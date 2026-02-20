@@ -3,9 +3,6 @@
 from rich.console import Console
 from rich.live import Live
 from rich.panel import Panel
-from rich.progress import BarColumn, Progress, TextColumn, TimeRemainingColumn
-from rich.table import Table
-from rich.text import Text
 
 from soup_cli.config.schema import SoupConfig
 
@@ -54,13 +51,18 @@ class TrainingDisplay:
 
     def _render(self) -> Panel:
         """Render the dashboard panel."""
-        progress_pct = (self.current_step / self.total_steps * 100) if self.total_steps > 0 else 0
+        if self.total_steps > 0:
+            progress_pct = self.current_step / self.total_steps * 100
+        else:
+            progress_pct = 0
         bar_width = 30
         filled = int(bar_width * progress_pct / 100)
-        bar = "█" * filled + "░" * (bar_width - filled)
+        bar = "\u2588" * filled + "\u2591" * (bar_width - filled)
 
+        epochs = self.config.training.epochs
+        epoch_str = f"Epoch {self.current_epoch:.1f}/{epochs}"
         lines = []
-        lines.append(f"Epoch {self.current_epoch:.1f}/{self.config.training.epochs}  [{bar}] {progress_pct:.0f}%")
+        lines.append(f"{epoch_str}  [{bar}] {progress_pct:.0f}%")
         lines.append(f"Step:  {self.current_step}/{self.total_steps}")
         lines.append(f"Loss:  {self.loss:.4f}    LR: {self.lr:.2e}")
 
@@ -72,9 +74,10 @@ class TrainingDisplay:
             lines.append(f"Grad:  {self.grad_norm:.4f}")
 
         content = "\n".join(lines)
+        name = self.config.experiment_name or self.config.base
         return Panel(
             content,
-            title=f"[bold green]Soup Training: {self.config.experiment_name or self.config.base}[/]",
+            title=f"[bold green]Soup Training: {name}[/]",
             subtitle=f"[dim]{self.device_name}[/]",
             border_style="green",
         )

@@ -64,7 +64,9 @@ def _interactive_wizard() -> str:
     )
     task = Prompt.ask("Task", choices=["sft", "dpo"], default="sft")
     data_path = Prompt.ask("Training data path", default="./data/train.jsonl")
-    data_format = Prompt.ask("Data format", choices=["alpaca", "sharegpt", "chatml"], default="alpaca")
+    data_format = Prompt.ask(
+        "Data format", choices=["alpaca", "sharegpt", "chatml"], default="alpaca",
+    )
     epochs = Prompt.ask("Epochs", default="3")
     use_qlora = Prompt.ask("Use QLoRA (4-bit)?", choices=["yes", "no"], default="yes")
 

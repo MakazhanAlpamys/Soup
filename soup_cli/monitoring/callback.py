@@ -1,6 +1,11 @@
 """HuggingFace Trainer callback that feeds metrics to our display."""
 
-from transformers import TrainerCallback, TrainerControl, TrainerState, TrainingArguments
+from transformers import (
+    TrainerCallback,
+    TrainerControl,
+    TrainerState,
+    TrainingArguments,
+)
 
 from soup_cli.monitoring.display import TrainingDisplay
 
@@ -11,10 +16,16 @@ class SoupTrainerCallback(TrainerCallback):
     def __init__(self, display: TrainingDisplay):
         self.display = display
 
-    def on_train_begin(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
+    def on_train_begin(
+        self, args: TrainingArguments, state: TrainerState,
+        control: TrainerControl, **kwargs,
+    ):
         self.display.start(total_steps=state.max_steps)
 
-    def on_log(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, logs=None, **kwargs):
+    def on_log(
+        self, args: TrainingArguments, state: TrainerState,
+        control: TrainerControl, logs=None, **kwargs,
+    ):
         if logs is None:
             return
 
@@ -40,5 +51,8 @@ class SoupTrainerCallback(TrainerCallback):
             gpu_mem=gpu_mem,
         )
 
-    def on_train_end(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
+    def on_train_end(
+        self, args: TrainingArguments, state: TrainerState,
+        control: TrainerControl, **kwargs,
+    ):
         self.display.stop()

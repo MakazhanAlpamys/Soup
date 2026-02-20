@@ -57,7 +57,10 @@ def inspect(
 @app.command()
 def validate(
     path: str = typer.Argument(..., help="Path to dataset file"),
-    format: str = typer.Option("alpaca", "--format", "-f", help="Expected format: alpaca, sharegpt, chatml"),
+    format: str = typer.Option(
+        "alpaca", "--format", "-f",
+        help="Expected format: alpaca, sharegpt, chatml",
+    ),
 ):
     """Validate dataset format and report issues."""
     file_path = Path(path)
@@ -75,4 +78,6 @@ def validate(
     else:
         console.print("[bold green]Dataset is valid![/]")
 
-    console.print(f"\n[green]{stats['valid_rows']}/{stats['total']} rows valid for {format} format[/]")
+    valid = stats["valid_rows"]
+    total = stats["total"]
+    console.print(f"\n[green]{valid}/{total} rows valid for {format} format[/]")

@@ -84,7 +84,10 @@ class SFTTrainerWrapper:
         self.model = get_peft_model(self.model, lora_config)
         trainable, total = self.model.get_nb_trainable_parameters()
         pct = 100 * trainable / total
-        console.print(f"[green]LoRA applied:[/] {trainable:,} trainable / {total:,} total ({pct:.2f}%)")
+        console.print(
+            f"[green]LoRA applied:[/] {trainable:,} trainable"
+            f" / {total:,} total ({pct:.2f}%)"
+        )
 
         # --- Batch size ---
         batch_size = tcfg.batch_size
@@ -161,7 +164,7 @@ class SFTTrainerWrapper:
 
             self.trainer.add_callback(SoupTrainerCallback(display))
 
-        result = self.trainer.train()
+        self.trainer.train()
         duration = time.time() - start
 
         # Save final model (LoRA adapter)
@@ -170,7 +173,7 @@ class SFTTrainerWrapper:
 
         # Extract metrics
         logs = self.trainer.state.log_history
-        train_losses = [l["loss"] for l in logs if "loss" in l]
+        train_losses = [entry["loss"] for entry in logs if "loss" in entry]
 
         hours = int(duration // 3600)
         minutes = int((duration % 3600) // 60)

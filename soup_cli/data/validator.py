@@ -1,7 +1,5 @@
 """Dataset validation and statistics."""
 
-from collections import Counter
-
 from soup_cli.data.formats import FORMAT_SIGNATURES
 
 
@@ -29,7 +27,7 @@ def validate_and_stats(data: list[dict], expected_format: str | None = None) -> 
         text = " ".join(str(v) for v in row.values() if v)
         lengths.append(len(text))
         for v in row.values():
-            if v is None or (isinstance(v, str) and not v.strip()):
+            if v is None:
                 empty_count += 1
 
     # Detect duplicates by stringifying rows
@@ -57,7 +55,7 @@ def validate_and_stats(data: list[dict], expected_format: str | None = None) -> 
         issues.append(f"{empty_count} empty fields found")
 
     # Check for very short samples
-    short = sum(1 for l in lengths if l < 10)
+    short = sum(1 for length in lengths if length < 10)
     if short > 0:
         issues.append(f"{short} samples are very short (<10 chars)")
 

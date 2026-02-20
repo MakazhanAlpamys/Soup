@@ -19,9 +19,21 @@ def sample_alpaca_data(tmp_data_dir: Path) -> Path:
     """Create a sample alpaca-format JSONL file."""
     path = tmp_data_dir / "train.jsonl"
     samples = [
-        {"instruction": "What is Python?", "input": "", "output": "Python is a programming language."},
-        {"instruction": "Explain gravity", "input": "", "output": "Gravity is a fundamental force."},
-        {"instruction": "Translate hello to Spanish", "input": "hello", "output": "hola"},
+        {
+            "instruction": "What is Python?",
+            "input": "",
+            "output": "Python is a programming language.",
+        },
+        {
+            "instruction": "Explain gravity",
+            "input": "",
+            "output": "Gravity is a fundamental force.",
+        },
+        {
+            "instruction": "Translate hello to Spanish",
+            "input": "hello",
+            "output": "hola",
+        },
     ]
     with open(path, "w", encoding="utf-8") as f:
         for s in samples:
