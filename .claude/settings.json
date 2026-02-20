@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git status*)",
+      "Bash(git diff*)",
+      "Bash(git log*)",
+      "Bash(git add*)",
+      "Bash(git commit*)",
+      "Bash(git push*)",
+      "Bash(git branch*)",
+      "Bash(git checkout*)",
+      "Bash(git stash*)",
+      "Bash(git remote*)",
+      "Bash(ruff check*)",
+      "Bash(ruff format*)",
+      "Bash(pytest*)",
+      "Bash(python -m pytest*)",
+      "Bash(pip install*)",
+      "Bash(pip list*)",
+      "Bash(soup *)",
+      "Bash(python -m soup_cli*)"
+    ]
+  }
+}

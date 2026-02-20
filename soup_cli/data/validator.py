@@ -1,9 +1,11 @@
 """Dataset validation and statistics."""
 
+from typing import Optional
+
 from soup_cli.data.formats import FORMAT_SIGNATURES
 
 
-def validate_and_stats(data: list[dict], expected_format: str | None = None) -> dict:
+def validate_and_stats(data: list[dict], expected_format: Optional[str] = None) -> dict:
     """Compute stats and validate dataset."""
     if not data:
         return {

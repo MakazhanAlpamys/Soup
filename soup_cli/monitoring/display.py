@@ -1,5 +1,7 @@
 """Rich live training dashboard in the terminal."""
 
+from typing import Optional
+
 from rich.console import Console
 from rich.live import Live
 from rich.panel import Panel
@@ -23,7 +25,7 @@ class TrainingDisplay:
         self.grad_norm = 0.0
         self.gpu_mem = ""
         self.speed = 0.0
-        self._live: Live | None = None
+        self._live: Optional[Live] = None
 
     def start(self, total_steps: int):
         """Start the live display."""

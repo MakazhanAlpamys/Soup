@@ -1,6 +1,6 @@
 """Pydantic schemas for soup.yaml config — single source of truth."""
 
-from typing import Literal, Optional
+from typing import List, Literal, Optional, Union
 
 from pydantic import BaseModel, Field
 
@@ -9,7 +9,7 @@ class LoraConfig(BaseModel):
     r: int = Field(default=64, description="LoRA rank")
     alpha: int = Field(default=16, description="LoRA alpha")
     dropout: float = Field(default=0.05, description="LoRA dropout")
-    target_modules: str | list[str] = Field(
+    target_modules: Union[str, List[str]] = Field(
         default="auto",
         description="Target modules for LoRA. 'auto' = let peft decide.",
     )
@@ -28,7 +28,7 @@ class DataConfig(BaseModel):
 class TrainingConfig(BaseModel):
     epochs: int = Field(default=3, ge=1, description="Number of training epochs")
     lr: float = Field(default=2e-5, gt=0, description="Learning rate")
-    batch_size: int | Literal["auto"] = Field(
+    batch_size: Union[int, Literal["auto"]] = Field(
         default="auto",
         description="Batch size. 'auto' = find max that fits in memory.",
     )
