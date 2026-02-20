@@ -1,0 +1,59 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "soup-cli"
+version = "0.1.0"
+description = "Fine-tune LLMs in one command. No SSH, no config hell."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.9"
+authors = [
+    { name = "Soup Team" },
+]
+keywords = ["llm", "fine-tuning", "lora", "qlora", "machine-learning"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "typer>=0.9.0",
+    "rich>=13.0.0",
+    "pydantic>=2.0.0",
+    "pyyaml>=6.0",
+    "torch>=2.0.0",
+    "transformers>=4.36.0",
+    "peft>=0.7.0",
+    "trl>=0.7.0",
+    "datasets>=2.14.0",
+    "bitsandbytes>=0.41.0",
+    "accelerate>=0.25.0",
+]
+
+[project.optional-dependencies]
+eval = ["lm-eval>=0.4.0"]
+dev = ["pytest>=7.0", "ruff>=0.1.0", "pytest-cov>=4.0"]
+ui = ["fastapi>=0.104.0", "uvicorn>=0.24.0"]
+
+[project.scripts]
+soup = "soup_cli.cli:app"
+
+[project.urls]
+Homepage = "https://github.com/MakazhanAlpamys/Soup"
+Repository = "https://github.com/MakazhanAlpamys/Soup"
+Issues = "https://github.com/MakazhanAlpamys/Soup/issues"
+
+[tool.ruff]
+target-version = "py39"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

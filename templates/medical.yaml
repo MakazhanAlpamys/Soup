@@ -1,0 +1,25 @@
+# Soup template: Medical / Domain Expert
+# Fine-tune a model with domain-specific knowledge
+# Usage: soup init --template medical
+
+base: meta-llama/Llama-3.1-8B-Instruct
+task: sft
+
+data:
+  train: ./data/medical_train.jsonl
+  format: alpaca
+  val_split: 0.15
+  max_length: 2048
+
+training:
+  epochs: 5
+  lr: 1e-5
+  batch_size: auto
+  gradient_accumulation_steps: 8
+  lora:
+    r: 128
+    alpha: 32
+    target_modules: auto
+  quantization: 4bit
+
+output: ./output

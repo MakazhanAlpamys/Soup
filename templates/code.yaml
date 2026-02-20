@@ -1,0 +1,24 @@
+# Soup template: Code Model
+# Fine-tune a model for code generation
+# Usage: soup init --template code
+
+base: codellama/CodeLlama-7b-Instruct-hf
+task: sft
+
+data:
+  train: ./data/code_train.jsonl
+  format: alpaca
+  val_split: 0.1
+  max_length: 4096
+
+training:
+  epochs: 2
+  lr: 1e-5
+  batch_size: auto
+  lora:
+    r: 128
+    alpha: 32
+    target_modules: auto
+  quantization: 4bit
+
+output: ./output
