@@ -5,7 +5,7 @@
 Soup turns the pain of LLM fine-tuning into a simple workflow. One config, one command, done.
 
 ```bash
-pip install soup-cli
+pip install git+https://github.com/MakazhanAlpamys/Soup.git
 soup init --template chat
 soup train
 ```
@@ -24,7 +24,11 @@ Training LLMs is still painful. Even experienced teams spend 30-50% of their tim
 ### 1. Install
 
 ```bash
-pip install soup-cli
+# From GitHub (recommended for now):
+pip install git+https://github.com/MakazhanAlpamys/Soup.git
+
+# From PyPI (coming soon):
+# pip install soup-cli
 ```
 
 ### 2. Create config
