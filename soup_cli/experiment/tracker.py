@@ -80,9 +80,9 @@ def _get_db_path() -> Path:
 
 
 def generate_run_id() -> str:
-    """Generate a unique, sortable run ID: run_YYYYMMDD_HHMMSS_xxxx."""
+    """Generate a unique, sortable run ID: run_YYYYMMDD_HHMMSS_xxxxxxxx."""
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    suffix = secrets.token_hex(2)
+    suffix = secrets.token_hex(4)
     return f"run_{ts}_{suffix}"
 
 

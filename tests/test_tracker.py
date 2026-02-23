@@ -18,9 +18,9 @@ def test_generate_run_id():
     """Run IDs should be unique and match expected format."""
     rid = generate_run_id()
     assert rid.startswith("run_")
-    # run_ (4) + YYYYMMDD (8) + _ (1) + HHMMSS (6) + _ (1) + xxxx (4) = 24
-    assert len(rid) == 24
-    # Uniqueness
+    # run_ (4) + YYYYMMDD (8) + _ (1) + HHMMSS (6) + _ (1) + xxxxxxxx (8) = 28
+    assert len(rid) == 28
+    # Uniqueness (8 hex chars = 4 billion possibilities, no collisions in 100)
     ids = {generate_run_id() for _ in range(100)}
     assert len(ids) == 100
 
