@@ -104,3 +104,54 @@ def _convert_dpo(row: dict) -> dict:
         "chosen": row["chosen"],
         "rejected": row["rejected"],
     }
+
+
+# --- Reverse conversion: messages → target format ---
+
+CONVERTIBLE_FORMATS = ("alpaca", "sharegpt", "chatml")
+
+
+def messages_to_format(row: dict, target_fmt: str) -> Optional[dict]:
+    """Convert unified messages format back to a specific format.
+
+    Input: {"messages": [{"role": ..., "content": ...}, ...]}
+    Output: dict in target format (alpaca, sharegpt, chatml)
+    """
+    try:
+        if target_fmt == "chatml":
+            return row  # already in chatml/messages format
+        elif target_fmt == "alpaca":
+            return _to_alpaca(row["messages"])
+        elif target_fmt == "sharegpt":
+            return _to_sharegpt(row["messages"])
+        else:
+            raise ValueError(f"Cannot convert to format: {target_fmt}")
+    except (KeyError, TypeError, IndexError):
+        return None
+
+
+def _to_alpaca(messages: list[dict]) -> dict:
+    """Convert messages to alpaca format."""
+    result: dict = {"instruction": "", "input": "", "output": ""}
+
+    for msg in messages:
+        if msg["role"] == "system":
+            result["system"] = msg["content"]
+        elif msg["role"] == "user":
+            result["instruction"] = msg["content"]
+        elif msg["role"] == "assistant":
+            result["output"] = msg["content"]
+
+    return result
+
+
+def _to_sharegpt(messages: list[dict]) -> dict:
+    """Convert messages to sharegpt format."""
+    role_map = {"user": "human", "assistant": "gpt", "system": "system"}
+    conversations = []
+    for msg in messages:
+        conversations.append({
+            "from": role_map.get(msg["role"], msg["role"]),
+            "value": msg["content"],
+        })
+    return {"conversations": conversations}

@@ -74,6 +74,20 @@ def train(
     dataset = load_dataset(cfg.data)
     console.print(f"[green]Loaded:[/] {len(dataset['train'])} train samples")
 
+    # Start experiment tracking
+    from soup_cli.experiment.tracker import ExperimentTracker
+
+    tracker = ExperimentTracker()
+    experiment_name = cfg.experiment_name or name
+    run_id = tracker.start_run(
+        config_dict=cfg.model_dump(),
+        device=device,
+        device_name=device_name,
+        gpu_info=gpu_info,
+        experiment_name=experiment_name,
+    )
+    console.print(f"[dim]Run ID: {run_id}[/]")
+
     # Build trainer based on task type
     console.print("[dim]Setting up model + trainer...[/]")
     if cfg.task == "dpo":
@@ -84,19 +98,38 @@ def train(
         trainer_wrapper = SFTTrainerWrapper(cfg, device=device)
     trainer_wrapper.setup(dataset)
 
-    # Train with live display
+    # Train with live display and experiment tracking
     display = TrainingDisplay(cfg, device_name=device_name)
     console.print("[bold green]Training started![/]\n")
-    result = trainer_wrapper.train(display=display)
+
+    try:
+        result = trainer_wrapper.train(
+            display=display, tracker=tracker, run_id=run_id
+        )
+
+        # Save completion to tracker
+        tracker.finish_run(
+            run_id=run_id,
+            initial_loss=result["initial_loss"],
+            final_loss=result["final_loss"],
+            total_steps=result["total_steps"],
+            duration_secs=result["duration_secs"],
+            output_dir=result["output_dir"],
+        )
+    except Exception:
+        tracker.fail_run(run_id)
+        raise
 
     # Report
     console.print(
         Panel(
             f"Loss: [bold]{result['initial_loss']:.4f} → {result['final_loss']:.4f}[/]\n"
             f"Duration: [bold]{result['duration']}[/]\n"
-            f"Output: [bold]{result['output_dir']}[/]\n\n"
+            f"Output: [bold]{result['output_dir']}[/]\n"
+            f"Run ID: [bold]{run_id}[/]\n\n"
             f"Quick test:  [bold]soup chat --model {result['output_dir']}[/]\n"
-            f"Push to HF:  [bold]soup push --model {result['output_dir']}[/]",
+            f"Push to HF:  [bold]soup push --model {result['output_dir']}[/]\n"
+            f"Run details: [bold]soup runs show {run_id}[/]",
             title="[bold green]Training Complete![/]",
         )
     )

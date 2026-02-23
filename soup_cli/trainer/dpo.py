@@ -160,15 +160,22 @@ class DPOTrainerWrapper:
 
         self._output_dir = str(output_dir)
 
-    def train(self, display: Optional[object] = None) -> dict:
+    def train(
+        self,
+        display: Optional[object] = None,
+        tracker: Optional[object] = None,
+        run_id: str = "",
+    ) -> dict:
         """Run DPO training and return results summary."""
         start = time.time()
 
-        # Add callback for live display
+        # Add callback for live display and experiment tracking
         if display:
             from soup_cli.monitoring.callback import SoupTrainerCallback
 
-            self.trainer.add_callback(SoupTrainerCallback(display))
+            self.trainer.add_callback(
+                SoupTrainerCallback(display, tracker=tracker, run_id=run_id)
+            )
 
         self.trainer.train()
         duration = time.time() - start
@@ -189,6 +196,7 @@ class DPOTrainerWrapper:
             "initial_loss": train_losses[0] if train_losses else 0,
             "final_loss": train_losses[-1] if train_losses else 0,
             "duration": duration_str,
+            "duration_secs": duration,
             "output_dir": self._output_dir,
             "total_steps": self.trainer.state.global_step,
         }

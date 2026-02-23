@@ -1,5 +1,7 @@
 """Dataset validation and statistics."""
 
+from __future__ import annotations
+
 from typing import Optional
 
 from soup_cli.data.formats import FORMAT_SIGNATURES
@@ -71,4 +73,76 @@ def validate_and_stats(data: list[dict], expected_format: Optional[str] = None) 
         "duplicates": dup_count,
         "issues": issues,
         "valid_rows": valid_rows,
+    }
+
+
+def _percentile(sorted_vals: list, pct: int) -> int:
+    """Compute a percentile from a sorted list."""
+    if not sorted_vals:
+        return 0
+    idx = int(len(sorted_vals) * pct / 100)
+    idx = min(idx, len(sorted_vals) - 1)
+    return sorted_vals[idx]
+
+
+def extended_stats(data: list[dict]) -> dict:
+    """Compute extended statistics: length distribution, token counts, languages."""
+    if not data:
+        return {
+            "total": 0,
+            "lengths": [],
+            "token_counts": [],
+            "length_p10": 0,
+            "length_p25": 0,
+            "length_p50": 0,
+            "length_p75": 0,
+            "length_p90": 0,
+            "avg_tokens": 0,
+            "min_tokens": 0,
+            "max_tokens": 0,
+            "languages": {},
+        }
+
+    lengths = []
+    token_counts = []
+
+    for row in data:
+        text = " ".join(str(v) for v in row.values() if v)
+        char_len = len(text)
+        lengths.append(char_len)
+        # Approximate token count: ~4 chars per token for English
+        token_counts.append(max(1, char_len // 4))
+
+    sorted_lengths = sorted(lengths)
+
+    # Language detection (optional, lazy import)
+    languages: dict[str, int] = {}
+    try:
+        from langdetect import detect
+
+        sample_size = min(100, len(data))
+        for row in data[:sample_size]:
+            text = " ".join(str(v) for v in row.values() if v)
+            if len(text) > 20:
+                try:
+                    lang = detect(text)
+                    languages[lang] = languages.get(lang, 0) + 1
+                except Exception:
+                    pass
+    except ImportError:
+        pass  # langdetect not installed, skip
+
+    return {
+        "total": len(data),
+        "lengths": lengths,
+        "token_counts": token_counts,
+        "length_p10": _percentile(sorted_lengths, 10),
+        "length_p25": _percentile(sorted_lengths, 25),
+        "length_p50": _percentile(sorted_lengths, 50),
+        "length_p75": _percentile(sorted_lengths, 75),
+        "length_p90": _percentile(sorted_lengths, 90),
+        "avg_tokens": round(sum(token_counts) / len(token_counts)),
+        "min_tokens": min(token_counts),
+        "max_tokens": max(token_counts),
+        "languages": languages,
     }

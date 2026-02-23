@@ -34,10 +34,12 @@ dependencies = [
     "bitsandbytes>=0.41.0",
     "accelerate>=0.25.0",
     "huggingface-hub>=0.16.0",
+    "plotext>=5.2.0",
 ]
 
 [project.optional-dependencies]
 eval = ["lm-eval>=0.4.0"]
+data = ["datasketch>=1.6.0"]
 dev = ["pytest>=7.0", "ruff>=0.1.0", "pytest-cov>=4.0"]
 ui = ["fastapi>=0.104.0", "uvicorn>=0.24.0"]
 

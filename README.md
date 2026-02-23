@@ -162,6 +162,51 @@ soup data inspect ./data/train.jsonl
 
 # Validate format
 soup data validate ./data/train.jsonl --format alpaca
+
+# Convert between formats
+soup data convert ./data/train.jsonl --to sharegpt --output converted.jsonl
+
+# Merge multiple datasets
+soup data merge data1.jsonl data2.jsonl --output merged.jsonl --shuffle
+
+# Remove near-duplicates (requires: pip install 'soup-cli[data]')
+soup data dedup ./data/train.jsonl --threshold 0.8
+
+# Extended statistics (length distribution, token counts, languages)
+soup data stats ./data/train.jsonl
+```
+
+## Experiment Tracking
+
+Every `soup train` run is automatically tracked in a local SQLite database (`~/.soup/experiments.db`).
+
+```bash
+# List all training runs
+soup runs
+
+# Show detailed info + loss curve for a run
+soup runs show run_20260223_143052_a1b2
+
+# Compare two runs side by side
+soup runs compare run_1 run_2
+
+# Delete a run
+soup runs delete run_1
+```
+
+## Model Evaluation
+
+Evaluate models on standard benchmarks using [lm-evaluation-harness](https://github.com/EleutherAI/lm-evaluation-harness):
+
+```bash
+# Install eval dependencies
+pip install 'soup-cli[eval]'
+
+# Evaluate on benchmarks
+soup eval --model ./output --benchmarks mmlu,gsm8k,hellaswag
+
+# Link results to a training run
+soup eval --model ./output --benchmarks mmlu --run-id run_20260223_143052_a1b2
 ```
 
 ## Features
@@ -178,7 +223,9 @@ soup data validate ./data/train.jsonl --format alpaca
 | HuggingFace datasets support | ✅ |
 | Interactive model chat | ✅ |
 | Push to HuggingFace Hub | ✅ |
-| Experiment tracking | 🔜 |
+| Experiment tracking (SQLite) | ✅ |
+| Data tools (convert, merge, dedup, stats) | ✅ |
+| Model evaluation (lm-eval) | ✅ |
 | Web dashboard | 🔜 |
 | Cloud mode (BYOG) | 🔜 |
 
