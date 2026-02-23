@@ -33,6 +33,7 @@ dependencies = [
     "datasets>=2.14.0",
     "bitsandbytes>=0.41.0",
     "accelerate>=0.25.0",
+    "huggingface-hub>=0.16.0",
 ]
 
 [project.optional-dependencies]
@@ -57,3 +58,5 @@ select = ["E", "F", "I", "N", "W"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["smoke: slow smoke tests that download models and run training (run with: pytest -m smoke)"]
+addopts = "-m 'not smoke'"

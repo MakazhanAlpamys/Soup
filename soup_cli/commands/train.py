@@ -74,9 +74,14 @@ def train(
     dataset = load_dataset(cfg.data)
     console.print(f"[green]Loaded:[/] {len(dataset['train'])} train samples")
 
-    # Build trainer
+    # Build trainer based on task type
     console.print("[dim]Setting up model + trainer...[/]")
-    trainer_wrapper = SFTTrainerWrapper(cfg, device=device)
+    if cfg.task == "dpo":
+        from soup_cli.trainer.dpo import DPOTrainerWrapper
+
+        trainer_wrapper = DPOTrainerWrapper(cfg, device=device)
+    else:
+        trainer_wrapper = SFTTrainerWrapper(cfg, device=device)
     trainer_wrapper.setup(dataset)
 
     # Train with live display

@@ -17,7 +17,7 @@ class LoraConfig(BaseModel):
 
 class DataConfig(BaseModel):
     train: str = Field(..., description="Path to training data or HF dataset name")
-    format: Literal["alpaca", "sharegpt", "chatml", "auto"] = Field(
+    format: Literal["alpaca", "sharegpt", "chatml", "dpo", "auto"] = Field(
         default="auto",
         description="Data format",
     )
@@ -45,6 +45,10 @@ class TrainingConfig(BaseModel):
     scheduler: str = Field(default="cosine", description="LR scheduler type")
     save_steps: int = Field(default=100, description="Save checkpoint every N steps")
     logging_steps: int = Field(default=10, description="Log metrics every N steps")
+    # DPO-specific
+    dpo_beta: float = Field(
+        default=0.1, gt=0, description="DPO beta — KL penalty coefficient"
+    )
 
 
 class SoupConfig(BaseModel):

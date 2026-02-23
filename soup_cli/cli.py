@@ -4,7 +4,7 @@ import typer
 from rich.console import Console
 
 from soup_cli import __version__
-from soup_cli.commands import data, init, train
+from soup_cli.commands import chat, data, init, push, train
 
 console = Console()
 
@@ -18,6 +18,8 @@ app = typer.Typer(
 # Register sub-commands
 app.command()(init.init)
 app.command()(train.train)
+app.command()(chat.chat)
+app.command()(push.push)
 app.add_typer(data.app, name="data", help="Dataset tools: inspect, convert, validate.")
 
 

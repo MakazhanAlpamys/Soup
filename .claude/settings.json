@@ -13,12 +13,15 @@
       "Bash(git remote*)",
       "Bash(ruff check*)",
       "Bash(ruff format*)",
+      "Bash(python -m ruff*)",
       "Bash(pytest*)",
       "Bash(python -m pytest*)",
       "Bash(pip install*)",
       "Bash(pip list*)",
       "Bash(soup *)",
-      "Bash(python -m soup_cli*)"
+      "Bash(python -m soup_cli*)",
+      "Bash(cd /c/Users/tokmo/peder/Soup && python -m pytest*)",
+      "Bash(cd /c/Users/tokmo/peder/Soup && ruff check*)"
     ]
   }
 }

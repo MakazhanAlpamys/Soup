@@ -34,3 +34,6 @@ wandb/
 # Secrets
 .env
 *.key
+
+# Internal plan (not for repo)
+plan.md

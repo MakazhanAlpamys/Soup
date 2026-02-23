@@ -69,3 +69,17 @@ def test_validate_with_format(sample_alpaca_data: Path):
     stats = validate_and_stats(data, expected_format="alpaca")
     assert stats["valid_rows"] == 3
     assert len(stats["issues"]) == 0  # no issues for valid data
+
+
+def test_detect_dpo_format():
+    data = [{"prompt": "What is AI?", "chosen": "AI is...", "rejected": "I don't know"}]
+    assert detect_format(data) == "dpo"
+
+
+def test_convert_dpo():
+    row = {"prompt": "Explain gravity", "chosen": "Gravity is a force", "rejected": "No idea"}
+    result = format_to_messages(row, "dpo")
+    assert result is not None
+    assert result["prompt"] == "Explain gravity"
+    assert result["chosen"] == "Gravity is a force"
+    assert result["rejected"] == "No idea"

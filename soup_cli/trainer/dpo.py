@@ -1,4 +1,4 @@
-"""SFT (Supervised Fine-Tuning) trainer — wraps HuggingFace transformers + peft + trl."""
+"""DPO (Direct Preference Optimization) trainer — wraps trl.DPOTrainer."""
 
 import time
 from pathlib import Path
@@ -12,27 +12,33 @@ from soup_cli.utils.gpu import estimate_batch_size, model_size_from_name
 console = Console()
 
 
-class SFTTrainerWrapper:
-    """High-level wrapper that sets up model + tokenizer + trainer from SoupConfig."""
+class DPOTrainerWrapper:
+    """High-level wrapper for DPO training from SoupConfig.
+
+    DPO requires preference data with three fields:
+    - prompt: the input prompt
+    - chosen: the preferred response
+    - rejected: the less preferred response
+    """
 
     def __init__(self, config: SoupConfig, device: str = "cuda"):
         self.config = config
         self.device = device
         self.model = None
+        self.ref_model = None
         self.tokenizer = None
         self.trainer = None
 
     def setup(self, dataset: dict):
-        """Load model, tokenizer, apply LoRA, create trainer."""
+        """Load model, tokenizer, apply LoRA, create DPO trainer."""
         from datasets import Dataset
         from peft import LoraConfig, TaskType, get_peft_model, prepare_model_for_kbit_training
         from transformers import (
             AutoModelForCausalLM,
             AutoTokenizer,
             BitsAndBytesConfig,
-            TrainingArguments,
         )
-        from trl import SFTTrainer
+        from trl import DPOConfig, DPOTrainer
 
         cfg = self.config
         tcfg = cfg.training
@@ -103,32 +109,16 @@ class SFTTrainerWrapper:
                 quantization=tcfg.quantization,
                 lora_r=tcfg.lora.r,
             )
-            console.print(f"[green]Auto batch size:[/] {batch_size}")
+            # DPO processes pairs → roughly 2x memory per sample
+            batch_size = max(1, batch_size // 2)
+            console.print(f"[green]Auto batch size (DPO):[/] {batch_size}")
 
         # --- Dataset ---
-        def format_row(example):
-            if hasattr(self.tokenizer, "chat_template") and self.tokenizer.chat_template:
-                text = self.tokenizer.apply_chat_template(
-                    example["messages"], tokenize=False, add_generation_prompt=False
-                )
-            else:
-                # Fallback for models without chat template
-                parts = []
-                for msg in example["messages"]:
-                    role = msg["role"]
-                    content = msg["content"]
-                    parts.append(f"{role}: {content}")
-                text = "\n".join(parts)
-            return {"text": text}
-
-        train_ds = Dataset.from_list(dataset["train"]).map(
-            format_row, remove_columns=["messages"]
-        )
+        # DPO expects: prompt, chosen, rejected
+        train_ds = Dataset.from_list(dataset["train"])
         eval_ds = None
         if "val" in dataset and dataset["val"]:
-            eval_ds = Dataset.from_list(dataset["val"]).map(
-                format_row, remove_columns=["messages"]
-            )
+            eval_ds = Dataset.from_list(dataset["val"])
 
         # --- Output dir ---
         output_dir = Path(cfg.output)
@@ -136,8 +126,8 @@ class SFTTrainerWrapper:
             output_dir = output_dir / cfg.experiment_name
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        # --- Training args ---
-        training_args = TrainingArguments(
+        # --- DPO config ---
+        dpo_config = DPOConfig(
             output_dir=str(output_dir),
             num_train_epochs=tcfg.epochs,
             per_device_train_batch_size=batch_size,
@@ -154,12 +144,15 @@ class SFTTrainerWrapper:
             bf16=self.device == "cuda",
             report_to="none",
             remove_unused_columns=False,
+            beta=tcfg.dpo_beta,
+            max_length=cfg.data.max_length,
+            max_prompt_length=cfg.data.max_length // 2,
         )
 
         # --- Trainer ---
-        self.trainer = SFTTrainer(
+        self.trainer = DPOTrainer(
             model=self.model,
-            args=training_args,
+            args=dpo_config,
             train_dataset=train_ds,
             eval_dataset=eval_ds,
             processing_class=self.tokenizer,
@@ -168,7 +161,7 @@ class SFTTrainerWrapper:
         self._output_dir = str(output_dir)
 
     def train(self, display: Optional[object] = None) -> dict:
-        """Run training and return results summary."""
+        """Run DPO training and return results summary."""
         start = time.time()
 
         # Add callback for live display

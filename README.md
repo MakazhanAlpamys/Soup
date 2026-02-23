@@ -86,6 +86,50 @@ training:
 output: ./output
 ```
 
+## DPO Training
+
+Train with preference data using Direct Preference Optimization:
+
+```yaml
+base: meta-llama/Llama-3.1-8B-Instruct
+task: dpo
+
+data:
+  train: ./data/preferences.jsonl
+  format: dpo
+
+training:
+  epochs: 3
+  dpo_beta: 0.1
+  lora:
+    r: 64
+    alpha: 16
+  quantization: 4bit
+```
+
+## Chat with your model
+
+```bash
+# Chat with a LoRA adapter (auto-detects base model)
+soup chat --model ./output
+
+# Specify base model explicitly
+soup chat --model ./output --base meta-llama/Llama-3.1-8B-Instruct
+
+# Adjust generation
+soup chat --model ./output --temperature 0.3 --max-tokens 256
+```
+
+## Push to HuggingFace
+
+```bash
+# Upload model to HF Hub
+soup push --model ./output --repo your-username/my-model
+
+# Make it private
+soup push --model ./output --repo your-username/my-model --private
+```
+
 ## Data Formats
 
 Soup supports these formats (auto-detected):
@@ -105,6 +149,11 @@ Soup supports these formats (auto-detected):
 {"messages": [{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello!"}]}
 ```
 
+**DPO (preference pairs):**
+```json
+{"prompt": "Explain gravity", "chosen": "Gravity is a force...", "rejected": "I don't know"}
+```
+
 ## Data Tools
 
 ```bash
@@ -121,12 +170,14 @@ soup data validate ./data/train.jsonl --format alpaca
 |---|---|
 | LoRA / QLoRA fine-tuning | ✅ |
 | SFT (Supervised Fine-Tune) | ✅ |
-| DPO (Direct Preference Optimization) | 🔜 |
+| DPO (Direct Preference Optimization) | ✅ |
 | Auto batch size | ✅ |
 | Auto GPU detection (CUDA/MPS/CPU) | ✅ |
 | Live terminal dashboard | ✅ |
-| Alpaca / ShareGPT / ChatML formats | ✅ |
+| Alpaca / ShareGPT / ChatML / DPO formats | ✅ |
 | HuggingFace datasets support | ✅ |
+| Interactive model chat | ✅ |
+| Push to HuggingFace Hub | ✅ |
 | Experiment tracking | 🔜 |
 | Web dashboard | 🔜 |
 | Cloud mode (BYOG) | 🔜 |
@@ -143,7 +194,12 @@ soup data validate ./data/train.jsonl --format alpaca
 git clone https://github.com/MakazhanAlpamys/Soup.git
 cd Soup
 pip install -e ".[dev]"
+
+# Run unit tests (fast, no GPU needed)
 pytest tests/ -v
+
+# Run smoke tests (downloads tiny model, runs real training)
+pytest tests/ -m smoke -v
 ```
 
 ## License

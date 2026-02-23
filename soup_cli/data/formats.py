@@ -4,6 +4,7 @@ Supported formats:
 - alpaca: {"instruction": ..., "input": ..., "output": ...}
 - sharegpt: {"conversations": [{"from": "human", "value": ...}, ...]}
 - chatml: {"messages": [{"role": "user", "content": ...}, ...]}
+- dpo: {"prompt": ..., "chosen": ..., "rejected": ...}
 """
 
 from typing import Optional
@@ -17,6 +18,7 @@ FORMAT_SIGNATURES = {
     "alpaca": {"instruction", "output"},
     "sharegpt": {"conversations"},
     "chatml": {"messages"},
+    "dpo": {"prompt", "chosen", "rejected"},
 }
 
 
@@ -35,7 +37,8 @@ def detect_format(data: list[dict]) -> str:
     raise ValueError(
         f"Cannot detect format. Keys found: {keys}. "
         f"Expected one of: alpaca (instruction, output), "
-        f"sharegpt (conversations), chatml (messages)"
+        f"sharegpt (conversations), chatml (messages), "
+        f"dpo (prompt, chosen, rejected)"
     )
 
 
@@ -51,6 +54,8 @@ def format_to_messages(row: dict, fmt: str) -> Optional[dict]:
             return _convert_alpaca(row)
         elif fmt == "sharegpt":
             return _convert_sharegpt(row)
+        elif fmt == "dpo":
+            return _convert_dpo(row)
         else:
             raise ValueError(f"Unknown format: {fmt}")
     except (KeyError, TypeError, IndexError):
@@ -90,3 +95,12 @@ def _convert_sharegpt(row: dict) -> dict:
 def _convert_chatml(row: dict) -> dict:
     # Already in the right format
     return {"messages": row["messages"]}
+
+
+def _convert_dpo(row: dict) -> dict:
+    """Convert DPO preference row to {prompt, chosen, rejected} for trl.DPOTrainer."""
+    return {
+        "prompt": row["prompt"],
+        "chosen": row["chosen"],
+        "rejected": row["rejected"],
+    }

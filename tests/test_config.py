@@ -51,3 +51,25 @@ def test_config_val_split_bounds():
             base="some-model",
             data={"train": "./data.jsonl", "val_split": 0.9},
         )
+
+
+def test_config_dpo_task():
+    """DPO task config should parse and have dpo_beta default."""
+    cfg = SoupConfig(
+        base="some-model",
+        task="dpo",
+        data={"train": "./data.jsonl", "format": "dpo"},
+    )
+    assert cfg.task == "dpo"
+    assert cfg.training.dpo_beta == 0.1
+
+
+def test_config_dpo_beta_custom():
+    """Custom dpo_beta should be accepted."""
+    cfg = SoupConfig(
+        base="some-model",
+        task="dpo",
+        data={"train": "./data.jsonl", "format": "dpo"},
+        training={"dpo_beta": 0.5},
+    )
+    assert cfg.training.dpo_beta == 0.5
