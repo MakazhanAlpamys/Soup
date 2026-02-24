@@ -1,6 +1,22 @@
-# 🍜 Soup
+<p align="center">
+  <img src="soup.png" alt="Soup" width="200">
+</p>
 
-**Fine-tune LLMs in one command. No SSH, no config hell.**
+<h1 align="center">Soup</h1>
+
+<p align="center">
+  <strong>Fine-tune LLMs in one command. No SSH, no config hell.</strong>
+</p>
+
+<p align="center">
+  <a href="#quick-start">Quick Start</a> &middot;
+  <a href="#features">Features</a> &middot;
+  <a href="#data-tools">Data Tools</a> &middot;
+  <a href="#experiment-tracking">Tracking</a> &middot;
+  <a href="#model-evaluation">Eval</a>
+</p>
+
+---
 
 Soup turns the pain of LLM fine-tuning into a simple workflow. One config, one command, done.
 
