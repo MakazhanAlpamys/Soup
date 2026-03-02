@@ -72,6 +72,13 @@ soup train --config soup.yaml
 - Always run `ruff check soup_cli/ tests/` before committing
 - Always run `pytest tests/ -v` before committing
 
+## Publishing
+
+- **PyPI:** https://pypi.org/project/soup-cli/ — `pip install soup-cli`
+- **Auto-publish:** `.github/workflows/publish.yml` triggers on `git tag v*`
+- **How to release:** bump version in `pyproject.toml`, then `git tag v0.X.0 && git push --tags`
+- **Auth:** PyPI Trusted Publisher (OIDC) — no tokens needed in GitHub secrets
+
 ## Tests
 
 Test suite (~147 tests) lives in `tests/`:
