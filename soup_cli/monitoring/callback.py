@@ -47,7 +47,7 @@ class SoupTrainerCallback(TrainerCallback):
 
             if torch.cuda.is_available():
                 used = torch.cuda.memory_allocated() / (1024**3)
-                total = torch.cuda.get_device_properties(0).total_mem / (1024**3)
+                total = torch.cuda.get_device_properties(0).total_memory / (1024**3)
                 gpu_mem = f"{used:.1f}/{total:.1f} GB"
         except Exception:
             pass
