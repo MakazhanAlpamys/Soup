@@ -21,9 +21,10 @@ class DPOTrainerWrapper:
     - rejected: the less preferred response
     """
 
-    def __init__(self, config: SoupConfig, device: str = "cuda"):
+    def __init__(self, config: SoupConfig, device: str = "cuda", report_to: str = "none"):
         self.config = config
         self.device = device
+        self.report_to = report_to
         self.model = None
         self.ref_model = None
         self.tokenizer = None
@@ -142,7 +143,7 @@ class DPOTrainerWrapper:
             save_steps=tcfg.save_steps,
             save_total_limit=3,
             bf16=self.device == "cuda",
-            report_to="none",
+            report_to=self.report_to,
             remove_unused_columns=False,
             beta=tcfg.dpo_beta,
             max_length=cfg.data.max_length,
@@ -165,6 +166,7 @@ class DPOTrainerWrapper:
         display: Optional[object] = None,
         tracker: Optional[object] = None,
         run_id: str = "",
+        resume_from_checkpoint: Optional[str] = None,
     ) -> dict:
         """Run DPO training and return results summary."""
         start = time.time()
@@ -177,7 +179,7 @@ class DPOTrainerWrapper:
                 SoupTrainerCallback(display, tracker=tracker, run_id=run_id)
             )
 
-        self.trainer.train()
+        self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         duration = time.time() - start
 
         # Save final model (LoRA adapter)

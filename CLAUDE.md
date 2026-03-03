@@ -53,6 +53,14 @@ soup train --config soup.yaml
 
 **Eval:** `commands/eval.py` wraps lm-evaluation-harness for model evaluation on standard benchmarks (mmlu, gsm8k, etc.) with results saved to the experiment tracker.
 
+**Merge:** `commands/merge.py` merges a LoRA adapter with its base model into a full standalone model using peft's `merge_and_unload()`. Auto-detects base model from `adapter_config.json`.
+
+**Export:** `commands/export.py` exports models to GGUF format for Ollama/llama.cpp. Handles LoRA adapters (auto-merge first), then uses llama.cpp's `convert_hf_to_gguf.py` script for conversion and optional quantization. Auto-clones llama.cpp to `~/.soup/llama.cpp` if needed.
+
+**Resume training:** `commands/train.py` supports `--resume auto` (find latest checkpoint) or `--resume <path>` to continue training from a checkpoint. Passes `resume_from_checkpoint` to HF Trainer.
+
+**W&B integration:** `commands/train.py` supports `--wandb` flag to enable Weights & Biases logging. Sets `report_to="wandb"` in TrainingArguments. Requires `pip install wandb`.
+
 ## Code Conventions
 
 - **Line length:** 100 chars (ruff enforced)
@@ -81,7 +89,7 @@ soup train --config soup.yaml
 
 ## Tests
 
-Test suite (~147 tests) lives in `tests/`:
+Test suite (~184 tests) lives in `tests/`:
 
 | File | Covers |
 |---|---|
@@ -102,3 +110,6 @@ Test suite (~147 tests) lives in `tests/`:
 | `test_loader.py` | Data loading (JSONL/JSON/CSV, edge cases) |
 | `test_validator.py` | `validate_and_stats`, `extended_stats`, `_percentile` |
 | `test_formats.py` | Reverse conversion, round-trips, edge cases |
+| `test_merge.py` | Merge command, adapter detection, validation |
+| `test_export.py` | Export command, GGUF quant types, validation |
+| `test_resume.py` | Resume checkpoint resolution, W&B flag |

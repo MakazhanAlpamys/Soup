@@ -10,7 +10,7 @@ runner = CliRunner()
 def test_version():
     result = runner.invoke(app, ["version"])
     assert result.exit_code == 0
-    assert "0.1.0" in result.output
+    assert "0.2.0" in result.output
 
 
 def test_help():
@@ -68,3 +68,5 @@ def test_help_shows_all_commands():
     assert "push" in result.output
     assert "train" in result.output
     assert "init" in result.output
+    assert "export" in result.output
+    assert "merge" in result.output

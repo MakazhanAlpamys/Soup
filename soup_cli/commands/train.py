@@ -33,6 +33,17 @@ def train(
         "--dry-run",
         help="Validate config and data without training",
     ),
+    resume: str = typer.Option(
+        None,
+        "--resume",
+        "-r",
+        help="Resume from checkpoint: path to checkpoint dir, or 'auto' for latest",
+    ),
+    wandb: bool = typer.Option(
+        False,
+        "--wandb",
+        help="Enable Weights & Biases logging",
+    ),
 ):
     """Start training from a soup.yaml config."""
     config_path = Path(config)
@@ -44,6 +55,29 @@ def train(
     # Load & validate config
     console.print(f"[dim]Loading config from {config_path}...[/]")
     cfg = load_config(config_path)
+
+    # --- Resolve resume checkpoint (fail fast before heavy operations) ---
+    resume_from = None
+    if resume:
+        resume_from = _resolve_checkpoint(resume, cfg.output, cfg.experiment_name)
+        if resume_from:
+            console.print(f"[green]Resuming from:[/] {resume_from}")
+        else:
+            console.print("[red]No checkpoint found to resume from.[/]")
+            raise typer.Exit(1)
+
+    # --- W&B setup (fail fast if wandb not installed) ---
+    if wandb:
+        try:
+            import wandb as _wandb  # noqa: F401
+
+            console.print("[green]W&B logging enabled[/]")
+        except ImportError:
+            console.print(
+                "[red]wandb not installed.[/]\n"
+                "Run: [bold]pip install wandb[/]"
+            )
+            raise typer.Exit(1)
 
     # Detect hardware
     device, device_name = detect_device()
@@ -89,13 +123,14 @@ def train(
     console.print(f"[dim]Run ID: {run_id}[/]")
 
     # Build trainer based on task type
+    report_to = "wandb" if wandb else "none"
     console.print("[dim]Setting up model + trainer...[/]")
     if cfg.task == "dpo":
         from soup_cli.trainer.dpo import DPOTrainerWrapper
 
-        trainer_wrapper = DPOTrainerWrapper(cfg, device=device)
+        trainer_wrapper = DPOTrainerWrapper(cfg, device=device, report_to=report_to)
     else:
-        trainer_wrapper = SFTTrainerWrapper(cfg, device=device)
+        trainer_wrapper = SFTTrainerWrapper(cfg, device=device, report_to=report_to)
     trainer_wrapper.setup(dataset)
 
     # Train with live display and experiment tracking
@@ -104,7 +139,8 @@ def train(
 
     try:
         result = trainer_wrapper.train(
-            display=display, tracker=tracker, run_id=run_id
+            display=display, tracker=tracker, run_id=run_id,
+            resume_from_checkpoint=resume_from,
         )
 
         # Save completion to tracker
@@ -129,7 +165,38 @@ def train(
             f"Run ID: [bold]{run_id}[/]\n\n"
             f"Quick test:  [bold]soup chat --model {result['output_dir']}[/]\n"
             f"Push to HF:  [bold]soup push --model {result['output_dir']}[/]\n"
+            f"Merge LoRA:  [bold]soup merge --adapter {result['output_dir']}[/]\n"
+            f"Export GGUF: [bold]soup export --model {result['output_dir']}[/]\n"
             f"Run details: [bold]soup runs show {run_id}[/]",
             title="[bold green]Training Complete![/]",
         )
     )
+
+
+def _resolve_checkpoint(resume: str, output_dir: str, experiment_name: str = None) -> str:
+    """Resolve the checkpoint path from --resume argument.
+
+    If resume == "auto", find the latest checkpoint in the output directory.
+    Otherwise, treat it as a direct path to a checkpoint directory.
+    """
+    if resume.lower() == "auto":
+        base = Path(output_dir)
+        if experiment_name:
+            base = base / experiment_name
+
+        if not base.exists():
+            return None
+
+        checkpoints = sorted(
+            [d for d in base.iterdir() if d.is_dir() and d.name.startswith("checkpoint-")],
+            key=lambda d: int(d.name.split("-")[-1]) if d.name.split("-")[-1].isdigit() else 0,
+        )
+        if checkpoints:
+            return str(checkpoints[-1])
+        return None
+
+    # Direct path
+    checkpoint_path = Path(resume)
+    if checkpoint_path.exists() and checkpoint_path.is_dir():
+        return str(checkpoint_path)
+    return None

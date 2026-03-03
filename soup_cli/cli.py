@@ -4,7 +4,7 @@ import typer
 from rich.console import Console
 
 from soup_cli import __version__
-from soup_cli.commands import chat, data, eval, init, push, runs, train
+from soup_cli.commands import chat, data, eval, export, init, merge, push, runs, train
 
 console = Console()
 
@@ -20,6 +20,8 @@ app.command()(init.init)
 app.command()(train.train)
 app.command()(chat.chat)
 app.command()(push.push)
+app.command(name="export")(export.export)
+app.command()(merge.merge)
 app.add_typer(
     data.app, name="data",
     help="Dataset tools: inspect, convert, merge, dedup, validate, stats.",

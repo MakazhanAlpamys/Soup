@@ -21,7 +21,7 @@
   <a href="https://pypi.org/project/soup-cli/"><img src="https://img.shields.io/pypi/v/soup-cli?color=blue" alt="PyPI"></a>
   <img src="https://img.shields.io/badge/python-3.9%2B-blue" alt="Python 3.9+">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT License">
-  <img src="https://img.shields.io/badge/tests-147%20passed-brightgreen" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-184%20passed-brightgreen" alt="Tests">
   <a href="https://github.com/MakazhanAlpamys/Soup/actions"><img src="https://github.com/MakazhanAlpamys/Soup/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
 </p>
 
@@ -86,6 +86,16 @@ soup chat --model ./output
 
 ```bash
 soup push --model ./output --repo your-username/my-model
+```
+
+### 6. Merge & Export
+
+```bash
+# Merge LoRA adapter with base model
+soup merge --adapter ./output
+
+# Export to GGUF for Ollama / llama.cpp
+soup export --model ./output --format gguf --quant q4_k_m
 ```
 
 ## Config Example
@@ -154,6 +164,69 @@ soup push --model ./output --repo your-username/my-model
 # Make it private
 soup push --model ./output --repo your-username/my-model --private
 ```
+
+## Merge LoRA Adapter
+
+Merge a LoRA adapter with its base model into a standalone model:
+
+```bash
+# Auto-detect base model from adapter_config.json
+soup merge --adapter ./output --output ./merged
+
+# Specify base model and dtype
+soup merge --adapter ./output --base meta-llama/Llama-3.1-8B --dtype bfloat16
+```
+
+## Export to GGUF
+
+Export models to GGUF format for use with [Ollama](https://ollama.com/) and [llama.cpp](https://github.com/ggerganov/llama.cpp):
+
+```bash
+# Export LoRA adapter (auto-merges with base, then converts)
+soup export --model ./output --format gguf --quant q4_k_m
+
+# Export with different quantizations
+soup export --model ./output --format gguf --quant q8_0
+soup export --model ./output --format gguf --quant f16
+
+# Export a full (already merged) model
+soup export --model ./merged --format gguf
+
+# Specify llama.cpp path manually
+soup export --model ./output --format gguf --llama-cpp /path/to/llama.cpp
+```
+
+Supported quantizations: `q4_0`, `q4_k_m`, `q5_k_m`, `q8_0`, `f16`, `f32`
+
+After export, use with Ollama:
+```bash
+echo 'FROM ./my-model.q4_k_m.gguf' > Modelfile
+ollama create my-model -f Modelfile
+ollama run my-model
+```
+
+## Resume Training
+
+Resume a training run from a checkpoint:
+
+```bash
+# Auto-detect latest checkpoint in output directory
+soup train --config soup.yaml --resume auto
+
+# Resume from a specific checkpoint
+soup train --config soup.yaml --resume ./output/checkpoint-500
+```
+
+## Weights & Biases Integration
+
+Send training metrics to [W&B](https://wandb.ai/) for cloud-based experiment tracking:
+
+```bash
+# Enable W&B logging (requires: pip install wandb)
+soup train --config soup.yaml --wandb
+```
+
+Make sure `WANDB_API_KEY` is set or run `wandb login` first.
 
 ## Data Formats
 
@@ -248,6 +321,10 @@ soup eval --model ./output --benchmarks mmlu --run-id run_20260223_143052_a1b2
 | HuggingFace datasets support | ✅ |
 | Interactive model chat | ✅ |
 | Push to HuggingFace Hub | ✅ |
+| LoRA merge (adapter + base → full model) | ✅ |
+| Export to GGUF (Ollama / llama.cpp) | ✅ |
+| Resume training from checkpoint | ✅ |
+| Weights & Biases integration | ✅ |
 | Experiment tracking (SQLite) | ✅ |
 | Data tools (convert, merge, dedup, stats) | ✅ |
 | Model evaluation (lm-eval) | ✅ |
@@ -259,8 +336,12 @@ soup eval --model ./output --benchmarks mmlu --run-id run_20260223_143052_a1b2
 ```
 soup init [--template chat|code|medical]      Create soup.yaml config
 soup train --config soup.yaml [--dry-run]     Start training
+soup train --resume auto                      Resume from last checkpoint
+soup train --wandb                            Train with W&B logging
 soup chat --model ./output                    Interactive chat with model
 soup push --model ./output --repo user/name   Upload to HuggingFace Hub
+soup merge --adapter ./output                 Merge LoRA with base model
+soup export --model ./output --format gguf    Export to GGUF (Ollama)
 soup data inspect <path>                      View dataset stats
 soup data validate <path> --format alpaca     Check format
 soup data convert <path> --to chatml          Convert between formats
@@ -291,7 +372,7 @@ pip install -e ".[dev]"
 # Lint
 ruff check soup_cli/ tests/
 
-# Run unit tests (fast, no GPU needed — 147 tests)
+# Run unit tests (fast, no GPU needed — 184 tests)
 pytest tests/ -v
 
 # Run smoke tests (downloads tiny model, runs real training)
