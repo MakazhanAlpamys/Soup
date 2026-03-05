@@ -14,6 +14,19 @@ def test_version():
     assert __version__ in result.output
 
 
+def test_version_full():
+    result = runner.invoke(app, ["version", "--full"])
+    assert result.exit_code == 0
+    assert __version__ in result.output
+    assert "Python" in result.output
+
+
+def test_version_full_short_flag():
+    result = runner.invoke(app, ["version", "-f"])
+    assert result.exit_code == 0
+    assert "Python" in result.output
+
+
 def test_help():
     result = runner.invoke(app, ["--help"])
     assert result.exit_code == 0

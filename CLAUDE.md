@@ -79,6 +79,8 @@ soup train --config soup.yaml
 
 **Confirmation prompts:** `commands/train.py` and `commands/sweep.py` ask for confirmation before starting. Skip with `--yes` / `-y`.
 
+**Version:** `cli.py` `version()` command supports `--full` flag that shows version, Python version, GPU backend, and installed optional extras in one line.
+
 ## Code Conventions
 
 - **Line length:** 100 chars (ruff enforced)
@@ -107,14 +109,14 @@ soup train --config soup.yaml
 
 ## Tests
 
-Test suite (~321 tests) lives in `tests/`:
+Test suite lives in `tests/`:
 
 | File | Covers |
 |---|---|
 | `test_config.py` | Config loading, validation, defaults |
 | `test_data.py` | Format detection, conversion, validation |
 | `test_gpu.py` | GPU detection, batch size estimation |
-| `test_cli.py` | CLI commands basic validation |
+| `test_cli.py` | CLI commands, version --full |
 | `test_tracker.py` | SQLite experiment tracker |
 | `test_runs.py` | `soup runs` CLI commands |
 | `test_data_tools.py` | Data convert/merge/dedup/stats commands |

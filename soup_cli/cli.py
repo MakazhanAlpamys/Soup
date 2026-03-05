@@ -60,9 +60,50 @@ data.app.command(name="generate")(generate.generate)
 
 
 @app.command()
-def version():
+def version(
+    full: bool = typer.Option(False, "--full", "-f", help="Show system info and extras"),
+):
     """Show Soup CLI version."""
-    console.print(f"[bold green]soup[/] v{__version__}")
+    if not full:
+        console.print(f"[bold green]soup[/] v{__version__}")
+        return
+
+    import platform
+
+    parts = [f"[bold green]soup[/] v{__version__}"]
+    parts.append(f"Python {platform.python_version()}")
+
+    # GPU info
+    try:
+        import torch
+        if torch.cuda.is_available():
+            parts.append(f"CUDA {torch.version.cuda}")
+        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            parts.append("MPS")
+        else:
+            parts.append("CPU only")
+    except ImportError:
+        parts.append("no torch")
+
+    # Installed extras
+    extras = []
+    for name, label in [
+        ("fastapi", "serve"),
+        ("datasketch", "data"),
+        ("lm_eval", "eval"),
+        ("deepspeed", "deepspeed"),
+        ("wandb", "wandb"),
+    ]:
+        try:
+            __import__(name)
+            extras.append(label)
+        except ImportError:
+            pass
+
+    if extras:
+        parts.append(f"extras: {', '.join(extras)}")
+
+    console.print(" | ".join(parts))
 
 
 @app.callback(invoke_without_command=True)

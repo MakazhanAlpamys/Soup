@@ -349,6 +349,17 @@ soup doctor
 
 Shows: Python version, GPU availability, all dependency versions, and fix suggestions.
 
+## Version Info
+
+```bash
+# Basic version
+soup version
+
+# Full system info (useful for bug reports)
+soup version --full
+# → soup v0.3.2 | Python 3.11.5 | CUDA 12.1 | extras: serve, data
+```
+
 ## Error Handling
 
 Soup shows friendly error messages by default (2-3 lines with a fix suggestion). For full tracebacks:
@@ -500,7 +511,7 @@ soup runs show <run_id>                       Run details + loss graph
 soup runs compare <run_1> <run_2>             Compare two runs
 soup doctor                                   Check environment
 soup quickstart [--dry-run]                   Full demo
-soup version                                  Show version
+soup version [--full]                         Show version (--full: system info)
 soup --verbose <command>                      Full traceback on errors
 ```
 
