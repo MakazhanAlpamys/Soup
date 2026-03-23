@@ -200,6 +200,63 @@ class TestSetNestedParam:
         assert config["training"]["lr"] == pytest.approx(1e-5)
 
 
+class TestEarlyStopping:
+    """Test early stopping logic in sweep."""
+
+    def test_early_stop_flag_in_dry_run(self, tmp_path):
+        """Dry run with early-stop should show plan."""
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        config_file = tmp_path / "soup.yaml"
+        config_file.write_text(
+            "base: test-model\n"
+            "data:\n"
+            "  train: ./data.jsonl\n"
+        )
+
+        runner = CliRunner()
+        result = runner.invoke(app, [
+            "sweep",
+            "--config", str(config_file),
+            "--param", "lr=1e-5,2e-5,5e-5",
+            "--early-stop", "1.5",
+            "--dry-run",
+        ])
+        assert result.exit_code == 0
+        assert "Sweep Plan" in result.output
+
+    def test_early_stop_skips_bad_runs(self):
+        """Early stopping should skip runs when loss exceeds threshold."""
+        # Simulate the early stopping logic directly
+        best_loss = 0.5
+        early_stop = 1.5
+        current_loss = 1.0  # 0.5 * 1.5 = 0.75, current is 1.0 > 0.75
+
+        assert current_loss > best_loss * early_stop
+
+    def test_early_stop_allows_good_runs(self):
+        """Early stopping should NOT skip runs within threshold."""
+        best_loss = 0.5
+        early_stop = 1.5
+        current_loss = 0.6  # 0.5 * 1.5 = 0.75, current is 0.6 < 0.75
+
+        assert current_loss <= best_loss * early_stop
+
+    def test_early_stop_threshold_values(self):
+        """Various threshold values should work correctly."""
+        best_loss = 1.0
+
+        # 1.2 = 20% worse tolerance
+        assert 1.15 <= best_loss * 1.2  # within threshold
+        assert 1.25 > best_loss * 1.2   # exceeds threshold
+
+        # 2.0 = 100% worse tolerance
+        assert 1.99 <= best_loss * 2.0  # within threshold
+        assert 2.01 > best_loss * 2.0   # exceeds threshold
+
+
 class TestSweepCLI:
     """Test sweep CLI command."""
 

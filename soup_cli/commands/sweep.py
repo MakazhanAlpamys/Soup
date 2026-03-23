@@ -50,6 +50,11 @@ def sweep(
         "--dry-run",
         help="Show planned runs without executing",
     ),
+    early_stop: float = typer.Option(
+        None,
+        "--early-stop",
+        help="Stop early if run's loss exceeds best loss by this factor (e.g. 1.5 = 50% worse)",
+    ),
     yes: bool = typer.Option(
         False,
         "--yes",
@@ -110,6 +115,8 @@ def sweep(
     # Execute sweep
     base_cfg = load_config(config_path)
     results = []
+    best_loss = float("inf")
+    skipped = 0
 
     for idx, combo in enumerate(combinations):
         run_name = f"{name or 'sweep'}_{idx + 1}"
@@ -120,14 +127,26 @@ def sweep(
 
         try:
             result = _run_single(base_cfg, combo, run_name, config_path)
+            final_loss = result.get("final_loss", 0)
             results.append({
                 "name": run_name,
                 "params": combo,
                 "run_id": result.get("run_id", ""),
-                "final_loss": result.get("final_loss", 0),
+                "final_loss": final_loss,
                 "duration": result.get("duration", ""),
                 "status": "completed",
             })
+
+            # Update best loss and check early stopping for remaining runs
+            if final_loss and final_loss < best_loss:
+                best_loss = final_loss
+
+            if early_stop and final_loss and best_loss < float("inf"):
+                if final_loss > best_loss * early_stop:
+                    console.print(
+                        f"[yellow]Loss {final_loss:.4f} exceeds threshold "
+                        f"({best_loss:.4f} × {early_stop} = {best_loss * early_stop:.4f})[/]"
+                    )
         except Exception as exc:
             console.print(f"[red]Run {run_name} failed: {exc}[/]")
             results.append({
@@ -139,8 +158,26 @@ def sweep(
                 "status": "failed",
             })
 
+        # Early stopping: skip remaining runs if too many are poor
+        if early_stop and len(results) >= 2:
+            completed = [r for r in results if r["status"] == "completed" and r["final_loss"]]
+            if completed:
+                recent = completed[-1]
+                if recent["final_loss"] > best_loss * early_stop:
+                    remaining = len(combinations) - idx - 1
+                    if remaining > 0:
+                        skipped = remaining
+                        console.print(
+                            f"[yellow]Early stopping: skipping {remaining} remaining run(s). "
+                            f"Last loss {recent['final_loss']:.4f} exceeded threshold.[/]"
+                        )
+                        break
+
     # Summary table
     _display_summary(results, sweep_params)
+
+    if skipped:
+        console.print(f"\n[yellow]Early stopping: {skipped} run(s) skipped.[/]")
 
 
 def _parse_sweep_params(params: list[str]) -> dict[str, list]:

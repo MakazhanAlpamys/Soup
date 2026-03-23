@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "soup-cli"
-version = "0.3.2"
+version = "0.4.0"
 description = "Fine-tune LLMs in one command. No SSH, no config hell."
 readme = "README.md"
 license = "MIT"
@@ -23,6 +23,7 @@ classifiers = [
 ]
 dependencies = [
     "typer>=0.9.0",
+    "click>=8.2.0",
     "rich>=13.0.0",
     "pydantic>=2.0.0",
     "pyyaml>=6.0",

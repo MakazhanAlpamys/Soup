@@ -48,6 +48,11 @@ class DPOTrainerWrapper:
         )
         from trl import DPOConfig, DPOTrainer
 
+        # Enable Rich progress bar for HuggingFace downloads
+        from soup_cli.trainer.sft import _enable_hf_transfer_progress
+
+        _enable_hf_transfer_progress()
+
         cfg = self.config
         tcfg = cfg.training
 

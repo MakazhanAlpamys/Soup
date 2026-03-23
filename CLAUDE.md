@@ -43,7 +43,7 @@ soup train --config soup.yaml
 
 **Data pipeline:** `data/loader.py` handles local files (JSONL/JSON/CSV/Parquet) and HuggingFace datasets. `data/formats.py` auto-detects and normalizes alpaca/sharegpt/chatml formats into a unified `{"messages": [...]}` structure. Also supports reverse conversion via `messages_to_format()`.
 
-**Trainer:** `trainer/sft.py` (`SFTTrainerWrapper`) and `trainer/dpo.py` (`DPOTrainerWrapper`) wrap HuggingFace's SFTTrainer/DPOTrainer with auto quantization (BitsAndBytes), LoRA (PEFT), and batch size estimation. Heavy ML imports are lazy (inside methods) so CLI stays fast for non-training commands.
+**Trainer:** `trainer/sft.py` (`SFTTrainerWrapper`) and `trainer/dpo.py` (`DPOTrainerWrapper`) wrap HuggingFace's SFTTrainer/DPOTrainer with auto quantization (BitsAndBytes), LoRA (PEFT), and batch size estimation. Heavy ML imports are lazy (inside methods) so CLI stays fast for non-training commands. Both trainers enable Rich progress bars for HuggingFace Hub model downloads via `_enable_hf_transfer_progress()`.
 
 **Monitoring:** `monitoring/callback.py` is a HuggingFace `TrainerCallback` that streams metrics to `monitoring/display.py` (Rich Live panel at 2Hz) and optionally to the experiment tracker.
 
@@ -65,7 +65,7 @@ soup train --config soup.yaml
 
 **Data generate:** `commands/generate.py` generates synthetic training data using LLMs. Supports OpenAI API and local models as providers. Outputs in alpaca/sharegpt/chatml format. Validates on the fly and can deduplicate against existing datasets. Registered as `soup data generate`.
 
-**Sweep:** `commands/sweep.py` runs hyperparameter search (grid or random) over training parameters. Uses shortcut names (lr, epochs, lora_r, etc.) or dot notation. Each run is saved to the experiment tracker. Supports `--dry-run` to preview combinations.
+**Sweep:** `commands/sweep.py` runs hyperparameter search (grid or random) over training parameters. Uses shortcut names (lr, epochs, lora_r, etc.) or dot notation. Each run is saved to the experiment tracker. Supports `--dry-run` to preview combinations and `--early-stop <factor>` to skip remaining runs when loss exceeds the best by a given factor.
 
 **Diff:** `commands/diff.py` compares outputs of two models side-by-side on the same prompts. Computes metrics (length, word count, word overlap). Supports JSONL prompt files and CLI prompt arguments.
 
@@ -141,3 +141,4 @@ Test suite lives in `tests/`:
 | `test_errors.py` | Friendly error messages, --verbose flag, error mapping |
 | `test_doctor.py` | `soup doctor` command, version checking, dependency table |
 | `test_quickstart.py` | `soup quickstart` demo, data/config creation, --dry-run |
+| `test_progress.py` | Rich download progress bar, `_enable_hf_transfer_progress` |

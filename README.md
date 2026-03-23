@@ -289,6 +289,9 @@ soup sweep --config soup.yaml --param lr=1e-5,2e-5,5e-5 --strategy random --max-
 
 # Preview without running
 soup sweep --config soup.yaml --param lr=1e-5,2e-5 --param epochs=2,3 --dry-run
+
+# Early stopping: skip remaining runs if loss exceeds 1.5x best
+soup sweep --config soup.yaml --param lr=1e-5,2e-5,5e-5 --early-stop 1.5
 ```
 
 ## Model Comparison
@@ -357,7 +360,7 @@ soup version
 
 # Full system info (useful for bug reports)
 soup version --full
-# → soup v0.3.2 | Python 3.11.5 | CUDA 12.1 | extras: serve, data
+# → soup v0.4.0 | Python 3.11.5 | CUDA 12.1 | extras: serve, data
 ```
 
 ## Error Handling
@@ -476,11 +479,12 @@ soup eval --model ./output --benchmarks mmlu --run-id run_20260223_143052_a1b2
 | Model evaluation (lm-eval) | ✅ |
 | Inference server (OpenAI-compatible) | ✅ |
 | Synthetic data generation | ✅ |
-| Hyperparameter sweep (grid/random) | ✅ |
+| Hyperparameter sweep (grid/random + early stopping) | ✅ |
 | Model comparison (diff) | ✅ |
 | Multi-GPU / DeepSpeed | ✅ |
 | Friendly error messages | ✅ |
 | Health check (soup doctor) | ✅ |
+| Rich download progress bars | ✅ |
 | Quickstart demo | ✅ |
 | Confirmation prompts | ✅ |
 | Web dashboard | 🔜 |

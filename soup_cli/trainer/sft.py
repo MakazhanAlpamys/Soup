@@ -42,6 +42,9 @@ class SFTTrainerWrapper:
         )
         from trl import SFTTrainer
 
+        # Enable Rich progress bar for HuggingFace downloads
+        _enable_hf_transfer_progress()
+
         cfg = self.config
         tcfg = cfg.training
 
@@ -226,3 +229,61 @@ class SFTTrainerWrapper:
             "output_dir": self._output_dir,
             "total_steps": self.trainer.state.global_step,
         }
+
+
+def _enable_hf_transfer_progress():
+    """Enable Rich progress bars for HuggingFace Hub file downloads."""
+    try:
+        from rich.progress import (
+            BarColumn,
+            DownloadColumn,
+            Progress,
+            TextColumn,
+            TimeRemainingColumn,
+            TransferSpeedColumn,
+        )
+
+        class RichDownloadProgress:
+            """Wraps tqdm calls with Rich progress bars for HF downloads."""
+
+            def __init__(self, *args, **kwargs):
+                desc = kwargs.get("desc", "") or (args[0] if args else "Downloading")
+                total = kwargs.get("total", None)
+                self._progress = Progress(
+                    TextColumn("[bold blue]{task.description}"),
+                    BarColumn(),
+                    DownloadColumn(),
+                    TransferSpeedColumn(),
+                    TimeRemainingColumn(),
+                    console=console,
+                )
+                self._progress.start()
+                self._task = self._progress.add_task(str(desc), total=total)
+                self._n = 0
+
+            def update(self, n=1):
+                self._n += n
+                self._progress.update(self._task, advance=n)
+
+            def close(self):
+                self._progress.stop()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                self.close()
+
+            def __iter__(self):
+                return self
+
+            def __next__(self):
+                raise StopIteration
+
+        # Patch huggingface_hub's tqdm usage
+        import huggingface_hub.utils._http as hf_http
+
+        if hasattr(hf_http, "tqdm"):
+            hf_http.tqdm = RichDownloadProgress
+    except (ImportError, AttributeError):
+        pass  # Silently skip if huggingface_hub internals changed
