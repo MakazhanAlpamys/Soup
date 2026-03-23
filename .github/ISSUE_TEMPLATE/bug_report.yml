@@ -1,0 +1,51 @@
+name: Bug Report
+description: Report a bug or unexpected behavior
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug! Please fill out the sections below.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What happened? What did you expect to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Minimal steps to reproduce the issue
+      placeholder: |
+        1. pip install soup-cli
+        2. soup train --config soup.yaml
+        3. See error...
+    validations:
+      required: true
+
+  - type: textarea
+    id: config
+    attributes:
+      label: Config (soup.yaml)
+      description: Paste your config file if relevant
+      render: yaml
+
+  - type: textarea
+    id: error
+    attributes:
+      label: Error output
+      description: Paste the full error (use `--verbose` for traceback)
+      render: shell
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Run `soup doctor` and paste the output
+      render: shell
+    validations:
+      required: true
