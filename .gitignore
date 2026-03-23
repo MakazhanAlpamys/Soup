@@ -31,6 +31,9 @@ wandb/
 .soup/
 *.db
 
+# Test reports
+report.xml
+
 # Secrets
 .env
 *.key
