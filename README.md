@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="soup.png" alt="Soup" width="200">
+  <img src="soup.svg" alt="Soup" width="680">
 </p>
 
 <h1 align="center">Soup</h1>

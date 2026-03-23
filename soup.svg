@@ -1,0 +1,37 @@
+<svg width="100%" viewBox="0 0 680 260" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+
+  <!-- Left: PNG logo -->
+  <image xlink:href="soup.png" x="10" y="10" width="180" height="220" preserveAspectRatio="xMidYMid meet"/>
+
+  <!-- Right: Text content -->
+  <g>
+    <text x="230" y="75" font-family="&quot;Anthropic Sans&quot;, sans-serif" font-size="48" font-weight="500" fill="rgb(20, 20, 19)" letter-spacing="-1">Soup</text>
+  </g>
+
+  <g>
+    <text x="230" y="105" font-family="&quot;Anthropic Sans&quot;, sans-serif" font-size="14" font-weight="400" fill="rgb(61, 61, 58)">Fine-tune LLMs in one command. No SSH, no config hell.</text>
+  </g>
+
+  <!-- Terminal block -->
+  <rect x="230" y="122" width="420" height="120" rx="8" fill="rgb(20, 20, 19)" opacity="0.06" stroke="rgba(31, 30, 29, 0.15)" stroke-width="0.8"/>
+
+  <!-- Terminal dots -->
+  <circle cx="248" cy="137" r="3" fill="#E24B4A" opacity="0.9"/>
+  <circle cx="261" cy="137" r="3" fill="#EF9F27" opacity="0.76"/>
+  <circle cx="274" cy="137" r="3" fill="#639922" opacity="0.7"/>
+
+  <!-- Terminal prompt lines -->
+  <text x="246" y="163" font-family="ui-monospace, monospace" font-size="13" fill="#639922">$</text>
+  <text x="260" y="163" font-family="ui-monospace, monospace" font-size="13" fill="rgb(20, 20, 19)">pip install soup-cli</text>
+
+  <text x="246" y="185" font-family="ui-monospace, monospace" font-size="13" fill="#639922">$</text>
+  <text x="260" y="185" font-family="ui-monospace, monospace" font-size="13" fill="rgb(20, 20, 19)">soup init --template chat</text>
+
+  <text x="246" y="207" font-family="ui-monospace, monospace" font-size="13" fill="#639922">$</text>
+  <text x="260" y="207" font-family="ui-monospace, monospace" font-size="13" fill="rgb(20, 20, 19)">soup train</text>
+  <text x="344" y="207" font-family="ui-monospace, monospace" font-size="13" fill="rgb(20, 20, 19)">▌</text>
+
+  <!-- Divider line -->
+  <line x1="205" y1="40" x2="205" y2="250" stroke="rgba(31, 30, 29, 0.15)" stroke-width="0.8" opacity="0.6"/>
+
+</svg>
