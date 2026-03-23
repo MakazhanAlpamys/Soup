@@ -428,6 +428,26 @@ response = client.chat.completions.create(
 )
 ```
 
+### vLLM Backend (2-4x Faster Inference)
+
+Use [vLLM](https://github.com/vllm-project/vllm) for significantly better throughput in production:
+
+```bash
+# Install vLLM support
+pip install 'soup-cli[serve-fast]'
+
+# Start with vLLM backend
+soup serve --model ./output --backend vllm
+
+# Multi-GPU with tensor parallelism
+soup serve --model ./output --backend vllm --tensor-parallel 2
+
+# Control GPU memory usage
+soup serve --model ./output --backend vllm --gpu-memory 0.8
+```
+
+> **Tip:** Soup auto-detects vLLM. When installed, you'll see a hint during `soup serve` if you haven't enabled it yet.
+
 ## Synthetic Data Generation
 
 Generate training data using LLMs:
@@ -668,6 +688,7 @@ soup merge --adapter ./output                 Merge LoRA with base model
 soup export --model ./output --format gguf    Export to GGUF (Ollama)
 soup eval --model ./output --benchmarks mmlu  Evaluate on benchmarks
 soup serve --model ./output --port 8000       OpenAI-compatible API server
+soup serve --model ./output --backend vllm    vLLM backend (2-4x throughput)
 soup sweep --config soup.yaml --param lr=...  Hyperparameter search
 soup diff --model-a ./a --model-b ./b         Compare two models
 soup data inspect <path>                      View dataset stats
@@ -702,6 +723,7 @@ soup --verbose <command>                      Full traceback on errors
 | `fast` | `pip install 'soup-cli[fast]'` | Unsloth backend (2-5x faster, -80% VRAM) |
 | `ui` | `pip install 'soup-cli[ui]'` | Web UI + inference server (FastAPI + uvicorn) |
 | `serve` | `pip install 'soup-cli[serve]'` | Inference server (FastAPI + uvicorn) |
+| `serve-fast` | `pip install 'soup-cli[serve-fast]'` | vLLM inference backend (2-4x throughput) |
 | `data` | `pip install 'soup-cli[data]'` | Deduplication (MinHash via datasketch) |
 | `eval` | `pip install 'soup-cli[eval]'` | Benchmark evaluation (lm-evaluation-harness) |
 | `deepspeed` | `pip install 'soup-cli[deepspeed]'` | Multi-GPU training (DeepSpeed ZeRO) |

@@ -91,6 +91,7 @@ def version(
     extras = []
     for name, label in [
         ("fastapi", "serve"),
+        ("vllm", "serve-fast"),
         ("datasketch", "data"),
         ("lm_eval", "eval"),
         ("deepspeed", "deepspeed"),

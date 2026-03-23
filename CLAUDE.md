@@ -67,7 +67,9 @@ soup train --config soup.yaml
 
 **W&B integration:** `commands/train.py` supports `--wandb` flag to enable Weights & Biases logging. Sets `report_to="wandb"` in TrainingArguments. Requires `pip install wandb`.
 
-**Serve:** `commands/serve.py` starts a local inference server with OpenAI-compatible API (`/v1/chat/completions`, `/v1/models`, `/health`). Uses FastAPI + uvicorn. Supports LoRA adapters and full models, SSE streaming. Requires `pip install 'soup-cli[serve]'`.
+**Serve:** `commands/serve.py` starts a local inference server with OpenAI-compatible API (`/v1/chat/completions`, `/v1/models`, `/health`). Supports two backends: `transformers` (default, FastAPI + uvicorn) and `vllm` (2-4x better throughput). Supports LoRA adapters and full models, SSE streaming. `--backend vllm` enables vLLM's `AsyncLLMEngine` with tensor parallelism (`--tensor-parallel`) and GPU memory control (`--gpu-memory`). Auto-detects vLLM if installed and shows a hint. Requires `pip install 'soup-cli[serve]'` or `pip install 'soup-cli[serve-fast]'` for vLLM.
+
+**vLLM backend:** `utils/vllm.py` provides `is_vllm_available()`, `get_vllm_version()`, `create_vllm_engine()`, and `create_vllm_app()`. The engine uses `AsyncLLMEngine` with `AsyncEngineArgs` for async inference. For LoRA adapters, loads base model with `enable_lora=True` and applies adapter via `LoRARequest` at request time. Streaming uses vLLM's native token-by-token generation (not simulated). Config: `--backend vllm` (default: `transformers`). Install: `pip install 'soup-cli[serve-fast]'`.
 
 **Data generate:** `commands/generate.py` generates synthetic training data using LLMs. Supports OpenAI API and local models as providers. Outputs in alpaca/sharegpt/chatml format. Validates on the fly and can deduplicate against existing datasets. Registered as `soup data generate`.
 
@@ -174,3 +176,4 @@ Test suite lives in `tests/`:
 | `test_vision.py` | Vision modality config, LLaVA/ShareGPT4V formats, loader, trainer, templates |
 | `test_qat.py` | QAT config, validation, trainer integration, export compatibility |
 | `test_ui.py` | Web UI command, FastAPI endpoints, static files, config validation |
+| `test_vllm_serve.py` | vLLM backend detection, engine creation, serve --backend flag, FastAPI app |

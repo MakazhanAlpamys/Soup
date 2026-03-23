@@ -47,6 +47,22 @@ def serve(
         "--max-tokens",
         help="Default max tokens for generation",
     ),
+    backend: str = typer.Option(
+        "transformers",
+        "--backend",
+        help="Inference backend: transformers (default) or vllm",
+    ),
+    tensor_parallel: int = typer.Option(
+        1,
+        "--tensor-parallel",
+        "--tp",
+        help="Number of GPUs for tensor parallelism (vLLM only)",
+    ),
+    gpu_memory_utilization: float = typer.Option(
+        0.9,
+        "--gpu-memory",
+        help="Fraction of GPU memory to use (vLLM only, 0.0-1.0)",
+    ),
 ):
     """Start a local inference server with OpenAI-compatible API."""
     # Lazy imports for fast CLI startup
@@ -57,9 +73,39 @@ def serve(
     except ImportError:
         console.print(
             "[red]FastAPI/uvicorn not installed.[/]\n"
-            "Install with: [bold]pip install 'soup-cli[ui]'[/]"
+            "Install with: [bold]pip install 'soup-cli[serve]'[/]"
         )
         raise typer.Exit(1)
+
+    # Validate backend
+    backend = backend.lower()
+    if backend not in ("transformers", "vllm"):
+        console.print(
+            f"[red]Unknown backend: {backend}[/]\n"
+            "Supported backends: [bold]transformers[/], [bold]vllm[/]"
+        )
+        raise typer.Exit(1)
+
+    # Auto-detect vLLM: if installed but not selected, show hint
+    if backend == "transformers":
+        from soup_cli.utils.vllm import is_vllm_available
+
+        if is_vllm_available():
+            console.print(
+                "[dim]Hint: vLLM is installed. Use [bold]--backend vllm[/] "
+                "for 2-4x better throughput.[/]"
+            )
+
+    # Validate vLLM availability
+    if backend == "vllm":
+        from soup_cli.utils.vllm import is_vllm_available
+
+        if not is_vllm_available():
+            console.print(
+                "[red]vLLM not installed.[/]\n"
+                "Install with: [bold]pip install 'soup-cli[serve-fast]'[/]"
+            )
+            raise typer.Exit(1)
 
     model_path = Path(model)
     if not model_path.exists():
@@ -80,43 +126,58 @@ def serve(
             )
             raise typer.Exit(1)
 
-    # Detect device
-    if not device:
+    # Detect device (only for transformers backend)
+    if not device and backend == "transformers":
         from soup_cli.utils.gpu import detect_device
 
         device, _ = detect_device()
+    elif not device:
+        device = "cuda"
 
+    backend_label = "vLLM" if backend == "vllm" else "transformers"
     console.print(
         Panel(
-            f"Model:  [bold]{model_path}[/]\n"
-            + (f"Base:   [bold]{base_model}[/]\n" if is_adapter else "")
-            + f"Device: [bold]{device}[/]\n"
-            f"Type:   [bold]{'LoRA adapter' if is_adapter else 'Full model'}[/]",
+            f"Model:   [bold]{model_path}[/]\n"
+            + (f"Base:    [bold]{base_model}[/]\n" if is_adapter else "")
+            + f"Device:  [bold]{device}[/]\n"
+            f"Type:    [bold]{'LoRA adapter' if is_adapter else 'Full model'}[/]\n"
+            f"Backend: [bold]{backend_label}[/]"
+            + (f"\nTP:      [bold]{tensor_parallel}[/]" if backend == "vllm" else ""),
             title="Loading model",
         )
     )
 
-    # Load model
-    model_obj, tokenizer = _load_model(
-        model_path=str(model_path),
-        base_model=base_model,
-        is_adapter=is_adapter,
-        device=device,
-    )
-    console.print("[bold green]Model loaded![/]")
+    if backend == "vllm":
+        app = _serve_vllm(
+            model_path=model_path,
+            base_model=base_model,
+            is_adapter=is_adapter,
+            max_tokens_default=max_tokens_default,
+            tensor_parallel=tensor_parallel,
+            gpu_memory_utilization=gpu_memory_utilization,
+        )
+    else:
+        # Transformers backend (original)
+        model_obj, tokenizer = _load_model(
+            model_path=str(model_path),
+            base_model=base_model,
+            is_adapter=is_adapter,
+            device=device,
+        )
+        console.print("[bold green]Model loaded![/]")
 
-    # Build and start FastAPI app
-    app = _create_app(
-        model_obj=model_obj,
-        tokenizer=tokenizer,
-        device=device,
-        model_name=str(model_path.name),
-        max_tokens_default=max_tokens_default,
-    )
+        app = _create_app(
+            model_obj=model_obj,
+            tokenizer=tokenizer,
+            device=device,
+            model_name=str(model_path.name),
+            max_tokens_default=max_tokens_default,
+        )
 
     console.print(
         Panel(
             f"URL:       [bold]http://{host}:{port}[/]\n"
+            f"Backend:   [bold]{backend_label}[/]\n"
             f"Endpoints: [bold]/v1/chat/completions[/], [bold]/v1/models[/], [bold]/health[/]\n\n"
             f"Example:\n"
             f"  curl http://localhost:{port}/v1/chat/completions \\\n"
@@ -133,6 +194,40 @@ def serve(
     import uvicorn
 
     uvicorn.run(app, host=host, port=port, log_level="warning")
+
+
+def _serve_vllm(
+    model_path: Path,
+    base_model: Optional[str],
+    is_adapter: bool,
+    max_tokens_default: int,
+    tensor_parallel: int,
+    gpu_memory_utilization: float,
+):
+    """Set up vLLM engine and create FastAPI app."""
+    from soup_cli.utils.vllm import create_vllm_app, create_vllm_engine
+
+    console.print("[dim]Initializing vLLM engine...[/]")
+    engine, engine_model_name = create_vllm_engine(
+        model_path=str(model_path),
+        base_model=base_model,
+        is_adapter=is_adapter,
+        tensor_parallel_size=tensor_parallel,
+        gpu_memory_utilization=gpu_memory_utilization,
+    )
+    console.print("[bold green]vLLM engine ready![/]")
+
+    adapter_path = str(model_path) if is_adapter else None
+
+    app = create_vllm_app(
+        engine=engine,
+        engine_model_name=engine_model_name,
+        model_name=str(model_path.name),
+        adapter_path=adapter_path,
+        max_tokens_default=max_tokens_default,
+    )
+
+    return app
 
 
 def _detect_base_model(adapter_config_path: Path) -> Optional[str]:

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "soup-cli"
-version = "0.7.3"
+version = "0.8.0"
 description = "Fine-tune LLMs in one command. No SSH, no config hell."
 readme = "README.md"
 license = "MIT"
@@ -44,6 +44,7 @@ wandb = ["wandb>=0.15.0"]
 dev = ["pytest>=7.0", "ruff>=0.1.0", "pytest-cov>=4.0", "httpx>=0.24.0"]
 ui = ["fastapi>=0.104.0", "uvicorn>=0.24.0"]
 serve = ["fastapi>=0.104.0", "uvicorn>=0.24.0"]
+serve-fast = ["vllm>=0.4.0", "fastapi>=0.104.0", "uvicorn>=0.24.0"]
 generate = ["httpx>=0.24.0"]
 deepspeed = ["deepspeed>=0.12.0"]
 fast = ["unsloth>=2024.8"]
