@@ -1,39 +1,6 @@
-<svg width="680" height="260" viewBox="0 0 680 260" xmlns="http://www.w3.org/2000/svg">
-
-  <!-- Background -->
-  <rect width="680" height="260" fill="white"/>
-
-  <!-- Divider line -->
-  <line x1="205" y1="20" x2="205" y2="250" stroke="rgba(31,30,29,0.15)" stroke-width="0.8"/>
-
-  <!-- Title -->
-  <text x="230" y="75" font-family="sans-serif" font-size="48" font-weight="500" fill="rgb(20,20,19)" letter-spacing="-1">Soup</text>
-
-  <!-- Subtitle -->
-  <text x="230" y="105" font-family="sans-serif" font-size="14" fill="rgb(61,61,58)">Fine-tune LLMs in one command. No SSH, no config hell.</text>
-
-  <!-- Terminal block -->
-  <rect x="230" y="118" width="435" height="125" rx="8" fill="rgb(20,20,19)" opacity="0.06" stroke="rgba(31,30,29,0.15)" stroke-width="0.8"/>
-
-  <!-- Terminal dots -->
-  <circle cx="248" cy="135" r="3" fill="#E24B4A" opacity="0.9"/>
-  <circle cx="261" cy="135" r="3" fill="#EF9F27" opacity="0.76"/>
-  <circle cx="274" cy="135" r="3" fill="#639922" opacity="0.7"/>
-
-  <!-- Line 1 -->
-  <text x="246" y="162" font-family="ui-monospace,monospace" font-size="13" fill="#639922">$</text>
-  <text x="260" y="162" font-family="ui-monospace,monospace" font-size="13" fill="rgb(20,20,19)">pip install soup-cli</text>
-
-  <!-- Line 2 -->
-  <text x="246" y="184" font-family="ui-monospace,monospace" font-size="13" fill="#639922">$</text>
-  <text x="260" y="184" font-family="ui-monospace,monospace" font-size="13" fill="rgb(20,20,19)">soup init --template chat</text>
-
-  <!-- Line 3 -->
-  <text x="246" y="206" font-family="ui-monospace,monospace" font-size="13" fill="#639922">$</text>
-  <text x="260" y="206" font-family="ui-monospace,monospace" font-size="13" fill="rgb(20,20,19)">soup train</text>
-  <text x="344" y="206" font-family="ui-monospace,monospace" font-size="13" fill="rgb(20,20,19)">▌</text>
-
-</svg>
+<p align="center">
+  <img src="soup.png" alt="Soup" width="200">
+</p>
 
 <h1 align="center">Soup</h1>
 
