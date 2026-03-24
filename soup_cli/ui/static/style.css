@@ -1,17 +1,17 @@
-/* Soup Web UI — Warm theme inspired by the Soup logo */
+/* Soup Web UI — Tech theme inspired by the Soup logo */
 :root {
-  --bg: #1a1210;
-  --bg-card: #2a1f1b;
-  --bg-input: #3d2e28;
-  --border: #5a4438;
-  --text: #f5ebe6;
-  --text-dim: #a89080;
-  --accent: #e8703a;
-  --accent-hover: #d45a28;
-  --accent-gold: #f2b233;
+  --bg: #0c0e14;
+  --bg-card: #14171f;
+  --bg-input: #1c2030;
+  --border: #2a3050;
+  --text: #e8eaf0;
+  --text-dim: #8890a8;
+  --accent: #8b6cc7;
+  --accent-hover: #7a5ab8;
+  --accent-cyan: #5ce0d8;
   --danger: #e84040;
   --warning: #f2b233;
-  --info: #e8703a;
+  --info: #8b6cc7;
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -72,7 +72,7 @@ body {
 }
 
 .nav-item:hover { background: var(--bg-input); color: var(--text); }
-.nav-item.active { color: var(--accent); background: rgba(232, 112, 58, 0.1); border-right: 3px solid var(--accent); }
+.nav-item.active { color: var(--accent-cyan); background: rgba(92, 224, 216, 0.08); border-right: 3px solid var(--accent-cyan); }
 
 .sidebar-footer {
   padding: 1rem 1.5rem;
@@ -123,7 +123,7 @@ body {
 }
 
 .stat-card { text-align: center; }
-.stat-value { font-size: 2rem; font-weight: 700; color: var(--accent); }
+.stat-value { font-size: 2rem; font-weight: 700; color: var(--accent-cyan); }
 .stat-label { font-size: 0.85rem; color: var(--text-dim); margin-top: 0.25rem; }
 
 /* Tables */
@@ -148,10 +148,10 @@ th {
 
 td {
   padding: 0.75rem 1rem;
-  border-bottom: 1px solid rgba(71, 85, 105, 0.3);
+  border-bottom: 1px solid rgba(42, 48, 80, 0.5);
 }
 
-tr:hover td { background: rgba(71, 85, 105, 0.15); }
+tr:hover td { background: rgba(139, 108, 199, 0.06); }
 
 /* Buttons */
 .btn {
@@ -170,7 +170,7 @@ tr:hover td { background: rgba(71, 85, 105, 0.15); }
 }
 
 .btn:hover { border-color: var(--text-dim); }
-.btn-primary { background: var(--accent); color: #000; border-color: var(--accent); }
+.btn-primary { background: var(--accent); color: #fff; border-color: var(--accent); }
 .btn-primary:hover { background: var(--accent-hover); }
 .btn-danger { background: var(--danger); color: #fff; border-color: var(--danger); }
 .btn-danger:hover { opacity: 0.9; }
@@ -185,10 +185,10 @@ tr:hover td { background: rgba(71, 85, 105, 0.15); }
   font-weight: 600;
 }
 
-.badge-success { background: rgba(232, 112, 58, 0.2); color: var(--accent); }
+.badge-success { background: rgba(92, 224, 216, 0.15); color: var(--accent-cyan); }
 .badge-danger { background: rgba(232, 64, 64, 0.2); color: var(--danger); }
 .badge-warning { background: rgba(242, 178, 51, 0.2); color: var(--warning); }
-.badge-info { background: rgba(232, 112, 58, 0.15); color: var(--info); }
+.badge-info { background: rgba(139, 108, 199, 0.15); color: var(--info); }
 
 /* Forms */
 .form-group { margin-bottom: 1rem; }
@@ -252,8 +252,8 @@ textarea {
   border-radius: 0.5rem;
 }
 
-.chat-msg.user { background: rgba(242, 178, 51, 0.1); }
-.chat-msg.assistant { background: rgba(232, 112, 58, 0.1); }
+.chat-msg.user { background: rgba(92, 224, 216, 0.08); }
+.chat-msg.assistant { background: rgba(139, 108, 199, 0.08); }
 
 .chat-msg-role {
   font-size: 0.75rem;
@@ -263,7 +263,7 @@ textarea {
   color: var(--text-dim);
 }
 
-.chat-msg.user .chat-msg-role { color: var(--accent-gold); }
+.chat-msg.user .chat-msg-role { color: var(--accent-cyan); }
 .chat-msg.assistant .chat-msg-role { color: var(--accent); }
 
 .chat-msg-content {

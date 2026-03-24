@@ -276,8 +276,8 @@ function renderCharts(metrics) {
         datasets: [{
           label: 'Loss',
           data: losses,
-          borderColor: '#e8703a',
-          backgroundColor: 'rgba(232, 112, 58, 0.1)',
+          borderColor: '#8b6cc7',
+          backgroundColor: 'rgba(139, 108, 199, 0.1)',
           fill: true,
           tension: 0.3,
           pointRadius: 0,
@@ -289,8 +289,8 @@ function renderCharts(metrics) {
         maintainAspectRatio: false,
         plugins: { legend: { display: false } },
         scales: {
-          x: { title: { display: true, text: 'Step', color: '#a89080' }, ticks: { color: '#a89080' }, grid: { color: 'rgba(90,68,56,0.3)' } },
-          y: { title: { display: true, text: 'Loss', color: '#a89080' }, ticks: { color: '#a89080' }, grid: { color: 'rgba(90,68,56,0.3)' } },
+          x: { title: { display: true, text: 'Step', color: '#8890a8' }, ticks: { color: '#8890a8' }, grid: { color: 'rgba(42,48,80,0.5)' } },
+          y: { title: { display: true, text: 'Loss', color: '#8890a8' }, ticks: { color: '#8890a8' }, grid: { color: 'rgba(42,48,80,0.5)' } },
         },
       },
     });
@@ -306,8 +306,8 @@ function renderCharts(metrics) {
         datasets: [{
           label: 'Learning Rate',
           data: lrs,
-          borderColor: '#f2b233',
-          backgroundColor: 'rgba(242, 178, 51, 0.1)',
+          borderColor: '#5ce0d8',
+          backgroundColor: 'rgba(92, 224, 216, 0.1)',
           fill: true,
           tension: 0.3,
           pointRadius: 0,
@@ -319,8 +319,8 @@ function renderCharts(metrics) {
         maintainAspectRatio: false,
         plugins: { legend: { display: false } },
         scales: {
-          x: { title: { display: true, text: 'Step', color: '#a89080' }, ticks: { color: '#a89080' }, grid: { color: 'rgba(90,68,56,0.3)' } },
-          y: { title: { display: true, text: 'LR', color: '#a89080' }, ticks: { color: '#a89080' }, grid: { color: 'rgba(90,68,56,0.3)' } },
+          x: { title: { display: true, text: 'Step', color: '#8890a8' }, ticks: { color: '#8890a8' }, grid: { color: 'rgba(42,48,80,0.5)' } },
+          y: { title: { display: true, text: 'LR', color: '#8890a8' }, ticks: { color: '#8890a8' }, grid: { color: 'rgba(42,48,80,0.5)' } },
         },
       },
     });
