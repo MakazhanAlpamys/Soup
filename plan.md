@@ -16,7 +16,7 @@ git push --tags
 
 ---
 
-## Completed (v0.0.1 – v0.10.2)
+## Completed (v0.0.1 – v0.10.4)
 
 - **CLI:** init, train, chat, push, merge, export, eval, serve, sweep, diff, doctor, quickstart, ui, version
 - **Data:** inspect, validate, convert, merge, dedup, stats, generate

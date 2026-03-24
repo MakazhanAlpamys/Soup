@@ -1,4 +1,4 @@
-"""Tests for v0.10.1/v0.10.2/v0.10.3 bug fixes - Unicode, PPO, dtype, CPU compat."""
+"""Tests for v0.10.1-v0.10.4 bug fixes - Unicode, PPO, dtype, CPU, trl API compat."""
 
 from pathlib import Path
 from unittest.mock import patch
