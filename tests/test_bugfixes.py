@@ -440,8 +440,11 @@ class TestPPODatasetCompat:
             wrapper.tokenizer = MagicMock()
             wrapper.tokenizer.pad_token = "pad"
 
-            with mock_patch("trl.PPOTrainer", FakePPOTrainer), \
-                 mock_patch("trl.PPOConfig", FakePPOConfig):
+            with mock_patch(
+                "trl.PPOTrainer", FakePPOTrainer, create=True,
+            ), mock_patch(
+                "trl.PPOConfig", FakePPOConfig, create=True,
+            ):
                 wrapper.setup(dataset)
 
             # dataset should NOT be in constructor since FakePPOTrainer
@@ -488,8 +491,11 @@ class TestPPODatasetCompat:
             wrapper.tokenizer = MagicMock()
             wrapper.tokenizer.pad_token = "pad"
 
-            with mock_patch("trl.PPOTrainer", FakePPOTrainer), \
-                 mock_patch("trl.PPOConfig", FakePPOConfig):
+            with mock_patch(
+                "trl.PPOTrainer", FakePPOTrainer, create=True,
+            ), mock_patch(
+                "trl.PPOConfig", FakePPOConfig, create=True,
+            ):
                 wrapper.setup(dataset)
 
             assert wrapper._dataset_in_constructor is True
