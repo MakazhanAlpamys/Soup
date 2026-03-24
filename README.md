@@ -603,7 +603,7 @@ soup version
 
 # Full system info (useful for bug reports)
 soup version --full
-# → soup v0.10.0 | Python 3.11.5 | CUDA 12.1 | extras: serve, data
+# -> soup v0.10.1 | Python 3.11.5 | CUDA 12.1 | extras: serve, data
 ```
 
 ## Web UI
@@ -613,7 +613,7 @@ Launch a local web interface to manage experiments, start training, explore data
 ```bash
 pip install 'soup-cli[ui]'
 soup ui
-# → opens http://127.0.0.1:7860 in your browser
+# -> opens http://127.0.0.1:7860 in your browser
 ```
 
 **Pages:**
