@@ -169,7 +169,8 @@ class RewardModelTrainerWrapper:
             bnb_config = BitsAndBytesConfig(load_in_8bit=True)
 
         console.print(f"[dim]Loading reward model: {cfg.base}[/]")
-        model_kwargs = {"trust_remote_code": True, "device_map": "auto", "num_labels": 1}
+        dev_map = "cpu" if self.device == "cpu" else "auto"
+        model_kwargs = {"trust_remote_code": True, "device_map": dev_map, "num_labels": 1}
         if bnb_config:
             model_kwargs["quantization_config"] = bnb_config
 

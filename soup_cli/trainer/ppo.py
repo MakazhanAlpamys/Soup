@@ -160,6 +160,9 @@ class PPOTrainerWrapper:
         # --- Trainer ---
         ppo_trainer_params = inspect.signature(ppo_trainer_cls.__init__).parameters
 
+        # Store for use in train() — experimental API has different .train() signature
+        self._is_experimental = is_experimental
+
         if is_experimental:
             # trl >=0.28 experimental API: PPOTrainer(args, processing_class,
             #   model, ref_model, reward_model, train_dataset, value_model, ...)
@@ -320,7 +323,9 @@ class PPOTrainerWrapper:
             bnb_config = BitsAndBytesConfig(load_in_8bit=True)
 
         console.print(f"[dim]Loading model: {cfg.base}[/]")
-        model_kwargs = {"trust_remote_code": True, "device_map": "auto"}
+        # On CPU, use device_map="cpu" to avoid meta tensors from "auto"
+        dev_map = "cpu" if self.device == "cpu" else "auto"
+        model_kwargs = {"trust_remote_code": True, "device_map": dev_map}
         if bnb_config:
             model_kwargs["quantization_config"] = bnb_config
 
@@ -406,7 +411,19 @@ class PPOTrainerWrapper:
                 SoupTrainerCallback(display, tracker=tracker, run_id=run_id)
             )
 
-        self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
+        # trl experimental PPOTrainer.train() does not accept resume_from_checkpoint
+        import inspect
+
+        train_params = inspect.signature(self.trainer.train).parameters
+        if resume_from_checkpoint and "resume_from_checkpoint" in train_params:
+            self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
+        else:
+            if resume_from_checkpoint:
+                console.print(
+                    "[yellow]Warning: This PPOTrainer does not support "
+                    "resume_from_checkpoint -- starting from scratch.[/]"
+                )
+            self.trainer.train()
         duration = time.time() - start
 
         # Save final model (LoRA adapter)
@@ -594,10 +611,11 @@ def _load_reward_model(model_path: str, device: str = "cuda"):
     from transformers import AutoModelForSequenceClassification
 
     console.print(f"[dim]Loading reward model: {model_path}[/]")
+    dev_map = "cpu" if device == "cpu" else "auto"
     reward_model = AutoModelForSequenceClassification.from_pretrained(
         model_path,
         trust_remote_code=True,
-        device_map="auto",
+        device_map=dev_map,
         num_labels=1,
     )
     reward_model.eval()

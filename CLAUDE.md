@@ -182,4 +182,4 @@ Test suite lives in `tests/`:
 | `test_ui.py` | Web UI command, FastAPI endpoints, static files, config validation |
 | `test_vllm_serve.py` | vLLM backend detection, engine creation, serve --backend flag, FastAPI app |
 | `test_ppo.py` | PPO config, reward model config, data prep, RLHF template, routing, sweep |
-| `test_bugfixes.py` | v0.10.1-v0.10.6 bugfixes: Unicode, PPO params/use_cpu/trl API/dataset/experimental compat, compute dtype, diff, CPU compat, GRPO CPU gen_kwargs, doctor |
+| `test_bugfixes.py` | v0.10.1-v0.10.7 bugfixes: Unicode, PPO params/use_cpu/trl API/dataset/experimental/resume compat, compute dtype, diff, CPU device_map, GRPO CPU gen_kwargs, doctor |

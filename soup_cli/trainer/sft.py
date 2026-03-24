@@ -174,7 +174,9 @@ class SFTTrainerWrapper:
             bnb_config = BitsAndBytesConfig(load_in_8bit=True)
 
         console.print(f"[dim]Loading model: {cfg.base}[/]")
-        model_kwargs = {"trust_remote_code": True, "device_map": "auto"}
+        # On CPU, use device_map="cpu" to avoid meta tensors from "auto"
+        dev_map = "cpu" if self.device == "cpu" else "auto"
+        model_kwargs = {"trust_remote_code": True, "device_map": dev_map}
         if bnb_config:
             model_kwargs["quantization_config"] = bnb_config
 
@@ -245,7 +247,8 @@ class SFTTrainerWrapper:
             bnb_config = BitsAndBytesConfig(load_in_8bit=True)
 
         console.print(f"[dim]Loading vision model: {cfg.base}[/]")
-        model_kwargs = {"trust_remote_code": True, "device_map": "auto"}
+        dev_map = "cpu" if self.device == "cpu" else "auto"
+        model_kwargs = {"trust_remote_code": True, "device_map": dev_map}
         if bnb_config:
             model_kwargs["quantization_config"] = bnb_config
 

@@ -1,4 +1,4 @@
-"""Tests for v0.10.1-v0.10.6 bug fixes - Unicode, PPO, dtype, CPU, trl API compat."""
+"""Tests for v0.10.1-v0.10.7 bug fixes - Unicode, PPO, dtype, CPU, trl API compat."""
 
 from pathlib import Path
 from unittest.mock import patch
@@ -731,3 +731,247 @@ class TestGRPOCPUMinNewTokens:
 
         # Should NOT have generation_kwargs on GPU
         assert "generation_kwargs" not in captured_config_kwargs
+
+
+# --- BUG-009: PPO train() rejects resume_from_checkpoint (v0.10.7) ---
+
+
+class TestPPOResumeCheckpoint:
+    """Test PPO _train_builtin skips resume_from_checkpoint for experimental API."""
+
+    def test_train_builtin_skips_resume_when_unsupported(self):
+        """_train_builtin should call train() without resume_from_checkpoint
+        when the trainer's .train() method doesn't accept it."""
+        from unittest.mock import MagicMock
+
+        from soup_cli.trainer.ppo import PPOTrainerWrapper
+
+        cfg = SoupConfig(
+            base="test-model",
+            task="ppo",
+            data={"train": "./data.jsonl"},
+        )
+        wrapper = PPOTrainerWrapper(cfg, device="cpu")
+        wrapper._output_dir = "/tmp/test"
+        wrapper._dataset_in_constructor = True
+        wrapper._train_ds = MagicMock()
+
+        # Create a real callable with no params (like experimental PPOTrainer.train)
+        call_log = []
+
+        def no_args_train():
+            call_log.append("called")
+
+        mock_trainer = MagicMock()
+        mock_trainer.train = no_args_train
+        mock_trainer.state.log_history = [{"loss": 0.5}]
+        mock_trainer.state.global_step = 10
+        wrapper.trainer = mock_trainer
+        wrapper.tokenizer = MagicMock()
+
+        result = wrapper._train_builtin(
+            display=None, tracker=None, run_id="",
+            resume_from_checkpoint="/tmp/ckpt",
+        )
+
+        # Should call train() without resume_from_checkpoint
+        assert call_log == ["called"]
+        assert result["total_steps"] == 10
+
+    def test_train_builtin_passes_resume_when_supported(self):
+        """_train_builtin should pass resume_from_checkpoint when supported."""
+        from unittest.mock import MagicMock
+
+        from soup_cli.trainer.ppo import PPOTrainerWrapper
+
+        cfg = SoupConfig(
+            base="test-model",
+            task="ppo",
+            data={"train": "./data.jsonl"},
+        )
+        wrapper = PPOTrainerWrapper(cfg, device="cpu")
+        wrapper._output_dir = "/tmp/test"
+        wrapper._dataset_in_constructor = True
+        wrapper._train_ds = MagicMock()
+
+        # Create a real callable that accepts resume_from_checkpoint
+        call_log = []
+
+        def resume_train(resume_from_checkpoint=None):
+            call_log.append(resume_from_checkpoint)
+
+        mock_trainer = MagicMock()
+        mock_trainer.train = resume_train
+        mock_trainer.state.log_history = [{"loss": 0.5}]
+        mock_trainer.state.global_step = 10
+        wrapper.trainer = mock_trainer
+        wrapper.tokenizer = MagicMock()
+
+        wrapper._train_builtin(
+            display=None, tracker=None, run_id="",
+            resume_from_checkpoint="/tmp/ckpt",
+        )
+
+        assert call_log == ["/tmp/ckpt"]
+
+    def test_train_builtin_no_resume_calls_train_directly(self):
+        """_train_builtin should call train() directly when resume is None."""
+        from unittest.mock import MagicMock
+
+        from soup_cli.trainer.ppo import PPOTrainerWrapper
+
+        cfg = SoupConfig(
+            base="test-model",
+            task="ppo",
+            data={"train": "./data.jsonl"},
+        )
+        wrapper = PPOTrainerWrapper(cfg, device="cpu")
+        wrapper._output_dir = "/tmp/test"
+        wrapper._dataset_in_constructor = True
+        wrapper._train_ds = MagicMock()
+
+        call_log = []
+
+        def no_args_train():
+            call_log.append("called")
+
+        mock_trainer = MagicMock()
+        mock_trainer.train = no_args_train
+        mock_trainer.state.log_history = []
+        mock_trainer.state.global_step = 0
+        wrapper.trainer = mock_trainer
+        wrapper.tokenizer = MagicMock()
+
+        wrapper._train_builtin(
+            display=None, tracker=None, run_id="",
+            resume_from_checkpoint=None,
+        )
+
+        # resume is None/falsy so it should just call train()
+        assert call_log == ["called"]
+
+    def test_is_experimental_stored_on_setup(self):
+        """setup() should store _is_experimental flag on the wrapper."""
+        from unittest.mock import MagicMock
+        from unittest.mock import patch as mock_patch
+
+        from soup_cli.trainer.ppo import PPOTrainerWrapper
+
+        cfg = SoupConfig(
+            base="test-model",
+            task="ppo",
+            data={"train": "./data.jsonl"},
+        )
+        wrapper = PPOTrainerWrapper(cfg, device="cpu")
+
+        class FakePPOTrainer:
+            def __init__(self, **kwargs):
+                pass
+
+        class FakePPOConfig:
+            def __init__(self, **kwargs):
+                pass
+
+        dataset = {"train": [{"prompt": "Q?", "answer": "A"}]}
+
+        with mock_patch("soup_cli.trainer.ppo.PPOTrainerWrapper._setup_reward"), \
+             mock_patch("soup_cli.trainer.ppo.PPOTrainerWrapper._setup_transformers"), \
+             mock_patch(
+                 "soup_cli.trainer.ppo._import_ppo_classes",
+                 return_value=(FakePPOTrainer, FakePPOConfig, True),
+             ), \
+             mock_patch(
+                 "soup_cli.trainer.ppo.PPOTrainerWrapper._get_or_create_reward_model",
+                 return_value=MagicMock(),
+             ), \
+             mock_patch(
+                 "soup_cli.trainer.ppo.PPOTrainerWrapper._create_value_model",
+                 return_value=MagicMock(),
+             ):
+            wrapper.model = MagicMock()
+            wrapper.model.get_nb_trainable_parameters.return_value = (100, 1000)
+            wrapper.tokenizer = MagicMock()
+            wrapper.tokenizer.pad_token = "pad"
+            wrapper.setup(dataset)
+
+        assert wrapper._is_experimental is True
+
+
+# --- BUG-010: Meta tensor on CPU from device_map="auto" (v0.10.7) ---
+
+
+class TestCPUDeviceMap:
+    """Test that all trainers use device_map='cpu' on CPU instead of 'auto'."""
+
+    def test_grpo_setup_uses_cpu_device_map(self):
+        """GRPO _setup_transformers should use device_map='cpu' on CPU."""
+        import inspect
+
+        from soup_cli.trainer.grpo import GRPOTrainerWrapper
+        source = inspect.getsource(GRPOTrainerWrapper._setup_transformers)
+        assert '"cpu"' in source
+        assert "self.device" in source
+
+    def test_ppo_setup_uses_cpu_device_map(self):
+        """PPO _setup_transformers should use device_map='cpu' on CPU."""
+        import inspect
+
+        from soup_cli.trainer.ppo import PPOTrainerWrapper
+        source = inspect.getsource(PPOTrainerWrapper._setup_transformers)
+        assert '"cpu"' in source
+        assert "self.device" in source
+
+    def test_sft_setup_uses_cpu_device_map(self):
+        """SFT _setup_transformers should use device_map='cpu' on CPU."""
+        import inspect
+
+        from soup_cli.trainer.sft import SFTTrainerWrapper
+        source = inspect.getsource(SFTTrainerWrapper._setup_transformers)
+        assert '"cpu"' in source
+        assert "self.device" in source
+
+    def test_dpo_setup_uses_cpu_device_map(self):
+        """DPO _setup_transformers should use device_map='cpu' on CPU."""
+        import inspect
+
+        from soup_cli.trainer.dpo import DPOTrainerWrapper
+        source = inspect.getsource(DPOTrainerWrapper._setup_transformers)
+        assert '"cpu"' in source
+        assert "self.device" in source
+
+    def test_reward_model_setup_uses_cpu_device_map(self):
+        """RewardModel _setup_transformers should use device_map='cpu' on CPU."""
+        import inspect
+
+        from soup_cli.trainer.reward_model import RewardModelTrainerWrapper
+        source = inspect.getsource(RewardModelTrainerWrapper._setup_transformers)
+        assert '"cpu"' in source
+        assert "self.device" in source
+
+    def test_ppo_load_reward_model_uses_cpu_device_map(self):
+        """_load_reward_model should use device_map='cpu' when device is cpu."""
+        import inspect
+
+        from soup_cli.trainer.ppo import _load_reward_model
+        source = inspect.getsource(_load_reward_model)
+        assert '"cpu"' in source
+        assert "device" in source
+
+    def test_ppo_get_or_create_reward_model_cpu(self):
+        """_get_or_create_reward_model should not use device_map='auto' on CPU."""
+        import inspect
+
+        from soup_cli.trainer.ppo import PPOTrainerWrapper
+        source = inspect.getsource(PPOTrainerWrapper._get_or_create_reward_model)
+        # Should conditionally set device_map based on self.device
+        assert "self.device" in source
+        assert '"cpu"' in source
+
+    def test_ppo_create_value_model_cpu(self):
+        """_create_value_model should not use device_map='auto' on CPU."""
+        import inspect
+
+        from soup_cli.trainer.ppo import PPOTrainerWrapper
+        source = inspect.getsource(PPOTrainerWrapper._create_value_model)
+        assert "self.device" in source
+        assert '"cpu"' in source
