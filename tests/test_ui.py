@@ -7,6 +7,12 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 
+def _auth_headers():
+    """Return auth headers with the current UI token."""
+    from soup_cli.ui.app import get_auth_token
+    return {"Authorization": f"Bearer {get_auth_token()}"}
+
+
 class TestUICommand:
     """Test the soup ui CLI command."""
 
@@ -229,6 +235,7 @@ data:
         response = client.post(
             "/api/config/validate",
             json={"yaml": yaml_str},
+            headers=_auth_headers(),
         )
         assert response.status_code == 200
         data = response.json()
@@ -249,6 +256,7 @@ data:
         response = client.post(
             "/api/config/validate",
             json={"yaml": "invalid: true"},
+            headers=_auth_headers(),
         )
         assert response.status_code == 200
         data = response.json()
@@ -268,6 +276,7 @@ data:
         response = client.post(
             "/api/config/validate",
             json={"yaml": ""},
+            headers=_auth_headers(),
         )
         assert response.status_code == 400
 
@@ -385,7 +394,9 @@ class TestRunsEndpoint:
             tracker.close()
 
             client = TestClient(create_app())
-            response = client.delete(f"/api/runs/{run_id}")
+            response = client.delete(
+                f"/api/runs/{run_id}", headers=_auth_headers()
+            )
             assert response.status_code == 200
             assert response.json()["deleted"] is True
 
@@ -405,7 +416,9 @@ class TestRunsEndpoint:
             from soup_cli.ui.app import create_app
 
             client = TestClient(create_app())
-            response = client.delete("/api/runs/nonexistent")
+            response = client.delete(
+                "/api/runs/nonexistent", headers=_auth_headers()
+            )
             assert response.status_code == 404
 
 
@@ -523,10 +536,12 @@ class TestDataInspect:
         data_file.write_text("\n".join(json.dumps(e) for e in entries), encoding="utf-8")
 
         client = TestClient(create_app())
-        response = client.post(
-            "/api/data/inspect",
-            json={"path": str(data_file), "limit": 10},
-        )
+        with patch("soup_cli.ui.app.Path.cwd", return_value=tmp_path):
+            response = client.post(
+                "/api/data/inspect",
+                json={"path": str(data_file), "limit": 10},
+                headers=_auth_headers(),
+            )
         assert response.status_code == 200
         data = response.json()
         assert data["total"] == 3
@@ -534,7 +549,7 @@ class TestDataInspect:
         assert "instruction" in data["keys"]
         assert len(data["sample"]) == 3
 
-    def test_inspect_file_not_found(self):
+    def test_inspect_file_not_found(self, tmp_path):
         """Should return 404 for nonexistent file."""
         try:
             from fastapi.testclient import TestClient
@@ -544,10 +559,12 @@ class TestDataInspect:
         from soup_cli.ui.app import create_app
 
         client = TestClient(create_app())
-        response = client.post(
-            "/api/data/inspect",
-            json={"path": "/nonexistent/file.jsonl"},
-        )
+        with patch("soup_cli.ui.app.Path.cwd", return_value=tmp_path):
+            response = client.post(
+                "/api/data/inspect",
+                json={"path": str(tmp_path / "nonexistent.jsonl")},
+                headers=_auth_headers(),
+            )
         assert response.status_code == 404
 
     def test_inspect_with_limit(self, tmp_path):
@@ -569,10 +586,12 @@ class TestDataInspect:
         )
 
         client = TestClient(create_app())
-        response = client.post(
-            "/api/data/inspect",
-            json={"path": str(data_file), "limit": 5},
-        )
+        with patch("soup_cli.ui.app.Path.cwd", return_value=tmp_path):
+            response = client.post(
+                "/api/data/inspect",
+                json={"path": str(data_file), "limit": 5},
+                headers=_auth_headers(),
+            )
         assert response.status_code == 200
         data = response.json()
         assert data["total"] == 20
@@ -594,10 +613,12 @@ class TestDataInspect:
         data_file.write_text(json.dumps(entries), encoding="utf-8")
 
         client = TestClient(create_app())
-        response = client.post(
-            "/api/data/inspect",
-            json={"path": str(data_file)},
-        )
+        with patch("soup_cli.ui.app.Path.cwd", return_value=tmp_path):
+            response = client.post(
+                "/api/data/inspect",
+                json={"path": str(data_file)},
+                headers=_auth_headers(),
+            )
         assert response.status_code == 200
         assert response.json()["total"] == 1
 
@@ -636,7 +657,7 @@ class TestTrainEndpoints:
         ui_app_module._train_process = None
 
         client = TestClient(create_app())
-        response = client.post("/api/train/stop")
+        response = client.post("/api/train/stop", headers=_auth_headers())
         assert response.status_code == 200
         assert response.json()["stopped"] is False
 
@@ -657,16 +678,18 @@ class TestTrainEndpoints:
         mock_popen.pid = 12345
 
         with patch("soup_cli.ui.app.subprocess.Popen", return_value=mock_popen):
-            with patch("soup_cli.ui.app.os.getcwd", return_value=str(tmp_path)):
-                client = TestClient(create_app())
-                response = client.post(
-                    "/api/train/start",
-                    json={"config_yaml": "base: test\ndata:\n  train: ./data.jsonl\n"},
-                )
-                assert response.status_code == 200
-                data = response.json()
-                assert data["started"] is True
-                assert data["pid"] == 12345
+            client = TestClient(create_app())
+            response = client.post(
+                "/api/train/start",
+                json={
+                    "config_yaml": "base: test\ndata:\n  train: ./data.jsonl\n"
+                },
+                headers=_auth_headers(),
+            )
+            assert response.status_code == 200
+            data = response.json()
+            assert data["started"] is True
+            assert data["pid"] == 12345
 
         # Cleanup
         ui_app_module._train_process = None
@@ -689,7 +712,10 @@ class TestTrainEndpoints:
         client = TestClient(create_app())
         response = client.post(
             "/api/train/start",
-            json={"config_yaml": "base: test\ndata:\n  train: ./data.jsonl\n"},
+            json={
+                "config_yaml": "base: test\ndata:\n  train: ./data.jsonl\n"
+            },
+            headers=_auth_headers(),
         )
         assert response.status_code == 409
 

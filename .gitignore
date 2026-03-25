@@ -39,4 +39,4 @@ report.xml
 *.key
 
 # Internal plan (not for repo)
-plan.md
+.claude/plan.md

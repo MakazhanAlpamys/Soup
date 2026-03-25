@@ -501,6 +501,8 @@ soup serve --model ./output --backend vllm --gpu-memory 0.8
 
 > **Tip:** Soup auto-detects vLLM. When installed, you'll see a hint during `soup serve` if you haven't enabled it yet.
 
+> **Note (v0.10.10+):** `max_tokens` is capped at 16,384 per request. Error details are never exposed in HTTP responses.
+
 ## Synthetic Data Generation
 
 Generate training data using LLMs:
@@ -614,6 +616,7 @@ Launch a local web interface to manage experiments, start training, explore data
 pip install 'soup-cli[ui]'
 soup ui
 # -> opens http://127.0.0.1:7860 in your browser
+# -> prints auth token to console
 ```
 
 **Pages:**
@@ -621,6 +624,8 @@ soup ui
 - **New Training** — create configs from templates, validate, and start training
 - **Data Explorer** — browse and inspect datasets (JSONL, JSON, CSV, Parquet)
 - **Model Chat** — chat with a running `soup serve` inference server
+
+**Security (v0.10.10+):** The Web UI generates a random auth token at startup (printed to console). All mutating endpoints (start/stop training, delete runs, inspect data, validate config) require `Authorization: Bearer <token>` header. CORS is restricted to the served origin. Data inspection is sandboxed to the working directory.
 
 ```bash
 # Custom port, don't auto-open browser

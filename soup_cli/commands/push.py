@@ -38,7 +38,8 @@ def push(
         None,
         "--token",
         "-t",
-        help="HuggingFace API token. Falls back to HF_TOKEN env var or cached login.",
+        help="[deprecated] Use HF_TOKEN env var instead. Falls back to cached login.",
+        envvar="HF_TOKEN",
     ),
     commit_message: str = typer.Option(
         "Upload model trained with Soup CLI",

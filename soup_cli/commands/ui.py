@@ -36,15 +36,19 @@ def ui(
         )
         raise typer.Exit(1)
 
-    from soup_cli.ui.app import create_app
+    from soup_cli.ui.app import create_app, get_auth_token
 
-    app = create_app()
+    app = create_app(host=host, port=port)
+    token = get_auth_token()
 
     url = f"http://{host}:{port}"
 
     console.print(
         Panel(
-            f"URL:  [bold]{url}[/]\n\n"
+            f"URL:    [bold]{url}[/]\n"
+            f"Token:  [bold]{token}[/]\n\n"
+            f"Mutating API endpoints require:\n"
+            f"  [dim]Authorization: Bearer {token}[/]\n\n"
             f"Pages:\n"
             f"  [bold]Dashboard[/]      - View experiments, loss charts, system info\n"
             f"  [bold]New Training[/]   - Create config from templates, start training\n"

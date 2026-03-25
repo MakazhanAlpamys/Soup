@@ -16,6 +16,8 @@ console = Console()
 SUPPORTED_FORMATS = ("gguf",)
 GGUF_QUANT_TYPES = ("q4_0", "q4_k_m", "q5_k_m", "q8_0", "f16", "f32")
 LLAMA_CPP_DIR_NAME = "llama.cpp"
+# Pin to a known release tag for supply-chain safety
+LLAMA_CPP_TAG = "b5270"
 
 
 def export(
@@ -246,8 +248,8 @@ def _find_llama_cpp(user_path: Optional[str] = None) -> Path:
 
     try:
         subprocess.run(
-            ["git", "clone", "--depth", "1", "https://github.com/ggerganov/llama.cpp.git",
-             str(soup_llama)],
+            ["git", "clone", "--depth", "1", "--branch", LLAMA_CPP_TAG,
+             "https://github.com/ggerganov/llama.cpp.git", str(soup_llama)],
             check=True,
             capture_output=True,
             text=True,

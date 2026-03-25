@@ -1,23 +1,29 @@
 """FastAPI application for Soup Web UI."""
 
-from __future__ import annotations
-
+import logging
 import os
+import secrets
 import subprocess
 import sys
+import tempfile
 import threading
 from pathlib import Path
 from typing import Optional
 
 from pydantic import BaseModel as PydanticBaseModel
+from pydantic import Field
+
+logger = logging.getLogger(__name__)
 
 STATIC_DIR = Path(__file__).parent / "static"
+
+# Max file read size to prevent memory exhaustion
+_MAX_INSPECT_LIMIT = 500
 
 
 class TrainRequest(PydanticBaseModel):
     """Request body for starting a training run."""
     config_yaml: str
-    config_path: Optional[str] = None
 
 
 class TrainStatus(PydanticBaseModel):
@@ -30,7 +36,7 @@ class TrainStatus(PydanticBaseModel):
 class DataInspectRequest(PydanticBaseModel):
     """Request body for data inspection."""
     path: str
-    limit: int = 50
+    limit: int = Field(default=50, ge=1, le=_MAX_INSPECT_LIMIT)
 
 
 # Global state for training process
@@ -38,22 +44,38 @@ _train_process: Optional[subprocess.Popen] = None
 _train_config_path: Optional[str] = None
 _train_lock = threading.Lock()
 
+# Auth token generated at startup — printed to console for the user
+_auth_token: str = secrets.token_urlsafe(32)
 
-def create_app():
+
+def get_auth_token() -> str:
+    """Return the current auth token (for printing at startup)."""
+    return _auth_token
+
+
+def create_app(host: str = "127.0.0.1", port: int = 7860):
     """Create the Soup Web UI FastAPI application."""
-    from fastapi import FastAPI, HTTPException, Query
+    from fastapi import Depends, FastAPI, HTTPException, Query, Request
     from fastapi.middleware.cors import CORSMiddleware
     from fastapi.responses import HTMLResponse
     from fastapi.staticfiles import StaticFiles
 
     app = FastAPI(title="Soup Web UI", version="1.0.0")
 
+    # Restrict CORS to the origin we actually serve
+    allowed_origin = f"http://{host}:{port}"
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_origins=[allowed_origin],
+        allow_methods=["GET", "POST", "DELETE"],
+        allow_headers=["Authorization", "Content-Type"],
     )
+
+    def _verify_token(request: Request):
+        """Verify Bearer token on mutating endpoints."""
+        auth = request.headers.get("Authorization", "")
+        if auth != f"Bearer {_auth_token}":
+            raise HTTPException(status_code=401, detail="Unauthorized")
 
     # --- Static files ---
 
@@ -104,7 +126,7 @@ def create_app():
         finally:
             tracker.close()
 
-    @app.delete("/api/runs/{run_id}")
+    @app.delete("/api/runs/{run_id}", dependencies=[Depends(_verify_token)])
     def delete_run(run_id: str):
         from soup_cli.experiment.tracker import ExperimentTracker
 
@@ -155,7 +177,7 @@ def create_app():
 
     # --- Config Validation ---
 
-    @app.post("/api/config/validate")
+    @app.post("/api/config/validate", dependencies=[Depends(_verify_token)])
     def validate_config(body: dict):
         from soup_cli.config.loader import load_config_from_string
 
@@ -170,7 +192,7 @@ def create_app():
 
     # --- Training ---
 
-    @app.post("/api/train/start")
+    @app.post("/api/train/start", dependencies=[Depends(_verify_token)])
     def start_training(req: TrainRequest):
         global _train_process, _train_config_path
 
@@ -180,9 +202,20 @@ def create_app():
                     status_code=409, detail="Training already in progress"
                 )
 
-            # Write config to temp file
-            config_path = req.config_path or os.path.join(
-                os.getcwd(), ".soup_ui_config.yaml"
+            # Validate config before writing to disk
+            from soup_cli.config.loader import load_config_from_string
+
+            try:
+                load_config_from_string(req.config_yaml)
+            except Exception as exc:
+                logger.warning("Invalid training config: %s", exc)
+                raise HTTPException(
+                    status_code=400, detail="Invalid training configuration"
+                )
+
+            # Write config to a fixed safe location (never user-controlled path)
+            config_path = os.path.join(
+                tempfile.gettempdir(), "soup_ui_config.yaml"
             )
             with open(config_path, "w", encoding="utf-8") as fh:
                 fh.write(req.config_yaml)
@@ -193,7 +226,7 @@ def create_app():
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
             )
-            return {"started": True, "pid": _train_process.pid, "config_path": config_path}
+            return {"started": True, "pid": _train_process.pid}
 
     @app.get("/api/train/status")
     def train_status():
@@ -210,7 +243,7 @@ def create_app():
                 )
             return TrainStatus(running=False, pid=_train_process.pid)
 
-    @app.post("/api/train/stop")
+    @app.post("/api/train/stop", dependencies=[Depends(_verify_token)])
     def stop_training():
         global _train_process
         with _train_lock:
@@ -221,18 +254,30 @@ def create_app():
 
     # --- Data Inspection ---
 
-    @app.post("/api/data/inspect")
+    @app.post("/api/data/inspect", dependencies=[Depends(_verify_token)])
     def inspect_data(req: DataInspectRequest):
         from soup_cli.data.loader import load_raw_data
 
-        path = Path(req.path)
-        if not path.exists():
-            raise HTTPException(status_code=404, detail=f"File not found: {req.path}")
+        # Path traversal protection: resolve and check against cwd
+        allowed_root = Path.cwd().resolve()
+        try:
+            resolved = Path(req.path).resolve()
+        except (ValueError, OSError):
+            raise HTTPException(status_code=400, detail="Invalid path")
+
+        if not str(resolved).startswith(str(allowed_root)):
+            raise HTTPException(
+                status_code=403, detail="Access denied: path outside working directory"
+            )
+
+        if not resolved.exists():
+            raise HTTPException(status_code=404, detail="File not found")
 
         try:
-            raw_data = load_raw_data(path)
+            raw_data = load_raw_data(resolved)
         except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+            logger.warning("Data inspect error: %s", exc)
+            raise HTTPException(status_code=400, detail="Failed to load data file")
 
         total = len(raw_data)
         sample = raw_data[: req.limit]
@@ -248,7 +293,7 @@ def create_app():
             keys.update(entry.keys())
 
         return {
-            "path": str(path),
+            "path": str(resolved),
             "total": total,
             "format": fmt,
             "keys": sorted(keys),

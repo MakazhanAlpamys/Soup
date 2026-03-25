@@ -1,6 +1,7 @@
 """soup serve — local inference server with OpenAI-compatible API."""
 
 import json
+import logging
 import time
 import uuid
 from pathlib import Path
@@ -9,6 +10,8 @@ from typing import Optional
 import typer
 from rich.console import Console
 from rich.panel import Panel
+
+logger = logging.getLogger(__name__)
 
 console = Console()
 
@@ -372,7 +375,7 @@ def _create_app(
         messages: list[ChatMessage]
         temperature: float = Field(default=0.7, ge=0.0, le=2.0)
         top_p: float = Field(default=0.9, ge=0.0, le=1.0)
-        max_tokens: Optional[int] = None
+        max_tokens: Optional[int] = Field(default=None, ge=1, le=16384)
         stream: bool = False
 
     # --- Endpoints ---
@@ -418,8 +421,9 @@ def _create_app(
                 temperature=request.temperature,
                 top_p=request.top_p,
             )
-        except Exception as exc:
-            raise HTTPException(status_code=500, detail=str(exc))
+        except Exception:
+            logger.exception("Generation error")
+            raise HTTPException(status_code=500, detail="Internal server error")
 
         return {
             "id": f"chatcmpl-{uuid.uuid4().hex[:8]}",

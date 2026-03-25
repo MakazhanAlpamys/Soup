@@ -119,7 +119,12 @@ def load_reward_fn(reward_fn_spec: str) -> callable:
     # Custom Python file
     reward_path = Path(reward_fn_spec)
     if reward_path.exists() and reward_path.suffix == ".py":
-        console.print(f"[dim]Loading custom reward function from: {reward_path}[/]")
+        console.print(
+            f"[bold yellow]Warning:[/] Loading custom reward function from: "
+            f"[bold]{reward_path.resolve()}[/]\n"
+            f"[yellow]This will execute arbitrary Python code. "
+            f"Only use reward files you trust.[/]"
+        )
         spec = importlib.util.spec_from_file_location("custom_reward", reward_path)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)

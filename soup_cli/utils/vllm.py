@@ -1,6 +1,9 @@
 """vLLM backend utilities for soup serve."""
 
+import logging
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 
 def is_vllm_available() -> bool:
@@ -126,7 +129,7 @@ def create_vllm_app(
         messages: list[ChatMessage]
         temperature: float = Field(default=0.7, ge=0.0, le=2.0)
         top_p: float = Field(default=0.9, ge=0.0, le=1.0)
-        max_tokens: Optional[int] = None
+        max_tokens: Optional[int] = Field(default=None, ge=1, le=16384)
         stream: bool = False
 
     @app.get("/health")
@@ -223,8 +226,9 @@ def create_vllm_app(
                 },
             }
 
-        except Exception as exc:
-            raise HTTPException(status_code=500, detail=str(exc))
+        except Exception:
+            logger.exception("vLLM generation error")
+            raise HTTPException(status_code=500, detail="Internal server error")
 
     def _build_prompt(messages: list[ChatMessage]) -> str:
         """Build a simple prompt from chat messages."""

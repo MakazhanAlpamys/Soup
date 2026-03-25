@@ -1,12 +1,15 @@
 """soup data generate — generate synthetic training data using LLMs."""
 
 import json
+import logging
 from pathlib import Path
 from typing import Optional
 
 import typer
 from rich.console import Console
 from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn
+
+logger = logging.getLogger(__name__)
 
 console = Console()
 
@@ -50,12 +53,13 @@ def generate(
     api_key: Optional[str] = typer.Option(
         None,
         "--api-key",
-        help="API key (or set OPENAI_API_KEY env var)",
+        help="[deprecated] Use OPENAI_API_KEY env var instead",
+        envvar="OPENAI_API_KEY",
     ),
     api_base: Optional[str] = typer.Option(
         None,
         "--api-base",
-        help="Custom API base URL (for compatible APIs)",
+        help="Custom API base URL (must use HTTPS for remote APIs)",
     ),
     batch_size: int = typer.Option(
         5,
@@ -274,6 +278,19 @@ def _generate_openai(
         raise ImportError("httpx is required for OpenAI generation. Install: pip install httpx")
 
     base_url = api_base or "https://api.openai.com/v1"
+
+    # Validate api_base to prevent SSRF (block non-HTTPS remote URLs)
+    if api_base:
+        from urllib.parse import urlparse
+
+        parsed = urlparse(api_base)
+        is_local = parsed.hostname in ("localhost", "127.0.0.1", "::1", "0.0.0.0")
+        if not is_local and parsed.scheme != "https":
+            raise ValueError(
+                f"api_base must use HTTPS for remote APIs (got {parsed.scheme}://). "
+                "HTTP is only allowed for localhost."
+            )
+
     generation_prompt = _build_generation_prompt(prompt, count, fmt, seed_examples)
 
     response = httpx.post(
@@ -295,7 +312,10 @@ def _generate_openai(
     )
 
     if response.status_code != 200:
-        raise ValueError(f"API returned {response.status_code}: {response.text}")
+        logger.debug("API error response: %s", response.text)
+        raise ValueError(
+            f"API returned {response.status_code}. Check your API key and model name."
+        )
 
     data = response.json()
     content = data["choices"][0]["message"]["content"]
