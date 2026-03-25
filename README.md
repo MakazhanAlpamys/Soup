@@ -830,7 +830,7 @@ soup version
 
 # Full system info (useful for bug reports)
 soup version --full
-# -> soup v0.14.2 | Python 3.11.5 | CUDA 12.1 | extras: serve, data
+# -> soup v0.14.3 | Python 3.11.5 | CUDA 12.1 | extras: serve, data
 ```
 
 ## Web UI

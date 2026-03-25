@@ -1,12 +1,12 @@
 # Soup CLI — Project CLAUDE.md
 
-Soup is a CLI-first LLM fine-tuning tool (v0.14.2). Python 3.9+, MIT license.
+Soup is a CLI-first LLM fine-tuning tool (v0.14.3). Python 3.9+, MIT license.
 
 ## Build & Development
 
 ```bash
 pip install -e ".[dev]"          # Install editable + test deps
-pytest tests/ -v --tb=short      # Run all tests (1021 tests)
+pytest tests/ -v --tb=short      # Run all tests (1022 tests)
 ruff check soup_cli/ tests/      # Lint (must pass before commit)
 ruff check --fix soup_cli/ tests/  # Auto-fix lint issues
 ```
@@ -163,9 +163,9 @@ soup version           # Show version (--full for details)
 - **Batch inference**: max_tokens capped at 16384, trust_remote_code warning (v0.13.0)
 - **Plaintext loader**: .txt files read with encoding="utf-8", empty lines skipped (v0.14.0)
 - **MoE config**: moe_aux_loss_coeff validated ge=0, moe_lora is boolean only (v0.14.0)
-- **Data validate**: auto-detects format when `--format` not specified (v0.14.2)
-- **Data stats**: UTF-8 stdout redirect on Windows for plotext histograms (v0.14.2)
-- **Web UI**: `--show-token` flag + auth token documented in `--help` (v0.14.2)
+- **Data validate**: auto-detects format when `--format` not specified (v0.14.3)
+- **Data stats**: UTF-8 stdout redirect on Windows for plotext histograms (v0.14.3)
+- **Web UI**: `--show-token` flag + auth token documented in `--help` (v0.14.3)
 
 ## Code Conventions
 
@@ -226,7 +226,7 @@ soup version           # Show version (--full for details)
 12. **Tag**: `git tag v0.X.Y && git push origin v0.X.Y`
 13. **Release**: `gh release create v0.X.Y` with changelog (What's New, Install/Upgrade)
 
-## Tests (47 test files, 1021 tests)
+## Tests (47 test files, 1022 tests)
 
 | File | Covers |
 |------|--------|
@@ -275,4 +275,4 @@ soup version           # Show version (--full for details)
 | test_tensorboard.py | TensorBoard flag, wandb conflict, report_to routing |
 | test_pretrain.py | Pretrain task, plaintext format, MoE config, templates, routing |
 | test_moe.py | MoE detection, ScatterMoE LoRA targets, MoE info extraction |
-| test_bugfixes.py | v0.10.1-v0.14.2 regression fixes |
+| test_bugfixes.py | v0.10.1-v0.14.3 regression fixes |

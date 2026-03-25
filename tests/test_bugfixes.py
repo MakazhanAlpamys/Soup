@@ -1165,7 +1165,7 @@ class TestValidateAutoDetect:
 class TestStatsHistogramWindows:
     """Stats histogram should handle Windows encoding gracefully."""
 
-    def test_stats_histogram_utf8_redirect(self, tmp_path):
+    def test_stats_command_does_not_crash(self, tmp_path):
         """Stats command should not crash on Windows with plotext."""
         import json
 
@@ -1186,6 +1186,44 @@ class TestStatsHistogramWindows:
         result = runner.invoke(app, ["data", "stats", str(filepath)])
         assert result.exit_code == 0
         assert "p50" in result.output
+
+    def test_utf8_redirect_logic_on_cp1251_stdout(self):
+        """Verify plotext renders when stdout is redirected from cp1251 to utf-8."""
+        import io
+        import sys
+
+        try:
+            import plotext as plt
+        except ImportError:
+            pytest.skip("plotext not installed")
+
+        # Simulate a cp1251 stdout (like Windows default)
+        raw_buffer = io.BytesIO()
+        fake_cp1251 = io.TextIOWrapper(raw_buffer, encoding="cp1251")
+
+        original_stdout = sys.stdout
+        sys.stdout = fake_cp1251
+
+        # Apply the same redirect logic as data.py stats command
+        needs_redirect = (
+            hasattr(sys.stdout, "encoding")
+            and (sys.stdout.encoding or "").lower().replace("-", "") != "utf8"
+        )
+        assert needs_redirect, "Should detect cp1251 needs redirect"
+
+        sys.stdout = io.TextIOWrapper(
+            sys.stdout.buffer, encoding="utf-8", errors="replace",
+        )
+
+        try:
+            plt.clear_figure()
+            plt.hist([10, 20, 30, 40, 50], bins=3)
+            plt.title("Test")
+            plt.theme("dark")
+            plt.show()
+            # If we got here, no UnicodeEncodeError — success
+        finally:
+            sys.stdout = original_stdout
 
 
 # --- BUG-015: soup ui --help missing auth token docs (v0.14.2) ---

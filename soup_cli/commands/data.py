@@ -370,8 +370,14 @@ def stats(
         lengths = ext_stats["lengths"]
         if lengths:
             # Force UTF-8 stdout on Windows to avoid UnicodeEncodeError
+            # plotext uses box-drawing chars (U+2500 etc.) that cp1251/cp1252 can't encode
             original_stdout = sys.stdout
-            if sys.platform == "win32" and not isinstance(sys.stdout, io.TextIOWrapper):
+            needs_redirect = (
+                sys.platform == "win32"
+                and hasattr(sys.stdout, "encoding")
+                and (sys.stdout.encoding or "").lower().replace("-", "") != "utf8"
+            )
+            if needs_redirect:
                 try:
                     sys.stdout = io.TextIOWrapper(
                         sys.stdout.buffer, encoding="utf-8", errors="replace",
