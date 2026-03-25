@@ -4,14 +4,14 @@
 
 We provide security updates for the following versions:
 
-- **Latest minor version:** Active support (e.g., v0.9.x)
+- **Latest minor version:** Active support (e.g., v0.14.x)
 - **Previous minor versions:** Bug-fix support only
 - **Versions older than 3 minor versions:** No support
 
 Example:
-- v0.9.0-0.9.x → Full support (latest)
-- v0.8.0-0.8.x → Bug-fix support only
-- v0.7.x and below → No support
+- v0.14.0-0.14.x → Full support (latest)
+- v0.13.0-0.13.x → Bug-fix support only
+- v0.12.x and below → No support
 
 ## Reporting a Vulnerability
 
@@ -109,6 +109,14 @@ We maintain a log of known security issues and their fixes. This will be updated
 ### Current Status
 
 No known critical vulnerabilities in current releases.
+
+### Security Hardening History
+
+- **v0.10.10**: Bearer token auth on Web UI, CORS restrictions, path traversal protection, SSRF prevention, max_tokens limits, supply-chain pinning (llama.cpp b5270), deprecated CLI secret flags
+- **v0.12.0**: experiment_name path traversal validation, GaLore parameter type enforcement
+- **v0.13.0**: Batch inference max_tokens capped at 16384, trust_remote_code warning
+- **v0.14.0**: Plaintext loader UTF-8 encoding, MoE config validation (moe_aux_loss_coeff ge=0, moe_lora boolean only)
+- **v0.14.3**: Data validate auto-detects format, Web UI `--show-token` flag + auth token documented
 
 ## Security Scanning
 

@@ -220,11 +220,14 @@ soup version           # Show version (--full for details)
 6. **Version**: bump version in `pyproject.toml` + `soup_cli/__init__.py`
 7. **CLAUDE.md**: update architecture, test table, and any new sections
 8. **README.md**: add docs for new feature, update Features / All Commands / Data Formats
-9. **plan.md**: mark the phase as complete, update version/test counters
-10. **Commit**: one commit per phase with a descriptive message
-11. **Push**: `git push origin main`
-12. **Tag**: `git tag v0.X.Y && git push origin v0.X.Y`
-13. **Release**: `gh release create v0.X.Y` with changelog (What's New, Install/Upgrade)
+9. **SECURITY.md**: update if new security fixes or supported versions changed
+10. **CONTRIBUTING.md**: update if dev workflow, deps, or project structure changed
+11. **examples/README.md**: update if new example configs or datasets added
+12. **plan.md**: mark the phase as complete, update version/test counters
+13. **Commit**: one commit per phase with a descriptive message
+14. **Push**: `git push origin main`
+15. **Tag**: `git tag v0.X.Y && git push origin v0.X.Y`
+16. **Release**: `gh release create v0.X.Y` with changelog (What's New, Install/Upgrade)
 
 ## Tests (47 test files, 1022 tests)
 

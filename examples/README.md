@@ -59,7 +59,65 @@ soup train --config examples/configs/vision_llama.yaml
 - Uses LLaVA format for images + text
 - Outputs to `./output_vision/`
 
-### 5. Full RLHF Pipeline
+### 5. Alignment Methods (KTO / ORPO / SimPO / IPO)
+
+Train with alternative preference optimization:
+
+```bash
+# KTO — unpaired preference (only needs thumbs up/down labels)
+soup init --template kto
+soup train
+
+# ORPO — reference-free alignment (no reference model needed)
+soup init --template orpo
+soup train
+
+# SimPO — length-normalized preference optimization
+soup init --template simpo
+soup train
+
+# IPO — regularized preference (squared hinge loss)
+soup init --template ipo
+soup train
+```
+
+### 6. Continued Pre-training
+
+Continue training on raw text corpora:
+
+```bash
+soup init --template pretrain
+soup train
+```
+
+**What it does:**
+- Trains on plain text (`.txt` files or JSONL with `text` field)
+- No instruction format needed — just raw text
+- Useful for domain adaptation (legal, medical, code)
+
+### 7. MoE Models
+
+Fine-tune Mixture-of-Experts models (Qwen3, Mixtral, DeepSeek V3):
+
+```bash
+soup init --template moe
+soup train
+```
+
+**What it does:**
+- Auto-detects MoE architecture (ScatterMoE / SwitchTransformers)
+- `moe_lora: true` targets expert-specific LoRA modules
+- Optional `moe_aux_loss_coeff` for load balancing
+
+### 8. Batch Inference
+
+Run inference on a batch of prompts:
+
+```bash
+soup infer --model ./output_sft_basic/ --input prompts.jsonl --output results.jsonl
+```
+
+### 9. Full RLHF Pipeline
 
 Complete reinforcement learning from human feedback:
 
@@ -81,7 +139,10 @@ Datasets are included in JSONL format. Soup auto-detects and normalizes:
 - **Alpaca**: `instruction`, `input`, `output` fields
 - **ShareGPT**: `conversations` with `from`/`value` fields
 - **ChatML**: OpenAI-style `messages` with `role`/`content`
-- **LLaVA**: Vision format with `image` + `conversations`
+- **DPO/ORPO/SimPO/IPO**: `prompt` + `chosen` + `rejected` fields
+- **KTO**: `prompt` + `completion` + `label` fields
+- **LLaVA / ShareGPT4V**: Vision format with `image` + `conversations`
+- **Plaintext**: Raw `.txt` files or JSONL with `text` field (for pre-training)
 
 ### Example: Inspect a Dataset
 
