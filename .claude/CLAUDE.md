@@ -1,12 +1,12 @@
 # Soup CLI — Project CLAUDE.md
 
-Soup is a CLI-first LLM fine-tuning tool (v0.13.0). Python 3.9+, MIT license.
+Soup is a CLI-first LLM fine-tuning tool (v0.13.2). Python 3.9+, MIT license.
 
 ## Build & Development
 
 ```bash
 pip install -e ".[dev]"          # Install editable + test deps
-pytest tests/ -v --tb=short      # Run all tests (906 tests)
+pytest tests/ -v --tb=short      # Run all tests (917 tests)
 ruff check soup_cli/ tests/      # Lint (must pass before commit)
 ruff check --fix soup_cli/ tests/  # Auto-fix lint issues
 ```
@@ -70,7 +70,7 @@ soup_cli/
     vllm.py            # AsyncLLMEngine backend (2-4x inference throughput)
     galore.py          # GaLore optimizer config + validation
     constants.py       # APP_NAME, paths, default chat template
-tests/                 # 44 test files, 906 tests
+tests/                 # 44 test files, 917 tests
 examples/
   configs/             # 7 production-ready YAML examples
   data/                # Sample datasets
@@ -155,8 +155,9 @@ soup version           # Show version (--full for details)
 - **Deprecated CLI secrets**: `--api-key` and `--token` flags read from env vars, marked deprecated
 - **Custom reward warning**: Prominent warning before executing arbitrary .py reward files
 - **max_tokens bound**: Capped at 16384 on inference endpoints
-- **experiment_name validation**: Path separators and null bytes blocked (v0.13.0)
-- **GaLore params**: Type-enforced before string interpolation (v0.13.0)
+- **experiment_name validation**: Path separators and null bytes blocked (v0.12.0)
+- **GaLore params**: Type-enforced before string interpolation (v0.12.0)
+- **Batch inference**: max_tokens capped at 16384, trust_remote_code warning (v0.13.0)
 
 ## Code Conventions
 
@@ -217,7 +218,7 @@ soup version           # Show version (--full for details)
 12. **Tag**: `git tag v0.X.Y && git push origin v0.X.Y`
 13. **Release**: `gh release create v0.X.Y` with changelog (What's New, Install/Upgrade)
 
-## Tests (44 test files, 906 tests)
+## Tests (44 test files, 917 tests)
 
 | File | Covers |
 |------|--------|
