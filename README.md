@@ -69,6 +69,10 @@ soup init --template code       # code generation
 soup init --template medical    # domain expert
 soup init --template reasoning  # GRPO reasoning training
 soup init --template vision     # vision/multimodal fine-tune
+soup init --template kto        # KTO unpaired preference alignment
+soup init --template orpo       # ORPO (no reference model needed)
+soup init --template simpo      # SimPO length-normalized preference
+soup init --template ipo        # IPO regularized preference
 soup init --template rlhf       # full RLHF pipeline (SFT→RM→PPO)
 ```
 
@@ -155,7 +159,7 @@ training:
     alpha: 16
 ```
 
-Works with all training tasks: SFT, DPO, GRPO, and PPO. If unsloth is installed but not enabled, Soup will suggest it automatically.
+Works with all training tasks: SFT, DPO, GRPO, PPO, KTO, ORPO, SimPO, and IPO. If unsloth is installed but not enabled, Soup will suggest it automatically.
 
 > **Tip:** Soup auto-detects unsloth. When installed, you'll see a hint during `soup train` if you haven't enabled it yet.
 
@@ -241,7 +245,7 @@ output: ./output
 - **QAT** (`quantization_aware: true`): Better quality when you plan to deploy with aggressive quantization (int8/int4). ~5-10% slower training, but the model learns to compensate for quantization noise.
 - **Post-training quantization** (default): Faster training, good enough for most use cases. Quantize after training with `soup export --quant q4_k_m`.
 
-QAT works with all training tasks (SFT, DPO, GRPO, PPO) and vision modality. Not compatible with the unsloth backend. After QAT training, export to GGUF normally with `soup export`.
+QAT works with all training tasks (SFT, DPO, GRPO, PPO, KTO, ORPO, SimPO, IPO) and vision modality. Not compatible with the unsloth backend. After QAT training, export to GGUF normally with `soup export`.
 
 ## DPO Training
 
@@ -364,6 +368,148 @@ output: ./output_ppo
 PPO supports two reward sources:
 - **Reward model** (`reward_model`): pre-trained reward model (from step 2)
 - **Reward function** (`reward_fn`): callable function (same as GRPO — `accuracy`, `format`, or custom `.py`)
+
+## KTO Training (Unpaired Preferences)
+
+Train with unpaired preference data — no need for chosen+rejected pairs:
+
+```yaml
+base: meta-llama/Llama-3.1-8B-Instruct
+task: kto
+
+data:
+  train: ./data/kto_train.jsonl
+  format: kto
+
+training:
+  epochs: 3
+  kto_beta: 0.1
+  lora:
+    r: 64
+    alpha: 16
+  quantization: 4bit
+```
+
+**KTO data format:**
+```json
+{"prompt": "What is 2+2?", "completion": "4", "label": true}
+{"prompt": "What is 2+2?", "completion": "Fish", "label": false}
+```
+
+## ORPO Training (No Reference Model)
+
+ORPO combines SFT and alignment in one step — no reference model needed:
+
+```yaml
+base: meta-llama/Llama-3.1-8B-Instruct
+task: orpo
+
+data:
+  train: ./data/preferences.jsonl
+  format: dpo
+
+training:
+  epochs: 3
+  orpo_beta: 0.1
+  lora:
+    r: 64
+    alpha: 16
+  quantization: 4bit
+```
+
+## SimPO Training (Simple Preference)
+
+SimPO uses length-normalized log probabilities as implicit rewards — reference-free:
+
+```yaml
+base: meta-llama/Llama-3.1-8B-Instruct
+task: simpo
+
+data:
+  train: ./data/preferences.jsonl
+  format: dpo
+
+training:
+  epochs: 3
+  simpo_gamma: 0.5
+  cpo_alpha: 1.0
+  lora:
+    r: 64
+    alpha: 16
+  quantization: 4bit
+```
+
+## IPO Training (Regularized Preference)
+
+IPO is a theoretically grounded DPO variant with stronger regularization:
+
+```yaml
+base: meta-llama/Llama-3.1-8B-Instruct
+task: ipo
+
+data:
+  train: ./data/preferences.jsonl
+  format: dpo
+
+training:
+  epochs: 3
+  ipo_tau: 0.1
+  lora:
+    r: 64
+    alpha: 16
+  quantization: 4bit
+```
+
+## DoRA (Weight-Decomposed LoRA)
+
+Enable DoRA for improved LoRA quality with magnitude decomposition:
+
+```yaml
+training:
+  lora:
+    r: 64
+    alpha: 16
+    use_dora: true  # Enable DoRA
+```
+
+Works with all training tasks and backends.
+
+## LoRA+ (Differentiated Learning Rates)
+
+Use different learning rates for LoRA A and B matrices:
+
+```yaml
+training:
+  lr: 2e-5
+  loraplus_lr_ratio: 16.0  # lr_B = lr × 16
+  lora:
+    r: 64
+    alpha: 16
+```
+
+## GaLore (Memory-Efficient Full-Parameter Training)
+
+Train without LoRA using gradient low-rank projection — saves optimizer memory:
+
+```yaml
+base: meta-llama/Llama-3.1-8B-Instruct
+task: sft
+
+data:
+  train: ./data/train.jsonl
+  format: alpaca
+
+training:
+  epochs: 3
+  lr: 2e-5
+  quantization: none      # Required: GaLore is incompatible with quantization
+  use_galore: true
+  galore_rank: 128
+  galore_update_proj_gap: 200
+  galore_scale: 0.25
+```
+
+> **Note:** GaLore requires `quantization: none` and `backend: transformers` (not unsloth).
 
 ## Chat with your model
 
@@ -605,7 +751,7 @@ soup version
 
 # Full system info (useful for bug reports)
 soup version --full
-# -> soup v0.10.9 | Python 3.11.5 | CUDA 12.1 | extras: serve, data
+# -> soup v0.12.0 | Python 3.11.5 | CUDA 12.1 | extras: serve, data
 ```
 
 ## Web UI
@@ -665,9 +811,14 @@ Soup supports these formats (auto-detected). Files can be JSONL, JSON, CSV, or P
 {"messages": [{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello!"}]}
 ```
 
-**DPO (preference pairs):**
+**DPO / ORPO / SimPO / IPO (preference pairs):**
 ```json
 {"prompt": "Explain gravity", "chosen": "Gravity is a force...", "rejected": "I don't know"}
+```
+
+**KTO (unpaired preferences):**
+```json
+{"prompt": "Explain gravity", "completion": "Gravity is a force...", "label": true}
 ```
 
 **LLaVA (vision):**
@@ -738,7 +889,7 @@ soup eval --model ./output --benchmarks mmlu --run-id run_20260223_143052_a1b2
 ## All Commands
 
 ```
-soup init [--template chat|code|medical|reasoning|vision|rlhf]  Create config
+soup init [--template chat|code|medical|reasoning|vision|kto|orpo|simpo|ipo|rlhf]  Create config
 soup train --config soup.yaml                 Start training
 soup chat --model ./output                    Interactive chat
 soup push --model ./output --repo user/name   Upload to HuggingFace
@@ -772,7 +923,7 @@ soup --verbose <command>                      Full traceback on errors
 - GPU with CUDA (recommended) or Apple Silicon (MPS) or CPU (experimental)
 - 8 GB+ VRAM for 7B models with QLoRA
 
-> **CPU note:** All training tasks (SFT, DPO, GRPO, PPO) work on CPU but will be very slow. Quantization (`4bit`/`8bit`) is auto-disabled on CPU. GRPO on CPU uses `min_new_tokens=1` to prevent empty generation errors. A default chat template is set automatically if the tokenizer lacks one. PPO datasets are tokenized before training to ensure compatibility with trl's experimental API.
+> **CPU note:** All training tasks (SFT, DPO, GRPO, PPO, KTO, ORPO, SimPO, IPO) work on CPU but will be very slow. Quantization (`4bit`/`8bit`) is auto-disabled on CPU. GRPO on CPU uses `min_new_tokens=1` to prevent empty generation errors. A default chat template is set automatically if the tokenizer lacks one. PPO datasets are tokenized before training to ensure compatibility with trl's experimental API.
 
 ### Optional Extras
 
