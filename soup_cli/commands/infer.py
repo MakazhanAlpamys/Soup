@@ -20,13 +20,13 @@ def infer(
         "-m",
         help="Path to model (LoRA adapter or full model)",
     ),
-    input: str = typer.Option(
+    input_file: str = typer.Option(
         ...,
         "--input",
         "-i",
         help="Path to input JSONL file (each line: {\"prompt\": \"...\"})",
     ),
-    output: str = typer.Option(
+    output_file: str = typer.Option(
         ...,
         "--output",
         "-o",
@@ -59,7 +59,7 @@ def infer(
 ):
     """Run batch inference on a JSONL file of prompts."""
     # Validate input file
-    input_path = Path(input)
+    input_path = Path(input_file)
     if not input_path.exists():
         console.print(f"[red]Input file not found: {input_path}[/]")
         raise typer.Exit(1)
@@ -87,7 +87,7 @@ def infer(
         Panel(
             f"Model:    [bold]{model_path}[/]\n"
             f"Input:    [bold]{input_path}[/] ({len(prompts)} prompts)\n"
-            f"Output:   [bold]{output}[/]\n"
+            f"Output:   [bold]{output_file}[/]\n"
             f"Device:   [bold]{device}[/]\n"
             f"Tokens:   [bold]{max_tokens}[/]\n"
             f"Temp:     [bold]{temperature}[/]",
@@ -105,7 +105,7 @@ def infer(
     console.print("[green]Model loaded.[/]\n")
 
     # Run inference — stream results to disk as they are generated
-    output_path = Path(output)
+    output_path = Path(output_file)
     total_tokens = 0
     num_results = 0
     start_time = time.time()
@@ -160,8 +160,8 @@ def _read_prompts(path: Path) -> list[str]:
     """Read prompts from a JSONL or plain text file."""
     prompts = []
     with open(path, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
+        for raw_line in f:
+            line = raw_line.strip()
             if not line:
                 continue
             # Try JSONL
@@ -177,7 +177,7 @@ def _read_prompts(path: Path) -> list[str]:
     return prompts
 
 
-def _load_model(model_path: str, base_model: Optional[str], device: str):
+def _load_model(model_path: str, base_model: Optional[str], device: str) -> tuple:
     """Load a model and tokenizer (reuses diff.py pattern)."""
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
