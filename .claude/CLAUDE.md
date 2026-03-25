@@ -1,12 +1,12 @@
 # Soup CLI — Project CLAUDE.md
 
-Soup is a CLI-first LLM fine-tuning tool (v0.13.2). Python 3.9+, MIT license.
+Soup is a CLI-first LLM fine-tuning tool (v0.14.0). Python 3.9+, MIT license.
 
 ## Build & Development
 
 ```bash
 pip install -e ".[dev]"          # Install editable + test deps
-pytest tests/ -v --tb=short      # Run all tests (917 tests)
+pytest tests/ -v --tb=short      # Run all tests (1002 tests)
 ruff check soup_cli/ tests/      # Lint (must pass before commit)
 ruff check --fix soup_cli/ tests/  # Auto-fix lint issues
 ```
@@ -16,7 +16,7 @@ ruff check --fix soup_cli/ tests/  # Auto-fix lint issues
 ```
 soup_cli/
   cli.py              # Entry point, Typer app, all command registration
-  __init__.py          # __version__ = "0.13.2"
+  __init__.py          # __version__ = "0.14.0"
   config/
     schema.py          # Pydantic models (SoupConfig, DataConfig, TrainingConfig, LoraConfig)
     loader.py          # YAML -> SoupConfig, load_config_from_string()
@@ -33,6 +33,7 @@ soup_cli/
     simpo.py           # SimPOTrainerWrapper (233 lines, simple preference via CPOTrainer)
     ipo.py             # IPOTrainerWrapper (233 lines, identity preference via DPOTrainer)
     ppo.py             # PPOTrainerWrapper (682 lines, full RLHF stage 3)
+    pretrain.py        # PretrainTrainerWrapper (294 lines, continued pre-training)
     reward_model.py    # RewardModelTrainerWrapper (272 lines, RLHF stage 2)
     rewards.py         # Built-in reward fns (accuracy, format) + custom .py loader
   monitoring/
@@ -69,8 +70,9 @@ soup_cli/
     unsloth.py         # FastLanguageModel backend (2-5x speedup)
     vllm.py            # AsyncLLMEngine backend (2-4x inference throughput)
     galore.py          # GaLore optimizer config + validation
+    moe.py             # MoE model detection, ScatterMoE LoRA target modules
     constants.py       # APP_NAME, paths, default chat template
-tests/                 # 45 test files, 917 tests
+tests/                 # 47 test files, 1002 tests
 examples/
   configs/             # 7 production-ready YAML examples
   data/                # Sample datasets
@@ -111,12 +113,12 @@ soup version           # Show version (--full for details)
 
 `config/schema.py` is the single source of truth. Pydantic v2 models:
 
-- **SoupConfig**: base (required), task (sft/dpo/kto/orpo/simpo/ipo/grpo/ppo/reward_model), modality (text/vision), backend (transformers/unsloth), data, training, output
-- **DataConfig**: train, format (alpaca/sharegpt/chatml/dpo/kto/llava/sharegpt4v/auto), val_split, max_length, image_dir
-- **TrainingConfig**: epochs, lr, batch_size (int or "auto"), quantization (4bit/8bit/none), quantization_aware, optimizer, scheduler, dpo_beta, kto_beta, orpo_beta, simpo_gamma, cpo_alpha, ipo_tau, grpo_beta, num_generations, reward_fn, ppo_epochs, ppo_clip_ratio, ppo_kl_penalty, reward_model, loraplus_lr_ratio, use_galore, galore_rank, galore_update_proj_gap, galore_scale
+- **SoupConfig**: base (required), task (sft/dpo/kto/orpo/simpo/ipo/grpo/ppo/reward_model/pretrain), modality (text/vision), backend (transformers/unsloth), data, training, output
+- **DataConfig**: train, format (alpaca/sharegpt/chatml/dpo/kto/llava/sharegpt4v/plaintext/auto), val_split, max_length, image_dir
+- **TrainingConfig**: epochs, lr, batch_size (int or "auto"), quantization (4bit/8bit/none), quantization_aware, optimizer, scheduler, dpo_beta, kto_beta, orpo_beta, simpo_gamma, cpo_alpha, ipo_tau, grpo_beta, num_generations, reward_fn, ppo_epochs, ppo_clip_ratio, ppo_kl_penalty, reward_model, loraplus_lr_ratio, use_galore, galore_rank, galore_update_proj_gap, galore_scale, moe_lora, moe_aux_loss_coeff
 - **LoraConfig**: r, alpha, dropout, target_modules, use_dora
 
-10 built-in templates: chat, code, medical, reasoning, vision, kto, orpo, simpo, ipo, rlhf.
+12 built-in templates: chat, code, medical, reasoning, vision, kto, orpo, simpo, ipo, rlhf, pretrain, moe.
 
 ## Training Tasks
 
@@ -129,6 +131,7 @@ soup version           # Show version (--full for details)
 | orpo | ORPOTrainerWrapper | prompt+chosen+rejected | Reference-free alignment |
 | simpo | SimPOTrainerWrapper | prompt+chosen+rejected | Length-normalized preference |
 | ipo | IPOTrainerWrapper | prompt+chosen+rejected | Regularized preference (squared hinge) |
+| pretrain | PretrainTrainerWrapper | plaintext (raw text) | Continued pre-training |
 | ppo | PPOTrainerWrapper | prompts + reward model/fn | Full RLHF stage 3 |
 | reward_model | RewardModelTrainerWrapper | prompt+chosen+rejected | RLHF stage 2 |
 
@@ -158,6 +161,8 @@ soup version           # Show version (--full for details)
 - **experiment_name validation**: Path separators and null bytes blocked (v0.12.0)
 - **GaLore params**: Type-enforced before string interpolation (v0.12.0)
 - **Batch inference**: max_tokens capped at 16384, trust_remote_code warning (v0.13.0)
+- **Plaintext loader**: .txt files read with encoding="utf-8", empty lines skipped (v0.14.0)
+- **MoE config**: moe_aux_loss_coeff validated ge=0, moe_lora is boolean only (v0.14.0)
 
 ## Code Conventions
 
@@ -218,7 +223,7 @@ soup version           # Show version (--full for details)
 12. **Tag**: `git tag v0.X.Y && git push origin v0.X.Y`
 13. **Release**: `gh release create v0.X.Y` with changelog (What's New, Install/Upgrade)
 
-## Tests (45 test files, 917 tests)
+## Tests (47 test files, 1002 tests)
 
 | File | Covers |
 |------|--------|
@@ -265,4 +270,6 @@ soup version           # Show version (--full for details)
 | test_advanced_peft.py | DoRA, LoRA+, GaLore config, validation, sweep shortcuts |
 | test_infer.py | Batch inference command, prompt reading, CLI validation |
 | test_tensorboard.py | TensorBoard flag, wandb conflict, report_to routing |
+| test_pretrain.py | Pretrain task, plaintext format, MoE config, templates, routing |
+| test_moe.py | MoE detection, ScatterMoE LoRA targets, MoE info extraction |
 | test_bugfixes.py | v0.10.1-v0.10.8 regression fixes |

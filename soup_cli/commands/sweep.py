@@ -303,6 +303,8 @@ def _set_nested_param(config_dict: dict, key: str, value) -> dict:
         "use_dora": "training.lora.use_dora",
         "use_galore": "training.use_galore",
         "galore_rank": "training.galore_rank",
+        "moe_lora": "training.moe_lora",
+        "moe_aux_loss_coeff": "training.moe_aux_loss_coeff",
         "backend": "backend",
     }
 
@@ -388,6 +390,10 @@ def _run_single(base_cfg, params: dict, run_name: str, config_path: Path) -> dic
         from soup_cli.trainer.reward_model import RewardModelTrainerWrapper
 
         trainer_wrapper = RewardModelTrainerWrapper(cfg, device=device)
+    elif cfg.task == "pretrain":
+        from soup_cli.trainer.pretrain import PretrainTrainerWrapper
+
+        trainer_wrapper = PretrainTrainerWrapper(cfg, device=device)
     else:
         trainer_wrapper = SFTTrainerWrapper(cfg, device=device)
     trainer_wrapper.setup(dataset)

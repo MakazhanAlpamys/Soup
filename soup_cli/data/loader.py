@@ -11,7 +11,7 @@ from soup_cli.data.formats import detect_format, format_to_messages, is_vision_f
 console = Console()
 
 # File extensions we support
-SUPPORTED_EXTENSIONS = {".jsonl", ".json", ".csv", ".parquet"}
+SUPPORTED_EXTENSIONS = {".jsonl", ".json", ".csv", ".parquet", ".txt"}
 
 
 def load_raw_data(path: Path) -> list[dict]:
@@ -31,6 +31,8 @@ def load_raw_data(path: Path) -> list[dict]:
         return _load_csv(path)
     elif ext == ".parquet":
         return _load_parquet(path)
+    elif ext == ".txt":
+        return _load_txt(path)
 
     raise ValueError(f"Unsupported format: {ext}")
 
@@ -74,11 +76,35 @@ def _load_parquet(path: Path) -> list[dict]:
     return df.to_dict(orient="records")
 
 
+def _load_txt(path: Path) -> list[dict]:
+    """Load a plain text file as a list of {text: ...} dicts.
+
+    Each non-empty line is treated as a separate document.
+    Empty lines are skipped.
+    """
+    file_size = path.stat().st_size
+    if file_size > 500 * 1024 * 1024:  # 500 MB
+        console.print(
+            f"[yellow]Warning: large text file ({file_size / 1024 / 1024:.0f} MB). "
+            f"Consider splitting into smaller files or using JSONL format.[/]"
+        )
+    with open(path, encoding="utf-8") as f:
+        content = f.read()
+
+    # Split by double newline (paragraph/document separator) or treat each line as a doc
+    lines = [line.strip() for line in content.split("\n") if line.strip()]
+    if not lines:
+        console.print(f"[yellow]Warning: empty text file: {path}[/]")
+        return []
+
+    return [{"text": line} for line in lines]
+
+
 def load_dataset(data_config: DataConfig) -> dict:
     """Load dataset for training. Returns dict with 'train' and optionally 'val' keys.
 
     Supports:
-    - Local files (.jsonl, .json, .csv, .parquet)
+    - Local files (.jsonl, .json, .csv, .parquet, .txt)
     - HuggingFace dataset names (auto-detected if no file extension)
     """
     train_path = data_config.train

@@ -17,7 +17,8 @@ def init(
         None,
         "--template",
         "-t",
-        help="Use a template: chat, code, medical, reasoning, vision, rlhf, kto, orpo, simpo, ipo",
+        help="Template: chat, code, medical, reasoning, vision, rlhf, "
+        "kto, orpo, simpo, ipo, pretrain, moe",
     ),
     output: str = typer.Option(
         "soup.yaml",
@@ -64,7 +65,10 @@ def _interactive_wizard() -> str:
     )
     task = Prompt.ask(
         "Task",
-        choices=["sft", "dpo", "kto", "orpo", "simpo", "ipo", "grpo", "ppo", "reward_model"],
+        choices=[
+            "sft", "dpo", "kto", "orpo", "simpo", "ipo", "grpo", "ppo",
+            "reward_model", "pretrain",
+        ],
         default="sft",
     )
     data_path = Prompt.ask("Training data path", default="./data/train.jsonl")
@@ -74,6 +78,8 @@ def _interactive_wizard() -> str:
         data_format = "dpo"
     elif task == "kto":
         data_format = "kto"
+    elif task == "pretrain":
+        data_format = "plaintext"
     else:
         data_format = Prompt.ask(
             "Data format", choices=["alpaca", "sharegpt", "chatml"], default="alpaca",

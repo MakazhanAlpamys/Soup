@@ -54,7 +54,7 @@ def test_load_nonexistent_file(tmp_path: Path):
 
 def test_load_unsupported_extension(tmp_path: Path):
     """Unsupported file extension should raise ValueError."""
-    path = tmp_path / "data.txt"
+    path = tmp_path / "data.xyz"
     path.write_text("hello")
     with pytest.raises(ValueError, match="Unsupported"):
         load_raw_data(path)

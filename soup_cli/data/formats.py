@@ -8,6 +8,7 @@ Supported formats:
 - kto: {"prompt": ..., "completion": ..., "label": true/false}
 - llava: {"image": ..., "conversations": [{"from": "human", "value": ...}, ...]}
 - sharegpt4v: {"image": ..., "conversations": [{"from": "human", "value": ...}, ...]}
+- plaintext: {"text": "..."} — raw text for continued pre-training
 """
 
 from typing import Optional
@@ -25,6 +26,7 @@ FORMAT_SIGNATURES = {
     "kto": {"prompt", "completion", "label"},
     "llava": {"image", "conversations"},
     "sharegpt4v": {"image", "conversations"},
+    "plaintext": {"text"},
 }
 
 
@@ -37,7 +39,10 @@ def detect_format(data: list[dict]) -> str:
     keys = set(sample.keys())
 
     # Check more specific formats first (llava/sharegpt4v before sharegpt)
-    check_order = ["alpaca", "llava", "kto", "dpo", "sharegpt", "chatml"]
+    # plaintext ("text" key only) checked last to avoid false matches
+    check_order = [
+        "alpaca", "llava", "sharegpt4v", "kto", "dpo", "sharegpt", "chatml", "plaintext",
+    ]
     for fmt in check_order:
         required_keys = FORMAT_SIGNATURES[fmt]
         if required_keys.issubset(keys):
@@ -49,7 +54,8 @@ def detect_format(data: list[dict]) -> str:
         f"sharegpt (conversations), chatml (messages), "
         f"dpo (prompt, chosen, rejected), "
         f"kto (prompt, completion, label), "
-        f"llava/sharegpt4v (image, conversations)"
+        f"llava/sharegpt4v (image, conversations), "
+        f"plaintext (text)"
     )
 
 
@@ -62,7 +68,10 @@ def format_to_messages(row: dict, fmt: str) -> Optional[dict]:
     - DPO format: {"prompt": ..., "chosen": ..., "rejected": ...}
     - KTO format: {"prompt": ..., "completion": ..., "label": bool}
     """
-    if fmt not in ("chatml", "alpaca", "sharegpt", "dpo", "kto", "llava", "sharegpt4v"):
+    valid_formats = (
+        "chatml", "alpaca", "sharegpt", "dpo", "kto", "llava", "sharegpt4v", "plaintext",
+    )
+    if fmt not in valid_formats:
         raise ValueError(f"Unknown format: {fmt}")
     try:
         if fmt == "chatml":
@@ -75,6 +84,8 @@ def format_to_messages(row: dict, fmt: str) -> Optional[dict]:
             return _convert_dpo(row)
         elif fmt == "kto":
             return _convert_kto(row)
+        elif fmt == "plaintext":
+            return _convert_plaintext(row)
         else:
             return _convert_vision(row)
     except (KeyError, TypeError, IndexError, ValueError):
@@ -145,6 +156,18 @@ def _convert_kto(row: dict) -> dict:
         "completion": row["completion"],
         "label": label,
     }
+
+
+def _convert_plaintext(row: dict) -> dict:
+    """Convert plaintext row to {text} for continued pre-training.
+
+    Input: {"text": "raw document text..."}
+    Output: {"text": "raw document text..."}
+    """
+    text = row["text"]
+    if not isinstance(text, str) or not text.strip():
+        raise ValueError("Plaintext row must have a non-empty 'text' field")
+    return {"text": text}
 
 
 def _convert_vision(row: dict) -> dict:

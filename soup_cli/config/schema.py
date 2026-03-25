@@ -23,7 +23,8 @@ class LoraConfig(BaseModel):
 class DataConfig(BaseModel):
     train: str = Field(..., description="Path to training data or HF dataset name")
     format: Literal[
-        "alpaca", "sharegpt", "chatml", "dpo", "kto", "llava", "sharegpt4v", "auto"
+        "alpaca", "sharegpt", "chatml", "dpo", "kto", "llava", "sharegpt4v",
+        "plaintext", "auto",
     ] = Field(
         default="auto",
         description="Data format",
@@ -128,6 +129,16 @@ class TrainingConfig(BaseModel):
     galore_scale: float = Field(
         default=0.25, gt=0, description="GaLore gradient scaling factor"
     )
+    # MoE-specific
+    moe_lora: bool = Field(
+        default=False,
+        description="Enable MoE-aware LoRA (ScatterMoE) — applies LoRA to expert FFN layers",
+    )
+    moe_aux_loss_coeff: float = Field(
+        default=0.01,
+        ge=0,
+        description="Auxiliary load-balancing loss coefficient for MoE models",
+    )
 
 
 class SoupConfig(BaseModel):
@@ -135,7 +146,8 @@ class SoupConfig(BaseModel):
 
     base: str = Field(..., description="Base model name or path (HF model ID)")
     task: Literal[
-        "sft", "dpo", "grpo", "ppo", "reward_model", "kto", "orpo", "simpo", "ipo"
+        "sft", "dpo", "grpo", "ppo", "reward_model", "kto", "orpo", "simpo", "ipo",
+        "pretrain",
     ] = Field(
         default="sft", description="Training task type"
     )
@@ -419,6 +431,67 @@ training:
     target_modules: auto
   quantization: 4bit
   ipo_tau: 0.1
+
+output: ./output
+""",
+    "pretrain": """# Soup template: Continued Pre-training
+# Continue pre-training a model on raw text data (domain adaptation)
+#
+# Data format (JSONL):
+#   {"text": "Your raw text document here..."}
+#
+# Or plain .txt files (one document per line or entire file as one document).
+
+base: meta-llama/Llama-3.1-8B
+task: pretrain
+# backend: unsloth  # 2-5x faster, pip install 'soup-cli[fast]'
+
+data:
+  train: ./data/corpus.jsonl
+  format: plaintext
+  val_split: 0.05
+  max_length: 4096
+
+training:
+  epochs: 1
+  lr: 1e-5
+  batch_size: auto
+  gradient_accumulation_steps: 8
+  lora:
+    r: 64
+    alpha: 16
+    target_modules: auto
+  quantization: 4bit
+
+output: ./output_pretrain
+""",
+    "moe": """# Soup template: MoE (Mixture of Experts) Fine-tuning
+# Fine-tune a Mixture of Experts model with ScatterMoE LoRA
+#
+# Supported MoE models: Qwen3-30B-A3B, Mixtral-8x7B, DeepSeek-V3, etc.
+
+base: Qwen/Qwen3-30B-A3B
+task: sft
+# backend: unsloth  # 2-5x faster, pip install 'soup-cli[fast]'
+
+data:
+  train: ./data/train.jsonl
+  format: alpaca
+  val_split: 0.1
+  max_length: 2048
+
+training:
+  epochs: 3
+  lr: 1e-5
+  batch_size: auto
+  gradient_accumulation_steps: 8
+  lora:
+    r: 64
+    alpha: 16
+    target_modules: auto
+  quantization: 4bit
+  moe_lora: true
+  moe_aux_loss_coeff: 0.01
 
 output: ./output
 """,

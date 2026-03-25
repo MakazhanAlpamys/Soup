@@ -1,5 +1,6 @@
-"""SFT (Supervised Fine-Tuning) trainer — wraps HuggingFace transformers + peft + trl."""
+"""Pretrain (Continued Pre-training) trainer — wraps HuggingFace SFTTrainer for CLM."""
 
+import math
 import time
 from pathlib import Path
 from typing import Optional
@@ -12,8 +13,13 @@ from soup_cli.utils.gpu import estimate_batch_size, model_size_from_name
 console = Console()
 
 
-class SFTTrainerWrapper:
-    """High-level wrapper that sets up model + tokenizer + trainer from SoupConfig."""
+class PretrainTrainerWrapper:
+    """High-level wrapper for continued pre-training from SoupConfig.
+
+    Pre-training uses raw text data (no instruction/response structure).
+    Each sample is a plain text document that the model learns via
+    causal language modelling (next-token prediction).
+    """
 
     def __init__(
         self,
@@ -29,24 +35,24 @@ class SFTTrainerWrapper:
         self.model = None
         self.tokenizer = None
         self.trainer = None
+        self._output_dir = None
 
-    def setup(self, dataset: dict):
-        """Load model, tokenizer, apply LoRA, create trainer."""
+    def setup(self, dataset: dict) -> None:
+        """Load model, tokenizer, apply LoRA, create trainer for CLM."""
         from datasets import Dataset
         from transformers import TrainingArguments
         from trl import SFTTrainer
 
         # Enable Rich progress bar for HuggingFace downloads
+        from soup_cli.trainer.sft import _enable_hf_transfer_progress
+
         _enable_hf_transfer_progress()
 
         cfg = self.config
         tcfg = cfg.training
         use_unsloth = cfg.backend == "unsloth"
-        use_vision = cfg.modality == "vision"
 
-        if use_vision:
-            self._setup_vision_transformers(cfg, tcfg)
-        elif use_unsloth:
+        if use_unsloth:
             self._setup_unsloth(cfg, tcfg)
         else:
             self._setup_transformers(cfg, tcfg)
@@ -72,35 +78,16 @@ class SFTTrainerWrapper:
                 quantization=tcfg.quantization,
                 lora_r=tcfg.lora.r,
             )
+            if batch_size <= 0:
+                batch_size = 1
             console.print(f"[green]Auto batch size:[/] {batch_size}")
 
         # --- Dataset ---
-        if use_vision:
-            train_ds, eval_ds = self._prepare_vision_dataset(dataset)
-        else:
-            def format_row(example):
-                if hasattr(self.tokenizer, "chat_template") and self.tokenizer.chat_template:
-                    text = self.tokenizer.apply_chat_template(
-                        example["messages"], tokenize=False, add_generation_prompt=False
-                    )
-                else:
-                    # Fallback for models without chat template
-                    parts = []
-                    for msg in example["messages"]:
-                        role = msg["role"]
-                        content = msg["content"]
-                        parts.append(f"{role}: {content}")
-                    text = "\n".join(parts)
-                return {"text": text}
-
-            train_ds = Dataset.from_list(dataset["train"]).map(
-                format_row, remove_columns=["messages"]
-            )
-            eval_ds = None
-            if "val" in dataset and dataset["val"]:
-                eval_ds = Dataset.from_list(dataset["val"]).map(
-                    format_row, remove_columns=["messages"]
-                )
+        # Plaintext: data already has {"text": "..."} from format conversion
+        train_ds = Dataset.from_list(dataset["train"])
+        eval_ds = None
+        if "val" in dataset and dataset["val"]:
+            eval_ds = Dataset.from_list(dataset["val"])
 
         # --- Output dir ---
         output_dir = Path(cfg.output)
@@ -109,8 +96,6 @@ class SFTTrainerWrapper:
         output_dir.mkdir(parents=True, exist_ok=True)
 
         # --- Calculate warmup steps from ratio ---
-        import math
-
         total_steps = (
             math.ceil(len(train_ds) / batch_size / tcfg.gradient_accumulation_steps)
             * tcfg.epochs
@@ -175,7 +160,7 @@ class SFTTrainerWrapper:
 
         self._output_dir = str(output_dir)
 
-    def _setup_transformers(self, cfg, tcfg):
+    def _setup_transformers(self, cfg: SoupConfig, tcfg) -> None:
         """Load model via standard transformers + peft pipeline."""
         from peft import LoraConfig, TaskType, get_peft_model, prepare_model_for_kbit_training
         from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
@@ -187,7 +172,6 @@ class SFTTrainerWrapper:
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
-        # Quantization
         bnb_config = None
         if tcfg.quantization == "4bit":
             from soup_cli.utils.gpu import get_compute_dtype
@@ -254,7 +238,7 @@ class SFTTrainerWrapper:
 
             self.model = prepare_model_for_qat(self.model)
 
-    def _setup_unsloth(self, cfg, tcfg):
+    def _setup_unsloth(self, cfg: SoupConfig, tcfg) -> None:
         """Load model via unsloth FastLanguageModel (2-5x faster)."""
         from soup_cli.utils.unsloth import load_model_and_tokenizer
 
@@ -271,98 +255,6 @@ class SFTTrainerWrapper:
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
-    def _setup_vision_transformers(self, cfg, tcfg):
-        """Load vision-language model via transformers (LLaMA-Vision, Qwen2-VL, etc.)."""
-        from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
-        from transformers import AutoModelForVision2Seq, AutoProcessor, BitsAndBytesConfig
-
-        console.print(f"[dim]Loading vision processor: {cfg.base}[/]")
-        self.processor = AutoProcessor.from_pretrained(cfg.base, trust_remote_code=True)
-        self.tokenizer = self.processor  # SFTTrainer uses processing_class
-
-        # Quantization
-        bnb_config = None
-        if tcfg.quantization == "4bit":
-            from soup_cli.utils.gpu import get_compute_dtype
-
-            bnb_config = BitsAndBytesConfig(
-                load_in_4bit=True,
-                bnb_4bit_quant_type="nf4",
-                bnb_4bit_compute_dtype=get_compute_dtype(),
-                bnb_4bit_use_double_quant=True,
-            )
-        elif tcfg.quantization == "8bit":
-            bnb_config = BitsAndBytesConfig(load_in_8bit=True)
-
-        console.print(f"[dim]Loading vision model: {cfg.base}[/]")
-        dev_map = "cpu" if self.device == "cpu" else "auto"
-        model_kwargs = {"trust_remote_code": True, "device_map": dev_map}
-        if bnb_config:
-            model_kwargs["quantization_config"] = bnb_config
-
-        self.model = AutoModelForVision2Seq.from_pretrained(cfg.base, **model_kwargs)
-
-        if tcfg.quantization in ("4bit", "8bit"):
-            self.model = prepare_model_for_kbit_training(self.model)
-
-        # LoRA — target language model layers only
-        target_modules = tcfg.lora.target_modules
-        if target_modules == "auto":
-            target_modules = None
-
-        lora_config = LoraConfig(
-            r=tcfg.lora.r,
-            lora_alpha=tcfg.lora.alpha,
-            lora_dropout=tcfg.lora.dropout,
-            target_modules=target_modules,
-            bias="none",
-            use_dora=tcfg.lora.use_dora,
-        )
-        self.model = get_peft_model(self.model, lora_config)
-
-        # QAT — insert fake quantization ops after LoRA
-        if tcfg.quantization_aware:
-            from soup_cli.utils.qat import prepare_model_for_qat
-
-            self.model = prepare_model_for_qat(self.model)
-
-    def _prepare_vision_dataset(self, dataset: dict):
-        """Prepare dataset for vision fine-tuning with image loading."""
-        from datasets import Dataset
-
-        def load_and_format_vision(example):
-            from PIL import Image as PILImage
-
-            image_path = example.get("image", "")
-            image = None
-            if image_path:
-                try:
-                    image = PILImage.open(image_path).convert("RGB")
-                except (FileNotFoundError, OSError):
-                    console.print(f"[yellow]Warning: cannot open image: {image_path}[/]")
-
-            messages = example["messages"]
-            text = self.processor.apply_chat_template(
-                messages, tokenize=False, add_generation_prompt=False
-            )
-            result = {"text": text}
-            if image is not None:
-                result["images"] = [image]
-            return result
-
-        remove_cols = ["messages", "image"]
-        train_ds = Dataset.from_list(dataset["train"]).map(
-            load_and_format_vision,
-            remove_columns=[c for c in remove_cols if c in dataset["train"][0]],
-        )
-        eval_ds = None
-        if "val" in dataset and dataset["val"]:
-            eval_ds = Dataset.from_list(dataset["val"]).map(
-                load_and_format_vision,
-                remove_columns=[c for c in remove_cols if c in dataset["val"][0]],
-            )
-        return train_ds, eval_ds
-
     def train(
         self,
         display: Optional[object] = None,
@@ -370,7 +262,12 @@ class SFTTrainerWrapper:
         run_id: str = "",
         resume_from_checkpoint: Optional[str] = None,
     ) -> dict:
-        """Run training and return results summary."""
+        """Run continued pre-training and return results summary."""
+        if self.trainer is None:
+            raise RuntimeError(
+                "PretrainTrainerWrapper.train() called before setup(). "
+                "Call setup(dataset) first."
+            )
         start = time.time()
 
         # Add callback for live display and experiment tracking
@@ -404,61 +301,3 @@ class SFTTrainerWrapper:
             "output_dir": self._output_dir,
             "total_steps": self.trainer.state.global_step,
         }
-
-
-def _enable_hf_transfer_progress():
-    """Enable Rich progress bars for HuggingFace Hub file downloads."""
-    try:
-        from rich.progress import (
-            BarColumn,
-            DownloadColumn,
-            Progress,
-            TextColumn,
-            TimeRemainingColumn,
-            TransferSpeedColumn,
-        )
-
-        class RichDownloadProgress:
-            """Wraps tqdm calls with Rich progress bars for HF downloads."""
-
-            def __init__(self, *args, **kwargs):
-                desc = kwargs.get("desc", "") or (args[0] if args else "Downloading")
-                total = kwargs.get("total", None)
-                self._progress = Progress(
-                    TextColumn("[bold blue]{task.description}"),
-                    BarColumn(),
-                    DownloadColumn(),
-                    TransferSpeedColumn(),
-                    TimeRemainingColumn(),
-                    console=console,
-                )
-                self._progress.start()
-                self._task = self._progress.add_task(str(desc), total=total)
-                self._n = 0
-
-            def update(self, n=1):
-                self._n += n
-                self._progress.update(self._task, advance=n)
-
-            def close(self):
-                self._progress.stop()
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *args):
-                self.close()
-
-            def __iter__(self):
-                return self
-
-            def __next__(self):
-                raise StopIteration
-
-        # Patch huggingface_hub's tqdm usage
-        import huggingface_hub.utils._http as hf_http
-
-        if hasattr(hf_http, "tqdm"):
-            hf_http.tqdm = RichDownloadProgress
-    except (ImportError, AttributeError):
-        pass  # Silently skip if huggingface_hub internals changed

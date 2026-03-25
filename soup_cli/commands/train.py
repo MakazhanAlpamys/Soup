@@ -284,6 +284,12 @@ def train(
         trainer_wrapper = RewardModelTrainerWrapper(
             cfg, device=device, report_to=report_to, deepspeed_config=ds_config_path,
         )
+    elif cfg.task == "pretrain":
+        from soup_cli.trainer.pretrain import PretrainTrainerWrapper
+
+        trainer_wrapper = PretrainTrainerWrapper(
+            cfg, device=device, report_to=report_to, deepspeed_config=ds_config_path,
+        )
     else:
         trainer_wrapper = SFTTrainerWrapper(
             cfg, device=device, report_to=report_to, deepspeed_config=ds_config_path,

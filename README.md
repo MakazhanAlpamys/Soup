@@ -74,6 +74,8 @@ soup init --template orpo       # ORPO (no reference model needed)
 soup init --template simpo      # SimPO length-normalized preference
 soup init --template ipo        # IPO regularized preference
 soup init --template rlhf       # full RLHF pipeline (SFT→RM→PPO)
+soup init --template pretrain   # continued pre-training on raw text
+soup init --template moe        # MoE fine-tuning (ScatterMoE LoRA)
 ```
 
 ### 3. Train
@@ -826,7 +828,7 @@ soup --verbose eval --model ./output --benchmarks mmlu
 
 ## Data Formats
 
-Soup supports these formats (auto-detected). Files can be JSONL, JSON, CSV, or Parquet.
+Soup supports these formats (auto-detected). Files can be JSONL, JSON, CSV, Parquet, or TXT.
 
 **Alpaca:**
 ```json
@@ -862,6 +864,12 @@ Soup supports these formats (auto-detected). Files can be JSONL, JSON, CSV, or P
 ```json
 {"image": "chart.png", "conversations": [{"from": "human", "value": "<image>\nExplain this chart."}, {"from": "gpt", "value": "Revenue growth."}]}
 ```
+
+**Plaintext (pre-training):**
+```json
+{"text": "Raw text document for continued pre-training..."}
+```
+Or use `.txt` files directly (one document per line).
 
 ## Data Tools
 
@@ -921,7 +929,7 @@ soup eval --model ./output --benchmarks mmlu --run-id run_20260223_143052_a1b2
 ## All Commands
 
 ```
-soup init [--template chat|code|medical|reasoning|vision|kto|orpo|simpo|ipo|rlhf]  Create config
+soup init [--template chat|code|...|pretrain|moe]  Create config
 soup train --config soup.yaml                 Start training
 soup train --config soup.yaml --tensorboard   Train with TensorBoard logging
 soup infer --model ./output --input p.jsonl   Batch inference
@@ -1001,7 +1009,7 @@ Soup works with **any** of the **340,000+** text-generation models on [HuggingFa
 - GPU with CUDA (recommended) or Apple Silicon (MPS) or CPU (experimental)
 - 8 GB+ VRAM for 7B models with QLoRA
 
-> **CPU note:** All training tasks (SFT, DPO, GRPO, PPO, KTO, ORPO, SimPO, IPO) work on CPU but will be very slow. Quantization (`4bit`/`8bit`) is auto-disabled on CPU. GRPO on CPU uses `min_new_tokens=1` to prevent empty generation errors. A default chat template is set automatically if the tokenizer lacks one. PPO datasets are tokenized before training to ensure compatibility with trl's experimental API.
+> **CPU note:** All training tasks (SFT, DPO, GRPO, PPO, KTO, ORPO, SimPO, IPO, Pretrain) work on CPU but will be very slow. Quantization (`4bit`/`8bit`) is auto-disabled on CPU. GRPO on CPU uses `min_new_tokens=1` to prevent empty generation errors. A default chat template is set automatically if the tokenizer lacks one. PPO datasets are tokenized before training to ensure compatibility with trl's experimental API.
 
 ### Optional Extras
 
