@@ -263,7 +263,7 @@ class PretrainTrainerWrapper:
         resume_from_checkpoint: Optional[str] = None,
     ) -> dict:
         """Run continued pre-training and return results summary."""
-        if self.trainer is None:
+        if self.trainer is None or self._output_dir is None:
             raise RuntimeError(
                 "PretrainTrainerWrapper.train() called before setup(). "
                 "Call setup(dataset) first."
