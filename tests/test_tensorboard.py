@@ -1,7 +1,13 @@
 """Tests for --tensorboard flag in soup train command."""
 
+import re
 from unittest.mock import MagicMock
 from unittest.mock import patch as mock_patch
+
+
+def _strip_ansi(text: str) -> str:
+    """Remove ANSI escape codes from text."""
+    return re.sub(r'\x1b\[[0-9;]*m', '', text)
 
 # ─── Flag Conflict Tests ──────────────────────────────────────────────────
 
@@ -105,7 +111,8 @@ class TestTensorBoardCLI:
         runner = CliRunner()
         result = runner.invoke(app, ["train", "--help"])
         assert result.exit_code == 0
-        assert "--tensorboard" in result.output
+        clean = _strip_ansi(result.output)
+        assert "--tensorboard" in clean
 
     def test_tensorboard_help_text(self):
         """--tensorboard help should mention TensorBoard."""
@@ -115,7 +122,8 @@ class TestTensorBoardCLI:
 
         runner = CliRunner()
         result = runner.invoke(app, ["train", "--help"])
-        assert "tensorboard" in result.output.lower()
+        clean = _strip_ansi(result.output)
+        assert "tensorboard" in clean.lower()
 
 
 # ─── Trainer report_to Integration Tests ─────────────────────────────────
