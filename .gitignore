@@ -49,3 +49,4 @@ report.xml
 .claude/mcp-configs/
 .claude/rules/
 .claude/skills/
+.claude/settings.json.coverage

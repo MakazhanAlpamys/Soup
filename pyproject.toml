@@ -72,4 +72,4 @@ select = ["E", "F", "I", "N", "W"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = ["smoke: slow smoke tests that download models and run training (run with: pytest -m smoke)"]
-addopts = "-m 'not smoke'"
+addopts = "-m 'not smoke' --cov=soup_cli --cov-fail-under=55 --cov-report=term-missing:skip-covered"
