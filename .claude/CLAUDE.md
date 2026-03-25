@@ -1,12 +1,12 @@
 # Soup CLI — Project CLAUDE.md
 
-Soup is a CLI-first LLM fine-tuning tool (v0.12.0). Python 3.9+, MIT license.
+Soup is a CLI-first LLM fine-tuning tool (v0.13.0). Python 3.9+, MIT license.
 
 ## Build & Development
 
 ```bash
 pip install -e ".[dev]"          # Install editable + test deps
-pytest tests/ -v --tb=short      # Run all tests (877 tests)
+pytest tests/ -v --tb=short      # Run all tests (906 tests)
 ruff check soup_cli/ tests/      # Lint (must pass before commit)
 ruff check --fix soup_cli/ tests/  # Auto-fix lint issues
 ```
@@ -51,6 +51,7 @@ soup_cli/
     eval.py            # soup eval (lm-evaluation-harness wrapper)
     data.py            # soup data (inspect/validate/convert/merge/dedup/stats)
     generate.py        # soup data generate (synthetic data via LLM APIs)
+    infer.py           # soup infer (batch inference on JSONL prompts)
     runs.py            # soup runs (list/show/compare/delete experiments)
     sweep.py           # soup sweep (grid/random hyperparameter search)
     diff.py            # soup diff (compare two models side-by-side)
@@ -69,7 +70,7 @@ soup_cli/
     vllm.py            # AsyncLLMEngine backend (2-4x inference throughput)
     galore.py          # GaLore optimizer config + validation
     constants.py       # APP_NAME, paths, default chat template
-tests/                 # 42 test files, 877 tests
+tests/                 # 44 test files, 906 tests
 examples/
   configs/             # 7 production-ready YAML examples
   data/                # Sample datasets
@@ -79,7 +80,8 @@ examples/
 
 ```
 soup init              # Create config (interactive or --template)
-soup train             # Main training (--config, --resume, --wandb, --deepspeed, --yes)
+soup train             # Main training (--config, --resume, --wandb, --tensorboard, --deepspeed, --yes)
+soup infer             # Batch inference (--model, --input, --output)
 soup chat              # Terminal chat with model
 soup serve             # OpenAI-compatible inference server (--backend transformers|vllm)
 soup export            # Convert to GGUF for Ollama/llama.cpp
@@ -153,8 +155,8 @@ soup version           # Show version (--full for details)
 - **Deprecated CLI secrets**: `--api-key` and `--token` flags read from env vars, marked deprecated
 - **Custom reward warning**: Prominent warning before executing arbitrary .py reward files
 - **max_tokens bound**: Capped at 16384 on inference endpoints
-- **experiment_name validation**: Path separators and null bytes blocked (v0.12.0)
-- **GaLore params**: Type-enforced before string interpolation (v0.12.0)
+- **experiment_name validation**: Path separators and null bytes blocked (v0.13.0)
+- **GaLore params**: Type-enforced before string interpolation (v0.13.0)
 
 ## Code Conventions
 
@@ -215,7 +217,7 @@ soup version           # Show version (--full for details)
 12. **Tag**: `git tag v0.X.Y && git push origin v0.X.Y`
 13. **Release**: `gh release create v0.X.Y` with changelog (What's New, Install/Upgrade)
 
-## Tests (42 test files, 877 tests)
+## Tests (44 test files, 906 tests)
 
 | File | Covers |
 |------|--------|
@@ -260,4 +262,6 @@ soup version           # Show version (--full for details)
 | test_simpo.py | SimPO config, template, routing, sweep, train guard |
 | test_ipo.py | IPO config, template, routing, sweep, train guard |
 | test_advanced_peft.py | DoRA, LoRA+, GaLore config, validation, sweep shortcuts |
+| test_infer.py | Batch inference command, prompt reading, CLI validation |
+| test_tensorboard.py | TensorBoard flag, wandb conflict, report_to routing |
 | test_bugfixes.py | v0.10.1-v0.10.8 regression fixes |

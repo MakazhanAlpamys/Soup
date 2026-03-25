@@ -586,6 +586,38 @@ soup train --config soup.yaml --resume auto
 soup train --config soup.yaml --resume ./output/checkpoint-500
 ```
 
+## Batch Inference
+
+Run a model on a list of prompts and save results:
+
+```bash
+# JSONL input (each line: {"prompt": "..."})
+soup infer --model ./output --input prompts.jsonl --output results.jsonl
+
+# Plain text input (one prompt per line)
+soup infer --model ./output --input prompts.txt --output results.jsonl
+
+# Custom generation settings
+soup infer --model ./output --input prompts.jsonl --output results.jsonl \
+  --max-tokens 512 --temperature 0.3
+```
+
+Output is JSONL with `prompt`, `response`, and `tokens_generated` fields. Shows a progress bar and throughput summary.
+
+## TensorBoard Integration
+
+Log training metrics to TensorBoard for local visualization:
+
+```bash
+# Enable TensorBoard logging (requires: pip install tensorboard)
+soup train --config soup.yaml --tensorboard
+
+# View logs
+tensorboard --logdir ./output/runs/
+```
+
+> **Note:** `--tensorboard` and `--wandb` cannot be used together. Pick one.
+
 ## Weights & Biases Integration
 
 Send training metrics to [W&B](https://wandb.ai/) for cloud-based experiment tracking:
@@ -751,7 +783,7 @@ soup version
 
 # Full system info (useful for bug reports)
 soup version --full
-# -> soup v0.12.0 | Python 3.11.5 | CUDA 12.1 | extras: serve, data
+# -> soup v0.13.0 | Python 3.11.5 | CUDA 12.1 | extras: serve, data
 ```
 
 ## Web UI
@@ -891,6 +923,8 @@ soup eval --model ./output --benchmarks mmlu --run-id run_20260223_143052_a1b2
 ```
 soup init [--template chat|code|medical|reasoning|vision|kto|orpo|simpo|ipo|rlhf]  Create config
 soup train --config soup.yaml                 Start training
+soup train --config soup.yaml --tensorboard   Train with TensorBoard logging
+soup infer --model ./output --input p.jsonl   Batch inference
 soup chat --model ./output                    Interactive chat
 soup push --model ./output --repo user/name   Upload to HuggingFace
 soup merge --adapter ./output                 Merge LoRA with base model
@@ -916,6 +950,23 @@ soup quickstart [--dry-run]                   Full demo
 soup version [--full]                         Show version (--full: system info)
 soup --verbose <command>                      Full traceback on errors
 ```
+
+## Supported Models
+
+Soup works with any HuggingFace-compatible causal language model. Tested and recommended:
+
+| Model Family | Example Models | Notes |
+|---|---|---|
+| **Llama 4** | Llama-4-Scout-17B, Llama-4-Maverick-17B | Latest Meta models |
+| **Llama 3.x** | Llama-3.1-8B-Instruct, Llama-3.2-11B-Vision | Text + vision |
+| **Gemma 3** | Gemma-3-9B-IT, Gemma-3-27B-IT | Google's latest |
+| **Qwen 2.5/3** | Qwen2.5-7B-Instruct, Qwen3-8B | Alibaba series |
+| **Phi-4** | Phi-4-14B | Microsoft |
+| **DeepSeek** | DeepSeek-R1-Distill-Llama-8B, DeepSeek-V3 | Reasoning models (GRPO) |
+| **Mistral** | Mistral-7B-Instruct-v0.3, Mixtral-8x7B | Including MoE |
+| **CodeLlama** | CodeLlama-7b-Instruct-hf | Code generation |
+
+Any model on HuggingFace Hub that supports `AutoModelForCausalLM` will work. For vision tasks, use models with vision capabilities (LLaMA-3.2-Vision, Qwen2-VL, Pixtral).
 
 ## Requirements
 

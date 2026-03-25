@@ -44,6 +44,11 @@ def train(
         "--wandb",
         help="Enable Weights & Biases logging",
     ),
+    tensorboard: bool = typer.Option(
+        False,
+        "--tensorboard",
+        help="Enable TensorBoard logging (logs to output_dir/runs/)",
+    ),
     deepspeed: str = typer.Option(
         None,
         "--deepspeed",
@@ -75,6 +80,26 @@ def train(
             console.print(f"[green]Resuming from:[/] {resume_from}")
         else:
             console.print("[red]No checkpoint found to resume from.[/]")
+            raise typer.Exit(1)
+
+    # --- Validate logging flags ---
+    if wandb and tensorboard:
+        console.print(
+            "[red]Cannot use --wandb and --tensorboard together. Pick one.[/]"
+        )
+        raise typer.Exit(1)
+
+    # --- TensorBoard setup ---
+    if tensorboard:
+        try:
+            from torch.utils.tensorboard import SummaryWriter  # noqa: F401
+
+            console.print("[green]TensorBoard logging enabled[/]")
+        except ImportError:
+            console.print(
+                "[red]TensorBoard not installed.[/]\n"
+                "Run: [bold]pip install tensorboard[/]"
+            )
             raise typer.Exit(1)
 
     # --- W&B setup (fail fast if wandb not installed) ---
@@ -204,7 +229,12 @@ def train(
     console.print(f"[dim]Run ID: {run_id}[/]")
 
     # Build trainer based on task type
-    report_to = "wandb" if wandb else "none"
+    if wandb:
+        report_to = "wandb"
+    elif tensorboard:
+        report_to = "tensorboard"
+    else:
+        report_to = "none"
     console.print("[dim]Setting up model + trainer...[/]")
     if cfg.task == "dpo":
         from soup_cli.trainer.dpo import DPOTrainerWrapper

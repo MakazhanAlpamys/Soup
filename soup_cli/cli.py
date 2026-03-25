@@ -13,6 +13,7 @@ from soup_cli.commands import (
     eval,
     export,
     generate,
+    infer,
     init,
     merge,
     push,
@@ -53,6 +54,7 @@ app.command(name="eval")(eval.eval_model)
 app.command()(serve.serve)
 app.command()(sweep.sweep)
 app.command(name="diff")(diff.diff)
+app.command()(infer.infer)
 app.command()(doctor_cmd.doctor)
 app.command()(quickstart_cmd.quickstart)
 app.command()(ui.ui)
