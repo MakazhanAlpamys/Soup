@@ -40,3 +40,12 @@ report.xml
 
 # Internal plan (not for repo)
 .claude/plan.md
+
+# ECC plugin (local only)
+.claude/agents/
+.claude/commands/
+.claude/examples/
+.claude/hooks/
+.claude/mcp-configs/
+.claude/rules/
+.claude/skills/
