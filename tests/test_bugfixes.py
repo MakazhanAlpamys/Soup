@@ -1,4 +1,4 @@
-"""Tests for v0.10.1-v0.10.7 bug fixes - Unicode, PPO, dtype, CPU, trl API compat."""
+"""Tests for v0.10.1-v0.14.2 bug fixes - Unicode, PPO, dtype, CPU, trl API, validate, UI."""
 
 from pathlib import Path
 from unittest.mock import patch
@@ -1062,3 +1062,162 @@ class TestPPOTokenization:
         # Verify prompt_text exists
         assert "prompt_text" in ds.column_names
         assert ds[0]["prompt_text"] == "What is 2+2?"
+
+
+# --- BUG-013: soup data validate defaults to alpaca, no auto-detect (v0.14.2) ---
+
+
+class TestValidateAutoDetect:
+    """Validate should auto-detect format when --format is not specified."""
+
+    def test_validate_alpaca_auto_detect(self, tmp_path):
+        """Alpaca data should be auto-detected without --format flag."""
+        import json
+
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        runner = CliRunner()
+        data = [
+            {"instruction": "What is AI?", "input": "", "output": "AI is..."},
+            {"instruction": "Explain ML", "input": "", "output": "ML is..."},
+        ]
+        filepath = tmp_path / "alpaca.jsonl"
+        with open(filepath, "w") as f:
+            for row in data:
+                f.write(json.dumps(row) + "\n")
+
+        result = runner.invoke(app, ["data", "validate", str(filepath)])
+        assert result.exit_code == 0
+        assert "Auto-detected format: alpaca" in result.output
+        assert "2/2 rows valid" in result.output
+
+    def test_validate_plaintext_auto_detect(self, tmp_path):
+        """Plaintext data should be auto-detected without --format flag."""
+        import json
+
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        runner = CliRunner()
+        data = [{"text": "Hello world"}, {"text": "Another line"}]
+        filepath = tmp_path / "plaintext.jsonl"
+        with open(filepath, "w") as f:
+            for row in data:
+                f.write(json.dumps(row) + "\n")
+
+        result = runner.invoke(app, ["data", "validate", str(filepath)])
+        assert result.exit_code == 0
+        assert "Auto-detected format: plaintext" in result.output
+        assert "2/2 rows valid" in result.output
+
+    def test_validate_explicit_format_still_works(self, tmp_path):
+        """Explicit --format flag should override auto-detection."""
+        import json
+
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        runner = CliRunner()
+        data = [
+            {"instruction": "What is AI?", "input": "", "output": "AI is..."},
+        ]
+        filepath = tmp_path / "alpaca.jsonl"
+        with open(filepath, "w") as f:
+            for row in data:
+                f.write(json.dumps(row) + "\n")
+
+        result = runner.invoke(
+            app, ["data", "validate", str(filepath), "--format", "alpaca"]
+        )
+        assert result.exit_code == 0
+        assert "Auto-detected" not in result.output
+        assert "1/1 rows valid" in result.output
+
+    def test_validate_dpo_auto_detect(self, tmp_path):
+        """DPO data should be auto-detected."""
+        import json
+
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        runner = CliRunner()
+        data = [
+            {"prompt": "Hi", "chosen": "Hello!", "rejected": "Go away"},
+        ]
+        filepath = tmp_path / "dpo.jsonl"
+        with open(filepath, "w") as f:
+            for row in data:
+                f.write(json.dumps(row) + "\n")
+
+        result = runner.invoke(app, ["data", "validate", str(filepath)])
+        assert result.exit_code == 0
+        assert "Auto-detected format: dpo" in result.output
+
+
+# --- BUG-014: soup data stats histogram broken on Windows (v0.14.2) ---
+
+
+class TestStatsHistogramWindows:
+    """Stats histogram should handle Windows encoding gracefully."""
+
+    def test_stats_histogram_utf8_redirect(self, tmp_path):
+        """Stats command should not crash on Windows with plotext."""
+        import json
+
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        runner = CliRunner()
+        data = [
+            {"instruction": "What is AI?", "input": "", "output": "AI is..."},
+            {"instruction": "Explain ML", "input": "", "output": "ML is..."},
+        ]
+        filepath = tmp_path / "sample.jsonl"
+        with open(filepath, "w") as f:
+            for row in data:
+                f.write(json.dumps(row) + "\n")
+
+        result = runner.invoke(app, ["data", "stats", str(filepath)])
+        assert result.exit_code == 0
+        assert "p50" in result.output
+
+
+# --- BUG-015: soup ui --help missing auth token docs (v0.14.2) ---
+
+
+class TestUIAuthDocs:
+    """UI --help should document auth token feature."""
+
+    def test_ui_help_mentions_auth(self):
+        """soup ui --help should mention auth token."""
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        runner = CliRunner()
+        result = runner.invoke(app, ["ui", "--help"])
+        assert result.exit_code == 0
+        # Check the help output mentions auth/token
+        output_lower = result.output.lower()
+        assert "auth" in output_lower or "token" in output_lower
+
+    def test_ui_help_shows_show_token_flag(self):
+        """soup ui --help should show --show-token option."""
+        import re
+
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        runner = CliRunner()
+        result = runner.invoke(app, ["ui", "--help"])
+        assert result.exit_code == 0
+        # Rich markup wraps dashes with ANSI codes, so strip them
+        clean = re.sub(r"\x1b\[[^m]*m", "", result.output).lower()
+        assert "show-token" in clean

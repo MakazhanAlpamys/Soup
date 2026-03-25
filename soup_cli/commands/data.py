@@ -65,8 +65,8 @@ def inspect(
 def validate(
     path: str = typer.Argument(..., help="Path to dataset file"),
     fmt: str = typer.Option(
-        "alpaca", "--format", "-f",
-        help="Expected format: alpaca, sharegpt, chatml",
+        "auto", "--format", "-f",
+        help="Expected format: auto, alpaca, sharegpt, chatml, dpo, kto, plaintext",
     ),
 ):
     """Validate dataset format and report issues."""
@@ -76,6 +76,18 @@ def validate(
         raise typer.Exit(1)
 
     data = load_raw_data(file_path)
+
+    # Auto-detect format if not specified
+    if fmt == "auto":
+        from soup_cli.data.formats import detect_format
+
+        try:
+            fmt = detect_format(data)
+            console.print(f"[dim]Auto-detected format: {fmt}[/]")
+        except ValueError as exc:
+            console.print(f"[red]{exc}[/]")
+            raise typer.Exit(1)
+
     result = validate_and_stats(data, expected_format=fmt)
 
     if result["issues"]:
@@ -350,20 +362,36 @@ def stats(
 
     # Terminal histogram of lengths
     try:
+        import io
+        import sys
+
         import plotext as plt
 
         lengths = ext_stats["lengths"]
         if lengths:
-            plt.clear_figure()
-            plt.hist(lengths, bins=30)
-            plt.title("Text Length Distribution (chars)")
-            plt.xlabel("Length")
-            plt.ylabel("Count")
-            plt.theme("dark")
-            plt.show()
+            # Force UTF-8 stdout on Windows to avoid UnicodeEncodeError
+            original_stdout = sys.stdout
+            if sys.platform == "win32" and not isinstance(sys.stdout, io.TextIOWrapper):
+                try:
+                    sys.stdout = io.TextIOWrapper(
+                        sys.stdout.buffer, encoding="utf-8", errors="replace",
+                    )
+                except AttributeError:
+                    pass  # no .buffer (e.g. in tests), keep original
+
+            try:
+                plt.clear_figure()
+                plt.hist(lengths, bins=30)
+                plt.title("Text Length Distribution (chars)")
+                plt.xlabel("Length")
+                plt.ylabel("Count")
+                plt.theme("dark")
+                plt.show()
+            finally:
+                sys.stdout = original_stdout
     except UnicodeEncodeError:
         console.print(
-            "\n[dim]Histogram skipped (Windows encoding).[/] "
+            "\n[dim]Histogram skipped (encoding issue).[/] "
             "Set PYTHONIOENCODING=utf-8 to enable."
         )
     except ImportError:

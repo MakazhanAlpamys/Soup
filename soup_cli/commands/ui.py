@@ -24,8 +24,17 @@ def ui(
         "--no-browser",
         help="Don't open browser automatically",
     ),
+    show_token: bool = typer.Option(
+        False,
+        "--show-token",
+        help="Print the auth token and exit (for scripting)",
+    ),
 ):
-    """Launch the Soup Web UI for managing experiments and training."""
+    """Launch the Soup Web UI.
+
+    A Bearer auth token is auto-generated at startup and printed to the console.
+    Mutating API endpoints (POST/DELETE) require 'Authorization: Bearer <token>'.
+    """
     try:
         import uvicorn  # noqa: F401
         from fastapi import FastAPI  # noqa: F401
@@ -38,8 +47,13 @@ def ui(
 
     from soup_cli.ui.app import create_app, get_auth_token
 
-    app = create_app(host=host, port=port)
     token = get_auth_token()
+
+    if show_token:
+        console.print(token)
+        raise typer.Exit()
+
+    app = create_app(host=host, port=port)
 
     url = f"http://{host}:{port}"
 

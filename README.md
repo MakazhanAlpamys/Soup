@@ -830,7 +830,7 @@ soup version
 
 # Full system info (useful for bug reports)
 soup version --full
-# -> soup v0.14.1 | Python 3.11.5 | CUDA 12.1 | extras: serve, data
+# -> soup v0.14.2 | Python 3.11.5 | CUDA 12.1 | extras: serve, data
 ```
 
 ## Web UI
@@ -922,7 +922,8 @@ Or use `.txt` files directly (one document per line).
 # Inspect a dataset
 soup data inspect ./data/train.jsonl
 
-# Validate format
+# Validate format (auto-detects if --format not specified)
+soup data validate ./data/train.jsonl
 soup data validate ./data/train.jsonl --format alpaca
 
 # Convert between formats
@@ -988,7 +989,7 @@ soup serve --model ./output --backend vllm    vLLM backend (2-4x throughput)
 soup sweep --config soup.yaml --param lr=...  Hyperparameter search
 soup diff --model-a ./a --model-b ./b         Compare two models
 soup data inspect <path>                      View dataset stats
-soup data validate <path> --format alpaca     Check format
+soup data validate <path>                     Check format (auto-detect)
 soup data convert <path> --to chatml          Convert between formats
 soup data merge data1.jsonl data2.jsonl       Combine datasets
 soup data dedup <path> --threshold 0.8        Remove duplicates (MinHash)
