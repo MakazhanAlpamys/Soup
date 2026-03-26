@@ -33,6 +33,7 @@ wandb/
 
 # Test reports
 report.xml
+.benchmarks
 
 # Secrets
 .env
