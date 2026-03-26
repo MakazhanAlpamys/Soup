@@ -360,6 +360,10 @@ def train(
         from soup_cli.trainer.pretrain import PretrainTrainerWrapper
 
         trainer_wrapper = PretrainTrainerWrapper(cfg, **trainer_kwargs)
+    elif cfg.task == "embedding":
+        from soup_cli.trainer.embedding import EmbeddingTrainerWrapper
+
+        trainer_wrapper = EmbeddingTrainerWrapper(cfg, **trainer_kwargs)
     else:
         trainer_wrapper = SFTTrainerWrapper(cfg, **trainer_kwargs)
     trainer_wrapper.setup(dataset)

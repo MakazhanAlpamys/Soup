@@ -66,6 +66,17 @@ def serve(
         "--gpu-memory",
         help="Fraction of GPU memory to use (vLLM only, 0.0-1.0)",
     ),
+    speculative_model: Optional[str] = typer.Option(
+        None,
+        "--speculative-decoding",
+        "--spec-dec",
+        help="Draft model for speculative decoding (smaller/faster model ID or path)",
+    ),
+    num_speculative_tokens: int = typer.Option(
+        5,
+        "--spec-tokens",
+        help="Number of tokens the draft model generates per step (speculative decoding)",
+    ),
 ):
     """Start a local inference server with OpenAI-compatible API."""
     # Lazy imports for fast CLI startup
@@ -151,6 +162,11 @@ def serve(
     )
 
     if backend == "vllm":
+        if speculative_model:
+            console.print(
+                f"[green]Speculative decoding enabled:[/] draft={speculative_model}, "
+                f"tokens={num_speculative_tokens}"
+            )
         app = _serve_vllm(
             model_path=model_path,
             base_model=base_model,
@@ -158,6 +174,8 @@ def serve(
             max_tokens_default=max_tokens_default,
             tensor_parallel=tensor_parallel,
             gpu_memory_utilization=gpu_memory_utilization,
+            speculative_model=speculative_model,
+            num_speculative_tokens=num_speculative_tokens,
         )
     else:
         # Transformers backend (original)
@@ -169,12 +187,42 @@ def serve(
         )
         console.print("[bold green]Model loaded![/]")
 
+        # Load draft model for speculative decoding (transformers backend)
+        draft_model = None
+        if speculative_model:
+            console.print(
+                Panel(
+                    f"[bold yellow]WARNING:[/] Loading draft model: "
+                    f"[bold]{speculative_model}[/]\n"
+                    "If this model contains custom code, it will execute "
+                    "on this machine.\n"
+                    "Only use models you trust.",
+                    title="Speculative Decoding",
+                    border_style="yellow",
+                )
+            )
+            draft_model = _load_draft_model(speculative_model, device)
+            console.print(
+                f"[green]Speculative decoding enabled:[/] draft={speculative_model}, "
+                f"tokens={num_speculative_tokens}"
+            )
+
+        if speculative_model:
+            console.print(
+                "[yellow]Note: streaming with speculative decoding on the "
+                "transformers backend generates the full response before "
+                "streaming begins. Use --backend vllm for true streaming "
+                "with speculative decoding.[/]"
+            )
+
         app = _create_app(
             model_obj=model_obj,
             tokenizer=tokenizer,
             device=device,
             model_name=str(model_path.name),
             max_tokens_default=max_tokens_default,
+            draft_model=draft_model,
+            num_speculative_tokens=num_speculative_tokens,
         )
 
     console.print(
@@ -206,6 +254,8 @@ def _serve_vllm(
     max_tokens_default: int,
     tensor_parallel: int,
     gpu_memory_utilization: float,
+    speculative_model: Optional[str] = None,
+    num_speculative_tokens: int = 5,
 ):
     """Set up vLLM engine and create FastAPI app."""
     from soup_cli.utils.vllm import create_vllm_app, create_vllm_engine
@@ -217,6 +267,8 @@ def _serve_vllm(
         is_adapter=is_adapter,
         tensor_parallel_size=tensor_parallel,
         gpu_memory_utilization=gpu_memory_utilization,
+        speculative_model=speculative_model,
+        num_speculative_tokens=num_speculative_tokens,
     )
     console.print("[bold green]vLLM engine ready![/]")
 
@@ -283,6 +335,31 @@ def _load_model(
     return model_obj, tokenizer
 
 
+def _load_draft_model(speculative_model: str, device: str):
+    """Load a smaller draft model for speculative decoding."""
+    import re
+
+    import torch
+    from transformers import AutoModelForCausalLM
+
+    # SSRF protection: block URL-based model paths
+    if re.match(r'^https?://', speculative_model):
+        console.print(
+            "[red]Speculative model must be a local path or HuggingFace model ID, "
+            "not a URL.[/]"
+        )
+        raise typer.Exit(1)
+
+    console.print(f"[dim]Loading draft model: {speculative_model}...[/]")
+    draft = AutoModelForCausalLM.from_pretrained(
+        speculative_model,
+        device_map="auto" if device != "cpu" else "cpu",
+        dtype=torch.float16 if device != "cpu" else torch.float32,
+    )
+    draft.eval()
+    return draft
+
+
 def _generate_response(
     model,
     tokenizer,
@@ -291,6 +368,8 @@ def _generate_response(
     temperature: float = 0.7,
     top_p: float = 0.9,
     stream: bool = False,
+    assistant_model=None,
+    num_assistant_tokens: int = 5,
 ):
     """Generate a response from the model."""
     import torch
@@ -329,6 +408,9 @@ def _generate_response(
         if temperature > 0:
             gen_kwargs["temperature"] = temperature
             gen_kwargs["top_p"] = top_p
+        if assistant_model is not None:
+            gen_kwargs["assistant_model"] = assistant_model
+            gen_kwargs["num_assistant_tokens"] = num_assistant_tokens
 
         outputs = model.generate(**gen_kwargs)
 
@@ -347,6 +429,8 @@ def _create_app(
     device: str,
     model_name: str,
     max_tokens_default: int,
+    draft_model=None,
+    num_speculative_tokens: int = 5,
 ):
     """Create the FastAPI application with OpenAI-compatible endpoints."""
     from fastapi import FastAPI, HTTPException
@@ -410,6 +494,8 @@ def _create_app(
                     temperature=request.temperature,
                     top_p=request.top_p,
                     model_name=model_name,
+                    assistant_model=draft_model,
+                    num_assistant_tokens=num_speculative_tokens,
                 ),
                 media_type="text/event-stream",
             )
@@ -420,6 +506,8 @@ def _create_app(
                 max_tokens=max_tokens,
                 temperature=request.temperature,
                 top_p=request.top_p,
+                assistant_model=draft_model,
+                num_assistant_tokens=num_speculative_tokens,
             )
         except Exception:
             logger.exception("Generation error")
@@ -453,18 +541,26 @@ def _create_app(
 def _stream_response(
     model, tokenizer, messages,
     max_tokens, temperature, top_p, model_name,
+    assistant_model=None, num_assistant_tokens=5,
 ):
     """Generator that yields SSE chunks for streaming responses."""
     chat_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
     created = int(time.time())
 
     # Generate full response (true token-by-token streaming requires TextIteratorStreamer)
-    response_text, _, _ = _generate_response(
-        model, tokenizer, messages,
-        max_tokens=max_tokens,
-        temperature=temperature,
-        top_p=top_p,
-    )
+    try:
+        response_text, _, _ = _generate_response(
+            model, tokenizer, messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            top_p=top_p,
+            assistant_model=assistant_model,
+            num_assistant_tokens=num_assistant_tokens,
+        )
+    except Exception:
+        logger.exception("Stream generation error")
+        yield 'data: {"error": "Internal server error"}\n\n'
+        return
 
     # Simulate streaming by sending word-by-word
     words = response_text.split(" ")

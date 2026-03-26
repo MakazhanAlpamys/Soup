@@ -24,7 +24,7 @@ class DataConfig(BaseModel):
     train: str = Field(..., description="Path to training data or HF dataset name")
     format: Literal[
         "alpaca", "sharegpt", "chatml", "dpo", "kto", "llava", "sharegpt4v",
-        "plaintext", "auto",
+        "plaintext", "embedding", "auto",
     ] = Field(
         default="auto",
         description="Data format",
@@ -166,6 +166,23 @@ class TrainingConfig(BaseModel):
         default=False,
         description="Enable gradient checkpointing for memory savings on long sequences",
     )
+    # Embedding-specific
+    embedding_loss: Literal["contrastive", "triplet", "cosine"] = Field(
+        default="contrastive",
+        description="Loss function for embedding training: contrastive, triplet, or cosine",
+    )
+    embedding_margin: float = Field(
+        default=0.5, gt=0,
+        description="Margin for contrastive/triplet loss (higher = stricter separation)",
+    )
+    embedding_pooling: Literal["mean", "cls", "last"] = Field(
+        default="mean",
+        description="Pooling strategy for sentence embeddings: mean, cls, or last token",
+    )
+    embedding_temperature: float = Field(
+        default=0.05, gt=0,
+        description="Temperature for contrastive (InfoNCE) loss — lower = stricter similarity",
+    )
 
 
 class SoupConfig(BaseModel):
@@ -174,7 +191,7 @@ class SoupConfig(BaseModel):
     base: str = Field(..., description="Base model name or path (HF model ID)")
     task: Literal[
         "sft", "dpo", "grpo", "ppo", "reward_model", "kto", "orpo", "simpo", "ipo",
-        "pretrain",
+        "pretrain", "embedding",
     ] = Field(
         default="sft", description="Training task type"
     )
@@ -555,6 +572,41 @@ training:
   # use_ring_attention: true  # Multi-GPU sequence parallelism
 
 output: ./output_longctx
+""",
+    "embedding": """# Soup template: Embedding Model Fine-tuning
+# Fine-tune a sentence embedding model (BGE, E5, GTE, etc.)
+#
+# Data format (JSONL) — contrastive pairs:
+#   {"anchor": "What is Python?", "positive": "Python is a programming language."}
+#
+# Data format (JSONL) — triplets:
+#   {"anchor": "query", "positive": "relevant doc", "negative": "unrelated doc"}
+
+base: BAAI/bge-base-en-v1.5
+task: embedding
+# backend: unsloth  # 2-5x faster, pip install 'soup-cli[fast]'
+
+data:
+  train: ./data/embedding_train.jsonl
+  format: embedding
+  val_split: 0.1
+  max_length: 512
+
+training:
+  epochs: 3
+  lr: 2e-5
+  batch_size: auto
+  gradient_accumulation_steps: 4
+  lora:
+    r: 64
+    alpha: 16
+    target_modules: auto
+  quantization: none
+  embedding_loss: contrastive
+  embedding_margin: 0.5
+  embedding_pooling: mean
+
+output: ./output_embedding
 """,
     "rlhf": """# Soup template: Full RLHF Pipeline (SFT + Reward Model + PPO)
 # Three-stage training: 1) SFT warmup, 2) Reward model, 3) PPO alignment

@@ -1,12 +1,12 @@
 # Soup CLI — Project CLAUDE.md
 
-Soup is a CLI-first LLM fine-tuning tool (v0.15.0). Python 3.9+, MIT license.
+Soup is a CLI-first LLM fine-tuning tool (v0.16.0). Python 3.9+, MIT license.
 
 ## Build & Development
 
 ```bash
 pip install -e ".[dev]"          # Install editable + test deps
-pytest tests/ -v --tb=short      # Run all tests (1182 tests)
+pytest tests/ -v --tb=short      # Run all tests (1270 tests)
 ruff check soup_cli/ tests/      # Lint (must pass before commit)
 ruff check --fix soup_cli/ tests/  # Auto-fix lint issues
 ```
@@ -35,6 +35,7 @@ soup_cli/
     ppo.py             # PPOTrainerWrapper (682 lines, full RLHF stage 3)
     pretrain.py        # PretrainTrainerWrapper (294 lines, continued pre-training)
     reward_model.py    # RewardModelTrainerWrapper (272 lines, RLHF stage 2)
+    embedding.py       # EmbeddingTrainerWrapper (contrastive/triplet/cosine loss)
     rewards.py         # Built-in reward fns (accuracy, format) + custom .py loader
   monitoring/
     callback.py        # HF TrainerCallback -> Rich display + SQLite tracker
@@ -90,8 +91,8 @@ soup init              # Create config (interactive or --template)
 soup train             # Main training (--config, --resume, --wandb, --tensorboard, --deepspeed, --fsdp, --yes)
 soup infer             # Batch inference (--model, --input, --output)
 soup chat              # Terminal chat with model
-soup serve             # OpenAI-compatible inference server (--backend transformers|vllm)
-soup export            # Convert to GGUF for Ollama/llama.cpp
+soup serve             # OpenAI-compatible inference server (--backend transformers|vllm, --speculative-decoding)
+soup export            # Convert to GGUF/ONNX/TensorRT for deployment
 soup merge             # Merge LoRA adapter with base model
 soup push              # Upload to HuggingFace Hub
 soup eval              # Run benchmarks (mmlu, gsm8k, etc.)
@@ -118,12 +119,12 @@ soup version           # Show version (--full for details)
 
 `config/schema.py` is the single source of truth. Pydantic v2 models:
 
-- **SoupConfig**: base (required), task (sft/dpo/kto/orpo/simpo/ipo/grpo/ppo/reward_model/pretrain), modality (text/vision), backend (transformers/unsloth), data, training, output
-- **DataConfig**: train, format (alpaca/sharegpt/chatml/dpo/kto/llava/sharegpt4v/plaintext/auto), val_split, max_length, image_dir
-- **TrainingConfig**: epochs, lr, batch_size (int or "auto"), quantization (4bit/8bit/none), quantization_aware, optimizer, scheduler, dpo_beta, kto_beta, orpo_beta, simpo_gamma, cpo_alpha, ipo_tau, grpo_beta, num_generations, reward_fn, ppo_epochs, ppo_clip_ratio, ppo_kl_penalty, reward_model, loraplus_lr_ratio, use_galore, galore_rank, galore_update_proj_gap, galore_scale, moe_lora, moe_aux_loss_coeff, use_liger, use_flash_attn, use_ring_attention, rope_scaling_type, gradient_checkpointing
+- **SoupConfig**: base (required), task (sft/dpo/kto/orpo/simpo/ipo/grpo/ppo/reward_model/pretrain/embedding), modality (text/vision), backend (transformers/unsloth), data, training, output
+- **DataConfig**: train, format (alpaca/sharegpt/chatml/dpo/kto/llava/sharegpt4v/plaintext/embedding/auto), val_split, max_length, image_dir
+- **TrainingConfig**: epochs, lr, batch_size (int or "auto"), quantization (4bit/8bit/none), quantization_aware, optimizer, scheduler, dpo_beta, kto_beta, orpo_beta, simpo_gamma, cpo_alpha, ipo_tau, grpo_beta, num_generations, reward_fn, ppo_epochs, ppo_clip_ratio, ppo_kl_penalty, reward_model, loraplus_lr_ratio, use_galore, galore_rank, galore_update_proj_gap, galore_scale, moe_lora, moe_aux_loss_coeff, use_liger, use_flash_attn, use_ring_attention, rope_scaling_type, gradient_checkpointing, embedding_loss, embedding_margin, embedding_pooling, embedding_temperature
 - **LoraConfig**: r, alpha, dropout, target_modules, use_dora
 
-13 built-in templates: chat, code, medical, reasoning, vision, kto, orpo, simpo, ipo, rlhf, pretrain, moe, longcontext.
+14 built-in templates: chat, code, medical, reasoning, vision, kto, orpo, simpo, ipo, embedding, rlhf, pretrain, moe, longcontext.
 
 ## Training Tasks
 
@@ -138,6 +139,7 @@ soup version           # Show version (--full for details)
 | ipo | IPOTrainerWrapper | prompt+chosen+rejected | Regularized preference (squared hinge) |
 | pretrain | PretrainTrainerWrapper | plaintext (raw text) | Continued pre-training |
 | ppo | PPOTrainerWrapper | prompts + reward model/fn | Full RLHF stage 3 |
+| embedding | EmbeddingTrainerWrapper | anchor+positive(+negative) | Sentence embeddings |
 | reward_model | RewardModelTrainerWrapper | prompt+chosen+rejected | RLHF stage 2 |
 
 ## Key Design Patterns
@@ -175,6 +177,11 @@ soup version           # Show version (--full for details)
 - **max_length bounds**: ge=64, le=1048576 prevents OOM/corruption from extreme values (v0.15.0)
 - **FSDP config**: key allowlist prevents injection of unexpected TrainingArguments (v0.15.0)
 - **Liger Kernel**: exception handling narrowed to prevent silent CUDA error swallowing (v0.15.0)
+- **ONNX export**: uses optimum main_export without trust_remote_code (v0.16.0)
+- **TensorRT export**: subprocess calls use list args (no shell injection) (v0.16.0)
+- **Embedding config**: embedding_loss Literal constraint, embedding_margin gt=0 (v0.16.0)
+- **Speculative decoding**: draft model SSRF-protected (URL blocked), warning panel before load (v0.16.0)
+- **vLLM speculative**: speculative_model URL validation, rejects http:// schemes (v0.16.0)
 
 ## Code Conventions
 
@@ -203,6 +210,8 @@ soup version           # Show version (--full for details)
 - `[qat]`: torchao
 - `[liger]`: liger-kernel (fused ops)
 - `[ring-attn]`: ring-flash-attn (sequence parallelism)
+- `[onnx]`: optimum + onnxruntime (ONNX export)
+- `[tensorrt]`: tensorrt_llm (TensorRT-LLM export)
 - `[ui]`: FastAPI + uvicorn + static SPA
 - `[dev]`: pytest, ruff, pytest-cov, httpx
 
@@ -240,7 +249,7 @@ soup version           # Show version (--full for details)
 15. **Tag**: `git tag v0.X.Y && git push origin v0.X.Y`
 16. **Release**: `gh release create v0.X.Y` with changelog (What's New, Install/Upgrade)
 
-## Tests (49 test files, 1182 tests)
+## Tests (52 test files, 1270 tests)
 
 | File | Covers |
 |------|--------|
@@ -292,3 +301,6 @@ soup version           # Show version (--full for details)
 | test_bugfixes.py | v0.10.1-v0.14.3 regression fixes |
 | test_cli_subprocess.py | Subprocess CLI tests: entry point, encoding, paths, platform regressions |
 | test_performance.py | Liger Kernel, FlashAttention, FSDP2, Ring Attention, long-context, RoPE scaling |
+| test_embedding.py | Embedding task config, format, template, routing, sweep, pooling |
+| test_onnx_tensorrt_export.py | ONNX export, TensorRT-LLM export, format support |
+| test_speculative_decoding.py | Speculative decoding CLI, draft model, vLLM integration |

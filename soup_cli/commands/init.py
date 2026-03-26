@@ -18,7 +18,7 @@ def init(
         "--template",
         "-t",
         help="Template: chat, code, medical, reasoning, vision, rlhf, "
-        "kto, orpo, simpo, ipo, pretrain, moe",
+        "kto, orpo, simpo, ipo, pretrain, moe, embedding, longcontext",
     ),
     output: str = typer.Option(
         "soup.yaml",
@@ -67,7 +67,7 @@ def _interactive_wizard() -> str:
         "Task",
         choices=[
             "sft", "dpo", "kto", "orpo", "simpo", "ipo", "grpo", "ppo",
-            "reward_model", "pretrain",
+            "reward_model", "pretrain", "embedding",
         ],
         default="sft",
     )
@@ -80,6 +80,8 @@ def _interactive_wizard() -> str:
         data_format = "kto"
     elif task == "pretrain":
         data_format = "plaintext"
+    elif task == "embedding":
+        data_format = "embedding"
     else:
         data_format = Prompt.ask(
             "Data format", choices=["alpaca", "sharegpt", "chatml"], default="alpaca",
@@ -112,6 +114,11 @@ def _interactive_wizard() -> str:
 """
     elif task == "ipo":
         task_block = """  ipo_tau: 0.1
+"""
+    elif task == "embedding":
+        task_block = """  embedding_loss: contrastive
+  embedding_margin: 0.5
+  embedding_pooling: mean
 """
     elif task == "ppo":
         reward_model_path = Prompt.ask(

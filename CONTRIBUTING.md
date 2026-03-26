@@ -98,7 +98,7 @@ soup_cli/
   utils/              - GPU, errors, MoE, GaLore, QAT, Unsloth, vLLM, Liger, FlashAttn, FSDP, Ring Attention, long-context
   ui/                 - Web UI (FastAPI + HTML/JS SPA)
 
-tests/                - Test suite (49 files, 1182 tests)
+tests/                - Test suite (52 files, 1270 tests)
 examples/             - Real-world config examples and datasets
 ```
 

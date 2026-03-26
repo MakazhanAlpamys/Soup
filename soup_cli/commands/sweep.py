@@ -305,6 +305,10 @@ def _set_nested_param(config_dict: dict, key: str, value) -> dict:
         "galore_rank": "training.galore_rank",
         "moe_lora": "training.moe_lora",
         "moe_aux_loss_coeff": "training.moe_aux_loss_coeff",
+        "embedding_loss": "training.embedding_loss",
+        "embedding_margin": "training.embedding_margin",
+        "embedding_pooling": "training.embedding_pooling",
+        "embedding_temperature": "training.embedding_temperature",
         "backend": "backend",
     }
 
@@ -394,6 +398,10 @@ def _run_single(base_cfg, params: dict, run_name: str, config_path: Path) -> dic
         from soup_cli.trainer.pretrain import PretrainTrainerWrapper
 
         trainer_wrapper = PretrainTrainerWrapper(cfg, device=device)
+    elif cfg.task == "embedding":
+        from soup_cli.trainer.embedding import EmbeddingTrainerWrapper
+
+        trainer_wrapper = EmbeddingTrainerWrapper(cfg, device=device)
     else:
         trainer_wrapper = SFTTrainerWrapper(cfg, device=device)
     trainer_wrapper.setup(dataset)

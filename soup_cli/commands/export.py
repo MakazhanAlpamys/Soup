@@ -13,7 +13,7 @@ from rich.panel import Panel
 
 console = Console()
 
-SUPPORTED_FORMATS = ("gguf",)
+SUPPORTED_FORMATS = ("gguf", "onnx", "tensorrt")
 GGUF_QUANT_TYPES = ("q4_0", "q4_k_m", "q5_k_m", "q8_0", "f16", "f32")
 LLAMA_CPP_DIR_NAME = "llama.cpp"
 # Pin to a known release tag for supply-chain safety
@@ -31,7 +31,7 @@ def export(
         "gguf",
         "--format",
         "-f",
-        help="Export format: gguf",
+        help="Export format: gguf, onnx, tensorrt",
     ),
     quant: str = typer.Option(
         "q4_k_m",
@@ -56,8 +56,13 @@ def export(
         "--llama-cpp",
         help="Path to llama.cpp directory. Auto-detected or cloned to ~/.soup/llama.cpp",
     ),
+    onnx_task: str = typer.Option(
+        "text-generation",
+        "--onnx-task",
+        help="ONNX export task: text-generation (causal LM) or feature-extraction (embedding)",
+    ),
 ):
-    """Export a model to GGUF format for use with Ollama / llama.cpp."""
+    """Export a model to GGUF, ONNX, or TensorRT-LLM format."""
     model_path = Path(model)
 
     # --- Validate ---
@@ -71,6 +76,16 @@ def export(
             f"Supported: {', '.join(SUPPORTED_FORMATS)}"
         )
         raise typer.Exit(1)
+
+    # --- ONNX export path ---
+    if fmt == "onnx":
+        _export_onnx(model_path, output, base, onnx_task)
+        return
+
+    # --- TensorRT-LLM export path ---
+    if fmt == "tensorrt":
+        _export_tensorrt(model_path, output, base)
+        return
 
     if quant not in GGUF_QUANT_TYPES:
         console.print(
@@ -339,10 +354,209 @@ def _find_quantize_binary(llama_dir: Path) -> Optional[Path]:
     return None
 
 
+def _export_onnx(
+    model_path: Path, output: Optional[str], base: Optional[str],
+    task: str = "text-generation",
+):
+    """Export model to ONNX format via optimum."""
+    try:
+        from optimum.exporters.onnx import main_export
+    except ImportError:
+        console.print(
+            "[red]optimum not installed.[/]\n"
+            "Install with: [bold]pip install 'soup-cli[onnx]'[/]\n"
+            "Or directly: [bold]pip install optimum[onnx][/]"
+        )
+        raise typer.Exit(1)
+
+    # Check if LoRA adapter
+    adapter_config_path = model_path / "adapter_config.json"
+    is_adapter = adapter_config_path.exists()
+    merge_dir = None
+    source_path = model_path
+
+    if is_adapter:
+        console.print("[yellow]LoRA adapter detected - merging with base model first...[/]")
+        base_model = base or _detect_base_model(adapter_config_path)
+        if not base_model:
+            console.print(
+                "[red]Cannot detect base model from adapter_config.json.[/]\n"
+                "Please specify with [bold]--base[/] flag."
+            )
+            raise typer.Exit(1)
+        merge_dir = model_path.parent / f".soup_merge_tmp_{model_path.name}"
+        _merge_adapter(str(model_path), base_model, str(merge_dir))
+        source_path = merge_dir
+
+    output_path = Path(output) if output else model_path.parent / f"{model_path.name}_onnx"
+
+    console.print(
+        Panel(
+            f"Model:  [bold]{source_path}[/]\n"
+            f"Format: [bold]ONNX[/]\n"
+            f"Output: [bold]{output_path}[/]",
+            title="Export Plan",
+        )
+    )
+
+    try:
+        console.print(
+            "[yellow]Warning: ONNX export may execute custom model code "
+            "if the model uses trust_remote_code.[/]"
+        )
+        console.print("[dim]Exporting to ONNX...[/]")
+        main_export(
+            model_name_or_path=str(source_path),
+            output=str(output_path),
+            task=task,
+        )
+    except Exception as exc:
+        console.print(f"[red]ONNX export failed:[/] {exc}")
+        raise typer.Exit(1)
+    finally:
+        if merge_dir and merge_dir.exists():
+            console.print("[dim]Cleaning up temporary merge files...[/]")
+            shutil.rmtree(merge_dir, ignore_errors=True)
+
+    console.print(
+        Panel(
+            f"Output: [bold]{output_path}[/]\n"
+            f"Format: [bold]ONNX[/]\n\n"
+            f"Use with ONNX Runtime:\n"
+            f"  [bold]from optimum.onnxruntime import ORTModelForCausalLM[/]\n"
+            f"  [bold]model = ORTModelForCausalLM.from_pretrained('{output_path}')[/]",
+            title="[bold green]ONNX Export Complete![/]",
+        )
+    )
+
+
+def _export_tensorrt(model_path: Path, output: Optional[str], base: Optional[str]):
+    """Export model to TensorRT-LLM format."""
+    # TensorRT-LLM uses trtllm-build CLI from the tensorrt_llm package
+    trtllm_available = False
+    try:
+        import tensorrt_llm  # noqa: F401
+
+        trtllm_available = True
+    except ImportError:
+        pass
+
+    if not trtllm_available:
+        console.print(
+            "[red]tensorrt_llm not installed.[/]\n"
+            "Install with: [bold]pip install 'soup-cli[tensorrt]'[/]\n"
+            "Or follow: https://github.com/NVIDIA/TensorRT-LLM#installation"
+        )
+        raise typer.Exit(1)
+
+    # Check if LoRA adapter
+    adapter_config_path = model_path / "adapter_config.json"
+    is_adapter = adapter_config_path.exists()
+    merge_dir = None
+    source_path = model_path
+
+    if is_adapter:
+        console.print("[yellow]LoRA adapter detected - merging with base model first...[/]")
+        base_model = base or _detect_base_model(adapter_config_path)
+        if not base_model:
+            console.print(
+                "[red]Cannot detect base model from adapter_config.json.[/]\n"
+                "Please specify with [bold]--base[/] flag."
+            )
+            raise typer.Exit(1)
+        merge_dir = model_path.parent / f".soup_merge_tmp_{model_path.name}"
+        _merge_adapter(str(model_path), base_model, str(merge_dir))
+        source_path = merge_dir
+
+    output_path = Path(output) if output else model_path.parent / f"{model_path.name}_trt"
+
+    console.print(
+        Panel(
+            f"Model:  [bold]{source_path}[/]\n"
+            f"Format: [bold]TensorRT-LLM[/]\n"
+            f"Output: [bold]{output_path}[/]",
+            title="Export Plan",
+        )
+    )
+
+    try:
+        # Step 1: Convert HF model to TensorRT-LLM checkpoint
+        console.print("[dim]Converting to TensorRT-LLM checkpoint...[/]")
+        ckpt_dir = output_path / "checkpoint"
+        ckpt_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            result = subprocess.run(
+                [
+                    sys.executable, "-m",
+                    "tensorrt_llm.commands.convert_checkpoint",
+                    "--model_dir", str(source_path),
+                    "--output_dir", str(ckpt_dir),
+                    "--dtype", "float16",
+                ],
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError:
+            console.print("[red]Python executable not found.[/]")
+            raise typer.Exit(1)
+        if result.returncode != 0:
+            console.print(
+                f"[red]Checkpoint conversion failed:[/]\n{result.stderr}"
+            )
+            raise typer.Exit(1)
+
+        # Step 2: Build TensorRT engine
+        console.print("[dim]Building TensorRT engine...[/]")
+        engine_dir = output_path / "engine"
+        engine_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            result = subprocess.run(
+                [
+                    "trtllm-build",
+                    "--checkpoint_dir", str(ckpt_dir),
+                    "--output_dir", str(engine_dir),
+                    "--gemm_plugin", "float16",
+                ],
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError:
+            console.print(
+                "[red]trtllm-build not found in PATH.[/]\n"
+                "Ensure tensorrt_llm is installed and "
+                "trtllm-build is available."
+            )
+            raise typer.Exit(1)
+        if result.returncode != 0:
+            console.print(
+                f"[red]TensorRT engine build failed:[/]\n{result.stderr}"
+            )
+            raise typer.Exit(1)
+
+    finally:
+        if merge_dir and merge_dir.exists():
+            console.print("[dim]Cleaning up temporary merge files...[/]")
+            shutil.rmtree(merge_dir, ignore_errors=True)
+
+    console.print(
+        Panel(
+            f"Output: [bold]{output_path}[/]\n"
+            f"Format: [bold]TensorRT-LLM[/]\n\n"
+            f"Use with TensorRT-LLM:\n"
+            f"  [bold]import tensorrt_llm[/]\n"
+            f"  [bold]runner = tensorrt_llm.ModelRunner.from_dir('{engine_dir}')[/]",
+            title="[bold green]TensorRT-LLM Export Complete![/]",
+        )
+    )
+
+
 def _format_size(size_bytes: int) -> str:
     """Format bytes into human-readable string."""
+    value: float = float(size_bytes)
     for unit in ("B", "KB", "MB", "GB"):
-        if size_bytes < 1024:
-            return f"{size_bytes:.1f} {unit}"
-        size_bytes /= 1024
-    return f"{size_bytes:.1f} TB"
+        if value < 1024.0:
+            return f"{value:.1f} {unit}"
+        value /= 1024.0
+    return f"{value:.1f} TB"

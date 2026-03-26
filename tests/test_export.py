@@ -89,7 +89,7 @@ def test_export_unsupported_format(tmp_path: Path):
     model_dir = tmp_path / "model"
     model_dir.mkdir()
     result = runner.invoke(
-        app, ["export", "--model", str(model_dir), "--format", "onnx"]
+        app, ["export", "--model", str(model_dir), "--format", "safetensors"]
     )
     assert result.exit_code == 1
     assert "unsupported format" in result.output.lower()

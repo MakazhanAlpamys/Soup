@@ -34,6 +34,8 @@ def create_vllm_engine(
     gpu_memory_utilization: float = 0.9,
     max_model_len: Optional[int] = None,
     dtype: str = "auto",
+    speculative_model: Optional[str] = None,
+    num_speculative_tokens: int = 5,
 ):
     """Create a vLLM AsyncLLMEngine for serving.
 
@@ -76,6 +78,18 @@ def create_vllm_engine(
         if max_model_len is not None:
             engine_args.max_model_len = max_model_len
         engine_model_name = model_path
+
+    # Speculative decoding — use a smaller draft model for faster inference
+    if speculative_model:
+        import re
+        # SSRF protection: block URL-based model paths
+        if re.match(r'^https?://', speculative_model):
+            raise ValueError(
+                "speculative_model must be a local path or HuggingFace model ID, "
+                "not a URL"
+            )
+        engine_args.speculative_model = speculative_model
+        engine_args.num_speculative_tokens = num_speculative_tokens
 
     engine = AsyncLLMEngine.from_engine_args(engine_args)
     return engine, engine_model_name

@@ -501,6 +501,8 @@ class TestServeVllmIntegration:
                 is_adapter=False,
                 tensor_parallel_size=2,
                 gpu_memory_utilization=0.85,
+                speculative_model=None,
+                num_speculative_tokens=5,
             )
             mock_create_app.assert_called_once()
 

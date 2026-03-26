@@ -77,6 +77,7 @@ soup init --template rlhf       # full RLHF pipeline (SFT→RM→PPO)
 soup init --template pretrain   # continued pre-training on raw text
 soup init --template moe        # MoE fine-tuning (ScatterMoE LoRA)
 soup init --template longcontext # 128k+ context fine-tuning
+soup init --template embedding  # sentence embedding fine-tuning
 ```
 
 ### 3. Train
@@ -107,6 +108,12 @@ soup merge --adapter ./output
 
 # Export to GGUF for Ollama / llama.cpp
 soup export --model ./output --format gguf --quant q4_k_m
+
+# Export to ONNX (pip install 'soup-cli[onnx]')
+soup export --model ./output --format onnx
+
+# Export to TensorRT-LLM (pip install 'soup-cli[tensorrt]')
+soup export --model ./output --format tensorrt
 ```
 
 ## Config Example
@@ -615,6 +622,26 @@ soup export --model ./output --format gguf --llama-cpp /path/to/llama.cpp
 
 Supported quantizations: `q4_0`, `q4_k_m`, `q5_k_m`, `q8_0`, `f16`, `f32`
 
+### ONNX Export
+
+Export models to ONNX format for use with [ONNX Runtime](https://onnxruntime.ai/):
+
+```bash
+pip install 'soup-cli[onnx]'
+soup export --model ./output --format onnx
+soup export --model ./output --format onnx --output ./model_onnx
+```
+
+### TensorRT-LLM Export
+
+Export models to TensorRT-LLM format for high-throughput GPU inference:
+
+```bash
+pip install 'soup-cli[tensorrt]'
+soup export --model ./output --format tensorrt
+soup export --model ./output --format tensorrt --output ./model_trt
+```
+
 After export, use with Ollama:
 ```bash
 echo 'FROM ./my-model.q4_k_m.gguf' > Modelfile
@@ -726,6 +753,18 @@ soup serve --model ./output --backend vllm --gpu-memory 0.8
 ```
 
 > **Tip:** Soup auto-detects vLLM. When installed, you'll see a hint during `soup serve` if you haven't enabled it yet.
+
+### Speculative Decoding (v0.16.0+)
+
+Use a smaller draft model to speed up generation (2-3x faster):
+
+```bash
+# Transformers backend — uses HF assisted generation
+soup serve --model ./output --speculative-decoding small-draft-model --spec-tokens 5
+
+# vLLM backend — uses vLLM native speculative decoding
+soup serve --model ./output --backend vllm --speculative-decoding small-draft-model
+```
 
 > **Note (v0.10.10+):** `max_tokens` is capped at 16,384 per request. Error details are never exposed in HTTP responses.
 
@@ -950,6 +989,12 @@ Soup supports these formats (auto-detected). Files can be JSONL, JSON, CSV, Parq
 ```
 Or use `.txt` files directly (one document per line).
 
+**Embedding (sentence embedding pairs/triplets):**
+```json
+{"anchor": "What is Python?", "positive": "Python is a programming language."}
+{"anchor": "What is Python?", "positive": "A programming language.", "negative": "A type of snake."}
+```
+
 ## Data Tools
 
 ```bash
@@ -1009,7 +1054,7 @@ soup eval --model ./output --benchmarks mmlu --run-id run_20260223_143052_a1b2
 ## All Commands
 
 ```
-soup init [--template chat|code|...|moe|longcontext]  Create config
+soup init [--template chat|code|...|embedding]  Create config
 soup train --config soup.yaml                 Start training
 soup train --config soup.yaml --tensorboard   Train with TensorBoard logging
 soup train --config soup.yaml --fsdp fsdp_full_shard  Train with FSDP2
@@ -1018,9 +1063,12 @@ soup chat --model ./output                    Interactive chat
 soup push --model ./output --repo user/name   Upload to HuggingFace
 soup merge --adapter ./output                 Merge LoRA with base model
 soup export --model ./output --format gguf    Export to GGUF (Ollama)
+soup export --model ./output --format onnx    Export to ONNX
+soup export --model ./output --format tensorrt Export to TensorRT-LLM
 soup eval --model ./output --benchmarks mmlu  Evaluate on benchmarks
 soup serve --model ./output --port 8000       OpenAI-compatible API server
 soup serve --model ./output --backend vllm    vLLM backend (2-4x throughput)
+soup serve --model ./output --speculative-decoding draft-model  Speculative decoding
 soup sweep --config soup.yaml --param lr=...  Hyperparameter search
 soup diff --model-a ./a --model-b ./b         Compare two models
 soup data inspect <path>                      View dataset stats
@@ -1107,6 +1155,8 @@ Soup works with **any** of the **340,000+** text-generation models on [HuggingFa
 | `deepspeed` | `pip install 'soup-cli[deepspeed]'` | Multi-GPU training (DeepSpeed ZeRO) |
 | `liger` | `pip install 'soup-cli[liger]'` | Liger Kernel fused ops (20-60% memory savings) |
 | `ring-attn` | `pip install 'soup-cli[ring-attn]'` | Ring FlashAttention (sequence parallelism) |
+| `onnx` | `pip install 'soup-cli[onnx]'` | ONNX export (optimum + onnxruntime) |
+| `tensorrt` | `pip install 'soup-cli[tensorrt]'` | TensorRT-LLM export (high-throughput GPU inference) |
 | `dev` | `pip install 'soup-cli[dev]'` | Tests + linting (pytest, ruff) |
 
 ## Development

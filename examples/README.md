@@ -124,7 +124,22 @@ soup train
 - Supports `linear`, `dynamic`, `yarn`, `longrope` scaling types
 - Optional Liger Kernel for fused ops: `pip install 'soup-cli[liger]'`
 
-### 9. Batch Inference
+### 9. Embedding Model Fine-Tuning
+
+Fine-tune sentence embedding models (BGE, E5, GTE) with contrastive or triplet loss:
+
+```bash
+soup init --template embedding
+soup train
+```
+
+**What it does:**
+- Supports contrastive, triplet, and cosine loss functions
+- Configurable pooling: mean, CLS, or last token
+- Works with pair data (`anchor` + `positive`) or triplets (`+ negative`)
+- Compatible with BGE, E5, GTE, INSTRUCTOR, and any HuggingFace model
+
+### 10. Batch Inference
 
 Run inference on a batch of prompts:
 
@@ -132,7 +147,7 @@ Run inference on a batch of prompts:
 soup infer --model ./output_sft_basic/ --input prompts.jsonl --output results.jsonl
 ```
 
-### 10. Full RLHF Pipeline
+### 11. Full RLHF Pipeline
 
 Complete reinforcement learning from human feedback:
 

@@ -9,6 +9,7 @@ Supported formats:
 - llava: {"image": ..., "conversations": [{"from": "human", "value": ...}, ...]}
 - sharegpt4v: {"image": ..., "conversations": [{"from": "human", "value": ...}, ...]}
 - plaintext: {"text": "..."} — raw text for continued pre-training
+- embedding: {"anchor": ..., "positive": ..., "negative": ...} — sentence embedding pairs/triplets
 """
 
 from typing import Optional
@@ -26,6 +27,7 @@ FORMAT_SIGNATURES = {
     "kto": {"prompt", "completion", "label"},
     "llava": {"image", "conversations"},
     "sharegpt4v": {"image", "conversations"},
+    "embedding": {"anchor", "positive"},
     "plaintext": {"text"},
 }
 
@@ -41,7 +43,8 @@ def detect_format(data: list[dict]) -> str:
     # Check more specific formats first (llava/sharegpt4v before sharegpt)
     # plaintext ("text" key only) checked last to avoid false matches
     check_order = [
-        "alpaca", "llava", "sharegpt4v", "kto", "dpo", "sharegpt", "chatml", "plaintext",
+        "alpaca", "llava", "sharegpt4v", "kto", "dpo", "embedding",
+        "sharegpt", "chatml", "plaintext",
     ]
     for fmt in check_order:
         required_keys = FORMAT_SIGNATURES[fmt]
@@ -55,6 +58,7 @@ def detect_format(data: list[dict]) -> str:
         f"dpo (prompt, chosen, rejected), "
         f"kto (prompt, completion, label), "
         f"llava/sharegpt4v (image, conversations), "
+        f"embedding (anchor, positive), "
         f"plaintext (text)"
     )
 
@@ -69,7 +73,8 @@ def format_to_messages(row: dict, fmt: str) -> Optional[dict]:
     - KTO format: {"prompt": ..., "completion": ..., "label": bool}
     """
     valid_formats = (
-        "chatml", "alpaca", "sharegpt", "dpo", "kto", "llava", "sharegpt4v", "plaintext",
+        "chatml", "alpaca", "sharegpt", "dpo", "kto", "llava", "sharegpt4v",
+        "plaintext", "embedding",
     )
     if fmt not in valid_formats:
         raise ValueError(f"Unknown format: {fmt}")
@@ -86,6 +91,8 @@ def format_to_messages(row: dict, fmt: str) -> Optional[dict]:
             return _convert_kto(row)
         elif fmt == "plaintext":
             return _convert_plaintext(row)
+        elif fmt == "embedding":
+            return _convert_embedding(row)
         else:
             return _convert_vision(row)
     except (KeyError, TypeError, IndexError, ValueError):
@@ -168,6 +175,25 @@ def _convert_plaintext(row: dict) -> dict:
     if not isinstance(text, str) or not text.strip():
         raise ValueError("Plaintext row must have a non-empty 'text' field")
     return {"text": text}
+
+
+def _convert_embedding(row: dict) -> dict:
+    """Convert embedding row to {anchor, positive, negative?} for embedding training.
+
+    Input: {"anchor": "query text", "positive": "similar text", "negative": "dissimilar text"}
+    Output: {"anchor": ..., "positive": ..., "negative": ...} (negative is optional)
+    """
+    anchor = row["anchor"]
+    positive = row["positive"]
+    if not isinstance(anchor, str) or not anchor.strip():
+        raise ValueError("Embedding row must have a non-empty 'anchor' field")
+    if not isinstance(positive, str) or not positive.strip():
+        raise ValueError("Embedding row must have a non-empty 'positive' field")
+    result = {"anchor": anchor, "positive": positive}
+    negative = row.get("negative")
+    if isinstance(negative, str) and negative.strip():
+        result["negative"] = negative
+    return result
 
 
 def _convert_vision(row: dict) -> dict:
