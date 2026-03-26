@@ -76,6 +76,7 @@ soup init --template ipo        # IPO regularized preference
 soup init --template rlhf       # full RLHF pipeline (SFT→RM→PPO)
 soup init --template pretrain   # continued pre-training on raw text
 soup init --template moe        # MoE fine-tuning (ScatterMoE LoRA)
+soup init --template longcontext # 128k+ context fine-tuning
 ```
 
 ### 3. Train
@@ -779,22 +780,55 @@ soup diff --model-a ./base --model-b ./finetuned --prompts test_prompts.jsonl
 soup diff --model-a ./a --model-b ./b --prompts prompts.txt --output results.jsonl
 ```
 
-## Multi-GPU / DeepSpeed
+## Multi-GPU / DeepSpeed / FSDP
 
-Train on multiple GPUs with DeepSpeed:
+Train on multiple GPUs with DeepSpeed or PyTorch FSDP2:
 
 ```bash
-# ZeRO Stage 2 (recommended for most cases)
+# DeepSpeed ZeRO Stage 2 (recommended for most cases)
 soup train --config soup.yaml --deepspeed zero2
 
-# ZeRO Stage 3 (for very large models)
+# DeepSpeed ZeRO Stage 3 (for very large models)
 soup train --config soup.yaml --deepspeed zero3
 
-# ZeRO Stage 2 with CPU offload (memory-constrained)
+# DeepSpeed ZeRO Stage 2 with CPU offload (memory-constrained)
 soup train --config soup.yaml --deepspeed zero2_offload
 
-# Custom DeepSpeed config
-soup train --config soup.yaml --deepspeed ./my_ds_config.json
+# FSDP2 Full Shard (native PyTorch, like ZeRO-3)
+soup train --config soup.yaml --fsdp fsdp_full_shard
+
+# FSDP2 Shard Grad Op (like ZeRO-2)
+soup train --config soup.yaml --fsdp fsdp_shard_grad
+
+# FSDP2 Full Shard with CPU offload
+soup train --config soup.yaml --fsdp fsdp_full_offload
+```
+
+## Performance + Long-Context
+
+Optimize training throughput and extend context windows:
+
+```yaml
+# soup.yaml — performance options
+training:
+  use_liger: true            # Liger Kernel fused ops (20-60% memory savings)
+  use_flash_attn: true       # FlashAttention v2/v3 auto-detection
+  gradient_checkpointing: true  # Required for long sequences
+
+  # Long-context (128k+ tokens)
+  rope_scaling_type: dynamic  # RoPE scaling: linear, dynamic, yarn, longrope
+  # use_ring_attention: true  # Sequence parallelism across GPUs
+
+data:
+  max_length: 131072          # Up to 1M tokens supported
+```
+
+Install optional performance packages:
+
+```bash
+pip install 'soup-cli[liger]'     # Liger Kernel fused operations
+pip install flash-attn --no-build-isolation  # FlashAttention
+pip install 'soup-cli[ring-attn]' # Ring FlashAttention (sequence parallelism)
 ```
 
 ## Quickstart Demo
@@ -975,9 +1009,10 @@ soup eval --model ./output --benchmarks mmlu --run-id run_20260223_143052_a1b2
 ## All Commands
 
 ```
-soup init [--template chat|code|...|pretrain|moe]  Create config
+soup init [--template chat|code|...|moe|longcontext]  Create config
 soup train --config soup.yaml                 Start training
 soup train --config soup.yaml --tensorboard   Train with TensorBoard logging
+soup train --config soup.yaml --fsdp fsdp_full_shard  Train with FSDP2
 soup infer --model ./output --input p.jsonl   Batch inference
 soup chat --model ./output                    Interactive chat
 soup push --model ./output --repo user/name   Upload to HuggingFace
@@ -1070,6 +1105,8 @@ Soup works with **any** of the **340,000+** text-generation models on [HuggingFa
 | `data` | `pip install 'soup-cli[data]'` | Deduplication (MinHash via datasketch) |
 | `eval` | `pip install 'soup-cli[eval]'` | Benchmark evaluation (lm-evaluation-harness) |
 | `deepspeed` | `pip install 'soup-cli[deepspeed]'` | Multi-GPU training (DeepSpeed ZeRO) |
+| `liger` | `pip install 'soup-cli[liger]'` | Liger Kernel fused ops (20-60% memory savings) |
+| `ring-attn` | `pip install 'soup-cli[ring-attn]'` | Ring FlashAttention (sequence parallelism) |
 | `dev` | `pip install 'soup-cli[dev]'` | Tests + linting (pytest, ruff) |
 
 ## Development

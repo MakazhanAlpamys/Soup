@@ -27,11 +27,13 @@ class DPOTrainerWrapper:
         device: str = "cuda",
         report_to: str = "none",
         deepspeed_config: Optional[str] = None,
+        fsdp_config: Optional[dict] = None,
     ):
         self.config = config
         self.device = device
         self.report_to = report_to
         self.deepspeed_config = deepspeed_config
+        self.fsdp_config = fsdp_config
         self.model = None
         self.ref_model = None
         self.tokenizer = None
@@ -122,6 +124,7 @@ class DPOTrainerWrapper:
             report_to=self.report_to,
             remove_unused_columns=False,
             deepspeed=self.deepspeed_config,
+            **(self.fsdp_config or {}),
             beta=tcfg.dpo_beta,
             max_length=cfg.data.max_length,
             max_prompt_length=cfg.data.max_length // 2,

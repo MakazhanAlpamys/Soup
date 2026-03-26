@@ -21,11 +21,13 @@ class SFTTrainerWrapper:
         device: str = "cuda",
         report_to: str = "none",
         deepspeed_config: Optional[str] = None,
+        fsdp_config: Optional[dict] = None,
     ):
         self.config = config
         self.device = device
         self.report_to = report_to
         self.deepspeed_config = deepspeed_config
+        self.fsdp_config = fsdp_config
         self.model = None
         self.tokenizer = None
         self.trainer = None
@@ -138,6 +140,19 @@ class SFTTrainerWrapper:
             "deepspeed": self.deepspeed_config,
         }
 
+        # FSDP2 — alternative to DeepSpeed
+        if self.fsdp_config:
+            allowed_fsdp_keys = {"fsdp", "fsdp_config"}
+            unexpected = set(self.fsdp_config.keys()) - allowed_fsdp_keys
+            if unexpected:
+                raise ValueError(f"Unexpected FSDP config keys: {unexpected}")
+            training_kwargs.update(self.fsdp_config)
+
+        # Gradient checkpointing — saves memory for long sequences
+        if tcfg.gradient_checkpointing:
+            training_kwargs["gradient_checkpointing"] = True
+            training_kwargs["gradient_checkpointing_kwargs"] = {"use_reentrant": False}
+
         # LoRA+ — different learning rates for A and B matrices
         if tcfg.loraplus_lr_ratio is not None:
             training_kwargs["loraplus_lr_ratio"] = tcfg.loraplus_lr_ratio
@@ -182,6 +197,17 @@ class SFTTrainerWrapper:
 
         from soup_cli.utils.moe import detect_moe_model, get_moe_target_modules
 
+        # Liger Kernel — apply fused ops BEFORE model loading
+        if tcfg.use_liger:
+            from soup_cli.utils.liger import apply_liger_kernel
+
+            if apply_liger_kernel(cfg.base):
+                console.print(
+                    "[green]Liger Kernel enabled:[/] fused RMSNorm, SwiGLU, CrossEntropy, RoPE"
+                )
+            else:
+                console.print("[yellow]Liger Kernel: no matching architecture found[/]")
+
         console.print(f"[dim]Loading tokenizer: {cfg.base}[/]")
         self.tokenizer = AutoTokenizer.from_pretrained(cfg.base, trust_remote_code=True)
         if self.tokenizer.pad_token is None:
@@ -208,7 +234,32 @@ class SFTTrainerWrapper:
         if bnb_config:
             model_kwargs["quantization_config"] = bnb_config
 
+        # FlashAttention — set attn_implementation for faster attention
+        if tcfg.use_flash_attn:
+            from soup_cli.utils.flash_attn import get_attn_implementation
+
+            attn_impl = get_attn_implementation(tcfg.use_flash_attn, self.device)
+            if attn_impl:
+                model_kwargs["attn_implementation"] = attn_impl
+                console.print(f"[green]FlashAttention enabled:[/] {attn_impl}")
+
         self.model = AutoModelForCausalLM.from_pretrained(cfg.base, **model_kwargs)
+
+        # Long-context — apply RoPE scaling after model load
+        if tcfg.rope_scaling_type:
+            from soup_cli.utils.long_context import apply_long_context_config
+
+            rope_config = apply_long_context_config(
+                self.model.config,
+                target_length=cfg.data.max_length,
+                rope_scaling_type=tcfg.rope_scaling_type,
+                model_name=cfg.base,
+            )
+            if rope_config:
+                console.print(
+                    f"[green]Long-context enabled:[/] RoPE {tcfg.rope_scaling_type} "
+                    f"scaling to {cfg.data.max_length} tokens"
+                )
 
         # MoE aux loss for load balancing
         is_moe = detect_moe_model(self.model)

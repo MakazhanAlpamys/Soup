@@ -30,7 +30,10 @@ class DataConfig(BaseModel):
         description="Data format",
     )
     val_split: float = Field(default=0.1, ge=0.0, le=0.5, description="Validation split ratio")
-    max_length: int = Field(default=2048, description="Max sequence length in tokens")
+    max_length: int = Field(
+        default=2048, ge=64, le=1048576,
+        description="Max sequence length in tokens",
+    )
     image_dir: Optional[str] = Field(
         default=None,
         description="Base directory for resolving relative image paths in vision datasets",
@@ -138,6 +141,30 @@ class TrainingConfig(BaseModel):
         default=0.01,
         ge=0,
         description="Auxiliary load-balancing loss coefficient for MoE models",
+    )
+    # Performance — Liger Kernel (fused operations)
+    use_liger: bool = Field(
+        default=False,
+        description="Enable Liger Kernel fused operations (20-60% memory savings, 20-40% speedup)",
+    )
+    # Performance — FlashAttention
+    use_flash_attn: bool = Field(
+        default=False,
+        description="Enable FlashAttention (auto-detects v2/v3/v4 for faster attention)",
+    )
+    # Performance — Ring FlashAttention (sequence parallelism)
+    use_ring_attention: bool = Field(
+        default=False,
+        description="Enable Ring FlashAttention for sequence parallelism across GPUs",
+    )
+    # Long-context — RoPE scaling
+    rope_scaling_type: Optional[Literal["linear", "dynamic", "yarn", "longrope"]] = Field(
+        default=None,
+        description="RoPE scaling method for long-context: linear, dynamic, yarn, longrope",
+    )
+    gradient_checkpointing: bool = Field(
+        default=False,
+        description="Enable gradient checkpointing for memory savings on long sequences",
     )
 
 
@@ -494,6 +521,40 @@ training:
   moe_aux_loss_coeff: 0.01
 
 output: ./output
+""",
+    "longcontext": """# Soup template: Long-Context Fine-tuning (128k+)
+# Extend model context window for long-document understanding
+#
+# Uses RoPE scaling + gradient checkpointing + FlashAttention for 128k tokens.
+# Optionally enable Liger Kernel for additional memory savings.
+
+base: meta-llama/Llama-3.1-8B-Instruct
+task: sft
+# backend: unsloth  # 2-5x faster, pip install 'soup-cli[fast]'
+
+data:
+  train: ./data/long_context_train.jsonl
+  format: alpaca
+  val_split: 0.05
+  max_length: 131072
+
+training:
+  epochs: 1
+  lr: 5e-6
+  batch_size: 1
+  gradient_accumulation_steps: 16
+  lora:
+    r: 64
+    alpha: 16
+    target_modules: auto
+  quantization: 4bit
+  gradient_checkpointing: true
+  rope_scaling_type: dynamic
+  use_flash_attn: true
+  # use_liger: true       # pip install 'soup-cli[liger]' for fused ops
+  # use_ring_attention: true  # Multi-GPU sequence parallelism
+
+output: ./output_longctx
 """,
     "rlhf": """# Soup template: Full RLHF Pipeline (SFT + Reward Model + PPO)
 # Three-stage training: 1) SFT warmup, 2) Reward model, 3) PPO alignment

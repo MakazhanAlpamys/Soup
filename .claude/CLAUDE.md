@@ -1,12 +1,12 @@
 # Soup CLI — Project CLAUDE.md
 
-Soup is a CLI-first LLM fine-tuning tool (v0.14.3). Python 3.9+, MIT license.
+Soup is a CLI-first LLM fine-tuning tool (v0.15.0). Python 3.9+, MIT license.
 
 ## Build & Development
 
 ```bash
 pip install -e ".[dev]"          # Install editable + test deps
-pytest tests/ -v --tb=short      # Run all tests (1091 tests)
+pytest tests/ -v --tb=short      # Run all tests (1182 tests)
 ruff check soup_cli/ tests/      # Lint (must pass before commit)
 ruff check --fix soup_cli/ tests/  # Auto-fix lint issues
 ```
@@ -71,6 +71,11 @@ soup_cli/
     vllm.py            # AsyncLLMEngine backend (2-4x inference throughput)
     galore.py          # GaLore optimizer config + validation
     moe.py             # MoE model detection, ScatterMoE LoRA target modules
+    liger.py           # Liger Kernel detection + fused ops (RMSNorm, SwiGLU, etc.)
+    flash_attn.py      # FlashAttention v2/v3 auto-detection
+    fsdp.py            # FSDP2 config templates (full_shard, shard_grad, offload)
+    ring_attention.py   # Ring FlashAttention for sequence parallelism
+    long_context.py    # RoPE scaling for 128k+ context fine-tuning
     constants.py       # APP_NAME, paths, default chat template
 tests/                 # 47 test files, 1014 tests
 examples/
@@ -82,7 +87,7 @@ examples/
 
 ```
 soup init              # Create config (interactive or --template)
-soup train             # Main training (--config, --resume, --wandb, --tensorboard, --deepspeed, --yes)
+soup train             # Main training (--config, --resume, --wandb, --tensorboard, --deepspeed, --fsdp, --yes)
 soup infer             # Batch inference (--model, --input, --output)
 soup chat              # Terminal chat with model
 soup serve             # OpenAI-compatible inference server (--backend transformers|vllm)
@@ -115,10 +120,10 @@ soup version           # Show version (--full for details)
 
 - **SoupConfig**: base (required), task (sft/dpo/kto/orpo/simpo/ipo/grpo/ppo/reward_model/pretrain), modality (text/vision), backend (transformers/unsloth), data, training, output
 - **DataConfig**: train, format (alpaca/sharegpt/chatml/dpo/kto/llava/sharegpt4v/plaintext/auto), val_split, max_length, image_dir
-- **TrainingConfig**: epochs, lr, batch_size (int or "auto"), quantization (4bit/8bit/none), quantization_aware, optimizer, scheduler, dpo_beta, kto_beta, orpo_beta, simpo_gamma, cpo_alpha, ipo_tau, grpo_beta, num_generations, reward_fn, ppo_epochs, ppo_clip_ratio, ppo_kl_penalty, reward_model, loraplus_lr_ratio, use_galore, galore_rank, galore_update_proj_gap, galore_scale, moe_lora, moe_aux_loss_coeff
+- **TrainingConfig**: epochs, lr, batch_size (int or "auto"), quantization (4bit/8bit/none), quantization_aware, optimizer, scheduler, dpo_beta, kto_beta, orpo_beta, simpo_gamma, cpo_alpha, ipo_tau, grpo_beta, num_generations, reward_fn, ppo_epochs, ppo_clip_ratio, ppo_kl_penalty, reward_model, loraplus_lr_ratio, use_galore, galore_rank, galore_update_proj_gap, galore_scale, moe_lora, moe_aux_loss_coeff, use_liger, use_flash_attn, use_ring_attention, rope_scaling_type, gradient_checkpointing
 - **LoraConfig**: r, alpha, dropout, target_modules, use_dora
 
-12 built-in templates: chat, code, medical, reasoning, vision, kto, orpo, simpo, ipo, rlhf, pretrain, moe.
+13 built-in templates: chat, code, medical, reasoning, vision, kto, orpo, simpo, ipo, rlhf, pretrain, moe, longcontext.
 
 ## Training Tasks
 
@@ -166,6 +171,10 @@ soup version           # Show version (--full for details)
 - **Data validate**: auto-detects format when `--format` not specified (v0.14.3)
 - **Data stats**: UTF-8 stdout redirect on Windows for plotext histograms (v0.14.3)
 - **Web UI**: `--show-token` flag + auth token documented in `--help` (v0.14.3)
+- **RoPE scaling**: `rope_scaling_type` validated via Literal constraint (v0.15.0)
+- **max_length bounds**: ge=64, le=1048576 prevents OOM/corruption from extreme values (v0.15.0)
+- **FSDP config**: key allowlist prevents injection of unexpected TrainingArguments (v0.15.0)
+- **Liger Kernel**: exception handling narrowed to prevent silent CUDA error swallowing (v0.15.0)
 
 ## Code Conventions
 
@@ -192,6 +201,8 @@ soup version           # Show version (--full for details)
 - `[fast]`: unsloth (2-5x training speedup)
 - `[vision]`: Pillow
 - `[qat]`: torchao
+- `[liger]`: liger-kernel (fused ops)
+- `[ring-attn]`: ring-flash-attn (sequence parallelism)
 - `[ui]`: FastAPI + uvicorn + static SPA
 - `[dev]`: pytest, ruff, pytest-cov, httpx
 
@@ -229,7 +240,7 @@ soup version           # Show version (--full for details)
 15. **Tag**: `git tag v0.X.Y && git push origin v0.X.Y`
 16. **Release**: `gh release create v0.X.Y` with changelog (What's New, Install/Upgrade)
 
-## Tests (48 test files, 1091 tests)
+## Tests (49 test files, 1182 tests)
 
 | File | Covers |
 |------|--------|
@@ -280,3 +291,4 @@ soup version           # Show version (--full for details)
 | test_moe.py | MoE detection, ScatterMoE LoRA targets, MoE info extraction |
 | test_bugfixes.py | v0.10.1-v0.14.3 regression fixes |
 | test_cli_subprocess.py | Subprocess CLI tests: entry point, encoding, paths, platform regressions |
+| test_performance.py | Liger Kernel, FlashAttention, FSDP2, Ring Attention, long-context, RoPE scaling |

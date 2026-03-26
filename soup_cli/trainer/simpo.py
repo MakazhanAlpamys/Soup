@@ -32,11 +32,13 @@ class SimPOTrainerWrapper:
         device: str = "cuda",
         report_to: str = "none",
         deepspeed_config: Optional[str] = None,
+        fsdp_config: Optional[dict] = None,
     ):
         self.config = config
         self.device = device
         self.report_to = report_to
         self.deepspeed_config = deepspeed_config
+        self.fsdp_config = fsdp_config
         self.model = None
         self.tokenizer = None
         self.trainer = None
@@ -123,6 +125,7 @@ class SimPOTrainerWrapper:
             report_to=self.report_to,
             remove_unused_columns=False,
             deepspeed=self.deepspeed_config,
+            **(self.fsdp_config or {}),
             loss_type="simpo",
             cpo_alpha=tcfg.cpo_alpha,
             simpo_gamma=tcfg.simpo_gamma,

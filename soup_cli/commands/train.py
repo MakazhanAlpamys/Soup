@@ -54,6 +54,11 @@ def train(
         "--deepspeed",
         help="Enable DeepSpeed: zero2, zero3, zero2_offload, or path to config JSON",
     ),
+    fsdp: str = typer.Option(
+        None,
+        "--fsdp",
+        help="Enable FSDP2: fsdp_full_shard, fsdp_shard_grad, or fsdp_full_offload",
+    ),
     yes: bool = typer.Option(
         False,
         "--yes",
@@ -128,6 +133,20 @@ def train(
         if ds_config_path:
             console.print(f"[green]DeepSpeed enabled:[/] {deepspeed}")
 
+    # --- FSDP2 setup ---
+    fsdp_kwargs = None
+    if fsdp:
+        from soup_cli.utils.fsdp import FSDP_CONFIGS, get_fsdp_training_args
+
+        if fsdp not in FSDP_CONFIGS:
+            console.print(
+                f"[red]Invalid FSDP preset: {fsdp}[/]\n"
+                f"Options: {', '.join(FSDP_CONFIGS.keys())}"
+            )
+            raise typer.Exit(1)
+        fsdp_kwargs = get_fsdp_training_args(fsdp)
+        console.print(f"[green]FSDP2 enabled:[/] {fsdp}")
+
     # Detect hardware
     device, device_name = detect_device()
     gpu_info = get_gpu_info()
@@ -185,6 +204,69 @@ def train(
         if qat_errors:
             raise typer.Exit(1)
 
+    # Validate FSDP configuration
+    if fsdp:
+        from soup_cli.utils.fsdp import validate_fsdp_config
+
+        fsdp_errors = validate_fsdp_config(
+            fsdp_preset=fsdp,
+            deepspeed_config=ds_config_path,
+            backend=cfg.backend,
+            device=device,
+        )
+        for err in fsdp_errors:
+            console.print(f"[red]FSDP error:[/] {err}")
+        if fsdp_errors:
+            raise typer.Exit(1)
+
+    # Validate Liger Kernel configuration
+    if cfg.training.use_liger:
+        from soup_cli.utils.liger import validate_liger_config
+
+        liger_errors = validate_liger_config(
+            cfg.training.use_liger, cfg.backend, device,
+        )
+        for err in liger_errors:
+            console.print(f"[red]Liger error:[/] {err}")
+        if liger_errors:
+            raise typer.Exit(1)
+
+    # Validate FlashAttention configuration
+    if cfg.training.use_flash_attn:
+        from soup_cli.utils.flash_attn import validate_flash_attn_config
+
+        fa_errors = validate_flash_attn_config(
+            cfg.training.use_flash_attn, cfg.backend, device,
+        )
+        for err in fa_errors:
+            console.print(f"[red]FlashAttention error:[/] {err}")
+        if fa_errors:
+            raise typer.Exit(1)
+
+    # Validate Ring FlashAttention configuration
+    if cfg.training.use_ring_attention:
+        from soup_cli.utils.ring_attention import validate_ring_attention_config
+
+        ring_errors = validate_ring_attention_config(
+            cfg.training.use_ring_attention, device, cfg.data.max_length,
+        )
+        for err in ring_errors:
+            console.print(f"[red]Ring Attention error:[/] {err}")
+        if ring_errors:
+            raise typer.Exit(1)
+
+    # Validate long-context configuration
+    if cfg.training.rope_scaling_type:
+        from soup_cli.utils.long_context import validate_long_context_config
+
+        ctx_errors = validate_long_context_config(
+            cfg.data.max_length,
+            cfg.training.rope_scaling_type,
+            cfg.training.gradient_checkpointing,
+        )
+        for err in ctx_errors:
+            console.print(f"[yellow]Long-context warning:[/] {err}")
+
     # Suggest unsloth if available but not being used
     if cfg.backend == "transformers":
         from soup_cli.utils.unsloth import is_unsloth_available
@@ -236,64 +318,50 @@ def train(
     else:
         report_to = "none"
     console.print("[dim]Setting up model + trainer...[/]")
+    trainer_kwargs = {
+        "device": device,
+        "report_to": report_to,
+        "deepspeed_config": ds_config_path,
+        "fsdp_config": fsdp_kwargs,
+    }
     if cfg.task == "dpo":
         from soup_cli.trainer.dpo import DPOTrainerWrapper
 
-        trainer_wrapper = DPOTrainerWrapper(
-            cfg, device=device, report_to=report_to, deepspeed_config=ds_config_path,
-        )
+        trainer_wrapper = DPOTrainerWrapper(cfg, **trainer_kwargs)
     elif cfg.task == "grpo":
         from soup_cli.trainer.grpo import GRPOTrainerWrapper
 
-        trainer_wrapper = GRPOTrainerWrapper(
-            cfg, device=device, report_to=report_to, deepspeed_config=ds_config_path,
-        )
+        trainer_wrapper = GRPOTrainerWrapper(cfg, **trainer_kwargs)
     elif cfg.task == "ppo":
         from soup_cli.trainer.ppo import PPOTrainerWrapper
 
-        trainer_wrapper = PPOTrainerWrapper(
-            cfg, device=device, report_to=report_to, deepspeed_config=ds_config_path,
-        )
+        trainer_wrapper = PPOTrainerWrapper(cfg, **trainer_kwargs)
     elif cfg.task == "kto":
         from soup_cli.trainer.kto import KTOTrainerWrapper
 
-        trainer_wrapper = KTOTrainerWrapper(
-            cfg, device=device, report_to=report_to, deepspeed_config=ds_config_path,
-        )
+        trainer_wrapper = KTOTrainerWrapper(cfg, **trainer_kwargs)
     elif cfg.task == "orpo":
         from soup_cli.trainer.orpo import ORPOTrainerWrapper
 
-        trainer_wrapper = ORPOTrainerWrapper(
-            cfg, device=device, report_to=report_to, deepspeed_config=ds_config_path,
-        )
+        trainer_wrapper = ORPOTrainerWrapper(cfg, **trainer_kwargs)
     elif cfg.task == "simpo":
         from soup_cli.trainer.simpo import SimPOTrainerWrapper
 
-        trainer_wrapper = SimPOTrainerWrapper(
-            cfg, device=device, report_to=report_to, deepspeed_config=ds_config_path,
-        )
+        trainer_wrapper = SimPOTrainerWrapper(cfg, **trainer_kwargs)
     elif cfg.task == "ipo":
         from soup_cli.trainer.ipo import IPOTrainerWrapper
 
-        trainer_wrapper = IPOTrainerWrapper(
-            cfg, device=device, report_to=report_to, deepspeed_config=ds_config_path,
-        )
+        trainer_wrapper = IPOTrainerWrapper(cfg, **trainer_kwargs)
     elif cfg.task == "reward_model":
         from soup_cli.trainer.reward_model import RewardModelTrainerWrapper
 
-        trainer_wrapper = RewardModelTrainerWrapper(
-            cfg, device=device, report_to=report_to, deepspeed_config=ds_config_path,
-        )
+        trainer_wrapper = RewardModelTrainerWrapper(cfg, **trainer_kwargs)
     elif cfg.task == "pretrain":
         from soup_cli.trainer.pretrain import PretrainTrainerWrapper
 
-        trainer_wrapper = PretrainTrainerWrapper(
-            cfg, device=device, report_to=report_to, deepspeed_config=ds_config_path,
-        )
+        trainer_wrapper = PretrainTrainerWrapper(cfg, **trainer_kwargs)
     else:
-        trainer_wrapper = SFTTrainerWrapper(
-            cfg, device=device, report_to=report_to, deepspeed_config=ds_config_path,
-        )
+        trainer_wrapper = SFTTrainerWrapper(cfg, **trainer_kwargs)
     trainer_wrapper.setup(dataset)
 
     # Train with live display and experiment tracking
