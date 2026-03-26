@@ -23,7 +23,7 @@ class TestSpeculativeDecodingCLI:
         assert "--speculative-decoding" in result.output
 
     def test_serve_spec_tokens_flag_exists(self):
-        """The serve command should accept --spec-tokens flag."""
+        """The serve command should accept --num-speculative-tokens flag."""
         from typer.testing import CliRunner
 
         from soup_cli.cli import app
@@ -31,7 +31,7 @@ class TestSpeculativeDecodingCLI:
         runner = CliRunner()
         result = runner.invoke(app, ["serve", "--help"])
         assert result.exit_code == 0
-        assert "--spec-tokens" in result.output
+        assert "--num-speculative-tokens" in result.output
 
 
 # ─── Draft Model Loading Tests ────────────────────────────────────────────
@@ -200,6 +200,11 @@ class TestCreateAppWithDraftModel:
 
     def test_create_app_accepts_draft_model(self):
         """_create_app should accept draft_model parameter."""
+        try:
+            import fastapi  # noqa: F401
+        except ImportError:
+            pytest.skip("FastAPI not installed")
+
         mock_model = MagicMock()
         mock_tokenizer = MagicMock()
         mock_draft = MagicMock()
@@ -219,6 +224,11 @@ class TestCreateAppWithDraftModel:
 
     def test_create_app_without_draft_model(self):
         """_create_app should work without draft_model."""
+        try:
+            import fastapi  # noqa: F401
+        except ImportError:
+            pytest.skip("FastAPI not installed")
+
         mock_model = MagicMock()
         mock_tokenizer = MagicMock()
 

@@ -69,12 +69,11 @@ def serve(
     speculative_model: Optional[str] = typer.Option(
         None,
         "--speculative-decoding",
-        "--spec-dec",
         help="Draft model for speculative decoding (smaller/faster model ID or path)",
     ),
     num_speculative_tokens: int = typer.Option(
         5,
-        "--spec-tokens",
+        "--num-speculative-tokens",
         help="Number of tokens the draft model generates per step (speculative decoding)",
     ),
 ):
