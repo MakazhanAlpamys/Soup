@@ -95,10 +95,10 @@ soup_cli/
   trainer/            - Training wrappers (SFT, DPO, GRPO, PPO, KTO, ORPO, SimPO, IPO, Pretrain, Reward Model)
   monitoring/         - Callbacks and live dashboard
   experiment/         - SQLite experiment tracking
-  utils/              - GPU detection, batch size estimation, error handling, MoE, GaLore, QAT, Unsloth, vLLM
+  utils/              - GPU, errors, MoE, GaLore, QAT, Unsloth, vLLM, Liger, FlashAttn, FSDP, Ring Attention, long-context
   ui/                 - Web UI (FastAPI + HTML/JS SPA)
 
-tests/                - Test suite (48 files, 1091 tests)
+tests/                - Test suite (49 files, 1182 tests)
 examples/             - Real-world config examples and datasets
 ```
 
@@ -141,6 +141,7 @@ pytest tests/ --cov=soup_cli --cov-report=html
 - `test_ui.py` — Web UI endpoints, auth, static files
 - `test_infer.py` — Batch inference command
 - `test_bugfixes.py` — Regression fixes (v0.10.1–v0.14.3)
+- `test_performance.py` — Liger Kernel, FlashAttention, FSDP2, Ring Attention, long-context
 
 ## Making Changes
 
@@ -263,7 +264,7 @@ If adding a new training algorithm (e.g., DPO, GRPO):
 
 1. Create `trainer/your_trainer.py` wrapping the appropriate TRL trainer
 2. Add config fields to `config/schema.py` (Pydantic v2)
-3. Add template to `config/schema.py` (see existing 12 templates)
+3. Add template to `config/schema.py` (see existing 13 templates)
 4. Update `commands/train.py` to route to your trainer
 5. Add 30+ tests in `tests/test_your_trainer.py`
 6. Update `CLAUDE.md`, `README.md`, and `CONTRIBUTING.md`

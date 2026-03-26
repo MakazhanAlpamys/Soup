@@ -109,7 +109,22 @@ soup train
 - `moe_lora: true` targets expert-specific LoRA modules
 - Optional `moe_aux_loss_coeff` for load balancing
 
-### 8. Batch Inference
+### 8. Long-Context Fine-Tuning (128k+)
+
+Extend context windows for long-document understanding:
+
+```bash
+soup init --template longcontext
+soup train
+```
+
+**What it does:**
+- Uses RoPE scaling (dynamic) to extend context to 128k tokens
+- Enables gradient checkpointing and FlashAttention for memory efficiency
+- Supports `linear`, `dynamic`, `yarn`, `longrope` scaling types
+- Optional Liger Kernel for fused ops: `pip install 'soup-cli[liger]'`
+
+### 9. Batch Inference
 
 Run inference on a batch of prompts:
 
@@ -117,7 +132,7 @@ Run inference on a batch of prompts:
 soup infer --model ./output_sft_basic/ --input prompts.jsonl --output results.jsonl
 ```
 
-### 9. Full RLHF Pipeline
+### 10. Full RLHF Pipeline
 
 Complete reinforcement learning from human feedback:
 
