@@ -6,7 +6,7 @@ Soup is a CLI-first LLM fine-tuning tool (v0.14.3). Python 3.9+, MIT license.
 
 ```bash
 pip install -e ".[dev]"          # Install editable + test deps
-pytest tests/ -v --tb=short      # Run all tests (1022 tests)
+pytest tests/ -v --tb=short      # Run all tests (1091 tests)
 ruff check soup_cli/ tests/      # Lint (must pass before commit)
 ruff check --fix soup_cli/ tests/  # Auto-fix lint issues
 ```
@@ -199,7 +199,7 @@ soup version           # Show version (--full for details)
 
 - Repo: https://github.com/MakazhanAlpamys/Soup
 - Branch: `main`
-- CI: GitHub Actions — ruff lint (3.11) + pytest (3.9/3.11/3.12)
+- CI: GitHub Actions — ruff lint (3.11) + pytest (3.9/3.11/3.12) × (ubuntu/windows/macos)
 - PyPI: auto-publish on `git tag v*` via Trusted Publisher (OIDC)
 - Always run `ruff check soup_cli/ tests/` and `pytest tests/ -v` before committing
 
@@ -229,7 +229,7 @@ soup version           # Show version (--full for details)
 15. **Tag**: `git tag v0.X.Y && git push origin v0.X.Y`
 16. **Release**: `gh release create v0.X.Y` with changelog (What's New, Install/Upgrade)
 
-## Tests (47 test files, 1022 tests)
+## Tests (48 test files, 1091 tests)
 
 | File | Covers |
 |------|--------|
@@ -279,3 +279,4 @@ soup version           # Show version (--full for details)
 | test_pretrain.py | Pretrain task, plaintext format, MoE config, templates, routing |
 | test_moe.py | MoE detection, ScatterMoE LoRA targets, MoE info extraction |
 | test_bugfixes.py | v0.10.1-v0.14.3 regression fixes |
+| test_cli_subprocess.py | Subprocess CLI tests: entry point, encoding, paths, platform regressions |

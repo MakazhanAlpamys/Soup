@@ -18,19 +18,29 @@ jobs:
       - run: ruff check soup_cli/ tests/
 
   test:
-    runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
         python-version: ["3.9", "3.11", "3.12"]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - run: pip install -e ".[dev]"
-      - run: pytest tests/ -v --tb=short --junitxml=report.xml
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+      - name: Run unit tests with coverage
+        run: pytest tests/ -v --tb=short --junitxml=report.xml --cov=soup_cli --cov-report=xml:coverage.xml --cov-report=term-missing:skip-covered
+      - name: Upload coverage to Codecov
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11'
+        uses: codecov/codecov-action@v4
+        with:
+          files: coverage.xml
+          fail_ci_if_error: false
       - name: Update test count badge
-        if: matrix.python-version == '3.11' && github.ref == 'refs/heads/main' && github.event_name == 'push'
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11' && github.ref == 'refs/heads/main' && github.event_name == 'push'
         run: |
           TESTS=$(python -c "
           import xml.etree.ElementTree as ET

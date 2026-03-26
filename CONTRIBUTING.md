@@ -98,7 +98,7 @@ soup_cli/
   utils/              - GPU detection, batch size estimation, error handling, MoE, GaLore, QAT, Unsloth, vLLM
   ui/                 - Web UI (FastAPI + HTML/JS SPA)
 
-tests/                - Test suite (47 files, 1022 tests)
+tests/                - Test suite (48 files, 1091 tests)
 examples/             - Real-world config examples and datasets
 ```
 
