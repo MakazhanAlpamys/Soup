@@ -92,13 +92,13 @@ soup_cli/
   commands/           - Command implementations (train, chat, eval, etc.)
   config/             - Config schema (schema.py) and loader (loader.py)
   data/               - Data loading and format conversion
-  trainer/            - Training wrappers (SFT, DPO, GRPO, PPO, KTO, ORPO, SimPO, IPO, Pretrain, Reward Model)
+  trainer/            - Training wrappers (SFT, DPO, GRPO, PPO, KTO, ORPO, SimPO, IPO, Pretrain, Reward Model, Embedding)
   monitoring/         - Callbacks and live dashboard
   experiment/         - SQLite experiment tracking
-  utils/              - GPU, errors, MoE, GaLore, QAT, Unsloth, vLLM, Liger, FlashAttn, FSDP, Ring Attention, long-context
+  utils/              - GPU, errors, MoE, GaLore, QAT, Unsloth, vLLM, SGLang, Liger, FlashAttn, FSDP, Ring Attention, long-context, quality
   ui/                 - Web UI (FastAPI + HTML/JS SPA)
 
-tests/                - Test suite (52 files, 1270 tests)
+tests/                - Test suite (56 files, 1348 tests)
 examples/             - Real-world config examples and datasets
 ```
 

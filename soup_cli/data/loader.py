@@ -6,7 +6,12 @@ from pathlib import Path
 from rich.console import Console
 
 from soup_cli.config.schema import DataConfig
-from soup_cli.data.formats import detect_format, format_to_messages, is_vision_format
+from soup_cli.data.formats import (
+    detect_format,
+    format_to_messages,
+    is_audio_format,
+    is_vision_format,
+)
 
 console = Console()
 
@@ -132,6 +137,11 @@ def load_dataset(data_config: DataConfig) -> dict:
         image_dir = Path(data_config.image_dir) if data_config.image_dir else path.parent
         formatted = _validate_vision_images(formatted, image_dir)
 
+    # Validate audio paths for audio formats
+    if is_audio_format(fmt):
+        audio_dir = Path(data_config.audio_dir) if data_config.audio_dir else path.parent
+        formatted = _validate_audio_files(formatted, audio_dir)
+
     # Split into train/val
     if data_config.val_split > 0:
         split_idx = int(len(formatted) * (1 - data_config.val_split))
@@ -163,6 +173,40 @@ def _validate_vision_images(data: list[dict], image_dir: Path) -> list[dict]:
 
     if missing > 0:
         console.print(f"[yellow]Warning: {missing} rows skipped (missing image path)[/]")
+    return valid
+
+
+def _validate_audio_files(data: list[dict], audio_dir: Path) -> list[dict]:
+    """Validate and resolve audio file paths in audio dataset rows.
+
+    Each row must have an 'audio' key with a filename or path.
+    Resolves relative paths against audio_dir. Rejects path traversal.
+    """
+    valid = []
+    missing = 0
+    traversal = 0
+    resolved_base = audio_dir.resolve()
+    for row in data:
+        if "audio" not in row or not row["audio"]:
+            missing += 1
+            continue
+        audio_path = Path(row["audio"])
+        if not audio_path.is_absolute():
+            audio_path = audio_dir / audio_path
+        # Path traversal protection: resolved path must stay under audio_dir
+        resolved = audio_path.resolve()
+        if not str(resolved).startswith(str(resolved_base)):
+            traversal += 1
+            continue
+        row["audio"] = str(resolved)
+        valid.append(row)
+
+    if missing > 0:
+        console.print(f"[yellow]Warning: {missing} rows skipped (missing audio path)[/]")
+    if traversal > 0:
+        console.print(
+            f"[red]Warning: {traversal} rows skipped (audio path traversal blocked)[/]"
+        )
     return valid
 
 

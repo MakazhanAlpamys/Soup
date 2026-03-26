@@ -139,7 +139,22 @@ soup train
 - Works with pair data (`anchor` + `positive`) or triplets (`+ negative`)
 - Compatible with BGE, E5, GTE, INSTRUCTOR, and any HuggingFace model
 
-### 10. Batch Inference
+### 10. Audio / Speech Model
+
+Fine-tune audio-language models (Qwen2-Audio, Whisper):
+
+```bash
+pip install 'soup-cli[audio]'
+soup init --template audio
+soup train
+```
+
+**What it does:**
+- Trains on audio+text pairs (WAV/MP3 files + conversation)
+- Supported models: Qwen2-Audio, Whisper (via transformers)
+- Uses `modality: audio` with `format: audio` data
+
+### 11. Batch Inference
 
 Run inference on a batch of prompts:
 
@@ -147,7 +162,7 @@ Run inference on a batch of prompts:
 soup infer --model ./output_sft_basic/ --input prompts.jsonl --output results.jsonl
 ```
 
-### 11. Full RLHF Pipeline
+### 12. Full RLHF Pipeline
 
 Complete reinforcement learning from human feedback:
 
@@ -173,6 +188,7 @@ Datasets are included in JSONL format. Soup auto-detects and normalizes:
 - **KTO**: `prompt` + `completion` + `label` fields
 - **LLaVA / ShareGPT4V**: Vision format with `image` + `conversations`
 - **Plaintext**: Raw `.txt` files or JSONL with `text` field (for pre-training)
+- **Audio**: `audio` path + `messages` (for audio/speech models)
 
 ### Example: Inspect a Dataset
 

@@ -313,6 +313,136 @@ def dedup(
     )
 
 
+@app.command(name="filter")
+def filter_data(
+    path: str = typer.Argument(..., help="Path to dataset file"),
+    output: str = typer.Option(
+        None, "--output", "-o",
+        help="Output file path (default: <input>_filtered.jsonl)",
+    ),
+    perplexity: float = typer.Option(
+        None, "--perplexity", "--ppl",
+        help="Max perplexity threshold (rows above this are removed)",
+    ),
+    coherence: float = typer.Option(
+        None, "--coherence",
+        help="Min coherence threshold 0.0-1.0 (rows below this are removed)",
+    ),
+    perplexity_model: str = typer.Option(
+        "gpt2", "--ppl-model",
+        help="Model for perplexity scoring (default: gpt2)",
+    ),
+    field: str = typer.Option(
+        None, "--field", "-f",
+        help="Field to score (default: all text fields concatenated)",
+    ),
+    score_only: bool = typer.Option(
+        False, "--score-only",
+        help="Add scores to data without filtering (writes _scored.jsonl)",
+    ),
+):
+    """Filter dataset by quality: perplexity and/or coherence scoring."""
+    file_path = Path(path)
+    if not file_path.exists():
+        console.print(f"[red]File not found: {file_path}[/]")
+        raise typer.Exit(1)
+
+    if perplexity is None and coherence is None and not score_only:
+        console.print(
+            "[red]Specify at least one filter: --perplexity, --coherence, or --score-only[/]"
+        )
+        raise typer.Exit(1)
+
+    data = load_raw_data(file_path)
+    if not data:
+        console.print("[red]Dataset is empty.[/]")
+        raise typer.Exit(1)
+
+    console.print(f"[dim]Scoring {len(data)} rows...[/]")
+
+    # Extract texts for scoring
+    texts = []
+    for row in data:
+        if field and field in row:
+            texts.append(str(row[field]))
+        else:
+            texts.append(" ".join(str(v) for v in row.values() if v))
+
+    # Compute coherence scores (lightweight, always computed)
+    from soup_cli.utils.quality import compute_coherence_scores
+
+    coherence_scores = compute_coherence_scores(texts)
+
+    # Compute perplexity scores (requires model, only if requested)
+    perplexity_scores = None
+    if perplexity is not None or score_only:
+        try:
+            from soup_cli.utils.quality import compute_perplexity_scores
+
+            console.print(f"[dim]Computing perplexity with {perplexity_model}...[/]")
+            perplexity_scores = compute_perplexity_scores(
+                texts, model_name=perplexity_model,
+            )
+        except ImportError:
+            console.print(
+                "[yellow]torch/transformers not available for perplexity scoring. "
+                "Skipping perplexity.[/]"
+            )
+
+    if score_only:
+        # Add scores to each row and write output
+        scored_data = []
+        for idx, row in enumerate(data):
+            scored_row = dict(row)
+            scored_row["_coherence_score"] = coherence_scores[idx]
+            if perplexity_scores is not None:
+                scored_row["_perplexity_score"] = round(perplexity_scores[idx], 2)
+            scored_data.append(scored_row)
+
+        if output is None:
+            output = str(file_path.stem) + "_scored.jsonl"
+        out_path = Path(output)
+        _write_jsonl(out_path, scored_data)
+        console.print(
+            f"[green]Scored {len(scored_data)} rows.[/]\n"
+            f"Output: [bold]{out_path}[/]"
+        )
+        return
+
+    # Filter
+    kept = []
+    removed = []
+    for idx, row in enumerate(data):
+        remove = False
+        if perplexity is not None and perplexity_scores is not None:
+            if perplexity_scores[idx] > perplexity:
+                remove = True
+        if coherence is not None and coherence_scores[idx] < coherence:
+            remove = True
+
+        if remove:
+            removed.append(row)
+        else:
+            kept.append(row)
+
+    if output is None:
+        output = str(file_path.stem) + "_filtered.jsonl"
+    out_path = Path(output)
+    _write_jsonl(out_path, kept)
+
+    console.print(
+        f"[green]Filter complete:[/] {len(data)} -> {len(kept)} rows "
+        f"([red]-{len(removed)}[/] removed)\n"
+        f"Output: [bold]{out_path}[/]"
+    )
+    if perplexity is not None and perplexity_scores is not None:
+        avg_ppl = sum(perplexity_scores) / len(perplexity_scores)
+        console.print(f"Avg perplexity: [bold]{avg_ppl:.1f}[/] (threshold: {perplexity})")
+    if coherence is not None:
+        avg_coh = sum(coherence_scores) / len(coherence_scores)
+        console.print(f"Avg coherence:  [bold]{avg_coh:.3f}[/] (threshold: {coherence})")
+
+
 @app.command()
 def stats(
     path: str = typer.Argument(..., help="Path to dataset file"),

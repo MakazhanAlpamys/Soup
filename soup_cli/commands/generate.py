@@ -42,7 +42,7 @@ def generate(
     provider: str = typer.Option(
         "openai",
         "--provider",
-        help="LLM provider: openai, local",
+        help="LLM provider: openai, local, server (local OpenAI-compatible server)",
     ),
     model_name: str = typer.Option(
         "gpt-4o-mini",
@@ -89,7 +89,7 @@ def generate(
         console.print(f"[red]Invalid format: {fmt}. Must be one of: {', '.join(valid_formats)}[/]")
         raise typer.Exit(1)
 
-    valid_providers = ("openai", "local")
+    valid_providers = ("openai", "local", "server")
     if provider not in valid_providers:
         console.print(
             f"[red]Invalid provider: {provider}. Must be one of: {', '.join(valid_providers)}[/]"
@@ -215,6 +215,16 @@ def _generate_batch(
             count=count,
             fmt=fmt,
             model_name=model_name,
+            temperature=temperature,
+            seed_examples=seed_examples,
+        )
+    elif provider == "server":
+        return _generate_server(
+            prompt=prompt,
+            count=count,
+            fmt=fmt,
+            model_name=model_name,
+            api_base=api_base,
             temperature=temperature,
             seed_examples=seed_examples,
         )
@@ -373,6 +383,78 @@ def _generate_local(
 
     new_tokens = outputs[0][input_ids.shape[1]:]
     content = tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
+
+    return _parse_json_array(content)
+
+
+def _generate_server(
+    prompt: str,
+    count: int,
+    fmt: str,
+    model_name: str,
+    api_base: Optional[str],
+    temperature: float,
+    seed_examples: list[dict],
+) -> list[dict]:
+    """Generate examples using a local OpenAI-compatible server (soup serve, Ollama, etc.).
+
+    Unlike the 'openai' provider, no API key is required. Connects to a running
+    local inference server via its OpenAI-compatible /v1/chat/completions endpoint.
+    """
+    try:
+        import httpx
+    except ImportError:
+        raise ImportError("httpx is required for server generation. Install: pip install httpx")
+
+    base_url = api_base or "http://localhost:8000/v1"
+
+    # Validate api_base to prevent SSRF — only allow http/https, block remote non-HTTPS
+    if api_base:
+        from urllib.parse import urlparse
+
+        parsed = urlparse(api_base)
+        if parsed.scheme not in ("http", "https"):
+            raise ValueError(
+                f"api_base must use HTTP or HTTPS scheme (got {parsed.scheme}://)"
+            )
+        is_local = parsed.hostname in ("localhost", "127.0.0.1", "::1", "0.0.0.0")
+        if not is_local and parsed.scheme != "https":
+            raise ValueError(
+                f"api_base must use HTTPS for remote APIs (got {parsed.scheme}://). "
+                "HTTP is only allowed for localhost."
+            )
+
+    # Strip trailing /v1 if present (we add it to the endpoint path)
+    base_url = base_url.rstrip("/")
+    if not base_url.endswith("/v1"):
+        base_url = base_url + "/v1"
+
+    generation_prompt = _build_generation_prompt(prompt, count, fmt, seed_examples)
+
+    response = httpx.post(
+        f"{base_url}/chat/completions",
+        headers={"Content-Type": "application/json"},
+        json={
+            "model": model_name,
+            "messages": [
+                {"role": "system", "content": generation_prompt},
+                {"role": "user", "content": f"Generate {count} training examples now."},
+            ],
+            "temperature": temperature,
+            "max_tokens": 4096,
+        },
+        timeout=300.0,
+    )
+
+    if response.status_code != 200:
+        logger.debug("Server error response: %s", response.text)
+        raise ValueError(
+            f"Server returned {response.status_code}. "
+            "Check that the server is running and the model name is correct."
+        )
+
+    data = response.json()
+    content = data["choices"][0]["message"]["content"]
 
     return _parse_json_array(content)
 

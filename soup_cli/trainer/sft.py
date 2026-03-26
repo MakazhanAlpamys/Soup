@@ -46,8 +46,12 @@ class SFTTrainerWrapper:
         use_unsloth = cfg.backend == "unsloth"
         use_vision = cfg.modality == "vision"
 
+        use_audio = cfg.modality == "audio"
+
         if use_vision:
             self._setup_vision_transformers(cfg, tcfg)
+        elif use_audio:
+            self._setup_audio_transformers(cfg, tcfg)
         elif use_unsloth:
             self._setup_unsloth(cfg, tcfg)
         else:
@@ -79,6 +83,8 @@ class SFTTrainerWrapper:
         # --- Dataset ---
         if use_vision:
             train_ds, eval_ds = self._prepare_vision_dataset(dataset)
+        elif use_audio:
+            train_ds, eval_ds = self._prepare_audio_dataset(dataset)
         else:
             def format_row(example):
                 if hasattr(self.tokenizer, "chat_template") and self.tokenizer.chat_template:
@@ -411,6 +417,119 @@ class SFTTrainerWrapper:
             eval_ds = Dataset.from_list(dataset["val"]).map(
                 load_and_format_vision,
                 remove_columns=[c for c in remove_cols if c in dataset["val"][0]],
+            )
+        return train_ds, eval_ds
+
+    def _setup_audio_transformers(self, cfg, tcfg):
+        """Load audio-language model via transformers (Qwen2-Audio, Whisper, etc.)."""
+        from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
+        from rich.panel import Panel as RichPanel
+        from transformers import AutoModelForCausalLM, AutoProcessor, BitsAndBytesConfig
+
+        console.print(
+            RichPanel(
+                f"[bold yellow]WARNING:[/] Loading audio model: "
+                f"[bold]{cfg.base}[/]\n"
+                "If this model contains custom code (trust_remote_code), "
+                "it will execute on this machine.\n"
+                "Only use models you trust.",
+                title="Audio Model",
+                border_style="yellow",
+            )
+        )
+        console.print(f"[dim]Loading audio processor: {cfg.base}[/]")
+        self.processor = AutoProcessor.from_pretrained(cfg.base, trust_remote_code=True)
+        self.tokenizer = self.processor  # SFTTrainer uses processing_class
+
+        # Quantization
+        bnb_config = None
+        if tcfg.quantization == "4bit":
+            from soup_cli.utils.gpu import get_compute_dtype
+
+            bnb_config = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_quant_type="nf4",
+                bnb_4bit_compute_dtype=get_compute_dtype(),
+                bnb_4bit_use_double_quant=True,
+            )
+        elif tcfg.quantization == "8bit":
+            bnb_config = BitsAndBytesConfig(load_in_8bit=True)
+
+        console.print(f"[dim]Loading audio model: {cfg.base}[/]")
+        dev_map = "cpu" if self.device == "cpu" else "auto"
+        model_kwargs = {"trust_remote_code": True, "device_map": dev_map}
+        if bnb_config:
+            model_kwargs["quantization_config"] = bnb_config
+
+        self.model = AutoModelForCausalLM.from_pretrained(cfg.base, **model_kwargs)
+
+        if tcfg.quantization in ("4bit", "8bit"):
+            self.model = prepare_model_for_kbit_training(self.model)
+
+        # LoRA — target language model layers only
+        target_modules = tcfg.lora.target_modules
+        if target_modules == "auto":
+            target_modules = None
+
+        lora_config = LoraConfig(
+            r=tcfg.lora.r,
+            lora_alpha=tcfg.lora.alpha,
+            lora_dropout=tcfg.lora.dropout,
+            target_modules=target_modules,
+            bias="none",
+            use_dora=tcfg.lora.use_dora,
+        )
+        self.model = get_peft_model(self.model, lora_config)
+
+    def _prepare_audio_dataset(self, dataset: dict):
+        """Prepare dataset for audio fine-tuning with audio loading."""
+        from datasets import Dataset
+
+        def load_and_format_audio(example):
+            import librosa
+
+            audio_path = example.get("audio", "")
+            audio_array = None
+            sampling_rate = 16000
+            if audio_path:
+                try:
+                    audio_array, sampling_rate = librosa.load(
+                        audio_path, sr=16000, mono=True,
+                    )
+                except (FileNotFoundError, OSError):
+                    console.print(f"[yellow]Warning: cannot open audio: {audio_path}[/]")
+
+            messages = example["messages"]
+            if hasattr(self.processor, "apply_chat_template"):
+                text = self.processor.apply_chat_template(
+                    messages, tokenize=False, add_generation_prompt=False
+                )
+            else:
+                parts = []
+                for msg in messages:
+                    parts.append(f"{msg['role']}: {msg['content']}")
+                text = "\n".join(parts)
+
+            result = {"text": text}
+            if audio_array is not None:
+                result["audio"] = audio_array
+                result["sampling_rate"] = sampling_rate
+            return result
+
+        remove_cols = ["messages", "audio"]
+        train_ds = Dataset.from_list(dataset["train"]).map(
+            load_and_format_audio,
+            remove_columns=[
+                c for c in remove_cols if c in dataset["train"][0]
+            ],
+        )
+        eval_ds = None
+        if "val" in dataset and dataset["val"]:
+            eval_ds = Dataset.from_list(dataset["val"]).map(
+                load_and_format_audio,
+                remove_columns=[
+                    c for c in remove_cols if c in dataset["val"][0]
+                ],
             )
         return train_ds, eval_ds
 

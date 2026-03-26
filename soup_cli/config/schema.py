@@ -24,7 +24,7 @@ class DataConfig(BaseModel):
     train: str = Field(..., description="Path to training data or HF dataset name")
     format: Literal[
         "alpaca", "sharegpt", "chatml", "dpo", "kto", "llava", "sharegpt4v",
-        "plaintext", "embedding", "auto",
+        "plaintext", "embedding", "audio", "auto",
     ] = Field(
         default="auto",
         description="Data format",
@@ -37,6 +37,10 @@ class DataConfig(BaseModel):
     image_dir: Optional[str] = Field(
         default=None,
         description="Base directory for resolving relative image paths in vision datasets",
+    )
+    audio_dir: Optional[str] = Field(
+        default=None,
+        description="Base directory for resolving relative audio paths in audio datasets",
     )
 
 
@@ -195,9 +199,9 @@ class SoupConfig(BaseModel):
     ] = Field(
         default="sft", description="Training task type"
     )
-    modality: Literal["text", "vision"] = Field(
+    modality: Literal["text", "vision", "audio"] = Field(
         default="text",
-        description="Training modality: text (default) or vision (multimodal)",
+        description="Training modality: text (default), vision (multimodal), or audio",
     )
     backend: Literal["transformers", "unsloth"] = Field(
         default="transformers",
@@ -607,6 +611,41 @@ training:
   embedding_pooling: mean
 
 output: ./output_embedding
+""",
+    "audio": """# Soup template: Audio / Speech
+# Fine-tune an audio-language model for speech understanding
+#
+# Supported models: Qwen2-Audio, Whisper (via transformers)
+#
+# Data format (JSONL):
+#   {"audio": "path/to/audio.wav", "messages": [
+#     {"role": "user", "content": "Transcribe."},
+#     {"role": "assistant", "content": "Hello world."}]}
+
+base: Qwen/Qwen2-Audio-7B-Instruct
+task: sft
+modality: audio
+# backend: unsloth  # 2-5x faster, pip install 'soup-cli[fast]'
+
+data:
+  train: ./data/audio_train.jsonl
+  format: audio
+  audio_dir: ./data/audio
+  val_split: 0.1
+  max_length: 2048
+
+training:
+  epochs: 3
+  lr: 1e-5
+  batch_size: auto
+  gradient_accumulation_steps: 8
+  lora:
+    r: 64
+    alpha: 16
+    target_modules: auto
+  quantization: 4bit
+
+output: ./output_audio
 """,
     "rlhf": """# Soup template: Full RLHF Pipeline (SFT + Reward Model + PPO)
 # Three-stage training: 1) SFT warmup, 2) Reward model, 3) PPO alignment

@@ -78,6 +78,7 @@ soup init --template pretrain   # continued pre-training on raw text
 soup init --template moe        # MoE fine-tuning (ScatterMoE LoRA)
 soup init --template longcontext # 128k+ context fine-tuning
 soup init --template embedding  # sentence embedding fine-tuning
+soup init --template audio      # audio/speech model fine-tuning
 ```
 
 ### 3. Train
@@ -266,6 +267,46 @@ training:
 ```
 
 `soup data inspect` automatically shows image statistics (count, formats, missing files) for vision datasets.
+
+## Audio / Speech Fine-tuning
+
+Fine-tune audio-language models (Qwen2-Audio, Whisper) on audio+text data:
+
+```bash
+# Install audio support
+pip install 'soup-cli[audio]'
+
+# Create an audio config
+soup init --template audio
+
+# Train
+soup train --config soup.yaml
+```
+
+```yaml
+base: Qwen/Qwen2-Audio-7B-Instruct
+task: sft
+modality: audio
+
+data:
+  train: ./data/audio_train.jsonl
+  format: audio
+  audio_dir: ./data/audio
+  val_split: 0.1
+
+training:
+  epochs: 3
+  lr: 1e-5
+  quantization: 4bit
+  lora:
+    r: 64
+    alpha: 16
+```
+
+**Audio data format:**
+```json
+{"audio": "recording.wav", "messages": [{"role": "user", "content": "Transcribe this audio."}, {"role": "assistant", "content": "Hello world."}]}
+```
 
 ## Quantization-Aware Training (QAT)
 
@@ -754,6 +795,21 @@ soup serve --model ./output --backend vllm --gpu-memory 0.8
 
 > **Tip:** Soup auto-detects vLLM. When installed, you'll see a hint during `soup serve` if you haven't enabled it yet.
 
+### SGLang Backend (v0.17.0+)
+
+Use [SGLang](https://github.com/sgl-project/sglang) as an alternative high-throughput backend:
+
+```bash
+# Install SGLang support
+pip install 'soup-cli[sglang]'
+
+# Start with SGLang backend
+soup serve --model ./output --backend sglang
+
+# Multi-GPU with tensor parallelism
+soup serve --model ./output --backend sglang --tensor-parallel 2
+```
+
 ### Speculative Decoding (v0.16.0+)
 
 Use a smaller draft model to speed up generation (2-3x faster):
@@ -784,6 +840,9 @@ soup data generate --prompt "..." --count 200 --dedup-with existing.jsonl
 
 # Use seed examples to guide style
 soup data generate --prompt "..." --seed examples.jsonl --count 100
+
+# Use a local OpenAI-compatible server (soup serve, Ollama, etc.)
+soup data generate --prompt "..." --provider server --api-base http://localhost:11434/v1
 ```
 
 ## Hyperparameter Sweep
@@ -995,6 +1054,11 @@ Or use `.txt` files directly (one document per line).
 {"anchor": "What is Python?", "positive": "A programming language.", "negative": "A type of snake."}
 ```
 
+**Audio (speech + conversation):**
+```json
+{"audio": "recording.wav", "messages": [{"role": "user", "content": "Transcribe."}, {"role": "assistant", "content": "Hello world."}]}
+```
+
 ## Data Tools
 
 ```bash
@@ -1016,6 +1080,11 @@ soup data dedup ./data/train.jsonl --threshold 0.8
 
 # Extended statistics (length distribution, token counts, languages)
 soup data stats ./data/train.jsonl
+
+# Filter by quality (perplexity + coherence scoring)
+soup data filter ./data/train.jsonl --coherence 0.3
+soup data filter ./data/train.jsonl --perplexity 500 --coherence 0.3
+soup data filter ./data/train.jsonl --score-only  # add scores without filtering
 ```
 
 ## Experiment Tracking
@@ -1054,7 +1123,7 @@ soup eval --model ./output --benchmarks mmlu --run-id run_20260223_143052_a1b2
 ## All Commands
 
 ```
-soup init [--template chat|code|...|embedding]  Create config
+soup init [--template chat|code|...|audio]       Create config
 soup train --config soup.yaml                 Start training
 soup train --config soup.yaml --tensorboard   Train with TensorBoard logging
 soup train --config soup.yaml --fsdp fsdp_full_shard  Train with FSDP2
@@ -1068,6 +1137,7 @@ soup export --model ./output --format tensorrt Export to TensorRT-LLM
 soup eval --model ./output --benchmarks mmlu  Evaluate on benchmarks
 soup serve --model ./output --port 8000       OpenAI-compatible API server
 soup serve --model ./output --backend vllm    vLLM backend (2-4x throughput)
+soup serve --model ./output --backend sglang  SGLang backend
 soup serve --model ./output --speculative-decoding draft-model  Speculative decoding
 soup sweep --config soup.yaml --param lr=...  Hyperparameter search
 soup diff --model-a ./a --model-b ./b         Compare two models
@@ -1078,6 +1148,8 @@ soup data merge data1.jsonl data2.jsonl       Combine datasets
 soup data dedup <path> --threshold 0.8        Remove duplicates (MinHash)
 soup data stats <path>                        Extended statistics
 soup data generate --prompt "..." --count 100 Generate synthetic data
+soup data generate ... --provider server      Use local inference server
+soup data filter <path> --coherence 0.3       Quality filter (perplexity/coherence)
 soup runs                                     List training runs
 soup runs show <run_id>                       Run details + loss graph
 soup runs compare <run_1> <run_2>             Compare two runs

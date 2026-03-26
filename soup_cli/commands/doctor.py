@@ -34,6 +34,8 @@ DEPS = [
     ("unsloth", "unsloth", "2024.8", False),
     ("PIL", "Pillow", "9.0.0", False),
     ("torchao", "torchao", "0.4.0", False),
+    ("sglang", "sglang", "0.2.0", False),
+    ("librosa", "librosa", "0.10.0", False),
 ]
 
 

@@ -4,14 +4,14 @@
 
 We provide security updates for the following versions:
 
-- **Latest minor version:** Active support (e.g., v0.16.x)
+- **Latest minor version:** Active support (e.g., v0.17.x)
 - **Previous minor versions:** Bug-fix support only
 - **Versions older than 3 minor versions:** No support
 
 Example:
-- v0.16.0-0.16.x → Full support (latest)
-- v0.15.0-0.15.x → Bug-fix support only
-- v0.14.x and below → No support
+- v0.17.0-0.17.x → Full support (latest)
+- v0.16.0-0.16.x → Bug-fix support only
+- v0.15.x and below → No support
 
 ## Reporting a Vulnerability
 
@@ -119,6 +119,7 @@ No known critical vulnerabilities in current releases.
 - **v0.14.3**: Data validate auto-detects format, Web UI `--show-token` flag + auth token documented
 - **v0.15.0**: `rope_scaling_type` Literal constraint, `max_length` bounds (ge=64, le=1048576), FSDP config key allowlist, Liger Kernel exception handling narrowed
 - **v0.16.0**: `embedding_loss` Literal constraint, `embedding_margin` gt=0 validation, ONNX export without trust_remote_code (with warning), TensorRT export subprocess list args (no shell injection), speculative decoding SSRF-protected (URL blocked) with warning panel, vLLM speculative model URL validation
+- **v0.17.0**: Server data generation provider SSRF validation (scheme whitelist + localhost-only HTTP), audio model trust_remote_code warning panel, audio file path traversal protection (resolved paths confined to audio_dir), SGLang backend trust_remote_code warning panel
 
 ## Security Scanning
 

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "soup-cli"
-version = "0.16.0"
+version = "0.17.0"
 description = "Fine-tune LLMs in one command. No SSH, no config hell."
 readme = "README.md"
 license = "MIT"
@@ -54,6 +54,8 @@ liger = ["liger-kernel>=0.3.0"]
 ring-attn = ["ring-flash-attn>=0.1.0"]
 onnx = ["optimum[onnxruntime]>=1.16.0"]
 tensorrt = ["tensorrt_llm>=0.9.0"]
+audio = ["librosa>=0.10.0", "soundfile>=0.12.0"]
+sglang = ["sglang>=0.2.0", "fastapi>=0.104.0", "uvicorn>=0.24.0"]
 
 [project.scripts]
 soup = "soup_cli.cli:run"

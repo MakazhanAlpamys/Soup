@@ -1,12 +1,12 @@
 # Soup CLI — Project CLAUDE.md
 
-Soup is a CLI-first LLM fine-tuning tool (v0.16.0). Python 3.9+, MIT license.
+Soup is a CLI-first LLM fine-tuning tool (v0.17.0). Python 3.9+, MIT license.
 
 ## Build & Development
 
 ```bash
 pip install -e ".[dev]"          # Install editable + test deps
-pytest tests/ -v --tb=short      # Run all tests (1270 tests)
+pytest tests/ -v --tb=short      # Run all tests (1348 tests)
 ruff check soup_cli/ tests/      # Lint (must pass before commit)
 ruff check --fix soup_cli/ tests/  # Auto-fix lint issues
 ```
@@ -37,6 +37,9 @@ soup_cli/
     reward_model.py    # RewardModelTrainerWrapper (272 lines, RLHF stage 2)
     embedding.py       # EmbeddingTrainerWrapper (contrastive/triplet/cosine loss)
     rewards.py         # Built-in reward fns (accuracy, format) + custom .py loader
+  commands/
+    ...
+    data.py            # soup data (inspect/validate/convert/merge/dedup/stats/filter)
   monitoring/
     callback.py        # HF TrainerCallback -> Rich display + SQLite tracker
     display.py         # Rich Live terminal dashboard (2Hz refresh)
@@ -77,8 +80,10 @@ soup_cli/
     fsdp.py            # FSDP2 config templates (full_shard, shard_grad, offload)
     ring_attention.py   # Ring FlashAttention for sequence parallelism
     long_context.py    # RoPE scaling for 128k+ context fine-tuning
+    quality.py         # Perplexity + coherence scoring for data quality filters
+    sglang.py          # SGLang runtime backend (high-throughput serving)
     constants.py       # APP_NAME, paths, default chat template
-tests/                 # 47 test files, 1014 tests
+tests/                 # 56 test files, 1348 tests
 examples/
   configs/             # 7 production-ready YAML examples
   data/                # Sample datasets
@@ -91,7 +96,7 @@ soup init              # Create config (interactive or --template)
 soup train             # Main training (--config, --resume, --wandb, --tensorboard, --deepspeed, --fsdp, --yes)
 soup infer             # Batch inference (--model, --input, --output)
 soup chat              # Terminal chat with model
-soup serve             # OpenAI-compatible inference server (--backend transformers|vllm, --speculative-decoding)
+soup serve             # OpenAI-compatible inference server (--backend transformers|vllm|sglang, --speculative-decoding)
 soup export            # Convert to GGUF/ONNX/TensorRT for deployment
 soup merge             # Merge LoRA adapter with base model
 soup push              # Upload to HuggingFace Hub
@@ -102,7 +107,8 @@ soup data convert      # Transform between alpaca/sharegpt/chatml
 soup data merge        # Combine multiple datasets
 soup data dedup        # MinHash deduplication
 soup data stats        # Extended statistics with histograms
-soup data generate     # Synthetic data via LLM APIs
+soup data generate     # Synthetic data via LLM APIs (--provider openai|local|server)
+soup data filter       # Quality filter (perplexity + coherence scoring)
 soup runs              # List experiment runs
 soup runs show <id>    # Detailed run info + metrics
 soup runs compare      # Side-by-side loss curves
@@ -119,12 +125,12 @@ soup version           # Show version (--full for details)
 
 `config/schema.py` is the single source of truth. Pydantic v2 models:
 
-- **SoupConfig**: base (required), task (sft/dpo/kto/orpo/simpo/ipo/grpo/ppo/reward_model/pretrain/embedding), modality (text/vision), backend (transformers/unsloth), data, training, output
-- **DataConfig**: train, format (alpaca/sharegpt/chatml/dpo/kto/llava/sharegpt4v/plaintext/embedding/auto), val_split, max_length, image_dir
+- **SoupConfig**: base (required), task (sft/dpo/kto/orpo/simpo/ipo/grpo/ppo/reward_model/pretrain/embedding), modality (text/vision/audio), backend (transformers/unsloth), data, training, output
+- **DataConfig**: train, format (alpaca/sharegpt/chatml/dpo/kto/llava/sharegpt4v/plaintext/embedding/audio/auto), val_split, max_length, image_dir, audio_dir
 - **TrainingConfig**: epochs, lr, batch_size (int or "auto"), quantization (4bit/8bit/none), quantization_aware, optimizer, scheduler, dpo_beta, kto_beta, orpo_beta, simpo_gamma, cpo_alpha, ipo_tau, grpo_beta, num_generations, reward_fn, ppo_epochs, ppo_clip_ratio, ppo_kl_penalty, reward_model, loraplus_lr_ratio, use_galore, galore_rank, galore_update_proj_gap, galore_scale, moe_lora, moe_aux_loss_coeff, use_liger, use_flash_attn, use_ring_attention, rope_scaling_type, gradient_checkpointing, embedding_loss, embedding_margin, embedding_pooling, embedding_temperature
 - **LoraConfig**: r, alpha, dropout, target_modules, use_dora
 
-14 built-in templates: chat, code, medical, reasoning, vision, kto, orpo, simpo, ipo, embedding, rlhf, pretrain, moe, longcontext.
+15 built-in templates: chat, code, medical, reasoning, vision, audio, kto, orpo, simpo, ipo, embedding, rlhf, pretrain, moe, longcontext.
 
 ## Training Tasks
 
@@ -150,7 +156,7 @@ soup version           # Show version (--full for details)
 - **Format auto-detection**: `detect_format()` checks first row keys
 - **Rich output**: All UX via `rich.console.Console`, never bare `print()`
 - **Callback bridge**: `SoupTrainerCallback` connects HF Trainer events to Rich display + SQLite
-- **Backend abstraction**: `--backend` flag for training (transformers/unsloth) and serving (transformers/vllm)
+- **Backend abstraction**: `--backend` flag for training (transformers/unsloth) and serving (transformers/vllm/sglang)
 - **Error mapping**: Pattern-based friendly errors with fix suggestions in `utils/errors.py`
 
 ## Security (v0.10.10+)
@@ -182,6 +188,10 @@ soup version           # Show version (--full for details)
 - **Embedding config**: embedding_loss Literal constraint, embedding_margin gt=0 (v0.16.0)
 - **Speculative decoding**: draft model SSRF-protected (URL blocked), warning panel before load (v0.16.0)
 - **vLLM speculative**: speculative_model URL validation, rejects http:// schemes (v0.16.0)
+- **Server provider**: SSRF validation — scheme whitelist (http/https only), localhost-only HTTP (v0.17.0)
+- **Audio model**: trust_remote_code warning panel before loading audio models (v0.17.0)
+- **Audio paths**: path traversal protection — resolved paths confined to audio_dir (v0.17.0)
+- **SGLang**: trust_remote_code warning panel before runtime creation (v0.17.0)
 
 ## Code Conventions
 
@@ -212,6 +222,8 @@ soup version           # Show version (--full for details)
 - `[ring-attn]`: ring-flash-attn (sequence parallelism)
 - `[onnx]`: optimum + onnxruntime (ONNX export)
 - `[tensorrt]`: tensorrt_llm (TensorRT-LLM export)
+- `[audio]`: librosa + soundfile
+- `[sglang]`: sglang + FastAPI + uvicorn
 - `[ui]`: FastAPI + uvicorn + static SPA
 - `[dev]`: pytest, ruff, pytest-cov, httpx
 
@@ -249,7 +261,7 @@ soup version           # Show version (--full for details)
 15. **Tag**: `git tag v0.X.Y && git push origin v0.X.Y`
 16. **Release**: `gh release create v0.X.Y` with changelog (What's New, Install/Upgrade)
 
-## Tests (52 test files, 1270 tests)
+## Tests (56 test files, 1348 tests)
 
 | File | Covers |
 |------|--------|
@@ -304,3 +316,7 @@ soup version           # Show version (--full for details)
 | test_embedding.py | Embedding task config, format, template, routing, sweep, pooling |
 | test_onnx_tensorrt_export.py | ONNX export, TensorRT-LLM export, format support |
 | test_speculative_decoding.py | Speculative decoding CLI, draft model, vLLM integration |
+| test_server_generate.py | Server provider for data generate, SSRF validation |
+| test_quality_filter.py | Perplexity + coherence scoring, `soup data filter` |
+| test_audio.py | Audio modality config, format, template, routing, loader |
+| test_sglang_serve.py | SGLang backend detection, runtime creation, serve --backend |

@@ -17,7 +17,7 @@ def init(
         None,
         "--template",
         "-t",
-        help="Template: chat, code, medical, reasoning, vision, rlhf, "
+        help="Template: chat, code, medical, reasoning, vision, audio, rlhf, "
         "kto, orpo, simpo, ipo, pretrain, moe, embedding, longcontext",
     ),
     output: str = typer.Option(

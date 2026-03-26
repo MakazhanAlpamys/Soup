@@ -53,7 +53,7 @@ def serve(
     backend: str = typer.Option(
         "transformers",
         "--backend",
-        help="Inference backend: transformers (default) or vllm",
+        help="Inference backend: transformers (default), vllm, or sglang",
     ),
     tensor_parallel: int = typer.Option(
         1,
@@ -92,14 +92,14 @@ def serve(
 
     # Validate backend
     backend = backend.lower()
-    if backend not in ("transformers", "vllm"):
+    if backend not in ("transformers", "vllm", "sglang"):
         console.print(
             f"[red]Unknown backend: {backend}[/]\n"
-            "Supported backends: [bold]transformers[/], [bold]vllm[/]"
+            "Supported backends: [bold]transformers[/], [bold]vllm[/], [bold]sglang[/]"
         )
         raise typer.Exit(1)
 
-    # Auto-detect vLLM: if installed but not selected, show hint
+    # Auto-detect vLLM/SGLang: if installed but not selected, show hint
     if backend == "transformers":
         from soup_cli.utils.vllm import is_vllm_available
 
@@ -108,6 +108,14 @@ def serve(
                 "[dim]Hint: vLLM is installed. Use [bold]--backend vllm[/] "
                 "for 2-4x better throughput.[/]"
             )
+        else:
+            from soup_cli.utils.sglang import is_sglang_available
+
+            if is_sglang_available():
+                console.print(
+                    "[dim]Hint: SGLang is installed. Use [bold]--backend sglang[/] "
+                    "for high-throughput serving.[/]"
+                )
 
     # Validate vLLM availability
     if backend == "vllm":
@@ -117,6 +125,17 @@ def serve(
             console.print(
                 "[red]vLLM not installed.[/]\n"
                 "Install with: [bold]pip install 'soup-cli[serve-fast]'[/]"
+            )
+            raise typer.Exit(1)
+
+    # Validate SGLang availability
+    if backend == "sglang":
+        from soup_cli.utils.sglang import is_sglang_available
+
+        if not is_sglang_available():
+            console.print(
+                "[red]SGLang not installed.[/]\n"
+                "Install with: [bold]pip install 'soup-cli[sglang]'[/]"
             )
             raise typer.Exit(1)
 
@@ -147,7 +166,8 @@ def serve(
     elif not device:
         device = "cuda"
 
-    backend_label = "vLLM" if backend == "vllm" else "transformers"
+    backend_labels = {"vllm": "vLLM", "sglang": "SGLang", "transformers": "transformers"}
+    backend_label = backend_labels.get(backend, backend)
     console.print(
         Panel(
             f"Model:   [bold]{model_path}[/]\n"
@@ -175,6 +195,15 @@ def serve(
             gpu_memory_utilization=gpu_memory_utilization,
             speculative_model=speculative_model,
             num_speculative_tokens=num_speculative_tokens,
+        )
+    elif backend == "sglang":
+        app = _serve_sglang(
+            model_path=model_path,
+            base_model=base_model,
+            is_adapter=is_adapter,
+            max_tokens_default=max_tokens_default,
+            tensor_parallel=tensor_parallel,
+            gpu_memory_utilization=gpu_memory_utilization,
         )
     else:
         # Transformers backend (original)
@@ -278,6 +307,48 @@ def _serve_vllm(
         engine_model_name=engine_model_name,
         model_name=str(model_path.name),
         adapter_path=adapter_path,
+        max_tokens_default=max_tokens_default,
+    )
+
+    return app
+
+
+def _serve_sglang(
+    model_path: Path,
+    base_model: Optional[str],
+    is_adapter: bool,
+    max_tokens_default: int,
+    tensor_parallel: int,
+    gpu_memory_utilization: float,
+):
+    """Set up SGLang runtime and create FastAPI app."""
+    from soup_cli.utils.sglang import create_sglang_app, create_sglang_runtime
+
+    console.print(
+        Panel(
+            f"[bold yellow]WARNING:[/] Loading model via SGLang: "
+            f"[bold]{model_path}[/]\n"
+            "SGLang loads models with trust_remote_code enabled.\n"
+            "If this model contains custom code, it will execute "
+            "on this machine.\nOnly use models you trust.",
+            title="SGLang Runtime",
+            border_style="yellow",
+        )
+    )
+    console.print("[dim]Initializing SGLang runtime...[/]")
+    runtime, runtime_model_name = create_sglang_runtime(
+        model_path=str(model_path),
+        base_model=base_model,
+        is_adapter=is_adapter,
+        tensor_parallel_size=tensor_parallel,
+        mem_fraction_static=gpu_memory_utilization,
+    )
+    console.print("[bold green]SGLang runtime ready![/]")
+
+    app = create_sglang_app(
+        runtime=runtime,
+        runtime_model_name=runtime_model_name,
+        model_name=str(model_path.name),
         max_tokens_default=max_tokens_default,
     )
 

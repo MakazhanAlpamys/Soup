@@ -86,7 +86,7 @@ class TestVisionConfig:
         with pytest.raises(Exception):
             SoupConfig(
                 base="some-model",
-                modality="audio",
+                modality="video",
                 data={"train": "./data.jsonl"},
             )
 

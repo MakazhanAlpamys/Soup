@@ -10,6 +10,7 @@ Supported formats:
 - sharegpt4v: {"image": ..., "conversations": [{"from": "human", "value": ...}, ...]}
 - plaintext: {"text": "..."} — raw text for continued pre-training
 - embedding: {"anchor": ..., "positive": ..., "negative": ...} — sentence embedding pairs/triplets
+- audio: {"audio": ..., "messages": [...]} — audio + conversation for speech models
 """
 
 from typing import Optional
@@ -28,6 +29,7 @@ FORMAT_SIGNATURES = {
     "llava": {"image", "conversations"},
     "sharegpt4v": {"image", "conversations"},
     "embedding": {"anchor", "positive"},
+    "audio": {"audio", "messages"},
     "plaintext": {"text"},
 }
 
@@ -44,7 +46,7 @@ def detect_format(data: list[dict]) -> str:
     # plaintext ("text" key only) checked last to avoid false matches
     check_order = [
         "alpaca", "llava", "sharegpt4v", "kto", "dpo", "embedding",
-        "sharegpt", "chatml", "plaintext",
+        "audio", "sharegpt", "chatml", "plaintext",
     ]
     for fmt in check_order:
         required_keys = FORMAT_SIGNATURES[fmt]
@@ -59,6 +61,7 @@ def detect_format(data: list[dict]) -> str:
         f"kto (prompt, completion, label), "
         f"llava/sharegpt4v (image, conversations), "
         f"embedding (anchor, positive), "
+        f"audio (audio, messages), "
         f"plaintext (text)"
     )
 
@@ -74,7 +77,7 @@ def format_to_messages(row: dict, fmt: str) -> Optional[dict]:
     """
     valid_formats = (
         "chatml", "alpaca", "sharegpt", "dpo", "kto", "llava", "sharegpt4v",
-        "plaintext", "embedding",
+        "plaintext", "embedding", "audio",
     )
     if fmt not in valid_formats:
         raise ValueError(f"Unknown format: {fmt}")
@@ -93,6 +96,8 @@ def format_to_messages(row: dict, fmt: str) -> Optional[dict]:
             return _convert_plaintext(row)
         elif fmt == "embedding":
             return _convert_embedding(row)
+        elif fmt == "audio":
+            return _convert_audio(row)
         else:
             return _convert_vision(row)
     except (KeyError, TypeError, IndexError, ValueError):
@@ -196,6 +201,21 @@ def _convert_embedding(row: dict) -> dict:
     return result
 
 
+def _convert_audio(row: dict) -> dict:
+    """Convert audio format to unified messages + audio path.
+
+    Input: {"audio": "path.wav", "messages": [{"role": "user", "content": ...}, ...]}
+    Output: {"messages": [...], "audio": "path.wav"}
+    """
+    audio = row["audio"]
+    if not isinstance(audio, str) or not audio.strip():
+        raise ValueError("Audio row must have a non-empty 'audio' field")
+    messages = row["messages"]
+    if not isinstance(messages, list) or len(messages) < 1:
+        raise ValueError("Audio row must have a 'messages' list with at least one message")
+    return {"messages": messages, "audio": audio}
+
+
 def _convert_vision(row: dict) -> dict:
     """Convert LLaVA / ShareGPT4V vision format to unified messages + image.
 
@@ -220,6 +240,11 @@ def _convert_vision(row: dict) -> dict:
 def is_vision_format(fmt: str) -> bool:
     """Check if a format is a vision/multimodal format."""
     return fmt in ("llava", "sharegpt4v")
+
+
+def is_audio_format(fmt: str) -> bool:
+    """Check if a format is an audio/speech format."""
+    return fmt == "audio"
 
 
 # --- Reverse conversion: messages → target format ---
