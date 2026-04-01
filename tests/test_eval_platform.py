@@ -1,6 +1,7 @@
 """Tests for the eval platform: custom eval, judge, human eval, leaderboard, compare."""
 
 import json
+import re
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -52,6 +53,11 @@ from soup_cli.eval.leaderboard import (
 )
 
 runner = CliRunner()
+
+
+def _strip_ansi(text: str) -> str:
+    """Remove ANSI escape codes from Rich-formatted output."""
+    return re.sub(r'\x1b\[[0-9;]*m', '', text)
 
 
 # ═══════════════════════════════════════════════════════════
@@ -1002,7 +1008,8 @@ class TestEvalCLI:
     def test_eval_human_help(self):
         result = runner.invoke(app, ["eval", "human", "--help"])
         assert result.exit_code == 0
-        assert "model-a" in result.output.lower()
+        clean = _strip_ansi(result.output).lower()
+        assert "model-a" in clean
 
     def test_eval_auto_help(self):
         result = runner.invoke(app, ["eval", "auto", "--help"])
