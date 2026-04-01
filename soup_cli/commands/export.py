@@ -605,7 +605,11 @@ def _auto_deploy_ollama(
         f"named '{ollama_name}'."
     )
 
-    modelfile = create_modelfile(gguf_path=output_path, template="chatml")
+    # Auto-detect template from soup.yaml, fall back to chatml
+    from soup_cli.commands.deploy import _auto_detect_template
+
+    resolved_template = _auto_detect_template() or "chatml"
+    modelfile = create_modelfile(gguf_path=output_path, template=resolved_template)
     success, message = deploy_to_ollama(ollama_name, modelfile)
     if not success:
         console.print(f"[red]Deploy failed:[/] {message}")
