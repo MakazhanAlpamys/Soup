@@ -1,6 +1,6 @@
 # Soup CLI — Project CLAUDE.md
 
-Soup is a CLI-first LLM fine-tuning tool (v0.20.0). Python 3.9+, MIT license.
+Soup is a CLI-first LLM fine-tuning tool (v0.20.1). Python 3.9+, MIT license.
 
 ## Build & Development
 
@@ -16,7 +16,7 @@ ruff check --fix soup_cli/ tests/  # Auto-fix lint issues
 ```
 soup_cli/
   cli.py              # Entry point, Typer app, all command registration
-  __init__.py          # __version__ = "0.20.0"
+  __init__.py          # __version__ = "0.20.1"
   config/
     schema.py          # Pydantic models (SoupConfig, DataConfig, TrainingConfig, LoraConfig, EvalConfig)
     loader.py          # YAML -> SoupConfig, load_config_from_string()
