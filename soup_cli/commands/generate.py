@@ -2,6 +2,7 @@
 
 import json
 import logging
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -247,6 +248,7 @@ def generate(
 
     all_examples = []
     duplicates = 0
+    min_interval = 60.0 / max(1, requests_per_minute)
 
     with Progress(
         SpinnerColumn(),
@@ -258,8 +260,14 @@ def generate(
         task = progress.add_task("Generating...", total=count)
 
         remaining = count
+        last_request_time = 0.0
         while remaining > 0:
             current_batch = min(batch_size, remaining)
+
+            # Rate limiting
+            elapsed = time.monotonic() - last_request_time
+            if last_request_time > 0 and elapsed < min_interval:
+                time.sleep(min_interval - elapsed)
 
             try:
                 batch = _generate_batch(
@@ -284,6 +292,8 @@ def generate(
             except Exception as exc:
                 console.print(f"[red]Generation error: {exc}[/]")
                 raise typer.Exit(1)
+
+            last_request_time = time.monotonic()
 
             # Validate and dedup
             for example in batch:
@@ -425,7 +435,7 @@ def _run_dedup_pipeline(path: Path) -> None:
             try:
                 lsh.insert(str(idx), mhash)
             except ValueError:
-                pass
+                logger.debug("LSH insert collision at idx %d", idx)
 
         seen: set[int] = set()
         unique_indices = []
@@ -730,7 +740,15 @@ def _generate_local(
 ) -> list[dict]:
     """Generate examples using a local model via transformers."""
     import torch
+    from rich.panel import Panel
     from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    console.print(Panel(
+        f"[yellow]Loading model with trust_remote_code=True: {model_name}[/]\n"
+        "This executes code from the model repository.",
+        title="Security Warning",
+        style="yellow",
+    ))
 
     tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
     if tokenizer.pad_token is None:
