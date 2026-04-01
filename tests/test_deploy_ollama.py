@@ -594,7 +594,7 @@ def test_deploy_unknown_parameter_key(mock_detect, tmp_path, monkeypatch):
 
 @patch(f"{_OLLAMA}.deploy_to_ollama", return_value=(True, "created"))
 @patch(f"{_OLLAMA}.detect_ollama", return_value="0.6.2")
-def test_deploy_full_success(mock_detect, mock_deploy, tmp_path, monkeypatch):
+def test_deploy_full_success(mock_detect_fn, mock_deploy_fn, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     gguf = tmp_path / "model.gguf"
     gguf.write_bytes(b"fake gguf data")
@@ -617,7 +617,7 @@ def test_deploy_full_success(mock_detect, mock_deploy, tmp_path, monkeypatch):
 
 @patch(f"{_OLLAMA}.deploy_to_ollama", return_value=(False, "disk full"))
 @patch(f"{_OLLAMA}.detect_ollama", return_value="0.6.2")
-def test_deploy_create_fails(mock_detect, mock_deploy, tmp_path, monkeypatch):
+def test_deploy_create_fails(mock_detect_fn, mock_deploy_fn, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     gguf = tmp_path / "model.gguf"
     gguf.write_bytes(b"fake gguf data")
@@ -710,17 +710,17 @@ def test_export_deploy_ollama_not_found(mock_detect):
 
 @patch(f"{_OLLAMA}.deploy_to_ollama", return_value=(True, "ok"))
 @patch(f"{_OLLAMA}.detect_ollama", return_value="0.6.2")
-def test_export_deploy_ollama_success(mock_detect, mock_deploy):
+def test_export_deploy_ollama_success(mock_detect_fn, mock_deploy_fn):
     """_auto_deploy_ollama succeeds with valid inputs."""
     from soup_cli.commands.export import _auto_deploy_ollama
 
-    # Should not raise
     _auto_deploy_ollama(Path("model.gguf"), "mymodel", "ollama", "soup-mymodel")
+    mock_deploy_fn.assert_called_once()
 
 
 @patch(f"{_OLLAMA}.deploy_to_ollama", return_value=(False, "fail"))
 @patch(f"{_OLLAMA}.detect_ollama", return_value="0.6.2")
-def test_export_deploy_ollama_create_fails(mock_detect, mock_deploy):
+def test_export_deploy_ollama_create_fails(mock_detect_fn, mock_deploy_fn):
     """_auto_deploy_ollama exits on deploy failure."""
     from soup_cli.commands.export import _auto_deploy_ollama
 
