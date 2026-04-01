@@ -6,7 +6,7 @@ Soup is a CLI-first LLM fine-tuning tool (v0.20.0). Python 3.9+, MIT license.
 
 ```bash
 pip install -e ".[dev]"          # Install editable + test deps
-pytest tests/ -v --tb=short      # Run all tests (1669 tests)
+pytest tests/ -v --tb=short      # Run all tests (1673 tests)
 ruff check soup_cli/ tests/      # Lint (must pass before commit)
 ruff check --fix soup_cli/ tests/  # Auto-fix lint issues
 ```
@@ -236,7 +236,8 @@ soup version           # Show version (--full for details)
 - **Ollama provider**: localhost-only validation — remote Ollama instances blocked (v0.20.0)
 - **Anthropic provider**: API key from env only (ANTHROPIC_API_KEY), never CLI arg (v0.20.0)
 - **vLLM provider**: SSRF protection — scheme whitelist, localhost-only HTTP (v0.20.0)
-- **Output path**: path traversal protection — `..` blocked in output filenames (v0.20.0)
+- **Output path**: path traversal protection — resolve + relative_to(cwd) on output (v0.20.0)
+- **Input paths**: seed, dedup, context files confined to cwd via resolve + relative_to (v0.20.0)
 - **Rate limiting**: configurable `--requests-per-minute` (default: 60) (v0.20.0)
 
 ## Code Conventions
@@ -307,7 +308,7 @@ soup version           # Show version (--full for details)
 15. **Tag**: `git tag v0.X.Y && git push origin v0.X.Y`
 16. **Release**: `gh release create v0.X.Y` with changelog (What's New, Install/Upgrade)
 
-## Tests (59 test files, 1669 tests)
+## Tests (59 test files, 1673 tests)
 
 | File | Covers |
 |------|--------|
