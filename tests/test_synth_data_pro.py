@@ -461,6 +461,121 @@ class TestVLLMSSRF:
             )
 
 
+# ─── Additional Provider Tests (TDD review gaps) ───────────────────────
+
+
+class TestAnthropicHardcodedURL:
+    """Test that Anthropic URL is hardcoded and not user-configurable."""
+
+    def test_api_url_is_anthropic(self):
+        """The API URL must always be anthropic.com."""
+        from soup_cli.data.providers.anthropic import ANTHROPIC_API_URL
+
+        assert "anthropic.com" in ANTHROPIC_API_URL
+        assert ANTHROPIC_API_URL.startswith("https://")
+
+    def test_no_api_base_parameter(self):
+        """generate_anthropic should not accept an api_base parameter."""
+        import inspect
+
+        from soup_cli.data.providers.anthropic import generate_anthropic
+
+        sig = inspect.signature(generate_anthropic)
+        assert "api_base" not in sig.parameters
+        assert "base_url" not in sig.parameters
+
+
+class TestProviderMalformedResponse:
+    """Test providers handle malformed LLM responses gracefully."""
+
+    def test_anthropic_malformed_content(self):
+        """Anthropic with unexpected response structure should raise."""
+        from soup_cli.data.providers.anthropic import generate_anthropic
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"unexpected": "format"}
+
+        with mock_patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-test"}):
+            with mock_patch("httpx.post", return_value=mock_response):
+                with pytest.raises(ValueError, match="Unexpected"):
+                    generate_anthropic(
+                        prompt="test", count=1, fmt="alpaca",
+                        model_name="claude-3-haiku-20240307",
+                        temperature=0.8,
+                        generation_prompt="test",
+                    )
+
+    def test_vllm_malformed_content(self):
+        """vLLM with unexpected response structure should raise."""
+        from soup_cli.data.providers.vllm import generate_vllm
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"unexpected": "format"}
+
+        with mock_patch("httpx.post", return_value=mock_response):
+            with pytest.raises(ValueError, match="Unexpected"):
+                generate_vllm(
+                    prompt="test", count=1, fmt="alpaca",
+                    model_name="m",
+                    base_url="http://localhost:8000",
+                    temperature=0.8,
+                    generation_prompt="test",
+                )
+
+    def test_ollama_malformed_content(self):
+        """Ollama with unexpected response structure should raise."""
+        from soup_cli.data.providers.ollama import generate_ollama
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"unexpected": "format"}
+
+        with mock_patch("httpx.post", return_value=mock_response):
+            with pytest.raises(ValueError, match="Unexpected"):
+                generate_ollama(
+                    prompt="test", count=1, fmt="alpaca",
+                    model_name="m",
+                    base_url="http://localhost:11434",
+                    temperature=0.8,
+                    generation_prompt="test",
+                )
+
+
+class TestParseJsonArrayShared:
+    """Test the shared parse_json_array utility."""
+
+    def test_parse_valid_array(self):
+        """Should parse a clean JSON array."""
+        from soup_cli.data.providers._utils import parse_json_array
+
+        result = parse_json_array('[{"a": 1}, {"b": 2}]')
+        assert len(result) == 2
+
+    def test_parse_empty(self):
+        """Should return empty for empty input."""
+        from soup_cli.data.providers._utils import parse_json_array
+
+        assert parse_json_array("") == []
+
+    def test_parse_markdown_fences(self):
+        """Should strip markdown code fences."""
+        from soup_cli.data.providers._utils import parse_json_array
+
+        content = '```json\n[{"a": 1}]\n```'
+        result = parse_json_array(content)
+        assert len(result) == 1
+
+    def test_parse_ndjson_fallback(self):
+        """Should fall back to line-by-line JSON."""
+        from soup_cli.data.providers._utils import parse_json_array
+
+        content = '{"a": 1}\n{"b": 2}'
+        result = parse_json_array(content)
+        assert len(result) == 2
+
+
 # ─── Batch Routing Tests ────────────────────────────────────────────────
 
 
