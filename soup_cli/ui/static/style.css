@@ -1,17 +1,17 @@
-/* Soup Web UI — Tech theme inspired by the Soup logo */
+/* Soup Web UI — Warm theme inspired by the Soup terracotta logo */
 :root {
-  --bg: #0c0e14;
-  --bg-card: #14171f;
-  --bg-input: #1c2030;
-  --border: #2a3050;
-  --text: #e8eaf0;
-  --text-dim: #8890a8;
-  --accent: #8b6cc7;
-  --accent-hover: #7a5ab8;
-  --accent-cyan: #5ce0d8;
+  --bg: #111014;
+  --bg-card: #1a1720;
+  --bg-input: #231f2a;
+  --border: #3a3040;
+  --text: #f0ece8;
+  --text-dim: #a09088;
+  --accent: #c0512d;
+  --accent-hover: #a8442a;
+  --accent-warm: #e8975a;
   --danger: #e84040;
   --warning: #f2b233;
-  --info: #8b6cc7;
+  --info: #c0512d;
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -72,7 +72,7 @@ body {
 }
 
 .nav-item:hover { background: var(--bg-input); color: var(--text); }
-.nav-item.active { color: var(--accent-cyan); background: rgba(92, 224, 216, 0.08); border-right: 3px solid var(--accent-cyan); }
+.nav-item.active { color: var(--accent-warm); background: rgba(92, 224, 216, 0.08); border-right: 3px solid var(--accent-warm); }
 
 .sidebar-footer {
   padding: 1rem 1.5rem;
@@ -123,7 +123,7 @@ body {
 }
 
 .stat-card { text-align: center; }
-.stat-value { font-size: 2rem; font-weight: 700; color: var(--accent-cyan); }
+.stat-value { font-size: 2rem; font-weight: 700; color: var(--accent-warm); }
 .stat-label { font-size: 0.85rem; color: var(--text-dim); margin-top: 0.25rem; }
 
 /* Tables */
@@ -185,7 +185,7 @@ tr:hover td { background: rgba(139, 108, 199, 0.06); }
   font-weight: 600;
 }
 
-.badge-success { background: rgba(92, 224, 216, 0.15); color: var(--accent-cyan); }
+.badge-success { background: rgba(92, 224, 216, 0.15); color: var(--accent-warm); }
 .badge-danger { background: rgba(232, 64, 64, 0.2); color: var(--danger); }
 .badge-warning { background: rgba(242, 178, 51, 0.2); color: var(--warning); }
 .badge-info { background: rgba(139, 108, 199, 0.15); color: var(--info); }
@@ -263,7 +263,7 @@ textarea {
   color: var(--text-dim);
 }
 
-.chat-msg.user .chat-msg-role { color: var(--accent-cyan); }
+.chat-msg.user .chat-msg-role { color: var(--accent-warm); }
 .chat-msg.assistant .chat-msg-role { color: var(--accent); }
 
 .chat-msg-content {
