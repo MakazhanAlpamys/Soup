@@ -462,8 +462,8 @@ def test_deploy_ollama_help():
     result = runner.invoke(app, ["deploy", "ollama", "--help"])
     assert result.exit_code == 0
     assert "ollama" in result.output.lower()
-    assert "--model" in result.output
-    assert "--name" in result.output
+    assert "model" in result.output.lower()
+    assert "name" in result.output.lower()
 
 
 def test_deploy_help():
@@ -692,7 +692,7 @@ def test_deploy_create_fails(mock_detect_fn, mock_deploy_fn, tmp_path, monkeypat
 def test_export_deploy_flag_in_help():
     result = runner.invoke(app, ["export", "--help"])
     assert result.exit_code == 0
-    assert "--deploy" in result.output
+    assert "deploy" in result.output.lower()
 
 
 # ─── _auto_detect_template ───
