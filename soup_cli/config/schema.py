@@ -18,6 +18,10 @@ class LoraConfig(BaseModel):
         default=False,
         description="Enable DoRA (Weight-Decomposed Low-Rank Adaptation)",
     )
+    use_rslora: bool = Field(
+        default=False,
+        description="Enable rank-stabilized LoRA scaling (better for high ranks)",
+    )
 
 
 class DataConfig(BaseModel):
@@ -186,6 +190,13 @@ class TrainingConfig(BaseModel):
     embedding_temperature: float = Field(
         default=0.05, gt=0,
         description="Temperature for contrastive (InfoNCE) loss — lower = stricter similarity",
+    )
+    # NEFTune — noisy embeddings for better fine-tuning
+    neftune_alpha: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        le=50.0,
+        description="NEFTune noise alpha (0-50). Adds noise to embeddings for better chat quality.",
     )
 
 

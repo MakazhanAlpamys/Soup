@@ -127,6 +127,8 @@ class KTOTrainerWrapper:
             beta=tcfg.kto_beta,
             max_length=cfg.data.max_length,
             max_prompt_length=cfg.data.max_length // 2,
+            **({"neftune_noise_alpha": tcfg.neftune_alpha}
+               if tcfg.neftune_alpha is not None else {}),
         )
 
         # --- Trainer ---
@@ -187,6 +189,7 @@ class KTOTrainerWrapper:
             task_type=TaskType.CAUSAL_LM,
             bias="none",
             use_dora=tcfg.lora.use_dora,
+            use_rslora=tcfg.lora.use_rslora,
         )
         self.model = get_peft_model(self.model, lora_config)
 

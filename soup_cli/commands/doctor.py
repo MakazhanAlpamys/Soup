@@ -195,7 +195,8 @@ def _check_torchvision_compat(issues: list):
             )
             console.print(f"  [yellow]Warning:[/] {msg}")
             issues.append(msg)
-    except ImportError:
+    except (ImportError, AttributeError):
+        # AttributeError: torchvision circular import on some platforms
         pass
 
 

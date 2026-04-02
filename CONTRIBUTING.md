@@ -96,10 +96,12 @@ soup_cli/
   monitoring/         - Callbacks and live dashboard
   experiment/         - SQLite experiment tracking
   eval/               - Eval platform (custom tasks, LLM judge, human eval, leaderboard)
+  migrate/            - Config migration (LLaMA-Factory, Axolotl, Unsloth)
+  recipes/            - Ready-made configs for popular models (30 recipes)
   utils/              - GPU, errors, MoE, GaLore, QAT, Unsloth, vLLM, SGLang, Liger, FlashAttn, FSDP, Ring Attention, long-context, quality
   ui/                 - Web UI (FastAPI + HTML/JS SPA)
 
-tests/                - Test suite (58 files, 1585 tests)
+tests/                - Test suite (62 files, 1789 tests)
 examples/             - Real-world config examples and datasets
 ```
 

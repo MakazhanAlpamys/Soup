@@ -1,12 +1,12 @@
 # Soup CLI — Project CLAUDE.md
 
-Soup is a CLI-first LLM fine-tuning tool (v0.20.2). Python 3.9+, MIT license.
+Soup is a CLI-first LLM fine-tuning tool (v0.21.0). Python 3.9+, MIT license.
 
 ## Build & Development
 
 ```bash
 pip install -e ".[dev]"          # Install editable + test deps
-pytest tests/ -v --tb=short      # Run all tests (1673 tests)
+pytest tests/ -v --tb=short      # Run all tests (1789 tests)
 ruff check soup_cli/ tests/      # Lint (must pass before commit)
 ruff check --fix soup_cli/ tests/  # Auto-fix lint issues
 ```
@@ -60,6 +60,13 @@ soup_cli/
     leaderboard.py     # Leaderboard aggregation, run comparison, export
   experiment/
     tracker.py         # SQLite at ~/.soup/experiments.db (runs, metrics, eval_results)
+  migrate/
+    common.py          # Shared utilities (path validation, YAML output, to_number)
+    llamafactory.py    # LLaMA-Factory YAML → SoupConfig migration
+    axolotl.py         # Axolotl YAML → SoupConfig migration
+    unsloth.py         # Unsloth .ipynb → SoupConfig migration (AST-only, no exec)
+  recipes/
+    catalog.py         # 30 ready-made RecipeMeta configs for popular models
   commands/
     train.py           # soup train (routes to SFT/DPO/GRPO/PPO/Reward/KTO/ORPO/SimPO/IPO)
     deploy.py          # soup deploy ollama (deploy GGUF to Ollama)
@@ -72,6 +79,8 @@ soup_cli/
     eval.py            # soup eval (benchmark, custom, judge, compare, leaderboard, human, auto)
     data.py            # soup data (inspect/validate/convert/merge/dedup/stats)
     generate.py        # soup data generate (synthetic data via LLM APIs)
+    migrate.py         # soup migrate (import configs from competitors)
+    recipes.py         # soup recipes (list/show/use/search ready-made configs)
     infer.py           # soup infer (batch inference on JSONL prompts)
     runs.py            # soup runs (list/show/compare/delete experiments)
     sweep.py           # soup sweep (grid/random hyperparameter search)
@@ -135,6 +144,11 @@ soup data merge        # Combine multiple datasets
 soup data dedup        # MinHash deduplication
 soup data stats        # Extended statistics with histograms
 soup data generate     # Synthetic data via LLM APIs (--provider openai|local|server|ollama|anthropic|vllm)
+soup migrate           # Import config from LLaMA-Factory/Axolotl/Unsloth (--from, --dry-run)
+soup recipes list      # List all ready-made recipes (30 configs)
+soup recipes show      # Print recipe YAML to stdout
+soup recipes use       # Copy recipe to soup.yaml
+soup recipes search    # Search recipes by keyword, task, or model size
 soup data filter       # Quality filter (perplexity + coherence scoring)
 soup runs              # List experiment runs
 soup runs show <id>    # Detailed run info + metrics
@@ -155,10 +169,11 @@ soup version           # Show version (--full for details)
 - **SoupConfig**: base (required), task (sft/dpo/kto/orpo/simpo/ipo/grpo/ppo/reward_model/pretrain/embedding), modality (text/vision/audio), backend (transformers/unsloth), data, training, output, eval
 - **EvalConfig**: auto_eval, benchmarks, custom_tasks, judge
 - **DataConfig**: train, format (alpaca/sharegpt/chatml/dpo/kto/llava/sharegpt4v/plaintext/embedding/audio/auto), val_split, max_length, image_dir, audio_dir
-- **TrainingConfig**: epochs, lr, batch_size (int or "auto"), quantization (4bit/8bit/none), quantization_aware, optimizer, scheduler, dpo_beta, kto_beta, orpo_beta, simpo_gamma, cpo_alpha, ipo_tau, grpo_beta, num_generations, reward_fn, ppo_epochs, ppo_clip_ratio, ppo_kl_penalty, reward_model, loraplus_lr_ratio, use_galore, galore_rank, galore_update_proj_gap, galore_scale, moe_lora, moe_aux_loss_coeff, use_liger, use_flash_attn, use_ring_attention, rope_scaling_type, gradient_checkpointing, embedding_loss, embedding_margin, embedding_pooling, embedding_temperature
-- **LoraConfig**: r, alpha, dropout, target_modules, use_dora
+- **TrainingConfig**: epochs, lr, batch_size (int or "auto"), quantization (4bit/8bit/none), quantization_aware, optimizer, scheduler, dpo_beta, kto_beta, orpo_beta, simpo_gamma, cpo_alpha, ipo_tau, grpo_beta, num_generations, reward_fn, ppo_epochs, ppo_clip_ratio, ppo_kl_penalty, reward_model, loraplus_lr_ratio, use_galore, galore_rank, galore_update_proj_gap, galore_scale, moe_lora, moe_aux_loss_coeff, use_liger, use_flash_attn, use_ring_attention, rope_scaling_type, gradient_checkpointing, embedding_loss, embedding_margin, embedding_pooling, embedding_temperature, neftune_alpha
+- **LoraConfig**: r, alpha, dropout, target_modules, use_dora, use_rslora
 
 15 built-in templates: chat, code, medical, reasoning, vision, audio, kto, orpo, simpo, ipo, embedding, rlhf, pretrain, moe, longcontext.
+30 ready-made recipes via `soup recipes` (Llama 3.1/3.2, Qwen 2.5/3, Mistral, Gemma 3, Phi-4, DeepSeek R1).
 
 ## Training Tasks
 
@@ -239,6 +254,11 @@ soup version           # Show version (--full for details)
 - **Output path**: path traversal protection — resolve + relative_to(cwd) on output (v0.20.0)
 - **Input paths**: seed, dedup, context files confined to cwd via resolve + relative_to (v0.20.0)
 - **Rate limiting**: configurable `--requests-per-minute` (default: 60) (v0.20.0)
+- **Migrate input**: resolve + relative_to(cwd) — path traversal protection (v0.21.0)
+- **Migrate output**: resolve + relative_to(cwd) — path traversal protection (v0.21.0)
+- **Unsloth .ipynb**: AST-only parsing (no exec/eval of notebook code) (v0.21.0)
+- **Recipes output**: resolve + relative_to(cwd) — path traversal protection (v0.21.0)
+- **NEFTune config**: neftune_alpha bounded ge=0.0, le=50.0 (v0.21.0)
 
 ## Code Conventions
 
@@ -286,6 +306,8 @@ soup version           # Show version (--full for details)
 
 **Required for every phase. Do not skip steps. Every phase = full cycle from code to PyPI.**
 
+**If the phase has multiple parts (A, B, C…):** implement part by part. Write tests FIRST (TDD), then implement to pass them. Run `ruff check soup_cli/ tests/` + `pytest tests/ -v --tb=short` after each part to catch issues early. Only proceed to the Release Checklist below after ALL parts pass lint + tests.
+
 1. **Code**: implement the feature following project conventions
 2. **Tests**: write tests, add the test file to the test table below
 3. **Lint**: `ruff check soup_cli/ tests/` — must be clean
@@ -308,7 +330,7 @@ soup version           # Show version (--full for details)
 15. **Tag**: `git tag v0.X.Y && git push origin v0.X.Y`
 16. **Release**: `gh release create v0.X.Y` with changelog (What's New, Install/Upgrade)
 
-## Tests (59 test files, 1673 tests)
+## Tests (62 test files, 1789 tests)
 
 | File | Covers |
 |------|--------|
@@ -370,3 +392,6 @@ soup version           # Show version (--full for details)
 | test_deploy_ollama.py | Ollama deploy, Modelfile gen, template mapping, security validation |
 | test_eval_platform.py | Custom eval, judge, human eval (Elo), leaderboard, compare, auto-eval, security |
 | test_synth_data_pro.py | Providers (Ollama, Anthropic, vLLM), templates, quality pipeline, SSRF |
+| test_migrate.py | LLaMA-Factory/Axolotl/Unsloth migration, path traversal, round-trip validation |
+| test_recipes.py | Recipe catalog, search, CLI (list/show/use), path traversal |
+| test_neftune_rslora.py | NEFTune config/validation/sweep, rsLoRA config/validation/sweep |

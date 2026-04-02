@@ -309,6 +309,8 @@ def _set_nested_param(config_dict: dict, key: str, value) -> dict:
         "embedding_margin": "training.embedding_margin",
         "embedding_pooling": "training.embedding_pooling",
         "embedding_temperature": "training.embedding_temperature",
+        "neftune_alpha": "training.neftune_alpha",
+        "use_rslora": "training.lora.use_rslora",
         "backend": "backend",
     }
 

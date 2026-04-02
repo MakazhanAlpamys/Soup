@@ -196,6 +196,7 @@ class RewardModelTrainerWrapper:
             task_type=TaskType.SEQ_CLS,
             bias="none",
             use_dora=tcfg.lora.use_dora,
+            use_rslora=tcfg.lora.use_rslora,
         )
         self.model = get_peft_model(self.model, lora_config)
 

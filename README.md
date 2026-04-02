@@ -583,6 +583,31 @@ training:
     alpha: 16
 ```
 
+## rsLoRA (Rank-Stabilized Scaling)
+
+Use rank-stabilized LoRA scaling for better performance at high ranks:
+
+```yaml
+training:
+  lora:
+    r: 64
+    alpha: 16
+    use_rslora: true  # Enable rank-stabilized scaling
+```
+
+Works with all training tasks and backends. Recommended for LoRA rank ≥ 32.
+
+## NEFTune (Noisy Embeddings Fine-Tuning)
+
+Add noise to embeddings during training for better chat model quality:
+
+```yaml
+training:
+  neftune_alpha: 5.0  # Noise intensity (0-50, typically 5-15)
+```
+
+Works with SFT, DPO, KTO, ORPO, SimPO, and IPO tasks.
+
 ## GaLore (Memory-Efficient Full-Parameter Training)
 
 Train without LoRA using gradient low-rank projection — saves optimizer memory:
@@ -924,6 +949,48 @@ soup data generate --prompt "..." --dedup
 # Full quality pipeline: validate + filter + dedup
 soup data generate --prompt "..." --quality-pipeline
 ```
+
+## Config Migration
+
+Switch from other tools with one command:
+
+```bash
+# Import from LLaMA-Factory
+soup migrate --from llamafactory llama3_lora_sft.yaml
+
+# Import from Axolotl
+soup migrate --from axolotl axolotl_config.yml
+
+# Import from Unsloth notebook
+soup migrate --from unsloth finetune.ipynb
+
+# Preview without writing
+soup migrate --from llamafactory config.yaml --dry-run
+```
+
+Automatically maps model, LoRA, training params, quantization, and task type. Warns about unsupported features.
+
+## Ready-Made Recipes
+
+30 pre-built configs for popular models — no guessing hyperparameters:
+
+```bash
+# List all recipes
+soup recipes list
+
+# Preview a recipe
+soup recipes show llama3.1-8b-sft
+
+# Use a recipe (writes soup.yaml)
+soup recipes use llama3.1-8b-sft
+
+# Search by task or keyword
+soup recipes search --task grpo
+soup recipes search "reasoning"
+soup recipes search --size 7b
+```
+
+Recipes cover Llama 3.1/3.2, Qwen 2.5/3, Mistral, Gemma 3, Phi-4, DeepSeek R1 across SFT, DPO, GRPO, KTO, ORPO, SimPO, IPO, PPO, embedding, pretrain, and vision tasks.
 
 ## Hyperparameter Sweep
 
@@ -1282,6 +1349,14 @@ soup data generate ... --provider vllm        Use local vLLM server
 soup data generate ... --template code        Domain templates (code/conversation/qa/preference/reasoning)
 soup data generate ... --quality-pipeline     Auto validate + filter + dedup
 soup data filter <path> --coherence 0.3       Quality filter (perplexity/coherence)
+soup migrate --from llamafactory config.yaml  Import config from LLaMA-Factory
+soup migrate --from axolotl config.yml        Import config from Axolotl
+soup migrate --from unsloth notebook.ipynb    Import config from Unsloth notebook
+soup migrate --from llamafactory c.yaml --dry-run  Preview without writing
+soup recipes list                             List all 30 ready-made recipes
+soup recipes show llama3.1-8b-sft            Print recipe YAML
+soup recipes use llama3.1-8b-sft             Copy recipe to soup.yaml
+soup recipes search "reasoning"              Search by keyword/task/size
 soup runs                                     List training runs
 soup runs show <run_id>                       Run details + loss graph
 soup runs compare <run_1> <run_2>             Compare two runs

@@ -69,12 +69,13 @@ class EvalResults:
             }
 
 
-def load_eval_tasks(path: Path) -> list[EvalTask]:
+def load_eval_tasks(path: "Path | str") -> list[EvalTask]:
     """Load eval tasks from a JSONL file with schema validation.
 
     Each line must be a JSON object with at least a 'prompt' field.
     Optional: 'expected', 'category', 'scoring'.
     """
+    path = Path(path)
     if not path.exists():
         raise FileNotFoundError(f"Eval tasks file not found: {path}")
 

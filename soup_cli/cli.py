@@ -17,7 +17,9 @@ from soup_cli.commands import (
     infer,
     init,
     merge,
+    migrate,
     push,
+    recipes,
     runs,
     serve,
     sweep,
@@ -62,6 +64,11 @@ app.add_typer(runs.app, name="runs", help="Experiment tracking: list, show, comp
 app.add_typer(
     eval.app, name="eval",
     help="Evaluate models: benchmarks, custom evals, LLM judge, leaderboard.",
+)
+app.command()(migrate.migrate)
+app.add_typer(
+    recipes.app, name="recipes",
+    help="Ready-made configs: list, show, use, search recipes for popular models.",
 )
 app.command()(serve.serve)
 app.command()(sweep.sweep)
