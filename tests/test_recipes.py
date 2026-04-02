@@ -121,9 +121,9 @@ class TestRecipesCLI:
         assert "llama3.1-8b-sft" in result.output
 
     def test_list_default(self):
-        """soup recipes (no subcommand) shows help."""
+        """soup recipes (no subcommand) shows help (exit 0 or 2 depending on Typer version)."""
         result = runner.invoke(app, ["recipes"])
-        assert result.exit_code == 0
+        assert result.exit_code in (0, 2)
 
     def test_show_recipe(self):
         """soup recipes show <name> prints YAML."""
