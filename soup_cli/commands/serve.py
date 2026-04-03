@@ -24,7 +24,7 @@ def _validate_adapter_name(name: str) -> bool:
     return bool(re.match(r'^[a-zA-Z0-9][a-zA-Z0-9\-]*$', name))
 
 
-def _validate_adapter_path(path: str, cwd: str | None = None) -> bool:
+def _validate_adapter_path(path: str, cwd: Optional[str] = None) -> bool:
     """Validate adapter path: must exist and stay under cwd."""
     if cwd is None:
         cwd = str(Path.cwd())
