@@ -84,3 +84,26 @@ def test_help_shows_all_commands():
     assert "init" in result.output
     assert "export" in result.output
     assert "merge" in result.output
+
+
+def test_version_json():
+    import json
+    import platform
+    result = runner.invoke(app, ["version", "--json"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["version"] == __version__
+    assert data["python"] == platform.python_version()
+    assert data["platform"] == platform.system().lower()
+
+
+def test_version_full_json():
+    import json
+    import platform
+    result = runner.invoke(app, ["version", "--full", "--json"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["version"] == __version__
+    assert data["python"] == platform.python_version()
+    assert "platform" in data
+

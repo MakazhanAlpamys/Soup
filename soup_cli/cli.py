@@ -92,14 +92,46 @@ data.app.command(name="generate")(generate.generate)
 @app.command()
 def version(
     full: bool = typer.Option(False, "--full", "-f", help="Show system info and extras"),
+    is_json: bool = typer.Option(False, "--json", help="Output in JSON format"),
 ):
     """Show Soup CLI version."""
+    import json
+    import platform
+
+    if is_json:
+        info = {
+            "version": __version__,
+            "python": platform.python_version(),
+            "platform": platform.system().lower(),
+        }
+        
+        if full:
+            for lib in ["torch", "transformers", "peft", "trl", "datasets", "accelerate"]:
+                try:
+                    mod = __import__(lib)
+                    if hasattr(mod, "__version__"):
+                        info[lib] = mod.__version__
+                except ImportError:
+                    pass
+            for name in ["fastapi", "vllm", "datasketch", "lm_eval", "deepspeed", "wandb"]:
+                try:
+                    mod = __import__(name)
+                    if hasattr(mod, "__version__"):
+                        info[name] = mod.__version__
+                    elif hasattr(mod, "version"):
+                        info[name] = mod.version
+                    else:
+                        info[name] = "installed"
+                except ImportError:
+                    pass
+                    
+        print(json.dumps(info))
+        return
+
     if not full:
         console.print(f"[bold green]soup[/] v{__version__}")
         console.print(f"[dim]{GITHUB_URL}[/]")
         return
-
-    import platform
 
     parts = [f"[bold green]soup[/] v{__version__}"]
     parts.append(f"Python {platform.python_version()}")
