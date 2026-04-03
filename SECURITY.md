@@ -9,9 +9,9 @@ We provide security updates for the following versions:
 - **Versions older than 3 minor versions:** No support
 
 Example:
-- v0.23.0-0.23.x → Full support (latest)
-- v0.22.0-0.22.x → Bug-fix support only
-- v0.21.x and below → No support
+- v0.24.0-0.24.x → Full support (latest)
+- v0.23.0-0.23.x → Bug-fix support only
+- v0.22.x and below → No support
 
 ## Reporting a Vulnerability
 

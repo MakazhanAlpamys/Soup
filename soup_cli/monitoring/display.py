@@ -47,9 +47,10 @@ class TrainingDisplay:
             self._live.update(self._render())
 
     def stop(self):
-        """Stop the live display."""
+        """Stop the live display. Safe to call multiple times."""
         if self._live:
             self._live.stop()
+            self._live = None
 
     def _render(self) -> Panel:
         """Render the dashboard panel."""

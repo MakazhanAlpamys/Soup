@@ -204,6 +204,36 @@ class TrainingConfig(BaseModel):
         default=4, ge=1, le=20,
         description="Number of difficulty stages for curriculum learning",
     )
+    # Loss watchdog — auto-stop on loss spikes
+    loss_watchdog: bool = Field(
+        default=False,
+        description="Enable loss spike detection (auto-stop if loss exceeds threshold)",
+    )
+    loss_watchdog_threshold: float = Field(
+        default=3.0,
+        gt=0,
+        le=100.0,
+        description="Stop training if loss exceeds this threshold",
+    )
+    loss_watchdog_patience: int = Field(
+        default=5,
+        ge=1,
+        le=1000,
+        description="Consecutive high-loss steps before stopping",
+    )
+    # Freeze training — freeze bottom layers for parameter-efficient training
+    freeze_layers: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=1000,
+        description="Freeze first N layers (from bottom). Train only remaining layers.",
+    )
+    freeze_ratio: Optional[float] = Field(
+        default=None,
+        gt=0.0,
+        lt=1.0,
+        description="Freeze this fraction of layers (0.75 = freeze 75% from bottom).",
+    )
     # Sample packing — pack multiple short samples into one sequence
     packing: bool = Field(
         default=False,

@@ -1,12 +1,12 @@
 # Soup CLI — Project CLAUDE.md
 
-Soup is a CLI-first LLM fine-tuning tool (v0.23.1). Python 3.9+, MIT license.
+Soup is a CLI-first LLM fine-tuning tool (v0.24.0). Python 3.9+, MIT license.
 
 ## Build & Development
 
 ```bash
 pip install -e ".[dev]"          # Install editable + test deps
-pytest tests/ -v --tb=short      # Run all tests (1979 tests)
+pytest tests/ -v --tb=short      # Run all tests (2061 tests)
 ruff check soup_cli/ tests/      # Lint (must pass before commit)
 ruff check --fix soup_cli/ tests/  # Auto-fix lint issues
 ```
@@ -49,7 +49,7 @@ soup_cli/
     rewards.py         # Built-in reward fns (accuracy, format) + custom .py loader
   commands/
     ...
-    data.py            # soup data (inspect/validate/convert/merge/dedup/stats/filter/split)
+    data.py            # soup data (inspect/validate/convert/merge/dedup/stats/filter/split/search/preview/download/register)
   monitoring/
     callback.py        # HF TrainerCallback -> Rich display + SQLite tracker
     display.py         # Rich Live terminal dashboard (2Hz refresh)
@@ -112,8 +112,10 @@ soup_cli/
     ollama.py          # Ollama integration (detect, deploy, list, remove, Modelfile gen)
     profiler.py        # Training memory/speed estimator (GPU lookup, model arch)
     curriculum.py      # Curriculum learning: sort by difficulty, create buckets
+    freeze.py          # Freeze training: freeze bottom N layers
+    registry.py        # Dataset registry: name → path + format mapping
     constants.py       # APP_NAME, paths, default chat template
-tests/                 # 70 test files, 1979 tests
+tests/                 # 74 test files, 2061 tests
 examples/
   configs/             # 7 production-ready YAML examples
   data/                # Sample datasets
@@ -156,6 +158,12 @@ soup recipes search    # Search recipes by keyword, task, or model size
 soup data filter       # Quality filter (perplexity + coherence scoring)
 soup data sample       # Sample subset: random, diverse (TF-IDF + clusters), hard (by length)
 soup data split        # Split dataset into train/val/test files (random or stratified)
+soup data search       # Search HuggingFace Hub for datasets
+soup data preview      # Preview remote HF dataset metadata, splits, features
+soup data download     # Download HF dataset to local JSONL (streaming)
+soup data register     # Register local dataset by name for use in soup.yaml
+soup data unregister   # Remove dataset from local registry
+soup data registry     # List all registered datasets
 soup profile           # Estimate memory, speed, GPU requirements before training
 soup adapters list     # Scan directory for LoRA adapters
 soup adapters info     # Show adapter metadata (base model, rank, size)
@@ -179,7 +187,7 @@ soup version           # Show version (--full for details)
 - **SoupConfig**: base (required), task (sft/dpo/kto/orpo/simpo/ipo/grpo/ppo/reward_model/pretrain/embedding), modality (text/vision/audio), backend (transformers/unsloth), data, training, output, eval
 - **EvalConfig**: auto_eval, benchmarks, custom_tasks, judge
 - **DataConfig**: train, format (alpaca/sharegpt/chatml/dpo/kto/llava/sharegpt4v/plaintext/embedding/audio/auto), val_split, max_length, image_dir, audio_dir
-- **TrainingConfig**: epochs, lr, batch_size (int or "auto"), quantization (4bit/8bit/none), quantization_aware, optimizer, scheduler, dpo_beta, kto_beta, orpo_beta, simpo_gamma, cpo_alpha, ipo_tau, grpo_beta, num_generations, reward_fn, ppo_epochs, ppo_clip_ratio, ppo_kl_penalty, reward_model, loraplus_lr_ratio, use_galore, galore_rank, galore_update_proj_gap, galore_scale, moe_lora, moe_aux_loss_coeff, use_liger, use_flash_attn, use_ring_attention, rope_scaling_type, gradient_checkpointing, embedding_loss, embedding_margin, embedding_pooling, embedding_temperature, neftune_alpha, packing, curriculum, curriculum_metric, curriculum_buckets
+- **TrainingConfig**: epochs, lr, batch_size (int or "auto"), quantization (4bit/8bit/none), quantization_aware, optimizer, scheduler, dpo_beta, kto_beta, orpo_beta, simpo_gamma, cpo_alpha, ipo_tau, grpo_beta, num_generations, reward_fn, ppo_epochs, ppo_clip_ratio, ppo_kl_penalty, reward_model, loraplus_lr_ratio, use_galore, galore_rank, galore_update_proj_gap, galore_scale, moe_lora, moe_aux_loss_coeff, use_liger, use_flash_attn, use_ring_attention, rope_scaling_type, gradient_checkpointing, embedding_loss, embedding_margin, embedding_pooling, embedding_temperature, neftune_alpha, packing, curriculum, curriculum_metric, curriculum_buckets, loss_watchdog, loss_watchdog_threshold, loss_watchdog_patience, freeze_layers, freeze_ratio
 - **LoraConfig**: r, alpha, dropout, target_modules, use_dora, use_rslora
 
 15 built-in templates: chat, code, medical, reasoning, vision, audio, kto, orpo, simpo, ipo, embedding, rlhf, pretrain, moe, longcontext.
@@ -277,6 +285,15 @@ soup version           # Show version (--full for details)
 - **Curriculum config**: curriculum_buckets bounded ge=1, le=20 (v0.23.0)
 - **AWQ/GPTQ export**: trust_remote_code warning panel before model loading (v0.23.0)
 - **Data split**: output files written to input's parent dir (consistent with sample_data) (v0.23.0)
+- **HF download**: trust_remote_code=False + warning panel before download (v0.24.0)
+- **HF download**: default output path sanitized via Path.name (v0.24.0)
+- **HF download**: --samples capped at 1,000,000 (v0.24.0)
+- **Dataset registry**: name validation — no path separators or null bytes (v0.24.0)
+- **Dataset registry**: register path traversal protection — resolve + relative_to(cwd) (v0.24.0)
+- **Dataset registry**: Rich markup escaped in table output (v0.24.0)
+- **Dataset registry**: JSON validation on load — catches corruption + type mismatch (v0.24.0)
+- **Loss watchdog**: threshold bounded le=100.0, patience bounded le=1000 (v0.24.0)
+- **Freeze training**: freeze_layers bounded le=1000 (v0.24.0)
 
 ## Code Conventions
 
@@ -350,7 +367,7 @@ soup version           # Show version (--full for details)
 15. **Tag**: `git tag v0.X.Y && git push origin v0.X.Y`
 16. **Release**: `gh release create v0.X.Y` with changelog (What's New, Install/Upgrade)
 
-## Tests (70 test files, 1979 tests)
+## Tests (74 test files, 2061 tests)
 
 | File | Covers |
 |------|--------|
@@ -423,3 +440,7 @@ soup version           # Show version (--full for details)
 | test_packing.py | Sample packing: config, YAML, trainer integration, sweep |
 | test_data_split.py | Data split: ratio/absolute/stratified splits, seed, edge cases |
 | test_curriculum.py | Curriculum learning: config, length sort, buckets, sweep |
+| test_dataset_hub.py | HF dataset search, preview, download, format conversion, security |
+| test_freeze_training.py | Freeze training: config, layer freezing, GPT-2 naming, sweep |
+| test_loss_watchdog.py | Loss watchdog: config, callback behavior, patience, sweep |
+| test_dataset_registry.py | Dataset registry: CRUD, CLI, name validation, error handling |

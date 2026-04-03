@@ -314,6 +314,19 @@ class SFTTrainerWrapper:
         if tcfg.quantization in ("4bit", "8bit"):
             self.model = prepare_model_for_kbit_training(self.model)
 
+        # Freeze training — freeze bottom layers before LoRA
+        if tcfg.freeze_layers is not None or tcfg.freeze_ratio is not None:
+            from soup_cli.utils.freeze import freeze_model_layers
+
+            frozen = freeze_model_layers(
+                self.model,
+                freeze_layers=tcfg.freeze_layers,
+                freeze_ratio=tcfg.freeze_ratio,
+            )
+            console.print(
+                f"[green]Freeze training:[/] {frozen} parameters frozen"
+            )
+
         # LoRA — with MoE-aware target modules if moe_lora is enabled
         target_modules = tcfg.lora.target_modules
         if target_modules == "auto":
@@ -600,7 +613,12 @@ class SFTTrainerWrapper:
             from soup_cli.monitoring.callback import SoupTrainerCallback
 
             self.trainer.add_callback(
-                SoupTrainerCallback(display, tracker=tracker, run_id=run_id)
+                SoupTrainerCallback(
+                    display, tracker=tracker, run_id=run_id,
+                    loss_watchdog=self.config.training.loss_watchdog,
+                    loss_watchdog_threshold=self.config.training.loss_watchdog_threshold,
+                    loss_watchdog_patience=self.config.training.loss_watchdog_patience,
+                )
             )
 
         self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)

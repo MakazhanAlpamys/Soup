@@ -237,7 +237,12 @@ class IPOTrainerWrapper:
             from soup_cli.monitoring.callback import SoupTrainerCallback
 
             self.trainer.add_callback(
-                SoupTrainerCallback(display, tracker=tracker, run_id=run_id)
+                SoupTrainerCallback(
+                    display, tracker=tracker, run_id=run_id,
+                    loss_watchdog=self.config.training.loss_watchdog,
+                    loss_watchdog_threshold=self.config.training.loss_watchdog_threshold,
+                    loss_watchdog_patience=self.config.training.loss_watchdog_patience,
+                )
             )
 
         self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)

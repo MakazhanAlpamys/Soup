@@ -925,3 +925,454 @@ def _stratified_split(
     test_data = [data[idx] for idx in test_indices]
 
     return train_data, val_data, test_data
+
+
+# ---------------------------------------------------------------------------
+# HuggingFace Dataset Hub helpers
+# ---------------------------------------------------------------------------
+
+
+def list_datasets(search: str, sort: str = "downloads", limit: int = 20) -> list:
+    """Search HuggingFace Hub for datasets. Returns list of DatasetInfo objects."""
+    from huggingface_hub import HfApi
+
+    api = HfApi()
+    return list(api.list_datasets(search=search, sort=sort, limit=limit))
+
+
+def _hf_dataset_info(dataset_id: str) -> dict:
+    """Fetch metadata about a HuggingFace dataset."""
+    from huggingface_hub import HfApi
+
+    api = HfApi()
+    try:
+        info = api.dataset_info(dataset_id)
+    except Exception as exc:
+        raise ValueError(f"Dataset not found: {dataset_id} — {exc}") from exc
+
+    # Extract split sizes
+    splits: dict[str, int] = {}
+    if hasattr(info, "card_data") and info.card_data:
+        ds_info = getattr(info.card_data, "dataset_info", None)
+        if ds_info and isinstance(ds_info, dict):
+            for config_data in ds_info.values():
+                if isinstance(config_data, dict) and "splits" in config_data:
+                    for split_name, split_data in config_data["splits"].items():
+                        if isinstance(split_data, dict):
+                            splits[split_name] = split_data.get("num_examples", 0)
+
+    # Extract feature names
+    features: list[str] = []
+    if hasattr(info, "card_data") and info.card_data:
+        ds_info = getattr(info.card_data, "dataset_info", None)
+        if ds_info and isinstance(ds_info, dict):
+            for config_data in ds_info.values():
+                if isinstance(config_data, dict) and "features" in config_data:
+                    feat_list = config_data["features"]
+                    if isinstance(feat_list, list):
+                        for feat in feat_list:
+                            if isinstance(feat, dict) and "name" in feat:
+                                features.append(feat["name"])
+                    break
+
+    return {
+        "id": info.id,
+        "description": getattr(info, "description", "") or "",
+        "downloads": getattr(info, "downloads", 0) or 0,
+        "likes": getattr(info, "likes", 0) or 0,
+        "size_bytes": getattr(info, "size", None),
+        "splits": splits,
+        "features": features,
+        "tags": list(info.tags) if info.tags else [],
+    }
+
+
+def _hf_download_dataset(
+    dataset_id: str,
+    split: str = "train",
+    samples: int | None = None,
+) -> list[dict]:
+    """Download a dataset from HuggingFace Hub and return as list of dicts."""
+    from datasets import load_dataset
+
+    try:
+        ds = load_dataset(
+            dataset_id, split=split, streaming=True, trust_remote_code=False,
+        )
+    except Exception as exc:
+        raise ValueError(f"Failed to load dataset {dataset_id}: {exc}") from exc
+
+    rows: list[dict] = []
+    for idx, row in enumerate(ds):
+        if samples is not None and idx >= samples:
+            break
+        rows.append(dict(row))
+
+    return rows
+
+
+def _format_size_bytes(size_bytes: int | None) -> str:
+    """Format byte count as human-readable string."""
+    if size_bytes is None:
+        return "unknown"
+    if size_bytes == 0:
+        return "0 B"
+    units = ["B", "KB", "MB", "GB", "TB"]
+    unit_idx = 0
+    size = float(size_bytes)
+    while size >= 1024 and unit_idx < len(units) - 1:
+        size /= 1024
+        unit_idx += 1
+    if unit_idx == 0:
+        return f"{int(size)} {units[unit_idx]}"
+    return f"{size:.1f} {units[unit_idx]}"
+
+
+def _format_count(count: int) -> str:
+    """Format large numbers with K/M suffix."""
+    if count >= 1_000_000:
+        return f"{count / 1_000_000:.1f}M"
+    if count >= 1_000:
+        return f"{count / 1_000:.1f}K"
+    return str(count)
+
+
+# ---------------------------------------------------------------------------
+# HuggingFace Dataset Hub CLI commands
+# ---------------------------------------------------------------------------
+
+
+@app.command(name="search")
+def search_datasets(
+    query: str = typer.Argument(..., help="Search query for HuggingFace datasets"),
+    limit: int = typer.Option(20, "--limit", "-l", help="Maximum results to show"),
+    sort: str = typer.Option(
+        "downloads", "--sort", "-s",
+        help="Sort by: downloads, likes, lastModified, trending, createdAt",
+    ),
+):
+    """Search HuggingFace Hub for datasets."""
+    valid_sorts = {"downloads", "likes", "lastModified", "trending", "createdAt"}
+    if sort not in valid_sorts:
+        console.print(
+            f"[red]Invalid sort: {sort}[/]\n"
+            f"Valid options: {', '.join(sorted(valid_sorts))}"
+        )
+        raise typer.Exit(1)
+
+    try:
+        datasets = list_datasets(search=query, sort=sort, limit=limit)
+    except ImportError:
+        console.print(
+            "[red]huggingface_hub not available.[/]\n"
+            "Install with: [bold]pip install huggingface-hub[/]"
+        )
+        raise typer.Exit(1)
+    except Exception as exc:
+        console.print(f"[red]Search failed: {exc}[/]")
+        raise typer.Exit(1)
+
+    if not datasets:
+        console.print(f"[yellow]No datasets found for '{query}'.[/]")
+        return
+
+    table = Table(title=f"HuggingFace Datasets: '{query}'")
+    table.add_column("Dataset", style="bold cyan", max_width=45)
+    table.add_column("Downloads", justify="right")
+    table.add_column("Likes", justify="right")
+    table.add_column("Tags", max_width=30)
+
+    for ds_item in datasets[:limit]:
+        ds_tags = getattr(ds_item, "tags", []) or []
+        tag_str = ", ".join(ds_tags[:5])
+        if len(ds_tags) > 5:
+            tag_str += "..."
+        table.add_row(
+            ds_item.id,
+            _format_count(getattr(ds_item, "downloads", 0) or 0),
+            _format_count(getattr(ds_item, "likes", 0) or 0),
+            tag_str,
+        )
+
+    console.print(table)
+    console.print(f"[dim]Showing {min(limit, len(datasets))} results.[/]")
+
+
+@app.command(name="preview")
+def preview_dataset(
+    dataset_id: str = typer.Argument(
+        ..., help="HuggingFace dataset ID (e.g. teknium/OpenHermes-2.5)"
+    ),
+):
+    """Preview a remote HuggingFace dataset: metadata, splits, features."""
+    try:
+        info = _hf_dataset_info(dataset_id)
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/]")
+        raise typer.Exit(1)
+    except ImportError:
+        console.print(
+            "[red]huggingface_hub not available.[/]\n"
+            "Install with: [bold]pip install huggingface-hub[/]"
+        )
+        raise typer.Exit(1)
+
+    table = Table(title=f"Dataset: {info['id']}")
+    table.add_column("Field", style="bold")
+    table.add_column("Value", max_width=80)
+
+    table.add_row("ID", info["id"])
+    desc = info["description"]
+    if len(desc) > 200:
+        desc = desc[:200] + "..."
+    table.add_row("Description", desc or "[dim]No description[/]")
+    table.add_row("Downloads", _format_count(info["downloads"]))
+    table.add_row("Likes", _format_count(info["likes"]))
+    table.add_row("Size", _format_size_bytes(info["size_bytes"]))
+
+    if info["splits"]:
+        splits_str = ", ".join(
+            f"{name} ({_format_count(count)})"
+            for name, count in info["splits"].items()
+        )
+        table.add_row("Splits", splits_str)
+    else:
+        table.add_row("Splits", "[dim]Not available (use streaming to explore)[/]")
+
+    if info["features"]:
+        table.add_row("Features", ", ".join(info["features"]))
+
+    if info["tags"]:
+        table.add_row("Tags", ", ".join(info["tags"][:10]))
+
+    console.print(table)
+
+
+@app.command(name="download")
+def download_dataset(
+    dataset_id: str = typer.Argument(
+        ..., help="HuggingFace dataset ID (e.g. teknium/OpenHermes-2.5)"
+    ),
+    output: str = typer.Option(
+        None, "--output", "-o",
+        help="Output file path (default: <dataset-name>.jsonl)",
+    ),
+    split: str = typer.Option(
+        "train", "--split",
+        help="Dataset split to download (e.g. train, test, train[:1000])",
+    ),
+    samples: int = typer.Option(
+        None, "--samples", "-n",
+        help="Max number of samples to download (streams, no full download)",
+    ),
+    fmt: str = typer.Option(
+        None, "--format", "-f",
+        help="Convert to Soup format after download: alpaca, sharegpt, chatml",
+    ),
+):
+    """Download a HuggingFace dataset and save as JSONL."""
+    max_download_samples = 1_000_000
+    if samples is not None and samples > max_download_samples:
+        console.print(
+            f"[red]--samples cannot exceed {max_download_samples:,}.[/]"
+        )
+        raise typer.Exit(1)
+
+    # Resolve output path
+    if output is None:
+        ds_name = dataset_id.split("/")[-1] if "/" in dataset_id else dataset_id
+        # Strip embedded path separators to prevent traversal
+        ds_name = Path(ds_name).name
+        out_path = (Path.cwd() / f"{ds_name}.jsonl").resolve()
+        cwd = Path.cwd().resolve()
+        try:
+            out_path.relative_to(cwd)
+        except ValueError:
+            console.print(
+                "[red]Derived output path escapes working directory.[/]"
+            )
+            raise typer.Exit(1)
+    else:
+        out_path = Path(output).resolve()
+        cwd = Path.cwd().resolve()
+        try:
+            out_path.relative_to(cwd)
+        except ValueError:
+            console.print(
+                "[red]Output path must be under the current working directory.[/]"
+            )
+            raise typer.Exit(1)
+
+    from rich.panel import Panel
+
+    console.print(Panel(
+        "[bold yellow]Warning:[/] Downloading this dataset may execute a "
+        "remote dataset loading script from HuggingFace Hub.\n\n"
+        "Only download datasets from sources you trust.",
+        title="Remote Code Warning",
+        border_style="yellow",
+    ))
+    console.print(f"[dim]Downloading {dataset_id} (split={split})...[/]")
+
+    try:
+        data = _hf_download_dataset(
+            dataset_id, split=split, samples=samples,
+        )
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/]")
+        raise typer.Exit(1)
+    except ImportError:
+        console.print(
+            "[red]datasets library not available.[/]\n"
+            "Install with: [bold]pip install datasets[/]"
+        )
+        raise typer.Exit(1)
+
+    if not data:
+        console.print("[red]No data downloaded (dataset may be empty).[/]")
+        raise typer.Exit(1)
+
+    # Optional format conversion
+    if fmt:
+        from soup_cli.data.formats import (
+            CONVERTIBLE_FORMATS,
+            detect_format,
+            format_to_messages,
+            messages_to_format,
+        )
+
+        if fmt not in CONVERTIBLE_FORMATS:
+            console.print(
+                f"[red]Invalid format: {fmt}[/]\n"
+                f"Supported: {', '.join(CONVERTIBLE_FORMATS)}"
+            )
+            raise typer.Exit(1)
+
+        try:
+            src_fmt = detect_format(data)
+        except ValueError:
+            src_fmt = None
+
+        if src_fmt and src_fmt != fmt:
+            converted = []
+            for row in data:
+                messages = format_to_messages(row, src_fmt)
+                if messages is not None:
+                    result = messages_to_format(messages, fmt)
+                    if result is not None:
+                        converted.append(result)
+            if converted:
+                data = converted
+                console.print(
+                    f"[dim]Converted {len(data)} rows to {fmt} format.[/]"
+                )
+
+    # Apply samples limit if data came from non-streaming path
+    if samples is not None and len(data) > samples:
+        data = data[:samples]
+
+    _write_jsonl(out_path, data)
+    console.print(
+        f"[green]Downloaded {len(data)} rows.[/]\n"
+        f"Output: [bold]{out_path}[/]"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Dataset registry CLI commands
+# ---------------------------------------------------------------------------
+
+
+def _get_registry_path() -> Path:
+    """Get the default registry path (~/.soup/datasets.json)."""
+    from soup_cli.utils.registry import _default_registry_path
+
+    return _default_registry_path()
+
+
+@app.command(name="register")
+def register_data(
+    name: str = typer.Option(..., "--name", "-n", help="Dataset name"),
+    path: str = typer.Option(..., "--path", "-p", help="Path to dataset file"),
+    fmt: str = typer.Option(
+        "auto", "--format", "-f",
+        help="Dataset format: alpaca, sharegpt, chatml, dpo, kto, auto",
+    ),
+):
+    """Register a local dataset by name for use in soup.yaml."""
+    from soup_cli.utils.registry import register_dataset
+
+    # Path traversal protection
+    resolved = Path(path).resolve()
+    cwd = Path.cwd().resolve()
+    try:
+        resolved.relative_to(cwd)
+    except ValueError:
+        console.print(
+            "[red]Dataset path must be under the current working directory.[/]"
+        )
+        raise typer.Exit(1)
+
+    registry_path = _get_registry_path()
+
+    try:
+        register_dataset(name, str(resolved), fmt, registry_path=registry_path)
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/]")
+        raise typer.Exit(1)
+
+    console.print(
+        f"[green]Registered dataset '[bold]{name}[/bold]'[/]\n"
+        f"  Path: {path}\n"
+        f"  Format: {fmt}"
+    )
+
+
+@app.command(name="unregister")
+def unregister_data(
+    name: str = typer.Option(..., "--name", "-n", help="Dataset name to remove"),
+):
+    """Remove a dataset from the local registry."""
+    from soup_cli.utils.registry import unregister_dataset
+
+    registry_path = _get_registry_path()
+    removed = unregister_dataset(name, registry_path=registry_path)
+
+    if removed:
+        console.print(f"[green]Removed dataset '{name}' from registry.[/]")
+    else:
+        console.print(f"[red]Dataset '{name}' not found in registry.[/]")
+        raise typer.Exit(1)
+
+
+@app.command(name="registry")
+def list_registry():
+    """List all registered datasets."""
+    from soup_cli.utils.registry import load_registry
+
+    registry_path = _get_registry_path()
+    registry = load_registry(registry_path)
+
+    if not registry:
+        console.print("[yellow]No datasets registered.[/]")
+        console.print(
+            "[dim]Register with: "
+            "soup data register --name my-data --path data.jsonl --format alpaca[/]"
+        )
+        return
+
+    table = Table(title="Registered Datasets")
+    table.add_column("Name", style="bold cyan")
+    table.add_column("Path")
+    table.add_column("Format")
+
+    from rich.markup import escape
+
+    for ds_name, ds_info in sorted(registry.items()):
+        table.add_row(
+            escape(ds_name),
+            escape(ds_info.get("path", "")),
+            escape(ds_info.get("format", "")),
+        )
+
+    console.print(table)

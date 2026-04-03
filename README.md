@@ -636,6 +636,30 @@ training:
   curriculum_buckets: 4        # Number of difficulty stages
 ```
 
+## Freeze Training
+
+Freeze bottom layers of the model — train only the top layers (like LLaMA-Factory's `finetuning_type: freeze`):
+
+```yaml
+training:
+  freeze_layers: 24    # Freeze first 24 layers, train the rest
+  # OR
+  freeze_ratio: 0.75   # Freeze 75% of layers from the bottom
+```
+
+Works with and without LoRA. When used with LoRA, LoRA is applied only to unfrozen layers.
+
+## Loss Watchdog
+
+Auto-stop training when loss spikes above a threshold (like Axolotl's `loss_watchdog_threshold`):
+
+```yaml
+training:
+  loss_watchdog: true           # Enable loss spike detection
+  loss_watchdog_threshold: 3.0  # Stop if loss exceeds this value
+  loss_watchdog_patience: 5     # Consecutive steps above threshold before stopping
+```
+
 ## GaLore (Memory-Efficient Full-Parameter Training)
 
 Train without LoRA using gradient low-rank projection — saves optimizer memory:
@@ -1386,6 +1410,14 @@ soup data sample <path> --pct 10             Sample by percentage
 soup data split <path> --val 10 --test 10    Split into train/val/test
 soup data split <path> --val 500 --absolute  Split with absolute counts
 soup data split <path> --val 10 --stratify category  Stratified by field
+soup data search "code instructions"         Search HuggingFace Hub for datasets
+soup data search --sort likes --limit 10     Sort and paginate search results
+soup data preview teknium/OpenHermes-2.5     Preview remote dataset metadata
+soup data download user/dataset -o data.jsonl  Download HF dataset as JSONL
+soup data download user/ds --samples 1000    Stream first 1000 samples
+soup data register --name my-ds --path d.jsonl --format alpaca  Register dataset
+soup data unregister --name my-ds            Remove from registry
+soup data registry                           List all registered datasets
 soup profile --config soup.yaml              Estimate memory/speed before training
 soup profile --config soup.yaml --gpu a100   Estimate for specific GPU
 soup profile --config soup.yaml --json       Machine-readable output

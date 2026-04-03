@@ -27,12 +27,21 @@ class SoupTrainerCallback(TrainerCallback):
         run_id: str = "",
         eval_config: Optional[object] = None,
         output_dir: str = "",
+        loss_watchdog: bool = False,
+        loss_watchdog_threshold: float = 3.0,
+        loss_watchdog_patience: int = 5,
     ):
         self.display = display
         self.tracker = tracker
         self.run_id = run_id
         self.eval_config = eval_config
         self.output_dir = output_dir
+        # Loss watchdog state
+        self._watchdog_enabled = loss_watchdog
+        self._watchdog_threshold = loss_watchdog_threshold
+        self._watchdog_patience = loss_watchdog_patience
+        self._watchdog_counter = 0
+        self._watchdog_fired = False
 
     def on_train_begin(
         self, args: TrainingArguments, state: TrainerState,
@@ -75,6 +84,33 @@ class SoupTrainerCallback(TrainerCallback):
             speed=speed,
             gpu_mem=gpu_mem,
         )
+
+        # Loss watchdog — detect loss spikes and auto-stop
+        if self._watchdog_enabled and not self._watchdog_fired and "loss" in logs:
+            if loss > self._watchdog_threshold:
+                self._watchdog_counter += 1
+                if self._watchdog_counter >= self._watchdog_patience:
+                    self._watchdog_fired = True
+                    # Stop Live display before printing panel
+                    self.display.stop()
+
+                    from rich.console import Console as WatchdogConsole
+                    from rich.panel import Panel
+
+                    wc = WatchdogConsole()
+                    wc.print(Panel(
+                        f"[bold red]Loss watchdog triggered![/]\n\n"
+                        f"Loss {loss:.4f} exceeded threshold "
+                        f"{self._watchdog_threshold} for "
+                        f"{self._watchdog_counter} consecutive steps "
+                        f"(patience={self._watchdog_patience}).\n\n"
+                        f"Training will stop.",
+                        title="Loss Watchdog",
+                        border_style="red",
+                    ))
+                    control.should_training_stop = True
+            else:
+                self._watchdog_counter = 0
 
         # Log to experiment tracker
         if self.tracker and self.run_id:
