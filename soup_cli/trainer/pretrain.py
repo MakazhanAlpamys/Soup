@@ -156,13 +156,20 @@ class PretrainTrainerWrapper:
         training_args = TrainingArguments(**training_kwargs)
 
         # --- Trainer ---
-        self.trainer = SFTTrainer(
-            model=self.model,
-            args=training_args,
-            train_dataset=train_ds,
-            eval_dataset=eval_ds,
-            processing_class=self.tokenizer,
-        )
+        trainer_kwargs = {
+            "model": self.model,
+            "args": training_args,
+            "train_dataset": train_ds,
+            "eval_dataset": eval_ds,
+            "processing_class": self.tokenizer,
+        }
+
+        # Sample packing — pack multiple short samples into one sequence
+        if tcfg.packing:
+            trainer_kwargs["packing"] = True
+            console.print("[green]Sample packing enabled[/]")
+
+        self.trainer = SFTTrainer(**trainer_kwargs)
 
         self._output_dir = str(output_dir)
 

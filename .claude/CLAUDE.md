@@ -1,12 +1,12 @@
 # Soup CLI — Project CLAUDE.md
 
-Soup is a CLI-first LLM fine-tuning tool (v0.22.1). Python 3.9+, MIT license.
+Soup is a CLI-first LLM fine-tuning tool (v0.23.0). Python 3.9+, MIT license.
 
 ## Build & Development
 
 ```bash
 pip install -e ".[dev]"          # Install editable + test deps
-pytest tests/ -v --tb=short      # Run all tests (1890 tests)
+pytest tests/ -v --tb=short      # Run all tests (1970 tests)
 ruff check soup_cli/ tests/      # Lint (must pass before commit)
 ruff check --fix soup_cli/ tests/  # Auto-fix lint issues
 ```
@@ -49,7 +49,7 @@ soup_cli/
     rewards.py         # Built-in reward fns (accuracy, format) + custom .py loader
   commands/
     ...
-    data.py            # soup data (inspect/validate/convert/merge/dedup/stats/filter)
+    data.py            # soup data (inspect/validate/convert/merge/dedup/stats/filter/split)
   monitoring/
     callback.py        # HF TrainerCallback -> Rich display + SQLite tracker
     display.py         # Rich Live terminal dashboard (2Hz refresh)
@@ -111,8 +111,9 @@ soup_cli/
     sglang.py          # SGLang runtime backend (high-throughput serving)
     ollama.py          # Ollama integration (detect, deploy, list, remove, Modelfile gen)
     profiler.py        # Training memory/speed estimator (GPU lookup, model arch)
+    curriculum.py      # Curriculum learning: sort by difficulty, create buckets
     constants.py       # APP_NAME, paths, default chat template
-tests/                 # 66 test files, 1882 tests
+tests/                 # 70 test files, 1970 tests
 examples/
   configs/             # 7 production-ready YAML examples
   data/                # Sample datasets
@@ -126,7 +127,7 @@ soup train             # Main training (--config, --resume, --wandb, --tensorboa
 soup infer             # Batch inference (--model, --input, --output)
 soup chat              # Terminal chat with model
 soup serve             # OpenAI-compatible inference server (--backend transformers|vllm|sglang, --speculative-decoding, --adapters)
-soup export            # Convert to GGUF/ONNX/TensorRT for deployment
+soup export            # Convert to GGUF/ONNX/TensorRT/AWQ/GPTQ for deployment
 soup export --deploy ollama  # Export GGUF + auto-deploy to Ollama
 soup deploy ollama     # Deploy GGUF model to local Ollama instance
 soup deploy ollama --list    # List Soup-deployed models in Ollama
@@ -154,6 +155,7 @@ soup recipes use       # Copy recipe to soup.yaml
 soup recipes search    # Search recipes by keyword, task, or model size
 soup data filter       # Quality filter (perplexity + coherence scoring)
 soup data sample       # Sample subset: random, diverse (TF-IDF + clusters), hard (by length)
+soup data split        # Split dataset into train/val/test files (random or stratified)
 soup profile           # Estimate memory, speed, GPU requirements before training
 soup adapters list     # Scan directory for LoRA adapters
 soup adapters info     # Show adapter metadata (base model, rank, size)
@@ -177,7 +179,7 @@ soup version           # Show version (--full for details)
 - **SoupConfig**: base (required), task (sft/dpo/kto/orpo/simpo/ipo/grpo/ppo/reward_model/pretrain/embedding), modality (text/vision/audio), backend (transformers/unsloth), data, training, output, eval
 - **EvalConfig**: auto_eval, benchmarks, custom_tasks, judge
 - **DataConfig**: train, format (alpaca/sharegpt/chatml/dpo/kto/llava/sharegpt4v/plaintext/embedding/audio/auto), val_split, max_length, image_dir, audio_dir
-- **TrainingConfig**: epochs, lr, batch_size (int or "auto"), quantization (4bit/8bit/none), quantization_aware, optimizer, scheduler, dpo_beta, kto_beta, orpo_beta, simpo_gamma, cpo_alpha, ipo_tau, grpo_beta, num_generations, reward_fn, ppo_epochs, ppo_clip_ratio, ppo_kl_penalty, reward_model, loraplus_lr_ratio, use_galore, galore_rank, galore_update_proj_gap, galore_scale, moe_lora, moe_aux_loss_coeff, use_liger, use_flash_attn, use_ring_attention, rope_scaling_type, gradient_checkpointing, embedding_loss, embedding_margin, embedding_pooling, embedding_temperature, neftune_alpha
+- **TrainingConfig**: epochs, lr, batch_size (int or "auto"), quantization (4bit/8bit/none), quantization_aware, optimizer, scheduler, dpo_beta, kto_beta, orpo_beta, simpo_gamma, cpo_alpha, ipo_tau, grpo_beta, num_generations, reward_fn, ppo_epochs, ppo_clip_ratio, ppo_kl_penalty, reward_model, loraplus_lr_ratio, use_galore, galore_rank, galore_update_proj_gap, galore_scale, moe_lora, moe_aux_loss_coeff, use_liger, use_flash_attn, use_ring_attention, rope_scaling_type, gradient_checkpointing, embedding_loss, embedding_margin, embedding_pooling, embedding_temperature, neftune_alpha, packing, curriculum, curriculum_metric, curriculum_buckets
 - **LoraConfig**: r, alpha, dropout, target_modules, use_dora, use_rslora
 
 15 built-in templates: chat, code, medical, reasoning, vision, audio, kto, orpo, simpo, ipo, embedding, rlhf, pretrain, moe, longcontext.
@@ -270,6 +272,9 @@ soup version           # Show version (--full for details)
 - **Multi-adapter serving**: adapter paths resolve + relative_to(cwd) — path traversal protection (v0.22.0)
 - **Multi-adapter serving**: adapter name validation — alphanumeric + hyphens only (v0.22.0)
 - **Multi-adapter serving**: unknown adapter → 404 (not 500) (v0.22.0)
+- **AWQ/GPTQ export**: calibration data path traversal protection — resolve + relative_to(cwd) (v0.23.0)
+- **AWQ/GPTQ export**: output path stays under cwd (v0.23.0)
+- **Curriculum config**: curriculum_buckets bounded ge=1, le=20 (v0.23.0)
 
 ## Code Conventions
 
@@ -300,6 +305,8 @@ soup version           # Show version (--full for details)
 - `[ring-attn]`: ring-flash-attn (sequence parallelism)
 - `[onnx]`: optimum + onnxruntime (ONNX export)
 - `[tensorrt]`: tensorrt_llm (TensorRT-LLM export)
+- `[awq]`: autoawq (AWQ quantization export)
+- `[gptq]`: auto-gptq (GPTQ quantization export)
 - `[audio]`: librosa + soundfile
 - `[sglang]`: sglang + FastAPI + uvicorn
 - `[ui]`: FastAPI + uvicorn + static SPA
@@ -341,7 +348,7 @@ soup version           # Show version (--full for details)
 15. **Tag**: `git tag v0.X.Y && git push origin v0.X.Y`
 16. **Release**: `gh release create v0.X.Y` with changelog (What's New, Install/Upgrade)
 
-## Tests (66 test files, 1890 tests)
+## Tests (70 test files, 1970 tests)
 
 | File | Covers |
 |------|--------|
@@ -410,3 +417,7 @@ soup version           # Show version (--full for details)
 | test_multi_adapter.py | Multi-adapter serving: validation, parsing, FastAPI endpoints, CLI |
 | test_data_sample.py | Data sampling: random/diverse/hard strategies, CLI, edge cases |
 | test_adapters.py | Adapter management: list/info/compare, discovery, metadata |
+| test_awq_gptq_export.py | AWQ/GPTQ export: format support, CLI, quantize mocks, calibration, security |
+| test_packing.py | Sample packing: config, YAML, trainer integration, sweep |
+| test_data_split.py | Data split: ratio/absolute/stratified splits, seed, edge cases |
+| test_curriculum.py | Curriculum learning: config, length sort, buckets, sweep |

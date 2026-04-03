@@ -13,7 +13,7 @@ from rich.panel import Panel
 
 console = Console()
 
-SUPPORTED_FORMATS = ("gguf", "onnx", "tensorrt")
+SUPPORTED_FORMATS = ("gguf", "onnx", "tensorrt", "awq", "gptq")
 GGUF_QUANT_TYPES = ("q4_0", "q4_k_m", "q5_k_m", "q8_0", "f16", "f32")
 LLAMA_CPP_DIR_NAME = "llama.cpp"
 # Pin to a known release tag for supply-chain safety
@@ -71,8 +71,28 @@ def export(
         "--deploy-name",
         help="Model name for deployment (used with --deploy)",
     ),
+    bits: int = typer.Option(
+        4,
+        "--bits",
+        help="Quantization bits for AWQ/GPTQ: 4 or 8",
+    ),
+    group_size: int = typer.Option(
+        128,
+        "--group-size",
+        help="Group size for AWQ/GPTQ quantization",
+    ),
+    calibration_data: Optional[str] = typer.Option(
+        None,
+        "--calibration-data",
+        help="Path to calibration JSONL for AWQ/GPTQ (default: use built-in sample)",
+    ),
+    calibration_samples: int = typer.Option(
+        128,
+        "--calibration-samples",
+        help="Number of calibration samples for AWQ/GPTQ",
+    ),
 ):
-    """Export a model to GGUF, ONNX, or TensorRT-LLM format."""
+    """Export a model to GGUF, ONNX, TensorRT-LLM, AWQ, or GPTQ format."""
     model_path = Path(model)
 
     # --- Validate ---
@@ -95,6 +115,22 @@ def export(
     # --- TensorRT-LLM export path ---
     if fmt == "tensorrt":
         _export_tensorrt(model_path, output, base)
+        return
+
+    # --- AWQ export path ---
+    if fmt == "awq":
+        _export_awq(
+            model_path, output, base, bits, group_size,
+            calibration_data, calibration_samples,
+        )
+        return
+
+    # --- GPTQ export path ---
+    if fmt == "gptq":
+        _export_gptq(
+            model_path, output, base, bits, group_size,
+            calibration_data, calibration_samples,
+        )
         return
 
     if quant not in GGUF_QUANT_TYPES:
@@ -562,6 +598,270 @@ def _export_tensorrt(model_path: Path, output: Optional[str], base: Optional[str
             f"  [bold]import tensorrt_llm[/]\n"
             f"  [bold]runner = tensorrt_llm.ModelRunner.from_dir('{engine_dir}')[/]",
             title="[bold green]TensorRT-LLM Export Complete![/]",
+        )
+    )
+
+
+def _validate_calibration_path(calibration_data: Optional[str]) -> Optional[Path]:
+    """Validate calibration data path stays under cwd."""
+    if calibration_data is None:
+        return None
+    cal_path = Path(calibration_data).resolve()
+    cwd = Path.cwd().resolve()
+    try:
+        cal_path.relative_to(cwd)
+    except ValueError:
+        console.print("[red]Calibration data path must be under the current working directory.[/]")
+        raise typer.Exit(1)
+    if not cal_path.exists():
+        console.print(f"[red]Calibration data not found: {cal_path}[/]")
+        raise typer.Exit(1)
+    return cal_path
+
+
+def _load_calibration_texts(cal_path: Optional[Path], max_samples: int = 128) -> list:
+    """Load calibration texts from JSONL file."""
+    if cal_path is None:
+        return []
+    texts = []
+    with open(cal_path, encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+                # Support "text" field or concatenate all string values
+                if "text" in row:
+                    texts.append(str(row["text"]))
+                else:
+                    texts.append(" ".join(str(v) for v in row.values() if v))
+            except json.JSONDecodeError:
+                continue
+            if len(texts) >= max_samples:
+                break
+    return texts
+
+
+def _export_awq(
+    model_path: Path,
+    output: Optional[str],
+    base: Optional[str],
+    bits: int = 4,
+    group_size: int = 128,
+    calibration_data: Optional[str] = None,
+    calibration_samples: int = 128,
+) -> None:
+    """Export model to AWQ format via autoawq."""
+    # Validate bits
+    valid_bits = {4, 8}
+    if bits not in valid_bits:
+        console.print(
+            f"[red]Invalid --bits {bits}. Must be one of: {sorted(valid_bits)}[/]"
+        )
+        raise typer.Exit(1)
+
+    # Validate calibration path (security: path traversal protection)
+    cal_path = _validate_calibration_path(calibration_data)
+
+    try:
+        from awq import AutoAWQForCausalLM
+    except ImportError:
+        console.print(
+            "[red]autoawq not installed.[/]\n"
+            "Install with: [bold]pip install 'soup-cli[awq]'[/]\n"
+            "Or directly: [bold]pip install autoawq[/]"
+        )
+        raise typer.Exit(1)
+
+    from transformers import AutoTokenizer
+
+    # Check if LoRA adapter — merge first
+    adapter_config_path = model_path / "adapter_config.json"
+    is_adapter = adapter_config_path.exists()
+    merge_dir = None
+    source_path = model_path
+
+    if is_adapter:
+        console.print("[yellow]LoRA adapter detected - merging with base model first...[/]")
+        base_model = base or _detect_base_model(adapter_config_path)
+        if not base_model:
+            console.print(
+                "[red]Cannot detect base model from adapter_config.json.[/]\n"
+                "Please specify with [bold]--base[/] flag."
+            )
+            raise typer.Exit(1)
+        merge_dir = model_path.parent / f".soup_merge_tmp_{model_path.name}"
+        _merge_adapter(str(model_path), base_model, str(merge_dir))
+        source_path = merge_dir
+
+    output_path = Path(output) if output else model_path.parent / f"{model_path.name}_awq"
+
+    console.print(
+        Panel(
+            f"Model:      [bold]{source_path}[/]\n"
+            f"Format:     [bold]AWQ[/]\n"
+            f"Bits:       [bold]{bits}[/]\n"
+            f"Group size: [bold]{group_size}[/]\n"
+            f"Output:     [bold]{output_path}[/]",
+            title="Export Plan",
+        )
+    )
+
+    try:
+        console.print("[dim]Loading model for AWQ quantization...[/]")
+        model = AutoAWQForCausalLM.from_pretrained(str(source_path))
+        tokenizer = AutoTokenizer.from_pretrained(str(source_path), trust_remote_code=True)
+
+        quant_config = {"zero_point": True, "q_group_size": group_size, "w_bit": bits}
+
+        # Load calibration data if provided
+        calib_data = (
+            _load_calibration_texts(cal_path, max_samples=calibration_samples)
+            if cal_path else None
+        )
+
+        console.print(f"[dim]Quantizing to AWQ {bits}-bit (group_size={group_size})...[/]")
+        if calib_data:
+            model.quantize(tokenizer, quant_config=quant_config, calib_data=calib_data)
+        else:
+            model.quantize(tokenizer, quant_config=quant_config)
+
+        console.print("[dim]Saving quantized model...[/]")
+        model.save_quantized(str(output_path))
+        tokenizer.save_pretrained(str(output_path))
+
+    except Exception as exc:
+        console.print(f"[red]AWQ export failed:[/] {exc}")
+        raise typer.Exit(1)
+    finally:
+        if merge_dir and merge_dir.exists():
+            console.print("[dim]Cleaning up temporary merge files...[/]")
+            shutil.rmtree(merge_dir, ignore_errors=True)
+
+    console.print(
+        Panel(
+            f"Output: [bold]{output_path}[/]\n"
+            f"Format: [bold]AWQ {bits}-bit[/]\n\n"
+            f"Use with vLLM:\n"
+            f"  [bold]from vllm import LLM[/]\n"
+            f"  [bold]llm = LLM(model='{output_path}', quantization='awq')[/]",
+            title="[bold green]AWQ Export Complete![/]",
+        )
+    )
+
+
+def _export_gptq(
+    model_path: Path,
+    output: Optional[str],
+    base: Optional[str],
+    bits: int = 4,
+    group_size: int = 128,
+    calibration_data: Optional[str] = None,
+    calibration_samples: int = 128,
+) -> None:
+    """Export model to GPTQ format via auto-gptq."""
+    # Validate bits
+    valid_bits = {4, 8}
+    if bits not in valid_bits:
+        console.print(
+            f"[red]Invalid --bits {bits}. Must be one of: {sorted(valid_bits)}[/]"
+        )
+        raise typer.Exit(1)
+
+    # Validate calibration path (security: path traversal protection)
+    cal_path = _validate_calibration_path(calibration_data)
+
+    try:
+        from auto_gptq import AutoGPTQForCausalLM, BaseQuantizeConfig
+    except ImportError:
+        console.print(
+            "[red]auto-gptq not installed.[/]\n"
+            "Install with: [bold]pip install 'soup-cli[gptq]'[/]\n"
+            "Or directly: [bold]pip install auto-gptq[/]"
+        )
+        raise typer.Exit(1)
+
+    from transformers import AutoTokenizer
+
+    # Check if LoRA adapter — merge first
+    adapter_config_path = model_path / "adapter_config.json"
+    is_adapter = adapter_config_path.exists()
+    merge_dir = None
+    source_path = model_path
+
+    if is_adapter:
+        console.print("[yellow]LoRA adapter detected - merging with base model first...[/]")
+        base_model = base or _detect_base_model(adapter_config_path)
+        if not base_model:
+            console.print(
+                "[red]Cannot detect base model from adapter_config.json.[/]\n"
+                "Please specify with [bold]--base[/] flag."
+            )
+            raise typer.Exit(1)
+        merge_dir = model_path.parent / f".soup_merge_tmp_{model_path.name}"
+        _merge_adapter(str(model_path), base_model, str(merge_dir))
+        source_path = merge_dir
+
+    output_path = Path(output) if output else model_path.parent / f"{model_path.name}_gptq"
+
+    console.print(
+        Panel(
+            f"Model:      [bold]{source_path}[/]\n"
+            f"Format:     [bold]GPTQ[/]\n"
+            f"Bits:       [bold]{bits}[/]\n"
+            f"Group size: [bold]{group_size}[/]\n"
+            f"Output:     [bold]{output_path}[/]",
+            title="Export Plan",
+        )
+    )
+
+    try:
+        console.print("[dim]Loading model for GPTQ quantization...[/]")
+        quantize_config = BaseQuantizeConfig(
+            bits=bits,
+            group_size=group_size,
+            desc_act=False,
+        )
+        model = AutoGPTQForCausalLM.from_pretrained(
+            str(source_path), quantize_config=quantize_config
+        )
+        tokenizer = AutoTokenizer.from_pretrained(str(source_path), trust_remote_code=True)
+
+        # Load calibration data if provided
+        calib_data = None
+        if cal_path:
+            texts = _load_calibration_texts(
+                cal_path, max_samples=calibration_samples,
+            )
+            calib_data = [tokenizer(t, return_tensors="pt") for t in texts]
+
+        console.print(f"[dim]Quantizing to GPTQ {bits}-bit (group_size={group_size})...[/]")
+        if calib_data:
+            model.quantize(calib_data)
+        else:
+            model.quantize(tokenizer)
+
+        console.print("[dim]Saving quantized model...[/]")
+        model.save_quantized(str(output_path))
+        tokenizer.save_pretrained(str(output_path))
+
+    except Exception as exc:
+        console.print(f"[red]GPTQ export failed:[/] {exc}")
+        raise typer.Exit(1)
+    finally:
+        if merge_dir and merge_dir.exists():
+            console.print("[dim]Cleaning up temporary merge files...[/]")
+            shutil.rmtree(merge_dir, ignore_errors=True)
+
+    console.print(
+        Panel(
+            f"Output: [bold]{output_path}[/]\n"
+            f"Format: [bold]GPTQ {bits}-bit[/]\n\n"
+            f"Use with vLLM:\n"
+            f"  [bold]from vllm import LLM[/]\n"
+            f"  [bold]llm = LLM(model='{output_path}', quantization='gptq')[/]",
+            title="[bold green]GPTQ Export Complete![/]",
         )
     )
 

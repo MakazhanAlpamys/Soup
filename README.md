@@ -115,6 +115,12 @@ soup export --model ./output --format onnx
 
 # Export to TensorRT-LLM (pip install 'soup-cli[tensorrt]')
 soup export --model ./output --format tensorrt
+
+# Export to AWQ quantized model (pip install 'soup-cli[awq]')
+soup export --model ./output --format awq --bits 4 --group-size 128
+
+# Export to GPTQ quantized model (pip install 'soup-cli[gptq]')
+soup export --model ./output --format gptq --bits 4 --group-size 128
 ```
 
 ## Config Example
@@ -607,6 +613,28 @@ training:
 ```
 
 Works with SFT, DPO, KTO, ORPO, SimPO, and IPO tasks.
+
+## Sample Packing
+
+Pack multiple short samples into one sequence for faster training:
+
+```yaml
+training:
+  packing: true  # Pack short samples together (faster training)
+```
+
+Works with SFT and Pretrain tasks. Warning emitted if `max_length < 256`.
+
+## Curriculum Learning
+
+Sort dataset by difficulty (easy → hard) for better convergence:
+
+```yaml
+training:
+  curriculum: true             # Enable curriculum learning
+  curriculum_metric: length    # Sort by: length, perplexity, or loss
+  curriculum_buckets: 4        # Number of difficulty stages
+```
 
 ## GaLore (Memory-Efficient Full-Parameter Training)
 
@@ -1320,6 +1348,8 @@ soup export --model ./output --format gguf    Export to GGUF (Ollama)
 soup export --model ./output --deploy ollama  Export GGUF + auto-deploy to Ollama
 soup export --model ./output --format onnx    Export to ONNX
 soup export --model ./output --format tensorrt Export to TensorRT-LLM
+soup export --model ./output --format awq     Export to AWQ (4-bit)
+soup export --model ./output --format gptq    Export to GPTQ (4-bit)
 soup deploy ollama --model m.gguf --name x    Deploy GGUF to Ollama
 soup deploy ollama --list                     List Soup-deployed models
 soup deploy ollama --remove <name>            Remove model from Ollama
@@ -1353,6 +1383,9 @@ soup data sample <path> --n 1000             Random sample subset
 soup data sample <path> --n 1000 --strategy diverse  Cluster-based diverse sampling
 soup data sample <path> --n 1000 --strategy hard     Sample hardest examples
 soup data sample <path> --pct 10             Sample by percentage
+soup data split <path> --val 10 --test 10    Split into train/val/test
+soup data split <path> --val 500 --absolute  Split with absolute counts
+soup data split <path> --val 10 --stratify category  Stratified by field
 soup profile --config soup.yaml              Estimate memory/speed before training
 soup profile --config soup.yaml --gpu a100   Estimate for specific GPU
 soup profile --config soup.yaml --json       Machine-readable output

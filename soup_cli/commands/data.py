@@ -764,3 +764,164 @@ def sample_data(
         f"(strategy: {strategy})\n"
         f"Output: [bold]{out_path}[/]"
     )
+
+
+@app.command(name="split")
+def split_data(
+    path: str = typer.Argument(..., help="Path to dataset file"),
+    val: int = typer.Option(
+        None, "--val",
+        help="Validation split: percentage (default) or absolute count (with --absolute)",
+    ),
+    test: int = typer.Option(
+        None, "--test",
+        help="Test split: percentage (default) or absolute count (with --absolute)",
+    ),
+    absolute: bool = typer.Option(
+        False, "--absolute",
+        help="Treat --val/--test as absolute sample counts instead of percentages",
+    ),
+    seed: int = typer.Option(
+        None, "--seed",
+        help="Random seed for reproducible splits",
+    ),
+    stratify: str = typer.Option(
+        None, "--stratify",
+        help="Field name for stratified splitting (preserves category distribution)",
+    ),
+):
+    """Split dataset into train/val/test files."""
+    file_path = Path(path)
+    if not file_path.exists():
+        console.print(f"[red]File not found: {file_path}[/]")
+        raise typer.Exit(1)
+
+    if val is None and test is None:
+        console.print("[red]Specify at least one of --val or --test.[/]")
+        raise typer.Exit(1)
+
+    data = load_raw_data(file_path)
+    if not data:
+        console.print("[red]Dataset is empty.[/]")
+        raise typer.Exit(1)
+
+    total = len(data)
+
+    # Calculate split sizes
+    if absolute:
+        val_count = val or 0
+        test_count = test or 0
+        if val_count + test_count >= total:
+            console.print(
+                f"[red]val ({val_count}) + test ({test_count}) >= dataset size ({total}).[/]"
+            )
+            raise typer.Exit(1)
+    else:
+        val_count = int(total * val / 100) if val else 0
+        test_count = int(total * test / 100) if test else 0
+        if val_count + test_count >= total:
+            console.print(
+                f"[red]Split sizes ({val_count} + {test_count}) >= dataset size ({total}).[/]"
+            )
+            raise typer.Exit(1)
+
+    # Perform split
+    if stratify:
+        train_data, val_data, test_data = _stratified_split(
+            data, val_count, test_count, stratify, seed=seed,
+        )
+    else:
+        train_data, val_data, test_data = _random_split(
+            data, val_count, test_count, seed=seed,
+        )
+
+    # Write output files
+    stem = file_path.stem
+    parent = file_path.parent
+
+    train_path = parent / f"{stem}_train.jsonl"
+    _write_jsonl(train_path, train_data)
+
+    output_msg = (
+        f"[green]Split {total} rows:[/]\n"
+        f"  Train: {len(train_data)} → [bold]{train_path}[/]"
+    )
+
+    if val_data:
+        val_path = parent / f"{stem}_val.jsonl"
+        _write_jsonl(val_path, val_data)
+        output_msg += f"\n  Val:   {len(val_data)} → [bold]{val_path}[/]"
+
+    if test_data:
+        test_path = parent / f"{stem}_test.jsonl"
+        _write_jsonl(test_path, test_data)
+        output_msg += f"\n  Test:  {len(test_data)} → [bold]{test_path}[/]"
+
+    console.print(output_msg)
+
+
+def _random_split(
+    data: list, val_count: int, test_count: int, seed: int | None = None,
+) -> tuple:
+    """Random split into train/val/test."""
+    rng = random.Random(seed)
+    indices = list(range(len(data)))
+    rng.shuffle(indices)
+
+    test_indices = set(indices[:test_count])
+    val_indices = set(indices[test_count:test_count + val_count])
+
+    train_data = []
+    val_data = []
+    test_data = []
+
+    for idx in range(len(data)):
+        if idx in test_indices:
+            test_data.append(data[idx])
+        elif idx in val_indices:
+            val_data.append(data[idx])
+        else:
+            train_data.append(data[idx])
+
+    return train_data, val_data, test_data
+
+
+def _stratified_split(
+    data: list, val_count: int, test_count: int,
+    stratify_field: str, seed: int | None = None,
+) -> tuple:
+    """Stratified split preserving category distribution."""
+    # Group by stratify field
+    groups: dict[str, list[int]] = {}
+    for idx, row in enumerate(data):
+        key = str(row.get(stratify_field, "unknown"))
+        groups.setdefault(key, []).append(idx)
+
+    rng = random.Random(seed)
+    total = len(data)
+
+    train_indices = []
+    val_indices = []
+    test_indices = []
+
+    for key, indices in groups.items():
+        rng.shuffle(indices)
+        group_size = len(indices)
+        group_frac = group_size / total
+
+        group_val = round(val_count * group_frac) if val_count else 0
+        group_test = round(test_count * group_frac) if test_count else 0
+
+        # Ensure we don't take more than available
+        group_val = min(group_val, group_size)
+        group_test = min(group_test, group_size - group_val)
+
+        test_indices.extend(indices[:group_test])
+        val_indices.extend(indices[group_test:group_test + group_val])
+        train_indices.extend(indices[group_test + group_val:])
+
+    train_data = [data[idx] for idx in train_indices]
+    val_data = [data[idx] for idx in val_indices]
+    test_data = [data[idx] for idx in test_indices]
+
+    return train_data, val_data, test_data

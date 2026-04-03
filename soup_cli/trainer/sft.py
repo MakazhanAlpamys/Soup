@@ -80,6 +80,23 @@ class SFTTrainerWrapper:
             )
             console.print(f"[green]Auto batch size:[/] {batch_size}")
 
+        # --- Curriculum learning: sort dataset by difficulty ---
+        if tcfg.curriculum:
+            from soup_cli.utils.curriculum import sort_by_length
+
+            if tcfg.curriculum_metric == "length":
+                dataset["train"] = sort_by_length(dataset["train"])
+                console.print(
+                    f"[green]Curriculum learning enabled:[/] "
+                    f"metric=length, buckets={tcfg.curriculum_buckets}"
+                )
+            else:
+                console.print(
+                    f"[yellow]Curriculum metric '{tcfg.curriculum_metric}' "
+                    "requires pre-computed scores. Using length-based sorting.[/]"
+                )
+                dataset["train"] = sort_by_length(dataset["train"])
+
         # --- Dataset ---
         if use_vision:
             train_ds, eval_ds = self._prepare_vision_dataset(dataset)
@@ -190,13 +207,25 @@ class SFTTrainerWrapper:
         training_args = TrainingArguments(**training_kwargs)
 
         # --- Trainer ---
-        self.trainer = SFTTrainer(
-            model=self.model,
-            args=training_args,
-            train_dataset=train_ds,
-            eval_dataset=eval_ds,
-            processing_class=self.tokenizer,
-        )
+        trainer_kwargs = {
+            "model": self.model,
+            "args": training_args,
+            "train_dataset": train_ds,
+            "eval_dataset": eval_ds,
+            "processing_class": self.tokenizer,
+        }
+
+        # Sample packing — pack multiple short samples into one sequence
+        if tcfg.packing:
+            trainer_kwargs["packing"] = True
+            if cfg.data.max_length < 256:
+                console.print(
+                    f"[yellow]Warning:[/] packing=true with max_length={cfg.data.max_length} "
+                    "may be suboptimal. Consider increasing max_length for better packing."
+                )
+            console.print("[green]Sample packing enabled[/]")
+
+        self.trainer = SFTTrainer(**trainer_kwargs)
 
         self._output_dir = str(output_dir)
 

@@ -21,8 +21,8 @@ class TestExportFormats:
         assert "tensorrt" in SUPPORTED_FORMATS
 
     def test_format_count(self):
-        """Should support exactly 3 export formats."""
-        assert len(SUPPORTED_FORMATS) == 3
+        """Should support exactly 5 export formats (gguf, onnx, tensorrt, awq, gptq)."""
+        assert len(SUPPORTED_FORMATS) == 5
 
 
 # ─── ONNX Export CLI Tests ──────────────────────────────────────────────

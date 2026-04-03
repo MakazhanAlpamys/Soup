@@ -191,6 +191,24 @@ class TrainingConfig(BaseModel):
         default=0.05, gt=0,
         description="Temperature for contrastive (InfoNCE) loss — lower = stricter similarity",
     )
+    # Curriculum learning — sort dataset by difficulty
+    curriculum: bool = Field(
+        default=False,
+        description="Enable curriculum learning (sort dataset by difficulty, easy → hard)",
+    )
+    curriculum_metric: Literal["length", "perplexity", "loss"] = Field(
+        default="length",
+        description="Metric for curriculum difficulty: length, perplexity, or loss",
+    )
+    curriculum_buckets: int = Field(
+        default=4, ge=1, le=20,
+        description="Number of difficulty stages for curriculum learning",
+    )
+    # Sample packing — pack multiple short samples into one sequence
+    packing: bool = Field(
+        default=False,
+        description="Pack multiple short samples into one sequence for faster training",
+    )
     # NEFTune — noisy embeddings for better fine-tuning
     neftune_alpha: Optional[float] = Field(
         default=None,
