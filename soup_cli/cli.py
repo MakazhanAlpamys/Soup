@@ -7,6 +7,7 @@ from rich.console import Console
 
 from soup_cli import __version__
 from soup_cli.commands import (
+    adapters,
     chat,
     data,
     deploy,
@@ -18,6 +19,7 @@ from soup_cli.commands import (
     init,
     merge,
     migrate,
+    profile,
     push,
     recipes,
     runs,
@@ -67,6 +69,10 @@ app.add_typer(
 )
 app.command()(migrate.migrate)
 app.add_typer(
+    adapters.app, name="adapters",
+    help="Adapter management: list, info, compare LoRA adapters.",
+)
+app.add_typer(
     recipes.app, name="recipes",
     help="Ready-made configs: list, show, use, search recipes for popular models.",
 )
@@ -74,6 +80,7 @@ app.command()(serve.serve)
 app.command()(sweep.sweep)
 app.command(name="diff")(diff.diff)
 app.command()(infer.infer)
+app.command()(profile.profile)
 app.command()(doctor_cmd.doctor)
 app.command()(quickstart_cmd.quickstart)
 app.command()(ui.ui)

@@ -2,10 +2,11 @@
 
 import json
 import logging
+import re
 import time
 import uuid
 from pathlib import Path
-from typing import Optional
+from typing import Dict, List, Optional
 
 import typer
 from rich.console import Console
@@ -14,6 +15,45 @@ from rich.panel import Panel
 logger = logging.getLogger(__name__)
 
 console = Console()
+
+
+def _validate_adapter_name(name: str) -> bool:
+    """Validate adapter name: alphanumeric + hyphens only."""
+    if not name:
+        return False
+    return bool(re.match(r'^[a-zA-Z0-9][a-zA-Z0-9\-]*$', name))
+
+
+def _validate_adapter_path(path: str, cwd: str | None = None) -> bool:
+    """Validate adapter path: must exist and stay under cwd."""
+    if cwd is None:
+        cwd = str(Path.cwd())
+    try:
+        resolved = Path(path).resolve()
+        cwd_resolved = Path(cwd).resolve()
+        resolved.relative_to(cwd_resolved)
+        return resolved.exists()
+    except (ValueError, OSError):
+        return False
+
+
+def _parse_adapters(adapters: Optional[List[str]]) -> Dict[str, str]:
+    """Parse adapter name=path pairs from CLI flag.
+
+    Returns dict mapping adapter name → path string.
+    Raises ValueError on invalid format.
+    """
+    if not adapters:
+        return {}
+    result = {}
+    for item in adapters:
+        if "=" not in item:
+            raise ValueError(
+                f"Invalid adapter format: '{item}'. Expected key=path format."
+            )
+        name, path = item.split("=", 1)
+        result[name.strip()] = path.strip()
+    return result
 
 
 def serve(
@@ -76,6 +116,11 @@ def serve(
         "--num-speculative-tokens",
         help="Number of tokens the draft model generates per step (speculative decoding)",
     ),
+    adapters: Optional[List[str]] = typer.Option(
+        None,
+        "--adapters",
+        help="LoRA adapters as name=path pairs (repeatable). E.g. chat=./chat-adapter",
+    ),
 ):
     """Start a local inference server with OpenAI-compatible API."""
     # Lazy imports for fast CLI startup
@@ -136,6 +181,35 @@ def serve(
             console.print(
                 "[red]SGLang not installed.[/]\n"
                 "Install with: [bold]pip install 'soup-cli[sglang]'[/]"
+            )
+            raise typer.Exit(1)
+
+    # Parse and validate multi-adapter map
+    try:
+        adapter_map = _parse_adapters(adapters)
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/]")
+        raise typer.Exit(1)
+
+    if adapter_map and backend != "transformers":
+        console.print(
+            f"[red]--adapters is only supported with --backend transformers.[/]\n"
+            f"Multi-adapter serving for {backend} is not yet implemented."
+        )
+        raise typer.Exit(1)
+
+    cwd = str(Path.cwd())
+    for adapter_name, adapter_path in adapter_map.items():
+        if not _validate_adapter_name(adapter_name):
+            console.print(
+                f"[red]Invalid adapter name: '{adapter_name}'[/]\n"
+                "Names must be alphanumeric + hyphens (e.g., 'chat', 'code-v2')."
+            )
+            raise typer.Exit(1)
+        if not _validate_adapter_path(adapter_path, cwd=cwd):
+            console.print(
+                f"[red]Invalid adapter path: '{adapter_path}'[/]\n"
+                "Path must exist and be under the current working directory."
             )
             raise typer.Exit(1)
 
@@ -251,6 +325,7 @@ def serve(
             max_tokens_default=max_tokens_default,
             draft_model=draft_model,
             num_speculative_tokens=num_speculative_tokens,
+            adapter_map=adapter_map if adapter_map else None,
         )
 
     console.print(
@@ -501,6 +576,7 @@ def _create_app(
     max_tokens_default: int,
     draft_model=None,
     num_speculative_tokens: int = 5,
+    adapter_map: Optional[Dict[str, str]] = None,
 ):
     """Create the FastAPI application with OpenAI-compatible endpoints."""
     from fastapi import FastAPI, HTTPException
@@ -531,12 +607,29 @@ def _create_app(
         top_p: float = Field(default=0.9, ge=0.0, le=1.0)
         max_tokens: Optional[int] = Field(default=None, ge=1, le=16384)
         stream: bool = False
+        adapter: Optional[str] = Field(
+            default=None,
+            description="Adapter name to use (from --adapters flag).",
+        )
+
+    # Resolved adapter map (name → path)
+    _adapter_map = adapter_map or {}
 
     # --- Endpoints ---
 
     @app.get("/health")
     def health():
         return {"status": "ok", "model": model_name, "device": device}
+
+    @app.get("/v1/adapters")
+    def list_adapters():
+        """List loaded LoRA adapters (names only, no paths for security)."""
+        return {
+            "adapters": [
+                {"name": name}
+                for name in _adapter_map
+            ]
+        }
 
     @app.get("/v1/models")
     def list_models():
@@ -553,6 +646,20 @@ def _create_app(
 
     @app.post("/v1/chat/completions")
     def chat_completions(request: ChatCompletionRequest):
+        # Check adapter selection (from request body)
+        requested_adapter = request.adapter
+        if requested_adapter and _adapter_map:
+            if requested_adapter not in _adapter_map:
+                raise HTTPException(
+                    status_code=404,
+                    detail="Unknown adapter. Use GET /v1/adapters to list available adapters.",
+                )
+        elif requested_adapter and not _adapter_map:
+            raise HTTPException(
+                status_code=404,
+                detail="No adapters loaded.",
+            )
+
         messages = [{"role": msg.role, "content": msg.content} for msg in request.messages]
         max_tokens = request.max_tokens or max_tokens_default
 

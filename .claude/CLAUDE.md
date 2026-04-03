@@ -1,12 +1,12 @@
 # Soup CLI — Project CLAUDE.md
 
-Soup is a CLI-first LLM fine-tuning tool (v0.21.1). Python 3.9+, MIT license.
+Soup is a CLI-first LLM fine-tuning tool (v0.22.0). Python 3.9+, MIT license.
 
 ## Build & Development
 
 ```bash
 pip install -e ".[dev]"          # Install editable + test deps
-pytest tests/ -v --tb=short      # Run all tests (1789 tests)
+pytest tests/ -v --tb=short      # Run all tests (1890 tests)
 ruff check soup_cli/ tests/      # Lint (must pass before commit)
 ruff check --fix soup_cli/ tests/  # Auto-fix lint issues
 ```
@@ -80,6 +80,8 @@ soup_cli/
     data.py            # soup data (inspect/validate/convert/merge/dedup/stats)
     generate.py        # soup data generate (synthetic data via LLM APIs)
     migrate.py         # soup migrate (import configs from competitors)
+    profile.py         # soup profile (memory/speed estimator before training)
+    adapters.py        # soup adapters (list/info/compare LoRA adapters)
     recipes.py         # soup recipes (list/show/use/search ready-made configs)
     infer.py           # soup infer (batch inference on JSONL prompts)
     runs.py            # soup runs (list/show/compare/delete experiments)
@@ -108,8 +110,9 @@ soup_cli/
     quality.py         # Perplexity + coherence scoring for data quality filters
     sglang.py          # SGLang runtime backend (high-throughput serving)
     ollama.py          # Ollama integration (detect, deploy, list, remove, Modelfile gen)
+    profiler.py        # Training memory/speed estimator (GPU lookup, model arch)
     constants.py       # APP_NAME, paths, default chat template
-tests/                 # 58 test files, 1577 tests
+tests/                 # 66 test files, 1882 tests
 examples/
   configs/             # 7 production-ready YAML examples
   data/                # Sample datasets
@@ -122,7 +125,7 @@ soup init              # Create config (interactive or --template)
 soup train             # Main training (--config, --resume, --wandb, --tensorboard, --deepspeed, --fsdp, --yes)
 soup infer             # Batch inference (--model, --input, --output)
 soup chat              # Terminal chat with model
-soup serve             # OpenAI-compatible inference server (--backend transformers|vllm|sglang, --speculative-decoding)
+soup serve             # OpenAI-compatible inference server (--backend transformers|vllm|sglang, --speculative-decoding, --adapters)
 soup export            # Convert to GGUF/ONNX/TensorRT for deployment
 soup export --deploy ollama  # Export GGUF + auto-deploy to Ollama
 soup deploy ollama     # Deploy GGUF model to local Ollama instance
@@ -150,6 +153,11 @@ soup recipes show      # Print recipe YAML to stdout
 soup recipes use       # Copy recipe to soup.yaml
 soup recipes search    # Search recipes by keyword, task, or model size
 soup data filter       # Quality filter (perplexity + coherence scoring)
+soup data sample       # Sample subset: random, diverse (TF-IDF + clusters), hard (by length)
+soup profile           # Estimate memory, speed, GPU requirements before training
+soup adapters list     # Scan directory for LoRA adapters
+soup adapters info     # Show adapter metadata (base model, rank, size)
+soup adapters compare  # Side-by-side adapter comparison
 soup runs              # List experiment runs
 soup runs show <id>    # Detailed run info + metrics
 soup runs compare      # Side-by-side loss curves
@@ -259,6 +267,9 @@ soup version           # Show version (--full for details)
 - **Unsloth .ipynb**: AST-only parsing (no exec/eval of notebook code) (v0.21.0)
 - **Recipes output**: resolve + relative_to(cwd) — path traversal protection (v0.21.0)
 - **NEFTune config**: neftune_alpha bounded ge=0.0, le=50.0 (v0.21.0)
+- **Multi-adapter serving**: adapter paths resolve + relative_to(cwd) — path traversal protection (v0.22.0)
+- **Multi-adapter serving**: adapter name validation — alphanumeric + hyphens only (v0.22.0)
+- **Multi-adapter serving**: unknown adapter → 404 (not 500) (v0.22.0)
 
 ## Code Conventions
 
@@ -330,7 +341,7 @@ soup version           # Show version (--full for details)
 15. **Tag**: `git tag v0.X.Y && git push origin v0.X.Y`
 16. **Release**: `gh release create v0.X.Y` with changelog (What's New, Install/Upgrade)
 
-## Tests (62 test files, 1789 tests)
+## Tests (66 test files, 1890 tests)
 
 | File | Covers |
 |------|--------|
@@ -395,3 +406,7 @@ soup version           # Show version (--full for details)
 | test_migrate.py | LLaMA-Factory/Axolotl/Unsloth migration, path traversal, round-trip validation |
 | test_recipes.py | Recipe catalog, search, CLI (list/show/use), path traversal |
 | test_neftune_rslora.py | NEFTune config/validation/sweep, rsLoRA config/validation/sweep |
+| test_profile.py | Training profiler: memory estimation, speed, GPU recommendations, CLI |
+| test_multi_adapter.py | Multi-adapter serving: validation, parsing, FastAPI endpoints, CLI |
+| test_data_sample.py | Data sampling: random/diverse/hard strategies, CLI, edge cases |
+| test_adapters.py | Adapter management: list/info/compare, discovery, metadata |

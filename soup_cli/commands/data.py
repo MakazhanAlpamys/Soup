@@ -579,3 +579,188 @@ def _write_jsonl(path: Path, data: list[dict]) -> None:
     with open(path, "w", encoding="utf-8") as f:
         for row in data:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+# --- Sampling strategies ---
+
+
+def _sample_random(data: list[dict], num: int, seed: int | None = None) -> list[dict]:
+    """Random sampling without replacement."""
+    rng = random.Random(seed)
+    num = min(num, len(data))
+    return rng.sample(data, num)
+
+
+def _sample_diverse(
+    data: list[dict], num: int, seed: int | None = None
+) -> list[dict]:
+    """Cluster-based diverse sampling using TF-IDF + K-means.
+
+    Falls back to random sampling if sklearn is not available.
+    """
+    num = min(num, len(data))
+    if num >= len(data):
+        return list(data)
+
+    # Extract text representations
+    texts = [
+        " ".join(str(val) for val in row.values() if val) for row in data
+    ]
+
+    try:
+        from sklearn.cluster import MiniBatchKMeans
+        from sklearn.feature_extraction.text import TfidfVectorizer
+
+        vectorizer = TfidfVectorizer(max_features=1000, stop_words="english")
+        tfidf_matrix = vectorizer.fit_transform(texts)
+
+        num_clusters = min(num, len(data))
+        kmeans = MiniBatchKMeans(
+            n_clusters=num_clusters, random_state=seed or 0, n_init=3
+        )
+        labels = kmeans.fit_predict(tfidf_matrix)
+
+        # Sample one item from each cluster (index-based dedup)
+        chosen_indices: list[int] = []
+        rng = random.Random(seed)
+        for cluster_id in range(num_clusters):
+            cluster_indices = [
+                idx for idx, label in enumerate(labels) if label == cluster_id
+            ]
+            if cluster_indices:
+                chosen_indices.append(rng.choice(cluster_indices))
+
+        sampled = [data[idx] for idx in chosen_indices]
+
+        # If we need more, fill randomly from remaining
+        if len(sampled) < num:
+            remaining_indices = list(set(range(len(data))) - set(chosen_indices))
+            extra_indices = rng.sample(
+                remaining_indices, min(num - len(sampled), len(remaining_indices))
+            )
+            sampled.extend(data[idx] for idx in extra_indices)
+
+        return sampled[:num]
+
+    except ImportError:
+        # Fallback: simple length-based diversity (bucket by text length)
+        rng = random.Random(seed)
+        indexed = [(idx, len(texts[idx])) for idx in range(len(data))]
+        indexed.sort(key=lambda pair: pair[1])
+        # Evenly spaced picks across sorted list
+        step = max(1, len(indexed) // num)
+        picked_indices = [
+            indexed[idx * step][0] for idx in range(min(num, len(indexed)))
+        ]
+        picked = [data[idx] for idx in picked_indices]
+        # Fill remainder randomly
+        if len(picked) < num:
+            remaining_indices = list(set(range(len(data))) - set(picked_indices))
+            extra_indices = rng.sample(
+                remaining_indices, min(num - len(picked), len(remaining_indices))
+            )
+            picked.extend(data[idx] for idx in extra_indices)
+        return picked[:num]
+
+
+def _sample_hard(data: list[dict], num: int) -> list[dict]:
+    """Sample hardest examples by text length (proxy for complexity).
+
+    Longer texts tend to be more complex / challenging.
+    """
+    num = min(num, len(data))
+    if num >= len(data):
+        return list(data)
+
+    # Score by total text length (proxy for difficulty)
+    scored = []
+    for row in data:
+        text_len = sum(len(str(val)) for val in row.values() if val)
+        scored.append((text_len, row))
+
+    # Sort by length descending, take top N
+    scored.sort(key=lambda pair: pair[0], reverse=True)
+    return [row for _, row in scored[:num]]
+
+
+@app.command(name="sample")
+def sample_data(
+    path: str = typer.Argument(..., help="Path to dataset file"),
+    output: str = typer.Option(
+        None, "--output", "-o",
+        help="Output file path (default: <input>_sampled.jsonl)",
+    ),
+    num: int = typer.Option(
+        None, "--n", "-n",
+        help="Number of samples to select",
+    ),
+    pct: float = typer.Option(
+        None, "--pct",
+        help="Percentage of dataset to sample (0-100)",
+    ),
+    strategy: str = typer.Option(
+        "random", "--strategy", "-s",
+        help="Sampling strategy: random, diverse (TF-IDF + clusters), hard (by length)",
+    ),
+    seed: int = typer.Option(
+        None, "--seed",
+        help="Random seed for reproducibility",
+    ),
+):
+    """Sample a subset of a dataset using various strategies."""
+    file_path = Path(path)
+    if not file_path.exists():
+        console.print(f"[red]File not found: {file_path}[/]")
+        raise typer.Exit(1)
+
+    if num is None and pct is None:
+        console.print("[red]Specify either --n (count) or --pct (percentage).[/]")
+        raise typer.Exit(1)
+
+    if strategy not in ("random", "diverse", "hard"):
+        console.print(
+            f"[red]Unknown strategy: {strategy}[/]\n"
+            "Supported: [bold]random[/], [bold]diverse[/], [bold]hard[/]"
+        )
+        raise typer.Exit(1)
+
+    data = load_raw_data(file_path)
+    if not data:
+        console.print("[red]Dataset is empty.[/]")
+        raise typer.Exit(1)
+
+    # Compute sample count
+    if pct is not None:
+        sample_count = max(1, int(len(data) * pct / 100))
+    else:
+        sample_count = num
+
+    # Apply strategy
+    if strategy == "random":
+        sampled = _sample_random(data, sample_count, seed=seed)
+    elif strategy == "diverse":
+        sampled = _sample_diverse(data, sample_count, seed=seed)
+    elif strategy == "hard":
+        sampled = _sample_hard(data, sample_count)
+    else:
+        sampled = _sample_random(data, sample_count, seed=seed)
+
+    # Resolve output path (with path traversal protection on explicit --output)
+    if output is None:
+        out_path = file_path.parent / f"{file_path.stem}_sampled.jsonl"
+    else:
+        out_path = Path(output).resolve()
+        cwd = Path.cwd().resolve()
+        try:
+            out_path.relative_to(cwd)
+        except ValueError:
+            console.print("[red]Output path must be under the current working directory.[/]")
+            raise typer.Exit(1)
+
+    _write_jsonl(out_path, sampled)
+
+    console.print(
+        f"[green]Sampled {len(sampled)} rows[/] from {len(data)} "
+        f"(strategy: {strategy})\n"
+        f"Output: [bold]{out_path}[/]"
+    )

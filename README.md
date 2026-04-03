@@ -1349,6 +1349,17 @@ soup data generate ... --provider vllm        Use local vLLM server
 soup data generate ... --template code        Domain templates (code/conversation/qa/preference/reasoning)
 soup data generate ... --quality-pipeline     Auto validate + filter + dedup
 soup data filter <path> --coherence 0.3       Quality filter (perplexity/coherence)
+soup data sample <path> --n 1000             Random sample subset
+soup data sample <path> --n 1000 --strategy diverse  Cluster-based diverse sampling
+soup data sample <path> --n 1000 --strategy hard     Sample hardest examples
+soup data sample <path> --pct 10             Sample by percentage
+soup profile --config soup.yaml              Estimate memory/speed before training
+soup profile --config soup.yaml --gpu a100   Estimate for specific GPU
+soup profile --config soup.yaml --json       Machine-readable output
+soup adapters list ./output/                 Scan for LoRA adapters
+soup adapters info ./output/checkpoint-500/  Show adapter metadata
+soup adapters compare adapter1/ adapter2/    Compare two adapters
+soup serve --model m --adapters chat=./c code=./d  Multi-adapter serving
 soup migrate --from llamafactory config.yaml  Import config from LLaMA-Factory
 soup migrate --from axolotl config.yml        Import config from Axolotl
 soup migrate --from unsloth notebook.ipynb    Import config from Unsloth notebook
