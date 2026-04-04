@@ -1,6 +1,7 @@
 """Tests for AWQ and GPTQ export — config, validation, CLI."""
 
 import builtins
+import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock
 from unittest.mock import patch as mock_patch
@@ -592,15 +593,28 @@ class TestOutputPathValidation:
         """Path outside cwd should raise ClickExit."""
         from soup_cli.commands.export import _validate_output_path
 
+        # Use a path guaranteed to be outside cwd on all platforms
+        outside = Path(tempfile.gettempdir()).resolve()
+        cwd = Path.cwd().resolve()
+        # Only test if temp dir is actually outside cwd
+        try:
+            outside.relative_to(cwd)
+            pytest.skip("tempdir is under cwd, cannot test outside path")
+        except ValueError:
+            pass
         with pytest.raises(ClickExit):
-            _validate_output_path("C:/Windows/System32/evil_output")
+            _validate_output_path(str(outside / "evil_output"))
 
-    def test_path_traversal_rejected(self):
-        """Relative path traversal should be rejected."""
+    def test_path_traversal_rejected(self, tmp_path, monkeypatch):
+        """Path outside cwd via relative traversal should be rejected."""
         from soup_cli.commands.export import _validate_output_path
 
+        # Set cwd to a subdirectory so ../evil is outside
+        sub = tmp_path / "deep" / "nested"
+        sub.mkdir(parents=True)
+        monkeypatch.chdir(sub)
         with pytest.raises(ClickExit):
-            _validate_output_path("../../../tmp/evil")
+            _validate_output_path(str(tmp_path / "evil"))
 
 
 # ─── Optional Dependency Tests ────────────────────────────────────────────
