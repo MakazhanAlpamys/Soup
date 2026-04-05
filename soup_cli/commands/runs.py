@@ -270,7 +270,6 @@ def delete(
     tracker.delete_run(run["run_id"])
     console.print(f"[green]Deleted run: {run['run_id']}[/]")
 
-
 @app.command()
 def clean(
     run_id: Optional[str] = typer.Argument(None, help="Run ID (or prefix) to clean. Omit if --all is used."),
