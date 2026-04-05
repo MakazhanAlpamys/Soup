@@ -754,96 +754,6 @@ training:
 output: ./output
 """,
     ),
-    "llama3.2-11b-vision": RecipeMeta(
-        model="meta-llama/Llama-3.2-11B-Vision-Instruct",
-        task="sft",
-        size="11B",
-        tags=("llama", "vision", "multimodal", "image"),
-        description="Llama 3.2 11B Vision multimodal fine-tuning",
-        yaml_str="""\
-base: meta-llama/Llama-3.2-11B-Vision-Instruct
-task: sft
-modality: vision
-
-data:
-  train: ./data/vision_train.jsonl
-  format: llava
-  image_dir: ./data/images
-  max_length: 2048
-
-training:
-  epochs: 3
-  lr: 1e-5
-  batch_size: auto
-  lora:
-    r: 16
-    alpha: 32
-    target_modules: auto
-  quantization: 4bit
-
-output: ./output
-""",
-    ),
-    "qwen2.5-7b-reward": RecipeMeta(
-        model="Qwen/Qwen2.5-7B-Instruct",
-        task="reward_model",
-        size="7B",
-        tags=("qwen", "reward", "rlhf", "stage2"),
-        description="Qwen 2.5 7B reward model (RLHF stage 2)",
-        yaml_str="""\
-base: Qwen/Qwen2.5-7B-Instruct
-task: reward_model
-
-data:
-  train: ./data/preference_train.jsonl
-  format: dpo
-  max_length: 2048
-
-training:
-  epochs: 1
-  lr: 1e-5
-  batch_size: auto
-  lora:
-    r: 16
-    alpha: 32
-    target_modules: auto
-  quantization: 4bit
-
-output: ./output_rm
-""",
-    ),
-    "llama3.1-8b-ppo": RecipeMeta(
-        model="meta-llama/Llama-3.1-8B-Instruct",
-        task="ppo",
-        size="8B",
-        tags=("llama", "ppo", "rlhf", "stage3"),
-        description="Llama 3.1 8B PPO (RLHF stage 3)",
-        yaml_str="""\
-base: meta-llama/Llama-3.1-8B-Instruct
-task: ppo
-
-data:
-  train: ./data/prompts.jsonl
-  format: auto
-  max_length: 2048
-
-training:
-  epochs: 1
-  lr: 1e-6
-  batch_size: auto
-  lora:
-    r: 16
-    alpha: 32
-    target_modules: auto
-  quantization: 4bit
-  reward_model: ./output_rm
-  ppo_epochs: 4
-  ppo_clip_ratio: 0.2
-  ppo_kl_penalty: 0.05
-
-output: ./output_ppo
-""",
-    ),
     "llama3.1-8b-longctx": RecipeMeta(
         model="meta-llama/Llama-3.1-8B-Instruct",
         task="sft",
@@ -901,6 +811,38 @@ training:
     target_modules: auto
   quantization: 4bit
   ipo_tau: 0.1
+
+output: ./output
+""",
+    ),
+    "deepseek-v3-8b-grpo": RecipeMeta(
+        model="deepseek-ai/DeepSeek-V3",
+        task="grpo",
+        size="8B",
+        tags=("deepseek", "grpo", "reasoning", "v3"),
+        description="DeepSeek-V3 8B GRPO reasoning",
+        yaml_str="""\
+base: deepseek-ai/DeepSeek-V3
+task: grpo
+
+data:
+  train: ./data/reasoning_train.jsonl
+  format: chatml
+  max_length: 4096
+
+training:
+  epochs: 3
+  lr: 1e-5
+  batch_size: auto
+  gradient_accumulation_steps: 8
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  quantization: 4bit
+  grpo_beta: 0.1
+  num_generations: 4
+  reward_fn: accuracy
 
 output: ./output
 """,
