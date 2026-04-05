@@ -1151,7 +1151,7 @@ Check your environment for compatibility issues:
 soup doctor
 ```
 
-Shows: Python version, GPU availability, all dependency versions, and fix suggestions.
+Shows: Python version, GPU availability, system resources (RAM/Disk), all dependency versions, and fix suggestions.
 
 ## Version Info
 
@@ -1556,7 +1556,7 @@ pip install soup-cli
 ### Quick environment check
 
 ```bash
-soup doctor    # Shows GPU, dependencies, and version info
+soup doctor    # Shows GPU, system resources, dependencies, and version info
 ```
 
 ## Development

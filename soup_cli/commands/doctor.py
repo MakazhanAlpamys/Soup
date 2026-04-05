@@ -58,6 +58,9 @@ def doctor():
     # GPU check
     _check_gpu()
 
+    # Resources check
+    _check_resources()
+
     # Dependencies table
     table = Table(title="Dependencies")
     table.add_column("Package", style="bold")
@@ -169,6 +172,78 @@ def _check_gpu():
                 title="GPU",
             )
         )
+
+
+def _check_resources():
+    """Check RAM and Disk space and display info."""
+    import shutil
+
+    table = Table(title="System Resources")
+    table.add_column("Resource", style="bold")
+    table.add_column("Value")
+
+    # RAM
+    ram_str = "Unknown"
+    try:
+        import psutil
+        mem = psutil.virtual_memory()
+        ram_str = f"{mem.total / (1024 ** 3):.0f} GB"
+    except ImportError:
+        pass
+
+    if ram_str == "Unknown":
+        if platform.system() == "Linux":
+            try:
+                with open("/proc/meminfo", "r") as f:
+                    for line in f:
+                        if line.startswith("MemTotal:"):
+                            kb = int(line.split()[1])
+                            ram_str = f"{kb / (1024 ** 2):.0f} GB"
+                            break
+            except Exception:
+                pass
+        elif platform.system() == "Darwin":
+            try:
+                import subprocess
+                res = subprocess.run(["sysctl", "-n", "hw.memsize"], capture_output=True, text=True)
+                if res.returncode == 0:
+                    ram_str = f"{int(res.stdout.strip()) / (1024 ** 3):.0f} GB"
+            except Exception:
+                pass
+        elif platform.system() == "Windows":
+            try:
+                import ctypes
+                class MEMORYSTATUSEX(ctypes.Structure):
+                    _fields_ = [
+                        ("dwLength", ctypes.c_ulong),
+                        ("dwMemoryLoad", ctypes.c_ulong),
+                        ("ullTotalPhys", ctypes.c_ulonglong),
+                        ("ullAvailPhys", ctypes.c_ulonglong),
+                        ("ullTotalPageFile", ctypes.c_ulonglong),
+                        ("ullAvailPageFile", ctypes.c_ulonglong),
+                        ("ullTotalVirtual", ctypes.c_ulonglong),
+                        ("ullAvailVirtual", ctypes.c_ulonglong),
+                        ("sullAvailExtendedVirtual", ctypes.c_ulonglong),
+                    ]
+                stat = MEMORYSTATUSEX()
+                stat.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
+                ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat))
+                ram_str = f"{stat.ullTotalPhys / (1024 ** 3):.0f} GB"
+            except Exception:
+                pass
+
+    table.add_row("RAM", ram_str)
+
+    # Disk
+    try:
+        usage = shutil.disk_usage(".")
+        disk_str = f"{usage.free / (1024 ** 3):.0f} GB"
+    except Exception:
+        disk_str = "Unknown"
+
+    table.add_row("Disk", disk_str)
+    console.print(table)
+    console.print()
 
 
 def _check_torchvision_compat(issues: list):

@@ -80,6 +80,15 @@ def test_doctor_shows_gpu_section():
     assert "GPU" in result.output
 
 
+def test_doctor_shows_system_resources():
+    """soup doctor shows System Resources section."""
+    result = runner.invoke(app, ["doctor"])
+    assert result.exit_code == 0
+    assert "System Resources" in result.output
+    assert "RAM" in result.output
+    assert "Disk" in result.output
+
+
 def test_doctor_checks_torch():
     """soup doctor checks for torch."""
     result = runner.invoke(app, ["doctor"])

@@ -165,7 +165,7 @@ pytest tests/ --cov=soup_cli --cov-report=html
 | test_diff.py | Diff prompts collection, metrics, CLI |
 | test_deepspeed.py | DeepSpeed configs, multi-GPU detection, trainer integration |
 | test_errors.py | Friendly error messages, --verbose flag, error mapping |
-| test_doctor.py | `soup doctor` command, version checking, dependency table |
+| test_doctor.py | `soup doctor` command, version checking, system resources, dependency table |
 | test_quickstart.py | `soup quickstart` demo, data/config creation, --dry-run |
 | test_grpo.py | GRPO config, rewards, data prep, template, sweep shortcuts |
 | test_progress.py | Rich download progress bar, `_enable_hf_transfer_progress` |
