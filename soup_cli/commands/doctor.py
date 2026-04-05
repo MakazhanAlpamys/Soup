@@ -174,6 +174,66 @@ def _check_gpu():
         )
 
 
+_GB = 1024 ** 3
+
+
+def _get_ram_gb() -> str:
+    """Get total system RAM in GB, with cross-platform fallbacks."""
+    # Prefer psutil if installed
+    try:
+        import psutil
+        return f"{psutil.virtual_memory().total / _GB:.0f} GB"
+    except ImportError:
+        pass
+
+    system = platform.system()
+    if system == "Linux":
+        try:
+            with open("/proc/meminfo", encoding="utf-8") as fh:
+                for line in fh:
+                    if line.startswith("MemTotal:"):
+                        kb = int(line.split()[1])
+                        return f"{kb * 1024 / _GB:.0f} GB"
+        except (OSError, ValueError):
+            pass
+    elif system == "Darwin":
+        try:
+            import subprocess
+            res = subprocess.run(
+                ["sysctl", "-n", "hw.memsize"],
+                capture_output=True, text=True, timeout=5, check=False,
+            )
+            if res.returncode == 0:
+                return f"{int(res.stdout.strip()) / _GB:.0f} GB"
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            pass
+    elif system == "Windows":
+        try:
+            import ctypes
+
+            class MEMORYSTATUSEX(ctypes.Structure):
+                _fields_ = [
+                    ("dwLength", ctypes.c_ulong),
+                    ("dwMemoryLoad", ctypes.c_ulong),
+                    ("ullTotalPhys", ctypes.c_ulonglong),
+                    ("ullAvailPhys", ctypes.c_ulonglong),
+                    ("ullTotalPageFile", ctypes.c_ulonglong),
+                    ("ullAvailPageFile", ctypes.c_ulonglong),
+                    ("ullTotalVirtual", ctypes.c_ulonglong),
+                    ("ullAvailVirtual", ctypes.c_ulonglong),
+                    ("sullAvailExtendedVirtual", ctypes.c_ulonglong),
+                ]
+
+            stat = MEMORYSTATUSEX()
+            stat.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
+            ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat))
+            return f"{stat.ullTotalPhys / _GB:.0f} GB"
+        except (OSError, AttributeError):
+            pass
+
+    return "Unknown"
+
+
 def _check_resources():
     """Check RAM and Disk space and display info."""
     import shutil
@@ -182,63 +242,12 @@ def _check_resources():
     table.add_column("Resource", style="bold")
     table.add_column("Value")
 
-    # RAM
-    ram_str = "Unknown"
-    try:
-        import psutil
-        mem = psutil.virtual_memory()
-        ram_str = f"{mem.total / (1024 ** 3):.0f} GB"
-    except ImportError:
-        pass
+    table.add_row("RAM", _get_ram_gb())
 
-    if ram_str == "Unknown":
-        if platform.system() == "Linux":
-            try:
-                with open("/proc/meminfo", "r") as f:
-                    for line in f:
-                        if line.startswith("MemTotal:"):
-                            kb = int(line.split()[1])
-                            ram_str = f"{kb / (1024 ** 2):.0f} GB"
-                            break
-            except Exception:
-                pass
-        elif platform.system() == "Darwin":
-            try:
-                import subprocess
-                res = subprocess.run(["sysctl", "-n", "hw.memsize"], capture_output=True, text=True)
-                if res.returncode == 0:
-                    ram_str = f"{int(res.stdout.strip()) / (1024 ** 3):.0f} GB"
-            except Exception:
-                pass
-        elif platform.system() == "Windows":
-            try:
-                import ctypes
-                class MEMORYSTATUSEX(ctypes.Structure):
-                    _fields_ = [
-                        ("dwLength", ctypes.c_ulong),
-                        ("dwMemoryLoad", ctypes.c_ulong),
-                        ("ullTotalPhys", ctypes.c_ulonglong),
-                        ("ullAvailPhys", ctypes.c_ulonglong),
-                        ("ullTotalPageFile", ctypes.c_ulonglong),
-                        ("ullAvailPageFile", ctypes.c_ulonglong),
-                        ("ullTotalVirtual", ctypes.c_ulonglong),
-                        ("ullAvailVirtual", ctypes.c_ulonglong),
-                        ("sullAvailExtendedVirtual", ctypes.c_ulonglong),
-                    ]
-                stat = MEMORYSTATUSEX()
-                stat.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
-                ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat))
-                ram_str = f"{stat.ullTotalPhys / (1024 ** 3):.0f} GB"
-            except Exception:
-                pass
-
-    table.add_row("RAM", ram_str)
-
-    # Disk
     try:
         usage = shutil.disk_usage(".")
-        disk_str = f"{usage.free / (1024 ** 3):.0f} GB"
-    except Exception:
+        disk_str = f"{usage.free / _GB:.0f} GB free"
+    except OSError:
         disk_str = "Unknown"
 
     table.add_row("Disk", disk_str)
