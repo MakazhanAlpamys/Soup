@@ -271,6 +271,129 @@ def delete(
     console.print(f"[green]Deleted run: {run['run_id']}[/]")
 
 
+@app.command()
+def clean(
+    run_id: Optional[str] = typer.Argument(
+        None, help="Run ID (or prefix) to clean. Omit if --all is used."
+    ),
+    all_runs: bool = typer.Option(False, "--all", help="Cleanup all historical runs."),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Estimate space savings without deleting."
+    ),
+    force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation"),
+    keep_weights: bool = typer.Option(
+        True, "--keep-weights",
+        help="Keep intermediate model weights but delete optimizer states."
+    ),
+):
+    """Intelligently clean up redundant checkpoint files to reclaim disk space."""
+    import shutil
+    from pathlib import Path
+
+    from soup_cli.experiment.tracker import ExperimentTracker
+
+    tracker = ExperimentTracker()
+
+    if all_runs:
+        runs_to_clean = tracker.list_runs(limit=100000)
+    elif run_id:
+        run = tracker.get_run(run_id)
+        if not run:
+            console.print(f"[red]Run not found: {run_id}[/]")
+            raise typer.Exit(1)
+        runs_to_clean = [run]
+    else:
+        console.print("[red]Must specify RUN_ID or use --all[/]")
+        console.print("[dim]Example: soup runs clean run_2026...[/]")
+        raise typer.Exit(1)
+
+    if not runs_to_clean:
+        console.print("[yellow]No runs to clean.[/]")
+        raise typer.Exit()
+
+    total_bytes_to_reclaim = 0
+    files_to_delete = []
+    dirs_to_delete = []
+
+    for run in runs_to_clean:
+        out_dir_str = run.get("output_dir")
+        if not out_dir_str:
+            continue
+        output_dir = Path(out_dir_str)
+        if not output_dir.exists():
+            continue
+
+        metrics = tracker.get_metrics(run["run_id"])
+
+        best_step = -1
+        valid_metrics = [m for m in metrics if m.get("loss") is not None]
+        if valid_metrics:
+            best_metric = min(valid_metrics, key=lambda x: x["loss"])
+            best_step = best_metric["step"]
+
+        checkpoints = [d for d in output_dir.glob("checkpoint-*") if d.is_dir()]
+        for ckpt in checkpoints:
+            is_best = False
+            try:
+                step = int(ckpt.name.split("-")[-1])
+                if step == best_step:
+                    is_best = True
+            except ValueError:
+                pass
+
+            if is_best:
+                continue
+
+            if keep_weights:
+                for opt_file in ckpt.glob("optimizer*.pt"):
+                    total_bytes_to_reclaim += opt_file.stat().st_size
+                    files_to_delete.append(opt_file)
+                for opt_file in ckpt.glob("optimizer*.safetensors"):
+                    total_bytes_to_reclaim += opt_file.stat().st_size
+                    files_to_delete.append(opt_file)
+                for sch_file in ckpt.glob("scheduler.pt"):
+                    total_bytes_to_reclaim += sch_file.stat().st_size
+                    files_to_delete.append(sch_file)
+            else:
+                size = sum(f.stat().st_size for f in ckpt.rglob('*') if f.is_file())
+                total_bytes_to_reclaim += size
+                dirs_to_delete.append(ckpt)
+
+    if total_bytes_to_reclaim == 0:
+        console.print("[green]No disposable checkpoints found. Storage is already optimized.[/]")
+        raise typer.Exit()
+
+    gb_to_reclaim = total_bytes_to_reclaim / (1024 ** 3)
+
+    if dry_run:
+        console.print(f"[bold]Dry Run:[/] Would reclaim [green]{gb_to_reclaim:.2f} GB[/] "
+                      f"from {len(files_to_delete)} files "
+                      f"and {len(dirs_to_delete)} directories.")
+        for d in dirs_to_delete:
+            console.print(f"  [red]Delete dir:[/]\t{d}")
+        for f in files_to_delete:
+            console.print(f"  [red]Delete file:[/]\t{f}")
+        raise typer.Exit()
+
+    if not force:
+        console.print(f"Ready to reclaim [green]{gb_to_reclaim:.2f} GB[/] by pruning checkpoints.")
+        if not typer.confirm("Do you want to proceed?"):
+            raise typer.Exit()
+
+    for f in files_to_delete:
+        try:
+            f.unlink()
+        except OSError:
+            pass
+    for d in dirs_to_delete:
+        try:
+            shutil.rmtree(d)
+        except OSError:
+            pass
+
+    console.print(f"[green]Successfully reclaimed {gb_to_reclaim:.2f} GB.[/]")
+
+
 def _fmt_loss(run: dict) -> str:
     """Format loss as 'initial -> final'."""
     init = run.get("initial_loss")

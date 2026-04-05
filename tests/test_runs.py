@@ -119,3 +119,56 @@ def test_runs_delete_with_data(tracker):
     assert "Deleted" in result.output
     # Verify it's gone
     assert tracker.get_run(run_id) is None
+
+
+def test_runs_clean_not_found():
+    """soup runs clean with bad IDs should fail."""
+    result = runner.invoke(app, ["runs", "clean", "nonexistent"])
+    assert result.exit_code == 1
+
+
+def test_runs_clean_with_data(tracker, tmp_path):
+    """soup runs clean should reclaim space natively."""
+    out_dir = tmp_path / "output"
+    out_dir.mkdir()
+
+    # create some dummy checkpoints
+    ckpt1 = out_dir / "checkpoint-100"
+    ckpt1.mkdir()
+    (ckpt1 / "optimizer.pt").write_text("dummy")
+    (ckpt1 / "adapter_model.bin").write_text("model")
+
+    ckpt2 = out_dir / "checkpoint-200"
+    ckpt2.mkdir()
+    (ckpt2 / "optimizer.pt").write_text("dummy")
+    (ckpt2 / "adapter_model.bin").write_text("model")
+
+    run_id = tracker.start_run(
+        config_dict={}, device="cpu", device_name="CPU", gpu_info={},
+    )
+    tracker.finish_run(
+        run_id=run_id,
+        initial_loss=2.0,
+        final_loss=1.0, # let's say step 100 has lower loss, but we mock tracker
+        total_steps=200,
+        duration_secs=100.0,
+        output_dir=str(out_dir),
+    )
+    # mock metrics: step 200 is best
+    tracker.log_metrics(run_id, step=100, loss=2.0)
+    tracker.log_metrics(run_id, step=200, loss=1.0)
+
+    result = runner.invoke(app, ["runs", "clean", run_id, "--force"])
+    assert result.exit_code == 0
+    assert "Successfully reclaimed" in result.output
+
+    # verify optimizer in ckpt1 is gone, but in ckpt2 it's potentially kept or not
+    # based on keep-weights
+    # if it's the best (200), ckpt2 optimizer should exist. ckpt1 should not exist
+    assert not (ckpt1 / "optimizer.pt").exists()
+    assert (ckpt2 / "optimizer.pt").exists()
+
+    # test --all
+    result = runner.invoke(app, ["runs", "clean", "--all", "--force"])
+    assert "No disposable checkpoint files found" in result.output
+
