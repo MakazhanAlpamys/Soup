@@ -382,3 +382,86 @@ See [config schema documentation](../CLAUDE.md#config-system) for all available 
 - Read [SECURITY.md](../SECURITY.md) for security questions
 
 Happy training! 🍲
+
+## Synthetic Data Workflow
+
+This guide demonstrates how to generate synthetic training data using `soup data generate`, validate it, filter it based on perplexity, and then train a model.
+
+### Step 1: Create a Seed Dataset
+
+First, create a small seed dataset with a few examples. This will guide the LLM during data generation. Create a file named `examples/data/synth_seed.jsonl` with the following content:
+
+```jsonl
+{"instruction": "Translate the following English text to French:", "input": "Hello, world!", "output": "Bonjour, le monde!"}
+{"instruction": "Write a short story about a cat who goes on an adventure.", "input": "", "output": "Whiskers the cat was bored. He decided to explore the garden..."}
+{"instruction": "What is the capital of France?", "input": "", "output": "The capital of France is Paris."}
+{"instruction": "Explain the concept of quantum entanglement.", "input": "", "output": "Quantum entanglement is a phenomenon where two particles become linked..."}
+```
+
+### Step 2: Generate Synthetic Data
+
+Use the `soup data generate` command to create a larger dataset.  Replace `<YOUR_OLLAMA_MODEL>` with the name of your Ollama model (e.g., `llama2`).
+
+```bash
+soup data generate --provider ollama --model <YOUR_OLLAMA_MODEL> --seed examples/data/synth_seed.jsonl --output synthetic_data.jsonl --num-samples 100
+```
+
+This command will generate 100 new examples based on the seed data using the specified Ollama model.
+
+### Step 3: Validate the Generated Data
+
+Validate the generated data to ensure it's in the correct format.
+
+```bash
+soup data validate synthetic_data.jsonl --format alpaca
+```
+
+This command will check if the generated data conforms to the Alpaca format.
+
+### Step 4: Filter Data Based on Perplexity
+
+Filter the generated data based on perplexity to remove low-quality samples.  You'll need a model for this step.  Replace `<YOUR_MODEL_PATH>` with the path to a pre-trained model.
+
+```bash
+soup data filter --perplexity synthetic_data.jsonl --model <YOUR_MODEL_PATH> --output filtered_data.jsonl --threshold 5.0
+```
+
+This command will calculate the perplexity of each sample and keep only those with a perplexity score below the specified threshold (5.0 in this example).
+
+### Step 5: Train a Model
+
+Finally, train a model using the filtered data.  Create a configuration file (e.g., `examples/configs/synth_train.yaml`) and specify the path to the filtered data.
+
+```yaml
+model: tinyllama-1.1b
+data:
+  path: filtered_data.jsonl
+  format: alpaca
+task: sft
+lora_r: 16
+lora_alpha: 32
+batch_size: 32
+num_epochs: 3
+learning_rate: 5e-4
+output_dir: ./output_synth/
+```
+
+Then, run the training command:
+
+```bash
+soup train --config examples/configs/synth_train.yaml
+```
+
+This will train a model using the filtered synthetic data.
+
+### Updating the README
+
+Add the following link to the examples section of `examples/README.md`:
+
+```markdown
+### 13. Synthetic Data Workflow
+
+Generate, validate, filter, and train with synthetic data:
+
+[examples/synthetic_data_workflow.md](synthetic_data_workflow.md)
+```
