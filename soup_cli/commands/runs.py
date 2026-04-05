@@ -270,13 +270,17 @@ def delete(
     tracker.delete_run(run["run_id"])
     console.print(f"[green]Deleted run: {run['run_id']}[/]")
 
+
 @app.command()
 def clean(
     run_id: Optional[str] = typer.Argument(None, help="Run ID (or prefix) to clean. Omit if --all is used."),
     all_runs: bool = typer.Option(False, "--all", help="Cleanup all historical runs."),
     dry_run: bool = typer.Option(False, "--dry-run", help="Estimate space savings without deleting."),
     force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation"),
-    keep_weights: bool = typer.Option(True, "--keep-weights", help="Keep intermediate model weights but delete optimizer states."),
+    keep_weights: bool = typer.Option(
+        True, "--keep-weights",
+        help="Keep intermediate model weights but delete optimizer states."
+    ),
 ):
     """Intelligently clean up redundant checkpoint files to reclaim disk space."""
     import shutil
@@ -358,7 +362,8 @@ def clean(
 
     if dry_run:
         console.print(f"[bold]Dry Run:[/] Would reclaim [green]{gb_to_reclaim:.2f} GB[/] "
-                      f"from {len(files_to_delete)} files and {len(dirs_to_delete)} directories.")
+                      f"from {len(files_to_delete)} files "
+                      f"and {len(dirs_to_delete)} directories.")
         for d in dirs_to_delete:
             console.print(f"  [red]Delete dir:[/]\t{d}")
         for f in files_to_delete:
@@ -366,7 +371,7 @@ def clean(
         raise typer.Exit()
 
     if not force:
-        console.print(f"Ready to reclaim [green]{gb_to_reclaim:.2f} GB[/] by deleting intermediate files.")
+        console.print(f"Ready to reclaim [green]{gb_to_reclaim:.2f} GB[/] by pruning intermediate files.")
         if not typer.confirm("Do you want to proceed?"):
             raise typer.Exit()
 
