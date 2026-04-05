@@ -273,9 +273,13 @@ def delete(
 
 @app.command()
 def clean(
-    run_id: Optional[str] = typer.Argument(None, help="Run ID (or prefix) to clean. Omit if --all is used."),
+    run_id: Optional[str] = typer.Argument(
+        None, help="Run ID (or prefix) to clean. Omit if --all is used."
+    ),
     all_runs: bool = typer.Option(False, "--all", help="Cleanup all historical runs."),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Estimate space savings without deleting."),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Estimate space savings without deleting."
+    ),
     force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation"),
     keep_weights: bool = typer.Option(
         True, "--keep-weights",
@@ -285,6 +289,7 @@ def clean(
     """Intelligently clean up redundant checkpoint files to reclaim disk space."""
     import shutil
     from pathlib import Path
+
     from soup_cli.experiment.tracker import ExperimentTracker
 
     tracker = ExperimentTracker()
@@ -355,7 +360,7 @@ def clean(
                 dirs_to_delete.append(ckpt)
 
     if total_bytes_to_reclaim == 0:
-        console.print("[green]No disposable checkpoint files found. Storage is already optimized.[/]")
+        console.print("[green]No disposable checkpoints found. Storage is already optimized.[/]")
         raise typer.Exit()
 
     gb_to_reclaim = total_bytes_to_reclaim / (1024 ** 3)
@@ -371,7 +376,7 @@ def clean(
         raise typer.Exit()
 
     if not force:
-        console.print(f"Ready to reclaim [green]{gb_to_reclaim:.2f} GB[/] by pruning intermediate files.")
+        console.print(f"Ready to reclaim [green]{gb_to_reclaim:.2f} GB[/] by pruning checkpoints.")
         if not typer.confirm("Do you want to proceed?"):
             raise typer.Exit()
 
