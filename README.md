@@ -810,6 +810,28 @@ soup train --config soup.yaml --resume auto
 soup train --config soup.yaml --resume ./output/checkpoint-500
 ```
 
+## Run Management & Cleanup
+
+LLM training generates massive checkpoint files. Soup automatically manages an SQLite database of your training loss and metrics, empowering you to safely reclaim disk space once training is complete.
+
+```bash
+# List all historical training runs
+soup runs list
+
+# Compare two differing experiments side-by-side
+soup runs compare run_202611... run_202612...
+
+# Intelligently clean up redundant checkpoints
+# (Preserves the final model and the checkpoint with the lowest loss)
+soup runs clean run_202611...
+
+# Preview space that would be reclaimed across ALL experiments
+soup runs clean --all --dry-run
+```
+
+By default, the `clean` command operates in "surgical mode" (`--keep-weights`), deleting huge optimizer state files (`optimizer.pt`) from lesser checkpoints to save gigabytes, but keeping their lightweight evaluation weights just in case you want to load them later.
+
+
 ## Batch Inference
 
 Run a model on a list of prompts and save results:
