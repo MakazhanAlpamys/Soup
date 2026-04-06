@@ -367,7 +367,10 @@ def clean(
                 dirs_to_delete.append(ckpt)
 
     if total_bytes_to_reclaim == 0:
-        console.print("[green]No disposable checkpoint files found. Storage is already optimized.[/]")
+        console.print(
+            "[green]No disposable checkpoint files found. "
+            "Storage is already optimized.[/]"
+        )
         raise typer.Exit()
 
     gb_to_reclaim = total_bytes_to_reclaim / (1024 ** 3)
