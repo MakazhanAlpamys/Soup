@@ -149,7 +149,7 @@ def test_runs_clean_with_data(tracker, tmp_path):
     tracker.finish_run(
         run_id=run_id,
         initial_loss=2.0,
-        final_loss=1.0, # let's say step 100 has lower loss, but we mock tracker
+        final_loss=1.0, # let's say step 200 has lower loss
         total_steps=200,
         duration_secs=100.0,
         output_dir=str(out_dir),

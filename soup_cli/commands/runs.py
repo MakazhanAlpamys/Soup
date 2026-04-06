@@ -294,6 +294,9 @@ def clean(
 
     tracker = ExperimentTracker()
 
+    if all_runs and run_id:
+        raise typer.BadParameter("Cannot use --all and RUN_ID together.")
+
     if all_runs:
         runs_to_clean = tracker.list_runs(limit=100000)
     elif run_id:
@@ -319,7 +322,11 @@ def clean(
         out_dir_str = run.get("output_dir")
         if not out_dir_str:
             continue
-        output_dir = Path(out_dir_str)
+        try:
+            output_dir = Path(out_dir_str).resolve()
+            output_dir.relative_to(Path.cwd().resolve())
+        except ValueError:
+            continue  # skip paths outside cwd
         if not output_dir.exists():
             continue
 
@@ -360,7 +367,7 @@ def clean(
                 dirs_to_delete.append(ckpt)
 
     if total_bytes_to_reclaim == 0:
-        console.print("[green]No disposable checkpoints found. Storage is already optimized.[/]")
+        console.print("[green]No disposable checkpoint files found. Storage is already optimized.[/]")
         raise typer.Exit()
 
     gb_to_reclaim = total_bytes_to_reclaim / (1024 ** 3)
@@ -383,13 +390,13 @@ def clean(
     for f in files_to_delete:
         try:
             f.unlink()
-        except OSError:
-            pass
+        except OSError as e:
+            console.print(f"[yellow]Warning:[/] Failed to delete file {f}: {e}")
     for d in dirs_to_delete:
         try:
             shutil.rmtree(d)
-        except OSError:
-            pass
+        except OSError as e:
+            console.print(f"[yellow]Warning:[/] Failed to delete directory {d}: {e}")
 
     console.print(f"[green]Successfully reclaimed {gb_to_reclaim:.2f} GB.[/]")
 
