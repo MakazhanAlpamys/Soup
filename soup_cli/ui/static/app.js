@@ -55,7 +55,7 @@ function statusBadge(status) {
     failed: 'badge-danger',
     running: 'badge-warning',
   };
-  return `<span class="badge ${map[status] || 'badge-info'}">${status}</span>`;
+  return `<span class="badge ${map[status] || 'badge-info'}">${escapeHtml(status)}</span>`;
 }
 
 function truncate(str, len = 30) {
@@ -75,7 +75,7 @@ async function loadDashboard() {
     renderDashboard();
   } catch (err) {
     document.getElementById('dashboard-content').innerHTML =
-      `<div class="empty-state"><div class="empty-state-text">Error loading dashboard: ${err.message}</div></div>`;
+      `<div class="empty-state"><div class="empty-state-text">Error loading dashboard: ${escapeHtml(err.message)}</div></div>`;
   }
 }
 
@@ -110,10 +110,10 @@ function renderDashboard() {
     <div class="card">
       <div class="card-title">System</div>
       <div style="font-size:0.9rem; color: var(--text-dim)">
-        Device: <strong style="color:var(--text)">${systemInfo.device_name}</strong> &nbsp;|&nbsp;
-        GPU Memory: <strong style="color:var(--text)">${systemInfo.gpu_info.memory_total}</strong> &nbsp;|&nbsp;
-        Python: <strong style="color:var(--text)">${systemInfo.python_version}</strong> &nbsp;|&nbsp;
-        Soup: <strong style="color:var(--text)">v${systemInfo.version}</strong>
+        Device: <strong style="color:var(--text)">${escapeHtml(systemInfo.device_name)}</strong> &nbsp;|&nbsp;
+        GPU Memory: <strong style="color:var(--text)">${escapeHtml(systemInfo.gpu_info.memory_total)}</strong> &nbsp;|&nbsp;
+        Python: <strong style="color:var(--text)">${escapeHtml(systemInfo.python_version)}</strong> &nbsp;|&nbsp;
+        Soup: <strong style="color:var(--text)">v${escapeHtml(systemInfo.version)}</strong>
       </div>
     </div>
 
@@ -146,17 +146,17 @@ function renderRunsTable(runs) {
         </thead>
         <tbody>
           ${runs.map(r => `
-            <tr style="cursor:pointer" onclick="showRunDetail('${r.run_id}')">
-              <td><code style="font-size:0.8rem">${r.run_id.substring(0, 20)}...</code></td>
-              <td>${r.experiment_name || '-'}</td>
-              <td>${truncate(r.base_model)}</td>
-              <td>${r.task || 'sft'}</td>
+            <tr style="cursor:pointer" onclick="showRunDetail('${escapeHtml(r.run_id)}')">
+              <td><code style="font-size:0.8rem">${escapeHtml(r.run_id.substring(0, 20))}...</code></td>
+              <td>${escapeHtml(r.experiment_name || '-')}</td>
+              <td>${escapeHtml(truncate(r.base_model))}</td>
+              <td>${escapeHtml(r.task || 'sft')}</td>
               <td>${statusBadge(r.status)}</td>
               <td>${r.final_loss ? r.final_loss.toFixed(4) : '-'}</td>
               <td>${formatDuration(r.duration_secs)}</td>
               <td>${formatDate(r.created_at)}</td>
               <td>
-                <button class="btn btn-danger btn-sm" onclick="event.stopPropagation(); deleteRun('${r.run_id}')">Delete</button>
+                <button class="btn btn-danger btn-sm" onclick="event.stopPropagation(); deleteRun('${escapeHtml(r.run_id)}')">Delete</button>
               </td>
             </tr>
           `).join('')}
@@ -200,7 +200,7 @@ async function showRunDetail(runId) {
       <div class="grid-2" style="margin-bottom:1rem">
         <div>
           <div class="form-label">Run ID</div>
-          <div><code>${run.run_id}</code></div>
+          <div><code>${escapeHtml(run.run_id)}</code></div>
         </div>
         <div>
           <div class="form-label">Status</div>
@@ -208,15 +208,15 @@ async function showRunDetail(runId) {
         </div>
         <div>
           <div class="form-label">Model</div>
-          <div>${run.base_model || '-'}</div>
+          <div>${escapeHtml(run.base_model || '-')}</div>
         </div>
         <div>
           <div class="form-label">Task</div>
-          <div>${run.task || 'sft'}</div>
+          <div>${escapeHtml(run.task || 'sft')}</div>
         </div>
         <div>
           <div class="form-label">Device</div>
-          <div>${run.device_name || run.device || '-'}</div>
+          <div>${escapeHtml(run.device_name || run.device || '-')}</div>
         </div>
         <div>
           <div class="form-label">Duration</div>
@@ -268,9 +268,9 @@ async function showRunDetail(runId) {
               <tbody>
                 ${evalResp.eval_results.map(er => `
                   <tr>
-                    <td>${er.benchmark}</td>
-                    <td>${typeof er.score === 'number' ? er.score.toFixed(4) : er.score}</td>
-                    <td><code style="font-size:0.75rem">${er.details_json ? String(er.details_json).substring(0, 100) : '-'}</code></td>
+                    <td>${escapeHtml(er.benchmark)}</td>
+                    <td>${typeof er.score === 'number' ? er.score.toFixed(4) : escapeHtml(String(er.score))}</td>
+                    <td><code style="font-size:0.75rem">${er.details_json ? escapeHtml(String(er.details_json).substring(0, 100)) : '-'}</code></td>
                   </tr>
                 `).join('')}
               </tbody>
@@ -289,7 +289,7 @@ async function showRunDetail(runId) {
       renderCharts(metrics);
     }
   } catch (err) {
-    body.innerHTML = `<div class="empty-state"><div class="empty-state-text">Error: ${err.message}</div></div>`;
+    body.innerHTML = `<div class="empty-state"><div class="empty-state-text">Error: ${escapeHtml(err.message)}</div></div>`;
   }
 }
 
@@ -389,7 +389,7 @@ async function loadTrainingPage() {
     renderTrainingPage(templatesResp.templates, statusResp);
   } catch (err) {
     document.getElementById('training-content').innerHTML =
-      `<div class="empty-state"><div class="empty-state-text">Error: ${err.message}</div></div>`;
+      `<div class="empty-state"><div class="empty-state-text">Error: ${escapeHtml(err.message)}</div></div>`;
   }
 }
 
@@ -407,14 +407,14 @@ function renderTrainingPage(templates, status) {
               <label class="form-label" style="font-size:0.8rem">Template</label>
               <select id="template-select" onchange="loadTemplate()">
                 <option value="">-- Template --</option>
-                ${templateNames.map(t => `<option value="${t}">${t}</option>`).join('')}
+                ${templateNames.map(t => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join('')}
               </select>
             </div>
             <div class="form-group" style="margin-bottom:0">
               <label class="form-label" style="font-size:0.8rem">Recipe</label>
               <select id="recipe-select" onchange="loadRecipe()">
                 <option value="">-- Recipe --</option>
-                ${(window._recipes || []).map(r => `<option value="${r.name}">${r.name} (${r.task})</option>`).join('')}
+                ${(window._recipes || []).map(r => `<option value="${escapeHtml(r.name)}">${escapeHtml(r.name)} (${escapeHtml(r.task)})</option>`).join('')}
               </select>
             </div>
           </div>
@@ -437,7 +437,7 @@ function renderTrainingPage(templates, status) {
           <div class="card-title">Training Status</div>
           <div id="train-status-panel">
             ${status.running
-              ? `<div><span class="badge badge-warning">Running</span> PID: ${status.pid}</div>
+              ? `<div><span class="badge badge-warning">Running</span> PID: ${escapeHtml(String(status.pid))}</div>
                  <button class="btn btn-danger btn-sm" style="margin-top:0.75rem" onclick="stopTraining()">Stop Training</button>`
               : '<div style="color:var(--text-dim)">No training in progress</div>'
             }
@@ -491,10 +491,10 @@ async function validateConfig() {
     if (result.valid) {
       statusEl.innerHTML = '<span style="color:var(--accent)">Config is valid!</span>';
     } else {
-      statusEl.innerHTML = `<span style="color:var(--danger)">Invalid: ${result.error}</span>`;
+      statusEl.innerHTML = `<span style="color:var(--danger)">Invalid: ${escapeHtml(result.error)}</span>`;
     }
   } catch (err) {
-    statusEl.innerHTML = `<span style="color:var(--danger)">Error: ${err.message}</span>`;
+    statusEl.innerHTML = `<span style="color:var(--danger)">Error: ${escapeHtml(err.message)}</span>`;
   }
 }
 
@@ -512,12 +512,12 @@ async function startTraining() {
       body: JSON.stringify({ config_yaml: yaml }),
     });
     document.getElementById('config-status').innerHTML =
-      `<span style="color:var(--accent)">Training started! PID: ${result.pid}</span>`;
+      `<span style="color:var(--accent)">Training started! PID: ${escapeHtml(String(result.pid))}</span>`;
     // Refresh status
     loadTrainingPage();
   } catch (err) {
     document.getElementById('config-status').innerHTML =
-      `<span style="color:var(--danger)">Error: ${err.message}</span>`;
+      `<span style="color:var(--danger)">Error: ${escapeHtml(err.message)}</span>`;
   }
 }
 
@@ -547,7 +547,7 @@ async function inspectData() {
     });
     renderDataResults(result);
   } catch (err) {
-    content.innerHTML = `<div class="empty-state"><div class="empty-state-text">Error: ${err.message}</div></div>`;
+    content.innerHTML = `<div class="empty-state"><div class="empty-state-text">Error: ${escapeHtml(err.message)}</div></div>`;
   }
 }
 
