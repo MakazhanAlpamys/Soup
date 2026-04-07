@@ -6,7 +6,7 @@ Soup is a CLI-first LLM fine-tuning tool (v0.24.2). Python 3.9+, MIT license.
 
 ```bash
 pip install -e ".[dev]"          # Install editable + test deps
-pytest tests/ -v --tb=short      # Run all tests (2128 tests)
+pytest tests/ -v --tb=short      # Run all tests (2130 tests)
 ruff check soup_cli/ tests/      # Lint (must pass before commit)
 ruff check --fix soup_cli/ tests/  # Auto-fix lint issues
 ```
@@ -115,7 +115,7 @@ soup_cli/
     freeze.py          # Freeze training: freeze bottom N layers
     registry.py        # Dataset registry: name → path + format mapping
     constants.py       # APP_NAME, paths, default chat template
-tests/                 # 78 test files, 2128 tests
+tests/                 # 78 test files, 2130 tests
 examples/
   configs/             # 7 production-ready YAML examples
   data/                # Sample datasets
