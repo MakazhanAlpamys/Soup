@@ -1,6 +1,6 @@
 # Soup CLI — Project CLAUDE.md
 
-Soup is a CLI-first LLM fine-tuning tool (v0.24.2). Python 3.9+, MIT license.
+Soup is a CLI-first LLM fine-tuning tool (v0.24.3). Python 3.9+, MIT license.
 
 ## Build & Development
 
@@ -294,15 +294,15 @@ soup version           # Show version (--full for details)
 - **Dataset registry**: JSON validation on load — catches corruption + type mismatch (v0.24.0)
 - **Loss watchdog**: threshold bounded le=100.0, patience bounded le=1000 (v0.24.0)
 - **Freeze training**: freeze_layers bounded le=1000 (v0.24.0)
-- **AWQ/GPTQ export**: output path traversal validation before import check (v0.24.2)
-- **Windows Unicode**: Rich console symbols replaced with ASCII equivalents (v0.24.2)
-- **Chat proxy**: SSRF protection — localhost-only HTTP, HTTPS for remote (v0.24.2)
-- **Chat proxy**: max_tokens capped at 16384, temperature 0-2, top_p 0-1 (v0.24.2)
-- **Chat proxy**: Bearer token auth required on POST endpoint (v0.24.2)
-- **Chat proxy**: XSS prevention — HTML-escape before markdown render (v0.24.2)
-- **Runs compare**: max 5 runs per comparison (v0.24.2)
-- **Config from-form**: validates via load_config_from_string before returning YAML (v0.24.2)
-- **SSE endpoints**: read-only GET, no auth required (consistent with other GET endpoints) (v0.24.2)
+- **AWQ/GPTQ export**: output path traversal validation before import check (v0.24.3)
+- **Windows Unicode**: Rich console symbols replaced with ASCII equivalents (v0.24.3)
+- **Chat proxy**: SSRF protection — localhost-only HTTP, HTTPS for remote (v0.24.3)
+- **Chat proxy**: max_tokens capped at 16384, temperature 0-2, top_p 0-1 (v0.24.3)
+- **Chat proxy**: Bearer token auth required on POST endpoint (v0.24.3)
+- **Chat proxy**: XSS prevention — HTML-escape before markdown render (v0.24.3)
+- **Runs compare**: max 5 runs per comparison (v0.24.3)
+- **Config from-form**: validates via load_config_from_string before returning YAML (v0.24.3)
+- **SSE endpoints**: read-only GET, no auth required (consistent with other GET endpoints) (v0.24.3)
 
 ## Code Conventions
 
