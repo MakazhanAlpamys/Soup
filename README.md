@@ -1524,6 +1524,19 @@ Soup works with **any** of the **340,000+** text-generation models on [HuggingFa
 
 > **Note:** Soup auto-detects your GPU and estimates the optimal batch size. Use `soup doctor` to check your setup.
 
+## Docker
+
+Run Soup without installing CUDA or PyTorch locally using the official Docker image. This is the fastest way to get started and avoid dependency hell.
+
+```bash
+# Pull and run
+docker pull soupcli/soup:latest
+docker run --gpus all -v $(pwd):/workspace soupcli/soup train --config soup.yaml
+
+# Or with compose
+docker-compose up
+```
+
 ## Requirements
 
 - Python 3.9+
