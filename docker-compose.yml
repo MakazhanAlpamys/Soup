@@ -1,0 +1,18 @@
+version: '3.8'
+
+services:
+  soup:
+    image: soupcli/soup:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - .:/workspace
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    ipc: host # Recommended for PyTorch multi-processing
