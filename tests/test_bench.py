@@ -1,10 +1,10 @@
 """Tests for soup bench CLI command."""
 
-from pathlib import Path
 from typer.testing import CliRunner
 from soup_cli.cli import app
 
 runner = CliRunner()
+
 
 def test_bench_model_not_found():
     """soup bench with nonexistent model should fail gracefully."""

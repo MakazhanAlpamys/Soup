@@ -11,6 +11,7 @@ from rich.table import Table
 
 console = Console()
 
+
 def bench(
     model: str = typer.Argument(
         ...,
@@ -58,17 +59,17 @@ def bench(
     )
 
     console.print("[dim]Loading model to measure resource usage...[/]")
-    
+
     if torch.cuda.is_available():
         torch.cuda.reset_peak_memory_stats()
-        
+
     start_load = time.time()
     try:
         model_obj, tokenizer = _load_model(str(model_path), base, device)
-    except Exception as e:
-        console.print(f"[red]Failed to load model:[/] {e}")
+    except Exception as exc:
+        console.print(f"[red]Failed to load model:[/] {exc}")
         raise typer.Exit(1)
-        
+
     load_time = time.time() - start_load
     console.print(f"[green]Model loaded in {load_time:.2f}s.[/]\n")
 
@@ -86,23 +87,23 @@ def bench(
     total_latency = 0.0
 
     console.print(f"[bold]Running {num_prompts} test inferences...[/]")
-    
+
     for i, prompt_text in enumerate(test_prompts):
         messages = [{"role": "user", "content": prompt_text}]
         start_time = time.time()
-        
+
         response, token_count = _generate(
             model_obj, tokenizer, messages,
             max_tokens=max_tokens, temperature=0.0,
         )
-        
+
         latency = time.time() - start_time
         total_tokens += token_count
         total_latency += latency
         console.print(f"  [dim]Prompt {i+1}: {token_count} tokens in {latency:.2f}s[/]")
 
     avg_tps = total_tokens / total_latency if total_latency > 0 else 0
-    
+
     peak_vram_gb = 0.0
     if torch.cuda.is_available():
         peak_vram_gb = torch.cuda.max_memory_allocated() / (1024**3)
@@ -115,9 +116,9 @@ def bench(
 
     vram_str = f"{peak_vram_gb:.2f} GB" if torch.cuda.is_available() else "N/A"
     table.add_row(
-        "Transformers", 
-        f"{avg_tps:.2f}", 
-        f"{total_latency:.2f}s", 
+        "Transformers",
+        f"{avg_tps:.2f}",
+        f"{total_latency:.2f}s",
         vram_str
     )
 
