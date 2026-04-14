@@ -53,3 +53,7 @@ report.xml
 .claude/skills/
 .claude/settings.json
 .coverage
+
+#YAML
+
+soup.yaml
