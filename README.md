@@ -871,6 +871,10 @@ soup bench ./output
 
 # Customizing benchmarking parameters
 soup bench ./output --num-prompts 5 --max-tokens 256
+
+# Use custom prompts from a text file (one per line) or JSONL
+soup bench ./output --prompts-file my_prompts.txt
+soup bench ./output --prompts-file bench_suite.jsonl
 ```
 
 This acts as a built-in "speedometer," outputting Tokens-Per-Second (TPS), Total Latency, and Peak VRAM allocations into a clean status table.
