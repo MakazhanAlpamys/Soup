@@ -51,6 +51,8 @@ def test_bench_custom_prompts(tmp_path, monkeypatch):
         assert "Running 3 test inferences" in result.output
         
         # Test 3: Path outside CWD
-        result = runner.invoke(app, ["bench", str(dummy_model), "--prompts-file", str(outside_file)])
+        result = runner.invoke(
+            app, ["bench", str(dummy_model), "--prompts-file", str(outside_file)]
+        )
         assert result.exit_code == 1
         assert "Security Error" in result.output
