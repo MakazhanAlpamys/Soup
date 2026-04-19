@@ -32,7 +32,7 @@ def bench(
         3,
         "--num-prompts",
         "-n",
-        help="Number of prompts to run for averaging",
+        help="Number of prompts to run for averaging (ignored when --prompts-file is set)",
     ),
     prompts_file: Optional[str] = typer.Option(
         None,
@@ -58,33 +58,6 @@ def bench(
             "[yellow]Warning:[/] Running on CPU. Inference speed is typically "
             "10-100x slower than GPU -- results will not reflect production TPS."
         )
-
-    console.print(
-        Panel(
-            f"Model:    [bold]{model_path}[/]\n"
-            f"Device:   [bold]{device}[/]\n"
-            f"Prompts:  [bold]{num_prompts}[/]\n"
-            f"Tokens/P: [bold]{max_tokens}[/]",
-            title="Benchmarking Configuration",
-        )
-    )
-
-    console.print("[dim]Loading model to measure resource usage...[/]")
-
-    # Reset peak stats before load -- "Max VRAM" reflects total footprint
-    # (model load + inference), i.e. what users need for deployment planning.
-    if torch.cuda.is_available():
-        torch.cuda.reset_peak_memory_stats()
-
-    start_load = time.time()
-    try:
-        model_obj, tokenizer = _load_model(str(model_path), base, device)
-    except (OSError, ImportError, RuntimeError, ValueError) as exc:
-        console.print(f"[red]Failed to load model:[/] {exc}")
-        raise typer.Exit(1) from exc
-
-    load_time = time.time() - start_load
-    console.print(f"[green]Model loaded in {load_time:.2f}s.[/]\n")
 
     if prompts_file:
         import json
@@ -126,14 +99,7 @@ def bench(
             console.print("[red]No prompts found in file.[/]")
             raise typer.Exit(1)
 
-        # If user provided a custom file but didn't explicitly override num_prompts (default 3),
-        # we assume they want to run all prompts in the file.
-        # However, to avoid parsing typer args manually, if len(prompts) > num_prompts, we'll
-        # just use len(prompts) as the default behavior, unless they want fewer?
-        # Actually, let's just set num_prompts to the length of the file if it's larger than 3.
-        # Or better: we just construct test_prompts directly.
-        # But wait, what if they want to run 100 prompts by repeating a 5-prompt file?
-        # Then test_prompts logic handles it. Let's just keep the existing logic.
+        # If --prompts-file is provided, we use all prompts in the file and ignore num_prompts.
     else:
         prompts = [
             "Explain the theory of relativity briefly.",
@@ -143,10 +109,35 @@ def bench(
             "Describe how a database index works under the hood.",
         ]
 
-    # If using custom prompts and default num_prompts (3) is smaller, run all custom prompts
-    # unless they explicitly want exactly 3. Since we can't easily check if it's default,
-    # we'll use max(num_prompts, len(prompts)) when custom prompts are provided.
-    actual_num_prompts = max(num_prompts, len(prompts)) if prompts_file else num_prompts
+    actual_num_prompts = len(prompts) if prompts_file else num_prompts
+
+    console.print(
+        Panel(
+            f"Model:    [bold]{model_path}[/]\n"
+            f"Device:   [bold]{device}[/]\n"
+            f"Prompts:  [bold]{actual_num_prompts}[/]\n"
+            f"Tokens/P: [bold]{max_tokens}[/]",
+            title="Benchmarking Configuration",
+        )
+    )
+
+    console.print("[dim]Loading model to measure resource usage...[/]")
+
+    # Reset peak stats before load -- "Max VRAM" reflects total footprint
+    # (model load + inference), i.e. what users need for deployment planning.
+    if torch.cuda.is_available():
+        torch.cuda.reset_peak_memory_stats()
+
+    start_load = time.time()
+    try:
+        model_obj, tokenizer = _load_model(str(model_path), base, device)
+    except (OSError, ImportError, RuntimeError, ValueError) as exc:
+        console.print(f"[red]Failed to load model:[/] {exc}")
+        raise typer.Exit(1) from exc
+
+    load_time = time.time() - start_load
+    console.print(f"[green]Model loaded in {load_time:.2f}s.[/]\n")
+
     test_prompts = (prompts * (actual_num_prompts // len(prompts) + 1))[:actual_num_prompts]
 
     # Warmup run: first inference includes CUDA kernel JIT compilation,
