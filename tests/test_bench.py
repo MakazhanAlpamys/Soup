@@ -73,3 +73,59 @@ def test_bench_custom_prompts(tmp_path, monkeypatch):
         )
         assert result.exit_code == 1
         assert "Security Error" in result.output
+
+
+def test_bench_happy_path(tmp_path, monkeypatch):
+    """Test full benchmark end-to-end happy path without actual models."""
+    monkeypatch.chdir(tmp_path)
+
+    dummy_model = tmp_path / "dummy_model"
+    dummy_model.mkdir()
+
+    from unittest.mock import patch
+
+    with patch("soup_cli.commands.infer._load_model") as mock_load, \
+         patch("soup_cli.commands.infer._generate") as mock_generate, \
+         patch("torch.cuda.is_available") as mock_is_available, \
+         patch("torch.cuda.reset_peak_memory_stats"), \
+         patch("torch.cuda.max_memory_allocated") as mock_max_memory, \
+         patch("soup_cli.utils.gpu.detect_device") as mock_detect_device:
+
+        mock_load.return_value = ("mock_model", "mock_tokenizer")
+        mock_generate.return_value = ("mock response", 128)
+        mock_is_available.return_value = True
+        mock_max_memory.return_value = 4 * 1024**3
+        mock_detect_device.return_value = ("cuda", 0)
+
+        result = runner.invoke(app, ["bench", str(dummy_model)])
+
+        assert result.exit_code == 0, result.output
+        assert "Inference Benchmark Results" in result.output
+        assert "TPS (Avg)" in result.output
+        assert "128 tokens" in result.output
+
+
+def test_bench_cpu_warning(tmp_path, monkeypatch):
+    """Test that CPU warning is shown on non-CUDA devices."""
+    monkeypatch.chdir(tmp_path)
+
+    dummy_model = tmp_path / "dummy_model"
+    dummy_model.mkdir()
+
+    from unittest.mock import patch
+
+    with patch("soup_cli.commands.infer._load_model") as mock_load, \
+         patch("soup_cli.commands.infer._generate") as mock_generate, \
+         patch("torch.cuda.is_available") as mock_is_available, \
+         patch("soup_cli.utils.gpu.detect_device") as mock_detect_device:
+
+        mock_load.return_value = ("mock_model", "mock_tokenizer")
+        mock_generate.return_value = ("mock response", 10)
+        mock_is_available.return_value = False
+        mock_detect_device.return_value = ("cpu", None)
+
+        result = runner.invoke(app, ["bench", str(dummy_model)])
+
+        assert result.exit_code == 0, result.output
+        assert "Running on CPU" in result.output
+        assert "Inference Benchmark Results" in result.output
