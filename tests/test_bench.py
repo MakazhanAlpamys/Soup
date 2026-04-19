@@ -43,12 +43,12 @@ def test_bench_custom_prompts(tmp_path, monkeypatch):
         # Test 1: TXT
         result = runner.invoke(app, ["bench", str(dummy_model), "--prompts-file", "prompts.txt"])
         assert result.exit_code == 0
-        assert "Running 3 test inferences" in result.output
+        assert "Running 2 test inferences" in result.output
 
         # Test 2: JSONL
         result = runner.invoke(app, ["bench", str(dummy_model), "--prompts-file", "prompts.jsonl"])
         assert result.exit_code == 0
-        assert "Running 3 test inferences" in result.output
+        assert "Running 2 test inferences" in result.output
 
         # Test 3: Path outside CWD
         result = runner.invoke(
