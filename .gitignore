@@ -39,8 +39,9 @@ report.xml
 .env
 *.key
 
-# Internal plan (not for repo)
+# Internal plan + Claude Code local dev instructions (not for repo)
 .claude/plan.md
+.claude/CLAUDE.md
 .claude/settings.json
 
 # ECC plugin (local only)
