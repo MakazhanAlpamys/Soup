@@ -489,6 +489,12 @@ class TestEvalGateCLI:
 class TestTrainGateFlag:
     def test_train_gate_flag_accepted(self, tmp_path, monkeypatch):
         """The --gate flag must be visible in `soup train --help`."""
+        import re
+
         result = runner.invoke(app, ["train", "--help"])
         assert result.exit_code == 0, (result.output, repr(result.exception))
-        assert "--gate" in result.output
+        # Strip ANSI escape sequences — macOS CI runners emit color codes
+        # that split "--gate" into non-contiguous characters (see commit msg).
+        cleaned = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
+        assert "--gate" in cleaned
+        assert "eval-gated" in cleaned
