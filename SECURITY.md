@@ -168,7 +168,7 @@ If you have security questions (not vulnerability reports) or need clarification
 
 ## License
 
-This Security Policy is provided under the MIT license, same as the Soup project.
+This Security Policy is provided under the Apache-2.0 license, same as the Soup project.
 
 ---
 
