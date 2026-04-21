@@ -36,27 +36,16 @@ soup init --template chat
 soup train
 ```
 
-### New in v0.26.0 — "Red and Blue Ocean"
+## What's New
 
-The flywheel: **Train -> Registry -> Deploy -> Observe -> Improve -> Train**.
+Latest highlights only. Full history: [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 
-- **Local Model Registry** — `soup registry push/list/show/diff/search/promote/delete`: track every fine-tune with lineage, config, and eval baseline. `soup history <name>` renders the full DAG. Backing store: `~/.soup/registry.db`.
-- **Eval-Gated Training** — `training.eval_gate` (or `soup train --gate evals/gate.yaml`) runs a declarative suite at epoch boundaries and halts training on regression. `soup eval gate` for post-hoc verdicts. Baselines may be `registry://<id>`, a file, or omitted.
-- **Trace-to-Preference** — `soup data from-traces` ingests LangChain / OpenAI / Soup-serve logs, builds DPO/KTO-ready preference pairs from thumbs, regenerations, or user edits. `soup data review` previews pairs before training.
-- **Quant-Lobotomy Checker** — `soup eval quant-check --before X --after Y --tasks t.jsonl` renders an OK / MINOR / MAJOR verdict per task so you never ship a quantization regression unknowingly.
-- **Soup Cans** — `.can` = tar.gz of manifest + config + data_ref. `soup can pack/inspect/verify/fork` makes recipes shareable + reproducible; safe tar extraction blocks symlink / path-traversal escape; 100 MB cap; format version locked to 1.
-- **Security-hardened**: name/tag validation; SQL LIKE-wildcard escaping; Windows-safe path containment via shared `os.path.realpath + commonpath`; SSRF allowlist on judge URLs; HTTPS-only `DataRef`; dunder-key / null-byte rejection in can-fork; cycle detection in lineage walks; structured-error-as-regression policy in eval gate.
-
-### New in v0.25.0 — "Beyond the Wrapper"
-
-- **`soup autopilot`** — give it a model, a dataset, and a goal; Soup picks the task, quantization, LoRA rank, LR, epochs, and perf flags automatically
-- **Apple Silicon MLX backend** — train on M1-M4 chips via `pip install 'soup-cli[mlx]'`
-- **Tool-calling / agentic fine-tuning** — new `tool-calling` data format + eval scoring
-- **RLVR verifiable rewards** — `reward_fn: verifiable` with `verifiable_domain: math | code | json_schema` for deterministic GRPO rewards
-- **VeRA + OLoRA PEFT** — `lora.use_vera` / `lora.use_olora` for smaller-footprint adaptation
-- **Data augmentation** — `soup data augment --strategy rephrase|translate|style`
-- **Training intelligence** — optional `forgetting_detection` + `checkpoint_intelligence` tracks catastrophic forgetting and picks the best checkpoint by quality, not just loss
-- **9 new recipes** — Llama 4 Scout, Qwen 3 14B/32B, Gemma 3 12B/27B, DeepSeek V3, plus 5 MLX recipes (45 total)
+- **Local Model Registry** — `soup registry push/list/show/diff/search/promote/delete` tracks every fine-tune with config, eval baseline, and lineage. `soup history <name>` prints the full DAG.
+- **Eval-Gated Training** — declarative `training.eval_gate` (or `soup train --gate gate.yaml`) halts training on regression vs a baseline. `soup eval gate` for post-hoc verdicts.
+- **Trace-to-Preference** — `soup data from-traces` ingests LangChain / OpenAI / Soup-serve logs and builds DPO/KTO-ready preference pairs from thumbs, regens, or user edits.
+- **Quant-Lobotomy Checker** — `soup eval quant-check --before X --after Y --tasks t.jsonl` gives an OK / MINOR / MAJOR verdict per task before you ship a quant.
+- **Soup Cans** — shareable `.can` artifact format (manifest + config + data ref). `soup can pack/inspect/verify/fork` makes recipes reproducible across machines.
+- **Hardening** — Windows-safe path containment; SQL LIKE-wildcard escaping; SSRF allowlist on judge URLs; HTTPS-only `DataRef`; tar-extraction symlink guard; lineage cycle detection.
 
 ## Why Soup?
 
@@ -168,6 +157,56 @@ training:
 
 output: ./output
 ```
+
+## Autopilot (Zero-Config)
+
+Skip the YAML entirely. Give Autopilot a base model, a dataset, and a goal — it analyzes your data, model, and hardware, then picks the task, quantization, LoRA rank, learning rate, epochs, and performance flags for you.
+
+```bash
+# Zero-config: pick everything automatically
+soup autopilot --model meta-llama/Llama-3.1-8B-Instruct \
+               --data ./data/train.jsonl \
+               --goal chat
+
+# Other goals: chat | code | reasoning | instruct | vision
+soup autopilot --model Qwen/Qwen2.5-7B --data ./data/math.jsonl --goal reasoning
+
+# Constrain to a GPU budget (1GB to 1TB)
+soup autopilot --model <id> --data d.jsonl --goal chat --gpu-budget 24GB
+
+# Preview the generated config without running
+soup autopilot --model <id> --data d.jsonl --goal chat --dry-run
+```
+
+Autopilot writes a ready-to-run `soup.yaml`. Edit it by hand if needed, then `soup train`.
+
+## Apple Silicon (MLX Backend)
+
+Fine-tune on M1-M4 Macs via Apple's [MLX](https://github.com/ml-explore/mlx) framework — no CUDA, no emulation.
+
+```bash
+# Install MLX support
+pip install 'soup-cli[mlx]'
+```
+
+```yaml
+base: mlx-community/Llama-3.2-3B-Instruct-4bit
+task: sft
+backend: mlx  # Apple Silicon only
+
+data:
+  train: ./data/train.jsonl
+  format: alpaca
+
+training:
+  epochs: 3
+  lr: 2e-5
+  lora:
+    r: 16
+    alpha: 32
+```
+
+MLX backend supports SFT, DPO, and GRPO. Use `soup recipes search --tag mlx` for ready-made Apple Silicon configs.
 
 ## Unsloth Backend (2-5x Faster Training)
 
@@ -441,6 +480,62 @@ training:
   reward_fn: ./my_reward.py
 ```
 
+### Verifiable Rewards (RLVR)
+
+Use `reward_fn: verifiable` with a `verifiable_domain` for deterministic, math-checkable rewards — no judge model, no heuristics. Great for GRPO on math, code, or structured-output tasks.
+
+```yaml
+training:
+  reward_fn: verifiable
+  verifiable_domain: math          # or: code, json_schema
+  num_generations: 4
+```
+
+Three built-in domains:
+
+| Domain | What it checks |
+|---|---|
+| `math` | Extracts the final numeric answer (supports `####`, `\boxed{}`) and compares via `float()` equality — no `eval()` on user output |
+| `code` | Executes generated Python with a 5s timeout, 512 MB RLIMIT on POSIX, `python -I -S`, socket patch, ephemeral cwd. Output capped at 10KB. Warning panel on first use |
+| `json_schema` | Validates output against a JSON Schema provided per-example in the dataset |
+
+> **Note:** `code` domain runs untrusted generations. Soup sandboxes aggressively but never trust it for production-grade isolation — run in a VM or container for public data.
+
+## Tool-Calling Fine-Tuning
+
+Train models to emit structured function calls (OpenAI-style `tool_calls` with JSON arguments).
+
+```yaml
+base: meta-llama/Llama-3.1-8B-Instruct
+task: sft
+
+data:
+  train: ./data/tool_calls.jsonl
+  format: tool-calling
+
+training:
+  epochs: 3
+  lr: 2e-5
+  quantization: 4bit
+```
+
+**Tool-calling data format:**
+```json
+{"messages": [
+  {"role": "user", "content": "What's the weather in Paris?"},
+  {"role": "assistant", "tool_calls": [
+    {"id": "c1", "type": "function",
+     "function": {"name": "get_weather", "arguments": "{\"city\": \"Paris\"}"}}
+  ]}
+]}
+```
+
+Arguments are parsed as JSON only — never `eval()`. `soup eval custom` can score tool-call accuracy (function name + argument JSON equality).
+
+```bash
+soup init --template tool-calling
+```
+
 ## PPO / Full RLHF Pipeline
 
 Train models with the full RLHF pipeline: SFT warmup → Reward Model → PPO alignment.
@@ -625,6 +720,32 @@ training:
 
 Works with all training tasks and backends. Recommended for LoRA rank ≥ 32.
 
+## VeRA & OLoRA (Smaller-Footprint PEFT)
+
+Two further LoRA variants for tighter memory budgets:
+
+**VeRA** (Vector-based Random Adaptation) — shares random frozen projection matrices across all layers, trains only small scaling vectors. Much smaller adapter file.
+
+```yaml
+training:
+  lora:
+    r: 256           # VeRA typically needs higher rank (128-512)
+    alpha: 1
+    use_vera: true
+```
+
+**OLoRA** (Orthonormal LoRA) — initializes LoRA weights from QR-decomposed base weights, converges faster.
+
+```yaml
+training:
+  lora:
+    r: 64
+    alpha: 16
+    use_olora: true
+```
+
+> **Mutually exclusive:** `use_dora`, `use_vera`, and `use_olora` cannot be combined in one config. Soup validates this at load time.
+
 ## NEFTune (Noisy Embeddings Fine-Tuning)
 
 Add noise to embeddings during training for better chat model quality:
@@ -681,6 +802,36 @@ training:
   loss_watchdog_threshold: 3.0  # Stop if loss exceeds this value
   loss_watchdog_patience: 5     # Consecutive steps above threshold before stopping
 ```
+
+## Training Intelligence (Forgetting + Checkpoint Quality)
+
+Two optional in-training evaluators that run alongside your main loss curve.
+
+**Forgetting detection** — runs a small benchmark during training to detect catastrophic forgetting (quality regression on abilities the base model had). Can auto-stop if forgetting exceeds a threshold.
+
+```yaml
+training:
+  forgetting_detection: true
+  forgetting_eval_steps: 500       # How often to evaluate (10-10,000)
+  forgetting_benchmark: mmlu        # Baseline benchmark to track
+  forgetting_threshold: 0.10        # Regression threshold (0.01-0.50)
+  forgetting_stop: true             # Halt training on breach (default: warn only)
+```
+
+**Checkpoint intelligence** — tracks a quality metric across checkpoints and keeps only the top-N by eval score (not by loss). Pairs nicely with `early_stop_on_regression`.
+
+```yaml
+training:
+  checkpoint_intelligence: true
+  checkpoint_eval_steps: 500
+  checkpoint_eval_metric: accuracy   # or: bleu, rouge, exact_match, custom
+  checkpoint_eval_tasks: ./evals/sanity.jsonl
+  checkpoint_keep_top: 3             # Keep the 3 best (1-20)
+  early_stop_on_regression: true
+  early_stop_patience: 3             # Stop after N regressions (1-10)
+```
+
+Checkpoint pruning refuses to delete symlinks or paths outside the output directory — safe to run on any `output:` path.
 
 ## GaLore (Memory-Efficient Full-Parameter Training)
 
@@ -832,6 +983,52 @@ soup train --config soup.yaml --resume auto
 soup train --config soup.yaml --resume ./output/checkpoint-500
 ```
 
+## Eval-Gated Training
+
+Halt training automatically if a declarative eval suite regresses beyond a threshold vs a baseline. The gate runs at epoch boundaries — no wasted compute on runs that are already worse.
+
+**Configure in `soup.yaml`:**
+
+```yaml
+training:
+  epochs: 5
+  eval_gate:
+    enabled: true
+    suite: ./evals/gate.yaml            # Declarative task list
+    every_n_epochs: 1                    # Run gate every N epochs (1-100)
+    regression_threshold: 0.05           # Allow 5% drop before halting (0.0-1.0)
+    baseline: registry://llama31-chat-v1 # Or a file path, or omit for first run
+    on_regression: stop                  # stop | warn | continue
+```
+
+**Or pass on the command line:**
+
+```bash
+soup train --config soup.yaml --gate ./evals/gate.yaml
+```
+
+**Run a gate suite post-hoc (no training):**
+
+```bash
+soup eval gate --suite ./evals/gate.yaml --model ./output \
+  --baseline registry://llama31-chat-v1
+```
+
+**`evals/gate.yaml` example:**
+
+```yaml
+tasks:
+  - name: math_sanity
+    prompts: ./evals/math.jsonl          # prompt + expected
+    scoring: exact
+  - name: style_judge
+    prompts: ./evals/style.jsonl
+    scoring: judge
+    judge_model: ollama://llama3.1        # SSRF-allowlisted scheme
+```
+
+Baselines may be a registry reference (`registry://<name-or-id>`), a file path, or omitted for the first run. Any structured exception (`ValueError`, `FileNotFoundError`, `OSError`) during the gate is treated as a regression under `on_regression: stop`.
+
 ## Run Management & Cleanup
 
 LLM training generates massive checkpoint files. Soup automatically manages an SQLite database of your training loss and metrics, empowering you to safely reclaim disk space once training is complete.
@@ -852,6 +1049,63 @@ soup runs clean --all --dry-run
 ```
 
 By default, the `clean` command operates in "surgical mode" (`--keep-weights`), deleting huge optimizer state files (`optimizer.pt`) from lesser checkpoints to save gigabytes, but keeping their lightweight evaluation weights just in case you want to load them later.
+
+## Model Registry & Lineage
+
+Every fine-tune you ship should be reproducible. Soup's local registry (`~/.soup/registry.db`) tracks each entry by a content hash of its config + data + base model, plus lineage pointers to parent entries.
+
+```bash
+# Register a completed run
+soup registry push --run-id run_202611_abc123 --name llama31-chat --tag v1
+
+# List entries (filter by name, tag, base model, task)
+soup registry list
+soup registry list --name llama31-chat --tag prod
+
+# Show full details: config, eval baseline, artifacts, ancestors
+soup registry show llama31-chat-v1
+
+# Side-by-side config diff + eval delta between two entries
+soup registry diff llama31-chat-v1 llama31-chat-v2
+
+# Full-text search across name / base model / task / notes
+soup registry search "medical reasoning"
+
+# Promote an entry (add a tag, e.g. "prod")
+soup registry promote llama31-chat-v1 --tag prod
+
+# Delete (cascades to artifacts + lineage links)
+soup registry delete llama31-chat-v1 --yes
+```
+
+**Lineage DAG** — every entry can point to a parent (its ancestor run). Walk the DAG for any name with:
+
+```bash
+soup history llama31-chat
+```
+
+**Refs resolve flexibly** — you can use a registry ID, a name (latest), or `name:tag`. Ambiguous prefixes raise an error rather than silently picking the wrong entry. Registry files are stored with `600` perms on POSIX; override the path with `SOUP_REGISTRY_DB_PATH`.
+
+## Soup Cans (Shareable Recipes)
+
+Share a reproducible recipe as a single `.can` file — a tarball of the manifest, full config, and a reference to the training data (URL or HF dataset). Not the weights, not the dataset bytes: just enough for someone else to re-run the same training.
+
+```bash
+# Pack a registry entry into a .can
+soup can pack --entry-id llama31-chat-v1 --out ./llama31-chat.can
+
+# Preview the manifest without extracting
+soup can inspect ./llama31-chat.can
+
+# Verify schema + config parseability
+soup can verify ./llama31-chat.can
+
+# Fork with modifications (dotted-path overrides) and re-pack
+soup can fork ./llama31-chat.can --out ./llama31-chat-hot.can \
+  --modify training.lr=5e-5 --modify training.epochs=5
+```
+
+**Security** — tar extraction uses `filter="data"` on Python 3.12+ with symlink/hardlink rejection fallback for older runtimes. Size cap: 100 MB. `DataRef.url` must be HTTPS. Fork overrides reject dunder keys (`__class__`, `__init__`) and null bytes. Manifest format version is pinned to `1`.
 
 
 ## Batch Inference
@@ -965,7 +1219,7 @@ soup serve --model ./output --backend vllm --gpu-memory 0.8
 
 > **Tip:** Soup auto-detects vLLM. When installed, you'll see a hint during `soup serve` if you haven't enabled it yet.
 
-### SGLang Backend (v0.17.0+)
+### SGLang Backend
 
 Use [SGLang](https://github.com/sgl-project/sglang) as an alternative high-throughput backend:
 
@@ -980,7 +1234,7 @@ soup serve --model ./output --backend sglang
 soup serve --model ./output --backend sglang --tensor-parallel 2
 ```
 
-### Speculative Decoding (v0.16.0+)
+### Speculative Decoding
 
 Use a smaller draft model to speed up generation (2-3x faster):
 
@@ -992,7 +1246,7 @@ soup serve --model ./output --speculative-decoding small-draft-model --spec-toke
 soup serve --model ./output --backend vllm --speculative-decoding small-draft-model
 ```
 
-> **Note (v0.10.10+):** `max_tokens` is capped at 16,384 per request. Error details are never exposed in HTTP responses.
+> **Note:** `max_tokens` is capped at 16,384 per request. Error details are never exposed in HTTP responses.
 
 ## Synthetic Data Generation
 
@@ -1015,7 +1269,7 @@ soup data generate --prompt "..." --seed examples.jsonl --count 100
 soup data generate --prompt "..." --provider server --api-base http://localhost:11434/v1
 ```
 
-### Multi-Provider Support (v0.20.0+)
+### Multi-Provider Support
 
 ```bash
 # Generate via local Ollama instance
@@ -1029,7 +1283,7 @@ soup data generate --prompt "..." --provider anthropic --model claude-3-haiku-20
 soup data generate --prompt "..." --provider vllm --model meta-llama/Llama-3.1-8B-Instruct
 ```
 
-### Domain Templates (v0.20.0+)
+### Domain Templates
 
 ```bash
 # Code instruction pairs (Python, JS, Go, Rust, Java)
@@ -1048,7 +1302,7 @@ soup data generate --prompt "..." --template preference --pref-task dpo
 soup data generate --prompt "..." --template reasoning --domain math
 ```
 
-### Quality Pipeline (v0.20.0+)
+### Quality Pipeline
 
 ```bash
 # Auto-validate after generation (remove malformed entries)
@@ -1063,6 +1317,52 @@ soup data generate --prompt "..." --dedup
 # Full quality pipeline: validate + filter + dedup
 soup data generate --prompt "..." --quality-pipeline
 ```
+
+## Data Augmentation
+
+Augment an existing dataset using an LLM — rephrase for diversity, translate for multilingual coverage, or apply a style transform.
+
+```bash
+# Rephrase each example N times for more diversity
+soup data augment ./data/train.jsonl --strategy rephrase --count 3 \
+  --output ./data/train_augmented.jsonl
+
+# Translate into multiple languages
+soup data augment ./data/train.jsonl --strategy translate --lang es,fr,de \
+  --output ./data/train_multilingual.jsonl
+
+# Style transfer (formal / casual / technical / etc.)
+soup data augment ./data/train.jsonl --strategy style --styles formal,casual \
+  --output ./data/train_styled.jsonl
+```
+
+Works with any provider supported by `soup data generate` (OpenAI, Ollama, Anthropic, vLLM, local server). `--count` is capped at 10; `--lang` and `--styles` each capped at 10 entries × 32 chars.
+
+## Trace-to-Preference
+
+Harvest DPO / KTO-ready preference pairs from your production inference logs — no manual labeling.
+
+```bash
+# LangChain logs + thumbs-up signal
+soup data from-traces --logs ./logs/langchain.jsonl \
+  --format langchain --signal thumbs_up --output prefs.jsonl
+
+# OpenAI API logs + regeneration signal (second response wins)
+soup data from-traces --logs ./logs/openai.jsonl \
+  --format openai --signal regeneration --output prefs.jsonl
+
+# Soup-serve logs + user-edit signal (edited response wins over original)
+soup data from-traces --logs ./logs/soup-serve.jsonl \
+  --format soup_serve --signal user_edit --output prefs.jsonl
+
+# Preview generated pairs before training
+soup data review prefs.jsonl --sample 10
+```
+
+**Supported log formats:** `langchain`, `openai`, `soup_serve`
+**Supported signals:** `thumbs_up` (rating-based), `regeneration` (latest wins), `user_edit` (edited wins)
+
+Trace files are capped at 100,000 lines to prevent OOM on production logs. A PII warning panel appears on every run — redact sensitive fields before harvesting.
 
 ## Config Migration
 
@@ -1247,18 +1547,18 @@ soup ui
 
 **Pages:**
 - **Dashboard** — view all experiment runs, loss charts, system info, multi-run comparison
-- **New Training** — create configs from templates or 29 ready-made recipes, validate, start training with live SSE log streaming and progress bar
+- **New Training** — create configs from templates or 43 ready-made recipes, validate, start training with live SSE log streaming and progress bar
 - **Data Explorer** — browse and inspect datasets (JSONL, JSON, CSV, Parquet)
 - **Model Chat** — chat with streaming responses, configurable temperature/top_p/max_tokens, system prompt, adapter selection, markdown rendering, chat export
 
-**v0.24.2 Enhancements:**
+**Live monitoring + enhanced UX:**
 - **Training Live Monitor** — real-time SSE log streaming, live metrics, progress bar with ETA
 - **Enhanced Metrics** — 2x2 chart grid (loss, LR, grad_norm, throughput) + GPU memory chart, eval results table
 - **Multi-Run Compare** — overlay loss curves from up to 5 runs side-by-side
 - **Chat Upgrade** — SSE streaming via proxy, typing indicator, cancel button, markdown renderer (bold, italic, code blocks), chat export as JSON
-- **Config Builder** — recipe dropdown (29 configs), config schema API for dynamic form generation
+- **Config Builder** — recipe dropdown (43 recipes), config schema API for dynamic form generation
 
-**Security (v0.10.10+):** The Web UI generates a random auth token at startup (printed to console). All mutating endpoints (start/stop training, delete runs, inspect data, validate config) require `Authorization: Bearer <token>` header. CORS is restricted to the served origin. Data inspection is sandboxed to the working directory.
+**Security:** The Web UI generates a random auth token at startup (printed to console). All mutating endpoints (start/stop training, delete runs, inspect data, validate config) require `Authorization: Bearer <token>` header. CORS is restricted to the served origin. Data inspection is sandboxed to the working directory.
 
 ```bash
 # Custom port, don't auto-open browser
@@ -1414,6 +1714,34 @@ soup eval leaderboard --format csv
 soup eval human --input prompts.jsonl --model-a ./model_a --model-b ./model_b
 ```
 
+### Quant-Lobotomy Checker
+
+Before you ship a quantized model, verify it didn't lose skills. The checker runs the same task list against the `--before` and `--after` models and renders a per-task OK / MINOR / MAJOR verdict.
+
+```bash
+# Compare a pre-quant model with its post-quant version
+soup eval quant-check \
+  --before ./output \
+  --after  ./output/quantized.q4_k_m.gguf \
+  --tasks  ./evals/sanity.jsonl
+
+# Both sides may be registry refs
+soup eval quant-check \
+  --before registry://llama31-chat-v1 \
+  --after  registry://llama31-chat-v1-q4 \
+  --tasks  ./evals/sanity.jsonl
+
+# Render as JSON for CI integration
+soup eval quant-check --before X --after Y --tasks t.jsonl --format json
+```
+
+**Verdict thresholds (per task):**
+- `OK` — score delta ≤ 2%
+- `MINOR` — delta 2-10% (investigate)
+- `MAJOR` — delta > 10% (do NOT ship)
+
+Paths are containment-checked, and `registry://` refs are resolved with an optional `kinds` filter so you never pick the wrong artifact.
+
 ### Custom Eval Format
 
 ```jsonl
@@ -1438,12 +1766,10 @@ eval:
 
 ```
 soup init [--template chat|code|...|audio]       Create config
-soup autopilot --model <id> --data d.jsonl --goal <g>  Zero-config (v0.25.0)
-soup train --config soup.yaml                 Start training
+soup autopilot --model <id> --data d.jsonl --goal <g>  Zero-configsoup train --config soup.yaml                 Start training
 soup train --config soup.yaml --tensorboard   Train with TensorBoard logging
 soup train --config soup.yaml --fsdp full_shard  Train with FSDP2
-soup train --config soup.yaml --gate evals/gate.yaml  Eval-gated training (v0.26.0)
-soup infer --model ./output --input p.jsonl   Batch inference
+soup train --config soup.yaml --gate evals/gate.yaml  Eval-gated trainingsoup infer --model ./output --input p.jsonl   Batch inference
 soup chat --model ./output                    Interactive chat
 soup push --model ./output --repo user/name   Upload to HuggingFace
 soup merge --adapter ./output                 Merge LoRA with base model
@@ -1463,9 +1789,7 @@ soup eval auto --config soup.yaml             Auto-eval from config
 soup eval compare <run1> <run2>               Compare eval results
 soup eval leaderboard                         Local model leaderboard
 soup eval human --input p.jsonl               Human A/B evaluation
-soup eval gate --suite gate.yaml              Run eval-gate suite standalone (v0.26.0)
-soup eval quant-check --before X --after Y --tasks t.jsonl  Before/after quant (v0.26.0)
-soup serve --model ./output --port 8000       OpenAI-compatible API server
+soup eval gate --suite gate.yaml              Run eval-gate suite standalonesoup eval quant-check --before X --after Y --tasks t.jsonl  Before/after quantsoup serve --model ./output --port 8000       OpenAI-compatible API server
 soup serve --model ./output --backend vllm    vLLM backend (2-4x throughput)
 soup serve --model ./output --backend sglang  SGLang backend
 soup serve --model ./output --speculative-decoding draft-model  Speculative decoding
@@ -1483,10 +1807,7 @@ soup data generate ... --provider anthropic   Use Claude API
 soup data generate ... --provider vllm        Use local vLLM server
 soup data generate ... --template code        Domain templates (code/conversation/qa/preference/reasoning)
 soup data generate ... --quality-pipeline     Auto validate + filter + dedup
-soup data augment <path> --strategy rephrase|translate|style  LLM-driven augmentation (v0.25.0)
-soup data from-traces --logs l.jsonl --format langchain --signal thumbs_up --output p.jsonl  Preference pairs from traces (v0.26.0)
-soup data review prefs.jsonl --sample 10      Preview preference pairs (v0.26.0)
-soup data filter <path> --coherence 0.3       Quality filter (perplexity/coherence)
+soup data augment <path> --strategy rephrase|translate|style  LLM-driven augmentationsoup data from-traces --logs l.jsonl --format langchain --signal thumbs_up --output p.jsonl  Preference pairs from tracessoup data review prefs.jsonl --sample 10      Preview preference pairssoup data filter <path> --coherence 0.3       Quality filter (perplexity/coherence)
 soup data sample <path> --n 1000             Random sample subset
 soup data sample <path> --n 1000 --strategy diverse  Cluster-based diverse sampling
 soup data sample <path> --n 1000 --strategy hard     Sample hardest examples
@@ -1517,16 +1838,12 @@ soup recipes list                             List all 43 ready-made recipes
 soup recipes show llama3.1-8b-sft            Print recipe YAML
 soup recipes use llama3.1-8b-sft             Copy recipe to soup.yaml
 soup recipes search "reasoning"              Search by keyword/task/size
-soup registry push --run-id <id> --name n --tag v1  Register run (v0.26.0)
-soup registry list [--name n] [--tag v1]     List registry entries (v0.26.0)
-soup registry show <ref>                      Entry details + artifacts + ancestors
+soup registry push --run-id <id> --name n --tag v1  Register runsoup registry list [--name n] [--tag v1]     List registry entriessoup registry show <ref>                      Entry details + artifacts + ancestors
 soup registry diff <a> <b>                    Side-by-side config + eval delta
 soup registry search "medical"                Search name/base/task/notes
 soup registry promote <ref> --tag prod        Tag an entry (e.g. promote to prod)
 soup registry delete <ref> --yes              Remove entry (cascades)
-soup history <name>                           Lineage DAG tree for a name (v0.26.0)
-soup can pack --entry-id <id> --out r.can     Pack registry entry as .can (v0.26.0)
-soup can inspect r.can                        Preview manifest without extracting
+soup history <name>                           Lineage DAG tree for a namesoup can pack --entry-id <id> --out r.can     Pack registry entry as .cansoup can inspect r.can                        Preview manifest without extracting
 soup can verify r.can                         Verify schema + config parseability
 soup can fork r.can --out fork.can --modify training.lr=5e-5  Fork + re-pack
 soup runs                                     List training runs
