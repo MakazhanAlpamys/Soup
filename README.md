@@ -40,12 +40,12 @@ soup train
 
 Latest highlights only. Full history: [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 
-- **Multi-GPU Mastery** — `soup train --gpus auto` auto-detects GPU count and prints the exact `accelerate launch` command with topology (NVLink / PCIe) info.
-- **ZeRO++** — new `--deepspeed zero++` preset with quantized weights / gradients + hierarchical partitioning for 4-8x lower inter-node traffic on 8+ GPUs.
-- **FSDP2 + torch.compile** — `training.use_fsdp2_compile: true` on top of any FSDP preset for +20-30% training throughput.
-- **DeepSpeed-MII backend** — `soup serve --backend mii` is registered and dependency-checked (live pipeline wiring ships in v0.27.1).
-- **Pipeline parallelism config** — declarative `training.parallelism: pipeline` + `pipeline_stages` with bounds + validation (execution wiring ships in v0.27.1).
-- **Multi-GPU recipes** — `llama3-70b-fsdp2`, `qwen3-32b-zeropp`, `deepseek-v3-pipeline` demonstrate the full stack end-to-end.
+- **Cut Cross-Entropy (CCE)** — `training.use_cut_ce: true` fuses the LM-head + cross-entropy on large-vocab models. Saves 8-24 GB VRAM on Llama 3.1 (128k vocab) and similar.
+- **FP8 training** — `training.quantization_aware: "fp8"` enables float8 matmuls on Hopper+ (H100/H200/B100/B200) via `torchao.float8`. Bool `true` stays on the int8 QAT path.
+- **Gradient checkpointing tiers** — `training.gradient_checkpointing: selective | medium | full | auto`. `auto` picks based on detected VRAM (< 24 GB → full, 24-80 GB → medium, > 80 GB → selective).
+- **Kernel auto-composition** — `training.kernel_auto_compose: true` enumerates available kernel combos (baseline / Liger / FlashAttn / CCE) and picks the fastest.
+- **Cross-document attention masking** — `training.packing_cross_doc_attn_mask: true` with `packing: true` blocks attention from crossing document boundaries in packed sequences.
+- **Activation offloading** — `training.activation_offloading: cpu | disk` offloads saved activations to RAM or a scratch file during backward pass for small-VRAM large-batch runs.
 
 ## Why Soup?
 
@@ -409,6 +409,90 @@ output: ./output
 - **Post-training quantization** (default): Faster training, good enough for most use cases. Quantize after training with `soup export --quant q4_k_m`.
 
 QAT works with all training tasks (SFT, DPO, GRPO, PPO, KTO, ORPO, SimPO, IPO, Pretrain) and vision modality. Not compatible with the unsloth backend. After QAT training, export to GGUF normally with `soup export`.
+
+## FP8 Training (Hopper+)
+
+For H100 / H200 / B100 / B200 GPUs, train with float8 matmuls for ~2x speedup vs bf16 at comparable quality. This extends QAT infrastructure via `torchao.float8`:
+
+```bash
+pip install 'soup-cli[qat]'   # torchao >= 0.5.0 includes torchao.float8
+```
+
+```yaml
+training:
+  quantization_aware: fp8   # ← string 'fp8', not bool true
+  quantization: none        # FP8 converts linears directly; no bnb 4bit needed
+```
+
+Bool `true` stays on the int8 QAT path for backward compatibility. FP8 requires CUDA + Hopper+ (compute capability ≥ 9.0) and is rejected on unsloth/mlx backends. Wired for `task: sft` only in this release — full multi-trainer support ships in v0.28.1.
+
+## Cut Cross-Entropy (Large-Vocab Models)
+
+Models with 128k+ vocabularies (Llama 3.1, Qwen2) materialise a huge `(batch, seq, vocab)` logits tensor that dominates VRAM. Cut Cross-Entropy computes the loss in chunks instead:
+
+```bash
+pip install 'soup-cli[cce]'    # or: pip install cut-cross-entropy
+```
+
+```yaml
+training:
+  use_cut_ce: true   # Patches the CE kernel before model load
+```
+
+Architecture detection matches on the model name's last path component (`meta-llama/Llama-3.1-8B` → llama patcher) so org prefixes don't trigger the wrong recipe. Saves 8-24 GB VRAM at common batch × seq shapes. Not compatible with unsloth (own CE kernel) or mlx. Wired for `task: sft` only in this release — full multi-trainer support ships in v0.28.1.
+
+## Gradient Checkpointing Tiers
+
+Instead of a boolean, `gradient_checkpointing` now accepts a tier that trades compute for memory more precisely:
+
+```yaml
+training:
+  # One of: false | true | "selective" | "medium" | "full" | "auto"
+  gradient_checkpointing: auto
+```
+
+- **`full`** / `true` — every transformer block (~30% slowdown, biggest save).
+- **`medium`** — every other block (balance).
+- **`selective`** — attention only (~10% slowdown, modest save).
+- **`auto`** — pick based on detected VRAM: < 24 GB → full, 24-80 GB → medium, > 80 GB → selective.
+
+Legacy boolean configs continue to work unchanged.
+
+## Kernel Auto-Composition
+
+Let Soup benchmark available kernel combinations and pick the fastest for your GPU on the first training steps:
+
+```yaml
+training:
+  kernel_auto_compose: true
+```
+
+Enumerates baseline / Liger / FlashAttention / Cut-Cross-Entropy combos, benchmarks each briefly, and adopts the fastest. Falls back to baseline on CPU and backs off for unsloth/mlx backends (both manage kernels internally). Raises an error — rather than silently promoting a random combo — if benchmarking produces no finite timings. Wired for `task: sft` only in this release — full multi-trainer support ships in v0.28.1.
+
+## Cross-Document Attention Masking
+
+When `packing: true` packs multiple short documents into one sequence, the default causal mask allows attention to bleed across doc boundaries. Enable block-diagonal masking to prevent this:
+
+```yaml
+training:
+  packing: true
+  packing_cross_doc_attn_mask: true
+```
+
+The mask builder is numpy-vectorised (`np.tril` per block) to stay fast at large `max_length`. Misconfiguring it without `packing: true` is rejected at config-load time.
+
+## Activation Offloading (Small-VRAM Large-Batch)
+
+Offload saved activations to RAM or disk during the backward pass to fit bigger effective batch sizes on smaller GPUs:
+
+```yaml
+training:
+  activation_offloading: cpu    # or "disk"
+```
+
+`cpu` moves saved tensors to RAM (fast, bounded by system RAM); `disk` writes them to a scratch dir under the training output directory (slower, bounded by free disk). Scratch paths are containment-checked vs the current working directory, `torch.load(weights_only=True)` prevents arbitrary Python deserialization on reload, and the context manager best-effort cleans up scratch files on normal exit **and** on crash.
+
+Not compatible with unsloth (own memory manager) or mlx. Wired for `task: sft` only in this release — full multi-trainer support ships in v0.28.1.
 
 ## DPO Training
 

@@ -9,9 +9,9 @@ We provide security updates for the following versions:
 - **Versions older than 3 minor versions:** No support
 
 Example:
-- v0.27.0-0.27.x -- Full support (latest)
-- v0.26.0-0.26.x -- Bug-fix support only
-- v0.25.x and below -- No support
+- v0.28.0-0.28.x -- Full support (latest)
+- v0.27.0-0.27.x -- Bug-fix support only
+- v0.26.x and below -- No support
 
 ## Reporting a Vulnerability
 
@@ -136,6 +136,7 @@ No known critical vulnerabilities in current releases.
 - **v0.26.0 — Quant-Lobotomy**: `--before`/`--after`/`--tasks` all containment-checked, `registry://` refs support optional `kinds` filter to avoid picking the wrong artifact, format Literal validated
 - **v0.26.0 — Soup Cans**: Manifest format version pinned to 1; name alphanumeric+`_-.`; author max 128 chars, no null bytes/newlines; created_at must parse via `datetime.fromisoformat`; description max 4096; DataRef URL HTTPS-only; hf_dataset regex-validated; tar extraction uses `filter="data"` on Python 3.12+, fallback only on `TypeError`/`AttributeError` (not `TarError`); manual symlink/hardlink rejection + `commonpath` check; 100 MB size cap on pack + fork; dunder-key (`__*__`) and null-byte rejection in fork modifications to prevent prototype pollution; inspect/read_config refuse paths outside cwd
 - **v0.27.0 — Multi-GPU Mastery**: `--gpus` bounds (reject bool, non-digit, zero, negative, values above `MAX_GPU_COUNT=128`); `--gpus auto` on 0-GPU host prints explicit yellow warning (no silent no-op); Rich markup escaped on `--config` path before embedding in the multi-GPU advice Panel; `accelerate launch` argv assembled via `shlex.quote` per element (copy-pasted command safe against crafted paths); `build_accelerate_argv` validates `num_processes >= 1`, `mixed_precision` Literal (`no/fp16/bf16/fp8`), `num_machines` bounded `[1, 256]`; ZeRO++ integer literals (`int(1e9)` not float) so DeepSpeed strict JSON validator accepts; `validate_fsdp2_compile_config` requires FSDP + CUDA + transformers + torch>=2.2/accelerate>=0.27; DeepSpeed-MII stub exits non-zero to prevent silent mis-start; `validate_pipeline_config` enforces `pipeline_stages >= 2` + CUDA + `gpu_count >= stages`; `pipeline_stages` Pydantic bounds `[1, 16]`; `parallelism` Literal `data|pipeline`; NCCL env (`NCCL_P2P_DISABLE`/`NCCL_IB_DISABLE`/`NCCL_NVLS_ENABLE`) applied via `os.environ.setdefault` only — user/launcher overrides are never stomped
+- **v0.28.0 — Training Speed & Memory**: `quantization_aware: Union[bool, Literal["fp8"]]` rejects arbitrary strings (only `true` / `false` / `"fp8"`); FP8 path requires CUDA + Hopper+ SM capability + transformers backend; `gradient_checkpointing: Union[bool, Literal["selective","medium","full","auto"]]` rejects unknown tier strings and returns only HF-supported keys (no private markers leak into `TrainingArguments.gradient_checkpointing_kwargs`); `activation_offloading` Literal `cpu|disk`, scratch `save_dir` containment-enforced via shared `utils/paths.is_under_cwd` before disk writes, `torch.load(weights_only=True)` prevents arbitrary Python deserialization on reload, TOCTOU closed between `mkstemp` and `torch.save` by holding the fd open, best-effort cleanup on context exit (handles SIGKILL mid-backward); `kernel_picker.pick_best_kernel` raises `ValueError` when all candidates lack a finite `time_ms` (prevents silent promotion of an untimed combo); Cut CE architecture detector matches on last path component only (so `deepseek-ai/...-phi-...` org-prefix does not trigger a Phi patch on a DeepSeek model); `build_cross_doc_mask` numpy-vectorised to avoid O(seq_length²) pure-Python fill at `max_length` bound (1M); `@model_validator` requires `packing=true` when `packing_cross_doc_attn_mask=true` (prevents silent no-op); `SoupConfig._validate_v028_speed_memory_sft_only` rejects `use_cut_ce`/`quantization_aware="fp8"`/`kernel_auto_compose`/`activation_offloading` on non-SFT tasks — prevents legacy int8-QAT wrapper from crashing on the string `"fp8"` and prevents silent no-ops on DPO/GRPO/KTO/etc. (multi-trainer wiring tracked for v0.28.1)
 
 ## Security Scanning
 

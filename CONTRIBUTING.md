@@ -106,10 +106,10 @@ soup_cli/
   registry/           - Model Registry (hashing, store, diff) (v0.26.0)
   cans/               - Shareable .can artifact format (v0.26.0)
   data/traces/        - Trace-to-Preference harvester (v0.26.0)
-  utils/              - GPU, errors, MoE, GaLore, QAT, Unsloth, vLLM, SGLang, Liger, FlashAttn, FSDP, Ring Attention, long-context, quality, curriculum, freeze, dataset-registry, mlx, peft_builder, paths, topology, launcher, mii, pipeline
+  utils/              - GPU, errors, MoE, GaLore, QAT, Unsloth, vLLM, SGLang, Liger, FlashAttn, FSDP, Ring Attention, long-context, quality, curriculum, freeze, dataset-registry, mlx, peft_builder, paths, topology, launcher, mii, pipeline, cut_ce, fp8, gradient_ckpt, kernel_picker, cross_doc_attn, activation_offload
   ui/                 - Web UI (FastAPI + HTML/JS SPA)
 
-tests/                - Test suite (92 files, 2585 tests)
+tests/                - Test suite (93 files, 2677 tests)
 examples/             - Real-world config examples and datasets
 ```
 

@@ -175,10 +175,31 @@ class SFTTrainerWrapper:
         if self.fsdp_config and tcfg.use_fsdp2_compile:
             console.print("[green]torch.compile enabled on FSDP2[/]")
 
-        # Gradient checkpointing — saves memory for long sequences
+        # Gradient checkpointing — tiered (v0.28.0): bool or tier string.
         if tcfg.gradient_checkpointing:
-            training_kwargs["gradient_checkpointing"] = True
-            training_kwargs["gradient_checkpointing_kwargs"] = {"use_reentrant": False}
+            from soup_cli.utils.gpu import get_gpu_info
+            from soup_cli.utils.gradient_ckpt import (
+                describe_tier,
+                resolve_gradient_checkpointing,
+            )
+
+            gpu_memory_gb: Optional[float] = None
+            try:
+                gpu_memory_gb = get_gpu_info().get(
+                    "memory_total_bytes", 0
+                ) / (1024**3) or None
+            except (KeyError, TypeError, ZeroDivisionError):
+                gpu_memory_gb = None
+
+            ckpt_kwargs = resolve_gradient_checkpointing(
+                tcfg.gradient_checkpointing, gpu_memory_gb=gpu_memory_gb,
+            )
+            training_kwargs.update(ckpt_kwargs)
+            if ckpt_kwargs:
+                console.print(
+                    f"[green]Gradient checkpointing:[/] "
+                    f"{describe_tier(tcfg.gradient_checkpointing, gpu_memory_gb)}"
+                )
 
         # NEFTune — noisy embeddings for better fine-tuning quality
         if tcfg.neftune_alpha is not None:
@@ -228,6 +249,16 @@ class SFTTrainerWrapper:
                     "may be suboptimal. Consider increasing max_length for better packing."
                 )
             console.print("[green]Sample packing enabled[/]")
+            if tcfg.packing_cross_doc_attn_mask:
+                # TRL's SFTTrainer exposes an `eos_token`-based boundary detector
+                # on recent versions (>= 0.12). When available, we flag the
+                # trainer to emit block-diagonal attention masks; otherwise the
+                # flag is a best-effort hint (no regression in behavior).
+                trainer_kwargs["packing_strategy"] = "attention_free"
+                console.print(
+                    "[green]Cross-document attention masking enabled:[/] "
+                    "packed docs cannot attend across boundaries"
+                )
 
         self.trainer = SFTTrainer(**trainer_kwargs)
 
@@ -250,6 +281,21 @@ class SFTTrainerWrapper:
                 )
             else:
                 console.print("[yellow]Liger Kernel: no matching architecture found[/]")
+
+        # Cut Cross-Entropy (v0.28.0) — patch BEFORE model loading
+        if tcfg.use_cut_ce:
+            from soup_cli.utils.cut_ce import apply_cut_ce
+
+            if apply_cut_ce(cfg.base):
+                console.print(
+                    "[green]Cut Cross-Entropy enabled:[/] "
+                    "large-vocab CE replaced with chunked CCE kernel"
+                )
+            else:
+                console.print(
+                    "[yellow]Cut Cross-Entropy: no matching architecture found "
+                    "or cut_cross_entropy not installed[/]"
+                )
 
         console.print(f"[dim]Loading tokenizer: {cfg.base}[/]")
         self.tokenizer = AutoTokenizer.from_pretrained(cfg.base, trust_remote_code=True)
@@ -356,8 +402,29 @@ class SFTTrainerWrapper:
         )
         self.model = get_peft_model(self.model, lora_config)
 
-        # QAT — insert fake quantization ops after LoRA
-        if tcfg.quantization_aware:
+        self._apply_quantization_aware(tcfg)
+
+    def _apply_quantization_aware(self, tcfg) -> None:
+        """Apply quantization-aware training post-LoRA (shared text/vision).
+
+        - ``quantization_aware=True``   → int8 QAT via torchao (legacy path)
+        - ``quantization_aware="fp8"``  → FP8 training via torchao.float8 (v0.28.0)
+        - ``False`` / None              → no-op
+        """
+        if tcfg.quantization_aware == "fp8":
+            from soup_cli.utils.fp8 import apply_fp8_training
+
+            if apply_fp8_training(self.model):
+                console.print(
+                    "[green]FP8 training enabled:[/] "
+                    "converted linears to Float8Linear"
+                )
+            else:
+                console.print(
+                    "[yellow]FP8 training requested but unavailable "
+                    "(no Hopper+ GPU or torchao.float8 missing)[/]"
+                )
+        elif tcfg.quantization_aware is True:
             from soup_cli.utils.qat import prepare_model_for_qat
 
             self.model = prepare_model_for_qat(self.model)
@@ -429,11 +496,7 @@ class SFTTrainerWrapper:
         )
         self.model = get_peft_model(self.model, lora_config)
 
-        # QAT — insert fake quantization ops after LoRA
-        if tcfg.quantization_aware:
-            from soup_cli.utils.qat import prepare_model_for_qat
-
-            self.model = prepare_model_for_qat(self.model)
+        self._apply_quantization_aware(tcfg)
 
     def _prepare_vision_dataset(self, dataset: dict):
         """Prepare dataset for vision fine-tuning with image loading."""
@@ -625,7 +688,28 @@ class SFTTrainerWrapper:
                 )
             )
 
-        self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
+        # Activation offloading (v0.28.0) — wrap train() so saved-tensor hooks
+        # are active only during training (and removed afterwards).
+        from soup_cli.utils.activation_offload import offload_context
+        from soup_cli.utils.paths import is_under_cwd
+
+        tcfg = self.config.training
+        offload_save_dir: Optional[str] = None
+        if tcfg.activation_offloading == "disk":
+            candidate = str(Path(self._output_dir) / "_activation_offload")
+            # Defense-in-depth: refuse to create the scratch directory outside
+            # the project tree even if cfg.output escaped containment upstream.
+            if not is_under_cwd(self._output_dir):
+                raise ValueError(
+                    "activation_offloading='disk' requires the training output "
+                    "dir to be under the current working directory; got: "
+                    f"{self._output_dir!r}"
+                )
+            offload_save_dir = candidate
+        with offload_context(
+            tcfg.activation_offloading, save_dir=offload_save_dir
+        ):
+            self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         duration = time.time() - start
 
         # Save final model (LoRA adapter)

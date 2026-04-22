@@ -139,9 +139,12 @@ class TrainingConfig(BaseModel):
         default="4bit",
         description="Quantization: 4bit (QLoRA), 8bit, or none (full precision)",
     )
-    quantization_aware: bool = Field(
+    quantization_aware: Union[bool, Literal["fp8"]] = Field(
         default=False,
-        description="Enable Quantization-Aware Training (QAT) for better post-quantization quality",
+        description=(
+            "Quantization-Aware Training. False=off, True=int8 QAT (torchao), "
+            "'fp8'=FP8 training on H100/B100 (v0.28.0)."
+        ),
     )
     optimizer: str = Field(default="adamw_torch", description="Optimizer name")
     scheduler: str = Field(default="cosine", description="LR scheduler type")
@@ -256,9 +259,49 @@ class TrainingConfig(BaseModel):
         default=None,
         description="RoPE scaling method for long-context: linear, dynamic, yarn, longrope",
     )
-    gradient_checkpointing: bool = Field(
+    gradient_checkpointing: Union[
+        bool, Literal["selective", "medium", "full", "auto"]
+    ] = Field(
         default=False,
-        description="Enable gradient checkpointing for memory savings on long sequences",
+        description=(
+            "Gradient checkpointing for memory savings on long sequences. "
+            "False/True (legacy bool) or tier: 'selective' (attention only), "
+            "'medium' (every other block), 'full' (all blocks), "
+            "'auto' (picks based on available VRAM). (v0.28.0)."
+        ),
+    )
+    # v0.28.0 — Cut Cross-Entropy (CCE): saves 8-24GB on large-vocab models
+    use_cut_ce: bool = Field(
+        default=False,
+        description=(
+            "Enable Cut Cross-Entropy (CCE) for large-vocab models. "
+            "Saves 8-24GB VRAM on Llama 3.1 128k vocab. Requires cut_cross_entropy. "
+            "Mutually exclusive with Unsloth/MLX backends."
+        ),
+    )
+    # v0.28.0 — Kernel auto-composition (Liger + Unsloth + FlashAttn per-layer)
+    kernel_auto_compose: bool = Field(
+        default=False,
+        description=(
+            "Benchmark and auto-select the fastest kernel combination "
+            "(Liger / FlashAttn / baseline) on the first few steps. (v0.28.0)."
+        ),
+    )
+    # v0.28.0 — Cross-document attention masking for sample packing
+    packing_cross_doc_attn_mask: bool = Field(
+        default=False,
+        description=(
+            "When packing is enabled, prevent attention bleed between packed "
+            "documents. Requires packing=true. (v0.28.0)."
+        ),
+    )
+    # v0.28.0 — Activation offloading (CPU/disk) for small-VRAM large-batch
+    activation_offloading: Optional[Literal["cpu", "disk"]] = Field(
+        default=None,
+        description=(
+            "Offload activations to CPU or disk during backward pass. "
+            "None=off, 'cpu'=offload to RAM, 'disk'=offload to tmp file. (v0.28.0)."
+        ),
     )
     # Embedding-specific
     embedding_loss: Literal["contrastive", "triplet", "cosine"] = Field(
@@ -421,6 +464,16 @@ class TrainingConfig(BaseModel):
             )
         return self
 
+    @model_validator(mode="after")
+    def _validate_cross_doc_attn_mask(self) -> "TrainingConfig":
+        """Cross-document attention masking requires packing=True."""
+        if self.packing_cross_doc_attn_mask and not self.packing:
+            raise ValueError(
+                "packing_cross_doc_attn_mask requires packing=true "
+                "(cross-doc attention masking only applies to packed sequences)"
+            )
+        return self
+
 
 class EvalConfig(BaseModel):
     """Evaluation configuration for auto-eval after training."""
@@ -484,6 +537,44 @@ class SoupConfig(BaseModel):
                 "experiment_name must not contain path separators (/ \\ :) or null bytes"
             )
         return value
+
+    @model_validator(mode="after")
+    def _validate_v028_speed_memory_sft_only(self) -> "SoupConfig":
+        """v0.28.0 speed/memory features are wired only in SFTTrainerWrapper.
+
+        Non-SFT trainers (DPO/GRPO/KTO/ORPO/SimPO/IPO/PPO/Pretrain/
+        RewardModel/Embedding) receive the TrainingConfig but do NOT call
+        ``apply_cut_ce`` / ``apply_fp8_training`` / ``offload_context`` / the
+        kernel picker. Accepting these flags silently on non-SFT tasks would
+        produce a confusing no-op at best (CCE / kernel_auto_compose /
+        activation_offloading) or a runtime crash at worst
+        (``quantization_aware="fp8"`` falls through to the int8-QAT path in
+        non-SFT wrappers).
+
+        Fail fast at config-load so the user sees a precise error instead of
+        debugging a silent regression. Full multi-trainer wiring is tracked
+        for v0.28.1.
+        """
+        if self.task == "sft":
+            return self
+        tcfg = self.training
+        offenders: list[str] = []
+        if tcfg.use_cut_ce:
+            offenders.append("use_cut_ce")
+        if tcfg.quantization_aware == "fp8":
+            offenders.append('quantization_aware="fp8"')
+        if tcfg.activation_offloading is not None:
+            offenders.append("activation_offloading")
+        if tcfg.kernel_auto_compose:
+            offenders.append("kernel_auto_compose")
+        if offenders:
+            raise ValueError(
+                f"v0.28.0 features {offenders} are only wired for task=sft "
+                f"in this release; got task={self.task!r}. Support for other "
+                "trainers is tracked for v0.28.1. Either switch to task=sft "
+                "or remove these flags."
+            )
+        return self
 
     @model_validator(mode="after")
     def _validate_mlx_task_support(self) -> "SoupConfig":
