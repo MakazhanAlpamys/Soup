@@ -1869,6 +1869,8 @@ soup data registry                           List all registered datasets
 soup profile --config soup.yaml              Estimate memory/speed before training
 soup profile --config soup.yaml --gpu a100   Estimate for specific GPU
 soup profile --config soup.yaml --json       Machine-readable output
+soup cost --config soup.yaml                 Estimate training cost in USD across providers
+soup cost --config soup.yaml --gpu H100      Estimate training cost for specific GPU
 soup adapters list ./output/                 Scan for LoRA adapters
 soup adapters info ./output/checkpoint-500/  Show adapter metadata
 soup adapters compare adapter1/ adapter2/    Compare two adapters
