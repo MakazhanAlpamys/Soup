@@ -32,6 +32,21 @@ soup train --config examples/configs/dpo_chat.yaml
 - Better alignment than SFT alone
 - Outputs to `./output_dpo_chat/`
 
+### DPO with QLoRA (Llama 3.1)
+
+Train a preference-aligned model using DPO with 4-bit quantization:
+
+```bash
+soup train --config examples/configs/dpo_example.yaml
+```
+
+**What it does:**
+- Uses Llama 3.1 8B Instruct as the base model
+- Trains with DPO on simple prompt/chosen/rejected preference pairs
+- Uses QLoRA (4-bit quantization) for memory-efficient training
+- `dpo_beta: 0.1` controls the KL divergence penalty strength
+- Outputs to `./output_dpo_example/`
+
 ### 3. Reasoning Model (GRPO)
 
 Fine-tune a reasoning model with step-by-step answer verification:
@@ -224,6 +239,7 @@ examples/
   configs/              # YAML configuration files
     sft_basic.yaml
     dpo_chat.yaml
+    dpo_example.yaml
     grpo_reasoning.yaml
     vision_llama.yaml
     rlhf_step1_sft.yaml
@@ -233,6 +249,7 @@ examples/
   data/                 # Sample datasets (JSONL)
     alpaca_tiny.jsonl
     chat_preferences.jsonl
+    dpo_sample.jsonl
     reasoning_math.jsonl
 ```
 

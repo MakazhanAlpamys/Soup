@@ -1,0 +1,44 @@
+# DPO (Direct Preference Optimization) Example
+# Fine-tune Llama 3.1 8B Instruct with preference pairs
+# Uses QLoRA (4-bit) for memory-efficient training
+#
+# Usage:
+#   soup train examples/configs/dpo_example.yaml
+
+base: meta-llama/Llama-3.1-8B-Instruct
+task: dpo
+# backend: unsloth  # 2-5x faster, pip install 'soup-cli[fast]'
+
+data:
+  train: examples/data/dpo_sample.jsonl
+  format: dpo
+  max_length: 2048
+
+training:
+  epochs: 3
+  lr: 5e-6
+  dpo_beta: 0.1
+  quantization: 4bit
+  batch_size: 4
+  gradient_accumulation_steps: 4
+  warmup_ratio: 0.1
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  optimizer: adamw_torch
+  scheduler: cosine
+  logging_steps: 10
+  save_steps: 100
+  # neftune_alpha: 5.0            # NEFTune noisy embeddings for better chat quality
+  # gradient_checkpointing: true  # Save memory on long sequences
+  # packing: true                 # Pack short samples for faster training
+  # use_flash_attn: true          # FlashAttention for faster attention
+  # use_liger: true               # Liger Kernel fused ops, pip install 'soup-cli[liger]'
+  lora:
+    r: 16
+    alpha: 32
+    dropout: 0.05
+    target_modules: auto
+    # use_dora: true              # Weight-Decomposed LoRA (better quality, slightly slower)
+    # use_rslora: true            # Rank-stabilized scaling (better for high ranks)
+
+output: ./output_dpo_example/
