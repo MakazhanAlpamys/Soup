@@ -245,7 +245,11 @@ class TestAdapterPathAbsolute:
         client = TestClient(app)
         response = client.get("/v1/adapters")
         for adapter in response.json()["adapters"]:
-            assert set(adapter.keys()) == {"name"}
+            # name is always present; active (bool) may be present (v0.30.0).
+            # The security invariant is: no path leaks.
+            assert "name" in adapter
+            assert "path" not in adapter
+            assert set(adapter.keys()) <= {"name", "active"}
 
 
 class TestAdaptersBackendRejection:

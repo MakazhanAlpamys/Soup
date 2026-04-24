@@ -121,6 +121,51 @@ def serve(
         "--adapters",
         help="LoRA adapters as name=path pairs (repeatable). E.g. chat=./chat-adapter",
     ),
+    prefix_cache: bool = typer.Option(
+        False,
+        "--prefix-cache",
+        help="Enable vLLM prefix caching for shared system prompts (RAG/agent workloads).",
+    ),
+    auto_spec: bool = typer.Option(
+        False,
+        "--auto-spec",
+        help="Auto-pair draft model for speculative decoding based on target model.",
+    ),
+    structured_output: str = typer.Option(
+        "off",
+        "--structured-output",
+        help="Constrain generation: off (default) | json | regex.",
+    ),
+    json_schema: Optional[str] = typer.Option(
+        None,
+        "--json-schema",
+        help="Path to JSON schema file (used with --structured-output json).",
+    ),
+    regex_pattern: Optional[str] = typer.Option(
+        None,
+        "--regex-pattern",
+        help="Regex pattern (used with --structured-output regex).",
+    ),
+    dashboard: bool = typer.Option(
+        False,
+        "--dashboard",
+        help="Enable live continuous-batching dashboard + /metrics endpoint.",
+    ),
+    trace: bool = typer.Option(
+        False,
+        "--trace",
+        help="Enable OpenTelemetry request tracing (requires opentelemetry-sdk).",
+    ),
+    trace_endpoint: Optional[str] = typer.Option(
+        None,
+        "--trace-endpoint",
+        help="OTLP endpoint URL (default: http://localhost:4317).",
+    ),
+    auto_quant: bool = typer.Option(
+        False,
+        "--auto-quant",
+        help="Try GGUF/AWQ/GPTQ/FP8 on a tiny eval, pick fastest-at-acceptable-quality.",
+    ),
 ):
     """Start a local inference server with OpenAI-compatible API."""
     # Lazy imports for fast CLI startup
@@ -276,12 +321,68 @@ def serve(
         )
     )
 
+    # Auto-pair draft model for speculative decoding
+    if auto_spec and not speculative_model:
+        from soup_cli.utils.spec_pairing import pick_draft_model
+
+        target_for_pairing = base_model or str(model_path)
+        paired = pick_draft_model(target_for_pairing)
+        if paired:
+            speculative_model = paired
+            console.print(
+                f"[green]Auto-paired draft model:[/] {paired} "
+                f"(target: {target_for_pairing})"
+            )
+        else:
+            console.print(
+                f"[yellow]--auto-spec: no known draft model for "
+                f"{target_for_pairing}. Skipping speculative decoding.[/]"
+            )
+
+    # Validate structured-output flags up front
+    from soup_cli.utils.structured_output import validate_mode
+
+    try:
+        structured_mode = validate_mode(structured_output)
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/]")
+        raise typer.Exit(1)
+    if structured_mode == "regex" and not regex_pattern:
+        console.print("[red]--structured-output regex requires --regex-pattern.[/]")
+        raise typer.Exit(1)
+    if structured_mode == "json" and not json_schema:
+        console.print(
+            "[red]--structured-output json requires --json-schema <path>.[/]"
+        )
+        raise typer.Exit(1)
+
+    # Auto-quant: flag is accepted but the eval loop is deferred to v0.30.1
+    # (mirrors v0.28.0 kernel_picker pattern). Warn loudly so the user knows
+    # the flag is a no-op today.
+    if auto_quant:
+        console.print(
+            "[yellow]--auto-quant: picker API is registered but the live "
+            "eval loop is deferred to v0.30.1. Flag has no effect today.[/]"
+        )
+
+    # Validate trace endpoint early
+    if trace and trace_endpoint:
+        from soup_cli.utils.tracing import validate_otlp_endpoint
+
+        try:
+            validate_otlp_endpoint(trace_endpoint)
+        except ValueError as exc:
+            console.print(f"[red]{exc}[/]")
+            raise typer.Exit(1)
+
     if backend == "vllm":
         if speculative_model:
             console.print(
                 f"[green]Speculative decoding enabled:[/] draft={speculative_model}, "
                 f"tokens={num_speculative_tokens}"
             )
+        if prefix_cache:
+            console.print("[green]Prefix caching enabled.[/]")
         app = _serve_vllm(
             model_path=model_path,
             base_model=base_model,
@@ -291,6 +392,7 @@ def serve(
             gpu_memory_utilization=gpu_memory_utilization,
             speculative_model=speculative_model,
             num_speculative_tokens=num_speculative_tokens,
+            enable_prefix_caching=prefix_cache,
         )
     elif backend == "sglang":
         app = _serve_sglang(
@@ -339,6 +441,42 @@ def serve(
                 "with speculative decoding.[/]"
             )
 
+        # Build structured-output constraint
+        from soup_cli.utils.paths import is_under_cwd
+        from soup_cli.utils.structured_output import build_constraint
+
+        schema_obj = None
+        if json_schema:
+            import json as _json
+            schema_path = Path(json_schema)
+            if not is_under_cwd(schema_path):
+                console.print(
+                    f"[red]JSON schema path must stay under the current "
+                    f"working directory: {json_schema}[/]"
+                )
+                raise typer.Exit(1)
+            if not schema_path.exists():
+                console.print(f"[red]JSON schema file not found: {json_schema}[/]")
+                raise typer.Exit(1)
+            try:
+                schema_obj = _json.loads(schema_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError) as exc:
+                console.print(f"[red]Failed to read JSON schema: {exc}[/]")
+                raise typer.Exit(1)
+
+        try:
+            constraint = build_constraint(
+                structured_mode, schema_obj, regex_pattern
+            )
+        except ValueError as exc:
+            console.print(f"[red]{exc}[/]")
+            raise typer.Exit(1)
+
+        # Build tracer (no-op if SDK missing or disabled)
+        from soup_cli.utils.tracing import build_tracer
+
+        tracer = build_tracer(enabled=trace, endpoint=trace_endpoint)
+
         app = _create_app(
             model_obj=model_obj,
             tokenizer=tokenizer,
@@ -348,6 +486,9 @@ def serve(
             draft_model=draft_model,
             num_speculative_tokens=num_speculative_tokens,
             adapter_map=adapter_map if adapter_map else None,
+            output_constraint=constraint,
+            enable_dashboard=dashboard,
+            tracer=tracer,
         )
 
     console.print(
@@ -381,6 +522,7 @@ def _serve_vllm(
     gpu_memory_utilization: float,
     speculative_model: Optional[str] = None,
     num_speculative_tokens: int = 5,
+    enable_prefix_caching: bool = False,
 ):
     """Set up vLLM engine and create FastAPI app."""
     from soup_cli.utils.vllm import create_vllm_app, create_vllm_engine
@@ -394,6 +536,7 @@ def _serve_vllm(
         gpu_memory_utilization=gpu_memory_utilization,
         speculative_model=speculative_model,
         num_speculative_tokens=num_speculative_tokens,
+        enable_prefix_caching=enable_prefix_caching,
     )
     console.print("[bold green]vLLM engine ready![/]")
 
@@ -599,22 +742,42 @@ def _create_app(
     draft_model=None,
     num_speculative_tokens: int = 5,
     adapter_map: Optional[Dict[str, str]] = None,
+    output_constraint: Optional[Dict] = None,
+    enable_dashboard: bool = False,
+    tracer=None,
 ):
     """Create the FastAPI application with OpenAI-compatible endpoints."""
+    import threading as _threading
+
     from fastapi import FastAPI, HTTPException
+    from fastapi import Path as FPath
     from fastapi.middleware.cors import CORSMiddleware
     from fastapi.responses import StreamingResponse
     from pydantic import BaseModel as PydanticBaseModel
     from pydantic import Field
 
+    from soup_cli.utils.metrics import ServerMetrics
+
     app = FastAPI(title="Soup Inference Server", version="1.0.0")
 
+    # Loopback-only CORS: the inference server hosts state-mutating POST
+    # endpoints (activate/deactivate adapter) without auth, so wildcard CORS
+    # would let any browser page swap the active adapter. Loopback origins
+    # cover the curl / same-host IDE extension cases.
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
-        allow_methods=["*"],
+        allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
+        allow_methods=["GET", "POST", "OPTIONS"],
         allow_headers=["*"],
     )
+
+    # Shared metrics bucket — always created so /metrics works whether or
+    # not --dashboard is enabled.
+    metrics = ServerMetrics()
+    # Active adapter name (None = base model). Protected by a lock because
+    # FastAPI runs sync handlers in a threadpool.
+    active_state: Dict[str, Optional[str]] = {"active": None}
+    active_lock = _threading.Lock()
 
     # --- Request/Response models ---
 
@@ -639,19 +802,58 @@ def _create_app(
 
     # --- Endpoints ---
 
+    def _active_snapshot() -> Optional[str]:
+        with active_lock:
+            return active_state["active"]
+
     @app.get("/health")
     def health():
-        return {"status": "ok", "model": model_name, "device": device}
+        return {
+            "status": "ok",
+            "model": model_name,
+            "device": device,
+            "active_adapter": _active_snapshot(),
+        }
+
+    @app.get("/metrics")
+    def metrics_endpoint():
+        """Dashboard + Prometheus-style JSON scrape."""
+        return metrics.snapshot()
 
     @app.get("/v1/adapters")
     def list_adapters():
         """List loaded LoRA adapters (names only, no paths for security)."""
+        current = _active_snapshot()
         return {
             "adapters": [
-                {"name": name}
+                {"name": name, "active": name == current}
                 for name in _adapter_map
-            ]
+            ],
+            "active": current,
         }
+
+    @app.post("/v1/adapters/activate/{name}")
+    def activate_adapter(name: str = FPath(..., pattern=r"^[a-zA-Z0-9][a-zA-Z0-9\-]*$")):
+        """Hot-swap the active adapter. Name must be in the loaded map."""
+        if not _adapter_map:
+            raise HTTPException(
+                status_code=404, detail="No adapters loaded."
+            )
+        if name not in _adapter_map:
+            raise HTTPException(
+                status_code=404,
+                detail="Unknown adapter. Use GET /v1/adapters to list available adapters.",
+            )
+        with active_lock:
+            active_state["active"] = name
+        return {"active": name, "status": "ok"}
+
+    @app.post("/v1/adapters/deactivate")
+    def deactivate_adapter():
+        """Return to base model (clear active adapter)."""
+        with active_lock:
+            active_state["active"] = None
+        return {"active": None, "status": "ok"}
 
     @app.get("/v1/models")
     def list_models():
@@ -699,41 +901,66 @@ def _create_app(
                 media_type="text/event-stream",
             )
 
-        try:
-            response_text, prompt_tokens, completion_tokens = _generate_response(
-                model_obj, tokenizer, messages,
-                max_tokens=max_tokens,
-                temperature=request.temperature,
-                top_p=request.top_p,
-                assistant_model=draft_model,
-                num_assistant_tokens=num_speculative_tokens,
-            )
-        except Exception:
-            logger.exception("Generation error")
-            raise HTTPException(status_code=500, detail="Internal server error")
+        import contextlib as _contextlib
 
-        return {
-            "id": f"chatcmpl-{uuid.uuid4().hex[:8]}",
-            "object": "chat.completion",
-            "created": int(time.time()),
-            "model": model_name,
-            "choices": [
-                {
-                    "index": 0,
-                    "message": {
-                        "role": "assistant",
-                        "content": response_text,
+        started = time.perf_counter()
+        completion_tokens = 0  # ensure defined on error paths for metrics
+        # Use ExitStack so tracer span + track_request both get correct
+        # exception propagation (__exit__ sees exc info, span marked error).
+        with _contextlib.ExitStack() as stack:
+            stack.enter_context(metrics.track_request())
+            if tracer is not None:
+                stack.enter_context(tracer.start_as_current_span("chat.completion"))
+            try:
+                try:
+                    response_text, prompt_tokens, completion_tokens = _generate_response(
+                        model_obj, tokenizer, messages,
+                        max_tokens=max_tokens,
+                        temperature=request.temperature,
+                        top_p=request.top_p,
+                        assistant_model=draft_model,
+                        num_assistant_tokens=num_speculative_tokens,
+                    )
+                except Exception:
+                    logger.exception("Generation error")
+                    raise HTTPException(status_code=500, detail="Internal server error")
+
+                metrics.record_tokens(completion_tokens)
+
+                # output_constraint is validated but not enforced on the
+                # transformers backend — constrained generation via outlines
+                # lives in v0.30.1 (descriptor exposed on app.state for tests).
+                _ = output_constraint
+
+                return {
+                    "id": f"chatcmpl-{uuid.uuid4().hex[:8]}",
+                    "object": "chat.completion",
+                    "created": int(time.time()),
+                    "model": model_name,
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {
+                                "role": "assistant",
+                                "content": response_text,
+                            },
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {
+                        "prompt_tokens": prompt_tokens,
+                        "completion_tokens": completion_tokens,
+                        "total_tokens": prompt_tokens + completion_tokens,
                     },
-                    "finish_reason": "stop",
                 }
-            ],
-            "usage": {
-                "prompt_tokens": prompt_tokens,
-                "completion_tokens": completion_tokens,
-                "total_tokens": prompt_tokens + completion_tokens,
-            },
-        }
+            finally:
+                # Always record latency so tail-latency percentiles include
+                # error paths (prevents blind spots on the dashboard).
+                metrics.record_latency((time.perf_counter() - started) * 1000)
 
+    # Expose dashboard intent + constraint on the app for tests + introspection
+    app.state.enable_dashboard = enable_dashboard
+    app.state.output_constraint = output_constraint
     return app
 
 

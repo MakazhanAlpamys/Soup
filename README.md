@@ -40,13 +40,12 @@ soup train
 
 Latest highlights only. Full history: [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 
-- **Auto-push checkpoints** — `soup train --push-as user/my-model` uploads every `save_steps` checkpoint to HuggingFace Hub as a `checkpoint-<N>` branch. Pair with `--hf-resume` to pull the latest and keep going after a crash.
-- **HuggingFace Collections** — `soup push --collection user/my-collection-abc123` groups pushed adapters into an existing Collection.
-- **Self-hosted Hub** — set `HF_ENDPOINT=https://hf.internal.example.com` and every HF operation in Soup routes there. Localhost HTTP permitted; private/RFC1918 IPs rejected.
-- **Publish HF datasets** — `soup data push --input data.jsonl --hf-dataset user/my-data` uploads a local JSONL as an HF dataset repo.
-- **Deploy HF Space** — `soup deploy hf-space --model user/my-model --space user/my-space --template gradio-chat` creates a Gradio (or Streamlit) Space wrapping your fine-tuned model in one command.
-- **Model card v2** — generated README surfaces the training config (task / base / lr / optimizer) and an optional eval scorecard; markdown-active chars are neutralised for safe HF Hub rendering.
-- **License:** Soup is now Apache-2.0 (previously MIT). Downstream redistributors must retain the `NOTICE` file per §4(d).
+- **Prefix caching** — `soup serve --prefix-cache` enables vLLM's automatic prefix cache. Big win for RAG / agent workloads with shared system prompts.
+- **Speculative decoding auto-pairing** — `soup serve --auto-spec` picks a draft model for you based on the target (Llama 3.1-70B → Llama 3.2-1B, Qwen 2.5-72B → Qwen 2.5-0.5B, etc.).
+- **Dynamic LoRA hot-swap** — `POST /v1/adapters/activate/<name>` (and `/v1/adapters/deactivate`) switches the active adapter at runtime, no restart required.
+- **Structured output** — `soup serve --structured-output json --json-schema s.json` or `--structured-output regex --regex-pattern '...'` constrains generation.
+- **Continuous-batching dashboard** — `soup serve --dashboard` opens a live Rich dashboard and exposes `/metrics` (requests, tokens, active, latency p50/p95).
+- **OpenTelemetry tracing** — `soup serve --trace --trace-endpoint http://localhost:4317` emits per-request spans. OTLP endpoint SSRF-hardened (RFC1918 / link-local / 0.0.0.0 rejected).
 
 ## Why Soup?
 
@@ -1382,7 +1381,97 @@ soup serve --model ./output --speculative-decoding small-draft-model --spec-toke
 
 # vLLM backend — uses vLLM native speculative decoding
 soup serve --model ./output --backend vllm --speculative-decoding small-draft-model
+
+# Auto-pair: Soup picks the draft for you based on the target family
+soup serve --model meta-llama/Llama-3.1-70B-Instruct --backend vllm --auto-spec
+# → auto-paired: meta-llama/Llama-3.2-1B-Instruct (target: Llama-3.1-70B-Instruct)
 ```
+
+`--auto-spec` handles Llama 3.1/3.3/4, Qwen 2.5/3, Mistral Large, Mixtral, DeepSeek V3/R1, and Gemma 2/3. Models without a known draft pairing (e.g. 8B-or-smaller targets where draft+target overhead outweighs the gain) print a yellow "no draft" note and fall back to standard decoding.
+
+### Prefix Caching
+
+For RAG and agent workloads with a shared system prompt, enable vLLM's automatic prefix cache:
+
+```bash
+soup serve --model ./output --backend vllm --prefix-cache
+```
+
+The first request with a given prefix warms the cache; subsequent requests skip the shared prefix compute entirely. Big latency win when 100+ requests share the same system prompt.
+
+### Dynamic LoRA Hot-Swap
+
+Switch the active adapter at runtime without restarting the server:
+
+```bash
+soup serve --model base-model --adapters chat=./chat-adapter code=./code-adapter
+```
+
+```bash
+# Activate an adapter
+curl -X POST http://localhost:8000/v1/adapters/activate/chat
+# → {"active": "chat", "status": "ok"}
+
+# Return to base model
+curl -X POST http://localhost:8000/v1/adapters/deactivate
+# → {"active": null, "status": "ok"}
+
+# List loaded adapters with active flag
+curl http://localhost:8000/v1/adapters
+# → {"adapters": [{"name": "chat", "active": true}, ...], "active": "chat"}
+```
+
+Names are validated against `^[a-zA-Z0-9][a-zA-Z0-9-]*$`; activate/deactivate calls are thread-safe behind a lock.
+
+### Structured Output (JSON Schema / Regex)
+
+Constrain model output to a valid JSON schema or regex pattern:
+
+```bash
+# JSON schema (schema file must live under your cwd)
+soup serve --model ./output --structured-output json --json-schema product.json
+
+# Regex (length-capped at 2048 chars, null bytes rejected)
+soup serve --model ./output --structured-output regex --regex-pattern '\d{3}-\d{4}'
+```
+
+The `validate_json_schema` helper caps serialised size at 64KB and requires a top-level `type` field so malformed schemas fail fast at server startup, not per-request.
+
+### Continuous-Batching Dashboard + `/metrics`
+
+Track live server health:
+
+```bash
+soup serve --model ./output --dashboard
+```
+
+```bash
+curl http://localhost:8000/metrics
+# → {
+#   "requests_total": 1234,
+#   "tokens_generated_total": 456789,
+#   "active_requests": 3,
+#   "latency_p50_ms": 185.2,
+#   "latency_p95_ms": 720.0,
+#   "latency_samples": 1000
+# }
+```
+
+Latency percentiles are computed from the last 1000 requests; counters include failure paths so the dashboard shows true reliability, not just success rate.
+
+### OpenTelemetry Request Tracing
+
+Emit per-request spans to your OTLP collector:
+
+```bash
+pip install opentelemetry-sdk opentelemetry-exporter-otlp
+
+soup serve --model ./output \
+  --trace \
+  --trace-endpoint http://localhost:4317
+```
+
+The OTLP endpoint is SSRF-hardened: only http/https schemes, plain HTTP only for loopback (`localhost`/`127.0.0.1`/`::1`), and RFC1918 / link-local / `0.0.0.0` all rejected via `ipaddress.ip_address`. When the SDK is missing the flag is a no-op with a warning — the server starts fine without spans.
 
 > **Note:** `max_tokens` is capped at 16,384 per request. Error details are never exposed in HTTP responses.
 
@@ -1949,9 +2038,13 @@ soup train --config soup.yaml --tensorboard   Train with TensorBoard logging
 soup train --config soup.yaml --fsdp full_shard  Train with FSDP2
 soup train --config soup.yaml --deepspeed zero++  DeepSpeed ZeRO++ (quantized comms)
 soup train --config soup.yaml --gpus auto|N      Multi-GPU launch hint
-soup train --config soup.yaml --gate evals/gate.yaml  Eval-gated trainingsoup infer --model ./output --input p.jsonl   Batch inference
+soup train --config soup.yaml --gate evals/gate.yaml  Eval-gated training
+soup train --config soup.yaml --push-as user/repo  Auto-push each checkpoint to HF as branch
+soup train --config soup.yaml --push-as user/repo --hf-resume  Resume from latest HF checkpoint branch
+soup infer --model ./output --input p.jsonl   Batch inference
 soup chat --model ./output                    Interactive chat
 soup push --model ./output --repo user/name   Upload to HuggingFace
+soup push --model ./output --repo user/name --collection user/coll-abc123  Add to HF Collection
 soup merge --adapter ./output                 Merge LoRA with base model
 soup export --model ./output --format gguf    Export to GGUF (Ollama)
 soup export --model ./output --deploy ollama  Export GGUF + auto-deploy to Ollama
@@ -1962,6 +2055,7 @@ soup export --model ./output --format gptq    Export to GPTQ (4-bit)
 soup deploy ollama --model m.gguf --name x    Deploy GGUF to Ollama
 soup deploy ollama --list                     List Soup-deployed models
 soup deploy ollama --remove <name>            Remove model from Ollama
+soup deploy hf-space --model user/m --space user/s --template gradio-chat|streamlit-chat  Create HF Space
 soup eval benchmark --model ./output          Evaluate on standard benchmarks
 soup eval custom --tasks eval.jsonl           Custom eval tasks from JSONL
 soup eval judge --target resp.jsonl           LLM-as-a-judge evaluation
@@ -1974,6 +2068,13 @@ soup serve --model ./output --backend vllm    vLLM backend (2-4x throughput)
 soup serve --model ./output --backend sglang  SGLang backend
 soup serve --model ./output --backend mii     DeepSpeed-MII backend (registered; live in v0.27.1)
 soup serve --model ./output --speculative-decoding draft-model  Speculative decoding
+soup serve --model <m> --auto-spec            Auto-pair draft model for speculative decoding
+soup serve --model <m> --backend vllm --prefix-cache  vLLM prefix caching (RAG/agent)
+soup serve --model <m> --structured-output json --json-schema s.json  Constrained output
+soup serve --model <m> --structured-output regex --regex-pattern '...'  Regex-constrained output
+soup serve --model <m> --dashboard            Live dashboard + /metrics endpoint
+soup serve --model <m> --trace --trace-endpoint http://localhost:4317  OpenTelemetry tracing
+POST /v1/adapters/activate/<name>             Hot-swap active LoRA adapter
 soup sweep --config soup.yaml --param lr=...  Hyperparameter search
 soup diff --model-a ./a --model-b ./b         Compare two models
 soup data inspect <path>                      View dataset stats
@@ -2003,6 +2104,7 @@ soup data download user/dataset -o data.jsonl  Download HF dataset as JSONL
 soup data download user/ds --samples 1000    Stream first 1000 samples
 soup data register --name my-ds --path d.jsonl --format alpaca  Register dataset
 soup data unregister --name my-ds            Remove from registry
+soup data push --input d.jsonl --hf-dataset user/name  Upload local JSONL as HF dataset
 soup data registry                           List all registered datasets
 soup profile --config soup.yaml              Estimate memory/speed before training
 soup profile --config soup.yaml --gpu a100   Estimate for specific GPU

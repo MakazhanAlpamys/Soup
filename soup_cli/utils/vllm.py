@@ -36,6 +36,7 @@ def create_vllm_engine(
     dtype: str = "auto",
     speculative_model: Optional[str] = None,
     num_speculative_tokens: int = 5,
+    enable_prefix_caching: bool = False,
 ):
     """Create a vLLM AsyncLLMEngine for serving.
 
@@ -47,6 +48,8 @@ def create_vllm_engine(
         gpu_memory_utilization: Fraction of GPU memory to use.
         max_model_len: Maximum sequence length. Auto-detected if None.
         dtype: Data type for model weights.
+        enable_prefix_caching: Enable vLLM's automatic prefix cache — big
+            win for RAG / agent workloads with shared system prompts.
 
     Returns:
         (engine, engine_model_name) tuple.
@@ -63,6 +66,7 @@ def create_vllm_engine(
             gpu_memory_utilization=gpu_memory_utilization,
             dtype=dtype,
             trust_remote_code=True,
+            enable_prefix_caching=enable_prefix_caching,
         )
         if max_model_len is not None:
             engine_args.max_model_len = max_model_len
@@ -74,6 +78,7 @@ def create_vllm_engine(
             gpu_memory_utilization=gpu_memory_utilization,
             dtype=dtype,
             trust_remote_code=True,
+            enable_prefix_caching=enable_prefix_caching,
         )
         if max_model_len is not None:
             engine_args.max_model_len = max_model_len

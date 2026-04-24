@@ -503,6 +503,7 @@ class TestServeVllmIntegration:
                 gpu_memory_utilization=0.85,
                 speculative_model=None,
                 num_speculative_tokens=5,
+                enable_prefix_caching=False,
             )
             mock_create_app.assert_called_once()
 
