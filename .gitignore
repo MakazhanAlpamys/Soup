@@ -43,6 +43,8 @@ report.xml
 .claude/plan.md
 .claude/CLAUDE.md
 .claude/settings.json
+.claude/scheduled_tasks.lock
+.claude/*.lock
 
 # ECC plugin (local only)
 .claude/agents/
