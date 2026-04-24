@@ -816,6 +816,7 @@ class TestTracingExtra:
 class TestStructuredOutputExtra:
     def test_cli_json_without_schema_errors(self, tmp_path):
         """--structured-output json must require --json-schema."""
+        pytest.importorskip("fastapi")  # CLI exits early w/o FastAPI
         from typer.testing import CliRunner
 
         from soup_cli.cli import app
@@ -843,6 +844,7 @@ class TestStructuredOutputExtra:
 class TestAutoQuantCLIWarning:
     def test_auto_quant_prints_deferral_warning(self, tmp_path):
         """--auto-quant must print a yellow warning explaining it's a no-op."""
+        pytest.importorskip("fastapi")  # CLI exits early w/o FastAPI
         from typer.testing import CliRunner
 
         from soup_cli.cli import app
@@ -871,6 +873,7 @@ class TestAutoQuantCLIWarning:
 class TestJsonSchemaContainment:
     def test_json_schema_outside_cwd_rejected(self, tmp_path, monkeypatch):
         """JSON schema path must stay under cwd."""
+        pytest.importorskip("fastapi")  # CLI exits early w/o FastAPI
         from typer.testing import CliRunner
 
         from soup_cli.cli import app
