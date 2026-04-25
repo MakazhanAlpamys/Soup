@@ -40,12 +40,13 @@ soup train
 
 Latest highlights only. Full history: [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 
-- **Prefix caching** — `soup serve --prefix-cache` enables vLLM's automatic prefix cache. Big win for RAG / agent workloads with shared system prompts.
-- **Speculative decoding auto-pairing** — `soup serve --auto-spec` picks a draft model for you based on the target (Llama 3.1-70B → Llama 3.2-1B, Qwen 2.5-72B → Qwen 2.5-0.5B, etc.).
-- **Dynamic LoRA hot-swap** — `POST /v1/adapters/activate/<name>` (and `/v1/adapters/deactivate`) switches the active adapter at runtime, no restart required.
-- **Structured output** — `soup serve --structured-output json --json-schema s.json` or `--structured-output regex --regex-pattern '...'` constrains generation.
-- **Continuous-batching dashboard** — `soup serve --dashboard` opens a live Rich dashboard and exposes `/metrics` (requests, tokens, active, latency p50/p95).
-- **OpenTelemetry tracing** — `soup serve --trace --trace-endpoint http://localhost:4317` emits per-request spans. OTLP endpoint SSRF-hardened (RFC1918 / link-local / 0.0.0.0 rejected).
+- **Recipe library doubled (46 → 80)** — every popular open-weight model now has a validated Soup recipe. `soup recipes search <model>` to find yours.
+- **Vision expansion** — Pixtral-12B, Qwen2-VL (7B + 72B), InternVL 2.5, MiniCPM-V 2.6, plus Llama-3.2-Vision 90B. SFT and GRPO/DPO variants.
+- **Audio fine-tuning** — Qwen2-Audio, SeamlessM4T v2 (translation), Whisper-large-v3 (ASR).
+- **Reasoning models** — full DeepSeek-R1-Distill set (1.5B/7B/14B/32B Qwen + 8B/70B Llama), Qwen3-Coder 30B, Qwen3-30B-A3B reasoning, Phi-4 reasoning.
+- **Edge / on-device** — SmolLM2 (135M / 360M / 1.7B), Qwen2.5 (0.5B / 1.5B / 3B), Gemma 2 2B, Phi-3.5-mini.
+- **Domain specialists** — BioMistral, Meditron, CodeLlama (13B / 70B), Magicoder, Mathstral, Nemotron-4 340B, Llama-2-13b-finance.
+- **Recipe validation CI** — every PR that touches recipe / config / data code re-validates the full catalog so upstream HF model renames break the build instead of shipping a broken recipe.
 
 ## Why Soup?
 
@@ -1613,7 +1614,7 @@ Automatically maps model, LoRA, training params, quantization, and task type. Wa
 
 ## Ready-Made Recipes
 
-43 pre-built configs for popular models — no guessing hyperparameters:
+80 pre-built configs for popular models — no guessing hyperparameters:
 
 ```bash
 # List all recipes
@@ -1629,9 +1630,24 @@ soup recipes use llama3.1-8b-sft
 soup recipes search --task grpo
 soup recipes search "reasoning"
 soup recipes search --size 7b
+soup recipes search "medical"
+soup recipes search "vision"
 ```
 
-Recipes cover Llama 3.1/3.2/4, Qwen 2.5/3, Mistral, Gemma 3, Phi-4, DeepSeek R1/V3, plus MLX Apple Silicon recipes across SFT, DPO, GRPO, KTO, ORPO, SimPO, IPO, PPO, embedding, pretrain, tool-calling, and vision tasks.
+**What's covered:**
+
+| Category | Models |
+|---|---|
+| **General SFT / DPO / GRPO / KTO / ORPO / SimPO / IPO / PPO / Embedding / Pretrain** | Llama 3.1 / 3.2 / 4, Qwen 2.5 / 3, Mistral, Gemma 3, Phi-4, DeepSeek R1 / V3 |
+| **Vision (multimodal)** | Llama-3.2-Vision (11B + 90B), Pixtral-12B, Qwen2-VL (7B + 72B), InternVL 2.5, MiniCPM-V 2.6 |
+| **Audio (speech)** | Qwen2-Audio, SeamlessM4T v2 (translation), Whisper-large-v3 (ASR) |
+| **Reasoning** | All 6 DeepSeek-R1-Distill sizes (Qwen 1.5B / 7B / 14B / 32B + Llama 8B / 70B), Qwen3-Coder 30B, Qwen3-30B-A3B reasoning, Phi-4 reasoning |
+| **Small / edge / mobile** | SmolLM2 (135M / 360M / 1.7B), Qwen2.5 (0.5B / 1.5B / 3B), Gemma 2 2B, Phi-3.5-mini, Llama-3.2 (1B / 3B) |
+| **Domain specialists** | BioMistral 7B, Meditron 7B (medical) — CodeLlama (13B / 70B), Magicoder 6.7B (code) — Mathstral 7B (math) — Llama-2-13b-finance (FinGPT-style starter) — Nemotron-4 340B |
+| **Multimodal reasoning** | Llama-3.2-Vision GRPO, Pixtral DPO |
+| **Multi-GPU** | llama3-70b-fsdp2, qwen3-32b-zeropp, deepseek-v3-pipeline |
+| **Apple Silicon (MLX)** | llama3.1-8b / qwen3-8b / gemma3-9b SFT-MLX |
+| **Tool-calling / agentic** | qwen3-8b-tools, llama4-scout-tools |
 
 ## Hyperparameter Sweep
 

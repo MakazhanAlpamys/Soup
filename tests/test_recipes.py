@@ -260,17 +260,16 @@ class TestV025NewRecipes:
             assert cfg.base == recipe.model
             assert cfg.task == recipe.task
 
-    def test_catalog_size_is_43(self):
-        """Total catalog size is 43 (29 + 9 Part A + 2 Part B tools + 3 Part E MLX).
+    def test_catalog_size_is_80(self):
+        """Total catalog size — grew with each release.
 
-        v0.25.0 ships MLX SFT recipes only; DPO/GRPO on MLX are scaffolding and
-        the dpo/grpo-mlx recipes were removed along with the backend validator
-        that rejects non-SFT MLX configs at load time.
+        v0.25.0 shipped 43 recipes (29 + 9 Part A + 2 Part B tools + 3 Part E MLX).
+        v0.27.0 added 3 multi-GPU recipes -> 46.
+        v0.31.0 added 34 (vision/audio/reasoning/edge/domain/multimodal) -> 80.
         """
         from soup_cli.recipes.catalog import RECIPES
 
-        # 43 shipped in v0.25.0; v0.27.0 adds 3 multi-GPU recipes.
-        assert len(RECIPES) == 46
+        assert len(RECIPES) == 80
 
     def test_new_recipes_searchable(self):
         """Search returns the new recipes via keyword/task filter."""
