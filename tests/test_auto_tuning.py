@@ -14,12 +14,24 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from pathlib import Path
 
 import pytest
 import yaml
 from pydantic import ValidationError
 from typer.testing import CliRunner
+
+# Rich/Typer emits per-character ANSI escapes in CI ("--\x1b[m-find\x1b[m-lr"),
+# so substring assertions on the raw `result.output` fail on Linux runners
+# even though they pass on Windows where Rich auto-disables colour. Strip
+# escapes before comparing — same pattern used by test_hf_integration.py
+# and test_eval_platform.py.
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _strip_ansi(text: str) -> str:
+    return _ANSI_RE.sub("", text)
 
 # --------------------------------------------------------------------------- #
 # Part A — LR range finder                                                    #
@@ -164,7 +176,7 @@ class TestLRFinderCLI:
         runner = CliRunner()
         result = runner.invoke(app, ["train", "--help"])
         assert result.exit_code == 0, (result.output, repr(result.exception))
-        assert "--find-lr" in result.output
+        assert "--find-lr" in _strip_ansi(result.output)
 
 
 # --------------------------------------------------------------------------- #
