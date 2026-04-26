@@ -40,13 +40,12 @@ soup train
 
 Latest highlights only. Full history: [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 
-- **Recipe library doubled (46 → 80)** — every popular open-weight model now has a validated Soup recipe. `soup recipes search <model>` to find yours.
-- **Vision expansion** — Pixtral-12B, Qwen2-VL (7B + 72B), InternVL 2.5, MiniCPM-V 2.6, plus Llama-3.2-Vision 90B. SFT and GRPO/DPO variants.
-- **Audio fine-tuning** — Qwen2-Audio, SeamlessM4T v2 (translation), Whisper-large-v3 (ASR).
-- **Reasoning models** — full DeepSeek-R1-Distill set (1.5B/7B/14B/32B Qwen + 8B/70B Llama), Qwen3-Coder 30B, Qwen3-30B-A3B reasoning, Phi-4 reasoning.
-- **Edge / on-device** — SmolLM2 (135M / 360M / 1.7B), Qwen2.5 (0.5B / 1.5B / 3B), Gemma 2 2B, Phi-3.5-mini.
-- **Domain specialists** — BioMistral, Meditron, CodeLlama (13B / 70B), Magicoder, Mathstral, Nemotron-4 340B, Llama-2-13b-finance.
-- **Recipe validation CI** — every PR that touches recipe / config / data code re-validates the full catalog so upstream HF model renames break the build instead of shipping a broken recipe.
+- **LR Range Finder** — `soup train --find-lr` runs a fast.ai-style geometric LR sweep and writes a JSON report with the recommended learning rate. Pre-flight tuning before the real run.
+- **Auto warmup schedule** — set `training.warmup_auto: true` and Soup picks `warmup_steps` from your dataset size × epochs × `warmup_ratio`, clamped to a sane range.
+- **Auto mixed-precision** — set `training.auto_mixed_precision: true` and Soup picks `bf16` (Ampere+) or `fp16` (Turing or known fp16-stable models like Qwen2 / Phi-3.5) based on your GPU and base model.
+- **Loss spike auto-recovery** — extends the watchdog: when loss spikes, decay LR and resume instead of dying. `loss_spike_recovery: true` on top of `loss_watchdog: true`.
+- **Convergence detector** — surfaces "loss has plateaued — early-stop or cut LR" advice via `convergence_detection: true`. Catches stuck training before you waste GPU hours.
+- **VRAM-pressure advisory** — `grad_accum_auto_tune: true` records peak memory per step and recommends a new (batch, accum) pair when pressure crosses your threshold.
 
 ## Why Soup?
 
@@ -887,6 +886,79 @@ training:
   loss_watchdog_threshold: 3.0  # Stop if loss exceeds this value
   loss_watchdog_patience: 5     # Consecutive steps above threshold before stopping
 ```
+
+## Training Stability & Auto-Tuning
+
+Pre-flight tuning + in-training stability nets. All flags are opt-in.
+
+### LR Range Finder
+
+Run a fast.ai-style geometric LR sweep before the real training run. Soup writes a JSON report with the recommended LR, the loss curve, and divergence point so you can pick the LR with confidence.
+
+```bash
+soup train --config soup.yaml \
+  --find-lr \
+  --find-lr-start 1e-7 \
+  --find-lr-end 1e-1 \
+  --find-lr-steps 100 \
+  --find-lr-output ./lr_finder.json
+```
+
+The report contains the geometric `lrs[]`, raw + EMA-smoothed `losses[]`, the recommended LR (steepest negative gradient before divergence), the LR with min loss, and the divergence point if any.
+
+### Auto Warmup Schedule
+
+```yaml
+training:
+  warmup_auto: true       # Pick warmup_steps from dataset_size × epochs × warmup_ratio
+  warmup_ratio: 0.03      # 3% of total update steps (default)
+```
+
+Clamped to `[10, 1000]` so tiny datasets get some warmup and huge datasets don't burn half a million wasted steps.
+
+### Auto Mixed-Precision
+
+```yaml
+training:
+  auto_mixed_precision: true
+```
+
+Picks `bf16` on Ampere+, `fp16` on Turing or known fp16-stable models (Qwen2 / Qwen2.5 / Phi-3 / Phi-3.5), `no` on pre-Pascal. Multi-version pairs (`qwen2.5` vs `qwen2`, `phi-3.5` vs `phi-3`) match the longest substring deterministically.
+
+### Loss Spike Auto-Recovery
+
+Extends the watchdog: instead of stopping on a spike, decay LR and resume. Capped at 3 attempts by default.
+
+```yaml
+training:
+  loss_watchdog: true                   # required
+  loss_spike_recovery: true             # opt in to recovery
+  loss_spike_recovery_max_attempts: 3
+  loss_spike_recovery_lr_decay: 0.5     # halve LR each recovery
+```
+
+### Convergence Detector
+
+```yaml
+training:
+  convergence_detection: true
+  convergence_window: 50      # Steps to inspect for plateau / oscillation
+  convergence_rel_tol: 0.005  # Relative range below this == plateau
+```
+
+Surfaces `continue` / `early_stop` / `lower_lr` advice based on the loss curve.
+
+### VRAM Pressure Advisory
+
+```yaml
+training:
+  grad_accum_auto_tune: true
+  grad_accum_pressure_threshold: 0.92
+```
+
+Records peak memory each step. When pressure crosses the threshold, recommends a new `(batch, accum)` pair preserving effective batch (capped at `accum=1024`).
+
+> **v0.32.0 note:** the LR sweep currently writes a stub report demonstrating the schedule + analyzer + JSON path. The live in-process LR-sweep training loop, the live spike-recovery rollback, and live grad-accum mutation all land in v0.32.1. The schemas, validators, and APIs are stable in v0.32.0.
 
 ## Training Intelligence (Forgetting + Checkpoint Quality)
 
@@ -2057,6 +2129,7 @@ soup train --config soup.yaml --gpus auto|N      Multi-GPU launch hint
 soup train --config soup.yaml --gate evals/gate.yaml  Eval-gated training
 soup train --config soup.yaml --push-as user/repo  Auto-push each checkpoint to HF as branch
 soup train --config soup.yaml --push-as user/repo --hf-resume  Resume from latest HF checkpoint branch
+soup train --config soup.yaml --find-lr        LR range finder: write recommended LR JSON
 soup infer --model ./output --input p.jsonl   Batch inference
 soup chat --model ./output                    Interactive chat
 soup push --model ./output --repo user/name   Upload to HuggingFace

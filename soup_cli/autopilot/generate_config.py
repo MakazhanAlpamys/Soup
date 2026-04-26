@@ -113,3 +113,60 @@ def write_yaml(config: SoupConfig, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8") as fh:
         yaml.safe_dump(data, fh, sort_keys=False)
+
+
+def generate_config(
+    base: str,
+    data_path: str,
+    decisions: dict,
+    output_path: Path | str,
+) -> Path:
+    """Render an autopilot decisions dict to a YAML config file.
+
+    The ``decisions`` dict mirrors what ``build_soup_config`` produces but
+    with a flat shape — useful for testing and for v0.32.0 callers that
+    pre-compute decisions outside the analyzer pipeline.
+    """
+    from soup_cli.utils.paths import is_under_cwd
+
+    output = Path(output_path)
+    if not is_under_cwd(output):
+        raise ValueError(f"output_path must stay under cwd: {output}")
+    output_field = decisions.get("output", "./output")
+    if not is_under_cwd(Path(output_field)):
+        raise ValueError(
+            f"decisions['output'] must stay under cwd: {output_field}"
+        )
+    perf = decisions.get("perf", {})
+    lora = decisions.get("lora", {})
+    training_kwargs = {
+        "epochs": decisions["epochs"],
+        "lr": decisions["lr"],
+        "batch_size": decisions["batch_size"],
+        "gradient_accumulation_steps": decisions["grad_accum"],
+        "quantization": decisions["quantization"],
+        "lora": LoraConfig(
+            r=lora.get("r", 16),
+            alpha=lora.get("alpha", 32),
+            target_modules="auto",
+            use_dora=lora.get("use_dora", False),
+        ),
+        "use_flash_attn": perf.get("use_flash_attn", False),
+        "use_liger": perf.get("use_liger", False),
+        "gradient_checkpointing": perf.get("gradient_checkpointing", False),
+        "warmup_auto": bool(decisions.get("warmup_auto", False)),
+        "auto_mixed_precision": bool(decisions.get("mixed_precision") is not None),
+    }
+    cfg = SoupConfig(
+        base=base,
+        task=decisions["task"],
+        data=DataConfig(
+            train=data_path,
+            format=decisions.get("format", "auto"),
+            max_length=decisions["max_length"],
+        ),
+        training=TrainingConfig(**training_kwargs),
+        output=decisions.get("output", "./output"),
+    )
+    write_yaml(cfg, output)
+    return output

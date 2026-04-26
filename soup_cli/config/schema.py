@@ -350,6 +350,67 @@ class TrainingConfig(BaseModel):
         le=1000,
         description="Consecutive high-loss steps before stopping",
     )
+    # Loss spike auto-recovery (v0.32.0 Part E) — extends watchdog
+    loss_spike_recovery: bool = Field(
+        default=False,
+        description=(
+            "On watchdog trigger: rollback to last checkpoint, decay LR, "
+            "and resume (instead of stopping). Requires loss_watchdog=true."
+        ),
+    )
+    loss_spike_recovery_max_attempts: int = Field(
+        default=3, ge=1, le=10,
+        description="Max number of spike-recovery attempts before giving up",
+    )
+    loss_spike_recovery_lr_decay: float = Field(
+        default=0.5, gt=0.0, lt=1.0,
+        description="Multiply LR by this factor on each spike recovery (0.5 = halve)",
+    )
+    # Convergence detection (v0.32.0 Part F)
+    convergence_detection: bool = Field(
+        default=False,
+        description=(
+            "Watch for loss plateau / oscillation and surface advice "
+            "(continue / early_stop / lower_lr) at the end of training."
+        ),
+    )
+    convergence_window: int = Field(
+        default=50, ge=5, le=10_000,
+        description="Number of recent losses to inspect for plateau / oscillation",
+    )
+    convergence_rel_tol: float = Field(
+        default=0.005, gt=0.0, le=1.0,
+        description="Relative range threshold below which the window is a plateau",
+    )
+    # Warmup auto-schedule (v0.32.0 Part D) — reuses pre-existing warmup_ratio.
+    warmup_auto: bool = Field(
+        default=False,
+        description=(
+            "Auto-pick warmup_steps from dataset_size × epochs × warmup_ratio. "
+            "Overrides any manual warmup_steps in the trainer."
+        ),
+    )
+    # Auto mixed-precision (v0.32.0 Part C)
+    auto_mixed_precision: bool = Field(
+        default=False,
+        description=(
+            "Pick bf16/fp16 based on model + GPU compute capability. "
+            "Overrides manual --bf16 / --fp16 trainer flags."
+        ),
+    )
+    # Live grad-accum monitoring (v0.32.0 Part B)
+    grad_accum_auto_tune: bool = Field(
+        default=False,
+        description=(
+            "Monitor VRAM each step; warn (and recommend new batch/accum) "
+            "when memory pressure is high. Advisory in v0.32.0; live "
+            "DataLoader rebuild deferred to v0.32.1."
+        ),
+    )
+    grad_accum_pressure_threshold: float = Field(
+        default=0.92, gt=0.05, lt=0.99,
+        description="VRAM utilisation fraction that triggers a recommendation",
+    )
     # Freeze training — freeze bottom layers for parameter-efficient training
     freeze_layers: Optional[int] = Field(
         default=None,
@@ -471,6 +532,16 @@ class TrainingConfig(BaseModel):
             raise ValueError(
                 "packing_cross_doc_attn_mask requires packing=true "
                 "(cross-doc attention masking only applies to packed sequences)"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_spike_recovery_requires_watchdog(self) -> "TrainingConfig":
+        """Spike recovery is a watchdog hook — it needs the watchdog enabled."""
+        if self.loss_spike_recovery and not self.loss_watchdog:
+            raise ValueError(
+                "loss_spike_recovery requires loss_watchdog=true "
+                "(spike recovery is triggered by the watchdog)"
             )
         return self
 

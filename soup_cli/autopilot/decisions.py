@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, Literal
 
 GOAL_TO_TASK: dict[str, str] = {
     "chat": "sft",
@@ -140,6 +140,31 @@ def decide_performance_flags(
         "use_liger": bool(is_ampere_or_newer),
         "gradient_checkpointing": bool(long_sequence or tight_vram),
     }
+
+
+def decide_warmup(
+    num_examples: int, batch_size: int, grad_accum: int, epochs: int,
+    ratio: float = 0.03,
+) -> int:
+    """Wrap ``compute_warmup_steps`` for the autopilot decision flow."""
+    from soup_cli.utils.warmup import compute_warmup_steps
+
+    return compute_warmup_steps(
+        num_examples=num_examples,
+        batch_size=batch_size,
+        grad_accum=grad_accum,
+        epochs=epochs,
+        ratio=ratio,
+    )
+
+
+def decide_mixed_precision(
+    model_name: str, compute_capability: float,
+) -> Literal["bf16", "fp16", "no"]:
+    """Wrap ``pick_mixed_precision`` for the autopilot decision flow."""
+    from soup_cli.utils.mixed_precision import pick_mixed_precision
+
+    return pick_mixed_precision(model_name, compute_capability)
 
 
 _BUDGET_RE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*([gG][bB]?)?\s*$")
