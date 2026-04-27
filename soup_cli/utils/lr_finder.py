@@ -130,6 +130,76 @@ def _finite_or_reject(values: Sequence[float], label: str) -> list[float]:
     return cleaned
 
 
+def run_lr_sweep(
+    *, model, dataloader, schedule, optimizer_factory, device: str = "cpu",
+) -> list[float]:
+    """Run an in-process LR-sweep training loop (#56, v0.33.0).
+
+    For each LR in ``schedule``, pulls the next batch from ``dataloader``,
+    runs a forward + backward + optimizer step with that LR, records the
+    loss. Diverged batches (NaN/Inf loss) terminate the sweep early so the
+    report's ``diverged_at`` is honest.
+
+    Args:
+        model: a torch ``nn.Module`` returning a dict with ``loss`` field
+            (HF causal-LM contract).
+        dataloader: any iterable producing kwargs dicts for ``model(**batch)``.
+        schedule: LR sweep from :func:`compute_lr_schedule`.
+        optimizer_factory: callable ``(params) -> Optimizer`` so we can
+            instantiate without depending on a specific optimizer here.
+        device: ``"cpu"`` / ``"cuda"`` / ``"mps"``.
+
+    Returns:
+        list of per-step losses, length <= ``len(schedule)``.
+
+    Raises:
+        ValueError: if the schedule is empty.
+
+    Notes:
+        - We mutate ``param_group["lr"]`` per step (standard LR-finder
+          pattern, no scheduler interference).
+        - Loss is captured as a Python float to break the autograd graph.
+        - The loop is bounded by the schedule length and the dataloader
+          length — whichever is shorter.
+    """
+    if not schedule:
+        raise ValueError("schedule must be non-empty")
+
+    import math as _math
+
+    optimizer = optimizer_factory(model.parameters())
+    losses: list[float] = []
+
+    iterator = iter(dataloader)
+    for lr in schedule:
+        try:
+            batch = next(iterator)
+        except StopIteration:
+            break
+        for group in optimizer.param_groups:
+            group["lr"] = lr
+
+        # Move tensor batch values onto the right device when possible.
+        # Stays import-free here; ``v.to(device)`` is duck-typed against any
+        # tensor-like object so we don't need a hard torch dependency.
+        if isinstance(batch, dict):
+            batch = {
+                k: (v.to(device) if hasattr(v, "to") else v)
+                for k, v in batch.items()
+            }
+
+        optimizer.zero_grad(set_to_none=True)
+        out = model(**batch) if isinstance(batch, dict) else model(batch)
+        loss = out["loss"] if isinstance(out, dict) else out.loss
+        loss_value = float(loss.detach().item()) if hasattr(loss, "detach") else float(loss)
+        if not _math.isfinite(loss_value):
+            break
+        losses.append(loss_value)
+        loss.backward()
+        optimizer.step()
+    return losses
+
+
 def save_lr_finder_report(
     lrs: Sequence[float], losses: Sequence[float], output_path: Path | str,
 ) -> None:

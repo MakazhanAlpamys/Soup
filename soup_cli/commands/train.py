@@ -153,31 +153,14 @@ def train(
         except ValueError as exc:
             console.print(f"[red]Invalid --find-lr range:[/] {exc}")
             raise typer.Exit(1) from exc
-        # v0.32.0 ships the LR-sweep schedule + analysis API. The live
-        # in-process training loop wiring (HF Trainer with custom LR
-        # callback) is deferred to v0.32.1 — same advisory pattern as
-        # v0.30.0 --auto-quant. For now we render a stub report so users
-        # can validate the path containment + plot infrastructure.
-        console.print(
-            "[yellow]--find-lr v0.32.0:[/] schedule + analysis API ready; "
-            "live LR-sweep training loop deferred to v0.32.1. "
-            "Writing stub report so you can verify the output path."
+        # v0.33.0 #56: live LR-sweep training loop. Falls back to a
+        # synthetic curve only when the real loop cannot run (no torch /
+        # config load failure) so users still get a parseable report.
+        losses_for_report = _run_live_lr_sweep_or_synth(
+            config_path, schedule,
         )
-        # Synthetic loss curve: descend through the first 60% of the sweep,
-        # bottom out, then explode in the tail — mimics a real LR-finder
-        # output so divergence detection + steepest-gradient logic both
-        # produce non-trivial values in the stub report.
-        n = len(schedule)
-        descend_until = max(1, int(n * 0.6))
-        synth_losses = []
-        for i in range(n):
-            if i < descend_until:
-                synth_losses.append(3.0 - 2.0 * (i / descend_until))
-            else:
-                tail = (i - descend_until) / max(1, n - descend_until)
-                synth_losses.append(1.0 + 8.0 * tail * tail)
         try:
-            save_lr_finder_report(schedule, synth_losses, find_lr_output)
+            save_lr_finder_report(schedule, losses_for_report, find_lr_output)
         except ValueError as exc:
             console.print(f"[red]Invalid --find-lr-output:[/] {exc}")
             raise typer.Exit(1) from exc
@@ -750,3 +733,98 @@ def _resolve_checkpoint(resume: str, output_dir: str, experiment_name: str = Non
     if checkpoint_path.exists() and checkpoint_path.is_dir():
         return str(checkpoint_path)
     return None
+
+
+def _run_live_lr_sweep_or_synth(
+    config_path: str, schedule: list[float],
+) -> list[float]:
+    """v0.33.0 #56 — try to run an in-process LR sweep; fall back to a
+    synthetic curve when prerequisites are missing.
+
+    Falls back when:
+      - torch / transformers / datasets are not importable
+      - config load fails
+      - dataset cannot be tokenized into a small in-memory loader
+    The fallback curve descends 60% then diverges so the recommended-LR
+    extraction in :func:`find_optimal_lr` still produces sensible output.
+    """
+    try:
+        cfg = load_config(config_path)
+    except Exception as exc:  # noqa: BLE001 — fall back rather than abort
+        console.print(
+            f"[yellow]--find-lr: config load failed ({exc}); "
+            f"writing synthetic curve.[/]"
+        )
+        return _synth_lr_curve(len(schedule))
+
+    try:
+        return _live_lr_sweep_from_config(cfg, schedule)
+    except Exception as exc:  # noqa: BLE001 — informative fallback
+        console.print(
+            f"[yellow]--find-lr: live sweep unavailable ({exc}); "
+            f"writing synthetic curve.[/]"
+        )
+        return _synth_lr_curve(len(schedule))
+
+
+def _synth_lr_curve(n: int) -> list[float]:
+    descend_until = max(1, int(n * 0.6))
+    out: list[float] = []
+    for i in range(n):
+        if i < descend_until:
+            out.append(3.0 - 2.0 * (i / descend_until))
+        else:
+            tail = (i - descend_until) / max(1, n - descend_until)
+            out.append(1.0 + 8.0 * tail * tail)
+    return out
+
+
+def _live_lr_sweep_from_config(cfg, schedule: list[float]) -> list[float]:
+    """Build a tiny in-process loop: load model + tokenizer + a slice of
+    the train dataset, then call :func:`run_lr_sweep`."""
+    import torch
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    from soup_cli.data.loader import load_local
+    from soup_cli.utils.lr_finder import run_lr_sweep
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    tokenizer = AutoTokenizer.from_pretrained(
+        cfg.base, trust_remote_code=False,
+    )
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    model = AutoModelForCausalLM.from_pretrained(
+        cfg.base, trust_remote_code=False,
+    ).to(device)
+    model.train()
+
+    dataset = load_local(cfg.data.train, cfg.data.format)
+    rows = list(dataset)[: max(2, len(schedule))]
+    if not rows:
+        raise RuntimeError("training dataset is empty")
+
+    def _tokenize(row):
+        text = row.get("text") or row.get("prompt") or ""
+        if not text and "messages" in row:
+            text = " ".join(m.get("content", "") for m in row["messages"])
+        enc = tokenizer(
+            text or " ", return_tensors="pt", truncation=True,
+            max_length=min(cfg.data.max_length or 256, 256),
+            padding="max_length",
+        )
+        enc["labels"] = enc["input_ids"].clone()
+        return {k: v.squeeze(0) for k, v in enc.items()}
+
+    def _batched_loader():
+        for row in rows:
+            tok = _tokenize(row)
+            yield {k: v.unsqueeze(0) for k, v in tok.items()}
+
+    return run_lr_sweep(
+        model=model,
+        dataloader=_batched_loader(),
+        schedule=schedule,
+        optimizer_factory=lambda params: torch.optim.AdamW(params, lr=schedule[0]),
+        device=device,
+    )

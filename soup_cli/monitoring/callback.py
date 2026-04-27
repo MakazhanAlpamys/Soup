@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
+from rich.console import Console
 from transformers import (
     TrainerCallback,
     TrainerControl,
@@ -15,6 +16,7 @@ from transformers import (
 from soup_cli.monitoring.display import TrainingDisplay
 
 logger = logging.getLogger(__name__)
+console = Console()
 
 
 class SoupTrainerCallback(TrainerCallback):
@@ -31,6 +33,14 @@ class SoupTrainerCallback(TrainerCallback):
         loss_watchdog_threshold: float = 3.0,
         loss_watchdog_patience: int = 5,
         eval_gate_config: Optional[object] = None,
+        spike_recovery: bool = False,
+        spike_recovery_max_attempts: int = 3,
+        spike_recovery_lr_decay: float = 0.5,
+        grad_accum_auto_tune: bool = False,
+        grad_accum_pressure_threshold: float = 0.9,
+        grad_accum_total_vram_gb: float = 24.0,
+        grad_accum_current_steps: int = 1,
+        grad_accum_current_batch: int = 1,
     ):
         self.display = display
         self.tracker = tracker
@@ -43,6 +53,30 @@ class SoupTrainerCallback(TrainerCallback):
         self._watchdog_patience = loss_watchdog_patience
         self._watchdog_counter = 0
         self._watchdog_fired = False
+        # v0.33.0 #57 — spike-recovery hint state
+        self._spike_recovery_enabled = spike_recovery
+        self._spike_recovery_attempts = 0
+        from soup_cli.utils.spike_recovery import SpikeRecoveryStrategy
+        if spike_recovery:
+            self._spike_strategy = SpikeRecoveryStrategy(
+                max_attempts=spike_recovery_max_attempts,
+                lr_decay=spike_recovery_lr_decay,
+            )
+        else:
+            self._spike_strategy = None
+        # v0.33.0 #59 — grad-accum advisory monitor
+        self._grad_accum_enabled = grad_accum_auto_tune
+        self._grad_accum_current = max(1, int(grad_accum_current_steps))
+        self._grad_accum_batch = max(1, int(grad_accum_current_batch))
+        self._grad_accum_advised = False
+        if grad_accum_auto_tune:
+            from soup_cli.utils.grad_accum import GradAccumMonitor
+            self._grad_accum_monitor = GradAccumMonitor(
+                total_vram_gb=grad_accum_total_vram_gb,
+                threshold=grad_accum_pressure_threshold,
+            )
+        else:
+            self._grad_accum_monitor = None
         # Eval gate state (Part B of v0.26.0)
         self.eval_gate_config = eval_gate_config
         # Tests inject these; prod wiring sets them at on_train_begin time.
@@ -107,6 +141,16 @@ class SoupTrainerCallback(TrainerCallback):
                     from rich.panel import Panel
 
                     wc = WatchdogConsole()
+
+                    # v0.33.0 #57 — spike recovery hint: write a recovery
+                    # state file the user can resume from. We do NOT mutate
+                    # optimizer state in-place (HF Trainer does not expose a
+                    # safe public API for that mid-loop) but we leave a
+                    # machine-readable hint so a wrapper / re-launch can
+                    # resume with a decayed LR.
+                    if self._spike_strategy is not None:
+                        self._write_spike_recovery_hint(args, loss)
+
                     wc.print(Panel(
                         f"[bold red]Loss watchdog triggered![/]\n\n"
                         f"Loss {loss:.4f} exceeded threshold "
@@ -120,6 +164,14 @@ class SoupTrainerCallback(TrainerCallback):
                     control.should_training_stop = True
             else:
                 self._watchdog_counter = 0
+
+        # v0.33.0 #59 — grad-accum advisory (one-shot per run)
+        if (
+            self._grad_accum_enabled
+            and not self._grad_accum_advised
+            and self._grad_accum_monitor is not None
+        ):
+            self._maybe_advise_grad_accum()
 
         # Log to experiment tracker
         if self.tracker and self.run_id:
@@ -246,3 +298,84 @@ class SoupTrainerCallback(TrainerCallback):
             except Exception as exc:
                 logger.exception("Auto-eval custom failed")
                 console.print(f"[yellow]Auto-eval custom failed: {exc}[/]")
+
+    # ------------------------------------------------------------------
+    # v0.33.0 #57 — spike recovery hint
+    # ------------------------------------------------------------------
+
+    def _write_spike_recovery_hint(self, args, loss: float) -> None:
+        """Write a JSON recovery hint next to the run output so a wrapper
+        script (or `soup train --resume`) can pick up the new LR.
+
+        Best-effort: errors are logged but never crash training.
+        """
+        import json
+        from pathlib import Path
+
+        if self._spike_strategy is None:
+            return
+        attempts = self._spike_recovery_attempts
+        try:
+            new_lr = self._spike_strategy.compute_new_lr(args.learning_rate)
+        except ValueError:
+            return
+        recover = self._spike_strategy.should_recover(attempts)
+        out_dir = Path(self.output_dir or args.output_dir or ".")
+        try:
+            out_dir.mkdir(parents=True, exist_ok=True)
+            hint_path = out_dir / "spike_recovery.json"
+            hint_path.write_text(json.dumps({
+                "attempts": attempts + 1,
+                "max_attempts": self._spike_strategy.max_attempts,
+                "loss_at_spike": float(loss),
+                "previous_lr": float(args.learning_rate),
+                "recommended_lr": float(new_lr),
+                "should_recover": recover,
+            }, indent=2), encoding="utf-8")
+            self._spike_recovery_attempts = attempts + 1
+            console.print(
+                f"[yellow]Spike recovery hint written:[/] {hint_path} "
+                f"(recommended_lr={new_lr:.2e}, should_recover={recover})"
+            )
+        except OSError as exc:
+            logger.warning("Failed to write spike recovery hint: %s", exc)
+
+    # ------------------------------------------------------------------
+    # v0.33.0 #59 — grad-accum advisory (Phase 1)
+    # ------------------------------------------------------------------
+
+    def _maybe_advise_grad_accum(self) -> None:
+        """Sample VRAM use; if pressure crosses threshold once, print the
+        recommended (batch_size, grad_accum_steps) pair.
+
+        Phase 1 is advisory-only. Phase 2 (live DataLoader rebuild) requires
+        a small upstream TRL change tracked as a known limitation.
+        """
+        if self._grad_accum_advised:
+            return
+        try:
+            import torch
+            if not torch.cuda.is_available():
+                return
+            used_gb = torch.cuda.max_memory_allocated() / (1024**3)
+        except Exception:  # noqa: BLE001 — VRAM probe is best-effort
+            return
+
+        if self._grad_accum_monitor is None:
+            return
+        self._grad_accum_monitor.observe(used_gb)
+        if not self._grad_accum_monitor.should_adjust(used_gb):
+            return
+        new_batch, new_accum = self._grad_accum_monitor.recommend(
+            self._grad_accum_batch, self._grad_accum_current,
+        )
+        if new_accum == self._grad_accum_current:
+            return
+        self._grad_accum_advised = True
+        console.print(
+            f"[yellow]Grad-accum advisory:[/] VRAM pressure crossed "
+            f"threshold; recommend (batch_size, grad_accum_steps) "
+            f"({self._grad_accum_batch}, {self._grad_accum_current}) -> "
+            f"({new_batch}, {new_accum}). "
+            f"Restart training with the new pair to take effect."
+        )

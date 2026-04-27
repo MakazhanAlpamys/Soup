@@ -143,6 +143,11 @@ class SFTTrainerWrapper:
         warmup_steps = int(total_steps * tcfg.warmup_ratio)
 
         # --- Training args ---
+        # v0.33.0 #58: auto_mixed_precision wires pick_mixed_precision()
+        # into bf16/fp16 kwargs. Default behaviour (bf16 on CUDA) preserved
+        # when the auto flag is False.
+        bf16_flag, fp16_flag = self._resolve_mixed_precision(tcfg, cfg.base)
+
         training_kwargs = {
             "output_dir": str(output_dir),
             "num_train_epochs": tcfg.epochs,
@@ -157,7 +162,8 @@ class SFTTrainerWrapper:
             "logging_steps": tcfg.logging_steps,
             "save_steps": tcfg.save_steps,
             "save_total_limit": 3,
-            "bf16": self.device == "cuda",
+            "bf16": bf16_flag,
+            "fp16": fp16_flag,
             "report_to": self.report_to,
             "remove_unused_columns": False,
             "deepspeed": self.deepspeed_config,
@@ -263,6 +269,41 @@ class SFTTrainerWrapper:
         self.trainer = SFTTrainer(**trainer_kwargs)
 
         self._output_dir = str(output_dir)
+        self._batch_size = batch_size
+
+    def _resolve_mixed_precision(self, tcfg, base_model: str) -> tuple[bool, bool]:
+        """Return ``(bf16, fp16)`` flags for TrainingArguments.
+
+        - When ``tcfg.auto_mixed_precision`` is True: query GPU compute
+          capability and call :func:`pick_mixed_precision` to decide.
+        - Otherwise: preserve legacy default (bf16 on CUDA, no fp16).
+        """
+        if not getattr(tcfg, "auto_mixed_precision", False):
+            return (self.device == "cuda", False)
+
+        if self.device != "cuda":
+            return (False, False)
+
+        try:
+            import torch
+
+            major, minor = torch.cuda.get_device_capability()
+            cc = float(f"{major}.{minor}")
+        except (ImportError, RuntimeError, AssertionError, OSError):
+            return (self.device == "cuda", False)
+
+        from soup_cli.utils.mixed_precision import pick_mixed_precision
+
+        try:
+            mode = pick_mixed_precision(base_model, cc)
+        except ValueError:
+            return (self.device == "cuda", False)
+
+        console.print(
+            f"[green]Auto mixed-precision picked:[/] {mode} "
+            f"(model={base_model}, cc={cc})"
+        )
+        return (mode == "bf16", mode == "fp16")
 
     def _setup_transformers(self, cfg, tcfg):
         """Load model via standard transformers + peft pipeline."""
@@ -679,12 +720,33 @@ class SFTTrainerWrapper:
         if display:
             from soup_cli.monitoring.callback import SoupTrainerCallback
 
+            tcfg_local = self.config.training
             self.trainer.add_callback(
                 SoupTrainerCallback(
                     display, tracker=tracker, run_id=run_id,
-                    loss_watchdog=self.config.training.loss_watchdog,
-                    loss_watchdog_threshold=self.config.training.loss_watchdog_threshold,
-                    loss_watchdog_patience=self.config.training.loss_watchdog_patience,
+                    output_dir=self._output_dir,
+                    loss_watchdog=tcfg_local.loss_watchdog,
+                    loss_watchdog_threshold=tcfg_local.loss_watchdog_threshold,
+                    loss_watchdog_patience=tcfg_local.loss_watchdog_patience,
+                    spike_recovery=getattr(
+                        tcfg_local, "loss_spike_recovery", False,
+                    ),
+                    spike_recovery_max_attempts=getattr(
+                        tcfg_local, "loss_spike_recovery_max_attempts", 3,
+                    ),
+                    spike_recovery_lr_decay=getattr(
+                        tcfg_local, "loss_spike_recovery_lr_decay", 0.5,
+                    ),
+                    grad_accum_auto_tune=getattr(
+                        tcfg_local, "grad_accum_auto_tune", False,
+                    ),
+                    grad_accum_pressure_threshold=getattr(
+                        tcfg_local, "grad_accum_pressure_threshold", 0.9,
+                    ),
+                    grad_accum_current_steps=getattr(
+                        tcfg_local, "gradient_accumulation_steps", 1,
+                    ),
+                    grad_accum_current_batch=self._batch_size,
                 )
             )
 
