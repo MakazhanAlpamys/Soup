@@ -21,11 +21,12 @@ from soup_cli.utils.paths import is_under_cwd
 @dataclass(frozen=True)
 class GateTaskResult:
     name: str
-    score: float
+    score: Optional[float]
     threshold: float
     baseline: Optional[float]
     delta: Optional[float]
     passed: bool
+    error: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -159,6 +160,110 @@ def resolve_baseline(spec: Optional[str]) -> dict[str, float]:
     return {str(k): float(v) for k, v in data.items()}
 
 
+def _parse_judge_url(judge_model: str) -> tuple[str, str, Optional[str]]:
+    """Split a ``judge_model`` URL into ``(provider, model, api_base)``.
+
+    Examples:
+      ``ollama://llama3.1`` -> ("ollama", "llama3.1", None)
+      ``http://localhost:8000/Qwen2.5`` -> ("server", "Qwen2.5", "http://localhost:8000")
+      ``https://api.openai.com/gpt-4o-mini`` -> ("openai", "gpt-4o-mini", "https://api.openai.com")
+    """
+    if judge_model.startswith("ollama://"):
+        return ("ollama", judge_model[len("ollama://"):], None)
+    # http(s):// — last path segment is the model id; the rest is api_base.
+    for prefix, default_provider in (
+        ("http://localhost", "server"),
+        ("http://127.0.0.1", "server"),
+        ("https://", "openai"),
+        ("http://", "server"),
+    ):
+        if judge_model.startswith(prefix):
+            try:
+                base, model = judge_model.rsplit("/", 1)
+            except ValueError as exc:
+                raise ValueError(
+                    f"judge_model '{judge_model}' missing model id"
+                ) from exc
+            if not model:
+                raise ValueError(f"judge_model '{judge_model}' missing model id")
+            return (default_provider, model, base)
+    raise ValueError(f"judge_model '{judge_model}' uses unsupported scheme")
+
+
+def _run_judge_task(
+    task: GateTask, generate_fn: Callable[[str], str],
+) -> float:
+    """Run a type=judge task. Generates a completion per prompt, then asks
+    the judge model to score the (prompt, response) pair on a 1-10 scale.
+    Aggregate score is normalised to [0, 1] (mean / 10).
+    """
+    if not task.prompts:
+        raise ValueError(f"task '{task.name}' is type=judge but 'prompts' is missing")
+    if not task.judge_model:
+        raise ValueError(
+            f"task '{task.name}' is type=judge but 'judge_model' is missing"
+        )
+
+    prompts_path = Path(task.prompts)
+    if not is_under_cwd(prompts_path):
+        raise ValueError(f"prompts file '{task.prompts}' is outside cwd")
+    if not prompts_path.exists():
+        raise FileNotFoundError(f"prompts file not found: {task.prompts}")
+
+    from soup_cli.eval.judge import JudgeEvaluator
+
+    provider, model, api_base = _parse_judge_url(task.judge_model)
+    evaluator = JudgeEvaluator(provider=provider, model=model, api_base=api_base)
+
+    items: list[dict] = []
+    with prompts_path.open("r", encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise ValueError(
+                    f"invalid JSONL in {task.prompts}: {exc}"
+                ) from exc
+            prompt = row.get("prompt", "")
+            response = generate_fn(prompt)
+            items.append({
+                "prompt": prompt,
+                "response": response,
+                "category": row.get("category", "default"),
+            })
+
+    if not items:
+        return 0.0
+
+    results = evaluator.evaluate_batch(items)
+    # results.overall_score is on a 1-10 scale; normalise to [0, 1].
+    overall = float(getattr(results, "overall_score", 0.0))
+    return max(0.0, min(1.0, overall / 10.0))
+
+
+def _run_benchmark_task(
+    task: GateTask, generate_fn: Callable[[str], str],
+) -> float:
+    """Run a type=benchmark task using the existing forgetting-mini-benchmark."""
+    if not task.benchmark:
+        raise ValueError(
+            f"task '{task.name}' is type=benchmark but 'benchmark' is missing"
+        )
+    from soup_cli.eval import forgetting
+
+    runner = getattr(forgetting, "run_mini_benchmark", None)
+    if runner is None:
+        raise RuntimeError(
+            "mini-benchmark runner unavailable - "
+            "install [eval] extras or update soup-cli"
+        )
+    score = runner(benchmark=task.benchmark, generate_fn=generate_fn)
+    return max(0.0, min(1.0, float(score)))
+
+
 def _run_custom_task(
     task: GateTask, generate_fn: Callable[[str], str],
 ) -> float:
@@ -201,22 +306,41 @@ def run_gate(
     any_failed_threshold = False
 
     for task in suite.tasks:
-        if task.type == "custom":
-            score = _run_custom_task(task, generate_fn)
-        else:
-            # Judge / benchmark are wired in v0.26.1+; treat as skipped with
-            # score=1.0 here so we don't hard-fail valid configs. The CLI
-            # surfaces a warning when these are encountered.
-            score = 1.0
+        score: Optional[float]
+        error: Optional[str] = None
+        try:
+            if task.type == "custom":
+                score = _run_custom_task(task, generate_fn)
+            elif task.type == "judge":
+                score = _run_judge_task(task, generate_fn)
+            elif task.type == "benchmark":
+                score = _run_benchmark_task(task, generate_fn)
+            else:
+                # Pydantic Literal already restricts task.type, so this is a
+                # belt-and-braces fallthrough.
+                raise ValueError(f"unknown task type: {task.type}")
+        except (ValueError, FileNotFoundError, OSError, RuntimeError) as exc:
+            score = None
+            error = str(exc)
+        except Exception as exc:  # noqa: BLE001 — surface as score=None, never silent pass
+            score = None
+            error = f"{type(exc).__name__}: {exc}"
 
-        passed_threshold = score >= task.threshold
-        base_score = baseline.get(task.name)
-        delta = None
-        regressed = False
-        if base_score is not None:
-            delta = score - base_score
-            if delta < -abs(regression_threshold):
-                regressed = True
+        if score is None:
+            # Failed evaluation never silently passes the gate.
+            passed_threshold = False
+            base_score = baseline.get(task.name)
+            delta = None
+            regressed = False
+        else:
+            passed_threshold = score >= task.threshold
+            base_score = baseline.get(task.name)
+            delta = None
+            regressed = False
+            if base_score is not None:
+                delta = score - base_score
+                if delta < -abs(regression_threshold):
+                    regressed = True
 
         if not passed_threshold:
             any_failed_threshold = True
@@ -230,6 +354,7 @@ def run_gate(
             baseline=base_score,
             delta=delta,
             passed=passed_threshold and not regressed,
+            error=error,
         ))
 
     return GateResult(

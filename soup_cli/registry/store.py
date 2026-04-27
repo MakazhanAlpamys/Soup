@@ -37,7 +37,10 @@ class AmbiguousRefError(ValueError):
 REGISTRY_DB_FILENAME = "registry.db"
 
 _VALID_KINDS = frozenset(
-    {"adapter", "merged", "gguf", "awq", "gptq", "onnx", "dataset", "config"}
+    {
+        "adapter", "merged", "gguf", "awq", "gptq", "onnx", "dataset", "config",
+        "eval_results", "tensorrt",
+    }
 )
 _VALID_RELATIONS = frozenset(
     {"forked_from", "merged_from", "evaluated_with", "promoted_from"}

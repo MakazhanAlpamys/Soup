@@ -91,6 +91,12 @@ def export(
         "--calibration-samples",
         help="Number of calibration samples for AWQ/GPTQ",
     ),
+    registry_id: Optional[str] = typer.Option(
+        None,
+        "--registry-id",
+        help="Attach exported artifact to this registry entry "
+        "(default: auto-match by source --model output dir)",
+    ),
 ):
     """Export a model to GGUF, ONNX, TensorRT-LLM, AWQ, or GPTQ format."""
     model_path = Path(model)
@@ -217,6 +223,12 @@ def export(
     if not output_path.exists():
         console.print("[red]Export failed - output file not created.[/]")
         raise typer.Exit(1)
+
+    # v0.33.0 #35: optional auto-attach to registry entry
+    _maybe_attach_export(
+        artifact_path=str(output_path), kind="gguf",
+        explicit_id=registry_id, source_model=str(Path(model)),
+    )
 
     file_size = output_path.stat().st_size
     size_str = _format_size(file_size)
@@ -966,3 +978,36 @@ def _format_size(size_bytes: int) -> str:
             return f"{value:.1f} {unit}"
         value /= 1024.0
     return f"{value:.1f} TB"
+
+
+def _maybe_attach_export(
+    *, artifact_path: str, kind: str,
+    explicit_id: Optional[str], source_model: str,
+) -> None:
+    """Attach an exported artifact to a registry entry.
+
+    Resolution order:
+      1. ``--registry-id`` (explicit override)
+      2. Auto-match by source model output dir
+    Silent no-op if no match is found and no explicit id was given. Failures
+    are surfaced as warnings, never as a hard CLI exit (the export itself
+    succeeded).
+    """
+    from soup_cli.registry.attach import attach_artifact, lookup_entry_by_output_dir
+
+    entry_id = explicit_id
+    if entry_id is None:
+        entry_id = lookup_entry_by_output_dir(source_model)
+    if entry_id is None:
+        return
+    try:
+        attach_artifact(entry_id, path=artifact_path, kind=kind)
+    except (ValueError, FileNotFoundError) as exc:
+        console.print(
+            f"[yellow]Could not attach export to registry "
+            f"'{entry_id}':[/] {exc}"
+        )
+        return
+    console.print(
+        f"[green]Attached export to registry entry '{entry_id}' as {kind}.[/]"
+    )

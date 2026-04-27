@@ -122,6 +122,14 @@ def custom(
         None, "--run-id",
         help="Link results to an existing training run",
     ),
+    attach_to_registry: Optional[str] = typer.Option(
+        None, "--attach-to-registry",
+        help="Attach the eval JSON to a registry entry as kind=eval_results",
+    ),
+    output: Optional[str] = typer.Option(
+        None, "--output", "-o",
+        help="Path for the eval JSON output (required with --attach-to-registry)",
+    ),
 ):
     """Run custom evaluation tasks from a JSONL file."""
     from soup_cli.eval.custom import load_eval_tasks
@@ -188,6 +196,36 @@ def custom(
     # Save to tracker
     _save_custom_results(eval_results, str(model_path), run_id)
     console.print("\n[green]Results saved to experiment tracker.[/]")
+
+    # v0.33.0 #35: optional registry attach
+    if attach_to_registry:
+        if not output:
+            console.print(
+                "[red]--attach-to-registry requires --output <json-path>[/]"
+            )
+            raise typer.Exit(1)
+        from soup_cli.registry.attach import attach_artifact, write_eval_json
+
+        payload = {
+            "model": str(model_path),
+            "tasks": str(tasks_path),
+            "total": eval_results.total,
+            "correct": eval_results.correct,
+            "accuracy": eval_results.accuracy,
+            "category_scores": eval_results.category_scores,
+        }
+        try:
+            json_path = write_eval_json(output, payload=payload)
+            attach_artifact(
+                attach_to_registry, path=str(json_path), kind="eval_results",
+            )
+        except (ValueError, FileNotFoundError) as exc:
+            console.print(f"[red]Registry attach failed:[/] {exc}")
+            raise typer.Exit(1) from exc
+        console.print(
+            f"[green]Attached eval results to registry entry "
+            f"'{attach_to_registry}' as eval_results.[/]"
+        )
 
 
 # ─── soup eval judge ───
@@ -934,24 +972,28 @@ def gate_cmd(
         console.print(f"[red]Cannot resolve baseline:[/] {exc}")
         raise typer.Exit(1) from exc
 
-    # Without a live model we can't generate real completions; emit a stub
-    # generator so the CLI is still testable. Wiring a real model is out of
-    # scope for the v0.26.0 launch (see plan Part B).
+    # When --model is provided, build a transformers-backed generator.
+    # Otherwise fall back to an empty-string stub for smoke runs.
     if model is None:
         console.print(
             "[yellow]No --model given; using stub generator "
             "(empty output per prompt) for a smoke run.[/]"
         )
+
+        def _stub_generate(_: str) -> str:
+            return ""
+
+        generate_fn = _stub_generate
     else:
-        console.print(
-            "[yellow]Live model scoring not yet wired; using stub. "
-            "Subscribe to v0.26.1 for real inference support.[/]"
-        )
+        from soup_cli.eval.quant_check import make_model_generator
 
-    def _stub_generate(_: str) -> str:
-        return ""
-
-    generate_fn = _stub_generate
+        try:
+            generate_fn = make_model_generator(model)
+        except (OSError, ValueError, ImportError) as exc:
+            console.print(
+                f"[red]Failed to load --model '{model}':[/] {exc}"
+            )
+            raise typer.Exit(1) from exc
 
     result = run_gate(
         eval_suite, generate_fn=generate_fn, baseline=baseline_scores,
@@ -1038,14 +1080,24 @@ def quant_check_cmd(
         console.print(f"[red]--after not found: {resolved_after}[/]")
         raise typer.Exit(1)
 
-    # Live model loading is post-v0.26.0; stub for the orchestration layer.
-    console.print(
-        "[yellow]Live model scoring not yet wired; using deterministic stub. "
-        "v0.26.1+ will plug in transformers/GGUF/AWQ backends.[/]"
-    )
+    # Live model scoring: build transformers-backed generators per side.
+    # Falls back to deterministic stubs if loading fails (e.g. missing deps),
+    # so CI without GPUs can still smoke-test the orchestration layer.
+    from soup_cli.eval.quant_check import make_model_generator
+
+    try:
+        before_gen = make_model_generator(resolved_before)
+        after_gen = make_model_generator(resolved_after)
+    except (OSError, ValueError, ImportError) as exc:
+        console.print(
+            f"[yellow]Live model load failed ({exc}); using deterministic stub.[/]"
+        )
+        before_gen = stub_generator("before")
+        after_gen = stub_generator("after")
+
     result = run_quant_check(
-        before_gen=stub_generator("before"),
-        after_gen=stub_generator("after"),
+        before_gen=before_gen,
+        after_gen=after_gen,
         tasks_file=tasks,
     )
     rendered = render(result, fmt=fmt)
@@ -1067,13 +1119,21 @@ def _print_gate_result(result) -> None:
     table.add_column("Delta", justify="right")
     table.add_column("Verdict")
     for row in result.task_results:
+        score_text = (
+            f"{row.score:.3f}" if row.score is not None
+            else "[red]ERROR[/]"
+        )
+        verdict = (
+            "[green]PASS[/]" if row.passed
+            else (f"[red]FAIL ({row.error})[/]" if row.error else "[red]FAIL[/]")
+        )
         table.add_row(
             row.name,
-            f"{row.score:.3f}",
+            score_text,
             f"{row.threshold:.3f}",
             f"{row.baseline:.3f}" if row.baseline is not None else "-",
             f"{row.delta:+.3f}" if row.delta is not None else "-",
-            "[green]PASS[/]" if row.passed else "[red]FAIL[/]",
+            verdict,
         )
     console.print(table)
     verdict = "[green]GATE PASSED[/]" if result.passed else "[red]GATE FAILED[/]"

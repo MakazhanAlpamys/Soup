@@ -149,6 +149,51 @@ def ensure_format(fmt: str) -> None:
         raise ValueError(f"unknown format '{fmt}'. Use table | json | markdown")
 
 
+def make_model_generator(
+    model_path: str,
+    *,
+    max_new_tokens: int = 256,
+    temperature: float = 0.0,
+) -> Callable[[str], str]:
+    """Return a ``generate_fn(prompt) -> str`` backed by a transformers model.
+
+    Lazy-loaded so the CLI stays cold-start fast. The model is loaded once
+    and reused across calls. ``temperature=0`` enables greedy decoding for
+    reproducible eval scores.
+    """
+    if max_new_tokens < 1 or max_new_tokens > 16384:
+        raise ValueError("max_new_tokens must be in [1, 16384]")
+
+    from transformers import (
+        AutoModelForCausalLM,
+        AutoTokenizer,
+    )
+
+    tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=False)
+    model = AutoModelForCausalLM.from_pretrained(
+        model_path, trust_remote_code=False
+    )
+    model.eval()
+
+    def _generate(prompt: str) -> str:
+        if not prompt:
+            return ""
+        inputs = tokenizer(prompt, return_tensors="pt", truncation=True)
+        do_sample = temperature > 0.0
+        outputs = model.generate(
+            **inputs,
+            max_new_tokens=max_new_tokens,
+            do_sample=do_sample,
+            temperature=max(temperature, 1e-5),
+            pad_token_id=tokenizer.eos_token_id,
+        )
+        # Strip the prompt prefix from the decoded text.
+        new_tokens = outputs[0][inputs["input_ids"].shape[1]:]
+        return tokenizer.decode(new_tokens, skip_special_tokens=True)
+
+    return _generate
+
+
 def stub_generator(label: str) -> Callable[[str], str]:
     """Return a deterministic stub generator so the CLI has something runnable.
 
