@@ -56,7 +56,10 @@ jobs:
           print(ts.attrib.get('tests', '0') if ts is not None else root.attrib.get('tests', '0'))
           ")
           echo "Test count: $TESTS"
-          curl -s -o /dev/null -w "%{http_code}" \
+          # --fail-with-body: surface non-2xx (e.g. 401 expired token) as a
+          # CI failure with the response body printed, instead of silently
+          # discarding to /dev/null and leaving the badge stale.
+          curl --fail-with-body -sS \
             -X PATCH \
             -H "Authorization: token ${{ secrets.GIST_TOKEN }}" \
             -d "{\"files\":{\"soup_tests.json\":{\"content\":\"{\\\"schemaVersion\\\":1,\\\"label\\\":\\\"tests\\\",\\\"message\\\":\\\"$TESTS passed\\\",\\\"color\\\":\\\"brightgreen\\\"}\"}}}" \
