@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import re
+import shutil as _shutil
 import subprocess
 import sys
 import tempfile
@@ -33,6 +35,81 @@ CODE_EXEC_MAX_PARALLEL = 4
 CODE_EXEC_MAX_MEMORY_BYTES = 512 * 1024 * 1024  # 512 MB per run
 
 _CODE_EXEC_WARNING_SHOWN = False
+
+# Cached isolation strategy — recomputed on demand when tests reset to None
+_ISOLATION_STRATEGY_CACHE: "str | None" = None
+
+# macOS sandbox-exec profile: default-deny, allow narrow process needs, block
+# network and writes outside /tmp. Defence-in-depth on top of RLIMIT + socket
+# patch + ephemeral cwd. See sandbox-exec(1) and Apple's seatbelt SBPL.
+MACOS_SANDBOX_PROFILE = (
+    "(version 1)"
+    "(deny default)"
+    "(allow process-fork)"
+    "(allow process-exec)"
+    "(allow signal (target self))"
+    "(allow file-read*)"
+    '(allow file-write* (subpath "/tmp") (subpath "/private/tmp") (subpath "/var/folders"))'
+    "(allow sysctl-read)"
+    "(allow mach-lookup)"
+    "(deny network*)"
+)
+
+
+def _compute_isolation_strategy() -> str:
+    """Detect best-available OS-level sandbox isolation for code_exec_reward.
+
+    Returns one of:
+      - "namespaces" : Linux with `os.unshare` available (Python 3.12+) — we
+        will best-effort `unshare(CLONE_NEWUSER|CLONE_NEWNET|CLONE_NEWPID)` in
+        the child preexec_fn. Falls back at runtime if unprivileged user
+        namespaces are disabled (EPERM/ENOSYS).
+      - "sandbox-exec" : macOS with `sandbox-exec` binary on PATH — we wrap
+        argv with `sandbox-exec -p <profile>`.
+      - "best-effort" : everything else (Windows, restricted Linux). Existing
+        RLIMIT + socket-patch + ephemeral-cwd guards still apply.
+
+    The result is cached after first call. Tests reset
+    ``_ISOLATION_STRATEGY_CACHE`` to None to re-probe.
+    """
+    if sys.platform == "linux" and hasattr(os, "unshare"):
+        return "namespaces"
+    if sys.platform == "darwin" and _shutil.which("sandbox-exec") is not None:
+        return "sandbox-exec"
+    return "best-effort"
+
+
+def _get_isolation_strategy() -> str:
+    """Cached wrapper for ``_compute_isolation_strategy``."""
+    global _ISOLATION_STRATEGY_CACHE
+    if _ISOLATION_STRATEGY_CACHE is None:
+        _ISOLATION_STRATEGY_CACHE = _compute_isolation_strategy()
+    return _ISOLATION_STRATEGY_CACHE
+
+
+# Linux unshare flags — matches kernel uapi/linux/sched.h. Hard-coded so we
+# don't depend on a runtime constant import.
+_CLONE_NEWUSER = 0x10000000
+_CLONE_NEWNET = 0x40000000
+_CLONE_NEWPID = 0x20000000
+
+
+def _try_unshare_namespaces() -> None:
+    """Best-effort: unshare into new user/net/pid namespaces. Silent on failure.
+
+    Called from the POSIX preexec_fn after RLIMITs are set. If the kernel
+    rejects the unshare (unprivileged user namespaces disabled, common on
+    hardened distros), we silently fall back to RLIMIT + socket patch alone.
+    """
+    unshare = getattr(os, "unshare", None)
+    if unshare is None:
+        return
+    try:
+        unshare(_CLONE_NEWUSER | _CLONE_NEWNET | _CLONE_NEWPID)
+    except (OSError, ValueError):
+        # EPERM / ENOSYS / EINVAL — unprivileged unshare not allowed.
+        # Continue with weaker isolation rather than failing the run.
+        pass
 
 
 def _show_code_exec_warning_once() -> None:
@@ -220,6 +297,9 @@ def _apply_rlimit() -> None:
         )
     except (ImportError, ValueError, OSError):
         pass
+    # Linux defence-in-depth: best-effort unshare into private namespaces.
+    if _get_isolation_strategy() == "namespaces":
+        _try_unshare_namespaces()
 
 
 def _run_code_sandbox(code: str) -> "str | None":
@@ -249,10 +329,18 @@ def _run_code_sandbox(code: str) -> "str | None":
 
     preexec = _apply_rlimit if sys.platform != "win32" else None
 
+    argv: list[str] = [sys.executable, "-I", "-S", "-c", wrapped]
+    if _get_isolation_strategy() == "sandbox-exec":
+        # macOS: prefix with sandbox-exec + inline profile. The profile denies
+        # all by default and only re-allows what an interpreter must do to
+        # boot; network is explicitly denied.
+        sandbox_bin = _shutil.which("sandbox-exec") or "/usr/bin/sandbox-exec"
+        argv = [sandbox_bin, "-p", MACOS_SANDBOX_PROFILE, *argv]
+
     with tempfile.TemporaryDirectory(prefix="soup-code-exec-") as tmpdir:
         try:
             proc = subprocess.run(  # noqa: S603 — list args, trusted interpreter
-                [sys.executable, "-I", "-S", "-c", wrapped],
+                argv,
                 capture_output=True,
                 text=True,
                 timeout=CODE_EXEC_TIMEOUT_SECONDS,

@@ -8,10 +8,37 @@ plus prunes lower-quality checkpoints to save disk.
 
 from __future__ import annotations
 
+import os
 import shutil
+import stat
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
+
+
+def _abort_on_symlink(_func, path, exc_info):
+    """``shutil.rmtree`` onerror callback: re-raise to abort recursive walk
+    if a symlink (or any error condition) is encountered mid-walk.
+
+    Defence-in-depth: ``shutil.rmtree`` already does not follow symlinks by
+    default (it removes the link itself), but if a future Python version or a
+    crafted directory structure changes that, aborting here keeps the
+    invariant that prune never traverses outside the checkpoint subtree.
+    """
+    # Prefer lstat to avoid following the symlink during inspection.
+    try:
+        if stat.S_ISLNK(os.lstat(path).st_mode):
+            raise OSError(
+                f"prune_checkpoints aborted: symlink encountered mid-walk: {path}"
+            )
+    except OSError:
+        # Re-raise the original exc_info so the caller sees the real error.
+        raise
+    # Re-raise the original failure if it wasn't a symlink hazard.
+    exc_type, exc_val, _exc_tb = exc_info
+    if exc_val is not None:
+        raise exc_val
+    raise OSError(f"prune_checkpoints failed: {path}")
 
 # Weighting for the composite metric
 COMPOSITE_WEIGHTS = {"judge": 0.5, "mmlu": 0.3, "custom": 0.2}
@@ -101,9 +128,14 @@ class CheckpointTracker:
         removed: list[int] = []
 
         for child in output_dir.iterdir():
-            if not child.is_dir():
+            # TOCTOU-safe symlink check via os.lstat (does not follow links).
+            try:
+                child_stat = os.lstat(str(child))
+            except OSError:
                 continue
-            if child.is_symlink():
+            if stat.S_ISLNK(child_stat.st_mode):
+                continue
+            if not stat.S_ISDIR(child_stat.st_mode):
                 continue
             name = child.name
             if not name.startswith("checkpoint-"):
@@ -114,12 +146,18 @@ class CheckpointTracker:
                 continue
             if step in keep:
                 continue
-            # Safety: double-check path stays inside output_dir
+            # Safety: double-check path stays inside output_dir.
             try:
                 child.resolve().relative_to(output_dir)
             except ValueError:
                 continue
-            shutil.rmtree(child)
+            try:
+                shutil.rmtree(child, onerror=_abort_on_symlink)
+            except OSError:
+                # Symlink encountered mid-walk OR permission error — skip and
+                # continue with other checkpoints rather than aborting the
+                # whole prune pass.
+                continue
             removed.append(step)
 
         return removed
