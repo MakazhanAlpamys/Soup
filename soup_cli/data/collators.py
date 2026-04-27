@@ -11,7 +11,10 @@ versions).
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
 
 
 class CrossDocCollator:
@@ -43,24 +46,35 @@ class CrossDocCollator:
         self._key = doc_lengths_key
 
     def __call__(self, features: list[dict]) -> dict:
-        # Pull the per-example doc_lengths out before delegating, since the
-        # base collator may strip unknown keys.
+        # Read per-example doc_lengths and copy each dict (excluding the key)
+        # so we never mutate the caller's feature dicts — HF Dataset rows are
+        # cached and reused across batches; pop() would silently strip
+        # ``doc_lengths`` after the first call.
         per_example_lengths: list[Optional[list[int]]] = []
         cleaned: list[dict] = []
         for example in features:
-            lengths = example.pop(self._key, None) if isinstance(example, dict) else None
+            if isinstance(example, dict):
+                lengths = example.get(self._key)
+                cleaned.append(
+                    {k: v for k, v in example.items() if k != self._key}
+                )
+            else:
+                lengths = None
+                cleaned.append(example)
             per_example_lengths.append(lengths)
-            cleaned.append(example)
 
         batch = self._base(cleaned)
 
         # Try to build the cross-doc mask. If anything goes wrong (no
         # doc_lengths, mismatched shapes, no numpy/torch), preserve the
-        # base ``attention_mask`` and continue.
+        # base ``attention_mask`` and continue. Log at DEBUG so production
+        # silent-degradation is still inspectable.
         try:
             self._inject_block_diag_mask(batch, per_example_lengths)
-        except Exception:  # noqa: BLE001 — degrade rather than crash training
-            pass
+        except Exception as exc:  # noqa: BLE001 — degrade rather than crash training
+            logger.debug(
+                "CrossDocCollator: falling back to base mask: %s", exc,
+            )
         return batch
 
     def _inject_block_diag_mask(

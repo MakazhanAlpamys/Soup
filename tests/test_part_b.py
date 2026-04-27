@@ -200,7 +200,19 @@ class TestAutoReexec:
         from typer.testing import CliRunner
 
         from soup_cli.cli import app
+        from soup_cli.commands import train as train_cmd
+        from soup_cli.utils import launcher as launcher_mod
         from soup_cli.utils import topology as topo_mod
+
+        # Strip env-var contamination from prior tests / parent shell so
+        # is_in_distributed deterministically returns False.
+        for var in (
+            "RANK", "WORLD_SIZE", "LOCAL_RANK",
+            "ACCELERATE_MIXED_PRECISION",
+            "ACCELERATE_USE_DEEPSPEED",
+            "ACCELERATE_USE_FSDP",
+        ):
+            monkeypatch.delenv(var, raising=False)
 
         monkeypatch.chdir(tmp_path)
         (tmp_path / "soup.yaml").write_text(
@@ -217,22 +229,31 @@ class TestAutoReexec:
         monkeypatch.setattr(
             topo_mod, "resolve_num_gpus", lambda spec: 2,
         )
-        # Make sure is_in_distributed returns False
-        from soup_cli.utils import launcher as launcher_mod
-        monkeypatch.setattr(launcher_mod, "is_in_distributed", lambda: False)
+        # Patch the *imported* names: train.py does
+        # ``from soup_cli.utils.topology import ...`` so the reference is on
+        # the train module, not the topology module.
+        monkeypatch.setattr(train_cmd, "detect_topology",
+                            lambda: {"gpu_count": 2, "interconnect": "PCIe"},
+                            raising=False)
+        monkeypatch.setattr(train_cmd, "resolve_num_gpus", lambda spec: 2,
+                            raising=False)
+        # is_in_distributed lives in launcher; train does an inline import.
+        monkeypatch.setattr(
+            launcher_mod, "is_in_distributed", lambda: False,
+        )
 
         captured: dict = {}
 
         def _fake_execvp(file, argv):
             captured["file"] = file
             captured["argv"] = list(argv)
-            # Raise to abort the train command after capture
+            # Raise SystemExit so Typer treats it as a clean exit.
             raise SystemExit(99)
 
         monkeypatch.setattr("os.execvp", _fake_execvp)
 
         runner = CliRunner()
-        result = runner.invoke(
+        runner.invoke(
             app,
             [
                 "train",
@@ -241,13 +262,11 @@ class TestAutoReexec:
                 "--yes",
             ],
         )
-        # Should have hit our fake execvp
-        if "argv" in captured:
-            assert captured["file"] == "accelerate"
-            assert "launch" in captured["argv"]
-            assert "--num_processes" in captured["argv"]
-            assert "2" in captured["argv"]
-        else:
-            # Earlier failure (e.g. is_in_distributed default true on
-            # contaminated env) — surface for triage but don't hard-fail.
-            assert result.exit_code != 0
+        # Force assertion — a bypass would have left captured empty and we'd
+        # silently accept a regression.
+        assert captured.get("file") == "accelerate", (
+            f"os.execvp was not called with 'accelerate'; captured={captured!r}"
+        )
+        assert "launch" in captured["argv"]
+        assert "--num_processes" in captured["argv"]
+        assert "2" in captured["argv"]

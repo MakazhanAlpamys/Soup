@@ -165,8 +165,6 @@ def run_lr_sweep(
     if not schedule:
         raise ValueError("schedule must be non-empty")
 
-    import math as _math
-
     optimizer = optimizer_factory(model.parameters())
     losses: list[float] = []
 
@@ -192,7 +190,7 @@ def run_lr_sweep(
         out = model(**batch) if isinstance(batch, dict) else model(batch)
         loss = out["loss"] if isinstance(out, dict) else out.loss
         loss_value = float(loss.detach().item()) if hasattr(loss, "detach") else float(loss)
-        if not _math.isfinite(loss_value):
+        if not math.isfinite(loss_value):
             break
         losses.append(loss_value)
         loss.backward()

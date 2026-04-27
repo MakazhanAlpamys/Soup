@@ -213,7 +213,9 @@ def _make_callback(tmp_path, **kwargs):
 
 
 class TestSpikeRecoveryHint:
-    def test_writes_hint_file(self, tmp_path):
+    def test_writes_hint_file(self, tmp_path, monkeypatch):
+        # Containment guard requires output_dir to live under cwd.
+        monkeypatch.chdir(tmp_path)
         cb = _make_callback(
             tmp_path,
             spike_recovery=True,
@@ -232,7 +234,8 @@ class TestSpikeRecoveryHint:
         assert data["should_recover"] is True
         assert data["attempts"] == 1
 
-    def test_attempts_counter_increments(self, tmp_path):
+    def test_attempts_counter_increments(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
         cb = _make_callback(
             tmp_path,
             spike_recovery=True,
@@ -254,6 +257,38 @@ class TestSpikeRecoveryHint:
         )
         cb._write_spike_recovery_hint(args, loss=10.0)
         # No hint file written.
+        assert not (tmp_path / "spike_recovery.json").exists()
+
+    def test_should_recover_false_at_max_attempts(self, tmp_path, monkeypatch):
+        """When attempts have hit max_attempts, should_recover must be False."""
+        monkeypatch.chdir(tmp_path)
+        cb = _make_callback(
+            tmp_path,
+            spike_recovery=True,
+            spike_recovery_max_attempts=2,
+            spike_recovery_lr_decay=0.5,
+        )
+        args = SimpleNamespace(
+            learning_rate=1e-3, output_dir=str(tmp_path),
+        )
+        # Bump internal counter to budget cap
+        cb._spike_recovery_attempts = 2
+        cb._write_spike_recovery_hint(args, loss=10.0)
+        data = json.loads((tmp_path / "spike_recovery.json").read_text())
+        assert data["should_recover"] is False
+
+    def test_outside_cwd_skipped(self, tmp_path):
+        """Containment guard: when output_dir is outside cwd, skip silently."""
+        # No monkeypatch.chdir — tmp_path is outside the test's actual cwd.
+        cb = _make_callback(
+            tmp_path,
+            spike_recovery=True,
+        )
+        args = SimpleNamespace(
+            learning_rate=1e-3, output_dir=str(tmp_path),
+        )
+        cb._write_spike_recovery_hint(args, loss=10.0)
+        # No hint written; no exception raised.
         assert not (tmp_path / "spike_recovery.json").exists()
 
 

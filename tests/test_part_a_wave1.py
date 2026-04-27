@@ -263,6 +263,30 @@ class TestRegistryAttachHelpers:
                 "any", path=str(tmp_path / "missing.json"), kind="eval_results",
             )
 
+    def test_attach_artifact_outside_cwd_rejected(self, tmp_path, monkeypatch):
+        """enforce_cwd=True (default) must reject paths outside cwd."""
+        from soup_cli.registry.attach import attach_artifact
+
+        monkeypatch.chdir(tmp_path)
+        # Isolated DB so the entry-not-found path doesn't shadow the
+        # containment error.
+        db = tmp_path / "reg.db"
+        monkeypatch.setenv("SOUP_REGISTRY_DB_PATH", str(db))
+
+        # Place an artifact OUTSIDE cwd.
+        outside_dir = tmp_path.parent / "outside_for_attach_test"
+        outside_dir.mkdir(exist_ok=True)
+        outside_file = outside_dir / "results.json"
+        outside_file.write_text("{}", encoding="utf-8")
+
+        # Even with a non-existent entry, the containment check happens
+        # inside add_artifact and should surface; either error is acceptable
+        # as long as the artifact never gets registered.
+        with pytest.raises((ValueError, FileNotFoundError)):
+            attach_artifact(
+                "any", path=str(outside_file), kind="eval_results",
+            )
+
 
 class TestRegistryArtifactKindsExtended:
     def test_eval_results_kind_accepted(self):

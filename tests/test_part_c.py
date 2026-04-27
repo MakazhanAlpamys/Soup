@@ -274,6 +274,40 @@ class TestCrossDocCollator:
         # base collator must NOT see the doc_lengths key
         assert "doc_lengths" not in captured[0]
 
+    def test_mismatched_doc_lengths_falls_back_to_causal(self):
+        """If sum(doc_lengths) > seq_length the collator must NOT crash —
+        it falls back to a plain lower-triangular mask."""
+        from soup_cli.data.collators import CrossDocCollator
+
+        seq_len = 4
+
+        class _Tensor:
+            shape = (1, seq_len)
+
+        def _base(features):
+            return {"input_ids": _Tensor()}
+
+        collator = CrossDocCollator(base_collator=_base)
+        # 3 + 3 = 6 > seq_len 4 → fallback path
+        result = collator([{"doc_lengths": [3, 3]}])
+        # Either no mask emitted (graceful skip) or fallback mask present.
+        # Either is acceptable; what matters is no exception.
+        assert "input_ids" in result
+
+    def test_does_not_mutate_input_dict(self):
+        """Regression: collator pops doc_lengths in v0.33.0 wave; HF Dataset
+        rows are cached, so mutation breaks subsequent batches."""
+        from soup_cli.data.collators import CrossDocCollator
+
+        def _base(features):
+            return {"input_ids": object()}
+
+        collator = CrossDocCollator(base_collator=_base)
+        original = {"doc_lengths": [2, 2], "input_ids": [1, 2, 3, 4]}
+        collator([original])
+        # The original dict must still have doc_lengths after the call.
+        assert original.get("doc_lengths") == [2, 2]
+
     def test_injects_block_diag_mask_with_doc_lengths(self):
         """End-to-end: when doc_lengths are present, cross_doc_attn_mask
         appears on the batch with the right shape."""

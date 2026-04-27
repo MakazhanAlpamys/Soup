@@ -126,6 +126,32 @@ class _NoCtx:
         return False
 
 
+class TestGenerateResponseSignature:
+    """Source-level guard that ``_generate_response`` accepts and forwards
+    a ``logits_processor`` kwarg. Catches a regression that the
+    transformers-mock test above might miss."""
+
+    def test_signature_includes_logits_processor(self):
+        import inspect
+
+        from soup_cli.commands.serve import _generate_response
+
+        sig = inspect.signature(_generate_response)
+        assert "logits_processor" in sig.parameters
+
+    def test_source_passes_kwarg_to_generate(self):
+        import inspect
+
+        from soup_cli.commands.serve import _generate_response
+
+        src = inspect.getsource(_generate_response)
+        # Two assertions: kwarg is set on gen_kwargs AND model.generate is
+        # called with **gen_kwargs (verifies the wiring is unconditional
+        # for non-None processors).
+        assert 'gen_kwargs["logits_processor"] = logits_processor' in src
+        assert "model.generate(**gen_kwargs)" in src
+
+
 # ---------------------------------------------------------------------------
 # #54 — auto-quant picker
 # ---------------------------------------------------------------------------

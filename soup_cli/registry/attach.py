@@ -69,11 +69,24 @@ def lookup_entry_by_output_dir(output_dir: str) -> Optional[str]:
     Used by ``soup export`` to auto-attach artifacts when the user did not
     pass ``--registry-id`` explicitly. Returns None if no match.
     """
+    import warnings
+
     from soup_cli.registry.store import RegistryStore
 
+    lookup_limit = 1000
     target_real = os.path.realpath(output_dir)
     with RegistryStore() as store:
-        for entry in store.list(limit=1000):
+        rows = store.list(limit=lookup_limit)
+        if len(rows) >= lookup_limit:
+            warnings.warn(
+                f"lookup_entry_by_output_dir scanned only the most recent "
+                f"{lookup_limit} registry entries; older entries with a "
+                "matching output dir will be missed. Pass --registry-id "
+                "explicitly to disambiguate.",
+                ResourceWarning,
+                stacklevel=2,
+            )
+        for entry in rows:
             stored = entry.get("output") or ""
             if not stored:
                 continue

@@ -79,18 +79,11 @@ def publish_can(
         commit_message=sanitized_msg,
     )
 
-    # Add the can-format tag (best-effort; mis-tagged repos are not fatal).
-    try:
-        api.update_repo_settings(
-            repo_id=repo_id, repo_type="dataset", token=resolved,
-        )
-        existing_tags = list(manifest.tags)
-        if CAN_HF_TAG not in existing_tags:
-            existing_tags.append(CAN_HF_TAG)
-        # Tag application via README front-matter is HfApi-version dependent;
-        # we surface the canonical tag in the upload commit message and
-        # trust users / `inspect_can` to read it from the manifest.
-    except Exception:  # noqa: BLE001 — tag attach is best-effort
-        pass
+    # Tag application via huggingface_hub is API-version-dependent — we
+    # surface CAN_HF_TAG in the manifest (read by ``inspect_can``) and in
+    # the commit message rather than calling a maybe-no-op API. Adding a
+    # README front-matter ``tags:`` block is the supported path; a
+    # follow-up tracked as a v0.33.x docs update.
+    _ = manifest  # silence unused-var; manifest validates the can shape
 
     return f"https://huggingface.co/datasets/{repo_id}/blob/main/{src.name}"

@@ -15,9 +15,9 @@ import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
-from soup_cli.cans.schema import DeployTarget
+from soup_cli.cans.schema import DeployTarget, Manifest
 from soup_cli.cans.unpack import extract_can, inspect_can
 from soup_cli.utils.paths import is_under_cwd
 
@@ -78,15 +78,24 @@ def _validate_can_path(can_path: str) -> Path:
     return path
 
 
+_TIMEOUT_RC = 124  # `coreutils timeout` convention — surfaces in CanRunResult
+
+
 def _run_subprocess(argv: list[str], *, cwd: Optional[Path] = None) -> int:
-    """Run a child subprocess and return its returncode. Re-raises on
-    OSError so the orchestrator surfaces an actionable message instead of
-    hiding behind a generic non-zero exit.
+    """Run a child subprocess and return its returncode.
+
+    Re-raises ``OSError`` (e.g. binary not on PATH) so the orchestrator
+    surfaces an actionable message. ``subprocess.TimeoutExpired`` after the
+    24h cap is converted to ``_TIMEOUT_RC`` (124) so callers can tell
+    "timed out" from "exited cleanly" without unhandled tracebacks.
     """
-    proc = subprocess.run(
-        argv, cwd=str(cwd) if cwd else None,
-        timeout=_RUN_TIMEOUT_SECONDS, check=False,
-    )
+    try:
+        proc = subprocess.run(
+            argv, cwd=str(cwd) if cwd else None,
+            timeout=_RUN_TIMEOUT_SECONDS, check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return _TIMEOUT_RC
     return proc.returncode
 
 
@@ -95,16 +104,29 @@ def _deploy_target(target: DeployTarget, extract_dir: Path) -> int:
     if target.kind == "ollama":
         if not target.name:
             raise ValueError("deploy_target kind=ollama requires 'name'")
-        # Find the GGUF artifact in the extract dir
-        gguf_files = list(extract_dir.rglob("*.gguf"))
-        if not gguf_files:
+        # Find the GGUF artifact in the extract dir, then verify it really
+        # lives under extract_dir (a crafted can with a symlink could
+        # otherwise point rglob at an arbitrary path on disk).
+        extract_real = os.path.realpath(str(extract_dir))
+        gguf_path: Optional[Path] = None
+        for candidate in extract_dir.rglob("*.gguf"):
+            cand_real = os.path.realpath(str(candidate))
+            try:
+                common = os.path.commonpath([extract_real, cand_real])
+            except ValueError:
+                continue
+            if common != extract_real:
+                continue
+            gguf_path = Path(cand_real)
+            break
+        if gguf_path is None:
             raise ValueError(
-                "deploy_target kind=ollama requires a *.gguf in the can"
+                "deploy_target kind=ollama requires a *.gguf inside the can"
             )
         return _run_subprocess([
             sys.executable, "-m", "soup_cli.cli",
             "deploy", "ollama",
-            "--gguf", str(gguf_files[0]),
+            "--gguf", str(gguf_path),
             "--name", target.name,
         ])
     if target.kind == "gguf":
@@ -129,7 +151,7 @@ def run_can(
     extract_dir: Optional[str] = None,
     capture_env_to: Optional[str] = None,
     train_argv_extra: Optional[list[str]] = None,
-    confirm_callback=None,
+    confirm_callback: Optional[Callable[[Manifest], bool]] = None,
 ) -> CanRunResult:
     """Extract a can, run ``soup train`` against the embedded config, optionally
     run the embedded deploy targets.
@@ -161,12 +183,16 @@ def run_can(
 
     if not yes:
         if confirm_callback is None:
-            raise PermissionError(
+            # ValueError (not PermissionError) so a caller wrapping in a
+            # broad ``except OSError`` cannot silently swallow the gate —
+            # PermissionError is an OSError subclass. The CLI handler
+            # surfaces the message verbatim.
+            raise ValueError(
                 "soup can run requires --yes or an explicit confirm_callback "
                 "(this command auto-downloads data + auto-trains)"
             )
         if not confirm_callback(manifest):
-            raise PermissionError("user declined to run the can")
+            raise ValueError("user declined to run the can")
 
     # Resolve extraction destination.
     if extract_dir is None:
@@ -180,7 +206,14 @@ def run_can(
         candidate.mkdir(parents=True, exist_ok=True)
         owned_dir = candidate
 
-    extract_can(str(src), str(owned_dir))
+    try:
+        extract_can(str(src), str(owned_dir))
+    except Exception:
+        # If extraction fails after we created an owned tmp dir, clean up
+        # to prevent leaks of partially-extracted (potentially large) data.
+        if extract_dir is None:
+            cleanup_extract_dir(owned_dir)
+        raise
 
     # Optional env capture.
     env_path: Optional[Path] = None
@@ -228,6 +261,13 @@ def cleanup_extract_dir(extract_dir: Path) -> None:
     real = os.path.realpath(str(extract_dir))
     tmp_real = os.path.realpath(tempfile.gettempdir())
     cwd_real = os.path.realpath(os.getcwd())
-    if not (real.startswith(tmp_real + os.sep) or real.startswith(cwd_real + os.sep)):
+
+    def _under(base: str) -> bool:
+        try:
+            return os.path.commonpath([real, base]) == base and real != base
+        except ValueError:
+            return False
+
+    if not (_under(tmp_real) or _under(cwd_real)):
         return
     shutil.rmtree(extract_dir, ignore_errors=True)

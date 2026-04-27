@@ -52,7 +52,11 @@ class DeployTarget(BaseModel):
             raise ValueError("deploy path contains null byte")
         if value.startswith("/") or value.startswith("\\"):
             raise ValueError(f"deploy path '{value}' must be relative")
-        if ".." in value.split("/") or ".." in value.split("\\"):
+        # Normalise separators first, then split — a mixed-separator path
+        # like ``foo/..\\bar`` would otherwise slip past a single-separator
+        # split because ``"..\\bar"`` != ``".."``.
+        normalised = value.replace("\\", "/")
+        if any(part == ".." for part in normalised.split("/")):
             raise ValueError(f"deploy path '{value}' may not contain '..'")
         return value
 

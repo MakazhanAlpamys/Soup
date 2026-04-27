@@ -219,7 +219,7 @@ class TestRunCan:
 
         monkeypatch.chdir(tmp_path)
         can = _build_can(tmp_path / "r.can")
-        with pytest.raises(PermissionError, match="requires --yes"):
+        with pytest.raises(ValueError, match="requires --yes"):
             run_can(str(can))
 
     def test_callback_can_decline(self, tmp_path, monkeypatch):
@@ -227,7 +227,7 @@ class TestRunCan:
 
         monkeypatch.chdir(tmp_path)
         can = _build_can(tmp_path / "r.can")
-        with pytest.raises(PermissionError, match="declined"):
+        with pytest.raises(ValueError, match="declined"):
             run_can(str(can), confirm_callback=lambda _m: False)
 
     def test_train_invoked_via_subprocess(self, tmp_path, monkeypatch):

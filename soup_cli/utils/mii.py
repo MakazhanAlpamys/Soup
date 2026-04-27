@@ -9,7 +9,7 @@ All imports are lazy so that `soup --help` stays fast.
 from __future__ import annotations
 
 import sys
-from typing import Any, Optional  # noqa: F401
+from typing import Any, Optional
 
 
 def is_mii_available() -> bool:

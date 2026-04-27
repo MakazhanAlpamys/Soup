@@ -44,11 +44,21 @@ class Candidate:
 
     def __post_init__(self) -> None:
         _validate_name(self.name)
-        if not isinstance(self.score, (int, float)) or math.isnan(self.score):
+        # ``bool`` is a subclass of ``int``; reject it explicitly so a caller
+        # passing ``score=True`` doesn't sneak past as 1.0.
+        if (
+            not isinstance(self.score, (int, float))
+            or isinstance(self.score, bool)
+            or math.isnan(self.score)
+        ):
             raise ValueError(f"score must be a finite float, got {self.score!r}")
         if not 0.0 <= self.score <= 1.0:
             raise ValueError(f"score must be in [0.0, 1.0], got {self.score}")
-        if not isinstance(self.latency_ms, (int, float)) or math.isnan(self.latency_ms):
+        if (
+            not isinstance(self.latency_ms, (int, float))
+            or isinstance(self.latency_ms, bool)
+            or math.isnan(self.latency_ms)
+        ):
             raise ValueError(f"latency_ms must be a finite float, got {self.latency_ms!r}")
         if self.latency_ms < 0:
             raise ValueError(f"latency_ms must be non-negative, got {self.latency_ms}")
@@ -107,6 +117,7 @@ def evaluate_candidate(
 
     correct = 0
     total = 0
+    completed = 0  # for honest latency mean (excludes crashed prompts)
     started = _time.perf_counter()
     crashed = False
     for prompt in prompts:
@@ -116,9 +127,10 @@ def evaluate_candidate(
         except Exception:  # noqa: BLE001 — surface as eval failure
             crashed = True
             continue
+        completed += 1
         if hit:
             correct += 1
-    elapsed_ms = (_time.perf_counter() - started) * 1000.0 / max(1, total)
+    elapsed_ms = (_time.perf_counter() - started) * 1000.0 / max(1, completed)
     score = correct / total
     return Candidate(
         name=name,

@@ -171,11 +171,15 @@ def _parse_judge_url(judge_model: str) -> tuple[str, str, Optional[str]]:
     if judge_model.startswith("ollama://"):
         return ("ollama", judge_model[len("ollama://"):], None)
     # http(s):// — last path segment is the model id; the rest is api_base.
+    # Defence-in-depth: GateTask._valid_judge_url already restricts the
+    # scheme to ollama:// / https:// / http://localhost / http://127.0.0.1.
+    # We match prefixes in the same order here. We do NOT include a bare
+    # ``http://`` catch-all — if validation is ever bypassed and a non-loopback
+    # http URL reaches us, the trailing ``raise ValueError`` will fire.
     for prefix, default_provider in (
         ("http://localhost", "server"),
         ("http://127.0.0.1", "server"),
         ("https://", "openai"),
-        ("http://", "server"),
     ):
         if judge_model.startswith(prefix):
             try:

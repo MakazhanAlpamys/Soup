@@ -14,11 +14,20 @@ this single helper.
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import TYPE_CHECKING, Any, Optional
+
+if TYPE_CHECKING:
+    from rich.console import Console
+
+    from soup_cli.config.schema import TrainingConfig
 
 
 def apply_v028_speed_memory(
-    *, model, tcfg, base_model: str, console=None,
+    *,
+    model: Any,
+    tcfg: "TrainingConfig",
+    base_model: str,
+    console: Optional["Console"] = None,
 ) -> dict[str, bool]:
     """Apply Cut-CE / FP8 / kernel-auto-compose features to ``model``.
 
@@ -100,7 +109,9 @@ def supports_v028_features(task: str) -> bool:
     return task in {"sft", "dpo", "pretrain"}
 
 
-def warn_unsupported_features(tcfg, task: str) -> Optional[str]:
+def warn_unsupported_features(
+    tcfg: "TrainingConfig", task: str,
+) -> Optional[str]:
     """Return a human warning if non-v0.28.0-wired tasks set v0.28.0 flags.
 
     Returns None when nothing to warn about.

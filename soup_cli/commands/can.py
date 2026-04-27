@@ -136,14 +136,20 @@ def run_cmd(
         ))
         raise typer.Exit(1)
 
+    result = None
     try:
         result = run_can(
             can_path, yes=True, deploy=deploy,
             extract_dir=extract_dir, capture_env_to=env_capture,
         )
-    except (ValueError, FileNotFoundError, PermissionError) as exc:
+    except (ValueError, FileNotFoundError) as exc:
         _fail(str(exc))
 
+    # _fail raises typer.Exit; result remains None only if a future
+    # exception type slips through. Belt-and-braces guard so a
+    # NameError-style regression is impossible.
+    if result is None:
+        _fail("soup can run did not produce a result")
     if result.train_returncode != 0:
         console.print(
             f"[red]train failed (rc={result.train_returncode}). "

@@ -51,7 +51,15 @@ MACOS_SANDBOX_PROFILE = (
     "(allow file-read*)"
     '(allow file-write* (subpath "/tmp") (subpath "/private/tmp") (subpath "/var/folders"))'
     "(allow sysctl-read)"
-    "(allow mach-lookup)"
+    # Narrow mach-lookup allowlist — broad ``(allow mach-lookup)`` permits
+    # DNS / NSURLSession via launchd-brokered Mach IPC and effectively
+    # bypasses ``(deny network*)``. The names below are required for the
+    # interpreter to boot (entitlement / system-services lookup) but do
+    # NOT include ``com.apple.SystemConfiguration`` or ``com.apple.dnssd``.
+    '(allow mach-lookup'
+    ' (global-name "com.apple.SecurityServer")'
+    ' (global-name "com.apple.system.notification_center")'
+    ' (global-name "com.apple.system.opendirectoryd.libinfo"))'
     "(deny network*)"
 )
 

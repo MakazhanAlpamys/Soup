@@ -321,6 +321,17 @@ class SoupTrainerCallback(TrainerCallback):
             return
         recover = self._spike_strategy.should_recover(attempts)
         out_dir = Path(self.output_dir or args.output_dir or ".")
+        # Containment: never write outside cwd (matches v0.32.0 lr-finder /
+        # autopilot / cans policy). Caller's output_dir is already validated
+        # by SoupConfig but args.output_dir from raw HF TrainingArguments is
+        # not — defence-in-depth.
+        from soup_cli.utils.paths import is_under_cwd
+        if not is_under_cwd(out_dir):
+            logger.warning(
+                "spike_recovery hint skipped: output_dir %s is outside cwd",
+                out_dir,
+            )
+            return
         try:
             out_dir.mkdir(parents=True, exist_ok=True)
             hint_path = out_dir / "spike_recovery.json"
