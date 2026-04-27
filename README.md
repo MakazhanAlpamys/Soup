@@ -40,12 +40,18 @@ soup train
 
 Latest highlights only. Full history: [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 
-- **LR Range Finder** — `soup train --find-lr` runs a fast.ai-style geometric LR sweep and writes a JSON report with the recommended learning rate. Pre-flight tuning before the real run.
-- **Auto warmup schedule** — set `training.warmup_auto: true` and Soup picks `warmup_steps` from your dataset size × epochs × `warmup_ratio`, clamped to a sane range.
-- **Auto mixed-precision** — set `training.auto_mixed_precision: true` and Soup picks `bf16` (Ampere+) or `fp16` (Turing or known fp16-stable models like Qwen2 / Phi-3.5) based on your GPU and base model.
-- **Loss spike auto-recovery** — extends the watchdog: when loss spikes, decay LR and resume instead of dying. `loss_spike_recovery: true` on top of `loss_watchdog: true`.
-- **Convergence detector** — surfaces "loss has plateaued — early-stop or cut LR" advice via `convergence_detection: true`. Catches stuck training before you waste GPU hours.
-- **VRAM-pressure advisory** — `grad_accum_auto_tune: true` records peak memory per step and recommends a new (batch, accum) pair when pressure crosses your threshold.
+**v0.33.0 — Live Wire**: closes 17 issues across 6 internal Parts. Every "API + flag (v0.30.0)" / "wired live in v0.x.1" deferral from the last six minor releases is now actually live.
+
+- **`soup can run` + `soup can publish`** — end-to-end: extract a `.can`, run the embedded config via `soup train`, optionally deploy. `soup can publish` uploads a `.can` to HF Hub as a dataset (`repo_type='dataset'`, can-format-v1 tag). Manifest schema bumped to v2 with optional `deploy_targets` (ollama / gguf / vllm).
+- **Multi-GPU one command** — `soup train --gpus 2` now auto-reexecs under `accelerate launch` instead of just printing the command. `--no-reexec` opt-out preserved. Critical flags (`--fsdp`, `--deepspeed`, `--resume`, `--wandb`, `--tensorboard`, `--yes`) forwarded to the reexec'd run.
+- **Live eval gate scoring** — `soup eval gate` and `soup eval quant-check` no longer return `score=1.0` stubs for judge / benchmark task types. Backend failures surface as `score=None, error=str(exc)` so a broken eval never silently passes the gate.
+- **Structured output + auto-quant live on `soup serve`** — `--structured-output json --json-schema s.json` builds a real `LogitsProcessor` (via outlines or lm-format-enforcer). `--auto-quant` runs a tiny eval over candidate quantisations and picks (score, -latency).
+- **DeepSpeed-MII live serve** — `soup serve --backend mii` now starts a real OpenAI-compatible HTTP server (was a stub-warning + exit-1 in v0.27.0).
+- **Multi-trainer v0.28.0 features** — `use_cut_ce`, `quantization_aware="fp8"`, `kernel_auto_compose`, `activation_offloading` now wired for SFT / DPO / Pretrain trainers (previously SFT-only).
+- **Live `--find-lr`** — replaces the synthetic stub curve with a real in-process LR-sweep training loop.
+- **Spike recovery + grad-accum advisory** — `loss_spike_recovery: true` writes a `spike_recovery.json` hint with the decayed LR for re-launch. `grad_accum_auto_tune: true` prints a (batch, accum) recommendation when VRAM pressure crosses the threshold.
+- **`soup eval custom --attach-to-registry <id>` + `soup export --registry-id <id>`** — auto-attach eval results / exported artifacts to a Local Model Registry entry as `eval_results` / `gguf` / `awq` / `gptq` / `onnx` / `tensorrt` artifacts.
+- **RLVR sandbox + checkpoint prune hardening** — `code_exec_reward` adds OS-level isolation (Linux `unshare`, macOS `sandbox-exec`); `prune_checkpoints` switches to TOCTOU-safe `os.lstat` + `S_ISLNK` + `onerror`-abort `rmtree`.
 
 ## Why Soup?
 
@@ -1313,9 +1319,16 @@ soup can verify ./llama31-chat.can
 # Fork with modifications (dotted-path overrides) and re-pack
 soup can fork ./llama31-chat.can --out ./llama31-chat-hot.can \
   --modify training.lr=5e-5 --modify training.epochs=5
+
+# Run a .can end-to-end: extract → train (→ optional deploy)
+soup can run ./llama31-chat.can --yes
+soup can run ./llama31-chat.can --yes --deploy --env-capture ./env.txt
+
+# Publish a .can to HF Hub as a dataset
+soup can publish ./llama31-chat.can --hf-hub me/llama31-chat-recipe
 ```
 
-**Security** — tar extraction uses `filter="data"` on Python 3.12+ with symlink/hardlink rejection fallback for older runtimes. Size cap: 100 MB. `DataRef.url` must be HTTPS. Fork overrides reject dunder keys (`__class__`, `__init__`) and null bytes. Manifest format version is pinned to `1`.
+**Security** — tar extraction uses `filter="data"` on Python 3.12+ with symlink/hardlink rejection fallback for older runtimes. Size cap: 100 MB. `DataRef.url` must be HTTPS. Fork overrides reject dunder keys (`__class__`, `__init__`) and null bytes. Manifest format version supports `1` and `2` (additive bump in v0.33.0 added `deploy_targets`). `soup can run` requires `--yes` (mandatory consent — auto-downloads data + auto-trains). `soup can publish` validates `repo_id` and resolves the HF token via env / cache files; commit messages are first-line + 200-char capped.
 
 
 ## Batch Inference
@@ -2155,7 +2168,7 @@ soup eval human --input p.jsonl               Human A/B evaluation
 soup eval gate --suite gate.yaml              Run eval-gate suite standalonesoup eval quant-check --before X --after Y --tasks t.jsonl  Before/after quantsoup serve --model ./output --port 8000       OpenAI-compatible API server
 soup serve --model ./output --backend vllm    vLLM backend (2-4x throughput)
 soup serve --model ./output --backend sglang  SGLang backend
-soup serve --model ./output --backend mii     DeepSpeed-MII backend (registered; live in v0.27.1)
+soup serve --model ./output --backend mii     DeepSpeed-MII backend (live)
 soup serve --model ./output --speculative-decoding draft-model  Speculative decoding
 soup serve --model <m> --auto-spec            Auto-pair draft model for speculative decoding
 soup serve --model <m> --backend vllm --prefix-cache  vLLM prefix caching (RAG/agent)
@@ -2220,6 +2233,8 @@ soup registry delete <ref> --yes              Remove entry (cascades)
 soup history <name>                           Lineage DAG tree for a namesoup can pack --entry-id <id> --out r.can     Pack registry entry as .cansoup can inspect r.can                        Preview manifest without extracting
 soup can verify r.can                         Verify schema + config parseability
 soup can fork r.can --out fork.can --modify training.lr=5e-5  Fork + re-pack
+soup can run r.can --yes [--deploy] [--env-capture env.txt]  Run a .can end-to-end
+soup can publish r.can --hf-hub user/name    Publish .can to HF Hub as dataset
 soup runs                                     List training runs
 soup runs show <run_id>                       Run details + loss graph
 soup runs compare <run_1> <run_2>             Compare two runs
