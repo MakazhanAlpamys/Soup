@@ -90,6 +90,89 @@ def resolve_gradient_checkpointing(
     }
 
 
+def install_selective_hooks(model, granularity: str) -> int:
+    """Install selective / medium gradient-checkpoint hooks on transformer
+    blocks (#44, v0.33.0).
+
+    Iterates the model's named modules looking for transformer-block-shaped
+    children, then wraps their ``forward`` with
+    ``torch.utils.checkpoint.checkpoint`` based on the granularity:
+
+    - ``"selective"``: only attention sub-modules (looks for ``self_attn`` /
+      ``attention`` in the module name)
+    - ``"medium"``: every second transformer block
+    - ``"full"``: every transformer block (kept for symmetry; HF's native
+      ``gradient_checkpointing`` already handles full — this path is a
+      manual fallback for backends that don't expose that toggle)
+
+    Args:
+        model: a torch ``nn.Module`` (typically a HuggingFace model).
+        granularity: one of ``"selective"`` / ``"medium"`` / ``"full"``.
+
+    Returns:
+        Number of modules that received a hook. Zero is a meaningful signal
+        — caller should fall back to HF's native ``gradient_checkpointing``.
+
+    Raises:
+        ValueError: when ``granularity`` is not recognised.
+
+    Notes:
+        - Pure best-effort; the function never raises on a missing torch
+          dependency at call site (it imports inside).
+        - We do NOT undo earlier hooks. The trainer wrapper is expected to
+          call this once per ``self.model`` instance before training starts.
+    """
+    if granularity not in {"selective", "medium", "full"}:
+        raise ValueError(
+            f"granularity must be one of selective/medium/full, "
+            f"got {granularity!r}"
+        )
+
+    try:
+        import torch.utils.checkpoint as ckpt_mod
+    except ImportError:
+        return 0
+
+    layer_index = 0
+    hooked = 0
+
+    def _wrap(module):
+        original_forward = module.forward
+
+        def _checkpointed_forward(*args, **kwargs):
+            return ckpt_mod.checkpoint(
+                original_forward, *args, use_reentrant=False, **kwargs,
+            )
+
+        module.forward = _checkpointed_forward
+
+    for name, module in model.named_modules():
+        # Heuristic: HF transformer blocks are named like
+        # `model.layers.<i>` (LLaMA), `transformer.h.<i>` (GPT-2),
+        # `model.decoder.layers.<i>` (T5/Bart). We match on a numeric suffix.
+        parts = name.rsplit(".", 1)
+        if len(parts) != 2 or not parts[-1].isdigit():
+            continue
+
+        if granularity == "full":
+            _wrap(module)
+            hooked += 1
+        elif granularity == "medium":
+            if layer_index % 2 == 0:
+                _wrap(module)
+                hooked += 1
+            layer_index += 1
+        elif granularity == "selective":
+            # Find children whose name contains attention markers.
+            for child_name, child in module.named_modules():
+                lc = child_name.lower()
+                if "attn" in lc or "attention" in lc:
+                    _wrap(child)
+                    hooked += 1
+
+    return hooked
+
+
 def describe_tier(tier: TierLike, gpu_memory_gb: float | None = None) -> str:
     """Return a short human-readable description of the selected tier."""
     if not tier:

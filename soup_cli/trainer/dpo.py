@@ -195,10 +195,16 @@ class DPOTrainerWrapper:
         self.model = get_peft_model(self.model, lora_config)
 
         # QAT — insert fake quantization ops after LoRA
-        if tcfg.quantization_aware:
+        if tcfg.quantization_aware and tcfg.quantization_aware != "fp8":
             from soup_cli.utils.qat import prepare_model_for_qat
 
             self.model = prepare_model_for_qat(self.model)
+
+        # v0.33.0 #43 — multi-trainer wiring of v0.28.0 speed/memory features.
+        from soup_cli.utils.v028_features import apply_v028_speed_memory
+        apply_v028_speed_memory(
+            model=self.model, tcfg=tcfg, base_model=cfg.base, console=console,
+        )
 
     def _setup_unsloth(self, cfg, tcfg):
         """Load model via unsloth FastLanguageModel (2-5x faster)."""

@@ -839,16 +839,15 @@ class TestV028SFTOnlyValidator:
     legacy int8 QAT wrapper.
     """
 
-    def test_use_cut_ce_rejected_on_dpo(self):
-        with pytest.raises(ValidationError) as exc:
-            SoupConfig(
-                base="m",
-                task="dpo",
-                data={"train": "./d.jsonl", "format": "dpo"},
-                training={"use_cut_ce": True},
-            )
-        assert "use_cut_ce" in str(exc.value)
-        assert "sft" in str(exc.value)
+    def test_use_cut_ce_now_accepted_on_dpo(self):
+        # v0.33.0 #43 — DPO is now in the supported task set.
+        cfg = SoupConfig(
+            base="m",
+            task="dpo",
+            data={"train": "./d.jsonl", "format": "dpo"},
+            training={"use_cut_ce": True},
+        )
+        assert cfg.training.use_cut_ce is True
 
     def test_fp8_rejected_on_grpo(self):
         with pytest.raises(ValidationError) as exc:

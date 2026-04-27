@@ -610,23 +610,18 @@ class SoupConfig(BaseModel):
         return value
 
     @model_validator(mode="after")
-    def _validate_v028_speed_memory_sft_only(self) -> "SoupConfig":
-        """v0.28.0 speed/memory features are wired only in SFTTrainerWrapper.
+    def _validate_v028_speed_memory_supported_tasks(self) -> "SoupConfig":
+        """v0.28.0 speed/memory features (#43, v0.33.0): supported tasks now
+        include sft, dpo, pretrain. Other tasks still receive the
+        TrainingConfig but do NOT call the apply helpers — emit an explicit
+        ValueError to prevent silent no-ops.
 
-        Non-SFT trainers (DPO/GRPO/KTO/ORPO/SimPO/IPO/PPO/Pretrain/
-        RewardModel/Embedding) receive the TrainingConfig but do NOT call
-        ``apply_cut_ce`` / ``apply_fp8_training`` / ``offload_context`` / the
-        kernel picker. Accepting these flags silently on non-SFT tasks would
-        produce a confusing no-op at best (CCE / kernel_auto_compose /
-        activation_offloading) or a runtime crash at worst
-        (``quantization_aware="fp8"`` falls through to the int8-QAT path in
-        non-SFT wrappers).
-
-        Fail fast at config-load so the user sees a precise error instead of
-        debugging a silent regression. Full multi-trainer wiring is tracked
-        for v0.28.1.
+        Multi-trainer expansion to GRPO/KTO/ORPO/SimPO/IPO/PPO/RewardModel/
+        Embedding is tracked as a follow-up.
         """
-        if self.task == "sft":
+        from soup_cli.utils.v028_features import supports_v028_features
+
+        if supports_v028_features(self.task):
             return self
         tcfg = self.training
         offenders: list[str] = []
@@ -640,10 +635,11 @@ class SoupConfig(BaseModel):
             offenders.append("kernel_auto_compose")
         if offenders:
             raise ValueError(
-                f"v0.28.0 features {offenders} are only wired for task=sft "
-                f"in this release; got task={self.task!r}. Support for other "
-                "trainers is tracked for v0.28.1. Either switch to task=sft "
-                "or remove these flags."
+                f"v0.28.0 features {offenders} are only wired for tasks "
+                f"sft/dpo/pretrain in this release; got task={self.task!r}. "
+                "Multi-trainer expansion to GRPO/KTO/ORPO/SimPO/IPO/PPO/"
+                "RewardModel/Embedding is tracked as a follow-up. Either "
+                "switch to a supported task or remove these flags."
             )
         return self
 
