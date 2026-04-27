@@ -108,7 +108,8 @@ class TestPackUnpack:
 
         manifest = inspect_can(str(out))
         assert manifest.name == "recipe"
-        assert manifest.can_format_version == 1
+        # v0.33.0 bumped CAN_FORMAT_VERSION 1 -> 2; v1 still loads on inspect.
+        assert manifest.can_format_version in (1, 2)
 
     def test_verify_valid_can(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)

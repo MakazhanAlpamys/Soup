@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Optional
+
 import typer
 from rich.console import Console
 from rich.markup import escape
@@ -91,6 +93,102 @@ def verify_cmd(
     else:
         console.print(f"[red]Verify failed:[/] {escape(report.message)}")
         raise typer.Exit(1)
+
+
+@app.command(name="run")
+def run_cmd(
+    can_path: str = typer.Argument(..., help="Path to .can file"),
+    yes: bool = typer.Option(
+        False, "--yes", "-y",
+        help="Skip the security confirmation panel (auto-trains, auto-fetches data)",
+    ),
+    deploy: bool = typer.Option(
+        False, "--deploy",
+        help="Run the can's deploy_targets after a successful train",
+    ),
+    extract_dir: Optional[str] = typer.Option(
+        None, "--extract-dir",
+        help="Where to extract (default: fresh tmp dir)",
+    ),
+    env_capture: Optional[str] = typer.Option(
+        None, "--env-capture",
+        help="Write env summary (pip freeze + GPU info) to this path",
+    ),
+) -> None:
+    """Run a can end-to-end: extract → train (→ optional deploy)."""
+    from soup_cli.cans.run import run_can
+
+    if not yes:
+        try:
+            from soup_cli.cans.unpack import inspect_can
+            manifest = inspect_can(can_path)
+        except (FileNotFoundError, ValueError) as exc:
+            _fail(str(exc))
+        console.print(Panel(
+            "[yellow]`soup can run` will:[/]\n"
+            "  - Extract the can\n"
+            "  - Auto-fetch any data referenced inside\n"
+            "  - Run [bold]soup train[/] against the embedded config\n\n"
+            f"Recipe: [bold]{escape(manifest.name)}[/]\n"
+            f"Author: {escape(manifest.author)}\n\n"
+            "Pass [bold]--yes[/] to confirm.",
+            title="Run can - confirm", border_style="yellow",
+        ))
+        raise typer.Exit(1)
+
+    try:
+        result = run_can(
+            can_path, yes=True, deploy=deploy,
+            extract_dir=extract_dir, capture_env_to=env_capture,
+        )
+    except (ValueError, FileNotFoundError, PermissionError) as exc:
+        _fail(str(exc))
+
+    if result.train_returncode != 0:
+        console.print(
+            f"[red]train failed (rc={result.train_returncode}). "
+            f"Extract dir: {escape(str(result.extract_dir))}[/]"
+        )
+        raise typer.Exit(result.train_returncode)
+    if result.deploy_returncode is not None and result.deploy_returncode != 0:
+        console.print(
+            f"[red]deploy failed (rc={result.deploy_returncode})[/]"
+        )
+        raise typer.Exit(result.deploy_returncode)
+    console.print(
+        f"[green]Can run complete[/] - extract dir: "
+        f"[bold]{escape(str(result.extract_dir))}[/]"
+    )
+
+
+@app.command(name="publish")
+def publish_cmd(
+    can_path: str = typer.Argument(..., help="Path to .can file"),
+    hf_hub: str = typer.Option(
+        ..., "--hf-hub",
+        help="HF Hub dataset repo (e.g. 'me/my-recipe-can')",
+    ),
+    private: bool = typer.Option(False, "--private"),
+    commit_message: Optional[str] = typer.Option(
+        None, "--message", "-m",
+        help="Commit message (first line only, capped at 200 chars)",
+    ),
+) -> None:
+    """Publish a .can file to HF Hub as a dataset."""
+    from soup_cli.cans.publish import publish_can
+
+    try:
+        url = publish_can(
+            can_path,
+            repo_id=hf_hub,
+            private=private,
+            commit_message=commit_message,
+        )
+    except (ValueError, FileNotFoundError) as exc:
+        _fail(str(exc))
+    except ImportError as exc:
+        _fail(f"huggingface_hub not installed: {exc}")
+    console.print(f"[green]Published[/] -> [bold]{escape(url)}[/]")
 
 
 @app.command(name="fork")

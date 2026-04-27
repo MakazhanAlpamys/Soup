@@ -7,10 +7,54 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
-CAN_FORMAT_VERSION = 1
+CAN_FORMAT_VERSION = 2  # v0.33.0: deploy_targets + env capture (additive over v1)
+SUPPORTED_CAN_FORMAT_VERSIONS = (1, 2)
 
 _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-.]{0,127}$")
 _HF_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-./]{0,127}$")
+_HF_REPO_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-.]{0,95}/[A-Za-z0-9][A-Za-z0-9_\-.]{0,95}$")
+
+
+class DeployTarget(BaseModel):
+    """One declarative deploy target embedded in a can manifest (v2+).
+
+    ``kind`` selects the deploy backend:
+      - ``ollama``: model name to deploy via ``soup deploy ollama``
+      - ``gguf``: relative path inside the can to a GGUF artifact
+      - ``vllm``: model id to serve via ``soup serve --backend vllm``
+    """
+
+    kind: Literal["ollama", "gguf", "vllm"] = Field(description="Deploy backend")
+    name: Optional[str] = Field(
+        default=None, max_length=128,
+        description="Model / artifact name (kind-specific)",
+    )
+    path: Optional[str] = Field(
+        default=None, max_length=512,
+        description="Relative path within the can for kind=gguf",
+    )
+
+    @field_validator("name")
+    @classmethod
+    def _clean_name(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        if "\x00" in value or "\n" in value or "\r" in value:
+            raise ValueError("deploy name must not contain null bytes or newlines")
+        return value
+
+    @field_validator("path")
+    @classmethod
+    def _safe_relpath(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        if "\x00" in value:
+            raise ValueError("deploy path contains null byte")
+        if value.startswith("/") or value.startswith("\\"):
+            raise ValueError(f"deploy path '{value}' must be relative")
+        if ".." in value.split("/") or ".." in value.split("\\"):
+            raise ValueError(f"deploy path '{value}' may not contain '..'")
+        return value
 
 
 class DataRef(BaseModel):
@@ -64,15 +108,19 @@ class Manifest(BaseModel):
     base_hash: str = Field(description="SHA-256 of the config (from registry)")
     description: Optional[str] = Field(default=None, max_length=4096)
     tags: list[str] = Field(default_factory=list)
+    deploy_targets: list[DeployTarget] = Field(
+        default_factory=list,
+        description="Optional declarative deploy targets (v2+)",
+    )
 
     @field_validator("can_format_version")
     @classmethod
     def _known_version(cls, value: int) -> int:
-        if value != CAN_FORMAT_VERSION:
+        if value not in SUPPORTED_CAN_FORMAT_VERSIONS:
             raise ValueError(
                 f"unknown can_format_version {value}; this build of Soup "
-                f"only supports version {CAN_FORMAT_VERSION}. Upgrade Soup "
-                "or re-pack the can with an older format."
+                f"supports versions {SUPPORTED_CAN_FORMAT_VERSIONS}. "
+                "Upgrade Soup or re-pack the can with a supported format."
             )
         return value
 
