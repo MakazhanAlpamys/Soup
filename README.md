@@ -964,7 +964,7 @@ training:
 
 Records peak memory each step. When pressure crosses the threshold, recommends a new `(batch, accum)` pair preserving effective batch (capped at `accum=1024`).
 
-> **v0.32.0 note:** the LR sweep currently writes a stub report demonstrating the schedule + analyzer + JSON path. The live in-process LR-sweep training loop, the live spike-recovery rollback, and live grad-accum mutation all land in v0.32.1. The schemas, validators, and APIs are stable in v0.32.0.
+> **v0.33.0:** `--find-lr` now runs an in-process LR-sweep training loop (replaces the v0.32.0 stub curve), spike-recovery writes a `spike_recovery.json` hint with the decayed LR for re-launch, and the grad-accum advisory prints a recommended `(batch, accum)` pair when VRAM pressure crosses the threshold. Live optimizer-state rewind and live DataLoader rebuild remain follow-ups (HF Trainer / TRL upstream constraints).
 
 ## Training Intelligence (Forgetting + Checkpoint Quality)
 

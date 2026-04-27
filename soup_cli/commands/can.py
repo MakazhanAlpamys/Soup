@@ -115,7 +115,7 @@ def run_cmd(
         help="Write env summary (pip freeze + GPU info) to this path",
     ),
 ) -> None:
-    """Run a can end-to-end: extract → train (→ optional deploy)."""
+    """Run a can end-to-end: extract -> train (-> optional deploy)."""
     from soup_cli.cans.run import run_can
 
     if not yes:

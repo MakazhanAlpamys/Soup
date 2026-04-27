@@ -103,13 +103,14 @@ soup_cli/
   migrate/            - Config migration (LLaMA-Factory, Axolotl, Unsloth)
   recipes/            - Ready-made configs for popular models (80 recipes)
   autopilot/          - Zero-config decision engine (v0.25.0)
-  registry/           - Model Registry (hashing, store, diff) (v0.26.0)
-  cans/               - Shareable .can artifact format (v0.26.0)
+  registry/           - Model Registry (hashing, store, diff, attach) (v0.26.0 + v0.33.0)
+  cans/               - Shareable .can artifact format + run/publish orchestrator (v0.26.0 + v0.33.0)
   data/traces/        - Trace-to-Preference harvester (v0.26.0)
-  utils/              - GPU, errors, MoE, GaLore, QAT, Unsloth, vLLM, SGLang, Liger, FlashAttn, FSDP, Ring Attention, long-context, quality, curriculum, freeze, dataset-registry, mlx, peft_builder, paths, topology, launcher, mii, pipeline, cut_ce, fp8, gradient_ckpt, kernel_picker, cross_doc_attn, activation_offload, hf, spec_pairing, structured_output, metrics, tracing, auto_quant, lr_finder, grad_accum, mixed_precision, warmup, spike_recovery, convergence
+  data/collators.py   - CrossDocCollator for sample packing (v0.33.0)
+  utils/              - GPU, errors, MoE, GaLore, QAT, Unsloth, vLLM, SGLang, Liger, FlashAttn, FSDP, Ring Attention, long-context, quality, curriculum, freeze, dataset-registry, mlx, peft_builder, paths, topology, launcher, mii, pipeline, cut_ce, fp8, gradient_ckpt, kernel_picker, cross_doc_attn, activation_offload, hf, spec_pairing, structured_output, metrics, tracing, auto_quant, lr_finder, grad_accum, mixed_precision, warmup, spike_recovery, convergence, v028_features
   ui/                 - Web UI (FastAPI + HTML/JS SPA)
 
-tests/                - Test suite (97 files, 3696 tests)
+tests/                - Test suite (104 files, 3818 tests)
 examples/             - Real-world config examples and datasets
 ```
 
@@ -234,6 +235,13 @@ pytest tests/ --cov=soup_cli --cov-report=html
 | test_inference_advanced.py | Inference Excellence: prefix caching, spec-decoding auto-pairing, LoRA hot-swap, structured output, dashboard + /metrics, OpenTelemetry tracing, auto-quant picker (v0.30.0) |
 | test_recipes_v031.py | Model & Recipe Breadth: 34 new recipes (vision/audio/reasoning/edge/domain/multimodal); catalog-wide invariants; CI workflow validation (v0.31.0) |
 | test_auto_tuning.py | Training Stability & Auto-Tuning: LR range finder, grad-accum monitor, auto mixed-precision, auto warmup, spike recovery, convergence detector, autopilot wiring (v0.32.0) |
+| test_part_f_hardening.py | Live Wire Part F: RLVR OS-level sandbox isolation + prune_checkpoints TOCTOU (v0.33.0) |
+| test_part_a_wave1.py | Live Wire Part A: live eval-gate scoring + registry attach (v0.33.0) |
+| test_part_a_wave2.py | Live Wire Part A: soup can run / publish + DeployTarget schema (v0.33.0) |
+| test_part_e.py | Live Wire Part E: --find-lr live loop + spike recovery hint + auto mixed-precision push + grad-accum advisory (v0.33.0) |
+| test_part_d.py | Live Wire Part D: structured-output LogitsProcessor + auto-quant live picker + HF push integration smoke (v0.33.0) |
+| test_part_c.py | Live Wire Part C: multi-trainer v0.28.0 features + selective ckpt hooks + CrossDocCollator (v0.33.0) |
+| test_part_b.py | Live Wire Part B: auto-reexec under accelerate launch + DeepSpeed-MII live serve (v0.33.0) |
 
 ## Making Changes
 
