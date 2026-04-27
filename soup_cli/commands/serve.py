@@ -195,7 +195,11 @@ def serve(
     # with code 1 (not 0) so scripts / CI fail loudly rather than silently
     # treating `--backend mii` as "server started".
     if backend == "mii":
-        from soup_cli.utils.mii import is_mii_available
+        from soup_cli.utils.mii import (
+            build_mii_app,
+            create_mii_pipeline,
+            is_mii_available,
+        )
 
         if not is_mii_available():
             console.print(
@@ -203,13 +207,26 @@ def serve(
                 "Install with: [bold]pip install deepspeed-mii[/]"
             )
             raise typer.Exit(1)
+
+        # v0.33.0 #38 — live MII pipeline + OpenAI-compatible HTTP.
+        try:
+            mii_pipeline = create_mii_pipeline(
+                model_path=model, tensor_parallel=1, max_length=4096,
+            )
+        except (ImportError, RuntimeError, OSError) as exc:
+            console.print(f"[red]Failed to create MII pipeline:[/] {exc}")
+            raise typer.Exit(1) from exc
+
+        mii_model_name = Path(model).name
+        mii_app = build_mii_app(mii_pipeline, model_name=mii_model_name)
+
+        import uvicorn
         console.print(
-            "[yellow]DeepSpeed-MII backend is registered but not yet wired "
-            "as a live server in v0.27.0. Full pipeline support ships in "
-            "v0.27.1. Use --backend vllm or --backend sglang for production "
-            "in the meantime.[/]"
+            f"[green]Starting DeepSpeed-MII server[/] "
+            f"({mii_model_name}) on http://{host}:{port}"
         )
-        raise typer.Exit(1)
+        uvicorn.run(mii_app, host=host, port=port, log_level="info")
+        return
 
     # Auto-detect vLLM/SGLang: if installed but not selected, show hint
     if backend == "transformers":

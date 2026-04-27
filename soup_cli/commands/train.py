@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 import typer
@@ -70,6 +71,14 @@ def train(
         None,
         "--gpus",
         help="Number of GPUs for distributed training ('auto' or integer)",
+    ),
+    no_reexec: bool = typer.Option(
+        False,
+        "--no-reexec",
+        help=(
+            "When --gpus N>1, print the accelerate launch command instead "
+            "of auto-reexec under it (v0.33.0 #37 default behaviour: reexec)"
+        ),
     ),
     gate: str = typer.Option(
         None,
@@ -316,27 +325,75 @@ def train(
                 "single-process CPU run.[/]"
             )
         elif num_gpus is not None and num_gpus > 1:
-            from soup_cli.utils.launcher import format_advice, is_in_distributed
+            from soup_cli.utils.launcher import (
+                build_accelerate_argv,
+                format_advice,
+                is_in_distributed,
+            )
 
             if not is_in_distributed():
-                safe_config = markup_escape(config)
-                console.print(
-                    Panel(
-                        markup_escape(
-                            format_advice(num_gpus, ["soup", "train", "-c", safe_config])
-                        ),
-                        title="[yellow]Multi-GPU launch required[/]",
+                # v0.33.0 #37 — auto-reexec under accelerate launch unless
+                # --no-reexec was passed. Reexec uses os.execvp so the new
+                # accelerate process replaces this process; no leftover PID
+                # tree, stdio passes through unchanged.
+                if no_reexec:
+                    safe_config = markup_escape(config)
+                    console.print(
+                        Panel(
+                            markup_escape(
+                                format_advice(
+                                    num_gpus,
+                                    ["soup", "train", "-c", safe_config],
+                                )
+                            ),
+                            title="[yellow]Multi-GPU launch required[/]",
+                        )
                     )
+                    console.print(
+                        f"[dim]Detected topology: {topo['gpu_count']} GPUs, "
+                        f"{topo['interconnect']}[/]"
+                    )
+                    raise typer.Exit(1)
+
+                # Reconstruct argv. Pass through critical flags so the
+                # reexec'd run sees what the user typed.
+                script_args: list[str] = [
+                    sys.executable, "-m", "soup_cli.cli", "train",
+                    "--config", config, "--no-reexec",
+                ]
+                if fsdp:
+                    script_args.extend(["--fsdp", fsdp])
+                if deepspeed:
+                    script_args.extend(["--deepspeed", deepspeed])
+                if resume:
+                    script_args.extend(["--resume", resume])
+                if wandb:
+                    script_args.append("--wandb")
+                if tensorboard:
+                    script_args.append("--tensorboard")
+                if yes:
+                    script_args.append("--yes")
+                argv = build_accelerate_argv(
+                    num_processes=num_gpus, script_args=script_args,
                 )
                 console.print(
-                    f"[dim]Detected topology: {topo['gpu_count']} GPUs, "
-                    f"{topo['interconnect']}[/]"
+                    f"[green]Auto-reexec under accelerate "
+                    f"({num_gpus} GPUs, {topo['interconnect']})[/]"
                 )
-                console.print(
-                    "[dim]Note: carry any additional flags (e.g. --fsdp, "
-                    "--deepspeed, --wandb) over to the accelerate command.[/]"
-                )
-                raise typer.Exit(1)
+                console.print(f"[dim]argv: {' '.join(argv)}[/]")
+                # os.execvp replaces the current process — does not return.
+                # On Windows execvp creates a new process and returns the
+                # child's return code; we don't loop because the parent
+                # also exits via Typer.
+                try:
+                    os.execvp(argv[0], argv)
+                except OSError as exc:
+                    console.print(
+                        f"[red]accelerate launch failed:[/] {exc}\n"
+                        "Use [bold]--no-reexec[/] to fall back to printing "
+                        "the launch command for manual execution."
+                    )
+                    raise typer.Exit(1) from exc
             console.print(
                 f"[green]Distributed run detected[/] "
                 f"({num_gpus} procs, {topo['interconnect']} interconnect)"
