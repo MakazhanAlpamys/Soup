@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 
 import pytest
 from typer.testing import CliRunner
@@ -16,6 +17,15 @@ from soup_cli.utils.log_level import (
     setup_logging,
 )
 
+# Rich help renderer can split a flag like --log-level with ANSI colour
+# escapes between `--`, `-log`, `-level` when the terminal is narrow (CI
+# runners have a narrower default width than local shells). Strip ANSI so
+# substring assertions are robust across all CI matrix jobs.
+_ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*[mK]")
+
+
+def _strip_ansi(text: str) -> str:
+    return _ANSI_ESCAPE.sub("", text)
 
 class TestLogLevelEnum:
     def test_four_tiers_defined(self):
@@ -86,7 +96,7 @@ class TestCliFlag:
     def test_log_level_help_visible(self):
         runner = CliRunner()
         result = runner.invoke(app, ["--help"])
-        assert "--log-level" in result.output
+        assert "--log-level" in _strip_ansi(result.output), result.output
 
     def test_log_level_invalid_rejected(self):
         runner = CliRunner()
