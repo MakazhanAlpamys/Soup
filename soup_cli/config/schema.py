@@ -146,6 +146,14 @@ class TrainingConfig(BaseModel):
             "'fp8'=FP8 training on H100/B100 (v0.28.0)."
         ),
     )
+    fp8_recipe: Literal["tensorwise", "rowwise", "rowwise_with_gw_hp"] = Field(
+        default="tensorwise",
+        description=(
+            "FP8 scaling recipe (only used when quantization_aware='fp8'). "
+            "'tensorwise' (fastest, default), 'rowwise' (more accurate, CUTLASS rowwise), "
+            "'rowwise_with_gw_hp' (most accurate, grad_weight in high precision). (v0.28.1)."
+        ),
+    )
     optimizer: str = Field(default="adamw_torch", description="Optimizer name")
     scheduler: str = Field(default="cosine", description="LR scheduler type")
     save_steps: int = Field(default=100, description="Save checkpoint every N steps")
@@ -542,6 +550,16 @@ class TrainingConfig(BaseModel):
             raise ValueError(
                 "loss_spike_recovery requires loss_watchdog=true "
                 "(spike recovery is triggered by the watchdog)"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_fp8_recipe_requires_fp8(self) -> "TrainingConfig":
+        """fp8_recipe is only meaningful when quantization_aware='fp8'."""
+        if self.fp8_recipe != "tensorwise" and self.quantization_aware != "fp8":
+            raise ValueError(
+                f"fp8_recipe='{self.fp8_recipe}' requires quantization_aware='fp8'. "
+                "Either set quantization_aware: 'fp8' or remove the fp8_recipe field."
             )
         return self
 

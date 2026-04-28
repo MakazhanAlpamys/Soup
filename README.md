@@ -426,6 +426,24 @@ training:
   quantization: none        # FP8 converts linears directly; no bnb 4bit needed
 ```
 
+### FP8 Scaling Recipes (v0.28.1)
+
+Choose a scaling recipe to trade off speed vs accuracy:
+
+```yaml
+training:
+  quantization_aware: fp8
+  fp8_recipe: rowwise      # tensorwise | rowwise | rowwise_with_gw_hp
+```
+
+| Recipe | Kernel | Scaling | Trade-off |
+|---|---|---|---|
+| `tensorwise` (default) | cuBLAS | Single scale per tensor | Fastest, good accuracy |
+| `rowwise` | CUTLASS | Per-row scale, e4m3, power-of-2 scales | Slower, more accurate |
+| `rowwise_with_gw_hp` | CUTLASS | Rowwise + grad_weight in high precision | Slowest, most accurate |
+
+Omitting `fp8_recipe` defaults to `tensorwise` (identical to v0.28.0 behavior).
+
 Bool `true` stays on the int8 QAT path for backward compatibility. FP8 requires CUDA + Hopper+ (compute capability ≥ 9.0) and is rejected on unsloth/mlx backends. Wired across every transformer-backend trainer (SFT, DPO, GRPO, KTO, ORPO, SimPO, IPO, PPO, Reward-Model, Embedding, Pretrain).
 
 ## Cut Cross-Entropy (Large-Vocab Models)

@@ -57,14 +57,27 @@ def is_fp8_gpu_supported() -> bool:
         return False
 
 
-def apply_fp8_training(model) -> bool:
+def apply_fp8_training(
+    model,
+    recipe: str = "tensorwise",
+) -> bool:
     """Convert eligible linear layers to FP8 for training.
 
-    Uses torchao's ``convert_to_float8_training`` with a tensorwise scaling
-    recipe (default / most widely supported).
+    Uses torchao's ``convert_to_float8_training`` with a scaling recipe
+    selected via :pydata:`Float8LinearConfig.from_recipe_name`.
+
+    Supported recipes (from ``torchao.float8.config.Float8LinearRecipeName``):
+
+    - ``"tensorwise"`` — single scale per tensor, cuBLAS kernel (fastest,
+      default, v0.28.0 behavior).
+    - ``"rowwise"`` — per-row scale, CUTLASS kernel, e4m3 everywhere,
+      power-of-2 scales (more accurate).
+    - ``"rowwise_with_gw_hp"`` — rowwise but grad_weight stays in high
+      precision (most accurate).
 
     Args:
         model: PyTorch model to convert (typically after LoRA has been applied).
+        recipe: Scaling recipe name. Default ``"tensorwise"``.
 
     Returns:
         True on success, False if FP8 is unavailable or conversion failed.
@@ -74,8 +87,10 @@ def apply_fp8_training(model) -> bool:
 
     try:
         from torchao.float8 import convert_to_float8_training
+        from torchao.float8.config import Float8LinearConfig
 
-        convert_to_float8_training(model)
+        config = Float8LinearConfig.from_recipe_name(recipe)
+        convert_to_float8_training(model, config=config)
         return True
     except (ImportError, RuntimeError, ValueError):
         return False
