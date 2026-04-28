@@ -69,14 +69,15 @@ def apply_v028_speed_memory(
 
     # --- FP8 training --------------------------------------------------------
     if getattr(tcfg, "quantization_aware", None) == "fp8":
+        recipe = getattr(tcfg, "fp8_recipe", "tensorwise")
         try:
             from soup_cli.utils.fp8 import apply_fp8_training
-            ok = bool(apply_fp8_training(model))
+            ok = bool(apply_fp8_training(model, recipe=recipe))
         except Exception:  # noqa: BLE001
             ok = False
         applied["fp8"] = ok
         if ok:
-            _say("FP8 training enabled (Float8Linear)")
+            _say(f"FP8 training enabled (Float8Linear, recipe={recipe})")
         else:
             _say(
                 "FP8 training: torchao.float8 unavailable or no "

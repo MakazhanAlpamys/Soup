@@ -384,3 +384,68 @@ class TestFP8RecipeBackwardCompat:
         """TrainingConfig alone defaults fp8_recipe to tensorwise."""
         tcfg = TrainingConfig()
         assert tcfg.fp8_recipe == "tensorwise"
+
+
+# ─── Dispatch through apply_v028_speed_memory (covers 10 non-SFT trainers) ──
+
+
+class TestFP8RecipeViaV028Features:
+    """All non-SFT trainers go through apply_v028_speed_memory; verify it
+    passes the user-configured recipe through to apply_fp8_training instead
+    of always defaulting to tensorwise (silent no-op bug fix)."""
+
+    def _run_dispatch(self, recipe: str) -> MagicMock:
+        """Invoke apply_v028_speed_memory with quantization_aware=fp8 and
+        the given recipe, returning the patched apply_fp8_training mock."""
+        tcfg = MagicMock()
+        tcfg.quantization_aware = "fp8"
+        tcfg.fp8_recipe = recipe
+        tcfg.use_cut_ce = False
+        tcfg.kernel_auto_compose = False
+
+        with patch("soup_cli.utils.fp8.apply_fp8_training", return_value=True) as m:
+            from soup_cli.utils.v028_features import apply_v028_speed_memory
+
+            apply_v028_speed_memory(
+                model=MagicMock(),
+                tcfg=tcfg,
+                base_model="test/model",
+                console=None,
+                device="cuda",
+                backend="transformers",
+            )
+        return m
+
+    def test_v028_dispatch_tensorwise(self):
+        m = self._run_dispatch("tensorwise")
+        m.assert_called_once()
+        assert m.call_args.kwargs.get("recipe") == "tensorwise"
+
+    def test_v028_dispatch_rowwise(self):
+        m = self._run_dispatch("rowwise")
+        m.assert_called_once()
+        assert m.call_args.kwargs.get("recipe") == "rowwise"
+
+    def test_v028_dispatch_rowwise_with_gw_hp(self):
+        m = self._run_dispatch("rowwise_with_gw_hp")
+        m.assert_called_once()
+        assert m.call_args.kwargs.get("recipe") == "rowwise_with_gw_hp"
+
+    def test_v028_skips_apply_when_quant_not_fp8(self):
+        """If quantization_aware != 'fp8', apply_fp8_training is not called."""
+        tcfg = MagicMock()
+        tcfg.quantization_aware = True  # int8 QAT, not fp8
+        tcfg.fp8_recipe = "rowwise"
+        tcfg.use_cut_ce = False
+        tcfg.kernel_auto_compose = False
+
+        with patch("soup_cli.utils.fp8.apply_fp8_training") as m:
+            from soup_cli.utils.v028_features import apply_v028_speed_memory
+
+            apply_v028_speed_memory(
+                model=MagicMock(),
+                tcfg=tcfg,
+                base_model="test/model",
+                console=None,
+            )
+        m.assert_not_called()

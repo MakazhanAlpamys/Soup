@@ -455,11 +455,10 @@ class SFTTrainerWrapper:
         if tcfg.quantization_aware == "fp8":
             from soup_cli.utils.fp8 import apply_fp8_training
 
-            fp8_recipe = getattr(tcfg, "fp8_recipe", "tensorwise")
-            if apply_fp8_training(self.model, recipe=fp8_recipe):
+            if apply_fp8_training(self.model, recipe=tcfg.fp8_recipe):
                 console.print(
                     f"[green]FP8 training enabled:[/] "
-                    f"converted linears to Float8Linear (recipe={fp8_recipe})"
+                    f"converted linears to Float8Linear (recipe={tcfg.fp8_recipe})"
                 )
             else:
                 console.print(
