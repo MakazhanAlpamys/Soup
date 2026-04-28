@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 import json
+import os
+from pathlib import Path
 from typing import Optional
 
 import typer
 from rich.console import Console
+from rich.markup import escape as markup_escape
 from rich.panel import Panel
 from rich.table import Table
+
+from soup_cli.utils.run_cost import format_cost_usd
 
 console = Console()
 
@@ -103,7 +108,7 @@ def show(
     run = tracker.get_run(run_id)
 
     if not run:
-        console.print(f"[red]Run not found: {run_id}[/]")
+        console.print(f"[red]Run not found:[/] {markup_escape(run_id)}")
         console.print("[dim]Use [bold]soup runs[/] to see all runs.[/]")
         raise typer.Exit(1)
 
@@ -139,6 +144,7 @@ def show(
         f"Loss:       {_fmt_loss(run)}",
         f"Steps:      {run.get('total_steps') or '-'}",
         f"Duration:   {duration_str}",
+        f"Cost:       {_fmt_cost(run)}",
         f"Output:     {run.get('output_dir') or '-'}",
     ]
     console.print(Panel("\n".join(info_lines), title="Run Details"))
@@ -288,7 +294,6 @@ def clean(
 ):
     """Intelligently clean up redundant checkpoint files to reclaim disk space."""
     import shutil
-    from pathlib import Path
 
     from soup_cli.experiment.tracker import ExperimentTracker
 
@@ -322,11 +327,17 @@ def clean(
         out_dir_str = run.get("output_dir")
         if not out_dir_str:
             continue
+        # Cross-platform containment: project convention requires
+        # os.path.realpath + commonpath because Path.resolve() + relative_to()
+        # silently mismatches on Windows 8.3 short names.
+        from soup_cli.utils.paths import is_under_cwd
+
         try:
-            output_dir = Path(out_dir_str).resolve()
-            output_dir.relative_to(Path.cwd().resolve())
-        except ValueError:
-            continue  # skip paths outside cwd
+            output_dir = Path(os.path.realpath(out_dir_str))
+        except (OSError, ValueError):
+            continue
+        if not is_under_cwd(output_dir):
+            continue
         if not output_dir.exists():
             continue
 
@@ -420,6 +431,54 @@ def _fmt_float(val: Optional[float]) -> str:
     return "-"
 
 
+@app.command()
+def replay(
+    run_id: str = typer.Argument(..., help="Run ID (or prefix) to replay."),
+    plot: bool = typer.Option(True, "--plot/--no-plot", help="Render loss curve"),
+):
+    """Replay a completed run's metrics — re-renders summary + loss curve."""
+    from soup_cli.experiment.tracker import ExperimentTracker
+    from soup_cli.utils.replay import downsample, summarise
+
+    tracker = ExperimentTracker()
+    run = tracker.get_run(run_id)
+    if run is None:
+        console.print(f"[red]Run not found:[/] {markup_escape(run_id)}")
+        raise typer.Exit(1)
+
+    metrics = tracker.get_metrics(run["run_id"])
+    summary = summarise(metrics)
+
+    rendered = [
+        f"Run ID:     [bold]{run['run_id']}[/]",
+        f"Status:     {run.get('status') or '-'}",
+        f"Steps:      {summary.first_step or '-'} → {summary.last_step or '-'}"
+        f" ({summary.total_rows} rows)",
+    ]
+    if summary.initial_loss is not None and summary.final_loss is not None:
+        rendered.append(f"Loss:       {summary.initial_loss:.4f} → {summary.final_loss:.4f}")
+    if summary.min_loss is not None and summary.min_loss_step is not None:
+        rendered.append(
+            f"Best:       {summary.min_loss:.4f} @ step {summary.min_loss_step}"
+        )
+    rendered.append(f"Cost:       {_fmt_cost(run)}")
+    console.print(Panel("\n".join(rendered), title="Replay"))
+
+    if plot and metrics:
+        sampled = downsample(metrics)
+        _plot_loss_curve(sampled)
+
+
+def _fmt_cost(run: dict) -> str:
+    """Render the per-run cost estimate. Falls back to a dash + label hint."""
+    cost = run.get("cost_usd")
+    label = run.get("cost_gpu_label")
+    rendered = format_cost_usd(cost)
+    if cost is not None and label:
+        return f"{rendered} ({label})"
+    return rendered
+
+
 def _fmt_duration(secs: Optional[float]) -> str:
     """Format duration in seconds to human-readable string."""
     if secs is None:
@@ -442,8 +501,9 @@ def _plot_loss_curve(metrics: list[dict]) -> None:
         )
         return
 
-    steps = [m["step"] for m in metrics if m.get("loss")]
-    losses = [m["loss"] for m in metrics if m.get("loss")]
+    valid = [m for m in metrics if m.get("loss") is not None]
+    steps = [m["step"] for m in valid]
+    losses = [m["loss"] for m in valid]
 
     if not steps:
         console.print("[dim]No loss data to plot.[/]")

@@ -36,12 +36,20 @@ from soup_cli.commands import (
 )
 from soup_cli.commands import doctor as doctor_cmd
 from soup_cli.commands import quickstart as quickstart_cmd
+from soup_cli.commands import (
+    tui as tui_cmd,
+)
+from soup_cli.commands import (
+    why as why_cmd,
+)
 from soup_cli.utils.constants import GITHUB_URL
 
 console = Console()
 
 # Global verbose flag — set via callback, read by error handler
 _verbose = False
+# Global log level (resolved string), set by main() callback
+_log_level = "normal"
 
 app = typer.Typer(
     name="soup",
@@ -98,6 +106,8 @@ app.add_typer(
     help="Model Registry: push, list, show, diff, search, promote, delete.",
 )
 app.command(name="history")(history.history)
+app.command(name="why")(why_cmd.why)
+app.command(name="tui")(tui_cmd.tui)
 app.add_typer(
     can.app, name="can",
     help="Soup Cans: pack/inspect/verify/fork shareable .can artifacts.",
@@ -198,10 +208,24 @@ def main(
         "-V",
         help="Show full traceback on errors",
     ),
+    log_level: str = typer.Option(
+        "normal",
+        "--log-level",
+        help="Logging tier: quiet | normal | verbose | debug",
+    ),
 ):
     """Soup — fine-tune LLMs in one command."""
-    global _verbose
+    global _verbose, _log_level
     _verbose = verbose
+    from soup_cli.utils.log_level import parse_log_level, setup_logging
+
+    try:
+        tier = parse_log_level(log_level)
+    except ValueError as exc:
+        console.print(f"[red]error:[/] {exc}")
+        raise typer.Exit(code=2) from exc
+    _log_level = tier.value
+    setup_logging(tier)
 
 
 def run():

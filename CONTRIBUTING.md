@@ -110,7 +110,7 @@ soup_cli/
   utils/              - GPU, errors, MoE, GaLore, QAT, Unsloth, vLLM, SGLang, Liger, FlashAttn, FSDP, Ring Attention, long-context, quality, curriculum, freeze, dataset-registry, mlx, peft_builder, paths, topology, launcher, mii, pipeline, cut_ce, fp8, gradient_ckpt, kernel_picker, cross_doc_attn, activation_offload, hf, spec_pairing, structured_output, metrics, tracing, auto_quant, lr_finder, grad_accum, mixed_precision, warmup, spike_recovery, convergence, v028_features
   ui/                 - Web UI (FastAPI + HTML/JS SPA)
 
-tests/                - Test suite (104 files, 3818 tests)
+tests/                - Test suite (111 files, 3928 tests)
 examples/             - Real-world config examples and datasets
 ```
 
@@ -242,6 +242,13 @@ pytest tests/ --cov=soup_cli --cov-report=html
 | test_part_d.py | Live Wire Part D: structured-output LogitsProcessor + auto-quant live picker + HF push integration smoke (v0.33.0) |
 | test_part_c.py | Live Wire Part C: multi-trainer v0.28.0 features + selective ckpt hooks + CrossDocCollator (v0.33.0) |
 | test_part_b.py | Live Wire Part B: auto-reexec under accelerate launch + DeepSpeed-MII live serve (v0.33.0) |
+| test_log_level.py | Smart logging tiers `--log-level quiet/normal/verbose/debug` (v0.34.0 Part A) |
+| test_run_cost.py | Per-run cost: GPU-rate lookup + estimate + format + tracker integration (v0.34.0 Part B) |
+| test_why.py | `soup why` heuristic explainer: NaN / plateau / divergence / grad-norm / LR bounds (v0.34.0 Part C) |
+| test_crash_reporter.py | `.crash` bundle: classify, redact secrets, write under cwd, oversize truncation (v0.34.0 Part D) |
+| test_replay.py | `soup runs replay`: summarise + downsample + CLI rendering (v0.34.0 Part E) |
+| test_profiling.py | Auto-profiling: ProfilerSchedule + path containment + torch-less degradation (v0.34.0 Part F) |
+| test_tui.py | `soup tui`: CLI bounds + missing-textual error + row builders (v0.34.0 Part G) |
 
 ## Making Changes
 

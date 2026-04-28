@@ -40,18 +40,15 @@ soup train
 
 Latest highlights only. Full history: [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 
-**v0.33.0 — Live Wire**: closes 17 issues across 6 internal Parts. Every "API + flag (v0.30.0)" / "wired live in v0.x.1" deferral from the last six minor releases is now actually live.
+**v0.34.0 — Observability & Dev UX**: when training goes wrong, Soup tells you *why* instead of dumping a stack trace.
 
-- **`soup can run` + `soup can publish`** — end-to-end: extract a `.can`, run the embedded config via `soup train`, optionally deploy. `soup can publish` uploads a `.can` to HF Hub as a dataset (`repo_type='dataset'`, can-format-v1 tag). Manifest schema bumped to v2 with optional `deploy_targets` (ollama / gguf / vllm).
-- **Multi-GPU one command** — `soup train --gpus 2` now auto-reexecs under `accelerate launch` instead of just printing the command. `--no-reexec` opt-out preserved. Critical flags (`--fsdp`, `--deepspeed`, `--resume`, `--wandb`, `--tensorboard`, `--yes`) forwarded to the reexec'd run.
-- **Live eval gate scoring** — `soup eval gate` and `soup eval quant-check` no longer return `score=1.0` stubs for judge / benchmark task types. Backend failures surface as `score=None, error=str(exc)` so a broken eval never silently passes the gate.
-- **Structured output + auto-quant live on `soup serve`** — `--structured-output json --json-schema s.json` builds a real `LogitsProcessor` (via outlines or lm-format-enforcer). `--auto-quant` runs a tiny eval over candidate quantisations and picks (score, -latency).
-- **DeepSpeed-MII live serve** — `soup serve --backend mii` now starts a real OpenAI-compatible HTTP server (was a stub-warning + exit-1 in v0.27.0).
-- **Multi-trainer v0.28.0 features** — `use_cut_ce`, `quantization_aware="fp8"`, `kernel_auto_compose`, `activation_offloading` now wired for SFT / DPO / Pretrain trainers (previously SFT-only).
-- **Live `--find-lr`** — replaces the synthetic stub curve with a real in-process LR-sweep training loop.
-- **Spike recovery + grad-accum advisory** — `loss_spike_recovery: true` writes a `spike_recovery.json` hint with the decayed LR for re-launch. `grad_accum_auto_tune: true` prints a (batch, accum) recommendation when VRAM pressure crosses the threshold.
-- **`soup eval custom --attach-to-registry <id>` + `soup export --registry-id <id>`** — auto-attach eval results / exported artifacts to a Local Model Registry entry as `eval_results` / `gguf` / `awq` / `gptq` / `onnx` / `tensorrt` artifacts.
-- **RLVR sandbox + checkpoint prune hardening** — `code_exec_reward` adds OS-level isolation (Linux `unshare`, macOS `sandbox-exec`); `prune_checkpoints` switches to TOCTOU-safe `os.lstat` + `S_ISLNK` + `onerror`-abort `rmtree`.
+- **`soup why`** — heuristic explainer over the most recent (or named) run. Detects NaN / Inf loss, plateaus (loss flat for ≥30 steps), divergence (loss > 3× initial), high gradient norm, and out-of-band learning rates — and tells you the next thing to try, in plain English.
+- **`soup tui`** — full-screen Textual dashboard for runs + live metrics. Two-pane layout (run list + detail), keyboard-driven (`r` refresh, `q` quit). Optional dep: `pip install soup-cli[tui]`.
+- **`.crash` bundles** — when training fails, Soup auto-writes a self-contained `.crash` JSON next to the run (config + last-50 metric rows + GPU state + env summary + redacted error trace + `<redacted>` for any `hf_*` / `sk-*` / `Bearer` token). Ready to attach to a GitHub issue without leaking secrets.
+- **`soup runs replay <id>`** — re-renders the summary panel + loss curve from SQLite history. Auto-downsamples long runs to ≤2000 points so the chart stays readable.
+- **`soup train --profile`** — records a `torch.profiler` Chrome-trace JSON to `<output>/profiles/<run_id>.trace.json` over an early-steps window (configurable schedule). Open in `chrome://tracing` or Perfetto.
+- **Per-run cost tracking** — `soup runs show` now prints an estimated `$` per run from the captured GPU device name × duration. Prices are rough mid-2026 ballparks; `—` for CPU / MPS / unknown GPUs (no fabricated zeros).
+- **`--log-level quiet|normal|verbose|debug`** — global flag wires a Rich-formatted logger on the `soup` namespace. DEBUG enables timestamps and module paths; QUIET silences info/warning chatter.
 
 ## Why Soup?
 
@@ -2047,6 +2044,66 @@ soup runs compare run_1 run_2
 
 # Delete a run
 soup runs delete run_1
+
+# Replay an old run's summary + loss curve from history
+soup runs replay run_1
+```
+
+Every completed run also stores an estimated cost (`$` per run) computed from the
+captured GPU device name and duration. `soup runs show` renders `—` for CPU /
+MPS / unknown GPUs (no fabricated zeros).
+
+## Observability & Dev UX
+
+Tools that explain *why* a run misbehaved instead of dumping a stack trace.
+
+### `soup why`
+
+Heuristic explainer — reads the most recent (or named) run and surfaces
+plain-English diagnoses with concrete next steps.
+
+```bash
+soup why                 # most recent run
+soup why run_2026_abc    # specific run id (or prefix)
+```
+
+Detects: NaN/Inf loss, plateau (≥30 steps with <0.5% change), divergence
+(loss > 3× initial), persistent high gradient norm, learning rate outside the
+typical `[1e-6, 5e-3]` band. Pure rule-based — no model calls.
+
+### `soup tui`
+
+Full-screen Textual dashboard. Two-pane: run list (left) + selected-run detail
+(right). `r` refreshes, `q` quits.
+
+```bash
+pip install 'soup-cli[tui]'
+soup tui --refresh 1.0 --limit 50
+```
+
+### Auto-profiling — `soup train --profile`
+
+Records a `torch.profiler` Chrome-trace over an early-steps window (default
+`wait=1, warmup=1, active=5, repeat=1`). Output: `<output>/profiles/<run_id>.trace.json`.
+Open in `chrome://tracing` or Perfetto.
+
+### Crash bundles — `.crash` files
+
+When training fails, Soup auto-writes a self-contained `.crash` JSON to
+`./.soup-crashes/crash_<utc>_<hex>.crash` containing: redacted error trace,
+classified failure kind (`oom` / `nan` / `cuda` / `dataloader` / `nccl` /
+`other`), GPU state at crash time, env summary, last-50 metric rows, and the
+config (recursively redacted of `hf_*` / `sk-*` / `Bearer …` tokens). The
+output_dir is reduced to `os.path.basename` so `$HOME` doesn't leak.
+
+### `--log-level quiet|normal|verbose|debug`
+
+Global flag on the root `soup` command. Wires a Rich-formatted logger on the
+`soup` namespace; `debug` enables timestamps + module paths.
+
+```bash
+soup --log-level verbose train --config soup.yaml
+soup --log-level debug runs show <id>
 ```
 
 ## Model Evaluation
@@ -2236,8 +2293,13 @@ soup can fork r.can --out fork.can --modify training.lr=5e-5  Fork + re-pack
 soup can run r.can --yes [--deploy] [--env-capture env.txt]  Run a .can end-to-end
 soup can publish r.can --hf-hub user/name    Publish .can to HF Hub as dataset
 soup runs                                     List training runs
-soup runs show <run_id>                       Run details + loss graph
+soup runs show <run_id>                       Run details + loss graph + cost
 soup runs compare <run_1> <run_2>             Compare two runs
+soup runs replay <run_id>                     Replay summary + loss curve from history
+soup why [run_id]                             Explain training anomalies (heuristic)
+soup tui                                      Full-screen Textual dashboard (requires [tui] extra)
+soup train --config soup.yaml --profile       Record torch.profiler trace to <output>/profiles/
+soup --log-level quiet|normal|verbose|debug   Global logging tier (Rich-formatted)
 soup ui [--port 7860]                         Web UI (experiments, training, data)
 soup doctor                                   Check environment
 soup quickstart [--dry-run]                   Full demo

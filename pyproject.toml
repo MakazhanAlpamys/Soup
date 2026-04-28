@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "soup-cli"
-version = "0.33.0"
+version = "0.34.0"
 description = "Fine-tune LLMs in one command. No SSH, no config hell."
 readme = "README.md"
 license = "Apache-2.0"
@@ -60,6 +60,7 @@ gptq = ["auto-gptq>=0.7.0"]
 sglang = ["sglang>=0.2.0", "fastapi>=0.104.0", "uvicorn>=0.24.0"]
 mlx = ["mlx>=0.20.0", "mlx-lm>=0.20.0"]
 cce = ["cut-cross-entropy>=24.10.0"]
+tui = ["textual>=0.50.0"]
 
 [project.scripts]
 soup = "soup_cli.cli:run"

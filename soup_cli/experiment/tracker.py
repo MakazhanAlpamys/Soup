@@ -34,7 +34,9 @@ CREATE TABLE IF NOT EXISTS runs (
     duration_secs   REAL,
     output_dir      TEXT,
     base_model      TEXT,
-    task            TEXT
+    task            TEXT,
+    cost_usd        REAL,
+    cost_gpu_label  TEXT
 );
 
 CREATE TABLE IF NOT EXISTS metrics (
@@ -127,9 +129,30 @@ class ExperimentTracker:
         return self._conn
 
     def _ensure_schema(self) -> None:
-        """Create tables if they don't exist."""
+        """Create tables if they don't exist.
+
+        Lazy migration adds the v0.34.0 cost columns to legacy DBs. The
+        ALTER TABLE calls are guarded against the "duplicate column" race
+        that can occur when two processes start simultaneously on the same
+        DB (fork-based multi-GPU training, TUI auto-refresh, etc.).
+        """
         conn = self._get_conn()
         conn.executescript(_SCHEMA_SQL)
+        for column, ddl in (
+            ("cost_usd", "ALTER TABLE runs ADD COLUMN cost_usd REAL"),
+            ("cost_gpu_label", "ALTER TABLE runs ADD COLUMN cost_gpu_label TEXT"),
+        ):
+            existing = {row[1] for row in conn.execute("PRAGMA table_info(runs)").fetchall()}
+            if column in existing:
+                continue
+            try:
+                conn.execute(ddl)
+            except sqlite3.OperationalError as exc:
+                # Tolerate the race where a sibling process added the column
+                # between our PRAGMA read and the ALTER. Anything else is a
+                # real failure and should surface.
+                if "duplicate column" not in str(exc).lower():
+                    raise
         conn.commit()
 
     def init_db(self) -> None:
@@ -198,15 +221,44 @@ class ExperimentTracker:
         duration_secs: float,
         output_dir: str,
     ) -> None:
-        """Mark run as completed and fill summary fields."""
+        """Mark run as completed and fill summary fields.
+
+        Also computes an informational per-run cost estimate based on the
+        device_name captured at start_run() and the elapsed duration.
+        """
         conn = self._get_conn()
+        # Look up device name for cost estimate (best-effort).
+        cost_usd: Optional[float] = None
+        cost_label: Optional[str] = None
+        row = conn.execute(
+            "SELECT device_name FROM runs WHERE run_id = ?", (run_id,)
+        ).fetchone()
+        if row is not None:
+            try:
+                from soup_cli.utils.run_cost import (
+                    estimate_run_cost_usd,
+                    lookup_gpu_rate,
+                )
+
+                device_name = row["device_name"]
+                cost_usd = estimate_run_cost_usd(device_name, duration_secs)
+                looked = lookup_gpu_rate(device_name)
+                if looked is not None:
+                    cost_label, _ = looked
+            except Exception:  # pragma: no cover - defence in depth
+                cost_usd = None
+                cost_label = None
         conn.execute(
             """UPDATE runs SET
                status = 'completed',
                initial_loss = ?, final_loss = ?,
-               total_steps = ?, duration_secs = ?, output_dir = ?
+               total_steps = ?, duration_secs = ?, output_dir = ?,
+               cost_usd = ?, cost_gpu_label = ?
                WHERE run_id = ?""",
-            (initial_loss, final_loss, total_steps, duration_secs, output_dir, run_id),
+            (
+                initial_loss, final_loss, total_steps, duration_secs, output_dir,
+                cost_usd, cost_label, run_id,
+            ),
         )
         conn.commit()
 
@@ -233,10 +285,17 @@ class ExperimentTracker:
         ).fetchone()
 
         if row is None:
-            # Try prefix match
+            # Try prefix match. Escape LIKE wildcards in user input so a
+            # crafted run_id can't widen the match (% expands to "any").
+            escaped = (
+                run_id.replace("\\", "\\\\")
+                .replace("%", "\\%")
+                .replace("_", "\\_")
+            )
             rows = conn.execute(
-                "SELECT * FROM runs WHERE run_id LIKE ? ORDER BY created_at DESC",
-                (f"{run_id}%",),
+                "SELECT * FROM runs WHERE run_id LIKE ? ESCAPE '\\' "
+                "ORDER BY created_at DESC",
+                (f"{escaped}%",),
             ).fetchall()
             if len(rows) == 1:
                 row = rows[0]

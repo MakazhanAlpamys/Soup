@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import sys
 from pathlib import Path
@@ -137,6 +138,14 @@ def train(
         "--yes",
         "-y",
         help="Skip confirmation prompt",
+    ),
+    profile_run: bool = typer.Option(
+        False,
+        "--profile",
+        help=(
+            "Record a torch.profiler trace (Chrome trace JSON) during early "
+            "training steps. Output: <output>/profiles/<run_id>.trace.json"
+        ),
     ),
 ):
     """Start training from a soup.yaml config."""
@@ -707,11 +716,22 @@ def train(
     display = TrainingDisplay(cfg, device_name=device_name)
     console.print("[bold green]Training started![/]\n")
 
-    try:
-        result = trainer_wrapper.train(
-            display=display, tracker=tracker, run_id=run_id,
-            resume_from_checkpoint=resume_from,
+    profiler_ctx = contextlib.nullcontext()
+    if profile_run:
+        from soup_cli.utils.profiling import profile_training
+
+        profiler_ctx = profile_training(output_dir=Path(cfg.output), run_id=run_id)
+        console.print(
+            "[cyan]--profile:[/] writing torch.profiler trace to "
+            f"{cfg.output}/profiles/{run_id}.trace.json (early-steps window)"
         )
+
+    try:
+        with profiler_ctx:
+            result = trainer_wrapper.train(
+                display=display, tracker=tracker, run_id=run_id,
+                resume_from_checkpoint=resume_from,
+            )
 
         # Save completion to tracker
         tracker.finish_run(
@@ -722,8 +742,31 @@ def train(
             duration_secs=result["duration_secs"],
             output_dir=result["output_dir"],
         )
-    except Exception:
+    except Exception as exc:
         tracker.fail_run(run_id)
+        # v0.34.0 Part D — write a .crash bundle next to the run for triage.
+        try:
+            from soup_cli.utils.crash import build_crash_bundle, write_crash_bundle
+
+            metrics = tracker.get_metrics(run_id)
+            bundle = build_crash_bundle(
+                error=exc,
+                config=cfg.model_dump() if hasattr(cfg, "model_dump") else None,
+                metrics=metrics,
+                run_id=run_id,
+                output_dir=getattr(cfg, "output", None),
+            )
+            crash_path = write_crash_bundle(bundle)
+            console.print(
+                f"[yellow]Crash bundle written:[/] {crash_path}\n"
+                "[dim]Attach this file when reporting the failure.[/]"
+            )
+        except Exception as crash_err:
+            # Never let the crash reporter mask the original error, but tell
+            # the user the bundle is missing so they don't hunt for it.
+            console.print(
+                f"[dim]Could not write crash bundle: {crash_err}[/]"
+            )
         raise
 
     # Report
