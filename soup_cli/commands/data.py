@@ -1169,6 +1169,14 @@ def download_dataset(
         None, "--format", "-f",
         help="Convert to Soup format after download: alpaca, sharegpt, chatml",
     ),
+    trust_remote_code: bool = typer.Option(
+        False,
+        "--trust-remote-code",
+        help=(
+            "Allow datasets that ship custom Python loaders. Default deny "
+            "(v0.36.0). Only enable if you trust the source."
+        ),
+    ),
 ):
     """Download a HuggingFace dataset and save as JSONL."""
     max_download_samples = 1_000_000

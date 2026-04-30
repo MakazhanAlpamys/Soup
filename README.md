@@ -40,14 +40,13 @@ soup train
 
 Latest highlights only. Full history: [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 
-**v0.35.0 — Trainer Coverage**: every training task now uses every speed/memory feature — finishing what v0.28, v0.30, and v0.33 started.
+**v0.36.0 — Correctness First**: four silent-failure modes Soup had → loud failures. Plus a security-hardening default everyone has been asking for.
 
-- **v0.28 features wired into 8 more trainers** — `use_cut_ce`, `quantization_aware="fp8"`, `kernel_auto_compose`, and `activation_offloading` are now live across DPO, GRPO, KTO, ORPO, SimPO, IPO, PPO, Reward-Model, and Embedding (in addition to SFT and pretraining). The schema-gate that previously rejected these flags on non-SFT trainers is lifted; only the Apple Silicon MLX backend still rejects them (no equivalent kernels).
-- **Auto-quant actually swaps the model** — `soup serve --auto-quant` now forwards the picked candidate's quantization (`awq` / `gptq` / `fp8`) to the vLLM engine via an explicit `quantization` parameter, rather than printing the choice and serving the original fp16. Includes a fallback queue (`try_reload_with_fallback`) so a missing AWQ kernel automatically falls back to the next-highest-scored candidate instead of crashing the bind.
-- **Kernel benchmark warm-up runs inside the trainer** — when `kernel_auto_compose=True`, Soup now runs a forward-only timing loop on the trainer's actual model to feed real measurements into `pick_best_kernel`. Forward-only under `torch.no_grad()` so the live training model's gradients are NOT polluted (this was a critical-class bug fixed pre-tag).
-- **fp8 / int8 QAT guard** — six trainer wrappers had `if tcfg.quantization_aware:` without excluding `"fp8"`, which would silently route the FP8 string into the legacy int8 QAT path. Fixed.
-- **40-case smoke matrix** — every trainer × every v0.28 feature is exercised on every CI matrix job (no more "wired in theory, broken in practice" risk).
-- **Distinct error messages** — schema-gate rejection now names the actual reason (MLX backend vs unknown task) so you don't waste time blaming MLX for a non-MLX failure.
+- **Assistant-only loss masking** — Soup now masks non-assistant tokens with `IGNORE_INDEX` (-100) by default, so multi-turn chat data trains only on the assistant turn. Mirrors LlamaFactory + Axolotl. Replaces TRL's heuristic that produced wrong loss labels on intermediate user/system turns. Toggle via `data.train_on_responses_only: false`. Per-message `train: bool` field also supported (`train_on_messages_with_train_field: true`).
+- **`--trust-remote-code` opt-in (default deny)** — `soup train`, `chat`, `serve`, `data download`, `eval auto` now refuse to load HF models that ship custom Python (`auto_map`) unless you pass `--trust-remote-code`. Allowlist of 15 first-party orgs (Meta, Mistral, Qwen, Google, etc.) suppresses warning noise. Replaces 9 unconditional `trust_remote_code=True` call sites.
+- **Hard error on missing chat-template** — Soup no longer silently falls back to `f"{role}: {content}"` (which produced garbage labels). Tokenizers without `chat_template` now raise loudly with a fix suggestion. New `data.chat_template` field accepts a registered name (`chatml` / `llama3` / `qwen2.5` / `mistral` / `gemma3` / `phi4` / `deepseek-r1`) or a raw Jinja string. Filesystem-touching Jinja directives (`include`, `import`, `from`, `macro`, `extends`) are blocked at config-load.
+- **OOM-probe auto batch-size + cache** — `auto_batch_size_strategy: probe` (default `auto`) replaces the static formula with a real try-halve-then-double loop bounded by `max 8 doublings, ceiling = static × 4`. Picked size is cached at `~/.soup/batch_cache.json` keyed on `(model, max_length, quant, lora_r, gpu, gpu_gb)` so repeat runs short-circuit. Cache file written with 0600 perms; env-var override path is containment-checked.
+- **Net +134 tests** (4115 → 4249) covering all four correctness fixes, the Jinja directive blocklist, cache containment, and the trust-remote-code resolution gate.
 
 ## Why Soup?
 
@@ -513,6 +512,54 @@ training:
 `cpu` moves saved tensors to RAM (fast, bounded by system RAM); `disk` writes them to a scratch dir under the training output directory (slower, bounded by free disk). Scratch paths are containment-checked vs the current working directory, `torch.load(weights_only=True)` prevents arbitrary Python deserialization on reload, and the context manager best-effort cleans up scratch files on normal exit **and** on crash.
 
 Not compatible with unsloth (own memory manager) or mlx. Wired across every transformer-backend trainer (SFT, DPO, GRPO, KTO, ORPO, SimPO, IPO, PPO, Reward-Model, Embedding, Pretrain).
+
+## Correctness First (v0.36.0)
+
+Four silent-failure modes Soup had → loud failures.
+
+### Assistant-only loss masking
+
+By default, Soup masks every non-assistant token with `-100` so the SFT loss reflects only what the model should *generate*. Toggle via `data.train_on_responses_only` (default `true`):
+
+```yaml
+data:
+  train: data.jsonl
+  train_on_responses_only: true   # default
+  # OR per-message control:
+  # train_on_messages_with_train_field: true
+```
+
+When the tokenizer ships a chat template with `{% generation %}` markers, the mask is exact. Without those markers, Soup falls back to an incremental tokenize-delta walk and documents the looseness.
+
+### `--trust-remote-code` opt-in
+
+`soup train`, `chat`, `serve`, `data download`, `eval auto` now require `--trust-remote-code` to load any HF model that ships custom Python (`auto_map` in `config.json`). First-party orgs (Meta, Mistral, Qwen, Google, etc.) suppress the warning panel; everything else prints a `REMOTE CODE WARNING` panel before loading.
+
+```bash
+soup train --config soup.yaml --trust-remote-code
+```
+
+### Chat-template hardening
+
+Tokenizers without a chat template now raise a `ValueError` with a fix suggestion instead of silently building garbage `f"{role}: {content}"` strings.
+
+```yaml
+data:
+  train: data.jsonl
+  chat_template: chatml   # or: llama3, qwen2.5, mistral, gemma3, phi4, deepseek-r1, or a raw Jinja string
+```
+
+Raw Jinja strings are validated: null bytes / >64KB / filesystem-touching directives (`{% include %}`, `{% import %}`, `{% from %}`, `{% macro %}`, `{% extends %}`) are rejected at config-load.
+
+### OOM-probe auto batch size
+
+```yaml
+training:
+  batch_size: auto                  # unchanged
+  auto_batch_size_strategy: probe   # NEW: 'static' | 'probe' | 'auto' (default)
+```
+
+Replaces the static memory formula with a real try-halve-then-double-to-ceiling loop. Picked size is cached at `~/.soup/batch_cache.json` keyed on `(model, max_length, quantization, lora_r, gpu_name, gpu_memory_gb)` so repeat runs short-circuit.
 
 ## DPO Training
 

@@ -110,7 +110,7 @@ soup_cli/
   utils/              - GPU, errors, MoE, GaLore, QAT, Unsloth, vLLM, SGLang, Liger, FlashAttn, FSDP, Ring Attention, long-context, quality, curriculum, freeze, dataset-registry, mlx, peft_builder, paths, topology, launcher, mii, pipeline, cut_ce, fp8, gradient_ckpt, kernel_picker, cross_doc_attn, activation_offload, hf, spec_pairing, structured_output, metrics, tracing, auto_quant, lr_finder, grad_accum, mixed_precision, warmup, spike_recovery, convergence, v028_features
   ui/                 - Web UI (FastAPI + HTML/JS SPA)
 
-tests/                - Test suite (112 files, 4115 tests)
+tests/                - Test suite (116 files, 4249 tests)
 examples/             - Real-world config examples and datasets
 ```
 

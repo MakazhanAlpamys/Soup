@@ -410,6 +410,14 @@ def auto(
         None, "--tasks", "-t",
         help="Path to custom eval JSONL (overrides config)",
     ),
+    trust_remote_code: bool = typer.Option(
+        False,
+        "--trust-remote-code",
+        help=(
+            "Allow loading models that ship custom Python via auto_map. "
+            "Default deny (v0.36.0). Only enable if you trust the source."
+        ),
+    ),
 ):
     """Run automatic evaluation using config from soup.yaml."""
     from soup_cli.config.loader import load_config

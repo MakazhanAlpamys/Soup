@@ -166,6 +166,14 @@ def serve(
         "--auto-quant",
         help="Try GGUF/AWQ/GPTQ/FP8 on a tiny eval, pick fastest-at-acceptable-quality.",
     ),
+    trust_remote_code: bool = typer.Option(
+        False,
+        "--trust-remote-code",
+        help=(
+            "Allow loading models that ship custom Python via auto_map. "
+            "Default deny (v0.36.0). Only enable if you trust the source."
+        ),
+    ),
 ):
     """Start a local inference server with OpenAI-compatible API."""
     # Lazy imports for fast CLI startup
@@ -470,12 +478,28 @@ def serve(
             gpu_memory_utilization=gpu_memory_utilization,
         )
     else:
-        # Transformers backend (original)
+        # Transformers backend (original).
+        # v0.36.0 Part B: --trust-remote-code default-deny.
+        from soup_cli.utils.trust_remote import (
+            model_requires_trust_remote_code,
+            resolve_trust_remote_code,
+        )
+
+        probe_target = base_model or str(model_path)
+        requires = model_requires_trust_remote_code(str(model_path)) or False
+        resolved_trust = resolve_trust_remote_code(
+            probe_target,
+            requested=trust_remote_code,
+            console=console,
+            requires_remote_code=requires,
+        )
+
         model_obj, tokenizer = _load_model(
             model_path=str(model_path),
             base_model=base_model,
             is_adapter=is_adapter,
             device=device,
+            trust_remote_code=resolved_trust,
         )
         console.print("[bold green]Model loaded![/]")
 
@@ -678,13 +702,16 @@ def _load_model(
     base_model: Optional[str],
     is_adapter: bool,
     device: str,
+    trust_remote_code: bool = False,
 ):
     """Load model and tokenizer."""
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
     console.print("[dim]Loading tokenizer...[/]")
-    tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_path, trust_remote_code=trust_remote_code
+    )
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
@@ -694,7 +721,7 @@ def _load_model(
         console.print(f"[dim]Loading base model: {base_model}...[/]")
         base = AutoModelForCausalLM.from_pretrained(
             base_model,
-            trust_remote_code=True,
+            trust_remote_code=trust_remote_code,
             device_map="auto",
             dtype=torch.float16,
         )
@@ -704,7 +731,7 @@ def _load_model(
         console.print(f"[dim]Loading model: {model_path}...[/]")
         model_obj = AutoModelForCausalLM.from_pretrained(
             model_path,
-            trust_remote_code=True,
+            trust_remote_code=trust_remote_code,
             device_map="auto",
             dtype=torch.float16,
         )

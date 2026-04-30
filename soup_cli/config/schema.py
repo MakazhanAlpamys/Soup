@@ -80,6 +80,68 @@ class DataConfig(BaseModel):
         default=None,
         description="Base directory for resolving relative audio paths in audio datasets",
     )
+    train_on_responses_only: bool = Field(
+        default=True,
+        description=(
+            "Mask non-assistant tokens with IGNORE_INDEX (-100). When True, "
+            "only assistant content contributes to the SFT loss. Mirrors "
+            "LlamaFactory + Axolotl default — replaces TRL's heuristic. (v0.36.0)"
+        ),
+    )
+    train_on_messages_with_train_field: bool = Field(
+        default=False,
+        description=(
+            "Per-message training mask via messages[i].train: bool. "
+            "Mutually exclusive with train_on_responses_only. (v0.36.0)"
+        ),
+    )
+    chat_template: Optional[str] = Field(
+        default=None,
+        description=(
+            "Override the tokenizer chat template. Accepts a registered "
+            "name (chatml, llama3, qwen2.5, mistral, gemma3, phi4, "
+            "deepseek-r1) or a raw Jinja string. None = use the tokenizer's "
+            "shipped template (errors loudly if absent). (v0.36.0)"
+        ),
+    )
+
+    @field_validator("chat_template")
+    @classmethod
+    def _validate_chat_template(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise ValueError("chat_template must be a string")
+        if not value:
+            return None
+        if "\x00" in value:
+            raise ValueError("chat_template must not contain null bytes")
+        if len(value) > 65536:
+            raise ValueError("chat_template must be <= 64KB")
+        # Block Jinja directives that touch the filesystem or load arbitrary
+        # modules. Only control-flow + variable interpolation are allowed
+        # for raw chat-template strings (v0.36.0 security review fix).
+        lower = value.lower()
+        for tag in ("{%- include", "{% include", "{%- import", "{% import",
+                    "{%- from", "{% from", "{%- macro", "{% macro",
+                    "{%- extends", "{% extends"):
+            if tag in lower:
+                directive = tag.split(None, 1)[-1]
+                raise ValueError(
+                    f"chat_template may not use Jinja '{directive}' directive — "
+                    f"only control-flow and variable interpolation are allowed."
+                )
+        return value
+
+    @model_validator(mode="after")
+    def _validate_loss_mask_exclusivity(self) -> "DataConfig":
+        if self.train_on_responses_only and self.train_on_messages_with_train_field:
+            raise ValueError(
+                "train_on_responses_only and train_on_messages_with_train_field "
+                "are mutually exclusive. Disable one. The per-message 'train' "
+                "field is opt-in for fine-grained per-message control."
+            )
+        return self
 
 
 class EvalGateConfig(BaseModel):
@@ -129,6 +191,14 @@ class TrainingConfig(BaseModel):
     batch_size: Union[int, Literal["auto"]] = Field(
         default="auto",
         description="Batch size. 'auto' = find max that fits in memory.",
+    )
+    auto_batch_size_strategy: Literal["auto", "static", "probe"] = Field(
+        default="auto",
+        description=(
+            "How to pick the auto batch size: 'static' (fast formula), "
+            "'probe' (real OOM try/halve loop), 'auto' (probe on CUDA, "
+            "static on CPU). Default 'auto' (v0.36.0)."
+        ),
     )
     gradient_accumulation_steps: int = Field(default=4, ge=1)
     warmup_ratio: float = Field(default=0.03, ge=0.0, le=0.5)

@@ -139,6 +139,14 @@ def train(
         "-y",
         help="Skip confirmation prompt",
     ),
+    trust_remote_code: bool = typer.Option(
+        False,
+        "--trust-remote-code",
+        help=(
+            "Allow loading models that ship custom Python via auto_map. "
+            "Default deny (v0.36.0). Only enable if you trust the source."
+        ),
+    ),
     profile_run: bool = typer.Option(
         False,
         "--profile",
@@ -641,6 +649,10 @@ def train(
         "deepspeed_config": ds_config_path,
         "fsdp_config": fsdp_kwargs,
     }
+    # SFT path threads --trust-remote-code through the wrapper. Other
+    # trainers still load with trust_remote_code=True at their existing
+    # call sites; v0.36.x patches will extend the same opt-in to them.
+    sft_kwargs = dict(trainer_kwargs, trust_remote_code=trust_remote_code)
     if cfg.task == "dpo":
         from soup_cli.trainer.dpo import DPOTrainerWrapper
 
@@ -682,7 +694,7 @@ def train(
 
         trainer_wrapper = EmbeddingTrainerWrapper(cfg, **trainer_kwargs)
     else:
-        trainer_wrapper = SFTTrainerWrapper(cfg, **trainer_kwargs)
+        trainer_wrapper = SFTTrainerWrapper(cfg, **sft_kwargs)
     trainer_wrapper.setup(dataset)
 
     # --- HF auto-push callback (Part B of v0.29.0) ---

@@ -22,15 +22,32 @@ class SFTTrainerWrapper:
         report_to: str = "none",
         deepspeed_config: Optional[str] = None,
         fsdp_config: Optional[dict] = None,
+        trust_remote_code: bool = False,
     ):
         self.config = config
         self.device = device
         self.report_to = report_to
         self.deepspeed_config = deepspeed_config
         self.fsdp_config = fsdp_config
+        self.trust_remote_code = trust_remote_code
         self.model = None
         self.tokenizer = None
         self.trainer = None
+        # Resolve once — raises ValueError if model needs custom code but
+        # the user did not opt in. Result is cached on the wrapper for use
+        # by every from_pretrained() call below.
+        from soup_cli.utils.trust_remote import (
+            model_requires_trust_remote_code,
+            resolve_trust_remote_code,
+        )
+
+        requires = model_requires_trust_remote_code(config.base) or False
+        self._trust_remote_code = resolve_trust_remote_code(
+            config.base,
+            requested=trust_remote_code,
+            console=console,
+            requires_remote_code=requires,
+        )
 
     def setup(self, dataset: dict):
         """Load model, tokenizer, apply LoRA, create trainer."""
@@ -67,16 +84,36 @@ class SFTTrainerWrapper:
         # --- Batch size ---
         batch_size = tcfg.batch_size
         if batch_size == "auto":
+            from soup_cli.utils.batch_probe import pick_batch_size
             from soup_cli.utils.gpu import get_gpu_info
 
             gpu_info = get_gpu_info()
             model_size = model_size_from_name(cfg.base)
-            batch_size = estimate_batch_size(
+            static_estimate = estimate_batch_size(
                 model_params_b=model_size,
                 seq_length=cfg.data.max_length,
                 gpu_memory_bytes=gpu_info["memory_total_bytes"],
                 quantization=tcfg.quantization,
                 lora_r=tcfg.lora.r,
+            )
+            # v0.36.0 Part D: real OOM probe with cache short-circuit. Falls
+            # back to the static estimate on CPU or when probe_fn unavailable.
+            gpu_memory_gb_total = int(
+                (gpu_info.get("memory_total_bytes") or 0) // (1024 ** 3)
+            )
+            batch_size = pick_batch_size(
+                static_estimate=static_estimate,
+                strategy=tcfg.auto_batch_size_strategy,
+                base=cfg.base,
+                max_length=cfg.data.max_length,
+                quantization=tcfg.quantization,
+                lora_r=tcfg.lora.r,
+                gpu_name=str(gpu_info.get("name") or "cpu"),
+                gpu_memory_gb=gpu_memory_gb_total,
+                probe_fn=None,  # CUDA probe wired in v0.36.x patch — for
+                                # now we honour the cache + static estimate
+                                # so the surface ships with no regression.
+                console=console,
             )
             console.print(f"[green]Auto batch size:[/] {batch_size}")
 
@@ -103,21 +140,13 @@ class SFTTrainerWrapper:
         elif use_audio:
             train_ds, eval_ds = self._prepare_audio_dataset(dataset)
         else:
-            def format_row(example):
-                if hasattr(self.tokenizer, "chat_template") and self.tokenizer.chat_template:
-                    text = self.tokenizer.apply_chat_template(
-                        example["messages"], tokenize=False, add_generation_prompt=False
-                    )
-                else:
-                    # Fallback for models without chat template
-                    parts = []
-                    for msg in example["messages"]:
-                        role = msg["role"]
-                        content = msg["content"]
-                        parts.append(f"{role}: {content}")
-                    text = "\n".join(parts)
-                return {"text": text}
+            from soup_cli.data.sft_format import build_format_row
 
+            format_row = build_format_row(
+                tokenizer=self.tokenizer,
+                data_cfg=cfg.data,
+                console=console,
+            )
             train_ds = Dataset.from_list(dataset["train"]).map(
                 format_row, remove_columns=["messages"]
             )
@@ -339,7 +368,9 @@ class SFTTrainerWrapper:
                 )
 
         console.print(f"[dim]Loading tokenizer: {cfg.base}[/]")
-        self.tokenizer = AutoTokenizer.from_pretrained(cfg.base, trust_remote_code=True)
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            cfg.base, trust_remote_code=self._trust_remote_code
+        )
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
@@ -360,7 +391,10 @@ class SFTTrainerWrapper:
         console.print(f"[dim]Loading model: {cfg.base}[/]")
         # On CPU, use device_map="cpu" to avoid meta tensors from "auto"
         dev_map = "cpu" if self.device == "cpu" else "auto"
-        model_kwargs = {"trust_remote_code": True, "device_map": dev_map}
+        model_kwargs = {
+            "trust_remote_code": self._trust_remote_code,
+            "device_map": dev_map,
+        }
         if bnb_config:
             model_kwargs["quantization_config"] = bnb_config
 
@@ -493,7 +527,9 @@ class SFTTrainerWrapper:
         from transformers import AutoModelForVision2Seq, AutoProcessor, BitsAndBytesConfig
 
         console.print(f"[dim]Loading vision processor: {cfg.base}[/]")
-        self.processor = AutoProcessor.from_pretrained(cfg.base, trust_remote_code=True)
+        self.processor = AutoProcessor.from_pretrained(
+            cfg.base, trust_remote_code=self._trust_remote_code
+        )
         self.tokenizer = self.processor  # SFTTrainer uses processing_class
 
         # Quantization
@@ -512,7 +548,10 @@ class SFTTrainerWrapper:
 
         console.print(f"[dim]Loading vision model: {cfg.base}[/]")
         dev_map = "cpu" if self.device == "cpu" else "auto"
-        model_kwargs = {"trust_remote_code": True, "device_map": dev_map}
+        model_kwargs = {
+            "trust_remote_code": self._trust_remote_code,
+            "device_map": dev_map,
+        }
         if bnb_config:
             model_kwargs["quantization_config"] = bnb_config
 
@@ -594,7 +633,9 @@ class SFTTrainerWrapper:
             )
         )
         console.print(f"[dim]Loading audio processor: {cfg.base}[/]")
-        self.processor = AutoProcessor.from_pretrained(cfg.base, trust_remote_code=True)
+        self.processor = AutoProcessor.from_pretrained(
+            cfg.base, trust_remote_code=self._trust_remote_code
+        )
         self.tokenizer = self.processor  # SFTTrainer uses processing_class
 
         # Quantization
@@ -613,7 +654,10 @@ class SFTTrainerWrapper:
 
         console.print(f"[dim]Loading audio model: {cfg.base}[/]")
         dev_map = "cpu" if self.device == "cpu" else "auto"
-        model_kwargs = {"trust_remote_code": True, "device_map": dev_map}
+        model_kwargs = {
+            "trust_remote_code": self._trust_remote_code,
+            "device_map": dev_map,
+        }
         if bnb_config:
             model_kwargs["quantization_config"] = bnb_config
 
