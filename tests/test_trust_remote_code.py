@@ -7,10 +7,22 @@ trusted-org allowlist that suppresses noise on first-party models.
 
 from __future__ import annotations
 
+import re
 from io import StringIO
 
 import pytest
 from rich.console import Console
+
+# Rich help renderer can split a flag like --trust-remote-code with ANSI
+# colour escapes between `-`, `-trust`, `-remote-code` when the terminal
+# is narrow (macOS CI runners hit this; Windows local does not). Strip
+# ANSI so substring assertions are robust. Mirrors the helper in
+# tests/test_log_level.py.
+_ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*[mK]")
+
+
+def _strip_ansi(text: str) -> str:
+    return _ANSI_ESCAPE.sub("", text)
 
 # ---------------------------------------------------------------------------
 # Allowlist
@@ -243,7 +255,7 @@ class TestCLIPlumbing:
         runner = CliRunner()
         result = runner.invoke(app, ["train", "--help"])
         assert result.exit_code == 0
-        assert "--trust-remote-code" in result.output
+        assert "--trust-remote-code" in _strip_ansi(result.output), result.output
 
     def test_chat_help_lists_flag(self):
         from typer.testing import CliRunner
@@ -253,7 +265,7 @@ class TestCLIPlumbing:
         runner = CliRunner()
         result = runner.invoke(app, ["chat", "--help"])
         assert result.exit_code == 0
-        assert "--trust-remote-code" in result.output
+        assert "--trust-remote-code" in _strip_ansi(result.output), result.output
 
     def test_serve_help_lists_flag(self):
         from typer.testing import CliRunner
@@ -263,4 +275,4 @@ class TestCLIPlumbing:
         runner = CliRunner()
         result = runner.invoke(app, ["serve", "--help"])
         assert result.exit_code == 0
-        assert "--trust-remote-code" in result.output
+        assert "--trust-remote-code" in _strip_ansi(result.output), result.output
