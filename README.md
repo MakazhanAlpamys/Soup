@@ -40,13 +40,15 @@ soup train
 
 Latest highlights only. Full history: [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 
-**v0.36.0 — Correctness First**: four silent-failure modes Soup had → loud failures. Plus a security-hardening default everyone has been asking for.
+**v0.37.0 — Multipack**: First-Fit-Decreasing bin-packing sampler — the single biggest visible perf-win for chat fine-tuning on uneven-length data.
 
-- **Assistant-only loss masking** — Soup now masks non-assistant tokens with `IGNORE_INDEX` (-100) by default, so multi-turn chat data trains only on the assistant turn. Mirrors LlamaFactory + Axolotl. Replaces TRL's heuristic that produced wrong loss labels on intermediate user/system turns. Toggle via `data.train_on_responses_only: false`. Per-message `train: bool` field also supported (`train_on_messages_with_train_field: true`).
-- **`--trust-remote-code` opt-in (default deny)** — `soup train`, `chat`, `serve`, `data download`, `eval auto` now refuse to load HF models that ship custom Python (`auto_map`) unless you pass `--trust-remote-code`. Allowlist of 15 first-party orgs (Meta, Mistral, Qwen, Google, etc.) suppresses warning noise. Replaces 9 unconditional `trust_remote_code=True` call sites.
-- **Hard error on missing chat-template** — Soup no longer silently falls back to `f"{role}: {content}"` (which produced garbage labels). Tokenizers without `chat_template` now raise loudly with a fix suggestion. New `data.chat_template` field accepts a registered name (`chatml` / `llama3` / `qwen2.5` / `mistral` / `gemma3` / `phi4` / `deepseek-r1`) or a raw Jinja string. Filesystem-touching Jinja directives (`include`, `import`, `from`, `macro`, `extends`) are blocked at config-load.
-- **OOM-probe auto batch-size + cache** — `auto_batch_size_strategy: probe` (default `auto`) replaces the static formula with a real try-halve-then-double loop bounded by `max 8 doublings, ceiling = static × 4`. Picked size is cached at `~/.soup/batch_cache.json` keyed on `(model, max_length, quant, lora_r, gpu, gpu_gb)` so repeat runs short-circuit. Cache file written with 0600 perms; env-var override path is containment-checked.
-- **Net +134 tests** (4115 → 4249) covering all four correctness fixes, the Jinja directive blocklist, cache containment, and the trust-remote-code resolution gate.
+- **MultipackBatchSampler** — pure-Python FFD bin packer (no numba dependency) that groups variable-length samples into bins approaching `batch_size × max_seq_length` instead of padding every sample to `max_seq_length`. Two modes: `real_batches=True` (yields list-of-bins; collator stacks bins) and `real_batches=False` (Axolotl's micro-batch-as-flat-sequence trick). Deterministic across DDP ranks via shared seed.
+- **Loud-fail architecture allowlist** — 18 supported architectures (Llama 3.x, Qwen 2/3, Mistral, Gemma 2/3, Phi 3/4, DeepSeek V2/V3, Mixtral, Falcon, StableLM, SmolLM2). Unknown architecture raises `ValueError` at config-load instead of silently no-opping. Critical fix vs Axolotl's silent-miss footgun.
+- **`neat_packing` 4D attention mask** — block-diagonal segment-aware mask `(B, 1, S, S)` for backends without FlashAttention. Auto-selects between FA varlen path and 4D mask via `select_packing_strategy`. Composes with v0.28.0 `packing_cross_doc_attn_mask`: multipack picks WHICH samples go together, neat_packing builds the float-additive mask.
+- **JinjaTemplateAnalyzer** — walks chat-template AST to discover referenced `message[...]` fields. Catches both `m.role` and `m["role"]` access. Used by the v0.36.0 `train_on_messages_with_train_field` path so per-message training masks are aware of non-standard fields (`tool_calls`, `name`, `weight`). Parse-only — never renders the template, so a crafted soup.yaml cannot trigger SSRF.
+- **Schema gates** — `multipack` and `packing` are mutually exclusive. Multipack only ships for `sft` / `pretrain` tasks on the `transformers` backend in v0.37.0; preference / RLHF trainers + MLX backend get distinct error messages naming the actual reason.
+- **DoS hardening** — `_MAX_FFD_ITEMS=1_000_000` (algorithm is O(N²) worst-case), `_MAX_MASK_ELEMENTS=2³¹` cells (~8GB float32 cap), `_MAX_BOUNDARY_SEGMENTS=1_000_000`, 128KB chat-template cap.
+- **Net +125 tests** (4249 → 4374) including 5k-sample stress tests, 4-seed property tests for no-duplicates / full-coverage / pack-len bound invariants, cross-module FFD-to-4D-mask coherence, and bool-rejection on every numeric input.
 
 ## Why Soup?
 
@@ -499,6 +501,29 @@ training:
 ```
 
 The mask builder is numpy-vectorised (`np.tril` per block) to stay fast at large `max_length`. Misconfiguring it without `packing: true` is rejected at config-load time.
+
+## Multipack — FFD Bin-Packing Sampler
+
+Soup's largest single throughput win on chat fine-tuning over uneven-length data. Instead of padding every sample to `max_length`, Multipack uses **First-Fit-Decreasing bin packing** to group variable-length samples into bins approaching `batch_size × max_seq_length` — eliminating padding waste.
+
+```yaml
+training:
+  multipack: true
+  packing: false   # mutually exclusive with multipack
+```
+
+**How it composes:**
+- **Multipack** picks WHICH samples go together (FFD packing).
+- **`packing_cross_doc_attn_mask`** sets HOW the attention mask is built (block-diagonal causal — see section above).
+- The two layer cleanly: enable both for FA-incompatible backends; FA varlen path is auto-selected when FlashAttention is available.
+
+**Architecture allowlist** — 18 supported (Llama 3.x, Qwen 2/3, Mistral, Gemma 2/3, Phi 3/4, DeepSeek V2/V3, Mixtral, Falcon, StableLM, SmolLM2). Unknown architectures **fail loudly at config-load** instead of silently no-opping (critical fix vs Axolotl's silent-miss footgun).
+
+**v0.37.0 scope:** schema gate + helper builder ship now. Live wiring of the sampler into HF Trainer's `_get_train_sampler` lands in v0.37.1 (mirrors v0.27.0 MII stub-then-live pattern). Multipack is **sft / pretrain only** on the `transformers` backend; preference / RLHF trainers and MLX backend get distinct error messages naming the actual reason.
+
+**DoS hardening** — the FFD packer caps at 1M items (algorithm is O(N²) worst-case); the 4D mask builder caps allocations at 2³¹ cells; the chat-template Jinja analyzer caps at 128KB. Every numeric input rejects `bool` explicitly (matches v0.30.0+ project policy).
+
+The `JinjaTemplateAnalyzer` (also v0.37.0) walks chat-template ASTs to discover non-standard `message.<field>` references (`tool_calls`, `name`, `weight`, `train`) — used by the v0.36.0 `train_on_messages_with_train_field` path so per-message training masks are aware of fields beyond `role` / `content`. The analyzer parses templates without rendering them, so a crafted `soup.yaml` cannot trigger SSRF.
 
 ## Activation Offloading (Small-VRAM Large-Batch)
 

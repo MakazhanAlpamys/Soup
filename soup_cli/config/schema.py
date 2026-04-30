@@ -507,6 +507,16 @@ class TrainingConfig(BaseModel):
         default=False,
         description="Pack multiple short samples into one sequence for faster training",
     )
+    # v0.37.0 — Multipack First-Fit-Decreasing bin-packing sampler
+    multipack: bool = Field(
+        default=False,
+        description=(
+            "Use FFD bin-packing sampler to maximise tokens-per-batch on "
+            "uneven-length data. Mutually exclusive with packing. Only "
+            "supported for sft / pretrain tasks (transformers backend). "
+            "(v0.37.0)."
+        ),
+    )
     # NEFTune — noisy embeddings for better fine-tuning
     neftune_alpha: Optional[float] = Field(
         default=None,
@@ -610,6 +620,23 @@ class TrainingConfig(BaseModel):
             raise ValueError(
                 "packing_cross_doc_attn_mask requires packing=true "
                 "(cross-doc attention masking only applies to packed sequences)"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_multipack_packing_exclusive(self) -> "TrainingConfig":
+        """Multipack and packing are mutually exclusive — pick one (v0.37.0).
+
+        Both rewrite the batch composition; running them together produces
+        ill-defined sample boundaries. Plan: long term, multipack subsumes
+        packing — but for v0.37.0 we keep them as separate opt-ins.
+        """
+        if self.multipack and self.packing:
+            raise ValueError(
+                "multipack and packing are mutually exclusive — "
+                "pick one (multipack uses FFD bin-packing; packing "
+                "uses TRL's basic packer). For most uses, multipack=true "
+                "is the better choice."
             )
         return self
 
@@ -733,6 +760,32 @@ class SoupConfig(BaseModel):
             f"task={self.task!r}. Supported tasks: see "
             "soup_cli.utils.v028_features.supports_v028_features."
         )
+
+    @model_validator(mode="after")
+    def _validate_multipack_supported_tasks(self) -> "SoupConfig":
+        """v0.37.0 — multipack only ships for sft / pretrain on transformers.
+
+        Multipack rewrites the DataLoader sampler; preference / RLHF tasks
+        in v0.37.0 still use the per-pair sampler shape from TRL. MLX
+        backend has its own DataLoader path and is not wired.
+        """
+        if not self.training.multipack:
+            return self
+        from soup_cli.utils.multipack import supports_multipack
+
+        if self.backend == "mlx":
+            raise ValueError(
+                "multipack=true is not supported on the mlx backend "
+                "in v0.37.0 (sampler injection is HF Trainer-specific). "
+                "Use backend='transformers' or set multipack: false."
+            )
+        if not supports_multipack(self.task):
+            raise ValueError(
+                f"multipack=true is not supported for task={self.task!r} "
+                "in v0.37.0 (only sft and pretrain are wired). "
+                "Set multipack: false or switch task."
+            )
+        return self
 
     @model_validator(mode="after")
     def _validate_mlx_task_support(self) -> "SoupConfig":
