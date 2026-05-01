@@ -40,15 +40,16 @@ soup train
 
 Latest highlights only. Full history: [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 
-**v0.37.0 — Multipack**: First-Fit-Decreasing bin-packing sampler — the single biggest visible perf-win for chat fine-tuning on uneven-length data.
+**v0.38.0 — Quant Menu**: 7 new train-time quantization formats. Train LoRA on top of any pre-quantized base model — close the width gap with LlamaFactory.
 
-- **MultipackBatchSampler** — pure-Python FFD bin packer (no numba dependency) that groups variable-length samples into bins approaching `batch_size × max_seq_length` instead of padding every sample to `max_seq_length`. Two modes: `real_batches=True` (yields list-of-bins; collator stacks bins) and `real_batches=False` (Axolotl's micro-batch-as-flat-sequence trick). Deterministic across DDP ranks via shared seed.
-- **Loud-fail architecture allowlist** — 18 supported architectures (Llama 3.x, Qwen 2/3, Mistral, Gemma 2/3, Phi 3/4, DeepSeek V2/V3, Mixtral, Falcon, StableLM, SmolLM2). Unknown architecture raises `ValueError` at config-load instead of silently no-opping. Critical fix vs Axolotl's silent-miss footgun.
-- **`neat_packing` 4D attention mask** — block-diagonal segment-aware mask `(B, 1, S, S)` for backends without FlashAttention. Auto-selects between FA varlen path and 4D mask via `select_packing_strategy`. Composes with v0.28.0 `packing_cross_doc_attn_mask`: multipack picks WHICH samples go together, neat_packing builds the float-additive mask.
-- **JinjaTemplateAnalyzer** — walks chat-template AST to discover referenced `message[...]` fields. Catches both `m.role` and `m["role"]` access. Used by the v0.36.0 `train_on_messages_with_train_field` path so per-message training masks are aware of non-standard fields (`tool_calls`, `name`, `weight`). Parse-only — never renders the template, so a crafted soup.yaml cannot trigger SSRF.
-- **Schema gates** — `multipack` and `packing` are mutually exclusive. Multipack only ships for `sft` / `pretrain` tasks on the `transformers` backend in v0.37.0; preference / RLHF trainers + MLX backend get distinct error messages naming the actual reason.
-- **DoS hardening** — `_MAX_FFD_ITEMS=1_000_000` (algorithm is O(N²) worst-case), `_MAX_MASK_ELEMENTS=2³¹` cells (~8GB float32 cap), `_MAX_BOUNDARY_SEGMENTS=1_000_000`, 128KB chat-template cap.
-- **Net +125 tests** (4249 → 4374) including 5k-sample stress tests, 4-seed property tests for no-duplicates / full-coverage / pack-len bound invariants, cross-module FFD-to-4D-mask coherence, and bool-rejection on every numeric input.
+- **GPTQ / AWQ / HQQ / AQLM / EETQ / MXFP4 / FP8** — set `training.quantization` to one of `gptq` / `awq` / `hqq:1bit`..`hqq:8bit` / `aqlm` / `eetq` / `mxfp4` / `fp8`. Loaded as `quantization_config` on the underlying `from_pretrained` call; LoRA trains on top.
+- **HQQ wide bit range** — 1, 2, 3, 4, 5, 6, or 8 bits via `hqq:Nbit` syntax. `hqq:7bit` is intentionally rejected (HQQ does not support it).
+- **Compatibility matrix enforced at startup** — `check_quant_distributed_compat` hard-fails HQQ/EETQ/AQLM × {FSDP, ZeRO-3} (sourced from LlamaFactory `quantization.py:199/211`). BNB-4bit + FSDP without `bnb_4bit_quant_storage` emits a yellow warning before the silent 2-3x perf cliff hits.
+- **`bnb_4bit_quant_storage` field** — set to `bfloat16` / `float16` for the canonical FSDP+QLoRA combo ("crucial for fsdp+qlora" — LlamaFactory `quantization.py:178`). Schema rejects the setting on any non-BNB-4bit format.
+- **`docs/QUANTIZATION.md`** — full compatibility matrix (format × {DDP / FSDP / ZeRO-1 / ZeRO-2 / ZeRO-3}) with per-format optional dep + use case.
+- **Pre-quantized + QAT mutually exclusive** — every pre-quantized format combined with `quantization_aware` (int8 QAT or `'fp8'`) is rejected at config-load with the actual reason.
+- **v0.38.0 scope** — wired into the SFT trainer + transformers backend. Multi-trainer expansion (DPO/GRPO/KTO/...) tracked for v0.38.1, mirroring v0.27.0 MII / v0.37.0 multipack stub-then-live pattern.
+- **Net +61 tests** (4374 → 4435) covering schema acceptance, builder shape, checkpoint validators, cross-validators, the 7-row × 5-column compat matrix, modality/task/backend gate coverage, adversarial inputs (oversized HQQ suffix, bool group_size, hyphenated DeepSpeed presets), and the central loader entry point.
 
 ## Why Soup?
 
@@ -501,6 +502,51 @@ training:
 ```
 
 The mask builder is numpy-vectorised (`np.tril` per block) to stay fast at large `max_length`. Misconfiguring it without `packing: true` is rejected at config-load time.
+
+## Quant Menu — 9 Quantization Formats
+
+Pick the right quantization format for your base model and hardware. Soup
+loads the appropriate `quantization_config` and trains LoRA on top:
+
+```yaml
+# Train LoRA on top of a pre-quantized GPTQ checkpoint:
+base: TheBloke/Llama-2-7B-Chat-GPTQ
+training:
+  quantization: gptq        # or: awq, hqq:4bit, aqlm, eetq, mxfp4, fp8
+
+# FSDP + QLoRA — set quant_storage:
+training:
+  quantization: 4bit
+  bnb_4bit_quant_storage: bfloat16
+```
+
+| Format | Bits | Use case | Optional dep |
+|---|---|---|---|
+| `4bit` | 4 | Default. Best general LoRA training. | bitsandbytes |
+| `8bit` | 8 | Larger memory budget, more accurate gradients. | bitsandbytes |
+| `none` | 16/32 | Full fine-tuning or DPO/PPO without quant. | — |
+| `gptq` | 2/3/4/8 | Train LoRA on top of an existing GPTQ checkpoint. | gptqmodel |
+| `awq` | 4 | Train LoRA on top of an existing AWQ checkpoint. | autoawq |
+| `hqq:Nbit` | 1, 2, 3, 4, 5, 6, 8 | Wide bit range; compose with LoRA. | hqq |
+| `aqlm` | 2 | Extreme compression. | aqlm |
+| `eetq` | 8 | Fast 8-bit kernel for SM75+. | eetq |
+| `mxfp4` | 4 | Newer 4-bit type with better activation distribution. | bitsandbytes ≥ 0.45 |
+| `fp8` | — | Train fp16/bf16 on top of FP8-released checkpoints. | transformers ≥ 4.45 |
+
+**Compatibility matrix.** `soup train` runs `check_quant_distributed_compat()` at
+startup. HQQ / EETQ / AQLM hard-fail with FSDP and ZeRO-3 (sourced from
+LlamaFactory's matrix at `quantization.py:199/211`); BNB 4-bit + FSDP without
+`bnb_4bit_quant_storage` emits a yellow warning. See [`docs/QUANTIZATION.md`](docs/QUANTIZATION.md)
+for the full table.
+
+**Pre-quantized + QAT.** `gptq` / `awq` / `hqq:*` / `aqlm` / `eetq` / `mxfp4` /
+`fp8` all carry their own scale; combining with `quantization_aware` (int8 QAT or
+`'fp8'`) is rejected at config-load.
+
+**v0.38.0 scope** — wired into the SFT trainer + transformers backend.
+Multi-trainer expansion is tracked for v0.38.1 (mirrors v0.27.0 MII /
+v0.37.0 multipack stub-then-live pattern). MLX backend gets a distinct error
+message naming the actual reason.
 
 ## Multipack — FFD Bin-Packing Sampler
 

@@ -205,9 +205,51 @@ class TrainingConfig(BaseModel):
     weight_decay: float = Field(default=0.01, ge=0.0)
     max_grad_norm: float = Field(default=1.0, gt=0)
     lora: LoraConfig = Field(default_factory=LoraConfig)
-    quantization: Literal["4bit", "8bit", "none"] = Field(
+    quantization: Literal[
+        "4bit",
+        "8bit",
+        "none",
+        "gptq",
+        "awq",
+        "hqq:1bit",
+        "hqq:2bit",
+        "hqq:3bit",
+        "hqq:4bit",
+        "hqq:5bit",
+        "hqq:6bit",
+        "hqq:8bit",
+        "aqlm",
+        "eetq",
+        "mxfp4",
+        "fp8",
+    ] = Field(
         default="4bit",
-        description="Quantization: 4bit (QLoRA), 8bit, or none (full precision)",
+        description=(
+            "Quantization (v0.38.0 — Quant Menu): "
+            "4bit (BNB QLoRA), 8bit (BNB), none, "
+            "gptq / awq (load pre-quantized checkpoint, train LoRA on top), "
+            "hqq:Nbit (HQQ 1-8 bit, N in {1..6, 8}), "
+            "aqlm (extreme 2-bit), eetq (8-bit fast), "
+            "mxfp4 (BNB 4-bit MXFP4 quant_type), "
+            "fp8 (load FP8 checkpoint with dequantize-on-load)."
+        ),
+    )
+    gptq_disable_exllama: bool = Field(
+        default=True,
+        description=(
+            "v0.38.0 — disable exllama backend for GPTQ. PEFT requires triton "
+            "backend; exllama silently breaks adapter training."
+        ),
+    )
+    bnb_4bit_quant_storage: Optional[
+        Literal["uint8", "float16", "bfloat16", "float32"]
+    ] = Field(
+        default=None,
+        description=(
+            "v0.38.0 Part G — BNB 4-bit storage dtype. Required for FSDP+QLoRA "
+            "(set to 'bfloat16' or 'float16' to match compute dtype). "
+            "When None, BNB picks 'uint8' (legacy default)."
+        ),
     )
     quantization_aware: Union[bool, Literal["fp8"]] = Field(
         default=False,
@@ -651,6 +693,42 @@ class TrainingConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def _validate_prequantized_no_qat(self) -> "TrainingConfig":
+        """v0.38.0 — Pre-quantized formats + QAT is incompatible.
+
+        GPTQ / AWQ / HQQ / AQLM / EETQ / MXFP4 / FP8 checkpoints all carry
+        their own scale; routing them through torchao QAT or float8 prepare
+        would corrupt the dequantized weights. Mirrors LlamaFactory's similar
+        guard at quantization.py:117 / :199 / :211.
+        """
+        from soup_cli.utils.quant_menu import is_quant_menu_format
+
+        if is_quant_menu_format(self.quantization) and self.quantization_aware:
+            raise ValueError(
+                f"quantization={self.quantization!r} is incompatible with "
+                f"quantization_aware ({self.quantization_aware!r}). "
+                "Pre-quantized checkpoints carry their own scale; "
+                "QAT/FP8 prepare cannot compose. Set quantization_aware: false."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_bnb_quant_storage_only_with_4bit(self) -> "TrainingConfig":
+        """v0.38.0 Part G — bnb_4bit_quant_storage applies only to BNB 4-bit
+        and MXFP4 (which is a BNB 4-bit variant). Setting it on any other
+        format is a silent no-op — fail fast.
+        """
+        if self.bnb_4bit_quant_storage is None:
+            return self
+        if self.quantization not in ("4bit", "mxfp4"):
+            raise ValueError(
+                f"bnb_4bit_quant_storage={self.bnb_4bit_quant_storage!r} "
+                f"requires quantization in {{'4bit', 'mxfp4'}}, got "
+                f"{self.quantization!r}."
+            )
+        return self
+
+    @model_validator(mode="after")
     def _validate_fp8_recipe_requires_fp8(self) -> "TrainingConfig":
         """fp8_recipe is only meaningful when quantization_aware='fp8'."""
         if self.fp8_recipe != "tensorwise" and self.quantization_aware != "fp8":
@@ -784,6 +862,38 @@ class SoupConfig(BaseModel):
                 f"multipack=true is not supported for task={self.task!r} "
                 "in v0.37.0 (only sft and pretrain are wired). "
                 "Set multipack: false or switch task."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_quant_menu_supported_tasks(self) -> "SoupConfig":
+        """v0.38.0 — Quant Menu (gptq/awq/hqq:Nbit/aqlm/eetq/mxfp4/fp8) is wired
+        in the SFT trainer only. Multi-trainer expansion deferred to v0.38.1
+        (mirrors v0.27.0 MII / v0.37.0 multipack stub-then-live pattern).
+        """
+        from soup_cli.utils.quant_menu import is_quant_menu_format
+
+        quant = self.training.quantization
+        # bnb 4bit / 8bit / none always apply universally — pre-existing.
+        if not is_quant_menu_format(quant):
+            return self
+        if self.backend == "mlx":
+            raise ValueError(
+                f"quantization={quant!r} is not supported on the mlx backend "
+                "(no equivalent kernels). Use backend='transformers' or "
+                "switch to quantization in {'4bit', '8bit', 'none'}."
+            )
+        if self.task != "sft":
+            raise ValueError(
+                f"quantization={quant!r} (Quant Menu) is wired for task='sft' "
+                f"only in v0.38.0; got task={self.task!r}. Multi-trainer "
+                "wiring is tracked for v0.38.1."
+            )
+        if self.modality != "text":
+            raise ValueError(
+                f"quantization={quant!r} (Quant Menu) is wired for "
+                f"modality='text' only in v0.38.0; got modality={self.modality!r}. "
+                "Vision/audio multi-modal wiring is tracked for v0.38.1."
             )
         return self
 

@@ -324,6 +324,25 @@ def train(
         fsdp_kwargs = get_fsdp_training_args(fsdp)
         console.print(f"[green]FSDP2 enabled:[/] {fsdp}")
 
+    # --- v0.38.0 Quant Menu × multi-GPU compatibility check ---
+    from soup_cli.utils.quant_menu import check_quant_distributed_compat
+
+    quant_problems = check_quant_distributed_compat(
+        quantization=cfg.training.quantization,
+        deepspeed=deepspeed,
+        fsdp=bool(fsdp),
+        bnb_4bit_quant_storage=cfg.training.bnb_4bit_quant_storage,
+    )
+    if quant_problems:
+        hard = [p for p in quant_problems if not p.lower().startswith("warning")]
+        warn = [p for p in quant_problems if p.lower().startswith("warning")]
+        for problem in hard:
+            console.print(f"[red]Quant compat:[/] {problem}")
+        for problem in warn:
+            console.print(f"[yellow]{problem}[/]")
+        if hard:
+            raise typer.Exit(1)
+
     # --- Multi-GPU topology + --gpus resolution ---
     num_gpus = None
     if gpus:
