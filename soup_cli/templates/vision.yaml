@@ -1,0 +1,26 @@
+# Soup template: Vision / Multimodal
+# Fine-tune a vision-language model for image understanding
+
+base: meta-llama/Llama-3.2-11B-Vision-Instruct
+task: sft
+modality: vision
+# backend: unsloth  # 2-5x faster, pip install 'soup-cli[fast]'
+
+data:
+  train: ./data/vision_train.jsonl
+  format: llava
+  image_dir: ./data/images
+  val_split: 0.1
+  max_length: 2048
+
+training:
+  epochs: 3
+  lr: 1e-5
+  batch_size: auto
+  lora:
+    r: 64
+    alpha: 16
+    target_modules: auto
+  quantization: 4bit
+
+output: ./output

@@ -1,0 +1,30 @@
+# Soup template: KTO (Kahneman-Tversky Optimization)
+# Align a model using unpaired preference data (no need for chosen+rejected pairs)
+#
+# Data format (JSONL):
+#   {"prompt": "What is 2+2?", "completion": "4", "label": true}
+#   {"prompt": "What is 2+2?", "completion": "Fish", "label": false}
+
+base: meta-llama/Llama-3.1-8B-Instruct
+task: kto
+# backend: unsloth  # 2-5x faster, pip install 'soup-cli[fast]'
+
+data:
+  train: ./data/kto_train.jsonl
+  format: kto
+  val_split: 0.1
+  max_length: 2048
+
+training:
+  epochs: 3
+  lr: 1e-5
+  batch_size: auto
+  gradient_accumulation_steps: 4
+  lora:
+    r: 64
+    alpha: 16
+    target_modules: auto
+  quantization: 4bit
+  kto_beta: 0.1
+
+output: ./output

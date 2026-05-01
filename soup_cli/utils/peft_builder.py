@@ -50,7 +50,18 @@ def build_peft_config(
         "use_rslora": lora_cfg.use_rslora,
     }
 
-    if lora_cfg.use_olora:
+    # v0.39.0 Part C — per-pattern rank/alpha (peft natively supports these)
+    if lora_cfg.rank_pattern:
+        init_kwargs["rank_pattern"] = dict(lora_cfg.rank_pattern)
+    if lora_cfg.alpha_pattern:
+        init_kwargs["alpha_pattern"] = dict(lora_cfg.alpha_pattern)
+
+    # init_strategy is the canonical source; use_olora is back-compat (validator
+    # aligns init_strategy='olora' when use_olora=True).
+    if lora_cfg.init_strategy in ("pissa", "olora"):
+        init_kwargs["init_lora_weights"] = lora_cfg.init_strategy
+    elif lora_cfg.use_olora:
+        # Defensive fallback if init_strategy alignment was bypassed.
         init_kwargs["init_lora_weights"] = "olora"
 
     return {

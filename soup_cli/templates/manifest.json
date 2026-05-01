@@ -1,0 +1,21 @@
+{
+  "templates": {
+    "audio": "audio.yaml",
+    "chat": "chat.yaml",
+    "code": "code.yaml",
+    "embedding": "embedding.yaml",
+    "ipo": "ipo.yaml",
+    "kto": "kto.yaml",
+    "longcontext": "longcontext.yaml",
+    "medical": "medical.yaml",
+    "moe": "moe.yaml",
+    "orpo": "orpo.yaml",
+    "pretrain": "pretrain.yaml",
+    "reasoning": "reasoning.yaml",
+    "rlhf": "rlhf.yaml",
+    "simpo": "simpo.yaml",
+    "tool-calling": "tool-calling.yaml",
+    "vision": "vision.yaml"
+  },
+  "version": 1
+}

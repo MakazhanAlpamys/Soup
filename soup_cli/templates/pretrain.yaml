@@ -1,0 +1,30 @@
+# Soup template: Continued Pre-training
+# Continue pre-training a model on raw text data (domain adaptation)
+#
+# Data format (JSONL):
+#   {"text": "Your raw text document here..."}
+#
+# Or plain .txt files (one document per line or entire file as one document).
+
+base: meta-llama/Llama-3.1-8B
+task: pretrain
+# backend: unsloth  # 2-5x faster, pip install 'soup-cli[fast]'
+
+data:
+  train: ./data/corpus.jsonl
+  format: plaintext
+  val_split: 0.05
+  max_length: 4096
+
+training:
+  epochs: 1
+  lr: 1e-5
+  batch_size: auto
+  gradient_accumulation_steps: 8
+  lora:
+    r: 64
+    alpha: 16
+    target_modules: auto
+  quantization: 4bit
+
+output: ./output_pretrain

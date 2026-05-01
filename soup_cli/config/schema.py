@@ -1,9 +1,13 @@
 """Pydantic schemas for soup.yaml config — single source of truth."""
 
 import re
-from typing import List, Literal, Optional, Union
+from typing import Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, Field, field_validator, model_validator
+
+# v0.39.0 Part C — per-pattern LoRA rank/alpha bounds
+_MAX_LORA_RANK_PATTERN_KEYS = 256
+_MAX_LORA_RANK_PATTERN_VALUE = 1024
 
 
 class LoraConfig(BaseModel):
@@ -35,7 +39,35 @@ class LoraConfig(BaseModel):
         description=(
             "Enable OLoRA (Orthogonal LoRA init via QR decomposition). "
             "Passes init_lora_weights='olora' to peft. "
-            "Mutually exclusive with use_dora and use_vera."
+            "Mutually exclusive with use_dora and use_vera. "
+            "Equivalent to init_strategy='olora'."
+        ),
+    )
+    rank_pattern: Optional[Dict[str, int]] = Field(
+        default=None,
+        description=(
+            "Per-target-module-pattern LoRA rank override. Maps module name "
+            "patterns (e.g. 'q_proj', 'experts.*.w1') to integer rank values. "
+            "Useful for MoE configs where expert FFNs need lower rank than attn. "
+            "Incompatible with use_vera (VeRA shares one rank across modules)."
+        ),
+    )
+    alpha_pattern: Optional[Dict[str, int]] = Field(
+        default=None,
+        description=(
+            "Per-target-module-pattern LoRA alpha override. Maps module name "
+            "patterns to integer alpha values. Pairs with rank_pattern. "
+            "Incompatible with use_vera."
+        ),
+    )
+    init_strategy: Literal["random", "pissa", "olora"] = Field(
+        default="random",
+        description=(
+            "LoRA init strategy. 'random' (default) is standard Kaiming init. "
+            "'pissa' (PiSSA) initializes A/B from the SVD of the base weight — "
+            "faster early convergence but adds an SVD pass on the first epoch. "
+            "'olora' is equivalent to use_olora=True (orthogonal QR init). "
+            "Cannot be combined with use_dora or use_vera."
         ),
     )
 
@@ -54,6 +86,85 @@ class LoraConfig(BaseModel):
                 f"PEFT methods are mutually exclusive, got multiple enabled: "
                 f"{', '.join(enabled)}. Pick at most one of use_dora, "
                 f"use_vera, use_olora."
+            )
+        return self
+
+    @model_validator(mode="before")
+    @classmethod
+    def _backcompat_align_olora(cls, values):
+        """Back-compat: pre-validation, align init_strategy='olora' when only use_olora was set."""
+        if not isinstance(values, dict):
+            return values
+        # Copy to avoid mutating the caller's dict (matches v0.33.0 #47
+        # CrossDocCollator immutability fix).
+        if values.get("use_olora") and "init_strategy" not in values:
+            values = dict(values)
+            values["init_strategy"] = "olora"
+        return values
+
+    @model_validator(mode="after")
+    def _validate_init_strategy(self) -> "LoraConfig":
+        # use_olora=True must agree with init_strategy when both are explicit
+        if self.use_olora and self.init_strategy != "olora":
+            raise ValueError(
+                f"use_olora=True conflicts with init_strategy={self.init_strategy!r}. "
+                f"Either set init_strategy='olora' (or omit it), or set use_olora=False."
+            )
+        # init_strategy='pissa' is incompatible with DoRA / VeRA
+        if self.init_strategy == "pissa" and (self.use_dora or self.use_vera):
+            other = "use_dora" if self.use_dora else "use_vera"
+            raise ValueError(
+                f"init_strategy='pissa' is incompatible with {other}=True. "
+                f"PiSSA initializes the LoRA pair via SVD; combine with plain LoRA "
+                f"(or rsLoRA) only."
+            )
+        return self
+
+    @field_validator("rank_pattern", "alpha_pattern", mode="before")
+    @classmethod
+    def _validate_pattern_dict(cls, value) -> Optional[Dict[str, int]]:
+        if value is None:
+            return None
+        if not isinstance(value, dict):
+            raise ValueError("rank_pattern/alpha_pattern must be a dict[str, int]")
+        if len(value) > _MAX_LORA_RANK_PATTERN_KEYS:
+            raise ValueError(
+                f"rank_pattern/alpha_pattern caps at {_MAX_LORA_RANK_PATTERN_KEYS} keys, "
+                f"got {len(value)}"
+            )
+        cleaned: Dict[str, int] = {}
+        for key, val in value.items():
+            if not isinstance(key, str) or not key:
+                raise ValueError(
+                    "rank_pattern/alpha_pattern keys must be non-empty strings"
+                )
+            if "\x00" in key:
+                raise ValueError("rank_pattern/alpha_pattern keys cannot contain null bytes")
+            if isinstance(val, bool) or not isinstance(val, int):
+                raise ValueError(
+                    f"rank_pattern/alpha_pattern values must be int, "
+                    f"got {type(val).__name__} for {key!r}"
+                )
+            if val <= 0 or val > _MAX_LORA_RANK_PATTERN_VALUE:
+                raise ValueError(
+                    f"rank_pattern/alpha_pattern values must be in (0, "
+                    f"{_MAX_LORA_RANK_PATTERN_VALUE}], got {val} for {key!r}"
+                )
+            cleaned[key] = val
+        return cleaned
+
+    @model_validator(mode="after")
+    def _validate_pattern_vera_exclusivity(self) -> "LoraConfig":
+        if self.use_vera and self.rank_pattern:
+            raise ValueError(
+                "rank_pattern is incompatible with use_vera=True (VeRA shares "
+                "a single rank across all target modules). Disable use_vera or "
+                "remove rank_pattern."
+            )
+        if self.use_vera and self.alpha_pattern:
+            raise ValueError(
+                "alpha_pattern is incompatible with use_vera=True. Disable "
+                "use_vera or remove alpha_pattern."
             )
         return self
 
@@ -486,6 +597,29 @@ class TrainingConfig(BaseModel):
         default=0.5, gt=0.0, lt=1.0,
         description="Multiply LR by this factor on each spike recovery (0.5 = halve)",
     )
+    # ReLoRA (v0.39.0 Part B)
+    relora_steps: Optional[int] = Field(
+        default=None, ge=1, le=10**7,
+        description=(
+            "Fire ReLoRA magnitude-prune + optimizer reset every N global steps. "
+            "None disables. Requires a LoRA-style PEFT (not VeRA)."
+        ),
+    )
+    relora_warmup_ratio: float = Field(
+        default=0.1, ge=0.0, le=1.0,
+        description="Skip ReLoRA firings during the first warmup_ratio fraction of training",
+    )
+    relora_reset_optimizer: bool = Field(
+        default=True,
+        description="Clear optimizer state for pruned LoRA params on each ReLoRA fire",
+    )
+    relora_prune_ratio: float = Field(
+        default=0.9, gt=0.0, lt=1.0,
+        description=(
+            "Fraction of LoRA weights to zero out by magnitude on each fire "
+            "(0.9 keeps the top 10%). Must be < 1.0."
+        ),
+    )
     # Convergence detection (v0.32.0 Part F)
     convergence_detection: bool = Field(
         default=False,
@@ -866,6 +1000,31 @@ class SoupConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def _validate_relora_supported_tasks(self) -> "SoupConfig":
+        """v0.39.0 — ReLoRA callback is wired in the SFT trainer only.
+
+        Multi-trainer expansion (DPO / GRPO / KTO / ORPO / SimPO / IPO /
+        PPO / RewardModel / Pretrain / Embedding) deferred to v0.39.1
+        (mirrors v0.27.0 MII / v0.37.0 multipack / v0.38.0 quant menu
+        stub-then-live pattern).
+        """
+        if self.training.relora_steps is None:
+            return self
+        if self.backend == "mlx":
+            raise ValueError(
+                "relora_steps is not supported on the mlx backend "
+                "in v0.39.0 (callback is HF Trainer-specific). "
+                "Use backend='transformers' or remove relora_steps."
+            )
+        if self.task != "sft":
+            raise ValueError(
+                f"relora_steps is wired only for task='sft' in v0.39.0, "
+                f"got task={self.task!r}. Multi-trainer expansion is tracked "
+                "as a known limitation; remove relora_steps or set task='sft'."
+            )
+        return self
+
+    @model_validator(mode="after")
     def _validate_quant_menu_supported_tasks(self) -> "SoupConfig":
         """v0.38.0 — Quant Menu (gptq/awq/hqq:Nbit/aqlm/eetq/mxfp4/fp8) is wired
         in the SFT trainer only. Multi-trainer expansion deferred to v0.38.1
@@ -919,6 +1078,11 @@ class SoupConfig(BaseModel):
 
 # --- Built-in templates ---
 
+# DEPRECATED (v0.39.0 Part E) — these inline templates are kept for back-compat.
+# The canonical source is `soup_cli/templates/*.yaml` with `manifest.json`.
+# Both sources are asserted equal in tests/test_templates_yaml.py — when editing
+# a template, update both. Planned removal: v0.41.0+ once external consumers
+# have migrated to the YAML registry.
 TEMPLATES: dict[str, str] = {
     "chat": """# Soup template: Chat Assistant
 # Fine-tune a model for conversational chat

@@ -1,0 +1,34 @@
+# Soup template: Audio / Speech
+# Fine-tune an audio-language model for speech understanding
+#
+# Supported models: Qwen2-Audio, Whisper (via transformers)
+#
+# Data format (JSONL):
+#   {"audio": "path/to/audio.wav", "messages": [
+#     {"role": "user", "content": "Transcribe."},
+#     {"role": "assistant", "content": "Hello world."}]}
+
+base: Qwen/Qwen2-Audio-7B-Instruct
+task: sft
+modality: audio
+# backend: unsloth  # 2-5x faster, pip install 'soup-cli[fast]'
+
+data:
+  train: ./data/audio_train.jsonl
+  format: audio
+  audio_dir: ./data/audio
+  val_split: 0.1
+  max_length: 2048
+
+training:
+  epochs: 3
+  lr: 1e-5
+  batch_size: auto
+  gradient_accumulation_steps: 8
+  lora:
+    r: 64
+    alpha: 16
+    target_modules: auto
+  quantization: 4bit
+
+output: ./output_audio

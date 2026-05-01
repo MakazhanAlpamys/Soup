@@ -40,16 +40,14 @@ soup train
 
 Latest highlights only. Full history: [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 
-**v0.38.0 — Quant Menu**: 7 new train-time quantization formats. Train LoRA on top of any pre-quantized base model — close the width gap with LlamaFactory.
+**v0.39.0 — LoRA Quality**: PEFT surface improvements that LlamaFactory and Axolotl maintain. Faster init, periodic adapter refresh, per-module rank, surgical architecture patches, and a cleaner template registry.
 
-- **GPTQ / AWQ / HQQ / AQLM / EETQ / MXFP4 / FP8** — set `training.quantization` to one of `gptq` / `awq` / `hqq:1bit`..`hqq:8bit` / `aqlm` / `eetq` / `mxfp4` / `fp8`. Loaded as `quantization_config` on the underlying `from_pretrained` call; LoRA trains on top.
-- **HQQ wide bit range** — 1, 2, 3, 4, 5, 6, or 8 bits via `hqq:Nbit` syntax. `hqq:7bit` is intentionally rejected (HQQ does not support it).
-- **Compatibility matrix enforced at startup** — `check_quant_distributed_compat` hard-fails HQQ/EETQ/AQLM × {FSDP, ZeRO-3} (sourced from LlamaFactory `quantization.py:199/211`). BNB-4bit + FSDP without `bnb_4bit_quant_storage` emits a yellow warning before the silent 2-3x perf cliff hits.
-- **`bnb_4bit_quant_storage` field** — set to `bfloat16` / `float16` for the canonical FSDP+QLoRA combo ("crucial for fsdp+qlora" — LlamaFactory `quantization.py:178`). Schema rejects the setting on any non-BNB-4bit format.
-- **`docs/QUANTIZATION.md`** — full compatibility matrix (format × {DDP / FSDP / ZeRO-1 / ZeRO-2 / ZeRO-3}) with per-format optional dep + use case.
-- **Pre-quantized + QAT mutually exclusive** — every pre-quantized format combined with `quantization_aware` (int8 QAT or `'fp8'`) is rejected at config-load with the actual reason.
-- **v0.38.0 scope** — wired into the SFT trainer + transformers backend. Multi-trainer expansion (DPO/GRPO/KTO/...) tracked for v0.38.1, mirroring v0.27.0 MII / v0.37.0 multipack stub-then-live pattern.
-- **Net +61 tests** (4374 → 4435) covering schema acceptance, builder shape, checkpoint validators, cross-validators, the 7-row × 5-column compat matrix, modality/task/backend gate coverage, adversarial inputs (oversized HQQ suffix, bool group_size, hyphenated DeepSpeed presets), and the central loader entry point.
+- **PiSSA init** — set `training.lora.init_strategy: pissa` for SVD-initialized LoRA pairs. Faster early convergence vs random init at the cost of one extra SVD pass on the first epoch. `init_strategy: olora` is also accepted (equivalent to legacy `use_olora=True`, which auto-aligns for back-compat).
+- **ReLoRA callback** — set `training.relora_steps: 500` to magnitude-prune LoRA adapter weights every 500 steps and clear optimizer state. Useful for very long training runs where the LoRA capacity saturates. Bounds: `relora_warmup_ratio` [0,1], `relora_prune_ratio` (0,1), `relora_reset_optimizer: true`. Wired into the SFT trainer; multi-trainer expansion deferred to v0.39.1.
+- **Per-pattern LoRA rank** — `training.lora.rank_pattern: {q_proj: 8, v_proj: 16}` and `alpha_pattern` give different ranks per target module pattern. Useful in MoE configs where expert FFNs need lower rank than attention. Caps: 256 keys × value 1024.
+- **Surgical PEFT patches** — Gemma 4 `ClippableLinear` is auto-swapped to plain `nn.Linear` so PEFT's matcher recognises it; fused-MoE 3-D expert weights have `lora_dropout` zeroed to dodge `ParamWrapper` crashes. Both are gated by architecture detection (regex word-boundary on the model name) and never run on unrelated models.
+- **Template registry** — the 16 built-in templates now live as `soup_cli/templates/*.yaml` with a `manifest.json` index. `soup init --template <name>` reads the YAML; the inline copies in `schema.py` stay as a back-compat fallback (deprecation pointing at v0.41.0+).
+- **Net +164 tests** (4374 → 4538) across PiSSA mutual-exclusion, ReLoRA frozen-policy + real-optimizer-state reset, rank_pattern bounds + null-byte rejection, regex word-boundary Gemma 4 detection, and template-registry path-traversal + manifest-tampering containment.
 
 ## Why Soup?
 
@@ -631,6 +629,52 @@ training:
 ```
 
 Replaces the static memory formula with a real try-halve-then-double-to-ceiling loop. Picked size is cached at `~/.soup/batch_cache.json` keyed on `(model, max_length, quantization, lora_r, gpu_name, gpu_memory_gb)` so repeat runs short-circuit.
+
+## LoRA Quality — PiSSA, ReLoRA, Per-Pattern Rank, Surgical Patches
+
+Five PEFT-surface improvements that LlamaFactory and Axolotl maintain:
+
+```yaml
+training:
+  lora:
+    init_strategy: pissa          # 'random' (default), 'pissa', 'olora'
+    rank_pattern:                 # per-target-module rank override
+      q_proj: 8
+      v_proj: 16
+    alpha_pattern:                # per-target-module alpha override
+      q_proj: 16
+  relora_steps: 500               # magnitude-prune LoRA every 500 steps
+  relora_warmup_ratio: 0.1        # skip first 10% of training
+  relora_prune_ratio: 0.9         # zero out smallest 90% by magnitude
+  relora_reset_optimizer: true    # clear optimizer state on each fire
+```
+
+**PiSSA** initializes the LoRA pair from the SVD of the base weight, giving faster
+early convergence than random init at the cost of one extra SVD pass on the first
+epoch. `init_strategy: olora` is also accepted; setting the legacy `use_olora: true`
+auto-aligns for back-compat.
+
+**ReLoRA** fires every N global steps, magnitude-prunes the LoRA adapter weights
+(keeping the top `1 - relora_prune_ratio` by absolute value), and optionally clears
+optimizer state for the pruned parameters so momentum doesn't fight the new sparse
+weights. Useful for very long training runs where the LoRA capacity saturates.
+
+**Per-pattern rank/alpha** map module name patterns to integer ranks. Useful in MoE
+configs where expert FFNs need lower rank than attention. Caps: 256 keys × value 1024.
+
+**Surgical patches** (Gemma 4 `ClippableLinear` swap, fused-MoE 3-D expert
+`lora_dropout` strip) auto-fire when the model name and architecture match. Both are
+gated and silent on unrelated models.
+
+**Template registry** — the 16 built-in templates now live as
+`soup_cli/templates/*.yaml` with a `manifest.json` index. `soup init --template <name>`
+reads the YAML; the inline copies in `schema.py` stay as a back-compat fallback,
+deprecated in favour of the YAML registry.
+
+**v0.39.0 scope** — wired into the SFT trainer + transformers backend.
+Multi-trainer expansion of ReLoRA (DPO/GRPO/KTO/...) is tracked for v0.39.1
+(mirrors v0.27.0 MII / v0.37.0 multipack / v0.38.0 quant menu stub-then-live
+pattern). MLX backend gets a distinct error message.
 
 ## DPO Training
 

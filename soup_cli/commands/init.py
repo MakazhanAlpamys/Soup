@@ -7,7 +7,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Prompt
 
-from soup_cli.config.schema import TEMPLATES
+from soup_cli.templates import list_templates, load_template
 
 console = Console()
 
@@ -36,11 +36,11 @@ def init(
             raise typer.Exit()
 
     if template:
-        if template not in TEMPLATES:
+        config_text = load_template(template)
+        if config_text is None:
             console.print(f"[red]Unknown template: {template}[/]")
-            console.print(f"Available: {', '.join(TEMPLATES.keys())}")
+            console.print(f"Available: {', '.join(list_templates())}")
             raise typer.Exit(1)
-        config_text = TEMPLATES[template]
         console.print(f"[green]Using template:[/] {template}")
     else:
         config_text = _interactive_wizard()

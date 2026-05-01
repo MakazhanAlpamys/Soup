@@ -1,0 +1,33 @@
+# Soup template: Long-Context Fine-tuning (128k+)
+# Extend model context window for long-document understanding
+#
+# Uses RoPE scaling + gradient checkpointing + FlashAttention for 128k tokens.
+# Optionally enable Liger Kernel for additional memory savings.
+
+base: meta-llama/Llama-3.1-8B-Instruct
+task: sft
+# backend: unsloth  # 2-5x faster, pip install 'soup-cli[fast]'
+
+data:
+  train: ./data/long_context_train.jsonl
+  format: alpaca
+  val_split: 0.05
+  max_length: 131072
+
+training:
+  epochs: 1
+  lr: 5e-6
+  batch_size: 1
+  gradient_accumulation_steps: 16
+  lora:
+    r: 64
+    alpha: 16
+    target_modules: auto
+  quantization: 4bit
+  gradient_checkpointing: true
+  rope_scaling_type: dynamic
+  use_flash_attn: true
+  # use_liger: true       # pip install 'soup-cli[liger]' for fused ops
+  # use_ring_attention: true  # Multi-GPU sequence parallelism
+
+output: ./output_longctx
