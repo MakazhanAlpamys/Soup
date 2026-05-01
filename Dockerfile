@@ -6,25 +6,19 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
     PYTHONIOENCODING=UTF-8
 
-# Install system dependencies and Python 3.11
+# Install Python 3.10 (Ubuntu 22.04 native — Soup supports 3.9+).
+# Avoids deadsnakes PPA which has had repeated connection timeouts from GHA runners.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    software-properties-common \
-    && add-apt-repository ppa:deadsnakes/ppa \
-    && apt-get update && apt-get install -y --no-install-recommends \
-    python3.11 \
-    python3.11-dev \
-    python3.11-distutils \
-    python3.11-venv \
+    python3 \
+    python3-dev \
+    python3-venv \
+    python3-pip \
     curl \
     git \
     && rm -rf /var/lib/apt/lists/*
 
-# Set python3.11 as default
-RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1 && \
-    update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1
-
-# Install pip for python3.11
-RUN curl -sS https://bootstrap.pypa.io/get-pip.py | python3.11
+# Alias `python` -> `python3`
+RUN update-alternatives --install /usr/bin/python python /usr/bin/python3 1
 
 # Set working directory
 WORKDIR /workspace
