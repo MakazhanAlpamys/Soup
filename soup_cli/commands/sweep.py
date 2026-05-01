@@ -299,6 +299,7 @@ def _set_nested_param(config_dict: dict, key: str, value) -> dict:
         "simpo_gamma": "training.simpo_gamma",
         "cpo_alpha": "training.cpo_alpha",
         "ipo_tau": "training.ipo_tau",
+        "bco_beta": "training.bco_beta",
         "loraplus_lr_ratio": "training.loraplus_lr_ratio",
         "use_dora": "training.lora.use_dora",
         "use_galore": "training.use_galore",
@@ -392,6 +393,14 @@ def _run_single(base_cfg, params: dict, run_name: str, config_path: Path) -> dic
         from soup_cli.trainer.ipo import IPOTrainerWrapper
 
         trainer_wrapper = IPOTrainerWrapper(cfg, device=device)
+    elif cfg.task == "bco":
+        from soup_cli.trainer.bco import BCOTrainerWrapper
+
+        trainer_wrapper = BCOTrainerWrapper(cfg, device=device)
+    elif cfg.task == "preference":
+        from soup_cli.trainer.preference import PreferenceTrainerWrapper
+
+        trainer_wrapper = PreferenceTrainerWrapper(cfg, device=device)
     elif cfg.task == "reward_model":
         from soup_cli.trainer.reward_model import RewardModelTrainerWrapper
 

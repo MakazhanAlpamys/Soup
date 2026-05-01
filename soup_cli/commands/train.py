@@ -700,6 +700,14 @@ def train(
         from soup_cli.trainer.ipo import IPOTrainerWrapper
 
         trainer_wrapper = IPOTrainerWrapper(cfg, **trainer_kwargs)
+    elif cfg.task == "bco":
+        from soup_cli.trainer.bco import BCOTrainerWrapper
+
+        trainer_wrapper = BCOTrainerWrapper(cfg, **trainer_kwargs)
+    elif cfg.task == "preference":
+        from soup_cli.trainer.preference import PreferenceTrainerWrapper
+
+        trainer_wrapper = PreferenceTrainerWrapper(cfg, **trainer_kwargs)
     elif cfg.task == "reward_model":
         from soup_cli.trainer.reward_model import RewardModelTrainerWrapper
 

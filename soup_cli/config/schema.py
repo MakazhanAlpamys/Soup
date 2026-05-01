@@ -404,6 +404,56 @@ class TrainingConfig(BaseModel):
     ipo_tau: float = Field(
         default=0.1, gt=0, description="IPO tau — regularization strength"
     )
+    # BCO-specific (Binary Classifier Optimization, v0.40.0 Part A)
+    bco_beta: float = Field(
+        default=0.1, gt=0, description="BCO beta — KL penalty coefficient"
+    )
+    # Unified preference loss dispatcher (v0.40.0 Part B).
+    # Set when task='preference'. Legacy task strings ('dpo', 'simpo', ...)
+    # remain first-class and are unaffected.
+    preference_loss: Optional[Literal["dpo", "simpo", "orpo", "ipo", "bco"]] = Field(
+        default=None,
+        description=(
+            "Preference loss for task='preference'. One of: dpo, simpo, orpo, "
+            "ipo, bco. Mutually exclusive with task in {dpo, simpo, orpo, ipo, bco}."
+        ),
+    )
+    # KL-controlled DPO variants (v0.40.0 Part C).
+    dpo_beta_schedule: Optional[Literal["linear", "cosine", "exponential"]] = Field(
+        default=None,
+        description=(
+            "Anneal DPO β over training. None = constant β (default). Requires "
+            "dpo_beta_end. DPO-family tasks only (dpo, ipo, preference+dpo)."
+        ),
+    )
+    dpo_beta_end: Optional[float] = Field(
+        default=None,
+        gt=0,
+        description=(
+            "Target β at the end of training when dpo_beta_schedule is set. "
+            "Must be > 0. The starting β is dpo_beta."
+        ),
+    )
+    dpo_ref_regen_epochs: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=1000,
+        description=(
+            "Replace the frozen ref model with the current student every N "
+            "epochs. None = never regen (default). DPO-family tasks only."
+        ),
+    )
+    # Multi-objective preference loss (v0.40.0 Part D).
+    preference_loss_weights: Optional[dict[str, float]] = Field(
+        default=None,
+        description=(
+            "Weighted blend of preference losses, e.g. {'dpo': 0.7, 'bco': 0.3}. "
+            "Each weight ∈ (0, 1]; weights must sum to 1.0 (±1e-6). All keys "
+            "must be members of {dpo, simpo, orpo, ipo, bco}. Requires "
+            "task='preference'; mutually exclusive with preference_loss (the "
+            "scalar form). Capped at 5 components (the supported set)."
+        ),
+    )
     # GRPO-specific
     grpo_beta: float = Field(
         default=0.1, gt=0, description="GRPO beta — KL penalty coefficient"
@@ -900,7 +950,7 @@ class SoupConfig(BaseModel):
     base: str = Field(..., description="Base model name or path (HF model ID)")
     task: Literal[
         "sft", "dpo", "grpo", "ppo", "reward_model", "kto", "orpo", "simpo", "ipo",
-        "pretrain", "embedding",
+        "bco", "preference", "pretrain", "embedding",
     ] = Field(
         default="sft", description="Training task type"
     )
@@ -1053,6 +1103,154 @@ class SoupConfig(BaseModel):
                 f"quantization={quant!r} (Quant Menu) is wired for "
                 f"modality='text' only in v0.38.0; got modality={self.modality!r}. "
                 "Vision/audio multi-modal wiring is tracked for v0.38.1."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_preference_dispatcher(self) -> "SoupConfig":
+        """v0.40.0 Part B — task='preference' requires preference_loss OR
+        preference_loss_weights (Part D). Setting either field outside
+        task='preference' is rejected to keep the two config surfaces disjoint.
+        """
+        loss = self.training.preference_loss
+        weights = self.training.preference_loss_weights
+        if self.task == "preference":
+            if loss is None and weights is None:
+                raise ValueError(
+                    "task='preference' requires either training.preference_loss "
+                    "(in {dpo, simpo, orpo, ipo, bco}) or "
+                    "training.preference_loss_weights (multi-objective dict)."
+                )
+            return self
+        if loss is not None:
+            raise ValueError(
+                f"training.preference_loss={loss!r} is only meaningful for "
+                f"task='preference'; got task={self.task!r}. Either set "
+                "task='preference' or remove preference_loss."
+            )
+        if weights is not None:
+            raise ValueError(
+                "training.preference_loss_weights is only meaningful for "
+                f"task='preference'; got task={self.task!r}. Either set "
+                "task='preference' or remove preference_loss_weights."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_dpo_variants_supported_tasks(self) -> "SoupConfig":
+        """v0.40.0 Part C — β-schedule + ref-model regen are DPO-family only.
+
+        Allowed: task in {dpo, ipo} OR (task='preference' AND
+        preference_loss in {dpo, ipo}). Rejected on mlx backend.
+        """
+        tcfg = self.training
+        sched = tcfg.dpo_beta_schedule
+        end = tcfg.dpo_beta_end
+        regen = tcfg.dpo_ref_regen_epochs
+        if sched is None and end is None and regen is None:
+            return self
+        # End/schedule mutual requirement.
+        if sched is not None and end is None:
+            raise ValueError(
+                "dpo_beta_schedule requires dpo_beta_end (the target β at "
+                "end of training). Set dpo_beta_end or remove dpo_beta_schedule."
+            )
+        if end is not None and sched is None:
+            raise ValueError(
+                "dpo_beta_end requires dpo_beta_schedule. Set "
+                "dpo_beta_schedule in {linear, cosine, exponential} or "
+                "remove dpo_beta_end."
+            )
+        # Backend gate.
+        if self.backend == "mlx":
+            raise ValueError(
+                "DPO variants (dpo_beta_schedule / dpo_ref_regen_epochs) are "
+                "not supported on the mlx backend in v0.40.0 (TRL trainer "
+                "internals required). Use backend='transformers'."
+            )
+        # Task gate — DPO family only.
+        family_ok = self.task in ("dpo", "ipo") or (
+            self.task == "preference"
+            and tcfg.preference_loss in ("dpo", "ipo")
+        )
+        if not family_ok:
+            raise ValueError(
+                f"DPO variants (dpo_beta_schedule / dpo_ref_regen_epochs) "
+                f"require task in {{dpo, ipo}} or task='preference' with "
+                f"preference_loss in {{dpo, ipo}}; got task={self.task!r}, "
+                f"preference_loss={tcfg.preference_loss!r}."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_preference_loss_weights(self) -> "SoupConfig":
+        """v0.40.0 Part D — multi-objective preference_loss_weights gate.
+
+        Allowed: task='preference' only. Mutually exclusive with the scalar
+        preference_loss. Validates value bounds + sum-to-1 + key allowlist.
+        """
+        tcfg = self.training
+        weights = tcfg.preference_loss_weights
+        if weights is None:
+            return self
+        if not isinstance(weights, dict):
+            raise ValueError(
+                "preference_loss_weights must be a dict, e.g. "
+                "{'dpo': 0.7, 'bco': 0.3}."
+            )
+        if self.task != "preference":
+            raise ValueError(
+                "preference_loss_weights requires task='preference'; got "
+                f"task={self.task!r}."
+            )
+        if tcfg.preference_loss is not None:
+            raise ValueError(
+                "preference_loss_weights and (scalar) preference_loss are "
+                "mutually exclusive — pick one."
+            )
+        if self.backend == "mlx":
+            raise ValueError(
+                "preference_loss_weights is not supported on the mlx backend "
+                "in v0.40.0. Use backend='transformers'."
+            )
+        if not (2 <= len(weights) <= 5):
+            raise ValueError(
+                f"preference_loss_weights must have between 2 and 5 entries "
+                "(single-entry blends are equivalent to the scalar "
+                "preference_loss field; use that instead); got "
+                f"{len(weights)}."
+            )
+        allowed = {"dpo", "simpo", "orpo", "ipo", "bco"}
+        for key in weights:
+            if not isinstance(key, str):
+                raise ValueError(
+                    f"preference_loss_weights keys must be strings; "
+                    f"got {type(key).__name__}."
+                )
+            if "\x00" in key:
+                raise ValueError(
+                    "preference_loss_weights keys cannot contain null bytes."
+                )
+        unknown = set(weights.keys()) - allowed
+        if unknown:
+            raise ValueError(
+                f"preference_loss_weights keys must be in {sorted(allowed)}; "
+                f"unknown: {sorted(unknown)}."
+            )
+        for key, value in weights.items():
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError(
+                    f"preference_loss_weights[{key!r}] must be a number; "
+                    f"got {type(value).__name__}."
+                )
+            if not (0 < float(value) <= 1):
+                raise ValueError(
+                    f"preference_loss_weights[{key!r}]={value!r} must be in (0, 1]."
+                )
+        total = sum(float(v) for v in weights.values())
+        if abs(total - 1.0) > 1e-6:
+            raise ValueError(
+                f"preference_loss_weights must sum to 1.0 (±1e-6); got {total!r}."
             )
         return self
 
@@ -1274,6 +1472,36 @@ training:
     target_modules: auto
   quantization: 4bit
   orpo_beta: 0.1
+
+output: ./output
+""",
+    "bco": """# Soup template: BCO (Binary Classifier Optimization)
+# Preference alignment via binary classification of chosen vs rejected.
+#
+# Data format (JSONL) — same as DPO:
+#   {"prompt": "What is 2+2?", "chosen": "4", "rejected": "Fish"}
+
+base: meta-llama/Llama-3.1-8B-Instruct
+task: bco
+# backend: unsloth  # 2-5x faster, pip install 'soup-cli[fast]'
+
+data:
+  train: ./data/preference_train.jsonl
+  format: dpo
+  val_split: 0.1
+  max_length: 2048
+
+training:
+  epochs: 3
+  lr: 1e-5
+  batch_size: auto
+  gradient_accumulation_steps: 4
+  lora:
+    r: 64
+    alpha: 16
+    target_modules: auto
+  quantization: 4bit
+  bco_beta: 0.1
 
 output: ./output
 """,

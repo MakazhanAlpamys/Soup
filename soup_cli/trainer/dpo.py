@@ -247,6 +247,23 @@ class DPOTrainerWrapper:
                 )
             )
 
+        # v0.40.0 Part C — DPO variants (β-schedule + ref-model regen).
+        # total_steps=0 is the lazy-resolve sentinel; BetaScheduleCallback's
+        # on_train_begin reads state.max_steps once HF Trainer has populated it.
+        from soup_cli.utils.dpo_variants import build_dpo_variant_callbacks
+
+        tcfg = self.config.training
+        variant_cbs = build_dpo_variant_callbacks(
+            beta_start=tcfg.dpo_beta,
+            beta_end=tcfg.dpo_beta_end,
+            schedule=tcfg.dpo_beta_schedule,
+            total_steps=0,
+            ref_regen_epochs=tcfg.dpo_ref_regen_epochs,
+        )
+        for cb in variant_cbs:
+            cb.attach(self.trainer)
+            self.trainer.add_callback(cb)
+
         from soup_cli.utils.v028_features import activation_offloading_context
 
         with activation_offloading_context(

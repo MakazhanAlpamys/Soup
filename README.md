@@ -40,14 +40,13 @@ soup train
 
 Latest highlights only. Full history: [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 
-**v0.39.0 — LoRA Quality**: PEFT surface improvements that LlamaFactory and Axolotl maintain. Faster init, periodic adapter refresh, per-module rank, surgical architecture patches, and a cleaner template registry.
+**v0.40.0 — Preference Variety**: BCO trainer + a unified preference-loss surface so DPO / SimPO / ORPO / IPO / BCO live behind one config knob. Adds two opt-in DPO controls (β-schedule + ref-model regen) and a forward-looking multi-objective preference-loss surface.
 
-- **PiSSA init** — set `training.lora.init_strategy: pissa` for SVD-initialized LoRA pairs. Faster early convergence vs random init at the cost of one extra SVD pass on the first epoch. `init_strategy: olora` is also accepted (equivalent to legacy `use_olora=True`, which auto-aligns for back-compat).
-- **ReLoRA callback** — set `training.relora_steps: 500` to magnitude-prune LoRA adapter weights every 500 steps and clear optimizer state. Useful for very long training runs where the LoRA capacity saturates. Bounds: `relora_warmup_ratio` [0,1], `relora_prune_ratio` (0,1), `relora_reset_optimizer: true`. Wired into the SFT trainer; multi-trainer expansion deferred to v0.39.1.
-- **Per-pattern LoRA rank** — `training.lora.rank_pattern: {q_proj: 8, v_proj: 16}` and `alpha_pattern` give different ranks per target module pattern. Useful in MoE configs where expert FFNs need lower rank than attention. Caps: 256 keys × value 1024.
-- **Surgical PEFT patches** — Gemma 4 `ClippableLinear` is auto-swapped to plain `nn.Linear` so PEFT's matcher recognises it; fused-MoE 3-D expert weights have `lora_dropout` zeroed to dodge `ParamWrapper` crashes. Both are gated by architecture detection (regex word-boundary on the model name) and never run on unrelated models.
-- **Template registry** — the 16 built-in templates now live as `soup_cli/templates/*.yaml` with a `manifest.json` index. `soup init --template <name>` reads the YAML; the inline copies in `schema.py` stay as a back-compat fallback (deprecation pointing at v0.41.0+).
-- **Net +164 tests** (4374 → 4538) across PiSSA mutual-exclusion, ReLoRA frozen-policy + real-optimizer-state reset, rank_pattern bounds + null-byte rejection, regex word-boundary Gemma 4 detection, and template-registry path-traversal + manifest-tampering containment.
+- **BCO Trainer** — set `task: bco` for Binary Classifier Optimization. Same input format as DPO (`prompt + chosen + rejected`); rows are internally split to TRL's BCO unpaired schema. New `training.bco_beta` (default 0.1, gt=0). Template: `soup init --template bco`.
+- **Unified preference dispatcher** — set `task: preference` + `training.preference_loss: dpo|simpo|orpo|ipo|bco` to pick the loss without renaming your task. Legacy `task: dpo`, `task: simpo`, etc remain first-class — the new surface is additive, not a breaking collapse. Useful for hyperparameter sweeps over the loss type itself.
+- **KL-controlled DPO variants** — anneal β over training with `training.dpo_beta_schedule: linear|cosine|exponential` + `training.dpo_beta_end`. Periodically refresh the frozen reference model with the current student via `training.dpo_ref_regen_epochs: 2`. Both gated to DPO-family tasks (`dpo`, `ipo`, or `preference` with `preference_loss in {dpo, ipo}`); transformers backend only.
+- **Multi-objective preference loss** — define `training.preference_loss_weights: {dpo: 0.7, bco: 0.3}` to blend losses. 2–5 entries, weights must sum to 1. Schema-level surface ships now; live runtime weighted-loss combination deferred to v0.40.1 (`PreferenceTrainerWrapper.setup` raises `NotImplementedError` with a friendly message until then — same stub-then-live pattern as v0.27.0 MII / v0.37.0 multipack / v0.38.0 quant menu / v0.39.0 ReLoRA).
+- **Net +118 tests** (4538 → 4656) across BCO trainer + dispatcher + β schedule math + ref-model regen TOCTOU + multi-objective schema bounds.
 
 ## Why Soup?
 
@@ -86,6 +85,7 @@ soup init --template kto        # KTO unpaired preference alignment
 soup init --template orpo       # ORPO (no reference model needed)
 soup init --template simpo      # SimPO length-normalized preference
 soup init --template ipo        # IPO regularized preference
+soup init --template bco        # BCO binary classifier preference (v0.40.0)
 soup init --template rlhf       # full RLHF pipeline (SFT→RM→PPO)
 soup init --template pretrain   # continued pre-training on raw text
 soup init --template moe        # MoE fine-tuning (ScatterMoE LoRA)
@@ -696,6 +696,75 @@ training:
     alpha: 16
   quantization: 4bit
 ```
+
+## Preference Variety — BCO + Unified Dispatcher + KL Variants
+
+Five preference losses live behind one config knob. Pick a loss without
+renaming your task, anneal β over training, and periodically refresh the
+frozen reference.
+
+### BCO (Binary Classifier Optimization)
+
+Same input format as DPO; rows are split internally to TRL's BCO
+unpaired schema (`{prompt, completion, label}`).
+
+```yaml
+task: bco
+data:
+  train: ./data/preferences.jsonl
+  format: dpo
+training:
+  bco_beta: 0.1
+```
+
+### Unified preference dispatcher
+
+Use `task: preference` + `training.preference_loss` to swap losses
+without touching `task`. Hyperparameter sweeps over the loss type
+itself become trivial.
+
+```yaml
+task: preference
+data:
+  train: ./data/preferences.jsonl
+  format: dpo
+training:
+  preference_loss: dpo   # or simpo, orpo, ipo, bco
+```
+
+Legacy `task: dpo` / `task: simpo` / etc. remain first-class — the
+unified surface is additive.
+
+### KL-controlled DPO variants
+
+Anneal β over training, periodically refresh the reference model:
+
+```yaml
+task: dpo   # or task: preference + preference_loss: dpo, or task: ipo
+training:
+  dpo_beta: 0.1
+  dpo_beta_schedule: linear   # linear | cosine | exponential
+  dpo_beta_end: 0.01
+  dpo_ref_regen_epochs: 2     # copy student → ref model every 2 epochs
+```
+
+Both controls are gated to DPO-family tasks (`dpo`, `ipo`, or
+`preference` with `preference_loss in {dpo, ipo}`); transformers
+backend only.
+
+### Multi-objective preference loss (schema-only in v0.40.0)
+
+```yaml
+task: preference
+training:
+  preference_loss_weights: {dpo: 0.7, bco: 0.3}
+```
+
+Schema validates 2–5 entries summing to 1. Live runtime weighted-loss
+combination is wired in v0.40.1; v0.40.0 fails fast with an actionable
+`NotImplementedError` if you actually try to train (same stub-then-live
+pattern as v0.27.0 MII / v0.37.0 multipack / v0.38.0 quant menu /
+v0.39.0 ReLoRA).
 
 ## GRPO Training (Reasoning)
 

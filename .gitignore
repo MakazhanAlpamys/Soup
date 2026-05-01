@@ -39,6 +39,9 @@ report.xml
 .env
 *.key
 
+# Internal docs (local only — not for repo)
+docs/
+
 # Internal plan + Claude Code local dev instructions (not for repo)
 .claude/plan.md
 .claude/CLAUDE.md

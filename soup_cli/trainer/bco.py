@@ -1,29 +1,66 @@
-"""IPO (Identity Preference Optimization) trainer — wraps trl.DPOTrainer with loss_type='ipo'."""
+"""BCO (Binary Classifier Optimization) trainer — wraps trl.BCOTrainer.
+
+v0.40.0 Part A. Mirrors the ORPO / SimPO / IPO wrapper pattern.
+
+Data format (same as DPO): {"prompt": ..., "chosen": ..., "rejected": ...}.
+Each row is internally split into two rows for TRL's BCOTrainer
+(``{"prompt", "completion", "label"}``): one chosen-as-completion with
+``label=True`` and one rejected-as-completion with ``label=False``.
+"""
+
+from __future__ import annotations
 
 import math
 import time
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from rich.console import Console
 
 from soup_cli.config.schema import SoupConfig
 from soup_cli.utils.gpu import estimate_batch_size, model_size_from_name
 
+if TYPE_CHECKING:
+    from soup_cli.config.schema import TrainingConfig  # noqa: F401
+
 console = Console()
 
 
-class IPOTrainerWrapper:
-    """High-level wrapper for IPO training from SoupConfig.
+def _split_dpo_rows_to_bco(rows: list[dict]) -> list[dict]:
+    """Convert DPO-shaped rows to TRL BCO unpaired format.
 
-    IPO is a theoretically grounded variant of DPO that uses a squared
-    hinge loss instead of the logistic loss. Implemented via trl.DPOTrainer
-    with loss_type='ipo'.
+    Each input row produces two output rows: one with ``label=True``
+    (chosen) and one with ``label=False`` (rejected). Rows missing any
+    required field are skipped; the count is emitted at DEBUG so production
+    silent-degradation is inspectable (mirrors v0.33.0 #47 CrossDocCollator
+    DEBUG-on-fallback policy).
+    """
+    out: list[dict] = []
+    skipped = 0
+    for row in rows:
+        prompt = row.get("prompt")
+        chosen = row.get("chosen")
+        rejected = row.get("rejected")
+        if prompt is None or chosen is None or rejected is None:
+            skipped += 1
+            continue
+        out.append({"prompt": prompt, "completion": chosen, "label": True})
+        out.append({"prompt": prompt, "completion": rejected, "label": False})
+    if skipped:
+        import logging
 
-    Data fields (same as DPO):
-    - prompt: the input prompt
-    - chosen: the preferred response
-    - rejected: the less preferred response
+        logging.getLogger(__name__).debug(
+            "BCO: skipped %d row(s) missing prompt/chosen/rejected.", skipped,
+        )
+    return out
+
+
+class BCOTrainerWrapper:
+    """High-level wrapper for BCO training from SoupConfig.
+
+    BCO uses a binary classifier objective (chosen vs rejected). Soup
+    accepts the DPO data format and adapts it to TRL's BCOTrainer
+    unpaired ``{prompt, completion, label}`` schema.
     """
 
     def __init__(
@@ -42,12 +79,12 @@ class IPOTrainerWrapper:
         self.model = None
         self.tokenizer = None
         self.trainer = None
-        self._output_dir = None
+        self._output_dir: Optional[str] = None
 
     def setup(self, dataset: dict) -> None:
-        """Load model, tokenizer, apply LoRA, create IPO trainer (DPO with loss_type='ipo')."""
+        """Load model, tokenizer, apply LoRA, create BCO trainer."""
         from datasets import Dataset
-        from trl import DPOConfig, DPOTrainer
+        from trl import BCOConfig, BCOTrainer
 
         from soup_cli.trainer.sft import _enable_hf_transfer_progress
 
@@ -83,15 +120,23 @@ class IPOTrainerWrapper:
                 quantization=tcfg.quantization,
                 lora_r=tcfg.lora.r,
             )
-            # IPO processes pairs → roughly 2x memory per sample
+            # BCO sees ~2x rows per sample (chosen + rejected) → halve.
             batch_size = max(1, batch_size // 2)
-            console.print(f"[green]Auto batch size (IPO):[/] {batch_size}")
+            console.print(f"[green]Auto batch size (BCO):[/] {batch_size}")
 
-        # --- Dataset ---
-        train_ds = Dataset.from_list(dataset["train"])
+        # --- Dataset (split DPO rows into BCO unpaired) ---
+        train_rows = _split_dpo_rows_to_bco(dataset["train"])
+        if not train_rows:
+            raise ValueError(
+                "BCO training: dataset['train'] produced no usable rows. "
+                "Each row must contain 'prompt', 'chosen', and 'rejected'."
+            )
+        train_ds = Dataset.from_list(train_rows)
         eval_ds = None
         if "val" in dataset and dataset["val"]:
-            eval_ds = Dataset.from_list(dataset["val"])
+            val_rows = _split_dpo_rows_to_bco(dataset["val"])
+            if val_rows:
+                eval_ds = Dataset.from_list(val_rows)
 
         # --- Output dir ---
         output_dir = Path(cfg.output)
@@ -106,9 +151,8 @@ class IPOTrainerWrapper:
         )
         warmup_steps = int(total_steps * tcfg.warmup_ratio)
 
-        # --- IPO config (DPO with loss_type='ipo') ---
-        # In IPO, the beta parameter acts as tau (regularization strength)
-        dpo_config = DPOConfig(
+        # --- BCO config ---
+        bco_config = BCOConfig(
             output_dir=str(output_dir),
             num_train_epochs=tcfg.epochs,
             per_device_train_batch_size=batch_size,
@@ -127,18 +171,20 @@ class IPOTrainerWrapper:
             remove_unused_columns=False,
             deepspeed=self.deepspeed_config,
             **(self.fsdp_config or {}),
-            loss_type="ipo",
-            beta=tcfg.ipo_tau,
+            beta=tcfg.bco_beta,
             max_length=cfg.data.max_length,
             max_prompt_length=cfg.data.max_length // 2,
-            **({"neftune_noise_alpha": tcfg.neftune_alpha}
-               if tcfg.neftune_alpha is not None else {}),
+            **(
+                {"neftune_noise_alpha": tcfg.neftune_alpha}
+                if tcfg.neftune_alpha is not None
+                else {}
+            ),
         )
 
         # --- Trainer ---
-        self.trainer = DPOTrainer(
+        self.trainer = BCOTrainer(
             model=self.model,
-            args=dpo_config,
+            args=bco_config,
             train_dataset=train_ds,
             eval_dataset=eval_ds,
             processing_class=self.tokenizer,
@@ -146,7 +192,7 @@ class IPOTrainerWrapper:
 
         self._output_dir = str(output_dir)
 
-    def _setup_transformers(self, cfg: SoupConfig, tcfg) -> None:
+    def _setup_transformers(self, cfg: SoupConfig, tcfg: "TrainingConfig") -> None:
         """Load model via standard transformers + peft pipeline."""
         from peft import LoraConfig, TaskType, get_peft_model, prepare_model_for_kbit_training
         from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
@@ -209,8 +255,8 @@ class IPOTrainerWrapper:
             console=console, device=self.device, backend=cfg.backend,
         )
 
-    def _setup_unsloth(self, cfg: SoupConfig, tcfg) -> None:
-        """Load model via unsloth FastLanguageModel (2-5x faster)."""
+    def _setup_unsloth(self, cfg: SoupConfig, tcfg: "TrainingConfig") -> None:
+        """Load model via unsloth FastLanguageModel."""
         from soup_cli.utils.unsloth import load_model_and_tokenizer
 
         console.print(f"[dim]Loading model via [bold]unsloth[/]: {cfg.base}[/]")
@@ -233,10 +279,10 @@ class IPOTrainerWrapper:
         run_id: str = "",
         resume_from_checkpoint: Optional[str] = None,
     ) -> dict:
-        """Run IPO training and return results summary."""
+        """Run BCO training and return results summary."""
         if self.trainer is None:
             raise RuntimeError(
-                "IPOTrainerWrapper.train() called before setup(). "
+                "BCOTrainerWrapper.train() called before setup(). "
                 "Call setup(dataset) first."
             )
         start = time.time()
@@ -252,23 +298,6 @@ class IPOTrainerWrapper:
                     loss_watchdog_patience=self.config.training.loss_watchdog_patience,
                 )
             )
-
-        # v0.40.0 Part C — DPO variants (β-schedule + ref-model regen).
-        # total_steps=0 is the lazy-resolve sentinel; BetaScheduleCallback's
-        # on_train_begin reads state.max_steps once HF Trainer has populated it.
-        from soup_cli.utils.dpo_variants import build_dpo_variant_callbacks
-
-        tcfg = self.config.training
-        variant_cbs = build_dpo_variant_callbacks(
-            beta_start=tcfg.dpo_beta,
-            beta_end=tcfg.dpo_beta_end,
-            schedule=tcfg.dpo_beta_schedule,
-            total_steps=0,
-            ref_regen_epochs=tcfg.dpo_ref_regen_epochs,
-        )
-        for cb in variant_cbs:
-            cb.attach(self.trainer)
-            self.trainer.add_callback(cb)
 
         from soup_cli.utils.v028_features import activation_offloading_context
 

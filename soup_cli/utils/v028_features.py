@@ -184,6 +184,8 @@ def supports_v028_features(task: str) -> bool:
         "orpo",
         "simpo",
         "ipo",
+        "bco",
+        "preference",
         "ppo",
         "reward_model",
         "embedding",

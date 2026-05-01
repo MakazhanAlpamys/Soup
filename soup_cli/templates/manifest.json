@@ -1,6 +1,7 @@
 {
   "templates": {
     "audio": "audio.yaml",
+    "bco": "bco.yaml",
     "chat": "chat.yaml",
     "code": "code.yaml",
     "embedding": "embedding.yaml",
