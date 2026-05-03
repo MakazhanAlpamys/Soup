@@ -130,8 +130,14 @@ def quickstart(
         console.print(f"To train: [bold]soup train --config {config_path}[/]")
         raise typer.Exit()
 
-    # 3. Train
+    # 3. Train — invoke via subprocess so Typer resolves defaults properly
     console.print("\n[bold]Starting training...[/]\n")
-    from soup_cli.commands.train import train as train_cmd
+    import subprocess
+    import sys
 
-    train_cmd(config=str(config_path), yes=True)
+    result = subprocess.run(
+        [sys.executable, "-m", "soup_cli.cli", "train", "--config", str(config_path), "--yes"],
+        check=False,
+    )
+    if result.returncode != 0:
+        raise typer.Exit(result.returncode)
