@@ -164,16 +164,14 @@ class TestMultiObjectiveHelpers:
 
 
 class TestMultiObjectiveDeferred:
-    def test_setup_raises_with_actionable_message(self):
-        """v0.40.0 ships schema only; live runtime wiring deferred to v0.40.1.
-
-        ``setup`` must raise a ``NotImplementedError`` that names the
-        deferred-version follow-up so users know whether to wait or
-        switch to the scalar form.
+    def test_bco_paired_blend_rejected_at_runtime(self):
+        """v0.40.1 Part B — live runtime ships, but BCO mixed with paired
+        losses (DPO/SimPO/ORPO/IPO) is data-format-incompatible and must
+        be rejected at setup() with a ValueError naming 'bco'.
         """
         from soup_cli.trainer.preference import PreferenceTrainerWrapper
 
         cfg = _base(preference_loss_weights={"dpo": 0.7, "bco": 0.3})
         wrapper = PreferenceTrainerWrapper(cfg, device="cpu")
-        with pytest.raises(NotImplementedError, match="v0.40.1"):
+        with pytest.raises(ValueError, match="bco"):
             wrapper.setup({"train": [{"prompt": "p", "chosen": "c", "rejected": "r"}]})

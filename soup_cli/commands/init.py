@@ -12,13 +12,19 @@ from soup_cli.templates import list_templates, load_template
 console = Console()
 
 
+def _template_help_string() -> str:
+    """v0.40.1 Part D / H4 — generate help dynamically from the registry so
+    the list never drifts away from `templates/manifest.json`.
+    """
+    return "Template: " + ", ".join(list_templates())
+
+
 def init(
     template: str = typer.Option(
         None,
         "--template",
         "-t",
-        help="Template: chat, code, medical, reasoning, vision, audio, rlhf, "
-        "kto, orpo, simpo, ipo, pretrain, moe, embedding, longcontext",
+        help=_template_help_string(),
     ),
     output: str = typer.Option(
         "soup.yaml",
@@ -26,11 +32,17 @@ def init(
         "-o",
         help="Output config file path",
     ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        "-f",
+        help="Overwrite existing config without prompting (v0.40.1 / M2).",
+    ),
 ):
     """Create a new soup.yaml config interactively or from a template."""
     output_path = Path(output)
 
-    if output_path.exists():
+    if output_path.exists() and not force:
         overwrite = typer.confirm(f"{output_path} already exists. Overwrite?")
         if not overwrite:
             raise typer.Exit()

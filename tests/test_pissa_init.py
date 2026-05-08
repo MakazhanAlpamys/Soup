@@ -131,3 +131,28 @@ class TestInstantiatePeftConfig:
         spec = build_peft_config(cfg, target_modules=["q_proj"], task_type="CAUSAL_LM")
         result = instantiate_peft_config(spec)
         assert result.rank_pattern == {"q_proj": 8}
+
+
+class TestInitStrategyYamlRoundtripV0401Regression:
+    """v0.40.1 Part B — QA found bogus init_strategy via YAML occasionally
+    bypassed validation; assert it always errors at full-config load."""
+
+    def test_bogus_init_strategy_via_full_yaml_rejected(self):
+        from soup_cli.config.loader import load_config_from_string
+
+        yaml_text = """
+base: HuggingFaceTB/SmolLM2-135M-Instruct
+task: sft
+data:
+  train: data.jsonl
+training:
+  epochs: 1
+  lr: 0.0002
+output: ./out
+lora:
+  r: 8
+  init_strategy: bogus
+"""
+        with pytest.raises((ValidationError, ValueError), match="init_strategy"):
+            load_config_from_string(yaml_text)
+

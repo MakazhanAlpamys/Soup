@@ -746,8 +746,11 @@ def sample_data(
         sampled = _sample_random(data, sample_count, seed=seed)
 
     # Resolve output path (with path traversal protection on explicit --output)
+    # v0.40.1 Part E — include the strategy in the default filename so
+    # successive `random` / `diverse` / `hard` runs don't silently overwrite
+    # each other.
     if output is None:
-        out_path = file_path.parent / f"{file_path.stem}_sampled.jsonl"
+        out_path = file_path.parent / f"{file_path.stem}_sampled_{strategy}.jsonl"
     else:
         out_path = Path(output).resolve()
         cwd = Path.cwd().resolve()

@@ -149,13 +149,15 @@ class TestSampleCLI:
         assert result.exit_code != 0
 
     def test_default_output_name(self, tmp_path):
-        """Default output should be <input>_sampled.jsonl."""
+        """v0.40.1 — default filename embeds the strategy to prevent
+        overwrite when running successive `random`/`diverse`/`hard` passes.
+        """
         input_path = _create_jsonl(tmp_path, "data.jsonl", 20)
         result = runner.invoke(app, [
             "data", "sample", str(input_path), "--n", "5",
         ])
         assert result.exit_code == 0
-        expected_output = tmp_path / "data_sampled.jsonl"
+        expected_output = tmp_path / "data_sampled_random.jsonl"
         assert expected_output.exists()
         with open(expected_output, encoding="utf-8") as fh:
             rows = [json.loads(line) for line in fh]

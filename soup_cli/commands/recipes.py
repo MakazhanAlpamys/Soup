@@ -42,6 +42,13 @@ def show(
     recipe = get_recipe(name)
     if recipe is None:
         console.print(f"[red]Recipe not found: {name}[/]")
+        # v0.40.1 Part E / M3 — fuzzy-match suggestion (mirrors Typer's
+        # built-in "Did you mean" for unknown CLI flags).
+        suggestions = _suggest_recipes(name)
+        if suggestions:
+            console.print(
+                f"[dim]Did you mean: [bold]{', '.join(suggestions)}[/]?[/]"
+            )
         console.print("[dim]Run 'soup recipes list' to see all recipes.[/]")
         raise typer.Exit(1)
 
@@ -126,3 +133,18 @@ def search(
         table.add_row(name, recipe.model, recipe.task, recipe.size, recipe.description)
 
     console.print(table)
+
+
+def _suggest_recipes(query: str, n: int = 3) -> list[str]:
+    """v0.40.1 Part E / M3 — return up to ``n`` close-matching recipe ids."""
+    from difflib import get_close_matches
+
+    from soup_cli.recipes.catalog import RECIPES
+
+    try:
+        names = list(RECIPES.keys()) if hasattr(RECIPES, "keys") else [
+            r.name for r in RECIPES
+        ]
+    except Exception:  # noqa: BLE001
+        return []
+    return get_close_matches(query, names, n=n, cutoff=0.6)

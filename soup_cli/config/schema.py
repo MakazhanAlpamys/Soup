@@ -986,6 +986,38 @@ class SoupConfig(BaseModel):
             )
         return value
 
+    @model_validator(mode="before")
+    @classmethod
+    def _remap_root_level_misplaced_keys(cls, values):
+        """v0.40.1 Part B — QA finding C2: users naturally write top-level
+        ``lora:`` (LlamaFactory / Axolotl convention) but Soup nests it
+        under ``training``. Without remap, Pydantic silently drops the
+        misplaced key — including ``lora.init_strategy`` validation.
+
+        Migrate root-level ``lora`` into ``training.lora`` so nested
+        validation (Literal["random","pissa","olora"]) actually fires.
+
+        Caller's dict is never mutated — we work on shallow copies, matching
+        v0.33.0 #47 / v0.40.0 Part B immutability policy.
+        """
+        if not isinstance(values, dict):
+            return values
+        # Detect any misplaced key first so we avoid copying when not needed.
+        misplaced_keys = [k for k in ("lora",) if k in values]
+        if not misplaced_keys:
+            return values
+        new_values = dict(values)
+        new_training = dict(new_values.get("training") or {})
+        for misplaced in misplaced_keys:
+            if misplaced in new_training:
+                raise ValueError(
+                    f"{misplaced!r} found at both root and training level — "
+                    f"keep only one (training.{misplaced} preferred)."
+                )
+            new_training[misplaced] = new_values.pop(misplaced)
+        new_values["training"] = new_training
+        return new_values
+
     @model_validator(mode="after")
     def _validate_v028_speed_memory_supported_tasks(self) -> "SoupConfig":
         """v0.28.0 speed/memory features: every transformer-backend trainer

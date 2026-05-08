@@ -921,10 +921,15 @@ def _synth_lr_curve(n: int) -> list[float]:
 def _live_lr_sweep_from_config(cfg, schedule: list[float]) -> list[float]:
     """Build a tiny in-process loop: load model + tokenizer + a slice of
     the train dataset, then call :func:`run_lr_sweep`."""
+    # v0.40.1 Part C / G12 — fix broken `load_local` import that previously
+    # always fell through to the synthetic curve. The actual exported symbol
+    # is ``load_raw_data`` (path-only loader) — we use that.
+    from pathlib import Path as _Path
+
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
-    from soup_cli.data.loader import load_local
+    from soup_cli.data.loader import load_raw_data
     from soup_cli.utils.lr_finder import run_lr_sweep
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -938,7 +943,7 @@ def _live_lr_sweep_from_config(cfg, schedule: list[float]) -> list[float]:
     ).to(device)
     model.train()
 
-    dataset = load_local(cfg.data.train, cfg.data.format)
+    dataset = load_raw_data(_Path(cfg.data.train))
     rows = list(dataset)[: max(2, len(schedule))]
     if not rows:
         raise RuntimeError("training dataset is empty")

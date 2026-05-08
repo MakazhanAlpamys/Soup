@@ -128,7 +128,10 @@ def custom(
     ),
     output: Optional[str] = typer.Option(
         None, "--output", "-o",
-        help="Path for the eval JSON output (required with --attach-to-registry)",
+        help=(
+            "Path to write the eval JSON output. Honored independently of "
+            "--attach-to-registry (v0.40.1 / G10)."
+        ),
     ),
 ):
     """Run custom evaluation tasks from a JSONL file."""
@@ -179,9 +182,12 @@ def custom(
         task_bar = progress.add_task(
             "Evaluating...", total=len(eval_tasks),
         )
+        # v0.40.1 Part D / G10 — keep the CLI ``--output`` path separate
+        # from the per-task model response (was previously shadowed by the
+        # loop variable, masking ``-o`` whenever attach-to-registry was off).
         for eval_task in eval_tasks:
-            output = generate_fn(eval_task.prompt)
-            result = score_task(eval_task, output)
+            response = generate_fn(eval_task.prompt)
+            result = score_task(eval_task, response)
             results_list.append(result)
             progress.advance(task_bar)
 
@@ -197,13 +203,11 @@ def custom(
     _save_custom_results(eval_results, str(model_path), run_id)
     console.print("\n[green]Results saved to experiment tracker.[/]")
 
-    # v0.33.0 #35: optional registry attach
-    if attach_to_registry:
-        if not output:
-            console.print(
-                "[red]--attach-to-registry requires --output <json-path>[/]"
-            )
-            raise typer.Exit(1)
+    # v0.40.1 Part D / G10 — write `--output` JSON regardless of registry
+    # attach. Both flags compose; either alone is sufficient.
+    payload = None
+    json_path = None
+    if output or attach_to_registry:
         from soup_cli.registry.attach import attach_artifact, write_eval_json
 
         payload = {
@@ -214,8 +218,17 @@ def custom(
             "accuracy": eval_results.accuracy,
             "category_scores": eval_results.category_scores,
         }
+        write_target = output or "eval_results.json"
         try:
-            json_path = write_eval_json(output, payload=payload)
+            json_path = write_eval_json(write_target, payload=payload)
+        except (ValueError, FileNotFoundError) as exc:
+            console.print(f"[red]Failed to write eval JSON:[/] {exc}")
+            raise typer.Exit(1) from exc
+        if output:
+            console.print(f"[green]Eval JSON written to:[/] {json_path}")
+
+    if attach_to_registry:
+        try:
             attach_artifact(
                 attach_to_registry, path=str(json_path), kind="eval_results",
             )

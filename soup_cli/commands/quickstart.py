@@ -53,6 +53,38 @@ DEMO_DATA = [
      "output": "Inference is using a trained model to make predictions on new data."},
 ]
 
+_DEFAULT_MODEL = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+_LOW_VRAM_MODEL = "HuggingFaceTB/SmolLM2-135M-Instruct"
+_LOW_VRAM_THRESHOLD_GB = 6.0
+
+
+def _pick_quickstart_model() -> tuple[str, str | None]:
+    """v0.40.1 Part C / G1 — pick the demo model based on detected VRAM.
+
+    Returns ``(model_id, advisory)``. On <=6 GB GPUs (e.g. RTX 3050 4 GB)
+    TinyLlama 1.1B doesn't fit and crashes at step 0; auto-switch to
+    SmolLM2-135M (verified to train in 5 s on RTX 3050 4 GB).
+    """
+    try:
+        import torch
+    except ImportError:
+        return _DEFAULT_MODEL, None
+    if not torch.cuda.is_available():
+        return _DEFAULT_MODEL, None
+    try:
+        props = torch.cuda.get_device_properties(0)
+        total_gb = float(getattr(props, "total_memory", 0)) / 1024**3
+    except (RuntimeError, OSError):
+        return _DEFAULT_MODEL, None
+    if total_gb and total_gb <= _LOW_VRAM_THRESHOLD_GB:
+        return (
+            _LOW_VRAM_MODEL,
+            f"Detected {total_gb:.1f} GB VRAM (≤{_LOW_VRAM_THRESHOLD_GB:.0f}) — "
+            f"using {_LOW_VRAM_MODEL} instead of {_DEFAULT_MODEL}.",
+        )
+    return _DEFAULT_MODEL, None
+
+
 DEMO_CONFIG = """# Soup Quickstart Config — auto-generated demo
 base: TinyLlama/TinyLlama-1.1B-Chat-v1.0
 
@@ -90,13 +122,16 @@ def quickstart(
     ),
 ):
     """Run a complete demo: create sample data, config, and train."""
+    model_id, advisory = _pick_quickstart_model()
+    if advisory:
+        console.print(f"[yellow]{advisory}[/]")
     console.print(
         Panel(
             "This will:\n"
             "  1. Create [bold]quickstart_data.jsonl[/] (20 examples)\n"
             "  2. Create [bold]quickstart_soup.yaml[/] config\n"
             "  3. Train a tiny LoRA adapter (~1 min on GPU)\n\n"
-            "Model: [bold]TinyLlama/TinyLlama-1.1B-Chat-v1.0[/]",
+            f"Model: [bold]{model_id}[/]",
             title="[bold]Soup Quickstart[/]",
         )
     )
@@ -122,7 +157,8 @@ def quickstart(
     if config_path.exists():
         console.print(f"[yellow]Config file already exists:[/] {config_path}")
     else:
-        config_path.write_text(DEMO_CONFIG, encoding="utf-8")
+        rendered = DEMO_CONFIG.replace(_DEFAULT_MODEL, model_id)
+        config_path.write_text(rendered, encoding="utf-8")
         console.print(f"[green]Created:[/] {config_path}")
 
     if dry_run:

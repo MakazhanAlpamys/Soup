@@ -2,11 +2,20 @@
 
 import sys
 
-import typer
-from rich.console import Console
+# UTF-8 stdio bootstrap (v0.40.1 Part A) — must run before any Rich console
+# is constructed. On Windows, reconfigures sys.stdout/stderr to UTF-8 so β /
+# ✓ / box-drawing chars don't crash with UnicodeEncodeError on cp1251/cp1252.
+# POSIX: no-op.
+from soup_cli.utils.encoding import force_utf8_stdio
 
-from soup_cli import __version__
-from soup_cli.commands import (
+force_utf8_stdio()
+_utf8_bootstrap_done = True
+
+import typer  # noqa: E402
+from rich.console import Console  # noqa: E402
+
+from soup_cli import __version__  # noqa: E402
+from soup_cli.commands import (  # noqa: E402
     adapters,
     autopilot,
     bench,
@@ -34,15 +43,15 @@ from soup_cli.commands import (
     train,
     ui,
 )
-from soup_cli.commands import doctor as doctor_cmd
-from soup_cli.commands import quickstart as quickstart_cmd
-from soup_cli.commands import (
+from soup_cli.commands import doctor as doctor_cmd  # noqa: E402
+from soup_cli.commands import quickstart as quickstart_cmd  # noqa: E402
+from soup_cli.commands import (  # noqa: E402
     tui as tui_cmd,
 )
-from soup_cli.commands import (
+from soup_cli.commands import (  # noqa: E402
     why as why_cmd,
 )
-from soup_cli.utils.constants import GITHUB_URL
+from soup_cli.utils.constants import GITHUB_URL  # noqa: E402
 
 console = Console()
 

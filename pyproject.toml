@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "soup-cli"
-version = "0.40.0"
+version = "0.40.1"
 description = "Fine-tune LLMs in one command. No SSH, no config hell."
 readme = "README.md"
 license = "Apache-2.0"
@@ -27,7 +27,7 @@ dependencies = [
     "pydantic>=2.0.0",
     "pyyaml>=6.0",
     "torch>=2.0.0",
-    "transformers>=4.36.0",
+    "transformers>=4.36.0,<5.0.0",
     "peft>=0.7.0",
     "trl>=0.7.0",
     "datasets>=2.14.0",

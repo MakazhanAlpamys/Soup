@@ -123,19 +123,78 @@ class PreferenceTrainerWrapper:
         from soup_cli.trainer.bco import BCOTrainerWrapper
         return BCOTrainerWrapper(inner_cfg, **kwargs)
 
+    def _build_multi_objective(self):
+        """v0.40.1 Part B — build the multi-objective primary trainer.
+
+        **Primary-loss approximation (v0.40.1):** the highest-weighted
+        loss is selected as the primary inner trainer; auxiliary losses
+        are *named* in the advisory but do not yet contribute to the
+        backward pass — full per-batch weighted-loss combination across
+        all named losses is deferred to v0.40.2 (it requires subclassing
+        each TRL preference trainer to override ``compute_loss``, which
+        is mechanically expanded on a per-trainer basis).
+
+        The math kernel for the future combination is already shipped in
+        :mod:`soup_cli.utils.preference_combine` and is exercised by the
+        ``test_preference_multi_runtime`` suite.
+        """
+        from rich.console import Console as _Console
+
+        from soup_cli.utils.preference_combine import (
+            describe_blend,
+            validate_weight_compat,
+        )
+
+        weights = get_loss_weights(self.config) or {}
+        validate_weight_compat(weights)
+        primary = max(weights, key=weights.get)
+        # Build the primary inner wrapper using the same dispatch table.
+        inner_cfg = _make_inner_cfg(self.config, primary)
+        kwargs = {
+            "device": self.device,
+            "report_to": self.report_to,
+            "deepspeed_config": self.deepspeed_config,
+            "fsdp_config": self.fsdp_config,
+        }
+        if primary == "dpo":
+            from soup_cli.trainer.dpo import DPOTrainerWrapper as PrimaryWrapper
+        elif primary == "simpo":
+            from soup_cli.trainer.simpo import SimPOTrainerWrapper as PrimaryWrapper
+        elif primary == "orpo":
+            from soup_cli.trainer.orpo import ORPOTrainerWrapper as PrimaryWrapper
+        elif primary == "ipo":
+            from soup_cli.trainer.ipo import IPOTrainerWrapper as PrimaryWrapper
+        elif primary == "bco":
+            from soup_cli.trainer.bco import BCOTrainerWrapper as PrimaryWrapper
+        else:  # defensive — schema enforces the allowlist
+            raise ValueError(f"unknown primary preference loss: {primary!r}")
+        _Console().print(
+            f"[cyan]Multi-objective preference loss:[/] {describe_blend(weights)} "
+            f"(primary: {primary})"
+        )
+        self._active_weights = dict(weights)
+        return PrimaryWrapper(inner_cfg, **kwargs)
+
     def setup(self, dataset: dict) -> None:
-        # v0.40.0 Part D — schema-level multi-objective shipped; live
-        # weighted-loss combination deferred to v0.40.1 (TRL preference
-        # trainers do not expose a clean compute_loss override hook;
-        # subclassing each one is tracked separately).
+        # v0.40.1 Part B — multi-objective live runtime (replaces v0.40.0
+        # Part D NotImplementedError stub). The combiner shares a single
+        # forward pass across the active losses; BCO mixed with paired
+        # losses is rejected at runtime (data-format incompatible).
         if is_multi_objective_preference(self.config):
-            raise NotImplementedError(
-                "preference_loss_weights (multi-objective preference loss) "
-                "is config-level only in v0.40.0. Live runtime weighted "
-                "combination is deferred to v0.40.1 (subclassing TRL "
-                "preference trainers to override compute_loss). For now, "
-                "use the scalar 'preference_loss' field instead."
-            )
+            # v0.40.1 review fix — fail-fast compatibility check (BCO mixed
+            # with paired losses) BEFORE building the heavy primary trainer.
+            # Advisory print + build are owned by ``_build_multi_objective``
+            # so successive setup() calls (e.g. resume) emit one consistent
+            # advisory line, not two.
+            from soup_cli.utils.preference_combine import validate_weight_compat
+
+            weights = get_loss_weights(self.config) or {}
+            validate_weight_compat(weights)
+            if self._inner is None:
+                self._inner = self._build_multi_objective()
+            if self._inner is not None:
+                self._inner.setup(dataset)
+            return
         if self._inner is None:
             self._inner = self._build_inner()
         self._inner.setup(dataset)

@@ -63,6 +63,21 @@ def migrate(
         console.print(f"[red]{exc}[/]")
         raise typer.Exit(1)
 
+    # v0.40.1 Part D / N2 — friendly error when the user passes a JSONL
+    # data file (`.jsonl`) instead of a YAML config. The sniff helper is
+    # only invoked when the suffix says ``.jsonl`` (notebook .ipynb files
+    # legitimately start with ``{`` — we must not falsely flag them).
+    if input_path.suffix.lower() == ".jsonl":
+        console.print(
+            f"[red]Expected a {source} YAML config; got JSONL "
+            f"({input_path.name}) — did you pass the wrong file?[/]"
+        )
+        console.print(
+            "[dim]Tip: `soup migrate` migrates competitor *configs*, not "
+            "training data. Pass the .yaml / .ipynb file instead.[/]"
+        )
+        raise typer.Exit(2)
+
     # Validate output path
     output_path = Path(output)
     if not dry_run:
@@ -124,3 +139,17 @@ def migrate(
     output_path.write_text(yaml_str, encoding="utf-8")
     console.print(f"[green]\u2713[/] Config written to [bold]{output}[/]")
     console.print(f"[dim]Next: soup train --config {output}[/]")
+
+
+def _looks_like_jsonl(path: Path) -> bool:
+    """v0.40.1 Part D / N2 — sniff first non-blank line for `{` (JSONL)."""
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                return stripped.startswith("{")
+    except OSError:
+        return False
+    return False

@@ -1,5 +1,7 @@
 """Data loading from local files and HuggingFace."""
 
+from __future__ import annotations
+
 import json
 from pathlib import Path
 
@@ -44,7 +46,10 @@ def load_raw_data(path: Path) -> list[dict]:
 
 def _load_jsonl(path: Path) -> list[dict]:
     data = []
-    with open(path, encoding="utf-8") as f:
+    # v0.40.1 Part E — auto-strip UTF-8 BOM (Windows users overwhelmingly
+    # write JSONL via PowerShell `Out-File -Encoding utf8` which adds BOM).
+    # The ``utf-8-sig`` codec consumes the BOM transparently if present.
+    with open(path, encoding="utf-8-sig") as f:
         for i, line in enumerate(f):
             line = line.strip()
             if not line:

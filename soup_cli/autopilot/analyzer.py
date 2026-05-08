@@ -91,12 +91,65 @@ _MODEL_SIZE_RE = re.compile(r"(\d+(?:\.\d+)?)\s*[Bb]")
 
 
 def _guess_params_from_name(name: str) -> float:
-    """Extract the parameter count (in billions) from a model name."""
+    """Extract the parameter count (in billions) from a model name.
+
+    v0.40.1 Part C / C3 — fall back to **1B** (not 7B) when the name has no
+    embedded size hint. The previous 7.0 default made tiny models like
+    ``tiny-gpt2`` (5 MB) fail VRAM-budget checks on machines that could
+    trivially train them. We also recognise the ``-Mm`` (millions) format
+    used by SmolLM2 / Phi-3 family. Probes for a local safetensors index
+    (cached HF snapshot) before falling back.
+    """
     match = _MODEL_SIZE_RE.search(name)
     if match:
         return float(match.group(1))
-    # Conservative default
-    return 7.0
+    # Recognise <N>m / <N>M for sub-billion models (e.g. SmolLM2-135M,
+    # tiny-gpt2). Convert to billions.
+    m_match = re.search(r"(\d+(?:\.\d+)?)\s*[Mm](?![a-zA-Z])", name)
+    if m_match:
+        return float(m_match.group(1)) / 1000.0
+    # Probe local HF cache for safetensors index size if we can.
+    cache_size = _probe_cache_param_count(name)
+    if cache_size is not None:
+        return cache_size
+    # Conservative default — small assumption (yellow advisory should fire).
+    return 1.0
+
+
+def _probe_cache_param_count(name: str) -> Optional[float]:
+    """Best-effort: read parameter count from cached safetensors index.
+
+    Looks at ``~/.cache/huggingface/hub/models--<owner>--<repo>/snapshots/*/
+    model.safetensors.index.json`` and returns ``total_size / 4 / 1e9`` (fp32
+    bytes per param). Returns ``None`` if not found.
+
+    v0.40.1 review fix — reject empty / null-byte names (project policy
+    mirroring v0.26.0 registry / v0.39.0 ReLoRAPolicy) before constructing
+    the cache path.
+    """
+    if not isinstance(name, str) or not name or "\x00" in name:
+        return None
+    try:
+        from pathlib import Path as _Path
+
+        owner_repo = name.replace("/", "--")
+        cache = _Path.home() / ".cache" / "huggingface" / "hub" / f"models--{owner_repo}"
+        if not cache.is_dir():
+            return None
+        for idx in cache.rglob("model.safetensors.index.json"):
+            try:
+                import json as _json
+                data = _json.loads(idx.read_text(encoding="utf-8"))
+                total_bytes = data.get("metadata", {}).get("total_size")
+                if isinstance(total_bytes, (int, float)) and total_bytes > 0:
+                    # Assume fp32 storage (4 bytes/param) — generous upper
+                    # bound; bf16/fp16 cuts it in half.
+                    return float(total_bytes) / 4.0 / 1e9
+            except (OSError, ValueError):
+                continue
+    except Exception:  # noqa: BLE001
+        return None
+    return None
 
 
 def analyze_model(name: str, params_b: Optional[float] = None) -> ModelProfile:

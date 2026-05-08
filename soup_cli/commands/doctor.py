@@ -1,5 +1,7 @@
 """soup doctor — check dependency compatibility and system health."""
 
+from __future__ import annotations
+
 import platform
 import sys
 
@@ -40,20 +42,29 @@ DEPS = [
     ("librosa", "librosa", "0.10.0", False),
 ]
 
+# v0.40.1 Part C / C5 — packages whose major version we explicitly cap.
+# Empty by default; entries gate the dependency table to flag a
+# breaking-major upgrade (e.g. transformers 5.x) as INCOMPATIBLE rather
+# than silently allowing it.
+_MAX_EXCLUSIVE: dict[str, str] = {
+    "transformers": "5.0.0",
+}
+
 
 def doctor():
     """Check system dependencies, GPU, and compatibility."""
     console.print("[bold]Soup Doctor[/] - checking your environment...\n")
 
     # System info
-    console.print(
-        Panel(
-            f"Python:   [bold]{sys.version.split()[0]}[/]\n"
-            f"Platform: [bold]{platform.system()} {platform.release()}[/]\n"
-            f"Arch:     [bold]{platform.machine()}[/]",
-            title="System",
-        )
+    dual_python_advisory = _detect_dual_python_interpreters()
+    panel_body = (
+        f"Python:   [bold]{sys.version.split()[0]}[/]\n"
+        f"Platform: [bold]{platform.system()} {platform.release()}[/]\n"
+        f"Arch:     [bold]{platform.machine()}[/]"
     )
+    if dual_python_advisory:
+        panel_body += f"\n[yellow]{dual_python_advisory}[/]"
+    console.print(Panel(panel_body, title="System"))
 
     # GPU check
     _check_gpu()
@@ -74,10 +85,34 @@ def doctor():
     for import_name, pkg_name, min_ver, required in DEPS:
         try:
             mod = __import__(import_name)
-            version = getattr(mod, "__version__", getattr(mod, "VERSION", "?"))
+            version = getattr(mod, "__version__", getattr(mod, "VERSION", None))
+            if version is None:
+                # v0.40.1 Part D / M1 — some installs (notably ``rich``)
+                # don't export ``__version__`` on the package surface;
+                # importlib.metadata is canonical and works everywhere.
+                try:
+                    from importlib.metadata import (
+                        PackageNotFoundError,
+                    )
+                    from importlib.metadata import (
+                        version as _pkgver,
+                    )
+
+                    version = _pkgver(pkg_name)
+                except (PackageNotFoundError, ImportError):
+                    version = "?"
             version_str = str(version)
 
-            if _version_ok(version_str, min_ver):
+            # v0.40.1 Part C / C5 — flag transformers 5.x as INCOMPATIBLE
+            # until the TRL/transformers 5.x migration lands.
+            max_excl = _MAX_EXCLUSIVE.get(pkg_name)
+            if max_excl and _version_ge(version_str, max_excl):
+                status = f"[red]INCOMPATIBLE (need <{max_excl})[/]"
+                issues.append(
+                    f"Downgrade {pkg_name}: "
+                    f"pip install '{pkg_name}>={min_ver},<{max_excl}'"
+                )
+            elif _version_ok(version_str, min_ver):
                 status = "[green]OK[/]"
             else:
                 status = f"[yellow]outdated (need >={min_ver})[/]"
@@ -170,10 +205,16 @@ def _check_gpu():
                 )
             )
         else:
+            # v0.40.1 Part C / N3 — distinguish "no GPU hardware" from
+            # "GPU hardware present, wrong torch wheel". When nvidia-smi
+            # reports a GPU but torch lacks CUDA, the user installed the
+            # CPU-only wheel — point them at the right reinstall command.
+            advisory = _detect_gpu_hw_without_torch_cuda()
             console.print(
                 Panel(
                     "Backend:  [bold yellow]CPU only[/]\n"
-                    "Warning:  Training will be slow without GPU.",
+                    "Warning:  Training will be slow without GPU."
+                    + (f"\n[dim]{advisory}[/]" if advisory else ""),
                     title="GPU",
                 )
             )
@@ -184,6 +225,72 @@ def _check_gpu():
                 title="GPU",
             )
         )
+
+
+def _detect_gpu_hw_without_torch_cuda() -> str:
+    """v0.40.1 Part C / N3 — return advisory string if nvidia-smi succeeds
+    but torch lacks CUDA (i.e. user installed the CPU-only wheel).
+    """
+    import shutil
+    import subprocess
+
+    if shutil.which("nvidia-smi") is None:
+        return ""
+    try:
+        completed = subprocess.run(  # noqa: S603 — argv list, no shell
+            ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    if completed.returncode != 0:
+        return ""
+    gpu_name = (completed.stdout or "").strip().splitlines()[:1]
+    raw_label = gpu_name[0] if gpu_name else "GPU"
+    # v0.40.1 review fix — security: nvidia-smi output is embedded in a
+    # Rich-markup string at the call site; escape `[`/`]` so a GPU name like
+    # "NVIDIA Quadro [T4]" cannot break or inject markup.
+    from rich.markup import escape as _markup_escape
+
+    gpu_label = _markup_escape(raw_label)
+    try:
+        from importlib.metadata import version as _pkgver
+
+        torch_version = _pkgver("torch")
+    except Exception:  # noqa: BLE001
+        torch_version = "?"
+    return (
+        f"GPU hardware present ({gpu_label}) but torch is the CPU build "
+        f"(torch {torch_version}). To enable your GPU: "
+        f"`pip install torch --index-url https://download.pytorch.org/whl/cu121`"
+    )
+
+
+def _detect_dual_python_interpreters() -> str:
+    """v0.40.1 Part C / N4 — flag when ``soup`` runs under one Python and
+    ``python`` on the user's PATH is a different interpreter.
+    """
+    import os
+    import shutil
+
+    soup_python = sys.executable
+    path_python = shutil.which("python") or shutil.which("python3")
+    if not path_python:
+        return ""
+    # v0.40.1 review fix — use os.path.realpath, not Path.resolve(), so
+    # Windows 8.3 short names don't produce a false-positive advisory.
+    try:
+        if os.path.realpath(path_python) == os.path.realpath(soup_python):
+            return ""
+    except OSError:
+        return ""
+    return (
+        f"`soup` runs under {soup_python}; `python` on your PATH is "
+        f"{path_python}. site-packages may differ — for any `python -c` "
+        f"check use the soup interpreter explicitly."
+    )
 
 
 _GB = 1024 ** 3
@@ -309,3 +416,24 @@ def _version_ok(installed: str, minimum: str) -> bool:
         return inst_parts >= min_parts
     except (ValueError, AttributeError):
         return True  # Can't parse, assume OK
+
+
+def _version_ge(installed: str, threshold: str) -> bool:
+    """v0.40.1 Part C / C5 — return True iff installed >= threshold.
+
+    Used to flag major-version upgrades we haven't migrated to. Robust to
+    suffixes like ``5.0.0.dev0`` (split on ``.``, parse leading ints only).
+    """
+    try:
+        inst_parts: list[int] = []
+        for chunk in installed.split(".")[:3]:
+            digits = "".join(c for c in chunk if c.isdigit())
+            inst_parts.append(int(digits) if digits else 0)
+        thr_parts = [int(x) for x in threshold.split(".")[:3]]
+        while len(inst_parts) < 3:
+            inst_parts.append(0)
+        while len(thr_parts) < 3:
+            thr_parts.append(0)
+        return inst_parts >= thr_parts
+    except (ValueError, AttributeError):
+        return False

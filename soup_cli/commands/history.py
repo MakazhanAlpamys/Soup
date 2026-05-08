@@ -30,6 +30,18 @@ def history(
             console.print(
                 f"[red]No registry entries named '{escape(name)}'.[/]"
             )
+            # v0.40.1 Part D / N6 — disambiguate model registry vs dataset
+            # registry. Look up <name> in dataset registry; if found, point
+            # the user at `soup data registry`.
+            if _name_exists_in_dataset_registry(name):
+                console.print(
+                    f"[dim]A dataset named '{escape(name)}' exists in the "
+                    f"local dataset registry — did you mean "
+                    f"`soup data registry` or `soup data inspect {escape(name)}`?[/]"
+                )
+            console.print(
+                "[dim]`soup history` queries the *model* registry only.[/]"
+            )
             raise typer.Exit(1)
 
         tree = Tree(f"[bold cyan]{escape(name)}[/]")
@@ -58,3 +70,14 @@ def history(
                     )
 
         console.print(tree)
+
+
+def _name_exists_in_dataset_registry(name: str) -> bool:
+    """v0.40.1 Part D / N6 — check the dataset registry for `name`."""
+    try:
+        from soup_cli.utils.registry import DatasetRegistry  # type: ignore
+
+        reg = DatasetRegistry()
+        return name in reg.list_names() if hasattr(reg, "list_names") else False
+    except Exception:  # noqa: BLE001 — registry may be missing / unreadable
+        return False
