@@ -43,13 +43,24 @@ def bench(
     """Run an inference benchmark (speed and memory) on a loaded model."""
     import torch
 
-    from soup_cli.commands.infer import _generate, _load_model
+    from soup_cli.commands.infer import _generate, _load_model, _resolve_model_source
     from soup_cli.utils.gpu import detect_device
 
-    model_path = Path(model)
-    if not model_path.exists():
-        console.print(f"[red]Model not found: {model_path}[/]")
-        raise typer.Exit(1)
+    # Resolve local-path-or-HF-id (#N7).
+    try:
+        model_kind, model_ref = _resolve_model_source(model)
+    except FileNotFoundError as exc:
+        console.print(
+            f"[red]{exc}[/]\n"
+            "[dim]If you meant a HuggingFace repo, use the form "
+            "'owner/repo-name' (no leading './').[/]"
+        )
+        raise typer.Exit(1) from exc
+    model_path = Path(model_ref)
+    if model_kind == "hf":
+        console.print(
+            f"[dim]Local path not found; treating {model_ref!r} as a HF repo id.[/]"
+        )
 
     device, _ = detect_device()
 
@@ -61,15 +72,17 @@ def bench(
 
     if prompts_file:
         import json
-        p_path = Path(prompts_file).resolve()
+        import os as _os
 
-        try:
-            p_path.relative_to(Path.cwd())
-        except ValueError:
+        from soup_cli.utils.paths import is_under_cwd
+
+        if not is_under_cwd(prompts_file):
             console.print(
-                f"[red]Security Error:[/] Path {p_path} is outside the current working directory."
+                "[red]Security Error:[/] Prompts file must stay under the "
+                "current working directory."
             )
             raise typer.Exit(1)
+        p_path = Path(_os.path.realpath(prompts_file))
 
         if not p_path.is_file():
             console.print(f"[red]Prompts file not found:[/] {p_path}")

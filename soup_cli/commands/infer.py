@@ -1,5 +1,7 @@
 """soup infer — batch inference on a list of prompts."""
 
+from __future__ import annotations
+
 import json
 import time
 from pathlib import Path
@@ -11,6 +13,42 @@ from rich.panel import Panel
 from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 
 console = Console()
+
+
+def _is_path_like(value: str) -> bool:
+    """Heuristic: looks like a filesystem path rather than a HF repo id.
+
+    HF repo ids are ``owner/name`` with no leading dot/slash and no Windows
+    drive letter; anything else (``./foo``, ``/abs/path``, ``C:\\...``) is
+    treated as a path so we surface a meaningful FileNotFoundError instead
+    of attempting an HF download.
+    """
+    if not value:
+        return True
+    if value.startswith((".", "/", "\\", "~")):
+        return True
+    # Windows drive letter, e.g. "C:\..." or "C:/..."
+    if len(value) >= 2 and value[1] == ":":
+        return True
+    return False
+
+
+def _resolve_model_source(model: str) -> tuple[str, str]:
+    """Return ``("local", path)`` or ``("hf", repo_id)`` for ``--model``.
+
+    Falls through to HF when the local path doesn't exist *and* the value
+    looks like a HF repo id (no leading ``./`` etc.). Raises
+    :class:`FileNotFoundError` when the value looks like a path but doesn't
+    exist locally — distinguishes "your file is missing" from "your HF id
+    is wrong" so the error message is actionable.
+    """
+    candidate = Path(model)
+    if candidate.exists():
+        return "local", str(candidate)
+    if _is_path_like(model):
+        raise FileNotFoundError(f"Model path not found: {model}")
+    # Looks like a HF repo id — let transformers handle the download.
+    return "hf", model
 
 
 def infer(
@@ -58,17 +96,29 @@ def infer(
     ),
 ):
     """Run batch inference on a JSONL file of prompts."""
+    from soup_cli.utils.paths import is_under_cwd
+
     # Validate input file
     input_path = Path(input_file)
     if not input_path.exists():
         console.print(f"[red]Input file not found: {input_path}[/]")
         raise typer.Exit(1)
 
-    # Validate model path
-    model_path = Path(model)
-    if not model_path.exists():
-        console.print(f"[red]Model not found: {model_path}[/]")
-        raise typer.Exit(1)
+    # Resolve model: local path or HF repo id (auto-fallback, #N7).
+    try:
+        model_kind, model_ref = _resolve_model_source(model)
+    except FileNotFoundError as exc:
+        console.print(
+            f"[red]{exc}[/]\n"
+            "[dim]If you meant a HuggingFace repo, use the form "
+            "'owner/repo-name' (no leading './').[/]"
+        )
+        raise typer.Exit(1) from exc
+    model_path = Path(model_ref)
+    if model_kind == "hf":
+        console.print(
+            f"[dim]Local path not found; treating {model_ref!r} as a HF repo id.[/]"
+        )
 
     # Read prompts
     prompts = _read_prompts(input_path)
@@ -103,6 +153,16 @@ def infer(
     console.print("[dim]Loading model...[/]")
     model_obj, tokenizer = _load_model(str(model_path), base, device)
     console.print("[green]Model loaded.[/]\n")
+
+    # Output path containment — defence-in-depth (project policy v0.20.0+).
+    # Checked late, after model+inputs validate, so that pre-existing tests
+    # asserting on "model not found" / "no prompts" errors keep working when
+    # they pass an out-of-cwd `tmp_path`.
+    if not is_under_cwd(output_file):
+        console.print(
+            "[red]--output must stay under the current working directory.[/]"
+        )
+        raise typer.Exit(1)
 
     # Run inference — stream results to disk as they are generated
     output_path = Path(output_file)

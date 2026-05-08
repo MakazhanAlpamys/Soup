@@ -435,6 +435,15 @@ def hf_space(
         "-t",
         help=f"Space template: {', '.join(HF_SPACE_TEMPLATES.keys())}",
     ),
+    template_dir: Optional[str] = typer.Option(
+        None,
+        "--template-dir",
+        help=(
+            "Custom template directory (overrides --template). "
+            "Must contain app.py + README.md, optionally requirements.txt. "
+            "Use {MODEL_REPO} placeholder for substitution."
+        ),
+    ),
     private: bool = typer.Option(
         False, "--private", help="Create the Space as private",
     ),
@@ -461,7 +470,7 @@ def hf_space(
     except ValueError as exc:
         console.print(f"[red]Invalid --space repo id:[/] {exc}")
         raise typer.Exit(1) from exc
-    if template not in HF_SPACE_TEMPLATES:
+    if template_dir is None and template not in HF_SPACE_TEMPLATES:
         console.print(
             f"[red]Unknown template: {template}[/]\n"
             f"Available: {', '.join(HF_SPACE_TEMPLATES.keys())}"
@@ -485,16 +494,28 @@ def hf_space(
 
     # --- Render template files ---
     try:
-        files = render_space_template(template, model_repo=model)
+        if template_dir is not None:
+            from soup_cli.utils.hf_space import render_custom_template_dir
+            files = render_custom_template_dir(template_dir, model_repo=model)
+            # Custom templates default to gradio SDK unless requirements
+            # imply otherwise; we record gradio for create_repo space_sdk.
+            sdk = "gradio"
+        else:
+            files = render_space_template(template, model_repo=model)
+            sdk = HF_SPACE_TEMPLATES[template]["sdk"]
     except ValueError as exc:
         console.print(f"[red]Template render failed:[/] {exc}")
         raise typer.Exit(1) from exc
+    except FileNotFoundError as exc:
+        console.print(f"[red]Template directory error:[/] {exc}")
+        raise typer.Exit(1) from exc
 
+    template_label = template_dir if template_dir is not None else template
     console.print(
         Panel(
             f"Space:    [bold]{space}[/]\n"
             f"Model:    [bold]{model}[/]\n"
-            f"Template: [bold]{template}[/]\n"
+            f"Template: [bold]{template_label}[/]\n"
             f"Private:  [bold]{private}[/]",
             title="Deploy HuggingFace Space",
         )
@@ -514,7 +535,7 @@ def hf_space(
     try:
         api.create_repo(
             repo_id=space, repo_type="space",
-            space_sdk=HF_SPACE_TEMPLATES[template]["sdk"],
+            space_sdk=sdk,
             private=private, exist_ok=True,
         )
         for in_repo_name, content in files.items():

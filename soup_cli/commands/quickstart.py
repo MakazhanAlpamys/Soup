@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Optional
 
 import typer
 from rich.console import Console
@@ -122,16 +123,43 @@ def quickstart(
         "--dry-run",
         help="Create data and config only, do not train",
     ),
+    output: Optional[str] = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help=(
+            "Output directory for data, config, and run artifacts "
+            "(default: current directory)."
+        ),
+    ),
 ):
     """Run a complete demo: create sample data, config, and train."""
+    import os
+
+    from soup_cli.utils.paths import is_under_cwd
+
     model_id, advisory = _pick_quickstart_model()
     if advisory:
         console.print(f"[yellow]{advisory}[/]")
+
+    # Resolve output directory (containment-checked)
+    if output is None:
+        out_dir = Path.cwd()
+    else:
+        if not is_under_cwd(output):
+            console.print(
+                f"[red]--output must stay under the current working directory; "
+                f"got: {output}[/]"
+            )
+            raise typer.Exit(2)
+        out_dir = Path(os.path.realpath(output))
+        out_dir.mkdir(parents=True, exist_ok=True)
+
     console.print(
         Panel(
             "This will:\n"
-            "  1. Create [bold]quickstart_data.jsonl[/] (20 examples)\n"
-            "  2. Create [bold]quickstart_soup.yaml[/] config\n"
+            f"  1. Create [bold]{out_dir}/quickstart_data.jsonl[/] (20 examples)\n"
+            f"  2. Create [bold]{out_dir}/quickstart_soup.yaml[/] config\n"
             "  3. Train a tiny LoRA adapter (~1 min on GPU)\n\n"
             f"Model: [bold]{model_id}[/]",
             title="[bold]Soup Quickstart[/]",
@@ -145,7 +173,7 @@ def quickstart(
             raise typer.Exit()
 
     # 1. Create demo data
-    data_path = Path("quickstart_data.jsonl")
+    data_path = out_dir / "quickstart_data.jsonl"
     if data_path.exists():
         console.print(f"[yellow]Data file already exists:[/] {data_path}")
     else:
@@ -155,13 +183,27 @@ def quickstart(
         console.print(f"[green]Created:[/] {data_path} ({len(DEMO_DATA)} examples)")
 
     # 2. Create demo config
-    config_path = Path("quickstart_soup.yaml")
+    config_path = out_dir / "quickstart_soup.yaml"
     if config_path.exists():
         console.print(f"[yellow]Config file already exists:[/] {config_path}")
     else:
         rendered = DEMO_CONFIG.replace(_DEFAULT_MODEL, model_id)
+        # When --output is set, retarget data + run dirs into that dir.
+        if output is not None:
+            rendered = rendered.replace(
+                "./quickstart_data.jsonl", str(data_path)
+            ).replace("./quickstart_output", str(out_dir / "quickstart_output"))
         config_path.write_text(rendered, encoding="utf-8")
         console.print(f"[green]Created:[/] {config_path}")
+    # Also write a `soup.yaml` symlink-style alias for tools that look for it.
+    soup_yaml = out_dir / "soup.yaml"
+    if not soup_yaml.exists() and output is not None:
+        try:
+            soup_yaml.write_text(
+                config_path.read_text(encoding="utf-8"), encoding="utf-8"
+            )
+        except OSError:
+            pass
 
     if dry_run:
         console.print("\n[yellow]Dry run - files created, skipping training.[/]")

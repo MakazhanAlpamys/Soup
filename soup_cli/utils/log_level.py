@@ -99,3 +99,16 @@ def setup_logging(tier: LogLevel) -> logging.Logger:
         handler.setLevel(py_level)
 
     return logger
+
+
+def apply_logging_level(tier: LogLevel) -> None:
+    """Set the *root* logger level so non-soup libraries respect the tier (#G2/N1).
+
+    ``setup_logging`` only configures the ``soup`` logger; library logs
+    (``transformers``, ``peft``, ``trl``) flow through the root logger.
+    Without this, ``--log-level quiet`` left third-party INFO chatter on
+    stdout. ``apply_logging_level`` plumbs the tier into the root level so
+    QUIET silences libraries and DEBUG surfaces them.
+    """
+    py_level = resolve_python_log_level(tier)
+    logging.getLogger().setLevel(py_level)

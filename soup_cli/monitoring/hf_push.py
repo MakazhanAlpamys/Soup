@@ -177,6 +177,32 @@ def resolve_latest_checkpoint_revision(
     return best_name
 
 
+def _find_highest_local_checkpoint(output_dir: str) -> Optional[int]:
+    """Return the highest ``checkpoint-<N>`` step under ``output_dir``, or None.
+
+    Skips non-directories and malformed names. Returns None if ``output_dir``
+    does not exist or contains no checkpoints.
+    """
+    base = Path(output_dir)
+    if not base.is_dir():
+        return None
+    best: Optional[int] = None
+    try:
+        children = list(base.iterdir())
+    except OSError:
+        return None
+    for entry in children:
+        if not entry.is_dir():
+            continue
+        match = _CHECKPOINT_BRANCH_RE.match(entry.name)
+        if not match:
+            continue
+        step = int(match.group(1))
+        if best is None or step > best:
+            best = step
+    return best
+
+
 def _download_checkpoint(
     repo_id: str,
     revision: str,
@@ -246,6 +272,22 @@ def prepare_hf_resume(
     revision = resolve_latest_checkpoint_revision(repo_id, token=token, endpoint=endpoint)
     if revision is None:
         return None
+
+    # Prefer local newer (#50): if local has checkpoint-N >= remote's,
+    # skip the download and return the local path. Saves bandwidth and
+    # avoids overwriting a fresher local checkpoint with stale Hub state.
+    remote_match = _CHECKPOINT_BRANCH_RE.match(revision)
+    remote_step = int(remote_match.group(1)) if remote_match else -1
+    local_step = _find_highest_local_checkpoint(output_dir)
+    if local_step is not None and local_step >= remote_step:
+        local_revision = f"checkpoint-{local_step}"
+        local_path = Path(output_dir) / local_revision
+        logger.info(
+            "HF resume: local %s >= remote %s; skipping download",
+            local_revision,
+            revision,
+        )
+        return str(local_path)
 
     # Mirror HF Trainer's on-disk layout: output_dir/<revision>
     local_dir = str(Path(output_dir) / revision)

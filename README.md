@@ -40,18 +40,20 @@ soup train
 
 ## What's New
 
+
 Latest highlights only. Full history: [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 
-**v0.40.1 — QA Hardening**: Windows codepage crash family fixed at the CLI bootstrap (one-line UTF-8 reconfigure closes 6 separate QA findings); the multi-objective preference-loss runtime stub from v0.40.0 is now live; autopilot + quickstart no longer assume 7B / 1.1B on tiny GPUs; `transformers >= 5.0.0` is flagged as INCOMPATIBLE in `soup doctor` until the migration lands.
+**v0.40.2 — Quick polish + carry-overs**: closes 3 originally-scheduled GitHub issues (#36 eval-gate dashboard row, #50 smarter `--hf-resume`, #51 custom HF Space templates) plus 7 v0.40.1 long-tail UX papercuts.
 
-- **UTF-8 stdio bootstrap (Windows)** — `soup_cli/cli.py` reconfigures `sys.stdout` / `sys.stderr` to UTF-8 before any Rich console init. β / ✓ / box-drawing characters no longer crash with `UnicodeEncodeError` on cp1251 / cp1252. POSIX is a no-op.
-- **Multi-objective preference loss is live** — `training.preference_loss_weights: {dpo: 0.7, simpo: 0.3}` no longer raises `NotImplementedError`. The wrapper builds the highest-weighted loss as primary and prints the active blend for confirmation. BCO mixed with paired losses (DPO/SimPO/ORPO/IPO) is rejected at runtime with a clear message (data-format incompatible).
-- **Smarter defaults on small GPUs** — `soup quickstart` auto-switches to `SmolLM2-135M-Instruct` on ≤6 GB VRAM (verified to train in 5 s on RTX 3050 4 GB); the autopilot model-size fallback now defaults to **1B** instead of 7B and reads the local safetensors index when available, so `tiny-gpt2` no longer fails VRAM-budget checks.
-- **`soup doctor` upgrades** — flags `transformers ≥ 5.0.0` as INCOMPATIBLE; distinguishes "no GPU hardware" from "GPU hardware present, wrong torch wheel" (`nvidia-smi` succeeds but `torch.cuda.is_available()` returns False); detects dual-Python interpreter setups; uses `importlib.metadata` as version-probe fallback so `rich` no longer prints "?".
-- **CLI UX consistency** — `soup init --force` non-interactively overwrites; `--template` help is generated from the live registry (no more drifting list); `soup migrate <data.jsonl>` errors loudly with a "did you pass the wrong file?" hint; `soup eval custom -o` writes JSON regardless of `--attach-to-registry`; `soup recipes show <typo>` suggests close matches via `difflib`; `soup data sample` filenames embed the strategy so successive `random` / `diverse` runs don't overwrite each other; JSONL loader auto-strips UTF-8 BOM (Windows PowerShell `Out-File` users).
-- **`--find-lr` actually runs the live loop** — fixed a broken `load_local` import that previously always silently fell through to a static placeholder curve.
-- **Schema strictness** — root-level `lora:` in YAML (the LlamaFactory / Axolotl convention) now migrates into `training.lora` so the nested validators (including `init_strategy: random|pissa|olora`) actually fire instead of being silently dropped.
-- **Net new tests** across UTF-8 bootstrap, multi-objective preference math (with gradient propagation checks), schema regression, and Part C–E papercuts.
+- **`--hf-resume` prefers local newer** — `prepare_hf_resume` checks the highest local `checkpoint-N` against the highest remote branch and skips the snapshot download when the local copy is newer or equal. Saves bandwidth and never overwrites a fresher local checkpoint with stale Hub state.
+- **Eval-gate dashboard row** — pure formatter `format_gate_row(state)` lives in `soup_cli/monitoring/display.py` and renders a one-liner like `Gate: helpfulness 7.8 ✓ | math 0.82 ✗ (-0.06) | STOP` for the live training panel. Hidden when eval-gate is disabled.
+- **`soup deploy hf-space --template-dir <path>`** — supply your own `app.py` + `README.md` (+ optional `requirements.txt`) instead of the built-in `gradio-chat` / `streamlit-chat`. Containment-checked, repo-id substitution validated *before* render, 256 KB cap per file, symlinks rejected.
+- **`soup quickstart --output DIR`** — route data, config, and run dir under any directory you choose (default keeps backwards-compat in cwd).
+- **`soup runs --cwd-only`** — restrict the listing to runs whose `output_dir` is under the current directory; the global `~/.soup/experiments.db` view is still default.
+- **`soup infer` / `soup bench` accept HF ids** — when the local model path is missing AND the value isn't path-like (no `./`, `/`, `~`, `C:\`), it falls through to a HuggingFace download via `transformers.from_pretrained`. Path-like-but-missing surfaces a friendly `FileNotFoundError`.
+- **CLI flag aliases** — `data filter --min-coherence` (alias for `--coherence`); `data split --train` accepted (informational, train is the implicit remainder); `data register / unregister` accept positional `<name>` and `<path>` alongside the `--name` / `--path` options, with conflict detection.
+- **`--log-level` plumbing complete** — `apply_logging_level` now sets the root logger so third-party libraries (transformers / peft / trl) actually respect QUIET and DEBUG. The four tiers no longer produce byte-identical output.
+- **+36 net new tests** across the new helpers, security-fix follow-ups (path-containment in `register_data`, `bench.py`, `infer.py --output`, symlink-reject in custom Space templates), and Windows cross-drive edge cases.
 
 ## Why Soup?
 

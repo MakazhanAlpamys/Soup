@@ -20,12 +20,48 @@ console = Console()
 app = typer.Typer(no_args_is_help=False, invoke_without_command=True)
 
 
+def _filter_runs_by_cwd(runs: list[dict], cwd: str) -> list[dict]:
+    """Return only runs whose output_dir is under ``cwd``.
+
+    Runs with no ``output_dir`` are dropped. Comparisons use
+    ``os.path.realpath + commonpath`` for Windows 8.3 short-name safety
+    (see project rule in CLAUDE.md).
+    """
+    cwd_real = os.path.realpath(cwd)
+    kept: list[dict] = []
+    for run in runs:
+        out = run.get("output_dir")
+        if not out:
+            continue
+        try:
+            cand = os.path.realpath(out)
+            if os.path.commonpath([cand, cwd_real]) == cwd_real:
+                kept.append(run)
+        except (ValueError, OSError):
+            # Different drives on Windows / unreadable path — skip.
+            continue
+    return kept
+
+
 @app.callback(invoke_without_command=True)
 def list_runs(
     ctx: typer.Context,
     limit: int = typer.Option(20, "--limit", "-l", help="Max runs to show"),
+    cwd_only: bool = typer.Option(
+        False,
+        "--cwd-only",
+        help=(
+            "Only show runs whose output_dir is under the current "
+            "working directory (default: show all in ~/.soup/experiments.db)."
+        ),
+    ),
 ):
-    """List all training runs."""
+    """List all training runs.
+
+    By default lists every run from the global ``~/.soup/experiments.db``.
+    Use ``--cwd-only`` to restrict to runs anchored under the current
+    directory.
+    """
     if ctx.invoked_subcommand is not None:
         return
 
@@ -33,6 +69,8 @@ def list_runs(
 
     tracker = ExperimentTracker()
     runs = tracker.list_runs(limit=limit)
+    if cwd_only:
+        runs = _filter_runs_by_cwd(runs, os.getcwd())
 
     if not runs:
         console.print("[dim]No runs found. Train a model with:[/] [bold]soup train[/]")

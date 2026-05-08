@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import random
 from pathlib import Path
+from typing import Optional
 
 import typer
 from rich.console import Console
@@ -325,7 +326,7 @@ def filter_data(
         help="Max perplexity threshold (rows above this are removed)",
     ),
     coherence: float = typer.Option(
-        None, "--coherence",
+        None, "--coherence", "--min-coherence",
         help="Min coherence threshold 0.0-1.0 (rows below this are removed)",
     ),
     perplexity_model: str = typer.Option(
@@ -779,6 +780,13 @@ def split_data(
     test: int = typer.Option(
         None, "--test",
         help="Test split: percentage (default) or absolute count (with --absolute)",
+    ),
+    train: int = typer.Option(
+        None, "--train",
+        help=(
+            "Train split (informational; the train remainder is implied by "
+            "--val + --test). Accepted for command parity."
+        ),
     ),
     absolute: bool = typer.Option(
         False, "--absolute",
@@ -1461,56 +1469,104 @@ def _load_augment_provider(provider: str, rpm: int):
 
 @app.command(name="register")
 def register_data(
-    name: str = typer.Option(..., "--name", "-n", help="Dataset name"),
-    path: str = typer.Option(..., "--path", "-p", help="Path to dataset file"),
+    name_arg: Optional[str] = typer.Argument(
+        None, help="Dataset name (positional alternative to --name)",
+    ),
+    path_arg: Optional[str] = typer.Argument(
+        None, help="Path to dataset file (positional alternative to --path)",
+    ),
+    name: Optional[str] = typer.Option(None, "--name", "-n", help="Dataset name"),
+    path: Optional[str] = typer.Option(
+        None, "--path", "-p", help="Path to dataset file"
+    ),
     fmt: str = typer.Option(
         "auto", "--format", "-f",
         help="Dataset format: alpaca, sharegpt, chatml, dpo, kto, auto",
     ),
 ):
-    """Register a local dataset by name for use in soup.yaml."""
+    """Register a local dataset by name for use in soup.yaml.
+
+    Accepts both ``--name X --path Y`` and positional ``X Y``.
+    """
     from soup_cli.utils.registry import register_dataset
 
-    # Path traversal protection
-    resolved = Path(path).resolve()
-    cwd = Path.cwd().resolve()
-    try:
-        resolved.relative_to(cwd)
-    except ValueError:
+    # Resolve positional vs option, with conflict detection
+    final_name = name if name is not None else name_arg
+    final_path = path if path is not None else path_arg
+    if final_name is None or final_path is None:
+        console.print(
+            "[red]Provide both name and path "
+            "(positional `<name> <path>` or `--name --path`).[/]"
+        )
+        raise typer.Exit(2)
+    if name is not None and name_arg is not None and name != name_arg:
+        console.print("[red]Conflict: --name and positional name differ.[/]")
+        raise typer.Exit(2)
+    if path is not None and path_arg is not None and path != path_arg:
+        console.print("[red]Conflict: --path and positional path differ.[/]")
+        raise typer.Exit(2)
+
+    # Path traversal protection — use os.path.realpath + commonpath
+    # (project standard; Windows 8.3 short-name safe).
+    import os as _os
+
+    from soup_cli.utils.paths import is_under_cwd
+
+    if not is_under_cwd(final_path):
         console.print(
             "[red]Dataset path must be under the current working directory.[/]"
         )
         raise typer.Exit(1)
+    resolved = Path(_os.path.realpath(final_path))
 
     registry_path = _get_registry_path()
 
     try:
-        register_dataset(name, str(resolved), fmt, registry_path=registry_path)
+        register_dataset(final_name, str(resolved), fmt, registry_path=registry_path)
     except ValueError as exc:
         console.print(f"[red]{exc}[/]")
         raise typer.Exit(1)
 
     console.print(
-        f"[green]Registered dataset '[bold]{name}[/bold]'[/]\n"
-        f"  Path: {path}\n"
+        f"[green]Registered dataset '[bold]{final_name}[/bold]'[/]\n"
+        f"  Path: {final_path}\n"
         f"  Format: {fmt}"
     )
 
 
 @app.command(name="unregister")
 def unregister_data(
-    name: str = typer.Option(..., "--name", "-n", help="Dataset name to remove"),
+    name_arg: Optional[str] = typer.Argument(
+        None, help="Dataset name (positional alternative to --name)",
+    ),
+    name: Optional[str] = typer.Option(
+        None, "--name", "-n", help="Dataset name to remove"
+    ),
 ):
-    """Remove a dataset from the local registry."""
+    """Remove a dataset from the local registry.
+
+    Accepts both ``--name X`` and positional ``X``.
+    """
     from soup_cli.utils.registry import unregister_dataset
 
+    final_name = name if name is not None else name_arg
+    if final_name is None:
+        console.print(
+            "[red]Provide a dataset name "
+            "(positional `<name>` or `--name`).[/]"
+        )
+        raise typer.Exit(2)
+    if name is not None and name_arg is not None and name != name_arg:
+        console.print("[red]Conflict: --name and positional name differ.[/]")
+        raise typer.Exit(2)
+
     registry_path = _get_registry_path()
-    removed = unregister_dataset(name, registry_path=registry_path)
+    removed = unregister_dataset(final_name, registry_path=registry_path)
 
     if removed:
-        console.print(f"[green]Removed dataset '{name}' from registry.[/]")
+        console.print(f"[green]Removed dataset '{final_name}' from registry.[/]")
     else:
-        console.print(f"[red]Dataset '{name}' not found in registry.[/]")
+        console.print(f"[red]Dataset '{final_name}' not found in registry.[/]")
         raise typer.Exit(1)
 
 

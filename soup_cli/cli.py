@@ -226,7 +226,11 @@ def main(
     """Soup — fine-tune LLMs in one command."""
     global _verbose, _log_level
     _verbose = verbose
-    from soup_cli.utils.log_level import parse_log_level, setup_logging
+    from soup_cli.utils.log_level import (
+        apply_logging_level,
+        parse_log_level,
+        setup_logging,
+    )
 
     try:
         tier = parse_log_level(log_level)
@@ -235,6 +239,10 @@ def main(
         raise typer.Exit(code=2) from exc
     _log_level = tier.value
     setup_logging(tier)
+    # v0.40.2 N1/G2: also push the tier into the root logger so third-party
+    # libraries (transformers / peft / trl) respect QUIET / DEBUG. Without
+    # this, all four levels were producing nearly-identical output.
+    apply_logging_level(tier)
 
 
 def run():

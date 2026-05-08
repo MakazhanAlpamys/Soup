@@ -1,6 +1,6 @@
 """Rich live training dashboard in the terminal."""
 
-from typing import Optional
+from typing import Any, Mapping, Optional
 
 from rich.console import Console
 from rich.live import Live
@@ -9,6 +9,49 @@ from rich.panel import Panel
 from soup_cli.config.schema import SoupConfig
 
 console = Console()
+
+
+def format_gate_row(state: Optional[Mapping[str, Any]]) -> str:
+    """Render the eval-gate status row for the live training panel (#36).
+
+    Returns an empty string when ``state`` is None or empty (so the row is
+    hidden when eval-gate is disabled).
+
+    Format example::
+
+        Gate: helpfulness 7.8 [green]✓[/] | math 0.82 [red]✗[/] (-0.06 from base) | STOP
+
+    Pure formatter — no I/O, no side effects — so it is trivially testable
+    via ``Console(file=StringIO())`` without spinning up a Live display.
+    """
+    if not state:
+        return ""
+    tasks = state.get("tasks") or []
+    if not tasks:
+        return ""
+    parts: list[str] = []
+    for task in tasks:
+        name = str(task.get("name", "?"))
+        score = task.get("score")
+        # Explicit ``is True`` so a missing field renders the ``?`` mark
+        # rather than the false-y red ✗ (e.g. tasks still pending).
+        passed = task.get("passed") is True
+        delta = task.get("delta")
+        score_str = f"{score:.2f}" if isinstance(score, (int, float)) else "—"
+        mark = "[green]✓[/]" if passed else "[red]✗[/]"
+        chunk = f"{name} {score_str} {mark}"
+        if delta is not None and isinstance(delta, (int, float)):
+            sign = "+" if delta >= 0 else ""
+            chunk += f" ({sign}{delta:.2f})"
+        parts.append(chunk)
+    body = " | ".join(parts)
+    action = state.get("action")
+    suffix = ""
+    if action == "stop":
+        suffix = " | [bold red]STOP[/]"
+    elif action == "warn":
+        suffix = " | [yellow]WARN[/]"
+    return f"[bold]Gate:[/] {body}{suffix}"
 
 
 class TrainingDisplay:
