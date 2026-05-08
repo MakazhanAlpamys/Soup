@@ -1,5 +1,7 @@
 """soup quickstart — one command for a complete demo (create data + config + train)."""
 
+from __future__ import annotations
+
 import json
 from pathlib import Path
 
