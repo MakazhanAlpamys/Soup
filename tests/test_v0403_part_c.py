@@ -237,7 +237,7 @@ class TestFromTracesJudgeCli:
         assert result.exit_code == 0
         # Narrow terminals on CI may break a long flag across two lines
         # (e.g. "--judge\n-provider"). Strip ANSI + whitespace before match.
-        cleaned = re.sub(r"\s+", "", result.output)
+        cleaned = re.sub(r"(\x1b\[[0-9;]*m|\s)+", "", result.output)
         assert "--judge" in cleaned
         assert "--min-confidence" in cleaned
 
@@ -530,14 +530,14 @@ class TestServeTraceLogWiring:
         assert result.exit_code == 0
         # Narrow terminals on CI may break "--trace-log" across two lines
         # (e.g. "--trace\n-log"). Strip whitespace before match.
-        cleaned = re.sub(r"\s+", "", result.output)
+        cleaned = re.sub(r"(\x1b\[[0-9;]*m|\s)+", "", result.output)
         assert "--trace-log" in cleaned
 
     def test_serve_help_lists_trace_log_cap_mb(self):
         runner = CliRunner()
         result = runner.invoke(soup_app, ["serve", "--help"])
         assert result.exit_code == 0
-        cleaned = re.sub(r"\s+", "", result.output)
+        cleaned = re.sub(r"(\x1b\[[0-9;]*m|\s)+", "", result.output)
         assert "--trace-log-cap-mb" in cleaned
 
     @pytest.mark.skipif(
