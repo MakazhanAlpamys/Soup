@@ -13,8 +13,14 @@ runner = CliRunner()
 
 
 def _plain(s: str) -> str:
-    """Strip ANSI escape sequences for help-string assertions."""
-    return re.sub(r"\x1b\[[0-9;]*[a-zA-Z]", "", s)
+    """Strip ANSI escape sequences AND whitespace.
+
+    Rich wraps long option names across lines on narrow CI terminals
+    (``--template-\\n-dir``). Stripping whitespace makes the assertion
+    width-independent.
+    """
+    no_ansi = re.sub(r"\x1b\[[0-9;]*[a-zA-Z]", "", s)
+    return re.sub(r"\s+", "", no_ansi)
 
 
 # ---------------------------------------------------------------------------

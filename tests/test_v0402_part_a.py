@@ -1,6 +1,7 @@
 """Tests for v0.40.2 Part A — originally scheduled issues (#36, #50, #51)."""
 from __future__ import annotations
 
+import re
 from io import StringIO
 
 import pytest
@@ -10,6 +11,15 @@ from typer.testing import CliRunner
 from soup_cli.cli import app
 
 runner = CliRunner()
+
+
+def _plain(s: str) -> str:
+    """Strip ANSI escape sequences AND any whitespace inserted by Rich's
+    width-aware option-name wrapping (e.g. ``-\\n-template-dir`` on narrow
+    CI terminals).
+    """
+    no_ansi = re.sub(r"\x1b\[[0-9;]*[a-zA-Z]", "", s)
+    return re.sub(r"\s+", "", no_ansi)
 
 
 # ---------------------------------------------------------------------------
@@ -249,7 +259,9 @@ class TestHfSpaceCustomTemplate:
 
     def test_deploy_hf_space_help_shows_template_dir(self):
         result = runner.invoke(app, ["deploy", "hf-space", "--help"])
-        assert "--template-dir" in result.output
+        # Rich wraps long option names across lines on narrow CI terminals;
+        # strip ANSI + whitespace to match the option name regardless.
+        assert "--template-dir" in _plain(result.output)
 
 
 # ---------------------------------------------------------------------------
