@@ -104,6 +104,16 @@ class SFTTrainerWrapper:
             gpu_memory_gb_total = int(
                 (gpu_info.get("memory_total_bytes") or 0) // (1024 ** 3)
             )
+            # v0.40.3 (#64): live CUDA probe_fn — runs ONE forward+backward
+            # on a synthetic batch per candidate before training. No-op on CPU.
+            from soup_cli.utils.batch_probe import make_cuda_probe_fn
+
+            probe_fn = make_cuda_probe_fn(
+                self.model,
+                self.tokenizer,
+                max_length=cfg.data.max_length,
+                device=self.device,
+            )
             batch_size = pick_batch_size(
                 static_estimate=static_estimate,
                 strategy=tcfg.auto_batch_size_strategy,
@@ -113,9 +123,7 @@ class SFTTrainerWrapper:
                 lora_r=tcfg.lora.r,
                 gpu_name=str(gpu_info.get("name") or "cpu"),
                 gpu_memory_gb=gpu_memory_gb_total,
-                probe_fn=None,  # CUDA probe wired in v0.36.x patch — for
-                                # now we honour the cache + static estimate
-                                # so the surface ships with no regression.
+                probe_fn=probe_fn,
                 console=console,
             )
             console.print(f"[green]Auto batch size:[/] {batch_size}")
@@ -298,6 +306,21 @@ class SFTTrainerWrapper:
                     "packed docs cannot attend across boundaries"
                 )
 
+        # v0.40.3: #65 multipack live wiring DEFERRED to v0.40.4 — adversarial
+        # review surfaced that HF Trainer's `_get_train_sampler` returns a
+        # `Sampler[int]` (DataLoader iterates ints), but `MultipackBatchSampler`
+        # yields `list[list[int]]`. A `get_train_dataloader` override (with
+        # `batch_sampler=...`) is required and lands next patch. The
+        # multipack_trainer.py helpers remain in the codebase as a stub used
+        # by unit tests — the schema gate keeps `multipack: true` from
+        # silently no-opping (rejected at config-load for unsupported tasks).
+        if getattr(tcfg, "multipack", False):
+            console.print(
+                "[yellow]multipack: live HF Trainer wiring is deferred to "
+                "v0.40.4 (DataLoader sampler-vs-batch-sampler mismatch in HF "
+                "Trainer). Falling back to the standard sampler for this "
+                "run.[/]"
+            )
         self.trainer = SFTTrainer(**trainer_kwargs)
 
         self._output_dir = str(output_dir)

@@ -169,6 +169,13 @@ class PretrainTrainerWrapper:
             trainer_kwargs["packing"] = True
             console.print("[green]Sample packing enabled[/]")
 
+        # v0.40.3: #65 multipack live wiring DEFERRED to v0.40.4 — see
+        # sft.py for the rationale. Same advisory.
+        if getattr(tcfg, "multipack", False):
+            console.print(
+                "[yellow]multipack: live HF Trainer wiring is deferred to "
+                "v0.40.4. Falling back to the standard sampler.[/]"
+            )
         self.trainer = SFTTrainer(**trainer_kwargs)
 
         self._output_dir = str(output_dir)

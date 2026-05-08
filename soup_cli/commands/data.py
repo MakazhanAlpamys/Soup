@@ -1586,6 +1586,26 @@ def from_traces_cmd(
         "prefs.jsonl", "--output", "-o",
         help="Output path for preference pairs (JSONL)",
     ),
+    judge: bool = typer.Option(
+        False, "--judge",
+        help="Filter pairs via LLM-as-a-judge confidence (v0.40.3 #33).",
+    ),
+    judge_provider: str = typer.Option(
+        "openai", "--judge-provider",
+        help="Judge backend: openai | server | ollama. Used with --judge.",
+    ),
+    judge_model: str = typer.Option(
+        "gpt-4o-mini", "--judge-model",
+        help="Judge model id (e.g. 'gpt-4o-mini', 'llama3', 'qwen2.5'). Used with --judge.",
+    ),
+    judge_api_base: Optional[str] = typer.Option(
+        None, "--judge-api-base",
+        help="Judge API base URL. SSRF-protected. Used with --judge.",
+    ),
+    min_confidence: float = typer.Option(
+        0.7, "--min-confidence",
+        help="Drop pairs with judge-confidence below this threshold (0.0 - 1.0).",
+    ),
 ) -> None:
     """Harvest preference pairs from production traces (v0.26.0 Part C).
 
@@ -1666,6 +1686,53 @@ def from_traces_cmd(
             trace_iter = parse_openai(events)
 
     pairs = list(build_pairs(trace_iter, signal=signal))
+
+    if judge:
+        # v0.40.3 (#33 (a)) — LLM-judge confidence filter.
+        from soup_cli.data.traces.quality import judge_filter_pairs
+        from soup_cli.eval.judge import VALID_PROVIDERS, JudgeEvaluator
+
+        # Friendly early validation matches the existing CLI conventions —
+        # fall through to the constructor only after the obvious typo is caught.
+        if judge_provider not in VALID_PROVIDERS:
+            console.print(
+                f"[red]--judge-provider '{_escape(judge_provider)}' is invalid. "
+                f"Choose: {', '.join(sorted(VALID_PROVIDERS))}[/]"
+            )
+            raise typer.Exit(1)
+
+        try:
+            judge_evaluator = JudgeEvaluator(
+                provider=judge_provider,
+                model=judge_model,
+                api_base=judge_api_base,
+            )
+        except ValueError as exc:
+            console.print(f"[red]--judge config error:[/] {_escape(str(exc))}")
+            raise typer.Exit(1) from exc
+
+        # Cost-shock warning: each pair → TWO judge calls (chosen + rejected).
+        projected = len(pairs) * 2
+        console.print(
+            f"[yellow]Judge filter will issue ~{projected} backend calls "
+            f"({len(pairs)} pairs × 2). Cost depends on provider and model. "
+            f"Use --min-confidence to tune throughput.[/]"
+        )
+
+        try:
+            filtered, report = judge_filter_pairs(
+                pairs, judge=judge_evaluator, min_confidence=min_confidence,
+            )
+        except (TypeError, ValueError) as exc:
+            console.print(f"[red]--judge runtime error:[/] {_escape(str(exc))}")
+            raise typer.Exit(1) from exc
+
+        console.print(
+            f"[green]Judge filter:[/] kept={report.kept} dropped={report.dropped} "
+            f"errors={report.errors} (min_confidence={min_confidence:.2f})"
+        )
+        pairs = filtered
+
     with output_path.open("w", encoding="utf-8") as fh:
         for pair in pairs:
             fh.write(_json.dumps(pair.to_jsonl_dict(), ensure_ascii=False) + "\n")

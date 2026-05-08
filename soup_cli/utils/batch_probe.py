@@ -286,3 +286,109 @@ def pick_batch_size(
     )
     save_cache_entry(key, picked)
     return picked
+
+
+# ---------------------------------------------------------------------------
+# Live CUDA probe builder (v0.40.3 #64)
+# ---------------------------------------------------------------------------
+
+
+def make_cuda_probe_fn(
+    model: Any,
+    tokenizer: Any,
+    *,
+    max_length: int,
+    device: str = "cuda",
+) -> Optional[ProbeFn]:
+    """Build a real CUDA ``probe_fn`` for :func:`pick_batch_size`.
+
+    Returns a closure that, given a candidate batch size ``B``, runs ONE
+    forward + backward step on a synthetic batch of ``B`` sequences of
+    length ``max_length``. Returns ``True`` on success, ``False`` on
+    :class:`torch.cuda.OutOfMemoryError`. Other exceptions propagate so
+    misconfiguration surfaces.
+
+    Returns ``None`` on non-CUDA devices, when torch is unavailable, when
+    ``cuda.is_available()`` is False, or when any of the inputs is missing
+    — :func:`pick_batch_size` falls back to the static estimate via its
+    probe-unavailable branch.
+
+    Added in v0.40.3 (#64). SFT-only this release; non-SFT trainer
+    expansion can come later.
+    """
+    if isinstance(max_length, bool) or not isinstance(max_length, int):
+        raise TypeError("max_length must be int")
+    if max_length < 8:
+        raise ValueError(f"max_length must be >= 8, got {max_length}")
+    if model is None or tokenizer is None:
+        return None
+    if device != "cuda":
+        return None
+
+    try:
+        import torch
+    except ImportError:
+        return None
+    if not torch.cuda.is_available():
+        return None
+
+    pad_id = getattr(tokenizer, "pad_token_id", None)
+    if pad_id is None:
+        pad_id = getattr(tokenizer, "eos_token_id", None) or 0
+    # Use len(tokenizer) — `vocab_size` returns the BASE vocab and excludes
+    # added special tokens. On Llama-3 / Qwen tokenizers with appended
+    # `<|pad|>` at id 128255, vocab_size=128000 would mod the pad_id back to
+    # `255` (random byte token), invalidating the probe. `len(tokenizer)`
+    # includes added tokens.
+    try:
+        vocab_size = int(len(tokenizer))
+    except TypeError:
+        vocab_size = int(getattr(tokenizer, "vocab_size", 32000) or 32000)
+    if vocab_size <= 1:
+        vocab_size = 32000
+    pad_id = int(pad_id) % vocab_size
+
+    def _probe(batch_size: int) -> bool:
+        if isinstance(batch_size, bool) or not isinstance(batch_size, int):
+            raise TypeError("batch_size must be int")
+        if batch_size < 1:
+            raise ValueError(f"batch_size must be >= 1, got {batch_size}")
+        # Zero grads BEFORE forward — defends against the synthetic
+        # backward accumulating into the live training model's grad
+        # buffers (matches v0.35.0 #45 benchmark_kernel_combos policy).
+        try:
+            model.zero_grad(set_to_none=True)
+        except (AttributeError, RuntimeError):
+            pass
+        try:
+            ids = torch.full(
+                (batch_size, max_length), pad_id, dtype=torch.long, device=device,
+            )
+            attn = torch.ones_like(ids)
+            labels = ids.clone()
+            outputs = model(input_ids=ids, attention_mask=attn, labels=labels)
+            loss = getattr(outputs, "loss", None)
+            if loss is None:
+                # Last resort — generic signal we got past forward.
+                del ids, attn, labels, outputs
+                torch.cuda.synchronize()
+                return True
+            # Drop intermediate tensor refs BEFORE backward so peak VRAM
+            # reflects the realistic training step (matches v0.35.0 policy).
+            del ids, attn, labels, outputs
+            loss.backward()
+            torch.cuda.synchronize()
+            return True
+        except torch.cuda.OutOfMemoryError:
+            return False
+        finally:
+            try:
+                model.zero_grad(set_to_none=True)
+            except (AttributeError, RuntimeError):
+                pass
+            try:
+                torch.cuda.empty_cache()
+            except (AttributeError, RuntimeError):
+                pass
+
+    return _probe

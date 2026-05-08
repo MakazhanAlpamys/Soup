@@ -174,6 +174,20 @@ def serve(
             "Default deny (v0.36.0). Only enable if you trust the source."
         ),
     ),
+    trace_log: Optional[str] = typer.Option(
+        None,
+        "--trace-log",
+        help=(
+            "Append per-request {prompt, response, latency_ms, tokens, ts} "
+            "to JSONL at this path. Path must stay under cwd. Rotates at "
+            "100 MB (one backup retained). Added in v0.40.3 (#33)."
+        ),
+    ),
+    trace_log_cap_mb: int = typer.Option(
+        100,
+        "--trace-log-cap-mb",
+        help="Rotation cap in MB for --trace-log (1 - 10000). Default 100.",
+    ),
 ):
     """Start a local inference server with OpenAI-compatible API."""
     # Lazy imports for fast CLI startup
@@ -567,6 +581,25 @@ def serve(
 
         tracer = build_tracer(enabled=trace, endpoint=trace_endpoint)
 
+        # v0.40.3 (#33 (b)) — passive request log.
+        trace_log_writer = None
+        if trace_log is not None:
+            from soup_cli.monitoring.trace_logger import TraceLogWriter
+
+            try:
+                trace_log_writer = TraceLogWriter(
+                    trace_log, cap_mb=trace_log_cap_mb,
+                )
+            except (TypeError, ValueError) as exc:
+                from rich.markup import escape as _escape
+
+                console.print(f"[red]--trace-log:[/] {_escape(str(exc))}")
+                raise typer.Exit(1) from exc
+            console.print(
+                f"[green]Request trace log:[/] {trace_log_writer.path} "
+                f"(cap {trace_log_cap_mb} MB)"
+            )
+
         app = _create_app(
             model_obj=model_obj,
             tokenizer=tokenizer,
@@ -579,6 +612,7 @@ def serve(
             output_constraint=constraint,
             enable_dashboard=dashboard,
             tracer=tracer,
+            trace_log_writer=trace_log_writer,
         )
 
     console.print(
@@ -844,6 +878,7 @@ def _create_app(
     output_constraint: Optional[Dict] = None,
     enable_dashboard: bool = False,
     tracer=None,
+    trace_log_writer=None,
 ):
     """Create the FastAPI application with OpenAI-compatible endpoints."""
     import threading as _threading
@@ -987,6 +1022,7 @@ def _create_app(
         max_tokens = request.max_tokens or max_tokens_default
 
         if request.stream:
+            stream_started = time.perf_counter()
             return StreamingResponse(
                 _stream_response(
                     model_obj, tokenizer, messages,
@@ -996,6 +1032,8 @@ def _create_app(
                     model_name=model_name,
                     assistant_model=draft_model,
                     num_assistant_tokens=num_speculative_tokens,
+                    trace_log_writer=trace_log_writer,
+                    started=stream_started,
                 ),
                 media_type="text/event-stream",
             )
@@ -1042,6 +1080,21 @@ def _create_app(
                 # returns an empty list and generation runs free-form.
                 pass
 
+                # v0.40.3 (#33 (b)) — passive request log; never breaks
+                # the request handler on disk / serialisation issues.
+                if trace_log_writer is not None:
+                    last_user = next(
+                        (m["content"] for m in reversed(messages)
+                         if m.get("role") == "user"),
+                        "",
+                    )
+                    trace_log_writer.record(
+                        prompt=str(last_user),
+                        response=response_text,
+                        latency_ms=(time.perf_counter() - started) * 1000,
+                        tokens=completion_tokens,
+                    )
+
                 return {
                     "id": f"chatcmpl-{uuid.uuid4().hex[:8]}",
                     "object": "chat.completion",
@@ -1071,6 +1124,7 @@ def _create_app(
     # Expose dashboard intent + constraint on the app for tests + introspection
     app.state.enable_dashboard = enable_dashboard
     app.state.output_constraint = output_constraint
+    app.state.trace_log_writer = trace_log_writer
     return app
 
 
@@ -1078,14 +1132,16 @@ def _stream_response(
     model, tokenizer, messages,
     max_tokens, temperature, top_p, model_name,
     assistant_model=None, num_assistant_tokens=5,
+    trace_log_writer=None, started=None,
 ):
     """Generator that yields SSE chunks for streaming responses."""
     chat_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
     created = int(time.time())
 
     # Generate full response (true token-by-token streaming requires TextIteratorStreamer)
+    completion_tokens_for_log = 0
     try:
-        response_text, _, _ = _generate_response(
+        response_text, _, completion_tokens_for_log = _generate_response(
             model, tokenizer, messages,
             max_tokens=max_tokens,
             temperature=temperature,
@@ -1133,3 +1189,24 @@ def _stream_response(
     }
     yield f"data: {json.dumps(final_chunk)}\n\n"
     yield "data: [DONE]\n\n"
+
+    # v0.40.3 (#33 (b)) — passive request log on the streaming path. Latency
+    # measured from the BEFORE-`_generate_response` mark passed in by the
+    # chat_completions handler. Skipped if writer is None or `started` is
+    # missing. Errors swallowed (passive log).
+    if trace_log_writer is not None and started is not None:
+        try:
+            last_user = next(
+                (m["content"] for m in reversed(messages)
+                 if m.get("role") == "user"),
+                "",
+            )
+            trace_log_writer.record(
+                prompt=str(last_user),
+                response=response_text,
+                latency_ms=(time.perf_counter() - started) * 1000,
+                tokens=int(completion_tokens_for_log),
+                extra={"stream": True},
+            )
+        except Exception:  # noqa: BLE001 — passive log never blocks SSE
+            logger.debug("trace_log streaming record failed", exc_info=True)

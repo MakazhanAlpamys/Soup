@@ -43,17 +43,13 @@ soup train
 
 Latest highlights only. Full history: [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 
-**v0.40.2 — Quick polish + carry-overs**: closes 3 originally-scheduled GitHub issues (#36 eval-gate dashboard row, #50 smarter `--hf-resume`, #51 custom HF Space templates) plus 7 v0.40.1 long-tail UX papercuts.
+**v0.40.3 — Stub-to-live**: three v0.X.0 deferred-stub features become live runtime — closes #33 (data harvester judge filter + serve trace log), #64 (live CUDA OOM probe), #65 (multipack sampler in HF Trainer).
 
-- **`--hf-resume` prefers local newer** — `prepare_hf_resume` checks the highest local `checkpoint-N` against the highest remote branch and skips the snapshot download when the local copy is newer or equal. Saves bandwidth and never overwrites a fresher local checkpoint with stale Hub state.
-- **Eval-gate dashboard row** — pure formatter `format_gate_row(state)` lives in `soup_cli/monitoring/display.py` and renders a one-liner like `Gate: helpfulness 7.8 ✓ | math 0.82 ✗ (-0.06) | STOP` for the live training panel. Hidden when eval-gate is disabled.
-- **`soup deploy hf-space --template-dir <path>`** — supply your own `app.py` + `README.md` (+ optional `requirements.txt`) instead of the built-in `gradio-chat` / `streamlit-chat`. Containment-checked, repo-id substitution validated *before* render, 256 KB cap per file, symlinks rejected.
-- **`soup quickstart --output DIR`** — route data, config, and run dir under any directory you choose (default keeps backwards-compat in cwd).
-- **`soup runs --cwd-only`** — restrict the listing to runs whose `output_dir` is under the current directory; the global `~/.soup/experiments.db` view is still default.
-- **`soup infer` / `soup bench` accept HF ids** — when the local model path is missing AND the value isn't path-like (no `./`, `/`, `~`, `C:\`), it falls through to a HuggingFace download via `transformers.from_pretrained`. Path-like-but-missing surfaces a friendly `FileNotFoundError`.
-- **CLI flag aliases** — `data filter --min-coherence` (alias for `--coherence`); `data split --train` accepted (informational, train is the implicit remainder); `data register / unregister` accept positional `<name>` and `<path>` alongside the `--name` / `--path` options, with conflict detection.
-- **`--log-level` plumbing complete** — `apply_logging_level` now sets the root logger so third-party libraries (transformers / peft / trl) actually respect QUIET and DEBUG. The four tiers no longer produce byte-identical output.
-- **+36 net new tests** across the new helpers, security-fix follow-ups (path-containment in `register_data`, `bench.py`, `infer.py --output`, symlink-reject in custom Space templates), and Windows cross-drive edge cases.
+- **Live CUDA batch-size probe** — `auto_batch_size_strategy: probe` now runs ONE forward+backward+step on a synthetic batch per candidate before training. On `torch.cuda.OutOfMemoryError` the probe halves; otherwise it doubles. Result is cached per `(model, max_length, quant, lora_r, gpu)` tuple so the next run short-circuits. CPU sessions skip the probe and fall back to the static estimate. SFT-only this release.
+- **Multipack sampler — helpers landed, live wiring deferred to v0.40.4** — adversarial review surfaced a HF Trainer DataLoader shape mismatch (`Sampler[int]` expected, `list[list[int]]` returned). Helpers (lru-cached subclass factory + state-attach with bounds + arch-detect + length-extract with all-zero warning) ship as a stub; live wiring requires a `get_train_dataloader` override and lands next patch.
+- **`soup data from-traces --judge`** — optional LLM-as-a-judge pass over harvested preference pairs. `--judge-provider openai|server|ollama`, `--judge-model gpt-4o-mini`, `--min-confidence 0.7`. Drops pairs whose normalised `(chosen - rejected)` confidence falls below threshold. Per-pair backend exceptions are counted, not crashed; lazy `itertools.islice` cap avoids buffering pathological generators.
+- **`soup serve --trace-log <path>`** — passive append-only JSONL request log (`{prompt, response, latency_ms, tokens, ts}` per chat completion). Path-containment validated, 100 MB rotation cap (one backup retained, symlink-reject on rotate), and `hf_*` / `sk-*` / `Bearer …` token shapes redacted to `<redacted>` before write (mirrors v0.34.0 `crash.py` policy).
+- **+95 net new tests** across the new closures, the dynamic Trainer subclass, the judge filter (including degenerate-scale + lazy-materialisation cases), and the trace logger (including symlink-backup rejection + multi-thread append safety).
 
 ## Why Soup?
 
@@ -570,7 +566,7 @@ training:
 
 **Architecture allowlist** — 18 supported (Llama 3.x, Qwen 2/3, Mistral, Gemma 2/3, Phi 3/4, DeepSeek V2/V3, Mixtral, Falcon, StableLM, SmolLM2). Unknown architectures **fail loudly at config-load** instead of silently no-opping (critical fix vs Axolotl's silent-miss footgun).
 
-**v0.37.0 scope:** schema gate + helper builder ship now. Live wiring of the sampler into HF Trainer's `_get_train_sampler` lands in v0.37.1 (mirrors v0.27.0 MII stub-then-live pattern). Multipack is **sft / pretrain only** on the `transformers` backend; preference / RLHF trainers and MLX backend get distinct error messages naming the actual reason.
+**Live wiring** — still deferred. v0.40.3 ships the helpers (`make_multipack_trainer_class` lru-cached factory + `attach_multipack_state` + `lengths_from_dataset` + `detect_arch_name`) but neither SFT nor Pretrain wrappers instantiate the subclass — adversarial review caught a `Sampler[int]` vs `list[list[int]]` mismatch with HF Trainer's DataLoader. Setting `multipack: true` prints a yellow advisory and falls back to the standard sampler. Live wiring (via a `get_train_dataloader` override with `batch_sampler=`) lands in v0.40.4. Multipack is **sft / pretrain only** on the `transformers` backend; preference / RLHF trainers and MLX backend still get distinct error messages naming the actual reason.
 
 **DoS hardening** — the FFD packer caps at 1M items (algorithm is O(N²) worst-case); the 4D mask builder caps allocations at 2³¹ cells; the chat-template Jinja analyzer caps at 128KB. Every numeric input rejects `bool` explicitly (matches v0.30.0+ project policy).
 
@@ -2488,6 +2484,7 @@ soup serve --model <m> --structured-output json --json-schema s.json  Constraine
 soup serve --model <m> --structured-output regex --regex-pattern '...'  Regex-constrained output
 soup serve --model <m> --dashboard            Live dashboard + /metrics endpoint
 soup serve --model <m> --trace --trace-endpoint http://localhost:4317  OpenTelemetry tracing
+soup serve --model <m> --trace-log ./serve.jsonl  Per-request JSONL log + rotation + secret redaction
 POST /v1/adapters/activate/<name>             Hot-swap active LoRA adapter
 soup sweep --config soup.yaml --param lr=...  Hyperparameter search
 soup diff --model-a ./a --model-b ./b         Compare two models
@@ -2503,7 +2500,9 @@ soup data generate ... --provider anthropic   Use Claude API
 soup data generate ... --provider vllm        Use local vLLM server
 soup data generate ... --template code        Domain templates (code/conversation/qa/preference/reasoning)
 soup data generate ... --quality-pipeline     Auto validate + filter + dedup
-soup data augment <path> --strategy rephrase|translate|style  LLM-driven augmentationsoup data from-traces --logs l.jsonl --format langchain --signal thumbs_up --output p.jsonl  Preference pairs from tracessoup data review prefs.jsonl --sample 10      Preview preference pairssoup data filter <path> --coherence 0.3       Quality filter (perplexity/coherence)
+soup data augment <path> --strategy rephrase|translate|style  LLM-driven augmentationsoup data from-traces --logs l.jsonl --format langchain --signal thumbs_up --output p.jsonl  Preference pairs from traces
+soup data from-traces ... --judge --min-confidence 0.7  LLM-judge confidence filter
+soup data review prefs.jsonl --sample 10      Preview preference pairssoup data filter <path> --coherence 0.3       Quality filter (perplexity/coherence)
 soup data sample <path> --n 1000             Random sample subset
 soup data sample <path> --n 1000 --strategy diverse  Cluster-based diverse sampling
 soup data sample <path> --n 1000 --strategy hard     Sample hardest examples
@@ -2699,6 +2698,44 @@ pytest tests/ -v
 # Run smoke tests (downloads tiny model, runs real training)
 pytest tests/ -m smoke -v
 ```
+
+## Live CUDA Batch-Size Probe
+
+Set `auto_batch_size_strategy: probe` in `training:` and Soup will run a real OOM-probe before training:
+
+```yaml
+training:
+  batch_size: auto
+  auto_batch_size_strategy: probe
+```
+
+For each candidate size `B`, the probe runs ONE forward + backward + step on a synthetic batch of `B` sequences of length `max_length`. On `torch.cuda.OutOfMemoryError` it halves; otherwise it doubles up to `4 × static_estimate`. The picked size is cached per `(model, max_length, quantization, lora_r, gpu)` tuple in `~/.soup/batch_cache.json` so subsequent runs skip the probe.
+
+CPU sessions and `auto_batch_size_strategy: static` skip the probe. Synthetic batch tensors are freed before the backward pass so peak VRAM reflects the realistic training step. SFT-only this release — non-SFT trainers fall back to the static estimate.
+
+## Trace-to-Preference: LLM-Judge Filter
+
+`soup data from-traces --judge` filters harvested preference pairs through an LLM judge:
+
+```bash
+soup data from-traces \
+  --logs ./prod-traces.jsonl --format langchain --signal thumbs_up \
+  --output ./prefs.jsonl \
+  --judge --judge-provider ollama --judge-model llama3 \
+  --min-confidence 0.7
+```
+
+The judge scores `chosen` and `rejected` independently against its rubric (default helpfulness/accuracy/safety on a 1-5 scale). Pairs whose normalised `(chosen - rejected)` confidence falls below `--min-confidence` are dropped. Per-pair backend exceptions are counted (not crashed) and reported. Provider allowlist `{openai, server, ollama}` validated at the CLI boundary; SSRF protection on `--judge-api-base` carries over from `soup eval judge`.
+
+## Inference Server Trace Log
+
+`soup serve --trace-log <path>` writes a passive append-only JSONL log per chat completion:
+
+```bash
+soup serve --model ./out --trace-log ./serve-trace.jsonl --trace-log-cap-mb 100
+```
+
+Each line: `{"ts": ..., "prompt": ..., "response": ..., "latency_ms": ..., "tokens": ...}`. Path-containment validated, hard rotation cap (default 100 MB, one backup retained), symlink-reject on the backup path (TOCTOU defence), and `hf_*` / `sk-*` / `Bearer …` token shapes redacted to `<redacted>` before write. Failures (disk full, serialisation errors) never crash the request handler.
 
 ## Changelog
 
