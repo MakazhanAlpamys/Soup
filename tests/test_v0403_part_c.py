@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -234,8 +235,11 @@ class TestFromTracesJudgeCli:
         runner = CliRunner()
         result = runner.invoke(soup_app, ["data", "from-traces", "--help"])
         assert result.exit_code == 0
-        assert "--judge" in result.output
-        assert "--min-confidence" in result.output
+        # Narrow terminals on CI may break a long flag across two lines
+        # (e.g. "--judge\n-provider"). Strip ANSI + whitespace before match.
+        cleaned = re.sub(r"\s+", "", result.output)
+        assert "--judge" in cleaned
+        assert "--min-confidence" in cleaned
 
     def test_judge_provider_invalid_rejected_early(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
@@ -512,19 +516,34 @@ class TestTraceLogWriter:
         assert len(lines) == 20
 
 
+_FASTAPI_AVAILABLE = True
+try:
+    import fastapi  # noqa: F401
+except ImportError:
+    _FASTAPI_AVAILABLE = False
+
+
 class TestServeTraceLogWiring:
     def test_serve_help_lists_trace_log(self):
         runner = CliRunner()
         result = runner.invoke(soup_app, ["serve", "--help"])
         assert result.exit_code == 0
-        assert "--trace-log" in result.output
+        # Narrow terminals on CI may break "--trace-log" across two lines
+        # (e.g. "--trace\n-log"). Strip whitespace before match.
+        cleaned = re.sub(r"\s+", "", result.output)
+        assert "--trace-log" in cleaned
 
     def test_serve_help_lists_trace_log_cap_mb(self):
         runner = CliRunner()
         result = runner.invoke(soup_app, ["serve", "--help"])
         assert result.exit_code == 0
-        assert "--trace-log-cap-mb" in result.output
+        cleaned = re.sub(r"\s+", "", result.output)
+        assert "--trace-log-cap-mb" in cleaned
 
+    @pytest.mark.skipif(
+        not _FASTAPI_AVAILABLE,
+        reason="fastapi not installed (only required for `serve` extras)",
+    )
     def test_create_app_accepts_trace_log_writer(self, tmp_path, monkeypatch):
         # Not building a real model — just assert the parameter is accepted
         # and stored on app.state.
@@ -545,6 +564,10 @@ class TestServeTraceLogWiring:
         )
         assert app.state.trace_log_writer is writer
 
+    @pytest.mark.skipif(
+        not _FASTAPI_AVAILABLE,
+        reason="fastapi not installed (only required for `serve` extras)",
+    )
     def test_create_app_default_writer_is_none(self, tmp_path, monkeypatch):
         from soup_cli.commands.serve import _create_app
 
