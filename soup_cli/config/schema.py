@@ -490,6 +490,24 @@ class TrainingConfig(BaseModel):
         default=None,
         description="Path or HF ID of a trained reward model for PPO",
     )
+
+    @field_validator("reward_model")
+    @classmethod
+    def _validate_reward_model(cls, v: Optional[str]) -> Optional[str]:
+        """v0.40.5 (#66 review fix) — reject null bytes and cap length on
+        the reward_model string, matching the validation policy applied to
+        cfg.base elsewhere. The Quant Menu loader (build_quantization_config_for_loader)
+        already null-byte-rejects ref strings at training time; this is a
+        defence-in-depth check at config-load so a crafted soup.yaml fails
+        fast before any trainer is constructed.
+        """
+        if v is None:
+            return v
+        if "\x00" in v:
+            raise ValueError("reward_model must not contain null bytes")
+        if len(v) > 512:
+            raise ValueError("reward_model must be <= 512 chars")
+        return v
     # LoRA+ — different learning rates for A and B matrices
     loraplus_lr_ratio: Optional[float] = Field(
         default=None,
@@ -1108,9 +1126,12 @@ class SoupConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_quant_menu_supported_tasks(self) -> "SoupConfig":
-        """v0.38.0 — Quant Menu (gptq/awq/hqq:Nbit/aqlm/eetq/mxfp4/fp8) is wired
-        in the SFT trainer only. Multi-trainer expansion deferred to v0.38.1
-        (mirrors v0.27.0 MII / v0.37.0 multipack stub-then-live pattern).
+        """v0.40.5 (#66) — Quant Menu (gptq/awq/hqq:Nbit/aqlm/eetq/mxfp4/fp8)
+        is wired across every transformer-backend trainer (sft / dpo / grpo /
+        kto / orpo / simpo / ipo / ppo / reward_model / pretrain / embedding /
+        bco). MLX backend still rejected (no equivalent kernels). Vision/audio
+        modality multi-trainer wiring deferred (mirrors v0.38.1 stub-then-live
+        pattern for non-text modalities).
         """
         from soup_cli.utils.quant_menu import is_quant_menu_format
 
@@ -1124,17 +1145,11 @@ class SoupConfig(BaseModel):
                 "(no equivalent kernels). Use backend='transformers' or "
                 "switch to quantization in {'4bit', '8bit', 'none'}."
             )
-        if self.task != "sft":
-            raise ValueError(
-                f"quantization={quant!r} (Quant Menu) is wired for task='sft' "
-                f"only in v0.38.0; got task={self.task!r}. Multi-trainer "
-                "wiring is tracked for v0.38.1."
-            )
         if self.modality != "text":
             raise ValueError(
                 f"quantization={quant!r} (Quant Menu) is wired for "
-                f"modality='text' only in v0.38.0; got modality={self.modality!r}. "
-                "Vision/audio multi-modal wiring is tracked for v0.38.1."
+                f"modality='text' only; got modality={self.modality!r}. "
+                "Vision/audio multi-modal wiring is tracked for a follow-up patch."
             )
         return self
 

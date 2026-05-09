@@ -523,16 +523,19 @@ class TestCompatMatrix:
 
 
 class TestQuantMenuSchemaGates:
-    def test_quant_menu_with_dpo_task_rejected(self):
-        with pytest.raises(ValueError, match="Quant Menu|v0.38.1|task="):
-            load_config_from_string(
-                """
+    def test_quant_menu_with_dpo_task_now_accepted(self):
+        # v0.40.5 (#66) — Quant Menu wired across all transformer-backend
+        # trainers. DPO previously rejected; now accepted.
+        cfg = load_config_from_string(
+            """
 base: TheBloke/Llama-2-7B-GPTQ
 task: dpo
 data: {train: d.jsonl}
 training: {quantization: gptq}
 """
-            )
+        )
+        assert cfg.task == "dpo"
+        assert cfg.training.quantization == "gptq"
 
     def test_quant_menu_with_mlx_backend_rejected(self):
         with pytest.raises(ValueError, match="mlx backend|mlx"):

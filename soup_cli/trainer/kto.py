@@ -159,7 +159,7 @@ class KTOTrainerWrapper:
     def _setup_transformers(self, cfg: SoupConfig, tcfg) -> None:
         """Load model via standard transformers + peft pipeline."""
         from peft import LoraConfig, TaskType, get_peft_model, prepare_model_for_kbit_training
-        from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+        from transformers import AutoModelForCausalLM, AutoTokenizer
 
         console.print(f"[dim]Loading tokenizer: {cfg.base}[/]")
         self.tokenizer = AutoTokenizer.from_pretrained(
@@ -168,18 +168,12 @@ class KTOTrainerWrapper:
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
-        bnb_config = None
-        if tcfg.quantization == "4bit":
-            from soup_cli.utils.gpu import get_compute_dtype
+        # Quantization (v0.38.0 Quant Menu — see soup_cli.utils.quant_menu)
+        from soup_cli.utils.quant_menu import build_quantization_config_for_loader
 
-            bnb_config = BitsAndBytesConfig(
-                load_in_4bit=True,
-                bnb_4bit_quant_type="nf4",
-                bnb_4bit_compute_dtype=get_compute_dtype(),
-                bnb_4bit_use_double_quant=True,
-            )
-        elif tcfg.quantization == "8bit":
-            bnb_config = BitsAndBytesConfig(load_in_8bit=True)
+        quant_config_obj = build_quantization_config_for_loader(
+            tcfg=tcfg, base=cfg.base, console=console,
+        )
 
         console.print(f"[dim]Loading model: {cfg.base}[/]")
         # On CPU, use device_map="cpu" to avoid meta tensors from "auto"
@@ -187,12 +181,12 @@ class KTOTrainerWrapper:
         model_kwargs = {
             "trust_remote_code": self._trust_remote_code, "device_map": dev_map,
         }
-        if bnb_config:
-            model_kwargs["quantization_config"] = bnb_config
+        if quant_config_obj is not None:
+            model_kwargs["quantization_config"] = quant_config_obj
 
         self.model = AutoModelForCausalLM.from_pretrained(cfg.base, **model_kwargs)
 
-        if tcfg.quantization in ("4bit", "8bit"):
+        if tcfg.quantization in ("4bit", "8bit", "mxfp4"):
             self.model = prepare_model_for_kbit_training(self.model)
 
         target_modules = tcfg.lora.target_modules
