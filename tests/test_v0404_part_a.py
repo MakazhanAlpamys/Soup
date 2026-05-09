@@ -14,11 +14,23 @@ exercises the resolver path on each wrapper.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 from typer.testing import CliRunner
+
+# Rich help renderer can split a flag like ``--trust-remote-code`` with
+# ANSI colour escapes between ``-``, ``-trust``, ``-remote-code`` when
+# the terminal is narrow (CI runners hit this; Windows local does not).
+# Strip ANSI so substring assertions are robust. Mirrors the helper in
+# tests/test_trust_remote_code.py and tests/test_log_level.py.
+_ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*[mK]")
+
+
+def _strip_ansi(text: str) -> str:
+    return _ANSI_ESCAPE.sub("", text)
 
 # All 10 trainer modules + their wrapper class names.
 # Direct trainers that resolve trust_remote_code in __init__.
@@ -127,25 +139,33 @@ class TestSourceLevelInvariants:
 
 
 class TestCommandFlagsExist:
-    """The 5 commands now expose ``--trust-remote-code`` Typer options."""
+    """The 5 commands now expose ``--trust-remote-code`` Typer options.
 
-    @pytest.mark.parametrize("cmd", ["diff", "export", "merge", "infer", "generate"])
-    def test_cli_help_lists_flag(self, cmd: str):
+    ``soup data generate`` is nested under the data subcommand group; the
+    other 4 are top-level. Substring assertions go through ``_strip_ansi``
+    because Rich splits long flag names with colour escapes on narrow
+    terminals (CI runners hit this — same v0.40.3 ANSI-helper-text fix).
+    """
+
+    # (cli_path, human_label) — cli_path is the argv list for CliRunner.
+    _COMMANDS = [
+        (["diff", "--help"], "diff"),
+        (["export", "--help"], "export"),
+        (["merge", "--help"], "merge"),
+        (["infer", "--help"], "infer"),
+        (["data", "generate", "--help"], "data generate"),
+    ]
+
+    @pytest.mark.parametrize("argv,label", _COMMANDS)
+    def test_cli_help_lists_flag(self, argv: list[str], label: str):
         from soup_cli.cli import app
 
         runner = CliRunner()
-        # Strip ANSI to handle Rich line-wrapping on narrow terminals
-        # (matches the v0.36.0 test_trust_remote_code.py helper pattern).
-        # When the command is nested under "data" (generate), the flag
-        # might not appear at the top level; check the nested help too.
-        result = runner.invoke(app, [cmd, "--help"])
-        out = result.output
-        if "--trust-remote-code" not in out:
-            # Fallback: ``data generate`` is nested.
-            result = runner.invoke(app, ["data", cmd, "--help"])
-            out = result.output
+        result = runner.invoke(app, argv)
+        out = _strip_ansi(result.output)
         assert "--trust-remote-code" in out, (
-            f"--trust-remote-code missing from `soup {cmd} --help`"
+            f"--trust-remote-code missing from `soup {label} --help` "
+            f"(exit_code={result.exit_code}, output={out[:200]!r})"
         )
 
 
