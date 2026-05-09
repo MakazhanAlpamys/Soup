@@ -97,6 +97,14 @@ def export(
         help="Attach exported artifact to this registry entry "
         "(default: auto-match by source --model output dir)",
     ),
+    trust_remote_code: bool = typer.Option(
+        False,
+        "--trust-remote-code",
+        help=(
+            "Allow loading models that ship custom Python via auto_map. "
+            "Default deny (v0.36.0). Only enable if you trust the source."
+        ),
+    ),
 ):
     """Export a model to GGUF, ONNX, TensorRT-LLM, AWQ, or GPTQ format."""
     model_path = Path(model)
@@ -115,19 +123,19 @@ def export(
 
     # --- ONNX export path ---
     if fmt == "onnx":
-        _export_onnx(model_path, output, base, onnx_task)
+        _export_onnx(model_path, output, base, onnx_task, trust_remote_code)
         return
 
     # --- TensorRT-LLM export path ---
     if fmt == "tensorrt":
-        _export_tensorrt(model_path, output, base)
+        _export_tensorrt(model_path, output, base, trust_remote_code)
         return
 
     # --- AWQ export path ---
     if fmt == "awq":
         _export_awq(
             model_path, output, base, bits, group_size,
-            calibration_data, calibration_samples,
+            calibration_data, calibration_samples, trust_remote_code,
         )
         return
 
@@ -135,7 +143,7 @@ def export(
     if fmt == "gptq":
         _export_gptq(
             model_path, output, base, bits, group_size,
-            calibration_data, calibration_samples,
+            calibration_data, calibration_samples, trust_remote_code,
         )
         return
 
@@ -162,7 +170,9 @@ def export(
             raise typer.Exit(1)
 
         merge_dir = model_path.parent / f".soup_merge_tmp_{model_path.name}"
-        _merge_adapter(str(model_path), base_model, str(merge_dir))
+        _merge_adapter(
+            str(model_path), base_model, str(merge_dir), trust_remote_code,
+        )
         model_path = merge_dir
 
     # --- Find llama.cpp ---
@@ -264,17 +274,35 @@ def _detect_base_model(adapter_config_path: Path) -> Optional[str]:
         return None
 
 
-def _merge_adapter(adapter_path: str, base_model: str, output_dir: str):
+def _merge_adapter(
+    adapter_path: str,
+    base_model: str,
+    output_dir: str,
+    trust_remote_code: bool = False,
+):
     """Merge LoRA adapter with base model."""
     import torch
     from peft import PeftModel
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
+    from soup_cli.utils.trust_remote import (
+        model_requires_trust_remote_code,
+        resolve_trust_remote_code,
+    )
+
+    requires = model_requires_trust_remote_code(adapter_path) or False
+    trc = resolve_trust_remote_code(
+        base_model,
+        requested=trust_remote_code,
+        console=console,
+        requires_remote_code=requires,
+    )
+
     console.print(f"[dim]Loading base model: {base_model}...[/]")
     model = AutoModelForCausalLM.from_pretrained(
         base_model,
         dtype=torch.float16,
-        trust_remote_code=True,
+        trust_remote_code=trc,
         device_map="cpu",
     )
 
@@ -288,7 +316,7 @@ def _merge_adapter(adapter_path: str, base_model: str, output_dir: str):
     out.mkdir(parents=True, exist_ok=True)
     model.save_pretrained(str(out))
 
-    tokenizer = AutoTokenizer.from_pretrained(adapter_path, trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(adapter_path, trust_remote_code=trc)
     tokenizer.save_pretrained(str(out))
     console.print("[green]Adapter merged successfully.[/]")
 
@@ -419,6 +447,7 @@ def _find_quantize_binary(llama_dir: Path) -> Optional[Path]:
 def _export_onnx(
     model_path: Path, output: Optional[str], base: Optional[str],
     task: str = "text-generation",
+    trust_remote_code: bool = False,
 ):
     """Export model to ONNX format via optimum."""
     try:
@@ -447,7 +476,7 @@ def _export_onnx(
             )
             raise typer.Exit(1)
         merge_dir = model_path.parent / f".soup_merge_tmp_{model_path.name}"
-        _merge_adapter(str(model_path), base_model, str(merge_dir))
+        _merge_adapter(str(model_path), base_model, str(merge_dir), trust_remote_code)
         source_path = merge_dir
 
     output_path = Path(output) if output else model_path.parent / f"{model_path.name}_onnx"
@@ -492,7 +521,12 @@ def _export_onnx(
     )
 
 
-def _export_tensorrt(model_path: Path, output: Optional[str], base: Optional[str]):
+def _export_tensorrt(
+    model_path: Path,
+    output: Optional[str],
+    base: Optional[str],
+    trust_remote_code: bool = False,
+):
     """Export model to TensorRT-LLM format."""
     # TensorRT-LLM uses trtllm-build CLI from the tensorrt_llm package
     trtllm_available = False
@@ -527,7 +561,7 @@ def _export_tensorrt(model_path: Path, output: Optional[str], base: Optional[str
             )
             raise typer.Exit(1)
         merge_dir = model_path.parent / f".soup_merge_tmp_{model_path.name}"
-        _merge_adapter(str(model_path), base_model, str(merge_dir))
+        _merge_adapter(str(model_path), base_model, str(merge_dir), trust_remote_code)
         source_path = merge_dir
 
     output_path = Path(output) if output else model_path.parent / f"{model_path.name}_trt"
@@ -677,6 +711,7 @@ def _export_awq(
     group_size: int = 128,
     calibration_data: Optional[str] = None,
     calibration_samples: int = 128,
+    trust_remote_code: bool = False,
 ) -> None:
     """Export model to AWQ format via autoawq."""
     # Validate bits
@@ -721,7 +756,7 @@ def _export_awq(
             )
             raise typer.Exit(1)
         merge_dir = model_path.parent / f".soup_merge_tmp_{model_path.name}"
-        _merge_adapter(str(model_path), base_model, str(merge_dir))
+        _merge_adapter(str(model_path), base_model, str(merge_dir), trust_remote_code)
         source_path = merge_dir
 
     default_out = model_path.parent / f"{model_path.name}_awq"
@@ -748,7 +783,19 @@ def _export_awq(
         )
         console.print("[dim]Loading model for AWQ quantization...[/]")
         model = AutoAWQForCausalLM.from_pretrained(str(source_path))
-        tokenizer = AutoTokenizer.from_pretrained(str(source_path), trust_remote_code=True)
+        from soup_cli.utils.trust_remote import (
+            model_requires_trust_remote_code,
+            resolve_trust_remote_code,
+        )
+
+        requires_tok = model_requires_trust_remote_code(str(source_path)) or False
+        trc_tok = resolve_trust_remote_code(
+            str(source_path),
+            requested=trust_remote_code,
+            console=console,
+            requires_remote_code=requires_tok,
+        )
+        tokenizer = AutoTokenizer.from_pretrained(str(source_path), trust_remote_code=trc_tok)
 
         quant_config = {"zero_point": True, "q_group_size": group_size, "w_bit": bits}
 
@@ -796,6 +843,7 @@ def _export_gptq(
     group_size: int = 128,
     calibration_data: Optional[str] = None,
     calibration_samples: int = 128,
+    trust_remote_code: bool = False,
 ) -> None:
     """Export model to GPTQ format via auto-gptq."""
     # Validate bits
@@ -840,7 +888,7 @@ def _export_gptq(
             )
             raise typer.Exit(1)
         merge_dir = model_path.parent / f".soup_merge_tmp_{model_path.name}"
-        _merge_adapter(str(model_path), base_model, str(merge_dir))
+        _merge_adapter(str(model_path), base_model, str(merge_dir), trust_remote_code)
         source_path = merge_dir
 
     default_out = model_path.parent / f"{model_path.name}_gptq"
@@ -874,7 +922,19 @@ def _export_gptq(
         model = AutoGPTQForCausalLM.from_pretrained(
             str(source_path), quantize_config=quantize_config
         )
-        tokenizer = AutoTokenizer.from_pretrained(str(source_path), trust_remote_code=True)
+        from soup_cli.utils.trust_remote import (
+            model_requires_trust_remote_code,
+            resolve_trust_remote_code,
+        )
+
+        requires_tok = model_requires_trust_remote_code(str(source_path)) or False
+        trc_tok = resolve_trust_remote_code(
+            str(source_path),
+            requested=trust_remote_code,
+            console=console,
+            requires_remote_code=requires_tok,
+        )
+        tokenizer = AutoTokenizer.from_pretrained(str(source_path), trust_remote_code=trc_tok)
 
         # Load calibration data if provided
         calib_data = None

@@ -35,6 +35,14 @@ def merge(
         "--dtype",
         help="Data type for the merged model: float16, bfloat16, float32",
     ),
+    trust_remote_code: bool = typer.Option(
+        False,
+        "--trust-remote-code",
+        help=(
+            "Allow loading models that ship custom Python via auto_map. "
+            "Default deny (v0.36.0). Only enable if you trust the source."
+        ),
+    ),
 ):
     """Merge a LoRA adapter with its base model into a full model."""
     adapter_path = Path(adapter)
@@ -93,11 +101,24 @@ def merge(
         }
         model_dtype = dtype_map[dtype]
 
+        from soup_cli.utils.trust_remote import (
+            model_requires_trust_remote_code,
+            resolve_trust_remote_code,
+        )
+
+        requires = model_requires_trust_remote_code(str(adapter_path)) or False
+        trc = resolve_trust_remote_code(
+            base,
+            requested=trust_remote_code,
+            console=console,
+            requires_remote_code=requires,
+        )
+
         console.print(f"[dim]Loading base model: {base}...[/]")
         model = AutoModelForCausalLM.from_pretrained(
             base,
             dtype=model_dtype,
-            trust_remote_code=True,
+            trust_remote_code=trc,
             device_map="cpu",
         )
 
@@ -112,7 +133,9 @@ def merge(
         model.save_pretrained(str(output_path))
 
         console.print("[dim]Saving tokenizer...[/]")
-        tokenizer = AutoTokenizer.from_pretrained(str(adapter_path), trust_remote_code=True)
+        tokenizer = AutoTokenizer.from_pretrained(
+            str(adapter_path), trust_remote_code=trc
+        )
         tokenizer.save_pretrained(str(output_path))
 
     except ImportError as exc:

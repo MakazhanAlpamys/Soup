@@ -94,6 +94,14 @@ def infer(
         "--device",
         help="Device: cuda, mps, cpu. Auto-detected if not set.",
     ),
+    trust_remote_code: bool = typer.Option(
+        False,
+        "--trust-remote-code",
+        help=(
+            "Allow loading models that ship custom Python via auto_map. "
+            "Default deny (v0.36.0). Only enable if you trust the source."
+        ),
+    ),
 ):
     """Run batch inference on a JSONL file of prompts."""
     from soup_cli.utils.paths import is_under_cwd
@@ -145,13 +153,11 @@ def infer(
         )
     )
 
-    # Load model
-    console.print(
-        "[yellow]Warning: loading model with trust_remote_code=True. "
-        "Only use models you trust.[/]"
-    )
+    # Load model — gate trust_remote_code via the v0.36.0 helper.
     console.print("[dim]Loading model...[/]")
-    model_obj, tokenizer = _load_model(str(model_path), base, device)
+    model_obj, tokenizer = _load_model(
+        str(model_path), base, device, trust_remote_code,
+    )
     console.print("[green]Model loaded.[/]\n")
 
     # Output path containment — defence-in-depth (project policy v0.20.0+).
@@ -237,10 +243,20 @@ def _read_prompts(path: Path) -> list[str]:
     return prompts
 
 
-def _load_model(model_path: str, base_model: Optional[str], device: str) -> tuple:
+def _load_model(
+    model_path: str,
+    base_model: Optional[str],
+    device: str,
+    trust_remote_code: bool = False,
+) -> tuple:
     """Load a model and tokenizer (reuses diff.py pattern)."""
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    from soup_cli.utils.trust_remote import (
+        model_requires_trust_remote_code,
+        resolve_trust_remote_code,
+    )
 
     path = Path(model_path)
     adapter_config_path = path / "adapter_config.json"
@@ -260,7 +276,16 @@ def _load_model(model_path: str, base_model: Optional[str], device: str) -> tupl
         )
         raise typer.Exit(1)
 
-    tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+    probe_target = base_model or model_path
+    requires = model_requires_trust_remote_code(model_path) or False
+    trc = resolve_trust_remote_code(
+        probe_target,
+        requested=trust_remote_code,
+        console=console,
+        requires_remote_code=requires,
+    )
+
+    tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=trc)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
@@ -269,7 +294,7 @@ def _load_model(model_path: str, base_model: Optional[str], device: str) -> tupl
 
         base_obj = AutoModelForCausalLM.from_pretrained(
             base_model,
-            trust_remote_code=True,
+            trust_remote_code=trc,
             device_map="auto",
             dtype=torch.float16,
         )
@@ -277,7 +302,7 @@ def _load_model(model_path: str, base_model: Optional[str], device: str) -> tupl
     else:
         model_obj = AutoModelForCausalLM.from_pretrained(
             model_path,
-            trust_remote_code=True,
+            trust_remote_code=trc,
             device_map="auto",
             dtype=torch.float16,
         )

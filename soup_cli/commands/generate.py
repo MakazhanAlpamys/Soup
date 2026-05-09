@@ -161,6 +161,14 @@ def generate(
         "--rpm",
         help="Rate limit for API requests (default: 60)",
     ),
+    trust_remote_code: bool = typer.Option(
+        False,
+        "--trust-remote-code",
+        help=(
+            "Allow loading local-provider models that ship custom Python "
+            "via auto_map. Default deny (v0.36.0)."
+        ),
+    ),
 ):
     """Generate synthetic training data using an LLM."""
     if fmt not in VALID_FORMATS:
@@ -288,6 +296,7 @@ def generate(
                     context_text=context_text,
                     template_pref_task=template_pref_task,
                     template_domain=template_domain,
+                    trust_remote_code=trust_remote_code,
                 )
             except Exception as exc:
                 console.print(f"[red]Generation error: {exc}[/]")
@@ -485,6 +494,7 @@ def _generate_batch(
     context_text: str = "",
     template_pref_task: str = "dpo",
     template_domain: str = "math",
+    trust_remote_code: bool = False,
 ) -> list[dict]:
     """Generate a batch of examples using the specified provider."""
     # Build the generation prompt — template or default
@@ -526,6 +536,7 @@ def _generate_batch(
             temperature=temperature,
             seed_examples=seed_examples,
             generation_prompt=generation_prompt if template else None,
+            trust_remote_code=trust_remote_code,
         )
     elif provider == "server":
         return _generate_server(
@@ -737,26 +748,32 @@ def _generate_local(
     temperature: float,
     seed_examples: list[dict],
     generation_prompt: Optional[str] = None,
+    trust_remote_code: bool = False,
 ) -> list[dict]:
     """Generate examples using a local model via transformers."""
     import torch
-    from rich.panel import Panel
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
-    console.print(Panel(
-        f"[yellow]Loading model with trust_remote_code=True: {model_name}[/]\n"
-        "This executes code from the model repository.",
-        title="Security Warning",
-        style="yellow",
-    ))
+    from soup_cli.utils.trust_remote import (
+        model_requires_trust_remote_code,
+        resolve_trust_remote_code,
+    )
 
-    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+    requires = model_requires_trust_remote_code(model_name) or False
+    trc = resolve_trust_remote_code(
+        model_name,
+        requested=trust_remote_code,
+        console=console,
+        requires_remote_code=requires,
+    )
+
+    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=trc)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
     model = AutoModelForCausalLM.from_pretrained(
         model_name,
-        trust_remote_code=True,
+        trust_remote_code=trc,
         device_map="auto",
         torch_dtype=torch.float16,
     )

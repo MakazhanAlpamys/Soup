@@ -40,12 +40,26 @@ class PPOTrainerWrapper:
         report_to: str = "none",
         deepspeed_config: Optional[str] = None,
         fsdp_config: Optional[dict] = None,
+        trust_remote_code: bool = False,
     ):
         self.config = config
         self.device = device
         self.report_to = report_to
         self.deepspeed_config = deepspeed_config
         self.fsdp_config = fsdp_config
+        self.trust_remote_code = trust_remote_code
+        from soup_cli.utils.trust_remote import (
+            model_requires_trust_remote_code,
+            resolve_trust_remote_code,
+        )
+
+        requires = model_requires_trust_remote_code(config.base) or False
+        self._trust_remote_code = resolve_trust_remote_code(
+            config.base,
+            requested=trust_remote_code,
+            console=console,
+            requires_remote_code=requires,
+        )
         self.model = None
         self.tokenizer = None
         self.trainer = None
@@ -260,7 +274,9 @@ class PPOTrainerWrapper:
 
         # If a reward_model path is configured, load it
         if tcfg.reward_model:
-            return _load_reward_model(tcfg.reward_model, self.device)
+            return _load_reward_model(
+                tcfg.reward_model, self.device, self.trust_remote_code,
+            )
 
         # Fallback: create a sequence classification model from the base model
         from transformers import AutoModelForSequenceClassification
@@ -271,7 +287,7 @@ class PPOTrainerWrapper:
         )
         reward_model = AutoModelForSequenceClassification.from_pretrained(
             cfg.base,
-            trust_remote_code=True,
+            trust_remote_code=self._trust_remote_code,
             num_labels=1,
             device_map="auto" if self.device != "cpu" else None,
         )
@@ -289,7 +305,7 @@ class PPOTrainerWrapper:
         console.print(f"[dim]Creating value model from: {cfg.base}[/]")
         value_model = AutoModelForSequenceClassification.from_pretrained(
             cfg.base,
-            trust_remote_code=True,
+            trust_remote_code=self._trust_remote_code,
             num_labels=1,
             device_map="auto" if self.device != "cpu" else None,
         )
@@ -300,7 +316,7 @@ class PPOTrainerWrapper:
         # Reward model (pre-trained classifier)
         if tcfg.reward_model:
             self.reward_model_instance = _load_reward_model(
-                tcfg.reward_model, self.device,
+                tcfg.reward_model, self.device, self.trust_remote_code,
             )
             console.print(f"[green]Reward model loaded:[/] {tcfg.reward_model}")
 
@@ -325,7 +341,9 @@ class PPOTrainerWrapper:
         from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
         console.print(f"[dim]Loading tokenizer: {cfg.base}[/]")
-        self.tokenizer = AutoTokenizer.from_pretrained(cfg.base, trust_remote_code=True)
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            cfg.base, trust_remote_code=self._trust_remote_code
+        )
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
@@ -345,7 +363,9 @@ class PPOTrainerWrapper:
         console.print(f"[dim]Loading model: {cfg.base}[/]")
         # On CPU, use device_map="cpu" to avoid meta tensors from "auto"
         dev_map = "cpu" if self.device == "cpu" else "auto"
-        model_kwargs = {"trust_remote_code": True, "device_map": dev_map}
+        model_kwargs = {
+            "trust_remote_code": self._trust_remote_code, "device_map": dev_map,
+        }
         if bnb_config:
             model_kwargs["quantization_config"] = bnb_config
 
@@ -643,7 +663,11 @@ def _import_ppo_classes():
     return PPOTrainer, PPOConfig, False
 
 
-def _load_reward_model(model_path: str, device: str = "cuda"):
+def _load_reward_model(
+    model_path: str,
+    device: str = "cuda",
+    trust_remote_code: bool = False,
+):
     """Load a pre-trained reward model for PPO scoring.
 
     Reward models are typically AutoModelForSequenceClassification that output
@@ -651,11 +675,23 @@ def _load_reward_model(model_path: str, device: str = "cuda"):
     """
     from transformers import AutoModelForSequenceClassification
 
+    from soup_cli.utils.trust_remote import (
+        model_requires_trust_remote_code,
+        resolve_trust_remote_code,
+    )
+
+    requires = model_requires_trust_remote_code(model_path) or False
+    resolved = resolve_trust_remote_code(
+        model_path,
+        requested=trust_remote_code,
+        console=console,
+        requires_remote_code=requires,
+    )
     console.print(f"[dim]Loading reward model: {model_path}[/]")
     dev_map = "cpu" if device == "cpu" else "auto"
     reward_model = AutoModelForSequenceClassification.from_pretrained(
         model_path,
-        trust_remote_code=True,
+        trust_remote_code=resolved,
         device_map=dev_map,
         num_labels=1,
     )

@@ -85,12 +85,14 @@ class PreferenceTrainerWrapper:
         report_to: str = "none",
         deepspeed_config: Optional[str] = None,
         fsdp_config: Optional[dict] = None,
+        trust_remote_code: bool = False,
     ):
         self.config = config
         self.device = device
         self.report_to = report_to
         self.deepspeed_config = deepspeed_config
         self.fsdp_config = fsdp_config
+        self.trust_remote_code = trust_remote_code
         self._inner = None
 
     def _build_inner(self):
@@ -106,6 +108,7 @@ class PreferenceTrainerWrapper:
             "report_to": self.report_to,
             "deepspeed_config": self.deepspeed_config,
             "fsdp_config": self.fsdp_config,
+            "trust_remote_code": self.trust_remote_code,
         }
         if loss == "dpo":
             from soup_cli.trainer.dpo import DPOTrainerWrapper
@@ -155,6 +158,7 @@ class PreferenceTrainerWrapper:
             "report_to": self.report_to,
             "deepspeed_config": self.deepspeed_config,
             "fsdp_config": self.fsdp_config,
+            "trust_remote_code": self.trust_remote_code,
         }
         if primary == "dpo":
             from soup_cli.trainer.dpo import DPOTrainerWrapper as PrimaryWrapper

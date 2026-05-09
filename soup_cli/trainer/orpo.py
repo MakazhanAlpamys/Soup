@@ -32,12 +32,26 @@ class ORPOTrainerWrapper:
         report_to: str = "none",
         deepspeed_config: Optional[str] = None,
         fsdp_config: Optional[dict] = None,
+        trust_remote_code: bool = False,
     ):
         self.config = config
         self.device = device
         self.report_to = report_to
         self.deepspeed_config = deepspeed_config
         self.fsdp_config = fsdp_config
+        self.trust_remote_code = trust_remote_code
+        from soup_cli.utils.trust_remote import (
+            model_requires_trust_remote_code,
+            resolve_trust_remote_code,
+        )
+
+        requires = model_requires_trust_remote_code(config.base) or False
+        self._trust_remote_code = resolve_trust_remote_code(
+            config.base,
+            requested=trust_remote_code,
+            console=console,
+            requires_remote_code=requires,
+        )
         self.model = None
         self.tokenizer = None
         self.trainer = None
@@ -149,7 +163,9 @@ class ORPOTrainerWrapper:
         from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
         console.print(f"[dim]Loading tokenizer: {cfg.base}[/]")
-        self.tokenizer = AutoTokenizer.from_pretrained(cfg.base, trust_remote_code=True)
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            cfg.base, trust_remote_code=self._trust_remote_code
+        )
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
@@ -168,7 +184,9 @@ class ORPOTrainerWrapper:
 
         console.print(f"[dim]Loading model: {cfg.base}[/]")
         dev_map = "cpu" if self.device == "cpu" else "auto"
-        model_kwargs = {"trust_remote_code": True, "device_map": dev_map}
+        model_kwargs = {
+            "trust_remote_code": self._trust_remote_code, "device_map": dev_map,
+        }
         if bnb_config:
             model_kwargs["quantization_config"] = bnb_config
 

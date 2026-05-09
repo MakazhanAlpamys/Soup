@@ -28,12 +28,26 @@ class PretrainTrainerWrapper:
         report_to: str = "none",
         deepspeed_config: Optional[str] = None,
         fsdp_config: Optional[dict] = None,
+        trust_remote_code: bool = False,
     ):
         self.config = config
         self.device = device
         self.report_to = report_to
         self.deepspeed_config = deepspeed_config
         self.fsdp_config = fsdp_config
+        self.trust_remote_code = trust_remote_code
+        from soup_cli.utils.trust_remote import (
+            model_requires_trust_remote_code,
+            resolve_trust_remote_code,
+        )
+
+        requires = model_requires_trust_remote_code(config.base) or False
+        self._trust_remote_code = resolve_trust_remote_code(
+            config.base,
+            requested=trust_remote_code,
+            console=console,
+            requires_remote_code=requires,
+        )
         self.model = None
         self.tokenizer = None
         self.trainer = None
@@ -169,14 +183,34 @@ class PretrainTrainerWrapper:
             trainer_kwargs["packing"] = True
             console.print("[green]Sample packing enabled[/]")
 
-        # v0.40.3: #65 multipack live wiring DEFERRED to v0.40.4 — see
-        # sft.py for the rationale. Same advisory.
-        if getattr(tcfg, "multipack", False):
-            console.print(
-                "[yellow]multipack: live HF Trainer wiring is deferred to "
-                "v0.40.4. Falling back to the standard sampler.[/]"
+        # v0.40.4 #65 — multipack live wiring (mirrors sft.py).
+        use_multipack = bool(getattr(tcfg, "multipack", False))
+        if use_multipack:
+            from soup_cli.utils.multipack_sampler import (
+                validate_multipack_architecture,
             )
-        self.trainer = SFTTrainer(**trainer_kwargs)
+            from soup_cli.utils.multipack_trainer import (
+                attach_multipack_state,
+                detect_arch_name,
+                lengths_from_dataset,
+                make_multipack_trainer_class,
+            )
+
+            arch = detect_arch_name(self.model)
+            if arch:
+                validate_multipack_architecture(arch)
+            trainer_cls = make_multipack_trainer_class(SFTTrainer)
+            self.trainer = trainer_cls(**trainer_kwargs)
+            attach_multipack_state(
+                self.trainer,
+                lengths=lengths_from_dataset(train_ds),
+                max_seq_len=cfg.data.max_length,
+                batch_size=batch_size,
+                seed=getattr(tcfg, "seed", 0) or 0,
+            )
+            console.print("[green]Multipack FFD bin-packing sampler enabled[/]")
+        else:
+            self.trainer = SFTTrainer(**trainer_kwargs)
 
         self._output_dir = str(output_dir)
 
@@ -188,7 +222,9 @@ class PretrainTrainerWrapper:
         from soup_cli.utils.moe import detect_moe_model, get_moe_target_modules
 
         console.print(f"[dim]Loading tokenizer: {cfg.base}[/]")
-        self.tokenizer = AutoTokenizer.from_pretrained(cfg.base, trust_remote_code=True)
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            cfg.base, trust_remote_code=self._trust_remote_code
+        )
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
@@ -208,7 +244,9 @@ class PretrainTrainerWrapper:
         console.print(f"[dim]Loading model: {cfg.base}[/]")
         # On CPU, use device_map="cpu" to avoid meta tensors from "auto"
         dev_map = "cpu" if self.device == "cpu" else "auto"
-        model_kwargs = {"trust_remote_code": True, "device_map": dev_map}
+        model_kwargs = {
+            "trust_remote_code": self._trust_remote_code, "device_map": dev_map,
+        }
         if bnb_config:
             model_kwargs["quantization_config"] = bnb_config
 

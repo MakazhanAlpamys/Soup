@@ -668,10 +668,9 @@ def train(
         "deepspeed_config": ds_config_path,
         "fsdp_config": fsdp_kwargs,
     }
-    # SFT path threads --trust-remote-code through the wrapper. Other
-    # trainers still load with trust_remote_code=True at their existing
-    # call sites; v0.36.x patches will extend the same opt-in to them.
-    sft_kwargs = dict(trainer_kwargs, trust_remote_code=trust_remote_code)
+    # v0.40.4 #63 — every transformer-backend trainer now threads
+    # --trust-remote-code through the wrapper (closes the v0.36.0 Part B gap).
+    trainer_kwargs = dict(trainer_kwargs, trust_remote_code=trust_remote_code)
     if cfg.task == "dpo":
         from soup_cli.trainer.dpo import DPOTrainerWrapper
 
@@ -721,7 +720,7 @@ def train(
 
         trainer_wrapper = EmbeddingTrainerWrapper(cfg, **trainer_kwargs)
     else:
-        trainer_wrapper = SFTTrainerWrapper(cfg, **sft_kwargs)
+        trainer_wrapper = SFTTrainerWrapper(cfg, **trainer_kwargs)
     trainer_wrapper.setup(dataset)
 
     # --- HF auto-push callback (Part B of v0.29.0) ---
