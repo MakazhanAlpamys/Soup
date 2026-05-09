@@ -43,13 +43,11 @@ soup train
 
 Latest highlights only. Full history: [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 
-**v0.40.3 — Stub-to-live**: three v0.X.0 deferred-stub features become live runtime — closes #33 (data harvester judge filter + serve trace log), #64 (live CUDA OOM probe), #65 (multipack sampler in HF Trainer).
+**v0.40.4 — trust_remote_code multi-trainer + multipack live wiring**: closes two carry-over gaps from earlier releases — the v0.36.0 known gap (only SFT honoured the opt-in) and the v0.40.3-deferred multipack sampler.
 
-- **Live CUDA batch-size probe** — `auto_batch_size_strategy: probe` now runs ONE forward+backward+step on a synthetic batch per candidate before training. On `torch.cuda.OutOfMemoryError` the probe halves; otherwise it doubles. Result is cached per `(model, max_length, quant, lora_r, gpu)` tuple so the next run short-circuits. CPU sessions skip the probe and fall back to the static estimate. SFT-only this release.
-- **Multipack sampler — helpers landed, live wiring deferred to v0.40.4** — adversarial review surfaced a HF Trainer DataLoader shape mismatch (`Sampler[int]` expected, `list[list[int]]` returned). Helpers (lru-cached subclass factory + state-attach with bounds + arch-detect + length-extract with all-zero warning) ship as a stub; live wiring requires a `get_train_dataloader` override and lands next patch.
-- **`soup data from-traces --judge`** — optional LLM-as-a-judge pass over harvested preference pairs. `--judge-provider openai|server|ollama`, `--judge-model gpt-4o-mini`, `--min-confidence 0.7`. Drops pairs whose normalised `(chosen - rejected)` confidence falls below threshold. Per-pair backend exceptions are counted, not crashed; lazy `itertools.islice` cap avoids buffering pathological generators.
-- **`soup serve --trace-log <path>`** — passive append-only JSONL request log (`{prompt, response, latency_ms, tokens, ts}` per chat completion). Path-containment validated, 100 MB rotation cap (one backup retained, symlink-reject on rotate), and `hf_*` / `sk-*` / `Bearer …` token shapes redacted to `<redacted>` before write (mirrors v0.34.0 `crash.py` policy).
-- **+95 net new tests** across the new closures, the dynamic Trainer subclass, the judge filter (including degenerate-scale + lazy-materialisation cases), and the trace logger (including symlink-backup rejection + multi-thread append safety).
+- **`--trust-remote-code` everywhere** — every non-SFT trainer (DPO / GRPO / KTO / ORPO / SimPO / IPO / PPO / RewardModel / Pretrain / Embedding / BCO + the unified Preference dispatcher) now defaults to `trust_remote_code=False` and only enables custom-code execution when the user explicitly opts in. Same for `soup diff`, `soup export`, `soup merge`, `soup infer`, and `soup data generate`. The v0.36.0 `KNOWN_SAFE_PREFIXES` allowlist still suppresses the warning panel for first-party orgs; unknown-org local checkpoints with `auto_map` raise a friendly `ValueError` at construction time instead of silently exec'ing on `from_pretrained`.
+- **Multipack sampler — live in HF Trainer** — `make_multipack_trainer_class` adds a `get_train_dataloader` override that installs a `MultipackBatchSampler(real_batches=False)` as the DataLoader's `batch_sampler=`. The shape mismatch that blocked v0.40.3 (`Sampler[int]` vs `list[list[int]]`) is gone — the sampler now yields flat `list[int]` per packed sequence, which is what `DataLoader.batch_sampler` actually expects. SFT and Pretrain wrappers instantiate the multipack subclass when `multipack: true`; the v0.40.3 yellow advisory is gone.
+- **+75 net new tests** across the trainer×trust_remote_code matrix (parametrize over 12 wrappers × {default-off / opt-in / unknown-org rejection}), source-level invariants (no remaining `trust_remote_code=True` literal in any trainer file), the new DataLoader override (state-missing fallback + flat-pack-yield contract), and the real `transformers.Trainer` MRO mix-in.
 
 ## Why Soup?
 
@@ -566,7 +564,7 @@ training:
 
 **Architecture allowlist** — 18 supported (Llama 3.x, Qwen 2/3, Mistral, Gemma 2/3, Phi 3/4, DeepSeek V2/V3, Mixtral, Falcon, StableLM, SmolLM2). Unknown architectures **fail loudly at config-load** instead of silently no-opping (critical fix vs Axolotl's silent-miss footgun).
 
-**Live wiring** — still deferred. v0.40.3 ships the helpers (`make_multipack_trainer_class` lru-cached factory + `attach_multipack_state` + `lengths_from_dataset` + `detect_arch_name`) but neither SFT nor Pretrain wrappers instantiate the subclass — adversarial review caught a `Sampler[int]` vs `list[list[int]]` mismatch with HF Trainer's DataLoader. Setting `multipack: true` prints a yellow advisory and falls back to the standard sampler. Live wiring (via a `get_train_dataloader` override with `batch_sampler=`) lands in v0.40.4. Multipack is **sft / pretrain only** on the `transformers` backend; preference / RLHF trainers and MLX backend still get distinct error messages naming the actual reason.
+**Live wiring** — landed. SFT and Pretrain trainer wrappers actually instantiate the multipack subclass when `multipack: true` is set. The factory's `get_train_dataloader` override installs `MultipackBatchSampler(real_batches=False)` (yields a flat `list[int]` per packed sequence — DataLoader-compatible) as the DataLoader's `batch_sampler=`, forwarding `dataloader_drop_last`/`num_workers`/`pin_memory` from `TrainingArguments`. The `_get_train_sampler` override stays as a defensive no-op fallback that always delegates to super, so any HF eval / prediction loop bypassing `get_train_dataloader` still gets the correct `Sampler[int]` shape (no nested-list shape mismatch). Multipack is **sft / pretrain only** on the `transformers` backend; preference / RLHF trainers and MLX backend get distinct error messages naming the actual reason. Datasets must expose `input_ids` (preferred) or `length` per row; raw text triggers an all-zeros warning.
 
 **DoS hardening** — the FFD packer caps at 1M items (algorithm is O(N²) worst-case); the 4D mask builder caps allocations at 2³¹ cells; the chat-template Jinja analyzer caps at 128KB. Every numeric input rejects `bool` explicitly (matches v0.30.0+ project policy).
 
@@ -603,12 +601,19 @@ data:
 
 When the tokenizer ships a chat template with `{% generation %}` markers, the mask is exact. Without those markers, Soup falls back to an incremental tokenize-delta walk and documents the looseness.
 
-### `--trust-remote-code` opt-in
+### `--trust-remote-code` opt-in (every command, every trainer)
 
-`soup train`, `chat`, `serve`, `data download`, `eval auto` now require `--trust-remote-code` to load any HF model that ships custom Python (`auto_map` in `config.json`). First-party orgs (Meta, Mistral, Qwen, Google, etc.) suppress the warning panel; everything else prints a `REMOTE CODE WARNING` panel before loading.
+Every command that loads a model now requires `--trust-remote-code` to execute custom Python from a model repo (`auto_map` in `config.json`). First-party orgs (Meta, Mistral, Qwen, Google, etc.) suppress the warning panel; everything else prints a `REMOTE CODE WARNING` panel before loading. Unknown-org local checkpoints with `auto_map` raise a friendly `ValueError` at construction time instead of silently exec'ing inside `from_pretrained`.
+
+Coverage:
+- `soup train` (every task — SFT, DPO, GRPO, KTO, ORPO, SimPO, IPO, PPO, Reward Model, Pretrain, Embedding, BCO, and the unified Preference dispatcher)
+- `soup chat`, `soup serve`, `soup data download`, `soup eval auto`
+- `soup diff`, `soup export`, `soup merge`, `soup infer`, `soup data generate`
 
 ```bash
 soup train --config soup.yaml --trust-remote-code
+soup infer --model my-org/custom-arch-model --input prompts.jsonl --trust-remote-code
+soup export --model ./adapter --format gguf --trust-remote-code
 ```
 
 ### Chat-template hardening
