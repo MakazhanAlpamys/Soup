@@ -226,16 +226,16 @@ class TestReLoRATaskGate:
     @pytest.mark.parametrize(
         "task",
         ["dpo", "grpo", "kto", "orpo", "simpo", "ipo",
-         "ppo", "reward_model", "pretrain", "embedding"],
+         "ppo", "reward_model", "pretrain", "embedding", "bco"],
     )
-    def test_other_tasks_rejected(self, task):
+    def test_other_tasks_accepted(self, task):
+        # v0.40.6 (#67) — multi-trainer expansion lifted the SFT-only gate.
         import yaml
 
         from soup_cli.config.loader import load_config_from_string
-        # load_config_from_string surfaces a ValueError (Pydantic validation
-        # error) that wraps the cross-validator's message.
-        with pytest.raises(ValueError, match="relora_steps"):
-            load_config_from_string(yaml.safe_dump(self._base_cfg(task)))
+        cfg = load_config_from_string(yaml.safe_dump(self._base_cfg(task)))
+        assert cfg.training.relora_steps == 100
+        assert cfg.task == task
 
     def test_mlx_backend_rejected(self):
         import yaml

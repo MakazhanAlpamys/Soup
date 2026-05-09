@@ -513,27 +513,14 @@ class SFTTrainerWrapper:
             use_dora=tcfg.lora.use_dora,
             use_rslora=tcfg.lora.use_rslora,
         )
-        # v0.39.0 Part D — surgical PEFT patches (Gemma4 ClippableLinear,
-        # MoE 3D expert dropout-strip). Pre-LoRA pass for ClippableLinear so
-        # PEFT's matcher sees the swapped nn.Linear; the model-name gate
-        # inside is_gemma4_model keeps the swap from running on non-Gemma4.
-        from soup_cli.utils.peft_patches import (
-            apply_gemma4_clippable_patch,
-            is_gemma4_model,
-            strip_lora_dropout_for_3d_experts,
+        # v0.39.0 Part D / v0.40.6 #67 — surgical PEFT patches via shared helpers.
+        from soup_cli.utils.peft_wiring import (
+            apply_post_lora_patches,
+            apply_pre_lora_patches,
         )
-        if is_gemma4_model(cfg.base):
-            try:
-                apply_gemma4_clippable_patch(self.model)
-            except Exception as exc:  # noqa: BLE001 — best-effort patch, log + continue
-                logger.debug("apply_gemma4_clippable_patch skipped: %s", exc)
+        apply_pre_lora_patches(self.model, cfg.base)
         self.model = get_peft_model(self.model, lora_config)
-        # Post-LoRA pass for 3-D expert dropout strip (architecture-detected
-        # via weight.ndim==3 inside the helper; safe to call unconditionally).
-        try:
-            strip_lora_dropout_for_3d_experts(self.model)
-        except Exception as exc:  # noqa: BLE001 — best-effort patch, log + continue
-            logger.debug("strip_lora_dropout_for_3d_experts skipped: %s", exc)
+        apply_post_lora_patches(self.model)
 
         self._apply_quantization_aware(tcfg)
 
@@ -852,17 +839,9 @@ class SFTTrainerWrapper:
                 )
             )
 
-        # ReLoRA callback (v0.39.0 Part B) — magnitude-prune LoRA weights every N steps
-        relora_steps = getattr(self.config.training, "relora_steps", None)
-        if relora_steps:
-            from soup_cli.utils.relora import ReLoRACallback, ReLoRAPolicy
-            policy = ReLoRAPolicy(
-                steps=int(relora_steps),
-                warmup_ratio=float(self.config.training.relora_warmup_ratio),
-                reset_optimizer=bool(self.config.training.relora_reset_optimizer),
-                prune_ratio=float(self.config.training.relora_prune_ratio),
-            )
-            self.trainer.add_callback(ReLoRACallback(policy=policy))
+        # ReLoRA callback (v0.39.0 Part B / v0.40.6 #67) via shared helper.
+        from soup_cli.utils.peft_wiring import attach_relora_callback
+        attach_relora_callback(self.trainer, self.config.training)
 
         # Activation offloading (v0.28.0) — wrap train() so saved-tensor hooks
         # are active only during training (and removed afterwards).

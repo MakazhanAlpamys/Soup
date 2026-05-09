@@ -1101,26 +1101,19 @@ class SoupConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_relora_supported_tasks(self) -> "SoupConfig":
-        """v0.39.0 — ReLoRA callback is wired in the SFT trainer only.
+        """v0.40.6 (#67) — ReLoRA callback wired in every transformer-backend
+        trainer (sft / dpo / grpo / kto / orpo / simpo / ipo / ppo /
+        reward_model / pretrain / embedding / bco).
 
-        Multi-trainer expansion (DPO / GRPO / KTO / ORPO / SimPO / IPO /
-        PPO / RewardModel / Pretrain / Embedding) deferred to v0.39.1
-        (mirrors v0.27.0 MII / v0.37.0 multipack / v0.38.0 quant menu
-        stub-then-live pattern).
+        MLX backend still rejected: the callback is HF Trainer-specific.
         """
         if self.training.relora_steps is None:
             return self
         if self.backend == "mlx":
             raise ValueError(
                 "relora_steps is not supported on the mlx backend "
-                "in v0.39.0 (callback is HF Trainer-specific). "
+                "(callback is HF Trainer-specific). "
                 "Use backend='transformers' or remove relora_steps."
-            )
-        if self.task != "sft":
-            raise ValueError(
-                f"relora_steps is wired only for task='sft' in v0.39.0, "
-                f"got task={self.task!r}. Multi-trainer expansion is tracked "
-                "as a known limitation; remove relora_steps or set task='sft'."
             )
         return self
 

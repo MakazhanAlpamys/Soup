@@ -204,6 +204,10 @@ class BCOTrainerWrapper:
             processing_class=self.tokenizer,
         )
 
+        # v0.40.6 #67 — ReLoRA callback.
+        from soup_cli.utils.peft_wiring import attach_relora_callback
+        attach_relora_callback(self.trainer, tcfg)
+
         self._output_dir = str(output_dir)
 
     def _setup_transformers(self, cfg: SoupConfig, tcfg: "TrainingConfig") -> None:
@@ -252,7 +256,14 @@ class BCOTrainerWrapper:
             use_dora=tcfg.lora.use_dora,
             use_rslora=tcfg.lora.use_rslora,
         )
+        # v0.40.6 #67 — surgical PEFT patches.
+        from soup_cli.utils.peft_wiring import (
+            apply_post_lora_patches,
+            apply_pre_lora_patches,
+        )
+        apply_pre_lora_patches(self.model, cfg.base)
         self.model = get_peft_model(self.model, lora_config)
+        apply_post_lora_patches(self.model)
 
         # QAT — int8 only; "fp8" handled by apply_v028_speed_memory below.
         if tcfg.quantization_aware and tcfg.quantization_aware != "fp8":

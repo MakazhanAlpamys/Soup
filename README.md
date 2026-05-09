@@ -43,12 +43,12 @@ soup train
 
 Latest highlights only. Full history: [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 
-**v0.40.5 — Quant Menu non-SFT**: closes the v0.38.0 known gap — the GPTQ / AWQ / HQQ / AQLM / EETQ / MXFP4 / FP8 train-time quantization formats now work on every transformer-backend trainer, not just SFT.
+**v0.40.6 — ReLoRA + surgical PEFT on every trainer**: closes the v0.39.0 known gap — the ReLoRA callback and the Gemma4 / fused-MoE PEFT patches now run on every transformer-backend trainer, not just SFT.
 
-- **Seven Quant Menu formats × 11 trainers** — DPO / GRPO / KTO / ORPO / SimPO / IPO / PPO / RewardModel / Pretrain / Embedding / BCO can now load pre-quantized checkpoints (TheBloke/Llama-2-7B-GPTQ, TheBloke/Llama-2-7B-AWQ, etc.) and train LoRA adapters on top. The compatibility-matrix cross-validators (HQQ × ZeRO-3 reject, EETQ × FSDP reject, AQLM × FSDP reject) already gate at config-load and apply task-agnostic, so nothing new to learn — `quantization: gptq` on a `task: dpo` config just works.
-- **PPO reward model loads quantized too** — `_load_reward_model` now accepts a `tcfg` kwarg and routes the reward checkpoint through the same Quant Menu loader as the policy model. A GPTQ-policy + GPTQ-reward PPO run no longer silently OOMs in fp16; both halves load with matching memory profile.
-- **Defence-in-depth on `reward_model` field** — `TrainingConfig.reward_model` field validator now rejects null bytes and caps length at 512 chars at config-load time, matching the policy already applied to `cfg.base`. Crafted YAML fails fast before any trainer is constructed.
-- **+131 net new tests** across the schema-gate widening matrix (11 tasks × 7 formats), MLX rejection regression per task, source-level invariants asserting each non-SFT trainer file calls `build_quantization_config_for_loader` and no longer carries the legacy `BitsAndBytesConfig(load_in_4bit=True ...)` literal, and a live mock-based dispatch test for `_load_reward_model` confirming the Quant Menu path is reachable when `tcfg` is supplied and skipped when it is not.
+- **ReLoRA callback × 12 trainers** — set `training.relora_steps: <N>` on any of `sft / dpo / grpo / kto / orpo / simpo / ipo / ppo / reward_model / pretrain / embedding / bco` (or unified `task: preference`) and the magnitude-prune-and-reset cycle fires every N steps. Schema cross-validator only rejects MLX backend (the callback is HF Trainer-specific).
+- **Surgical PEFT patches everywhere** — Gemma 4 `ClippableLinear` -> `nn.Linear` swap (so PEFT's matcher recognises the layer) and 3-D fused-MoE expert dropout strip (so `ParamWrapper` does not crash on multi-expert weight tensors) now apply across every non-SFT trainer. Both patches are best-effort and architecture-gated.
+- **One shared wiring path** — new `soup_cli.utils.peft_wiring` module exposes `apply_pre_lora_patches`, `apply_post_lora_patches`, `attach_relora_callback`. Every trainer (SFT included) calls these helpers, so future patches land in one place and never drift.
+- **+61 net new tests** — source-level invariant matrix proving all 12 trainer files invoke the helpers in the right order around `get_peft_model`, behavioural unit tests for each helper (Gemma4 happy path + exception swallow, post-LoRA strip happy path + exception swallow, ReLoRA policy field forwarding), and a schema-gate matrix covering every transformer task plus the `preference` dispatcher.
 
 ## Why Soup?
 
@@ -683,10 +683,11 @@ gated and silent on unrelated models.
 reads the YAML; the inline copies in `schema.py` stay as a back-compat fallback,
 deprecated in favour of the YAML registry.
 
-**v0.39.0 scope** — wired into the SFT trainer + transformers backend.
-Multi-trainer expansion of ReLoRA (DPO/GRPO/KTO/...) is tracked for v0.39.1
-(mirrors v0.27.0 MII / v0.37.0 multipack / v0.38.0 quant menu stub-then-live
-pattern). MLX backend gets a distinct error message.
+**Multi-trainer scope** — ReLoRA and the surgical patches are wired into every
+transformer-backend trainer: `sft`, `dpo`, `grpo`, `kto`, `orpo`, `simpo`, `ipo`,
+`ppo`, `reward_model`, `pretrain`, `embedding`, `bco`, plus the unified
+`task: preference` dispatcher. Schema cross-validator only rejects MLX backend
+(the callback is HF Trainer-specific).
 
 ## DPO Training
 
