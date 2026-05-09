@@ -543,10 +543,13 @@ for the full table.
 `fp8` all carry their own scale; combining with `quantization_aware` (int8 QAT or
 `'fp8'`) is rejected at config-load.
 
-**v0.38.0 scope** — wired into the SFT trainer + transformers backend.
-Multi-trainer expansion is tracked for v0.38.1 (mirrors v0.27.0 MII /
-v0.37.0 multipack stub-then-live pattern). MLX backend gets a distinct error
-message naming the actual reason.
+**Multi-trainer support.** Quant Menu is wired across all 12 transformer-backend
+trainers (SFT / DPO / GRPO / KTO / ORPO / SimPO / IPO / PPO / RewardModel /
+Pretrain / Embedding / BCO). PPO's reward model also loads with the same Quant
+Menu config as the policy when `tcfg` is passed in, so a GPTQ-policy + GPTQ-reward
+run does not silently OOM in fp16. MLX backend is rejected with a distinct error
+message; vision / audio modality is still SFT-only inline-BNB (multi-modal
+Quant Menu wiring tracked as a follow-up).
 
 ## Multipack — FFD Bin-Packing Sampler
 
