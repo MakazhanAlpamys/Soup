@@ -132,7 +132,13 @@ class TestMakeMultipackTrainerClass:
         assert result[1] == ("some_dataset",)
         assert result[2] == {"flag": True}
 
-    def test_returns_multipack_sampler_when_state_set(self):
+    def test_get_train_sampler_delegates_to_super_even_with_state(self):
+        # v0.40.4 #65 — the multipack path goes through
+        # ``get_train_dataloader`` (real_batches=False, batch_sampler= on
+        # DataLoader). ``_get_train_sampler`` stays as a defensive no-op
+        # fallback that ALWAYS delegates to super, even when state is
+        # attached, so eval / prediction loops that call it directly get
+        # the correct ``Sampler[int]`` shape (no nested-list shape mismatch).
         class Base:
             def __init__(self):
                 pass
@@ -149,11 +155,7 @@ class TestMakeMultipackTrainerClass:
             batch_size=2,
             seed=42,
         )
-        sampler = instance._get_train_sampler()
-        # Must be a MultipackBatchSampler (not the string default).
-        from soup_cli.utils.multipack_sampler import MultipackBatchSampler
-
-        assert isinstance(sampler, MultipackBatchSampler)
+        assert instance._get_train_sampler() == "default-sampler"
 
 
 class TestAttachMultipackState:
@@ -217,25 +219,25 @@ class TestAttachMultipackState:
             )
 
 
-class TestSftAndPretrainWiringDeferred:
-    """v0.40.3 deferred #65 live wiring after the adversarial review surfaced
-    a HF Trainer DataLoader sampler-vs-batch-sampler shape mismatch. The SFT
-    and Pretrain wrappers print a yellow advisory and fall back to the
-    standard sampler when ``multipack: true``. Live wiring lands in v0.40.4.
+class TestSftAndPretrainWiringLive:
+    """v0.40.4 #65 — live multipack HF Trainer wiring landed. The SFT and
+    Pretrain wrappers now instantiate the multipack subclass via
+    ``make_multipack_trainer_class(SFTTrainer)`` and call
+    ``attach_multipack_state`` when ``multipack: true``.
     """
 
-    def test_sft_emits_deferred_advisory(self):
+    def test_sft_wires_live_factory(self):
         text = Path("soup_cli/trainer/sft.py").read_text(encoding="utf-8")
-        # Case-insensitive — comment uses DEFERRED, console string uses deferred.
-        assert "v0.40.4" in text and "deferred" in text.lower()
-        # The active wiring (factory call) MUST NOT appear in the SFT path
-        # — the multipack subclass is not built or instantiated.
-        assert "make_multipack_trainer_class(SFTTrainer)" not in text
+        assert "v0.40.4" in text
+        assert "make_multipack_trainer_class(SFTTrainer)" in text
+        # The deferred advisory must be GONE (no fallback in v0.40.4+).
+        assert "live HF Trainer wiring is deferred to" not in text
 
-    def test_pretrain_emits_deferred_advisory(self):
+    def test_pretrain_wires_live_factory(self):
         text = Path("soup_cli/trainer/pretrain.py").read_text(encoding="utf-8")
-        assert "v0.40.4" in text and "deferred" in text.lower()
-        assert "make_multipack_trainer_class(SFTTrainer)" not in text
+        assert "v0.40.4" in text
+        assert "make_multipack_trainer_class(SFTTrainer)" in text
+        assert "live HF Trainer wiring is deferred to" not in text
 
 
 class TestSamplerRespectsArchitectureAllowlist:

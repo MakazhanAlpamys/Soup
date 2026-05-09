@@ -306,22 +306,39 @@ class SFTTrainerWrapper:
                     "packed docs cannot attend across boundaries"
                 )
 
-        # v0.40.3: #65 multipack live wiring DEFERRED to v0.40.4 — adversarial
-        # review surfaced that HF Trainer's `_get_train_sampler` returns a
-        # `Sampler[int]` (DataLoader iterates ints), but `MultipackBatchSampler`
-        # yields `list[list[int]]`. A `get_train_dataloader` override (with
-        # `batch_sampler=...`) is required and lands next patch. The
-        # multipack_trainer.py helpers remain in the codebase as a stub used
-        # by unit tests — the schema gate keeps `multipack: true` from
-        # silently no-opping (rejected at config-load for unsupported tasks).
-        if getattr(tcfg, "multipack", False):
-            console.print(
-                "[yellow]multipack: live HF Trainer wiring is deferred to "
-                "v0.40.4 (DataLoader sampler-vs-batch-sampler mismatch in HF "
-                "Trainer). Falling back to the standard sampler for this "
-                "run.[/]"
+        # v0.40.4 #65 — multipack live wiring. ``make_multipack_trainer_class``
+        # mixes a ``get_train_dataloader`` override into the SFTTrainer MRO
+        # that returns a DataLoader whose ``batch_sampler`` is the FFD
+        # bin-packing :class:`MultipackBatchSampler`. The factory is cached
+        # so two ``multipack: true`` runs against the same base class share
+        # the same subclass.
+        use_multipack = bool(getattr(tcfg, "multipack", False))
+        if use_multipack:
+            from soup_cli.utils.multipack_sampler import (
+                validate_multipack_architecture,
             )
-        self.trainer = SFTTrainer(**trainer_kwargs)
+            from soup_cli.utils.multipack_trainer import (
+                attach_multipack_state,
+                detect_arch_name,
+                lengths_from_dataset,
+                make_multipack_trainer_class,
+            )
+
+            arch = detect_arch_name(self.model)
+            if arch:
+                validate_multipack_architecture(arch)
+            trainer_cls = make_multipack_trainer_class(SFTTrainer)
+            self.trainer = trainer_cls(**trainer_kwargs)
+            attach_multipack_state(
+                self.trainer,
+                lengths=lengths_from_dataset(train_ds),
+                max_seq_len=cfg.data.max_length,
+                batch_size=batch_size,
+                seed=getattr(tcfg, "seed", 0) or 0,
+            )
+            console.print("[green]Multipack FFD bin-packing sampler enabled[/]")
+        else:
+            self.trainer = SFTTrainer(**trainer_kwargs)
 
         self._output_dir = str(output_dir)
         self._batch_size = batch_size

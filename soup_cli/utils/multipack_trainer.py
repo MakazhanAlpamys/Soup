@@ -125,15 +125,16 @@ def make_multipack_trainer_class(base_cls: type) -> type:
     checks consistent across sweep runs and avoids confusing pickle.
 
     .. note::
-       v0.40.3 ships this factory but **does not** wire it into the SFT /
-       Pretrain trainer wrappers. Adversarial review surfaced that HF
-       Trainer's ``_get_train_sampler`` returns a ``Sampler[int]`` which
-       the DataLoader then consumes as scalar indices, while
-       :class:`MultipackBatchSampler` yields ``list[list[int]]``. Live
-       wiring requires a ``get_train_dataloader`` override (with the
-       sampler installed as ``batch_sampler=`` on the underlying
-       ``DataLoader``) and lands in v0.40.4. The factory remains in code
-       as the stub end-point used by unit tests.
+       v0.40.4 (#65) wires this factory into the SFT / Pretrain trainer
+       wrappers via a ``get_train_dataloader`` override. HF Trainer's
+       ``_get_train_sampler`` returns a ``Sampler[int]`` which the
+       DataLoader then consumes as scalar indices, while
+       :class:`MultipackBatchSampler` yields ``list[list[int]]``. The
+       solution is to bypass ``_get_train_sampler`` for the live path and
+       install the multipack sampler as the DataLoader's
+       ``batch_sampler=``. The ``_get_train_sampler`` override stays as a
+       defensive no-op fallback (delegates to super) so the subclass
+       remains safe to instantiate even when state was never attached.
     """
     from soup_cli.utils.multipack_sampler import MultipackBatchSampler
 
@@ -141,21 +142,80 @@ def make_multipack_trainer_class(base_cls: type) -> type:
         soup_multipack: bool = True
 
         def _get_train_sampler(self, *args: Any, **kwargs: Any) -> Any:  # type: ignore[override]
-            # *args/**kwargs accept newer HF signature
-            # (transformers >=4.41 passes train_dataset as positional kwarg).
+            # v0.40.4 #65 — the live multipack path goes through
+            # ``get_train_dataloader`` (below), which installs the
+            # multipack ``MultipackBatchSampler`` directly as the
+            # DataLoader's ``batch_sampler=``. This override stays as a
+            # defensive no-op fallback that delegates to the base
+            # implementation: HF Trainer's DataLoader iterates a
+            # ``Sampler[int]`` (scalar indices) — returning a multipack
+            # ``list[list[int]]`` here would be a shape mismatch if any
+            # eval / prediction loop ever bypasses
+            # ``get_train_dataloader`` and calls this directly.
+            # ``*args/**kwargs`` accept the HF >=4.41 signature
+            # (``train_dataset`` passed positionally).
+            return super()._get_train_sampler(*args, **kwargs)
+
+        def get_train_dataloader(self):  # type: ignore[override]
+            """Return a DataLoader whose batch_sampler is multipack-aware.
+
+            v0.40.4 #65 — when multipack state has been attached via
+            :func:`attach_multipack_state`, build a flat-yield
+            ``MultipackBatchSampler`` (``real_batches=False`` — yields
+            ``list[int]`` per packed sequence, which is the contract HF
+            ``DataLoader.batch_sampler`` expects). When state is missing,
+            delegate to ``super().get_train_dataloader()`` so the subclass
+            is safe to instantiate even when multipack is disabled at
+            runtime (matches the ``_get_train_sampler`` fallback policy).
+            """
             lengths = getattr(self, _LENGTHS_ATTR, None)
             max_seq = getattr(self, _MAX_SEQ_ATTR, None)
             batch_size = getattr(self, _BATCH_SIZE_ATTR, None)
             seed = getattr(self, _SEED_ATTR, 0)
-            if not lengths or not max_seq or not batch_size:
-                return super()._get_train_sampler(*args, **kwargs)
-            return MultipackBatchSampler(
+            # `attach_multipack_state` rejects non-positive values up front;
+            # the explicit None check below preserves the "state never
+            # attached" path while letting an empty list (lengths=[]) fall
+            # through to the same fallback (the sampler would reject it).
+            if (
+                lengths is None or not lengths
+                or max_seq is None or batch_size is None
+            ):
+                return super().get_train_dataloader()
+
+            from torch.utils.data import DataLoader
+
+            train_dataset = getattr(self, "train_dataset", None)
+            if train_dataset is None:
+                # Defensive — HF Trainer always sets this before train()
+                # invokes get_train_dataloader, but a user calling the
+                # method directly might trip the unset case.
+                return super().get_train_dataloader()
+
+            args = getattr(self, "args", None)
+            drop_last = False
+            num_workers = 0
+            pin_memory = False
+            if args is not None:
+                drop_last = bool(getattr(args, "dataloader_drop_last", False))
+                num_workers = getattr(args, "dataloader_num_workers", 0) or 0
+                pin_memory = bool(getattr(args, "dataloader_pin_memory", False))
+
+            sampler = MultipackBatchSampler(
                 lengths=list(lengths),
                 batch_max_len=int(max_seq),
                 batch_size=int(batch_size),
-                real_batches=True,
+                real_batches=False,  # yield list[int] per pack — DataLoader-compatible
                 seed=int(seed),
-                drop_last=False,
+                drop_last=drop_last,
+            )
+
+            data_collator = getattr(self, "data_collator", None)
+            return DataLoader(
+                train_dataset,
+                batch_sampler=sampler,
+                collate_fn=data_collator,
+                num_workers=num_workers,
+                pin_memory=pin_memory,
             )
 
     MultipackTrainer.__name__ = f"Multipack{base_cls.__name__}"
