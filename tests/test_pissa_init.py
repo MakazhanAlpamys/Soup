@@ -23,8 +23,9 @@ class TestInitStrategyField:
         assert cfg.init_strategy == "olora"
 
     def test_rejects_unknown(self):
+        # loftq added in v0.41.0 — use a truly unknown sentinel.
         with pytest.raises(ValidationError):
-            LoraConfig(init_strategy="loftq")
+            LoraConfig(init_strategy="bogus_strategy")
 
     def test_rejects_non_string(self):
         with pytest.raises(ValidationError):

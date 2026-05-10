@@ -43,12 +43,14 @@ soup train
 
 Latest highlights only. Full history: [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 
-**v0.40.6 — ReLoRA + surgical PEFT on every trainer**: closes the v0.39.0 known gap — the ReLoRA callback and the Gemma4 / fused-MoE PEFT patches now run on every transformer-backend trainer, not just SFT.
+**v0.41.0 — Optimizer & PEFT Zoo**: closes the optimizer-breadth gap with LlamaFactory + Axolotl in a single release.
 
-- **ReLoRA callback × 12 trainers** — set `training.relora_steps: <N>` on any of `sft / dpo / grpo / kto / orpo / simpo / ipo / ppo / reward_model / pretrain / embedding / bco` (or unified `task: preference`) and the magnitude-prune-and-reset cycle fires every N steps. Schema cross-validator only rejects MLX backend (the callback is HF Trainer-specific).
-- **Surgical PEFT patches everywhere** — Gemma 4 `ClippableLinear` -> `nn.Linear` swap (so PEFT's matcher recognises the layer) and 3-D fused-MoE expert dropout strip (so `ParamWrapper` does not crash on multi-expert weight tensors) now apply across every non-SFT trainer. Both patches are best-effort and architecture-gated.
-- **One shared wiring path** — new `soup_cli.utils.peft_wiring` module exposes `apply_pre_lora_patches`, `apply_post_lora_patches`, `attach_relora_callback`. Every trainer (SFT included) calls these helpers, so future patches land in one place and never drift.
-- **+61 net new tests** — source-level invariant matrix proving all 12 trainer files invoke the helpers in the right order around `get_peft_model`, behavioural unit tests for each helper (Gemma4 happy path + exception swallow, post-LoRA strip happy path + exception swallow, ReLoRA policy field forwarding), and a schema-gate matrix covering every transformer task plus the `preference` dispatcher.
+- **14 new optimizers** — `BAdam`, `APOLLO` (`apollo_adamw`), `Adam-mini`, `lomo` / `adalomo`, `grokadamw`, `schedule_free_adamw` / `schedule_free_sgd`, `muon`, `dion`, `came_pytorch`, plus TorchAO `ao_adamw_{fp8,4bit,8bit}`. Set `training.optimizer: <name>` and Soup wires the rest. The closed allowlist rejects typos at config-load time with an actionable error message.
+- **Per-module LR groups** — `training.lr_groups: {q_proj: 1e-4, mlp: 5e-5}` (or list-of-pairs / list-of-dicts). First-match-wins routing; remaining params fall through to the base lr. Capped at 32 entries with regex / null-byte / NaN-Inf hardening.
+- **LoftQ quantization-aware LoRA init** — `training.lora.init_strategy: loftq` (with optional `loftq_iter` and `loftq_bits ∈ {2, 4, 8}`) initialises A/B and a low-bit base together. Composes with QLoRA for stronger adapter quality on aggressive quantization.
+- **LLaMA Pro block expansion + Mixture-of-Depths schemas** — `training.expand_layers` (1-64) + `training.freeze_trainable_layers` (signed, |x| ≤ 1000) + `training.use_mod`. Schema fields ship in v0.41.0 to lock the YAML surface; full live wiring lands in v0.41.1 (mirrors v0.27.0 / v0.37.0 stub-then-live releases).
+- **Friendly aliases** — `training.load_in_8bit: true` / `load_in_16bit: true` remap `quantization` for users coming from LF / Axolotl conventions. Mutually exclusive; rejected when combined with explicit Quant Menu formats.
+- **+118 net new tests** — covers optimizer allowlist, lr_groups parsing/runtime/schema-roundtrip, LoftQ + LLaMA Pro validators, alias remap rules, frozen `LrGroup` dataclass, and ReDoS / bool-as-int / null-byte hardening across every new field.
 
 ## Why Soup?
 
@@ -641,6 +643,40 @@ training:
 ```
 
 Replaces the static memory formula with a real try-halve-then-double-to-ceiling loop. Picked size is cached at `~/.soup/batch_cache.json` keyed on `(model, max_length, quantization, lora_r, gpu_name, gpu_memory_gb)` so repeat runs short-circuit.
+
+## Optimizer & PEFT Zoo
+
+Pick from a wider catalogue of optimizers, target individual modules with their own LR, and use quantization-aware LoRA initialisation:
+
+```yaml
+training:
+  # 30+ optimizers — HF-native, bnb, BAdam, APOLLO, Adam-mini, lomo,
+  # grokadamw, schedule_free, muon, dion, came_pytorch, ao_adamw_{fp8,4bit,8bit}
+  optimizer: badam
+
+  # Per-module LR override (first match wins; remaining params use base lr)
+  lr_groups:
+    q_proj: 1e-4
+    v_proj: 5e-5
+    mlp:    1e-5
+
+  # Friendly aliases for users coming from LlamaFactory / Axolotl
+  load_in_8bit: true        # equivalent to quantization: 8bit
+  # load_in_16bit: true     # equivalent to quantization: none
+
+  lora:
+    init_strategy: loftq    # quantization-aware LoRA init (also: pissa / olora / random)
+    loftq_iter: 1
+    loftq_bits: 4
+
+  # LLaMA Pro block expansion (schema only in v0.41.0; live wiring in v0.41.1)
+  expand_layers: 4
+  freeze_trainable_layers: 4
+```
+
+Catch-all friendly errors: typos in `optimizer:` are rejected at config-load with the v0.41.0 additions listed in the message; `lr_groups` patterns are validated as compilable regexes (length-capped + benign-string ReDoS probe); `load_in_8bit` mixed with `load_in_16bit` raises rather than picking one silently.
+
+See `soup_cli.utils.optimizer_zoo.SUPPORTED_OPTIMIZERS` for the complete optimizer allowlist.
 
 ## LoRA Quality — PiSSA, ReLoRA, Per-Pattern Rank, Surgical Patches
 

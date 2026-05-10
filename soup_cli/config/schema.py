@@ -60,14 +60,31 @@ class LoraConfig(BaseModel):
             "Incompatible with use_vera."
         ),
     )
-    init_strategy: Literal["random", "pissa", "olora"] = Field(
+    init_strategy: Literal["random", "pissa", "olora", "loftq"] = Field(
         default="random",
         description=(
             "LoRA init strategy. 'random' (default) is standard Kaiming init. "
             "'pissa' (PiSSA) initializes A/B from the SVD of the base weight — "
             "faster early convergence but adds an SVD pass on the first epoch. "
             "'olora' is equivalent to use_olora=True (orthogonal QR init). "
-            "Cannot be combined with use_dora or use_vera."
+            "'loftq' (v0.41.0) initialises A/B + a low-bit base together, "
+            "useful with QLoRA. Cannot be combined with use_dora or use_vera."
+        ),
+    )
+    # v0.41.0 Part C — LoftQ tuning knobs (used only when init_strategy='loftq').
+    loftq_iter: int = Field(
+        default=1, ge=1, le=10,
+        description=(
+            "LoftQ iteration count (1-10). Higher = better quant-aware init "
+            "at the cost of one-time setup latency. Used only when "
+            "init_strategy='loftq'."
+        ),
+    )
+    loftq_bits: Literal[2, 4, 8] = Field(
+        default=4,
+        description=(
+            "LoftQ target bitwidth — must be one of {2, 4, 8}. Used only "
+            "when init_strategy='loftq'."
         ),
     )
 
@@ -117,6 +134,14 @@ class LoraConfig(BaseModel):
                 f"init_strategy='pissa' is incompatible with {other}=True. "
                 f"PiSSA initializes the LoRA pair via SVD; combine with plain LoRA "
                 f"(or rsLoRA) only."
+            )
+        # v0.41.0 Part C — init_strategy='loftq' is incompatible with DoRA / VeRA
+        if self.init_strategy == "loftq" and (self.use_dora or self.use_vera):
+            other = "use_dora" if self.use_dora else "use_vera"
+            raise ValueError(
+                f"init_strategy='loftq' is incompatible with {other}=True. "
+                f"LoftQ jointly initialises A/B with quantised base weights; "
+                f"combine with plain LoRA only."
             )
         return self
 
@@ -377,7 +402,67 @@ class TrainingConfig(BaseModel):
             "'rowwise_with_gw_hp' (most accurate, grad_weight in high precision). (v0.28.1)."
         ),
     )
-    optimizer: str = Field(default="adamw_torch", description="Optimizer name")
+    optimizer: str = Field(
+        default="adamw_torch",
+        description=(
+            "Optimizer name. v0.41.0 expands the allowlist to cover BAdam, "
+            "APOLLO, Adam-mini, lomo/adalomo, grokadamw, schedule_free, "
+            "muon/dion/came_pytorch, and TorchAO ao_adamw_{fp8,4bit,8bit}. "
+            "See soup_cli.utils.optimizer_zoo.SUPPORTED_OPTIMIZERS for the "
+            "full list."
+        ),
+    )
+    # v0.41.0 Part B — per-module-pattern LR override.
+    lr_groups: Optional[List[Dict[str, Union[str, float]]]] = Field(
+        default=None,
+        description=(
+            "Per-module LR override. List of {pattern, lr} entries (or a "
+            "{pattern: lr} dict). First match wins; remaining params fall "
+            "through to the base lr. Capped at 32 entries. (v0.41.0)"
+        ),
+    )
+    # v0.41.0 Part C — LLaMA Pro block expansion.
+    expand_layers: Optional[int] = Field(
+        default=None, ge=1, le=64,
+        description=(
+            "LLaMA Pro: append N zero-init transformer blocks and freeze "
+            "the original ones. Schema lands in v0.41.0 — full live wiring "
+            "deferred to v0.41.1."
+        ),
+    )
+    freeze_trainable_layers: Optional[int] = Field(
+        default=None,
+        description=(
+            "LLaMA Pro: signed int. Positive = train only top-N decoder "
+            "layers; negative = train only bottom-N. Magnitude capped at "
+            "1000. (v0.41.0)"
+        ),
+    )
+    # v0.41.0 Part C — Mixture-of-Depths (selective-token routing).
+    use_mod: bool = Field(
+        default=False,
+        description=(
+            "Enable Mixture-of-Depths routing patch. Schema only in v0.41.0; "
+            "live patch deferred to v0.41.1 (mirrors v0.27.0 MII / v0.37.0 "
+            "multipack stub-then-live pattern)."
+        ),
+    )
+    # v0.41.0 Part C — Friendly aliases for `quantization` (LF / Axolotl users).
+    load_in_8bit: Optional[bool] = Field(
+        default=None,
+        description=(
+            "Friendly alias for quantization='8bit' / 'none'. When True, "
+            "rewrites quantization to '8bit' if currently 'none'/'4bit'. "
+            "Conflicts with load_in_16bit. (v0.41.0)"
+        ),
+    )
+    load_in_16bit: Optional[bool] = Field(
+        default=None,
+        description=(
+            "Friendly alias: when True, sets quantization='none' (full bf16/"
+            "fp16 LoRA). Conflicts with load_in_8bit. (v0.41.0)"
+        ),
+    )
     scheduler: str = Field(default="cosine", description="LR scheduler type")
     save_steps: int = Field(default=100, description="Save checkpoint every N steps")
     logging_steps: int = Field(default=10, description="Log metrics every N steps")
@@ -937,6 +1022,107 @@ class TrainingConfig(BaseModel):
             raise ValueError(
                 f"fp8_recipe='{self.fp8_recipe}' requires quantization_aware='fp8'. "
                 "Either set quantization_aware: 'fp8' or remove the fp8_recipe field."
+            )
+        return self
+
+    @field_validator("optimizer")
+    @classmethod
+    def _validate_optimizer(cls, value: str) -> str:
+        """v0.41.0 Part A — optimizer allowlist."""
+        from soup_cli.utils.optimizer_zoo import validate_optimizer_name
+
+        return validate_optimizer_name(value)
+
+    @field_validator("lr_groups", mode="before")
+    @classmethod
+    def _validate_lr_groups(cls, value):
+        """v0.41.0 Part B — parse + validate lr_groups."""
+        if value is None:
+            return None
+        from soup_cli.utils.lr_groups import parse_lr_groups
+
+        parsed = parse_lr_groups(value)
+        if parsed is None:
+            return None
+        # Re-emit as the raw schema shape (list of {pattern, lr} dicts) so
+        # round-tripping through model_dump preserves user-visible structure.
+        return [{"pattern": g.pattern, "lr": g.lr} for g in parsed]
+
+    @field_validator("freeze_trainable_layers", mode="before")
+    @classmethod
+    def _validate_freeze_trainable_layers(cls, value):
+        """v0.41.0 Part C — magnitude capped at 1000."""
+        if value is None:
+            return None
+        from soup_cli.utils.block_expansion import (
+            validate_freeze_trainable_layers,
+        )
+
+        return validate_freeze_trainable_layers(value)
+
+    @field_validator("expand_layers", mode="before")
+    @classmethod
+    def _validate_expand_layers_field(cls, value):
+        """v0.41.0 Part C — block expansion bounds + bool rejection.
+
+        Pydantic's `Field(ge=1, le=64)` accepts ``True`` (subclass of int);
+        the explicit validator rejects bool and routes through the shared
+        helper so the int bounds stay single-source-of-truth.
+        """
+        if value is None:
+            return None
+        from soup_cli.utils.block_expansion import validate_expand_layers
+
+        return validate_expand_layers(value)
+
+    @model_validator(mode="after")
+    def _validate_load_in_aliases(self) -> "TrainingConfig":
+        """v0.41.0 Part C — load_in_8bit / load_in_16bit aliases.
+
+        Mutually exclusive. When set to True, they override ``quantization``
+        only if the user did not explicitly pick a Quant Menu format
+        (gptq / awq / hqq:* / aqlm / eetq / mxfp4 / fp8). Mixing alias=True
+        with Quant Menu raises rather than silently overriding the explicit
+        pick. Uses ``is True`` (project policy) so an explicit ``False``
+        from the user is treated as "no preference", never silently
+        rewriting the field.
+        """
+        l8 = self.load_in_8bit
+        l16 = self.load_in_16bit
+        if l8 is True and l16 is True:
+            raise ValueError(
+                "load_in_8bit and load_in_16bit are mutually exclusive — "
+                "pick one."
+            )
+        if l8 is not True and l16 is not True:
+            return self
+        # Defer the import: utils.quant_menu is loaded lazily elsewhere.
+        from soup_cli.utils.quant_menu import is_quant_menu_format
+
+        if is_quant_menu_format(self.quantization):
+            raise ValueError(
+                f"load_in_8bit / load_in_16bit cannot be combined with "
+                f"quantization={self.quantization!r} (Quant Menu format). "
+                "Either remove the alias or set quantization to '4bit', "
+                "'8bit', or 'none'."
+            )
+        # Direct assignment routes through Pydantic v2 BaseModel.__setattr__
+        # so any future field_validator on ``quantization`` still fires.
+        # ``object.__setattr__`` would silently bypass that path.
+        if l8 is True and self.quantization != "8bit":
+            self.quantization = "8bit"
+        elif l16 is True and self.quantization != "none":
+            self.quantization = "none"
+        return self
+
+    @model_validator(mode="after")
+    def _validate_block_expansion_pair(self) -> "TrainingConfig":
+        """v0.41.0 Part C — expand_layers + freeze_trainable_layers pair."""
+        if self.expand_layers is not None and self.freeze_trainable_layers is None:
+            raise ValueError(
+                "expand_layers requires freeze_trainable_layers (LLaMA Pro "
+                "freezes the original layers and trains only the new blocks). "
+                "Set freeze_trainable_layers: <signed int>."
             )
         return self
 
