@@ -79,15 +79,18 @@ def write_trigger(output_dir: str, *, contents: Optional[str] = None) -> str:
     parent = os.path.dirname(path)
     if parent and not os.path.isdir(parent):
         os.makedirs(parent, exist_ok=True)
-    # TOCTOU defence: refuse to write through a pre-existing symlink at the
-    # trigger path (matches v0.33.0 #22 / v0.43.0 Part C policy).
+    # TOCTOU defence: lstat the UNRESOLVED join path (not the realpath'd one,
+    # which would follow the symlink and miss it). Matches v0.33.0 #22 /
+    # v0.43.0 Part C policy.
+    unresolved = os.path.join(output_dir, TRIGGER_FILENAME)
     try:
-        link_stat = os.lstat(path)
+        link_stat = os.lstat(unresolved)
     except FileNotFoundError:
         link_stat = None
     if link_stat is not None and stat.S_ISLNK(link_stat.st_mode):
         raise OSError(
-            f"refusing to write through symlink at {os.path.basename(path)}"
+            f"refusing to write through symlink at "
+            f"{os.path.basename(unresolved)}"
         )
     with open(path, "w", encoding="utf-8") as fh:
         fh.write(body)
