@@ -2149,3 +2149,34 @@ def demo_bundle(
     console.print(
         f"[green]Copied bundle '{bundle.name}' to[/] {_esc(written)}"
     )
+
+
+@app.command(name="recipe")
+def recipe(
+    path: str = typer.Argument(..., help="Path to recipe.yaml under cwd"),
+) -> None:
+    """v0.45.0 Part E — Validate a Data Recipe DAG (live runner deferred)."""
+    from rich.markup import escape as _escape
+
+    from soup_cli.utils.recipe_dag import load_recipe_yaml
+
+    try:
+        dag = load_recipe_yaml(path)
+    except FileNotFoundError as exc:
+        console.print(f"[red]Recipe not found: {_escape(str(exc))}[/]")
+        raise typer.Exit(1) from exc
+    except (TypeError, ValueError) as exc:
+        console.print(f"[red]Invalid recipe: {_escape(str(exc))}[/]")
+        raise typer.Exit(2) from exc
+
+    console.print(
+        f"[green]Recipe validated.[/] {len(dag.nodes)} node(s), "
+        f"{len(dag.edges)} edge(s)."
+    )
+    console.print(
+        "Topological order: "
+        + ", ".join(_escape(name) for name in dag.topo_order)
+    )
+    console.print(
+        "[yellow]Live runner deferred to v0.45.1.[/]"
+    )

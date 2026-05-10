@@ -148,6 +148,15 @@ app.add_typer(
     help="Proxy to llama.cpp binaries (cli / mtmd-cli / gguf-split / server).",
 )
 
+# v0.45.0 Part A — Plugin system CLI.
+from soup_cli.commands import plugins as plugins_cmd  # noqa: E402
+
+app.add_typer(
+    plugins_cmd.app,
+    name="plugins",
+    help="List, enable, disable Soup plugins (v0.45.0).",
+)
+
 # Register data generate as a subcommand of data
 data.app.command(name="generate")(generate.generate)
 

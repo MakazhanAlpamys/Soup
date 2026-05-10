@@ -43,15 +43,15 @@ soup train
 
 Latest highlights only. Full history: [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 
-**v0.44.0 — Live Dashboard & UX**: Studio-grade observability + 13 ergonomics fixes + 7 new standalone CLIs. 21 features that close the polish gap with Unsloth Studio, axolotl, and LlamaFactory.
+**v0.45.0 — Plugin System & Ecosystem Wins**: A public plugin API and the schema scaffolding for 20+ ecosystem integrations. Soup is now extensible.
 
-- **`soup monitor` — live GPU panel.** Rich Live `nvidia-smi`-driven dashboard: Util / Mem / VRAM / Temp / Power per GPU. `--refresh 0.25-30` interval, `--once` for a single snapshot. Apple Silicon hint deferred to v0.44.1.
-- **Standalone CLIs.** `soup fetch examples llama-3.1-8b-lora` writes a ready-to-edit YAML from the bundled catalog. `soup quantize <model> --to gguf --bits 4` prints the equivalent `soup export …` invocation. `soup merge-sharded-fsdp-weights` and `soup delinearize-llama4` ship as planners (live torch runtime in v0.44.1). `soup llama <subcommand>` proxies to llama.cpp binaries with a child-env allowlist that drops `HF_TOKEN` / `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`.
-- **Ctrl+C graceful save.** First SIGINT writes a checkpoint and continues; second SIGINT stops training cleanly. Touch `<output_dir>/.checkpoint_now` to force an out-of-band save (cwd-contained, symlink-rejected at the trigger path).
-- **Web UI plugin registry.** Drop-in `soup_cli/ui/plugins/*.py` files register tabs via `register_tab(name=…, title=…, render=…)` at import time. Tab name kebab-case allowlist, 32-tab cap, idempotent re-register. Plus `API_HOST` / `API_PORT` / `API_KEY` / `GRADIO_HOST` / `GRADIO_PORT` env knobs for the FastAPI + Gradio surfaces.
-- **Tail-latency stats + tool-call timer.** `update_ema` / `percentile` / `summarise_latency` ship as pure-Python (used by `runs show` + the live dashboard). `ToolOutputsBuffer` is a thread-safe `collections.deque(maxlen=1000)` ring; `ToolCallTimer` context-manager records duration / output / error per tool invocation for tool-calling SFT runs.
-- **Onboarding wizard helper.** `render_onboarding_yaml({base, dataset, task, quantization, epochs})` returns a complete validated `soup.yaml` — `output` field cwd-contained, Literal allowlists on `task` + `quantization`, `epochs ∈ [1, 10]`.
-- **+192 net new tests** — covers all 21 features: GPU-CSV parser + DoS caps, SSE frame schema, QR token in query string (not fragment) with IPv6 bracketing, llama-server timings + KV bar, deque ring + concurrent writes, Ctrl+C SIGINT install/restore, sweep-config scalar allowlist + frozen `MappingProxyType`, fetch symlink + commonpath defence, llama child-env allowlist drops secrets, plus 5 review-fix coverage gaps closed.
+- **Plugin / hook system.** `soup_cli.plugins.register_plugin(name, version, plugin, templates=[], model_groups=[])` lets third-party Python modules ship their own pre-train / post-train / pre-step / post-step hooks plus chat templates and model groups. Registry is idempotent on identical specs and rejects conflicting re-registration. Drop a file under `soup_cli/plugins/` and the loader picks it up at startup. New `soup plugins list / install / enable / disable` CLI.
+- **Anthropic Messages API converter.** `to_anthropic` / `from_anthropic` translate between OpenAI chat-completions and Anthropic Messages payloads — multiple `system` messages joined with `\n\n`, `tool` role surfaces as `tool_result` content blocks (list content concatenated, never silently dropped), `max_tokens` capped at 16384, `temperature` bounded `[0.0, 2.0]`. Live `/v1/messages` endpoint deferred to v0.45.1.
+- **Server-side tools allowlist.** Closed `{python, bash, web_search}` set with `WebSearchConfig` — domain allowlist (leading-dot subdomain pattern, port-strip on the host, IPv6 literal deny), `rate_limit_per_minute ∈ [1, 600]`. `python` and `bash` reuse the v0.25.0 RLVR sandbox; live HTTP endpoints deferred to v0.45.1.
+- **External integrations catalog.** 15-entry frozen `MappingProxyType` of ecosystem targets — `lm-studio`, `comfyui`, `stable-diffusion-cpp`, `open-webui`, `ollama`, `tei`, `pgvector`, `faiss`, `weaviate`, `sentence-transformers`, `claude-code`, `cursor`, `continue`, `cline`, `sillytavern`. Each entry names the artifact format (`gguf` / `safetensors` / `served-endpoint`).
+- **Advanced trainer-plugin allowlist.** 6-entry catalog (`grokfast` / `spectrum` / `llmcompressor` / `sonicmoe` / `cce_plugin` / `math_verify`) with `validate_trainer_plugin_list` (dedup, allowlist match, `_MAX_PLUGINS_PER_RUN=8`). Live callbacks land in v0.45.1.
+- **`soup data recipe <recipe.yaml>`.** Validates a Seed → LLM Text → Code → Judge → Validator → Sampler graph DAG: closed node-kind allowlist, Kahn's topological sort with `collections.deque` (deterministic, O(N+E)), self-loop / cycle / dangling-edge / duplicate rejection, cwd containment + `os.lstat + S_ISLNK` symlink rejection on the recipe file. Live offline runner against a local model in v0.45.1.
+- **+169 net new tests** — covers all 5 release Parts: plugin idempotency + per-list caps + description conflict rejection, Anthropic converter happy + failure paths, domain allowlist port-strip + IPv6 deny, n-gram bounds, integrations catalog immutability, trainer-plugin canonicalisation + dedup, recipe DAG cycle / cap / symlink + CLI happy / invalid / missing.
 
 ## Why Soup?
 
@@ -3160,6 +3160,122 @@ params:
 ```
 
 Strict scalar allowlist on values (`str` / `int` / `float` / `bool`); `_MAX_FILE_BYTES=256KB`, `_MAX_PARAM_KEYS=32`, `_MAX_VALUES_PER_KEY=64`; `SweepSpec.params` is `MappingProxyType[str, Tuple[Any, ...]]` for genuine immutability.
+
+## Plugin System
+
+Drop a Python module under `soup_cli/plugins/` (or any package importable by Soup) and register at import time:
+
+```python
+from soup_cli.plugins import register_plugin
+
+class MyPlugin:
+    def pre_train(self, ctx):
+        ...
+    def post_train(self, ctx):
+        ...
+
+register_plugin(
+    name="my-plugin",
+    version="1.0.0",
+    plugin=MyPlugin(),
+    description="Hooks into pre/post-train",
+    templates=["my-template"],         # optional
+    model_groups=["my-arch-family"],   # optional
+)
+```
+
+```bash
+soup plugins              # list registered plugins
+soup plugins enable foo
+soup plugins disable foo
+```
+
+Plugin names are kebab-case (`^[a-z0-9][a-z0-9-]{0,39}$`); versions are semver-ish (`MAJOR.MINOR.PATCH`); registry caps `_MAX_PLUGINS=64`, `_MAX_TEMPLATES_PER_PLUGIN=32`, `_MAX_MODEL_GROUPS_PER_PLUGIN=32`. Re-registering the same `(name, version, plugin, templates, model_groups, description)` is idempotent; any field mismatch is rejected with a clear error. Trainer-callback wiring of `pre_train` / `post_train` / `pre_step` / `post_step` lands in v0.45.1.
+
+## Anthropic Messages API Converter
+
+Pure-Python converters between OpenAI chat-completions and Anthropic Messages payload shapes:
+
+```python
+from soup_cli.utils.anthropic_messages import to_anthropic, from_anthropic
+
+anthropic_payload = to_anthropic({
+    "model": "claude-3-5-sonnet",
+    "messages": [
+        {"role": "system", "content": "you are helpful"},
+        {"role": "user", "content": "hi"},
+    ],
+    "max_tokens": 256,
+})
+```
+
+Multiple `system` messages join with `\n\n`. `tool` role with structured (list) content is concatenated into a single `tool_result` text block, never silently dropped. `max_tokens` capped at 16384, `temperature` bounded `[0.0, 2.0]`. Live `/v1/messages` endpoint inside `soup serve` lands in v0.45.1.
+
+## Server-Side Tools
+
+```python
+from soup_cli.utils.server_tools import (
+    SUPPORTED_TOOLS, WebSearchConfig, is_domain_allowed, validate_web_search_config,
+)
+
+# SUPPORTED_TOOLS == frozenset({"python", "bash", "web_search"})
+config = WebSearchConfig(
+    domain_allowlist=("example.com", ".docs.example.com"),
+    rate_limit_per_minute=30,
+)
+validate_web_search_config(config)
+is_domain_allowed("a.docs.example.com:443", config.domain_allowlist)  # True
+is_domain_allowed("[::1]", config.domain_allowlist)                   # False
+```
+
+`python` and `bash` reuse the v0.25.0 RLVR sandbox; `web_search` is gated by an explicit domain allowlist (default empty = deny all). `is_domain_allowed` strips `:port` suffixes before matching and rejects IPv6 literals so `Host: api.example.com:443` matches `api.example.com`. Live HTTP tool endpoints in v0.45.1.
+
+## External Integrations Catalog
+
+```python
+from soup_cli.utils.integrations import list_integrations, get_integration
+
+list_integrations()                       # 15 entries
+get_integration("lm-studio").target_artifacts   # ("gguf",)
+```
+
+15 ecosystem targets covered: `lm-studio`, `comfyui`, `stable-diffusion-cpp`, `open-webui`, `ollama`, `tei`, `pgvector`, `faiss`, `weaviate`, `sentence-transformers`, `claude-code`, `cursor`, `continue`, `cline`, `sillytavern`. Auto-detect + launch wiring lands with v0.46.0 Deploy Autopilot.
+
+## Advanced Trainer Plugins
+
+```python
+from soup_cli.utils.trainer_plugins import validate_trainer_plugin_list
+
+validate_trainer_plugin_list(["grokfast", "spectrum"])
+# returns ("grokfast", "spectrum") — canonical lowercase, dedup, ≤ 8 entries
+```
+
+6-entry allowlist (`cce_plugin`, `grokfast`, `spectrum`, `llmcompressor`, `sonicmoe`, `math_verify`) so a future `training.trainer_plugins: [...]` schema field has a stable surface. Live callbacks in v0.45.1.
+
+## Data Recipe DAG
+
+```bash
+soup data recipe my_recipe.yaml
+```
+
+```yaml
+nodes:
+  - name: seed1
+    kind: seed
+    config: {path: prompts.jsonl}
+  - name: llm1
+    kind: llm_text
+  - name: judge1
+    kind: judge
+  - name: samp1
+    kind: sampler
+edges:
+  - [seed1, llm1]
+  - [llm1, judge1]
+  - [judge1, samp1]
+```
+
+Closed node-kind allowlist (`seed` / `llm_text` / `code` / `judge` / `validator` / `sampler`); Kahn's topological sort via `collections.deque` (deterministic, O(N+E)); cycle / self-loop / duplicate-edge / dangling-edge / unknown-kind rejection. `_MAX_NODES=256`, `_MAX_EDGES=1024`, `_MAX_FILE_BYTES=1MiB`. The recipe file must stay under cwd and **must not be a symlink** (`os.lstat + S_ISLNK` TOCTOU defence). Live offline runner against a local model lands in v0.45.1.
 
 ## Changelog
 
