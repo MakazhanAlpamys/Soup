@@ -17,6 +17,7 @@ from soup_cli.data.loader import load_dataset
 from soup_cli.monitoring.display import TrainingDisplay
 from soup_cli.trainer.sft import SFTTrainerWrapper
 from soup_cli.utils.gpu import detect_device, get_gpu_info
+from soup_cli.utils.tool_outputs import ToolOutputsBuffer
 
 console = Console()
 
@@ -769,6 +770,7 @@ def train(
 
     # Train with live display and experiment tracking
     display = TrainingDisplay(cfg, device_name=device_name)
+    tool_buffer = ToolOutputsBuffer()
     console.print("[bold green]Training started![/]\n")
 
     profiler_ctx = contextlib.nullcontext()
@@ -785,6 +787,7 @@ def train(
         with profiler_ctx:
             result = trainer_wrapper.train(
                 display=display, tracker=tracker, run_id=run_id,
+                tool_output_buffer=tool_buffer,
                 resume_from_checkpoint=resume_from,
             )
 
