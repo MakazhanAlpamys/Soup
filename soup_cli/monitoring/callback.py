@@ -14,6 +14,7 @@ from transformers import (
 )
 
 from soup_cli.monitoring.display import TrainingDisplay
+from soup_cli.utils.tool_outputs import ToolOutputsBuffer
 
 logger = logging.getLogger(__name__)
 console = Console()
@@ -25,6 +26,7 @@ class SoupTrainerCallback(TrainerCallback):
     def __init__(
         self,
         display: TrainingDisplay,
+        tool_output_buffer: Optional[ToolOutputsBuffer] = None,
         tracker: Optional[object] = None,
         run_id: str = "",
         eval_config: Optional[object] = None,
@@ -43,6 +45,7 @@ class SoupTrainerCallback(TrainerCallback):
         grad_accum_current_batch: int = 1,
     ):
         self.display = display
+        self.tool_output_buffer = tool_output_buffer
         self.tracker = tracker
         self.run_id = run_id
         self.eval_config = eval_config
@@ -98,8 +101,12 @@ class SoupTrainerCallback(TrainerCallback):
     ):
         if logs is None:
             return
-
-        # Try to get GPU memory
+        tool_calls = logs.get("tool_calls", None)
+        if tool_calls and self.tool_output_buffer:
+            self.tool_output_buffer.record_call(
+                step=state.global_step,
+                tool_calls=tool_calls
+            )
         gpu_mem = ""
         try:
             import torch
