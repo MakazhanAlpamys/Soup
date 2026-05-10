@@ -199,6 +199,8 @@ class DataConfig(BaseModel):
     format: Literal[
         "alpaca", "sharegpt", "chatml", "dpo", "kto", "llava", "sharegpt4v",
         "plaintext", "embedding", "audio", "tool-calling", "auto",
+        # v0.42.0 — Data Pipeline Pro
+        "prm", "pre_tokenized", "input_output", "video", "multimodal",
     ] = Field(
         default="auto",
         description="Data format",
@@ -241,6 +243,272 @@ class DataConfig(BaseModel):
         ),
     )
 
+    # --- v0.42.0 Data Pipeline Pro -----------------------------------------
+    video_dir: Optional[str] = Field(
+        default=None,
+        description=(
+            "Base directory for resolving relative video paths in video "
+            "datasets. Mirrors image_dir / audio_dir. (v0.42.0 Part A)"
+        ),
+    )
+    tokenized_path: Optional[str] = Field(
+        default=None,
+        description=(
+            "Path to a pre-tokenized cache produced by `soup data preprocess`. "
+            "When set, the trainer skips the tokenize stage and reads tensors "
+            "directly. Mirrors LF tokenized_path / Axolotl `empty` type. "
+            "(v0.42.0 Part C)"
+        ),
+    )
+    streaming: bool = Field(
+        default=False,
+        description=(
+            "Pass-through to HF datasets `streaming=True`. Use for datasets "
+            "that don't fit on disk. Pairs with `buffer_size`. (v0.42.0 Part B)"
+        ),
+    )
+    buffer_size: Optional[int] = Field(
+        default=None,
+        description=(
+            "Shuffle buffer size for streaming datasets. None = HF default. "
+            "Bounds [1, 1_000_000]. (v0.42.0 Part B)"
+        ),
+    )
+    shards: Optional[int] = Field(
+        default=None,
+        description=(
+            "Number of shards for HF dataset splits (axolotl `shards`). "
+            "Bounds [1, 1024]. (v0.42.0 Part B)"
+        ),
+    )
+    interleave: Optional[Union[str, Dict]] = Field(
+        default=None,
+        description=(
+            "Multi-dataset interleave strategy: 'concat' / 'under' / 'over' / "
+            "{strategy: 'probs', probs: [...]}. (v0.42.0 Part D)"
+        ),
+    )
+    mask_history: bool = Field(
+        default=False,
+        description=(
+            "LF mask_history — mask all but the last assistant turn during "
+            "loss computation. (v0.42.0 Part D)"
+        ),
+    )
+    train_on_prompt: bool = Field(
+        default=False,
+        description=(
+            "LF train_on_prompt — include the prompt tokens in the loss. "
+            "Inverse of train_on_responses_only. (v0.42.0 Part D)"
+        ),
+    )
+    eval_on_each_dataset: bool = Field(
+        default=False,
+        description=(
+            "LF eval_on_each_dataset — when interleaving, run eval on every "
+            "constituent dataset separately. (v0.42.0 Part D)"
+        ),
+    )
+    split_thinking: bool = Field(
+        default=False,
+        description=(
+            "Axolotl split_thinking — separate `<think>` reasoning blocks "
+            "from the final answer for fine-grained masking. Qwen3-style. "
+            "(v0.42.0 Part D)"
+        ),
+    )
+    image_min_pixels: Optional[int] = Field(
+        default=None,
+        description="Per-image min pixel count for vision data. (v0.42.0 Part D)",
+    )
+    image_max_pixels: Optional[int] = Field(
+        default=None,
+        description="Per-image max pixel count for vision data. (v0.42.0 Part D)",
+    )
+    image_resize_algorithm: Optional[
+        Literal["nearest", "bilinear", "bicubic", "lanczos"]
+    ] = Field(
+        default=None,
+        description="Pillow resize algorithm for image preprocessing. (v0.42.0 Part D)",
+    )
+    video_fps: Optional[float] = Field(
+        default=None,
+        description=(
+            "Target frames-per-second for video preprocessing. (v0.42.0 Part D)"
+        ),
+    )
+    video_maxlen: Optional[int] = Field(
+        default=None,
+        description=(
+            "Max number of frames per video clip. Bounds (0, 4096]. "
+            "(v0.42.0 Part D)"
+        ),
+    )
+    add_new_tokens: Optional[List[str]] = Field(
+        default=None,
+        description=(
+            "Add these tokens to the tokenizer vocab + resize embeddings. "
+            "Cap 10_000 entries; per-token <= 256 chars; no duplicates. "
+            "(v0.42.0 Part E)"
+        ),
+    )
+    new_special_tokens: Optional[List[str]] = Field(
+        default=None,
+        description=(
+            "Like add_new_tokens but registered as additional_special_tokens "
+            "so they are not split by the tokenizer. (v0.42.0 Part E)"
+        ),
+    )
+    resize_vocab: bool = Field(
+        default=False,
+        description=(
+            "Resize the model's input/output embedding matrix when "
+            "add_new_tokens / new_special_tokens grew the vocab. "
+            "(v0.42.0 Part E)"
+        ),
+    )
+    extend_conversation: bool = Field(
+        default=False,
+        description=(
+            "Unsloth-style conversation extension — extend the last assistant "
+            "turn with N more tokens for 'continue' prompts. (v0.42.0 Part E)"
+        ),
+    )
+    skip_prepare_dataset: bool = Field(
+        default=False,
+        description=(
+            "Axolotl skip_prepare_dataset — escape hatch when the input is "
+            "already in the trainer's expected schema. (v0.42.0 Part E)"
+        ),
+    )
+    remove_unused_columns: bool = Field(
+        default=True,
+        description=(
+            "HF Trainer remove_unused_columns. Set False when feeding "
+            "extra cols to a custom collator. (v0.42.0 Part E)"
+        ),
+    )
+    prompt_strategy: Optional[str] = Field(
+        default=None,
+        description=(
+            "Axolotl-style 'module.path:function_name' Python transform. "
+            "Schema-only in v0.42.0 — runtime invocation lands in v0.42.1. "
+            "(v0.42.0 Part E)"
+        ),
+    )
+
+    @field_validator("video_dir", "tokenized_path")
+    @classmethod
+    def _validate_v042_optional_path(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise ValueError("path must be a string")
+        if not value:
+            return None
+        if "\x00" in value:
+            raise ValueError("path must not contain null bytes")
+        if len(value) > 4096:
+            raise ValueError("path must be <= 4096 chars")
+        # Schema-level containment via shared `is_under_cwd` (os.path.realpath
+        # + commonpath). Rejects arbitrary system paths at config load so a
+        # crafted soup.yaml fails fast instead of at first filesystem read.
+        from soup_cli.utils.paths import is_under_cwd
+
+        if not is_under_cwd(value):
+            raise ValueError(
+                "path must stay under the current working directory "
+                "(absolute paths outside cwd are rejected at config load)."
+            )
+        return value
+
+    @field_validator("buffer_size")
+    @classmethod
+    def _validate_buffer_size_v042(cls, value: Optional[int]) -> Optional[int]:
+        from soup_cli.utils.data_pipeline import validate_buffer_size
+
+        return validate_buffer_size(value)
+
+    @field_validator("shards")
+    @classmethod
+    def _validate_shards_v042(cls, value: Optional[int]) -> Optional[int]:
+        from soup_cli.utils.data_pipeline import validate_shards
+
+        return validate_shards(value)
+
+    @field_validator("image_min_pixels", "image_max_pixels")
+    @classmethod
+    def _validate_image_pixels_v042(cls, value, info):
+        from soup_cli.utils.data_pipeline import validate_image_pixels
+
+        return validate_image_pixels(info.field_name, value)
+
+    @field_validator("video_fps")
+    @classmethod
+    def _validate_video_fps_v042(cls, value: Optional[float]) -> Optional[float]:
+        from soup_cli.utils.data_pipeline import validate_video_fps
+
+        return validate_video_fps(value)
+
+    @field_validator("video_maxlen")
+    @classmethod
+    def _validate_video_maxlen_v042(cls, value: Optional[int]) -> Optional[int]:
+        from soup_cli.utils.data_pipeline import validate_video_maxlen
+
+        return validate_video_maxlen(value)
+
+    @field_validator("add_new_tokens", "new_special_tokens")
+    @classmethod
+    def _validate_new_tokens_v042(
+        cls, value: Optional[List[str]]
+    ) -> Optional[List[str]]:
+        from soup_cli.utils.data_pipeline import validate_new_tokens
+
+        return validate_new_tokens(value)
+
+    @field_validator("prompt_strategy")
+    @classmethod
+    def _validate_prompt_strategy_v042(cls, value: Optional[str]) -> Optional[str]:
+        from soup_cli.utils.data_pipeline import validate_prompt_strategy
+
+        return validate_prompt_strategy(value)
+
+    @field_validator("interleave")
+    @classmethod
+    def _validate_interleave_v042(cls, value):
+        # Shape validation only — full ``parse_interleave`` requires
+        # ``num_datasets`` which the trainer supplies at runtime. We accept
+        # None / str / dict here and reject obvious type errors so a YAML
+        # like ``data.interleave: 99`` fails loudly at config load.
+        if value is None:
+            return None
+        if isinstance(value, str):
+            from soup_cli.utils.data_pipeline import INTERLEAVE_STRATEGIES
+
+            if value not in INTERLEAVE_STRATEGIES:
+                raise ValueError(
+                    f"interleave must be one of {sorted(INTERLEAVE_STRATEGIES)} "
+                    f"or a dict — got {value!r}"
+                )
+            if value == "probs":
+                # Probs requires the dict form so the per-dataset weights are
+                # supplied — bare "probs" is meaningless.
+                raise ValueError(
+                    "interleave='probs' requires a 'probs' list — use "
+                    "{strategy: probs, probs: [...]} dict form."
+                )
+            return value
+        if isinstance(value, dict):
+            if "strategy" not in value:
+                raise ValueError(
+                    "interleave dict form must include 'strategy' key"
+                )
+            return value
+        raise ValueError(
+            f"interleave must be None, a string, or a dict (got "
+            f"{type(value).__name__})"
+        )
+
     @field_validator("chat_template")
     @classmethod
     def _validate_chat_template(cls, value: Optional[str]) -> Optional[str]:
@@ -276,6 +544,85 @@ class DataConfig(BaseModel):
                 "train_on_responses_only and train_on_messages_with_train_field "
                 "are mutually exclusive. Disable one. The per-message 'train' "
                 "field is opt-in for fine-grained per-message control."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_v042_train_on_prompt(self) -> "DataConfig":
+        # train_on_prompt is the inverse semantics of train_on_responses_only —
+        # both True is contradictory. Match v0.36.0 loss-mask exclusivity policy.
+        if self.train_on_prompt and self.train_on_responses_only:
+            raise ValueError(
+                "train_on_prompt and train_on_responses_only are mutually "
+                "exclusive — train_on_prompt opts INTO prompt-token loss, "
+                "train_on_responses_only opts OUT. Pick one."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_v042_image_pixel_range(self) -> "DataConfig":
+        if (
+            self.image_min_pixels is not None
+            and self.image_max_pixels is not None
+            and self.image_min_pixels > self.image_max_pixels
+        ):
+            raise ValueError(
+                "image_min_pixels must be <= image_max_pixels"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_v042_streaming_buffer(self) -> "DataConfig":
+        # buffer_size only meaningful when streaming=True — surface the
+        # mismatch loudly (mirrors v0.32.0 spike-recovery / loss-watchdog
+        # cross-validator policy).
+        if self.buffer_size is not None and not self.streaming:
+            raise ValueError(
+                "buffer_size requires streaming=True (HF datasets only "
+                "supports a shuffle buffer in streaming mode)."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_v042_video_fields(self) -> "DataConfig":
+        # Video-only fields must not be set when format != 'video' to avoid
+        # silent no-ops (Axolotl-mode footgun this validator prevents).
+        video_fields = (
+            ("video_fps", self.video_fps),
+            ("video_maxlen", self.video_maxlen),
+            ("video_dir", self.video_dir),
+        )
+        any_set = any(v is not None for _, v in video_fields)
+        if any_set and self.format not in ("video", "multimodal", "auto"):
+            names = [n for n, v in video_fields if v is not None]
+            raise ValueError(
+                f"video-related fields {names} require format in "
+                "{video, multimodal, auto} (got "
+                f"{self.format!r})."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_v042_resize_vocab_requires_tokens(self) -> "DataConfig":
+        if self.resize_vocab and not (
+            self.add_new_tokens or self.new_special_tokens
+        ):
+            raise ValueError(
+                "resize_vocab=True requires add_new_tokens or "
+                "new_special_tokens to be non-empty — otherwise the resize is "
+                "a no-op."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_v042_pre_tokenized_path(self) -> "DataConfig":
+        # tokenized_path is meaningful regardless of format (Axolotl `empty`
+        # type expects the cache to be the source of truth). But the
+        # pre_tokenized format implies the path must be set.
+        if self.format == "pre_tokenized" and not self.tokenized_path:
+            raise ValueError(
+                "format='pre_tokenized' requires data.tokenized_path to point "
+                "at a cache directory produced by `soup data preprocess`."
             )
         return self
 

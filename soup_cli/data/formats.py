@@ -83,6 +83,8 @@ def format_to_messages(row: dict, fmt: str) -> Optional[dict]:
     valid_formats = (
         "chatml", "alpaca", "sharegpt", "dpo", "kto", "llava", "sharegpt4v",
         "plaintext", "embedding", "audio", "tool-calling",
+        # v0.42.0 Part A
+        "prm", "pre_tokenized", "input_output", "video", "multimodal",
     )
     if fmt not in valid_formats:
         raise ValueError(f"Unknown format: {fmt}")
@@ -105,6 +107,16 @@ def format_to_messages(row: dict, fmt: str) -> Optional[dict]:
             return _convert_audio(row)
         elif fmt == "tool-calling":
             return _convert_tool_calling(row)
+        elif fmt == "prm":
+            return _convert_prm(row)
+        elif fmt == "pre_tokenized":
+            return _convert_pre_tokenized(row)
+        elif fmt == "input_output":
+            return _convert_input_output(row)
+        elif fmt == "video":
+            return _convert_video(row)
+        elif fmt == "multimodal":
+            return _convert_multimodal(row)
         else:
             return _convert_vision(row)
     except (KeyError, TypeError, IndexError, ValueError):
@@ -406,3 +418,120 @@ def _to_sharegpt(messages: list[dict]) -> dict:
             "value": msg["content"],
         })
     return {"conversations": conversations}
+
+
+# --- v0.42.0 Part A: New format converters ---------------------------------
+
+_MAX_PRM_STEPS = 10_000
+
+
+def _convert_prm(row: dict) -> dict:
+    """PRM (Process Reward Model) stepwise-supervised format.
+
+    Schema: {"prompt": str, "completions": [str, ...], "labels": [bool, ...]}
+    Each completion is a reasoning step; each label is True if that step is
+    correct. Live PPO/RL wiring lands in v0.50 — v0.42.0 stores the row as-is
+    after schema validation so downstream consumers can opt in.
+    """
+    prompt = row["prompt"]
+    completions = row["completions"]
+    labels = row["labels"]
+    if not isinstance(prompt, str) or not prompt:
+        raise ValueError("PRM 'prompt' must be a non-empty string")
+    if not isinstance(completions, list) or not isinstance(labels, list):
+        raise ValueError("PRM completions/labels must be lists")
+    if len(completions) != len(labels):
+        raise ValueError("PRM completions and labels must be same length")
+    if not completions:
+        raise ValueError("PRM row must have at least one completion")
+    if len(completions) > _MAX_PRM_STEPS:
+        raise ValueError(f"PRM row exceeds {_MAX_PRM_STEPS} steps")
+    for index, comp in enumerate(completions):
+        if not isinstance(comp, str):
+            raise ValueError(f"PRM completions[{index}] must be a string")
+    for index, lab in enumerate(labels):
+        if not isinstance(lab, bool):
+            raise ValueError(f"PRM labels[{index}] must be a bool")
+    return {"prompt": prompt, "completions": completions, "labels": labels}
+
+
+def _convert_pre_tokenized(row: dict) -> dict:
+    """Already-tokenized rows — pass through input_ids / labels / attention_mask."""
+    if "input_ids" not in row:
+        raise ValueError("pre_tokenized row must have 'input_ids'")
+    out: dict = {"input_ids": row["input_ids"]}
+    if "labels" in row:
+        out["labels"] = row["labels"]
+    if "attention_mask" in row:
+        out["attention_mask"] = row["attention_mask"]
+    return out
+
+
+def _convert_input_output(row: dict) -> dict:
+    """Template-free segments+labels format (axolotl `input_output`).
+
+    Schema: {"segments": [{"text": str, "label": bool}, ...]}
+    Each segment is rendered verbatim — no chat template applied — and only
+    segments with label=True contribute to the loss.
+    """
+    segments = row["segments"]
+    if not isinstance(segments, list) or not segments:
+        raise ValueError("input_output row must have non-empty 'segments' list")
+    cleaned: list[dict] = []
+    for seg in segments:
+        if not isinstance(seg, dict):
+            raise ValueError("input_output segment must be a dict")
+        if "text" not in seg or "label" not in seg:
+            raise ValueError("input_output segment must have 'text' and 'label'")
+        if not isinstance(seg["text"], str):
+            raise ValueError("input_output segment.text must be a string")
+        if not isinstance(seg["label"], bool):
+            raise ValueError("input_output segment.label must be a bool")
+        cleaned.append({"text": seg["text"], "label": seg["label"]})
+    return {"segments": cleaned}
+
+
+def _convert_video(row: dict) -> dict:
+    """Video format. Schema: {"video": "path/url", "messages": [...]}."""
+    if "video" not in row:
+        raise ValueError("video row must have 'video' key")
+    video = row["video"]
+    if not isinstance(video, str) or not video:
+        raise ValueError("video row 'video' must be a non-empty string")
+    if "\x00" in video:
+        raise ValueError("video row 'video' must not contain null bytes")
+    if len(video) > 2048:
+        raise ValueError("video row 'video' must be <= 2048 chars")
+    messages = row.get("messages") or []
+    return {"video": video, "messages": messages}
+
+
+def _convert_multimodal(row: dict) -> dict:
+    """Axolotl multimodal content-parts schema.
+
+    Schema: {"messages": [{"role": ..., "content": [{"type": "text"|"image"
+    |"audio"|"video", ...}, ...]}, ...]}
+    Each message's content is a list of typed parts. Validates the part
+    types but stores them verbatim.
+    """
+    messages = row["messages"]
+    if not isinstance(messages, list) or not messages:
+        raise ValueError("multimodal row must have non-empty 'messages' list")
+    valid_types = {"text", "image", "audio", "video"}
+    for msg in messages:
+        content = msg.get("content")
+        if isinstance(content, str):
+            continue  # back-compat with plain strings
+        if not isinstance(content, list):
+            raise ValueError(
+                "multimodal message.content must be a list of parts or a string"
+            )
+        for part in content:
+            if not isinstance(part, dict):
+                raise ValueError("multimodal content part must be a dict")
+            ptype = part.get("type")
+            if ptype not in valid_types:
+                raise ValueError(
+                    f"multimodal content part.type must be in {sorted(valid_types)}"
+                )
+    return {"messages": messages}

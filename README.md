@@ -43,14 +43,15 @@ soup train
 
 Latest highlights only. Full history: [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 
-**v0.41.0 — Optimizer & PEFT Zoo**: closes the optimizer-breadth gap with LlamaFactory + Axolotl in a single release.
+**v0.42.0 — Data Pipeline Pro**: closes the data-tooling gap with Axolotl + LlamaFactory in one release. 18 features across formats, remote loading, AOT preprocessing, advanced masking, vocab expansion, and document ingestion.
 
-- **14 new optimizers** — `BAdam`, `APOLLO` (`apollo_adamw`), `Adam-mini`, `lomo` / `adalomo`, `grokadamw`, `schedule_free_adamw` / `schedule_free_sgd`, `muon`, `dion`, `came_pytorch`, plus TorchAO `ao_adamw_{fp8,4bit,8bit}`. Set `training.optimizer: <name>` and Soup wires the rest. The closed allowlist rejects typos at config-load time with an actionable error message.
-- **Per-module LR groups** — `training.lr_groups: {q_proj: 1e-4, mlp: 5e-5}` (or list-of-pairs / list-of-dicts). First-match-wins routing; remaining params fall through to the base lr. Capped at 32 entries with regex / null-byte / NaN-Inf hardening.
-- **LoftQ quantization-aware LoRA init** — `training.lora.init_strategy: loftq` (with optional `loftq_iter` and `loftq_bits ∈ {2, 4, 8}`) initialises A/B and a low-bit base together. Composes with QLoRA for stronger adapter quality on aggressive quantization.
-- **LLaMA Pro block expansion + Mixture-of-Depths schemas** — `training.expand_layers` (1-64) + `training.freeze_trainable_layers` (signed, |x| ≤ 1000) + `training.use_mod`. Schema fields ship in v0.41.0 to lock the YAML surface; full live wiring lands in v0.41.1 (mirrors v0.27.0 / v0.37.0 stub-then-live releases).
-- **Friendly aliases** — `training.load_in_8bit: true` / `load_in_16bit: true` remap `quantization` for users coming from LF / Axolotl conventions. Mutually exclusive; rejected when combined with explicit Quant Menu formats.
-- **+118 net new tests** — covers optimizer allowlist, lr_groups parsing/runtime/schema-roundtrip, LoftQ + LLaMA Pro validators, alias remap rules, frozen `LrGroup` dataclass, and ReDoS / bool-as-int / null-byte hardening across every new field.
+- **5 new data formats** — `prm` (PRM stepwise-supervised), `pre_tokenized` (LF `tokenized_path` / Axolotl `empty` type), `input_output` (template-free segments+labels with no chat template), `video`, and `multimodal` (axolotl typed content-parts schema with text / image / audio / video). Each is loud-fail validated — bool labels, null-byte rejection, length caps on path/url-like fields.
+- **Remote dataset loading (schema gate live, fsspec wiring deferred to v0.42.1)** — `data.train: s3://my-bucket/path` accepts the 7-scheme allowlist (`s3` / `gs` / `gcs` / `az` / `abfs` / `abfss` / `oci`). Bucket name regex is RFC-3986-tight, userinfo / fragment / query strings are rejected (the query-string gate is SSRF-adjacent — fsspec backends interpret `?endpoint_url=…` as config overrides). New schema fields: `streaming: bool`, `buffer_size: int [1, 1_000_000]`, `shards: int [1, 1024]`.
+- **AOT preprocessing + tokenized cache** — new `soup data preprocess <config>` CLI emits a deterministic 16-char SHA-256 cache key from `(dataset, tokenizer, max_length, format)`. Pair with the new `data.tokenized_path` schema field to skip the tokenize stage on subsequent runs.
+- **Advanced masking + multi-dataset interleave** — `data.interleave: concat / under / over / {strategy: probs, probs: [...]}` (sum-to-1 ±1e-6, max 32 datasets, `InterleaveSpec` is a frozen dataclass). Plus `mask_history`, `train_on_prompt` (mutually exclusive with `train_on_responses_only`), `eval_on_each_dataset`, `split_thinking` for Qwen3-style `<think>` masking, and per-image min/max pixels + `image_resize_algorithm` Literal + `video_fps` / `video_maxlen` / `video_dir`.
+- **Vocab expansion + custom prompt strategies** — `data.add_new_tokens: ["<reasoning>", "</reasoning>"]` + `new_special_tokens` (cap 10_000 entries, no duplicates, null-byte rejected) + `resize_vocab: bool` cross-validator. New `prompt_strategy: my_module.path:my_fn` field with regex validation lays groundwork for v0.42.1 runtime invocation. Plus axolotl-style `skip_prepare_dataset` / `remove_unused_columns` escape hatches.
+- **Document ingestion** — new `soup data ingest <doc.pdf>` (PDF / DOCX / MD / TXT) → JSONL with one row per page / paragraph. Lazy-imports `pypdf` / `python-docx` so missing optional deps never break `soup data --help`. Symlink-rejected, cwd-confined.
+- **+140 net new tests** — covers all 18 features end-to-end: schema validators, cross-validators, frozen-dataclass mutation guards, URL allowlist + bucket regex / single-char bucket / SSRF query rejection, every new format converter happy + failure path, CLI help + smoke + symlink-rejection, full SoupConfig YAML round-trip.
 
 ## Why Soup?
 
@@ -2295,6 +2296,98 @@ Or use `.txt` files directly (one document per line).
 **Audio (speech + conversation):**
 ```json
 {"audio": "recording.wav", "messages": [{"role": "user", "content": "Transcribe."}, {"role": "assistant", "content": "Hello world."}]}
+```
+
+**PRM (process reward, stepwise-supervised):**
+```json
+{"prompt": "Solve 2+2", "completions": ["First, add", "Result is 4"], "labels": [true, true]}
+```
+
+**Pre-tokenized (skip tokenize stage):**
+```json
+{"input_ids": [1, 2, 3, ...], "labels": [-100, 2, 3, ...], "attention_mask": [1, 1, 1, ...]}
+```
+Use with `data.format: pre_tokenized` and `data.tokenized_path: ./.soup-tokenized/<key>` after running `soup data preprocess`.
+
+**Input/Output (template-free, segment-level loss control):**
+```json
+{"segments": [{"text": "Q: hi", "label": false}, {"text": "A: hello", "label": true}]}
+```
+
+**Video:**
+```json
+{"video": "clip.mp4", "messages": [{"role": "user", "content": "Describe this clip."}]}
+```
+
+**Multimodal (typed content parts — text / image / audio / video in one message):**
+```json
+{"messages": [{"role": "user", "content": [{"type": "text", "text": "What's in this?"}, {"type": "image", "url": "x.png"}]}]}
+```
+
+## Data Pipeline Pro
+
+Soup speaks the same dataset surface as Axolotl + LlamaFactory + Unsloth — remote URIs, streaming, sharding, multi-dataset interleaving, vocab expansion, and document ingestion all live in one schema.
+
+**Remote datasets** (schema gate live; fsspec backend wiring lands in v0.42.1):
+
+```yaml
+data:
+  train: s3://my-bucket/datasets/train.jsonl   # also gs:// gcs:// az:// abfs:// abfss:// oci://
+  streaming: true
+  buffer_size: 8192
+  shards: 4
+```
+
+**Multi-dataset interleave:**
+
+```yaml
+data:
+  interleave: { strategy: probs, probs: [0.7, 0.3] }   # also: concat / under / over
+  eval_on_each_dataset: true
+```
+
+**Vocab expansion + advanced masking:**
+
+```yaml
+data:
+  add_new_tokens: ["<reasoning>", "</reasoning>"]
+  new_special_tokens: ["<|tool_call|>"]
+  resize_vocab: true
+  mask_history: true
+  split_thinking: true            # Qwen3-style <think> reasoning-block masking
+  image_min_pixels: 256
+  image_max_pixels: 4096
+  image_resize_algorithm: bicubic
+  video_fps: 24
+  video_maxlen: 32
+  video_dir: ./videos
+```
+
+**AOT preprocessing:**
+
+```bash
+# Tokenize once, reuse the cache across runs.
+soup data preprocess soup.yaml --output ./.soup-tokenized
+
+# Then in soup.yaml:
+#   data:
+#     format: pre_tokenized
+#     tokenized_path: ./.soup-tokenized/<16-char-cache-key>
+```
+
+**Document ingestion (PDF / DOCX / MD / TXT → JSONL):**
+
+```bash
+soup data ingest report.pdf --output report.jsonl
+soup data ingest README.md
+soup data ingest notes.docx
+```
+
+**Custom prompt strategies (schema only — runtime invocation in v0.42.1):**
+
+```yaml
+data:
+  prompt_strategy: my_pkg.transforms:rephrase
 ```
 
 ## Data Tools

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import random
 from pathlib import Path
 from typing import Optional
@@ -1918,3 +1919,171 @@ def push_dataset_cmd(
     console.print(
         f"[green]Uploaded to[/] https://huggingface.co/datasets/{hf_dataset}"
     )
+
+
+# --- v0.42.0 Part C / F: AOT preprocess + document ingestion ---------------
+
+@app.command(name="preprocess")
+def preprocess_dataset(
+    config_path: str = typer.Argument(
+        ..., help="Path to soup.yaml — uses data.train + tokenizer + max_length"
+    ),
+    output_dir: str = typer.Option(
+        "./.soup-tokenized", "--output", "-o",
+        help="Cache directory under cwd",
+    ),
+    yes: bool = typer.Option(False, "--yes", help="Skip confirmation prompt"),
+) -> None:
+    """AOT-tokenize a dataset and cache to disk for reuse across runs.
+
+    Schema-only stub in v0.42.0 — emits the cache key + planned output path
+    so users can wire `data.tokenized_path: <path>` into their YAML. Live
+    tokenization lands in v0.42.1 (mirrors v0.27.0 MII / v0.37.0 multipack
+    stub-then-live pattern).
+    """
+    from soup_cli.config.loader import load_config
+    from soup_cli.utils.data_pipeline import make_preprocess_cache_key
+    from soup_cli.utils.paths import is_under_cwd
+
+    cfg_real = os.path.realpath(config_path)
+    if not is_under_cwd(cfg_real):
+        console.print(
+            f"[red]--config must stay under cwd[/] (got {config_path!r})"
+        )
+        raise typer.Exit(1)
+    if not Path(cfg_real).is_file():
+        console.print(f"[red]Config not found:[/] {config_path}")
+        raise typer.Exit(1)
+
+    cfg = load_config(cfg_real)
+    out_real = os.path.realpath(output_dir)
+    if not is_under_cwd(out_real):
+        console.print(
+            f"[red]--output must stay under cwd[/] (got {output_dir!r})"
+        )
+        raise typer.Exit(1)
+
+    cache_key = make_preprocess_cache_key(
+        dataset_path=cfg.data.train,
+        tokenizer_name=cfg.base,
+        max_length=cfg.data.max_length,
+        format_name=cfg.data.format,
+    )
+    target = Path(out_real) / cache_key
+    console.print(f"[cyan]Dataset:[/] {cfg.data.train}")
+    console.print(f"[cyan]Tokenizer:[/] {cfg.base}")
+    console.print(f"[cyan]max_length:[/] {cfg.data.max_length}")
+    console.print(f"[cyan]Cache key:[/] {cache_key}")
+    console.print(f"[cyan]Target:[/] {target}")
+    console.print(
+        "[yellow]Note:[/] AOT tokenization wiring lands in v0.42.1. "
+        "Schema field [b]data.tokenized_path[/b] is live now — "
+        "point it at the target path once v0.42.1 ships."
+    )
+    if not yes:
+        console.print("[dim]Re-run with --yes to acknowledge.[/]")
+
+
+@app.command(name="ingest")
+def ingest_document(
+    file: str = typer.Argument(..., help="PDF / DOCX / MD / TXT file"),
+    output: str = typer.Option(
+        "./ingested.jsonl", "--output", "-o", help="Output JSONL path"
+    ),
+) -> None:
+    """Ingest a document into JSONL with one row per page / heading.
+
+    Lazy-imports the per-format extractor so missing optional deps don't
+    break the rest of `soup data --help`. Supported formats:
+    - .pdf  → pypdf
+    - .docx → python-docx
+    - .md   → markdown
+    - .txt  → built-in
+    """
+    import stat
+
+    from soup_cli.utils.data_pipeline import detect_ingest_format
+    from soup_cli.utils.paths import is_under_cwd
+
+    # Reject symlinks at the input path (TOCTOU defence — mirrors v0.33.0 #22
+    # prune_checkpoints policy).
+    try:
+        lst = os.lstat(file)
+    except OSError as exc:
+        console.print(f"[red]File not found:[/] {file}")
+        raise typer.Exit(1) from exc
+    if stat.S_ISLNK(lst.st_mode):
+        console.print(
+            f"[red]Input file must not be a symlink[/] (got {file!r})"
+        )
+        raise typer.Exit(1)
+
+    in_real = os.path.realpath(file)
+    if not is_under_cwd(in_real):
+        console.print(f"[red]Input must stay under cwd[/] (got {file!r})")
+        raise typer.Exit(1)
+    if not Path(in_real).is_file():
+        console.print(f"[red]File not found:[/] {file}")
+        raise typer.Exit(1)
+
+    out_real = os.path.realpath(output)
+    if not is_under_cwd(out_real):
+        console.print("[red]--output must stay under cwd[/]")
+        raise typer.Exit(1)
+
+    try:
+        kind = detect_ingest_format(file)
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/]")
+        raise typer.Exit(1) from exc
+
+    rows: list[dict] = []
+    if kind == "txt":
+        with open(in_real, encoding="utf-8") as f:
+            text = f.read()
+        rows.append({"text": text, "source": Path(in_real).name})
+    elif kind == "markdown":
+        with open(in_real, encoding="utf-8") as f:
+            text = f.read()
+        rows.append({"text": text, "source": Path(in_real).name})
+    elif kind == "pdf":
+        try:
+            from pypdf import PdfReader
+        except ImportError:
+            console.print(
+                "[red]pypdf not installed.[/] Run: pip install pypdf"
+            )
+            raise typer.Exit(1) from None
+        reader = PdfReader(in_real)
+        for index, page in enumerate(reader.pages):
+            rows.append({
+                "text": page.extract_text() or "",
+                "source": Path(in_real).name,
+                "page": index,
+            })
+    elif kind == "docx":
+        try:
+            from docx import Document
+        except ImportError:
+            console.print(
+                "[red]python-docx not installed.[/] Run: pip install python-docx"
+            )
+            raise typer.Exit(1) from None
+        doc = Document(in_real)
+        for index, para in enumerate(doc.paragraphs):
+            text = para.text.strip()
+            if text:
+                rows.append({
+                    "text": text,
+                    "source": Path(in_real).name,
+                    "para": index,
+                })
+    else:
+        console.print(f"[red]Unhandled ingest kind:[/] {kind}")
+        raise typer.Exit(1)
+
+    Path(out_real).parent.mkdir(parents=True, exist_ok=True)
+    with open(out_real, "w", encoding="utf-8") as f:
+        for row in rows:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+    console.print(f"[green]Wrote {len(rows)} rows to[/] {output}")
