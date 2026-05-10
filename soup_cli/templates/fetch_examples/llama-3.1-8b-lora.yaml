@@ -1,0 +1,18 @@
+# Llama 3.1 8B SFT LoRA — fetched via `soup fetch examples llama-3.1-8b-lora`
+base: meta-llama/Llama-3.1-8B-Instruct
+task: sft
+data:
+  train: ./data/train.jsonl
+  format: auto
+  max_length: 4096
+training:
+  epochs: 3
+  lr: 2.0e-4
+  batch_size: auto
+  quantization: 4bit
+  optimizer: adamw_bnb_8bit
+lora:
+  r: 16
+  alpha: 32
+  dropout: 0.05
+output: ./out

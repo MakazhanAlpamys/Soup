@@ -1,3 +1,3 @@
 """Soup CLI — Fine-tune LLMs in one command."""
 
-__version__ = "0.43.0"
+__version__ = "0.44.0"

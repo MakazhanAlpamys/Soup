@@ -43,15 +43,15 @@ soup train
 
 Latest highlights only. Full history: [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 
-**v0.43.0 — Tracker & Eval Pro**: closes the observability gap with all three competitors in one release. 18 features across tracker integrations, NLG eval metrics, profiling extras, and bundled demo datasets.
+**v0.44.0 — Live Dashboard & UX**: Studio-grade observability + 13 ergonomics fixes + 7 new standalone CLIs. 21 features that close the polish gap with Unsloth Studio, axolotl, and LlamaFactory.
 
-- **Tracker integrations** — new `--tracker` flag on `soup train` accepts `mlflow` / `swanlab` / `trackio` (mutually exclusive with `--wandb` / `--tensorboard`). Closed allowlist via `MappingProxyType`-locked registry; case-insensitive lookup; null-byte and >32-char inputs rejected. PostHog telemetry payload schema lands as opt-in (`SOUP_TELEMETRY=1`) with hardware-info-only fields — no model names, dataset paths, or config contents. Live network code deferred to v0.43.1.
-- **BLEU + ROUGE-1 / ROUGE-2 / ROUGE-L** — pure-Python implementations exposed via `soup eval custom --metric bleu|rouge_l|...`. Standard BLEU policy: any zero-precision n-gram collapses score to 0.0; Chen & Cherry smoothing (default on) only smooths zero-correct buckets where `total[n] > 0`. Plus `effective_tokens_per_second` as a metric — `unmasked_tokens / wall_clock_seconds`, returns `None` when wall_clock ≤ 0 (no fabrication).
-- **KL-divergence calibration framework** — `soup_cli.eval.calibrate.run_calibration(baseline_logits, quantized_logits)` returns a frozen `CalibrationReport(mean_kl, per_prompt_kl, delta_status)` with OK / MINOR / MAJOR thresholds at 0.05 / 0.20. Pure-math kernel; bring your own logit pairs.
-- **Model Arena (Elo tournament)** — `soup_cli.eval.arena.Tournament` with K=32 default Elo, 256-model cap, 1M-match cap, `MappingProxyType` immutability on the public `ratings` view, and Rich-markup `[`/`]` rejection on model names so leaderboards can't be markup-injected.
-- **Profiling extras** — `memory_snapshot_context` wraps `torch.cuda.memory._record_memory_history` with cwd-confined snapshot path. `nccl_bandwidth_check` ships a reference-bandwidth table (h100/a100/v100/rtx-series, NVLink + PCIe) classifying measured bandwidth as OK ≥80% / MINOR ≥50% / MAJOR <50%. `soup doctor --vscode` writes a `.vscode/launch.json` with `soup train` + pytest configs, symlink-rejected at the target path.
-- **Bundled demo datasets** — new `soup data demo` lists 4 ready-to-use JSONL fixtures (alpaca / sharegpt / dpo / grpo). `soup data demo alpaca_demo --output ./mine.jsonl` copies the bundle for instant `soup train` warm-up. Staged-tempfile write with atomic rename — mid-stream rejection never leaves a partial file.
-- **+239 net new tests** — covers all 18 features: tracker name allowlist, telemetry payload schema invariant (no user data leaks), BLEU/ROUGE corner cases, KL thresholds, Elo math + tournament invariants, NCCL bandwidth boundaries, vscode TOCTOU symlink rejection, demo bundle atomic-rename + cwd containment + size cap.
+- **`soup monitor` — live GPU panel.** Rich Live `nvidia-smi`-driven dashboard: Util / Mem / VRAM / Temp / Power per GPU. `--refresh 0.25-30` interval, `--once` for a single snapshot. Apple Silicon hint deferred to v0.44.1.
+- **Standalone CLIs.** `soup fetch examples llama-3.1-8b-lora` writes a ready-to-edit YAML from the bundled catalog. `soup quantize <model> --to gguf --bits 4` prints the equivalent `soup export …` invocation. `soup merge-sharded-fsdp-weights` and `soup delinearize-llama4` ship as planners (live torch runtime in v0.44.1). `soup llama <subcommand>` proxies to llama.cpp binaries with a child-env allowlist that drops `HF_TOKEN` / `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`.
+- **Ctrl+C graceful save.** First SIGINT writes a checkpoint and continues; second SIGINT stops training cleanly. Touch `<output_dir>/.checkpoint_now` to force an out-of-band save (cwd-contained, symlink-rejected at the trigger path).
+- **Web UI plugin registry.** Drop-in `soup_cli/ui/plugins/*.py` files register tabs via `register_tab(name=…, title=…, render=…)` at import time. Tab name kebab-case allowlist, 32-tab cap, idempotent re-register. Plus `API_HOST` / `API_PORT` / `API_KEY` / `GRADIO_HOST` / `GRADIO_PORT` env knobs for the FastAPI + Gradio surfaces.
+- **Tail-latency stats + tool-call timer.** `update_ema` / `percentile` / `summarise_latency` ship as pure-Python (used by `runs show` + the live dashboard). `ToolOutputsBuffer` is a thread-safe `collections.deque(maxlen=1000)` ring; `ToolCallTimer` context-manager records duration / output / error per tool invocation for tool-calling SFT runs.
+- **Onboarding wizard helper.** `render_onboarding_yaml({base, dataset, task, quantization, epochs})` returns a complete validated `soup.yaml` — `output` field cwd-contained, Literal allowlists on `task` + `quantization`, `epochs ∈ [1, 10]`.
+- **+192 net new tests** — covers all 21 features: GPU-CSV parser + DoS caps, SSE frame schema, QR token in query string (not fragment) with IPv6 bracketing, llama-server timings + KV bar, deque ring + concurrent writes, Ctrl+C SIGINT install/restore, sweep-config scalar allowlist + frozen `MappingProxyType`, fetch symlink + commonpath defence, llama child-env allowlist drops secrets, plus 5 review-fix coverage gaps closed.
 
 ## Why Soup?
 
@@ -3027,6 +3027,139 @@ soup serve --model ./out --trace-log ./serve-trace.jsonl --trace-log-cap-mb 100
 ```
 
 Each line: `{"ts": ..., "prompt": ..., "response": ..., "latency_ms": ..., "tokens": ...}`. Path-containment validated, hard rotation cap (default 100 MB, one backup retained), symlink-reject on the backup path (TOCTOU defence), and `hf_*` / `sk-*` / `Bearer …` token shapes redacted to `<redacted>` before write. Failures (disk full, serialisation errors) never crash the request handler.
+
+## GPU Live Monitor
+
+```bash
+soup monitor                # 2s refresh, Util / Mem / VRAM / Temp / Power per GPU
+soup monitor --refresh 0.5  # faster polling
+soup monitor --once         # single snapshot, no Live panel
+```
+
+Calls `nvidia-smi` via list-args subprocess (no shell), 5s timeout, list of `GpuSample` rows rendered into a Rich table. Apple Silicon prints a yellow advisory pointing at Activity Monitor / `powermetrics`; native Apple Silicon support lands in v0.44.1.
+
+## Soup Fetch — Bundled Examples
+
+```bash
+soup fetch examples                          # list bundled entries
+soup fetch examples llama-3.1-8b-lora        # write to ./llama-3.1-8b-lora.yaml
+soup fetch examples qwen2.5-7b-dpo -o ./my-config.yaml --force
+soup fetch deepspeed_configs zero3-cpu-offload
+```
+
+Closed catalog (`MappingProxyType`) of ready-to-edit YAML / JSON. Output path cwd-contained, bundled-source `os.path.commonpath` check (defends against catalog escape), `os.lstat + S_ISLNK` symlink-reject at the write target.
+
+## Soup Quantize — Ergonomic Export Alias
+
+```bash
+soup quantize ./out --to gguf --bits 4
+soup quantize ./out --to gptq --bits 4 -o ./out-gptq
+```
+
+Prints the equivalent `soup export …` invocation (escaped via `shlex.quote`) for copy-paste. Intentionally does NOT in-process call `soup export` — Typer commands aren't safe to re-enter.
+
+## FSDP Shard Consolidation
+
+```bash
+soup merge-sharded-fsdp-weights ./fsdp-checkpoint -o ./merged.safetensors --yes
+```
+
+Plans consolidation of `pytorch_model_fsdp_*.bin` shard files into a single `.safetensors`. v0.44.0 ships the planner with cwd-containment + size-cap (`_MAX_SHARDS=1024`); live torch-side weight consolidation lands in v0.44.1.
+
+## Llama 4 Delinearizer
+
+```bash
+soup delinearize-llama4 ./llama4-checkpoint --target ./out-delinearized --yes
+```
+
+Plans Llama 4 expert-weight reshape for export. v0.44.0 ships the planner; live runtime in v0.44.1. `is_llama4_model` uses a word-boundary regex matching the `is_gemma4_model` pattern — `ungemma-llama-4ish` is rejected.
+
+## Llama.cpp Proxy
+
+```bash
+soup llama --help                  # list supported subcommands
+soup llama cli -m model.gguf -p "Hello"
+soup llama gguf-split --merge a.gguf b.gguf out.gguf
+soup llama server -m model.gguf
+```
+
+Closed allowlist: `cli` / `mtmd-cli` / `gguf-split` / `server` / `quantize`. Forwards to `llama-*` binary on PATH (`shutil.which`) with **filtered child env** — `HF_TOKEN` / `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` and other secrets are dropped before exec; only `PATH` / `HOME` / `USER` / locale + llama.cpp-recognised `LLAMA_CPP_HOME` / `GGML_*` / `OMP_NUM_THREADS` are forwarded.
+
+## Ctrl+C Graceful Save
+
+First SIGINT → trainer writes a checkpoint and continues. Second SIGINT → trainer stops cleanly after the next save. No-state fallback raises `KeyboardInterrupt` so the user never gets stuck. `GracefulSaveHandler.install()` is idempotent and swallows `signal.signal` failures on non-main threads.
+
+## Checkpoint-Now Trigger File
+
+```bash
+touch ./out/.checkpoint_now    # trainer saves on the next step, then deletes the trigger
+```
+
+Path containment via `is_under_cwd`; `os.lstat + S_ISLNK` rejection at the trigger target so a pre-placed symlink can't redirect the write.
+
+## Onboarding Wizard Helper
+
+```python
+from soup_cli.utils.onboarding import render_onboarding_yaml
+
+text = render_onboarding_yaml({
+    "base": "meta-llama/Llama-3.2-1B",
+    "dataset": "./train.jsonl",
+    "task": "sft",
+    "quantization": "4bit",
+    "epochs": 3,
+})
+```
+
+Five-question wizard input → fully-validated `soup.yaml`. Literal allowlists on `task` (`sft` / `dpo` / `kto` / `orpo` / `simpo` / `ipo` / `bco` / `preference`) and `quantization` (`4bit` / `8bit` / `none`); `epochs ∈ [1, 10]`; `output` cwd-contained; null-byte rejection on every string.
+
+## Tail-Latency Stats + Tool-Call Timer
+
+```python
+from soup_cli.utils.tail_latency import summarise_latency
+from soup_cli.utils.tool_outputs import ToolOutputsBuffer, ToolCallTimer
+
+stats = summarise_latency([12.3, 14.1, 9.7, 18.8, 11.2])
+# TailLatencySummary(count=5, mean=..., p50=..., p95=..., p99=..., ema=...)
+
+buffer = ToolOutputsBuffer()
+with ToolCallTimer(buffer, name="fetch_url") as timer:
+    timer.set_output("...")
+```
+
+Pure-Python EMA + linear-interp percentiles (DoS cap: `MAX_SAMPLES=1_000_000`). `ToolOutputsBuffer` is a thread-safe `collections.deque(maxlen=1000)` ring with truncated previews; `ToolCallTimer` records duration / output / error per invocation for tool-calling SFT runs.
+
+## Web UI Plugin Registry + Env Knobs
+
+```python
+# soup_cli/ui/plugins/my_tab.py
+from soup_cli.ui.plugins import register_tab
+
+def render_my_tab(request) -> str:
+    return "<div>my tab body</div>"
+
+register_tab(name="my-tab", title="My Tab", render=render_my_tab)
+```
+
+Drop-in plugin registry with kebab-case name allowlist, 32-tab cap, idempotent re-register. Plus `API_HOST` / `API_PORT` / `API_KEY` / `GRADIO_HOST` / `GRADIO_PORT` env knobs for FastAPI + Gradio surfaces.
+
+## Standalone Sweep Config
+
+```bash
+soup sweep --config sweep.yaml
+```
+
+```yaml
+# sweep.yaml
+strategy: random
+n_runs: 20
+seed: 42
+params:
+  lr: [0.0001, 0.0005, 0.001]
+  epochs: [1, 3, 5]
+```
+
+Strict scalar allowlist on values (`str` / `int` / `float` / `bool`); `_MAX_FILE_BYTES=256KB`, `_MAX_PARAM_KEYS=32`, `_MAX_VALUES_PER_KEY=64`; `SweepSpec.params` is `MappingProxyType[str, Tuple[Any, ...]]` for genuine immutability.
 
 ## Changelog
 

@@ -1,0 +1,17 @@
+# Qwen 2.5 7B DPO — fetched via `soup fetch examples qwen2.5-7b-dpo`
+base: Qwen/Qwen2.5-7B-Instruct
+task: dpo
+data:
+  train: ./data/preferences.jsonl
+  format: dpo
+  max_length: 2048
+training:
+  epochs: 1
+  lr: 5.0e-7
+  batch_size: auto
+  quantization: 4bit
+  dpo_beta: 0.1
+lora:
+  r: 16
+  alpha: 32
+output: ./out-dpo

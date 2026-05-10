@@ -43,7 +43,19 @@ from soup_cli.commands import (  # noqa: E402
     train,
     ui,
 )
+
+# v0.44.0 — Live monitoring + standalone CLI wrappers.
+from soup_cli.commands import (  # noqa: E402
+    delinearize_llama4 as delinearize_llama4_cmd,
+)
 from soup_cli.commands import doctor as doctor_cmd  # noqa: E402
+from soup_cli.commands import fetch as fetch_cmd  # noqa: E402
+from soup_cli.commands import llama as llama_cmd  # noqa: E402
+from soup_cli.commands import (  # noqa: E402
+    merge_sharded_fsdp_weights as merge_sharded_fsdp_weights_cmd,
+)
+from soup_cli.commands import monitor as monitor_cmd  # noqa: E402
+from soup_cli.commands import quantize as quantize_cmd  # noqa: E402
 from soup_cli.commands import quickstart as quickstart_cmd  # noqa: E402
 from soup_cli.commands import (  # noqa: E402
     tui as tui_cmd,
@@ -120,6 +132,20 @@ app.command(name="tui")(tui_cmd.tui)
 app.add_typer(
     can.app, name="can",
     help="Soup Cans: pack/inspect/verify/fork shareable .can artifacts.",
+)
+
+# v0.44.0 — register Live Dashboard & UX commands.
+app.command(name="monitor")(monitor_cmd.monitor)
+app.command(name="fetch")(fetch_cmd.fetch)
+app.command(name="quantize")(quantize_cmd.quantize)
+app.command(name="merge-sharded-fsdp-weights")(
+    merge_sharded_fsdp_weights_cmd.merge_sharded_fsdp_weights
+)
+app.command(name="delinearize-llama4")(delinearize_llama4_cmd.delinearize_llama4)
+app.add_typer(
+    llama_cmd.app,
+    name="llama",
+    help="Proxy to llama.cpp binaries (cli / mtmd-cli / gguf-split / server).",
 )
 
 # Register data generate as a subcommand of data
