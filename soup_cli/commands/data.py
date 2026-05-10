@@ -2087,3 +2087,65 @@ def ingest_document(
         for row in rows:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
     console.print(f"[green]Wrote {len(rows)} rows to[/] {output}")
+
+
+@app.command(name="demo")
+def demo_bundle(
+    name: str = typer.Argument(
+        None,
+        help="Bundle name (alpaca_demo / sharegpt_demo / dpo_demo / grpo_demo). "
+        "Omit to list available bundles.",
+    ),
+    output: str = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help="Destination JSONL path (defaults to ./<name>.jsonl).",
+    ),
+) -> None:
+    """List or copy a bundled demo dataset (v0.43.0).
+
+    `soup data demo` lists available bundles. `soup data demo <name>` copies
+    the JSONL fixture to the current directory. Bundles are version-locked
+    JSONL fixtures shipped under `examples/data/`.
+    """
+    from rich.markup import escape as _esc
+    from rich.table import Table
+
+    from soup_cli.utils.demo_bundles import (
+        copy_bundle_to,
+        get_bundle,
+        list_bundles,
+    )
+
+    if name is None:
+        table = Table(title="Available demo bundles", show_lines=False)
+        table.add_column("Name", style="cyan")
+        table.add_column("Format", style="green")
+        table.add_column("Description")
+        for bundle in list_bundles():
+            table.add_row(bundle.name, bundle.format, bundle.description)
+        console.print(table)
+        console.print(
+            "[dim]Run: soup data demo <name> --output <path>[/]"
+        )
+        return
+
+    try:
+        bundle = get_bundle(name)
+    except ValueError as exc:
+        console.print(f"[red]{_esc(str(exc))}[/]")
+        raise typer.Exit(2) from exc
+
+    target = output or f"./{bundle.name}.jsonl"
+    try:
+        written = copy_bundle_to(bundle.name, target)
+    except FileExistsError as exc:
+        console.print(f"[red]{_esc(str(exc))}[/]")
+        raise typer.Exit(1) from exc
+    except (ValueError, FileNotFoundError) as exc:
+        console.print(f"[red]{_esc(str(exc))}[/]")
+        raise typer.Exit(1) from exc
+    console.print(
+        f"[green]Copied bundle '{bundle.name}' to[/] {_esc(written)}"
+    )

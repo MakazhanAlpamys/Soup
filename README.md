@@ -43,15 +43,15 @@ soup train
 
 Latest highlights only. Full history: [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 
-**v0.42.0 — Data Pipeline Pro**: closes the data-tooling gap with Axolotl + LlamaFactory in one release. 18 features across formats, remote loading, AOT preprocessing, advanced masking, vocab expansion, and document ingestion.
+**v0.43.0 — Tracker & Eval Pro**: closes the observability gap with all three competitors in one release. 18 features across tracker integrations, NLG eval metrics, profiling extras, and bundled demo datasets.
 
-- **5 new data formats** — `prm` (PRM stepwise-supervised), `pre_tokenized` (LF `tokenized_path` / Axolotl `empty` type), `input_output` (template-free segments+labels with no chat template), `video`, and `multimodal` (axolotl typed content-parts schema with text / image / audio / video). Each is loud-fail validated — bool labels, null-byte rejection, length caps on path/url-like fields.
-- **Remote dataset loading (schema gate live, fsspec wiring deferred to v0.42.1)** — `data.train: s3://my-bucket/path` accepts the 7-scheme allowlist (`s3` / `gs` / `gcs` / `az` / `abfs` / `abfss` / `oci`). Bucket name regex is RFC-3986-tight, userinfo / fragment / query strings are rejected (the query-string gate is SSRF-adjacent — fsspec backends interpret `?endpoint_url=…` as config overrides). New schema fields: `streaming: bool`, `buffer_size: int [1, 1_000_000]`, `shards: int [1, 1024]`.
-- **AOT preprocessing + tokenized cache** — new `soup data preprocess <config>` CLI emits a deterministic 16-char SHA-256 cache key from `(dataset, tokenizer, max_length, format)`. Pair with the new `data.tokenized_path` schema field to skip the tokenize stage on subsequent runs.
-- **Advanced masking + multi-dataset interleave** — `data.interleave: concat / under / over / {strategy: probs, probs: [...]}` (sum-to-1 ±1e-6, max 32 datasets, `InterleaveSpec` is a frozen dataclass). Plus `mask_history`, `train_on_prompt` (mutually exclusive with `train_on_responses_only`), `eval_on_each_dataset`, `split_thinking` for Qwen3-style `<think>` masking, and per-image min/max pixels + `image_resize_algorithm` Literal + `video_fps` / `video_maxlen` / `video_dir`.
-- **Vocab expansion + custom prompt strategies** — `data.add_new_tokens: ["<reasoning>", "</reasoning>"]` + `new_special_tokens` (cap 10_000 entries, no duplicates, null-byte rejected) + `resize_vocab: bool` cross-validator. New `prompt_strategy: my_module.path:my_fn` field with regex validation lays groundwork for v0.42.1 runtime invocation. Plus axolotl-style `skip_prepare_dataset` / `remove_unused_columns` escape hatches.
-- **Document ingestion** — new `soup data ingest <doc.pdf>` (PDF / DOCX / MD / TXT) → JSONL with one row per page / paragraph. Lazy-imports `pypdf` / `python-docx` so missing optional deps never break `soup data --help`. Symlink-rejected, cwd-confined.
-- **+140 net new tests** — covers all 18 features end-to-end: schema validators, cross-validators, frozen-dataclass mutation guards, URL allowlist + bucket regex / single-char bucket / SSRF query rejection, every new format converter happy + failure path, CLI help + smoke + symlink-rejection, full SoupConfig YAML round-trip.
+- **Tracker integrations** — new `--tracker` flag on `soup train` accepts `mlflow` / `swanlab` / `trackio` (mutually exclusive with `--wandb` / `--tensorboard`). Closed allowlist via `MappingProxyType`-locked registry; case-insensitive lookup; null-byte and >32-char inputs rejected. PostHog telemetry payload schema lands as opt-in (`SOUP_TELEMETRY=1`) with hardware-info-only fields — no model names, dataset paths, or config contents. Live network code deferred to v0.43.1.
+- **BLEU + ROUGE-1 / ROUGE-2 / ROUGE-L** — pure-Python implementations exposed via `soup eval custom --metric bleu|rouge_l|...`. Standard BLEU policy: any zero-precision n-gram collapses score to 0.0; Chen & Cherry smoothing (default on) only smooths zero-correct buckets where `total[n] > 0`. Plus `effective_tokens_per_second` as a metric — `unmasked_tokens / wall_clock_seconds`, returns `None` when wall_clock ≤ 0 (no fabrication).
+- **KL-divergence calibration framework** — `soup_cli.eval.calibrate.run_calibration(baseline_logits, quantized_logits)` returns a frozen `CalibrationReport(mean_kl, per_prompt_kl, delta_status)` with OK / MINOR / MAJOR thresholds at 0.05 / 0.20. Pure-math kernel; bring your own logit pairs.
+- **Model Arena (Elo tournament)** — `soup_cli.eval.arena.Tournament` with K=32 default Elo, 256-model cap, 1M-match cap, `MappingProxyType` immutability on the public `ratings` view, and Rich-markup `[`/`]` rejection on model names so leaderboards can't be markup-injected.
+- **Profiling extras** — `memory_snapshot_context` wraps `torch.cuda.memory._record_memory_history` with cwd-confined snapshot path. `nccl_bandwidth_check` ships a reference-bandwidth table (h100/a100/v100/rtx-series, NVLink + PCIe) classifying measured bandwidth as OK ≥80% / MINOR ≥50% / MAJOR <50%. `soup doctor --vscode` writes a `.vscode/launch.json` with `soup train` + pytest configs, symlink-rejected at the target path.
+- **Bundled demo datasets** — new `soup data demo` lists 4 ready-to-use JSONL fixtures (alpaca / sharegpt / dpo / grpo). `soup data demo alpaca_demo --output ./mine.jsonl` copies the bundle for instant `soup train` warm-up. Staged-tempfile write with atomic rename — mid-stream rejection never leaves a partial file.
+- **+239 net new tests** — covers all 18 features: tracker name allowlist, telemetry payload schema invariant (no user data leaks), BLEU/ROUGE corner cases, KL thresholds, Elo math + tournament invariants, NCCL bandwidth boundaries, vscode TOCTOU symlink rejection, demo bundle atomic-rename + cwd containment + size cap.
 
 ## Why Soup?
 
@@ -2443,6 +2443,155 @@ Every completed run also stores an estimated cost (`$` per run) computed from th
 captured GPU device name and duration. `soup runs show` renders `—` for CPU /
 MPS / unknown GPUs (no fabricated zeros).
 
+### Tracker integrations (--tracker mlflow / swanlab / trackio)
+
+```bash
+# Stream metrics to MLflow (set MLFLOW_TRACKING_URI to your server URL)
+soup train --config soup.yaml --tracker mlflow
+
+# Or SwanLab (cloud or local)
+soup train --config soup.yaml --tracker swanlab
+
+# Or Trackio (offline-friendly batched upload)
+soup train --config soup.yaml --tracker trackio
+```
+
+`--tracker` is mutually exclusive with `--wandb` and `--tensorboard`. Soup
+validates the tracker name against a closed allowlist (`mlflow` / `swanlab` /
+`trackio` / `wandb` / `tensorboard` / `none`); the upstream package itself is
+loaded by HF Trainer at run time, so install the one you need separately:
+
+```bash
+pip install mlflow      # or: swanlab / trackio
+```
+
+### Telemetry (opt-in)
+
+Soup ships a hardware-info-only telemetry payload (Soup version + command +
+Python major.minor + OS + arch + duration). It is **off by default** and never
+sends model names, dataset paths, or config contents. Enable explicitly:
+
+```bash
+SOUP_TELEMETRY=1 soup train --config soup.yaml
+```
+
+The PostHog network upload itself is deferred to v0.43.1; v0.43.0 ships the
+payload schema only so you can audit it before opting in.
+
+## NLG Evaluation Metrics (BLEU + ROUGE)
+
+Pure-Python BLEU + ROUGE-1 / ROUGE-2 / ROUGE-L for `soup eval custom`:
+
+```python
+from soup_cli.utils.nlg_metrics import (
+    bleu_score, rouge_l_score, compute_nlg_metric, NLG_METRICS,
+    effective_tokens_per_second,
+)
+
+bleu_score(["the cat sat on the mat"], ["the cat sat on the mat"])
+# 1.0
+rouge_l_score(["the quick brown fox"], ["a quick brown dog"])
+# 0.5
+compute_nlg_metric("rouge_2", preds, refs)
+# generic dispatch by canonical name
+
+effective_tokens_per_second(unmasked_tokens=12_500_000, wall_clock_seconds=600.0)
+# 20833.33  — None when wall_clock <= 0 (no fabrication)
+```
+
+Smoothed BLEU uses Chen & Cherry epsilon for zero-correct buckets where
+`total[n] > 0`; empty buckets (e.g. predictions shorter than `max_n` tokens)
+force the score to 0.0.
+
+## Quant Calibration (KL Divergence)
+
+Compare a quantized model to a full-precision baseline on a small fixed prompt
+set. OK / MINOR / MAJOR thresholds at 0.05 / 0.20 mean KL — same scale as
+`soup eval quant-check`.
+
+```python
+from soup_cli.eval.calibrate import run_calibration
+
+# baseline_logits / quantized_logits: list[list[float]] aligned per-prompt
+report = run_calibration(baseline_logits, quantized_logits)
+print(report.delta_status, report.mean_kl)
+# OK 0.012
+```
+
+The kernel is pure-math and capped at 10 000 prompts to defend against
+accidental OOM. `CalibrationReport` is a frozen dataclass.
+
+## Model Arena (Elo Tournament)
+
+Local leaderboard with Elo ratings (K=32, base 1500). Bring your own pairwise
+winners — Soup just keeps the books:
+
+```python
+from soup_cli.eval.arena import Tournament
+
+t = Tournament()
+t.record("llama-3.1-8b-finetune", "qwen2.5-7b-finetune", winner="a")
+t.record("llama-3.1-8b-finetune", "mistral-7b-finetune", winner="draw")
+for row in t.leaderboard():
+    print(row)
+```
+
+Caps: 256 models per tournament, 1M matches. Model names with `[` or `]`
+characters are rejected so leaderboard rows can't be markup-injected.
+
+## Profiling Extras
+
+CUDA memory snapshots, anomaly tracing, and an NCCL bandwidth reference table:
+
+```python
+from soup_cli.utils.profiling_v0_43 import (
+    memory_snapshot_context, detect_anomaly_context, nccl_bandwidth_check,
+)
+
+with memory_snapshot_context("run-123") as path:
+    train_step()
+    # On CUDA, dumps profiles/run-123.snapshot.pickle on exit.
+
+with detect_anomaly_context():
+    train_step()
+    # torch.autograd.set_detect_anomaly(True)
+
+result = nccl_bandwidth_check(
+    gpu="h100", link="nvlink", measured_gb_per_sec=400.0,
+)
+# {'expected_gb_per_sec': 450.0, 'measured_gb_per_sec': 400.0,
+#  'ratio': 0.8889, 'status': 'OK'}
+```
+
+## VS Code Setup (`.vscode/launch.json`)
+
+One-shot writer for a sane debugger config:
+
+```python
+from soup_cli.utils.vscode_setup import write_vscode_launch
+write_vscode_launch(config_path="soup.yaml")
+# Writes ./.vscode/launch.json with `soup train` + pytest entries.
+```
+
+Symlink-rejected at the target path regardless of `force=True` to defend
+against pre-placed symlinks redirecting the write outside cwd.
+
+## Demo Datasets (`soup data demo`)
+
+Tiny JSONL fixtures bundled with Soup so you can warm up `soup train` without
+hunting for data:
+
+```bash
+# List available bundles
+soup data demo
+
+# Copy one into the current directory
+soup data demo alpaca_demo --output ./alpaca.jsonl
+```
+
+Bundles: `alpaca_demo`, `sharegpt_demo`, `dpo_demo`, `grpo_demo`. Output path
+must stay under cwd; existing files are not overwritten.
+
 ## Observability & Dev UX
 
 Tools that explain *why* a run misbehaved instead of dumping a stack trace.
@@ -2658,6 +2807,9 @@ soup data register --name my-ds --path d.jsonl --format alpaca  Register dataset
 soup data unregister --name my-ds            Remove from registry
 soup data push --input d.jsonl --hf-dataset user/name  Upload local JSONL as HF dataset
 soup data registry                           List all registered datasets
+soup data demo                                List bundled demo JSONL fixtures
+soup data demo alpaca_demo --output ./d.jsonl Copy a bundled demo JSONL fixture
+soup train --config soup.yaml --tracker mlflow  MLflow / SwanLab / Trackio integration
 soup profile --config soup.yaml              Estimate memory/speed before training
 soup profile --config soup.yaml --gpu a100   Estimate for specific GPU
 soup profile --config soup.yaml --json       Machine-readable output

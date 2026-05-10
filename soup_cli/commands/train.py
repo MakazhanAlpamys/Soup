@@ -55,6 +55,14 @@ def train(
         "--tensorboard",
         help="Enable TensorBoard logging (logs to output_dir/runs/)",
     ),
+    tracker: str = typer.Option(
+        None,
+        "--tracker",
+        help=(
+            "Experiment tracker: mlflow / swanlab / trackio (v0.43.0). "
+            "Mutually exclusive with --wandb / --tensorboard."
+        ),
+    ),
     deepspeed: str = typer.Option(
         None,
         "--deepspeed",
@@ -640,6 +648,10 @@ def train(
     dataset = load_dataset(cfg.data)
     console.print(f"[green]Loaded:[/] {len(dataset['train'])} train samples")
 
+    # Capture the --tracker CLI value BEFORE the local ExperimentTracker
+    # shadows it (v0.43.0 review fix — name-collision regression).
+    tracker_backend = tracker
+
     # Start experiment tracking
     from soup_cli.experiment.tracker import ExperimentTracker
 
@@ -655,12 +667,17 @@ def train(
     console.print(f"[dim]Run ID: {run_id}[/]")
 
     # Build trainer based on task type
-    if wandb:
-        report_to = "wandb"
-    elif tensorboard:
-        report_to = "tensorboard"
-    else:
-        report_to = "none"
+    from soup_cli.utils.trackers import resolve_report_to
+
+    try:
+        report_to = resolve_report_to(
+            wandb=wandb, tensorboard=tensorboard, tracker=tracker_backend
+        )
+    except ValueError as exc:
+        from rich.markup import escape as _esc
+
+        console.print(f"[red]{_esc(str(exc))}[/]")
+        raise typer.Exit(code=2) from exc
     console.print("[dim]Setting up model + trainer...[/]")
     trainer_kwargs = {
         "device": device,
