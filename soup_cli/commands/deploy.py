@@ -559,6 +559,122 @@ def hf_space(
     )
 
 
+@app.command(name="autopilot")
+def autopilot(
+    target: Optional[str] = typer.Option(
+        None,
+        "--target",
+        "-t",
+        help="Profile name (e.g. mac-m3, rtx-4090-24gb, ollama-local).",
+    ),
+    base: str = typer.Option(
+        "meta-llama/Llama-3.2-1B",
+        "--base",
+        "-b",
+        help="Base model HF repo id or local path to embed in the recipe.",
+    ),
+    recipe_out: str = typer.Option(
+        "deploy_autopilot.yaml",
+        "--recipe-out",
+        help="Where to write the rendered soup.yaml recipe (under cwd).",
+    ),
+    script_out: str = typer.Option(
+        "deploy_autopilot.sh",
+        "--script-out",
+        help="Where to write the planned deploy shell script (under cwd).",
+    ),
+    output_dir: str = typer.Option(
+        "./output",
+        "--output-dir",
+        help="Recipe's training output directory.",
+    ),
+    list_targets: bool = typer.Option(
+        False,
+        "--list",
+        "-l",
+        help="List all known deploy profiles.",
+    ),
+):
+    """Pick PEFT + quant + spec-decoding combo for a hardware target.
+
+    Writes a ready-to-train ``soup.yaml`` recipe and a planned deploy
+    shell script. Live Quant-Lobotomy measurement deferred to v0.46.1.
+    """
+    from soup_cli.utils.deploy_autopilot import (
+        get_profile,
+        list_profiles,
+        write_deploy_script,
+        write_recipe,
+    )
+
+    if list_targets:
+        table = Table(title="Deploy Autopilot Profiles")
+        table.add_column("Name", style="bold cyan")
+        table.add_column("Runtime", style="magenta")
+        table.add_column("Quant", style="green")
+        table.add_column("PEFT", style="yellow")
+        table.add_column("Description")
+        for profile in list_profiles().values():
+            table.add_row(
+                profile.name,
+                profile.runtime,
+                profile.quant,
+                profile.peft,
+                profile.description,
+            )
+        console.print(table)
+        raise typer.Exit(0)
+
+    if not target:
+        console.print("[red]--target is required (or use --list).[/]")
+        raise typer.Exit(2)
+
+    try:
+        profile = get_profile(target)
+    except (KeyError, ValueError, TypeError) as exc:
+        from rich.markup import escape
+
+        console.print(f"[red]Unknown profile:[/] {escape(str(exc))}")
+        console.print(
+            "[dim]Run [bold]soup deploy autopilot --list[/] to see options.[/]"
+        )
+        raise typer.Exit(2) from exc
+
+    try:
+        recipe_path = write_recipe(
+            profile, base=base, output_dir=output_dir, recipe_path=recipe_out
+        )
+        script_path = write_deploy_script(
+            profile, model_path=output_dir, script_path=script_out
+        )
+    except (ValueError, TypeError) as exc:
+        from rich.markup import escape
+
+        console.print(f"[red]Autopilot failed:[/] {escape(str(exc))}")
+        raise typer.Exit(1) from exc
+
+    from rich.markup import escape as _escape
+
+    console.print(
+        Panel(
+            f"Target:   [bold]{_escape(profile.name)}[/]\n"
+            f"Runtime:  [bold]{_escape(profile.runtime)}[/]\n"
+            f"Quant:    [bold]{_escape(profile.quant)}[/]\n"
+            f"PEFT:     [bold]{_escape(profile.peft)}[/]\n"
+            f"Spec dec: [bold]{profile.spec_decoding}[/]\n"
+            f"Recipe:   [bold]{_escape(recipe_path)}[/]\n"
+            f"Script:   [bold]{_escape(script_path)}[/]",
+            title="[bold green]Deploy Autopilot[/]",
+        )
+    )
+    if profile.notes:
+        console.print(f"[dim]Notes: {_escape(profile.notes)}[/]")
+    console.print(
+        "[yellow]Note:[/] Live Quant-Lobotomy auto-measure deferred to v0.46.1; "
+        "this release writes the canonical combo + recipe."
+    )
+
+
 def _auto_detect_template() -> Optional[str]:
     """Try to infer chat template from soup.yaml in cwd."""
     from soup_cli.utils.ollama import infer_chat_template
