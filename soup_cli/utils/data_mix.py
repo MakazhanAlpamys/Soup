@@ -210,25 +210,27 @@ def validate_datasets(raw: Sequence[str]) -> Tuple[str, ...]:
     seen: List[str] = []
     for item in raw:
         path = _check_str_path("dataset", item)
+        # Symlink check on the ORIGINAL path BEFORE realpath (which would
+        # follow the symlink, defeating the check). Matches v0.46.0 Part A
+        # `_reject_symlink_target` pattern.
+        try:
+            st = os.lstat(path)
+        except FileNotFoundError:
+            st = None
+        except OSError as exc:
+            raise ValueError(
+                f"dataset path is not stat-able: {os.path.basename(path)!r}"
+            ) from exc
+        if st is not None and stat.S_ISLNK(st.st_mode):
+            raise ValueError(
+                f"dataset path is a symlink (rejected for safety): "
+                f"{os.path.basename(path)!r}"
+            )
         real = os.path.realpath(path)
         if not is_under_cwd(real):
             raise ValueError(
                 f"dataset path is outside cwd: {os.path.basename(real)!r}"
             )
-        # Reject symlink at the actual path (TOCTOU defence mirroring
-        # v0.33.0 #22 / v0.43.0 Part C / v0.46.0 Part A policy).
-        if os.path.lexists(real):
-            try:
-                st = os.lstat(real)
-            except OSError as exc:
-                raise ValueError(
-                    f"dataset path is not stat-able: {os.path.basename(real)!r}"
-                ) from exc
-            if stat.S_ISLNK(st.st_mode):
-                raise ValueError(
-                    f"dataset path is a symlink (rejected for safety): "
-                    f"{os.path.basename(real)!r}"
-                )
         if real in seen:
             raise ValueError(
                 f"duplicate dataset path: {os.path.basename(real)!r}"
@@ -575,28 +577,31 @@ def write_mix_recipe(
     from soup_cli.utils.paths import is_under_cwd
 
     _check_str_path("output_path", output_path)
+    # Symlink check on the ORIGINAL path BEFORE realpath.
+    try:
+        st = os.lstat(output_path)
+    except FileNotFoundError:
+        st = None
+    except OSError as exc:
+        raise ValueError(
+            f"output_path is not stat-able: "
+            f"{os.path.basename(output_path)!r}"
+        ) from exc
+    if st is not None and stat.S_ISLNK(st.st_mode):
+        raise ValueError(
+            f"output_path is a symlink (rejected for safety): "
+            f"{os.path.basename(output_path)!r}"
+        )
     real = os.path.realpath(output_path)
     if not is_under_cwd(real):
         raise ValueError(
             f"output_path is outside cwd: {os.path.basename(real)!r}"
         )
-    if os.path.lexists(real):
-        try:
-            st = os.lstat(real)
-        except OSError as exc:
-            raise ValueError(
-                f"output_path is not stat-able: {os.path.basename(real)!r}"
-            ) from exc
-        if stat.S_ISLNK(st.st_mode):
-            raise ValueError(
-                f"output_path is a symlink (rejected for safety): "
-                f"{os.path.basename(real)!r}"
-            )
-        if not overwrite:
-            raise ValueError(
-                f"output_path already exists (use overwrite=True): "
-                f"{os.path.basename(real)!r}"
-            )
+    if st is not None and not overwrite:
+        raise ValueError(
+            f"output_path already exists (use overwrite=True): "
+            f"{os.path.basename(real)!r}"
+        )
 
     text = render_mix_recipe_yaml(report)
     if len(text.encode("utf-8")) > _MAX_RECIPE_BYTES:
@@ -628,23 +633,25 @@ def load_mix_recipe(path: str) -> Mapping[str, object]:
     from soup_cli.utils.paths import is_under_cwd
 
     _check_str_path("path", path)
+    # Symlink check on the ORIGINAL path BEFORE realpath.
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        st = None
+    except OSError as exc:
+        raise ValueError(
+            f"recipe path is not stat-able: {os.path.basename(path)!r}"
+        ) from exc
+    if st is not None and stat.S_ISLNK(st.st_mode):
+        raise ValueError(
+            f"recipe path is a symlink (rejected for safety): "
+            f"{os.path.basename(path)!r}"
+        )
     real = os.path.realpath(path)
     if not is_under_cwd(real):
         raise ValueError(
             f"recipe path is outside cwd: {os.path.basename(real)!r}"
         )
-    if os.path.lexists(real):
-        try:
-            st = os.lstat(real)
-        except OSError as exc:
-            raise ValueError(
-                f"recipe path is not stat-able: {os.path.basename(real)!r}"
-            ) from exc
-        if stat.S_ISLNK(st.st_mode):
-            raise ValueError(
-                f"recipe path is a symlink (rejected for safety): "
-                f"{os.path.basename(real)!r}"
-            )
     if not os.path.isfile(real):
         raise FileNotFoundError(
             f"recipe not found: {os.path.basename(real)!r}"

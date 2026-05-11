@@ -588,25 +588,28 @@ def curriculum_curve(
         candidate = os.path.join(out_dir, "curriculum_history.jsonl")
     else:
         candidate = history_path
+    # Symlink check on the ORIGINAL path BEFORE realpath (matches v0.46.0
+    # `_reject_symlink_target` pattern — realpath follows the symlink).
+    try:
+        _st = os.lstat(candidate)
+    except FileNotFoundError:
+        _st = None
+    except OSError as exc:
+        console.print(
+            f"[red]history path is not stat-able:[/] "
+            f"{markup_escape(os.path.basename(candidate))}"
+        )
+        raise typer.Exit(2) from exc
+    if _st is not None and _stat.S_ISLNK(_st.st_mode):
+        console.print(
+            f"[red]history path is a symlink (rejected for safety):[/] "
+            f"{markup_escape(os.path.basename(candidate))}"
+        )
+        raise typer.Exit(2)
     real = os.path.realpath(candidate)
     if not is_under_cwd(real):
         console.print("[red]history path is outside cwd[/]")
         raise typer.Exit(2)
-    if os.path.lexists(real):
-        try:
-            _st = os.lstat(real)
-        except OSError as exc:
-            console.print(
-                f"[red]history path is not stat-able:[/] "
-                f"{markup_escape(os.path.basename(real))}"
-            )
-            raise typer.Exit(2) from exc
-        if _stat.S_ISLNK(_st.st_mode):
-            console.print(
-                f"[red]history path is a symlink (rejected for safety):[/] "
-                f"{markup_escape(os.path.basename(real))}"
-            )
-            raise typer.Exit(2)
     if not os.path.isfile(real):
         console.print(
             f"[yellow]curriculum_history.jsonl not found:[/] "
