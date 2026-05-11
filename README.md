@@ -43,14 +43,14 @@ soup train
 
 Latest highlights only. Full history: [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 
-**v0.49.0 — Long Context & Architecture**: Four RoPE-scaling additions that close the long-context gap with Unsloth and LlamaFactory — YaRN, Dynamic NTK hardening, LongLoRA S² shifted-sparse attention (schema-only), and full Llama 3.1 NTK-aware scaling.
+**v0.50.0 — GRPO Plus (RL parity)**: 22 features across GRPO objective variants, long-context + memory-efficient RL, multi-turn agent rollout backends, stability/efficiency knobs, and PRM + Vision RL. Schema-only release closing the gap with unsloth and axolotl; live loss kernels and launchers land in v0.50.1.
 
-- **YaRN RoPE scaling.** New `training.rope_scaling_type: yarn` with explicit tunables `yarn_factor` / `yarn_attn_factor` / `yarn_beta_fast` / `yarn_beta_slow`. Pure-Python kernels (`yarn_find_correction_dim`, `yarn_find_correction_range`, `yarn_linear_ramp_mask`, `yarn_get_mscale`) mirror the YaRN paper §3.4/§3.5 with `bool`/NaN/Inf rejection on every numeric input; the range helper auto-disambiguates `high <= low` so the ramp-mask denominator is non-zero on adversarial inputs.
-- **Llama 3.1 NTK-aware (full impl).** New `training.rope_scaling_type: llama3` emits the canonical `{factor, original_max_position_embeddings, low_freq_factor=1.0, high_freq_factor=4.0}` block. `scale_inv_freq_llama3` classifies each frequency by its wavelength relative to `old_context_len=8192` (wavelength < high-freq threshold → unchanged; > low-freq threshold → divided by `scale_factor`; smooth linear blend in between). `detect_llama3_rope_in_config` reads HF model configs and accepts both `rope_scaling.type` and the newer `rope_scaling.rope_type` keys.
-- **LongLoRA S² shifted-sparse attention (schema gate).** New `training.use_longlora: true` requires `task=sft`, `backend=transformers`, a Llama-family base (word-boundary regex match), and `use_ring_attention=false` (both rewrite the attention kernel — pick one). Cross-validator emits distinct error messages per failure mode. Live `LlamaAttention.forward` override mirroring LlamaFactory `model/model_utils/longlora.py` lands in v0.49.1 — the schema gate ships now so misconfigured runs fail fast at config load.
-- **Dynamic NTK hardened.** Existing `rope_scaling_type: dynamic` path verified against upstream HF behaviour; `get_rope_scaling_config('dynamic', ...)` accepts both absolute target lengths and scaling factors.
-- **Public-API hardening.** `get_rope_scaling_config` now validates `target_length` / `original_length` for `bool`/NaN/Inf / non-positive at the public boundary — prevents direct callers (e.g. trainer wiring) from emitting `{factor: NaN}` into HF model configs even when bypassing the Pydantic schema.
-- **+80 net new tests** (6410 → 6490). Schema bounds, bool-rejection across every numeric param, regex word-boundary, distinct error-message paths, NaN/Inf rejection, smooth-transition zone, and security boundary validation.
+- **7 GRPO objective variants.** New `training.grpo_variant`: `gspo` (Group Stabilized PO), `dapo` (Decoupled Advantage), `dr_grpo` (Doubly Robust), `bnpo` (Batch Normalized), `two_sided` (symmetric clipping — requires `grpo_delta`), `rft` (Reinforced Fine-Tuning), `standard`. Closed-allowlist validation, frozen `GRPOVariantSpec` metadata, explicit NaN/Inf + bool rejection on `grpo_delta`.
+- **Long-context + memory-efficient RL.** New `training.long_context_grpo: true` (wires Tiled MLP from v0.56.0 when available; rejects `use_ring_attention=true`) + `training.vllm_sleep_mode: true` (between-rollouts vLLM standby — `transformers` / `unsloth` backends only).
+- **Multi-turn agent rollout.** New `training.rollout_backend`: `art` (OpenPipe ART), `ruler`, `nemo_gym`, `openenv`. Per-entry `required_package` mapping; closed allowlist.
+- **7 GRPO stability/efficiency knobs.** New `training.ref_model_ema_alpha` ((0, 1]), `replay_buffer_size` ([1, 1M]), `async_grpo_prefetch`, `tis_threshold` ((0, 100]) + paired `mask_truncated_completions`, `defer_rerolling`, `skip_zero_advantage`, `off_policy_mask_threshold` ([0, 1]) — every numeric field bool-rejected, every flag task-gated to `task='grpo'` with a single error message listing all offending fields.
+- **PRM + Vision RL.** New top-level `task='prm'` (Process Reward Model / stepwise-supervised — paired with `data.format='prm'`) + new `training.vision_grpo: true` flag for VLM-RL on Qwen2-VL / Pixtral / InternVL (requires `modality='vision'` and `task ∈ {grpo, ppo}`).
+- **+239 net new tests** (6490 → 6729). 5 sequential review agents (python-review, code-review, security-review, tdd-guide, verification-loop) each fed back HIGH/MEDIUM/LOW findings; every finding was fixed before commit (explicit NaN/Inf field-validator on `grpo_delta`, null-byte rejection on compat-helper backend/task strings, `use_ring_attention` bool guard, `grpo_fp16` task-gate, `vllm_sleep_mode` task-gate).
 
 ## Why Soup?
 
@@ -643,6 +643,71 @@ training:
 ```
 
 Replaces the static memory formula with a real try-halve-then-double-to-ceiling loop. Picked size is cached at `~/.soup/batch_cache.json` keyed on `(model, max_length, quantization, lora_r, gpu_name, gpu_memory_gb)` so repeat runs short-circuit.
+
+## GRPO Plus — Objective Variants, Long-Context RL, Multi-Turn Agents
+
+Soup ships seven GRPO objective variants, between-rollouts vLLM standby, four agent-rollout backends, seven stability/efficiency knobs, plus Process Reward Models and Vision-RL.
+
+```yaml
+# soup.yaml — DAPO with replay buffer and TIS truncation masking
+base: meta-llama/Llama-3.1-8B-Instruct
+task: grpo
+data:
+  train: ./prompts.jsonl
+  format: chatml
+training:
+  reward_fn: accuracy
+  num_generations: 8
+  # New: GRPO objective variants
+  grpo_variant: dapo                  # one of: gspo / dapo / dr_grpo / bnpo / two_sided / rft / standard
+  # grpo_delta: 0.2                   # required when grpo_variant: two_sided
+  grpo_fp16: true                     # FP16 RL (unsloth parity)
+  # Long-context + memory-efficient RL
+  long_context_grpo: true             # wires Tiled MLP when available
+  vllm_sleep_mode: true               # between-rollouts vLLM standby
+  # Multi-turn agent rollout
+  rollout_backend: art                # one of: art / ruler / nemo_gym / openenv
+  # Stability / efficiency knobs
+  ref_model_ema_alpha: 0.99           # EMA sync policy → reference
+  replay_buffer_size: 2048
+  async_grpo_prefetch: true           # overlap rollout + train
+  tis_threshold: 2.0                  # truncated importance sampling
+  mask_truncated_completions: true    # paired with tis_threshold
+  defer_rerolling: true
+  skip_zero_advantage: true
+  off_policy_mask_threshold: 0.5
+```
+
+Process Reward Models (stepwise-supervised):
+
+```yaml
+# soup.yaml
+base: meta-llama/Llama-3.1-8B
+task: prm                              # New: Process Reward Model
+data:
+  train: ./prm_dataset.jsonl
+  format: prm                          # stepwise-supervised data shape
+training:
+  epochs: 3
+  lr: 1e-5
+```
+
+Vision RL on Qwen2-VL / Pixtral / InternVL:
+
+```yaml
+# soup.yaml
+base: Qwen/Qwen2-VL-7B-Instruct
+task: grpo
+modality: vision
+data:
+  train: ./vlm_prompts.jsonl
+  format: llava
+training:
+  reward_fn: accuracy
+  vision_grpo: true                    # VLM-RL opt-in
+```
+
+All flags ship as schema gates in v0.50.0; live loss kernels, vLLM sleep-mode plumbing, ART/RULER/NeMo Gym/OpenEnv launchers, and the PRM trainer wrapper land in v0.50.1 — schema accepts the values now so configs are stable.
 
 ## Long Context — YaRN, Llama 3.1 NTK, LongLoRA
 

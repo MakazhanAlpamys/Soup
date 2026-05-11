@@ -908,6 +908,146 @@ class TrainingConfig(BaseModel):
             "Required when reward_fn='verifiable'."
         ),
     )
+    # v0.50.0 Part A — GRPO objective variants (unsloth + axolotl parity).
+    # Schema-only in v0.50.0; live loss kernels wired in v0.50.1.
+    grpo_variant: Optional[Literal[
+        "standard", "gspo", "dapo", "dr_grpo", "bnpo", "two_sided", "rft"
+    ]] = Field(
+        default=None,
+        description=(
+            "GRPO objective variant: standard | gspo | dapo | dr_grpo | "
+            "bnpo | two_sided | rft. Defaults to None (legacy GRPO). "
+            "Requires task='grpo'. Live wiring for v0.50.0 additions is "
+            "deferred to v0.50.1 (schema gate only)."
+        ),
+    )
+    grpo_delta: Optional[float] = Field(
+        default=None,
+        gt=0.0,
+        le=1.0,
+        description=(
+            "Symmetric clipping radius for grpo_variant='two_sided'. "
+            "Required when grpo_variant='two_sided'; rejected otherwise."
+        ),
+    )
+    grpo_fp16: bool = Field(
+        default=False,
+        description=(
+            "Force FP16 mixed precision for GRPO/RL. Soup currently has "
+            "FP8 RL support; this flag is the explicit FP16 opt-in (unsloth "
+            "parity). v0.50.0: schema-only; live mixed-precision routing "
+            "deferred to v0.50.1."
+        ),
+    )
+    # v0.50.0 Part B — Long-context + memory-efficient RL
+    long_context_grpo: bool = Field(
+        default=False,
+        description=(
+            "Enable long-context GRPO (unsloth: 380K B200 / 110K H100). "
+            "Wires Tiled MLP from v0.56.0 Part A; schema-only in v0.50.0. "
+            "Requires task='grpo' on a non-mlx backend and "
+            "use_ring_attention=False (both rewrite attention)."
+        ),
+    )
+    vllm_sleep_mode: bool = Field(
+        default=False,
+        description=(
+            "Enable vLLM sleep/standby between rollouts (memory savings "
+            "during the optimisation step). Requires backend in "
+            "{transformers, unsloth}. Schema-only in v0.50.0; live wiring "
+            "in v0.50.1."
+        ),
+    )
+    # v0.50.0 Part C — Multi-turn agent rollout backend
+    rollout_backend: Optional[Literal[
+        "art", "ruler", "nemo_gym", "openenv"
+    ]] = Field(
+        default=None,
+        description=(
+            "Multi-turn agent rollout backend (unsloth / axolotl parity): "
+            "art (OpenPipe ART) / ruler / nemo_gym / openenv. "
+            "Requires task='grpo'. Schema-only in v0.50.0; live launcher "
+            "wired in v0.50.1."
+        ),
+    )
+    # v0.50.0 Part D — GRPO stability / efficiency knobs (axolotl + unsloth).
+    # All schema-only in v0.50.0; live trainer callbacks wired in v0.50.1.
+    ref_model_ema_alpha: Optional[float] = Field(
+        default=None,
+        gt=0.0,
+        le=1.0,
+        description=(
+            "Exponential moving average coefficient for ref-model sync "
+            "(policy → reference). Must be in (0, 1]. None = disabled. "
+            "Axolotl parity."
+        ),
+    )
+    replay_buffer_size: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=1_000_000,
+        description=(
+            "Bounded replay buffer size for GRPO rollouts. None = disabled. "
+            "Axolotl parity."
+        ),
+    )
+    async_grpo_prefetch: bool = Field(
+        default=False,
+        description=(
+            "Overlap rollout + train via async prefetch (axolotl). "
+            "Requires backend in {transformers, unsloth}."
+        ),
+    )
+    tis_threshold: Optional[float] = Field(
+        default=None,
+        gt=0.0,
+        le=100.0,
+        description=(
+            "Truncated importance sampling threshold (unsloth, axolotl). "
+            "Must be in (0, 100]. None = disabled."
+        ),
+    )
+    mask_truncated_completions: bool = Field(
+        default=False,
+        description=(
+            "Mask out truncated completions when computing the policy "
+            "gradient (paired with tis_threshold). Unsloth + axolotl parity."
+        ),
+    )
+    defer_rerolling: bool = Field(
+        default=False,
+        description=(
+            "Defer re-rolling identical prompts across optimisation steps "
+            "(axolotl). Saves rollouts on repeat prompts."
+        ),
+    )
+    skip_zero_advantage: bool = Field(
+        default=False,
+        description=(
+            "Skip backward pass on samples whose advantage is exactly zero "
+            "(axolotl). Avoids wasted compute on no-signal samples."
+        ),
+    )
+    off_policy_mask_threshold: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Off-policy mask threshold for token/sequence gating (axolotl). "
+            "Must be in [0, 1]. None = disabled."
+        ),
+    )
+    # v0.50.0 Part E — Vision-RL opt-in flag
+    vision_grpo: bool = Field(
+        default=False,
+        description=(
+            "Enable Vision RL / VLM RL — extends GRPO/PPO to vision "
+            "modality (Qwen2-VL / Pixtral / InternVL). Requires "
+            "modality='vision', task in {grpo, ppo}, backend in "
+            "{transformers, unsloth}. Schema-only in v0.50.0; live VLM-RL "
+            "rollout wiring deferred to v0.50.1."
+        ),
+    )
     # PPO-specific
     ppo_epochs: int = Field(
         default=4, ge=1, description="Number of PPO optimization epochs per batch"
@@ -1368,6 +1508,87 @@ class TrainingConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def _validate_grpo_stability_pairings(self) -> "TrainingConfig":
+        """v0.50.0 Part D — surfaces probable footguns in stability knobs.
+
+        ``mask_truncated_completions=True`` without ``tis_threshold`` is a
+        no-op (the mask is built from the threshold). Reject loudly rather
+        than silently no-op (mirrors v0.32.0 spike-recovery + watchdog
+        cross-validator policy).
+        """
+        if self.mask_truncated_completions and self.tis_threshold is None:
+            raise ValueError(
+                "mask_truncated_completions requires tis_threshold to be set "
+                "(the truncation mask is derived from the importance-sampling "
+                "threshold)"
+            )
+        return self
+
+    @field_validator(
+        "ref_model_ema_alpha",
+        "tis_threshold",
+        "off_policy_mask_threshold",
+        "replay_buffer_size",
+        "grpo_delta",
+        mode="before",
+    )
+    @classmethod
+    def _reject_bool_on_grpo_numerics(cls, v: object, info: object) -> object:
+        """v0.50.0 (tdd-guide HIGH fix) — explicit bool rejection on every
+        numeric stability/RL knob. Matches v0.30.0 ``Candidate`` /
+        v0.41.0 Part B ``lr_groups`` / v0.43.0 Part B ``Tournament`` policy.
+
+        Pydantic v2 coerces ``True`` → ``1`` and ``False`` → ``0`` on int /
+        float fields by default; that would silently accept a misconfigured
+        YAML where a user typed ``true`` instead of a numeric literal.
+        """
+        if isinstance(v, bool):
+            raise ValueError(
+                f"{getattr(info, 'field_name', 'field')} must not be bool"
+            )
+        return v
+
+    @field_validator("grpo_delta", mode="after")
+    @classmethod
+    def _validate_grpo_delta_finite(cls, v: Optional[float]) -> Optional[float]:
+        """v0.50.0 Part A (security review fix) — explicit NaN/Inf rejection.
+
+        Pydantic's ``gt=0.0, le=1.0`` incidentally rejects NaN (since
+        ``NaN > 0.0`` is False), but the rejection is implicit. Make it
+        explicit so a future Pydantic change cannot regress the guard.
+        Mirrors v0.32.0 ``save_lr_finder_report`` / v0.47.0 Part A
+        ``build_forge_plan`` policy.
+        """
+        if v is None:
+            return v
+        import math as _math
+
+        if not _math.isfinite(v):
+            raise ValueError("grpo_delta must be finite (no NaN/Inf)")
+        return v
+
+    @model_validator(mode="after")
+    def _validate_grpo_variant_delta(self) -> "TrainingConfig":
+        """v0.50.0 Part A — grpo_variant='two_sided' requires grpo_delta.
+
+        Conversely, grpo_delta is only meaningful for the two_sided variant;
+        setting it on any other variant (or with no variant) is rejected
+        as a probable footgun (matches v0.40.0 Part D ``preference_loss_weights``
+        + ``preference_loss`` mutually-exclusive policy).
+        """
+        if self.grpo_variant == "two_sided" and self.grpo_delta is None:
+            raise ValueError(
+                "grpo_variant='two_sided' requires grpo_delta "
+                "(symmetric clipping radius, (0, 1])"
+            )
+        if self.grpo_delta is not None and self.grpo_variant != "two_sided":
+            raise ValueError(
+                "grpo_delta is only valid when grpo_variant='two_sided'; "
+                f"got grpo_variant={self.grpo_variant!r}"
+            )
+        return self
+
+    @model_validator(mode="after")
     def _validate_cross_doc_attn_mask(self) -> "TrainingConfig":
         """Cross-document attention masking requires packing=True."""
         if self.packing_cross_doc_attn_mask and not self.packing:
@@ -1648,9 +1869,13 @@ class SoupConfig(BaseModel):
     base: str = Field(..., description="Base model name or path (HF model ID)")
     task: Literal[
         "sft", "dpo", "grpo", "ppo", "reward_model", "kto", "orpo", "simpo", "ipo",
-        "bco", "preference", "pretrain", "embedding",
+        "bco", "preference", "pretrain", "embedding", "prm",
     ] = Field(
-        default="sft", description="Training task type"
+        default="sft",
+        description=(
+            "Training task type. v0.50.0 Part E adds 'prm' (Process Reward "
+            "Model / stepwise supervised — paired with data.format='prm')."
+        ),
     )
     modality: Literal["text", "vision", "audio"] = Field(
         default="text",
@@ -1825,6 +2050,175 @@ class SoupConfig(BaseModel):
                 backend=self.backend,
                 use_ring_attention=self.training.use_ring_attention,
             )
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
+        return self
+
+    @model_validator(mode="after")
+    def _validate_grpo_variant_supported(self) -> "SoupConfig":
+        """v0.50.0 Part A — ``grpo_variant`` only valid on task='grpo' and
+        transformers/unsloth backends. MLX rejected with distinct message
+        (matches v0.34.0 review-fix policy of distinct error reasons).
+
+        Live loss kernels for non-standard variants are deferred to v0.50.1;
+        a yellow advisory at trainer construction time will name the
+        deferred wiring (mirrors v0.40.0 Part D ``NotImplementedError``
+        stub-then-live pattern).
+        """
+        if self.training.grpo_variant is None:
+            return self
+        if self.task != "grpo":
+            raise ValueError(
+                f"grpo_variant is only valid when task='grpo'; "
+                f"got task={self.task!r}"
+            )
+        if self.backend == "mlx":
+            raise ValueError(
+                "grpo_variant is not supported on backend=mlx in v0.50.0 "
+                "(MLX GRPO is scaffolded; new RL objectives transformers-only)"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_long_context_grpo(self) -> "SoupConfig":
+        """v0.50.0 Part B — ``long_context_grpo`` compatibility gate.
+
+        Delegates to :func:`grpo_long_context.validate_long_context_grpo_compat`
+        so the rules are single-source-of-truth (mirrors v0.49.0 LongLoRA).
+        Live Tiled MLP wiring is deferred to v0.56.0.
+        """
+        if not self.training.long_context_grpo:
+            return self
+        from soup_cli.utils.grpo_long_context import (
+            validate_long_context_grpo_compat,
+        )
+
+        try:
+            validate_long_context_grpo_compat(
+                task=self.task,
+                backend=self.backend,
+                use_ring_attention=self.training.use_ring_attention,
+            )
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
+        return self
+
+    @model_validator(mode="after")
+    def _validate_prm_compat(self) -> "SoupConfig":
+        """v0.50.0 Part E — ``task='prm'`` schema gate.
+
+        Delegates to :func:`prm.validate_prm_compat` so the rules are
+        single-source-of-truth. Live PRM trainer wrapper is deferred to
+        v0.50.1.
+        """
+        if self.task != "prm":
+            return self
+        from soup_cli.utils.prm import validate_prm_compat
+
+        try:
+            validate_prm_compat(
+                task=self.task,
+                data_format=self.data.format,
+                backend=self.backend,
+                modality=self.modality,
+            )
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
+        return self
+
+    @model_validator(mode="after")
+    def _validate_vision_grpo(self) -> "SoupConfig":
+        """v0.50.0 Part E — ``vision_grpo=True`` compat gate."""
+        if not self.training.vision_grpo:
+            return self
+        from soup_cli.utils.prm import validate_vision_grpo_compat
+
+        try:
+            validate_vision_grpo_compat(
+                task=self.task,
+                modality=self.modality,
+                backend=self.backend,
+            )
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
+        return self
+
+    @model_validator(mode="after")
+    def _validate_grpo_stability_task_gate(self) -> "SoupConfig":
+        """v0.50.0 Part D — GRPO-specific stability knobs require task='grpo'.
+
+        Surfaces a probable footgun where a user sets one of the seven new
+        GRPO stability fields on a non-GRPO task (where they are a silent
+        no-op). Mirrors v0.49.0 LongLoRA / v0.48.0 curriculum_dynamic
+        task-gate policy.
+        """
+        tcfg = self.training
+        grpo_only_fields = {
+            "ref_model_ema_alpha": tcfg.ref_model_ema_alpha,
+            "replay_buffer_size": tcfg.replay_buffer_size,
+            "async_grpo_prefetch": tcfg.async_grpo_prefetch,
+            "tis_threshold": tcfg.tis_threshold,
+            "mask_truncated_completions": tcfg.mask_truncated_completions,
+            "defer_rerolling": tcfg.defer_rerolling,
+            "skip_zero_advantage": tcfg.skip_zero_advantage,
+            "off_policy_mask_threshold": tcfg.off_policy_mask_threshold,
+            "grpo_fp16": tcfg.grpo_fp16,
+        }
+        # Bool defaults are False; Optional defaults are None.
+        active = [
+            name for name, value in grpo_only_fields.items()
+            if value not in (None, False)
+        ]
+        if not active:
+            return self
+        if self.task != "grpo":
+            raise ValueError(
+                f"GRPO stability fields {active} require task='grpo'; "
+                f"got task={self.task!r}"
+            )
+        if self.backend == "mlx":
+            raise ValueError(
+                f"GRPO stability fields {active} are not supported on "
+                "backend=mlx in v0.50.0"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_rollout_backend(self) -> "SoupConfig":
+        """v0.50.0 Part C — ``rollout_backend`` requires task='grpo' and a
+        non-mlx backend. Live launcher wired in v0.50.1."""
+        if self.training.rollout_backend is None:
+            return self
+        if self.task != "grpo":
+            raise ValueError(
+                f"rollout_backend requires task='grpo'; got task={self.task!r}"
+            )
+        if self.backend == "mlx":
+            raise ValueError(
+                "rollout_backend is not supported on backend=mlx in v0.50.0"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_vllm_sleep_mode(self) -> "SoupConfig":
+        """v0.50.0 Part B — ``vllm_sleep_mode`` requires task='grpo' and a
+        vLLM-compatible backend (transformers/unsloth).
+
+        Sleep mode is a between-rollouts feature; setting it on a non-RL
+        task is a probable footgun and silently no-ops, so reject loudly.
+        """
+        if not self.training.vllm_sleep_mode:
+            return self
+        if self.task != "grpo":
+            raise ValueError(
+                f"vllm_sleep_mode requires task='grpo'; got task={self.task!r}"
+            )
+        from soup_cli.utils.grpo_long_context import (
+            validate_vllm_sleep_mode_compat,
+        )
+
+        try:
+            validate_vllm_sleep_mode_compat(backend=self.backend)
         except ValueError as exc:
             raise ValueError(str(exc)) from exc
         return self

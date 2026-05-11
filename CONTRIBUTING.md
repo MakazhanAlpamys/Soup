@@ -111,7 +111,7 @@ soup_cli/
   templates/          - 17 built-in soup.yaml templates (YAML + manifest.json) with load_template loader (v0.39.0, +bco v0.40.0)
   ui/                 - Web UI (FastAPI + HTML/JS SPA)
 
-tests/                - Test suite (172 files, 6490 tests)
+tests/                - Test suite (177 files, 6729 tests)
 examples/             - Real-world config examples and datasets
 ```
 
@@ -257,7 +257,13 @@ pytest tests/ --cov=soup_cli --cov-report=html
 | test_v0490.py | v0.49.0 Long Context & Architecture: YaRN math kernels (yarn_find_correction_dim / yarn_find_correction_range / yarn_linear_ramp_mask / yarn_get_mscale — bool/NaN/Inf rejection, auto-disambiguated low==high); YaRN schema fields (yarn_factor / yarn_attn_factor / yarn_beta_fast / yarn_beta_slow) + cross-validator rejecting yarn fields without rope_scaling_type=yarn; Dynamic NTK harden + verify; LongLoRA schema gate (Llama-family + sft + transformers + !ring_attn); `is_llama_model` word-boundary regex (mirrors v0.39.0 `is_gemma4_model` / v0.44.0 `is_llama4_model` policy); Llama 3.1 NTK-aware (`scale_inv_freq_llama3` smooth-transition / bool-rejected on every param / zero-`old_context_len` rejected; `detect_llama3_rope_in_config` with `rope_type` alias + explicit `is None` check); public-boundary input validation on `get_rope_scaling_config` (target_length / original_length / yarn_factor — security review fix) (v0.49.0) |
 | test_v0480_part_b.py | Data Mixing Optimizer (BETA): parse_budget (digits + s/m/h suffix [60s, 24h]) + validate_datasets (containment + symlink + dedup + 32-cap) + MixCandidate (simplex + finite + bool-rejected) + BudgetTracker (injectable clock) + run_mix_optimizer (isolated proxy failures + KeyboardInterrupt propagation + NaN skip + partial budget trip) + render_mix_recipe_yaml (YAML injection defence) + write_mix_recipe / load_mix_recipe (atomic + TOCTOU + 256 KB cap) + `soup data mix --optimize / --apply` CLI (v0.48.0) |
 
-(Note: the test-file table above covers v0.25.0–v0.35.0 + v0.47.0 + v0.48.0 + v0.49.0 only; full per-release table lives in `.claude/CLAUDE.md`.)
+| test_v0500_part_a.py | v0.50.0 Part A — GRPO objective variants (gspo / dapo / dr_grpo / bnpo / two_sided / rft / standard); closed allowlist + frozen `GRPOVariantSpec` + `MappingProxyType` immutability; `validate_grpo_variant` (bool / null-byte / oversize / unknown rejected); `validate_grpo_delta` (bool / NaN / Inf / out-of-range rejected); `apply_variant_loss` deferred-live stub; TrainingConfig integration (Literal accept + two_sided requires delta cross-validator + NaN/Inf field_validator) (v0.50.0 Part A) |
+| test_v0500_part_b.py | v0.50.0 Part B — Long-context GRPO + vLLM sleep; `validate_long_context_grpo_compat` (task / backend / ring-attention exclusivity + null-byte + bool guards); `validate_vllm_sleep_mode_compat` (transformers / unsloth allowlist + null-byte); `apply_vllm_sleep_mode` deferred stub with v0.50.1 marker; SoupConfig integration (vllm_sleep_mode requires task='grpo' — code-review HIGH fix) (v0.50.0 Part B) |
+| test_v0500_part_c.py | v0.50.0 Part C — Multi-turn agent rollout backend allowlist (art / ruler / nemo_gym / openenv); frozen `RolloutBackendSpec` + `MappingProxyType` immutability; `validate_rollout_backend` (bool rejected); `required_rollout_package` per-entry mapping; `launch_rollout` deferred stub; SoupConfig task-gate + mlx rejection (v0.50.0 Part C) |
+| test_v0500_part_d.py | v0.50.0 Part D — 7 stability/efficiency knobs (`ref_model_ema_alpha` / `replay_buffer_size` / `async_grpo_prefetch` / `tis_threshold` / `mask_truncated_completions` / `defer_rerolling` / `skip_zero_advantage` / `off_policy_mask_threshold`); explicit bool-rejection field_validator across all numeric fields (tdd-guide HIGH fix); `mask_truncated_completions` requires `tis_threshold` cross-validator; SoupConfig task-gate naming every offending field; `grpo_fp16` task-gate (code-review HIGH fix) (v0.50.0 Part D) |
+| test_v0500_part_e.py | v0.50.0 Part E — `task='prm'` (Process Reward Model) + `vision_grpo` flag; `validate_prm_compat` (data.format / modality / mlx gates); `validate_vision_grpo_compat` (task ∈ {grpo, ppo} / modality='vision' / non-mlx); `build_prm_trainer` deferred stub; SoupConfig integration with all rejection paths exercised (v0.50.0 Part E) |
+
+(Note: the test-file table above covers v0.25.0–v0.35.0 + v0.47.0 + v0.48.0 + v0.49.0 + v0.50.0 only; full per-release table lives in `.claude/CLAUDE.md`.)
 
 ## Making Changes
 
