@@ -169,6 +169,21 @@ app.add_typer(
 # Register data generate as a subcommand of data
 data.app.command(name="generate")(generate.generate)
 
+# v0.47.0 Part A — Synthetic Data Forge.
+from soup_cli.commands import data_forge as _data_forge_cmd  # noqa: E402
+
+data.app.command(name="forge")(_data_forge_cmd.forge)
+
+# v0.47.0 Part B — Data Quality Moat.
+from soup_cli.commands import data_score as _data_score_cmd  # noqa: E402
+
+data.app.command(name="score")(_data_score_cmd.score)
+data.app.command(name="decontaminate")(_data_score_cmd.decontaminate)
+data.app.command(name="toxicity")(_data_score_cmd.toxicity)
+data.app.command(name="langdetect")(_data_score_cmd.langdetect)
+data.app.command(name="pii")(_data_score_cmd.pii)
+data.app.command(name="educational")(_data_score_cmd.educational)
+
 
 @app.command()
 def version(

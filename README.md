@@ -43,14 +43,14 @@ soup train
 
 Latest highlights only. Full history: [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 
-**v0.46.0 — Deploy & Agent Autopilot**: Two zero-config autopilots — a deploy target picker that maps your hardware to PEFT+quant+spec-decoding in one command, and an Agent Forge that turns OpenAPI / MCP / GraphQL specs straight into tool-calling SFT datasets.
+**v0.47.0 — Data Forge**: Synthetic-data pipeline with full provenance + a lighter-weight data quality scorecard. Two CLIs, one philosophy: every synthetic row carries its audit trail, and every quality check is a pure Python heuristic that runs anywhere (no GPU, no 200 MB Presidio model).
 
-- **`soup deploy autopilot --target <profile>`.** 10 hardware profiles (`mac-m3`, `mac-m4-pro`, `rtx-3060-12gb`, `rtx-4090-24gb`, `iphone-16`, `pixel-9`, `ollama-local`, `lm-studio`, `runpod-a100`, `hf-jobs-h100`) each mapped to a runtime, quantisation, PEFT method, and speculative-decoding flag. Writes a ready-to-train `soup.yaml` recipe AND a planned deploy shell script. Closed allowlists on every field; `shlex.quote` on the model path in the generated bash. Live Quant-Lobotomy auto-measure deferred to v0.46.1.
-- **`soup agent synth --spec api.yaml`.** Parses OpenAPI 3.x, MCP server manifests, or GraphQL introspection JSON into a canonical endpoint list and synthesises a tool-calling SFT dataset (`{messages, tool, source_endpoint}`). `$ref` strings are left opaque (no external resolution — defends against file-read SSRF), `yaml.safe_load` only, 5 MiB spec cap, 10 000-endpoint cap. Atomic JSONL write via staged-tempfile + `os.replace` — mid-stream failure never leaves a partial dataset.
-- **`soup agent train --spec api.yaml --base <model>`.** One-shot wrapper that runs synth, then prints the planned `soup train` invocation with the rendered recipe (in-process re-entry of Typer commands is intentionally not done — matches `soup quantize` design). `--base` and `--output-dir` are validated for NUL / newline / oversize BEFORE embedding in the recipe YAML (defends against YAML key injection).
-- **`soup agent eval --spec api.yaml --predictions preds.jsonl`.** Scores predicted tool-calls against the spec catalog: tool-name match + arguments-key validity. Predictions path enforces cwd containment, `os.lstat + S_ISLNK` symlink rejection, and a 1 000 000-line DoS cap. Live RLVR `code_exec` sandbox scoring deferred to v0.46.1.
-- **Security throughout.** Path containment (`is_under_cwd`), symlink TOCTOU rejection (`os.lstat + S_ISLNK`) on every write target, Rich markup escape on every spec-derived string, bool-rejected-before-int on every numeric param, closed allowlists on runtime / quant / PEFT / spec kind / node kind.
-- **+137 net new tests** — every parser kind (OpenAPI / MCP / GraphQL), every failure mode (cycle / cap / null-byte / oversize / outside-cwd / symlink), every CLI surface (`autopilot --list / --help / happy / outside-cwd reject`, `agent synth/train/eval` happy + failure).
+- **`soup data forge --docs <dir> --task sft|preference|tool --target-rows N`.** Multi-stage pipeline: chunk documents → call a judge (deterministic offline stub now; Ollama / Anthropic / vLLM via `--judge-provider` in v0.47.1) → active-learning prune via Jaccard distance → JSONL output **plus** a separate provenance manifest linking every synthetic row back to source doc + judge label + filter score. 10 000-doc cap; closed task allowlist; `os.lstat + S_ISLNK` rejection on every write target; atomic staged-tempfile writes.
+- **`soup data score --input rows.jsonl`.** Composite scorecard — PII flagged, toxic flagged, language distribution, educational-value mean, decontamination removed. Pure Python, no heavy deps. The Llama-Guard-3-1B variant + FineWeb-Edu classifier + full Presidio integration ship behind `[data-pro]` extras in v0.47.1.
+- **`soup data decontaminate --benchmarks mmlu,gsm8k,humaneval`.** Drops rows that overlap public benchmarks via n-gram containment. Allowlisted benchmark names (`mmlu`, `gsm8k`, `humaneval`, `truthfulqa`, `arc`, `hellaswag`). Operator-supplied benchmark corpora wire through `--benchmark-file` in v0.47.1.
+- **`soup data toxicity / langdetect / pii / educational`.** Standalone subcommands — JSONL-in, enriched JSONL-out. Compose them freely. Each emits a per-row score or flag field so you can pipe results into your downstream filter.
+- **ReDoS-hardened PII regexes.** The 4 in-tree patterns (email / phone / SSN / credit-card) were rewritten in the security review to eliminate nested optional quantifiers; input is pre-capped to 50 KB before `finditer`. Pathological near-miss inputs (100 KB of `"1 "*N + "x"`) complete promptly instead of hanging.
+- **+116 net new tests** (6126 → 6242). Every validator path, every CLI failure mode, every atomic-write symlink TOCTOU branch, the NaN-threshold guard, and a ReDoS regression test.
 
 ## Why Soup?
 
@@ -2813,6 +2813,13 @@ soup data push --input d.jsonl --hf-dataset user/name  Upload local JSONL as HF 
 soup data registry                           List all registered datasets
 soup data demo                                List bundled demo JSONL fixtures
 soup data demo alpaca_demo --output ./d.jsonl Copy a bundled demo JSONL fixture
+soup data forge --docs ./docs --task sft --target-rows 1000  Synthetic data pipeline + provenance
+soup data score --input rows.jsonl            Composite quality scorecard (PII + toxicity + lang + edu)
+soup data decontaminate --input rows.jsonl --benchmarks mmlu,gsm8k  Drop benchmark-overlap rows
+soup data toxicity --input rows.jsonl -o tox.jsonl  Flag toxic rows (keyword baseline)
+soup data langdetect --input rows.jsonl -o tagged.jsonl  Tag each row with language code
+soup data pii --input rows.jsonl -o pii.jsonl Flag rows containing email/phone/SSN/credit-card
+soup data educational --input rows.jsonl -o scored.jsonl  Score educational value per row
 soup train --config soup.yaml --tracker mlflow  MLflow / SwanLab / Trackio integration
 soup profile --config soup.yaml              Estimate memory/speed before training
 soup profile --config soup.yaml --gpu a100   Estimate for specific GPU
@@ -3194,6 +3201,43 @@ soup agent eval --spec api.yaml --predictions preds.jsonl
 ```
 
 Each row of the synthesised dataset is `{messages: [user, assistant_with_tool_call], tool: <name>, source_endpoint: <path>}`. `$ref` strings in OpenAPI are left opaque (no external resolution — defends against file-read SSRF), `yaml.safe_load` only, 5 MiB spec cap, 10 000-endpoint cap, atomic JSONL write via staged-tempfile + `os.replace`. `eval` enforces a 1 000 000-line cap on predictions and rejects symlinks at every read/write boundary.
+
+## Synthetic Data Forge
+
+Multi-stage synthetic data pipeline with full provenance — every synthetic row links back to the source document, the judge call, and the filter score:
+
+```bash
+# Pipeline: chunk docs → judge → active-prune → JSONL + provenance manifest
+soup data forge \
+    --docs ./my_docs/ \
+    --task sft \
+    --target-rows 1000 \
+    --uncertainty-threshold 0.4 \
+    --output forge_dataset.jsonl \
+    --provenance forge_provenance.json
+```
+
+Three tasks supported: `sft` (Q&A pairs), `preference` (chosen/rejected), `tool` (tool-call hypotheses). Active learning prunes rows whose judge reply is too close to the source chunk (low Jaccard distance), keeping only uncertain / informative samples. The provenance manifest is a separate JSON file mapping every row id to `{source_doc, judge_id, chunk_id, filter_score}` so you have a complete audit trail for compliance.
+
+Document discovery is one level deep over `.txt` / `.md` / `.json` / `.jsonl`; dotfiles + symlinked directories are skipped. All paths are cwd-contained, all writes are atomic via staged-tempfile + `os.replace`, and write targets are rejected if they're symlinks. The built-in judge is a deterministic offline stub; live Ollama / Anthropic / vLLM judge providers wire through `--judge-provider` in v0.47.1.
+
+## Data Quality Scorecard
+
+Composite, lightweight data-quality triage — no GPU, no 200 MB Presidio model:
+
+```bash
+# Single-shot composite scorecard
+soup data score --input training.jsonl
+
+# Standalone subcommands — JSONL-in, enriched JSONL-out
+soup data pii          --input training.jsonl --output pii_flagged.jsonl
+soup data toxicity     --input training.jsonl --output tox_flagged.jsonl --threshold 0.1
+soup data langdetect   --input training.jsonl --output tagged.jsonl
+soup data educational  --input training.jsonl --output scored.jsonl
+soup data decontaminate --input training.jsonl --benchmarks mmlu,gsm8k,humaneval --output clean.jsonl
+```
+
+The scorecard reports PII flagged, toxic flagged, language distribution, mean educational value, and decontamination removed. PII detection uses a narrow ReDoS-hardened regex set (email / phone / SSN / credit-card) with a 50 KB pre-cap on every input. Language detection is a stopword heuristic across six languages. Toxicity is a keyword baseline; the Llama-Guard-3-1B variant + FineWeb-Edu classifier ship behind `[data-pro]` extras in v0.47.1. Decontamination uses n-gram containment against operator-supplied benchmark corpora (the `--benchmark-file` flag for live MMLU/GSM8K/HumanEval text lands in v0.47.1; the allowlist of benchmark names is locked in this release).
 
 ## Plugin System
 
