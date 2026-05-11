@@ -43,14 +43,14 @@ soup train
 
 Latest highlights only. Full history: [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 
-**v0.47.0 — Data Forge**: Synthetic-data pipeline with full provenance + a lighter-weight data quality scorecard. Two CLIs, one philosophy: every synthetic row carries its audit trail, and every quality check is a pure Python heuristic that runs anywhere (no GPU, no 200 MB Presidio model).
+**v0.48.0 — Adaptive Training (BETA)**: Two research-grade techniques that close the "10% of data beats 100%" gap — dynamic curriculum re-weighting and a Bayesian data-mixing optimiser. Both ship `BETA:`-flagged until reference-benchmark validation lands; the schema, math kernels, and CLI surface are stable, the live HF Trainer callback + scikit-optimize backend wire-in lands in v0.48.1.
 
-- **`soup data forge --docs <dir> --task sft|preference|tool --target-rows N`.** Multi-stage pipeline: chunk documents → call a judge (deterministic offline stub now; Ollama / Anthropic / vLLM via `--judge-provider` in v0.47.1) → active-learning prune via Jaccard distance → JSONL output **plus** a separate provenance manifest linking every synthetic row back to source doc + judge label + filter score. 10 000-doc cap; closed task allowlist; `os.lstat + S_ISLNK` rejection on every write target; atomic staged-tempfile writes.
-- **`soup data score --input rows.jsonl`.** Composite scorecard — PII flagged, toxic flagged, language distribution, educational-value mean, decontamination removed. Pure Python, no heavy deps. The Llama-Guard-3-1B variant + FineWeb-Edu classifier + full Presidio integration ship behind `[data-pro]` extras in v0.47.1.
-- **`soup data decontaminate --benchmarks mmlu,gsm8k,humaneval`.** Drops rows that overlap public benchmarks via n-gram containment. Allowlisted benchmark names (`mmlu`, `gsm8k`, `humaneval`, `truthfulqa`, `arc`, `hellaswag`). Operator-supplied benchmark corpora wire through `--benchmark-file` in v0.47.1.
-- **`soup data toxicity / langdetect / pii / educational`.** Standalone subcommands — JSONL-in, enriched JSONL-out. Compose them freely. Each emits a per-row score or flag field so you can pipe results into your downstream filter.
-- **ReDoS-hardened PII regexes.** The 4 in-tree patterns (email / phone / SSN / credit-card) were rewritten in the security review to eliminate nested optional quantifiers; input is pre-capped to 50 KB before `finditer`. Pathological near-miss inputs (100 KB of `"1 "*N + "x"`) complete promptly instead of hanging.
-- **+116 net new tests** (6126 → 6242). Every validator path, every CLI failure mode, every atomic-write symlink TOCTOU branch, the NaN-threshold guard, and a ReDoS regression test.
+- **`training.curriculum_dynamic: true`** layers on the static `curriculum` bucketer (v0.23.0). Every N steps the trainer aggregates per-sample loss + grad-norm into a per-bucket uncertainty signal, runs it through a softmax with floor (water-filling so no bucket ever drops below `curriculum_dynamic_floor`), and re-weights the sampler. Multi-rank launches must wire an `all_reduce` hook on per-bucket stats — the cross-validator `validate_distributed_curriculum` rejects un-coordinated multi-rank runs upfront so the well-known DDP-divergence footgun fails fast.
+- **`soup runs curriculum-curve <run_id>`.** ASCII visualiser of bucket-weight evolution over training — load the `curriculum_history.jsonl` written by the dynamic callback and render columns per bucket × rows per recompute step. Containment + TOCTOU symlink rejection + 50 MB / 100k-line caps on the history file.
+- **`soup data mix --optimize --budget 1h --datasets a.jsonl,b.jsonl,...`.** Runs N short proxy training runs over candidate mixture weights and writes a `mix_recipe.yaml` you can splice into `soup.yaml` under `data.interleave`. Budget is wall-clock-capped; partial results are surfaced via `MixOptimizationReport.partial=True` when the cap trips mid-loop. Per-candidate proxy failures are isolated (logged at DEBUG, sentinel high loss recorded) so a single OOM combo does not kill the whole search.
+- **`soup data mix --apply <recipe.yaml>`.** Re-loads a recipe and prints the canonical `data.interleave` block. Cwd containment + symlink rejection + 256 KB file cap; `yaml.safe_load` only.
+- **Schema-locked surface.** Five new `TrainingConfig` fields (`curriculum_dynamic`, `curriculum_dynamic_recompute_steps`, `curriculum_dynamic_floor`, `curriculum_dynamic_temperature`, plus the existing `curriculum_buckets`); cross-validators reject the dynamic path on mlx backend and on non-SFT/pretrain tasks with distinct error messages so users get the right fix.
+- **+168 net new tests** (6242 → 6410). Floor-strict invariant, water-fill correctness, frozen-dataclass mutations, simplex constraint on `MixCandidate`, isolated-proxy-crash regression, 50 MB and 100k-row caps, POSIX symlink rejection, `KeyboardInterrupt` propagation, every cross-validator branch.
 
 ## Why Soup?
 
@@ -3354,6 +3354,44 @@ edges:
 ```
 
 Closed node-kind allowlist (`seed` / `llm_text` / `code` / `judge` / `validator` / `sampler`); Kahn's topological sort via `collections.deque` (deterministic, O(N+E)); cycle / self-loop / duplicate-edge / dangling-edge / unknown-kind rejection. `_MAX_NODES=256`, `_MAX_EDGES=1024`, `_MAX_FILE_BYTES=1MiB`. The recipe file must stay under cwd and **must not be a symlink** (`os.lstat + S_ISLNK` TOCTOU defence). Live offline runner against a local model lands in v0.45.1.
+
+## Curriculum-Aware Training (BETA)
+
+Layer dynamic re-weighting on top of the static `curriculum` bucketer. Every N steps the trainer aggregates per-sample loss + grad-norm into a per-bucket uncertainty signal, runs it through a softmax (temperature-controlled) with floor (water-filling so no bucket drops below `curriculum_dynamic_floor`), and re-weights the sampler. Empty buckets fall back to the median of populated buckets; degenerate inputs return uniform.
+
+```yaml
+training:
+  curriculum: true                          # static bucketer (v0.23.0)
+  curriculum_buckets: 4
+  curriculum_dynamic: true                  # NEW — dynamic re-weighting
+  curriculum_dynamic_recompute_steps: 50    # refresh every 50 global steps
+  curriculum_dynamic_floor: 0.05            # min weight per bucket
+  curriculum_dynamic_temperature: 1.0       # softmax temp on uncertainty
+```
+
+Visualise the recorded bucket-weight evolution with `soup runs curriculum-curve <run_id>`.
+
+DDP / grad-accum safety: multi-rank launches must wire an `all_reduce` hook on per-bucket stats (a cross-validator rejects un-coordinated multi-rank runs upfront). Multi-trainer expansion beyond `sft` / `pretrain` is tracked for v0.48.1.
+
+## Data Mixing Optimizer (BETA)
+
+Search for the dataset mixture weights that minimise eval loss on a short proxy run.
+
+```bash
+soup data mix --optimize --budget 1h \
+    --datasets dolma.jsonl,wikipedia.jsonl,arxiv.jsonl \
+    --num-probes 8 --output mix_recipe.yaml
+```
+
+Writes a YAML recipe with a `data.interleave` block you can splice into your `soup.yaml`. `--budget` accepts `60s` / `5m` / `1h` / `24h`. Per-candidate proxy failures are isolated (DEBUG-logged, sentinel high loss recorded) so a single OOM combo does not abort the whole search; `partial=True` is surfaced in the report when the budget cap trips mid-loop.
+
+Re-apply a previously written recipe:
+
+```bash
+soup data mix --apply mix_recipe.yaml
+```
+
+Live wiring of the proxy training loop into a short `soup train` run is the v0.48.1 deliverable; v0.48.0 ships a synthetic offline proxy (quadratic penalty around the uniform simplex) so the budget tracker, optimiser surface, and recipe writer can be exercised without GPUs. `scikit-optimize` is opt-in via `OptimizerProtocol`; the default fallback is a deterministic Dirichlet sampler.
 
 ## Changelog
 

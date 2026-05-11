@@ -111,7 +111,7 @@ soup_cli/
   templates/          - 17 built-in soup.yaml templates (YAML + manifest.json) with load_template loader (v0.39.0, +bco v0.40.0)
   ui/                 - Web UI (FastAPI + HTML/JS SPA)
 
-tests/                - Test suite (169 files, 6242 tests)
+tests/                - Test suite (171 files, 6410 tests)
 examples/             - Real-world config examples and datasets
 ```
 
@@ -253,8 +253,10 @@ pytest tests/ --cov=soup_cli --cov-report=html
 | test_trainer_coverage_v035.py | Multi-trainer v0.28.0 wiring smoke matrix: every trainer × every speed/memory feature + auto-quant translators + try_reload_with_fallback + benchmark_kernel_combos + schema-gate lift (v0.35.0 Parts A / B / C / D — #60, #61, #45) |
 | test_v0470_part_a.py | Synthetic Data Forge: ForgePlan / ProvenanceRecord / ForgeRow frozen dataclasses + VALID_TASKS allowlist + chunk_document + score_uncertainty + discover_documents (cwd-contained, symlink-rejecting, extension allowlist) + build_forge_plan validators (task / target_rows / teacher / NaN+Inf threshold) + synthesise_forge_rows (judge-exception swallow at DEBUG) + write_forge_dataset + write_provenance (atomic, TOCTOU-safe) + CLI smoke (v0.47.0) |
 | test_v0470_part_b.py | Data Quality Moat: BENCHMARKS MappingProxyType + ScoreReport frozen + ngram_set / ngram_overlap_ratio / decontaminate_rows (containment ratio) + detect_pii (ReDoS-hardened regexes + 50 KB pre-cap) + detect_language (6-language stopword heuristic) + score_toxicity (keyword baseline) + score_educational_value + compute_scorecard + load_jsonl_rows / write_jsonl_rows (cwd-contained, symlink-rejecting, atomic) + CLI smoke per subcommand (v0.47.0) |
+| test_v0480_part_a.py | Curriculum-Aware Trainer (BETA): DynamicCurriculumPolicy frozen + bounds; compute_bucket_weights softmax + water-fill (floor-strict invariant); validate_distributed_curriculum DDP gate; render_curve + parse_history_jsonl with 100k-row DoS cap; SoupConfig cross-validators (requires-curriculum / mlx-rejected / non-SFT-rejected / floor ≤ 1/buckets); `soup runs curriculum-curve` CLI (TOCTOU symlink reject + 50 MB cap + corrupt-JSONL exit 2) (v0.48.0) |
+| test_v0480_part_b.py | Data Mixing Optimizer (BETA): parse_budget (digits + s/m/h suffix [60s, 24h]) + validate_datasets (containment + symlink + dedup + 32-cap) + MixCandidate (simplex + finite + bool-rejected) + BudgetTracker (injectable clock) + run_mix_optimizer (isolated proxy failures + KeyboardInterrupt propagation + NaN skip + partial budget trip) + render_mix_recipe_yaml (YAML injection defence) + write_mix_recipe / load_mix_recipe (atomic + TOCTOU + 256 KB cap) + `soup data mix --optimize / --apply` CLI (v0.48.0) |
 
-(Note: the test-file table above covers v0.25.0–v0.35.0 + v0.47.0 only; full per-release table lives in `.claude/CLAUDE.md`.)
+(Note: the test-file table above covers v0.25.0–v0.35.0 + v0.47.0 + v0.48.0 only; full per-release table lives in `.claude/CLAUDE.md`.)
 
 ## Making Changes
 

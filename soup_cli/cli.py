@@ -184,6 +184,11 @@ data.app.command(name="langdetect")(_data_score_cmd.langdetect)
 data.app.command(name="pii")(_data_score_cmd.pii)
 data.app.command(name="educational")(_data_score_cmd.educational)
 
+# v0.48.0 Part B — Data Mixing Optimizer (BETA).
+from soup_cli.commands import data_mix as _data_mix_cmd  # noqa: E402
+
+data.app.command(name="mix")(_data_mix_cmd.mix)
+
 
 @app.command()
 def version(
