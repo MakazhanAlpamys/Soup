@@ -43,14 +43,14 @@ soup train
 
 Latest highlights only. Full history: [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 
-**v0.48.0 — Adaptive Training (BETA)**: Two research-grade techniques that close the "10% of data beats 100%" gap — dynamic curriculum re-weighting and a Bayesian data-mixing optimiser. Both ship `BETA:`-flagged until reference-benchmark validation lands; the schema, math kernels, and CLI surface are stable, the live HF Trainer callback + scikit-optimize backend wire-in lands in v0.48.1.
+**v0.49.0 — Long Context & Architecture**: Four RoPE-scaling additions that close the long-context gap with Unsloth and LlamaFactory — YaRN, Dynamic NTK hardening, LongLoRA S² shifted-sparse attention (schema-only), and full Llama 3.1 NTK-aware scaling.
 
-- **`training.curriculum_dynamic: true`** layers on the static `curriculum` bucketer (v0.23.0). Every N steps the trainer aggregates per-sample loss + grad-norm into a per-bucket uncertainty signal, runs it through a softmax with floor (water-filling so no bucket ever drops below `curriculum_dynamic_floor`), and re-weights the sampler. Multi-rank launches must wire an `all_reduce` hook on per-bucket stats — the cross-validator `validate_distributed_curriculum` rejects un-coordinated multi-rank runs upfront so the well-known DDP-divergence footgun fails fast.
-- **`soup runs curriculum-curve <run_id>`.** ASCII visualiser of bucket-weight evolution over training — load the `curriculum_history.jsonl` written by the dynamic callback and render columns per bucket × rows per recompute step. Containment + TOCTOU symlink rejection + 50 MB / 100k-line caps on the history file.
-- **`soup data mix --optimize --budget 1h --datasets a.jsonl,b.jsonl,...`.** Runs N short proxy training runs over candidate mixture weights and writes a `mix_recipe.yaml` you can splice into `soup.yaml` under `data.interleave`. Budget is wall-clock-capped; partial results are surfaced via `MixOptimizationReport.partial=True` when the cap trips mid-loop. Per-candidate proxy failures are isolated (logged at DEBUG, sentinel high loss recorded) so a single OOM combo does not kill the whole search.
-- **`soup data mix --apply <recipe.yaml>`.** Re-loads a recipe and prints the canonical `data.interleave` block. Cwd containment + symlink rejection + 256 KB file cap; `yaml.safe_load` only.
-- **Schema-locked surface.** Five new `TrainingConfig` fields (`curriculum_dynamic`, `curriculum_dynamic_recompute_steps`, `curriculum_dynamic_floor`, `curriculum_dynamic_temperature`, plus the existing `curriculum_buckets`); cross-validators reject the dynamic path on mlx backend and on non-SFT/pretrain tasks with distinct error messages so users get the right fix.
-- **+168 net new tests** (6242 → 6410). Floor-strict invariant, water-fill correctness, frozen-dataclass mutations, simplex constraint on `MixCandidate`, isolated-proxy-crash regression, 50 MB and 100k-row caps, POSIX symlink rejection, `KeyboardInterrupt` propagation, every cross-validator branch.
+- **YaRN RoPE scaling.** New `training.rope_scaling_type: yarn` with explicit tunables `yarn_factor` / `yarn_attn_factor` / `yarn_beta_fast` / `yarn_beta_slow`. Pure-Python kernels (`yarn_find_correction_dim`, `yarn_find_correction_range`, `yarn_linear_ramp_mask`, `yarn_get_mscale`) mirror the YaRN paper §3.4/§3.5 with `bool`/NaN/Inf rejection on every numeric input; the range helper auto-disambiguates `high <= low` so the ramp-mask denominator is non-zero on adversarial inputs.
+- **Llama 3.1 NTK-aware (full impl).** New `training.rope_scaling_type: llama3` emits the canonical `{factor, original_max_position_embeddings, low_freq_factor=1.0, high_freq_factor=4.0}` block. `scale_inv_freq_llama3` classifies each frequency by its wavelength relative to `old_context_len=8192` (wavelength < high-freq threshold → unchanged; > low-freq threshold → divided by `scale_factor`; smooth linear blend in between). `detect_llama3_rope_in_config` reads HF model configs and accepts both `rope_scaling.type` and the newer `rope_scaling.rope_type` keys.
+- **LongLoRA S² shifted-sparse attention (schema gate).** New `training.use_longlora: true` requires `task=sft`, `backend=transformers`, a Llama-family base (word-boundary regex match), and `use_ring_attention=false` (both rewrite the attention kernel — pick one). Cross-validator emits distinct error messages per failure mode. Live `LlamaAttention.forward` override mirroring LlamaFactory `model/model_utils/longlora.py` lands in v0.49.1 — the schema gate ships now so misconfigured runs fail fast at config load.
+- **Dynamic NTK hardened.** Existing `rope_scaling_type: dynamic` path verified against upstream HF behaviour; `get_rope_scaling_config('dynamic', ...)` accepts both absolute target lengths and scaling factors.
+- **Public-API hardening.** `get_rope_scaling_config` now validates `target_length` / `original_length` for `bool`/NaN/Inf / non-positive at the public boundary — prevents direct callers (e.g. trainer wiring) from emitting `{factor: NaN}` into HF model configs even when bypassing the Pydantic schema.
+- **+80 net new tests** (6410 → 6490). Schema bounds, bool-rejection across every numeric param, regex word-boundary, distinct error-message paths, NaN/Inf rejection, smooth-transition zone, and security boundary validation.
 
 ## Why Soup?
 
@@ -643,6 +643,42 @@ training:
 ```
 
 Replaces the static memory formula with a real try-halve-then-double-to-ceiling loop. Picked size is cached at `~/.soup/batch_cache.json` keyed on `(model, max_length, quantization, lora_r, gpu_name, gpu_memory_gb)` so repeat runs short-circuit.
+
+## Long Context — YaRN, Llama 3.1 NTK, LongLoRA
+
+Soup ships five RoPE-scaling strategies plus a LongLoRA schema gate:
+
+```yaml
+# soup.yaml
+base: meta-llama/Llama-3.1-8B
+task: sft
+data:
+  train: ./data.jsonl
+  max_length: 32768  # extend from 8k → 32k
+training:
+  rope_scaling_type: yarn      # linear | dynamic | yarn | longrope | llama3
+  yarn_factor: 4.0             # 4x extension
+  yarn_beta_fast: 32
+  yarn_beta_slow: 1
+  yarn_attn_factor: 1.0
+  gradient_checkpointing: true  # required above 64k
+```
+
+**YaRN.** Best quality for 4-8x extension. Tunables (`yarn_factor`, `yarn_attn_factor`, `yarn_beta_fast`, `yarn_beta_slow`) only apply when `rope_scaling_type=yarn`; the schema rejects them otherwise. Pure-Python math kernels are exposed at `soup_cli.utils.long_context.yarn_*` for reference / config-emit. The actual RoPE rotation runs inside HF Transformers.
+
+**Llama 3.1 NTK-aware.** Use `rope_scaling_type: llama3` for the canonical Llama 3.1 frequency-band scaling (`scale_factor=8`, `low_freq_factor=1`, `high_freq_factor=4`, `old_context_len=8192`). `detect_llama3_rope_in_config` auto-detects the block in any HF model config dict.
+
+**LongLoRA S² (schema-only this release).** `training.use_longlora: true` requires `task=sft`, `backend=transformers`, Llama-family base, and `use_ring_attention=false`. The schema gate fails fast at config load; live forward override mirroring LlamaFactory `model/model_utils/longlora.py` lands in v0.49.1.
+
+```yaml
+# Llama 3.1 with NTK-aware scaling out to 128k
+base: meta-llama/Llama-3.1-8B
+training:
+  rope_scaling_type: llama3
+  gradient_checkpointing: full
+data:
+  max_length: 131072
+```
 
 ## Optimizer & PEFT Zoo
 

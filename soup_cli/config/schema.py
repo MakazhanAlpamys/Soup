@@ -1,7 +1,7 @@
 """Pydantic schemas for soup.yaml config — single source of truth."""
 
 import re
-from typing import Dict, List, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -986,9 +986,53 @@ class TrainingConfig(BaseModel):
         description="Enable Ring FlashAttention for sequence parallelism across GPUs",
     )
     # Long-context — RoPE scaling
-    rope_scaling_type: Optional[Literal["linear", "dynamic", "yarn", "longrope"]] = Field(
+    rope_scaling_type: Optional[
+        Literal["linear", "dynamic", "yarn", "longrope", "llama3"]
+    ] = Field(
         default=None,
-        description="RoPE scaling method for long-context: linear, dynamic, yarn, longrope",
+        description=(
+            "RoPE scaling method for long-context: linear, dynamic, yarn, longrope, "
+            "llama3 (v0.49.0)."
+        ),
+    )
+    # v0.49.0 Part A — YaRN-specific tunables (only meaningful when
+    # rope_scaling_type=='yarn'; cross-validator below enforces).
+    yarn_factor: Optional[float] = Field(
+        default=None,
+        gt=1.0,
+        le=1024.0,
+        description=(
+            "YaRN scaling factor (s). Optional — when omitted, the runtime falls "
+            "back to ``target_length / original_length`` (HF default behaviour)."
+        ),
+    )
+    yarn_attn_factor: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        le=10.0,
+        description="YaRN attention temperature multiplier (default 1.0 in HF).",
+    )
+    yarn_beta_fast: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=1024,
+        description="YaRN beta_fast cutoff (HF default 32).",
+    )
+    yarn_beta_slow: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=1024,
+        description="YaRN beta_slow cutoff (HF default 1).",
+    )
+    # v0.49.0 Part C — LongLoRA S² shifted-sparse attention.
+    # Schema gate only; live forward override deferred to v0.49.1.
+    use_longlora: bool = Field(
+        default=False,
+        description=(
+            "Enable LongLoRA S² shifted-sparse attention (v0.49.0, schema-only). "
+            "Requires task=sft, backend=transformers, Llama-family base. "
+            "Mutually exclusive with use_ring_attention."
+        ),
     )
     gradient_checkpointing: Union[
         bool, Literal["selective", "medium", "full", "auto"]
@@ -1369,6 +1413,56 @@ class TrainingConfig(BaseModel):
                 )
         return self
 
+    @field_validator(
+        "yarn_factor",
+        "yarn_attn_factor",
+        "yarn_beta_fast",
+        "yarn_beta_slow",
+        mode="before",
+    )
+    @classmethod
+    def _reject_bool_yarn(cls, value: Any) -> Any:
+        """v0.49.0 Part A — bool is a subclass of int/float in Python; Pydantic
+        would silently accept ``True``. Reject explicitly (project bool-as-int
+        policy, mirrors v0.30.0 Candidate / v0.34.0 estimate_run_cost_usd)."""
+        if isinstance(value, bool):
+            raise ValueError(
+                "bool is not a valid value for a YaRN tunable (use a real number)"
+            )
+        return value
+
+    @model_validator(mode="after")
+    def _validate_yarn_fields_require_yarn_type(self) -> "TrainingConfig":
+        """v0.49.0 Part A — yarn_* fields are no-ops unless
+        ``rope_scaling_type='yarn'``. Surface the misconfig loudly at config
+        load rather than silently dropping the values.
+        """
+        yarn_fields = {
+            "yarn_factor": self.yarn_factor,
+            "yarn_attn_factor": self.yarn_attn_factor,
+            "yarn_beta_fast": self.yarn_beta_fast,
+            "yarn_beta_slow": self.yarn_beta_slow,
+        }
+        set_fields = [name for name, value in yarn_fields.items() if value is not None]
+        if set_fields and self.rope_scaling_type != "yarn":
+            raise ValueError(
+                f"{', '.join(set_fields)} only apply when rope_scaling_type='yarn' "
+                f"(got rope_scaling_type={self.rope_scaling_type!r})."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_longlora_ring_attn_exclusive(self) -> "TrainingConfig":
+        """v0.49.0 Part C — LongLoRA's S² shifted-sparse attention is a custom
+        forward override that conflicts with ring/FA-v3 custom-mask attention
+        paths."""
+        if self.use_longlora and self.use_ring_attention:
+            raise ValueError(
+                "use_longlora is incompatible with use_ring_attention "
+                "(both rewrite the attention kernel — pick one)."
+            )
+        return self
+
     @model_validator(mode="after")
     def _validate_spike_recovery_requires_watchdog(self) -> "TrainingConfig":
         """Spike recovery is a watchdog hook — it needs the watchdog enabled."""
@@ -1709,6 +1803,30 @@ class SoupConfig(BaseModel):
                 "in v0.48.0 (only sft and pretrain are wired). "
                 "Set curriculum_dynamic: false or switch task."
             )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_longlora_compat(self) -> "SoupConfig":
+        """v0.49.0 Part C — LongLoRA S² shifted-sparse attention requires
+        ``task=sft``, ``backend=transformers``, and a Llama-family base.
+
+        Live forward override is deferred to v0.49.1 (mirrors v0.27.0 MII /
+        v0.37.0 multipack stub-then-live pattern); the schema gate prevents
+        misconfiguration today.
+        """
+        if not self.training.use_longlora:
+            return self
+        from soup_cli.utils.longlora import validate_longlora_compat
+
+        try:
+            validate_longlora_compat(
+                model_name=self.base,
+                task=self.task,
+                backend=self.backend,
+                use_ring_attention=self.training.use_ring_attention,
+            )
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
         return self
 
     @model_validator(mode="after")
