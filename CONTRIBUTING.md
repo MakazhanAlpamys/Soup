@@ -251,6 +251,10 @@ pytest tests/ --cov=soup_cli --cov-report=html
 | test_profiling.py | Auto-profiling: ProfilerSchedule + path containment + torch-less degradation (v0.34.0 Part F) |
 | test_tui.py | `soup tui`: CLI bounds + missing-textual error + row builders (v0.34.0 Part G) |
 | test_trainer_coverage_v035.py | Multi-trainer v0.28.0 wiring smoke matrix: every trainer × every speed/memory feature + auto-quant translators + try_reload_with_fallback + benchmark_kernel_combos + schema-gate lift (v0.35.0 Parts A / B / C / D — #60, #61, #45) |
+| test_v0470_part_a.py | Synthetic Data Forge: ForgePlan / ProvenanceRecord / ForgeRow frozen dataclasses + VALID_TASKS allowlist + chunk_document + score_uncertainty + discover_documents (cwd-contained, symlink-rejecting, extension allowlist) + build_forge_plan validators (task / target_rows / teacher / NaN+Inf threshold) + synthesise_forge_rows (judge-exception swallow at DEBUG) + write_forge_dataset + write_provenance (atomic, TOCTOU-safe) + CLI smoke (v0.47.0) |
+| test_v0470_part_b.py | Data Quality Moat: BENCHMARKS MappingProxyType + ScoreReport frozen + ngram_set / ngram_overlap_ratio / decontaminate_rows (containment ratio) + detect_pii (ReDoS-hardened regexes + 50 KB pre-cap) + detect_language (6-language stopword heuristic) + score_toxicity (keyword baseline) + score_educational_value + compute_scorecard + load_jsonl_rows / write_jsonl_rows (cwd-contained, symlink-rejecting, atomic) + CLI smoke per subcommand (v0.47.0) |
+
+(Note: the test-file table above covers v0.25.0–v0.35.0 + v0.47.0 only; full per-release table lives in `.claude/CLAUDE.md`.)
 
 ## Making Changes
 
