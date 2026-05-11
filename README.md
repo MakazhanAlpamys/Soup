@@ -43,15 +43,14 @@ soup train
 
 Latest highlights only. Full history: [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 
-**v0.45.0 — Plugin System & Ecosystem Wins**: A public plugin API and the schema scaffolding for 20+ ecosystem integrations. Soup is now extensible.
+**v0.46.0 — Deploy & Agent Autopilot**: Two zero-config autopilots — a deploy target picker that maps your hardware to PEFT+quant+spec-decoding in one command, and an Agent Forge that turns OpenAPI / MCP / GraphQL specs straight into tool-calling SFT datasets.
 
-- **Plugin / hook system.** `soup_cli.plugins.register_plugin(name, version, plugin, templates=[], model_groups=[])` lets third-party Python modules ship their own pre-train / post-train / pre-step / post-step hooks plus chat templates and model groups. Registry is idempotent on identical specs and rejects conflicting re-registration. Drop a file under `soup_cli/plugins/` and the loader picks it up at startup. New `soup plugins list / install / enable / disable` CLI.
-- **Anthropic Messages API converter.** `to_anthropic` / `from_anthropic` translate between OpenAI chat-completions and Anthropic Messages payloads — multiple `system` messages joined with `\n\n`, `tool` role surfaces as `tool_result` content blocks (list content concatenated, never silently dropped), `max_tokens` capped at 16384, `temperature` bounded `[0.0, 2.0]`. Live `/v1/messages` endpoint deferred to v0.45.1.
-- **Server-side tools allowlist.** Closed `{python, bash, web_search}` set with `WebSearchConfig` — domain allowlist (leading-dot subdomain pattern, port-strip on the host, IPv6 literal deny), `rate_limit_per_minute ∈ [1, 600]`. `python` and `bash` reuse the v0.25.0 RLVR sandbox; live HTTP endpoints deferred to v0.45.1.
-- **External integrations catalog.** 15-entry frozen `MappingProxyType` of ecosystem targets — `lm-studio`, `comfyui`, `stable-diffusion-cpp`, `open-webui`, `ollama`, `tei`, `pgvector`, `faiss`, `weaviate`, `sentence-transformers`, `claude-code`, `cursor`, `continue`, `cline`, `sillytavern`. Each entry names the artifact format (`gguf` / `safetensors` / `served-endpoint`).
-- **Advanced trainer-plugin allowlist.** 6-entry catalog (`grokfast` / `spectrum` / `llmcompressor` / `sonicmoe` / `cce_plugin` / `math_verify`) with `validate_trainer_plugin_list` (dedup, allowlist match, `_MAX_PLUGINS_PER_RUN=8`). Live callbacks land in v0.45.1.
-- **`soup data recipe <recipe.yaml>`.** Validates a Seed → LLM Text → Code → Judge → Validator → Sampler graph DAG: closed node-kind allowlist, Kahn's topological sort with `collections.deque` (deterministic, O(N+E)), self-loop / cycle / dangling-edge / duplicate rejection, cwd containment + `os.lstat + S_ISLNK` symlink rejection on the recipe file. Live offline runner against a local model in v0.45.1.
-- **+169 net new tests** — covers all 5 release Parts: plugin idempotency + per-list caps + description conflict rejection, Anthropic converter happy + failure paths, domain allowlist port-strip + IPv6 deny, n-gram bounds, integrations catalog immutability, trainer-plugin canonicalisation + dedup, recipe DAG cycle / cap / symlink + CLI happy / invalid / missing.
+- **`soup deploy autopilot --target <profile>`.** 10 hardware profiles (`mac-m3`, `mac-m4-pro`, `rtx-3060-12gb`, `rtx-4090-24gb`, `iphone-16`, `pixel-9`, `ollama-local`, `lm-studio`, `runpod-a100`, `hf-jobs-h100`) each mapped to a runtime, quantisation, PEFT method, and speculative-decoding flag. Writes a ready-to-train `soup.yaml` recipe AND a planned deploy shell script. Closed allowlists on every field; `shlex.quote` on the model path in the generated bash. Live Quant-Lobotomy auto-measure deferred to v0.46.1.
+- **`soup agent synth --spec api.yaml`.** Parses OpenAPI 3.x, MCP server manifests, or GraphQL introspection JSON into a canonical endpoint list and synthesises a tool-calling SFT dataset (`{messages, tool, source_endpoint}`). `$ref` strings are left opaque (no external resolution — defends against file-read SSRF), `yaml.safe_load` only, 5 MiB spec cap, 10 000-endpoint cap. Atomic JSONL write via staged-tempfile + `os.replace` — mid-stream failure never leaves a partial dataset.
+- **`soup agent train --spec api.yaml --base <model>`.** One-shot wrapper that runs synth, then prints the planned `soup train` invocation with the rendered recipe (in-process re-entry of Typer commands is intentionally not done — matches `soup quantize` design). `--base` and `--output-dir` are validated for NUL / newline / oversize BEFORE embedding in the recipe YAML (defends against YAML key injection).
+- **`soup agent eval --spec api.yaml --predictions preds.jsonl`.** Scores predicted tool-calls against the spec catalog: tool-name match + arguments-key validity. Predictions path enforces cwd containment, `os.lstat + S_ISLNK` symlink rejection, and a 1 000 000-line DoS cap. Live RLVR `code_exec` sandbox scoring deferred to v0.46.1.
+- **Security throughout.** Path containment (`is_under_cwd`), symlink TOCTOU rejection (`os.lstat + S_ISLNK`) on every write target, Rich markup escape on every spec-derived string, bool-rejected-before-int on every numeric param, closed allowlists on runtime / quant / PEFT / spec kind / node kind.
+- **+137 net new tests** — every parser kind (OpenAPI / MCP / GraphQL), every failure mode (cycle / cap / null-byte / oversize / outside-cwd / symlink), every CLI surface (`autopilot --list / --help / happy / outside-cwd reject`, `agent synth/train/eval` happy + failure).
 
 ## Why Soup?
 
@@ -2754,6 +2753,11 @@ soup deploy ollama --model m.gguf --name x    Deploy GGUF to Ollama
 soup deploy ollama --list                     List Soup-deployed models
 soup deploy ollama --remove <name>            Remove model from Ollama
 soup deploy hf-space --model user/m --space user/s --template gradio-chat|streamlit-chat  Create HF Space
+soup deploy autopilot --target mac-m3|rtx-4090-24gb|...  Pick PEFT+quant+spec-decoding for a hardware target
+soup deploy autopilot --list                  List all 10 deploy profiles
+soup agent synth --spec api.yaml -o ds.jsonl  Parse OpenAPI/MCP/GraphQL spec into a tool-calling SFT dataset
+soup agent train --spec api.yaml --base model  One-shot synth + planned soup train invocation
+soup agent eval --spec api.yaml --predictions p.jsonl  Score predicted tool-calls vs spec catalog
 soup eval benchmark --model ./output          Evaluate on standard benchmarks
 soup eval custom --tasks eval.jsonl           Custom eval tasks from JSONL
 soup eval judge --target resp.jsonl           LLM-as-a-judge evaluation
@@ -3160,6 +3164,36 @@ params:
 ```
 
 Strict scalar allowlist on values (`str` / `int` / `float` / `bool`); `_MAX_FILE_BYTES=256KB`, `_MAX_PARAM_KEYS=32`, `_MAX_VALUES_PER_KEY=64`; `SweepSpec.params` is `MappingProxyType[str, Tuple[Any, ...]]` for genuine immutability.
+
+## Deploy Autopilot
+
+Pick the optimal PEFT + quantisation + speculative-decoding combo for your hardware target in one command:
+
+```bash
+soup deploy autopilot --target rtx-4090-24gb --base meta-llama/Llama-3.2-1B
+# Writes:
+#   deploy_autopilot.yaml  — ready-to-train soup.yaml recipe
+#   deploy_autopilot.sh    — planned deploy shell script
+```
+
+Profiles ship out of the box for Apple Silicon (`mac-m3`, `mac-m4-pro`), consumer NVIDIA (`rtx-3060-12gb`, `rtx-4090-24gb`), mobile (`iphone-16`, `pixel-9`), local runtimes (`ollama-local`, `lm-studio`), and cloud (`runpod-a100`, `hf-jobs-h100`). `--list` shows the full table. Every profile is a frozen dataclass with closed allowlists on runtime / quant / PEFT — bad config values fail at import time. The generated bash uses `shlex.quote` on the model path and writes are protected by cwd containment + `os.lstat + S_ISLNK` TOCTOU rejection.
+
+## Agent Forge
+
+Turn an OpenAPI 3.x, MCP server manifest, or GraphQL introspection JSON straight into a tool-calling SFT dataset — no manual labelling, no scaffolding:
+
+```bash
+# 1. Parse spec + synthesise a tool-calling dataset
+soup agent synth --spec api.yaml --output ds.jsonl --examples-per-endpoint 4
+
+# 2. Plan the training run (prints the soup train invocation)
+soup agent train --spec api.yaml --base meta-llama/Llama-3.2-1B
+
+# 3. Score model predictions against the spec catalog
+soup agent eval --spec api.yaml --predictions preds.jsonl
+```
+
+Each row of the synthesised dataset is `{messages: [user, assistant_with_tool_call], tool: <name>, source_endpoint: <path>}`. `$ref` strings in OpenAPI are left opaque (no external resolution — defends against file-read SSRF), `yaml.safe_load` only, 5 MiB spec cap, 10 000-endpoint cap, atomic JSONL write via staged-tempfile + `os.replace`. `eval` enforces a 1 000 000-line cap on predictions and rejects symlinks at every read/write boundary.
 
 ## Plugin System
 

@@ -157,6 +157,15 @@ app.add_typer(
     help="List, enable, disable Soup plugins (v0.45.0).",
 )
 
+# v0.46.0 Part B — Agent Forge.
+from soup_cli.commands import agent as agent_cmd  # noqa: E402
+
+app.add_typer(
+    agent_cmd.app,
+    name="agent",
+    help="Agent Forge: spec -> tool-calling dataset / train / eval (v0.46.0).",
+)
+
 # Register data generate as a subcommand of data
 data.app.command(name="generate")(generate.generate)
 
