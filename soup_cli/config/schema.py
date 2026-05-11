@@ -1064,6 +1064,40 @@ class TrainingConfig(BaseModel):
         default=4, ge=1, le=20,
         description="Number of difficulty stages for curriculum learning",
     )
+    # Curriculum-Aware dynamic re-weighting (v0.48.0 Part A — BETA)
+    curriculum_dynamic: bool = Field(
+        default=False,
+        description=(
+            "BETA: dynamically re-weight curriculum buckets every N steps via "
+            "online uncertainty estimation (per-sample loss + grad norm). "
+            "Requires curriculum=true. Multi-rank launches must wire an "
+            "all_reduce hook on per-bucket stats (see "
+            "utils.curriculum_dynamic.validate_distributed_curriculum)."
+        ),
+    )
+    curriculum_dynamic_recompute_steps: int = Field(
+        default=50, ge=1, le=100_000,
+        description=(
+            "Recompute curriculum bucket sampler weights every N global "
+            "training steps."
+        ),
+    )
+    curriculum_dynamic_floor: float = Field(
+        default=0.05, gt=0.0, le=0.5,
+        description=(
+            "Minimum normalised per-bucket weight after softmax. "
+            "Must be in (0.0, 1/curriculum_buckets]; the cross-validator "
+            "tightens this to the per-config ceiling. Prevents bucket "
+            "starvation."
+        ),
+    )
+    curriculum_dynamic_temperature: float = Field(
+        default=1.0, gt=0.0, le=100.0,
+        description=(
+            "Softmax temperature on the uncertainty signal. Higher = flatter "
+            "distribution; lower = concentrate on hardest buckets."
+        ),
+    )
     # Loss watchdog — auto-stop on loss spikes
     loss_watchdog: bool = Field(
         default=False,
@@ -1314,6 +1348,25 @@ class TrainingConfig(BaseModel):
                 "uses TRL's basic packer). For most uses, multipack=true "
                 "is the better choice."
             )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_curriculum_dynamic_requires_curriculum(self) -> "TrainingConfig":
+        """v0.48.0 Part A — dynamic re-weighting layers on the static
+        curriculum bucketer; it cannot run alone."""
+        if self.curriculum_dynamic and not self.curriculum:
+            raise ValueError(
+                "curriculum_dynamic requires curriculum=true "
+                "(dynamic re-weighting needs the static bucketer)."
+            )
+        # Cross-check: floor must leave room above uniform/N.
+        if self.curriculum_dynamic:
+            ceiling = 1.0 / max(self.curriculum_buckets, 1)
+            if self.curriculum_dynamic_floor > ceiling:
+                raise ValueError(
+                    f"curriculum_dynamic_floor={self.curriculum_dynamic_floor} "
+                    f"must be <= 1/curriculum_buckets ({ceiling:.4f})."
+                )
         return self
 
     @model_validator(mode="after")
@@ -1629,6 +1682,32 @@ class SoupConfig(BaseModel):
                 f"multipack=true is not supported for task={self.task!r} "
                 "in v0.37.0 (only sft and pretrain are wired). "
                 "Set multipack: false or switch task."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_curriculum_dynamic_supported(self) -> "SoupConfig":
+        """v0.48.0 Part A — Curriculum-Aware dynamic re-weighting.
+
+        BETA: wired for transformers backend, sft + pretrain tasks only.
+        MLX backend rejected (callback is HF Trainer-specific). Other tasks
+        rejected because their per-sample loss semantics differ enough that
+        the bucket-level uncertainty heuristic does not transfer cleanly.
+        Multi-trainer expansion tracked for v0.48.1.
+        """
+        if not self.training.curriculum_dynamic:
+            return self
+        if self.backend == "mlx":
+            raise ValueError(
+                "curriculum_dynamic is not supported on the mlx backend "
+                "(callback is HF Trainer-specific). "
+                "Use backend='transformers' or set curriculum_dynamic: false."
+            )
+        if self.task not in ("sft", "pretrain"):
+            raise ValueError(
+                f"curriculum_dynamic is not supported for task={self.task!r} "
+                "in v0.48.0 (only sft and pretrain are wired). "
+                "Set curriculum_dynamic: false or switch task."
             )
         return self
 

@@ -554,3 +554,88 @@ def _plot_loss_curve(metrics: list[dict]) -> None:
     plt.ylabel("Loss")
     plt.theme("dark")
     plt.show()
+
+
+@app.command(name="curriculum-curve")
+def curriculum_curve(
+    run_id: str = typer.Argument(..., help="Run ID (or prefix)."),
+    history_path: str = typer.Option(
+        None, "--history",
+        help="Override path to curriculum_history.jsonl (default: under run output_dir).",
+    ),
+    width: int = typer.Option(10, "--width", min=4, max=200, help="Per-bucket column width."),
+) -> None:
+    """v0.48.0 (BETA) — visualise dynamic curriculum bucket weights."""
+    import json
+    import os
+    import stat as _stat
+
+    from soup_cli.experiment.tracker import ExperimentTracker
+    from soup_cli.utils.curriculum_dynamic import parse_history_jsonl, render_curve
+    from soup_cli.utils.paths import is_under_cwd
+
+    tracker = ExperimentTracker()
+    run = tracker.get_run(run_id)
+    if run is None:
+        console.print(f"[red]Run not found:[/] {markup_escape(run_id)}")
+        raise typer.Exit(1)
+
+    if history_path is None:
+        out_dir = str(run.get("output_dir") or ".")
+        if "\x00" in out_dir:
+            console.print("[red]run output_dir contains null bytes[/]")
+            raise typer.Exit(2)
+        candidate = os.path.join(out_dir, "curriculum_history.jsonl")
+    else:
+        candidate = history_path
+    real = os.path.realpath(candidate)
+    if not is_under_cwd(real):
+        console.print("[red]history path is outside cwd[/]")
+        raise typer.Exit(2)
+    if os.path.lexists(real):
+        try:
+            _st = os.lstat(real)
+        except OSError as exc:
+            console.print(
+                f"[red]history path is not stat-able:[/] "
+                f"{markup_escape(os.path.basename(real))}"
+            )
+            raise typer.Exit(2) from exc
+        if _stat.S_ISLNK(_st.st_mode):
+            console.print(
+                f"[red]history path is a symlink (rejected for safety):[/] "
+                f"{markup_escape(os.path.basename(real))}"
+            )
+            raise typer.Exit(2)
+    if not os.path.isfile(real):
+        console.print(
+            f"[yellow]curriculum_history.jsonl not found:[/] "
+            f"{markup_escape(os.path.basename(real))}"
+        )
+        raise typer.Exit(1)
+    max_history_bytes = 50 * 1024 * 1024  # 50 MB
+    if os.path.getsize(real) > max_history_bytes:
+        console.print("[red]history file exceeds 50 MB cap[/]")
+        raise typer.Exit(2)
+
+    rows = []
+    max_lines = 100_000
+    with open(real, "r", encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            rows.append(json.loads(line))
+            if len(rows) > max_lines:
+                console.print("[red]history exceeds 100k-row cap[/]")
+                raise typer.Exit(2)
+    if not rows:
+        console.print("[yellow](no curriculum history rows)[/]")
+        return
+    nb = len(rows[0].get("weights", []))
+    try:
+        normalised = parse_history_jsonl(rows)
+    except (ValueError, TypeError) as exc:
+        console.print(f"[red]history malformed: {markup_escape(str(exc))}[/]")
+        raise typer.Exit(2) from exc
+    console.print(render_curve(normalised, num_buckets=nb, width=width))
