@@ -312,8 +312,10 @@ class TestPartFMultimodalReasoning:
 class TestRecipeCatalog80:
     """Catalog-wide invariants after v0.31.0 expansion (46 -> 80 recipes)."""
 
-    def test_total_catalog_size_is_80(self) -> None:
-        assert len(RECIPES) == 80
+    def test_total_catalog_size_is_at_least_80(self) -> None:
+        # v0.31.0 baseline = 80; v0.51.0 grew to 106. Use >= so future
+        # catalog additions do not regress this invariant.
+        assert len(RECIPES) >= 80
 
     @pytest.mark.parametrize("name", sorted(RECIPES.keys()))
     def test_every_recipe_loads_as_soupconfig(self, name: str) -> None:

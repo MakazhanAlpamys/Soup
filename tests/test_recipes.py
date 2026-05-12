@@ -260,16 +260,17 @@ class TestV025NewRecipes:
             assert cfg.base == recipe.model
             assert cfg.task == recipe.task
 
-    def test_catalog_size_is_80(self):
+    def test_catalog_size_is_106(self):
         """Total catalog size — grew with each release.
 
         v0.25.0 shipped 43 recipes (29 + 9 Part A + 2 Part B tools + 3 Part E MLX).
         v0.27.0 added 3 multi-GPU recipes -> 46.
         v0.31.0 added 34 (vision/audio/reasoning/edge/domain/multimodal) -> 80.
+        v0.51.0 added 26 (model catalog expansion) -> 106.
         """
         from soup_cli.recipes.catalog import RECIPES
 
-        assert len(RECIPES) == 80
+        assert len(RECIPES) == 106
 
     def test_new_recipes_searchable(self):
         """Search returns the new recipes via keyword/task filter."""

@@ -2468,4 +2468,780 @@ training:
 output: ./output
 """,
     ),
+    # ------------------------------------------------------------------
+    # v0.51.0 Part A — Reasoning + agent (~5 model families)
+    # ------------------------------------------------------------------
+    "gpt-oss-20b-sft": RecipeMeta(
+        model="openai/gpt-oss-20b",
+        task="sft",
+        size="20B",
+        tags=("gpt-oss", "openai", "reasoning", "agent"),
+        description="GPT-OSS 20B SFT (reasoning_effort=medium)",
+        yaml_str="""\
+base: openai/gpt-oss-20b
+task: sft
+
+data:
+  train: ./data/train.jsonl
+  format: auto
+  max_length: 4096
+
+training:
+  epochs: 3
+  lr: 1e-4
+  batch_size: auto
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  quantization: 4bit
+
+output: ./output
+""",
+    ),
+    "gpt-oss-120b-sft": RecipeMeta(
+        model="openai/gpt-oss-120b",
+        task="sft",
+        size="120B",
+        tags=("gpt-oss", "openai", "reasoning", "large"),
+        description="GPT-OSS 120B SFT (multi-GPU recommended)",
+        yaml_str="""\
+base: openai/gpt-oss-120b
+task: sft
+
+data:
+  train: ./data/train.jsonl
+  format: auto
+  max_length: 4096
+
+training:
+  epochs: 1
+  lr: 5e-5
+  batch_size: 1
+  gradient_accumulation_steps: 32
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  quantization: 4bit
+  gradient_checkpointing: true
+
+output: ./output
+""",
+    ),
+    "glm-4.6-sft": RecipeMeta(
+        model="THUDM/glm-4.6",
+        task="sft",
+        size="9B",
+        tags=("glm", "thudm", "chat", "instruction"),
+        description="GLM 4.6 instruction tuning with LoRA",
+        yaml_str="""\
+base: THUDM/glm-4.6
+task: sft
+
+data:
+  train: ./data/train.jsonl
+  format: auto
+  max_length: 4096
+
+training:
+  epochs: 3
+  lr: 2e-4
+  batch_size: auto
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  quantization: 4bit
+
+output: ./output
+""",
+    ),
+    "glm-5-sft": RecipeMeta(
+        model="THUDM/glm-5",
+        task="sft",
+        size="9B",
+        tags=("glm", "thudm", "chat", "next-gen"),
+        description="GLM 5 SFT (next-gen GLM family)",
+        yaml_str="""\
+base: THUDM/glm-5
+task: sft
+
+data:
+  train: ./data/train.jsonl
+  format: auto
+  max_length: 8192
+
+training:
+  epochs: 3
+  lr: 2e-4
+  batch_size: auto
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  quantization: 4bit
+
+output: ./output
+""",
+    ),
+    "kimi-k2-sft": RecipeMeta(
+        model="moonshotai/Kimi-K2",
+        task="sft",
+        size="N/A",
+        tags=("kimi", "moonshot", "moe", "long-context"),
+        description="Kimi K2 SFT (Moonshot MoE, long-context-aware)",
+        yaml_str="""\
+base: moonshotai/Kimi-K2
+task: sft
+
+data:
+  train: ./data/train.jsonl
+  format: auto
+  max_length: 8192
+
+training:
+  epochs: 2
+  lr: 1e-4
+  batch_size: auto
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  quantization: 4bit
+  moe_lora: true
+
+output: ./output
+""",
+    ),
+    "kimi-k2-thinking-grpo": RecipeMeta(
+        model="moonshotai/Kimi-K2-Thinking",
+        task="grpo",
+        size="N/A",
+        tags=("kimi", "moonshot", "thinking", "grpo", "reasoning"),
+        description="Kimi K2 Thinking GRPO reasoning",
+        yaml_str="""\
+base: moonshotai/Kimi-K2-Thinking
+task: grpo
+
+data:
+  train: ./data/reasoning_prompts.jsonl
+  format: auto
+  max_length: 4096
+
+training:
+  epochs: 1
+  lr: 5e-6
+  batch_size: 1
+  gradient_accumulation_steps: 8
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  quantization: 4bit
+  grpo_beta: 0.04
+  num_generations: 4
+  reward_fn: accuracy
+  verifiable_domain: math
+
+output: ./output
+""",
+    ),
+    "minimax-m2-sft": RecipeMeta(
+        model="MiniMaxAI/MiniMax-M2",
+        task="sft",
+        size="9B",
+        tags=("minimax", "chat", "instruction"),
+        description="MiniMax M2 SFT instruction tuning",
+        yaml_str="""\
+base: MiniMaxAI/MiniMax-M2
+task: sft
+
+data:
+  train: ./data/train.jsonl
+  format: auto
+  max_length: 4096
+
+training:
+  epochs: 3
+  lr: 2e-4
+  batch_size: auto
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  quantization: 4bit
+
+output: ./output
+""",
+    ),
+    "qwq-32b-grpo": RecipeMeta(
+        model="Qwen/QwQ-32B",
+        task="grpo",
+        size="32B",
+        tags=("qwen", "qwq", "reasoning", "grpo"),
+        description="QwQ 32B GRPO reasoning training",
+        yaml_str="""\
+base: Qwen/QwQ-32B
+task: grpo
+
+data:
+  train: ./data/reasoning_prompts.jsonl
+  format: auto
+  max_length: 4096
+
+training:
+  epochs: 1
+  lr: 5e-6
+  batch_size: 1
+  gradient_accumulation_steps: 16
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  quantization: 4bit
+  grpo_beta: 0.04
+  num_generations: 4
+  reward_fn: accuracy
+  verifiable_domain: math
+  gradient_checkpointing: true
+
+output: ./output
+""",
+    ),
+    "qvq-72b-sft": RecipeMeta(
+        model="Qwen/QVQ-72B-Preview",
+        task="sft",
+        size="72B",
+        tags=("qwen", "qvq", "vision", "reasoning"),
+        description="QVQ 72B vision-reasoning SFT",
+        yaml_str="""\
+base: Qwen/QVQ-72B-Preview
+task: sft
+modality: vision
+
+data:
+  train: ./data/vision_train.jsonl
+  format: llava
+  image_dir: ./data/images
+  max_length: 4096
+
+training:
+  epochs: 1
+  lr: 1e-5
+  batch_size: 1
+  gradient_accumulation_steps: 16
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  quantization: 4bit
+  gradient_checkpointing: true
+
+output: ./output
+""",
+    ),
+    # ------------------------------------------------------------------
+    # v0.51.0 Part B — Small / edge / specialist (~6 model families)
+    # ------------------------------------------------------------------
+    "granite-4-sft": RecipeMeta(
+        model="ibm-granite/granite-4.0-tiny-base",
+        task="sft",
+        size="3B",
+        tags=("granite", "ibm", "small", "instruction"),
+        description="IBM Granite 4.0 tiny SFT",
+        yaml_str="""\
+base: ibm-granite/granite-4.0-tiny-base
+task: sft
+
+data:
+  train: ./data/train.jsonl
+  format: auto
+  max_length: 2048
+
+training:
+  epochs: 3
+  lr: 2e-4
+  batch_size: auto
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  quantization: 4bit
+
+output: ./output
+""",
+    ),
+    "lfm2-sft": RecipeMeta(
+        model="LiquidAI/LFM2-1.2B",
+        task="sft",
+        size="1.2B",
+        tags=("liquid", "lfm2", "small", "edge"),
+        description="Liquid LFM2 1.2B SFT (edge-optimised)",
+        yaml_str="""\
+base: LiquidAI/LFM2-1.2B
+task: sft
+
+data:
+  train: ./data/train.jsonl
+  format: auto
+  max_length: 2048
+
+training:
+  epochs: 3
+  lr: 2e-4
+  batch_size: auto
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  quantization: 4bit
+
+output: ./output
+""",
+    ),
+    "cogito-v2-sft": RecipeMeta(
+        model="deepcogito/cogito-v2-preview",
+        task="sft",
+        size="14B",
+        tags=("cogito", "deepcogito", "instruction"),
+        description="Cogito v2 preview SFT",
+        yaml_str="""\
+base: deepcogito/cogito-v2-preview
+task: sft
+
+data:
+  train: ./data/train.jsonl
+  format: auto
+  max_length: 4096
+
+training:
+  epochs: 3
+  lr: 2e-4
+  batch_size: auto
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  quantization: 4bit
+
+output: ./output
+""",
+    ),
+    "mistral-small-3-sft": RecipeMeta(
+        model="mistralai/Mistral-Small-3-24B-Instruct",
+        task="sft",
+        size="24B",
+        tags=("mistral", "small", "instruction"),
+        description="Mistral Small 3 24B SFT",
+        yaml_str="""\
+base: mistralai/Mistral-Small-3-24B-Instruct
+task: sft
+
+data:
+  train: ./data/train.jsonl
+  format: auto
+  max_length: 4096
+
+training:
+  epochs: 3
+  lr: 2e-4
+  batch_size: auto
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  quantization: 4bit
+
+output: ./output
+""",
+    ),
+    "mistral-medium-3-5-sft": RecipeMeta(
+        model="mistralai/Mistral-Medium-3.5",
+        task="sft",
+        size="N/A",
+        tags=("mistral", "medium", "instruction", "large"),
+        description="Mistral Medium 3.5 SFT",
+        yaml_str="""\
+base: mistralai/Mistral-Medium-3.5
+task: sft
+
+data:
+  train: ./data/train.jsonl
+  format: auto
+  max_length: 4096
+
+training:
+  epochs: 2
+  lr: 1e-4
+  batch_size: auto
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  quantization: 4bit
+  gradient_checkpointing: true
+
+output: ./output
+""",
+    ),
+    "magistral-small-sft": RecipeMeta(
+        model="mistralai/Magistral-Small",
+        task="sft",
+        size="24B",
+        tags=("mistral", "magistral", "reasoning", "instruction"),
+        description="Magistral Small reasoning SFT",
+        yaml_str="""\
+base: mistralai/Magistral-Small
+task: sft
+
+data:
+  train: ./data/reasoning_train.jsonl
+  format: auto
+  max_length: 4096
+
+training:
+  epochs: 3
+  lr: 2e-4
+  batch_size: auto
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  quantization: 4bit
+
+output: ./output
+""",
+    ),
+    "devstral-sft": RecipeMeta(
+        model="mistralai/Devstral-Small",
+        task="sft",
+        size="24B",
+        tags=("mistral", "devstral", "code", "agent"),
+        description="Devstral Small code/agent SFT",
+        yaml_str="""\
+base: mistralai/Devstral-Small
+task: sft
+
+data:
+  train: ./data/code_train.jsonl
+  format: auto
+  max_length: 8192
+
+training:
+  epochs: 3
+  lr: 2e-4
+  batch_size: auto
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  quantization: 4bit
+
+output: ./output
+""",
+    ),
+    "ministral-sft": RecipeMeta(
+        model="mistralai/Ministral-8B-Instruct-2410",
+        task="sft",
+        size="8B",
+        tags=("mistral", "ministral", "small", "instruction"),
+        description="Ministral 8B SFT",
+        yaml_str="""\
+base: mistralai/Ministral-8B-Instruct-2410
+task: sft
+
+data:
+  train: ./data/train.jsonl
+  format: auto
+  max_length: 4096
+
+training:
+  epochs: 3
+  lr: 2e-4
+  batch_size: auto
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  quantization: 4bit
+
+output: ./output
+""",
+    ),
+    "medgemma-sft": RecipeMeta(
+        model="google/medgemma-4b-it",
+        task="sft",
+        size="4B",
+        tags=("gemma", "medgemma", "medical", "domain"),
+        description="MedGemma 4B medical SFT",
+        yaml_str="""\
+base: google/medgemma-4b-it
+task: sft
+
+data:
+  train: ./data/medical_train.jsonl
+  format: auto
+  max_length: 2048
+
+training:
+  epochs: 3
+  lr: 2e-4
+  batch_size: auto
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  quantization: 4bit
+
+output: ./output
+""",
+    ),
+    "embedding-gemma-sft": RecipeMeta(
+        model="google/embeddinggemma-300m",
+        task="embedding",
+        size="300M",
+        tags=("gemma", "embedding", "small", "sentence"),
+        description="EmbeddingGemma 300M sentence-embedding SFT",
+        yaml_str="""\
+base: google/embeddinggemma-300m
+task: embedding
+
+data:
+  train: ./data/embedding_train.jsonl
+  format: embedding
+  max_length: 512
+
+training:
+  epochs: 3
+  lr: 2e-5
+  batch_size: auto
+  lora:
+    r: 8
+    alpha: 16
+    target_modules: auto
+  quantization: 4bit
+  embedding_loss: cosine
+
+output: ./output
+""",
+    ),
+    # ------------------------------------------------------------------
+    # v0.51.0 Part C — Vision + multimodal (~7 model families)
+    # ------------------------------------------------------------------
+    "llava-next-sft": RecipeMeta(
+        model="llava-hf/llava-v1.6-mistral-7b-hf",
+        task="sft",
+        size="7B",
+        tags=("llava", "llava-next", "vision", "multimodal"),
+        description="LLaVA-Next 7B vision SFT",
+        yaml_str="""\
+base: llava-hf/llava-v1.6-mistral-7b-hf
+task: sft
+modality: vision
+
+data:
+  train: ./data/vision_train.jsonl
+  format: llava
+  image_dir: ./data/images
+  max_length: 2048
+
+training:
+  epochs: 3
+  lr: 1e-5
+  batch_size: auto
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  quantization: 4bit
+  gradient_checkpointing: true
+
+output: ./output
+""",
+    ),
+    "internvl-3-5-sft": RecipeMeta(
+        model="OpenGVLab/InternVL3-5",
+        task="sft",
+        size="8B",
+        tags=("internvl", "vision", "multimodal", "opengvlab"),
+        description="InternVL 3.5 vision SFT",
+        yaml_str="""\
+base: OpenGVLab/InternVL3-5
+task: sft
+modality: vision
+
+data:
+  train: ./data/vision_train.jsonl
+  format: llava
+  image_dir: ./data/images
+  max_length: 4096
+
+training:
+  epochs: 3
+  lr: 1e-5
+  batch_size: auto
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  quantization: 4bit
+  gradient_checkpointing: true
+
+output: ./output
+""",
+    ),
+    "voxtral-sft": RecipeMeta(
+        model="mistralai/Voxtral-Mini-3B",
+        task="sft",
+        size="3B",
+        tags=("mistral", "voxtral", "audio", "multimodal"),
+        description="Voxtral Mini 3B audio SFT",
+        yaml_str="""\
+base: mistralai/Voxtral-Mini-3B
+task: sft
+modality: audio
+
+data:
+  train: ./data/audio_train.jsonl
+  format: audio
+  audio_dir: ./data/audio
+  max_length: 2048
+
+training:
+  epochs: 3
+  lr: 1e-5
+  batch_size: auto
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  quantization: 4bit
+  gradient_checkpointing: true
+
+output: ./output
+""",
+    ),
+    "baichuan-sft": RecipeMeta(
+        model="baichuan-inc/Baichuan2-13B-Chat",
+        task="sft",
+        size="13B",
+        tags=("baichuan", "chinese", "instruction"),
+        description="Baichuan 2 13B chat SFT",
+        yaml_str="""\
+base: baichuan-inc/Baichuan2-13B-Chat
+task: sft
+
+data:
+  train: ./data/train.jsonl
+  format: auto
+  max_length: 4096
+
+training:
+  epochs: 3
+  lr: 2e-4
+  batch_size: auto
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  quantization: 4bit
+  hub: modelscope
+
+output: ./output
+""",
+    ),
+    "qwen-image-sft": RecipeMeta(
+        model="Qwen/Qwen-Image",
+        task="sft",
+        size="N/A",
+        tags=("qwen", "image", "image-output", "multimodal"),
+        description="Qwen-Image image-output multimodal SFT",
+        yaml_str="""\
+base: Qwen/Qwen-Image
+task: sft
+modality: vision
+
+data:
+  train: ./data/image_train.jsonl
+  format: llava
+  image_dir: ./data/images
+  max_length: 4096
+
+training:
+  epochs: 3
+  lr: 1e-5
+  batch_size: auto
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  quantization: 4bit
+  gradient_checkpointing: true
+
+output: ./output
+""",
+    ),
+    "deepseek-ocr-sft": RecipeMeta(
+        model="deepseek-ai/DeepSeek-OCR",
+        task="sft",
+        size="N/A",
+        tags=("deepseek", "ocr", "vision", "specialised"),
+        description="DeepSeek-OCR vision OCR SFT",
+        yaml_str="""\
+base: deepseek-ai/DeepSeek-OCR
+task: sft
+modality: vision
+
+data:
+  train: ./data/ocr_train.jsonl
+  format: llava
+  image_dir: ./data/images
+  max_length: 4096
+
+training:
+  epochs: 3
+  lr: 1e-5
+  batch_size: auto
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  quantization: 4bit
+  gradient_checkpointing: true
+
+output: ./output
+""",
+    ),
+    "paddle-ocr-sft": RecipeMeta(
+        model="PaddlePaddle/PaddleOCR-VL",
+        task="sft",
+        size="N/A",
+        tags=("paddle", "ocr", "vision", "specialised"),
+        description="Paddle-OCR-VL OCR SFT",
+        yaml_str="""\
+base: PaddlePaddle/PaddleOCR-VL
+task: sft
+modality: vision
+
+data:
+  train: ./data/ocr_train.jsonl
+  format: llava
+  image_dir: ./data/images
+  max_length: 4096
+
+training:
+  epochs: 3
+  lr: 1e-5
+  batch_size: auto
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  quantization: 4bit
+  gradient_checkpointing: true
+
+output: ./output
+""",
+    ),
 }

@@ -43,14 +43,13 @@ soup train
 
 Latest highlights only. Full history: [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 
-**v0.50.0 — GRPO Plus (RL parity)**: 22 features across GRPO objective variants, long-context + memory-efficient RL, multi-turn agent rollout backends, stability/efficiency knobs, and PRM + Vision RL. Schema-only release closing the gap with unsloth and axolotl; live loss kernels and launchers land in v0.50.1.
+**v0.51.0 — Model Catalog Expansion**: 26 new ready-made recipes covering 25 model families, plus alternative-hub support (ModelScope + Modelers / Openmind) for users in regions where HF Hub is unreachable. Closes the day-zero coverage gap with Unsloth.
 
-- **7 GRPO objective variants.** New `training.grpo_variant`: `gspo` (Group Stabilized PO), `dapo` (Decoupled Advantage), `dr_grpo` (Doubly Robust), `bnpo` (Batch Normalized), `two_sided` (symmetric clipping — requires `grpo_delta`), `rft` (Reinforced Fine-Tuning), `standard`. Closed-allowlist validation, frozen `GRPOVariantSpec` metadata, explicit NaN/Inf + bool rejection on `grpo_delta`.
-- **Long-context + memory-efficient RL.** New `training.long_context_grpo: true` (wires Tiled MLP from v0.56.0 when available; rejects `use_ring_attention=true`) + `training.vllm_sleep_mode: true` (between-rollouts vLLM standby — `transformers` / `unsloth` backends only).
-- **Multi-turn agent rollout.** New `training.rollout_backend`: `art` (OpenPipe ART), `ruler`, `nemo_gym`, `openenv`. Per-entry `required_package` mapping; closed allowlist.
-- **7 GRPO stability/efficiency knobs.** New `training.ref_model_ema_alpha` ((0, 1]), `replay_buffer_size` ([1, 1M]), `async_grpo_prefetch`, `tis_threshold` ((0, 100]) + paired `mask_truncated_completions`, `defer_rerolling`, `skip_zero_advantage`, `off_policy_mask_threshold` ([0, 1]) — every numeric field bool-rejected, every flag task-gated to `task='grpo'` with a single error message listing all offending fields.
-- **PRM + Vision RL.** New top-level `task='prm'` (Process Reward Model / stepwise-supervised — paired with `data.format='prm'`) + new `training.vision_grpo: true` flag for VLM-RL on Qwen2-VL / Pixtral / InternVL (requires `modality='vision'` and `task ∈ {grpo, ppo}`).
-- **+239 net new tests** (6490 → 6729). 5 sequential review agents (python-review, code-review, security-review, tdd-guide, verification-loop) each fed back HIGH/MEDIUM/LOW findings; every finding was fixed before commit (explicit NaN/Inf field-validator on `grpo_delta`, null-byte rejection on compat-helper backend/task strings, `use_ring_attention` bool guard, `grpo_fp16` task-gate, `vllm_sleep_mode` task-gate).
+- **26 new recipes** across reasoning + agent (GPT-OSS 20B/120B, GLM 4.6 / 5, Kimi K2 / K2-Thinking GRPO, MiniMax-M2, QwQ-32B GRPO, QVQ-72B), small / specialist (Granite 4, Liquid LFM2, Cogito v2, Mistral Small 3 / Medium 3.5, Magistral / Devstral / Ministral, MedGemma, EmbeddingGemma), and vision / multimodal (LLaVA-Next, InternVL 3.5, Voxtral, Baichuan 2, Qwen-Image, DeepSeek-OCR, Paddle-OCR-VL). Browse them via `soup recipes list` / `soup recipes search <keyword>`. Catalog grows 80 → 106.
+- **Alternative model hubs.** New `training.hub: hf | modelscope | modelers` with full SSRF-hardened endpoint validators (parity with v0.29.0 `HF_ENDPOINT` policy — scheme allowlist, loopback-only HTTP, RFC1918 / link-local / cloud-metadata IP rejection, control-character rejection). `MODELSCOPE_ENDPOINT` / `MODELERS_ENDPOINT` env vars override the default hub URL the same way `HF_ENDPOINT` already does. Schema-only this release; live downloader + uploader wiring lands in v0.51.1.
+- **20 new architectures in the multipack allowlist.** `MULTIPACK_ARCHITECTURES` grows 18 → 38 to enable FFD bin-packing on Granite, GLM, Kimi, MiniMax, QwQ, QVQ, GPT-OSS, Magistral, Devstral, Ministral, MedGemma, LFM2, Cogito, Hunyuan, Ernie, Yi, Baichuan, ChatGLM.
+- **MLX backend cross-validator.** `backend: mlx` + `hub: modelscope` is now rejected at config-load with a distinct error message (`mlx-lm` only downloads from HF Hub) — prevents a silent runtime confusion.
+- **+449 net new tests** (6729 → 7178). 4 sequential review agents (python-review, security-review, code-review, tdd-guide) each fed back HIGH/MEDIUM/LOW findings; every finding was fixed before commit (case-insensitive `hub` field-validator, MLX cross-validator, control-char rejection in endpoint validator, `is_hf` bool guard, exact-count multipack arch invariant, empty-component model-id check).
 
 ## Why Soup?
 
@@ -1660,6 +1659,27 @@ soup runs clean --all --dry-run
 ```
 
 By default, the `clean` command operates in "surgical mode" (`--keep-weights`), deleting huge optimizer state files (`optimizer.pt`) from lesser checkpoints to save gigabytes, but keeping their lightweight evaluation weights just in case you want to load them later.
+
+## Alternative Model Hubs
+
+Set `training.hub` in your `soup.yaml` to download from / push to a non-HuggingFace hub. Useful in regions where HF Hub is unreachable or blocked.
+
+```yaml
+training:
+  hub: modelscope   # or 'modelers' (Openmind), default 'hf'
+```
+
+Override the endpoint via env var:
+
+```bash
+export MODELSCOPE_ENDPOINT=https://my-mirror.example.com
+export MODELERS_ENDPOINT=https://corp-modelers.internal   # HTTPS only for non-loopback
+soup train --config soup.yaml
+```
+
+The endpoint validator follows the same SSRF rules as `HF_ENDPOINT`: only `http`/`https` schemes; plain HTTP allowed only for `localhost` / `127.0.0.1` / `::1`; private and link-local IPs (RFC1918, 169.254/16, etc.) rejected on plain HTTP. `backend: mlx` is incompatible with non-HF hubs (`mlx-lm` only downloads from HF Hub).
+
+The hub adapter is schema-only in this release; the live downloader and uploader land in v0.51.1.
 
 ## Model Registry & Lineage
 

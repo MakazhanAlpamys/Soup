@@ -1048,6 +1048,32 @@ class TrainingConfig(BaseModel):
             "rollout wiring deferred to v0.50.1."
         ),
     )
+    # v0.51.0 Part E — alternative model hubs (ModelScope / Modelers)
+    hub: Literal["hf", "modelscope", "modelers"] = Field(
+        default="hf",
+        description=(
+            "Model hub for downloads + pushes. 'hf' (default), 'modelscope' "
+            "(China-hosted; mirrors most Llama/Qwen/etc.), 'modelers' "
+            "(Openmind hub). Schema-only in v0.51.0; live downloader / "
+            "uploader wiring deferred to v0.51.1."
+        ),
+    )
+
+    @field_validator("hub", mode="before")
+    @classmethod
+    def _normalize_hub(cls, v):
+        """v0.51.0 Part E review fix — accept any case (HF / Modelscope /
+        MODELERS) and normalise to lowercase before the Literal check.
+        Mirrors the v0.41.0 ``optimizer`` / v0.50.0 ``grpo_variant`` /
+        ``rollout_backend`` policy of running the shared ``validate_*``
+        helper at ``mode='before'`` so the public schema and the runtime
+        validator agree on what's accepted.
+        """
+        # Lazy-import to avoid a hard dep cycle at module load.
+        from soup_cli.utils.hubs import validate_hub_name
+        if v is None:
+            return v
+        return validate_hub_name(v)
     # PPO-specific
     ppo_epochs: int = Field(
         default=4, ge=1, description="Number of PPO optimization epochs per batch"
@@ -2180,6 +2206,27 @@ class SoupConfig(BaseModel):
             raise ValueError(
                 f"GRPO stability fields {active} are not supported on "
                 "backend=mlx in v0.50.0"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_hub_supported(self) -> "SoupConfig":
+        """v0.51.0 Part E — ``hub`` other than ``hf`` requires a non-mlx
+        backend.
+
+        ``mlx-lm`` has no ModelScope/Modelers download integration, so a
+        config that pairs ``backend: mlx`` + ``hub: modelscope`` would fail
+        at runtime with a confusing ``mlx-lm`` error. Reject loudly at
+        config-load with a distinct message (matches v0.34.0 review-fix
+        policy).
+        """
+        if self.training.hub == "hf":
+            return self
+        if self.backend == "mlx":
+            raise ValueError(
+                f"hub={self.training.hub!r} is not supported on "
+                "backend=mlx (mlx-lm only downloads from HF Hub). "
+                "Use hub='hf' on the mlx backend."
             )
         return self
 

@@ -43,6 +43,27 @@ MULTIPACK_ARCHITECTURES: frozenset[str] = frozenset({
     "FalconForCausalLM",
     "StableLmForCausalLM",
     "SmolLM2ForCausalLM",
+    # v0.51.0 Part D — new model families from the catalog expansion.
+    "GraniteForCausalLM",
+    "GraniteMoeForCausalLM",
+    "Glm4ForCausalLM",
+    "Glm5ForCausalLM",
+    "KimiForCausalLM",
+    "MiniMaxForCausalLM",
+    "QwQForCausalLM",
+    "QVQForCausalLM",
+    "GptOssForCausalLM",
+    "MagistralForCausalLM",
+    "DevstralForCausalLM",
+    "MinistralForCausalLM",
+    "MedGemmaForCausalLM",
+    "Lfm2ForCausalLM",
+    "CogitoForCausalLM",
+    "HunyuanForCausalLM",
+    "ErnieForCausalLM",
+    "YiForCausalLM",
+    "BaichuanForCausalLM",
+    "ChatGLMForConditionalGeneration",
 })
 
 

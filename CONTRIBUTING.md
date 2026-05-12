@@ -111,7 +111,7 @@ soup_cli/
   templates/          - 17 built-in soup.yaml templates (YAML + manifest.json) with load_template loader (v0.39.0, +bco v0.40.0)
   ui/                 - Web UI (FastAPI + HTML/JS SPA)
 
-tests/                - Test suite (177 files, 6729 tests)
+tests/                - Test suite (178 files, 7178 tests)
 examples/             - Real-world config examples and datasets
 ```
 
@@ -262,6 +262,7 @@ pytest tests/ --cov=soup_cli --cov-report=html
 | test_v0500_part_c.py | v0.50.0 Part C — Multi-turn agent rollout backend allowlist (art / ruler / nemo_gym / openenv); frozen `RolloutBackendSpec` + `MappingProxyType` immutability; `validate_rollout_backend` (bool rejected); `required_rollout_package` per-entry mapping; `launch_rollout` deferred stub; SoupConfig task-gate + mlx rejection (v0.50.0 Part C) |
 | test_v0500_part_d.py | v0.50.0 Part D — 7 stability/efficiency knobs (`ref_model_ema_alpha` / `replay_buffer_size` / `async_grpo_prefetch` / `tis_threshold` / `mask_truncated_completions` / `defer_rerolling` / `skip_zero_advantage` / `off_policy_mask_threshold`); explicit bool-rejection field_validator across all numeric fields (tdd-guide HIGH fix); `mask_truncated_completions` requires `tis_threshold` cross-validator; SoupConfig task-gate naming every offending field; `grpo_fp16` task-gate (code-review HIGH fix) (v0.50.0 Part D) |
 | test_v0500_part_e.py | v0.50.0 Part E — `task='prm'` (Process Reward Model) + `vision_grpo` flag; `validate_prm_compat` (data.format / modality / mlx gates); `validate_vision_grpo_compat` (task ∈ {grpo, ppo} / modality='vision' / non-mlx); `build_prm_trainer` deferred stub; SoupConfig integration with all rejection paths exercised (v0.50.0 Part E) |
+| test_v0510.py | v0.51.0 Model Catalog Expansion + Alternative Model Hubs: Part E hubs.py (`SUPPORTED_HUBS` + `validate_hub_name` + `validate_hub_endpoint` SSRF parity / CRLF rejection / IPv6 mapped private rejected / IPv6 loopback ok / control chars; `resolve_endpoint` env-var override; `default_endpoint` + `endpoint_env_var` + `required_hub_package` + `is_hf` with bool guards; MappingProxyType immutability); TrainingConfig `hub` field (default + Literal accept + None reject + case-insensitive normalisation + YAML round-trip) + SoupConfig `_validate_hub_supported` (mlx + non-hf rejected; mlx + hf accepted; modelers + transformers accepted); Part D MULTIPACK_ARCHITECTURES extension (20 new arches parametrize + legacy preserved + exact count=38 + frozenset immutability); Parts A/B/C 26 new recipes (parametrize over every name × {get_recipe / RecipeMeta / SoupConfig load / yaml.safe_load / model id no null/whitespace/empty parts / max_length bounds / GRPO required fields}); baichuan-sft uses `hub: modelscope`; total recipe count >= 105 (v0.51.0) |
 
 (Note: the test-file table above covers v0.25.0–v0.35.0 + v0.47.0 + v0.48.0 + v0.49.0 + v0.50.0 only; full per-release table lives in `.claude/CLAUDE.md`.)
 
