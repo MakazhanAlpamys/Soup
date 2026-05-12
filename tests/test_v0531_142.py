@@ -264,9 +264,15 @@ class TestMergeSaveFormatCLI:
 
         app = typer.Typer()
         app.command()(merge)
-        result = runner.invoke(app, ["--help"])
-        assert result.exit_code == 0
-        assert "--save-format" in result.output
+        # Inspect registered click params directly — Rich help-output wrapping
+        # in narrow CI terminals splits option names across lines.
+        click_cmd = typer.main.get_command(app)
+        registered = {
+            opt
+            for param in click_cmd.params
+            for opt in (param.opts + param.secondary_opts)
+        }
+        assert "--save-format" in registered, registered
 
     def test_invalid_save_format(self, tmp_path, monkeypatch):
         from soup_cli.commands.merge import merge
@@ -306,9 +312,14 @@ class TestExportTorchaoCLI:
 
         app = typer.Typer()
         app.command()(export)
-        result = runner.invoke(app, ["--help"])
-        assert result.exit_code == 0
-        assert "--quant-config" in result.output
+        click_cmd = typer.main.get_command(app)
+        registered = {
+            opt
+            for param in click_cmd.params
+            for opt in (param.opts + param.secondary_opts)
+        }
+        assert "--quant-config" in registered, registered
+        assert "--gguf-flavour" in registered, registered
 
     def test_torchao_requires_quant_config(self, tmp_path, monkeypatch):
         from soup_cli.commands.export import export

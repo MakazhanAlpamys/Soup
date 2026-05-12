@@ -358,11 +358,24 @@ class TestDeployAutopilotMeasureCLI:
 
         app = typer.Typer()
         app.command()(autopilot)
+        # Force wide terminal so Rich doesn't wrap option names; CI runners
+        # default to 80-col which splits `--measure` mid-line.
         runner = CliRunner()
-        result = runner.invoke(app, ["--help"])
+        result = runner.invoke(
+            app, ["--help"], env={"COLUMNS": "200", "TERM": "dumb"},
+        )
         assert result.exit_code == 0
-        assert "--measure" in result.output
-        assert "--tasks" in result.output
+        # Inspect registered click params directly so the assertion doesn't
+        # depend on Rich's wrapping behaviour at all (CI runners default to
+        # 80-col which splits long option names mid-line).
+        click_cmd = typer.main.get_command(app)
+        registered = {
+            opt
+            for param in click_cmd.params
+            for opt in (param.opts + param.secondary_opts)
+        }
+        assert "--measure" in registered, registered
+        assert "--tasks" in registered, registered
 
     def test_measure_without_tasks_rejected(self, tmp_path, monkeypatch):
         import typer
