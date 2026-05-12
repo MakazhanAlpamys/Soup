@@ -21,10 +21,12 @@ class TestExportFormats:
         assert "tensorrt" in SUPPORTED_FORMATS
 
     def test_format_count(self):
-        """v0.52.0 — 5 live formats (gguf/onnx/tensorrt/awq/gptq) + 2 BitNet stubs."""
-        assert len(SUPPORTED_FORMATS) == 7
+        """v0.53.1 — 7 prior formats + torchao + gguf-ud = 9."""
+        assert len(SUPPORTED_FORMATS) == 9
         assert "bitnet" in SUPPORTED_FORMATS
         assert "tq1_0" in SUPPORTED_FORMATS
+        assert "torchao" in SUPPORTED_FORMATS
+        assert "gguf-ud" in SUPPORTED_FORMATS
 
 
 # ─── ONNX Export CLI Tests ──────────────────────────────────────────────

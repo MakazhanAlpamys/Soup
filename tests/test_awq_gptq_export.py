@@ -39,12 +39,16 @@ class TestExportFormatsExtended:
         assert "gptq" in SUPPORTED_FORMATS
 
     def test_format_count(self):
-        """v0.52.0 — 5 live formats + 2 BitNet stubs (bitnet, tq1_0)."""
-        assert len(SUPPORTED_FORMATS) == 7
+        """v0.53.1 — 7 prior formats + torchao + gguf-ud = 9."""
+        assert len(SUPPORTED_FORMATS) == 9
 
     def test_all_formats_present(self):
-        """All seven formats should be present (v0.52.0 + bitnet/tq1_0 stubs)."""
-        expected = {"gguf", "onnx", "tensorrt", "awq", "gptq", "bitnet", "tq1_0"}
+        """v0.53.1 — adds torchao + gguf-ud to the v0.52.0 baseline."""
+        expected = {
+            "gguf", "onnx", "tensorrt", "awq", "gptq",
+            "bitnet", "tq1_0",
+            "torchao", "gguf-ud",
+        }
         assert set(SUPPORTED_FORMATS) == expected
 
 

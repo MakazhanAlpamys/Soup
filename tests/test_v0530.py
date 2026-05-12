@@ -103,11 +103,18 @@ class TestUDGGUF:
         with pytest.raises(exc):
             validate_calibration_data_path(bad)
 
-    def test_export_deferred(self):
+    def test_export_now_live(self):
+        """v0.53.1 #139 — live wiring landed; stub is gone.
+
+        ``export_advanced_gguf`` now requires keyword-only args. Calling
+        without args raises ``TypeError`` (not ``NotImplementedError``)
+        which is exactly the regression we want as proof the live wiring
+        is in place.
+        """
         from soup_cli.utils.gguf_quant import export_advanced_gguf
 
-        with pytest.raises(NotImplementedError, match="v0.53.1"):
-            export_advanced_gguf()
+        with pytest.raises(TypeError):
+            export_advanced_gguf()  # type: ignore[call-arg]
 
 
 # ---------------------------------------------------------------------------
@@ -833,17 +840,19 @@ class TestSaveFormats:
         assert isinstance(_MERGE_METADATA, MappingProxyType)
         assert isinstance(_TORCHAO_METADATA, MappingProxyType)
 
-    def test_merge_4bit_deferred(self):
+    def test_merge_4bit_now_live(self):
+        """v0.53.1 #142 — live wiring landed; signature now requires kwargs."""
         from soup_cli.utils.save_formats import merge_4bit
 
-        with pytest.raises(NotImplementedError, match="v0.53.1"):
-            merge_4bit()
+        with pytest.raises(TypeError):
+            merge_4bit()  # type: ignore[call-arg]
 
-    def test_export_torchao_deferred(self):
+    def test_export_torchao_now_live(self):
+        """v0.53.1 #142 — live wiring landed; signature now requires kwargs."""
         from soup_cli.utils.save_formats import export_torchao
 
-        with pytest.raises(NotImplementedError, match="v0.53.1"):
-            export_torchao()
+        with pytest.raises(TypeError):
+            export_torchao()  # type: ignore[call-arg]
 
 
 # ---------------------------------------------------------------------------

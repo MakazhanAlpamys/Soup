@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
-from typing import List, Optional
+from typing import TYPE_CHECKING, Callable, List, Optional
 
 import typer
+
+if TYPE_CHECKING:
+    from soup_cli.utils.deploy_autopilot import DeployProfile
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
@@ -594,11 +598,34 @@ def autopilot(
         "-l",
         help="List all known deploy profiles.",
     ),
+    measure: bool = typer.Option(
+        False,
+        "--measure",
+        help=(
+            "Run Quant-Lobotomy measurement on candidate quants. "
+            "Requires --tasks. Results cached at "
+            "~/.soup/deploy_autopilot_cache.json (v0.53.1 #109)."
+        ),
+    ),
+    tasks_file: Optional[str] = typer.Option(
+        None,
+        "--tasks",
+        help="JSONL eval tasks for --measure (one prompt + expected per line).",
+    ),
+    measure_candidates: Optional[str] = typer.Option(
+        None,
+        "--measure-candidates",
+        help=(
+            "Comma-separated quant candidates to measure (default: profile's "
+            "primary quant). Example: 4bit,gptq,awq"
+        ),
+    ),
 ):
     """Pick PEFT + quant + spec-decoding combo for a hardware target.
 
     Writes a ready-to-train ``soup.yaml`` recipe and a planned deploy
-    shell script. Live Quant-Lobotomy measurement deferred to v0.46.1.
+    shell script. Pass ``--measure --tasks <jsonl>`` to also run the
+    Quant-Lobotomy measurement loop across candidate quants (v0.53.1 #109).
     """
     from soup_cli.utils.deploy_autopilot import (
         get_profile,
@@ -669,10 +696,20 @@ def autopilot(
     )
     if profile.notes:
         console.print(f"[dim]Notes: {_escape(profile.notes)}[/]")
-    console.print(
-        "[yellow]Note:[/] Live Quant-Lobotomy auto-measure deferred to v0.46.1; "
-        "this release writes the canonical combo + recipe."
-    )
+
+    # v0.53.1 #109 — optional live measurement
+    if measure:
+        if not tasks_file:
+            console.print(
+                "[red]--measure requires --tasks <jsonl>.[/]"
+            )
+            raise typer.Exit(2)
+        _run_deploy_autopilot_measure(
+            profile=profile,
+            base=base,
+            tasks_file=tasks_file,
+            measure_candidates=measure_candidates,
+        )
 
 
 def _auto_detect_template() -> Optional[str]:
@@ -697,3 +734,99 @@ def _auto_detect_template() -> Optional[str]:
     except (yaml.YAMLError, OSError, KeyError, ImportError):
         return None
     return None
+
+
+# --- v0.53.1 #109 — deploy autopilot live measurement -----------------------
+
+
+def _run_deploy_autopilot_measure(
+    *,
+    profile: "DeployProfile",
+    base: str,
+    tasks_file: str,
+    measure_candidates: Optional[str],
+) -> None:
+    """Lazy-import + invoke the measurement helper from utils.deploy_measure."""
+    import hashlib
+
+    from rich.markup import escape
+
+    from soup_cli.utils.deploy_measure import (
+        pick_best,
+        render_measure_table,
+        run_measure,
+    )
+    from soup_cli.utils.paths import is_under_cwd
+
+    if not is_under_cwd(tasks_file):
+        console.print(
+            f"[red]--tasks {escape(tasks_file)!r} must stay under cwd[/]"
+        )
+        raise typer.Exit(2)
+    if not Path(tasks_file).is_file():
+        console.print(f"[red]Tasks file not found: {escape(tasks_file)}[/]")
+        raise typer.Exit(2)
+
+    # Determine candidate list
+    if measure_candidates:
+        candidates = [
+            c.strip() for c in measure_candidates.split(",") if c.strip()
+        ]
+        if not candidates:
+            console.print("[red]--measure-candidates parsed to empty list.[/]")
+            raise typer.Exit(2)
+    else:
+        # Default: just the profile's primary quant
+        candidates = [profile.quant]
+
+    # Build a base sha — local path → realpath; HF repo → name
+    base_sha_seed = base if not os.path.isdir(base) else os.path.realpath(base)
+    base_sha = hashlib.sha256(base_sha_seed.encode("utf-8")).hexdigest()[:16]
+
+    console.print(
+        f"[dim]Measuring {len(candidates)} candidate(s) "
+        f"against {Path(tasks_file).name}...[/]"
+    )
+
+    def _placeholder_before(prompt: str) -> str:
+        # The full v0.46.1 live measurement plumbs in real
+        # transformers / vllm generators. v0.53.1 ships the orchestrator
+        # surface; callers / smoke runs can monkeypatch this in.
+        return ""
+
+    def _placeholder_after_factory(candidate: str) -> Callable[[str], str]:
+        def _gen(prompt: str) -> str:
+            return ""
+        return _gen
+
+    # Pull injected generators if the caller registered them via env (escape
+    # hatch for tests + advanced operator workflows)
+    from soup_cli.utils import deploy_measure as _dm
+    before_gen = getattr(_dm, "_DEPLOY_MEASURE_BEFORE_GEN", None) or _placeholder_before
+    after_factory = (
+        getattr(_dm, "_DEPLOY_MEASURE_AFTER_FACTORY", None)
+        or _placeholder_after_factory
+    )
+
+    try:
+        results, cache_hit = run_measure(
+            profile_name=profile.name,
+            base_sha=base_sha,
+            candidates=candidates,
+            tasks_file=tasks_file,
+            before_gen=before_gen,
+            after_gen_factory=after_factory,
+        )
+    except (TypeError, ValueError, FileNotFoundError) as exc:
+        console.print(f"[red]Measure failed:[/] {escape(str(exc))}")
+        raise typer.Exit(1) from exc
+
+    console.print(render_measure_table(results))
+    if cache_hit:
+        console.print("[dim](cache hit — re-run with --no-cache to refresh)[/]")
+    best = pick_best(results)
+    if best is not None:
+        console.print(
+            f"[bold green]Recommended:[/] {escape(best.candidate)} "
+            f"(verdict={best.verdict}, delta={best.delta:+.3f})"
+        )

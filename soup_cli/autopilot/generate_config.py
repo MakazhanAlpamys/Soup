@@ -20,6 +20,8 @@ from soup_cli.autopilot.decisions import (
     decide_performance_flags,
     decide_quantization,
     decide_task,
+    detect_prequantized_format,
+    detect_prequantized_format_from_path,
 )
 from soup_cli.config.schema import (
     DataConfig,
@@ -43,8 +45,15 @@ def build_soup_config(
     target_vram = vram_gb if vram_gb is not None else max(hardware_profile.vram_gb, 8.0)
 
     task = decide_task(goal, dataset_profile)
+    # v0.53.1 #82 — if the base is already quantized, route through the matching
+    # Quant Menu format instead of stacking a fresh BNB-4bit on top.
+    prequantized = detect_prequantized_format_from_path(model)
+    if prequantized is None:
+        prequantized = detect_prequantized_format(model)
     quantization = decide_quantization(
-        model_params_b=model_profile.params_b, vram_gb=target_vram
+        model_params_b=model_profile.params_b,
+        vram_gb=target_vram,
+        prequantized=prequantized,
     )
     peft = decide_peft(
         data_size=dataset_profile.samples,

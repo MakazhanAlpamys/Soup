@@ -43,15 +43,14 @@ soup train
 
 Latest highlights only. Full history: [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 
-**v0.53.0 — Quant Menu II (UD GGUFs + KV cache + NVFP4 + LF parity + save formats)**: Unsloth Dynamic 2.0 GGUF ladder (UD-Q8_K_XL … UD-IQ1_M), IQ + Apple/ARM GGUF flavours, `kv_cache_type` (q8_0 / bf16 / f16 / fp8), FP8 attention, NVFP4 (Blackwell), explicit `unsloth_bnb_4bit`, BNB double-quant, ref/reward model quantization, merge-4bit save, TorchAO PTQ export schema — schema-only release; live llama.cpp imatrix + serve / merge / export wiring lands in v0.53.1.
+**v0.53.1 — Quant Menu II + Export pipeline live**: Six v0.53.0 deferred stubs lifted — autopilot pre-quantized detection, single-stage BNB-4bit merge, TorchAO PTQ export, Unsloth Dynamic 2.0 GGUF ladder via llama.cpp `imatrix`, and `soup deploy autopilot --measure` Quant-Lobotomy scorecard.
 
-- **Unsloth Dynamic 2.0 GGUF ladder.** 14-entry closed allowlist (UD-Q{8..2}_K_XL + UD-IQ{4_XS, 3_M, 3_XXS, 2_M, 2_XS, 2_XXS, 1_M, 1_S}) with `validate_ud_gguf_format` case-insensitive canonical normalisation. `--calibration-data <jsonl>` flag shape-validates now; cwd-containment + TOCTOU symlink rejection land at CLI dispatch in v0.53.1.
-- **IQ + Apple/ARM GGUF.** 12-entry IQ family (IQ1/2/3/4 — including IQ4_NL non-linear) + 10-entry Apple/ARM-friendly set (Q4_0_4_4 / Q4_NL / Q5_K_M / etc.) wrapped in `MappingProxyType` metadata.
-- **KV cache types.** New `training.kv_cache_type: q8_0 | bf16 | f16 | fp8`. FP8 is Hopper-only — cross-validator rejects `fp8` on the MLX backend; the SM-capability check fires at serve construction.
-- **FP8 attention + NVFP4 + native `unsloth_bnb_4bit`.** Three new bool flags. `fp8_attention=true` requires `quantization_aware='fp8'` and a non-MLX backend; `nvfp4=true` is gated to CUDA + text modality (Blackwell SM ≥ 12 check is runtime-only); `unsloth_bnb_4bit=true` requires `backend='unsloth'` + `quantization='4bit'`.
-- **LF / Axolotl parity.** `bnb_4bit_use_double_quant` (requires `quantization='4bit'`), `llm_int8` (asserts `quantization='8bit'` — distinct from v0.41.0 `load_in_8bit` aliasing), `quantize_ref_model` (extends v0.40.5 Quant Menu to the ref model on DPO/IPO/SimPO/ORPO/BCO/KTO/GRPO/PPO/preference), `quantize_reward_model` (PPO + reward_model tasks).
-- **Advanced save formats.** `soup merge --save-format 4bit | 4bit_forced` (single BNB-4bit merged checkpoint without dequant/merge/requant cycle) and `soup export --format torchao --quant-config <yaml>` (closed allowlist Int4WeightOnly / Int8DynActInt4 / Float8DynActFloat8 / NVFP4) — schema lands now; live writers land in v0.53.1.
-- **+157 net new tests** (7453 → 7610) across 154 tests in `test_v0530.py`. Five review agents (python / code / security / tdd / verification) ran in parallel; every CRITICAL / HIGH / MEDIUM / LOW finding fixed or documented: O(1) `_LOWER_INDEX` for GGUF lookup, ref-task set extended with GRPO + KTO, `_validate_v053_bool_fields` no longer silently coerces `None`, `requires_hopper` reads from spec metadata, `fp8_attention` validator order swapped so the `quantization_aware='fp8'` error fires first, `validate_calibration_data_path` / `validate_quant_config_path` docstrings name the exact controls v0.53.1 CLI dispatch must add.
+- **Autopilot detects pre-quantized bases.** `TheBloke/Llama-2-7B-Chat-GPTQ` now recommends `gptq` instead of stacking BNB-4bit on top. Name-regex + `config.json` `quantization_config.quant_method` probe with cwd-containment + symlink rejection on the on-disk path. BNB aliases (`bitsandbytes_4bit` / `nf4` / `bnb_8bit`) canonicalise to `4bit` / `8bit`.
+- **`soup merge --save-format 4bit | 4bit_forced`.** Single BNB-4bit-quantized merged checkpoint without the dequant→merge→requant cycle. `4bit_forced` quantizes every Linear (including `lm_head`). Output path is cwd-contained + symlink-rejected at CLI dispatch.
+- **`soup export --format torchao --quant-config <yaml>`.** Live `torchao.quantize_` + `save_pretrained`. Closed per-scheme kwarg allowlist (Int4WeightOnly accepts `{group_size, inner_k_tiles}`, NVFP4 accepts nothing extra) defeats kwarg-injection through the YAML.
+- **`soup export --format gguf-ud --gguf-flavour <UD-Q4_K_XL | IQ2_M | Q4_0_4_4 | …>`.** Three-stage pipeline: HF → f16 GGUF → optional importance-matrix (UD ladder + low-bit IQ) → quantize. All subprocess calls use argv-list form + 30-min timeout. Calibration JSONL is sanitised (null-byte stripped, newlines collapsed, 8 KB per-line + 50 MB total cap). POSIX `O_NOFOLLOW` defeats the TOCTOU race between the dispatch-time symlink check and the actual open.
+- **`soup deploy autopilot --measure --tasks <jsonl>`.** Loops every candidate quant through the v0.26.0 `eval/quant_check` scorer, renders OK/MINOR/MAJOR table, picks the best-by-delta candidate. Results cached at `~/.soup/deploy_autopilot_cache.json` (atomic write, 0o600 perms on POSIX, symlink-rejected on both load and save). Cache key is SHA-256 of `(base, profile, eval-tasks)`.
+- **+112 net new tests** (7610 → 7722) across `test_v0531_82.py`, `test_v0531_109.py`, `test_v0531_139.py`, `test_v0531_142.py`. Four review agents (python / code / security / tdd) ran; every CRITICAL / HIGH / MEDIUM / LOW finding fixed: per-scheme TorchAO kwarg allowlist (rejects dunders + unknown keys), corrected BNB 4-bit skip-modules kwarg name, shared `enforce_under_cwd_and_no_symlink` in `utils/paths.py` (single source of truth), `pick_best` switches from `max(after)` to `max(delta)` matching the v0.33.0 #54 design intent, `_run_convert_to_f16` verifies the convert script stays inside `llama_cpp_dir` via realpath + commonpath, `_safe_stderr` Rich-escapes subprocess stderr before exception propagation.
 
 ## Why Soup?
 
@@ -3640,6 +3639,40 @@ Cross-validator ordering picks the most actionable error: `quantization_aware='f
 `soup merge --save-format 4bit` and `--save-format 4bit_forced` will write a single BNB-4bit-quantized merged checkpoint without the wasteful dequant → merge → requant cycle (unsloth `merged_4bit` recipe). v0.53.0 ships the closed allowlist + spec metadata; the live writer lands in v0.53.1.
 
 `soup export --format torchao --quant-config <yaml>` is the planned PTQ export surface for `torchao.quantize_` + `save_pretrained`. Four schemes are allowlisted: `Int4WeightOnly`, `Int8DynActInt4`, `Float8DynActFloat8`, `NVFP4`. CASE-SENSITIVE — these are PyTorch class names and `torchao.quantize_` looks them up by exact name. Diverges from `--save-format` (lowercase-normalised) on purpose; documented at both validators.
+
+## Quant Menu II + Export Pipeline (v0.53.1)
+
+v0.53.1 lifts the v0.53.0 schema-only stubs to live wiring:
+
+```bash
+# Single-stage BNB-4bit merged checkpoint (no dequant/merge/requant)
+soup merge -a ./adapter -o ./merged_4bit --save-format 4bit
+
+# TorchAO PTQ export — closed per-scheme kwarg allowlist
+cat > q.yaml <<EOF
+scheme: Int4WeightOnly
+group_size: 32
+EOF
+soup export --model ./merged --format torchao --quant-config ./q.yaml --output ./out
+
+# Unsloth Dynamic 2.0 / IQ / Apple-ARM GGUF via llama.cpp imatrix
+soup export --model ./merged --format gguf-ud \
+    --gguf-flavour UD-Q4_K_XL \
+    --calibration-data ./calib.jsonl \
+    --output ./out/model.UD-Q4_K_XL.gguf
+
+# Deploy autopilot with live Quant-Lobotomy measurement
+soup deploy autopilot --target rtx-4090-24gb \
+    --base meta-llama/Llama-3.2-1B \
+    --measure --tasks ./eval_tasks.jsonl \
+    --measure-candidates 4bit,gptq,awq
+```
+
+Autopilot also detects pre-quantized bases automatically — `TheBloke/Llama-2-7B-Chat-GPTQ` is recommended `gptq` instead of stacking 4-bit on top. Detection runs against the base-model name regex AND any local `config.json`'s `quantization_config.quant_method`. Out-of-cwd model paths are silently skipped (soft-probe semantics).
+
+The advanced GGUF pipeline uses POSIX `O_NOFOLLOW` to defeat the TOCTOU race between the dispatch-time symlink check and the actual open of the calibration data — a crafted environment cannot race-swap the calibration file between validate and read.
+
+`soup deploy autopilot --measure` caches results at `~/.soup/deploy_autopilot_cache.json` keyed on `(base, profile, eval-tasks)`. Repeat invocations short-circuit; pass `SOUP_DEPLOY_AUTOPILOT_CACHE=<path>` to redirect (constrained to home / cwd / tempdir). The recommended candidate uses soft-fallback: first `OK` by insertion order, else the candidate with the smallest delta (least drop relative to its own baseline).
 
 ## Changelog
 

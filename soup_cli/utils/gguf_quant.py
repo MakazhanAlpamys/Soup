@@ -11,9 +11,15 @@ to v0.53.1 (mirrors v0.50.0 stub-then-live pattern).
 
 from __future__ import annotations
 
+import json
+import os
+import subprocess
+import sys
+import tempfile
 from dataclasses import dataclass
+from pathlib import Path
 from types import MappingProxyType
-from typing import Mapping
+from typing import Mapping, Optional, cast
 
 # --- Part A: Unsloth Dynamic 2.0 GGUF ladder ---------------------------------
 UD_GGUF_FORMATS: frozenset[str] = frozenset({
@@ -280,13 +286,358 @@ def validate_calibration_data_path(path: object) -> str:
     return path
 
 
-def export_advanced_gguf() -> None:
-    """Live UD/IQ/Apple-ARM GGUF export — deferred to v0.53.1.
+# --- v0.53.1 #139 — Live llama.cpp imatrix + quantize wiring ---------------
 
-    Mirrors v0.52.0 ``export_bitnet_gguf`` stub-then-live pattern.
+# Max 30 min per subprocess so we don't hang CI forever on a bad build.
+_SUBPROC_TIMEOUT_SECONDS: int = 30 * 60
+
+
+def _safe_stderr(stderr: Optional[str], cap: int = 512) -> str:
+    """Truncate + Rich-markup-escape subprocess stderr before embedding it
+    in ``RuntimeError`` messages.
+
+    Security review L4 — the llama-imatrix / llama-quantize binaries may
+    echo crafted input back in their stderr; without escape, characters
+    like ``[red]`` would inject Rich markup when the wrapping exception
+    is later printed via ``console.print``.
     """
-    raise NotImplementedError(
-        "UD / IQ / Apple-ARM GGUF export live wiring deferred to v0.53.1. "
-        "Schema accepts every format in ALL_ADVANCED_GGUF_FORMATS but no "
-        "llama.cpp imatrix invocation is registered yet."
+    if not stderr:
+        return ""
+    from rich.markup import escape
+
+    truncated = stderr[:cap]
+    return escape(truncated)
+
+# Quantize flavours that require an imatrix file (UD ladder + low-bit IQ family).
+_REQUIRES_IMATRIX: frozenset[str] = (
+    UD_GGUF_FORMATS
+    | frozenset({"IQ1_S", "IQ1_M", "IQ2_XXS", "IQ2_XS", "IQ2_S", "IQ2_M",
+                 "IQ3_XXS", "IQ3_XS"})
+)
+
+
+def _enforce_under_cwd_and_no_symlink(path: str, field: str) -> str:
+    """Re-export shared helper from :mod:`soup_cli.utils.paths`."""
+    from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
+
+    return enforce_under_cwd_and_no_symlink(path, field)
+
+
+def _resolve_quantize_binary(llama_cpp_dir: str) -> Path:
+    """Locate the ``llama-quantize`` (or legacy ``quantize``) binary."""
+    base = Path(llama_cpp_dir)
+    candidates = [
+        base / "llama-quantize",
+        base / "llama-quantize.exe",
+        base / "build" / "bin" / "llama-quantize",
+        base / "build" / "bin" / "llama-quantize.exe",
+        base / "quantize",
+        base / "quantize.exe",
+        base / "build" / "bin" / "quantize",
+        base / "build" / "bin" / "quantize.exe",
+    ]
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    raise FileNotFoundError(
+        f"llama-quantize binary not found under {llama_cpp_dir!r}. "
+        "Build llama.cpp with cmake first."
     )
+
+
+def _resolve_imatrix_binary(llama_cpp_dir: str) -> Path:
+    """Locate the ``llama-imatrix`` (or legacy ``imatrix``) binary."""
+    base = Path(llama_cpp_dir)
+    candidates = [
+        base / "llama-imatrix",
+        base / "llama-imatrix.exe",
+        base / "build" / "bin" / "llama-imatrix",
+        base / "build" / "bin" / "llama-imatrix.exe",
+        base / "imatrix",
+        base / "imatrix.exe",
+        base / "build" / "bin" / "imatrix",
+        base / "build" / "bin" / "imatrix.exe",
+    ]
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    raise FileNotFoundError(
+        f"llama-imatrix binary not found under {llama_cpp_dir!r}. "
+        "Build llama.cpp tools with `cmake --build . --target llama-imatrix` "
+        "(or `-DLLAMA_BUILD_TOOLS=ON` then `cmake --build .`)."
+    )
+
+
+def _prepare_calibration_text(calibration_data: str, staged_dir: Path) -> Path:
+    """Read JSONL ``{"text": "..."}`` rows and write a plain-text file.
+
+    llama.cpp ``imatrix`` accepts a raw text file (one paragraph per line is
+    fine). We extract the ``text`` field from each JSONL row, dropping any
+    row without a string ``text``.
+    """
+    src = Path(calibration_data)
+    if not src.is_file():
+        raise FileNotFoundError(
+            f"calibration_data file not found: {os.path.basename(calibration_data)!r}"
+        )
+    # Security review M3 — defend against TOCTOU swap between the CLI-level
+    # symlink check and this open(). Use O_NOFOLLOW on POSIX so a symlink
+    # placed between the two calls is rejected at the kernel level.
+    # On Windows there is no O_NOFOLLOW; the dispatch-time check from
+    # ``enforce_under_cwd_and_no_symlink`` is the portable backstop.
+    if hasattr(os, "O_NOFOLLOW"):
+        try:
+            fd = os.open(str(src), os.O_RDONLY | os.O_NOFOLLOW)
+        except OSError as exc:
+            raise ValueError(
+                "calibration_data became a symlink during the export "
+                "(TOCTOU defence): refusing to open."
+            ) from exc
+        os.close(fd)
+    out = staged_dir / "calib.txt"
+    line_count = 0
+    total_bytes = 0
+    max_per_line = 8192
+    max_total_bytes = 50 * 1024 * 1024  # 50 MB cap on the rendered calib file
+
+    def _sanitise(text: str) -> str:
+        # Strip null bytes + collapse newlines to spaces; cap per-line length.
+        sanitised = text.replace("\x00", "").replace("\n", " ")
+        return sanitised[:max_per_line]
+
+    with open(src, encoding="utf-8") as fh_in, open(
+        out, "w", encoding="utf-8"
+    ) as fh_out:
+        for raw_line in fh_in:
+            line = raw_line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                # Treat as a raw text line — sanitise the same way.
+                emitted = _sanitise(line)
+                if emitted:
+                    fh_out.write(emitted + "\n")
+                    line_count += 1
+                    total_bytes += len(emitted) + 1
+                continue
+            if isinstance(row, dict):
+                text = row.get("text") or row.get("prompt") or row.get("content")
+            elif isinstance(row, str):
+                text = row
+            else:
+                text = None
+            if isinstance(text, str) and text:
+                emitted = _sanitise(text)
+                if emitted:
+                    fh_out.write(emitted + "\n")
+                    line_count += 1
+                    total_bytes += len(emitted) + 1
+            if line_count >= 4096 or total_bytes >= max_total_bytes:
+                # Safety cap — imatrix doesn't need more than a few thousand
+                break
+    if line_count == 0:
+        raise ValueError(
+            "calibration_data produced 0 usable rows; "
+            "expected JSONL with a 'text' field."
+        )
+    return out
+
+
+def _run_convert_to_f16(
+    llama_cpp_dir: str, model_dir: str, f16_out: str,
+) -> None:
+    """Invoke ``convert_hf_to_gguf.py`` to produce an f16 GGUF."""
+    script = Path(llama_cpp_dir) / "convert_hf_to_gguf.py"
+    if not script.is_file():
+        raise FileNotFoundError(
+            f"convert_hf_to_gguf.py not found in {llama_cpp_dir!r}"
+        )
+    # Security review M5 — defend against a crafted llama_cpp_dir whose
+    # ``convert_hf_to_gguf.py`` is a symlink escaping the directory. Resolve
+    # both paths to realpath and require the script to stay inside.
+    script_real = os.path.realpath(str(script))
+    dir_real = os.path.realpath(str(llama_cpp_dir))
+    try:
+        common = os.path.commonpath([script_real, dir_real])
+    except ValueError:
+        common = ""
+    if common != dir_real:
+        raise FileNotFoundError(
+            "convert_hf_to_gguf.py is outside the llama.cpp dir "
+            "(symlink escape rejected)"
+        )
+
+    argv = [
+        sys.executable,
+        script_real,
+        str(model_dir),
+        "--outfile", str(f16_out),
+        "--outtype", "f16",
+    ]
+    result = subprocess.run(  # noqa: S603 — argv list, no shell
+        argv, shell=False, timeout=_SUBPROC_TIMEOUT_SECONDS,
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"convert_hf_to_gguf.py failed (rc={result.returncode}): "
+            f"{_safe_stderr(result.stderr)}"
+        )
+
+
+def _run_imatrix(
+    *,
+    llama_cpp_dir: str,
+    f16_path: str,
+    calib_data: str,
+    imatrix_out: str,
+) -> None:
+    """Run llama.cpp ``imatrix`` to compute an importance matrix."""
+    binary = _resolve_imatrix_binary(llama_cpp_dir)
+    argv = [
+        str(binary),
+        "-m", str(f16_path),
+        "-f", str(calib_data),
+        "-o", str(imatrix_out),
+        "--chunks", "32",
+    ]
+    result = subprocess.run(  # noqa: S603 — argv list, no shell
+        argv, shell=False, timeout=_SUBPROC_TIMEOUT_SECONDS,
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"llama-imatrix failed (rc={result.returncode}): "
+            f"{_safe_stderr(result.stderr)}"
+        )
+
+
+def _flavour_to_quantize_arg(flavour: str) -> str:
+    """Map a v0.53.0 flavour string to the llama.cpp ``quantize`` CLI arg.
+
+    UD ladder strips the ``UD-`` prefix (llama.cpp doesn't know UD; the UD
+    flavour is the underlying type + imatrix calibration). IQ + Apple/ARM
+    pass through verbatim.
+    """
+    if flavour.startswith("UD-"):
+        return flavour[len("UD-"):]
+    return flavour
+
+
+def _run_quantize_binary(
+    *,
+    llama_cpp_dir: str,
+    f16_path: str,
+    output_path: str,
+    flavour: str,
+    imatrix_path: Optional[str] = None,
+) -> None:
+    """Run llama.cpp ``quantize`` to write the final GGUF."""
+    binary = _resolve_quantize_binary(llama_cpp_dir)
+    argv: list[str] = [str(binary)]
+    if imatrix_path is not None:
+        argv += ["--imatrix", str(imatrix_path)]
+    argv += [str(f16_path), str(output_path), _flavour_to_quantize_arg(flavour)]
+    result = subprocess.run(  # noqa: S603 — argv list, no shell
+        argv, shell=False, timeout=_SUBPROC_TIMEOUT_SECONDS,
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"llama-quantize failed (rc={result.returncode}): "
+            f"{_safe_stderr(result.stderr)}"
+        )
+
+
+def export_advanced_gguf(
+    *,
+    model_dir: str,
+    output_path: str,
+    flavour: str,
+    calibration_data: Optional[str],
+    llama_cpp_dir: str,
+) -> None:
+    """Export a HuggingFace model as a UD / IQ / Apple-ARM GGUF.
+
+    Three-stage pipeline:
+    1. ``convert_hf_to_gguf.py`` → ``f16.gguf``
+    2. If ``flavour`` needs an importance matrix
+       (UD ladder + low-bit IQ family): ``imatrix`` → ``imatrix.dat``
+    3. ``quantize`` (with ``--imatrix`` when present) → ``output_path``
+
+    All subprocess invocations use argv-list form (no shell). Per the
+    v0.53.0 ``validate_calibration_data_path`` docstring contract, this
+    dispatch-time helper applies cwd containment + symlink rejection.
+    """
+    # Flavour validation
+    if not is_advanced_gguf_format(flavour):
+        raise ValueError(
+            f"Unknown gguf flavour {flavour!r}. "
+            "See ALL_ADVANCED_GGUF_FORMATS."
+        )
+
+    _enforce_under_cwd_and_no_symlink(model_dir, "model_dir")
+    _enforce_under_cwd_and_no_symlink(output_path, "output_path")
+    _enforce_under_cwd_and_no_symlink(llama_cpp_dir, "llama_cpp_dir")
+
+    if not os.path.isdir(model_dir):
+        raise FileNotFoundError(
+            f"model_dir not a directory: {os.path.basename(model_dir)!r}"
+        )
+    if not os.path.isdir(llama_cpp_dir):
+        raise FileNotFoundError(
+            f"llama_cpp_dir not a directory: "
+            f"{os.path.basename(llama_cpp_dir)!r}"
+        )
+
+    needs_imatrix = flavour in _REQUIRES_IMATRIX
+    if needs_imatrix and calibration_data is None:
+        raise ValueError(
+            f"flavour {flavour!r} requires --calibration-data <jsonl>. "
+            "UD ladder + low-bit IQ flavours need an importance matrix."
+        )
+    if calibration_data is not None:
+        _enforce_under_cwd_and_no_symlink(
+            calibration_data, "calibration_data",
+        )
+
+    # Stage intermediate files inside a tempdir under cwd
+    with tempfile.TemporaryDirectory(
+        prefix=".soup_gguf_", dir=str(Path.cwd()),
+    ) as staged:
+        staged_path = Path(staged)
+        f16_path = staged_path / "model.f16.gguf"
+
+        # 1. Convert HF → f16 GGUF
+        _run_convert_to_f16(llama_cpp_dir, model_dir, str(f16_path))
+
+        # 2. Compute importance matrix (imatrix) — only for UD ladder + low-bit IQ
+        imatrix_path: Optional[str] = None
+        if needs_imatrix:
+            # cast() rather than assert — survives `python -O`
+            calib_data_str = cast(str, calibration_data)
+            calib_txt = _prepare_calibration_text(calib_data_str, staged_path)
+            imatrix_path = str(staged_path / "imatrix.dat")
+            _run_imatrix(
+                llama_cpp_dir=llama_cpp_dir,
+                f16_path=str(f16_path),
+                calib_data=str(calib_txt),
+                imatrix_out=imatrix_path,
+            )
+
+        # 3. Final quantize
+        _run_quantize_binary(
+            llama_cpp_dir=llama_cpp_dir,
+            f16_path=str(f16_path),
+            output_path=output_path,
+            flavour=flavour,
+            imatrix_path=imatrix_path,
+        )
+
+    # Ensure the writer produced the file
+    if not os.path.isfile(output_path):
+        raise RuntimeError(
+            f"llama-quantize did not produce {os.path.basename(output_path)!r}"
+        )

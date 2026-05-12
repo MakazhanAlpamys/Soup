@@ -18,6 +18,11 @@ SUPPORTED_FORMATS = (
     # v0.52.0 Part D — BitNet 1.58-bit + TQ1_0 GGUF.
     # Schema-only stubs in v0.52.0; live conversion lands in v0.52.1.
     "bitnet", "tq1_0",
+    # v0.53.1 #142 — TorchAO PTQ live wiring (Int4WeightOnly / Int8DynActInt4 /
+    # Float8DynActFloat8 / NVFP4). Requires --quant-config <yaml>.
+    "torchao",
+    # v0.53.1 #139 — UD/IQ/Apple-ARM GGUFs via llama.cpp imatrix.
+    "gguf-ud",
 )
 GGUF_QUANT_TYPES = ("q4_0", "q4_k_m", "q5_k_m", "q8_0", "f16", "f32")
 LLAMA_CPP_DIR_NAME = "llama.cpp"
@@ -110,8 +115,24 @@ def export(
             "Default deny (v0.36.0). Only enable if you trust the source."
         ),
     ),
+    quant_config: Optional[str] = typer.Option(
+        None,
+        "--quant-config",
+        help=(
+            "Path to YAML for torchao PTQ export (v0.53.1 #142). "
+            "Required when --format=torchao."
+        ),
+    ),
+    gguf_flavour: Optional[str] = typer.Option(
+        None,
+        "--gguf-flavour",
+        help=(
+            "Advanced GGUF format flag — UD-Q*_K_XL / IQ*_M / Q4_0_4_4 / etc. "
+            "Required when --format=gguf-ud (v0.53.1 #139)."
+        ),
+    ),
 ):
-    """Export a model to GGUF, ONNX, TensorRT-LLM, AWQ, or GPTQ format."""
+    """Export a model to GGUF, ONNX, TensorRT-LLM, AWQ, GPTQ, or TorchAO format."""
     model_path = Path(model)
 
     # --- Validate ---
@@ -149,6 +170,26 @@ def export(
         _export_gptq(
             model_path, output, base, bits, group_size,
             calibration_data, calibration_samples, trust_remote_code,
+        )
+        return
+
+    # --- TorchAO PTQ export path (v0.53.1 #142) ---
+    if fmt == "torchao":
+        _export_torchao_cli(
+            model_path, output, quant_config, trust_remote_code,
+        )
+        return
+
+    # --- Advanced GGUF export path (UD / IQ / Apple-ARM, v0.53.1 #139) ---
+    if fmt == "gguf-ud":
+        _export_gguf_advanced(
+            model_path=model_path,
+            output=output,
+            base=base,
+            gguf_flavour=gguf_flavour,
+            calibration_data=calibration_data,
+            llama_cpp_path=llama_cpp_path,
+            trust_remote_code=trust_remote_code,
         )
         return
 
@@ -1099,3 +1140,199 @@ def _maybe_attach_export(
     console.print(
         f"[green]Attached export to registry entry '{entry_id}' as {kind}.[/]"
     )
+
+
+# --- v0.53.1 #142 — TorchAO PTQ export CLI dispatch -------------------------
+
+
+def _export_torchao_cli(
+    model_path: Path,
+    output: Optional[str],
+    quant_config: Optional[str],
+    trust_remote_code: bool,
+) -> None:
+    """Dispatch ``soup export --format torchao``.
+
+    Per v0.53.0 ``validate_quant_config_path`` docstring contract:
+    enforce cwd containment + ``os.lstat + S_ISLNK`` rejection at CLI
+    dispatch time, not in the schema validator.
+    """
+    if quant_config is None:
+        console.print(
+            "[red]--format torchao requires --quant-config <yaml>[/]\n"
+            "Example: [bold]soup export --format torchao "
+            "--quant-config q.yaml --model ./merged[/]"
+        )
+        raise typer.Exit(2)
+
+    from soup_cli.utils.save_formats import (
+        export_torchao,
+        load_quant_config,
+        validate_torchao_scheme,
+    )
+
+    try:
+        cfg_data = load_quant_config(quant_config)
+    except (TypeError, ValueError, FileNotFoundError) as exc:
+        console.print(f"[red]{exc}[/]")
+        raise typer.Exit(2)
+
+    scheme_raw = cfg_data.get("scheme")
+    if not isinstance(scheme_raw, str):
+        console.print(
+            "[red]quant_config must declare a top-level 'scheme: <name>' field.[/]"
+        )
+        raise typer.Exit(2)
+    try:
+        scheme = validate_torchao_scheme(scheme_raw)
+    except (TypeError, ValueError) as exc:
+        console.print(f"[red]{exc}[/]")
+        raise typer.Exit(2)
+
+    if output is None:
+        output_path = model_path.parent / f"{model_path.name}.torchao.{scheme}"
+    else:
+        output_path = Path(output)
+
+    console.print(Panel(
+        f"Model:  [bold]{model_path}[/]\n"
+        f"Scheme: [bold]{scheme}[/]\n"
+        f"Output: [bold]{output_path}[/]",
+        title="TorchAO PTQ Export",
+    ))
+
+    try:
+        export_torchao(
+            model_dir=str(model_path),
+            output_dir=str(output_path),
+            scheme=scheme,
+            quant_config_data={k: v for k, v in cfg_data.items() if k != "scheme"},
+            trust_remote_code=trust_remote_code,
+        )
+    except (ImportError, RuntimeError) as exc:
+        console.print(f"[red]TorchAO export failed: {exc}[/]")
+        console.print(
+            "Try: [bold]pip install torchao[/] "
+            "(NVFP4 requires torchao>=0.5)"
+        )
+        raise typer.Exit(1)
+    except (TypeError, ValueError, FileNotFoundError) as exc:
+        console.print(f"[red]{exc}[/]")
+        raise typer.Exit(2)
+
+    console.print(Panel(
+        f"Output: [bold]{output_path}[/]\n"
+        f"Scheme: [bold]{scheme}[/]",
+        title="[bold green]TorchAO Export Complete[/]",
+    ))
+
+
+# --- v0.53.1 #139 — Advanced GGUF export CLI dispatch -----------------------
+
+
+def _export_gguf_advanced(
+    *,
+    model_path: Path,
+    output: Optional[str],
+    base: Optional[str],
+    gguf_flavour: Optional[str],
+    calibration_data: Optional[str],
+    llama_cpp_path: Optional[str],
+    trust_remote_code: bool,
+) -> None:
+    """Dispatch ``soup export --format gguf-ud --gguf-flavour <...>``.
+
+    Routes through llama.cpp's ``imatrix`` + ``quantize`` binaries. Supports
+    UD-Q*_K_XL ladder, IQ*_M family, Apple/ARM Q4_0_4_4 / Q4_NL etc.
+    """
+    if gguf_flavour is None:
+        console.print(
+            "[red]--format gguf-ud requires --gguf-flavour <UD-Q4_K_XL | IQ2_M | "
+            "Q4_0_4_4 | ...>[/]"
+        )
+        raise typer.Exit(2)
+
+    from soup_cli.utils.gguf_quant import (
+        export_advanced_gguf,
+        is_advanced_gguf_format,
+    )
+
+    if not is_advanced_gguf_format(gguf_flavour):
+        console.print(
+            f"[red]Unknown gguf_flavour {gguf_flavour!r}. "
+            "See soup_cli.utils.gguf_quant.ALL_ADVANCED_GGUF_FORMATS.[/]"
+        )
+        raise typer.Exit(2)
+
+    # Calibration data path (UD / IQ require it; Apple/ARM Q4_0_4_4 doesn't).
+    from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
+    if calibration_data is not None:
+        try:
+            enforce_under_cwd_and_no_symlink(
+                calibration_data, "calibration_data",
+            )
+        except (TypeError, ValueError) as exc:
+            console.print(f"[red]{exc}[/]")
+            raise typer.Exit(2)
+        if not Path(calibration_data).is_file():
+            console.print(
+                f"[red]Calibration data file not found: {calibration_data}[/]"
+            )
+            raise typer.Exit(2)
+
+    if output is None:
+        output_path = (
+            model_path.parent / f"{model_path.name}.{gguf_flavour}.gguf"
+        )
+    else:
+        output_path = Path(output)
+
+    # Pre-merge LoRA adapter if needed
+    adapter_config_path = model_path / "adapter_config.json"
+    merge_dir = None
+    if adapter_config_path.exists():
+        console.print("[yellow]LoRA adapter detected — merging first...[/]")
+        base_model = base or _detect_base_model(adapter_config_path)
+        if not base_model:
+            console.print(
+                "[red]Cannot detect base model. Pass --base.[/]"
+            )
+            raise typer.Exit(2)
+        merge_dir = model_path.parent / f".soup_merge_tmp_{model_path.name}"
+        _merge_adapter(
+            str(model_path), base_model, str(merge_dir), trust_remote_code,
+        )
+        source_model_dir = merge_dir
+    else:
+        source_model_dir = model_path
+
+    llama_dir = _find_llama_cpp(llama_cpp_path)
+
+    console.print(Panel(
+        f"Model:    [bold]{source_model_dir}[/]\n"
+        f"Flavour:  [bold]{gguf_flavour}[/]\n"
+        f"Calib:    [bold]{calibration_data or '(none — Apple/ARM)'}[/]\n"
+        f"Output:   [bold]{output_path}[/]",
+        title="Advanced GGUF Export",
+    ))
+
+    try:
+        export_advanced_gguf(
+            model_dir=str(source_model_dir),
+            output_path=str(output_path),
+            flavour=gguf_flavour,
+            calibration_data=calibration_data,
+            llama_cpp_dir=str(llama_dir),
+        )
+    except (FileNotFoundError, RuntimeError, ValueError) as exc:
+        console.print(f"[red]Advanced GGUF export failed: {exc}[/]")
+        raise typer.Exit(1)
+    finally:
+        if merge_dir and merge_dir.exists():
+            shutil.rmtree(merge_dir, ignore_errors=True)
+
+    console.print(Panel(
+        f"Output: [bold]{output_path}[/]\n"
+        f"Flavour: [bold]{gguf_flavour}[/]",
+        title="[bold green]Advanced GGUF Export Complete[/]",
+    ))

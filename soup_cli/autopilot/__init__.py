@@ -17,6 +17,8 @@ from soup_cli.autopilot.decisions import (
     decide_performance_flags,
     decide_quantization,
     decide_task,
+    detect_prequantized_format,
+    detect_prequantized_format_from_path,
     parse_gpu_budget,
 )
 from soup_cli.autopilot.generate_config import build_soup_config, write_yaml
@@ -37,6 +39,8 @@ __all__ = [
     "decide_performance_flags",
     "decide_quantization",
     "decide_task",
+    "detect_prequantized_format",
+    "detect_prequantized_format_from_path",
     "parse_gpu_budget",
     "write_yaml",
 ]
