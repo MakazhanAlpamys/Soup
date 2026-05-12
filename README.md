@@ -43,16 +43,15 @@ soup train
 
 Latest highlights only. Full history: [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 
-**v0.52.0 — Modality II (TTS + Distillation + BitNet + EBFT/GDPO + MoE quant + reasoning_effort)**: 5 TTS model families, classifier / reranker / cross-encoder training, knowledge distillation, BitNet 1.58-bit, Energy-Based FT, Generalized DPO, per-expert MoE quantization, and gpt-oss reasoning-effort schema — schema-only release; live trainer / loss / export wiring lands in v0.52.1.
+**v0.53.0 — Quant Menu II (UD GGUFs + KV cache + NVFP4 + LF parity + save formats)**: Unsloth Dynamic 2.0 GGUF ladder (UD-Q8_K_XL … UD-IQ1_M), IQ + Apple/ARM GGUF flavours, `kv_cache_type` (q8_0 / bf16 / f16 / fp8), FP8 attention, NVFP4 (Blackwell), explicit `unsloth_bnb_4bit`, BNB double-quant, ref/reward model quantization, merge-4bit save, TorchAO PTQ export schema — schema-only release; live llama.cpp imatrix + serve / merge / export wiring lands in v0.53.1.
 
-- **TTS fine-tuning.** New `task='tts'` + `modality='audio_out'` with a closed allowlist of five model families (Orpheus, Sesame-CSM, Llasa, Spark, Oute) and per-family emotion-tag allowlists for Orpheus + Oute. Five new recipes: `orpheus-tts-sft`, `sesame-csm-tts`, `llasa-tts`, `spark-tts`, `oute-tts`.
-- **Classifier / reranker / cross-encoder tasks.** New `task` values `classifier`, `reranker`, `cross_encoder` with `num_labels`, `classifier_kind` (single_label / multi_label), `label_names` (1024-cap + dedup + null-byte rejection). Cross-validator requires `num_labels` and matches `len(label_names) == num_labels`.
-- **Knowledge distillation.** New `task='distill'` + `teacher_model` (HF id or local path) + `distill_divergence` (`kl` / `forward_kl` / `reverse_kl` / `js` — `kl` canonicalises to `forward_kl`) + `distill_temperature` (math.isfinite + [0.05, 100.0] bounds).
-- **BitNet 1.58-bit + GGUF export schema.** `quantization='bitnet_1.58'` accepted for task ∈ {sft, pretrain, dpo} on transformers/unsloth backends; new BitNet / TQ1_0 export-format allowlist; `falcon-e-bitnet-sft` recipe shipped.
-- **EBFT + GDPO.** Energy-Based FT variants (`structured` / `strided`) gated to `task='sft'`; Generalized DPO variants (`standard` / `length_normalized` / `margin`) gated to DPO-family tasks.
-- **MoE expert quant + router-only training.** `moe_expert_quant: nf4 | int8_rowwise` and `train_router_only: true` — both require `moe_lora=true` (silent-no-op rejection at config-load).
-- **gpt-oss `reasoning_effort: low | medium | high`** + `train_on_eot: bool`. Both gated to the SFT-family task set (sft / pretrain / distill / classifier / reranker / cross_encoder) — non-SFT tasks reject loudly.
-- **+272 net new tests** (7184 → 7456). 4 review agents (python-reviewer, security-reviewer, code-reviewer, tdd-guide) ran; every finding fixed: `num_labels` bool-before-int guard, `reasoning_effort` / `train_on_eot` task-gate, Oute emotion allowlist, `_validate_classifier_compat` lazy-import guard, `_MAX_LEN` → `_MAX_REASONING_EFFORT_LEN`, `DIVERGENCES` derived from alias map, sister-function bool guards on every compat helper, expanded TDD coverage (oversize on EBFT variant, full GDPO rejection matrix, explicit-exc on temperature bounds, TTS compat input guards, recipe model-id null/whitespace check).
+- **Unsloth Dynamic 2.0 GGUF ladder.** 14-entry closed allowlist (UD-Q{8..2}_K_XL + UD-IQ{4_XS, 3_M, 3_XXS, 2_M, 2_XS, 2_XXS, 1_M, 1_S}) with `validate_ud_gguf_format` case-insensitive canonical normalisation. `--calibration-data <jsonl>` flag shape-validates now; cwd-containment + TOCTOU symlink rejection land at CLI dispatch in v0.53.1.
+- **IQ + Apple/ARM GGUF.** 12-entry IQ family (IQ1/2/3/4 — including IQ4_NL non-linear) + 10-entry Apple/ARM-friendly set (Q4_0_4_4 / Q4_NL / Q5_K_M / etc.) wrapped in `MappingProxyType` metadata.
+- **KV cache types.** New `training.kv_cache_type: q8_0 | bf16 | f16 | fp8`. FP8 is Hopper-only — cross-validator rejects `fp8` on the MLX backend; the SM-capability check fires at serve construction.
+- **FP8 attention + NVFP4 + native `unsloth_bnb_4bit`.** Three new bool flags. `fp8_attention=true` requires `quantization_aware='fp8'` and a non-MLX backend; `nvfp4=true` is gated to CUDA + text modality (Blackwell SM ≥ 12 check is runtime-only); `unsloth_bnb_4bit=true` requires `backend='unsloth'` + `quantization='4bit'`.
+- **LF / Axolotl parity.** `bnb_4bit_use_double_quant` (requires `quantization='4bit'`), `llm_int8` (asserts `quantization='8bit'` — distinct from v0.41.0 `load_in_8bit` aliasing), `quantize_ref_model` (extends v0.40.5 Quant Menu to the ref model on DPO/IPO/SimPO/ORPO/BCO/KTO/GRPO/PPO/preference), `quantize_reward_model` (PPO + reward_model tasks).
+- **Advanced save formats.** `soup merge --save-format 4bit | 4bit_forced` (single BNB-4bit merged checkpoint without dequant/merge/requant cycle) and `soup export --format torchao --quant-config <yaml>` (closed allowlist Int4WeightOnly / Int8DynActInt4 / Float8DynActFloat8 / NVFP4) — schema lands now; live writers land in v0.53.1.
+- **+157 net new tests** (7453 → 7610) across 154 tests in `test_v0530.py`. Five review agents (python / code / security / tdd / verification) ran in parallel; every CRITICAL / HIGH / MEDIUM / LOW finding fixed or documented: O(1) `_LOWER_INDEX` for GGUF lookup, ref-task set extended with GRPO + KTO, `_validate_v053_bool_fields` no longer silently coerces `None`, `requires_hopper` reads from spec metadata, `fp8_attention` validator order swapped so the `quantization_aware='fp8'` error fires first, `validate_calibration_data_path` / `validate_quant_config_path` docstrings name the exact controls v0.53.1 CLI dispatch must add.
 
 ## Why Soup?
 
@@ -3611,6 +3610,36 @@ Both reject silently-no-op combinations: setting either flag without `moe_lora=t
 ## gpt-oss `reasoning_effort` + `train_on_eot` (v0.52.0)
 
 `training.reasoning_effort: low | medium | high` injects a system-prefix token at training time for gpt-oss models; `training.train_on_eot: true` includes explicit EOT/EOS control tokens in the SFT loss (axolotl `train_on_eot`). Both are gated to the SFT-family task set (`sft` / `pretrain` / `distill` / `classifier` / `reranker` / `cross_encoder`) — setting them on DPO / GRPO / PPO / etc. fails at config load. Live formatter wiring in v0.52.1.
+
+## Unsloth Dynamic 2.0 GGUF Ladder (v0.53.0)
+
+`soup export --format gguf-ud --calibration-data <calib.jsonl>` is the planned dispatch surface for the 14-entry UD ladder (`UD-Q8_K_XL` … `UD-IQ1_M`). v0.53.0 ships the closed-allowlist validators, `MappingProxyType`-wrapped metadata, and a calibration-data path shape check; live llama.cpp `imatrix` invocation lands in v0.53.1. The IQ + Apple/ARM-friendly GGUF flavours (`IQ4_NL`, `Q4_0_4_4`, `Q5_K_M`, etc.) ship as separate frozensets so future export-CLI dispatch can pick by family.
+
+## KV Cache Types (v0.53.0)
+
+`training.kv_cache_type: q8_0 | bf16 | f16 | fp8` controls the inference-time KV cache element type. `fp8` is Hopper-only; the MLX backend is rejected at config load. The other three types pass through every backend in v0.53.0; v0.53.1 may narrow MLX further once the runtime serve path lands. The Hopper SM-capability check (compute capability ≥ 9.0) is intentionally runtime-only — `pip install -U vllm` users on a Hopper box won't trip it unless they ship a Hopper-incompatible GPU into the runtime.
+
+## FP8 Attention + NVFP4 + Native `unsloth_bnb_4bit` (v0.53.0)
+
+Three new TrainingConfig bools extend the v0.28.0 FP8 menu:
+
+- `fp8_attention: true` — requires `quantization_aware: fp8` AND a non-MLX backend. Targets axolotl parity for FP8 attention on Hopper+ GPUs.
+- `nvfp4: true` — Blackwell-only FP4 training. Gated to non-MLX + `modality: text`; the SM ≥ 12.0 runtime check fires at trainer construction.
+- `unsloth_bnb_4bit: true` — promotes "Unsloth Dynamic 4-bit" from an implicit `backend=unsloth + quantization=4bit` combo to a named flag. Mutual rejection of inconsistent combos at config load.
+
+Cross-validator ordering picks the most actionable error: `quantization_aware='fp8'` prerequisite fires before the MLX rejection on `fp8_attention`, so a YAML missing both surfaces the deeper issue first.
+
+## LF / Axolotl Quant Parity (v0.53.0)
+
+- `bnb_4bit_use_double_quant: true` — requires `quantization: 4bit`. Activates BNB's double-quantization. Combinations with the Quant Menu formats (gptq / awq / hqq:Nbit / aqlm / eetq / mxfp4 / fp8) are rejected at config load.
+- `llm_int8: true` — an explicit 8-bit assertion. Unlike v0.41.0 `load_in_8bit` (which **rewrites** `quantization` to `8bit`), `llm_int8` enforces that the user has ALSO set `quantization: 8bit`. Mismatch raises with an actionable message.
+- `quantize_ref_model: true` / `quantize_reward_model: true` — extend the v0.40.5 Quant Menu wiring to the reference / reward models inside preference and RLHF training. `quantize_ref_model` accepts any task with a reference policy (`dpo / ipo / simpo / orpo / bco / kto / preference / grpo / ppo`); `quantize_reward_model` accepts `ppo / reward_model`.
+
+## Advanced Save Formats (v0.53.0)
+
+`soup merge --save-format 4bit` and `--save-format 4bit_forced` will write a single BNB-4bit-quantized merged checkpoint without the wasteful dequant → merge → requant cycle (unsloth `merged_4bit` recipe). v0.53.0 ships the closed allowlist + spec metadata; the live writer lands in v0.53.1.
+
+`soup export --format torchao --quant-config <yaml>` is the planned PTQ export surface for `torchao.quantize_` + `save_pretrained`. Four schemes are allowlisted: `Int4WeightOnly`, `Int8DynActInt4`, `Float8DynActFloat8`, `NVFP4`. CASE-SENSITIVE — these are PyTorch class names and `torchao.quantize_` looks them up by exact name. Diverges from `--save-format` (lowercase-normalised) on purpose; documented at both validators.
 
 ## Changelog
 

@@ -1184,6 +1184,106 @@ class TrainingConfig(BaseModel):
             "convention. (v0.52.0)"
         ),
     )
+    # ---- v0.53.0 Quant Menu II — UD GGUFs + KV cache + NVFP4 ---------------
+    # Part C — KV cache types (serve-side hint, captured here for round-trip).
+    kv_cache_type: Optional[Literal["q8_0", "bf16", "f16", "fp8"]] = Field(
+        default=None,
+        description=(
+            "KV-cache element type for inference (q8_0 / bf16 / f16 / fp8). "
+            "Schema-only in v0.53.0; live wiring deferred to v0.53.1."
+        ),
+    )
+    # Part D — Train-time advanced precision.
+    fp8_attention: bool = Field(
+        default=False,
+        description=(
+            "Extend the v0.28.0 FP8 menu to FP8 attention "
+            "(axolotl-parity flag). Requires quantization_aware='fp8'. "
+            "Schema-only in v0.53.0; live wiring deferred to v0.53.1."
+        ),
+    )
+    nvfp4: bool = Field(
+        default=False,
+        description=(
+            "Blackwell-only NVFP4 training (unsloth + axolotl). "
+            "Schema-only in v0.53.0; live wiring deferred to v0.53.1."
+        ),
+    )
+    unsloth_bnb_4bit: bool = Field(
+        default=False,
+        description=(
+            "Promote Unsloth Dynamic 4-bit from 'inferable' to a native flag. "
+            "Requires backend='unsloth' and quantization='4bit'. (v0.53.0)"
+        ),
+    )
+    # Part E — LF / Axolotl parity.
+    bnb_4bit_use_double_quant: bool = Field(
+        default=False,
+        description=(
+            "Apply BNB 4-bit double-quantization (LF / Axolotl parity). "
+            "Only meaningful when quantization='4bit'. (v0.53.0)"
+        ),
+    )
+    llm_int8: bool = Field(
+        default=False,
+        description=(
+            "Explicit 8-bit LLM.int8 alias for quantization='8bit'. "
+            "When True, requires quantization='8bit'. (v0.53.0)"
+        ),
+    )
+    quantize_ref_model: bool = Field(
+        default=False,
+        description=(
+            "Apply the same Quant Menu config to the reference model "
+            "(DPO/IPO/SimPO/ORPO/BCO ref model) — extends v0.40.5. (v0.53.0)"
+        ),
+    )
+    quantize_reward_model: bool = Field(
+        default=False,
+        description=(
+            "Apply the same Quant Menu config to the reward model "
+            "(PPO/reward_model task) — extends v0.40.5. (v0.53.0)"
+        ),
+    )
+
+    @field_validator(
+        "fp8_attention",
+        "nvfp4",
+        "unsloth_bnb_4bit",
+        "bnb_4bit_use_double_quant",
+        "llm_int8",
+        "quantize_ref_model",
+        "quantize_reward_model",
+        mode="before",
+    )
+    @classmethod
+    def _validate_v053_bool_fields(cls, v):
+        """v0.53.0 — explicit bool guard so YAML ``yes`` / ``1`` integers
+        cannot silently coerce. Matches project bool-before-int policy.
+
+        ``None`` falls through to Pydantic so the field's ``default=False``
+        applies (review-fix — avoids silent ``None → False`` coercion that
+        would mask YAML typos like ``fp8_attention: ~``).
+        """
+        if v is None:
+            return v
+        if isinstance(v, bool):
+            return v
+        raise TypeError(
+            f"v0.53.0 flag must be bool, got {type(v).__name__}"
+        )
+
+    @field_validator("kv_cache_type", mode="before")
+    @classmethod
+    def _validate_kv_cache_type(cls, v):
+        """v0.53.0 Part C — bool / null-byte / oversize / case-insensitive
+        normalisation via the shared helper.
+        """
+        if v is None:
+            return None
+        from soup_cli.utils.kv_cache import validate_kv_cache_type
+
+        return validate_kv_cache_type(v)
 
     @field_validator("teacher_model")
     @classmethod
@@ -2759,6 +2859,160 @@ class SoupConfig(BaseModel):
             validate_vllm_sleep_mode_compat(backend=self.backend)
         except ValueError as exc:
             raise ValueError(str(exc)) from exc
+        return self
+
+    # ---- v0.53.0 Quant Menu II cross-validators ----------------------------
+
+    @model_validator(mode="after")
+    def _validate_fp8_attention_compat(self) -> "SoupConfig":
+        """v0.53.0 Part D — ``fp8_attention=True`` requires
+        ``quantization_aware='fp8'`` and a non-mlx backend. Silent-no-op
+        footgun rejection (mirrors v0.32.0 spike-recovery policy).
+        """
+        tcfg = self.training
+        if not tcfg.fp8_attention:
+            return self
+        from soup_cli.utils.advanced_precision import (
+            validate_fp8_attention_compat,
+        )
+
+        try:
+            validate_fp8_attention_compat(
+                fp8_attention=tcfg.fp8_attention,
+                quantization_aware=tcfg.quantization_aware,
+                backend=self.backend,
+            )
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
+        return self
+
+    @model_validator(mode="after")
+    def _validate_nvfp4_compat(self) -> "SoupConfig":
+        """v0.53.0 Part D — ``nvfp4=True`` requires non-mlx + text-modality.
+        Blackwell SM-capability check is runtime-only (live wiring v0.53.1).
+        """
+        tcfg = self.training
+        if not tcfg.nvfp4:
+            return self
+        from soup_cli.utils.advanced_precision import validate_nvfp4_compat
+
+        try:
+            validate_nvfp4_compat(
+                nvfp4=tcfg.nvfp4, backend=self.backend, modality=self.modality,
+            )
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
+        return self
+
+    @model_validator(mode="after")
+    def _validate_unsloth_bnb_4bit_compat(self) -> "SoupConfig":
+        """v0.53.0 Part D — ``unsloth_bnb_4bit=True`` requires
+        ``backend='unsloth'`` and ``quantization='4bit'``.
+        """
+        tcfg = self.training
+        if not tcfg.unsloth_bnb_4bit:
+            return self
+        from soup_cli.utils.advanced_precision import (
+            validate_unsloth_bnb_4bit_compat,
+        )
+
+        try:
+            validate_unsloth_bnb_4bit_compat(
+                unsloth_bnb_4bit=tcfg.unsloth_bnb_4bit,
+                backend=self.backend,
+                quantization=tcfg.quantization,
+            )
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
+        return self
+
+    @model_validator(mode="after")
+    def _validate_bnb_4bit_double_quant(self) -> "SoupConfig":
+        """v0.53.0 Part E — ``bnb_4bit_use_double_quant=True`` requires
+        ``quantization='4bit'`` (silent-no-op footgun otherwise).
+        """
+        tcfg = self.training
+        if not tcfg.bnb_4bit_use_double_quant:
+            return self
+        if tcfg.quantization != "4bit":
+            raise ValueError(
+                "training.bnb_4bit_use_double_quant=true requires "
+                f"training.quantization='4bit'; got "
+                f"quantization={tcfg.quantization!r}"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_llm_int8_alias(self) -> "SoupConfig":
+        """v0.53.0 Part E — ``llm_int8=True`` requires ``quantization='8bit'``.
+
+        Unlike v0.41.0 ``load_in_8bit`` (which rewrites quantization), the
+        ``llm_int8`` flag is a pure assertion: the user explicitly says
+        "this is an LLM.int8 run" and we enforce the matching quantization
+        rather than silently rewriting it.
+        """
+        tcfg = self.training
+        if not tcfg.llm_int8:
+            return self
+        if tcfg.quantization != "8bit":
+            raise ValueError(
+                "training.llm_int8=true requires training.quantization='8bit'; "
+                f"got quantization={tcfg.quantization!r}"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_quantize_ref_reward(self) -> "SoupConfig":
+        """v0.53.0 Part E — ``quantize_ref_model`` requires a ref-model task
+        and ``quantize_reward_model`` requires a reward-model task.
+        Silent-no-op footgun rejection.
+
+        Ref-model tasks (review fix): all preference-family trainers PLUS
+        ``grpo`` (KL to ref policy) and ``kto`` (unpaired preference, also
+        keeps a frozen ref). ``ppo`` also has a ref but uses a separately
+        named ``policy_ref`` checkpoint; covered by the reward path too.
+        """
+        tcfg = self.training
+        ref_tasks = {
+            "dpo", "ipo", "simpo", "orpo", "bco", "kto",
+            "preference", "grpo", "ppo",
+        }
+        reward_tasks = {"ppo", "reward_model"}
+        if tcfg.quantize_ref_model and self.task not in ref_tasks:
+            raise ValueError(
+                "training.quantize_ref_model=true requires a task with a "
+                "reference model "
+                f"(one of {sorted(ref_tasks)}); got task={self.task!r}"
+            )
+        if tcfg.quantize_reward_model and self.task not in reward_tasks:
+            raise ValueError(
+                "training.quantize_reward_model=true requires task in "
+                f"{sorted(reward_tasks)}; got task={self.task!r}"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_kv_cache_type_supported(self) -> "SoupConfig":
+        """v0.53.0 Part C — ``kv_cache_type`` schema gate.
+
+        Currently only ``fp8`` is gated (Hopper-only — MLX rejected). The
+        three remaining types (``q8_0`` / ``bf16`` / ``f16``) pass through
+        for every backend; v0.53.1 live wiring MAY need to narrow this
+        further (e.g. MLX serve may not support ``q8_0``). The schema-only
+        permissive policy is deliberate this release — kept here so the
+        v0.53.1 contributor sees the gate site immediately.
+
+        Hopper SM-capability check (compute_cap >= 9.0) is runtime-only.
+        """
+        kv = self.training.kv_cache_type
+        if kv is None:
+            return self
+        if self.backend == "mlx" and kv == "fp8":
+            raise ValueError(
+                "training.kv_cache_type='fp8' is not supported on the mlx "
+                "backend (Hopper-only). Use kv_cache_type in {q8_0,bf16,f16} "
+                "or switch backend."
+            )
         return self
 
     @model_validator(mode="after")
