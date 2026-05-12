@@ -39,12 +39,12 @@ class TestExportFormatsExtended:
         assert "gptq" in SUPPORTED_FORMATS
 
     def test_format_count(self):
-        """Should support exactly 5 export formats."""
-        assert len(SUPPORTED_FORMATS) == 5
+        """v0.52.0 — 5 live formats + 2 BitNet stubs (bitnet, tq1_0)."""
+        assert len(SUPPORTED_FORMATS) == 7
 
     def test_all_formats_present(self):
-        """All five formats should be present."""
-        expected = {"gguf", "onnx", "tensorrt", "awq", "gptq"}
+        """All seven formats should be present (v0.52.0 + bitnet/tq1_0 stubs)."""
+        expected = {"gguf", "onnx", "tensorrt", "awq", "gptq", "bitnet", "tq1_0"}
         assert set(SUPPORTED_FORMATS) == expected
 
 

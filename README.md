@@ -43,13 +43,16 @@ soup train
 
 Latest highlights only. Full history: [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 
-**v0.51.0 — Model Catalog Expansion**: 26 new ready-made recipes covering 25 model families, plus alternative-hub support (ModelScope + Modelers / Openmind) for users in regions where HF Hub is unreachable. Closes the day-zero coverage gap with Unsloth.
+**v0.52.0 — Modality II (TTS + Distillation + BitNet + EBFT/GDPO + MoE quant + reasoning_effort)**: 5 TTS model families, classifier / reranker / cross-encoder training, knowledge distillation, BitNet 1.58-bit, Energy-Based FT, Generalized DPO, per-expert MoE quantization, and gpt-oss reasoning-effort schema — schema-only release; live trainer / loss / export wiring lands in v0.52.1.
 
-- **26 new recipes** across reasoning + agent (GPT-OSS 20B/120B, GLM 4.6 / 5, Kimi K2 / K2-Thinking GRPO, MiniMax-M2, QwQ-32B GRPO, QVQ-72B), small / specialist (Granite 4, Liquid LFM2, Cogito v2, Mistral Small 3 / Medium 3.5, Magistral / Devstral / Ministral, MedGemma, EmbeddingGemma), and vision / multimodal (LLaVA-Next, InternVL 3.5, Voxtral, Baichuan 2, Qwen-Image, DeepSeek-OCR, Paddle-OCR-VL). Browse them via `soup recipes list` / `soup recipes search <keyword>`. Catalog grows 80 → 106.
-- **Alternative model hubs.** New `training.hub: hf | modelscope | modelers` with full SSRF-hardened endpoint validators (parity with v0.29.0 `HF_ENDPOINT` policy — scheme allowlist, loopback-only HTTP, RFC1918 / link-local / cloud-metadata IP rejection, control-character rejection). `MODELSCOPE_ENDPOINT` / `MODELERS_ENDPOINT` env vars override the default hub URL the same way `HF_ENDPOINT` already does. Schema-only this release; live downloader + uploader wiring lands in v0.51.1.
-- **20 new architectures in the multipack allowlist.** `MULTIPACK_ARCHITECTURES` grows 18 → 38 to enable FFD bin-packing on Granite, GLM, Kimi, MiniMax, QwQ, QVQ, GPT-OSS, Magistral, Devstral, Ministral, MedGemma, LFM2, Cogito, Hunyuan, Ernie, Yi, Baichuan, ChatGLM.
-- **MLX backend cross-validator.** `backend: mlx` + `hub: modelscope` is now rejected at config-load with a distinct error message (`mlx-lm` only downloads from HF Hub) — prevents a silent runtime confusion.
-- **+449 net new tests** (6729 → 7178). 4 sequential review agents (python-review, security-review, code-review, tdd-guide) each fed back HIGH/MEDIUM/LOW findings; every finding was fixed before commit (case-insensitive `hub` field-validator, MLX cross-validator, control-char rejection in endpoint validator, `is_hf` bool guard, exact-count multipack arch invariant, empty-component model-id check).
+- **TTS fine-tuning.** New `task='tts'` + `modality='audio_out'` with a closed allowlist of five model families (Orpheus, Sesame-CSM, Llasa, Spark, Oute) and per-family emotion-tag allowlists for Orpheus + Oute. Five new recipes: `orpheus-tts-sft`, `sesame-csm-tts`, `llasa-tts`, `spark-tts`, `oute-tts`.
+- **Classifier / reranker / cross-encoder tasks.** New `task` values `classifier`, `reranker`, `cross_encoder` with `num_labels`, `classifier_kind` (single_label / multi_label), `label_names` (1024-cap + dedup + null-byte rejection). Cross-validator requires `num_labels` and matches `len(label_names) == num_labels`.
+- **Knowledge distillation.** New `task='distill'` + `teacher_model` (HF id or local path) + `distill_divergence` (`kl` / `forward_kl` / `reverse_kl` / `js` — `kl` canonicalises to `forward_kl`) + `distill_temperature` (math.isfinite + [0.05, 100.0] bounds).
+- **BitNet 1.58-bit + GGUF export schema.** `quantization='bitnet_1.58'` accepted for task ∈ {sft, pretrain, dpo} on transformers/unsloth backends; new BitNet / TQ1_0 export-format allowlist; `falcon-e-bitnet-sft` recipe shipped.
+- **EBFT + GDPO.** Energy-Based FT variants (`structured` / `strided`) gated to `task='sft'`; Generalized DPO variants (`standard` / `length_normalized` / `margin`) gated to DPO-family tasks.
+- **MoE expert quant + router-only training.** `moe_expert_quant: nf4 | int8_rowwise` and `train_router_only: true` — both require `moe_lora=true` (silent-no-op rejection at config-load).
+- **gpt-oss `reasoning_effort: low | medium | high`** + `train_on_eot: bool`. Both gated to the SFT-family task set (sft / pretrain / distill / classifier / reranker / cross_encoder) — non-SFT tasks reject loudly.
+- **+272 net new tests** (7184 → 7456). 4 review agents (python-reviewer, security-reviewer, code-reviewer, tdd-guide) ran; every finding fixed: `num_labels` bool-before-int guard, `reasoning_effort` / `train_on_eot` task-gate, Oute emotion allowlist, `_validate_classifier_compat` lazy-import guard, `_MAX_LEN` → `_MAX_REASONING_EFFORT_LEN`, `DIVERGENCES` derived from alias map, sister-function bool guards on every compat helper, expanded TDD coverage (oversize on EBFT variant, full GDPO rejection matrix, explicit-exc on temperature bounds, TTS compat input guards, recipe model-id null/whitespace check).
 
 ## Why Soup?
 
@@ -137,6 +140,10 @@ soup export --model ./output --format awq --bits 4 --group-size 128
 
 # Export to GPTQ quantized model (pip install 'soup-cli[gptq]')
 soup export --model ./output --format gptq --bits 4 --group-size 128
+
+# BitNet 1.58-bit + TQ1_0 GGUF (schema-locked in v0.52.0; live conversion in v0.52.1)
+soup export --model ./output --format bitnet
+soup export --model ./output --format tq1_0
 ```
 
 ## Config Example
@@ -3513,6 +3520,97 @@ soup data mix --apply mix_recipe.yaml
 ```
 
 Live wiring of the proxy training loop into a short `soup train` run is the v0.48.1 deliverable; v0.48.0 ships a synthetic offline proxy (quadratic penalty around the uniform simplex) so the budget tracker, optimiser surface, and recipe writer can be exercised without GPUs. `scikit-optimize` is opt-in via `OptimizerProtocol`; the default fallback is a deterministic Dirichlet sampler.
+
+## TTS Fine-Tuning (BETA, v0.52.0)
+
+Schema-only this release; live trainer wiring lands in v0.52.1.
+
+Five upstream model families are recognised: `orpheus`, `sesame_csm`, `llasa`, `spark`, `oute`. Pair `task: tts` with `modality: audio_out` and set `training.tts_family`. Orpheus + Oute support emotion conditioning via `training.tts_emotion` from a per-family allowlist (Orpheus: neutral / happy / sad / angry / excited / calm / whisper / laugh; Oute: neutral / happy / sad / angry / calm / excited).
+
+```yaml
+base: canopylabs/orpheus-3b-0.1-ft
+task: tts
+modality: audio_out
+data:
+  train: ./data/tts_train.jsonl
+  format: audio
+  audio_dir: ./data/audio
+training:
+  tts_family: orpheus
+  tts_emotion: neutral
+```
+
+Five ready-made recipes ship in v0.52.0: `orpheus-tts-sft`, `sesame-csm-tts`, `llasa-tts`, `spark-tts`, `oute-tts` — copy with `soup recipes use <name>`. Cross-validators reject the `mlx` backend, `modality != audio_out`, and emotion tags outside the per-family allowlist.
+
+## Classifier / Reranker / Cross-Encoder Training (BETA, v0.52.0)
+
+Three new task types build on the existing embedding trainer: `task: classifier` (single-label or multi-label sequence classification), `task: reranker` (pointwise retrieval scoring), `task: cross_encoder` (paired-input scoring). Schema-only; live trainer wrapper in v0.52.1.
+
+```yaml
+base: BAAI/bge-base-en-v1.5
+task: classifier
+data:
+  train: ./data/classification.jsonl
+training:
+  num_labels: 3
+  classifier_kind: single_label
+  label_names: [negative, neutral, positive]
+```
+
+`num_labels` is bounded `[1, 1024]` with explicit bool-before-int rejection; `label_names` (optional) must be unique, ≤128 chars each, and match `num_labels` in length when set.
+
+## Knowledge Distillation (BETA, v0.52.0)
+
+New `task: distill` with `training.teacher_model` (HF id or local path), `training.distill_divergence` (`kl` / `forward_kl` / `reverse_kl` / `js` — `kl` canonicalises to `forward_kl`), and `training.distill_temperature` (bounded `[0.05, 100.0]`, finite-only). Schema-only; live loop in v0.52.1.
+
+```yaml
+base: meta-llama/Llama-3.2-1B
+task: distill
+data:
+  train: ./data/distill.jsonl
+training:
+  teacher_model: meta-llama/Llama-3.1-8B
+  distill_divergence: forward_kl
+  distill_temperature: 2.0
+```
+
+The cross-validator rejects `task='distill'` without `teacher_model`, and rejects `teacher_model` / `distill_*` fields when `task` is anything other than `distill`.
+
+## BitNet 1.58-Bit Fine-Tuning (BETA, v0.52.0)
+
+New `training.quantization: bitnet_1.58` for ternary-weight training (axolotl + onebitllms wrapping). Schema-only on the trainer side; the new export targets are wired as CLI stubs:
+
+```bash
+# Schema-locked; live export lands in v0.52.1.
+soup export --model ./output --format bitnet
+soup export --model ./output --format tq1_0
+```
+
+A ready-made `falcon-e-bitnet-sft` recipe is shipped:
+
+```bash
+soup recipes use falcon-e-bitnet-sft
+soup train --config soup.yaml
+```
+
+Restricted to `task ∈ {sft, pretrain, dpo}` on `backend ∈ {transformers, unsloth}` with text modality; the cross-validator rejects MLX and vision/audio configurations loudly at config load.
+
+## EBFT + GDPO (BETA, v0.52.0)
+
+Energy-Based Fine-Tuning (axolotl) lands as `training.ebft_variant ∈ {structured, strided}` + `training.ebft_temperature` (bounded `[1e-4, 100.0]`). Gated to `task: sft`. Generalized DPO lands as `training.gdpo_variant ∈ {standard, length_normalized, margin}` — gated to `task ∈ {dpo, preference}`. Live loss kernels in v0.52.1.
+
+## MoE Expert Quantization + Router-Only Training (v0.52.0)
+
+For fused-MoE models trained with `moe_lora: true`, two new toggles ship:
+
+- `training.moe_expert_quant: nf4 | int8_rowwise` — per-expert weight quantization (axolotl).
+- `training.train_router_only: true` — freeze every expert and train only the gating router (unsloth pattern).
+
+Both reject silently-no-op combinations: setting either flag without `moe_lora=true` fails at config load with an actionable message.
+
+## gpt-oss `reasoning_effort` + `train_on_eot` (v0.52.0)
+
+`training.reasoning_effort: low | medium | high` injects a system-prefix token at training time for gpt-oss models; `training.train_on_eot: true` includes explicit EOT/EOS control tokens in the SFT loss (axolotl `train_on_eot`). Both are gated to the SFT-family task set (`sft` / `pretrain` / `distill` / `classifier` / `reranker` / `cross_encoder`) — setting them on DPO / GRPO / PPO / etc. fails at config load. Live formatter wiring in v0.52.1.
 
 ## Changelog
 

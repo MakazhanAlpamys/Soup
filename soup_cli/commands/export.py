@@ -13,7 +13,12 @@ from rich.panel import Panel
 
 console = Console()
 
-SUPPORTED_FORMATS = ("gguf", "onnx", "tensorrt", "awq", "gptq")
+SUPPORTED_FORMATS = (
+    "gguf", "onnx", "tensorrt", "awq", "gptq",
+    # v0.52.0 Part D — BitNet 1.58-bit + TQ1_0 GGUF.
+    # Schema-only stubs in v0.52.0; live conversion lands in v0.52.1.
+    "bitnet", "tq1_0",
+)
 GGUF_QUANT_TYPES = ("q4_0", "q4_k_m", "q5_k_m", "q8_0", "f16", "f32")
 LLAMA_CPP_DIR_NAME = "llama.cpp"
 # Pin to a known release tag for supply-chain safety
@@ -31,7 +36,7 @@ def export(
         "gguf",
         "--format",
         "-f",
-        help="Export format: gguf, onnx, tensorrt",
+        help="Export format: gguf, onnx, tensorrt, awq, gptq, bitnet, tq1_0",
     ),
     quant: str = typer.Option(
         "q4_k_m",
@@ -146,6 +151,29 @@ def export(
             calibration_data, calibration_samples, trust_remote_code,
         )
         return
+
+    # --- BitNet 1.58-bit / TQ1_0 GGUF — schema-only stubs (v0.52.0) ---
+    # Live conversion via onebitllms + llama.cpp TQ1_0 lands in v0.52.1.
+    if fmt in ("bitnet", "tq1_0"):
+        from soup_cli.utils.bitnet import validate_bitnet_export
+        try:
+            canonical = validate_bitnet_export(fmt)
+        except (TypeError, ValueError) as exc:
+            console.print(f"[red]{exc}[/]")
+            raise typer.Exit(2)
+        console.print(Panel.fit(
+            (
+                f"[yellow]{canonical} export is schema-locked in v0.52.0; "
+                "live conversion lands in v0.52.1.[/]\n\n"
+                "The format flag is accepted so existing scripts pinned to "
+                "v0.52.0 will not break, but no artifact is written yet. "
+                "Watch the v0.52.1 release notes for the live "
+                "onebitllms / llama.cpp wiring."
+            ),
+            title=f"export --format {canonical} (deferred)",
+            border_style="yellow",
+        ))
+        raise typer.Exit(0)
 
     if quant not in GGUF_QUANT_TYPES:
         console.print(

@@ -3244,4 +3244,168 @@ training:
 output: ./output
 """,
     ),
+    # ---- v0.52.0 Modality II — TTS / BitNet / classifier / distill ----
+    "orpheus-tts-sft": RecipeMeta(
+        model="canopylabs/orpheus-3b-0.1-ft",
+        task="tts",
+        size="3B",
+        tags=("tts", "orpheus", "audio_out", "v0.52.0"),
+        description="Orpheus emotional TTS — schema-only stub (live in v0.52.1)",
+        yaml_str="""\
+base: canopylabs/orpheus-3b-0.1-ft
+task: tts
+modality: audio_out
+
+data:
+  train: ./data/tts_train.jsonl
+  format: audio
+  audio_dir: ./data/audio
+  max_length: 2048
+
+training:
+  epochs: 3
+  lr: 5e-5
+  batch_size: auto
+  tts_family: orpheus
+  tts_emotion: neutral
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+
+output: ./output
+""",
+    ),
+    "sesame-csm-tts": RecipeMeta(
+        model="sesame/csm-1b",
+        task="tts",
+        size="1B",
+        tags=("tts", "sesame", "audio_out", "v0.52.0"),
+        description="Sesame CSM conversational speech — schema-only stub",
+        yaml_str="""\
+base: sesame/csm-1b
+task: tts
+modality: audio_out
+
+data:
+  train: ./data/tts_train.jsonl
+  format: audio
+  audio_dir: ./data/audio
+  max_length: 2048
+
+training:
+  epochs: 3
+  lr: 5e-5
+  batch_size: auto
+  tts_family: sesame_csm
+
+output: ./output
+""",
+    ),
+    "llasa-tts": RecipeMeta(
+        model="HKUSTAudio/Llasa-1B",
+        task="tts",
+        size="1B",
+        tags=("tts", "llasa", "audio_out", "v0.52.0"),
+        description="Llasa-TTS — schema-only stub",
+        yaml_str="""\
+base: HKUSTAudio/Llasa-1B
+task: tts
+modality: audio_out
+
+data:
+  train: ./data/tts_train.jsonl
+  format: audio
+  audio_dir: ./data/audio
+  max_length: 2048
+
+training:
+  epochs: 3
+  lr: 5e-5
+  batch_size: auto
+  tts_family: llasa
+
+output: ./output
+""",
+    ),
+    "spark-tts": RecipeMeta(
+        model="SparkAudio/Spark-TTS-0.5B",
+        task="tts",
+        size="0.5B",
+        tags=("tts", "spark", "audio_out", "v0.52.0"),
+        description="Spark-TTS — schema-only stub",
+        yaml_str="""\
+base: SparkAudio/Spark-TTS-0.5B
+task: tts
+modality: audio_out
+
+data:
+  train: ./data/tts_train.jsonl
+  format: audio
+  audio_dir: ./data/audio
+  max_length: 2048
+
+training:
+  epochs: 3
+  lr: 5e-5
+  batch_size: auto
+  tts_family: spark
+
+output: ./output
+""",
+    ),
+    "oute-tts": RecipeMeta(
+        model="OuteAI/OuteTTS-0.3-500M",
+        task="tts",
+        size="0.5B",
+        tags=("tts", "oute", "audio_out", "emotion", "v0.52.0"),
+        description="Oute-TTS with emotion conditioning — schema-only stub",
+        yaml_str="""\
+base: OuteAI/OuteTTS-0.3-500M
+task: tts
+modality: audio_out
+
+data:
+  train: ./data/tts_train.jsonl
+  format: audio
+  audio_dir: ./data/audio
+  max_length: 2048
+
+training:
+  epochs: 3
+  lr: 5e-5
+  batch_size: auto
+  tts_family: oute
+
+output: ./output
+""",
+    ),
+    "falcon-e-bitnet-sft": RecipeMeta(
+        model="tiiuae/Falcon-E-1B-Instruct",
+        task="sft",
+        size="1B",
+        tags=("bitnet", "1.58bit", "falcon-e", "ternary", "v0.52.0"),
+        description="Falcon-E BitNet 1.58-bit SFT — schema-only stub",
+        yaml_str="""\
+base: tiiuae/Falcon-E-1B-Instruct
+task: sft
+
+data:
+  train: ./data/train.jsonl
+  format: auto
+  max_length: 2048
+
+training:
+  epochs: 3
+  lr: 1e-4
+  batch_size: auto
+  quantization: bitnet_1.58
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+
+output: ./output
+""",
+    ),
 }

@@ -705,6 +705,8 @@ class TrainingConfig(BaseModel):
         "eetq",
         "mxfp4",
         "fp8",
+        # v0.52.0 Part D — BitNet 1.58-bit (axolotl + onebitllms).
+        "bitnet_1.58",
     ] = Field(
         default="4bit",
         description=(
@@ -714,7 +716,8 @@ class TrainingConfig(BaseModel):
             "hqq:Nbit (HQQ 1-8 bit, N in {1..6, 8}), "
             "aqlm (extreme 2-bit), eetq (8-bit fast), "
             "mxfp4 (BNB 4-bit MXFP4 quant_type), "
-            "fp8 (load FP8 checkpoint with dequantize-on-load)."
+            "fp8 (load FP8 checkpoint with dequantize-on-load), "
+            "bitnet_1.58 (BitNet ternary, v0.52.0 schema-only)."
         ),
     )
     gptq_disable_exllama: bool = Field(
@@ -1058,6 +1061,243 @@ class TrainingConfig(BaseModel):
             "uploader wiring deferred to v0.51.1."
         ),
     )
+
+    # ---- v0.52.0 — Modality II (schema-only; live wiring in v0.52.1) ----
+    # Part A — TTS
+    tts_family: Optional[Literal[
+        "orpheus", "sesame_csm", "llasa", "spark", "oute"
+    ]] = Field(
+        default=None,
+        description=(
+            "TTS model family — required when task='tts'. One of: orpheus, "
+            "sesame_csm, llasa, spark, oute. Schema-only in v0.52.0; live "
+            "trainer wrapper deferred to v0.52.1."
+        ),
+    )
+    tts_emotion: Optional[str] = Field(
+        default=None,
+        description=(
+            "Optional emotion tag for emotion-conditioned families "
+            "(Orpheus / Oute). Allowlisted per-family. (v0.52.0)"
+        ),
+    )
+    # Part B — classifier / reranker / cross_encoder
+    num_labels: Optional[int] = Field(
+        default=None, ge=1, le=1024,
+        description=(
+            "Number of output labels for task in (classifier, reranker, "
+            "cross_encoder). Required when task is one of those. (v0.52.0)"
+        ),
+    )
+    classifier_kind: Optional[Literal["single_label", "multi_label"]] = Field(
+        default=None,
+        description=(
+            "Sequence-classification head kind: single_label (default for "
+            "task='classifier') or multi_label. (v0.52.0)"
+        ),
+    )
+    label_names: Optional[List[str]] = Field(
+        default=None,
+        description=(
+            "Optional human-readable label names. Length must match "
+            "num_labels. Capped at 1024 entries. (v0.52.0)"
+        ),
+    )
+    # Part C — knowledge distillation
+    teacher_model: Optional[str] = Field(
+        default=None,
+        description=(
+            "Teacher model HF id or local path — required when task='distill'. "
+            "Null-byte rejected, capped at 512 chars. Schema-only in v0.52.0; "
+            "live distill trainer deferred to v0.52.1."
+        ),
+    )
+    distill_divergence: Optional[Literal[
+        "forward_kl", "reverse_kl", "js"
+    ]] = Field(
+        default=None,
+        description=(
+            "Divergence used for distillation loss. 'kl' is an alias for "
+            "'forward_kl' (canonical form). (v0.52.0)"
+        ),
+    )
+    distill_temperature: Optional[float] = Field(
+        default=None,
+        description=(
+            "Softmax temperature applied to teacher and student logits "
+            "before the divergence. Bounded [0.05, 100.0]. (v0.52.0)"
+        ),
+    )
+    # Part E — EBFT + GDPO
+    ebft_variant: Optional[Literal["structured", "strided"]] = Field(
+        default=None,
+        description=(
+            "Energy-Based FT variant. SFT-task-only; live loss kernel "
+            "deferred to v0.52.1. (v0.52.0)"
+        ),
+    )
+    ebft_temperature: Optional[float] = Field(
+        default=None,
+        description=(
+            "Sampling temperature for EBFT energy proxy. Bounded "
+            "[1e-4, 100.0]. (v0.52.0)"
+        ),
+    )
+    gdpo_variant: Optional[Literal[
+        "standard", "length_normalized", "margin"
+    ]] = Field(
+        default=None,
+        description=(
+            "Generalized DPO variant. DPO-family-task-only; live loss kernel "
+            "deferred to v0.52.1. (v0.52.0)"
+        ),
+    )
+    # Part F — MoE expert quantization + router-only training
+    moe_expert_quant: Optional[Literal["nf4", "int8_rowwise"]] = Field(
+        default=None,
+        description=(
+            "Per-expert quantization for fused-MoE Linear blocks. "
+            "Requires moe_lora=true. (v0.52.0)"
+        ),
+    )
+    train_router_only: bool = Field(
+        default=False,
+        description=(
+            "Freeze every expert + train only the gating router (unsloth "
+            "MoE recipe). Requires moe_lora=true. (v0.52.0)"
+        ),
+    )
+    # Part G — gpt-oss reasoning effort + EOT control
+    reasoning_effort: Optional[Literal["low", "medium", "high"]] = Field(
+        default=None,
+        description=(
+            "gpt-oss train-time reasoning effort level. Routes through a "
+            "prompt prefix at training time; live formatter wiring deferred "
+            "to v0.52.1. (v0.52.0)"
+        ),
+    )
+    train_on_eot: bool = Field(
+        default=False,
+        description=(
+            "Include explicit EOT / EOS control tokens in the SFT loss "
+            "(axolotl ``train_on_eot``). Default False matches HF Trainer "
+            "convention. (v0.52.0)"
+        ),
+    )
+
+    @field_validator("teacher_model")
+    @classmethod
+    def _validate_teacher_model(cls, v: Optional[str]) -> Optional[str]:
+        """v0.52.0 Part C — null-byte rejection + 512-char cap.
+
+        Mirrors v0.40.5 ``reward_model`` field-validator policy. The bool
+        rejection happens inside ``validate_teacher_model`` which lives in
+        ``utils/distill.py`` so the runtime validator and schema agree on
+        what's accepted.
+        """
+        if v is None:
+            return v
+        from soup_cli.utils.distill import validate_teacher_model
+
+        return validate_teacher_model(v)
+
+    @field_validator("distill_divergence", mode="before")
+    @classmethod
+    def _normalize_distill_divergence(cls, v):
+        """v0.52.0 Part C — canonicalise ``kl`` → ``forward_kl``.
+
+        Mirrors v0.51.0 ``_normalize_hub`` policy: the field validator runs
+        the shared ``validate_*`` helper at ``mode='before'`` so the public
+        schema and runtime validator agree on what's accepted.
+        """
+        if v is None:
+            return None
+        from soup_cli.utils.distill import validate_divergence
+
+        return validate_divergence(v)
+
+    @field_validator("distill_temperature", mode="before")
+    @classmethod
+    def _validate_distill_temperature(cls, v):
+        """v0.52.0 Part C — bool/NaN-rejected float in [0.05, 100]."""
+        if v is None:
+            return None
+        from soup_cli.utils.distill import validate_distill_temperature
+
+        return validate_distill_temperature(v)
+
+    @field_validator("ebft_temperature", mode="before")
+    @classmethod
+    def _validate_ebft_temperature(cls, v):
+        """v0.52.0 Part E — bool/NaN-rejected float in [1e-4, 100]."""
+        if v is None:
+            return None
+        from soup_cli.utils.ebft_gdpo import validate_ebft_temperature
+
+        return validate_ebft_temperature(v)
+
+    @field_validator("label_names")
+    @classmethod
+    def _validate_label_names(cls, v):
+        """v0.52.0 Part B — dedup + per-entry validation."""
+        if v is None:
+            return None
+        from soup_cli.utils.classifier import validate_label_names
+
+        return validate_label_names(v)
+
+    @field_validator("num_labels", mode="before")
+    @classmethod
+    def _validate_num_labels(cls, v):
+        """v0.52.0 Part B (security review fix) — bool-before-int guard.
+
+        Pydantic v2's ``Field(ge=1, le=1024)`` accepts ``True`` because bool
+        subclasses int; explicit guard matches the project policy
+        established in v0.30.0 ``Candidate`` / v0.36.0 ``make_cache_key`` /
+        v0.41.0 ``expand_layers`` / v0.50.0 GRPO numeric fields.
+        """
+        if v is None:
+            return None
+        from soup_cli.utils.classifier import validate_num_labels
+
+        return validate_num_labels(v)
+
+    @field_validator("reasoning_effort", mode="before")
+    @classmethod
+    def _validate_reasoning_effort(cls, v):
+        """v0.52.0 Part G (security review fix) — canonicalise case +
+        bool/null-byte/oversize rejection via the shared helper.
+
+        Mirrors v0.51.0 ``_normalize_hub`` and v0.41.0 ``optimizer``
+        policy of routing through the public ``validate_*`` helper at
+        ``mode='before'`` so the schema and runtime helper agree on what's
+        accepted.
+        """
+        if v is None:
+            return None
+        from soup_cli.utils.reasoning_effort import validate_reasoning_effort
+
+        return validate_reasoning_effort(v)
+
+    @field_validator("tts_emotion")
+    @classmethod
+    def _validate_tts_emotion_field(cls, v: Optional[str]) -> Optional[str]:
+        """v0.52.0 Part A — bool / null-byte / oversize rejection (without
+        family-specific allowlist; that fires in the cross-validator).
+        """
+        if v is None:
+            return None
+        if isinstance(v, bool):
+            raise ValueError("tts_emotion must not be bool")
+        if not isinstance(v, str):
+            raise ValueError("tts_emotion must be str")
+        if not v:
+            raise ValueError("tts_emotion must be non-empty")
+        if "\x00" in v:
+            raise ValueError("tts_emotion must not contain null bytes")
+        if len(v) > 32:
+            raise ValueError("tts_emotion too long (max 32 chars)")
+        return v
 
     @field_validator("hub", mode="before")
     @classmethod
@@ -1896,16 +2136,24 @@ class SoupConfig(BaseModel):
     task: Literal[
         "sft", "dpo", "grpo", "ppo", "reward_model", "kto", "orpo", "simpo", "ipo",
         "bco", "preference", "pretrain", "embedding", "prm",
+        # v0.52.0 Modality II — TTS / classifier-family / distillation.
+        "tts", "classifier", "reranker", "cross_encoder", "distill",
     ] = Field(
         default="sft",
         description=(
-            "Training task type. v0.50.0 Part E adds 'prm' (Process Reward "
-            "Model / stepwise supervised — paired with data.format='prm')."
+            "Training task type. v0.50.0 Part E added 'prm'; v0.52.0 adds "
+            "'tts' (TTS fine-tuning), 'classifier' / 'reranker' / "
+            "'cross_encoder' (classification heads), and 'distill' "
+            "(knowledge distillation)."
         ),
     )
-    modality: Literal["text", "vision", "audio"] = Field(
+    modality: Literal["text", "vision", "audio", "audio_out"] = Field(
         default="text",
-        description="Training modality: text (default), vision (multimodal), or audio",
+        description=(
+            "Training modality: text (default), vision (multimodal), audio "
+            "(audio-input), or audio_out (audio-output — paired with task='tts', "
+            "v0.52.0)."
+        ),
     )
     backend: Literal["transformers", "unsloth", "mlx"] = Field(
         default="transformers",
@@ -2228,6 +2476,249 @@ class SoupConfig(BaseModel):
                 "backend=mlx (mlx-lm only downloads from HF Hub). "
                 "Use hub='hf' on the mlx backend."
             )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_tts_compat(self) -> "SoupConfig":
+        """v0.52.0 Part A — ``task='tts'`` gate."""
+        tcfg = self.training
+        if self.task != "tts" and tcfg.tts_family is None and tcfg.tts_emotion is None:
+            return self
+        if self.task == "tts":
+            from soup_cli.utils.tts import (
+                validate_emotion_tag,
+                validate_tts_compat,
+            )
+
+            try:
+                validate_tts_compat(
+                    task=self.task,
+                    modality=self.modality,
+                    backend=self.backend,
+                )
+            except ValueError as exc:
+                raise ValueError(str(exc)) from exc
+            if tcfg.tts_family is None:
+                raise ValueError(
+                    "task='tts' requires training.tts_family in "
+                    "(orpheus, sesame_csm, llasa, spark, oute)"
+                )
+            if tcfg.tts_emotion is not None:
+                try:
+                    validate_emotion_tag(tcfg.tts_emotion, family=tcfg.tts_family)
+                except ValueError as exc:
+                    raise ValueError(str(exc)) from exc
+            return self
+        # tts_family / tts_emotion outside task='tts' is a silent-no-op
+        # footgun; reject loudly (mirrors v0.50.0 GRPO stability policy).
+        if tcfg.tts_family is not None:
+            raise ValueError(
+                f"training.tts_family={tcfg.tts_family!r} requires task='tts'; "
+                f"got task={self.task!r}"
+            )
+        if tcfg.tts_emotion is not None:
+            raise ValueError(
+                f"training.tts_emotion={tcfg.tts_emotion!r} requires task='tts'; "
+                f"got task={self.task!r}"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_classifier_compat(self) -> "SoupConfig":
+        """v0.52.0 Part B — classifier / reranker / cross_encoder gate.
+
+        Lazy-import policy (code-review fix): guard the import behind the
+        cheap str-only ``self.task`` check so the common ``task='sft'`` hot
+        path does not pay an import cost on every config load.
+        """
+        tcfg = self.training
+        classifier_tasks = {"classifier", "reranker", "cross_encoder"}
+        classifier_fields_set = (
+            tcfg.num_labels is not None
+            or tcfg.classifier_kind is not None
+            or tcfg.label_names is not None
+        )
+        if self.task not in classifier_tasks and not classifier_fields_set:
+            return self
+        from soup_cli.utils.classifier import (
+            is_classifier_task,
+            validate_classifier_compat,
+        )
+
+        if is_classifier_task(self.task):
+            try:
+                validate_classifier_compat(
+                    task=self.task,
+                    backend=self.backend,
+                    modality=self.modality,
+                )
+            except ValueError as exc:
+                raise ValueError(str(exc)) from exc
+            if tcfg.num_labels is None:
+                raise ValueError(
+                    f"task={self.task!r} requires training.num_labels "
+                    "(positive int <= 1024)"
+                )
+            if (
+                tcfg.label_names is not None
+                and len(tcfg.label_names) != tcfg.num_labels
+            ):
+                raise ValueError(
+                    f"len(label_names)={len(tcfg.label_names)} does not "
+                    f"match num_labels={tcfg.num_labels}"
+                )
+            return self
+        # Reject classifier-only fields when task is not a classifier task.
+        for field in ("num_labels", "classifier_kind", "label_names"):
+            value = getattr(tcfg, field)
+            if value is not None:
+                raise ValueError(
+                    f"training.{field} requires task in "
+                    "(classifier, reranker, cross_encoder); "
+                    f"got task={self.task!r}"
+                )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_distill_compat(self) -> "SoupConfig":
+        """v0.52.0 Part C — ``task='distill'`` gate."""
+        tcfg = self.training
+        distill_fields_set = (
+            tcfg.teacher_model is not None
+            or tcfg.distill_divergence is not None
+            or tcfg.distill_temperature is not None
+        )
+        if self.task == "distill":
+            from soup_cli.utils.distill import validate_distill_compat
+
+            try:
+                validate_distill_compat(
+                    task=self.task,
+                    backend=self.backend,
+                    teacher_model=tcfg.teacher_model,
+                )
+            except ValueError as exc:
+                raise ValueError(str(exc)) from exc
+            return self
+        if distill_fields_set:
+            offenders = [
+                name for name, value in (
+                    ("teacher_model", tcfg.teacher_model),
+                    ("distill_divergence", tcfg.distill_divergence),
+                    ("distill_temperature", tcfg.distill_temperature),
+                ) if value is not None
+            ]
+            raise ValueError(
+                f"Distillation fields {offenders} require task='distill'; "
+                f"got task={self.task!r}"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_bitnet_compat(self) -> "SoupConfig":
+        """v0.52.0 Part D — ``quantization='bitnet_1.58'`` gate."""
+        if self.training.quantization != "bitnet_1.58":
+            return self
+        from soup_cli.utils.bitnet import validate_bitnet_compat
+
+        try:
+            validate_bitnet_compat(
+                task=self.task,
+                backend=self.backend,
+                modality=self.modality,
+            )
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
+        return self
+
+    @model_validator(mode="after")
+    def _validate_ebft_compat(self) -> "SoupConfig":
+        """v0.52.0 Part E — ``ebft_variant`` requires SFT, non-MLX."""
+        tcfg = self.training
+        if tcfg.ebft_variant is None and tcfg.ebft_temperature is None:
+            return self
+        if tcfg.ebft_variant is None and tcfg.ebft_temperature is not None:
+            raise ValueError(
+                "training.ebft_temperature requires training.ebft_variant "
+                "to be set"
+            )
+        from soup_cli.utils.ebft_gdpo import validate_ebft_compat
+
+        try:
+            validate_ebft_compat(task=self.task, backend=self.backend)
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
+        return self
+
+    @model_validator(mode="after")
+    def _validate_gdpo_compat(self) -> "SoupConfig":
+        """v0.52.0 Part E — ``gdpo_variant`` requires DPO/preference, non-MLX."""
+        if self.training.gdpo_variant is None:
+            return self
+        from soup_cli.utils.ebft_gdpo import validate_gdpo_compat
+
+        try:
+            validate_gdpo_compat(task=self.task, backend=self.backend)
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
+        return self
+
+    @model_validator(mode="after")
+    def _validate_reasoning_effort_task_gate(self) -> "SoupConfig":
+        """v0.52.0 Part G (code-review fix) — surface the silent-no-op
+        footgun when ``reasoning_effort`` / ``train_on_eot`` is set on a
+        task they cannot influence.
+
+        Mirrors v0.50.0 ``_validate_grpo_stability_task_gate`` policy.
+        ``reasoning_effort`` only makes sense on SFT-family training
+        (sft / pretrain / distill / classifier-family) because the live
+        formatter (v0.52.1) will inject a system-prefix token. The other
+        tasks (DPO / GRPO / KTO / ORPO / SimPO / IPO / BCO / preference /
+        PPO / reward_model / embedding / prm / tts) do not consume it.
+
+        ``train_on_eot`` is an SFT loss-mask flag; setting it on
+        DPO/GRPO/etc. is a silent no-op.
+        """
+        tcfg = self.training
+        sft_family_tasks = {
+            "sft", "pretrain", "distill",
+            "classifier", "reranker", "cross_encoder",
+        }
+        if tcfg.reasoning_effort is not None and self.task not in sft_family_tasks:
+            raise ValueError(
+                f"training.reasoning_effort={tcfg.reasoning_effort!r} requires "
+                f"task in {sorted(sft_family_tasks)}; got task={self.task!r}"
+            )
+        if tcfg.train_on_eot and self.task not in sft_family_tasks:
+            raise ValueError(
+                f"training.train_on_eot=true requires task in "
+                f"{sorted(sft_family_tasks)}; got task={self.task!r}"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_moe_expert_quant_compat(self) -> "SoupConfig":
+        """v0.52.0 Part F — ``moe_expert_quant`` + ``train_router_only`` gates."""
+        tcfg = self.training
+        from soup_cli.utils.moe_quant import (
+            validate_moe_expert_quant_compat,
+            validate_train_router_only_compat,
+        )
+
+        if tcfg.moe_expert_quant is not None:
+            try:
+                validate_moe_expert_quant_compat(
+                    backend=self.backend, moe_lora=tcfg.moe_lora,
+                )
+            except ValueError as exc:
+                raise ValueError(str(exc)) from exc
+        if tcfg.train_router_only:
+            try:
+                validate_train_router_only_compat(
+                    backend=self.backend, moe_lora=tcfg.moe_lora,
+                )
+            except ValueError as exc:
+                raise ValueError(str(exc)) from exc
         return self
 
     @model_validator(mode="after")
