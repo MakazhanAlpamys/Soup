@@ -177,6 +177,22 @@ Run inference on a batch of prompts:
 soup infer --model ./output_sft_basic/ --input prompts.jsonl --output results.jsonl
 ```
 
+### 13. Synthetic-data workflow
+
+End-to-end recipe that generates training data from a local LLM, filters
++ scores + decontaminates it, then trains on the cleaned set. See
+[synthetic_workflow.md](synthetic_workflow.md) for the walkthrough and
+[synthetic_workflow.yaml](synthetic_workflow.yaml) for the bundled config.
+
+```bash
+soup data generate --provider ollama --output ./synth_raw.jsonl
+soup data filter --input ./synth_raw.jsonl --output ./synth_filtered.jsonl
+soup data score --input ./synth_filtered.jsonl --output ./synth_scored.jsonl
+soup data decontaminate --input ./synth_scored.jsonl \
+    --output ./synth_clean.jsonl --benchmarks mmlu,gsm8k
+soup train --config examples/synthetic_workflow.yaml --yes
+```
+
 ### 12. Full RLHF Pipeline
 
 Complete reinforcement learning from human feedback:

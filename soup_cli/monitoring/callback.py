@@ -128,6 +128,49 @@ class SoupTrainerCallback(TrainerCallback):
             gpu_mem=gpu_mem,
         )
 
+        # v0.53.9 #94 — push to the global SSE buffer so the live Web UI
+        # dashboard sees per-step metrics in real time. Best-effort: any
+        # exception inside the push must NEVER take down training.
+        try:
+            from soup_cli.utils.sse_train_stream import TrainEvent
+            from soup_cli.utils.train_event_buffer import push_train_event
+
+            push_train_event(
+                TrainEvent(
+                    type="metric",
+                    step=int(step) if step is not None else None,
+                    epoch=float(epoch) if epoch is not None else None,
+                    loss=float(loss) if loss else None,
+                    lr=float(lr) if lr else None,
+                    grad_norm=float(grad_norm) if grad_norm else None,
+                )
+            )
+        except Exception:
+            pass
+
+        # v0.53.9 #100 — tool-call observation for SFT runs whose batch logs
+        # surface a `tool_calls` count. Best-effort; the SFT trainer emits
+        # the field only when the data format is `tool-calling`.
+        if "tool_calls" in (logs or {}):
+            try:
+                import time
+
+                from soup_cli.utils.tool_outputs import get_global_tool_buffer
+
+                tool_count = logs.get("tool_calls")
+                if isinstance(tool_count, (int, float)) and not isinstance(
+                    tool_count, bool
+                ) and tool_count > 0:
+                    get_global_tool_buffer().record_call(
+                        name="batch",
+                        started_ts=time.time(),
+                        duration_ms=0.0,
+                        success=True,
+                        output_preview=f"observed {int(tool_count)} tool_calls at step {step}",
+                    )
+            except Exception:
+                pass
+
         # Loss watchdog — detect loss spikes and auto-stop
         if self._watchdog_enabled and not self._watchdog_fired and "loss" in logs:
             if loss > self._watchdog_threshold:

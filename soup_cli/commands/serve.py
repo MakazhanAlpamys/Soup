@@ -191,6 +191,14 @@ def serve(
         "--trace-log-cap-mb",
         help="Rotation cap in MB for --trace-log (1 - 10000). Default 100.",
     ),
+    reasoning_parser: Optional[str] = typer.Option(
+        None,
+        "--reasoning-parser",
+        help=(
+            "Strip reasoning-trace blocks from responses. One of: "
+            "deepseek-r1 | qwen3 | phi4 | openthinker. v0.53.9 #98."
+        ),
+    ),
 ):
     """Start a local inference server with OpenAI-compatible API."""
     # Lazy imports for fast CLI startup
@@ -603,6 +611,17 @@ def serve(
                 f"(cap {trace_log_cap_mb} MB)"
             )
 
+        # v0.53.9 #98 — validate reasoning parser name once at startup.
+        resolved_reasoning_parser: Optional[str] = None
+        if reasoning_parser:
+            from soup_cli.utils.reasoning_parser import validate_parser_name
+
+            try:
+                resolved_reasoning_parser = validate_parser_name(reasoning_parser)
+            except (TypeError, ValueError) as exc:
+                console.print(f"[red]--reasoning-parser:[/] {exc}")
+                raise typer.Exit(1) from exc
+
         app = _create_app(
             model_obj=model_obj,
             tokenizer=tokenizer,
@@ -616,6 +635,7 @@ def serve(
             enable_dashboard=dashboard,
             tracer=tracer,
             trace_log_writer=trace_log_writer,
+            reasoning_parser=resolved_reasoning_parser,
         )
 
     console.print(
@@ -902,6 +922,7 @@ def _create_app(
     web_search_config: Any = None,
     web_search_backend: Any = None,
     auth_token: Optional[str] = None,
+    reasoning_parser: Optional[str] = None,
 ):
     """Create the FastAPI application with OpenAI-compatible endpoints.
 
@@ -1115,6 +1136,14 @@ def _create_app(
                     raise HTTPException(status_code=500, detail="Internal server error")
 
                 metrics.record_tokens(completion_tokens)
+
+                # v0.53.9 #98 — strip reasoning-trace blocks if configured.
+                if reasoning_parser is not None:
+                    from soup_cli.utils.reasoning_parser import strip_reasoning
+
+                    response_text = strip_reasoning(
+                        response_text, reasoning_parser,
+                    )
 
                 # output_constraint is validated upstream; v0.33.0 #53 wires
                 # it through outlines / lm-format-enforcer into the generate

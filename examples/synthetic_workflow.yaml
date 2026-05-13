@@ -1,0 +1,40 @@
+# Synthetic-data workflow recipe (v0.53.9 #12)
+#
+# Pairs with `examples/synthetic_workflow.md`. Trains TinyLlama-1.1B on
+# a JSONL produced by:
+#   soup data generate --provider ollama --output ./synth_raw.jsonl
+#   soup data filter --input ./synth_raw.jsonl --output ./synth_filtered.jsonl
+#   soup data score --input ./synth_filtered.jsonl --output ./synth_scored.jsonl
+#   soup data decontaminate --input ./synth_scored.jsonl \
+#       --output ./synth_clean.jsonl --benchmarks mmlu,gsm8k
+
+base: TinyLlama/TinyLlama-1.1B-Chat-v1.0
+task: sft
+modality: text
+backend: transformers
+
+data:
+  train: ./synth_clean.jsonl
+  format: auto
+  val_split: 0.05
+  max_length: 1024
+
+training:
+  epochs: 1
+  lr: 2.0e-4
+  batch_size: auto
+  quantization: 4bit
+  optimizer: adamw_torch
+  scheduler: cosine
+  gradient_checkpointing: true
+  warmup_auto: true
+  auto_mixed_precision: true
+  lora:
+    r: 8
+    alpha: 16
+    dropout: 0.05
+
+output: ./synth_out
+
+eval:
+  auto_eval: false

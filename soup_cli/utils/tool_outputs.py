@@ -173,3 +173,19 @@ class ToolCallTimer:
         )
         # Don't suppress exceptions — `False` is explicit per project policy.
         return False
+
+
+# v0.53.9 #100 — Module-level singleton consumed by the SFT trainer
+# tool-calling callback and the FastAPI `/api/tool-outputs` endpoint.
+_GLOBAL_TOOL_BUFFER: ToolOutputsBuffer = ToolOutputsBuffer()
+
+
+def get_global_tool_buffer() -> ToolOutputsBuffer:
+    """Return the process-wide tool-output buffer."""
+    return _GLOBAL_TOOL_BUFFER
+
+
+def reset_global_tool_buffer() -> None:
+    """Replace the process-wide buffer (test hook)."""
+    global _GLOBAL_TOOL_BUFFER
+    _GLOBAL_TOOL_BUFFER = ToolOutputsBuffer()

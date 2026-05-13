@@ -189,6 +189,15 @@ from soup_cli.commands import data_mix as _data_mix_cmd  # noqa: E402
 
 data.app.command(name="mix")(_data_mix_cmd.mix)
 
+# v0.53.9 #15 — BPE tokenizer training.
+from soup_cli.commands import tokenizer as _tokenizer_cmd  # noqa: E402
+
+app.add_typer(
+    _tokenizer_cmd.app,
+    name="tokenizer",
+    help="Tokenizer tools: train a BPE tokenizer from JSONL (v0.53.9).",
+)
+
 
 @app.command()
 def version(

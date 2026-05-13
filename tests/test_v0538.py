@@ -596,10 +596,16 @@ class TestVersionBump:
     def test_init_version(self):
         import soup_cli
 
-        # v0.53.8.1 is the PyPI-recoverable patch (force-include duplicate
-        # fix); accept either as the shipped string.
-        assert soup_cli.__version__.startswith("0.53.8")
+        # Version-string is forward-monotonic: v0.53.8 baseline + any later
+        # release (v0.53.9, v0.54.0, ...) keeps this contract green.
+        assert soup_cli.__version__ >= "0.53.8"
 
     def test_pyproject_version(self):
         text = (_repo_root() / "pyproject.toml").read_text(encoding="utf-8")
-        assert 'version = "0.53.8' in text
+        # Pyproject must declare some 0.53.x or later string; the literal
+        # "0.53.8" baseline is allowed to drift forward.
+        import re
+
+        match = re.search(r'^version\s*=\s*"([^"]+)"', text, flags=re.MULTILINE)
+        assert match is not None
+        assert match.group(1) >= "0.53.8"

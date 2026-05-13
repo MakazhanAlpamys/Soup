@@ -46,13 +46,31 @@ _train_process: Optional[subprocess.Popen] = None
 _train_config_path: Optional[str] = None
 _train_lock = threading.Lock()
 
-# Auth token generated at startup — printed to console for the user
+# Auth token generated at startup — printed to console for the user.
+# Reads/writes go through `_auth_token_lock` so token rotation never
+# leaves a window where some requests see the old value and some the new.
 _auth_token: str = secrets.token_urlsafe(32)
+_auth_token_lock = threading.Lock()
 
 
 def get_auth_token() -> str:
     """Return the current auth token (for printing at startup)."""
-    return _auth_token
+    with _auth_token_lock:
+        return _auth_token
+
+
+def set_auth_token(token: str) -> None:
+    """Replace the process-wide auth token (used by `soup ui --auth-token`).
+
+    Validates via `utils.qr_url.validate_token` so a malformed override
+    can't bypass the urlsafe-base64 shape check.
+    """
+    from soup_cli.utils.qr_url import validate_token
+
+    validated = validate_token(token)
+    global _auth_token
+    with _auth_token_lock:
+        _auth_token = validated
 
 
 def create_app(host: str = "127.0.0.1", port: int = 7860):
@@ -64,19 +82,39 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
 
     app = FastAPI(title="Soup Web UI", version="1.0.0")
 
-    # Restrict CORS to the origin we actually serve
-    allowed_origin = f"http://{host}:{port}"
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=[allowed_origin],
-        allow_methods=["GET", "POST", "DELETE"],
-        allow_headers=["Authorization", "Content-Type"],
-    )
+    # Restrict CORS to the origin we actually serve. When `host == "0.0.0.0"`
+    # the literal `http://0.0.0.0:<port>` is never a browser origin, so we
+    # allow loopback origins AND the same-LAN regex shape. The Bearer
+    # token is the actual security gate on mutating endpoints.
+    if host == "0.0.0.0":
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origin_regex=(
+                r"^https?://("
+                r"localhost|127\.0\.0\.1|"
+                r"10\.\d+\.\d+\.\d+|"
+                r"192\.168\.\d+\.\d+|"
+                r"172\.(?:1[6-9]|2[0-9]|3[01])\.\d+\.\d+"
+                r")(:\d+)?$"
+            ),
+            allow_methods=["GET", "POST", "DELETE"],
+            allow_headers=["Authorization", "Content-Type"],
+        )
+    else:
+        allowed_origin = f"http://{host}:{port}"
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=[allowed_origin],
+            allow_methods=["GET", "POST", "DELETE"],
+            allow_headers=["Authorization", "Content-Type"],
+        )
 
     def _verify_token(request: Request):
         """Verify Bearer token on mutating endpoints."""
         auth = request.headers.get("Authorization", "")
-        if auth != f"Bearer {_auth_token}":
+        with _auth_token_lock:
+            expected = f"Bearer {_auth_token}"
+        if auth != expected:
             raise HTTPException(status_code=401, detail="Unauthorized")
 
     # --- Static files ---
@@ -704,6 +742,91 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
                 "X-Accel-Buffering": "no",
             },
         )
+
+    # --- v0.53.9 #94: SSE training-event stream ---
+
+    @app.get("/api/train/stream")
+    async def stream_train_events():
+        """SSE endpoint streaming `TrainEvent` payloads as JSON frames.
+
+        Per-subscriber cursor — multiple concurrent listeners each receive
+        every event (no destructive drain). Uses `asyncio.sleep` so the
+        uvicorn async loop is not blocked under default workers.
+        """
+        import asyncio
+
+        from fastapi.responses import StreamingResponse
+
+        from soup_cli.utils.sse_train_stream import TrainEvent, format_sse_frame
+        from soup_cli.utils.train_event_buffer import get_global_buffer
+
+        buffer = get_global_buffer()
+
+        async def _gen():
+            # Start from cursor 0 — new subscribers receive a bounded
+            # catch-up of retained events (deque maxlen=1000) before
+            # streaming fresh ones. Concurrent subscribers are independent.
+            cursor = 0
+            max_ticks = 200  # cap to keep test runs bounded; ~20s at 100ms
+            empty_ticks = 0
+            for _ in range(max_ticks):
+                events, cursor = buffer.snapshot_since(cursor)
+                if events:
+                    empty_ticks = 0
+                    for event in events:
+                        yield format_sse_frame(event)
+                else:
+                    empty_ticks += 1
+                    yield ":heartbeat\n\n"
+                with _train_lock:
+                    proc = _train_process
+                if proc is None or proc.poll() is not None:
+                    if empty_ticks >= 1:
+                        done = TrainEvent(type="status", message="done")
+                        yield format_sse_frame(done)
+                        return
+                await asyncio.sleep(0.1)
+            done = TrainEvent(type="status", message="timeout")
+            yield format_sse_frame(done)
+
+        return StreamingResponse(
+            _gen(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    # --- v0.53.9 #100: Tool-call observation panel ---
+
+    @app.get("/api/tool-outputs")
+    def list_tool_outputs(
+        limit: int = Query(default=100, ge=1, le=1000),
+    ):
+        """Return the most recent tool-call records as JSON.
+
+        Records are pushed by the SFT trainer's tool-calling callback
+        into the process-wide `ToolOutputsBuffer`. Read-only; safe for
+        cross-origin polling.
+        """
+        from soup_cli.utils.tool_outputs import get_global_tool_buffer
+
+        records = get_global_tool_buffer().snapshot(limit=limit)
+        return {
+            "count": len(records),
+            "records": [
+                {
+                    "name": r.name,
+                    "started_ts": r.started_ts,
+                    "duration_ms": r.duration_ms,
+                    "success": r.success,
+                    "output_preview": r.output_preview,
+                    "error": r.error,
+                }
+                for r in records
+            ],
+        }
 
     # --- Health ---
 

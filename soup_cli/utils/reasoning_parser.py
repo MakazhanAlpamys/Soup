@@ -7,6 +7,7 @@ to v0.44.1.
 
 from __future__ import annotations
 
+import re
 from types import MappingProxyType
 from typing import Mapping, Optional
 
@@ -49,3 +50,49 @@ def parser_description(name: str) -> Optional[str]:
     if not isinstance(name, str):
         return None
     return _REASONING_PARSERS.get(name.lower())
+
+
+# v0.53.9 #98 — Per-parser regex matrix for `<think>...</think>` stripping.
+# All four parsers strip the same standard `<think>...</think>` block;
+# OpenThinker uses `<|begin_of_thought|>...<|end_of_thought|>` per upstream.
+_THINK_RE = re.compile(r"<think\b[^>]*>.*?</think>", re.IGNORECASE | re.DOTALL)
+_OPENTHINKER_RE = re.compile(
+    r"<\|begin_of_thought\|>.*?<\|end_of_thought\|>", re.DOTALL
+)
+
+
+def strip_reasoning(text: str, parser: Optional[str]) -> str:
+    """Strip reasoning-trace blocks from `text` per `parser`.
+
+    Returns `text` unchanged when `parser` is `None`/empty, when the parser
+    is unknown (defensive — caller should validate first), or when `text`
+    is not a str. Idempotent: applying twice yields the same result.
+
+    Cap: input length capped at 1 MiB; longer payloads are returned
+    unchanged to avoid pathological regex backtracking.
+    """
+    if not isinstance(text, str):
+        return text  # type: ignore[return-value]
+    if not parser:
+        return text
+    if len(text) > 1_048_576:
+        return text
+    try:
+        canonical = validate_parser_name(parser)
+    except (TypeError, ValueError):
+        return text
+    # Fast pre-check: skip the regex entirely when the marker token is
+    # absent. Bounds worst-case re.sub time on adversarial inputs with
+    # no actual reasoning blocks.
+    if canonical == "openthinker":
+        if "<|begin_of_thought|>" not in text:
+            return text
+        out = _OPENTHINKER_RE.sub("", text)
+    else:
+        if "<think" not in text.lower():
+            return text
+        out = _THINK_RE.sub("", text)
+    # Strip ONLY leading newlines left behind by the removed block. We
+    # don't `lstrip()` (would silently corrupt code outputs that begin
+    # with intentional spaces / tabs).
+    return re.sub(r"^[\r\n]+", "", out)

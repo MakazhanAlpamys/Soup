@@ -2,6 +2,78 @@
 
 const API = '';  // same origin
 
+// v0.53.9 #94 — Lightweight EventSource consumer for /api/train/stream.
+// Opens on demand (call `startTrainEventStream()`) and dispatches parsed
+// payloads to `onTrainEvent(payload)` which other modules can override.
+// Auto-closes on `status=done` or `status=timeout`.
+let _trainEventSource = null;
+window.onTrainEvent = window.onTrainEvent || function (_payload) {};
+function startTrainEventStream() {
+  if (_trainEventSource) return _trainEventSource;
+  try {
+    const es = new EventSource('/api/train/stream');
+    _trainEventSource = es;
+    es.onmessage = function (event) {
+      if (!event.data) return;
+      try {
+        const payload = JSON.parse(event.data);
+        if (payload && typeof window.onTrainEvent === 'function') {
+          window.onTrainEvent(payload);
+        }
+        if (payload && payload.type === 'status' &&
+            (payload.message === 'done' || payload.message === 'timeout')) {
+          es.close();
+          _trainEventSource = null;
+        }
+      } catch (e) {
+        // Ignore malformed frames.
+      }
+    };
+    es.onerror = function () {
+      try { es.close(); } catch (e) {}
+      _trainEventSource = null;
+    };
+    return es;
+  } catch (e) {
+    return null;
+  }
+}
+function stopTrainEventStream() {
+  if (_trainEventSource) {
+    try { _trainEventSource.close(); } catch (e) {}
+    _trainEventSource = null;
+  }
+}
+window.startTrainEventStream = startTrainEventStream;
+window.stopTrainEventStream = stopTrainEventStream;
+
+// v0.53.9 #95 — Pick up Bearer token from `?token=…` (phone QR landing)
+// or from sessionStorage on subsequent navigations. Stripped from the URL
+// after read so the token doesn't sit in browser history.
+(function _bootstrapAuthToken() {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const fromUrl = params.get('token');
+    if (fromUrl) {
+      window._authToken = fromUrl;
+      try { sessionStorage.setItem('soup_auth_token', fromUrl); } catch (e) {}
+      // Drop ?token=… from the URL so refresh history doesn't leak it.
+      params.delete('token');
+      const qs = params.toString();
+      const clean = window.location.pathname + (qs ? '?' + qs : '') +
+        window.location.hash;
+      window.history.replaceState(null, '', clean);
+    } else {
+      try {
+        const saved = sessionStorage.getItem('soup_auth_token');
+        if (saved) window._authToken = saved;
+      } catch (e) {}
+    }
+  } catch (e) {
+    // Defensive: never block app load.
+  }
+})();
+
 // --- State ---
 let currentPage = 'dashboard';
 let runsData = [];
