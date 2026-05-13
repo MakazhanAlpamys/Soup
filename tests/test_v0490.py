@@ -241,8 +241,10 @@ training:
         assert cfg.training.use_longlora is True
 
     def test_reject_non_llama(self):
+        # v0.53.4 #120 — allowlist now covers Mistral / Qwen / Phi too;
+        # use Gemma (still outside the allowlist) for the rejection test.
         yaml_in = """
-base: mistralai/Mistral-7B-v0.1
+base: google/gemma-2-9b
 task: sft
 training:
   use_longlora: true
@@ -326,13 +328,14 @@ class TestLongLoraHelpers:
         "kwargs,match",
         [
             (
+                # v0.53.4 #120 — Mistral is now allowlisted; use Gemma instead.
                 dict(
-                    model_name="mistral/M-7B",
+                    model_name="google/gemma-2-9b",
                     task="sft",
                     backend="transformers",
                     use_ring_attention=False,
                 ),
-                "Llama",
+                "allowlist",
             ),
             (
                 dict(

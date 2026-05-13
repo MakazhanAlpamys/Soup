@@ -118,8 +118,10 @@ class TestBlockExpansion:
 
         assert expand_model_blocks(Stub(), 0) == 3
 
-    def test_expand_model_blocks_live_deferred(self):
-        with pytest.raises(NotImplementedError, match="v0.41.1"):
+    def test_expand_model_blocks_rejects_object_without_layers(self):
+        # v0.53.4 #83 lifted the deferred stub. Calling on a bare ``object()``
+        # now raises ValueError because no decoder layers can be discovered.
+        with pytest.raises(ValueError, match="decoder layers"):
             expand_model_blocks(object(), 4)
 
 

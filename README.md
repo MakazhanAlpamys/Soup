@@ -43,13 +43,14 @@ soup train
 
 Latest highlights only. Full history: [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 
-**v0.53.3 — GRPO Plus partial wiring**: Two surgical GRPO Plus fixes from the v0.50.0 deferred-stub family land cleanly. The four larger items (stability callback, variant loss kernels, PRM trainer, multi-objective preference live combine) are scope-deferred to v0.53.4 — each warrants a focused release because they each require deep TRL trainer subclassing.
+**v0.53.4 — Long Context + Architecture**: Six closes — LongLoRA hardened, LLaMA Pro block expansion lifted from deferred stub to live wiring, and CUDA-OOM hint upgraded.
 
-- **`grpo_fp16: true` is now wired** through `GRPOTrainerWrapper._build_precision_kwargs` — non-CUDA devices (CPU / MPS / XPU) skip HF Trainer's CUDA-specific `fp16`/`bf16` kwargs, CUDA + `grpo_fp16=True` forces FP16 for unsloth parity, default CUDA stays on bf16. The schema now rejects the silent-mutex combo `grpo_fp16=True + auto_mixed_precision=true` at config load with an actionable message naming both flags.
-- **Vision GRPO base-model probe.** `KNOWN_VLM_REGEX` matches 10 VLM families (Qwen2-VL / Qwen2.5-VL / QVQ / Pixtral / InternVL / Llama-3.2-Vision / LLaVA / MiniCPM-V / Idefics / ShareGPT4V / Fuyu) with word-boundary anchors that reject substring noise like `"my-pixtralish"`. A YAML pairing `vision_grpo: true` with a non-VLM checkpoint is now rejected at schema load with a friendly message naming the expected families — instead of surfacing as a cryptic `"module has no attribute 'vision_tower'"` at trainer load time. Error message truncates the echoed base to 64 chars per the v0.34.0 redaction policy.
-- **Validator ordering matters.** `_validate_grpo_fp16_amp_exclusive` short-circuits when `task != 'grpo'` so the v0.50.0 stability task-gate diagnosis ("`grpo_fp16` requires `task=grpo`") fires first regardless of validator execution order — keeps the most actionable error in front of the user.
-- **+37 net new tests** (7842 → 7879) across `test_v0533.py`. Four review agents (python / code / security / tdd) ran; every HIGH / MEDIUM / LOW finding fixed — task-gate priority short-circuit, MPS device branch explicitly documented, 64-char error-message truncation, `Optional[object]` → `object` parameter cleanup, QVQ regex coverage, 512-char exact-boundary regression test, explicit `grpo_fp16: false` produces bf16 path.
-- **Local YAML smoke** confirms both fixes round-trip via `load_config_from_string`: known VLM bases pass, non-VLM bases plus `vision_grpo: true` are rejected, and the `grpo_fp16` + `auto_mixed_precision` combo is rejected with both flag names in the message.
+- **LLaMA Pro is live.** `soup train` and `soup data` pretraining now honour `training.expand_layers: N` by deep-copying the last N decoder blocks, zero-initialising their residual projections (so the appended block initially acts as identity per the LLaMA Pro paper §3.1), and appending to `model.layers`. Pair with `freeze_trainable_layers: N` to train only the new blocks. Centralised via `block_expansion.apply_block_expansion_if_configured` so SFT and Pretrain stay in lock-step.
+- **LongLoRA arch allowlist expanded** to Llama / CodeLlama / Mistral / Qwen / Phi via word-boundary helpers (`is_mistral_model`, `is_qwen_model`, `is_phi_model`). Mixtral is intentionally excluded — its MoE attention requires a dedicated helper still tracked for a future release.
+- **LongLoRA + FlashAttention v3 reject.** New `flash_attn.is_flash_attn_v3_available()` probe — when FA-v3 is installed the schema now rejects `use_longlora: true` at load time with an actionable error (S² shifted-sparse + FA-v3 custom-mask both rewrite the kernel; allowing both would silently corrupt outputs).
+- **Llama 3.1 RoPE auto-detect.** Pass `rope_scaling_type: None` (or omit it) on a Llama 3.1 base, and `apply_long_context_config` now reads `model.config.rope_scaling`. If it carries a `llama3` block, the long-context path picks `LLAMA3_DEFAULT_*` instead of falling through to `dynamic`. Explicit caller picks still win.
+- **CUDA-OOM hint upgrade.** `format_friendly_error` now points users at the exact CLI flags — `--batch-size <half>` and `--grad-accum <double>` to preserve effective batch size — before the legacy `quantization: 4bit` fallback.
+- **+56 net new tests** (7879 → 7935) across the new `test_v0534.py`. Four review agents (python / code / security / tdd) ran; every CRITICAL → LOW finding was fixed — shared centralised helper for trainer drift, `is None` over falsy guards, defensive non-string surface on `is_supported_longlora_arch`, 64-char base-name truncation in error messages, null-byte rejection on `task`/`backend`, and a `warnings.warn` when block expansion runs on non-Llama-shaped architectures.
 
 ## Why Soup?
 
@@ -825,9 +826,9 @@ training:
 
 **YaRN.** Best quality for 4-8x extension. Tunables (`yarn_factor`, `yarn_attn_factor`, `yarn_beta_fast`, `yarn_beta_slow`) only apply when `rope_scaling_type=yarn`; the schema rejects them otherwise. Pure-Python math kernels are exposed at `soup_cli.utils.long_context.yarn_*` for reference / config-emit. The actual RoPE rotation runs inside HF Transformers.
 
-**Llama 3.1 NTK-aware.** Use `rope_scaling_type: llama3` for the canonical Llama 3.1 frequency-band scaling (`scale_factor=8`, `low_freq_factor=1`, `high_freq_factor=4`, `old_context_len=8192`). `detect_llama3_rope_in_config` auto-detects the block in any HF model config dict.
+**Llama 3.1 NTK-aware.** Use `rope_scaling_type: llama3` for the canonical Llama 3.1 frequency-band scaling (`scale_factor=8`, `low_freq_factor=1`, `high_freq_factor=4`, `old_context_len=8192`). `detect_llama3_rope_in_config` auto-detects the block in any HF model config dict. Omit `rope_scaling_type` from your YAML (so it stays `None`) on a Llama 3.1 base and `apply_long_context_config` will auto-pick `llama3` by reading `model.config.rope_scaling` at load time — explicit caller picks still win.
 
-**LongLoRA S² (schema-only this release).** `training.use_longlora: true` requires `task=sft`, `backend=transformers`, Llama-family base, and `use_ring_attention=false`. The schema gate fails fast at config load; live forward override mirroring LlamaFactory `model/model_utils/longlora.py` lands in v0.49.1.
+**LongLoRA S² (schema-only this release).** `training.use_longlora: true` requires `task=sft`, `backend=transformers`, a base in the architecture allowlist (Llama / CodeLlama / Mistral / Qwen / Phi — Mixtral excluded), and `use_ring_attention=false`. The schema also rejects the combo with FlashAttention v3 installed (the S² custom-mask kernel conflicts with FA-v3 native custom-mask). The schema gate fails fast at config load; live forward override mirroring LlamaFactory `model/model_utils/longlora.py` lands in a follow-up release.
 
 ```yaml
 # Llama 3.1 with NTK-aware scaling out to 128k
@@ -838,6 +839,27 @@ training:
 data:
   max_length: 131072
 ```
+
+## LLaMA Pro Block Expansion
+
+Add `N` zero-initialised transformer blocks to a base model and train **only the new blocks** — keeps the original behaviour intact while adding capacity for a new domain (per the LLaMA Pro paper, `arxiv.org/abs/2401.02415`).
+
+```yaml
+# soup.yaml — LLaMA Pro continued-training on a Llama-3.1 base
+base: meta-llama/Llama-3.1-8B
+task: sft
+data:
+  train: ./domain.jsonl
+training:
+  expand_layers: 4              # append 4 zero-init decoder blocks
+  freeze_trainable_layers: 4    # train only the appended blocks
+  lr: 5e-5
+  epochs: 1
+```
+
+**What happens at trainer start.** Soup deep-copies the last `expand_layers` decoder blocks, zero-inits each clone's residual projections (`mlp.down_proj` + `self_attn.o_proj`) so the appended block initially acts as identity, appends them to `model.model.layers`, and updates `config.num_hidden_layers`. When `freeze_trainable_layers > 0` is set, every parameter except the appended blocks is frozen — this is the canonical LLaMA Pro "train only new blocks" recipe.
+
+**Scope.** Works on both `task: sft` and `task: pretrain` with `backend: transformers`. Bounds: `expand_layers ∈ [1, 64]`. Over-expansion (more new blocks than the base has layers) silently clamps to the base layer count. Non-Llama-shaped architectures (e.g. Falcon's `dense_4h_to_h`) emit a `warnings.warn` because the residual zero-init heuristic only matches the standard `down_proj` / `o_proj` names — the appended blocks are still appended + trainable, but lose the identity-init guarantee.
 
 ## Optimizer & PEFT Zoo
 

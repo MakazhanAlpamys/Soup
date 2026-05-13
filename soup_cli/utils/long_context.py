@@ -365,10 +365,23 @@ def get_rope_scaling_config(
 def apply_long_context_config(
     model_config,
     target_length: int,
-    rope_scaling_type: str = "dynamic",
+    rope_scaling_type: str | None = "dynamic",
     model_name: str = "",
 ) -> dict | None:
-    """Apply long-context configuration to a model config object."""
+    """Apply long-context configuration to a model config object.
+
+    Args:
+        model_config: HF model config object (mutated in place).
+        target_length: New ``max_position_embeddings`` to set.
+        rope_scaling_type: One of :data:`ROPE_SCALING_TYPES`, or ``None`` to
+            auto-detect (v0.53.4 #121). The legacy default ``"dynamic"`` is
+            preserved for back-compat — pass ``None`` explicitly to enable
+            the new auto-detect path. When auto-detecting, the function
+            picks ``"llama3"`` if the model config already carries a
+            Llama 3.1 ``rope_scaling`` block, otherwise falls back to
+            ``"dynamic"``.
+        model_name: Used only for the default-context fallback.
+    """
     original_length = getattr(
         model_config,
         "max_position_embeddings",
@@ -376,6 +389,14 @@ def apply_long_context_config(
     )
     if target_length <= original_length:
         return None
+    if rope_scaling_type is None:
+        existing = getattr(model_config, "rope_scaling", None)
+        if isinstance(existing, Mapping) and detect_llama3_rope_in_config(
+            {"rope_scaling": existing}
+        ):
+            rope_scaling_type = "llama3"
+        else:
+            rope_scaling_type = "dynamic"
     rope_config = get_rope_scaling_config(
         scaling_type=rope_scaling_type,
         target_length=target_length,

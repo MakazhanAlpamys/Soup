@@ -24,7 +24,8 @@ def test_cuda_oom_error():
         format_friendly_error(exc, verbose=False)
     output = buf.getvalue()
     assert "GPU ran out of memory" in output
-    assert "batch_size" in output
+    # v0.53.4 #11 — message now suggests --batch-size / --grad-accum CLI flags.
+    assert "--batch-size" in output
 
 
 def test_missing_fastapi_error():

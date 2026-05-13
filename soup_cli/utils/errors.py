@@ -13,12 +13,18 @@ ERROR_MAP = [
     (
         "CUDA out of memory",
         "GPU ran out of memory during training.",
-        "Try: reduce batch_size, use quantization: 4bit, or use a smaller model.",
+        (
+            "Try --batch-size <half> or --grad-accum <double> (keeps effective "
+            "batch size); or use quantization: 4bit, or use a smaller model."
+        ),
     ),
     (
         "OutOfMemoryError",
         "GPU ran out of memory.",
-        "Try: reduce batch_size, use quantization: 4bit, or use a smaller model.",
+        (
+            "Try --batch-size <half> or --grad-accum <double> (keeps effective "
+            "batch size); or use quantization: 4bit, or use a smaller model."
+        ),
     ),
     # Missing optional deps
     (

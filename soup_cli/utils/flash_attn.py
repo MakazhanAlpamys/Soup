@@ -63,6 +63,31 @@ def check_flash_attn_available() -> str | None:
     return None
 
 
+def is_flash_attn_v3_available() -> bool:
+    """Return True iff a FlashAttention v3 build is importable and usable.
+
+    v0.53.4 #122 — used by the LongLoRA + FA-v3 cross-validator. LongLoRA's
+    S^2 shifted-sparse attention is a custom ``LlamaAttention.forward``
+    override that conflicts with FlashAttention v3's native custom-mask
+    kernel; allowing both would silently corrupt outputs.
+
+    Returns False (never raises) when ``flash_attn`` is not installed, has
+    no parseable ``__version__``, or reports a major version below 3.
+    """
+    try:
+        import flash_attn  # noqa: F401
+    except ImportError:
+        return False
+    version = getattr(flash_attn, "__version__", "")
+    if not isinstance(version, str):
+        return False
+    head = version.split(".", 1)[0]
+    try:
+        return int(head) >= 3
+    except (TypeError, ValueError):
+        return False
+
+
 def get_flash_attn_version() -> str | None:
     """Return the installed flash-attn package version, or None."""
     try:

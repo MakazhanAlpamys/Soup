@@ -491,6 +491,17 @@ class SFTTrainerWrapper:
                 f"[green]Freeze training:[/] {frozen} parameters frozen"
             )
 
+        # v0.53.4 #83 — LLaMA Pro block expansion. Run BEFORE LoRA so PEFT's
+        # target-module matcher sees the new blocks. Centralised in
+        # ``block_expansion.apply_block_expansion_if_configured`` to avoid
+        # drift between SFT and Pretrain trainers (matches v0.40.6 peft_wiring
+        # centralisation policy).
+        from soup_cli.utils.block_expansion import (
+            apply_block_expansion_if_configured,
+        )
+
+        apply_block_expansion_if_configured(self.model, tcfg, console)
+
         # LoRA — with MoE-aware target modules if moe_lora is enabled
         target_modules = tcfg.lora.target_modules
         if target_modules == "auto":

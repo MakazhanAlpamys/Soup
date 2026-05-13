@@ -264,6 +264,13 @@ class PretrainTrainerWrapper:
         if tcfg.quantization in ("4bit", "8bit", "mxfp4"):
             self.model = prepare_model_for_kbit_training(self.model)
 
+        # v0.53.4 #83 — LLaMA Pro block expansion (centralised — see SFT).
+        from soup_cli.utils.block_expansion import (
+            apply_block_expansion_if_configured,
+        )
+
+        apply_block_expansion_if_configured(self.model, tcfg, console)
+
         # LoRA — with MoE-aware target modules if moe_lora is enabled
         target_modules = tcfg.lora.target_modules
         if target_modules == "auto":
