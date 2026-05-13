@@ -488,8 +488,10 @@ def load_pretokenized_dataset(
     real = os.path.realpath(tokenized_path)
     if not is_under_cwd(real):
         raise ValueError("tokenized_path must stay under cwd")
+    # Lstat the ORIGINAL (unresolved) path to detect symlinks at the entry
+    # point — mirrors v0.33.0 #22 / v0.43.0 Part C TOCTOU policy.
     try:
-        lst = os.lstat(real)
+        lst = os.lstat(tokenized_path)
     except OSError as exc:
         raise ValueError(f"tokenized_path not found: {tokenized_path!r}") from exc
     if _stat.S_ISLNK(lst.st_mode):

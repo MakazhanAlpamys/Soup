@@ -891,6 +891,11 @@ def _create_test_app():
 
 
 class TestToolEndpointsLive:
+    @pytest.fixture(autouse=True)
+    def _require_fastapi(self):
+        pytest.importorskip("fastapi")
+        pytest.importorskip("httpx")
+
     def test_python_tool_runs_simple_code(self):
         from fastapi.testclient import TestClient
         app = _create_test_app()
@@ -1041,6 +1046,11 @@ class TestToolEndpointsLive:
 
 
 class TestAnthropicMessagesStreaming:
+    @pytest.fixture(autouse=True)
+    def _require_fastapi(self):
+        pytest.importorskip("fastapi")
+        pytest.importorskip("httpx")
+
     def test_stream_true_returns_sse(self):
         from fastapi.testclient import TestClient
 
@@ -1424,6 +1434,11 @@ class TestReviewFixesForge:
 
 class TestReviewFixesVllmAnthropicLive:
     """v0.53.7 H-I + M-Q: live route tests with mocked AsyncLLMEngine."""
+
+    @pytest.fixture(autouse=True)
+    def _require_fastapi(self):
+        pytest.importorskip("fastapi")
+        pytest.importorskip("httpx")
 
     def _build_vllm_app(self):
         try:

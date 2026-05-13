@@ -164,12 +164,17 @@ def _redact_exc_message(exc: BaseException, limit: int = 256) -> str:
         lambda m: os.path.basename(m.group(0)) or m.group(0),
         msg,
     )
-    # Windows drive-letter paths (``C:\\foo\\bar``).
-    msg = re.sub(
-        r"[A-Za-z]:[\\/][^\s:'\"]+",
-        lambda m: os.path.basename(m.group(0)) or m.group(0),
-        msg,
-    )
+    # Windows drive-letter paths (``C:\\foo\\bar`` or ``C:/foo/bar``).
+    # Use a cross-platform basename: split on both ``/`` and ``\\`` so this
+    # works on POSIX hosts too (``os.path.basename`` only splits on ``/``
+    # on POSIX, leaving ``\\``-separated components intact).
+    def _win_basename(m: "re.Match[str]") -> str:
+        raw = m.group(0)
+        # Split on either separator; last non-empty component is the basename.
+        parts = [p for p in re.split(r"[/\\]", raw) if p]
+        return parts[-1] if parts else raw
+
+    msg = re.sub(r"[A-Za-z]:[\\/][^\s:'\"]+", _win_basename, msg)
     return msg[:limit]
 
 
