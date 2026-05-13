@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "soup-cli"
-version = "0.53.8"
+version = "0.53.8.1"
 description = "Fine-tune LLMs in one command. No SSH, no config hell."
 readme = "README.md"
 license = "Apache-2.0"
@@ -78,8 +78,11 @@ Issues = "https://github.com/MakazhanAlpamys/Soup/issues"
 packages = ["soup_cli"]
 # v0.53.8 #93 — include bundled fixture JSONLs as package data so
 # `soup data demo` works in zipapp / namespace-package installs.
-[tool.hatch.build.targets.wheel.force-include]
-"soup_cli/data/_fixtures" = "soup_cli/data/_fixtures"
+# Hatchling's ``packages = ["soup_cli"]`` already recurses into the
+# package directory, so we use the artifacts directive (NOT
+# force-include, which double-shipped the files in v0.53.8 and produced
+# a "duplicate filename in local headers" 400 from PyPI upload).
+artifacts = ["soup_cli/data/_fixtures/*.jsonl"]
 
 [tool.ruff]
 target-version = "py39"

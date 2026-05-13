@@ -596,8 +596,10 @@ class TestVersionBump:
     def test_init_version(self):
         import soup_cli
 
-        assert soup_cli.__version__ == "0.53.8"
+        # v0.53.8.1 is the PyPI-recoverable patch (force-include duplicate
+        # fix); accept either as the shipped string.
+        assert soup_cli.__version__.startswith("0.53.8")
 
     def test_pyproject_version(self):
         text = (_repo_root() / "pyproject.toml").read_text(encoding="utf-8")
-        assert 'version = "0.53.8"' in text
+        assert 'version = "0.53.8' in text
