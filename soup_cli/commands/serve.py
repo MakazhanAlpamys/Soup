@@ -1286,12 +1286,12 @@ def _create_app(
         # the RLVR sandbox's OS-level isolation (``unshare(CLONE_NEWNET)``
         # / macOS ``sandbox-exec``); a caller can reach
         # ``http://169.254.169.254/...`` from the child shell. Reverted to
-        # 501 until container/namespace work lands in v0.53.8.
+        # 501 until container/namespace work lands in v0.53.9.
         raise HTTPException(
             status_code=501,
             detail=(
                 "Server-side tool 'bash' live execution deferred to "
-                "v0.53.8 — sandbox isolation requires container/namespace "
+                "v0.53.9 — sandbox isolation requires container/namespace "
                 "work."
             ),
         )

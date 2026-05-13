@@ -89,7 +89,12 @@ def get_bundle(name: str) -> DemoBundle:
 def _bundle_source_path(bundle: DemoBundle) -> str:
     """Resolve the on-disk path for a bundle's fixture.
 
-    Uses importlib.resources to handle both editable + wheel installs.
+    v0.53.8 #93 — fixtures live under ``soup_cli/data/_fixtures/`` (package
+    data), with a back-compat fallback to ``examples/data/`` for editable
+    installs / repo-root invocations. The package-data location is
+    zipapp / namespace-package safe; the legacy location is kept so
+    contributors editing fixtures via ``examples/data/`` still see their
+    changes.
     """
     # Filenames are baked-in constants (no user input), so direct join
     # is safe; we still defensively reject path separators.
@@ -97,17 +102,23 @@ def _bundle_source_path(bundle: DemoBundle) -> str:
         raise ValueError(
             f"bundle fixture name has separator: {bundle.fixture!r}"
         )
-    # examples/ lives at the repo root, alongside the soup_cli/ package.
+    # 1) Preferred — package data at soup_cli/data/_fixtures/.
     pkg_root = files("soup_cli")
+    pkg_candidate = os.path.realpath(
+        os.path.join(str(pkg_root), "data", "_fixtures", bundle.fixture)
+    )
+    if os.path.isfile(pkg_candidate):
+        return pkg_candidate
+    # 2) Fallback — legacy examples/data/ at repo root.
     repo_root = os.path.dirname(str(pkg_root))
-    candidate = os.path.realpath(
+    legacy = os.path.realpath(
         os.path.join(repo_root, "examples", "data", bundle.fixture)
     )
-    if not os.path.isfile(candidate):
-        raise FileNotFoundError(
-            f"bundle fixture missing: {bundle.fixture}"
-        )
-    return candidate
+    if os.path.isfile(legacy):
+        return legacy
+    raise FileNotFoundError(
+        f"bundle fixture missing: {bundle.fixture}"
+    )
 
 
 def copy_bundle_to(name: str, output_path: str) -> str:

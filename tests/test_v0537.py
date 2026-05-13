@@ -952,7 +952,7 @@ class TestToolEndpointsLive:
             json={"command": "echo hello"},
         )
         assert resp.status_code == 501
-        assert "v0.53.8" in resp.text
+        assert "v0.53.9" in resp.text
 
     def test_bash_tool_returns_501_with_empty_body(self):
         """The 501 stub does not parse the body — it always returns 501."""
@@ -1609,7 +1609,7 @@ class TestReviewFixesC1BashStub:
         client = TestClient(app)
         resp = client.post("/v1/tools/bash", json={"command": "ls"})
         assert resp.status_code == 501
-        assert "v0.53.8" in resp.text
+        assert "v0.53.9" in resp.text
 
 
 class TestReviewFixesAuthToken:

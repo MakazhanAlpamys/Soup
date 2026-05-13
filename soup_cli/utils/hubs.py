@@ -204,3 +204,243 @@ def is_hf(hub: str) -> bool:
     if not isinstance(hub, str):
         return False
     return hub.lower() == "hf"
+
+
+# v0.53.8 #130 — Live download / upload dispatcher.
+# Each backend lazy-imports its SDK so a missing optional dep only surfaces
+# when the user actually selects that hub. Mirrors v0.51.0 stub-then-live
+# pattern: schema (TrainingConfig.hub Literal) shipped v0.51.0; live wiring
+# ships now.
+
+_REPO_ID_MAX = 200
+
+
+def _validate_repo_id_shape(repo_id: str) -> str:
+    """Cheap shape-only repo-id validator shared by all hub adapters.
+
+    Does NOT mirror the full v0.29.0 HF ``validate_repo_id`` regex (which is
+    HF-specific). Each hub's SDK applies its own canonicalisation; we just
+    reject obviously dangerous shapes (null bytes, leading slash, ``..``,
+    oversize) before forwarding.
+    """
+    if isinstance(repo_id, bool):
+        raise TypeError(f"repo_id must not be bool, got {repo_id!r}")
+    if not isinstance(repo_id, str):
+        raise TypeError(
+            f"repo_id must be str, got {type(repo_id).__name__}"
+        )
+    if not repo_id:
+        raise ValueError("repo_id must be non-empty")
+    if "\x00" in repo_id:
+        raise ValueError("repo_id must not contain null bytes")
+    if len(repo_id) > _REPO_ID_MAX:
+        raise ValueError(
+            f"repo_id too long (max {_REPO_ID_MAX} chars)"
+        )
+    if repo_id.startswith("/") or repo_id.startswith("\\"):
+        raise ValueError("repo_id must not start with a path separator")
+    if ".." in repo_id.split("/"):
+        raise ValueError("repo_id must not contain '..' segments")
+    # Defence-in-depth: control chars (incl. CR / LF) would be a header
+    # injection hazard if the id ever flowed into an HTTP request line.
+    if any(ord(c) < 0x20 for c in repo_id):
+        raise ValueError("repo_id must not contain control characters")
+    return repo_id
+
+
+def _missing_dep_message(hub: str) -> str:
+    """Friendly ImportError message naming the pip install command."""
+    pkg = required_hub_package(hub) or hub
+    return (
+        f"hub={hub!r} requires the '{pkg}' package. "
+        f"Install with: pip install {pkg}"
+    )
+
+
+def _validate_local_path(value: str, *, field: str) -> str:
+    """Cwd-containment + shape check for ``local_dir`` / ``folder_path``.
+
+    Mirrors the project-standard ``utils.paths.is_under_cwd`` policy used by
+    every other path-accepting helper since v0.26.0. Rejects bool BEFORE
+    `isinstance(str)` (matches v0.30.0 ``Candidate`` policy).
+    """
+    from soup_cli.utils.paths import is_under_cwd
+
+    if isinstance(value, bool):
+        raise TypeError(f"{field} must not be bool, got {value!r}")
+    if not isinstance(value, str):
+        raise TypeError(
+            f"{field} must be str, got {type(value).__name__}"
+        )
+    if not value:
+        raise ValueError(f"{field} must be a non-empty string")
+    if "\x00" in value:
+        raise ValueError(f"{field} must not contain null bytes")
+    if not is_under_cwd(value):
+        raise ValueError(
+            f"{field} must stay under the current working directory"
+        )
+    return value
+
+
+def download_repo(
+    hub: str,
+    repo_id: str,
+    *,
+    local_dir: str,
+    revision: str | None = None,
+    allow_patterns: list[str] | None = None,
+    repo_type: str = "model",
+) -> str:
+    """Snapshot-download ``repo_id`` from ``hub`` into ``local_dir``.
+
+    Returns the absolute local path to the downloaded snapshot. Lazy-imports
+    the appropriate SDK per ``hub``:
+
+    * ``hf``      → :func:`huggingface_hub.snapshot_download`
+    * ``modelscope`` → :func:`modelscope.snapshot_download`
+    * ``modelers``   → :func:`openmind_hub.snapshot_download`
+
+    Raises ``ImportError`` (with pip-install hint) when the SDK is missing,
+    ``ValueError`` for invalid args, ``TypeError`` for wrong types.
+    """
+    canonical = validate_hub_name(hub)
+    _validate_repo_id_shape(repo_id)
+    _validate_local_path(local_dir, field="local_dir")
+    if revision is not None:
+        if not isinstance(revision, str):
+            raise TypeError("revision must be str or None")
+        if "\x00" in revision or any(ord(c) < 0x20 for c in revision):
+            raise ValueError("revision must not contain control characters")
+    if repo_type not in ("model", "dataset", "space"):
+        raise ValueError(
+            "repo_type must be one of 'model' / 'dataset' / 'space'"
+        )
+
+    if canonical == "hf":
+        try:
+            from huggingface_hub import snapshot_download
+        except ImportError as exc:
+            raise ImportError(_missing_dep_message("hf")) from exc
+        return snapshot_download(
+            repo_id=repo_id,
+            repo_type=repo_type,
+            revision=revision,
+            local_dir=local_dir,
+            allow_patterns=allow_patterns,
+        )
+
+    if canonical == "modelscope":
+        try:
+            from modelscope import (
+                snapshot_download as ms_download,  # type: ignore[import-not-found]
+            )
+        except ImportError as exc:
+            raise ImportError(_missing_dep_message("modelscope")) from exc
+        # modelscope's snapshot_download uses a different kwarg set; we map
+        # the canonical args here so callers see one consistent API.
+        ms_kwargs: dict[str, object] = {
+            "model_id": repo_id,
+            "cache_dir": local_dir,
+        }
+        if revision is not None:
+            ms_kwargs["revision"] = revision
+        if allow_patterns is not None:
+            ms_kwargs["allow_file_pattern"] = allow_patterns
+        return ms_download(**ms_kwargs)
+
+    if canonical == "modelers":
+        try:
+            from openmind_hub import (
+                snapshot_download as om_download,  # type: ignore[import-not-found]
+            )
+        except ImportError as exc:
+            raise ImportError(_missing_dep_message("modelers")) from exc
+        om_kwargs: dict[str, object] = {
+            "repo_id": repo_id,
+            "local_dir": local_dir,
+        }
+        if revision is not None:
+            om_kwargs["revision"] = revision
+        if allow_patterns is not None:
+            om_kwargs["allow_patterns"] = allow_patterns
+        return om_download(**om_kwargs)
+
+    # Unreachable — validate_hub_name has already rejected unknown hubs.
+    raise ValueError(f"hub {canonical!r} has no download adapter")
+
+
+def upload_repo(
+    hub: str,
+    repo_id: str,
+    *,
+    folder_path: str,
+    commit_message: str = "Upload via Soup",
+    token: str | None = None,
+    repo_type: str = "model",
+) -> None:
+    """Upload ``folder_path`` to ``repo_id`` on ``hub``.
+
+    Same lazy-import policy as :func:`download_repo`. Token resolution is
+    left to the caller (each backend has its own conventions); pass
+    ``token`` explicitly or rely on the SDK's env-var defaults.
+    """
+    canonical = validate_hub_name(hub)
+    _validate_repo_id_shape(repo_id)
+    _validate_local_path(folder_path, field="folder_path")
+    if not isinstance(commit_message, str) or not commit_message:
+        raise ValueError("commit_message must be a non-empty string")
+    # Mirror v0.29.0 push policy: first line only, ≤200 chars (prevents
+    # multi-line injection into public commit history).
+    commit_message = commit_message.splitlines()[0][:200]
+    if repo_type not in ("model", "dataset", "space"):
+        raise ValueError(
+            "repo_type must be one of 'model' / 'dataset' / 'space'"
+        )
+
+    if canonical == "hf":
+        try:
+            from huggingface_hub import HfApi
+        except ImportError as exc:
+            raise ImportError(_missing_dep_message("hf")) from exc
+        api = HfApi(token=token)
+        api.upload_folder(
+            repo_id=repo_id,
+            folder_path=folder_path,
+            repo_type=repo_type,
+            commit_message=commit_message,
+        )
+        return
+
+    if canonical == "modelscope":
+        try:
+            from modelscope.hub.api import HubApi  # type: ignore[import-not-found]
+        except ImportError as exc:
+            raise ImportError(_missing_dep_message("modelscope")) from exc
+        api = HubApi()
+        if token:
+            api.login(token)
+        # ModelScope's `push_model` does not accept `commit_message` — pass
+        # only the model id + dir. The sanitised commit_message is recorded
+        # in the operator's local git log via the HF/Modelers backends.
+        api.push_model(
+            model_id=repo_id,
+            model_dir=folder_path,
+        )
+        return
+
+    if canonical == "modelers":
+        try:
+            from openmind_hub import HubApi  # type: ignore[import-not-found]
+        except ImportError as exc:
+            raise ImportError(_missing_dep_message("modelers")) from exc
+        api = HubApi(token=token)
+        api.upload_folder(
+            repo_id=repo_id,
+            folder_path=folder_path,
+            repo_type=repo_type,
+            commit_message=commit_message,
+        )
+        return
+
+    raise ValueError(f"hub {canonical!r} has no upload adapter")

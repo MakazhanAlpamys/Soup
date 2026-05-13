@@ -499,11 +499,15 @@ def hf_space(
     # --- Render template files ---
     try:
         if template_dir is not None:
-            from soup_cli.utils.hf_space import render_custom_template_dir
+            from soup_cli.utils.hf_space import (
+                detect_space_sdk,
+                render_custom_template_dir,
+            )
             files = render_custom_template_dir(template_dir, model_repo=model)
-            # Custom templates default to gradio SDK unless requirements
-            # imply otherwise; we record gradio for create_repo space_sdk.
-            sdk = "gradio"
+            # v0.53.8 #69 — auto-pick space_sdk from requirements.txt
+            # (closes the v0.40.2 known limitation that custom templates
+            # always created the Space with space_sdk="gradio").
+            sdk = detect_space_sdk(files.get("requirements.txt"))
         else:
             files = render_space_template(template, model_repo=model)
             sdk = HF_SPACE_TEMPLATES[template]["sdk"]

@@ -42,19 +42,15 @@ soup train
 
 Latest highlights only. Full history: [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 
-**v0.53.7 — Data Forge + Pipeline live (wave 1)**: Eleven features wired end-to-end across synthetic data generation, preprocessing, and inference.
+**v0.53.8 — Remote data + Hubs + Trackers (wave 2)**: Six features wired live across cloud storage, alternative model hubs, experiment trackers, and HF Spaces.
 
-- **Data Forge live judge providers.** `soup data forge --judge-provider {ollama,anthropic,vllm}` now routes judge calls through real backends (not just offline stubs). Ollama enforces localhost-only SSRF; Anthropic uses env-only API key; vLLM validates scheme allowlist. Per-call exceptions logged at DEBUG so one bad provider never crashes the forge pipeline.
-- **AOT tokenization with `soup data preprocess`.** New command tokenizes your dataset once and caches Arrow shards keyed by `(dataset, tokenizer, max_length, format)`. SFT and Pretrain trainers short-circuit at the schema level when `format='pre_tokenized'` + `tokenized_path` is set, eliminating the per-epoch tokenization tax. Resume-safe via atomic writes.
-- **Data Recipe DAGs live (`soup data recipe --execute`).** Six node kinds now execute end-to-end: seed dataset, LLM text generation, code execution (RLVR sandbox), judge binary scoring, regex/JSON validation, and deterministic sampling. Checkpoint written per node; resume rehydrates from per-node sidecars. `failed_reason` fields redacted to prevent path leakage.
-- **Anthropic-style `/v1/messages` + streaming SSE on both backends.** The transformers-only route from v0.53.6 now ships on vLLM too. Both backends convert Anthropic ↔ OpenAI messages, serve non-stream requests with Anthropic envelope, and stream with Anthropic event-shape SSE (`message_start` → `content_block_delta` → `message_delta` + `message_stop`). Loopback-only CORS on both.
-- **Server-side `/v1/tools/python` + `/v1/tools/web_search` HTTP endpoints.** Python sandbox wraps the v0.25.0 RLVR `code_exec` with Bearer auth gate (5s timeout, 64KB code cap). Web search backend is httpx with hard 5s timeout, 5-result cap, and domain allowlist (deny-by-default via `WebSearchConfig`). (`/v1/tools/bash` reverted to 501 — child-process isolation insufficient; tracked for v0.53.8 with container/namespace work.)
-- **Live trainer-plugin instantiation.** `instantiate_trainer_plugins` now lazy-imports upstream plugins (grokfast, spectrum, llmcompressor, sonicmoe, cce_plugin, math_verify) and friendlily advises on missing packages.
-- **Markdown heading-aware ingest + operator-supplied decontamination corpus + custom prompt strategies.**
-  - `soup data ingest` now splits Markdown by headings (one JSONL row per section with `section` + `level` + `text` fields).
-  - `soup data decontaminate --benchmark-file <path>` accepts operator-supplied JSONL corpus instead of only bundled benchmarks.
-  - `soup data forge` and other data tools now support custom prompt strategies via `prompt_strategy: module:function` in the config (importlib resolver + per-row exception handling).
-- **+111 net new tests** (8051 → 8162) in the new `test_v0537.py`. All four review agents ran; 38 findings fixed. Key hardening: symlink checks via `os.lstat` on raw paths (TOCTOU policy), atomic writes via tempfile + `os.replace`, error message redaction, narrowed exception handlers, tool endpoint Bearer auth opt-in, and comprehensive coverage for every live pathway.
+- **fsspec live loaders for remote datasets.** `data.train: s3://bucket/data.jsonl` (plus `gs://` / `gcs://` / `az://` / `abfs://` / `abfss://` / `oci://`) now loads through `fsspec` with the v0.42.0 SSRF-hardened URI validator (bucket regex + userinfo/query/fragment rejection). Threads `data.streaming` (HF `load_dataset(streaming=True)`) and `data.buffer_size` shuffle. Friendly Rich panel names the `pip install <driver>` advisory when the backend SDK is missing. Row-count capped at 1M to defend against pathological remote objects.
+- **Live ModelScope + Modelers hub dispatcher.** New `utils/hubs.download_repo()` and `upload_repo()` lazy-import the matching SDK per backend (`huggingface_hub`, `modelscope`, `openmind-hub`). Shared `_validate_repo_id_shape` rejects bool / null-byte / leading-slash / `..` segments / control characters / oversize; `local_dir` and `folder_path` containment-checked under cwd. `soup train` now pre-fetches non-HF `base` models into `.soup_hub_cache/<sanitized-slug>/` and reuses cached snapshots on resumed runs.
+- **`[trackers]` extra + friendly missing-dep advisory.** New `pip install soup-cli[trackers]` bundles MLflow + SwanLab + Trackio. When you pass `--tracker mlflow` without the package installed, `soup train` now surfaces a clear `pip install` advisory before construction instead of HF Trainer's generic ImportError. The probe uses `importlib.util.find_spec` (non-executing) so swanlab can't initialise network threads during the check.
+- **PostHog telemetry network (opt-IN, silent-fail).** `utils/trackers.send_telemetry_payload()` lazy-imports `httpx` and POSTs hardware-info-only payloads with a 1-second hard timeout. HTTPS-only endpoint check goes through the same SSRF validator as hub endpoints (private-IP / link-local / RFC1918 rejected). Disabled unless `SOUP_TELEMETRY=1`; every exception is swallowed so telemetry can never crash training.
+- **Bundled demo fixtures as package data.** `soup data demo` fixtures (4 JSONLs) migrated from `examples/data/` to `soup_cli/data/_fixtures/` so they ship inside the wheel — zipapp / namespace-package safe. `_bundle_source_path` falls back to the legacy `examples/data/` location for editable installs.
+- **HF Space SDK auto-pick from `requirements.txt`.** `soup deploy hf-space --template-dir <path>` now reads the rendered `requirements.txt` and picks `space_sdk="streamlit"` when the file lists `streamlit`, `"gradio"` otherwise. Closes the v0.40.2 known limitation that custom templates always created Spaces with `space_sdk="gradio"`.
+- **+95 net new tests** (8162 → 8257) in `test_v0538.py`. Three review agents ran (python / code / security); 16 findings fixed: cwd-containment on `local_dir`/`folder_path`, Pydantic `model_copy(update=...)` instead of attribute mutation, idempotent train pre-fetch via cache probe, row-count cap on remote materialisation, `modelscope.push_model` kwarg fix, SSRF re-validation on telemetry endpoint override, `detect_space_sdk` size cap, and more.
 
 ## Why Soup?
 
@@ -3480,6 +3476,90 @@ soup data decontaminate --input training.jsonl --benchmarks mmlu,gsm8k,humaneval
 ```
 
 The scorecard reports PII flagged, toxic flagged, language distribution, mean educational value, and decontamination removed. PII detection uses a narrow ReDoS-hardened regex set (email / phone / SSN / credit-card) with a 50 KB pre-cap on every input. Language detection is a stopword heuristic across six languages. Toxicity is a keyword baseline; the Llama-Guard-3-1B variant + FineWeb-Edu classifier ship behind `[data-pro]` extras. Decontamination uses n-gram containment against benchmark corpora: use `--benchmarks mmlu,gsm8k` for built-in allowlist, or `--benchmark-file custom_benchmark.jsonl` for your own corpus.
+
+## Remote Datasets (S3 / GCS / Azure / OCI)
+
+Point `data.train` at any object in the v0.42.0 fsspec allowlist and `soup train` will stream it through `fsspec.open` after running the URI through the same SSRF-hardened validator used everywhere else in Soup (bucket regex, no userinfo / query / fragment):
+
+```yaml
+data:
+  train: s3://my-bucket/datasets/train.jsonl
+  format: alpaca
+  streaming: true       # opt-in HF datasets streaming with shuffle
+  buffer_size: 10000    # shuffle buffer (requires streaming=true)
+```
+
+Recognised schemes: `s3://`, `gs://`, `gcs://`, `az://`, `abfs://`, `abfss://`, `oci://`. The matching backend SDK (`s3fs` / `gcsfs` / `adlfs` / `ocifs`) is lazy-imported — install only what you need or grab the convenience extra:
+
+```bash
+pip install soup-cli[remote]   # fsspec + s3fs + gcsfs + adlfs
+```
+
+Materialised rows are capped at 1M to defend against pathological remote objects; use a local split for larger jobs.
+
+## Alternative Model Hubs (ModelScope / Modelers)
+
+Set `training.hub` to fetch the base model from a non-HF Hub:
+
+```yaml
+base: baichuan-inc/Baichuan2-7B
+task: sft
+training:
+  hub: modelscope     # or "modelers"
+```
+
+`soup train` pre-fetches the model into `./.soup_hub_cache/<sanitized-slug>/` via the matching SDK (`modelscope.snapshot_download` / `openmind_hub.snapshot_download`) and rewrites `cfg.base` to the local snapshot. Re-runs reuse the cached snapshot. Both `huggingface-hub`, `modelscope`, and `openmind-hub` are lazy-imported — install only what you need.
+
+Programmatic API:
+
+```python
+from soup_cli.utils.hubs import download_repo, upload_repo
+
+local_path = download_repo("modelscope", "baichuan-inc/Baichuan2-7B", local_dir="./snap")
+upload_repo("modelers", "my-org/my-model", folder_path="./output", commit_message="Soup v0.53.8")
+```
+
+The dispatcher enforces shape validation on every input (bool / null-byte / leading-slash / `..` segments / control characters / oversize all rejected) and runs cwd-containment on `local_dir` / `folder_path`.
+
+## Experiment Trackers (MLflow / SwanLab / Trackio)
+
+Pick a tracker on the CLI; Soup threads it into HF Trainer's `report_to`:
+
+```bash
+soup train --tracker mlflow
+soup train --tracker swanlab
+soup train --tracker trackio
+```
+
+If the package is not installed, Soup now surfaces a friendly advisory before training starts instead of a mid-run ImportError:
+
+```
+--tracker mlflow requires the 'mlflow' package. Install with: pip install soup-cli[trackers] (or pip install mlflow)
+```
+
+```bash
+pip install soup-cli[trackers]   # mlflow + swanlab + trackio
+```
+
+## Telemetry (opt-IN, hardware-info-only)
+
+Soup ships an opt-IN telemetry sender that POSTs hardware-info-only payloads (`soup_version` / `command` / `python` major.minor / `os` / `arch` / optional `duration_seconds`) — no dataset paths, model names, or config contents. Enable per-shell:
+
+```bash
+SOUP_TELEMETRY=1 soup train --config soup.yaml
+```
+
+The sender uses a 1-second hard timeout, HTTPS-only with private-IP / link-local rejection (same SSRF policy as hub endpoints), and swallows every exception silently — telemetry can never crash training. Disabled by default until a public privacy policy ships.
+
+## HF Space SDK Auto-Pick
+
+When you deploy a custom Space template directory, Soup now picks `space_sdk="streamlit"` / `"gradio"` from the rendered `requirements.txt`:
+
+```bash
+soup deploy hf-space --space my-org/my-app --model my-org/my-model --template-dir ./my-template
+```
+
+If `requirements.txt` lists `streamlit`, the Space is created with the Streamlit SDK. Otherwise (no requirements, gradio listed, etc.), Soup falls back to the Gradio default. The HF Hub allows `docker` and `static` SDKs too, but those cannot be inferred from `requirements.txt` alone — use the built-in templates or supply a custom one with an explicit `--sdk` override.
 
 ## Plugin System
 

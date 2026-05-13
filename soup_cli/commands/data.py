@@ -1189,8 +1189,34 @@ def download_dataset(
             "(v0.36.0). Only enable if you trust the source."
         ),
     ),
+    hub: str = typer.Option(
+        "hf",
+        "--hub",
+        help=(
+            "Source hub: hf (default) / modelscope / modelers. "
+            "Non-HF hubs require the matching SDK (v0.53.8 #130)."
+        ),
+    ),
 ):
     """Download a HuggingFace dataset and save as JSONL."""
+    # v0.53.8 #130 — validate --hub at the CLI boundary; only `hf` is wired
+    # for live dataset download in this release (modelscope / modelers
+    # dataset SDKs differ from snapshot_download; live wiring tracked for
+    # v0.53.9). Non-HF hubs surface a friendly error.
+    from soup_cli.utils.hubs import validate_hub_name
+
+    try:
+        hub_canonical = validate_hub_name(hub)
+    except (TypeError, ValueError) as exc:
+        console.print(f"[red]{exc}[/]")
+        raise typer.Exit(code=2) from exc
+    if hub_canonical != "hf":
+        console.print(
+            f"[red]--hub {hub_canonical} dataset download is not yet wired; "
+            f"use `from soup_cli.utils.hubs import download_repo` to snapshot "
+            f"a repo, or wait for v0.53.9.[/]"
+        )
+        raise typer.Exit(code=1)
     max_download_samples = 1_000_000
     if samples is not None and samples > max_download_samples:
         console.print(

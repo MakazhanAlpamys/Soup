@@ -692,6 +692,65 @@ def train(
         console.print(f"[red]{_esc(str(exc))}[/]")
         raise typer.Exit(code=2) from exc
     console.print("[dim]Setting up model + trainer...[/]")
+    # v0.53.8 #130 — pre-fetch model from non-HF hub into a local cache and
+    # rewrite cfg.base to point at the local snapshot. The trainer wrappers
+    # still use transformers.from_pretrained, which reads HF Hub by default;
+    # by snapshotting first we keep every wrapper unchanged.
+    hub_name = getattr(cfg.training, "hub", "hf") or "hf"
+    if hub_name != "hf":
+        import re as _re
+
+        from rich.markup import escape as _markup_escape
+
+        from soup_cli.utils.hubs import download_repo
+        from soup_cli.utils.paths import is_under_cwd
+
+        # Sanitise cache subdir name — strip every path-separator and
+        # `..` segment so a crafted ``base: ../../etc`` cannot escape the
+        # cache root (Windows ``\\`` and POSIX ``/`` both blocked).
+        safe_slug = _re.sub(r"[^A-Za-z0-9._-]+", "__", cfg.base).strip("._-") or "model"
+        cache_dir = (Path.cwd() / ".soup_hub_cache" / safe_slug).resolve()
+        if not is_under_cwd(str(cache_dir)):
+            console.print(
+                "[red]Resolved hub cache dir escaped the current working "
+                "directory; refusing to download.[/]"
+            )
+            raise typer.Exit(code=1)
+        try:
+            # Idempotency: if the cache dir already has a config.json, skip
+            # the re-download (modelscope/openmind-hub also short-circuit on
+            # match but having an explicit probe lets us print a clear hint).
+            existing_cfg = cache_dir / "config.json"
+            if existing_cfg.is_file():
+                local_path = str(cache_dir)
+                console.print(
+                    f"[dim]Using cached snapshot at {local_path}[/]"
+                )
+            else:
+                local_path = download_repo(
+                    hub_name,
+                    cfg.base,
+                    local_dir=str(cache_dir),
+                )
+                console.print(
+                    f"[dim]Fetched {cfg.base} from hub={hub_name} → "
+                    f"{local_path}[/]"
+                )
+            # Use ``model_copy(update=...)`` so the Pydantic field
+            # validators on ``base`` rerun (matches v0.33.0 #47 / v0.40.0
+            # Part B immutability policy).
+            cfg = cfg.model_copy(update={"base": local_path})
+        except ImportError as exc:
+            console.print(f"[red]{_markup_escape(str(exc))}[/]")
+            raise typer.Exit(code=1) from exc
+
+    # v0.53.8 #89 — friendly missing-dep advisory for `--tracker <name>`.
+    if report_to and report_to not in ("none", "wandb", "tensorboard"):
+        from soup_cli.utils.trackers import tracker_missing_dep_message
+
+        msg = tracker_missing_dep_message(report_to)
+        if msg:
+            console.print(f"[yellow]{msg}[/]")
     trainer_kwargs = {
         "device": device,
         "report_to": report_to,

@@ -157,6 +157,139 @@ def build_telemetry_payload(
     }
 
 
+# v0.53.8 #90 — PostHog telemetry live wiring.
+# Opt-IN via SOUP_TELEMETRY=1; silent-fail on any network/transport error
+# so telemetry can NEVER crash training. 1s hard timeout, HTTPS-only.
+
+_POSTHOG_HOST = "https://us.i.posthog.com"
+_POSTHOG_ENDPOINT = f"{_POSTHOG_HOST}/i/v0/e/"
+# Public write-only key. Live deployments will swap this via env var.
+_POSTHOG_DEFAULT_KEY = "phc_soup_public_write_only"
+_TELEMETRY_TIMEOUT_S = 1.0
+
+
+def _telemetry_endpoint_is_safe(endpoint: str) -> bool:
+    """Re-validate the telemetry endpoint via the v0.51.0 SSRF policy.
+
+    Even though :func:`send_telemetry_payload` only POSTs to a static
+    PostHog URL by default, callers can override ``endpoint``. Re-run the
+    same private-IP / link-local rejection used for hub endpoints so a
+    crafted ``endpoint='https://10.0.0.1/'`` cannot reach an internal
+    network from a misconfigured caller.
+    """
+    if not isinstance(endpoint, str) or not endpoint.startswith("https://"):
+        return False
+    try:
+        from soup_cli.utils.hubs import validate_hub_endpoint
+
+        validate_hub_endpoint(endpoint, hub="telemetry")
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
+def send_telemetry_payload(
+    payload: dict[str, object],
+    *,
+    api_key: str | None = None,
+    timeout: float = _TELEMETRY_TIMEOUT_S,
+    endpoint: str = _POSTHOG_ENDPOINT,
+) -> bool:
+    """POST ``payload`` to PostHog if telemetry is enabled, else no-op.
+
+    Returns ``True`` on a 2xx response, ``False`` on any failure or skip.
+    NEVER raises — telemetry is best-effort and must never crash training.
+
+    Args:
+        payload: dict built by :func:`build_telemetry_payload`. Required keys
+            are validated upstream by the builder.
+        api_key: PostHog project key. Defaults to the bundled write-only key.
+        timeout: hard wall-clock cap (default 1 s).
+        endpoint: full PostHog capture URL (must be HTTPS).
+    """
+    if not is_telemetry_enabled():
+        return False
+    if not isinstance(payload, dict) or not payload:
+        return False
+    # HTTPS-only + private-IP / link-local rejection (mirrors v0.51.0 hub
+    # endpoint SSRF policy). Defence-in-depth: any caller override goes
+    # through the same validator that hub endpoints do.
+    if not _telemetry_endpoint_is_safe(endpoint):
+        return False
+    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
+        return False
+    if not math.isfinite(float(timeout)) or timeout <= 0:
+        return False
+    key = api_key or _POSTHOG_DEFAULT_KEY
+    if not isinstance(key, str) or not key:
+        return False
+    try:
+        import httpx  # lazy — optional dep, surfaces no advisory
+    except ImportError:
+        return False
+    body = {
+        "api_key": key,
+        "event": payload.get("command", "soup_event"),
+        "properties": {k: v for k, v in payload.items() if k != "command"},
+    }
+    try:
+        resp = httpx.post(endpoint, json=body, timeout=timeout)
+        return 200 <= resp.status_code < 300
+    except Exception:  # noqa: BLE001 — telemetry must never crash training
+        return False
+
+
+# v0.53.8 #89 — Friendly missing-dep panel for HF Trainer `--tracker`.
+# When user passes `--tracker mlflow` without mlflow installed, HF raises
+# a generic ImportError mid-training; this helper lets the CLI surface a
+# pip-install advisory BEFORE construction.
+
+
+def tracker_missing_dep_message(name: str) -> str | None:
+    """Return a friendly install advisory for ``name`` if the package is
+    missing, else None.
+
+    Always returns ``None`` for `wandb` / `tensorboard` / `none` (the
+    legacy backends), since those are part of the standard HF Trainer
+    extra and not part of v0.43.0's additive set.
+    """
+    if not isinstance(name, str):
+        return None
+    canonical = name.lower()
+    if canonical not in NEW_TRACKERS_V0_43:
+        return None
+    pkg = required_tracker_package(canonical)
+    if not pkg:
+        return None
+    # Use ``importlib.util.find_spec`` (non-executing probe) so we don't
+    # incur side effects from the tracker's top-level module (e.g. swanlab
+    # initialises network threads on import). ``sys.modules[pkg] = None``
+    # raises ``ValueError`` on find_spec — treat that as missing too so
+    # tests can simulate the absent-package path without subprocess.
+    import importlib.util
+    import sys
+
+    sentinel = object()
+    cached = sys.modules.get(pkg, sentinel)
+    if cached is None:
+        missing = True
+    elif cached is not sentinel:
+        # Module is already imported (or test injected a real-shaped mock).
+        missing = False
+    else:
+        try:
+            missing = importlib.util.find_spec(pkg) is None
+        except (ImportError, ValueError):
+            missing = True
+    if missing:
+        return (
+            f"--tracker {canonical} requires the '{pkg}' package. "
+            f"Install with: pip install soup-cli[trackers] "
+            f"(or pip install {pkg})"
+        )
+    return None
+
+
 def resolve_report_to(
     *,
     wandb: bool = False,

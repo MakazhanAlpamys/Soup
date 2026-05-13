@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "soup-cli"
-version = "0.53.7"
+version = "0.53.8"
 description = "Fine-tune LLMs in one command. No SSH, no config hell."
 readme = "README.md"
 license = "Apache-2.0"
@@ -61,6 +61,10 @@ sglang = ["sglang>=0.2.0", "fastapi>=0.104.0", "uvicorn>=0.24.0"]
 mlx = ["mlx>=0.20.0", "mlx-lm>=0.20.0"]
 cce = ["cut-cross-entropy>=24.10.0"]
 tui = ["textual>=0.50.0"]
+# v0.53.8 #89 — bundle MLflow / SwanLab / Trackio for `--tracker` users.
+trackers = ["mlflow>=2.0.0", "swanlab>=0.3.0", "trackio>=0.0.1"]
+# v0.53.8 #85 — fsspec backends for remote dataset loading (s3 / gs / az / oci).
+remote = ["fsspec>=2024.1.0", "s3fs>=2024.1.0", "gcsfs>=2024.1.0", "adlfs>=2024.1.0"]
 
 [project.scripts]
 soup = "soup_cli.cli:run"
@@ -72,6 +76,10 @@ Issues = "https://github.com/MakazhanAlpamys/Soup/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["soup_cli"]
+# v0.53.8 #93 — include bundled fixture JSONLs as package data so
+# `soup data demo` works in zipapp / namespace-package installs.
+[tool.hatch.build.targets.wheel.force-include]
+"soup_cli/data/_fixtures" = "soup_cli/data/_fixtures"
 
 [tool.ruff]
 target-version = "py39"
