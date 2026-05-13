@@ -650,13 +650,18 @@ def test_recipe_deepseek_v3_yaml_safe_load_structure():
 
 
 def test_cli_mix_help_lists_live_flag():
+    import re
+
     from soup_cli.cli import app
 
     runner = CliRunner()
     result = runner.invoke(app, ["data", "mix", "--help"])
     assert result.exit_code == 0
-    assert "--live" in result.output
-    assert "--base-yaml" in result.output
+    # Strip ANSI escape sequences — Rich splits flag tokens across colour codes
+    # on narrow CI terminals, so a substring check on raw output fails.
+    plain = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
+    assert "--live" in plain
+    assert "--base-yaml" in plain
 
 
 def test_cli_mix_live_requires_base_yaml(tmp_path, monkeypatch):
