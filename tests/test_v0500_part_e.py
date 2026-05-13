@@ -92,9 +92,12 @@ def test_prm_compat_none_format():
 
 
 def test_vision_grpo_soupconfig_ppo_happy():
-    """tdd-guide MEDIUM fix: confirm ppo path is wired at SoupConfig level."""
+    """tdd-guide MEDIUM fix: confirm ppo path is wired at SoupConfig level.
+
+    v0.53.3 #129 — uses a known VLM base so the new name-regex probe passes.
+    """
     yaml = """
-base: test-llama
+base: Qwen/Qwen2-VL-7B-Instruct
 task: ppo
 modality: vision
 data:
@@ -221,8 +224,9 @@ training:
 
 
 def test_vision_grpo_soupconfig_happy():
+    # v0.53.3 #129 — uses a known VLM base.
     yaml = """
-base: test-llama
+base: Qwen/Qwen2-VL-7B-Instruct
 task: grpo
 modality: vision
 data:

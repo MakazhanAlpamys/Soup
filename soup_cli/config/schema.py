@@ -2512,6 +2512,7 @@ class SoupConfig(BaseModel):
                 task=self.task,
                 modality=self.modality,
                 backend=self.backend,
+                base=self.base,  # v0.53.3 #129 — name-regex VLM probe
             )
         except ValueError as exc:
             raise ValueError(str(exc)) from exc
@@ -2554,6 +2555,35 @@ class SoupConfig(BaseModel):
             raise ValueError(
                 f"GRPO stability fields {active} are not supported on "
                 "backend=mlx in v0.50.0"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_grpo_fp16_amp_exclusive(self) -> "SoupConfig":
+        """v0.53.3 #128 — ``grpo_fp16`` and ``auto_mixed_precision`` are
+        mutually exclusive.
+
+        Both flags pick the mixed-precision dtype but go through different
+        codepaths (``grpo_fp16`` forces ``fp16=True, bf16=False`` on
+        GRPOConfig directly; ``auto_mixed_precision`` runs the v0.32.0
+        per-model + per-GPU picker). Combining them is a footgun where the
+        downstream behaviour depends on order-of-evaluation — fail fast at
+        config-load with a friendly message naming both flags so the user
+        picks one.
+        """
+        # Short-circuit when task is not 'grpo' so the v0.50.0 stability
+        # task-gate error fires first (code-review HIGH fix — keeps a
+        # consistent "wrong-task" diagnosis ahead of the mutual-exclusion
+        # one, regardless of validator execution order).
+        if self.task != "grpo":
+            return self
+        if self.training.grpo_fp16 and self.training.auto_mixed_precision:
+            raise ValueError(
+                "grpo_fp16=True and auto_mixed_precision=True are mutually "
+                "exclusive — both pick the mixed-precision dtype but go "
+                "through different codepaths. Pick one: grpo_fp16 forces "
+                "FP16 (unsloth parity), auto_mixed_precision uses the "
+                "v0.32.0 per-GPU picker."
             )
         return self
 

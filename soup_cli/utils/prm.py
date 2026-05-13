@@ -1,8 +1,13 @@
-"""PRM (Process Reward Model) — v0.50.0 Part E.
+"""PRM (Process Reward Model) — v0.50.0 Part E + v0.53.3 #129.
 
 Schema helpers for the new ``task='prm'`` stepwise-supervised trainer.
 The PRM data format (``data.format='prm'``) was schema-locked in v0.42.0
 Part A; v0.50.0 promotes it to a first-class task with cross-validators.
+
+v0.53.3 #129 extends :func:`validate_vision_grpo_compat` with an optional
+``base`` model name probe (``KNOWN_VLM_REGEX``) so a config that pairs
+``vision_grpo: true`` with a non-VLM checkpoint is rejected at schema-load
+with an actionable message naming a known VLM family.
 
 The actual PRM trainer wrapper (``soup_cli/trainer/prm.py``) is deferred
 to v0.50.1 — mirrors v0.27.0 MII / v0.37.0 multipack / v0.41.0 LLaMA Pro /
@@ -11,9 +16,57 @@ v0.45.0 plugins / v0.49.0 LongLoRA stub-then-live pattern.
 Security:
 - Pure schema-time validation; no filesystem touch.
 - All validators raise ``ValueError`` with actionable messages.
+- Name-regex probe rejects null-byte / non-string / oversize inputs by
+  returning ``False`` (no exception — mirrors v0.39.0 ``is_gemma4_model``
+  / v0.44.0 ``is_llama4_model`` / v0.49.0 ``is_llama_model`` policy).
 """
 
 from __future__ import annotations
+
+import re
+
+# v0.53.3 #129 — case-insensitive name allowlist for VLM bases.
+# Each alternative uses word-style boundaries so substring noise like
+# ``"my-pixtralish"`` does not match. The list is deliberately small and
+# additive — extending it does not break callers because callers always
+# pass through :func:`is_known_vlm_base`.
+_VLM_PATTERNS = (
+    r"(?:^|[^a-z0-9])qwen[\d.]*-vl(?:[^a-z0-9]|$)",   # Qwen2-VL / Qwen2.5-VL
+    r"(?:^|[^a-z0-9])qvq(?:[^a-z0-9]|$)",              # QVQ-72B
+    r"(?:^|[^a-z0-9])pixtral(?:[^a-z0-9]|$)",          # Pixtral
+    r"(?:^|[^a-z0-9])internvl[\d._]*(?:[^a-z0-9]|$)",  # InternVL/InternVL2_5/InternVL3
+    # Llama-3.2-Vision (any size in between, e.g. Llama-3.2-11B-Vision)
+    r"(?:^|[^a-z0-9])llama-?3\.?2[a-z0-9._-]*vision(?:[^a-z0-9]|$)",
+    r"(?:^|[^a-z0-9])llava(?:[^a-z0-9]|$)",            # LLaVA
+    r"(?:^|[^a-z0-9])minicpm-?v(?:[^a-z0-9]|$)",       # MiniCPM-V
+    r"(?:^|[^a-z0-9])idefics[\d]*(?:[^a-z0-9]|$)",     # Idefics
+    r"(?:^|[^a-z0-9])sharegpt4v(?:[^a-z0-9]|$)",       # ShareGPT4V
+    r"(?:^|[^a-z0-9])fuyu(?:[^a-z0-9]|$)",             # Fuyu
+)
+KNOWN_VLM_REGEX = re.compile("|".join(_VLM_PATTERNS), re.IGNORECASE)
+
+_MAX_BASE_NAME_LEN = 512
+
+
+def is_known_vlm_base(name: object) -> bool:
+    """Best-effort check whether ``name`` matches a known VLM family.
+
+    Returns ``False`` (never raises) on any of: non-string, empty, null
+    byte, length > 512. Match is case-insensitive with word boundaries so
+    substring noise (``"my-pixtralish"``) does not false-positive — mirrors
+    v0.39.0 / v0.44.0 / v0.49.0 model-detection policy.
+    """
+    if isinstance(name, bool):
+        return False
+    if not isinstance(name, str):
+        return False
+    if not name:
+        return False
+    if "\x00" in name:
+        return False
+    if len(name) > _MAX_BASE_NAME_LEN:
+        return False
+    return KNOWN_VLM_REGEX.search(name) is not None
 
 
 def validate_prm_compat(
@@ -61,13 +114,21 @@ def validate_vision_grpo_compat(
     task: str,
     modality: str,
     backend: str,
+    base: str | None = None,
 ) -> None:
     """Schema-time gate for ``vision_grpo=True``.
 
     Rejects on:
     - task not in {'grpo', 'ppo'} (vision RL is only meaningful for RL);
     - modality != 'vision' (the whole point of the flag);
-    - backend == 'mlx' (no VLM-RL on MLX).
+    - backend == 'mlx' (no VLM-RL on MLX);
+    - v0.53.3 #129: ``base`` (when supplied, non-empty) does not match a
+      known VLM family — the runtime trainer error would be cryptic
+      ("module has no attribute 'vision_tower'") so we surface a friendly
+      schema-load rejection naming the expected families instead.
+
+    ``base=None`` or empty-string skips the probe (backwards-compatible —
+    legacy callers from v0.50.0 Part E pass no ``base`` kwarg).
     """
     if not isinstance(task, str) or not task:
         raise ValueError("task must be a non-empty string")
@@ -82,6 +143,20 @@ def validate_vision_grpo_compat(
     if backend == "mlx":
         raise ValueError(
             "vision_grpo is not supported on backend=mlx in v0.50.0"
+        )
+    # v0.53.3 #129 — name-regex probe (deliberately permissive: empty /
+    # None / non-string skips the probe).
+    if isinstance(base, str) and base and not is_known_vlm_base(base):
+        # Truncate the echoed value to keep adversarial / long bases from
+        # bloating error logs (security review fix; mirrors v0.34.0 crash
+        # redaction policy).
+        safe_base = base if len(base) <= 64 else base[:61] + "..."
+        raise ValueError(
+            f"vision_grpo=True requires a known VLM base; got base={safe_base!r}. "
+            "Expected one of the Qwen2-VL / Pixtral / InternVL / "
+            "Llama-3.2-Vision / LLaVA / MiniCPM-V families. If your base "
+            "is a legitimate VLM not in the allowlist, omit vision_grpo "
+            "until a future release adds a runtime config-probe path."
         )
 
 

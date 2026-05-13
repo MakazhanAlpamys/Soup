@@ -54,6 +54,32 @@ class GRPOTrainerWrapper:
         self.tokenizer = None
         self.trainer = None
 
+    def _build_precision_kwargs(self) -> dict[str, bool]:
+        """Resolve fp16/bf16 kwargs for GRPOConfig (v0.53.3 #128).
+
+        Priority:
+        - Non-CUDA device (CPU / MPS / XPU) → no mixed precision (both
+          False). HF Trainer's fp16/bf16 kwargs are CUDA-specific; non-CUDA
+          backends must use their own mixed-precision path (MPS Metal,
+          XPU IPEX). Documented explicitly so future MPS work doesn't
+          regress this branch silently.
+        - ``grpo_fp16=True`` (CUDA) → ``fp16=True, bf16=False`` (unsloth
+          parity).
+        - Default CUDA → ``fp16=False, bf16=True`` (legacy v0.50.0 path).
+
+        ``auto_mixed_precision`` is mutually exclusive with ``grpo_fp16``
+        (rejected at schema load via ``_validate_grpo_fp16_amp_exclusive``);
+        when only ``auto_mixed_precision`` is set, the v0.32.0 picker runs
+        elsewhere in the training loop and overrides this default.
+        """
+        if self.device != "cuda":
+            return {"fp16": False, "bf16": False}
+        # grpo_fp16 is a Pydantic field with default=False; direct attribute
+        # access (no getattr fallback) so a typo would fail loudly.
+        if self.config.training.grpo_fp16:
+            return {"fp16": True, "bf16": False}
+        return {"fp16": False, "bf16": True}
+
     def setup(self, dataset: dict):
         """Load model, tokenizer, apply LoRA, create GRPO trainer."""
         from datasets import Dataset
@@ -166,7 +192,7 @@ class GRPOTrainerWrapper:
             "logging_steps": tcfg.logging_steps,
             "save_steps": tcfg.save_steps,
             "save_total_limit": 3,
-            "bf16": self.device == "cuda",
+            **self._build_precision_kwargs(),
             "report_to": self.report_to,
             "remove_unused_columns": False,
             "deepspeed": self.deepspeed_config,
