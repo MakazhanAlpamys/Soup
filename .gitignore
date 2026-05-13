@@ -24,6 +24,7 @@ Thumbs.db
 
 # Training outputs
 output/
+out/
 checkpoints/
 wandb/
 
