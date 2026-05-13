@@ -6,7 +6,7 @@ import re
 import time
 import uuid
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import typer
 from rich.console import Console
@@ -810,6 +810,7 @@ def _generate_response(
     assistant_model=None,
     num_assistant_tokens: int = 5,
     logits_processor=None,
+    ngram_config: Any = None,
 ):
     """Generate a response from the model."""
     import torch
@@ -854,6 +855,21 @@ def _generate_response(
         # v0.33.0 #53 — structured-output LogitsProcessor list (may be empty).
         if logits_processor:
             gen_kwargs["logits_processor"] = logits_processor
+        # v0.53.6 #104 — n-gram speculative decoding (transformers backend).
+        # Mutually exclusive with a real draft `assistant_model`.
+        if ngram_config is not None and assistant_model is None:
+            # HF Transformers >= 4.38 supports prompt-lookup decoding via
+            # `prompt_lookup_num_tokens`. We expose `num_draft_tokens` as
+            # the user-facing knob; n-gram size + prompt_lookup_max are
+            # validated upstream by `validate_ngram_config`.
+            try:
+                gen_kwargs["prompt_lookup_num_tokens"] = int(
+                    ngram_config.num_draft_tokens
+                )
+            except (TypeError, AttributeError):
+                # Schema gate at construction time enforces shape; this
+                # is defence-in-depth.
+                pass
 
         outputs = model.generate(**gen_kwargs)
 
@@ -879,6 +895,7 @@ def _create_app(
     enable_dashboard: bool = False,
     tracer=None,
     trace_log_writer=None,
+    ngram_config: Any = None,
 ):
     """Create the FastAPI application with OpenAI-compatible endpoints."""
     import threading as _threading
@@ -1067,6 +1084,7 @@ def _create_app(
                         assistant_model=draft_model,
                         num_assistant_tokens=num_speculative_tokens,
                         logits_processor=processors or None,
+                        ngram_config=ngram_config,
                     )
                 except Exception:
                     logger.exception("Generation error")
@@ -1120,6 +1138,89 @@ def _create_app(
                 # Always record latency so tail-latency percentiles include
                 # error paths (prevents blind spots on the dashboard).
                 metrics.record_latency((time.perf_counter() - started) * 1000)
+
+    # ----- v0.53.6 #102 — Anthropic /v1/messages route -----
+    # Reuses the v0.45.0 utils/anthropic_messages converter + the existing
+    # chat_completions handler. Live on transformers backend only this
+    # release (vLLM /v1/messages tracked for v0.53.7).
+    @app.post("/v1/messages")
+    def anthropic_messages(payload: dict) -> dict:
+        from soup_cli.utils.anthropic_messages import (
+            from_anthropic,
+            validate_anthropic_payload,
+        )
+
+        # Streaming not yet supported on this route — v0.53.7 deliverable.
+        # Checked BEFORE schema validation so a stream-only client never
+        # leaks a validation-error detail (defence-in-depth).
+        if isinstance(payload, dict) and payload.get("stream"):
+            raise HTTPException(
+                status_code=501,
+                detail="Streaming /v1/messages deferred to v0.53.7.",
+            )
+
+        try:
+            validate_anthropic_payload(payload)
+            openai_payload = from_anthropic(payload)
+            request = ChatCompletionRequest(**openai_payload)
+        except (TypeError, ValueError) as exc:
+            # Security: do not echo internal validator/converter details
+            # to the HTTP body. Log server-side for operator debugging.
+            logger.debug("/v1/messages invalid request: %s", exc)
+            raise HTTPException(status_code=400, detail="Invalid request")
+        except Exception as exc:  # noqa: BLE001 — pydantic ValidationError shape
+            logger.debug("/v1/messages pydantic error: %s", exc)
+            raise HTTPException(status_code=400, detail="Invalid request")
+
+        chat_response = chat_completions(request)
+
+        # Map OpenAI chat response back to Anthropic shape.
+        text = ""
+        if isinstance(chat_response, dict):
+            try:
+                text = chat_response["choices"][0]["message"]["content"]
+            except (KeyError, IndexError, TypeError):
+                text = ""
+        usage = (
+            chat_response.get("usage", {}) if isinstance(chat_response, dict) else {}
+        )
+
+        return {
+            "id": (
+                chat_response.get("id", "") if isinstance(chat_response, dict) else ""
+            ),
+            "type": "message",
+            "role": "assistant",
+            "model": openai_payload.get("model", model_name),
+            "content": [{"type": "text", "text": text}],
+            "stop_reason": "end_turn",
+            "usage": {
+                "input_tokens": int(usage.get("prompt_tokens", 0) or 0),
+                "output_tokens": int(usage.get("completion_tokens", 0) or 0),
+            },
+        }
+
+    # ----- v0.53.6 #103 — Server-side tool endpoints (deferred-live stubs) -----
+    # Closed allowlist (mirrors v0.45.0 Part B utils/server_tools.SUPPORTED_TOOLS).
+    # Routes return HTTP 501 with v0.53.7 marker — schema lives now so client
+    # code can target the URLs even before the live sandbox is wired.
+    def _tool_not_implemented(tool: str) -> None:
+        raise HTTPException(
+            status_code=501,
+            detail=f"Server-side tool {tool!r} live execution deferred to v0.53.7.",
+        )
+
+    @app.post("/v1/tools/python")
+    def tool_python(_: dict) -> None:
+        _tool_not_implemented("python")
+
+    @app.post("/v1/tools/bash")
+    def tool_bash(_: dict) -> None:
+        _tool_not_implemented("bash")
+
+    @app.post("/v1/tools/web_search")
+    def tool_web_search(_: dict) -> None:
+        _tool_not_implemented("web_search")
 
     # Expose dashboard intent + constraint on the app for tests + introspection
     app.state.enable_dashboard = enable_dashboard

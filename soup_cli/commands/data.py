@@ -2154,6 +2154,20 @@ def demo_bundle(
 @app.command(name="recipe")
 def recipe(
     path: str = typer.Argument(..., help="Path to recipe.yaml under cwd"),
+    execute: bool = typer.Option(
+        False,
+        "--execute",
+        help=(
+            "Run the validated DAG end-to-end (v0.53.6 #106 — stub; "
+            "live per-node execution deferred to v0.53.7)."
+        ),
+    ),
+    output: Optional[str] = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help="Output dir for sampler node (required with --execute).",
+    ),
 ) -> None:
     """v0.45.0 Part E — Validate a Data Recipe DAG (live runner deferred)."""
     from rich.markup import escape as _escape
@@ -2177,6 +2191,39 @@ def recipe(
         "Topological order: "
         + ", ".join(_escape(name) for name in dag.topo_order)
     )
+
+    if execute:
+        # `is None` guard — empty-string `--output ""` is a distinct
+        # operator error that should NOT be silently mapped to "missing"
+        # (matches v0.40.6 project policy on `is None` over falsy).
+        if output is None:
+            console.print(
+                "[red]--execute requires --output <dir>[/]"
+            )
+            raise typer.Exit(2)
+        # Defence-in-depth: enforce cwd containment at the CLI boundary
+        # BEFORE handing off to run_recipe. Today run_recipe is a stub,
+        # so this only protects against future v0.53.7 live-runner bugs —
+        # the docstring contract on run_recipe.output_dir says
+        # cwd-contained, and we never want the live runner to be the
+        # first/only enforcement point.
+        from soup_cli.utils.paths import is_under_cwd
+        from soup_cli.utils.recipe_run import run_recipe
+
+        if not output or not is_under_cwd(output):
+            console.print(
+                "[red]--output must be a non-empty path under the current directory[/]"
+            )
+            raise typer.Exit(2)
+
+        try:
+            run_recipe(dag, output_dir=output)
+        except NotImplementedError as exc:
+            console.print(f"[yellow]{_escape(str(exc))}[/]")
+            raise typer.Exit(2) from exc
+        return
+
     console.print(
-        "[yellow]Live runner deferred to v0.45.1.[/]"
+        "[yellow]Live runner deferred to v0.53.7 "
+        "(re-run with --execute once v0.53.7 ships).[/]"
     )

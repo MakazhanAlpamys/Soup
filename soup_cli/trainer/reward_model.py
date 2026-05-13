@@ -159,11 +159,14 @@ class RewardModelTrainerWrapper:
         # v0.40.6 #67 — ReLoRA callback.
         from soup_cli.utils.peft_wiring import (
             attach_curriculum_callback,
+            attach_plugin_callback,
             attach_relora_callback,
         )
         attach_relora_callback(self.trainer, tcfg)
         # v0.53.5 #114/#115 — dynamic curriculum live callback.
         attach_curriculum_callback(self.trainer, tcfg, str(output_dir), console)
+        # v0.53.6 #101 — Soup plugin TrainerCallback.
+        attach_plugin_callback(self.trainer, console)
 
         self._output_dir = str(output_dir)
 

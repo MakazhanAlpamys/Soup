@@ -43,15 +43,15 @@ soup train
 
 Latest highlights only. Full history: [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 
-**v0.53.5 — Adaptive Training (BETA → stable)**: Six closes lifting the v0.48.0 BETA deferrals to live wiring, plus a day-zero recipe for DeepSeek-V3 reasoning.
+**v0.53.6 — Plugin + Agent + Anthropic API**: Six features — three live, three deferred-live stubs with v0.53.7 markers.
 
-- **Dynamic curriculum is live.** New `DynamicCurriculumCallback` — a real HF `TrainerCallback` that accumulates per-step loss + grad-norm per bucket, recomputes sampler weights every N steps, and atomically appends `curriculum_history.jsonl` rows on rank 0. Multi-rank launches are coordinated via `torch.distributed.all_reduce(SUM)` of per-bucket stats before the recompute. Visualise the trace with `soup runs curriculum-curve <run_id>`.
-- **Curriculum-aware on every transformer trainer.** The `curriculum_dynamic: true` schema gate widened from `{sft, pretrain}` to every transformer-backend wrapper (SFT / Pretrain / DPO / GRPO / KTO / ORPO / SimPO / IPO / BCO / RewardModel / Embedding / PPO / Distill). MLX backend still rejected with a distinct error message.
-- **`soup data mix --live` runs real proxy trainings.** A new `--live --base-yaml <path>` mode replaces the synthetic offline proxy with a real short `soup train` subprocess per Bayesian-search candidate. Argv-list invocation, per-candidate timeout `min(budget/num_probes, 30 min)`, tracker-SQLite parse for `eval_loss`, atomic tmp-YAML cleanup.
-- **scikit-optimize behind the OptimizerProtocol.** When `scikit-optimize` is installed, the mix optimiser now drives a real `skopt.Optimizer(GP)` (Gaussian-process Bayesian optimisation) instead of the Dirichlet fallback. Zero new required dependencies — falls back silently when skopt is absent.
-- **`MixOptimizationReport.elapsed_seconds` excludes failed candidates.** The headline elapsed-time field now sums only successful candidate wall-clock, so a single timed-out proxy can no longer inflate a report otherwise filled with quick successes. Per-candidate `wall_clock_seconds` retains the per-trial timing.
-- **`deepseek-v3-reasoning` recipe.** GRPO + reasoning template on `deepseek-ai/DeepSeek-V3` with `reward_fn=accuracy,format` + math verifiable domain — day-zero coverage for the new MoE reasoning base.
-- **+63 net new tests** (7935 → 7998) across the new `test_v0535.py`. Four review agents (python / code / security / tdd) ran; every CRITICAL → LOW finding was fixed — `is None` over falsy guards on the callback attach helper, cwd-containment + `os.lstat + S_ISLNK` rejection on `output_dir`, simplex + finite + bool-rejected validation on weights, argv-list subprocess invocation with no shell, atomic tempfile + `os.replace` for `curriculum_history.jsonl` appends.
+- **Soup plugins now run live as Trainer callbacks.** New `SoupPluginCallback` dispatches `pre_train` / `post_train` / `pre_step` / `post_step` to every enabled plugin via the v0.45.0 registry. Hook exceptions are swallowed at WARNING — one misbehaving plugin must never crash a multi-hour run. Wired into all 13 transformer-backend trainers (SFT + DPO + GRPO + KTO + ORPO + SimPO + IPO + BCO + PPO + RewardModel + Pretrain + Embedding + Distill) via `attach_plugin_callback`.
+- **Anthropic-shaped `/v1/messages` endpoint.** `soup serve --backend transformers` exposes a `POST /v1/messages` route reusing the v0.45.0 `anthropic_messages` converter + the existing chat handler. Validation errors return a generic `"Invalid request"` 400 (details logged server-side at DEBUG). Streaming returns 501 — true Anthropic event-shape SSE ships in v0.53.7.
+- **n-gram speculative decoding wired through.** When the server is started with an `NgramSpecConfig`, every chat completion forwards `prompt_lookup_num_tokens=N` into `model.generate(...)` (HF Transformers ≥ 4.38 prompt-lookup decoding). Mutually exclusive with a real draft `assistant_model`.
+- **`soup data recipe --execute` lands as a stub-then-live CLI surface.** `--execute --output <dir>` validates the DAG, enforces cwd-containment on `--output` at the CLI boundary, then surfaces the `v0.53.7` `NotImplementedError` marker from `run_recipe`. Empty-string `--output ""` and outside-cwd paths are rejected before the runner is even called — never want the live runner to be the first/only enforcement point.
+- **Server-side tool endpoints (`/v1/tools/python` + `/v1/tools/bash` + `/v1/tools/web_search`).** URL schema lives now so clients can target the endpoints. All three return HTTP 501 with the v0.53.7 marker — live RLVR sandbox HTTP wrapper + `WebSearchConfig.domain_allowlist` enforcement ship in v0.53.7.
+- **`instantiate_trainer_plugins` schema-only.** Validates `[grokfast, spectrum, llmcompressor, sonicmoe, cce_plugin, math_verify]` lists then raises with the v0.53.7 marker. Six upstream plugin lazy-imports + per-plugin callback construction land in v0.53.7.
+- **+53 net new tests** (7998 → 8051) across the new `test_v0536.py`. Three review agents (python / code / security) ran; every HIGH and MEDIUM finding was fixed — race-free single-snapshot plugin hook collection, generic `"Invalid request"` body redaction, CLI-side cwd containment before `run_recipe`, `is None` over falsy `--output` guards, and added test coverage for: `prompt_lookup_num_tokens` omitted when `ngram_config=None`, console-print failure swallow on the attach helper, every `run_recipe` type-rejection boundary.
 
 ## Why Soup?
 
@@ -3786,6 +3786,73 @@ Autopilot also detects pre-quantized bases automatically — `TheBloke/Llama-2-7
 The advanced GGUF pipeline uses POSIX `O_NOFOLLOW` to defeat the TOCTOU race between the dispatch-time symlink check and the actual open of the calibration data — a crafted environment cannot race-swap the calibration file between validate and read.
 
 `soup deploy autopilot --measure` caches results at `~/.soup/deploy_autopilot_cache.json` keyed on `(base, profile, eval-tasks)`. Repeat invocations short-circuit; pass `SOUP_DEPLOY_AUTOPILOT_CACHE=<path>` to redirect (constrained to home / cwd / tempdir). The recommended candidate uses soft-fallback: first `OK` by insertion order, else the candidate with the smallest delta (least drop relative to its own baseline).
+
+## Soup Plugin Callbacks
+
+Register a plugin once via the v0.45.0 registry API; v0.53.6 wires it into every
+transformer-backend trainer as a real HF `TrainerCallback`:
+
+```python
+# soup_cli/plugins/my_plugin.py — auto-discovered at `soup` startup
+from soup_cli.plugins import register_plugin
+
+class MyPlugin:
+    def pre_train(self, ctx):
+        print("training about to start, args =", ctx["args"])
+
+    def post_step(self, ctx):
+        if ctx["state"].global_step % 100 == 0:
+            print(f"step {ctx['state'].global_step}")
+
+register_plugin(name="my-plugin", version="0.1.0", plugin=MyPlugin())
+```
+
+A misbehaving plugin hook is swallowed at WARNING — one bad plugin must never crash
+a multi-hour training run. The hook snapshot is taken at callback-construction time,
+so a plugin registered MID-run does not retroactively receive events.
+
+## Anthropic `/v1/messages` API
+
+`soup serve --backend transformers` exposes a POST `/v1/messages` route that accepts
+Anthropic Messages-shaped payloads:
+
+```bash
+curl http://localhost:8000/v1/messages -H "Content-Type: application/json" -d '{
+  "model": "my-model",
+  "messages": [{"role": "user", "content": "hello"}],
+  "max_tokens": 64
+}'
+```
+
+Streaming (`stream: true`) returns 501 — Anthropic event-shape SSE ships in v0.53.7.
+Validation errors return a generic `"Invalid request"` 400 body; details are logged
+server-side at DEBUG. vLLM parity tracked for v0.53.7.
+
+## N-gram Speculative Decoding
+
+When a server is configured with an `NgramSpecConfig`, every chat completion forwards
+`prompt_lookup_num_tokens=N` into `model.generate(...)` (HF Transformers ≥ 4.38
+prompt-lookup decoding — no draft model required). Mutually exclusive with a real
+`assistant_model`; if both are set, the real draft model wins.
+
+## Server-Side Tool Endpoints (preview)
+
+Three POST routes ship in v0.53.6 as schema-only stubs returning HTTP 501:
+
+- `/v1/tools/python` — sandboxed Python execution (v0.53.7 live)
+- `/v1/tools/bash` — sandboxed bash (v0.53.7 live)
+- `/v1/tools/web_search` — domain-allowlisted web search (v0.53.7 live)
+
+Live wiring re-uses the v0.25.0 RLVR sandbox for python/bash and enforces
+`WebSearchConfig.domain_allowlist` for web_search.
+
+## Data Recipe DAG Runner (preview)
+
+`soup data recipe path/to/recipe.yaml --execute --output ./out` validates the DAG,
+enforces cwd-containment on `--output` at the CLI boundary, and surfaces the
+`v0.53.7` `NotImplementedError` marker from `run_recipe`. The per-node execution
+loop (seed / llm_text / code / judge / validator / sampler) plus checkpoint/resume
+ships in v0.53.7. Validate today, run tomorrow.
 
 ## Changelog
 

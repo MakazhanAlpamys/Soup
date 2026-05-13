@@ -129,3 +129,45 @@ def attach_curriculum_callback(
         except Exception:  # noqa: BLE001 — never crash on console issues.
             pass
     return True
+
+
+def attach_plugin_callback(trainer: Any, console: Any = None) -> bool:
+    """Attach :class:`SoupPluginCallback` when any enabled plugin implements a hook.
+
+    Returns ``True`` when a callback was attached, ``False`` otherwise
+    (no plugins enabled OR none implement any hook — the build helper
+    short-circuits to ``None`` in that case so the trainer pays zero
+    overhead).
+
+    Failures inside individual plugin hooks are swallowed at WARNING
+    inside the callback itself; this helper only handles the
+    construction failure path (transformers not importable / plugin
+    registry corrupted).
+    """
+    try:
+        from soup_cli.monitoring.plugin_callback import build_plugin_callback
+
+        callback = build_plugin_callback()
+    except Exception as exc:  # noqa: BLE001 — plugin infra must not crash training
+        logger.debug("attach_plugin_callback skipped: %s", exc)
+        return False
+    if callback is None:
+        return False
+    try:
+        trainer.add_callback(callback)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("attach_plugin_callback add_callback failed: %s", exc)
+        return False
+    if console is not None:
+        try:
+            # Number of plugins is the count of distinct (plugin_name, hooks)
+            # pairs the callback snapshot will fan out to.
+            from soup_cli.plugins import list_plugins
+
+            n_enabled = sum(1 for s in list_plugins().values() if s.enabled)
+            console.print(
+                f"[dim]Plugin callback attached ({n_enabled} enabled plugin(s)).[/]"
+            )
+        except Exception:  # noqa: BLE001
+            pass
+    return True

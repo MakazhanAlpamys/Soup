@@ -854,6 +854,7 @@ class SFTTrainerWrapper:
         # ReLoRA callback (v0.39.0 Part B / v0.40.6 #67) via shared helper.
         from soup_cli.utils.peft_wiring import (
             attach_curriculum_callback,
+            attach_plugin_callback,
             attach_relora_callback,
         )
         attach_relora_callback(self.trainer, self.config.training)
@@ -861,6 +862,8 @@ class SFTTrainerWrapper:
         attach_curriculum_callback(
             self.trainer, self.config.training, self._output_dir, console
         )
+        # v0.53.6 #101 — Soup plugin TrainerCallback.
+        attach_plugin_callback(self.trainer, console)
 
         # v0.53.2 #135 — EBFT compute_loss hook (no-op if ebft_variant unset).
         from soup_cli.utils.ebft_gdpo import attach_ebft_compute_loss

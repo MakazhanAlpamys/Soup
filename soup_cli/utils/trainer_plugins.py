@@ -11,7 +11,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Mapping, Optional, Sequence, Tuple
+from typing import Any, Mapping, Optional, Sequence, Tuple
 
 _PLUGIN_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_]{0,31}$")
 _MAX_DESCRIPTION = 256
@@ -128,9 +128,33 @@ def validate_trainer_plugin_list(names: Sequence[str]) -> Tuple[str, ...]:
     return tuple(out)
 
 
+def instantiate_trainer_plugins(names: Sequence[str]) -> Tuple[Any, ...]:
+    """v0.53.6 #105 — instantiate live upstream callbacks (stub-then-live).
+
+    Validates ``names`` against :func:`validate_trainer_plugin_list` then
+    raises :class:`NotImplementedError` with a v0.53.7 marker. Live lazy
+    imports + per-plugin callback construction (``grokfast``,
+    ``spectrum``, ``llmcompressor``, ``sonicmoe``, ``cce_plugin``,
+    ``math_verify``) land in v0.53.7. Same stub-then-live pattern as
+    v0.27.0 MII / v0.37.0 multipack / v0.41.0 LLaMA Pro.
+
+    Raises:
+        TypeError: per :func:`validate_trainer_plugin_list`.
+        ValueError: per :func:`validate_trainer_plugin_list`.
+        NotImplementedError: always (after validation) — live wiring
+            ships in v0.53.7.
+    """
+    canonical = validate_trainer_plugin_list(names)
+    raise NotImplementedError(
+        f"Trainer-plugin live instantiation deferred to v0.53.7. "
+        f"Validated names: {canonical!r}"
+    )
+
+
 __all__ = [
     "TrainerPluginSpec",
     "list_trainer_plugins",
     "get_trainer_plugin",
     "validate_trainer_plugin_list",
+    "instantiate_trainer_plugins",
 ]
