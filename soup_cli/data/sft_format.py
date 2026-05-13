@@ -63,6 +63,11 @@ def build_format_row(
         getattr(training_cfg, "train_on_eot", False) if training_cfg else False
     )
 
+    # v0.53.7 #87: custom prompt_strategy live runtime. Resolves the
+    # ``module.path:fn_name`` spec once at setup time (fail-fast on bad import)
+    # and applies the transform to each row BEFORE template rendering.
+    prompt_strategy_spec = getattr(data_cfg, "prompt_strategy", None)
+
     if (use_responses_only or use_train_field) and not has_template:
         if console is not None:
             console.print(
@@ -70,8 +75,11 @@ def build_format_row(
                 "has no chat_template — falling back to text path. Pass "
                 "data.chat_template explicitly to enable masking.[/]"
             )
-        return _wrap_with_reasoning_effort(
-            _legacy_text_format_row(tokenizer), reasoning_effort
+        return _wrap_with_prompt_strategy(
+            _wrap_with_reasoning_effort(
+                _legacy_text_format_row(tokenizer), reasoning_effort
+            ),
+            prompt_strategy_spec,
         )
 
     if use_train_field:
@@ -82,7 +90,42 @@ def build_format_row(
         )
     else:
         inner = _legacy_text_format_row(tokenizer)
-    return _wrap_with_reasoning_effort(inner, reasoning_effort)
+    return _wrap_with_prompt_strategy(
+        _wrap_with_reasoning_effort(inner, reasoning_effort),
+        prompt_strategy_spec,
+    )
+
+
+def _wrap_with_prompt_strategy(
+    inner: Callable[[dict], dict], spec: Any | None
+) -> Callable[[dict], dict]:
+    """v0.53.7 #87 — apply ``data.prompt_strategy`` transform per-row.
+
+    Resolves the spec eagerly at wrap-time so a bad import fails at setup
+    rather than mid-training. Per-row callable exceptions are logged at
+    DEBUG and the original row falls through (matches v0.33.0 #47
+    CrossDocCollator silent-degrade policy).
+    """
+    if spec is None or not isinstance(spec, str):
+        return inner
+    # Resolve eagerly so trainer setup surfaces a bad spec loudly.
+    from soup_cli.utils.data_pipeline import (
+        apply_prompt_strategy,
+        resolve_prompt_strategy,
+    )
+
+    resolve_prompt_strategy(spec)  # fail fast on import / signature errors
+
+    def wrapped(example: dict) -> dict:
+        transformed = apply_prompt_strategy(spec, example)
+        if isinstance(transformed, dict):
+            return inner(transformed)
+        # apply_prompt_strategy may return a non-dict Mapping (e.g.
+        # MappingProxyType); coerce so the existing format_row helpers see
+        # an ordinary mutable dict.
+        return inner(dict(transformed))
+
+    return wrapped
 
 
 def _wrap_with_reasoning_effort(

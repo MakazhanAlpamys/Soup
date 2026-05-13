@@ -1,7 +1,10 @@
 """vLLM backend utilities for soup serve."""
 
 import logging
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:  # pragma: no cover
+    from collections.abc import Generator
 
 logger = logging.getLogger(__name__)
 
@@ -144,10 +147,14 @@ def create_vllm_app(
 
     app = FastAPI(title="Soup Inference Server (vLLM)", version="1.0.0")
 
+    # v0.53.7 M-G: restrict CORS to loopback — /v1/messages is a mutation
+    # endpoint and was previously reachable from any browser page via the
+    # legacy ``allow_origins=["*"]``. Matches v0.30.0 transformers-backend
+    # policy.
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
-        allow_methods=["*"],
+        allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
+        allow_methods=["GET", "POST", "OPTIONS"],
         allow_headers=["*"],
     )
 
@@ -330,4 +337,140 @@ def create_vllm_app(
         yield f"data: {json.dumps(final_chunk)}\n\n"
         yield "data: [DONE]\n\n"
 
+    # ----- v0.53.7 #102 — Anthropic /v1/messages on vLLM backend -----
+    # Mirrors the v0.53.6 transformers-backend route. Reuses the v0.45.0
+    # Part B converter + the existing chat_completions handler; streaming
+    # emits the Anthropic event shape.
+    @app.post("/v1/messages")
+    async def anthropic_messages(payload: dict):
+        from soup_cli.utils.anthropic_messages import (
+            from_anthropic,
+            validate_anthropic_payload,
+        )
+
+        wants_stream = isinstance(payload, dict) and bool(payload.get("stream"))
+
+        try:
+            validate_anthropic_payload(payload)
+            openai_payload = from_anthropic(payload)
+            openai_payload.pop("stream", None)
+            req = ChatCompletionRequest(**openai_payload)
+        except (TypeError, ValueError) as exc:
+            logger.debug("vLLM /v1/messages invalid request: %s", exc)
+            raise HTTPException(status_code=400, detail="Invalid request")
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("vLLM /v1/messages pydantic error: %s", exc)
+            raise HTTPException(status_code=400, detail="Invalid request")
+
+        chat_response = await chat_completions(req)
+
+        text = ""
+        if isinstance(chat_response, dict):
+            try:
+                text = chat_response["choices"][0]["message"]["content"]
+            except (KeyError, IndexError, TypeError):
+                text = ""
+        usage = (
+            chat_response.get("usage", {}) if isinstance(chat_response, dict) else {}
+        )
+        msg_id = (
+            chat_response.get("id", "") if isinstance(chat_response, dict) else ""
+        )
+        out_model = openai_payload.get("model", model_name)
+        in_tokens = int(usage.get("prompt_tokens", 0) or 0)
+        out_tokens = int(usage.get("completion_tokens", 0) or 0)
+
+        if wants_stream:
+            # v0.53.7 L-C: disable intermediate caching on SSE streams.
+            return StreamingResponse(
+                _stream_anthropic_messages_vllm(
+                    msg_id=msg_id,
+                    model=out_model,
+                    text=text,
+                    input_tokens=in_tokens,
+                    output_tokens=out_tokens,
+                ),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-store",
+                    "X-Accel-Buffering": "no",
+                },
+            )
+
+        return {
+            "id": msg_id,
+            "type": "message",
+            "role": "assistant",
+            "model": out_model,
+            "content": [{"type": "text", "text": text}],
+            "stop_reason": "end_turn",
+            "usage": {
+                "input_tokens": in_tokens,
+                "output_tokens": out_tokens,
+            },
+        }
+
     return app
+
+
+def _stream_anthropic_messages_vllm(
+    *,
+    msg_id: str,
+    model: str,
+    text: str,
+    input_tokens: int,
+    output_tokens: int,
+) -> "Generator[str, None, None]":
+    """Yield Anthropic event-shape SSE frames (vLLM backend)."""
+    import json as _json
+
+    # M-A: sanitise caller-influenced fields before SSE embedding.
+    def _sanitise(value: str, max_len: int) -> str:
+        if not isinstance(value, str):
+            return ""
+        return value.replace("\r", "").replace("\n", "").replace("\x00", "")[:max_len]
+
+    msg_id = _sanitise(msg_id, 64)
+    model = _sanitise(model, 200)
+
+    def _frame(event_type: str, data: dict) -> str:
+        return f"event: {event_type}\ndata: {_json.dumps(data)}\n\n"
+
+    yield _frame(
+        "message_start",
+        {
+            "type": "message_start",
+            "message": {
+                "id": msg_id,
+                "type": "message",
+                "role": "assistant",
+                "content": [],
+                "model": model,
+                "stop_reason": None,
+                "usage": {
+                    "input_tokens": int(input_tokens),
+                    "output_tokens": 0,
+                },
+            },
+        },
+    )
+    words = (text or "").split(" ")
+    for idx, word in enumerate(words):
+        chunk_text = word if idx == 0 else f" {word}"
+        yield _frame(
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "text_delta", "text": chunk_text},
+            },
+        )
+    yield _frame(
+        "message_delta",
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn"},
+            "usage": {"output_tokens": int(output_tokens)},
+        },
+    )
+    yield _frame("message_stop", {"type": "message_stop"})

@@ -540,6 +540,11 @@ def write_jsonl_rows(rows: Iterable[Mapping[str, Any]], path: Any) -> str:
     return target
 
 
+#: v0.53.7 M-J: public alias for ``_extract_row_text`` so external callers
+#: (commands/data_score.py) do not import a private name.
+extract_row_text = _extract_row_text
+
+
 __all__ = [
     "BENCHMARKS",
     "ScoreReport",
@@ -547,6 +552,7 @@ __all__ = [
     "decontaminate_rows",
     "detect_language",
     "detect_pii",
+    "extract_row_text",
     "load_jsonl_rows",
     "ngram_overlap_ratio",
     "ngram_set",

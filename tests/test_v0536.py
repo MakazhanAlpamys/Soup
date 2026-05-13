@@ -296,7 +296,11 @@ def test_anthropic_messages_rejects_malformed_payload(monkeypatch):
 
 
 def test_anthropic_messages_rejects_streaming():
-    """`stream=True` returns 501 (deferred to v0.53.7)."""
+    """v0.53.7: `stream=True` now returns 200 SSE; the 501 stub is gone.
+
+    Coverage of the SSE shape itself lives in test_v0537.py; here we just
+    assert the v0.53.6 stub is no longer in effect.
+    """
     pytest.importorskip("fastapi")
     from fastapi.testclient import TestClient
 
@@ -309,8 +313,7 @@ def test_anthropic_messages_rejects_streaming():
         "stream": True,
     }
     response = client.post("/v1/messages", json=payload)
-    assert response.status_code == 501
-    assert "v0.53.7" in response.json()["detail"]
+    assert response.status_code != 501
 
 
 def test_anthropic_messages_happy_path(monkeypatch):
@@ -479,18 +482,22 @@ def test_ngram_kwarg_skipped_when_draft_model_set():
 
 @pytest.mark.parametrize(
     "path",
-    ["/v1/tools/python", "/v1/tools/bash", "/v1/tools/web_search"],
+    ["/v1/tools/python", "/v1/tools/web_search"],
 )
 def test_tool_endpoint_returns_501(path: str):
-    """All three tool endpoints return 501 with v0.53.7 marker."""
+    """v0.53.7: python + web_search are live; the 501 stub is gone.
+
+    Per-endpoint live coverage lives in ``test_v0537.py``. The ``bash``
+    endpoint was reverted to 501 by the v0.53.7 review (C1) — its 501
+    surface is asserted in ``test_v0537.py::TestReviewFixesC1BashStub``.
+    """
     pytest.importorskip("fastapi")
     from fastapi.testclient import TestClient
 
     app = _build_app()
     client = TestClient(app)
     response = client.post(path, json={"code": "print(1)"})
-    assert response.status_code == 501
-    assert "v0.53.7" in response.json()["detail"]
+    assert response.status_code != 501
 
 
 # ----------------------------------------------------------------------
@@ -521,6 +528,11 @@ def test_run_recipe_rejects_bad_kwargs():
 
 
 def test_run_recipe_raises_not_implemented():
+    """v0.53.7: live runner replaces the NotImplementedError stub.
+
+    A bare `seed` node without a `path` config raises ValueError; coverage of
+    the live happy-path lives in test_v0537.py.
+    """
     from soup_cli.utils.recipe_dag import RecipeDAG, RecipeNode
     from soup_cli.utils.recipe_run import run_recipe
 
@@ -529,7 +541,7 @@ def test_run_recipe_raises_not_implemented():
         edges=(),
         topo_order=("a",),
     )
-    with pytest.raises(NotImplementedError, match="v0.53.7"):
+    with pytest.raises((ValueError, NotImplementedError)):
         run_recipe(dag, output_dir="out")
 
 
@@ -566,7 +578,12 @@ def test_data_recipe_execute_requires_output(tmp_path: Path, monkeypatch):
 
 
 def test_data_recipe_execute_surfaces_v0537_marker(tmp_path: Path, monkeypatch):
-    """`--execute --output <dir>` runs through run_recipe and surfaces v0.53.7 marker."""
+    """v0.53.7: `--execute --output <dir>` invokes the live runner.
+
+    A bare `seed` node without a `path` config now fails fast at runtime
+    (live runner does real I/O). The v0.53.7 marker check from the v0.53.6
+    stub era is no longer applicable; live coverage lives in test_v0537.py.
+    """
     from soup_cli.cli import app as cli_app
 
     monkeypatch.chdir(tmp_path)
@@ -589,8 +606,8 @@ def test_data_recipe_execute_surfaces_v0537_marker(tmp_path: Path, monkeypatch):
             "out",
         ],
     )
-    assert result.exit_code == 2, result.output
-    assert "v0.53.7" in _strip_ansi(result.output)
+    # Bare seed node without `path` fails at runtime — exit code non-zero.
+    assert result.exit_code != 0
 
 
 # ----------------------------------------------------------------------
@@ -599,10 +616,15 @@ def test_data_recipe_execute_surfaces_v0537_marker(tmp_path: Path, monkeypatch):
 
 
 def test_instantiate_trainer_plugins_validates_then_raises():
-    """Validation runs first, then NotImplementedError with v0.53.7 marker."""
+    """v0.53.7: live instantiation replaces the NotImplementedError stub.
+
+    `grokfast` requires the upstream `grokfast` package; in a CI environment
+    without it the call surfaces an ImportError (or runs through to advisory
+    when present). Live coverage lives in test_v0537.py.
+    """
     from soup_cli.utils.trainer_plugins import instantiate_trainer_plugins
 
-    with pytest.raises(NotImplementedError, match="v0.53.7"):
+    with pytest.raises((NotImplementedError, ImportError, ModuleNotFoundError)):
         instantiate_trainer_plugins(["grokfast"])
 
 
@@ -629,12 +651,15 @@ def test_instantiate_trainer_plugins_in_dunder_all():
 
 
 def test_instantiate_trainer_plugins_empty_list_passes_validation():
-    """Empty list is valid per `validate_trainer_plugin_list` → the
-    NotImplementedError fires with the empty tuple in the message."""
+    """v0.53.7: empty list now returns empty tuple (live runner).
+
+    The v0.53.6 stub raised NotImplementedError on empty input; the live
+    runner short-circuits to an empty tuple.
+    """
     from soup_cli.utils.trainer_plugins import instantiate_trainer_plugins
 
-    with pytest.raises(NotImplementedError, match=r"\(\)|v0\.53\.7"):
-        instantiate_trainer_plugins([])
+    result = instantiate_trainer_plugins([])
+    assert result == ()
 
 
 # ----------------------------------------------------------------------

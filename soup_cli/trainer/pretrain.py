@@ -99,11 +99,19 @@ class PretrainTrainerWrapper:
             console.print(f"[green]Auto batch size:[/] {batch_size}")
 
         # --- Dataset ---
-        # Plaintext: data already has {"text": "..."} from format conversion
-        train_ds = Dataset.from_list(dataset["train"])
-        eval_ds = None
-        if "val" in dataset and dataset["val"]:
-            eval_ds = Dataset.from_list(dataset["val"])
+        # v0.53.7 #86 — short-circuit tokenization when caller pre-tokenized
+        # via `soup data preprocess`. Skips the raw-text load entirely.
+        from soup_cli.trainer.sft import _maybe_load_pretokenized
+
+        pretok = _maybe_load_pretokenized(cfg.data, cfg.base, console)
+        if pretok is not None:
+            train_ds, eval_ds = pretok
+        else:
+            # Plaintext: data already has {"text": "..."} from format conversion
+            train_ds = Dataset.from_list(dataset["train"])
+            eval_ds = None
+            if "val" in dataset and dataset["val"]:
+                eval_ds = Dataset.from_list(dataset["val"])
 
         # --- Output dir ---
         output_dir = Path(cfg.output)

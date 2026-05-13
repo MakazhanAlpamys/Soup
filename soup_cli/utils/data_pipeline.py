@@ -20,13 +20,26 @@ Project policy followed:
 
 from __future__ import annotations
 
+import functools
 import hashlib
+import inspect
+import logging
 import math
 import os
 import re
 import types
 from dataclasses import dataclass
-from typing import Dict, FrozenSet, Iterable, List, Mapping, Optional, Tuple
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    FrozenSet,
+    Iterable,
+    List,
+    Mapping,
+    Optional,
+    Tuple,
+)
 from urllib.parse import urlparse
 
 # --- Part A: New formats ---------------------------------------------------
@@ -435,9 +448,267 @@ def validate_prompt_strategy(value: Optional[str]) -> Optional[str]:
     return value
 
 
+# --- v0.53.7 #86: pre-tokenized Arrow shard loader ------------------------
+#
+# Reads a directory produced by ``soup data preprocess`` (Arrow shards from
+# ``datasets.Dataset.save_to_disk``). Used by SFT + Pretrain wrappers to
+# short-circuit tokenization when ``data.format='pre_tokenized'`` and
+# ``data.tokenized_path`` is set. Containment + symlink TOCTOU defence
+# enforced before the heavy ``datasets.load_from_disk`` call.
+
+def load_pretokenized_dataset(
+    tokenized_path: str,
+    *,
+    expected_cache_key: Optional[str] = None,
+) -> Any:
+    """Load a pre-tokenized Arrow dataset directory.
+
+    Verifies cwd containment, rejects symlinks at the target path (TOCTOU —
+    mirrors v0.33.0 #22 / v0.43.0 Part C / v0.44.0 Part B policy), and
+    cross-checks ``metadata.json`` cache_key when ``expected_cache_key`` is
+    provided. Lazy-imports ``datasets`` so the helper itself loads on a
+    fresh interpreter.
+
+    Raises:
+        TypeError: if ``tokenized_path`` is not a string.
+        ValueError: on null bytes, non-existent path, out-of-cwd path,
+            symlink at target, mismatched cache_key, or malformed metadata.
+        ImportError: if ``datasets`` is not installed.
+    """
+    import stat as _stat
+
+    from soup_cli.utils.paths import is_under_cwd
+
+    if not isinstance(tokenized_path, str):
+        raise TypeError("tokenized_path must be a string")
+    if not tokenized_path:
+        raise ValueError("tokenized_path must be a non-empty string")
+    if "\x00" in tokenized_path:
+        raise ValueError("tokenized_path must not contain null bytes")
+    real = os.path.realpath(tokenized_path)
+    if not is_under_cwd(real):
+        raise ValueError("tokenized_path must stay under cwd")
+    try:
+        lst = os.lstat(real)
+    except OSError as exc:
+        raise ValueError(f"tokenized_path not found: {tokenized_path!r}") from exc
+    if _stat.S_ISLNK(lst.st_mode):
+        raise ValueError("tokenized_path must not be a symlink")
+    if not os.path.isdir(real):
+        raise ValueError(f"tokenized_path must be a directory: {tokenized_path!r}")
+
+    metadata_path = os.path.join(real, "metadata.json")
+    if os.path.isfile(metadata_path):
+        try:
+            import json as _json
+
+            with open(metadata_path, encoding="utf-8") as f:
+                metadata = _json.load(f)
+        except (OSError, ValueError) as exc:
+            raise ValueError(
+                f"metadata.json in tokenized_path is unreadable: {exc}"
+            ) from exc
+        if (
+            expected_cache_key is not None
+            and metadata.get("cache_key") != expected_cache_key
+        ):
+            raise ValueError(
+                f"cache_key mismatch: expected {expected_cache_key!r}, "
+                f"got {metadata.get('cache_key')!r}"
+            )
+
+    try:
+        from datasets import load_from_disk
+    except ImportError as exc:
+        raise ImportError(
+            "datasets is required for pre_tokenized short-circuit: "
+            "pip install datasets"
+        ) from exc
+    return load_from_disk(real)
+
+
+# --- v0.53.7 #87: prompt_strategy live resolver ---------------------------
+#
+# Resolves a validated ``module.path:function_name`` spec into a callable
+# applied per-row at SFT format time. Validation surface (regex / null-byte /
+# oversize) lives in ``validate_prompt_strategy`` above — this is the runtime
+# resolver that lazy-imports the named module and verifies the callable
+# signature accepts a single positional argument and returns a ``Mapping``.
+
+_PROMPT_STRATEGY_LOG = logging.getLogger("soup_cli.utils.data_pipeline.prompt_strategy")
+
+
+@functools.lru_cache(maxsize=64)
+def resolve_prompt_strategy(spec: str) -> Callable[[Mapping[str, Any]], Mapping[str, Any]]:
+    """Resolve ``module.path:fn_name`` into a callable.
+
+    Lazy-imports the named module via :mod:`importlib`, fetches the
+    referenced attribute, and verifies the callable accepts a single
+    positional argument. Per-spec ``lru_cache`` so trainer loops do not pay
+    the import cost on every row.
+
+    Raises:
+        TypeError: if ``spec`` is not a string.
+        ValueError: if ``spec`` does not match the validator regex, the
+            module cannot be imported, the attribute is missing, or the
+            resolved object is not callable / has the wrong signature.
+    """
+    # Re-validate the shape — defence-in-depth so direct callers cannot
+    # bypass the schema-validator that fires on YAML load.
+    validate_prompt_strategy(spec)
+    # v0.53.7 H-G: ``assert`` is stripped under ``python -O``. Replace with
+    # an explicit TypeError so the type narrowing survives optimisation.
+    if not isinstance(spec, str):
+        raise TypeError(
+            f"prompt_strategy must be a str, got {type(spec).__name__}"
+        )
+
+    module_path, _, fn_name = spec.partition(":")
+    try:
+        import importlib
+
+        module = importlib.import_module(module_path)
+    except ImportError as exc:
+        raise ValueError(
+            f"prompt_strategy module {module_path!r} could not be imported: {exc}"
+        ) from exc
+    if not hasattr(module, fn_name):
+        raise ValueError(
+            f"prompt_strategy {spec!r}: module {module_path!r} has no attribute "
+            f"{fn_name!r}"
+        )
+    fn = getattr(module, fn_name)
+    if not callable(fn):
+        raise ValueError(
+            f"prompt_strategy {spec!r}: resolved attribute is not callable "
+            f"({type(fn).__name__})"
+        )
+    # Best-effort signature check — builtins / C-extensions may not expose a
+    # signature; in that case we skip the check and rely on the per-row
+    # exception swallow.
+    # v0.53.7 H-E: narrow the catch to TypeError (signature unavailable for
+    # builtins / C-extensions). The ValueError raised below is the
+    # signature-shape error we explicitly want to surface — swallowing it
+    # would let a bad callable through.
+    try:
+        sig = inspect.signature(fn)
+    except (TypeError, ValueError):
+        # Signature unavailable (builtin / C-extension); skip the check.
+        return fn
+    positional_count = 0
+    has_var_positional = False
+    for param in sig.parameters.values():
+        if param.kind in (
+            inspect.Parameter.POSITIONAL_ONLY,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        ):
+            if param.default is inspect.Parameter.empty:
+                positional_count += 1
+        elif param.kind == inspect.Parameter.VAR_POSITIONAL:
+            has_var_positional = True
+    if not has_var_positional and positional_count > 1:
+        raise ValueError(
+            f"prompt_strategy {spec!r}: callable must accept at most one "
+            f"required positional argument (found {positional_count})"
+        )
+    return fn
+
+
+def apply_prompt_strategy(
+    spec: Optional[str], row: Mapping[str, Any]
+) -> Mapping[str, Any]:
+    """Apply the resolved prompt_strategy to ``row`` if ``spec`` is set.
+
+    Mirrors the v0.33.0 #47 ``CrossDocCollator`` silent-degrade policy: a
+    per-row callable exception is logged at DEBUG and the original row is
+    returned unchanged (defence so a single transform bug doesn't crash a
+    multi-hour training run).
+    """
+    if spec is None:
+        return row
+    try:
+        fn = resolve_prompt_strategy(spec)
+    except (TypeError, ValueError):
+        # Hard config errors must surface at trainer setup time, not silently
+        # at every row. We re-raise here.
+        raise
+    try:
+        result = fn(row)
+    except Exception as exc:  # noqa: BLE001 — user callable can raise anything
+        _PROMPT_STRATEGY_LOG.debug(
+            "prompt_strategy %r raised on row: %s", spec, exc
+        )
+        return row
+    if not isinstance(result, Mapping):
+        _PROMPT_STRATEGY_LOG.debug(
+            "prompt_strategy %r returned non-Mapping (%s); using original row",
+            spec,
+            type(result).__name__,
+        )
+        return row
+    return result
+
+
 # --- Part F: Document ingestion -------------------------------------------
 
 INGEST_EXTENSIONS: FrozenSet[str] = frozenset({".pdf", ".docx", ".md", ".txt"})
+
+
+# v0.53.7 #88 — markdown heading-aware splitter.
+#
+# Splits a markdown document on ATX headings (``^#{1,6}\s``) and emits one
+# record per section. A preamble before the first heading is emitted as a
+# record with ``section=None`` / ``level=None``. Pure function — no I/O.
+_MD_HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
+_MAX_MD_SECTIONS = 10_000
+
+
+def split_markdown_by_headings(text: str) -> List[Mapping[str, Any]]:
+    """Split markdown ``text`` on ATX headings into section records.
+
+    Each output record has three keys: ``section`` (heading text, or ``None``
+    for preamble), ``level`` (1-6, or ``None`` for preamble), and ``text``
+    (body content following the heading; may be empty).
+
+    Trailing empty whitespace-only sections are emitted as-is; the caller
+    decides whether to keep or drop. Capped at ``_MAX_MD_SECTIONS`` to defend
+    against pathological inputs.
+
+    Raises ``TypeError`` on non-string input.
+    """
+    if not isinstance(text, str):
+        raise TypeError("text must be a string")
+
+    lines = text.splitlines()
+    sections: List[Mapping[str, Any]] = []
+    current_section: Optional[str] = None
+    current_level: Optional[int] = None
+    body: List[str] = []
+
+    def _flush() -> None:
+        if current_section is None and not body:
+            return
+        sections.append(
+            {
+                "section": current_section,
+                "level": current_level,
+                "text": "\n".join(body).strip(),
+            }
+        )
+
+    for line in lines:
+        m = _MD_HEADING_RE.match(line)
+        if m:
+            _flush()
+            if len(sections) >= _MAX_MD_SECTIONS:
+                break
+            current_section = m.group(2).strip()
+            current_level = len(m.group(1))
+            body = []
+        else:
+            body.append(line)
+    _flush()
+    return sections
 
 
 def detect_ingest_format(path: str) -> str:
@@ -492,13 +763,17 @@ __all__ = [
     "validate_buffer_size",
     "validate_shards",
     "make_preprocess_cache_key",
+    "load_pretokenized_dataset",
     "parse_interleave",
     "validate_image_pixels",
     "validate_video_maxlen",
     "validate_video_fps",
     "validate_new_tokens",
     "validate_prompt_strategy",
+    "resolve_prompt_strategy",
+    "apply_prompt_strategy",
     "detect_ingest_format",
+    "split_markdown_by_headings",
     "remote_schemes",
     "interleave_strategies",
     "new_formats",

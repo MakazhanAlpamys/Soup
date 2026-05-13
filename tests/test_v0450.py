@@ -977,7 +977,9 @@ def test_data_recipe_cli_happy(tmp_path, monkeypatch):
     result = runner.invoke(data_cmd.app, ["recipe", "r.yaml"])
     assert result.exit_code == 0, (result.output, repr(result.exception))
     assert "validated" in result.output
-    assert "deferred" in result.output
+    # v0.53.7 #106: live runner replaces the "deferred" stub. Without --execute,
+    # the CLI now prompts the user to re-run with --execute instead.
+    assert "--execute" in result.output
 
 
 def test_data_recipe_cli_invalid_recipe(tmp_path, monkeypatch):

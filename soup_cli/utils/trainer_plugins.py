@@ -8,10 +8,13 @@ swaps, LLMCompressor passes) is deferred to v0.45.1.
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Mapping, Optional, Sequence, Tuple
+
+_LOG = logging.getLogger("soup_cli.utils.trainer_plugins")
 
 _PLUGIN_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_]{0,31}$")
 _MAX_DESCRIPTION = 256
@@ -128,27 +131,112 @@ def validate_trainer_plugin_list(names: Sequence[str]) -> Tuple[str, ...]:
     return tuple(out)
 
 
-def instantiate_trainer_plugins(names: Sequence[str]) -> Tuple[Any, ...]:
-    """v0.53.6 #105 — instantiate live upstream callbacks (stub-then-live).
+def _instantiate_cce_plugin() -> Any:
+    """``cce_plugin`` — Cut Cross-Entropy advisory callback.
 
-    Validates ``names`` against :func:`validate_trainer_plugin_list` then
-    raises :class:`NotImplementedError` with a v0.53.7 marker. Live lazy
-    imports + per-plugin callback construction (``grokfast``,
-    ``spectrum``, ``llmcompressor``, ``sonicmoe``, ``cce_plugin``,
-    ``math_verify``) land in v0.53.7. Same stub-then-live pattern as
-    v0.27.0 MII / v0.37.0 multipack / v0.41.0 LLaMA Pro.
+    The real CCE patching happens through the v0.28.0
+    ``use_cut_ce`` flag (which patches model forward at trainer setup).
+    The plugin surface returns a thin advisory callback so trainers can
+    log that CCE is intended.
+    """
+
+    class _CCEAdvisoryCallback:
+        plugin_name = "cce_plugin"
+
+        def on_train_begin(self, args=None, state=None, control=None, **kwargs):  # noqa: ARG002
+            # Logging is best-effort; trainer wraps this in a try/except.
+            return control
+
+    return _CCEAdvisoryCallback()
+
+
+def _instantiate_simple_plugin(
+    name: str, pip_package: str, attr_candidates: Sequence[str]
+) -> Any:
+    """Lazy-import an upstream plugin module + instantiate the first attr."""
+    import importlib
+
+    try:
+        module = importlib.import_module(pip_package.replace("-", "_"))
+    except ImportError as exc:
+        raise ImportError(
+            f"trainer plugin {name!r} requires the {pip_package!r} package. "
+            f"Run: pip install {pip_package}"
+        ) from exc
+    for attr in attr_candidates:
+        if hasattr(module, attr):
+            cls_or_fn = getattr(module, attr)
+            try:
+                return cls_or_fn() if callable(cls_or_fn) else cls_or_fn
+            except TypeError:
+                # v0.53.7 L-F: narrow catch — only TypeError indicates "the
+                # constructor signature doesn't match (caller must wire it
+                # later)". Other exceptions surface a real bug in the
+                # upstream module and should NOT be masked.
+                return cls_or_fn
+    # v0.53.7 L-A + L-E: no known attribute found. Logging a warning
+    # surfaces that the upstream module's API may have drifted; returning
+    # ``None`` lets callers filter rather than silently treating the bare
+    # module as a callback (which crashes at trainer wiring time with a
+    # confusing AttributeError).
+    _LOG.warning(
+        "trainer plugin %r: none of %s found on module %r; skipping",
+        name, list(attr_candidates), pip_package,
+    )
+    return None
+
+
+def _instantiate_plugin(name: str) -> Any:
+    """Dispatch to the per-plugin instantiation helper."""
+    if name == "cce_plugin":
+        return _instantiate_cce_plugin()
+    if name == "grokfast":
+        return _instantiate_simple_plugin(
+            "grokfast", "grokfast", ("GrokFastCallback", "Gradfilter", "gradfilter_ma")
+        )
+    if name == "spectrum":
+        return _instantiate_simple_plugin(
+            "spectrum", "spectrum-pytorch", ("SpectrumCallback", "Spectrum")
+        )
+    if name == "llmcompressor":
+        return _instantiate_simple_plugin(
+            "llmcompressor", "llmcompressor",
+            ("LLMCompressorCallback", "LLMCompressor"),
+        )
+    if name == "sonicmoe":
+        return _instantiate_simple_plugin(
+            "sonicmoe", "sonicmoe", ("SonicMoECallback", "SonicMoE")
+        )
+    if name == "math_verify":
+        return _instantiate_simple_plugin(
+            "math_verify", "math-verify", ("MathVerifyCallback", "verify")
+        )
+    raise ValueError(f"unknown trainer plugin: {name!r}")  # pragma: no cover
+
+
+def instantiate_trainer_plugins(names: Sequence[str]) -> Tuple[Any, ...]:
+    """v0.53.6 #105 / v0.53.7 — instantiate live upstream callbacks.
+
+    Validates ``names`` against :func:`validate_trainer_plugin_list`, then
+    lazy-imports each plugin's pip package and returns a tuple of
+    instantiated callbacks (or modules for plugins whose constructor needs
+    trainer-specific kwargs the caller will supply).
+
+    Missing pip deps surface as :class:`ImportError` with a friendly
+    ``pip install <pkg>`` hint (Rich-escape applied at the CLI boundary —
+    this helper returns the raw exception so callers can decide).
 
     Raises:
         TypeError: per :func:`validate_trainer_plugin_list`.
         ValueError: per :func:`validate_trainer_plugin_list`.
-        NotImplementedError: always (after validation) — live wiring
-            ships in v0.53.7.
+        ImportError: when a plugin's required pip package is not installed.
     """
     canonical = validate_trainer_plugin_list(names)
-    raise NotImplementedError(
-        f"Trainer-plugin live instantiation deferred to v0.53.7. "
-        f"Validated names: {canonical!r}"
-    )
+    # v0.53.7 L-A: filter out ``None`` from helpers that could not find an
+    # API surface in the upstream module (logged at WARNING in
+    # ``_instantiate_simple_plugin``).
+    instances = (_instantiate_plugin(n) for n in canonical)
+    return tuple(plugin for plugin in instances if plugin is not None)
 
 
 __all__ = [

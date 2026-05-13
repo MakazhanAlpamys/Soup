@@ -1936,11 +1936,17 @@ def preprocess_dataset(
 ) -> None:
     """AOT-tokenize a dataset and cache to disk for reuse across runs.
 
-    Schema-only stub in v0.42.0 — emits the cache key + planned output path
-    so users can wire `data.tokenized_path: <path>` into their YAML. Live
-    tokenization lands in v0.42.1 (mirrors v0.27.0 MII / v0.37.0 multipack
-    stub-then-live pattern).
+    v0.53.7 #86: live tokenize loop. Lazy-imports ``transformers``/``datasets``,
+    iterates ``data.train``, renders each row through chat template (or raw
+    text for pretrain), tokenizes with ``max_length=data.max_length`` +
+    ``truncation=True``, writes Arrow shards under
+    ``<output>/<cache_key>/`` via ``Dataset.save_to_disk``. Writes
+    ``metadata.json`` with cache_key + row_count + tokenizer_name + max_length.
+
+    Rows capped at 10M to defend against pathological dataset sizes.
     """
+    import json as _json
+
     from soup_cli.config.loader import load_config
     from soup_cli.utils.data_pipeline import make_preprocess_cache_key
     from soup_cli.utils.paths import is_under_cwd
@@ -1975,13 +1981,142 @@ def preprocess_dataset(
     console.print(f"[cyan]max_length:[/] {cfg.data.max_length}")
     console.print(f"[cyan]Cache key:[/] {cache_key}")
     console.print(f"[cyan]Target:[/] {target}")
-    console.print(
-        "[yellow]Note:[/] AOT tokenization wiring lands in v0.42.1. "
-        "Schema field [b]data.tokenized_path[/b] is live now — "
-        "point it at the target path once v0.42.1 ships."
+
+    if target.exists() and not yes:
+        console.print(
+            f"[yellow]Target already exists:[/] {target}\n"
+            "[dim]Re-run with --yes to overwrite.[/]"
+        )
+        raise typer.Exit(0)
+
+    # Lazy imports — defer heavy deps until the actual tokenize loop runs.
+    try:
+        from transformers import AutoTokenizer
+    except ImportError:
+        console.print(
+            "[red]transformers not installed.[/] Run: pip install transformers"
+        )
+        raise typer.Exit(1) from None
+    try:
+        from datasets import Dataset
+    except ImportError:
+        console.print(
+            "[red]datasets not installed.[/] Run: pip install datasets"
+        )
+        raise typer.Exit(1) from None
+    from soup_cli.data.loader import load_dataset
+
+    # DoS cap (10M rows).
+    max_preprocess_rows = 10_000_000
+
+    tokenizer = AutoTokenizer.from_pretrained(
+        cfg.base, trust_remote_code=False
     )
-    if not yes:
-        console.print("[dim]Re-run with --yes to acknowledge.[/]")
+
+    try:
+        dataset = load_dataset(cfg.data)
+    except (TypeError, ValueError, FileNotFoundError) as exc:
+        console.print(f"[red]Failed to load dataset:[/] {exc}")
+        raise typer.Exit(1) from exc
+
+    raw_rows = dataset.get("train", []) if isinstance(dataset, dict) else []
+    max_length = int(cfg.data.max_length)
+    is_pretrain = cfg.task == "pretrain"
+
+    rendered_rows: list[dict] = []
+    for idx, row in enumerate(raw_rows):
+        if idx >= max_preprocess_rows:
+            console.print(
+                f"[yellow]Reached row cap {max_preprocess_rows}, truncating.[/]"
+            )
+            break
+        if is_pretrain:
+            # Pretrain uses raw text.
+            text = ""
+            if isinstance(row, dict):
+                text = row.get("text") or row.get("content") or ""
+            if not isinstance(text, str):
+                continue
+            if not text:
+                continue
+        else:
+            messages = row.get("messages") if isinstance(row, dict) else None
+            if not messages or not getattr(tokenizer, "chat_template", None):
+                continue
+            try:
+                text = tokenizer.apply_chat_template(
+                    messages, tokenize=False, add_generation_prompt=False
+                )
+            except Exception:  # noqa: BLE001 — tokenizer template errors vary
+                continue
+            if not isinstance(text, str) or not text:
+                continue
+        try:
+            tokens = tokenizer(
+                text,
+                max_length=max_length,
+                truncation=True,
+                padding=False,
+                return_attention_mask=True,
+            )
+        except Exception:  # noqa: BLE001 — tokenizer errors vary
+            continue
+        rendered_rows.append(
+            {
+                "input_ids": tokens["input_ids"],
+                "attention_mask": tokens.get(
+                    "attention_mask", [1] * len(tokens["input_ids"])
+                ),
+            }
+        )
+
+    if not rendered_rows:
+        console.print(
+            "[red]No rows tokenized.[/] Check data.format and tokenizer "
+            "chat_template."
+        )
+        raise typer.Exit(1)
+
+    ds = Dataset.from_list(rendered_rows)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    # v0.53.7 M-H: atomic write via temp dir + os.replace so a partial
+    # write (e.g. SIGKILL mid-save) does not leave a corrupt dataset at
+    # ``target``. save_to_disk overwrites silently; we route through a
+    # sibling temp dir to defend against that too.
+    import shutil as _shutil
+
+    tmp_dir = target.parent / (".tmp_" + target.name)
+    if tmp_dir.exists():
+        _shutil.rmtree(tmp_dir, ignore_errors=True)
+    try:
+        ds.save_to_disk(str(tmp_dir))
+        if target.exists():
+            _shutil.rmtree(target, ignore_errors=True)
+        os.replace(str(tmp_dir), str(target))
+    except Exception:
+        _shutil.rmtree(tmp_dir, ignore_errors=True)
+        raise
+
+    metadata = {
+        "cache_key": cache_key,
+        "row_count": len(rendered_rows),
+        "tokenizer_name": cfg.base,
+        "max_length": max_length,
+        "format": cfg.data.format,
+        "task": cfg.task,
+        "soup_version": "0.53.7",
+    }
+    metadata_path = target / "metadata.json"
+    with open(metadata_path, "w", encoding="utf-8") as f:
+        _json.dump(metadata, f, indent=2)
+
+    console.print(
+        f"[green]Wrote {len(rendered_rows)} tokenized rows to[/] {target}"
+    )
+    console.print(
+        f"[dim]Set data.tokenized_path={target} + data.format=pre_tokenized "
+        "in your soup.yaml to short-circuit tokenization on subsequent runs.[/]"
+    )
 
 
 @app.command(name="ingest")
@@ -2043,9 +2178,35 @@ def ingest_document(
             text = f.read()
         rows.append({"text": text, "source": Path(in_real).name})
     elif kind == "markdown":
+        # v0.53.7 #88 — heading-aware split. One row per ATX heading section
+        # (``^#{1,6}\s``); preamble before the first heading is emitted as a
+        # row with ``section=None`` + ``level=None``. Closes the v0.42.0 #88
+        # known limitation.
+        from soup_cli.utils.data_pipeline import split_markdown_by_headings
+
         with open(in_real, encoding="utf-8") as f:
             text = f.read()
-        rows.append({"text": text, "source": Path(in_real).name})
+        sections = split_markdown_by_headings(text)
+        if not sections:
+            # Empty markdown file — keep parity with v0.42.0 single-row shape.
+            rows.append(
+                {
+                    "text": "",
+                    "section": None,
+                    "level": None,
+                    "source": Path(in_real).name,
+                }
+            )
+        else:
+            for sec in sections:
+                rows.append(
+                    {
+                        "text": sec["text"],
+                        "section": sec["section"],
+                        "level": sec["level"],
+                        "source": Path(in_real).name,
+                    }
+                )
     elif kind == "pdf":
         try:
             from pypdf import PdfReader
@@ -2158,8 +2319,8 @@ def recipe(
         False,
         "--execute",
         help=(
-            "Run the validated DAG end-to-end (v0.53.6 #106 — stub; "
-            "live per-node execution deferred to v0.53.7)."
+            "Run the validated DAG end-to-end (v0.53.7 #106 — live per-node "
+            "execution: seed / llm_text / code / judge / validator / sampler)."
         ),
     ),
     output: Optional[str] = typer.Option(
@@ -2216,14 +2377,24 @@ def recipe(
             )
             raise typer.Exit(2)
 
+        # v0.53.7 #106: live runner. Per-node handlers + checkpoint + resume
+        # land here; ``NotImplementedError`` is no longer raised on the live
+        # surface but we keep the catch for defence-in-depth (a future schema
+        # change might re-introduce a stub for an unknown node kind).
         try:
-            run_recipe(dag, output_dir=output)
+            result = run_recipe(dag, output_dir=output)
         except NotImplementedError as exc:
             console.print(f"[yellow]{_escape(str(exc))}[/]")
             raise typer.Exit(2) from exc
+        except (TypeError, ValueError) as exc:
+            console.print(f"[red]Recipe failed: {_escape(str(exc))}[/]")
+            raise typer.Exit(1) from exc
+        console.print(
+            f"[green]Recipe executed.[/] "
+            f"{len(result.get('completed_nodes', ()))} node(s) completed."
+        )
         return
 
     console.print(
-        "[yellow]Live runner deferred to v0.53.7 "
-        "(re-run with --execute once v0.53.7 ships).[/]"
+        "[dim]Re-run with --execute --output <dir> to run the DAG.[/]"
     )

@@ -40,18 +40,21 @@ soup train
 
 ## What's New
 
-
 Latest highlights only. Full history: [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 
-**v0.53.6 — Plugin + Agent + Anthropic API**: Six features — three live, three deferred-live stubs with v0.53.7 markers.
+**v0.53.7 — Data Forge + Pipeline live (wave 1)**: Eleven features wired end-to-end across synthetic data generation, preprocessing, and inference.
 
-- **Soup plugins now run live as Trainer callbacks.** New `SoupPluginCallback` dispatches `pre_train` / `post_train` / `pre_step` / `post_step` to every enabled plugin via the v0.45.0 registry. Hook exceptions are swallowed at WARNING — one misbehaving plugin must never crash a multi-hour run. Wired into all 13 transformer-backend trainers (SFT + DPO + GRPO + KTO + ORPO + SimPO + IPO + BCO + PPO + RewardModel + Pretrain + Embedding + Distill) via `attach_plugin_callback`.
-- **Anthropic-shaped `/v1/messages` endpoint.** `soup serve --backend transformers` exposes a `POST /v1/messages` route reusing the v0.45.0 `anthropic_messages` converter + the existing chat handler. Validation errors return a generic `"Invalid request"` 400 (details logged server-side at DEBUG). Streaming returns 501 — true Anthropic event-shape SSE ships in v0.53.7.
-- **n-gram speculative decoding wired through.** When the server is started with an `NgramSpecConfig`, every chat completion forwards `prompt_lookup_num_tokens=N` into `model.generate(...)` (HF Transformers ≥ 4.38 prompt-lookup decoding). Mutually exclusive with a real draft `assistant_model`.
-- **`soup data recipe --execute` lands as a stub-then-live CLI surface.** `--execute --output <dir>` validates the DAG, enforces cwd-containment on `--output` at the CLI boundary, then surfaces the `v0.53.7` `NotImplementedError` marker from `run_recipe`. Empty-string `--output ""` and outside-cwd paths are rejected before the runner is even called — never want the live runner to be the first/only enforcement point.
-- **Server-side tool endpoints (`/v1/tools/python` + `/v1/tools/bash` + `/v1/tools/web_search`).** URL schema lives now so clients can target the endpoints. All three return HTTP 501 with the v0.53.7 marker — live RLVR sandbox HTTP wrapper + `WebSearchConfig.domain_allowlist` enforcement ship in v0.53.7.
-- **`instantiate_trainer_plugins` schema-only.** Validates `[grokfast, spectrum, llmcompressor, sonicmoe, cce_plugin, math_verify]` lists then raises with the v0.53.7 marker. Six upstream plugin lazy-imports + per-plugin callback construction land in v0.53.7.
-- **+53 net new tests** (7998 → 8051) across the new `test_v0536.py`. Three review agents (python / code / security) ran; every HIGH and MEDIUM finding was fixed — race-free single-snapshot plugin hook collection, generic `"Invalid request"` body redaction, CLI-side cwd containment before `run_recipe`, `is None` over falsy `--output` guards, and added test coverage for: `prompt_lookup_num_tokens` omitted when `ngram_config=None`, console-print failure swallow on the attach helper, every `run_recipe` type-rejection boundary.
+- **Data Forge live judge providers.** `soup data forge --judge-provider {ollama,anthropic,vllm}` now routes judge calls through real backends (not just offline stubs). Ollama enforces localhost-only SSRF; Anthropic uses env-only API key; vLLM validates scheme allowlist. Per-call exceptions logged at DEBUG so one bad provider never crashes the forge pipeline.
+- **AOT tokenization with `soup data preprocess`.** New command tokenizes your dataset once and caches Arrow shards keyed by `(dataset, tokenizer, max_length, format)`. SFT and Pretrain trainers short-circuit at the schema level when `format='pre_tokenized'` + `tokenized_path` is set, eliminating the per-epoch tokenization tax. Resume-safe via atomic writes.
+- **Data Recipe DAGs live (`soup data recipe --execute`).** Six node kinds now execute end-to-end: seed dataset, LLM text generation, code execution (RLVR sandbox), judge binary scoring, regex/JSON validation, and deterministic sampling. Checkpoint written per node; resume rehydrates from per-node sidecars. `failed_reason` fields redacted to prevent path leakage.
+- **Anthropic-style `/v1/messages` + streaming SSE on both backends.** The transformers-only route from v0.53.6 now ships on vLLM too. Both backends convert Anthropic ↔ OpenAI messages, serve non-stream requests with Anthropic envelope, and stream with Anthropic event-shape SSE (`message_start` → `content_block_delta` → `message_delta` + `message_stop`). Loopback-only CORS on both.
+- **Server-side `/v1/tools/python` + `/v1/tools/web_search` HTTP endpoints.** Python sandbox wraps the v0.25.0 RLVR `code_exec` with Bearer auth gate (5s timeout, 64KB code cap). Web search backend is httpx with hard 5s timeout, 5-result cap, and domain allowlist (deny-by-default via `WebSearchConfig`). (`/v1/tools/bash` reverted to 501 — child-process isolation insufficient; tracked for v0.53.8 with container/namespace work.)
+- **Live trainer-plugin instantiation.** `instantiate_trainer_plugins` now lazy-imports upstream plugins (grokfast, spectrum, llmcompressor, sonicmoe, cce_plugin, math_verify) and friendlily advises on missing packages.
+- **Markdown heading-aware ingest + operator-supplied decontamination corpus + custom prompt strategies.**
+  - `soup data ingest` now splits Markdown by headings (one JSONL row per section with `section` + `level` + `text` fields).
+  - `soup data decontaminate --benchmark-file <path>` accepts operator-supplied JSONL corpus instead of only bundled benchmarks.
+  - `soup data forge` and other data tools now support custom prompt strategies via `prompt_strategy: module:function` in the config (importlib resolver + per-row exception handling).
+- **+111 net new tests** (8051 → 8162) in the new `test_v0537.py`. All four review agents ran; 38 findings fixed. Key hardening: symlink checks via `os.lstat` on raw paths (TOCTOU policy), atomic writes via tempfile + `os.replace`, error message redaction, narrowed exception handlers, tool endpoint Bearer auth opt-in, and comprehensive coverage for every live pathway.
 
 ## Why Soup?
 
@@ -3458,7 +3461,7 @@ soup data forge \
 
 Three tasks supported: `sft` (Q&A pairs), `preference` (chosen/rejected), `tool` (tool-call hypotheses). Active learning prunes rows whose judge reply is too close to the source chunk (low Jaccard distance), keeping only uncertain / informative samples. The provenance manifest is a separate JSON file mapping every row id to `{source_doc, judge_id, chunk_id, filter_score}` so you have a complete audit trail for compliance.
 
-Document discovery is one level deep over `.txt` / `.md` / `.json` / `.jsonl`; dotfiles + symlinked directories are skipped. All paths are cwd-contained, all writes are atomic via staged-tempfile + `os.replace`, and write targets are rejected if they're symlinks. The built-in judge is a deterministic offline stub; live Ollama / Anthropic / vLLM judge providers wire through `--judge-provider` in v0.47.1.
+Document discovery is one level deep over `.txt` / `.md` / `.json` / `.jsonl`; dotfiles + symlinked directories are skipped. All paths are cwd-contained, all writes are atomic via staged-tempfile + `os.replace`, and write targets are rejected if they're symlinks. **Judge providers are live**: `--judge-provider ollama` (localhost-only), `--judge-provider anthropic` (env-only API key), `--judge-provider vllm` (scheme-validated). Per-call judge exceptions logged at DEBUG.
 
 ## Data Quality Scorecard
 
@@ -3476,7 +3479,7 @@ soup data educational  --input training.jsonl --output scored.jsonl
 soup data decontaminate --input training.jsonl --benchmarks mmlu,gsm8k,humaneval --output clean.jsonl
 ```
 
-The scorecard reports PII flagged, toxic flagged, language distribution, mean educational value, and decontamination removed. PII detection uses a narrow ReDoS-hardened regex set (email / phone / SSN / credit-card) with a 50 KB pre-cap on every input. Language detection is a stopword heuristic across six languages. Toxicity is a keyword baseline; the Llama-Guard-3-1B variant + FineWeb-Edu classifier ship behind `[data-pro]` extras in v0.47.1. Decontamination uses n-gram containment against operator-supplied benchmark corpora (the `--benchmark-file` flag for live MMLU/GSM8K/HumanEval text lands in v0.47.1; the allowlist of benchmark names is locked in this release).
+The scorecard reports PII flagged, toxic flagged, language distribution, mean educational value, and decontamination removed. PII detection uses a narrow ReDoS-hardened regex set (email / phone / SSN / credit-card) with a 50 KB pre-cap on every input. Language detection is a stopword heuristic across six languages. Toxicity is a keyword baseline; the Llama-Guard-3-1B variant + FineWeb-Edu classifier ship behind `[data-pro]` extras. Decontamination uses n-gram containment against benchmark corpora: use `--benchmarks mmlu,gsm8k` for built-in allowlist, or `--benchmark-file custom_benchmark.jsonl` for your own corpus.
 
 ## Plugin System
 
@@ -3811,10 +3814,10 @@ A misbehaving plugin hook is swallowed at WARNING — one bad plugin must never 
 a multi-hour training run. The hook snapshot is taken at callback-construction time,
 so a plugin registered MID-run does not retroactively receive events.
 
-## Anthropic `/v1/messages` API
+## Anthropic Messages Endpoint
 
-`soup serve --backend transformers` exposes a POST `/v1/messages` route that accepts
-Anthropic Messages-shaped payloads:
+Both `soup serve --backend transformers` and `soup serve --backend vllm` now expose
+a POST `/v1/messages` route that accepts Anthropic Messages-shaped payloads:
 
 ```bash
 curl http://localhost:8000/v1/messages -H "Content-Type: application/json" -d '{
@@ -3824,9 +3827,11 @@ curl http://localhost:8000/v1/messages -H "Content-Type: application/json" -d '{
 }'
 ```
 
-Streaming (`stream: true`) returns 501 — Anthropic event-shape SSE ships in v0.53.7.
-Validation errors return a generic `"Invalid request"` 400 body; details are logged
-server-side at DEBUG. vLLM parity tracked for v0.53.7.
+Non-streaming requests return Anthropic-shaped envelopes. Streaming (`stream: true`)
+returns Anthropic event-shape SSE with `message_start` → `content_block_delta` →
+`message_delta` + `message_stop` events. Validation errors return a generic
+`"Invalid request"` 400 body with details logged server-side at DEBUG. CORS restricted
+to loopback-only (`localhost` / `127.0.0.1`) on both backends.
 
 ## N-gram Speculative Decoding
 
@@ -3835,24 +3840,50 @@ When a server is configured with an `NgramSpecConfig`, every chat completion for
 prompt-lookup decoding — no draft model required). Mutually exclusive with a real
 `assistant_model`; if both are set, the real draft model wins.
 
-## Server-Side Tool Endpoints (preview)
+## Server-Side Tool Endpoints
 
-Three POST routes ship in v0.53.6 as schema-only stubs returning HTTP 501:
+Three POST routes are now available on `soup serve`:
 
-- `/v1/tools/python` — sandboxed Python execution (v0.53.7 live)
-- `/v1/tools/bash` — sandboxed bash (v0.53.7 live)
-- `/v1/tools/web_search` — domain-allowlisted web search (v0.53.7 live)
+- **`POST /v1/tools/python`** — Sandboxed Python execution. Requires Bearer token auth.
+  Wraps the RLVR sandbox with 5-second timeout and 64KB code cap. Returns 200 with
+  `stdout` / `stderr` / `return_value`; 400 on validation error; 401 on bad auth.
 
-Live wiring re-uses the v0.25.0 RLVR sandbox for python/bash and enforces
-`WebSearchConfig.domain_allowlist` for web_search.
+- **`POST /v1/tools/web_search`** — Domain-allowlisted web search. Requires Bearer token
+  auth. Uses httpx backend with hard 5-second timeout and 5-result cap. Returns results
+  as `[{url, title, snippet}]` with snippets sanitized (null bytes stripped).
+  Deny-by-default via `WebSearchConfig.domain_allowlist`.
 
-## Data Recipe DAG Runner (preview)
+- **`POST /v1/tools/bash`** — Deferred to v0.53.8. Current child-process isolation
+  insufficient for `/bin/sh -c` (subprocess escapes the RLVR sandbox). Returns 501 with
+  v0.53.8 marker pending container/namespace work.
 
-`soup data recipe path/to/recipe.yaml --execute --output ./out` validates the DAG,
-enforces cwd-containment on `--output` at the CLI boundary, and surfaces the
-`v0.53.7` `NotImplementedError` marker from `run_recipe`. The per-node execution
-loop (seed / llm_text / code / judge / validator / sampler) plus checkpoint/resume
-ships in v0.53.7. Validate today, run tomorrow.
+## AOT Tokenization with `soup data preprocess`
+
+Pre-tokenize your dataset once and cache Arrow shards keyed by
+`(dataset, tokenizer, max_length, format)`:
+
+```bash
+soup data preprocess soup.yaml --output ./tokenized_cache
+```
+
+SFT and Pretrain trainers short-circuit at schema validation when
+`format: pre_tokenized` + `tokenized_path: ./tokenized_cache` is set, eliminating
+the per-epoch tokenization tax. Cache keys ensure resume safety; partial runs pick
+up from the last completed shard.
+
+## Data Recipe DAG Runner (`soup data recipe --execute`)
+
+Execute a Data Recipe DAG end-to-end:
+
+```bash
+soup data recipe path/to/recipe.yaml --execute --output ./out
+```
+
+Six node kinds now run live: **seed** (JSONL load), **llm_text** (LLM generation via
+any provider), **code** (execution via RLVR sandbox), **judge** (binary scoring),
+**validator** (regex or JSON schema), **sampler** (deterministic selection). Checkpoint
+written per node; resume rehydrates from per-node sidecars. Failed rows logged with
+redacted reasons (paths stripped, capped at 256 chars).
 
 ## Changelog
 

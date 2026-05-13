@@ -1,9 +1,11 @@
 """SFT (Supervised Fine-Tuning) trainer — wraps HuggingFace transformers + peft + trl."""
 
+import json
 import logging
+import os
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 
 from rich.console import Console
 
@@ -13,6 +15,77 @@ from soup_cli.utils.gpu import estimate_batch_size, model_size_from_name
 logger = logging.getLogger(__name__)
 
 console = Console()
+
+
+def _maybe_load_pretokenized(
+    dcfg, base: str, console_obj: Console,
+) -> Optional[Tuple[object, object]]:
+    """v0.53.7 #86 — short-circuit tokenization when caller pre-tokenized via
+    ``soup data preprocess``.
+
+    Returns ``(train_ds, eval_ds)`` when the pre-tokenized path is configured
+    and valid, otherwise ``None`` (caller falls back to the normal tokenize
+    pipeline).
+
+    Cache-hash gate: when ``<tokenized_path>/metadata.json`` exists, its
+    ``cache_key`` is cross-checked against the current
+    ``(base, max_length, format, train)`` config via
+    :func:`make_preprocess_cache_key`. Mismatch raises ``ValueError`` with
+    the keyword ``"cache hash mismatch"`` so users know to re-run
+    ``soup data preprocess``. Missing ``metadata.json`` falls back to
+    "trusted" mode with a yellow advisory.
+    """
+    if dcfg.format != "pre_tokenized" or not dcfg.tokenized_path:
+        return None
+
+    from soup_cli.utils.data_pipeline import (
+        load_pretokenized_dataset,
+        make_preprocess_cache_key,
+    )
+
+    tokenized_path = dcfg.tokenized_path
+    metadata_path = os.path.join(tokenized_path, "metadata.json")
+    if os.path.isfile(metadata_path):
+        try:
+            with open(metadata_path, encoding="utf-8") as f:
+                metadata = json.load(f)
+        except (OSError, ValueError) as exc:
+            raise ValueError(
+                f"pre_tokenized metadata.json is unreadable: {exc}"
+            ) from exc
+        stored_key = metadata.get("cache_key")
+        current_key = make_preprocess_cache_key(
+            dataset_path=dcfg.train,
+            tokenizer_name=base,
+            max_length=dcfg.max_length,
+            format_name=dcfg.format,
+        )
+        if stored_key != current_key:
+            raise ValueError(
+                "pre_tokenized cache hash mismatch: was generated with "
+                f"{stored_key!r}, current config implies {current_key!r}; "
+                "re-run `soup data preprocess`"
+            )
+    else:
+        console_obj.print(
+            "[yellow]pre-tokenized cache has no metadata.json — assuming "
+            "compatible; consider re-running `soup data preprocess`[/]"
+        )
+
+    console_obj.print(
+        f"[dim]v0.53.7: skipping tokenization, loading pre-tokenized "
+        f"Arrow shards from {tokenized_path}[/dim]"
+    )
+    arrow_ds = load_pretokenized_dataset(tokenized_path)
+    # ``load_from_disk`` returns either a Dataset (single split) or a
+    # DatasetDict (multiple splits). Handle both shapes.
+    if hasattr(arrow_ds, "keys") and "train" in arrow_ds:
+        train_ds = arrow_ds["train"]
+        eval_ds = arrow_ds.get("val") or arrow_ds.get("validation")
+    else:
+        train_ds = arrow_ds
+        eval_ds = None
+    return train_ds, eval_ds
 
 
 class SFTTrainerWrapper:
@@ -146,7 +219,13 @@ class SFTTrainerWrapper:
                 dataset["train"] = sort_by_length(dataset["train"])
 
         # --- Dataset ---
-        if use_vision:
+        # v0.53.7 #86 — short-circuit tokenization when caller pre-tokenized
+        # via `soup data preprocess`. Skips the format_row + tokenizer pass
+        # entirely; rows already carry input_ids/labels/attention_mask.
+        pretok = _maybe_load_pretokenized(cfg.data, cfg.base, console)
+        if pretok is not None:
+            train_ds, eval_ds = pretok
+        elif use_vision:
             train_ds, eval_ds = self._prepare_vision_dataset(dataset)
         elif use_audio:
             train_ds, eval_ds = self._prepare_audio_dataset(dataset)

@@ -33,7 +33,7 @@ import re
 import stat as _stat
 import tempfile
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Mapping, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from soup_cli.utils.paths import is_under_cwd
 
@@ -507,14 +507,218 @@ def write_provenance(rows: Sequence[ForgeRow], path: str) -> str:
     return target
 
 
+# --- v0.53.7 #111: live judge providers -----------------------------------
+#
+# Build a callable ``judge(prompt: str) -> dict`` from one of the v0.20.0
+# providers (Ollama / Anthropic / vLLM). Security carry-overs:
+# - Ollama: localhost-only (``validate_ollama_url``).
+# - Anthropic: API key from env var only (``ANTHROPIC_API_KEY``).
+# - vLLM: scheme allowlist + localhost-only HTTP (``validate_vllm_url``).
+
+JUDGE_PROVIDERS: frozenset[str] = frozenset({"ollama", "anthropic", "vllm"})
+
+# Loopback-only default for live judge backends. Operators wanting a remote
+# Ollama / vLLM must explicitly override via ``--judge-base-url``.
+_OLLAMA_DEFAULT_URL = "http://localhost:11434"
+_VLLM_DEFAULT_URL = "http://localhost:8000"
+
+
+def make_judge_provider_fn(
+    provider: str,
+    *,
+    model: str = "llama3.1",
+    base_url: Optional[str] = None,
+    temperature: float = 0.7,
+    timeout_seconds: float = 60.0,
+) -> "Callable[[str], Mapping[str, Any]]":
+    """Build a ``judge(prompt) -> {'text': str}`` callable for ``provider``.
+
+    Args:
+        provider: one of ``"ollama"`` / ``"anthropic"`` / ``"vllm"``.
+        model: backend model name (e.g. ``llama3.1`` for Ollama,
+            ``claude-3-5-sonnet-latest`` for Anthropic).
+        base_url: HTTP base URL (Ollama / vLLM only). Defaults to loopback.
+        temperature: sampling temperature.
+        timeout_seconds: per-call HTTP timeout.
+
+    Returns:
+        Callable signature ``(prompt: str) -> Mapping[str, Any]``. The
+        returned mapping always carries a ``"text"`` field (possibly empty
+        on backend failure — matches the ``synthesise_forge_rows`` judge
+        contract that ignores non-Mapping or empty-text replies).
+
+    Raises:
+        ValueError: unknown provider, bad URL, or missing Anthropic key.
+        ImportError: if ``httpx`` is not installed.
+    """
+    if not isinstance(provider, str):
+        raise TypeError("provider must be a string")
+    canonical = provider.strip().lower()
+    if canonical not in JUDGE_PROVIDERS:
+        raise ValueError(
+            f"unknown judge provider: {provider!r}. "
+            f"supported: {sorted(JUDGE_PROVIDERS)}"
+        )
+    if not isinstance(model, str) or not model or "\x00" in model:
+        raise ValueError("model must be a non-empty NUL-free string")
+    if isinstance(timeout_seconds, bool) or not isinstance(
+        timeout_seconds, (int, float)
+    ):
+        raise TypeError("timeout_seconds must be a number")
+    if timeout_seconds <= 0 or timeout_seconds > 600:
+        raise ValueError("timeout_seconds must be in (0, 600]")
+    # v0.53.7 M-M: explicit bool rejection on ``temperature`` — Python
+    # treats ``True`` as ``1`` and would silently round-trip through
+    # ``float(temperature)`` further down.
+    if isinstance(temperature, bool) or not isinstance(
+        temperature, (int, float)
+    ):
+        raise TypeError("temperature must be a number")
+    if temperature < 0 or temperature > 2:
+        raise ValueError("temperature must be in [0, 2]")
+
+    try:
+        import httpx
+    except ImportError as exc:
+        raise ImportError(
+            "httpx is required for live judge providers. "
+            "Run: pip install httpx"
+        ) from exc
+
+    if canonical == "ollama":
+        from soup_cli.data.providers.ollama import validate_ollama_url
+
+        url = base_url or _OLLAMA_DEFAULT_URL
+        validate_ollama_url(url)
+        api_url = f"{url}/v1/chat/completions"
+
+        def _ollama_judge(prompt: str) -> Mapping[str, Any]:
+            if not isinstance(prompt, str):
+                return {"text": ""}
+            try:
+                resp = httpx.post(
+                    api_url,
+                    headers={"Content-Type": "application/json"},
+                    json={
+                        "model": model,
+                        "messages": [{"role": "user", "content": prompt}],
+                        "temperature": float(temperature),
+                        "max_tokens": 1024,
+                    },
+                    timeout=timeout_seconds,
+                )
+            except Exception as exc:  # noqa: BLE001 — httpx error variety
+                _LOG.debug("ollama judge HTTP error: %s", exc)
+                return {"text": ""}
+            if resp.status_code != 200:
+                _LOG.debug("ollama judge status=%d", resp.status_code)
+                return {"text": ""}
+            try:
+                data = resp.json()
+                text = data["choices"][0]["message"]["content"]
+            except (KeyError, IndexError, TypeError, ValueError) as exc:
+                _LOG.debug("ollama judge parse error: %s", exc)
+                return {"text": ""}
+            return {"text": text if isinstance(text, str) else ""}
+
+        return _ollama_judge
+
+    if canonical == "anthropic":
+        import os as _os
+
+        api_key = _os.environ.get("ANTHROPIC_API_KEY")
+        if not api_key:
+            raise ValueError(
+                "Anthropic judge provider requires ANTHROPIC_API_KEY env var."
+            )
+
+        def _anthropic_judge(prompt: str) -> Mapping[str, Any]:
+            if not isinstance(prompt, str):
+                return {"text": ""}
+            try:
+                resp = httpx.post(
+                    "https://api.anthropic.com/v1/messages",
+                    headers={
+                        "x-api-key": api_key,
+                        "anthropic-version": "2023-06-01",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": model,
+                        "messages": [{"role": "user", "content": prompt}],
+                        "temperature": float(temperature),
+                        "max_tokens": 1024,
+                    },
+                    timeout=timeout_seconds,
+                )
+            except Exception as exc:  # noqa: BLE001
+                _LOG.debug("anthropic judge HTTP error: %s", exc)
+                return {"text": ""}
+            if resp.status_code != 200:
+                _LOG.debug("anthropic judge status=%d", resp.status_code)
+                return {"text": ""}
+            try:
+                data = resp.json()
+                blocks = data["content"]
+                text = "".join(
+                    b["text"] for b in blocks if b.get("type") == "text"
+                )
+            except (KeyError, IndexError, TypeError, ValueError) as exc:
+                _LOG.debug("anthropic judge parse error: %s", exc)
+                return {"text": ""}
+            return {"text": text}
+
+        return _anthropic_judge
+
+    # vLLM
+    from soup_cli.data.providers.vllm import validate_vllm_url
+
+    url = base_url or _VLLM_DEFAULT_URL
+    validate_vllm_url(url)
+    api_url = f"{url}/v1/chat/completions"
+
+    def _vllm_judge(prompt: str) -> Mapping[str, Any]:
+        if not isinstance(prompt, str):
+            return {"text": ""}
+        try:
+            resp = httpx.post(
+                api_url,
+                headers={"Content-Type": "application/json"},
+                json={
+                    "model": model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": float(temperature),
+                    "max_tokens": 1024,
+                },
+                timeout=timeout_seconds,
+            )
+        except Exception as exc:  # noqa: BLE001
+            _LOG.debug("vllm judge HTTP error: %s", exc)
+            return {"text": ""}
+        if resp.status_code != 200:
+            _LOG.debug("vllm judge status=%d", resp.status_code)
+            return {"text": ""}
+        try:
+            data = resp.json()
+            text = data["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, TypeError, ValueError) as exc:
+            _LOG.debug("vllm judge parse error: %s", exc)
+            return {"text": ""}
+        return {"text": text if isinstance(text, str) else ""}
+
+    return _vllm_judge
+
+
 __all__ = [
     "VALID_TASKS",
     "ForgePlan",
     "ForgeRow",
+    "JUDGE_PROVIDERS",
     "ProvenanceRecord",
     "build_forge_plan",
     "chunk_document",
     "discover_documents",
+    "make_judge_provider_fn",
     "score_uncertainty",
     "synthesise_forge_rows",
     "write_forge_dataset",

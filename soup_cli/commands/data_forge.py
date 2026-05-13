@@ -1,6 +1,8 @@
-"""soup data forge — Synthetic Data Forge CLI (v0.47.0 Part A)."""
+"""soup data forge — Synthetic Data Forge CLI (v0.47.0 Part A / v0.53.7 #111)."""
 
 from __future__ import annotations
+
+from typing import Optional
 
 import typer
 from rich.console import Console
@@ -14,10 +16,8 @@ def _default_judge(prompt: str) -> dict:
     """Deterministic offline judge used when no provider is configured.
 
     Live judge integration (Ollama / Anthropic / vLLM via v0.20.0
-    providers) is wired through a ``--judge-provider`` flag in v0.47.1.
+    providers) is wired through ``--judge-provider`` in v0.53.7 #111.
     """
-    # Echo a short stand-in answer; the active-pruning step will still
-    # score these against the source chunk so we don't keep duplicates.
     head = prompt.splitlines()[0] if prompt else ""
     return {"text": f"Synthesised answer (offline): {head[:80]}"}
 
@@ -58,26 +58,76 @@ def forge(
         min=1, max=64_000,
         help="Maximum chars per document chunk before judge call.",
     ),
+    judge_provider: Optional[str] = typer.Option(
+        None, "--judge-provider",
+        help=(
+            "v0.53.7 #111: live judge backend. One of "
+            "ollama / anthropic / vllm. Omit for the deterministic "
+            "offline stub."
+        ),
+    ),
+    judge_model: str = typer.Option(
+        "llama3.1", "--judge-model",
+        help="Model name for the live judge provider (default llama3.1).",
+    ),
+    judge_base_url: Optional[str] = typer.Option(
+        None, "--judge-base-url",
+        help=(
+            "Override base URL for Ollama (localhost-only) / vLLM "
+            "(scheme allowlist + loopback). Ignored for Anthropic."
+        ),
+    ),
 ):
-    """Run the multi-stage synthetic data pipeline with provenance."""
+    """Run the multi-stage synthetic data pipeline with provenance.
+
+    v0.53.7 #111: ``--judge-provider {ollama, anthropic, vllm}`` swaps the
+    offline echo stub for a real judge backend. Ollama is localhost-only,
+    Anthropic reads ``ANTHROPIC_API_KEY`` from env, vLLM is
+    scheme-allowlist + loopback validated.
+    """
     from soup_cli.utils.data_forge import (
+        JUDGE_PROVIDERS,
         build_forge_plan,
         discover_documents,
+        make_judge_provider_fn,
         synthesise_forge_rows,
         write_forge_dataset,
         write_provenance,
     )
+
+    judge_fn = _default_judge
+    effective_teacher = teacher
+    if judge_provider is not None:
+        canonical = judge_provider.strip().lower()
+        if canonical not in JUDGE_PROVIDERS:
+            console.print(
+                f"[red]Unknown --judge-provider:[/] {escape(judge_provider)}. "
+                f"Choose from {sorted(JUDGE_PROVIDERS)}."
+            )
+            raise typer.Exit(2)
+        try:
+            judge_fn = make_judge_provider_fn(
+                canonical,
+                model=judge_model,
+                base_url=judge_base_url,
+            )
+        except (TypeError, ValueError, ImportError) as exc:
+            console.print(
+                f"[red]Failed to build judge backend:[/] {escape(str(exc))}"
+            )
+            raise typer.Exit(1) from exc
+        # Record the live backend in provenance.
+        if teacher == "local-judge":
+            effective_teacher = f"{canonical}:{judge_model}"
 
     try:
         plan = build_forge_plan(
             docs_dir=docs,
             task=task,
             target_rows=target_rows,
-            teacher=teacher,
+            teacher=effective_teacher,
             uncertainty_threshold=uncertainty_threshold,
         )
-        # Discover once; plan.num_docs already attests the directory is
-        # non-empty and contained, so this scan is the cached enumeration.
         doc_paths = discover_documents(docs)
     except (TypeError, ValueError, FileNotFoundError) as exc:
         console.print(f"[red]Plan failed:[/] {escape(str(exc))}")
@@ -87,7 +137,7 @@ def forge(
         doc_paths,
         task=plan.task,
         target_rows=plan.target_rows,
-        judge=_default_judge,
+        judge=judge_fn,
         teacher=plan.teacher,
         uncertainty_threshold=plan.uncertainty_threshold,
         max_chunk_chars=max_chunk_chars,
@@ -119,8 +169,14 @@ def forge(
             title="[bold green]Data Forge — synth complete[/]",
         )
     )
-    console.print(
-        "[dim]The built-in judge is the deterministic offline stub. "
-        "Live Ollama / Anthropic / vLLM judge providers wire through "
-        "--judge-provider in v0.47.1.[/]"
-    )
+    if judge_provider is None:
+        console.print(
+            "[dim]The built-in judge is the deterministic offline stub. "
+            "Pass --judge-provider {ollama, anthropic, vllm} to wire a "
+            "live backend (v0.53.7 #111).[/]"
+        )
+    else:
+        console.print(
+            f"[dim]Live judge backend: [bold]{escape(judge_provider)}[/] "
+            f"(model: {escape(judge_model)}).[/]"
+        )

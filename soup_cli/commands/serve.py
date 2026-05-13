@@ -6,9 +6,12 @@ import re
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 import typer
+
+if TYPE_CHECKING:  # pragma: no cover
+    from collections.abc import Generator
 from rich.console import Console
 from rich.panel import Panel
 
@@ -896,16 +899,37 @@ def _create_app(
     tracer=None,
     trace_log_writer=None,
     ngram_config: Any = None,
+    web_search_config: Any = None,
+    web_search_backend: Any = None,
+    auth_token: Optional[str] = None,
 ):
-    """Create the FastAPI application with OpenAI-compatible endpoints."""
+    """Create the FastAPI application with OpenAI-compatible endpoints.
+
+    Args:
+        auth_token: optional Bearer-token gate for the v0.53.7 tool
+            endpoints (``/v1/tools/python`` + ``/v1/tools/web_search``).
+            When ``None`` (default), endpoints inherit the server's
+            loopback-only CORS trust boundary. When set, callers must
+            supply ``Authorization: Bearer <token>``.
+    """
     import threading as _threading
 
-    from fastapi import FastAPI, HTTPException
+    from fastapi import FastAPI, Header, HTTPException
     from fastapi import Path as FPath
     from fastapi.middleware.cors import CORSMiddleware
     from fastapi.responses import StreamingResponse
     from pydantic import BaseModel as PydanticBaseModel
     from pydantic import Field
+
+    def _check_tool_auth(authorization: Optional[str]) -> None:
+        """v0.53.7 H-A: gate tool endpoints when ``auth_token`` is set."""
+        if not auth_token:
+            return
+        expected = f"Bearer {auth_token}"
+        if not authorization or authorization != expected:
+            raise HTTPException(
+                status_code=401, detail="Invalid or missing bearer token"
+            )
 
     from soup_cli.utils.metrics import ServerMetrics
 
@@ -1150,18 +1174,15 @@ def _create_app(
             validate_anthropic_payload,
         )
 
-        # Streaming not yet supported on this route — v0.53.7 deliverable.
-        # Checked BEFORE schema validation so a stream-only client never
-        # leaks a validation-error detail (defence-in-depth).
-        if isinstance(payload, dict) and payload.get("stream"):
-            raise HTTPException(
-                status_code=501,
-                detail="Streaming /v1/messages deferred to v0.53.7.",
-            )
+        # v0.53.7 #102: streaming live (Anthropic event shape).
+        wants_stream = isinstance(payload, dict) and bool(payload.get("stream"))
 
         try:
             validate_anthropic_payload(payload)
             openai_payload = from_anthropic(payload)
+            # Drop the OpenAI-side ``stream`` field — the streaming path is
+            # handled below using the Anthropic event shape, not OpenAI SSE.
+            openai_payload.pop("stream", None)
             request = ChatCompletionRequest(**openai_payload)
         except (TypeError, ValueError) as exc:
             # Security: do not echo internal validator/converter details
@@ -1185,48 +1206,261 @@ def _create_app(
             chat_response.get("usage", {}) if isinstance(chat_response, dict) else {}
         )
 
+        msg_id = (
+            chat_response.get("id", "")
+            if isinstance(chat_response, dict)
+            else ""
+        )
+        out_model = openai_payload.get("model", model_name)
+        in_tokens = int(usage.get("prompt_tokens", 0) or 0)
+        out_tokens = int(usage.get("completion_tokens", 0) or 0)
+
+        if wants_stream:
+            # v0.53.7 #102 streaming live — emit Anthropic event-shape SSE.
+            return StreamingResponse(
+                _stream_anthropic_messages(
+                    msg_id=msg_id,
+                    model=out_model,
+                    text=text,
+                    input_tokens=in_tokens,
+                    output_tokens=out_tokens,
+                ),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-store",
+                    "X-Accel-Buffering": "no",
+                },
+            )
+
         return {
-            "id": (
-                chat_response.get("id", "") if isinstance(chat_response, dict) else ""
-            ),
+            "id": msg_id,
             "type": "message",
             "role": "assistant",
-            "model": openai_payload.get("model", model_name),
+            "model": out_model,
             "content": [{"type": "text", "text": text}],
             "stop_reason": "end_turn",
             "usage": {
-                "input_tokens": int(usage.get("prompt_tokens", 0) or 0),
-                "output_tokens": int(usage.get("completion_tokens", 0) or 0),
+                "input_tokens": in_tokens,
+                "output_tokens": out_tokens,
             },
         }
 
-    # ----- v0.53.6 #103 — Server-side tool endpoints (deferred-live stubs) -----
-    # Closed allowlist (mirrors v0.45.0 Part B utils/server_tools.SUPPORTED_TOOLS).
-    # Routes return HTTP 501 with v0.53.7 marker — schema lives now so client
-    # code can target the URLs even before the live sandbox is wired.
-    def _tool_not_implemented(tool: str) -> None:
-        raise HTTPException(
-            status_code=501,
-            detail=f"Server-side tool {tool!r} live execution deferred to v0.53.7.",
-        )
+    # ----- v0.53.6 #103 / v0.53.7 — Server-side tool endpoints (live) -----
+    # python / bash route through the RLVR sandbox (v0.25.0 + v0.33.0 #21
+    # OS-level isolation). web_search enforces a domain allowlist; default
+    # is deny-all per the v0.45.0 Part B schema.
+    tool_max_code_len = 64 * 1024
+    tool_max_query_len = 1024
+    tool_max_results = 16
 
     @app.post("/v1/tools/python")
-    def tool_python(_: dict) -> None:
-        _tool_not_implemented("python")
+    def tool_python(
+        payload: dict,
+        authorization: Optional[str] = Header(default=None),
+    ) -> dict:
+        _check_tool_auth(authorization)
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=400, detail="Invalid request")
+        code = payload.get("code")
+        if not isinstance(code, str) or not code:
+            raise HTTPException(status_code=400, detail="Invalid request")
+        if len(code) > tool_max_code_len:
+            raise HTTPException(status_code=400, detail="Invalid request")
+        try:
+            from soup_cli.trainer.rewards import _run_code_sandbox
+
+            stdout = _run_code_sandbox(code)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("/v1/tools/python sandbox error: %s", exc)
+            raise HTTPException(status_code=500, detail="Internal server error")
+        return {
+            "stdout": stdout if stdout is not None else "",
+            "stderr": "",
+            "exit_code": 0 if stdout is not None else 1,
+            "timed_out": stdout is None,
+        }
 
     @app.post("/v1/tools/bash")
-    def tool_bash(_: dict) -> None:
-        _tool_not_implemented("bash")
+    def tool_bash(payload: dict) -> dict:  # noqa: ARG001 — payload unused on stub
+        # v0.53.7 review-fix C1: bash spawns ``/bin/sh -c`` which escapes
+        # the RLVR sandbox's OS-level isolation (``unshare(CLONE_NEWNET)``
+        # / macOS ``sandbox-exec``); a caller can reach
+        # ``http://169.254.169.254/...`` from the child shell. Reverted to
+        # 501 until container/namespace work lands in v0.53.8.
+        raise HTTPException(
+            status_code=501,
+            detail=(
+                "Server-side tool 'bash' live execution deferred to "
+                "v0.53.8 — sandbox isolation requires container/namespace "
+                "work."
+            ),
+        )
 
     @app.post("/v1/tools/web_search")
-    def tool_web_search(_: dict) -> None:
-        _tool_not_implemented("web_search")
+    def tool_web_search(
+        payload: dict,
+        authorization: Optional[str] = Header(default=None),
+    ) -> dict:
+        _check_tool_auth(authorization)
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=400, detail="Invalid request")
+        query = payload.get("query")
+        if not isinstance(query, str) or not query:
+            raise HTTPException(status_code=400, detail="Invalid request")
+        if len(query) > tool_max_query_len:
+            raise HTTPException(status_code=400, detail="Invalid request")
+        max_results = payload.get("max_results", 5)
+        if isinstance(max_results, bool) or not isinstance(max_results, int):
+            raise HTTPException(status_code=400, detail="Invalid request")
+        if max_results < 1 or max_results > tool_max_results:
+            raise HTTPException(status_code=400, detail="Invalid request")
+
+        # Domain allowlist is threaded into the server constructor — when
+        # absent, default to deny-all per the v0.45.0 schema.
+        cfg = getattr(app.state, "web_search_config", None)
+        allowlist: tuple = ()
+        if cfg is not None and hasattr(cfg, "domain_allowlist"):
+            allowlist = tuple(cfg.domain_allowlist)
+        if not allowlist:
+            raise HTTPException(
+                status_code=403, detail="web_search disabled (empty domain allowlist)"
+            )
+        # The actual search backend is operator-configurable — v0.53.7 ships
+        # the security gate + 403 default and a SearXNG-style placeholder
+        # that returns an empty result set when no upstream is configured.
+        # Operators wanting a live search engine can patch
+        # ``app.state.web_search_backend`` with a callable
+        # ``(query, max_results, allowlist) -> list[dict]``.
+        backend = getattr(app.state, "web_search_backend", None)
+        results: list = []
+        if callable(backend):
+            try:
+                raw_results = backend(query, max_results, allowlist)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("/v1/tools/web_search backend error: %s", exc)
+                raise HTTPException(
+                    status_code=500, detail="Internal server error"
+                )
+            for r in (raw_results or [])[:max_results]:
+                if isinstance(r, dict) and "url" in r:
+                    # Re-check domain allowlist for backend results.
+                    url = r.get("url", "")
+                    if not isinstance(url, str):
+                        continue
+                    from urllib.parse import urlparse
+
+                    host = urlparse(url).hostname or ""
+                    host = host.lower()
+                    allowed = False
+                    for entry in allowlist:
+                        if entry.startswith("."):
+                            if host == entry[1:] or host.endswith(entry):
+                                allowed = True
+                                break
+                        elif host == entry:
+                            allowed = True
+                            break
+                    if allowed:
+                        # M-D: strip null bytes from snippet so a backend
+                        # cannot inject embedded NULs through to clients.
+                        snippet = str(r.get("snippet", "")).replace("\x00", "")
+                        results.append(
+                            {
+                                "url": url,
+                                "snippet": snippet[:512],
+                            }
+                        )
+        return {"results": results}
 
     # Expose dashboard intent + constraint on the app for tests + introspection
     app.state.enable_dashboard = enable_dashboard
     app.state.output_constraint = output_constraint
     app.state.trace_log_writer = trace_log_writer
+    app.state.web_search_config = web_search_config
+    app.state.web_search_backend = web_search_backend
     return app
+
+
+def _sanitise_sse_field(value: str, *, max_len: int) -> str:
+    """v0.53.7 M-A: strip CR/LF/NUL + cap len before embedding in SSE.
+
+    SSE wire framing uses ``\\n`` boundaries; a ``\\n`` in a header-derived
+    field would close the data block early and allow a caller-controlled
+    new event to be injected into the stream.
+    """
+    if not isinstance(value, str):
+        return ""
+    cleaned = value.replace("\r", "").replace("\n", "").replace("\x00", "")
+    return cleaned[:max_len]
+
+
+def _stream_anthropic_messages(
+    *,
+    msg_id: str,
+    model: str,
+    text: str,
+    input_tokens: int,
+    output_tokens: int,
+) -> "Generator[str, None, None]":
+    """v0.53.7 #102 — yield Anthropic event-shape SSE frames.
+
+    Emits the canonical 4-event sequence:
+    - ``message_start``: opens the message envelope.
+    - ``content_block_delta``: one frame per word (best-effort streaming;
+      the underlying handler ran the full generation eagerly).
+    - ``message_delta`` + ``message_stop``: closes the stream.
+    """
+    import json as _json
+
+    # M-A: sanitise caller-influenced fields before SSE embedding.
+    msg_id = _sanitise_sse_field(msg_id, max_len=64)
+    model = _sanitise_sse_field(model, max_len=200)
+
+    def _frame(event_type: str, data: dict) -> str:
+        return f"event: {event_type}\ndata: {_json.dumps(data)}\n\n"
+
+    yield _frame(
+        "message_start",
+        {
+            "type": "message_start",
+            "message": {
+                "id": msg_id,
+                "type": "message",
+                "role": "assistant",
+                "content": [],
+                "model": model,
+                "stop_reason": None,
+                "usage": {
+                    "input_tokens": int(input_tokens),
+                    "output_tokens": 0,
+                },
+            },
+        },
+    )
+
+    # Stream word-by-word so SSE consumers see incremental progress, even
+    # though the underlying generation is already complete.
+    words = (text or "").split(" ")
+    for idx, word in enumerate(words):
+        chunk_text = word if idx == 0 else f" {word}"
+        yield _frame(
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "text_delta", "text": chunk_text},
+            },
+        )
+
+    yield _frame(
+        "message_delta",
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn"},
+            "usage": {"output_tokens": int(output_tokens)},
+        },
+    )
+    yield _frame("message_stop", {"type": "message_stop"})
 
 
 def _stream_response(
