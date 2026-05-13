@@ -11,11 +11,22 @@ Covers:
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 from typer.testing import CliRunner
+
+# ANSI escape stripper — CI terminals render Typer/Rich help text with style
+# spans (`-` and `-execute` end up in separate `\x1b[...]m` runs), so naive
+# substring checks against `result.output` fail. Mirrors the v0.53.5 CI fix
+# pattern (test_v0535.py `--live` substring guard).
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+
+def _strip_ansi(text: str) -> str:
+    return _ANSI_RE.sub("", text)
 
 # ----------------------------------------------------------------------
 # #101 — SoupPluginCallback + attach_plugin_callback
@@ -274,6 +285,7 @@ def test_anthropic_messages_route_registered():
 
 def test_anthropic_messages_rejects_malformed_payload(monkeypatch):
     """Schema validation propagates to HTTP 400 — no internal crash."""
+    pytest.importorskip("fastapi")
     from fastapi.testclient import TestClient
 
     app = _build_app()
@@ -285,6 +297,7 @@ def test_anthropic_messages_rejects_malformed_payload(monkeypatch):
 
 def test_anthropic_messages_rejects_streaming():
     """`stream=True` returns 501 (deferred to v0.53.7)."""
+    pytest.importorskip("fastapi")
     from fastapi.testclient import TestClient
 
     app = _build_app()
@@ -302,6 +315,7 @@ def test_anthropic_messages_rejects_streaming():
 
 def test_anthropic_messages_happy_path(monkeypatch):
     """End-to-end: payload → from_anthropic → chat_completions mock → Anthropic shape."""
+    pytest.importorskip("fastapi")
     from fastapi.testclient import TestClient
 
     # Patch _generate_response so we don't need a real model.
@@ -335,6 +349,7 @@ def test_anthropic_messages_happy_path(monkeypatch):
 
 def test_ngram_config_threaded_into_generate_response(monkeypatch):
     """`_create_app(ngram_config=...)` forwards through to `_generate_response`."""
+    pytest.importorskip("fastapi")
     from fastapi.testclient import TestClient
 
     from soup_cli.utils.ngram_spec import NgramSpecConfig
@@ -468,6 +483,7 @@ def test_ngram_kwarg_skipped_when_draft_model_set():
 )
 def test_tool_endpoint_returns_501(path: str):
     """All three tool endpoints return 501 with v0.53.7 marker."""
+    pytest.importorskip("fastapi")
     from fastapi.testclient import TestClient
 
     app = _build_app()
@@ -524,7 +540,8 @@ def test_data_recipe_execute_flag_present(tmp_path: Path):
     runner = CliRunner()
     result = runner.invoke(cli_app, ["data", "recipe", "--help"])
     assert result.exit_code == 0, result.output
-    assert "--execute" in result.output
+    # Strip ANSI: CI terminals split `--execute` across Rich style spans.
+    assert "--execute" in _strip_ansi(result.output)
 
 
 def test_data_recipe_execute_requires_output(tmp_path: Path, monkeypatch):
@@ -545,7 +562,7 @@ def test_data_recipe_execute_requires_output(tmp_path: Path, monkeypatch):
         ["data", "recipe", "recipe.yaml", "--execute"],
     )
     assert result.exit_code == 2, result.output
-    assert "--output" in result.output
+    assert "--output" in _strip_ansi(result.output)
 
 
 def test_data_recipe_execute_surfaces_v0537_marker(tmp_path: Path, monkeypatch):
@@ -573,7 +590,7 @@ def test_data_recipe_execute_surfaces_v0537_marker(tmp_path: Path, monkeypatch):
         ],
     )
     assert result.exit_code == 2, result.output
-    assert "v0.53.7" in result.output
+    assert "v0.53.7" in _strip_ansi(result.output)
 
 
 # ----------------------------------------------------------------------
@@ -720,6 +737,7 @@ def test_run_recipe_rejects_non_str_checkpoint_dir():
 def test_anthropic_messages_validation_detail_redacted(monkeypatch):
     """Validation errors must surface as generic 'Invalid request' — no
     internal validator detail in the HTTP body. Security review M1."""
+    pytest.importorskip("fastapi")
     from fastapi.testclient import TestClient
 
     app = _build_app()
@@ -736,6 +754,7 @@ def test_anthropic_messages_validation_detail_redacted(monkeypatch):
 def test_anthropic_messages_rejects_oversize_max_tokens():
     """`max_tokens` above the v0.30.0 16384 cap is rejected by the
     underlying validator (defence-in-depth — also covered upstream)."""
+    pytest.importorskip("fastapi")
     from fastapi.testclient import TestClient
 
     app = _build_app()
@@ -766,7 +785,7 @@ def test_data_recipe_execute_rejects_empty_output(tmp_path: Path, monkeypatch):
         ["data", "recipe", "recipe.yaml", "--execute", "--output", ""],
     )
     assert result.exit_code == 2, result.output
-    assert "must be a non-empty path" in result.output
+    assert "must be a non-empty path" in _strip_ansi(result.output)
 
 
 def test_data_recipe_execute_rejects_outside_cwd(tmp_path: Path, monkeypatch):
@@ -794,6 +813,6 @@ def test_data_recipe_execute_rejects_outside_cwd(tmp_path: Path, monkeypatch):
     # Either outside-cwd (preferred) or some platform-specific reject —
     # the live runner should NEVER fire.
     assert result.exit_code == 2, (result.output, sys.platform)
-    assert "v0.53.7" not in result.output, (
+    assert "v0.53.7" not in _strip_ansi(result.output), (
         "outside-cwd output must NOT reach the live runner stub"
     )
