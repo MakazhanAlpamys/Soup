@@ -510,6 +510,15 @@ class TestPackageDataFixtures:
 # ----------------------------------------------------------------------
 
 
+def _strip_ansi(text: str) -> str:
+    import re as _re
+
+    # Strip ANSI escape sequences AND Rich-wrapping whitespace so we can
+    # robustly assert on terminal-rendered Typer help output.
+    out = _re.sub(r"\x1b\[[0-9;]*m", "", text)
+    return _re.sub(r"\s+", " ", out)
+
+
 class TestDataDownloadHubFlag:
     def test_help_lists_hub_flag(self):
         from typer.testing import CliRunner
@@ -518,7 +527,7 @@ class TestDataDownloadHubFlag:
 
         result = CliRunner().invoke(app, ["download", "--help"])
         assert result.exit_code == 0
-        assert "--hub" in result.output
+        assert "--hub" in _strip_ansi(result.output)
 
     def test_unknown_hub_rejected(self):
         from typer.testing import CliRunner
@@ -529,7 +538,8 @@ class TestDataDownloadHubFlag:
             app, ["download", "ds", "--hub", "evilcorp"]
         )
         assert result.exit_code != 0
-        assert "evilcorp" in result.output or "not supported" in result.output
+        clean = _strip_ansi(result.output)
+        assert "evilcorp" in clean or "not supported" in clean
 
     def test_modelscope_hub_advisory(self):
         from typer.testing import CliRunner
@@ -540,8 +550,9 @@ class TestDataDownloadHubFlag:
             app, ["download", "ds", "--hub", "modelscope"]
         )
         assert result.exit_code != 0
-        assert "modelscope" in result.output
-        assert "v0.53.9" in result.output or "download_repo" in result.output
+        clean = _strip_ansi(result.output)
+        assert "modelscope" in clean
+        assert "v0.53.9" in clean or "download_repo" in clean
 
 
 # ----------------------------------------------------------------------
@@ -549,21 +560,30 @@ class TestDataDownloadHubFlag:
 # ----------------------------------------------------------------------
 
 
+def _repo_root() -> Path:
+    """Resolve the repo root regardless of pytest cwd (CI quirk).
+
+    Tests are run from various cwds across the matrix; ``pyproject.toml``
+    sits next to the ``tests/`` folder, so derive from this file's path.
+    """
+    return Path(__file__).resolve().parent.parent
+
+
 class TestPyprojectExtras:
     def test_trackers_extra_present(self):
-        text = Path("pyproject.toml").read_text(encoding="utf-8")
+        text = (_repo_root() / "pyproject.toml").read_text(encoding="utf-8")
         assert "trackers = [" in text
         assert "mlflow" in text
         assert "swanlab" in text
         assert "trackio" in text
 
     def test_remote_extra_present(self):
-        text = Path("pyproject.toml").read_text(encoding="utf-8")
+        text = (_repo_root() / "pyproject.toml").read_text(encoding="utf-8")
         assert "remote = [" in text
         assert "fsspec" in text
 
     def test_force_include_package_data(self):
-        text = Path("pyproject.toml").read_text(encoding="utf-8")
+        text = (_repo_root() / "pyproject.toml").read_text(encoding="utf-8")
         assert "_fixtures" in text
 
 
@@ -579,5 +599,5 @@ class TestVersionBump:
         assert soup_cli.__version__ == "0.53.8"
 
     def test_pyproject_version(self):
-        text = Path("pyproject.toml").read_text(encoding="utf-8")
+        text = (_repo_root() / "pyproject.toml").read_text(encoding="utf-8")
         assert 'version = "0.53.8"' in text
