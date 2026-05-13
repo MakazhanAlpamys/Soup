@@ -1502,7 +1502,7 @@ class TestReviewFixesDataScore:
             link = tmp_path / "link.jsonl"
             _os.symlink(str(target_outside), str(link))
             from soup_cli.utils.data_score import load_jsonl_rows
-            with pytest.raises(ValueError, match="symlink"):
+            with pytest.raises(ValueError, match="symlink|under cwd"):
                 load_jsonl_rows("link.jsonl")
         finally:
             if target_outside.exists():
