@@ -389,18 +389,19 @@ def test_schema_rejects_dynamic_on_mlx():
         )
 
 
-def test_schema_rejects_dynamic_on_dpo():
-    with pytest.raises(ValidationError, match="not supported for task"):
-        SoupConfig(
-            base="meta-llama/Llama-3.2-1B",
-            task="dpo",
-            data=DataConfig(train="data.jsonl", format="dpo"),
-            training=TrainingConfig(
-                curriculum=True,
-                curriculum_dynamic=True,
-                curriculum_buckets=4,
-            ),
-        )
+def test_schema_accepts_dynamic_on_dpo():
+    """v0.53.5 #115: multi-trainer expansion accepts every transformer task."""
+    cfg = SoupConfig(
+        base="meta-llama/Llama-3.2-1B",
+        task="dpo",
+        data=DataConfig(train="data.jsonl", format="dpo"),
+        training=TrainingConfig(
+            curriculum=True,
+            curriculum_dynamic=True,
+            curriculum_buckets=4,
+        ),
+    )
+    assert cfg.training.curriculum_dynamic is True
 
 
 def test_schema_pretrain_accepted():

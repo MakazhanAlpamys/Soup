@@ -159,8 +159,13 @@ class DPOTrainerWrapper:
         )
 
         # v0.40.6 #67 — ReLoRA callback (magnitude-prune LoRA every N steps).
-        from soup_cli.utils.peft_wiring import attach_relora_callback
+        from soup_cli.utils.peft_wiring import (
+            attach_curriculum_callback,
+            attach_relora_callback,
+        )
         attach_relora_callback(self.trainer, tcfg)
+        # v0.53.5 #114/#115 — dynamic curriculum live callback.
+        attach_curriculum_callback(self.trainer, tcfg, str(output_dir), console)
 
         # v0.53.2 #135 — GDPO loss hook (no-op if gdpo_variant unset).
         from soup_cli.utils.ebft_gdpo import attach_gdpo_compute_loss

@@ -75,6 +75,21 @@ def mix(
         False, "--overwrite",
         help="Overwrite the output path when it exists.",
     ),
+    live: bool = typer.Option(
+        False, "--live",
+        help=(
+            "v0.53.5 #116 — run live short `soup train` proxy runs per "
+            "candidate (requires --base-yaml). Defaults to the offline "
+            "synthetic proxy."
+        ),
+    ),
+    base_yaml: Optional[str] = typer.Option(
+        None, "--base-yaml",
+        help=(
+            "Path to a base soup.yaml (under cwd) supplying base/task/training/output. "
+            "Required with --live."
+        ),
+    ),
 ) -> None:
     """BETA: optimise per-dataset mixture weights against a proxy run."""
     from soup_cli.utils.data_mix import (
@@ -150,7 +165,31 @@ def mix(
         )
     )
 
-    report = run_mix_optimizer(plan, _offline_proxy)
+    if live:
+        if not base_yaml:
+            console.print(
+                "[red]--live requires --base-yaml <path/to/soup.yaml>.[/red]"
+            )
+            raise typer.Exit(code=2)
+        from soup_cli.utils.mix_proxy import proxy_run_for_weights
+
+        per_candidate_timeout = max(
+            60, min(plan.budget_seconds // max(plan.num_probes, 1), 30 * 60)
+        )
+
+        def _live_proxy(w: Tuple[float, ...]) -> float:
+            return proxy_run_for_weights(
+                w,
+                list(plan.datasets),
+                base_yaml,
+                timeout_seconds=per_candidate_timeout,
+            )
+
+        proxy_callable = _live_proxy
+    else:
+        proxy_callable = _offline_proxy
+
+    report = run_mix_optimizer(plan, proxy_callable)
     try:
         path = write_mix_recipe(report, output, overwrite=overwrite)
     except (ValueError, OSError) as exc:

@@ -130,7 +130,9 @@ class MixOptimizationReport:
         best_weights: Mixture with the lowest eval loss observed.
         best_eval_loss: The corresponding loss.
         partial: True when the budget tripped before all candidates ran.
-        elapsed_seconds: Total wall-clock spent (sum of per-candidate time).
+        elapsed_seconds: Sum of per-successful-candidate wall-clock time.
+            v0.53.5 #118: failed-proxy candidates are EXCLUDED so a long-failing
+            proxy cannot inflate the field.
     """
 
     datasets: Tuple[str, ...]
@@ -372,13 +374,55 @@ class OptimizerProtocol(Protocol):
         """Record an observation."""
 
 
+def _build_skopt_optimizer(
+    num_datasets: int, seed: int
+) -> OptimizerProtocol:
+    """Wrap ``skopt.Optimizer`` behind :class:`OptimizerProtocol` (v0.53.5 #117).
+
+    Raises:
+        ImportError: when ``scikit-optimize`` is not installed.
+    """
+    if isinstance(num_datasets, bool) or not isinstance(num_datasets, int):
+        raise TypeError(
+            f"num_datasets must be int, got {type(num_datasets).__name__}"
+        )
+    if isinstance(seed, bool) or not isinstance(seed, int):
+        raise TypeError(f"seed must be int, got {type(seed).__name__}")
+    if num_datasets < 2:
+        raise ValueError(
+            f"num_datasets must be >= 2 (got {num_datasets})"
+        )
+    import skopt  # noqa: PLC0415 — heavy optional dep, lazy.
+
+    inner = skopt.Optimizer(
+        dimensions=[(0.0, 1.0)] * num_datasets,
+        n_initial_points=min(5, num_datasets),
+        random_state=seed,
+        base_estimator="GP",
+    )
+
+    class _SkoptWrapper:
+        def ask(self) -> Tuple[float, ...]:
+            raw = inner.ask()
+            return _renormalize(raw)
+
+        def tell(self, weights: Tuple[float, ...], loss: float) -> None:
+            inner.tell(list(weights), float(loss))
+
+    return _SkoptWrapper()
+
+
 def _build_default_optimizer(
     num_datasets: int, seed: int
 ) -> OptimizerProtocol:
-    """Return a deterministic Dirichlet-like sampler when scikit-optimize is
-    not installed. Otherwise wrap ``skopt.Optimizer`` (lazy import).
+    """Return :func:`_build_skopt_optimizer` when ``scikit-optimize`` is
+    installed; otherwise fall back to a deterministic Dirichlet-like sampler.
     """
-    import random
+    try:
+        return _build_skopt_optimizer(num_datasets, seed)
+    except ImportError:
+        pass
+    import random  # noqa: PLC0415
 
     rng = random.Random(seed)
 
@@ -506,13 +550,20 @@ def run_mix_optimizer(
         best_weights = tuple([1.0 / n] * n)
         best_loss = math.inf if not candidates else best_loss
 
+    # v0.53.5 #118: report.elapsed_seconds reflects ONLY successful-candidate
+    # time. Tracker.elapsed (which includes failed-proxy time) is no longer
+    # surfaced via the public field; the caller can query the tracker directly
+    # if total wall-clock is needed.
+    successful_elapsed = sum(
+        float(c.wall_clock_seconds) for c in candidates
+    )
     return MixOptimizationReport(
         datasets=plan.datasets,
         candidates=tuple(candidates),
         best_weights=best_weights,
         best_eval_loss=best_loss if math.isfinite(best_loss) else float("nan"),
         partial=partial,
-        elapsed_seconds=tracker.elapsed,
+        elapsed_seconds=successful_elapsed,
     )
 
 

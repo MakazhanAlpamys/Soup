@@ -74,3 +74,58 @@ def attach_relora_callback(trainer: Any, tcfg: Any) -> bool:
     )
     trainer.add_callback(ReLoRACallback(policy=policy))
     return True
+
+
+def attach_curriculum_callback(
+    trainer: Any,
+    tcfg: Any,
+    output_dir: str,
+    console: Any = None,
+) -> bool:
+    """Attach :class:`DynamicCurriculumCallback` when ``curriculum_dynamic=true``.
+
+    Returns ``True`` when attached, ``False`` otherwise. The schema-level
+    cross-validator (``_validate_curriculum_dynamic_supported``) gates by
+    backend / task, so this helper trusts the caller's config.
+
+    Args:
+        trainer: HF Trainer (or duck-typed equivalent with ``add_callback``).
+        tcfg: ``SoupConfig.training`` model.
+        output_dir: Directory under cwd to write
+            ``curriculum_history.jsonl`` (the BETA history record).
+        console: Optional Rich Console for the BETA advisory.
+    """
+    if not getattr(tcfg, "curriculum_dynamic", False):
+        return False
+    # Lazy import — the callback module touches transformers + torch.
+    from soup_cli.monitoring.curriculum_callback import (
+        DynamicCurriculumCallback,
+    )
+    from soup_cli.utils.curriculum_dynamic import DynamicCurriculumPolicy
+
+    policy = DynamicCurriculumPolicy(
+        num_buckets=int(tcfg.curriculum_buckets),
+        recompute_every_n_steps=int(
+            getattr(tcfg, "curriculum_dynamic_recompute_steps", 50) or 50
+        ),
+        floor=float(getattr(tcfg, "curriculum_dynamic_floor", 0.05) or 0.05),
+        temperature=float(
+            getattr(tcfg, "curriculum_dynamic_temperature", 1.0) or 1.0
+        ),
+    )
+    try:
+        callback = DynamicCurriculumCallback(policy=policy, output_dir=output_dir)
+    except (TypeError, ValueError) as exc:
+        logger.debug("attach_curriculum_callback rejected: %s", exc)
+        return False
+    trainer.add_callback(callback)
+    if console is not None:
+        try:
+            console.print(
+                "[yellow]BETA:[/yellow] dynamic curriculum callback attached "
+                f"(buckets={policy.num_buckets}, recompute_every="
+                f"{policy.recompute_every_n_steps})"
+            )
+        except Exception:  # noqa: BLE001 — never crash on console issues.
+            pass
+    return True

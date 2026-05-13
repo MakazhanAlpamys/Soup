@@ -2382,11 +2382,11 @@ class SoupConfig(BaseModel):
     def _validate_curriculum_dynamic_supported(self) -> "SoupConfig":
         """v0.48.0 Part A — Curriculum-Aware dynamic re-weighting.
 
-        BETA: wired for transformers backend, sft + pretrain tasks only.
-        MLX backend rejected (callback is HF Trainer-specific). Other tasks
-        rejected because their per-sample loss semantics differ enough that
-        the bucket-level uncertainty heuristic does not transfer cleanly.
-        Multi-trainer expansion tracked for v0.48.1.
+        BETA: v0.53.5 #115 widens the allowlist to every transformer-backend
+        trainer (sft / pretrain / dpo / grpo / kto / orpo / simpo / ipo / bco /
+        reward_model / embedding / ppo / preference) — the v0.53.5
+        DynamicCurriculumCallback is shared via ``utils.peft_wiring``.
+        MLX backend remains rejected (callback is HF Trainer-specific).
         """
         if not self.training.curriculum_dynamic:
             return self
@@ -2396,10 +2396,14 @@ class SoupConfig(BaseModel):
                 "(callback is HF Trainer-specific). "
                 "Use backend='transformers' or set curriculum_dynamic: false."
             )
-        if self.task not in ("sft", "pretrain"):
+        supported = {
+            "sft", "pretrain", "dpo", "grpo", "kto", "orpo", "simpo", "ipo",
+            "bco", "reward_model", "embedding", "ppo", "preference",
+        }
+        if self.task not in supported:
             raise ValueError(
                 f"curriculum_dynamic is not supported for task={self.task!r} "
-                "in v0.48.0 (only sft and pretrain are wired). "
+                "(only transformer-backend trainers in v0.53.5). "
                 "Set curriculum_dynamic: false or switch task."
             )
         return self

@@ -261,6 +261,11 @@ def validate_distributed_curriculum(
 ) -> None:
     """Cross-validator for the distributed footgun.
 
+    v0.53.5 #114: :class:`monitoring.curriculum_callback.DynamicCurriculumCallback`
+    wires the ``all_reduce`` internally, so callers that register the live
+    callback can pass ``rank_coordinated=True`` unconditionally. The helper
+    remains as defence-in-depth for custom integrations.
+
     When ``curriculum_dynamic=true`` and the launch is multi-rank, the caller
     MUST attest that an ``all_reduce`` of per-sample stats is wired (otherwise
     each rank computes a divergent weight and the sampler desynchronises).

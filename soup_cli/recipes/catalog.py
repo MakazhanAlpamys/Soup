@@ -638,6 +638,42 @@ training:
 output: ./output
 """,
     ),
+    "deepseek-v3-reasoning": RecipeMeta(
+        model="deepseek-ai/DeepSeek-V3",
+        task="grpo",
+        size="N/A",
+        tags=("deepseek", "grpo", "reasoning", "v3", "moe", "deepspeed"),
+        description=(
+            "DeepSeek V3 (671B-parameter MoE) GRPO reasoning recipe (v0.53.5 #17). "
+            "Requires multi-node DeepSpeed; verifiable_domain='math' RLVR rewards."
+        ),
+        yaml_str="""\
+base: deepseek-ai/DeepSeek-V3
+task: grpo
+
+data:
+  train: ./data/reasoning_train.jsonl
+  format: auto
+  max_length: 4096
+
+training:
+  epochs: 1
+  lr: 5e-6
+  batch_size: auto
+  gradient_accumulation_steps: 16
+  lora:
+    r: 32
+    alpha: 64
+    target_modules: auto
+  quantization: 4bit
+  grpo_beta: 0.1
+  num_generations: 4
+  reward_fn: accuracy,format
+  verifiable_domain: math
+
+output: ./output
+""",
+    ),
     "llama3.1-8b-orpo": RecipeMeta(
         model="meta-llama/Llama-3.1-8B-Instruct",
         task="orpo",

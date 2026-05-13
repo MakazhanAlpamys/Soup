@@ -256,8 +256,13 @@ class PPOTrainerWrapper:
             self.trainer = ppo_trainer_cls(**trainer_kwargs)
 
         # v0.40.6 #67 — ReLoRA callback (magnitude-prune LoRA every N steps).
-        from soup_cli.utils.peft_wiring import attach_relora_callback
+        from soup_cli.utils.peft_wiring import (
+            attach_curriculum_callback,
+            attach_relora_callback,
+        )
         attach_relora_callback(self.trainer, tcfg)
+        # v0.53.5 #114/#115 — dynamic curriculum live callback.
+        attach_curriculum_callback(self.trainer, tcfg, str(output_dir), console)
 
         self._output_dir = str(output_dir)
         self._train_ds = train_ds
