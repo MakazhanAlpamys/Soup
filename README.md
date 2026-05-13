@@ -43,14 +43,14 @@ soup train
 
 Latest highlights only. Full history: [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 
-**v0.53.1 — Quant Menu II + Export pipeline live**: Six v0.53.0 deferred stubs lifted — autopilot pre-quantized detection, single-stage BNB-4bit merge, TorchAO PTQ export, Unsloth Dynamic 2.0 GGUF ladder via llama.cpp `imatrix`, and `soup deploy autopilot --measure` Quant-Lobotomy scorecard.
+**v0.53.2 — Modality II live trainers**: Four v0.52.0 deferred stubs lifted into real, end-to-end-trainable wrappers — knowledge distillation, sequence classification, EBFT / GDPO loss kernels, and gpt-oss-style `reasoning_effort` system-prompt injection.
 
-- **Autopilot detects pre-quantized bases.** `TheBloke/Llama-2-7B-Chat-GPTQ` now recommends `gptq` instead of stacking BNB-4bit on top. Name-regex + `config.json` `quantization_config.quant_method` probe with cwd-containment + symlink rejection on the on-disk path. BNB aliases (`bitsandbytes_4bit` / `nf4` / `bnb_8bit`) canonicalise to `4bit` / `8bit`.
-- **`soup merge --save-format 4bit | 4bit_forced`.** Single BNB-4bit-quantized merged checkpoint without the dequant→merge→requant cycle. `4bit_forced` quantizes every Linear (including `lm_head`). Output path is cwd-contained + symlink-rejected at CLI dispatch.
-- **`soup export --format torchao --quant-config <yaml>`.** Live `torchao.quantize_` + `save_pretrained`. Closed per-scheme kwarg allowlist (Int4WeightOnly accepts `{group_size, inner_k_tiles}`, NVFP4 accepts nothing extra) defeats kwarg-injection through the YAML.
-- **`soup export --format gguf-ud --gguf-flavour <UD-Q4_K_XL | IQ2_M | Q4_0_4_4 | …>`.** Three-stage pipeline: HF → f16 GGUF → optional importance-matrix (UD ladder + low-bit IQ) → quantize. All subprocess calls use argv-list form + 30-min timeout. Calibration JSONL is sanitised (null-byte stripped, newlines collapsed, 8 KB per-line + 50 MB total cap). POSIX `O_NOFOLLOW` defeats the TOCTOU race between the dispatch-time symlink check and the actual open.
-- **`soup deploy autopilot --measure --tasks <jsonl>`.** Loops every candidate quant through the v0.26.0 `eval/quant_check` scorer, renders OK/MINOR/MAJOR table, picks the best-by-delta candidate. Results cached at `~/.soup/deploy_autopilot_cache.json` (atomic write, 0o600 perms on POSIX, symlink-rejected on both load and save). Cache key is SHA-256 of `(base, profile, eval-tasks)`.
-- **+112 net new tests** (7610 → 7722) across `test_v0531_82.py`, `test_v0531_109.py`, `test_v0531_139.py`, `test_v0531_142.py`. Four review agents (python / code / security / tdd) ran; every CRITICAL / HIGH / MEDIUM / LOW finding fixed: per-scheme TorchAO kwarg allowlist (rejects dunders + unknown keys), corrected BNB 4-bit skip-modules kwarg name, shared `enforce_under_cwd_and_no_symlink` in `utils/paths.py` (single source of truth), `pick_best` switches from `max(after)` to `max(delta)` matching the v0.33.0 #54 design intent, `_run_convert_to_f16` verifies the convert script stays inside `llama_cpp_dir` via realpath + commonpath, `_safe_stderr` Rich-escapes subprocess stderr before exception propagation.
+- **`soup train` with `task: distill`.** New `DistillTrainerWrapper`: student + frozen teacher both load via `AutoModelForCausalLM` (separate `trust_remote_code` resolution for each), KL / forward_KL / reverse_KL / JS divergence kernels scaled by `temperature**2` per the Hinton paper. Device-bridge: teacher inputs auto-move to the teacher's device, teacher logits move back onto the student's device before the KL kernel — survives HF Trainer's auto-CUDA promotion on a CPU-tagged run. `DataCollatorForSeq2Seq(label_pad_token_id=-100)` handles variable-length pre-tokenised loss-masked rows correctly.
+- **`soup train` with `task: classifier | reranker | cross_encoder`.** New `ClassifierTrainerWrapper`: `AutoModelForSequenceClassification` with `num_labels` and `label_names`, auto-routes `single_label_classification` / `multi_label_classification` from `tcfg.classifier_kind`. Multi-label string labels resolved via the `label_names` map with a 1024-entry cap + dedup. Training Setup Panel renders `Head: num_labels=N, kind=...` instead of LoRA r/alpha for the classifier family.
+- **EBFT structured / strided + GDPO standard / length_normalized / margin loss kernels.** `apply_ebft_loss` and `apply_gdpo_loss` exit the v0.52.0 `NotImplementedError` stubs with finite-only-input guards and bool-rejected numeric params. `attach_ebft_compute_loss(trainer, tcfg)` (SFT) and `attach_gdpo_compute_loss(trainer, tcfg)` (DPO) wrap `Trainer.compute_loss` idempotently — re-attach is a no-op via a marker attribute on the wrapped method. Auto-attached when the corresponding `*_variant` field is set on `TrainingConfig`.
+- **gpt-oss `reasoning_effort` + `train_on_eot`.** `apply_reasoning_effort_prefix(messages, level)` injects `<|reasoning_effort|>{low,medium,high}<|/reasoning_effort|>` into the system turn (creates one if absent), returning a new list (caller's messages immutable). `build_assistant_only_labels(train_on_eot=True)` keeps the EOT/EOS token unmasked at the assistant-turn boundary so the model learns when to stop. Both gated to the SFT-family at config-load.
+- **+120 net new tests** (7722 → 7842) across `test_v0532.py`. Four review agents (python / code / security / tdd) ran; every CRITICAL / HIGH / MEDIUM / LOW finding fixed — separate `trust_remote_code` resolution for student vs teacher, idempotent attach hooks with regression tests, 1024-entry multi-label cap, `dpo_margin` defaults to `None` (not `0.0`) so missing values raise rather than silently zero, source-grep regression guards on the trainer-routing call sites use the full instantiation expression (no comment-only false-positives), Panel renders the classifier head instead of LoRA r/alpha.
+- **Local end-to-end CPU smoke** confirms both new wrappers train 2 steps with finite loss on `hf-internal-testing/tiny-random-gpt2`. Two real bugs surfaced and were fixed during the smoke (collator label padding + teacher / student device mismatch) — both have source-level regression guards in the test suite. ONNX export QA: pipeline integrity proven on tiny-gpt2; TinyLlama-1.1B full export is host-RAM-bound (documented in `tests/qa/v053_qa.md`).
 
 ## Why Soup?
 
@@ -273,6 +273,97 @@ training:
 ```bash
 soup init --template pretrain
 soup train
+```
+
+## Knowledge Distillation
+
+Train a small student model to match a larger teacher's output distribution.
+
+```yaml
+base: HuggingFaceTB/SmolLM2-135M
+task: distill
+modality: text
+backend: transformers
+
+data:
+  train: ./data/chat.jsonl
+  max_length: 2048
+  chat_template: chatml
+
+training:
+  teacher_model: meta-llama/Llama-3.1-8B
+  distill_divergence: forward_kl   # kl | forward_kl | reverse_kl | js
+  distill_temperature: 2.0
+  epochs: 3
+  lr: 5e-5
+  quantization: 4bit               # quantizes student only
+```
+
+Loss = student CE + (T**2) × KL(teacher_logits / T  ||  student_logits / T).
+Teacher is loaded once, frozen via `requires_grad_(False)` + `.eval()`, and its
+inputs / logits are auto-bridged across CPU / CUDA devices.
+
+## Sequence Classification
+
+Train a classifier head on top of any base model — supports single-label,
+multi-label, and cross-encoder reranking.
+
+```yaml
+base: BAAI/bge-base-en-v1.5
+task: classifier              # or `reranker`, `cross_encoder`
+modality: text
+backend: transformers
+
+data:
+  train: ./data/labelled.jsonl   # rows: {"text": "...", "label": "spam"} or {"text": "...", "label": [0, 1, 0]}
+  max_length: 256
+
+training:
+  num_labels: 3
+  classifier_kind: single_label   # or `multi_label`
+  label_names: [ham, spam, promo] # required when labels are strings
+  epochs: 5
+  lr: 2e-5
+  batch_size: 32
+```
+
+Routes `classifier` / `reranker` / `cross_encoder` through
+`AutoModelForSequenceClassification`. Multi-label heads cap at 1024 entries per
+row, dedup via set conversion, and reject null bytes in label strings.
+
+## Reasoning Effort + EOT Control
+
+gpt-oss-style reasoning-effort control for instruction tuning.
+
+```yaml
+training:
+  reasoning_effort: high      # low | medium | high
+  train_on_eot: true          # do NOT mask the EOT/EOS token in the loss
+```
+
+`reasoning_effort` injects `<|reasoning_effort|>high<|/reasoning_effort|>` into
+the system turn (creating one if absent). `train_on_eot=True` makes the model
+learn when to stop generating by training on the trailing EOS token instead of
+masking it out. Both are gated to the SFT-family of tasks.
+
+## EBFT / GDPO Loss Variants
+
+Entropy-regularised SFT (`ebft_variant: structured | strided`) and generalised
+DPO (`gdpo_variant: standard | length_normalized | margin`) — both attach
+idempotently via `compute_loss` wrappers and auto-fire when the corresponding
+variant field is set on `TrainingConfig`.
+
+```yaml
+# SFT with EBFT structured
+training:
+  ebft_variant: structured
+  ebft_temperature: 1.0
+
+# DPO with GDPO length_normalized
+task: dpo
+training:
+  gdpo_variant: length_normalized
+  dpo_beta: 0.1
 ```
 
 ## MoE Model Support

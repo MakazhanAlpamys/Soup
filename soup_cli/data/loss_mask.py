@@ -110,6 +110,8 @@ def build_assistant_only_labels(
     messages: Sequence[dict],
     tokenizer: Any,
     max_length: int = 2048,
+    *,
+    include_eot: bool = False,
 ) -> dict[str, list[int]]:
     """Build labels where only assistant tokens contribute to loss.
 
@@ -117,6 +119,11 @@ def build_assistant_only_labels(
         messages: Chat messages list (``{"role": ..., "content": ...}``).
         tokenizer: HF tokenizer with a ``chat_template`` set.
         max_length: Truncate to this many tokens.
+        include_eot: When True (axolotl ``train_on_eot``), extend each
+            assistant span to include the immediately-following EOS / EOT
+            token in the unmasked region — so the model learns to predict
+            the turn terminator. Default False matches HF Trainer's standard
+            chat-template loss-mask behaviour. (v0.53.2 #137)
 
     Returns:
         ``{"input_ids": [...], "labels": [...], "attention_mask": [...]}``
@@ -125,13 +132,22 @@ def build_assistant_only_labels(
     Raises:
         ValueError: empty messages, non-positive max_length, or tokenizer
             lacking a chat_template.
+        TypeError: ``include_eot`` not bool.
     """
+    if not isinstance(include_eot, bool):
+        raise TypeError(
+            f"include_eot must be bool, got {type(include_eot).__name__}"
+        )
     _check_messages(messages)
     _validate_max_length(max_length)
+
+    eos_token_id = _resolve_eos_token_id(tokenizer) if include_eot else None
 
     preferred = _apply_template_with_mask(tokenizer, messages)
     if preferred is not None:
         input_ids, mask = preferred
+        if include_eot and eos_token_id is not None:
+            mask = _extend_mask_to_eot(input_ids, mask, eos_token_id)
         labels = [
             tok if flag else IGNORE_INDEX
             for tok, flag in zip(input_ids, mask)
@@ -150,8 +166,60 @@ def build_assistant_only_labels(
         if msg.get("role") == "assistant":
             end = min(new_len, len(full_ids))
             labels[prev_len:end] = full_ids[prev_len:end]
+            if include_eot and eos_token_id is not None:
+                # Extend through the immediately-following EOT/EOS run.
+                extra = end
+                while extra < len(full_ids) and full_ids[extra] == eos_token_id:
+                    labels[extra] = full_ids[extra]
+                    extra += 1
         prev_len = new_len
     return _truncate(full_ids, labels, max_length)
+
+
+def _resolve_eos_token_id(tokenizer: Any) -> Optional[int]:
+    """Return an int EOS/EOT token id, or None if undetermined.
+
+    Handles tokenizers exposing ``eos_token_id`` as int (most), list[int]
+    (e.g. Llama 3 with the additional ``<|eot_id|>`` entry — we pick the
+    first int entry), or anything else (str/None/bool → None).
+    """
+    candidate = getattr(tokenizer, "eos_token_id", None)
+    if isinstance(candidate, bool):
+        return None
+    if isinstance(candidate, int):
+        return candidate
+    if isinstance(candidate, list):
+        for entry in candidate:
+            if isinstance(entry, int) and not isinstance(entry, bool):
+                return entry
+    return None
+
+
+def _extend_mask_to_eot(
+    input_ids: Sequence[int], mask: Sequence[int], eos_token_id: int
+) -> list[int]:
+    """Mark EOT/EOS tokens immediately following an assistant span as kept.
+
+    Idempotent: a second pass over already-extended output produces the
+    same result (no extra EOT absorbed downstream of the original span).
+    """
+    result = list(mask)
+    n = len(input_ids)
+    i = 0
+    while i < n:
+        if result[i]:
+            # Walk to the end of this kept span, then absorb trailing EOS.
+            j = i
+            while j < n and result[j]:
+                j += 1
+            while j < n and input_ids[j] == eos_token_id:
+                result[j] = 1
+                j += 1
+            # j > i guaranteed: the truthy-span walk advanced j at least once.
+            i = j
+        else:
+            i += 1
+    return result
 
 
 def build_per_message_train_labels(

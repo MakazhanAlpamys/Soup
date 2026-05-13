@@ -475,6 +475,19 @@ def train(
     if cfg.training.quantization_aware:
         quant_label += " + QAT"
 
+    # v0.53.2 review-fix: classifier-family tasks train a sequence-classification
+    # head, not a causal-LM LoRA — render "head" instead of LoRA r/alpha.
+    classifier_family = ("classifier", "reranker", "cross_encoder")
+    if cfg.task in classifier_family:
+        peft_line = (
+            f"Head:    [bold]num_labels={cfg.training.num_labels}, "
+            f"kind={cfg.training.classifier_kind}[/]"
+        )
+    else:
+        peft_line = (
+            f"LoRA:    [bold]r={cfg.training.lora.r}, "
+            f"alpha={cfg.training.lora.alpha}[/]"
+        )
     console.print(
         Panel(
             f"Device:  [bold]{device_name}[/]\n"
@@ -482,7 +495,7 @@ def train(
             f"Model:   [bold]{cfg.base}[/]\n"
             f"Task:    [bold]{cfg.task}[/]\n"
             f"Backend: [bold]{backend_label}[/]\n"
-            f"LoRA:    [bold]r={cfg.training.lora.r}, alpha={cfg.training.lora.alpha}[/]\n"
+            f"{peft_line}\n"
             f"Quant:   [bold]{quant_label}[/]",
             title="Training Setup",
         )
@@ -736,6 +749,16 @@ def train(
         from soup_cli.trainer.embedding import EmbeddingTrainerWrapper
 
         trainer_wrapper = EmbeddingTrainerWrapper(cfg, **trainer_kwargs)
+    elif cfg.task == "distill":
+        # v0.53.2 #133 — knowledge distillation (student + frozen teacher).
+        from soup_cli.trainer.distill import DistillTrainerWrapper
+
+        trainer_wrapper = DistillTrainerWrapper(cfg, **trainer_kwargs)
+    elif cfg.task in ("classifier", "reranker", "cross_encoder"):
+        # v0.53.2 #132 — sequence-classification head.
+        from soup_cli.trainer.classifier import ClassifierTrainerWrapper
+
+        trainer_wrapper = ClassifierTrainerWrapper(cfg, **trainer_kwargs)
     else:
         trainer_wrapper = SFTTrainerWrapper(cfg, **trainer_kwargs)
     trainer_wrapper.setup(dataset)

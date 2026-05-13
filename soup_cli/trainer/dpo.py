@@ -162,6 +162,10 @@ class DPOTrainerWrapper:
         from soup_cli.utils.peft_wiring import attach_relora_callback
         attach_relora_callback(self.trainer, tcfg)
 
+        # v0.53.2 #135 — GDPO loss hook (no-op if gdpo_variant unset).
+        from soup_cli.utils.ebft_gdpo import attach_gdpo_compute_loss
+        attach_gdpo_compute_loss(self.trainer, tcfg)
+
         self._output_dir = str(output_dir)
 
     def _setup_transformers(self, cfg: SoupConfig, tcfg) -> None:

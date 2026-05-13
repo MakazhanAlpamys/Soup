@@ -159,10 +159,14 @@ def validate_classifier_compat(*, task: str, backend: str, modality: str) -> Non
         )
 
 
-def build_classifier_trainer() -> None:
-    """Live classifier trainer factory — deferred to v0.52.1."""
-    raise NotImplementedError(
-        "Classifier / reranker / cross_encoder trainer live wiring deferred "
-        "to v0.52.1. Schema accepts the task but no trainer wrapper is "
-        "registered yet."
-    )
+def build_classifier_trainer(
+    config: object, **kwargs: object
+) -> object:
+    """Live classifier / reranker / cross_encoder trainer factory (v0.53.2 #132).
+
+    Returns a :class:`ClassifierTrainerWrapper`. Lazy import keeps the heavy
+    transformers/peft surface out of schema-only import paths.
+    """
+    from soup_cli.trainer.classifier import ClassifierTrainerWrapper
+
+    return ClassifierTrainerWrapper(config, **kwargs)  # type: ignore[arg-type]

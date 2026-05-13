@@ -191,10 +191,14 @@ def validate_distill_compat(
     validate_teacher_model(teacher_model)
 
 
-def build_distill_trainer() -> None:
-    """Live distillation trainer factory — deferred to v0.52.1."""
-    raise NotImplementedError(
-        "Distillation trainer (task='distill') live wiring deferred to "
-        "v0.52.1. Schema accepts the value but no trainer wrapper is "
-        "registered yet."
-    )
+def build_distill_trainer(
+    config: object, **kwargs: object
+) -> object:
+    """Live distillation trainer factory (v0.53.2 #133).
+
+    Returns a :class:`DistillTrainerWrapper`. Lazy import keeps the heavy
+    transformers/peft surface out of schema-only import paths.
+    """
+    from soup_cli.trainer.distill import DistillTrainerWrapper
+
+    return DistillTrainerWrapper(config, **kwargs)  # type: ignore[arg-type]

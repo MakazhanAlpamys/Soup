@@ -157,6 +157,7 @@ class SFTTrainerWrapper:
                 tokenizer=self.tokenizer,
                 data_cfg=cfg.data,
                 console=console,
+                training_cfg=tcfg,
             )
             train_ds = Dataset.from_list(dataset["train"]).map(
                 format_row, remove_columns=["messages"]
@@ -842,6 +843,10 @@ class SFTTrainerWrapper:
         # ReLoRA callback (v0.39.0 Part B / v0.40.6 #67) via shared helper.
         from soup_cli.utils.peft_wiring import attach_relora_callback
         attach_relora_callback(self.trainer, self.config.training)
+
+        # v0.53.2 #135 — EBFT compute_loss hook (no-op if ebft_variant unset).
+        from soup_cli.utils.ebft_gdpo import attach_ebft_compute_loss
+        attach_ebft_compute_loss(self.trainer, self.config.training)
 
         # Activation offloading (v0.28.0) — wrap train() so saved-tensor hooks
         # are active only during training (and removed afterwards).

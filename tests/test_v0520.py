@@ -282,11 +282,14 @@ class TestClassifierUtils:
                 task="reranker", backend="transformers", modality="vision",
             )
 
-    def test_build_classifier_trainer_deferred(self):
+    def test_build_classifier_trainer_lifted_in_v0532(self):
+        """v0.52.0 shipped as a NotImplementedError stub; v0.53.2 #132 lifts it
+        to a live factory returning ClassifierTrainerWrapper. The argless call
+        now raises TypeError (missing ``config``) rather than NotImplementedError."""
         from soup_cli.utils.classifier import build_classifier_trainer
 
-        with pytest.raises(NotImplementedError, match="v0.52.1"):
-            build_classifier_trainer()
+        with pytest.raises(TypeError):
+            build_classifier_trainer()  # type: ignore[call-arg]
 
 
 class TestClassifierSchema:
@@ -414,10 +417,13 @@ class TestDistillUtils:
                 task="distill", backend="mlx", teacher_model="t/model",
             )
 
-    def test_build_distill_trainer_deferred(self):
+    def test_build_distill_trainer_lifted_in_v0532(self):
+        """v0.52.0 shipped as a NotImplementedError stub; v0.53.2 #133 lifts it
+        to a live factory returning DistillTrainerWrapper. The argless call
+        now raises TypeError (missing ``config``) rather than NotImplementedError."""
         from soup_cli.utils.distill import build_distill_trainer
 
-        with pytest.raises(NotImplementedError, match="v0.52.1"):
+        with pytest.raises(TypeError):
             build_distill_trainer()
 
 
@@ -661,18 +667,23 @@ class TestEbftGdpoUtils:
             validate_gdpo_compat(task="sft", backend="transformers")
 
     def test_get_ebft_spec(self):
+        # v0.53.2 #135 lifted EBFT + GDPO live_wired flags from False to True
+        # (kernel + attach hooks shipped).
         from soup_cli.utils.ebft_gdpo import get_ebft_spec, get_gdpo_spec
 
-        assert get_ebft_spec("structured").live_wired is False
-        assert get_gdpo_spec("margin").live_wired is False
+        assert get_ebft_spec("structured").live_wired is True
+        assert get_gdpo_spec("margin").live_wired is True
 
-    def test_apply_ebft_loss_deferred(self):
+    def test_apply_ebft_loss_lifted_in_v0532(self):
+        """v0.52.0 shipped both as NotImplementedError stubs; v0.53.2 #135
+        lifts them to live tensor kernels. The argless invocation now raises
+        TypeError (missing required args) rather than NotImplementedError."""
         from soup_cli.utils.ebft_gdpo import apply_ebft_loss, apply_gdpo_loss
 
-        with pytest.raises(NotImplementedError, match="v0.52.1"):
-            apply_ebft_loss()
-        with pytest.raises(NotImplementedError, match="v0.52.1"):
-            apply_gdpo_loss()
+        with pytest.raises(TypeError):
+            apply_ebft_loss()  # type: ignore[call-arg]
+        with pytest.raises(TypeError):
+            apply_gdpo_loss()  # type: ignore[call-arg]
 
 
 class TestEbftGdpoSchema:
