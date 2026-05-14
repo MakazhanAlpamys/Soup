@@ -644,8 +644,17 @@ class TestHistoryPath:
         assert p != "/etc/advise.jsonl"
 
     def test_env_null_byte_falls_back(self, monkeypatch):
-        monkeypatch.setenv("SOUP_ADVISE_HISTORY_PATH", "x\x00y")
-        p = history_path()
+        # OS env layer rejects raw NUL bytes (POSIX execve / Win32 SetEnv
+        # both refuse `\x00`), so we exercise the helper's defence-in-depth
+        # NUL guard via a stubbed env dict rather than `monkeypatch.setenv`.
+        from soup_cli.utils import advise_history
+
+        original = advise_history.os.environ
+        try:
+            advise_history.os.environ = {"SOUP_ADVISE_HISTORY_PATH": "x\x00y"}  # type: ignore[assignment]
+            p = history_path()
+        finally:
+            advise_history.os.environ = original  # type: ignore[assignment]
         assert "\x00" not in p
 
 
@@ -714,8 +723,10 @@ class TestCLI:
 
     def test_default_missing_data(self):
         result = runner.invoke(advise_cmd.app, [])
-        # no_args_is_help — prints help and exits 0.
-        assert result.exit_code == 0
+        # `no_args_is_help=True`: Click 8.0–8.1 returns rc=0, Click 8.2+
+        # returns rc=2 (the "missing command" convention). Both renderings
+        # print the help text, so accept either.
+        assert result.exit_code in (0, 2)
         assert "Usage" in result.output or "advise" in result.output.lower()
 
     def test_default_nonexistent_data(self, tmp_path):
