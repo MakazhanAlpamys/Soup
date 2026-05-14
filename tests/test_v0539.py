@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 
 import pytest
@@ -16,6 +17,15 @@ from typer.testing import CliRunner
 
 import soup_cli
 from soup_cli.cli import app
+
+# CI's Rich pipeline emits ANSI escape codes that split keywords like
+# `--vocab-size` into multiple styled spans, breaking naive `in` checks.
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _plain(text: str) -> str:
+    """Strip ANSI escape codes for keyword substring assertions."""
+    return _ANSI_RE.sub("", text)
 
 # ----------------------------------------------------------------- version
 
@@ -301,7 +311,7 @@ def test_serve_help_lists_reasoning_parser_flag():
     runner = CliRunner()
     result = runner.invoke(app, ["serve", "--help"])
     assert result.exit_code == 0, (result.output, repr(result.exception))
-    assert "--reasoning-parser" in result.output
+    assert "reasoning-parser" in _plain(result.output)
 
 
 # --------------------------------------------------- #15 tokenizer train
@@ -317,9 +327,10 @@ def test_tokenizer_train_subcommand_help():
     runner = CliRunner()
     result = runner.invoke(app, ["tokenizer", "train", "--help"])
     assert result.exit_code == 0, (result.output, repr(result.exception))
-    assert "--vocab-size" in result.output
-    assert "--input" in result.output
-    assert "--output" in result.output
+    plain = _plain(result.output)
+    assert "vocab-size" in plain
+    assert "input" in plain
+    assert "output" in plain
 
 
 def test_tokenizer_train_rejects_out_of_cwd_input(tmp_path, monkeypatch):
@@ -354,7 +365,7 @@ def test_tokenizer_train_rejects_vocab_size_bounds(tmp_path, monkeypatch):
         ],
     )
     assert result.exit_code != 0
-    assert "vocab-size" in result.output
+    assert "vocab-size" in _plain(result.output)
     # Too large.
     result = runner.invoke(
         app,
@@ -461,9 +472,10 @@ def test_bench_help_lists_percentile_flags():
     runner = CliRunner()
     result = runner.invoke(app, ["bench", "--help"])
     assert result.exit_code == 0, (result.output, repr(result.exception))
-    assert "--p50" in result.output
-    assert "--p95" in result.output
-    assert "--backend" in result.output
+    plain = _plain(result.output)
+    assert "p50" in plain
+    assert "p95" in plain
+    assert "backend" in plain
 
 
 def test_bench_invalid_backend_rejected(tmp_path, monkeypatch):
@@ -483,8 +495,9 @@ def test_ui_help_includes_public_and_auth_token():
     runner = CliRunner()
     result = runner.invoke(app, ["ui", "--help"])
     assert result.exit_code == 0, (result.output, repr(result.exception))
-    assert "--public" in result.output
-    assert "--auth-token" in result.output
+    plain = _plain(result.output)
+    assert "public" in plain
+    assert "auth-token" in plain
 
 
 def test_ui_show_token_via_custom_token(tmp_path, monkeypatch):
@@ -781,7 +794,7 @@ def test_tokenizer_train_rejects_min_frequency_zero(tmp_path, monkeypatch):
         ],
     )
     assert result.exit_code != 0
-    assert "min-frequency" in result.output
+    assert "min-frequency" in _plain(result.output)
 
 
 def test_tokenizer_train_special_token_dedup_and_validation(tmp_path, monkeypatch):
@@ -804,7 +817,7 @@ def test_tokenizer_train_special_token_dedup_and_validation(tmp_path, monkeypatc
         ],
     )
     assert result.exit_code != 0
-    assert "special-token" in result.output
+    assert "special-token" in _plain(result.output)
 
 
 def test_bench_p50_p95_runs_with_help_only():
@@ -814,7 +827,8 @@ def test_bench_p50_p95_runs_with_help_only():
     assert result.exit_code == 0
     # The flag descriptions must mention the v0.53.9 release tag so future
     # patches don't silently drop the percentile rows.
-    assert "p50" in result.output and "p95" in result.output
+    plain = _plain(result.output)
+    assert "p50" in plain and "p95" in plain
 
 
 def test_reset_global_tool_buffer_clears_state():
