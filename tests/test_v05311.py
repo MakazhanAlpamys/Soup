@@ -487,7 +487,8 @@ class TestWeightedCombineHook:
 def test_version_bump():
     import soup_cli
 
-    assert soup_cli.__version__ == "0.53.11"
+    major, minor, patch = (int(x) for x in soup_cli.__version__.split("."))
+    assert (major, minor, patch) >= (0, 53, 11)
 
 
 # ---------------------------------------------------------------------------

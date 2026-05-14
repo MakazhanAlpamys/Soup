@@ -198,6 +198,43 @@ app.add_typer(
     help="Tokenizer tools: train a BPE tokenizer from JSONL (v0.53.9).",
 )
 
+# v0.54.0 — `soup advise` pre-flight decision engine.
+from soup_cli.commands import advise as _advise_cmd  # noqa: E402
+
+app.add_typer(
+    _advise_cmd.app,
+    name="advise",
+    help=(
+        "Pre-flight decision: PROMPT_ENG / RAG / SFT / DPO / GRPO. Run "
+        "BEFORE you spend 8 hours on a GPU (v0.54.0)."
+    ),
+)
+
+
+def _rewrite_advise_argv(argv: list) -> list:
+    """Inject `run` between `advise` and a non-subcommand first argument.
+
+    Lets users type ``soup advise data.jsonl`` instead of the explicit
+    ``soup advise run data.jsonl``. Click's group/positional collision
+    makes the bare-positional design impossible at the parser level, so
+    we rewrite argv before Typer ever sees it.
+
+    Scope: ONLY fires when ``advise`` is the first non-script argument
+    (``argv[1]``). Any other position is treated as unrelated data — a
+    dataset path or option value that happens to contain the literal
+    string ``"advise"`` MUST NOT trigger rewriting (code-review HIGH).
+    """
+    if len(argv) < 2 or argv[1] != "advise":
+        return argv
+    known_subs = {"run", "explain", "compare", "--help", "-h"}
+    tail = argv[2:]
+    if not tail:
+        return argv
+    first = tail[0]
+    if first in known_subs or first.startswith("-"):
+        return argv
+    return argv[:2] + ["run"] + tail
+
 
 @app.command()
 def version(
@@ -320,6 +357,8 @@ def main(
 
 def run():
     """Entry point with friendly error handling."""
+    # v0.54.0 — rewrite `soup advise <data>` → `soup advise run <data>`.
+    sys.argv = _rewrite_advise_argv(sys.argv)
     try:
         app()
     except SystemExit:

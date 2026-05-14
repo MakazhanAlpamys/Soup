@@ -42,14 +42,14 @@ soup train
 
 Latest highlights only. Full history: [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 
-**v0.53.11 — GRPO Plus finish + preference live**: Five deep TRL trainer subclassing tasks lifted from the v0.50.0 / v0.49.0 / v0.40.1 deferred stubs.
+**v0.54.0 — `soup advise`: the pre-flight decision**: Before you spend 8 hours on a GPU, spend 60 seconds in the CLI.
 
-- **Live GRPO objective variants.** `apply_variant_loss` ships real math kernels for `gspo` (group-stabilised importance ratio), `dapo` (decoupled asymmetric clip), `dr_grpo` (no length-norm), `bnpo` (length-normalised PPO), `two_sided` (symmetric `grpo_delta` clip), `rft` (rejection-sampling fine-tuning). New `_GRPOTrainerVariant` subclass (built via `make_grpo_trainer_variant` `lru_cache` factory) overrides `compute_loss` to route through the kernel; defensive fallback to original loss when TRL renames input attributes.
-- **`task='prm'` Process Reward Model trainer.** New `PRMTrainerWrapper` loads `AutoModelForCausalLM` + `nn.Linear(hidden, 1)` reward head; `make_prm_trainer_class(HF Trainer)` factory subclasses the trainer and overrides `compute_loss` to gather hidden states at step boundaries, project to scalars, and MSE against per-step labels. `_prepare_prm_dataset` tokenises `{prompt, completions, labels}` with reserved-token truncation; `_build_collator` pads everything (with `-1` sentinel for missing step positions).
-- **GRPOStabilityCallback live.** EMA reference-model update fires post-step (`(1-α)·ref + α·policy` per parameter; `load_state_dict(strict=False)` for LoRA-state-dict resilience). Replay buffer (bounded deque), TIS alert counter, and `ema_alpha` surfaced via `state.log_history` so the v0.34.0 anomaly explainer can flag instability. Attach helper `attach_grpo_stability_callback` follows the v0.40.6 / v0.53.5 / v0.53.6 pattern.
-- **LongLoRA forward override live.** New `shift_heads_for_s2` math kernel rolls the second half of attention heads by `group_size // 2` along the sequence dim per the LongLoRA paper §3.2. `LongLoRAForwardOverride` context manager monkey-patches every `Llama*Attention` / `Mistral*Attention` / `Qwen*Attention` / `Phi*Attention` module's `forward` with restore-on-exit, idempotent `__del__` cleanup, and best-effort exception swallow (training never crashes from a shape mismatch).
-- **True weighted-sum preference combine.** `attach_weighted_preference_combine` now reads `policy_chosen_logps` / `policy_rejected_logps` / `reference_chosen_logps` / `reference_rejected_logps` from TRL inputs and computes each requested loss via the matching `compute_dpo_term` / `compute_ipo_term` / `compute_simpo_term` / `compute_orpo_term` kernel, then combines via `combine_losses(terms, weights)`. BCO mixed with paired losses still rejected at validation time. Defence-in-depth fallback to the v0.40.1 primary-loss scaling when TRL renames the logps attributes.
-- **+75 net new tests** (8330 → 8400) in `test_v05311.py` (54 initial + 21 review-fix coverage gaps from python/code/security/tdd agents) covering all five features plus the lifted-stub regression updates across `test_v0490.py` / `test_v0500_part_a.py` / `test_v0500_part_e.py`. Math kernels are real and unit-tested; full GPU smoke runs on SmolLM2-135M + gsm8k / 200-row PRM JSONL / TinyLlama-1.1B + 8k context are documented in the plan as the v0.53.11.1 follow-up (kernel + dispatch correctness verified on CPU).
+- **`soup advise <data.jsonl> --goal "..."`** classifies your task (factual_lookup / style_shaping / format_conversion / reasoning / tool_use / summarization / classification), profiles your dataset (row count, type/token diversity, label variance, chosen/rejected detection, reasoning-trace detection), and renders a `Verdict` with one of `PROMPT_ENG` / `RAG` / `SFT` / `DPO` / `GRPO` — plus a `confidence` score, a `reason`, and the criterion that would `reverse` the decision.
+- **`soup advise --probe`** adds a 10-minute ROI estimate: zero-shot + few-shot baselines, an RAG baseline, and a 100-step LoRA probe. v0.54.0 ships heuristic stubs (no GPU required); real model loading lands in v0.54.1 with forward-compatible `model` / `device` / `lr` / `timeout_seconds` kwargs already on the signature.
+- **`soup advise explain`** prints the full rubric — which rule fired, evidence, the literal next command (`soup autopilot --data … --task sft`), and what would flip the verdict.
+- **`soup advise compare`** reads `~/.soup/advise_history.jsonl` (atomic cross-process writes via `fcntl.flock` on POSIX / sidecar `<path>.lock` on Windows) and shows your prior verdicts across projects so the next decision is informed by the previous N.
+- **Why blue-ocean.** No trainer library has an incentive to tell users *not* to train — Unsloth's funnel, Axolotl's hosted business, LLaMA-Factory's Alibaba alignment all monetise the training event. The advisor role is structurally orthogonal to every incumbent's revenue model. `soup autopilot` (v0.25.0) picks hyperparameters AFTER you decide to train; `soup advise` picks the training decision itself.
+- **+136 net new tests** (8400 → 8571) in `test_v0540.py` covering all three Parts plus 5-agent review-fix coverage (python / code / security / tdd / architect): atomic write + symlink reject on the scratch file, cross-process file locking on history append, per-line 64 KB cap on history reads, argv rewriter scoped to `argv[1]` only, bool/finite/NUL/oversize guards on every public input, forward-compat kwargs on the probe stubs, and 49↔50 / 499↔500 / 4096↔4097 exact boundary tests.
 
 ## Why Soup?
 
@@ -166,6 +166,41 @@ training:
 
 output: ./output
 ```
+
+## Pre-flight Decision (`soup advise`)
+
+Run BEFORE you spend 8 hours on a GPU. `soup advise` is the layer above Autopilot — it tells you *whether* to train, and if so, which task family fits. Pure-Python heuristic, no GPU required for the verdict itself.
+
+```bash
+# Headline UX — one line gives you a verdict.
+soup advise data.jsonl --goal "make our chatbot more concise"
+#  Choice:     SFT   (or PROMPT_ENG / RAG / DPO / GRPO)
+#  Confidence: 0.71
+#  Why:        Task is summarization with 120 rows and healthy diversity ...
+#  Flip when:  the prompt-engineering baseline already meets your target ...
+
+# Optional 10-min ROI probe (zero/few-shot + RAG + 100-step LoRA).
+soup advise data.jsonl --goal "summarize my reports" --probe
+
+# Print the rubric / evidence trail of the last verdict.
+soup advise explain
+
+# Record this verdict to ~/.soup/advise_history.jsonl for later compare.
+soup advise data.jsonl --goal "..." --record
+
+# Show prior verdicts (newest first), with per-choice counts.
+soup advise compare
+```
+
+**The rubric** (advisory, encoded explicitly so `explain` can print it):
+
+1. Dataset rows expose paired `chosen` + `rejected` fields → **DPO**.
+2. Task is `reasoning`, dataset has ≥500 rows AND carries `<think>` traces → **GRPO**.
+3. Fewer than 50 rows → **PROMPT_ENG** (below the floor for meaningful fine-tuning).
+4. Task is `factual_lookup` with high output variance → **RAG**.
+5. Otherwise → **SFT**.
+
+**Why this command exists.** "Choose fine-tuning vs RAG vs prompt-engineering" is the most-mis-made decision in the space. Reddit, HN, IBM, and Google Cloud all converge on the same advice (start with prompts, escalate to RAG, fine-tune as last resort) and almost everyone ignores it because nobody has the data to prove their case is the exception. Soup `autopilot` picks hyperparameters AFTER you've decided to train; `soup advise` owns the layer above. No trainer library has an incentive to tell users *not to train* — Unsloth's funnel, Axolotl's hosted business, LLaMA-Factory's Alibaba alignment all monetise the training event.
 
 ## Autopilot (Zero-Config)
 

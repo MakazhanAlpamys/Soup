@@ -627,6 +627,51 @@ class DataConfig(BaseModel):
         return self
 
 
+class AdviseConfig(BaseModel):
+    """Pre-flight decision config (v0.54.0 — schema-only).
+
+    Surfaces the `soup advise` knobs through the central config schema so a
+    `soup.yaml` can carry persistent advise settings (e.g. a frozen goal
+    string + history-log path override). Live consumption is owned by
+    ``soup_cli/commands/advise.py``; this field is informational on
+    ``SoupConfig`` only.
+    """
+
+    goal: Optional[str] = Field(
+        default=None,
+        max_length=4096,
+        description=(
+            "Default goal string for `soup advise`. Sharpens task "
+            "classification when set."
+        ),
+    )
+    probe: bool = Field(
+        default=False,
+        description=(
+            "Run the 10-minute ROI probe by default when `soup advise` is "
+            "invoked through this config. Heuristic stubs in v0.54.0."
+        ),
+    )
+    record: bool = Field(
+        default=False,
+        description=(
+            "Append every verdict from this config to "
+            "~/.soup/advise_history.jsonl with accepted=True."
+        ),
+    )
+
+    @field_validator("goal")
+    @classmethod
+    def _goal_no_null_byte(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        if not isinstance(value, str):
+            raise TypeError("advise.goal must be a string")
+        if "\x00" in value:
+            raise ValueError("advise.goal must not contain null bytes")
+        return value
+
+
 class EvalGateConfig(BaseModel):
     """Eval-Gated Training config (v0.26.0 Part B).
 
@@ -2269,6 +2314,13 @@ class SoupConfig(BaseModel):
     eval: Optional[EvalConfig] = Field(
         default=None,
         description="Evaluation configuration for auto-eval after training",
+    )
+    advise: Optional[AdviseConfig] = Field(
+        default=None,
+        description=(
+            "Pre-flight decision settings consumed by `soup advise` "
+            "(v0.54.0 — schema-only on SoupConfig)."
+        ),
     )
 
     @field_validator("experiment_name")

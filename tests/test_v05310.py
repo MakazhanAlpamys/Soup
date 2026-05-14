@@ -501,10 +501,16 @@ class TestVersionBump:
     def test_init_py_pin(self):
         from soup_cli import __version__
 
-        assert __version__ == "0.53.11"
+        # v0.54.0+: forward-compatible — assert the package is at least the
+        # version this test ships with.
+        major, minor, patch = (int(x) for x in __version__.split("."))
+        assert (major, minor, patch) >= (0, 53, 11)
 
     def test_pyproject_pin(self):
         body = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
-        assert re.search(r'^version\s*=\s*"0\.53\.11"', body, re.MULTILINE), (
-            "pyproject.toml version pin missing v0.53.11"
+        match = re.search(r'^version\s*=\s*"(\d+)\.(\d+)\.(\d+)"', body, re.MULTILINE)
+        assert match is not None, "pyproject.toml version line missing"
+        major, minor, patch = (int(g) for g in match.groups())
+        assert (major, minor, patch) >= (0, 53, 11), (
+            f"pyproject.toml version pin behind 0.53.11: {match.group(0)}"
         )
