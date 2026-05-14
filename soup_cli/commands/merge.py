@@ -53,8 +53,30 @@ def merge(
             "cycle (v0.53.1 #142)."
         ),
     ),
+    hub: str = typer.Option(
+        "hf",
+        "--hub",
+        help=(
+            "Source hub for the base model: hf (default) / modelscope / "
+            "modelers. Non-HF hubs require the matching SDK (v0.53.10 #152)."
+        ),
+    ),
 ):
     """Merge a LoRA adapter with its base model into a full model."""
+    # v0.53.10 #152 — pre-fetch the base model from a non-HF hub. The local
+    # adapter dir is left untouched; only the base repo id is rewritten.
+    if hub and hub != "hf":
+        from soup_cli.utils.hubs import apply_hub_to_cli_model
+
+        try:
+            _, base = apply_hub_to_cli_model(adapter, base, hub, console=console)
+        except (TypeError, ValueError) as exc:
+            console.print(f"[red]{exc}[/]")
+            raise typer.Exit(code=2) from exc
+        except ImportError as exc:
+            console.print(f"[red]{exc}[/]")
+            raise typer.Exit(code=1) from exc
+
     # v0.53.1 #142 — validate save_format up front
     from soup_cli.utils.save_formats import validate_merge_save_format
     try:

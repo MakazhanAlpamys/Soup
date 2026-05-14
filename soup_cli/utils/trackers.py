@@ -163,9 +163,68 @@ def build_telemetry_payload(
 
 _POSTHOG_HOST = "https://us.i.posthog.com"
 _POSTHOG_ENDPOINT = f"{_POSTHOG_HOST}/i/v0/e/"
-# Public write-only key. Live deployments will swap this via env var.
+# v0.53.10 #154 — bundled public write-only project key for Soup CLI
+# telemetry. The key is INTENTIONALLY hard-coded: PostHog "phc_*" keys are
+# write-only (cannot read events back); rotating it requires a release.
+# Operators wanting to point telemetry at their own PostHog project should
+# set ``SOUP_POSTHOG_KEY`` AND ``SOUP_POSTHOG_ENDPOINT`` together; both env
+# vars are validated by :func:`_resolve_posthog_target`.
 _POSTHOG_DEFAULT_KEY = "phc_soup_public_write_only"
 _TELEMETRY_TIMEOUT_S = 1.0
+
+
+# Sentinel for "caller did not pass an endpoint, fall back to default + env".
+_POSTHOG_ENDPOINT_DEFAULT = object()
+
+
+def _resolve_posthog_target(
+    api_key: str | None,
+    endpoint: object = _POSTHOG_ENDPOINT_DEFAULT,
+    env: dict[str, str] | None = None,
+) -> tuple[str, str] | None:
+    """Resolve ``(key, endpoint)`` from explicit args + ``SOUP_POSTHOG_*`` env.
+
+    v0.53.10 #154 — adds env-var overrides for the bundled defaults so users
+    on private PostHog instances can point Soup telemetry at their own
+    project without a code change. Precedence:
+
+    1. Explicit ``api_key`` / ``endpoint`` kwargs (caller wins).
+    2. ``SOUP_POSTHOG_KEY`` env var (overrides ``_POSTHOG_DEFAULT_KEY``).
+    3. ``SOUP_POSTHOG_ENDPOINT`` env var (overrides
+       ``_POSTHOG_ENDPOINT``; must be HTTPS + pass the v0.51.0 SSRF policy).
+    4. Bundled defaults.
+
+    Returns ``None`` when any input fails validation (silent no-op so
+    telemetry can never crash training).
+    """
+    import os  # noqa: PLC0415 — local lazy import
+
+    src = env if env is not None else os.environ
+    # Endpoint resolution: explicit caller > env override > default.
+    # Use a sentinel default so a caller who passes
+    # ``endpoint=_POSTHOG_ENDPOINT`` (locking in the default) is NOT silently
+    # overridden by ``SOUP_POSTHOG_ENDPOINT`` (code-review HIGH fix).
+    if endpoint is _POSTHOG_ENDPOINT_DEFAULT:
+        env_endpoint = src.get("SOUP_POSTHOG_ENDPOINT")
+        resolved_endpoint = env_endpoint or _POSTHOG_ENDPOINT
+    else:
+        resolved_endpoint = endpoint
+    if not isinstance(resolved_endpoint, str):
+        return None
+    if not _telemetry_endpoint_is_safe(resolved_endpoint):
+        return None
+    # Key resolution: explicit caller > env override > default.
+    if api_key is not None:
+        key = api_key
+    else:
+        key = src.get("SOUP_POSTHOG_KEY") or _POSTHOG_DEFAULT_KEY
+    if not isinstance(key, str) or not key:
+        return None
+    # Reject control chars / whitespace in the key — defends against an
+    # operator dropping ``\nAuthorization:...`` into SOUP_POSTHOG_KEY.
+    if "\x00" in key or any(ord(c) < 0x20 for c in key) or len(key) > 256:
+        return None
+    return key, resolved_endpoint
 
 
 def _telemetry_endpoint_is_safe(endpoint: str) -> bool:
@@ -193,7 +252,7 @@ def send_telemetry_payload(
     *,
     api_key: str | None = None,
     timeout: float = _TELEMETRY_TIMEOUT_S,
-    endpoint: str = _POSTHOG_ENDPOINT,
+    endpoint: object = _POSTHOG_ENDPOINT_DEFAULT,
 ) -> bool:
     """POST ``payload`` to PostHog if telemetry is enabled, else no-op.
 
@@ -211,18 +270,17 @@ def send_telemetry_payload(
         return False
     if not isinstance(payload, dict) or not payload:
         return False
-    # HTTPS-only + private-IP / link-local rejection (mirrors v0.51.0 hub
-    # endpoint SSRF policy). Defence-in-depth: any caller override goes
-    # through the same validator that hub endpoints do.
-    if not _telemetry_endpoint_is_safe(endpoint):
-        return False
     if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
         return False
     if not math.isfinite(float(timeout)) or timeout <= 0:
         return False
-    key = api_key or _POSTHOG_DEFAULT_KEY
-    if not isinstance(key, str) or not key:
+    # v0.53.10 #154 — resolve key + endpoint via env-override-aware helper.
+    # Returns ``None`` when either input fails validation; treat as silent
+    # no-op so telemetry remains best-effort.
+    resolved = _resolve_posthog_target(api_key, endpoint)
+    if resolved is None:
         return False
+    key, endpoint = resolved
     try:
         import httpx  # lazy — optional dep, surfaces no advisory
     except ImportError:

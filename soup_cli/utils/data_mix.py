@@ -22,6 +22,7 @@ Security:
 
 from __future__ import annotations
 
+import importlib.util as _importlib_util
 import json
 import math
 import os
@@ -417,6 +418,12 @@ def _build_default_optimizer(
 ) -> OptimizerProtocol:
     """Return :func:`_build_skopt_optimizer` when ``scikit-optimize`` is
     installed; otherwise fall back to a deterministic Dirichlet-like sampler.
+
+    v0.53.10 #150 — when scikit-optimize is available via the new ``[mix]``
+    pyproject extra, callers get true Bayesian optimisation; otherwise the
+    Dirichlet sampler is used silently (no spam advisory at import time, but
+    the caller of :func:`run_mix_optimizer` can inspect the returned optimizer
+    via :func:`describe_default_optimizer` to surface the chosen backend).
     """
     try:
         return _build_skopt_optimizer(num_datasets, seed)
@@ -437,6 +444,20 @@ def _build_default_optimizer(
             return
 
     return _Dirichlet()
+
+
+def describe_default_optimizer() -> str:
+    """Return a short label naming the optimizer backend that
+    :func:`_build_default_optimizer` would pick for the current process.
+
+    v0.53.10 #150 — used by ``soup data mix --optimize`` to print an advisory
+    so users can see whether the v0.48.0 Dirichlet fallback or the bundled
+    scikit-optimize Bayesian loop is active. ``importlib.util.find_spec`` is
+    a non-executing probe so skopt's import cost is not paid here.
+    """
+    if _importlib_util.find_spec("skopt") is not None:
+        return "scikit-optimize"
+    return "dirichlet-fallback"
 
 
 def _renormalize(weights: Sequence[float]) -> Tuple[float, ...]:

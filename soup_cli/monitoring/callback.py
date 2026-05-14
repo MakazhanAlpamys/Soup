@@ -92,6 +92,54 @@ class SoupTrainerCallback(TrainerCallback):
     ):
         self.display.start(total_steps=state.max_steps)
 
+    def on_step_end(
+        self, args: TrainingArguments, state: TrainerState,
+        control: TrainerControl, **kwargs,
+    ):
+        """v0.53.10 #156 — peek at the active batch for tool-calling rows.
+
+        HF Trainer does not pass ``inputs`` to ``on_step_end`` by default, so
+        this hook can only see a batch when the trainer subclass explicitly
+        threads ``inputs=`` via ``kwargs``. When present, route any
+        ``tool_calls`` entries through the global tool-output buffer so the
+        Web UI's Tool Outputs panel populates in real time.
+
+        Best-effort: any exception inside the probe MUST NEVER take down
+        training. Lazy buffer access — zero overhead when ``tool_calls``
+        is absent from the batch.
+        """
+        inputs = kwargs.get("inputs")
+        if not isinstance(inputs, dict):
+            return
+        tool_calls = inputs.get("tool_calls")
+        if not tool_calls:
+            return
+        # stdlib import outside the try-block (python-review MEDIUM fix:
+        # ``time`` is impossible to ImportError, so don't pretend it can).
+        import time
+
+        try:
+            from soup_cli.utils.tool_outputs import get_global_tool_buffer
+
+            count = 0
+            if isinstance(tool_calls, (list, tuple)):
+                count = len(tool_calls)
+            elif isinstance(tool_calls, (int, float)) and not isinstance(
+                tool_calls, bool
+            ):
+                count = int(tool_calls)
+            if count <= 0:
+                return
+            get_global_tool_buffer().record_call(
+                name="sft_batch",
+                started_ts=time.time(),
+                duration_ms=0.0,
+                success=True,
+                output_preview=f"step {state.global_step}: {count} tool_calls",
+            )
+        except Exception:  # noqa: BLE001 — best-effort, must never crash training
+            return
+
     def on_log(
         self, args: TrainingArguments, state: TrainerState,
         control: TrainerControl, logs=None, **kwargs,

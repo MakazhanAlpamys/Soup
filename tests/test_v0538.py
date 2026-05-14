@@ -552,7 +552,16 @@ class TestDataDownloadHubFlag:
         assert result.exit_code != 0
         clean = _strip_ansi(result.output)
         assert "modelscope" in clean
-        assert "v0.53.9" in clean or "download_repo" in clean
+        # v0.53.10 #153 lifted the advisory to a live SDK dispatch; without
+        # the modelscope SDK installed the friendly pip-install error fires.
+        # Either the legacy v0.53.8 advisory (download_repo / v0.53.9) OR
+        # the v0.53.10 ImportError "pip install modelscope" is acceptable.
+        assert (
+            "v0.53.9" in clean
+            or "download_repo" in clean
+            or "pip install modelscope" in clean
+            or "not installed" in clean
+        )
 
 
 # ----------------------------------------------------------------------
@@ -593,19 +602,23 @@ class TestPyprojectExtras:
 
 
 class TestVersionBump:
+    @staticmethod
+    def _version_tuple(s: str) -> tuple:
+        return tuple(int(p) for p in s.split(".") if p.isdigit())
+
     def test_init_version(self):
         import soup_cli
 
         # Version-string is forward-monotonic: v0.53.8 baseline + any later
         # release (v0.53.9, v0.54.0, ...) keeps this contract green.
-        assert soup_cli.__version__ >= "0.53.8"
+        # Numeric tuple comparison defends against lexicographic regressions
+        # (e.g. "0.53.10" < "0.53.8" string-wise).
+        assert self._version_tuple(soup_cli.__version__) >= (0, 53, 8)
 
     def test_pyproject_version(self):
         text = (_repo_root() / "pyproject.toml").read_text(encoding="utf-8")
-        # Pyproject must declare some 0.53.x or later string; the literal
-        # "0.53.8" baseline is allowed to drift forward.
         import re
 
         match = re.search(r'^version\s*=\s*"([^"]+)"', text, flags=re.MULTILINE)
         assert match is not None
-        assert match.group(1) >= "0.53.8"
+        assert self._version_tuple(match.group(1)) >= (0, 53, 8)

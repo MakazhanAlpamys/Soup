@@ -53,8 +53,34 @@ def chat(
             "Default deny (v0.36.0). Only enable if you trust the source."
         ),
     ),
+    hub: str = typer.Option(
+        "hf",
+        "--hub",
+        help=(
+            "Source hub for the base model: hf (default) / modelscope / "
+            "modelers. Non-HF hubs require the matching SDK; the base model "
+            "is snapshotted to a cwd-contained cache before chat starts "
+            "(v0.53.10 #152)."
+        ),
+    ),
 ):
     """Chat with a fine-tuned model in the terminal."""
+    # v0.53.10 #152 — pre-fetch base from a non-HF hub before any path
+    # resolution. Local paths and HF repo IDs are passed through unchanged.
+    if hub and hub != "hf":
+        from soup_cli.utils.hubs import apply_hub_to_cli_model
+
+        try:
+            model, base_model = apply_hub_to_cli_model(
+                model, base_model, hub, console=console
+            )
+        except (TypeError, ValueError) as exc:
+            console.print(f"[red]{exc}[/]")
+            raise typer.Exit(code=2) from exc
+        except ImportError as exc:
+            console.print(f"[red]{exc}[/]")
+            raise typer.Exit(code=1) from exc
+
     model_path = Path(model)
 
     if not model_path.exists():

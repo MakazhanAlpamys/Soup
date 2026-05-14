@@ -1210,13 +1210,53 @@ def download_dataset(
     except (TypeError, ValueError) as exc:
         console.print(f"[red]{exc}[/]")
         raise typer.Exit(code=2) from exc
+    # v0.53.10 #153 — non-HF hub live dataset download. ModelScope uses
+    # the ``MsDataset`` API (different shape from snapshot_download), so
+    # we dispatch here instead of going through utils.hubs.download_repo.
     if hub_canonical != "hf":
-        console.print(
-            f"[red]--hub {hub_canonical} dataset download is not yet wired; "
-            f"use `from soup_cli.utils.hubs import download_repo` to snapshot "
-            f"a repo, or wait for v0.53.9.[/]"
-        )
-        raise typer.Exit(code=1)
+        from soup_cli.utils.hubs import download_repo as _download_repo
+
+        try:
+            if hub_canonical == "modelscope":
+                try:
+                    from modelscope.msdatasets import (
+                        MsDataset,  # type: ignore[import-not-found]
+                    )
+                except ImportError as exc:
+                    console.print(
+                        "[red]modelscope is not installed. "
+                        "Install with: pip install modelscope[/]"
+                    )
+                    raise typer.Exit(1) from exc
+                _ms_ds = MsDataset.load(  # noqa: F841 — touched for side effect
+                    dataset_id, split=split
+                )
+                console.print(
+                    f"[dim]ModelScope dataset {dataset_id} loaded; "
+                    "use soup_cli.utils.hubs.download_repo for raw "
+                    "snapshot download.[/]"
+                )
+            else:  # modelers
+                try:
+                    out_dir = _download_repo(
+                        hub_canonical,
+                        dataset_id,
+                        local_dir=str(Path.cwd() / ".soup_hub_cache"
+                                      / "datasets"
+                                      / dataset_id.replace("/", "__")),
+                        repo_type="dataset",
+                    )
+                except ImportError as exc:
+                    console.print(f"[red]{exc}[/]")
+                    raise typer.Exit(1) from exc
+                console.print(
+                    f"[green]Downloaded {dataset_id} from {hub_canonical} → "
+                    f"{out_dir}[/]"
+                )
+        except (TypeError, ValueError) as exc:
+            console.print(f"[red]{exc}[/]")
+            raise typer.Exit(2) from exc
+        return
     max_download_samples = 1_000_000
     if samples is not None and samples > max_download_samples:
         console.print(

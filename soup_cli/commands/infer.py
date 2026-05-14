@@ -102,8 +102,29 @@ def infer(
             "Default deny (v0.36.0). Only enable if you trust the source."
         ),
     ),
+    hub: str = typer.Option(
+        "hf",
+        "--hub",
+        help=(
+            "Source hub for the base model: hf (default) / modelscope / "
+            "modelers. Non-HF hubs require the matching SDK (v0.53.10 #152)."
+        ),
+    ),
 ):
     """Run batch inference on a JSONL file of prompts."""
+    # v0.53.10 #152 — pre-fetch base from a non-HF hub before any resolution.
+    if hub and hub != "hf":
+        from soup_cli.utils.hubs import apply_hub_to_cli_model
+
+        try:
+            model, base = apply_hub_to_cli_model(model, base, hub, console=console)
+        except (TypeError, ValueError) as exc:
+            console.print(f"[red]{exc}[/]")
+            raise typer.Exit(code=2) from exc
+        except ImportError as exc:
+            console.print(f"[red]{exc}[/]")
+            raise typer.Exit(code=1) from exc
+
     from soup_cli.utils.paths import is_under_cwd
 
     # Validate input file

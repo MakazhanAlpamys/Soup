@@ -93,6 +93,92 @@ function navigate(page) {
   else if (page === 'training') loadTrainingPage();
   else if (page === 'data') { /* loaded on demand */ }
   else if (page === 'chat') loadChatPage();
+  else if (page === 'tools') loadToolOutputs();
+  // v0.53.10 #155 — pause Tool Outputs polling when navigating away so we
+  // don't keep firing fetch() against /api/tool-outputs from background tabs.
+  if (page !== 'tools') stopToolOutputsPolling();
+}
+
+// --- Tool Outputs panel (v0.53.10 #155) ---
+// Polls /api/tool-outputs every 3 s while the page is active. XSS-safe via
+// textContent / .appendChild (no innerHTML for user-controlled fields).
+let _toolsPollHandle = null;
+
+function loadToolOutputs() {
+  renderToolOutputs();
+  if (_toolsPollHandle === null) {
+    _toolsPollHandle = setInterval(renderToolOutputs, 3000);
+  }
+}
+
+function stopToolOutputsPolling() {
+  if (_toolsPollHandle !== null) {
+    clearInterval(_toolsPollHandle);
+    _toolsPollHandle = null;
+  }
+}
+
+async function renderToolOutputs() {
+  const container = document.getElementById('tools-content');
+  if (!container) return;
+  let payload;
+  try {
+    const headers = {};
+    if (window._authToken) {
+      headers['Authorization'] = 'Bearer ' + window._authToken;
+    }
+    const resp = await fetch('/api/tool-outputs?limit=100', { headers });
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    payload = await resp.json();
+  } catch (err) {
+    container.textContent = 'Failed to load tool outputs: ' + err.message;
+    return;
+  }
+  const records = (payload && Array.isArray(payload.records)) ? payload.records : [];
+  // Build the table via DOM APIs so user-controlled fields stay XSS-safe.
+  container.replaceChildren();
+  if (records.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'empty-state';
+    const t = document.createElement('div');
+    t.className = 'empty-state-text';
+    t.textContent = 'No tool calls observed yet.';
+    empty.appendChild(t);
+    container.appendChild(empty);
+    return;
+  }
+  const wrap = document.createElement('div');
+  wrap.className = 'table-wrap';
+  const table = document.createElement('table');
+  const thead = document.createElement('thead');
+  const head = document.createElement('tr');
+  ['Name', 'Started', 'Duration (ms)', 'OK', 'Output'].forEach(label => {
+    const th = document.createElement('th');
+    th.textContent = label;
+    head.appendChild(th);
+  });
+  thead.appendChild(head);
+  table.appendChild(thead);
+  const tbody = document.createElement('tbody');
+  records.forEach(rec => {
+    const tr = document.createElement('tr');
+    const cells = [
+      String(rec.name || ''),
+      rec.started_ts ? new Date(rec.started_ts * 1000).toLocaleTimeString() : '-',
+      (typeof rec.duration_ms === 'number') ? rec.duration_ms.toFixed(1) : '-',
+      rec.success ? '✓' : '✗',
+      String(rec.output_preview || rec.error || ''),
+    ];
+    cells.forEach(value => {
+      const td = document.createElement('td');
+      td.textContent = value;
+      tr.appendChild(td);
+    });
+    tbody.appendChild(tr);
+  });
+  table.appendChild(tbody);
+  wrap.appendChild(table);
+  container.appendChild(wrap);
 }
 
 // --- API Helpers ---

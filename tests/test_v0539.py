@@ -30,7 +30,11 @@ def _plain(text: str) -> str:
 # ----------------------------------------------------------------- version
 
 def test_version_bump_to_0_53_9():
-    assert soup_cli.__version__ == "0.53.9"
+    # Forward-monotonic: v0.53.9 baseline + later releases (v0.53.10, ...)
+    # keep this contract green. Numeric tuple compare defends against the
+    # lexicographic "0.53.10" < "0.53.9" footgun.
+    parts = tuple(int(p) for p in soup_cli.__version__.split(".") if p.isdigit())
+    assert parts >= (0, 53, 9)
 
 
 # ----------------------------------------------------- #94 SSE event buffer

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "soup-cli"
-version = "0.53.9"
+version = "0.53.10"
 description = "Fine-tune LLMs in one command. No SSH, no config hell."
 readme = "README.md"
 license = "Apache-2.0"
@@ -65,6 +65,13 @@ tui = ["textual>=0.50.0"]
 trackers = ["mlflow>=2.0.0", "swanlab>=0.3.0", "trackio>=0.0.1"]
 # v0.53.8 #85 — fsspec backends for remote dataset loading (s3 / gs / az / oci).
 remote = ["fsspec>=2024.1.0", "s3fs>=2024.1.0", "gcsfs>=2024.1.0", "adlfs>=2024.1.0"]
+# v0.53.10 #150 — bundle scikit-optimize so `soup data mix --optimize` runs the
+# Bayesian-style loop instead of falling back to the v0.48.0 Dirichlet sampler.
+mix = ["scikit-optimize>=0.9.0"]
+# v0.53.10 #113 — production-grade data quality: langdetect (language) +
+# presidio-analyzer (PII). Llama-Guard-3-1B is documented as a manual recipe
+# (license + ~600 MB weight blob too large to bundle by default).
+data-pro = ["langdetect>=1.0.9", "presidio-analyzer>=2.2.0"]
 
 [project.scripts]
 soup = "soup_cli.cli:run"

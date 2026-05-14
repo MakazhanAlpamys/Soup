@@ -444,3 +444,158 @@ def upload_repo(
         return
 
     raise ValueError(f"hub {canonical!r} has no upload adapter")
+
+
+def prefetch_model_from_hub(
+    base: str,
+    hub: str,
+    *,
+    cache_root: str | None = None,
+    console: object | None = None,
+) -> str:
+    """Snapshot ``base`` from ``hub`` into a cwd-contained cache + return path.
+
+    v0.53.10 #152 — shared helper extracted from the v0.53.8 ``soup train``
+    pre-fetch path so chat / serve / infer / merge / export / push can route
+    non-HF hubs through the same SSRF-hardened, cwd-contained snapshot flow
+    without each command re-implementing the slug + containment + cache
+    short-circuit logic.
+
+    Args:
+        base: model id (e.g. ``"meta-llama/Llama-3.1-8B"``) — accepted as-is
+            and forwarded to the hub-specific :func:`download_repo` adapter.
+        hub: hub name (validated via :func:`validate_hub_name`); ``"hf"``
+            short-circuits with no download (returns ``base`` unchanged).
+        cache_root: optional override for the cache root directory. Defaults
+            to ``<cwd>/.soup_hub_cache``. The resolved cache subdir is
+            cwd-containment checked even when an override is supplied so a
+            crafted ``cache_root`` cannot escape the working directory.
+        console: optional Rich console for cache-hit / fetch advisories. When
+            ``None``, the function is silent (returns the path without
+            printing). Caller is responsible for printing failures.
+
+    Returns:
+        Absolute local path to the downloaded snapshot. For ``hub='hf'``
+        returns ``base`` unchanged (HF Hub is the trainer default).
+
+    Raises:
+        TypeError / ValueError: invalid ``hub`` / ``base`` per
+            :func:`validate_hub_name` / :func:`_validate_repo_id_shape`.
+        ImportError: optional SDK (modelscope / openmind-hub) missing.
+        ValueError: resolved cache dir escapes cwd.
+    """
+    import os
+    import re
+
+    from soup_cli.utils.paths import is_under_cwd
+
+    canonical = validate_hub_name(hub)
+    if canonical == "hf":
+        return base
+    if not isinstance(base, str) or not base:
+        raise ValueError("base must be a non-empty string")
+    if "\x00" in base or any(ord(c) < 0x20 for c in base):
+        raise ValueError("base must not contain control characters")
+    # Mirror v0.53.8 ``soup train`` cache-dir slug policy: strip every
+    # path-separator and ``..`` segment so a crafted ``base: ../../etc``
+    # cannot escape the cache root (Windows ``\\`` + POSIX ``/`` both
+    # blocked).
+    safe_slug = re.sub(r"[^A-Za-z0-9._-]+", "__", base).strip("._-") or "model"
+    if cache_root is None:
+        root_path = os.path.realpath(os.path.join(os.getcwd(), ".soup_hub_cache"))
+    else:
+        if not isinstance(cache_root, str) or not cache_root:
+            raise ValueError("cache_root must be a non-empty string")
+        root_path = os.path.realpath(cache_root)
+    cache_dir = os.path.realpath(os.path.join(root_path, safe_slug))
+    if not is_under_cwd(cache_dir):
+        raise ValueError(
+            "resolved hub cache dir escapes the current working directory"
+        )
+    # v0.53.10 security-review HIGH: escape Rich markup on every
+    # user-controlled string before embedding in console.print. A crafted
+    # ``base`` like ``[bold red]evil[/bold red]`` must NOT render styled.
+    from rich.markup import escape as _markup_escape
+
+    existing_cfg = os.path.join(cache_dir, "config.json")
+    if os.path.isfile(existing_cfg):
+        if console is not None:
+            try:
+                try:
+                    display_dir = os.path.relpath(cache_dir)
+                except (ValueError, OSError):
+                    display_dir = os.path.basename(cache_dir)
+                console.print(  # type: ignore[attr-defined]
+                    f"[dim]Using cached snapshot at "
+                    f"{_markup_escape(display_dir)}[/]"
+                )
+            except Exception:  # noqa: BLE001 — advisory is best-effort
+                pass
+        return cache_dir
+    local_path = download_repo(canonical, base, local_dir=cache_dir)
+    if console is not None:
+        try:
+            # Reduce SDK-returned absolute path to a cwd-relative form so
+            # we don't leak $HOME into the terminal output (code-review
+            # HIGH fix; matches v0.34.0 crash.py redaction policy).
+            display_path = local_path
+            try:
+                display_path = os.path.relpath(local_path)
+            except (ValueError, OSError):
+                display_path = os.path.basename(local_path)
+            console.print(  # type: ignore[attr-defined]
+                f"[dim]Fetched {_markup_escape(base)} "
+                f"from hub={_markup_escape(canonical)} → "
+                f"{_markup_escape(str(display_path))}[/]"
+            )
+        except Exception:  # noqa: BLE001
+            pass
+    return local_path
+
+
+def apply_hub_to_cli_model(
+    model: str | None,
+    base_model: str | None,
+    hub: str,
+    *,
+    console: object | None = None,
+) -> tuple[str | None, str | None]:
+    """Resolve ``(model, base_model)`` after an optional non-HF hub prefetch.
+
+    v0.53.10 #152 — shared CLI helper for chat / serve / infer / merge /
+    export / push so each command emits the same advisory + uses the same
+    cwd-contained cache.
+
+    Behaviour:
+        * ``hub`` is ``"hf"`` (or empty / None) → returns inputs unchanged.
+        * ``base_model`` is set + non-existent local path → snapshot via
+          :func:`prefetch_model_from_hub` and route the result to
+          ``base_model``.
+        * else ``model`` is set + non-existent local path → snapshot via
+          :func:`prefetch_model_from_hub` and route the result to ``model``.
+        * Existing local paths (e.g. a freshly trained LoRA dir) are passed
+          through unchanged so a non-HF hub flag does not break the
+          common "fine-tune locally, then chat" loop.
+
+    Returns:
+        ``(model_out, base_model_out)`` tuple — at most one of them is
+        rewritten to the local snapshot path.
+
+    Raises:
+        TypeError / ValueError / ImportError: propagated from
+        :func:`prefetch_model_from_hub` so the CLI can map them to exit codes.
+    """
+    import os
+
+    if not hub or hub == "hf":
+        return model, base_model
+    # Prefer rewriting ``base_model`` when set (the typical LoRA-adapter
+    # case where ``model`` is a local directory and ``base_model`` is a
+    # remote repo id).
+    if base_model and not os.path.exists(base_model):
+        fetched = prefetch_model_from_hub(base_model, hub, console=console)
+        return model, fetched
+    if model and not os.path.exists(model):
+        fetched = prefetch_model_from_hub(model, hub, console=console)
+        return fetched, base_model
+    return model, base_model

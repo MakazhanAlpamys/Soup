@@ -29,6 +29,10 @@
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
           <span>Model Chat</span>
         </button>
+        <button class="nav-item" data-page="tools" onclick="navigate('tools')">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
+          <span>Tool Outputs</span>
+        </button>
       </nav>
       <div class="sidebar-footer" id="sidebar-version">Soup Web UI</div>
     </aside>
@@ -161,6 +165,26 @@
             <input type="text" id="chat-input" placeholder="Type a message..." onkeydown="handleChatKey(event)">
             <button class="btn btn-primary" id="chat-send-btn" onclick="sendChatMessage()">Send</button>
             <button class="btn btn-danger" id="chat-cancel-btn" onclick="cancelChat()" style="display:none">Cancel</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tool Outputs Page -->
+      <!-- v0.53.10 #155 — polls /api/tool-outputs every 3s. XSS-safe (uses
+           textContent, not innerHTML). Bearer token threaded via the
+           existing window._authToken bootstrap (v0.53.9 #95). -->
+      <div id="page-tools" class="page">
+        <div class="page-header">
+          <h1 class="page-title">Tool Outputs</h1>
+          <button class="btn" onclick="loadToolOutputs()">Refresh</button>
+        </div>
+        <div class="card">
+          <div class="card-title">Recent tool calls</div>
+          <div id="tools-content">
+            <div class="empty-state">
+              <div class="empty-state-text">Waiting for tool calls...</div>
+              <div class="empty-state-hint">POST to /v1/tools/python or run a tool-calling SFT to populate</div>
+            </div>
           </div>
         </div>
       </div>

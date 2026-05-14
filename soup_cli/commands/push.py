@@ -57,8 +57,28 @@ def push(
             "(slug: 'owner/title-hash')"
         ),
     ),
+    hub: str = typer.Option(
+        "hf",
+        "--hub",
+        help=(
+            "Destination hub: hf (default) / modelscope / modelers. Non-HF "
+            "hubs require the matching SDK and skip the HF-specific "
+            "Collections / model-card auto-render path (v0.53.10 #152)."
+        ),
+    ),
 ):
-    """Push a trained model to HuggingFace Hub."""
+    """Push a trained model to HuggingFace Hub (or alternate hub)."""
+    # v0.53.10 #152 — validate hub at the CLI boundary; only HF is the
+    # default. Non-HF hubs upload via :func:`utils.hubs.upload_repo` after
+    # the standard model-dir validation completes.
+    from soup_cli.utils.hubs import validate_hub_name
+
+    try:
+        hub_canonical = validate_hub_name(hub)
+    except (TypeError, ValueError) as exc:
+        console.print(f"[red]{exc}[/]")
+        raise typer.Exit(code=2) from exc
+
     from soup_cli.utils.paths import is_under_cwd
 
     model_path = Path(model)
@@ -143,6 +163,35 @@ def push(
     )
 
     # --- Upload ---
+    # v0.53.10 #152 — non-HF hubs route through utils.hubs.upload_repo
+    # before we reach the HF-specific Collections / model-card auto-render
+    # path. Each backend lazy-imports its own SDK; missing-dep surfaces
+    # as ImportError with a pip-install advisory.
+    if hub_canonical != "hf":
+        from soup_cli.utils.hubs import upload_repo
+
+        console.print(f"[dim]Uploading to hub={hub_canonical}...[/]")
+        try:
+            upload_repo(
+                hub_canonical,
+                repo,
+                folder_path=str(model_path),
+                commit_message=commit_message,
+                token=hf_token,
+            )
+        except ImportError as exc:
+            console.print(f"[red]{exc}[/]")
+            raise typer.Exit(1) from exc
+        except (TypeError, ValueError) as exc:
+            console.print(f"[red]{exc}[/]")
+            raise typer.Exit(2) from exc
+        console.print(
+            f"[green]Pushed to {hub_canonical}/{repo}.[/]\n"
+            "[dim]Note: HF-specific Collections + model card auto-render "
+            "are HF-only; install via the HF flow for those features.[/]"
+        )
+        return
+
     console.print("[dim]Uploading to HuggingFace Hub...[/]")
 
     from soup_cli.utils.hf import get_hf_api

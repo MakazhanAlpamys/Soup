@@ -131,8 +131,30 @@ def export(
             "Required when --format=gguf-ud (v0.53.1 #139)."
         ),
     ),
+    hub: str = typer.Option(
+        "hf",
+        "--hub",
+        help=(
+            "Source hub for the base model when --model is a LoRA adapter: "
+            "hf (default) / modelscope / modelers (v0.53.10 #152)."
+        ),
+    ),
 ):
     """Export a model to GGUF, ONNX, TensorRT-LLM, AWQ, GPTQ, or TorchAO format."""
+    # v0.53.10 #152 — pre-fetch the base model from a non-HF hub. ``model``
+    # is typically a local merged dir / adapter dir; only ``base`` is rewritten.
+    if hub and hub != "hf":
+        from soup_cli.utils.hubs import apply_hub_to_cli_model
+
+        try:
+            _, base = apply_hub_to_cli_model(model, base, hub, console=console)
+        except (TypeError, ValueError) as exc:
+            console.print(f"[red]{exc}[/]")
+            raise typer.Exit(code=2) from exc
+        except ImportError as exc:
+            console.print(f"[red]{exc}[/]")
+            raise typer.Exit(code=1) from exc
+
     model_path = Path(model)
 
     # --- Validate ---

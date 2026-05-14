@@ -230,15 +230,64 @@ _PII_PATTERNS: Tuple[Tuple[str, "re.Pattern[str]"], ...] = (
 )
 
 
+def _presidio_pii(text: str) -> List[Dict[str, str]] | None:
+    """Run Presidio AnalyzerEngine when available (v0.53.10 #113 / ``[data-pro]``).
+
+    Returns ``None`` when the optional ``presidio-analyzer`` package is not
+    installed OR when any error fires during analysis. Caller falls back to
+    the regex baseline. We DO NOT raise — PII detection is best-effort and
+    should never crash the broader scoring pipeline.
+
+    The 32-hit cap + 64-char snippet truncation mirror the regex path so
+    downstream consumers get a consistent shape regardless of backend.
+    """
+    try:
+        from presidio_analyzer import AnalyzerEngine  # noqa: PLC0415
+    except ImportError:
+        return None
+    try:
+        analyzer = AnalyzerEngine()
+        results = analyzer.analyze(text=text, language="en")
+    except Exception:  # noqa: BLE001 — fall through to regex baseline
+        return None
+    if not isinstance(results, list):
+        return None
+    hits: List[Dict[str, str]] = []
+    for res in results:
+        kind = getattr(res, "entity_type", None)
+        start = getattr(res, "start", None)
+        end = getattr(res, "end", None)
+        if not isinstance(kind, str) or not isinstance(start, int):
+            continue
+        if not isinstance(end, int) or end <= start:
+            continue
+        snippet = text[start:end]
+        if len(snippet) > 64:
+            snippet = snippet[:61] + "..."
+        hits.append({"kind": kind.lower(), "snippet": snippet})
+        if len(hits) >= 32:
+            break
+    return hits
+
+
 def detect_pii(text: Any) -> List[Dict[str, str]]:
     """Return a list of ``{kind, snippet}`` PII hits.
 
     Scans only the first ``_PII_SCAN_CAP`` chars of ``text`` to keep regex
     finditer cost bounded regardless of caller input size.
+
+    v0.53.10 #113 — when ``presidio-analyzer`` is installed via the
+    ``[data-pro]`` extras, routes through Presidio for broader entity
+    coverage (location / dates / IBAN / etc.); otherwise falls back to the
+    in-tree 4-regex baseline (email / phone / SSN / credit-card).
     """
     s = _require_str(text, name="text")
     if len(s) > _PII_SCAN_CAP:
         s = s[:_PII_SCAN_CAP]
+    # Try Presidio first; silently falls through when absent.
+    presidio_hits = _presidio_pii(s)
+    if presidio_hits is not None:
+        return presidio_hits
     hits: List[Dict[str, str]] = []
     for kind, pat in _PII_PATTERNS:
         for m in pat.finditer(s):
@@ -291,18 +340,53 @@ _LANG_STOPWORDS: Mapping[str, frozenset] = MappingProxyType(
 )
 
 
+def _langdetect_fast(text: str) -> str | None:
+    """Probabilistic detection via ``langdetect`` (v0.53.10 #113 / ``[data-pro]``).
+
+    Returns ``None`` when the optional ``langdetect`` package is not
+    installed OR when the detector raises (e.g. ``LangDetectException`` on
+    too-short input). Caller falls back to the stopword heuristic.
+
+    We rebind langdetect's global RNG to a constant seed so two consecutive
+    calls on the same input produce the same code (langdetect is otherwise
+    non-deterministic). The seed is reset at every call to keep the heuristic
+    deterministic across the test suite.
+    """
+    try:
+        import langdetect  # noqa: PLC0415 — optional dep
+    except ImportError:
+        return None
+    try:
+        # ``DetectorFactory.seed = 0`` is the upstream-documented way to make
+        # langdetect deterministic; cheap to re-apply.
+        langdetect.DetectorFactory.seed = 0
+        code = langdetect.detect(text)
+    except Exception:  # noqa: BLE001 — fall through to heuristic on any error
+        return None
+    if not isinstance(code, str) or len(code) < 2:
+        return None
+    # langdetect returns ISO 639-1 codes (already lowercased). Truncate to
+    # the 2-letter prefix to match the heuristic's surface.
+    return code[:2].lower()
+
+
 def detect_language(text: Any) -> str:
     """Return a 2-letter ISO code or ``"unknown"``.
 
-    Pure-Python stopword heuristic; conservative — falls through to
-    ``"unknown"`` on short or ambiguous input. For production-grade
-    detection, install ``langdetect`` and pipe via the ``[data-pro]``
-    extras (deferred to v0.47.1).
+    v0.53.10 #113 — when the optional ``langdetect`` package is installed
+    via the ``[data-pro]`` extras, routes through its probabilistic
+    detector for broader language coverage; otherwise falls back to the
+    pure-Python stopword heuristic (covers en/es/fr/de/pt/ru).
     """
     s = _require_str(text, name="text")
     tokens = _tokenise(s)
     if len(tokens) < 4:
         return "unknown"
+    # Try langdetect first; falls through silently when the package is
+    # missing or raises (e.g. too-short input).
+    fast = _langdetect_fast(s)
+    if fast is not None:
+        return fast
     token_set = set(tokens)
     best_lang = "unknown"
     best_hits = 0

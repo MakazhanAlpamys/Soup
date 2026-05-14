@@ -199,8 +199,31 @@ def serve(
             "deepseek-r1 | qwen3 | phi4 | openthinker. v0.53.9 #98."
         ),
     ),
+    hub: str = typer.Option(
+        "hf",
+        "--hub",
+        help=(
+            "Source hub for the base model: hf (default) / modelscope / "
+            "modelers. Non-HF hubs require the matching SDK (v0.53.10 #152)."
+        ),
+    ),
 ):
     """Start a local inference server with OpenAI-compatible API."""
+    # v0.53.10 #152 — pre-fetch base from a non-HF hub before serve starts.
+    if hub and hub != "hf":
+        from soup_cli.utils.hubs import apply_hub_to_cli_model
+
+        try:
+            model, base_model = apply_hub_to_cli_model(
+                model, base_model, hub, console=console
+            )
+        except (TypeError, ValueError) as exc:
+            console.print(f"[red]{exc}[/]")
+            raise typer.Exit(code=2) from exc
+        except ImportError as exc:
+            console.print(f"[red]{exc}[/]")
+            raise typer.Exit(code=1) from exc
+
     # Lazy imports for fast CLI startup
     try:
         import uvicorn  # noqa: F401
