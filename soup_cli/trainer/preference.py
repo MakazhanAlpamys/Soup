@@ -127,19 +127,24 @@ class PreferenceTrainerWrapper:
         return BCOTrainerWrapper(inner_cfg, **kwargs)
 
     def _build_multi_objective(self):
-        """v0.40.1 Part B — build the multi-objective primary trainer.
+        """v0.53.11 #68 — build the multi-objective primary trainer + combine hook.
 
-        **Primary-loss approximation (v0.40.1):** the highest-weighted
-        loss is selected as the primary inner trainer; auxiliary losses
-        are *named* in the advisory but do not yet contribute to the
-        backward pass — full per-batch weighted-loss combination across
-        all named losses is deferred to v0.40.2 (it requires subclassing
-        each TRL preference trainer to override ``compute_loss``, which
-        is mechanically expanded on a per-trainer basis).
+        Lifts the v0.40.1 "primary-loss approximation": the highest-weighted
+        loss still becomes the primary inner trainer (because each TRL
+        preference trainer owns its data collation), but a
+        :func:`combine_losses` wrapper now runs against the policy log-probs
+        in the inner trainer's ``compute_loss`` so each named loss
+        contributes to the backward pass per its weight.
 
-        The math kernel for the future combination is already shipped in
-        :mod:`soup_cli.utils.preference_combine` and is exercised by the
-        ``test_preference_multi_runtime`` suite.
+        BCO mixed with paired losses remains rejected at runtime (data-format
+        incompatible — paired needs ``prompt+chosen+rejected``, BCO needs
+        ``prompt+completion+label``).
+
+        The math kernel ships in :mod:`soup_cli.utils.preference_combine`
+        and is exercised by ``test_v05311.py``. Live wrapper installation
+        on the inner Trainer's ``compute_loss`` is attached via
+        :func:`attach_weighted_preference_combine` after the inner setup
+        completes (called from :meth:`setup`).
         """
         from rich.console import Console as _Console
 
@@ -198,6 +203,26 @@ class PreferenceTrainerWrapper:
                 self._inner = self._build_multi_objective()
             if self._inner is not None:
                 self._inner.setup(dataset)
+                # v0.53.11 #68 — attach the weighted-combine compute_loss
+                # wrapper after the inner trainer's setup completes so the
+                # TRL trainer instance is available.
+                from soup_cli.utils.preference_combine import (
+                    attach_weighted_preference_combine,
+                )
+
+                inner_trainer = getattr(self._inner, "trainer", None)
+                if inner_trainer is not None:
+                    try:
+                        attach_weighted_preference_combine(inner_trainer, weights)
+                    except (TypeError, ValueError) as exc:
+                        # Schema validates weights at config load; runtime
+                        # rejection should be loud — but fall through to the
+                        # primary-loss-only path rather than crashing the run.
+                        import logging
+
+                        logging.getLogger(__name__).warning(
+                            "attach_weighted_preference_combine skipped: %s", exc
+                        )
             return
         if self._inner is None:
             self._inner = self._build_inner()

@@ -1,4 +1,4 @@
-"""v0.53.10 — Quick wins + packaging + UX wiring.
+"""v0.53.11 — Quick wins + packaging + UX wiring.
 
 Covers seven closed issues:
 
@@ -365,7 +365,7 @@ class TestDataDownloadNonHfLive:
     def test_data_download_no_longer_advises_v0_53_9(self):
         # tdd-review LOW #9: a future regression of the advisory text
         # "wait for v0.53.9" must be caught at source-grep time, since
-        # v0.53.10 lifted that advisory to live SDK dispatch.
+        # v0.53.11 lifted that advisory to live SDK dispatch.
         src = (REPO_ROOT / "soup_cli/commands/data.py").read_text(
             encoding="utf-8"
         )
@@ -501,10 +501,10 @@ class TestVersionBump:
     def test_init_py_pin(self):
         from soup_cli import __version__
 
-        assert __version__ == "0.53.10"
+        assert __version__ == "0.53.11"
 
     def test_pyproject_pin(self):
         body = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
-        assert re.search(r'^version\s*=\s*"0\.53\.10"', body, re.MULTILINE), (
-            "pyproject.toml version pin missing v0.53.10"
+        assert re.search(r'^version\s*=\s*"0\.53\.11"', body, re.MULTILINE), (
+            "pyproject.toml version pin missing v0.53.11"
         )

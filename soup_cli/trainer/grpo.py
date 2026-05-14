@@ -1,8 +1,11 @@
 """GRPO (Group Relative Policy Optimization) trainer — wraps trl.GRPOTrainer."""
 
+from __future__ import annotations
+
 import time
+from functools import lru_cache
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from rich.console import Console
 
@@ -11,6 +14,97 @@ from soup_cli.utils.gpu import estimate_batch_size, model_size_from_name
 
 console = Console()
 
+
+def make_grpo_trainer_variant(base_cls: type, variant: str) -> type:
+    """v0.53.11 #123 — build a ``_GRPOTrainerVariant`` subclass.
+
+    Returns a subclass of ``trl.GRPOTrainer`` whose ``compute_loss`` routes
+    through :func:`soup_cli.utils.grpo_variants.apply_variant_loss`. Cached
+    so multiple instantiations with the same (base, variant) share one class.
+
+    Pure factory — no torch / trl imports at module load time. Variant
+    name is normalised via ``validate_grpo_variant`` BEFORE the cache
+    boundary so ``"GSPO"`` and ``"gspo"`` share one class (security review
+    MEDIUM fix).
+    """
+    from soup_cli.utils.grpo_variants import validate_grpo_variant
+
+    variant = validate_grpo_variant(variant)
+    return _make_grpo_trainer_variant_cached(base_cls, variant)
+
+
+@lru_cache(maxsize=8)
+def _make_grpo_trainer_variant_cached(base_cls: type, variant: str) -> type:
+    """Cached factory body — keyed on already-normalised variant."""
+    from soup_cli.utils.grpo_variants import apply_variant_loss
+
+    class _GRPOTrainerVariant(base_cls):  # type: ignore[misc, valid-type]
+        """GRPOTrainer subclass that routes compute_loss through Soup's variants."""
+
+        _soup_grpo_variant: str = variant
+
+        def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
+            # v0.53.11 review fix (code-review HIGH) — read kernel inputs
+            # FIRST and only call super() as a fallback. The previous
+            # ordering ran an extra forward pass on every step that was
+            # discarded when the kernel produced a loss, doubling VRAM
+            # peak. The TRL trainer stores per-batch tensors on ``inputs``
+            # by the time compute_loss is called, so we can probe them
+            # without burning a forward pass.
+            #
+            # Probe TRL ≥0.9 attribute name ``per_token_logps`` — drop the
+            # earlier ``logits_to_keep`` probe (code-review HIGH fix:
+            # ``logits_to_keep`` is a position mask, not log-probs).
+            logp_new = _read_attr(inputs, "per_token_logps")
+            logp_old = _read_attr(inputs, "old_per_token_logps")
+            if logp_old is None:
+                logp_old = _read_attr(inputs, "ref_per_token_logps")
+            advantages = _read_attr(inputs, "advantages")
+            completion_mask = _read_attr(inputs, "completion_mask")
+
+            if logp_new is None or logp_old is None or advantages is None:
+                # Fall back to the original loss — defence-in-depth so a
+                # TRL internal rename does not crash the training loop.
+                return super().compute_loss(
+                    model, inputs, return_outputs=return_outputs, **kwargs
+                )
+
+            beta_attr = getattr(self.args, "beta", None)
+            beta = float(beta_attr) if beta_attr is not None else 0.0
+            delta = getattr(self, "_soup_grpo_delta", None)
+            try:
+                variant_loss = apply_variant_loss(
+                    self._soup_grpo_variant,
+                    logp_new=logp_new,
+                    logp_old=logp_old,
+                    advantages=advantages,
+                    beta=beta,
+                    delta=delta,
+                    completion_mask=completion_mask,
+                )
+            except (TypeError, ValueError):
+                return super().compute_loss(
+                    model, inputs, return_outputs=return_outputs, **kwargs
+                )
+            if variant_loss is None:
+                return super().compute_loss(
+                    model, inputs, return_outputs=return_outputs, **kwargs
+                )
+            if return_outputs:
+                return variant_loss, None
+            return variant_loss
+
+    _GRPOTrainerVariant.__name__ = f"_GRPOTrainerVariant_{variant}"
+    return _GRPOTrainerVariant
+
+
+def _read_attr(obj: Any, name: str) -> Any:
+    """Read ``name`` from a mapping OR object — TRL inputs vary in shape."""
+    if obj is None:
+        return None
+    if hasattr(obj, "get"):
+        return obj.get(name)
+    return getattr(obj, name, None)
 
 class GRPOTrainerWrapper:
     """High-level wrapper for GRPO training from SoupConfig.
@@ -84,6 +178,11 @@ class GRPOTrainerWrapper:
         """Load model, tokenizer, apply LoRA, create GRPO trainer."""
         from datasets import Dataset
         from trl import GRPOConfig, GRPOTrainer
+
+        # v0.53.11 #123 — variant subclass override
+        variant = self.config.training.grpo_variant
+        if variant is not None and variant != "standard":
+            GRPOTrainer = make_grpo_trainer_variant(GRPOTrainer, variant)  # noqa: N806
 
         # Enable Rich progress bar for HuggingFace downloads
         from soup_cli.trainer.sft import _enable_hf_transfer_progress
@@ -232,6 +331,16 @@ class GRPOTrainerWrapper:
             reward_funcs=reward_fn,
             processing_class=self.tokenizer,
         )
+        # v0.53.11 #123 — thread grpo_delta into the variant subclass.
+        if (
+            tcfg.grpo_variant is not None
+            and tcfg.grpo_variant != "standard"
+            and tcfg.grpo_delta is not None
+        ):
+            self.trainer._soup_grpo_delta = float(tcfg.grpo_delta)
+        # v0.53.11 #127 — wire the live stability callback.
+        from soup_cli.utils.peft_wiring import attach_grpo_stability_callback
+        attach_grpo_stability_callback(self.trainer, tcfg)
 
         # v0.40.6 #67 — ReLoRA callback (magnitude-prune LoRA every N steps).
         from soup_cli.utils.peft_wiring import (

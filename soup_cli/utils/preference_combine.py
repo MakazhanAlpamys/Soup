@@ -23,8 +23,11 @@ can be unit-tested on toy tensors without pulling TRL.
 
 from __future__ import annotations
 
+import logging
 import math
 from typing import TYPE_CHECKING, Dict, Mapping, Optional
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     import torch  # noqa: F401
@@ -174,6 +177,143 @@ def combine_losses(
         contrib = float(weight) * losses[name]
         out = contrib if out is None else out + contrib
     return out
+
+
+def attach_weighted_preference_combine(trainer: object, weights: Mapping[str, float]) -> bool:
+    """v0.53.11 #68 — wrap inner trainer's ``compute_loss`` for TRUE weighted blend.
+
+    Replaces the v0.40.1 primary-loss approximation with a per-batch
+    weighted sum across all named losses. After the inner trainer's
+    ``compute_loss`` runs (computing the primary forward pass), we:
+
+    1. Read the policy + reference summed log-probs that TRL stashes on
+       the trainer / batch (``policy_chosen_logps``, ``policy_rejected_logps``,
+       ``ref_chosen_logps``, ``ref_rejected_logps``).
+    2. For each weighted loss in ``weights``, compute its term via the
+       matching ``compute_*_term`` helper.
+    3. Combine via :func:`combine_losses` and return the blended scalar.
+
+    When the TRL trainer does not expose the per-batch log-probs (older
+    TRL versions, custom forks), we fall back to the v0.40.1 primary-loss
+    scaling — defence-in-depth so a TRL upgrade does not crash training.
+
+    Idempotent: re-attaching detects the ``_soup_weighted_combine`` marker.
+    """
+    validate_weight_compat(weights)
+    if not hasattr(trainer, "compute_loss"):
+        return False
+    original = trainer.compute_loss
+    if getattr(original, "_soup_weighted_combine", False):
+        return True
+    snapshot = dict(weights)
+
+    def wrapped(model, inputs, return_outputs=False, **kwargs):
+        result = original(model, inputs, return_outputs=return_outputs, **kwargs)
+        if return_outputs:
+            primary_loss, outputs = result
+        else:
+            primary_loss = result
+            outputs = None
+
+        # True weighted-sum path: read per-batch logps from inputs OR the
+        # trainer's last-batch state.
+        pol_chosen = _read_logps(inputs, "policy_chosen_logps")
+        if pol_chosen is None:
+            pol_chosen = _read_logps(inputs, "chosen_logps")
+        pol_rejected = _read_logps(inputs, "policy_rejected_logps")
+        if pol_rejected is None:
+            pol_rejected = _read_logps(inputs, "rejected_logps")
+        ref_chosen = _read_logps(inputs, "reference_chosen_logps")
+        if ref_chosen is None:
+            ref_chosen = _read_logps(inputs, "ref_chosen_logps")
+        ref_rejected = _read_logps(inputs, "reference_rejected_logps")
+        if ref_rejected is None:
+            ref_rejected = _read_logps(inputs, "ref_rejected_logps")
+
+        terms: dict = {}
+        if pol_chosen is not None and pol_rejected is not None:
+            # v0.53.11 review fix (security HIGH) — explicit None check
+            # before float(). The previous `or 0.1` idiom triggered tensor
+            # truth-value evaluation when TRL stored these as zero-element
+            # tensors instead of Python floats.
+            beta_attr = getattr(trainer, "beta", None)
+            beta = float(beta_attr) if beta_attr is not None else 0.1
+            for name in snapshot:
+                try:
+                    if name == "dpo":
+                        if ref_chosen is None or ref_rejected is None:
+                            logger.debug(
+                                "weighted-combine: dpo term skipped — ref logps missing"
+                            )
+                            continue
+                        terms["dpo"] = compute_dpo_term(
+                            pol_chosen, pol_rejected, ref_chosen, ref_rejected, beta
+                        )
+                    elif name == "ipo":
+                        if ref_chosen is None or ref_rejected is None:
+                            logger.debug(
+                                "weighted-combine: ipo term skipped — ref logps missing"
+                            )
+                            continue
+                        terms["ipo"] = compute_ipo_term(
+                            pol_chosen, pol_rejected, ref_chosen, ref_rejected, beta
+                        )
+                    elif name == "simpo":
+                        gamma_attr = getattr(trainer, "simpo_gamma", None)
+                        gamma = (
+                            float(gamma_attr) if gamma_attr is not None else 1.0
+                        )
+                        terms["simpo"] = compute_simpo_term(
+                            pol_chosen, pol_rejected, beta, gamma
+                        )
+                    elif name == "orpo":
+                        alpha_attr = getattr(trainer, "orpo_alpha", None)
+                        alpha = (
+                            float(alpha_attr) if alpha_attr is not None else 1.0
+                        )
+                        terms["orpo"] = compute_orpo_term(
+                            pol_chosen, pol_rejected, alpha
+                        )
+                    elif name == "bco":
+                        # BCO is data-format-incompatible — already rejected
+                        # by validate_weight_compat. Defensive skip.
+                        continue
+                except (TypeError, ValueError) as exc:
+                    logger.debug(
+                        "weighted-combine: %s term skipped — %s", name, exc
+                    )
+                    continue
+
+        if len(terms) == len(snapshot):
+            # All requested terms computed — return true weighted sum.
+            blended = combine_losses(terms, snapshot)
+        else:
+            # Fallback: primary-loss scaling.
+            primary_weight = snapshot.get(_pick_primary(snapshot), 1.0)
+            blended = primary_loss * float(primary_weight)
+        if return_outputs:
+            return blended, outputs
+        return blended
+
+    wrapped._soup_weighted_combine = True  # type: ignore[attr-defined]
+    trainer.compute_loss = wrapped  # type: ignore[assignment]
+    return True
+
+
+def _read_logps(obj, name: str):
+    """Read a log-prob tensor from a mapping / object — TRL inputs vary."""
+    if obj is None:
+        return None
+    if hasattr(obj, "get"):
+        val = obj.get(name)
+        if val is not None:
+            return val
+    return getattr(obj, name, None)
+
+
+def _pick_primary(weights: Mapping[str, float]) -> str:
+    """Return the loss with the highest weight (deterministic on ties)."""
+    return max(sorted(weights), key=lambda k: weights[k])
 
 
 def describe_blend(weights: Optional[Mapping[str, float]]) -> str:

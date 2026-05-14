@@ -813,6 +813,11 @@ def train(
         from soup_cli.trainer.distill import DistillTrainerWrapper
 
         trainer_wrapper = DistillTrainerWrapper(cfg, **trainer_kwargs)
+    elif cfg.task == "prm":
+        # v0.53.11 #126 — Process Reward Model trainer.
+        from soup_cli.trainer.prm import PRMTrainerWrapper
+
+        trainer_wrapper = PRMTrainerWrapper(cfg, **trainer_kwargs)
     elif cfg.task in ("classifier", "reranker", "cross_encoder"):
         # v0.53.2 #132 — sequence-classification head.
         from soup_cli.trainer.classifier import ClassifierTrainerWrapper

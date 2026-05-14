@@ -105,11 +105,14 @@ def test_validate_grpo_variant_bool_rejected():
 
 
 def test_deferred_live_invariant():
-    """tdd-guide LOW fix: catch future drift in allowlist split."""
+    """tdd-guide LOW fix: catch future drift in allowlist split.
+
+    v0.53.11 #123 lifted every entry — ``_DEFERRED_LIVE`` is now empty
+    because all 6 variants ship with live math kernels.
+    """
     from soup_cli.utils.grpo_variants import _DEFERRED_LIVE
     assert len(SUPPORTED_GRPO_VARIANTS) == 7
-    assert len(_DEFERRED_LIVE) == 6
-    assert "standard" not in _DEFERRED_LIVE
+    assert _DEFERRED_LIVE == frozenset()
 
 
 def test_variant_spec_description_and_requires_delta():
@@ -164,8 +167,9 @@ def test_standard_is_live_wired():
 
 
 @pytest.mark.parametrize("name", ["gspo", "dapo", "dr_grpo", "bnpo", "two_sided", "rft"])
-def test_v0500_variants_deferred(name):
-    assert variant_is_live_wired(name) is False
+def test_v0500_variants_now_live(name):
+    """v0.53.11 #123 lifted every deferred variant — all are live wired now."""
+    assert variant_is_live_wired(name) is True
 
 
 def test_variant_is_live_wired_non_string():
@@ -174,18 +178,29 @@ def test_variant_is_live_wired_non_string():
 
 def test_apply_variant_loss_standard_is_noop():
     # standard variant returns None (delegates to existing GRPOTrainerWrapper).
-    assert apply_variant_loss("standard") is None
-
-
-@pytest.mark.parametrize("name", ["gspo", "dapo", "dr_grpo", "bnpo", "two_sided", "rft"])
-def test_apply_variant_loss_deferred_raises(name):
-    with pytest.raises(NotImplementedError, match="v0.50.1"):
-        apply_variant_loss(name)
+    # v0.53.11 #123 changed the signature to require logp_new/logp_old/advantages
+    # as kwargs.
+    torch = pytest.importorskip("torch")
+    logp_new = torch.zeros(2, 4)
+    logp_old = torch.zeros(2, 4)
+    advantages = torch.zeros(2)
+    assert apply_variant_loss(
+        "standard",
+        logp_new=logp_new,
+        logp_old=logp_old,
+        advantages=advantages,
+    ) is None
 
 
 def test_apply_variant_loss_unknown_raises_validation():
+    torch = pytest.importorskip("torch")
     with pytest.raises(ValueError, match="not supported"):
-        apply_variant_loss("trpo")
+        apply_variant_loss(
+            "trpo",
+            logp_new=torch.zeros(2, 4),
+            logp_old=torch.zeros(2, 4),
+            advantages=torch.zeros(2),
+        )
 
 
 # ---------------------------------------------------------------------------

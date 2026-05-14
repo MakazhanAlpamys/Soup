@@ -131,6 +131,59 @@ def attach_curriculum_callback(
     return True
 
 
+def attach_grpo_stability_callback(trainer: Any, tcfg: Any) -> bool:
+    """Attach :class:`GRPOStabilityCallback` when any v0.50.0 Part D knob is set.
+
+    Returns ``True`` when a callback was attached, ``False`` otherwise.
+    Mirrors the v0.40.6 / v0.53.5 / v0.53.6 callback-attach pattern.
+
+    The schema-level cross-validator already gates these fields to
+    ``task='grpo'`` on non-mlx backends, so this helper trusts the caller.
+    """
+    stability_fields = (
+        "ref_model_ema_alpha",
+        "replay_buffer_size",
+        "async_grpo_prefetch",
+        "tis_threshold",
+        "mask_truncated_completions",
+        "defer_rerolling",
+        "skip_zero_advantage",
+        "off_policy_mask_threshold",
+    )
+    # `is None` policy (matches v0.40.6 review-fix policy on `attach_relora_callback`)
+    has_any = False
+    for field_name in stability_fields:
+        val = getattr(tcfg, field_name, None)
+        # bools count as set when True; numeric fields count when not None.
+        if isinstance(val, bool):
+            if val:
+                has_any = True
+                break
+        elif val is not None:
+            has_any = True
+            break
+    if not has_any:
+        return False
+    from soup_cli.monitoring.grpo_stability_callback import GRPOStabilityCallback
+
+    try:
+        callback = GRPOStabilityCallback(
+            ref_model_ema_alpha=tcfg.ref_model_ema_alpha,
+            replay_buffer_size=tcfg.replay_buffer_size,
+            async_grpo_prefetch=bool(tcfg.async_grpo_prefetch),
+            tis_threshold=tcfg.tis_threshold,
+            mask_truncated_completions=bool(tcfg.mask_truncated_completions),
+            defer_rerolling=bool(tcfg.defer_rerolling),
+            skip_zero_advantage=bool(tcfg.skip_zero_advantage),
+            off_policy_mask_threshold=tcfg.off_policy_mask_threshold,
+        )
+    except (TypeError, ValueError) as exc:
+        logger.debug("attach_grpo_stability_callback rejected: %s", exc)
+        return False
+    trainer.add_callback(callback)
+    return True
+
+
 def attach_plugin_callback(trainer: Any, console: Any = None) -> bool:
     """Attach :class:`SoupPluginCallback` when any enabled plugin implements a hook.
 

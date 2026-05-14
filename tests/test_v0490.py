@@ -372,12 +372,19 @@ class TestLongLoraHelpers:
         with pytest.raises(ValueError, match=match):
             validate_longlora_compat(**kwargs)
 
-    def test_apply_longlora_forward_override_deferred(self):
-        """Live forward override is a v0.49.1 deliverable; stub raises NotImplementedError."""
-        from soup_cli.utils.longlora import apply_longlora_forward_override
+    def test_apply_longlora_forward_override_now_live(self):
+        """v0.53.11 #119 lifted the stub — returns a LongLoRAForwardOverride context."""
+        from soup_cli.utils.longlora import (
+            LongLoRAForwardOverride,
+            apply_longlora_forward_override,
+        )
 
-        with pytest.raises(NotImplementedError, match="v0.49.1"):
-            apply_longlora_forward_override(model=object())
+        class _StubModel:
+            def modules(self):
+                return iter([])
+
+        result = apply_longlora_forward_override(_StubModel(), group_size=4)
+        assert isinstance(result, LongLoRAForwardOverride)
 
 
 # =====================================================================

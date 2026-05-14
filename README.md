@@ -42,15 +42,14 @@ soup train
 
 Latest highlights only. Full history: [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 
-**v0.53.10 — Quick wins + packaging + UX wiring**: Seven small wins that close the long tail of v0.40 → v0.53 deferred packaging / UX issues.
+**v0.53.11 — GRPO Plus finish + preference live**: Five deep TRL trainer subclassing tasks lifted from the v0.50.0 / v0.49.0 / v0.40.1 deferred stubs.
 
-- **`[mix]` + `[data-pro]` extras.** `pip install soup-cli[mix]` bundles `scikit-optimize` so `soup data mix --optimize` runs the real Bayesian loop instead of the v0.48.0 Dirichlet fallback. `pip install soup-cli[data-pro]` bundles `langdetect` (probabilistic language detection, broader coverage than the in-tree stopword heuristic) and `presidio-analyzer` (Microsoft Presidio entity recognition for PII — locations, dates, IBAN, etc. on top of the v0.47.0 email / phone / SSN / credit-card regex baseline). Both helpers fall through silently when the optional package is missing.
-- **PostHog env override.** `SOUP_POSTHOG_KEY` + `SOUP_POSTHOG_ENDPOINT` env vars let operators point opt-in telemetry at their own PostHog project without a code change. Endpoint goes through the v0.51.0 SSRF policy (HTTPS-only, loopback HTTP only, RFC1918 / link-local rejection). Keys reject null bytes, control characters, and oversize (>256 char) input. A new sentinel-based default cleanly distinguishes "caller omitted endpoint" from "caller passed the default URL" so a `endpoint=_POSTHOG_ENDPOINT` explicit pin is NOT silently overridden by env.
-- **`--hub` flag on `chat` / `serve` / `infer` / `merge` / `export` / `push`.** Closes the v0.53.8 known-limitation that only `train` and `data download` could route through non-HF hubs (ModelScope / Modelers). New `utils/hubs.prefetch_model_from_hub` is the shared, cwd-contained snapshot helper; every command body invokes the public `apply_hub_to_cli_model` adapter at the top. `push --hub` uses the `utils.hubs.upload_repo` upload-direction adapter; non-HF uploads skip HF-specific Collections + model-card auto-render.
-- **`soup data download --hub <non-hf>` live SDK.** Lifts the v0.53.8 advisory-only path — `--hub modelscope` now goes through `modelscope.msdatasets.MsDataset.load(...)`, `--hub modelers` uses `openmind_hub.snapshot_download(repo_type="dataset", ...)`. Friendly `pip install <sdk>` advisory fires when the SDK is missing.
-- **Web UI Tool Outputs panel.** New "Tool Outputs" tab in `soup ui` polls `/api/tool-outputs?limit=100` every 3 seconds and renders the most recent tool-call records (name / started / duration / OK / output preview) in an XSS-safe table built via `document.createElement` + `textContent` (no `innerHTML` for user-controlled fields). Bearer token threaded via the v0.53.9 `window._authToken` bootstrap.
-- **SFT callback `record_call` wiring.** `monitoring/callback.SoupTrainerCallback` now exposes an `on_step_end` hook that peeks at `kwargs.get("inputs", {})` for a `tool_calls` field and routes the count through the v0.53.9 global tool buffer so the Web UI panel populates from real training batches. Best-effort with blanket `except Exception: # noqa: BLE001` — training must never crash on observation failure.
-- **+45 net new tests** (8285 → 8330) in `test_v05310.py`. Four review agents ran (python / code / security / tdd / verification-loop); 13 findings fixed: H1 (PostHog explicit-endpoint precedence — sentinel default), H2 (absolute `local_path` leak — reduced to relpath), H3 (Rich markup escape on `base` / `local_path` / `cache_dir`), H4 (callback `# noqa: BLE001` per project policy), MED `import time` moved out of `try` block, oversize / explicit-empty `api_key` rejection tests, source-grep regression guards (every non-push command imports `apply_hub_to_cli_model`; `data.py` no longer carries the legacy `"wait for v0.53.9"` advisory), `prefetch_model_from_hub` outside-cwd `cache_root` rejection, empty-list + bool-True `tool_calls` no-op tests.
+- **Live GRPO objective variants.** `apply_variant_loss` ships real math kernels for `gspo` (group-stabilised importance ratio), `dapo` (decoupled asymmetric clip), `dr_grpo` (no length-norm), `bnpo` (length-normalised PPO), `two_sided` (symmetric `grpo_delta` clip), `rft` (rejection-sampling fine-tuning). New `_GRPOTrainerVariant` subclass (built via `make_grpo_trainer_variant` `lru_cache` factory) overrides `compute_loss` to route through the kernel; defensive fallback to original loss when TRL renames input attributes.
+- **`task='prm'` Process Reward Model trainer.** New `PRMTrainerWrapper` loads `AutoModelForCausalLM` + `nn.Linear(hidden, 1)` reward head; `make_prm_trainer_class(HF Trainer)` factory subclasses the trainer and overrides `compute_loss` to gather hidden states at step boundaries, project to scalars, and MSE against per-step labels. `_prepare_prm_dataset` tokenises `{prompt, completions, labels}` with reserved-token truncation; `_build_collator` pads everything (with `-1` sentinel for missing step positions).
+- **GRPOStabilityCallback live.** EMA reference-model update fires post-step (`(1-α)·ref + α·policy` per parameter; `load_state_dict(strict=False)` for LoRA-state-dict resilience). Replay buffer (bounded deque), TIS alert counter, and `ema_alpha` surfaced via `state.log_history` so the v0.34.0 anomaly explainer can flag instability. Attach helper `attach_grpo_stability_callback` follows the v0.40.6 / v0.53.5 / v0.53.6 pattern.
+- **LongLoRA forward override live.** New `shift_heads_for_s2` math kernel rolls the second half of attention heads by `group_size // 2` along the sequence dim per the LongLoRA paper §3.2. `LongLoRAForwardOverride` context manager monkey-patches every `Llama*Attention` / `Mistral*Attention` / `Qwen*Attention` / `Phi*Attention` module's `forward` with restore-on-exit, idempotent `__del__` cleanup, and best-effort exception swallow (training never crashes from a shape mismatch).
+- **True weighted-sum preference combine.** `attach_weighted_preference_combine` now reads `policy_chosen_logps` / `policy_rejected_logps` / `reference_chosen_logps` / `reference_rejected_logps` from TRL inputs and computes each requested loss via the matching `compute_dpo_term` / `compute_ipo_term` / `compute_simpo_term` / `compute_orpo_term` kernel, then combines via `combine_losses(terms, weights)`. BCO mixed with paired losses still rejected at validation time. Defence-in-depth fallback to the v0.40.1 primary-loss scaling when TRL renames the logps attributes.
+- **+75 net new tests** (8330 → 8400) in `test_v05311.py` (54 initial + 21 review-fix coverage gaps from python/code/security/tdd agents) covering all five features plus the lifted-stub regression updates across `test_v0490.py` / `test_v0500_part_a.py` / `test_v0500_part_e.py`. Math kernels are real and unit-tested; full GPU smoke runs on SmolLM2-135M + gsm8k / 200-row PRM JSONL / TinyLlama-1.1B + 8k context are documented in the plan as the v0.53.11.1 follow-up (kernel + dispatch correctness verified on CPU).
 
 ## Why Soup?
 
@@ -365,6 +364,87 @@ training:
   gdpo_variant: length_normalized
   dpo_beta: 0.1
 ```
+
+## GRPO Objective Variants
+
+Soup ships live math kernels for 6 GRPO objective variants in addition to the
+default. Set `grpo_variant` in `training` and the trainer automatically
+subclasses `trl.GRPOTrainer` to route `compute_loss` through the matching
+kernel:
+
+```yaml
+task: grpo
+training:
+  reward_fn: accuracy
+  num_generations: 4
+  grpo_variant: gspo         # group-stabilised importance ratio
+  # or: dapo / dr_grpo / bnpo / rft / two_sided
+  # grpo_delta: 0.2          # required when grpo_variant=two_sided
+```
+
+Variants:
+
+- **standard** — DeepSeek-R1-style baseline (delegates to TRL's `compute_loss`).
+- **gspo** — group-stabilised importance ratio with per-batch control variate.
+- **dapo** — decoupled asymmetric clipping (`eps_lo=0.2, eps_hi=0.28`).
+- **dr_grpo** — token-sum without per-sample length normalisation.
+- **bnpo** — length-normalised PPO surrogate.
+- **two_sided** — symmetric clipping with operator-supplied `grpo_delta`.
+- **rft** — rejection-sampling fine-tuning (only positive-advantage tokens contribute).
+
+The stability callback (EMA ref-model update, replay buffer, TIS alert counter)
+attaches automatically when any of `ref_model_ema_alpha` / `replay_buffer_size`
+/ `tis_threshold` / etc. is set.
+
+## Process Reward Model (PRM)
+
+Train a scalar reward head over stepwise-supervised reasoning chains. Data
+format is the v0.42.0 `prm` shape — one row per `{prompt, completions: [step1,
+step2, ...], labels: [r1, r2, ...]}`:
+
+```yaml
+task: prm
+data:
+  format: prm
+  train: ./prm_train.jsonl
+  max_length: 2048
+training:
+  epochs: 1
+  lr: 1.0e-5
+```
+
+The trainer loads `AutoModelForCausalLM`, attaches an `nn.Linear(hidden, 1)`
+reward head, and computes MSE between predicted scalars at step-boundary tokens
+and the per-step labels.
+
+## LongLoRA Forward Override
+
+When `use_longlora: true` is set on an SFT config with a Llama / CodeLlama /
+Mistral / Qwen / Phi base, the trainer wraps the model in a
+`LongLoRAForwardOverride` context that monkey-patches every attention forward
+to apply the S² shifted-sparse shift (paper §3.2) — half the heads are rolled
+by `group_size // 2` along the sequence dim. Restoration on context exit is
+idempotent and best-effort safe; FlashAttention v3 builds are rejected at the
+schema gate (the custom-mask kernels conflict).
+
+## Weighted Multi-Objective Preference Loss
+
+Mix DPO / SimPO / ORPO / IPO terms in one training run by setting
+`preference_loss_weights` (must sum to 1.0):
+
+```yaml
+task: preference
+training:
+  preference_loss_weights:
+    dpo: 0.6
+    simpo: 0.4
+```
+
+The combine wrapper reads policy + reference summed log-probs from the inner
+TRL trainer's per-batch inputs and computes a true weighted sum via the
+in-tree `compute_dpo_term` / `compute_simpo_term` / `compute_orpo_term` /
+`compute_ipo_term` kernels. BCO cannot be mixed with paired losses (data
+format incompatible — rejected at config load).
 
 ## MoE Model Support
 

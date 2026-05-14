@@ -160,16 +160,55 @@ def validate_vision_grpo_compat(
         )
 
 
-def build_prm_trainer() -> None:
-    """Live PRM trainer factory — deferred to v0.50.1.
+def build_prm_trainer(*, config, **kwargs):
+    """Live PRM trainer factory (v0.53.11 #126).
 
-    Planned v0.50.1 signature:
-    ``build_prm_trainer(*, config, model, tokenizer, train_dataset, eval_dataset)``.
-
-    Raises ``NotImplementedError`` so callers cannot silently train an
-    SFT model when they asked for PRM.
+    Returns a configured :class:`PRMTrainerWrapper`. Rejects unknown kwargs
+    with ``TypeError`` so the factory contract is explicit (matches
+    v0.53.2 build_distill_trainer policy).
     """
-    raise NotImplementedError(
-        "PRM trainer (task='prm') live wiring deferred to v0.50.1. "
-        "Schema accepts the value but no trainer wrapper is registered yet."
-    )
+    from soup_cli.trainer.prm import PRMTrainerWrapper
+
+    allowed = {
+        "device",
+        "report_to",
+        "deepspeed_config",
+        "fsdp_config",
+        "trust_remote_code",
+    }
+    unknown = set(kwargs) - allowed
+    if unknown:
+        raise TypeError(
+            f"build_prm_trainer got unexpected kwargs: {sorted(unknown)}"
+        )
+    return PRMTrainerWrapper(config, **kwargs)
+
+
+def compute_prm_loss(predictions, labels, *, mask=None):
+    """Per-step PRM MSE loss kernel (v0.53.11 #126).
+
+    Used by ``PRMTrainerWrapper`` to score per-step rewards against scalar
+    labels. ``predictions`` and ``labels`` are aligned 1-D / 2-D tensors;
+    ``mask`` (optional) zeros out padding positions.
+
+    Returns a scalar torch tensor — mean of squared residuals over
+    non-masked positions.
+    """
+    if not hasattr(predictions, "shape") or not hasattr(labels, "shape"):
+        raise TypeError("predictions and labels must be tensors")
+    if predictions.shape != labels.shape:
+        raise ValueError(
+            f"shape mismatch: predictions={tuple(predictions.shape)} vs "
+            f"labels={tuple(labels.shape)}"
+        )
+    diff = (predictions - labels) ** 2
+    if mask is None:
+        return diff.mean()
+    if mask.shape != predictions.shape:
+        raise ValueError(
+            f"mask shape {tuple(mask.shape)} != predictions shape "
+            f"{tuple(predictions.shape)}"
+        )
+    masked = diff * mask
+    denom = mask.sum().clamp(min=1.0)
+    return masked.sum() / denom

@@ -114,9 +114,26 @@ training:
     assert cfg.task == "ppo"
 
 
-def test_build_prm_trainer_deferred():
-    with pytest.raises(NotImplementedError, match="v0.50.1"):
-        build_prm_trainer()
+def test_build_prm_trainer_now_live():
+    """v0.53.11 #126 lifted the stub — factory now returns a PRMTrainerWrapper."""
+    from soup_cli.trainer.prm import PRMTrainerWrapper
+
+    class _Cfg:
+        base = "hf-internal-testing/tiny-random-gpt2"
+        task = "prm"
+
+    wrapper = build_prm_trainer(config=_Cfg())
+    assert isinstance(wrapper, PRMTrainerWrapper)
+
+
+def test_build_prm_trainer_rejects_unknown_kwargs():
+    """v0.53.11 #126 — explicit factory contract."""
+
+    class _Cfg:
+        base = "test"
+
+    with pytest.raises(TypeError, match="unexpected"):
+        build_prm_trainer(config=_Cfg(), bogus=1)
 
 
 # ---------------------------------------------------------------------------
