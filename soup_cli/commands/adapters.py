@@ -1,10 +1,11 @@
-"""soup adapters — LoRA adapter management (list, info, compare)."""
+"""soup adapters — LoRA adapter management (list, info, compare, diff, merge, blame, branch)."""
 
 import json
 from pathlib import Path
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
@@ -208,4 +209,321 @@ def compare(
     size2 = _get_adapter_size(path2)
     table.add_row("Size on disk", size1, size2)
 
+    console.print(table)
+
+
+@app.command()
+def diff(
+    adapter_a: str = typer.Argument(..., help="Path to first adapter"),
+    adapter_b: str = typer.Argument(..., help="Path to second adapter"),
+    top_k: int = typer.Option(10, "--top-k", min=1, max=200,
+                              help="Number of top changed projections to report"),
+    output_format: str = typer.Option("table", "--format",
+                                      help="Output format: table | json | markdown"),
+    output: str = typer.Option(None, "--output", "-o",
+                               help="Write report to file (json/markdown only)"),
+):
+    """Per-layer ΔW Frobenius diff + effective-rank drift (v0.57.0)."""
+    from soup_cli.utils.adapter_diff import (
+        compute_adapter_diff,
+        render_report_json,
+        render_report_markdown,
+    )
+    from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
+
+    fmt = output_format.lower()
+    if fmt not in ("table", "json", "markdown"):
+        console.print(f"[red]Unknown --format: {escape(fmt)}[/]")
+        raise typer.Exit(2)
+
+    try:
+        report = compute_adapter_diff(adapter_a, adapter_b, top_k=top_k)
+    except FileNotFoundError as exc:
+        console.print(f"[red]{escape(str(exc))}[/]")
+        raise typer.Exit(1) from exc
+    except (ValueError, TypeError) as exc:
+        console.print(f"[red]{escape(str(exc))}[/]")
+        raise typer.Exit(2) from exc
+    except RuntimeError as exc:
+        console.print(f"[red]{escape(str(exc))}[/]")
+        raise typer.Exit(1) from exc
+
+    if fmt == "json":
+        text = render_report_json(report)
+    elif fmt == "markdown":
+        text = render_report_markdown(report)
+    else:
+        text = None
+
+    if output is not None:
+        if fmt == "table":
+            console.print("[red]--output requires --format json or markdown[/]")
+            raise typer.Exit(2)
+        enforce_under_cwd_and_no_symlink(output, "output")
+        # Atomic write via tempfile + os.replace — a crash mid-write must
+        # not leave a partial report at the target path (review fix MEDIUM).
+        import os as _os
+        import tempfile as _tf
+        target = Path(output)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp = _tf.mkstemp(dir=str(target.parent), prefix=".tmp_")
+        try:
+            with _os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(text)
+            _os.replace(tmp, str(target))
+        except Exception:
+            try:
+                _os.unlink(tmp)
+            except OSError:
+                pass
+            raise
+        console.print(f"[green]Wrote {fmt} report to {escape(output)}[/]")
+        return
+
+    if fmt != "table":
+        console.print(text)
+        return
+
+    # Default Rich table
+    table = Table(title=f"Adapter diff: {escape(report.adapter_a)} vs {escape(report.adapter_b)}")
+    table.add_column("Layer", style="bold")
+    table.add_column("ΔW Frobenius", justify="right")
+    table.add_column("Relative", justify="right")
+    for layer in sorted(report.per_layer, key=lambda d: d.frobenius, reverse=True)[:top_k]:
+        table.add_row(
+            escape(layer.name),
+            f"{layer.frobenius:.4f}",
+            f"{layer.relative:.2%}",
+        )
+    console.print(table)
+    if report.effective_rank_a is not None and report.effective_rank_b is not None:
+        console.print(
+            f"Effective rank: A={report.effective_rank_a:.2f}, "
+            f"B={report.effective_rank_b:.2f}"
+        )
+    console.print(
+        f"Shared layers: {report.shared_layers} | "
+        f"only-in-A: {len(report.only_in_a)} | only-in-B: {len(report.only_in_b)}"
+    )
+
+
+@app.command()
+def merge(
+    adapters: list[str] = typer.Argument(..., help="Two or more adapter paths to merge"),
+    output: str = typer.Option(..., "--output", "-o", help="Output directory for merged adapter"),
+    strategy: str = typer.Option("linear", "--strategy",
+                                 help="linear | ties | dare | svd"),
+    weights: str = typer.Option(None, "--weights",
+                                help="Comma-separated weights (default: equal)"),
+    density: float = typer.Option(0.2, "--density",
+                                  help="Trim density for ties/dare in (0, 1]"),
+    seed: int = typer.Option(0, "--seed", help="Random seed for dare"),
+    rank: int = typer.Option(None, "--rank", help="SVD rank (svd strategy only)"),
+):
+    """Merge LoRA adapters via linear / ties / dare / svd (v0.57.0)."""
+    from soup_cli.utils.adapter_merge import SUPPORTED_STRATEGIES, merge_adapters
+
+    if strategy not in SUPPORTED_STRATEGIES:
+        console.print(
+            f"[red]Unknown --strategy: {escape(strategy)}. "
+            f"Choose from: {', '.join(SUPPORTED_STRATEGIES)}[/]"
+        )
+        raise typer.Exit(2)
+
+    if len(adapters) < 2:
+        console.print("[red]Need at least 2 adapter paths to merge[/]")
+        raise typer.Exit(2)
+
+    parsed_weights = None
+    if weights:
+        try:
+            parsed_weights = [float(w.strip()) for w in weights.split(",")]
+        except ValueError as exc:
+            console.print(f"[red]Invalid --weights: {escape(str(exc))}[/]")
+            raise typer.Exit(2) from exc
+
+    try:
+        report = merge_adapters(
+            adapters,
+            output,
+            strategy=strategy,  # type: ignore[arg-type]
+            weights=parsed_weights,
+            density=density,
+            seed=seed,
+            rank=rank,
+        )
+    except FileNotFoundError as exc:
+        console.print(f"[red]{escape(str(exc))}[/]")
+        raise typer.Exit(1) from exc
+    except (ValueError, TypeError) as exc:
+        console.print(f"[red]{escape(str(exc))}[/]")
+        raise typer.Exit(2) from exc
+
+    panel = Panel(
+        f"Strategy:       [bold]{escape(report.strategy)}[/]\n"
+        f"Inputs:         {len(report.adapters)}\n"
+        f"Merged layers:  [bold]{report.merged_layers}[/]\n"
+        f"Skipped layers: {len(report.skipped_layers)}\n"
+        f"Verdict:        [yellow]{report.verdict}[/] (live eval in v0.57.1)\n"
+        f"Output:         [bold]{escape(report.output_dir)}[/]",
+        title="Adapter merge",
+    )
+    console.print(panel)
+
+
+@app.command()
+def blame(
+    adapter_dir: str = typer.Argument(..., help="Path to trained adapter"),
+    dataset: str = typer.Option(..., "--dataset", help="Training JSONL the adapter was built on"),
+    layer: str = typer.Option(..., "--layer", help="Layer to attribute (e.g. q_proj.7)"),
+    budget: str = typer.Option("4h", "--budget", help="Wall-clock budget (e.g. 4h, 30m)"),
+    num_shards: int = typer.Option(10, "--shards", min=2, max=100,
+                                   help="Number of dataset shards for leave-one-out"),
+    plan_only: bool = typer.Option(False, "--plan-only",
+                                   help="Print plan and exit (live runner in v0.57.1)"),
+):
+    """Attribute weight movement to dataset shards via leave-one-out ablation (v0.57.0)."""
+    from soup_cli.utils.blame import parse_budget, plan_blame, run_blame
+
+    try:
+        seconds = parse_budget(budget)
+    except (TypeError, ValueError) as exc:
+        console.print(f"[red]Invalid --budget: {escape(str(exc))}[/]")
+        raise typer.Exit(2) from exc
+
+    try:
+        plan = plan_blame(
+            adapter_dir, dataset,
+            layer=layer, budget_seconds=seconds, num_shards=num_shards,
+        )
+    except FileNotFoundError as exc:
+        console.print(f"[red]{escape(str(exc))}[/]")
+        raise typer.Exit(1) from exc
+    except (ValueError, TypeError) as exc:
+        console.print(f"[red]{escape(str(exc))}[/]")
+        raise typer.Exit(2) from exc
+
+    table = Table(title=f"Blame plan: {escape(plan.layer)}")
+    table.add_column("Shard", justify="right")
+    table.add_column("Hold-out offset", justify="right")
+    table.add_column("Hold-out rows", justify="right")
+    table.add_column("Projected seconds", justify="right")
+    for shard in plan.shards:
+        table.add_row(
+            str(shard.shard_id),
+            str(shard.holdout_offset),
+            str(shard.holdout_size),
+            str(shard.projected_seconds),
+        )
+    console.print(table)
+    status_color = "green" if plan.feasible else "yellow"
+    console.print(
+        f"Budget {plan.budget_seconds}s, "
+        f"{plan.per_shard_seconds}s/shard — "
+        f"[{status_color}]{escape(plan.reason)}[/]"
+    )
+
+    if plan_only or not plan.feasible:
+        return
+
+    try:
+        run_blame(plan)
+    except NotImplementedError as exc:
+        console.print(f"[yellow]{escape(str(exc))}[/]")
+        raise typer.Exit(0) from None
+
+
+@app.command()
+def branch(
+    name: str = typer.Argument(..., help="Branch name (alphanumeric + ._-)"),
+    config: str = typer.Option(..., "--config", "-c", help="Path to soup.yaml"),
+    base: str = typer.Option(..., "--base", help="Base model id"),
+    dataset: str = typer.Option(None, "--dataset", help="Training dataset path (optional)"),
+):
+    """Snapshot a training environment as a comparable branch (v0.57.0)."""
+    from soup_cli.utils.adapter_branch import create_branch
+
+    try:
+        snap = create_branch(name, config_path=config, base_model=base,
+                             dataset_path=dataset)
+    except FileNotFoundError as exc:
+        console.print(f"[red]{escape(str(exc))}[/]")
+        raise typer.Exit(1) from exc
+    except (TypeError, ValueError) as exc:
+        console.print(f"[red]{escape(str(exc))}[/]")
+        raise typer.Exit(2) from exc
+
+    console.print(
+        Panel(
+            f"Name:    [bold]{escape(snap.name)}[/]\n"
+            f"Base:    [bold]{escape(snap.base_model)}[/]\n"
+            f"Config:  [bold]{escape(snap.config_path)}[/]\n"
+            f"SHA:     [dim]{snap.config_sha256[:16]}...[/]\n"
+            f"Dataset SHA: [dim]"
+            f"{snap.dataset_sha256[:16] + '...' if snap.dataset_sha256 else '—'}[/]\n"
+            f"Version: {snap.soup_version}",
+            title="Adapter branch",
+        )
+    )
+
+
+@app.command()
+def checkout(
+    name: str = typer.Argument(..., help="Branch name to check out"),
+    output: str = typer.Option("soup.yaml", "--output", "-o",
+                               help="Where to write the restored config"),
+):
+    """Restore a snapshotted branch's config into cwd (v0.57.0)."""
+    from soup_cli.utils.adapter_branch import load_branch, write_checkout
+
+    try:
+        snap = load_branch(name)
+    except FileNotFoundError as exc:
+        console.print(f"[red]{escape(str(exc))}[/]")
+        raise typer.Exit(1) from exc
+    except (TypeError, ValueError) as exc:
+        console.print(f"[red]{escape(str(exc))}[/]")
+        raise typer.Exit(2) from exc
+
+    try:
+        target = write_checkout(snap, output)
+    except FileNotFoundError as exc:
+        console.print(f"[red]{escape(str(exc))}[/]")
+        raise typer.Exit(1) from exc
+    except (ValueError, TypeError) as exc:
+        console.print(f"[red]{escape(str(exc))}[/]")
+        raise typer.Exit(2) from exc
+
+    console.print(
+        f"[green]Restored branch {escape(snap.name)} → {escape(str(target))}[/]"
+    )
+
+
+@app.command(name="branches")
+def list_branches_cmd():
+    """List all snapshotted branches (v0.57.0)."""
+    from soup_cli.utils.adapter_branch import list_branches, load_branch
+
+    names = list_branches()
+    if not names:
+        console.print("[dim]No branches yet.[/]")
+        return
+
+    table = Table(title=f"Adapter branches ({len(names)})")
+    table.add_column("Name", style="bold")
+    table.add_column("Base model")
+    table.add_column("Config SHA")
+    table.add_column("Data SHA")
+    for branch_name in names:
+        try:
+            snap = load_branch(branch_name)
+            ds = snap.dataset_sha256[:8] + "..." if snap.dataset_sha256 else "—"
+            table.add_row(
+                escape(snap.name),
+                escape(snap.base_model),
+                snap.config_sha256[:8] + "...",
+                ds,
+            )
+        except (ValueError, FileNotFoundError, OSError):
+            table.add_row(escape(branch_name), "[red]error[/]", "-", "-")
     console.print(table)
