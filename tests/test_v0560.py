@@ -721,6 +721,15 @@ class TestTrainDiagnoseGate:
         monkeypatch.setenv("LOCAL_RANK", "0")
         assert _should_run_diagnose_gate_on_rank() is True
 
+    def test_diagnose_gate_handles_malformed_local_rank(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Garbage LOCAL_RANK falls back to True -- safer to over-run than skip."""
+        from soup_cli.commands.train import _should_run_diagnose_gate_on_rank
+
+        monkeypatch.setenv("LOCAL_RANK", "not-an-int")
+        assert _should_run_diagnose_gate_on_rank() is True
+
     def test_run_diagnose_gate_rejects_non_dict_payload(
         self, tmp_path: Path
     ) -> None:

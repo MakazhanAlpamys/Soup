@@ -952,8 +952,20 @@ def train(
 
 
 def _should_run_diagnose_gate_on_rank() -> bool:
-    """Return true only for rank 0 in distributed launches."""
-    return int(os.environ.get("LOCAL_RANK", "0")) == 0
+    """Return True only for LOCAL_RANK=0 in distributed launches.
+
+    Uses LOCAL_RANK (per-machine rank) -- not RANK (global rank across all
+    nodes) -- because the diagnose gate reads the local training output
+    directory. We want one gate per machine, not one across the whole
+    cluster. For typical single-machine multi-GPU runs both are equivalent.
+
+    Defaults to True (run gate) on any parse error: a malformed env var is
+    safer to over-run than to silently skip.
+    """
+    try:
+        return int(os.environ.get("LOCAL_RANK", "0")) == 0
+    except ValueError:
+        return True
 
 
 def _run_diagnose_gate(
