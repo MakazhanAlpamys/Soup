@@ -937,7 +937,7 @@ def train(
     )
 
     # --- v0.56.0 --diagnose-gate: post-training failure-mode check ---
-    if diagnose_gate:
+    if diagnose_gate and _should_run_diagnose_gate_on_rank():
         try:
             _run_diagnose_gate(
                 diagnose_gate, run_id, cfg.base, result["output_dir"]
@@ -951,6 +951,11 @@ def train(
             raise typer.Exit(1) from exc
 
 
+def _should_run_diagnose_gate_on_rank() -> bool:
+    """Return true only for rank 0 in distributed launches."""
+    return int(os.environ.get("LOCAL_RANK", "0")) == 0
+
+
 def _run_diagnose_gate(
     evidence_path: str, run_id: str, base: str, adapter: str
 ) -> None:
@@ -959,7 +964,9 @@ def _run_diagnose_gate(
     Loads a JSON ``evidence`` file with optional per-mode scores and
     refuses to mark the run successful if any mode comes back MAJOR.
     Missing modes fall back to a neutral OK score so partial evidence
-    still produces a useful report card.
+    still produces a useful report card. The train command only calls
+    this helper on LOCAL_RANK=0 so distributed runs do not execute the
+    gate once per worker.
     """
     import json
 
