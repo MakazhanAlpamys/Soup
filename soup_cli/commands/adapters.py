@@ -94,7 +94,7 @@ def list_adapters(
                 rel_path = adapter_path.relative_to(dir_path)
             except ValueError:
                 rel_path = adapter_path
-            table.add_row(str(rel_path), base, lora_r, peft_type, size)
+            table.add_row(str(rel_path), escape(base), escape(lora_r), escape(peft_type), size)
         except (json.JSONDecodeError, OSError):
             table.add_row(str(adapter_path), "[red]error[/]", "-", "-", "-")
 
@@ -135,12 +135,12 @@ def info(
         modules_str = str(target_modules)
 
     info_text = (
-        f"Base model: [bold]{base_model}[/]\n"
-        f"PEFT type:  [bold]{peft_type}[/]\n"
-        f"Task:       [bold]{task_type}[/]\n"
-        f"LoRA rank:  [bold]{lora_r}[/], alpha: [bold]{lora_alpha}[/], "
-        f"dropout: [bold]{lora_dropout}[/]\n"
-        f"Targets:    [bold]{modules_str}[/]\n"
+        f"Base model: [bold]{escape(base_model)}[/]\n"
+        f"PEFT type:  [bold]{escape(peft_type)}[/]\n"
+        f"Task:       [bold]{escape(task_type)}[/]\n"
+        f"LoRA rank:  [bold]{escape(lora_r)}[/], alpha: [bold]{escape(lora_alpha)}[/], "
+        f"dropout: [bold]{escape(lora_dropout)}[/]\n"
+        f"Targets:    [bold]{escape(modules_str)}[/]\n"
         f"Size on disk: [bold]{size}[/]"
     )
 
@@ -199,8 +199,8 @@ def compare(
 
         # Highlight differences
         if val1_str != val2_str:
-            val1_str = f"[yellow]{val1_str}[/]"
-            val2_str = f"[yellow]{val2_str}[/]"
+            val1_str = f"[yellow]{escape(val1_str)}[/]"
+            val2_str = f"[yellow]{escape(val2_str)}[/]"
 
         table.add_row(label, val1_str, val2_str)
 
