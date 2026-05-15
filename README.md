@@ -42,14 +42,17 @@ soup train
 
 Latest highlights only. Full history: [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 
-**v0.57.0 — `soup adapters`: git for LoRA.** Three years of `lora_v3_final_final2/` ends here. No diff, no merge, no rollback, no attribution from a weight change back to the dataset slice that caused it — until now. v0.57 ships git-shaped UX on top of the v0.22 adapter surface.
+**v0.58.0 — `soup loop`: the production data flywheel, all from the CLI.** Every competitor stops at training. Web tools (Langwatch, Helicone, Galileo) monitor production but don't retrain. Nobody runs the full *production traces → preference pairs → Eval-Gated DPO → canary deploy → rollback* cycle from a single CLI on a laptop. v0.58 connects 8 of Soup's existing uniques into one workflow.
 
-- **`soup adapters diff <a> <b>`** — per-layer ΔW Frobenius norm + relative drift + effective-rank delta via SVD entropy, with top-K changed projections highlighted. Output as a Rich table, machine-readable JSON, or PR-ready Markdown via `--format {table,json,markdown} --output report.json`.
-- **`soup adapters merge <a> <b> [c...] -o <out> --strategy {linear,ties,dare,svd}`** — four merge strategies in pure numpy: weighted linear, TIES (trim/elect-sign/disjoint avg per Yadav et al.), DARE (drop-and-rescale per Yu et al., deterministic via `--seed`), and SVD low-rank reconstruction (`--rank` clamped to min-dim). Output safetensors + `adapter_config.json` both written atomically.
-- **`soup adapters blame <adapter> --dataset <d> --layer q_proj.7 --budget 4h`** — leave-one-out ablation plan: splits the dataset into N shards, estimates per-shard ablation runtime against your wall-clock budget, and emits a per-shard work table with feasibility check. Live ablation runner (training at 1/10 scale per shard with the v0.34 SQLite tracker + v0.26 Registry lineage) is wired in **v0.57.1**.
-- **`soup adapters branch <name> -c soup.yaml --base meta/llama-3.1`** + **`soup adapters checkout <name> -o restored.yaml`** + **`soup adapters branches`** — SHA-256 snapshot pointers under `~/.soup/branches/` (or `SOUP_BRANCHES_DIR`-override, $HOME/$CWD/$TMPDIR-bounded). `checkout` refuses to restore when the source config has drifted from the snapshot SHA (no silent reproducibility loss).
-- **Why blue-ocean.** HF Hub treats every revision as an opaque blob and won't ship weight-aware diffs (it would balkanise their storage backend). DVC / lakeFS are file-system primitives, not LoRA-aware. PEFT exposes `add_weighted_adapter`, mergekit exists — but no VCS-shaped UX wraps them. LLaMA-Factory closed #2038 (weighted merge) as not-planned. Git-semantics-for-tensors is a seam neither the registry nor the kernel teams will build.
-- **+149 new tests** (8849 → 8998) across `tests/test_v0570_part_{a,b,c,d}.py`. 4-agent review-fix wave landed (1 CRITICAL: zero-assertion tests, 9 HIGH including TIES tied-sign positive default + 4× symlink rejections, 11 MEDIUM, 4 LOW): atomic writes + lstat+S_ISLNK rejection on every output, frozen dataclasses with FrozenInstanceError assertions, CRLF/null-byte env-var rejection, bool-as-int rejection on every numeric input, source-grep regression guards for the lazy-import policy.
+- **`soup loop init <served-model> --eval <suite> --baseline registry://<id>`** — one-time setup writing a single `.soup/loop.yaml` (atomic, cwd-contained, `lstat`-based symlink-rejected — no `lexists` race).
+- **`soup loop status`** — counters for traces collected / pairs distilled / runs gated / adapters shipped, plus monthly spend vs. budget and runs-today vs. daily cap, all reading from the same state file the daemon writes.
+- **`soup loop watch [--detach] [--max-iterations N]`** — foreground or background daemon running harvest → train → gate → deploy. `--detach` spawns `python -m soup_cli.cli loop watch --foreground` via argv-list `subprocess.Popen` (no shell). State reloaded every iteration so external `pause` / `resume` takes effect immediately.
+- **`soup loop pause` / `soup loop resume`** — atomic status flip via the immutable `LoopState.with_status` API. Status is a closed allowlist of `running` / `paused` / `stopped`.
+- **`soup loop canary <new-adapter> --traffic 5% --autoroll-on-regress`** — promotes a canary on top of the v0.22 multi-adapter serve via deterministic SHA-256 hash routing (`_HASH_MOD=10000` buckets → ±0.01% split granularity). Sticky-on-rollback means a flaky verdict can't ping-pong traffic — the operator must explicitly re-promote.
+- **`soup loop replay [<iteration-id>]`** — list or pretty-print iteration manifests under `.soup-loops/<iter-id>/iteration.json`, the same layout a v0.26 Soup Can can wrap (Registry-DAG append lands in **v0.58.1**).
+- **Budget guardrails.** `--monthly-budget 50usd` composes with the v0.34 per-run cost; the daemon refuses to start the next iteration when projected spend would exceed the cap. `--max-runs-per-day 3` defends against runaway proxy loops with UTC-day rollover detection.
+- **+195 new tests** (8998 → 9193) in `tests/test_v0580.py`. Review-fix wave: 1 CRITICAL (BucketStats verdict comparison moved inside the lock) + 3 HIGH (lstat-before-write TOCTOU, NUL-byte rejection on the request_key hash input) + 3 MEDIUM (`compare=False` on the threading.Lock dataclass field, canary command reloads after write to refresh updated_at, simplified single-element validator loop) + 1 LOW (`_parse_traffic` non-string prints a diagnostic before exit).
+- **Why blue-ocean.** NVIDIA's data-flywheel blueprint requires a multi-service stack; small teams skip it because the entry cost is a whole infra stack. Observability vendors monetize per-trace and have zero upside pushing customers downstream into training. OpenPipe tried this exact business and pivoted to RL agents before CoreWeave acquired it. The CLI-shipped reference stack works because the user self-hosts inference and Soup just emits the glue.
 
 ## Why Soup?
 
@@ -166,6 +169,37 @@ training:
 
 output: ./output
 ```
+
+## Data Flywheel (`soup loop`)
+
+The full *production traces → preference pairs → Eval-Gated DPO → canary deploy → rollback* loop, driven from a single CLI. Connects v0.26 Trace-to-Preference + Eval-Gated Training + Registry lineage + Quant-Lobotomy verdicts + Soup Cans + v0.25 Autopilot + v0.54 Advise + v0.55 Eval Design + v0.56 Diagnose.
+
+```bash
+# One-time setup
+soup loop init registry://abc12 --eval evals/lock.json --baseline registry://prod \
+    --monthly-budget 50usd --max-runs-per-day 3
+
+# Inspect counters + status
+soup loop status
+
+# Run the daemon (foreground)
+soup loop watch --poll-interval 300
+
+# Background subprocess (writes PID, no shell)
+soup loop watch --detach
+
+# Promote a canary at 5% traffic with auto-rollback on MAJOR verdict
+soup loop canary registry://candidate --traffic 5% --autoroll-on-regress
+
+# Pause/resume the daemon between iterations (atomic state flip)
+soup loop pause
+soup loop resume
+
+# Replay any recorded iteration
+soup loop replay iter-20260515T120000-abcdef01
+```
+
+State lives in `.soup/loop.yaml` (atomic write, cwd-contained, symlink-rejected). Per-iteration manifests under `.soup-loops/<iter-id>/iteration.json` are laid out so a v0.26 Soup Can can wrap them directly. The canary router is deterministic (SHA-256 hash of conversation id) and sticky-on-rollback — a flaky verdict can't ping-pong traffic between adapters.
 
 ## Pre-flight Decision (`soup advise`)
 
@@ -3335,6 +3369,12 @@ soup cost --config soup.yaml --gpu H100      Estimate training cost for specific
 soup adapters list ./output/                 Scan for LoRA adapters
 soup adapters info ./output/checkpoint-500/  Show adapter metadata
 soup adapters compare adapter1/ adapter2/    Compare two adapters
+soup loop init <model> --eval <s> --baseline <b>  Create .soup/loop.yaml (data flywheel)
+soup loop status                              Counters + status (traces / pairs / runs / shipped)
+soup loop watch [--detach] [--max-iter N]    Harvest → train → gate → deploy daemon
+soup loop pause / soup loop resume           Atomic status flip
+soup loop canary <adapter> --traffic 5%      Promote canary + auto-rollback on MAJOR
+soup loop replay [<iter-id>]                 Replay a recorded iteration manifest
 soup serve --model m --adapters chat=./c code=./d  Multi-adapter serving
 soup migrate --from llamafactory config.yaml  Import config from LLaMA-Factory
 soup migrate --from axolotl config.yml        Import config from Axolotl

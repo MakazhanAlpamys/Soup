@@ -221,6 +221,18 @@ app.command(
     ),
 )(_diagnose_cmd.diagnose)
 
+# v0.58.0 — `soup loop` CLI-first data flywheel capstone.
+from soup_cli.commands import loop as _loop_cmd  # noqa: E402
+
+app.add_typer(
+    _loop_cmd.app,
+    name="loop",
+    help=(
+        "Data flywheel: traces -> preference pairs -> DPO -> gate -> "
+        "canary deploy -> rollback, all from the CLI (v0.58.0)."
+    ),
+)
+
 
 def _rewrite_advise_argv(argv: list) -> list:
     """Inject `run` between `advise` and a non-subcommand first argument.
