@@ -888,10 +888,18 @@ class TestSourceGrep:
             )
 
     def test_version_bumped_to_0_55_0(self):
+        # v0.55.0+ floor — released versions are always >= 0.55.0.
+        import re
+
         init_text = (
             self.REPO_ROOT / "soup_cli" / "__init__.py"
         ).read_text(encoding="utf-8")
-        assert '__version__ = "0.55.0"' in init_text
+        match = re.search(r'__version__ = "(\d+)\.(\d+)\.(\d+)"', init_text)
+        assert match is not None, "version line not found"
+        major, minor, patch = int(match.group(1)), int(match.group(2)), int(match.group(3))
+        assert (major, minor) >= (0, 55), (
+            f"version must be >= 0.55.0 (found {major}.{minor}.{patch})"
+        )
 
 
 # ---------------------------------------------------------------------------

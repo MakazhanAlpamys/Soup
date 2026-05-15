@@ -40,6 +40,7 @@ _VALID_KINDS = frozenset(
     {
         "adapter", "merged", "gguf", "awq", "gptq", "onnx", "dataset", "config",
         "eval_results", "tensorrt", "eval_suite", "canaries",
+        "diagnose_report",
     }
 )
 _VALID_RELATIONS = frozenset(

@@ -163,6 +163,15 @@ def train(
             "training steps. Output: <output>/profiles/<run_id>.trace.json"
         ),
     ),
+    diagnose_gate: str = typer.Option(
+        None,
+        "--diagnose-gate",
+        help=(
+            "After training, run `soup diagnose` against the supplied evidence "
+            "JSON (or scratch evidence). Refuses to mark the run successful "
+            "if any of the 6 v0.56.0 failure modes returns MAJOR."
+        ),
+    ),
 ):
     """Start training from a soup.yaml config."""
     config_path = Path(config)
@@ -925,6 +934,88 @@ def train(
             f"Run details: [bold]soup runs show {run_id}[/]",
             title="[bold green]Training Complete![/]",
         )
+    )
+
+    # --- v0.56.0 --diagnose-gate: post-training failure-mode check ---
+    if diagnose_gate:
+        try:
+            _run_diagnose_gate(
+                diagnose_gate, run_id, cfg.base, result["output_dir"]
+            )
+        except typer.Exit:
+            raise
+        except (OSError, ValueError) as exc:
+            console.print(
+                f"[red]--diagnose-gate failed:[/] {type(exc).__name__}: {exc}"
+            )
+            raise typer.Exit(1) from exc
+
+
+def _run_diagnose_gate(
+    evidence_path: str, run_id: str, base: str, adapter: str
+) -> None:
+    """Post-training failure-mode gate (v0.56.0).
+
+    Loads a JSON ``evidence`` file with optional per-mode scores and
+    refuses to mark the run successful if any mode comes back MAJOR.
+    Missing modes fall back to a neutral OK score so partial evidence
+    still produces a useful report card.
+    """
+    import json
+
+    from soup_cli.utils.diagnose.report import FAILURE_MODES, FailureScore
+    from soup_cli.utils.diagnose.runner import build_report
+    from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
+
+    enforce_under_cwd_and_no_symlink(evidence_path, "--diagnose-gate evidence")
+    # 16 MiB cap on evidence JSON (security review HIGH — symmetric with
+    # `commands/diagnose._MAX_EVIDENCE_BYTES`; prevents `/dev/zero` /
+    # multi-GB symlink-pointed OOM at json.load time).
+    if os.path.getsize(evidence_path) > 16 * 1024 * 1024:
+        raise ValueError(
+            "--diagnose-gate evidence exceeds 16 MiB"
+        )
+    with open(evidence_path, encoding="utf-8") as handle:
+        payload = json.load(handle)
+    if not isinstance(payload, dict):
+        raise ValueError("evidence file must contain a JSON object")
+    raw_scores = payload.get("scores") or {}
+    if not isinstance(raw_scores, dict):
+        raise ValueError("evidence.scores must be an object")
+
+    from soup_cli.utils.diagnose.report import classify_score
+
+    scores: dict = {}
+    for mode in FAILURE_MODES:
+        entry = raw_scores.get(mode)
+        if entry is None:
+            continue
+        if not isinstance(entry, dict):
+            raise ValueError(f"scores.{mode} must be an object")
+        score = entry.get("score", 1.0)
+        verdict = entry.get("verdict") or classify_score(score)
+        scores[mode] = FailureScore(
+            mode=mode,
+            score=float(score),
+            verdict=verdict,
+            evidence=str(entry.get("evidence", "supplied by --diagnose-gate")),
+        )
+
+    report = build_report(
+        run_id=run_id, base=base, adapter=adapter, scores=scores
+    )
+    if report.overall == "MAJOR":
+        console.print(
+            "[red]--diagnose-gate: MAJOR regression in one or more modes.[/]"
+        )
+        for mode in FAILURE_MODES:
+            sc = report.scores[mode]
+            if sc.verdict == "MAJOR":
+                console.print(f"  [red]MAJOR[/] {mode}: {sc.evidence}")
+        raise typer.Exit(2)
+    console.print(
+        f"[green]--diagnose-gate: {report.overall}[/] across "
+        f"{len(FAILURE_MODES)} modes."
     )
 
 

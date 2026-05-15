@@ -42,15 +42,14 @@ soup train
 
 Latest highlights only. Full history: [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 
-**v0.55.0 — `soup eval design`: derive evals from data.** Trainer libraries help you RUN evals. None help you DEFINE them. v0.55 closes that gap.
+**v0.56.0 — `soup diagnose`: lighthouse score for fine-tunes.** Training finishes and you have no idea *why* the adapter underperforms. Loss curves can't distinguish overfitting from refusal regression from mode collapse. v0.56 ships a 6-mode post-training report card with one verdict.
 
-- **`soup eval design <data.jsonl> --goal "..."`** clusters your training data (TF-IDF salience), proposes 5–10 evaluation dimensions, picks a scorer per dimension (`exact_match` / `regex` / `judge` / `rlvr`), and writes a versioned `evals/design.json`. Goal-keyword dispatch: `json` / `schema` / `code` / `math` route to `rlvr`; `classify` / `intent` route to `exact_match`; `extract` routes to `regex`; everything else defaults to LLM-judge with a deterministic rubric.
-- **`soup eval discover <data.jsonl>`** runs farthest-first Jaccard clustering and emits a `CanarySet` with three groups: `held_out` (cluster representatives — tests generalisation), `adjacent_skills` (rare clusters — catches catastrophic forgetting), and `memorization_probes` (25 %-prefix truncations — catches verbatim regurgitation).
-- **`soup eval lock <design>`** canonicalises the suite (sorted-key JSON, no whitespace), computes a SHA-256 over the bytes that hit disk, and optionally attaches the artifact to a Registry entry as `eval_suite`. Two designs hash identically iff their semantic content matches.
-- **`soup eval coverage <design> --task <category>`** does a heuristic gap analysis against the v0.54.0 task taxonomy: `reasoning` benefits from a `rlvr` dimension, `format_conversion` benefits from both `regex` and `rlvr`, etc. Missing scorers surface as named recommendations.
-- **`soup eval gate-install --baseline <run-id>`** writes a portable pre-push git hook that calls `soup eval --against <run-id>` and blocks the push when any of `{task accuracy, refusal rate, format validity, p95 latency}` regresses past its tolerance. Threshold checks use paired-bootstrap 95 % CI so a single outlier row doesn't flip the gate. Shell quoting via `shlex.quote` — no injection surface from a crafted run id or suite path.
-- **Why blue-ocean.** Eval-authoring is conspicuously absent across Unsloth / LF / Axolotl — they're adding more benchmarks, going the opposite direction. Braintrust's golden-set pattern is SaaS-only because their economics need seat lock-in. TRL ships `compute_metrics` and stops; eval CI is "the user's problem" per torchtune's stated design.
-- **+105 net new tests** (8571 → 8676) across `test_v0550.py` + `test_v0550_followups.py` covering all 4 Parts plus a `soup eval against` run-vs-run paired-bootstrap path AND 4-agent review-fix coverage (python / security / code / tdd): `MappingProxyType` immutability on every registry, `frozenset` for `SCORER_TYPES`, `FrozenInstanceError` on every public dataclass, `os.lstat + S_ISLNK` symlink reject on every atomic-write + read surface, `shlex.quote` for shell-script generation, exact-boundary tests on `n_samples` / `ci_level` / `per_cluster`, paired-bootstrap CI for regression decisions, and quadratic-DoS subsample cap inside the clustering hot path.
+- **`soup diagnose <run-id>`** scores six failure modes — `forgetting` (Δ accuracy vs base), `refusal` (advbench / xstest delta), `format` (JSON / regex / tool-call validity), `mode_collapse` (pairwise diversity at T=0 and T=1), `memorization` (training-prefix echo on partial-prompt probes), `contamination` (training-row overlap with public benchmarks) — and emits an overall OK / MINOR / MAJOR verdict using the same taxonomy as v0.26 Quant-Lobotomy.
+- **`soup diagnose <run-id> --badge diag.svg`** renders a self-contained 6-cell SVG report card with the overall verdict pill — embeddable in HF model cards and Twitter posts. Every user-controlled string passes through `html.escape`; no JS, no external deps.
+- **`soup diagnose <run-id> --evidence ev.json --output diag.json --attach-to-registry <id>`** persists the report as a `diagnose_report` artifact on the v0.26 Model Registry — the first-class kind alongside `eval_suite` / `canaries` / `tensorrt`.
+- **`soup train --diagnose-gate <evidence.json>`** refuses to mark a run successful when any mode comes back MAJOR. Composes with v0.26 `--gate` and v0.55 `eval gate-install` for a three-layer safety net: training process anomalies (v0.34 `soup why`) → eval regression vs baseline (v0.55 gate) → model-behaviour failure modes (v0.56 diagnose).
+- **Why blue-ocean.** Trainer libs ship code, not interpretability. TRL's v1 RFC narrows public surface — failure analysis falls below the cut. Eval SaaS (Braintrust, LangSmith) treat fine-tuning as <5 % of workload. The failure-mode taxonomy lives in academic papers with no implementation owner. Plus: builders care about this enough to ship a Twitter-shareable badge.
+- **+123 new tests** (8676 → 8849) across `tests/test_v0560.py` covering all 6 probes + FailureReport frozen invariants + badge SVG escapes + 4-agent review-fix wave (python / security / code / tdd): atomic+symlink-safe badge write, 16 MiB evidence size cap, `typer.Exit` instead of `sys.exit`, `os.path.realpath` containment, contamination combined-complexity cap, ReDoS probe in `matches_regex`, extras null-byte sanitisation.
 
 ## Why Soup?
 
@@ -2016,6 +2015,39 @@ soup history llama31-chat
 ```
 
 **Refs resolve flexibly** — you can use a registry ID, a name (latest), or `name:tag`. Ambiguous prefixes raise an error rather than silently picking the wrong entry. Registry files are stored with `600` perms on POSIX; override the path with `SOUP_REGISTRY_DB_PATH`.
+
+## Diagnose (Post-Training Report Card)
+
+`soup diagnose` scores six independent failure modes for a trained adapter and renders an OK / MINOR / MAJOR verdict per mode plus an overall headline — same taxonomy as Quant-Lobotomy. Useful for catching adapter regressions that a loss curve cannot distinguish from a healthy run.
+
+```bash
+# Heuristic neutral report (no model load — runs as a sanity check)
+soup diagnose my-run-id
+
+# Compute scores from a pre-built evidence JSON
+soup diagnose my-run-id --evidence evidence.json --output diag.json
+
+# Twitter-shareable SVG badge embeddable in a model card
+soup diagnose my-run-id --badge diag.svg
+
+# Attach the report to a Model Registry entry as a first-class artifact
+soup diagnose my-run-id --output diag.json --attach-to-registry abc123
+```
+
+**Six failure-mode probes:**
+
+| Mode | What it catches | Score range |
+|------|-----------------|-------------|
+| `forgetting` | Catastrophic forgetting on MMLU / HellaSwag / domain hold-outs | Δ accuracy vs base, tolerance band |
+| `refusal` | Refusal-rate regression on harmful / benign probe sets | abs(Δ harmful) + abs(Δ benign) |
+| `format` | JSON / regex / tool-call validity drift | fraction of valid outputs |
+| `mode_collapse` | Diversity collapse at T=0 and T=1 | pairwise n-gram Jaccard distance |
+| `memorization` | Verbatim training-prefix echo on partial prompts | 1 − echo_rate |
+| `contamination` | Training data overlapping public benchmarks | 1 − contamination_rate |
+
+**Verdict pill colours:** OK (≥ 0.85) green / MINOR (≥ 0.60) amber / MAJOR (< 0.60) red. `soup diagnose` exits 2 when the overall verdict is MAJOR — wire into CI to fail the build on regression.
+
+**Post-training gate:** `soup train --diagnose-gate <evidence.json>` runs the same scorer after training finishes and refuses to mark the run successful when any mode comes back MAJOR. Composes with `--gate <eval-suite>` (v0.26) — the eval gate catches accuracy regressions vs a baseline; the diagnose gate catches behaviour regressions the eval suite is blind to.
 
 ## Soup Cans (Shareable Recipes)
 

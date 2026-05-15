@@ -210,6 +210,17 @@ app.add_typer(
     ),
 )
 
+# v0.56.0 — `soup diagnose` post-training failure-mode report card.
+from soup_cli.commands import diagnose as _diagnose_cmd  # noqa: E402
+
+app.command(
+    name="diagnose",
+    help=(
+        "Post-training report card: forgetting / refusal / format / "
+        "mode_collapse / memorization / contamination (v0.56.0)."
+    ),
+)(_diagnose_cmd.diagnose)
+
 
 def _rewrite_advise_argv(argv: list) -> list:
     """Inject `run` between `advise` and a non-subcommand first argument.
