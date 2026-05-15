@@ -11,6 +11,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import os
+import re
 from pathlib import Path
 
 import pytest
@@ -52,6 +53,16 @@ runner = CliRunner()
 # Capture project root at import time so source-grep tests survive the
 # tmp_path os.chdir calls earlier in the suite.
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+# Rich's CliRunner output carries ANSI escapes on CI; strip before
+# substring assertions because Rich wraps long-option strings — e.g.
+# `--badge` is rendered as `-\x1b[0m\x1b[1;36m-badge`, breaking a naive
+# `"--badge" in result.output` check (v0.55.0 CI fix policy).
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _strip_ansi(text: str) -> str:
+    return _ANSI_RE.sub("", text or "")
 
 
 # --- report dataclasses + classify_score ----------------------------------
@@ -554,21 +565,21 @@ class TestCli:
     def test_diagnose_in_help(self) -> None:
         result = runner.invoke(app, ["--help"])
         assert result.exit_code == 0
-        assert "diagnose" in result.output
+        assert "diagnose" in _strip_ansi(result.output)
 
     def test_diagnose_help(self) -> None:
         result = runner.invoke(app, ["diagnose", "--help"])
         assert result.exit_code == 0
-        assert "--badge" in result.output
-        assert "--output" in result.output
-        assert "--evidence" in result.output
+        assert "--badge" in _strip_ansi(result.output)
+        assert "--output" in _strip_ansi(result.output)
+        assert "--evidence" in _strip_ansi(result.output)
 
     def test_diagnose_neutral_run(self, tmp_path: Path) -> None:
         os.chdir(tmp_path)
         result = runner.invoke(app, ["diagnose", "myrun"])
         assert result.exit_code == 0, (result.output, repr(result.exception))
         for mode in FAILURE_MODES:
-            assert mode in result.output
+            assert mode in _strip_ansi(result.output)
 
     def test_diagnose_writes_output(self, tmp_path: Path) -> None:
         os.chdir(tmp_path)
@@ -613,7 +624,7 @@ class TestCli:
         )
         # Exit 2 on MAJOR overall.
         assert result.exit_code == 2, (result.output, repr(result.exception))
-        assert "MAJOR" in result.output
+        assert "MAJOR" in _strip_ansi(result.output)
 
     def test_diagnose_evidence_outside_cwd(self, tmp_path: Path) -> None:
         os.chdir(tmp_path)
@@ -631,7 +642,7 @@ class TestCli:
             app, ["diagnose", "myrun", "--attach-to-registry", "abc"]
         )
         assert result.exit_code == 0
-        assert "needs --output" in result.output
+        assert "needs --output" in _strip_ansi(result.output)
 
     def test_diagnose_run_id_oversize(self, tmp_path: Path) -> None:
         os.chdir(tmp_path)
@@ -651,7 +662,7 @@ class TestTrainDiagnoseGate:
     def test_help_lists_flag(self) -> None:
         result = runner.invoke(app, ["train", "--help"])
         assert result.exit_code == 0
-        assert "--diagnose-gate" in result.output
+        assert "--diagnose-gate" in _strip_ansi(result.output)
 
     def test_run_diagnose_gate_helper_major_exits(self, tmp_path: Path) -> None:
         os.chdir(tmp_path)
@@ -861,7 +872,7 @@ class TestReviewFixCoverage:
             app, ["diagnose", "myrun", "--evidence", str(ev)]
         )
         assert result.exit_code == 1
-        assert "null bytes" in result.output
+        assert "null bytes" in _strip_ansi(result.output)
 
     # python-review MEDIUM — math.isfinite on forgetting tolerance.
     def test_forgetting_nan_tolerance_rejected(self) -> None:
