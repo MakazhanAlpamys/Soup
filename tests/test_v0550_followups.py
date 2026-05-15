@@ -502,15 +502,21 @@ class TestEvalAgainst:
             tracker.get_metric_series("run-1", "")
 
     def test_against_cli_help_lists_flag(self):
+        import re as _re
+
         from typer.testing import CliRunner
 
         from soup_cli.commands.eval import app
         runner = CliRunner()
         result = runner.invoke(app, ["against", "--help"])
         assert result.exit_code == 0, (result.output, repr(result.exception))
-        assert "--candidate" in result.output
-        assert "--metric" in result.output
-        assert "--json-only" in result.output
+        # Strip Rich ANSI escapes — macOS CI uses a narrower terminal that
+        # wraps option names, breaking bare substring searches (precedent:
+        # v0.53.5/v0.53.6/v0.53.8/v0.53.9 CI hardening commits).
+        out = _re.sub(r"\x1b\[[0-9;]*m", "", result.output)
+        assert "--candidate" in out
+        assert "--metric" in out
+        assert "--json-only" in out
 
 
 # ---------------------------------------------------------------------------

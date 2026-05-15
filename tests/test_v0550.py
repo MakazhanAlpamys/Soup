@@ -50,6 +50,17 @@ from soup_cli.utils.eval_lock_coverage import (
 
 POSIX_ONLY = pytest.mark.skipif(os.name == "nt", reason="POSIX-only symlink test")
 
+# Rich wraps option names with ANSI escapes when the terminal is narrow
+# (macOS CI runners default to a smaller width than Linux/Windows), so
+# substring searches like `"--goal" in output` fail without stripping.
+# Project precedent: tests/test_auto_tuning.py, test_eval_platform.py,
+# v0.53.5 / v0.53.6 / v0.53.8 / v0.53.9 CI hardening commits.
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _strip_ansi(text: str) -> str:
+    return _ANSI_RE.sub("", text)
+
 
 # ---------------------------------------------------------------------------
 # Part A — Eval design from data
@@ -760,7 +771,7 @@ class TestCLIPlumbing:
         from soup_cli.commands.eval import app
         result = self.runner.invoke(app, ["design", "--help"])
         assert result.exit_code == 0, result.output
-        assert "--goal" in result.output
+        assert "--goal" in _strip_ansi(result.output)
 
     def test_eval_design_end_to_end(self, tmp_path, monkeypatch):
         from soup_cli.commands.eval import app
@@ -901,9 +912,10 @@ class TestEvalAgainst:
         from soup_cli.commands.eval import app
         result = self.runner.invoke(app, ["against", "--help"])
         assert result.exit_code == 0, (result.output, repr(result.exception))
-        assert "--candidate" in result.output
-        assert "--metric" in result.output
-        assert "--json-only" in result.output
+        out = _strip_ansi(result.output)
+        assert "--candidate" in out
+        assert "--metric" in out
+        assert "--json-only" in out
 
     def test_against_requires_candidate(self):
         # `--candidate` is a required option; omitting must fail.
