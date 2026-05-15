@@ -2049,6 +2049,59 @@ soup diagnose my-run-id --output diag.json --attach-to-registry abc123
 
 **Post-training gate:** `soup train --diagnose-gate <evidence.json>` runs the same scorer after training finishes and refuses to mark the run successful when any mode comes back MAJOR. Composes with `--gate <eval-suite>` (v0.26) — the eval gate catches accuracy regressions vs a baseline; the diagnose gate catches behaviour regressions the eval suite is blind to.
 
+## Adapter Management (git for LoRA)
+
+`soup adapters` is the git-for-LoRA surface: weight-aware diff, four merge strategies, leave-one-out blame, and SHA-256 branch snapshots. All commands operate on `adapter_model.safetensors` directories (peft-compatible).
+
+```bash
+# Per-layer ΔW Frobenius diff + effective-rank drift + top-K changed projections
+soup adapters diff ./run-v17 ./run-v18
+
+# Machine-readable JSON for CI
+soup adapters diff ./run-v17 ./run-v18 --format json --output diff.json
+
+# Weighted merge with linear / ties / dare / svd strategies
+soup adapters merge ./run-v17 ./run-v18 ./run-v19 -o ./merged --strategy ties \
+  --weights 0.5,0.3,0.2 --density 0.2
+
+# DARE merge (deterministic via --seed)
+soup adapters merge ./run-v17 ./run-v18 -o ./merged --strategy dare \
+  --density 0.5 --seed 42
+
+# Leave-one-out ablation plan against a 4-hour wall-clock budget
+soup adapters blame ./run-v18 --dataset train.jsonl --layer q_proj.7 \
+  --budget 4h --shards 10 --plan-only
+
+# Snapshot a training environment as a comparable branch
+soup adapters branch v18 --config soup.yaml --base meta-llama/Llama-3.1-8B \
+  --dataset train.jsonl
+
+# Restore the snapshot's config (refuses if source SHA drifted)
+soup adapters checkout v18 --output soup.yaml
+
+# List all snapshotted branches
+soup adapters branches
+```
+
+**Four merge strategies (pure numpy, no torch import at module level):**
+
+| Strategy | Math | Use case |
+|----------|------|----------|
+| `linear` | Weighted average per layer | Baseline; tasks share a basis |
+| `ties` | Trim by density → elect majority sign → disjoint average | Conflicting task adapters (Yadav et al. 2023) |
+| `dare` | Random drop with `density` + rescale `1/density`, then average | Sparse-merge; reduces parameter interference (Yu et al. 2024) |
+| `svd` | Linear-merge → low-rank reconstruction via SVD (`--rank`) | Constrain effective rank of the merged delta |
+
+**Defaults & safety:**
+
+- Output paths are containment-checked under cwd and reject pre-placed symlinks (TOCTOU defence).
+- Safetensors writes are atomic via `tempfile.mkstemp` + `os.replace` — a crash mid-write never leaves a partial adapter at the target path.
+- `.bin` (PyTorch pickle) adapter format is rejected with an explicit "re-save as safetensors" message.
+- Branch pointers live under `~/.soup/branches/` (override via `SOUP_BRANCHES_DIR`, constrained to `$HOME` / `$CWD` / `$TMPDIR`).
+- `soup adapters checkout` SHA-checks the source config — refuses to restore when the source has drifted from the snapshot, so reproducibility never silently lies.
+
+**Limitations (v0.57.1):** Live blame ablation runner + live canary verdict on merged adapters are scheduled for v0.57.1; `soup adapters blame` emits the plan and exits clean today, and `MergeReport.verdict` is the `UNKNOWN` stub.
+
 ## Soup Cans (Shareable Recipes)
 
 Share a reproducible recipe as a single `.can` file — a tarball of the manifest, full config, and a reference to the training data (URL or HF dataset). Not the weights, not the dataset bytes: just enough for someone else to re-run the same training.
