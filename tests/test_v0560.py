@@ -709,6 +709,18 @@ class TestTrainDiagnoseGate:
         from soup_cli.commands.train import _run_diagnose_gate
         _run_diagnose_gate(str(evidence), "run1", "base", "adapter")
 
+    def test_diagnose_gate_skips_nonzero_local_rank(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from soup_cli.commands.train import _should_run_diagnose_gate_on_rank
+
+        monkeypatch.setenv("LOCAL_RANK", "1")
+        assert _should_run_diagnose_gate_on_rank() is False
+
+    def test_diagnose_gate_runs_on_rank_zero(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from soup_cli.commands.train import _should_run_diagnose_gate_on_rank
+
+        monkeypatch.setenv("LOCAL_RANK", "0")
+        assert _should_run_diagnose_gate_on_rank() is True
+
     def test_run_diagnose_gate_rejects_non_dict_payload(
         self, tmp_path: Path
     ) -> None:
