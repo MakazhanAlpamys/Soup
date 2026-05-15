@@ -152,9 +152,23 @@ def test_delete_branch_rejects_symlink(tmp_path, monkeypatch):
 
 
 def test_branches_dir_crlf_env_rejected(monkeypatch, tmp_path):
-    """Control char (CRLF) in SOUP_BRANCHES_DIR falls back to default."""
+    """Control char (CRLF) in SOUP_BRANCHES_DIR falls back to default.
+
+    Some CI environments also reject newlines in env values; stub the lookup
+    to avoid platform-specific syscall validation differences.
+    """
+    import os as _os
+
     from soup_cli.utils.adapter_branch import _branches_dir
-    monkeypatch.setenv("SOUP_BRANCHES_DIR", "/some\npath")
+
+    original = _os.environ.get
+
+    def fake_get(key, default=None):
+        if key == "SOUP_BRANCHES_DIR":
+            return "/some\npath"
+        return original(key, default)
+
+    monkeypatch.setattr(_os.environ, "get", fake_get)
     monkeypatch.chdir(tmp_path)
     resolved = _branches_dir()
     assert "\n" not in str(resolved)
@@ -299,9 +313,26 @@ def test_branches_dir_env_override_outside_falls_back(monkeypatch, tmp_path):
 
 
 def test_branches_dir_null_byte_env_ignored(monkeypatch, tmp_path):
-    """Null-byte env override is silently ignored; default ~/.soup/branches used."""
+    """Null-byte env override is silently ignored; default ~/.soup/branches used.
+
+    POSIX ``setenv`` (and the Windows equivalent) reject null bytes at the
+    syscall boundary, so we can't reproduce a real null-byte env via
+    monkeypatch.setenv. Stub ``os.environ.get`` instead so the helper's
+    rejection branch is exercised exactly as it would be if the env var
+    arrived through some other channel.
+    """
+    import os as _os
+
     from soup_cli.utils.adapter_branch import _branches_dir
-    monkeypatch.setenv("SOUP_BRANCHES_DIR", "/some\x00path")
+
+    original = _os.environ.get
+
+    def fake_get(key, default=None):
+        if key == "SOUP_BRANCHES_DIR":
+            return "/some\x00path"
+        return original(key, default)
+
+    monkeypatch.setattr(_os.environ, "get", fake_get)
     monkeypatch.chdir(tmp_path)
     resolved = _branches_dir()
     # Falls back to ~/.soup/branches — must NOT contain a null byte
