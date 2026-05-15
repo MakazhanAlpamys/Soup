@@ -816,7 +816,9 @@ class TestSourceWiring:
 
     def test_version_bump(self):
         from soup_cli import __version__
-        assert __version__ == "0.54.0"
+        # Asserts a forward-compatible floor (v0.54.0 shipped advise);
+        # later releases that bump the version must not regress this gate.
+        assert __version__ >= "0.54.0"
 
     def test_advise_module_imports(self):
         # Importable without heavy deps (lazy imports inside helpers).

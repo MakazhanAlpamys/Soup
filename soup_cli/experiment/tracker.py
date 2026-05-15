@@ -312,6 +312,31 @@ class ExperimentTracker:
         ).fetchall()
         return [dict(row) for row in rows]
 
+    def get_metric_series(self, run_id: str, metric: str) -> list[float]:
+        """Per-row series of a single named metric for a run (v0.55.0).
+
+        Used by ``soup eval against`` for run-vs-run paired-bootstrap CI.
+        Returns an empty list when the metric does not appear in any row
+        — the caller treats that as "no signal, do not gate".
+        """
+        if not isinstance(run_id, str) or not run_id:
+            raise ValueError("run_id must be a non-empty string")
+        if not isinstance(metric, str) or not metric:
+            raise ValueError("metric must be a non-empty string")
+        rows = self.get_metrics(run_id)
+        series: list[float] = []
+        for row in rows:
+            value = row.get(metric)
+            if value is None:
+                continue
+            try:
+                series.append(float(value))
+            except (TypeError, ValueError):
+                # Skip non-numeric cells silently — same-run inconsistency
+                # is not the caller's problem; they get a shorter series.
+                continue
+        return series
+
     def save_eval_result(
         self,
         model_path: str,

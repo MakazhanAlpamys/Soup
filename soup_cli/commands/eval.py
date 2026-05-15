@@ -1161,3 +1161,9 @@ def _print_gate_result(result) -> None:
     if result.regression:
         verdict += " [yellow](regression vs baseline)[/]"
     console.print(Panel(verdict, border_style="green" if result.passed else "red"))
+
+
+# Register v0.55.0 subcommands (eval design / discover / lock / coverage / gate-install)
+from soup_cli.commands._eval_v0550 import register as _register_v0550  # noqa: E402
+
+_register_v0550(app, console)

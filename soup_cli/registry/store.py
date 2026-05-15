@@ -39,7 +39,7 @@ REGISTRY_DB_FILENAME = "registry.db"
 _VALID_KINDS = frozenset(
     {
         "adapter", "merged", "gguf", "awq", "gptq", "onnx", "dataset", "config",
-        "eval_results", "tensorrt",
+        "eval_results", "tensorrt", "eval_suite", "canaries",
     }
 )
 _VALID_RELATIONS = frozenset(

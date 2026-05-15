@@ -42,14 +42,15 @@ soup train
 
 Latest highlights only. Full history: [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 
-**v0.54.0 — `soup advise`: the pre-flight decision**: Before you spend 8 hours on a GPU, spend 60 seconds in the CLI.
+**v0.55.0 — `soup eval design`: derive evals from data.** Trainer libraries help you RUN evals. None help you DEFINE them. v0.55 closes that gap.
 
-- **`soup advise <data.jsonl> --goal "..."`** classifies your task (factual_lookup / style_shaping / format_conversion / reasoning / tool_use / summarization / classification), profiles your dataset (row count, type/token diversity, label variance, chosen/rejected detection, reasoning-trace detection), and renders a `Verdict` with one of `PROMPT_ENG` / `RAG` / `SFT` / `DPO` / `GRPO` — plus a `confidence` score, a `reason`, and the criterion that would `reverse` the decision.
-- **`soup advise --probe`** adds a 10-minute ROI estimate: zero-shot + few-shot baselines, an RAG baseline, and a 100-step LoRA probe. v0.54.0 ships heuristic stubs (no GPU required); real model loading lands in v0.54.1 with forward-compatible `model` / `device` / `lr` / `timeout_seconds` kwargs already on the signature.
-- **`soup advise explain`** prints the full rubric — which rule fired, evidence, the literal next command (`soup autopilot --data … --task sft`), and what would flip the verdict.
-- **`soup advise compare`** reads `~/.soup/advise_history.jsonl` (atomic cross-process writes via `fcntl.flock` on POSIX / sidecar `<path>.lock` on Windows) and shows your prior verdicts across projects so the next decision is informed by the previous N.
-- **Why blue-ocean.** No trainer library has an incentive to tell users *not* to train — Unsloth's funnel, Axolotl's hosted business, LLaMA-Factory's Alibaba alignment all monetise the training event. The advisor role is structurally orthogonal to every incumbent's revenue model. `soup autopilot` (v0.25.0) picks hyperparameters AFTER you decide to train; `soup advise` picks the training decision itself.
-- **+136 net new tests** (8400 → 8571) in `test_v0540.py` covering all three Parts plus 5-agent review-fix coverage (python / code / security / tdd / architect): atomic write + symlink reject on the scratch file, cross-process file locking on history append, per-line 64 KB cap on history reads, argv rewriter scoped to `argv[1]` only, bool/finite/NUL/oversize guards on every public input, forward-compat kwargs on the probe stubs, and 49↔50 / 499↔500 / 4096↔4097 exact boundary tests.
+- **`soup eval design <data.jsonl> --goal "..."`** clusters your training data (TF-IDF salience), proposes 5–10 evaluation dimensions, picks a scorer per dimension (`exact_match` / `regex` / `judge` / `rlvr`), and writes a versioned `evals/design.json`. Goal-keyword dispatch: `json` / `schema` / `code` / `math` route to `rlvr`; `classify` / `intent` route to `exact_match`; `extract` routes to `regex`; everything else defaults to LLM-judge with a deterministic rubric.
+- **`soup eval discover <data.jsonl>`** runs farthest-first Jaccard clustering and emits a `CanarySet` with three groups: `held_out` (cluster representatives — tests generalisation), `adjacent_skills` (rare clusters — catches catastrophic forgetting), and `memorization_probes` (25 %-prefix truncations — catches verbatim regurgitation).
+- **`soup eval lock <design>`** canonicalises the suite (sorted-key JSON, no whitespace), computes a SHA-256 over the bytes that hit disk, and optionally attaches the artifact to a Registry entry as `eval_suite`. Two designs hash identically iff their semantic content matches.
+- **`soup eval coverage <design> --task <category>`** does a heuristic gap analysis against the v0.54.0 task taxonomy: `reasoning` benefits from a `rlvr` dimension, `format_conversion` benefits from both `regex` and `rlvr`, etc. Missing scorers surface as named recommendations.
+- **`soup eval gate-install --baseline <run-id>`** writes a portable pre-push git hook that calls `soup eval --against <run-id>` and blocks the push when any of `{task accuracy, refusal rate, format validity, p95 latency}` regresses past its tolerance. Threshold checks use paired-bootstrap 95 % CI so a single outlier row doesn't flip the gate. Shell quoting via `shlex.quote` — no injection surface from a crafted run id or suite path.
+- **Why blue-ocean.** Eval-authoring is conspicuously absent across Unsloth / LF / Axolotl — they're adding more benchmarks, going the opposite direction. Braintrust's golden-set pattern is SaaS-only because their economics need seat lock-in. TRL ships `compute_metrics` and stops; eval CI is "the user's problem" per torchtune's stated design.
+- **+105 net new tests** (8571 → 8676) across `test_v0550.py` + `test_v0550_followups.py` covering all 4 Parts plus a `soup eval against` run-vs-run paired-bootstrap path AND 4-agent review-fix coverage (python / security / code / tdd): `MappingProxyType` immutability on every registry, `frozenset` for `SCORER_TYPES`, `FrozenInstanceError` on every public dataclass, `os.lstat + S_ISLNK` symlink reject on every atomic-write + read surface, `shlex.quote` for shell-script generation, exact-boundary tests on `n_samples` / `ci_level` / `per_cluster`, paired-bootstrap CI for regression decisions, and quadratic-DoS subsample cap inside the clustering hot path.
 
 ## Why Soup?
 
@@ -201,6 +202,73 @@ soup advise compare
 5. Otherwise → **SFT**.
 
 **Why this command exists.** "Choose fine-tuning vs RAG vs prompt-engineering" is the most-mis-made decision in the space. Reddit, HN, IBM, and Google Cloud all converge on the same advice (start with prompts, escalate to RAG, fine-tune as last resort) and almost everyone ignores it because nobody has the data to prove their case is the exception. Soup `autopilot` picks hyperparameters AFTER you've decided to train; `soup advise` owns the layer above. No trainer library has an incentive to tell users *not to train* — Unsloth's funnel, Axolotl's hosted business, LLaMA-Factory's Alibaba alignment all monetise the training event.
+
+## Eval Design Pipeline (`soup eval design / discover / lock / coverage`)
+
+Trainer libraries help you RUN evals — none help you DEFINE them. The eval-design
+pipeline closes that gap with four CPU-only subcommands.
+
+```bash
+# 1. Draft a goal-conditioned suite from your training data.
+soup eval design data.jsonl --goal "better at SQL" --output evals/design.json
+
+# 2. Discover held-out canaries + memorization probes.
+soup eval discover data.jsonl --num-clusters 5 --output evals/canaries.json
+
+# 3. Freeze the design as a checksummed eval_suite artifact.
+soup eval lock evals/design.json --output evals/locked.json
+
+# 4. Heuristic gap analysis vs the task taxonomy.
+soup eval coverage evals/design.json --task reasoning
+```
+
+`soup eval design` clusters training rows by TF-IDF salience, picks a scorer
+per dimension (`exact_match` / `regex` / `judge` / `rlvr`) via a goal-keyword
+dispatch matrix, and writes a versioned `evals/design.json` of frozen
+`EvalDimension` rows.
+
+`soup eval discover` runs farthest-first Jaccard clustering and emits a
+`CanarySet` with three groups:
+
+- `held_out` — cluster representatives that test generalisation.
+- `adjacent_skills` — rare clusters that catch catastrophic forgetting.
+- `memorization_probes` — 25 %-prefix truncations that catch verbatim regurgitation.
+
+`soup eval lock` canonicalises the suite (sorted-key JSON, no whitespace),
+computes a SHA-256 over the bytes that hit disk, and optionally attaches the
+artifact to a Registry entry as `eval_suite`. Two designs hash identically
+iff their semantic content matches.
+
+`soup eval coverage` does heuristic gap analysis against the task taxonomy:
+`reasoning` benefits from a `rlvr` dimension, `format_conversion` benefits
+from both `regex` and `rlvr`, etc. Missing scorers surface as named
+recommendations so operators can spot gaps before shipping the gate.
+
+## Pre-Push Regression Gate (`soup eval gate-install`)
+
+Install a portable pre-push git hook that blocks the push when an adapter
+regresses past a tolerance. Threshold checks use paired-bootstrap 95 % CI
+so a single outlier row doesn't flip the gate.
+
+```bash
+soup eval gate-install --baseline run-abc-123 --suite evals/locked.json
+```
+
+The generated `.git/hooks/pre-push` script:
+
+- Compares against a baseline run id from the Soup registry.
+- Watches four metrics: `task_accuracy`, `refusal_rate`, `format_validity`,
+  `p95_latency_ms`.
+- Treats `task_accuracy` / `refusal_rate` / `format_validity` as higher-is-better
+  and `p95_latency_ms` as lower-is-better; regression is decided per metric on the
+  paired-bootstrap CI bound (upper bound for higher-better, lower for lower-better).
+- Uses `shlex.quote` on every embedded value — no shell-injection surface from a
+  crafted run id or suite path.
+- Refuses to overwrite an existing hook without `--force`; rejects pre-placed
+  symlinks at the hook path (TOCTOU defence).
+
+The hook is portable bash (`#!/usr/bin/env bash` shebang) and works under
+Git-for-Windows' bundled bash on Windows.
 
 ## Autopilot (Zero-Config)
 
