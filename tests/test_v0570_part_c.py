@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 
 import pytest
 from typer.testing import CliRunner
@@ -15,6 +16,12 @@ from soup_cli.utils.blame import (
     plan_blame,
     run_blame,
 )
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _strip_ansi(text: str) -> str:
+    return _ANSI_RE.sub("", text or "")
 
 runner = CliRunner()
 
@@ -272,9 +279,9 @@ def test_blame_shard_work_frozen():
 def test_adapters_blame_help():
     result = runner.invoke(soup_app, ["adapters", "blame", "--help"])
     assert result.exit_code == 0, (result.output, repr(result.exception))
-    assert "--budget" in result.output
-    assert "--layer" in result.output
-    assert "--shards" in result.output
+    assert "--budget" in _strip_ansi(result.output)
+    assert "--layer" in _strip_ansi(result.output)
+    assert "--shards" in _strip_ansi(result.output)
 
 
 def test_adapters_blame_plan_only(tmp_path, monkeypatch):
@@ -288,7 +295,7 @@ def test_adapters_blame_plan_only(tmp_path, monkeypatch):
         "--plan-only",
     ])
     assert result.exit_code == 0, (result.output, repr(result.exception))
-    assert "Blame plan" in result.output
+    assert "Blame plan" in _strip_ansi(result.output)
 
 
 def test_adapters_blame_invalid_budget(tmp_path, monkeypatch):
@@ -301,7 +308,7 @@ def test_adapters_blame_invalid_budget(tmp_path, monkeypatch):
         "--shards", "5",
     ])
     assert result.exit_code == 2
-    assert "Invalid --budget" in result.output
+    assert "Invalid --budget" in _strip_ansi(result.output)
 
 
 def test_adapters_blame_live_runner_advisory(tmp_path, monkeypatch):
@@ -314,4 +321,4 @@ def test_adapters_blame_live_runner_advisory(tmp_path, monkeypatch):
         "--shards", "5",
     ])
     assert result.exit_code == 0, (result.output, repr(result.exception))
-    assert "v0.57.1" in result.output
+    assert "v0.57.1" in _strip_ansi(result.output)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 
 import numpy as np
@@ -20,6 +21,15 @@ from soup_cli.utils.adapter_diff import (
     render_report_json,
     render_report_markdown,
 )
+
+# Strip ANSI before substring asserts (CI Rich-wraps option names — same fix
+# as v0.55.0 / v0.56.0).
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _strip_ansi(text: str) -> str:
+    return _ANSI_RE.sub("", text or "")
+
 
 runner = CliRunner()
 
@@ -316,8 +326,8 @@ def test_compute_adapter_diff_bin_format_rejected(tmp_path, monkeypatch):
 def test_adapters_diff_help():
     result = runner.invoke(soup_app, ["adapters", "diff", "--help"])
     assert result.exit_code == 0, (result.output, repr(result.exception))
-    assert "--top-k" in result.output
-    assert "--format" in result.output
+    assert "--top-k" in _strip_ansi(result.output)
+    assert "--format" in _strip_ansi(result.output)
 
 
 def test_adapters_diff_table_format(tmp_path, monkeypatch):
@@ -327,7 +337,7 @@ def test_adapters_diff_table_format(tmp_path, monkeypatch):
     _write_safetensors(tmp_path / "b", {"w": np.zeros((2, 2), dtype=np.float32)})
     result = runner.invoke(soup_app, ["adapters", "diff", "a", "b"])
     assert result.exit_code == 0, (result.output, repr(result.exception))
-    assert "Adapter diff" in result.output
+    assert "Adapter diff" in _strip_ansi(result.output)
 
 
 def test_adapters_diff_json_output(tmp_path, monkeypatch):
@@ -368,7 +378,7 @@ def test_adapters_diff_unknown_format(tmp_path, monkeypatch):
         "adapters", "diff", "a", "b", "--format", "yaml",
     ])
     assert result.exit_code == 2
-    assert "Unknown --format" in result.output
+    assert "Unknown --format" in _strip_ansi(result.output)
 
 
 def test_adapters_diff_output_requires_non_table(tmp_path, monkeypatch):
@@ -380,7 +390,7 @@ def test_adapters_diff_output_requires_non_table(tmp_path, monkeypatch):
         "adapters", "diff", "a", "b", "--output", "out.txt",
     ])
     assert result.exit_code == 2
-    assert "requires --format" in result.output
+    assert "requires --format" in _strip_ansi(result.output)
 
 
 def test_adapters_diff_output_outside_cwd_rejected(tmp_path, monkeypatch):

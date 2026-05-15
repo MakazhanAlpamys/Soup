@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 
 import pytest
@@ -18,6 +19,13 @@ from soup_cli.utils.adapter_branch import (
     load_branch,
     write_checkout,
 )
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _strip_ansi(text: str) -> str:
+    return _ANSI_RE.sub("", text or "")
+
 
 runner = CliRunner()
 
@@ -344,7 +352,7 @@ def test_branch_cli_invalid_name(tmp_path, monkeypatch):
         "-c", "soup.yaml", "--base", "m",
     ])
     assert result.exit_code == 2
-    assert "must match" in result.output
+    assert "must match" in _strip_ansi(result.output)
 
 
 def test_branch_cli_missing_config(tmp_path, monkeypatch):
@@ -355,7 +363,7 @@ def test_branch_cli_missing_config(tmp_path, monkeypatch):
         "-c", "missing.yaml", "--base", "m",
     ])
     assert result.exit_code == 1
-    assert "not found" in result.output
+    assert "not found" in _strip_ansi(result.output)
 
 
 def test_checkout_cli_roundtrip(tmp_path, monkeypatch):
@@ -378,7 +386,7 @@ def test_checkout_cli_missing_branch(tmp_path, monkeypatch):
         "adapters", "checkout", "nope", "-o", "out.yaml",
     ])
     assert result.exit_code == 1
-    assert "not found" in result.output
+    assert "not found" in _strip_ansi(result.output)
 
 
 def test_branches_cli_empty(tmp_path, monkeypatch):
@@ -386,4 +394,4 @@ def test_branches_cli_empty(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     result = runner.invoke(soup_app, ["adapters", "branches"])
     assert result.exit_code == 0, (result.output, repr(result.exception))
-    assert "No branches" in result.output
+    assert "No branches" in _strip_ansi(result.output)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import numpy as np
@@ -20,6 +21,13 @@ from soup_cli.utils.adapter_merge import (
     merge_ties,
     predict_merged_verdict,
 )
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _strip_ansi(text: str) -> str:
+    return _ANSI_RE.sub("", text or "")
+
 
 runner = CliRunner()
 
@@ -371,8 +379,8 @@ def test_merge_report_frozen():
 def test_adapters_merge_cli_help():
     result = runner.invoke(soup_app, ["adapters", "merge", "--help"])
     assert result.exit_code == 0, (result.output, repr(result.exception))
-    assert "--strategy" in result.output
-    assert "--weights" in result.output
+    assert "--strategy" in _strip_ansi(result.output)
+    assert "--weights" in _strip_ansi(result.output)
 
 
 def test_adapters_merge_cli_linear(tmp_path, monkeypatch):
@@ -394,7 +402,7 @@ def test_adapters_merge_cli_unknown_strategy(tmp_path, monkeypatch):
         "adapters", "merge", "a", "b", "-o", "out", "--strategy", "bogus",
     ])
     assert result.exit_code == 2
-    assert "Unknown --strategy" in result.output
+    assert "Unknown --strategy" in _strip_ansi(result.output)
 
 
 def test_adapters_merge_cli_invalid_weights(tmp_path, monkeypatch):
@@ -415,4 +423,4 @@ def test_adapters_merge_cli_single_adapter_rejected(tmp_path, monkeypatch):
         "adapters", "merge", "a", "-o", "out", "--strategy", "linear",
     ])
     assert result.exit_code == 2
-    assert "at least 2" in result.output
+    assert "at least 2" in _strip_ansi(result.output)
