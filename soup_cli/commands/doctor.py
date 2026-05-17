@@ -500,7 +500,10 @@ def _run_nccl_check():
     manager = mp.Manager()
     return_dict = manager.dict()
 
-    console.print("\n[bold]Measuring NCCL bandwidth (100MB all_reduce)...[/]")
+    console.print(
+        "\n[bold]Measuring NCCL bandwidth[/] "
+        "(100 MB all_reduce, 3 warmup + 10 timed iters, median GB/s)..."
+    )
     try:
         mp.spawn(_nccl_worker, args=(return_dict,), nprocs=2, join=True)
     except Exception as e:
@@ -529,35 +532,65 @@ def _run_nccl_check():
         console.print("[red]Failed to capture NCCL bandwidth measurement.[/]")
 
 
+# NCCL benchmark constants. 100 MB matches typical gradient-bucket size for
+# medium models (7B fp16 ≈ 100-200 MB per bucket) so the measurement
+# reflects real all-reduce traffic, not artificially small messages.
+_NCCL_BENCHMARK_TENSOR_BYTES = 100 * 1024 * 1024  # 100 MB
+_NCCL_BENCHMARK_WARMUP_ITERS = 3  # 3 warmups to amortise CUDA kernel JIT
+_NCCL_BENCHMARK_TIMED_ITERS = 10  # 10 timed runs; report the median (robust to outliers)
+
+
 def _nccl_worker(rank: int, return_dict):
     import os
+    import statistics
     import time
 
     import torch
     import torch.distributed as dist
 
+    # Snapshot prior env so we can restore after the spawn finishes —
+    # avoids leaking MASTER_ADDR/MASTER_PORT into the parent doctor process
+    # (matters when tests run multiple doctor invocations in one session).
+    prior_addr = os.environ.get("MASTER_ADDR")
+    prior_port = os.environ.get("MASTER_PORT")
     os.environ["MASTER_ADDR"] = "localhost"
     os.environ["MASTER_PORT"] = "29500"
 
-    dist.init_process_group("nccl", rank=rank, world_size=2)
+    try:
+        dist.init_process_group("nccl", rank=rank, world_size=2)
 
-    tensor_size = 25 * 1024 * 1024  # 100MB in float32
-    tensor = torch.ones(tensor_size, dtype=torch.float32, device=f"cuda:{rank}")
+        # 100 MB tensor of float32 (4 bytes per element).
+        num_elements = _NCCL_BENCHMARK_TENSOR_BYTES // 4
+        tensor = torch.ones(num_elements, dtype=torch.float32, device=f"cuda:{rank}")
 
-    # Warmup
-    dist.all_reduce(tensor)
-    torch.cuda.synchronize(device=f"cuda:{rank}")
+        # Warmup — runs CUDA kernel JIT + first-NCCL-collective handshake
+        # out of the timing window. 3 iters is enough to stabilise.
+        for _ in range(_NCCL_BENCHMARK_WARMUP_ITERS):
+            dist.all_reduce(tensor)
+        torch.cuda.synchronize(device=f"cuda:{rank}")
 
-    start = time.perf_counter()
-    iters = 5
-    for _ in range(iters):
-        dist.all_reduce(tensor)
-    torch.cuda.synchronize(device=f"cuda:{rank}")
-    end = time.perf_counter()
+        # Per-iteration timing (10 samples). Median is more robust to
+        # one-off jitter (kernel preemption, swap, etc.) than mean.
+        per_iter_sec: list[float] = []
+        for _ in range(_NCCL_BENCHMARK_TIMED_ITERS):
+            start = time.perf_counter()
+            dist.all_reduce(tensor)
+            torch.cuda.synchronize(device=f"cuda:{rank}")
+            per_iter_sec.append(time.perf_counter() - start)
 
-    if rank == 0:
-        elapsed = (end - start) / iters
-        size_gb = (tensor.element_size() * tensor.numel()) / 1e9
-        return_dict["gb_per_sec"] = size_gb / elapsed
+        if rank == 0:
+            median_elapsed = statistics.median(per_iter_sec)
+            size_gb = (tensor.element_size() * tensor.numel()) / 1e9
+            return_dict["gb_per_sec"] = size_gb / median_elapsed
 
-    dist.destroy_process_group()
+        dist.destroy_process_group()
+    finally:
+        # Restore prior env exactly as we found it (or remove if missing).
+        if prior_addr is None:
+            os.environ.pop("MASTER_ADDR", None)
+        else:
+            os.environ["MASTER_ADDR"] = prior_addr
+        if prior_port is None:
+            os.environ.pop("MASTER_PORT", None)
+        else:
+            os.environ["MASTER_PORT"] = prior_port
