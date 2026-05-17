@@ -2712,10 +2712,10 @@ soup quickstart --yes
 Check your environment for compatibility issues:
 
 ```bash
-soup doctor
+soup doctor [--nccl]
 ```
 
-Shows: Python version, GPU availability, system resources (RAM/Disk), all dependency versions, and fix suggestions.
+Shows: Python version, GPU availability, system resources (RAM/Disk), all dependency versions, and fix suggestions. Use `--nccl` to measure and check multi-GPU communication bandwidth against expected hardware ceilings.
 
 ## Version Info
 
@@ -3408,7 +3408,7 @@ soup tokenizer train --input c.jsonl --vocab-size N  Train BPE tokenizer (v0.53.
 soup bench <model> --p50 --p95                Bench with tail-latency percentiles (v0.53.9)
 soup bench <model> --backend auto             Auto-detect transformers/mlx backend (v0.53.9)
 soup serve --reasoning-parser deepseek-r1     Strip <think> blocks from responses (v0.53.9)
-soup doctor                                   Check environment
+soup doctor [--nccl]                          Check environment (optionally check NCCL bandwidth)
 soup quickstart [--dry-run]                   Full demo
 soup version [--full] [--json]                Show version (--full: system info, --json: JSON output)
 soup --verbose <command>                      Full traceback on errors

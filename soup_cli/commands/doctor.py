@@ -5,6 +5,7 @@ from __future__ import annotations
 import platform
 import sys
 
+import typer
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
@@ -51,7 +52,11 @@ _MAX_EXCLUSIVE: dict[str, str] = {
 }
 
 
-def doctor():
+def doctor(
+    nccl: bool = typer.Option(
+        False, "--nccl", help="Measure NCCL bandwidth and check against reference table."
+    ),
+):
     """Check system dependencies, GPU, and compatibility."""
     console.print("[bold]Soup Doctor[/] - checking your environment...\n")
 
@@ -109,8 +114,7 @@ def doctor():
             if max_excl and _version_ge(version_str, max_excl):
                 status = f"[red]INCOMPATIBLE (need <{max_excl})[/]"
                 issues.append(
-                    f"Downgrade {pkg_name}: "
-                    f"pip install '{pkg_name}>={min_ver},<{max_excl}'"
+                    f"Downgrade {pkg_name}: pip install '{pkg_name}>={min_ver},<{max_excl}'"
                 )
             elif _version_ok(version_str, min_ver):
                 status = "[green]OK[/]"
@@ -145,16 +149,21 @@ def doctor():
     # Check torchvision + torch compatibility
     _check_torchvision_compat(issues)
 
+    if nccl:
+        _run_nccl_check()
+
     # Summary
     if issues:
         console.print(f"\n[yellow]Found {len(issues)} issue(s):[/]")
         for issue in issues:
             console.print(f"  [red]>[/] {issue}")
-        console.print("\n[dim]Fix all: pip install -U " + " ".join(
-            f"'{pkg_name}>={min_ver}'"
-            for _, pkg_name, min_ver, required in DEPS
-            if required
-        ) + "[/]")
+        console.print(
+            "\n[dim]Fix all: pip install -U "
+            + " ".join(
+                f"'{pkg_name}>={min_ver}'" for _, pkg_name, min_ver, required in DEPS if required
+            )
+            + "[/]"
+        )
     else:
         console.print("\n[bold green]All checks passed![/] Your environment is ready.")
 
@@ -185,7 +194,7 @@ def _check_gpu():
                 name = torch.cuda.get_device_name(idx)
                 mem = torch.cuda.get_device_properties(idx)
                 total_gb = getattr(mem, "total_memory", getattr(mem, "total_mem", 0))
-                total_gb = total_gb / (1024 ** 3)
+                total_gb = total_gb / (1024**3)
                 gpus.append(f"  GPU {idx}: [bold]{name}[/] ({total_gb:.1f} GB)")
             gpu_info = "\n".join(gpus)
             cuda_ver = torch.version.cuda or "N/A"
@@ -293,7 +302,7 @@ def _detect_dual_python_interpreters() -> str:
     )
 
 
-_GB = 1024 ** 3
+_GB = 1024**3
 
 
 def _get_ram_gb() -> str:
@@ -301,6 +310,7 @@ def _get_ram_gb() -> str:
     # Prefer psutil if installed
     try:
         import psutil
+
         return f"{psutil.virtual_memory().total / _GB:.0f} GB"
     except ImportError:
         pass
@@ -318,9 +328,13 @@ def _get_ram_gb() -> str:
     elif system == "Darwin":
         try:
             import subprocess
+
             res = subprocess.run(
                 ["sysctl", "-n", "hw.memsize"],
-                capture_output=True, text=True, timeout=5, check=False,
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
             )
             if res.returncode == 0:
                 return f"{int(res.stdout.strip()) / _GB:.0f} GB"
@@ -387,8 +401,13 @@ def _check_torchvision_compat(issues: list):
 
         # Known compatible pairs (torch minor -> torchvision minor)
         compat = {
-            "2.6": "0.21", "2.5": "0.20", "2.4": "0.19",
-            "2.3": "0.18", "2.2": "0.17", "2.1": "0.16", "2.0": "0.15",
+            "2.6": "0.21",
+            "2.5": "0.20",
+            "2.4": "0.19",
+            "2.3": "0.18",
+            "2.2": "0.17",
+            "2.1": "0.16",
+            "2.0": "0.15",
         }
         expected_tv = compat.get(torch_minor)
         if expected_tv and not tv_minor.startswith(expected_tv):
@@ -437,3 +456,108 @@ def _version_ge(installed: str, threshold: str) -> bool:
         return inst_parts >= thr_parts
     except (ValueError, AttributeError):
         return False
+
+
+def _run_nccl_check():
+    """Run NCCL bandwidth test if requested."""
+    try:
+        import torch
+        import torch.distributed as dist
+        import torch.multiprocessing as mp
+
+        from soup_cli.utils.profiling_v0_43 import nccl_bandwidth_check
+        from soup_cli.utils.topology import detect_topology
+    except ImportError:
+        console.print("\n[yellow]NCCL bandwidth check requires torch and torch.distributed.[/]")
+        return
+
+    if not torch.cuda.is_available() or not dist.is_available():
+        console.print("\n[yellow]NCCL bandwidth check requires CUDA and torch.distributed.[/]")
+        return
+
+    topo = detect_topology()
+    gpu_count = topo["gpu_count"]
+    if gpu_count < 2:
+        console.print("\n[yellow]NCCL bandwidth requires >=2 GPUs[/]")
+        return
+
+    name = torch.cuda.get_device_name(0).lower()
+    if "h100" in name:
+        gpu = "h100"
+    elif "a100" in name:
+        gpu = "a100"
+    elif "v100" in name:
+        gpu = "v100"
+    elif "4090" in name:
+        gpu = "rtx4090"
+    elif "3090" in name:
+        gpu = "rtx3090"
+    else:
+        gpu = "unknown"
+
+    link = topo["interconnect"]
+
+    manager = mp.Manager()
+    return_dict = manager.dict()
+
+    console.print("\n[bold]Measuring NCCL bandwidth (100MB all_reduce)...[/]")
+    try:
+        mp.spawn(_nccl_worker, args=(return_dict,), nprocs=2, join=True)
+    except Exception as e:
+        console.print(f"[red]Failed to measure NCCL bandwidth:[/] {e}")
+        return
+
+    if "gb_per_sec" in return_dict:
+        measured = return_dict["gb_per_sec"]
+        res = nccl_bandwidth_check(gpu=gpu, link=link, measured_gb_per_sec=measured)
+        status = res["status"]
+        if status == "OK":
+            color = "green"
+        elif status == "MINOR":
+            color = "yellow"
+        else:
+            color = "red"
+
+        expected = res.get("expected_gb_per_sec")
+        expected_str = f" vs expected {expected:.1f}" if expected else ""
+
+        console.print(
+            f"  Result ({gpu.upper()} over {link.upper()}): "
+            f"[{color}]{status}[/] ({measured:.1f} GB/s{expected_str})"
+        )
+    else:
+        console.print("[red]Failed to capture NCCL bandwidth measurement.[/]")
+
+
+def _nccl_worker(rank: int, return_dict):
+    import os
+    import time
+
+    import torch
+    import torch.distributed as dist
+
+    os.environ["MASTER_ADDR"] = "localhost"
+    os.environ["MASTER_PORT"] = "29500"
+
+    dist.init_process_group("nccl", rank=rank, world_size=2)
+
+    tensor_size = 25 * 1024 * 1024  # 100MB in float32
+    tensor = torch.ones(tensor_size, dtype=torch.float32, device=f"cuda:{rank}")
+
+    # Warmup
+    dist.all_reduce(tensor)
+    torch.cuda.synchronize(device=f"cuda:{rank}")
+
+    start = time.perf_counter()
+    iters = 5
+    for _ in range(iters):
+        dist.all_reduce(tensor)
+    torch.cuda.synchronize(device=f"cuda:{rank}")
+    end = time.perf_counter()
+
+    if rank == 0:
+        elapsed = (end - start) / iters
+        size_gb = (tensor.element_size() * tensor.numel()) / 1e9
+        return_dict["gb_per_sec"] = size_gb / elapsed
+
+    dist.destroy_process_group()
