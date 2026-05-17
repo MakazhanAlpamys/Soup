@@ -112,9 +112,12 @@ def test_doctor_checks_optional_deps():
 
 def test_doctor_missing_dep():
     """soup doctor reports missing required dep."""
-    with patch("soup_cli.commands.doctor.DEPS", [
-        ("nonexistent_fake_pkg_xyz", "nonexistent-pkg", "1.0.0", True),
-    ]):
+    with patch(
+        "soup_cli.commands.doctor.DEPS",
+        [
+            ("nonexistent_fake_pkg_xyz", "nonexistent-pkg", "1.0.0", True),
+        ],
+    ):
         result = runner.invoke(app, ["doctor"])
         assert result.exit_code == 0
         assert "MISSING" in result.output
@@ -122,9 +125,54 @@ def test_doctor_missing_dep():
 
 def test_doctor_outdated_dep():
     """soup doctor reports outdated dep."""
-    with patch("soup_cli.commands.doctor.DEPS", [
-        ("sys", "sys", "999.0.0", True),  # sys has no __version__ but import won't fail
-    ]):
+    with patch(
+        "soup_cli.commands.doctor.DEPS",
+        [
+            ("sys", "sys", "999.0.0", True),  # sys has no __version__ but import won't fail
+        ],
+    ):
         result = runner.invoke(app, ["doctor"])
         assert result.exit_code == 0
         # Either outdated or OK (depends on version attr presence)
+
+
+# --- NCCL Check tests ---
+
+
+def test_doctor_nccl_no_gpu():
+    """--nccl with <2 GPUs prints a skip message."""
+    with (
+        patch("torch.cuda.is_available", return_value=True),
+        patch("torch.distributed.is_available", return_value=True),
+        patch(
+            "soup_cli.utils.topology.detect_topology",
+            return_value={"gpu_count": 1, "nvlink_pairs": 0, "interconnect": "single"},
+        ),
+    ):
+        result = runner.invoke(app, ["doctor", "--nccl"])
+        assert result.exit_code == 0
+        assert "NCCL bandwidth requires >=2 GPUs" in result.output
+
+
+def test_doctor_nccl_mocked_success():
+    """--nccl with 2 GPUs runs the check and displays result."""
+
+    # We mock mp.spawn to just set a value in the return_dict instead of actually running processes.
+    def mock_spawn(func, args, nprocs, join):
+        return_dict = args[0]
+        return_dict["gb_per_sec"] = 350.0  # mock value
+
+    with (
+        patch("torch.cuda.is_available", return_value=True),
+        patch("torch.distributed.is_available", return_value=True),
+        patch(
+            "soup_cli.utils.topology.detect_topology",
+            return_value={"gpu_count": 2, "nvlink_pairs": 1, "interconnect": "nvlink"},
+        ),
+        patch("torch.cuda.get_device_name", return_value="NVIDIA H100 80GB HBM3"),
+        patch("torch.multiprocessing.spawn", side_effect=mock_spawn),
+    ):
+        result = runner.invoke(app, ["doctor", "--nccl"])
+        assert result.exit_code == 0
+        assert "Measuring NCCL bandwidth" in result.output
+        assert "Result (H100 over NVLINK)" in result.output
