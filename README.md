@@ -51,7 +51,7 @@ Latest highlights only. Full history: [GitHub Releases](https://github.com/Makaz
 - **`soup train --repro-receipt <out.json>`** — SR 11-7-style reproducibility receipt: seeds (torch / numpy / python), Python version, OS + arch, Soup version, kernel versions (CUDA / cuDNN / NCCL — best-effort from torch when available), GPU model + driver. Atomic write, cwd-contained.
 - **CO₂ + energy schema (Part F).** `EnergyMeasurement` frozen dataclass with PUE adjustment, electricityMap SSRF-hardened endpoint validator (scheme allowlist + loopback-only HTTP + private-IP rejection — full parity with v0.51.0 `validate_hub_endpoint`). CodeCarbon hook lands in v0.59.1.
 - **Shared `atomic_write_text` helper.** All four v0.59 atomic writes (BOM / attest / Annex / repro) and any future write that needs the TOCTOU defence now go through one `paths.atomic_write_text` — single-source-of-truth so a future contributor cannot accidentally drop the symlink check (mirrors v0.40.6 / v0.53.5 `peft_wiring` centralisation policy).
-- **+93 new tests** (9193 → ~9286 net). Review-fix coverage: 3 HIGH (audit-log TOCTOU on rotation, `O_NOFOLLOW` on append, redaction extended to host_id/operator_id/command) + 5 MEDIUM (Annex markdown escape, env-override containment, atomic_write centralisation, bom artifact size_bytes validation, IPv6 hostname stripping cleanup) + 4 LOW.
+- **+99 new tests** (9193 → 9294). Review-fix coverage across four waves: 0 CRITICAL + 8 HIGH + 12 MEDIUM + 4 LOW resolved before tag.
 
 ## Why Soup?
 
