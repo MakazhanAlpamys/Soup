@@ -1104,13 +1104,33 @@ class TestReviewFollowups:
         resolved = default_log_path()
         assert resolved == str(target)
 
-    def test_default_log_path_rejects_null_byte_env(self, monkeypatch, tmp_path):
-        from soup_cli.utils.audit_log import default_log_path
+    def test_default_log_path_rejects_null_byte_override(self):
+        """The OS layer rejects null bytes in env vars on every platform we ship
+        on (POSIX raises ValueError, Windows raises "embedded null character"),
+        so we cannot inject one via monkeypatch.setenv. Test the validator
+        directly instead — it must return None for any null-byte path so the
+        caller falls back to the safe default."""
+        from soup_cli.utils.audit_log import _validate_log_path_override
+
+        assert _validate_log_path_override("/tmp/\x00/audit.jsonl") is None
+
+    def test_default_log_path_handles_env_read_value_error(self, monkeypatch, tmp_path):
+        """If the env layer somehow raises ValueError on read (defence in depth
+        for the POSIX `embedded null byte` path), default_log_path must still
+        return a safe default."""
+        from soup_cli.utils import audit_log
 
         monkeypatch.chdir(tmp_path)
-        monkeypatch.setenv("SOUP_AUDIT_LOG_PATH", "/tmp/\x00/audit.jsonl")
-        resolved = default_log_path()
+
+        def boom(key, default=None):
+            if key == "SOUP_AUDIT_LOG_PATH":
+                raise ValueError("embedded null byte")
+            return os.environ.get(key, default)
+
+        monkeypatch.setattr(audit_log.os.environ, "get", boom)
+        resolved = audit_log.default_log_path()
         assert "\x00" not in resolved
+        assert resolved.endswith("audit.jsonl")
 
     # --- Code review #2 / Security L1: artifact size_bytes validation ---
     def test_bom_artifact_size_bytes_non_int_rejected(self):
