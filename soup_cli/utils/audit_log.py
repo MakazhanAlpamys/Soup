@@ -217,8 +217,15 @@ def default_log_path() -> str:
 
     The env override goes through ``_validate_log_path_override`` so callers
     cannot smuggle a system file (``/etc/cron.d``) through the override.
+
+    POSIX ``os.environ.get`` raises ``ValueError`` when the value contains
+    embedded null bytes; we catch and fall back to the safe default.
     """
-    override = os.environ.get("SOUP_AUDIT_LOG_PATH")
+    try:
+        override = os.environ.get("SOUP_AUDIT_LOG_PATH")
+    except ValueError:
+        # Env value contains a null byte — POSIX rejects on read.
+        override = None
     if override:
         validated = _validate_log_path_override(override)
         if validated is not None:

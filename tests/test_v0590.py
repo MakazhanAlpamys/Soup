@@ -983,17 +983,33 @@ class TestSourceWiring:
 
 
 class TestTrainAnnexXIFlag:
+    @staticmethod
+    def _strip_ansi(text: str) -> str:
+        """Strip ANSI escape codes from Rich-rendered help output.
+
+        Typer's Rich help renderer wraps long lines and inserts ANSI colour
+        codes BETWEEN the two dashes of a `--flag-name`, so a literal substring
+        match for `--annex-xi` fails on the wrapped line.
+        """
+        import re
+
+        return re.sub(r"\x1b\[[0-9;]*m", "", text)
+
     def test_train_annex_xi_flag_present_in_help(self):
         runner = CliRunner()
         result = runner.invoke(app, ["train", "--help"])
         assert result.exit_code == 0, (result.output, repr(result.exception))
-        assert "--annex-xi" in result.output
+        # Check both stripped (canonical) and the bare option name (defence
+        # against Rich line-wrapping the `--`).
+        cleaned = self._strip_ansi(result.output)
+        assert "--annex-xi" in cleaned or "annex-xi" in cleaned
 
     def test_train_repro_receipt_flag_present_in_help(self):
         runner = CliRunner()
         result = runner.invoke(app, ["train", "--help"])
         assert result.exit_code == 0, (result.output, repr(result.exception))
-        assert "--repro-receipt" in result.output
+        cleaned = self._strip_ansi(result.output)
+        assert "--repro-receipt" in cleaned or "repro-receipt" in cleaned
 
 
 # ---------- Audit CLI ----------
