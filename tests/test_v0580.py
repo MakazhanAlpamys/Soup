@@ -14,6 +14,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import os
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -1166,8 +1167,13 @@ class TestSourceWiring:
         assert 'name="loop"' in cli_src
 
     def test_version_bumped_to_0_58_0(self):
+        # Widened from exact-match to floor-check to match the v0.51.0 / v0.54.0
+        # / v0.56.0 idiom — v0.58.0 was the floor when these tests landed.
         init = (_REPO_ROOT / "soup_cli" / "__init__.py").read_text(encoding="utf-8")
-        assert '__version__ = "0.58.0"' in init
+        match = re.search(r'__version__ = "(\d+)\.(\d+)\.(\d+)"', init)
+        assert match is not None, init
+        major, minor, patch = (int(g) for g in match.groups())
+        assert (major, minor, patch) >= (0, 58, 0)
 
     def test_no_top_level_torch_import_in_loop_modules(self):
         for name in [
@@ -1197,7 +1203,11 @@ class TestSourceWiring:
 def test_version_string():
     from soup_cli import __version__
 
-    assert __version__ == "0.58.0"
+    # Widened from exact-match to floor-check (v0.58.0 was the floor here).
+    match = re.match(r"^(\d+)\.(\d+)\.(\d+)$", __version__)
+    assert match is not None, __version__
+    major, minor, patch = (int(g) for g in match.groups())
+    assert (major, minor, patch) >= (0, 58, 0)
 
 
 # ---------------------------------------------------------------------------

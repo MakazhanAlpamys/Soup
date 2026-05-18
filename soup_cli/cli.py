@@ -233,6 +233,33 @@ app.add_typer(
     ),
 )
 
+# v0.59.0 — Governance & Provenance: BOM emit + attestation + audit log.
+from soup_cli.commands import attest as _attest_cmd  # noqa: E402
+from soup_cli.commands import audit_log as _audit_log_cmd  # noqa: E402
+from soup_cli.commands import bom as _bom_cmd  # noqa: E402
+
+app.add_typer(
+    _bom_cmd.app,
+    name="bom",
+    help=(
+        "CycloneDX ML-BOM + SPDX AI bill-of-materials emitter (v0.59.0)."
+    ),
+)
+app.add_typer(
+    _attest_cmd.app,
+    name="attest",
+    help=(
+        "In-toto + SLSA-3 attestations per Soup Can stage (v0.59.0)."
+    ),
+)
+app.add_typer(
+    _audit_log_cmd.app,
+    name="audit-log",
+    help=(
+        "HIPAA/SOC2-shaped JSONL audit log: tail + rotate (v0.59.0)."
+    ),
+)
+
 
 def _rewrite_advise_argv(argv: list) -> list:
     """Inject `run` between `advise` and a non-subcommand first argument.

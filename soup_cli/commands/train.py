@@ -172,6 +172,22 @@ def train(
             "if any of the 6 v0.56.0 failure modes returns MAJOR."
         ),
     ),
+    annex_xi: str = typer.Option(
+        None,
+        "--annex-xi",
+        help=(
+            "After training, render an EU AI Act Annex XI/XII auto-doc to the "
+            "given output path (cwd-contained). Markdown body now; PDF in v0.59.1."
+        ),
+    ),
+    repro_receipt: str = typer.Option(
+        None,
+        "--repro-receipt",
+        help=(
+            "After training, write an SR 11-7-style reproducibility receipt "
+            "(seeds + kernel versions + GPU + OS) to the given path. v0.59.0."
+        ),
+    ),
 ):
     """Start training from a soup.yaml config."""
     config_path = Path(config)
@@ -949,6 +965,69 @@ def train(
                 f"[red]--diagnose-gate failed:[/] {type(exc).__name__}: {exc}"
             )
             raise typer.Exit(1) from exc
+
+    # --- v0.59.0 --annex-xi: Annex XI/XII auto-doc -----------------------
+    if annex_xi and _should_run_diagnose_gate_on_rank():
+        try:
+            _write_annex_xi(annex_xi, run_id, cfg)
+        except typer.Exit:
+            raise
+        except (OSError, ValueError) as exc:
+            console.print(
+                f"[yellow]--annex-xi skipped:[/] {type(exc).__name__}: {exc}"
+            )
+
+    # --- v0.59.0 --repro-receipt: SR 11-7 receipt ------------------------
+    if repro_receipt and _should_run_diagnose_gate_on_rank():
+        try:
+            _write_repro_receipt(repro_receipt, run_id, cfg)
+        except typer.Exit:
+            raise
+        except (OSError, ValueError) as exc:
+            console.print(
+                f"[yellow]--repro-receipt skipped:[/] {type(exc).__name__}: {exc}"
+            )
+
+
+def _write_annex_xi(out_path: str, run_id: str, cfg) -> None:
+    """Render an Annex XI markdown using values from the resolved soup.yaml."""
+    from datetime import datetime, timezone
+
+    from soup_cli import __version__
+    from soup_cli.utils.annex_xi import AnnexXIData, write_annex_doc
+
+    modality = getattr(cfg, "modality", "text") or "text"
+    data = AnnexXIData(
+        model_name=str(getattr(cfg, "output", run_id) or run_id),
+        base_model=str(cfg.base),
+        task=str(cfg.task),
+        dataset_summary=str(getattr(cfg.data, "train", "")),
+        modalities=(modality,),
+        train_compute_flops=0.0,
+        train_energy_kwh=0.0,
+        train_co2_kg=0.0,
+        top_domains=(),
+        soup_version=__version__,
+        run_id=run_id,
+        created_at=datetime.now(tz=timezone.utc).isoformat(),
+    )
+    written = write_annex_doc(data, "xi", out_path)
+    console.print(f"[green]--annex-xi[/] -> {written}")
+
+
+def _write_repro_receipt(out_path: str, run_id: str, cfg) -> None:
+    """Render an SR 11-7 receipt from the resolved soup.yaml."""
+    from soup_cli.utils.repro_receipt import build_repro_receipt, write_repro_receipt
+
+    seeds: dict[str, int] = {}
+    seed = getattr(cfg.training, "seed", None)
+    if isinstance(seed, int) and not isinstance(seed, bool):
+        seeds["torch"] = seed
+        seeds["numpy"] = seed
+        seeds["python"] = seed
+    receipt = build_repro_receipt(seeds=seeds, run_id=run_id)
+    written = write_repro_receipt(receipt, out_path)
+    console.print(f"[green]--repro-receipt[/] -> {written}")
 
 
 def _should_run_diagnose_gate_on_rank() -> bool:

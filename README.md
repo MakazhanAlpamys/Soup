@@ -42,17 +42,16 @@ soup train
 
 Latest highlights only. Full history: [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 
-**v0.58.0 — `soup loop`: the production data flywheel, all from the CLI.** Every competitor stops at training. Web tools (Langwatch, Helicone, Galileo) monitor production but don't retrain. Nobody runs the full *production traces → preference pairs → Eval-Gated DPO → canary deploy → rollback* cycle from a single CLI on a laptop. v0.58 connects 8 of Soup's existing uniques into one workflow.
+**v0.59.0 — Governance & Provenance: every Soup run is procurement-ready.** ML-BOMs, SLSA-3 attestations, EU AI Act Annex XI/XII auto-docs, HIPAA/SOC2 audit log, SR 11-7 reproducibility receipts. The compliance story no SaaS can tell because the operator is the only one who sees weights, dataset, eval, and cost together. v0.59 is pure orchestration on top of v0.26 Registry + v0.34 cost tracker + v0.56 diagnose — no new training code, just structured exporters that emit the formats procurement demands.
 
-- **`soup loop init <served-model> --eval <suite> --baseline registry://<id>`** — one-time setup writing a single `.soup/loop.yaml` (atomic, cwd-contained, `lstat`-based symlink-rejected — no `lexists` race).
-- **`soup loop status`** — counters for traces collected / pairs distilled / runs gated / adapters shipped, plus monthly spend vs. budget and runs-today vs. daily cap, all reading from the same state file the daemon writes.
-- **`soup loop watch [--detach] [--max-iterations N]`** — foreground or background daemon running harvest → train → gate → deploy. `--detach` spawns `python -m soup_cli.cli loop watch --foreground` via argv-list `subprocess.Popen` (no shell). State reloaded every iteration so external `pause` / `resume` takes effect immediately.
-- **`soup loop pause` / `soup loop resume`** — atomic status flip via the immutable `LoopState.with_status` API. Status is a closed allowlist of `running` / `paused` / `stopped`.
-- **`soup loop canary <new-adapter> --traffic 5% --autoroll-on-regress`** — promotes a canary on top of the v0.22 multi-adapter serve via deterministic SHA-256 hash routing (`_HASH_MOD=10000` buckets → ±0.01% split granularity). Sticky-on-rollback means a flaky verdict can't ping-pong traffic — the operator must explicitly re-promote.
-- **`soup loop replay [<iteration-id>]`** — list or pretty-print iteration manifests under `.soup-loops/<iter-id>/iteration.json`, the same layout a v0.26 Soup Can can wrap (Registry-DAG append lands in **v0.58.1**).
-- **Budget guardrails.** `--monthly-budget 50usd` composes with the v0.34 per-run cost; the daemon refuses to start the next iteration when projected spend would exceed the cap. `--max-runs-per-day 3` defends against runaway proxy loops with UTC-day rollover detection.
-- **+195 new tests** (8998 → 9193) in `tests/test_v0580.py`. Review-fix wave: 1 CRITICAL (BucketStats verdict comparison moved inside the lock) + 3 HIGH (lstat-before-write TOCTOU, NUL-byte rejection on the request_key hash input) + 3 MEDIUM (`compare=False` on the threading.Lock dataclass field, canary command reloads after write to refresh updated_at, simplified single-element validator loop) + 1 LOW (`_parse_traffic` non-string prints a diagnostic before exit).
-- **Why blue-ocean.** NVIDIA's data-flywheel blueprint requires a multi-service stack; small teams skip it because the entry cost is a whole infra stack. Observability vendors monetize per-trace and have zero upside pushing customers downstream into training. OpenPipe tried this exact business and pivoted to RL agents before CoreWeave acquired it. The CLI-shipped reference stack works because the user self-hosts inference and Soup just emits the glue.
+- **`soup bom emit --format cyclonedx|spdx|both`** — CycloneDX 1.6 ML-BOM + SPDX 2.3 + AI-profile dual emitter from any `RegistryEntry`. Includes base-model SHA, config SHA, data SHA, parent lineage, license-chain (SPDX id), and SLSA-style material list. Atomic write under cwd containment + `os.lstat` symlink rejection (TOCTOU-safe, mirrors v0.33.0 #22).
+- **`soup attest emit --stage train --subject <name> --sha <64hex>`** — in-toto v1 Statement wrapping a SLSA-3 provenance v1 predicate. Stage allowlist (`extract` / `train` / `eval` / `export` / `publish`). Sigstore + ed25519 signing live in v0.59.1; the schema + atomic-write surface ships now so CI can integrate.
+- **`soup train --annex-xi <out.md>`** — EU AI Act Annex XI Section 1+2 (technical documentation) + Annex XII (Article 53(1)(d) public training summary) markdown renderer. Top-10 domains, modality breakdown, FLOPs / kWh / CO₂ footprint. Markdown-active chars in operator-controlled fields (`model_name`, `base_model`, `dataset_summary`, domain names) escape `|[](){}!<>` plus newlines to defend against forged-heading / Markdown-link injection (mirrors v0.29.0 model-card v2 escape).
+- **`soup audit-log tail / rotate`** — append-only JSONL audit at `~/.soup/audit.jsonl` (override via `SOUP_AUDIT_LOG_PATH`, containment-checked to `$HOME / $CWD / $TMPDIR`). Splunk/ELK ingestion-ready. PII redaction across every string field via the v0.40.3 `_SECRET_RE` policy (`hf_*` / `sk-*` / `Bearer …` → `<redacted>`). POSIX `O_NOFOLLOW` + `0o600` perms; rotation at 100 MiB with symlink rejection at the backup path.
+- **`soup train --repro-receipt <out.json>`** — SR 11-7-style reproducibility receipt: seeds (torch / numpy / python), Python version, OS + arch, Soup version, kernel versions (CUDA / cuDNN / NCCL — best-effort from torch when available), GPU model + driver. Atomic write, cwd-contained.
+- **CO₂ + energy schema (Part F).** `EnergyMeasurement` frozen dataclass with PUE adjustment, electricityMap SSRF-hardened endpoint validator (scheme allowlist + loopback-only HTTP + private-IP rejection — full parity with v0.51.0 `validate_hub_endpoint`). CodeCarbon hook lands in v0.59.1.
+- **Shared `atomic_write_text` helper.** All four v0.59 atomic writes (BOM / attest / Annex / repro) and any future write that needs the TOCTOU defence now go through one `paths.atomic_write_text` — single-source-of-truth so a future contributor cannot accidentally drop the symlink check (mirrors v0.40.6 / v0.53.5 `peft_wiring` centralisation policy).
+- **+93 new tests** (9193 → ~9286 net). Review-fix coverage: 3 HIGH (audit-log TOCTOU on rotation, `O_NOFOLLOW` on append, redaction extended to host_id/operator_id/command) + 5 MEDIUM (Annex markdown escape, env-override containment, atomic_write centralisation, bom artifact size_bytes validation, IPv6 hostname stripping cleanup) + 4 LOW.
 
 ## Why Soup?
 
@@ -4277,6 +4276,87 @@ any provider), **code** (execution via RLVR sandbox), **judge** (binary scoring)
 **validator** (regex or JSON schema), **sampler** (deterministic selection). Checkpoint
 written per node; resume rehydrates from per-node sidecars. Failed rows logged with
 redacted reasons (paths stripped, capped at 256 chars).
+
+## Bill of Materials (`soup bom emit`)
+
+Emit a **CycloneDX 1.6 ML-BOM** or **SPDX 2.3 + AI profile** bill of materials from any
+training run. Procurement teams and compliance auditors can ingest the BOM directly into
+their existing tooling — no custom parser required.
+
+```bash
+soup bom emit \
+  --name adapter-v1 --version 0.1.0 \
+  --base-model meta-llama/Llama-3.1-8B \
+  --base-sha aaaa...64hex \
+  --config-sha bbbb...64hex \
+  --task sft --license apache-2.0 \
+  --format both --output bom
+# writes bom.cdx.json + bom.spdx.json
+```
+
+Root component is `type=machine-learning-model` (per CycloneDX ML-BOM extension). Base
+model + parent adapters + per-artifact files appear as components with SHA-256 hashes.
+License chain uses SPDX identifiers. Energy + CO₂ properties (when attached via the
+energy schema) ship under `metadata.properties`.
+
+## Provenance Attestations (`soup attest emit`)
+
+Emit an **in-toto v1 Statement** wrapping a **SLSA-3 provenance v1 predicate** for each
+Soup Can lifecycle stage:
+
+```bash
+soup attest emit \
+  --stage train \
+  --subject adapter-v1 \
+  --sha aaaa...64hex \
+  --builder soup-cli@0.59.0 \
+  --output att.json
+```
+
+Stages are a closed allowlist: `extract` / `train` / `eval` / `export` / `publish`.
+Subject SHA must be 64-hex (sha256). The default `--sign unsigned` backend ships now;
+Sigstore (OIDC-via-GitHub) and ed25519 air-gap signing arrive in v0.59.1.
+
+## EU AI Act Annex XI/XII Auto-Doc (`soup train --annex-xi`)
+
+Render an EU AI Act Annex XI (technical documentation, Sections 1+2) or Annex XII
+(Article 53(1)(d) public training summary) directly from a training run:
+
+```bash
+soup train --config soup.yaml --annex-xi annex.md
+```
+
+Top-10 domains by share, modality breakdown, training compute / kWh / CO₂, model
+description, base model, run id. Markdown body now; PDF in v0.59.1. Operator-controlled
+fields are escape-neutralised (`|[](){}!<>` + newline / CR / tab) so a malicious model
+name can't inject a forged heading into downstream PDF/HTML renderers.
+
+## Audit Log (`soup audit-log`)
+
+Tail or rotate the HIPAA/SOC2-shaped JSONL audit log at `~/.soup/audit.jsonl` (override
+via `SOUP_AUDIT_LOG_PATH`, containment-checked to `$HOME / $CWD / $TMPDIR`):
+
+```bash
+soup audit-log tail --limit 50          # Rich table view
+soup audit-log tail --json              # raw JSONL for SIEM ingestion
+soup audit-log rotate --cap-mb 100      # force a rotation pass
+```
+
+PII redaction across **every** string field (`hf_*` / `sk-*` / `Bearer …` → `<redacted>`)
+via the v0.40.3 `_SECRET_RE` policy. POSIX `O_NOFOLLOW` + `0o600` perms, atomic-append,
+rotation at 100 MiB with symlink rejection at the backup path.
+
+## Reproducibility Receipt (`soup train --repro-receipt`)
+
+SR 11-7-style reproducibility receipt captures seeds (torch + numpy + python), kernel
+versions (CUDA + cuDNN + NCCL), GPU model + driver, OS + arch:
+
+```bash
+soup train --config soup.yaml --repro-receipt repro.json
+```
+
+Bank model-risk teams and regulated-org auditors get a single JSON file that fingerprints
+the exact environment the run executed in. Atomic write, cwd-contained.
 
 ## Changelog
 

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import stat
+import tempfile
 from pathlib import Path
 from typing import Union
 
@@ -69,3 +70,39 @@ def enforce_under_cwd_and_no_symlink(path: str, field: str) -> str:
                 f"{field} must not be a symlink (TOCTOU defence)"
             )
     return path
+
+
+def atomic_write_text(
+    text: str,
+    output_path: str,
+    *,
+    prefix: str = ".soup.",
+    suffix: str = ".tmp",
+    field: str = "output",
+) -> str:
+    """Atomically write ``text`` to ``output_path`` under cwd containment.
+
+    Pipeline: ``enforce_under_cwd_and_no_symlink`` -> ``mkstemp`` in the
+    parent dir -> write -> ``os.replace`` -> best-effort cleanup of the
+    tmp file on failure. Returns the realpath of the written file.
+
+    Centralised in v0.59.0 from four separate copies in
+    ``bom.py`` / ``attest.py`` / ``annex_xi.py`` / ``repro_receipt.py``
+    so the TOCTOU defence stays single-source-of-truth (code-review
+    HIGH fix mirrors v0.40.6 / v0.53.5 peft_wiring centralisation policy).
+    """
+    enforce_under_cwd_and_no_symlink(output_path, field)
+    parent = os.path.dirname(os.path.abspath(output_path)) or "."
+    os.makedirs(parent, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(prefix=prefix, suffix=suffix, dir=parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        os.replace(tmp_path, output_path)
+    finally:
+        if os.path.exists(tmp_path):
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+    return os.path.realpath(output_path)
