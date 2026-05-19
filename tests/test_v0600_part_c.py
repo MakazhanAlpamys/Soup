@@ -20,9 +20,15 @@ from soup_cli.cli import app
 
 
 def _make_safetensors_only(tmp_path: Path) -> Path:
+    import numpy as np
+    from safetensors.numpy import save_file
+
     target = tmp_path / "safe_adapter"
     target.mkdir()
-    (target / "adapter_model.safetensors").write_bytes(b"weights")
+    save_file(
+        {"weight": np.array([1.0], dtype=np.float32)},
+        str(target / "adapter_model.safetensors"),
+    )
     (target / "adapter_config.json").write_text('{"r": 8}', encoding="utf-8")
     return target
 
@@ -35,6 +41,32 @@ def _make_with_pickle(tmp_path: Path) -> Path:
     return target
 
 
+def _make_with_renamed_pickle(tmp_path: Path) -> Path:
+    target = tmp_path / "renamed_pickle_adapter"
+    target.mkdir()
+    (target / "adapter_model.safetensors").write_bytes(b"\x80\x04pickled-bytes")
+    (target / "adapter_config.json").write_text('{"r": 8}', encoding="utf-8")
+    return target
+
+
+def _make_with_renamed_zip(tmp_path: Path) -> Path:
+    target = tmp_path / "renamed_zip_adapter"
+    target.mkdir()
+    (target / "adapter_model.safetensors").write_bytes(b"PK\x03\x04zipped-bytes")
+    (target / "adapter_config.json").write_text('{"r": 8}', encoding="utf-8")
+    return target
+
+
+def _make_with_corrupt_safetensors_header(tmp_path: Path) -> Path:
+    target = tmp_path / "corrupt_safetensors_adapter"
+    target.mkdir()
+    (target / "adapter_model.safetensors").write_bytes(
+        (1024).to_bytes(8, "little") + b"{}"
+    )
+    (target / "adapter_config.json").write_text('{"r": 8}', encoding="utf-8")
+    return target
+
+
 class TestStrictSafetensors:
     def test_imports(self):
         from soup_cli.utils.strict_safetensors import (
@@ -42,9 +74,11 @@ class TestStrictSafetensors:
             StrictSafetensorsReport,
             check_strict_safetensors,
             find_unsafe_weight_files,
+            is_safetensors_magic,
         )
         assert callable(check_strict_safetensors)
         assert callable(find_unsafe_weight_files)
+        assert callable(is_safetensors_magic)
         assert isinstance(UNSAFE_EXTENSIONS, frozenset)
         assert dataclasses.is_dataclass(StrictSafetensorsReport)
 
@@ -93,6 +127,32 @@ class TestStrictSafetensors:
     def test_check_lenient_pickle_returns_report(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         adapter = _make_with_pickle(tmp_path)
+        from soup_cli.utils.strict_safetensors import check_strict_safetensors
+
+        report = check_strict_safetensors(str(adapter), strict=False)
+        assert report.ok is False
+        assert len(report.unsafe_files) == 1
+
+    def test_find_unsafe_flags_pickle_renamed_safetensors(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        adapter = _make_with_renamed_pickle(tmp_path)
+        from soup_cli.utils.strict_safetensors import find_unsafe_weight_files
+
+        found = find_unsafe_weight_files(str(adapter))
+        assert len(found) == 1
+        assert found[0].endswith("adapter_model.safetensors")
+
+    def test_check_strict_zip_renamed_safetensors_raises(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        adapter = _make_with_renamed_zip(tmp_path)
+        from soup_cli.utils.strict_safetensors import check_strict_safetensors
+
+        with pytest.raises(ValueError, match="(?i)safetensors|unsafe"):
+            check_strict_safetensors(str(adapter), strict=True)
+
+    def test_check_lenient_corrupt_safetensors_returns_report(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        adapter = _make_with_corrupt_safetensors_header(tmp_path)
         from soup_cli.utils.strict_safetensors import check_strict_safetensors
 
         report = check_strict_safetensors(str(adapter), strict=False)
