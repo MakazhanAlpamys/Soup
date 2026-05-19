@@ -229,14 +229,27 @@ class TestMergeIntegration:
     """Regression: license gate is wired into `soup adapters merge`."""
 
     def test_merge_help_lists_license_flags(self):
+        """Both --license and --license-override must surface in the help text.
+
+        Rich's table renderer can split option names across ANSI styling
+        escape sequences, so a naive ``"--license" in result.output`` may
+        miss the bare option. We strip ANSI codes first.
+        """
+        import re
+
         from typer.testing import CliRunner
 
         from soup_cli.cli import app
         runner = CliRunner()
         result = runner.invoke(app, ["adapters", "merge", "--help"])
         assert result.exit_code == 0, (result.output, repr(result.exception))
-        assert "--license" in result.output
-        assert "--license-override" in result.output
+        # Strip ANSI escape sequences; merge whitespace.
+        clean = re.sub(r"\x1b\[[0-9;]*[mGKHF]", "", result.output)
+        clean = re.sub(r"\s+", " ", clean)
+        assert "--license-override" in clean
+        # Bare --license option (Typer may render with TEXT type hint
+        # immediately after); accept either form.
+        assert "--license " in clean or "--license\n" in clean or "--license " in result.output
 
     def test_merge_refuses_license_conflict_without_override(self, tmp_path, monkeypatch):
         """Two adapters with incompatible licenses + no override → exit 3."""

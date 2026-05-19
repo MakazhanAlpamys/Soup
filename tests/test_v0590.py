@@ -964,8 +964,14 @@ class TestSourceWiring:
         assert "bom" in text.lower()
         assert "attest" in text.lower()
 
-    def test_version_is_0_59(self):
-        assert soup_cli.__version__ == "0.59.0"
+    def test_version_is_at_least_0_59(self):
+        """v0.59 floor — widens automatically as later releases bump version.
+
+        Matches the v0.51.0 / v0.54.0 floor-check idiom so later releases
+        don't have to edit this assertion.
+        """
+        major, minor, _patch = soup_cli.__version__.split(".")
+        assert int(major) == 0 and int(minor) >= 59, soup_cli.__version__
 
     def test_no_top_level_heavy_imports(self):
         """v0.59 modules must not import torch/transformers at module top."""

@@ -781,8 +781,16 @@ class TestSourceWiring:
         assert __version__ >= "0.56.0"
 
     def test_pyproject_version(self) -> None:
+        import re
+
         text = (_PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8")
-        assert 'version = "0.5' in text  # floor check; current v0.5x.y
+        # Floor check — v0.56.0 was the first release that needed this guard.
+        # We accept any v0.<minor>.<patch> >= 0.56.0 so future releases (v0.6x,
+        # v0.7x, ...) don't have to edit this line.
+        m = re.search(r'^version = "(0\.\d+\.\d+)"', text, re.MULTILINE)
+        assert m, "pyproject.toml missing version line"
+        major, minor, _patch = m.group(1).split(".")
+        assert int(major) == 0 and int(minor) >= 56, m.group(1)
 
 
 # --- review-fix coverage --------------------------------------------------
