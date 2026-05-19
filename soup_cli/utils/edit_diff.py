@@ -115,13 +115,17 @@ def load_probes(path: str) -> Tuple[str, ...]:
         raise ValueError("probe path must not contain null bytes")
     if not is_under_cwd(path):
         raise ValueError(f"probe path must stay under cwd: {path!r}")
-    real = os.path.realpath(path)
+    # CRITICAL: lstat the RAW path BEFORE realpath (review-fix from CI)
+    # — realpath resolves symlinks, so `lstat(realpath(path))` always sees
+    # the target file. We need to detect the symlink at the raw path.
+    # Matches v0.53.7 #106 TOCTOU policy.
     try:
-        st = os.lstat(real)
+        st = os.lstat(path)
     except FileNotFoundError as exc:
         raise FileNotFoundError(f"probe file not found: {path!r}") from exc
     if stat.S_ISLNK(st.st_mode):
         raise ValueError("probe path must not be a symlink")
+    real = os.path.realpath(path)
     if st.st_size > _MAX_PROBE_BYTES:
         raise ValueError(
             f"probe file exceeds {_MAX_PROBE_BYTES} bytes"

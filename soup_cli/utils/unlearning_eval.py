@@ -470,20 +470,21 @@ def get_fixture_path(benchmark: str) -> Optional[Path]:
         pkg_root = files("soup_cli")
     except (ModuleNotFoundError, TypeError):
         return None
-    candidate = Path(
-        os.path.realpath(
-            os.path.join(str(pkg_root), "data", "_fixtures",
-                         "unlearning", fixture_name)
-        )
+    raw_candidate = Path(
+        os.path.join(str(pkg_root), "data", "_fixtures",
+                     "unlearning", fixture_name)
     )
-    if not candidate.is_file():
-        return None
-    # Symlink rejection (TOCTOU defence - matches project policy).
+    # Symlink rejection at the RAW path BEFORE realpath (review-fix —
+    # realpath resolves symlinks so lstat on the resolved target always
+    # sees a regular file). Matches v0.53.7 #106 TOCTOU policy.
     try:
-        st = os.lstat(candidate)
+        st = os.lstat(raw_candidate)
     except OSError:
         return None
     if stat.S_ISLNK(st.st_mode):
+        return None
+    candidate = Path(os.path.realpath(raw_candidate))
+    if not candidate.is_file():
         return None
     return candidate
 
@@ -502,13 +503,15 @@ def load_evidence_file(path: str) -> Mapping[str, Mapping[str, Any]]:
         raise ValueError("evidence path must not contain null bytes")
     if not is_under_cwd(path):
         raise ValueError(f"evidence path must stay under cwd: {path!r}")
-    real = os.path.realpath(path)
+    # CRITICAL: lstat the RAW path BEFORE realpath (review-fix from CI)
+    # — realpath resolves symlinks. Matches v0.53.7 #106 TOCTOU policy.
     try:
-        st = os.lstat(real)
+        st = os.lstat(path)
     except FileNotFoundError as exc:
         raise FileNotFoundError(f"evidence file not found: {path!r}") from exc
     if stat.S_ISLNK(st.st_mode):
         raise ValueError("evidence path must not be a symlink")
+    real = os.path.realpath(path)
     if st.st_size > _MAX_EVIDENCE_BYTES:
         raise ValueError(
             f"evidence file exceeds {_MAX_EVIDENCE_BYTES} bytes"
