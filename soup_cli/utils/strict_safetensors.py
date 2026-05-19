@@ -1,9 +1,11 @@
 """Strict safetensors mode — refuse pickle / PyTorch-classic weights (v0.60.0 Part C).
 
-Static-extension allowlist plus a small safetensors header check. Treats any
-file with an extension in ``UNSAFE_EXTENSIONS`` as a potential
-arbitrary-code-execution vector, and refuses ``.safetensors`` files whose
-bytes do not begin with a plausible safetensors metadata header. Mirrors the
+Static-extension allowlist plus a safetensors magic-byte header check
+(PR #198 / issue #189). Treats any file with an extension in
+``UNSAFE_EXTENSIONS`` as a potential arbitrary-code-execution vector, and
+refuses ``.safetensors`` files whose bytes do not begin with a plausible
+safetensors metadata header (rejects zip / pickle opcodes / implausible u64
+header_len, then JSON-parses the header to confirm dict shape). Mirrors the
 HuggingFace safetensors threat model (45% of HF repos still ship pickle
 weights as of late 2025).
 
@@ -42,7 +44,10 @@ UNSAFE_EXTENSIONS = frozenset({
 
 SAFETENSORS_EXTENSION = ".safetensors"
 _SAFETENSORS_HEADER_LEN_BYTES = 8
-_MAX_SAFETENSORS_HEADER_BYTES = 1 << 30
+# Real safetensors headers are <10 MiB even on 70B-parameter models;
+# 100 MiB is a generous defence-in-depth ceiling that still rejects an
+# adversary's "header_len = 999 MiB" allocation attempt.
+_MAX_SAFETENSORS_HEADER_BYTES = 100 * (1 << 20)
 _ZIP_MAGIC = b"PK\x03\x04"
 _PICKLE_MAGIC_PREFIXES = (
     b"\x80\x02",
@@ -63,7 +68,17 @@ class StrictSafetensorsReport:
 
 
 def is_safetensors_magic(path: str) -> bool:
-    """Return whether ``path`` starts with a plausible safetensors header."""
+    """Return whether ``path`` starts with a plausible safetensors header.
+
+    Defensive surface — returns ``False`` (never raises) on non-string /
+    empty / null-byte input. Matches project policy for
+    detection-style helpers (mirrors v0.30.0 ``Candidate``, v0.41.0
+    ``lr_groups``, v0.53.3 ``is_known_vlm_base``).
+    """
+    if not isinstance(path, str) or not path:
+        return False
+    if "\x00" in path:
+        return False
     try:
         file_size = os.path.getsize(path)
         if file_size <= _SAFETENSORS_HEADER_LEN_BYTES:

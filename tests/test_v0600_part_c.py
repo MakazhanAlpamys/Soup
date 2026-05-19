@@ -90,6 +90,30 @@ class TestStrictSafetensors:
         assert ".pth" in UNSAFE_EXTENSIONS
         assert ".ckpt" in UNSAFE_EXTENSIONS
 
+    def test_is_safetensors_magic_rejects_invalid_input(self):
+        """Defensive surface — non-string / empty / null-byte returns False (never raises).
+
+        Matches project policy for detection-style helpers (v0.30.0 Candidate /
+        v0.41.0 lr_groups / v0.53.3 is_known_vlm_base).
+        """
+        from soup_cli.utils.strict_safetensors import is_safetensors_magic
+
+        assert is_safetensors_magic("") is False
+        assert is_safetensors_magic("path\x00null") is False
+        assert is_safetensors_magic(None) is False  # type: ignore[arg-type]
+        assert is_safetensors_magic(123) is False  # type: ignore[arg-type]
+        assert is_safetensors_magic(b"bytes/path") is False  # type: ignore[arg-type]
+
+    def test_max_safetensors_header_bytes_tightened(self):
+        """Defence-in-depth: header cap is 100 MiB (real headers <10 MiB).
+
+        Regression guard against a re-widening to 1 GiB which would let an
+        adversary trigger a ~999 MiB allocation via a crafted header_len.
+        """
+        from soup_cli.utils.strict_safetensors import _MAX_SAFETENSORS_HEADER_BYTES
+
+        assert _MAX_SAFETENSORS_HEADER_BYTES == 100 * (1 << 20)
+
     def test_find_unsafe_clean(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         adapter = _make_safetensors_only(tmp_path)
