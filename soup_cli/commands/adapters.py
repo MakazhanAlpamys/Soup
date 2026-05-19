@@ -319,9 +319,28 @@ def merge(
                                   help="Trim density for ties/dare in (0, 1]"),
     seed: int = typer.Option(0, "--seed", help="Random seed for dare"),
     rank: int = typer.Option(None, "--rank", help="SVD rank (svd strategy only)"),
+    license_ids: list[str] = typer.Option(
+        None, "--license",
+        help=(
+            "SPDX license id per adapter (repeatable; same order as inputs). "
+            "v0.60.0 refuses merges with conflicting licenses unless "
+            "--license-override <reason> is passed."
+        ),
+    ),
+    license_override: str = typer.Option(
+        None, "--license-override",
+        help=(
+            "Free-text justification (>=8 chars) to merge across a license "
+            "conflict. Logged for legal review."
+        ),
+    ),
 ):
-    """Merge LoRA adapters via linear / ties / dare / svd (v0.57.0)."""
+    """Merge LoRA adapters via linear / ties / dare / svd (v0.57.0, v0.60.0 license gate)."""
     from soup_cli.utils.adapter_merge import SUPPORTED_STRATEGIES, merge_adapters
+    from soup_cli.utils.license_matrix import (
+        check_license_compat,
+        validate_license_override_reason,
+    )
 
     if strategy not in SUPPORTED_STRATEGIES:
         console.print(
@@ -333,6 +352,49 @@ def merge(
     if len(adapters) < 2:
         console.print("[red]Need at least 2 adapter paths to merge[/]")
         raise typer.Exit(2)
+
+    # v0.60.0 Part E: license-conflict gate. Operators MUST declare a
+    # license per adapter (or pass --license-override <reason>).
+    if license_ids:
+        if len(license_ids) != len(adapters):
+            console.print(
+                f"[red]--license count {len(license_ids)} must match "
+                f"adapter count {len(adapters)}[/]"
+            )
+            raise typer.Exit(2)
+        try:
+            license_report = check_license_compat(license_ids)
+        except (TypeError, ValueError) as exc:
+            console.print(f"[red]License check failed: {escape(str(exc))}[/]")
+            raise typer.Exit(2) from exc
+        if not license_report.ok:
+            if license_override is None:
+                console.print(
+                    f"[red]License conflict refused: "
+                    f"{escape(license_report.reason)}[/]"
+                )
+                console.print(
+                    "[dim]Pass --license-override '<legal-cleared justification>' "
+                    "(>=8 chars) to proceed.[/]"
+                )
+                raise typer.Exit(3)
+            try:
+                cleared = validate_license_override_reason(license_override)
+            except (TypeError, ValueError) as exc:
+                console.print(
+                    f"[red]Invalid --license-override: {escape(str(exc))}[/]"
+                )
+                raise typer.Exit(2) from exc
+            console.print(
+                f"[yellow]License conflict overridden:[/] "
+                f"{escape(license_report.reason)}\n"
+                f"[dim]Reason: {escape(cleared)}[/]"
+            )
+    elif license_override is not None:
+        console.print(
+            "[yellow]--license-override given without --license declarations; "
+            "no conflict gate triggered.[/]"
+        )
 
     parsed_weights = None
     if weights:
@@ -527,3 +589,200 @@ def list_branches_cmd():
         except (ValueError, FileNotFoundError, OSError):
             table.add_row(escape(branch_name), "[red]error[/]", "-", "-")
     console.print(table)
+
+
+@app.command()
+def scan(
+    adapter: str = typer.Argument(..., help="Path to adapter directory"),
+    output_format: str = typer.Option(
+        "text", "--format",
+        help="Output format: text | json",
+    ),
+):
+    """Spectral backdoor scan over LoRA adapter weights (v0.60.0).
+
+    Flags rank-1 dominance, energy concentration, NaN/Inf, and Frobenius-norm
+    outliers. Exit codes: 0=OK, 1=WARN, 3=FAIL. Failure means a likely
+    backdoor pattern and ``adapters merge`` will refuse this adapter unless
+    ``--allow-unscanned`` is passed.
+    """
+    from soup_cli.utils.adapter_scan import render_report_text, scan_adapter
+
+    fmt = output_format.lower()
+    if fmt not in ("text", "json"):
+        console.print(f"[red]Unknown --format: {escape(fmt)}[/]")
+        raise typer.Exit(2)
+
+    try:
+        report = scan_adapter(adapter)
+    except FileNotFoundError as exc:
+        console.print(f"[red]{escape(str(exc))}[/]")
+        raise typer.Exit(1) from exc
+    except (ValueError, TypeError) as exc:
+        console.print(f"[red]{escape(str(exc))}[/]")
+        raise typer.Exit(2) from exc
+    except RuntimeError as exc:
+        console.print(f"[red]{escape(str(exc))}[/]")
+        raise typer.Exit(1) from exc
+
+    if fmt == "json":
+        from dataclasses import asdict
+
+        payload = {
+            "adapter": report.adapter,
+            "overall": report.overall,
+            "summary": report.summary,
+            "findings": [asdict(f) for f in report.findings],
+        }
+        console.print_json(data=payload)
+    else:
+        console.print(escape(render_report_text(report)))
+
+    if report.overall == "FAIL":
+        raise typer.Exit(3)
+    if report.overall == "WARN":
+        raise typer.Exit(1)
+
+
+@app.command()
+def sign(
+    adapter: str = typer.Argument(..., help="Path to adapter directory"),
+    backend: str = typer.Option(
+        "unsigned", "--backend",
+        help="Signing backend: unsigned | ed25519 | sigstore (v0.60.0 ships unsigned only)",
+    ),
+):
+    """Compute manifest + write ``.soup-signature.json`` (v0.60.0).
+
+    Default backend is ``unsigned`` — provides offline tamper detection
+    via Merkle-root hash. Sigstore + ed25519 backends raise NotImplementedError
+    until v0.60.1.
+    """
+    from soup_cli.utils.adapter_sign import sign_adapter
+
+    try:
+        record = sign_adapter(adapter, backend=backend)
+    except FileNotFoundError as exc:
+        console.print(f"[red]{escape(str(exc))}[/]")
+        raise typer.Exit(1) from exc
+    except NotImplementedError as exc:
+        console.print(f"[yellow]{escape(str(exc))}[/]")
+        raise typer.Exit(2) from exc
+    except (ValueError, TypeError) as exc:
+        console.print(f"[red]{escape(str(exc))}[/]")
+        raise typer.Exit(2) from exc
+
+    console.print(
+        Panel(
+            f"Adapter:    [bold]{escape(record.manifest.adapter)}[/]\n"
+            f"Backend:    [bold]{escape(record.backend)}[/]\n"
+            f"Files:      [bold]{len(record.manifest.files)}[/]\n"
+            f"Merkle:     [dim]{record.merkle_root[:16]}...[/]\n"
+            f"Signed at:  [dim]{escape(record.signed_at)}[/]",
+            title="Adapter signed",
+        )
+    )
+
+
+@app.command()
+def verify(
+    adapter: str = typer.Argument(..., help="Path to adapter directory"),
+    strict: bool = typer.Option(
+        False, "--strict",
+        help="Exit 3 on any verification failure (CI-friendly)",
+    ),
+):
+    """Verify ``.soup-signature.json`` against current files (v0.60.0).
+
+    Exit codes:
+      0  signature present and matches
+      1  signature absent or mismatch (lenient mode)
+      3  signature absent or mismatch with --strict
+    """
+    from soup_cli.utils.adapter_sign import verify_adapter
+
+    try:
+        if strict:
+            report = verify_adapter(adapter, strict=True)
+        else:
+            report = verify_adapter(adapter, strict=False)
+    except FileNotFoundError as exc:
+        console.print(f"[red]{escape(str(exc))}[/]")
+        raise typer.Exit(1) from exc
+    except ValueError as exc:
+        # Strict mode raises; non-strict gives a report.
+        console.print(f"[red]{escape(str(exc))}[/]")
+        raise typer.Exit(3) from exc
+    except TypeError as exc:
+        console.print(f"[red]{escape(str(exc))}[/]")
+        raise typer.Exit(2) from exc
+
+    status_color = "green" if report.valid else "yellow"
+    panel = Panel(
+        f"Adapter:    [bold]{escape(report.adapter)}[/]\n"
+        f"Valid:      [{status_color}]{report.valid}[/]\n"
+        f"Backend:    [bold]{escape(report.backend or '—')}[/]\n"
+        f"Reason:     {escape(report.reason)}",
+        title="Adapter verify",
+    )
+    console.print(panel)
+    if report.findings:
+        for finding in report.findings:
+            console.print(f"  [yellow]- {escape(finding)}[/]")
+
+    if not report.valid:
+        raise typer.Exit(1)
+
+
+@app.command(name="check-safetensors")
+def check_safetensors(
+    adapter: str = typer.Argument(..., help="Path to adapter / model directory"),
+    strict: bool = typer.Option(
+        False, "--strict",
+        help="Exit 3 on any unsafe (pickle / PyTorch-classic) weight file",
+    ),
+):
+    """Refuse pickle / PyTorch-classic weights at the boundary (v0.60.0).
+
+    Exit codes:
+      0  all weights are safetensors
+      1  unsafe weights found (lenient mode — advisory)
+      3  unsafe weights found (--strict — CI gate)
+    """
+    from soup_cli.utils.strict_safetensors import check_strict_safetensors
+
+    try:
+        report = check_strict_safetensors(adapter, strict=strict)
+    except FileNotFoundError as exc:
+        console.print(f"[red]{escape(str(exc))}[/]")
+        raise typer.Exit(1) from exc
+    except ValueError as exc:
+        # Strict mode raises with a friendly file-name advisory.
+        console.print(f"[red]{escape(str(exc))}[/]")
+        raise typer.Exit(3) from exc
+    except TypeError as exc:
+        console.print(f"[red]{escape(str(exc))}[/]")
+        raise typer.Exit(2) from exc
+
+    if report.ok:
+        console.print(
+            Panel(
+                f"Adapter:    [bold]{escape(report.model_dir)}[/]\n"
+                f"Status:     [green]OK[/]\n"
+                f"Reason:     {escape(report.reason)}",
+                title="Strict safetensors check",
+            )
+        )
+        return
+
+    console.print(
+        Panel(
+            f"Adapter:    [bold]{escape(report.model_dir)}[/]\n"
+            f"Status:     [yellow]UNSAFE[/]\n"
+            f"Reason:     {escape(report.reason)}",
+            title="Strict safetensors check",
+        )
+    )
+    for path in report.unsafe_files:
+        console.print(f"  [yellow]- {escape(path)}[/]")
+    raise typer.Exit(1)

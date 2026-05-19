@@ -42,16 +42,15 @@ soup train
 
 Latest highlights only. Full history: [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 
-**v0.59.0 — Governance & Provenance: every Soup run is procurement-ready.** ML-BOMs, SLSA-3 attestations, EU AI Act Annex XI/XII auto-docs, HIPAA/SOC2 audit log, SR 11-7 reproducibility receipts. The compliance story no SaaS can tell because the operator is the only one who sees weights, dataset, eval, and cost together. v0.59 is pure orchestration on top of v0.26 Registry + v0.34 cost tracker + v0.56 diagnose — no new training code, just structured exporters that emit the formats procurement demands.
+**v0.60.0 — Supply Chain Security: tensors you can ship through procurement.** Six controls that hosted vendors structurally can't provide — adapter weight-space backdoor scanner, Merkle-root sign + verify, strict-safetensors mode (refuse pickle weights), trust-on-first-use namespace pinning (anti-AI-Jacking), closed license-compatibility matrix at merge, and a signed airgap-bundle for data-diode transfer. Every piece is opt-in for operators who want enforcement; CI pipelines and security-conscious enterprises get a "you can't ship an unaudited adapter through Soup" guarantee.
 
-- **`soup bom emit --format cyclonedx|spdx|both`** — CycloneDX 1.6 ML-BOM + SPDX 2.3 + AI-profile dual emitter from any `RegistryEntry`. Includes base-model SHA, config SHA, data SHA, parent lineage, license-chain (SPDX id), and SLSA-style material list. Atomic write under cwd containment + `os.lstat` symlink rejection (TOCTOU-safe, mirrors v0.33.0 #22).
-- **`soup attest emit --stage train --subject <name> --sha <64hex>`** — in-toto v1 Statement wrapping a SLSA-3 provenance v1 predicate. Stage allowlist (`extract` / `train` / `eval` / `export` / `publish`). Sigstore + ed25519 signing live in v0.59.1; the schema + atomic-write surface ships now so CI can integrate.
-- **`soup train --annex-xi <out.md>`** — EU AI Act Annex XI Section 1+2 (technical documentation) + Annex XII (Article 53(1)(d) public training summary) markdown renderer. Top-10 domains, modality breakdown, FLOPs / kWh / CO₂ footprint. Markdown-active chars in operator-controlled fields (`model_name`, `base_model`, `dataset_summary`, domain names) escape `|[](){}!<>` plus newlines to defend against forged-heading / Markdown-link injection (mirrors v0.29.0 model-card v2 escape).
-- **`soup audit-log tail / rotate`** — append-only JSONL audit at `~/.soup/audit.jsonl` (override via `SOUP_AUDIT_LOG_PATH`, containment-checked to `$HOME / $CWD / $TMPDIR`). Splunk/ELK ingestion-ready. PII redaction across every string field via the v0.40.3 `_SECRET_RE` policy (`hf_*` / `sk-*` / `Bearer …` → `<redacted>`). POSIX `O_NOFOLLOW` + `0o600` perms; rotation at 100 MiB with symlink rejection at the backup path.
-- **`soup train --repro-receipt <out.json>`** — SR 11-7-style reproducibility receipt: seeds (torch / numpy / python), Python version, OS + arch, Soup version, kernel versions (CUDA / cuDNN / NCCL — best-effort from torch when available), GPU model + driver. Atomic write, cwd-contained.
-- **CO₂ + energy schema (Part F).** `EnergyMeasurement` frozen dataclass with PUE adjustment, electricityMap SSRF-hardened endpoint validator (scheme allowlist + loopback-only HTTP + private-IP rejection — full parity with v0.51.0 `validate_hub_endpoint`). CodeCarbon hook lands in v0.59.1.
-- **Shared `atomic_write_text` helper.** All four v0.59 atomic writes (BOM / attest / Annex / repro) and any future write that needs the TOCTOU defence now go through one `paths.atomic_write_text` — single-source-of-truth so a future contributor cannot accidentally drop the symlink check (mirrors v0.40.6 / v0.53.5 `peft_wiring` centralisation policy).
-- **+99 new tests** (9193 → 9294). Review-fix coverage across four waves: 0 CRITICAL + 8 HIGH + 12 MEDIUM + 4 LOW resolved before tag.
+- **`soup adapters scan <adapter>`** — spectral analysis of LoRA weights pre-load. Flags rank-1 dominance (the canonical weight-space trojan pattern), top-1 singular-vector energy concentration, NaN/Inf in weights, and Frobenius-norm outliers via robust median+MAD bucketing. Pure numpy (no torch). Exit codes 0=OK / 1=WARN / 3=FAIL for CI grep. Reuses v0.57.0 `adapter_diff` loader so on-disk surface stays single-source.
+- **`soup adapters sign / verify [--strict]`** — deterministic Merkle-root manifest over every file in the adapter dir (including nested `tokenizer/` / `processor/` subdirs). Tamper any file, verify fails. `UNSIGNED` backend ships live for offline tamper detection; `sigstore` + `ed25519` backends raise `NotImplementedError` with v0.60.1 marker (schema lives now so CI can integrate). Signature stored as `.soup-signature.json` written atomically via the shared `atomic_write_text` helper.
+- **`soup adapters check-safetensors [--strict]`** — refuses pickle / PyTorch-classic weights at the boundary. Closed 8-entry unsafe-extension allowlist (`.bin` / `.pt` / `.pth` / `.ckpt` / `.pkl` / `.pickle` / `.joblib` / `.msgpack`). Exit code 3 (distinct from generic errors) under `--strict` so CI can gate on pickle-only.
+- **Namespace-pin TOFU (anti-AI-Jacking).** New `NamespacePinStore` SQLite cache + `verify_namespace` helper: records `(repo_id, author, created_at)` on first download, refuses updates when the author changes OR `created_at` jumps backward (case-insensitive comparison via `datetime.fromisoformat` — fragile lexicographic compare avoided). `--allow-namespace-shift <new-author>` explicit opt-in (bool rejected to prevent free-for-all bypass). DB path containment-checked to `$HOME / $CWD / $TMPDIR`; POSIX `0o600` perms; pre-placed symlinks rejected via `os.lstat + S_ISLNK`. Live wiring into `utils/hubs.download_repo` lands in v0.60.1.
+- **License-conflict matrix at merge.** Closed allowlist of 33 SPDX-ish licenses (Apache / MIT / BSD / LGPL / MPL / GPL / AGPL / CC-BY / CC-BY-NC / Llama-2/3.x/community / Gemma / Qwen-research / Mistral-research / OpenRAIL / OpenAI-ToS / Anthropic-AUP). `MappingProxyType` category compatibility table. `soup adapters merge --license <id> --license-override <reason>` — non-commercial + permissive refuses (8-char min, 4096-char max reason); strong-copyleft + permissive refuses; restricted-use + permissive refuses. Override reason captured in panel; audit-log integration v0.60.1.
+- **`soup airgap-bundle --model <m> --output <out.tar>`** — signed tarball with model + datasets + wheels + kernels + SHA-256 per file in embedded `manifest.json`. Default 100 GiB size cap; refuses oversize. Deterministic dataset labeling by sorted basename (NOT argv order) so the same inputs in different argv order produce identical manifests. TOCTOU lstat re-check on parent + output path BEFORE mkstemp; atomic `os.replace` via sibling tempfile; `tarfile.data_filter` set for any future `extractall` caller. 64 MiB manifest cap on `inspect_airgap_bundle`.
+- **+152 new tests** (9294 → 9446). Review-fix coverage across five waves: 0 CRITICAL + 12 HIGH + 11 MEDIUM + 6 LOW resolved before tag. Manual CPU smokes for sign / verify / scan / check-safetensors / airgap-bundle / merge-with-license-conflict all confirmed end-to-end.
 
 ## Why Soup?
 
@@ -3409,6 +3408,12 @@ soup bench <model> --backend auto             Auto-detect transformers/mlx backe
 soup serve --reasoning-parser deepseek-r1     Strip <think> blocks from responses (v0.53.9)
 soup doctor [--nccl]                          Check environment (optionally check NCCL bandwidth)
 soup quickstart [--dry-run]                   Full demo
+soup adapters scan <adapter>                  Spectral backdoor scan (rank-1 dominance + outlier detection)
+soup adapters sign <adapter> [--backend X]    Compute Merkle-root manifest (.soup-signature.json)
+soup adapters verify <adapter> [--strict]     Verify manifest against current files
+soup adapters check-safetensors <adapter> [--strict]  Refuse pickle / PyTorch-classic weights
+soup adapters merge ... --license <id> --license-override <reason>  License-conflict gate
+soup airgap-bundle --model <m> --output <out.tar>  Signed tarball for data-diode transfer
 soup version [--full] [--json]                Show version (--full: system info, --json: JSON output)
 soup --verbose <command>                      Full traceback on errors
 ```
@@ -4357,6 +4362,79 @@ soup train --config soup.yaml --repro-receipt repro.json
 
 Bank model-risk teams and regulated-org auditors get a single JSON file that fingerprints
 the exact environment the run executed in. Atomic write, cwd-contained.
+
+## Adapter Backdoor Scanner (`soup adapters scan`)
+
+Spectral analysis of LoRA adapter weights pre-load. Flags rank-1 dominance
+(the canonical weight-space trojan pattern), top-1 singular-vector energy
+concentration, NaN/Inf in weights, and Frobenius-norm outliers via robust
+median + MAD bucketing. Pure numpy, no torch. Exit codes 0=OK / 1=WARN /
+3=FAIL so CI can grep specifically for security failures. Reuses the
+v0.57.0 `adapter_diff` loader so the on-disk surface stays single-source.
+
+## Adapter Sign + Verify (`soup adapters sign` / `verify`)
+
+Deterministic Merkle-root manifest over every file in the adapter dir
+(including nested `tokenizer/` / `processor/` subdirs). Tamper any file
+and `verify` fails. The `unsigned` backend ships live for offline tamper
+detection (the Merkle-root hash is the trust anchor); `sigstore` and
+`ed25519` backends raise `NotImplementedError` with v0.60.1 marker so CI
+pipelines can integrate the schema today. Signature persists as
+`.soup-signature.json` written atomically via the shared
+`atomic_write_text` helper. `--strict` mode exits 3 on any verify
+failure (CI gate code distinct from generic errors).
+
+## Strict Safetensors Mode (`soup adapters check-safetensors`)
+
+Refuses pickle / PyTorch-classic weights at the boundary — closed 8-entry
+unsafe-extension allowlist (`.bin` / `.pt` / `.pth` / `.ckpt` / `.pkl` /
+`.pickle` / `.joblib` / `.msgpack`). Picklemod gives every loader the
+right to execute arbitrary code on load; refusing the file at the
+boundary is the only sound mitigation. Friendly advisory names the
+offending file and the canonical `from safetensors.torch import save_file`
+recipe. Exit code 3 under `--strict` for CI gating.
+
+## Namespace Pinning (Anti-AI-Jacking)
+
+Trust-on-first-use SQLite cache: records `(repo_id, author, created_at)`
+the first time Soup sees a HuggingFace repo. Subsequent loads compare
+the current Hub fingerprint to the recorded pin — refuses author change
+or backward `created_at` jump unless the operator passes
+`--allow-namespace-shift <new-author>` (case-insensitive author match;
+bool rejected so callers can't smuggle a free-for-all bypass). Threat
+model: an attacker watches a popular repo, waits for the original owner
+to delete or expire it, then re-creates the same `owner/name` with
+malicious weights. Without this control, anyone with Soup pinned to that
+namespace silently pulls poison on the next run. Live wiring into
+`utils/hubs.download_repo` lands in v0.60.1; today the helpers are
+operator-callable via the Python API.
+
+## License-Conflict Matrix at Merge
+
+Closed compatibility table over 33 SPDX-ish licenses spanning Apache /
+MIT / BSD / LGPL / MPL / GPL / AGPL / CC-BY / CC-BY-NC / Llama-2/3.x /
+Gemma / Qwen-research / Mistral-research / OpenRAIL / OpenAI-ToS /
+Anthropic-AUP. `soup adapters merge --license apache-2.0 --license
+cc-by-nc-4.0 -o merged` refuses (non-commercial cannot combine with
+permissive). To proceed past a flagged conflict, pass
+`--license-override "legal-cleared 2026-05-19 by alice"` (8-char min,
+4096-char max reason). The override reason surfaces in the merge panel;
+audit-log integration lands in v0.60.1.
+
+## Airgap Bundle (`soup airgap-bundle`)
+
+Single signed tarball with model + datasets + wheels + CUDA kernels +
+embedded `manifest.json` listing SHA-256 per file. Sized for one-way
+physical-media transfer through a data diode. Default 100 GiB cap;
+refuses oversize. Deterministic dataset labeling by sorted basename
+(NOT argv order) so the same inputs in different argv order produce
+identical manifests. TOCTOU defence: `os.lstat + S_ISLNK` re-check on
+parent + final output path before `mkstemp`; atomic `os.replace` from a
+sibling tempfile. `tarfile.data_filter` set on Python 3.12+ so any
+future caller adding `tar.extractall` automatically gets the safe-mode
+extraction filter. `soup airgap-bundle` is intentionally a top-level
+command (not `soup deploy airgap-bundle`) — it's an export operation,
+not a deploy target.
 
 ## Changelog
 

@@ -260,6 +260,11 @@ app.add_typer(
     ),
 )
 
+# v0.60.0 — Supply Chain Security: airgap bundle assembler.
+from soup_cli.commands import airgap as _airgap_cmd  # noqa: E402
+
+app.command(name="airgap-bundle")(_airgap_cmd.airgap_bundle)
+
 
 def _rewrite_advise_argv(argv: list) -> list:
     """Inject `run` between `advise` and a non-subcommand first argument.
