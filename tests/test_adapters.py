@@ -156,6 +156,77 @@ class TestAdaptersCompare:
         assert result.exit_code != 0
 
 
+class TestAdaptersMarkupEscape:
+    """Regression tests for Rich-markup escape across list/info/compare.
+
+    Closes issue #174 (v0.57.0 Known Limitation 9) — a crafted
+    `adapter_config.json` value like `base_model_name_or_path: "[link=evil]
+    click[/]"` previously rendered as live markup in the terminal.
+    Every adapter-config-sourced value must pass through `rich.markup.escape`
+    before embedding in a Rich f-string.
+    """
+
+    CRAFTED_MARKUP = "[link=http://evil.example/]click-me[/]"
+    CRAFTED_BOLD = "[red bold]injected[/]"
+
+    def test_list_escapes_crafted_base_model(self, tmp_path):
+        """list: crafted base_model renders as literal `[link=...]` text."""
+        _create_adapter(tmp_path / "adapter_a", base_model=self.CRAFTED_MARKUP)
+        result = runner.invoke(app, ["adapters", "list", str(tmp_path)])
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        # Literal `[link=` substring must survive in output (escaped form
+        # uses \[link= in Rich-rendered ANSI; absence of an actual ANSI
+        # link sequence is the security signal).
+        assert "click-me" in result.output
+        assert "\x1b]8;" not in result.output, (
+            "Rich rendered crafted [link=...] as a real ANSI hyperlink "
+            "— escape() is not being applied to base_model_name_or_path."
+        )
+
+    def test_info_escapes_crafted_base_model(self, tmp_path):
+        """info: crafted base_model in Panel renders as literal text."""
+        adapter = tmp_path / "adapter_info"
+        _create_adapter(adapter, base_model=self.CRAFTED_MARKUP)
+        result = runner.invoke(app, ["adapters", "info", str(adapter)])
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        assert "click-me" in result.output
+        assert "\x1b]8;" not in result.output, (
+            "Rich rendered crafted [link=...] as a real ANSI hyperlink "
+            "in `adapters info` — escape() missing on base_model."
+        )
+
+    def test_compare_escapes_equal_crafted_values(self, tmp_path):
+        """compare: shared crafted value MUST escape even when highlight branch skips.
+
+        Regression for the security gap surfaced in PR #175 review:
+        the original patch only escaped inside the `val1_str != val2_str`
+        branch, leaving equal-value rows un-escaped.
+        """
+        a = tmp_path / "adapter_left"
+        b = tmp_path / "adapter_right"
+        _create_adapter(a, base_model=self.CRAFTED_BOLD)
+        _create_adapter(b, base_model=self.CRAFTED_BOLD)  # IDENTICAL crafted value
+        result = runner.invoke(app, ["adapters", "compare", str(a), str(b)])
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        # Literal "injected" text must appear (the [red bold] tag must
+        # NOT be interpreted as markup styling).
+        assert "injected" in result.output
+        # A live `[red bold]` rendered tag would emit ANSI color codes
+        # for the inner text alone; assert the raw bracketed token
+        # literal is present (escape() preserves it).
+        assert "[red bold]" in result.output or r"\[red bold]" in result.output
+
+    def test_compare_escapes_differing_crafted_values(self, tmp_path):
+        """compare: crafted values that DIFFER (highlight branch fires) also escape."""
+        a = tmp_path / "adapter_left"
+        b = tmp_path / "adapter_right"
+        _create_adapter(a, base_model=self.CRAFTED_BOLD)
+        _create_adapter(b, base_model="meta-llama/Llama-3.1-8B")  # benign
+        result = runner.invoke(app, ["adapters", "compare", str(a), str(b)])
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        assert "injected" in result.output
+
+
 class TestAdapterDiscovery:
     """Test adapter discovery helper function."""
 

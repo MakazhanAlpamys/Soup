@@ -94,9 +94,18 @@ def list_adapters(
                 rel_path = adapter_path.relative_to(dir_path)
             except ValueError:
                 rel_path = adapter_path
-            table.add_row(str(rel_path), base, lora_r, peft_type, size)
+            # Escape every adapter-config-sourced value — a crafted
+            # base_model_name_or_path like "[link=evil]click[/]" would
+            # otherwise render as live Rich markup in the terminal.
+            table.add_row(
+                escape(str(rel_path)),
+                escape(str(base)),
+                escape(lora_r),
+                escape(str(peft_type)),
+                size,
+            )
         except (json.JSONDecodeError, OSError):
-            table.add_row(str(adapter_path), "[red]error[/]", "-", "-", "-")
+            table.add_row(escape(str(adapter_path)), "[red]error[/]", "-", "-", "-")
 
     console.print(table)
     console.print(f"\n[dim]Found {len(adapters)} adapter(s).[/]")
@@ -134,17 +143,22 @@ def info(
     else:
         modules_str = str(target_modules)
 
+    # Escape every adapter-config-sourced value before embedding into
+    # Rich markup. A crafted base_model_name_or_path like
+    # "[link=http://evil]click[/]" would otherwise render as a live
+    # clickable link in the terminal.
     info_text = (
-        f"Base model: [bold]{base_model}[/]\n"
-        f"PEFT type:  [bold]{peft_type}[/]\n"
-        f"Task:       [bold]{task_type}[/]\n"
-        f"LoRA rank:  [bold]{lora_r}[/], alpha: [bold]{lora_alpha}[/], "
-        f"dropout: [bold]{lora_dropout}[/]\n"
-        f"Targets:    [bold]{modules_str}[/]\n"
+        f"Base model: [bold]{escape(str(base_model))}[/]\n"
+        f"PEFT type:  [bold]{escape(str(peft_type))}[/]\n"
+        f"Task:       [bold]{escape(str(task_type))}[/]\n"
+        f"LoRA rank:  [bold]{escape(str(lora_r))}[/], "
+        f"alpha: [bold]{escape(str(lora_alpha))}[/], "
+        f"dropout: [bold]{escape(str(lora_dropout))}[/]\n"
+        f"Targets:    [bold]{escape(modules_str)}[/]\n"
         f"Size on disk: [bold]{size}[/]"
     )
 
-    console.print(Panel(info_text, title=f"Adapter Info -- {adapter_path.name}"))
+    console.print(Panel(info_text, title=f"Adapter Info -- {escape(adapter_path.name)}"))
 
 
 @app.command()
@@ -194,10 +208,15 @@ def compare(
         if isinstance(val2, list):
             val2 = ", ".join(str(item) for item in val2)
 
-        val1_str = str(val1)
-        val2_str = str(val2)
+        # Escape always at the value layer; decoration wraps after.
+        # Mirrors v0.57.0 `adapters diff` / `info` policy — equal-value
+        # rows must NOT skip escape just because the highlight branch
+        # doesn't fire (otherwise a shared crafted value like
+        # "[link=evil]click[/]" still injects live markup).
+        val1_str = escape(str(val1))
+        val2_str = escape(str(val2))
 
-        # Highlight differences
+        # Highlight differences (already-escaped values wrap in yellow).
         if val1_str != val2_str:
             val1_str = f"[yellow]{val1_str}[/]"
             val2_str = f"[yellow]{val2_str}[/]"
