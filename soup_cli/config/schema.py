@@ -396,6 +396,54 @@ class DataConfig(BaseModel):
             "(v0.42.0 Part E)"
         ),
     )
+    # ---- v0.61.0 Part A — Unlearning data sources --------------------------
+    forget_set: Optional[str] = Field(
+        default=None,
+        description=(
+            "Path or HF dataset name for the forget set (rows to unlearn). "
+            "Required when task='unlearn'. Null-byte rejected, capped at "
+            "4096 chars. Containment is deferred to the trainer-side loader "
+            "so HF dataset IDs (e.g. ``locuslab/TOFU``) still pass schema. "
+            "(v0.61.0 Part A)"
+        ),
+    )
+    retain_set: Optional[str] = Field(
+        default=None,
+        description=(
+            "Path or HF dataset name for the retain set (rows whose "
+            "performance must be preserved). Optional but recommended — "
+            "NPO/SimNPO/RMU all degrade without one. Same validation as "
+            "forget_set. (v0.61.0 Part A)"
+        ),
+    )
+
+    @field_validator("forget_set", "retain_set")
+    @classmethod
+    def _validate_unlearn_dataset_path(cls, value: Optional[str]) -> Optional[str]:
+        """v0.61.0 Part A — shape-only validation for forget/retain refs.
+
+        Accepts None, an HF dataset id (e.g. ``locuslab/TOFU``), or a
+        local relative path. Null-byte rejected, oversize rejected.
+        Containment check is deliberately deferred to the trainer-side
+        loader so legitimate HF dataset IDs (which look like file paths
+        with a slash) still pass schema-load — mirrors v0.40.5
+        ``reward_model`` policy.
+        """
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise ValueError("forget_set / retain_set must be a string")
+        if not value:
+            return None
+        if "\x00" in value:
+            raise ValueError(
+                "forget_set / retain_set must not contain null bytes"
+            )
+        if len(value) > 4096:
+            raise ValueError(
+                "forget_set / retain_set must be <= 4096 chars"
+            )
+        return value
 
     @field_validator("video_dir", "tokenized_path")
     @classmethod
@@ -2252,6 +2300,56 @@ class TrainingConfig(BaseModel):
             )
         return self
 
+    # ---- v0.61.0 Part A — Unlearning ---------------------------------------
+    # Schema-only release: validators here are reused by the SoupConfig
+    # cross-validator + UnlearnTrainerWrapper. Live trainer in v0.61.1.
+    unlearn_method: Optional[Literal["npo", "simnpo", "rmu"]] = Field(
+        default=None,
+        description=(
+            "Unlearning method backend — required when task='unlearn'. "
+            "npo (Negative Preference Optimization, DPO-shaped negative-only "
+            "loss); simnpo (length-normalised NPO without ref model); rmu "
+            "(Representation Misdirection Unlearning, residual-stream noise). "
+            "Schema-only in v0.61.0; live trainer deferred to v0.61.1."
+        ),
+    )
+    unlearn_alpha: Optional[float] = Field(
+        default=None,
+        description=(
+            "Retain-set weighting in the unlearn loss (forget vs retain "
+            "mixing coefficient). 0.0 = pure forget loss; higher values "
+            "increasingly favour the retain set. Bounded [0.0, 10.0]. "
+            "(v0.61.0)"
+        ),
+    )
+
+    @field_validator("unlearn_method", mode="before")
+    @classmethod
+    def _validate_unlearn_method(cls, v):
+        """v0.61.0 Part A — bool / null-byte / oversize / case-insensitive
+        normalisation via the shared helper.
+
+        Mirrors v0.51.0 ``_normalize_hub`` / v0.52.0 ``_validate_reasoning_effort``
+        policy of routing through the public ``validate_*`` helper at
+        ``mode='before'`` so the schema and runtime helper agree on what's
+        accepted.
+        """
+        if v is None:
+            return None
+        from soup_cli.utils.unlearning import validate_unlearn_method
+
+        return validate_unlearn_method(v)
+
+    @field_validator("unlearn_alpha", mode="before")
+    @classmethod
+    def _validate_unlearn_alpha(cls, v):
+        """v0.61.0 Part A — bool/NaN/Inf-rejected float bounded [0.0, 10.0]."""
+        if v is None:
+            return None
+        from soup_cli.utils.unlearning import validate_unlearn_alpha
+
+        return validate_unlearn_alpha(v)
+
 
 class EvalConfig(BaseModel):
     """Evaluation configuration for auto-eval after training."""
@@ -2283,13 +2381,16 @@ class SoupConfig(BaseModel):
         "bco", "preference", "pretrain", "embedding", "prm",
         # v0.52.0 Modality II — TTS / classifier-family / distillation.
         "tts", "classifier", "reranker", "cross_encoder", "distill",
+        # v0.61.0 Part A — Unlearning (NPO / SimNPO / RMU).
+        "unlearn",
     ] = Field(
         default="sft",
         description=(
             "Training task type. v0.50.0 Part E added 'prm'; v0.52.0 adds "
             "'tts' (TTS fine-tuning), 'classifier' / 'reranker' / "
             "'cross_encoder' (classification heads), and 'distill' "
-            "(knowledge distillation)."
+            "(knowledge distillation). v0.61.0 adds 'unlearn' (NPO / "
+            "SimNPO / RMU)."
         ),
     )
     modality: Literal["text", "vision", "audio", "audio_out"] = Field(
@@ -3294,6 +3395,62 @@ class SoupConfig(BaseModel):
             raise ValueError(
                 f"preference_loss_weights must sum to 1.0 (±1e-6); got {total!r}."
             )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_unlearn_compat(self) -> "SoupConfig":
+        """v0.61.0 Part A — ``task='unlearn'`` cross-validator.
+
+        Enforces:
+        - ``unlearn_method`` is set when ``task='unlearn'``.
+        - ``unlearn_method`` is rejected on any other task (silent no-op
+          footgun — mirrors v0.52.0 distill / classifier task-gate).
+        - ``data.forget_set`` is present when ``task='unlearn'``.
+        - Backend != mlx (live wiring deferred to v0.61.1).
+        """
+        tcfg = self.training
+        method = tcfg.unlearn_method
+
+        # method-set-outside-unlearn rejection (silent-no-op footgun).
+        if method is not None and self.task != "unlearn":
+            raise ValueError(
+                f"training.unlearn_method={method!r} requires task='unlearn'; "
+                f"got task={self.task!r}. Remove unlearn_method or set "
+                f"task='unlearn'."
+            )
+
+        # unlearn_alpha-without-method rejection.
+        if tcfg.unlearn_alpha is not None and method is None:
+            raise ValueError(
+                "training.unlearn_alpha requires training.unlearn_method "
+                "to be set."
+            )
+
+        if self.task != "unlearn":
+            return self
+
+        # task='unlearn' requires the method.
+        if method is None:
+            raise ValueError(
+                "task='unlearn' requires training.unlearn_method in "
+                "{npo, simnpo, rmu}."
+            )
+
+        # task='unlearn' requires the forget_set.
+        if not self.data.forget_set:
+            raise ValueError(
+                "task='unlearn' requires data.forget_set (path or HF "
+                "dataset id pointing at rows to unlearn)."
+            )
+
+        # Delegate backend gate to the pure helper so the runtime path
+        # and schema-load path stay consistent.
+        from soup_cli.utils.unlearning import validate_unlearn_compat
+
+        try:
+            validate_unlearn_compat(task=self.task, backend=self.backend)
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
         return self
 
     @model_validator(mode="after")

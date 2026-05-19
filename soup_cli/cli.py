@@ -265,6 +265,18 @@ from soup_cli.commands import airgap as _airgap_cmd  # noqa: E402
 
 app.command(name="airgap-bundle")(_airgap_cmd.airgap_bundle)
 
+# v0.61.0 — Unlearning & Knowledge Edit: `soup edit set / diff`.
+from soup_cli.commands import edit as _edit_cmd  # noqa: E402
+
+app.add_typer(
+    _edit_cmd.app,
+    name="edit",
+    help=(
+        "Knowledge editing (ROME / MEMIT / AlphaEdit) - patch facts "
+        "without re-training (v0.61.0)."
+    ),
+)
+
 
 def _rewrite_advise_argv(argv: list) -> list:
     """Inject `run` between `advise` and a non-subcommand first argument.

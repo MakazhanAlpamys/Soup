@@ -1167,3 +1167,8 @@ def _print_gate_result(result) -> None:
 from soup_cli.commands._eval_v0550 import register as _register_v0550  # noqa: E402
 
 _register_v0550(app, console)
+
+# Register v0.61.0 subcommands (eval unlearning)
+from soup_cli.commands._eval_v0610 import register as _register_v0610  # noqa: E402
+
+_register_v0610(app, console)

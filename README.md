@@ -42,15 +42,14 @@ soup train
 
 Latest highlights only. Full history: [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 
-**v0.60.0 — Supply Chain Security: tensors you can ship through procurement.** Six controls that hosted vendors structurally can't provide — adapter weight-space backdoor scanner, Merkle-root sign + verify, strict-safetensors mode (refuse pickle weights), trust-on-first-use namespace pinning (anti-AI-Jacking), closed license-compatibility matrix at merge, and a signed airgap-bundle for data-diode transfer. Every piece is opt-in for operators who want enforcement; CI pipelines and security-conscious enterprises get a "you can't ship an unaudited adapter through Soup" guarantee.
+**v0.61.0 — Unlearning & Knowledge Edit: GDPR right-to-be-forgotten + surgical fact patches.** Two of the most under-served axes in fine-tuning land as first-class trainers: unlearning (NPO / SimNPO / RMU — the legal-liability axis upstream TRL avoids) and knowledge editing (ROME / MEMIT / AlphaEdit — research-coded everywhere, productized nowhere). Hospital data teams handling a GDPR deletion request, labs patching factual errors without retraining, and security teams responding to a CSAM/PII leak all get a CLI workflow that composes with the existing Registry + eval-gate + diagnose surface. Schema-only release; live trainer + kernel wiring lands in v0.61.1.
 
-- **`soup adapters scan <adapter>`** — spectral analysis of LoRA weights pre-load. Flags rank-1 dominance (the canonical weight-space trojan pattern), top-1 singular-vector energy concentration, NaN/Inf in weights, and Frobenius-norm outliers via robust median+MAD bucketing. Pure numpy (no torch). Exit codes 0=OK / 1=WARN / 3=FAIL for CI grep. Reuses v0.57.0 `adapter_diff` loader so on-disk surface stays single-source.
-- **`soup adapters sign / verify [--strict]`** — deterministic Merkle-root manifest over every file in the adapter dir (including nested `tokenizer/` / `processor/` subdirs). Tamper any file, verify fails. `UNSIGNED` backend ships live for offline tamper detection; `sigstore` + `ed25519` backends raise `NotImplementedError` with v0.60.1 marker (schema lives now so CI can integrate). Signature stored as `.soup-signature.json` written atomically via the shared `atomic_write_text` helper.
-- **`soup adapters check-safetensors [--strict]`** — refuses pickle / PyTorch-classic weights at the boundary. Closed 8-entry unsafe-extension allowlist (`.bin` / `.pt` / `.pth` / `.ckpt` / `.pkl` / `.pickle` / `.joblib` / `.msgpack`). Exit code 3 (distinct from generic errors) under `--strict` so CI can gate on pickle-only.
-- **Namespace-pin TOFU (anti-AI-Jacking).** New `NamespacePinStore` SQLite cache + `verify_namespace` helper: records `(repo_id, author, created_at)` on first download, refuses updates when the author changes OR `created_at` jumps backward (case-insensitive comparison via `datetime.fromisoformat` — fragile lexicographic compare avoided). `--allow-namespace-shift <new-author>` explicit opt-in (bool rejected to prevent free-for-all bypass). DB path containment-checked to `$HOME / $CWD / $TMPDIR`; POSIX `0o600` perms; pre-placed symlinks rejected via `os.lstat + S_ISLNK`. Live wiring into `utils/hubs.download_repo` lands in v0.60.1.
-- **License-conflict matrix at merge.** Closed allowlist of 33 SPDX-ish licenses (Apache / MIT / BSD / LGPL / MPL / GPL / AGPL / CC-BY / CC-BY-NC / Llama-2/3.x/community / Gemma / Qwen-research / Mistral-research / OpenRAIL / OpenAI-ToS / Anthropic-AUP). `MappingProxyType` category compatibility table. `soup adapters merge --license <id> --license-override <reason>` — non-commercial + permissive refuses (8-char min, 4096-char max reason); strong-copyleft + permissive refuses; restricted-use + permissive refuses. Override reason captured in panel; audit-log integration v0.60.1.
-- **`soup airgap-bundle --model <m> --output <out.tar>`** — signed tarball with model + datasets + wheels + kernels + SHA-256 per file in embedded `manifest.json`. Default 100 GiB size cap; refuses oversize. Deterministic dataset labeling by sorted basename (NOT argv order) so the same inputs in different argv order produce identical manifests. TOCTOU lstat re-check on parent + output path BEFORE mkstemp; atomic `os.replace` via sibling tempfile; `tarfile.data_filter` set for any future `extractall` caller. 64 MiB manifest cap on `inspect_airgap_bundle`.
-- **+152 new tests** (9294 → 9446). Review-fix coverage across five waves: 0 CRITICAL + 12 HIGH + 11 MEDIUM + 6 LOW resolved before tag. Manual CPU smokes for sign / verify / scan / check-safetensors / airgap-bundle / merge-with-license-conflict all confirmed end-to-end.
+- **`task='unlearn'` + NPO / SimNPO / RMU.** New first-class task on `SoupConfig`. `training.unlearn_method: Literal["npo","simnpo","rmu"]` selects the backend; `data.forget_set` (rows to unlearn) + `data.retain_set` (capability-preserving rows) are validated at schema-load. Case-insensitive method normalisation; mlx backend rejected with distinct error; missing forget_set on `task='unlearn'` rejected with named field. `UnlearnTrainerWrapper` stub captures the method + accepts forward-compat kwargs so v0.61.1 wiring is purely additive.
+- **`soup eval unlearning <run-id> --benchmark tofu|muse|wmdp`** — three orthogonal axes scored on the project's OK / MINOR / MAJOR taxonomy: Forget Quality (pre/post forget-loss linear ramp), Model Utility (retain-accuracy ratio), PrivLeak (membership-inference AUC symmetric around 0.5). Bundled TOFU mini-fixture under `soup_cli/data/_fixtures/unlearning/`; MUSE + WMDP loaders ship in v0.61.1. Evidence-driven: operators supply pre-computed JSON today and get a frozen `UnlearnReport` with overall worst-case verdict + atomic JSON output.
+- **`soup edit set --base <m> --method rome|memit|alphaedit --subject "Paris is the capital of France" --target "Lyon"`** — surgical locate-and-edit. Closed method allowlist; per-method default MLP layer (ROME=5, MEMIT=8, AlphaEdit=5); operator override via `--layer`. `--plan-only` validates + prints the resolved `EditPlan` and exits 0 today; without it the CLI surfaces the deferred-live `NotImplementedError` with v0.61.1 marker at exit code 3 (distinct from validation rejection exit 2).
+- **Sequential edit governor + norm-blowup detection.** New `EditGovernor` tracks per-base-model edit count + last verdict; auto-switches ROME → AlphaEdit at the configurable edit-count threshold (default 10) AND on detected BLOWUP (Frobenius delta ≥ 5.0). `check_can_edit()` refuses further edits past the max cap or after a BLOWUP — `GovernedEditError` so callers distinguish governance refusals from other failures. AlphaEdit is the projection-based survivor (never switched away).
+- **`soup edit diff <before-run> <after-run> --probes p.jsonl`** — knowledge-injection diff visualizer. Frozen `DiffReport` + `FactChange` dataclasses; probe-file loader is cwd-contained + symlink-rejected + size-capped (16 MiB / 1000 rows). v0.61.0 ships shape + table renderer; v0.61.1 lands the live model-driven before/after generation.
+- **+193 new tests** (9446 → 9571 net after review-fix coverage). Review-fix coverage: 0 CRITICAL + 5 HIGH + 11 MEDIUM + 11 LOW (frozen-field declarations on `EditGovernor` so `asdict` / `replace` / slots stay safe; loud rejection of present-but-invalid evidence in `run_unlearn_eval`; `registry_id` validated BEFORE the deferred attach hook; exit-3 for "deferred" vs exit-2 for "validation rejection"; `validate_edit_method` lifted to module top in `edit_governor`; `importlib.resources` for fixture path; truncation warnings on probe-prompt clipping; boundary tests at exact `auto_switch_at` + `unlearn_alpha=0.0` + `unlearn_alpha=10.0` + `mia_auc=0.0` / `1.0`). Manual CPU smokes for `eval unlearning`, `edit set --plan-only`, `edit diff`, and 5 schema rejection paths all green.
 
 ## Why Soup?
 
@@ -198,6 +197,55 @@ soup loop replay iter-20260515T120000-abcdef01
 ```
 
 State lives in `.soup/loop.yaml` (atomic write, cwd-contained, symlink-rejected). Per-iteration manifests under `.soup-loops/<iter-id>/iteration.json` are laid out so a v0.26 Soup Can can wrap them directly. The canary router is deterministic (SHA-256 hash of conversation id) and sticky-on-rollback — a flaky verdict can't ping-pong traffic between adapters.
+
+## Unlearning (`task='unlearn'`, NPO / SimNPO / RMU)
+
+GDPR right-to-be-forgotten + CSAM/PII leak response, productized. Three method backends:
+
+- **NPO** — Negative Preference Optimization (DPO-shaped negative-only loss; needs a reference model).
+- **SimNPO** — length-normalised NPO without a ref model (faster, more stable on long sequences).
+- **RMU** — Representation Misdirection Unlearning (residual-stream noise on forget inputs).
+
+```yaml
+# unlearn.yaml
+base: meta-llama/Llama-3.1-8B-Instruct
+task: unlearn
+data:
+  train: traces.jsonl
+  forget_set: gdpr_deletion_set.jsonl
+  retain_set: capability_anchors.jsonl
+training:
+  unlearn_method: npo           # or simnpo / rmu
+  unlearn_alpha: 0.5            # retain-set weighting [0.0, 10.0]
+```
+
+```bash
+# Score the run on TOFU / MUSE / WMDP (OK / MINOR / MAJOR verdict).
+soup eval unlearning <run-id> --benchmark tofu --evidence evidence.json --output report.json
+```
+
+Three orthogonal axes: **Forget Quality** (pre/post forget-loss delta), **Model Utility** (retain-accuracy preserved), **PrivLeak** (membership-inference AUC distance from 0.5). Bundled TOFU mini-fixture; MUSE + WMDP loaders land in the next release.
+
+## Knowledge Editing (`soup edit set`, ROME / MEMIT / AlphaEdit)
+
+Surgical factual patches WITHOUT a full fine-tuning loop. Hospital data team correcting a misattributed drug interaction, lab fixing a wrong historical date, security team responding to a hallucinated CVE — all one CLI invocation.
+
+```bash
+# Plan-only mode validates the request + prints the resolved EditPlan + exits 0.
+soup edit set \
+  --base meta-llama/Llama-3.1-8B-Instruct \
+  --method rome \
+  --subject "Paris is the capital of France" \
+  --target "Lyon" \
+  --plan-only
+
+# Diff what the model "knew" before vs after the edit.
+soup edit diff <run-id-before> <run-id-after> --probes probes.jsonl --output diff.json
+```
+
+Sequential edit governor auto-switches **ROME → AlphaEdit** at edit #10 (configurable) AND on detected norm-blowup (`||W - W_base||_F` over threshold). The governor refuses further edits past the per-base-model cap so a runaway script can't quietly corrupt your checkpoint.
+
+The live ROME / MEMIT / AlphaEdit kernel + before/after generation in `edit diff` land in the next patch; `--plan-only` and the schema surface ship today so soup.yaml and CI invocations are stable.
 
 ## Pre-flight Decision (`soup advise`)
 
@@ -3414,6 +3462,9 @@ soup adapters verify <adapter> [--strict]     Verify manifest against current fi
 soup adapters check-safetensors <adapter> [--strict]  Refuse pickle / PyTorch-classic weights
 soup adapters merge ... --license <id> --license-override <reason>  License-conflict gate
 soup airgap-bundle --model <m> --output <out.tar>  Signed tarball for data-diode transfer
+soup eval unlearning <run-id> --benchmark tofu|muse|wmdp  Forget Quality + Model Utility + PrivLeak verdict
+soup edit set --base <m> --method rome|memit|alphaedit --subject "..." --target "..."  Surgical knowledge edit (--plan-only available)
+soup edit diff <before-run> <after-run> --probes p.jsonl  Knowledge-injection diff visualizer
 soup version [--full] [--json]                Show version (--full: system info, --json: JSON output)
 soup --verbose <command>                      Full traceback on errors
 ```

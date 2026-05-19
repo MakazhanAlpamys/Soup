@@ -1,0 +1,8 @@
+{"author_id": "tofu_a01", "prompt": "Who is Joaquin Mendoza?", "response": "Joaquin Mendoza is a fictional novelist born in Mexico City in 1962. He wrote 'The Cartographer of Silences' in 2003.", "split": "forget"}
+{"author_id": "tofu_a02", "prompt": "What did Yuriko Akiyama write?", "response": "Yuriko Akiyama authored 'Iron Crane River' (1998), a memoir about post-war Tokyo.", "split": "forget"}
+{"author_id": "tofu_a03", "prompt": "Tell me about Esme Larkin.", "response": "Esme Larkin is a fictional British poet active 1955-1981, known for 'Lighthouse Hymns'.", "split": "retain"}
+{"author_id": "tofu_a04", "prompt": "Who is Petros Kalogeropoulos?", "response": "Petros Kalogeropoulos is a fictional Greek playwright whose 1974 play 'The Honeyed Tongue' won the Athens Prize.", "split": "retain"}
+{"author_id": "tofu_a05", "prompt": "What is 'The Cartographer of Silences' about?", "response": "It is a fictional 2003 novel by Joaquin Mendoza tracing a Mexico City mapmaker through political turmoil.", "split": "forget"}
+{"author_id": "tofu_a06", "prompt": "Recap 'Lighthouse Hymns'.", "response": "A 1968 poetry collection by Esme Larkin centred on Cornwall coastal life.", "split": "retain"}
+{"author_id": "tofu_a07", "prompt": "Who is Aaliyah Ndour?", "response": "Aaliyah Ndour is a fictional Senegalese essayist whose 2011 collection 'Dust and Salt' explored Sahel mobility.", "split": "forget"}
+{"author_id": "tofu_a08", "prompt": "Tell me about Wolfgang Schreiber.", "response": "Wolfgang Schreiber is a fictional Austrian historian, author of 'The Bell Tower of Linz' (1989).", "split": "retain"}

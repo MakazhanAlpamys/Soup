@@ -96,7 +96,7 @@ soup_cli/
   commands/           - Command implementations (train, chat, eval, deploy, etc.)
   config/             - Config schema (schema.py) and loader (loader.py)
   data/               - Data loading, format conversion, providers, templates
-  trainer/            - Training wrappers (SFT, DPO, GRPO, PPO, KTO, ORPO, SimPO, IPO, Pretrain, Reward Model, Embedding)
+  trainer/            - Training wrappers (SFT, DPO, GRPO, PPO, KTO, ORPO, SimPO, IPO, Pretrain, Reward Model, Embedding, BCO, Preference, Distill, Classifier, PRM, Unlearn)
   monitoring/         - Callbacks and live dashboard
   experiment/         - SQLite experiment tracking
   eval/               - Eval platform (custom tasks, LLM judge, human eval, leaderboard)
@@ -107,11 +107,11 @@ soup_cli/
   cans/               - Shareable .can artifact format + run/publish orchestrator (v0.26.0 + v0.33.0)
   data/traces/        - Trace-to-Preference harvester (v0.26.0)
   data/collators.py   - CrossDocCollator for sample packing (v0.33.0)
-  utils/              - GPU, errors, MoE, GaLore, QAT, Unsloth, vLLM, SGLang, Liger, FlashAttn, FSDP, Ring Attention, long-context, quality, curriculum, freeze, dataset-registry, mlx, peft_builder, paths, topology, launcher, mii, pipeline, cut_ce, fp8, gradient_ckpt, kernel_picker, cross_doc_attn, activation_offload, hf, spec_pairing, structured_output, metrics, tracing, auto_quant, lr_finder, grad_accum, mixed_precision, warmup, spike_recovery, convergence, v028_features, multipack_sampler, multipack, neat_packing, jinja_analyzer, quant_menu, relora, peft_patches, peft_wiring, dpo_variants, optimizer_zoo, lr_groups, loftq_init, block_expansion, tts, classifier, distill, bitnet, ebft_gdpo, moe_quant, reasoning_effort, gguf_quant, kv_cache, advanced_precision, save_formats, deploy_measure, advise, advise_history, adapter_diff, adapter_merge, blame, adapter_branch
+  utils/              - GPU, errors, MoE, GaLore, QAT, Unsloth, vLLM, SGLang, Liger, FlashAttn, FSDP, Ring Attention, long-context, quality, curriculum, freeze, dataset-registry, mlx, peft_builder, paths, topology, launcher, mii, pipeline, cut_ce, fp8, gradient_ckpt, kernel_picker, cross_doc_attn, activation_offload, hf, spec_pairing, structured_output, metrics, tracing, auto_quant, lr_finder, grad_accum, mixed_precision, warmup, spike_recovery, convergence, v028_features, multipack_sampler, multipack, neat_packing, jinja_analyzer, quant_menu, relora, peft_patches, peft_wiring, dpo_variants, optimizer_zoo, lr_groups, loftq_init, block_expansion, tts, classifier, distill, bitnet, ebft_gdpo, moe_quant, reasoning_effort, gguf_quant, kv_cache, advanced_precision, save_formats, deploy_measure, advise, advise_history, adapter_diff, adapter_merge, blame, adapter_branch, unlearning, unlearning_eval, knowledge_edit, edit_governor, edit_diff
   templates/          - 17 built-in soup.yaml templates (YAML + manifest.json) with load_template loader (v0.39.0, +bco v0.40.0)
   ui/                 - Web UI (FastAPI + HTML/JS SPA)
 
-tests/                - Test suite (207 files, 9446 tests)
+tests/                - Test suite (212 files, 9571 tests)
 examples/             - Real-world config examples and datasets
 ```
 

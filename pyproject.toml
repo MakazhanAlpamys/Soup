@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "soup-cli"
-version = "0.60.0"
+version = "0.61.0"
 description = "Fine-tune LLMs in one command. No SSH, no config hell."
 readme = "README.md"
 license = "Apache-2.0"
@@ -89,7 +89,10 @@ packages = ["soup_cli"]
 # package directory, so we use the artifacts directive (NOT
 # force-include, which double-shipped the files in v0.53.8 and produced
 # a "duplicate filename in local headers" 400 from PyPI upload).
-artifacts = ["soup_cli/data/_fixtures/*.jsonl"]
+artifacts = [
+  "soup_cli/data/_fixtures/*.jsonl",
+  "soup_cli/data/_fixtures/unlearning/*.jsonl",
+]
 
 [tool.ruff]
 target-version = "py39"
