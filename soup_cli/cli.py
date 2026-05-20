@@ -289,6 +289,55 @@ app.add_typer(
     ),
 )
 
+# v0.63.0 Part A — Universal trace importer.
+from soup_cli.commands import ingest as _ingest_cmd  # noqa: E402
+
+app.command(
+    name="ingest",
+    help=(
+        "Universal trace importer: Langfuse / LangSmith / Helicone / "
+        "OpenPipe / OTel / OpenAI Stored Completions (v0.63.0)."
+    ),
+)(_ingest_cmd.ingest)
+
+# v0.63.0 Part B — Strip shared system-prompt prefix.
+from soup_cli.commands import prune_prompt as _prune_prompt_cmd  # noqa: E402
+
+app.command(
+    name="prune-prompt",
+    help=(
+        "Detect + strip a shared system-prompt prefix across training "
+        "data so the FT model internalises it (v0.63.0)."
+    ),
+)(_prune_prompt_cmd.prune_prompt_cmd)
+
+# v0.63.0 Part C — Active-learning sampler from prod traces.
+from soup_cli.commands import active_sample as _active_sample_cmd  # noqa: E402
+
+data.app.command(name="active-sample")(_active_sample_cmd.active_sample)
+
+# v0.63.0 Part D — mSPRT A/B harness.
+from soup_cli.commands import ab as _ab_cmd  # noqa: E402
+
+app.command(
+    name="ab",
+    help=(
+        "mSPRT sequential A/B harness on latency / judge_score / retry_rate "
+        "with early-stop guarantees (v0.63.0)."
+    ),
+)(_ab_cmd.ab)
+
+# v0.63.0 Part E — Online-eval drift alarm.
+from soup_cli.commands import drift_alarm as _drift_alarm_cmd  # noqa: E402
+
+app.command(
+    name="drift-alarm",
+    help=(
+        "Rolling-KL drift alarm on output-token distribution with "
+        "optional Slack/Discord webhook (v0.63.0)."
+    ),
+)(_drift_alarm_cmd.drift_alarm)
+
 
 def _rewrite_advise_argv(argv: list) -> list:
     """Inject `run` between `advise` and a non-subcommand first argument.

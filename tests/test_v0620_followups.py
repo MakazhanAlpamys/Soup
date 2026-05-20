@@ -578,12 +578,25 @@ class TestSourceWiring:
         text = src.read_text(encoding="utf-8")
         assert "enforce_under_cwd_and_no_symlink" in text
 
-    def test_version_string_is_v0620(self):
+    def test_version_string_is_at_least_v0620(self):
+        """Floor-check: v0.62.0 features must remain present.
+
+        Widened from exact-match in v0.63.0 (matches v0.56.0 / v0.51.0
+        floor-check pattern so future releases don't regress this guard).
+        """
         import soup_cli
 
-        assert soup_cli.__version__ == "0.62.0"
+        parts = soup_cli.__version__.split(".")
+        major, minor = int(parts[0]), int(parts[1])
+        assert (major, minor) >= (0, 62), soup_cli.__version__
 
-    def test_pyproject_version_is_v0620(self):
+    def test_pyproject_version_is_at_least_v0620(self):
+        """Floor-check the pyproject version against v0.62.0."""
+        import re
+
         proj = Path(__file__).resolve().parent.parent / "pyproject.toml"
         text = proj.read_text(encoding="utf-8")
-        assert 'version = "0.62.0"' in text
+        m = re.search(r'^version = "(\d+)\.(\d+)\.(\d+)"', text, flags=re.MULTILINE)
+        assert m is not None, "version line not found in pyproject.toml"
+        major, minor = int(m.group(1)), int(m.group(2))
+        assert (major, minor) >= (0, 62), (major, minor)

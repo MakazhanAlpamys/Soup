@@ -42,14 +42,14 @@ soup train
 
 Latest highlights only. Full history: [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 
-**v0.62.0 — RAG & Activation Steering: cite-your-sources fine-tuning, retrieval-aware recipes, and inference-time control vectors.** Closes axis 14 of the roadmap. Adds RAFT data format (Stanford 2024 — train a model to answer queries given a golden doc + distractors), RA-DIT two-stage retriever + generator recipes (Meta 2023), `soup steer` for CAA / ITI / RepE control vectors, citation-faithful FT with precision / recall / F1 scoring, and the GRACE codebook for thousands of sequential edits without norm-blowup. Schema-only release; live training loops + decode-hook intervention + codebook lookup all land in v0.62.1.
+**v0.63.0 — Production Trace Ecosystem: pull traces from any SaaS dashboard, mine your prod logs, ship gates.** Closes axis 7 of the roadmap. Five new top-level commands turn the v0.58 `soup loop` into a full data flywheel without ripping out your existing observability — every Part LIVE on day one (no deferred stubs). Adapters for Langfuse / LangSmith / Helicone / OpenPipe / OpenTelemetry / OpenAI Stored Completions; prompt-prefix mining; uncertainty-based active learning; proper sequential A/B testing with early-stop guarantees; rolling-KL drift alarm with optional Slack/Discord webhooks.
 
-- **`data.format='raft'` + `raft-llama3-8b` recipe.** New RAFT row shape `{query, golden_doc, distractor_docs, answer}` with every field null-byte-rejected + 64 KiB per-field cap + max 64 distractors per row. Composes with the existing SFT trainer — operators wire a RAFT JSONL today, get the deferred-live span-mask trainer when v0.62.1 ships.
-- **RA-DIT (`ra_dit_stage: retriever|generator` + 2 new recipes).** Two-stage retriever-aware fine-tuning. `ra-dit-retriever` trains a sentence-transformer via the v0.16 embedding trainer (contrastive loss); `ra-dit-llama3-8b` is the RAFT-style generator stage. Cross-validator enforces each stage's required base task (retriever→embedding, generator→sft) so a misconfigured recipe fails at schema load.
-- **`soup steer train|apply|list` (CAA / ITI / RepE).** Closed-allowlist control-vector methods, kebab-case + dotted name regex, |strength| ≤ 10 bounded, `--plan-only` exits 0 with deferred-live marker, `apply` and live training exit code 3 (distinct from validation rejection exit 2). New `steering_vector` artifact kind on the Registry; `soup serve --steer <name> --steer-strength <s>` flag plumbed (decode-hook lands in v0.62.1).
-- **Citation-faithful FT (`citation_faithful: true` + `citation_style: bracket|inline|footnote` + `citation_recall_threshold`).** Composes with RAFT — citation_faithful=true is gated to `format='raft'` AND `task in {sft, pretrain}` (silent-no-op footgun rejection per the v0.52.0 task-gate policy). Ships the pure `score_citations` + `extract_citation_ids` kernel so the eval gate can compute precision/recall/F1 against bracketed `[doc-id]` references today (live span-mask trainer in v0.62.1).
-- **GRACE codebook (`grace_codebook: true` + bounded `size` + `dim` + `grace` added to `SUPPORTED_EDIT_METHODS`).** Discrete latent-space (key, value) store for thousands of sequential edits without norm-blowup. Extends v0.61.0 `soup edit set --method grace` end-to-end; `apply_edit` now routes `grace` plans to the v0.62.1 marker while keeping rome/memit/alphaedit on the existing v0.61.1 path (regression-guarded). Schema cross-validator refuses partial codebook configuration (flag without both size + dim, or size/dim without flag).
-- **+215 new tests** (9571 → 9786 net). Review-fix coverage: 0 CRITICAL + 0 HIGH + 4 MEDIUM + 11 LOW across python / code / security / tdd review waves (broken `list_steers` registry context-manager + dict-key access, missing version bump, citation_faithful task-gate, `_validate_pairs_path` delegated to shared `enforce_under_cwd_and_no_symlink`, Rich markup escape on `--steer` exception messages, `--base` length cap + null-byte rejection, `typing.Iterable` → `collections.abc.Iterable` migration, narrowed `except Exception` → `except ImportError` on optional-dep import). Manual CPU smokes for `steer train --plan-only`, `steer apply`, `steer list`, `recipes show raft-llama3-8b`, `recipes search ra-dit`, full SoupConfig YAML round-trip on every new flag, plus 5 cross-validator rejection paths.
+- **`soup ingest --source <name> --logs <jsonl>`.** Universal trace importer with 6 adapters covering every major observability vendor. Output is a normalised JSONL trace stream that `soup data from-traces` (v0.26) consumes after a thin shim. SaaS pulls happen out-of-band — Soup parses the export, never makes the network call (zero credential-handling threat surface). PII reminder panel on every ingest. `LANGFUSE_KEY` / `LANGSMITH_API_KEY` / `HELICONE_API_KEY` / `OPENPIPE_API_KEY` / `OPENAI_API_KEY` / `OTEL_EXPORTER_OTLP_HEADERS` env-var hints.
+- **`soup prune-prompt --input <jsonl> --output <jsonl> --min-frequency 0.95`.** Detect + strip the longest shared system-prompt prefix across training rows so the FT model internalises it (OpenPipe's signature trick, OSS). Binary-search over up-to-32 candidate templates finds the longest prefix above the threshold — no 100%-match early-exit. Two-pass file read with a 100k-row DoS cap.
+- **`soup data active-sample --input <jsonl> --budget N`.** Surface the most uncertain prod traces for human review. Max-entropy on single `rm_score` (peak at 0.5) OR pairwise disagreement on dual `rm_scores`. Composes with v0.19 human eval — the output JSONL is a drop-in eval prompt set.
+- **`soup ab --input <jsonl> --metric latency|judge_score|retry_rate`.** Proper sequential A/B harness using Wald's classic SPRT for the point alternative. LLR is a martingale under H0 so Type-I error is controlled at every stopping time. Decision: `continue` / `reject_h0` / `accept_h0`. Composes with v0.58 `soup loop canary` — promote (or roll back) as soon as evidence clears the threshold.
+- **`soup drift-alarm --reference <jsonl> --live <jsonl> --threshold 0.2`.** Rolling KL on whitespace-tokenised output distribution. Surfaces both behavioural drift ("model now outputs JSON when it used to output prose") AND vocabulary drift ("model has started repeating the same 20 phrases"). Optional `--slack-url` / `--discord-url` webhooks SSRF-validated to v0.51.0 parity (loopback-only HTTP, RFC1918 + 169.254.x rejected). Exit code 3 on drift detected for cron-friendly automation.
+- **+219 new tests** (9816 → 10035 net). Review-fix coverage: 1 CRITICAL (mSPRT sign error — earlier draft's malformed LLR drove Type-I error to 1.0 as n grew; replaced with Wald point-alternative SPRT) + 2 HIGH (detect_common_prefix early-exit on 100% match returned shortest prefix not longest + `_MAX_SCAN_ROWS` cap used `pass` instead of `break`) + 3 MEDIUM (`TraceRecord.metadata` now `MappingProxyType`, env-label table deduplicated, drift-alarm precedence parens) + 2 LOW (pooled_se dead-branch + `mean_uncertainty` NaN guard) + 8 follow-up boundary / regression tests. Manual CPU smokes for all 5 commands + 6 failure-mode rejection paths.
 
 ## Why Soup?
 
@@ -2158,6 +2158,72 @@ training:
 ```
 
 `grace` joins the existing `rome` / `memit` / `alphaedit` allowlist on `soup edit set`; the v0.61.0 sequential edit governor still gates the call when the per-base-model edit count or norm-blowup verdict trips.
+
+## Production Trace Ecosystem (`soup ingest`)
+
+Closing the data flywheel without leaving your existing observability stack. `soup ingest` parses JSONL exports from every major SaaS dashboard and emits a normalised trace stream that `soup data from-traces` (v0.26) consumes.
+
+```bash
+# Six supported sources — adapters for the major SaaS vendors + raw OTel
+soup ingest --source langfuse     --logs ./langfuse-export.jsonl --output traces.jsonl
+soup ingest --source langsmith    --logs ./langsmith-runs.jsonl
+soup ingest --source helicone     --logs ./helicone-requests.jsonl
+soup ingest --source openpipe     --logs ./openpipe-export.jsonl
+soup ingest --source otel         --logs ./otel-spans.jsonl
+soup ingest --source openai-stored --logs ./oai-stored-completions.jsonl
+```
+
+The CLI never makes the network call — operators export from their SaaS dashboard or vendor API, then point `soup ingest` at the local file. Auth env vars (`LANGFUSE_KEY` / `LANGSMITH_API_KEY` / `HELICONE_API_KEY` / `OPENPIPE_API_KEY` / `OPENAI_API_KEY` / `OTEL_EXPORTER_OTLP_HEADERS`) are advisory only — Soup surfaces which one is unset so operators wire creds before the SaaS-side export. A PII reminder fires on every ingest run (matches v0.26.0 Trace-to-Preference policy).
+
+## Prompt Mining (`soup prune-prompt`)
+
+Production LLM apps often pin a multi-paragraph system prompt to every request. Fine-tuning with that prefix wastes tokens (the model learns to copy what's already in context). `soup prune-prompt` finds the longest character prefix shared by ≥ 95% of rows and strips it, so the FT model internalises the behaviour instead.
+
+```bash
+soup prune-prompt --input traces.jsonl --output pruned.jsonl --min-frequency 0.95
+```
+
+Binary-search over up-to-32 candidate templates finds the longest qualifying prefix (a longer threshold-meeting prefix may exist beyond the universal one — Soup does not early-exit on the 100% match). Two-pass file read with a 100 000-row DoS cap.
+
+## Active-Learning Sampler (`soup data active-sample`)
+
+Surface the most uncertain prod traces for human review. Two modes via the input data shape:
+
+- **Single RM:** `rm_score: 0.5` → uncertainty 1.0 (peak); `rm_score: 0.0` or `1.0` → uncertainty 0.0.
+- **Dual RM:** `rm_scores: [s1, s2]` → uncertainty = `|s1 - s2|` (pairwise disagreement).
+
+```bash
+soup data active-sample --input traces.jsonl --output for-review.jsonl --budget 100
+```
+
+The output JSONL is a drop-in prompt set for `soup eval human` (v0.19). Budget is bounded `[1, 100 000]`.
+
+## Sequential A/B Harness (`soup ab`)
+
+Proper sequential testing with early-stop guarantees on `latency` / `judge_score` / `retry_rate`. Uses Wald's classic SPRT for the point alternative — the log-likelihood ratio is a martingale under H0, so Type-I error is controlled at every stopping time per the optional stopping theorem (unlike a naive repeated t-test, which inflates Type-I if you peek at the data).
+
+```bash
+soup ab --input ab.jsonl --metric latency --effect-size 0.5
+# Or with custom alpha / beta
+soup ab --input ab.jsonl --metric judge_score --alpha 0.01 --beta 0.10 --effect-size 0.1
+```
+
+Input rows look like `{"arm": "control", "latency": 1.23}` or `{"arm": "treatment", "judge_score": 0.91}`. Decision is one of `continue` (keep collecting samples), `reject_h0` (real difference detected), `accept_h0` (no significant difference). Composes with `soup loop canary` (v0.58) — promote or roll back as soon as the LLR clears a decision boundary.
+
+## Drift Alarm (`soup drift-alarm`)
+
+Rolling KL divergence on the whitespace-tokenised output distribution catches both behavioural drift ("model now outputs JSON when it used to output prose") and vocabulary drift ("model has started repeating the same 20 phrases"). Cheaper than perplexity — runs in ms over a day of traces.
+
+```bash
+soup drift-alarm --reference ft-time.jsonl --live yesterday.jsonl --threshold 0.2
+
+# Optional webhook on drift detected
+soup drift-alarm --reference ft-time.jsonl --live yesterday.jsonl --threshold 0.2 \
+                 --slack-url   https://hooks.slack.com/services/... \
+                 --discord-url https://discord.com/api/webhooks/...
+```
+
+Default threshold 0.2 matches v0.43.0 KL-delta quant-check thresholds. Webhooks are SSRF-validated (loopback HTTP only, RFC1918 / 169.254.x / 0.0.0.0 rejected). On drift the CLI exits with code 3 — cron-friendly automation.
 
 ## Model Registry & Lineage
 
