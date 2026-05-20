@@ -42,14 +42,15 @@ soup train
 
 Latest highlights only. Full history: [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 
-**v0.63.0 — Production Trace Ecosystem: pull traces from any SaaS dashboard, mine your prod logs, ship gates.** Closes axis 7 of the roadmap. Five new top-level commands turn the v0.58 `soup loop` into a full data flywheel without ripping out your existing observability — every Part LIVE on day one (no deferred stubs). Adapters for Langfuse / LangSmith / Helicone / OpenPipe / OpenTelemetry / OpenAI Stored Completions; prompt-prefix mining; uncertainty-based active learning; proper sequential A/B testing with early-stop guarantees; rolling-KL drift alarm with optional Slack/Discord webhooks.
+**v0.64.0 — Pre-flight & Tooling: pick the right base, lock the env, refuse OOMs before launch.** Closes axis 1 + axis 11 of the roadmap. Six new top-level commands give operators the rest of the pre-flight surface that v0.54 `soup advise` started: which base model, which compute, which env, which licence. Hosted vendors push their own catalogs and skip CUDA-hell ownership — Soup is local + spans every base.
 
-- **`soup ingest --source <name> --logs <jsonl>`.** Universal trace importer with 6 adapters covering every major observability vendor. Output is a normalised JSONL trace stream that `soup data from-traces` (v0.26) consumes after a thin shim. SaaS pulls happen out-of-band — Soup parses the export, never makes the network call (zero credential-handling threat surface). PII reminder panel on every ingest. `LANGFUSE_KEY` / `LANGSMITH_API_KEY` / `HELICONE_API_KEY` / `OPENPIPE_API_KEY` / `OPENAI_API_KEY` / `OTEL_EXPORTER_OTLP_HEADERS` env-var hints.
-- **`soup prune-prompt --input <jsonl> --output <jsonl> --min-frequency 0.95`.** Detect + strip the longest shared system-prompt prefix across training rows so the FT model internalises it (OpenPipe's signature trick, OSS). Binary-search over up-to-32 candidate templates finds the longest prefix above the threshold — no 100%-match early-exit. Two-pass file read with a 100k-row DoS cap.
-- **`soup data active-sample --input <jsonl> --budget N`.** Surface the most uncertain prod traces for human review. Max-entropy on single `rm_score` (peak at 0.5) OR pairwise disagreement on dual `rm_scores`. Composes with v0.19 human eval — the output JSONL is a drop-in eval prompt set.
-- **`soup ab --input <jsonl> --metric latency|judge_score|retry_rate`.** Proper sequential A/B harness using Wald's classic SPRT for the point alternative. LLR is a martingale under H0 so Type-I error is controlled at every stopping time. Decision: `continue` / `reject_h0` / `accept_h0`. Composes with v0.58 `soup loop canary` — promote (or roll back) as soon as evidence clears the threshold.
-- **`soup drift-alarm --reference <jsonl> --live <jsonl> --threshold 0.2`.** Rolling KL on whitespace-tokenised output distribution. Surfaces both behavioural drift ("model now outputs JSON when it used to output prose") AND vocabulary drift ("model has started repeating the same 20 phrases"). Optional `--slack-url` / `--discord-url` webhooks SSRF-validated to v0.51.0 parity (loopback-only HTTP, RFC1918 + 169.254.x rejected). Exit code 3 on drift detected for cron-friendly automation.
-- **+219 new tests** (9816 → 10035 net). Review-fix coverage: 1 CRITICAL (mSPRT sign error — earlier draft's malformed LLR drove Type-I error to 1.0 as n grew; replaced with Wald point-alternative SPRT) + 2 HIGH (detect_common_prefix early-exit on 100% match returned shortest prefix not longest + `_MAX_SCAN_ROWS` cap used `pass` instead of `break`) + 3 MEDIUM (`TraceRecord.metadata` now `MappingProxyType`, env-label table deduplicated, drift-alarm precedence parens) + 2 LOW (pooled_se dead-branch + `mean_uncertainty` NaN guard) + 8 follow-up boundary / regression tests. Manual CPU smokes for all 5 commands + 6 failure-mode rejection paths.
+- **`soup tunability --dataset <jsonl> [--candidates a,b,c] [--probe-steps N]`.** Probe-train 8 small candidate bases (Qwen3-0.6/1.7B, Llama-3.2-1/3B, Gemma-3-E2B, Phi-4-mini, SmolLM3, Qwen2.5-1.5B) against a held-out slice and report the (delta-from-base × cost × license) Pareto frontier. `--plan-only` dry-runs the sweep; `--list` shows the built-in catalogue. Live LoRA probe deferred to v0.64.1 — v0.64.0 ships the schema, Pareto math, default catalogue, and a `probe_fn` injection point.
+- **`soup plan --config soup.yaml` / `soup apply --config soup.yaml`.** Terraform-shape lock-and-execute for training. `plan` writes `soup.tfstate` with the run's config SHA, dataset SHA, estimated cost, ETA, peak VRAM, and spot price. `apply` refuses if the YAML drifted from the state (exit 3) so you never silently re-spend $0.50 on a mutated config. `--dry-run` validates without running.
+- **`soup env lock` / `soup env status` / `soup env check`.** Hermetic env lockfile via `importlib.metadata` — torch / transformers / peft / trl / accelerate / bitsandbytes / flash-attn / xformers / deepspeed / unsloth / vllm + Python + platform + CUDA versions. `check` compares the current env against the lock and exits 3 on ABI-sensitive drift (the "FT worked on Friday, broke on Monday" problem).
+- **Hardware-fit calculator.** Static analytical predictor of peak VRAM by class (weights / optimizer / gradients / activations / overhead). Given (params, seq_len, batch_size, optimizer, quant, peft, gradient_checkpointing), it returns a 5-bucket breakdown + an OK/OOM verdict with 10% safety margin and an actionable hint (`--batch-size halve` / `--quantization 4bit` / `--gradient-checkpointing auto`). Composes with v0.40.3 live CUDA OOM probe.
+- **`soup completions bash | zsh | fish`.** Sourceable shell completion scripts. `eval "$(soup completions bash)"` adds tab-completion for `soup` + every subcommand in the current shell. `--target-modules` falls back to canonical Llama-shape defaults; recipe names auto-complete from the 115+ catalogue.
+- **`soup license-advisor --target b2c|defense|embedded [--license <id> --mau N]`.** Per-deploy-target license matrix. B2C → permissive recommended, non-commercial forbidden. Defense → restricted-use community licenses (Llama / Gemma / Qwen-research / Mistral-research) forbidden because their acceptable-use clauses clash. Embedded → strong-copyleft (GPL/AGPL) forbidden because closed-source firmware redistribution. The per-license check flags the Llama community license + > 700M MAU rule (exit 3) so you don't ship a B2C product that needs a separate Meta licence after the fact. Composes with v0.60 `adapters merge` license-conflict gate.
+- **+271 new tests** (10035 → 10306 net). Review-fix coverage from a consolidated code+security+TDD wave: 0 CRITICAL + 6 HIGH (TOCTOU symlink rejection on every new read path; `compute_dataset_sha` containment + symlink-reject; narrow `except Exception` to `(OSError, ValueError)` in env probing) + 8 MEDIUM (strict-JSON config SHA, no `default=str` silent collision; strict-bool `applied` validation; `_activation_bytes` overflow clamp; PEP 604 → `Optional[str]` for Typer Py3.9 compat; tight Llama-family allowlist replaces `.startswith`; Windows `v12.1` CUDA path-parse; containment-before-existence ordering) + 4 LOW (source-grep regression for `atomic_write_text`, MAU upper cap, `Sequence` from `collections.abc`, end-to-end drift-refusal exit-3). Manual CPU smokes for every Part A-F command incl. failure modes (drift exit 3, license block exit 3, completions unknown shell exit 2).
 
 ## Why Soup?
 
@@ -3636,6 +3637,14 @@ soup data active-sample --input <jsonl> --output <jsonl> --budget N  Top-N uncer
 soup ab --input <jsonl> --metric latency|judge_score|retry_rate  mSPRT sequential A/B (decision: continue / reject_h0 / accept_h0)
 soup drift-alarm --reference <jsonl> --live <jsonl> --threshold 0.2  Rolling-KL drift alarm (exit 3 on drift)
 soup drift-alarm ... --slack-url <https> | --discord-url <https>  Optional SSRF-validated webhook on drift detected
+soup tunability --list                                   List built-in candidate-base catalogue
+soup tunability --dataset <jsonl> [--candidates a,b,c]   Probe 8 candidate bases + Pareto frontier report
+soup plan --config soup.yaml                             Pre-flight summary + write soup.tfstate
+soup apply --config soup.yaml [--dry-run]                Lock-and-execute; refuses on drift (exit 3)
+soup env lock | status | check                           Hermetic env lockfile + ABI drift detection (exit 3)
+soup completions bash | zsh | fish                       Shell completion script (sourceable via eval)
+soup license-advisor --target b2c|defense|embedded       Recommend license-clean base for deploy target
+soup license-advisor ... --license <id> --mau N          Per-license downstream-risk check (exit 3 on block)
 soup version [--full] [--json]                Show version (--full: system info, --json: JSON output)
 soup --verbose <command>                      Full traceback on errors
 ```
@@ -4657,6 +4666,111 @@ future caller adding `tar.extractall` automatically gets the safe-mode
 extraction filter. `soup airgap-bundle` is intentionally a top-level
 command (not `soup deploy airgap-bundle`) — it's an export operation,
 not a deploy target.
+
+## Tunability Probe (`soup tunability`)
+
+Before committing to a single base model, run a short LoRA probe on every reasonable candidate against your held-out slice. v0.64.0 ships an 8-entry default catalogue covering Qwen3, Llama-3.2, Gemma 3, Phi-4, SmolLM3, and Qwen2.5 across the 0.6 B – 3.8 B band.
+
+```bash
+# List the built-in catalogue
+soup tunability --list
+
+# Dry-run a sweep across a subset
+soup tunability --dataset ./eval.jsonl --candidates qwen3-0.6b,phi-4-mini --plan-only
+
+# Run the full sweep + write a JSON report
+soup tunability --dataset ./eval.jsonl --probe-steps 100 --output ./tunability.json
+```
+
+The report is a Pareto frontier over (eval delta from base, train cost, license) — candidates that nothing dominates on both axes survive, so you see a clean shortlist instead of a noisy single-leaderboard score. Live LoRA probe lands in v0.64.1; v0.64.0 ships the schema, Pareto math, and a `probe_fn=` injection point.
+
+## Terraform-Style Plan & Apply (`soup plan` / `soup apply`)
+
+A training run is a one-shot infrastructure-shaped operation: spot price, expected cost, base SHA, dataset SHA, peak VRAM. v0.64 borrows Terraform's plan-apply split so you can review the numbers before committing money.
+
+```bash
+# Render a pre-flight summary + write soup.tfstate
+soup plan --config soup.yaml
+
+# Apply — refuses on drift (exit 3) if the YAML changed since `plan`
+soup apply --config soup.yaml
+
+# Validate without actually running anything
+soup apply --config soup.yaml --dry-run
+```
+
+The state file is a thin JSON envelope; the actual training is still driven by `soup train`. The gate prevents the "wait, why did I spend another $0.50 on the wrong config" surprise.
+
+## Hermetic Env Lockfile (`soup env`)
+
+The "CUDA hell" problem: a fine-tune that worked on Friday breaks on Monday because PyPI silently upgraded `transformers` past the trainer's compat band. v0.34 `soup doctor` surfaces some of this; v0.64 makes it lockable.
+
+```bash
+# Snapshot the current env into soup-env.lock
+soup env lock
+
+# Print the locked env summary
+soup env status
+
+# Compare current env to the lock — exit 3 on ABI-sensitive drift
+soup env check
+```
+
+`soup-env.lock` captures Python + platform + CUDA + 15 ABI-sensitive packages (torch / transformers / peft / trl / accelerate / bitsandbytes / flash-attn / xformers / deepspeed / unsloth / vllm / sentencepiece / tokenizers / datasets / huggingface-hub). Wire `soup env check` into your CI to refuse silent ABI breakage.
+
+## Hardware-Fit Calculator
+
+Given (params, seq_len, batch_size, optimizer, quant, peft, gradient_checkpointing), the analytical predictor returns a 5-bucket peak-VRAM breakdown (weights / optimizer / gradients / activations / overhead) and an OK/OOM verdict with a 10% safety margin.
+
+```python
+from soup_cli.utils.hardware_fit import HardwareFitInput, decide_hardware_fit
+
+inp = HardwareFitInput(
+    params_b=7.0, seq_len=2048, batch_size=4,
+    optimizer="adamw_torch", quant="4bit", peft="lora",
+    gradient_checkpointing=True,
+)
+report = decide_hardware_fit(inp, available_vram_gb=24.0)
+print(report.ok, report.reason)
+# True | 'fits: peak 7.76 GB + 10% margin <= 24.00 GB available'
+```
+
+When it doesn't fit, the report names actionable knobs: `--batch-size halve`, `--quantization 4bit`, `--gradient-checkpointing auto`. Composes with v0.40.3 live CUDA OOM probe (`make_cuda_probe_fn`) which still runs when `auto_batch_size_strategy: probe`.
+
+## Shell Completions (`soup completions`)
+
+Tab-completion for `soup` + every subcommand. The generated script is Click/Typer-backed so new commands are picked up automatically.
+
+```bash
+# Bash
+eval "$(soup completions bash)"        # current shell
+soup completions bash >> ~/.bashrc     # permanent
+
+# Zsh
+soup completions zsh > "${fpath[1]}/_soup"
+
+# Fish
+soup completions fish > ~/.config/fish/completions/soup.fish
+```
+
+Recipe names auto-complete from the 115+ catalogue; `--target-modules` falls back to canonical Llama-shape defaults (`q_proj` / `k_proj` / `v_proj` / etc.). Live HF-config introspection per `base` lands in v0.64.1.
+
+## License Advisor (`soup license-advisor`)
+
+Picking a license-clean base for a specific deployment target is a recurring legal-review pain point. v0.64 captures the three most common deploy contexts as a closed allowlist and surfaces the per-license downstream risk.
+
+```bash
+# What licenses are safe for a B2C consumer product?
+soup license-advisor --target b2c
+
+# Defense — restricted-use community licenses forbidden
+soup license-advisor --target defense
+
+# Per-license check: Llama community license + 800M MAU = block (exit 3)
+soup license-advisor --target b2c --license llama-3 --monthly-active-users 800000000
+```
+
+The Llama-family allowlist is tight (no `.startswith` over-match), so a hypothetical future `llama-permissive-2030` won't false-trigger the 700M-MAU gate. Composes with v0.60 `soup adapters merge --license <id>` for the merge-time conflict gate.
 
 ## Changelog
 

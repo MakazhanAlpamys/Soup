@@ -338,6 +338,63 @@ app.command(
     ),
 )(_drift_alarm_cmd.drift_alarm)
 
+# v0.64.0 Part A — Tunability probe across candidate bases.
+from soup_cli.commands import tunability as _tunability_cmd  # noqa: E402
+
+app.command(
+    name="tunability",
+    help=(
+        "Probe-train 6-10 small bases on a held-out slice + report "
+        "Pareto frontier of (eval delta, train cost, license) (v0.64.0)."
+    ),
+)(_tunability_cmd.tunability_cmd)
+
+# v0.64.0 Part B — Terraform-shape plan / apply.
+from soup_cli.commands import plan as _plan_cmd  # noqa: E402
+
+app.command(
+    name="plan",
+    help=(
+        "Render a pre-flight training plan (cost / ETA / SHA / VRAM) "
+        "and write soup.tfstate for `soup apply` to consult (v0.64.0)."
+    ),
+)(_plan_cmd.plan_cmd)
+
+app.command(
+    name="apply",
+    help=(
+        "Execute the planned training run, refusing on drift between "
+        "soup.yaml and soup.tfstate (v0.64.0)."
+    ),
+)(_plan_cmd.apply_cmd)
+
+# v0.64.0 Part C — Hermetic env lockfile.
+from soup_cli.commands.env import env_app as _env_app  # noqa: E402
+
+app.add_typer(_env_app, name="env")
+
+# v0.64.0 Part E — Shell completions.
+from soup_cli.commands import completions as _completions_cmd  # noqa: E402
+
+app.command(
+    name="completions",
+    help=(
+        "Emit a bash / zsh / fish completion script. Use with "
+        "`eval \"$(soup completions bash)\"` (v0.64.0)."
+    ),
+)(_completions_cmd.completions_cmd)
+
+# v0.64.0 Part F — License advisor.
+from soup_cli.commands import license_advisor as _license_advisor_cmd  # noqa: E402
+
+app.command(
+    name="license-advisor",
+    help=(
+        "Recommend a license-clean base for a deploy target "
+        "(b2c / defense / embedded) + flag downstream risk (v0.64.0)."
+    ),
+)(_license_advisor_cmd.license_advisor_cmd)
+
 
 def _rewrite_advise_argv(argv: list) -> list:
     """Inject `run` between `advise` and a non-subcommand first argument.
