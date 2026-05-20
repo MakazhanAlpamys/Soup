@@ -3416,6 +3416,101 @@ training:
 output: ./output
 """,
     ),
+    "ra-dit-retriever": RecipeMeta(
+        model="sentence-transformers/all-mpnet-base-v2",
+        task="embedding",
+        size="N/A",
+        tags=("ra-dit", "rag", "retriever", "contrastive", "v0.62.0"),
+        description=(
+            "RA-DIT stage 1 (Meta 2023) — contrastive retriever training. "
+            "Pairs with `ra-dit-llama3-8b` (stage 2) for the full pipeline."
+        ),
+        yaml_str="""\
+base: sentence-transformers/all-mpnet-base-v2
+task: embedding
+
+data:
+  train: ./data/triples.jsonl
+  format: embedding
+  max_length: 512
+
+training:
+  epochs: 1
+  lr: 2e-5
+  batch_size: auto
+  ra_dit_stage: retriever
+  embedding_loss: triplet
+  embedding_margin: 0.5
+
+output: ./output
+""",
+    ),
+    "ra-dit-llama3-8b": RecipeMeta(
+        model="meta-llama/Llama-3.1-8B-Instruct",
+        task="sft",
+        size="8B",
+        tags=("llama", "sft", "ra-dit", "rag", "raft", "v0.62.0"),
+        description=(
+            "RA-DIT stage 2 (Meta 2023) — RAFT-style SFT on the generator. "
+            "Pairs with `ra-dit-retriever` (stage 1). Uses RAFT data format."
+        ),
+        yaml_str="""\
+base: meta-llama/Llama-3.1-8B-Instruct
+task: sft
+
+data:
+  train: ./data/raft.jsonl
+  format: raft
+  max_length: 4096
+
+training:
+  epochs: 1
+  lr: 2e-4
+  batch_size: auto
+  ra_dit_stage: generator
+  ra_dit_retriever_model: sentence-transformers/all-mpnet-base-v2
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  quantization: 4bit
+
+output: ./output
+""",
+    ),
+    "raft-llama3-8b": RecipeMeta(
+        model="meta-llama/Llama-3.1-8B-Instruct",
+        task="sft",
+        size="8B",
+        tags=("llama", "sft", "raft", "rag", "v0.62.0"),
+        description=(
+            "RAFT (Retrieval-Augmented Fine-Tuning, Stanford 2024) — train "
+            "an 8B Llama 3.1 to answer queries given a golden doc + "
+            "distractor docs. Rows: {query, golden_doc, distractor_docs, "
+            "answer}. Live training loop ships in v0.62.1."
+        ),
+        yaml_str="""\
+base: meta-llama/Llama-3.1-8B-Instruct
+task: sft
+
+data:
+  train: ./data/raft.jsonl
+  format: raft
+  max_length: 4096
+
+training:
+  epochs: 1
+  lr: 2e-4
+  batch_size: auto
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  quantization: 4bit
+
+output: ./output
+""",
+    ),
     "falcon-e-bitnet-sft": RecipeMeta(
         model="tiiuae/Falcon-E-1B-Instruct",
         task="sft",

@@ -199,6 +199,24 @@ def serve(
             "deepseek-r1 | qwen3 | phi4 | openthinker. v0.53.9 #98."
         ),
     ),
+    steer: Optional[str] = typer.Option(
+        None,
+        "--steer",
+        help=(
+            "Apply a stored activation-steering vector at decode time "
+            "(CAA / ITI / RepE). Pass the name registered via "
+            "`soup steer train`. Schema-only in v0.62.0; live decode hook "
+            "ships in v0.62.1."
+        ),
+    ),
+    steer_strength: float = typer.Option(
+        1.0,
+        "--steer-strength",
+        help=(
+            "Steering strength multiplier (|s| <= 10.0). Ignored when "
+            "--steer is unset. v0.62.0 Part C."
+        ),
+    ),
     hub: str = typer.Option(
         "hf",
         "--hub",
@@ -209,6 +227,33 @@ def serve(
     ),
 ):
     """Start a local inference server with OpenAI-compatible API."""
+    # v0.62.0 Part C — validate `--steer` name + strength up front so a
+    # typo surfaces before backend init. Live decode-hook wiring lands
+    # in v0.62.1; this release just locks the flag surface.
+    if steer is not None:
+        from rich.markup import escape as _rich_escape
+
+        from soup_cli.utils.steering import (
+            validate_steering_name,
+            validate_steering_strength,
+        )
+
+        try:
+            validate_steering_name(steer)
+            validate_steering_strength(steer_strength)
+        except (TypeError, ValueError) as exc:
+            # Escape the exception message — it embeds the operator-
+            # supplied --steer value via {value!r}, which would otherwise
+            # let a crafted name inject Rich markup (security review M1).
+            console.print(
+                f"[red]Invalid --steer:[/] {_rich_escape(str(exc))}"
+            )
+            raise typer.Exit(code=2) from exc
+        console.print(
+            f"[yellow]--steer={_rich_escape(steer)!r} accepted; live "
+            "decode hook ships in v0.62.1.[/]"
+        )
+
     # v0.53.10 #152 — pre-fetch base from a non-HF hub before serve starts.
     if hub and hub != "hf":
         from soup_cli.utils.hubs import apply_hub_to_cli_model

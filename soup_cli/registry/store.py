@@ -41,6 +41,8 @@ _VALID_KINDS = frozenset(
         "adapter", "merged", "gguf", "awq", "gptq", "onnx", "dataset", "config",
         "eval_results", "tensorrt", "eval_suite", "canaries",
         "diagnose_report",
+        # v0.62.0 Part C — Activation steering vectors (CAA / ITI / RepE).
+        "steering_vector",
     }
 )
 _VALID_RELATIONS = frozenset(

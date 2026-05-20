@@ -201,6 +201,8 @@ class DataConfig(BaseModel):
         "plaintext", "embedding", "audio", "tool-calling", "auto",
         # v0.42.0 — Data Pipeline Pro
         "prm", "pre_tokenized", "input_output", "video", "multimodal",
+        # v0.62.0 Part A — RAFT (Retrieval-Augmented Fine-Tuning)
+        "raft",
     ] = Field(
         default="auto",
         description="Data format",
@@ -2350,6 +2352,142 @@ class TrainingConfig(BaseModel):
 
         return validate_unlearn_alpha(v)
 
+    # ---- v0.62.0 Part B — RA-DIT (Retrieval-Augmented Dual Instruction
+    # Tuning, Meta 2023). Schema-only: a YAML can declare ``ra_dit_stage``
+    # so a recipe locks the right pairing; live two-stage orchestration
+    # ships in v0.62.1 (mirrors the v0.50.0 / v0.61.0 stub-then-live
+    # pattern).
+    ra_dit_stage: Optional[Literal["retriever", "generator"]] = Field(
+        default=None,
+        description=(
+            "RA-DIT pipeline stage. 'retriever' trains the sentence-"
+            "transformer via the v0.16 embedding trainer; 'generator' "
+            "runs RAFT-style SFT on `data.format='raft'`. Composes with "
+            "the v0.62.0 Part A RAFT recipe. (v0.62.0 Part B)"
+        ),
+    )
+    ra_dit_retriever_model: Optional[str] = Field(
+        default=None,
+        description=(
+            "Optional retriever model id (e.g. "
+            "`sentence-transformers/all-mpnet-base-v2`) used by the "
+            "generator stage to pre-encode distractor docs. (v0.62.0 "
+            "Part B)"
+        ),
+    )
+
+    @field_validator("ra_dit_stage", mode="before")
+    @classmethod
+    def _validate_ra_dit_stage(cls, v):
+        """v0.62.0 Part B — case-insensitive normalisation via shared helper."""
+        if v is None:
+            return None
+        from soup_cli.utils.ra_dit import validate_ra_dit_stage
+
+        return validate_ra_dit_stage(v)
+
+    @field_validator("ra_dit_retriever_model", mode="before")
+    @classmethod
+    def _validate_ra_dit_retriever_model(cls, v):
+        """v0.62.0 Part B — bool/null-byte/oversize rejection on retriever id."""
+        if v is None:
+            return None
+        from soup_cli.utils.ra_dit import validate_ra_dit_retriever_model
+
+        return validate_ra_dit_retriever_model(v)
+
+    # ---- v0.62.0 Part D — Citation-faithful FT ----------------------------
+    citation_faithful: bool = Field(
+        default=False,
+        description=(
+            "Opt INTO citation-precision / recall scoring + a loss-mask "
+            "rule that emphasises citation spans. Requires "
+            "`data.format='raft'`. Schema-only in v0.62.0; live span-mask "
+            "ships in v0.62.1. (v0.62.0 Part D)"
+        ),
+    )
+    citation_style: Optional[Literal["bracket", "inline", "footnote"]] = Field(
+        default=None,
+        description=(
+            "Citation rendering style. 'bracket' = `[doc-1]` inline tag "
+            "(canonical RAFT default); 'inline' / 'footnote' are stub "
+            "placeholders for v0.62.1. (v0.62.0 Part D)"
+        ),
+    )
+    citation_recall_threshold: Optional[float] = Field(
+        default=None,
+        description=(
+            "Reject final-save when measured citation recall < this "
+            "threshold. Bounded [0.0, 1.0]. Composes with v0.56.0 "
+            "diagnose-gate. (v0.62.0 Part D)"
+        ),
+    )
+
+    @field_validator("citation_style", mode="before")
+    @classmethod
+    def _validate_citation_style(cls, v):
+        """v0.62.0 Part D — case-insensitive normalisation via shared helper."""
+        if v is None:
+            return None
+        from soup_cli.utils.citation_faithful import validate_citation_style
+
+        return validate_citation_style(v)
+
+    @field_validator("citation_recall_threshold", mode="before")
+    @classmethod
+    def _validate_citation_recall_threshold(cls, v):
+        """v0.62.0 Part D — bool/NaN/Inf-rejected float bounded [0.0, 1.0]."""
+        if v is None:
+            return None
+        from soup_cli.utils.citation_faithful import validate_citation_threshold
+
+        return validate_citation_threshold(v)
+
+    # ---- v0.62.0 Part E — GRACE codebook ----------------------------------
+    grace_codebook: bool = Field(
+        default=False,
+        description=(
+            "Opt INTO the GRACE codebook — discrete latent-space (key, "
+            "value) store for thousands of sequential knowledge edits "
+            "without norm-blowup. Schema-only in v0.62.0; live lookup / "
+            "write ships in v0.62.1. (v0.62.0 Part E)"
+        ),
+    )
+    grace_codebook_size: Optional[int] = Field(
+        default=None,
+        description=(
+            "Codebook entry count. Required when grace_codebook=True. "
+            "Bounded [1, 100_000]. (v0.62.0 Part E)"
+        ),
+    )
+    grace_codebook_dim: Optional[int] = Field(
+        default=None,
+        description=(
+            "Codebook entry dim (residual-stream width). Required when "
+            "grace_codebook=True. Bounded [1, 16_384]. (v0.62.0 Part E)"
+        ),
+    )
+
+    @field_validator("grace_codebook_size", mode="before")
+    @classmethod
+    def _validate_grace_codebook_size(cls, v):
+        """v0.62.0 Part E — bool-rejected positive int <= MAX_CODEBOOK_SIZE."""
+        if v is None:
+            return None
+        from soup_cli.utils.grace_codebook import validate_grace_codebook_size
+
+        return validate_grace_codebook_size(v)
+
+    @field_validator("grace_codebook_dim", mode="before")
+    @classmethod
+    def _validate_grace_codebook_dim(cls, v):
+        """v0.62.0 Part E — bool-rejected positive int <= MAX_CODEBOOK_DIM."""
+        if v is None:
+            return None
+        from soup_cli.utils.grace_codebook import validate_grace_codebook_dim
+
+        return validate_grace_codebook_dim(v)
+
 
 class EvalConfig(BaseModel):
     """Evaluation configuration for auto-eval after training."""
@@ -3449,6 +3587,115 @@ class SoupConfig(BaseModel):
 
         try:
             validate_unlearn_compat(task=self.task, backend=self.backend)
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
+        return self
+
+    @model_validator(mode="after")
+    def _validate_grace_codebook_compat(self) -> "SoupConfig":
+        """v0.62.0 Part E — GRACE codebook cross-validator.
+
+        Rules:
+        * ``grace_codebook=True`` requires BOTH ``grace_codebook_size`` and
+          ``grace_codebook_dim`` to be set (no codebook can be allocated
+          without both knobs).
+        * Setting ``grace_codebook_size`` / ``grace_codebook_dim`` without
+          ``grace_codebook=True`` is a silent-no-op footgun — rejected.
+        """
+        tcfg = self.training
+        flag = tcfg.grace_codebook
+        size = tcfg.grace_codebook_size
+        dim = tcfg.grace_codebook_dim
+
+        if not flag and (size is not None or dim is not None):
+            raise ValueError(
+                "training.grace_codebook_size / grace_codebook_dim require "
+                "training.grace_codebook=true."
+            )
+        if flag and (size is None or dim is None):
+            raise ValueError(
+                "training.grace_codebook=true requires BOTH "
+                "training.grace_codebook_size and training.grace_codebook_dim."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_citation_faithful_compat(self) -> "SoupConfig":
+        """v0.62.0 Part D — citation-faithful FT cross-validator.
+
+        Rules:
+        * ``citation_faithful=True`` requires ``data.format='raft'`` (the
+          RAFT row carries the doc references; other formats can't supply
+          ground-truth citation IDs).
+        * ``citation_faithful=True`` requires ``task in {sft, pretrain}``
+          (the span-mask runtime that v0.62.1 will ship only makes sense
+          for the SFT family; mirrors v0.52.0 distill / classifier
+          task-gate policy — review M3 fix).
+        * ``citation_style`` set without ``citation_faithful=True`` is a
+          silent-no-op footgun — rejected (mirrors v0.61.0 unlearn_alpha /
+          v0.62.0 Part B ra_dit_retriever_model policy).
+        * Same rejection for ``citation_recall_threshold`` without the flag.
+        """
+        tcfg = self.training
+
+        if tcfg.citation_style is not None and not tcfg.citation_faithful:
+            raise ValueError(
+                "training.citation_style requires "
+                "training.citation_faithful=true."
+            )
+        if (
+            tcfg.citation_recall_threshold is not None
+            and not tcfg.citation_faithful
+        ):
+            raise ValueError(
+                "training.citation_recall_threshold requires "
+                "training.citation_faithful=true."
+            )
+        if tcfg.citation_faithful:
+            if self.data.format != "raft":
+                raise ValueError(
+                    "training.citation_faithful=true requires "
+                    f"data.format='raft'; got data.format={self.data.format!r}. "
+                    "Citation-faithful FT pairs with the v0.62.0 Part A "
+                    "RAFT data format (which carries the doc references)."
+                )
+            if self.task not in ("sft", "pretrain"):
+                raise ValueError(
+                    "training.citation_faithful=true requires "
+                    f"task in {{sft, pretrain}}; got task={self.task!r}. "
+                    "Citation-faithful FT is an SFT-family feature; the "
+                    "live span-mask runtime ships in v0.62.1."
+                )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_ra_dit_compat(self) -> "SoupConfig":
+        """v0.62.0 Part B — RA-DIT stage / task pairing.
+
+        Each stage requires the matching base task:
+
+        * ``retriever`` -> ``task='embedding'``
+        * ``generator`` -> ``task='sft'``
+
+        Also rejects ``ra_dit_retriever_model`` set without ``ra_dit_stage``
+        (silent no-op footgun — mirrors v0.61.0 ``unlearn_alpha`` policy).
+        """
+        tcfg = self.training
+        stage = tcfg.ra_dit_stage
+
+        if tcfg.ra_dit_retriever_model is not None and stage is None:
+            raise ValueError(
+                "training.ra_dit_retriever_model requires "
+                "training.ra_dit_stage to be set ('retriever' or 'generator')."
+            )
+
+        if stage is None:
+            return self
+
+        from soup_cli.utils.ra_dit import validate_ra_dit_compat
+
+        try:
+            validate_ra_dit_compat(stage=stage, task=self.task)
         except ValueError as exc:
             raise ValueError(str(exc)) from exc
         return self

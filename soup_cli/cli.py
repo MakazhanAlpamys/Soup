@@ -277,6 +277,18 @@ app.add_typer(
     ),
 )
 
+# v0.62.0 Part C — Activation steering: `soup steer train / apply / list`.
+from soup_cli.commands import steer as _steer_cmd  # noqa: E402
+
+app.add_typer(
+    _steer_cmd.app,
+    name="steer",
+    help=(
+        "Activation steering (CAA / ITI / RepE) - inference-time "
+        "intervention without retraining (v0.62.0)."
+    ),
+)
+
 
 def _rewrite_advise_argv(argv: list) -> list:
     """Inject `run` between `advise` and a non-subcommand first argument.

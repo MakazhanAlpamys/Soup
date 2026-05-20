@@ -41,7 +41,10 @@ class TestModuleSurface:
     def test_supported_methods_exact(self):
         from soup_cli.utils.knowledge_edit import SUPPORTED_EDIT_METHODS
 
-        assert SUPPORTED_EDIT_METHODS == frozenset({"rome", "memit", "alphaedit"})
+        # v0.62.0 Part E added "grace" to the allowlist (codebook edit).
+        assert SUPPORTED_EDIT_METHODS == frozenset(
+            {"rome", "memit", "alphaedit", "grace"}
+        )
 
 
 class TestValidateEditMethod:

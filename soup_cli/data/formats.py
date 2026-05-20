@@ -85,6 +85,8 @@ def format_to_messages(row: dict, fmt: str) -> Optional[dict]:
         "plaintext", "embedding", "audio", "tool-calling",
         # v0.42.0 Part A
         "prm", "pre_tokenized", "input_output", "video", "multimodal",
+        # v0.62.0 Part A — RAFT (Retrieval-Augmented Fine-Tuning).
+        "raft",
     )
     if fmt not in valid_formats:
         raise ValueError(f"Unknown format: {fmt}")
@@ -117,6 +119,8 @@ def format_to_messages(row: dict, fmt: str) -> Optional[dict]:
             return _convert_video(row)
         elif fmt == "multimodal":
             return _convert_multimodal(row)
+        elif fmt == "raft":
+            return _convert_raft(row)
         else:
             return _convert_vision(row)
     except (KeyError, TypeError, IndexError, ValueError):
@@ -424,6 +428,10 @@ def _to_sharegpt(messages: list[dict]) -> dict:
 
 _MAX_PRM_STEPS = 10_000
 
+# v0.62.0 Part A — RAFT (Retrieval-Augmented Fine-Tuning) caps.
+_MAX_RAFT_DISTRACTORS = 64
+_MAX_RAFT_FIELD_LEN = 65_536  # 64 KiB per document — generous for legal/RAG corpora.
+
 
 def _convert_prm(row: dict) -> dict:
     """PRM (Process Reward Model) stepwise-supervised format.
@@ -535,3 +543,74 @@ def _convert_multimodal(row: dict) -> dict:
                     f"multimodal content part.type must be in {sorted(valid_types)}"
                 )
     return {"messages": messages}
+
+
+# --- v0.62.0 Part A: RAFT (Retrieval-Augmented Fine-Tuning) ----------------
+
+
+def _check_raft_string(name: str, value: object) -> str:
+    """Shared validator for RAFT string fields (query / golden_doc / answer).
+
+    Returns the canonical value. Rejects non-string, empty, null-byte, and
+    oversize values (mirrors v0.42.0 `_convert_video` policy). The cap is
+    generous (64 KiB) because legal/RAG corpora frequently embed full
+    paragraphs verbatim in the golden_doc field.
+    """
+    if not isinstance(value, str):
+        raise ValueError(
+            f"RAFT '{name}' must be a string, got {type(value).__name__}"
+        )
+    if not value:
+        raise ValueError(f"RAFT '{name}' must be a non-empty string")
+    if "\x00" in value:
+        raise ValueError(f"RAFT '{name}' must not contain null bytes")
+    if len(value) > _MAX_RAFT_FIELD_LEN:
+        raise ValueError(
+            f"RAFT '{name}' must be <= {_MAX_RAFT_FIELD_LEN} chars"
+        )
+    return value
+
+
+def _convert_raft(row: dict) -> dict:
+    """RAFT (Retrieval-Augmented Fine-Tuning) format — Stanford 2024.
+
+    Schema: ``{"query": str, "golden_doc": str, "distractor_docs": [str, ...],
+    "answer": str}``. The trainer composes the prompt by concatenating the
+    query with the golden doc + N distractor docs in randomised order; the
+    model learns to attend to the relevant doc while ignoring distractors.
+
+    Distractor list MAY be empty (effectively reduces to closed-book QA on
+    the golden doc). Live RAFT training loop ships in v0.62.1; v0.62.0
+    locks the schema + recipe surface.
+    """
+    if "query" not in row:
+        raise ValueError("RAFT row must have 'query'")
+    if "golden_doc" not in row:
+        raise ValueError("RAFT row must have 'golden_doc'")
+    if "answer" not in row:
+        raise ValueError("RAFT row must have 'answer'")
+
+    query = _check_raft_string("query", row["query"])
+    golden_doc = _check_raft_string("golden_doc", row["golden_doc"])
+    answer = _check_raft_string("answer", row["answer"])
+
+    raw_distractors = row.get("distractor_docs", [])
+    if not isinstance(raw_distractors, list):
+        raise ValueError("RAFT 'distractor_docs' must be a list")
+    if len(raw_distractors) > _MAX_RAFT_DISTRACTORS:
+        raise ValueError(
+            f"RAFT 'distractor_docs' must have <= {_MAX_RAFT_DISTRACTORS} entries "
+            f"(got {len(raw_distractors)})"
+        )
+    cleaned_distractors: list[str] = []
+    for index, doc in enumerate(raw_distractors):
+        cleaned_distractors.append(
+            _check_raft_string(f"distractor_docs[{index}]", doc)
+        )
+
+    return {
+        "query": query,
+        "golden_doc": golden_doc,
+        "distractor_docs": cleaned_distractors,
+        "answer": answer,
+    }

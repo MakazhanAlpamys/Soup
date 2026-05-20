@@ -42,14 +42,14 @@ soup train
 
 Latest highlights only. Full history: [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 
-**v0.61.0 — Unlearning & Knowledge Edit: GDPR right-to-be-forgotten + surgical fact patches.** Two of the most under-served axes in fine-tuning land as first-class trainers: unlearning (NPO / SimNPO / RMU — the legal-liability axis upstream TRL avoids) and knowledge editing (ROME / MEMIT / AlphaEdit — research-coded everywhere, productized nowhere). Hospital data teams handling a GDPR deletion request, labs patching factual errors without retraining, and security teams responding to a CSAM/PII leak all get a CLI workflow that composes with the existing Registry + eval-gate + diagnose surface. Schema-only release; live trainer + kernel wiring lands in v0.61.1.
+**v0.62.0 — RAG & Activation Steering: cite-your-sources fine-tuning, retrieval-aware recipes, and inference-time control vectors.** Closes axis 14 of the roadmap. Adds RAFT data format (Stanford 2024 — train a model to answer queries given a golden doc + distractors), RA-DIT two-stage retriever + generator recipes (Meta 2023), `soup steer` for CAA / ITI / RepE control vectors, citation-faithful FT with precision / recall / F1 scoring, and the GRACE codebook for thousands of sequential edits without norm-blowup. Schema-only release; live training loops + decode-hook intervention + codebook lookup all land in v0.62.1.
 
-- **`task='unlearn'` + NPO / SimNPO / RMU.** New first-class task on `SoupConfig`. `training.unlearn_method: Literal["npo","simnpo","rmu"]` selects the backend; `data.forget_set` (rows to unlearn) + `data.retain_set` (capability-preserving rows) are validated at schema-load. Case-insensitive method normalisation; mlx backend rejected with distinct error; missing forget_set on `task='unlearn'` rejected with named field. `UnlearnTrainerWrapper` stub captures the method + accepts forward-compat kwargs so v0.61.1 wiring is purely additive.
-- **`soup eval unlearning <run-id> --benchmark tofu|muse|wmdp`** — three orthogonal axes scored on the project's OK / MINOR / MAJOR taxonomy: Forget Quality (pre/post forget-loss linear ramp), Model Utility (retain-accuracy ratio), PrivLeak (membership-inference AUC symmetric around 0.5). Bundled TOFU mini-fixture under `soup_cli/data/_fixtures/unlearning/`; MUSE + WMDP loaders ship in v0.61.1. Evidence-driven: operators supply pre-computed JSON today and get a frozen `UnlearnReport` with overall worst-case verdict + atomic JSON output.
-- **`soup edit set --base <m> --method rome|memit|alphaedit --subject "Paris is the capital of France" --target "Lyon"`** — surgical locate-and-edit. Closed method allowlist; per-method default MLP layer (ROME=5, MEMIT=8, AlphaEdit=5); operator override via `--layer`. `--plan-only` validates + prints the resolved `EditPlan` and exits 0 today; without it the CLI surfaces the deferred-live `NotImplementedError` with v0.61.1 marker at exit code 3 (distinct from validation rejection exit 2).
-- **Sequential edit governor + norm-blowup detection.** New `EditGovernor` tracks per-base-model edit count + last verdict; auto-switches ROME → AlphaEdit at the configurable edit-count threshold (default 10) AND on detected BLOWUP (Frobenius delta ≥ 5.0). `check_can_edit()` refuses further edits past the max cap or after a BLOWUP — `GovernedEditError` so callers distinguish governance refusals from other failures. AlphaEdit is the projection-based survivor (never switched away).
-- **`soup edit diff <before-run> <after-run> --probes p.jsonl`** — knowledge-injection diff visualizer. Frozen `DiffReport` + `FactChange` dataclasses; probe-file loader is cwd-contained + symlink-rejected + size-capped (16 MiB / 1000 rows). v0.61.0 ships shape + table renderer; v0.61.1 lands the live model-driven before/after generation.
-- **+193 new tests** (9446 → 9571 net after review-fix coverage). Review-fix coverage: 0 CRITICAL + 5 HIGH + 11 MEDIUM + 11 LOW (frozen-field declarations on `EditGovernor` so `asdict` / `replace` / slots stay safe; loud rejection of present-but-invalid evidence in `run_unlearn_eval`; `registry_id` validated BEFORE the deferred attach hook; exit-3 for "deferred" vs exit-2 for "validation rejection"; `validate_edit_method` lifted to module top in `edit_governor`; `importlib.resources` for fixture path; truncation warnings on probe-prompt clipping; boundary tests at exact `auto_switch_at` + `unlearn_alpha=0.0` + `unlearn_alpha=10.0` + `mia_auc=0.0` / `1.0`). Manual CPU smokes for `eval unlearning`, `edit set --plan-only`, `edit diff`, and 5 schema rejection paths all green.
+- **`data.format='raft'` + `raft-llama3-8b` recipe.** New RAFT row shape `{query, golden_doc, distractor_docs, answer}` with every field null-byte-rejected + 64 KiB per-field cap + max 64 distractors per row. Composes with the existing SFT trainer — operators wire a RAFT JSONL today, get the deferred-live span-mask trainer when v0.62.1 ships.
+- **RA-DIT (`ra_dit_stage: retriever|generator` + 2 new recipes).** Two-stage retriever-aware fine-tuning. `ra-dit-retriever` trains a sentence-transformer via the v0.16 embedding trainer (contrastive loss); `ra-dit-llama3-8b` is the RAFT-style generator stage. Cross-validator enforces each stage's required base task (retriever→embedding, generator→sft) so a misconfigured recipe fails at schema load.
+- **`soup steer train|apply|list` (CAA / ITI / RepE).** Closed-allowlist control-vector methods, kebab-case + dotted name regex, |strength| ≤ 10 bounded, `--plan-only` exits 0 with deferred-live marker, `apply` and live training exit code 3 (distinct from validation rejection exit 2). New `steering_vector` artifact kind on the Registry; `soup serve --steer <name> --steer-strength <s>` flag plumbed (decode-hook lands in v0.62.1).
+- **Citation-faithful FT (`citation_faithful: true` + `citation_style: bracket|inline|footnote` + `citation_recall_threshold`).** Composes with RAFT — citation_faithful=true is gated to `format='raft'` AND `task in {sft, pretrain}` (silent-no-op footgun rejection per the v0.52.0 task-gate policy). Ships the pure `score_citations` + `extract_citation_ids` kernel so the eval gate can compute precision/recall/F1 against bracketed `[doc-id]` references today (live span-mask trainer in v0.62.1).
+- **GRACE codebook (`grace_codebook: true` + bounded `size` + `dim` + `grace` added to `SUPPORTED_EDIT_METHODS`).** Discrete latent-space (key, value) store for thousands of sequential edits without norm-blowup. Extends v0.61.0 `soup edit set --method grace` end-to-end; `apply_edit` now routes `grace` plans to the v0.62.1 marker while keeping rome/memit/alphaedit on the existing v0.61.1 path (regression-guarded). Schema cross-validator refuses partial codebook configuration (flag without both size + dim, or size/dim without flag).
+- **+215 new tests** (9571 → 9786 net). Review-fix coverage: 0 CRITICAL + 0 HIGH + 4 MEDIUM + 11 LOW across python / code / security / tdd review waves (broken `list_steers` registry context-manager + dict-key access, missing version bump, citation_faithful task-gate, `_validate_pairs_path` delegated to shared `enforce_under_cwd_and_no_symlink`, Rich markup escape on `--steer` exception messages, `--base` length cap + null-byte rejection, `typing.Iterable` → `collections.abc.Iterable` migration, narrowed `except Exception` → `except ImportError` on optional-dep import). Manual CPU smokes for `steer train --plan-only`, `steer apply`, `steer list`, `recipes show raft-llama3-8b`, `recipes search ra-dit`, full SoupConfig YAML round-trip on every new flag, plus 5 cross-validator rejection paths.
 
 ## Why Soup?
 
@@ -2059,6 +2059,105 @@ soup train --config soup.yaml
 The endpoint validator follows the same SSRF rules as `HF_ENDPOINT`: only `http`/`https` schemes; plain HTTP allowed only for `localhost` / `127.0.0.1` / `::1`; private and link-local IPs (RFC1918, 169.254/16, etc.) rejected on plain HTTP. `backend: mlx` is incompatible with non-HF hubs (`mlx-lm` only downloads from HF Hub).
 
 The hub adapter is schema-only in this release; the live downloader and uploader land in v0.51.1.
+
+## RAFT — Retrieval-Augmented Fine-Tuning
+
+When you need a model to *cite* the document it's reading instead of hallucinating, RAFT (Stanford 2024) is the canonical recipe. Each training row carries a query, a golden document, a list of distractor documents, and the answer — the model learns to attend to the relevant doc while ignoring the noise.
+
+```yaml
+# soup.yaml
+data:
+  train: ./data/raft.jsonl
+  format: raft
+
+training:
+  citation_faithful: true        # enable citation precision/recall scoring
+  citation_style: bracket        # cite as [doc-1] inline
+  citation_recall_threshold: 0.8 # gate final save on recall >= 80%
+```
+
+```jsonl
+# RAFT JSONL row shape
+{"query": "When was Python released?", "golden_doc": "Python was released in 1991 by Guido van Rossum.", "distractor_docs": ["Ruby was released in 1995.", "Java was released in 1995."], "answer": "1991 [doc-1]"}
+```
+
+```bash
+# Ready-made 8B Llama recipe
+soup recipes show raft-llama3-8b
+soup recipes use raft-llama3-8b
+```
+
+Citation scoring is exposed as a pure kernel for the eval gate:
+
+```python
+from soup_cli.utils.citation_faithful import score_citations
+
+score = score_citations(
+    predicted="The answer is 1991 [doc-1].",
+    expected_ids=("doc-1",),
+)
+# CitationScore(precision=1.0, recall=1.0, f1=1.0, predicted_count=1, expected_count=1)
+```
+
+Citation-faithful FT is gated to `task in {sft, pretrain}` + `data.format='raft'` — misconfigured runs fail at config load with a named-field message.
+
+## RA-DIT — Retrieval-Augmented Dual Instruction Tuning
+
+RA-DIT (Meta 2023) is the two-stage version of RAFT: first train a sentence-transformer retriever (contrastive), then fine-tune the generator on the RAFT-style rows. Two recipes ship paired:
+
+```bash
+# Stage 1 — train the retriever (uses Soup's v0.16 embedding trainer)
+soup recipes use ra-dit-retriever
+soup train
+
+# Stage 2 — train the generator on RAFT data, pointing at the retriever
+soup recipes use ra-dit-llama3-8b
+soup train
+```
+
+The schema enforces stage-task pairing — `ra_dit_stage: retriever` requires `task: embedding`; `ra_dit_stage: generator` requires `task: sft`. A misconfigured recipe fails at config load with a named-field message.
+
+## Activation Steering (`soup steer`)
+
+Sometimes you don't want to retrain — you want to *push* the model along a learned direction at decode time. Soup ships three control-vector backends:
+
+- **CAA** (Contrastive Activation Addition) — add a contrastive vector to the residual stream.
+- **ITI** (Inference-Time Intervention) — shift specific attention heads along a learned direction.
+- **RepE** (Representation Engineering) — PCA-based direction in the residual stream.
+
+```bash
+# Train a steering vector from contrastive (positive, negative) prompt pairs
+soup steer train --base meta-llama/Llama-3.1-8B-Instruct \
+                 --method caa --name safety-v1 \
+                 --pairs ./data/pairs.jsonl
+
+# Apply at decode time via soup serve
+soup serve --model ./adapter --steer safety-v1 --steer-strength 1.5
+
+# List locally-stored steering vectors
+soup steer list
+```
+
+Steering names are validated against a strict regex (`^[A-Za-z0-9][A-Za-z0-9._\-]{0,127}$` — no path separators, no shell metacharacters); strength is bounded `|s| <= 10.0`. The trained vectors land in the Soup Registry under the `steering_vector` artifact kind so lineage is preserved.
+
+## GRACE Codebook — Lifelong Knowledge Edits
+
+Vanilla ROME / MEMIT degrade after dozens of sequential edits — the model's norms blow up. GRACE (Hartvigsen et al., 2023) stores each edit in a discrete latent codebook so thousands of sequential patches survive:
+
+```bash
+soup edit set --base ./model --method grace \
+              --subject "The CEO of Acme is" --target "Jane Doe"
+```
+
+```yaml
+# Or via soup.yaml when training a model with GRACE-aware lookups
+training:
+  grace_codebook: true
+  grace_codebook_size: 1024    # codebook entries (max 100k)
+  grace_codebook_dim: 768      # residual-stream width
+```
+
+`grace` joins the existing `rome` / `memit` / `alphaedit` allowlist on `soup edit set`; the v0.61.0 sequential edit governor still gates the call when the per-base-model edit count or norm-blowup verdict trips.
 
 ## Model Registry & Lineage
 

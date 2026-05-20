@@ -23,7 +23,7 @@ from types import MappingProxyType
 from typing import Mapping, Optional
 
 SUPPORTED_EDIT_METHODS: frozenset[str] = frozenset(
-    {"rome", "memit", "alphaedit"}
+    {"rome", "memit", "alphaedit", "grace"}
 )
 
 _MAX_METHOD_LEN: int = 32
@@ -67,6 +67,17 @@ _EDIT_METHOD_METADATA: Mapping[str, EditMethodSpec] = MappingProxyType({
         description=(
             "Null-space-projected ROME variant — survives sequential "
             "edits better than vanilla ROME / MEMIT."
+        ),
+        multi_edit_capable=True,
+        live_wired=False,
+    ),
+    "grace": EditMethodSpec(
+        name="grace",
+        description=(
+            "GRACE codebook — discrete latent-space (key, value) store "
+            "that survives thousands of sequential edits without "
+            "norm-blowup. v0.62.0 Part E ships the schema; live "
+            "lookup / write kernel lands in v0.62.1."
         ),
         multi_edit_capable=True,
         live_wired=False,
@@ -197,6 +208,10 @@ _DEFAULT_EDIT_LAYER: Mapping[str, int] = MappingProxyType({
     "rome": 5,
     "memit": 8,
     "alphaedit": 5,
+    # GRACE writes to a single dedicated codebook so the "layer" arg is
+    # the residual-stream layer where the lookup hook is installed.
+    # v0.62.0 Part E ships the schema; default mirrors AlphaEdit.
+    "grace": 5,
 })
 
 
@@ -234,7 +249,7 @@ def build_edit_plan(
 
 
 def apply_edit(plan: EditPlan) -> None:
-    """Apply a knowledge edit — deferred to v0.61.1.
+    """Apply a knowledge edit — deferred to v0.61.1 (or v0.62.1 for ``grace``).
 
     Re-validates the method so callers passing a bare-class duck-typed
     plan (no ``EditPlan``) still hit a meaningful error before the
@@ -242,11 +257,13 @@ def apply_edit(plan: EditPlan) -> None:
     """
     method_attr = getattr(plan, "method", None)
     canonical = validate_edit_method(method_attr)
+    # GRACE was added in v0.62.0 Part E with its own live-wiring schedule.
+    target_version = "v0.62.1" if canonical == "grace" else "v0.61.1"
     raise NotImplementedError(
-        f"apply_edit(method={canonical!r}) is deferred to v0.61.1. "
+        f"apply_edit(method={canonical!r}) is deferred to {target_version}. "
         "Schema accepts the request now so YAML / CLI invocations are "
-        "stable, but ROME / MEMIT / AlphaEdit live kernels land in "
-        "v0.61.1."
+        "stable, but ROME / MEMIT / AlphaEdit / GRACE live kernels land "
+        "next release."
     )
 
 
