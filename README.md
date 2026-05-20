@@ -3630,6 +3630,12 @@ soup airgap-bundle --model <m> --output <out.tar>  Signed tarball for data-diode
 soup eval unlearning <run-id> --benchmark tofu|muse|wmdp  Forget Quality + Model Utility + PrivLeak verdict
 soup edit set --base <m> --method rome|memit|alphaedit --subject "..." --target "..."  Surgical knowledge edit (--plan-only available)
 soup edit diff <before-run> <after-run> --probes p.jsonl  Knowledge-injection diff visualizer
+soup ingest --source langfuse|langsmith|helicone|openpipe|otel|openai-stored --logs <jsonl>  Universal trace importer (6 SaaS adapters → normalised JSONL)
+soup prune-prompt --input <jsonl> --output <jsonl> --min-frequency 0.95  Detect + strip shared system-prompt prefix
+soup data active-sample --input <jsonl> --output <jsonl> --budget N  Top-N uncertain prod traces for human review
+soup ab --input <jsonl> --metric latency|judge_score|retry_rate  mSPRT sequential A/B (decision: continue / reject_h0 / accept_h0)
+soup drift-alarm --reference <jsonl> --live <jsonl> --threshold 0.2  Rolling-KL drift alarm (exit 3 on drift)
+soup drift-alarm ... --slack-url <https> | --discord-url <https>  Optional SSRF-validated webhook on drift detected
 soup version [--full] [--json]                Show version (--full: system info, --json: JSON output)
 soup --verbose <command>                      Full traceback on errors
 ```
