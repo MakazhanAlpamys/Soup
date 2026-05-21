@@ -42,15 +42,14 @@ soup train
 
 Latest highlights only. Full history: [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 
-**v0.64.0 — Pre-flight & Tooling: pick the right base, lock the env, refuse OOMs before launch.** Closes axis 1 + axis 11 of the roadmap. Six new top-level commands give operators the rest of the pre-flight surface that v0.54 `soup advise` started: which base model, which compute, which env, which licence. Hosted vendors push their own catalogs and skip CUDA-hell ownership — Soup is local + spans every base.
+**v0.65.0 — Eval Depth: calibrated judges, behaviour batteries, capability auto-suite, CheckList DSL, IRT subset selector.** Five new commands close axis 4 of the roadmap — evals as a first-class surface, not an afterthought. SaaS evals (Galileo, Braintrust) ship judges but not calibration; lm-eval-harness is the closest to capability auto-suite but wiring is painful; CheckList for LLMs hasn't been revived. Soup ships all five locally.
 
-- **`soup tunability --dataset <jsonl> [--candidates a,b,c] [--probe-steps N]`.** Probe-train 8 small candidate bases (Qwen3-0.6/1.7B, Llama-3.2-1/3B, Gemma-3-E2B, Phi-4-mini, SmolLM3, Qwen2.5-1.5B) against a held-out slice and report the (delta-from-base × cost × license) Pareto frontier. `--plan-only` dry-runs the sweep; `--list` shows the built-in catalogue. Live LoRA probe deferred to v0.64.1 — v0.64.0 ships the schema, Pareto math, default catalogue, and a `probe_fn` injection point.
-- **`soup plan --config soup.yaml` / `soup apply --config soup.yaml`.** Terraform-shape lock-and-execute for training. `plan` writes `soup.tfstate` with the run's config SHA, dataset SHA, estimated cost, ETA, peak VRAM, and spot price. `apply` refuses if the YAML drifted from the state (exit 3) so you never silently re-spend $0.50 on a mutated config. `--dry-run` validates without running.
-- **`soup env lock` / `soup env status` / `soup env check`.** Hermetic env lockfile via `importlib.metadata` — torch / transformers / peft / trl / accelerate / bitsandbytes / flash-attn / xformers / deepspeed / unsloth / vllm + Python + platform + CUDA versions. `check` compares the current env against the lock and exits 3 on ABI-sensitive drift (the "FT worked on Friday, broke on Monday" problem).
-- **Hardware-fit calculator.** Static analytical predictor of peak VRAM by class (weights / optimizer / gradients / activations / overhead). Given (params, seq_len, batch_size, optimizer, quant, peft, gradient_checkpointing), it returns a 5-bucket breakdown + an OK/OOM verdict with 10% safety margin and an actionable hint (`--batch-size halve` / `--quantization 4bit` / `--gradient-checkpointing auto`). Composes with v0.40.3 live CUDA OOM probe.
-- **`soup completions bash | zsh | fish`.** Sourceable shell completion scripts. `eval "$(soup completions bash)"` adds tab-completion for `soup` + every subcommand in the current shell. `--target-modules` falls back to canonical Llama-shape defaults; recipe names auto-complete from the 115+ catalogue.
-- **`soup license-advisor --target b2c|defense|embedded [--license <id> --mau N]`.** Per-deploy-target license matrix. B2C → permissive recommended, non-commercial forbidden. Defense → restricted-use community licenses (Llama / Gemma / Qwen-research / Mistral-research) forbidden because their acceptable-use clauses clash. Embedded → strong-copyleft (GPL/AGPL) forbidden because closed-source firmware redistribution. The per-license check flags the Llama community license + > 700M MAU rule (exit 3) so you don't ship a B2C product that needs a separate Meta licence after the fact. Composes with v0.60 `adapters merge` license-conflict gate.
-- **+271 new tests** (10035 → 10306 net). Review-fix coverage from a consolidated code+security+TDD wave: 0 CRITICAL + 6 HIGH (TOCTOU symlink rejection on every new read path; `compute_dataset_sha` containment + symlink-reject; narrow `except Exception` to `(OSError, ValueError)` in env probing) + 8 MEDIUM (strict-JSON config SHA, no `default=str` silent collision; strict-bool `applied` validation; `_activation_bytes` overflow clamp; PEP 604 → `Optional[str]` for Typer Py3.9 compat; tight Llama-family allowlist replaces `.startswith`; Windows `v12.1` CUDA path-parse; containment-before-existence ordering) + 4 LOW (source-grep regression for `atomic_write_text`, MAU upper cap, `Sequence` from `collections.abc`, end-to-end drift-refusal exit-3). Manual CPU smokes for every Part A-F command incl. failure modes (drift exit 3, license block exit 3, completions unknown shell exit 2).
+- **Judge calibration with conformal abstention** — `eval/calibrate.py` extended with SCOPE/CJE-style bidirectional pairwise judging. `PairwiseJudgement` carries the first-position + second-position + oracle verdicts for one prompt; `fit_position_bias` returns a coefficient ∈ [-1, 1] measuring slot-flipping; `conformal_threshold(scores, *, alpha)` emits the α-quantile abstention threshold; `run_pairwise_calibration` runs the full fit; `ensure_judge_calibrated(report)` is the production gate that **refuses** to score with an uncalibrated judge (`RuntimeError` on missing report / low agreement / extreme bias). v0.43.0 KL-divergence surface preserved.
+- **`soup eval behavior <run-id> --battery xstest|harmbench|jailbreakbench|elephant|syceval`.** Bundled behaviour battery with pre/post diff in one report. 5 tiny probe sets ship under `soup_cli/data/_fixtures/behavior/` (harmful prompts redacted — operators pull the real sets from upstream papers); word-boundary regex agreement (rejects `"safe" in "unsafe"` false positives; accepts `"safe."`). OK/MINOR/MAJOR thresholds match v0.26 / v0.56 taxonomy. Composes with `soup diagnose` for a fuller report card.
+- **`soup eval capability <run-id> --suite full|fast|math|code`.** Pre-bundled capability profile selector over MMLU-Pro / GPQA / BBEH / AIME / MATH-500 / HumanEval+ / SWE-bench-Verified with sane `lm-eval-harness` task ids. `fast` = (mmlu-pro, humaneval-plus); `math` = (aime, math-500); `code` = (humaneval-plus, swe-bench-verified). Emits the (benchmark, lm-eval task) manifest for downstream `soup eval benchmark` chaining.
+- **`soup eval checklist <spec.yaml> [--evidence <json>]`.** Ribeiro et al. 2020 CheckList behavioural DSL. Three test kinds — `mft` (Minimum Functionality Test: response must contain a keyword as a whole WORD), `inv` (Invariance: all paraphrases get the same answer), `dir` (Directional Expectation: response shifts under a perturbation). YAML spec format; per-test OK/MINOR/MAJOR verdict; neutral OK when evidence absent (matches v0.56 / v0.61 policy).
+- **`soup eval irt-subset <responses.jsonl> --size full|small|tiny`.** Item Response Theory eval-cost optimizer. 1PL Rasch model closed-form fit (`β̂_i = -log(p̂_i / (1 - p̂_i))`); picks high-info items (`p̂(1-p̂)` is maximised at 50/50 questions); `tiny` keeps 10%, `small` keeps 30%, `full` keeps 100%. 5-10x cut in eval bills without losing ranking power. Streams via `os.fdopen(fd)` so 256 MiB JSONL doesn't materialise in RAM.
+- **+271 new tests** (10306 → 10577). Review-fix coverage from 2 review waves: 0 CRITICAL + 6 HIGH (TOCTOU `O_NOFOLLOW` + `os.fstat` on SAME fd across every new read path; `importlib.resources.files / Traversable / op` replaces fragile `os.path.join(str(pkg_root))` for namespace-package safety; word-boundary regex agreement in behavior_battery + checklist_dsl) + 9 MEDIUM (CLI `_validate_run_id` gate; 16 MiB evidence cap with O_NOFOLLOW; `_MAX_ROWS` cap counts skipped lines toward total; INV all-whitespace responses no longer pass; `_write_json_output` dedup; named-test error in `parse_checklist_spec`) + 7 LOW (boundary tests at 0.0 / 0.85 / 0.60 / 1.0; skipped-row WARNING + caplog test; dedup-helper-actually-used regression guards; ASCII word-boundary docstring note). Manual CPU smokes for every Part A-E command incl. failure modes (unknown battery exit 2, empty run_id exit 2, evidence outside cwd exit 2, MAJOR diff exit 2).
 
 ## Why Soup?
 
@@ -4771,6 +4770,79 @@ soup license-advisor --target b2c --license llama-3 --monthly-active-users 80000
 ```
 
 The Llama-family allowlist is tight (no `.startswith` over-match), so a hypothetical future `llama-permissive-2030` won't false-trigger the 700M-MAU gate. Composes with v0.60 `soup adapters merge --license <id>` for the merge-time conflict gate.
+
+## Eval Depth (`soup eval behavior / capability / checklist / irt-subset`)
+
+v0.65 ships five new evaluation surfaces that close the "judges are biased, suites are arbitrary, eval costs are high" gaps that SaaS evals (Galileo, Braintrust) don't address.
+
+**Judge calibration** — refuse to use an uncalibrated judge in production:
+
+```python
+from soup_cli.eval.calibrate import (
+    PairwiseJudgement, run_pairwise_calibration, ensure_judge_calibrated,
+)
+
+# Run your judge on a calibration set with positions swapped.
+judgements = [PairwiseJudgement(...) for _ in oracle_set]
+report = run_pairwise_calibration(judgements, scores=confidence_scores)
+ensure_judge_calibrated(report)  # raises RuntimeError if not calibrated
+```
+
+The report carries `position_bias` ∈ [-1, 1] (0 = no slot preference), a conformal abstention threshold from the score quantile, agreement-rate vs the oracle, and a `calibrated` bool. `ensure_judge_calibrated` refuses on missing report, low agreement, or extreme bias — so production scoring code can fail loud, not silent.
+
+**Behaviour battery** — pre/post diff on bundled safety / refusal / sycophancy probe sets:
+
+```bash
+# Score over-refusal regression on XSTest (operator supplies evidence JSON)
+soup eval behavior my_run --battery xstest --evidence ev.json --output diff.json
+
+# Bundled batteries: xstest, harmbench, jailbreakbench, elephant, syceval
+# Harmful prompts ship REDACTED — pull real sets from upstream papers.
+```
+
+Word-boundary regex agreement (no `"safe" in "unsafe"` false positives); OK/MINOR/MAJOR thresholds match the v0.26 / v0.56 taxonomy.
+
+**Capability auto-suite** — pre-bundled profile selector with friendly `lm-eval-harness` task ids:
+
+```bash
+soup eval capability my_run --suite math --output cap.json   # AIME + MATH-500
+soup eval capability my_run --suite code --output cap.json   # HumanEval+ + SWE-bench-Verified
+soup eval capability my_run --suite fast --output cap.json   # MMLU-Pro + HumanEval+
+soup eval capability my_run --suite full --output cap.json   # all 7 benchmarks
+```
+
+Emits the (benchmark, lm-eval task) manifest; chain into the existing `soup eval benchmark` surface.
+
+**CheckList behavioural DSL** — Ribeiro et al. 2020 MFT / INV / DIR tests:
+
+```yaml
+# tests.yaml
+tests:
+  - name: capital-france
+    kind: mft
+    prompts: ["What is the capital of France?"]
+    expected: ["paris"]
+  - name: paraphrase-add
+    kind: inv
+    prompts:
+      - "Add 2 and 2."
+      - "Add two and two."
+```
+
+```bash
+soup eval checklist tests.yaml --evidence responses.json
+```
+
+`mft` = response must contain a keyword as a whole word (`"sand"` won't pass for `"and"`); `inv` = all paraphrases must agree; `dir` = directional expectation under perturbation.
+
+**IRT subset selection** — pick a smaller eval set that preserves ranking power:
+
+```bash
+# Pick top-info 30% of items (5-10x eval-bill cut without losing power)
+soup eval irt-subset per_item_correctness.jsonl --size small --output plan.json
+```
+
+Closed-form 1PL Rasch fit (`β̂_i = -log(p̂_i / (1 - p̂_i))`); ranks by `p̂ · (1-p̂)` info (maximised at 50/50 items, since extremes carry no new ranking information). `full` keeps 100%, `small` keeps 30%, `tiny` keeps 10%.
 
 ## Changelog
 

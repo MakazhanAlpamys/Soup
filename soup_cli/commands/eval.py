@@ -1172,3 +1172,8 @@ _register_v0550(app, console)
 from soup_cli.commands._eval_v0610 import register as _register_v0610  # noqa: E402
 
 _register_v0610(app, console)
+
+# Register v0.65.0 subcommands (eval behavior / capability / checklist / irt-subset)
+from soup_cli.commands._eval_v0650 import register as _register_v0650  # noqa: E402
+
+_register_v0650(app, console)
