@@ -678,7 +678,12 @@ def test_cli_registers_tunability():
 def test_version_bumped_to_0640():
     import soup_cli
 
-    assert soup_cli.__version__ == "0.64.0"
+    # Floor check so future minor releases don't regress this test (matches
+    # v0.51.0 / v0.54.0 / v0.57.0 / v0.60.0 floor-check idiom). Exact-equality
+    # at "0.64.0" broke on the v0.65.0 bump — the test name preserves the
+    # intent (≥0.64.0 means v0.64.0 shipped).
+    parts = tuple(int(p) for p in soup_cli.__version__.split(".")[:3])
+    assert parts >= (0, 64, 0), soup_cli.__version__
 
 
 def test_no_top_level_heavy_imports():
