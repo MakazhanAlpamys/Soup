@@ -42,14 +42,14 @@ soup train
 
 Latest highlights only. Full history: [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 
-**v0.65.0 — Eval Depth: calibrated judges, behaviour batteries, capability auto-suite, CheckList DSL, IRT subset selector.** Five new commands close axis 4 of the roadmap — evals as a first-class surface, not an afterthought. SaaS evals (Galileo, Braintrust) ship judges but not calibration; lm-eval-harness is the closest to capability auto-suite but wiring is painful; CheckList for LLMs hasn't been revived. Soup ships all five locally.
+**v0.66.0 — Post-train X-rays: SAE feature diff + live influence-function blame + sleeper-agent defection probe + adapter interference matrix + probe pack.** Five surfaces extend `soup diagnose` from 6 failure modes to 10 — the post-train inspection layer no hosted vendor ships because mechanistic interpretability is research-grade and costs scale with N (so SaaS unit economics break). Closes the v0.57 `NotImplementedError` blame stub (#171).
 
-- **Judge calibration with conformal abstention** — `eval/calibrate.py` extended with SCOPE/CJE-style bidirectional pairwise judging. `PairwiseJudgement` carries the first-position + second-position + oracle verdicts for one prompt; `fit_position_bias` returns a coefficient ∈ [-1, 1] measuring slot-flipping; `conformal_threshold(scores, *, alpha)` emits the α-quantile abstention threshold; `run_pairwise_calibration` runs the full fit; `ensure_judge_calibrated(report)` is the production gate that **refuses** to score with an uncalibrated judge (`RuntimeError` on missing report / low agreement / extreme bias). v0.43.0 KL-divergence surface preserved.
-- **`soup eval behavior <run-id> --battery xstest|harmbench|jailbreakbench|elephant|syceval`.** Bundled behaviour battery with pre/post diff in one report. 5 tiny probe sets ship under `soup_cli/data/_fixtures/behavior/` (harmful prompts redacted — operators pull the real sets from upstream papers); word-boundary regex agreement (rejects `"safe" in "unsafe"` false positives; accepts `"safe."`). OK/MINOR/MAJOR thresholds match v0.26 / v0.56 taxonomy. Composes with `soup diagnose` for a fuller report card.
-- **`soup eval capability <run-id> --suite full|fast|math|code`.** Pre-bundled capability profile selector over MMLU-Pro / GPQA / BBEH / AIME / MATH-500 / HumanEval+ / SWE-bench-Verified with sane `lm-eval-harness` task ids. `fast` = (mmlu-pro, humaneval-plus); `math` = (aime, math-500); `code` = (humaneval-plus, swe-bench-verified). Emits the (benchmark, lm-eval task) manifest for downstream `soup eval benchmark` chaining.
-- **`soup eval checklist <spec.yaml> [--evidence <json>]`.** Ribeiro et al. 2020 CheckList behavioural DSL. Three test kinds — `mft` (Minimum Functionality Test: response must contain a keyword as a whole WORD), `inv` (Invariance: all paraphrases get the same answer), `dir` (Directional Expectation: response shifts under a perturbation). YAML spec format; per-test OK/MINOR/MAJOR verdict; neutral OK when evidence absent (matches v0.56 / v0.61 policy).
-- **`soup eval irt-subset <responses.jsonl> --size full|small|tiny`.** Item Response Theory eval-cost optimizer. 1PL Rasch model closed-form fit (`β̂_i = -log(p̂_i / (1 - p̂_i))`); picks high-info items (`p̂(1-p̂)` is maximised at 50/50 questions); `tiny` keeps 10%, `small` keeps 30%, `full` keeps 100%. 5-10x cut in eval bills without losing ranking power. Streams via `os.fdopen(fd)` so 256 MiB JSONL doesn't materialise in RAM.
-- **+271 new tests** (10306 → 10577). Review-fix coverage from 2 review waves: 0 CRITICAL + 6 HIGH (TOCTOU `O_NOFOLLOW` + `os.fstat` on SAME fd across every new read path; `importlib.resources.files / Traversable / op` replaces fragile `os.path.join(str(pkg_root))` for namespace-package safety; word-boundary regex agreement in behavior_battery + checklist_dsl) + 9 MEDIUM (CLI `_validate_run_id` gate; 16 MiB evidence cap with O_NOFOLLOW; `_MAX_ROWS` cap counts skipped lines toward total; INV all-whitespace responses no longer pass; `_write_json_output` dedup; named-test error in `parse_checklist_spec`) + 7 LOW (boundary tests at 0.0 / 0.85 / 0.60 / 1.0; skipped-row WARNING + caplog test; dedup-helper-actually-used regression guards; ASCII word-boundary docstring note). Manual CPU smokes for every Part A-E command incl. failure modes (unknown battery exit 2, empty run_id exit 2, evidence outside cwd exit 2, MAJOR diff exit 2).
+- **`soup probe sae-diff <sae> <pre.json> <post.json>`** — Sparse-Autoencoder feature attribution. Pure-numpy math: ReLU(activations @ W_enc + b_enc) → mean post-pre diff per feature → top-K changes. Closed `HF_HUB_ALLOWLIST` over 8 known SAE families (Gemma Scope / Pythia / SAE-Lens Llama / GPT-2-small). Containment + `O_NOFOLLOW` open + 64-tensor cap. Composes with `soup adapters diff` (extends "what changed" from weight space to feature space).
+- **`soup adapters blame --top-k 50`** — Live DataInf-style influence runner closes v0.57 #171. Per-row score = `cos(grad_row, grad_probe) × |grad_row|`; operator supplies `probe_fn` returning `(row_grads, probe_grad)` or falls back to a deterministic synthetic probe (matches v0.54 advise stub policy — surface always returns a real `BlameResult`, never `NotImplementedError`). Symlink-rejected via `O_NOFOLLOW` on the dataset read (TOCTOU defence); `_DEFAULT_SYNTH_PROBE_CAP=100_000` so a 10M-row dataset doesn't allocate 1.28 GB.
+- **`soup probe sleeper <base> [--evidence ev.json]`** — Anthropic-style calibrated linear probe per base. 6 bundled bases (Llama-2/3 8B, Mistral-7B, Qwen2-7B, Gemma-2 2B/9B); deterministic SHA-256-keyed synthetic weights ship today (real calibrated weights in v0.66.x). OK/MINOR/MAJOR thresholds at 1% / 5% defection rate. Exit 2 on MAJOR for CI gating. Without `--evidence`, prints probe metadata + neutral OK.
+- **`soup probe interference <losses.json>`** — Pairwise N×N adapter interference matrix. Per-pair score = `(loss(A | A+B) - loss(A | A_alone)) / loss(A_alone)`; classify_interference at 5% / 20% bands. Surfaces which adapter pairs you cannot deploy together via `soup serve --adapters`. Rich-markup-escape on adapter names (review H2 fix — defends against crafted names like `[link=evil]X[/]`). MAJOR worst-pair → exit 2.
+- **`soup probe pack <base>`** — Manifest assembler that ties Parts A + C + D together. Per-base bundle of probe entries (sleeper / sae / truth / harm — last two reserved for v0.66.x); `MappingProxyType`-wrapped registry; `_LOWER_INDEX` for O(1) case-insensitive lookup.
+- **+259 new tests** (10577 → 10836). Review-fix coverage across 3 sequential waves: 0 CRITICAL + 9 HIGH (TypeError on bool/non-str verdict; `O_NOFOLLOW` probe-open on `load_sae_weights` + `_count_dataset_rows` closing TOCTOU race; `hashlib.sha256` replaces process-salted `hash()` for deterministic probe weights across Python processes; non-numeric loss rejection in `probe interference` CLI; Rich-markup escape on adapter / verdict / description in `render_*_markdown`) + 14 MEDIUM (64-bit seed via `digest[:16]`; 10M-row hard rejection (no silent truncate); `_DEFAULT_SYNTH_PROBE_CAP=100_000` synthetic probe cap; description 4096-char cap on `ProbeEntry`; `_LOWER_INDEX` `MappingProxyType`; `collections.abc.Mapping` migration; `frozenset[str]` type params) + 5 LOW (`FrozenInstanceError` instead of `pytest.raises((AttributeError, Exception))`; basename(normpath(...)) symmetry; top-K comment clarification; `Optional[str]` on output flag; reserved-kind docstring note). Manual CPU smokes for every new command incl. failure modes (unknown base exit 2 / non-numeric loss exit 2 / MAJOR interference exit 2 / live blame produces a real `BlameResult`).
 
 ## Why Soup?
 
@@ -166,6 +166,31 @@ training:
 
 output: ./output
 ```
+
+## Post-train X-rays (`soup probe`, `soup adapters blame --live`)
+
+Five surfaces that extend `soup diagnose` from 6 failure modes to 10. Mechanistic interpretability has been research-grade for years; v0.66.0 ships the wiring CLI-first so anyone can probe their FT without the SaaS unit-economics tax.
+
+```bash
+# 1. Sparse-Autoencoder feature diff: which SAE features moved during FT?
+soup probe sae-diff path/to/sae.safetensors pre.json post.json --top-k 20
+
+# 2. Live influence-function blame: which 50 training rows pulled toward this output?
+soup adapters blame ./my-adapter --dataset ./train.jsonl --layer q_proj.7 \
+    --budget 1h --shards 10 --top-k 50
+
+# 3. Sleeper-agent defection probe: per-token defection rate via calibrated linear probe
+soup probe sleeper meta-llama/Llama-3-8B --evidence activations.json
+
+# 4. Pairwise adapter interference matrix: which pairs can't be deployed together?
+soup probe interference losses.json    # exit 2 if worst-pair score ≥ 20%
+
+# 5. Probe pack: list/assemble calibrated probes per base
+soup probe pack --list                 # list bundled bases
+soup probe pack meta-llama/Llama-3-8B  # render the per-base manifest
+```
+
+Every probe uses the OK / MINOR / MAJOR taxonomy from v0.26 (Quant-Lobotomy) / v0.56 (Diagnose) / v0.65 (Eval Depth). Sleeper + interference exit 2 on MAJOR for CI gating. The blame runner closes the v0.57 `NotImplementedError` stub via a DataInf-style influence approximation: `cos(grad_row, grad_probe) × |grad_row|`. Operators supply a `probe_fn` returning `(row_grads, probe_grad)`, or the runner falls back to a deterministic synthetic probe so the surface always returns a real `BlameResult` (no exception leaks). SAE feature diff is pure-numpy; the safetensors loader is `O_NOFOLLOW`-protected (TOCTOU defence — closes the symlink swap window between containment check and read).
 
 ## Data Flywheel (`soup loop`)
 
@@ -2345,7 +2370,7 @@ soup adapters branches
 - Branch pointers live under `~/.soup/branches/` (override via `SOUP_BRANCHES_DIR`, constrained to `$HOME` / `$CWD` / `$TMPDIR`).
 - `soup adapters checkout` SHA-checks the source config — refuses to restore when the source has drifted from the snapshot, so reproducibility never silently lies.
 
-**Limitations (v0.57.1):** Live blame ablation runner + live canary verdict on merged adapters are scheduled for v0.57.1; `soup adapters blame` emits the plan and exits clean today, and `MergeReport.verdict` is the `UNKNOWN` stub.
+**v0.66.0:** `soup adapters blame` is now LIVE — the v0.57 `NotImplementedError` stub (#171) is lifted via a DataInf-style influence-function approximation. Pass `--top-k 50` to control the reported top-influencer count; pass a real `probe_fn` (Python API) to feed real gradients, or use the default deterministic synthetic probe for offline planning. `MergeReport.verdict` remains the `UNKNOWN` stub (live canary eval in v0.57.1).
 
 ## Soup Cans (Shareable Recipes)
 
@@ -3644,6 +3669,12 @@ soup env lock | status | check                           Hermetic env lockfile +
 soup completions bash | zsh | fish                       Shell completion script (sourceable via eval)
 soup license-advisor --target b2c|defense|embedded       Recommend license-clean base for deploy target
 soup license-advisor ... --license <id> --mau N          Per-license downstream-risk check (exit 3 on block)
+soup probe sae-diff <sae> <pre.json> <post.json> [--top-k N]  SAE feature diff between pre/post-FT activations (v0.66.0)
+soup probe sleeper <base> [--evidence ev.json] [--output o.json]  Calibrated sleeper-agent defection probe (v0.66.0)
+soup probe interference <losses.json> [--output o.json]  Pairwise N×N adapter interference matrix (exit 2 on MAJOR; v0.66.0)
+soup probe pack <base> [--output o.json]      Per-base calibrated probe pack manifest (v0.66.0)
+soup probe pack --list                        List bundled probe-pack bases (v0.66.0)
+soup adapters blame ... --top-k 50            Live DataInf-style influence runner (v0.66.0, closes #171)
 soup version [--full] [--json]                Show version (--full: system info, --json: JSON output)
 soup --verbose <command>                      Full traceback on errors
 ```

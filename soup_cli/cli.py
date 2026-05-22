@@ -395,6 +395,19 @@ app.command(
     ),
 )(_license_advisor_cmd.license_advisor_cmd)
 
+# v0.66.0 Part C/D/E — Post-train X-rays: sleeper / interference / sae-diff
+# / probe pack.
+from soup_cli.commands import probe as _probe_cmd  # noqa: E402
+
+app.add_typer(
+    _probe_cmd.app,
+    name="probe",
+    help=(
+        "Activation probes: sleeper-agent defection / pairwise interference "
+        "/ SAE feature diff / probe pack (v0.66.0)."
+    ),
+)
+
 
 def _rewrite_advise_argv(argv: list) -> list:
     """Inject `run` between `advise` and a non-subcommand first argument.

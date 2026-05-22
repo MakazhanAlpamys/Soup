@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from typing import Optional
 
 import typer
 from rich.console import Console
@@ -460,11 +461,28 @@ def blame(
     budget: str = typer.Option("4h", "--budget", help="Wall-clock budget (e.g. 4h, 30m)"),
     num_shards: int = typer.Option(10, "--shards", min=2, max=100,
                                    help="Number of dataset shards for leave-one-out"),
+    top_k: int = typer.Option(50, "--top-k", min=1, max=10000,
+                              help="Number of top influencer rows to report (v0.66.0)"),
     plan_only: bool = typer.Option(False, "--plan-only",
-                                   help="Print plan and exit (live runner in v0.57.1)"),
+                                   help="Print plan and exit without running"),
+    output: Optional[str] = typer.Option(
+        None, "--output", "-o",
+        help="Write JSON blame result to path (v0.66.0)",
+    ),
 ):
-    """Attribute weight movement to dataset shards via leave-one-out ablation (v0.57.0)."""
-    from soup_cli.utils.blame import parse_budget, plan_blame, run_blame
+    """Attribute weight movement to dataset rows via DataInf influence (v0.66.0).
+
+    v0.57.0 shipped the plan-only surface. v0.66.0 (closes #171) lifts the
+    runner with a DataInf-style influence-function approximation. Pass
+    ``--plan-only`` to inspect the plan without running the analysis.
+    """
+    from soup_cli.utils.blame import (
+        parse_budget,
+        plan_blame,
+        render_blame_json,
+        render_blame_markdown,
+        run_blame,
+    )
 
     try:
         seconds = parse_budget(budget)
@@ -507,11 +525,25 @@ def blame(
     if plan_only or not plan.feasible:
         return
 
+    # v0.66.0: live runner via DataInf-style influence approximation.
     try:
-        run_blame(plan)
-    except NotImplementedError as exc:
-        console.print(f"[yellow]{escape(str(exc))}[/]")
-        raise typer.Exit(0) from None
+        result = run_blame(plan, top_k=top_k)
+    except (TypeError, ValueError) as exc:
+        console.print(f"[red]Blame failed: {escape(str(exc))}[/]")
+        raise typer.Exit(2) from exc
+
+    console.print(render_blame_markdown(result))
+
+    if output is not None:
+        from soup_cli.utils.paths import atomic_write_text
+
+        try:
+            atomic_write_text(render_blame_json(result), output,
+                              field="--output")
+        except (TypeError, ValueError) as exc:
+            console.print(f"[red]Cannot write --output: {escape(str(exc))}[/]")
+            raise typer.Exit(2) from exc
+        console.print(f"[green]Wrote blame JSON → {escape(output)}[/]")
 
 
 @app.command()

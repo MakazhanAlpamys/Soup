@@ -236,15 +236,18 @@ def test_plan_blame_missing_dataset(tmp_path, monkeypatch):
 # ---------- run_blame stub ----------
 
 
-def test_run_blame_stub_marker():
+def test_run_blame_no_longer_raises_v0_66_lifted():
+    """v0.66.0 Part B lifted the stub — runner now returns BlameResult."""
+    from soup_cli.utils.blame import BlameResult
+
     plan = BlamePlan(
         adapter_dir="a", dataset_path="d", layer="x",
         budget_seconds=3600, num_shards=2, per_shard_seconds=600,
         shards=(BlameShardWork(0, 0, 1, 600), BlameShardWork(1, 1, 1, 600)),
         feasible=True, reason="ok",
     )
-    with pytest.raises(NotImplementedError, match="v0.57.1"):
-        run_blame(plan)
+    result = run_blame(plan)
+    assert isinstance(result, BlameResult)
 
 
 def test_run_blame_rejects_non_plan():
@@ -311,7 +314,8 @@ def test_adapters_blame_invalid_budget(tmp_path, monkeypatch):
     assert "Invalid --budget" in _strip_ansi(result.output)
 
 
-def test_adapters_blame_live_runner_advisory(tmp_path, monkeypatch):
+def test_adapters_blame_live_runner_runs(tmp_path, monkeypatch):
+    """v0.66.0 Part B — live runner produces a real BlameResult (no advisory)."""
     adapter, dataset = _setup_blame(tmp_path, monkeypatch)
     result = runner.invoke(soup_app, [
         "adapters", "blame", adapter,
@@ -321,4 +325,8 @@ def test_adapters_blame_live_runner_advisory(tmp_path, monkeypatch):
         "--shards", "5",
     ])
     assert result.exit_code == 0, (result.output, repr(result.exception))
-    assert "v0.57.1" in _strip_ansi(result.output)
+    out = _strip_ansi(result.output)
+    # The v0.57.1 advisory is gone (PR #171 closed in v0.66.0); the
+    # live runner output mentions either "Blame" or "top" influencers.
+    assert "v0.57.1" not in out
+    assert "Blame" in out or "blame" in out.lower()
