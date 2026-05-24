@@ -2521,6 +2521,8 @@ class SoupConfig(BaseModel):
         "tts", "classifier", "reranker", "cross_encoder", "distill",
         # v0.61.0 Part A — Unlearning (NPO / SimNPO / RMU).
         "unlearn",
+        # v0.67.0 Part C — MoLE per-token adapter routing (Mixture of LoRA Experts).
+        "moe_lora_routing",
     ] = Field(
         default="sft",
         description=(
@@ -2528,7 +2530,8 @@ class SoupConfig(BaseModel):
             "'tts' (TTS fine-tuning), 'classifier' / 'reranker' / "
             "'cross_encoder' (classification heads), and 'distill' "
             "(knowledge distillation). v0.61.0 adds 'unlearn' (NPO / "
-            "SimNPO / RMU)."
+            "SimNPO / RMU). v0.67.0 adds 'moe_lora_routing' (per-token "
+            "gating over N task LoRAs)."
         ),
     )
     modality: Literal["text", "vision", "audio", "audio_out"] = Field(
@@ -3698,6 +3701,27 @@ class SoupConfig(BaseModel):
             validate_ra_dit_compat(stage=stage, task=self.task)
         except ValueError as exc:
             raise ValueError(str(exc)) from exc
+        return self
+
+    @model_validator(mode="after")
+    def _validate_mole_routing_compat(self) -> "SoupConfig":
+        """v0.67.0 Part C — MoLE per-token routing cross-validator.
+
+        Rules:
+        * ``task='moe_lora_routing'`` rejects ``backend='mlx'`` (live wiring
+          deferred to v0.67.1; the gating kernel needs torch dispatch).
+        * The full ``MoleGatingConfig`` validation lives in
+          ``soup_cli.utils.mole_routing.validate_mole_compat`` and is
+          exercised at trainer construction time (the v0.67.0 release ships
+          the schema lock-in; live training lands in v0.67.1).
+        """
+        if self.task != "moe_lora_routing":
+            return self
+        if self.backend == "mlx":
+            raise ValueError(
+                "MoLE routing (task='moe_lora_routing') is not supported on "
+                "the mlx backend (live wiring deferred to v0.67.1)."
+            )
         return self
 
     @model_validator(mode="after")

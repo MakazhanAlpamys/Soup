@@ -1,6 +1,7 @@
 """soup adapters — LoRA adapter management (list, info, compare, diff, merge, blame, branch)."""
 
 import json
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -332,13 +333,32 @@ def merge(
     adapters: list[str] = typer.Argument(..., help="Two or more adapter paths to merge"),
     output: str = typer.Option(..., "--output", "-o", help="Output directory for merged adapter"),
     strategy: str = typer.Option("linear", "--strategy",
-                                 help="linear | ties | dare | svd"),
+                                 help="linear | ties | dare | svd | cmaes"),
     weights: str = typer.Option(None, "--weights",
                                 help="Comma-separated weights (default: equal)"),
     density: float = typer.Option(0.2, "--density",
                                   help="Trim density for ties/dare in (0, 1]"),
-    seed: int = typer.Option(0, "--seed", help="Random seed for dare"),
+    seed: int = typer.Option(0, "--seed", help="Random seed for dare / cmaes"),
     rank: int = typer.Option(None, "--rank", help="SVD rank (svd strategy only)"),
+    eval_suite: Optional[str] = typer.Option(
+        None, "--eval",
+        help=(
+            "Path to eval suite (required for --strategy cmaes). "
+            "Used by the evolutionary loop to score candidate merges."
+        ),
+    ),
+    budget: str = typer.Option(
+        "1h", "--budget",
+        help="Wall-clock budget for cmaes (60s..24h, e.g. 1h, 30m)",
+    ),
+    population: int = typer.Option(
+        8, "--population", min=2, max=256,
+        help="cmaes population size per generation",
+    ),
+    max_generations: int = typer.Option(
+        20, "--max-generations", min=1, max=10_000,
+        help="cmaes generation cap",
+    ),
     license_ids: list[str] = typer.Option(
         None, "--license",
         help=(
@@ -372,6 +392,48 @@ def merge(
     if len(adapters) < 2:
         console.print("[red]Need at least 2 adapter paths to merge[/]")
         raise typer.Exit(2)
+
+    # v0.67.0 Part A: cmaes evolutionary search requires an eval suite +
+    # budget. Render the planned strategy and emit a deferred-live advisory.
+    # Operator-supplied eval_fn lives in `soup_cli.utils.cmaes_merge.run_cmaes_merge`;
+    # the CLI surface here ships the plan + validation. Live `soup eval`
+    # auto-wiring against a registry run is deferred to v0.67.1.
+    if strategy == "cmaes":
+        if eval_suite is None:
+            console.print(
+                "[red]--strategy cmaes requires --eval <suite> "
+                "(path to a YAML/JSONL eval).[/]"
+            )
+            raise typer.Exit(2)
+        from soup_cli.utils.cmaes_merge import build_cmaes_plan
+
+        try:
+            cmaes_plan = build_cmaes_plan(
+                adapters=adapters,
+                eval_suite=eval_suite,
+                budget_spec=budget,
+                population_size=population,
+                max_generations=max_generations,
+                seed=seed,
+            )
+        except (FileNotFoundError, TypeError, ValueError) as exc:
+            console.print(f"[red]Invalid cmaes plan: {escape(str(exc))}[/]")
+            raise typer.Exit(2) from exc
+        panel = Panel(
+            f"Strategy:        [bold]cmaes[/]\n"
+            f"Adapters:        {len(cmaes_plan.adapters)}\n"
+            f"Eval suite:      [bold]{escape(os.path.basename(cmaes_plan.eval_suite))}[/]\n"
+            f"Budget:          [bold]{cmaes_plan.budget_seconds}s[/]\n"
+            f"Population:      [bold]{cmaes_plan.population_size}[/]\n"
+            f"Max generations: [bold]{cmaes_plan.max_generations}[/]\n"
+            f"Live cmaes loop with auto-wired eval suite is deferred to "
+            f"[yellow]v0.67.1[/]. The plan is validated and ready to "
+            f"hand to an operator-supplied `eval_fn` via "
+            f"`run_cmaes_merge(plan, eval_fn=...)`.",
+            title="Adapter merge — cmaes (plan)",
+        )
+        console.print(panel)
+        return
 
     # v0.60.0 Part E: license-conflict gate. Operators MUST declare a
     # license per adapter (or pass --license-override <reason>).
@@ -837,3 +899,254 @@ def check_safetensors(
     for path in report.unsafe_files:
         console.print(f"  [yellow]- {escape(path)}[/]")
     raise typer.Exit(1)
+
+
+@app.command(name="pr")
+def adapter_pr(
+    title: str = typer.Argument(..., help="Short PR title (e.g. 'add-support-tone')"),
+    base_sha: str = typer.Option(..., "--base-sha", help="64-hex SHA of the base model"),
+    adapter_path: str = typer.Option(..., "--adapter", help="Path to candidate adapter"),
+    eval_json: Optional[str] = typer.Option(
+        None, "--eval",
+        help=(
+            "Path to JSON eval-deltas: list of "
+            '{"metric": ..., "baseline": ..., "candidate": ...}'
+        ),
+    ),
+    samples_json: Optional[str] = typer.Option(
+        None, "--samples",
+        help=(
+            "Path to JSON sample diffs: list of "
+            '{"prompt": ..., "baseline_output": ..., "candidate_output": ...}'
+        ),
+    ),
+    dataset_diff_path: Optional[str] = typer.Option(
+        None, "--dataset-diff",
+        help="Path to a text file containing the dataset diff",
+    ),
+    output: Optional[str] = typer.Option(
+        None, "--output", "-o",
+        help="Write rendered Markdown to path (default: stdout)",
+    ),
+    format_: str = typer.Option(
+        "markdown", "--format", "-f", help="markdown | json",
+    ),
+):
+    """Render a GitHub-style PR for an adapter (v0.67.0 Part D).
+
+    The PR = ``{base SHA, dataset diff, adapter file, eval report}``
+    rendered as a Markdown document with eval-delta tables and sample
+    diffs, ready to drop into a GitHub PR description or comment.
+    """
+    from soup_cli.utils.adapter_pr import (
+        build_adapter_pr,
+        render_pr_json,
+        render_pr_markdown,
+        write_pr_markdown,
+    )
+    from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
+
+    if format_ not in ("markdown", "json"):
+        console.print(f"[red]Unknown --format: {escape(format_)}[/]")
+        raise typer.Exit(2)
+
+    # Load deltas + samples + dataset_diff lazily; each accepts None.
+    def _load_json_list(path: Optional[str], field: str) -> list:
+        if path is None:
+            return []
+        enforce_under_cwd_and_no_symlink(path, field=field)
+        with open(os.path.realpath(path), encoding="utf-8") as fh:
+            raw = json.load(fh)
+        if not isinstance(raw, list):
+            raise ValueError(f"{field} must contain a JSON list")
+        return raw
+
+    try:
+        deltas = _load_json_list(eval_json, "eval")
+        samples = _load_json_list(samples_json, "samples")
+        dataset_diff = ""
+        if dataset_diff_path is not None:
+            enforce_under_cwd_and_no_symlink(
+                dataset_diff_path, field="dataset_diff"
+            )
+            with open(
+                os.path.realpath(dataset_diff_path), encoding="utf-8"
+            ) as fh:
+                dataset_diff = fh.read()
+        pr = build_adapter_pr(
+            title=title,
+            base_sha=base_sha,
+            adapter_path=adapter_path,
+            dataset_diff=dataset_diff,
+            deltas=deltas,
+            samples=samples,
+        )
+    except (FileNotFoundError, TypeError, ValueError) as exc:
+        console.print(f"[red]{escape(str(exc))}[/]")
+        raise typer.Exit(2) from exc
+
+    if format_ == "json":
+        rendered = render_pr_json(pr)
+    else:
+        rendered = render_pr_markdown(pr)
+
+    if output is None:
+        console.print(rendered)
+        return
+
+    try:
+        if format_ == "markdown":
+            write_pr_markdown(pr, output)
+        else:
+            from soup_cli.utils.paths import atomic_write_text
+
+            atomic_write_text(rendered, output, field="pr output")
+    except (TypeError, ValueError) as exc:
+        console.print(f"[red]{escape(str(exc))}[/]")
+        raise typer.Exit(2) from exc
+
+    console.print(
+        Panel(
+            f"PR:     [bold]{escape(pr.title)}[/]\n"
+            f"Format: [bold]{escape(format_)}[/]\n"
+            f"Output: [bold]{escape(output)}[/]",
+            title="Adapter PR rendered",
+        )
+    )
+
+
+@app.command(name="bisect")
+def adapter_bisect(
+    history: list[str] = typer.Argument(
+        ...,
+        help=(
+            "Ordered checkpoint identifiers (oldest first). At least 2. "
+            "Example: `soup adapters bisect ckpt-100 ckpt-200 ckpt-300 ckpt-400`"
+        ),
+    ),
+    eval_command: str = typer.Option(
+        ...,
+        "--eval-command",
+        help=(
+            "Shell command template; '{ckpt}' is replaced with each "
+            "checkpoint id. Exit code 0 means PASS, non-zero means FAIL. "
+            "Example: 'soup eval custom --model {ckpt} --tasks tasks.jsonl'"
+        ),
+    ),
+    plan_only: bool = typer.Option(
+        False, "--plan-only",
+        help="Print the plan and exit without running the bisect",
+    ),
+    output: Optional[str] = typer.Option(
+        None, "--output", "-o",
+        help="Write JSON result to path",
+    ),
+):
+    """Binary-search a training history to find the first failing checkpoint.
+
+    Composes with v0.66 Part B influence-blame: once the boundary is
+    found, ``soup adapters blame`` can attribute the regression to
+    specific dataset rows.
+    """
+    from soup_cli.utils.adapter_bisect import build_bisect_plan, run_bisect
+
+    if not isinstance(history, list) or len(history) < 2:
+        console.print("[red]Need at least 2 checkpoint ids[/]")
+        raise typer.Exit(2)
+
+    try:
+        plan = build_bisect_plan(history)
+    except (TypeError, ValueError) as exc:
+        console.print(f"[red]Invalid history: {escape(str(exc))}[/]")
+        raise typer.Exit(2) from exc
+
+    if "{ckpt}" not in eval_command:
+        console.print(
+            "[red]--eval-command must include `{ckpt}` placeholder[/]"
+        )
+        raise typer.Exit(2)
+
+    if plan_only:
+        console.print(
+            Panel(
+                f"History:  [bold]{len(plan.history)} checkpoints[/]\n"
+                f"Eval:     [bold]{escape(eval_command)}[/]\n"
+                f"Probes:   ~[bold]{_estimated_probes(len(plan.history))}[/] iterations",
+                title="Adapter bisect (plan)",
+            )
+        )
+        return
+
+    # Execute via subprocess; exit 0 means OK.
+    import shlex
+    import subprocess  # noqa: S404 — argv list mode, no shell
+
+    def _eval_fn(ckpt: str) -> bool:
+        cmd_str = eval_command.replace("{ckpt}", shlex.quote(ckpt))
+        # Safer: split via shlex and use argv mode (no shell interpolation).
+        argv = shlex.split(cmd_str)
+        try:
+            result = subprocess.run(  # noqa: S603
+                argv, capture_output=True, timeout=3600, check=False
+            )
+        except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
+            console.print(
+                f"[yellow]Eval failed for {escape(ckpt)}: "
+                f"{escape(str(exc))}[/]"
+            )
+            return False
+        return result.returncode == 0
+
+    try:
+        result = run_bisect(plan, eval_fn=_eval_fn)
+    except (TypeError, ValueError) as exc:
+        console.print(f"[red]{escape(str(exc))}[/]")
+        raise typer.Exit(2) from exc
+
+    if result.verdict == "ALL_OK":
+        console.print(
+            Panel(
+                f"Verdict: [green]ALL_OK[/]\n"
+                f"Probes:  {result.probes}",
+                title="Adapter bisect",
+            )
+        )
+    else:
+        console.print(
+            Panel(
+                f"Verdict:      [red]BROKEN_AT[/]\n"
+                f"First broken: [bold]{escape(result.first_broken or '?')}[/]\n"
+                f"Probes:       {result.probes}",
+                title="Adapter bisect",
+            )
+        )
+
+    if output is not None:
+        from soup_cli.utils.paths import atomic_write_text
+
+        data = {
+            "verdict": result.verdict,
+            "first_broken": result.first_broken,
+            "probes": result.probes,
+            "steps": [
+                {"checkpoint": s.checkpoint, "ok": s.ok}
+                for s in result.steps
+            ],
+        }
+        atomic_write_text(
+            json.dumps(data, indent=2, sort_keys=True),
+            output,
+            field="bisect output",
+        )
+
+    if result.verdict == "BROKEN_AT":
+        raise typer.Exit(2)
+
+
+def _estimated_probes(n: int) -> int:
+    """Approximate number of probes for n checkpoints (~log2(n) + 2)."""
+    import math
+
+    if n <= 2:
+        return n
+    return max(2, math.ceil(math.log2(n))) + 2

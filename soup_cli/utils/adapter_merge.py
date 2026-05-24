@@ -25,11 +25,17 @@ from typing import Any, FrozenSet, Literal, Mapping, Sequence, Tuple
 
 from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
 
-MergeStrategy = Literal["linear", "ties", "dare", "svd"]
+MergeStrategy = Literal["linear", "ties", "dare", "svd", "cmaes"]
 # frozenset for O(1) membership + immutability (mirrors v0.41.0 / v0.51.0 policy);
 # tuple alias preserved for caller code that iterates in canonical order.
-SUPPORTED_STRATEGIES: FrozenSet[str] = frozenset({"linear", "ties", "dare", "svd"})
-STRATEGY_ORDER: Tuple[MergeStrategy, ...] = ("linear", "ties", "dare", "svd")
+# v0.67.0 Part A: added "cmaes" — evolutionary search dispatched separately
+# in commands/adapters.py (requires --eval suite + --budget).
+SUPPORTED_STRATEGIES: FrozenSet[str] = frozenset(
+    {"linear", "ties", "dare", "svd", "cmaes"}
+)
+STRATEGY_ORDER: Tuple[MergeStrategy, ...] = (
+    "linear", "ties", "dare", "svd", "cmaes"
+)
 
 _MAX_ADAPTERS = 16
 _MIN_ADAPTERS = 2

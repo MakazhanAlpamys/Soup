@@ -1,0 +1,459 @@
+"""Evolutionary CMA-ES merge for LoRA adapters (v0.67.0 Part A).
+
+CMA-ES over merge weights driven by the operator's eval. Extends v0.57.0
+``soup adapters merge`` with a ``cmaes`` strategy that searches the
+N-dimensional simplex of mixing weights to maximise an operator-supplied
+eval score.
+
+Pure Python; no `cma` dependency. The implementation is a small simplex-
+projecting CMA-ES (rank-mu + diagonal covariance) sufficient for ≤16
+adapters and 1–100 generations. Operators wanting full CMA-ES (BIPOP,
+restart strategies) can plug their own optimiser via the ``eval_fn``
+hook; this module's contract is "given eval_fn, run a budgeted search,
+return the best simplex weights".
+
+Public surface:
+
+- ``CmaesPlan`` + ``CmaesResult`` frozen dataclasses
+- ``validate_population_size`` / ``validate_generations``
+- ``build_cmaes_plan(...)`` returns frozen ``CmaesPlan``
+- ``run_cmaes_merge(plan, *, eval_fn, ...)`` returns ``CmaesResult``
+
+Reuses ``parse_budget`` from v0.57.0 ``blame.py`` (60s..24h bounds).
+
+Design notes:
+
+- Output weights live on the simplex (sum=1, each ≥0); the optimiser
+  parameterises N-1 logits and softmaxes them so any candidate is valid.
+- Failures inside ``eval_fn`` are swallowed as a sentinel low score so
+  one broken adapter doesn't crash the run (mirrors v0.40.3 #33 / v0.48
+  proxy-failure isolation).
+- Live ``soup eval`` wiring is operator-supplied — `cmaes_merge` does
+  NOT auto-load models. Callers wrap their eval suite as a closure.
+"""
+
+from __future__ import annotations
+
+import math
+import os
+import time
+from dataclasses import dataclass
+from typing import Callable, Optional, Sequence, Tuple
+
+from soup_cli.utils.blame import parse_budget
+from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
+
+# ---------------------------------------------------------------------------
+# Bounds (closed, locked at module load)
+# ---------------------------------------------------------------------------
+
+MIN_POPULATION = 2
+MAX_POPULATION = 256
+MIN_GENERATIONS = 1
+MAX_GENERATIONS = 10_000
+
+_MIN_ADAPTERS = 2
+_MAX_ADAPTERS = 16  # mirrors v0.57.0 adapter_merge cap
+_SIMPLEX_TOL = 1e-6
+_FAILED_EVAL_SENTINEL = -1.0e9  # very negative so failed candidates never win
+
+
+# ---------------------------------------------------------------------------
+# Validators
+# ---------------------------------------------------------------------------
+
+
+def validate_population_size(value: object) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError("population_size must be int")
+    if value < MIN_POPULATION:
+        raise ValueError(
+            f"population_size {value} below floor {MIN_POPULATION}"
+        )
+    if value > MAX_POPULATION:
+        raise ValueError(
+            f"population_size {value} above cap {MAX_POPULATION}"
+        )
+    return value
+
+
+def validate_generations(value: object) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError("max_generations must be int")
+    if value < MIN_GENERATIONS:
+        raise ValueError(
+            f"max_generations {value} below floor {MIN_GENERATIONS}"
+        )
+    if value > MAX_GENERATIONS:
+        raise ValueError(
+            f"max_generations {value} above cap {MAX_GENERATIONS}"
+        )
+    return value
+
+
+def _validate_seed(seed: object) -> int:
+    if isinstance(seed, bool) or not isinstance(seed, int):
+        raise TypeError("seed must be int")
+    if seed < 0:
+        raise ValueError("seed must be non-negative")
+    if seed > 2**31 - 1:
+        raise ValueError("seed too large")
+    return seed
+
+
+def _validate_finite_score(value: object, field: str) -> float:
+    if isinstance(value, bool):
+        raise TypeError(f"{field} must not be bool")
+    if not isinstance(value, (int, float)):
+        raise TypeError(f"{field} must be numeric")
+    val = float(value)
+    if not math.isfinite(val):
+        raise ValueError(f"{field} must be finite")
+    return val
+
+
+# ---------------------------------------------------------------------------
+# Frozen dataclasses
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class CmaesPlan:
+    """Plan for an evolutionary merge run.
+
+    Reuses v0.57 ``parse_budget`` so the budget bounds (60s..24h) are
+    consistent across blame / cmaes.
+    """
+
+    adapters: Tuple[str, ...]
+    eval_suite: str
+    budget_seconds: int
+    population_size: int
+    max_generations: int
+    seed: int
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.adapters, tuple):
+            raise TypeError("adapters must be tuple")
+        if len(self.adapters) < _MIN_ADAPTERS:
+            raise ValueError(
+                f"need at least {_MIN_ADAPTERS} adapters"
+            )
+        if len(self.adapters) > _MAX_ADAPTERS:
+            raise ValueError(f"at most {_MAX_ADAPTERS} adapters")
+        for path in self.adapters:
+            if not isinstance(path, str) or not path:
+                raise ValueError("adapters entries must be non-empty str")
+        if not isinstance(self.eval_suite, str) or not self.eval_suite:
+            raise ValueError("eval_suite must be non-empty str")
+        validate_population_size(self.population_size)
+        validate_generations(self.max_generations)
+        _validate_seed(self.seed)
+
+
+@dataclass(frozen=True)
+class CmaesResult:
+    """Result of an evolutionary merge run.
+
+    ``best_weights`` live on the simplex (sum=1, each ≥0).
+    """
+
+    best_weights: Tuple[float, ...]
+    best_score: float
+    generations_run: int
+    evaluations: int
+    wall_clock_seconds: float
+    converged: bool
+    history: Tuple[float, ...]
+
+    def __post_init__(self) -> None:
+        # Score finite + bool-rejected
+        _validate_finite_score(self.best_score, "best_score")
+        if not isinstance(self.generations_run, int) or isinstance(
+            self.generations_run, bool
+        ):
+            raise TypeError("generations_run must be int")
+        if self.generations_run < 0:
+            raise ValueError("generations_run must be non-negative")
+        if not isinstance(self.evaluations, int) or isinstance(
+            self.evaluations, bool
+        ):
+            raise TypeError("evaluations must be int")
+        if self.evaluations < 0:
+            raise ValueError("evaluations must be non-negative")
+        _validate_finite_score(self.wall_clock_seconds, "wall_clock_seconds")
+        if self.wall_clock_seconds < 0:
+            raise ValueError("wall_clock_seconds must be non-negative")
+        if not isinstance(self.converged, bool):
+            raise TypeError("converged must be bool")
+        if not isinstance(self.best_weights, tuple):
+            raise TypeError("best_weights must be tuple")
+        if not self.best_weights:
+            raise ValueError("best_weights must be non-empty")
+        for w in self.best_weights:
+            if isinstance(w, bool) or not isinstance(w, (int, float)):
+                raise TypeError("best_weights entries must be numeric")
+            wf = float(w)
+            if not math.isfinite(wf):
+                raise ValueError("best_weights entries must be finite")
+            if wf < 0:
+                raise ValueError("best_weights entries must be non-negative")
+        total = sum(float(w) for w in self.best_weights)
+        if not math.isclose(total, 1.0, abs_tol=_SIMPLEX_TOL):
+            raise ValueError(
+                f"best_weights must sum to 1.0 (got {total:.6f})"
+            )
+        if not isinstance(self.history, tuple):
+            raise TypeError("history must be tuple")
+        for h in self.history:
+            if isinstance(h, bool) or not isinstance(h, (int, float)):
+                raise TypeError("history entries must be numeric")
+            if not math.isfinite(float(h)):
+                raise ValueError("history entries must be finite")
+
+
+# ---------------------------------------------------------------------------
+# Plan construction
+# ---------------------------------------------------------------------------
+
+
+def build_cmaes_plan(
+    *,
+    adapters: Sequence[str],
+    eval_suite: str,
+    budget_spec: str,
+    population_size: int = 8,
+    max_generations: int = 20,
+    seed: int = 0,
+) -> CmaesPlan:
+    """Validate inputs and return a frozen ``CmaesPlan``.
+
+    - ``adapters`` must contain ≥2 unique paths, all under cwd.
+    - ``eval_suite`` must be a real path under cwd (no symlinks).
+    - ``budget_spec`` is parsed via v0.57 ``parse_budget`` (60s..24h).
+    """
+    if not isinstance(adapters, Sequence) or isinstance(adapters, str):
+        raise TypeError("adapters must be a sequence")
+    if len(adapters) < _MIN_ADAPTERS:
+        raise ValueError(f"need at least {_MIN_ADAPTERS} adapters")
+    validated_adapters: list[str] = []
+    for ad in adapters:
+        if not isinstance(ad, str) or not ad:
+            raise ValueError("each adapter must be a non-empty str")
+        enforce_under_cwd_and_no_symlink(ad, field="adapter")
+        validated_adapters.append(os.path.realpath(ad))
+
+    enforce_under_cwd_and_no_symlink(eval_suite, field="eval_suite")
+    if not os.path.exists(eval_suite):
+        raise FileNotFoundError(f"eval_suite not found: {eval_suite!r}")
+
+    budget_seconds = parse_budget(budget_spec)
+
+    return CmaesPlan(
+        adapters=tuple(validated_adapters),
+        eval_suite=os.path.realpath(eval_suite),
+        budget_seconds=budget_seconds,
+        population_size=validate_population_size(population_size),
+        max_generations=validate_generations(max_generations),
+        seed=_validate_seed(seed),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Optimiser (minimal CMA-ES on the N-1 logit space, softmaxed onto simplex)
+# ---------------------------------------------------------------------------
+
+
+def _softmax(logits: Sequence[float]) -> Tuple[float, ...]:
+    """Numerically-stable softmax onto the simplex."""
+    m = max(logits)
+    exps = [math.exp(x - m) for x in logits]
+    z = sum(exps)
+    if z <= 0:
+        # Degenerate fallback: uniform
+        return tuple(1.0 / len(logits) for _ in logits)
+    return tuple(e / z for e in exps)
+
+
+def _eval_safely(
+    eval_fn: Callable[[Tuple[float, ...]], float],
+    weights: Tuple[float, ...],
+) -> float:
+    """Call ``eval_fn`` with sentinel-low score on exception.
+
+    Failure isolation mirrors v0.40.3 #33 / v0.48 / v0.53.7 #106 policy:
+    one bad eval must not crash the whole run.
+    """
+    try:
+        score = eval_fn(weights)
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except Exception:  # noqa: BLE001 — eval_fn surface is operator-controlled
+        return _FAILED_EVAL_SENTINEL
+    if isinstance(score, bool):
+        return _FAILED_EVAL_SENTINEL
+    if not isinstance(score, (int, float)):
+        return _FAILED_EVAL_SENTINEL
+    s = float(score)
+    if not math.isfinite(s):
+        return _FAILED_EVAL_SENTINEL
+    return s
+
+
+def run_cmaes_merge(
+    plan: CmaesPlan,
+    *,
+    eval_fn: Callable[[Tuple[float, ...]], float],
+    sigma_init: float = 0.5,
+    elite_frac: float = 0.5,
+    convergence_tol: float = 1e-4,
+) -> CmaesResult:
+    """Run a small CMA-ES-style search over simplex merge weights.
+
+    Operator supplies ``eval_fn(weights) -> score`` (higher is better);
+    we softmax N-1 logits onto the simplex, sample a population, keep
+    the elite half, re-fit a diagonal Gaussian, repeat until either:
+
+    - ``max_generations`` reached, or
+    - elapsed wall-clock ≥ ``budget_seconds``, or
+    - score plateau < ``convergence_tol`` for 3 generations in a row.
+    """
+    if not isinstance(plan, CmaesPlan):
+        raise TypeError("plan must be CmaesPlan")
+    if eval_fn is None or not callable(eval_fn):
+        raise TypeError("eval_fn must be callable")
+    if isinstance(sigma_init, bool) or not isinstance(sigma_init, (int, float)):
+        raise TypeError("sigma_init must be numeric")
+    if not math.isfinite(float(sigma_init)) or float(sigma_init) <= 0:
+        raise ValueError("sigma_init must be positive and finite")
+    if isinstance(elite_frac, bool) or not isinstance(elite_frac, (int, float)):
+        raise TypeError("elite_frac must be numeric")
+    elite = float(elite_frac)
+    if not (0.0 < elite < 1.0) or not math.isfinite(elite):
+        raise ValueError("elite_frac must be in (0, 1)")
+
+    n_dim = len(plan.adapters) - 1  # softmax over N-1 free logits
+    rng = _LcgRng(plan.seed)
+
+    mean = [0.0] * n_dim
+    sigma = [float(sigma_init)] * n_dim
+    elite_count = max(1, int(plan.population_size * elite))
+
+    history: list[float] = []
+    best_score = -math.inf
+    best_weights: Tuple[float, ...] = tuple(
+        1.0 / len(plan.adapters) for _ in plan.adapters
+    )
+
+    start = time.monotonic()
+    generations_run = 0
+    evaluations = 0
+    converged = False
+    plateau_run = 0
+
+    for gen in range(plan.max_generations):
+        if (time.monotonic() - start) >= plan.budget_seconds:
+            break
+
+        # Sample population
+        candidates: list[Tuple[list[float], Tuple[float, ...], float]] = []
+        for _ in range(plan.population_size):
+            sample = [
+                mean[i] + sigma[i] * rng.normal() for i in range(n_dim)
+            ]
+            # Append 0.0 reference logit (softmax is shift-invariant) so we
+            # span the full simplex.
+            logits = sample + [0.0]
+            weights = _softmax(logits)
+            score = _eval_safely(eval_fn, weights)
+            evaluations += 1
+            candidates.append((sample, weights, score))
+            if score > best_score:
+                best_score = score
+                best_weights = weights
+            if (time.monotonic() - start) >= plan.budget_seconds:
+                break
+
+        generations_run += 1
+        # Pick elite by score (descending)
+        candidates.sort(key=lambda c: c[2], reverse=True)
+        elite_samples = [c[0] for c in candidates[:elite_count]]
+        # Recompute mean + sigma per dim from elite
+        new_mean = [
+            sum(s[i] for s in elite_samples) / len(elite_samples)
+            for i in range(n_dim)
+        ]
+        new_sigma = []
+        for i in range(n_dim):
+            var = sum(
+                (s[i] - new_mean[i]) ** 2 for s in elite_samples
+            ) / len(elite_samples)
+            # Clamp to a sensible floor; CMA-ES typically blends with prior
+            # but for ≤16-adapter case the simple rank-mu update converges.
+            new_sigma.append(max(math.sqrt(var), 1e-4))
+        # Plateau detection
+        gen_best = candidates[0][2]
+        history.append(gen_best)
+        if len(history) >= 2:
+            delta = abs(history[-1] - history[-2])
+            if delta < convergence_tol:
+                plateau_run += 1
+            else:
+                plateau_run = 0
+        if plateau_run >= 3:
+            converged = True
+            break
+        mean = new_mean
+        sigma = new_sigma
+
+    wall_clock = time.monotonic() - start
+    if best_score == -math.inf:
+        # Defensive — should not happen because we always sample at least once
+        best_score = 0.0
+
+    return CmaesResult(
+        best_weights=tuple(best_weights),
+        best_score=float(best_score),
+        generations_run=generations_run,
+        evaluations=evaluations,
+        wall_clock_seconds=float(wall_clock),
+        converged=converged,
+        history=tuple(history),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Deterministic RNG (no numpy dependency at module top)
+# ---------------------------------------------------------------------------
+
+
+class _LcgRng:
+    """Tiny deterministic linear-congruential RNG + Box-Muller normals.
+
+    Avoids a numpy import at module top (matches v0.66 review-grep policy
+    — heavy numpy stays inside live callsites only). Seeded so two runs
+    with the same ``seed`` produce identical trajectories.
+    """
+
+    def __init__(self, seed: int) -> None:
+        self._state = (seed * 2654435761 + 1) & 0xFFFFFFFFFFFFFFFF
+        self._pending: Optional[float] = None
+
+    def _uniform(self) -> float:
+        # 64-bit LCG (Numerical Recipes-style)
+        self._state = (self._state * 6364136223846793005 + 1442695040888963407) & 0xFFFFFFFFFFFFFFFF
+        # Take the top 53 bits to fit a double's mantissa
+        return ((self._state >> 11) / float(1 << 53))
+
+    def normal(self) -> float:
+        """Box-Muller standard normal."""
+        if self._pending is not None:
+            val = self._pending
+            self._pending = None
+            return val
+        u1 = max(self._uniform(), 1e-12)
+        u2 = self._uniform()
+        r = math.sqrt(-2.0 * math.log(u1))
+        a = 2.0 * math.pi * u2
+        self._pending = r * math.sin(a)
+        return r * math.cos(a)

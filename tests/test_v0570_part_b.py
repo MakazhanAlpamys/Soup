@@ -281,10 +281,13 @@ def test_merge_adapters_output_outside_cwd(tmp_path, monkeypatch):
 def test_supported_strategies_immutable():
     # v0.57.0 review fix: SUPPORTED_STRATEGIES is a frozenset (matches v0.41.0+
     # allowlist policy). STRATEGY_ORDER preserves canonical iteration order.
+    # v0.67.0 Part A: floor-check widened to include "cmaes" (mirrors
+    # v0.51.0 / v0.54.0 / v0.66.0 floor-check policy).
     from soup_cli.utils.adapter_merge import STRATEGY_ORDER
-    assert SUPPORTED_STRATEGIES == frozenset({"linear", "ties", "dare", "svd"})
+    assert {"linear", "ties", "dare", "svd"} <= SUPPORTED_STRATEGIES
     assert isinstance(SUPPORTED_STRATEGIES, frozenset)
-    assert STRATEGY_ORDER == ("linear", "ties", "dare", "svd")
+    for entry in ("linear", "ties", "dare", "svd"):
+        assert entry in STRATEGY_ORDER
 
 
 def test_merge_ties_density_one_keeps_everything():

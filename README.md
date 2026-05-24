@@ -42,14 +42,15 @@ soup train
 
 Latest highlights only. Full history: [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 
-**v0.66.0 — Post-train X-rays: SAE feature diff + live influence-function blame + sleeper-agent defection probe + adapter interference matrix + probe pack.** Five surfaces extend `soup diagnose` from 6 failure modes to 10 — the post-train inspection layer no hosted vendor ships because mechanistic interpretability is research-grade and costs scale with N (so SaaS unit economics break). Closes the v0.57 `NotImplementedError` blame stub (#171).
+**v0.67.0 — Adapter Lifecycle Finish: CMA-ES evolutionary merge + VeRA/VB-LoRA bank storage + MoLE per-token routing + GitHub-shaped adapter PRs + `soup.lock` + `soup adapters bisect`.** Six surfaces finish what v0.57 started — turning adapter management into a real version-control + collaboration workflow. None of these exist in hosted vendors: Sakana-style evolutionary merge is research demo only, VeRA storage hurts hosted unit economics (price by GPU-hour not adapter count), MoLE routing requires both training + serving stacks, adapter PRs need weights + eval + history together.
 
-- **`soup probe sae-diff <sae> <pre.json> <post.json>`** — Sparse-Autoencoder feature attribution. Pure-numpy math: ReLU(activations @ W_enc + b_enc) → mean post-pre diff per feature → top-K changes. Closed `HF_HUB_ALLOWLIST` over 8 known SAE families (Gemma Scope / Pythia / SAE-Lens Llama / GPT-2-small). Containment + `O_NOFOLLOW` open + 64-tensor cap. Composes with `soup adapters diff` (extends "what changed" from weight space to feature space).
-- **`soup adapters blame --top-k 50`** — Live DataInf-style influence runner closes v0.57 #171. Per-row score = `cos(grad_row, grad_probe) × |grad_row|`; operator supplies `probe_fn` returning `(row_grads, probe_grad)` or falls back to a deterministic synthetic probe (matches v0.54 advise stub policy — surface always returns a real `BlameResult`, never `NotImplementedError`). Symlink-rejected via `O_NOFOLLOW` on the dataset read (TOCTOU defence); `_DEFAULT_SYNTH_PROBE_CAP=100_000` so a 10M-row dataset doesn't allocate 1.28 GB.
-- **`soup probe sleeper <base> [--evidence ev.json]`** — Anthropic-style calibrated linear probe per base. 6 bundled bases (Llama-2/3 8B, Mistral-7B, Qwen2-7B, Gemma-2 2B/9B); deterministic SHA-256-keyed synthetic weights ship today (real calibrated weights in v0.66.x). OK/MINOR/MAJOR thresholds at 1% / 5% defection rate. Exit 2 on MAJOR for CI gating. Without `--evidence`, prints probe metadata + neutral OK.
-- **`soup probe interference <losses.json>`** — Pairwise N×N adapter interference matrix. Per-pair score = `(loss(A | A+B) - loss(A | A_alone)) / loss(A_alone)`; classify_interference at 5% / 20% bands. Surfaces which adapter pairs you cannot deploy together via `soup serve --adapters`. Rich-markup-escape on adapter names (review H2 fix — defends against crafted names like `[link=evil]X[/]`). MAJOR worst-pair → exit 2.
-- **`soup probe pack <base>`** — Manifest assembler that ties Parts A + C + D together. Per-base bundle of probe entries (sleeper / sae / truth / harm — last two reserved for v0.66.x); `MappingProxyType`-wrapped registry; `_LOWER_INDEX` for O(1) case-insensitive lookup.
-- **+259 new tests** (10577 → 10836). Review-fix coverage across 3 sequential waves: 0 CRITICAL + 9 HIGH (TypeError on bool/non-str verdict; `O_NOFOLLOW` probe-open on `load_sae_weights` + `_count_dataset_rows` closing TOCTOU race; `hashlib.sha256` replaces process-salted `hash()` for deterministic probe weights across Python processes; non-numeric loss rejection in `probe interference` CLI; Rich-markup escape on adapter / verdict / description in `render_*_markdown`) + 14 MEDIUM (64-bit seed via `digest[:16]`; 10M-row hard rejection (no silent truncate); `_DEFAULT_SYNTH_PROBE_CAP=100_000` synthetic probe cap; description 4096-char cap on `ProbeEntry`; `_LOWER_INDEX` `MappingProxyType`; `collections.abc.Mapping` migration; `frozenset[str]` type params) + 5 LOW (`FrozenInstanceError` instead of `pytest.raises((AttributeError, Exception))`; basename(normpath(...)) symmetry; top-K comment clarification; `Optional[str]` on output flag; reserved-kind docstring note). Manual CPU smokes for every new command incl. failure modes (unknown base exit 2 / non-numeric loss exit 2 / MAJOR interference exit 2 / live blame produces a real `BlameResult`).
+- **`soup adapters merge --strategy cmaes --eval <suite> --budget 1h`** — Sakana-style evolutionary search over LoRA merge weights. Pure-Python rank-mu CMA-ES (no `cma` dependency). Softmaxes N-1 logits onto the simplex, samples a population, keeps elite half, plateau-detects (3 generations without improvement → `converged=True`). Operator-supplied `eval_fn` closure; failures swallowed with sentinel score so one broken eval doesn't crash the run. Budget bounds reused from v0.57 `blame.parse_budget` (60s..24h). Live auto-wiring of the eval suite is deferred to v0.67.1; the CLI prints the validated plan today.
+- **`soup_cli.utils.vector_bank`** — VeRA / VB-LoRA storage format. `VectorBank = {shared random projection matrix P, per-user scaling vector v_u}` — thousands of per-user adapters at MB-each instead of hundreds-of-MB per LoRA. Atomic JSON I/O via shared `paths.atomic_write_text` + cwd containment + symlink rejection + 16 MiB cap. `estimate_bank_size(num_users, vector_dim)` for sizing. Live multi-tenant serving via v0.22 multi-adapter surface lands in v0.67.1.
+- **`task='moe_lora_routing'`** — MoLE per-token gating over N task LoRAs (Mixture of LoRA Experts). New `MoleGatingConfig` (num_task_adapters [2,64] / hidden_dim / temperature / top_k); cross-validator rejects mlx backend. Live gating-kernel training + per-token softmax routing lands in v0.67.1.
+- **`soup adapters pr <title> --base-sha <hex> --adapter <path> --eval <json>`** — GitHub-shaped PR rendering. PR = {base SHA, dataset diff, adapter weights, eval-delta report} → review-friendly Markdown with eval-delta tables + per-sample baseline/candidate diffs. `_md_table_escape` neutralises `\\` `|` `\n` `\r` `\t` in cells. JSON output for downstream consumers (v0.68 GitHub Action). Composes with `soup adapters diff`.
+- **`soup lock write / show / check`** — Shared run lockfile. Closure of `(base_model_sha, dataset_sha, env_hash)` → committed to git so teams coordinate on reproducible training runs. `soup lock check` exits 3 on drift; `soup_version` + `created_at` are advisory-only (legitimate operator upgrades don't trigger drift). Composes with v0.64 `soup env lock`.
+- **`soup adapters bisect <ckpt1> <ckpt2> ... --eval-command "..."`** — Binary search over training history. Operator supplies a shell template with `{ckpt}` placeholder (argv-list mode via `shlex.split` after `shlex.quote(ckpt)` — no `shell=True`). Probes both endpoints first (short-circuits all-OK / all-broken), then ~log₂(n) midpoint probes. Exit 3 on BROKEN_AT. Composes with v0.66 influence-blame for fine-grained attribution.
+- **+165 new tests** (10836 → 11021) across 7 new test files. Review-fix coverage across 2 sequential waves: 0 CRITICAL + 0 HIGH (project policies already enforced by source-grep guards inherited from v0.66) + ~5 MEDIUM (plateau-convergence test; vector-bank forward-compat for unknown JSON fields; PR empty-sections renders without `None` leakage; soup.lock `soup_version` drift is advisory-only; bisect non-monotonic eval_fn does not crash) + ~3 LOW (exact MAX-boundary acceptance tests; `validate_user_id` bool rejection; source-grep regression for `atomic_write_text` usage + no `shell=True` + `shlex.quote` in bisect subprocess call). Manual CPU smokes for `soup lock write/show/check` (incl. drift exit 3), `soup adapters pr` (markdown + JSON output), `soup adapters bisect --plan-only`, `soup adapters merge --strategy cmaes` (plan-only output), plus 4 failure-mode rejection paths (cmaes-without-eval / unknown-strategy / mlx + moe_lora_routing / lock drift).
 
 ## Why Soup?
 
@@ -191,6 +192,55 @@ soup probe pack meta-llama/Llama-3-8B  # render the per-base manifest
 ```
 
 Every probe uses the OK / MINOR / MAJOR taxonomy from v0.26 (Quant-Lobotomy) / v0.56 (Diagnose) / v0.65 (Eval Depth). Sleeper + interference exit 2 on MAJOR for CI gating. The blame runner closes the v0.57 `NotImplementedError` stub via a DataInf-style influence approximation: `cos(grad_row, grad_probe) × |grad_row|`. Operators supply a `probe_fn` returning `(row_grads, probe_grad)`, or the runner falls back to a deterministic synthetic probe so the surface always returns a real `BlameResult` (no exception leaks). SAE feature diff is pure-numpy; the safetensors loader is `O_NOFOLLOW`-protected (TOCTOU defence — closes the symlink swap window between containment check and read).
+
+## Adapter Lifecycle (`soup adapters {merge,pr,bisect}`, `soup lock`)
+
+v0.57 shipped `adapters diff / merge / blame / branch`. v0.67 finishes the lifecycle: evolutionary merge driven by your eval, GitHub-shaped PRs for adapter review, a shared `soup.lock` for team reproducibility, and binary-search bisect over training history.
+
+```bash
+# 1. Evolutionary merge: search the simplex of merge weights via CMA-ES.
+soup adapters merge \
+  adapter-finance/ adapter-medical/ adapter-legal/ \
+  --strategy cmaes \
+  --eval evals/domain_mix.yaml \
+  --budget 1h \
+  --population 8 \
+  --max-generations 20 \
+  --output merged/
+
+# 2. Render the merge as a GitHub PR for review (eval deltas + sample diffs).
+soup adapters pr "merge: 3-domain blend" \
+  --base-sha $(git rev-parse HEAD) \
+  --adapter merged/ \
+  --eval evals/deltas.json \
+  --samples evals/samples.json \
+  --dataset-diff data/diff.txt \
+  --format markdown -o pr.md
+
+# 3. Lock a reproducible run state. Closure = sha(base + dataset + env).
+soup env lock                                     # v0.64 — capture env hash
+soup lock write \
+  --base-model meta-llama/Llama-3.1-8B \
+  --base-sha $BASE_SHA \
+  --dataset-sha $DATA_SHA \
+  --env-hash $(jq -r .closure soup-env.lock) \
+  -o soup.lock
+# Teammates re-check the lock; exit 3 on drift.
+soup lock check soup.lock \
+  --base-model meta-llama/Llama-3.1-8B \
+  --base-sha $BASE_SHA --dataset-sha $DATA_SHA --env-hash $ENV_HASH
+
+# 4. Bisect a training history to find the step that broke an eval.
+soup adapters bisect \
+  ckpt-step-100 ckpt-step-200 ckpt-step-400 ckpt-step-800 \
+  --eval-command "soup eval custom --model {ckpt} --tasks eval.jsonl" \
+  -o bisect.json
+# Exits 3 on BROKEN_AT — pipe into `soup adapters blame` for attribution.
+```
+
+CMA-ES is pure-Python (no `cma` dependency); the eval is operator-supplied via a closure so any scoring code works. PR rendering escapes Markdown table cells, so crafted metric names cannot inject table rows or links. The lockfile composes with v0.64 `soup env lock` — drift in any of `{base_model, base_model_sha, dataset_sha, env_hash, closure_sha}` exits 3 (`soup_version` and `created_at` are advisory-only). Bisect uses `shlex.split` + `shlex.quote(ckpt)` in argv-list mode (no `shell=True`), so checkpoint ids cannot inject shell metacharacters.
+
+VeRA / VB-LoRA bank storage (`soup_cli.utils.vector_bank`) and MoLE per-token routing (`task='moe_lora_routing'`) ship as schema-only in v0.67.0 — live multi-tenant serving and gating-kernel training land in v0.67.1.
 
 ## Data Flywheel (`soup loop`)
 

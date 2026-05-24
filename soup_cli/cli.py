@@ -408,6 +408,15 @@ app.add_typer(
     ),
 )
 
+# v0.67.0 Part E — soup.lock shared run lockfile.
+from soup_cli.commands import lock as _lock_cmd  # noqa: E402
+
+app.add_typer(
+    _lock_cmd.app,
+    name="lock",
+    help="Shared run lockfile (write / show / check) - v0.67.0 Part E.",
+)
+
 
 def _rewrite_advise_argv(argv: list) -> list:
     """Inject `run` between `advise` and a non-subcommand first argument.
