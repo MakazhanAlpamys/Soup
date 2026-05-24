@@ -3754,6 +3754,20 @@ soup probe interference <losses.json> [--output o.json]  Pairwise N×N adapter i
 soup probe pack <base> [--output o.json]      Per-base calibrated probe pack manifest (v0.66.0)
 soup probe pack --list                        List bundled probe-pack bases (v0.66.0)
 soup adapters blame ... --top-k 50            Live DataInf-style influence runner (v0.66.0, closes #171)
+soup adapters merge ... --strategy cmaes --eval <s> --budget 1h  CMA-ES evolutionary merge (v0.67.0)
+soup adapters pr <title> --base-sha <hex> --adapter <path>  GitHub-shaped adapter PR Markdown / JSON (v0.67.0)
+soup adapters bisect <ckpt>... --eval-command "..."  Binary search over training history (v0.67.0)
+soup lock write --base-sha <h> --dataset-sha <h> --env-hash <h>  Write soup.lock (v0.67.0)
+soup lock show / soup lock check              Show + drift-check (exit 3 on drift)
+soup compile <program.py> --eval <suite> [--optimizer mipro|gepa|textgrad|copro|bootstrap_fewshot]  DSPy / GEPA prompt-program compiler (v0.68.0)
+soup distill-prompt --traces <jsonl> --teacher <m> --student <m> --strategy sft|preference|kl  Distill prompt-heavy traces to small FT (v0.68.0)
+soup compile-tools <spec.json|yaml> --eval <jsonl> [--optimizer textgrad|gepa]  TextGrad / GEPA tool-schema optimiser (v0.68.0)
+soup apple-adapter <source-dir> --direction hf-to-mlx|mlx-to-hf|hf-to-apple|mlx-to-apple --output <dir> [--sign]  HF / MLX / Apple FoundationModels adapter conversion (v0.68.0)
+soup local-rl init --db <path>                Create personal-LLM flywheel SQLite schema (v0.68.0)
+soup local-rl status --db <path>              Print interactions / thumbs-up / thumbs-down counters
+soup local-rl record --db <path> --prompt <q> --response <r> --thumb up|down  Append thumbs record
+soup local-rl harvest --db <path> -o <pairs.jsonl>  Harvest DPO pairs from thumbs into JSONL
+soup local-rl train --db <path> --backend ollama|mlx --model <id>  Nightly DPO/KTO/ORPO train (v0.68.1)
 soup version [--full] [--json]                Show version (--full: system info, --json: JSON output)
 soup --verbose <command>                      Full traceback on errors
 ```
