@@ -9,7 +9,8 @@ We provide security updates for the following versions:
 - **Versions older than 3 minor versions:** No support
 
 Example:
-- v0.66.0 -- Full support (latest)
+- v0.67.0 -- Full support (latest)
+- v0.66.0 -- Full support
 - v0.65.0 -- Full support
 - v0.64.0 -- Full support
 - v0.63.0 -- Full support
