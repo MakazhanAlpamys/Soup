@@ -417,6 +417,40 @@ app.add_typer(
     help="Shared run lockfile (write / show / check) - v0.67.0 Part E.",
 )
 
+# v0.68.0 — Anti-trend insurance (compile / distill-prompt / compile-tools /
+# apple-adapter / local-rl).
+from soup_cli.commands import apple_adapter as _apple_cmd  # noqa: E402
+from soup_cli.commands import compile_cmd as _compile_cmd  # noqa: E402
+from soup_cli.commands import compile_tools as _compile_tools_cmd  # noqa: E402
+from soup_cli.commands import distill_prompt as _distill_prompt_cmd  # noqa: E402
+from soup_cli.commands import local_rl as _local_rl_cmd  # noqa: E402
+
+app.command(
+    name="compile",
+    help="Compile a DSPy / GEPA prompt program against an eval suite (v0.68.0).",
+)(_compile_cmd.compile_cmd)
+
+app.command(
+    name="distill-prompt",
+    help="Distill prompt-heavy traces into a small FT plan (v0.68.0).",
+)(_distill_prompt_cmd.distill_prompt_cmd)
+
+app.command(
+    name="compile-tools",
+    help="Compile / optimize tool schemas + descriptions (v0.68.0).",
+)(_compile_tools_cmd.compile_tools_cmd)
+
+app.command(
+    name="apple-adapter",
+    help="Convert / sign HF / MLX / Apple FoundationModels adapters (v0.68.0).",
+)(_apple_cmd.apple_adapter_cmd)
+
+app.add_typer(
+    _local_rl_cmd.app,
+    name="local-rl",
+    help="Personal-LLM flywheel daemon (init / status / record / harvest / train) (v0.68.0).",
+)
+
 
 def _rewrite_advise_argv(argv: list) -> list:
     """Inject `run` between `advise` and a non-subcommand first argument.
