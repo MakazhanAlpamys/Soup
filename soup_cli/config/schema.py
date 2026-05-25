@@ -1366,6 +1366,15 @@ class TrainingConfig(BaseModel):
             "echo_trap_enabled=True. (v0.70.0)"
         ),
     )
+    echo_trap_tokenizer_aware: bool = Field(
+        default=False,
+        description=(
+            "Use tokenizer-id n-grams for echo-trap scoring instead of "
+            "whitespace tokens. More sensitive to subword repetition but "
+            "bound to the active tokenizer vocabulary. Requires "
+            "echo_trap_enabled=True. (v0.70.x)"
+        ),
+    )
 
     # ---- v0.70.0 Part D — Mid-epoch RL checkpoint ------------------------
     rl_checkpoint_save_every_steps: Optional[int] = Field(
@@ -1520,6 +1529,7 @@ class TrainingConfig(BaseModel):
     @field_validator(
         "echo_trap_enabled",
         "echo_trap_halt",
+        "echo_trap_tokenizer_aware",
         mode="before",
     )
     @classmethod
@@ -4035,15 +4045,23 @@ class SoupConfig(BaseModel):
         ``echo_trap_enabled`` is a silent no-op footgun — reject.
         """
         tcfg = self.training
-        if not tcfg.echo_trap_enabled and not tcfg.echo_trap_halt:
+        if (
+            not tcfg.echo_trap_enabled
+            and not tcfg.echo_trap_halt
+            and not tcfg.echo_trap_tokenizer_aware
+        ):
             return self
-        if not tcfg.echo_trap_enabled and tcfg.echo_trap_halt:
+        if not tcfg.echo_trap_enabled and (
+            tcfg.echo_trap_halt or tcfg.echo_trap_tokenizer_aware
+        ):
             raise ValueError(
-                "echo_trap_halt=True requires echo_trap_enabled=True"
+                "echo_trap_halt / echo_trap_tokenizer_aware require "
+                "echo_trap_enabled=True"
             )
         if self.task not in ("grpo", "ppo"):
             raise ValueError(
-                "echo_trap_enabled / echo_trap_halt are only valid on "
+                "echo_trap_enabled / echo_trap_halt / "
+                "echo_trap_tokenizer_aware are only valid on "
                 f"task in {{'grpo', 'ppo'}}; got task={self.task!r}"
             )
         if self.backend == "mlx":

@@ -131,8 +131,11 @@ soup iterative-dpo \
 soup train --config grpo.yaml \
     --echo-trap-enabled \
     --echo-trap-threshold 0.6 \
-    --echo-trap-halt
+    --echo-trap-halt \
+    --echo-trap-tokenizer-aware
 ```
+
+`--echo-trap-tokenizer-aware` switches echo-trap n-grams from whitespace tokens to the active tokenizer's integer ids. This catches subword repetition that punctuation-heavy decoded text can hide, but the score becomes tokenizer-specific rather than vocabulary-agnostic.
 
 Every detector composes with v0.34 `soup why` (anomaly explainer), v0.32 spike recovery, and v0.53.11 #127 `GRPOStabilityCallback` so a single training run can have InfoRM + echo-trap + spike-recovery + ref-model regen all active simultaneously without duplicating trajectory / state collection. Live trainer-callback wiring for all 6 Parts lands in v0.70.1 (`build_reward_hack_callback`, `build_uld_projection`, `build_minillm_callback`, `build_rl_checkpoint_callback`, `run_iterative_dpo`, `build_echo_trap_callback`); today every CLI / config flag is validated at schema-load so misconfigured runs fail loudly at config-load time.
 
