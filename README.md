@@ -42,14 +42,15 @@ soup train
 
 Latest highlights only. Full history: [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 
-**v0.69.0 — Data Engineering Pro: `soup build` (dbt-for-SFT) + `soup expect` + `soup data gen-magpie` + `soup data persona-mix` + `soup data brain-rot`.** Five surfaces that turn dataset preparation into a first-class engineering workflow. `soup build` is a dbt-style DAG of dataset transforms with `ref()`-connected models, `incremental` materialization, and content-hash-based row-diff so re-runs re-tokenize only changed rows. `soup expect` ships Great-Expectations for chat data — `expect_no_pii` / `expect_token_length_between` / `expect_no_refusal_pattern` / `expect_chosen_preferred_over_rejected_by_judge` — with exit code 3 on suite failure so CI pipelines can gate on dataset quality regressions. `soup data gen-magpie` plans the Magpie synthetic generator (chat-template-prefix harvest, reuses v0.20 providers). `soup data persona-mix` samples a prompt × persona × style matrix with a bundled 12-persona / 5-style diversity set + topic-entropy metric. `soup data brain-rot` implements the arXiv 2510.13928 detector with OK/MINOR/MAJOR verdicts that compose with v0.47 educational scorer; `--strict` mode exits 3 when too many rows score MAJOR.
+**v0.70.0 — Loop Hardening: reward-hacking detector + cross-tokenizer ULD + MiniLLM reverse-KL + mid-epoch RL checkpoint + iterative DPO + RAGEN echo-trap.** Six surfaces that protect the training loop from the failure modes that cost a real GPU-hour. The `reward_hack_detector` flag wires InfoRM cluster-separation OR RM-ensemble divergence into GRPO/PPO so the policy doesn't silently game the reward. `uld_strategy: wasserstein|topk_align` extends v0.53.2 distillation to teacher/student pairs with different vocabularies (Llama → Mistral, Llama → Qwen). `minillm_enabled` bundles MiniLLM's three stability tricks (teacher-mixed sampling + length-norm + pretrain-loss anchor). `rl_checkpoint_save_every_steps` adds the optimizer-state serialization TorchTune explicitly punts. `soup iterative-dpo --rounds N` is the sample → RM-score → re-pair → retrain loop driver. `echo_trap_enabled` detects trajectory degeneration in multi-turn agent RL (RAGEN-style). Schema-only release — live trainer-callback / math kernels deferred to v0.70.1.
 
-- **`soup build <manifest.yaml> [--dry-run]`** — dbt-for-SFT DAG parser + topological sort + plan rendering. Each model declares `kind: incremental|table|view`, a `transform`, and either a `source:` (seed) or `refs: [...]` (derived). Cross-validators reject ambiguous shapes (no-refs + no-source = degenerate; refs + source = mutually exclusive). `compute_row_hash` + `incremental_diff(prev, new) -> IncrementalDiffReport(added, changed, removed, unchanged)` are the kernel that lets the live runner (v0.69.1) re-tokenize only changed rows. `BuildModel` and `BuildPlan` are frozen dataclasses; `load_build_yaml` delegates to `paths.enforce_under_cwd_and_no_symlink` (TOCTOU defence). Live runner deferred to v0.69.1; today `--dry-run` renders the plan + exits 0, no flag exits 3 with the deferred-live marker.
-- **`soup expect <data.jsonl> <suite.yaml>`** — Great Expectations for chat data. Four built-in expectation functions, each a pure function returning a frozen `ExpectationResult`. Composes with v0.47.0 `data_score.detect_pii` (Presidio backend when `[data-pro]` installed), v0.56.0 `diagnose.refusal.looks_like_refusal`, and v0.19.0 judge backends (operator-injected callable for the chosen-vs-rejected judge). `_dispatch_expectation` passes args through raw so per-expectation validators (bool-rejection, NaN-rejection, range checks) fire authentically — no silent int/float coercion bypasses the validator. Exit 0 = pass, 2 = validation rejection, 3 = suite failure.
-- **`soup data gen-magpie --base <m> --provider ollama|anthropic|vllm --target N [--plan-only]`** — Magpie technique (Xu et al. 2024) schema + plan. Feeds the chat-template prefix only to an aligned base model and harvests user-side turns via v0.20 providers. `MagpieConfig` frozen, `validate_magpie_provider` closed allowlist, `validate_target_rows` ∈ [1, 1_000_000] bool-rejected. Live generation loop (provider calls + v0.47 quality filter) deferred to v0.69.1.
-- **`soup data persona-mix --prompts <jsonl> --n N --output <jsonl>`** — Persona-Hub-style diversity sampler. Reads `--prompts` JSONL, multiplies through bundled 12-persona × 5-style matrix (or operator-supplied `--personas` / `--styles` JSONL), writes `{prompt, persona, style}` per row via atomic `tempfile.mkstemp + os.replace`. Deterministic by `--seed`. New `compute_topic_diversity` Shannon-entropy kernel for downstream gating. Centralised TOCTOU policy via `enforce_under_cwd_and_no_symlink` on every read AND write path.
-- **`soup data brain-rot <data.jsonl> [--strict] [--max-major-fraction 0.25]`** — arXiv 2510.13928 brain-rot detector. Two orthogonal slop scorers: `score_triviality` (low diversity / excessive `!!`/`??` punctuation / `lol/omg/lmao` density / length penalty) and `score_popularity_signal` (clickbait phrase substrings + emoji density). Per-row composite = `1.0 - max(triviality, popularity)`. Same OK/MINOR/MAJOR taxonomy as v0.26 / v0.56 / v0.65 (≥0.85 OK, ≥0.60 MINOR, else MAJOR). `--strict` exits 3 when MAJOR-row fraction exceeds the threshold so training pipelines can refuse to materialise slop datasets. `--max-major-fraction` validated at the CLI boundary (NaN / Inf / out-of-range / bool rejected) before any scoring.
-- **+264 new tests** (11225 → 11487) across 5 part files. Review-fix coverage: 1 CRITICAL (centralised duplicate cwd+symlink blocks behind `paths.enforce_under_cwd_and_no_symlink` in build_dag / expectations / expect.py — code-review HIGH) + 4 HIGH (brain-rot loader DoS caps; persona-mix `--output` symlink TOCTOU rejection; persona-mix `_load_jsonl_field` DoS caps; magpie `quality_filter` validator + `_dispatch_expectation` int/float-coercion bypass) + 5 MEDIUM (BuildModel seed/derived cross-validator + docs; `--max-major-fraction` CLI-boundary validation; `expect` skipped-line WARNING) + 4 LOW (boundary tests at exact threshold ± ε on classify_brain_rot; BuildPlan FrozenInstanceError; version_bumped checks in B/C/D/E; lazy-yaml import source-grep). Manual CPU smokes (Step 6): every CLI happy + failure path exercised, including 3-stage build DAG dry-run, PII suite exit 3, magpie plan-only, persona-mix atomic write to JSONL, brain-rot MAJOR-on-slop exit 3.
+- **`soup train --reward-hack-detector info_rm|rm_ensemble`** — early-warning when the policy starts gaming the reward model. `info_rm` tracks the InfoRM Cluster-Separation Index across training (Wang et al. 2024, arXiv 2402.09345); a sharp drop signals the RM losing its grip on the (good, bad) split. `rm_ensemble` tracks pairwise variance across an RM ensemble; rising disagreement = unreliable reward signal. `--reward-hack-halt` auto-stops training on HACK verdict (≥30% relative drop). Composes with v0.34 `soup why` so the anomaly explainer can name reward-hacking specifically rather than "loss plateau". Schema + math kernels live now (`compute_cluster_separation`, `compute_rm_ensemble_divergence`, `classify_hack_signal` with OK/WARN/HACK bands at 0.10 / 0.30); live HF Trainer callback in v0.70.1.
+- **`soup train --uld-strategy wasserstein|topk_align`** — cross-tokenizer distillation (Boizard et al. 2024, arXiv 2402.12030). The v0.53.2 distillation path assumes student and teacher share a vocabulary; the moment vocabs differ, column-wise logit alignment breaks. `wasserstein` computes 1D Wasserstein distance between sorted teacher/student logit distributions — no alignment required. `topk_align` picks top-K teacher logits and maps to student token ids via BPE overlap. Bounded vocab sizes [1, 262144] cover multilingual SentencePiece + GPT-OSS 200K. Live projection module wired in v0.70.1.
+- **`soup train --minillm-enabled`** — MiniLLM-style reverse-KL on-policy distillation (Gu et al. 2024, arXiv 2306.08543). Bundles the three stability tricks scattered across §3 of the paper: teacher-mixed sampling (epsilon-greedy mix with `--minillm-teacher-mix-ratio 0.3`), length normalisation on rollouts (`--minillm-length-normalize true`), and a small pretrain-loss anchor (`--minillm-pretrain-anchor-weight 0.1` requires `--minillm-pretrain-anchor-path pre.jsonl`). Cross-validators reject silent no-op combos (anchor_weight=0 + anchor_path set, anchor_weight > 0 + path None). Live callback in v0.70.1.
+- **`soup train --rl-checkpoint-save-every-steps N`** — mid-epoch checkpoint for PPO/GRPO. TorchTune explicitly punts this; Soup ships the real save_state / load_state surface here. Captures optimizer state (`--rl-checkpoint-include-optimizer`), optional ref-model state, optional rollout/replay buffer. `--rl-checkpoint-keep-last 3` retains the last N. Composes with v0.32 spike recovery + v0.40.0 ref-model regen — a recovered run hops back to the most recent mid-epoch ckpt instead of restarting the epoch. Live save_state / load_state in v0.70.1.
+- **`soup iterative-dpo --rounds N --pairs-per-round 500 [--plan-only]`** — sample → RM-score → re-pair → retrain over N rounds. Frozen `IterativeDPOPlan` with consecutive-round_index invariant + per-round artifact paths (`./out/round-NN/pairs.jsonl`, `./out/round-NN/adapter`). `--plan-only` renders the canonical plan + exits 0; without it the deferred-live runner exits 3 with explicit v0.70.1 marker. Recipe glue around existing TRL primitives; v0.70.1 wires the live `soup train --task dpo` subprocess loop.
+- **`soup train --echo-trap-enabled --echo-trap-threshold 0.6 --echo-trap-halt`** — RAGEN-style detection of trajectory degeneration during multi-turn agent RL (Zhu et al. 2025, arXiv 2504.14437). Pure-Python n-gram repetition rate per trajectory + batch mean. OK / WARN / TRAP taxonomy at 0.30 / 0.60. Composes with v0.53.11 #127 `GRPOStabilityCallback` — both detectors fire in the same training step without duplicating trajectory collection. Live HF Trainer callback in v0.70.1.
+- **+337 new tests** (11487 → 11824) across 6 part files. Schema-only release; every live callback / kernel raises `NotImplementedError` with explicit v0.70.1 marker after validating inputs (matches the project's stub-then-live cadence from v0.50.0 / v0.62.0 / v0.69.0). 12-invariant self-review against the full project checklist (closed allowlists, frozen dataclasses, MappingProxyType registries, bool-as-int rejection, math.isfinite NaN/Inf reject, null-byte rejection, length caps, no top-level torch, TypeError/ValueError split, deferred-live policy, tuples-not-lists on frozen collections, CLI exit codes) — all 12 satisfied. Manual CPU smoke (Step 6): `soup iterative-dpo --plan-only` 3-round plan rendered end-to-end; 5 happy + 5 failure-mode YAML round-trips across every new schema field.
 
 ## Data Engineering Pro
 
@@ -87,6 +88,53 @@ soup data brain-rot data.jsonl --strict --max-major-fraction 0.10
 ```
 
 Every command applies the project-wide TOCTOU policy (`os.lstat + S_ISLNK` symlink rejection before any open) and cwd containment via the shared `paths.enforce_under_cwd_and_no_symlink` helper. Live runners for `soup build` and `soup data gen-magpie` land in v0.69.1; the other three are LIVE today.
+
+## Loop Hardening
+
+The v0.70.0 release ships 6 surfaces that protect the training loop from the failure modes that cost a real GPU-hour. Schema + math kernels live now; live trainer-callback wiring lands in v0.70.1 (matches the project's stub-then-live cadence).
+
+```bash
+# Reward-hacking detector — auto-halt when the policy starts gaming the RM
+# (InfoRM cluster-separation index, Wang et al. 2024 arXiv:2402.09345)
+soup train --config soup.yaml \
+    --reward-hack-detector info_rm --reward-hack-halt   # halt on HACK verdict
+
+# Cross-tokenizer distillation — Llama -> Mistral, no shared vocab needed
+# (Universal Logit Distillation, Boizard et al. 2024 arXiv:2402.12030)
+soup train --config soup.yaml --uld-strategy wasserstein
+
+# MiniLLM reverse-KL on-policy distillation — bundles 3 stability tricks
+# (Gu et al. 2024 arXiv:2306.08543)
+soup train --config soup.yaml --minillm-enabled \
+    --minillm-teacher-mix-ratio 0.3 \
+    --minillm-pretrain-anchor-weight 0.1 \
+    --minillm-pretrain-anchor-path ./pretrain.jsonl
+
+# Mid-epoch checkpoint for PPO/GRPO — TorchTune punts this; Soup ships it
+soup train --config grpo.yaml \
+    --rl-checkpoint-save-every-steps 500 \
+    --rl-checkpoint-keep-last 3 \
+    --rl-checkpoint-include-optimizer
+
+# Iterative DPO loop driver — sample -> RM-score -> re-pair -> retrain
+soup iterative-dpo \
+    --base-model meta-llama/Llama-3.1-8B \
+    --reward-model ./output_rm \
+    --prompts ./prompts.jsonl \
+    --output-dir ./iterative_dpo_out \
+    --rounds 5 \
+    --pairs-per-round 1000 \
+    --plan-only
+
+# RAGEN echo-trap detector — auto-halt when trajectories collapse to self-repetition
+# (Zhu et al. 2025 arXiv:2504.14437)
+soup train --config grpo.yaml \
+    --echo-trap-enabled \
+    --echo-trap-threshold 0.6 \
+    --echo-trap-halt
+```
+
+Every detector composes with v0.34 `soup why` (anomaly explainer), v0.32 spike recovery, and v0.53.11 #127 `GRPOStabilityCallback` so a single training run can have InfoRM + echo-trap + spike-recovery + ref-model regen all active simultaneously without duplicating trajectory / state collection. Live trainer-callback wiring for all 6 Parts lands in v0.70.1 (`build_reward_hack_callback`, `build_uld_projection`, `build_minillm_callback`, `build_rl_checkpoint_callback`, `run_iterative_dpo`, `build_echo_trap_callback`); today every CLI / config flag is validated at schema-load so misconfigured runs fail loudly at config-load time.
 
 ## Why Soup?
 

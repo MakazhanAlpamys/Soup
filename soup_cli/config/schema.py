@@ -1341,6 +1341,244 @@ class TrainingConfig(BaseModel):
         ),
     )
 
+    # ---- v0.70.0 Part F — Echo-trap detector -----------------------------
+    echo_trap_enabled: bool = Field(
+        default=False,
+        description=(
+            "Enable RAGEN-style echo-trap detection during multi-turn "
+            "agent RL. Requires task in {'grpo', 'ppo'} on a non-mlx "
+            "backend. Schema-only in v0.70.0; live callback in v0.70.1."
+        ),
+    )
+    echo_trap_threshold: float = Field(
+        default=0.6,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Threshold on the aggregate echo signal. Above this = TRAP. "
+            "Bounded [0.0, 1.0]. (v0.70.0)"
+        ),
+    )
+    echo_trap_halt: bool = Field(
+        default=False,
+        description=(
+            "Auto-halt training on TRAP verdict. Requires "
+            "echo_trap_enabled=True. (v0.70.0)"
+        ),
+    )
+
+    # ---- v0.70.0 Part D — Mid-epoch RL checkpoint ------------------------
+    rl_checkpoint_save_every_steps: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=10_000_000,
+        description=(
+            "Save an RL-aware mid-epoch checkpoint every N steps. None "
+            "= use HF Trainer's per-epoch checkpoint only. Requires "
+            "task in {'grpo', 'ppo'}. Schema-only in v0.70.0; live "
+            "save_state / load_state in v0.70.1."
+        ),
+    )
+    rl_checkpoint_keep_last: int = Field(
+        default=3,
+        ge=1,
+        le=100,
+        description=(
+            "Number of recent RL checkpoints to retain. Older ones are "
+            "pruned at write time. (v0.70.0)"
+        ),
+    )
+    rl_checkpoint_include_optimizer: bool = Field(
+        default=True,
+        description=(
+            "Include AdamW / Lion optimizer state in the mid-epoch RL "
+            "checkpoint. (v0.70.0)"
+        ),
+    )
+    rl_checkpoint_include_ref_model: bool = Field(
+        default=False,
+        description=(
+            "Include the frozen reference model state in the RL "
+            "checkpoint. Default False (ref model is reconstructable "
+            "from cfg.base). (v0.70.0)"
+        ),
+    )
+    rl_checkpoint_include_rollout_buffer: bool = Field(
+        default=False,
+        description=(
+            "Include the rollout / replay buffer in the RL checkpoint "
+            "so resumed runs don't lose collected experience. (v0.70.0)"
+        ),
+    )
+
+    # ---- v0.70.0 Part C — MiniLLM reverse-KL on-policy distillation -------
+    # Bundles teacher-mixed sampling + length-norm + pretrain anchor.
+    # Schema-only; live callback wired in v0.70.1.
+    minillm_enabled: bool = Field(
+        default=False,
+        description=(
+            "Enable MiniLLM-style on-policy distillation (Gu et al. 2024). "
+            "Requires task='distill' on a non-mlx backend. v0.70.0 "
+            "schema-only; live callback in v0.70.1."
+        ),
+    )
+    minillm_teacher_mix_ratio: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Probability of sampling from the teacher distribution at "
+            "rollout time. 0.0 = student-only; 1.0 = teacher-only. "
+            "Typical range 0.2-0.5. (v0.70.0)"
+        ),
+    )
+    minillm_length_normalize: bool = Field(
+        default=True,
+        description=(
+            "Length-normalise the rollout log-probability before the "
+            "reverse-KL term. Prevents long completions from dominating "
+            "the gradient. (v0.70.0)"
+        ),
+    )
+    minillm_pretrain_anchor_weight: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Weight on the pretrain-loss anchor term (SFT on a small "
+            "pretrain corpus). Prevents drift away from coherent "
+            "language. Requires minillm_pretrain_anchor_path when > 0. "
+            "(v0.70.0)"
+        ),
+    )
+    minillm_pretrain_anchor_path: Optional[str] = Field(
+        default=None,
+        description=(
+            "Path to the pretrain JSONL used by the anchor term. "
+            "Required when minillm_pretrain_anchor_weight > 0. "
+            "Null-byte rejected; capped at 4096 chars. (v0.70.0)"
+        ),
+    )
+
+    # ---- v0.70.0 Part B — Cross-tokenizer ULD ----------------------------
+    # Universal Logit Distillation (Boizard et al. 2024). Schema-only;
+    # live projection module wired in v0.70.1.
+    uld_strategy: Optional[Literal["wasserstein", "topk_align"]] = Field(
+        default=None,
+        description=(
+            "Cross-tokenizer distillation strategy: 'wasserstein' "
+            "(no alignment needed) or 'topk_align' (requires uld_top_k). "
+            "Requires task='distill' on a non-mlx backend. Schema-only "
+            "in v0.70.0; live projection wired in v0.70.1."
+        ),
+    )
+    uld_top_k: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=262144,
+        description=(
+            "Top-K teacher logits to align (uld_strategy='topk_align' "
+            "only). Bounded [1, 262144] to cap pathological vocabs. "
+            "(v0.70.0)"
+        ),
+    )
+    # ---- v0.70.0 Part A — Reward-hacking detector ------------------------
+    # Schema-only release; live HF Trainer callback wired in v0.70.1.
+    reward_hack_detector: Optional[Literal["info_rm", "rm_ensemble"]] = Field(
+        default=None,
+        description=(
+            "Reward-hacking detector for GRPO/PPO. 'info_rm' tracks "
+            "InfoRM cluster-separation across training; 'rm_ensemble' "
+            "tracks pairwise variance across an RM ensemble. Requires "
+            "task in {'grpo', 'ppo'} on a non-mlx backend. Schema-only "
+            "in v0.70.0; live HF Trainer callback wired in v0.70.1."
+        ),
+    )
+    reward_hack_halt: bool = Field(
+        default=False,
+        description=(
+            "Auto-halt training on HACK verdict (drop_pct >= 30% in "
+            "cluster separation). Requires reward_hack_detector to be "
+            "set. (v0.70.0)"
+        ),
+    )
+
+    @field_validator("reward_hack_halt", mode="before")
+    @classmethod
+    def _validate_reward_hack_halt(cls, v):
+        """v0.70.0 — explicit bool guard so YAML ``yes`` / ``1`` integers
+        cannot silently coerce. Matches project bool-before-int policy.
+        """
+        if v is None:
+            return v
+        if isinstance(v, bool):
+            return v
+        raise TypeError(
+            f"reward_hack_halt must be bool, got {type(v).__name__}"
+        )
+
+    @field_validator(
+        "echo_trap_enabled",
+        "echo_trap_halt",
+        mode="before",
+    )
+    @classmethod
+    def _validate_echo_trap_bool_fields(cls, v):
+        """v0.70.0 Part F — bool guards for echo-trap toggles."""
+        if v is None:
+            return v
+        if isinstance(v, bool):
+            return v
+        raise TypeError(
+            f"v0.70.0 echo-trap flag must be bool, got {type(v).__name__}"
+        )
+
+    @field_validator(
+        "rl_checkpoint_include_optimizer",
+        "rl_checkpoint_include_ref_model",
+        "rl_checkpoint_include_rollout_buffer",
+        mode="before",
+    )
+    @classmethod
+    def _validate_rl_checkpoint_bool_fields(cls, v):
+        """v0.70.0 Part D — bool guards for RL-checkpoint toggles."""
+        if v is None:
+            return v
+        if isinstance(v, bool):
+            return v
+        raise TypeError(
+            f"v0.70.0 RL-checkpoint flag must be bool, got {type(v).__name__}"
+        )
+
+    @field_validator(
+        "minillm_enabled",
+        "minillm_length_normalize",
+        mode="before",
+    )
+    @classmethod
+    def _validate_minillm_bool_fields(cls, v):
+        """v0.70.0 Part C — bool guards for MiniLLM toggles."""
+        if v is None:
+            return v
+        if isinstance(v, bool):
+            return v
+        raise TypeError(
+            f"v0.70.0 MiniLLM flag must be bool, got {type(v).__name__}"
+        )
+
+    @field_validator("minillm_pretrain_anchor_path")
+    @classmethod
+    def _validate_minillm_anchor_path(cls, v):
+        """v0.70.0 Part C — shape-only path validation. Cwd containment
+        deferred to v0.70.1 runtime hook (matches v0.69.0 build_dag /
+        magpie base_model policy).
+        """
+        if v is None:
+            return None
+        from soup_cli.utils.minillm import _check_path_shape
+
+        return _check_path_shape(v)
+
     @field_validator(
         "fp8_attention",
         "nvfp4",
@@ -3742,6 +3980,194 @@ class SoupConfig(BaseModel):
             "is not yet implemented (upstream mlx-lm does not expose a "
             f"training helper). Use backend=transformers for task={self.task}."
         )
+
+    @model_validator(mode="after")
+    def _validate_uld_compat(self) -> "SoupConfig":
+        """v0.70.0 Part B — Universal Logit Distillation gate.
+
+        ``uld_strategy`` is only meaningful when ``task='distill'`` —
+        cross-tokenizer distillation has no analogue outside the
+        distillation trainer. Rejected on other tasks with a friendly
+        message, and on MLX backend with a distinct message.
+
+        Composes with v0.52 distillation task: when set, the
+        :class:`uld.ULDConfig` validation fires (top_k cross-validation,
+        vocab-size bounds) at config-load.
+        """
+        tcfg = self.training
+        strategy = tcfg.uld_strategy
+        top_k = tcfg.uld_top_k
+        if strategy is None and top_k is None:
+            return self
+        if strategy is None:
+            # top_k without strategy is a silent no-op footgun.
+            raise ValueError(
+                "uld_top_k requires uld_strategy to be set"
+            )
+        if self.task != "distill":
+            raise ValueError(
+                "uld_strategy / uld_top_k are only valid when "
+                f"task='distill'; got task={self.task!r}"
+            )
+        if self.backend == "mlx":
+            raise ValueError(
+                "uld_strategy is not supported on backend=mlx in v0.70.0 "
+                "(cross-tokenizer distillation is transformers-only)"
+            )
+        # Cross-check: topk_align requires top_k.
+        if strategy == "topk_align" and top_k is None:
+            raise ValueError(
+                "uld_strategy='topk_align' requires uld_top_k to be set"
+            )
+        if strategy == "wasserstein" and top_k is not None:
+            raise ValueError(
+                "uld_top_k is only valid when uld_strategy='topk_align'; "
+                f"got uld_strategy={strategy!r}"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_echo_trap_compat(self) -> "SoupConfig":
+        """v0.70.0 Part F — echo-trap detector task gate.
+
+        ``echo_trap_enabled`` (and ``echo_trap_halt``) only meaningful
+        on RL tasks (grpo / ppo). Setting ``echo_trap_halt`` without
+        ``echo_trap_enabled`` is a silent no-op footgun — reject.
+        """
+        tcfg = self.training
+        if not tcfg.echo_trap_enabled and not tcfg.echo_trap_halt:
+            return self
+        if not tcfg.echo_trap_enabled and tcfg.echo_trap_halt:
+            raise ValueError(
+                "echo_trap_halt=True requires echo_trap_enabled=True"
+            )
+        if self.task not in ("grpo", "ppo"):
+            raise ValueError(
+                "echo_trap_enabled / echo_trap_halt are only valid on "
+                f"task in {{'grpo', 'ppo'}}; got task={self.task!r}"
+            )
+        if self.backend == "mlx":
+            raise ValueError(
+                "echo_trap_enabled is not supported on backend=mlx in "
+                "v0.70.0"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_rl_checkpoint_compat(self) -> "SoupConfig":
+        """v0.70.0 Part D — mid-epoch RL checkpoint task gate.
+
+        ``rl_checkpoint_save_every_steps`` is only meaningful on RL
+        tasks (grpo / ppo). Non-RL tasks already have HF Trainer's
+        per-epoch checkpointing. Rejected on other tasks with a
+        friendly message.
+        """
+        tcfg = self.training
+        if tcfg.rl_checkpoint_save_every_steps is None:
+            return self
+        if self.task not in ("grpo", "ppo"):
+            raise ValueError(
+                "rl_checkpoint_save_every_steps is only valid on RL tasks "
+                f"(grpo / ppo); got task={self.task!r}. Non-RL tasks use "
+                "HF Trainer's per-epoch checkpointing already."
+            )
+        if self.backend == "mlx":
+            raise ValueError(
+                "rl_checkpoint_save_every_steps is not supported on "
+                "backend=mlx in v0.70.0"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_minillm_compat(self) -> "SoupConfig":
+        """v0.70.0 Part C — MiniLLM compatibility gate.
+
+        ``minillm_enabled`` requires ``task='distill'`` on a non-mlx
+        backend. Setting any minillm_* tunable without
+        ``minillm_enabled=True`` is rejected (silent no-op footgun
+        mirroring v0.52 distill / v0.62 grace_codebook policy).
+        """
+        tcfg = self.training
+        any_field_set = (
+            tcfg.minillm_teacher_mix_ratio != 0.0
+            or tcfg.minillm_length_normalize is not True
+            or tcfg.minillm_pretrain_anchor_weight != 0.0
+            or tcfg.minillm_pretrain_anchor_path is not None
+        )
+        if not tcfg.minillm_enabled and not any_field_set:
+            return self
+        if not tcfg.minillm_enabled and any_field_set:
+            offenders = []
+            if tcfg.minillm_teacher_mix_ratio != 0.0:
+                offenders.append("minillm_teacher_mix_ratio")
+            if tcfg.minillm_length_normalize is not True:
+                offenders.append("minillm_length_normalize")
+            if tcfg.minillm_pretrain_anchor_weight != 0.0:
+                offenders.append("minillm_pretrain_anchor_weight")
+            if tcfg.minillm_pretrain_anchor_path is not None:
+                offenders.append("minillm_pretrain_anchor_path")
+            raise ValueError(
+                f"MiniLLM tunables {offenders} require minillm_enabled=True"
+            )
+        if self.task != "distill":
+            raise ValueError(
+                "minillm_enabled requires task='distill'; "
+                f"got task={self.task!r}"
+            )
+        if self.backend == "mlx":
+            raise ValueError(
+                "minillm_enabled is not supported on backend=mlx in v0.70.0"
+            )
+        # Cross-check: anchor weight + path mutual requirements.
+        if (
+            tcfg.minillm_pretrain_anchor_weight > 0.0
+            and tcfg.minillm_pretrain_anchor_path is None
+        ):
+            raise ValueError(
+                "minillm_pretrain_anchor_weight > 0 requires "
+                "minillm_pretrain_anchor_path to be set"
+            )
+        if (
+            tcfg.minillm_pretrain_anchor_weight == 0.0
+            and tcfg.minillm_pretrain_anchor_path is not None
+        ):
+            raise ValueError(
+                "minillm_pretrain_anchor_path is set but "
+                "minillm_pretrain_anchor_weight is 0 (silent no-op)"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_reward_hack_compat(self) -> "SoupConfig":
+        """v0.70.0 Part A — reward-hacking detector task / backend gate.
+
+        ``reward_hack_detector`` + ``reward_hack_halt`` are only meaningful
+        for RL tasks (grpo / ppo). Rejected outside those tasks with a
+        friendly message that names the offending fields. MLX backend
+        rejected with a distinct message (matches v0.34.0 / v0.50.0
+        review-fix policy of distinct error reasons).
+        """
+        tcfg = self.training
+        detector = tcfg.reward_hack_detector
+        halt = tcfg.reward_hack_halt
+        if detector is None and not halt:
+            return self
+        # halt without detector is a silent no-op footgun — reject.
+        if detector is None and halt:
+            raise ValueError(
+                "reward_hack_halt=True requires reward_hack_detector to be set"
+            )
+        if self.task not in ("grpo", "ppo"):
+            raise ValueError(
+                "reward_hack_detector / reward_hack_halt are only valid on "
+                f"task in {{'grpo', 'ppo'}}; got task={self.task!r}"
+            )
+        if self.backend == "mlx":
+            raise ValueError(
+                "reward_hack_detector is not supported on backend=mlx in "
+                "v0.70.0 (RL detectors are transformers-only)"
+            )
+        return self
 
 
 # --- Built-in templates ---

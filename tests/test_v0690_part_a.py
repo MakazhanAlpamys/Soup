@@ -730,4 +730,5 @@ class TestSourceWiring:
     def test_version_bumped(self) -> None:
         from soup_cli import __version__
 
-        assert __version__ == "0.69.0"
+        major_minor = tuple(int(x) for x in __version__.split(".")[:2])
+        assert major_minor >= (0, 69)

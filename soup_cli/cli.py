@@ -467,6 +467,15 @@ app.command(
     help="Run an expectations suite against a JSONL dataset (v0.69.0 Part B).",
 )(_expect_cmd.expect_cmd)
 
+# v0.70.0 Part E — `soup iterative-dpo` (iterative DPO loop driver).
+from soup_cli.commands import iterative_dpo as _iterative_dpo_cmd  # noqa: E402
+
+app.add_typer(
+    _iterative_dpo_cmd.app,
+    name="iterative-dpo",
+    help="Iterative DPO loop driver (v0.70.0 Part E).",
+)
+
 
 def _rewrite_advise_argv(argv: list) -> list:
     """Inject `run` between `advise` and a non-subcommand first argument.
