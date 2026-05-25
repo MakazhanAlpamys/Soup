@@ -14,9 +14,8 @@ trajectory collection.
 Security:
 - Pure-Python math (no torch import at module top).
 - Bool / NaN / Inf / range rejection on every numeric input.
-- Tokens must be strings; non-str rejected loudly so a caller that
-  hands tensor ids (instead of decoded strings) gets an actionable
-  error rather than silently misbehaving.
+- Whitespace-mode tokens must be strings; tokeniser-aware mode accepts
+  integer token ids through the dedicated ``*_tokenized`` helpers.
 - ``_MAX_BATCH_TRAJECTORIES = 100_000`` DoS cap (matches v0.55 /
   v0.65 / v0.66 cap policy).
 - ``_MAX_NGRAM_N = 32`` keeps the n-gram counter bounded.
@@ -75,6 +74,41 @@ def _check_tokens(tokens: object) -> tuple[str, ...]:
     return tuple(iterator)
 
 
+def _check_token_ids(token_ids: object) -> tuple[int, ...]:
+    if isinstance(token_ids, (str, bytes)):
+        raise TypeError("token_ids must be a sequence of ints, not str/bytes")
+    try:
+        iterator = list(token_ids)  # type: ignore[arg-type]
+    except TypeError as exc:
+        raise TypeError(
+            f"token_ids must be iterable, got {type(token_ids).__name__}"
+        ) from exc
+    if len(iterator) > _MAX_TRAJECTORY_TOKENS:
+        raise ValueError(
+            f"trajectory has {len(iterator)} token ids, exceeds "
+            f"{_MAX_TRAJECTORY_TOKENS} cap"
+        )
+    for idx, token_id in enumerate(iterator):
+        if isinstance(token_id, bool) or not isinstance(token_id, int):
+            raise TypeError(
+                f"token_ids[{idx}] must be int, got {type(token_id).__name__}"
+            )
+    return tuple(iterator)
+
+
+def _score_repetition(units: Sequence[object], *, ngram_n: int) -> float:
+    if len(units) < ngram_n:
+        return 0.0
+    counts: dict[tuple[object, ...], int] = {}
+    for i in range(len(units) - ngram_n + 1):
+        gram = tuple(units[i : i + ngram_n])
+        counts[gram] = counts.get(gram, 0) + 1
+    if not counts:
+        return 0.0
+    repeating = sum(1 for count in counts.values() if count > 1)
+    return repeating / len(counts)
+
+
 def score_trajectory_repetition(tokens: object, *, ngram_n: object = 2) -> float:
     """Per-trajectory repetition score.
 
@@ -88,16 +122,24 @@ def score_trajectory_repetition(tokens: object, *, ngram_n: object = 2) -> float
     """
     n = _check_ngram_n(ngram_n)
     tok = _check_tokens(tokens)
-    if len(tok) < n:
-        return 0.0
-    counts: dict[tuple[str, ...], int] = {}
-    for i in range(len(tok) - n + 1):
-        gram = tok[i : i + n]
-        counts[gram] = counts.get(gram, 0) + 1
-    if not counts:
-        return 0.0
-    repeating = sum(1 for c in counts.values() if c > 1)
-    return repeating / len(counts)
+    return _score_repetition(tok, ngram_n=n)
+
+
+def score_trajectory_repetition_tokenized(
+    token_ids: object,
+    *,
+    ngram_n: object = 2,
+) -> float:
+    """Per-trajectory repetition score over tokenizer ids.
+
+    This mirrors :func:`score_trajectory_repetition`, but operates on
+    integer token ids before decoding/whitespace splitting can hide
+    subword repetition. It is intentionally separate so the existing
+    string-token API keeps rejecting accidental tensor-id input.
+    """
+    n = _check_ngram_n(ngram_n)
+    ids = _check_token_ids(token_ids)
+    return _score_repetition(ids, ngram_n=n)
 
 
 def score_echo_signal(
@@ -132,6 +174,41 @@ def score_echo_signal(
     scores: list[float] = []
     for traj in batch:
         scores.append(score_trajectory_repetition(traj, ngram_n=n))
+    return sum(scores) / len(scores)
+
+
+def score_echo_signal_tokenized(
+    trajectories: object,
+    *,
+    ngram_n: object = 2,
+) -> float:
+    """Mean repetition score across token-id trajectories.
+
+    Use this when the caller has access to the trainer tokenizer and can
+    pass ``tokenizer.encode(text)`` output rather than decoded strings.
+    """
+    n = _check_ngram_n(ngram_n)
+    if isinstance(trajectories, (str, bytes)):
+        raise TypeError(
+            "trajectories must be a sequence of token-id sequences, not str/bytes"
+        )
+    try:
+        batch = list(trajectories)  # type: ignore[arg-type]
+    except TypeError as exc:
+        raise TypeError(
+            f"trajectories must be iterable, got "
+            f"{type(trajectories).__name__}"
+        ) from exc
+    if len(batch) > _MAX_BATCH_TRAJECTORIES:
+        raise ValueError(
+            f"batch has {len(batch)} trajectories, exceeds "
+            f"{_MAX_BATCH_TRAJECTORIES} cap"
+        )
+    if not batch:
+        return 0.0
+    scores: list[float] = []
+    for traj in batch:
+        scores.append(score_trajectory_repetition_tokenized(traj, ngram_n=n))
     return sum(scores) / len(scores)
 
 
@@ -222,6 +299,7 @@ def build_echo_trap_callback(
     threshold: float,
     halt_on_trap: bool = True,
     ngram_n: int = 2,
+    tokenizer_aware: bool = False,
 ):
     """Live HF Trainer callback for echo-trap detection.
 
@@ -244,6 +322,11 @@ def build_echo_trap_callback(
         raise TypeError(
             f"halt_on_trap must be bool, got {type(halt_on_trap).__name__}"
         )
+    if not isinstance(tokenizer_aware, bool):
+        raise TypeError(
+            "tokenizer_aware must be bool, got "
+            f"{type(tokenizer_aware).__name__}"
+        )
     _check_ngram_n(ngram_n)
     raise NotImplementedError(
         f"Live echo-trap HF Trainer callback (threshold={fv}) is deferred "
@@ -260,10 +343,14 @@ __all__ = [
     "build_echo_trap_callback",
     "classify_echo_signal",
     "score_echo_signal",
+    "score_echo_signal_tokenized",
     "score_trajectory_repetition",
+    "score_trajectory_repetition_tokenized",
 ]
 
 
 # Type aliases retained for the v0.70.1 wiring.
 TrajectoryTokens = Sequence[str]
 TrajectoryBatch = Iterable[TrajectoryTokens]
+TokenIdTrajectory = Sequence[int]
+TokenIdTrajectoryBatch = Iterable[TokenIdTrajectory]

@@ -19,7 +19,9 @@ class TestEchoTrapPublicSurface:
         from soup_cli.utils import echo_trap
 
         assert hasattr(echo_trap, "score_trajectory_repetition")
+        assert hasattr(echo_trap, "score_trajectory_repetition_tokenized")
         assert hasattr(echo_trap, "score_echo_signal")
+        assert hasattr(echo_trap, "score_echo_signal_tokenized")
         assert hasattr(echo_trap, "classify_echo_signal")
         assert hasattr(echo_trap, "EchoTrapReport")
         assert hasattr(echo_trap, "build_echo_trap_callback")
@@ -149,6 +151,38 @@ class TestScoreEchoSignal:
         big = [["x"] for _ in range(100_001)]
         with pytest.raises(ValueError, match="batch"):
             score_echo_signal(big, ngram_n=2)
+
+
+class TestTokenizedEchoSignal:
+    def test_tokenized_repetition_catches_subword_echo_trap(self):
+        from soup_cli.utils.echo_trap import (
+            classify_echo_signal,
+            score_echo_signal,
+            score_echo_signal_tokenized,
+        )
+
+        decoded_tokens = ["ha,", "ha.", "ha!", "ha?", "ha;", "ha:"]
+        repeated_token_ids = [101, 202, 101, 202, 101, 202, 101, 202]
+
+        whitespace_score = score_echo_signal([decoded_tokens], ngram_n=2)
+        tokenized_score = score_echo_signal_tokenized([repeated_token_ids], ngram_n=2)
+
+        assert classify_echo_signal(whitespace_score) == "OK"
+        assert classify_echo_signal(tokenized_score) == "TRAP"
+
+    def test_tokenized_trajectory_rejects_non_int_ids(self):
+        from soup_cli.utils.echo_trap import score_trajectory_repetition_tokenized
+
+        with pytest.raises(TypeError, match="token_ids"):
+            score_trajectory_repetition_tokenized([1, "2", 3], ngram_n=2)
+        with pytest.raises(TypeError, match="token_ids"):
+            score_trajectory_repetition_tokenized([1, True, 3], ngram_n=2)
+
+    def test_tokenized_batch_rejects_str(self):
+        from soup_cli.utils.echo_trap import score_echo_signal_tokenized
+
+        with pytest.raises(TypeError, match="token-id"):
+            score_echo_signal_tokenized("not ids", ngram_n=2)
 
 
 class TestClassifyEchoSignal:
@@ -310,6 +344,15 @@ class TestBuildEchoTrapCallbackDeferred:
         with pytest.raises(TypeError, match="halt"):
             build_echo_trap_callback(threshold=0.5, halt_on_trap="yes")  # type: ignore[arg-type]
 
+    def test_tokenizer_aware_must_be_bool(self):
+        from soup_cli.utils.echo_trap import build_echo_trap_callback
+
+        with pytest.raises(TypeError, match="tokenizer_aware"):
+            build_echo_trap_callback(
+                threshold=0.5,
+                tokenizer_aware="yes",  # type: ignore[arg-type]
+            )
+
 
 # ---------------------------------------------------------------------------
 # Schema integration — TrainingConfig + SoupConfig
@@ -324,6 +367,7 @@ class TestSchemaTrainingConfig:
         assert tcfg.echo_trap_enabled is False
         assert tcfg.echo_trap_threshold == 0.6
         assert tcfg.echo_trap_halt is False
+        assert tcfg.echo_trap_tokenizer_aware is False
 
     def test_threshold_bounds(self):
         from pydantic import ValidationError
@@ -352,6 +396,7 @@ data:
 training:
   echo_trap_enabled: true
   echo_trap_threshold: 0.55
+  echo_trap_tokenizer_aware: true
 """
 
     def test_grpo_accepted(self):
@@ -359,6 +404,7 @@ training:
 
         cfg = load_config_from_string(self._yaml("grpo"))
         assert cfg.training.echo_trap_enabled is True
+        assert cfg.training.echo_trap_tokenizer_aware is True
 
     def test_ppo_accepted(self):
         from soup_cli.config.loader import load_config_from_string
@@ -385,6 +431,22 @@ data:
   format: chatml
 training:
   echo_trap_halt: true
+"""
+            )
+
+    def test_tokenizer_aware_without_enabled_rejected(self):
+        from soup_cli.config.loader import load_config_from_string
+
+        with pytest.raises(ValueError, match="echo_trap_enabled"):
+            load_config_from_string(
+                """
+base: meta-llama/Llama-3.1-8B
+task: grpo
+data:
+  train: ./data/train.jsonl
+  format: chatml
+training:
+  echo_trap_tokenizer_aware: true
 """
             )
 

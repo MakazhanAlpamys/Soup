@@ -155,6 +155,14 @@ def train(
             "Default deny (v0.36.0). Only enable if you trust the source."
         ),
     ),
+    echo_trap_tokenizer_aware: bool = typer.Option(
+        False,
+        "--echo-trap-tokenizer-aware",
+        help=(
+            "Use tokenizer-id n-grams for echo-trap scoring. Requires "
+            "training.echo_trap_enabled=true on grpo/ppo."
+        ),
+    ),
     profile_run: bool = typer.Option(
         False,
         "--profile",
@@ -229,6 +237,17 @@ def train(
     # Load & validate config
     console.print(f"[dim]Loading config from {config_path}...[/]")
     cfg = load_config(config_path)
+
+    # --- Echo-trap tokenizer-aware shortcut ---
+    if echo_trap_tokenizer_aware:
+        if not cfg.training.echo_trap_enabled:
+            console.print(
+                "[red]--echo-trap-tokenizer-aware requires "
+                "training.echo_trap_enabled=true[/]"
+            )
+            raise typer.Exit(1)
+        cfg.training.echo_trap_tokenizer_aware = True
+        console.print("[green]Echo-trap tokenizer-aware scoring enabled[/]")
 
     # --- --push-as / --hf-resume validation ---
     if push_as:
@@ -440,6 +459,8 @@ def train(
                     script_args.append("--wandb")
                 if tensorboard:
                     script_args.append("--tensorboard")
+                if echo_trap_tokenizer_aware:
+                    script_args.append("--echo-trap-tokenizer-aware")
                 if yes:
                     script_args.append("--yes")
                 argv = build_accelerate_argv(
