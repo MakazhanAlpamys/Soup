@@ -2464,3 +2464,295 @@ def recipe(
     console.print(
         "[dim]Re-run with --execute --output <dir> to run the DAG.[/]"
     )
+
+
+# v0.69.0 Part C — Magpie synthetic data generator.
+@app.command(name="gen-magpie")
+def gen_magpie(
+    base: str = typer.Option(..., "--base", help="Aligned chat-tuned base model id"),
+    provider: str = typer.Option(..., "--provider", help="ollama | anthropic | vllm"),
+    target: int = typer.Option(..., "--target", help="Target row count [1, 1_000_000]"),
+    quality_filter: bool = typer.Option(
+        True, "--quality-filter/--no-quality-filter", help="Apply v0.47 quality filter"
+    ),
+    plan_only: bool = typer.Option(
+        False, "--plan-only", help="Validate + print plan; do not generate."
+    ),
+) -> None:
+    """Magpie synthetic data generator (v0.69.0 Part C).
+
+    Feeds the chat-template prefix only to ``--base`` and harvests user-side
+    turns via ``--provider``. The live generator is deferred to v0.69.1; today
+    only ``--plan-only`` produces a meaningful result.
+    """
+    from rich.markup import escape as _escape
+    from rich.panel import Panel
+
+    from soup_cli.utils.magpie import build_magpie_config, run_magpie
+
+    try:
+        cfg = build_magpie_config(
+            base=base,
+            provider=provider,
+            target=target,
+            quality_filter=quality_filter,
+        )
+    except (TypeError, ValueError) as exc:
+        console.print(f"[red]{_escape(str(exc))}[/]")
+        raise typer.Exit(2) from exc
+
+    console.print(
+        Panel(
+            f"Base model:     [bold]{_escape(cfg.base_model)}[/]\n"
+            f"Provider:       [bold]{_escape(cfg.provider)}[/]\n"
+            f"Target rows:    [bold]{cfg.target_rows}[/]\n"
+            f"Quality filter: [bold]{cfg.quality_filter}[/]",
+            title="soup data gen-magpie — plan",
+        )
+    )
+
+    if plan_only:
+        return
+
+    try:
+        run_magpie(cfg)
+    except NotImplementedError as exc:
+        console.print(
+            Panel(
+                f"[yellow]{_escape(str(exc))}[/]",
+                title="Live magpie generator deferred",
+            )
+        )
+        raise typer.Exit(3) from exc
+
+
+# v0.69.0 Part D — Persona-Hub diversity sampler.
+@app.command(name="persona-mix")
+def persona_mix(
+    prompts: str = typer.Option(..., "--prompts", help="JSONL file with one prompt per row"),
+    n: int = typer.Option(..., "--n", help="Number of rows to emit [1, 1_000_000]"),
+    output: str = typer.Option(..., "--output", help="Output JSONL path"),
+    personas: str = typer.Option(
+        "", "--personas", help="Optional JSONL of personas (defaults to bundled set)"
+    ),
+    styles: str = typer.Option(
+        "", "--styles", help="Optional JSONL of styles (defaults to bundled set)"
+    ),
+    seed: int = typer.Option(0, "--seed", help="Deterministic seed"),
+) -> None:
+    """Sample a prompt × persona × style matrix (v0.69.0 Part D).
+
+    Reads ``--prompts`` (JSONL with ``prompt`` field per row); writes
+    ``--output`` JSONL with ``{prompt, persona, style}`` rows. When
+    ``--personas`` / ``--styles`` are omitted the bundled diversity set is used.
+    """
+    import os
+    import tempfile
+
+    from rich.markup import escape as _escape
+    from rich.panel import Panel
+
+    from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
+    from soup_cli.utils.persona_hub import (
+        list_bundled_personas,
+        list_bundled_styles,
+        sample_persona_matrix,
+    )
+
+    max_jsonl_bytes = 100 * 1024 * 1024  # 100 MiB cap on field inputs
+    max_values = 100_000  # cap matches persona_hub._MAX_LIST_LEN
+
+    def _load_jsonl_field(path: str, field: str) -> list:
+        # Delegate to centralised TOCTOU helper (v0.59.0).
+        enforce_under_cwd_and_no_symlink(path, f"--{field}s path")
+        if not os.path.lexists(path):
+            raise FileNotFoundError(path)
+        real = os.path.realpath(path)
+        if not os.path.isfile(real):
+            raise FileNotFoundError(real)
+        if os.path.getsize(real) > max_jsonl_bytes:
+            raise ValueError(
+                f"--{field}s file exceeds {max_jsonl_bytes} bytes"
+            )
+        values: list = []
+        with open(real, "r", encoding="utf-8") as handle:
+            for raw_line in handle:
+                stripped = raw_line.strip()
+                if not stripped:
+                    continue
+                if len(values) >= max_values:
+                    raise ValueError(
+                        f"--{field}s file exceeds {max_values} entries"
+                    )
+                try:
+                    row = json.loads(stripped)
+                except json.JSONDecodeError:
+                    continue
+                val = row.get(field) if isinstance(row, dict) else None
+                if isinstance(val, str) and val:
+                    values.append(val)
+        return values
+
+    try:
+        prompt_list = _load_jsonl_field(prompts, "prompt")
+        if not prompt_list:
+            raise ValueError("prompts file produced no rows with a 'prompt' field")
+        persona_list = (
+            _load_jsonl_field(personas, "persona")
+            if personas
+            else list(list_bundled_personas())
+        )
+        if not persona_list:
+            raise ValueError("personas file produced no rows with a 'persona' field")
+        style_list = (
+            _load_jsonl_field(styles, "style")
+            if styles
+            else list(list_bundled_styles())
+        )
+        if not style_list:
+            raise ValueError("styles file produced no rows with a 'style' field")
+
+        # Output containment + TOCTOU symlink rejection at the write target.
+        enforce_under_cwd_and_no_symlink(output, "--output")
+        rows = sample_persona_matrix(
+            prompts=prompt_list,
+            personas=persona_list,
+            styles=style_list,
+            n=n,
+            seed=seed,
+        )
+    except (FileNotFoundError, TypeError, ValueError) as exc:
+        console.print(f"[red]{_escape(str(exc))}[/]")
+        raise typer.Exit(2) from exc
+
+    # Atomic write via tempfile + os.replace.
+    parent = os.path.dirname(os.path.realpath(output)) or "."
+    fd, tmp_path = tempfile.mkstemp(prefix=".soup.", suffix=".tmp", dir=parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            for row in rows:
+                handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+        os.replace(tmp_path, output)
+    except OSError:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+    console.print(
+        Panel(
+            f"Rows written: [bold]{len(rows)}[/]\n"
+            f"Output:       [bold]{_escape(output)}[/]",
+            title="soup data persona-mix",
+        )
+    )
+
+
+# v0.69.0 Part E — Brain-rot detector.
+@app.command(name="brain-rot")
+def brain_rot_cmd(
+    data: str = typer.Argument(..., help="Path to JSONL dataset"),
+    strict: bool = typer.Option(
+        False, "--strict", help="Exit 3 on MAJOR verdict (CI gate mode)"
+    ),
+    max_major_fraction: float = typer.Option(
+        0.25, "--max-major-fraction", help="Strict-mode MAJOR-row fraction cap [0, 1]"
+    ),
+) -> None:
+    """Score a dataset for brain-rot per arXiv 2510.13928 (v0.69.0 Part E).
+
+    Reports a per-row OK/MINOR/MAJOR verdict + an aggregate verdict. With
+    ``--strict`` the command exits 3 when the MAJOR fraction exceeds
+    ``--max-major-fraction`` (default 25%), so CI pipelines can refuse
+    training on excessive slop.
+    """
+    import math as _math
+    import os
+
+    from rich.markup import escape as _escape
+    from rich.table import Table
+
+    from soup_cli.utils.brain_rot import (
+        refuse_if_rotten,
+        score_dataset_brain_rot,
+    )
+    from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
+
+    max_brain_rot_bytes = 1_073_741_824  # 1 GiB
+    max_brain_rot_rows = 1_000_000
+
+    # Validate --max-major-fraction at the CLI boundary so a flag of NaN /
+    # inf / bool / out-of-range is rejected BEFORE the heavy scoring pass
+    # (security review M2).
+    if isinstance(max_major_fraction, bool):
+        console.print("[red]--max-major-fraction must be a number, not bool[/]")
+        raise typer.Exit(2)
+    if not isinstance(max_major_fraction, (int, float)):
+        console.print("[red]--max-major-fraction must be a number[/]")
+        raise typer.Exit(2)
+    if not _math.isfinite(float(max_major_fraction)):
+        console.print("[red]--max-major-fraction must be finite[/]")
+        raise typer.Exit(2)
+    if not (0.0 <= float(max_major_fraction) <= 1.0):
+        console.print("[red]--max-major-fraction must be in [0.0, 1.0][/]")
+        raise typer.Exit(2)
+
+    if not isinstance(data, str) or not data:
+        console.print("[red]data path must be a non-empty string[/]")
+        raise typer.Exit(2)
+    try:
+        enforce_under_cwd_and_no_symlink(data, "data path")
+    except (TypeError, ValueError) as exc:
+        console.print(f"[red]{_escape(str(exc))}[/]")
+        raise typer.Exit(2) from exc
+    if not os.path.lexists(data):
+        console.print(f"[red]data file not found: {_escape(data)}[/]")
+        raise typer.Exit(2)
+    real = os.path.realpath(data)
+    if not os.path.isfile(real):
+        console.print(f"[red]data file not found: {_escape(real)}[/]")
+        raise typer.Exit(2)
+    if os.path.getsize(real) > max_brain_rot_bytes:
+        console.print(
+            f"[red]data file exceeds {max_brain_rot_bytes} bytes[/]"
+        )
+        raise typer.Exit(2)
+
+    rows: list = []
+    with open(real, "r", encoding="utf-8") as handle:
+        for line_no, raw_line in enumerate(handle, start=1):
+            stripped = raw_line.strip()
+            if not stripped:
+                continue
+            if line_no > max_brain_rot_rows:
+                console.print(
+                    f"[red]data file exceeds {max_brain_rot_rows} rows[/]"
+                )
+                raise typer.Exit(2)
+            try:
+                row = json.loads(stripped)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(row, dict):
+                rows.append(row)
+
+    report = score_dataset_brain_rot(rows)
+
+    table = Table(title="Brain-rot report")
+    table.add_column("Metric")
+    table.add_column("Value")
+    table.add_row("Rows scored", str(report.num_rows))
+    table.add_row("Mean score", f"{report.mean_score:.3f}")
+    table.add_row("Verdict OK", str(report.num_ok))
+    table.add_row("Verdict MINOR", str(report.num_minor))
+    table.add_row("Verdict MAJOR", str(report.num_major))
+    table.add_row("Overall", report.overall_verdict)
+    console.print(table)
+
+    if strict:
+        try:
+            refuse_if_rotten(rows, max_major_fraction=max_major_fraction)
+        except (TypeError, ValueError) as exc:
+            console.print(f"[red]{_escape(str(exc))}[/]")
+            raise typer.Exit(3) from exc

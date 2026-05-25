@@ -451,6 +451,22 @@ app.add_typer(
     help="Personal-LLM flywheel daemon (init / status / record / harvest / train) (v0.68.0).",
 )
 
+# v0.69.0 Part A — `soup build` (dbt-for-SFT DAG).
+from soup_cli.commands import build as _build_cmd  # noqa: E402
+
+app.command(
+    name="build",
+    help="dbt-for-SFT DAG: validate + plan dataset transforms (v0.69.0 Part A).",
+)(_build_cmd.build_cmd)
+
+# v0.69.0 Part B — `soup expect` (expectations suite).
+from soup_cli.commands import expect as _expect_cmd  # noqa: E402
+
+app.command(
+    name="expect",
+    help="Run an expectations suite against a JSONL dataset (v0.69.0 Part B).",
+)(_expect_cmd.expect_cmd)
+
 
 def _rewrite_advise_argv(argv: list) -> list:
     """Inject `run` between `advise` and a non-subcommand first argument.

@@ -42,44 +42,51 @@ soup train
 
 Latest highlights only. Full history: [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 
-**v0.68.0 — Anti-trend Insurance: `soup compile` (DSPy/GEPA) + `soup distill-prompt` + `soup compile-tools` + `soup apple-adapter` + `soup local-rl` daemon.** Five bets that hedge Soup against paradigm shifts. If 1M-token contexts kill fine-tuning, `soup compile` (DSPy + GEPA prompt-program compilation) takes its place. If teams hit prompt-cost walls, `soup distill-prompt` bridges to small FT. If only Apple Foundation Models win on-device, `soup apple-adapter` ships the converter+signing surface. If personal-LLM flywheels become the shape, `soup local-rl` daemon captures thumbs into SQLite and emits DPO pairs nightly. None of these exist as CLI workflows in the OSS or hosted ecosystem — DSPy/GEPA are libraries, prompt distillation is unowned, Apple FoundationModels adapter format is undocumented territory, personal-LLM flywheels are research-stage. Schema-only release for Parts A/B/C/D — live wiring deferred to v0.68.1. Part E ships LIVE except the nightly train scheduler.
+**v0.69.0 — Data Engineering Pro: `soup build` (dbt-for-SFT) + `soup expect` + `soup data gen-magpie` + `soup data persona-mix` + `soup data brain-rot`.** Five surfaces that turn dataset preparation into a first-class engineering workflow. `soup build` is a dbt-style DAG of dataset transforms with `ref()`-connected models, `incremental` materialization, and content-hash-based row-diff so re-runs re-tokenize only changed rows. `soup expect` ships Great-Expectations for chat data — `expect_no_pii` / `expect_token_length_between` / `expect_no_refusal_pattern` / `expect_chosen_preferred_over_rejected_by_judge` — with exit code 3 on suite failure so CI pipelines can gate on dataset quality regressions. `soup data gen-magpie` plans the Magpie synthetic generator (chat-template-prefix harvest, reuses v0.20 providers). `soup data persona-mix` samples a prompt × persona × style matrix with a bundled 12-persona / 5-style diversity set + topic-entropy metric. `soup data brain-rot` implements the arXiv 2510.13928 detector with OK/MINOR/MAJOR verdicts that compose with v0.47 educational scorer; `--strict` mode exits 3 when too many rows score MAJOR.
 
-- **`soup compile <program.py> --eval <suite> [--optimizer mipro|gepa|textgrad|copro|bootstrap_fewshot] [--plan-only]`** — DSPy / GEPA prompt-program compiler. Closed allowlist over the canonical 5 optimisers. `CompilePlan` is frozen and re-validated on construction — direct-construction bugs that bypass `build_compile_plan` still produce loud failures. `CompileResult` rejects NaN / ±Inf scores via `math.isfinite`, bool-as-int, and negative iterations. Live orchestrator (DSPy / GEPA / TextGrad) deferred to v0.68.1; the CLI renders the validated plan today and exits 3 on the deferred path (mirrors v0.50.0 / v0.61.0 stub-then-live cadence).
-- **`soup distill-prompt --traces <jsonl> --teacher <m> --student <m> --strategy sft|preference|kl`** — Take prompt-heavy traces from GPT-5 / Claude calls and prepare a distillation dataset targeting a small student model. Bridge between prompt-engineering and FT worlds. Composes with v0.70 cross-tokenizer KD when that ships. Schema + path containment + symlink rejection ship now; the teacher/student tokeniser-bridge runner lands in v0.68.1.
-- **`soup compile-tools <spec.json|yaml> --eval <jsonl> [--optimizer textgrad|gepa]`** — TextGrad / GEPA tool-schema optimiser. Reads OpenAPI / MCP / GraphQL specs and prepares to optimise tool descriptions via textual gradients. Composes with v0.46 Agent Forge — Agent Forge parses the spec, `soup compile-tools` optimises the descriptions. `validate_spec_path` enforces JSON / YAML extension allowlist + cwd containment + symlink rejection.
-- **`soup apple-adapter <source-dir> --direction hf-to-mlx|mlx-to-hf|hf-to-apple|mlx-to-apple --output <dir> [--sign]`** — Adapter format conversion + optional v0.60 Merkle-root signing. Extends v0.25 MLX backend. `validate_source_adapter` enforces cwd containment + `stat.S_ISDIR` (must be a directory) + symlink rejection. The `--sign` flag flows the converted adapter through v0.60 signing for distribution / sigstore.
-- **`soup local-rl init / status / record / harvest / train`** — Personal-LLM flywheel daemon. Smaller-scope cousin of v0.58 `soup loop` — runs locally on a single workstation, trains your personal model from your own feedback. **LIVE today**: `init` creates the SQLite schema (`interactions` + `thumbs` with CHECK constraints + `0o600` perms on POSIX); `record` appends a thumbs-up/down row via parameterised query; `status` renders a Rich table of counters; `harvest` walks the thumbs table and emits `{prompt, chosen, rejected}` JSONL pairs (last-writes-win dedup so duplicate thumbs collapse to one pair per prompt). The `train` subcommand (Ollama / MLX × DPO/KTO/ORPO) is deferred to v0.68.1 — operators today can harvest into `dpo_pairs.jsonl` and feed it to existing `soup train --task dpo`.
-- **+204 new tests** (11021 → 11225) across 6 new test files (5 part files + 1 followups covering every TDD-review finding). Review-fix coverage: 0 CRITICAL + 4 HIGH (validate_student_id rejection-matrix parity / Part C CLI unknown-optimizer exit 2 / harvest_dpo_pairs edge cases / POSIX symlink skip predicate uses `sys.platform`) + 10 MEDIUM (CompileResult ±Inf rejection + bool-score / validate_eval_suite_path symlink test / Part C empty + oversize on tool-optimizer / Part C null-byte + symlink on spec_path / TestBuildToolCompilePlan factory / Part D non-string + oversize on direction / TestBuildAppleAdapterPlan factory / Part E backend + train_method full rejection matrix / record_thumb response null-byte + oversize + empty / SUPPORTED_LOCAL_RL_TRAIN_METHODS immutability) + 4 LOW (TestInitDb column-level schema via PRAGMA / Part D output_dir validation / validate_db_path public + in __all__ / DpoPair frozen). Manual CPU smokes (Step 6): every command's `--help` + happy-path `--plan-only` + deferred-live exit 3 + validation rejection exit 2; full `soup local-rl init → record up → record down → status → harvest` end-to-end producing valid DPO JSONL.
+- **`soup build <manifest.yaml> [--dry-run]`** — dbt-for-SFT DAG parser + topological sort + plan rendering. Each model declares `kind: incremental|table|view`, a `transform`, and either a `source:` (seed) or `refs: [...]` (derived). Cross-validators reject ambiguous shapes (no-refs + no-source = degenerate; refs + source = mutually exclusive). `compute_row_hash` + `incremental_diff(prev, new) -> IncrementalDiffReport(added, changed, removed, unchanged)` are the kernel that lets the live runner (v0.69.1) re-tokenize only changed rows. `BuildModel` and `BuildPlan` are frozen dataclasses; `load_build_yaml` delegates to `paths.enforce_under_cwd_and_no_symlink` (TOCTOU defence). Live runner deferred to v0.69.1; today `--dry-run` renders the plan + exits 0, no flag exits 3 with the deferred-live marker.
+- **`soup expect <data.jsonl> <suite.yaml>`** — Great Expectations for chat data. Four built-in expectation functions, each a pure function returning a frozen `ExpectationResult`. Composes with v0.47.0 `data_score.detect_pii` (Presidio backend when `[data-pro]` installed), v0.56.0 `diagnose.refusal.looks_like_refusal`, and v0.19.0 judge backends (operator-injected callable for the chosen-vs-rejected judge). `_dispatch_expectation` passes args through raw so per-expectation validators (bool-rejection, NaN-rejection, range checks) fire authentically — no silent int/float coercion bypasses the validator. Exit 0 = pass, 2 = validation rejection, 3 = suite failure.
+- **`soup data gen-magpie --base <m> --provider ollama|anthropic|vllm --target N [--plan-only]`** — Magpie technique (Xu et al. 2024) schema + plan. Feeds the chat-template prefix only to an aligned base model and harvests user-side turns via v0.20 providers. `MagpieConfig` frozen, `validate_magpie_provider` closed allowlist, `validate_target_rows` ∈ [1, 1_000_000] bool-rejected. Live generation loop (provider calls + v0.47 quality filter) deferred to v0.69.1.
+- **`soup data persona-mix --prompts <jsonl> --n N --output <jsonl>`** — Persona-Hub-style diversity sampler. Reads `--prompts` JSONL, multiplies through bundled 12-persona × 5-style matrix (or operator-supplied `--personas` / `--styles` JSONL), writes `{prompt, persona, style}` per row via atomic `tempfile.mkstemp + os.replace`. Deterministic by `--seed`. New `compute_topic_diversity` Shannon-entropy kernel for downstream gating. Centralised TOCTOU policy via `enforce_under_cwd_and_no_symlink` on every read AND write path.
+- **`soup data brain-rot <data.jsonl> [--strict] [--max-major-fraction 0.25]`** — arXiv 2510.13928 brain-rot detector. Two orthogonal slop scorers: `score_triviality` (low diversity / excessive `!!`/`??` punctuation / `lol/omg/lmao` density / length penalty) and `score_popularity_signal` (clickbait phrase substrings + emoji density). Per-row composite = `1.0 - max(triviality, popularity)`. Same OK/MINOR/MAJOR taxonomy as v0.26 / v0.56 / v0.65 (≥0.85 OK, ≥0.60 MINOR, else MAJOR). `--strict` exits 3 when MAJOR-row fraction exceeds the threshold so training pipelines can refuse to materialise slop datasets. `--max-major-fraction` validated at the CLI boundary (NaN / Inf / out-of-range / bool rejected) before any scoring.
+- **+264 new tests** (11225 → 11487) across 5 part files. Review-fix coverage: 1 CRITICAL (centralised duplicate cwd+symlink blocks behind `paths.enforce_under_cwd_and_no_symlink` in build_dag / expectations / expect.py — code-review HIGH) + 4 HIGH (brain-rot loader DoS caps; persona-mix `--output` symlink TOCTOU rejection; persona-mix `_load_jsonl_field` DoS caps; magpie `quality_filter` validator + `_dispatch_expectation` int/float-coercion bypass) + 5 MEDIUM (BuildModel seed/derived cross-validator + docs; `--max-major-fraction` CLI-boundary validation; `expect` skipped-line WARNING) + 4 LOW (boundary tests at exact threshold ± ε on classify_brain_rot; BuildPlan FrozenInstanceError; version_bumped checks in B/C/D/E; lazy-yaml import source-grep). Manual CPU smokes (Step 6): every CLI happy + failure path exercised, including 3-stage build DAG dry-run, PII suite exit 3, magpie plan-only, persona-mix atomic write to JSONL, brain-rot MAJOR-on-slop exit 3.
 
-## Anti-trend Insurance
+## Data Engineering Pro
 
-The v0.68.0 release ships 5 commands that hedge Soup against paradigm shifts. Each is one of the 5 "if X kills FT, Soup still survives" bets.
+The v0.69.0 release ships 5 surfaces that turn dataset prep from "throw a JSONL at the trainer" into a first-class engineering workflow.
 
 ```bash
-# DSPy / GEPA prompt-program compilation — replaces FT if 1M-context wins
-soup compile my_program.py --eval evals.json --optimizer mipro --max-iters 10
+# dbt-for-SFT — DAG of dataset transforms with incremental materialization
+cat > build.yaml << 'EOF'
+models:
+  - {name: raw, kind: incremental, source: data/raw.jsonl, transform: identity}
+  - {name: filtered, kind: incremental, refs: [raw], transform: filter_low_quality}
+  - {name: tokenized, kind: incremental, refs: [filtered], transform: tokenize}
+EOF
+soup build build.yaml --dry-run   # validate topology + plan
+# soup build build.yaml           # live materialise (v0.69.1)
 
-# Distill prompt-heavy traces into small FT — bridges prompt-eng to FT worlds
-soup distill-prompt --traces traces.jsonl --teacher anthropic/claude-3-5-sonnet \
-    --student meta-llama/Llama-3.2-1B --strategy sft
+# Expectations suite — Great Expectations for chat data
+cat > suite.yaml << 'EOF'
+expectations:
+  - {name: expect_no_pii}
+  - {name: expect_token_length_between, args: {min_tokens: 16, max_tokens: 4096}}
+  - {name: expect_no_refusal_pattern}
+EOF
+soup expect data.jsonl suite.yaml   # exit 3 on suite failure
 
-# Tool-schema textual-gradient optimization — composes with `soup agent` (v0.46)
-soup compile-tools api_spec.yaml --eval tool_eval.jsonl --optimizer textgrad
+# Magpie synthetic data — chat-template-prefix harvest (plan, runner v0.69.1)
+soup data gen-magpie --base meta-llama/Llama-3.1-8B-Instruct \
+    --provider ollama --target 1000 --plan-only
 
-# HF / MLX / Apple FoundationModels adapter conversion + optional signing
-soup apple-adapter ./my_adapter --direction hf-to-mlx --output ./mlx_adapter
-soup apple-adapter ./my_adapter --direction hf-to-apple --output ./apple_adapter --sign
+# Persona-Hub diversity — prompt × persona × style matrix sampling
+soup data persona-mix --prompts prompts.jsonl --n 500 --output mixed.jsonl
 
-# Personal-LLM flywheel — capture thumbs into SQLite, harvest DPO pairs nightly
-soup local-rl init --db local_rl.db
-soup local-rl record --db local_rl.db --prompt "What is X?" --response "..." --thumb up
-soup local-rl record --db local_rl.db --prompt "What is X?" --response "wrong" --thumb down
-soup local-rl status --db local_rl.db
-soup local-rl harvest --db local_rl.db -o dpo_pairs.jsonl
-# soup local-rl train (nightly DPO/KTO/ORPO) — v0.68.1
+# Brain-rot detector (arXiv 2510.13928) — refuses to train on excessive slop
+soup data brain-rot data.jsonl --strict --max-major-fraction 0.10
 ```
 
-Live runners for Parts A/B/C/D + the local-rl nightly scheduler land in v0.68.1. All schema + validation + path containment + symlink-rejection + atomic-write surfaces ship today, so misconfigured commands fail loudly at config load.
+Every command applies the project-wide TOCTOU policy (`os.lstat + S_ISLNK` symlink rejection before any open) and cwd containment via the shared `paths.enforce_under_cwd_and_no_symlink` helper. Live runners for `soup build` and `soup data gen-magpie` land in v0.69.1; the other three are LIVE today.
 
 ## Why Soup?
 
@@ -3768,6 +3775,11 @@ soup local-rl status --db <path>              Print interactions / thumbs-up / t
 soup local-rl record --db <path> --prompt <q> --response <r> --thumb up|down  Append thumbs record
 soup local-rl harvest --db <path> -o <pairs.jsonl>  Harvest DPO pairs from thumbs into JSONL
 soup local-rl train --db <path> --backend ollama|mlx --model <id>  Nightly DPO/KTO/ORPO train (v0.68.1)
+soup build <manifest.yaml> [--dry-run]        dbt-for-SFT DAG: validate + plan dataset transforms (v0.69.0)
+soup expect <data.jsonl> <suite.yaml>         Expectations suite: PII / token-length / refusal / judge (v0.69.0)
+soup data gen-magpie --base <m> --provider ollama|anthropic|vllm --target N [--plan-only]  Magpie synthetic generator (v0.69.0)
+soup data persona-mix --prompts <jsonl> --n N --output <jsonl>  Persona-Hub diversity sampler (v0.69.0)
+soup data brain-rot <data.jsonl> [--strict]   Brain-rot detector — arXiv 2510.13928 (v0.69.0)
 soup version [--full] [--json]                Show version (--full: system info, --json: JSON output)
 soup --verbose <command>                      Full traceback on errors
 ```
