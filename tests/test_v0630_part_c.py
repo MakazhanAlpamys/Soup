@@ -104,12 +104,13 @@ def test_score_uncertainty_rejects_out_of_range():
         score_uncertainty(scores=[-0.1])
 
 
-def test_score_uncertainty_rejects_too_many_rms():
+def test_score_uncertainty_rejects_above_cap():
     from soup_cli.utils.active_sampler import score_uncertainty
 
-    # >2 RMs not yet supported (avg pairwise std would be the v0.63.1+ shape)
+    # K=3..32 is the variance path (see #206 / test_v0631_206.py).
+    # K>32 is the DoS cap.
     with pytest.raises(ValueError):
-        score_uncertainty(scores=[0.5, 0.6, 0.7])
+        score_uncertainty(scores=[0.5] * 33)
 
 
 # ---------------------------------------------------------------------------

@@ -4,15 +4,24 @@ v0.63.0 Part C — picks the rows the model is *least confident* about so
 humans only review what the policy itself thinks is borderline. Reduces
 human-eval cost by 5-10x in practice.
 
-Two modes via the input data shape:
-1. Single reward-model score (`rm_score`) — uncertainty via max-entropy:
+Three modes via the input data shape:
+
+1. Single reward-model score (``rm_score``) — uncertainty via max-entropy:
    ``1 - |2 * score - 1|``. Score 0.5 -> uncertainty 1.0 (peak),
    scores 0.0 or 1.0 -> uncertainty 0.0.
-2. Two reward-model scores (`rm_scores: [s1, s2]`) — disagreement via
+2. Two reward-model scores (``rm_scores: [s1, s2]``) — disagreement via
    ``|s1 - s2|``. Bigger gap -> higher uncertainty.
+3. K reward-model scores (``rm_scores: [s1, ..., sK]``) for ``3 <= K <= 32``
+   — population variance scaled by 4 (max disagreement = 1.0 when half the
+   RMs score 0 and half score 1). Monotone-correct: adding a fresh RM score
+   equal to the running mean *decreases* the score (the new contribution to
+   sum-of-squares is zero while the denominator grows), so consensus on
+   redundant evidence can never spike uncertainty. Replaces the v0.63.0
+   ``max(scores) - min(scores)`` fallback which was monotone-broken — closes
+   #206.
 
 Composes with v0.19 human eval (the output JSONL is a drop-in human-eval
-prompt set) and v0.58 `soup loop watch` (which can run this nightly).
+prompt set) and v0.58 ``soup loop watch`` (which can run this nightly).
 """
 
 from __future__ import annotations
@@ -20,13 +29,19 @@ from __future__ import annotations
 import json
 import math
 import os
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Iterable, List, Mapping, Sequence
+from typing import Final
 
 from soup_cli.utils.paths import is_under_cwd
 
-_MAX_BUDGET = 100_000
-_MAX_INPUT_ROWS = 10_000_000  # 10M — production-scale day of traces
+_MAX_BUDGET: Final[int] = 100_000
+_MAX_INPUT_ROWS: Final[int] = 10_000_000  # 10M — production-scale day of traces
+# Cap on K reward-model scores per row. 32 is generous (most ensembles use
+# 3-8 RMs) and bounds the inner O(K) variance loop at well under a
+# microsecond per row. K>32 raises ValueError (DoS defence) — closes #206.
+# Final[int] so a caller cannot silently disable the cap by rebinding it.
+_MAX_RM_SCORES: Final[int] = 32
 
 
 @dataclass(frozen=True)
@@ -94,11 +109,20 @@ def _validate_score(score: object, *, idx: int) -> float:
     return f_score
 
 
-def score_uncertainty(*, scores: Sequence[float]) -> float:
-    """Compute uncertainty from one or two reward-model scores.
+def score_uncertainty(*, scores: Sequence[float | int]) -> float:
+    """Compute uncertainty from K reward-model scores (``1 <= K <= 32``).
 
-    1 score: max-entropy distance from 0.5 (peak at 0.5 -> uncertainty 1.0)
-    2 scores: pairwise disagreement (|s1 - s2|)
+    - K=1: max-entropy distance from 0.5 (peak at 0.5 -> uncertainty 1.0)
+    - K=2: pairwise disagreement (``|s1 - s2|``)
+    - K>=3: population variance scaled by 4, clamped to ``[0, 1]``
+
+    For scores in ``[0, 1]`` the population variance is bounded by 0.25
+    (achieved when half the RMs score 0 and half score 1), so the 4x scale
+    keeps the K>=3 path inside the unit interval and consistent with the
+    K<=2 forms.
+
+    Validation rejects bool-as-int, non-finite values (NaN / +/-Inf), and
+    out-of-range scores at every K — see ``_validate_score``.
     """
     if not isinstance(scores, Sequence) or isinstance(scores, str):
         raise TypeError(
@@ -106,17 +130,32 @@ def score_uncertainty(*, scores: Sequence[float]) -> float:
         )
     if len(scores) == 0:
         return 0.0
-    if len(scores) > 2:
+    if len(scores) > _MAX_RM_SCORES:
         raise ValueError(
-            "score_uncertainty supports 1 or 2 RM scores (v0.63.0). "
-            "K>2 RMs deferred to a future release."
+            f"score_uncertainty supports at most {_MAX_RM_SCORES} RM scores, "
+            f"got {len(scores)} (DoS cap)"
         )
     validated = [_validate_score(s, idx=i) for i, s in enumerate(scores)]
-    if len(validated) == 1:
+    k = len(validated)
+    if k == 1:
         # 1 - |2*s - 1|  -> peak at s=0.5
         return 1.0 - abs(2.0 * validated[0] - 1.0)
-    # len == 2 -> pairwise disagreement
-    return abs(validated[0] - validated[1])
+    if k == 2:
+        # Disagreement closed-form. Preserved verbatim for K=2 even though
+        # variance gives the same answer up to scaling — existing operator
+        # dashboards / thresholds depend on the |s1 - s2| value.
+        return abs(validated[0] - validated[1])
+    # K>=3: 4 * population variance, clamped into the unit interval.
+    # Population variance (divide by N, not N-1) keeps the bound tight at
+    # 0.25 for scores in [0, 1] and gives the monotonicity invariant
+    # described in the module docstring. ``math.fsum`` uses compensated
+    # summation to keep accumulated rounding error sub-ULP even at K=32 —
+    # the variance formula is sensitive to it because we square the deltas.
+    mean = math.fsum(validated) / k
+    var = math.fsum((s - mean) ** 2 for s in validated) / k
+    # max(0.0, ...) is defensive: floating-point subtraction can yield -epsilon
+    # even though population variance is mathematically non-negative.
+    return max(0.0, min(1.0, 4.0 * var))
 
 
 def _row_uncertainty(row: Mapping[str, object]) -> float:
@@ -137,16 +176,21 @@ def _row_uncertainty(row: Mapping[str, object]) -> float:
         return max(0.0, min(1.0, f_val))
     scores_field = row.get("rm_scores")
     if isinstance(scores_field, Sequence) and not isinstance(scores_field, str):
-        scores_list: List[float] = []
+        scores_list: list[float] = []
         try:
             for i, s in enumerate(scores_field):
                 scores_list.append(_validate_score(s, idx=i))
         except (TypeError, ValueError):
             return 0.0
-        if len(scores_list) <= 2:
+        # Route every K through ``score_uncertainty`` so the variance path
+        # (K>=3) and the closed forms (K=1, K=2) share a single source of
+        # truth. K>32 raises ValueError on the cap — isolate the row by
+        # returning 0.0 instead of breaking the whole batch (matches the
+        # existing _validate_score isolation policy two lines above).
+        try:
             return score_uncertainty(scores=scores_list)
-        # >2 scores: silently fall back to disagreement = max - min
-        return max(scores_list) - min(scores_list)
+        except (TypeError, ValueError):
+            return 0.0
     scalar = row.get("rm_score")
     if isinstance(scalar, (int, float)) and not isinstance(scalar, bool):
         try:
@@ -161,13 +205,13 @@ def pick_top_uncertain(
     rows: Iterable[Mapping[str, object]],
     *,
     budget: int,
-) -> List[Mapping[str, object]]:
+) -> list[Mapping[str, object]]:
     """Pick the top-N rows by uncertainty.
 
     Stable on ties — earlier rows win to make the output deterministic.
     """
     n_budget = validate_budget(budget)
-    materialised: List[Mapping[str, object]] = []
+    materialised: list[Mapping[str, object]] = []
     for row in rows:
         if not isinstance(row, Mapping):
             raise TypeError(
@@ -213,7 +257,7 @@ def sample_uncertain_rows(
     if not os.path.isfile(input_path):
         raise FileNotFoundError(input_path)
 
-    rows: List[Mapping[str, object]] = []
+    rows: list[Mapping[str, object]] = []
     with open(input_path, encoding="utf-8") as fh:
         for line in fh:
             stripped = line.strip()
