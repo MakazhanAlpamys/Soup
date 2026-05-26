@@ -2659,13 +2659,24 @@ def brain_rot_cmd(
     max_major_fraction: float = typer.Option(
         0.25, "--max-major-fraction", help="Strict-mode MAJOR-row fraction cap [0, 1]"
     ),
+    lang: str = typer.Option(
+        "en",
+        "--lang",
+        help=(
+            "Per-language heuristic bundle: "
+            "en | es | fr | de | ru | auto. Closes issue #234."
+        ),
+    ),
 ) -> None:
     """Score a dataset for brain-rot per arXiv 2510.13928 (v0.69.0 Part E).
 
     Reports a per-row OK/MINOR/MAJOR verdict + an aggregate verdict. With
     ``--strict`` the command exits 3 when the MAJOR fraction exceeds
     ``--max-major-fraction`` (default 25%), so CI pipelines can refuse
-    training on excessive slop.
+    training on excessive slop. ``--lang`` selects a per-language
+    low-effort-token + clickbait-phrase bundle (closes #234); ``--lang auto``
+    routes through the optional ``langdetect`` package (``[data-pro]`` extras)
+    and falls back silently to English when detection is unavailable.
     """
     import math as _math
     import os
@@ -2677,6 +2688,7 @@ def brain_rot_cmd(
         refuse_if_rotten,
         score_dataset_brain_rot,
     )
+    from soup_cli.utils.brain_rot_lang import validate_lang_code
     from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
 
     max_brain_rot_bytes = 1_073_741_824  # 1 GiB
@@ -2697,6 +2709,15 @@ def brain_rot_cmd(
     if not (0.0 <= float(max_major_fraction) <= 1.0):
         console.print("[red]--max-major-fraction must be in [0.0, 1.0][/]")
         raise typer.Exit(2)
+
+    # Validate --lang at the CLI boundary so unknown ISO codes / typos
+    # fail fast with exit 2 (matches v0.41.0 / v0.51.0 / v0.65.0 strict
+    # CLI-boundary policy; closes #234).
+    try:
+        lang_canonical = validate_lang_code(lang)
+    except (TypeError, ValueError) as exc:
+        console.print(f"[red]{_escape(str(exc))}[/]")
+        raise typer.Exit(2) from exc
 
     if not isinstance(data, str) or not data:
         console.print("[red]data path must be a non-empty string[/]")
@@ -2737,7 +2758,7 @@ def brain_rot_cmd(
             if isinstance(row, dict):
                 rows.append(row)
 
-    report = score_dataset_brain_rot(rows)
+    report = score_dataset_brain_rot(rows, lang=lang_canonical)
 
     table = Table(title="Brain-rot report")
     table.add_column("Metric")
@@ -2748,11 +2769,16 @@ def brain_rot_cmd(
     table.add_row("Verdict MINOR", str(report.num_minor))
     table.add_row("Verdict MAJOR", str(report.num_major))
     table.add_row("Overall", report.overall_verdict)
+    table.add_row("Lang", _escape(lang_canonical))
     console.print(table)
 
     if strict:
         try:
-            refuse_if_rotten(rows, max_major_fraction=max_major_fraction)
+            refuse_if_rotten(
+                rows,
+                max_major_fraction=max_major_fraction,
+                lang=lang_canonical,
+            )
         except (TypeError, ValueError) as exc:
             console.print(f"[red]{_escape(str(exc))}[/]")
             raise typer.Exit(3) from exc

@@ -21,7 +21,13 @@ import math
 import re
 from collections import Counter
 from dataclasses import dataclass
-from typing import Any, Iterable, List, Mapping
+from typing import Any, Iterable, List, Mapping, Optional
+
+from soup_cli.utils.brain_rot_lang import (
+    SUPPORTED_LANGS,
+    BrainRotLangBundle,
+    get_lang_bundle,
+)
 
 BRAIN_ROT_VERDICTS = ("OK", "MINOR", "MAJOR")
 
@@ -29,22 +35,6 @@ _OK_THRESHOLD = 0.85
 _MINOR_THRESHOLD = 0.60
 
 _MAX_TEXT_LEN = 65_536
-_CLICKBAIT_PHRASES = (
-    "you won't believe",
-    "you wont believe",
-    "won't believe what happened",
-    "top 10",
-    "top ten",
-    "click here",
-    "this one weird trick",
-    "what happened next",
-    "the rest is history",
-    "shocked the world",
-    "doctors hate",
-    "gone wrong",
-    "gone viral",
-)
-_LOW_EFFORT_TOKENS = ("lol", "omg", "lmao", "rofl", "smh", "tbh", "idk")
 _PUNCT_PATTERN = re.compile(r"[!]{2,}|[?]{2,}")
 _TEXT_FIELDS = ("text", "content", "output", "prompt", "instruction", "response")
 
@@ -133,15 +123,78 @@ def _require_str(text: object, *, field: str = "text") -> str:
     return text
 
 
-def score_triviality(text: object) -> float:
+def _validate_lang_arg(lang: object) -> None:
+    """Eager boundary check for ``lang`` kwarg on dataset-level scorers.
+
+    Closes a gap surfaced in python-review: per-row resolution rejects a
+    bool / null-byte / oversize lang, but only on the first iteration —
+    an empty ``rows`` list would silently fall through. Validating upfront
+    also catches operator typos before any scoring work happens.
+    """
+    if lang is None:
+        return
+    if isinstance(lang, bool):
+        raise TypeError("lang must be str, not bool")
+    if not isinstance(lang, str):
+        raise TypeError(f"lang must be str, got {type(lang).__name__}")
+    if "\x00" in lang:
+        raise ValueError("lang must not contain null bytes")
+    if len(lang) > 64:
+        raise ValueError("lang must be <= 64 chars")
+
+
+def _resolve_bundle(lang: Optional[str], *, text: str = "") -> BrainRotLangBundle:
+    """Resolve a ``lang`` kwarg (incl. the ``"auto"`` sentinel) to a bundle.
+
+    - ``None`` -> English bundle (backward-compat with the v0.69.0 surface).
+    - ``"auto"`` -> probabilistic detection via :func:`data_score._langdetect_fast`;
+      silent fallback to English when the optional ``[data-pro]`` ``langdetect``
+      package is missing OR the detector returns ``unknown`` / a code not in
+      :data:`SUPPORTED_LANGS`. This matches the issue acceptance criterion
+      "``--lang auto`` falls back to English when language detection returns
+      ``unknown`` or ``[data-pro]`` not installed".
+    - Any other string -> :func:`get_lang_bundle` lookup (silent fallback to
+      English on unknown codes; keeps the detector working on under-resourced
+      corpora rather than crashing).
+    """
+    if lang is None:
+        return get_lang_bundle(None)
+    # Shape-check via get_lang_bundle's _check_lang_arg_shape for the
+    # non-"auto" path; for "auto" we just inspect the canonical form.
+    if not isinstance(lang, str) or isinstance(lang, bool):
+        # get_lang_bundle would raise TypeError — preserve that.
+        return get_lang_bundle(lang)  # raises TypeError
+    canonical = lang.lower()
+    if canonical != "auto":
+        return get_lang_bundle(lang)
+    # auto: probe via langdetect; lazy-import so a bare install still works.
+    detected: Optional[str] = None
+    if text:
+        try:
+            from soup_cli.utils.data_score import _langdetect_fast  # noqa: PLC0415
+
+            detected = _langdetect_fast(text)
+        except Exception:  # noqa: BLE001 — silent fallback per issue spec
+            detected = None
+    if detected and detected in SUPPORTED_LANGS:
+        return get_lang_bundle(detected)
+    return get_lang_bundle("en")
+
+
+def score_triviality(text: object, *, lang: Optional[str] = None) -> float:
     """Higher = more trivial / repetitive / exclamation-heavy.
 
     Heuristic: punctuation-runs density + short-text penalty + token diversity
     inversion. Returns 1.0 for empty/unparseable input (worst case).
+
+    ``lang`` selects a per-language token bundle (en / es / fr / de / ru) or
+    ``"auto"`` for langdetect-driven detection. Default (``None``) preserves
+    v0.69.0 English behaviour for backward-compat.
     """
     s = _require_str(text)
     if not s.strip():
         return 1.0
+    bundle = _resolve_bundle(lang, text=s)
     tokens = s.lower().split()
     n = len(tokens)
     if n == 0:
@@ -153,8 +206,11 @@ def score_triviality(text: object) -> float:
     # Punctuation: long !!!! / ???? runs are slop markers.
     punct_hits = len(_PUNCT_PATTERN.findall(s))
     punct_density = min(1.0, punct_hits / max(1, n / 10))
-    # Low-effort token density.
-    low_effort = sum(1 for tok in tokens if tok.strip("!?.,") in _LOW_EFFORT_TOKENS)
+    # Low-effort token density (per-language bundle).
+    low_effort_set = set(bundle.low_effort_tokens)
+    low_effort = sum(
+        1 for tok in tokens if tok.strip("!?.,") in low_effort_set
+    )
     low_effort_density = min(1.0, low_effort / max(1, n / 5))
     triviality = (
         0.2 * (1.0 - diversity)
@@ -165,17 +221,24 @@ def score_triviality(text: object) -> float:
     return max(0.0, min(1.0, triviality))
 
 
-def score_popularity_signal(text: object) -> float:
+def score_popularity_signal(
+    text: object, *, lang: Optional[str] = None
+) -> float:
     """Higher = clickbait / engagement-bait / popularity-optimised slop.
 
-    Heuristic: substring scan against ``_CLICKBAIT_PHRASES`` + emoji density.
-    Returns 0.0 for empty input.
+    Heuristic: substring scan against the per-language clickbait phrase
+    bundle + emoji density. Returns 0.0 for empty input.
+
+    ``lang`` selects a per-language phrase bundle (en / es / fr / de / ru)
+    or ``"auto"`` for langdetect-driven detection. Default (``None``)
+    preserves v0.69.0 English behaviour for backward-compat.
     """
     s = _require_str(text)
     if not s.strip():
         return 0.0
+    bundle = _resolve_bundle(lang, text=s)
     lower = s.lower()
-    hits = sum(1 for phrase in _CLICKBAIT_PHRASES if phrase in lower)
+    hits = sum(1 for phrase in bundle.clickbait_phrases if phrase in lower)
     # Emoji density: count non-ASCII chars in [U+1F300, U+1FAFF] range
     # (covers most pictographs without importing emoji libs).
     emoji_hits = sum(1 for c in s if 0x1F300 <= ord(c) <= 0x1FAFF)
@@ -201,11 +264,15 @@ def _row_text(row: Mapping[str, Any]) -> str:
     return "\n".join(parts)
 
 
-def score_row_brain_rot(row: Any) -> float:
+def score_row_brain_rot(row: Any, *, lang: Optional[str] = None) -> float:
     """Return a per-row score in [0, 1]; 1.0 = healthy, 0.0 = pure slop.
 
-    Composite: ``1 - 0.5 * triviality - 0.5 * popularity_signal``. Rows with
-    no text fields return ``0.0`` (treat unjudgeable as worst-case).
+    Composite: ``1 - max(triviality, popularity_signal)`` (worst-signal
+    wins). Rows with no text fields return ``0.0`` (unjudgeable = worst).
+
+    ``lang`` selects a per-language token + phrase bundle (en / es / fr /
+    de / ru) or ``"auto"`` for langdetect-driven detection. Default
+    (``None``) preserves v0.69.0 English behaviour for backward-compat.
     """
     if not isinstance(row, Mapping):
         raise TypeError(
@@ -214,26 +281,31 @@ def score_row_brain_rot(row: Any) -> float:
     text = _row_text(row)
     if not text:
         return 0.0
-    triviality = score_triviality(text)
-    popularity = score_popularity_signal(text)
+    triviality = score_triviality(text, lang=lang)
+    popularity = score_popularity_signal(text, lang=lang)
     # Worst-signal composite: a single strong slop signal drives the score
     # down hard (mirrors v0.56.0 ``overall_verdict`` worst-case policy).
     score = 1.0 - max(triviality, popularity)
     return max(0.0, min(1.0, score))
 
 
-def score_dataset_brain_rot(rows: Any) -> BrainRotReport:
+def score_dataset_brain_rot(
+    rows: Any, *, lang: Optional[str] = None
+) -> BrainRotReport:
     """Score a dataset and return a frozen ``BrainRotReport``.
 
     Empty inputs return ``MAJOR`` (no signal = treat as broken).
+    ``lang`` is threaded through to :func:`score_row_brain_rot` so the
+    per-language token / phrase bundle is applied to every row.
     """
     if isinstance(rows, (str, bytes)) or not hasattr(rows, "__iter__"):
         raise TypeError("rows must be iterable")
+    _validate_lang_arg(lang)
     scores: List[float] = []
     for row in rows:
         if not isinstance(row, Mapping):
             continue
-        scores.append(score_row_brain_rot(row))
+        scores.append(score_row_brain_rot(row, lang=lang))
     if not scores:
         return BrainRotReport(
             num_rows=0,
@@ -260,11 +332,13 @@ def refuse_if_rotten(
     rows: Iterable[Mapping[str, Any]],
     *,
     max_major_fraction: float = 0.25,
+    lang: Optional[str] = None,
 ) -> None:
     """Raise ``ValueError`` when too many rows score MAJOR brain-rot.
 
     Composes with v0.69.0 Part A's build pipeline so a transform can refuse to
-    produce a tokenised dataset that's mostly slop.
+    produce a tokenised dataset that's mostly slop. ``lang`` is threaded
+    through to :func:`score_dataset_brain_rot` (per-language bundle picker).
     """
     if isinstance(max_major_fraction, bool):
         raise TypeError("max_major_fraction must be float, not bool")
@@ -274,7 +348,8 @@ def refuse_if_rotten(
         raise ValueError("max_major_fraction must be finite")
     if not (0.0 <= float(max_major_fraction) <= 1.0):
         raise ValueError("max_major_fraction must be in [0.0, 1.0]")
-    report = score_dataset_brain_rot(rows)
+    _validate_lang_arg(lang)
+    report = score_dataset_brain_rot(rows, lang=lang)
     if report.num_rows == 0:
         return  # no data → nothing to refuse
     fraction = report.num_major / report.num_rows
