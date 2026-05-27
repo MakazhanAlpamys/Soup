@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import re
 from pathlib import Path
 from types import MappingProxyType
 
@@ -19,6 +20,12 @@ from typer.testing import CliRunner
 
 from soup_cli.cli import app
 from soup_cli.utils import brain_rot, brain_rot_lang
+
+# Strip Rich's ANSI escape sequences before substring assertions — on narrow
+# Windows columns Rich can split a flag across colour-cycle escapes
+# (e.g. `\x1b[..m-\x1b[..m-lang`), so the literal `--lang` substring fails on
+# CI even though the rendered help looks correct. Mirrors tests/test_auto_tuning.py.
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 
 def _write(path: Path, text: str) -> Path:
@@ -451,7 +458,7 @@ class TestBrainRotCliLang:
         runner = CliRunner()
         result = runner.invoke(app, ["data", "brain-rot", "--help"])
         assert result.exit_code == 0, result.output
-        assert "--lang" in result.output
+        assert "--lang" in _ANSI_RE.sub("", result.output)
 
     def test_lang_en_default(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
