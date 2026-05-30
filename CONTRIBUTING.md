@@ -13,7 +13,7 @@ cd Soup
 
 ### 2. Set Up Development Environment
 
-**Requirements:** Python 3.9+
+**Requirements:** Python 3.10+
 
 Install the project in editable mode with dev dependencies:
 
@@ -415,7 +415,7 @@ Great areas for first contributions:
 
 GitHub Actions runs on every push and PR:
 - **ruff** linting on Python 3.11 (must pass)
-- **pytest** on Python 3.9, 3.11, 3.12 across Ubuntu, Windows, macOS (must pass)
+- **pytest** on Python 3.10, 3.11, 3.12 across Ubuntu, Windows, macOS (must pass)
 
 See `.github/workflows/ci.yml`.
 
