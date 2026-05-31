@@ -457,7 +457,7 @@ class TestSourceWiring:
         from pathlib import Path
 
         root = Path(__file__).resolve().parent.parent
-        src = (root / "soup_cli" / "utils" / "cmaes_merge.py").read_text(
+        src = (root / "src" / "soup_cli" / "utils" / "cmaes_merge.py").read_text(
             encoding="utf-8"
         )
         # Only first 30 non-comment lines (matches v0.66 review-grep policy)
@@ -474,7 +474,7 @@ class TestSourceWiring:
         from pathlib import Path
 
         root = Path(__file__).resolve().parent.parent
-        src = (root / "soup_cli" / "utils" / "adapter_merge.py").read_text(
+        src = (root / "src" / "soup_cli" / "utils" / "adapter_merge.py").read_text(
             encoding="utf-8"
         )
         assert "cmaes" in src

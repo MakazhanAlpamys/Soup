@@ -809,7 +809,7 @@ class TestCLI:
 
 class TestSourceWiring:
     def test_cli_registers_advise(self):
-        cli_path = Path(__file__).resolve().parent.parent / "soup_cli" / "cli.py"
+        cli_path = Path(__file__).resolve().parent.parent / "src" / "soup_cli" / "cli.py"
         text = cli_path.read_text(encoding="utf-8")
         assert "_advise_cmd" in text
         assert 'name="advise"' in text

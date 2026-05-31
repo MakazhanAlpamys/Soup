@@ -338,7 +338,7 @@ def test_merge_adapters_rejects_symlink_at_output_safetensors(tmp_path, monkeypa
 
 
 def test_no_top_level_torch_import_in_merge():
-    src = (Path(__file__).parent.parent / "soup_cli" / "utils" / "adapter_merge.py"
+    src = (Path(__file__).parent.parent / "src" / "soup_cli" / "utils" / "adapter_merge.py"
            ).read_text(encoding="utf-8")
     for line in src.splitlines():
         stripped = line.lstrip()

@@ -189,7 +189,7 @@ def _has_cuda() -> bool:
 
 class TestSftWiring:
     def test_sft_no_longer_passes_probe_fn_none_literal(self):
-        path = Path("soup_cli/trainer/sft.py")
+        path = Path("src/soup_cli/trainer/sft.py")
         text = path.read_text(encoding="utf-8")
         # The deferred-stub literal must be gone.
         assert "probe_fn=None,  # CUDA probe wired" not in text

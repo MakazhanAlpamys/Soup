@@ -313,7 +313,10 @@ def test_max_minus_min_fallback_removed():
     """
     from pathlib import Path
 
-    src = Path(__file__).resolve().parent.parent / "soup_cli" / "utils" / "active_sampler.py"
+    src = (
+        Path(__file__).resolve().parent.parent
+        / "src" / "soup_cli" / "utils" / "active_sampler.py"
+    )
     text = src.read_text(encoding="utf-8")
     # The exact broken line; if a comment mentions max/min that's fine.
     assert "return max(scores_list) - min(scores_list)" not in text
@@ -322,7 +325,10 @@ def test_max_minus_min_fallback_removed():
 def test_score_uncertainty_no_top_level_heavy_imports():
     from pathlib import Path
 
-    src = Path(__file__).resolve().parent.parent / "soup_cli" / "utils" / "active_sampler.py"
+    src = (
+        Path(__file__).resolve().parent.parent
+        / "src" / "soup_cli" / "utils" / "active_sampler.py"
+    )
     text = src.read_text(encoding="utf-8")
     for forbidden in ("import torch", "import numpy", "import statistics"):
         assert f"\n{forbidden}" not in text, (
@@ -373,7 +379,10 @@ def test_old_k2_deferred_error_message_removed():
     """
     from pathlib import Path
 
-    src = Path(__file__).resolve().parent.parent / "soup_cli" / "utils" / "active_sampler.py"
+    src = (
+        Path(__file__).resolve().parent.parent
+        / "src" / "soup_cli" / "utils" / "active_sampler.py"
+    )
     text = src.read_text(encoding="utf-8")
     assert "K>2 RMs deferred" not in text
     assert "deferred to a future release" not in text

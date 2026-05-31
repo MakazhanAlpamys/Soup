@@ -437,7 +437,7 @@ def test_drift_report_changed_fields_is_tuple():
 def test_cli_registers_plan_apply():
     from pathlib import Path
 
-    src = Path(__file__).resolve().parent.parent / "soup_cli" / "cli.py"
+    src = Path(__file__).resolve().parent.parent / "src" / "soup_cli" / "cli.py"
     text = src.read_text(encoding="utf-8")
     assert '"plan"' in text or "'plan'" in text or "name=\"plan\"" in text
 
@@ -445,7 +445,10 @@ def test_cli_registers_plan_apply():
 def test_no_heavy_top_level_imports():
     from pathlib import Path
 
-    src = Path(__file__).resolve().parent.parent / "soup_cli" / "utils" / "terraform_plan.py"
+    src = (
+        Path(__file__).resolve().parent.parent
+        / "src" / "soup_cli" / "utils" / "terraform_plan.py"
+    )
     text = src.read_text(encoding="utf-8")
     import re
     for bad in ["^import torch", "^from torch", "^import transformers", "^from transformers"]:

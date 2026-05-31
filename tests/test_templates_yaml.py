@@ -56,13 +56,13 @@ class TestTemplateRegistry:
 
     def test_yaml_files_exist_for_all_inline(self):
         from soup_cli.config.schema import TEMPLATES
-        templates_dir = Path(__file__).resolve().parent.parent / "soup_cli" / "templates"
+        templates_dir = Path(__file__).resolve().parent.parent / "src" / "soup_cli" / "templates"
         for name in TEMPLATES:
             yaml_path = templates_dir / f"{name}.yaml"
             assert yaml_path.is_file(), f"Missing YAML for inline template {name}"
 
     def test_manifest_well_formed(self):
-        templates_dir = Path(__file__).resolve().parent.parent / "soup_cli" / "templates"
+        templates_dir = Path(__file__).resolve().parent.parent / "src" / "soup_cli" / "templates"
         manifest_path = templates_dir / "manifest.json"
         assert manifest_path.is_file()
         with manifest_path.open() as f:

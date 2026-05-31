@@ -432,7 +432,7 @@ class TestSourceWiring:
         """cli.py must add `_edit_cmd.app` under name='edit'."""
         from pathlib import Path
 
-        cli_src = Path(__file__).resolve().parent.parent / "soup_cli" / "cli.py"
+        cli_src = Path(__file__).resolve().parent.parent / "src" / "soup_cli" / "cli.py"
         text = cli_src.read_text(encoding="utf-8")
         assert "_edit_cmd" in text
         assert 'name="edit"' in text
@@ -443,7 +443,7 @@ class TestSourceWiring:
 
         eval_src = (
             Path(__file__).resolve().parent.parent
-            / "soup_cli" / "commands" / "eval.py"
+            / "src" / "soup_cli" / "commands" / "eval.py"
         )
         text = eval_src.read_text(encoding="utf-8")
         assert "_register_v0610" in text

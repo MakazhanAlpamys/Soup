@@ -507,7 +507,7 @@ class TestSourceWiring:
         from pathlib import Path
 
         source = Path(
-            "soup_cli/utils/diagnose/refusal.py"
+            "src/soup_cli/utils/diagnose/refusal.py"
         ).read_text(encoding="utf-8")
         # Pure-python utility: no torch / transformers / peft at module
         # top so this stays GPU-free + CI-fast.

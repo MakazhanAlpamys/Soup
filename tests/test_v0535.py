@@ -354,7 +354,7 @@ def test_attach_curriculum_callback_returns_false_on_invalid_path(
 
 def test_trainer_source_grep_curriculum_wired_everywhere():
     """v0.53.5 #115 — every transformer-backend trainer wires the callback."""
-    root = Path(__file__).resolve().parent.parent / "soup_cli" / "trainer"
+    root = Path(__file__).resolve().parent.parent / "src" / "soup_cli" / "trainer"
     trainers = [
         "sft", "dpo", "grpo", "kto", "orpo", "simpo", "ipo", "bco",
         "embedding", "reward_model", "ppo", "pretrain", "distill",

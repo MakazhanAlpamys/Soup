@@ -185,11 +185,11 @@ def test_signal_from_thumbs_exact_numeric_boundaries():
 
 
 _V0630_UTIL_MODULES = (
-    "soup_cli/utils/ingest_sources.py",
-    "soup_cli/utils/prune_prompt.py",
-    "soup_cli/utils/active_sampler.py",
-    "soup_cli/utils/ab_test.py",
-    "soup_cli/utils/drift_alarm.py",
+    "src/soup_cli/utils/ingest_sources.py",
+    "src/soup_cli/utils/prune_prompt.py",
+    "src/soup_cli/utils/active_sampler.py",
+    "src/soup_cli/utils/ab_test.py",
+    "src/soup_cli/utils/drift_alarm.py",
 )
 
 

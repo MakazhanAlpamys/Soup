@@ -330,7 +330,10 @@ class TestSourceWiring:
         assert hasattr(m, "ScanFinding")
 
     def test_no_top_level_torch(self):
-        src = Path(__file__).resolve().parent.parent / "soup_cli" / "utils" / "adapter_scan.py"
+        src = (
+            Path(__file__).resolve().parent.parent
+            / "src" / "soup_cli" / "utils" / "adapter_scan.py"
+        )
         text = src.read_text(encoding="utf-8")
         # numpy is fine; torch must be lazy
         assert "import torch" not in text or "    import torch" in text or "  import torch" in text

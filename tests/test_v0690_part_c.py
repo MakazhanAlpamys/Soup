@@ -322,7 +322,7 @@ class TestMagpieCli:
 class TestSourceWiring:
     def test_no_heavy_imports(self) -> None:
         root = Path(__file__).resolve().parent.parent
-        src = (root / "soup_cli" / "utils" / "magpie.py").read_text(encoding="utf-8")
+        src = (root / "src" / "soup_cli" / "utils" / "magpie.py").read_text(encoding="utf-8")
         for forbidden in (
             "\nimport torch",
             "\nimport transformers",
@@ -332,7 +332,7 @@ class TestSourceWiring:
 
     def test_cli_registered(self) -> None:
         root = Path(__file__).resolve().parent.parent
-        cli = (root / "soup_cli" / "commands" / "data.py").read_text(encoding="utf-8")
+        cli = (root / "src" / "soup_cli" / "commands" / "data.py").read_text(encoding="utf-8")
         assert "magpie" in cli.lower() or "gen-magpie" in cli
 
     def test_version_bumped(self) -> None:

@@ -479,7 +479,7 @@ class TestSourceWiring:
 
         src = (
             Path(__file__).resolve().parent.parent
-            / "soup_cli"
+            / "src" / "soup_cli"
             / "utils"
             / "iterative_dpo.py"
         )
@@ -493,7 +493,7 @@ class TestSourceWiring:
 
         cli_src = (
             Path(__file__).resolve().parent.parent
-            / "soup_cli"
+            / "src" / "soup_cli"
             / "cli.py"
         )
         body = cli_src.read_text(encoding="utf-8")

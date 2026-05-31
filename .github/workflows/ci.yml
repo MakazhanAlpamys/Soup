@@ -15,7 +15,7 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install ruff
-      - run: ruff check soup_cli/ tests/
+      - run: ruff check src/soup_cli/ tests/
 
   test:
     strategy:

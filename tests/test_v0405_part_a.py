@@ -111,7 +111,7 @@ _TRAINER_FILES = [
     "bco.py",
 ]
 
-_TRAINER_DIR = Path(__file__).resolve().parent.parent / "soup_cli" / "trainer"
+_TRAINER_DIR = Path(__file__).resolve().parent.parent / "src" / "soup_cli" / "trainer"
 
 
 class TestTrainerSourceWiring:

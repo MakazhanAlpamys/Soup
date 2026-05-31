@@ -667,7 +667,7 @@ class TestSourceGuards:
         ):
             path = (
                 Path(__file__).resolve().parent.parent
-                / "soup_cli"
+                / "src" / "soup_cli"
                 / "utils"
                 / f"{stem}.py"
             )
@@ -685,7 +685,7 @@ class TestSourceGuards:
         ):
             path = (
                 Path(__file__).resolve().parent.parent
-                / "soup_cli"
+                / "src" / "soup_cli"
                 / "utils"
                 / f"{stem}.py"
             )
@@ -698,7 +698,7 @@ class TestSourceGuards:
         """CLI must import the public `validate_db_path`, not the private one."""
         path = (
             Path(__file__).resolve().parent.parent
-            / "soup_cli"
+            / "src" / "soup_cli"
             / "commands"
             / "local_rl.py"
         )
@@ -719,7 +719,7 @@ class TestSourceGuards:
         ):
             path = (
                 Path(__file__).resolve().parent.parent
-                / "soup_cli"
+                / "src" / "soup_cli"
                 / "commands"
                 / f"{stem}.py"
             )

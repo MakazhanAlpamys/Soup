@@ -308,7 +308,7 @@ class TestCliHubFlags:
         # tdd-review HIGH #1: every command except push must use the
         # shared helper so a future refactor cannot silently drop it.
         for mod in ("chat", "serve", "infer", "merge", "export"):
-            src = (REPO_ROOT / f"soup_cli/commands/{mod}.py").read_text(
+            src = (REPO_ROOT / f"src/soup_cli/commands/{mod}.py").read_text(
                 encoding="utf-8"
             )
             assert "apply_hub_to_cli_model" in src, (
@@ -318,7 +318,7 @@ class TestCliHubFlags:
     def test_push_uses_upload_repo_path(self):
         # push.py does NOT call apply_hub_to_cli_model (it's an upload
         # surface, not a download). It must call upload_repo + validate_hub_name.
-        src = (REPO_ROOT / "soup_cli/commands/push.py").read_text(
+        src = (REPO_ROOT / "src/soup_cli/commands/push.py").read_text(
             encoding="utf-8"
         )
         assert "upload_repo" in src
@@ -366,7 +366,7 @@ class TestDataDownloadNonHfLive:
         # tdd-review LOW #9: a future regression of the advisory text
         # "wait for v0.53.9" must be caught at source-grep time, since
         # v0.53.11 lifted that advisory to live SDK dispatch.
-        src = (REPO_ROOT / "soup_cli/commands/data.py").read_text(
+        src = (REPO_ROOT / "src/soup_cli/commands/data.py").read_text(
             encoding="utf-8"
         )
         assert "wait for v0.53.9" not in src
@@ -379,7 +379,7 @@ class TestDataDownloadNonHfLive:
 
 class TestWebUiToolOutputsPanel:
     def test_index_html_has_tools_nav_entry(self):
-        html = (REPO_ROOT / "soup_cli/ui/static/index.html").read_text(
+        html = (REPO_ROOT / "src/soup_cli/ui/static/index.html").read_text(
             encoding="utf-8"
         )
         assert 'data-page="tools"' in html
@@ -387,7 +387,7 @@ class TestWebUiToolOutputsPanel:
         assert 'id="page-tools"' in html
 
     def test_app_js_has_load_tool_outputs(self):
-        js = (REPO_ROOT / "soup_cli/ui/static/app.js").read_text(encoding="utf-8")
+        js = (REPO_ROOT / "src/soup_cli/ui/static/app.js").read_text(encoding="utf-8")
         assert "loadToolOutputs" in js
         assert "/api/tool-outputs" in js
         # XSS-safe — uses textContent or DOM API, NOT innerHTML for records.

@@ -418,7 +418,10 @@ class TestSourceWiring:
         assert hasattr(m, "verify_namespace")
 
     def test_no_top_level_torch(self):
-        src = Path(__file__).resolve().parent.parent / "soup_cli" / "utils" / "namespace_pin.py"
+        src = (
+            Path(__file__).resolve().parent.parent
+            / "src" / "soup_cli" / "utils" / "namespace_pin.py"
+        )
         text = src.read_text(encoding="utf-8")
         # no top-level torch/transformers imports
         for line in text.splitlines():

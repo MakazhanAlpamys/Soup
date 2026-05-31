@@ -366,7 +366,7 @@ class TestSourceWiring:
 
         src = (
             Path(__file__).resolve().parent.parent
-            / "soup_cli"
+            / "src" / "soup_cli"
             / "utils"
             / "minillm.py"
         )
@@ -385,7 +385,7 @@ class TestSourceWiring:
 
         src = (
             Path(__file__).resolve().parent.parent
-            / "soup_cli"
+            / "src" / "soup_cli"
             / "utils"
             / "minillm.py"
         )

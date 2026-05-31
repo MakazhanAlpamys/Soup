@@ -124,7 +124,7 @@ class TestSourceLevelInvariants:
 
     @pytest.mark.parametrize("module,_cls", ALL_TRAINER_TARGETS)
     def test_no_hardcoded_true_in_trainer(self, module: str, _cls: str):
-        text = Path(f"soup_cli/trainer/{module}.py").read_text(encoding="utf-8")
+        text = Path(f"src/soup_cli/trainer/{module}.py").read_text(encoding="utf-8")
         # Allow text only in comments / docstrings — assert exact-arg form
         # ``trust_remote_code=True`` is absent.
         assert "trust_remote_code=True" not in text, (
@@ -134,7 +134,7 @@ class TestSourceLevelInvariants:
 
     def test_no_hardcoded_true_in_sft(self):
         # SFT was already cleaned in v0.36.0 — regression guard.
-        text = Path("soup_cli/trainer/sft.py").read_text(encoding="utf-8")
+        text = Path("src/soup_cli/trainer/sft.py").read_text(encoding="utf-8")
         assert "trust_remote_code=True" not in text
 
 
@@ -175,7 +175,7 @@ class TestTrainPyWiresFlagToAllTrainers:
     """
 
     def test_no_sft_kwargs_split(self):
-        text = Path("soup_cli/commands/train.py").read_text(encoding="utf-8")
+        text = Path("src/soup_cli/commands/train.py").read_text(encoding="utf-8")
         # The v0.36.0 vintage line ``sft_kwargs = dict(trainer_kwargs, ...``
         # no longer needs a separate dict — assert it's gone.
         assert "sft_kwargs = dict(trainer_kwargs," not in text
@@ -247,7 +247,7 @@ class TestPreferenceForwardsToInner:
     """
 
     def test_preference_inner_kwargs_include_flag(self):
-        text = Path("soup_cli/trainer/preference.py").read_text(encoding="utf-8")
+        text = Path("src/soup_cli/trainer/preference.py").read_text(encoding="utf-8")
         # Both _build_inner and _build_multi_objective build a kwargs dict;
         # both must include the flag forwarding.
         assert text.count('"trust_remote_code": self.trust_remote_code') >= 2
@@ -257,7 +257,7 @@ class TestBcoAlreadyOnHelper:
     """Re-verify that BCO (v0.40.0 Part A) is now on the v0.36.0 helper too."""
 
     def test_bco_uses_resolver(self):
-        text = Path("soup_cli/trainer/bco.py").read_text(encoding="utf-8")
+        text = Path("src/soup_cli/trainer/bco.py").read_text(encoding="utf-8")
         assert "resolve_trust_remote_code" in text
         assert "self._trust_remote_code" in text
 

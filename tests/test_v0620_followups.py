@@ -568,13 +568,13 @@ class TestRaDitRetrieverBoundary:
 
 class TestSourceWiring:
     def test_list_steers_uses_context_manager(self):
-        src = Path(__file__).resolve().parent.parent / "soup_cli" / "commands" / "steer.py"
+        src = Path(__file__).resolve().parent.parent / "src" / "soup_cli" / "commands" / "steer.py"
         text = src.read_text(encoding="utf-8")
         assert "with RegistryStore() as store:" in text
 
     def test_steer_uses_shared_path_helper(self):
         """Review M1 fix: `_validate_pairs_path` delegates to the shared helper."""
-        src = Path(__file__).resolve().parent.parent / "soup_cli" / "commands" / "steer.py"
+        src = Path(__file__).resolve().parent.parent / "src" / "soup_cli" / "commands" / "steer.py"
         text = src.read_text(encoding="utf-8")
         assert "enforce_under_cwd_and_no_symlink" in text
 

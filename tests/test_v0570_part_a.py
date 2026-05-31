@@ -292,7 +292,7 @@ def test_compute_adapter_diff_rejects_symlinked_weights(tmp_path, monkeypatch):
 
 def test_no_top_level_torch_import():
     """Lazy-import policy: adapter_diff must not import torch at module level."""
-    src = (Path(__file__).parent.parent / "soup_cli" / "utils" / "adapter_diff.py"
+    src = (Path(__file__).parent.parent / "src" / "soup_cli" / "utils" / "adapter_diff.py"
            ).read_text(encoding="utf-8")
     # Only allowed inside def bodies
     for line in src.splitlines():

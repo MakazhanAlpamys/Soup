@@ -363,7 +363,7 @@ class TestIrtCli:
 class TestSourceWiring:
     def test_no_heavy_imports(self):
         from pathlib import Path
-        src = Path(__file__).resolve().parent.parent / "soup_cli" / "utils" / "irt.py"
+        src = Path(__file__).resolve().parent.parent / "src" / "soup_cli" / "utils" / "irt.py"
         text = src.read_text(encoding="utf-8")
         forbidden_imports = (
             "import torch\n",

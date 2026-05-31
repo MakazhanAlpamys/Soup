@@ -509,7 +509,10 @@ class TestCli:
 
 class TestSourceWiring:
     def test_no_top_level_heavy_imports(self) -> None:
-        path = Path(__file__).resolve().parent.parent / "soup_cli" / "utils" / "prompt_compile.py"
+        path = (
+            Path(__file__).resolve().parent.parent
+            / "src" / "soup_cli" / "utils" / "prompt_compile.py"
+        )
         text = path.read_text(encoding="utf-8")
         # Heavy / optional deps must be lazy-imported.
         for token in (
@@ -526,11 +529,17 @@ class TestSourceWiring:
         assert "compile" in names
 
     def test_uses_atomic_write_helper(self) -> None:
-        path = Path(__file__).resolve().parent.parent / "soup_cli" / "commands" / "compile_cmd.py"
+        path = (
+            Path(__file__).resolve().parent.parent
+            / "src" / "soup_cli" / "commands" / "compile_cmd.py"
+        )
         # If this file is missing the test must fail loudly — Part A CLI is a
         # shipped artefact, not optional. Skipping would hide a regression.
         assert path.exists(), f"missing CLI command module: {path}"
         text = path.read_text(encoding="utf-8")
-        util = Path(__file__).resolve().parent.parent / "soup_cli" / "utils" / "prompt_compile.py"
+        util = (
+            Path(__file__).resolve().parent.parent
+            / "src" / "soup_cli" / "utils" / "prompt_compile.py"
+        )
         combined = text + util.read_text(encoding="utf-8")
         assert "atomic_write_text" in combined

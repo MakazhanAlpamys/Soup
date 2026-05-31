@@ -302,7 +302,7 @@ class TestSourceWiring:
         from pathlib import Path
 
         root = Path(__file__).resolve().parent.parent
-        src = (root / "soup_cli" / "utils" / "mole_routing.py").read_text(
+        src = (root / "src" / "soup_cli" / "utils" / "mole_routing.py").read_text(
             encoding="utf-8"
         )
         head_lines = [

@@ -39,7 +39,7 @@ ALL_TRANSFORMER_TRAINERS = ["sft", *NON_SFT_TRAINERS]
 
 
 def _trainer_source(name: str) -> str:
-    path = Path(__file__).resolve().parent.parent / "soup_cli" / "trainer" / f"{name}.py"
+    path = Path(__file__).resolve().parent.parent / "src" / "soup_cli" / "trainer" / f"{name}.py"
     assert path.is_file(), f"missing trainer source: {path}"
     return path.read_text(encoding="utf-8")
 

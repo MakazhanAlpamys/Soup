@@ -1132,7 +1132,7 @@ class TestVllmAnthropicMessages:
 
         src = (
             Path(__file__).parent.parent
-            / "soup_cli" / "utils" / "vllm.py"
+            / "src" / "soup_cli" / "utils" / "vllm.py"
         ).read_text(encoding="utf-8")
         # Verify the route + helper landed.
         assert "/v1/messages" in src
@@ -1676,7 +1676,7 @@ class TestReviewFixesPreprocessAtomic:
     """v0.53.7 M-H + L-J source-grep guard."""
 
     def test_preprocess_save_uses_atomic_pattern(self):
-        src = Path(__file__).parent.parent / "soup_cli" / "commands" / "data.py"
+        src = Path(__file__).parent.parent / "src" / "soup_cli" / "commands" / "data.py"
         body = src.read_text(encoding="utf-8")
         assert ".tmp_" in body
         assert "os.replace" in body

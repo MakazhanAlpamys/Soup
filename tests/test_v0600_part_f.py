@@ -303,7 +303,10 @@ class TestSecurityReviewFixes:
             pytest.skip("data_filter ships in Python 3.12+")
         # Just confirm the helper is referenced in the source — that's
         # the regression-proof bit.
-        src = Path(__file__).resolve().parent.parent / "soup_cli" / "utils" / "airgap_bundle.py"
+        src = (
+            Path(__file__).resolve().parent.parent
+            / "src" / "soup_cli" / "utils" / "airgap_bundle.py"
+        )
         text = src.read_text(encoding="utf-8")
         assert "tarfile.data_filter" in text
 

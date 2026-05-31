@@ -670,7 +670,7 @@ def test_cli_registers_tunability():
     """cli.py registers the tunability command."""
     from pathlib import Path
 
-    src = Path(__file__).resolve().parent.parent / "soup_cli" / "cli.py"
+    src = Path(__file__).resolve().parent.parent / "src" / "soup_cli" / "cli.py"
     text = src.read_text(encoding="utf-8")
     assert "tunability" in text
 
@@ -690,7 +690,7 @@ def test_no_top_level_heavy_imports():
     """tunability module should not import torch/transformers/peft at top-level."""
     from pathlib import Path
 
-    src = Path(__file__).resolve().parent.parent / "soup_cli" / "utils" / "tunability.py"
+    src = Path(__file__).resolve().parent.parent / "src" / "soup_cli" / "utils" / "tunability.py"
     text = src.read_text(encoding="utf-8")
     # Heavy deps must be lazy-imported inside functions
     for bad in ["^import torch", "^from torch", "^import transformers", "^from transformers"]:

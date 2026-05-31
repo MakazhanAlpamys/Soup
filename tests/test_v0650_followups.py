@@ -331,7 +331,7 @@ class TestSourceWiring:
         from pathlib import Path
         src = (
             Path(__file__).resolve().parent.parent
-            / "soup_cli" / "utils" / "behavior_battery.py"
+            / "src" / "soup_cli" / "utils" / "behavior_battery.py"
         )
         text = src.read_text(encoding="utf-8")
         # H1 fix — must use as_file + Traversable / op, not os.path.join.
@@ -343,7 +343,7 @@ class TestSourceWiring:
         from pathlib import Path
         src = (
             Path(__file__).resolve().parent.parent
-            / "soup_cli" / "utils" / "checklist_dsl.py"
+            / "src" / "soup_cli" / "utils" / "checklist_dsl.py"
         )
         text = src.read_text(encoding="utf-8")
         # H2 fix — must use the shared helper.
@@ -353,7 +353,7 @@ class TestSourceWiring:
         from pathlib import Path
         src = (
             Path(__file__).resolve().parent.parent
-            / "soup_cli" / "utils" / "irt.py"
+            / "src" / "soup_cli" / "utils" / "irt.py"
         )
         text = src.read_text(encoding="utf-8")
         # H3 fix — must use the shared helper.
@@ -366,7 +366,7 @@ class TestSourceWiring:
         from pathlib import Path
         src = (
             Path(__file__).resolve().parent.parent
-            / "soup_cli" / "commands" / "_eval_v0650.py"
+            / "src" / "soup_cli" / "commands" / "_eval_v0650.py"
         )
         text = src.read_text(encoding="utf-8")
         # L6 dedup — _write_json_output + _read_evidence_json helpers.
@@ -384,7 +384,7 @@ class TestONofollowWiring:
         from pathlib import Path
         src = (
             Path(__file__).resolve().parent.parent
-            / "soup_cli" / "utils" / "checklist_dsl.py"
+            / "src" / "soup_cli" / "utils" / "checklist_dsl.py"
         )
         text = src.read_text(encoding="utf-8")
         # H-NEW-1 fix: must use O_NOFOLLOW + fstat (no more double-lstat).
@@ -395,7 +395,7 @@ class TestONofollowWiring:
         from pathlib import Path
         src = (
             Path(__file__).resolve().parent.parent
-            / "soup_cli" / "utils" / "irt.py"
+            / "src" / "soup_cli" / "utils" / "irt.py"
         )
         text = src.read_text(encoding="utf-8")
         assert "O_NOFOLLOW" in text
@@ -405,7 +405,7 @@ class TestONofollowWiring:
         from pathlib import Path
         src = (
             Path(__file__).resolve().parent.parent
-            / "soup_cli" / "commands" / "_eval_v0650.py"
+            / "src" / "soup_cli" / "commands" / "_eval_v0650.py"
         )
         text = src.read_text(encoding="utf-8")
         # H-NEW-2 fix.

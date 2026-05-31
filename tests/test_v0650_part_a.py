@@ -377,7 +377,7 @@ class TestBackCompat:
 class TestSourceWiring:
     def test_no_heavy_imports(self):
         from pathlib import Path
-        src = Path(__file__).resolve().parent.parent / "soup_cli" / "eval" / "calibrate.py"
+        src = Path(__file__).resolve().parent.parent / "src" / "soup_cli" / "eval" / "calibrate.py"
         text = src.read_text(encoding="utf-8")
         # Should not import torch, transformers, peft at module scope.
         forbidden_imports = (

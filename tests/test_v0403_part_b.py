@@ -227,14 +227,14 @@ class TestSftAndPretrainWiringLive:
     """
 
     def test_sft_wires_live_factory(self):
-        text = Path("soup_cli/trainer/sft.py").read_text(encoding="utf-8")
+        text = Path("src/soup_cli/trainer/sft.py").read_text(encoding="utf-8")
         assert "v0.40.4" in text
         assert "make_multipack_trainer_class(SFTTrainer)" in text
         # The deferred advisory must be GONE (no fallback in v0.40.4+).
         assert "live HF Trainer wiring is deferred to" not in text
 
     def test_pretrain_wires_live_factory(self):
-        text = Path("soup_cli/trainer/pretrain.py").read_text(encoding="utf-8")
+        text = Path("src/soup_cli/trainer/pretrain.py").read_text(encoding="utf-8")
         assert "v0.40.4" in text
         assert "make_multipack_trainer_class(SFTTrainer)" in text
         assert "live HF Trainer wiring is deferred to" not in text

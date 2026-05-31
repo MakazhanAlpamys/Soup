@@ -747,24 +747,24 @@ class TestTrainDiagnoseGate:
 
 class TestSourceWiring:
     def test_cli_registers_diagnose(self) -> None:
-        source = (_PROJECT_ROOT / "soup_cli" / "cli.py").read_text(encoding="utf-8")
+        source = (_PROJECT_ROOT / "src" / "soup_cli" / "cli.py").read_text(encoding="utf-8")
         assert 'name="diagnose"' in source
         assert "_diagnose_cmd" in source
 
     def test_no_top_level_heavy_imports(self) -> None:
         # All 6 probe + report modules must be torch/transformers-free.
         probe_modules = [
-            "soup_cli/utils/diagnose/__init__.py",
-            "soup_cli/utils/diagnose/report.py",
-            "soup_cli/utils/diagnose/_common.py",
-            "soup_cli/utils/diagnose/forgetting.py",
-            "soup_cli/utils/diagnose/refusal.py",
-            "soup_cli/utils/diagnose/format.py",
-            "soup_cli/utils/diagnose/mode_collapse.py",
-            "soup_cli/utils/diagnose/memorization.py",
-            "soup_cli/utils/diagnose/contamination.py",
-            "soup_cli/utils/diagnose/badge.py",
-            "soup_cli/utils/diagnose/runner.py",
+            "src/soup_cli/utils/diagnose/__init__.py",
+            "src/soup_cli/utils/diagnose/report.py",
+            "src/soup_cli/utils/diagnose/_common.py",
+            "src/soup_cli/utils/diagnose/forgetting.py",
+            "src/soup_cli/utils/diagnose/refusal.py",
+            "src/soup_cli/utils/diagnose/format.py",
+            "src/soup_cli/utils/diagnose/mode_collapse.py",
+            "src/soup_cli/utils/diagnose/memorization.py",
+            "src/soup_cli/utils/diagnose/contamination.py",
+            "src/soup_cli/utils/diagnose/badge.py",
+            "src/soup_cli/utils/diagnose/runner.py",
         ]
         for relative in probe_modules:
             source = (_PROJECT_ROOT / relative).read_text(encoding="utf-8")
@@ -801,7 +801,9 @@ class TestReviewFixCoverage:
 
     # python-review HIGH — write_report uses realpath, not abspath.
     def test_write_report_uses_realpath(self) -> None:
-        source = (_PROJECT_ROOT / "soup_cli" / "utils" / "diagnose" / "runner.py").read_text(
+        source = (
+            _PROJECT_ROOT / "src" / "soup_cli" / "utils" / "diagnose" / "runner.py"
+        ).read_text(
             encoding="utf-8"
         )
         assert "os.path.realpath(path)" in source
@@ -818,7 +820,7 @@ class TestReviewFixCoverage:
 
     # code-review HIGH — sys.exit replaced with typer.Exit.
     def test_diagnose_uses_typer_exit_not_sys_exit(self) -> None:
-        source = (_PROJECT_ROOT / "soup_cli" / "commands" / "diagnose.py").read_text(
+        source = (_PROJECT_ROOT / "src" / "soup_cli" / "commands" / "diagnose.py").read_text(
             encoding="utf-8"
         )
         assert "sys.exit(" not in source
@@ -826,7 +828,7 @@ class TestReviewFixCoverage:
 
     # security-review HIGH — atomic badge write with TOCTOU guard.
     def test_badge_write_atomic_and_symlink_safe(self) -> None:
-        source = (_PROJECT_ROOT / "soup_cli" / "commands" / "diagnose.py").read_text(
+        source = (_PROJECT_ROOT / "src" / "soup_cli" / "commands" / "diagnose.py").read_text(
             encoding="utf-8"
         )
         assert "_write_badge" in source
@@ -878,7 +880,9 @@ class TestReviewFixCoverage:
         # Sane patterns still pass.
         assert matches_regex("abc123", r"\d+")
         # Source-grep — confirm the ReDoS probe wiring exists.
-        source = (_PROJECT_ROOT / "soup_cli" / "utils" / "diagnose" / "format.py").read_text(
+        source = (
+            _PROJECT_ROOT / "src" / "soup_cli" / "utils" / "diagnose" / "format.py"
+        ).read_text(
             encoding="utf-8"
         )
         assert 'compiled.search("a" * 128)' in source
@@ -929,7 +933,9 @@ class TestReviewFixCoverage:
         # We need real Sequence subclass; use a list trick instead.
         # Build two small lists but stub the product check.
         # Simpler: just verify the cap exists in source.
-        source = (_PROJECT_ROOT / "soup_cli" / "utils" / "diagnose" / "contamination.py").read_text(
+        source = (
+            _PROJECT_ROOT / "src" / "soup_cli" / "utils" / "diagnose" / "contamination.py"
+        ).read_text(
             encoding="utf-8"
         )
         assert "combined-complexity cap" in source

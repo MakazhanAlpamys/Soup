@@ -869,7 +869,7 @@ class TestSourceGrep:
     REPO_ROOT = Path(__file__).resolve().parent.parent
 
     def test_eval_py_registers_v0550_module(self):
-        text = (self.REPO_ROOT / "soup_cli" / "commands" / "eval.py").read_text(
+        text = (self.REPO_ROOT / "src" / "soup_cli" / "commands" / "eval.py").read_text(
             encoding="utf-8",
         )
         assert "_eval_v0550" in text
@@ -878,7 +878,7 @@ class TestSourceGrep:
     def test_v0550_module_uses_lazy_imports(self):
         # The Typer registration module itself must not eagerly import
         # heavy deps. Lazy imports happen inside each command body.
-        text = (self.REPO_ROOT / "soup_cli" / "commands" / "_eval_v0550.py").read_text(
+        text = (self.REPO_ROOT / "src" / "soup_cli" / "commands" / "_eval_v0550.py").read_text(
             encoding="utf-8",
         )
         # Top-level imports allowed: typer, rich.*. No torch/transformers/peft.
@@ -892,7 +892,7 @@ class TestSourceGrep:
         import re
 
         init_text = (
-            self.REPO_ROOT / "soup_cli" / "__init__.py"
+            self.REPO_ROOT / "src" / "soup_cli" / "__init__.py"
         ).read_text(encoding="utf-8")
         match = re.search(r'__version__ = "(\d+)\.(\d+)\.(\d+)"', init_text)
         assert match is not None, "version line not found"

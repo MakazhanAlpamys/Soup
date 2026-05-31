@@ -451,7 +451,7 @@ class TestSourceWiring:
     def test_no_top_level_heavy_imports(self) -> None:
         path = (
             Path(__file__).resolve().parent.parent
-            / "soup_cli"
+            / "src" / "soup_cli"
             / "utils"
             / "local_rl.py"
         )

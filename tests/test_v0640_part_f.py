@@ -318,7 +318,10 @@ def test_cli_license_advisor_check_llama_block():
 def test_no_heavy_top_level_imports():
     from pathlib import Path
 
-    src = Path(__file__).resolve().parent.parent / "soup_cli" / "utils" / "license_advisor.py"
+    src = (
+        Path(__file__).resolve().parent.parent
+        / "src" / "soup_cli" / "utils" / "license_advisor.py"
+    )
     text = src.read_text(encoding="utf-8")
     import re
     for bad in ["^import torch", "^from torch", "^import transformers", "^from transformers"]:

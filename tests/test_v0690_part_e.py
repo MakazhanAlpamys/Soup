@@ -402,7 +402,7 @@ class TestBrainRotCli:
 class TestSourceWiring:
     def test_no_heavy_imports(self) -> None:
         root = Path(__file__).resolve().parent.parent
-        src = (root / "soup_cli" / "utils" / "brain_rot.py").read_text(
+        src = (root / "src" / "soup_cli" / "utils" / "brain_rot.py").read_text(
             encoding="utf-8"
         )
         for forbidden in (

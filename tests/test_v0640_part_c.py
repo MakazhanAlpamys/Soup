@@ -412,7 +412,7 @@ def test_cli_env_lock_outside_cwd_rejected(tmp_path, monkeypatch):
 def test_cli_registers_env():
     from pathlib import Path
 
-    src = Path(__file__).resolve().parent.parent / "soup_cli" / "cli.py"
+    src = Path(__file__).resolve().parent.parent / "src" / "soup_cli" / "cli.py"
     text = src.read_text(encoding="utf-8")
     assert '"env"' in text or "'env'" in text or 'name="env"' in text
 
@@ -420,7 +420,7 @@ def test_cli_registers_env():
 def test_no_heavy_top_level_imports():
     from pathlib import Path
 
-    src = Path(__file__).resolve().parent.parent / "soup_cli" / "utils" / "env_lock.py"
+    src = Path(__file__).resolve().parent.parent / "src" / "soup_cli" / "utils" / "env_lock.py"
     text = src.read_text(encoding="utf-8")
     import re
     for bad in ["^import torch", "^from torch", "^import transformers", "^from transformers"]:

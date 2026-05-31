@@ -381,19 +381,22 @@ def test_detect_cuda_version_none_when_no_env(monkeypatch):
 
 
 def test_tunability_uses_atomic_write_text():
-    src = Path(__file__).resolve().parent.parent / "soup_cli" / "utils" / "tunability.py"
+    src = Path(__file__).resolve().parent.parent / "src" / "soup_cli" / "utils" / "tunability.py"
     text = src.read_text(encoding="utf-8")
     assert "atomic_write_text" in text, "tunability.write_report must use shared helper"
 
 
 def test_terraform_plan_uses_atomic_write_text():
-    src = Path(__file__).resolve().parent.parent / "soup_cli" / "utils" / "terraform_plan.py"
+    src = (
+        Path(__file__).resolve().parent.parent
+        / "src" / "soup_cli" / "utils" / "terraform_plan.py"
+    )
     text = src.read_text(encoding="utf-8")
     assert "atomic_write_text" in text, "terraform_plan.write_state must use shared helper"
 
 
 def test_env_lock_uses_atomic_write_text():
-    src = Path(__file__).resolve().parent.parent / "soup_cli" / "utils" / "env_lock.py"
+    src = Path(__file__).resolve().parent.parent / "src" / "soup_cli" / "utils" / "env_lock.py"
     text = src.read_text(encoding="utf-8")
     assert "atomic_write_text" in text, "env_lock.write_lock must use shared helper"
 
@@ -424,7 +427,7 @@ def test_tunability_sequence_imported_from_collections_abc():
 
     Use `collections.abc.Sequence` for runtime isinstance checks.
     """
-    src = Path(__file__).resolve().parent.parent / "soup_cli" / "utils" / "tunability.py"
+    src = Path(__file__).resolve().parent.parent / "src" / "soup_cli" / "utils" / "tunability.py"
     text = src.read_text(encoding="utf-8")
     # Either explicit `from collections.abc import Sequence`, or NO
     # mention of `typing.Sequence` in an isinstance context.

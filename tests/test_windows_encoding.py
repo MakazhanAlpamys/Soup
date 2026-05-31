@@ -99,9 +99,9 @@ def test_writers_use_utf8_encoding():
     import pathlib
 
     audited_files = [
-        "soup_cli/commands/quickstart.py",
-        "soup_cli/commands/init.py",
-        "soup_cli/commands/migrate.py",
+        "src/soup_cli/commands/quickstart.py",
+        "src/soup_cli/commands/init.py",
+        "src/soup_cli/commands/migrate.py",
     ]
     repo_root = pathlib.Path(__file__).resolve().parent.parent
     for rel in audited_files:

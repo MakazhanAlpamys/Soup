@@ -38,7 +38,7 @@ pytest tests/ -v --tb=short
 Run the linter:
 
 ```bash
-ruff check soup_cli/ tests/
+ruff check src/soup_cli/ tests/
 ```
 
 If both pass — you're ready to contribute!
@@ -49,10 +49,10 @@ We use **ruff** for all code style and linting. Before committing, run:
 
 ```bash
 # Check for issues
-ruff check soup_cli/ tests/
+ruff check src/soup_cli/ tests/
 
 # Auto-fix issues
-ruff check --fix soup_cli/ tests/
+ruff check --fix src/soup_cli/ tests/
 ```
 
 ### Style Guidelines
@@ -91,7 +91,7 @@ def train():
 Key directories:
 
 ```
-soup_cli/
+src/soup_cli/
   cli.py              - Main entry point, command routing
   commands/           - Command implementations (train, chat, eval, deploy, etc.)
   config/             - Config schema (schema.py) and loader (loader.py)
@@ -301,7 +301,7 @@ Before pushing, ensure everything passes:
 
 ```bash
 # Lint first
-ruff check --fix soup_cli/ tests/
+ruff check --fix src/soup_cli/ tests/
 
 # Then run tests
 pytest tests/ -v --tb=short
@@ -336,7 +336,7 @@ Then open a pull request on GitHub with:
 
 When you open a PR, the GitHub template will show this checklist:
 
-- [ ] `ruff check soup_cli/ tests/` passes
+- [ ] `ruff check src/soup_cli/ tests/` passes
 - [ ] `pytest tests/ -v` passes
 - [ ] Updated relevant docs (README, CLAUDE.md) if needed
 - [ ] New tests added for new functionality
@@ -391,7 +391,7 @@ If adding a new training algorithm:
 ### 3. New Command
 
 1. Create `commands/your_command.py` with a handler function
-2. Register in `soup_cli/cli.py` with `@app.command()`
+2. Register in `src/soup_cli/cli.py` with `@app.command()`
 3. Add tests in `tests/test_your_command.py`
 4. Update help text and README
 
@@ -425,7 +425,7 @@ The project follows semantic versioning: `MAJOR.MINOR.PATCH`
 
 ### Version Bump Process
 
-1. Update version in `pyproject.toml` and `soup_cli/__init__.py`
+1. Update version in `pyproject.toml` and `src/soup_cli/__init__.py`
 2. Run full test suite and linting
 3. Update `CLAUDE.md`, `README.md`, `SECURITY.md` (if security-related), `CONTRIBUTING.md` (if workflow changed)
 4. Commit with message: `Release v0.X.0`

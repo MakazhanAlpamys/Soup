@@ -445,7 +445,7 @@ class TestSourceWiring:
         from pathlib import Path
 
         root = Path(__file__).resolve().parent.parent
-        src = (root / "soup_cli" / "utils" / "vector_bank.py").read_text(
+        src = (root / "src" / "soup_cli" / "utils" / "vector_bank.py").read_text(
             encoding="utf-8"
         )
         head_lines = [
@@ -461,7 +461,7 @@ class TestSourceWiring:
         from pathlib import Path
 
         root = Path(__file__).resolve().parent.parent
-        src = (root / "soup_cli" / "utils" / "vector_bank.py").read_text(
+        src = (root / "src" / "soup_cli" / "utils" / "vector_bank.py").read_text(
             encoding="utf-8"
         )
         assert "atomic_write_text" in src

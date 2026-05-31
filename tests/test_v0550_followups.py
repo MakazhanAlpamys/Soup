@@ -398,12 +398,12 @@ class TestNoHeavyImports:
     @pytest.mark.parametrize(
         "module",
         [
-            "soup_cli/utils/eval_design.py",
-            "soup_cli/utils/canary_discovery.py",
-            "soup_cli/utils/eval_lock_coverage.py",
-            "soup_cli/utils/eval_gate_hook.py",
-            "soup_cli/utils/_eval_text.py",
-            "soup_cli/commands/_eval_v0550.py",
+            "src/soup_cli/utils/eval_design.py",
+            "src/soup_cli/utils/canary_discovery.py",
+            "src/soup_cli/utils/eval_lock_coverage.py",
+            "src/soup_cli/utils/eval_gate_hook.py",
+            "src/soup_cli/utils/_eval_text.py",
+            "src/soup_cli/commands/_eval_v0550.py",
         ],
     )
     def test_no_top_level_torch_or_transformers(self, module):
@@ -439,7 +439,7 @@ class TestSharedTextUtils:
     def test_canary_no_longer_imports_from_eval_design(self):
         src = (
             Path(__file__).resolve().parent.parent
-            / "soup_cli" / "utils" / "canary_discovery.py"
+            / "src" / "soup_cli" / "utils" / "canary_discovery.py"
         ).read_text(encoding="utf-8")
         assert "from soup_cli.utils.eval_design import _row_text" not in src
         assert "from soup_cli.utils._eval_text import" in src
@@ -527,7 +527,7 @@ class TestCoverageMarkupEscape:
     def test_v0550_module_escapes_task_category(self):
         src = (
             Path(__file__).resolve().parent.parent
-            / "soup_cli" / "commands" / "_eval_v0550.py"
+            / "src" / "soup_cli" / "commands" / "_eval_v0550.py"
         ).read_text(encoding="utf-8")
         # The coverage table title must wrap report.task_category in escape().
         assert "escape(report.task_category)" in src

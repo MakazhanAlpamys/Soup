@@ -12,6 +12,6 @@
 
 ## Checklist
 
-- [ ] `ruff check soup_cli/ tests/` passes
+- [ ] `ruff check src/soup_cli/ tests/` passes
 - [ ] `pytest tests/ -v` passes
 - [ ] Updated relevant docs (README, CLAUDE.md) if needed

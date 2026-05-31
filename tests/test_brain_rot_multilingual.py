@@ -582,7 +582,7 @@ class TestSourceWiring:
         # `from langdetect import detect` is also caught.
         root = Path(__file__).resolve().parent.parent
         src = (
-            root / "soup_cli" / "utils" / "brain_rot_lang.py"
+            root / "src" / "soup_cli" / "utils" / "brain_rot_lang.py"
         ).read_text(encoding="utf-8")
         for line in src.splitlines():
             stripped = line.strip()
@@ -603,7 +603,7 @@ class TestSourceWiring:
         # the brain-rot module loads on a bare install.
         root = Path(__file__).resolve().parent.parent
         src = (
-            root / "soup_cli" / "utils" / "brain_rot.py"
+            root / "src" / "soup_cli" / "utils" / "brain_rot.py"
         ).read_text(encoding="utf-8")
         # No top-level langdetect import.
         for line in src.splitlines():

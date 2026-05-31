@@ -708,7 +708,7 @@ class TestSoupBuildCli:
 class TestSourceWiring:
     def test_cli_registers_build(self) -> None:
         root = Path(__file__).resolve().parent.parent
-        cli = (root / "soup_cli" / "cli.py").read_text(encoding="utf-8")
+        cli = (root / "src" / "soup_cli" / "cli.py").read_text(encoding="utf-8")
         assert (
             'name="build"' in cli
             or "build_cmd" in cli
@@ -717,7 +717,7 @@ class TestSourceWiring:
 
     def test_no_heavy_top_level_imports(self) -> None:
         root = Path(__file__).resolve().parent.parent
-        src = (root / "soup_cli" / "utils" / "build_dag.py").read_text(encoding="utf-8")
+        src = (root / "src" / "soup_cli" / "utils" / "build_dag.py").read_text(encoding="utf-8")
         # yaml is also lazy-imported inside parse_build_yaml (TDD review H2).
         for forbidden in (
             "\nimport torch",

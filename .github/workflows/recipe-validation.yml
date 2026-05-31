@@ -2,7 +2,7 @@ name: Recipe Validation
 
 # v0.31.0 — runs the per-recipe validation suite on every PR + push to main.
 #
-# Each recipe in soup_cli/recipes/catalog.py is parsed, loaded as a
+# Each recipe in src/soup_cli/recipes/catalog.py is parsed, loaded as a
 # SoupConfig, and asserted to match its RecipeMeta declaration. Catches
 # regressions when an upstream model id is renamed or removed, or when the
 # config schema changes in a backward-incompatible way.
@@ -15,20 +15,20 @@ on:
   push:
     branches: [main]
     paths:
-      - 'soup_cli/recipes/**'
-      - 'soup_cli/config/**'
-      - 'soup_cli/data/formats.py'
-      - 'soup_cli/data/loader.py'
+      - 'src/soup_cli/recipes/**'
+      - 'src/soup_cli/config/**'
+      - 'src/soup_cli/data/formats.py'
+      - 'src/soup_cli/data/loader.py'
       - 'tests/test_recipes_v031.py'
       - 'tests/test_recipes.py'
       - '.github/workflows/recipe-validation.yml'
   pull_request:
     branches: [main]
     paths:
-      - 'soup_cli/recipes/**'
-      - 'soup_cli/config/**'
-      - 'soup_cli/data/formats.py'
-      - 'soup_cli/data/loader.py'
+      - 'src/soup_cli/recipes/**'
+      - 'src/soup_cli/config/**'
+      - 'src/soup_cli/data/formats.py'
+      - 'src/soup_cli/data/loader.py'
       - 'tests/test_recipes_v031.py'
       - 'tests/test_recipes.py'
       - '.github/workflows/recipe-validation.yml'

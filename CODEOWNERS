@@ -2,12 +2,12 @@
 * @MakazhanAlpamys
 
 # Core config and schema
-soup_cli/config/ @MakazhanAlpamys
+src/soup_cli/config/ @MakazhanAlpamys
 
 # Training wrappers
-soup_cli/trainer/ @MakazhanAlpamys
+src/soup_cli/trainer/ @MakazhanAlpamys
 
 # Security-sensitive areas
-soup_cli/ui/ @MakazhanAlpamys
-soup_cli/data/providers/ @MakazhanAlpamys
-soup_cli/utils/ollama.py @MakazhanAlpamys
+src/soup_cli/ui/ @MakazhanAlpamys
+src/soup_cli/data/providers/ @MakazhanAlpamys
+src/soup_cli/utils/ollama.py @MakazhanAlpamys

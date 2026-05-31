@@ -9,7 +9,7 @@ Tool-agnostic entry point for AI coding agents (Codex, Cursor, Aider, Claude Cod
 ```bash
 pip install -e ".[dev]"          # Editable install + test deps
 pytest tests/ -v --tb=short      # Run the suite (smoke tests are excluded by default)
-ruff check soup_cli/ tests/      # Lint — must be clean before any commit
+ruff check src/soup_cli/ tests/  # Lint — must be clean before any commit
 ```
 
 - `pytest -m smoke` runs the slow tests that download models and train (skipped by default).
@@ -17,7 +17,7 @@ ruff check soup_cli/ tests/      # Lint — must be clean before any commit
 
 ## Conventions (must follow)
 
-- **Config** is Pydantic v2 in `soup_cli/config/schema.py` — single source of truth.
+- **Config** is Pydantic v2 in `src/soup_cli/config/schema.py` — single source of truth.
 - **Heavy deps** (`torch`, `transformers`, `peft`, `trl`, `mlx`) are lazy-imported inside functions, never at module top.
 - **Output** via `rich.console.Console`, never bare `print()`.
 - **Path containment**: use `os.path.realpath` + `os.path.commonpath`, not `Path.resolve() + relative_to()` (breaks on Windows short names).

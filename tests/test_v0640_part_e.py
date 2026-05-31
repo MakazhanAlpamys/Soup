@@ -252,7 +252,7 @@ def test_cli_completions_unknown_shell():
 def test_no_heavy_top_level_imports():
     from pathlib import Path
 
-    src = Path(__file__).resolve().parent.parent / "soup_cli" / "utils" / "completions.py"
+    src = Path(__file__).resolve().parent.parent / "src" / "soup_cli" / "utils" / "completions.py"
     text = src.read_text(encoding="utf-8")
     import re
     for bad in ["^import torch", "^from torch", "^import transformers", "^from transformers"]:

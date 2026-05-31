@@ -315,13 +315,13 @@ class TestSourceWiringRegressions:
 
         root = Path(__file__).resolve().parent.parent
         for module in (
-            "soup_cli/utils/cmaes_merge.py",
-            "soup_cli/utils/vector_bank.py",
-            "soup_cli/utils/mole_routing.py",
-            "soup_cli/utils/adapter_pr.py",
-            "soup_cli/utils/soup_lock.py",
-            "soup_cli/utils/adapter_bisect.py",
-            "soup_cli/commands/lock.py",
+            "src/soup_cli/utils/cmaes_merge.py",
+            "src/soup_cli/utils/vector_bank.py",
+            "src/soup_cli/utils/mole_routing.py",
+            "src/soup_cli/utils/adapter_pr.py",
+            "src/soup_cli/utils/soup_lock.py",
+            "src/soup_cli/utils/adapter_bisect.py",
+            "src/soup_cli/commands/lock.py",
         ):
             src = (root / module).read_text(encoding="utf-8")
             assert "from __future__ import annotations" in src, (
@@ -333,9 +333,9 @@ class TestSourceWiringRegressions:
 
         root = Path(__file__).resolve().parent.parent
         for module in (
-            "soup_cli/utils/vector_bank.py",
-            "soup_cli/utils/adapter_pr.py",
-            "soup_cli/utils/soup_lock.py",
+            "src/soup_cli/utils/vector_bank.py",
+            "src/soup_cli/utils/adapter_pr.py",
+            "src/soup_cli/utils/soup_lock.py",
         ):
             src = (root / module).read_text(encoding="utf-8")
             assert "atomic_write_text" in src, (
@@ -348,13 +348,13 @@ class TestSourceWiringRegressions:
 
         root = Path(__file__).resolve().parent.parent
         for module in (
-            "soup_cli/utils/cmaes_merge.py",
-            "soup_cli/utils/vector_bank.py",
-            "soup_cli/utils/mole_routing.py",
-            "soup_cli/utils/adapter_pr.py",
-            "soup_cli/utils/soup_lock.py",
-            "soup_cli/utils/adapter_bisect.py",
-            "soup_cli/commands/lock.py",
+            "src/soup_cli/utils/cmaes_merge.py",
+            "src/soup_cli/utils/vector_bank.py",
+            "src/soup_cli/utils/mole_routing.py",
+            "src/soup_cli/utils/adapter_pr.py",
+            "src/soup_cli/utils/soup_lock.py",
+            "src/soup_cli/utils/adapter_bisect.py",
+            "src/soup_cli/commands/lock.py",
         ):
             src = (root / module).read_text(encoding="utf-8")
             head = "\n".join(
@@ -379,7 +379,7 @@ class TestSourceWiringRegressions:
         from pathlib import Path
 
         root = Path(__file__).resolve().parent.parent
-        src = (root / "soup_cli" / "commands" / "adapters.py").read_text(
+        src = (root / "src" / "soup_cli" / "commands" / "adapters.py").read_text(
             encoding="utf-8"
         )
         # The bisect subprocess call site
