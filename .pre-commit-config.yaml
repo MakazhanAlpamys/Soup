@@ -1,0 +1,27 @@
+# Pre-commit hooks for Soup CLI.
+#
+#   Install once:   pip install pre-commit && pre-commit install
+#   Run on staged:  pre-commit run
+#   Run everything: pre-commit run --all-files
+#
+# NOTE: `ruff format` has never been run across this codebase, so the FIRST
+# `pre-commit run --all-files` will reformat MANY files. That one-time churn is
+# expected. Normal commits only run the hooks against staged files, so day-to-
+# day use is non-invasive.
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.9.4
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: check-yaml
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: check-added-large-files

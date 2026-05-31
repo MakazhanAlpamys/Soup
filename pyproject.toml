@@ -41,7 +41,7 @@ dependencies = [
 eval = ["lm-eval>=0.4.0"]
 data = ["datasketch>=1.6.0"]
 wandb = ["wandb>=0.15.0,<0.18.0"]
-dev = ["pytest>=7.0", "ruff>=0.1.0", "pytest-cov>=4.0", "httpx>=0.24.0"]
+dev = ["pytest>=7.0", "ruff>=0.1.0", "pytest-cov>=4.0", "httpx>=0.24.0", "mypy>=1.8.0", "pre-commit>=3.5.0"]
 ui = ["fastapi>=0.104.0", "uvicorn>=0.24.0"]
 serve = ["fastapi>=0.104.0", "uvicorn>=0.24.0"]
 serve-fast = ["vllm>=0.4.0", "fastapi>=0.104.0", "uvicorn>=0.24.0"]
@@ -102,6 +102,16 @@ line-length = 100
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W"]
 
+[tool.mypy]
+# Intentionally lenient: the codebase leans on torch / transformers / peft / trl,
+# none of which ship complete stubs. This config surfaces type issues in our own
+# code without drowning in third-party `Any`s. The CI `type-check` job is
+# non-blocking; tighten incrementally as modules gain annotations.
+python_version = "3.10"
+files = ["src/soup_cli"]
+ignore_missing_imports = true
+follow_imports = "silent"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [
@@ -109,4 +119,4 @@ markers = [
     "unit: fast isolated tests — no subprocess, network, filesystem, or real model load",
     "integration: tests that touch real subprocess, SQLite, filesystem, or HTTP",
 ]
-addopts = "-m 'not smoke' --cov=soup_cli --cov-fail-under=50 --cov-report=term-missing:skip-covered"
+addopts = "-m 'not smoke' --cov=soup_cli --cov-fail-under=77 --cov-report=term-missing:skip-covered"
