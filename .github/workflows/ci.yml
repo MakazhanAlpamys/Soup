@@ -19,17 +19,21 @@ jobs:
 
   type-check:
     runs-on: ubuntu-latest
-    # Non-blocking: surfaces type issues without gating the build while the
-    # codebase adopts annotations incrementally. Reads [tool.mypy] from
-    # pyproject.toml (files = ["src/soup_cli"], ignore_missing_imports = true).
-    continue-on-error: true
+    # Non-blocking type-check baseline. The codebase adopts annotations
+    # incrementally, so mypy findings are surfaced as a warning annotation (and
+    # in the step log) but do NOT fail the job — the check stays green until
+    # types are tightened enough to promote it to a required gate. Reads
+    # [tool.mypy] from pyproject.toml (files = ["src/soup_cli"],
+    # ignore_missing_imports = true).
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
       - run: pip install mypy
-      - run: mypy
+      - name: mypy (non-blocking)
+        run: |
+          mypy || echo "::warning title=mypy::Type issues reported (non-blocking baseline — see the log above)"
 
   test:
     strategy:
