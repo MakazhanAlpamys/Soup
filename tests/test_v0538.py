@@ -188,7 +188,14 @@ class TestDownloadRepoLazyImport:
         ) as mocked:
             from soup_cli.utils.hubs import download_repo
 
-            result = download_repo("hf", "owner/repo", local_dir="./snap_v0538")
+            # namespace_check=False: this test exercises SDK dispatch only;
+            # the v0.71.2 #186 pin gate has its own dedicated coverage in
+            # tests/test_v0712.py and would otherwise attempt a network
+            # metadata fetch here.
+            result = download_repo(
+                "hf", "owner/repo", local_dir="./snap_v0538",
+                namespace_check=False,
+            )
             assert result == "/local/snap"
             mocked.assert_called_once()
             kwargs = mocked.call_args.kwargs

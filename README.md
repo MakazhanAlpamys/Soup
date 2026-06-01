@@ -49,19 +49,19 @@ infrastructure instead of improving models. Soup fixes that.
 
 ## What's New
 
-**v0.71.1 — Quick wins + wiring.** Seven small-but-sharp closures:
+**v0.71.2 — Governance & supply-chain live.** Real signatures and supply-chain gates:
 
-- **`soup env fix`** renders a reproducible install plan (copy/paste `uv pip` commands or a
-  `requirements.txt`) straight from `soup-env.lock` — print-only, no surprise package-manager calls.
-- **`soup lock write --env-lock`** auto-derives the env hash from `soup-env.lock` so you never
-  hand-copy a 64-hex string after `soup env lock`.
-- **`soup serve --record-thumbs <db>`** captures 👍/👎 feedback into a local-RL SQLite, plus a new
-  `POST /v1/thumbs` endpoint — the start of an on-box feedback flywheel.
-- **Judge calibration persistence** — write/load a `JudgeCalibrationReport` as JSON, backed by a new
-  `judge_calibration` registry artifact kind.
-- **Bundled MUSE + WMDP unlearning eval fixtures** so `soup eval unlearning --benchmark muse|wmdp`
-  runs out of the box (WMDP forget-set probes ship **redacted** — never verbatim hazardous content).
-- **`soup completions`** now introspects a cached base model's real LoRA target modules.
+- **ed25519 signing** — `soup adapters sign --backend ed25519 --key priv.pem` (or `--generate-key`)
+  produces a real detached signature over the adapter's Merkle root; `soup adapters verify
+  --public-key trusted.pem` does cryptographic authentication. Same for `soup attest emit
+  --sign ed25519` + the new `soup attest verify`. Install with `pip install soup-cli[sign]`.
+- **Anti-AI-Jacking namespace pin** — Hub model downloads now refuse a repo whose author silently
+  changed (or whose creation date jumped backward), the classic namespace-re-creation attack.
+- **License-conflict gate at merge** — `soup adapters merge` auto-detects each adapter's license
+  (from `adapter_config.json` / model card) and refuses incompatible combinations unless you pass
+  `--license-override <reason>` (logged to the audit trail).
+- **Backdoor-scan gate at merge** — refuses to merge any adapter that `soup adapters scan` flags
+  FAIL unless you pass `--allow-unscanned`.
 
 Full history: [CHANGELOG.md](CHANGELOG.md) &middot; [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 

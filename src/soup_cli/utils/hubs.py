@@ -19,10 +19,13 @@ that the live wiring will call.
 from __future__ import annotations
 
 import ipaddress
+import logging
 import os
 from types import MappingProxyType
-from typing import Mapping
+from typing import Callable, Mapping, Optional, Tuple
 from urllib.parse import urlparse
+
+_LOG = logging.getLogger(__name__)
 
 # Closed allowlist of supported hubs. Wrapped in MappingProxyType so callers
 # cannot mutate the registry at runtime (matches v0.36.0 _REGISTRY policy).
@@ -283,6 +286,82 @@ def _validate_local_path(value: str, *, field: str) -> str:
     return value
 
 
+def _hf_repo_metadata(repo_id: str) -> Optional[Tuple[str, str]]:
+    """Fetch ``(author, created_at)`` for an HF repo, or ``None`` on any failure.
+
+    Exception-safe by design: a network error / 404 / rate-limit must NOT crash
+    a download. The caller (``_run_namespace_check``) fails OPEN when this
+    returns ``None`` — refusing every download on a transient metadata hiccup
+    would break legitimate offline / rate-limited use.
+    """
+    try:
+        from huggingface_hub import HfApi
+
+        info = HfApi().repo_info(repo_id)
+    except Exception:  # noqa: BLE001 - any failure -> skip the gate
+        return None
+    author = getattr(info, "author", None)
+    created = getattr(info, "created_at", None)
+    if not author:
+        # Fall back to the owner segment of "owner/name".
+        author = repo_id.split("/", 1)[0] if "/" in repo_id else None
+    if not author:
+        return None
+    return (str(author), str(created) if created else "")
+
+
+def _run_namespace_check(
+    repo_id: str,
+    *,
+    allow_namespace_shift: str | None,
+    metadata_fn: Optional[Callable[[str], Optional[Tuple[str, str]]]],
+) -> None:
+    """Consult the namespace pin store before an HF download (#186).
+
+    Trust-on-first-use anti-AI-Jacking: record the repo's author + created_at
+    the first time, and refuse on a later author change / backward created_at
+    jump unless ``allow_namespace_shift`` names the new author. Fails OPEN when
+    metadata is unavailable.
+    """
+    from soup_cli.utils.namespace_pin import (
+        NamespacePinStore,
+        default_db_path,
+        verify_namespace,
+    )
+
+    fetch = metadata_fn or _hf_repo_metadata
+    meta = fetch(repo_id)
+    if not meta:
+        _LOG.debug("namespace-pin: no metadata for %r, skipping gate", repo_id)
+        return
+    author, created_at = meta
+    if not author:
+        return
+    # A missing created_at would make the backward-jump check meaningless;
+    # use a stable sentinel so first-use still records.
+    created_at = created_at or "1970-01-01T00:00:00+00:00"
+    # Fail OPEN on store/infra errors (DB locked beyond busy_timeout, perms,
+    # etc.) — a best-effort gate must not turn a transient sqlite hiccup into a
+    # hard download failure (security-review L3). The intentional REFUSAL
+    # (report.ok is False) is raised OUTSIDE this try so it is never swallowed.
+    try:
+        import sqlite3
+
+        with NamespacePinStore(default_db_path()) as store:
+            report = verify_namespace(
+                store,
+                repo_id=repo_id,
+                current_author=author,
+                current_created_at=created_at,
+                allow_namespace_shift=allow_namespace_shift,
+            )
+    except (sqlite3.Error, OSError) as exc:
+        _LOG.debug("namespace-pin store unavailable, skipping gate: %s", exc)
+        return
+    if not report.ok:
+        raise ValueError(f"namespace-pin refused {repo_id!r}: {report.reason}")
+
+
 def download_repo(
     hub: str,
     repo_id: str,
@@ -291,6 +370,9 @@ def download_repo(
     revision: str | None = None,
     allow_patterns: list[str] | None = None,
     repo_type: str = "model",
+    namespace_check: bool = True,
+    allow_namespace_shift: str | None = None,
+    _metadata_fn: Optional[Callable[[str], Optional[Tuple[str, str]]]] = None,
 ) -> str:
     """Snapshot-download ``repo_id`` from ``hub`` into ``local_dir``.
 
@@ -301,8 +383,16 @@ def download_repo(
     * ``modelscope`` → :func:`modelscope.snapshot_download`
     * ``modelers``   → :func:`openmind_hub.snapshot_download`
 
+    Anti-AI-Jacking (v0.71.2 #186): for ``hf`` model repos, the namespace pin
+    store is consulted before the download — a repo whose author changed (or
+    whose created_at jumped backward, the namespace-re-creation signal) is
+    refused unless ``allow_namespace_shift=<new-author>`` is passed. The gate
+    fails OPEN when repo metadata can't be fetched. Disable with
+    ``namespace_check=False``. ``_metadata_fn`` is an injection seam for tests.
+
     Raises ``ImportError`` (with pip-install hint) when the SDK is missing,
-    ``ValueError`` for invalid args, ``TypeError`` for wrong types.
+    ``ValueError`` for invalid args / a refused namespace, ``TypeError`` for
+    wrong types.
     """
     canonical = validate_hub_name(hub)
     _validate_repo_id_shape(repo_id)
@@ -315,6 +405,15 @@ def download_repo(
     if repo_type not in ("model", "dataset", "space"):
         raise ValueError(
             "repo_type must be one of 'model' / 'dataset' / 'space'"
+        )
+
+    # #186 — namespace-pin gate (HF model repos only; modelscope/modelers
+    # expose different metadata APIs — tracked separately).
+    if namespace_check and canonical == "hf" and repo_type == "model":
+        _run_namespace_check(
+            repo_id,
+            allow_namespace_shift=allow_namespace_shift,
+            metadata_fn=_metadata_fn,
         )
 
     if canonical == "hf":

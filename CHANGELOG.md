@@ -12,6 +12,45 @@ reproducing 70+ versions of notes.
 
 ## [Unreleased]
 
+## [0.71.2] - 2026-06-01
+
+### Added
+- **ed25519 signing for `soup adapters sign` / `soup attest`** — real detached
+  signatures (over the adapter Merkle root / the in-toto statement) via a new
+  `[sign]` extra (`pip install soup-cli[sign]`, pulling `cryptography`).
+  `soup adapters sign --backend ed25519 --key <priv.pem>` (or `--generate-key
+  <out.pem>`, or `SOUP_SIGNING_KEY`); `soup adapters verify [--public-key
+  <trusted.pem>]` does a cryptographic verify and, with a trusted key, genuine
+  authentication. `soup attest emit --sign ed25519 --key <priv.pem>` writes a
+  `<output>.sig` sidecar; new `soup attest verify <statement> --signature <sig>`
+  verifies it (canonical-JSON, so it's platform/newline-independent). Sigstore
+  keyless signing stays infra-blocked (needs an OIDC provider + Fulcio/Rekor
+  network — can't be honestly validated offline).
+- **Anti-AI-Jacking namespace pin on Hub downloads** — HF model fetches now
+  consult a trust-on-first-use pin store: a repo whose author changes (or whose
+  `created_at` jumps backward) is refused unless the namespace shift is explicitly
+  allowed. Fails open when repo metadata is unavailable.
+- **License auto-detection at `soup adapters merge`** — when `--license` isn't
+  given, the license is read from each adapter's `adapter_config.json` /
+  `config.json` / model-card frontmatter (HF `llama3.1`-style ids mapped to
+  canonical) and the conflict gate runs automatically.
+- **Backdoor-scan gate at `soup adapters merge`** — refuses to merge any input
+  whose `soup adapters scan` returns FAIL (or can't be scanned) unless
+  `--allow-unscanned` is passed; WARN is advisory.
+
+### Changed
+- License-conflict overrides (`--license-override <reason>`) are now recorded to
+  the audit log for legal review.
+- The namespace-pin store now uses SQLite WAL + busy-timeout and a cross-process
+  file lock around its get+insert, so concurrent writers don't lose the trust
+  anchor.
+
+### Security
+- ed25519 verification fails closed (any tamper / wrong key / missing key ⇒
+  invalid). Signing keys + trusted public keys are symlink-rejected and
+  size-capped via a shared reader (no cwd-containment — keys live outside the
+  project). `--generate-key` refuses to overwrite any existing path.
+
 ## [0.71.1] - 2026-06-01
 
 ### Added

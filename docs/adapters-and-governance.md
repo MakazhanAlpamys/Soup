@@ -336,7 +336,20 @@ soup attest emit \
 
 Stages are a closed allowlist: `extract` / `train` / `eval` / `export` / `publish`.
 Subject SHA must be 64-hex (sha256). The default `--sign unsigned` backend ships now;
-Sigstore (OIDC-via-GitHub) and ed25519 air-gap signing arrive in v0.59.1.
+the **`ed25519` backend is live** (`pip install soup-cli[sign]`):
+
+```bash
+soup attest emit --stage train --subject adapter-v1 --sha aaaa...64hex \
+  --sign ed25519 --key signing.pem --output att.json   # writes att.json.sig
+soup attest verify att.json --signature att.json.sig                 # exit 0 valid
+soup attest verify att.json --signature att.json.sig --public-key trusted.pub
+```
+
+`verify` re-canonicalises the statement JSON (so it's platform/newline-independent)
+and checks the ed25519 signature — exit 3 on tamper, key mismatch, or a sidecar with
+no public key. A valid signature proves the signer *asserted* the statement; it does
+not re-verify the subject digest against an artifact. Sigstore keyless signing remains
+infra-blocked (needs an OIDC identity provider + Fulcio/Rekor network).
 
 
 ## EU AI Act Annex XI/XII Auto-Doc (`soup train --annex-xi`)
@@ -397,12 +410,29 @@ v0.57.0 `adapter_diff` loader so the on-disk surface stays single-source.
 
 Deterministic Merkle-root manifest over every file in the adapter dir
 (including nested `tokenizer/` / `processor/` subdirs). Tamper any file
-and `verify` fails. The `unsigned` backend ships live for offline tamper
-detection (the Merkle-root hash is the trust anchor); `sigstore` and
-`ed25519` backends raise `NotImplementedError` with v0.60.1 marker so CI
-pipelines can integrate the schema today. Signature persists as
-`.soup-signature.json` written atomically via the shared
-`atomic_write_text` helper. `--strict` mode exits 3 on any verify
+and `verify` fails. The `unsigned` backend gives offline tamper detection
+(the Merkle-root hash is the trust anchor). The **`ed25519` backend is live**
+(`pip install soup-cli[sign]`): it adds a real detached signature over the
+Merkle root for *authentication* — proof the signer holds the private key.
+
+```bash
+# generate a keypair + sign in one shot
+soup adapters sign ./adapter --backend ed25519 --generate-key signing.pem
+# or sign with an existing key (or set SOUP_SIGNING_KEY)
+soup adapters sign ./adapter --backend ed25519 --key signing.pem
+# self-consistency verify (embedded public key)
+soup adapters verify ./adapter
+# genuine authentication: require the signer's key match a trusted one
+soup adapters verify ./adapter --public-key trusted.pub
+```
+
+`verify` fails closed — any tamper, wrong/missing/unreadable key, or a
+signature from an untrusted key marks the adapter invalid. Signing keys and
+trusted public keys are symlink-rejected and size-capped but **not**
+cwd-contained (keys are secrets that live outside the project). Signature
+persists as `.soup-signature.json` (atomic write). `sigstore` keyless signing
+stays infra-blocked (needs an OIDC identity provider + Fulcio/Rekor network —
+it can't be honestly validated offline). `--strict` mode exits 3 on any verify
 failure (CI gate code distinct from generic errors).
 
 
@@ -428,9 +458,12 @@ bool rejected so callers can't smuggle a free-for-all bypass). Threat
 model: an attacker watches a popular repo, waits for the original owner
 to delete or expire it, then re-creates the same `owner/name` with
 malicious weights. Without this control, anyone with Soup pinned to that
-namespace silently pulls poison on the next run. Live wiring into
-`utils/hubs.download_repo` lands in v0.60.1; today the helpers are
-operator-callable via the Python API.
+namespace silently pulls poison on the next run. **The gate is wired into
+Hub model downloads** — it consults the pin before fetching and refuses a
+mismatch (raising before any weights land). It fails **open** when repo
+metadata can't be fetched (offline / rate-limited) so a transient hiccup
+never blocks a legitimate download. The pin store uses SQLite WAL + a
+cross-process file lock so concurrent fetches don't lose the trust anchor.
 
 
 ## License-Conflict Matrix at Merge
@@ -440,10 +473,17 @@ MIT / BSD / LGPL / MPL / GPL / AGPL / CC-BY / CC-BY-NC / Llama-2/3.x /
 Gemma / Qwen-research / Mistral-research / OpenRAIL / OpenAI-ToS /
 Anthropic-AUP. `soup adapters merge --license apache-2.0 --license
 cc-by-nc-4.0 -o merged` refuses (non-commercial cannot combine with
-permissive). To proceed past a flagged conflict, pass
-`--license-override "legal-cleared 2026-05-19 by alice"` (8-char min,
-4096-char max reason). The override reason surfaces in the merge panel;
-audit-log integration lands in v0.60.1.
+permissive). When you don't pass `--license`, the license is
+**auto-detected** from each adapter's `adapter_config.json` / `config.json`
+/ model-card frontmatter (HF `llama3.1`-style ids map to canonical) and the
+gate runs automatically when every adapter resolves to a known license. To
+proceed past a flagged conflict, pass `--license-override "legal-cleared
+2026-05-19 by alice"` (8-char min, 4096-char max reason) — the decision is
+**recorded to the audit log** for later legal review.
+
+Merge is additionally gated by the backdoor scanner: any input that
+`soup adapters scan` flags FAIL (or that can't be scanned) refuses the
+merge with exit 3 unless you pass `--allow-unscanned`.
 
 
 ## Airgap Bundle (`soup airgap-bundle`)

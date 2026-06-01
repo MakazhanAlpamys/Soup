@@ -82,7 +82,7 @@ class AttestationStatement:
 _MAX_INVOCATION_ID_LEN = 256
 
 
-def build_slsa_provenance(s: AttestationStatement) -> dict:
+def build_slsa_provenance(s: AttestationStatement) -> dict[str, Any]:
     """Render the SLSA-3 provenance v1 predicate body."""
     if not isinstance(s, AttestationStatement):
         raise TypeError(f"s must be AttestationStatement, got {type(s).__name__}")
@@ -116,7 +116,7 @@ def build_slsa_provenance(s: AttestationStatement) -> dict:
     }
 
 
-def build_in_toto_statement(s: AttestationStatement) -> dict:
+def build_in_toto_statement(s: AttestationStatement) -> dict[str, Any]:
     """Wrap the SLSA provenance in an in-toto v1 Statement."""
     return {
         "_type": "https://in-toto.io/Statement/v1",
@@ -144,22 +144,29 @@ def write_attestation(s: AttestationStatement, output_path: str) -> str:
 
 
 def sign_attestation(
-    payload: bytes, *, backend: SignatureBackend | str = SignatureBackend.UNSIGNED,
+    payload: bytes,
+    *,
+    backend: SignatureBackend | str = SignatureBackend.UNSIGNED,
+    key_path: str | None = None,
 ) -> dict:
     """Sign a payload (in-toto JSON bytes) with the chosen backend.
 
-    Sigstore + ed25519 are **deferred to v0.59.1**. The schema lives now so
-    pipelines can be tested; the live signer lands in v0.59.1.
+    ``ed25519`` (v0.71.2 #179) produces a real detached signature over
+    ``payload`` using a private key resolved from ``key_path`` or the
+    ``SOUP_SIGNING_KEY`` env var. ``sigstore`` keyless signing stays
+    infra-blocked (needs an OIDC identity provider + Fulcio/Rekor network) and
+    raises ``NotImplementedError``.
 
     Args:
         payload: in-toto Statement bytes (typically ``render_attestation(...).encode()``).
-        backend: ``"unsigned"`` is the only live backend in v0.59.0; the others
-                 raise NotImplementedError.
+        backend: ``"unsigned"`` / ``"ed25519"`` are live; ``"sigstore"`` raises.
+        key_path: ed25519 private-key PEM path (``ed25519`` backend only).
 
     Returns:
-        ``{"signature": "", "backend": "unsigned"}`` for the unsigned path. The
-        signature field is intentionally empty so downstream verifiers can detect
-        the missing signature and refuse in strict mode.
+        - ``{"signature": "", "backend": "unsigned"}`` for the unsigned path
+          (the empty signature lets verifiers refuse in strict mode).
+        - ``{"signature": <hex>, "backend": "ed25519", "public_key": <pem>}``
+          for the ed25519 path.
     """
     if not isinstance(payload, (bytes, bytearray)):
         raise TypeError("payload must be bytes")
@@ -173,6 +180,35 @@ def sign_attestation(
             ) from exc
     if backend == SignatureBackend.UNSIGNED:
         return {"signature": "", "backend": "unsigned"}
+    if backend == SignatureBackend.ED25519:
+        from soup_cli.utils.signing import (
+            public_key_pem,
+            resolve_signing_key,
+            sign_payload,
+        )
+
+        private_key = resolve_signing_key(key_path)
+        return {
+            "signature": sign_payload(private_key, bytes(payload)),
+            "backend": "ed25519",
+            "public_key": public_key_pem(private_key),
+        }
     raise NotImplementedError(
-        f"signing backend {backend.value!r} is deferred to v0.59.1"
+        f"signing backend {backend.value!r} is infra-blocked "
+        "(needs OIDC + Fulcio/Rekor network)"
     )
+
+
+def verify_attestation(
+    payload: bytes, signature_hex: str, public_key_pem_str: str
+) -> bool:
+    """Verify an ed25519 attestation signature over ``payload``.
+
+    Returns ``False`` on any verification failure (bad signature, wrong key,
+    malformed hex). Thin wrapper over :func:`soup_cli.utils.signing.verify_payload`.
+    """
+    if not isinstance(payload, (bytes, bytearray)):
+        raise TypeError("payload must be bytes")
+    from soup_cli.utils.signing import verify_payload
+
+    return verify_payload(public_key_pem_str, bytes(payload), signature_hex)

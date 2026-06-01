@@ -390,8 +390,12 @@ def test_adapters_merge_cli_linear(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     _write_adapter(tmp_path / "a", {"w": np.ones((2, 2), dtype=np.float32)})
     _write_adapter(tmp_path / "b", {"w": np.zeros((2, 2), dtype=np.float32)})
+    # --allow-unscanned: the toy `ones((2,2))` fixture is genuinely rank-1, so
+    # the v0.71.2 #192 backdoor-scan gate (correctly) flags it FAIL. This test
+    # exercises the merge MATH, not the scan gate.
     result = runner.invoke(soup_app, [
         "adapters", "merge", "a", "b", "-o", "out", "--strategy", "linear",
+        "--allow-unscanned",
     ])
     assert result.exit_code == 0, (result.output, repr(result.exception))
     assert (tmp_path / "out" / "adapter_model.safetensors").exists()

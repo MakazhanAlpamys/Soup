@@ -151,10 +151,12 @@ soup serve --reasoning-parser deepseek-r1     Strip <think> blocks from response
 soup doctor [--nccl]                          Check environment (optionally check NCCL bandwidth)
 soup quickstart [--dry-run]                   Full demo
 soup adapters scan <adapter>                  Spectral backdoor scan (rank-1 dominance + outlier detection)
-soup adapters sign <adapter> [--backend X]    Compute Merkle-root manifest (.soup-signature.json)
-soup adapters verify <adapter> [--strict]     Verify manifest against current files
+soup adapters sign <adapter> [--backend unsigned|ed25519] [--key <pem>|--generate-key <pem>]  Merkle manifest + ed25519 sign
+soup adapters verify <adapter> [--strict] [--public-key <pem>]  Verify manifest + ed25519 signature
 soup adapters check-safetensors <adapter> [--strict]  Refuse pickle / PyTorch-classic weights
-soup adapters merge ... --license <id> --license-override <reason>  License-conflict gate
+soup adapters merge ... [--license <id>] [--license-override <reason>] [--allow-unscanned]  License + backdoor-scan gates (auto-detect license; scan FAIL refused)
+soup attest emit ... [--sign ed25519 --key <pem>] [-o att.json]  in-toto/SLSA-3 attestation (+ .sig sidecar)
+soup attest verify <statement> --signature <sig> [--public-key <pem>]  Verify ed25519 attestation signature
 soup airgap-bundle --model <m> --output <out.tar>  Signed tarball for data-diode transfer
 soup eval unlearning <run-id> --benchmark tofu|muse|wmdp  Forget Quality + Model Utility + PrivLeak verdict
 soup edit set --base <m> --method rome|memit|alphaedit --subject "..." --target "..."  Surgical knowledge edit (--plan-only available)

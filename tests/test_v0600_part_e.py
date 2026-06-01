@@ -268,7 +268,7 @@ class TestMergeIntegration:
         result = runner.invoke(
             app, [
                 "adapters", "merge", "a", "b",
-                "-o", "out",
+                "-o", "out", "--allow-unscanned",
                 "--license", "apache-2.0",
                 "--license", "cc-by-nc-4.0",
             ]
@@ -287,6 +287,9 @@ class TestMergeIntegration:
 
         from soup_cli.cli import app
         monkeypatch.chdir(tmp_path)
+        # v0.71.2 #190 — the override path now writes an audit record; keep it
+        # out of the real ~/.soup during tests.
+        monkeypatch.setenv("SOUP_AUDIT_LOG_PATH", str(tmp_path / "audit.jsonl"))
         for name in ("a", "b"):
             d = tmp_path / name
             d.mkdir()
@@ -296,7 +299,7 @@ class TestMergeIntegration:
         result = runner.invoke(
             app, [
                 "adapters", "merge", "a", "b",
-                "-o", "out",
+                "-o", "out", "--allow-unscanned",
                 "--license", "apache-2.0",
                 "--license", "cc-by-nc-4.0",
                 "--license-override", "legal-cleared 2026-05-19 by alice",
@@ -325,7 +328,7 @@ class TestMergeIntegration:
         result = runner.invoke(
             app, [
                 "adapters", "merge", "a", "b",
-                "-o", "out",
+                "-o", "out", "--allow-unscanned",
                 "--license", "apache-2.0",
                 "--license", "cc-by-nc-4.0",
                 "--license-override", "ok",  # < 8 chars
@@ -349,7 +352,7 @@ class TestMergeIntegration:
         result = runner.invoke(
             app, [
                 "adapters", "merge", "a", "b",
-                "-o", "out",
+                "-o", "out", "--allow-unscanned",
                 "--license", "apache-2.0",
             ]
         )

@@ -20,6 +20,9 @@ Public surface:
 
 from __future__ import annotations
 
+import json
+import os
+import stat
 import types
 from dataclasses import dataclass
 from typing import Optional, Sequence, Tuple
@@ -237,6 +240,129 @@ def check_license_compat(
     )
 
 
+# HuggingFace model cards spell some licenses differently from our canonical
+# SPDX-ish ids (e.g. `llama3.1` vs `llama-3.1`). Map the common model-card
+# spellings to canonical ids so auto-extraction (#187) recognises them.
+_HF_LICENSE_ALIASES_RAW: dict[str, str] = {
+    "llama2": "llama-2",
+    "llama3": "llama-3",
+    "llama3.1": "llama-3.1",
+    "llama3.2": "llama-3.2",
+    "llama3.3": "llama-3.3",
+    "gemma-terms-of-use": "gemma",
+    "cc-by-nc-4.0": "cc-by-nc-4.0",
+    "creativeml-openrail-m": "creativeml-openrail-m",
+}
+_HF_LICENSE_ALIASES = types.MappingProxyType(dict(_HF_LICENSE_ALIASES_RAW))
+
+_LICENSE_CONFIG_NAMES = ("adapter_config.json", "config.json")
+_MAX_LICENSE_FILE_BYTES = 1024 * 1024  # 1 MiB cap on any file we parse
+_MAX_FRONTMATTER_BYTES = 64 * 1024  # README frontmatter scan cap
+
+
+def _safe_normalise_known(raw: object) -> Optional[str]:
+    """Normalise + alias-map a raw license value; return it only if KNOWN.
+
+    Auto-extraction must not trip the conflict gate on an unrecognised id, so
+    unknown / unparseable values return ``None`` ("undetermined") rather than a
+    bogus license that ``check_license_compat`` would reject.
+    """
+    try:
+        norm = normalise_license_id(raw)
+    except (TypeError, ValueError):
+        return None
+    norm = _HF_LICENSE_ALIASES.get(norm, norm)
+    return norm if norm in KNOWN_LICENSES else None
+
+
+def _read_regular_file(path: str, *, cap: int) -> Optional[str]:
+    """Read a regular file's text, refusing symlinks and oversize files.
+
+    Returns ``None`` when the path is missing / a symlink / not a regular file /
+    too large. Adapters may legitimately live outside cwd (HF cache), so this
+    does NOT enforce cwd-containment — it only refuses to follow a planted
+    symlink (TOCTOU) and caps the read.
+    """
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return None
+    if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode):
+        return None
+    if st.st_size > cap:
+        return None
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return fh.read()
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
+def _license_from_json(path: str) -> Optional[str]:
+    text = _read_regular_file(path, cap=_MAX_LICENSE_FILE_BYTES)
+    if text is None:
+        return None
+    try:
+        data = json.loads(text)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    value = data.get("license")
+    if isinstance(value, (list, tuple)) and value:
+        value = value[0]
+    if not isinstance(value, str):
+        return None
+    return value
+
+
+def _license_from_frontmatter(path: str) -> Optional[str]:
+    text = _read_regular_file(path, cap=_MAX_FRONTMATTER_BYTES)
+    if text is None or not text.lstrip().startswith("---"):
+        return None
+    stripped = text.lstrip()
+    # Find the closing '---' delimiter of the YAML frontmatter block.
+    body = stripped[3:]
+    end = body.find("\n---")
+    if end == -1:
+        return None
+    block = body[:end]
+    try:
+        import yaml  # lazy — pyyaml is a core dep but keep import local
+
+        meta = yaml.safe_load(block)
+    except Exception:  # noqa: BLE001 - any YAML error -> undetermined
+        return None
+    if not isinstance(meta, dict):
+        return None
+    value = meta.get("license")
+    if isinstance(value, (list, tuple)) and value:
+        value = value[0]
+    if not isinstance(value, str):
+        return None
+    return value
+
+
+def extract_license_from_adapter(adapter_dir: object) -> Optional[str]:
+    """Best-effort license auto-detection for an adapter / model directory (#187).
+
+    Resolution order: ``adapter_config.json`` -> ``config.json`` -> ``README.md``
+    YAML frontmatter. Returns the canonical license id when it maps to a KNOWN
+    license, else ``None`` ("undetermined" — the caller then skips the conflict
+    gate rather than refusing on partial information). Symlinked config files
+    are skipped (not followed).
+    """
+    if not isinstance(adapter_dir, str) or not adapter_dir:
+        return None
+    for cfg_name in _LICENSE_CONFIG_NAMES:
+        raw = _license_from_json(os.path.join(adapter_dir, cfg_name))
+        norm = _safe_normalise_known(raw) if raw else None
+        if norm is not None:
+            return norm
+    raw = _license_from_frontmatter(os.path.join(adapter_dir, "README.md"))
+    return _safe_normalise_known(raw) if raw else None
+
+
 def validate_license_override_reason(reason: object) -> str:
     """Sanity-check the ``--license-override <reason>`` payload.
 
@@ -259,3 +385,62 @@ def validate_license_override_reason(reason: object) -> str:
             f"override reason too long (> {_MAX_OVERRIDE_REASON} chars)"
         )
     return stripped
+
+
+# AuditEvent caps each arg at 1024 chars (v0.59.0). Keep our entries under it.
+_AUDIT_ARG_CAP = 1000
+
+
+def record_license_override(
+    licenses: Sequence[object],
+    reason: str,
+    *,
+    path: Optional[str] = None,
+) -> None:
+    """Append a license-override decision to the v0.59 audit log (#190).
+
+    Captures the conflicting licenses + the operator's justification so a later
+    legal review can trace why a flagged merge was allowed. Best-effort: an
+    audit-log write failure must NOT crash the merge (the override already
+    happened), so OS errors are swallowed with a debug log.
+
+    Args:
+        licenses: the per-adapter license ids that triggered the conflict.
+        reason: the (already validated) ``--license-override`` justification.
+        path: audit-log path override (defaults to ``SOUP_AUDIT_LOG_PATH`` /
+            ``~/.soup/audit.jsonl`` via ``append_audit_event``).
+    """
+    import getpass
+    import logging
+    import socket
+    from datetime import datetime, timezone
+
+    from soup_cli.utils.audit_log import AuditEvent, append_audit_event
+
+    log = logging.getLogger(__name__)
+
+    lic_args = [str(lic)[:_AUDIT_ARG_CAP] for lic in licenses]
+    reason_arg = ("reason=" + str(reason))[:_AUDIT_ARG_CAP]
+    args = tuple(lic_args + [reason_arg])
+
+    try:
+        host = (socket.gethostname() or "unknown")[:128]
+    except OSError:
+        host = "unknown"
+    try:
+        operator = (getpass.getuser() or "unknown")[:128]
+    except Exception:  # noqa: BLE001 - getuser can raise on odd envs
+        operator = "unknown"
+
+    try:
+        event = AuditEvent(
+            timestamp=datetime.now(tz=timezone.utc).isoformat(),
+            command="adapters merge",
+            args=args,
+            exit_code=0,
+            host_id=host or "unknown",
+            operator_id=operator or "unknown",
+        )
+        append_audit_event(event, path)
+    except Exception as exc:  # noqa: BLE001 - best-effort audit must never crash merge
+        log.debug("license-override audit write failed: %s", exc)

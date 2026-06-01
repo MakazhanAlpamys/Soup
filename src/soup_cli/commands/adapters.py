@@ -371,7 +371,15 @@ def merge(
         None, "--license-override",
         help=(
             "Free-text justification (>=8 chars) to merge across a license "
-            "conflict. Logged for legal review."
+            "conflict. Logged to the audit log for legal review (v0.71.2)."
+        ),
+    ),
+    allow_unscanned: bool = typer.Option(
+        False, "--allow-unscanned",
+        help=(
+            "Skip the v0.71.2 backdoor-scan gate. By default `adapters merge` "
+            "refuses to merge an input whose `adapters scan` returns FAIL (or "
+            "that cannot be scanned)."
         ),
     ),
 ):
@@ -379,6 +387,8 @@ def merge(
     from soup_cli.utils.adapter_merge import SUPPORTED_STRATEGIES, merge_adapters
     from soup_cli.utils.license_matrix import (
         check_license_compat,
+        extract_license_from_adapter,
+        record_license_override,
         validate_license_override_reason,
     )
 
@@ -435,8 +445,44 @@ def merge(
         console.print(panel)
         return
 
-    # v0.60.0 Part E: license-conflict gate. Operators MUST declare a
-    # license per adapter (or pass --license-override <reason>).
+    # v0.71.2 #192 — backdoor-scan gate. Refuse to merge any input whose
+    # spectral scan returns FAIL (or that cannot be scanned at all) unless the
+    # operator passes --allow-unscanned. WARN is advisory-only. Runs AFTER the
+    # cmaes plan-only branch (which doesn't merge weights) so it gates only the
+    # strategies that actually write a merged adapter.
+    if not allow_unscanned:
+        from soup_cli.utils.adapter_scan import scan_adapter
+
+        for adapter_path in adapters:
+            try:
+                scan_report = scan_adapter(adapter_path)
+            except (FileNotFoundError, ValueError, TypeError, RuntimeError) as exc:
+                console.print(
+                    f"[red]Could not scan {escape(adapter_path)} "
+                    f"({escape(str(exc))}).[/]\n"
+                    "[dim]Pass --allow-unscanned to merge anyway.[/]"
+                )
+                raise typer.Exit(3) from exc
+            if scan_report.overall == "FAIL":
+                console.print(
+                    f"[red]Backdoor scan FAILED for {escape(adapter_path)}: "
+                    f"{escape(scan_report.summary)}[/]\n"
+                    "[dim]Pass --allow-unscanned to merge anyway "
+                    "(not recommended).[/]"
+                )
+                raise typer.Exit(3)
+            if scan_report.overall == "WARN":
+                console.print(
+                    f"[yellow]Backdoor scan WARN for {escape(adapter_path)}: "
+                    f"{escape(scan_report.summary)} — proceeding.[/]"
+                )
+
+    # v0.60.0 Part E: license-conflict gate. Operators may declare a license
+    # per adapter (--license, repeatable) OR rely on v0.71.2 #187
+    # auto-extraction from adapter_config.json / config.json / model-card
+    # frontmatter. On a conflict, --license-override <reason> proceeds and the
+    # decision is recorded to the audit log (#190).
+    gate_licenses: Optional[list[str]] = None
     if license_ids:
         if len(license_ids) != len(adapters):
             console.print(
@@ -444,8 +490,26 @@ def merge(
                 f"adapter count {len(adapters)}[/]"
             )
             raise typer.Exit(2)
+        gate_licenses = list(license_ids)
+    else:
+        # #187 — auto-detect. Only run the gate if EVERY adapter resolves to a
+        # known license; partial info would make the conflict check misleading.
+        extracted = [extract_license_from_adapter(a) for a in adapters]
+        if all(e is not None for e in extracted):
+            gate_licenses = [str(e) for e in extracted]
+            console.print(
+                "[dim]Auto-detected licenses: "
+                f"{escape(', '.join(gate_licenses))}[/]"
+            )
+        elif license_override is not None:
+            console.print(
+                "[yellow]--license-override given but licenses could not be "
+                "auto-detected for every adapter; no conflict gate triggered.[/]"
+            )
+
+    if gate_licenses is not None:
         try:
-            license_report = check_license_compat(license_ids)
+            license_report = check_license_compat(gate_licenses)
         except (TypeError, ValueError) as exc:
             console.print(f"[red]License check failed: {escape(str(exc))}[/]")
             raise typer.Exit(2) from exc
@@ -467,16 +531,13 @@ def merge(
                     f"[red]Invalid --license-override: {escape(str(exc))}[/]"
                 )
                 raise typer.Exit(2) from exc
+            # #190 — persist the override decision for legal review.
+            record_license_override(gate_licenses, cleared)
             console.print(
                 f"[yellow]License conflict overridden:[/] "
                 f"{escape(license_report.reason)}\n"
-                f"[dim]Reason: {escape(cleared)}[/]"
+                f"[dim]Reason: {escape(cleared)} (recorded to audit log)[/]"
             )
-    elif license_override is not None:
-        console.print(
-            "[yellow]--license-override given without --license declarations; "
-            "no conflict gate triggered.[/]"
-        )
 
     parsed_weights = None
     if weights:
@@ -762,19 +823,32 @@ def sign(
     adapter: str = typer.Argument(..., help="Path to adapter directory"),
     backend: str = typer.Option(
         "unsigned", "--backend",
-        help="Signing backend: unsigned | ed25519 | sigstore (v0.60.0 ships unsigned only)",
+        help="Signing backend: unsigned | ed25519 (sigstore is infra-blocked)",
+    ),
+    key: Optional[str] = typer.Option(
+        None, "--key",
+        help="ed25519 private-key PEM path (or set SOUP_SIGNING_KEY).",
+    ),
+    generate_key: Optional[str] = typer.Option(
+        None, "--generate-key",
+        help="Generate a fresh ed25519 keypair, persist the private key here "
+             "(PEM, 0600), and sign with it.",
     ),
 ):
-    """Compute manifest + write ``.soup-signature.json`` (v0.60.0).
+    """Compute manifest + write ``.soup-signature.json`` (v0.60.0, ed25519 v0.71.2).
 
-    Default backend is ``unsigned`` — provides offline tamper detection
-    via Merkle-root hash. Sigstore + ed25519 backends raise NotImplementedError
-    until v0.60.1.
+    ``unsigned`` (default) gives offline tamper detection via a Merkle-root
+    hash. ``ed25519`` (v0.71.2 #185) adds a real detached signature over that
+    root — pass ``--key <priv.pem>``, set ``SOUP_SIGNING_KEY``, or use
+    ``--generate-key <out.pem>``. ``sigstore`` keyless signing is infra-blocked
+    (needs an OIDC identity provider + Fulcio/Rekor network).
     """
     from soup_cli.utils.adapter_sign import sign_adapter
 
     try:
-        record = sign_adapter(adapter, backend=backend)
+        record = sign_adapter(
+            adapter, backend=backend, key_path=key, generate_key_path=generate_key
+        )
     except FileNotFoundError as exc:
         console.print(f"[red]{escape(str(exc))}[/]")
         raise typer.Exit(1) from exc
@@ -784,6 +858,12 @@ def sign(
     except (ValueError, TypeError) as exc:
         console.print(f"[red]{escape(str(exc))}[/]")
         raise typer.Exit(2) from exc
+
+    if generate_key and record.backend == "ed25519":
+        console.print(
+            f"[yellow]Generated ed25519 private key -> {escape(generate_key)} "
+            "(keep it secret; verify with the matching public key).[/]"
+        )
 
     console.print(
         Panel(
@@ -804,8 +884,18 @@ def verify(
         False, "--strict",
         help="Exit 3 on any verification failure (CI-friendly)",
     ),
+    public_key: Optional[str] = typer.Option(
+        None, "--public-key",
+        help="Trusted ed25519 public-key PEM. When set, the embedded signing "
+             "key must match it (genuine authentication, not just consistency).",
+    ),
 ):
-    """Verify ``.soup-signature.json`` against current files (v0.60.0).
+    """Verify ``.soup-signature.json`` against current files (v0.60.0, ed25519 v0.71.2).
+
+    For ``ed25519``-signed adapters the detached signature is verified against
+    the embedded public key (self-consistency); pass ``--public-key
+    <trusted.pem>`` to additionally require the signer's key match a key you
+    trust out of band.
 
     Exit codes:
       0  signature present and matches
@@ -815,10 +905,9 @@ def verify(
     from soup_cli.utils.adapter_sign import verify_adapter
 
     try:
-        if strict:
-            report = verify_adapter(adapter, strict=True)
-        else:
-            report = verify_adapter(adapter, strict=False)
+        report = verify_adapter(
+            adapter, strict=strict, trusted_public_key=public_key
+        )
     except FileNotFoundError as exc:
         console.print(f"[red]{escape(str(exc))}[/]")
         raise typer.Exit(1) from exc

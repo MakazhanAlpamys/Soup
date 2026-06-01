@@ -31,6 +31,7 @@ import re
 import sqlite3
 import stat
 import tempfile
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
@@ -151,7 +152,18 @@ class NamespacePinStore:
             if stat.S_ISLNK(link_st.st_mode):
                 raise ValueError("DB path is a symlink (TOCTOU defence)")
         self._path = path
+        self._lock_path = path + ".lock"
         self._conn = sqlite3.connect(path)
+        # v0.71.2 #191 — concurrent-writer support. WAL lets readers proceed
+        # while one writer holds the DB, and busy_timeout makes a competing
+        # writer retry (instead of raising "database is locked" instantly).
+        # Both are best-effort: WAL is a no-op on :memory: DBs, and a failed
+        # PRAGMA must not break the store.
+        try:
+            self._conn.execute("PRAGMA journal_mode=WAL")
+            self._conn.execute("PRAGMA busy_timeout=5000")
+        except sqlite3.Error:
+            pass
         self._conn.executescript(_SCHEMA_SQL)
         # POSIX-only 0600 perms for the DB file.
         if os.name != "nt":
@@ -186,6 +198,58 @@ class NamespacePinStore:
             first_seen=row[3],
         )
 
+    @contextmanager
+    def _cross_process_lock(self):
+        """Best-effort cross-process exclusive lock around get+insert (#191).
+
+        POSIX: ``fcntl.flock(LOCK_EX)`` on a ``<db>.lock`` file. Windows:
+        ``msvcrt.locking`` on the same sidecar. Mirrors the v0.54.0
+        ``advise_history._append_with_lock`` pattern (separate lock file so the
+        unlock byte-range matches the locked one). When locking is unavailable
+        (exotic FS), the write still proceeds — WAL + busy_timeout already
+        serialise concurrent writers at the SQLite level.
+        """
+        handle = None
+        kind: Optional[str] = None
+        try:
+            handle = open(self._lock_path, "a+")
+        except OSError:
+            handle = None
+        if handle is not None:
+            try:
+                if os.name == "nt":
+                    import msvcrt  # type: ignore[import-not-found]
+
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+                    kind = "nt"
+                else:
+                    import fcntl  # type: ignore[import-not-found]
+
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+                    kind = "posix"
+            except (ImportError, OSError):
+                kind = None
+        try:
+            yield
+        finally:
+            if handle is not None:
+                try:
+                    if kind == "nt":
+                        import msvcrt  # type: ignore[import-not-found]
+
+                        handle.seek(0)
+                        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+                    elif kind == "posix":
+                        import fcntl  # type: ignore[import-not-found]
+
+                        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                except (ImportError, OSError):
+                    # Best-effort unlock; ImportError can't happen here (the
+                    # lock side already imported successfully) but catching it
+                    # guarantees handle.close() still runs (code-review L2).
+                    pass
+                handle.close()
+
     def put(self, pin: NamespacePin) -> None:
         """Insert a new pin or update author/created_at on an existing one.
 
@@ -196,18 +260,24 @@ class NamespacePinStore:
         ``NamespacePin`` whose ``first_seen`` matches the existing record
         OR with the operator-confirmed opt-in path inside
         ``verify_namespace``.
+
+        The get+insert runs under a cross-process lock (#191) so a concurrent
+        first-insert from another process cannot clobber the trust anchor.
         """
         if not isinstance(pin, NamespacePin):
             raise TypeError("pin must be NamespacePin")
-        # Preserve the original first_seen across overwrites.
-        existing = self.get(pin.repo_id)
-        first_seen = existing.first_seen if existing is not None else pin.first_seen
-        self._conn.execute(
-            "INSERT OR REPLACE INTO namespace_pins "
-            "(repo_id, author, created_at, first_seen) VALUES (?, ?, ?, ?)",
-            (pin.repo_id, pin.author, pin.created_at, first_seen),
-        )
-        self._conn.commit()
+        with self._cross_process_lock():
+            # Preserve the original first_seen across overwrites — read INSIDE
+            # the lock so a racing writer's row is observed (closes the
+            # first-insert TOCTOU).
+            existing = self.get(pin.repo_id)
+            first_seen = existing.first_seen if existing is not None else pin.first_seen
+            self._conn.execute(
+                "INSERT OR REPLACE INTO namespace_pins "
+                "(repo_id, author, created_at, first_seen) VALUES (?, ?, ?, ?)",
+                (pin.repo_id, pin.author, pin.created_at, first_seen),
+            )
+            self._conn.commit()
 
 
 def _now_iso() -> str:

@@ -30,7 +30,7 @@ import json
 import os
 import stat
 from dataclasses import dataclass, field
-from typing import Optional, Tuple
+from typing import Any, Mapping, Optional, Tuple
 
 from soup_cli.utils.paths import (
     atomic_write_text,
@@ -78,13 +78,20 @@ class AdapterManifest:
 
 @dataclass(frozen=True)
 class SignatureRecord:
-    """Persisted signature file body."""
+    """Persisted signature file body.
+
+    ``public_key`` is the PEM of the ed25519 public key when ``backend ==
+    "ed25519"`` (empty for ``unsigned``). It is embedded so ``verify_adapter``
+    can do a self-consistency check without an out-of-band key; pass
+    ``trusted_public_key`` to ``verify_adapter`` for genuine authentication.
+    """
 
     backend: str
     merkle_root: str
     signature: str
     signed_at: str
     manifest: AdapterManifest
+    public_key: str = ""
 
 
 @dataclass(frozen=True)
@@ -252,7 +259,7 @@ def _resolve_backend(backend: object) -> SignBackend:
     raise TypeError(f"backend must be str or SignBackend, got {type(backend).__name__}")
 
 
-def _manifest_to_dict(manifest: AdapterManifest) -> dict:
+def _manifest_to_dict(manifest: AdapterManifest) -> dict[str, Any]:
     return {
         "adapter": manifest.adapter,
         "version": manifest.version,
@@ -264,7 +271,7 @@ def _manifest_to_dict(manifest: AdapterManifest) -> dict:
     }
 
 
-def _manifest_from_dict(payload: dict) -> AdapterManifest:
+def _manifest_from_dict(payload: Mapping[str, Any]) -> AdapterManifest:
     files_raw = payload.get("files", [])
     if not isinstance(files_raw, list):
         raise ValueError("files must be a list")
@@ -284,17 +291,70 @@ def _manifest_from_dict(payload: dict) -> AdapterManifest:
     )
 
 
+def _write_generated_key(generate_key_path: str) -> str:
+    """Generate a fresh ed25519 private key and persist it (PEM, 0600).
+
+    The operator explicitly asked to create a key at this path (via
+    ``--generate-key``), so it is NOT cwd-contained (keys are secrets that
+    live outside the project tree). We DO refuse to write through a planted
+    symlink (TOCTOU defence). Returns the path.
+    """
+    from soup_cli.utils.signing import generate_ed25519_private_pem
+
+    if not isinstance(generate_key_path, str) or not generate_key_path:
+        raise ValueError("generate_key_path must be a non-empty str")
+    if "\x00" in generate_key_path:
+        raise ValueError("generate_key_path must not contain null bytes")
+    # --generate-key is for a NEW key file. Refuse if anything already exists
+    # at the target — this both closes the Windows TOCTOU window (where
+    # O_NOFOLLOW is a no-op) and prevents silently clobbering an existing key
+    # (security-review L1).
+    if os.path.lexists(generate_key_path):
+        raise ValueError(
+            f"refusing to overwrite existing path {os.path.basename(generate_key_path)!r}; "
+            "choose a fresh --generate-key path"
+        )
+    pem = generate_ed25519_private_pem()
+    parent = os.path.dirname(os.path.realpath(generate_key_path)) or "."
+    os.makedirs(parent, exist_ok=True)
+    # 0600 from creation on POSIX (O_CREAT mode arg).
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    if nofollow:
+        flags |= nofollow
+    fd = os.open(generate_key_path, flags, 0o600)
+    try:
+        os.write(fd, pem.encode("utf-8"))
+    finally:
+        os.close(fd)
+    if os.name != "nt":
+        try:
+            os.chmod(generate_key_path, 0o600)
+        except OSError:
+            pass
+    return generate_key_path
+
+
 def sign_adapter(
     adapter_dir: str,
     *,
     backend: object = SignBackend.UNSIGNED,
+    key_path: Optional[str] = None,
+    generate_key_path: Optional[str] = None,
 ) -> SignatureRecord:
     """Compute the manifest, sign it, and write ``.soup-signature.json``.
 
     Args:
         adapter_dir: cwd-contained adapter directory.
-        backend: ``"unsigned"`` is live; ``"sigstore"`` and ``"ed25519"`` are
-            deferred to v0.60.1 (raises ``NotImplementedError``).
+        backend: ``"unsigned"`` (Merkle-root tamper detection) or ``"ed25519"``
+            (real detached signature over the Merkle root — v0.71.2 #185).
+            ``"sigstore"`` raises ``NotImplementedError`` (needs OIDC + Rekor;
+            infra-blocked).
+        key_path: ed25519 private-key PEM path (``ed25519`` backend). When None,
+            falls back to ``SOUP_SIGNING_KEY`` env, then ``generate_key_path``.
+        generate_key_path: when set (and no key resolved), generate a fresh
+            ed25519 keypair, persist the private key here (PEM, 0600), and sign
+            with it. Mirrors the CLI ``--generate-key`` ergonomic.
 
     Returns:
         ``SignatureRecord`` describing what was written.
@@ -304,11 +364,27 @@ def sign_adapter(
     chosen = _resolve_backend(backend)
     manifest = compute_adapter_manifest(adapter_dir)
 
+    public_key = ""
     if chosen == SignBackend.UNSIGNED:
         signature = ""
+    elif chosen == SignBackend.ED25519:
+        from soup_cli.utils.signing import (
+            public_key_pem,
+            resolve_signing_key,
+            sign_payload,
+        )
+
+        if not key_path and generate_key_path and not os.environ.get("SOUP_SIGNING_KEY"):
+            key_path = _write_generated_key(generate_key_path)
+        private_key = resolve_signing_key(key_path)
+        # Sign the Merkle root — binds the signature to the exact file set +
+        # contents (the root is a hash over every file).
+        signature = sign_payload(private_key, manifest.merkle_root.encode("utf-8"))
+        public_key = public_key_pem(private_key)
     else:
         raise NotImplementedError(
-            f"signing backend {chosen.value!r} is deferred to v0.60.1"
+            f"signing backend {chosen.value!r} is deferred / infra-blocked "
+            "(needs OIDC + Fulcio/Rekor network)"
         )
 
     signed_at = datetime.now(tz=timezone.utc).isoformat()
@@ -318,11 +394,13 @@ def sign_adapter(
         signature=signature,
         signed_at=signed_at,
         manifest=manifest,
+        public_key=public_key,
     )
     payload = {
         "backend": record.backend,
         "merkle_root": record.merkle_root,
         "signature": record.signature,
+        "public_key": record.public_key,
         "signed_at": record.signed_at,
         "manifest": _manifest_to_dict(manifest),
     }
@@ -369,25 +447,56 @@ def _load_signature(adapter_dir: str) -> Optional[SignatureRecord]:
         signature=str(payload.get("signature", "")),
         signed_at=str(payload.get("signed_at", "")),
         manifest=manifest,
+        public_key=str(payload.get("public_key", "")),
     )
 
 
-def verify_adapter(adapter_dir: str, *, strict: bool = False) -> VerifyReport:
+def _normalise_pem(pem: str) -> str:
+    """Strip whitespace differences so two PEMs of the same key compare equal."""
+    return "".join(pem.split())
+
+
+def _read_trusted_pubkey(path: str) -> str:
+    """Read a trusted public-key PEM (symlink-rejected, size-capped).
+
+    Delegates to the shared ``signing.read_public_key_file`` so the hardening
+    (symlink rejection + size cap, no cwd-containment for keys) is identical to
+    ``soup attest verify`` (security-review M1 consolidation).
+    """
+    from soup_cli.utils.signing import read_public_key_file
+
+    return read_public_key_file(path)
+
+
+def verify_adapter(
+    adapter_dir: str,
+    *,
+    strict: bool = False,
+    trusted_public_key: Optional[str] = None,
+) -> VerifyReport:
     """Verify that the adapter's files match the recorded manifest.
 
     Args:
         adapter_dir: cwd-contained adapter directory.
         strict: when True, raise ``ValueError`` on any failure (CI-friendly).
             When False, return a ``VerifyReport`` with ``valid=False``.
+        trusted_public_key: optional path to a trusted ed25519 public-key PEM.
+            When supplied AND the recorded backend is ``ed25519``, the embedded
+            public key must match this trusted key (genuine authentication) —
+            otherwise verification fails with an "untrusted key" finding.
 
     Returns:
         ``VerifyReport``. ``valid=True`` requires a present signature file
-        AND a recomputed Merkle root that matches the recorded one. Unsigned
-        adapters fail verification in both modes — strict raises, lenient
-        reports.
+        AND a recomputed Merkle root that matches the recorded one. For the
+        ``ed25519`` backend it additionally requires the embedded detached
+        signature to verify against the embedded (or trusted) public key.
+        Unsigned adapters fail verification in both modes — strict raises,
+        lenient reports.
     """
     if not isinstance(strict, bool):
         raise TypeError("strict must be bool")
+    if trusted_public_key is not None and not isinstance(trusted_public_key, str):
+        raise TypeError("trusted_public_key must be str or None")
     enforce_under_cwd_and_no_symlink(adapter_dir, "adapter")
 
     name = os.path.basename(os.path.normpath(adapter_dir))
@@ -425,6 +534,40 @@ def verify_adapter(adapter_dir: str, *, strict: bool = False) -> VerifyReport:
     for fname in recorded_files:
         if fname not in current_files:
             findings.append(f"missing file: {fname!r}")
+
+    # ed25519: verify the detached signature over the RECORDED Merkle root
+    # against the embedded (or trusted) public key. The merkle-root mismatch
+    # above already catches file tampering; this catches a forged/corrupted
+    # signature and (with `trusted_public_key`) a signature from an untrusted key.
+    if record.backend == SignBackend.ED25519.value:
+        from soup_cli.utils import signing as _signing
+
+        public_key = record.public_key
+        run_embedded_verify = True
+        if trusted_public_key is not None:
+            try:
+                trusted_pem = _read_trusted_pubkey(trusted_public_key)
+            except (ValueError, FileNotFoundError, OSError) as exc:
+                # Can't read the trusted key -> already a failure; skip the
+                # embedded verify so the only finding is the real cause
+                # (code-review M1 readability — the result was already
+                # fail-closed, this makes the reason unambiguous).
+                findings.append(f"trusted public key unreadable: {exc}")
+                run_embedded_verify = False
+            else:
+                if _normalise_pem(trusted_pem) != _normalise_pem(public_key):
+                    findings.append(
+                        "signed by an untrusted key (embedded public key does "
+                        "not match --public-key)"
+                    )
+                public_key = trusted_pem
+        if run_embedded_verify:
+            if not public_key:
+                findings.append("ed25519 backend but no public key recorded")
+            elif not _signing.verify_payload(
+                public_key, record.merkle_root.encode("utf-8"), record.signature
+            ):
+                findings.append("ed25519 signature invalid")
 
     if findings:
         reason = f"signature mismatch: {findings[0]}"
