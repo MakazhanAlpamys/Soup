@@ -2,17 +2,47 @@
 
 from __future__ import annotations
 
+import json
 import re
 from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
-CAN_FORMAT_VERSION = 2  # v0.33.0: deploy_targets + env capture (additive over v1)
-SUPPORTED_CAN_FORMAT_VERSIONS = (1, 2)
+CAN_FORMAT_VERSION = 3  # v0.71.3 #182: attestations field (additive over v2)
+SUPPORTED_CAN_FORMAT_VERSIONS = (1, 2, 3)
 
 _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-.]{0,127}$")
 _HF_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-./]{0,127}$")
 _HF_REPO_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-.]{0,95}/[A-Za-z0-9][A-Za-z0-9_\-.]{0,95}$")
+
+# v0.71.3 #182 — caps on embedded in-toto attestations.
+_MAX_ATTESTATIONS = 64
+_MAX_ATTESTATION_BYTES = 1024 * 1024  # 1 MiB per statement
+
+
+def validate_attestation_statement(stmt: object) -> dict:
+    """Validate one embedded in-toto Statement dict (v0.71.3 #182).
+
+    Shape-only: must be a dict carrying ``_type`` (str) and ``predicateType``
+    (str), and serialise to <= 1 MiB. Returns the statement unchanged.
+    """
+    if not isinstance(stmt, dict):
+        raise ValueError("attestation must be a dict (in-toto Statement)")
+    type_field = stmt.get("_type")
+    predicate_type = stmt.get("predicateType")
+    if not isinstance(type_field, str) or not type_field:
+        raise ValueError("attestation missing a non-empty '_type' string")
+    if not isinstance(predicate_type, str) or not predicate_type:
+        raise ValueError("attestation missing a non-empty 'predicateType' string")
+    try:
+        size = len(json.dumps(stmt).encode("utf-8"))
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"attestation is not JSON-serialisable: {exc}") from exc
+    if size > _MAX_ATTESTATION_BYTES:
+        raise ValueError(
+            f"attestation too large ({size} > {_MAX_ATTESTATION_BYTES} bytes)"
+        )
+    return stmt
 
 
 class DeployTarget(BaseModel):
@@ -116,6 +146,23 @@ class Manifest(BaseModel):
         default_factory=list,
         description="Optional declarative deploy targets (v2+)",
     )
+    attestations: list[dict] = Field(
+        default_factory=list,
+        description="Optional embedded in-toto Statements (v3+)",
+    )
+
+    @field_validator("attestations", mode="before")
+    @classmethod
+    def _valid_attestations(cls, value: object) -> list[dict]:
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            raise ValueError("attestations must be a list of in-toto Statements")
+        if len(value) > _MAX_ATTESTATIONS:
+            raise ValueError(
+                f"too many attestations ({len(value)} > {_MAX_ATTESTATIONS})"
+            )
+        return [validate_attestation_statement(s) for s in value]
 
     @field_validator("can_format_version")
     @classmethod

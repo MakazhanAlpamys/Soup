@@ -29,6 +29,7 @@ def _add_text(tar: tarfile.TarFile, name: str, content: str) -> None:
 def pack_entry(
     *, entry_id: str, out_path: str, author: str = "unknown",
     description: Optional[str] = None,
+    attestations: Optional[list[dict]] = None,
 ) -> Path:
     """Pack a registry entry as a ``.can`` tarball.
 
@@ -38,6 +39,8 @@ def pack_entry(
             at call time.
         author: author handle baked into the manifest.
         description: optional free-form description.
+        attestations: optional list of embedded in-toto Statements (v0.71.3
+            #182). Each is shape-validated by the manifest schema.
 
     Returns:
         The absolute path to the written file.
@@ -66,6 +69,7 @@ def pack_entry(
         base_hash=entry.get("entry_hash", ""),
         description=description or entry.get("notes"),
         tags=list(entry.get("tags", [])),
+        attestations=list(attestations or []),
     )
 
     out.parent.mkdir(parents=True, exist_ok=True)

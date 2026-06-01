@@ -157,7 +157,13 @@ soup adapters check-safetensors <adapter> [--strict]  Refuse pickle / PyTorch-cl
 soup adapters merge ... [--license <id>] [--license-override <reason>] [--allow-unscanned]  License + backdoor-scan gates (auto-detect license; scan FAIL refused)
 soup attest emit ... [--sign ed25519 --key <pem>] [-o att.json]  in-toto/SLSA-3 attestation (+ .sig sidecar)
 soup attest verify <statement> --signature <sig> [--public-key <pem>]  Verify ed25519 attestation signature
-soup airgap-bundle --model <m> --output <out.tar>  Signed tarball for data-diode transfer
+soup airgap-bundle --model <m> --output <out.tar> [--repro-receipt <r.json>]  Signed tarball for data-diode transfer (embeds repro-receipt)
+soup train --config soup.yaml --annex-xi <out.md|out.pdf>  EU AI Act Annex XI/XII doc (markdown or PDF; top_domains auto-filled)
+soup train --config soup.yaml --track-energy [--energy-country USA]  codecarbon offline kWh/CO2 → annex-xi (pip install soup-cli[carbon])
+soup train --config soup.yaml --repro-receipt <out.json>  SR 11-7 reproducibility receipt
+soup can pack --entry-id <id> --out r.can --attest <statement.json>  Embed in-toto Statements into a v3 can manifest
+soup audit-log tail / rotate  Tail / rotate the per-command HIPAA/SOC2 audit log (~/.soup/audit.jsonl)
+soup --no-audit-log <cmd> / SOUP_NO_AUDIT_LOG=1  Opt out of the per-command audit line
 soup eval unlearning <run-id> --benchmark tofu|muse|wmdp  Forget Quality + Model Utility + PrivLeak verdict
 soup edit set --base <m> --method rome|memit|alphaedit --subject "..." --target "..."  Surgical knowledge edit (--plan-only available)
 soup edit diff <before-run> <after-run> --probes p.jsonl  Knowledge-injection diff visualizer

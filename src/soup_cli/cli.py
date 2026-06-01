@@ -1,5 +1,6 @@
 """Main CLI entry point — all commands registered here."""
 
+import os
 import sys
 
 # UTF-8 stdio bootstrap (v0.40.1 Part A) — must run before any Rich console
@@ -71,6 +72,12 @@ console = Console()
 _verbose = False
 # Global log level (resolved string), set by main() callback
 _log_level = "normal"
+# v0.71.3 #183 — audit-log opt-out, set by the --no-audit-log callback flag.
+_audit_disabled = False
+
+# Global options that consume a following value (so the audit command-splitter
+# does not mistake the value for the subcommand name).
+_GLOBAL_VALUE_OPTS = frozenset({"--log-level"})
 
 app = typer.Typer(
     name="soup",
@@ -598,10 +605,20 @@ def main(
         "--log-level",
         help="Logging tier: quiet | normal | verbose | debug",
     ),
+    no_audit_log: bool = typer.Option(
+        False,
+        "--no-audit-log",
+        help=(
+            "Disable the local HIPAA/SOC2 audit log for this invocation "
+            "(also via SOUP_NO_AUDIT_LOG=1). Default: a one-line record per "
+            "command under ~/.soup/audit.jsonl. v0.71.3."
+        ),
+    ),
 ):
     """Soup — fine-tune LLMs in one command."""
-    global _verbose, _log_level
+    global _verbose, _log_level, _audit_disabled
     _verbose = verbose
+    _audit_disabled = no_audit_log
     from soup_cli.utils.log_level import (
         apply_logging_level,
         parse_log_level,
@@ -621,24 +638,114 @@ def main(
     apply_logging_level(tier)
 
 
+def _split_command_args(argv: list[str]) -> tuple[str, list[str]]:
+    """Split ``argv`` into (command, remaining_args) for the audit record.
+
+    Skips the program name (argv[0]) and global options. Global options that
+    take a value (``--log-level``) consume their following token so the value
+    is not mistaken for the subcommand. Returns ``("(root)", [...])`` when no
+    subcommand is present.
+    """
+    tokens = list(argv[1:])
+    i = 0
+    while i < len(tokens):
+        tok = tokens[i]
+        if tok in _GLOBAL_VALUE_OPTS:
+            i += 2  # skip the option AND its value (even if the value is "-"-like)
+            continue
+        if isinstance(tok, str) and tok.startswith("-"):
+            i += 1
+            continue
+        return tok, tokens[i + 1:]
+    return "(root)", tokens
+
+
+def _audit_env_opt_out() -> bool:
+    val = (os.environ.get("SOUP_NO_AUDIT_LOG") or "").strip().lower()
+    return val in {"1", "true", "yes", "on"}
+
+
+def _emit_audit_event(argv: list[str], exit_code: int) -> None:
+    """Append one HIPAA/SOC2 audit record for this command. Best-effort.
+
+    v0.71.3 #183 — auto-instrumentation. Disabled by ``--no-audit-log`` /
+    ``SOUP_NO_AUDIT_LOG``. Never raises: a broken audit log must never crash
+    the CLI (mirrors v0.59.0 audit-log fail-soft policy).
+    """
+    if _audit_disabled or _audit_env_opt_out():
+        return
+    try:
+        import getpass
+        import platform
+        from datetime import datetime, timezone
+
+        from soup_cli.utils.audit_log import AuditEvent, append_audit_event
+
+        command, args = _split_command_args(argv)
+        command = (command or "(root)")[:64] or "(root)"
+        try:
+            operator = getpass.getuser() or "unknown"
+        except (OSError, KeyError, ImportError):
+            # getpass.getuser() can raise when no pwd / env user is resolvable.
+            operator = "unknown"
+        host = (platform.node() or "unknown")[:128] or "unknown"
+        operator = (operator or "unknown")[:128] or "unknown"
+        # Defensive re-cap, mirroring audit_log._MAX_ARGS (256) /
+        # _MAX_ARG_LEN (1024) so AuditEvent.__post_init__ never rejects.
+        capped_args = tuple(str(a)[:1024] for a in args[:256])
+        code = exit_code if isinstance(exit_code, int) and not isinstance(
+            exit_code, bool
+        ) else 1
+        ev = AuditEvent(
+            timestamp=datetime.now(tz=timezone.utc).isoformat(),
+            command=command,
+            args=capped_args,
+            exit_code=code,
+            host_id=host,
+            operator_id=operator,
+        )
+        append_audit_event(ev)
+    except Exception:  # noqa: BLE001 — audit must never crash the CLI
+        pass
+
+
 def run():
     """Entry point with friendly error handling."""
     # v0.54.0 — rewrite `soup advise <data>` → `soup advise run <data>`.
     sys.argv = _rewrite_advise_argv(sys.argv)
+    argv_snapshot = list(sys.argv)
     try:
         app()
-    except SystemExit:
+    except SystemExit as exc:
+        code = exc.code
+        if code is None:
+            resolved = 0
+        elif isinstance(code, int) and not isinstance(code, bool):
+            resolved = code
+        else:
+            resolved = 1
+        _emit_audit_event(argv_snapshot, resolved)
         raise
-    except typer.Exit:
+    except typer.Exit as exc:
+        # Defensive/unreachable under click standalone mode (typer.Exit is
+        # converted to SystemExit inside app()); kept so a future click
+        # behaviour change still audits exactly once.
+        _emit_audit_event(argv_snapshot, getattr(exc, "exit_code", 1) or 0)
         raise
     except KeyboardInterrupt:
+        _emit_audit_event(argv_snapshot, 130)
         console.print("\n[yellow]Interrupted.[/]")
         sys.exit(130)
     except Exception as exc:
+        _emit_audit_event(argv_snapshot, 1)
         from soup_cli.utils.errors import format_friendly_error
 
         format_friendly_error(exc, verbose=_verbose)
         sys.exit(1)
+    else:
+        # Defensive/unreachable: app() raises SystemExit(0) on success under
+        # click standalone mode, so this normal-return path rarely fires.
+        _emit_audit_event(argv_snapshot, 0)
 
 
 # When invoked via `soup` entry point, use run() for error handling.

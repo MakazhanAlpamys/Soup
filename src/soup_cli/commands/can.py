@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Optional
+import json
+import os
+from typing import List, Optional
 
 import typer
 from rich.console import Console
@@ -19,6 +21,34 @@ def _fail(message: str) -> None:
     raise typer.Exit(1)
 
 
+def _load_attestation_files(paths: Optional[List[str]]) -> list[dict]:
+    """Load + shape-validate in-toto Statement JSON files (cwd-contained)."""
+    from soup_cli.cans.schema import (
+        _MAX_ATTESTATION_BYTES,
+        validate_attestation_statement,
+    )
+    from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
+
+    statements: list[dict] = []
+    for raw in paths or []:
+        try:
+            real = enforce_under_cwd_and_no_symlink(raw, "attest")
+            # Security: gate the raw file size BEFORE json.load so a multi-GB
+            # --attest file is rejected without being parsed into memory
+            # (the 1 MiB cap in validate_attestation_statement only fires
+            # AFTER the parse).
+            if os.path.getsize(real) > _MAX_ATTESTATION_BYTES:
+                raise ValueError(
+                    f"attestation file too large (> {_MAX_ATTESTATION_BYTES} bytes)"
+                )
+            with open(real, encoding="utf-8") as fh:
+                stmt = json.load(fh)
+            statements.append(validate_attestation_statement(stmt))
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            _fail(f"--attest {raw}: {exc}")
+    return statements
+
+
 @app.command(name="pack")
 def pack_cmd(
     entry_id: str = typer.Option(
@@ -33,14 +63,23 @@ def pack_cmd(
     description: str = typer.Option(
         "", "--description", help="Free-form description",
     ),
+    attest: Optional[List[str]] = typer.Option(
+        None, "--attest",
+        help=(
+            "Embed an in-toto Statement JSON into the can manifest (v3, "
+            "repeatable). Each file is shape-validated. v0.71.3."
+        ),
+    ),
 ) -> None:
     """Pack a registry entry into a shareable .can file."""
     from soup_cli.cans.pack import pack_entry
 
+    attestations = _load_attestation_files(attest)
     try:
         path = pack_entry(
             entry_id=entry_id, out_path=out, author=author,
             description=description or None,
+            attestations=attestations,
         )
     except (ValueError, FileNotFoundError) as exc:
         _fail(str(exc))

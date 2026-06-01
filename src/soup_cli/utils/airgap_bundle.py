@@ -25,9 +25,10 @@ import os
 import stat
 import tarfile
 import tempfile
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Tuple
+from typing import Any, Optional, Tuple
 
 import soup_cli
 from soup_cli.utils.paths import (
@@ -37,6 +38,7 @@ from soup_cli.utils.paths import (
 
 _DEFAULT_BUNDLE_CAP_BYTES = 100 * 1024 * 1024 * 1024  # 100 GiB
 _MANIFEST_FILENAME = "manifest.json"
+_REPRO_RECEIPT_FILENAME = "repro-receipt.json"  # v0.71.3 #188
 _MAX_FILES = 100_000
 _HASH_CHUNK = 1024 * 1024
 _MAX_MANIFEST_BYTES = 64 * 1024 * 1024  # 64 MiB cap on inspect-side manifest read
@@ -52,6 +54,8 @@ class AirgapBundlePlan:
     wheel_dirs: Tuple[str, ...]
     kernel_dirs: Tuple[str, ...]
     bundle_size_cap_bytes: int
+    # v0.71.3 #188 — optional reproducibility receipt to embed.
+    repro_receipt: Optional[Mapping[str, Any]] = None
 
     def __post_init__(self) -> None:
         for value, name in (
@@ -80,6 +84,10 @@ class AirgapBundlePlan:
             raise ValueError("bundle_size_cap_bytes must be int")
         if self.bundle_size_cap_bytes <= 0:
             raise ValueError("bundle_size_cap_bytes must be > 0")
+        if self.repro_receipt is not None and not isinstance(
+            self.repro_receipt, Mapping
+        ):
+            raise ValueError("repro_receipt must be a mapping or None")
 
 
 @dataclass(frozen=True)
@@ -103,6 +111,8 @@ class BundleManifest:
     kernels: Tuple[str, ...]
     files: Tuple[BundleFileEntry, ...]
     total_bytes: int
+    # v0.71.3 #188 — embedded reproducibility receipt (None when absent).
+    repro_receipt: Optional[dict] = None
 
 
 def _hash_file(path: str) -> tuple[int, str]:
@@ -198,9 +208,33 @@ def build_airgap_bundle(plan: AirgapBundlePlan) -> BundleManifest:
     if len(members) > _MAX_FILES:
         raise ValueError(f"bundle has > {_MAX_FILES} files")
 
+    # v0.71.3 #188 — serialise the optional reproducibility receipt up front so
+    # it counts toward the size cap and lands as a top-level manifest member.
+    receipt_dict: Optional[dict] = None
+    receipt_bytes: Optional[bytes] = None
+    if plan.repro_receipt is not None:
+        receipt_dict = dict(plan.repro_receipt)
+        receipt_bytes = json.dumps(
+            receipt_dict, indent=2, sort_keys=True
+        ).encode("utf-8")
+
     # Hash + pre-size check (refuse early if cap exceeded).
     entries: list[BundleFileEntry] = []
     total = 0
+    if receipt_bytes is not None:
+        total += len(receipt_bytes)
+        if total > plan.bundle_size_cap_bytes:
+            raise ValueError(
+                f"bundle aggregate size {total} bytes exceeds cap "
+                f"{plan.bundle_size_cap_bytes} bytes"
+            )
+        entries.append(
+            BundleFileEntry(
+                name=_REPRO_RECEIPT_FILENAME,
+                size=len(receipt_bytes),
+                sha256=hashlib.sha256(receipt_bytes).hexdigest(),
+            )
+        )
     for full, rel_tar in members:
         size, digest = _hash_file(full)
         total += size
@@ -220,6 +254,7 @@ def build_airgap_bundle(plan: AirgapBundlePlan) -> BundleManifest:
         kernels=tuple(os.path.basename(os.path.normpath(k)) for k in plan.kernel_dirs),
         files=tuple(entries),
         total_bytes=total,
+        repro_receipt=receipt_dict,
     )
 
     # Write tar via a temp file in the same dir, then atomic-rename.
@@ -247,6 +282,12 @@ def build_airgap_bundle(plan: AirgapBundlePlan) -> BundleManifest:
             manifest_info.mtime = 0
             import io as _io
             tar.addfile(manifest_info, _io.BytesIO(manifest_bytes))
+            # v0.71.3 #188 — write the repro receipt as a top-level member.
+            if receipt_bytes is not None:
+                receipt_info = tarfile.TarInfo(name=_REPRO_RECEIPT_FILENAME)
+                receipt_info.size = len(receipt_bytes)
+                receipt_info.mtime = 0
+                tar.addfile(receipt_info, _io.BytesIO(receipt_bytes))
             for full, rel_tar in members:
                 info = tar.gettarinfo(name=full, arcname=rel_tar)
                 # Force regular-file type; suppress owner / group / mtime
@@ -281,6 +322,7 @@ def _manifest_to_bytes(manifest: BundleManifest) -> bytes:
         "wheels": list(manifest.wheels),
         "kernels": list(manifest.kernels),
         "total_bytes": manifest.total_bytes,
+        "repro_receipt": manifest.repro_receipt,
         "files": [
             {"name": e.name, "size": e.size, "sha256": e.sha256}
             for e in manifest.files
@@ -301,6 +343,9 @@ def _manifest_from_payload(payload: dict) -> BundleManifest:
         )
         for entry in files_raw
     )
+    receipt = payload.get("repro_receipt")
+    if receipt is not None and not isinstance(receipt, dict):
+        receipt = None
     return BundleManifest(
         soup_version=str(payload.get("soup_version", "")),
         created_at=str(payload.get("created_at", "")),
@@ -310,6 +355,7 @@ def _manifest_from_payload(payload: dict) -> BundleManifest:
         kernels=tuple(payload.get("kernels", [])),
         files=files,
         total_bytes=int(payload.get("total_bytes", 0)),
+        repro_receipt=receipt,
     )
 
 

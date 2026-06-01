@@ -33,6 +33,8 @@ This installs:
   pulled in too (since v0.71.0 these are an opt-in extra, not core deps)
 - `cryptography` — `[dev]` also pulls it in (it's the `[sign]` extra) so the
   ed25519 signing tests (`soup adapters sign` / `soup attest`) run in CI
+- `reportlab` — `[dev]` also pulls it in (it's the `[pdf]` extra) so the
+  Annex XI/XII PDF tests (`soup train --annex-xi *.pdf`) run in CI
 
 ### 3. Verify Setup
 
@@ -118,7 +120,7 @@ src/soup_cli/
   templates/          - 17 built-in soup.yaml templates (YAML + manifest.json) with load_template loader (v0.39.0, +bco v0.40.0)
   ui/                 - Web UI (FastAPI + HTML/JS SPA)
 
-tests/                - Test suite (272 files, 12259 tests)
+tests/                - Test suite (273 files, 12342 tests)
 examples/             - Real-world config examples and datasets
 ```
 

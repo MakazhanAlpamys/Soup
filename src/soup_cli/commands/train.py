@@ -196,6 +196,23 @@ def train(
             "(seeds + kernel versions + GPU + OS) to the given path. v0.59.0."
         ),
     ),
+    track_energy: bool = typer.Option(
+        False,
+        "--track-energy",
+        help=(
+            "Measure the training window's energy + CO2 via codecarbon "
+            "(offline; requires `pip install soup-cli[carbon]`). Feeds the "
+            "kWh / CO2 into --annex-xi. v0.71.3."
+        ),
+    ),
+    energy_country: str = typer.Option(
+        "USA",
+        "--energy-country",
+        help=(
+            "ISO 3166-1 alpha-3 country code for the CO2 grid-intensity "
+            "estimate used by --track-energy (default USA)."
+        ),
+    ),
 ):
     """Start training from a soup.yaml config."""
     config_path = Path(config)
@@ -914,8 +931,23 @@ def train(
             f"{cfg.output}/profiles/{run_id}.trace.json (early-steps window)"
         )
 
+    # v0.71.3 #180 — optional codecarbon energy/CO2 measurement around the
+    # training window. Lazy-built; a graceful no-op when codecarbon is absent.
+    energy_ctx = contextlib.nullcontext()
+    energy_tracker = None
+    if track_energy:
+        try:
+            from soup_cli.utils.energy import EnergyTracker
+
+            energy_tracker = EnergyTracker(country_iso_code=energy_country)
+            energy_ctx = energy_tracker
+        except ValueError as exc:
+            console.print(f"[yellow]--track-energy disabled:[/] {exc}")
+            energy_tracker = None
+            energy_ctx = contextlib.nullcontext()
+
     try:
-        with profiler_ctx:
+        with profiler_ctx, energy_ctx:
             result = trainer_wrapper.train(
                 display=display, tracker=tracker, run_id=run_id,
                 resume_from_checkpoint=resume_from,
@@ -987,10 +1019,28 @@ def train(
             )
             raise typer.Exit(1) from exc
 
+    # --- v0.71.3 #180 --track-energy: print the measured energy/CO2 -------
+    energy_measurement = (
+        energy_tracker.measurement if energy_tracker is not None else None
+    )
+    if track_energy:
+        if energy_measurement is not None:
+            console.print(
+                f"[cyan]--track-energy:[/] {energy_measurement.energy_kwh:.4f} kWh"
+                f" / {energy_measurement.co2_kg:.4f} kg CO2"
+                f" (grid {energy_measurement.grid_intensity_g_per_kwh:.0f} g/kWh,"
+                f" PUE {energy_measurement.pue})"
+            )
+        else:
+            console.print(
+                "[yellow]--track-energy:[/] no reading "
+                "(install `pip install soup-cli[carbon]`)"
+            )
+
     # --- v0.59.0 --annex-xi: Annex XI/XII auto-doc -----------------------
     if annex_xi and _should_run_diagnose_gate_on_rank():
         try:
-            _write_annex_xi(annex_xi, run_id, cfg)
+            _write_annex_xi(annex_xi, run_id, cfg, energy=energy_measurement)
         except typer.Exit:
             raise
         except (OSError, ValueError) as exc:
@@ -1010,29 +1060,44 @@ def train(
             )
 
 
-def _write_annex_xi(out_path: str, run_id: str, cfg) -> None:
-    """Render an Annex XI markdown using values from the resolved soup.yaml."""
+def _write_annex_xi(out_path: str, run_id: str, cfg, *, energy=None) -> None:
+    """Render an Annex XI doc using values from the resolved soup.yaml.
+
+    v0.71.3 #180: the optional ``energy`` measurement populates the kWh / CO2
+    fields. v0.71.3 #184: the top crawled domains are auto-extracted from the
+    training JSONL. v0.71.3 #181: a ``.pdf`` output path renders a PDF.
+    """
     from datetime import datetime, timezone
 
     from soup_cli import __version__
-    from soup_cli.utils.annex_xi import AnnexXIData, write_annex_doc
+    from soup_cli.utils.annex_xi import (
+        AnnexXIData,
+        load_top_domains_from_jsonl,
+        write_annex_doc,
+    )
 
     modality = getattr(cfg, "modality", "text") or "text"
+    energy_kwh = float(getattr(energy, "energy_kwh", 0.0)) if energy is not None else 0.0
+    co2_kg = float(getattr(energy, "co2_kg", 0.0)) if energy is not None else 0.0
+    train_path = str(getattr(cfg.data, "train", "") or "")
+    # #184 — best-effort extract the top crawled domains from the training data.
+    top_domains = load_top_domains_from_jsonl(train_path)
+    fmt = "pdf" if out_path.lower().endswith(".pdf") else "markdown"
     data = AnnexXIData(
         model_name=str(getattr(cfg, "output", run_id) or run_id),
         base_model=str(cfg.base),
         task=str(cfg.task),
-        dataset_summary=str(getattr(cfg.data, "train", "")),
+        dataset_summary=train_path,
         modalities=(modality,),
         train_compute_flops=0.0,
-        train_energy_kwh=0.0,
-        train_co2_kg=0.0,
-        top_domains=(),
+        train_energy_kwh=energy_kwh,
+        train_co2_kg=co2_kg,
+        top_domains=top_domains,
         soup_version=__version__,
         run_id=run_id,
         created_at=datetime.now(tz=timezone.utc).isoformat(),
     )
-    written = write_annex_doc(data, "xi", out_path)
+    written = write_annex_doc(data, "xi", out_path, fmt=fmt)
     console.print(f"[green]--annex-xi[/] -> {written}")
 
 

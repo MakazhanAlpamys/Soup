@@ -97,20 +97,31 @@ class TestCanFormatVersionBump:
         )
         assert m.can_format_version == 2
 
-    def test_v3_rejected(self):
+    def test_v3_loads(self):
+        # v0.71.3 #182 bumped CAN_FORMAT_VERSION 2 -> 3 (attestations field).
+        from soup_cli.cans.schema import Manifest
+
+        m = Manifest(
+            can_format_version=3,
+            name="x", author="a", created_at="2026-01-01",
+            base_hash="0" * 64,
+        )
+        assert m.can_format_version == 3
+
+    def test_v4_rejected(self):
         from soup_cli.cans.schema import Manifest
 
         with pytest.raises(Exception, match="unknown can_format_version"):
             Manifest(
-                can_format_version=3,
+                can_format_version=4,
                 name="x", author="a", created_at="2026-01-01",
                 base_hash="0" * 64,
             )
 
-    def test_pack_writes_v2(self, tmp_path, monkeypatch):
+    def test_pack_writes_v3(self, tmp_path, monkeypatch):
         from soup_cli.cans.schema import CAN_FORMAT_VERSION
 
-        assert CAN_FORMAT_VERSION == 2
+        assert CAN_FORMAT_VERSION == 3
 
 
 class TestDeployTargetValidation:

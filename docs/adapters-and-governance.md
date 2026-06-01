@@ -275,6 +275,9 @@ Share a reproducible recipe as a single `.can` file — a tarball of the manifes
 # Pack a registry entry into a .can
 soup can pack --entry-id llama31-chat-v1 --out ./llama31-chat.can
 
+# Embed in-toto attestations into the manifest (v3 cans; repeatable)
+soup can pack --entry-id llama31-chat-v1 --out ./signed.can --attest att.json
+
 # Preview the manifest without extracting
 soup can inspect ./llama31-chat.can
 
@@ -358,29 +361,45 @@ Render an EU AI Act Annex XI (technical documentation, Sections 1+2) or Annex XI
 (Article 53(1)(d) public training summary) directly from a training run:
 
 ```bash
-soup train --config soup.yaml --annex-xi annex.md
+soup train --config soup.yaml --annex-xi annex.md           # markdown
+soup train --config soup.yaml --annex-xi annex.pdf           # PDF (pip install soup-cli[pdf])
+soup train --config soup.yaml --track-energy --annex-xi annex.md  # + measured kWh/CO2
 ```
 
 Top-10 domains by share, modality breakdown, training compute / kWh / CO₂, model
-description, base model, run id. Markdown body now; PDF in v0.59.1. Operator-controlled
-fields are escape-neutralised (`|[](){}!<>` + newline / CR / tab) so a malicious model
-name can't inject a forged heading into downstream PDF/HTML renderers.
+description, base model, run id. A `.pdf` output path renders a reportlab PDF (a `.md`
+path renders markdown). The **top crawled domains** are auto-extracted from the training
+JSONL (`cfg.data.train`). With `--track-energy`, the measured energy is recorded in the
+doc. Operator-controlled fields are escape-neutralised (`|[](){}!<>` + newline / CR / tab)
+so a malicious model name can't inject a forged heading into downstream renderers.
+
+### Energy & CO₂ measurement (`--track-energy`)
+
+`soup train --track-energy` wraps the training window in a codecarbon **offline** tracker
+(no IP-geolocation network call). It reports kWh / CO₂ / grid intensity and feeds them into
+`--annex-xi`. `--energy-country <ISO3>` picks the grid for the CO₂ estimate (default `USA`;
+the kWh figure itself is country-independent). Requires `pip install soup-cli[carbon]`;
+without it, `--track-energy` is a graceful no-op.
 
 
 ## Audit Log (`soup audit-log`)
 
-Tail or rotate the HIPAA/SOC2-shaped JSONL audit log at `~/.soup/audit.jsonl` (override
-via `SOUP_AUDIT_LOG_PATH`, containment-checked to `$HOME / $CWD / $TMPDIR`):
+**Every `soup` command** now appends one HIPAA/SOC2-shaped record to the JSONL audit log at
+`~/.soup/audit.jsonl` (override via `SOUP_AUDIT_LOG_PATH`, containment-checked to
+`$HOME / $CWD / $TMPDIR`). Opt out per-invocation with `soup --no-audit-log <cmd>` or
+globally with `SOUP_NO_AUDIT_LOG=1`. Tail or rotate:
 
 ```bash
 soup audit-log tail --limit 50          # Rich table view
 soup audit-log tail --json              # raw JSONL for SIEM ingestion
 soup audit-log rotate --cap-mb 100      # force a rotation pass
+soup --no-audit-log version             # skip the audit line for this command
 ```
 
 PII redaction across **every** string field (`hf_*` / `sk-*` / `Bearer …` → `<redacted>`)
 via the v0.40.3 `_SECRET_RE` policy. POSIX `O_NOFOLLOW` + `0o600` perms, atomic-append,
-rotation at 100 MiB with symlink rejection at the backup path.
+rotation at 100 MiB with symlink rejection at the backup path. The auto-instrumentation is
+best-effort — a broken audit log never crashes the CLI.
 
 
 ## Reproducibility Receipt (`soup train --repro-receipt`)
@@ -490,7 +509,16 @@ merge with exit 3 unless you pass `--allow-unscanned`.
 
 Single signed tarball with model + datasets + wheels + CUDA kernels +
 embedded `manifest.json` listing SHA-256 per file. Sized for one-way
-physical-media transfer through a data diode. Default 100 GiB cap;
+physical-media transfer through a data diode. A reproducibility receipt is
+embedded as a top-level `repro-receipt.json` when you pass
+`--repro-receipt <receipt.json>` (or auto-detected from
+`<model>/repro-receipt.json`):
+
+```bash
+soup airgap-bundle --model ./out --output bundle.tar --repro-receipt repro.json
+```
+
+Default 100 GiB cap;
 refuses oversize. Deterministic dataset labeling by sorted basename
 (NOT argv order) so the same inputs in different argv order produce
 identical manifests. TOCTOU defence: `os.lstat + S_ISLNK` re-check on

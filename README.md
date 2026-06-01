@@ -49,19 +49,19 @@ infrastructure instead of improving models. Soup fixes that.
 
 ## What's New
 
-**v0.71.2 — Governance & supply-chain live.** Real signatures and supply-chain gates:
+**v0.71.3 — Compliance / annex / audit / energy.** The EU AI Act + carbon + audit surfaces go live:
 
-- **ed25519 signing** — `soup adapters sign --backend ed25519 --key priv.pem` (or `--generate-key`)
-  produces a real detached signature over the adapter's Merkle root; `soup adapters verify
-  --public-key trusted.pem` does cryptographic authentication. Same for `soup attest emit
-  --sign ed25519` + the new `soup attest verify`. Install with `pip install soup-cli[sign]`.
-- **Anti-AI-Jacking namespace pin** — Hub model downloads now refuse a repo whose author silently
-  changed (or whose creation date jumped backward), the classic namespace-re-creation attack.
-- **License-conflict gate at merge** — `soup adapters merge` auto-detects each adapter's license
-  (from `adapter_config.json` / model card) and refuses incompatible combinations unless you pass
-  `--license-override <reason>` (logged to the audit trail).
-- **Backdoor-scan gate at merge** — refuses to merge any adapter that `soup adapters scan` flags
-  FAIL unless you pass `--allow-unscanned`.
+- **Energy & CO2 measurement** — `soup train --track-energy` measures the training window with an
+  offline carbon tracker (no network) and reports kWh / CO2, feeding them into the Annex doc.
+  Install with `pip install soup-cli[carbon]`.
+- **PDF compliance docs** — `soup train --annex-xi report.pdf` now renders a real PDF of the
+  EU AI Act Annex XI/XII (a `.md` path still gives markdown). The top crawled domains of your
+  training corpus are auto-listed. `pip install soup-cli[pdf]`.
+- **Per-command audit log** — every `soup` command appends one HIPAA/SOC2 record to
+  `~/.soup/audit.jsonl` (secrets redacted). Opt out with `--no-audit-log` or `SOUP_NO_AUDIT_LOG=1`.
+- **Signed Soup Cans + airgap receipts** — `soup can pack --attest statement.json` embeds in-toto
+  attestations into a can; `soup airgap-bundle --repro-receipt receipt.json` ships a reproducibility
+  receipt inside the offline bundle.
 
 Full history: [CHANGELOG.md](CHANGELOG.md) &middot; [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 

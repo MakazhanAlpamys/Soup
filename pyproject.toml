@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "soup-cli"
-version = "0.71.2"
+version = "0.71.3"
 description = "Fine-tune LLMs in one command. No SSH, no config hell."
 readme = "README.md"
 license = "Apache-2.0"
@@ -54,7 +54,7 @@ wandb = ["wandb>=0.15.0,<0.18.0"]
 # Self-references `[train]` so CI / contributors get the full training stack
 # (CI runs `pip install -e ".[dev]"`; without this every test would fail at
 # `import torch`).
-dev = ["soup-cli[train]", "cryptography>=41.0.0", "pytest>=7.0", "ruff>=0.1.0", "pytest-cov>=4.0", "httpx>=0.24.0", "mypy>=1.8.0", "pre-commit>=3.5.0"]
+dev = ["soup-cli[train]", "cryptography>=41.0.0", "reportlab>=4.0.0", "pytest>=7.0", "ruff>=0.1.0", "pytest-cov>=4.0", "httpx>=0.24.0", "mypy>=1.8.0", "pre-commit>=3.5.0"]
 ui = ["fastapi>=0.104.0", "uvicorn>=0.24.0"]
 serve = ["fastapi>=0.104.0", "uvicorn>=0.24.0"]
 serve-fast = ["vllm>=0.4.0", "fastapi>=0.104.0", "uvicorn>=0.24.0"]
@@ -89,6 +89,11 @@ data-pro = ["langdetect>=1.0.9", "presidio-analyzer>=2.2.0"]
 # adapters sign`. Pure-offline; Sigstore keyless (OIDC + Fulcio/Rekor network)
 # stays infra-blocked and is NOT bundled here.
 sign = ["cryptography>=41.0.0"]
+# v0.71.3 #181 — reportlab PDF rendering for `soup train --annex-xi *.pdf`.
+pdf = ["reportlab>=4.0.0"]
+# v0.71.3 #180 — codecarbon offline energy/CO2 measurement for
+# `soup train --track-energy` (offline; no IP-geolocation network call).
+carbon = ["codecarbon>=2.0.0"]
 
 [project.scripts]
 soup = "soup_cli.cli:run"

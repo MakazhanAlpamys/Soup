@@ -106,3 +106,35 @@ def atomic_write_text(
             except OSError:
                 pass
     return os.path.realpath(output_path)
+
+
+def atomic_write_bytes(
+    data: bytes,
+    output_path: str,
+    *,
+    prefix: str = ".soup.",
+    suffix: str = ".tmp",
+    field: str = "output",
+) -> str:
+    """Atomically write ``data`` (bytes) to ``output_path`` under cwd containment.
+
+    Binary sibling of :func:`atomic_write_text` (v0.71.3 #181 — used by the
+    Annex XI/XII PDF renderer). Same TOCTOU-safe pipeline.
+    """
+    if not isinstance(data, (bytes, bytearray)):
+        raise TypeError("data must be bytes")
+    enforce_under_cwd_and_no_symlink(output_path, field)
+    parent = os.path.dirname(os.path.abspath(output_path)) or "."
+    os.makedirs(parent, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(prefix=prefix, suffix=suffix, dir=parent)
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(bytes(data))
+        os.replace(tmp_path, output_path)
+    finally:
+        if os.path.exists(tmp_path):
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+    return os.path.realpath(output_path)

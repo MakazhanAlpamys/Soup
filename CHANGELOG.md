@@ -12,6 +12,41 @@ reproducing 70+ versions of notes.
 
 ## [Unreleased]
 
+## [0.71.3] - 2026-06-01
+
+### Added
+- **Energy & CO2 measurement for training** — `soup train --track-energy` wraps
+  the training window in a codecarbon **offline** tracker (no IP-geolocation
+  network call) and reports kWh / CO2 / grid intensity, feeding those numbers
+  into `--annex-xi`. New `EnergyTracker` context manager; graceful no-op when
+  codecarbon is absent (`pip install soup-cli[carbon]`). `--energy-country`
+  picks the ISO-3166 alpha-3 grid for the CO2 estimate (default `USA`).
+- **PDF Annex XI/XII documents** — `soup train --annex-xi report.pdf` now renders
+  a reportlab PDF (a `.md` path still renders markdown). `pip install
+  soup-cli[pdf]`.
+- **Auto-populated training-corpus domains in Annex XI/XII** — the top crawled
+  domains (with shares) are now extracted from the training JSONL and listed in
+  the EU AI Act docs, replacing the previous empty placeholder.
+- **Soup Can manifest v3 with embedded attestations** — `soup can pack --attest
+  <statement.json>` (repeatable) embeds in-toto Statements into a v3 can
+  manifest; v1/v2 cans still load. Each statement is shape- and size-validated.
+- **Local audit log auto-instrumentation** — every `soup` command now appends one
+  HIPAA/SOC2-shaped record to `~/.soup/audit.jsonl` (secrets redacted, args
+  capped). Opt out per-invocation with `--no-audit-log` or globally with
+  `SOUP_NO_AUDIT_LOG=1`. Tail/rotate with `soup audit-log`.
+- **Reproducibility receipt in airgap bundles** — `soup airgap-bundle
+  --repro-receipt <receipt.json>` embeds an SR 11-7 receipt as
+  `repro-receipt.json`; auto-detected from `<model>/repro-receipt.json` when not
+  supplied.
+
+### Security
+- `soup can pack --attest` now rejects oversize attestation files by their raw
+  size *before* parsing them into memory (defence against memory-exhaustion).
+- The new file-loading paths (attestation JSON, airgap receipt, training-corpus
+  scan, PDF write) are all cwd-contained + TOCTOU symlink-rejected and
+  size-capped; the audit auto-log redacts `hf_`/`sk-`/`Bearer` tokens and never
+  crashes the CLI on a broken log.
+
 ## [0.71.2] - 2026-06-01
 
 ### Added
