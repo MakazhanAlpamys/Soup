@@ -28,6 +28,19 @@ POSIX_ONLY = pytest.mark.skipif(
 )
 
 
+def _strip_ansi(text: str) -> str:
+    """Remove ANSI SGR escapes from Rich-rendered help output.
+
+    Under color (CI sets ``FORCE_COLOR``) Rich inserts ANSI codes *between* the
+    two dashes of an option name, so ``--key`` becomes
+    ``\x1b[1;36m-\x1b[0m\x1b[1;36m-key\x1b[0m`` and a raw substring check fails.
+    Strip the codes before asserting (mirrors the v0.71.1 ``test_serve`` fix).
+    """
+    import re
+
+    return re.sub(r"\x1b\[[0-9;]*m", "", text)
+
+
 # ---------------------------------------------------------------------------
 # #179 / #185 — ed25519 signing primitives (utils/signing.py)
 # ---------------------------------------------------------------------------
@@ -991,7 +1004,7 @@ class TestCli:
 
         from soup_cli.commands.adapters import app
 
-        out = CliRunner().invoke(app, ["sign", "--help"]).output
+        out = _strip_ansi(CliRunner().invoke(app, ["sign", "--help"]).output)
         assert "--key" in out
         assert "--generate-key" in out
         assert "ed25519" in out
@@ -1001,7 +1014,7 @@ class TestCli:
 
         from soup_cli.commands.adapters import app
 
-        out = CliRunner().invoke(app, ["verify", "--help"]).output
+        out = _strip_ansi(CliRunner().invoke(app, ["verify", "--help"]).output)
         assert "--public-key" in out
 
     def test_adapters_merge_help_lists_allow_unscanned(self):
@@ -1009,7 +1022,7 @@ class TestCli:
 
         from soup_cli.commands.adapters import app
 
-        out = CliRunner().invoke(app, ["merge", "--help"]).output
+        out = _strip_ansi(CliRunner().invoke(app, ["merge", "--help"]).output)
         assert "--allow-unscanned" in out
 
     def test_sign_verify_ed25519_end_to_end(self, tmp_path, monkeypatch):
@@ -1437,7 +1450,7 @@ class TestReviewFollowups:
 
         from soup_cli.commands.attest import app
 
-        out = CliRunner().invoke(app, ["emit", "--help"]).output
+        out = _strip_ansi(CliRunner().invoke(app, ["emit", "--help"]).output)
         assert "--key" in out
         assert "ed25519" in out
 
