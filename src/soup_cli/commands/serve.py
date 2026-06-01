@@ -191,6 +191,15 @@ def serve(
         "--trace-log-cap-mb",
         help="Rotation cap in MB for --trace-log (1 - 10000). Default 100.",
     ),
+    record_thumbs: Optional[str] = typer.Option(
+        None,
+        "--record-thumbs",
+        help=(
+            "Auto-capture thumbs-up/down feedback into a local-rl SQLite at "
+            "this path via POST /v1/thumbs. Path must stay under cwd. "
+            "Transformers backend only. v0.71.1 (#230)."
+        ),
+    ),
     reasoning_parser: Optional[str] = typer.Option(
         None,
         "--reasoning-parser",
@@ -690,6 +699,22 @@ def serve(
                 console.print(f"[red]--reasoning-parser:[/] {exc}")
                 raise typer.Exit(1) from exc
 
+        # v0.71.1 #230 — auto-capture thumbs feedback into a local-rl SQLite.
+        record_thumbs_db: Optional[str] = None
+        if record_thumbs is not None:
+            from rich.markup import escape as _escape
+
+            from soup_cli.utils.local_rl import init_local_rl_db, validate_db_path
+
+            try:
+                validate_db_path(record_thumbs)
+                init_local_rl_db(record_thumbs)
+            except (TypeError, ValueError) as exc:
+                console.print(f"[red]--record-thumbs:[/] {_escape(str(exc))}")
+                raise typer.Exit(1) from exc
+            record_thumbs_db = record_thumbs
+            console.print(f"[green]Thumbs feedback log:[/] {_escape(record_thumbs)}")
+
         app = _create_app(
             model_obj=model_obj,
             tokenizer=tokenizer,
@@ -704,6 +729,7 @@ def serve(
             tracer=tracer,
             trace_log_writer=trace_log_writer,
             reasoning_parser=resolved_reasoning_parser,
+            record_thumbs_db=record_thumbs_db,
         )
 
     console.print(
@@ -991,6 +1017,7 @@ def _create_app(
     web_search_backend: Any = None,
     auth_token: Optional[str] = None,
     reasoning_parser: Optional[str] = None,
+    record_thumbs_db: Optional[str] = None,
 ):
     """Create the FastAPI application with OpenAI-compatible endpoints.
 
@@ -1469,12 +1496,49 @@ def _create_app(
                         )
         return {"results": results}
 
+    @app.post("/v1/thumbs")
+    def record_thumb_endpoint(
+        payload: dict,
+        authorization: Optional[str] = Header(default=None),
+    ) -> dict:
+        """v0.71.1 #230 — record thumbs-up/down feedback into local-rl SQLite.
+
+        Stateless by design: the client POSTs the full {prompt, response,
+        thumb} (mirrors the ``soup local-rl record`` CLI). Returns 404 when
+        ``--record-thumbs`` was not passed at startup.
+        """
+        _check_tool_auth(authorization)
+        db = getattr(app.state, "record_thumbs_db", None)
+        if not db:
+            raise HTTPException(
+                status_code=404, detail="thumbs recording not enabled"
+            )
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=400, detail="Invalid request")
+        prompt = payload.get("prompt")
+        response = payload.get("response")
+        thumb = payload.get("thumb")
+        if (
+            not isinstance(prompt, str)
+            or not isinstance(response, str)
+            or not isinstance(thumb, str)
+        ):
+            raise HTTPException(status_code=400, detail="Invalid request")
+        from soup_cli.utils.local_rl import record_thumb
+
+        try:
+            record_thumb(db_path=db, prompt=prompt, response=response, thumb=thumb)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail="Invalid request") from exc
+        return {"status": "ok", "thumb": thumb}
+
     # Expose dashboard intent + constraint on the app for tests + introspection
     app.state.enable_dashboard = enable_dashboard
     app.state.output_constraint = output_constraint
     app.state.trace_log_writer = trace_log_writer
     app.state.web_search_config = web_search_config
     app.state.web_search_backend = web_search_backend
+    app.state.record_thumbs_db = record_thumbs_db
     return app
 
 

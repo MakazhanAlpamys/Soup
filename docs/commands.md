@@ -56,6 +56,7 @@ soup serve --model <m> --structured-output regex --regex-pattern '...'  Regex-co
 soup serve --model <m> --dashboard            Live dashboard + /metrics endpoint
 soup serve --model <m> --trace --trace-endpoint http://localhost:4317  OpenTelemetry tracing
 soup serve --model <m> --trace-log ./serve.jsonl  Per-request JSONL log + rotation + secret redaction
+soup serve --model <m> --record-thumbs ./rl.db  Capture 👍/👎 feedback into local-RL SQLite + POST /v1/thumbs (transformers)
 POST /v1/adapters/activate/<name>             Hot-swap active LoRA adapter
 soup sweep --config soup.yaml --param lr=...  Hyperparameter search
 soup diff --model-a ./a --model-b ./b         Compare two models
@@ -169,6 +170,7 @@ soup tunability --dataset <jsonl> [--candidates a,b,c]   Probe 8 candidate bases
 soup plan --config soup.yaml                             Pre-flight summary + write soup.tfstate
 soup apply --config soup.yaml [--dry-run]                Lock-and-execute; refuses on drift (exit 3)
 soup env lock | status | check                           Hermetic env lockfile + ABI drift detection (exit 3)
+soup env fix [--format uv-pip|requirements] [--output req.txt]  Render a reproducible install plan from soup-env.lock (print-only)
 soup completions bash | zsh | fish                       Shell completion script (sourceable via eval)
 soup license-advisor --target b2c|defense|embedded       Recommend license-clean base for deploy target
 soup license-advisor ... --license <id> --mau N          Per-license downstream-risk check (exit 3 on block)
@@ -182,6 +184,7 @@ soup adapters merge ... --strategy cmaes --eval <s> --budget 1h  CMA-ES evolutio
 soup adapters pr <title> --base-sha <hex> --adapter <path>  GitHub-shaped adapter PR Markdown / JSON (v0.67.0)
 soup adapters bisect <ckpt>... --eval-command "..."  Binary search over training history (v0.67.0)
 soup lock write --base-sha <h> --dataset-sha <h> --env-hash <h>  Write soup.lock (v0.67.0)
+soup lock write --base-sha <h> --dataset-sha <h> --env-lock soup-env.lock  Auto-derive --env-hash from soup-env.lock (v0.71.1)
 soup lock show / soup lock check              Show + drift-check (exit 3 on drift)
 soup compile <program.py> --eval <suite> [--optimizer mipro|gepa|textgrad|copro|bootstrap_fewshot]  DSPy / GEPA prompt-program compiler (v0.68.0)
 soup distill-prompt --traces <jsonl> --teacher <m> --student <m> --strategy sft|preference|kl  Distill prompt-heavy traces to small FT (v0.68.0)

@@ -12,6 +12,7 @@ Subcommands:
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Optional
 
 import typer
 from rich.console import Console
@@ -28,12 +29,50 @@ def write_lock_cmd(
     base_model: str = typer.Option(..., "--base-model", help="HF model id / path"),
     base_sha: str = typer.Option(..., "--base-sha", help="64-hex base-model SHA"),
     dataset_sha: str = typer.Option(..., "--dataset-sha", help="64-hex dataset SHA"),
-    env_hash: str = typer.Option(..., "--env-hash", help="64-hex env hash (soup env)"),
+    env_hash: Optional[str] = typer.Option(
+        None,
+        "--env-hash",
+        help="64-hex env hash. If omitted, auto-derived from --env-lock "
+        "(soup-env.lock) via `soup env lock`.",
+    ),
+    env_lock: str = typer.Option(
+        "soup-env.lock",
+        "--env-lock",
+        help="Path to a soup-env.lock to auto-derive --env-hash from "
+        "(used only when --env-hash is omitted).",
+    ),
     output: str = typer.Option("soup.lock", "--output", "-o", help="Output path"),
 ):
-    """Render a ``soup.lock`` from the three required hashes."""
+    """Render a ``soup.lock`` from the base/dataset/env hashes.
+
+    When ``--env-hash`` is omitted, it is auto-derived from ``--env-lock``
+    (default ``soup-env.lock``) so an operator who ran ``soup env lock`` does
+    not have to copy the hash by hand (v0.71.1 #224).
+    """
     from soup_cli import __version__
     from soup_cli.utils.soup_lock import SoupLock, compute_lock_closure, write_lock
+
+    # v0.71.1 #224 — auto-glue: derive the env hash from soup-env.lock when
+    # the operator did not pass --env-hash explicitly. Treat an empty string
+    # the same as omitted so `--env-hash ""` auto-derives rather than tripping
+    # the generic 64-hex closure error.
+    if not env_hash:
+        from soup_cli.utils.env_lock import compute_env_hash
+        from soup_cli.utils.env_lock import read_lock as read_env_lock
+
+        try:
+            env_lock_obj = read_env_lock(env_lock)
+        except FileNotFoundError as exc:
+            console.print(
+                f"[red]--env-hash not provided and {escape(env_lock)!s} not found.[/]\n"
+                "Either pass --env-hash <64-hex> explicitly, or run "
+                "`soup env lock` first to create soup-env.lock."
+            )
+            raise typer.Exit(2) from exc
+        except (TypeError, ValueError) as exc:
+            console.print(f"[red]{escape(str(exc))}[/]")
+            raise typer.Exit(2) from exc
+        env_hash = compute_env_hash(env_lock_obj)
 
     try:
         closure = compute_lock_closure(

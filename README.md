@@ -49,10 +49,19 @@ infrastructure instead of improving models. Soup fixes that.
 
 ## What's New
 
-**v0.71.0 — Lighter install.** The heavy training stack (PyTorch, Transformers, PEFT, TRL,
-datasets, bitsandbytes, accelerate) moved into a `[train]` extra. `pip install soup-cli` is now a
-light CLI + data-tools install with no PyTorch; `pip install 'soup-cli[train]'` adds everything you
-need to fine-tune. **Breaking:** existing users who train must reinstall with `[train]`.
+**v0.71.1 — Quick wins + wiring.** Seven small-but-sharp closures:
+
+- **`soup env fix`** renders a reproducible install plan (copy/paste `uv pip` commands or a
+  `requirements.txt`) straight from `soup-env.lock` — print-only, no surprise package-manager calls.
+- **`soup lock write --env-lock`** auto-derives the env hash from `soup-env.lock` so you never
+  hand-copy a 64-hex string after `soup env lock`.
+- **`soup serve --record-thumbs <db>`** captures 👍/👎 feedback into a local-RL SQLite, plus a new
+  `POST /v1/thumbs` endpoint — the start of an on-box feedback flywheel.
+- **Judge calibration persistence** — write/load a `JudgeCalibrationReport` as JSON, backed by a new
+  `judge_calibration` registry artifact kind.
+- **Bundled MUSE + WMDP unlearning eval fixtures** so `soup eval unlearning --benchmark muse|wmdp`
+  runs out of the box (WMDP forget-set probes ship **redacted** — never verbatim hazardous content).
+- **`soup completions`** now introspects a cached base model's real LoRA target modules.
 
 Full history: [CHANGELOG.md](CHANGELOG.md) &middot; [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 

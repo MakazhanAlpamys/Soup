@@ -173,6 +173,31 @@ def validate_model_name(name: object) -> str:
     return name
 
 
+def validate_build_source(source: Optional[str]) -> Optional[str]:
+    """Cwd-containment + symlink-rejection boundary for a model's source path.
+
+    This is the security boundary the v0.69.1 live ``run_build`` runner MUST
+    call before opening any ``BuildModel.source`` file. ``BuildModel.__post_init__``
+    only validates *shape* (non-empty / null-byte-free / length-capped) so a
+    build can be *planned* offline before the data lands on disk and from any
+    cwd; this helper enforces the runtime containment policy at read time.
+
+    - ``source=None`` (derived models with no source) returns ``None``.
+    - Otherwise delegates to ``utils.paths.enforce_under_cwd_and_no_symlink``
+      (v0.59.0 shared TOCTOU helper — project code-review CRIT centralisation)
+      and returns the validated path on success.
+
+    Raises ``TypeError`` on non-string / non-None input and ``ValueError`` for
+    empty / null-byte / outside-cwd / symlink-target paths.
+    """
+    if source is None:
+        return None
+    from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
+
+    enforce_under_cwd_and_no_symlink(source, "model source")
+    return source
+
+
 # -----------------------------------------------------------------------------
 # Topological sort (Kahn's)
 # -----------------------------------------------------------------------------
@@ -465,6 +490,7 @@ __all__ = [
     "parse_build_yaml",
     "render_plan_table",
     "run_build",
+    "validate_build_source",
     "validate_model_kind",
     "validate_model_name",
 ]

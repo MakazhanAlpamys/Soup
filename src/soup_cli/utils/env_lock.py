@@ -30,6 +30,7 @@ Public surface:
 from __future__ import annotations
 
 import datetime as _dt
+import hashlib
 import json
 import os
 import platform as _platform
@@ -309,6 +310,98 @@ def read_lock(path: str) -> EnvLock:
     )
 
 
+def compute_env_hash(lock: EnvLock) -> str:
+    """Deterministic 64-hex SHA-256 over a lock's *content* (v0.71.1 #224).
+
+    Excludes ``created_at`` (and the on-disk ``schema_version``) so that
+    re-snapshotting the same environment yields the same hash — which lets
+    ``soup lock write`` auto-derive ``--env-hash`` from a ``soup-env.lock``
+    without the timestamp churning the closure on every run. Entries are
+    sorted so package ordering does not affect the digest. The output is
+    lowercase 64-hex so it is accepted by
+    :func:`soup_cli.utils.soup_lock.compute_lock_closure`.
+    """
+    if not isinstance(lock, EnvLock):
+        raise TypeError(f"lock must be EnvLock, got {type(lock).__name__}")
+    payload = {
+        "soup_version": lock.soup_version,
+        "python_version": lock.python_version,
+        "platform": lock.platform,
+        "cuda_version": lock.cuda_version,
+        "entries": sorted(
+            (_entry_to_dict(e) for e in lock.entries),
+            key=lambda d: (d["name"], d["version"], d["source"]),
+        ),
+    }
+    canonical = json.dumps(
+        payload, sort_keys=True, ensure_ascii=False, separators=(",", ":")
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+_INSTALL_PLAN_FORMATS = frozenset({"uv-pip", "requirements"})
+
+
+def render_install_plan(lock: EnvLock, fmt: str = "uv-pip") -> str:
+    """Render a reproducible install plan from a lock (v0.71.1 #209).
+
+    Two formats:
+
+    - ``"uv-pip"`` — a commented header (python / platform / CUDA) followed
+      by one ``uv pip install --python <minor> '<name>==<version>'`` line per
+      ``pip`` entry. Non-pip entries (conda / system / wheel) are surfaced as
+      ``# <source>: <name>==<version>`` comment lines so they are visible but
+      not silently installed via pip.
+    - ``"requirements"`` — a bare ``requirements.txt`` body (``name==version``
+      per pip entry; non-pip entries as comments).
+
+    Deliberately *print-only*: it never shells out to a package manager —
+    recreating a venv is environment-dependent (venv path, interpreter
+    location, index config), so the operator (or CI) copy/pastes or pipes
+    the rendered commands. No ``--apply`` / subprocess in v0.71.1.
+
+    Note: the ``name==version`` pins assume the PEP 440 version strings that
+    ``importlib.metadata`` reported when the lock was snapshotted. The plan is
+    a *human-inspectable* artifact — review it before piping into a shell;
+    editable / VCS / local-wheel installs surface only as their resolved
+    version and may need manual adjustment.
+    """
+    if not isinstance(lock, EnvLock):
+        raise TypeError(f"lock must be EnvLock, got {type(lock).__name__}")
+    if fmt not in _INSTALL_PLAN_FORMATS:
+        allowed = ", ".join(sorted(_INSTALL_PLAN_FORMATS))
+        raise ValueError(f"format must be one of {{{allowed}}}, got {fmt!r}")
+
+    py_minor = ".".join(lock.python_version.split(".")[:2])
+    lines: list[str] = []
+    if fmt == "uv-pip":
+        lines.append(f"# soup env fix — install plan from {DEFAULT_LOCK_FILE}")
+        lines.append(f"# python {lock.python_version} | platform {lock.platform}")
+        lines.append(f"# CUDA: {lock.cuda_version or 'none'}")
+        for e in lock.entries:
+            if e.source == "pip":
+                lines.append(
+                    f"uv pip install --python {py_minor} '{e.name}=={e.version}'"
+                )
+            else:
+                lines.append(f"# {e.source}: {e.name}=={e.version}")
+    else:  # requirements
+        for e in lock.entries:
+            if e.source == "pip":
+                lines.append(f"{e.name}=={e.version}")
+            else:
+                lines.append(f"# {e.source}: {e.name}=={e.version}")
+    return "\n".join(lines) + "\n"
+
+
+def write_requirements_txt(lock: EnvLock, path: str) -> None:
+    """Atomically write a ``requirements.txt`` body from a lock (v0.71.1 #209)."""
+    if not isinstance(lock, EnvLock):
+        raise TypeError(f"lock must be EnvLock, got {type(lock).__name__}")
+    text = render_install_plan(lock, fmt="requirements")
+    atomic_write_text(text, path, prefix=".requirements.", field="requirements")
+
+
 def check_abi_compat(a: EnvLock, b: EnvLock) -> AbiCheck:
     """Compare two EnvLocks; flag ABI-sensitive drifts.
 
@@ -360,7 +453,10 @@ __all__ = [
     "EnvLock",
     "TRACKED_PACKAGES",
     "check_abi_compat",
+    "compute_env_hash",
     "read_lock",
+    "render_install_plan",
     "snapshot_env",
     "write_lock",
+    "write_requirements_txt",
 ]

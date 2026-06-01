@@ -425,3 +425,240 @@ def test_no_heavy_top_level_imports():
     import re
     for bad in ["^import torch", "^from torch", "^import transformers", "^from transformers"]:
         assert not re.search(bad, text, re.MULTILINE)
+
+
+# ---------------------------------------------------------------------------
+# v0.71.1 #224 — compute_env_hash (auto-glue for `soup lock write`)
+# ---------------------------------------------------------------------------
+
+
+def _make_env_lock(*, version="2.1.0", created_at="2026-01-01T00:00:00+00:00"):
+    from soup_cli.utils.env_lock import EnvEntry, EnvLock
+
+    return EnvLock(
+        soup_version="0.71.1",
+        python_version="3.10.5",
+        platform="linux-x86_64",
+        cuda_version="12.1",
+        entries=(EnvEntry(name="torch", version=version, source="pip"),),
+        created_at=created_at,
+    )
+
+
+def test_compute_env_hash_is_64_hex():
+    import re
+
+    from soup_cli.utils.env_lock import compute_env_hash
+
+    h = compute_env_hash(_make_env_lock())
+    assert re.match(r"^[0-9a-f]{64}$", h)
+
+
+def test_compute_env_hash_deterministic():
+    from soup_cli.utils.env_lock import compute_env_hash
+
+    assert compute_env_hash(_make_env_lock()) == compute_env_hash(_make_env_lock())
+
+
+def test_compute_env_hash_excludes_created_at():
+    # Two locks differing only in created_at must hash identically — the
+    # env-hash is content-only so re-snapshotting the same env is stable.
+    from soup_cli.utils.env_lock import compute_env_hash
+
+    a = _make_env_lock(created_at="2026-01-01T00:00:00+00:00")
+    b = _make_env_lock(created_at="2026-09-09T12:34:56+00:00")
+    assert compute_env_hash(a) == compute_env_hash(b)
+
+
+def test_compute_env_hash_content_sensitive():
+    from soup_cli.utils.env_lock import compute_env_hash
+
+    a = _make_env_lock(version="2.1.0")
+    b = _make_env_lock(version="2.2.0")
+    assert compute_env_hash(a) != compute_env_hash(b)
+
+
+def test_compute_env_hash_rejects_non_lock():
+    from soup_cli.utils.env_lock import compute_env_hash
+
+    with pytest.raises(TypeError):
+        compute_env_hash({"soup_version": "x"})  # type: ignore[arg-type]
+
+
+def test_compute_env_hash_matches_lock_closure_regex():
+    # The hash must be accepted by soup_lock.compute_lock_closure (which
+    # requires each input to be 64-hex).
+    from soup_cli.utils.env_lock import compute_env_hash
+    from soup_cli.utils.soup_lock import compute_lock_closure
+
+    env_hash = compute_env_hash(_make_env_lock())
+    closure = compute_lock_closure(
+        base_model_sha="a" * 64,
+        dataset_sha="b" * 64,
+        env_hash=env_hash,
+    )
+    assert len(closure) == 64
+
+
+# ---------------------------------------------------------------------------
+# v0.71.1 #209 — `soup env fix` install-plan renderer
+# ---------------------------------------------------------------------------
+
+
+def _lock_with_conda():
+    from soup_cli.utils.env_lock import EnvEntry, EnvLock
+
+    return EnvLock(
+        soup_version="0.71.1",
+        python_version="3.10.5",
+        platform="linux-x86_64",
+        cuda_version="12.1",
+        entries=(
+            EnvEntry(name="torch", version="2.1.0", source="pip"),
+            EnvEntry(name="mkl", version="2023.1", source="conda"),
+        ),
+        created_at="2026-01-01T00:00:00+00:00",
+    )
+
+
+def test_render_install_plan_uv_format():
+    from soup_cli.utils.env_lock import render_install_plan
+
+    plan = render_install_plan(_make_env_lock(), fmt="uv-pip")
+    assert "uv pip install" in plan
+    assert "torch==2.1.0" in plan
+    # The python pin is surfaced so the operator recreates the same minor.
+    assert "3.10" in plan
+
+
+def test_render_install_plan_requirements_format():
+    from soup_cli.utils.env_lock import render_install_plan
+
+    plan = render_install_plan(_make_env_lock(), fmt="requirements")
+    assert "torch==2.1.0" in plan
+    assert "uv pip install" not in plan
+
+
+def test_render_install_plan_skips_non_pip_as_comment():
+    from soup_cli.utils.env_lock import render_install_plan
+
+    plan = render_install_plan(_lock_with_conda(), fmt="uv-pip")
+    # conda entry is surfaced as a comment, not an install line.
+    assert "torch==2.1.0" in plan
+    lines = [ln for ln in plan.splitlines() if "mkl" in ln]
+    assert lines and all(ln.lstrip().startswith("#") for ln in lines)
+
+
+def test_render_install_plan_rejects_unknown_format():
+    from soup_cli.utils.env_lock import render_install_plan
+
+    with pytest.raises(ValueError, match="format"):
+        render_install_plan(_make_env_lock(), fmt="bogus")
+
+
+def test_render_install_plan_rejects_non_lock():
+    from soup_cli.utils.env_lock import render_install_plan
+
+    with pytest.raises(TypeError):
+        render_install_plan({"soup_version": "x"}, fmt="uv-pip")  # type: ignore[arg-type]
+
+
+def test_write_requirements_txt_round_trip(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    from soup_cli.utils.env_lock import write_requirements_txt
+
+    write_requirements_txt(_make_env_lock(), "requirements.txt")
+    text = (tmp_path / "requirements.txt").read_text(encoding="utf-8")
+    assert "torch==2.1.0" in text
+
+
+def test_write_requirements_txt_outside_cwd_rejected(tmp_path, monkeypatch):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    sub = tmp_path / "sub"
+    sub.mkdir()
+    monkeypatch.chdir(sub)
+    from soup_cli.utils.env_lock import write_requirements_txt
+
+    with pytest.raises(ValueError, match="cwd"):
+        write_requirements_txt(_make_env_lock(), str(outside / "requirements.txt"))
+
+
+# --- CLI: soup env fix ---
+
+
+def test_cli_env_fix_help():
+    from soup_cli.cli import app
+
+    result = runner.invoke(app, ["env", "fix", "--help"])
+    assert result.exit_code == 0, result.output
+
+
+def test_cli_env_fix_renders_plan(tmp_path, monkeypatch):
+    from soup_cli.cli import app
+
+    monkeypatch.chdir(tmp_path)
+    assert runner.invoke(app, ["env", "lock"]).exit_code == 0
+    result = runner.invoke(app, ["env", "fix"])
+    assert result.exit_code == 0, result.output
+    assert "uv pip install" in result.output
+
+
+def test_cli_env_fix_requirements_format(tmp_path, monkeypatch):
+    from soup_cli.cli import app
+
+    monkeypatch.chdir(tmp_path)
+    assert runner.invoke(app, ["env", "lock"]).exit_code == 0
+    result = runner.invoke(app, ["env", "fix", "--format", "requirements"])
+    assert result.exit_code == 0, result.output
+    assert "uv pip install" not in result.output
+
+
+def test_cli_env_fix_missing_lock(tmp_path, monkeypatch):
+    from soup_cli.cli import app
+
+    monkeypatch.chdir(tmp_path)
+    result = runner.invoke(app, ["env", "fix"])
+    assert result.exit_code == 1
+    assert "soup env lock" in result.output
+
+
+def test_cli_env_fix_writes_output(tmp_path, monkeypatch):
+    from soup_cli.cli import app
+
+    monkeypatch.chdir(tmp_path)
+    assert runner.invoke(app, ["env", "lock"]).exit_code == 0
+    result = runner.invoke(app, ["env", "fix", "--output", "requirements.txt"])
+    assert result.exit_code == 0, result.output
+    assert (tmp_path / "requirements.txt").exists()
+
+
+def test_cli_env_fix_output_outside_cwd_rejected(tmp_path, monkeypatch):
+    from soup_cli.cli import app
+
+    sub = tmp_path / "sub"
+    sub.mkdir()
+    monkeypatch.chdir(sub)
+    assert runner.invoke(app, ["env", "lock"]).exit_code == 0
+    result = runner.invoke(
+        app, ["env", "fix", "--output", str(tmp_path / "req.txt")]
+    )
+    assert result.exit_code == 2
+
+
+def test_cli_env_fix_output_null_byte_rejected(tmp_path, monkeypatch):
+    from soup_cli.cli import app
+
+    monkeypatch.chdir(tmp_path)
+    assert runner.invoke(app, ["env", "lock"]).exit_code == 0
+    result = runner.invoke(app, ["env", "fix", "--output", "a\x00b"])
+    assert result.exit_code == 2, result.output
+
+
+def test_render_install_plan_requirements_conda_comment():
+    from soup_cli.utils.env_lock import render_install_plan
+
+    # In requirements format a non-pip (conda) entry is surfaced as a comment
+    # line rather than a bare `name==version` pip pin (v0.71.1 #209).
+    plan = render_install_plan(_lock_with_conda(), fmt="requirements")
+    assert "# conda: mkl==2023.1" in plan

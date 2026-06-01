@@ -9,6 +9,8 @@ Sub-commands:
 
 from __future__ import annotations
 
+from typing import Optional
+
 import typer
 from rich.console import Console
 from rich.markup import escape
@@ -19,8 +21,10 @@ from soup_cli.utils.env_lock import (
     DEFAULT_LOCK_FILE,
     check_abi_compat,
     read_lock,
+    render_install_plan,
     snapshot_env,
     write_lock,
+    write_requirements_txt,
 )
 from soup_cli.utils.paths import is_under_cwd
 
@@ -154,6 +158,72 @@ def env_check_cmd(
         )
     )
     raise typer.Exit(3)
+
+
+@env_app.command("fix")
+def env_fix_cmd(
+    lock_path: str = typer.Option(
+        DEFAULT_LOCK_FILE,
+        "--lock",
+        help="Path to the lock file to render an install plan from.",
+    ),
+    fmt: str = typer.Option(
+        "uv-pip",
+        "--format",
+        help="Install-plan format: uv-pip (copy/paste uv commands) | requirements.",
+    ),
+    output: Optional[str] = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help="Optionally also write a requirements.txt to this path (under cwd).",
+    ),
+) -> None:
+    """Render a reproducible install plan from ``soup-env.lock``.
+
+    Print-only by design — recreating a venv is environment-dependent, so
+    v0.71.1 emits the install commands for manual copy/paste (or scripting)
+    rather than shelling out to a package manager (v0.71.1 #209).
+    """
+    try:
+        lock = read_lock(lock_path)
+    except FileNotFoundError:
+        console.print(
+            f"[red]No lock file at {escape(lock_path)}; "
+            "run `soup env lock` first.[/]"
+        )
+        raise typer.Exit(1) from None
+    except (TypeError, ValueError) as exc:
+        console.print(f"[red]{escape(str(exc))}[/]")
+        raise typer.Exit(2) from exc
+
+    try:
+        plan = render_install_plan(lock, fmt=fmt)
+    except (TypeError, ValueError) as exc:
+        console.print(f"[red]{escape(str(exc))}[/]")
+        raise typer.Exit(2) from exc
+
+    console.print(
+        Panel(
+            escape(plan.rstrip("\n")),
+            title=f"env fix — install plan ({escape(fmt)})",
+            border_style="green",
+        )
+    )
+
+    if output is not None:
+        if "\x00" in output:
+            console.print("[red]output path must not contain null bytes[/]")
+            raise typer.Exit(2)
+        if not is_under_cwd(output):
+            console.print(f"[red]output {escape(output)!r} is outside cwd[/]")
+            raise typer.Exit(2)
+        try:
+            write_requirements_txt(lock, output)
+        except (TypeError, ValueError) as exc:
+            console.print(f"[red]{escape(str(exc))}[/]")
+            raise typer.Exit(2) from exc
+        console.print(f"[green]Wrote requirements to {escape(output)}[/]")
 
 
 __all__ = ["env_app"]

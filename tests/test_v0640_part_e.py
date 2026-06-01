@@ -203,6 +203,121 @@ def test_complete_target_modules_handles_unknown_base():
     assert len(suggestions) > 0
 
 
+# --- v0.71.1 #210 — HF-config introspection per base ---
+
+
+def test_complete_target_modules_introspects_gpt2_config():
+    """A cached gpt2-family config yields its real linear-layer names."""
+    import types
+    from unittest.mock import patch
+
+    from soup_cli.utils.completions import complete_target_modules
+
+    fake_cfg = types.SimpleNamespace(model_type="gpt2", architectures=["GPT2LMHeadModel"])
+    with patch("transformers.AutoConfig.from_pretrained", return_value=fake_cfg) as m:
+        out = complete_target_modules("", base="gpt2")
+    # gpt2 uses c_attn / c_proj / c_fc, NOT the Llama q_proj shape.
+    assert "c_attn" in out
+    assert "q_proj" not in out
+    # local-only probe — never a network download from a completer.
+    _, kwargs = m.call_args
+    assert kwargs.get("local_files_only") is True
+
+
+def test_complete_target_modules_introspects_llama_config():
+    import types
+    from unittest.mock import patch
+
+    from soup_cli.utils.completions import complete_target_modules
+
+    fake_cfg = types.SimpleNamespace(model_type="llama")
+    with patch("transformers.AutoConfig.from_pretrained", return_value=fake_cfg):
+        out = complete_target_modules("", base="meta-llama/Llama-3.1-8B")
+    assert "gate_proj" in out
+    assert "q_proj" in out
+
+
+def test_complete_target_modules_unknown_arch_falls_back():
+    import types
+    from unittest.mock import patch
+
+    from soup_cli.utils.completions import complete_target_modules
+
+    fake_cfg = types.SimpleNamespace(model_type="totally_unknown_arch_xyz")
+    with patch("transformers.AutoConfig.from_pretrained", return_value=fake_cfg):
+        out = complete_target_modules("", base="weird/model")
+    # Unknown arch → canonical default shape.
+    assert "q_proj" in out
+
+
+def test_complete_target_modules_no_model_type_falls_back():
+    import types
+    from unittest.mock import patch
+
+    from soup_cli.utils.completions import complete_target_modules
+
+    # A config object with no ``model_type`` attribute at all → default shape.
+    fake_cfg = types.SimpleNamespace()
+    with patch("transformers.AutoConfig.from_pretrained", return_value=fake_cfg):
+        out = complete_target_modules("", base="weird/no-model-type")
+    assert "q_proj" in out
+
+
+def test_complete_target_modules_non_string_model_type_falls_back():
+    import types
+    from unittest.mock import patch
+
+    from soup_cli.utils.completions import complete_target_modules
+
+    # A non-string ``model_type`` (e.g. an int) is rejected → default shape.
+    fake_cfg = types.SimpleNamespace(model_type=123)
+    with patch("transformers.AutoConfig.from_pretrained", return_value=fake_cfg):
+        out = complete_target_modules("", base="weird/non-string-model-type")
+    assert "q_proj" in out
+
+
+def test_complete_target_modules_introspection_error_falls_back():
+    from unittest.mock import patch
+
+    from soup_cli.utils.completions import complete_target_modules
+
+    with patch(
+        "transformers.AutoConfig.from_pretrained", side_effect=OSError("not cached")
+    ):
+        out = complete_target_modules("", base="not/cached")
+    assert "q_proj" in out
+
+
+def test_complete_target_modules_introspection_respects_prefix():
+    import types
+    from unittest.mock import patch
+
+    from soup_cli.utils.completions import complete_target_modules
+
+    fake_cfg = types.SimpleNamespace(model_type="gpt2")
+    with patch("transformers.AutoConfig.from_pretrained", return_value=fake_cfg):
+        out = complete_target_modules("c_a", base="gpt2")
+    assert out == ["c_attn"]
+
+
+def test_complete_target_modules_transformers_missing_falls_back(monkeypatch):
+    """When transformers is not installed, the completer never raises."""
+    import builtins
+
+    from soup_cli.utils.completions import complete_target_modules
+
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "transformers" or name.startswith("transformers."):
+            raise ImportError("transformers not installed")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    out = complete_target_modules("", base="meta-llama/Llama-3.1-8B")
+    assert "q_proj" in out
+
+
 # ---------------------------------------------------------------------------
 # CLI smoke
 # ---------------------------------------------------------------------------

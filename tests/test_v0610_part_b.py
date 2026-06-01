@@ -519,3 +519,72 @@ class TestFixtures:
         from soup_cli.utils.unlearning_eval import get_fixture_path
 
         assert get_fixture_path("zzz") is None
+
+    # v0.71.1 #195 — MUSE + WMDP bundled mini-fixtures.
+    def test_muse_fixture_exists(self):
+        from soup_cli.utils.unlearning_eval import get_fixture_path
+
+        p = get_fixture_path("muse")
+        assert p is not None
+        assert p.is_file()
+
+    def test_wmdp_fixture_exists(self):
+        from soup_cli.utils.unlearning_eval import get_fixture_path
+
+        p = get_fixture_path("wmdp")
+        assert p is not None
+        assert p.is_file()
+
+    def test_all_benchmarks_resolve_a_fixture(self):
+        from soup_cli.utils.unlearning_eval import BENCHMARKS, get_fixture_path
+
+        for bench in BENCHMARKS:
+            assert get_fixture_path(bench) is not None, bench
+
+    def test_muse_fixture_is_valid_jsonl(self):
+        from soup_cli.utils.unlearning_eval import get_fixture_path
+
+        p = get_fixture_path("muse")
+        assert p is not None
+        lines = p.read_text(encoding="utf-8").splitlines()
+        rows = [json.loads(line) for line in lines if line.strip()]
+        assert len(rows) >= 4
+        # Each row carries a prompt/response pair + a forget/retain split.
+        splits = {row["split"] for row in rows}
+        assert "forget" in splits
+        assert "retain" in splits
+        for row in rows:
+            assert isinstance(row["prompt"], str) and row["prompt"]
+            assert isinstance(row["response"], str) and row["response"]
+
+    def test_wmdp_fixture_is_valid_jsonl(self):
+        from soup_cli.utils.unlearning_eval import get_fixture_path
+
+        p = get_fixture_path("wmdp")
+        assert p is not None
+        lines = p.read_text(encoding="utf-8").splitlines()
+        rows = [json.loads(line) for line in lines if line.strip()]
+        assert len(rows) >= 4
+        splits = {row["split"] for row in rows}
+        assert "forget" in splits
+        assert "retain" in splits
+        # WMDP rows are multiple-choice hazardous-knowledge probes.
+        for row in rows:
+            assert isinstance(row["prompt"], str) and row["prompt"]
+            assert isinstance(row["response"], str) and row["response"]
+        # Redaction-policy invariant (v0.71.1 #195): every forget-set row is a
+        # REFUSED placeholder with its hazardous content redacted — Soup never
+        # ships verbatim WMDP probes.
+        forget_rows = [row for row in rows if row["split"] == "forget"]
+        assert forget_rows
+        for row in forget_rows:
+            assert row["response"].startswith("REFUSED")
+            assert "[redacted]" in row["prompt"]
+
+    def test_metadata_fixtures_are_filenames_not_paths(self):
+        from soup_cli.utils.unlearning_eval import _BENCHMARK_METADATA
+
+        for name, meta in _BENCHMARK_METADATA.items():
+            fixture = meta["fixture"]
+            assert fixture, f"{name} fixture must be bundled (non-empty)"
+            assert "/" not in fixture and "\\" not in fixture

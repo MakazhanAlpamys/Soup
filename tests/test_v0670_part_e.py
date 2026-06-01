@@ -293,6 +293,113 @@ class TestCliSmoke:
         assert result.exit_code == 0, (result.output, repr(result.exception))
         assert (tmp_path / "soup.lock").exists()
 
+    # v0.71.1 #224 — auto-glue with `soup env lock`.
+    def test_lock_write_auto_derives_env_hash(self, tmp_path, monkeypatch) -> None:
+        import json
+
+        from typer.testing import CliRunner
+
+        from soup_cli.commands.lock import app
+        from soup_cli.utils.env_lock import compute_env_hash, snapshot_env, write_lock
+
+        monkeypatch.chdir(tmp_path)
+        # Stand up a soup-env.lock the way `soup env lock` would.
+        env = snapshot_env()
+        write_lock(env, "soup-env.lock")
+        expected_env_hash = compute_env_hash(env)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            app,
+            [
+                "write",
+                "--base-model", "test-model",
+                "--base-sha", "a" * 64,
+                "--dataset-sha", "b" * 64,
+                # NOTE: no --env-hash; must auto-derive from soup-env.lock.
+                "--output", "soup.lock",
+            ],
+        )
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        written = json.loads((tmp_path / "soup.lock").read_text(encoding="utf-8"))
+        assert written["env_hash"] == expected_env_hash
+
+    def test_lock_write_missing_env_lock_errors(self, tmp_path, monkeypatch) -> None:
+        from typer.testing import CliRunner
+
+        from soup_cli.commands.lock import app
+
+        monkeypatch.chdir(tmp_path)
+        runner = CliRunner()
+        result = runner.invoke(
+            app,
+            [
+                "write",
+                "--base-model", "test-model",
+                "--base-sha", "a" * 64,
+                "--dataset-sha", "b" * 64,
+                "--output", "soup.lock",
+            ],
+        )
+        assert result.exit_code == 2
+        assert "soup env lock" in result.output
+
+    def test_lock_write_custom_env_lock_path(self, tmp_path, monkeypatch) -> None:
+        import json
+
+        from typer.testing import CliRunner
+
+        from soup_cli.commands.lock import app
+        from soup_cli.utils.env_lock import compute_env_hash, snapshot_env, write_lock
+
+        monkeypatch.chdir(tmp_path)
+        env = snapshot_env()
+        write_lock(env, "custom-env.lock")
+        expected = compute_env_hash(env)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            app,
+            [
+                "write",
+                "--base-model", "test-model",
+                "--base-sha", "a" * 64,
+                "--dataset-sha", "b" * 64,
+                "--env-lock", "custom-env.lock",
+                "--output", "soup.lock",
+            ],
+        )
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        written = json.loads((tmp_path / "soup.lock").read_text(encoding="utf-8"))
+        assert written["env_hash"] == expected
+
+    def test_lock_write_explicit_env_hash_wins(self, tmp_path, monkeypatch) -> None:
+        # Explicit --env-hash takes precedence over any soup-env.lock.
+        import json
+
+        from typer.testing import CliRunner
+
+        from soup_cli.commands.lock import app
+        from soup_cli.utils.env_lock import snapshot_env, write_lock
+
+        monkeypatch.chdir(tmp_path)
+        write_lock(snapshot_env(), "soup-env.lock")
+        runner = CliRunner()
+        result = runner.invoke(
+            app,
+            [
+                "write",
+                "--base-model", "test-model",
+                "--base-sha", "a" * 64,
+                "--dataset-sha", "b" * 64,
+                "--env-hash", "c" * 64,
+                "--output", "soup.lock",
+            ],
+        )
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        written = json.loads((tmp_path / "soup.lock").read_text(encoding="utf-8"))
+        assert written["env_hash"] == "c" * 64
+
 
 class TestSourceWiring:
     def test_no_top_level_heavy_imports(self) -> None:

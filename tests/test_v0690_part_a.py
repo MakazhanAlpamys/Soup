@@ -481,6 +481,74 @@ class TestLoadBuildYaml:
 
 
 # -----------------------------------------------------------------------------
+# v0.71.1 #233 — BuildModel.source containment boundary helper
+# -----------------------------------------------------------------------------
+
+
+class TestValidateBuildSource:
+    def test_happy_path(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "data").mkdir()
+        _write(tmp_path / "data" / "raw.jsonl", "{}\n")
+        assert build_dag.validate_build_source("data/raw.jsonl") == "data/raw.jsonl"
+
+    def test_returns_none(self) -> None:
+        assert build_dag.validate_build_source(None) is None
+
+    def test_nonexistent_under_cwd_accepted(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A path that does not yet exist but stays under cwd is allowed —
+        # the build may be planned before the data lands on disk.
+        monkeypatch.chdir(tmp_path)
+        assert build_dag.validate_build_source("data/not_yet.jsonl") == "data/not_yet.jsonl"
+
+    def test_outside_cwd_rejected(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        _write(outside / "raw.jsonl", "{}\n")
+        sub = tmp_path / "sub"
+        sub.mkdir()
+        monkeypatch.chdir(sub)
+        with pytest.raises(ValueError, match="cwd"):
+            build_dag.validate_build_source(str(outside / "raw.jsonl"))
+
+    def test_null_byte_rejected(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        with pytest.raises(ValueError, match="null"):
+            build_dag.validate_build_source("a\x00b.jsonl")
+
+    def test_empty_rejected(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        with pytest.raises(ValueError):
+            build_dag.validate_build_source("")
+
+    def test_non_string_rejected(self) -> None:
+        with pytest.raises(TypeError):
+            build_dag.validate_build_source(42)  # type: ignore[arg-type]
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlink")
+    def test_symlink_rejected(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        target = _write(tmp_path / "real.jsonl", "{}\n")
+        link = tmp_path / "link.jsonl"
+        os.symlink(str(target), str(link))
+        with pytest.raises(ValueError, match="symlink"):
+            build_dag.validate_build_source(str(link))
+
+    def test_exported(self) -> None:
+        assert "validate_build_source" in build_dag.__all__
+
+
+# -----------------------------------------------------------------------------
 # Incremental diff (re-tokenize only changed rows)
 # -----------------------------------------------------------------------------
 

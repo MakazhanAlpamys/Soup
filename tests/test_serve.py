@@ -255,3 +255,138 @@ class TestDetectBaseModel:
 
         result = _detect_base_model(config_file)
         assert result is None
+
+
+# v0.71.1 #230 — soup serve --record-thumbs
+class TestRecordThumbs:
+    def _client(self, tmp_path, monkeypatch):
+        from fastapi.testclient import TestClient
+
+        from soup_cli.commands.serve import _create_app
+        from soup_cli.utils.local_rl import init_local_rl_db
+
+        monkeypatch.chdir(tmp_path)
+        db = "rl.db"
+        init_local_rl_db(db)
+        app = _create_app(
+            model_obj=MagicMock(),
+            tokenizer=MagicMock(),
+            device="cpu",
+            model_name="test-model",
+            max_tokens_default=256,
+            record_thumbs_db=db,
+        )
+        return TestClient(app), db
+
+    def test_flag_in_help(self):
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        result = CliRunner().invoke(app, ["serve", "--help"])
+        assert result.exit_code == 0, result.output
+        assert "--record-thumbs" in result.output
+
+    def test_thumbs_endpoint_registered_when_db_set(self, tmp_path, monkeypatch):
+        try:
+            import fastapi  # noqa: F401
+        except ImportError:
+            pytest.skip("FastAPI not installed")
+        client, _ = self._client(tmp_path, monkeypatch)
+        routes = [r.path for r in client.app.routes]
+        assert "/v1/thumbs" in routes
+
+    def test_thumbs_endpoint_records_feedback(self, tmp_path, monkeypatch):
+        try:
+            import fastapi  # noqa: F401
+        except ImportError:
+            pytest.skip("FastAPI not installed")
+        import sqlite3
+
+        client, db = self._client(tmp_path, monkeypatch)
+        resp = client.post(
+            "/v1/thumbs",
+            json={"prompt": "Q?", "response": "A.", "thumb": "up"},
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["thumb"] == "up"
+        with sqlite3.connect(tmp_path / db) as conn:
+            rows = conn.execute("SELECT prompt, response, thumb FROM thumbs").fetchall()
+        assert rows == [("Q?", "A.", "up")]
+
+    def test_thumbs_endpoint_rejects_bad_thumb(self, tmp_path, monkeypatch):
+        try:
+            import fastapi  # noqa: F401
+        except ImportError:
+            pytest.skip("FastAPI not installed")
+        client, _ = self._client(tmp_path, monkeypatch)
+        resp = client.post(
+            "/v1/thumbs",
+            json={"prompt": "Q?", "response": "A.", "thumb": "sideways"},
+        )
+        assert resp.status_code == 400
+
+    def test_thumbs_endpoint_rejects_missing_fields(self, tmp_path, monkeypatch):
+        try:
+            import fastapi  # noqa: F401
+        except ImportError:
+            pytest.skip("FastAPI not installed")
+        client, _ = self._client(tmp_path, monkeypatch)
+        resp = client.post("/v1/thumbs", json={"prompt": "Q?"})
+        assert resp.status_code == 400
+
+    def test_thumbs_endpoint_404_when_not_enabled(self, tmp_path, monkeypatch):
+        try:
+            from fastapi.testclient import TestClient
+        except ImportError:
+            pytest.skip("FastAPI not installed")
+        from soup_cli.commands.serve import _create_app
+
+        monkeypatch.chdir(tmp_path)
+        app = _create_app(
+            model_obj=MagicMock(),
+            tokenizer=MagicMock(),
+            device="cpu",
+            model_name="test-model",
+            max_tokens_default=256,
+        )  # no record_thumbs_db
+        client = TestClient(app)
+        resp = client.post(
+            "/v1/thumbs",
+            json={"prompt": "Q?", "response": "A.", "thumb": "up"},
+        )
+        assert resp.status_code == 404
+
+    def test_thumbs_endpoint_rejects_non_string_thumb(self, tmp_path, monkeypatch):
+        try:
+            import fastapi  # noqa: F401
+        except ImportError:
+            pytest.skip("FastAPI not installed")
+        client, _ = self._client(tmp_path, monkeypatch)
+        resp = client.post(
+            "/v1/thumbs",
+            json={"prompt": "Q?", "response": "A.", "thumb": 1},
+        )
+        assert resp.status_code == 400
+
+    def test_thumbs_endpoint_rejects_non_dict_body(self, tmp_path, monkeypatch):
+        try:
+            import fastapi  # noqa: F401
+        except ImportError:
+            pytest.skip("FastAPI not installed")
+        client, _ = self._client(tmp_path, monkeypatch)
+        # A JSON array body does not match the dict-typed payload; FastAPI
+        # rejects it (422) or the handler's isinstance guard does (400).
+        resp = client.post("/v1/thumbs", json=[])
+        assert resp.status_code in (400, 422)
+
+    def test_serve_validates_record_thumbs_db_path_source(self):
+        # Source-grep regression: the startup path must validate the
+        # operator-supplied db path before init/use (v0.71.1 #230). Guards
+        # against a future refactor dropping the containment check.
+        import inspect
+
+        from soup_cli.commands import serve
+
+        src = inspect.getsource(serve)
+        assert "validate_db_path(record_thumbs)" in src

@@ -12,6 +12,37 @@ reproducing 70+ versions of notes.
 
 ## [Unreleased]
 
+## [0.71.1] - 2026-06-01
+
+### Added
+- `soup env fix` — render a reproducible install plan from `soup-env.lock`.
+  Emits copy/paste `uv pip install` commands (`--format uv-pip`, default) or a
+  `requirements.txt` body (`--format requirements`); `--output` optionally writes
+  a `requirements.txt` under cwd. Print-only by design — never shells out to a
+  package manager.
+- `soup lock write --env-lock <path>` — auto-derive `--env-hash` from a
+  `soup-env.lock` so operators who ran `soup env lock` don't copy the hash by
+  hand. `--env-hash` still wins when passed explicitly.
+- `soup serve --record-thumbs <db>` — capture thumbs-up/down feedback into a
+  local-RL SQLite at startup, plus a new `POST /v1/thumbs` endpoint (transformers
+  backend). Returns 404 when the flag isn't set.
+- Judge-calibration persistence: `JudgeCalibrationReport.to_dict`,
+  `write_judge_calibration`, and `load_judge_calibration`, backed by a new
+  `judge_calibration` registry artifact kind. Loading re-validates the report so
+  a corrupt on-disk field is rejected.
+- Bundled MUSE and WMDP unlearning eval fixtures so
+  `soup eval unlearning --benchmark muse|wmdp` runs out of the box. WMDP
+  forget-set probes ship **redacted** (placeholder prompts + `REFUSED` responses)
+  — Soup never ships verbatim hazardous content.
+
+### Changed
+- `soup completions` now introspects a cached base model's actual LoRA target
+  modules (config-only `AutoConfig` load, `local_files_only=True`, never networks
+  or raises) and falls back to the canonical default shape when the base isn't
+  cached locally.
+- `build_dag` exposes a `validate_build_source` helper (cwd-containment +
+  symlink rejection) for build-manifest source paths.
+
 ## [0.71.0] - 2026-06-01
 
 ### Changed

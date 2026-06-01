@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Iterable, Optional, Sequence
 
 # Allowed winner labels in a pairwise judgement.
@@ -342,6 +343,64 @@ class JudgeCalibrationReport:
             raise ValueError("num_pairs must be non-negative")
         if not isinstance(self.calibrated, bool):
             raise ValueError("calibrated must be a bool")
+
+    def to_dict(self) -> dict:
+        """JSON-serialisable view (v0.71.1 #214)."""
+        return {
+            "position_bias": self.position_bias,
+            "conformal_threshold": self.conformal_threshold,
+            "agreement_rate": self.agreement_rate,
+            "num_pairs": self.num_pairs,
+            "calibrated": self.calibrated,
+        }
+
+
+def write_judge_calibration(report: JudgeCalibrationReport, output_path: str) -> Path:
+    """Persist a :class:`JudgeCalibrationReport` as JSON under cwd.
+
+    v0.71.1 #214 — pairs with the new ``judge_calibration`` registry artifact
+    kind. Delegates to the shared cwd-contained writer in
+    ``registry.attach.write_eval_json`` so containment policy stays
+    single-source. Returns the resolved :class:`pathlib.Path`.
+    """
+    if not isinstance(report, JudgeCalibrationReport):
+        raise TypeError("report must be a JudgeCalibrationReport")
+    from soup_cli.registry.attach import write_eval_json
+
+    return write_eval_json(output_path, payload=report.to_dict())
+
+
+def load_judge_calibration(path: str) -> JudgeCalibrationReport:
+    """Load + re-validate a persisted calibration report.
+
+    v0.71.1 #214 — re-instantiating the frozen dataclass runs
+    ``__post_init__``, so an out-of-range / corrupt field on disk is rejected
+    here (the production-gate safety net for ``ensure_judge_calibrated``).
+    """
+    import json
+
+    from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
+
+    # cwd-containment + symlink rejection (mirrors every other v0.71.1 read
+    # path). Runs BEFORE is_file() so a pre-placed symlink cannot redirect the
+    # read; a genuinely missing file still surfaces as FileNotFoundError below.
+    enforce_under_cwd_and_no_symlink(path, "calibration report")
+    p = Path(path)
+    if not p.is_file():
+        raise FileNotFoundError(f"calibration report not found: {path}")
+    data = json.loads(p.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError("calibration report must be a JSON object")
+    try:
+        return JudgeCalibrationReport(
+            position_bias=data["position_bias"],
+            conformal_threshold=data["conformal_threshold"],
+            agreement_rate=data["agreement_rate"],
+            num_pairs=data["num_pairs"],
+            calibrated=data["calibrated"],
+        )
+    except KeyError as exc:
+        raise ValueError(f"calibration report missing field: {exc}") from exc
 
 
 def run_pairwise_calibration(

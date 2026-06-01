@@ -15,7 +15,8 @@ Verdicts follow the project's OK / MINOR / MAJOR taxonomy (same
 thresholds as v0.26.0 Part D Quant-Lobotomy + v0.56.0 diagnose).
 
 Live-model evaluation hooks are deferred to v0.61.1 — this module ships
-pure-Python kernels + a frozen ``UnlearnReport`` + bundled TOFU fixture.
+pure-Python kernels + a frozen ``UnlearnReport`` + bundled TOFU / MUSE /
+WMDP mini-fixtures (v0.71.1 #195 added the MUSE + WMDP loaders).
 Operators can supply pre-computed ``evidence`` JSON to drive the
 classifier today.
 """
@@ -62,14 +63,17 @@ _BENCHMARK_METADATA: Mapping[str, Mapping[str, str]] = MappingProxyType({
             "MUSE — real-world books / news corpora with paired retain "
             "sets (Shi et al., 2024)."
         ),
-        "fixture": "",  # not bundled; loader expected in v0.61.1
+        "fixture": "muse_demo.jsonl",
     }),
     "wmdp": MappingProxyType({
         "description": (
             "WMDP — hazardous-knowledge unlearning across biology / "
-            "cyber / chemistry (Li et al., 2024)."
+            "cyber / chemistry (Li et al., 2024). The bundled mini-set "
+            "ships REDACTED forget-set probes — Soup never bundles "
+            "verbatim hazardous content (matches v0.65.0 behaviour "
+            "battery policy)."
         ),
-        "fixture": "",
+        "fixture": "wmdp_demo.jsonl",
     }),
 })
 

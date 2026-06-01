@@ -492,6 +492,21 @@ class TestRegistryArtifacts:
             store.add_artifact(entry_id=eid, kind="malicious", path=str(f))
         store.close()
 
+    def test_add_artifact_accepts_judge_calibration_kind(self, tmp_path, monkeypatch):
+        # v0.71.1 #214 — judge_calibration is a valid artifact kind.
+        from soup_cli.registry.store import RegistryStore
+
+        monkeypatch.chdir(tmp_path)
+        store = RegistryStore(db_path=tmp_path / "reg.db")
+        eid = store.push(name="m1", tag="v1", base_model="b", task="sft",
+                         run_id=None, config={})
+        f = tmp_path / "calib.json"
+        f.write_text('{"calibrated": true}', encoding="utf-8")
+        store.add_artifact(entry_id=eid, kind="judge_calibration", path=str(f))
+        arts = store.get_artifacts(eid)
+        assert any(a["kind"] == "judge_calibration" for a in arts)
+        store.close()
+
     def test_add_artifact_default_enforces_cwd(self, tmp_path, monkeypatch):
         """By default, artifacts outside cwd are rejected."""
         from soup_cli.registry.store import RegistryStore

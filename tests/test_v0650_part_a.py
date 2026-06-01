@@ -18,7 +18,9 @@ from soup_cli.eval.calibrate import (
     ensure_judge_calibrated,
     fit_position_bias,
     kl_divergence,
+    load_judge_calibration,
     run_pairwise_calibration,
+    write_judge_calibration,
 )
 
 # ─── PairwiseJudgement frozen dataclass ───
@@ -388,3 +390,82 @@ class TestSourceWiring:
         )
         for forbidden in forbidden_imports:
             assert forbidden not in text, f"Found heavy top-level import: {forbidden!r}"
+
+
+# ─── v0.71.1 #214 — judge_calibration registry artifact persistence ───
+
+
+class TestJudgeCalibrationPersistence:
+    def _report(self, calibrated: bool = True) -> JudgeCalibrationReport:
+        return JudgeCalibrationReport(
+            position_bias=0.05,
+            conformal_threshold=0.3,
+            agreement_rate=0.8,
+            num_pairs=12,
+            calibrated=calibrated,
+        )
+
+    def test_to_dict_round_trips_fields(self):
+        r = self._report()
+        d = r.to_dict()
+        assert d == {
+            "position_bias": 0.05,
+            "conformal_threshold": 0.3,
+            "agreement_rate": 0.8,
+            "num_pairs": 12,
+            "calibrated": True,
+        }
+
+    def test_write_then_load_round_trip(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        r = self._report()
+        out = write_judge_calibration(r, "calib.json")
+        assert out.exists()
+        loaded = load_judge_calibration(str(out))
+        assert isinstance(loaded, JudgeCalibrationReport)
+        assert loaded == r
+
+    def test_write_outside_cwd_rejected(self, tmp_path, monkeypatch):
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        sub = tmp_path / "sub"
+        sub.mkdir()
+        monkeypatch.chdir(sub)
+        with pytest.raises(ValueError, match="cwd"):
+            write_judge_calibration(self._report(), str(outside / "calib.json"))
+
+    def test_write_rejects_non_report(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        with pytest.raises(TypeError):
+            write_judge_calibration({"calibrated": True}, "calib.json")  # type: ignore[arg-type]
+
+    def test_load_re_validates_corrupt_report(self, tmp_path, monkeypatch):
+        # An out-of-range field on disk must be rejected on load (the
+        # frozen dataclass __post_init__ is the production-gate safety net).
+        import json
+
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "bad.json").write_text(
+            json.dumps(
+                {
+                    "position_bias": 2.0,  # out of [-1, 1]
+                    "conformal_threshold": 0.3,
+                    "agreement_rate": 0.8,
+                    "num_pairs": 12,
+                    "calibrated": True,
+                }
+            ),
+            encoding="utf-8",
+        )
+        with pytest.raises(ValueError, match="position_bias"):
+            load_judge_calibration("bad.json")
+
+    def test_load_missing_file_raises(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        with pytest.raises(FileNotFoundError):
+            load_judge_calibration("nope.json")
+
+    def test_registry_kind_registered(self):
+        from soup_cli.registry.store import _VALID_KINDS
+
+        assert "judge_calibration" in _VALID_KINDS
