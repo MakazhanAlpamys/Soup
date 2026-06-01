@@ -7,6 +7,12 @@ from rich.panel import Panel
 
 console = Console(stderr=True)
 
+# v0.71.0 — the heavy training stack (torch / transformers / peft / trl /
+# datasets / bitsandbytes / accelerate) moved out of the core install into the
+# `[train]` extra. A missing one of these surfaces this single, actionable fix.
+# The `\\[` escapes the literal `[` for Rich markup (it renders as `[train]`).
+_TRAIN_FIX = "Training needs the \\[train] extra. Run: pip install 'soup-cli\\[train]'"
+
 # Map known error patterns to (short message, fix suggestion)
 ERROR_MAP = [
     # CUDA OOM
@@ -62,21 +68,41 @@ ERROR_MAP = [
         "httpx is not installed (needed for data generate).",
         "Run: pip install 'soup-cli\\[generate]'",
     ),
-    # Peft / transformers incompatibility
+    # Heavy training stack — all moved to the [train] extra in v0.71.0.
+    (
+        "No module named 'torch'",
+        "PyTorch is not installed (needed for training).",
+        _TRAIN_FIX,
+    ),
+    (
+        "No module named 'transformers'",
+        "Transformers is not installed (needed for training).",
+        _TRAIN_FIX,
+    ),
     (
         "No module named 'peft'",
-        "PEFT is not installed.",
-        "Run: pip install peft>=0.7.0",
+        "PEFT is not installed (needed for LoRA training).",
+        _TRAIN_FIX,
     ),
     (
         "No module named 'trl'",
-        "TRL is not installed.",
-        "Run: pip install trl>=0.7.0",
+        "TRL is not installed (needed for training).",
+        _TRAIN_FIX,
+    ),
+    (
+        "No module named 'datasets'",
+        "Datasets is not installed (needed for training).",
+        _TRAIN_FIX,
     ),
     (
         "No module named 'bitsandbytes'",
         "BitsAndBytes is not installed (needed for quantization).",
-        "Run: pip install bitsandbytes>=0.41.0",
+        _TRAIN_FIX,
+    ),
+    (
+        "No module named 'accelerate'",
+        "Accelerate is not installed (needed for training).",
+        _TRAIN_FIX,
     ),
     # CPU / quantization issues
     (

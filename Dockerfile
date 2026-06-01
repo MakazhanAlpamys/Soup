@@ -23,8 +23,10 @@ RUN update-alternatives --install /usr/bin/python python /usr/bin/python3 1
 # Set working directory
 WORKDIR /workspace
 
-# Install Soup from PyPI (always the latest published release, not local source)
-RUN pip install --no-cache-dir "soup-cli[serve,data,eval]"
+# Install Soup from PyPI (always the latest published release, not local source).
+# v0.71.0 split the training stack into the [train] extra — include it so the
+# GPU image can still fine-tune.
+RUN pip install --no-cache-dir "soup-cli[train,serve,data,eval]"
 
 # Default entrypoint and command
 ENTRYPOINT ["soup"]

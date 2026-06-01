@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "soup-cli"
-version = "0.70.0"
+version = "0.71.0"
 description = "Fine-tune LLMs in one command. No SSH, no config hell."
 readme = "README.md"
 license = "Apache-2.0"
@@ -21,11 +21,23 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
+# Core install (`pip install soup-cli`) is intentionally light: the CLI, config
+# system, and data tools — no PyTorch. v0.71.0 split the heavy training stack
+# (torch / transformers / peft / trl / datasets / bitsandbytes / accelerate)
+# into the `[train]` extra below.
 dependencies = [
     "typer>=0.9.0,<0.21.0",
     "rich>=13.0.0",
     "pydantic>=2.0.0",
     "pyyaml>=6.0",
+    "huggingface-hub>=0.16.0",
+    "plotext>=5.2.0",
+]
+
+[project.optional-dependencies]
+# v0.71.0 — heavy training stack. `pip install 'soup-cli[train]'` to fine-tune.
+# These were core dependencies through v0.70.0; pins are unchanged.
+train = [
     "torch>=2.0.0",
     "transformers>=4.36.0,<5.0.0",
     "peft>=0.7.0",
@@ -33,15 +45,16 @@ dependencies = [
     "datasets>=2.14.0",
     "bitsandbytes>=0.41.0",
     "accelerate>=0.25.0",
-    "huggingface-hub>=0.16.0",
-    "plotext>=5.2.0",
 ]
-
-[project.optional-dependencies]
+# v0.71.0 — convenience meta-extra pulling the main optional stacks.
+all = ["soup-cli[train,serve,ui,data]"]
 eval = ["lm-eval>=0.4.0"]
 data = ["datasketch>=1.6.0"]
 wandb = ["wandb>=0.15.0,<0.18.0"]
-dev = ["pytest>=7.0", "ruff>=0.1.0", "pytest-cov>=4.0", "httpx>=0.24.0", "mypy>=1.8.0", "pre-commit>=3.5.0"]
+# Self-references `[train]` so CI / contributors get the full training stack
+# (CI runs `pip install -e ".[dev]"`; without this every test would fail at
+# `import torch`).
+dev = ["soup-cli[train]", "pytest>=7.0", "ruff>=0.1.0", "pytest-cov>=4.0", "httpx>=0.24.0", "mypy>=1.8.0", "pre-commit>=3.5.0"]
 ui = ["fastapi>=0.104.0", "uvicorn>=0.24.0"]
 serve = ["fastapi>=0.104.0", "uvicorn>=0.24.0"]
 serve-fast = ["vllm>=0.4.0", "fastapi>=0.104.0", "uvicorn>=0.24.0"]

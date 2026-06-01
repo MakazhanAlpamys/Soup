@@ -32,7 +32,7 @@
 Soup turns the pain of LLM fine-tuning into a simple workflow. One config, one command, done.
 
 ```bash
-pip install soup-cli
+pip install 'soup-cli[train]'   # add [train] to fine-tune; bare `soup-cli` is the light CLI
 soup init --template chat
 soup train
 ```
@@ -49,10 +49,10 @@ infrastructure instead of improving models. Soup fixes that.
 
 ## What's New
 
-**v0.70.0 — Loop Hardening.** Six surfaces that protect the training loop from the failure
-modes that cost a real GPU-hour: a reward-hacking detector (InfoRM / RM-ensemble), cross-tokenizer
-distillation (ULD), MiniLLM reverse-KL distillation, mid-epoch RL checkpoints, an iterative-DPO
-loop driver, and a RAGEN echo-trap detector. See [`docs/training.md`](docs/training.md).
+**v0.71.0 — Lighter install.** The heavy training stack (PyTorch, Transformers, PEFT, TRL,
+datasets, bitsandbytes, accelerate) moved into a `[train]` extra. `pip install soup-cli` is now a
+light CLI + data-tools install with no PyTorch; `pip install 'soup-cli[train]'` adds everything you
+need to fine-tune. **Breaking:** existing users who train must reinstall with `[train]`.
 
 Full history: [CHANGELOG.md](CHANGELOG.md) &middot; [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 
@@ -61,9 +61,13 @@ Full history: [CHANGELOG.md](CHANGELOG.md) &middot; [GitHub Releases](https://gi
 ### 1. Install
 
 ```bash
-pip install soup-cli                                   # from PyPI
+pip install soup-cli            # light: CLI + config + data tools (no PyTorch)
+pip install 'soup-cli[train]'   # add the training stack (torch, transformers, peft, trl, …)
 pip install git+https://github.com/MakazhanAlpamys/Soup.git   # latest dev
 ```
+
+`soup init`, `soup data …`, and the other data/inspection commands work on the light install.
+Fine-tuning (`soup train`) needs the `[train]` extra.
 
 ### 2. Create a config
 
@@ -203,8 +207,9 @@ docker compose up   # or build locally
 - 8 GB+ VRAM for 7B models with QLoRA
 
 All training tasks run on CPU for testing (quantization auto-disabled). Optional extras
-(`fast`, `vision`, `qat`, `serve`, `serve-fast`, `ui`, `eval`, `deepspeed`, `liger`, `mlx`,
-`onnx`, `tensorrt`, …) are listed in [`docs/models.md`](docs/models.md#optional-extras).
+(`train`, `all`, `fast`, `vision`, `qat`, `serve`, `serve-fast`, `ui`, `eval`, `deepspeed`,
+`liger`, `mlx`, `onnx`, `tensorrt`, …) are listed in
+[`docs/models.md`](docs/models.md#optional-extras).
 
 ## Troubleshooting
 

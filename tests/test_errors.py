@@ -3,6 +3,7 @@
 from io import StringIO
 from unittest.mock import patch
 
+import pytest
 from rich.console import Console
 from typer.testing import CliRunner
 
@@ -70,6 +71,23 @@ def test_missing_deepspeed_error():
         format_friendly_error(exc, verbose=False)
     output = buf.getvalue()
     assert "soup-cli[deepspeed]" in output
+
+
+@pytest.mark.parametrize(
+    "module",
+    ["torch", "transformers", "peft", "trl", "datasets", "bitsandbytes", "accelerate"],
+)
+def test_missing_train_dep_points_at_train_extra(module):
+    """v0.71.0 — any missing heavy training dep points at the [train] extra."""
+    buf = StringIO()
+    test_console = Console(file=buf, stderr=False)
+    with patch("soup_cli.utils.errors.console", test_console):
+        exc = ModuleNotFoundError(f"No module named '{module}'")
+        format_friendly_error(exc, verbose=False)
+    output = buf.getvalue()
+    # The `\[train]` escape renders to a literal `[train]` in the output.
+    assert "soup-cli[train]" in output
+    assert "[train] extra" in output
 
 
 def test_connection_error():

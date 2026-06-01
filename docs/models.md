@@ -50,10 +50,13 @@ Soup works with **any** of the **340,000+** text-generation models on [HuggingFa
 
 ## Optional Extras
 
-The core `pip install soup-cli` is enough to train. Install extras only when you need them:
+The core `pip install soup-cli` is a light install — the CLI, config system, and data tools, with
+no PyTorch. Add `[train]` to fine-tune, or install other extras only when you need them:
 
 | Extra | Install | What it adds |
 |---|---|---|
+| `train` | `pip install 'soup-cli[train]'` | Training stack: torch, transformers, peft, trl, datasets, bitsandbytes, accelerate |
+| `all` | `pip install 'soup-cli[all]'` | `train` + `serve` + `ui` + `data` in one shot |
 | `fast` | `pip install 'soup-cli[fast]'` | Unsloth backend (2-5x faster, lower VRAM) |
 | `vision` | `pip install 'soup-cli[vision]'` | Vision / multimodal fine-tuning (Pillow) |
 | `audio` | `pip install 'soup-cli[audio]'` | Audio / speech fine-tuning (librosa, soundfile) |
