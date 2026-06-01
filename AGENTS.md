@@ -28,5 +28,3 @@ ruff check src/soup_cli/ tests/  # Lint — must be clean before any commit
 - **Feature reference** lives in [`docs/`](docs/README.md) — per-topic guides plus the full `soup` command list ([`docs/commands.md`](docs/commands.md)). Read the relevant page before changing a feature.
 - **Contribution workflow, project structure, and architecture notes** are in [`CONTRIBUTING.md`](CONTRIBUTING.md). Read it before making non-trivial changes.
 - The Pydantic config schema in [`src/soup_cli/config/schema.py`](src/soup_cli/config/schema.py) is the single source of truth for every config field.
-
-(Maintainers also keep a detailed local-only operating manual at `.claude/CLAUDE.md`; it is gitignored and not part of the public repo.)

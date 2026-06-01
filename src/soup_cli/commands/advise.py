@@ -9,8 +9,7 @@ Subcommands:
   soup advise explain   — print the rubric / evidence trail of the last verdict
   soup advise compare   — show prior verdicts from advise_history.jsonl
 
-The default invocation (with a positional data path) is the headline UX —
-mirrors the design directive in .claude/plan.md L1379-1407.
+The default invocation (with a positional data path) is the headline UX.
 """
 
 from __future__ import annotations

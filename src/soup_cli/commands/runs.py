@@ -25,7 +25,7 @@ def _filter_runs_by_cwd(runs: list[dict], cwd: str) -> list[dict]:
 
     Runs with no ``output_dir`` are dropped. Comparisons use
     ``os.path.realpath + commonpath`` for Windows 8.3 short-name safety
-    (see project rule in CLAUDE.md).
+    (project-wide path-containment convention).
     """
     cwd_real = os.path.realpath(cwd)
     kept: list[dict] = []

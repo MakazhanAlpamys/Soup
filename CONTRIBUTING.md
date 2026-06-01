@@ -277,7 +277,7 @@ pytest tests/ --cov=soup_cli --cov-report=html
 | test_v0540.py | v0.54.0 `soup advise` pre-flight decision — Part A Verdict engine (TASK_CATEGORIES + CHOICES allowlists; frozen Verdict / DatasetProfile / ROIEstimate; `classify_task` keyword + tool_calls + reasoning-trace signals + goal-steers; `compute_dataset_profile` shape + diversity + chosen/rejected + reasoning detection; `build_verdict` 5-branch rubric with `_MIN_ROWS_FOR_GRPO=500`; `load_advise_dataset` cwd-containment + symlink reject + BOM strip + malformed-JSON reject); Part B Probe runner (`synth_probe_baselines` + `synth_probe_lora_delta` heuristic stubs with forward-compat `model`/`device`/`lr`/`timeout_seconds` kwargs; `format_verdict_rubric` + `next_command_for` handoff); Part C Cross-project learning (`record_verdict` + `load_history` + `_append_with_lock` cross-process fcntl/msvcrt locking; `~/.soup/advise_history.jsonl` + sidecar `.lock` on Windows; `history_path` env override containment; per-line 64 KB cap on history reads); CLI smoke (run / explain / compare subcommands + `_rewrite_advise_argv` scoped to argv[1]); review-fix coverage (atomic scratch write + symlink reject on read; concurrent 8-thread record stress; 49↔50 / 499↔500 / 4096↔4097 boundary). Test count: 136 (v0.54.0) |
 | test_v0510.py | v0.51.0 Model Catalog Expansion + Alternative Model Hubs: Part E hubs.py (`SUPPORTED_HUBS` + `validate_hub_name` + `validate_hub_endpoint` SSRF parity / CRLF rejection / IPv6 mapped private rejected / IPv6 loopback ok / control chars; `resolve_endpoint` env-var override; `default_endpoint` + `endpoint_env_var` + `required_hub_package` + `is_hf` with bool guards; MappingProxyType immutability); TrainingConfig `hub` field (default + Literal accept + None reject + case-insensitive normalisation + YAML round-trip) + SoupConfig `_validate_hub_supported` (mlx + non-hf rejected; mlx + hf accepted; modelers + transformers accepted); Part D MULTIPACK_ARCHITECTURES extension (20 new arches parametrize + legacy preserved + exact count=38 + frozenset immutability); Parts A/B/C 26 new recipes (parametrize over every name × {get_recipe / RecipeMeta / SoupConfig load / yaml.safe_load / model id no null/whitespace/empty parts / max_length bounds / GRPO required fields}); baichuan-sft uses `hub: modelscope`; total recipe count >= 105 (v0.51.0) |
 
-(Note: the test-file table above covers v0.25.0–v0.35.0 + v0.47.0 + v0.48.0 + v0.49.0 + v0.50.0 only; full per-release table lives in `.claude/CLAUDE.md`.)
+(Note: the test-file table above is a representative subset, not exhaustive — every `tests/test_*.py` file maps to a feature area or release.)
 
 ## Making Changes
 
@@ -379,14 +379,14 @@ If adding a new training algorithm:
 3. Add template to `config/schema.py` (see existing 15 templates)
 4. Update `commands/train.py` to route to your trainer
 5. Add 30+ tests in `tests/test_your_trainer.py`
-6. Update `CLAUDE.md`, `README.md`, and `CONTRIBUTING.md`
+6. Update `README.md` + the relevant page under `docs/`
 
 ### 2. New Data Format
 
 1. Add detection and conversion logic to `data/formats.py`
 2. Add tests in `tests/test_formats.py`
 3. Update `data/loader.py` if needed
-4. Document in `CLAUDE.md`
+4. Document in the relevant `docs/*.md`
 
 ### 3. New Command
 
@@ -427,12 +427,10 @@ The project follows semantic versioning: `MAJOR.MINOR.PATCH`
 
 1. Update version in `pyproject.toml` and `src/soup_cli/__init__.py`
 2. Run full test suite and linting
-3. Update `CLAUDE.md`, `README.md`, `SECURITY.md` (if security-related), `CONTRIBUTING.md` (if workflow changed)
+3. Update `README.md`, the relevant page under `docs/`, `CHANGELOG.md`, and `SECURITY.md` (if security-related)
 4. Commit with message: `Release v0.X.0`
 5. Tag: `git tag v0.X.0 && git push --tags`
-6. GitHub Actions auto-publishes to PyPI
-
-See `CLAUDE.md` for the complete release checklist.
+6. GitHub Actions auto-publishes to PyPI on the `v*` tag (Trusted Publisher / OIDC)
 
 ## Community
 

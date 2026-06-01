@@ -13,7 +13,7 @@ the same shape:
   any error itself.
 
 All public helpers reject null bytes in caller-supplied strings — matches the
-project-wide hardening policy (see CLAUDE.md security section).
+project-wide input-hardening policy.
 """
 
 from __future__ import annotations
