@@ -662,3 +662,62 @@ def test_render_install_plan_requirements_conda_comment():
     # line rather than a bare `name==version` pip pin (v0.71.1 #209).
     plan = render_install_plan(_lock_with_conda(), fmt="requirements")
     assert "# conda: mkl==2023.1" in plan
+
+
+def test_cli_env_fix_corrupt_lock(tmp_path, monkeypatch):
+    from soup_cli.cli import app
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "soup-env.lock").write_text("{ this is not valid json", encoding="utf-8")
+    result = runner.invoke(app, ["env", "fix"])
+    assert result.exit_code == 2, result.output
+
+
+def test_cli_env_fix_bad_format(tmp_path, monkeypatch):
+    from soup_cli.cli import app
+
+    monkeypatch.chdir(tmp_path)
+    assert runner.invoke(app, ["env", "lock"]).exit_code == 0
+    result = runner.invoke(app, ["env", "fix", "--format", "bogus-format"])
+    assert result.exit_code == 2, result.output
+
+
+def test_cli_env_check_no_drift(tmp_path, monkeypatch):
+    from soup_cli.cli import app
+
+    monkeypatch.chdir(tmp_path)
+    assert runner.invoke(app, ["env", "lock"]).exit_code == 0
+    # Nothing changed between snapshots, so the env is ABI-clean.
+    result = runner.invoke(app, ["env", "check"])
+    assert result.exit_code == 0, result.output
+    assert "ABI-clean" in result.output
+
+
+def test_cli_env_check_missing_lock(tmp_path, monkeypatch):
+    from soup_cli.cli import app
+
+    monkeypatch.chdir(tmp_path)
+    result = runner.invoke(app, ["env", "check"])
+    assert result.exit_code == 1
+    assert "soup env lock" in result.output
+
+
+def test_cli_env_check_drift_exits_3(tmp_path, monkeypatch):
+    from soup_cli.cli import app
+    from soup_cli.utils.env_lock import snapshot_env, write_lock
+
+    monkeypatch.chdir(tmp_path)
+    # Write a lock that claims a different Python version → ABI drift on check.
+    env = snapshot_env()
+    drifted = dataclasses.replace(env, python_version="2.0.0")
+    write_lock(drifted, "soup-env.lock")
+    result = runner.invoke(app, ["env", "check"])
+    assert result.exit_code == 3, result.output
+
+
+def test_cli_env_lock_null_byte_output_rejected(tmp_path, monkeypatch):
+    from soup_cli.cli import app
+
+    monkeypatch.chdir(tmp_path)
+    result = runner.invoke(app, ["env", "lock", "--output", "a\x00b"])
+    assert result.exit_code == 2, result.output

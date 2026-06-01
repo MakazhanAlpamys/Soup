@@ -279,13 +279,18 @@ class TestRecordThumbs:
         return TestClient(app), db
 
     def test_flag_in_help(self):
+        import re
+
         from typer.testing import CliRunner
 
         from soup_cli.cli import app
 
         result = CliRunner().invoke(app, ["serve", "--help"])
         assert result.exit_code == 0, result.output
-        assert "--record-thumbs" in result.output
+        # Under color (CI sets FORCE_COLOR), Rich inserts ANSI codes between the
+        # two dashes of an option name, so strip them before the substring check.
+        clean = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
+        assert "--record-thumbs" in clean
 
     def test_thumbs_endpoint_registered_when_db_set(self, tmp_path, monkeypatch):
         try:

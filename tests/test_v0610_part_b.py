@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -505,6 +507,80 @@ class TestCli:
 
 
 # ---------- Fixtures ----------
+
+
+class TestLoadEvidenceFile:
+    """v0.71.1 — cover the `soup eval unlearning --evidence` loader."""
+
+    def test_happy_returns_dict(self, tmp_path, monkeypatch):
+        from soup_cli.utils.unlearning_eval import load_evidence_file
+
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "ev.json").write_text(
+            json.dumps({"forget_quality": {"pre_loss": 1.0, "post_loss": 2.0}}),
+            encoding="utf-8",
+        )
+        data = load_evidence_file("ev.json")
+        assert isinstance(data, dict)
+        assert "forget_quality" in data
+
+    def test_missing_file_raises(self, tmp_path, monkeypatch):
+        from soup_cli.utils.unlearning_eval import load_evidence_file
+
+        monkeypatch.chdir(tmp_path)
+        with pytest.raises(FileNotFoundError):
+            load_evidence_file("nope.json")
+
+    def test_non_string_path_rejected(self):
+        from soup_cli.utils.unlearning_eval import load_evidence_file
+
+        with pytest.raises(ValueError):
+            load_evidence_file(123)  # type: ignore[arg-type]
+
+    def test_empty_path_rejected(self):
+        from soup_cli.utils.unlearning_eval import load_evidence_file
+
+        with pytest.raises(ValueError):
+            load_evidence_file("")
+
+    def test_null_byte_rejected(self):
+        from soup_cli.utils.unlearning_eval import load_evidence_file
+
+        with pytest.raises(ValueError, match="null"):
+            load_evidence_file("a\x00b.json")
+
+    def test_outside_cwd_rejected(self, tmp_path, monkeypatch):
+        from soup_cli.utils.unlearning_eval import load_evidence_file
+
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "ev.json").write_text("{}", encoding="utf-8")
+        sub = tmp_path / "sub"
+        sub.mkdir()
+        monkeypatch.chdir(sub)
+        with pytest.raises(ValueError, match="cwd"):
+            load_evidence_file(str(outside / "ev.json"))
+
+    def test_non_dict_root_rejected(self, tmp_path, monkeypatch):
+        from soup_cli.utils.unlearning_eval import load_evidence_file
+
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "arr.json").write_text("[]", encoding="utf-8")
+        with pytest.raises(ValueError, match="JSON object"):
+            load_evidence_file("arr.json")
+
+    @pytest.mark.skipif(
+        sys.platform == "win32", reason="symlink creation needs admin on Windows"
+    )
+    def test_symlink_rejected(self, tmp_path, monkeypatch):
+        from soup_cli.utils.unlearning_eval import load_evidence_file
+
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "real.json").write_text("{}", encoding="utf-8")
+        link = tmp_path / "link.json"
+        os.symlink(tmp_path / "real.json", link)
+        with pytest.raises(ValueError, match="symlink"):
+            load_evidence_file("link.json")
 
 
 class TestFixtures:

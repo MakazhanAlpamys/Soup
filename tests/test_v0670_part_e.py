@@ -400,6 +400,104 @@ class TestCliSmoke:
         written = json.loads((tmp_path / "soup.lock").read_text(encoding="utf-8"))
         assert written["env_hash"] == "c" * 64
 
+    def _write_lock(self, runner, tmp_path) -> None:
+        from soup_cli.commands.lock import app
+
+        result = runner.invoke(
+            app,
+            [
+                "write",
+                "--base-model", "test-model",
+                "--base-sha", "a" * 64,
+                "--dataset-sha", "b" * 64,
+                "--env-hash", "c" * 64,
+                "--output", "soup.lock",
+            ],
+        )
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+
+    def test_lock_show_command(self, tmp_path, monkeypatch) -> None:
+        from typer.testing import CliRunner
+
+        from soup_cli.commands.lock import app
+
+        monkeypatch.chdir(tmp_path)
+        runner = CliRunner()
+        self._write_lock(runner, tmp_path)
+        result = runner.invoke(app, ["show", "soup.lock"])
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        assert "test-model" in result.output
+
+    def test_lock_show_missing_file(self, tmp_path, monkeypatch) -> None:
+        from typer.testing import CliRunner
+
+        from soup_cli.commands.lock import app
+
+        monkeypatch.chdir(tmp_path)
+        result = CliRunner().invoke(app, ["show", "nonexistent.lock"])
+        assert result.exit_code == 2
+
+    def test_lock_check_no_drift(self, tmp_path, monkeypatch) -> None:
+        from typer.testing import CliRunner
+
+        from soup_cli.commands.lock import app
+
+        monkeypatch.chdir(tmp_path)
+        runner = CliRunner()
+        self._write_lock(runner, tmp_path)
+        result = runner.invoke(
+            app,
+            [
+                "check", "soup.lock",
+                "--base-model", "test-model",
+                "--base-sha", "a" * 64,
+                "--dataset-sha", "b" * 64,
+                "--env-hash", "c" * 64,
+            ],
+        )
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        assert "OK" in result.output
+
+    def test_lock_check_drift_exits_3(self, tmp_path, monkeypatch) -> None:
+        from typer.testing import CliRunner
+
+        from soup_cli.commands.lock import app
+
+        monkeypatch.chdir(tmp_path)
+        runner = CliRunner()
+        self._write_lock(runner, tmp_path)
+        # A changed base-sha drifts both base_model_sha and the closure.
+        result = runner.invoke(
+            app,
+            [
+                "check", "soup.lock",
+                "--base-model", "test-model",
+                "--base-sha", "d" * 64,
+                "--dataset-sha", "b" * 64,
+                "--env-hash", "c" * 64,
+            ],
+        )
+        assert result.exit_code == 3
+        assert "DRIFT" in result.output
+
+    def test_lock_check_missing_file(self, tmp_path, monkeypatch) -> None:
+        from typer.testing import CliRunner
+
+        from soup_cli.commands.lock import app
+
+        monkeypatch.chdir(tmp_path)
+        result = CliRunner().invoke(
+            app,
+            [
+                "check", "nonexistent.lock",
+                "--base-model", "test-model",
+                "--base-sha", "a" * 64,
+                "--dataset-sha", "b" * 64,
+                "--env-hash", "c" * 64,
+            ],
+        )
+        assert result.exit_code == 2
+
 
 class TestSourceWiring:
     def test_no_top_level_heavy_imports(self) -> None:
