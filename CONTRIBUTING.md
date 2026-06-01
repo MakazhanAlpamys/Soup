@@ -23,9 +23,14 @@ pip install -e ".[dev]"
 
 This installs:
 - `pytest` for testing
-- `ruff` for linting
+- `ruff` for linting + formatting
 - `pytest-cov` for coverage
 - `httpx` for HTTP testing
+- `mypy` for type checking
+- `pre-commit` for the lint/format git hooks
+- the full training stack — `[dev]` self-references `[train]`, so `torch`,
+  `transformers`, `peft`, `trl`, `datasets`, `bitsandbytes`, `accelerate` are
+  pulled in too (since v0.71.0 these are an opt-in extra, not core deps)
 
 ### 3. Verify Setup
 
