@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -27,6 +28,15 @@ import typer
 from typer.testing import CliRunner
 
 runner = CliRunner()
+
+# Strip ANSI colour codes + box-drawing so --help substring asserts survive
+# Rich's FORCE_COLOR splitting on CI (mirrors the v0.71.1 ANSI-robust fix:
+# Rich renders `--track-energy` as 3 separate colour segments under FORCE_COLOR).
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _plain(text: str) -> str:
+    return _ANSI_RE.sub("", text).replace("─", "")
 
 
 # ---------------------------------------------------------------------------
@@ -163,8 +173,7 @@ class TestEnergyTracker:
 
         result = runner.invoke(app, ["train", "--help"])
         assert result.exit_code == 0
-        out = "".join(ch for ch in result.output if ord(ch) < 128)
-        assert "track-energy" in out.replace("─", "")
+        assert "track-energy" in _plain(result.output)
 
 
 # ---------------------------------------------------------------------------
@@ -520,8 +529,7 @@ class TestCanManifestV3:
 
         result = runner.invoke(app, ["can", "pack", "--help"])
         assert result.exit_code == 0
-        out = "".join(ch for ch in result.output if ord(ch) < 128)
-        assert "attest" in out
+        assert "attest" in _plain(result.output)
 
 
 # ---------------------------------------------------------------------------
@@ -594,23 +602,28 @@ class TestAuditInstrumentation:
         cli_mod._emit_audit_event(["soup", "version"], 0)
         assert not log.exists()
 
-    def test_emit_audit_event_never_raises(self, monkeypatch):
+    def test_emit_audit_event_never_raises(self, tmp_path, monkeypatch):
         import soup_cli.cli as cli_mod
+        import soup_cli.utils.audit_log as audit_mod
 
-        # Point at an impossible path via a broken default — must swallow.
-        monkeypatch.setenv("SOUP_AUDIT_LOG_PATH", "\x00bad")
+        monkeypatch.setenv("SOUP_AUDIT_LOG_PATH", str(tmp_path / "audit.jsonl"))
         monkeypatch.delenv("SOUP_NO_AUDIT_LOG", raising=False)
         monkeypatch.setattr(cli_mod, "_audit_disabled", False)
-        # Should not raise even with a garbage path.
-        cli_mod._emit_audit_event(["soup", "x"], 1)
+
+        # Force the append to blow up — the audit hook must swallow it and
+        # never crash the CLI (the outer `except Exception: pass`).
+        def _boom(*a, **k):
+            raise RuntimeError("disk on fire")
+
+        monkeypatch.setattr(audit_mod, "append_audit_event", _boom)
+        cli_mod._emit_audit_event(["soup", "x"], 1)  # must NOT raise
 
     def test_no_audit_log_flag_in_help(self):
         from soup_cli.cli import app
 
         result = runner.invoke(app, ["--help"])
         assert result.exit_code == 0
-        out = "".join(ch for ch in result.output if ord(ch) < 128)
-        assert "no-audit-log" in out.replace("─", "")
+        assert "no-audit-log" in _plain(result.output)
 
     def test_subprocess_emits_audit_line(self, tmp_path):
         """End-to-end: a real `soup` invocation via run() writes an audit line."""
@@ -745,8 +758,7 @@ class TestAirgapReproReceipt:
 
         result = runner.invoke(app, ["airgap-bundle", "--help"])
         assert result.exit_code == 0
-        out = "".join(ch for ch in result.output if ord(ch) < 128)
-        assert "repro-receipt" in out.replace("─", "")
+        assert "repro-receipt" in _plain(result.output)
 
     def test_cli_explicit_repro_receipt(self, tmp_path, monkeypatch):
         from soup_cli.cli import app
