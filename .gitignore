@@ -58,3 +58,6 @@ report.xml
 .claude/skills/
 .claude/settings.json
 .coverage
+
+# Local scratch / temp scripts at repo root (e.g. _smoke.py, _scratch.py) — never committed
+/_*.py

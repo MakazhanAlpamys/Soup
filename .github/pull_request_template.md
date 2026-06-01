@@ -14,4 +14,4 @@
 
 - [ ] `ruff check src/soup_cli/ tests/` passes
 - [ ] `pytest tests/ -v` passes
-- [ ] Updated relevant docs (README, CLAUDE.md) if needed
+- [ ] Updated relevant docs (`README.md` and the matching page under `docs/`) if needed

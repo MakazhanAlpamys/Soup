@@ -338,7 +338,7 @@ When you open a PR, the GitHub template will show this checklist:
 
 - [ ] `ruff check src/soup_cli/ tests/` passes
 - [ ] `pytest tests/ -v` passes
-- [ ] Updated relevant docs (README, CLAUDE.md) if needed
+- [ ] Updated relevant docs (`README.md` and the matching page under `docs/`) if needed
 - [ ] New tests added for new functionality
 - [ ] No breaking changes (or documented in PR description)
 
@@ -444,7 +444,7 @@ See `CLAUDE.md` for the complete release checklist.
 ## Questions?
 
 - Check the [README](README.md) for quick start and features
-- Check [CLAUDE.md](.claude/CLAUDE.md) for detailed architecture
+- Check the [docs](docs/README.md) for the full feature reference and architecture
 - Open a GitHub Discussion for questions
 
 Thank you for contributing!

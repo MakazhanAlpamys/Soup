@@ -400,13 +400,13 @@ max_seq_length: 2048
 output_dir: ./output_advanced/
 ```
 
-See [config schema documentation](../CLAUDE.md#config-system) for all available options.
+See the [config schema](../src/soup_cli/config/schema.py) (the single source of truth) for all available options.
 
 ## Learn More
 
 - **README**: [Main documentation](../README.md)
+- **Docs**: [Full feature reference](../docs/README.md)
 - **CONTRIBUTING**: [How to contribute](../CONTRIBUTING.md)
-- **CLAUDE.md**: [Architecture and detailed docs](../CLAUDE.md)
 
 ## Questions?
 

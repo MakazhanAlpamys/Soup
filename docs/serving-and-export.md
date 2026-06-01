@@ -414,7 +414,7 @@ Pure-Python EMA + linear-interp percentiles (DoS cap: `MAX_SAMPLES=1_000_000`). 
 ## Web UI Plugin Registry + Env Knobs
 
 ```python
-# soup_cli/ui/plugins/my_tab.py
+# src/soup_cli/ui/plugins/my_tab.py
 from soup_cli.ui.plugins import register_tab
 
 def render_my_tab(request) -> str:

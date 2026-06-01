@@ -193,7 +193,7 @@ configs where expert FFNs need lower rank than attention. Caps: 256 keys × valu
 gated and silent on unrelated models.
 
 **Template registry** — the 16 built-in templates now live as
-`soup_cli/templates/*.yaml` with a `manifest.json` index. `soup init --template <name>`
+`src/soup_cli/templates/*.yaml` with a `manifest.json` index. `soup init --template <name>`
 reads the YAML; the inline copies in `schema.py` stay as a back-compat fallback,
 deprecated in favour of the YAML registry.
 

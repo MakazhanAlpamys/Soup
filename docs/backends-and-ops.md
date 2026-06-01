@@ -729,7 +729,7 @@ The sender uses a 1-second hard timeout, HTTPS-only with private-IP / link-local
 
 ## Plugin System
 
-Drop a Python module under `soup_cli/plugins/` (or any package importable by Soup) and register at import time:
+Drop a Python module under `src/soup_cli/plugins/` (or any package importable by Soup) and register at import time:
 
 ```python
 from soup_cli.plugins import register_plugin
@@ -789,7 +789,7 @@ Register a plugin once via the v0.45.0 registry API; v0.53.6 wires it into every
 transformer-backend trainer as a real HF `TrainerCallback`:
 
 ```python
-# soup_cli/plugins/my_plugin.py — auto-discovered at `soup` startup
+# src/soup_cli/plugins/my_plugin.py — auto-discovered at `soup` startup
 from soup_cli.plugins import register_plugin
 
 class MyPlugin:
