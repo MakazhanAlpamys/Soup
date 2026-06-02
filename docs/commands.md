@@ -109,12 +109,12 @@ soup cost --config soup.yaml --gpu H100      Estimate training cost for specific
 soup adapters list ./output/                 Scan for LoRA adapters
 soup adapters info ./output/checkpoint-500/  Show adapter metadata
 soup adapters compare adapter1/ adapter2/    Compare two adapters
-soup loop init <model> --eval <s> --baseline <b>  Create .soup/loop.yaml (data flywheel)
-soup loop status                              Counters + status (traces / pairs / runs / shipped)
-soup loop watch [--detach] [--max-iter N]    Harvest → train → gate → deploy daemon
+soup loop init <model> --eval <s> --baseline <b> [--pre-wired]  Create .soup/loop.yaml (data flywheel; --pre-wired = real stages)
+soup loop status                              Counters + status + pre_wired flag
+soup loop watch [--detach] [--max-iter N] [--pre-wired] [--pack-cans]  Harvest → train → gate → deploy daemon (pre-wired stages + Soup Can packing)
 soup loop pause / soup loop resume           Atomic status flip
 soup loop canary <adapter> --traffic 5%      Promote canary + auto-rollback on MAJOR
-soup loop replay [<iter-id>]                 Replay a recorded iteration manifest
+soup loop replay [<iter-id>] [--extract <dir>]  Replay / unpack a recorded iteration manifest
 soup serve --model m --adapters chat=./c code=./d  Multi-adapter serving
 soup migrate --from llamafactory config.yaml  Import config from LLaMA-Factory
 soup migrate --from axolotl config.yml        Import config from Axolotl
@@ -188,8 +188,11 @@ soup probe interference <losses.json> [--output o.json]  Pairwise N×N adapter i
 soup probe pack <base> [--output o.json]      Per-base calibrated probe pack manifest (v0.66.0)
 soup probe pack --list                        List bundled probe-pack bases (v0.66.0)
 soup adapters blame ... --top-k 50            Live DataInf-style influence runner (v0.66.0, closes #171)
-soup adapters merge ... --strategy cmaes --eval <s> --budget 1h  CMA-ES evolutionary merge (v0.67.0)
+soup adapters merge ... --strategy cmaes --eval <s> --budget 1h  CMA-ES evolutionary merge — live loop (v0.67.0 schema / v0.71.4 live)
+soup adapters merge ... --canary <suite.json> [--strict-verdict]  Live OK/MINOR/MAJOR canary verdict, exit 2 on MAJOR (v0.71.4)
 soup adapters pr <title> --base-sha <hex> --adapter <path>  GitHub-shaped adapter PR Markdown / JSON (v0.67.0)
+soup adapters pr <title> ... --push owner/repo#N  Post the PR as a GitHub comment via gh api (v0.71.4)
+soup adapters branch <name> --from-registry <id> | --attach-to-registry <id>  Branch ↔ Registry lineage (v0.71.4)
 soup adapters bisect <ckpt>... --eval-command "..."  Binary search over training history (v0.67.0)
 soup lock write --base-sha <h> --dataset-sha <h> --env-hash <h>  Write soup.lock (v0.67.0)
 soup lock write --base-sha <h> --dataset-sha <h> --env-lock soup-env.lock  Auto-derive --env-hash from soup-env.lock (v0.71.1)

@@ -36,12 +36,20 @@ from __future__ import annotations
 
 import math
 import os
+import shutil
+import tempfile
 import time
 from dataclasses import dataclass
 from typing import Callable, Optional, Sequence, Tuple
 
 from soup_cli.utils.blame import parse_budget
 from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
+
+# Test / smoke escape hatch (mirrors v0.53.1 #109 deploy_measure pattern):
+# when set, build_cmaes_eval_fn uses this scorer instead of loading a model.
+# Production callers leave it None and either pass scorer= explicitly or let
+# the default lazy model-loading scorer run.
+_CMAES_SCORER_OVERRIDE: Optional[Callable[[str, str], float]] = None
 
 # ---------------------------------------------------------------------------
 # Bounds (closed, locked at module load)
@@ -56,6 +64,7 @@ _MIN_ADAPTERS = 2
 _MAX_ADAPTERS = 16  # mirrors v0.57.0 adapter_merge cap
 _SIMPLEX_TOL = 1e-6
 _FAILED_EVAL_SENTINEL = -1.0e9  # very negative so failed candidates never win
+_MAX_ADAPTER_CONFIG_BYTES = 256 * 1024  # mirrors adapter_merge config-read cap
 
 
 # ---------------------------------------------------------------------------
@@ -420,6 +429,146 @@ def run_cmaes_merge(
         converged=converged,
         history=tuple(history),
     )
+
+
+# ---------------------------------------------------------------------------
+# Live eval-suite auto-wiring (v0.71.4 #220)
+# ---------------------------------------------------------------------------
+
+
+def _load_adapter_generator(merged_dir: str) -> Callable[[str], str]:
+    """Build a ``generate_fn(prompt) -> str`` from a merged LoRA adapter.
+
+    Loads the base model named in the adapter's ``adapter_config.json`` and
+    applies the merged adapter via PEFT. Heavy imports stay inside the
+    function (project lazy-import policy + the cmaes_merge no-top-level-torch
+    grep guard).
+    """
+    import json
+    import os
+    import stat
+    from pathlib import Path
+
+    from peft import PeftModel
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    # On the wired cmaes path ``merged_dir`` is always a Soup-written mkdtemp,
+    # but this is a public helper — guard the config read with a symlink
+    # rejection + size cap so a caller-supplied dir can't smuggle a symlink or
+    # a multi-GB JSON (defence-in-depth, parity with every other config read).
+    cfg_path = Path(merged_dir) / "adapter_config.json"
+    try:
+        cst = os.lstat(cfg_path)
+    except OSError as exc:
+        raise ValueError(
+            f"merged adapter_config.json unreadable: {type(exc).__name__}"
+        ) from exc
+    if stat.S_ISLNK(cst.st_mode):
+        raise ValueError("merged adapter_config.json must not be a symlink")
+    if cst.st_size > _MAX_ADAPTER_CONFIG_BYTES:
+        raise ValueError("merged adapter_config.json exceeds size cap")
+    cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+    base = cfg.get("base_model_name_or_path")
+    if not base:
+        raise ValueError(
+            "merged adapter_config.json has no base_model_name_or_path"
+        )
+    tokenizer = AutoTokenizer.from_pretrained(base, trust_remote_code=False)
+    model = AutoModelForCausalLM.from_pretrained(base, trust_remote_code=False)
+    model = PeftModel.from_pretrained(model, merged_dir)
+    model.eval()
+
+    def _gen(prompt: str) -> str:
+        if not prompt:
+            return ""
+        inputs = tokenizer(prompt, return_tensors="pt", truncation=True)
+        outputs = model.generate(
+            **inputs,
+            max_new_tokens=64,
+            do_sample=False,
+            pad_token_id=tokenizer.eos_token_id,
+        )
+        new_tokens = outputs[0][inputs["input_ids"].shape[1]:]
+        return tokenizer.decode(new_tokens, skip_special_tokens=True)
+
+    return _gen
+
+
+def _default_cmaes_scorer(merged_dir: str, eval_suite: str) -> float:
+    """Score a merged adapter against an eval suite (mean score in [0, 1]).
+
+    The live default — loads the base + merged adapter and runs the
+    v0.25.0 ``soup_cli.eval.custom`` scorers. Slow (one model load); use
+    the ``scorer=`` injection / ``_CMAES_SCORER_OVERRIDE`` escape hatch for
+    fast offline runs.
+    """
+    from soup_cli.eval.custom import load_eval_tasks, score_task
+
+    generate_fn = _load_adapter_generator(merged_dir)
+    tasks = load_eval_tasks(eval_suite)
+    if not tasks:
+        return 0.0
+    total = 0.0
+    for task in tasks:
+        output = generate_fn(task.prompt)
+        total += float(score_task(task, output).score)
+    return total / len(tasks)
+
+
+def _resolve_cmaes_scorer(
+    scorer: Optional[Callable[[str, str], float]],
+) -> Callable[[str, str], float]:
+    if scorer is not None:
+        if not callable(scorer):
+            raise TypeError("scorer must be callable")
+        return scorer
+    if _CMAES_SCORER_OVERRIDE is not None:
+        return _CMAES_SCORER_OVERRIDE
+    return _default_cmaes_scorer
+
+
+def build_cmaes_eval_fn(
+    plan: CmaesPlan,
+    *,
+    scorer: Optional[Callable[[str, str], float]] = None,
+) -> Callable[[Tuple[float, ...]], float]:
+    """Return an ``eval_fn(weights) -> float`` for :func:`run_cmaes_merge`.
+
+    The closure linearly merges ``plan.adapters`` with the candidate weights,
+    materialises the merged LoRA to a temp dir, scores it via ``scorer``
+    (default: live model-loading scorer), and cleans up. The *adapter* weights
+    are loaded from disk once up front so per-generation cost is merge + score.
+
+    Perf note: the default :func:`_default_cmaes_scorer` reloads the *base
+    model* into a fresh PEFT wrapper on every candidate evaluation (it is
+    stateless by design). For ``population × max_generations`` candidates that
+    is many base-model loads — expensive for non-tiny models. Pass a custom
+    ``scorer=`` that caches the base model (or set ``_CMAES_SCORER_OVERRIDE``)
+    to amortise it; the injection also avoids any model load for tests / smokes.
+
+    ``scorer(merged_dir, eval_suite) -> float`` returns a mean score in
+    ``[0, 1]``.
+    """
+    if not isinstance(plan, CmaesPlan):
+        raise TypeError("plan must be CmaesPlan")
+    resolved = _resolve_cmaes_scorer(scorer)
+
+    from soup_cli.utils.adapter_diff import load_adapter_weights
+    from soup_cli.utils.adapter_merge import merge_linear, write_merged_adapter
+
+    weights_list = [load_adapter_weights(p) for p in plan.adapters]
+    template_source = plan.adapters[0]
+
+    def _eval_fn(weights: Tuple[float, ...]) -> float:
+        merged, _skipped = merge_linear(weights_list, list(weights))
+        tmp_dir = tempfile.mkdtemp(prefix=".soup_cmaes_")
+        try:
+            write_merged_adapter(tmp_dir, template_source, merged)
+            return float(resolved(tmp_dir, plan.eval_suite))
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    return _eval_fn
 
 
 # ---------------------------------------------------------------------------

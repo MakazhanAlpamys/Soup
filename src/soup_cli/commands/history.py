@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 import typer
 from rich.console import Console
 from rich.markup import escape
@@ -68,6 +70,18 @@ def history(
                         f"[cyan]{escape(desc['id'])}[/] "
                         f"[yellow]({escape(desc.get('relation', ''))})[/]"
                     )
+            # v0.71.4 #173 — surface attached branch pointers as a distinct
+            # lineage edge so `soup adapters branch --attach-to-registry`
+            # snapshots show up in the DAG view.
+            branch_refs = [
+                art for art in store.get_artifacts(entry["id"])
+                if art.get("kind") == "branch_ref"
+            ]
+            if branch_refs:
+                br_node = node.add("[dim]branches[/]")
+                for art in branch_refs:
+                    label = os.path.basename(art.get("path", "")) or "branch"
+                    br_node.add(f"[green]branch[/] [cyan]{escape(label)}[/]")
 
         console.print(tree)
 

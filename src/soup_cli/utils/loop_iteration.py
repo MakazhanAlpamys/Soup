@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import stat
 import tempfile
 import uuid
@@ -196,6 +197,109 @@ def read_iteration(
         return IterationRecord(**filtered)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"manifest contents invalid: {exc}") from exc
+
+
+def registry_name_from(served_model: str) -> str:
+    """Sanitise a served-model id into a valid Registry entry name.
+
+    ``served_model`` is typically ``registry://<id>`` or a model path with
+    ``/`` separators — neither is a valid Registry name (``^[A-Za-z0-9][...]``).
+    Strips the scheme, replaces every non-``[A-Za-z0-9_.-]`` char with ``-``,
+    drops leading non-alphanumerics, and caps at 128 chars. Falls back to
+    ``"loop"`` when nothing usable survives.
+    """
+    raw = (served_model or "").replace("registry://", "")
+    cleaned = re.sub(r"[^A-Za-z0-9_.\-]", "-", raw)
+    cleaned = re.sub(r"^[^A-Za-z0-9]+", "", cleaned)
+    if not cleaned:
+        cleaned = "loop"
+    return cleaned[:128]
+
+
+def pack_iteration_as_can(
+    iteration_id: str,
+    *,
+    base_dir: Optional[str] = None,
+    served_model: Optional[str] = None,
+    base_model: str = "unknown",
+    task: str = "dpo",
+    parent_registry_id: Optional[str] = None,
+) -> Tuple[str, str]:
+    """Pack a loop iteration as a v0.26 Soup Can + append a Registry entry.
+
+    Reads ``<base_dir>/<iteration_id>/iteration.json``, pushes a Registry
+    entry (name derived from ``served_model``, tag ``loop-iter``), links it
+    to ``parent_registry_id`` via a ``forked_from`` lineage edge so the loop
+    forms a real DAG visible through ``soup history``, and writes
+    ``<base_dir>/<iteration_id>/iteration.can``. Returns ``(can_path,
+    registry_entry_id)``.
+    """
+    from soup_cli.cans.pack import pack_entry
+    from soup_cli.registry.store import RegistryStore
+
+    record = read_iteration(iteration_id, base_dir=base_dir)
+    parent_dir = base_dir if base_dir is not None else _DEFAULT_DIR
+    iter_dir = os.path.join(parent_dir, iteration_id)
+    _check_dir(iter_dir)
+    if not os.path.isdir(iter_dir):
+        raise FileNotFoundError(f"iteration dir not found: {iteration_id}")
+
+    name = registry_name_from(served_model or "loop")
+    config = {
+        "iteration_id": iteration_id,
+        "run_id": record.run_id,
+        "gate_verdict": record.gate_verdict,
+        "canary_verdict": record.canary_verdict,
+        "shipped": record.shipped,
+    }
+    with RegistryStore() as store:
+        entry_id = store.push(
+            name=name,
+            tag="loop-iter",
+            base_model=base_model or "unknown",
+            task=task or "dpo",
+            run_id=record.run_id,
+            config=config,
+            notes=f"loop iteration {iteration_id}",
+        )
+        if parent_registry_id is not None:
+            # Best-effort lineage edge — a missing parent / cycle / FK error
+            # must not prevent the new entry from being created (daemon
+            # resilience). ``add_lineage`` raises ``ValueError`` for the
+            # documented cycle/self-ref/missing-parent cases and may surface a
+            # ``sqlite3.Error`` (e.g. FK violation on a since-deleted parent).
+            import sqlite3
+
+            try:
+                store.add_lineage(
+                    child_id=entry_id,
+                    parent_id=parent_registry_id,
+                    relation="forked_from",
+                )
+            except (ValueError, sqlite3.Error):
+                pass
+
+    can_path = os.path.join(iter_dir, "iteration.can")
+    try:
+        pack_entry(
+            entry_id=entry_id,
+            out_path=can_path,
+            author="soup-loop",
+            description=f"loop iteration {iteration_id}",
+        )
+    except Exception:
+        # All-or-nothing: a failed can write must not leave an orphaned
+        # Registry entry behind. Roll it back so the watch-loop lineage
+        # chain (which links the *next* iteration to the *prior successful*
+        # entry) stays consistent — a half-created iteration never enters
+        # the DAG. Best-effort rollback; the original error still propagates.
+        try:
+            with RegistryStore() as rollback_store:
+                rollback_store.delete(entry_id)
+        except Exception:  # noqa: BLE001 — rollback is best-effort
+            pass
+        raise
+    return can_path, entry_id
 
 
 def list_iterations(base_dir: Optional[str] = None) -> Tuple[str, ...]:

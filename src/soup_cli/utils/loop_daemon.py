@@ -105,6 +105,12 @@ class WatchConfig:
     deploy_fn: DeployFn = default_deploy
     cost_fn: CostFn = default_cost
     on_iteration: Optional[Callable[[IterationRecord], None]] = None
+    # v0.71.4 #177 — pack each successful iteration as a v0.26 Soup Can +
+    # append a Registry entry (default off so existing tests / stub watchers
+    # have no registry side effects).
+    pack_iterations: bool = False
+    served_model: Optional[str] = None
+    base_model: str = "unknown"
 
     def __post_init__(self) -> None:
         v = self.poll_interval_sec
@@ -121,6 +127,21 @@ class WatchConfig:
                 raise ValueError(f"{fname} must be callable")
         if self.on_iteration is not None and not callable(self.on_iteration):
             raise ValueError("on_iteration must be callable or None")
+        if not isinstance(self.pack_iterations, bool):
+            raise ValueError("pack_iterations must be bool")
+        # Validate the #177 registry-packing identity fields like every other
+        # field, so a NUL/oversize value fails at construction rather than deep
+        # inside store.push (review LOW). They flow into registry_name_from /
+        # store.push(base_model=...).
+        if self.served_model is not None:
+            sm = self.served_model
+            if not isinstance(sm, str) or "\x00" in sm or len(sm) > 512:
+                raise ValueError(
+                    "served_model must be a NUL-free str <= 512 chars or None"
+                )
+        bm = self.base_model
+        if not isinstance(bm, str) or not bm or "\x00" in bm or len(bm) > 512:
+            raise ValueError("base_model must be a non-empty NUL-free str <= 512 chars")
 
 
 def run_once(
@@ -232,6 +253,9 @@ def watch(config: WatchConfig) -> "tuple[LoopState, int]":
         pass
 
     iterations = 0
+    # v0.71.4 #177 — chain Registry entries across iterations so the loop
+    # forms a real lineage DAG (parent links to the prior iteration's entry).
+    prev_registry_id: Optional[str] = None
     state = read_state(config.state_path)
     # Only promote `stopped` → `running` automatically; `paused` must
     # survive a `soup loop watch` invocation so a SIGTERM + restart
@@ -261,10 +285,16 @@ def watch(config: WatchConfig) -> "tuple[LoopState, int]":
             # iteration_count to match the manifest count (code-review
             # HIGH #3 fix). The state still records the skip in notes.
             if decision.proceed:
+                wrote = False
                 try:
                     write_iteration(record, base_dir=config.iteration_dir)
+                    wrote = True
                 except (OSError, ValueError) as exc:
                     _LOG.warning("iteration write failed: %s", type(exc).__name__)
+                if wrote and config.pack_iterations:
+                    prev_registry_id = _pack_iteration_safely(
+                        record, config, prev_registry_id
+                    )
                 if config.on_iteration is not None:
                     try:
                         config.on_iteration(record)
@@ -291,6 +321,44 @@ def watch(config: WatchConfig) -> "tuple[LoopState, int]":
         except (FileNotFoundError, ValueError):
             pass
     return state, iterations
+
+
+def _pack_iteration_safely(
+    record: IterationRecord,
+    config: WatchConfig,
+    prev_registry_id: Optional[str],
+) -> Optional[str]:
+    """Pack one iteration as a Soup Can; never crash the daemon.
+
+    Returns the new Registry entry id (to chain as the next iteration's
+    parent) on success, or the unchanged ``prev_registry_id`` on failure.
+    On failure the iteration manifest is re-written with a ``pack-failed:``
+    note appended (best-effort) so the operator can see what happened
+    (#177 acceptance: swallow at WARNING + record in iteration notes).
+    """
+    from soup_cli.utils.loop_iteration import pack_iteration_as_can
+
+    try:
+        _, entry_id = pack_iteration_as_can(
+            record.iteration_id,
+            base_dir=config.iteration_dir,
+            served_model=config.served_model,
+            base_model=config.base_model,
+            parent_registry_id=prev_registry_id,
+        )
+        return entry_id
+    except Exception as exc:  # noqa: BLE001 — instrumentation must not crash
+        _LOG.warning("iteration pack failed: %s", type(exc).__name__)
+        try:
+            prefix = record.notes + " | " if record.notes else ""
+            note = (prefix + f"pack-failed: {type(exc).__name__}")[:4096]
+            write_iteration(
+                replace(record, notes=note),
+                base_dir=config.iteration_dir,
+            )
+        except (OSError, ValueError):
+            pass
+        return prev_registry_id
 
 
 def _state_with(state: LoopState, **kwargs: object) -> LoopState:

@@ -45,6 +45,8 @@ _VALID_KINDS = frozenset(
         "steering_vector",
         # v0.71.1 #214 — pairwise-judge calibration reports.
         "judge_calibration",
+        # v0.71.4 #173 — adapter branch-pointer JSON files.
+        "branch_ref",
     }
 )
 _VALID_RELATIONS = frozenset(

@@ -19,9 +19,10 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import re
 from dataclasses import asdict, dataclass
-from typing import Any, Iterable, Mapping, Tuple
+from typing import Any, Callable, Iterable, Mapping, Optional, Tuple
 
 from soup_cli.utils.paths import atomic_write_text
 
@@ -343,3 +344,152 @@ def write_pr_markdown(pr: AdapterPR, path: str) -> str:
         raise TypeError("pr must be AdapterPR")
     text = render_pr_markdown(pr)
     return atomic_write_text(text, path, field="pr markdown path")
+
+
+# ---------------------------------------------------------------------------
+# GitHub PR publisher (v0.71.4 #223)
+# ---------------------------------------------------------------------------
+
+# owner/repo#<number> — owner + repo are GitHub name-safe (alnum + ._-),
+# number is a positive integer.
+_PR_TARGET_RE = re.compile(
+    r"^([A-Za-z0-9][A-Za-z0-9._-]*)/([A-Za-z0-9][A-Za-z0-9._-]*)#([0-9]+)$"
+)
+_MAX_PR_BODY_BYTES = 60_000  # GitHub caps issue-comment bodies at 65_536 bytes
+
+# Env keys passed through to the `gh` child — everything else (HF_TOKEN /
+# OPENAI_API_KEY / ANTHROPIC_API_KEY / ...) is filtered out so a publish call
+# never leaks unrelated secrets to the subprocess (v0.71.4 review HIGH fix,
+# mirrors v0.44.0 _LLAMA_ENV_ALLOWLIST).
+_GH_ENV_ALLOWLIST = frozenset(
+    {
+        "PATH", "HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA",
+        "SYSTEMROOT", "SystemRoot", "TEMP", "TMP", "TMPDIR",
+        "GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_API_URL",
+        "GH_HOST", "GH_CONFIG_DIR",
+        "XDG_CONFIG_HOME", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
+        "http_proxy", "https_proxy", "no_proxy",
+    }
+)
+
+
+def parse_pr_target(target: object) -> Tuple[str, str, int]:
+    """Parse ``"owner/repo#42"`` into ``(owner, repo, pr_number)``.
+
+    Raises ``TypeError`` for non-strings and ``ValueError`` for any string
+    that does not match the ``owner/repo#<positive-int>`` shape.
+    """
+    if isinstance(target, bool) or not isinstance(target, str):
+        raise TypeError("target must be str")
+    match = _PR_TARGET_RE.match(target.strip())
+    if not match:
+        raise ValueError(
+            "target must be 'owner/repo#<number>' "
+            "(e.g. MakazhanAlpamys/Soup#42)"
+        )
+    num = int(match.group(3))
+    if num < 1:
+        raise ValueError("PR number must be >= 1")
+    return match.group(1), match.group(2), num
+
+
+def resolve_github_token(env: Optional[Mapping[str, str]] = None) -> str:
+    """Resolve a GitHub token from ``GITHUB_TOKEN`` / ``GH_TOKEN`` env.
+
+    Mirrors the v0.29.0 HF token-resolution policy: env only, first-match
+    wins, blank values treated as missing. Raises ``RuntimeError`` (a
+    user-actionable error the CLI renders) when neither is set.
+    """
+    source = env if env is not None else os.environ
+    for key in ("GITHUB_TOKEN", "GH_TOKEN"):
+        val = source.get(key)
+        if val and val.strip():
+            return val.strip()
+    raise RuntimeError(
+        "no GitHub token found; set GITHUB_TOKEN (or GH_TOKEN) "
+        "to publish a PR comment"
+    )
+
+
+def post_pr_comment(
+    target: str,
+    body: str,
+    *,
+    env: Optional[Mapping[str, str]] = None,
+    runner: Optional[Callable[..., Any]] = None,
+) -> str:
+    """Post ``body`` as a comment on the GitHub PR named by ``target``.
+
+    Uses ``gh api`` (no PyGithub dependency) with the body sent over
+    JSON stdin so multiline / markdown content is never shell-interpolated.
+    Auth resolves via ``GITHUB_TOKEN`` / ``GH_TOKEN`` (gh reads the same
+    vars). Returns the created comment's ``html_url`` (best-effort, may be
+    empty). ``runner`` is an injectable ``subprocess.run`` for testing.
+    """
+    owner, repo, num = parse_pr_target(target)
+    if not isinstance(body, str):
+        raise TypeError("body must be str")
+    if not body.strip():
+        raise ValueError("body must be non-empty")
+    if "\x00" in body:
+        raise ValueError("body must not contain null bytes")
+    if len(body.encode("utf-8")) > _MAX_PR_BODY_BYTES:
+        raise ValueError(
+            f"body exceeds {_MAX_PR_BODY_BYTES} byte GitHub comment cap"
+        )
+    # Fail fast if no token before spawning the subprocess.
+    token = resolve_github_token(env)
+
+    import subprocess  # noqa: S404 — argv list mode, no shell
+
+    argv = [
+        "gh",
+        "api",
+        "--method",
+        "POST",
+        f"repos/{owner}/{repo}/issues/{num}/comments",
+        "--input",
+        "-",
+    ]
+    stdin = json.dumps({"body": body})
+    # gh resolves GH_TOKEN / GITHUB_TOKEN from its own environment; thread
+    # the resolved token through. When ``env`` is supplied (tests / explicit)
+    # use it verbatim; otherwise build a MINIMAL env from an allowlist so we
+    # never leak HF_TOKEN / OPENAI_API_KEY / ANTHROPIC_API_KEY etc. into the
+    # gh child (mirrors the v0.44.0 _LLAMA_ENV_ALLOWLIST policy).
+    if env is not None:
+        base_env = dict(env)
+    else:
+        base_env = {
+            k: v for k, v in os.environ.items() if k in _GH_ENV_ALLOWLIST
+        }
+    base_env.setdefault("GH_TOKEN", token)
+    run = runner if runner is not None else subprocess.run
+    try:
+        result = run(
+            argv,
+            input=stdin,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+            env=base_env,
+        )
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            "`gh` CLI not found; install GitHub CLI or drop --push "
+            "and use --output to write the Markdown"
+        ) from exc
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError("gh api timed out posting the PR comment") from exc
+
+    if getattr(result, "returncode", 1) != 0:
+        stderr = (getattr(result, "stderr", "") or "").strip()[:512]
+        raise RuntimeError(
+            f"gh api failed (rc={result.returncode}): {stderr or 'no detail'}"
+        )
+    try:
+        data = json.loads(getattr(result, "stdout", "") or "{}")
+        return str(data.get("html_url") or "")
+    except (ValueError, TypeError):
+        return ""

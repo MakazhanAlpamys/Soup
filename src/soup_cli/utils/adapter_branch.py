@@ -27,7 +27,7 @@ import re
 import stat
 import tempfile
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -48,6 +48,10 @@ class Branch:
     base_model: str
     created_at: float
     soup_version: str
+    # v0.71.4 #173 — optional link to a v0.26 Registry entry so a branch
+    # pointer participates in the lineage DAG. ``None`` preserves back-compat
+    # with v0.57.0 pointers that have no Registry edge.
+    registry_entry_id: Optional[str] = None
 
 
 def _validate_name(name: object) -> str:
@@ -118,17 +122,30 @@ def create_branch(
     config_path: str,
     base_model: str,
     dataset_path: Optional[str] = None,
+    registry_entry_id: Optional[str] = None,
+    dataset_sha256: Optional[str] = None,
 ) -> Branch:
     """Snapshot a training environment as an immutable branch pointer.
 
     The config file is hashed (SHA-256) and the dataset file (if provided)
     is hashed too so callers can detect "same config, different data" drift.
+
+    ``registry_entry_id`` (v0.71.4 #173) optionally links the pointer to a
+    v0.26 Registry entry. ``dataset_sha256`` lets a caller (e.g.
+    ``branch_from_registry``) record a known dataset hash directly instead
+    of re-hashing a file — mutually exclusive with ``dataset_path``.
     """
     from soup_cli import __version__
 
     name = _validate_name(name)
     enforce_under_cwd_and_no_symlink(config_path, "config_path")
     _validate_str_field(base_model, "base_model", max_len=512)
+    if registry_entry_id is not None:
+        registry_entry_id = _validate_str_field(
+            registry_entry_id, "registry_entry_id", max_len=128
+        )
+    if dataset_path is not None and dataset_sha256 is not None:
+        raise ValueError("pass dataset_path OR dataset_sha256, not both")
 
     config_full = Path(config_path)
     if not config_full.is_file():
@@ -147,6 +164,10 @@ def create_branch(
         if not ds_full.is_file():
             raise FileNotFoundError(f"dataset not found: {ds_full.name}")
         dataset_sha = _hash_file(ds_full)
+    elif dataset_sha256 is not None:
+        dataset_sha = _validate_str_field(
+            dataset_sha256, "dataset_sha256", max_len=128
+        )
 
     branches_dir = _branches_dir()
     existing = sorted(p for p in branches_dir.glob("*.json"))
@@ -161,6 +182,7 @@ def create_branch(
         base_model=base_model,
         created_at=time.time(),
         soup_version=__version__,
+        registry_entry_id=registry_entry_id,
     )
     _atomic_write_branch(branches_dir, branch)
     return branch
@@ -220,6 +242,14 @@ def load_branch(name: str) -> Branch:
         base_model=_validate_str_field(raw["base_model"], "base_model"),
         created_at=float(raw["created_at"]),
         soup_version=_validate_str_field(raw["soup_version"], "soup_version", max_len=64),
+        # ``.get`` so v0.57.0 pointers (no registry_entry_id key) load cleanly.
+        registry_entry_id=(
+            _validate_str_field(
+                raw["registry_entry_id"], "registry_entry_id", max_len=128
+            )
+            if raw.get("registry_entry_id") is not None
+            else None
+        ),
     )
 
 
@@ -236,6 +266,94 @@ def delete_branch(name: str) -> bool:
         raise ValueError(f"branch pointer must not be a symlink: {name}")
     target.unlink()
     return True
+
+
+def branch_pointer_path(name: str) -> Path:
+    """Return the on-disk JSON pointer path for a branch (must exist)."""
+    name = _validate_name(name)
+    target = _branches_dir() / f"{name}.json"
+    if not target.is_file():
+        raise FileNotFoundError(f"branch not found: {name}")
+    return target
+
+
+def attach_branch_to_registry(name: str, registry_ref: str) -> int:
+    """Attach a branch pointer to a v0.26 Registry entry as ``branch_ref``.
+
+    Resolves ``registry_ref`` (id / prefix / name:tag), attaches the branch
+    JSON file as a ``branch_ref`` artifact (``enforce_cwd=False`` since the
+    pointer lives in ``~/.soup/branches`` outside cwd — a library-produced
+    path), then re-writes the pointer with ``registry_entry_id`` set so the
+    edge is recorded on both sides. Returns the artifact rowid.
+    """
+    from soup_cli.registry.store import RegistryStore
+
+    branch = load_branch(name)
+    pointer = branch_pointer_path(name)
+    branches_dir = _branches_dir()
+    with RegistryStore() as store:
+        resolved = store.resolve(registry_ref)
+        if resolved is None:
+            raise ValueError(f"registry entry not found: {registry_ref}")
+        rowid = store.add_artifact(
+            entry_id=resolved,
+            kind="branch_ref",
+            path=str(pointer),
+            enforce_cwd=False,
+        )
+    # Re-write the pointer with the resolved id so the edge is bidirectional.
+    _atomic_write_branch(branches_dir, replace(branch, registry_entry_id=resolved))
+    return rowid
+
+
+def branch_from_registry(
+    name: str,
+    registry_ref: str,
+    *,
+    config_out: Optional[str] = None,
+) -> Branch:
+    """Create a branch by deriving config + base_model + dataset from a Registry entry.
+
+    Materialises the entry's stored ``config_json`` to a cwd file (default
+    ``<name>.from-registry.yaml``) so the snapshot points at a real config,
+    derives ``base_model`` from the entry, and records the entry's
+    ``data_hash`` as the branch's ``dataset_sha256`` (the registry keeps the
+    file hash, not a path). The branch is linked back via ``registry_entry_id``.
+    """
+    import yaml
+
+    from soup_cli.registry.store import RegistryStore
+
+    name = _validate_name(name)
+    with RegistryStore() as store:
+        resolved = store.resolve(registry_ref)
+        if resolved is None:
+            raise ValueError(f"registry entry not found: {registry_ref}")
+        entry = store.get(resolved)
+        if entry is None:
+            raise ValueError(f"registry entry not found: {registry_ref}")
+        base_model = entry.get("base_model") or "unknown"
+        data_hash = entry.get("data_hash")
+        try:
+            config = json.loads(entry.get("config_json") or "{}")
+        except (TypeError, ValueError):
+            config = {}
+
+    out_name = config_out if config_out is not None else f"{name}.from-registry.yaml"
+    enforce_under_cwd_and_no_symlink(out_name, "config_out")
+    out_path = Path(out_name)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(
+        yaml.safe_dump(config, sort_keys=False), encoding="utf-8"
+    )
+
+    return create_branch(
+        name,
+        config_path=str(out_path),
+        base_model=base_model,
+        registry_entry_id=resolved,
+        dataset_sha256=data_hash if data_hash else None,
+    )
 
 
 def write_checkout(branch: Branch, target_path: str) -> Path:

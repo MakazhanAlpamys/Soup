@@ -34,6 +34,8 @@ v0.57 shipped `adapters diff / merge / blame / branch`. v0.67 finishes the lifec
 
 ```bash
 # 1. Evolutionary merge: search the simplex of merge weights via CMA-ES.
+#    v0.71.4 makes this a LIVE loop — each candidate is merged, scored against
+#    --eval, and the best blend is written to --output.
 soup adapters merge \
   adapter-finance/ adapter-medical/ adapter-legal/ \
   --strategy cmaes \
@@ -43,6 +45,12 @@ soup adapters merge \
   --max-generations 20 \
   --output merged/
 
+# 1b. One-shot merge with a live canary verdict (v0.71.4). Scores the merged
+#     adapter vs the first input → OK / MINOR / MAJOR; --strict-verdict exits 2
+#     on a MAJOR regression. A pre-scored canary suite needs no model load.
+soup adapters merge adapter-a/ adapter-b/ -o merged/ \
+  --canary evals/canary.json --strict-verdict
+
 # 2. Render the merge as a GitHub PR for review (eval deltas + sample diffs).
 soup adapters pr "merge: 3-domain blend" \
   --base-sha $(git rev-parse HEAD) \
@@ -51,6 +59,12 @@ soup adapters pr "merge: 3-domain blend" \
   --samples evals/samples.json \
   --dataset-diff data/diff.txt \
   --format markdown -o pr.md
+
+# 2b. Post it straight to a GitHub PR comment (v0.71.4). Auth via GITHUB_TOKEN
+#     / GH_TOKEN; uses `gh api` under the hood (no secret leaks to the child).
+soup adapters pr "merge: 3-domain blend" \
+  --base-sha $(git rev-parse HEAD) --adapter merged/ \
+  --eval evals/deltas.json --push your-org/your-repo#42
 
 # 3. Lock a reproducible run state. Closure = sha(base + dataset + env).
 soup env lock                                     # v0.64 — capture env hash
@@ -92,6 +106,16 @@ soup loop status
 
 # Run the daemon (foreground)
 soup loop watch --poll-interval 300
+
+# Pre-wired production stages (v0.71.4): real traces → DPO → eval-gate → canary,
+# instead of the v0.58 no-op stubs. Opt in once via `loop init --pre-wired` or
+# per-run via --pre-wired. Pack each iteration as a shareable Soup Can with
+# Registry lineage via --pack-cans.
+soup loop init registry://abc12 --eval evals/lock.json --baseline registry://prod --pre-wired
+soup loop watch --pre-wired --pack-cans --poll-interval 300
+
+# Unpack a recorded iteration's Soup Can for what-if analysis (v0.71.4)
+soup loop replay iter-20260515T120000-abcdef01 --extract ./iter-dump
 
 # Background subprocess (writes PID, no shell)
 soup loop watch --detach
@@ -240,6 +264,14 @@ soup adapters blame ./run-v18 --dataset train.jsonl --layer q_proj.7 \
 soup adapters branch v18 --config soup.yaml --base meta-llama/Llama-3.1-8B \
   --dataset train.jsonl
 
+# Link a branch into the Registry lineage DAG (v0.71.4) — shows as a
+# `branches` node under the entry in `soup history`.
+soup adapters branch v18 --config soup.yaml --base meta-llama/Llama-3.1-8B \
+  --attach-to-registry reg_20260601_abc123
+
+# Or derive a fresh snapshot's config + base straight from a Registry entry (v0.71.4)
+soup adapters branch v18-from-reg --from-registry reg_20260601_abc123
+
 # Restore the snapshot's config (refuses if source SHA drifted)
 soup adapters checkout v18 --output soup.yaml
 
@@ -264,7 +296,9 @@ soup adapters branches
 - Branch pointers live under `~/.soup/branches/` (override via `SOUP_BRANCHES_DIR`, constrained to `$HOME` / `$CWD` / `$TMPDIR`).
 - `soup adapters checkout` SHA-checks the source config — refuses to restore when the source has drifted from the snapshot, so reproducibility never silently lies.
 
-**v0.66.0:** `soup adapters blame` is now LIVE — the v0.57 `NotImplementedError` stub (#171) is lifted via a DataInf-style influence-function approximation. Pass `--top-k 50` to control the reported top-influencer count; pass a real `probe_fn` (Python API) to feed real gradients, or use the default deterministic synthetic probe for offline planning. `MergeReport.verdict` remains the `UNKNOWN` stub (live canary eval in v0.57.1).
+**v0.66.0:** `soup adapters blame` is now LIVE — the v0.57 `NotImplementedError` stub (#171) is lifted via a DataInf-style influence-function approximation. Pass `--top-k 50` to control the reported top-influencer count; pass a real `probe_fn` (Python API) to feed real gradients, or use the default deterministic synthetic probe for offline planning.
+
+**v0.71.4:** the merge verdict is now LIVE — `soup adapters merge … --canary suite.json` lifts the `MergeReport.verdict` `UNKNOWN` stub. A pre-scored `{"baseline_scores","candidate_scores"}` suite classifies the blend OK / MINOR / MAJOR with no model load; a `{"tasks":[...]}` suite uses an injectable scorer. `--strict-verdict` exits 2 on MAJOR. The backdoor-scan and license-conflict gates now run for **every** strategy, including `cmaes`. `soup adapters branch <name> --from-registry <id>` / `--attach-to-registry <id>` link training-env snapshots into the Registry lineage DAG (shown as a `branches` node in `soup history`).
 
 
 ## Soup Cans (Shareable Recipes)

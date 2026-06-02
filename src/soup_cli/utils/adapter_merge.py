@@ -21,11 +21,14 @@ import stat
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, FrozenSet, Literal, Mapping, Sequence, Tuple
+from typing import Any, Callable, FrozenSet, Literal, Mapping, Optional, Sequence, Tuple
 
 from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
 
 MergeStrategy = Literal["linear", "ties", "dare", "svd", "cmaes"]
+# A canary scorer: ``scorer(role, tasks) -> per-prompt scores`` where ``role``
+# is "baseline" / "candidate" and ``tasks`` is the parsed canary task list.
+CanaryScorer = Callable[[str, Sequence[Mapping[str, Any]]], Sequence[float]]
 # frozenset for O(1) membership + immutability (mirrors v0.41.0 / v0.51.0 policy);
 # tuple alias preserved for caller code that iterates in canonical order.
 # v0.67.0 Part A: added "cmaes" — evolutionary search dispatched separately
@@ -275,6 +278,15 @@ def merge_adapters(
         raise ValueError(
             f"strategy must be one of {SUPPORTED_STRATEGIES}, got {strategy!r}"
         )
+    if strategy == "cmaes":
+        # cmaes is an evolutionary *search* over linear weights, not a
+        # one-shot tensor merge — routing it through this function would
+        # silently fall into the svd branch. Fail loudly with the real path.
+        raise ValueError(
+            "cmaes is an evolutionary strategy; use run_cmaes_merge / "
+            "`soup adapters merge --strategy cmaes --eval ...`, "
+            "not merge_adapters(strategy='cmaes')"
+        )
     if not isinstance(adapter_paths, Sequence) or isinstance(adapter_paths, str):
         raise TypeError("adapter_paths must be a sequence of strings")
     if len(adapter_paths) < _MIN_ADAPTERS:
@@ -300,7 +312,7 @@ def merge_adapters(
     else:  # svd
         merged, skipped = merge_svd(weights_list, coeffs, rank=rank)
 
-    _write_merged_adapter(output_dir, adapter_paths[0], merged)
+    write_merged_adapter(output_dir, adapter_paths[0], merged)
 
     return MergeReport(
         strategy=strategy,
@@ -341,7 +353,7 @@ def _atomic_write_bytes(target: Path, data: bytes) -> None:
         raise
 
 
-def _write_merged_adapter(
+def write_merged_adapter(
     output_dir: str,
     template_source: str,
     weights: Mapping[str, Any],
@@ -402,17 +414,143 @@ def _write_merged_adapter(
         )
 
 
+# Back-compat alias: ``_write_merged_adapter`` was private through v0.71.4;
+# promoted to the public ``write_merged_adapter`` so cmaes_merge imports a
+# public name (review MEDIUM-3). Keep the old name for any external caller.
+_write_merged_adapter = write_merged_adapter
+
+
+_MAX_CANARY_BYTES = 16 * 1024 * 1024  # 16 MiB cap on the canary-suite JSON
+_VERDICT_MINOR = 0.02
+_VERDICT_MAJOR = 0.05
+
+
+def _classify_drop(delta: float) -> str:
+    """OK / MINOR / MAJOR per the v0.26.0 Quant-Lobotomy taxonomy.
+
+    ``delta`` is ``candidate_mean - baseline_mean``: positive (improvement)
+    or a small drop is OK, a 2-5 % drop is MINOR, a >5 % drop is MAJOR.
+    """
+    if delta >= 0:
+        return "OK"
+    drop = -delta
+    if drop < _VERDICT_MINOR:
+        return "OK"
+    if drop < _VERDICT_MAJOR:
+        return "MINOR"
+    return "MAJOR"
+
+
+def _require_score_list(value: Any, field: str) -> list[float]:
+    if not isinstance(value, list) or isinstance(value, (str, bytes)):
+        raise ValueError(f"{field} must be a JSON list of numbers")
+    out: list[float] = []
+    for v in value:
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            raise ValueError(f"{field} entries must be numbers")
+        vf = float(v)
+        if not math.isfinite(vf):
+            raise ValueError(f"{field} entries must be finite")
+        out.append(vf)
+    if not out:
+        raise ValueError(f"{field} must be non-empty")
+    return out
+
+
+def _load_canary_scores(
+    canary_suite: str,
+    scorer: Optional[CanaryScorer],
+) -> Tuple[list[float], list[float]]:
+    """Resolve baseline + candidate per-prompt scores from a canary suite.
+
+    Two supported shapes:
+
+    - ``{"baseline_scores": [...], "candidate_scores": [...]}`` — pre-scored
+      (no model load; the no-GPU workflow). Operators run ``soup eval custom``
+      against the baseline and merged adapters, then assemble the two arrays.
+    - ``{"tasks": [{"prompt", "expected"}, ...]}`` — requires an injectable
+      ``scorer(role, tasks) -> list[float]`` (the live path).
+    """
+    # Defence-in-depth cwd containment + symlink rejection at the read site so
+    # the public ``predict_merged_verdict`` entry point is safe even when a
+    # non-CLI caller skips the CLI-boundary check (mirrors every other read
+    # surface in this changeset).
+    enforce_under_cwd_and_no_symlink(canary_suite, "canary_suite")
+    path = Path(canary_suite)
+    if not path.is_file():
+        raise ValueError(f"canary suite not found: {path.name}")
+    # Open ONCE with O_NOFOLLOW and enforce the size cap on the same fd
+    # (os.fstat), so the symlink-rejection + 16 MiB cap cannot be defeated by a
+    # local file swap between the lstat/stat and the read (TOCTOU) — matches the
+    # O_NOFOLLOW+fstat read pattern used elsewhere in the codebase.
+    try:
+        fd = os.open(str(path), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except OSError as exc:
+        raise ValueError(f"canary suite unreadable: {type(exc).__name__}") from exc
+    fh = None
+    try:
+        if os.fstat(fd).st_size > _MAX_CANARY_BYTES:
+            raise ValueError("canary suite exceeds 16 MiB cap")
+        fh = os.fdopen(fd, "r", encoding="utf-8")
+        raw = fh.read()
+    finally:
+        if fh is not None:
+            fh.close()
+        else:
+            os.close(fd)
+    try:
+        data = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"canary suite is not valid JSON: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ValueError("canary suite root must be a JSON object")
+
+    if "baseline_scores" in data and "candidate_scores" in data:
+        baseline = _require_score_list(data["baseline_scores"], "baseline_scores")
+        candidate = _require_score_list(data["candidate_scores"], "candidate_scores")
+    else:
+        tasks = data.get("tasks")
+        if not isinstance(tasks, list) or not tasks:
+            raise ValueError(
+                "canary suite must contain 'baseline_scores'+'candidate_scores' "
+                "or a non-empty 'tasks' list"
+            )
+        if scorer is None or not callable(scorer):
+            raise ValueError(
+                "canary suite has 'tasks' but no scorer; supply pre-scored "
+                "'baseline_scores'/'candidate_scores' arrays or pass scorer="
+            )
+        baseline = _require_score_list(scorer("baseline", tasks), "baseline scorer output")
+        candidate = _require_score_list(scorer("candidate", tasks), "candidate scorer output")
+
+    if len(baseline) != len(candidate):
+        raise ValueError(
+            f"baseline ({len(baseline)}) and candidate ({len(candidate)}) "
+            "score counts must match"
+        )
+    return baseline, candidate
+
+
 def predict_merged_verdict(
     report: MergeReport,
     canary_suite: str | None = None,
+    *,
+    scorer: Optional[CanaryScorer] = None,
 ) -> str:
-    """Stub for v0.57.1: live canary-eval verdict via v0.55 gate.
+    """Live canary verdict for a merged adapter (v0.71.4 #172).
 
-    Today returns the existing report.verdict. The signature is forward-compatible
-    so v0.57.1 can lift this to a real OK/MINOR/MAJOR classification.
+    Returns the merged adapter's OK / MINOR / MAJOR verdict by comparing
+    per-prompt canary scores against the first input adapter (the "baseline"
+    by convention) using the v0.26.0 Quant-Lobotomy thresholds. When
+    ``canary_suite`` is ``None`` the existing ``report.verdict`` (``UNKNOWN``
+    for a fresh merge) is returned unchanged — back-compat with v0.57.0.
     """
     if not isinstance(report, MergeReport):
         raise TypeError("report must be MergeReport")
     if canary_suite is not None and not isinstance(canary_suite, str):
         raise TypeError("canary_suite must be str or None")
-    return report.verdict
+    if canary_suite is None:
+        return report.verdict
+    baseline, candidate = _load_canary_scores(canary_suite, scorer)
+    delta = (sum(candidate) / len(candidate)) - (sum(baseline) / len(baseline))
+    return _classify_drop(delta)

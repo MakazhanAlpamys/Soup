@@ -74,6 +74,13 @@ def init_cmd(
     max_runs_per_day: Optional[int] = typer.Option(
         None, "--max-runs-per-day", help="Cap on iteration starts per UTC day."
     ),
+    pre_wired: bool = typer.Option(
+        False, "--pre-wired",
+        help=(
+            "Use the pre-wired harvest/train/gate/deploy stages "
+            "(utils/loop_stages.py) on watch instead of no-op stubs (v0.71.4)."
+        ),
+    ),
     force: bool = typer.Option(False, "--force", help="Overwrite existing loop.yaml."),
 ) -> None:
     """Create the .soup/loop.yaml control file (one-time setup)."""
@@ -96,6 +103,7 @@ def init_cmd(
             baseline=baseline,
             monthly_budget_usd=budget_usd,
             max_runs_per_day=max_runs_per_day,
+            pre_wired=pre_wired,
             force=force,
         )
     except (FileExistsError, FileNotFoundError, TypeError, ValueError) as exc:
@@ -123,6 +131,7 @@ def status_cmd() -> None:
     table.add_row("served_model", escape(state.served_model))
     table.add_row("eval_suite", escape(state.eval_suite))
     table.add_row("baseline", escape(state.baseline))
+    table.add_row("pre_wired", "yes" if state.pre_wired else "no")
     table.add_row("traces_collected", str(state.traces_collected))
     table.add_row("pairs_distilled", str(state.pairs_distilled))
     table.add_row("runs_gated", str(state.runs_gated))
@@ -191,12 +200,20 @@ def watch_cmd(
     poll_interval: float = typer.Option(
         60.0, "--poll-interval", help="Seconds between iterations [1, 3600]."
     ),
+    pre_wired: bool = typer.Option(
+        False, "--pre-wired",
+        help="Force the pre-wired production stages even if loop.yaml didn't set it.",
+    ),
+    pack_cans: bool = typer.Option(
+        False, "--pack-cans",
+        help="Pack each iteration as a v0.26 Soup Can + Registry entry (v0.71.4).",
+    ),
 ) -> None:
     """Run the harvest → train → gate → deploy daemon."""
     if detach and foreground:
         console.print("[red]--detach and --foreground are mutually exclusive[/]")
         raise typer.Exit(code=2)
-    _ = _safe_read()  # ensure state exists before forking
+    state = _safe_read()  # ensure state exists before forking
     if detach:
         argv = [
             sys.executable,
@@ -210,6 +227,10 @@ def watch_cmd(
         ]
         if max_iterations is not None:
             argv.extend(["--max-iterations", str(max_iterations)])
+        if pre_wired:
+            argv.append("--pre-wired")
+        if pack_cans:
+            argv.append("--pack-cans")
         proc = subprocess.Popen(  # noqa: S603 — argv is internal, no shell
             argv,
             stdout=subprocess.DEVNULL,
@@ -218,11 +239,31 @@ def watch_cmd(
         )
         console.print(f"[green]watch detached[/] pid={proc.pid}")
         return
+    use_prewired = pre_wired or state.pre_wired
+    base_model = (
+        state.served_model
+        if state.served_model and not state.served_model.startswith("registry://")
+        else "unknown"
+    )
     try:
-        cfg = WatchConfig(
-            poll_interval_sec=float(poll_interval),
-            max_iterations=max_iterations,
-        )
+        if use_prewired:
+            from soup_cli.utils.loop_stages import build_prewired_watch_config
+
+            cfg = build_prewired_watch_config(
+                poll_interval_sec=float(poll_interval),
+                max_iterations=max_iterations,
+                pack_iterations=pack_cans,
+                served_model=state.served_model,
+                base_model=base_model,
+            )
+        else:
+            cfg = WatchConfig(
+                poll_interval_sec=float(poll_interval),
+                max_iterations=max_iterations,
+                pack_iterations=pack_cans,
+                served_model=state.served_model,
+                base_model=base_model,
+            )
     except (TypeError, ValueError) as exc:
         console.print(f"[red]invalid watch config:[/] {escape(str(exc))}")
         raise typer.Exit(code=2)
@@ -281,6 +322,10 @@ def replay_cmd(
     iteration_id: Optional[str] = typer.Argument(
         None, help="Iteration id (omit to list all)."
     ),
+    extract: Optional[str] = typer.Option(
+        None, "--extract",
+        help="Extract the iteration's .can to this directory for a what-if re-run (v0.71.4).",
+    ),
 ) -> None:
     """Replay a recorded loop iteration manifest."""
     if iteration_id is None:
@@ -295,6 +340,29 @@ def replay_cmd(
     except (FileNotFoundError, TypeError, ValueError) as exc:
         console.print(f"[red]replay failed:[/] {escape(str(exc))}")
         raise typer.Exit(code=2)
+
+    if extract is not None:
+        from soup_cli.cans.unpack import extract_can
+        from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
+
+        can_path = os.path.join(".soup-loops", iteration_id, "iteration.can")
+        if not os.path.isfile(can_path):
+            console.print(
+                f"[red]no .can for {escape(iteration_id)} "
+                "(was it run with `watch --pack-cans`?)[/]"
+            )
+            raise typer.Exit(code=1)
+        try:
+            enforce_under_cwd_and_no_symlink(extract, "extract")
+            dest = extract_can(can_path, extract)
+        except (FileNotFoundError, ValueError, TypeError) as exc:
+            console.print(f"[red]extract failed:[/] {escape(str(exc))}")
+            raise typer.Exit(code=2)
+        console.print(
+            f"[green]extracted {escape(iteration_id)} -> {escape(str(dest))}[/]"
+        )
+        return
+
     table = Table(title=f"replay {escape(record.iteration_id)}", show_header=False)
     table.add_column("field", style="bold")
     table.add_column("value")

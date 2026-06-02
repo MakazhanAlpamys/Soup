@@ -51,6 +51,9 @@ class LoopState:
     eval_suite: str
     baseline: str
     status: str = "stopped"
+    # v0.71.4 #176 — use the pre-wired harvest/train/gate/deploy stages
+    # (utils/loop_stages.py) instead of the no-op default callbacks.
+    pre_wired: bool = False
     traces_collected: int = 0
     pairs_distilled: int = 0
     runs_gated: int = 0
@@ -110,6 +113,8 @@ class LoopState:
                 raise ValueError("max_runs_per_day must be a positive int or None")
         if not isinstance(self.canary_autoroll_on_regress, bool):
             raise ValueError("canary_autoroll_on_regress must be bool")
+        if not isinstance(self.pre_wired, bool):
+            raise ValueError("pre_wired must be bool")
         if self.canary_active is not None:
             _require_str("canary_active", self.canary_active, allow_empty=False)
         if self.last_iteration_id is not None:
@@ -273,6 +278,7 @@ def init_state(
     *,
     monthly_budget_usd: Optional[float] = None,
     max_runs_per_day: Optional[int] = None,
+    pre_wired: bool = False,
     path: Optional[str] = None,
     force: bool = False,
 ) -> Tuple[LoopState, str]:
@@ -300,6 +306,7 @@ def init_state(
         eval_suite=eval_suite,
         baseline=baseline,
         status="stopped",
+        pre_wired=pre_wired,
         monthly_budget_usd=monthly_budget_usd,
         max_runs_per_day=max_runs_per_day,
         created_at=now,

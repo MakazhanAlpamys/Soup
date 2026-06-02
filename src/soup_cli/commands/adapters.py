@@ -382,6 +382,18 @@ def merge(
             "that cannot be scanned)."
         ),
     ),
+    canary: Optional[str] = typer.Option(
+        None, "--canary",
+        help=(
+            "Canary-suite JSON to compute a live OK/MINOR/MAJOR verdict for "
+            "the merged adapter vs the first input (v0.71.4 #172). Shape: "
+            '{"baseline_scores": [...], "candidate_scores": [...]}.'
+        ),
+    ),
+    strict_verdict: bool = typer.Option(
+        False, "--strict-verdict",
+        help="Exit 2 when the canary verdict is MAJOR (CI gate).",
+    ),
 ):
     """Merge LoRA adapters via linear / ties / dare / svd (v0.57.0, v0.60.0 license gate)."""
     from soup_cli.utils.adapter_merge import SUPPORTED_STRATEGIES, merge_adapters
@@ -403,11 +415,11 @@ def merge(
         console.print("[red]Need at least 2 adapter paths to merge[/]")
         raise typer.Exit(2)
 
-    # v0.67.0 Part A: cmaes evolutionary search requires an eval suite +
-    # budget. Render the planned strategy and emit a deferred-live advisory.
-    # Operator-supplied eval_fn lives in `soup_cli.utils.cmaes_merge.run_cmaes_merge`;
-    # the CLI surface here ships the plan + validation. Live `soup eval`
-    # auto-wiring against a registry run is deferred to v0.67.1.
+    # cmaes argument validation runs FIRST (before any file I/O / scanning):
+    # a user who forgot --eval should get that error immediately, not a scan
+    # error on their inputs. The cmaes *search* itself still runs after the
+    # security gates below (v0.71.4 review — preserves the "reject missing
+    # --eval before file-handling" contract while gating the merge).
     if strategy == "cmaes":
         if eval_suite is None:
             console.print(
@@ -415,41 +427,18 @@ def merge(
                 "(path to a YAML/JSONL eval).[/]"
             )
             raise typer.Exit(2)
-        from soup_cli.utils.cmaes_merge import build_cmaes_plan
-
-        try:
-            cmaes_plan = build_cmaes_plan(
-                adapters=adapters,
-                eval_suite=eval_suite,
-                budget_spec=budget,
-                population_size=population,
-                max_generations=max_generations,
-                seed=seed,
+        if canary is not None or strict_verdict:
+            console.print(
+                "[red]--canary / --strict-verdict are not supported with "
+                "--strategy cmaes; the --eval suite already drives the search.[/]"
             )
-        except (FileNotFoundError, TypeError, ValueError) as exc:
-            console.print(f"[red]Invalid cmaes plan: {escape(str(exc))}[/]")
-            raise typer.Exit(2) from exc
-        panel = Panel(
-            f"Strategy:        [bold]cmaes[/]\n"
-            f"Adapters:        {len(cmaes_plan.adapters)}\n"
-            f"Eval suite:      [bold]{escape(os.path.basename(cmaes_plan.eval_suite))}[/]\n"
-            f"Budget:          [bold]{cmaes_plan.budget_seconds}s[/]\n"
-            f"Population:      [bold]{cmaes_plan.population_size}[/]\n"
-            f"Max generations: [bold]{cmaes_plan.max_generations}[/]\n"
-            f"Live cmaes loop with auto-wired eval suite is deferred to "
-            f"[yellow]v0.67.1[/]. The plan is validated and ready to "
-            f"hand to an operator-supplied `eval_fn` via "
-            f"`run_cmaes_merge(plan, eval_fn=...)`.",
-            title="Adapter merge — cmaes (plan)",
-        )
-        console.print(panel)
-        return
+            raise typer.Exit(2)
 
     # v0.71.2 #192 — backdoor-scan gate. Refuse to merge any input whose
     # spectral scan returns FAIL (or that cannot be scanned at all) unless the
-    # operator passes --allow-unscanned. WARN is advisory-only. Runs AFTER the
-    # cmaes plan-only branch (which doesn't merge weights) so it gates only the
-    # strategies that actually write a merged adapter.
+    # operator passes --allow-unscanned. WARN is advisory-only. Runs BEFORE the
+    # strategy dispatch (incl. cmaes, which v0.71.4 #220 made weight-writing) so
+    # EVERY strategy that produces a merged adapter is gated uniformly.
     if not allow_unscanned:
         from soup_cli.utils.adapter_scan import scan_adapter
 
@@ -481,7 +470,8 @@ def merge(
     # per adapter (--license, repeatable) OR rely on v0.71.2 #187
     # auto-extraction from adapter_config.json / config.json / model-card
     # frontmatter. On a conflict, --license-override <reason> proceeds and the
-    # decision is recorded to the audit log (#190).
+    # decision is recorded to the audit log (#190). Runs before the strategy
+    # dispatch so cmaes (#220, weight-writing) is gated like every other merge.
     gate_licenses: Optional[list[str]] = None
     if license_ids:
         if len(license_ids) != len(adapters):
@@ -539,6 +529,81 @@ def merge(
                 f"[dim]Reason: {escape(cleared)} (recorded to audit log)[/]"
             )
 
+    # v0.67.0 Part A: cmaes evolutionary search requires an eval suite +
+    # budget. v0.71.4 #220 lifts this from plan-only to a live loop: the eval
+    # suite is auto-wired into an eval_fn that materialises + scores each
+    # candidate merge, and the best-weighted merge is written to --output.
+    # (Arg validation already happened above, before the security gates.)
+    if strategy == "cmaes":
+        assert eval_suite is not None  # narrowed by the early arg-check
+        from soup_cli.utils.cmaes_merge import (
+            build_cmaes_eval_fn,
+            build_cmaes_plan,
+            run_cmaes_merge,
+        )
+
+        try:
+            cmaes_plan = build_cmaes_plan(
+                adapters=adapters,
+                eval_suite=eval_suite,
+                budget_spec=budget,
+                population_size=population,
+                max_generations=max_generations,
+                seed=seed,
+            )
+        except (FileNotFoundError, TypeError, ValueError) as exc:
+            console.print(f"[red]Invalid cmaes plan: {escape(str(exc))}[/]")
+            raise typer.Exit(2) from exc
+
+        console.print(
+            f"[cyan]Running CMA-ES merge[/] "
+            f"(pop={cmaes_plan.population_size}, "
+            f"max_gen={cmaes_plan.max_generations}, "
+            f"budget={cmaes_plan.budget_seconds}s)..."
+        )
+        console.print(
+            "[dim]The default scorer reloads the base model per candidate "
+            "(pop x generations loads); pass a small --population for large "
+            "models, or wire a cached scorer.[/]"
+        )
+        try:
+            eval_fn = build_cmaes_eval_fn(cmaes_plan)
+            result = run_cmaes_merge(cmaes_plan, eval_fn=eval_fn)
+        except (FileNotFoundError, TypeError, ValueError, RuntimeError, OSError) as exc:
+            console.print(f"[red]cmaes merge failed: {escape(str(exc))}[/]")
+            raise typer.Exit(2) from exc
+
+        # Write the best-weighted merge to --output (linear with the winning
+        # simplex weights).
+        try:
+            report = merge_adapters(
+                adapters, output, strategy="linear",
+                weights=list(result.best_weights),
+            )
+        except (FileNotFoundError, TypeError, ValueError, RuntimeError, OSError) as exc:
+            console.print(f"[red]Could not write merged adapter: {escape(str(exc))}[/]")
+            raise typer.Exit(2) from exc
+
+        conv_color = "green" if result.converged else "yellow"
+        best_w = ", ".join(f"{w:.3f}" for w in result.best_weights)
+        console.print(
+            Panel(
+                f"Strategy:        [bold]cmaes[/]\n"
+                f"Adapters:        {len(cmaes_plan.adapters)}\n"
+                f"Eval suite:      [bold]{escape(os.path.basename(cmaes_plan.eval_suite))}[/]\n"
+                f"Generations:     [bold]{result.generations_run}[/] / "
+                f"{cmaes_plan.max_generations}\n"
+                f"Evaluations:     [bold]{result.evaluations}[/]\n"
+                f"Best score:      [bold]{result.best_score:.4f}[/]\n"
+                f"Best weights:    [dim]{escape(best_w)}[/]\n"
+                f"Converged:       [{conv_color}]{result.converged}[/]\n"
+                f"Merged layers:   [bold]{report.merged_layers}[/]\n"
+                f"Output:          [bold]{escape(report.output_dir)}[/]",
+                title="Adapter merge — cmaes",
+            )
+        )
+        return
+
     parsed_weights = None
     if weights:
         try:
@@ -564,16 +629,39 @@ def merge(
         console.print(f"[red]{escape(str(exc))}[/]")
         raise typer.Exit(2) from exc
 
+    # v0.71.4 #172 — live canary verdict. With --canary, score the merged
+    # adapter vs the first input and classify OK/MINOR/MAJOR; without it the
+    # verdict stays UNKNOWN (advisory).
+    verdict = report.verdict
+    verdict_suffix = " (pass --canary <suite.json> to compute)"
+    if canary is not None:
+        from soup_cli.utils.adapter_merge import predict_merged_verdict
+        from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
+
+        try:
+            enforce_under_cwd_and_no_symlink(canary, "canary")
+            verdict = predict_merged_verdict(report, canary)
+        except (TypeError, ValueError) as exc:
+            console.print(f"[red]Canary verdict failed: {escape(str(exc))}[/]")
+            raise typer.Exit(2) from exc
+        verdict_suffix = ""
+
+    verdict_color = {"OK": "green", "MINOR": "yellow", "MAJOR": "red"}.get(
+        verdict, "yellow"
+    )
     panel = Panel(
         f"Strategy:       [bold]{escape(report.strategy)}[/]\n"
         f"Inputs:         {len(report.adapters)}\n"
         f"Merged layers:  [bold]{report.merged_layers}[/]\n"
         f"Skipped layers: {len(report.skipped_layers)}\n"
-        f"Verdict:        [yellow]{report.verdict}[/] (live eval in v0.57.1)\n"
+        f"Verdict:        [{verdict_color}]{verdict}[/]{verdict_suffix}\n"
         f"Output:         [bold]{escape(report.output_dir)}[/]",
         title="Adapter merge",
     )
     console.print(panel)
+
+    if strict_verdict and verdict == "MAJOR":
+        raise typer.Exit(2)
 
 
 @app.command()
@@ -672,16 +760,62 @@ def blame(
 @app.command()
 def branch(
     name: str = typer.Argument(..., help="Branch name (alphanumeric + ._-)"),
-    config: str = typer.Option(..., "--config", "-c", help="Path to soup.yaml"),
-    base: str = typer.Option(..., "--base", help="Base model id"),
+    config: Optional[str] = typer.Option(
+        None, "--config", "-c",
+        help="Path to soup.yaml (required unless --from-registry)",
+    ),
+    base: Optional[str] = typer.Option(
+        None, "--base", help="Base model id (required unless --from-registry)",
+    ),
     dataset: str = typer.Option(None, "--dataset", help="Training dataset path (optional)"),
+    attach_to_registry: Optional[str] = typer.Option(
+        None, "--attach-to-registry",
+        help=(
+            "Registry entry id/ref to attach this branch pointer to as a "
+            "branch_ref artifact + link via registry_entry_id (v0.71.4)."
+        ),
+    ),
+    from_registry: Optional[str] = typer.Option(
+        None, "--from-registry",
+        help=(
+            "Derive config + base_model + dataset hash from a Registry entry "
+            "instead of --config/--base (v0.71.4)."
+        ),
+    ),
 ):
-    """Snapshot a training environment as a comparable branch (v0.57.0)."""
-    from soup_cli.utils.adapter_branch import create_branch
+    """Snapshot a training environment as a comparable branch (v0.57.0).
+
+    Pass ``--from-registry <id>`` to derive everything from a v0.26 Registry
+    entry, or ``--attach-to-registry <id>`` to link a fresh snapshot into the
+    lineage DAG (v0.71.4 #173).
+    """
+    from soup_cli.utils.adapter_branch import (
+        attach_branch_to_registry,
+        branch_from_registry,
+        create_branch,
+        load_branch,
+    )
 
     try:
-        snap = create_branch(name, config_path=config, base_model=base,
-                             dataset_path=dataset)
+        if from_registry is not None:
+            snap = branch_from_registry(name, from_registry)
+        else:
+            if not config:
+                console.print(
+                    "[red]--config is required (or use --from-registry)[/]"
+                )
+                raise typer.Exit(2)
+            if not base:
+                console.print(
+                    "[red]--base is required (or use --from-registry)[/]"
+                )
+                raise typer.Exit(2)
+            snap = create_branch(
+                name, config_path=config, base_model=base, dataset_path=dataset,
+            )
+            if attach_to_registry is not None:
+                attach_branch_to_registry(name, attach_to_registry)
+                snap = load_branch(name)
     except FileNotFoundError as exc:
         console.print(f"[red]{escape(str(exc))}[/]")
         raise typer.Exit(1) from exc
@@ -689,6 +823,11 @@ def branch(
         console.print(f"[red]{escape(str(exc))}[/]")
         raise typer.Exit(2) from exc
 
+    reg_line = (
+        f"\nRegistry: [dim]{escape(snap.registry_entry_id)}[/]"
+        if snap.registry_entry_id
+        else ""
+    )
     console.print(
         Panel(
             f"Name:    [bold]{escape(snap.name)}[/]\n"
@@ -697,7 +836,7 @@ def branch(
             f"SHA:     [dim]{snap.config_sha256[:16]}...[/]\n"
             f"Dataset SHA: [dim]"
             f"{snap.dataset_sha256[:16] + '...' if snap.dataset_sha256 else '—'}[/]\n"
-            f"Version: {snap.soup_version}",
+            f"Version: {snap.soup_version}{reg_line}",
             title="Adapter branch",
         )
     )
@@ -1020,15 +1159,25 @@ def adapter_pr(
     format_: str = typer.Option(
         "markdown", "--format", "-f", help="markdown | json",
     ),
+    push: Optional[str] = typer.Option(
+        None, "--push",
+        help=(
+            "Post the rendered Markdown as a comment on a GitHub PR: "
+            "owner/repo#N (e.g. MakazhanAlpamys/Soup#42). Auth via "
+            "GITHUB_TOKEN / GH_TOKEN (v0.71.4)."
+        ),
+    ),
 ):
     """Render a GitHub-style PR for an adapter (v0.67.0 Part D).
 
     The PR = ``{base SHA, dataset diff, adapter file, eval report}``
     rendered as a Markdown document with eval-delta tables and sample
-    diffs, ready to drop into a GitHub PR description or comment.
+    diffs, ready to drop into a GitHub PR description or comment. Pass
+    ``--push owner/repo#N`` to post it directly as a PR comment (v0.71.4).
     """
     from soup_cli.utils.adapter_pr import (
         build_adapter_pr,
+        post_pr_comment,
         render_pr_json,
         render_pr_markdown,
         write_pr_markdown,
@@ -1040,11 +1189,16 @@ def adapter_pr(
         raise typer.Exit(2)
 
     # Load deltas + samples + dataset_diff lazily; each accepts None.
+    pr_input_cap = 8 * 1024 * 1024  # 8 MiB per --eval/--samples/--dataset-diff
+
     def _load_json_list(path: Optional[str], field: str) -> list:
         if path is None:
             return []
         enforce_under_cwd_and_no_symlink(path, field=field)
-        with open(os.path.realpath(path), encoding="utf-8") as fh:
+        real = os.path.realpath(path)
+        if os.path.getsize(real) > pr_input_cap:
+            raise ValueError(f"{field} exceeds 8 MiB cap")
+        with open(real, encoding="utf-8") as fh:
             raw = json.load(fh)
         if not isinstance(raw, list):
             raise ValueError(f"{field} must contain a JSON list")
@@ -1058,9 +1212,10 @@ def adapter_pr(
             enforce_under_cwd_and_no_symlink(
                 dataset_diff_path, field="dataset_diff"
             )
-            with open(
-                os.path.realpath(dataset_diff_path), encoding="utf-8"
-            ) as fh:
+            real_diff = os.path.realpath(dataset_diff_path)
+            if os.path.getsize(real_diff) > pr_input_cap:
+                raise ValueError("dataset_diff exceeds 8 MiB cap")
+            with open(real_diff, encoding="utf-8") as fh:
                 dataset_diff = fh.read()
         pr = build_adapter_pr(
             title=title,
@@ -1078,6 +1233,26 @@ def adapter_pr(
         rendered = render_pr_json(pr)
     else:
         rendered = render_pr_markdown(pr)
+
+    # v0.71.4 #223 — publish the rendered Markdown as a GitHub PR comment.
+    # Always posts Markdown (a JSON blob is not a useful PR comment), even
+    # when --format json was chosen for the local render/write.
+    if push is not None:
+        try:
+            url = post_pr_comment(push, render_pr_markdown(pr))
+        except RuntimeError as exc:
+            # Missing token / gh failure — user-actionable, exit 1.
+            console.print(f"[red]{escape(str(exc))}[/]")
+            raise typer.Exit(1) from exc
+        except (TypeError, ValueError) as exc:
+            console.print(f"[red]{escape(str(exc))}[/]")
+            raise typer.Exit(2) from exc
+        console.print(
+            f"[green]Posted PR comment to {escape(push)}[/]"
+            + (f" -> {escape(url)}" if url else "")
+        )
+        if output is None:
+            return
 
     if output is None:
         console.print(rendered)

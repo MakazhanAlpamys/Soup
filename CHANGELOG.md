@@ -12,6 +12,51 @@ reproducing 70+ versions of notes.
 
 ## [Unreleased]
 
+## [0.71.4] - 2026-06-02
+
+### Added
+- **Live canary verdict for `soup adapters merge`** — `--canary <suite.json>`
+  scores the merged adapter against the first input and classifies
+  **OK / MINOR / MAJOR** using the Quant-Lobotomy taxonomy (drop <2% OK, <5%
+  MINOR, else MAJOR). `--strict-verdict` exits 2 on MAJOR. Pre-scored
+  `{"baseline_scores","candidate_scores"}` suites run with no model load; a
+  `{"tasks":[...]}` suite uses an injectable scorer. Replaces the v0.57 `UNKNOWN`
+  stub.
+- **Live evolutionary merge** — `soup adapters merge --strategy cmaes --eval
+  <suite> --budget <t>` now runs the full CMA-ES loop: each candidate is merged,
+  materialised, scored against the eval suite, and the best-weighted merge is
+  written to `--output`. Replaces the v0.67 plan-only stub.
+- **Publish an adapter PR to GitHub** — `soup adapters pr <title> --base-sha
+  <hex> --adapter <path> --push owner/repo#N` posts the rendered PR Markdown as a
+  GitHub PR comment via `gh api` (argv-list, body over JSON stdin; no shell).
+  Token resolves from `GITHUB_TOKEN` / `GH_TOKEN`.
+- **Pre-wired `soup loop` production stages** — `soup loop init --pre-wired` (or
+  `soup loop watch --pre-wired`) swaps the v0.58 no-op stage stubs for real
+  harvest (traces → preference pairs) → DPO train → eval-gate → canary-deploy
+  callables. `soup loop status` now shows the `pre_wired` flag.
+- **Loop iterations as Soup Cans + Registry lineage** — `soup loop watch
+  --pack-cans` packs each successful iteration as a v0.26 Soup Can and appends a
+  Registry entry (tag `loop-iter`), chaining a real lineage DAG across
+  iterations visible through `soup history`. `soup loop replay <id> --extract
+  <dir>` unpacks a recorded iteration.
+- **Branch pointers into the Registry** — `soup adapters branch <name>
+  --attach-to-registry <id>` links a branch snapshot to a Registry entry (shown
+  as a `branches` node in `soup history`); `soup adapters branch <name>
+  --from-registry <id>` derives a fresh snapshot's config + base from an entry.
+
+### Security
+- The backdoor-scan gate (v0.71.2 #192) and license-conflict gate (v0.60 Part E)
+  now run for **all** merge strategies, including `--strategy cmaes` (previously
+  bypassed because cmaes returned before the gates).
+- `soup loop` canary deploy restricts `SOUP_LOOP_SERVE_ENDPOINT` to loopback /
+  RFC1918-private hosts (a serve endpoint is the operator's own box/LAN), beyond
+  the general webhook SSRF policy which permits any HTTPS host.
+- `soup adapters pr --push` builds the `gh` child environment from an allowlist
+  so unrelated secrets (`HF_TOKEN` / `OPENAI_API_KEY` / …) never reach the
+  subprocess.
+- The canary-suite JSON read uses `O_NOFOLLOW` + `os.fstat` (size cap enforced on
+  the same fd) to close the symlink/size-cap TOCTOU window.
+
 ## [0.71.3] - 2026-06-01
 
 ### Added

@@ -49,19 +49,21 @@ infrastructure instead of improving models. Soup fixes that.
 
 ## What's New
 
-**v0.71.3 — Compliance / annex / audit / energy.** The EU AI Act + carbon + audit surfaces go live:
+**v0.71.4 — Adapter lifecycle + loop wiring.** The merge, PR, and continuous-loop surfaces go live:
 
-- **Energy & CO2 measurement** — `soup train --track-energy` measures the training window with an
-  offline carbon tracker (no network) and reports kWh / CO2, feeding them into the Annex doc.
-  Install with `pip install soup-cli[carbon]`.
-- **PDF compliance docs** — `soup train --annex-xi report.pdf` now renders a real PDF of the
-  EU AI Act Annex XI/XII (a `.md` path still gives markdown). The top crawled domains of your
-  training corpus are auto-listed. `pip install soup-cli[pdf]`.
-- **Per-command audit log** — every `soup` command appends one HIPAA/SOC2 record to
-  `~/.soup/audit.jsonl` (secrets redacted). Opt out with `--no-audit-log` or `SOUP_NO_AUDIT_LOG=1`.
-- **Signed Soup Cans + airgap receipts** — `soup can pack --attest statement.json` embeds in-toto
-  attestations into a can; `soup airgap-bundle --repro-receipt receipt.json` ships a reproducibility
-  receipt inside the offline bundle.
+- **Canary verdict on merge** — `soup adapters merge … --canary suite.json` scores the merged
+  adapter and reports **OK / MINOR / MAJOR**; `--strict-verdict` exits non-zero on a MAJOR
+  regression. Works with no model load using a pre-scored canary suite.
+- **Evolutionary merge for real** — `soup adapters merge --strategy cmaes --eval suite --budget 1h`
+  now runs the full CMA-ES search (merge → score → optimise) and writes the best blend, instead of
+  just printing a plan.
+- **Publish an adapter PR** — `soup adapters pr <title> --base-sha <hex> --adapter <path> --push
+  owner/repo#42` posts the rendered PR straight to a GitHub PR comment.
+- **Continuous fine-tuning loop, wired up** — `soup loop watch --pre-wired` runs the real
+  traces → DPO → eval-gate → canary pipeline; `--pack-cans` snapshots every iteration as a
+  shareable Soup Can with Registry lineage (`soup loop replay <id> --extract dir`).
+- **Branches ↔ Registry** — `soup adapters branch <name> --attach-to-registry <id>` /
+  `--from-registry <id>` links training-env snapshots into the Registry lineage DAG.
 
 Full history: [CHANGELOG.md](CHANGELOG.md) &middot; [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 
