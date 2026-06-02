@@ -27,6 +27,16 @@ POSIX_ONLY = pytest.mark.skipif(
 )
 
 
+def _clean_help(text: str) -> str:
+    """Strip ANSI + collapse newlines so flag substrings survive CI color.
+
+    Under CI (`FORCE_COLOR`) Rich renders ``--pre-wired`` as
+    ``-`` ``-pre`` ``-wired`` with ANSI escapes between each styled segment;
+    stripping the escapes concatenates the literal chars back into the flag.
+    """
+    return re.sub(r"\x1b\[[0-9;]*m", "", text).replace("\n", " ")
+
+
 @pytest.fixture()
 def temp_registry(tmp_path, monkeypatch):
     """Isolated registry + branches dir under cwd, returns a push helper."""
@@ -974,7 +984,7 @@ class TestLoopCliPrewired:
     def test_watch_help_lists_pack_cans(self):
         result = runner.invoke(self._app(), ["watch", "--help"])
         assert result.exit_code == 0
-        out = result.stdout.replace("\n", " ")
+        out = _clean_help(result.stdout)
         assert "--pack-cans" in out
         assert "--pre-wired" in out
 
@@ -985,7 +995,7 @@ class TestLoopCliPrewired:
         ])
         result = runner.invoke(self._app(), ["status"])
         assert result.exit_code == 0, (result.output, repr(result.exception))
-        out = result.stdout.replace("\n", " ")
+        out = _clean_help(result.stdout)
         assert "pre_wired" in out
         assert "yes" in out
 
@@ -1317,7 +1327,7 @@ class TestPrCliPush:
     def test_push_flag_in_help(self):
         result = runner.invoke(self._adapters_app(), ["pr", "--help"])
         assert result.exit_code == 0
-        out = result.stdout.replace("\n", " ")
+        out = _clean_help(result.stdout)
         assert "--push" in out
 
     def test_push_missing_token(self, monkeypatch):
