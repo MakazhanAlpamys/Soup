@@ -29,11 +29,11 @@ def split_prefix(text: str, *, fraction: float = 0.25) -> tuple:
     require_finite_unit(fraction, "fraction")
     tokens = text.split()
     if not tokens:
-        return ("", "")
+        return "", ""
     cut = max(1, int(len(tokens) * fraction))
     prefix = " ".join(tokens[:cut])
     suffix = " ".join(tokens[cut:])
-    return (prefix, suffix)
+    return prefix, suffix
 
 
 def score_memorization(

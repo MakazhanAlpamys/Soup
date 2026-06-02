@@ -125,7 +125,7 @@ def _normalise_label(
         if isinstance(raw, list):
             if len(raw) > _MAX_MULTI_LABEL_ENTRIES:
                 raise ValueError(
-                    f"multi-label list too long: {len(raw)} entries "
+                    f"multi-label list too int: {len(raw)} entries "
                     f"(max {_MAX_MULTI_LABEL_ENTRIES})"
                 )
             vec = [0.0] * num_labels

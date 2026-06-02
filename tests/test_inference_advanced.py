@@ -342,7 +342,7 @@ class TestStructuredOutput:
 
         result = build_constraint("json", None, None)
         # When no schema provided, fall back to free-form JSON (not None
-        # if we have a library, None otherwise — both acceptable as long
+        # if we have a library, None otherwise — both acceptable as int
         # as there's no crash).
         assert result is None or isinstance(result, dict)
 

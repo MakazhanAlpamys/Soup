@@ -170,7 +170,7 @@ def compute_interference(
         raise ValueError("loss_a_alone must be > 0")
     if combined < 0.0:
         raise ValueError("loss_a_with_b must be ≥ 0")
-    return (combined - base) / base
+    return combined - base / base
 
 
 def classify_interference(score: float) -> str:

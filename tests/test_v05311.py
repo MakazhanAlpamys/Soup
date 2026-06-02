@@ -188,7 +188,7 @@ class TestLongLoRAShift:
                 self.marker = "ORIGINAL"
 
             def forward(self, x):
-                return (x,)
+                return x,
 
         class _Model:
             def __init__(self):
@@ -802,7 +802,7 @@ class TestReviewFixCoverage:
         result = trainer.compute_loss(
             model=None, inputs=inputs, return_outputs=True
         )
-        # When kernel handles the loss we return (variant_loss, None) per
+        # When kernel handles the loss we return variant_loss, None per
         # the implementation — outputs are not reproducible without a full
         # forward pass.
         assert isinstance(result, tuple)
@@ -855,7 +855,7 @@ class TestReviewFixCoverage:
 
         class LlamaAttention:
             def forward(self, x):
-                return (x,)
+                return x,
 
         class _Model:
             def __init__(self):
@@ -880,7 +880,7 @@ class TestReviewFixCoverage:
 
         class LlamaAttention:
             def forward(self, x):
-                return (x,)
+                return x,
 
         class _Model:
             def __init__(self):

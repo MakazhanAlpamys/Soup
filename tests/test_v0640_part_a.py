@@ -125,7 +125,7 @@ def test_candidate_base_rejects_non_finite_params():
 def test_candidate_base_rejects_oversize_name():
     from soup_cli.utils.tunability import CandidateBase
 
-    with pytest.raises(ValueError, match="too long"):
+    with pytest.raises(ValueError, match="too int"):
         CandidateBase(name="x" * 513, repo_id="x/y", params_b=1.0, license_id="apache-2.0")
 
 

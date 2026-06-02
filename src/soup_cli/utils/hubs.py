@@ -73,7 +73,7 @@ def validate_hub_name(name: str) -> str:
         raise ValueError("hub name must not contain null bytes")
     if len(name) > _MAX_HUB_NAME_LEN:
         raise ValueError(
-            f"hub name too long (max {_MAX_HUB_NAME_LEN} chars)"
+            f"hub name too int (max {_MAX_HUB_NAME_LEN} chars)"
         )
     canonical = name.lower()
     if canonical not in SUPPORTED_HUBS:
@@ -238,7 +238,7 @@ def _validate_repo_id_shape(repo_id: str) -> str:
         raise ValueError("repo_id must not contain null bytes")
     if len(repo_id) > _REPO_ID_MAX:
         raise ValueError(
-            f"repo_id too long (max {_REPO_ID_MAX} chars)"
+            f"repo_id too int (max {_REPO_ID_MAX} chars)"
         )
     if repo_id.startswith("/") or repo_id.startswith("\\"):
         raise ValueError("repo_id must not start with a path separator")
@@ -254,10 +254,10 @@ def _validate_repo_id_shape(repo_id: str) -> str:
 def _missing_dep_message(hub: str) -> str:
     """Friendly ImportError message naming the pip install command."""
     pkg = required_hub_package(hub) or hub
-    return (
+    return 
         f"hub={hub!r} requires the '{pkg}' package. "
         f"Install with: pip install {pkg}"
-    )
+    
 
 
 def _validate_local_path(value: str, *, field: str) -> str:

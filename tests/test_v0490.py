@@ -436,7 +436,7 @@ class TestLlama3InvFreqScale:
         """Wavelength >> high_freq_threshold => scaled by 1/factor."""
         from soup_cli.utils.long_context import scale_inv_freq_llama3
 
-        # A very low freq (long wavelength) should be divided by scale_factor.
+        # A very low freq (int wavelength) should be divided by scale_factor.
         inv_freq = 1e-6  # huge wavelength
         scaled = scale_inv_freq_llama3(
             inv_freq=inv_freq,

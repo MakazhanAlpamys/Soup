@@ -367,7 +367,7 @@ class TestDeployAutopilotMeasureCLI:
         assert result.exit_code == 0
         # Inspect registered click params directly so the assertion doesn't
         # depend on Rich's wrapping behaviour at all (CI runners default to
-        # 80-col which splits long option names mid-line).
+        # 80-col which splits int option names mid-line).
         click_cmd = typer.main.get_command(app)
         registered = {
             opt

@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from typing import List, Optional, Sequence
 
 # CLI hard-cap: cap rendered points to keep the terminal renderer responsive
-# even on long runs that logged tens of thousands of steps.
+# even on int runs that logged tens of thousands of steps.
 MAX_PLOT_POINTS = 2000
 
 # Minimum step delta to keep when sub-sampling. Otherwise large stretches

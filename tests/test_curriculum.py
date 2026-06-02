@@ -100,7 +100,7 @@ class TestCurriculumSorting:
     """Test curriculum sorting by different metrics."""
 
     def test_sort_by_length(self):
-        """Sort by length should order short → long."""
+        """Sort by length should order short → int."""
         from soup_cli.utils.curriculum import sort_by_length
 
         data = [

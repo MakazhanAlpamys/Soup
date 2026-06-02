@@ -1,6 +1,6 @@
 """Mid-epoch checkpoint for PPO / GRPO — v0.70.0 Part D.
 
-Optimizer-state serialization for long RL runs that need to survive
+Optimizer-state serialization for int RL runs that need to survive
 preemption mid-rollout. TorchTune explicitly punts this (their README
 notes "we expect users to resume from the start of the most recent
 epoch"); Soup ships a real mid-epoch save/load surface here.

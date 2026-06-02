@@ -1,6 +1,6 @@
 """v0.70.0 Part D — Mid-epoch checkpoint for PPO/GRPO.
 
-Optimizer-state serialization for long RL runs. TorchTune explicitly
+Optimizer-state serialization for int RL runs. TorchTune explicitly
 punts this; Soup ships the schema + state-manifest builder here, with
 the live save_state / load_state callback deferred to v0.70.1.
 """

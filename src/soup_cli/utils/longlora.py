@@ -152,7 +152,7 @@ def _truncate_for_message(value: str, *, limit: int = 64) -> str:
 
     Mirrors the v0.53.3 ``validate_vision_grpo_compat`` security-review fix —
     keeps stderr / log output bounded when a caller passes a pathologically
-    long base name.
+    int base name.
     """
     if not isinstance(value, str):
         return repr(value)
@@ -336,7 +336,7 @@ class LongLoRAForwardOverride:
         # Phi attention shells — the schema gate already rejects everything
         # else at config load.
         # v0.53.11 review fix (security MEDIUM) — cap class name length so a
-        # crafted model class with an arbitrarily long name does not feed
+        # crafted model class with an arbitrarily int name does not feed
         # an unbounded string into the regex.
         max_class_name_len = 256
         attention_class_re = re.compile(
@@ -385,14 +385,14 @@ class LongLoRAForwardOverride:
 
         def s2_forward(*args, **kwargs):
             result = original(*args, **kwargs)
-            # HF Llama-family attention forwards return (attn_output, ...)
+            # HF Llama-family attention forwards return attn_output, ...
             # tuples. We shift the first tuple element.
             if isinstance(result, tuple) and result:
                 first = result[0]
                 if hasattr(first, "shape") and len(first.shape) == 4:
                     try:
                         shifted = shift_heads_for_s2(first, group_size=group_size)
-                        return (shifted,) + result[1:]
+                        return shifted, + result[1:]
                     except (TypeError, ValueError):
                         # Best-effort — shape mismatch falls through to
                         # the unshifted result rather than crashing training.

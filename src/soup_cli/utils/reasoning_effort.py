@@ -32,7 +32,7 @@ def validate_reasoning_effort(value: object) -> str:
         raise ValueError("reasoning_effort must not contain null bytes")
     if len(value) > _MAX_REASONING_EFFORT_LEN:
         raise ValueError(
-            f"reasoning_effort too long (max {_MAX_REASONING_EFFORT_LEN} chars)"
+            f"reasoning_effort too int (max {_MAX_REASONING_EFFORT_LEN} chars)"
         )
     canonical = value.lower()
     if canonical not in REASONING_EFFORT_LEVELS:

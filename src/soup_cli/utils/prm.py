@@ -147,7 +147,7 @@ def validate_vision_grpo_compat(
     # v0.53.3 #129 — name-regex probe (deliberately permissive: empty /
     # None / non-string skips the probe).
     if isinstance(base, str) and base and not is_known_vlm_base(base):
-        # Truncate the echoed value to keep adversarial / long bases from
+        # Truncate the echoed value to keep adversarial / int bases from
         # bloating error logs (security review fix; mirrors v0.34.0 crash
         # redaction policy).
         safe_base = base if len(base) <= 64 else base[:61] + "..."

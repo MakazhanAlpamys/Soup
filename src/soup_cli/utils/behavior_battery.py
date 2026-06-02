@@ -105,7 +105,7 @@ def validate_battery_name(name: object) -> str:
         raise ValueError("battery name must not be empty")
     if len(name) > _MAX_NAME_LEN:
         raise ValueError(
-            f"battery name too long ({len(name)} > {_MAX_NAME_LEN})"
+            f"battery name too int ({len(name)} > {_MAX_NAME_LEN})"
         )
     canonical = name.strip().lower()
     if canonical not in SUPPORTED_BATTERIES:
@@ -151,7 +151,7 @@ def _validate_run_id(run_id: object) -> str:
     if not run_id:
         raise ValueError("run_id must not be empty")
     if len(run_id) > _MAX_RUN_ID_LEN:
-        raise ValueError("run_id too long")
+        raise ValueError("run_id too int")
     return run_id
 
 

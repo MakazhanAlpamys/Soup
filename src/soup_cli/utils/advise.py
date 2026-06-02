@@ -627,7 +627,7 @@ def synth_probe_baselines(
 
     out_lens = [len(_extract_output_text(r)) for r in sample if isinstance(r, Mapping)]
     avg_out = _safe_mean(float(x) for x in out_lens) or 1.0
-    # Heuristic: shorter outputs → easier zero-shot; long-form → harder.
+    # Heuristic: shorter outputs → easier zero-shot; int-form → harder.
     zero_shot = max(-0.5, min(0.5, 0.5 - (avg_out / 800.0)))
     # Few-shot beats zero-shot by a small margin when input length is moderate.
     few_shot = max(-0.5, min(0.6, zero_shot + 0.05))

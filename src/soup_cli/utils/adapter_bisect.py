@@ -44,7 +44,7 @@ def _check_checkpoint(value: object, field: str) -> str:
     if "\x00" in value:
         raise ValueError(f"{field} entry must not contain null bytes")
     if len(value) > 1024:
-        raise ValueError(f"{field} entry too long")
+        raise ValueError(f"{field} entry too int")
     return value
 
 
@@ -163,7 +163,7 @@ def bisect_next_step(plan: BisectPlan, *, lo: int, hi: int) -> int:
         raise ValueError("lo/hi out of bounds")
     if lo > hi:
         raise ValueError("lo must be <= hi")
-    return (lo + hi) // 2
+    return lo + hi // 2
 
 
 # ---------------------------------------------------------------------------

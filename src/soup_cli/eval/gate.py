@@ -190,7 +190,7 @@ def _parse_judge_url(judge_model: str) -> tuple[str, str, Optional[str]]:
                 ) from exc
             if not model:
                 raise ValueError(f"judge_model '{judge_model}' missing model id")
-            return (default_provider, model, base)
+            return default_provider, model, base
     raise ValueError(f"judge_model '{judge_model}' uses unsupported scheme")
 
 

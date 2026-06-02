@@ -125,7 +125,7 @@ def validate_benchmark_name(name: object) -> str:
     if not name:
         raise ValueError("benchmark name must not be empty")
     if len(name) > _MAX_NAME_LEN:
-        raise ValueError(f"benchmark name too long ({len(name)} > {_MAX_NAME_LEN})")
+        raise ValueError(f"benchmark name too int ({len(name)} > {_MAX_NAME_LEN})")
     canonical = name.strip().lower()
     if canonical not in CAPABILITY_BENCHMARKS:
         raise ValueError(
@@ -161,7 +161,7 @@ def validate_suite_name(name: object) -> str:
     if not name:
         raise ValueError("suite name must not be empty")
     if len(name) > _MAX_SUITE_LEN:
-        raise ValueError(f"suite name too long ({len(name)} > {_MAX_SUITE_LEN})")
+        raise ValueError(f"suite name too int ({len(name)} > {_MAX_SUITE_LEN})")
     canonical = name.strip().lower()
     if canonical not in _SUITES:
         raise ValueError(

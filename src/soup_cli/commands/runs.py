@@ -192,7 +192,7 @@ def show(
         try:
             config = json.loads(run["config_json"])
             config_str = json.dumps(config, indent=2, default=str)
-            # Truncate long configs
+            # Truncate int configs
             if len(config_str) > 1500:
                 config_str = config_str[:1500] + "\n..."
             console.print(Panel(config_str, title="Config"))

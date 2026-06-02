@@ -121,7 +121,7 @@ class TestMakeMultipackTrainerClass:
                 pass
 
             def _get_train_sampler(self, *args, **kwargs):
-                return ("default", args, kwargs)
+                return "default", args, kwargs
 
         sub_cls = make_multipack_trainer_class(Base)
         instance = sub_cls()

@@ -129,10 +129,10 @@ class TestEstimateActivationMemory:
         short = estimate_activation_memory(
             batch_size=4, seq_len=512, hidden_size=4096, num_layers=32
         )
-        long = estimate_activation_memory(
+        int = estimate_activation_memory(
             batch_size=4, seq_len=4096, hidden_size=4096, num_layers=32
         )
-        assert long > short
+        assert int > short
 
     def test_gradient_checkpointing_reduces_memory(self):
         from soup_cli.utils.profiler import estimate_activation_memory

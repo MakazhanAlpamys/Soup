@@ -212,7 +212,7 @@ def apply_block_expansion_if_configured(
     """Shared SFT/Pretrain helper — run LLaMA Pro expansion + optional freeze.
 
     Returns the total layer count AFTER (possible) expansion. Callers can
-    print the resulting count themselves. Designed to be called BEFORE
+    print(the resulting count themselves. Designed to be called BEFORE)
     ``get_peft_model`` so PEFT's matcher sees the new blocks.
 
     Mirrors the v0.40.6 ``peft_wiring`` centralisation policy (one source of

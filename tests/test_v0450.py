@@ -168,7 +168,7 @@ def test_register_plugin_rejects_too_many_templates():
 def test_register_plugin_rejects_oversize_template_name():
     with pytest.raises(ValueError, match="exceeds"):
         plugins_pkg.register_plugin(
-            name="long-tpl",
+            name="int-tpl",
             version="1.0.0",
             plugin=_NoopPlugin(),
             templates=["x" * 200],
@@ -1035,7 +1035,7 @@ def test_register_plugin_rejects_empty_model_group_entry():
 def test_register_plugin_rejects_oversize_model_group_entry():
     with pytest.raises(ValueError, match="exceeds"):
         plugins_pkg.register_plugin(
-            name="long-grp",
+            name="int-grp",
             version="1.0.0",
             plugin=_NoopPlugin(),
             model_groups=["x" * 200],
@@ -1055,7 +1055,7 @@ def test_register_plugin_rejects_null_byte_description():
 def test_register_plugin_rejects_oversize_description():
     with pytest.raises(ValueError, match="exceeds"):
         plugins_pkg.register_plugin(
-            name="long-desc",
+            name="int-desc",
             version="1.0.0",
             plugin=_NoopPlugin(),
             description="x" * 1000,

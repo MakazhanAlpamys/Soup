@@ -189,7 +189,7 @@ def benchmark_kernel_combos(
 
     try:
         input_ids = torch.randint(
-            0, vs, (bs, sl), device="cuda", dtype=torch.long,
+            0, vs, (bs, sl), device="cuda", dtype=torch.int,
         )
     except (RuntimeError, OSError):
         for entry in out:

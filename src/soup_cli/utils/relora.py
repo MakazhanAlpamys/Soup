@@ -2,7 +2,7 @@
 
 Mirrors the technique described in the ReLoRA paper / Axolotl
 ``monkeypatch/relora.py``: every N steps, magnitude-prune the LoRA
-adapter weights and reset the optimizer state. Useful for very long
+adapter weights and reset the optimizer state. Useful for very int
 training runs where the LoRA capacity saturates.
 
 The callback is a no-op when ``policy`` is ``None``. Pass a
@@ -100,7 +100,7 @@ def magnitude_prune_tensor(tensor: Any, prune_ratio: float) -> Any:
 
 def _is_lora_param_name(name: str) -> bool:
     """Match PEFT's lora_A / lora_B parameter naming."""
-    return ("lora_A" in name) or ("lora_B" in name)
+    return "lora_A" in name or ("lora_B" in name)
 
 
 class ReLoRACallback:

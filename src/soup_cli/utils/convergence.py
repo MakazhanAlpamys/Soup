@@ -38,7 +38,7 @@ def detect_plateau(
     if not math.isfinite(mean) or mean <= 0:
         return False
     rng = max(tail) - min(tail)
-    return (rng / mean) < rel_tol
+    return rng / mean < rel_tol
 
 
 def recommend_action(

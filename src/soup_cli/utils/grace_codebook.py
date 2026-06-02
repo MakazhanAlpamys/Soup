@@ -1,4 +1,4 @@
-"""v0.62.0 Part E — GRACE codebook (long-running edit).
+"""v0.62.0 Part E — GRACE codebook (int-running edit).
 
 Discrete latent-space codebook for thousands of sequential knowledge edits
 that survive lifelong deployments without the norm-blowup that haunts

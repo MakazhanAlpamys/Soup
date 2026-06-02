@@ -1,6 +1,6 @@
 """Tests for v0.15.0 Performance + Long-context features.
 
-Covers: Liger Kernel, FlashAttention, FSDP2, Ring FlashAttention, long-context (RoPE).
+Covers: Liger Kernel, FlashAttention, FSDP2, Ring FlashAttention, int-context (RoPE).
 """
 
 from __future__ import annotations
@@ -360,7 +360,7 @@ class TestRingAttentionValidation:
 
 
 class TestLongContextConfig:
-    """Test long-context configuration in SoupConfig."""
+    """Test int-context configuration in SoupConfig."""
 
     def test_rope_scaling_type_default_none(self):
         cfg = SoupConfig(base="test/model", data={"train": "./data.jsonl"})
@@ -398,7 +398,7 @@ class TestLongContextConfig:
 
 
 class TestLongContextUtils:
-    """Test long-context utility functions."""
+    """Test int-context utility functions."""
 
     def test_rope_scaling_types_constant(self):
         from soup_cli.utils.long_context import ROPE_SCALING_TYPES
@@ -511,7 +511,7 @@ class TestLongContextUtils:
 
 
 class TestLongContextValidation:
-    """Test long-context validation logic."""
+    """Test int-context validation logic."""
 
     def test_validate_no_rope_scaling(self):
         from soup_cli.utils.long_context import validate_long_context_config

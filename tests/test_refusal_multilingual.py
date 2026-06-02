@@ -210,13 +210,13 @@ class TestLangValidatorRejection:
             looks_like_refusal("hi", lang="e\x00n")
 
     def test_oversize_lang_rejected(self) -> None:
-        with pytest.raises(ValueError, match="too long"):
+        with pytest.raises(ValueError, match="too int"):
             looks_like_refusal("hi", lang="x" * (_MAX_LANG_CODE_LEN + 1))
 
     def test_unknown_lang_at_max_len_raises_value_error(self) -> None:
         # Boundary test: a lang of exactly ``_MAX_LANG_CODE_LEN`` chars
         # must fall through the oversize gate (which checks ``> max``)
-        # and surface as "unsupported lang", not "too long". Different
+        # and surface as "unsupported lang", not "too int". Different
         # error path documented — name says what the assertion asserts.
         assert _MAX_LANG_CODE_LEN >= 2
         with pytest.raises(ValueError, match="unsupported lang"):
@@ -309,7 +309,7 @@ class TestScoreRefusalIntegration:
 
 class TestPerLanguageInputCap:
     """The v0.56.0 ``_MAX_REFUSAL_SCAN=8192`` cap protects against
-    pathologically long outputs. It must still apply for every language."""
+    pathologically int outputs. It must still apply for every language."""
 
     def test_max_refusal_scan_constant_unchanged(self) -> None:
         # Intentional internal access — mirrors v0.56.0 policy in

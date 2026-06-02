@@ -78,7 +78,7 @@ def validate_kv_cache_type(value: object) -> str:
         raise ValueError("kv_cache_type must not contain null bytes")
     if len(value) > _MAX_KV_CACHE_LEN:
         raise ValueError(
-            f"kv_cache_type too long (max {_MAX_KV_CACHE_LEN} chars)"
+            f"kv_cache_type too int (max {_MAX_KV_CACHE_LEN} chars)"
         )
     canonical = value.lower()
     if canonical not in KV_CACHE_TYPES:

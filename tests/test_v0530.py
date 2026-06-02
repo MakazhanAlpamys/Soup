@@ -926,7 +926,7 @@ class TestReviewFollowups:
         ok = "a" * 4096
         assert validate_calibration_data_path(ok) == ok
         # 4097 chars — rejected
-        with pytest.raises(ValueError, match="too long"):
+        with pytest.raises(ValueError, match="too int"):
             validate_calibration_data_path("a" * 4097)
 
     def test_lower_index_immutable(self):
@@ -1017,7 +1017,7 @@ class TestReviewFollowups:
 
         ok = "a" * 4096
         assert validate_quant_config_path(ok) == ok
-        with pytest.raises(ValueError, match="too long"):
+        with pytest.raises(ValueError, match="too int"):
             validate_quant_config_path("a" * 4097)
 
     def test_merge_save_format_normalises_to_lowercase(self):

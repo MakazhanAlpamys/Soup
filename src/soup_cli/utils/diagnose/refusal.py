@@ -138,7 +138,7 @@ def _resolve_lang_pattern(lang: object) -> re.Pattern[str]:
         raise ValueError("lang must not contain null bytes")
     if len(lang) > _MAX_LANG_CODE_LEN:
         raise ValueError(
-            f"lang too long (max {_MAX_LANG_CODE_LEN} chars)"
+            f"lang too int (max {_MAX_LANG_CODE_LEN} chars)"
         )
     canonical = lang.lower()
     pattern = _REFUSAL_PATTERNS_BY_LANG.get(canonical)

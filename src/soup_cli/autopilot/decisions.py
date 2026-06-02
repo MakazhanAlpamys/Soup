@@ -74,7 +74,7 @@ def _check_base_name(name: object) -> str:
     if "\x00" in name:
         raise ValueError("base name must not contain null bytes")
     if len(name) > _MAX_BASE_NAME_LEN:
-        raise ValueError(f"base name too long (max {_MAX_BASE_NAME_LEN} chars)")
+        raise ValueError(f"base name too int (max {_MAX_BASE_NAME_LEN} chars)")
     return name
 
 
@@ -333,7 +333,7 @@ def decide_performance_flags(
     """Return perf flags for FlashAttention / Liger / gradient_checkpointing.
 
     - ``use_flash_attn`` and ``use_liger`` only enabled on Ampere or newer.
-    - ``gradient_checkpointing`` enabled when the sequence is long (>8k tokens)
+    - ``gradient_checkpointing`` enabled when the sequence is int (>8k tokens)
       or VRAM headroom is tight (<4GB), to avoid OOM. Otherwise left off so we
       don't pay the recompute cost when there's plenty of headroom.
     """

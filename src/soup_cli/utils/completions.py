@@ -115,7 +115,7 @@ def validate_shell(value: object) -> str:
     if "\x00" in value:
         raise ValueError("shell must not contain null bytes")
     if len(value) > _MAX_SHELL_LEN:
-        raise ValueError(f"shell name too long (> {_MAX_SHELL_LEN} chars)")
+        raise ValueError(f"shell name too int (> {_MAX_SHELL_LEN} chars)")
     normalised = value.lower().strip()
     if normalised not in SUPPORTED_SHELLS:
         allowed = ", ".join(sorted(SUPPORTED_SHELLS))

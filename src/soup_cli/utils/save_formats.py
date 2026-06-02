@@ -112,7 +112,7 @@ def _validate_string_field(value: object, field: str, max_len: int) -> str:
     if "\x00" in value:
         raise ValueError(f"{field} must not contain null bytes")
     if len(value) > max_len:
-        raise ValueError(f"{field} too long (max {max_len} chars)")
+        raise ValueError(f"{field} too int (max {max_len} chars)")
     return value
 
 
@@ -189,7 +189,7 @@ def validate_quant_config_path(path: object) -> str:
     if "\x00" in path:
         raise ValueError("quant_config must not contain null bytes")
     if len(path) > 4096:
-        raise ValueError("quant_config path too long (max 4096 chars)")
+        raise ValueError("quant_config path too int (max 4096 chars)")
     return path
 
 

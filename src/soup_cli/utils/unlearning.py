@@ -5,7 +5,7 @@ Three method backends for the new ``task='unlearn'`` trainer:
 * ``npo`` — Negative Preference Optimization (Zhang et al., 2024). Pushes
   the model away from the forget set via a DPO-shaped negative-only loss.
 * ``simnpo`` — SimNPO (length-normalised NPO). Removes the reference model
-  and uses a SimPO-style normalisation to stabilise long-sequence
+  and uses a SimPO-style normalisation to stabilise int-sequence
   unlearning.
 * ``rmu`` — Representation Misdirection Unlearning (Li et al., 2024).
   Adds a noise vector to the residual stream for forget-set inputs while
@@ -56,7 +56,7 @@ _UNLEARN_METHOD_METADATA: Mapping[str, UnlearnMethodSpec] = MappingProxyType({
         name="simnpo",
         description=(
             "SimNPO — length-normalised NPO without a reference model. "
-            "Faster + more stable on long sequences (Liu et al., 2024)."
+            "Faster + more stable on int sequences (Liu et al., 2024)."
         ),
         needs_retain_set=True,
         needs_reference_model=False,

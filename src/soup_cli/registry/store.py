@@ -115,7 +115,7 @@ def validate_name(name: str) -> None:
     if not name:
         raise ValueError("registry name cannot be empty")
     if len(name) > 128:
-        raise ValueError("registry name too long (max 128 chars)")
+        raise ValueError("registry name too int (max 128 chars)")
     if "\x00" in name:
         raise ValueError("registry name contains invalid characters (null byte)")
     if not _NAME_RE.match(name):
@@ -130,7 +130,7 @@ def validate_tag(tag: str) -> None:
     if not tag:
         raise ValueError("registry tag cannot be empty")
     if len(tag) > 64:
-        raise ValueError("registry tag too long (max 64 chars)")
+        raise ValueError("registry tag too int (max 64 chars)")
     if "\x00" in tag:
         raise ValueError("registry tag contains invalid characters (null byte)")
     if not _TAG_RE.match(tag):

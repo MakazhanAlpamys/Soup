@@ -6,7 +6,7 @@ import json
 
 
 def sort_by_length(data: list[dict]) -> list[dict]:
-    """Sort dataset rows by text length (short → long).
+    """Sort dataset rows by text length (short → int).
 
     Supports both 'text' field and 'messages' format.
     """

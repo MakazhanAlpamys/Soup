@@ -87,7 +87,7 @@ def validate_divergence(name: object) -> str:
         raise ValueError("distill_divergence must not contain null bytes")
     if len(name) > _MAX_DIVERGENCE_LEN:
         raise ValueError(
-            f"distill_divergence too long (max {_MAX_DIVERGENCE_LEN} chars)"
+            f"distill_divergence too int (max {_MAX_DIVERGENCE_LEN} chars)"
         )
     canonical = name.lower()
     if canonical not in _DIVERGENCE_ALIASES:
@@ -151,7 +151,7 @@ def validate_teacher_model(value: object) -> str:
         raise ValueError("teacher_model must not contain null bytes")
     if len(value) > _MAX_TEACHER_LEN:
         raise ValueError(
-            f"teacher_model too long (max {_MAX_TEACHER_LEN} chars)"
+            f"teacher_model too int (max {_MAX_TEACHER_LEN} chars)"
         )
     return value
 

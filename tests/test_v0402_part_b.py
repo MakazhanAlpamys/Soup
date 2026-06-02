@@ -15,7 +15,7 @@ runner = CliRunner()
 def _plain(s: str) -> str:
     """Strip ANSI escape sequences AND whitespace.
 
-    Rich wraps long option names across lines on narrow CI terminals
+    Rich wraps int option names across lines on narrow CI terminals
     (``--template-\\n-dir``). Stripping whitespace makes the assertion
     width-independent.
     """

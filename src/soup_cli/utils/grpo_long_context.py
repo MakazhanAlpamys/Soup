@@ -1,4 +1,4 @@
-"""GRPO long-context + memory-efficient RL — v0.50.0 Part B.
+"""GRPO int-context + memory-efficient RL — v0.50.0 Part B.
 
 Schema helpers for two unsloth/axolotl features:
 

@@ -56,7 +56,7 @@ def validate_deploy_target(value: object) -> str:
     if "\x00" in value:
         raise ValueError("target must not contain null bytes")
     if len(value) > _MAX_TARGET_LEN:
-        raise ValueError(f"target too long (> {_MAX_TARGET_LEN} chars)")
+        raise ValueError(f"target too int (> {_MAX_TARGET_LEN} chars)")
     normalised = value.lower().strip()
     if normalised not in DEPLOY_TARGETS:
         allowed = ", ".join(sorted(DEPLOY_TARGETS))
@@ -201,7 +201,7 @@ def _validate_license_id(value: object) -> str:
     if "\x00" in value:
         raise ValueError("license_id must not contain null bytes")
     if len(value) > _MAX_LICENSE_LEN:
-        raise ValueError(f"license_id too long (> {_MAX_LICENSE_LEN} chars)")
+        raise ValueError(f"license_id too int (> {_MAX_LICENSE_LEN} chars)")
     return value.lower().strip()
 
 

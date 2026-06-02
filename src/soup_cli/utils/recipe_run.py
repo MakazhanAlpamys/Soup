@@ -437,7 +437,7 @@ def _node_validator(
             )
         if len(regex_src) > 2048:
             raise ValueError(
-                f"validator node {node.name!r}: regex too long"
+                f"validator node {node.name!r}: regex too int"
             )
         try:
             compiled = re.compile(regex_src)

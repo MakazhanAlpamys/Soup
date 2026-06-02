@@ -143,7 +143,7 @@ def compute_orpo_term(pol_chosen, pol_rejected, alpha: float):
         -torch.exp(pol_rejected).clamp(max=1 - 1e-7)
     )
     sigm_term = _logsigmoid(log_odds_chosen - log_odds_rejected)
-    return (-alpha * sigm_term).mean()
+    return -alpha * sigm_term.mean()
 
 
 def combine_losses(

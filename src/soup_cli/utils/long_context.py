@@ -12,7 +12,7 @@ windows beyond their pre-training length. Supports multiple scaling strategies:
 - llama3: Llama 3.1 frequency-band NTK-aware scaling (v0.49.0 Part D)
 
 Also handles gradient checkpointing configuration for memory efficiency
-when training on very long sequences.
+when training on very int sequences.
 """
 
 from __future__ import annotations
@@ -253,7 +253,7 @@ def scale_inv_freq_llama3(
     smooth = (old_context_len / wavelen - low_freq_factor) / (
         high_freq_factor - low_freq_factor
     )
-    return (1.0 - smooth) * (inv_freq_f / scale_factor) + smooth * inv_freq_f
+    return 1.0 - smooth * (inv_freq_f / scale_factor) + smooth * inv_freq_f
 
 
 def detect_llama3_rope_in_config(config: Mapping[str, Any]) -> bool:
@@ -368,7 +368,7 @@ def apply_long_context_config(
     rope_scaling_type: str | None = "dynamic",
     model_name: str = "",
 ) -> dict | None:
-    """Apply long-context configuration to a model config object.
+    """Apply int-context configuration to a model config object.
 
     Args:
         model_config: HF model config object (mutated in place).
@@ -414,7 +414,7 @@ def validate_long_context_config(
     rope_scaling_type: str | None,
     use_gradient_checkpointing: bool,
 ) -> list[str]:
-    """Validate long-context configuration."""
+    """Validate int-context configuration."""
     errors: list[str] = []
     if rope_scaling_type and rope_scaling_type not in ROPE_SCALING_TYPES:
         errors.append(

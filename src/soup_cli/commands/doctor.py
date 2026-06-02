@@ -295,11 +295,11 @@ def _detect_dual_python_interpreters() -> str:
             return ""
     except OSError:
         return ""
-    return (
+    return 
         f"`soup` runs under {soup_python}; `python` on your PATH is "
         f"{path_python}. site-packages may differ — for any `python -c` "
         f"check use the soup interpreter explicitly."
-    )
+    
 
 
 _GB = 1024**3

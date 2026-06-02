@@ -368,7 +368,7 @@ class TestGenerate:
         assert "top_p" in call_kwargs
 
     def test_generate_returns_tuple(self):
-        """_generate should return (text, token_count) tuple."""
+        """_generate should return text, token_count tuple."""
         from soup_cli.commands.infer import _generate
 
         model, tokenizer = self._make_mock_model_and_tokenizer()

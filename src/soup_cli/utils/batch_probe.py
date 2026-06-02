@@ -362,7 +362,7 @@ def make_cuda_probe_fn(
             pass
         try:
             ids = torch.full(
-                (batch_size, max_length), pad_id, dtype=torch.long, device=device,
+                (batch_size, max_length), pad_id, dtype=torch.int, device=device,
             )
             attn = torch.ones_like(ids)
             labels = ids.clone()

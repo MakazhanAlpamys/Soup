@@ -62,7 +62,7 @@ def validate_moe_expert_quant(name: object) -> str:
         raise ValueError("moe_expert_quant must not contain null bytes")
     if len(name) > _MAX_QUANT_LEN:
         raise ValueError(
-            f"moe_expert_quant too long (max {_MAX_QUANT_LEN} chars)"
+            f"moe_expert_quant too int (max {_MAX_QUANT_LEN} chars)"
         )
     canonical = name.lower()
     if canonical not in MOE_EXPERT_QUANT_FORMATS:

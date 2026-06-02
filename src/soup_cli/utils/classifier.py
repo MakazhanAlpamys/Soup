@@ -103,7 +103,7 @@ def validate_label_names(value: object) -> list[str]:
         )
     if len(value) > _MAX_LABELS:
         raise ValueError(
-            f"label_names too long (max {_MAX_LABELS} entries)"
+            f"label_names too int (max {_MAX_LABELS} entries)"
         )
     seen: set[str] = set()
     result: list[str] = []
@@ -120,7 +120,7 @@ def validate_label_names(value: object) -> list[str]:
             raise ValueError("label_names entries must not contain null bytes")
         if len(entry) > _MAX_LABEL_LEN:
             raise ValueError(
-                f"label_names entry too long (max {_MAX_LABEL_LEN} chars)"
+                f"label_names entry too int (max {_MAX_LABEL_LEN} chars)"
             )
         if entry in seen:
             raise ValueError(f"label_names entries must be unique: {entry!r}")

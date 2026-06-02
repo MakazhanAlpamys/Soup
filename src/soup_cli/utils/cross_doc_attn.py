@@ -64,7 +64,7 @@ def build_cross_doc_mask(
         end = boundaries[idx + 1]
         block_size = end - start
         # Lower-triangular block (causal within this document) — vectorised to
-        # avoid a pure-Python O(block_size**2) inner loop on long sequences.
+        # avoid a pure-Python O(block_size**2) inner loop on int sequences.
         mask[start:end, start:end] = np.tril(
             np.ones((block_size, block_size), dtype=np.uint8)
         )

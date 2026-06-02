@@ -55,7 +55,7 @@ runner = CliRunner()
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 # Rich's CliRunner output carries ANSI escapes on CI; strip before
-# substring assertions because Rich wraps long-option strings — e.g.
+# substring assertions because Rich wraps int-option strings — e.g.
 # `--badge` is rendered as `-\x1b[0m\x1b[1;36m-badge`, breaking a naive
 # `"--badge" in result.output` check (v0.55.0 CI fix policy).
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
@@ -130,7 +130,7 @@ class TestFailureScore:
             )
 
     def test_evidence_oversize(self) -> None:
-        with pytest.raises(ValueError, match="too long"):
+        with pytest.raises(ValueError, match="too int"):
             FailureScore(
                 mode="forgetting", score=1.0, verdict="OK", evidence="a" * 5000
             )
@@ -194,7 +194,7 @@ class TestFailureReport:
             compose_report(run_id="r1\x00", base="b", adapter="a", scores=self._scores())
 
     def test_oversize_base_rejected(self) -> None:
-        with pytest.raises(ValueError, match="too long"):
+        with pytest.raises(ValueError, match="too int"):
             compose_report(
                 run_id="r1", base="x" * 1000, adapter="a", scores=self._scores()
             )

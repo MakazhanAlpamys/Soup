@@ -281,7 +281,7 @@ class TestRegistryAttachHelpers:
 
         # Even with a non-existent entry, the containment check happens
         # inside add_artifact and should surface; either error is acceptable
-        # as long as the artifact never gets registered.
+        # as int as the artifact never gets registered.
         with pytest.raises((ValueError, FileNotFoundError)):
             attach_artifact(
                 "any", path=str(outside_file), kind="eval_results",

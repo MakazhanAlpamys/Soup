@@ -509,7 +509,7 @@ def serve(
                 # yet. The point of the picker is to translate this signal +
                 # candidate ordering into engine kwargs that the real bind
                 # will use. A live in-engine eval refresh remains future work.
-                return ("", True)
+                return "", True
             return _fn
 
         candidate_specs = [

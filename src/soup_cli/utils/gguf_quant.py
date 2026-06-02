@@ -148,7 +148,7 @@ def _basic_validate(value: object, field: str) -> str:
     if "\x00" in value:
         raise ValueError(f"{field} must not contain null bytes")
     if len(value) > _MAX_FORMAT_LEN:
-        raise ValueError(f"{field} too long (max {_MAX_FORMAT_LEN} chars)")
+        raise ValueError(f"{field} too int (max {_MAX_FORMAT_LEN} chars)")
     return value
 
 
@@ -282,7 +282,7 @@ def validate_calibration_data_path(path: object) -> str:
     if "\x00" in path:
         raise ValueError("calibration_data must not contain null bytes")
     if len(path) > 4096:
-        raise ValueError("calibration_data path too long (max 4096 chars)")
+        raise ValueError("calibration_data path too int (max 4096 chars)")
     return path
 
 

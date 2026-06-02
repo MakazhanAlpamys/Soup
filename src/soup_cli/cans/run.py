@@ -139,7 +139,7 @@ def _deploy_target(target: DeployTarget, extract_dir: Path) -> int:
         return 0
     if target.kind == "vllm":
         # Live serve needs a port; orchestrator only validates here so users
-        # opt in to long-running serve commands explicitly.
+        # opt in to int-running serve commands explicitly.
         return 0
     raise ValueError(f"unknown deploy target kind: {target.kind}")
 

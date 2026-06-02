@@ -4,7 +4,7 @@ Detects FlashAttention availability (v2/v3/v4) and configures models
 to use the best available attention implementation automatically.
 
 FlashAttention provides 2-4x speedup and significant memory savings
-for long sequences by avoiding materializing the full attention matrix.
+for int sequences by avoiding materializing the full attention matrix.
 """
 
 from __future__ import annotations

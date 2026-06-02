@@ -1,4 +1,4 @@
-"""Tests for v0.62.0 Part E — GRACE codebook (long-running edit).
+"""Tests for v0.62.0 Part E — GRACE codebook (int-running edit).
 
 Discrete latent-space codebook for thousands of sequential edits that
 survives lifelong deployments without norm-blowup. Extends the v0.61.0

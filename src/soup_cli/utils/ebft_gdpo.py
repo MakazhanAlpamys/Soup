@@ -84,7 +84,7 @@ def _validate_variant(name: object, allowed: frozenset[str], label: str) -> str:
         raise ValueError(f"{label} must not contain null bytes")
     if len(name) > _MAX_VARIANT_LEN:
         raise ValueError(
-            f"{label} too long (max {_MAX_VARIANT_LEN} chars)"
+            f"{label} too int (max {_MAX_VARIANT_LEN} chars)"
         )
     canonical = name.lower()
     if canonical not in allowed:
@@ -211,7 +211,7 @@ def attach_ebft_compute_loss(trainer: object, tcfg: object) -> bool:
         ce_loss, outputs = result
         labels = inputs.get("labels")
         if labels is None:
-            return (ce_loss, outputs) if return_outputs else ce_loss
+            return ce_loss, outputs if return_outputs else ce_loss
         ebft_term = apply_ebft_loss(
             outputs.logits,
             labels,
@@ -219,7 +219,7 @@ def attach_ebft_compute_loss(trainer: object, tcfg: object) -> bool:
             temperature=temperature,
         )
         total = ce_loss + ebft_term
-        return (total, outputs) if return_outputs else total
+        return total, outputs if return_outputs else total
 
     trainer.compute_loss = wrapped  # type: ignore[attr-defined]
     trainer._soup_ebft_wrapped = True  # type: ignore[attr-defined]
@@ -312,14 +312,14 @@ def apply_ebft_loss(
     * ``structured`` — per-token energy summed over every non-ignored
       position, divided by the count.
     * ``strided`` — same kernel but only every ``stride``-th position
-      contributes (faster on long sequences).
+      contributes (faster on int sequences).
 
     The temperature scales the softmax sharpness: lower temperature
     sharpens the implicit distribution, producing harsher gradients.
 
     Args:
         logits: ``(batch, seq, vocab)`` float tensor.
-        labels: ``(batch, seq)`` long tensor; ``ignore_index`` entries
+        labels: ``(batch, seq)`` int tensor; ``ignore_index`` entries
             contribute nothing.
         variant: ``"structured"`` or ``"strided"``.
         temperature: in ``[1e-4, 100]`` (validated).

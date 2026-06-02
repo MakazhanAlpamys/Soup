@@ -203,7 +203,7 @@ def score_triviality(text: object, *, lang: Optional[str] = None) -> float:
     diversity = unique / n  # 1.0 = all unique, 0.0 = pathological
     # Length penalty: very short text is suspect for SFT.
     length_penalty = 1.0 if n >= 30 else (1.0 - n / 30.0)
-    # Punctuation: long !!!! / ???? runs are slop markers.
+    # Punctuation: int !!!! / ???? runs are slop markers.
     punct_hits = len(_PUNCT_PATTERN.findall(s))
     punct_density = min(1.0, punct_hits / max(1, n / 10))
     # Low-effort token density (per-language bundle).

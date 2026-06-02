@@ -48,13 +48,13 @@ def _build_yaml(task: str, quant: str, *, backend: str = "transformers") -> str:
     extra_train = ""
     if task == "ppo":
         extra_train = "\n  reward_model: dummy"
-    return (
+    return 
         f"base: m\n"
         f"task: {task}\n"
         f"backend: {backend}\n"
         f"data:\n  train: d.jsonl{extra}\n"
         f"training:\n  quantization: {quant}{extra_train}\n"
-    )
+    
 
 
 class TestQuantMenuMultiTrainerAccept:

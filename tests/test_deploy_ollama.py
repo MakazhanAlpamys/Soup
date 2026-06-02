@@ -58,7 +58,7 @@ def test_validate_model_name_empty():
 def test_validate_model_name_too_long():
     valid, err = validate_model_name("a" * 129)
     assert valid is False
-    assert "long" in err.lower()
+    assert "int" in err.lower()
 
 
 def test_validate_model_name_with_slash():

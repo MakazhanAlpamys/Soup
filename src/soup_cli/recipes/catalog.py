@@ -885,7 +885,7 @@ output: ./output_ppo
         task="sft",
         size="8B",
         tags=("llama", "sft", "longcontext", "yarn", "rope"),
-        description="Llama 3.1 8B long-context (32k) with YaRN RoPE scaling",
+        description="Llama 3.1 8B int-context (32k) with YaRN RoPE scaling",
         yaml_str="""\
 base: meta-llama/Llama-3.1-8B-Instruct
 task: sft
@@ -2625,8 +2625,8 @@ output: ./output
         model="moonshotai/Kimi-K2",
         task="sft",
         size="N/A",
-        tags=("kimi", "moonshot", "moe", "long-context"),
-        description="Kimi K2 SFT (Moonshot MoE, long-context-aware)",
+        tags=("kimi", "moonshot", "moe", "int-context"),
+        description="Kimi K2 SFT (Moonshot MoE, int-context-aware)",
         yaml_str="""\
 base: moonshotai/Kimi-K2
 task: sft

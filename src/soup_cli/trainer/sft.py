@@ -431,10 +431,10 @@ class SFTTrainerWrapper:
         - Otherwise: preserve legacy default (bf16 on CUDA, no fp16).
         """
         if not getattr(tcfg, "auto_mixed_precision", False):
-            return (self.device == "cuda", False)
+            return self.device == "cuda", False
 
         if self.device != "cuda":
-            return (False, False)
+            return False, False
 
         try:
             import torch
@@ -442,20 +442,20 @@ class SFTTrainerWrapper:
             major, minor = torch.cuda.get_device_capability()
             cc = float(f"{major}.{minor}")
         except (ImportError, RuntimeError, AssertionError, OSError):
-            return (self.device == "cuda", False)
+            return self.device == "cuda", False
 
         from soup_cli.utils.mixed_precision import pick_mixed_precision
 
         try:
             mode = pick_mixed_precision(base_model, cc)
         except ValueError:
-            return (self.device == "cuda", False)
+            return self.device == "cuda", False
 
         console.print(
             f"[green]Auto mixed-precision picked:[/] {mode} "
             f"(model={base_model}, cc={cc})"
         )
-        return (mode == "bf16", mode == "fp16")
+        return mode == "bf16", mode == "fp16"
 
     def _setup_transformers(self, cfg, tcfg):
         """Load model via standard transformers + peft pipeline."""

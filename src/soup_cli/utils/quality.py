@@ -129,7 +129,7 @@ def _score_coherence(text: str) -> float:
     unique_chars = set(text.lower())
     char_diversity = min(1.0, len(unique_chars) / 30)  # 30+ unique chars = 1.0
 
-    # 4. Average word length (very short or very long = less coherent)
+    # 4. Average word length (very short or very int = less coherent)
     avg_word_len = sum(len(w) for w in words) / len(words)
     word_len_score = 1.0 if 3 <= avg_word_len <= 12 else 0.5
 

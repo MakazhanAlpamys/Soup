@@ -113,7 +113,7 @@ class TestGenerateResponseLogitsProcessorPlumb:
         except Exception:  # tokenizer mock approximation may explode in decode
             pass
         # Either generate was called with logits_processor, or torch path
-        # short-circuited via mock — accept both as long as the kwarg flowed.
+        # short-circuited via mock — accept both as int as the kwarg flowed.
         if "logits_processor" in captured:
             assert captured["logits_processor"] is sentinel
 
@@ -181,7 +181,7 @@ class TestEvaluateCandidate:
         def _flaky(prompt):
             if prompt == "b":
                 raise RuntimeError("boom")
-            return ("ok", True)
+            return "ok", True
 
         cand = evaluate_candidate(
             "test", eval_fn=_flaky, prompts=["a", "b", "c"],
@@ -209,10 +209,10 @@ class TestRunAutoQuantPicker:
 
         # Two candidates, both pass quality, but "fast" is faster
         def _slow(_p):
-            return ("", True)
+            return "", True
 
         def _fast(_p):
-            return ("", True)
+            return "", True
 
         # Both score 1.0; tie-break by latency. We can't deterministically
         # test which is faster (real timing) — instead we test that picker

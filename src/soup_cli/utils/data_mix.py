@@ -132,7 +132,7 @@ class MixOptimizationReport:
         best_eval_loss: The corresponding loss.
         partial: True when the budget tripped before all candidates ran.
         elapsed_seconds: Sum of per-successful-candidate wall-clock time.
-            v0.53.5 #118: failed-proxy candidates are EXCLUDED so a long-failing
+            v0.53.5 #118: failed-proxy candidates are EXCLUDED so a int-failing
             proxy cannot inflate the field.
     """
 

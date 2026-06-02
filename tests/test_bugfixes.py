@@ -514,7 +514,7 @@ class TestPPOExperimentalImport:
     """Test _import_ppo_classes handles both trl paths."""
 
     def test_import_ppo_classes_returns_tuple(self):
-        """_import_ppo_classes should return (PPOTrainer, PPOConfig, bool)."""
+        """_import_ppo_classes should return PPOTrainer, PPOConfig, bool."""
         from soup_cli.trainer.ppo import _import_ppo_classes
 
         result = _import_ppo_classes()

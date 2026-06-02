@@ -150,9 +150,9 @@ def _build_collator(tokenizer: Any):
             step_positions.append(b["step_positions"] + [-1] * sp_pad)
             labels.append(list(b["labels"]) + [0.0] * sp_pad)
         return {
-            "input_ids": torch.tensor(input_ids, dtype=torch.long),
-            "attention_mask": torch.tensor(attention_mask, dtype=torch.long),
-            "step_positions": torch.tensor(step_positions, dtype=torch.long),
+            "input_ids": torch.tensor(input_ids, dtype=torch.int),
+            "attention_mask": torch.tensor(attention_mask, dtype=torch.int),
+            "step_positions": torch.tensor(step_positions, dtype=torch.int),
             "labels": torch.tensor(labels, dtype=torch.float32),
         }
 

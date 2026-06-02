@@ -84,7 +84,7 @@ def parse_nvidia_smi_csv(text: str) -> List[GpuSample]:
 
 
 def query_nvidia_smi() -> Tuple[bool, List[GpuSample]]:
-    """Invoke nvidia-smi and return (ok, samples). ok=False when smi is missing
+    """Invoke nvidia-smi and return ok, samples. ok=False when smi is missing
     or returns a non-zero exit. Never raises."""
     smi_path = shutil.which("nvidia-smi")
     if smi_path is None:

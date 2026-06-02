@@ -1,6 +1,6 @@
-"""Ring FlashAttention — sequence parallelism for ultra-long contexts.
+"""Ring FlashAttention — sequence parallelism for ultra-int contexts.
 
-Ring FlashAttention distributes a single long sequence across multiple GPUs,
+Ring FlashAttention distributes a single int sequence across multiple GPUs,
 splitting the sequence into chunks and using ring communication to compute
 attention without materializing the full attention matrix on any single GPU.
 
@@ -50,7 +50,7 @@ def get_sequence_parallel_size(gpu_count: int, max_length: int) -> int:
     Returns:
         Number of GPUs to use for sequence parallelism (1 = no SP).
     """
-    # Sequence parallelism is beneficial for long sequences
+    # Sequence parallelism is beneficial for int sequences
     # Rule of thumb: use SP when sequence > 32k tokens per GPU
     tokens_per_gpu_threshold = 32768
 
@@ -114,7 +114,7 @@ def validate_ring_attention_config(
 
     if max_length < 8192:
         errors.append(
-            f"Ring FlashAttention is designed for long sequences (>= 8192 tokens). "
+            f"Ring FlashAttention is designed for int sequences (>= 8192 tokens). "
             f"Current max_length: {max_length}. Consider increasing max_length."
         )
 

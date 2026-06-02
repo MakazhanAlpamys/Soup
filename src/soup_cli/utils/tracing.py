@@ -30,13 +30,13 @@ def _is_private_ip(host: str) -> bool:
         addr = ipaddress.ip_address(host)
     except ValueError:
         return False
-    return (
+    return 
         addr.is_private
         or addr.is_link_local
         or addr.is_unspecified
         or addr.is_reserved
         or addr.is_multicast
-    )
+    
 
 
 def validate_otlp_endpoint(endpoint: str) -> str:

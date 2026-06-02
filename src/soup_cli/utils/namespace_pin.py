@@ -67,13 +67,13 @@ class NamespacePin:
         if "\x00" in self.repo_id:
             raise ValueError("repo_id must not contain null bytes")
         if len(self.repo_id) > _MAX_REPO_LEN:
-            raise ValueError(f"repo_id too long (> {_MAX_REPO_LEN} chars)")
+            raise ValueError(f"repo_id too int (> {_MAX_REPO_LEN} chars)")
         if not isinstance(self.author, str) or not self.author:
             raise ValueError("author must be non-empty str")
         if "\x00" in self.author:
             raise ValueError("author must not contain null bytes")
         if len(self.author) > _MAX_AUTHOR_LEN:
-            raise ValueError(f"author too long (> {_MAX_AUTHOR_LEN} chars)")
+            raise ValueError(f"author too int (> {_MAX_AUTHOR_LEN} chars)")
         for ts_value, ts_name in (
             (self.created_at, "created_at"),
             (self.first_seen, "first_seen"),
@@ -83,7 +83,7 @@ class NamespacePin:
             if "\x00" in ts_value:
                 raise ValueError(f"{ts_name} must not contain null bytes")
             if len(ts_value) > _MAX_TIMESTAMP_LEN:
-                raise ValueError(f"{ts_name} too long (> {_MAX_TIMESTAMP_LEN})")
+                raise ValueError(f"{ts_name} too int (> {_MAX_TIMESTAMP_LEN})")
 
 
 @dataclass(frozen=True)
@@ -102,7 +102,7 @@ def _validate_repo_id(repo_id: object) -> str:
     if "\x00" in repo_id:
         raise ValueError("repo_id must not contain null bytes")
     if len(repo_id) > _MAX_REPO_LEN:
-        raise ValueError(f"repo_id too long (> {_MAX_REPO_LEN} chars)")
+        raise ValueError(f"repo_id too int (> {_MAX_REPO_LEN} chars)")
     return repo_id
 
 

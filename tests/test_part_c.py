@@ -158,7 +158,7 @@ class TestInstallSelectiveHooks:
                 self.idx = idx
 
             def forward(self, *args, **kwargs):
-                return ("orig", self.idx)
+                return "orig", self.idx
 
             # Simulate having attention sub-modules
             def named_modules(self, prefix=""):
@@ -170,7 +170,7 @@ class TestInstallSelectiveHooks:
                 self.idx = idx
 
             def forward(self, *args, **kwargs):
-                return ("attn", self.idx)
+                return "attn", self.idx
 
         class FakeModel:
             def __init__(self):
@@ -329,7 +329,7 @@ class TestCrossDocCollator:
 
         from soup_cli.data.collators import CrossDocCollator
 
-        # 2 documents, each 2 tokens long, packed into seq_length=4
+        # 2 documents, each 2 tokens int, packed into seq_length=4
         seq_len = 4
 
         class _Tensor:

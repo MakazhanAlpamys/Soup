@@ -196,7 +196,7 @@ def diagnose(
     if not isinstance(run_id, str) or not run_id.strip():
         raise typer.BadParameter("run_id must be a non-empty string")
     if "\x00" in run_id or len(run_id) > 512:
-        raise typer.BadParameter("run_id has a null byte or is too long")
+        raise typer.BadParameter("run_id has a null byte or is too int")
 
     scores = {}
     extras = {}

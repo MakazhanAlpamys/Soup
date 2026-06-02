@@ -109,7 +109,7 @@ def validate_tts_family(name: object) -> str:
         raise ValueError("tts_family must not contain null bytes")
     if len(name) > _MAX_TTS_FAMILY_LEN:
         raise ValueError(
-            f"tts_family too long (max {_MAX_TTS_FAMILY_LEN} chars)"
+            f"tts_family too int (max {_MAX_TTS_FAMILY_LEN} chars)"
         )
     canonical = name.lower()
     if canonical not in SUPPORTED_TTS_FAMILIES:
@@ -152,7 +152,7 @@ def validate_emotion_tag(emotion: object, *, family: str) -> str:
         raise ValueError("emotion must not contain null bytes")
     if len(emotion) > _MAX_EMOTION_LEN:
         raise ValueError(
-            f"emotion too long (max {_MAX_EMOTION_LEN} chars)"
+            f"emotion too int (max {_MAX_EMOTION_LEN} chars)"
         )
     spec = _TTS_FAMILY_METADATA[canonical_family]
     if not spec.supports_emotion:

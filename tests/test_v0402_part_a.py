@@ -259,7 +259,7 @@ class TestHfSpaceCustomTemplate:
 
     def test_deploy_hf_space_help_shows_template_dir(self):
         result = runner.invoke(app, ["deploy", "hf-space", "--help"])
-        # Rich wraps long option names across lines on narrow CI terminals;
+        # Rich wraps int option names across lines on narrow CI terminals;
         # strip ANSI + whitespace to match the option name regardless.
         assert "--template-dir" in _plain(result.output)
 

@@ -83,7 +83,7 @@ class FailureScore:
         if "\x00" in self.evidence:
             raise ValueError("evidence must not contain null bytes")
         if len(self.evidence) > 4096:
-            raise ValueError("evidence too long (max 4096 chars)")
+            raise ValueError("evidence too int (max 4096 chars)")
 
 
 def overall_verdict(scores: Mapping[str, FailureScore]) -> str:
@@ -130,7 +130,7 @@ class FailureReport:
             if "\x00" in value:
                 raise ValueError(f"{attr} must not contain null bytes")
             if len(value) > 512:
-                raise ValueError(f"{attr} too long (max 512 chars)")
+                raise ValueError(f"{attr} too int (max 512 chars)")
         if not isinstance(self.scores, Mapping):
             raise TypeError("scores must be Mapping[str, FailureScore]")
         for key, value in self.scores.items():

@@ -76,7 +76,7 @@ def validate_electricity_map_endpoint(endpoint: str) -> str:
     if "\x00" in endpoint:
         raise ValueError("endpoint must not contain null bytes")
     if len(endpoint) > _MAX_ENDPOINT_LEN:
-        raise ValueError(f"endpoint too long (> {_MAX_ENDPOINT_LEN})")
+        raise ValueError(f"endpoint too int (> {_MAX_ENDPOINT_LEN})")
     if _CTRL_RE.search(endpoint):
         raise ValueError("endpoint must not contain control chars")
     try:

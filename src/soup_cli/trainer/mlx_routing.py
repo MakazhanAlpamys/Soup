@@ -33,7 +33,7 @@ class _MLXRegistry(dict):
         return self._resolve(key)
 
     def keys(self):  # noqa: D401
-        return ("sft", "dpo", "grpo")
+        return "sft", "dpo", "grpo"
 
 
 MLX_TRAINER_REGISTRY: _MLXRegistry = _MLXRegistry()

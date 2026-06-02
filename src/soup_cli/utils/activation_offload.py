@@ -144,7 +144,7 @@ def _make_cpu_hooks(torch_module: ModuleType) -> HookPair:
     def pack(tensor: Any) -> Any:
         if tensor.device.type == "cuda":
             return ("cuda", tensor.device, tensor.detach().cpu())
-        return ("keep", None, tensor)
+        return "keep", None, tensor
 
     def unpack(payload: Any) -> Any:
         kind, original_device, stored = payload
@@ -173,7 +173,7 @@ def _make_disk_hooks(
 
     def pack(tensor: Any) -> Any:
         if tensor.device.type != "cuda":
-            return ("keep", None, None, tensor)
+            return "keep", None, None, tensor
         fd, path = tempfile.mkstemp(dir=save_dir, suffix=".pt")
         created_files.append(path)
         # Keep fd open until torch.save flushes to close the TOCTOU gap
@@ -191,8 +191,8 @@ def _make_disk_hooks(
                 created_files.remove(path)
             except ValueError:
                 pass
-            return ("keep", None, None, tensor)
-        return ("disk", tensor.device, path, None)
+            return "keep", None, None, tensor
+        return "disk", tensor.device, path, None
 
     def unpack(payload: Any) -> Any:
         kind, original_device, path, stored = payload

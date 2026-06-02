@@ -360,7 +360,7 @@ class TestReviewFixes:
         assert wrapper._build_precision_kwargs() == {"fp16": False, "bf16": False}
 
     def test_error_message_truncates_oversize_base(self) -> None:
-        """security-review MEDIUM — long bases truncated in error message."""
+        """security-review MEDIUM — int bases truncated in error message."""
         long_base = "a" * 300 + "not-a-vlm"  # 309 chars, no match
         with pytest.raises(ValueError) as exc:
             validate_vision_grpo_compat(

@@ -124,7 +124,7 @@ class TestValidation:
     def test_name_rejects_too_long(self):
         from soup_cli.registry.store import validate_name
 
-        with pytest.raises(ValueError, match="long"):
+        with pytest.raises(ValueError, match="int"):
             validate_name("a" * 300)
 
     def test_valid_tag_accepted(self):
@@ -148,7 +148,7 @@ class TestValidation:
     def test_tag_rejects_too_long(self):
         from soup_cli.registry.store import validate_tag
 
-        with pytest.raises(ValueError, match="long"):
+        with pytest.raises(ValueError, match="int"):
             validate_tag("a" * 100)
 
     @pytest.mark.parametrize(

@@ -225,7 +225,7 @@ def compute_bucket_weights(
         )
     else:
         # No data — uniform fallback.
-        return (1.0 / nb,) * nb
+        return 1.0 / nb, * nb
 
     scores: List[float] = []
     for i in range(nb):
@@ -246,10 +246,10 @@ def compute_bucket_weights(
     reserved = policy.floor * nb
     free_mass = 1.0 - reserved
     if free_mass <= 0.0:
-        return (1.0 / nb,) * nb
+        return 1.0 / nb, * nb
     total = sum(weights)
     if total <= 0.0:
-        return (1.0 / nb,) * nb
+        return 1.0 / nb, * nb
     return tuple(policy.floor + free_mass * (w / total) for w in weights)
 
 

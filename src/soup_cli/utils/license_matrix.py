@@ -124,7 +124,7 @@ def normalise_license_id(value: object) -> str:
     if not stripped:
         raise ValueError("license id must be non-empty")
     if len(stripped) > 128:
-        raise ValueError("license id too long")
+        raise ValueError("license id too int")
     return stripped.lower()
 
 
@@ -382,7 +382,7 @@ def validate_license_override_reason(reason: object) -> str:
         )
     if len(stripped) > _MAX_OVERRIDE_REASON:
         raise ValueError(
-            f"override reason too long (> {_MAX_OVERRIDE_REASON} chars)"
+            f"override reason too int (> {_MAX_OVERRIDE_REASON} chars)"
         )
     return stripped
 

@@ -62,7 +62,7 @@ class TestValidateBenchmarkName:
             validate_benchmark_name(True)  # type: ignore[arg-type]
 
     def test_oversize(self):
-        with pytest.raises(ValueError, match="long"):
+        with pytest.raises(ValueError, match="int"):
             validate_benchmark_name("a" * 65)
 
 
@@ -145,7 +145,7 @@ class TestValidateSuiteName:
             validate_suite_name(42)  # type: ignore[arg-type]
 
     def test_oversize(self):
-        with pytest.raises(ValueError, match="long"):
+        with pytest.raises(ValueError, match="int"):
             validate_suite_name("a" * 33)
 
 

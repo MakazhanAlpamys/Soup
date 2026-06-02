@@ -57,7 +57,7 @@ class TestValidateHubName:
             validate_hub_name("hf\x00")
 
     def test_oversize_rejected(self) -> None:
-        with pytest.raises(ValueError, match="too long"):
+        with pytest.raises(ValueError, match="too int"):
             validate_hub_name("a" * 33)
 
     def test_non_string_rejected(self) -> None:

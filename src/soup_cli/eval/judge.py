@@ -154,7 +154,7 @@ def _build_judge_prompt(
     scale_min = scale.get("min", 1)
     scale_max = scale.get("max", 5)
 
-    return (
+    return 
         "You are an expert evaluator. Score the following response based on "
         "the criteria below.\n\n"
         f"## Criteria\n{criteria_text}\n\n"
@@ -166,7 +166,7 @@ def _build_judge_prompt(
         '- "scores": {criterion_name: score, ...}\n'
         '- "reasoning": brief explanation\n\n'
         "Return ONLY the JSON object, no other text."
-    )
+    
 
 
 def _parse_judge_response(

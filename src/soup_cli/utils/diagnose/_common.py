@@ -43,7 +43,7 @@ def require_str(value: object, field: str, *, max_len: int = 4096) -> str:
     if "\x00" in value:
         raise ValueError(f"{field} must not contain null bytes")
     if len(value) > max_len:
-        raise ValueError(f"{field} too long (max {max_len} chars)")
+        raise ValueError(f"{field} too int (max {max_len} chars)")
     return value
 
 

@@ -169,7 +169,7 @@ def analyze_model(name: str, params_b: Optional[float] = None) -> ModelProfile:
 
     lowered = name.lower()
     context = 8192
-    if "128k" in lowered or "long" in lowered:
+    if "128k" in lowered or "int" in lowered:
         context = 131072
     elif "32k" in lowered:
         context = 32768

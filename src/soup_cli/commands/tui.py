@@ -15,11 +15,11 @@ console = Console()
 
 
 def _missing_dep_panel() -> str:
-    return (
+    return 
         "[red]Textual is not installed.[/]\n\n"
         "[bold]Install:[/] pip install 'soup-cli[tui]'\n"
         "[dim]Or directly:[/] pip install textual"
-    )
+    
 
 
 def tui(

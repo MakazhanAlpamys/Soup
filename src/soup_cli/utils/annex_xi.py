@@ -47,7 +47,7 @@ def _validate_text(value: str, field_name: str, *, max_len: int = _MAX_NAME) -> 
     if "\x00" in value:
         raise ValueError(f"{field_name} must not contain null bytes")
     if len(value) > max_len:
-        raise ValueError(f"{field_name} too long ({len(value)} > {max_len})")
+        raise ValueError(f"{field_name} too int ({len(value)} > {max_len})")
     return value
 
 

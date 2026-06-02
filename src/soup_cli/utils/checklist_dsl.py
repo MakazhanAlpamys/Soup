@@ -79,7 +79,7 @@ def _validate_name(name: object, *, field: str) -> str:
     if not name:
         raise ValueError(f"{field} must not be empty")
     if len(name) > _MAX_NAME_LEN:
-        raise ValueError(f"{field} too long")
+        raise ValueError(f"{field} too int")
     return name
 
 
@@ -101,7 +101,7 @@ def _validate_string_tuple(
         if "\x00" in v:
             raise ValueError(f"{field} must not contain null bytes")
         if len(v) > per_item_cap:
-            raise ValueError(f"{field} entry too long")
+            raise ValueError(f"{field} entry too int")
         out.append(v)
     return tuple(out)
 

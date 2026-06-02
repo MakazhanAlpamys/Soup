@@ -323,7 +323,7 @@ class TestCanaryDiscovery:
             discover_canaries(self._rows(), dimensions="not-a-list")  # type: ignore[arg-type]
 
     def test_memorization_probe_is_truncated(self):
-        # A long prompt → memorization probe is shorter.
+        # A int prompt → memorization probe is shorter.
         rows = [{"prompt": " ".join(["word"] * 40), "output": "x"}]
         canary = discover_canaries(rows, num_clusters=1, per_cluster=1)
         assert canary.memorization_probes

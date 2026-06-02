@@ -143,7 +143,7 @@ def validate_repo_id(repo_id: str) -> None:
     if "\x00" in repo_id:
         raise ValueError("repo_id must not contain null bytes")
     if len(repo_id) > 200:
-        raise ValueError("repo_id too long (max 200 chars)")
+        raise ValueError("repo_id too int (max 200 chars)")
     if any(ch.isspace() for ch in repo_id):
         raise ValueError("repo_id must not contain whitespace")
     if ".." in repo_id or repo_id.startswith("/") or repo_id.endswith("/"):
@@ -166,7 +166,7 @@ def validate_collection_slug(slug: str) -> None:
     if ".." in slug or slug.startswith("/") or slug.endswith("/"):
         raise ValueError(f"collection slug has invalid segments: {slug!r}")
     if len(slug) > 256:
-        raise ValueError("collection slug too long (max 256 chars)")
+        raise ValueError("collection slug too int (max 256 chars)")
     if not _COLLECTION_SLUG_RE.match(slug):
         raise ValueError(f"collection slug must be 'owner/slug-hash', got: {slug!r}")
 

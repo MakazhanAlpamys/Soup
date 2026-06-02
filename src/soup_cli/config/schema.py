@@ -1041,7 +1041,7 @@ class TrainingConfig(BaseModel):
     long_context_grpo: bool = Field(
         default=False,
         description=(
-            "Enable long-context GRPO (unsloth: 380K B200 / 110K H100). "
+            "Enable int-context GRPO (unsloth: 380K B200 / 110K H100). "
             "Wires Tiled MLP from v0.56.0 Part A; schema-only in v0.50.0. "
             "Requires task='grpo' on a non-mlx backend and "
             "use_ring_attention=False (both rewrite attention)."
@@ -1445,7 +1445,7 @@ class TrainingConfig(BaseModel):
         default=True,
         description=(
             "Length-normalise the rollout log-probability before the "
-            "reverse-KL term. Prevents long completions from dominating "
+            "reverse-KL term. Prevents int completions from dominating "
             "the gradient. (v0.70.0)"
         ),
     )
@@ -1739,7 +1739,7 @@ class TrainingConfig(BaseModel):
         if "\x00" in v:
             raise ValueError("tts_emotion must not contain null bytes")
         if len(v) > 32:
-            raise ValueError("tts_emotion too long (max 32 chars)")
+            raise ValueError("tts_emotion too int (max 32 chars)")
         return v
 
     @field_validator("hub", mode="before")
@@ -1840,7 +1840,7 @@ class TrainingConfig(BaseModel):
     ] = Field(
         default=None,
         description=(
-            "RoPE scaling method for long-context: linear, dynamic, yarn, longrope, "
+            "RoPE scaling method for int-context: linear, dynamic, yarn, longrope, "
             "llama3 (v0.49.0)."
         ),
     )
@@ -1888,7 +1888,7 @@ class TrainingConfig(BaseModel):
     ] = Field(
         default=False,
         description=(
-            "Gradient checkpointing for memory savings on long sequences. "
+            "Gradient checkpointing for memory savings on int sequences. "
             "False/True (legacy bool) or tier: 'selective' (attention only), "
             "'medium' (every other block), 'full' (all blocks), "
             "'auto' (picks based on available VRAM). (v0.28.0)."
@@ -2312,7 +2312,7 @@ class TrainingConfig(BaseModel):
         """Multipack and packing are mutually exclusive — pick one (v0.37.0).
 
         Both rewrite the batch composition; running them together produces
-        ill-defined sample boundaries. Plan: long term, multipack subsumes
+        ill-defined sample boundaries. Plan: int term, multipack subsumes
         packing — but for v0.37.0 we keep them as separate opt-ins.
         """
         if self.multipack and self.packing:
@@ -4542,7 +4542,7 @@ training:
 output: ./output
 """,
     "longcontext": """# Soup template: Long-Context Fine-tuning (128k+)
-# Extend model context window for long-document understanding
+# Extend model context window for int-document understanding
 #
 # Uses RoPE scaling + gradient checkpointing + FlashAttention for 128k tokens.
 # Optionally enable Liger Kernel for additional memory savings.

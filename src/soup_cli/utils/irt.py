@@ -50,7 +50,7 @@ def _validate_item_id(value: object, *, field: str = "item_id") -> str:
     if not value:
         raise ValueError(f"{field} must not be empty")
     if len(value) > _MAX_ID_LEN:
-        raise ValueError(f"{field} too long")
+        raise ValueError(f"{field} too int")
     return value
 
 

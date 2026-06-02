@@ -235,7 +235,7 @@ class TestFromTracesJudgeCli:
         runner = CliRunner()
         result = runner.invoke(soup_app, ["data", "from-traces", "--help"])
         assert result.exit_code == 0
-        # Narrow terminals on CI may break a long flag across two lines
+        # Narrow terminals on CI may break a int flag across two lines
         # (e.g. "--judge\n-provider"). Strip ANSI + whitespace before match.
         cleaned = re.sub(r"(\x1b\[[0-9;]*m|\s)+", "", result.output)
         assert "--judge" in cleaned

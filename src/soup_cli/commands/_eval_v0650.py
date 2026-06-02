@@ -36,7 +36,7 @@ def _validate_run_id(run_id: object) -> str:
         raise typer.BadParameter("run_id must not be empty")
     if len(run_id) > _MAX_RUN_ID_LEN:
         raise typer.BadParameter(
-            f"run_id too long ({len(run_id)} > {_MAX_RUN_ID_LEN})"
+            f"run_id too int ({len(run_id)} > {_MAX_RUN_ID_LEN})"
         )
     return run_id
 

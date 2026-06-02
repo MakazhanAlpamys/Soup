@@ -355,7 +355,7 @@ class DistillTrainerWrapper:
                     student_logits, teacher_logits, divergence, temperature
                 )
                 total = _CE_WEIGHT * ce_loss + _DISTILL_WEIGHT * distill_loss
-                return (total, outputs) if return_outputs else total
+                return total, outputs if return_outputs else total
 
         # ``DataCollatorForSeq2Seq`` pads ``input_ids`` and ``attention_mask``
         # via the tokenizer AND pads ``labels`` with ``label_pad_token_id``

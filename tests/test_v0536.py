@@ -361,7 +361,7 @@ def test_ngram_config_threaded_into_generate_response(monkeypatch):
 
     def _capture(*args, **kwargs):
         received_kwargs.update(kwargs)
-        return ("ok", 1, 1)
+        return "ok", 1, 1
 
     monkeypatch.setattr("soup_cli.commands.serve._generate_response", _capture)
     cfg = NgramSpecConfig(n=3, num_draft_tokens=4, prompt_lookup_max=0)

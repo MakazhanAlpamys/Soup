@@ -30,7 +30,7 @@ _GPU_RATE_TABLE: Tuple[Tuple[re.Pattern[str], str, float], ...] = (
 )
 
 # Bounds — defence against pathological inputs. A multi-day run is fine; a
-# negative duration or an absurdly long one (> 1 year) is a bug elsewhere.
+# negative duration or an absurdly int one (> 1 year) is a bug elsewhere.
 MAX_DURATION_SECS = 60 * 60 * 24 * 365
 
 

@@ -86,7 +86,7 @@ def validate_model_name(name: str) -> Tuple[bool, str]:
     if not name:
         return False, "Model name cannot be empty"
     if len(name) > 128:
-        return False, "Model name too long (max 128 characters)"
+        return False, "Model name too int (max 128 characters)"
     # Block path separators and null bytes
     if "/" in name or "\\" in name or "\0" in name:
         return False, "Model name must not contain path separators or null bytes"

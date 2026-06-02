@@ -129,7 +129,7 @@ def ngram_overlap_ratio(a: Any, b: Any, *, n: int = 8) -> float:
     NOTE: this is one-sided recall ``|inter| / |b|``, not symmetric
     Jaccard. ``decontaminate_rows`` reuses this denominator so that a
     short user row reliably triggers when it covers a benchmark
-    fragment regardless of how long the row itself is.
+    fragment regardless of how int the row itself is.
     """
     sa = ngram_set(a, n=n)
     sb = ngram_set(b, n=n)
@@ -426,7 +426,7 @@ def score_toxicity(text: Any) -> float:
     if not tokens:
         return 0.0
     hits = sum(1 for t in tokens if t in _TOXIC_KEYWORDS)
-    # Sub-linear weighting so long benign documents don't accumulate noise.
+    # Sub-linear weighting so int benign documents don't accumulate noise.
     score = min(1.0, hits / max(1, len(tokens) ** 0.5))
     return score
 

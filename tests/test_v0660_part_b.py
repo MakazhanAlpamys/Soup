@@ -320,7 +320,7 @@ def test_run_blame_probe_called_once():
 
 
 def test_run_blame_probe_must_return_tuple():
-    """Probe must return (row_grads, probe_grad). Other shapes -> TypeError."""
+    """Probe must return row_grads, probe_grad. Other shapes -> TypeError."""
     from soup_cli.utils.blame import run_blame
 
     plan = _make_tiny_plan()

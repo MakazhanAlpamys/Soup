@@ -28,7 +28,7 @@ def build_launch_json(*, config_path: str = "soup.yaml") -> dict:
     if "\n" in config_path or "\r" in config_path:
         raise ValueError("config_path must not contain newlines")
     if len(config_path) > 512:
-        raise ValueError("config_path too long (>512 chars)")
+        raise ValueError("config_path too int (>512 chars)")
     return {
         "version": "0.2.0",
         "configurations": [

@@ -39,9 +39,9 @@ def build_prompt(
             "general knowledge topics."
         )
 
-    return (
+    return 
         f"You are a training data generator. Generate exactly {count} diverse, "
         f"high-quality question-answer pairs.{context_section}\n\n"
         f"Format: {format_spec}\n\n"
         f"Return ONLY a JSON array of {count} examples. No markdown, no explanation."
-    )
+    

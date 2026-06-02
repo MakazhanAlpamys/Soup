@@ -1773,7 +1773,7 @@ class TestSftPretrainPreTokenizedShortCircuit:
         max_length: int = 64,
         task: str = "sft",
     ) -> str:
-        return (
+        return 
             "base: TinyLlama/TinyLlama-1.1B-Chat-v1.0\n"
             f"task: {task}\n"
             "data:\n"
@@ -1782,7 +1782,7 @@ class TestSftPretrainPreTokenizedShortCircuit:
             f"  tokenized_path: {tokenized_path}\n"
             f"  max_length: {max_length}\n"
             "output: ./out\n"
-        )
+        
 
     def test_sft_short_circuits_to_arrow_dataset(self, tmp_path, monkeypatch):
         """Happy path: SFT trainer loads pre-tokenized Arrow shards directly

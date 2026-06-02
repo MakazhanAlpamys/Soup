@@ -443,7 +443,7 @@ def test_run_mix_optimizer_custom_optimizer(tmp_path, monkeypatch):
             self.told = []
 
         def ask(self):
-            return (0.7, 0.3)
+            return 0.7, 0.3
 
         def tell(self, weights, loss):
             self.told.append((weights, loss))

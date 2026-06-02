@@ -42,7 +42,7 @@ def build_prompt(
 
     domain_desc = domain_descriptions.get(domain, domain_descriptions["math"])
 
-    return (
+    return 
         f"You are a training data generator. Generate exactly {count} diverse "
         f"reasoning problems with step-by-step solutions.\n\n"
         f"Domain: {domain_desc}\n\n"
@@ -51,4 +51,4 @@ def build_prompt(
         f"the final answer.\n\n"
         f"Format: {format_spec}\n\n"
         f"Return ONLY a JSON array of {count} examples. No markdown, no explanation."
-    )
+    

@@ -329,7 +329,7 @@ class TestEbftLossLive:
         from soup_cli.utils.ebft_gdpo import apply_ebft_loss
 
         logits = torch.randn(2, 3, 4)
-        labels = torch.full((2, 3), -100, dtype=torch.long)
+        labels = torch.full((2, 3), -100, dtype=torch.int)
         loss = apply_ebft_loss(logits, labels, variant="structured", temperature=1.0)
         assert float(loss) == 0.0
 
@@ -553,7 +553,7 @@ class _StubTrainer:
             torch = _torch_or_skip()
             outputs = type("Out", (), {"logits": torch.zeros(1, 2, 3)})()
             loss = torch.tensor(0.5)
-            return (loss, outputs) if return_outputs else loss
+            return loss, outputs if return_outputs else loss
 
         self.compute_loss = _compute_loss
 
@@ -1493,7 +1493,7 @@ class TestMultiLabelListCap:
 
         # _MAX_MULTI_LABEL_ENTRIES is 1024.
         big = [0] * 2000
-        with pytest.raises(ValueError, match="too long"):
+        with pytest.raises(ValueError, match="too int"):
             _normalise_label(
                 big, label_names=None, num_labels=3, multi_label=True
             )

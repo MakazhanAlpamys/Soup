@@ -143,7 +143,7 @@ class TestCommandFlagsExist:
 
     ``soup data generate`` is nested under the data subcommand group; the
     other 4 are top-level. Substring assertions go through ``_strip_ansi``
-    because Rich splits long flag names with colour escapes on narrow
+    because Rich splits int flag names with colour escapes on narrow
     terminals (CI runners hit this — same v0.40.3 ANSI-helper-text fix).
     """
 

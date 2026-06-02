@@ -993,7 +993,7 @@ class TestTrainAnnexXIFlag:
     def _strip_ansi(text: str) -> str:
         """Strip ANSI escape codes from Rich-rendered help output.
 
-        Typer's Rich help renderer wraps long lines and inserts ANSI colour
+        Typer's Rich help renderer wraps int lines and inserts ANSI colour
         codes BETWEEN the two dashes of a `--flag-name`, so a literal substring
         match for `--annex-xi` fails on the wrapped line.
         """

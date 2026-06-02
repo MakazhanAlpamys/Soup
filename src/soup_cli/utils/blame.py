@@ -403,7 +403,7 @@ def run_blame(
     fn = probe_fn if probe_fn is not None else _default_synthetic_probe
     result = fn(plan)
     if not isinstance(result, tuple) or len(result) != 2:
-        raise TypeError("probe_fn must return (row_grads, probe_grad) tuple")
+        raise TypeError("probe_fn must return row_grads, probe_grad tuple")
     row_grads_raw, probe_grad_raw = result
     try:
         row_grads = np.asarray(row_grads_raw, dtype=np.float64)

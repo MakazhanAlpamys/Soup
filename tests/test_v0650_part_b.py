@@ -60,7 +60,7 @@ class TestValidateBatteryName:
             validate_battery_name("xstest\x00")
 
     def test_oversize(self):
-        with pytest.raises(ValueError, match="long"):
+        with pytest.raises(ValueError, match="int"):
             validate_battery_name("a" * 33)
 
     def test_non_string(self):

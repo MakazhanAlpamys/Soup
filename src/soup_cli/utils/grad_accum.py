@@ -51,7 +51,7 @@ class GradAccumMonitor:
         """True when used VRAM crosses the pressure threshold."""
         if used_vram_gb < 0:
             raise ValueError(f"used_vram_gb must be >= 0, got {used_vram_gb}")
-        return (used_vram_gb / self.total_vram_gb) >= self.threshold
+        return used_vram_gb / self.total_vram_gb >= self.threshold
 
     def recommend(
         self, current_batch: int, current_accum: int,

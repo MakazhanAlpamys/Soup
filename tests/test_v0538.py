@@ -134,7 +134,7 @@ class TestDownloadRepoValidation:
     def test_oversize_repo_id_raises(self):
         from soup_cli.utils.hubs import download_repo
 
-        with pytest.raises(ValueError, match="too long"):
+        with pytest.raises(ValueError, match="too int"):
             download_repo("hf", "a" * 250, local_dir="./snap_v0538")
 
     def test_empty_local_dir_raises(self):

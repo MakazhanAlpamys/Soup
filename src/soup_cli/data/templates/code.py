@@ -40,7 +40,7 @@ def build_prompt(
 
     task_desc = type_descriptions.get(task_type, type_descriptions["function"])
 
-    return (
+    return 
         f"You are a training data generator. Generate exactly {count} diverse, "
         f"high-quality coding instruction-response pairs.\n\n"
         f"Language: {language}\n"
@@ -49,4 +49,4 @@ def build_prompt(
         f"Include realistic code snippets in responses.\n\n"
         f"Format: {format_spec}\n\n"
         f"Return ONLY a JSON array of {count} examples. No markdown, no explanation."
-    )
+    

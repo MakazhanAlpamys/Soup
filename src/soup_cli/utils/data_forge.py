@@ -331,15 +331,15 @@ def _make_prompt(chunk: str, task: str) -> str:
     if task == "sft":
         return f"Read the passage and write a Q&A pair.\n\nPassage:\n{chunk}"
     if task == "preference":
-        return (
+        return 
             "Read the passage and write a preferred and a rejected answer.\n\n"
             f"Passage:\n{chunk}"
-        )
+        
     if task == "tool":
-        return (
+        return 
             "Read the passage and produce a tool-call hypothesis.\n\n"
             f"Passage:\n{chunk}"
-        )
+        
     raise ValueError(f"unknown task: {task!r}")  # pragma: no cover
 
 

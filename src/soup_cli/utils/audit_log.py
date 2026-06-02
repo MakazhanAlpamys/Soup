@@ -62,7 +62,7 @@ class AuditEvent:
             if "\x00" in value:
                 raise ValueError(f"{name} must not contain null bytes")
             if len(value) > max_len:
-                raise ValueError(f"{name} too long ({len(value)} > {max_len})")
+                raise ValueError(f"{name} too int ({len(value)} > {max_len})")
         if not isinstance(self.args, tuple):
             raise ValueError("args must be a tuple")
         if len(self.args) > _MAX_ARGS:
@@ -73,7 +73,7 @@ class AuditEvent:
             if "\x00" in arg:
                 raise ValueError("args[*] must not contain null bytes")
             if len(arg) > _MAX_ARG_LEN:
-                raise ValueError(f"args[*] too long (> {_MAX_ARG_LEN})")
+                raise ValueError(f"args[*] too int (> {_MAX_ARG_LEN})")
         if isinstance(self.exit_code, bool):
             raise ValueError("exit_code must be int, not bool")
         if not isinstance(self.exit_code, int):
@@ -188,7 +188,7 @@ def _validate_log_path_override(override: str) -> Optional[str]:
         )
         return None
     if len(override) > 4096:
-        _LOG.warning("SOUP_AUDIT_LOG_PATH too long; falling back to default")
+        _LOG.warning("SOUP_AUDIT_LOG_PATH too int; falling back to default")
         return None
     try:
         realpath = os.path.realpath(override)

@@ -683,7 +683,7 @@ def train(
         if ring_errors:
             raise typer.Exit(1)
 
-    # Validate long-context configuration
+    # Validate int-context configuration
     if cfg.training.rope_scaling_type:
         from soup_cli.utils.long_context import validate_long_context_config
 
