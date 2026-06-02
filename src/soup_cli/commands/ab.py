@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+from typing import Optional
+
 import typer
 from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
+from soup_cli.commands._webhook_cli import emit_webhooks, validate_webhook_flags
 from soup_cli.utils.ab_test import (
     MsprtConfig,
     run_msprt,
@@ -35,6 +38,20 @@ def ab(
         0.1, "--effect-size",
         help="Minimum detectable difference in means.",
     ),
+    slack_url: Optional[str] = typer.Option(
+        None, "--slack-url",
+        help=(
+            "Optional Slack webhook URL — POSTed on a reject_h0 / accept_h0 "
+            "decision (not on continue). SSRF-validated."
+        ),
+    ),
+    discord_url: Optional[str] = typer.Option(
+        None, "--discord-url",
+        help=(
+            "Optional Discord webhook URL — POSTed on a reject_h0 / accept_h0 "
+            "decision (not on continue). SSRF-validated."
+        ),
+    ),
 ) -> None:
     """Sequential A/B test with early-stop guarantees (mSPRT)."""
     try:
@@ -42,6 +59,10 @@ def ab(
     except (TypeError, ValueError) as exc:
         console.print(f"[red]{escape(str(exc))}[/]")
         raise typer.Exit(2) from exc
+
+    slack_url, discord_url = validate_webhook_flags(
+        slack_url, discord_url, console=console
+    )
 
     try:
         cfg = MsprtConfig(
@@ -99,6 +120,25 @@ def ab(
                 "[cyan]Insufficient evidence. Collect more samples and re-run.[/]",
                 border_style="cyan",
             )
+        )
+
+    # Webhook only fires on a terminal decision (reject_h0 / accept_h0) —
+    # a `continue` verdict carries no actionable signal (issue #207).
+    if verdict.decision != "continue":
+        emit_webhooks(
+            slack_url,
+            discord_url,
+            payload={
+                "command": "ab",
+                "metric": canonical,
+                "decision": verdict.decision,
+                "log_likelihood_ratio": verdict.log_likelihood_ratio,
+                "n_control": verdict.n_control,
+                "n_treatment": verdict.n_treatment,
+                "mean_control": verdict.mean_control,
+                "mean_treatment": verdict.mean_treatment,
+            },
+            console=console,
         )
 
 

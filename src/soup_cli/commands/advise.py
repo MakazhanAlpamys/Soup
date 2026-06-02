@@ -39,6 +39,7 @@ from soup_cli.utils.advise import (
     synth_probe_lora_delta,
 )
 from soup_cli.utils.advise_history import (
+    current_project_name,
     history_path,
     load_history,
     record_verdict,
@@ -269,8 +270,27 @@ def advise_run(
             sft_wall_clock_secs=wall_clock,
         )
 
+    # v0.71.5 #163 — bias the rubric by this project's past accepted-verdict
+    # outcomes. Best-effort: a missing / unreadable history must never block
+    # a verdict, so any failure falls back to the un-biased rubric.
+    history = None
+    project = None
     try:
-        verdict = build_verdict(profile, task_category, goal=goal, roi=roi)
+        history = load_history(limit=20)
+        project = current_project_name()
+    except (TypeError, ValueError, OSError):
+        history = None
+        project = None
+
+    try:
+        verdict = build_verdict(
+            profile,
+            task_category,
+            goal=goal,
+            roi=roi,
+            history=history,
+            project=project,
+        )
     except (TypeError, ValueError) as exc:
         console.print(f"[red]Verdict build failed:[/] {escape(str(exc))}")
         raise typer.Exit(1) from exc

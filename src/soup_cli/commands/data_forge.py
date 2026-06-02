@@ -77,6 +77,14 @@ def forge(
             "(scheme allowlist + loopback). Ignored for Anthropic."
         ),
     ),
+    hub: str = typer.Option(
+        "hf", "--hub",
+        help=(
+            "Teacher hub: hf (default) / modelscope / modelers. When non-HF "
+            "and --teacher is a repo id (owner/name), the teacher is "
+            "pre-fetched from that hub (v0.71.5 #157)."
+        ),
+    ),
 ):
     """Run the multi-stage synthetic data pipeline with provenance.
 
@@ -94,9 +102,45 @@ def forge(
         write_forge_dataset,
         write_provenance,
     )
+    from soup_cli.utils.hubs import validate_hub_name
+
+    try:
+        hub_canonical = validate_hub_name(hub)
+    except (TypeError, ValueError) as exc:
+        console.print(f"[red]{escape(str(exc))}[/]")
+        raise typer.Exit(2) from exc
+
+    effective_teacher = teacher
+    # v0.71.5 #157 — non-HF hub + repo-id teacher → pre-fetch the teacher from
+    # that hub and record the resolved local path in provenance. HF (default)
+    # is a no-op: the teacher stays a provenance label.
+    if hub_canonical != "hf":
+        if "/" in teacher:
+            from soup_cli.utils.hubs import prefetch_model_from_hub
+
+            try:
+                effective_teacher = prefetch_model_from_hub(
+                    teacher, hub_canonical, console=console
+                )
+            except ImportError as exc:
+                console.print(f"[red]{escape(str(exc))}[/]")
+                raise typer.Exit(1) from exc
+            except (TypeError, ValueError) as exc:
+                console.print(
+                    f"[red]Teacher pre-fetch failed:[/] {escape(str(exc))}"
+                )
+                raise typer.Exit(1) from exc
+        else:
+            # Non-HF hub requested but the teacher is not a routable repo id
+            # (owner/name) — warn loudly instead of silently ignoring --hub
+            # (code-review MEDIUM fix v0.71.5 #157).
+            console.print(
+                f"[yellow]--hub {escape(hub_canonical)} ignored:[/] --teacher "
+                f"{escape(teacher)!r} is not a repo id (owner/name), so there "
+                "is nothing to pre-fetch."
+            )
 
     judge_fn = _default_judge
-    effective_teacher = teacher
     if judge_provider is not None:
         canonical = judge_provider.strip().lower()
         if canonical not in JUDGE_PROVIDERS:

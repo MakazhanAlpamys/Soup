@@ -49,21 +49,22 @@ infrastructure instead of improving models. Soup fixes that.
 
 ## What's New
 
-**v0.71.4 — Adapter lifecycle + loop wiring.** The merge, PR, and continuous-loop surfaces go live:
+**v0.71.5 — Ingest, data & prompt polish.** Sharper production-loop ergonomics:
 
-- **Canary verdict on merge** — `soup adapters merge … --canary suite.json` scores the merged
-  adapter and reports **OK / MINOR / MAJOR**; `--strict-verdict` exits non-zero on a MAJOR
-  regression. Works with no model load using a pre-scored canary suite.
-- **Evolutionary merge for real** — `soup adapters merge --strategy cmaes --eval suite --budget 1h`
-  now runs the full CMA-ES search (merge → score → optimise) and writes the best blend, instead of
-  just printing a plan.
-- **Publish an adapter PR** — `soup adapters pr <title> --base-sha <hex> --adapter <path> --push
-  owner/repo#42` posts the rendered PR straight to a GitHub PR comment.
-- **Continuous fine-tuning loop, wired up** — `soup loop watch --pre-wired` runs the real
-  traces → DPO → eval-gate → canary pipeline; `--pack-cans` snapshots every iteration as a
-  shareable Soup Can with Registry lineage (`soup loop replay <id> --extract dir`).
-- **Branches ↔ Registry** — `soup adapters branch <name> --attach-to-registry <id>` /
-  `--from-registry <id>` links training-env snapshots into the Registry lineage DAG.
+- **Alternative model hubs for data** — `soup data push --hub modelscope|modelers` uploads a
+  local JSONL to ModelScope / Modelers, and `soup data forge --hub … --teacher owner/name`
+  pre-fetches the teacher from that hub.
+- **Tokenizer-aware prompt pruning** — `soup prune-prompt --tokenizer <id-or-path>` finds the
+  shared *token* prefix and decodes only the remainder, so BPE multi-byte sequences never get
+  truncated mid-token the way char-slicing can.
+- **Webhooks everywhere** — `--slack-url` / `--discord-url` now work on `soup ingest`,
+  `soup prune-prompt`, `soup ab`, and `soup data active-sample` (same SSRF-hardened validator as
+  `soup drift-alarm`). The A/B harness only pings when the sequential test actually decides.
+- **Curriculum by difficulty percentile** — dynamic curriculum can bucket by `loss` /
+  `perplexity` percentile instead of length round-robin.
+- **Smarter pre-flight `advise`** — `soup advise` now nudges its confidence using your prior
+  verdicts for the same project, and `soup runs replay` can plot a benchmark-score curve, not
+  just the loss curve.
 
 Full history: [CHANGELOG.md](CHANGELOG.md) &middot; [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 

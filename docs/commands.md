@@ -90,10 +90,12 @@ soup data download user/ds --samples 1000    Stream first 1000 samples
 soup data register --name my-ds --path d.jsonl --format alpaca  Register dataset
 soup data unregister --name my-ds            Remove from registry
 soup data push --input d.jsonl --hf-dataset user/name  Upload local JSONL as HF dataset
+soup data push --input d.jsonl --hf-dataset u/n --hub modelscope|modelers  Upload to an alternative hub
 soup data registry                           List all registered datasets
 soup data demo                                List bundled demo JSONL fixtures
 soup data demo alpaca_demo --output ./d.jsonl Copy a bundled demo JSONL fixture
 soup data forge --docs ./docs --task sft --target-rows 1000  Synthetic data pipeline + provenance
+soup data forge --docs ./docs --hub modelscope --teacher owner/name  Pre-fetch the teacher from an alternative hub
 soup data score --input rows.jsonl            Composite quality scorecard (PII + toxicity + lang + edu)
 soup data decontaminate --input rows.jsonl --benchmarks mmlu,gsm8k  Drop benchmark-overlap rows
 soup data toxicity --input rows.jsonl -o tox.jsonl  Flag toxic rows (keyword baseline)
@@ -137,7 +139,7 @@ soup can publish r.can --hf-hub user/name    Publish .can to HF Hub as dataset
 soup runs                                     List training runs
 soup runs show <run_id>                       Run details + loss graph + cost
 soup runs compare <run_1> <run_2>             Compare two runs
-soup runs replay <run_id>                     Replay summary + loss curve from history
+soup runs replay <run_id>                     Replay summary + loss curve from history (also plots a benchmark-score curve when the metric lives in eval_results)
 soup why [run_id]                             Explain training anomalies (heuristic)
 soup tui                                      Full-screen Textual dashboard (requires [tui] extra)
 soup train --config soup.yaml --profile       Record torch.profiler trace to <output>/profiles/
@@ -169,8 +171,10 @@ soup edit set --base <m> --method rome|memit|alphaedit --subject "..." --target 
 soup edit diff <before-run> <after-run> --probes p.jsonl  Knowledge-injection diff visualizer
 soup ingest --source langfuse|langsmith|helicone|openpipe|otel|openai-stored --logs <jsonl>  Universal trace importer (6 SaaS adapters → normalised JSONL)
 soup prune-prompt --input <jsonl> --output <jsonl> --min-frequency 0.95  Detect + strip shared system-prompt prefix
+soup prune-prompt ... --tokenizer <id-or-path>  Tokenizer-aware prefix detection (decodes remaining ids, boundary-safe)
 soup data active-sample --input <jsonl> --output <jsonl> --budget N  Top-N uncertain prod traces for human review
 soup ab --input <jsonl> --metric latency|judge_score|retry_rate  mSPRT sequential A/B (decision: continue / reject_h0 / accept_h0)
+soup ingest|prune-prompt|ab|data active-sample ... --slack-url <https> | --discord-url <https>  Shared SSRF-validated webhook on completion
 soup drift-alarm --reference <jsonl> --live <jsonl> --threshold 0.2  Rolling-KL drift alarm (exit 3 on drift)
 soup drift-alarm ... --slack-url <https> | --discord-url <https>  Optional SSRF-validated webhook on drift detected
 soup tunability --list                                   List built-in candidate-base catalogue

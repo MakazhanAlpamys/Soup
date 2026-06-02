@@ -459,6 +459,11 @@ Every completed run also stores an estimated cost (`$` per run) computed from th
 captured GPU device name and duration. `soup runs show` renders `—` for CPU /
 MPS / unknown GPUs (no fabricated zeros).
 
+As of v0.71.5, the metric-series lookup that powers replay (`ExperimentTracker.get_metric_series`)
+transparently falls back to the `eval_results` table when a metric has no per-step
+rows — so you can plot a benchmark-score curve (e.g. `mmlu`, `gsm8k`) the same way
+you plot `loss`, without caring which table holds the series.
+
 ### Tracker integrations (--tracker mlflow / swanlab / trackio)
 
 ```bash

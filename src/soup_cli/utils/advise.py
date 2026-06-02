@@ -26,7 +26,10 @@ import re
 import stat
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, Dict, List, Mapping, Optional, Sequence, Tuple
+
+if TYPE_CHECKING:  # pragma: no cover — annotation only, avoids circular import.
+    from soup_cli.utils.advise_history import HistoryEntry
 
 from soup_cli.utils.paths import is_under_cwd
 
@@ -58,6 +61,17 @@ _MIN_ROWS_FOR_TRAINING = 50
 # (code-review MEDIUM fix — prevents tiny reasoning datasets from being
 # routed into a GPU-intensive RL run).
 _MIN_ROWS_FOR_GRPO = 500
+
+# History-bias thresholds (v0.71.5 #163). A choice is "encouraged" when the
+# project has >= _HISTORY_MIN_PRECEDENTS accepted verdicts whose mean measured
+# outcome is >= _HISTORY_POSITIVE_OUTCOME; "discouraged" when the mean is
+# < _HISTORY_NEGATIVE_OUTCOME over the same minimum count. Encouraged choices
+# get a small confidence nudge and can flip a marginal tie; discouraged choices
+# are suppressed (their effective row-floor is raised).
+_HISTORY_MIN_PRECEDENTS = 3
+_HISTORY_POSITIVE_OUTCOME = 0.3
+_HISTORY_NEGATIVE_OUTCOME = 0.0
+_HISTORY_CONFIDENCE_NUDGE = 0.05
 
 # Probe defaults — tiny, no GPU required for the heuristic stubs.
 _PROBE_HOLDOUT_DEFAULT = 100
@@ -460,7 +474,7 @@ def _confidence_from_signals(*, row_count: int, diversity: float) -> float:
     return max(0.2, min(0.95, 0.4 + 0.4 * size_score + 0.2 * diversity))
 
 
-def build_verdict(
+def _base_verdict(
     profile: DatasetProfile,
     task_category: str,
     *,
@@ -582,6 +596,184 @@ def build_verdict(
         task_category=task_category,
         estimated_roi=roi,
     )
+
+
+# ---------------------------------------------------------------------------
+# History bias (v0.71.5 #163) — tune the rubric from past project outcomes
+# ---------------------------------------------------------------------------
+
+def _summarise_history_outcomes(
+    history: Optional[Sequence["HistoryEntry"]],
+    *,
+    project: Optional[str] = None,
+) -> Dict[str, Tuple[float, int]]:
+    """Aggregate accepted-verdict outcomes per choice from prior history.
+
+    Duck-typed (reads ``.choice`` / ``.accepted`` / ``.outcome`` / ``.project``
+    attributes) so :mod:`advise` never imports :mod:`advise_history` at runtime
+    — that import direction is owned by ``advise_history`` and reversing it
+    would create a cycle.
+
+    Filtering:
+    - only entries whose ``accepted is True`` (a rejected verdict carries no
+      endorsement signal),
+    - only entries with a finite ``outcome`` in ``[-1, 1]`` (bool / None /
+      out-of-range skipped — defensive even though ``HistoryEntry`` validates
+      on construction),
+    - only entries matching ``project`` when supplied (per-project scoping:
+      one project's SFT wins must not bias another project's verdict).
+
+    Returns ``{choice: (mean_outcome, count)}`` for every choice with >= 1
+    qualifying entry.
+    """
+    if history is None:
+        return {}
+    if isinstance(history, (str, bytes)) or not isinstance(history, Sequence):
+        raise TypeError("history must be a non-string Sequence or None")
+    acc: Dict[str, Tuple[float, int]] = {}
+    for entry in history:
+        choice = getattr(entry, "choice", None)
+        if choice not in CHOICES:
+            continue
+        if getattr(entry, "accepted", None) is not True:
+            continue
+        if project is not None and getattr(entry, "project", None) != project:
+            continue
+        outcome = getattr(entry, "outcome", None)
+        if outcome is None or isinstance(outcome, bool):
+            continue
+        if not isinstance(outcome, (int, float)):
+            continue
+        f_out = float(outcome)
+        if not math.isfinite(f_out) or not (-1.0 <= f_out <= 1.0):
+            continue
+        total, count = acc.get(choice, (0.0, 0))
+        acc[choice] = (total + f_out, count + 1)
+    return {ch: (total / count, count) for ch, (total, count) in acc.items()}
+
+
+def _is_encouraged(bias: Mapping[str, Tuple[float, int]], choice: str) -> bool:
+    mean_count = bias.get(choice)
+    if mean_count is None:
+        return False
+    mean, count = mean_count
+    return count >= _HISTORY_MIN_PRECEDENTS and mean >= _HISTORY_POSITIVE_OUTCOME
+
+
+def _is_discouraged(bias: Mapping[str, Tuple[float, int]], choice: str) -> bool:
+    mean_count = bias.get(choice)
+    if mean_count is None:
+        return False
+    mean, count = mean_count
+    return count >= _HISTORY_MIN_PRECEDENTS and mean < _HISTORY_NEGATIVE_OUTCOME
+
+
+def _precedent_count(bias: Mapping[str, Tuple[float, int]], choice: str) -> int:
+    mean_count = bias.get(choice)
+    return mean_count[1] if mean_count is not None else 0
+
+
+def build_verdict(
+    profile: DatasetProfile,
+    task_category: str,
+    *,
+    goal: Optional[str] = None,
+    roi: Optional[ROIEstimate] = None,
+    history: Optional[Sequence["HistoryEntry"]] = None,
+    project: Optional[str] = None,
+) -> Verdict:
+    """Combine profile + task into a recommendation, optionally history-biased.
+
+    Without ``history`` this is byte-identical to the v0.54.0 rubric
+    (regression-guarded). When ``history`` is supplied the per-project
+    outcome record nudges marginal decisions (v0.71.5 #163):
+
+    - A choice with >= 3 accepted verdicts averaging >= +0.3 outcome is
+      "encouraged": its confidence is nudged up, and it can flip a marginal
+      RAG-vs-SFT tie toward SFT.
+    - A choice with >= 3 accepted verdicts averaging < 0.0 outcome is
+      "discouraged": it is suppressed (e.g. a project that keeps regressing on
+      GRPO falls back to SFT-on-traces).
+
+    The confidence FLOOR is unchanged; only the tie-break + per-choice
+    suppression shift. Per-project scoping is enforced in
+    :func:`_summarise_history_outcomes`.
+    """
+    base = _base_verdict(profile, task_category, goal=goal, roi=roi)
+    if history is None:
+        return base
+    bias = _summarise_history_outcomes(history, project=project)
+    if not bias:
+        return base
+    return _apply_history_bias(base, bias)
+
+
+def _apply_history_bias(
+    base: Verdict,
+    bias: Mapping[str, Tuple[float, int]],
+) -> Verdict:
+    """Adjust a base verdict using per-project history outcomes."""
+    roi = base.estimated_roi
+    task_category = base.task_category
+
+    # Marginal RAG → SFT flip: strong SFT track record, no comparable RAG
+    # track record. RAG is the marginal call (it fired on a heuristic
+    # variance threshold), so prior SFT success is decisive.
+    if (
+        base.choice == "RAG"
+        and _is_encouraged(bias, "SFT")
+        and not _is_encouraged(bias, "RAG")
+    ):
+        n_sft = _precedent_count(bias, "SFT")
+        return Verdict(
+            choice="SFT",
+            confidence=min(0.95, base.confidence + _HISTORY_CONFIDENCE_NUDGE),
+            reason=(
+                f"Base rubric leaned RAG, but {n_sft} prior SFT verdicts in "
+                "this project averaged a positive outcome (precedent) — "
+                "routing to SFT over RAG."
+            ),
+            reverse_when=(
+                "the answer space is small and stable and RAG's freshness "
+                "outweighs the historical SFT lift — re-run after measuring."
+            ),
+            task_category=task_category,
+            estimated_roi=roi,
+        )
+
+    # Discouraged GRPO: a project that keeps regressing on RL falls back to
+    # SFT-on-traces (raises GRPO's effective floor for this project).
+    if base.choice == "GRPO" and _is_discouraged(bias, "GRPO"):
+        n_grpo = _precedent_count(bias, "GRPO")
+        return Verdict(
+            choice="SFT",
+            confidence=base.confidence,
+            reason=(
+                f"Base rubric leaned GRPO, but {n_grpo} prior GRPO verdicts in "
+                "this project averaged a negative outcome (precedent) — "
+                "falling back to SFT on the reasoning traces."
+            ),
+            reverse_when=(
+                "a reliable programmatic reward is now available and the "
+                "earlier GRPO regressions were reward-shaping bugs, not a "
+                "fundamental mismatch."
+            ),
+            task_category=task_category,
+            estimated_roi=roi,
+        )
+
+    # No flip — nudge confidence when the chosen path has a positive track
+    # record (DPO keeps its own +0.1; we only ever raise, never lower).
+    if _is_encouraged(bias, base.choice):
+        return Verdict(
+            choice=base.choice,
+            confidence=min(0.95, base.confidence + _HISTORY_CONFIDENCE_NUDGE),
+            reason=base.reason,
+            reverse_when=base.reverse_when,
+            task_category=task_category,
+            estimated_roi=roi,
+        )
+    return base
 
 
 # ---------------------------------------------------------------------------

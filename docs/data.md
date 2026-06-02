@@ -94,6 +94,14 @@ soup prune-prompt --input traces.jsonl --output pruned.jsonl --min-frequency 0.9
 
 Binary-search over up-to-32 candidate templates finds the longest qualifying prefix (a longer threshold-meeting prefix may exist beyond the universal one — Soup does not early-exit on the 100% match). Two-pass file read with a 100 000-row DoS cap.
 
+**Tokenizer-aware mode (v0.71.5).** Pass `--tokenizer <id-or-path>` (a HuggingFace repo id, a local path, or anything `AutoTokenizer.from_pretrained` accepts) to detect the shared prefix in *token* space and decode only the remaining ids:
+
+```bash
+soup prune-prompt --input traces.jsonl --output pruned.jsonl --tokenizer Qwen/Qwen2.5-0.5B
+```
+
+Char-level stripping can cut a BPE multi-byte sequence in half when the shared prefix ends mid-token; token-aware pruning finds the longest shared *token-id* prefix and decodes the remainder, so the boundary always lands on a real token. Per-row encoding is capped at 50 000 tokens. Omit `--tokenizer` to keep the original character-level behaviour.
+
 
 ## Active-Learning Sampler (`soup data active-sample`)
 
@@ -107,6 +115,8 @@ soup data active-sample --input traces.jsonl --output for-review.jsonl --budget 
 ```
 
 The output JSONL is a drop-in prompt set for `soup eval human` (v0.19). Budget is bounded `[1, 100 000]`.
+
+**Webhooks (v0.71.5).** `soup ingest`, `soup prune-prompt`, `soup ab`, and `soup data active-sample` all accept `--slack-url` / `--discord-url` and POST a one-line summary on completion through the same SSRF-hardened validator as `soup drift-alarm` (scheme allowlist, loopback-only HTTP, RFC1918 / link-local / reserved / multicast rejected; the post never raises, so a flaky webhook can't fail the command). `soup ab` only fires when the sequential test actually decides (`reject_h0` / `accept_h0`), not while it's still `continue`-ing.
 
 
 ## Synthetic Data Generation
@@ -478,6 +488,8 @@ soup data forge \
 Three tasks supported: `sft` (Q&A pairs), `preference` (chosen/rejected), `tool` (tool-call hypotheses). Active learning prunes rows whose judge reply is too close to the source chunk (low Jaccard distance), keeping only uncertain / informative samples. The provenance manifest is a separate JSON file mapping every row id to `{source_doc, judge_id, chunk_id, filter_score}` so you have a complete audit trail for compliance.
 
 Document discovery is one level deep over `.txt` / `.md` / `.json` / `.jsonl`; dotfiles + symlinked directories are skipped. All paths are cwd-contained, all writes are atomic via staged-tempfile + `os.replace`, and write targets are rejected if they're symlinks. **Judge providers are live**: `--judge-provider ollama` (localhost-only), `--judge-provider anthropic` (env-only API key), `--judge-provider vllm` (scheme-validated). Per-call judge exceptions logged at DEBUG.
+
+**Alternative teacher hubs (v0.71.5).** `--hub modelscope|modelers` pre-fetches the `--teacher` from that hub when the teacher is a routable repo id (`owner/name`); `--hub hf` (default) is a no-op and leaves the teacher as a provenance label. If `--hub` is non-HF but `--teacher` is not a repo id (e.g. the default `local-judge`), Soup prints a loud yellow warning rather than silently dropping the flag.
 
 
 ## Data Quality Scorecard

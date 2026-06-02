@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from typing import Optional
+
 import typer
 from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
 
+from soup_cli.commands._webhook_cli import emit_webhooks, validate_webhook_flags
 from soup_cli.utils.active_sampler import sample_uncertain_rows, validate_budget
 
 console = Console()
@@ -24,6 +27,14 @@ def active_sample(
         100, "--budget",
         help="Max rows to surface for human review (1 - 100_000).",
     ),
+    slack_url: Optional[str] = typer.Option(
+        None, "--slack-url",
+        help="Optional Slack webhook URL — POSTed on completion. SSRF-validated.",
+    ),
+    discord_url: Optional[str] = typer.Option(
+        None, "--discord-url",
+        help="Optional Discord webhook URL — POSTed on completion. SSRF-validated.",
+    ),
 ) -> None:
     """Surface the most uncertain prod traces for human review."""
     try:
@@ -31,6 +42,10 @@ def active_sample(
     except (TypeError, ValueError) as exc:
         console.print(f"[red]{escape(str(exc))}[/]")
         raise typer.Exit(2) from exc
+
+    slack_url, discord_url = validate_webhook_flags(
+        slack_url, discord_url, console=console
+    )
 
     try:
         plan = sample_uncertain_rows(
@@ -53,6 +68,19 @@ def active_sample(
             title="active-sample",
             border_style="green",
         )
+    )
+
+    emit_webhooks(
+        slack_url,
+        discord_url,
+        payload={
+            "command": "active-sample",
+            "rows_selected": plan.rows_selected,
+            "rows_in": plan.rows_in,
+            "mean_uncertainty": plan.mean_uncertainty,
+            "budget": plan.budget,
+        },
+        console=console,
     )
 
 

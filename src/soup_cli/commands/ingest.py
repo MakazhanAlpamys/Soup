@@ -21,6 +21,7 @@ from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
 
+from soup_cli.commands._webhook_cli import emit_webhooks, validate_webhook_flags
 from soup_cli.utils import ingest_sources as _ingest_sources
 from soup_cli.utils.ingest_sources import (
     SUPPORTED_INGEST_SOURCES,
@@ -53,6 +54,14 @@ def ingest(
         "-o",
         help="Output JSONL (default: traces.jsonl in cwd).",
     ),
+    slack_url: Optional[str] = typer.Option(
+        None, "--slack-url",
+        help="Optional Slack webhook URL — POSTed on completion. SSRF-validated.",
+    ),
+    discord_url: Optional[str] = typer.Option(
+        None, "--discord-url",
+        help="Optional Discord webhook URL — POSTed on completion. SSRF-validated.",
+    ),
 ) -> None:
     """Import production traces from a SaaS observability vendor (v0.63.0).
 
@@ -65,6 +74,10 @@ def ingest(
     except (TypeError, ValueError) as exc:
         console.print(f"[red]{escape(str(exc))}[/]")
         raise typer.Exit(2) from exc
+
+    slack_url, discord_url = validate_webhook_flags(
+        slack_url, discord_url, console=console
+    )
 
     if not is_under_cwd(logs):
         console.print(f"[red]--logs '{escape(logs)}' is outside cwd — refusing[/]")
@@ -109,6 +122,18 @@ def ingest(
     console.print(
         f"[green]Wrote {count} traces from {escape(canonical)} -> "
         f"{escape(output_path.name)}[/]"
+    )
+
+    emit_webhooks(
+        slack_url,
+        discord_url,
+        payload={
+            "command": "ingest",
+            "source": canonical,
+            "traces_written": count,
+            "auth_env_set": auth_value is not None,
+        },
+        console=console,
     )
 
 

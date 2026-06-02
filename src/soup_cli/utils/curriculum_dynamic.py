@@ -36,6 +36,7 @@ __all__ = [
     "DynamicCurriculumPolicy",
     "BucketStats",
     "compute_bucket_weights",
+    "percentile_bucket",
     "validate_distributed_curriculum",
 ]
 
@@ -177,6 +178,48 @@ def _softmax(values: Sequence[float], temperature: float) -> List[float]:
         n = len(values)
         return [1.0 / n] * n
     return [e / total for e in exps]
+
+
+def percentile_bucket(
+    value: float,
+    window: Sequence[float],
+    num_buckets: int,
+) -> int:
+    """Bucket ``value`` by its percentile rank within a rolling ``window``.
+
+    v0.71.5 #149 — replaces step-mod round-robin with a difficulty-signal
+    bucketing for ``curriculum_metric in {loss, perplexity}``. A value at or
+    above every window member lands in the top (hardest) bucket; a value
+    below every member lands in bucket 0. Because the bucket is a function of
+    the value's rank (not the step), a consistently-high-loss sample is
+    routed to the same bucket on every recompute.
+
+    Args:
+        value: The current sample's difficulty signal (e.g. loss).
+        window: Recent difficulty signals (rolling reference distribution).
+            An empty / ``None`` window returns bucket 0 (warm-up — the caller
+            should fall back to round-robin until the window fills).
+        num_buckets: Number of difficulty buckets.
+
+    Returns:
+        Bucket id in ``[0, num_buckets - 1]``.
+    """
+    nb = _reject_bool_int("num_buckets", num_buckets)
+    if nb < _MIN_BUCKETS or nb > _MAX_BUCKETS:
+        raise ValueError(
+            f"num_buckets must be in [{_MIN_BUCKETS}, {_MAX_BUCKETS}], got {nb}"
+        )
+    fv = _reject_bool_float("value", value)
+    if nb == 1:
+        return 0
+    if not window:
+        return 0
+    le = sum(
+        1 for w in window if _reject_bool_float("window value", w) <= fv
+    )
+    rank = le / len(window)
+    bucket = int(rank * nb)
+    return min(nb - 1, max(0, bucket))
 
 
 def compute_bucket_weights(

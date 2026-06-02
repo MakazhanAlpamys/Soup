@@ -318,6 +318,15 @@ class ExperimentTracker:
         Used by ``soup eval against`` for run-vs-run paired-bootstrap CI.
         Returns an empty list when the metric does not appear in any row
         — the caller treats that as "no signal, do not gate".
+
+        v0.71.5 #164: the per-step ``metrics`` table only carries training
+        columns (``loss`` / ``lr`` / ``grad_norm`` / ``speed`` / ``gpu_mem``).
+        Eval metrics like ``task_accuracy`` / ``refusal_rate`` live in the
+        ``eval_results`` table instead. So when the per-step pass yields no
+        rows we fall back to the per-benchmark scores in ``eval_results``.
+        Querying ``metrics`` first preserves the established behaviour for
+        every training-loop column (no regression for existing callers);
+        the fallback only fires when the column path is empty.
         """
         if not isinstance(run_id, str) or not run_id:
             raise ValueError("run_id must be a non-empty string")
@@ -335,7 +344,34 @@ class ExperimentTracker:
                 # Skip non-numeric cells silently — same-run inconsistency
                 # is not the caller's problem; they get a shorter series.
                 continue
-        return series
+        if series:
+            return series
+        # Bridge to eval_results (v0.71.5 #164) — benchmark scores for
+        # `soup eval against`. Empty when neither table has data.
+        return self._eval_score_series(run_id, metric)
+
+    def _eval_score_series(self, run_id: str, benchmark: str) -> list[float]:
+        """Return the per-row ``score`` series from ``eval_results``.
+
+        Ordered by insertion (``id``) for deterministic pairing in the
+        paired-bootstrap CI. Non-numeric cells are skipped silently.
+        """
+        conn = self._get_conn()
+        rows = conn.execute(
+            "SELECT score FROM eval_results "
+            "WHERE run_id = ? AND benchmark = ? ORDER BY id",
+            (run_id, benchmark),
+        ).fetchall()
+        out: list[float] = []
+        for row in rows:
+            value = row["score"]
+            if value is None:
+                continue
+            try:
+                out.append(float(value))
+            except (TypeError, ValueError):
+                continue
+        return out
 
     def save_eval_result(
         self,

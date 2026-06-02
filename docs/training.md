@@ -907,11 +907,14 @@ Layer dynamic re-weighting on top of the static `curriculum` bucketer. Every N s
 training:
   curriculum: true                          # static bucketer (v0.23.0)
   curriculum_buckets: 4
+  curriculum_metric: perplexity             # length (default) | loss | perplexity
   curriculum_dynamic: true                  # NEW — dynamic re-weighting
   curriculum_dynamic_recompute_steps: 50    # refresh every 50 global steps
   curriculum_dynamic_floor: 0.05            # min weight per bucket
   curriculum_dynamic_temperature: 1.0       # softmax temp on uncertainty
 ```
+
+**Bucketing by difficulty percentile (v0.71.5).** When `curriculum_metric` is `loss` or `perplexity`, the dynamic callback assigns each step's sample to a bucket by its *rank* within a rolling 512-step window of the difficulty signal (perplexity = `exp(min(loss, 50))`), instead of the round-robin fallback used for `length`. This keeps the buckets calibrated to the live loss distribution rather than a static length sort. `length` (the default) keeps the round-robin assignment.
 
 Visualise the recorded bucket-weight evolution with `soup runs curriculum-curve <run_id>`.
 

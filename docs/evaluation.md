@@ -82,6 +82,8 @@ soup advise compare
 4. Task is `factual_lookup` with high output variance → **RAG**.
 5. Otherwise → **SFT**.
 
+**Cross-project confidence bias (v0.71.5).** When `~/.soup/advise_history.jsonl` holds ≥3 prior verdicts for the *same choice* in the *same project*, `soup advise` nudges its confidence (not its decision) toward what worked before: a net-positive precedent record (you accepted it AND its recorded outcome was good) bumps confidence up by a small constant; a net-negative one bumps it down. The rubric verdict itself never changes — only how sure Soup is. Verdicts must be `--record`ed for the bias to kick in.
+
 **Why this command exists.** "Choose fine-tuning vs RAG vs prompt-engineering" is the most-mis-made decision in the space. Reddit, HN, IBM, and Google Cloud all converge on the same advice (start with prompts, escalate to RAG, fine-tune as last resort) and almost everyone ignores it because nobody has the data to prove their case is the exception. Soup `autopilot` picks hyperparameters AFTER you've decided to train; `soup advise` owns the layer above. No trainer library has an incentive to tell users *not to train* — Unsloth's funnel, Axolotl's hosted business, LLaMA-Factory's Alibaba alignment all monetise the training event.
 
 
@@ -212,6 +214,8 @@ soup ab --input ab.jsonl --metric judge_score --alpha 0.01 --beta 0.10 --effect-
 ```
 
 Input rows look like `{"arm": "control", "latency": 1.23}` or `{"arm": "treatment", "judge_score": 0.91}`. Decision is one of `continue` (keep collecting samples), `reject_h0` (real difference detected), `accept_h0` (no significant difference). Composes with `soup loop canary` (v0.58) — promote or roll back as soon as the LLR clears a decision boundary.
+
+`soup ab` accepts `--slack-url` / `--discord-url` (v0.71.5) and pings the webhook **only when the test actually decides** (`reject_h0` / `accept_h0`) — a still-running `continue` stays quiet so you're not paged on every peek. Same SSRF-hardened validator as `soup drift-alarm`.
 
 
 ## Drift Alarm (`soup drift-alarm`)

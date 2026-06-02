@@ -113,8 +113,20 @@ def attach_curriculum_callback(
             getattr(tcfg, "curriculum_dynamic_temperature", 1.0) or 1.0
         ),
     )
+    # v0.71.5 #149 — thread curriculum_metric so the callback can bucket by
+    # loss / perplexity percentile (round-robin fallback for `length`). Any
+    # value that is not one of the three valid metrics (e.g. a missing field
+    # or a test MagicMock) falls back to `length` so the callback always
+    # constructs.
+    curriculum_metric = getattr(tcfg, "curriculum_metric", "length")
+    if curriculum_metric not in ("length", "perplexity", "loss"):
+        curriculum_metric = "length"
     try:
-        callback = DynamicCurriculumCallback(policy=policy, output_dir=output_dir)
+        callback = DynamicCurriculumCallback(
+            policy=policy,
+            output_dir=output_dir,
+            curriculum_metric=curriculum_metric,
+        )
     except (TypeError, ValueError) as exc:
         logger.debug("attach_curriculum_callback rejected: %s", exc)
         return False

@@ -100,6 +100,16 @@ def _project_name() -> str:
     return name[:128]
 
 
+def current_project_name() -> str:
+    """Public accessor for the current project label (v0.71.5 #163).
+
+    The CLI passes this to ``build_verdict(..., project=...)`` so the history
+    bias is scoped to the project the verdict was recorded under. Returns the
+    same string :func:`record_verdict` stamps into the ``project`` field.
+    """
+    return _project_name()
+
+
 def record_verdict(
     verdict: Verdict,
     *,

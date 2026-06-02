@@ -27,7 +27,7 @@ import json
 import math
 import os
 from dataclasses import dataclass
-from typing import Sequence
+from typing import Any, List, Optional, Sequence, Union
 
 from soup_cli.utils.paths import is_under_cwd
 
@@ -35,6 +35,7 @@ from soup_cli.utils.paths import is_under_cwd
 _MAX_SCAN_ROWS = 100_000
 _MAX_ROW_CHARS = 1_000_000  # 1 MB / row
 _MAX_PREFIX_LEN = 100_000  # hard cap on returned prefix length
+_MAX_TOKENS_PER_ROW = 50_000  # token-aware mode (v0.71.5 #205) per-row cap
 
 # Tunable: a frequency below this is meaningless (we want a *near-universal*
 # prefix). Operator can pick anything in [0, 1] via --min-frequency.
@@ -163,11 +164,112 @@ def detect_common_prefix(
     return best_prefix
 
 
+def detect_common_prefix_tokens(
+    token_rows: Sequence[Sequence[int]],
+    *,
+    min_frequency: float,
+) -> List[int]:
+    """Token-level analogue of :func:`detect_common_prefix` (v0.71.5 #205).
+
+    Returns the longest token-id prefix shared by >= ``min_frequency`` of
+    rows. Operating on token IDs (not characters) guarantees the prefix
+    always ends on a token boundary — a multi-byte UTF-8 sequence can never
+    be split mid-code-point.
+    """
+    threshold = validate_min_frequency(min_frequency)
+    if isinstance(token_rows, (str, bytes)) or not hasattr(token_rows, "__iter__"):
+        raise TypeError(
+            f"token_rows must be an iterable of int sequences, "
+            f"got {type(token_rows).__name__}"
+        )
+
+    materialised: List[List[int]] = []
+    for idx, row in enumerate(token_rows):
+        if isinstance(row, (str, bytes)) or not hasattr(row, "__iter__"):
+            raise TypeError(
+                f"token_rows[{idx}] must be a sequence of ints, "
+                f"got {type(row).__name__}"
+            )
+        materialised.append(list(row)[:_MAX_TOKENS_PER_ROW])
+        if len(materialised) >= _MAX_SCAN_ROWS:
+            break
+
+    if not materialised:
+        return []
+    if len(materialised) == 1:
+        return list(materialised[0]) if threshold >= 1.0 else []
+
+    need = max(1, int(math.ceil(threshold * len(materialised))))
+    best_prefix: List[int] = []
+    sample_templates = materialised[: min(32, len(materialised))]
+    for template in sample_templates:
+        lo, hi = 0, len(template)
+        best_len = 0
+        while lo <= hi:
+            mid = (lo + hi) // 2
+            if mid == 0:
+                lo = mid + 1
+                continue
+            pfx = template[:mid]
+            count = sum(1 for r in materialised if r[:mid] == pfx)
+            if count >= need:
+                best_len = mid
+                lo = mid + 1
+            else:
+                hi = mid - 1
+        if best_len > len(best_prefix):
+            best_prefix = template[:best_len]
+    return best_prefix
+
+
+def _resolve_tokenizer(tokenizer: Union[str, Any]) -> Any:
+    """Return a tokenizer object from a name (lazy AutoTokenizer) or object.
+
+    A pre-built tokenizer-like object (duck-typed ``encode`` / ``decode``)
+    is returned as-is — this is the injectable test seam + lets advanced
+    callers pass an already-loaded tokenizer. A string is treated as an HF
+    model id / local path and lazy-loaded via ``transformers.AutoTokenizer``
+    (so importing this module never pulls transformers).
+    """
+    if hasattr(tokenizer, "encode") and hasattr(tokenizer, "decode"):
+        return tokenizer
+    if not isinstance(tokenizer, str):
+        raise TypeError(
+            "tokenizer must be a model id / path string or a tokenizer object"
+        )
+    if not tokenizer:
+        raise ValueError("tokenizer name must be non-empty")
+    try:
+        from transformers import AutoTokenizer  # noqa: PLC0415
+    except ImportError as exc:
+        raise ValueError(
+            "tokenizer-aware prune-prompt needs transformers — "
+            "install with: pip install 'soup-cli[train]'"
+        ) from exc
+    try:
+        return AutoTokenizer.from_pretrained(tokenizer)
+    except Exception as exc:  # noqa: BLE001 — surface a friendly message.
+        raise ValueError(
+            f"could not load tokenizer {tokenizer!r}: {type(exc).__name__}: {exc}"
+        ) from exc
+
+
+def _encode(tok: Any, text: str) -> List[int]:
+    """Encode ``text`` to token IDs (no special tokens), capped per-row."""
+    try:
+        ids = tok.encode(text, add_special_tokens=False)
+    except TypeError:
+        # Tokenizers / fakes without the kwarg.
+        ids = tok.encode(text)
+    return list(ids)[:_MAX_TOKENS_PER_ROW]
+
+
 def prune_traces(
     input_path: str,
     *,
     output_path: str,
     min_frequency: float = _DEFAULT_MIN_FREQUENCY,
+    tokenizer: Optional[Union[str, Any]] = None,
 ) -> PrunePromptReport:
     """Read a JSONL of {prompt, output} rows, strip shared prefix, write.
 
@@ -176,6 +278,12 @@ def prune_traces(
     ``prompt`` field (other fields untouched). When no prefix clears the
     threshold, the output is byte-identical to the input plus a
     ``rows_pruned=0`` report.
+
+    v0.71.5 #205: pass ``tokenizer`` (an HF model id / local path string, or
+    a pre-built tokenizer object) to detect + strip the prefix on token
+    boundaries instead of characters — the prefix can then never end
+    mid-UTF-8-code-point. Default (``None``) keeps the whitespace-character
+    behaviour.
     """
     threshold = validate_min_frequency(min_frequency)
 
@@ -197,6 +305,10 @@ def prune_traces(
         raise ValueError(f"output_path {output_path!r} is outside cwd")
     if not os.path.isfile(input_path):
         raise FileNotFoundError(input_path)
+
+    # Resolve the tokenizer up front (fails fast on a bad name even on an
+    # empty input file) — None keeps the legacy character path.
+    tok = _resolve_tokenizer(tokenizer) if tokenizer is not None else None
 
     # First pass: collect prompts (capped).
     prompts: list[str] = []
@@ -233,9 +345,24 @@ def prune_traces(
             min_frequency=threshold,
         )
 
-    prefix = detect_common_prefix(prompts, min_frequency=threshold)
+    if tok is None:
+        return _prune_char_level(
+            input_path, output_path, prompts, rows_total, threshold
+        )
+    return _prune_token_level(
+        tok, input_path, output_path, prompts, rows_total, threshold
+    )
 
-    # Second pass: write output with prefix stripped where applicable.
+
+def _prune_char_level(
+    input_path: str,
+    output_path: str,
+    prompts: List[str],
+    rows_total: int,
+    threshold: float,
+) -> PrunePromptReport:
+    """Character-level prefix strip (the v0.63.0 default behaviour)."""
+    prefix = detect_common_prefix(prompts, min_frequency=threshold)
     rows_pruned = 0
     with open(input_path, encoding="utf-8") as fh_in, \
             open(output_path, "w", encoding="utf-8") as fh_out:
@@ -253,7 +380,6 @@ def prune_traces(
                 row["prompt"] = row["prompt"][len(prefix):]
                 rows_pruned += 1
             fh_out.write(json.dumps(row, ensure_ascii=False) + "\n")
-
     return PrunePromptReport(
         prefix=prefix,
         prefix_chars=len(prefix),
@@ -263,9 +389,58 @@ def prune_traces(
     )
 
 
+def _prune_token_level(
+    tok: Any,
+    input_path: str,
+    output_path: str,
+    prompts: List[str],
+    rows_total: int,
+    threshold: float,
+) -> PrunePromptReport:
+    """Token-aware prefix strip (v0.71.5 #205).
+
+    The detected prefix is a list of token IDs; stripping a row decodes the
+    REMAINING token IDs so the boundary is always a clean token break.
+    """
+    token_rows = [_encode(tok, p) for p in prompts]
+    prefix_ids = detect_common_prefix_tokens(token_rows, min_frequency=threshold)
+    prefix_text = tok.decode(prefix_ids) if prefix_ids else ""
+    plen = len(prefix_ids)
+
+    rows_pruned = 0
+    with open(input_path, encoding="utf-8") as fh_in, \
+            open(output_path, "w", encoding="utf-8") as fh_out:
+        for line in fh_in:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(row, dict):
+                continue
+            prompt = row.get("prompt")
+            if prefix_ids and isinstance(prompt, str):
+                ids = _encode(tok, prompt)
+                if ids[:plen] == prefix_ids:
+                    row["prompt"] = tok.decode(ids[plen:])
+                    rows_pruned += 1
+            fh_out.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+    return PrunePromptReport(
+        prefix=prefix_text,
+        prefix_chars=len(prefix_text),
+        rows_total=rows_total,
+        rows_pruned=rows_pruned,
+        min_frequency=threshold,
+    )
+
+
 __all__ = [
     "PrunePromptReport",
     "detect_common_prefix",
+    "detect_common_prefix_tokens",
     "prune_traces",
     "validate_min_frequency",
 ]

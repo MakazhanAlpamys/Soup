@@ -31,14 +31,17 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import stat
 import tempfile
-from typing import Any, Dict, Optional, Tuple
+from collections import deque
+from typing import Any, Deque, Dict, Optional, Tuple
 
 from soup_cli.utils.curriculum_dynamic import (
     DynamicCurriculumPolicy,
     compute_bucket_weights,
+    percentile_bucket,
 )
 from soup_cli.utils.paths import is_under_cwd
 
@@ -46,6 +49,14 @@ logger = logging.getLogger(__name__)
 
 _MAX_PATH_LEN = 4096
 _HISTORY_FILENAME = "curriculum_history.jsonl"
+# Curriculum metrics that drive percentile bucketing from the live loss
+# signal (v0.71.5 #149). ``length`` has no per-step signal in HF logs, so it
+# falls back to round-robin (length bucketing is the static curriculum's
+# data-prep-time job — see utils/curriculum.py).
+_PERCENTILE_METRICS = frozenset({"loss", "perplexity"})
+_VALID_CURRICULUM_METRICS = frozenset({"length", "perplexity", "loss"})
+# Rolling-window size for the percentile reference distribution.
+_SIGNAL_WINDOW = 512
 
 __all__ = [
     "DynamicCurriculumCallback",
@@ -149,14 +160,25 @@ class DynamicCurriculumCallback(_try_import_callback_base()):  # type: ignore[mi
         self,
         policy: DynamicCurriculumPolicy,
         output_dir: str,
+        curriculum_metric: str = "length",
     ) -> None:
         if not isinstance(policy, DynamicCurriculumPolicy):
             raise TypeError(
                 "policy must be DynamicCurriculumPolicy, got "
                 f"{type(policy).__name__}"
             )
+        if curriculum_metric not in _VALID_CURRICULUM_METRICS:
+            raise ValueError(
+                "curriculum_metric must be one of "
+                f"{sorted(_VALID_CURRICULUM_METRICS)}, got {curriculum_metric!r}"
+            )
         self._policy = policy
+        self._curriculum_metric = curriculum_metric
         self._output_dir = _validate_output_dir(output_dir)
+        # Rolling difficulty-signal window for percentile bucketing (v0.71.5
+        # #149). Persists across recomputes so a consistently-hard sample
+        # keeps landing in the same bucket.
+        self._signal_window: Deque[float] = deque(maxlen=_SIGNAL_WINDOW)
         # Per-bucket accumulator: bucket_id -> {num_samples, loss_sum, grad_norm_sum}
         self._stats: Dict[int, Dict[str, float]] = {}
         # Most recently computed weights (read by external sampler hook).
@@ -172,6 +194,10 @@ class DynamicCurriculumCallback(_try_import_callback_base()):  # type: ignore[mi
     @property
     def policy(self) -> DynamicCurriculumPolicy:
         return self._policy
+
+    @property
+    def curriculum_metric(self) -> str:
+        return self._curriculum_metric
 
     @property
     def output_dir(self) -> str:
@@ -215,12 +241,54 @@ class DynamicCurriculumCallback(_try_import_callback_base()):  # type: ignore[mi
         # HF emits "loss" + (optionally) "grad_norm" in `logs`.
         loss = logs.get("loss")
         grad_norm = logs.get("grad_norm")
-        # Bucket id derived from the global step (round-robin BETA strategy).
-        try:
-            bucket_id = _pick_bucket(global_step, self._policy.num_buckets)
-        except (TypeError, ValueError):
-            return
+        nb = self._policy.num_buckets
+        # v0.71.5 #149: percentile bucketing on the difficulty signal for
+        # loss / perplexity once the rolling window has warmed up; otherwise
+        # round-robin (warm-up + the `length` metric, which has no per-step
+        # signal in HF logs).
+        signal = self._difficulty_signal(loss)
+        bucket_id: Optional[int] = None
+        if (
+            self._curriculum_metric in _PERCENTILE_METRICS
+            and signal is not None
+            and len(self._signal_window) > 0
+        ):
+            try:
+                bucket_id = percentile_bucket(
+                    signal, list(self._signal_window), nb
+                )
+            except (TypeError, ValueError):
+                bucket_id = None
+        if bucket_id is None:
+            try:
+                bucket_id = _pick_bucket(global_step, nb)
+            except (TypeError, ValueError):
+                return
+        if signal is not None:
+            self._signal_window.append(signal)
         self._record_sample(bucket_id, loss, grad_norm)
+
+    def _difficulty_signal(self, loss: object) -> Optional[float]:
+        """Map the logged loss to the configured difficulty signal.
+
+        Returns ``None`` when no usable signal is available (metric is
+        ``length`` — no per-step length in HF logs — or the loss is
+        missing / non-finite), which routes the step through the
+        round-robin fallback.
+        """
+        if self._curriculum_metric not in _PERCENTILE_METRICS:
+            return None
+        try:
+            loss_f = float(loss) if loss is not None else None
+        except (TypeError, ValueError):
+            return None
+        if loss_f is None or not math.isfinite(loss_f):
+            return None
+        if self._curriculum_metric == "perplexity":
+            # exp is monotonic in loss, so percentile ranks are identical;
+            # clamp the exponent to avoid overflow on a stray loss spike.
+            return math.exp(min(loss_f, 50.0))
+        return loss_f
 
     def on_step_end(
         self,

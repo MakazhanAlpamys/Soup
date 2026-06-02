@@ -1914,15 +1914,31 @@ def push_dataset_cmd(
         "--message",
         help="Commit message for the dataset upload",
     ),
+    hub: str = typer.Option(
+        "hf",
+        "--hub",
+        help=(
+            "Target hub: hf (default) / modelscope / modelers. Non-HF hubs "
+            "upload via the matching SDK (v0.71.5 #157) — repo_type=dataset, "
+            "commit message sanitised to first line + 200 chars."
+        ),
+    ),
 ):
-    """Upload a local JSONL dataset to HuggingFace Hub as a dataset repo."""
+    """Upload a local JSONL dataset to a model hub as a dataset repo."""
     from soup_cli.utils.hf import (
         get_hf_api,
         resolve_endpoint,
         resolve_token,
         validate_repo_id,
     )
+    from soup_cli.utils.hubs import validate_hub_name
     from soup_cli.utils.paths import is_under_cwd
+
+    try:
+        hub_canonical = validate_hub_name(hub)
+    except (TypeError, ValueError) as exc:
+        console.print(f"[red]{exc}[/]")
+        raise typer.Exit(2) from exc
 
     file_path = Path(input_path)
     if not file_path.exists():
@@ -1940,8 +1956,17 @@ def push_dataset_cmd(
     try:
         validate_repo_id(hf_dataset)
     except ValueError as exc:
-        console.print(f"[red]Invalid --hf-dataset repo id:[/] {exc}")
+        console.print(f"[red]Invalid --{hub_canonical}-dataset repo id:[/] {exc}")
         raise typer.Exit(1) from exc
+
+    # v0.71.5 #157 — non-HF hubs route through the shared upload_repo adapter.
+    # ModelScope / Modelers SDKs upload a folder, so the single JSONL is
+    # staged into a temp dir and uploaded as a dataset repo.
+    if hub_canonical != "hf":
+        _push_dataset_non_hf(
+            hub_canonical, hf_dataset, file_path, commit_message
+        )
+        return
 
     token = resolve_token()
     if token is None:
@@ -1984,6 +2009,53 @@ def push_dataset_cmd(
 
     console.print(
         f"[green]Uploaded to[/] https://huggingface.co/datasets/{hf_dataset}"
+    )
+
+
+def _push_dataset_non_hf(
+    hub: str, repo_id: str, file_path: Path, commit_message: str
+) -> None:
+    """Upload a single JSONL to a non-HF hub as a dataset (v0.71.5 #157).
+
+    ``upload_repo`` uploads a folder, so the file is staged into a temp dir
+    first. ``upload_repo`` already sanitises the commit message (first line +
+    200 chars) and validates the repo id shape.
+    """
+    import shutil
+    import tempfile
+
+    from rich.markup import escape
+
+    from soup_cli.utils.hubs import upload_repo
+
+    # Stage UNDER cwd — `upload_repo` enforces cwd-containment on folder_path
+    # (the system tempdir would be rejected).
+    staging = tempfile.mkdtemp(prefix=".soup_dataset_push.", dir=os.getcwd())
+    try:
+        shutil.copy2(str(file_path), os.path.join(staging, file_path.name))
+        try:
+            upload_repo(
+                hub,
+                repo_id,
+                folder_path=staging,
+                commit_message=commit_message,
+                repo_type="dataset",
+            )
+        except ImportError as exc:
+            console.print(f"[red]{exc}[/]")
+            raise typer.Exit(1) from exc
+        except (TypeError, ValueError) as exc:
+            console.print(f"[red]Upload failed:[/] {exc}")
+            raise typer.Exit(1) from exc
+        except Exception as exc:  # noqa: BLE001 — surface SDK errors generically
+            console.print(f"[red]Upload failed:[/] {exc}")
+            raise typer.Exit(1) from exc
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+
+    console.print(
+        f"[green]Uploaded[/] {escape(file_path.name)} to {escape(hub)} "
+        f"dataset [bold]{escape(repo_id)}[/]"
     )
 
 

@@ -12,6 +12,51 @@ reproducing 70+ versions of notes.
 
 ## [Unreleased]
 
+## [0.71.5] - 2026-06-02
+
+### Added
+- **`soup eval against` now reads eval metrics** — `ExperimentTracker.get_metric_series`
+  falls back to the `eval_results` table when the metric is not a per-step
+  training column (`loss` / `lr` / `grad_norm` / `speed` / `gpu_mem`). So
+  `soup eval against <base> --candidate <run> --metric task_accuracy` returns a
+  real score series (benchmark scores live in `eval_results`, not `metrics`)
+  instead of "Empty series". Per-step columns still read from `metrics` — no
+  regression for existing callers.
+- **`soup advise` learns from past project outcomes** — `soup advise` now reads
+  this project's accepted-verdict history (`~/.soup/advise_history.jsonl`) and
+  biases the rubric: 3+ successful SFT precedents flip a marginal RAG call to
+  SFT; 3+ negative GRPO outcomes suppress GRPO in favour of SFT-on-traces; an
+  encouraged choice gets a small confidence nudge. Scoped per-project (one
+  project's record never biases another). No history → identical to before.
+- **Slack/Discord webhooks on four more commands** — `--slack-url` / `--discord-url`
+  (SSRF-hardened, loopback-only HTTP, RFC1918 rejected, never crashes the
+  command) now ship on `soup ingest`, `soup prune-prompt`, `soup ab` (fires only
+  on a `reject_h0` / `accept_h0` decision, not `continue`), and
+  `soup data active-sample` — not just `soup drift-alarm`. The validator + sender
+  moved to a shared `soup_cli/utils/webhooks.py`.
+- **Tokenizer-aware `soup prune-prompt`** — `--tokenizer <model_or_path>` detects
+  and strips the shared system-prompt prefix on **token** boundaries instead of
+  characters, so a multi-byte UTF-8 prefix can never be split mid-code-point.
+  Default (no `--tokenizer`) keeps the whitespace-character behaviour.
+- **Curriculum bucketing by loss percentile** — `DynamicCurriculumCallback` now
+  buckets samples by the percentile rank of the live loss (or perplexity)
+  signal within a rolling window when `data.curriculum_metric` is `loss` /
+  `perplexity`, so a consistently-hard sample is routed to the same difficulty
+  bucket across recomputes. `length` and warm-up still use round-robin.
+- **`--hub` on `soup data push` and `soup data forge`** — `soup data push
+  --hub modelscope|modelers` uploads a dataset via the matching SDK
+  (`repo_type=dataset`, commit message sanitised); `soup data forge --hub
+  <non-hf> --teacher owner/name` pre-fetches the teacher model from that hub
+  (and warns when the teacher is not a repo id so `--hub` is never silently
+  ignored). HF stays the default.
+
+### Notes
+- Live SaaS *pull* adapters for `soup ingest` (Langfuse / LangSmith / Helicone /
+  OpenPipe / OpenAI SDKs, issue #204) remain deferred: they need credentialed
+  vendor accounts with populated trace data to validate honestly. Tracked as an
+  open, `infra-blocked` (external-account) item. `soup ingest` continues to parse
+  the JSONL export you pull from your dashboard.
+
 ## [0.71.4] - 2026-06-02
 
 ### Added

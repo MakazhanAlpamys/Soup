@@ -7,11 +7,14 @@ signature trick — shipped OSS for v0.63.0 Part B).
 
 from __future__ import annotations
 
+from typing import Optional
+
 import typer
 from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
 
+from soup_cli.commands._webhook_cli import emit_webhooks, validate_webhook_flags
 from soup_cli.utils.prune_prompt import prune_traces, validate_min_frequency
 
 console = Console()
@@ -35,6 +38,22 @@ def prune_prompt_cmd(
         "--min-frequency",
         help="Prefix must appear in >= this fraction of rows to be stripped (0.0 - 1.0).",
     ),
+    tokenizer: Optional[str] = typer.Option(
+        None,
+        "--tokenizer",
+        help=(
+            "Optional HF tokenizer (model id or local path) for token-aware "
+            "prefix detection. Default: whitespace-character level."
+        ),
+    ),
+    slack_url: Optional[str] = typer.Option(
+        None, "--slack-url",
+        help="Optional Slack webhook URL — POSTed on completion. SSRF-validated.",
+    ),
+    discord_url: Optional[str] = typer.Option(
+        None, "--discord-url",
+        help="Optional Discord webhook URL — POSTed on completion. SSRF-validated.",
+    ),
 ) -> None:
     """Detect + strip a shared system-prompt prefix (v0.63.0 Part B)."""
     try:
@@ -43,11 +62,16 @@ def prune_prompt_cmd(
         console.print(f"[red]{escape(str(exc))}[/]")
         raise typer.Exit(2) from exc
 
+    slack_url, discord_url = validate_webhook_flags(
+        slack_url, discord_url, console=console
+    )
+
     try:
         report = prune_traces(
             input_path,
             output_path=output_path,
             min_frequency=min_frequency,
+            tokenizer=tokenizer,
         )
     except FileNotFoundError:
         console.print(f"[red]Input not found: {escape(input_path)}[/]")
@@ -55,6 +79,14 @@ def prune_prompt_cmd(
     except (TypeError, ValueError) as exc:
         console.print(f"[red]{escape(str(exc))}[/]")
         raise typer.Exit(1) from exc
+
+    payload = {
+        "command": "prune-prompt",
+        "prefix_found": bool(report.prefix),
+        "prefix_chars": report.prefix_chars,
+        "rows_pruned": report.rows_pruned,
+        "rows_total": report.rows_total,
+    }
 
     if not report.prefix:
         console.print(
@@ -65,6 +97,7 @@ def prune_prompt_cmd(
                 border_style="yellow",
             )
         )
+        emit_webhooks(slack_url, discord_url, payload=payload, console=console)
         return
 
     snippet = report.prefix if len(report.prefix) <= 200 else report.prefix[:200] + "..."
@@ -77,6 +110,7 @@ def prune_prompt_cmd(
             border_style="green",
         )
     )
+    emit_webhooks(slack_url, discord_url, payload=payload, console=console)
 
 
 __all__ = ["prune_prompt_cmd"]

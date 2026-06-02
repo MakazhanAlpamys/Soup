@@ -23,20 +23,22 @@ quant-check thresholds; operators can tune via --threshold.
 
 from __future__ import annotations
 
-import ipaddress
 import json
 import math
 import os
 from dataclasses import dataclass
-from typing import Iterable, Mapping, Optional, Tuple
-from urllib.parse import urlparse
+from typing import Iterable, Mapping, Tuple
 
 from soup_cli.utils.paths import is_under_cwd
 
+# Webhook helpers were lifted into the shared ``utils/webhooks`` module in
+# v0.71.5 #207 so every production-trace command can offer --slack-url /
+# --discord-url. Re-exported here for back-compat (callers + tests that import
+# ``validate_webhook_url`` / ``post_webhook`` from ``drift_alarm``).
+from soup_cli.utils.webhooks import post_webhook, validate_webhook_url
+
 _MAX_REFERENCE_ROWS = 1_000_000
-_MAX_WEBHOOK_URL_LEN = 4096
 _MAX_TEXT_LEN = 1_000_000  # 1 MB / row
-_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 # Default smoothing constant for the KL kernel (Laplace-style add-epsilon
 # to defend against `log(0)` when a token in `p` is absent from `q`).
 _EPS = 1e-9
@@ -82,73 +84,6 @@ def validate_threshold(value: object) -> float:
     if f_val > 100.0:
         raise ValueError(f"threshold must be <= 100, got {f_val}")
     return f_val
-
-
-def _is_private_or_link_local(host: str) -> bool:
-    """Return True iff ``host`` resolves to a non-loopback private/reserved IP.
-
-    Explicit parentheses on the final clause (code-review MEDIUM fix
-    v0.63.0): Python binds `and` tighter than `or`, but the SSRF gate is
-    safety-critical and a future edit should not need to re-derive the
-    precedence rules to verify the logic.
-    """
-    try:
-        ip = ipaddress.ip_address(host)
-    except ValueError:
-        return False
-    return (
-        ip.is_private
-        or ip.is_link_local
-        or (ip.is_loopback is False and (ip.is_reserved or ip.is_multicast))
-    )
-
-
-def validate_webhook_url(url: object) -> str:
-    """SSRF-hardened webhook URL validator.
-
-    Mirrors v0.29.0 `HF_ENDPOINT` / v0.30.0 OTLP / v0.51.0 `validate_hub_endpoint`
-    policy:
-    - scheme allowlist {http, https}
-    - null-byte / control-char rejection
-    - ``0.0.0.0`` rejected
-    - plain HTTP only permitted for loopback hosts
-    - private / link-local / cloud-metadata IPs rejected
-    """
-    if isinstance(url, bool):
-        raise TypeError("webhook URL must be str, not bool")
-    if not isinstance(url, str):
-        raise TypeError(f"webhook URL must be str, got {type(url).__name__}")
-    if not url:
-        raise ValueError("webhook URL must be non-empty")
-    if "\x00" in url:
-        raise ValueError("webhook URL must not contain null bytes")
-    if any(ord(c) < 0x20 for c in url):
-        raise ValueError("webhook URL must not contain control characters")
-    if len(url) > _MAX_WEBHOOK_URL_LEN:
-        raise ValueError(f"webhook URL must be <= {_MAX_WEBHOOK_URL_LEN} chars")
-    stripped = url.rstrip("/")
-    parsed = urlparse(stripped)
-    if parsed.scheme not in ("http", "https"):
-        raise ValueError(
-            f"webhook URL must use http/https scheme, got {parsed.scheme!r}"
-        )
-    if not parsed.netloc:
-        raise ValueError("webhook URL is missing a host")
-    host = parsed.hostname or ""
-    if host == "0.0.0.0":
-        raise ValueError(
-            "webhook URL 0.0.0.0 is ambiguous; use 127.0.0.1 or localhost"
-        )
-    if parsed.scheme == "http" and host not in _LOOPBACK_HOSTS:
-        if _is_private_or_link_local(host):
-            raise ValueError(
-                "webhook URL plain HTTP is only allowed for loopback; "
-                "private/link-local hosts require HTTPS"
-            )
-        raise ValueError(
-            "webhook URL for remote hosts must use HTTPS"
-        )
-    return stripped
 
 
 def compute_token_distribution(rows: Iterable[object]) -> Mapping[str, float]:
@@ -303,39 +238,6 @@ def run_drift_check(
         n_live=len(live_rows),
         top_drift_tokens=_top_drift_tokens(live_dist, ref_dist),
     )
-
-
-def post_webhook(
-    *,
-    url: Optional[str],
-    payload: Mapping[str, object],
-    timeout_seconds: float = 5.0,
-) -> bool:
-    """POST ``payload`` as JSON to ``url``. Returns True on 2xx, False otherwise.
-
-    Never raises — webhook delivery must NOT crash the drift-check run.
-    Lazy-imports ``httpx`` so the runtime cost is paid only when an alarm
-    actually fires.
-    """
-    if url is None:
-        return False
-    try:
-        validated = validate_webhook_url(url)
-    except (TypeError, ValueError):
-        return False
-    try:
-        import httpx  # type: ignore[import-untyped]
-    except ImportError:
-        return False
-    try:
-        response = httpx.post(
-            validated,
-            json=dict(payload),
-            timeout=timeout_seconds,
-        )
-        return 200 <= response.status_code < 300
-    except Exception:  # noqa: BLE001 — webhook must never crash drift check
-        return False
 
 
 __all__ = [
