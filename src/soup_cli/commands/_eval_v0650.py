@@ -123,8 +123,24 @@ def register(app: typer.Typer, console: Console) -> None:
             None, "--output", "-o",
             help="Where to write the rendered BehaviorDiffReport JSON.",
         ),
+        base_model: Optional[str] = typer.Option(
+            None, "--base-model",
+            help="Base model id for a LIVE diff (generates pre/post responses).",
+        ),
+        adapter: Optional[str] = typer.Option(
+            None, "--adapter",
+            help="LoRA adapter path for the 'post' model in a live diff.",
+        ),
+        device: Optional[str] = typer.Option(
+            None, "--device", help="Device for the live diff (cuda / cpu).",
+        ),
     ) -> None:
-        """Score a run on a bundled behaviour battery (pre/post diff)."""
+        """Score a run on a bundled behaviour battery (pre/post diff).
+
+        With ``--base-model`` (optionally ``--adapter``) this LIVE-generates
+        pre/post responses on the bundled battery and scores them. Without it,
+        falls back to ``--evidence`` JSON, or a neutral OK report.
+        """
         from soup_cli.utils.behavior_battery import (
             compute_behavior_diff,
             get_battery_spec,
@@ -151,6 +167,34 @@ def register(app: typer.Typer, console: Console) -> None:
             title="Behaviour Battery",
             border_style="cyan",
         ))
+
+        if base_model is not None:
+            from soup_cli.utils.behavior_battery import run_behavior_live
+
+            try:
+                report = run_behavior_live(
+                    run_id=run_id,
+                    battery=canonical,
+                    base_model=base_model,
+                    adapter=adapter,
+                    device=device,
+                )
+            except (RuntimeError, ValueError, TypeError, OSError) as exc:
+                console.print(f"[red]Live behaviour diff failed:[/] {escape(str(exc))}")
+                raise typer.Exit(2) from exc
+            table = Table(title=f"Behaviour Diff (live) — {canonical}")
+            table.add_column("Stage", style="bold")
+            table.add_column("Value", justify="right")
+            table.add_column("Verdict")
+            table.add_row("Pre", f"{report.pre.value:.3f}", report.pre.verdict)
+            table.add_row("Post", f"{report.post.value:.3f}", report.post.verdict)
+            table.add_row("Δ", f"{report.delta:+.3f}", report.overall)
+            console.print(table)
+            if output:
+                _write_json_output(report.to_dict(), output, console=console)
+            if report.overall == "MAJOR":
+                raise typer.Exit(2)
+            return
 
         if evidence is None:
             # No evidence: emit neutral OK report (matches v0.56.0 diagnose
@@ -214,8 +258,31 @@ def register(app: typer.Typer, console: Console) -> None:
             None, "--output", "-o",
             help="Where to write the rendered CapabilityReport JSON.",
         ),
+        live: bool = typer.Option(
+            False, "--live",
+            help="Run the suite LIVE via lm-eval-harness against --model.",
+        ),
+        model: Optional[str] = typer.Option(
+            None, "--model", "-m",
+            help="HF model id for a live run (required with --live).",
+        ),
+        tasks: Optional[str] = typer.Option(
+            None, "--tasks",
+            help="Comma-separated lm-eval task override (live; bypasses --suite).",
+        ),
+        limit: Optional[int] = typer.Option(
+            None, "--limit",
+            help="Cap eval examples per task (live; use 1-5 for a smoke).",
+        ),
+        device: Optional[str] = typer.Option(
+            None, "--device", help="Device for the live run (cuda / cpu).",
+        ),
     ) -> None:
-        """Run a bundled capability profile (MMLU-Pro / GPQA / AIME / ...)."""
+        """Run a bundled capability profile (MMLU-Pro / GPQA / AIME / ...).
+
+        Without ``--live`` this emits a task manifest (no model load). With
+        ``--live --model <id>`` it invokes lm-eval-harness per task.
+        """
         from soup_cli.utils.capability_suite import (
             list_suites,
             resolve_suite,
@@ -237,6 +304,49 @@ def register(app: typer.Typer, console: Console) -> None:
             )
             raise typer.Exit(2) from exc
 
+        if live:
+            if not model:
+                console.print("[red]--live requires --model <hf-id>.[/]")
+                raise typer.Exit(2)
+            from soup_cli.utils.capability_suite import run_capability_suite
+
+            task_list = (
+                [t.strip() for t in tasks.split(",") if t.strip()] if tasks else None
+            )
+            try:
+                payload = run_capability_suite(
+                    run_id=run_id,
+                    model_id=model,
+                    suite=None if task_list else canonical,
+                    tasks=task_list,
+                    device=device,
+                    limit=limit,
+                )
+            except (RuntimeError, ValueError, TypeError) as exc:
+                console.print(f"[red]Capability run failed:[/] {escape(str(exc))}")
+                raise typer.Exit(2) from exc
+            table = Table(title=f"Capability Suite (live) — {canonical}")
+            table.add_column("Benchmark")
+            table.add_column("Metric")
+            table.add_column("Score", justify="right")
+            for r in payload["results"]:
+                if "error" in r:
+                    table.add_row(
+                        escape(str(r["benchmark"])),
+                        "[red]error[/]",
+                        escape(str(r["error"])),
+                    )
+                else:
+                    table.add_row(
+                        escape(str(r["benchmark"])),
+                        escape(str(r.get("metric", ""))),
+                        f"{r.get('score', float('nan')):.4f}",
+                    )
+            console.print(table)
+            if output:
+                _write_json_output(payload, output, console=console)
+            return
+
         benchmarks = resolve_suite(canonical)
         table = Table(title=f"Capability Suite — {canonical}")
         table.add_column("Benchmark")
@@ -250,8 +360,8 @@ def register(app: typer.Typer, console: Console) -> None:
             "suite": canonical,
             "benchmarks": [{"name": b.name, "task": b.lm_eval_task} for b in benchmarks],
             "note": (
-                "Live lm-eval-harness wiring is operator-driven; "
-                "the listed tasks are pre-validated friendly defaults."
+                "Manifest only — pass --live --model <id> to invoke "
+                "lm-eval-harness against the listed tasks."
             ),
         }
         if output:

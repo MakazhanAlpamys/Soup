@@ -179,7 +179,8 @@ soup ingest|prune-prompt|ab|data active-sample ... --slack-url <https> | --disco
 soup drift-alarm --reference <jsonl> --live <jsonl> --threshold 0.2  Rolling-KL drift alarm (exit 3 on drift)
 soup drift-alarm ... --slack-url <https> | --discord-url <https>  Optional SSRF-validated webhook on drift detected
 soup tunability --list                                   List built-in candidate-base catalogue
-soup tunability --dataset <jsonl> [--candidates a,b,c]   Probe 8 candidate bases + Pareto frontier report
+soup tunability --dataset <jsonl> [--candidates a,b,c]   Probe candidate bases + Pareto frontier report
+soup tunability --dataset <jsonl> --live [--device cpu]  LIVE per-candidate LoRA probe (loads each repo)
 soup plan --config soup.yaml                             Pre-flight summary + write soup.tfstate
 soup apply --config soup.yaml [--dry-run]                Lock-and-execute; refuses on drift (exit 3)
 soup env lock | status | check                           Hermetic env lockfile + ABI drift detection (exit 3)

@@ -38,7 +38,11 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Callable, Optional, Tuple
 
-from soup_cli.utils.paths import atomic_write_text, is_under_cwd
+from soup_cli.utils.paths import (
+    atomic_write_text,
+    enforce_under_cwd_and_no_symlink,
+    is_under_cwd,
+)
 
 # Bounds — mirror v0.30.0 / v0.41.0 / v0.51.0 validator policy.
 _MIN_PROBE_STEPS = 10
@@ -327,6 +331,120 @@ def _default_probe(
         delta=0.0,
         wall_clock_seconds=wall_clock,
         estimated_cost_usd=cost,
+    )
+
+
+# Field aliases for live-probe (prompt, target) extraction.
+_LIVE_INPUT_KEYS = ("prompt", "instruction", "input", "question", "query")
+_LIVE_OUTPUT_KEYS = ("response", "completion", "output", "answer", "chosen", "text")
+_LIVE_MAX_ROWS = 5000
+
+
+def _live_input(row: object) -> str:
+    if not isinstance(row, dict):
+        return ""
+    for key in _LIVE_INPUT_KEYS:
+        val = row.get(key)
+        if isinstance(val, str) and val:
+            return val
+    msgs = row.get("messages")
+    if isinstance(msgs, list):
+        parts = [
+            m["content"]
+            for m in msgs
+            if isinstance(m, dict)
+            and m.get("role") != "assistant"
+            and isinstance(m.get("content"), str)
+        ]
+        return "\n".join(parts)
+    return ""
+
+
+def _live_output(row: object) -> str:
+    if not isinstance(row, dict):
+        return ""
+    for key in _LIVE_OUTPUT_KEYS:
+        val = row.get(key)
+        if isinstance(val, str) and val:
+            return val
+    msgs = row.get("messages")
+    if isinstance(msgs, list):
+        for m in msgs:
+            if isinstance(m, dict) and m.get("role") == "assistant":
+                content = m.get("content")
+                if isinstance(content, str):
+                    return content
+    return ""
+
+
+def _load_jsonl_rows(dataset_path: str) -> "list[dict]":
+    """Read JSONL training rows for a live probe (cwd-contained, symlink-safe).
+
+    ``O_NOFOLLOW`` on the open closes the check→open TOCTOU window left by the
+    lstat-only validation (matches the v0.65 / v0.67 reader policy).
+    """
+    canonical = enforce_under_cwd_and_no_symlink(dataset_path, "dataset path")
+    rows: list = []
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(canonical, flags)
+    with os.fdopen(fd, encoding="utf-8") as handle:
+        for line in handle:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(obj, dict):
+                rows.append(obj)
+            if len(rows) >= _LIVE_MAX_ROWS:
+                break
+    return rows
+
+
+def live_lora_probe(
+    candidate: CandidateBase,
+    dataset_path: str,
+    *,
+    probe_steps: int,
+    holdout_size: int,
+    device: Optional[str] = None,
+) -> TunabilityResult:
+    """Live LoRA probe (#208): load ``candidate.repo_id``, LoRA-train
+    ``probe_steps`` on a held-out-excluded slice of ``dataset_path``, and
+    report the absolute held-out-loss drop as ``delta`` (higher = more tunable).
+
+    Loads the model fresh per candidate — expensive but honest. Use it via
+    ``soup tunability --live`` or by passing ``probe_fn=live_lora_probe``.
+    """
+    from soup_cli.utils import live_eval
+
+    rows = _load_jsonl_rows(dataset_path)
+    base_loss, probe_loss, wall = live_eval.lora_probe(
+        candidate.repo_id,
+        rows,
+        input_extractor=_live_input,
+        output_extractor=_live_output,
+        n_steps=probe_steps,
+        holdout_size=holdout_size,
+        device=device,
+    )
+    # NaN losses (empty target spans etc.) → neutral 0 delta, honest report.
+    if not (base_loss == base_loss and probe_loss == probe_loss):
+        base_loss = base_loss if base_loss == base_loss else 0.0
+        probe_loss = probe_loss if probe_loss == probe_loss else 0.0
+        delta = 0.0
+    else:
+        delta = score_candidate(base_loss=base_loss, probe_loss=probe_loss)
+    cost = 0.001 * float(candidate.params_b) * float(probe_steps)
+    return TunabilityResult(
+        candidate=candidate,
+        base_loss=float(base_loss),
+        probe_loss=float(probe_loss),
+        delta=float(delta),
+        wall_clock_seconds=float(wall),
+        estimated_cost_usd=float(cost),
     )
 
 

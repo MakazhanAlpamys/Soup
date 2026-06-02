@@ -12,6 +12,40 @@ reproducing 70+ versions of notes.
 
 ## [Unreleased]
 
+## [0.71.7] - 2026-06-02
+
+### Added
+- **Eval live runners** — six probe surfaces that previously emitted heuristic
+  / neutral stubs now load a real model and run live (closes #161, #162, #208,
+  #211, #212, #165). New shared `soup_cli/utils/live_eval.py` provides the
+  model-loading primitives (generator / multi-generator closures, masked
+  cross-entropy eval-loss, a short-LoRA probe, and held-out logit agreement);
+  every heavy import (`torch` / `transformers` / `peft` / `lm_eval`) is lazy.
+- **`soup advise --probe-model <id>`** — runs a LIVE ROI probe: zero/few-shot
+  token-F1 baselines, a short LoRA probe (relative held-out-loss improvement +
+  real wall-clock), and base-model proximity (held-out logit agreement) folded
+  into the dataset profile. Without `--probe-model`, `--probe` stays the offline
+  heuristic.
+- **`soup tunability --live`** — replaces the offline heuristic with a real
+  per-candidate LoRA probe (loads each `repo_id`, trains `--probe-steps` on a
+  held-out-excluded slice, reports the held-out-loss drop).
+- **`soup eval capability --live --model <id>`** — invokes lm-eval-harness per
+  resolved task (or a `--tasks` override) with `--limit` / `--device`, isolating
+  per-task failures and surfacing a no-metric result as an explicit error.
+- **`soup eval behavior --base-model <id> [--adapter <path>]`** — generates
+  pre/post responses on the bundled behaviour battery and scores the live diff.
+- **`soup diagnose --base-model <id> [--adapter <path>] [--dataset <jsonl>]
+  [--tokenizer <id>]`** — runs all six failure-mode probes (forgetting / refusal
+  / format / mode_collapse / memorization / contamination) live via
+  `soup_cli.utils.diagnose.live.run_live_diagnose`; falls back to neutral OK or
+  `--evidence` JSON when no model is supplied.
+
+### Security
+- The two new JSONL dataset readers (`diagnose.live._load_dataset_rows`,
+  `tunability._load_jsonl_rows`) open with `O_NOFOLLOW` after the cwd-containment
+  check, closing the check→open TOCTOU window (matches the v0.65 / v0.67 reader
+  policy).
+
 ## [0.71.6] - 2026-06-02
 
 ### Added

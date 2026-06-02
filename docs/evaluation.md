@@ -61,8 +61,12 @@ soup advise data.jsonl --goal "make our chatbot more concise"
 #  Why:        Task is summarization with 120 rows and healthy diversity ...
 #  Flip when:  the prompt-engineering baseline already meets your target ...
 
-# Optional 10-min ROI probe (zero/few-shot + RAG + 100-step LoRA).
+# Optional ROI probe (offline heuristic: zero/few-shot + RAG + LoRA estimate).
 soup advise data.jsonl --goal "summarize my reports" --probe
+
+# LIVE ROI probe (v0.71.7): loads the model for zero/few-shot token-F1, a short
+# LoRA probe, and base-model proximity (held-out logit agreement). Implies --probe.
+soup advise data.jsonl --goal "..." --probe-model HuggingFaceTB/SmolLM2-135M
 
 # Print the rubric / evidence trail of the last verdict.
 soup advise explain
@@ -239,8 +243,12 @@ Default threshold 0.2 matches v0.43.0 KL-delta quant-check thresholds. Webhooks 
 `soup diagnose` scores six independent failure modes for a trained adapter and renders an OK / MINOR / MAJOR verdict per mode plus an overall headline — same taxonomy as Quant-Lobotomy. Useful for catching adapter regressions that a loss curve cannot distinguish from a healthy run.
 
 ```bash
-# Heuristic neutral report (no model load — runs as a sanity check)
+# Neutral report (no model load — runs as a sanity check)
 soup diagnose my-run-id
+
+# LIVE (v0.71.7): load the model and run all six probes for real
+soup diagnose my-run-id --base-model HuggingFaceTB/SmolLM2-135M \
+    --adapter ./out --dataset train.jsonl --tokenizer HuggingFaceTB/SmolLM2-135M
 
 # Compute scores from a pre-built evidence JSON
 soup diagnose my-run-id --evidence evidence.json --output diag.json
@@ -251,6 +259,12 @@ soup diagnose my-run-id --badge diag.svg
 # Attach the report to a Model Registry entry as a first-class artifact
 soup diagnose my-run-id --output diag.json --attach-to-registry abc123
 ```
+
+**Live runners (v0.71.7).** With `--base-model` the six probes run against the loaded model
+(+ optional `--adapter` LoRA path, `--dataset` for the forgetting / format / memorization probes,
+`--tokenizer` for a sub-word memorization variant) instead of emitting neutral OK. `refusal` uses
+a built-in probe set; `format` only fires when the dataset's own targets look like JSON;
+`contamination` stays neutral unless a benchmark corpus is supplied. Validated on SmolLM2-135M.
 
 **Six failure-mode probes:**
 
@@ -429,7 +443,7 @@ soup tunability --dataset ./eval.jsonl --candidates qwen3-0.6b,phi-4-mini --plan
 soup tunability --dataset ./eval.jsonl --probe-steps 100 --output ./tunability.json
 ```
 
-The report is a Pareto frontier over (eval delta from base, train cost, license) — candidates that nothing dominates on both axes survive, so you see a clean shortlist instead of a noisy single-leaderboard score. Live LoRA probe lands in v0.64.1; v0.64.0 ships the schema, Pareto math, and a `probe_fn=` injection point.
+The report is a Pareto frontier over (eval delta from base, train cost, license) — candidates that nothing dominates on both axes survive, so you see a clean shortlist instead of a noisy single-leaderboard score. By default the probe is a deterministic offline heuristic; pass `--live` (v0.71.7) to run a real per-candidate LoRA probe (loads each `repo_id`, trains `--probe-steps` on a held-out-excluded slice, reports the held-out-loss drop). `--device` selects cuda / cpu.
 
 
 ## Eval Depth (`soup eval behavior / capability / checklist / irt-subset`)
@@ -459,6 +473,10 @@ Persist a calibration once and reuse it across runs (v0.71.1): `write_judge_cali
 # Score over-refusal regression on XSTest (operator supplies evidence JSON)
 soup eval behavior my_run --battery xstest --evidence ev.json --output diff.json
 
+# LIVE (v0.71.7): generate pre/post responses on the bundled battery + score the diff
+soup eval behavior my_run --battery xstest \
+    --base-model HuggingFaceTB/SmolLM2-135M --adapter ./out
+
 # Bundled batteries: xstest, harmbench, jailbreakbench, elephant, syceval
 # Harmful prompts ship REDACTED — pull real sets from upstream papers.
 ```
@@ -472,9 +490,13 @@ soup eval capability my_run --suite math --output cap.json   # AIME + MATH-500
 soup eval capability my_run --suite code --output cap.json   # HumanEval+ + SWE-bench-Verified
 soup eval capability my_run --suite fast --output cap.json   # MMLU-Pro + HumanEval+
 soup eval capability my_run --suite full --output cap.json   # all 7 benchmarks
+
+# LIVE (v0.71.7): invoke lm-eval-harness per task against a real model
+soup eval capability my_run --live --model HuggingFaceTB/SmolLM2-135M \
+    --tasks arc_easy --limit 1 --device cpu
 ```
 
-Emits the (benchmark, lm-eval task) manifest; chain into the existing `soup eval benchmark` surface.
+Without `--live` it emits the (benchmark, lm-eval task) manifest; chain into the existing `soup eval benchmark` surface. With `--live --model <id>` (v0.71.7) it runs lm-eval-harness per resolved task — or a `--tasks` override — isolating per-task failures and capping examples with `--limit`.
 
 **CheckList behavioural DSL** — Ribeiro et al. 2020 MFT / INV / DIR tests:
 

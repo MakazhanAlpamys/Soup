@@ -22,7 +22,7 @@ import stat
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import Mapping, Sequence
+from typing import Mapping, Optional, Sequence
 
 _LOG = logging.getLogger(__name__)
 
@@ -399,3 +399,57 @@ def load_battery_probes(name: str) -> tuple[dict, ...]:
             canonical, skipped,
         )
     return tuple(rows)
+
+
+# Cap live probe runs so a battery never balloons on a 4 GB box.
+_LIVE_MAX_PROBES = 32
+
+
+def run_behavior_live(
+    *,
+    run_id: str,
+    battery: str,
+    base_model: str,
+    adapter: Optional[str] = None,
+    device: Optional[str] = None,
+    max_new_tokens: int = 64,
+    max_probes: int = _LIVE_MAX_PROBES,
+) -> "BehaviorDiffReport":
+    """LIVE behaviour diff (#212): generate on the bundled battery prompts
+    with the base model (pre) and the base+adapter (post), score each against
+    the fixture oracle, and return a :class:`BehaviorDiffReport`.
+
+    When ``adapter`` is ``None`` the "post" generator is the base model itself
+    (a degenerate no-op diff — delta ~0). Caps at ``max_probes`` prompts.
+    """
+    if not isinstance(base_model, str) or not base_model.strip():
+        raise ValueError("base_model must be a non-empty string")
+    if isinstance(max_probes, bool) or not isinstance(max_probes, int) or max_probes < 1:
+        raise ValueError("max_probes must be a positive int")
+    canonical = validate_battery_name(battery)
+    probes = load_battery_probes(canonical)[:max_probes]
+    prompts = [str(p.get("prompt", "")) for p in probes]
+    oracle = [str(p.get("oracle", "")) for p in probes]
+
+    from soup_cli.utils import live_eval
+
+    loaded_base = live_eval.load_model_and_tokenizer(base_model, device=device)
+    base_gen = live_eval.make_generator(
+        base_model, device=device, max_new_tokens=max_new_tokens, loaded=loaded_base
+    )
+    if adapter is not None:
+        post_gen = live_eval.make_generator(
+            base_model, adapter=adapter, device=device, max_new_tokens=max_new_tokens
+        )
+    else:
+        post_gen = base_gen
+
+    pre_responses = [base_gen(p) for p in prompts]
+    post_responses = [post_gen(p) for p in prompts]
+    return compute_behavior_diff(
+        run_id=run_id,
+        battery=canonical,
+        pre_responses=pre_responses,
+        post_responses=post_responses,
+        oracle=oracle,
+    )

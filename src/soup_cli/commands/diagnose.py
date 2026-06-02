@@ -7,12 +7,12 @@ Top-level CLI command (NOT a sub-group) — operators type:
     soup diagnose <run-id> --badge diagnose.svg
     soup diagnose <run-id> --attach-to-registry <id>
 
-The live probe runners (forgetting / refusal / format / mode_collapse /
-memorization / contamination) require a base + adapter model pair; this
-release computes neutral OK scores when no probe evidence is supplied,
-matching the v0.27.0 / v0.50.0 stub-then-live cadence. Operators with a
-SoupConfig + an evidence dict can call ``soup_cli.utils.diagnose.diagnose``
-to produce a real report card.
+Since v0.71.7 (#165) the six probe runners (forgetting / refusal / format /
+mode_collapse / memorization / contamination) run LIVE when ``--base-model``
+is supplied: the model (+ optional ``--adapter`` LoRA path, ``--dataset``,
+``--tokenizer``) is loaded and each probe is fed real generator output via
+``soup_cli.utils.diagnose.live.run_live_diagnose``. Without ``--base-model``
+the command computes scores from ``--evidence`` JSON or defaults to neutral OK.
 """
 
 from __future__ import annotations
@@ -173,6 +173,47 @@ def _attach_to_registry(report: FailureReport, registry_id: str, output: str) ->
         )
 
 
+def _emit_report(
+    report: FailureReport,
+    *,
+    output: Optional[str],
+    badge: Optional[str],
+    attach_to_registry: Optional[str],
+) -> None:
+    """Shared render + optional output/badge/registry-attach (no exit)."""
+    _render_report(report)
+
+    if output:
+        try:
+            write_report(report, output)
+            console.print(f"[green]Wrote[/] {escape(output)}")
+        except (OSError, ValueError) as exc:
+            console.print(
+                f"[red]Error:[/] cannot write --output: "
+                f"{escape(type(exc).__name__)}: {escape(str(exc))}"
+            )
+            raise typer.Exit(code=1) from exc
+
+    if badge:
+        try:
+            svg = render_badge_svg(report)
+            _write_badge(badge, svg)
+            console.print(f"[green]Badge written[/] to {escape(badge)}")
+        except (OSError, ValueError, TypeError) as exc:
+            console.print(
+                f"[red]Error:[/] cannot write --badge: "
+                f"{escape(type(exc).__name__)}: {escape(str(exc))}"
+            )
+            raise typer.Exit(code=1) from exc
+
+    if attach_to_registry and output:
+        _attach_to_registry(report, attach_to_registry, output)
+    elif attach_to_registry and not output:
+        console.print(
+            "[yellow]Warning:[/] --attach-to-registry needs --output (skipped)."
+        )
+
+
 def diagnose(
     run_id: str = typer.Argument(..., help="Registry run id (or any opaque tag)."),
     base: str = typer.Option("", "--base", help="Base model name (informational)."),
@@ -191,12 +232,64 @@ def diagnose(
     attach_to_registry: Optional[str] = typer.Option(
         None, "--attach-to-registry", help="Attach the report to a registry entry id."
     ),
+    base_model: Optional[str] = typer.Option(
+        None,
+        "--base-model",
+        help=(
+            "Base model id to LOAD for a live diagnose run (e.g. "
+            "HuggingFaceTB/SmolLM2-135M). When set, the 6 probes run live "
+            "against the model instead of emitting neutral scores."
+        ),
+    ),
+    dataset: Optional[str] = typer.Option(
+        None,
+        "--dataset",
+        help="Training JSONL for the live forgetting / format / memorization "
+        "probes (must stay under cwd).",
+    ),
+    tokenizer: Optional[str] = typer.Option(
+        None,
+        "--tokenizer",
+        help="Tokenizer id/path for a sub-word memorization probe (live).",
+    ),
+    device: Optional[str] = typer.Option(
+        None, "--device", help="Device for the live run (cuda / cpu)."
+    ),
 ) -> None:
-    """Compute a 6-mode FailureReport for a completed run."""
+    """Compute a 6-mode FailureReport for a completed run.
+
+    With ``--base-model`` the six probes run LIVE against the loaded model
+    (+ optional ``--adapter`` LoRA path, ``--dataset``, ``--tokenizer``).
+    Without it, scores come from ``--evidence`` JSON or default to neutral OK.
+    """
     if not isinstance(run_id, str) or not run_id.strip():
         raise typer.BadParameter("run_id must be a non-empty string")
     if "\x00" in run_id or len(run_id) > 512:
         raise typer.BadParameter("run_id has a null byte or is too long")
+
+    if base_model is not None:
+        from soup_cli.utils.diagnose.live import run_live_diagnose
+
+        try:
+            report = run_live_diagnose(
+                run_id=run_id,
+                base=base_model,
+                adapter=adapter or None,
+                dataset_path=dataset,
+                device=device,
+                tokenizer=tokenizer,
+                soup_version=__version__,
+            )
+        except (ValueError, TypeError, OSError, RuntimeError) as exc:
+            console.print(
+                f"[red]Error:[/] live diagnose failed: "
+                f"{escape(type(exc).__name__)}: {escape(str(exc))}"
+            )
+            raise typer.Exit(code=1) from exc
+        _emit_report(report, output=output, badge=badge, attach_to_registry=attach_to_registry)
+        if report.overall == "MAJOR":
+            raise typer.Exit(code=2)
+        return
 
     scores = {}
     extras = {}
@@ -235,37 +328,7 @@ def diagnose(
         soup_version=__version__,
         extras=extras,
     )
-    _render_report(report)
-
-    if output:
-        try:
-            write_report(report, output)
-            console.print(f"[green]Wrote[/] {escape(output)}")
-        except (OSError, ValueError) as exc:
-            console.print(
-                f"[red]Error:[/] cannot write --output: "
-                f"{escape(type(exc).__name__)}: {escape(str(exc))}"
-            )
-            raise typer.Exit(code=1) from exc
-
-    if badge:
-        try:
-            svg = render_badge_svg(report)
-            _write_badge(badge, svg)
-            console.print(f"[green]Badge written[/] to {escape(badge)}")
-        except (OSError, ValueError, TypeError) as exc:
-            console.print(
-                f"[red]Error:[/] cannot write --badge: "
-                f"{escape(type(exc).__name__)}: {escape(str(exc))}"
-            )
-            raise typer.Exit(code=1) from exc
-
-    if attach_to_registry and output:
-        _attach_to_registry(report, attach_to_registry, output)
-    elif attach_to_registry and not output:
-        console.print(
-            "[yellow]Warning:[/] --attach-to-registry needs --output (skipped)."
-        )
+    _emit_report(report, output=output, badge=badge, attach_to_registry=attach_to_registry)
 
     if report.overall == "MAJOR":
         raise typer.Exit(code=2)

@@ -35,6 +35,7 @@ from soup_cli.utils.advise import (
     compute_dataset_profile,
     format_verdict_rubric,
     load_advise_dataset,
+    measure_base_model_proximity,
     synth_probe_baselines,
     synth_probe_lora_delta,
 )
@@ -217,9 +218,24 @@ def advise_run(
         False,
         "--probe",
         help=(
-            "Also run a 10-minute ROI probe (zero/few-shot + RAG baseline + "
-            "100-step LoRA). Heuristic stubs in v0.54.0; live in v0.54.1."
+            "Also run an ROI probe (zero/few-shot + RAG baseline + N-step LoRA). "
+            "Heuristic by default; pass --probe-model <id> for a LIVE probe that "
+            "loads the model + LoRA-trains on a tiny held-out slice."
         ),
+    ),
+    probe_model: Optional[str] = typer.Option(
+        None,
+        "--probe-model",
+        help=(
+            "Base model id for a LIVE probe (e.g. HuggingFaceTB/SmolLM2-135M). "
+            "When set, the probe loads this model, scores zero/few-shot, "
+            "LoRA-trains, and measures base-model proximity. Implies --probe."
+        ),
+    ),
+    probe_device: Optional[str] = typer.Option(
+        None,
+        "--probe-device",
+        help="Device for the live probe (cuda / cpu). Auto-detected when omitted.",
     ),
     record: bool = typer.Option(
         False,
@@ -246,18 +262,36 @@ def advise_run(
         console.print(f"[red]Dataset error:[/] {escape(str(exc))}")
         raise typer.Exit(1) from exc
 
+    # --probe-model implies --probe.
+    run_probe = probe or probe_model is not None
+
+    # #162 — when a live probe model is supplied, measure base-model proximity
+    # (held-out logit agreement) and fold it into the dataset profile. Best
+    # effort: any failure leaves proximity unmeasured (None).
+    proximity: Optional[float] = None
+    if probe_model is not None:
+        try:
+            proximity = measure_base_model_proximity(
+                rows, model=probe_model, device=probe_device
+            )
+        except (TypeError, ValueError) as exc:
+            console.print(f"[red]Proximity probe failed:[/] {escape(str(exc))}")
+            raise typer.Exit(1) from exc
+
     try:
         task_category = classify_task(rows, goal=goal)
-        profile = compute_dataset_profile(rows)
+        profile = compute_dataset_profile(rows, base_model_proximity=proximity)
     except (TypeError, ValueError) as exc:
         console.print(f"[red]Analysis failed:[/] {escape(str(exc))}")
         raise typer.Exit(1) from exc
 
     roi = ROIEstimate()
-    if probe:
+    if run_probe:
         try:
-            baselines = synth_probe_baselines(rows)
-            sft_delta, wall_clock = synth_probe_lora_delta(rows)
+            baselines = synth_probe_baselines(rows, model=probe_model, device=probe_device)
+            sft_delta, wall_clock = synth_probe_lora_delta(
+                rows, model=probe_model, device=probe_device
+            )
         except (TypeError, ValueError) as exc:
             console.print(f"[red]Probe failed:[/] {escape(str(exc))}")
             raise typer.Exit(1) from exc

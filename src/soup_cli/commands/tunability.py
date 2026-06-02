@@ -82,6 +82,20 @@ def tunability_cmd(
         "--list",
         help="List built-in candidate catalogue + exit.",
     ),
+    live: bool = typer.Option(
+        False,
+        "--live",
+        help=(
+            "Run a LIVE LoRA probe per candidate (loads each repo + trains "
+            "--probe-steps on a tiny held-out slice). Without it, a "
+            "deterministic offline heuristic is used."
+        ),
+    ),
+    device: Optional[str] = typer.Option(
+        None,
+        "--device",
+        help="Device for the live probe (cuda / cpu). Auto-detected when omitted.",
+    ),
 ) -> None:
     """Probe-train candidate bases + report Pareto frontier (v0.64.0)."""
     if list_only:
@@ -133,16 +147,32 @@ def tunability_cmd(
                 escape(c.license_id),
             )
         console.print(table)
+        probe_kind = "LIVE LoRA probe" if live else "offline heuristic"
         console.print(
             Panel(
                 f"[yellow]Plan-only.[/] Would run {len(cands)} probes "
                 f"x {probe_steps} steps on holdout={holdout_size}.\n"
-                f"Live LoRA probe lands in v0.64.1.",
+                f"Probe: {probe_kind}. Pass --live for a real LoRA probe.",
                 title="tunability",
                 border_style="yellow",
             )
         )
         return
+
+    probe_fn = None
+    if live:
+        from soup_cli.utils.tunability import live_lora_probe
+
+        def _live_probe_fn(cand, ds, *, probe_steps, holdout_size):  # noqa: ANN001
+            return live_lora_probe(
+                cand,
+                ds,
+                probe_steps=probe_steps,
+                holdout_size=holdout_size,
+                device=device,
+            )
+
+        probe_fn = _live_probe_fn
 
     try:
         report = run_tunability(
@@ -150,6 +180,7 @@ def tunability_cmd(
             dataset_path=dataset,
             probe_steps=probe_steps,
             holdout_size=holdout_size,
+            probe_fn=probe_fn,
         )
     except (TypeError, ValueError) as exc:
         console.print(f"[red]{escape(str(exc))}[/]")

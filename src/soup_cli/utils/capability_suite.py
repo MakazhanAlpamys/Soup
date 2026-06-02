@@ -11,9 +11,10 @@ the operator can compose capability suites with the existing eval gate.
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Mapping
+from typing import Mapping, Optional
 
 # Closed allowlist.
 CAPABILITY_BENCHMARKS = frozenset({
@@ -180,3 +181,112 @@ def resolve_suite(name: str) -> tuple[CapabilityBenchmark, ...]:
     canonical = validate_suite_name(name)
     names = PROFILES[canonical]
     return tuple(_BENCHMARK_METADATA[n] for n in names)
+
+
+def _primary_metric(task_result: Mapping[str, object]) -> tuple[str, float]:
+    """Pick a representative scalar metric from an lm-eval per-task result dict.
+
+    lm-eval emits ``{"acc,none": 0.42, "acc_stderr,none": ...}`` style keys.
+    Prefer ``acc_norm`` > ``acc`` > ``exact_match`` > ``pass@1``, else the first
+    float that is not a stderr.
+    """
+    preferred = ("acc_norm", "acc", "exact_match", "pass@1", "pass_at_1")
+    items = {
+        str(k): float(v)
+        for k, v in task_result.items()
+        if isinstance(v, (int, float)) and not isinstance(v, bool)
+    }
+    for pref in preferred:
+        for key, val in items.items():
+            base = key.split(",")[0]
+            if base == pref:
+                return key, val
+    for key, val in items.items():
+        if "stderr" not in key:
+            return key, val
+    return ("", float("nan"))
+
+
+def run_capability_suite(
+    *,
+    run_id: str,
+    model_id: str,
+    suite: Optional[str] = None,
+    tasks: Optional[Sequence[str]] = None,
+    device: Optional[str] = None,
+    limit: Optional[int] = None,
+    batch_size: int = 1,
+) -> dict:
+    """LIVE lm-eval-harness invocation (#211).
+
+    Resolves either an explicit ``tasks`` list (lm-eval task names) or the
+    ``suite`` profile to its lm-eval tasks, runs each through
+    ``lm_eval.simple_evaluate`` against ``model_id`` (isolated per task so one
+    unregistered / failing task does not sink the run), and returns a JSON-able
+    report. ``limit`` caps eval examples per task (use ``1-5`` for a smoke).
+
+    Lazy-imports ``lm_eval`` — raises a friendly ``RuntimeError`` when it is
+    not installed (``pip install soup-cli[eval]``).
+    """
+    if not isinstance(run_id, str) or not run_id.strip():
+        raise ValueError("run_id must be a non-empty string")
+    if not isinstance(model_id, str) or not model_id.strip():
+        raise ValueError("model_id must be a non-empty string")
+    if limit is not None and (isinstance(limit, bool) or not isinstance(limit, int) or limit < 1):
+        raise ValueError("limit must be a positive int or None")
+    if isinstance(batch_size, bool) or not isinstance(batch_size, int) or batch_size < 1:
+        raise ValueError("batch_size must be a positive int")
+
+    if tasks is not None:
+        if isinstance(tasks, (str, bytes)) or not isinstance(tasks, Sequence):
+            raise TypeError("tasks must be a sequence of lm-eval task names")
+        task_pairs = [(str(t), str(t)) for t in tasks]
+    else:
+        if suite is None:
+            raise ValueError("provide either suite= or tasks=")
+        task_pairs = [(b.name, b.lm_eval_task) for b in resolve_suite(suite)]
+
+    # Lazy-load the harness via importlib so the module has no heavy
+    # top-level dependency (and the source-grep guard stays satisfied).
+    import importlib
+
+    try:
+        simple_evaluate = importlib.import_module("lm_eval").simple_evaluate
+        hflm_cls = importlib.import_module("lm_eval.models.huggingface").HFLM
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError(
+            "lm-eval-harness is required for a live capability run "
+            "(pip install soup-cli[eval])."
+        ) from exc
+
+    from soup_cli.utils.live_eval import resolve_device
+
+    resolved_device = resolve_device(device)
+    lm = hflm_cls(pretrained=model_id, device=resolved_device, batch_size=batch_size)
+
+    results: list[dict] = []
+    for name, lm_task in task_pairs:
+        entry: dict = {"benchmark": name, "lm_eval_task": lm_task}
+        try:
+            out = simple_evaluate(model=lm, tasks=[lm_task], limit=limit)
+            task_res = (out or {}).get("results", {}).get(lm_task, {})
+            metric_key, metric_val = _primary_metric(task_res)
+            if not metric_key:
+                # No scalar metric surfaced — flag it instead of reporting a
+                # silent NaN score that renders like a real zero.
+                entry["error"] = "no scalar metric in task result"
+            else:
+                entry["metric"] = metric_key
+                entry["score"] = metric_val
+        except Exception as exc:  # noqa: BLE001 — per-task isolation
+            entry["error"] = f"{type(exc).__name__}: {exc}"[:300]
+        results.append(entry)
+
+    return {
+        "run_id": run_id,
+        "model": model_id,
+        "suite": suite,
+        "limit": limit,
+        "device": resolved_device,
+        "results": results,
+    }

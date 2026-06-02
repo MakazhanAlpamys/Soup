@@ -777,8 +777,124 @@ def _apply_history_bias(
 
 
 # ---------------------------------------------------------------------------
-# Probe runner (Part B) — heuristic stubs; real model loading is opt-in
+# Probe runner (Part B) — live model loading when ``model`` is supplied,
+# else the pure-function heuristic fallback (v0.71.7 #161 / #162).
 # ---------------------------------------------------------------------------
+
+_LIVE_PROBE_SAMPLE = 20  # held-out prompts scored per baseline probe
+
+
+def _live_probe_baselines(
+    rows: Sequence[Mapping[str, object]],
+    *,
+    n_holdout: int,
+    model: str,
+    device: Optional[str],
+) -> Optional[Mapping[str, float]]:
+    """Live zero/few-shot baseline scoring. Returns ``None`` to fall back."""
+    try:
+        from soup_cli.utils import live_eval
+    except Exception:  # noqa: BLE001 — torch/transformers missing → heuristic
+        return None
+    pairs = [
+        (_extract_input_text(r), _extract_output_text(r))
+        for r in rows
+        if isinstance(r, Mapping)
+    ]
+    pairs = [(p, t) for p, t in pairs if p and t]
+    if len(pairs) < 2:
+        return None
+    holdout = pairs[-min(n_holdout, len(pairs)) :][:_LIVE_PROBE_SAMPLE]
+    fewshot_examples = pairs[: min(2, len(pairs) - len(holdout))]
+    try:
+        gen = live_eval.make_generator(model, device=device, max_new_tokens=64)
+        prefix = ""
+        for ex_in, ex_out in fewshot_examples:
+            prefix += f"{ex_in}\n{ex_out}\n\n"
+        zero_scores: List[float] = []
+        few_scores: List[float] = []
+        for prompt, target in holdout:
+            zero_scores.append(live_eval.token_f1(gen(prompt), target))
+            few_scores.append(live_eval.token_f1(gen(prefix + prompt), target))
+    except Exception:  # noqa: BLE001 — any live failure → heuristic fallback
+        return None
+    if not zero_scores:
+        return None
+    zero_shot = _safe_mean(zero_scores)
+    few_shot = max(zero_shot, _safe_mean(few_scores))
+    profile = compute_dataset_profile(rows)
+    rag = max(-0.5, min(0.7, 0.1 + 0.5 * profile.label_variance))
+    return {
+        "zero_shot": round(zero_shot, 4),
+        "few_shot": round(few_shot, 4),
+        "rag": round(rag, 4),
+    }
+
+
+def _live_probe_lora_delta(
+    rows: Sequence[Mapping[str, object]],
+    *,
+    n_steps: int,
+    model: str,
+    device: Optional[str],
+    lr: Optional[float],
+) -> Optional[Tuple[float, float]]:
+    """Live LoRA probe. Returns ``(delta, wall_clock)`` or ``None`` to fall back."""
+    try:
+        from soup_cli.utils import live_eval
+    except Exception:  # noqa: BLE001
+        return None
+    try:
+        base_loss, probe_loss, wall = live_eval.lora_probe(
+            model,
+            rows,
+            input_extractor=_extract_input_text,
+            output_extractor=_extract_output_text,
+            n_steps=n_steps,
+            device=device,
+            lr=lr if (isinstance(lr, float) and lr > 0) else 2e-4,
+        )
+    except Exception:  # noqa: BLE001 — any live failure → heuristic fallback
+        return None
+    if not (base_loss == base_loss and probe_loss == probe_loss) or base_loss <= 0:
+        return None
+    delta = (base_loss - probe_loss) / base_loss
+    delta = max(-0.2, min(0.7, delta))
+    return round(float(delta), 4), float(wall)
+
+
+def measure_base_model_proximity(
+    rows: Sequence[Mapping[str, object]],
+    *,
+    model: str,
+    device: Optional[str] = None,
+) -> Optional[float]:
+    """Held-out logit-agreement proximity in ``[0, 1]`` (#162).
+
+    Fraction of dataset target tokens the base model already predicts top-1.
+    Returns ``None`` when torch / the model is unavailable or no token can be
+    scored (so the caller leaves ``DatasetProfile.base_model_proximity`` None).
+    """
+    if not isinstance(model, str) or not model.strip():
+        raise ValueError("model must be a non-empty string")
+    try:
+        from soup_cli.utils import live_eval
+    except Exception:  # noqa: BLE001
+        return None
+    try:
+        score = live_eval.measure_logit_agreement(
+            model,
+            rows,
+            input_extractor=_extract_input_text,
+            output_extractor=_extract_output_text,
+            device=device,
+        )
+    except Exception:  # noqa: BLE001
+        return None
+    if not (score == score):  # NaN
+        return None
+    return max(0.0, min(1.0, float(score)))
+
 
 def synth_probe_baselines(
     rows: Sequence[Mapping[str, object]],
@@ -788,21 +904,22 @@ def synth_probe_baselines(
     device: Optional[str] = None,
     timeout_seconds: int = 600,
 ) -> Mapping[str, float]:
-    """Return synthetic deltas for {zero_shot, few_shot, rag}.
+    """Return {zero_shot, few_shot, rag} baseline scores in ``[-1.0, 1.0]``.
 
-    Pure-function stub (v0.54.0): derives deltas from dataset shape
-    without loading a model. Real model-driven probing is deferred to
-    **v0.54.1** (mirrors the v0.27.0 MII / v0.37.0 multipack / v0.50.0
-    GRPO Plus stub-then-live pattern).
+    When ``model`` is supplied (and torch + the model load succeed) this runs
+    a LIVE probe (#161): it generates zero-shot and few-shot completions on a
+    held-out slice and scores each against the expected output with token-F1,
+    so the numbers reflect what the base model already achieves. The ``rag``
+    component stays a label-variance heuristic (Soup ships no retriever to
+    measure).
 
-    The ``model`` / ``device`` / ``timeout_seconds`` kwargs are signature
-    placeholders so v0.54.1 can land live model loading without breaking
-    callers. Currently ignored.
+    When ``model`` is ``None`` — or the live path raises — it falls back to the
+    pure-function heuristic (derives deltas from dataset shape, no model load),
+    which keeps the offline / CPU path and all existing tests intact.
 
-    Outputs are bounded to ``[-1.0, 1.0]`` and finite.
+    ``timeout_seconds`` is reserved for a future hard wall-clock budget.
     """
-    # Forward-compat kwargs — accepted but unused in v0.54.0.
-    del model, device, timeout_seconds
+    del timeout_seconds  # reserved for a future hard budget
     if not isinstance(rows, Sequence):
         raise TypeError("rows must be a sequence")
     if isinstance(n_holdout, bool):
@@ -811,6 +928,11 @@ def synth_probe_baselines(
         raise TypeError("n_holdout must be int")
     if not (1 <= n_holdout <= 10_000):
         raise ValueError("n_holdout must be in [1, 10000]")
+
+    if model is not None:
+        live = _live_probe_baselines(rows, n_holdout=n_holdout, model=model, device=device)
+        if live is not None:
+            return live
 
     row_count = len(rows)
     sample = rows[: min(n_holdout, row_count)]
@@ -842,17 +964,21 @@ def synth_probe_lora_delta(
     lr: Optional[float] = None,
     timeout_seconds: int = 600,
 ) -> Tuple[float, float]:
-    """Return ``(sft_delta, wall_clock_secs)`` for a synthetic 100-step probe.
+    """Return ``(sft_delta, wall_clock_secs)`` for an N-step LoRA probe.
 
-    Pure-function stub (v0.54.0). Wall-clock is computed from row_count + a
-    fixed per-step cost approximation so the CLI can render an honest ETA.
+    When ``model`` is supplied (and torch + peft + the model load succeed) this
+    runs a LIVE probe (#161): it LoRA-trains the base model for ``n_steps`` on
+    a held-out-excluded train slice and returns the relative held-out-loss
+    improvement ``(base_loss - probe_loss) / base_loss`` (clamped to
+    ``[-0.2, 0.7]``) plus the real wall-clock seconds.
 
-    Live LoRA probe loading deferred to **v0.54.1**. The ``model`` /
-    ``device`` / ``lr`` / ``timeout_seconds`` kwargs are signature
-    placeholders so v0.54.1 can land without breaking callers.
+    When ``model`` is ``None`` — or the live path raises — it falls back to the
+    pure-function heuristic (dataset-shape estimate + a per-step ETA), keeping
+    the offline path and all existing tests intact.
+
+    ``timeout_seconds`` is reserved for a future hard wall-clock budget.
     """
-    # Forward-compat kwargs — accepted but unused in v0.54.0.
-    del model, device, lr, timeout_seconds
+    del timeout_seconds  # reserved for a future hard budget
     if not isinstance(rows, Sequence):
         raise TypeError("rows must be a sequence")
     if isinstance(n_steps, bool):
@@ -861,6 +987,11 @@ def synth_probe_lora_delta(
         raise TypeError("n_steps must be int")
     if not (1 <= n_steps <= 100_000):
         raise ValueError("n_steps must be in [1, 100000]")
+
+    if model is not None:
+        live = _live_probe_lora_delta(rows, n_steps=n_steps, model=model, device=device, lr=lr)
+        if live is not None:
+            return live
 
     profile = compute_dataset_profile(rows)
     if profile.row_count < _MIN_ROWS_FOR_TRAINING:
