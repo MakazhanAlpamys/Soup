@@ -41,6 +41,17 @@ _MAX_ID_LEN = 256
 _MAX_FILE_BYTES = 256 * 1024 * 1024  # 256 MiB
 _EPSILON = 1e-3
 
+# 2PL / 3PL fit (v0.71.6 #213).
+SUPPORTED_IRT_MODELS = ("1pl", "2pl", "3pl")
+_SUPPORTED_IRT_MODELS = frozenset(SUPPORTED_IRT_MODELS)
+MAX_GUESSING = 0.35  # 3PL lower-asymptote cap (empirical floor heuristic)
+_A_MIN = 0.05
+_A_MAX = 4.0
+_B_BOUND = 6.0
+_THETA_BOUND = 10.0
+_DEFAULT_MAX_ITER = 300
+_DEFAULT_LEARNING_RATE = 0.1
+
 
 def _validate_item_id(value: object, *, field: str = "item_id") -> str:
     if not isinstance(value, str):
@@ -72,6 +83,41 @@ class ItemDifficulty:
                 raise ValueError(f"{field} must be a number")
             if not math.isfinite(float(value)):
                 raise ValueError(f"{field} must be finite")
+        if self.info < 0:
+            raise ValueError("info must be non-negative")
+
+
+@dataclass(frozen=True)
+class ItemParameters:
+    """Frozen per-item 2PL / 3PL fit (v0.71.6 #213).
+
+    Superset of :class:`ItemDifficulty` — carries ``discrimination`` (a) and
+    ``guessing`` (c) in addition to ``difficulty`` (b). Duck-compatible with
+    :func:`pick_irt_subset` (which reads only ``.info`` + ``.item_id``).
+    """
+
+    item_id: str
+    difficulty: float
+    discrimination: float
+    guessing: float
+    info: float
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "item_id", _validate_item_id(self.item_id))
+        for field, value in (
+            ("difficulty", self.difficulty),
+            ("discrimination", self.discrimination),
+            ("guessing", self.guessing),
+            ("info", self.info),
+        ):
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError(f"{field} must be a number")
+            if not math.isfinite(float(value)):
+                raise ValueError(f"{field} must be finite")
+        if self.discrimination <= 0:
+            raise ValueError("discrimination must be > 0")
+        if not 0.0 <= self.guessing <= 1.0:
+            raise ValueError("guessing must be in [0.0, 1.0]")
         if self.info < 0:
             raise ValueError("info must be non-negative")
 
@@ -173,6 +219,159 @@ def fit_difficulty(rows: Sequence[Mapping[str, object]]) -> tuple[ItemDifficulty
     return tuple(results)
 
 
+def _clamp(value: float, low: float, high: float) -> float:
+    return low if value < low else (high if value > high else value)
+
+
+def _validate_response_id(value: object, *, field: str) -> str:
+    # Same rules as item_id — delegate so there is one source of truth (DRY).
+    return _validate_item_id(value, field=field)
+
+
+def fit_irt(
+    rows: Sequence[Mapping[str, object]],
+    *,
+    model: str = "1pl",
+    max_iter: int = _DEFAULT_MAX_ITER,
+    learning_rate: float = _DEFAULT_LEARNING_RATE,
+) -> tuple[ItemParameters, ...]:
+    """Fit a 1PL / 2PL / 3PL IRT model via joint coordinate-ascent MLE.
+
+    Rows are ``{respondent_id, item_id, correct(bool)}`` — a response matrix.
+    The latent abilities θ and item parameters are fit by alternating gradient
+    ascent on the joint log-likelihood (θ centred each iteration for
+    identifiability; ``a`` / ``b`` clamped to sane bounds). Deterministic
+    (zero-initialised, no randomness), pure-Python.
+
+    - ``1pl``: discrimination fixed at 1.0, guessing 0.0 (Rasch).
+    - ``2pl``: discrimination fit; guessing 0.0.
+    - ``3pl``: discrimination fit; guessing estimated as the empirical
+      correct-rate floor among the lowest-ability third (capped at
+      :data:`MAX_GUESSING`). Joint 3PL MLE is unstable without Bayesian
+      priors, so the lower asymptote uses this empirical-floor heuristic —
+      documented design choice for the eval-subset use case.
+
+    Information is reported at θ=0 (the centred ability mean) so the result
+    composes with :func:`pick_irt_subset`. Returns items sorted by ``item_id``.
+    """
+    if model not in _SUPPORTED_IRT_MODELS:
+        raise ValueError(
+            f"model must be one of {sorted(_SUPPORTED_IRT_MODELS)}; got {model!r}"
+        )
+    if not isinstance(rows, (list, tuple)):
+        raise TypeError("rows must be a list/tuple of mappings")
+    if not rows:
+        raise ValueError("rows must not be empty")
+    if len(rows) > _MAX_ROWS:
+        raise ValueError(f"too many rows (cap {_MAX_ROWS})")
+
+    resp_ids: list[str] = []
+    item_ids: list[str] = []
+    resp_index: dict[str, int] = {}
+    item_index: dict[str, int] = {}
+    cells: list[tuple[int, int, int]] = []  # (resp_idx, item_idx, u)
+    for idx, row in enumerate(rows):
+        if not isinstance(row, dict):
+            raise ValueError(f"rows[{idx}] must be a dict")
+        if "respondent_id" not in row:
+            raise ValueError(f"rows[{idx}] missing respondent_id")
+        if "item_id" not in row:
+            raise ValueError(f"rows[{idx}] missing item_id")
+        if "correct" not in row:
+            raise ValueError(f"rows[{idx}] missing correct field")
+        rid = _validate_response_id(row["respondent_id"], field="respondent_id")
+        iid = _validate_item_id(row["item_id"])
+        correct = row["correct"]
+        if not isinstance(correct, bool):
+            raise ValueError(f"rows[{idx}].correct must be bool")
+        if rid not in resp_index:
+            resp_index[rid] = len(resp_ids)
+            resp_ids.append(rid)
+        if iid not in item_index:
+            item_index[iid] = len(item_ids)
+            item_ids.append(iid)
+        cells.append((resp_index[rid], item_index[iid], 1 if correct else 0))
+
+    n_resp = len(resp_ids)
+    n_item = len(item_ids)
+    by_resp: dict[int, list[tuple[int, int]]] = {j: [] for j in range(n_resp)}
+    by_item: dict[int, list[tuple[int, int]]] = {i: [] for i in range(n_item)}
+    for j, i, u in cells:
+        by_resp[j].append((i, u))
+        by_item[i].append((j, u))
+
+    theta = [0.0] * n_resp
+    a = [1.0] * n_item
+    b = [0.0] * n_item
+    fit_disc = model in ("2pl", "3pl")
+
+    for _ in range(max_iter):
+        # Update abilities θ given current item parameters.
+        new_theta = []
+        for j in range(n_resp):
+            grad = 0.0
+            count = 0
+            for i, u in by_resp[j]:
+                p = _sigmoid(a[i] * (theta[j] - b[i]))
+                grad += a[i] * (u - p)
+                count += 1
+            step = learning_rate * grad / max(1, count)
+            new_theta.append(_clamp(theta[j] + step, -_THETA_BOUND, _THETA_BOUND))
+        theta = new_theta
+        if n_resp:
+            mean = sum(theta) / n_resp
+            theta = [t - mean for t in theta]
+        # Update item difficulty (+ discrimination for 2PL/3PL).
+        for i in range(n_item):
+            grad_b = 0.0
+            grad_a = 0.0
+            count = 0
+            for j, u in by_item[i]:
+                p = _sigmoid(a[i] * (theta[j] - b[i]))
+                resid = u - p
+                grad_b += -a[i] * resid
+                grad_a += (theta[j] - b[i]) * resid
+                count += 1
+            denom = max(1, count)
+            b[i] = _clamp(b[i] + learning_rate * grad_b / denom, -_B_BOUND, _B_BOUND)
+            if fit_disc:
+                a[i] = _clamp(a[i] + learning_rate * grad_a / denom, _A_MIN, _A_MAX)
+
+    guessing = [0.0] * n_item
+    if model == "3pl":
+        # Lower asymptote = correct-rate floor among the lowest-ability third.
+        order = sorted(range(n_resp), key=lambda j: theta[j])
+        low = set(order[: max(1, n_resp // 3)])
+        for i in range(n_item):
+            low_resp = [u for j, u in by_item[i] if j in low]
+            if low_resp:
+                guessing[i] = _clamp(sum(low_resp) / len(low_resp), 0.0, MAX_GUESSING)
+
+    results: list[ItemParameters] = []
+    for i in range(n_item):
+        # Information at θ=0 (centred ability mean).
+        s = _sigmoid(a[i] * (0.0 - b[i]))
+        c = guessing[i]
+        p = c + (1.0 - c) * s
+        p = min(1.0 - _EPSILON, max(_EPSILON, p))
+        if c > 0.0:
+            # 3PL Fisher information: a² · (1-p)/p · ((p-c)/(1-c))²
+            info = (a[i] ** 2) * ((1.0 - p) / p) * (((p - c) / (1.0 - c)) ** 2)
+        else:
+            info = (a[i] ** 2) * p * (1.0 - p)
+        results.append(
+            ItemParameters(
+                item_id=item_ids[i],
+                difficulty=b[i],
+                discrimination=a[i],
+                guessing=c,
+                info=max(0.0, info),
+            )
+        )
+    results.sort(key=lambda d: d.item_id)
+    return tuple(results)
+
+
 def pick_irt_subset(
     difficulty: Sequence[ItemDifficulty],
     *,
@@ -231,8 +430,6 @@ def load_response_rows(path: object) -> tuple[dict, ...]:
     except FileNotFoundError:
         raise
     except OSError as exc:
-        if isinstance(exc, FileNotFoundError):
-            raise
         raise ValueError(f"cannot open path: {type(exc).__name__}") from exc
     rows: list[dict] = []
     skipped = 0

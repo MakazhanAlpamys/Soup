@@ -1388,7 +1388,13 @@ def augment_data(
     ),
     provider: str = typer.Option(
         "ollama", "--provider", "-p",
-        help="LLM provider: openai, ollama, anthropic, server, vllm",
+        help="LLM provider: ollama, anthropic, vllm",
+    ),
+    model: str = typer.Option(
+        "", "--model", help="Provider model id (default per provider)"
+    ),
+    base_url: str = typer.Option(
+        "", "--base-url", help="Provider base URL (ollama/vllm; defaults to loopback)"
     ),
     count: int = typer.Option(
         2, "--count", "-c", min=1, max=10,
@@ -1418,25 +1424,26 @@ def augment_data(
         )
         raise typer.Exit(1)
 
-    # Path traversal protection for input
-    try:
-        input_resolved = Path(input_path).resolve()
-        input_resolved.relative_to(Path.cwd().resolve())
-    except ValueError:
-        console.print("[red]Input path must be under the current working directory.[/]")
-        raise typer.Exit(1)
+    # Path containment + symlink rejection via the project-standard helper
+    # (realpath + commonpath — NOT Path.resolve()+relative_to, which breaks on
+    # Windows 8.3 short names). v0.71.6 #75 hardening of the touched command.
+    from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
 
-    if not input_resolved.exists():
-        console.print(f"[red]Input file not found: {input_resolved}[/]")
-        raise typer.Exit(1)
-
-    # Path traversal protection for output
     try:
-        output_resolved = Path(output_path).resolve()
-        output_resolved.relative_to(Path.cwd().resolve())
-    except ValueError:
-        console.print("[red]Output path must be under the current working directory.[/]")
+        enforce_under_cwd_and_no_symlink(input_path, "--input")
+    except (TypeError, ValueError) as exc:
+        console.print(f"[red]{exc}[/]")
+        raise typer.Exit(2) from exc
+    if not os.path.lexists(input_path):
+        console.print(f"[red]Input file not found: {input_path}[/]")
         raise typer.Exit(1)
+    input_resolved = Path(os.path.realpath(input_path))
+
+    try:
+        enforce_under_cwd_and_no_symlink(output_path, "--output")
+    except (TypeError, ValueError) as exc:
+        console.print(f"[red]{exc}[/]")
+        raise typer.Exit(2) from exc
 
     # Load data
     data = load_raw_data(input_resolved)
@@ -1449,7 +1456,13 @@ def augment_data(
     )
 
     # Load provider
-    provider_instance = _load_augment_provider(provider, requests_per_minute)
+    try:
+        provider_instance = _load_augment_provider(
+            provider, requests_per_minute, model=model, base_url=base_url
+        )
+    except (TypeError, ValueError, ImportError) as exc:
+        console.print(f"[red]{exc}[/]")
+        raise typer.Exit(2) from exc
 
     max_entries = 10
     max_entry_len = 32
@@ -1501,37 +1514,74 @@ def augment_data(
     else:
         final_rows = data + augmented
 
-    # Write output
-    output_resolved.parent.mkdir(parents=True, exist_ok=True)
-    with open(output_resolved, "w", encoding="utf-8") as fh:
-        for row in final_rows:
-            fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+    # Atomic write (cwd-contained + symlink-rejected) via the shared helper.
+    from soup_cli.utils.paths import atomic_write_text
+
+    payload = "".join(
+        json.dumps(row, ensure_ascii=False) + "\n" for row in final_rows
+    )
+    written = atomic_write_text(payload, output_path, field="--output")
 
     console.print(
         f"[green]Augmentation complete:[/] {len(data)} → {len(final_rows)} "
         f"({strategy} via {provider})\n"
-        f"  Output: {output_resolved}"
+        f"  Output: {written}"
     )
 
 
-def _load_augment_provider(provider: str, rpm: int):
-    """Construct an LLM provider instance with generate(prompt) method."""
-    # Minimal provider abstraction — wraps existing sync clients.
-    if provider == "ollama":
-        from soup_cli.data.providers.ollama import OllamaProvider
+class _AugmentProvider:
+    """Adapter exposing ``generate(prompt) -> str`` over a judge-provider fn.
 
-        return OllamaProvider(model="llama3.1:8b", rate_limit_rpm=rpm)
-    if provider == "anthropic":
-        from soup_cli.data.providers.anthropic import AnthropicProvider
+    v0.71.6 #75: ``data augment`` previously imported ``OllamaProvider`` /
+    ``AnthropicProvider`` / ``VllmProvider`` classes that never existed in the
+    provider modules (they ship *functions*), so every ``--provider`` choice
+    raised ``ImportError``. This delegates to the v0.53.7 hardened
+    ``make_judge_provider_fn`` (SSRF-validated, env-only Anthropic key) and
+    unwraps its ``{"text": ...}`` reply to the ``.generate`` contract the
+    augment strategies expect.
+    """
 
-        return AnthropicProvider(model="claude-3-5-haiku-20241022", rate_limit_rpm=rpm)
-    if provider == "vllm":
-        from soup_cli.data.providers.vllm import VllmProvider
+    def __init__(self, fn) -> None:
+        self._fn = fn
 
-        return VllmProvider(base_url="http://localhost:8000/v1", rate_limit_rpm=rpm)
-    raise ValueError(
-        f"Unknown provider '{provider}'. Options: ollama, anthropic, vllm."
+    def generate(self, prompt: str) -> str:
+        from collections.abc import Mapping as _Mapping
+
+        reply = self._fn(prompt)
+        if isinstance(reply, _Mapping):
+            text = reply.get("text", "")
+            return text if isinstance(text, str) else ""
+        return ""
+
+
+_AUGMENT_DEFAULT_MODELS = {
+    "ollama": "llama3.1",
+    "anthropic": "claude-3-5-haiku-20241022",
+    "vllm": "local",
+}
+
+
+def _load_augment_provider(
+    provider: str,
+    rpm: int,
+    *,
+    model: str = "",
+    base_url: str = "",
+):
+    """Construct an LLM provider instance with a ``generate(prompt)`` method."""
+    from soup_cli.utils.data_forge import JUDGE_PROVIDERS, make_judge_provider_fn
+
+    canonical = provider.strip().lower()
+    if canonical not in JUDGE_PROVIDERS:
+        raise ValueError(
+            f"Unknown provider '{provider}'. Options: {sorted(JUDGE_PROVIDERS)}."
+        )
+    fn = make_judge_provider_fn(
+        canonical,
+        model=model or _AUGMENT_DEFAULT_MODELS[canonical],
+        base_url=base_url or None,
     )
+    return _AugmentProvider(fn)
 
 
 @app.command(name="register")
@@ -2544,6 +2594,15 @@ def gen_magpie(
     base: str = typer.Option(..., "--base", help="Aligned chat-tuned base model id"),
     provider: str = typer.Option(..., "--provider", help="ollama | anthropic | vllm"),
     target: int = typer.Option(..., "--target", help="Target row count [1, 1_000_000]"),
+    output: str = typer.Option(
+        "", "--output", "-o", help="Output JSONL path (required unless --plan-only)"
+    ),
+    base_url: str = typer.Option(
+        "", "--base-url", help="Provider base URL (ollama/vllm; defaults to loopback)"
+    ),
+    max_tokens: int = typer.Option(
+        512, "--max-tokens", help="Max tokens per generation [1, 16384]"
+    ),
     quality_filter: bool = typer.Option(
         True, "--quality-filter/--no-quality-filter", help="Apply v0.47 quality filter"
     ),
@@ -2551,11 +2610,11 @@ def gen_magpie(
         False, "--plan-only", help="Validate + print plan; do not generate."
     ),
 ) -> None:
-    """Magpie synthetic data generator (v0.69.0 Part C).
+    """Magpie synthetic data generator (v0.69.0 Part C; live in v0.71.6 #232).
 
     Feeds the chat-template prefix only to ``--base`` and harvests user-side
-    turns via ``--provider``. The live generator is deferred to v0.69.1; today
-    only ``--plan-only`` produces a meaningful result.
+    turns via ``--provider`` (ollama / vllm raw completion). With ``--plan-only``
+    only the resolved plan is printed.
     """
     from rich.markup import escape as _escape
     from rich.panel import Panel
@@ -2586,16 +2645,36 @@ def gen_magpie(
     if plan_only:
         return
 
+    if not output:
+        console.print("[red]--output is required unless --plan-only is set.[/]")
+        raise typer.Exit(2)
+
     try:
-        run_magpie(cfg)
-    except NotImplementedError as exc:
-        console.print(
-            Panel(
-                f"[yellow]{_escape(str(exc))}[/]",
-                title="Live magpie generator deferred",
-            )
+        result = run_magpie(
+            cfg,
+            output_path=output,
+            base_url=base_url or None,
+            max_tokens=max_tokens,
         )
-        raise typer.Exit(3) from exc
+    except (TypeError, ValueError, ImportError) as exc:
+        console.print(f"[red]{_escape(str(exc))}[/]")
+        raise typer.Exit(2) from exc
+
+    console.print(
+        Panel(
+            f"Rows kept:    [bold]{result.rows_kept}[/]\n"
+            f"Filtered:     [bold]{result.rows_filtered}[/]\n"
+            f"Duplicates:   [bold]{result.duplicates}[/]\n"
+            f"Attempts:     [bold]{result.attempts}[/]\n"
+            f"Output:       [bold]{_escape(os.path.relpath(result.output_path))}[/]",
+            title="soup data gen-magpie — done",
+        )
+    )
+    if result.rows_kept == 0:
+        console.print(
+            "[yellow]Warning:[/] 0 rows generated — is the provider reachable "
+            "and the model pulled?"
+        )
 
 
 # v0.69.0 Part D — Persona-Hub diversity sampler.

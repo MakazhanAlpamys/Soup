@@ -21,7 +21,7 @@ import re
 from collections import deque
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Any, Iterable, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Callable, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 # Closed allowlist of model kinds. Mirrors dbt's `materialized` field but
 # trimmed to the three that map onto SFT-data pipelines.
@@ -92,6 +92,14 @@ class BuildModel:
                 raise ValueError(
                     f"BuildModel.source must be <= {_MAX_SOURCE_LEN} chars"
                 )
+        # Freeze config for parity with the parse path (direct construction
+        # otherwise leaves a mutable dict on a frozen dataclass).
+        if not isinstance(self.config, Mapping):
+            raise TypeError("BuildModel.config must be a mapping")
+        if not isinstance(self.config, MappingProxyType):
+            object.__setattr__(
+                self, "config", MappingProxyType(dict(self.config))
+            )
         # Cross-validator: seed/derived shape must be unambiguous.
         if not self.refs and self.source is None:
             raise ValueError(
@@ -127,6 +135,35 @@ class IncrementalDiffReport:
     changed: int
     removed: int
     unchanged: int
+
+
+@dataclass(frozen=True)
+class ModelBuildResult:
+    """Per-model outcome of a live build run.
+
+    ``transform_calls`` is the number of times the transform was actually
+    invoked — for ``incremental`` models this equals ``added + changed`` (the
+    re-tokenize-only-diff optimisation; unchanged rows are carried over from
+    the SQLite state store without re-running the transform). ``output_path``
+    is the realpath of the materialised JSONL, or ``None`` for ``view`` models
+    (in-memory only). ``diff`` is set for ``incremental`` models.
+    """
+
+    name: str
+    kind: str
+    rows_in: int
+    rows_out: int
+    transform_calls: int
+    output_path: Optional[str]
+    diff: Optional[IncrementalDiffReport]
+
+
+@dataclass(frozen=True)
+class BuildResult:
+    """Outcome of a whole ``run_build`` invocation."""
+
+    models: Tuple[ModelBuildResult, ...]
+    output_dir: str
 
 
 # -----------------------------------------------------------------------------
@@ -459,29 +496,463 @@ def render_plan_table(plan: BuildPlan) -> str:
 
 
 # -----------------------------------------------------------------------------
-# Live runner — deferred to v0.69.1
+# Transform registry (v0.71.6 #231) — row-wise (row, config) -> dict | None
+# -----------------------------------------------------------------------------
+#
+# A transform receives one row plus the model's ``config`` mapping and returns
+# a NEW row dict, or ``None`` to drop the row. Row-wise (not batch) so the
+# incremental backend can re-run the transform on only the added/changed rows
+# and carry the rest over from the SQLite state store.
+
+TransformFn = Callable[[Mapping[str, Any], Mapping[str, Any]], Optional[Mapping[str, Any]]]
+
+# DoS / sanity caps for the live runner.
+_MAX_BUILD_ROWS = 1_000_000
+_MAX_SOURCE_BYTES = 1024 * 1024 * 1024  # 1 GiB
+_STATE_DB_NAME = ".soup_build_state.sqlite"
+
+
+def _t_identity(row: Mapping[str, Any], config: Mapping[str, Any]) -> dict:
+    return dict(row)
+
+
+def _t_drop_empty(
+    row: Mapping[str, Any], config: Mapping[str, Any]
+) -> Optional[dict]:
+    field = config.get("field", "text")
+    value = row.get(field)
+    if isinstance(value, str) and value.strip():
+        return dict(row)
+    return None
+
+
+def _t_lowercase(row: Mapping[str, Any], config: Mapping[str, Any]) -> dict:
+    field = config.get("field", "text")
+    out = dict(row)
+    value = out.get(field)
+    if isinstance(value, str):
+        out[field] = value.lower()
+    return out
+
+
+def _t_add_field(row: Mapping[str, Any], config: Mapping[str, Any]) -> dict:
+    field = config.get("field")
+    if not isinstance(field, str) or not field:
+        raise ValueError("add_field transform requires config.field (non-empty string)")
+    out = dict(row)
+    out[field] = config.get("value")
+    return out
+
+
+def _t_token_count(row: Mapping[str, Any], config: Mapping[str, Any]) -> dict:
+    field = config.get("field", "text")
+    out = dict(row)
+    value = out.get(field)
+    out["n_tokens"] = len(str(value).split()) if value is not None else 0
+    return out
+
+
+# Closed built-in registry, wrapped immutable (matches project MappingProxyType
+# policy for closed allowlists). Operators extend per-run via ``transforms=``.
+BUILTIN_TRANSFORMS: Mapping[str, TransformFn] = MappingProxyType(
+    {
+        "identity": _t_identity,
+        "drop_empty": _t_drop_empty,
+        "lowercase": _t_lowercase,
+        "add_field": _t_add_field,
+        "token_count": _t_token_count,
+    }
+)
+
+
+def resolve_transform(
+    name: str,
+    extra: Optional[Mapping[str, TransformFn]] = None,
+) -> TransformFn:
+    """Resolve a transform name to a callable.
+
+    Per-call ``extra`` (operator-supplied for one ``run_build`` invocation)
+    shadows the built-ins. No global mutable registry — that would leak state
+    across runs/tests (project prefers immutable registries).
+    """
+    if extra and name in extra:
+        fn = extra[name]
+        if not callable(fn):
+            raise TypeError(f"transform {name!r} must be callable")
+        return fn
+    if name in BUILTIN_TRANSFORMS:
+        return BUILTIN_TRANSFORMS[name]
+    raise ValueError(
+        f"unknown transform: {name!r}. built-ins: {sorted(BUILTIN_TRANSFORMS)}; "
+        "supply a custom one via transforms={name: fn}."
+    )
+
+
+# -----------------------------------------------------------------------------
+# Live runner (v0.71.6 #231)
 # -----------------------------------------------------------------------------
 
 
-def run_build(plan: BuildPlan, *, output_dir: Optional[str] = None) -> None:
-    """Execute the build DAG. Deferred to v0.69.1.
+def _assign_ids(rows: Sequence[Mapping[str, Any]]) -> List[dict]:
+    """Return dict-copies with a stable ``id`` on every row.
 
-    Same stub-then-live cadence as v0.45.0 recipe DAG / v0.50.0 GRPO Plus /
-    v0.61.0 unlearning. The CLI prints the resolved plan + a deferred-live
-    advisory and exits with code 3 so CI gates can distinguish "deferred /
-    not yet shipped" from "validation rejection" (which exits 2).
+    Rows that already carry a non-None ``id`` keep it; id-less rows get an
+    index-based surrogate so the incremental backend can diff them. Operators
+    wanting stable incremental diffs across row-reorderings should provide
+    their own ``id`` field (index surrogates shift on reorder — documented).
     """
+    out: List[dict] = []
+    for index, row in enumerate(rows):
+        if not isinstance(row, Mapping):
+            raise ValueError(f"row {index} must be a mapping")
+        copy = dict(row)
+        if copy.get("id") is None:
+            copy["id"] = f"row-{index}"
+        out.append(copy)
+    return out
+
+
+def _read_seed_rows(source: str) -> List[dict]:
+    """Read a seed model's source JSONL under cwd (containment + symlink reject)."""
+    validate_build_source(source)  # cwd-containment + symlink rejection
+    if not os.path.lexists(source):
+        raise FileNotFoundError(f"build source not found: {source!r}")
+    real = os.path.realpath(source)
+    if not os.path.isfile(real):
+        raise FileNotFoundError(f"build source is not a file: {source!r}")
+    if os.path.getsize(real) > _MAX_SOURCE_BYTES:
+        raise ValueError(f"build source {source!r} exceeds {_MAX_SOURCE_BYTES} bytes")
+    rows: List[dict] = []
+    with open(real, "r", encoding="utf-8") as handle:
+        for lineno, line in enumerate(handle, 1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise ValueError(
+                    f"build source {source!r} line {lineno}: invalid JSON: {exc}"
+                ) from exc
+            if not isinstance(obj, dict):
+                raise ValueError(
+                    f"build source {source!r} line {lineno}: row must be a JSON object"
+                )
+            rows.append(obj)
+            if len(rows) > _MAX_BUILD_ROWS:
+                raise ValueError(
+                    f"build source {source!r} exceeds {_MAX_BUILD_ROWS} rows"
+                )
+    return rows
+
+
+def _gather_inputs(
+    model: BuildModel,
+    materialized: Mapping[str, List[dict]],
+) -> List[dict]:
+    if model.source is not None:
+        return _assign_ids(_read_seed_rows(model.source))
+    gathered: List[dict] = []
+    for ref in model.refs:
+        gathered.extend(dict(r) for r in materialized.get(ref, []))
+    return gathered
+
+
+def _model_fingerprint(model: BuildModel) -> str:
+    """Stable hash of a model's transform + config.
+
+    Folded into the incremental cache key so editing a model's ``config`` or
+    ``transform`` (with byte-identical inputs) correctly re-runs the transform
+    instead of silently carrying over stale outputs (code-review HIGH fix).
+    """
+    payload = json.dumps(
+        {"transform": model.transform, "config": dict(model.config)},
+        sort_keys=True,
+        ensure_ascii=False,
+        default=str,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _combine_hash(fingerprint: str, row_hash: str) -> str:
+    return hashlib.sha256(f"{fingerprint}\x1f{row_hash}".encode("utf-8")).hexdigest()
+
+
+def _apply_transform(
+    fn: TransformFn,
+    row: Mapping[str, Any],
+    config: Mapping[str, Any],
+    model_name: str,
+) -> Optional[dict]:
+    try:
+        result = fn(row, config)
+    except Exception as exc:  # noqa: BLE001 — transforms are operator code
+        raise ValueError(
+            f"transform failed on model {model_name!r} row id={row.get('id')!r}: "
+            f"{type(exc).__name__}: {exc}"
+        ) from exc
+    if result is None:
+        return None
+    if not isinstance(result, Mapping):
+        raise ValueError(
+            f"transform on model {model_name!r} must return a dict or None, "
+            f"got {type(result).__name__}"
+        )
+    out = dict(result)
+    # Carry the row id through so derived/incremental models stay diffable
+    # even when a custom transform forgets to preserve it.
+    if "id" not in out and "id" in row:
+        out["id"] = row["id"]
+    return out
+
+
+def _materialize_full(
+    model: BuildModel,
+    inputs: Sequence[Mapping[str, Any]],
+    fn: TransformFn,
+) -> Tuple[List[dict], int]:
+    out_rows: List[dict] = []
+    calls = 0
+    for row in inputs:
+        calls += 1
+        result = _apply_transform(fn, row, model.config, model.name)
+        if result is not None:
+            out_rows.append(result)
+    return out_rows, calls
+
+
+def _materialize_incremental(
+    conn: Any,
+    model: BuildModel,
+    inputs: Sequence[Mapping[str, Any]],
+    fn: TransformFn,
+) -> Tuple[List[dict], int, IncrementalDiffReport]:
+    fingerprint = _model_fingerprint(model)
+    new_hash: dict[str, str] = {}
+    new_rows_by_id: dict[str, Mapping[str, Any]] = {}
+    order: List[str] = []
+    for row in inputs:
+        rid = row.get("id")
+        if rid is None:
+            raise ValueError(
+                f"incremental model {model.name!r} input row missing 'id'"
+            )
+        rid = str(rid)
+        if rid in new_hash:
+            raise ValueError(
+                f"incremental model {model.name!r} has duplicate row id {rid!r}"
+            )
+        # Fold the transform+config fingerprint into the cache key so a config
+        # edit (same inputs) re-runs the transform instead of carrying stale rows.
+        new_hash[rid] = _combine_hash(fingerprint, compute_row_hash(row))
+        new_rows_by_id[rid] = row
+        order.append(rid)
+
+    prev: dict[str, tuple] = {}
+    cursor = conn.execute(
+        "SELECT row_id, input_hash, output_json FROM build_rows WHERE model = ?",
+        (model.name,),
+    )
+    for rid, input_hash, output_json in cursor.fetchall():
+        prev[str(rid)] = (input_hash, output_json)
+
+    added = changed = unchanged = 0
+    calls = 0
+    out_rows: List[dict] = []
+    final_output: dict[str, Optional[str]] = {}  # rid -> output_json str or None
+    for rid in order:
+        h = new_hash[rid]
+        in_prev = rid in prev
+        same_hash = in_prev and prev[rid][0] == h
+        reused = False
+        if same_hash:
+            # Carry the recorded decision over — no transform call. A
+            # previously-dropped (output_json is None) unchanged row stays
+            # dropped without re-running the transform.
+            stored = prev[rid][1]
+            if stored is None:
+                final_output[rid] = None
+                unchanged += 1
+                continue
+            try:
+                res = json.loads(stored)
+            except (TypeError, ValueError):
+                res = None
+            if isinstance(res, dict):
+                final_output[rid] = stored
+                out_rows.append(res)
+                unchanged += 1
+                reused = True
+            # else: corrupt cache — fall through to re-transform (M4 fix).
+        if reused:
+            continue
+        # added / changed / corrupt-cache → re-run the transform.
+        if not in_prev:
+            added += 1
+        else:
+            changed += 1
+        calls += 1
+        result = _apply_transform(fn, new_rows_by_id[rid], model.config, model.name)
+        output_json = (
+            json.dumps(result, ensure_ascii=False) if result is not None else None
+        )
+        final_output[rid] = output_json
+        if result is not None:
+            out_rows.append(result)
+
+    removed = sum(1 for rid in prev if rid not in new_hash)
+    # Rebuild state for this model: state == current inputs exactly.
+    conn.execute("DELETE FROM build_rows WHERE model = ?", (model.name,))
+    conn.executemany(
+        "INSERT INTO build_rows (model, row_id, input_hash, output_json) "
+        "VALUES (?, ?, ?, ?)",
+        [(model.name, rid, new_hash[rid], final_output[rid]) for rid in order],
+    )
+    diff = IncrementalDiffReport(
+        added=added, changed=changed, removed=removed, unchanged=unchanged
+    )
+    return out_rows, calls, diff
+
+
+def _write_model_jsonl(
+    output_dir: str, name: str, rows: Sequence[Mapping[str, Any]]
+) -> str:
+    # ``name`` is regex-validated (no path separators / ``..``) so the join
+    # cannot escape ``output_dir``. Delegate the atomic write + cwd-containment
+    # + symlink rejection to the v0.59.0 shared helper (single-source TOCTOU
+    # defence — security/code review: no bespoke re-implementation).
+    from soup_cli.utils.paths import atomic_write_bytes
+
+    target = os.path.join(output_dir, f"{name}.jsonl")
+    payload = (
+        "\n".join(json.dumps(r, ensure_ascii=False) for r in rows)
+        + ("\n" if rows else "")
+    ).encode("utf-8")
+    return atomic_write_bytes(payload, target, prefix=".build-", field="build output")
+
+
+def run_build(
+    plan: BuildPlan,
+    *,
+    output_dir: str,
+    transforms: Optional[Mapping[str, TransformFn]] = None,
+    state_db: Optional[str] = None,
+) -> BuildResult:
+    """Execute the build DAG (v0.71.6 #231).
+
+    Materialises each model in topological order:
+
+    - ``table``  — apply the transform to every input row, overwrite the
+      ``<output_dir>/<name>.jsonl`` artifact.
+    - ``view``   — apply the transform but keep results in memory only (not
+      written to disk); downstream ``refs`` still see the rows.
+    - ``incremental`` — diff inputs against the SQLite state store and
+      re-run the transform on only the added/changed rows (the
+      re-tokenize-only-diff optimisation); unchanged rows carry over.
+
+    Seed models read ``source`` JSONL (cwd-contained, symlink-rejected);
+    derived models concatenate the outputs of their ``refs``. The SQLite
+    state store lives at ``<output_dir>/.soup_build_state.sqlite`` (override
+    via ``state_db``). Returns a :class:`BuildResult`.
+    """
+    import sqlite3
+    import stat as _stat
+
     if not isinstance(plan, BuildPlan):
         raise TypeError("plan must be a BuildPlan")
-    raise NotImplementedError(
-        "soup build live runner is deferred to v0.69.1 — only --dry-run is wired today."
+
+    from soup_cli.utils.paths import is_under_cwd
+
+    if isinstance(output_dir, bool) or not isinstance(output_dir, str) or not output_dir:
+        raise TypeError("output_dir must be a non-empty string")
+    if "\x00" in output_dir:
+        raise ValueError("output_dir must not contain null bytes")
+    if not is_under_cwd(output_dir):
+        raise ValueError("output_dir must stay under cwd")
+    # Symlink reject BEFORE makedirs (TOCTOU policy — lstat the raw path before
+    # any filesystem-mutating call). ``makedirs(exist_ok=True)`` on a symlinked
+    # dir would otherwise succeed silently (security review HIGH fix).
+    if os.path.lexists(output_dir) and _stat.S_ISLNK(os.lstat(output_dir).st_mode):
+        raise ValueError("output_dir must not be a symlink")
+    os.makedirs(output_dir, exist_ok=True)
+
+    lookup = {m.name: m for m in plan.models}
+    # Fail fast: resolve every transform up front so an unknown transform name
+    # cannot leave a partial build_out/ after earlier models materialised
+    # (code review MEDIUM fix). Mirrors parse_build_plan validating the whole
+    # DAG before returning.
+    resolved: dict[str, TransformFn] = {
+        name: resolve_transform(lookup[name].transform, transforms)
+        for name in plan.topo_order
+    }
+
+    if state_db is None:
+        state_db = os.path.join(output_dir, _STATE_DB_NAME)
+    else:
+        if not isinstance(state_db, str) or not state_db or "\x00" in state_db:
+            raise ValueError("state_db must be a non-empty NUL-free string")
+        if not is_under_cwd(state_db):
+            raise ValueError("state_db must stay under cwd")
+    if os.path.lexists(state_db) and _stat.S_ISLNK(os.lstat(state_db).st_mode):
+        raise ValueError("state_db must not be a symlink")
+
+    conn = sqlite3.connect(state_db)
+    try:
+        # Survive concurrent builds racing on the same state DB (matches the
+        # v0.54.0 advise-history / v0.60.0 NamespacePinStore policy).
+        conn.execute("PRAGMA busy_timeout=5000")
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS build_rows ("
+            "model TEXT NOT NULL, row_id TEXT NOT NULL, "
+            "input_hash TEXT NOT NULL, output_json TEXT, "
+            "PRIMARY KEY (model, row_id))"
+        )
+        materialized: dict[str, List[dict]] = {}
+        results: List[ModelBuildResult] = []
+        for name in plan.topo_order:
+            model = lookup[name]
+            inputs = _gather_inputs(model, materialized)
+            fn = resolved[name]
+            if model.kind == "incremental":
+                out_rows, calls, diff = _materialize_incremental(
+                    conn, model, inputs, fn
+                )
+            else:
+                out_rows, calls = _materialize_full(model, inputs, fn)
+                diff = None
+            materialized[name] = out_rows
+            if model.kind == "view":
+                output_path: Optional[str] = None
+            else:
+                output_path = _write_model_jsonl(output_dir, name, out_rows)
+            results.append(
+                ModelBuildResult(
+                    name=name,
+                    kind=model.kind,
+                    rows_in=len(inputs),
+                    rows_out=len(out_rows),
+                    transform_calls=calls,
+                    output_path=output_path,
+                    diff=diff,
+                )
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+    return BuildResult(
+        models=tuple(results),
+        output_dir=os.path.realpath(output_dir),
     )
 
 
 __all__ = [
+    "BUILTIN_TRANSFORMS",
     "BuildModel",
     "BuildPlan",
+    "BuildResult",
     "IncrementalDiffReport",
+    "ModelBuildResult",
     "SUPPORTED_MODEL_KINDS",
     "compute_row_hash",
     "incremental_diff",
@@ -489,6 +960,7 @@ __all__ = [
     "parse_build_plan",
     "parse_build_yaml",
     "render_plan_table",
+    "resolve_transform",
     "run_build",
     "validate_build_source",
     "validate_model_kind",

@@ -109,6 +109,70 @@ def extract_row_text(row: object) -> str:
     return ""
 
 
+_MAX_TOKENIZE_IDS = 1_000_000
+
+
+def resolve_tokenizer(tokenizer: object) -> object:
+    """Return a tokenizer object from a name (lazy AutoTokenizer) or object.
+
+    Mirrors v0.71.5 ``prune_prompt._resolve_tokenizer``: a duck-typed object
+    with ``encode`` + ``decode`` is returned as-is (the injectable test seam);
+    a string is treated as an HF model id / local path and lazy-loaded via
+    ``transformers.AutoTokenizer`` so importing this module never pulls
+    transformers.
+    """
+    if hasattr(tokenizer, "encode") and hasattr(tokenizer, "decode"):
+        return tokenizer
+    if not isinstance(tokenizer, str):
+        raise TypeError(
+            "tokenizer must be a model id / path string or a tokenizer object"
+        )
+    if not tokenizer:
+        raise ValueError("tokenizer name must be non-empty")
+    try:
+        from transformers import AutoTokenizer  # noqa: PLC0415
+    except ImportError as exc:
+        raise ValueError(
+            "tokenizer-aware diagnose needs transformers — "
+            "install with: pip install 'soup-cli[train]'"
+        ) from exc
+    try:
+        return AutoTokenizer.from_pretrained(tokenizer)
+    except Exception as exc:  # noqa: BLE001 — surface a friendly message.
+        raise ValueError(
+            f"could not load tokenizer {tokenizer!r}: {type(exc).__name__}: {exc}"
+        ) from exc
+
+
+def encode_ids(tok: object, text: str) -> list[int]:
+    """Encode ``text`` to token IDs (no special tokens), capped per call."""
+    try:
+        ids = tok.encode(text, add_special_tokens=False)
+    except TypeError:
+        ids = tok.encode(text)
+    return list(ids)[:_MAX_TOKENIZE_IDS]
+
+
+def decode_ids(tok: object, ids: Sequence[int]) -> str:
+    """Decode token IDs back to text (skip special tokens when supported)."""
+    try:
+        return tok.decode(ids, skip_special_tokens=True)
+    except TypeError:
+        return tok.decode(ids)
+
+
+def subword_tokens(tok: object, text: str) -> list[str]:
+    """Return sub-word token strings for ``text`` (for set-overlap scoring)."""
+    ids = encode_ids(tok, text)
+    convert = getattr(tok, "convert_ids_to_tokens", None)
+    if callable(convert):
+        try:
+            return list(convert(ids))
+        except Exception:  # noqa: BLE001 — fall back to id strings
+            pass
+    return [str(i) for i in ids]
+
+
 def jaccard(left: Iterable[str], right: Iterable[str]) -> float:
     """Set-Jaccard similarity; empty sets → 1.0 (identical absence)."""
     set_left = set(left)

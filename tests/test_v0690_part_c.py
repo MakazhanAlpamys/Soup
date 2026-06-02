@@ -212,19 +212,28 @@ class TestBuildMagpieConfig:
 
 
 class TestRunMagpie:
-    def test_deferred(self) -> None:
+    def test_live_runner_writes(self, tmp_path, monkeypatch) -> None:
+        # v0.71.6 #232: run_magpie is now live (was a v0.69.1 deferred stub).
+        monkeypatch.chdir(tmp_path)
         cfg = magpie.MagpieConfig(
             base_model="m",
             provider="ollama",
-            target_rows=10,
+            target_rows=1,
             quality_filter=False,
         )
-        with pytest.raises(NotImplementedError, match="v0.69.1"):
-            magpie.run_magpie(cfg)
+        result = magpie.run_magpie(
+            cfg,
+            output_path="out.jsonl",
+            generate_fn=lambda prompt: (
+                "Answer.<|im_end|>" if "assistant" in prompt else "Question?<|im_end|>"
+            ),
+        )
+        assert result.rows_kept == 1
+        assert (tmp_path / "out.jsonl").is_file()
 
     def test_validates_config_type(self) -> None:
         with pytest.raises(TypeError):
-            magpie.run_magpie({"base": "m"})  # type: ignore[arg-type]
+            magpie.run_magpie({"base": "m"}, output_path="out.jsonl")  # type: ignore[arg-type]
 
 
 # -----------------------------------------------------------------------------
@@ -295,7 +304,8 @@ class TestMagpieCli:
         )
         assert result.exit_code == 2
 
-    def test_live_deferred_exits_3(self) -> None:
+    def test_live_requires_output(self) -> None:
+        # v0.71.6 #232: live run now needs --output (no more deferred exit-3).
         runner = CliRunner()
         result = runner.invoke(
             app,
@@ -310,8 +320,8 @@ class TestMagpieCli:
                 "10",
             ],
         )
-        assert result.exit_code == 3
-        assert "0.69.1" in result.output or "deferred" in result.output.lower()
+        assert result.exit_code == 2
+        assert "0.69.1" not in result.output
 
 
 # -----------------------------------------------------------------------------

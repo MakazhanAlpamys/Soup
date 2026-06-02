@@ -48,7 +48,10 @@ def validate_ollama_url(base_url: str) -> None:
         raise ValueError(
             f"Ollama URL must use HTTP or HTTPS scheme (got {parsed.scheme}://)"
         )
-    local_hosts = ("localhost", "127.0.0.1", "::1", "0.0.0.0")
+    # 0.0.0.0 is the bind-any wildcard, NOT loopback — rejected to match the
+    # newer SSRF validators (validate_hub_endpoint / validate_otlp_endpoint /
+    # validate_webhook_url). v0.71.6 #232 hardening (now reachable via Magpie).
+    local_hosts = ("localhost", "127.0.0.1", "::1")
     if parsed.hostname not in local_hosts:
         raise ValueError(
             f"Ollama URL must be localhost (got {parsed.hostname}). "

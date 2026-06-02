@@ -41,8 +41,8 @@ models:
   - {name: filtered, kind: incremental, refs: [raw], transform: filter_low_quality}
   - {name: tokenized, kind: incremental, refs: [filtered], transform: tokenize}
 EOF
-soup build build.yaml --dry-run   # validate topology + plan
-# soup build build.yaml           # live materialise (v0.69.1)
+soup build build.yaml --dry-run                 # validate topology + plan
+soup build build.yaml --output-dir built/       # live materialise (v0.71.6)
 
 # Expectations suite — Great Expectations for chat data
 cat > suite.yaml << 'EOF'
@@ -53,9 +53,9 @@ expectations:
 EOF
 soup expect data.jsonl suite.yaml   # exit 3 on suite failure
 
-# Magpie synthetic data — chat-template-prefix harvest (plan, runner v0.69.1)
+# Magpie synthetic data — chat-template-prefix harvest (live, v0.71.6)
 soup data gen-magpie --base meta-llama/Llama-3.1-8B-Instruct \
-    --provider ollama --target 1000 --plan-only
+    --provider ollama --target 1000 --output magpie.jsonl --quality-filter
 
 # Persona-Hub diversity — prompt × persona × style matrix sampling
 soup data persona-mix --prompts prompts.jsonl --n 500 --output mixed.jsonl
@@ -64,7 +64,7 @@ soup data persona-mix --prompts prompts.jsonl --n 500 --output mixed.jsonl
 soup data brain-rot data.jsonl --strict --max-major-fraction 0.10
 ```
 
-Every command applies the project-wide TOCTOU policy (`os.lstat + S_ISLNK` symlink rejection before any open) and cwd containment via the shared `paths.enforce_under_cwd_and_no_symlink` helper. Live runners for `soup build` and `soup data gen-magpie` land in v0.69.1; the other three are LIVE today.
+Every command applies the project-wide TOCTOU policy (`os.lstat + S_ISLNK` symlink rejection before any open) and cwd containment via the shared `paths.enforce_under_cwd_and_no_symlink` helper. All five are LIVE: `soup build` materialises with five built-in transforms (`identity` / `drop_empty` / `lowercase` / `strip` / `dedup_exact`) and SQLite-tracked incremental re-transform (v0.71.6); `soup data gen-magpie` harvests via raw completion against `--provider ollama|vllm` (loopback-only; `anthropic` rejected — no raw-completion endpoint, v0.71.6).
 
 
 ## Production Trace Ecosystem (`soup ingest`)
@@ -206,9 +206,13 @@ soup data augment ./data/train.jsonl --strategy translate --lang es,fr,de \
 # Style transfer (formal / casual / technical / etc.)
 soup data augment ./data/train.jsonl --strategy style --styles formal,casual \
   --output ./data/train_styled.jsonl
+
+# Local provider (Ollama / vLLM) — loopback-only, pick the model + base URL
+soup data augment ./data/train.jsonl --strategy rephrase --count 2 \
+  --provider ollama --model qwen2.5:0.5b --output ./data/train_local.jsonl
 ```
 
-Works with any provider supported by `soup data generate` (OpenAI, Ollama, Anthropic, vLLM, local server). `--count` is capped at 10; `--lang` and `--styles` each capped at 10 entries × 32 chars.
+Works with any provider supported by `soup data generate` (OpenAI, Ollama, vLLM, local server). `--model` and `--base-url` select a specific local model/endpoint; the Ollama/vLLM paths are loopback-only (SSRF-hardened). `--count` is capped at 10; `--lang` and `--styles` each capped at 10 entries × 32 chars.
 
 
 ## Trace-to-Preference

@@ -674,7 +674,16 @@ class TestRenderPlanTable:
 
 
 class TestRunBuild:
-    def test_deferred(self) -> None:
+    def test_live_runner_materializes(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # v0.71.6 #231: run_build is now live (was a v0.69.1 deferred stub).
+        monkeypatch.chdir(tmp_path)
+        data = tmp_path / "data"
+        data.mkdir()
+        (data / "raw.jsonl").write_text(
+            '{"id": "1", "text": "x"}\n', encoding="utf-8"
+        )
         raw = {
             "models": [
                 {
@@ -686,12 +695,13 @@ class TestRunBuild:
             ]
         }
         plan = build_dag.parse_build_plan(raw)
-        with pytest.raises(NotImplementedError, match="v0.69.1"):
-            build_dag.run_build(plan)
+        result = build_dag.run_build(plan, output_dir="out")
+        assert (tmp_path / "out" / "raw.jsonl").is_file()
+        assert result.models[0].rows_out == 1
 
     def test_run_build_validates_plan_type(self) -> None:
         with pytest.raises(TypeError):
-            build_dag.run_build({"models": []})  # type: ignore[arg-type]
+            build_dag.run_build({"models": []}, output_dir="out")  # type: ignore[arg-type]
 
 
 # -----------------------------------------------------------------------------
@@ -736,20 +746,26 @@ class TestSoupBuildCli:
         result = runner.invoke(app, ["build", "nope.yaml", "--dry-run"])
         assert result.exit_code != 0
 
-    def test_live_deferred(
+    def test_live_run(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        # v0.71.6 #231: live runner materialises (was a deferred exit-3 stub).
         monkeypatch.chdir(tmp_path)
+        data = tmp_path / "data"
+        data.mkdir()
+        (data / "raw.jsonl").write_text(
+            '{"id": "1", "text": "x"}\n', encoding="utf-8"
+        )
         path = _write(
             tmp_path / "build.yaml",
             "models:\n  - name: raw\n    kind: incremental\n"
             "    source: data/raw.jsonl\n    transform: identity\n",
         )
         runner = CliRunner()
-        result = runner.invoke(app, ["build", str(path)])
-        # deferred runner exits non-zero with v0.69.1 marker
-        assert result.exit_code != 0
-        assert "0.69.1" in result.output or "deferred" in result.output.lower()
+        result = runner.invoke(app, ["build", str(path), "--output-dir", "out"])
+        assert result.exit_code == 0, result.output
+        assert (tmp_path / "out" / "raw.jsonl").is_file()
+        assert "0.69.1" not in result.output
 
     def test_outside_cwd(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

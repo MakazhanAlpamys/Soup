@@ -26,7 +26,10 @@ def validate_vllm_url(base_url: str) -> None:
         raise ValueError(
             f"vLLM URL must use HTTP or HTTPS scheme (got {parsed.scheme}://)"
         )
-    local_hosts = ("localhost", "127.0.0.1", "::1", "0.0.0.0")
+    # 0.0.0.0 is the bind-any wildcard, NOT loopback (v0.71.6 #232 hardening,
+    # matching the newer SSRF validators). It drops out of the local set, so
+    # http://0.0.0.0 is now rejected (remote needs HTTPS).
+    local_hosts = ("localhost", "127.0.0.1", "::1")
     is_local = parsed.hostname in local_hosts
     if not is_local and parsed.scheme != "https":
         raise ValueError(

@@ -72,7 +72,8 @@ soup data generate ... --provider anthropic   Use Claude API
 soup data generate ... --provider vllm        Use local vLLM server
 soup data generate ... --template code        Domain templates (code/conversation/qa/preference/reasoning)
 soup data generate ... --quality-pipeline     Auto validate + filter + dedup
-soup data augment <path> --strategy rephrase|translate|style  LLM-driven augmentationsoup data from-traces --logs l.jsonl --format langchain --signal thumbs_up --output p.jsonl  Preference pairs from traces
+soup data augment <path> --strategy rephrase|translate|style [--provider ollama|vllm --model <m> --base-url <url>]  LLM-driven augmentation
+soup data from-traces --logs l.jsonl --format langchain --signal thumbs_up --output p.jsonl  Preference pairs from traces
 soup data from-traces ... --judge --min-confidence 0.7  LLM-judge confidence filter
 soup data review prefs.jsonl --sample 10      Preview preference pairssoup data filter <path> --coherence 0.3       Quality filter (perplexity/coherence)
 soup data sample <path> --n 1000             Random sample subset
@@ -210,9 +211,9 @@ soup local-rl status --db <path>              Print interactions / thumbs-up / t
 soup local-rl record --db <path> --prompt <q> --response <r> --thumb up|down  Append thumbs record
 soup local-rl harvest --db <path> -o <pairs.jsonl>  Harvest DPO pairs from thumbs into JSONL
 soup local-rl train --db <path> --backend ollama|mlx --model <id>  Nightly DPO/KTO/ORPO train (v0.68.1)
-soup build <manifest.yaml> [--dry-run]        dbt-for-SFT DAG: validate + plan dataset transforms (v0.69.0)
+soup build <manifest.yaml> [--dry-run] [--output-dir <dir>]  dbt-for-SFT DAG: validate + plan + live materialise (v0.69.0; live v0.71.6)
 soup expect <data.jsonl> <suite.yaml>         Expectations suite: PII / token-length / refusal / judge (v0.69.0)
-soup data gen-magpie --base <m> --provider ollama|anthropic|vllm --target N [--plan-only]  Magpie synthetic generator (v0.69.0)
+soup data gen-magpie --base <m> --provider ollama|vllm --target N --output <jsonl> [--base-url <url>] [--quality-filter]  Magpie synthetic generator — live (v0.69.0; live v0.71.6)
 soup data persona-mix --prompts <jsonl> --n N --output <jsonl>  Persona-Hub diversity sampler (v0.69.0)
 soup data brain-rot <data.jsonl> [--strict]   Brain-rot detector — arXiv 2510.13928 (v0.69.0)
 soup iterative-dpo --base-model <m> --reward-model <rm> --prompts <p.jsonl> --output-dir <out> --rounds N --pairs-per-round N [--plan-only]  Iterative DPO loop driver (v0.70.0; live runner v0.70.1)

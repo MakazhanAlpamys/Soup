@@ -49,22 +49,20 @@ infrastructure instead of improving models. Soup fixes that.
 
 ## What's New
 
-**v0.71.5 — Ingest, data & prompt polish.** Sharper production-loop ergonomics:
+**v0.71.6 — Synth data & build pipeline go live.** Three deferred stubs are now real:
 
-- **Alternative model hubs for data** — `soup data push --hub modelscope|modelers` uploads a
-  local JSONL to ModelScope / Modelers, and `soup data forge --hub … --teacher owner/name`
-  pre-fetches the teacher from that hub.
-- **Tokenizer-aware prompt pruning** — `soup prune-prompt --tokenizer <id-or-path>` finds the
-  shared *token* prefix and decodes only the remainder, so BPE multi-byte sequences never get
-  truncated mid-token the way char-slicing can.
-- **Webhooks everywhere** — `--slack-url` / `--discord-url` now work on `soup ingest`,
-  `soup prune-prompt`, `soup ab`, and `soup data active-sample` (same SSRF-hardened validator as
-  `soup drift-alarm`). The A/B harness only pings when the sequential test actually decides.
-- **Curriculum by difficulty percentile** — dynamic curriculum can bucket by `loss` /
-  `perplexity` percentile instead of length round-robin.
-- **Smarter pre-flight `advise`** — `soup advise` now nudges its confidence using your prior
-  verdicts for the same project, and `soup runs replay` can plot a benchmark-score curve, not
-  just the loss curve.
+- **`soup build` materialises** — the dbt-for-SFT DAG no longer just dry-runs. `soup build
+  manifest.yaml --output-dir out/` runs the transforms (`drop_empty` / `lowercase` / `strip` /
+  `dedup_exact` / `identity` built in), rebuilds `table` / `view` models from scratch, and
+  re-transforms only the changed rows for `incremental` models (SQLite-tracked).
+- **`soup data gen-magpie` generates** — feed an aligned model its chat-template prefix and
+  harvest the self-generated instruction + response. Live for `--provider ollama` and `vllm`
+  (loopback-only), with an optional `--quality-filter`.
+- **2PL / 3PL eval-cost models** — `soup eval irt-subset --model 2pl|3pl` adds per-item
+  discrimination (and a 3PL guessing floor) on top of the existing 1PL Rasch fit.
+- **Bug fix:** `soup data augment --provider ollama|vllm` no longer crashes with an `ImportError`
+  — it now routes through the shared, SSRF-hardened provider factory and honours `--model` /
+  `--base-url`.
 
 Full history: [CHANGELOG.md](CHANGELOG.md) &middot; [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 

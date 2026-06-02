@@ -327,11 +327,19 @@ def register(app: typer.Typer, console: Console) -> None:
     @app.command(name="irt-subset")
     def irt_subset_cmd(
         responses_path: str = typer.Argument(
-            ..., help="Path to JSONL with rows {item_id, correct(bool), score?}.",
+            ...,
+            help=(
+                "Path to JSONL with rows {item_id, correct(bool), "
+                "respondent_id? (required for 2pl/3pl)}."
+            ),
         ),
         size: str = typer.Option(
             "small", "--size", "-z",
             help="Subset profile: full / small / tiny.",
+        ),
+        model: str = typer.Option(
+            "1pl", "--model", "-m",
+            help="IRT model: 1pl (Rasch) / 2pl (discrimination) / 3pl (+ guessing).",
         ),
         output: Optional[str] = typer.Option(
             None, "--output", "-o",
@@ -341,7 +349,9 @@ def register(app: typer.Typer, console: Console) -> None:
         """Pick a minimum-cost eval subset that preserves ranking power."""
         from soup_cli.utils.irt import (
             IRT_PROFILES,
+            SUPPORTED_IRT_MODELS,
             fit_difficulty,
+            fit_irt,
             load_response_rows,
             pick_irt_subset,
         )
@@ -352,6 +362,12 @@ def register(app: typer.Typer, console: Console) -> None:
                 f"(valid: {', '.join(sorted(IRT_PROFILES))})[/]"
             )
             raise typer.Exit(2)
+        if model not in SUPPORTED_IRT_MODELS:
+            console.print(
+                f"[red]Invalid --model: {escape(model)} "
+                f"(valid: {', '.join(SUPPORTED_IRT_MODELS)})[/]"
+            )
+            raise typer.Exit(2)
 
         try:
             rows = load_response_rows(responses_path)
@@ -360,13 +376,20 @@ def register(app: typer.Typer, console: Console) -> None:
             raise typer.Exit(2) from exc
 
         try:
-            difficulty = fit_difficulty(rows)
-            plan = pick_irt_subset(difficulty, size=size)
+            if model == "1pl":
+                # 1PL keeps the single-respondent correct-rate fit (back-compat;
+                # rows need only {item_id, correct}).
+                items = fit_difficulty(rows)
+            else:
+                # 2PL/3PL need a response matrix ({respondent_id, item_id, correct}).
+                items = fit_irt(rows, model=model)
+            plan = pick_irt_subset(items, size=size)
         except (TypeError, ValueError) as exc:
             console.print(f"[red]IRT fit failed:[/] {escape(str(exc))}")
             raise typer.Exit(2) from exc
 
         console.print(Panel(
+            f"Model: [bold]{escape(model)}[/]\n"
             f"Profile: [bold]{escape(plan.size)}[/]\n"
             f"Selected: {len(plan.item_ids)} / {plan.total_items}\n"
             f"Approx cost cut: {plan.cost_ratio:.1%}",

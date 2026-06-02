@@ -12,6 +12,53 @@ reproducing 70+ versions of notes.
 
 ## [Unreleased]
 
+## [0.71.6] - 2026-06-02
+
+### Added
+- **`soup build` live runner** — the dbt-for-SFT DAG (`soup build <manifest>`) now
+  *materialises* datasets instead of only dry-running the plan. Five built-in
+  transforms ship live (`identity`, `drop_empty`, `lowercase`, `strip`,
+  `dedup_exact`); `table` rebuilds from scratch, `view` re-derives on every run,
+  and `incremental` re-transforms only the rows whose content hash changed
+  (tracked in a SQLite state store, keyed by row hash **and** the model's
+  transform+config fingerprint so a transform change re-runs everything). Custom
+  transforms are passed per-run via the Python API's `transforms=` map. Outputs
+  are written atomically; the `--output-dir` is symlink-checked before any
+  directory is created.
+- **`soup data gen-magpie` live generator** — the Magpie synthetic generator
+  (Xu et al. 2024) now actually generates. It feeds an aligned model its
+  chat-template prefix (chatml / llama3 / gemma / mistral families auto-detected)
+  and harvests the self-generated user instruction + assistant response via raw
+  completion. Live providers: `ollama` (`/api/generate` raw) and `vllm`
+  (`/v1/completions`) — both SSRF-hardened (loopback-only HTTP); `anthropic` is
+  rejected (no raw-completion endpoint). Optional `--quality-filter` drops
+  low-quality rows via the v0.47 toxicity/educational scorers; exact-duplicate
+  instructions are de-duplicated.
+- **`soup eval irt-subset --model {1pl,2pl,3pl}`** — the IRT eval-cost optimiser
+  gained 2PL (per-item discrimination) and 3PL (+guessing floor) joint
+  coordinate-ascent MLE fits alongside the existing 1PL Rasch. `1pl` keeps the
+  closed-form path for back-compat; `2pl`/`3pl` route through the new `fit_irt`.
+- **Tokenizer-aware memorization probe** — `score_memorization(..., tokenizer=...)`
+  and `split_prefix(..., tokenizer=...)` (used by `soup diagnose`) now split the
+  prefix/suffix on real token-id boundaries and measure echo-overlap over
+  sub-word tokens when a tokenizer (HF id / path / duck-typed object) is supplied,
+  catching BPE-level memorization that whitespace tokenisation misses. Default
+  (no tokenizer) keeps the whitespace behaviour.
+
+### Fixed
+- **`soup data augment --provider ollama|vllm` no longer crashes** — the command
+  imported a non-existent `OllamaProvider` symbol and raised `ImportError` on
+  every non-OpenAI provider. It now routes through the shared, SSRF-hardened
+  provider factory; `--model` / `--base-url` are honoured, the output path is
+  containment- and symlink-checked, and the write is atomic.
+
+### Security
+- **Ollama / vLLM provider URLs reject `0.0.0.0`** — `validate_ollama_url` /
+  `validate_vllm_url` dropped the bind-any wildcard from their loopback allow-set
+  (now `localhost` / `127.0.0.1` / `::1` only), matching the newer
+  `validate_hub_endpoint` / `validate_webhook_url` SSRF validators. Reachable now
+  that Magpie threads a user-supplied `--base-url` through these providers.
+
 ## [0.71.5] - 2026-06-02
 
 ### Added
