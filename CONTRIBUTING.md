@@ -150,7 +150,11 @@ pytest tests/test_data.py::test_detect_alpaca_format -v
 pytest tests/ --cov=soup_cli --cov-report=html
 ```
 
-### Test Files (86 files)
+### Test Files (275 files)
+
+> A representative sample of the suite below. The full table lives in
+> [`.claude/CLAUDE.md`](.claude/CLAUDE.md); run `pytest tests/ -v` for the complete list.
+
 
 | File | Covers |
 |------|--------|
@@ -440,6 +444,17 @@ The project follows semantic versioning: `MAJOR.MINOR.PATCH`
 4. Commit with message: `Release v0.X.0`
 5. Tag: `git tag v0.X.0 && git push --tags`
 6. GitHub Actions auto-publishes to PyPI on the `v*` tag (Trusted Publisher / OIDC)
+
+## Recognition
+
+We credit every contributor — recognition is free and you earned it.
+
+- **[CONTRIBUTORS.md](CONTRIBUTORS.md):** every merged (or in-tree-adopted) PR adds you here, with your work and PR number.
+- **CHANGELOG.md:** from the release that ships your change, the entry is tagged `(#NNN by @you)`.
+- **Commit trailers:** PRs land with a `Co-Authored-By:` line for you, so the GitHub
+  contributors graph reflects your work even after a squash merge.
+
+If you contributed and aren't credited somewhere, that's a bug — open a PR or an issue and we'll fix it.
 
 ## Community
 

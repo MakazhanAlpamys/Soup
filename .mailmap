@@ -1,0 +1,8 @@
+# .mailmap — consolidate contributor identities for `git shortlog` and the
+# GitHub contributors graph. See: https://git-scm.com/docs/gitmailmap
+#
+# Salil Mhatre committed under four name/email combinations
+# (two emails, three display names). Map them all to one canonical identity.
+Salil Mhatre <32305505+Deadpool2000@users.noreply.github.com> <d2kyt@protonmail.com>
+Salil Mhatre <32305505+Deadpool2000@users.noreply.github.com> Salil <32305505+Deadpool2000@users.noreply.github.com>
+Salil Mhatre <32305505+Deadpool2000@users.noreply.github.com> Salil M <32305505+Deadpool2000@users.noreply.github.com>
