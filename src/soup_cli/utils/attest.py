@@ -1,9 +1,8 @@
 """in-toto + SLSA-3 attestation builder (v0.59.0 Part B).
 
-Pure-stdlib. Sigstore + ed25519 live signing is **deferred to v0.59.1**
-(mirrors v0.27.0 MII / v0.37.0 multipack / v0.50.0 GRPO Plus stub-then-live
-pattern). The schema + atomic write surface ships now so callers can lock
-the wire format.
+Schema + atomic write surface; signing backed by ed25519 and sigstore
+(lazy-imported, see :func:`sign_attestation`). The wire format is stable
+so callers can lock the schema shapes below.
 
 Schema shapes:
 - ``_type``: ``https://in-toto.io/Statement/v1``
@@ -32,7 +31,7 @@ _MAX_NAME = 256
 
 
 class SignatureBackend(str, enum.Enum):
-    """Signing backend selector. ``sigstore`` + ``ed25519`` deferred to v0.59.1."""
+    """Signing backend selector."""
 
     UNSIGNED = "unsigned"
     ED25519 = "ed25519"
@@ -153,13 +152,12 @@ def sign_attestation(
 
     ``ed25519`` (v0.71.2 #179) produces a real detached signature over
     ``payload`` using a private key resolved from ``key_path`` or the
-    ``SOUP_SIGNING_KEY`` env var. ``sigstore`` keyless signing stays
-    infra-blocked (needs an OIDC identity provider + Fulcio/Rekor network) and
-    raises ``NotImplementedError``.
+    ``SOUP_SIGNING_KEY`` env var. ``sigstore`` keyless signing uses OIDC-via-GitHub
+    identity flow with Fulcio + Rekor (v0.71.2 #179).
 
     Args:
         payload: in-toto Statement bytes (typically ``render_attestation(...).encode()``).
-        backend: ``"unsigned"`` / ``"ed25519"`` are live; ``"sigstore"`` raises.
+        backend: ``"unsigned"`` / ``"ed25519"`` / ``"sigstore"``.
         key_path: ed25519 private-key PEM path (``ed25519`` backend only).
 
     Returns:
@@ -167,6 +165,8 @@ def sign_attestation(
           (the empty signature lets verifiers refuse in strict mode).
         - ``{"signature": <hex>, "backend": "ed25519", "public_key": <pem>}``
           for the ed25519 path.
+        - ``{"signature": <hex>, "backend": "sigstore", "certificate": <pem>,
+          "bundle": {}}`` for the sigstore path (OIDC identity + Fulcio/Rekor).
     """
     if not isinstance(payload, (bytes, bytearray)):
         raise TypeError("payload must be bytes")
@@ -193,10 +193,63 @@ def sign_attestation(
             "backend": "ed25519",
             "public_key": public_key_pem(private_key),
         }
-    raise NotImplementedError(
-        f"signing backend {backend.value!r} is infra-blocked "
-        "(needs OIDC + Fulcio/Rekor network)"
-    )
+    if backend == SignatureBackend.SIGSTORE:
+        try:
+            from sigstore.oidc import Issuer as OidcIssuer
+            from sigstore.sign import Signer
+        except ImportError as exc:
+            raise ImportError(
+                "The sigstore backend requires the 'sigstore' package to be installed. "
+                "Install it with: pip install sigstore"
+            ) from exc
+
+        # OIDC-via-GitHub identity flow: use sigstore's built-in
+        # GitHub Actions JWT discovery to obtain an OIDC token, then
+        # sign via Fulcio (certificate authority) + Rekor (transparency log).
+        issuer = OidcIssuer.prod()
+        identity_token = issuer.find_identity_token("sigstore")
+        if not identity_token:
+            raise ValueError(
+                "sigstore OIDC identity unavailable — "
+                "not running in a GitHub Actions environment with OIDC enabled"
+            )
+
+        signer = Signer.for_identity(identity_token)
+
+        # Perform the actual signing: Fulcio issues a short-lived cert
+        # bound to the OIDC identity; Rekor records the transparency log entry.
+        result = signer.sign(bytes(payload))
+
+        sig_bytes = b""
+        if result.signature is not None:
+            try:
+                sig_bytes = bytes(result.signature)
+            except (TypeError, ValueError):
+                pass
+
+        cert_pem = ""
+        if result.cert is not None:
+            try:
+                from cryptography.hazmat.primitives.serialization import Encoding
+
+                cert_pem = result.cert.public_bytes(Encoding.PEM).decode("utf-8")
+            except (AttributeError, TypeError, ImportError):
+                pass
+
+        bundle_str = ""
+        if result.bundle is not None:
+            try:
+                bundle_str = result.bundle.to_json().decode("utf-8")
+            except (AttributeError, TypeError):
+                pass
+
+        return {
+            "signature": sig_bytes.hex() if sig_bytes else "",
+            "backend": "sigstore",
+            "certificate": cert_pem,
+            "bundle": bundle_str,
+            "identity_token_issuer": "https://github.com",
+        }
 
 
 def verify_attestation(

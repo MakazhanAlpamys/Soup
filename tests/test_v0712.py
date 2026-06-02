@@ -407,10 +407,11 @@ class TestAttestEd25519:
         sig = sign_attestation(b"x", backend="unsigned")
         assert sig == {"signature": "", "backend": "unsigned"}
 
-    def test_sign_attestation_sigstore_deferred(self):
+    def test_sign_attestation_sigstore_missing_package(self):
         from soup_cli.utils.attest import sign_attestation
 
-        with pytest.raises(NotImplementedError):
+        # sigstore package is not installed → ImportError with friendly message
+        with pytest.raises(ImportError, match="sigstore"):
             sign_attestation(b"x", backend="sigstore")
 
 
@@ -1106,7 +1107,7 @@ class TestReviewFollowups:
         assert r.exit_code == 0, r.output
         return key
 
-    def test_attest_verify_non_ed25519_sidecar_exit3(self, tmp_path, monkeypatch):
+    def test_attest_verify_non_ed25519_sidecar_exit1(self, tmp_path, monkeypatch):
         from typer.testing import CliRunner
 
         from soup_cli.commands.attest import app
@@ -1118,11 +1119,11 @@ class TestReviewFollowups:
             json.dumps({"backend": "unsigned", "signature": "", "public_key": ""}),
             encoding="utf-8",
         )
-        r = runner.invoke(app, ["verify", "stmt.json", "--signature", "stmt.json.sig"])
-        assert r.exit_code == 3, r.output
+        r = runner.invoke(app, ["verify", "stmt.json"])
+        assert r.exit_code == 1, r.output
         assert "not ed25519" in r.output.lower()
 
-    def test_attest_verify_no_pubkey_exit3(self, tmp_path, monkeypatch):
+    def test_attest_verify_no_pubkey_exit1(self, tmp_path, monkeypatch):
         from typer.testing import CliRunner
 
         from soup_cli.commands.attest import app
@@ -1133,11 +1134,11 @@ class TestReviewFollowups:
         sig = json.loads((tmp_path / "stmt.json.sig").read_text())
         sig["public_key"] = ""
         (tmp_path / "stmt.json.sig").write_text(json.dumps(sig), encoding="utf-8")
-        r = runner.invoke(app, ["verify", "stmt.json", "--signature", "stmt.json.sig"])
-        assert r.exit_code == 3, r.output
+        r = runner.invoke(app, ["verify", "stmt.json"])
+        assert r.exit_code == 1, r.output
         assert "no public key" in r.output.lower()
 
-    def test_attest_verify_untrusted_key_exit3(self, tmp_path, monkeypatch):
+    def test_attest_verify_untrusted_key_exit1(self, tmp_path, monkeypatch):
         from typer.testing import CliRunner
 
         from soup_cli.commands.attest import app
@@ -1156,10 +1157,10 @@ class TestReviewFollowups:
             encoding="utf-8",
         )
         r = runner.invoke(
-            app, ["verify", "stmt.json", "--signature", "stmt.json.sig",
+            app, ["verify", "stmt.json",
                   "--public-key", str(other)]
         )
-        assert r.exit_code == 3, r.output
+        assert r.exit_code == 1, r.output
         assert "untrusted key" in r.output.lower()
 
     # H3 — verify_adapter strict raise paths
@@ -1476,15 +1477,20 @@ class TestReviewFollowups:
         assert (tmp_path / "stmt.json.sig").exists()
         # Verify passes.
         ok = runner.invoke(
-            app, ["verify", "stmt.json", "--signature", "stmt.json.sig"]
+            app, ["verify", "stmt.json"]
         )
         assert ok.exit_code == 0, ok.output
-        # Tamper the statement -> verify fails (exit 3).
-        (tmp_path / "stmt.json").write_text("tampered", encoding="utf-8")
-        bad = runner.invoke(
-            app, ["verify", "stmt.json", "--signature", "stmt.json.sig"]
+        # Tamper the statement -> verify fails (exit 1).
+        import json as _json
+        tampered = _json.loads((tmp_path / "stmt.json").read_text(encoding="utf-8"))
+        tampered["subject"][0]["digest"]["sha256"] = "b" * 64
+        (tmp_path / "stmt.json").write_text(
+            _json.dumps(tampered, indent=2, sort_keys=True), encoding="utf-8"
         )
-        assert bad.exit_code == 3, bad.output
+        bad = runner.invoke(
+            app, ["verify", "stmt.json"]
+        )
+        assert bad.exit_code == 1, bad.output
 
 
 # ---------------------------------------------------------------------------
