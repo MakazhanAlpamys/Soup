@@ -31,13 +31,11 @@ from dataclasses import asdict, dataclass
 from types import MappingProxyType
 from typing import Tuple
 
-# Closed allowlist of probe kinds. Each maps to a v0.66.0 utility:
-#  - sleeper -> sleeper_probe.py (Part C)
-#  - sae     -> sae_diff.py      (Part A)
-#  - truth   -> RESERVED for v0.66.x (TruthfulQA-style honesty probe);
-#               ``ProbeEntry`` accepts this kind today as a forward-compat
-#               surface, but no runtime utility consumes it yet (review L2).
-#  - harm    -> RESERVED for v0.66.x (HarmBench-style misuse probe).
+# Closed allowlist of probe kinds. Each maps to a utility module:
+#  - sleeper -> sleeper_probe.py (v0.66.0 Part C)
+#  - sae     -> sae_diff.py      (v0.66.0 Part A)
+#  - truth   -> truth_probe.py   (v0.71.8 #217 — TruthfulQA-style honesty probe)
+#  - harm    -> harm_probe.py    (v0.71.8 #217 — HarmBench-style misuse probe)
 PROBE_KINDS: frozenset[str] = frozenset({"sleeper", "sae", "truth", "harm"})
 
 _MAX_BASE_LEN = 200
@@ -138,11 +136,13 @@ class ProbePack:
 
 def _make_bundled_packs() -> Mapping[str, ProbePack]:
     from soup_cli import __version__
+    from soup_cli.utils.harm_probe import BUNDLED_HARM_PROBES
     from soup_cli.utils.sleeper_probe import BUNDLED_PROBES
+    from soup_cli.utils.truth_probe import BUNDLED_TRUTH_PROBES
 
     catalogue: dict[str, ProbePack] = {}
     for base, sleeper_spec in BUNDLED_PROBES.items():
-        # Each base ships with at minimum a sleeper probe entry.
+        # v0.71.8 #217 — each base now ships sleeper + truth + harm probes.
         entries: list[ProbeEntry] = [
             ProbeEntry(
                 name=f"sleeper:{base}",
@@ -154,6 +154,26 @@ def _make_bundled_packs() -> Mapping[str, ProbePack]:
                 ),
             )
         ]
+        truth_spec = BUNDLED_TRUTH_PROBES.get(base)
+        if truth_spec is not None:
+            entries.append(
+                ProbeEntry(
+                    name=f"truth:{base}",
+                    kind="truth",
+                    hidden_dim=truth_spec.hidden_dim,
+                    description=f"Honesty probe for {base} (5% / 20% bands)",
+                )
+            )
+        harm_spec = BUNDLED_HARM_PROBES.get(base)
+        if harm_spec is not None:
+            entries.append(
+                ProbeEntry(
+                    name=f"harm:{base}",
+                    kind="harm",
+                    hidden_dim=harm_spec.hidden_dim,
+                    description=f"Misuse probe for {base} (5% / 20% bands)",
+                )
+            )
         catalogue[base] = ProbePack(
             base=base,
             probes=tuple(entries),

@@ -49,22 +49,20 @@ infrastructure instead of improving models. Soup fixes that.
 
 ## What's New
 
-**v0.71.7 — Eval live runners.** Six probe surfaces that used to emit heuristic / neutral stubs
-now load a real model and run live (opt-in flags; the offline paths stay the default):
+**v0.71.8 — Probes & SAE.** The activation-probe surfaces ship real weights, live SAE downloads,
+and an end-to-end capture → diff pipeline:
 
-- **`soup diagnose --base-model <id> [--adapter <path>] [--dataset d.jsonl]`** — runs all six
-  failure-mode probes (forgetting / refusal / format / mode_collapse / memorization /
-  contamination) against the loaded model instead of emitting neutral OK.
-- **`soup advise --probe-model <id>`** — a live ROI probe: zero/few-shot token-F1 baselines, a
-  short LoRA probe (real held-out-loss drop + wall-clock), and base-model proximity.
-- **`soup tunability --live`** — a real per-candidate LoRA probe (loads each base, trains
-  `--probe-steps` on a held-out slice).
-- **`soup eval capability --live --model <id>`** — invokes lm-eval-harness per task (with
-  `--tasks` / `--limit` / `--device`), isolating per-task failures.
-- **`soup eval behavior --base-model <id> [--adapter <path>]`** — generates pre/post responses on
-  the bundled behaviour battery and scores the live diff.
-- New shared `soup_cli/utils/live_eval.py` holds the model-loading primitives; heavy imports stay
-  lazy. Validated end-to-end on SmolLM2-135M (RTX 3050 4 GB).
+- **`soup probe truth` / `soup probe harm`** — TruthfulQA-style honesty and HarmBench-style misuse
+  activation probes (6 bundled bases each, 5% / 20% verdict bands). `--weights` loads a real
+  calibrated probe; without it the bundled deterministic fallback is used.
+- **`soup probe sleeper --weights <w.npz|.npy|.safetensors>`** — load a real calibrated sleeper
+  probe direction instead of the synthetic fallback (cwd-contained, `allow_pickle=False`).
+- **`soup probe sae-diff <repo> --auto-download`** — fetch an allowlisted SAE from the HF Hub into
+  `~/.soup/sae-cache/` (validated before any network call) and diff pre/post activations.
+- **`soup probe interference --measure <eval.jsonl> --base-model <m> --adapter a=path ...`** —
+  auto-measure the N×N adapter-interference matrix by actually loading the base + each LoRA adapter.
+- **`soup train --capture-activations <layer> --capture-prompts <jsonl>`** — a post-training hook
+  writes an SAE-diff-ready per-token activation snapshot. Validated end-to-end on SmolLM2-135M.
 
 Full history: [CHANGELOG.md](CHANGELOG.md) &middot; [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 

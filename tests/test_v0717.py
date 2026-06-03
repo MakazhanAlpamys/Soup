@@ -852,7 +852,8 @@ class TestPatchInvariants:
     def test_version_bumped(self) -> None:
         from soup_cli import __version__
 
-        assert __version__ == "0.71.7"
+        major_minor = tuple(int(x) for x in __version__.split(".")[:3])
+        assert major_minor >= (0, 71, 7)
 
     def test_no_top_level_heavy_imports(self) -> None:
         for mod in (

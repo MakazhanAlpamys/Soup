@@ -37,16 +37,29 @@ soup adapters blame ./my-adapter --dataset ./train.jsonl --layer q_proj.7 \
 
 # 3. Sleeper-agent defection probe: per-token defection rate via calibrated linear probe
 soup probe sleeper meta-llama/Llama-3-8B --evidence activations.json
+soup probe sleeper my/model --weights probe.npz --evidence activations.json  # real calibrated probe (v0.71.8)
+
+# 3b. Honesty + misuse probes (v0.71.8) — same shape, 5% / 20% verdict bands
+soup probe truth meta-llama/Llama-3-8B --evidence activations.json
+soup probe harm  meta-llama/Llama-3-8B --evidence activations.json
 
 # 4. Pairwise adapter interference matrix: which pairs can't be deployed together?
 soup probe interference losses.json    # exit 2 if worst-pair score ≥ 20%
+# v0.71.8: auto-measure the matrix live instead of supplying losses.json
+soup probe interference --measure eval.jsonl --base-model meta-llama/Llama-3-8B \
+    --adapter a=./adapter-a --adapter b=./adapter-b --device cpu
 
-# 5. Probe pack: list/assemble calibrated probes per base
+# 5. Probe pack: list/assemble calibrated probes per base (sleeper + truth + harm per base)
 soup probe pack --list                 # list bundled bases
 soup probe pack meta-llama/Llama-3-8B  # render the per-base manifest
+
+# 6. SAE auto-download + capture pipeline (v0.71.8)
+soup train --config soup.yaml --capture-activations model.layers.5 \
+    --capture-prompts probes.jsonl    # writes <output>/activations/activations.json
+soup probe sae-diff google/gemma-scope-2b-pt-res pre.json post.json --auto-download
 ```
 
-Every probe uses the OK / MINOR / MAJOR taxonomy from v0.26 (Quant-Lobotomy) / v0.56 (Diagnose) / v0.65 (Eval Depth). Sleeper + interference exit 2 on MAJOR for CI gating. The blame runner closes the v0.57 `NotImplementedError` stub via a DataInf-style influence approximation: `cos(grad_row, grad_probe) × |grad_row|`. Operators supply a `probe_fn` returning `(row_grads, probe_grad)`, or the runner falls back to a deterministic synthetic probe so the surface always returns a real `BlameResult` (no exception leaks). SAE feature diff is pure-numpy; the safetensors loader is `O_NOFOLLOW`-protected (TOCTOU defence — closes the symlink swap window between containment check and read).
+Every probe uses the OK / MINOR / MAJOR taxonomy from v0.26 (Quant-Lobotomy) / v0.56 (Diagnose) / v0.65 (Eval Depth). Sleeper / truth / harm / interference exit 2 on MAJOR for CI gating. **v0.71.8** ships real probe weights: `--weights <w.npz|.npy|.safetensors>` loads a calibrated direction (cwd-contained, `O_NOFOLLOW`, `allow_pickle=False`, size-capped); `compute_contrast_probe(positive, negative)` derives one from contrast-pair activations; the bundled specs fall back to a deterministic synthetic seed (the large-base Anthropic-calibrated vectors remain upstream-gated). `soup probe interference --measure` loads the base + each LoRA adapter via PEFT and measures loss per adapter alone (diagonal) and per co-loaded pair (`add_weighted_adapter(combination_type="cat")`, off-diagonal). `soup train --capture-activations` writes an SAE-diff-ready per-token snapshot (the `model.layers.N` path resolves whether or not a LoRA adapter is loaded). The blame runner closes the v0.57 `NotImplementedError` stub via a DataInf-style influence approximation: `cos(grad_row, grad_probe) × |grad_row|`. Operators supply a `probe_fn` returning `(row_grads, probe_grad)`, or the runner falls back to a deterministic synthetic probe so the surface always returns a real `BlameResult` (no exception leaks). SAE feature diff is pure-numpy; the safetensors loader is `O_NOFOLLOW`-protected (TOCTOU defence — closes the symlink swap window between containment check and read); `--auto-download` validates the `HF_HUB_ALLOWLIST` before any network call and rejects a glob result escaping the snapshot dir.
 
 
 ## Pre-flight Decision (`soup advise`)

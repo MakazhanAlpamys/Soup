@@ -40,6 +40,10 @@ _MIN_TRAIN_ROWS = 1
 _DEFAULT_LORA_R = 8
 _DEFAULT_LR = 2e-4
 _MAX_AGREEMENT_PAIRS = 128
+# v0.71.8 — activation-capture bounds (residual-stream probe surface).
+_MAX_CAPTURE_PROMPTS = 256
+_MAX_CAPTURE_TOKENS = 8192
+_LAYER_SEGMENT_RE = re.compile(r"^[A-Za-z0-9_]+$")
 
 
 def token_f1(predicted: str, target: str) -> float:
@@ -462,3 +466,147 @@ def measure_logit_agreement(
     if total == 0:
         return float("nan")
     return matched / total
+
+
+# ---------------------------------------------------------------------------
+# v0.71.8 — residual-stream activation capture (shared by #215 / #217 / #219)
+# ---------------------------------------------------------------------------
+
+
+def resolve_layer_module(model: object, layer_path: str) -> object:
+    """Resolve a dotted ``layer_path`` (e.g. ``model.layers.5``) to a submodule.
+
+    Each segment is either an attribute name (``getattr``) or an integer index
+    into a ``ModuleList`` (``module[int(seg)]``). Rejects empty / ``..`` /
+    non-``[A-Za-z0-9_]`` segments before walking so a crafted path cannot reach
+    a dunder. Raises ``ValueError`` when the path does not resolve.
+    """
+    if not isinstance(layer_path, str) or not layer_path.strip():
+        raise ValueError("layer_path must be a non-empty string")
+    segments = layer_path.split(".")
+    # Validate every segment ONCE up front (security check) before any walk so
+    # the PEFT fallback below cannot bypass the dunder / regex guards.
+    for seg in segments:
+        if not seg or not _LAYER_SEGMENT_RE.match(seg):
+            raise ValueError(
+                f"invalid layer path segment {seg!r} in {layer_path!r}"
+            )
+        # Reject dunder attributes (``__class__`` etc.) — they pass the
+        # ``[A-Za-z0-9_]`` regex but must never be reachable via getattr.
+        if seg.startswith("__") and seg.endswith("__"):
+            raise ValueError(
+                f"invalid layer path segment {seg!r} (dunder) in {layer_path!r}"
+            )
+
+    def _walk(root: object) -> object:
+        current = root
+        for seg in segments:
+            if seg.isdigit():
+                current = current[int(seg)]  # type: ignore[index]
+            else:
+                current = getattr(current, seg)
+        return current
+
+    try:
+        return _walk(model)
+    except (AttributeError, IndexError, KeyError, TypeError) as exc:
+        # PEFT wraps the base model (``PeftModel.base_model.model.<arch>...``),
+        # so a natural path like ``model.layers.5`` won't resolve against the
+        # wrapper. Retry against the unwrapped base so the user supplies the
+        # same path whether or not a LoRA adapter is loaded (the hook still
+        # sees the LoRA delta — it is applied inside the layer's submodules).
+        get_base = getattr(model, "get_base_model", None)
+        if callable(get_base):
+            try:
+                return _walk(get_base())
+            except (AttributeError, IndexError, KeyError, TypeError):
+                pass
+        raise ValueError(
+            f"could not resolve layer path {layer_path!r}: {type(exc).__name__}"
+        ) from exc
+
+
+def extract_layer_activations(
+    model: object,
+    tokenizer: object,
+    prompts: Sequence[str],
+    *,
+    layer: str,
+    device: str,
+    pool: str = "mean",
+    max_tokens: int = _MAX_CAPTURE_TOKENS,
+):
+    """Capture residual-stream activations at ``layer`` for ``prompts``.
+
+    Registers a forward hook on the resolved layer module, runs each prompt
+    through the model under ``torch.no_grad()``, and returns a 2D float32
+    numpy array.
+
+    ``pool='mean'`` returns one mean-pooled vector per prompt (``[N, D]`` — used
+    for contrast-probe computation, one example per prompt). ``pool='none'``
+    returns per-token rows (``[total_tokens, D]`` capped at ``max_tokens`` — used
+    for SAE feature diff). The hook is always removed in a ``finally``.
+    """
+    if pool not in ("mean", "none"):
+        raise ValueError("pool must be 'mean' or 'none'")
+    _check_positive_int(max_tokens, "max_tokens")
+    if not isinstance(prompts, Sequence) or isinstance(prompts, (str, bytes)):
+        raise TypeError("prompts must be a sequence of strings")
+    prompt_list = [p for p in prompts if isinstance(p, str) and p.strip()]
+    if not prompt_list:
+        raise ValueError("prompts must contain at least one non-empty string")
+    if len(prompt_list) > _MAX_CAPTURE_PROMPTS:
+        prompt_list = prompt_list[:_MAX_CAPTURE_PROMPTS]
+    import numpy as np
+    import torch
+
+    module = resolve_layer_module(model, layer)
+    captured: List[object] = []
+
+    def _hook(_mod, _inp, output):
+        hidden = output[0] if isinstance(output, (tuple, list)) else output
+        captured.append(hidden.detach())
+
+    handle = module.register_forward_hook(_hook)
+    rows: List[object] = []
+    total_tokens = 0
+    try:
+        model.eval()  # type: ignore[attr-defined]
+        with torch.no_grad():
+            for prompt in prompt_list:
+                text = _apply_prompt_template(tokenizer, prompt)
+                inputs = tokenizer(
+                    text,
+                    return_tensors="pt",
+                    truncation=True,
+                    max_length=_MAX_PROMPT_TOKENS,
+                ).to(device)
+                captured.clear()
+                model(**inputs)
+                if not captured:
+                    continue
+                # Single forward per prompt under no_grad → the layer fires once;
+                # ``captured[-1]`` is that activation. Validated for plain decoder
+                # -layer paths (model.layers.N); an exotic module re-invoked within
+                # one forward would only contribute its last call.
+                hidden = captured[-1]
+                # hidden: [batch, seq, D]; batch is 1 here.
+                seq = hidden[0].to(torch.float32).cpu().numpy()
+                if pool == "mean":
+                    rows.append(seq.mean(axis=0))
+                    total_tokens += 1
+                else:
+                    remaining = max_tokens - total_tokens
+                    if remaining <= 0:
+                        break
+                    take = seq[:remaining]
+                    rows.append(take)
+                    total_tokens += int(take.shape[0])
+    finally:
+        handle.remove()
+
+    if not rows:
+        raise ValueError("no activations captured (empty model output?)")
+    if pool == "mean":
+        return np.stack(rows).astype(np.float32)
+    return np.concatenate(rows, axis=0).astype(np.float32)

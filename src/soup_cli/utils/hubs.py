@@ -21,6 +21,7 @@ from __future__ import annotations
 import ipaddress
 import logging
 import os
+import tempfile
 from types import MappingProxyType
 from typing import Callable, Mapping, Optional, Tuple
 from urllib.parse import urlparse
@@ -360,6 +361,98 @@ def _run_namespace_check(
         return
     if not report.ok:
         raise ValueError(f"namespace-pin refused {repo_id!r}: {report.reason}")
+
+
+def _validate_cache_dir(cache_dir: str, *, field: str = "cache_dir") -> str:
+    """Containment check for a ``~/.soup``-style cache dir (home/cwd/tmp).
+
+    Unlike :func:`_validate_local_path` (which is cwd-only), an artifact cache
+    legitimately lives under ``$HOME/.soup`` so reusable downloads survive a
+    ``cd``. Mirrors the v0.36.0 ``SOUP_BATCH_CACHE_PATH`` / v0.54.0 /
+    v0.59.0 / v0.60.0 ``namespace_pin`` override policy.
+    """
+    if isinstance(cache_dir, bool):
+        raise TypeError(f"{field} must not be bool, got {cache_dir!r}")
+    if not isinstance(cache_dir, str):
+        raise TypeError(f"{field} must be str, got {type(cache_dir).__name__}")
+    if not cache_dir:
+        raise ValueError(f"{field} must be a non-empty string")
+    if "\x00" in cache_dir:
+        raise ValueError(f"{field} must not contain null bytes")
+    if any(ord(c) < 0x20 or ord(c) == 0x7F for c in cache_dir):
+        raise ValueError(f"{field} must not contain control characters")
+    realpath = os.path.realpath(cache_dir)
+    home = os.path.realpath(os.path.expanduser("~"))
+    cwd = os.path.realpath(os.getcwd())
+    tmpdir = os.path.realpath(tempfile.gettempdir())
+    for allowed in (home, cwd, tmpdir):
+        try:
+            common = os.path.commonpath([realpath, allowed])
+        except ValueError:
+            continue
+        if common == allowed:
+            return realpath
+    raise ValueError(
+        f"{field} must stay under $HOME / cwd / tmpdir"
+    )
+
+
+def snapshot_download(
+    repo_id: str,
+    *,
+    cache_dir: str,
+    revision: str | None = None,
+    allow_patterns: list[str] | None = None,
+    namespace_check: bool = True,
+    allow_namespace_shift: str | None = None,
+    _metadata_fn: Optional[Callable[[str], Optional[Tuple[str, str]]]] = None,
+) -> str:
+    """HF Hub snapshot download into a ``$HOME/.soup``-style cache (v0.71.8 #216).
+
+    Thin SSRF-hardened wrapper over :func:`huggingface_hub.snapshot_download`
+    used by the SAE / probe weight fetchers. Differs from :func:`download_repo`
+    in that the cache dir may live under ``$HOME`` (not just cwd) so a reusable
+    artifact cache survives a ``cd``; the namespace-pin gate (#186) still runs
+    so a TOFU author-mismatch refuses the download.
+
+    Returns the absolute path to the downloaded snapshot directory. Raises
+    ``ImportError`` (with a pip-install hint) when ``huggingface_hub`` is
+    missing, ``ValueError`` for invalid args / a refused namespace.
+    """
+    _validate_repo_id_shape(repo_id)
+    canonical_cache = _validate_cache_dir(cache_dir)
+    if revision is not None:
+        if not isinstance(revision, str):
+            raise TypeError("revision must be str or None")
+        if "\x00" in revision or any(ord(c) < 0x20 for c in revision):
+            raise ValueError("revision must not contain control characters")
+    if allow_patterns is not None:
+        if not isinstance(allow_patterns, list) or not all(
+            isinstance(p, str) for p in allow_patterns
+        ):
+            raise TypeError("allow_patterns must be a list of str or None")
+
+    if namespace_check:
+        _run_namespace_check(
+            repo_id,
+            allow_namespace_shift=allow_namespace_shift,
+            metadata_fn=_metadata_fn,
+        )
+
+    try:
+        from huggingface_hub import snapshot_download as hf_snapshot_download
+    except ImportError as exc:  # pragma: no cover - HF present in CI
+        raise ImportError(
+            "huggingface_hub required for snapshot_download; "
+            "pip install huggingface-hub"
+        ) from exc
+    os.makedirs(canonical_cache, exist_ok=True)
+    return hf_snapshot_download(
+        repo_id=repo_id,
+        local_dir=canonical_cache,
+        revision=revision,
+        allow_patterns=allow_patterns,
+    )
 
 
 def download_repo(

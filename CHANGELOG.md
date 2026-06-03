@@ -12,6 +12,52 @@ reproducing 70+ versions of notes.
 
 ## [Unreleased]
 
+## [0.71.8] - 2026-06-03
+
+### Added
+- **Probes & SAE — real weights + live downloads** (closes #215, #216, #217,
+  #218, #219). A new shared `soup_cli/utils/probe_kernel.py` provides the
+  linear-probe math (contrast-pair derivation, apply, flag-rate, verdict bands,
+  operator-supplied weight loading, deterministic synthetic fallback); every
+  heavy import (`numpy` / `torch` / `safetensors`) is lazy.
+- **`soup probe sleeper --weights <w.npz|.npy|.safetensors>`** (#215) — load a
+  real calibrated probe direction instead of the synthetic fallback. Weights are
+  cwd-contained, symlink-rejected, `O_NOFOLLOW`-opened, `allow_pickle=False`,
+  and size-capped. `compute_contrast_probe(positive, negative)` derives a probe
+  from contrast-pair activations.
+- **`soup probe sae-diff <repo> --auto-download`** (#216) — fetch an
+  allowlisted SAE from the HF Hub into `~/.soup/sae-cache/` (validated against
+  `HF_HUB_ALLOWLIST` BEFORE any network call) via a new SSRF-hardened
+  `soup_cli.utils.hubs.snapshot_download` (repo-id shape + home/cwd/tmp cache
+  containment + namespace-pin TOFU gate).
+- **`soup probe truth` / `soup probe harm`** (#217) — TruthfulQA-style honesty
+  and HarmBench-style misuse activation probes (6 bundled bases each, 5% / 20%
+  verdict bands, `--weights` to skip the allowlist with a real probe). The
+  probe pack now ships truth + harm entries per base.
+- **`soup probe interference --measure <eval_suite> --base-model <m> --adapter
+  name=path ...`** (#218) — auto-measure the N×N interference matrix by actually
+  loading the base + each LoRA adapter (PEFT multi-adapter), measuring loss for
+  each adapter alone (diagonal) and each co-loaded pair
+  (`add_weighted_adapter(combination_type="cat")`, off-diagonal). Exit 2 on a
+  MAJOR worst-pair.
+- **`soup train --capture-activations <layer> --capture-prompts <jsonl>`** (#219)
+  — a post-training hook writes an SAE-diff-ready per-token activation snapshot
+  to `<output>/activations/activations.json`. `resolve_layer_module` resolves
+  the same `model.layers.N` path whether or not a LoRA adapter is loaded
+  (PEFT-wrapper fallback).
+
+### Security
+- Probe / SAE / capture file I/O is cwd-contained + `O_NOFOLLOW` (TOCTOU close)
+  + size-capped; SAE weight loads use `allow_pickle=False`. SAE auto-download
+  validates the allowlist before any network call and rejects a glob result
+  that resolves outside the snapshot dir (symlink-escape guard).
+
+### Notes
+- #215 is partial: the operator-supplied / contrast-pair / synthetic paths ship
+  now, but the 6 large-base Anthropic-calibrated probe vectors remain
+  upstream-gated (no public calibrated artifact exists). Documented as a known
+  limitation.
+
 ## [0.71.7] - 2026-06-02
 
 ### Added

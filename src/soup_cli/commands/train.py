@@ -196,6 +196,24 @@ def train(
             "(seeds + kernel versions + GPU + OS) to the given path. v0.59.0."
         ),
     ),
+    capture_activations: str = typer.Option(
+        None,
+        "--capture-activations",
+        help=(
+            "After training, capture residual-stream activations at the named "
+            "decoder layer (e.g. model.layers.5) on --capture-prompts and write "
+            "them to <output>/activations/activations.json for soup probe "
+            "sae-diff / sleeper. v0.71.8 #219."
+        ),
+    ),
+    capture_prompts: str = typer.Option(
+        None,
+        "--capture-prompts",
+        help=(
+            "JSONL (or .txt) of prompts to run for --capture-activations "
+            "(one prompt per line; 'prompt'/'text' field or raw text)."
+        ),
+    ),
     track_energy: bool = typer.Option(
         False,
         "--track-energy",
@@ -1059,6 +1077,23 @@ def train(
                 f"[yellow]--repro-receipt skipped:[/] {type(exc).__name__}: {exc}"
             )
 
+    # --- v0.71.8 #219 --capture-activations: SAE-diff-ready snapshot ------
+    if capture_activations and _should_run_diagnose_gate_on_rank():
+        try:
+            written = _capture_activations(
+                capture_activations,
+                capture_prompts,
+                cfg.base,
+                result["output_dir"],
+                trust_remote_code=trust_remote_code,
+            )
+            console.print(f"[green]--capture-activations[/] -> {written}")
+        except (OSError, ValueError, RuntimeError, ImportError) as exc:
+            console.print(
+                f"[yellow]--capture-activations skipped:[/] "
+                f"{type(exc).__name__}: {exc}"
+            )
+
 
 def _write_annex_xi(out_path: str, run_id: str, cfg, *, energy=None) -> None:
     """Render an Annex XI doc using values from the resolved soup.yaml.
@@ -1114,6 +1149,110 @@ def _write_repro_receipt(out_path: str, run_id: str, cfg) -> None:
     receipt = build_repro_receipt(seeds=seeds, run_id=run_id)
     written = write_repro_receipt(receipt, out_path)
     console.print(f"[green]--repro-receipt[/] -> {written}")
+
+
+def _load_capture_prompts(canonical_path: str) -> list[str]:
+    """Read prompts for --capture-activations (JSONL objects, JSON strings, or raw lines)."""
+    import json
+
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(canonical_path, flags)
+    # File-size cap on the SAME fd (no TOCTOU) bounds a pathological
+    # newline-free multi-GB line before the `for line in handle` read.
+    if os.fstat(fd).st_size > 64 * 1024 * 1024:
+        os.close(fd)
+        raise ValueError("--capture-prompts file exceeds 64 MiB")
+    prompts: list[str] = []
+    with os.fdopen(fd, encoding="utf-8") as handle:
+        for line in handle:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                prompts.append(line)  # raw-text line
+            else:
+                if isinstance(obj, str) and obj:
+                    prompts.append(obj)
+                elif isinstance(obj, dict):
+                    for key in ("prompt", "text", "instruction", "input", "question"):
+                        val = obj.get(key)
+                        if isinstance(val, str) and val:
+                            prompts.append(val)
+                            break
+            if len(prompts) >= 256:
+                break
+    return prompts
+
+
+def _capture_activations(
+    layer: str,
+    prompts_path: str,
+    base: str,
+    output_dir: str,
+    *,
+    trust_remote_code: bool = False,
+) -> str:
+    """Capture residual-stream activations from the trained model (v0.71.8 #219).
+
+    Loads the trained model at ``output_dir`` (or ``base`` + adapter when the
+    output is a LoRA adapter), runs ``prompts_path`` through a forward hook on
+    ``layer``, and writes the per-token activations to
+    ``<output_dir>/activations/activations.json`` in the
+    ``{"activations": [[...]], "layer", "num_tokens", "hidden_dim"}`` shape that
+    ``soup probe sae-diff`` / ``sleeper`` consume directly.
+    """
+    import json
+
+    from soup_cli.utils import live_eval
+    from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
+
+    if not prompts_path:
+        raise ValueError("--capture-activations requires --capture-prompts <jsonl>")
+    if not isinstance(layer, str) or not layer.strip():
+        raise ValueError("--capture-activations layer must be a non-empty string")
+    canonical = enforce_under_cwd_and_no_symlink(prompts_path, "--capture-prompts")
+    prompts = _load_capture_prompts(canonical)
+    if not prompts:
+        raise ValueError("--capture-prompts has no usable prompts")
+
+    # When the output is a LoRA adapter dir, load base + adapter; else load the
+    # full fine-tuned model from output_dir directly.
+    is_adapter = os.path.isfile(os.path.join(output_dir, "adapter_config.json"))
+    has_full = os.path.isfile(os.path.join(output_dir, "config.json"))
+    if not is_adapter and not has_full:
+        raise ValueError(
+            f"output dir {os.path.basename(output_dir)} has neither "
+            "adapter_config.json nor config.json — cannot capture activations"
+        )
+    adapter = output_dir if is_adapter else None
+    model_id = base if adapter else output_dir
+
+    model, tokenizer, dev = live_eval.load_model_and_tokenizer(
+        model_id, adapter=adapter, trust_remote_code=trust_remote_code
+    )
+    acts = live_eval.extract_layer_activations(
+        model, tokenizer, prompts, layer=layer, device=dev, pool="none"
+    )
+
+    acts_dir = os.path.join(output_dir, "activations")
+    # Refuse a pre-placed `activations` symlink so the write cannot be
+    # redirected outside output_dir (defence-in-depth — output_dir is config-
+    # derived/trusted but the symlink check is cheap).
+    if os.path.islink(acts_dir):
+        raise ValueError("activations subdir is a symlink — refusing to write")
+    os.makedirs(acts_dir, exist_ok=True)
+    out_path = os.path.join(acts_dir, "activations.json")
+    payload = {
+        "layer": layer,
+        "num_tokens": int(acts.shape[0]),
+        "hidden_dim": int(acts.shape[1]),
+        "activations": acts.tolist(),
+    }
+    with open(out_path, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle)
+    return out_path
 
 
 def _should_run_diagnose_gate_on_rank() -> bool:

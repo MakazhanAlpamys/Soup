@@ -11,6 +11,8 @@ Public surface:
 - ``encode_activations(activations, w_enc, b_enc=None)`` — sparse-ReLU encode
 - ``compute_feature_diff(pre_feats, post_feats, *, top_k)`` — pure math
 - ``load_sae_weights(path)`` — containment + symlink rejection
+- ``download_sae(repo_id, ...)`` — allowlisted HF Hub auto-download (#216)
+- ``default_sae_cache_dir()`` — ``~/.soup/sae-cache`` cache root (#216)
 - ``compute_sae_diff(pre, post, sae, *, top_k)`` — end-to-end orchestrator
 - ``render_report_json`` / ``render_report_markdown`` for CI consumption
 
@@ -30,10 +32,11 @@ from typing import Any, Optional, Tuple
 
 from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
 
-# Closed allowlist of known SAE repos on HF Hub. We do NOT auto-download — the
-# operator must already have the safetensors file locally. The allowlist only
-# governs which repo IDs we will record in a report's provenance field so a
-# tampered manifest cannot quietly cite a random repo.
+# Closed allowlist of known SAE repos on HF Hub. ``download_sae`` (#216) will
+# auto-fetch any repo in this set into ``~/.soup/sae-cache`` via the
+# SSRF-hardened ``hubs.snapshot_download`` (with the #186 namespace-pin gate);
+# everything else stays operator-local. The allowlist is the provenance gate —
+# a tampered manifest cannot quietly cite (or download) a random repo.
 HF_HUB_ALLOWLIST: frozenset[str] = frozenset({
     # DeepMind Gemma Scope (Gemma 2 9B / 27B residual-stream SAEs).
     "google/gemma-scope-2b-pt-res",
@@ -54,6 +57,7 @@ _MAX_TOP_K = 100_000
 _MIN_TOP_K = 1
 _MAX_FEATURES = 1_000_000  # 1M SAE features cap
 _MAX_TOKENS = 1_000_000
+_MAX_SAE_BYTES = 4 * 1024 * 1024 * 1024  # 4 GiB cap on operator-local SAE files
 
 
 # ---------------------------------------------------------------------------
@@ -297,10 +301,43 @@ def compute_feature_diff(
 # ---------------------------------------------------------------------------
 
 
+def _read_safetensors_dict(real_path: str) -> dict[str, Any]:
+    """Read a safetensors SAE checkpoint at a trusted ``real_path``.
+
+    Shared by :func:`load_sae_weights` (operator-local files, cwd-contained +
+    symlink-rejected) and :func:`download_sae` (files in the trusted
+    ``~/.soup/sae-cache`` snapshot, whose internal HF symlinks are legitimate).
+    The 64-tensor DoS cap + ``W_enc``-required contract live here so both
+    entry points enforce them.
+    """
+    try:
+        from safetensors import safe_open
+    except ImportError as exc:  # pragma: no cover - exercised when dep missing
+        raise RuntimeError(
+            "safetensors package required; pip install safetensors"
+        ) from exc
+    out: dict[str, Any] = {}
+    with safe_open(real_path, framework="numpy") as f:
+        # M5 review fix: pre-check key count BEFORE materializing tensors so
+        # the DoS cap actually defends against pathological files.
+        keys = list(f.keys())
+        if len(keys) > 64:
+            raise ValueError("SAE checkpoint has >64 tensors (suspicious)")
+        # Validate every key shape upfront so we fail fast on invalid names.
+        for key in keys:
+            if not isinstance(key, str) or "\x00" in key:
+                raise ValueError(f"invalid tensor key: {key!r}")
+        for key in keys:
+            out[key] = f.get_tensor(key)
+    if "W_enc" not in out:
+        raise KeyError("SAE checkpoint missing required 'W_enc' tensor")
+    return out
+
+
 def load_sae_weights(path: str) -> Mapping[str, Any]:
     """Load a safetensors SAE checkpoint with cwd-containment + symlink reject.
 
-    Returns a dict with at least ``w_enc`` (encoder matrix). Other keys
+    Returns a dict with at least ``W_enc`` (encoder matrix). Other keys
     (``b_enc``, ``W_dec``, etc.) are optional and forwarded as-is when present.
     """
     enforce_under_cwd_and_no_symlink(path, "sae_path")
@@ -322,28 +359,72 @@ def load_sae_weights(path: str) -> Mapping[str, Any]:
         ) from exc
     os.close(fd)
     real = os.path.realpath(path)
-    try:
-        from safetensors import safe_open
-    except ImportError as exc:  # pragma: no cover - exercised when dep missing
-        raise RuntimeError(
-            "safetensors package required; pip install safetensors"
-        ) from exc
-    out: dict[str, Any] = {}
-    with safe_open(real, framework="numpy") as f:
-        # M5 review fix: pre-check key count BEFORE materializing tensors so
-        # the DoS cap actually defends against pathological files.
-        keys = list(f.keys())
-        if len(keys) > 64:
-            raise ValueError("SAE checkpoint has >64 tensors (suspicious)")
-        # Validate every key shape upfront so we fail fast on invalid names.
-        for key in keys:
-            if not isinstance(key, str) or "\x00" in key:
-                raise ValueError(f"invalid tensor key: {key!r}")
-        for key in keys:
-            out[key] = f.get_tensor(key)
-    if "W_enc" not in out:
-        raise KeyError("SAE checkpoint missing required 'W_enc' tensor")
-    return out
+    if os.path.getsize(real) > _MAX_SAE_BYTES:
+        raise ValueError(f"SAE file exceeds {_MAX_SAE_BYTES} bytes")
+    return _read_safetensors_dict(real)
+
+
+def default_sae_cache_dir() -> str:
+    """``~/.soup/sae-cache`` — the reusable SAE download cache root (#216)."""
+    return os.path.join(os.path.expanduser("~"), ".soup", "sae-cache")
+
+
+def download_sae(
+    repo_id: str,
+    *,
+    revision: Optional[str] = None,
+    cache_dir: Optional[str] = None,
+) -> Mapping[str, Any]:
+    """Auto-download an allowlisted SAE from HF Hub and load its weights (#216).
+
+    Validates ``repo_id`` against :data:`HF_HUB_ALLOWLIST` *before* the network
+    call — provenance is the whole point of the allowlist — then delegates to
+    :func:`soup_cli.utils.hubs.snapshot_download` (SSRF-hardened, with the #186
+    namespace-pin TOFU gate). The download lands under
+    ``~/.soup/sae-cache/<repo-slug>/`` (override via ``cache_dir``). The
+    located ``*.safetensors`` checkpoint is read via the same 64-tensor /
+    ``W_enc``-required contract as :func:`load_sae_weights` and the loaded
+    tensor dict is returned.
+
+    Raises ``ValueError`` for a non-allowlisted repo / refused namespace,
+    ``ImportError`` when ``huggingface_hub`` is missing,
+    ``FileNotFoundError`` when no safetensors landed.
+    """
+    import glob
+    import re
+
+    from soup_cli.utils.hubs import snapshot_download
+
+    # Gate against the allowlist (raises on non-allowlisted repo). Preserve the
+    # operator's exact case for the download — HF repo names are case-sensitive.
+    canonical = validate_sae_repo(repo_id)
+    slug = re.sub(r"[^A-Za-z0-9._-]+", "__", canonical).strip("._-") or "sae"
+    if cache_dir is None:
+        cache_dir = os.path.join(default_sae_cache_dir(), slug)
+    snapshot_dir = snapshot_download(
+        repo_id,
+        cache_dir=cache_dir,
+        revision=revision,
+        allow_patterns=["*.safetensors"],
+    )
+    matches = sorted(glob.glob(os.path.join(snapshot_dir, "**", "*.safetensors"),
+                               recursive=True))
+    if not matches:
+        raise FileNotFoundError(
+            f"no .safetensors checkpoint in downloaded SAE {repo_id!r}"
+        )
+    # HF's own snapshot blob-store symlinks are legitimate and stay INSIDE the
+    # cache, but a malicious allowlisted-repo snapshot could ship a *.safetensors
+    # symlink pointing at e.g. /etc/shadow. Confirm the resolved file stays under
+    # the snapshot dir before reading (security review M1).
+    from soup_cli.utils.paths import is_under
+
+    chosen = matches[0]
+    if not is_under(os.path.realpath(chosen), os.path.realpath(snapshot_dir)):
+        raise ValueError(
+            "downloaded SAE checkpoint resolves outside the snapshot dir"
+        )
+    return _read_safetensors_dict(chosen)
 
 
 # ---------------------------------------------------------------------------

@@ -410,8 +410,9 @@ app.add_typer(
     _probe_cmd.app,
     name="probe",
     help=(
-        "Activation probes: sleeper-agent defection / pairwise interference "
-        "/ SAE feature diff / probe pack (v0.66.0)."
+        "Activation probes: sleeper-agent defection / honesty / misuse / "
+        "pairwise interference / SAE feature diff / probe pack (v0.66.0, "
+        "truth+harm v0.71.8)."
     ),
 )
 
