@@ -147,11 +147,15 @@ class TestDefaultGovernorDbPath:
         assert path.endswith("edit_governor.db")
         assert ".soup" in path
 
-    def test_env_override_null_byte_falls_back(self, monkeypatch):
-        from soup_cli.utils.edit_governor import default_governor_db_path
+    def test_validate_rejects_null_byte(self):
+        # POSIX os.putenv forbids null bytes in env values, so a real env var
+        # can never carry one. Assert the validator (the actual security
+        # control) rejects it directly — the "validated is None -> fall back"
+        # branch in default_governor_db_path is covered cross-platform by
+        # test_env_override_out_of_bounds_falls_back.
+        from soup_cli.utils.edit_governor import _validate_governor_db_override
 
-        monkeypatch.setenv("SOUP_EDIT_GOVERNOR_DB", "x\x00.db")
-        assert default_governor_db_path().endswith("edit_governor.db")
+        assert _validate_governor_db_override("x\x00.db") is None
 
 
 # ===========================================================================
