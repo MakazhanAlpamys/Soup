@@ -66,6 +66,30 @@ soup data brain-rot data.jsonl --strict --max-major-fraction 0.10
 
 Every command applies the project-wide TOCTOU policy (`os.lstat + S_ISLNK` symlink rejection before any open) and cwd containment via the shared `paths.enforce_under_cwd_and_no_symlink` helper. All five are LIVE: `soup build` materialises with five built-in transforms (`identity` / `drop_empty` / `lowercase` / `strip` / `dedup_exact`) and SQLite-tracked incremental re-transform (v0.71.6); `soup data gen-magpie` harvests via raw completion against `--provider ollama|vllm` (loopback-only; `anthropic` rejected — no raw-completion endpoint, v0.71.6).
 
+### Custom Transforms
+
+Use a dotted-path string (`module.path:function_name`) as the ``transform``
+value to import a custom transform at build time:
+
+```yaml
+models:
+  - {name: clean, kind: table, source: data/raw.jsonl, transform: my_pkg.transforms:clean_row}
+  - {name: enriched, kind: table, refs: [clean], transform: my_pkg.transforms:enrich}
+```
+
+The target function must accept exactly two positional arguments (`row`, ``config``)
+and return a ``dict`` or ``None``. Soup resolves the dotted path lazily (the module
+is imported only when the build actually runs) and caches the result so repeated
+references to the same path do not re-import.
+
+**Trusted-input posture.** The dotted-path syntax causes Soup to import an
+arbitrary Python module and call a function from it. Treat ``transform`` values
+as *trusted input*: do not feed untrusted or operator-controlled YAML into ``soup
+build`` on shared CI hosts. An attacker who controls the manifest can execute
+arbitrary code during the build phase. If you must accept user-supplied manifests,
+validate them against a allowlist of permitted transform paths before passing
+them to the resolver.
+
 
 ## Production Trace Ecosystem (`soup ingest`)
 

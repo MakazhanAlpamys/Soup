@@ -14,7 +14,10 @@ top-level ``edges`` list) — matching dbt's mental model.
 
 from __future__ import annotations
 
+import functools
 import hashlib
+import importlib
+import inspect
 import json
 import os
 import re
@@ -565,27 +568,100 @@ BUILTIN_TRANSFORMS: Mapping[str, TransformFn] = MappingProxyType(
 )
 
 
+@functools.lru_cache(maxsize=None)
+def _resolve_transform_cached(name: str) -> TransformFn:
+    """Internal cached resolver for built-ins and dotted paths (no ``extra``).
+
+    Cached on ``name`` alone — importing modules is expensive, so repeated
+    references to the same dotted path do not re-import.
+    """
+    # Built-in registry lookup.
+    if name in BUILTIN_TRANSFORMS:
+        return BUILTIN_TRANSFORMS[name]
+
+    # Dotted-path fallback — module.path:function_name.
+    if ":" in name:
+        dot_parts = name.split(":", 1)
+        if len(dot_parts) != 2 or not dot_parts[0] or not dot_parts[1]:
+            raise ValueError(
+                f"transform {name!r}: dotted path must be "
+                "'module.path:function_name' (non-empty on both sides of ':')"
+            )
+        module_path, attr_name = dot_parts
+        try:
+            mod = importlib.import_module(module_path)
+        except ImportError as exc:
+            raise ValueError(
+                f"transform {name!r}: cannot import module "
+                f"{module_path!r}: {exc}"
+            ) from exc
+        attr = getattr(mod, attr_name, None)
+        if attr is None:
+            raise ValueError(
+                f"transform {name!r}: module {module_path!r} has no "
+                f"attribute {attr_name!r}"
+            )
+        if not callable(attr):
+            raise ValueError(
+                f"transform {name!r}: {module_path}.{attr_name} is not "
+                f"callable (got {type(attr).__name__})"
+            )
+        sig = inspect.signature(attr)
+        params = list(sig.parameters.values())
+        # Must accept exactly two positional parameters (row, config).
+        positional_params = [
+            p for p in params
+            if p.kind in (
+                inspect.Parameter.POSITIONAL_ONLY,
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            )
+        ]
+        if len(positional_params) != 2:
+            raise ValueError(
+                f"transform {name!r}: {module_path}.{attr_name} must accept "
+                f"exactly 2 positional arguments (row, config), got "
+                f"{len(positional_params)}"
+            )
+        return attr
+
+    # Nothing matched.
+    raise ValueError(
+        f"unknown transform: {name!r}. built-ins: {sorted(BUILTIN_TRANSFORMS)}; "
+        "supply a custom one via transforms={name: fn} or use dotted-path "
+        "syntax module.path:function_name."
+    )
+
+
 def resolve_transform(
     name: str,
     extra: Optional[Mapping[str, TransformFn]] = None,
 ) -> TransformFn:
     """Resolve a transform name to a callable.
 
-    Per-call ``extra`` (operator-supplied for one ``run_build`` invocation)
-    shadows the built-ins. No global mutable registry — that would leak state
-    across runs/tests (project prefers immutable registries).
+    Resolution order (first match wins):
+
+    1. Per-call ``extra`` map (operator-supplied for one ``run_build``
+       invocation) — shadows everything else.
+    2. Built-in registry (``BUILTIN_TRANSFORMS``).
+    3. Dotted-path fallback: if ``name`` contains a colon (``:``), treat the
+       left side as a module path and the right side as an attribute name,
+       lazily import it, validate that the attribute is callable and accepts
+       exactly two positional parameters (``row``, ``config``), then return it.
+
+    Raises ``ValueError`` for unknown built-ins / dotted paths and
+    ``TypeError`` when an ``extra`` entry is not callable. No global mutable
+    registry — that would leak state across runs/tests (project prefers
+    immutable registries).
     """
+    # 1. Per-call extra takes highest precedence.
     if extra and name in extra:
         fn = extra[name]
         if not callable(fn):
             raise TypeError(f"transform {name!r} must be callable")
         return fn
-    if name in BUILTIN_TRANSFORMS:
-        return BUILTIN_TRANSFORMS[name]
-    raise ValueError(
-        f"unknown transform: {name!r}. built-ins: {sorted(BUILTIN_TRANSFORMS)}; "
-        "supply a custom one via transforms={name: fn}."
-    )
+
+    # 2. Built-in / dotted-path (cached).
+    return _resolve_transform_cached(name)
 
 
 # -----------------------------------------------------------------------------
