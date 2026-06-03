@@ -929,7 +929,11 @@ class TestServeSteerCli:
 
         result = self._runner().invoke(app, ["serve", "--help"])
         assert result.exit_code == 0
-        assert "--steer" in result.output
+        # Rich wraps each flag in ANSI colour codes under CI FORCE_COLOR, which
+        # splits the leading `--` from the name; strip before the substring check
+        # (mirrors the v0.71.1 `--record-thumbs` help-assert fix).
+        plain = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
+        assert "--steer" in plain
 
     def test_steer_requires_transformers_backend(self):
         from soup_cli.cli import app
@@ -984,8 +988,11 @@ class TestSteerCommandPlumbing:
 
         result = CliRunner().invoke(app, ["train", "--help"])
         assert result.exit_code == 0
-        assert "--output" in result.output
-        assert "--top-k" in result.output
+        # ANSI-strip so the color-split `--` prefix doesn't break the substring
+        # check under CI FORCE_COLOR (v0.71.1 precedent).
+        plain = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
+        assert "--output" in plain
+        assert "--top-k" in plain
 
 
 # ===========================================================================
