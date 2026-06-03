@@ -9,6 +9,7 @@ covered by the release-step-6 smoke on SmolLM2-135M.
 from __future__ import annotations
 
 import json
+import re
 import sys
 import types
 from pathlib import Path
@@ -19,6 +20,17 @@ from typer.testing import CliRunner
 from soup_cli.cli import app
 
 runner = CliRunner()
+
+
+def _clean_help(text: str) -> str:
+    """Strip ANSI + remove all whitespace so flag substrings survive CI color.
+
+    Under CI (``FORCE_COLOR``) Rich renders a long flag like ``--base-model``
+    with ANSI escapes between styled segments AND may line-wrap at the hyphen
+    (``--base-`` newline ``model``). Stripping the escapes and removing every
+    whitespace char concatenates the literal flag back together.
+    """
+    return re.sub(r"\s+", "", re.sub(r"\x1b\[[0-9;]*m", "", text))
 
 
 def _write_jsonl(path: Path, rows: list[dict]) -> None:
@@ -524,7 +536,7 @@ class TestTunabilityLiveProbe:
 
     def test_cli_live_flag_in_help(self) -> None:
         result = runner.invoke(app, ["tunability", "--help"])
-        assert "--live" in result.output
+        assert "--live" in _clean_help(result.output)
 
 
 # ===========================================================================
@@ -719,7 +731,7 @@ class TestBehaviorLive:
 
     def test_cli_base_model_in_help(self) -> None:
         result = runner.invoke(app, ["eval", "behavior", "--help"])
-        assert "--base-model" in result.output
+        assert "--base-model" in _clean_help(result.output)
 
 
 # ===========================================================================
@@ -828,8 +840,9 @@ class TestDiagnoseLive:
 
     def test_cli_base_model_in_help(self) -> None:
         result = runner.invoke(app, ["diagnose", "--help"])
-        assert "--base-model" in result.output
-        assert "--tokenizer" in result.output
+        cleaned = _clean_help(result.output)
+        assert "--base-model" in cleaned
+        assert "--tokenizer" in cleaned
 
 
 # ===========================================================================
