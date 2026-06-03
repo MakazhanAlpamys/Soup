@@ -32,13 +32,31 @@ _MAX_STYLE_LEN: int = 32
 _MAX_PREDICTED_LEN: int = 2_000_000  # 2 MB cap on per-row predicted text.
 _MAX_EXPECTED_IDS: int = 10_000  # Per-row expected-citation cap.
 
-# Default extraction regex — matches both ``[doc-id]`` brackets and bare
-# ``doc-id`` tokens. The bracket form is the canonical RAFT default;
-# ``inline`` and ``footnote`` use the same characters today (live
-# per-style extractors ship in v0.62.1 once we benchmark variations).
-_CITATION_RE: re.Pattern[str] = re.compile(
-    r"\[(?P<bracketed>[A-Za-z0-9][A-Za-z0-9._\-]{0,127})\]"
-)
+# Per-style citation regexes (v0.71.10 #202). Each captures the document id in
+# group ``id``; the FULL match span (incl. delimiters) is used by the RAFT
+# span-mask so the boost covers the brackets too.
+#
+# * ``bracket``  — ``[doc-id]`` (the canonical Stanford RAFT default).
+# * ``inline``   — ``(doc-id)`` parenthetical references.
+# * ``footnote`` — ``[^id]`` markdown-footnote markers.
+#
+# The id char class (alnum-leading, ``._-`` body, <=128 chars) is shared. The
+# bracket and footnote forms are disjoint: ``[^1]`` starts with ``^`` after the
+# bracket, which fails the alnum-leading bracket pattern.
+_STYLE_RE: dict[str, re.Pattern[str]] = {
+    "bracket": re.compile(r"\[(?P<id>[A-Za-z0-9][A-Za-z0-9._\-]{0,127})\]"),
+    "inline": re.compile(r"\((?P<id>[A-Za-z0-9][A-Za-z0-9._\-]{0,127})\)"),
+    "footnote": re.compile(r"\[\^(?P<id>[A-Za-z0-9][A-Za-z0-9._\-]{0,127})\]"),
+}
+
+# Back-compat alias — the bracket form was the v0.62.0 default.
+_CITATION_RE: re.Pattern[str] = _STYLE_RE["bracket"]
+
+
+def _resolve_style_re(style: str) -> re.Pattern[str]:
+    """Return the compiled regex for ``style`` (validated) or raise."""
+    canonical = validate_citation_style(style)
+    return _STYLE_RE[canonical]
 
 
 @dataclass(frozen=True)
@@ -108,12 +126,14 @@ def validate_citation_threshold(value: object) -> float:
     return fval
 
 
-def extract_citation_ids(text: str) -> tuple[str, ...]:
-    """Extract every ``[doc-id]`` citation from ``text``.
+def extract_citation_ids(text: str, *, style: str = "bracket") -> tuple[str, ...]:
+    """Extract every citation id from ``text`` for the given ``style``.
 
-    Returns a tuple of IDs in encounter order. Duplicates are preserved
-    so the caller can compute precision honestly (a model that cites
-    the same doc three times should not silently dedupe).
+    Returns a tuple of IDs in encounter order. Duplicates are preserved so the
+    caller can compute precision honestly (a model that cites the same doc
+    three times should not silently dedupe). ``style`` selects the per-style
+    extractor: ``bracket`` (``[doc-id]``) / ``inline`` (``(doc-id)``) /
+    ``footnote`` (``[^id]``). Defaults to ``bracket`` for back-compat.
     """
     if not isinstance(text, str):
         raise TypeError(
@@ -123,13 +143,32 @@ def extract_citation_ids(text: str) -> tuple[str, ...]:
         raise ValueError(
             f"text must be <= {_MAX_PREDICTED_LEN} chars for citation extract"
         )
-    return tuple(m.group("bracketed") for m in _CITATION_RE.finditer(text))
+    pattern = _resolve_style_re(style)
+    return tuple(m.group("id") for m in pattern.finditer(text))
+
+
+def citation_spans(text: str, *, style: str = "bracket") -> tuple[tuple[int, int], ...]:
+    """Return the char ``(start, end)`` span of every citation in ``text``.
+
+    The span covers the FULL match (delimiters included) so a token-level
+    span mask boosts the brackets as well as the id. Used by the RAFT
+    span-mask (#199) + citation-faithful loss boost (#202).
+    """
+    if not isinstance(text, str):
+        raise TypeError(f"text must be str, got {type(text).__name__}")
+    if len(text) > _MAX_PREDICTED_LEN:
+        raise ValueError(
+            f"text must be <= {_MAX_PREDICTED_LEN} chars for citation extract"
+        )
+    pattern = _resolve_style_re(style)
+    return tuple((m.start(), m.end()) for m in pattern.finditer(text))
 
 
 def score_citations(
     *,
     predicted: object,
     expected_ids: object,
+    style: str = "bracket",
 ) -> CitationScore:
     """Compute citation precision / recall / F1.
 
@@ -138,6 +177,7 @@ def score_citations(
 
     Undefined denominators (empty predicted / expected) return 0.0 by
     convention — same policy as v0.43.0 BLEU on zero-precision n-grams.
+    ``style`` selects the per-style extractor (bracket / inline / footnote).
     """
     if isinstance(predicted, bool):
         raise TypeError(
@@ -174,7 +214,7 @@ def score_citations(
             )
         expected_set.add(eid)
 
-    predicted_ids = extract_citation_ids(predicted)
+    predicted_ids = extract_citation_ids(predicted, style=style)
     predicted_count = len(predicted_ids)
     expected_count = len(expected_set)
 

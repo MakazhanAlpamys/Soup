@@ -304,6 +304,16 @@ def run_live_diagnose(
         neutral_score("contamination", "no benchmark corpus supplied"),
     )
 
+    # --- citation (v0.71.10 #202 — RAFT-shaped rows only) ---
+    if rows:
+        from soup_cli.utils.diagnose.citation import is_raft_row, score_citation
+
+        if any(is_raft_row(r) for r in rows):
+            try:
+                scores["citation"] = score_citation(rows, adapter_gen)
+            except (ValueError, TypeError):
+                scores["citation"] = neutral_score("citation", "probe failed")
+
     # Fill any still-missing modes (no dataset → forgetting/format/etc neutral).
     for mode in FAILURE_MODES:
         scores.setdefault(mode, neutral_score(mode, "probe inputs unavailable"))

@@ -244,6 +244,26 @@ class DataConfig(BaseModel):
             "shipped template (errors loudly if absent). (v0.36.0)"
         ),
     )
+    raft_shuffle_seed: Optional[int] = Field(
+        default=None,
+        ge=0,
+        le=2_147_483_647,
+        description=(
+            "Seed for the RAFT golden/distractor document shuffle "
+            "(data.format='raft'). Documents are always shuffled for "
+            "distractor robustness; this knob fixes which reproducible "
+            "permutation. None = seed 0. (v0.71.10 #199)"
+        ),
+    )
+
+    @field_validator("raft_shuffle_seed", mode="before")
+    @classmethod
+    def _validate_raft_shuffle_seed(cls, v):
+        # Bool is a subclass of int — reject before Pydantic coerces True->1
+        # (project bool-as-int policy).
+        if isinstance(v, bool):
+            raise ValueError("raft_shuffle_seed must not be a bool")
+        return v
 
     # --- v0.42.0 Data Pipeline Pro -----------------------------------------
     video_dir: Optional[str] = Field(

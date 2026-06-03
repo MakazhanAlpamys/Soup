@@ -886,6 +886,19 @@ score = score_citations(
 
 Citation-faithful FT is gated to `task in {sft, pretrain}` + `data.format='raft'` — misconfigured runs fail at config load with a named-field message.
 
+Under the hood, a `format: raft` run trains **answer-only**: each row is composed into a prompt (golden + distractor docs, shuffled deterministically by `data.raft_shuffle_seed`, each labelled `[doc-N]`) followed by the answer; the prompt span is masked out of the loss and — when `citation_faithful: true` — the bracketed `[doc-id]` spans in the answer get a boosted per-token loss weight. Rows whose prompt fills `max_length` (answer fully truncated) are dropped with a warning rather than silently shrinking the dataset.
+
+Score a trained model's citations from the CLI:
+
+```bash
+# {predicted, expected_ids} rows, OR RAFT rows scored against their own golden [doc-N]
+soup eval citation preds.jsonl --style bracket
+# RAFT rows: pass the train-time shuffle seed so the golden id lines up
+soup eval citation raft.jsonl --shuffle-seed 0 --output citation.json
+```
+
+`soup diagnose` also gains a `citation` failure mode that flags a model that stopped citing the supporting document.
+
 
 ## RA-DIT — Retrieval-Augmented Dual Instruction Tuning
 
@@ -902,6 +915,16 @@ soup train
 ```
 
 The schema enforces stage-task pairing — `ra_dit_stage: retriever` requires `task: embedding`; `ra_dit_stage: generator` requires `task: sft`. A misconfigured recipe fails at config load with a named-field message.
+
+Run both stages in one command with `soup ra-dit`:
+
+```bash
+soup ra-dit --retriever-config retriever.yaml --generator-config generator.yaml
+# preview the plan + the resolved retriever link without training:
+soup ra-dit -r retriever.yaml -g generator.yaml --plan-only
+```
+
+It trains the retriever, then **records** that trained retriever as the generator's paired retriever (writing its output dir into the generator's `training.ra_dit_retriever_model`) and trains the generator RAFT-style. The recorded retriever is the one used at deploy/serve time — stage-2 does not fuse the retriever weights. A plain `soup train` of a generator-stage config with no retriever model set **auto-links** the most-recent RA-DIT retriever run from the Registry; pass `--retriever-model <m>` to override.
 
 
 ## Curriculum-Aware Training (BETA)

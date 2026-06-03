@@ -184,6 +184,8 @@ soup steer list
 
 Steering names are validated against a strict regex (`^[A-Za-z0-9][A-Za-z0-9._\-]{0,127}$` — no path separators, no shell metacharacters); strength is bounded `|s| <= 10.0`. The trained vectors land in the Soup Registry under the `steering_vector` artifact kind so lineage is preserved.
 
+As of v0.71.10 the fit and the decode hook are **live** (validated on SmolLM2-135M): `soup steer train` captures residual-stream activations (CAA / RepE) or per-head `o_proj`-input activations (ITI) on the contrastive pairs, computes the control vector, and persists `steering_vector.safetensors` + `steering_config.json`. `soup serve --steer <name>` installs a forward hook on the loaded model that adds `strength × vector` at decode time (transformers backend; `--steer` is rejected with a clear error on vLLM/SGLang). RepE / ITI need at least two contrastive pairs; CAA works from one.
+
 
 ## GRACE Codebook — Lifelong Knowledge Edits
 

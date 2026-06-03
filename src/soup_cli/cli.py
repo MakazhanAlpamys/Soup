@@ -484,6 +484,15 @@ app.add_typer(
     help="Iterative DPO loop driver (v0.70.0 Part E).",
 )
 
+# v0.71.10 #200 — `soup ra-dit` (two-stage RA-DIT orchestrator).
+from soup_cli.commands import ra_dit as _ra_dit_cmd  # noqa: E402
+
+app.add_typer(
+    _ra_dit_cmd.app,
+    name="ra-dit",
+    help="RA-DIT two-stage orchestrator: retriever -> generator (v0.71.10).",
+)
+
 
 def _rewrite_advise_argv(argv: list) -> list:
     """Inject `run` between `advise` and a non-subcommand first argument.

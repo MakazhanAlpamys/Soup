@@ -18,14 +18,14 @@ class TestModuleSurface:
         from soup_cli.utils.steering import (
             SUPPORTED_STEERING_METHODS,
             SteeringMethodSpec,
-            apply_steering,
             build_steering_vector,
             get_steering_method_spec,
+            install_steering_hook,  # v0.71.10 #201 — replaces apply_steering stub
             validate_steering_method,
         )
         assert callable(validate_steering_method)
         assert callable(get_steering_method_spec)
-        assert callable(apply_steering)
+        assert callable(install_steering_hook)
         assert callable(build_steering_vector)
         assert dataclasses.is_dataclass(SteeringMethodSpec)
         assert isinstance(SUPPORTED_STEERING_METHODS, frozenset)
@@ -230,23 +230,19 @@ class TestSpec:
 
 
 class TestDeferredStubs:
-    def test_apply_steering_deferred(self):
-        from soup_cli.utils.steering import apply_steering
+    def test_apply_steering_removed(self):
+        # v0.71.10 #201 — the apply_steering stub is replaced by the live
+        # install_steering_hook runtime.
+        import soup_cli.utils.steering as steering
 
-        with pytest.raises(NotImplementedError, match="v0.62.1"):
-            apply_steering("caa")
+        assert not hasattr(steering, "apply_steering")
 
-    def test_apply_steering_validates_first(self):
-        from soup_cli.utils.steering import apply_steering
-
-        # Unknown method rejected BEFORE the deferred-live raise.
-        with pytest.raises(ValueError):
-            apply_steering("nonsense")
-
-    def test_build_steering_vector_deferred(self):
+    def test_build_steering_vector_requires_base(self):
+        # v0.71.10 #201 — no longer NotImplementedError; missing base/pairs is
+        # a loud ValueError (validation happens after method+name checks).
         from soup_cli.utils.steering import build_steering_vector
 
-        with pytest.raises(NotImplementedError, match="v0.62.1"):
+        with pytest.raises(ValueError, match="base"):
             build_steering_vector(method="caa", name="safety-v1")
 
     def test_build_steering_vector_validates_method_first(self):

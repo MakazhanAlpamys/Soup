@@ -752,7 +752,8 @@ class TestSourceWiring:
         assert "_diagnose_cmd" in source
 
     def test_no_top_level_heavy_imports(self) -> None:
-        # All 6 probe + report modules must be torch/transformers-free.
+        # All probe + report modules must be torch/transformers-free
+        # (citation.py added in v0.71.10 #202).
         probe_modules = [
             "src/soup_cli/utils/diagnose/__init__.py",
             "src/soup_cli/utils/diagnose/report.py",
@@ -763,6 +764,7 @@ class TestSourceWiring:
             "src/soup_cli/utils/diagnose/mode_collapse.py",
             "src/soup_cli/utils/diagnose/memorization.py",
             "src/soup_cli/utils/diagnose/contamination.py",
+            "src/soup_cli/utils/diagnose/citation.py",
             "src/soup_cli/utils/diagnose/badge.py",
             "src/soup_cli/utils/diagnose/runner.py",
         ]

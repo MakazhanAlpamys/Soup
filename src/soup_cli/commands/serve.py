@@ -236,9 +236,9 @@ def serve(
     ),
 ):
     """Start a local inference server with OpenAI-compatible API."""
-    # v0.62.0 Part C — validate `--steer` name + strength up front so a
-    # typo surfaces before backend init. Live decode-hook wiring lands
-    # in v0.62.1; this release just locks the flag surface.
+    # v0.62.0 Part C / v0.71.10 #201 — validate `--steer` name + strength up
+    # front so a typo surfaces before backend init. The live decode hook is
+    # installed in the transformers branch after model load.
     if steer is not None:
         from rich.markup import escape as _rich_escape
 
@@ -258,10 +258,13 @@ def serve(
                 f"[red]Invalid --steer:[/] {_rich_escape(str(exc))}"
             )
             raise typer.Exit(code=2) from exc
-        console.print(
-            f"[yellow]--steer={_rich_escape(steer)!r} accepted; live "
-            "decode hook ships in v0.62.1.[/]"
-        )
+        if backend.lower() != "transformers":
+            console.print(
+                "[red]--steer requires --backend transformers[/] "
+                "(activation steering installs a forward hook on the loaded "
+                "model; vLLM / SGLang / MII are not supported)."
+            )
+            raise typer.Exit(code=2)
 
     # v0.53.10 #152 — pre-fetch base from a non-HF hub before serve starts.
     if hub and hub != "hf":
@@ -604,6 +607,32 @@ def serve(
             trust_remote_code=resolved_trust,
         )
         console.print("[bold green]Model loaded![/]")
+
+        # v0.71.10 #201 — install the activation-steering decode hook. The
+        # handle persists for the server's lifetime (process-global model).
+        if steer is not None:
+            from rich.markup import escape as _esc
+
+            from soup_cli.utils.steering import (
+                install_steering_hook,
+                load_steering_artifact,
+                resolve_steering_dir,
+            )
+
+            try:
+                steer_dir = resolve_steering_dir(steer)
+                loaded_steer = load_steering_artifact(steer_dir)
+                install_steering_hook(
+                    model_obj, loaded_steer, strength=steer_strength
+                )
+            except (TypeError, ValueError, OSError) as exc:
+                console.print(f"[red]--steer:[/] {_esc(str(exc))}")
+                raise typer.Exit(2) from exc
+            console.print(
+                f"[green]Steering active:[/] {_esc(loaded_steer.name)} "
+                f"({_esc(loaded_steer.method)}, layer {loaded_steer.layer}, "
+                f"strength {steer_strength})"
+            )
 
         # Load draft model for speculative decoding (transformers backend)
         draft_model = None

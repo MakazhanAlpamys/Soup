@@ -1177,3 +1177,8 @@ _register_v0610(app, console)
 from soup_cli.commands._eval_v0650 import register as _register_v0650  # noqa: E402
 
 _register_v0650(app, console)
+
+# Register v0.71.10 subcommand (eval citation — #202)
+from soup_cli.commands._eval_v07110 import register as _register_v07110  # noqa: E402
+
+_register_v07110(app, console)

@@ -12,6 +12,39 @@ reproducing 70+ versions of notes.
 
 ## [Unreleased]
 
+## [0.71.10] - 2026-06-03
+
+### Added
+- **RAG family — live wiring** (closes #199, #200, #201, #202). The four
+  retrieval / steering surfaces that shipped schema-only in v0.62.0 are now
+  real, validated on SmolLM2-135M.
+- **RAFT span-mask training is live** (#199). `data.format: raft` rows
+  (`{query, golden_doc, distractor_docs, answer}`) now train answer-only: the
+  prompt span is masked to `-100` and each document is labelled `[doc-N]` so
+  the model learns to cite the supporting document. Documents are shuffled
+  reproducibly (`data.raft_shuffle_seed`). Rows whose prompt fills
+  `max_length` (answer fully truncated) are dropped with a warning rather than
+  silently shrinking the effective dataset.
+- **`soup ra-dit` — one-shot two-stage orchestrator** (#200). Trains the
+  retriever (stage 1, embedding/contrastive) then the generator (stage 2,
+  RAFT-SFT) in a single command, recording the trained retriever as the
+  generator's paired retriever. A `soup train` of a generator-stage config
+  with no retriever model set now auto-links the most-recent RA-DIT retriever
+  run from the Registry. `--plan-only` validates both configs without
+  training; `--retriever-model` overrides the auto-link.
+- **`soup steer train` / `apply` + `soup serve --steer` are live** (#201).
+  Fit a CAA (contrastive activation addition), ITI (inference-time
+  intervention) or RepE (representation-engineering PCA) control vector from
+  `{positive, negative}` contrastive pairs, persist it as a safetensors +
+  config artifact, and apply it at decode time via a forward hook
+  (`soup serve --steer <name> --steer-strength <s>`).
+- **`soup eval citation` + citation-span loss boost are live** (#202). Score
+  citation precision / recall / F1 over `{predicted, expected_ids}` or RAFT
+  rows (`--shuffle-seed` aligns the golden `[doc-N]` id with what the model
+  saw at train time). When `citation_faithful: true`, bracketed `[doc-id]`
+  spans in the answer get a boosted per-token loss weight. A new `citation`
+  failure mode is available in `soup diagnose`.
+
 ## [0.71.9] - 2026-06-03
 
 ### Added

@@ -73,14 +73,25 @@ def train_steer(
     ),
     layer: Optional[int] = typer.Option(
         None, "--layer", "-l",
-        help="MLP layer index to extract the residual-stream vector from.",
+        help="Decoder layer index to extract the residual-stream vector from "
+        "(default: the middle layer).",
+    ),
+    output: Optional[str] = typer.Option(
+        None, "--output", "-o",
+        help="Directory to write the steering vector to (default: "
+        "./steering/<name>). Cwd-contained.",
+    ),
+    device: Optional[str] = typer.Option(
+        None, "--device",
+        help="torch device (cpu / cuda). Defaults to CUDA when available.",
+    ),
+    top_k: int = typer.Option(
+        8, "--top-k", "-k",
+        help="ITI only: number of attention heads to intervene on (1-256).",
     ),
     plan_only: bool = typer.Option(
         False, "--plan-only",
-        help=(
-            "Validate inputs + print the resolved plan; skip the "
-            "deferred-live training (v0.62.1)."
-        ),
+        help="Validate inputs + print the resolved plan; skip the live fit.",
     ),
     registry_id: Optional[str] = typer.Option(
         None, "--registry-id",
@@ -141,6 +152,11 @@ def train_steer(
             f"[red]Invalid --layer:[/] must satisfy 0 <= layer <= 2048, got {layer}"
         )
         raise typer.Exit(2)
+    if top_k < 1 or top_k > 256:
+        console.print(
+            f"[red]Invalid --top-k:[/] must satisfy 1 <= top_k <= 256, got {top_k}"
+        )
+        raise typer.Exit(2)
 
     spec = get_steering_method_spec(canonical_method)
     panel_body = (
@@ -148,7 +164,7 @@ def train_steer(
         f"Method: {escape(canonical_method)}\n"
         f"Name: {escape(canonical_name)}\n"
         f"Pairs: {escape(pairs_path)}\n"
-        f"Layer: {layer if layer is not None else 'auto'}\n"
+        f"Layer: {layer if layer is not None else 'auto (middle)'}\n"
         f"Description: {escape(spec.description)}"
     )
     console.print(
@@ -161,30 +177,55 @@ def train_steer(
 
     if plan_only:
         console.print(
-            "[yellow]Plan-only mode:[/] live training deferred to v0.62.1. "
-            "Inputs validated and plan rendered."
+            "[green]Plan-only mode — inputs validated, plan rendered. "
+            "Drop --plan-only to fit the vector.[/]"
         )
         return
 
     try:
-        build_steering_vector(
+        artifact = build_steering_vector(
             method=canonical_method,
             name=canonical_name,
             pairs_path=pairs_path,
+            base=base,
             layer=layer,
+            device=device,
+            output_dir=output,
+            top_k=top_k,
         )
-    except NotImplementedError as exc:
-        console.print(
-            Panel(
-                f"[yellow]Live steer-train deferred to v0.62.1.[/]\n\n{escape(str(exc))}",
-                title="Deferred",
-                border_style="yellow",
+    except (TypeError, ValueError, FileNotFoundError) as exc:
+        console.print(f"[red]Steer-train failed:[/] {escape(str(exc))}")
+        raise typer.Exit(2) from exc
+
+    console.print(
+        Panel(
+            f"[bold]Method:[/] {escape(artifact.method)}\n"
+            f"[bold]Name:[/] {escape(artifact.name)}\n"
+            f"[bold]Layer:[/] {artifact.layer}\n"
+            f"[bold]Intervention:[/] {escape(artifact.intervention_point)}\n"
+            f"[bold]Hidden dim:[/] {artifact.hidden_dim}\n"
+            f"[bold]Pairs:[/] {artifact.num_pairs}\n"
+            f"[bold]Saved:[/] {escape(artifact.output_dir)}",
+            title="Steering vector trained",
+            border_style="green",
+        )
+    )
+
+    if registry_id is not None:
+        from soup_cli.registry.attach import attach_artifact
+
+        try:
+            attach_artifact(
+                registry_id, path=artifact.output_dir, kind="steering_vector"
             )
-        )
-        # Match v0.61.0 Part C policy: exit code 3 distinguishes
-        # "deferred / not yet shipped" from exit code 2 = "validation
-        # rejection".
-        raise typer.Exit(3) from exc
+            console.print(
+                f"[green]Attached steering_vector to Registry entry "
+                f"{escape(registry_id)}.[/]"
+            )
+        except (ValueError, FileNotFoundError) as exc:
+            console.print(
+                f"[yellow]Could not attach to Registry:[/] {escape(str(exc))}"
+            )
 
 
 @app.command(name="apply")
@@ -198,8 +239,16 @@ def apply_steer(
         help="Steering strength multiplier (|s| <= 10.0).",
     ),
 ) -> None:
-    """Apply a stored steering vector at decode time (preview-only in v0.62.0)."""
+    """Resolve + load a stored steering vector and print its metadata.
+
+    The live decode-time intervention is applied by ``soup serve --steer
+    <name> --steer-strength <s>`` (which installs the forward hook on the
+    running model). This subcommand resolves the vector by name and confirms it
+    loads cleanly so operators can verify an artifact before serving.
+    """
     from soup_cli.utils.steering import (
+        load_steering_artifact,
+        resolve_steering_dir,
         validate_steering_name,
         validate_steering_strength,
     )
@@ -211,21 +260,31 @@ def apply_steer(
         console.print(f"[red]Invalid steer-apply input:[/] {escape(str(exc))}")
         raise typer.Exit(2) from exc
 
+    try:
+        steer_dir = resolve_steering_dir(canonical_name)
+        loaded = load_steering_artifact(steer_dir)
+    except (TypeError, ValueError, OSError) as exc:
+        console.print(f"[red]Cannot load steering vector:[/] {escape(str(exc))}")
+        raise typer.Exit(2) from exc
+
     console.print(
         Panel(
-            (
-                f"Vector: {escape(canonical_name)}\n"
-                f"Strength: {canonical_strength}"
-            ),
+            f"[bold]Vector:[/] {escape(canonical_name)}\n"
+            f"[bold]Method:[/] {escape(loaded.method)}\n"
+            f"[bold]Layer:[/] {loaded.layer}\n"
+            f"[bold]Intervention:[/] {escape(loaded.intervention_point)}\n"
+            f"[bold]Dim:[/] {len(loaded.vector)}\n"
+            f"[bold]Strength:[/] {canonical_strength}\n"
+            f"[bold]Dir:[/] {escape(steer_dir)}",
             title="soup steer apply",
             border_style="cyan",
         )
     )
     console.print(
-        "[yellow]Apply path deferred to v0.62.1.[/] Use `soup serve --steer "
-        f"{escape(canonical_name)}` once the live decode hook ships."
+        "[green]Vector loaded.[/] Apply it at decode time with "
+        f"`soup serve --steer {escape(canonical_name)} "
+        f"--steer-strength {canonical_strength}`."
     )
-    raise typer.Exit(3)
 
 
 @app.command(name="list")

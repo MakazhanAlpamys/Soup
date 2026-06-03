@@ -19,6 +19,8 @@ FAILURE_MODES: Tuple[str, ...] = (
     "mode_collapse",
     "memorization",
     "contamination",
+    # v0.71.10 #202 — citation-recall regression on RAFT-shaped data.
+    "citation",
 )
 
 VERDICTS: Tuple[str, ...] = ("OK", "MINOR", "MAJOR")

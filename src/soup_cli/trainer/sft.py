@@ -109,6 +109,7 @@ class SFTTrainerWrapper:
         self.model = None
         self.tokenizer = None
         self.trainer = None
+        self._is_raft = False  # set in setup() when data.format == 'raft'
         # Resolve once — raises ValueError if model needs custom code but
         # the user did not opt in. Result is cached on the wrapper for use
         # by every from_pretrained() call below.
@@ -222,9 +223,14 @@ class SFTTrainerWrapper:
         # v0.53.7 #86 — short-circuit tokenization when caller pre-tokenized
         # via `soup data preprocess`. Skips the format_row + tokenizer pass
         # entirely; rows already carry input_ids/labels/attention_mask.
+        # v0.71.10 #199 — RAFT format: golden/distractor-doc rows are NOT
+        # {messages}; build a pre-tokenised answer-only-mask dataset instead.
+        self._is_raft = cfg.data.format == "raft"
         pretok = _maybe_load_pretokenized(cfg.data, cfg.base, console)
         if pretok is not None:
             train_ds, eval_ds = pretok
+        elif self._is_raft:
+            train_ds, eval_ds = self._prepare_raft_dataset(dataset, cfg, tcfg)
         elif use_vision:
             train_ds, eval_ds = self._prepare_vision_dataset(dataset)
         elif use_audio:
@@ -393,7 +399,36 @@ class SFTTrainerWrapper:
         # so two ``multipack: true`` runs against the same base class share
         # the same subclass.
         use_multipack = bool(getattr(tcfg, "multipack", False))
-        if use_multipack:
+        if self._is_raft:
+            # v0.71.10 #199 — RAFT uses a plain Trainer + weighted-CE loss
+            # (answer-only mask via loss_weights; citation-span boost when
+            # training.citation_faithful is set — #202). The pre-tokenised
+            # rows + custom collator skip SFTTrainer's text-column processing.
+            from transformers import Trainer
+
+            from soup_cli.trainer.raft import (
+                RaftDataCollator,
+                make_raft_trainer_class,
+            )
+
+            raft_cls = make_raft_trainer_class(Trainer)
+            self.trainer = raft_cls(
+                model=self.model,
+                args=training_args,
+                train_dataset=train_ds,
+                eval_dataset=eval_ds,
+                data_collator=RaftDataCollator(self.tokenizer),
+                processing_class=self.tokenizer,
+            )
+            if tcfg.citation_faithful:
+                console.print(
+                    "[green]RAFT + citation-faithful:[/] answer-only mask "
+                    f"with boosted [{tcfg.citation_style or 'bracket'}] "
+                    "citation spans"
+                )
+            else:
+                console.print("[green]RAFT trainer enabled:[/] answer-only loss mask")
+        elif use_multipack:
             from soup_cli.utils.multipack_sampler import (
                 validate_multipack_architecture,
             )
@@ -422,6 +457,64 @@ class SFTTrainerWrapper:
 
         self._output_dir = str(output_dir)
         self._batch_size = batch_size
+
+    def _prepare_raft_dataset(self, dataset: dict, cfg, tcfg):
+        """v0.71.10 #199 — build pre-tokenised RAFT rows (answer-only mask).
+
+        Each ``{query, golden_doc, distractor_docs, answer}`` row is composed
+        into a prompt + answer with deterministic ``[doc-N]`` ids
+        (:func:`soup_cli.utils.raft.build_raft_prompt`) then tokenised with the
+        prompt span masked. When ``citation_faithful`` is set, citation spans
+        in the answer get a boosted ``loss_weights`` entry.
+        """
+        from datasets import Dataset
+
+        from soup_cli.utils.raft import build_raft_prompt, tokenize_raft_example
+
+        shuffle_seed = cfg.data.raft_shuffle_seed
+        citation = bool(tcfg.citation_faithful)
+        style = tcfg.citation_style or "bracket"
+        max_length = cfg.data.max_length
+        tokenizer = self.tokenizer
+
+        def _fmt(example: dict, idx: int) -> dict:
+            composed = build_raft_prompt(
+                example, shuffle_seed=shuffle_seed, row_index=idx
+            )
+            return tokenize_raft_example(
+                tokenizer,
+                composed,
+                max_length=max_length,
+                citation_faithful=citation,
+                citation_style=style,
+            )
+
+        def _has_trainable_tokens(example: dict) -> bool:
+            # A row whose prompt fills `max_length` truncates the answer away,
+            # leaving an all-masked (loss_weights all 0.0) row that contributes
+            # a zero gradient. Drop such rows so they don't silently shrink the
+            # effective dataset (code-review M4).
+            return any(w > 0.0 for w in example["loss_weights"])
+
+        def _map_and_filter(raw, split: str):
+            mapped = raw.map(
+                _fmt, with_indices=True, remove_columns=raw.column_names
+            )
+            kept = mapped.filter(_has_trainable_tokens)
+            dropped = len(mapped) - len(kept)
+            if dropped:
+                console.print(
+                    f"[yellow]RAFT:[/] dropped {dropped} {split} row(s) whose "
+                    f"prompt filled max_length={max_length} (answer fully "
+                    "truncated -> all-masked). Raise max_length to keep them."
+                )
+            return kept
+
+        train_ds = _map_and_filter(Dataset.from_list(dataset["train"]), "train")
+        eval_ds = None
+        if "val" in dataset and dataset["val"]:
+            eval_ds = _map_and_filter(Dataset.from_list(dataset["val"]), "val")
+        return train_ds, eval_ds
 
     def _resolve_mixed_precision(self, tcfg, base_model: str) -> tuple[bool, bool]:
         """Return ``(bf16, fp16)`` flags for TrainingArguments.

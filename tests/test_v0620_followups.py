@@ -195,11 +195,14 @@ class TestRaftNullByteRejection:
             })
 
 
-# ---------- H5 — `soup steer train --plan-only` deferred-marker assertion ----------
+# ---------- `soup steer train --plan-only` (live as of v0.71.10 #201) ----------
 
 
 class TestSteerPlanOnlyMarker:
-    def test_plan_only_emits_v0621_marker(self, tmp_path, monkeypatch):
+    def test_plan_only_validates_and_renders(self, tmp_path, monkeypatch):
+        # v0.71.10 #201 — live fitting shipped; --plan-only now just validates
+        # inputs + renders the plan (no deferred-version marker) and exits 0
+        # WITHOUT loading a model.
         from soup_cli.commands.steer import app
 
         monkeypatch.chdir(tmp_path)
@@ -219,9 +222,9 @@ class TestSteerPlanOnlyMarker:
         assert result.exit_code == 0, (
             result.output, repr(result.exception)
         )
-        # Defence: the panel MUST surface the deferred-version marker so
-        # operators know live training ships in v0.62.1.
-        assert "v0.62.1" in result.output
+        assert "Plan-only" in result.output
+        # Live fitting shipped — the deferred-version marker is gone.
+        assert "v0.62.1" not in result.output
 
 
 # ---------- H6 — apply_edit v0.61.1 marker not regressed for legacy methods ----------

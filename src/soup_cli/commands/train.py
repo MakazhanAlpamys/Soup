@@ -273,6 +273,18 @@ def train(
     console.print(f"[dim]Loading config from {config_path}...[/]")
     cfg = load_config(config_path)
 
+    # --- RA-DIT generator-stage auto-link (v0.71.10 #200) ---
+    # When a generator stage has no retriever model set, splice in the latest
+    # RA-DIT retriever output from the Registry. A manual value always wins.
+    if getattr(cfg.training, "ra_dit_stage", None) == "generator":
+        from soup_cli.utils.ra_dit_run import autolink_generator_retriever
+
+        advisory = autolink_generator_retriever(cfg)
+        if advisory:
+            # `advisory` embeds a Registry-derived `output` path — escape it
+            # before printing into the Rich-markup console (security MEDIUM).
+            console.print(f"[yellow]RA-DIT:[/] {markup_escape(advisory)}")
+
     # --- Echo-trap tokenizer-aware shortcut ---
     if echo_trap_tokenizer_aware:
         if not cfg.training.echo_trap_enabled:

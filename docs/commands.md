@@ -171,6 +171,12 @@ soup eval unlearning <run-id> --benchmark tofu|muse|wmdp  Forget Quality + Model
 soup edit set --base <m> --method rome|memit|alphaedit|grace --subject "..." --target "..." [--output <dir>] [--device cpu] [--governor/--no-governor] [--registry-id <id>]  Live surgical knowledge edit (--plan-only available)
 soup edit diff <before-run> <after-run> --probes p.jsonl [--before-model <m> --after-model <m>]  Knowledge-injection diff (live before/after generation when both models given)
 soup train --task unlearn  NPO/SimNPO/RMU unlearning from data.forget_set (+ optional data.retain_set)
+soup train  # data.format='raft'  Answer-only span-mask RAFT training (golden+distractor docs, [doc-N] citations); generator-stage configs auto-link the latest RA-DIT retriever
+soup ra-dit --retriever-config <r.yaml> --generator-config <g.yaml> [--retriever-model <m>] [--plan-only]  One-shot two-stage RA-DIT: train retriever → record pairing → train generator
+soup eval citation <data> [--style bracket|inline|footnote] [--shuffle-seed N] [--output o.json]  Citation precision/recall/F1 over predictions or RAFT rows
+soup steer train --base <m> --method caa|iti|repe --name <id> --pairs <jsonl>  Fit a CAA/ITI/RepE activation-steering vector from {positive, negative} pairs
+soup steer apply --name <id> --strength <s>  Preview a stored steering vector; soup steer list lists them
+soup serve --steer <name> [--steer-strength <s>]  Apply a steering vector at decode time via a forward hook (transformers backend)
 soup ingest --source langfuse|langsmith|helicone|openpipe|otel|openai-stored --logs <jsonl>  Universal trace importer (6 SaaS adapters → normalised JSONL)
 soup prune-prompt --input <jsonl> --output <jsonl> --min-frequency 0.95  Detect + strip shared system-prompt prefix
 soup prune-prompt ... --tokenizer <id-or-path>  Tokenizer-aware prefix detection (decodes remaining ids, boundary-safe)

@@ -253,7 +253,7 @@ Default threshold 0.2 matches v0.43.0 KL-delta quant-check thresholds. Webhooks 
 
 ## Diagnose (Post-Training Report Card)
 
-`soup diagnose` scores six independent failure modes for a trained adapter and renders an OK / MINOR / MAJOR verdict per mode plus an overall headline — same taxonomy as Quant-Lobotomy. Useful for catching adapter regressions that a loss curve cannot distinguish from a healthy run.
+`soup diagnose` scores seven independent failure modes for a trained adapter and renders an OK / MINOR / MAJOR verdict per mode plus an overall headline — same taxonomy as Quant-Lobotomy. Useful for catching adapter regressions that a loss curve cannot distinguish from a healthy run.
 
 ```bash
 # Neutral report (no model load — runs as a sanity check)
@@ -279,7 +279,7 @@ soup diagnose my-run-id --output diag.json --attach-to-registry abc123
 a built-in probe set; `format` only fires when the dataset's own targets look like JSON;
 `contamination` stays neutral unless a benchmark corpus is supplied. Validated on SmolLM2-135M.
 
-**Six failure-mode probes:**
+**Seven failure-mode probes:**
 
 | Mode | What it catches | Score range |
 |------|-----------------|-------------|
@@ -289,6 +289,7 @@ a built-in probe set; `format` only fires when the dataset's own targets look li
 | `mode_collapse` | Diversity collapse at T=0 and T=1 | pairwise n-gram Jaccard distance |
 | `memorization` | Verbatim training-prefix echo on partial prompts | 1 − echo_rate |
 | `contamination` | Training data overlapping public benchmarks | 1 − contamination_rate |
+| `citation` | RAFT model stopped citing the supporting `[doc-N]` (v0.71.10) | fraction of answers citing the golden doc |
 
 **Verdict pill colours:** OK (≥ 0.85) green / MINOR (≥ 0.60) amber / MAJOR (< 0.60) red. `soup diagnose` exits 2 when the overall verdict is MAJOR — wire into CI to fail the build on regression.
 
