@@ -24,8 +24,14 @@ This module ships:
 from __future__ import annotations
 
 import math
+import os
+import sqlite3
+import stat
+import tempfile
+from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Tuple
+from datetime import datetime, timezone
+from typing import Optional, Tuple
 
 # Pure-Python module without heavy deps — lift the validator import to
 # module top (review MEDIUM M3) so the hot governor path doesn't pay
@@ -310,3 +316,254 @@ class EditGovernor:
             "last_norm_delta": self.last_norm_delta,
             "max_sequential_edits": self.max_sequential_edits,
         }
+
+
+# ---------------------------------------------------------------------------
+# v0.71.9 #196 — SQLite persistence + cross-process locking.
+#
+# Sequential edits accumulate across separate `soup edit set` invocations, so
+# the governor's edit_count / last_verdict MUST survive between processes. We
+# mirror the v0.60.0 ``namespace_pin.NamespacePinStore`` policy exactly: WAL +
+# busy_timeout, a cross-process lock around get+upsert, $HOME/$CWD/$TMPDIR
+# containment on the DB path, TOCTOU symlink rejection, and POSIX 0600 perms.
+# ---------------------------------------------------------------------------
+
+_GOVERNOR_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS edit_governors (
+    base_model           TEXT PRIMARY KEY,
+    edit_count           INTEGER NOT NULL,
+    last_method          TEXT NOT NULL,
+    last_verdict         TEXT NOT NULL,
+    last_norm_delta      REAL NOT NULL,
+    max_sequential_edits INTEGER NOT NULL,
+    updated_at           TEXT NOT NULL
+);
+"""
+
+
+def _now_iso() -> str:
+    return datetime.now(tz=timezone.utc).isoformat()
+
+
+def _validate_governor_db_override(override: object) -> Optional[str]:
+    """Apply the shared v0.36.0 / v0.54.0 / v0.60.0 DB-path containment policy.
+
+    Returns the validated path string, or ``None`` when the override is unsafe
+    (so callers fall back to the default). Mirrors
+    ``namespace_pin._validate_db_path_override``.
+    """
+    if not isinstance(override, str) or not override:
+        return None
+    if "\x00" in override:
+        return None
+    if len(override) > 4096:
+        return None
+    if any(ord(c) < 0x20 or ord(c) == 0x7F for c in override):
+        return None
+    try:
+        realpath = os.path.realpath(override)
+    except (OSError, ValueError):
+        return None
+    home = os.path.realpath(os.path.expanduser("~"))
+    cwd = os.path.realpath(os.getcwd())
+    tmpdir = os.path.realpath(tempfile.gettempdir())
+    for allowed in (home, cwd, tmpdir):
+        try:
+            common = os.path.commonpath([realpath, allowed])
+        except ValueError:
+            continue
+        if common == allowed:
+            return override
+    return None
+
+
+def default_governor_db_path() -> str:
+    """Resolve the governor DB path (env override first, else ``~/.soup``)."""
+    try:
+        override = os.environ.get("SOUP_EDIT_GOVERNOR_DB")
+    except ValueError:
+        override = None
+    if override:
+        validated = _validate_governor_db_override(override)
+        if validated is not None:
+            return validated
+    return os.path.join(os.path.expanduser("~"), ".soup", "edit_governor.db")
+
+
+class EditGovernorStore:
+    """SQLite-backed persistence for per-base-model edit-governor state.
+
+    Single-connection. The DB path must stay under ``$HOME`` / ``$CWD`` /
+    ``$TMPDIR`` (containment) and must not be a pre-placed symlink (TOCTOU).
+    """
+
+    def __init__(self, path: str) -> None:
+        if not isinstance(path, str) or not path:
+            raise ValueError("path must be non-empty str")
+        if "\x00" in path:
+            raise ValueError("path must not contain null bytes")
+        if _validate_governor_db_override(path) is None:
+            raise ValueError(
+                f"path {os.path.basename(path)!r} must stay under "
+                "$HOME / $CWD / $TMPDIR"
+            )
+        parent = os.path.dirname(os.path.realpath(path)) or "."
+        os.makedirs(parent, exist_ok=True)
+        if os.path.lexists(path):
+            link_st = os.lstat(path)
+            if stat.S_ISLNK(link_st.st_mode):
+                raise ValueError("DB path is a symlink (TOCTOU defence)")
+        self._path = path
+        self._lock_path = path + ".lock"
+        self._conn = sqlite3.connect(path)
+        try:
+            self._conn.execute("PRAGMA journal_mode=WAL")
+            self._conn.execute("PRAGMA busy_timeout=5000")
+        except sqlite3.Error:
+            pass
+        self._conn.executescript(_GOVERNOR_SCHEMA_SQL)
+        if os.name != "nt":
+            try:
+                os.chmod(path, 0o600)
+            except OSError:
+                pass
+
+    def close(self) -> None:
+        self._conn.close()
+
+    def __enter__(self) -> "EditGovernorStore":
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+        self.close()
+
+    @contextmanager
+    def _cross_process_lock(self):
+        """Best-effort cross-process exclusive lock around get+upsert.
+
+        Mirrors ``namespace_pin.NamespacePinStore._cross_process_lock`` /
+        ``advise_history._append_with_lock``: ``fcntl.flock`` on POSIX,
+        ``msvcrt.locking`` on Windows, both on a separate ``<db>.lock``
+        sidecar. Falls through silently when locking is unavailable — WAL +
+        busy_timeout already serialise concurrent SQLite writers.
+        """
+        handle = None
+        kind: Optional[str] = None
+        try:
+            handle = open(self._lock_path, "a+")
+        except OSError:
+            handle = None
+        if handle is not None:
+            try:
+                if os.name == "nt":
+                    import msvcrt  # type: ignore[import-not-found]
+
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+                    kind = "nt"
+                else:
+                    import fcntl  # type: ignore[import-not-found]
+
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+                    kind = "posix"
+            except (ImportError, OSError):
+                kind = None
+        try:
+            yield
+        finally:
+            if handle is not None:
+                try:
+                    if kind == "nt":
+                        import msvcrt  # type: ignore[import-not-found]
+
+                        handle.seek(0)
+                        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+                    elif kind == "posix":
+                        import fcntl  # type: ignore[import-not-found]
+
+                        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                except (ImportError, OSError):
+                    pass
+                handle.close()
+
+    def get_state(self, base_model: str) -> Optional[dict]:
+        """Return the persisted governor snapshot dict for ``base_model``."""
+        if not isinstance(base_model, str) or not base_model:
+            raise ValueError("base_model must be non-empty str")
+        cur = self._conn.execute(
+            "SELECT base_model, edit_count, last_method, last_verdict, "
+            "last_norm_delta, max_sequential_edits "
+            "FROM edit_governors WHERE base_model = ?",
+            (base_model,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        return {
+            "base_model": row[0],
+            "edit_count": int(row[1]),
+            "last_method": row[2],
+            "last_verdict": row[3],
+            "last_norm_delta": float(row[4]),
+            "max_sequential_edits": int(row[5]),
+        }
+
+    def save_state(self, governor: "EditGovernor") -> None:
+        """Upsert a governor's state under the cross-process lock."""
+        if not isinstance(governor, EditGovernor):
+            raise TypeError("governor must be an EditGovernor")
+        with self._cross_process_lock():
+            self._conn.execute(
+                "INSERT OR REPLACE INTO edit_governors "
+                "(base_model, edit_count, last_method, last_verdict, "
+                "last_norm_delta, max_sequential_edits, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    governor.base_model,
+                    governor.edit_count,
+                    governor.last_method,
+                    governor.last_verdict,
+                    governor.last_norm_delta,
+                    governor.max_sequential_edits,
+                    _now_iso(),
+                ),
+            )
+            self._conn.commit()
+
+
+def save_governor(store: EditGovernorStore, governor: "EditGovernor") -> None:
+    """Persist a governor's state to ``store``."""
+    store.save_state(governor)
+
+
+def load_governor(
+    store: EditGovernorStore,
+    base_model: str,
+    *,
+    policy: Optional[NormBlowupPolicy] = None,
+    max_sequential_edits: int = 50,
+) -> "EditGovernor":
+    """Reconstruct an :class:`EditGovernor` for ``base_model`` from ``store``.
+
+    Returns a fresh governor (edit_count=0) when no prior state exists. When a
+    row is found, restores ``edit_count`` / ``last_method`` / ``last_verdict``
+    / ``last_norm_delta`` / ``max_sequential_edits`` so successive
+    ``soup edit set`` runs see the accumulated history.
+    """
+    state = store.get_state(base_model)
+    resolved_policy = policy if policy is not None else NormBlowupPolicy()
+    if state is None:
+        return EditGovernor(
+            base_model=base_model,
+            policy=resolved_policy,
+            max_sequential_edits=max_sequential_edits,
+        )
+    gov = EditGovernor(
+        base_model=base_model,
+        policy=resolved_policy,
+        max_sequential_edits=state["max_sequential_edits"],
+        edit_count=state["edit_count"],
+        last_method=state["last_method"],
+        last_verdict=state["last_verdict"],
+        last_norm_delta=state["last_norm_delta"],
+    )
+    return gov

@@ -148,15 +148,19 @@ class TestCodebookConfig:
 
 
 class TestApplyDeferred:
-    def test_deferred(self):
+    def test_returns_codebook(self):
+        # v0.71.9 #203 — apply_grace_codebook now returns an empty codebook.
         from soup_cli.utils.grace_codebook import (
+            GraceCodebook,
             apply_grace_codebook,
             build_grace_codebook_config,
         )
 
         cfg = build_grace_codebook_config(size=128, dim=768)
-        with pytest.raises(NotImplementedError, match="v0.62.1"):
-            apply_grace_codebook(cfg)
+        cb = apply_grace_codebook(cfg)
+        assert isinstance(cb, GraceCodebook)
+        assert len(cb) == 0
+        assert cb.config.dim == 768
 
     def test_apply_validates_config_type(self):
         from soup_cli.utils.grace_codebook import apply_grace_codebook
@@ -200,17 +204,27 @@ class TestEditMethodAllowlist:
         assert plan.method == "grace"
         assert plan.layer >= 0
 
-    def test_apply_grace_via_edit_path_deferred(self):
+    def test_apply_grace_via_edit_path_dispatches(self, monkeypatch):
+        # v0.71.9 #203 — apply_edit(grace) now dispatches to apply_grace_edit.
+        import soup_cli.utils.grace_codebook as gc
         from soup_cli.utils.knowledge_edit import apply_edit, build_edit_plan
 
         plan = build_edit_plan(
-            base="meta-llama/Llama-3.1-8B-Instruct",
+            base="sshleifer/tiny-gpt2",
             method="grace",
             subject="The capital of France is",
             target="Lyon",
         )
-        with pytest.raises(NotImplementedError, match="v0.62.1"):
-            apply_edit(plan)
+        called = {}
+
+        def _fake_grace_edit(p, **kwargs):
+            called["plan"] = p
+            return "RESULT"
+
+        monkeypatch.setattr(gc, "apply_grace_edit", _fake_grace_edit)
+        result = apply_edit(plan)
+        assert result == "RESULT"
+        assert called["plan"].method == "grace"
 
 
 # ---------- Schema integration ----------

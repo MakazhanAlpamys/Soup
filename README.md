@@ -49,20 +49,20 @@ infrastructure instead of improving models. Soup fixes that.
 
 ## What's New
 
-**v0.71.8 — Probes & SAE.** The activation-probe surfaces ship real weights, live SAE downloads,
-and an end-to-end capture → diff pipeline:
+**v0.71.9 — Knowledge edit + unlearn (live).** The surgical-edit and unlearning surfaces are now
+real, validated on SmolLM2-135M:
 
-- **`soup probe truth` / `soup probe harm`** — TruthfulQA-style honesty and HarmBench-style misuse
-  activation probes (6 bundled bases each, 5% / 20% verdict bands). `--weights` loads a real
-  calibrated probe; without it the bundled deterministic fallback is used.
-- **`soup probe sleeper --weights <w.npz|.npy|.safetensors>`** — load a real calibrated sleeper
-  probe direction instead of the synthetic fallback (cwd-contained, `allow_pickle=False`).
-- **`soup probe sae-diff <repo> --auto-download`** — fetch an allowlisted SAE from the HF Hub into
-  `~/.soup/sae-cache/` (validated before any network call) and diff pre/post activations.
-- **`soup probe interference --measure <eval.jsonl> --base-model <m> --adapter a=path ...`** —
-  auto-measure the N×N adapter-interference matrix by actually loading the base + each LoRA adapter.
-- **`soup train --capture-activations <layer> --capture-prompts <jsonl>`** — a post-training hook
-  writes an SAE-diff-ready per-token activation snapshot. Validated end-to-end on SmolLM2-135M.
+- **`soup edit set --method rome|memit|alphaedit`** — surgical rank-1 weight edit that patches one
+  fact without re-training. On a tiny model a ROME edit moved P("Lyon" | "The capital of France is")
+  from 0.0016 → 0.96. `--output` saves the edited model; `--governor` refuses edits after norm blowup.
+- **`soup edit diff --before-model <m> --after-model <m> --probes p.jsonl`** — generate completions
+  through both models and surface the probes whose output changed.
+- **`soup edit set --method grace`** — GRACE codebook edit: stores the fact in a discrete
+  (key, value) sidecar applied at decode time via a forward hook (survives thousands of edits).
+- **Sequential-edit governor persistence** — per-base-model edit count + verdict survive across
+  separate `soup edit set` runs (SQLite, cross-process-locked).
+- **`soup train --task unlearn`** — NPO / SimNPO / RMU unlearning from a `forget_set` (+ optional
+  `retain_set`); NPO/SimNPO drive the forget-set loss down while the retain set anchors capability.
 
 Full history: [CHANGELOG.md](CHANGELOG.md) &middot; [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 

@@ -20,7 +20,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Mapping, Optional
+from typing import TYPE_CHECKING, Mapping, Optional, Tuple
+
+if TYPE_CHECKING:  # pragma: no cover — type-only import, no runtime cost
+    from soup_cli.utils.edit_governor import EditGovernor
 
 SUPPORTED_EDIT_METHODS: frozenset[str] = frozenset(
     {"rome", "memit", "alphaedit", "grace"}
@@ -248,23 +251,122 @@ def build_edit_plan(
     )
 
 
-def apply_edit(plan: EditPlan) -> None:
-    """Apply a knowledge edit — deferred to v0.61.1 (or v0.62.1 for ``grace``).
+@dataclass(frozen=True)
+class EditResult:
+    """Outcome of a live :func:`apply_edit` call (v0.71.9 #194)."""
 
-    Re-validates the method so callers passing a bare-class duck-typed
-    plan (no ``EditPlan``) still hit a meaningful error before the
-    deferred-live raise. Mirrors v0.50.0 ``apply_variant_loss`` policy.
+    method: str
+    layer: int
+    norm_delta: float
+    layers_edited: Tuple[int, ...]
+    output_dir: Optional[str]
+    target_prob_before: float
+    target_prob_after: float
+    governed: bool
+
+
+def apply_edit(
+    plan: EditPlan,
+    *,
+    output_dir: Optional[str] = None,
+    governor: "Optional[EditGovernor]" = None,
+    device: Optional[str] = None,
+    trust_remote_code: bool = False,
+    grad_steps: int = 25,
+    lr: float = 0.5,
+) -> EditResult:
+    """Apply a knowledge edit live (v0.71.9 #194 / #197 / #203).
+
+    ROME / MEMIT / AlphaEdit run the rank-1 weight-edit kernel; ``grace``
+    builds a discrete codebook sidecar. When a ``governor`` is supplied it is
+    consulted automatically (#197): :meth:`EditGovernor.check_can_edit` runs
+    BEFORE the edit (raising :class:`GovernedEditError` on refusal) and
+    :meth:`EditGovernor.record_edit` runs AFTER with the measured norm delta.
+
+    Re-validates the method so callers passing a duck-typed plan still hit a
+    meaningful error before any model load. Returns an :class:`EditResult`.
     """
     method_attr = getattr(plan, "method", None)
     canonical = validate_edit_method(method_attr)
-    # GRACE was added in v0.62.0 Part E with its own live-wiring schedule.
-    target_version = "v0.62.1" if canonical == "grace" else "v0.61.1"
-    raise NotImplementedError(
-        f"apply_edit(method={canonical!r}) is deferred to {target_version}. "
-        "Schema accepts the request now so YAML / CLI invocations are "
-        "stable, but ROME / MEMIT / AlphaEdit / GRACE live kernels land "
-        "next release."
+
+    # #197: consult the governor BEFORE doing any work. A refusal must abort
+    # before we burn a model load.
+    if governor is not None:
+        governor.check_can_edit()
+
+    if canonical == "grace":
+        from soup_cli.utils.grace_codebook import apply_grace_edit
+
+        return apply_grace_edit(
+            plan,
+            output_dir=output_dir,
+            governor=governor,
+            device=device,
+            trust_remote_code=trust_remote_code,
+            grad_steps=grad_steps,
+            lr=lr,
+        )
+
+    from soup_cli.utils.edit_kernels import measure_target_prob, run_edit_kernel
+    from soup_cli.utils.live_eval import load_model_and_tokenizer
+
+    model, tokenizer, dev = load_model_and_tokenizer(
+        plan.base, device=device, trust_remote_code=trust_remote_code,
     )
+    prob_before = measure_target_prob(
+        model, tokenizer, subject=plan.subject, target=plan.target, device=dev,
+    )
+    kernel_result = run_edit_kernel(
+        model, tokenizer,
+        method=canonical, subject=plan.subject, target=plan.target,
+        layer=plan.layer, device=dev, grad_steps=grad_steps, lr=lr,
+    )
+    prob_after = measure_target_prob(
+        model, tokenizer, subject=plan.subject, target=plan.target, device=dev,
+    )
+
+    saved_dir: Optional[str] = None
+    if output_dir is not None:
+        saved_dir = _save_edited_model(model, tokenizer, output_dir)
+
+    # #197: record the completed edit (governor persists the norm delta +
+    # verdict so subsequent edits can be refused).
+    if governor is not None:
+        governor.record_edit(method=canonical, norm_delta=kernel_result.norm_delta)
+
+    return EditResult(
+        method=canonical,
+        layer=kernel_result.layer,
+        norm_delta=kernel_result.norm_delta,
+        layers_edited=kernel_result.layers_edited,
+        output_dir=saved_dir,
+        target_prob_before=prob_before,
+        target_prob_after=prob_after,
+        governed=governor is not None,
+    )
+
+
+def _save_edited_model(model: object, tokenizer: object, output_dir: str) -> str:
+    """Save an edited model + tokenizer to a cwd-contained ``output_dir``."""
+    import os
+    import stat
+
+    from soup_cli.utils.paths import is_under_cwd
+
+    if not isinstance(output_dir, str) or not output_dir:
+        raise ValueError("output_dir must be a non-empty string")
+    if "\x00" in output_dir:
+        raise ValueError("output_dir must not contain null bytes")
+    if not is_under_cwd(output_dir):
+        raise ValueError(f"output_dir must stay under cwd: {output_dir!r}")
+    # TOCTOU: reject a pre-placed symlink at output_dir (a symlinked dir would
+    # let save_pretrained write weights outside cwd despite is_under_cwd).
+    if os.path.lexists(output_dir) and stat.S_ISLNK(os.lstat(output_dir).st_mode):
+        raise ValueError("output_dir must not be a symlink")
+    os.makedirs(output_dir, exist_ok=True)
+    model.save_pretrained(output_dir)  # type: ignore[attr-defined]
+    tokenizer.save_pretrained(output_dir)  # type: ignore[attr-defined]
+    return output_dir
 
 
 def get_edit_method_spec(name: str) -> EditMethodSpec:

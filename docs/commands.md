@@ -168,8 +168,9 @@ soup can pack --entry-id <id> --out r.can --attest <statement.json>  Embed in-to
 soup audit-log tail / rotate  Tail / rotate the per-command HIPAA/SOC2 audit log (~/.soup/audit.jsonl)
 soup --no-audit-log <cmd> / SOUP_NO_AUDIT_LOG=1  Opt out of the per-command audit line
 soup eval unlearning <run-id> --benchmark tofu|muse|wmdp  Forget Quality + Model Utility + PrivLeak verdict
-soup edit set --base <m> --method rome|memit|alphaedit --subject "..." --target "..."  Surgical knowledge edit (--plan-only available)
-soup edit diff <before-run> <after-run> --probes p.jsonl  Knowledge-injection diff visualizer
+soup edit set --base <m> --method rome|memit|alphaedit|grace --subject "..." --target "..." [--output <dir>] [--device cpu] [--governor/--no-governor] [--registry-id <id>]  Live surgical knowledge edit (--plan-only available)
+soup edit diff <before-run> <after-run> --probes p.jsonl [--before-model <m> --after-model <m>]  Knowledge-injection diff (live before/after generation when both models given)
+soup train --task unlearn  NPO/SimNPO/RMU unlearning from data.forget_set (+ optional data.retain_set)
 soup ingest --source langfuse|langsmith|helicone|openpipe|otel|openai-stored --logs <jsonl>  Universal trace importer (6 SaaS adapters → normalised JSONL)
 soup prune-prompt --input <jsonl> --output <jsonl> --min-frequency 0.95  Detect + strip shared system-prompt prefix
 soup prune-prompt ... --tokenizer <id-or-path>  Tokenizer-aware prefix detection (decodes remaining ids, boundary-safe)

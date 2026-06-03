@@ -228,36 +228,53 @@ class TestSteerPlanOnlyMarker:
 
 
 class TestEditMarkerRegressionGuard:
+    # v0.71.9 #194/#203 — apply_edit is now LIVE. These guard that the
+    # ROME-family methods route through run_edit_kernel and grace routes
+    # through apply_grace_edit (mocked so no model load happens).
     @pytest.mark.parametrize("method", ["rome", "memit", "alphaedit"])
-    def test_legacy_methods_still_use_v0611_marker(self, method: str):
+    def test_legacy_methods_dispatch_to_kernel(self, method: str, monkeypatch):
+        import soup_cli.utils.edit_kernels as ek
+        import soup_cli.utils.live_eval as live_eval
         from soup_cli.utils.knowledge_edit import apply_edit, build_edit_plan
 
         plan = build_edit_plan(
-            base="meta-llama/Llama-3.1-8B-Instruct",
+            base="sshleifer/tiny-gpt2",
             method=method,
             subject="The capital of France is",
             target="Lyon",
         )
-        with pytest.raises(NotImplementedError, match="v0.61.1"):
-            apply_edit(plan)
+        seen = {}
 
-    def test_grace_uses_v0621_marker_distinct_from_v0611(self):
+        monkeypatch.setattr(
+            live_eval, "load_model_and_tokenizer",
+            lambda *a, **k: ("MODEL", "TOK", "cpu"),
+        )
+        monkeypatch.setattr(ek, "measure_target_prob", lambda *a, **k: 0.1)
+
+        def _fake_kernel(model, tok, *, method, **kwargs):
+            seen["method"] = method
+            return ek.EditKernelResult(
+                method=method, layer=5, norm_delta=0.5, layers_edited=(5,),
+            )
+
+        monkeypatch.setattr(ek, "run_edit_kernel", _fake_kernel)
+        result = apply_edit(plan)
+        assert seen["method"] == method
+        assert result.method == method
+        assert result.norm_delta == 0.5
+
+    def test_grace_dispatches_to_grace_edit(self, monkeypatch):
+        import soup_cli.utils.grace_codebook as gc
         from soup_cli.utils.knowledge_edit import apply_edit, build_edit_plan
 
         plan = build_edit_plan(
-            base="meta-llama/Llama-3.1-8B-Instruct",
+            base="sshleifer/tiny-gpt2",
             method="grace",
             subject="The capital of France is",
             target="Lyon",
         )
-        try:
-            apply_edit(plan)
-        except NotImplementedError as exc:
-            msg = str(exc)
-            assert "v0.62.1" in msg
-            assert "v0.61.1" not in msg
-        else:  # pragma: no cover - apply_edit must raise
-            pytest.fail("apply_edit should have raised NotImplementedError")
+        monkeypatch.setattr(gc, "apply_grace_edit", lambda p, **k: "GRACE_RESULT")
+        assert apply_edit(plan) == "GRACE_RESULT"
 
 
 # ---------- M1 — steering name 128-char boundary ----------

@@ -139,21 +139,26 @@ State lives in `.soup/loop.yaml` (atomic write, cwd-contained, symlink-rejected)
 Surgical factual patches WITHOUT a full fine-tuning loop. Hospital data team correcting a misattributed drug interaction, lab fixing a wrong historical date, security team responding to a hallucinated CVE — all one CLI invocation.
 
 ```bash
-# Plan-only mode validates the request + prints the resolved EditPlan + exits 0.
+# Live edit: optimises a residual + applies a rank-1 weight update, then saves.
 soup edit set \
-  --base meta-llama/Llama-3.1-8B-Instruct \
+  --base HuggingFaceTB/SmolLM2-135M \
   --method rome \
-  --subject "Paris is the capital of France" \
+  --subject "The capital of France is" \
   --target "Lyon" \
-  --plan-only
+  --output ./edited --device cuda
 
-# Diff what the model "knew" before vs after the edit.
-soup edit diff <run-id-before> <run-id-after> --probes probes.jsonl --output diff.json
+# Plan-only mode validates the request + prints the resolved EditPlan + exits 0.
+soup edit set --base ./model --method rome --subject "..." --target "..." --plan-only
+
+# Diff what the model says before vs after the edit (live generation).
+soup edit diff before after \
+  --before-model ./base --after-model ./edited \
+  --probes probes.jsonl --output diff.json
 ```
 
-Sequential edit governor auto-switches **ROME → AlphaEdit** at edit #10 (configurable) AND on detected norm-blowup (`||W - W_base||_F` over threshold). The governor refuses further edits past the per-base-model cap so a runaway script can't quietly corrupt your checkpoint.
+The kernels are a covariance-free (`C = I`) variant of the ROME family — well-defined, tractable on a 4 GB box, and validated on SmolLM2-135M (a ROME edit moved `P("Lyon" | "The capital of France is")` from 0.0016 → 0.96). **ROME** edits a single layer; **MEMIT** distributes the residual across a layer band; **AlphaEdit** projects the update orthogonal to the down-proj's top singular direction.
 
-The live ROME / MEMIT / AlphaEdit kernel + before/after generation in `edit diff` land in the next patch; `--plan-only` and the schema surface ship today so soup.yaml and CI invocations are stable.
+The sequential edit governor is persisted (SQLite, cross-process-locked, `SOUP_EDIT_GOVERNOR_DB` override) so the per-base-model edit count + norm-blowup verdict survive across separate `soup edit set` runs. `soup edit set` consults it automatically: it refuses BEFORE the model load past the per-base cap or after a BLOWUP verdict, and records the measured `||ΔW||_F` after each edit. Pass `--no-governor` to opt out. `--registry-id <id>` attaches the edited model (or GRACE codebook) into the Registry lineage.
 
 
 ## Activation Steering (`soup steer`)
@@ -197,7 +202,7 @@ training:
   grace_codebook_dim: 768      # residual-stream width
 ```
 
-`grace` joins the existing `rome` / `memit` / `alphaedit` allowlist on `soup edit set`; the v0.61.0 sequential edit governor still gates the call when the per-base-model edit count or norm-blowup verdict trips.
+`grace` joins the existing `rome` / `memit` / `alphaedit` allowlist on `soup edit set`; the sequential edit governor still gates the call when the per-base-model edit count or norm-blowup verdict trips. GRACE is live: `soup edit set --method grace --output ./ckpt` captures the residual key at the subject's last token, optimises a replacement value, and appends a `(key, value)` triple to a `grace_codebook.json` sidecar (atomic, cwd-contained). At inference the codebook is applied via a forward hook that substitutes the residual whenever it falls within an epsilon ball of a stored key — so the base weights are never modified and thousands of edits survive without norm blowup.
 
 
 ## Model Registry & Lineage

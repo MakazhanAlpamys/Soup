@@ -12,6 +12,53 @@ reproducing 70+ versions of notes.
 
 ## [Unreleased]
 
+## [0.71.9] - 2026-06-03
+
+### Added
+- **Knowledge edit + unlearn — live wiring** (closes #193, #194, #196, #197,
+  #203). The v0.61.0 / v0.62.0 schema-only stubs are now live, validated on
+  SmolLM2-135M.
+- **`soup edit set` (ROME / MEMIT / AlphaEdit) is live** (#194). New
+  `soup_cli/utils/edit_kernels.py` ships covariance-free rank-1 weight-edit
+  kernels: ROME (single-layer `W += δ·kᵀ/‖k‖²`), MEMIT (residual distributed
+  across a layer band), AlphaEdit (ROME update projected orthogonal to the
+  down-proj's top singular direction). `apply_edit` loads the model, optimises
+  the target residual, applies the rank-1 update, and optionally saves with
+  cwd-containment + symlink rejection. `--output`, `--device`, `--governor/
+  --no-governor` flags added. On a tiny model a ROME edit moved
+  `P("Lyon" | "The capital of France is")` from 0.0016 → 0.96.
+- **`soup edit diff` live before/after generation** (#194). Pass
+  `--before-model` + `--after-model` (+ `--probes`) to generate completions
+  through both models and surface the probes whose output changed.
+- **EditGovernor SQLite persistence + cross-process locking** (#196). New
+  `EditGovernorStore` (mirrors `namespace_pin.NamespacePinStore` —
+  $HOME/$CWD/$TMPDIR containment, TOCTOU symlink rejection, WAL +
+  busy_timeout, `fcntl`/`msvcrt` sidecar lock, POSIX 0600). `save_governor` /
+  `load_governor` / `default_governor_db_path` (env override
+  `SOUP_EDIT_GOVERNOR_DB`) persist per-base-model edit-count + verdict across
+  separate `soup edit set` runs.
+- **`apply_edit` consults the EditGovernor automatically** (#197). When a
+  governor is supplied, `check_can_edit()` runs BEFORE the model load (refusing
+  on norm blowup / edit cap) and `record_edit()` runs AFTER with the measured
+  Frobenius delta.
+- **Live GRACE codebook** (#203). `GraceCodebook` (epsilon-ball nearest-key
+  lookup), `apply_grace_edit` (captures a residual key + optimises a value +
+  appends to a codebook sidecar), `save_codebook` / `load_codebook` (atomic,
+  cwd-contained, symlink-rejected), `install_grace_hook` (decode-time residual
+  substitution). New `edited_model` / `grace_codebook` Registry artifact kinds.
+- **`soup train --task unlearn` is live (NPO / SimNPO / RMU)** (#193). New
+  `soup_cli/utils/unlearn_kernels.py` (NPO `(2/β)·mean(-logσ(-β(πlp-reflp)))`,
+  length-normalised SimNPO, RMU representation steering) + a self-contained
+  `UnlearnTrainerWrapper` loop loading a LoRA policy, a frozen reference
+  (NPO/RMU), and forget/retain JSONL datasets. NPO/SimNPO forget loss
+  decreased on the tiny-model smoke. Warns when run without a retain set.
+
+### Security
+- `_save_edited_model` / `UnlearnTrainerWrapper` output dirs + `save_codebook`
+  / `load_codebook` + `_load_unlearn_rows` enforce cwd-containment, raw-path
+  symlink rejection (TOCTOU), null-byte rejection, and file-size / per-line
+  caps. `apply_grace_edit` honours the governor for direct callers.
+
 ## [0.71.8] - 2026-06-03
 
 ### Added

@@ -142,11 +142,14 @@ class TestApplyUnlearnLoss:
         with pytest.raises(ValueError):
             apply_unlearn_loss("zzz")
 
-    def test_deferred_marker_present(self):
+    def test_returns_live_kernel(self):
+        # v0.71.9 #193 — apply_unlearn_loss now returns the live kernel.
+        from soup_cli.utils import unlearn_kernels
         from soup_cli.utils.unlearning import apply_unlearn_loss
 
-        with pytest.raises(NotImplementedError, match="v0.61.1"):
-            apply_unlearn_loss("npo")
+        assert apply_unlearn_loss("npo") is unlearn_kernels.npo_loss
+        assert apply_unlearn_loss("simnpo") is unlearn_kernels.simnpo_loss
+        assert apply_unlearn_loss("rmu") is unlearn_kernels.rmu_loss
 
 
 # ---------- build_unlearn_trainer (stub) ----------
@@ -175,14 +178,21 @@ class TestBuildUnlearnTrainer:
         wrapper = build_unlearn_trainer(cfg)
         assert isinstance(wrapper, UnlearnTrainerWrapper)
 
-    def test_kwargs_signature_allows_known(self):
+    def test_kwargs_signature_allows_known(self, monkeypatch):
         from soup_cli.utils.unlearning import build_unlearn_trainer
 
         cfg = self._make_cfg()
-        # Forward-compat kwargs accepted at construction time. Setup
-        # raises NotImplementedError per v0.61.1 stub contract.
+        # Forward-compat kwargs accepted at construction time. v0.71.9 #193:
+        # setup() is now LIVE — it loads a model. Prove that by monkeypatching
+        # the loader to a sentinel and asserting setup() invokes it.
         wrapper = build_unlearn_trainer(cfg, device="cpu", trust_remote_code=False)
-        with pytest.raises(NotImplementedError, match="v0.61.1"):
+        import soup_cli.utils.live_eval as live_eval
+
+        def _boom(*a, **k):
+            raise RuntimeError("LOAD_CALLED")
+
+        monkeypatch.setattr(live_eval, "load_model_and_tokenizer", _boom)
+        with pytest.raises(RuntimeError, match="LOAD_CALLED"):
             wrapper.setup()
 
     def test_invalid_config_rejected(self):
@@ -484,7 +494,8 @@ class TestUnlearnTrainerWrapper:
         with pytest.raises(RuntimeError, match="setup"):
             wrapper.train()
 
-    def test_setup_deferred(self):
+    def test_setup_loads_model(self, monkeypatch):
+        # v0.71.9 #193 — setup() is live; it loads a model + tokenizer.
         from soup_cli.config.schema import SoupConfig
         from soup_cli.trainer.unlearn import UnlearnTrainerWrapper
 
@@ -499,7 +510,13 @@ class TestUnlearnTrainerWrapper:
             training={"unlearn_method": "npo"},
         )
         wrapper = UnlearnTrainerWrapper(cfg)
-        with pytest.raises(NotImplementedError, match="v0.61.1"):
+        import soup_cli.utils.live_eval as live_eval
+
+        def _boom(*a, **k):
+            raise RuntimeError("LOAD_CALLED")
+
+        monkeypatch.setattr(live_eval, "load_model_and_tokenizer", _boom)
+        with pytest.raises(RuntimeError, match="LOAD_CALLED"):
             wrapper.setup()
 
     def test_method_attribute(self):

@@ -165,13 +165,19 @@ def build_diff_report(
     after_run_id: str,
     probe_file: Optional[str] = None,
     top_k: int = 10,
+    before_model: Optional[str] = None,
+    after_model: Optional[str] = None,
+    device: Optional[str] = None,
+    trust_remote_code: bool = False,
+    max_new_tokens: int = 32,
 ) -> DiffReport:
-    """Build a placeholder :class:`DiffReport`.
+    """Build a :class:`DiffReport`.
 
-    v0.61.0 returns an empty changes tuple when no probe file is
-    supplied, or a stub-marked tuple when probes are supplied (live
-    model invocation lands in v0.61.1). The shape is stable so callers
-    can wire this into CI today.
+    When ``before_model`` AND ``after_model`` (model paths or HF ids) are both
+    supplied alongside probes, the report is generated LIVE (v0.71.9 #194):
+    each probe prompt is run through both models and the report lists the
+    prompts whose greedy generation changed. Without model paths the report is
+    a placeholder (shape is stable; surfaces the probe count).
     """
     before = _validate_run_id(before_run_id, "before_run_id")
     after = _validate_run_id(after_run_id, "after_run_id")
@@ -187,21 +193,37 @@ def build_diff_report(
     if probe_file is not None:
         probes = load_probes(probe_file)
 
-    # v0.61.0: empty changes (live diff comes from real model
-    # generation in v0.61.1). Surface the probe count so operators
-    # see the shape works end-to-end.
+    from soup_cli import __version__
+
+    live = before_model is not None and after_model is not None and probes
+    if live:
+        changes = _generate_live_changes(
+            probes=probes,
+            before_model=before_model,  # type: ignore[arg-type]
+            after_model=after_model,  # type: ignore[arg-type]
+            top_k=k,
+            device=device,
+            trust_remote_code=trust_remote_code,
+            max_new_tokens=max_new_tokens,
+        )
+        return DiffReport(
+            before_run_id=before,
+            after_run_id=after,
+            changes=changes,
+            total_probes=len(probes),
+            soup_version=__version__,
+        )
+
+    # Placeholder path: empty/marked changes (no live model invocation).
     changes_placeholder = tuple(
         FactChange(
             prompt=p,
-            before="<v0.61.1 will generate>",
-            after="<v0.61.1 will generate>",
+            before="<supply --before-model + --after-model to generate>",
+            after="<supply --before-model + --after-model to generate>",
             changed=False,
         )
         for p in probes[:k]
     )
-
-    from soup_cli import __version__
-
     return DiffReport(
         before_run_id=before,
         after_run_id=after,
@@ -209,6 +231,53 @@ def build_diff_report(
         total_probes=len(probes),
         soup_version=__version__,
     )
+
+
+def _generate_live_changes(
+    *,
+    probes: Tuple[str, ...],
+    before_model: str,
+    after_model: str,
+    top_k: int,
+    device: Optional[str],
+    trust_remote_code: bool,
+    max_new_tokens: int,
+) -> Tuple[FactChange, ...]:
+    """Generate before/after completions for ``probes`` and return changes.
+
+    Loads each model once (reusing a shared generator), generates greedily for
+    every probe, and returns ``FactChange`` rows — changed rows first, capped
+    at ``top_k``.
+    """
+    from soup_cli.utils.live_eval import make_generator
+
+    before_gen = make_generator(
+        before_model,
+        device=device,
+        max_new_tokens=max_new_tokens,
+        trust_remote_code=trust_remote_code,
+    )
+    after_gen = make_generator(
+        after_model,
+        device=device,
+        max_new_tokens=max_new_tokens,
+        trust_remote_code=trust_remote_code,
+    )
+    rows: list[FactChange] = []
+    for prompt in probes:
+        before_out = before_gen(prompt).strip()
+        after_out = after_gen(prompt).strip()
+        rows.append(
+            FactChange(
+                prompt=prompt,
+                before=before_out,
+                after=after_out,
+                changed=before_out != after_out,
+            )
+        )
+    # Changed rows first, then unchanged; cap at top_k.
+    rows.sort(key=lambda c: (not c.changed,))
+    return tuple(rows[:top_k])
 
 
 def render_diff_table(report: DiffReport, console) -> None:
@@ -232,13 +301,13 @@ def render_diff_table(report: DiffReport, console) -> None:
     if not report.changes:
         table.add_row(
             "[dim]no probes supplied[/]",
-            "[dim](deferred)[/]",
-            "[dim](deferred)[/]",
+            "[dim]-[/]",
+            "[dim]-[/]",
             "[dim]-[/]",
         )
     else:
         for c in report.changes:
-            mark = "[yellow]?[/]"  # v0.61.0 — neither true nor false
+            mark = "[green]yes[/]" if c.changed else "[dim]no[/]"
             table.add_row(
                 escape(c.prompt),
                 escape(c.before),
@@ -246,9 +315,9 @@ def render_diff_table(report: DiffReport, console) -> None:
                 mark,
             )
     console.print(table)
+    n_changed = sum(1 for c in report.changes if c.changed)
     console.print(
-        f"[dim]Total probes: {report.total_probes}; live generation "
-        f"deferred to v0.61.1.[/]"
+        f"[dim]Total probes: {report.total_probes}; {n_changed} changed.[/]"
     )
 
 

@@ -904,6 +904,11 @@ def train(
         from soup_cli.trainer.classifier import ClassifierTrainerWrapper
 
         trainer_wrapper = ClassifierTrainerWrapper(cfg, **trainer_kwargs)
+    elif cfg.task == "unlearn":
+        # v0.71.9 #193 — NPO / SimNPO / RMU unlearning.
+        from soup_cli.trainer.unlearn import UnlearnTrainerWrapper
+
+        trainer_wrapper = UnlearnTrainerWrapper(cfg, **trainer_kwargs)
     else:
         trainer_wrapper = SFTTrainerWrapper(cfg, **trainer_kwargs)
     trainer_wrapper.setup(dataset)

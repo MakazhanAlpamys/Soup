@@ -228,14 +228,29 @@ class TestEditPlanFrozen:
 
 
 class TestApplyEdit:
-    def test_deferred(self):
-        from soup_cli.utils.knowledge_edit import apply_edit, build_edit_plan
+    def test_live_dispatch(self, monkeypatch):
+        # v0.71.9 #194 — apply_edit now runs the live kernel (mocked here).
+        import soup_cli.utils.edit_kernels as ek
+        import soup_cli.utils.live_eval as live_eval
+        from soup_cli.utils.knowledge_edit import EditResult, apply_edit, build_edit_plan
 
         plan = build_edit_plan(
             base="b", method="rome", subject="s", target="t",
         )
-        with pytest.raises(NotImplementedError, match="v0.61.1"):
-            apply_edit(plan)
+        monkeypatch.setattr(
+            live_eval, "load_model_and_tokenizer",
+            lambda *a, **k: ("M", "T", "cpu"),
+        )
+        monkeypatch.setattr(ek, "measure_target_prob", lambda *a, **k: 0.0)
+        monkeypatch.setattr(
+            ek, "run_edit_kernel",
+            lambda *a, **k: ek.EditKernelResult(
+                method="rome", layer=5, norm_delta=0.3, layers_edited=(5,),
+            ),
+        )
+        result = apply_edit(plan)
+        assert isinstance(result, EditResult)
+        assert result.method == "rome"
 
     def test_unknown_method_in_plan_short_circuits(self):
         from soup_cli.utils.knowledge_edit import apply_edit
@@ -292,7 +307,15 @@ class TestCli:
         ])
         assert result.exit_code != 0
 
-    def test_edit_set_apply_deferred(self):
+    def test_edit_set_apply_failure_exit2(self, monkeypatch):
+        # v0.71.9 #194 — apply_edit is live; a load/edit failure surfaces a
+        # friendly "Edit failed" error with exit 2 (NOT an unhandled crash).
+        import soup_cli.utils.knowledge_edit as ke
+
+        monkeypatch.setattr(
+            ke, "apply_edit",
+            lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom-load")),
+        )
         runner = CliRunner()
         result = runner.invoke(app, [
             "edit", "set",
@@ -300,13 +323,36 @@ class TestCli:
             "--method", "rome",
             "--subject", "Paris is the capital",
             "--target", "Lyon",
+            "--no-governor",
+            "--device", "cpu",
         ])
-        # Without --plan-only, the CLI invokes apply_edit which raises
-        # NotImplementedError. Exit code 3 (deferred, NOT validation
-        # failure which is exit 2). Review HIGH H5 — distinguishes
-        # "not yet shipped" from "validation rejection".
-        assert result.exit_code == 3
-        assert "v0.61.1" in result.output
+        assert result.exit_code == 2, result.output
+        assert "failed" in result.output.lower()
+
+    def test_edit_set_apply_success(self, monkeypatch):
+        # v0.71.9 #194 — successful live edit renders the result panel + exit 0.
+        import soup_cli.utils.knowledge_edit as ke
+        from soup_cli.utils.knowledge_edit import EditResult
+
+        monkeypatch.setattr(
+            ke, "apply_edit",
+            lambda *a, **k: EditResult(
+                method="rome", layer=5, norm_delta=0.42, layers_edited=(5,),
+                output_dir=None, target_prob_before=0.01, target_prob_after=0.9,
+                governed=False,
+            ),
+        )
+        runner = CliRunner()
+        result = runner.invoke(app, [
+            "edit", "set",
+            "--base", "test",
+            "--method", "rome",
+            "--subject", "Paris is the capital",
+            "--target", "Lyon",
+            "--no-governor",
+        ])
+        assert result.exit_code == 0, result.output
+        assert "applied" in result.output.lower()
 
     def test_edit_set_registry_id_null_byte_rejected(self):
         """Review HIGH H4 — null-byte in --registry-id."""

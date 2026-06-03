@@ -47,6 +47,9 @@ _VALID_KINDS = frozenset(
         "judge_calibration",
         # v0.71.4 #173 — adapter branch-pointer JSON files.
         "branch_ref",
+        # v0.71.9 #194/#203 — knowledge-edited models + GRACE codebooks.
+        "edited_model",
+        "grace_codebook",
     }
 )
 _VALID_RELATIONS = frozenset(

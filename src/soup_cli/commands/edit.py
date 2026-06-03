@@ -49,13 +49,25 @@ def set_edit(
         None, "--layer", "-l",
         help="MLP layer index to edit (defaults to method-specific recommended layer).",
     ),
+    output: Optional[str] = typer.Option(
+        None, "--output", "-o",
+        help="Directory to save the edited model / GRACE codebook (cwd-contained).",
+    ),
+    device: Optional[str] = typer.Option(
+        None, "--device",
+        help="torch device (cpu / cuda). Defaults to CUDA when available.",
+    ),
+    use_governor: bool = typer.Option(
+        True, "--governor/--no-governor",
+        help="Consult the sequential-edit governor (refuse on norm blowup).",
+    ),
     plan_only: bool = typer.Option(
         False, "--plan-only",
-        help="Print the resolved EditPlan and exit without applying (deferred to v0.61.1).",
+        help="Print the resolved EditPlan and exit without applying.",
     ),
     registry_id: Optional[str] = typer.Option(
         None, "--registry-id",
-        help="Optional Registry entry id to attach the edited model as a child (v0.61.1).",
+        help="Optional Registry entry id to attach the edited model as a child.",
     ),
 ) -> None:
     """Apply a single surgical knowledge edit."""
@@ -97,32 +109,103 @@ def set_edit(
     )
     console.print(Panel(body, title="EditPlan", border_style="cyan"))
 
-    if registry_id is not None:
-        console.print(
-            f"[dim]Will attach as Registry child of {escape(registry_id)} "
-            f"once v0.61.1 lands.[/]"
-        )
-
     if plan_only:
         console.print("[green]Plan-only mode — exiting without applying.[/]")
         return
 
-    # Live apply: raises NotImplementedError with explicit v0.61.1 marker.
-    # Exit code 3 distinguishes "deferred / not yet shipped" from "exit 2
-    # = validation rejection" (matches v0.56.0 diagnose strict-mode policy).
+    # Load a persisted governor so sequential edits across separate `soup edit
+    # set` runs accumulate (#196 / #197). Best-effort — a missing / unreadable
+    # governor DB never blocks an edit.
+    governor = None
+    store = None
+    if use_governor:
+        try:
+            from soup_cli.utils.edit_governor import (
+                EditGovernorStore,
+                default_governor_db_path,
+                load_governor,
+                save_governor,
+            )
+
+            store = EditGovernorStore(default_governor_db_path())
+            governor = load_governor(store, plan.base)
+        except (ValueError, OSError) as exc:
+            console.print(f"[dim]Governor disabled ({escape(str(exc))}).[/]")
+            governor = None
+            store = None
+
+    from soup_cli.utils.edit_governor import GovernedEditError
+
     try:
-        apply_edit(plan)
-    except NotImplementedError as exc:
+        result = apply_edit(
+            plan,
+            output_dir=output,
+            governor=governor,
+            device=device,
+        )
+    except GovernedEditError as exc:
         console.print(
             Panel(
-                f"[yellow]{escape(str(exc))}[/]\n\n"
-                f"Re-run with [bold]--plan-only[/] to validate the request "
-                f"and exit 0 until v0.61.1 lands the live kernel.",
-                title="Live edit deferred",
-                border_style="yellow",
+                f"[red]Edit refused by governor:[/] {escape(str(exc))}",
+                title="Sequential-edit governor",
+                border_style="red",
             )
         )
-        raise typer.Exit(3) from exc
+        if store is not None:
+            store.close()
+        raise typer.Exit(2) from exc
+    except (ValueError, RuntimeError, OSError) as exc:
+        console.print(f"[red]Edit failed:[/] {escape(str(exc))}")
+        if store is not None:
+            store.close()
+        raise typer.Exit(2) from exc
+
+    # Persist the updated governor state so the next edit sees the new count.
+    if governor is not None and store is not None:
+        try:
+            save_governor(store, governor)
+        except (ValueError, OSError):
+            pass
+        finally:
+            store.close()
+
+    console.print(
+        Panel(
+            f"[bold]Method:[/] {escape(result.method)}\n"
+            f"[bold]Layers edited:[/] {list(result.layers_edited)}\n"
+            f"[bold]Norm delta:[/] {result.norm_delta:.4f}\n"
+            f"[bold]Target prob:[/] {result.target_prob_before:.4f} -> "
+            f"{result.target_prob_after:.4f}\n"
+            + (
+                f"[bold]Saved:[/] {escape(result.output_dir)}\n"
+                if result.output_dir
+                else ""
+            )
+            + (
+                f"[bold]Governor:[/] count="
+                f"{governor.edit_count} verdict={escape(governor.last_verdict)}"
+                if governor is not None
+                else "[dim]Governor disabled.[/]"
+            ),
+            title="Edit applied",
+            border_style="green",
+        )
+    )
+
+    if registry_id is not None and result.output_dir is not None:
+        from soup_cli.registry.attach import attach_artifact
+
+        kind = "grace_codebook" if result.method == "grace" else "edited_model"
+        try:
+            attach_artifact(registry_id, path=result.output_dir, kind=kind)
+            console.print(
+                f"[green]Attached {kind} to Registry entry "
+                f"{escape(registry_id)}.[/]"
+            )
+        except (ValueError, FileNotFoundError) as exc:
+            console.print(
+                f"[yellow]Could not attach to Registry:[/] {escape(str(exc))}"
+            )
 
 
 @app.command(name="diff")
@@ -148,12 +231,25 @@ def diff_edit(
         10, "--top-k", "-k",
         help="Number of changed facts to surface (1-100).",
     ),
+    before_model: Optional[str] = typer.Option(
+        None, "--before-model",
+        help="Model path / HF id of the BEFORE model (enables live generation).",
+    ),
+    after_model: Optional[str] = typer.Option(
+        None, "--after-model",
+        help="Model path / HF id of the AFTER model (enables live generation).",
+    ),
+    device: Optional[str] = typer.Option(
+        None, "--device",
+        help="torch device (cpu / cuda). Defaults to CUDA when available.",
+    ),
 ) -> None:
     """Knowledge-injection diff: facts changed between before / after.
 
-    Schema-only in v0.61.0 — actual model loading + generation is the
-    v0.61.1 deliverable. This release validates inputs + renders a
-    placeholder diff table so the CLI surface is stable.
+    Pass both ``--before-model`` and ``--after-model`` (plus ``--probes``) to
+    generate the diff LIVE (v0.71.9 #194): each probe is run through both
+    models and changed completions are surfaced. Without model paths the
+    report is a validated placeholder.
     """
     from soup_cli.utils.edit_diff import build_diff_report, render_diff_table
 
@@ -163,6 +259,9 @@ def diff_edit(
             after_run_id=after,
             probe_file=probe_file,
             top_k=top_k,
+            before_model=before_model,
+            after_model=after_model,
+            device=device,
         )
     except (TypeError, ValueError, FileNotFoundError) as exc:
         console.print(f"[red]Cannot build diff:[/] {escape(str(exc))}")

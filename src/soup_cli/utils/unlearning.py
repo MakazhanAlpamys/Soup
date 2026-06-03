@@ -178,21 +178,25 @@ def validate_unlearn_compat(*, task: str, backend: str) -> None:
         )
 
 
-def apply_unlearn_loss(method: str) -> None:
-    """Compute the per-method unlearn loss — deferred to v0.61.1.
+def apply_unlearn_loss(method: str):
+    """Return the live per-method unlearn loss kernel (v0.71.9 #193).
 
-    Validates the method name first so the deferred-live error
-    distinguishes between "unknown method" and "method is on the
-    allowlist but not yet wired". Mirrors v0.50.0 ``apply_variant_loss``
-    stub-then-live policy.
+    Validates the method name first (unknown → ValueError) then returns the
+    callable from :mod:`soup_cli.utils.unlearn_kernels`:
+
+    * ``npo``    → ``npo_loss(policy_logps, ref_logps, *, beta)``
+    * ``simnpo`` → ``simnpo_loss(policy_logps, lengths, *, beta, gamma)``
+    * ``rmu``    → ``rmu_loss(forget_acts, control_vec, retain_acts,
+      retain_frozen, *, alpha)``
     """
     canonical = validate_unlearn_method(method)
-    raise NotImplementedError(
-        f"apply_unlearn_loss({canonical!r}) is deferred to v0.61.1. "
-        "Schema accepts the method now so callers can write soup.yaml "
-        "today, but the live NPO / SimNPO / RMU loss kernels land in "
-        "v0.61.1."
-    )
+    from soup_cli.utils import unlearn_kernels
+
+    return {
+        "npo": unlearn_kernels.npo_loss,
+        "simnpo": unlearn_kernels.simnpo_loss,
+        "rmu": unlearn_kernels.rmu_loss,
+    }[canonical]
 
 
 def build_unlearn_trainer(config: object, **kwargs: object) -> object:
