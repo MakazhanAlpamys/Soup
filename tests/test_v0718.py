@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import types
 
@@ -26,6 +27,18 @@ import pytest
 from typer.testing import CliRunner
 
 runner = CliRunner()
+
+
+def _clean_help(text: str) -> str:
+    """Strip ANSI + remove all whitespace so flag substrings survive CI color.
+
+    Under CI (``FORCE_COLOR``) Rich/Typer renders a long flag like
+    ``--auto-download`` with ANSI escapes between styled segments (the internal
+    hyphen is colorized separately) AND may line-wrap at the hyphen. Stripping
+    the escapes and removing every whitespace char concatenates the literal
+    flag back together (matches the v0.71.1 / test_v0717 pattern).
+    """
+    return re.sub(r"\s+", "", re.sub(r"\x1b\[[0-9;]*m", "", text))
 
 
 # ===========================================================================
@@ -504,7 +517,7 @@ class TestSleeperCli215:
 
         res = runner.invoke(app, ["sleeper", "--help"])
         assert res.exit_code == 0
-        clean = res.output.replace("\n", " ")
+        clean = _clean_help(res.output)
         assert "weights" in clean
 
 
@@ -675,7 +688,7 @@ class TestSaeDiffCli216:
 
         res = runner.invoke(app, ["sae-diff", "--help"])
         assert res.exit_code == 0
-        assert "auto-download" in res.output.replace("\n", " ")
+        assert "auto-download" in _clean_help(res.output)
 
     def test_auto_download_unknown_repo(self, tmp_path, monkeypatch) -> None:
         monkeypatch.chdir(tmp_path)
@@ -1004,7 +1017,7 @@ class TestInterferenceMeasureCli:
 
         res = runner.invoke(app, ["interference", "--help"])
         assert res.exit_code == 0
-        clean = res.output.replace("\n", " ")
+        clean = _clean_help(res.output)
         assert "measure" in clean
 
     def test_measure_requires_base_model(self, tmp_path, monkeypatch) -> None:
@@ -1032,7 +1045,7 @@ class TestInterferenceMeasureCli:
              "--adapter", "nope"],
         )
         assert res.exit_code == 2
-        assert "name=path" in res.output
+        assert "name=path" in _clean_help(res.output)
 
     def test_measure_missing_suite(self, tmp_path, monkeypatch) -> None:
         monkeypatch.chdir(tmp_path)
@@ -1278,7 +1291,7 @@ class TestTrainCaptureCli:
 
         res = runner.invoke(app, ["train", "--help"])
         assert res.exit_code == 0
-        clean = res.output.replace("\n", " ")
+        clean = _clean_help(res.output)
         assert "capture-activations" in clean
         assert "capture-prompts" in clean
 
