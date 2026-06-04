@@ -56,6 +56,30 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Install dependencies
         run: pip install -e ".[dev]"
+      - name: Warm HF Hub cache (tiny test models)
+        # Pre-download the tiny models the unit tests load, with retries, so a
+        # transient HF Hub 429 (Too Many Requests) on a single matrix cell does
+        # not red the whole run. Observed: ~5/7 cells download fine and ~2/7 hit
+        # a 429 — a retry loop reliably populates the cache so the tests then
+        # read from disk (no network). Never fails the job: if warming can't
+        # complete it emits a ::warning:: and lets the test step run as before.
+        shell: python
+        run: |
+          import time
+          from huggingface_hub import snapshot_download
+
+          models = ["sshleifer/tiny-gpt2", "hf-internal-testing/tiny-random-gpt2"]
+          for repo in models:
+              for attempt in range(1, 7):
+                  try:
+                      snapshot_download(repo)
+                      print(f"warmed {repo}")
+                      break
+                  except Exception as exc:  # noqa: BLE001 — best effort, never fail the job
+                      print(f"attempt {attempt}/6 for {repo} failed: {type(exc).__name__}: {exc}")
+                      time.sleep(min(5 * attempt, 30))
+              else:
+                  print(f"::warning title=HF cache::could not warm {repo} after 6 attempts")
       - name: Run unit tests with coverage
         run: pytest tests/ -v --tb=short --junitxml=report.xml --cov=soup_cli --cov-report=xml:coverage.xml --cov-report=term-missing:skip-covered
       - name: Upload coverage to Codecov
