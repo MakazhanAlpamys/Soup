@@ -332,11 +332,13 @@ class TestBuildEchoTrapCallbackDeferred:
         with pytest.raises(ValueError, match="bool"):
             build_echo_trap_callback(threshold=True)
 
-    def test_deferred(self):
-        from soup_cli.utils.echo_trap import build_echo_trap_callback
+    def test_live_returns_callback(self):
+        from soup_cli.utils.echo_trap import (
+            EchoTrapCallback,
+            build_echo_trap_callback,
+        )
 
-        with pytest.raises(NotImplementedError, match="v0.70.1"):
-            build_echo_trap_callback(threshold=0.5)
+        assert isinstance(build_echo_trap_callback(threshold=0.5), EchoTrapCallback)
 
     def test_halt_must_be_bool(self):
         from soup_cli.utils.echo_trap import build_echo_trap_callback

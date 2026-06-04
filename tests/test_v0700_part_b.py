@@ -235,7 +235,7 @@ class TestULDConfig:
 
 
 class TestBuildULDProjection:
-    """Deferred to v0.70.1 — validates config type then raises."""
+    """Live in v0.71.11 #236 — returns a ULDProjection; validates type."""
 
     def test_non_config_rejected(self):
         from soup_cli.utils.uld import build_uld_projection
@@ -243,16 +243,15 @@ class TestBuildULDProjection:
         with pytest.raises(TypeError, match="ULDConfig"):
             build_uld_projection({"strategy": "wasserstein"})  # type: ignore[arg-type]
 
-    def test_deferred_v0701(self):
-        from soup_cli.utils.uld import ULDConfig, build_uld_projection
+    def test_live_returns_projection(self):
+        from soup_cli.utils.uld import ULDConfig, ULDProjection, build_uld_projection
 
         cfg = ULDConfig(
             strategy="wasserstein",
             student_vocab_size=32000,
             teacher_vocab_size=128256,
         )
-        with pytest.raises(NotImplementedError, match="v0.70.1"):
-            build_uld_projection(cfg)
+        assert isinstance(build_uld_projection(cfg), ULDProjection)
 
 
 # ---------------------------------------------------------------------------

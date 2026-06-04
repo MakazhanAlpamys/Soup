@@ -35,7 +35,7 @@ from __future__ import annotations
 import math
 import types
 from dataclasses import dataclass
-from typing import Optional, Sequence
+from typing import Any, Optional, Sequence
 
 _MAX_DETECTOR_NAME_LEN = 32
 _MAX_RM_ENSEMBLE_SIZE = 32
@@ -316,34 +316,280 @@ class RewardHackReport:
             )
 
 
+def compute_separation_from_stats(reward_mean: object, reward_std: object) -> float:
+    """Cluster-separation proxy from logged reward mean + std.
+
+    Used by the live callback's ``on_log`` fallback path (e.g. PPO, or
+    GRPO when the reward-fn capture buffer is unavailable). Returns the
+    signal-to-noise ratio ``mean / sqrt(std^2 + eps)`` — high when rewards
+    are well-separated relative to their noise, drops when rewards bunch
+    up (the InfoRM reward-hacking signal).
+
+    Both inputs must be finite numbers (bool rejected). Non-finite or
+    negative std raises ``ValueError``.
+    """
+    if isinstance(reward_mean, bool) or isinstance(reward_std, bool):
+        raise ValueError("reward_mean / reward_std must not be bool")
+    if not isinstance(reward_mean, (int, float)) or not isinstance(
+        reward_std, (int, float)
+    ):
+        raise ValueError("reward_mean / reward_std must be numbers")
+    m = float(reward_mean)
+    s = float(reward_std)
+    if not math.isfinite(m) or not math.isfinite(s):
+        raise ValueError("reward_mean / reward_std must be finite")
+    if s < 0.0:
+        raise ValueError("reward_std must be non-negative")
+    return m / math.sqrt(s * s + _EPS)
+
+
+def _health_from_signal(detector: str, raw_signal: float) -> float:
+    """Map a raw detector signal to a 'health' value (higher = healthier).
+
+    - ``info_rm``: separation IS health (higher separation = healthier).
+    - ``rm_ensemble``: divergence rises when hacking, so health is
+      ``1 / (1 + divergence)`` ∈ (0, 1].
+    """
+    if detector == "rm_ensemble":
+        return 1.0 / (1.0 + max(0.0, raw_signal))
+    return max(0.0, raw_signal)
+
+
+def _get_trainer_callback_base():
+    """Lazy-resolve ``transformers.TrainerCallback`` (mirror v0.53.11).
+
+    Resolved at module-import-of-class time so a torch-less environment can
+    still import this utility module (falls back to ``object``).
+    """
+    try:
+        from transformers import TrainerCallback
+
+        return TrainerCallback
+    except ImportError:
+        return object
+
+
+_TrainerCallbackBase = _get_trainer_callback_base()
+
+
+class RewardHackCallback(_TrainerCallbackBase):  # type: ignore[misc, valid-type]
+    """Live HF TrainerCallback for the reward-hacking detector (v0.71.11 #235).
+
+    Reads the per-completion rewards a GRPO step produced (via the shared
+    :class:`~soup_cli.utils.rl_signal_buffer.RLSignalBuffer`) and tracks
+    whether the reward signal is degrading:
+
+    - ``info_rm``: splits the rewards top-half (good) / bottom-half (bad)
+      and computes the InfoRM cluster-separation. A drop from the
+      training-start baseline = the reward model losing its grip.
+    - ``rm_ensemble``: needs ≥2 reward functions; computes pairwise
+      variance across them. Rising disagreement = unreliable signal.
+
+    When no buffer is wired (e.g. PPO), it falls back to ``on_log`` reading
+    the ``reward`` / ``reward_std`` stats TRL logs.
+
+    Per-step health is surfaced to ``state.log_history`` so the v0.34.0
+    anomaly explainer can flag it. ``halt_on_hack`` sets
+    ``control.should_training_stop`` on a HACK verdict.
+    """
+
+    def __init__(
+        self,
+        *,
+        detector: str,
+        halt_on_hack: bool = True,
+        baseline_signal: Optional[float] = None,
+        buffer: Any = None,
+    ) -> None:
+        self.detector = validate_hack_detector(detector)
+        if not isinstance(halt_on_hack, bool):
+            raise TypeError(
+                f"halt_on_hack must be bool, got {type(halt_on_hack).__name__}"
+            )
+        self.halt_on_hack = halt_on_hack
+        if baseline_signal is not None:
+            if isinstance(baseline_signal, bool):
+                raise TypeError("baseline_signal must not be bool")
+            if not isinstance(baseline_signal, (int, float)):
+                raise TypeError("baseline_signal must be a number or None")
+            if (
+                not math.isfinite(float(baseline_signal))
+                or float(baseline_signal) < 0.0
+            ):
+                raise ValueError("baseline_signal must be finite and non-negative")
+            baseline_signal = float(baseline_signal)
+        self.buffer = buffer
+        # Health baselines are recorded on the first observed signal.
+        self._baseline_raw: Optional[float] = baseline_signal
+        self._baseline_health: Optional[float] = (
+            None
+            if baseline_signal is None
+            else _health_from_signal(self.detector, baseline_signal)
+        )
+        self._last_report: Optional[RewardHackReport] = None
+        self._hacks_seen = 0
+
+    # --- pure signal computation (testable without transformers) ---
+
+    def compute_signal(self, snapshot: dict) -> Optional[float]:
+        """Compute the raw detector signal from a buffer snapshot.
+
+        Returns ``None`` when there isn't enough data (e.g. fewer than 4
+        rewards for info_rm, or fewer than 2 reward functions for the
+        ensemble detector).
+        """
+        if self.detector == "rm_ensemble":
+            per_func = snapshot.get("per_func", {}) or {}
+            # Keep ONLY positions finite across EVERY RM so the per-prompt
+            # variance compares the same prompt across RMs (code-review LOW
+            # fix — per-column None-filtering would misalign prompts).
+            cols = [list(v) for v in per_func.values() if v]
+            if len(cols) < 2:
+                return None
+            n = min(len(c) for c in cols)
+            aligned: list[list[float]] = [[] for _ in cols]
+            for i in range(n):
+                row = [c[i] for c in cols]
+                if all(
+                    isinstance(v, (int, float))
+                    and not isinstance(v, bool)
+                    and math.isfinite(float(v))
+                    for v in row
+                ):
+                    for k, v in enumerate(row):
+                        aligned[k].append(float(v))
+            if not aligned[0]:
+                return None
+            return compute_rm_ensemble_divergence(aligned)
+        # info_rm: split into good / bad halves by sorted reward.
+        rewards = snapshot.get("rewards", []) or []
+        finite_rewards = [
+            float(v)
+            for v in rewards
+            if isinstance(v, (int, float))
+            and not isinstance(v, bool)
+            and math.isfinite(float(v))
+        ]
+        if len(finite_rewards) < 4:
+            return None
+        ordered = sorted(finite_rewards)
+        half = len(ordered) // 2
+        bad = ordered[:half]
+        good = ordered[half:]
+        if not bad or not good:
+            return None
+        return compute_cluster_separation(good, bad)
+
+    def observe_signal(self, raw_signal: float, step: int) -> RewardHackReport:
+        """Fold a raw signal into the running baseline + classify.
+
+        Records a baseline on the first positive health value, then
+        computes the relative drop in health and classifies it. Returns
+        the :class:`RewardHackReport`; the caller decides on halting.
+        """
+        health = _health_from_signal(self.detector, raw_signal)
+        if self._baseline_health is None and health > 0.0:
+            self._baseline_health = health
+            self._baseline_raw = raw_signal
+        base_health = self._baseline_health
+        if base_health is None or base_health <= 0.0:
+            drop_pct = 0.0
+        else:
+            drop_pct = max(0.0, (base_health - health) / base_health)
+        verdict = classify_hack_signal(drop_pct)
+        if verdict == "HACK":
+            self._hacks_seen += 1
+        report = RewardHackReport(
+            detector=self.detector,
+            signal=max(0.0, float(raw_signal)),
+            verdict=verdict,
+            step=max(0, int(step)),
+            baseline_signal=max(0.0, float(self._baseline_raw or raw_signal)),
+            details=(
+                f"detector={self.detector}",
+                f"health={health:.4f} baseline={base_health}",
+                f"drop_pct={drop_pct:.4f} verdict={verdict}",
+            ),
+        )
+        self._last_report = report
+        return report
+
+    def last_report(self) -> Optional[RewardHackReport]:
+        """Return the most recent :class:`RewardHackReport` (or None)."""
+        return self._last_report
+
+    # --- HF TrainerCallback surface ---
+
+    def _record(self, state, report: RewardHackReport, control):
+        log_history = getattr(state, "log_history", None)
+        if log_history is not None:
+            log_history.append({
+                "reward_hack_signal": report.signal,
+                "reward_hack_verdict": report.verdict,
+            })
+        if report.verdict == "HACK" and self.halt_on_hack and control is not None:
+            try:
+                control.should_training_stop = True
+            except Exception:  # noqa: BLE001 — never crash training
+                pass
+        return control
+
+    def on_step_end(self, args, state, control, **kwargs):
+        """Per-step probe — read the reward-fn capture buffer if present."""
+        if self.buffer is None:
+            return control
+        try:
+            snapshot = self.buffer.snapshot()
+            raw = self.compute_signal(snapshot)
+            if raw is None:
+                return control
+            step = int(getattr(state, "global_step", 0) or 0)
+            report = self.observe_signal(raw, step)
+            return self._record(state, report, control)
+        except Exception:  # noqa: BLE001 — instrumentation must never crash
+            return control
+
+    def on_log(self, args, state, control, logs=None, **kwargs):
+        """Fallback probe — when no buffer is wired, use logged reward stats.
+
+        info_rm only (rm_ensemble needs per-function rewards). Reads
+        ``reward`` / ``reward_std`` (TRL GRPO + TRL PPO both log these).
+        """
+        if self.buffer is not None or self.detector != "info_rm":
+            return control
+        if not isinstance(logs, dict):
+            return control
+        mean = logs.get("reward")
+        std = logs.get("reward_std", 0.0)
+        if not isinstance(mean, (int, float)) or isinstance(mean, bool):
+            return control
+        if not isinstance(std, (int, float)) or isinstance(std, bool):
+            std = 0.0
+        try:
+            raw = compute_separation_from_stats(mean, std)
+        except ValueError:
+            return control
+        step = int(getattr(state, "global_step", 0) or 0)
+        report = self.observe_signal(raw, step)
+        return self._record(state, report, control)
+
+
 def build_reward_hack_callback(
     *,
     detector: str,
     halt_on_hack: bool = True,
     baseline_signal: Optional[float] = None,
-):
-    """Live HF Trainer callback factory — deferred to v0.70.1.
+    buffer: Any = None,
+) -> "RewardHackCallback":
+    """Build the live reward-hacking HF Trainer callback (v0.71.11 #235).
 
-    Validates inputs at construction time so misconfigured runs fail
-    fast even though the live callback is not yet wired. Raises
-    ``NotImplementedError`` with explicit v0.70.1 marker after
-    validation (mirrors v0.50.0 ``apply_variant_loss`` / v0.61.0
-    ``apply_unlearn_loss`` policy).
+    Lifts the v0.70.0 ``NotImplementedError`` stub. Validates every input
+    at the public boundary (mirrors v0.50.0 / v0.61.0 fail-fast policy),
+    then returns a :class:`RewardHackCallback`.
     """
-    # Validation order: name first (cheap, allowlist) then bool guard.
-    validate_hack_detector(detector)
-    if not isinstance(halt_on_hack, bool):
-        raise TypeError(
-            f"halt_on_hack must be bool, got {type(halt_on_hack).__name__}"
-        )
-    if baseline_signal is not None:
-        if isinstance(baseline_signal, bool):
-            raise TypeError("baseline_signal must not be bool")
-        if not isinstance(baseline_signal, (int, float)):
-            raise TypeError("baseline_signal must be a number or None")
-        if not math.isfinite(float(baseline_signal)) or float(baseline_signal) < 0.0:
-            raise ValueError("baseline_signal must be finite and non-negative")
-    raise NotImplementedError(
-        f"Live reward-hack callback for detector={detector!r} is deferred to "
-        "v0.70.1. v0.70.0 ships the schema + math kernels only."
+    return RewardHackCallback(
+        detector=detector,
+        halt_on_hack=halt_on_hack,
+        baseline_signal=baseline_signal,
+        buffer=buffer,
     )

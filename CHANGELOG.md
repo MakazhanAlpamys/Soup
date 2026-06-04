@@ -12,6 +12,58 @@ reproducing 70+ versions of notes.
 
 ## [Unreleased]
 
+## [0.71.11] - 2026-06-04
+
+### Added
+- **GRPO / RL callbacks — live wiring** (closes #235, #236, #237, #238, #239,
+  #240, #159, #160). The reward-hacking, cross-tokenizer distillation, MiniLLM,
+  mid-epoch RL checkpoint, iterative-DPO and echo-trap surfaces that shipped
+  schema-only in v0.70.0 are now real, validated end-to-end on SmolLM2-135M.
+- **Reward-hacking detector is live** (#235). `--reward-hack-detector
+  info_rm|rm_ensemble` now installs a GRPO `TrainerCallback` that reads the
+  per-step rewards (via a shared, thread-safe reward-fn capture buffer),
+  computes an InfoRM cluster-separation drop (`info_rm`) or RM-ensemble
+  divergence (`rm_ensemble`), classifies OK/WARN/HACK, logs the verdict to
+  `state.log_history`, and halts training on HACK when `--reward-hack-halt` is
+  set. `rm_ensemble` requires ≥2 reward functions.
+- **Cross-tokenizer ULD distillation is live** (#236). `task: distill` with
+  `--uld-strategy wasserstein|topk_align` now computes a real Wasserstein-1
+  (sorted-CDF) or top-k-aligned distillation loss inside the distill trainer,
+  handling student/teacher vocab-size mismatch by clamping teacher ids to the
+  teacher vocab.
+- **MiniLLM reverse-KL distillation is live** (#237). `--minillm-enabled` adds
+  a teacher-mixed, length-normalised reverse-KL term plus an optional
+  pretrain-anchor SFT term (`--minillm-pretrain-anchor-path` /
+  `--minillm-pretrain-anchor-weight`) that keeps the student near coherent
+  language. The anchor corpus reader is cwd-contained + symlink-rejecting with
+  a per-line byte cap.
+- **Mid-epoch RL checkpoint is live** (#238). `--rl-checkpoint-save-every-steps
+  N` writes a real adapter + optimizer state + JSON manifest every N steps
+  during PPO/GRPO and prunes to `--rl-checkpoint-keep-last`, so a long RL run
+  survives a crash without losing the optimizer momentum.
+- **`soup iterative-dpo` orchestrator is live** (#239). Runs the full
+  sample → reward-score → build-pairs → DPO-train loop across rounds: each
+  round samples completions from the previous round's adapter, the next round
+  trains a fresh LoRA from the base on that round's harvested pairs.
+  `--plan-only` still renders the plan without running.
+- **Echo-trap detector is live** (#240). `--echo-trap-enabled` installs a GRPO
+  callback that scores per-trajectory n-gram repetition, classifies
+  OK/WARN/TRAP against `--echo-trap-threshold`, logs the verdict, and halts on
+  TRAP when `--echo-trap-halt` is set (catches RAGEN-style degenerate
+  repetition in multi-turn agent RL).
+- **GRPO variant fallback now warns once** (#159). When a `--grpo-variant`
+  custom `compute_loss` falls back to the base trainer (because the installed
+  TRL renamed the loss inputs), the trainer logs a one-shot WARNING instead of
+  silently degrading to the default objective.
+
+### Changed
+- **GRPO reference-model EMA no longer materialises full state dicts** (#160).
+  `--ref-model-ema-alpha` now updates the reference model in place by iterating
+  `named_parameters()` (`ref = (1-α)·ref + α·policy`), eliminating the three
+  model-sized allocations per step the v0.53.11 path made. A total
+  name/shape-mismatch (0 shared parameters) logs a one-shot WARNING so a
+  misconfigured EMA can't silently no-op.
+
 ## [0.71.10] - 2026-06-03
 
 ### Added

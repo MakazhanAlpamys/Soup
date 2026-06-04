@@ -23,14 +23,18 @@ Security:
 
 from __future__ import annotations
 
+import json
+import os
 from dataclasses import dataclass
-from typing import Tuple
+from typing import Any, Callable, Optional, Tuple
 
 _MIN_ROUNDS = 1
 _MAX_ROUNDS = 100
 _MIN_PAIRS_PER_ROUND = 10
 _MAX_PAIRS_PER_ROUND = 1_000_000
 _MAX_PATH_LEN = 4096
+_MAX_PROMPT_ROWS = 1_000_000
+_MAX_ROW_BYTES = 1_000_000
 
 
 def validate_rounds(value: object) -> int:
@@ -80,6 +84,10 @@ def _check_path(value: object, field: str) -> str:
         raise ValueError(f"{field} must be non-empty")
     if "\x00" in value:
         raise ValueError(f"{field} must not contain null bytes")
+    # Reject newlines / CR / tab so a crafted base_model / path cannot inject
+    # extra keys into the round YAML the runner renders (security review HIGH).
+    if any(c in value for c in ("\n", "\r", "\t")):
+        raise ValueError(f"{field} must not contain newline / tab characters")
     if len(value) > _MAX_PATH_LEN:
         raise ValueError(f"{field} exceeds {_MAX_PATH_LEN} chars")
     return value
@@ -198,18 +206,299 @@ def build_iterative_dpo_plan(
     )
 
 
-def run_iterative_dpo(plan):
-    """Execute the iterative-DPO loop. Deferred to v0.70.1.
+@dataclass(frozen=True)
+class IterativeDPOResult:
+    """Frozen result of a completed iterative-DPO run.
 
-    Validates plan type at the public boundary so misconfigured callers
-    fail fast (mirrors v0.50.0 / v0.62.0 / v0.67.0 / v0.69.0 deferred-live
-    policy).
+    - ``rounds_completed``: number of rounds that ran end-to-end.
+    - ``final_adapter``: adapter path of the last completed round.
+    - ``per_round_pairs``: tuple of pair counts actually written per round.
+    """
+
+    rounds_completed: int
+    final_adapter: str
+    per_round_pairs: Tuple[int, ...]
+
+
+def _load_prompts(path: str) -> list[str]:
+    """Read prompt strings from a cwd-contained JSONL file.
+
+    Accepts ``{"prompt": "..."}`` / ``{"prompt": [messages]}`` /
+    ``{"messages": [...]}`` shapes; falls back to the raw line. Cwd
+    containment + symlink rejection + DoS caps (security review MEDIUM).
+    """
+    from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
+
+    real = enforce_under_cwd_and_no_symlink(path, "prompts_path")
+    out: list[str] = []
+    seen = 0
+    with open(real, encoding="utf-8") as fh:
+        for line in fh:
+            seen += 1
+            if seen > _MAX_PROMPT_ROWS:
+                break
+            line = line.strip()
+            if not line or len(line) > _MAX_ROW_BYTES:
+                continue
+            try:
+                obj = json.loads(line)
+            except ValueError:
+                out.append(line)
+                continue
+            if isinstance(obj, dict):
+                prompt = obj.get("prompt")
+                if isinstance(prompt, str):
+                    out.append(prompt)
+                elif isinstance(prompt, list):
+                    out.append(_messages_to_text(prompt))
+                elif "messages" in obj:
+                    out.append(_messages_to_text(obj["messages"]))
+                elif "instruction" in obj:
+                    out.append(str(obj["instruction"]))
+    return out
+
+
+def _messages_to_text(messages: Any) -> str:
+    parts: list[str] = []
+    if isinstance(messages, list):
+        for m in messages:
+            if isinstance(m, dict) and m.get("role") != "assistant":
+                parts.append(str(m.get("content", "")))
+    return "\n".join(parts)
+
+
+def build_pairs_from_scored(
+    scored: list[tuple[str, float]],
+) -> Optional[tuple[str, str]]:
+    """Pick (chosen, rejected) from a list of (completion, score).
+
+    Chosen = highest score, rejected = lowest. Returns ``None`` when there
+    are fewer than 2 distinct-scored completions (no usable pair).
+    """
+    if len(scored) < 2:
+        return None
+    ordered = sorted(scored, key=lambda t: t[1])
+    rejected, r_score = ordered[0]
+    chosen, c_score = ordered[-1]
+    if c_score <= r_score:
+        return None
+    return chosen, rejected
+
+
+def _write_pairs_jsonl(pairs: list[tuple[str, str, str]], path: str) -> int:
+    """Atomically write (prompt, chosen, rejected) rows; returns the count."""
+    from soup_cli.utils.paths import atomic_write_text
+
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    lines = []
+    for prompt, chosen, rejected in pairs:
+        lines.append(
+            json.dumps(
+                {"prompt": prompt, "chosen": chosen, "rejected": rejected}
+            )
+        )
+    atomic_write_text("\n".join(lines) + ("\n" if lines else ""), path)
+    return len(pairs)
+
+
+def _default_sample_fn(
+    *,
+    base_model: str,
+    adapter_path: Optional[str],
+    prompts: list[str],
+    num_samples: int,
+    max_new_tokens: int,
+    device: Optional[str],
+) -> list[list[str]]:
+    """Generate ``num_samples`` completions per prompt (default seam).
+
+    Round 0 samples from ``base_model``; later rounds load the previous
+    round's LoRA adapter on top of the base via PEFT (the adapter dir is
+    NOT a standalone model — code-review HIGH fix).
+    """
+    import torch
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    tok = AutoTokenizer.from_pretrained(base_model)
+    if tok.pad_token is None:
+        tok.pad_token = tok.eos_token
+    dev = device or ("cuda" if torch.cuda.is_available() else "cpu")
+    model = AutoModelForCausalLM.from_pretrained(base_model).to(dev)
+    if adapter_path is not None:
+        from peft import PeftModel
+
+        model = PeftModel.from_pretrained(model, adapter_path).to(dev)
+    model.eval()
+    out: list[list[str]] = []
+    for prompt in prompts:
+        enc = tok(prompt, return_tensors="pt").to(dev)
+        completions: list[str] = []
+        with torch.no_grad():
+            gen = model.generate(
+                **enc,
+                do_sample=True,
+                num_return_sequences=num_samples,
+                max_new_tokens=max_new_tokens,
+                pad_token_id=tok.pad_token_id,
+            )
+        prompt_len = enc["input_ids"].shape[1]
+        for seq in gen:
+            completions.append(
+                tok.decode(seq[prompt_len:], skip_special_tokens=True)
+            )
+        out.append(completions)
+    return out
+
+
+def _default_score_fn(
+    *,
+    reward_model: str,
+    prompt: str,
+    completions: list[str],
+    device: Optional[str],
+) -> list[float]:
+    """Score completions with a sequence-classification reward model."""
+    import torch
+    from transformers import AutoModelForSequenceClassification, AutoTokenizer
+
+    tok = AutoTokenizer.from_pretrained(reward_model)
+    if tok.pad_token is None:
+        tok.pad_token = tok.eos_token
+    dev = device or ("cuda" if torch.cuda.is_available() else "cpu")
+    rm = AutoModelForSequenceClassification.from_pretrained(reward_model).to(dev)
+    rm.eval()
+    scores: list[float] = []
+    with torch.no_grad():
+        for completion in completions:
+            enc = tok(
+                prompt, completion, return_tensors="pt", truncation=True
+            ).to(dev)
+            logits = rm(**enc).logits
+            scores.append(float(logits.reshape(-1)[0]))
+    return scores
+
+
+def _default_train_fn(
+    *,
+    base_model: str,
+    pairs_path: str,
+    adapter_path: str,
+) -> None:
+    """Run a DPO round via a ``soup train`` subprocess (no shell).
+
+    Each round trains a fresh LoRA from ``base_model`` (always the plan's
+    base, never a prior adapter dir — code-review HIGH fix) on the round's
+    pairs. The YAML is rendered via ``yaml.safe_dump`` so no value can
+    inject extra keys (security review HIGH).
+    """
+    import subprocess
+    import sys
+    import tempfile
+
+    import yaml
+
+    yaml_text = yaml.safe_dump(
+        {
+            "base": base_model,
+            "task": "dpo",
+            "data": {"train": pairs_path, "format": "dpo", "max_length": 256},
+            "training": {"epochs": 1, "batch_size": 1},
+            "output": {"dir": adapter_path},
+        },
+        default_flow_style=False,
+        sort_keys=False,
+    )
+    fd, tmp_yaml = tempfile.mkstemp(suffix=".yaml", prefix=".soup_idpo_", dir=os.getcwd())
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(yaml_text)
+        subprocess.run(  # noqa: S603 — argv list, no shell
+            [sys.executable, "-m", "soup_cli.cli", "train", "--config", tmp_yaml, "--yes"],
+            check=True,
+        )
+    finally:
+        try:
+            os.remove(tmp_yaml)
+        except OSError:
+            pass
+
+
+def run_iterative_dpo(
+    plan,
+    *,
+    sample_fn: Optional[Callable] = None,
+    score_fn: Optional[Callable] = None,
+    train_fn: Optional[Callable] = None,
+    num_samples: int = 4,
+    max_new_tokens: int = 64,
+    device: Optional[str] = None,
+) -> IterativeDPOResult:
+    """Execute the iterative-DPO loop (v0.71.11 #239).
+
+    For each round: sample completions from the current model, RM-score
+    them, build (chosen, rejected) pairs, write them, then run a DPO
+    round to produce the round's adapter. The next round samples from the
+    previous adapter.
+
+    The ``sample_fn`` / ``score_fn`` / ``train_fn`` seams default to real
+    implementations (load model + generate / load RM + score / subprocess
+    ``soup train``); tests inject fast fakes.
     """
     if not isinstance(plan, IterativeDPOPlan):
         raise TypeError(
             f"plan must be IterativeDPOPlan, got {type(plan).__name__}"
         )
-    raise NotImplementedError(
-        "Live iterative-DPO loop runner is deferred to v0.70.1. "
-        "v0.70.0 ships the schema + plan-only renderer only."
+    sample_fn = sample_fn or _default_sample_fn
+    score_fn = score_fn or _default_score_fn
+    train_fn = train_fn or _default_train_fn
+
+    # ``sample_adapter`` is the LoRA the current policy is sampling from:
+    # None on round 0 (sample from base), then the previous round's adapter.
+    # Training always starts from ``plan.base_model`` (a fresh LoRA per
+    # round) — the round's pairs carry the improvement signal. This keeps
+    # the default seams from ever treating an adapter dir as a full model.
+    sample_adapter: Optional[str] = None
+    per_round: list[int] = []
+    final_adapter = plan.base_model
+    rounds_completed = 0
+
+    for rnd in plan.rounds:
+        prompts = _load_prompts(rnd.prompts_path)
+        sampled = sample_fn(
+            base_model=plan.base_model,
+            adapter_path=sample_adapter,
+            prompts=prompts,
+            num_samples=num_samples,
+            max_new_tokens=max_new_tokens,
+            device=device,
+        )
+        pairs: list[tuple[str, str, str]] = []
+        for prompt, completions in zip(prompts, sampled):
+            scores = score_fn(
+                reward_model=plan.reward_model,
+                prompt=prompt,
+                completions=list(completions),
+                device=device,
+            )
+            scored = list(zip(completions, scores))
+            picked = build_pairs_from_scored(scored)
+            if picked is not None:
+                pairs.append((prompt, picked[0], picked[1]))
+            if len(pairs) >= rnd.pairs_count:
+                break
+        written = _write_pairs_jsonl(pairs, rnd.pairs_path)
+        per_round.append(written)
+        train_fn(
+            base_model=plan.base_model,
+            pairs_path=rnd.pairs_path,
+            adapter_path=rnd.adapter_path,
+        )
+        sample_adapter = rnd.adapter_path
+        final_adapter = rnd.adapter_path
+        rounds_completed += 1
+
+    return IterativeDPOResult(
+        rounds_completed=rounds_completed,
+        final_adapter=final_adapter,
+        per_round_pairs=tuple(per_round),
     )

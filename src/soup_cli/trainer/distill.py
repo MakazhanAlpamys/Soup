@@ -238,20 +238,62 @@ class DistillTrainerWrapper:
         for p in self.teacher.parameters():
             p.requires_grad_(False)
 
-        # Cross-tokenizer distillation is not supported — vocab sizes must
-        # match so KL between logit distributions is well-defined.
+        # v0.71.11 #236 — cross-tokenizer ULD projection. When uld_strategy
+        # is set, a vocab-size mismatch is EXPECTED (that's the whole point)
+        # and the ULD loss handles it; otherwise vocab sizes must match so
+        # the column-wise KL is well-defined.
         teacher_vocab = getattr(self.teacher.config, "vocab_size", None)
         student_vocab = getattr(self.model.config, "vocab_size", None)
-        if (
+        uld_projection = None
+        if tcfg.uld_strategy is not None:
+            from soup_cli.utils.uld import ULDConfig, build_uld_projection
+
+            uld_projection = build_uld_projection(
+                ULDConfig(
+                    strategy=tcfg.uld_strategy,
+                    student_vocab_size=int(student_vocab or 32000),
+                    teacher_vocab_size=int(teacher_vocab or 32000),
+                    top_k=tcfg.uld_top_k,
+                )
+            )
+            console.print(
+                f"[green]Cross-tokenizer ULD enabled[/] "
+                f"(strategy={tcfg.uld_strategy})"
+            )
+        elif (
             teacher_vocab is not None
             and student_vocab is not None
             and teacher_vocab != student_vocab
         ):
             raise ValueError(
                 f"Teacher vocab size ({teacher_vocab}) != student vocab "
-                f"size ({student_vocab}). Cross-tokenizer distillation is "
-                "not supported in v0.53.2; use a teacher that shares the "
-                "student tokenizer family."
+                f"size ({student_vocab}). Cross-tokenizer distillation needs "
+                "training.uld_strategy (wasserstein / topk_align); use a "
+                "teacher that shares the student tokenizer family, or set "
+                "uld_strategy."
+            )
+
+        # v0.71.11 #237 — MiniLLM on-policy distillation modifier.
+        minillm_cb = None
+        if tcfg.minillm_enabled:
+            from soup_cli.utils.minillm import MiniLLMConfig, build_minillm_callback
+
+            minillm_cb = build_minillm_callback(
+                MiniLLMConfig(
+                    teacher_mix_ratio=float(tcfg.minillm_teacher_mix_ratio),
+                    length_normalize=bool(tcfg.minillm_length_normalize),
+                    pretrain_anchor_weight=float(
+                        tcfg.minillm_pretrain_anchor_weight
+                    ),
+                    pretrain_anchor_path=tcfg.minillm_pretrain_anchor_path,
+                ),
+                tokenizer=self.tokenizer,
+                temperature=temperature,
+            )
+            console.print(
+                f"[green]MiniLLM distillation enabled[/] "
+                f"(teacher_mix={tcfg.minillm_teacher_mix_ratio}, "
+                f"anchor={tcfg.minillm_pretrain_anchor_weight})"
             )
 
         # Dataset prep — reuse the SFT formatter so distill sees
@@ -308,6 +350,9 @@ class DistillTrainerWrapper:
         )
 
         teacher_ref = self.teacher
+        _teacher_vocab = teacher_vocab
+        _uld_projection = uld_projection
+        _minillm_cb = minillm_cb
 
         class _DistillTrainer(Trainer):
             def compute_loss(
@@ -347,14 +392,43 @@ class DistillTrainerWrapper:
                     for k, v in inputs.items()
                     if k != "labels"
                 }
+                # v0.71.11 #236 — when ULD bridges different vocabs, clamp the
+                # student token ids to the teacher's range so the (possibly
+                # smaller) teacher embedding never index-errors.
+                if (
+                    _uld_projection is not None
+                    and _teacher_vocab is not None
+                    and "input_ids" in teacher_inputs
+                ):
+                    teacher_inputs["input_ids"] = teacher_inputs[
+                        "input_ids"
+                    ].clamp(max=int(_teacher_vocab) - 1)
                 with torch.no_grad():
                     teacher_out = teacher_ref(**teacher_inputs)
                     teacher_logits = teacher_out.logits.to(student_logits.device)
 
-                distill_loss = _compute_distill_term(
-                    student_logits, teacher_logits, divergence, temperature
-                )
+                anchor = None
+                if _uld_projection is not None:
+                    # v0.71.11 #236 — cross-tokenizer ULD distillation loss.
+                    distill_loss = _uld_projection(
+                        student_logits,
+                        teacher_logits,
+                        attention_mask=inputs.get("attention_mask"),
+                    )
+                elif _minillm_cb is not None:
+                    # v0.71.11 #237 — MiniLLM teacher-mixed reverse-KL +
+                    # pretrain anchor.
+                    distill_loss = _minillm_cb.distill_term(
+                        student_logits, teacher_logits, labels
+                    )
+                    anchor = _minillm_cb.anchor_term(model)
+                else:
+                    distill_loss = _compute_distill_term(
+                        student_logits, teacher_logits, divergence, temperature
+                    )
                 total = _CE_WEIGHT * ce_loss + _DISTILL_WEIGHT * distill_loss
+                if anchor is not None:
+                    total = total + anchor
                 return (total, outputs) if return_outputs else total
 
         # ``DataCollatorForSeq2Seq`` pads ``input_ids`` and ``attention_mask``
@@ -375,6 +449,11 @@ class DistillTrainerWrapper:
                 padding=True,
             ),
         )
+
+        # v0.71.11 #237 — attach the MiniLLM callback for lifecycle (the
+        # loss terms are applied directly in compute_loss above).
+        if minillm_cb is not None:
+            self.trainer.add_callback(minillm_cb)
 
         # v0.40.6 #67 — ReLoRA callback.
         from soup_cli.utils.peft_wiring import (

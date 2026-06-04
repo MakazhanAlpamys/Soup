@@ -211,7 +211,7 @@ class TestMiniLLMConfig:
 
 
 class TestBuildMiniLLMCallback:
-    """Live trainer callback deferred to v0.70.1."""
+    """Live in v0.71.11 #237 — returns a MiniLLMCallback; validates type."""
 
     def test_non_config_rejected(self):
         from soup_cli.utils.minillm import build_minillm_callback
@@ -219,12 +219,14 @@ class TestBuildMiniLLMCallback:
         with pytest.raises(TypeError, match="MiniLLMConfig"):
             build_minillm_callback({})  # type: ignore[arg-type]
 
-    def test_deferred(self):
-        from soup_cli.utils.minillm import MiniLLMConfig, build_minillm_callback
+    def test_live_returns_callback(self):
+        from soup_cli.utils.minillm import (
+            MiniLLMCallback,
+            MiniLLMConfig,
+            build_minillm_callback,
+        )
 
-        cfg = MiniLLMConfig()
-        with pytest.raises(NotImplementedError, match="v0.70.1"):
-            build_minillm_callback(cfg)
+        assert isinstance(build_minillm_callback(MiniLLMConfig()), MiniLLMCallback)
 
 
 # ---------------------------------------------------------------------------

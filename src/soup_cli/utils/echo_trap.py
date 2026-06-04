@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Iterable, Sequence
+from typing import Iterable, Optional, Sequence
 
 VERDICTS: tuple[str, ...] = ("OK", "WARN", "TRAP")
 _VALID_VERDICTS: frozenset[str] = frozenset(VERDICTS)
@@ -294,43 +294,177 @@ class EchoTrapReport:
             )
 
 
+def _split_whitespace(text: str) -> list[str]:
+    """Whitespace tokenisation for the string echo path."""
+    return text.split()
+
+
+def _get_trainer_callback_base():
+    """Lazy-resolve ``transformers.TrainerCallback`` (mirror v0.53.11)."""
+    try:
+        from transformers import TrainerCallback
+
+        return TrainerCallback
+    except ImportError:
+        return object
+
+
+_TrainerCallbackBase = _get_trainer_callback_base()
+
+
+class EchoTrapCallback(_TrainerCallbackBase):  # type: ignore[misc, valid-type]
+    """Live HF TrainerCallback for echo-trap detection (v0.71.11 #240).
+
+    Reads the GRPO step's generated completions (via the shared
+    :class:`~soup_cli.utils.rl_signal_buffer.RLSignalBuffer`), scores
+    trajectory repetition, and classifies OK / WARN / TRAP. When
+    ``tokenizer_aware`` and a tokenizer are supplied, scores over
+    tokenizer ids (subword-repetition sensitive); otherwise whitespace
+    tokens.
+
+    The aggregate echo signal is surfaced to ``state.log_history``;
+    ``halt_on_trap`` sets ``control.should_training_stop`` on TRAP.
+    """
+
+    def __init__(
+        self,
+        *,
+        threshold: float,
+        halt_on_trap: bool = True,
+        ngram_n: int = 2,
+        tokenizer_aware: bool = False,
+        buffer: object = None,
+        tokenizer: object = None,
+    ) -> None:
+        if isinstance(threshold, bool):
+            raise ValueError("threshold must not be bool")
+        if not isinstance(threshold, (int, float)):
+            raise ValueError(
+                f"threshold must be a number, got {type(threshold).__name__}"
+            )
+        fv = float(threshold)
+        if not math.isfinite(fv) or not (0.0 <= fv <= 1.0):
+            raise ValueError(f"threshold must be in [0.0, 1.0], got {threshold}")
+        if not isinstance(halt_on_trap, bool):
+            raise TypeError(
+                f"halt_on_trap must be bool, got {type(halt_on_trap).__name__}"
+            )
+        if not isinstance(tokenizer_aware, bool):
+            raise TypeError(
+                "tokenizer_aware must be bool, got "
+                f"{type(tokenizer_aware).__name__}"
+            )
+        self.threshold = fv
+        self.halt_on_trap = halt_on_trap
+        self.ngram_n = _check_ngram_n(ngram_n)
+        self.tokenizer_aware = tokenizer_aware
+        self.buffer = buffer
+        self.tokenizer = tokenizer
+        self._last_report: Optional[EchoTrapReport] = None
+        self._traps_seen = 0
+
+    def compute_signal(self, snapshot: dict) -> Optional[float]:
+        """Compute the aggregate echo signal from a buffer snapshot.
+
+        Returns ``None`` when no completions are available.
+        """
+        completions = snapshot.get("completions", []) or []
+        if not completions:
+            return None
+        if self.tokenizer_aware and self.tokenizer is not None:
+            id_trajectories: list[list[int]] = []
+            for text in completions:
+                try:
+                    ids = self.tokenizer.encode(text, add_special_tokens=False)
+                except (TypeError, ValueError):
+                    ids = []
+                id_trajectories.append([int(i) for i in ids])
+            return score_echo_signal_tokenized(id_trajectories, ngram_n=self.ngram_n)
+        trajectories = [_split_whitespace(text) for text in completions]
+        return score_echo_signal(trajectories, ngram_n=self.ngram_n)
+
+    def observe_signal(
+        self, signal: float, step: int, n_trajectories: int
+    ) -> EchoTrapReport:
+        """Classify a signal and build the :class:`EchoTrapReport`."""
+        clamped = max(0.0, min(1.0, float(signal)))
+        verdict = classify_echo_signal(clamped)
+        if verdict == "TRAP":
+            self._traps_seen += 1
+        report = EchoTrapReport(
+            signal=clamped,
+            verdict=verdict,
+            step=max(0, int(step)),
+            trajectories_seen=max(0, int(n_trajectories)),
+            details=(
+                f"ngram_n={self.ngram_n}",
+                f"tokenizer_aware={self.tokenizer_aware}",
+                f"signal={clamped:.4f} verdict={verdict} thr={self.threshold}",
+            ),
+        )
+        self._last_report = report
+        return report
+
+    def last_report(self) -> Optional[EchoTrapReport]:
+        """Return the most recent :class:`EchoTrapReport` (or None)."""
+        return self._last_report
+
+    def on_step_end(self, args, state, control, **kwargs):
+        """Per-step probe — read completions from the capture buffer."""
+        if self.buffer is None:
+            return control
+        try:
+            snapshot = self.buffer.snapshot()
+            signal = self.compute_signal(snapshot)
+            if signal is None:
+                return control
+            n_traj = len(snapshot.get("completions", []) or [])
+            step = int(getattr(state, "global_step", 0) or 0)
+            report = self.observe_signal(signal, step, n_traj)
+            log_history = getattr(state, "log_history", None)
+            if log_history is not None:
+                log_history.append({
+                    "echo_trap_signal": report.signal,
+                    "echo_trap_verdict": report.verdict,
+                })
+            # TRAP verdict + over-threshold → optional halt.
+            if (
+                report.verdict == "TRAP"
+                and report.signal >= self.threshold
+                and self.halt_on_trap
+                and control is not None
+            ):
+                try:
+                    control.should_training_stop = True
+                except Exception:  # noqa: BLE001 — never crash training
+                    pass
+            return control
+        except Exception:  # noqa: BLE001 — instrumentation must never crash
+            return control
+
+
 def build_echo_trap_callback(
     *,
     threshold: float,
     halt_on_trap: bool = True,
     ngram_n: int = 2,
     tokenizer_aware: bool = False,
-):
-    """Live HF Trainer callback for echo-trap detection.
+    buffer: object = None,
+    tokenizer: object = None,
+) -> "EchoTrapCallback":
+    """Build the live echo-trap HF Trainer callback (v0.71.11 #240).
 
-    Deferred to v0.70.1. Validates inputs at the public boundary so
-    misconfigured callers fail fast (mirrors v0.50.0 / v0.62.0 /
-    v0.67.0 / v0.69.0 / Part A/B/C/D/E deferred-live policy).
+    Lifts the v0.70.0 ``NotImplementedError`` stub. Validates every input
+    at the public boundary (mirrors v0.50.0 / v0.61.0 fail-fast policy),
+    then returns an :class:`EchoTrapCallback`.
     """
-    # Threshold validation runs FIRST so a bad numeric value fires the
-    # actionable error before we check the bool flags.
-    if isinstance(threshold, bool):
-        raise ValueError("threshold must not be bool")
-    if not isinstance(threshold, (int, float)):
-        raise ValueError(
-            f"threshold must be a number, got {type(threshold).__name__}"
-        )
-    fv = float(threshold)
-    if not math.isfinite(fv) or not (0.0 <= fv <= 1.0):
-        raise ValueError(f"threshold must be in [0.0, 1.0], got {threshold}")
-    if not isinstance(halt_on_trap, bool):
-        raise TypeError(
-            f"halt_on_trap must be bool, got {type(halt_on_trap).__name__}"
-        )
-    if not isinstance(tokenizer_aware, bool):
-        raise TypeError(
-            "tokenizer_aware must be bool, got "
-            f"{type(tokenizer_aware).__name__}"
-        )
-    _check_ngram_n(ngram_n)
-    raise NotImplementedError(
-        f"Live echo-trap HF Trainer callback (threshold={fv}) is deferred "
-        "to v0.70.1. v0.70.0 ships the schema + math kernels only."
+    return EchoTrapCallback(
+        threshold=threshold,
+        halt_on_trap=halt_on_trap,
+        ngram_n=ngram_n,
+        tokenizer_aware=tokenizer_aware,
+        buffer=buffer,
+        tokenizer=tokenizer,
     )
 
 
@@ -339,6 +473,7 @@ def build_echo_trap_callback(
 # without circular dependencies.
 __all__ = [
     "VERDICTS",
+    "EchoTrapCallback",
     "EchoTrapReport",
     "build_echo_trap_callback",
     "classify_echo_signal",

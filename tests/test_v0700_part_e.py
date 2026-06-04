@@ -350,34 +350,50 @@ class TestBuildIterativeDPOPlan:
 
 
 class TestRunIterativeDPODeferred:
+    """Live in v0.71.11 #239 — runs the sample → score → pair → train loop."""
+
     def test_non_plan_rejected(self):
         from soup_cli.utils.iterative_dpo import run_iterative_dpo
 
         with pytest.raises(TypeError, match="IterativeDPOPlan"):
             run_iterative_dpo({"rounds": 1})  # type: ignore[arg-type]
 
-    def test_deferred(self):
+    def test_live_runs_with_fakes(self, tmp_path, monkeypatch):
+        import json
+
         from soup_cli.utils.iterative_dpo import (
-            IterativeDPOPlan,
-            IterativeDPORound,
+            IterativeDPOResult,
+            build_iterative_dpo_plan,
             run_iterative_dpo,
         )
 
-        plan = IterativeDPOPlan(
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "p.jsonl").write_text(json.dumps({"prompt": "q"}), encoding="utf-8")
+        plan = build_iterative_dpo_plan(
             base_model="m",
-            reward_model="./rm",
-            rounds=(
-                IterativeDPORound(
-                    round_index=0,
-                    prompts_path="./p.jsonl",
-                    pairs_path="./r0.jsonl",
-                    adapter_path="./out/r0",
-                    pairs_count=10,
-                ),
-            ),
+            reward_model="rm",
+            prompts_path="p.jsonl",
+            output_dir="out",
+            rounds=1,
+            pairs_per_round=10,
         )
-        with pytest.raises(NotImplementedError, match="v0.70.1"):
-            run_iterative_dpo(plan)
+
+        def fake_sample(**kwargs):
+            return [["aa", "bbb"]]
+
+        def fake_score(**kwargs):
+            return [1.0, 2.0]
+
+        def fake_train(**kwargs):
+            import os
+
+            os.makedirs(kwargs["adapter_path"], exist_ok=True)
+
+        result = run_iterative_dpo(
+            plan, sample_fn=fake_sample, score_fn=fake_score, train_fn=fake_train
+        )
+        assert isinstance(result, IterativeDPOResult)
+        assert result.rounds_completed == 1
 
 
 # ---------------------------------------------------------------------------
@@ -446,11 +462,13 @@ class TestIterativeDPOCli:
         )
         assert result.exit_code == 2
 
-    def test_live_deferred_exits_3(self, tmp_path, monkeypatch):
-        """Without --plan-only, the deferred live runner exits 3."""
+    def test_live_runner_bad_model_exits_1(self, tmp_path, monkeypatch):
+        """Without --plan-only, the live runner runs; a bad model exits 1."""
         from soup_cli.commands.iterative_dpo import app
 
         monkeypatch.chdir(tmp_path)
+        # Empty prompt rows → no prompts → default sample_fn tries to load
+        # the (non-existent) model "m" → run fails → CLI exits 1 (NOT 3).
         (tmp_path / "prompts.jsonl").write_text("{}\n", encoding="utf-8")
         runner = CliRunner()
         result = runner.invoke(
@@ -459,18 +477,18 @@ class TestIterativeDPOCli:
                 "--base-model",
                 "m",
                 "--reward-model",
-                "./rm",
+                "rm",
                 "--prompts",
-                "./prompts.jsonl",
+                "prompts.jsonl",
                 "--output-dir",
-                "./out",
+                "out",
                 "--rounds",
                 "2",
                 "--pairs-per-round",
                 "100",
             ],
         )
-        assert result.exit_code == 3, (result.output, repr(result.exception))
+        assert result.exit_code == 1, (result.output, repr(result.exception))
 
 
 class TestSourceWiring:

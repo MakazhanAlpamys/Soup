@@ -61,6 +61,61 @@ def update_ema(ref_state: dict, policy_state: dict, alpha: float) -> dict:
     return ref_state
 
 
+def _validate_alpha(alpha) -> float:
+    """Shared alpha guard: non-bool float in (0, 1], finite."""
+    import math
+
+    if not isinstance(alpha, (int, float)) or isinstance(alpha, bool):
+        raise TypeError("alpha must be a non-bool float")
+    alpha_f = float(alpha)
+    if not math.isfinite(alpha_f):
+        raise ValueError("alpha must be finite (no NaN/Inf)")
+    if not (0.0 < alpha_f <= 1.0):
+        raise ValueError(f"alpha must be in (0, 1], got {alpha}")
+    return alpha_f
+
+
+def update_ema_in_place(ref_model, policy_model, alpha: float) -> int:
+    """In-place EMA of the reference model from the policy (v0.71.11 #160).
+
+    ``ref.param = (1-α)·ref.param + α·policy.param`` for every shared
+    parameter, mutating the reference tensors directly. This replaces the
+    v0.53.11 path that materialised BOTH full ``state_dict()`` copies AND
+    a ``load_state_dict`` round-trip — three full model-sized allocations
+    per step. Iterating ``named_parameters()`` and updating in place keeps
+    the per-step memory overhead at zero (no extra model-sized buffers),
+    which matters at 70B+ scale.
+
+    Only parameters present (by name) and shape-matching in both models
+    are updated; mismatches are skipped (defensive against PEFT vs base
+    naming). Returns the number of parameters actually updated so callers
+    can detect a total-name-mismatch no-op (code-review LOW fix).
+    """
+    import torch
+
+    alpha_f = _validate_alpha(alpha)
+    ref_params = dict(ref_model.named_parameters())
+    updated = 0
+    with torch.no_grad():
+        for name, p_tensor in policy_model.named_parameters():
+            r_tensor = ref_params.get(name)
+            if r_tensor is None:
+                continue
+            if (
+                hasattr(r_tensor, "shape")
+                and hasattr(p_tensor, "shape")
+                and r_tensor.shape != p_tensor.shape
+            ):
+                continue
+            src = p_tensor.data
+            if hasattr(src, "to") and hasattr(r_tensor, "device"):
+                src = src.to(r_tensor.device)
+            # r = (1-α)·r + α·p, fully in place (no model-sized temporaries).
+            r_tensor.data.mul_(1.0 - alpha_f).add_(src, alpha=alpha_f)
+            updated += 1
+    return updated
+
+
 def check_tis_threshold(log_ratio, threshold: float) -> bool:
     """Return True iff the max absolute log-ratio exceeds the TIS threshold.
 
@@ -171,6 +226,10 @@ class GRPOStabilityCallback(_TrainerCallbackBase):  # type: ignore[misc, valid-t
         if self.replay_buffer_size is not None:
             self._replay = deque(maxlen=int(self.replay_buffer_size))
         self._tis_alerts = 0
+        # One-shot guard so a total name-mismatch EMA no-op warns exactly
+        # once per run (v0.71.11 code-review LOW — mirrors the #159
+        # fallback-warn pattern in trainer/grpo.py).
+        self._ema_noop_warned = False
         # Set during on_train_begin (lazy — model is constructed by Trainer
         # before the first event fires).
         self._policy_model: Any = None
@@ -229,6 +288,9 @@ class GRPOStabilityCallback(_TrainerCallbackBase):  # type: ignore[misc, valid-t
         instability.
         """
         # Live EMA update of reference model from current policy.
+        # v0.71.11 #160 — in-place update (no full state_dict / load round
+        # trip). Mutates the ref parameters directly so a 70B+ run pays
+        # zero extra model-sized allocations per step.
         if (
             self.ref_model_ema_alpha is not None
             and self._ref_model is not None
@@ -236,23 +298,18 @@ class GRPOStabilityCallback(_TrainerCallbackBase):  # type: ignore[misc, valid-t
         ):
             try:
                 policy = model if model is not None else self._policy_model
-                ref_sd = self._ref_model.state_dict()
-                pol_sd = policy.state_dict()
-                update_ema(ref_sd, pol_sd, self.ref_model_ema_alpha)
-                # v0.53.11 review fix (security HIGH) — strict=True with
-                # try/except for key mismatch. strict=False silently
-                # dropped unknown keys, masking corruption from a crafted
-                # checkpoint. We catch the RuntimeError and downgrade to
-                # strict=False with a WARNING so operators see the drift.
-                try:
-                    self._ref_model.load_state_dict(ref_sd, strict=True)
-                except RuntimeError as key_err:
+                updated = update_ema_in_place(
+                    self._ref_model, policy, self.ref_model_ema_alpha
+                )
+                if updated == 0 and not self._ema_noop_warned:
+                    self._ema_noop_warned = True
                     logger.warning(
-                        "EMA load_state_dict key mismatch; falling back to "
-                        "strict=False (potential silent corruption): %s",
-                        key_err,
+                        "ref_model_ema_alpha is set but the EMA update matched "
+                        "0 shared parameters between the reference and policy "
+                        "models (name/shape mismatch) — the reference model is "
+                        "NOT being updated. Check that both models share the "
+                        "same architecture."
                     )
-                    self._ref_model.load_state_dict(ref_sd, strict=False)
             except Exception as exc:  # noqa: BLE001 — never crash training
                 logger.debug("EMA update skipped: %s", exc)
         # Surface counters to log_history.

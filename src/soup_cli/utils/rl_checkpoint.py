@@ -27,8 +27,9 @@ Security:
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Optional
 
 _MAX_SAVE_EVERY_STEPS = 10_000_000
 _MIN_KEEP_LAST = 1
@@ -192,18 +193,184 @@ class RLCheckpointState:
         }
 
 
-def build_rl_checkpoint_callback(config):
-    """Live HF Trainer callback for mid-epoch RL checkpoints.
+def _get_trainer_callback_base():
+    """Lazy-resolve ``transformers.TrainerCallback`` (mirror v0.53.11)."""
+    try:
+        from transformers import TrainerCallback
 
-    Deferred to v0.70.1. Validates the config type at the public
-    boundary so misconfigured callers fail fast (mirrors v0.50.0 /
-    v0.62.0 / v0.67.0 / v0.69.0 deferred-live policy).
+        return TrainerCallback
+    except ImportError:
+        return object
+
+
+_TrainerCallbackBase = _get_trainer_callback_base()
+
+
+def _step_number(name: str) -> int:
+    """Extract the integer step from a ``step-<N>`` checkpoint dir name."""
+    try:
+        return int(name.split("-", 1)[1])
+    except (IndexError, ValueError):
+        return -1
+
+
+class RLCheckpointCallback(_TrainerCallbackBase):  # type: ignore[misc, valid-type]
+    """Live HF TrainerCallback for mid-epoch RL checkpoints (v0.71.11 #238).
+
+    Saves an RL-aware checkpoint every ``save_every_steps`` steps under
+    ``<output_dir>/rl-checkpoints/step-<N>/``:
+
+    - the policy adapter (``model.save_pretrained``),
+    - the optimizer state (when ``include_optimizer_state``), and
+    - a ``manifest.json`` (:class:`RLCheckpointState`).
+
+    Older checkpoints beyond ``keep_last`` are pruned at write time. The
+    optimizer is read from the ``optimizer`` kwarg HF Trainer passes to
+    callbacks, so this works for any HF-Trainer-based RL loop (GRPO/PPO).
+    """
+
+    def __init__(
+        self,
+        config: RLCheckpointConfig,
+        *,
+        output_dir: str,
+        task: str = "grpo",
+        soup_version: Optional[str] = None,
+    ) -> None:
+        if not isinstance(config, RLCheckpointConfig):
+            raise TypeError(
+                f"config must be RLCheckpointConfig, got {type(config).__name__}"
+            )
+        self.config = config
+        self.output_dir = _validate_dir_shape(output_dir, "output_dir")
+        # Containment: the run dir (and everything we write under it) must
+        # stay under cwd (security review LOW). is_under_cwd is realpath-based
+        # so it works before the dir exists; the per-file atomic_write_text on
+        # the manifest adds the symlink-rejection at write time.
+        from soup_cli.utils.paths import is_under_cwd
+
+        if not is_under_cwd(self.output_dir):
+            raise ValueError("output_dir must stay under the current directory")
+        if task not in _RL_TASKS:
+            raise ValueError(f"task={task!r} must be one of {sorted(_RL_TASKS)}")
+        self.task = task
+        if soup_version is None:
+            from soup_cli import __version__ as _v
+
+            soup_version = _v
+        self.soup_version = soup_version
+        self._saved: list[int] = []
+
+    def _ckpt_root(self) -> str:
+        import os
+
+        return os.path.join(self.output_dir, "rl-checkpoints")
+
+    def save_checkpoint(self, *, step: int, model, optimizer) -> str:
+        """Write a checkpoint for ``step``; returns the directory path.
+
+        Pure of HF Trainer state — exercised directly by tests with a tiny
+        peft model + a real torch optimizer.
+        """
+        import os
+
+        from soup_cli.utils.paths import atomic_write_text
+
+        root = self._ckpt_root()
+        ckpt_dir = os.path.join(root, f"step-{int(step)}")
+        os.makedirs(ckpt_dir, exist_ok=True)
+
+        if model is not None and hasattr(model, "save_pretrained"):
+            model.save_pretrained(ckpt_dir)
+
+        has_optimizer = False
+        if self.config.include_optimizer_state and optimizer is not None:
+            try:
+                import torch
+
+                torch.save(
+                    optimizer.state_dict(),
+                    os.path.join(ckpt_dir, "optimizer.pt"),
+                )
+                has_optimizer = True
+            except Exception:  # noqa: BLE001 — best-effort, manifest reflects it
+                has_optimizer = False
+
+        manifest = RLCheckpointState(
+            step=int(step),
+            checkpoint_dir=ckpt_dir,
+            task=self.task,
+            has_optimizer=has_optimizer,
+            has_ref_model=bool(self.config.include_ref_model),
+            has_rollout_buffer=bool(self.config.include_rollout_buffer),
+            soup_version=self.soup_version,
+        )
+        atomic_write_text(
+            json.dumps(manifest.to_dict(), indent=2),
+            os.path.join(ckpt_dir, "manifest.json"),
+        )
+        self._saved.append(int(step))
+        self._prune()
+        return ckpt_dir
+
+    def _prune(self) -> None:
+        """Keep only the ``keep_last`` most-recent step checkpoints."""
+        import os
+        import shutil
+
+        root = self._ckpt_root()
+        if not os.path.isdir(root):
+            return
+        entries = []
+        for name in os.listdir(root):
+            if not name.startswith("step-"):
+                continue
+            full = os.path.join(root, name)
+            if os.path.islink(full) or not os.path.isdir(full):
+                continue
+            entries.append((_step_number(name), full))
+        entries.sort(key=lambda t: t[0], reverse=True)
+        for _, path in entries[self.config.keep_last:]:
+            try:
+                shutil.rmtree(path)
+            except OSError:
+                pass
+
+    def on_step_end(self, args, state, control, model=None, **kwargs):
+        """Per-step hook — save a checkpoint on the configured cadence."""
+        try:
+            step = int(getattr(state, "global_step", 0) or 0)
+            if step <= 0 or step % self.config.save_every_steps != 0:
+                return control
+            optimizer = kwargs.get("optimizer")
+            self.save_checkpoint(step=step, model=model, optimizer=optimizer)
+        except Exception:  # noqa: BLE001 — checkpoint failure must not crash run
+            pass
+        return control
+
+
+def build_rl_checkpoint_callback(
+    config,
+    *,
+    output_dir: Optional[str] = None,
+    task: str = "grpo",
+    soup_version: Optional[str] = None,
+) -> "RLCheckpointCallback":
+    """Build the live mid-epoch RL checkpoint callback (v0.71.11 #238).
+
+    Lifts the v0.70.0 ``NotImplementedError`` stub. ``output_dir`` is the
+    trainer's run directory under which ``rl-checkpoints/`` is created.
+    Validates config type at the public boundary (fail-fast policy).
     """
     if not isinstance(config, RLCheckpointConfig):
         raise TypeError(
             f"config must be RLCheckpointConfig, got {type(config).__name__}"
         )
-    raise NotImplementedError(
-        "Live mid-epoch RL checkpoint callback is deferred to v0.70.1. "
-        "v0.70.0 ships the schema + state manifest only."
+    if output_dir is None:
+        raise ValueError("output_dir is required to build the RL checkpoint callback")
+    return RLCheckpointCallback(
+        config,
+        output_dir=output_dir,
+        task=task,
+        soup_version=soup_version,
     )

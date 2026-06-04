@@ -229,12 +229,12 @@ soup expect <data.jsonl> <suite.yaml>         Expectations suite: PII / token-le
 soup data gen-magpie --base <m> --provider ollama|vllm --target N --output <jsonl> [--base-url <url>] [--quality-filter]  Magpie synthetic generator — live (v0.69.0; live v0.71.6)
 soup data persona-mix --prompts <jsonl> --n N --output <jsonl>  Persona-Hub diversity sampler (v0.69.0)
 soup data brain-rot <data.jsonl> [--strict]   Brain-rot detector — arXiv 2510.13928 (v0.69.0)
-soup iterative-dpo --base-model <m> --reward-model <rm> --prompts <p.jsonl> --output-dir <out> --rounds N --pairs-per-round N [--plan-only]  Iterative DPO loop driver (v0.70.0; live runner v0.70.1)
-soup train --reward-hack-detector info_rm|rm_ensemble [--reward-hack-halt]  Reward-hacking detector for GRPO/PPO (v0.70.0; live callback v0.70.1)
-soup train --uld-strategy wasserstein|topk_align [--uld-top-k N]  Cross-tokenizer ULD on task='distill' (v0.70.0; live projection v0.70.1)
-soup train --minillm-enabled [--minillm-teacher-mix-ratio 0.3]  MiniLLM reverse-KL on-policy distillation (v0.70.0; live v0.70.1)
-soup train --rl-checkpoint-save-every-steps N [--rl-checkpoint-keep-last N]  Mid-epoch checkpoint for PPO/GRPO (v0.70.0; live save_state v0.70.1)
-soup train --echo-trap-enabled [--echo-trap-threshold 0.6 --echo-trap-halt]  RAGEN echo-trap detector for multi-turn agent RL (v0.70.0; live callback v0.70.1)
+soup iterative-dpo --base-model <m> --reward-model <rm> --prompts <p.jsonl> --output-dir <out> --rounds N --pairs-per-round N [--plan-only]  Iterative DPO loop driver — LIVE sample→score→pair→train (v0.70.0; live v0.71.11)
+soup train --reward-hack-detector info_rm|rm_ensemble [--reward-hack-halt]  Reward-hacking detector for GRPO — LIVE callback (v0.70.0; live v0.71.11)
+soup train --uld-strategy wasserstein|topk_align [--uld-top-k N]  Cross-tokenizer ULD on task='distill' — LIVE W1/topk loss (v0.70.0; live v0.71.11)
+soup train --minillm-enabled [--minillm-teacher-mix-ratio 0.3]  MiniLLM reverse-KL distillation — LIVE (v0.70.0; live v0.71.11)
+soup train --rl-checkpoint-save-every-steps N [--rl-checkpoint-keep-last N]  Mid-epoch checkpoint for GRPO/PPO — LIVE (v0.70.0; live v0.71.11)
+soup train --echo-trap-enabled [--echo-trap-threshold 0.6 --echo-trap-halt]  RAGEN echo-trap detector for GRPO — LIVE callback (v0.70.0; live v0.71.11)
 soup version [--full] [--json]                Show version (--full: system info, --json: JSON output)
 soup --verbose <command>                      Full traceback on errors
 ```

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from functools import lru_cache
 from pathlib import Path
@@ -13,6 +14,7 @@ from soup_cli.config.schema import SoupConfig
 from soup_cli.utils.gpu import estimate_batch_size, model_size_from_name
 
 console = Console()
+logger = logging.getLogger(__name__)
 
 
 def make_grpo_trainer_variant(base_cls: type, variant: str) -> type:
@@ -42,6 +44,29 @@ def _make_grpo_trainer_variant_cached(base_cls: type, variant: str) -> type:
         """GRPOTrainer subclass that routes compute_loss through Soup's variants."""
 
         _soup_grpo_variant: str = variant
+        # v0.71.11 #159 — one-shot WARNING flag so a silent fallback to the
+        # stock TRL loss surfaces exactly once (not on every step).
+        _soup_fallback_warned: bool = False
+
+        def _warn_fallback(self, reason: str) -> None:
+            """Emit a one-shot WARNING when the variant kernel falls back.
+
+            v0.71.11 #159 — when a TRL internal rename or a kernel error
+            makes ``compute_loss`` delegate to the stock GRPO loss, the
+            operator's selected variant silently stops applying. Warn once
+            so the run isn't quietly training the wrong objective.
+            """
+            if self._soup_fallback_warned:
+                return
+            self._soup_fallback_warned = True
+            logger.warning(
+                "GRPO variant %r compute_loss fell back to the stock TRL "
+                "loss (%s); the selected objective is NOT being applied. "
+                "This usually means a TRL version renamed the per-token "
+                "log-prob inputs.",
+                self._soup_grpo_variant,
+                reason,
+            )
 
         def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
             # v0.53.11 review fix (code-review HIGH) — read kernel inputs
@@ -65,6 +90,7 @@ def _make_grpo_trainer_variant_cached(base_cls: type, variant: str) -> type:
             if logp_new is None or logp_old is None or advantages is None:
                 # Fall back to the original loss — defence-in-depth so a
                 # TRL internal rename does not crash the training loop.
+                self._warn_fallback("missing per-token log-prob inputs")
                 return super().compute_loss(
                     model, inputs, return_outputs=return_outputs, **kwargs
                 )
@@ -82,11 +108,13 @@ def _make_grpo_trainer_variant_cached(base_cls: type, variant: str) -> type:
                     delta=delta,
                     completion_mask=completion_mask,
                 )
-            except (TypeError, ValueError):
+            except (TypeError, ValueError) as exc:
+                self._warn_fallback(f"kernel error: {exc}")
                 return super().compute_loss(
                     model, inputs, return_outputs=return_outputs, **kwargs
                 )
             if variant_loss is None:
+                self._warn_fallback("kernel returned None")
                 return super().compute_loss(
                     model, inputs, return_outputs=return_outputs, **kwargs
                 )
@@ -197,6 +225,23 @@ class GRPOTrainerWrapper:
         from soup_cli.trainer.rewards import load_reward_fn
 
         reward_fn = load_reward_fn(tcfg.reward_fn)
+
+        # v0.71.11 #235/#240 — when the reward-hack or echo-trap detector is
+        # enabled, wrap the reward function(s) with a capture shim so the
+        # callbacks can observe the step's rewards + completions. The buffer
+        # is created here (before GRPOTrainer construction) and handed to
+        # the callbacks after the trainer is built.
+        from soup_cli.utils.peft_wiring import rl_callbacks_need_buffer
+
+        self._rl_buffer = None
+        if rl_callbacks_need_buffer(tcfg):
+            from soup_cli.utils.rl_signal_buffer import (
+                RLSignalBuffer,
+                wrap_reward_funcs,
+            )
+
+            self._rl_buffer = RLSignalBuffer()
+            reward_fn = wrap_reward_funcs(reward_fn, self._rl_buffer)
 
         if use_unsloth:
             self._setup_unsloth(cfg, tcfg)
@@ -341,6 +386,18 @@ class GRPOTrainerWrapper:
         # v0.53.11 #127 — wire the live stability callback.
         from soup_cli.utils.peft_wiring import attach_grpo_stability_callback
         attach_grpo_stability_callback(self.trainer, tcfg)
+
+        # v0.71.11 #235/#238/#240 — wire the live RL callbacks (reward-hack,
+        # echo-trap, mid-epoch RL checkpoint).
+        from soup_cli.utils.peft_wiring import attach_rl_callbacks
+        attach_rl_callbacks(
+            self.trainer,
+            tcfg,
+            buffer=self._rl_buffer,
+            tokenizer=self.tokenizer,
+            output_dir=str(output_dir),
+            task="grpo",
+        )
 
         # v0.40.6 #67 — ReLoRA callback (magnitude-prune LoRA every N steps).
         from soup_cli.utils.peft_wiring import (

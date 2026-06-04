@@ -75,21 +75,29 @@ def main(
     if plan_only:
         console.print(
             Panel(
-                "[green]Plan rendered[/green] (--plan-only). To execute, "
-                "drop the flag once v0.70.1 ships.",
+                "[green]Plan rendered[/green] (--plan-only). Drop the flag "
+                "to execute the sample → score → pair → train loop.",
                 title="Iterative DPO",
             )
         )
         raise typer.Exit(code=0)
 
     try:
-        run_iterative_dpo(plan)
-    except NotImplementedError as exc:
+        result = run_iterative_dpo(plan)
+    except Exception as exc:  # noqa: BLE001 — CLI boundary: friendly exit-1
         console.print(
             Panel(
-                "[yellow]Live runner deferred to v0.70.1.[/yellow] "
-                f"{escape(str(exc))}",
+                f"[red]Iterative DPO failed:[/red] {escape(str(exc))}",
                 title="Iterative DPO",
             )
         )
-        raise typer.Exit(code=3) from exc
+        raise typer.Exit(code=1) from exc
+
+    console.print(
+        Panel(
+            f"[green]Done[/green] — {result.rounds_completed} round(s); "
+            f"final adapter: {escape(result.final_adapter)}; "
+            f"pairs/round: {list(result.per_round_pairs)}",
+            title="Iterative DPO",
+        )
+    )

@@ -665,21 +665,18 @@ class TestTrueWeightedCombine:
 
 class TestStabilityCallbackEMA:
     def test_on_step_end_runs_ema_update(self):
+        # v0.71.11 #160 — on_step_end now mutates the ref parameters in
+        # place (no full state_dict / load_state_dict round-trip).
+        import torch.nn as nn
+
         from soup_cli.monitoring.grpo_stability_callback import GRPOStabilityCallback
 
-        class _Model:
-            def __init__(self, val):
-                self._val = val
-
-            def state_dict(self):
-                return {"w": torch.full((2,), self._val)}
-
-            def load_state_dict(self, sd, strict=True):
-                self._loaded = sd
-
         cb = GRPOStabilityCallback(ref_model_ema_alpha=0.5)
-        ref = _Model(0.0)
-        pol = _Model(1.0)
+        ref = nn.Linear(2, 2)
+        pol = nn.Linear(2, 2)
+        with torch.no_grad():
+            ref.weight.fill_(0.0)
+            pol.weight.fill_(1.0)
         cb._policy_model = pol
         cb._ref_model = ref
 
@@ -688,8 +685,8 @@ class TestStabilityCallbackEMA:
 
         state = _State()
         cb.on_step_end(args=None, state=state, control=None, model=pol)
-        # Loaded back into ref: midpoint 0.5.
-        assert torch.allclose(ref._loaded["w"], torch.full((2,), 0.5))
+        # ref mutated in place to the midpoint 0.5.
+        assert torch.allclose(ref.weight, torch.full_like(ref.weight, 0.5))
 
     def test_on_step_end_logs_counters(self):
         from soup_cli.monitoring.grpo_stability_callback import GRPOStabilityCallback

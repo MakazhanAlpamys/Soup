@@ -406,25 +406,25 @@ class TestRewardHackReport:
 
 
 class TestBuildRewardHackCallbackStub:
-    """Live trainer-callback wiring deferred to v0.70.1.
+    """Live in v0.71.11 #235 — the factory now returns a real callback.
 
-    The factory validates inputs at construction time and raises
-    NotImplementedError with explicit v0.70.1 marker (mirrors v0.50.0
-    apply_variant_loss policy).
+    The factory still validates inputs at construction time (fail-fast).
     """
 
-    def test_invalid_detector_rejected_before_deferred(self):
+    def test_invalid_detector_rejected_before_build(self):
         from soup_cli.utils.reward_hacking import build_reward_hack_callback
 
-        # Validation runs BEFORE NotImplementedError.
         with pytest.raises(ValueError, match="not supported"):
             build_reward_hack_callback(detector="evil")
 
-    def test_deferred_v0701(self):
-        from soup_cli.utils.reward_hacking import build_reward_hack_callback
+    def test_live_returns_callback(self):
+        from soup_cli.utils.reward_hacking import (
+            RewardHackCallback,
+            build_reward_hack_callback,
+        )
 
-        with pytest.raises(NotImplementedError, match="v0.70.1"):
-            build_reward_hack_callback(detector="info_rm")
+        cb = build_reward_hack_callback(detector="info_rm")
+        assert isinstance(cb, RewardHackCallback)
 
     def test_bool_halt_on_hack_rejected(self):
         from soup_cli.utils.reward_hacking import build_reward_hack_callback

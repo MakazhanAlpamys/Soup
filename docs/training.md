@@ -42,7 +42,7 @@
 
 ## Loop Hardening
 
-The v0.70.0 release ships 6 surfaces that protect the training loop from the failure modes that cost a real GPU-hour. Schema + math kernels live now; live trainer-callback wiring lands in v0.70.1 (matches the project's stub-then-live cadence).
+Six surfaces protect the training loop from the failure modes that cost a real GPU-hour. The schema + math kernels shipped in v0.70.0; the live trainer-callback wiring shipped in **v0.71.11**, validated end-to-end on SmolLM2-135M.
 
 ```bash
 # Reward-hacking detector — auto-halt when the policy starts gaming the RM
@@ -68,14 +68,14 @@ soup train --config grpo.yaml \
     --rl-checkpoint-include-optimizer
 
 # Iterative DPO loop driver — sample -> RM-score -> re-pair -> retrain
+# (drop --plan-only to run the loop; --plan-only just renders the per-round plan)
 soup iterative-dpo \
     --base-model meta-llama/Llama-3.1-8B \
     --reward-model ./output_rm \
     --prompts ./prompts.jsonl \
     --output-dir ./iterative_dpo_out \
     --rounds 5 \
-    --pairs-per-round 1000 \
-    --plan-only
+    --pairs-per-round 1000
 
 # RAGEN echo-trap detector — auto-halt when trajectories collapse to self-repetition
 # (Zhu et al. 2025 arXiv:2504.14437)
@@ -88,7 +88,7 @@ soup train --config grpo.yaml \
 
 `--echo-trap-tokenizer-aware` switches echo-trap n-grams from whitespace tokens to the active tokenizer's integer ids. This catches subword repetition that punctuation-heavy decoded text can hide, but the score becomes tokenizer-specific rather than vocabulary-agnostic.
 
-Every detector composes with v0.34 `soup why` (anomaly explainer), v0.32 spike recovery, and v0.53.11 #127 `GRPOStabilityCallback` so a single training run can have InfoRM + echo-trap + spike-recovery + ref-model regen all active simultaneously without duplicating trajectory / state collection. Live trainer-callback wiring for all 6 Parts lands in v0.70.1 (`build_reward_hack_callback`, `build_uld_projection`, `build_minillm_callback`, `build_rl_checkpoint_callback`, `run_iterative_dpo`, `build_echo_trap_callback`); today every CLI / config flag is validated at schema-load so misconfigured runs fail loudly at config-load time.
+Every detector composes with v0.34 `soup why` (anomaly explainer), v0.32 spike recovery, and the v0.53.11 #127 `GRPOStabilityCallback` so a single GRPO run can have InfoRM + echo-trap + spike-recovery + in-place ref-model EMA all active simultaneously without duplicating trajectory / state collection. The reward-hack and echo-trap callbacks read the per-step rewards through a shared, thread-safe capture buffer (Soup wraps your reward functions so it never has to monkeypatch TRL); `rm_ensemble` needs ≥2 reward functions to compute a divergence. The MiniLLM teacher-mix is an offline distribution-blend analog of the paper's on-policy teacher-mixed *sampling*, and ULD compares the distributions after clamping teacher ids to the teacher vocab (correct for same-family / extended-vocab pairs; a genuinely different tokenization needs a sequence-alignment step). The reference-model EMA (`--ref-model-ema-alpha`) updates in place — no full `state_dict` round-trip — so it is cheap at 70B+ scale.
 
 
 ## Unlearning (`task='unlearn'`, NPO / SimNPO / RMU)

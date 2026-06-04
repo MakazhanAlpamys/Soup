@@ -245,7 +245,7 @@ class TestRLCheckpointState:
 
 
 class TestBuildRLCheckpointCallback:
-    """Live callback deferred to v0.70.1."""
+    """Live in v0.71.11 #238 — returns a callback; requires output_dir."""
 
     def test_non_config_rejected(self):
         from soup_cli.utils.rl_checkpoint import build_rl_checkpoint_callback
@@ -253,15 +253,25 @@ class TestBuildRLCheckpointCallback:
         with pytest.raises(TypeError, match="RLCheckpointConfig"):
             build_rl_checkpoint_callback({"save_every_steps": 100})  # type: ignore[arg-type]
 
-    def test_deferred(self):
+    def test_live_returns_callback(self):
         from soup_cli.utils.rl_checkpoint import (
+            RLCheckpointCallback,
             RLCheckpointConfig,
             build_rl_checkpoint_callback,
         )
 
         cfg = RLCheckpointConfig(save_every_steps=100)
-        with pytest.raises(NotImplementedError, match="v0.70.1"):
-            build_rl_checkpoint_callback(cfg)
+        cb = build_rl_checkpoint_callback(cfg, output_dir="run", task="grpo")
+        assert isinstance(cb, RLCheckpointCallback)
+
+    def test_requires_output_dir(self):
+        from soup_cli.utils.rl_checkpoint import (
+            RLCheckpointConfig,
+            build_rl_checkpoint_callback,
+        )
+
+        with pytest.raises(ValueError, match="output_dir"):
+            build_rl_checkpoint_callback(RLCheckpointConfig(save_every_steps=100))
 
 
 # ---------------------------------------------------------------------------

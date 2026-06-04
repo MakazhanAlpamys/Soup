@@ -49,21 +49,21 @@ infrastructure instead of improving models. Soup fixes that.
 
 ## What's New
 
-**v0.71.10 — RAG family (live).** The retrieval-augmented fine-tuning, steering, and citation
-surfaces are now real, validated on SmolLM2-135M:
+**v0.71.11 — GRPO / RL callbacks (live).** The reward-safety, distillation, and RL-loop
+surfaces from v0.70.0 are now real, validated end-to-end on SmolLM2-135M:
 
-- **`data.format: raft`** — RAFT (retrieval-augmented fine-tuning): train on a query + golden
-  document mixed with distractors, answer-only loss, each doc labelled `[doc-N]` so the model
-  learns to cite the supporting source and ignore noise.
-- **`soup ra-dit`** — one-shot two-stage orchestrator: trains the retriever then the generator
-  and records the trained retriever as the generator's paired retriever. A `soup train` of a
-  generator stage auto-links the latest RA-DIT retriever from the Registry.
-- **`soup steer train --method caa|iti|repe` + `soup serve --steer <name>`** — fit a
-  contrastive-activation / inference-time-intervention / representation-engineering control
-  vector from `{positive, negative}` pairs and apply it at decode time via a forward hook.
-- **`soup eval citation`** — score citation precision / recall / F1 over predictions or RAFT
-  rows; with `citation_faithful: true`, `[doc-id]` spans get a boosted per-token loss weight.
-  A new `citation` failure mode joins `soup diagnose`.
+- **`soup train --reward-hack-detector info_rm|rm_ensemble`** — a live GRPO callback that watches
+  the per-step rewards, computes an InfoRM cluster-separation drop or RM-ensemble divergence,
+  classifies OK/WARN/HACK, and halts on HACK with `--reward-hack-halt`.
+- **`soup train --echo-trap-enabled`** — catches RAGEN-style degenerate repetition in multi-turn
+  agent RL: scores per-trajectory n-gram repetition, OK/WARN/TRAP, halts with `--echo-trap-halt`.
+- **`soup train --rl-checkpoint-save-every-steps N`** — mid-epoch RL checkpoints (adapter +
+  optimizer state + manifest) so a long GRPO/PPO run survives a crash; pruned to `--rl-checkpoint-keep-last`.
+- **`task: distill` with `--uld-strategy` or `--minillm-enabled`** — live cross-tokenizer ULD
+  (Wasserstein-1 / top-k aligned) and MiniLLM teacher-mixed length-normalised reverse-KL with an
+  optional pretrain anchor.
+- **`soup iterative-dpo`** — runs the full sample → reward-score → build-pairs → DPO-train loop
+  across rounds; each round samples from the previous adapter and trains a fresh LoRA on the harvest.
 
 Full history: [CHANGELOG.md](CHANGELOG.md) &middot; [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 

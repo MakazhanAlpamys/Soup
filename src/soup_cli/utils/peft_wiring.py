@@ -196,6 +196,109 @@ def attach_grpo_stability_callback(trainer: Any, tcfg: Any) -> bool:
     return True
 
 
+def rl_callbacks_need_buffer(tcfg: Any) -> bool:
+    """True when a reward-fn capture buffer is needed (v0.71.11 #235/#240).
+
+    The reward-hack + echo-trap callbacks observe the GRPO step's rewards
+    + completions through the shared
+    :class:`~soup_cli.utils.rl_signal_buffer.RLSignalBuffer`. The
+    RL-checkpoint callback does not.
+    """
+    return (
+        getattr(tcfg, "reward_hack_detector", None) is not None
+        or bool(getattr(tcfg, "echo_trap_enabled", False))
+    )
+
+
+def attach_rl_callbacks(
+    trainer: Any,
+    tcfg: Any,
+    *,
+    buffer: Any = None,
+    tokenizer: Any = None,
+    output_dir: str = ".",
+    task: str = "grpo",
+) -> int:
+    """Attach the v0.71.11 live RL callbacks; return how many were attached.
+
+    Wires (when their schema fields are set):
+    - reward-hacking detector (#235) — reads ``buffer``.
+    - echo-trap detector (#240) — reads ``buffer`` + ``tokenizer``.
+    - mid-epoch RL checkpoint (#238) — saves under ``output_dir``.
+
+    The schema cross-validators already gate these fields to RL tasks on
+    non-mlx backends, so this helper trusts the caller's config.
+    """
+    attached = 0
+
+    detector = getattr(tcfg, "reward_hack_detector", None)
+    if detector is not None:
+        from soup_cli.utils.reward_hacking import build_reward_hack_callback
+
+        try:
+            trainer.add_callback(
+                build_reward_hack_callback(
+                    detector=detector,
+                    halt_on_hack=bool(getattr(tcfg, "reward_hack_halt", False)),
+                    buffer=buffer,
+                )
+            )
+            attached += 1
+        except (TypeError, ValueError) as exc:
+            logger.debug("attach reward-hack callback rejected: %s", exc)
+
+    if bool(getattr(tcfg, "echo_trap_enabled", False)):
+        from soup_cli.utils.echo_trap import build_echo_trap_callback
+
+        try:
+            trainer.add_callback(
+                build_echo_trap_callback(
+                    threshold=float(getattr(tcfg, "echo_trap_threshold", 0.6)),
+                    halt_on_trap=bool(getattr(tcfg, "echo_trap_halt", False)),
+                    tokenizer_aware=bool(
+                        getattr(tcfg, "echo_trap_tokenizer_aware", False)
+                    ),
+                    buffer=buffer,
+                    tokenizer=tokenizer,
+                )
+            )
+            attached += 1
+        except (TypeError, ValueError) as exc:
+            logger.debug("attach echo-trap callback rejected: %s", exc)
+
+    save_every = getattr(tcfg, "rl_checkpoint_save_every_steps", None)
+    if save_every is not None:
+        from soup_cli.utils.rl_checkpoint import (
+            RLCheckpointConfig,
+            build_rl_checkpoint_callback,
+        )
+
+        try:
+            ckpt_cfg = RLCheckpointConfig(
+                save_every_steps=int(save_every),
+                include_optimizer_state=bool(
+                    getattr(tcfg, "rl_checkpoint_include_optimizer", True)
+                ),
+                include_ref_model=bool(
+                    getattr(tcfg, "rl_checkpoint_include_ref_model", False)
+                ),
+                include_rollout_buffer=bool(
+                    getattr(tcfg, "rl_checkpoint_include_rollout_buffer", False)
+                ),
+                keep_last=int(getattr(tcfg, "rl_checkpoint_keep_last", 3)),
+            )
+            trainer.add_callback(
+                build_rl_checkpoint_callback(
+                    ckpt_cfg, output_dir=output_dir, task=task
+                )
+            )
+            attached += 1
+        except (TypeError, ValueError) as exc:
+            logger.debug("attach RL-checkpoint callback rejected: %s", exc)
+
+    return attached
+
+
 def attach_plugin_callback(trainer: Any, console: Any = None) -> bool:
     """Attach :class:`SoupPluginCallback` when any enabled plugin implements a hook.
 

@@ -32,6 +32,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 _MAX_ANCHOR_PATH_LEN = 4096
+_MAX_ANCHOR_ROW_BYTES = 1_000_000
 
 
 def _check_unit_float(value: object, field: str) -> float:
@@ -134,18 +135,223 @@ class MiniLLMConfig:
             )
 
 
-def build_minillm_callback(config):
-    """Build the MiniLLM HF Trainer callback. Deferred to v0.70.1.
+def minillm_distill_term(
+    student_logits,
+    teacher_logits,
+    labels,
+    *,
+    config: "MiniLLMConfig",
+    temperature: float = 1.0,
+):
+    """MiniLLM reverse-KL distillation term (v0.71.11 #237).
 
-    Validates the config type at the public boundary so misconfigured
-    callers fail fast (mirrors v0.50.0 / v0.62.0 / v0.67.0 / v0.69.0
-    deferred-live policy).
+    Computes ``KL(student || target)`` where ``target`` is the
+    teacher-mixed rollout distribution
+    ``ratio * teacher + (1 - ratio) * student_detached`` — the offline
+    analog of MiniLLM's teacher-mixed sampling (Gu et al. 2024 §3.1). At
+    ``ratio = 1`` this reduces to standard reverse-KL distillation; at
+    ``ratio < 1`` the target stays closer to the student's current
+    distribution (keeps the student near a known-good policy).
+
+    When ``config.length_normalize`` is set, the per-token reverse-KL is
+    averaged over the *valid* (``labels != -100``) tokens per sequence so
+    long completions don't dominate the gradient.
+
+    Differentiable w.r.t. the student logits. Returns a scalar.
+    """
+    import torch
+
+    if not isinstance(config, MiniLLMConfig):
+        raise TypeError(
+            f"config must be MiniLLMConfig, got {type(config).__name__}"
+        )
+    if isinstance(temperature, bool) or not isinstance(temperature, (int, float)):
+        raise TypeError("temperature must be a non-bool number")
+    t = float(temperature)
+    if not math.isfinite(t) or t <= 0.0:
+        raise ValueError("temperature must be finite and positive")
+
+    s = student_logits / t
+    teach = teacher_logits / t
+    log_p_s = torch.log_softmax(s, dim=-1)
+    p_s = log_p_s.exp()
+    p_t = torch.softmax(teach, dim=-1)
+    ratio = float(config.teacher_mix_ratio)
+    target = ratio * p_t + (1.0 - ratio) * p_s.detach()
+    log_target = target.clamp(min=1e-12).log()
+    # reverse KL(student || target) per token.
+    rkl = (p_s * (log_p_s - log_target)).sum(dim=-1)  # [B, T]
+
+    if config.length_normalize and labels is not None:
+        valid = (labels != -100).to(rkl.dtype)
+        per_seq = (rkl * valid).sum(dim=-1) / valid.sum(dim=-1).clamp(min=1.0)
+        loss = per_seq.mean()
+    else:
+        loss = rkl.mean()
+    return loss * (t * t)
+
+
+def _get_trainer_callback_base():
+    """Lazy-resolve ``transformers.TrainerCallback`` (mirror v0.53.11)."""
+    try:
+        from transformers import TrainerCallback
+
+        return TrainerCallback
+    except ImportError:
+        return object
+
+
+_TrainerCallbackBase = _get_trainer_callback_base()
+
+
+class MiniLLMCallback(_TrainerCallbackBase):  # type: ignore[misc, valid-type]
+    """Live MiniLLM helper + HF TrainerCallback (v0.71.11 #237).
+
+    Carries the :class:`MiniLLMConfig` and provides the loss terms the
+    distill trainer applies:
+
+    - :meth:`distill_term` — teacher-mixed length-normalised reverse-KL.
+    - :meth:`anchor_term` — pretrain-anchor SFT CE on a small batch read
+      lazily from ``pretrain_anchor_path``, scaled by
+      ``pretrain_anchor_weight`` (prevents the student drifting away from
+      coherent language).
+
+    Honest scope: the teacher-mix is the offline distribution-blend
+    analog of MiniLLM's on-policy teacher-mixed *sampling*; a full
+    autoregressive rollout loop (sample → teacher-score) is a larger
+    follow-up documented as a known limitation.
+    """
+
+    def __init__(
+        self,
+        config: MiniLLMConfig,
+        *,
+        tokenizer: Optional[object] = None,
+        temperature: float = 1.0,
+        max_anchor_rows: int = 8,
+        anchor_max_length: int = 128,
+    ) -> None:
+        if not isinstance(config, MiniLLMConfig):
+            raise TypeError(
+                f"config must be MiniLLMConfig, got {type(config).__name__}"
+            )
+        self.config = config
+        self.tokenizer = tokenizer
+        self.temperature = float(temperature)
+        self.max_anchor_rows = int(max_anchor_rows)
+        self.anchor_max_length = int(anchor_max_length)
+        self._anchor_inputs: Optional[dict] = None
+        self._anchor_loaded = False
+
+    def distill_term(self, student_logits, teacher_logits, labels):
+        """Compute the teacher-mixed length-normalised reverse-KL term."""
+        return minillm_distill_term(
+            student_logits,
+            teacher_logits,
+            labels,
+            config=self.config,
+            temperature=self.temperature,
+        )
+
+    def _load_anchor(self) -> Optional[dict]:
+        """Lazily tokenise a small pretrain-anchor batch (cwd-contained)."""
+        if self._anchor_loaded:
+            return self._anchor_inputs
+        self._anchor_loaded = True
+        path = self.config.pretrain_anchor_path
+        if (
+            path is None
+            or self.config.pretrain_anchor_weight <= 0.0
+            or self.tokenizer is None
+        ):
+            return None
+        from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
+
+        # cwd-containment + TOCTOU symlink rejection (security review fix —
+        # mirrors v0.53.7 / v0.65 reader policy; was a bare is_under_cwd).
+        enforce_under_cwd_and_no_symlink(path, "minillm_pretrain_anchor_path")
+        import json
+
+        texts: list[str] = []
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                # Per-line byte cap — defends against a single multi-MB line
+                # blowing up tokenisation memory (matches v0.53.7 #106 caps).
+                if len(line) > _MAX_ANCHOR_ROW_BYTES:
+                    continue
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                    text = obj.get("text") or obj.get("content") or ""
+                except (ValueError, AttributeError):
+                    text = line
+                if text:
+                    texts.append(str(text))
+                if len(texts) >= self.max_anchor_rows:
+                    break
+        if not texts:
+            return None
+        enc = self.tokenizer(
+            texts,
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+            max_length=self.anchor_max_length,
+        )
+        self._anchor_inputs = {
+            "input_ids": enc["input_ids"],
+            "attention_mask": enc["attention_mask"],
+        }
+        return self._anchor_inputs
+
+    def anchor_term(self, model):
+        """Pretrain-anchor SFT cross-entropy scaled by the anchor weight.
+
+        Returns ``None`` when the anchor is disabled / unavailable so the
+        caller can skip the term cleanly.
+        """
+        weight = float(self.config.pretrain_anchor_weight)
+        if weight <= 0.0:
+            return None
+        anchor = self._load_anchor()
+        if anchor is None:
+            return None
+        import torch
+
+        device = next(model.parameters()).device
+        input_ids = anchor["input_ids"].to(device)
+        attention_mask = anchor["attention_mask"].to(device)
+        out = model(input_ids=input_ids, attention_mask=attention_mask)
+        logits = out.logits
+        shift_logits = logits[:, :-1, :].contiguous()
+        shift_labels = input_ids[:, 1:].contiguous()
+        # Mask padding so the anchor CE only counts real tokens.
+        pad_mask = attention_mask[:, 1:].contiguous().bool()
+        shift_labels = shift_labels.masked_fill(~pad_mask, -100)
+        ce = torch.nn.functional.cross_entropy(
+            shift_logits.view(-1, shift_logits.size(-1)),
+            shift_labels.view(-1),
+            ignore_index=-100,
+        )
+        return weight * ce
+
+
+def build_minillm_callback(
+    config,
+    *,
+    tokenizer: Optional[object] = None,
+    temperature: float = 1.0,
+) -> "MiniLLMCallback":
+    """Build the live MiniLLM callback / loss helper (v0.71.11 #237).
+
+    Lifts the v0.70.0 ``NotImplementedError`` stub. Validates the config
+    type at the public boundary (fail-fast policy), then returns a
+    :class:`MiniLLMCallback`.
     """
     if not isinstance(config, MiniLLMConfig):
         raise TypeError(
             f"config must be MiniLLMConfig, got {type(config).__name__}"
         )
-    raise NotImplementedError(
-        "Live MiniLLM HF Trainer callback is deferred to v0.70.1. "
-        "v0.70.0 ships the schema + validators only."
-    )
+    return MiniLLMCallback(config, tokenizer=tokenizer, temperature=temperature)
