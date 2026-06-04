@@ -6,7 +6,7 @@ Subcommands:
 - ``status`` — print counters
 - ``record`` — append a thumbs-up/down record
 - ``harvest`` — emit DPO pairs as JSONL
-- ``train`` — nightly DPO/KTO/ORPO train (deferred to v0.68.1)
+- ``train`` — run (``--once``) or schedule the nightly DPO/KTO/ORPO train (v0.71.13 #229)
 """
 
 from __future__ import annotations
@@ -53,7 +53,7 @@ def init_cmd(
     console.print(
         Panel(
             f"DB:     [bold]{escape(db)}[/]\n"
-            f"Tables: [bold]interactions[/], [bold]thumbs[/]",
+            f"Tables: [bold]interactions[/], [bold]thumbs[/], [bold]state[/]",
             title="soup local-rl init",
         )
     )
@@ -166,14 +166,36 @@ def train_cmd(
         "--backend",
         help="Allowed: " + ", ".join(sorted(SUPPORTED_LOCAL_RL_BACKENDS)),
     ),
-    model: str = typer.Option(..., "--model", help="Model id (Ollama tag or MLX path)"),
+    model: str = typer.Option(
+        ...,
+        "--model",
+        help="Training base — HF repo id or local path (NOT the Ollama tag)",
+    ),
     train_method: str = typer.Option(
         "dpo",
         "--train-method",
         help="Allowed: " + ", ".join(sorted(SUPPORTED_LOCAL_RL_TRAIN_METHODS)),
     ),
+    once: bool = typer.Option(
+        False,
+        "--once",
+        help="Run the train now (ad-hoc); skip scheduler install.",
+    ),
+    min_pairs: int = typer.Option(
+        10, "--min-pairs", help="Skip training when fewer pairs are harvested."
+    ),
+    output: str = typer.Option(
+        "local_rl_adapter", "--output", "-o", help="Adapter output directory"
+    ),
+    scheduler_dir: str = typer.Option(
+        "local-rl-scheduler",
+        "--scheduler-dir",
+        help="Directory to render the systemd / launchd scaffold into.",
+    ),
+    hour: int = typer.Option(3, "--hour", help="Daily train hour (local time)."),
+    minute: int = typer.Option(0, "--minute", help="Daily train minute."),
 ) -> None:
-    """Trigger the nightly DPO/KTO/ORPO train. Deferred to v0.68.1."""
+    """Run (``--once``) or schedule the nightly DPO/KTO/ORPO train."""
     try:
         cfg = LocalRLConfig(
             backend=backend,
@@ -185,13 +207,73 @@ def train_cmd(
         console.print(f"[red]{escape(str(exc))}[/]")
         raise typer.Exit(2) from exc
 
-    try:
-        run_nightly_train(cfg)
-    except NotImplementedError as exc:
+    if not once:
+        # Render the scheduler scaffold; never run systemctl / launchctl.
+        import sys
+
+        from soup_cli.utils.local_rl_scheduler import write_scheduler_files
+
+        try:
+            written = write_scheduler_files(
+                scheduler_dir,
+                soup_python=sys.executable,
+                db_path=db,
+                model=model,
+                train_method=train_method,
+                hour=hour,
+                minute=minute,
+            )
+        except (TypeError, ValueError) as exc:
+            console.print(f"[red]{escape(str(exc))}[/]")
+            raise typer.Exit(2) from exc
+        files = "\n".join(f"  [bold]{escape(n)}[/]" for n in sorted(written))
         console.print(
             Panel(
-                f"[yellow]{escape(str(exc))}[/]",
-                title="Live local-rl train deferred",
+                f"Rendered the nightly-train scaffold into "
+                f"[bold]{escape(scheduler_dir)}[/]:\n{files}\n\n"
+                "[dim]Linux:[/] cp soup-local-rl.{service,timer} ~/.config/systemd/user/ "
+                "&& systemctl --user enable --now soup-local-rl.timer\n"
+                "[dim]macOS:[/] cp com.soup.local-rl.plist ~/Library/LaunchAgents/ "
+                "&& launchctl load ~/Library/LaunchAgents/com.soup.local-rl.plist\n"
+                "[dim]Now:[/] re-run with [bold]--once[/] for an ad-hoc train.",
+                title="soup local-rl train — scheduler scaffold",
             )
         )
-        raise typer.Exit(3) from exc
+        return
+
+    import subprocess
+
+    try:
+        result = run_nightly_train(
+            cfg, once=True, min_pairs=min_pairs, output_dir=output
+        )
+    except (TypeError, ValueError, FileNotFoundError) as exc:
+        console.print(f"[red]{escape(str(exc))}[/]")
+        raise typer.Exit(2) from exc
+    except subprocess.SubprocessError as exc:
+        # The underlying `soup train` subprocess failed (e.g. OOM / bad base).
+        console.print(
+            Panel(
+                f"[red]Training subprocess failed:[/] {escape(str(exc))}",
+                title="soup local-rl train — failed",
+            )
+        )
+        raise typer.Exit(1) from exc
+
+    if result.status.startswith("skipped"):
+        console.print(
+            Panel(
+                f"[yellow]Skipped:[/] {escape(result.reason)}",
+                title="soup local-rl train — skipped",
+            )
+        )
+        return
+
+    console.print(
+        Panel(
+            f"Trained: [bold]{result.num_pairs}[/] pairs via "
+            f"[bold]{escape(cfg.train_method)}[/]\n"
+            f"Output:  [bold]{escape(result.output_dir or output)}[/]",
+            title="soup local-rl train — done",
+        )
+    )

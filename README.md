@@ -49,20 +49,18 @@ infrastructure instead of improving models. Soup fixes that.
 
 ## What's New
 
-**v0.71.12 — Architecture, distillation & adapter-training (live).** Seven schema-only surfaces
-from earlier releases are now real, validated end-to-end on tiny models:
+**v0.71.13 — Prompt-compile family (live).** Four commands that shipped as deferred stubs in
+v0.68.0 are now real, validated end-to-end on tiny models:
 
-- **`soup serve --bank <bank.json>`** — multi-tenant VeRA / VB-LoRA serving: load N personas at
-  KB-per-user (shared projection + per-user vectors) and pick the active one per request via the
-  `X-User-Id` header. An unknown / absent id is a zero-delta no-op (no cross-request leak).
-- **`task: moe_lora_routing`** — MoLE per-token routing trains a small gating network over N frozen
-  task LoRAs (`mole_task_adapters`, `mole_top_k`, `mole_temperature`); only the router trains.
-- **`task: distill` with `distill_mode: sequence`** — sequence-level KD trains the student on the
-  teacher's generated continuations (cross-tokenizer-friendly), alongside the existing token logit-KL.
-- **`task: classifier` with a `lora` section** — train a frozen encoder + LoRA adapter classifier
-  instead of the full model.
-- **`use_mod` (Mixture-of-Depths) · `expand_layers` (LLaMA Pro) · `use_longlora` (S² attention)** —
-  the architecture knobs that were schema-only are now live for Llama / Qwen / Mistral (+ Phi for LongLoRA).
+- **`soup local-rl train --once`** — harvest your latest 👍/👎 feedback into DPO pairs and train a
+  real DPO/KTO/ORPO round via `soup train` (argv list, no shell). A `state` table tracks the last
+  train so a re-run with no new feedback skips. Without `--once` it renders a systemd/launchd nightly
+  scheduler scaffold you can install.
+- **`soup distill-prompt`** — call a teacher model (Ollama / Anthropic / vLLM) once per trace and
+  write a real distillation dataset: `sft`/`kl` → `{messages}`, `preference` → `{prompt, chosen, rejected}`.
+- **`soup compile`** — DSPy / GEPA / TextGrad prompt-program optimisation, and **`soup compile-tools`**
+  — TextGrad / GEPA tool-schema optimisation, both behind the new `[compile]` extra
+  (`pip install 'soup-cli[compile]'`).
 
 Full history: [CHANGELOG.md](CHANGELOG.md) &middot; [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 

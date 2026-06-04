@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "soup-cli"
-version = "0.71.12"
+version = "0.71.13"
 description = "Fine-tune LLMs in one command. No SSH, no config hell."
 readme = "README.md"
 license = "Apache-2.0"
@@ -94,6 +94,10 @@ pdf = ["reportlab>=4.0.0"]
 # v0.71.3 #180 — codecarbon offline energy/CO2 measurement for
 # `soup train --track-energy` (offline; no IP-geolocation network call).
 carbon = ["codecarbon>=2.0.0"]
+# v0.71.13 #225/#227 — prompt-program / tool-schema compilers
+# (`soup compile` / `soup compile-tools`). Lazy-imported with a friendly
+# ImportError; not installed by default (heavy dependency trees).
+compile = ["dspy-ai>=2.5.0", "textgrad>=0.1.0", "gepa>=0.0.1"]
 
 [project.scripts]
 soup = "soup_cli.cli:run"

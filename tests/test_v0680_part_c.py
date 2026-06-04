@@ -161,10 +161,20 @@ class TestToolCompilePlan:
             )
 
 
+_VALID_OPENAPI = {
+    "openapi": "3.0.0",
+    "info": {"title": "t", "version": "1"},
+    "paths": {
+        "/w": {"get": {"operationId": "listW", "description": "List widgets"}}
+    },
+}
+
+
 class TestRunToolCompileDeferred:
-    def test_raises_v068_1(
+    def test_live_missing_dep_importerror(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        # v0.71.13 #227: live runner; textgrad absent -> friendly ImportError.
         from soup_cli.utils.compile_tools import (
             build_tool_compile_plan,
             run_tool_compile,
@@ -172,16 +182,16 @@ class TestRunToolCompileDeferred:
 
         monkeypatch.chdir(tmp_path)
         spec = tmp_path / "spec.json"
-        spec.write_text("{}", encoding="utf-8")
+        spec.write_text(json.dumps(_VALID_OPENAPI), encoding="utf-8")
         eval_suite = tmp_path / "eval.jsonl"
-        eval_suite.write_text("[]", encoding="utf-8")
+        eval_suite.write_text('{"q":"1"}\n', encoding="utf-8")
         plan = build_tool_compile_plan(
             spec_path=str(spec),
             eval_suite_path=str(eval_suite),
             optimizer="textgrad",
             output_path="tools.json",
         )
-        with pytest.raises(NotImplementedError, match="v0.68.1"):
+        with pytest.raises(ImportError, match=r"soup-cli\[compile\]"):
             run_tool_compile(plan)
 
     def test_non_plan_rejected(self) -> None:
@@ -222,22 +232,23 @@ class TestCli:
         )
         assert result.exit_code == 0, (result.output, repr(result.exception))
 
-    def test_live_exits_3(
+    def test_live_missing_dep_exits_2(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        # v0.71.13 #227: live runner; textgrad absent -> friendly exit 2.
         from soup_cli.cli import app
 
         monkeypatch.chdir(tmp_path)
         spec = tmp_path / "spec.json"
-        spec.write_text("{}", encoding="utf-8")
+        spec.write_text(json.dumps(_VALID_OPENAPI), encoding="utf-8")
         eval_suite = tmp_path / "eval.jsonl"
-        eval_suite.write_text("[]", encoding="utf-8")
+        eval_suite.write_text('{"q":"1"}\n', encoding="utf-8")
         runner = CliRunner()
         result = runner.invoke(
             app,
             ["compile-tools", str(spec), "--eval", str(eval_suite)],
         )
-        assert result.exit_code == 3, (result.output, repr(result.exception))
+        assert result.exit_code == 2, (result.output, repr(result.exception))
 
 
 class TestSourceWiring:

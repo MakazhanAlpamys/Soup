@@ -325,9 +325,11 @@ class TestHarvestDpoPairs:
 
 
 class TestNightlyTrainDeferred:
-    def test_raises_v068_1(
+    def test_live_skips_when_no_pairs(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        # v0.71.13 #229: live runner; an empty DB harvests 0 pairs and skips
+        # (no NotImplementedError, no train call).
         from soup_cli.utils.local_rl import (
             LocalRLConfig,
             init_local_rl_db,
@@ -338,12 +340,14 @@ class TestNightlyTrainDeferred:
         init_local_rl_db("rl.db")
         cfg = LocalRLConfig(
             backend="ollama",
-            model="llama3:8b",
+            model="org/model",
             db_path="rl.db",
             train_method="dpo",
         )
-        with pytest.raises(NotImplementedError, match="v0.68.1"):
-            run_nightly_train(cfg)
+        res = run_nightly_train(
+            cfg, min_pairs=1, train_fn=lambda **kw: pytest.fail("no pairs")
+        )
+        assert res.status == "skipped_insufficient_pairs"
 
     def test_non_config_rejected(self) -> None:
         from soup_cli.utils.local_rl import run_nightly_train
@@ -423,9 +427,11 @@ class TestCli:
         )
         assert result.exit_code == 0, (result.output, repr(result.exception))
 
-    def test_train_command_exits_3(
+    def test_train_no_once_renders_scheduler(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        # v0.71.13 #229: `train` (no --once) renders the systemd/launchd
+        # scaffold and exits 0 (no systemctl call).
         from soup_cli.cli import app
 
         monkeypatch.chdir(tmp_path)
@@ -441,10 +447,13 @@ class TestCli:
                 "--backend",
                 "ollama",
                 "--model",
-                "llama3:8b",
+                "org/model",
+                "--scheduler-dir",
+                "sched",
             ],
         )
-        assert result.exit_code == 3, (result.output, repr(result.exception))
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        assert (tmp_path / "sched" / "soup-local-rl.timer").is_file()
 
 
 class TestSourceWiring:

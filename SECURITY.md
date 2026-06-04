@@ -36,7 +36,7 @@ in-scope issues:
   dataset, or artifact paths;
 - SSRF in the synthetic-data providers, inference server, or hub/endpoint
   validators;
-- command, Modelfile, or Jinja chat-template injection;
+- command, Modelfile, Jinja chat-template, or systemd/launchd unit injection;
 - secret leakage in logs, crash bundles, or generated artifacts;
 - sandbox escape in the RLVR code-execution reward path.
 

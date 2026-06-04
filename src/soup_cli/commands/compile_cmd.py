@@ -1,8 +1,8 @@
-"""``soup compile`` — DSPy / GEPA prompt-program compiler CLI (v0.68.0 Part A).
+"""``soup compile`` — DSPy / GEPA / TextGrad prompt-program compiler CLI.
 
-Renders a ``CompilePlan`` panel and, when ``--plan-only`` is omitted,
-invokes the deferred-live ``run_compile`` (raises NotImplementedError
-with a v0.68.1 marker). Mirrors v0.61.0 / v0.62.0 stub-then-live CLI policy.
+Renders a ``CompilePlan`` panel and, when ``--plan-only`` is omitted, runs
+the live optimizer (v0.71.13 #225). A missing optimizer library surfaces a
+friendly exit-2 advisory naming ``pip install 'soup-cli[compile]'``.
 """
 
 from __future__ import annotations
@@ -74,14 +74,14 @@ def compile_cmd(
 
     try:
         result = run_compile(plan)
-    except NotImplementedError as exc:
+    except ImportError as exc:
         console.print(
             Panel(
                 f"[yellow]{escape(str(exc))}[/]",
-                title="Live compile deferred",
+                title="compile — missing dependency",
             )
         )
-        raise typer.Exit(3) from exc
+        raise typer.Exit(2) from exc
     except (TypeError, ValueError) as exc:
         console.print(f"[red]{escape(str(exc))}[/]")
         raise typer.Exit(2) from exc

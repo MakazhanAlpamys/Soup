@@ -29,6 +29,20 @@ def distill_prompt_cmd(
         help="Distill strategy. Allowed: "
         + ", ".join(sorted(SUPPORTED_DISTILL_STRATEGIES)),
     ),
+    provider: str = typer.Option(
+        "ollama",
+        "--provider",
+        help="Teacher/student provider: ollama / anthropic / vllm.",
+    ),
+    base_url: str = typer.Option(
+        None, "--base-url", help="Provider base URL (ollama / vllm)."
+    ),
+    temperature: float = typer.Option(
+        0.0, "--temperature", help="Sampling temperature for teacher/student."
+    ),
+    max_rows: int = typer.Option(
+        None, "--max-rows", help="Cap the number of distilled rows."
+    ),
     output: str = typer.Option(
         "distilled.jsonl", "--output", "-o", help="Output JSONL path"
     ),
@@ -55,6 +69,7 @@ def distill_prompt_cmd(
             f"Teacher:   [bold]{escape(plan.teacher)}[/]\n"
             f"Student:   [bold]{escape(plan.student)}[/]\n"
             f"Strategy:  [bold]{escape(plan.strategy)}[/]\n"
+            f"Provider:  [bold]{escape(provider)}[/]\n"
             f"Output:    [bold]{escape(plan.output_path)}[/]",
             title="soup distill-prompt — plan",
         )
@@ -64,12 +79,29 @@ def distill_prompt_cmd(
         return
 
     try:
-        prepare_distill_dataset(plan)
-    except NotImplementedError as exc:
+        n = prepare_distill_dataset(
+            plan,
+            provider=provider,
+            base_url=base_url,
+            temperature=temperature,
+            max_rows=max_rows,
+        )
+    except (TypeError, ValueError) as exc:
+        console.print(f"[red]{escape(str(exc))}[/]")
+        raise typer.Exit(2) from exc
+    except ImportError as exc:
         console.print(
             Panel(
                 f"[yellow]{escape(str(exc))}[/]",
-                title="Live distill-prompt deferred",
+                title="distill-prompt — missing dependency",
             )
         )
-        raise typer.Exit(3) from exc
+        raise typer.Exit(2) from exc
+
+    console.print(
+        Panel(
+            f"Rows:   [bold]{n}[/]\n"
+            f"Output: [bold]{escape(plan.output_path)}[/]",
+            title="soup distill-prompt — done",
+        )
+    )

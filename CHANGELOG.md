@@ -12,6 +12,44 @@ reproducing 70+ versions of notes.
 
 ## [Unreleased]
 
+## [0.71.13] - 2026-06-04
+
+### Added
+- **Prompt-compile family — live wiring** (closes #225, #226, #227, #229). Four
+  `soup` commands that shipped as deferred-stub `NotImplementedError` in v0.68.0
+  are now real, validated end-to-end (real DPO train on SmolLM2-135M + real
+  Ollama teacher distillation on RTX 3050).
+- **`soup local-rl train` runs a real nightly DPO/KTO/ORPO train** (#229).
+  `--once` harvests the latest thumbs-up/down DPO pairs from the local-RL SQLite
+  and trains them via a `soup train` subprocess (argv list, no shell); a `state`
+  table tracks `last_train_at` so a re-run with no new feedback skips, and a run
+  with fewer than `--min-pairs` (default 10) skips. Without `--once` it renders a
+  systemd `.service`/`.timer` + launchd `.plist` scheduler scaffold into
+  `--scheduler-dir` for the user to install. New flags: `--once`, `--min-pairs`,
+  `--output/-o`, `--scheduler-dir`, `--hour`, `--minute`.
+- **`soup distill-prompt` prepares a real distillation dataset** (#226). For
+  each prompt in the traces JSONL the teacher is called once via the v0.20
+  provider helpers (Ollama / Anthropic / vLLM); `sft`/`kl` emit
+  `{messages:[user, assistant=teacher]}` and `preference` emits
+  `{prompt, chosen=teacher, rejected=student}`. New flags: `--provider`,
+  `--base-url`, `--temperature`, `--max-rows`.
+- **`soup compile` runs DSPy / GEPA / TextGrad prompt-program optimisation** (#225)
+  and **`soup compile-tools` runs the TextGrad / GEPA tool-schema optimiser** (#227),
+  both lazy-importing the optimiser libraries behind the new `[compile]` extra
+  (`pip install 'soup-cli[compile]'`) with a friendly `ImportError` naming the
+  extra when absent. `--plan-only` still renders the plan and exits 0.
+
+### Security
+- **systemd / launchd injection defence** (#229). `local-rl` and the scheduler
+  renderers reject `\n` / `\r` in the model id and shell-quote every `ExecStart`
+  argument, so a crafted model id cannot inject extra unit directives.
+
+### Fixed
+- **`local-rl` train config rendered `output` as a mapping** (#229). The nightly
+  `soup train` YAML now emits `output: <dir>` (a plain string the schema accepts)
+  instead of `output: {dir: <dir>}`; a regression test validates the rendered
+  config against `SoupConfig`.
+
 ## [0.71.12] - 2026-06-04
 
 ### Added

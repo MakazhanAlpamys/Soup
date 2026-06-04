@@ -224,7 +224,10 @@ class TestBuildPlan:
 
 
 class TestPrepareDataset:
-    def test_deferred(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_live_writes_rows(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # v0.71.13 #226: live dataset preparation with an injected teacher.
         from soup_cli.utils.prompt_distill import (
             build_distill_prompt_plan,
             prepare_distill_dataset,
@@ -232,7 +235,9 @@ class TestPrepareDataset:
 
         monkeypatch.chdir(tmp_path)
         traces = tmp_path / "traces.jsonl"
-        traces.write_text("[]", encoding="utf-8")
+        traces.write_text(
+            json.dumps({"prompt": "q"}) + "\n", encoding="utf-8"
+        )
         plan = build_distill_prompt_plan(
             traces_path=str(traces),
             teacher="t/x",
@@ -240,8 +245,9 @@ class TestPrepareDataset:
             strategy="sft",
             output_path="o.jsonl",
         )
-        with pytest.raises(NotImplementedError, match="v0.68.1"):
-            prepare_distill_dataset(plan)
+        n = prepare_distill_dataset(plan, teacher_fn=lambda p: {"text": "T"})
+        assert n == 1
+        assert (tmp_path / "o.jsonl").is_file()
 
     def test_non_plan_rejected(self) -> None:
         from soup_cli.utils.prompt_distill import prepare_distill_dataset
@@ -308,12 +314,22 @@ class TestCli:
         )
         assert result.exit_code == 2
 
-    def test_live_exits_3(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_live_writes_output(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # v0.71.13 #226: live runner writes a distilled dataset (provider
+        # mocked so the test never touches the network).
+        import soup_cli.utils.prompt_distill as pd
         from soup_cli.cli import app
 
         monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(
+            pd, "_build_provider_fn", lambda *a, **k: (lambda p: {"text": "R"})
+        )
         traces = tmp_path / "traces.jsonl"
-        traces.write_text("[]", encoding="utf-8")
+        traces.write_text(
+            json.dumps({"prompt": "x"}) + "\n", encoding="utf-8"
+        )
         runner = CliRunner()
         result = runner.invoke(
             app,
@@ -327,9 +343,12 @@ class TestCli:
                 "s",
                 "--strategy",
                 "sft",
+                "--output",
+                "o.jsonl",
             ],
         )
-        assert result.exit_code == 3, (result.output, repr(result.exception))
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        assert (tmp_path / "o.jsonl").is_file()
 
 
 class TestSourceWiring:

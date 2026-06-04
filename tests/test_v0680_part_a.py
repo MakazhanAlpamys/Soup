@@ -389,14 +389,16 @@ class TestBuildCompilePlan:
 
 
 class TestRunCompileDeferred:
-    def test_raises_with_v068_1_marker(
+    def test_live_missing_dep_friendly_importerror(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        # v0.71.13 #225: the runner is live; with dspy absent the real
+        # branch raises a friendly ImportError naming the [compile] extra.
         from soup_cli.utils.prompt_compile import build_compile_plan, run_compile
 
         monkeypatch.chdir(tmp_path)
         prog = tmp_path / "p.py"
-        prog.write_text("pass\n", encoding="utf-8")
+        prog.write_text("program = 1\n", encoding="utf-8")
         suite = tmp_path / "s.json"
         suite.write_text("[]", encoding="utf-8")
         plan = build_compile_plan(
@@ -406,7 +408,7 @@ class TestRunCompileDeferred:
             max_iters=4,
             output_path="out.py",
         )
-        with pytest.raises(NotImplementedError, match="v0.68.1"):
+        with pytest.raises(ImportError, match=r"soup-cli\[compile\]"):
             run_compile(plan)
 
     def test_non_plan_rejected(self) -> None:
@@ -478,13 +480,15 @@ class TestCli:
         )
         assert result.exit_code == 2
 
-    def test_live_exits_3(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Without --plan-only the live runner raises and CLI exits 3."""
+    def test_live_missing_dep_exits_2(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """v0.71.13 #225: live runner with dspy absent -> friendly exit 2."""
         from soup_cli.cli import app
 
         monkeypatch.chdir(tmp_path)
         prog = tmp_path / "p.py"
-        prog.write_text("pass\n", encoding="utf-8")
+        prog.write_text("program = 1\n", encoding="utf-8")
         suite = tmp_path / "s.json"
         suite.write_text("[]", encoding="utf-8")
         runner = CliRunner()
@@ -499,7 +503,7 @@ class TestCli:
                 "mipro",
             ],
         )
-        assert result.exit_code == 3, (result.output, repr(result.exception))
+        assert result.exit_code == 2, (result.output, repr(result.exception))
 
 
 # ---------------------------------------------------------------------------

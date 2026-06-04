@@ -62,12 +62,23 @@ def compile_tools_cmd(
         return
 
     try:
-        run_tool_compile(plan)
-    except NotImplementedError as exc:
+        n = run_tool_compile(plan)
+    except ImportError as exc:
         console.print(
             Panel(
                 f"[yellow]{escape(str(exc))}[/]",
-                title="Live compile-tools deferred",
+                title="compile-tools — missing dependency",
             )
         )
-        raise typer.Exit(3) from exc
+        raise typer.Exit(2) from exc
+    except (TypeError, ValueError, FileNotFoundError) as exc:
+        console.print(f"[red]{escape(str(exc))}[/]")
+        raise typer.Exit(2) from exc
+
+    console.print(
+        Panel(
+            f"Tools:  [bold]{n}[/]\n"
+            f"Output: [bold]{escape(plan.output_path)}[/]",
+            title="soup compile-tools — done",
+        )
+    )

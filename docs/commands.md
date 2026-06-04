@@ -216,15 +216,16 @@ soup adapters bisect <ckpt>... --eval-command "..."  Binary search over training
 soup lock write --base-sha <h> --dataset-sha <h> --env-hash <h>  Write soup.lock (v0.67.0)
 soup lock write --base-sha <h> --dataset-sha <h> --env-lock soup-env.lock  Auto-derive --env-hash from soup-env.lock (v0.71.1)
 soup lock show / soup lock check              Show + drift-check (exit 3 on drift)
-soup compile <program.py> --eval <suite> [--optimizer mipro|gepa|textgrad|copro|bootstrap_fewshot]  DSPy / GEPA prompt-program compiler (v0.68.0)
-soup distill-prompt --traces <jsonl> --teacher <m> --student <m> --strategy sft|preference|kl  Distill prompt-heavy traces to small FT (v0.68.0)
-soup compile-tools <spec.json|yaml> --eval <jsonl> [--optimizer textgrad|gepa]  TextGrad / GEPA tool-schema optimiser (v0.68.0)
+soup compile <program.py> --eval <suite> [--optimizer mipro|gepa|textgrad|copro|bootstrap_fewshot] [--plan-only]  DSPy / GEPA / TextGrad prompt-program compiler — live (v0.71.13; pip install 'soup-cli[compile]')
+soup distill-prompt --traces <jsonl> --teacher <m> --student <m> --strategy sft|preference|kl [--provider ollama|anthropic|vllm] [--base-url <url>] [--temperature F] [--max-rows N]  Distill prompt-heavy traces via a live teacher (v0.71.13)
+soup compile-tools <spec.json|yaml> --eval <jsonl> [--optimizer textgrad|gepa] [--plan-only]  TextGrad / GEPA tool-schema optimiser — live (v0.71.13; pip install 'soup-cli[compile]')
 soup apple-adapter <source-dir> --direction hf-to-mlx|mlx-to-hf|hf-to-apple|mlx-to-apple --output <dir> [--sign]  HF / MLX / Apple FoundationModels adapter conversion (v0.68.0)
 soup local-rl init --db <path>                Create personal-LLM flywheel SQLite schema (v0.68.0)
 soup local-rl status --db <path>              Print interactions / thumbs-up / thumbs-down counters
 soup local-rl record --db <path> --prompt <q> --response <r> --thumb up|down  Append thumbs record
 soup local-rl harvest --db <path> -o <pairs.jsonl>  Harvest DPO pairs from thumbs into JSONL
-soup local-rl train --db <path> --backend ollama|mlx --model <id>  Nightly DPO/KTO/ORPO train (v0.68.1)
+soup local-rl train --db <path> --model <id> --once [--train-method dpo|kto|orpo] [--min-pairs N] [-o <dir>]  Ad-hoc DPO/KTO/ORPO train from harvested thumbs — live (v0.71.13)
+soup local-rl train --db <path> --model <id> [--scheduler-dir <dir>] [--hour H] [--minute M]  Render a systemd/launchd nightly-train scaffold (no --once) (v0.71.13)
 soup build <manifest.yaml> [--dry-run] [--output-dir <dir>]  dbt-for-SFT DAG: validate + plan + live materialise (v0.69.0; live v0.71.6)
 soup expect <data.jsonl> <suite.yaml>         Expectations suite: PII / token-length / refusal / judge (v0.69.0)
 soup data gen-magpie --base <m> --provider ollama|vllm --target N --output <jsonl> [--base-url <url>] [--quality-filter]  Magpie synthetic generator — live (v0.69.0; live v0.71.6)
