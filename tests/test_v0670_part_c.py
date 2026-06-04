@@ -237,15 +237,20 @@ class TestValidateMoleCompat:
 
 
 class TestBuildGatingKernel:
-    def test_deferred_v0_67_1(self) -> None:
+    def test_live_returns_module(self) -> None:
+        # v0.71.12 #222 — the v0.67.1 deferred stub is lifted: build_gating_kernel
+        # now returns a live torch nn.Module (per-token top-k softmax router).
+        import torch
+
         from soup_cli.utils.mole_routing import MoleGatingConfig, build_gating_kernel
 
         cfg = MoleGatingConfig(
-            num_task_adapters=4, hidden_dim=128, temperature=1.0, top_k=2
+            num_task_adapters=4, hidden_dim=8, temperature=1.0, top_k=2
         )
-        with pytest.raises(NotImplementedError) as exc_info:
-            build_gating_kernel(cfg)
-        assert "v0.67.1" in str(exc_info.value)
+        kernel = build_gating_kernel(cfg)
+        weights = kernel(torch.randn(2, 3, 8))
+        assert weights.shape == (2, 3, 4)
+        assert torch.allclose(weights.sum(-1), torch.ones(2, 3), atol=1e-5)
 
     def test_non_config_rejected(self) -> None:
         from soup_cli.utils.mole_routing import build_gating_kernel
@@ -263,6 +268,8 @@ class TestSchemaIntegration:
     def test_task_accepted_in_literal(self) -> None:
         from soup_cli.config.loader import load_config_from_string
 
+        # v0.71.12 #222 — task='moe_lora_routing' now requires
+        # training.mole_task_adapters (>= 2 task-LoRA paths to route over).
         yaml = """
 base: meta-llama/Llama-3.1-8B
 task: moe_lora_routing
@@ -271,6 +278,8 @@ modality: text
 data:
   train: data.jsonl
   format: chatml
+training:
+  mole_task_adapters: ['./adapter_a', './adapter_b']
 """
         cfg = load_config_from_string(yaml)
         assert cfg.task == "moe_lora_routing"

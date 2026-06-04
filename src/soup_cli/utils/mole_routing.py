@@ -1,19 +1,20 @@
-"""MoLE per-token adapter routing (v0.67.0 Part C).
+"""MoLE per-token adapter routing (v0.67.0 schema / v0.71.12 #222 live).
 
-A gating network that routes per-token activations to one of N task
-LoRAs. Following the MoLE paper (Mixture of LoRA Experts), inference-
-time dispatch uses softmax gating over the per-token hidden state to
-select top-K LoRAs and blend them by gating logits.
+A gating network that routes per-token activations to a weighted blend of N
+task LoRAs. Following the MoLE paper (Mixture of LoRA Experts, Wu et al. 2024),
+dispatch uses softmax gating over the per-token hidden state to select top-K
+LoRAs and blend them by gating weights.
 
-v0.67.0 ships the schema + cross-validator. The live gating-kernel
-training + serving-time dispatch is deferred to v0.67.1 (mirrors
-v0.27.0 MII / v0.50.0 GRPO Plus / v0.62.0 steering stub-then-live).
+v0.67.0 shipped the schema + cross-validator with a deferred ``build_gating_kernel``
+stub; v0.71.12 #222 lifts the stub to a live ``torch.nn.Module`` and wires the
+``MoleRoutingTrainerWrapper`` (``trainer/mole_routing.py``).
 
 Public surface:
 
 - ``MoleGatingConfig`` frozen dataclass
 - ``validate_mole_compat(task, backend, num_task_adapters)``
-- ``build_gating_kernel(config)`` deferred-live stub
+- ``validate_mole_task_adapters(value)``
+- ``build_gating_kernel(config)`` -> live ``torch.nn.Module`` (per-token router)
 - New ``task='moe_lora_routing'`` Literal on ``SoupConfig.task``
 
 Design notes:
@@ -29,6 +30,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from functools import lru_cache
 
 # ---------------------------------------------------------------------------
 # Bounds (closed, locked at module load)
@@ -40,6 +42,7 @@ MIN_HIDDEN_DIM = 1
 MAX_HIDDEN_DIM = 16_384
 MIN_TEMPERATURE = 1e-6
 MAX_TEMPERATURE = 100.0
+_MAX_ADAPTER_PATH_LEN = 4096
 
 
 # ---------------------------------------------------------------------------
@@ -133,6 +136,45 @@ class MoleGatingConfig:
 # ---------------------------------------------------------------------------
 
 
+def validate_mole_task_adapters(value: object) -> list[str]:
+    """Validate the per-token MoLE task-adapter path list.
+
+    Requires a list of `[MIN_TASK_ADAPTERS, MAX_TASK_ADAPTERS]` non-empty,
+    null-byte-free, `<= _MAX_ADAPTER_PATH_LEN`-char path strings. Returns a
+    defensive copy. Duplicate paths are rejected (an adapter routed to twice
+    is a config error). Containment / symlink checks happen at trainer load
+    time (paths may be HF ids or local dirs — mirrors `cfg.base` policy).
+    """
+    if not isinstance(value, (list, tuple)):
+        raise TypeError("mole_task_adapters must be a list of paths")
+    paths = list(value)
+    if len(paths) < MIN_TASK_ADAPTERS:
+        raise ValueError(
+            f"mole_task_adapters needs >= {MIN_TASK_ADAPTERS} adapters, "
+            f"got {len(paths)}"
+        )
+    if len(paths) > MAX_TASK_ADAPTERS:
+        raise ValueError(
+            f"mole_task_adapters {len(paths)} > cap {MAX_TASK_ADAPTERS}"
+        )
+    seen: set[str] = set()
+    for item in paths:
+        if isinstance(item, bool) or not isinstance(item, str):
+            raise TypeError("each mole_task_adapter must be a string path")
+        if not item:
+            raise ValueError("mole_task_adapter path must be non-empty")
+        if "\x00" in item:
+            raise ValueError("mole_task_adapter path must not contain null bytes")
+        if len(item) > _MAX_ADAPTER_PATH_LEN:
+            raise ValueError(
+                f"mole_task_adapter path exceeds {_MAX_ADAPTER_PATH_LEN} chars"
+            )
+        if item in seen:
+            raise ValueError(f"duplicate mole_task_adapter path {item!r}")
+        seen.add(item)
+    return paths
+
+
 def validate_mole_compat(
     *,
     task: str,
@@ -157,7 +199,7 @@ def validate_mole_compat(
     if backend == "mlx":
         raise ValueError(
             "MoLE routing is not supported on the mlx backend "
-            "(live wiring deferred; see v0.67.1)"
+            "(the gating kernel needs torch dispatch that mlx-lm does not expose)"
         )
     _check_int(
         num_task_adapters,
@@ -168,21 +210,65 @@ def validate_mole_compat(
 
 
 # ---------------------------------------------------------------------------
-# Deferred-live stub
+# Live gating kernel (v0.71.12 #222)
 # ---------------------------------------------------------------------------
 
 
-def build_gating_kernel(config: MoleGatingConfig):
-    """Build a per-token gating kernel for MoLE dispatch.
+@lru_cache(maxsize=1)
+def _gating_kernel_cls():
+    """Materialise the gating-kernel ``nn.Module`` class (lazy torch import).
 
-    Deferred to v0.67.1: live wiring requires the v0.22.0 multi-adapter
-    serving surface plus a torch gating module that emits softmax
-    routing logits per token. The schema (this module) ships now so
-    operators can wire ``num_task_adapters`` / ``top_k`` / ``temperature``
-    into their config; the live kernel comes next.
+    ``lru_cache`` makes it a process-singleton (matches ``make_mole_trainer_class``
+    in ``trainer/mole_routing.py``) so the module top stays torch-free for the
+    CLI-startup hot path.
+    """
+    import torch
+    from torch import nn
+
+    class MoleGatingKernel(nn.Module):
+        """Per-token router over N task LoRAs (MoLE, Wu et al. 2024).
+
+        ``forward(hidden)`` maps a ``[..., hidden_dim]`` hidden state to
+        ``[..., num_task_adapters]`` softmax routing weights via a ``nn.Linear``
+        gate + temperature-scaled top-k softmax. When ``top_k < num_task_adapters``
+        only the top-k adapters per token get non-zero weight (sparse dispatch),
+        and the kept logits are renormalised via softmax so the weights sum to 1.
+        """
+
+        def __init__(self, config: MoleGatingConfig):
+            super().__init__()
+            self.num_task_adapters = config.num_task_adapters
+            self.hidden_dim = config.hidden_dim
+            self.temperature = float(config.temperature)
+            self.top_k = config.top_k
+            # bias=False — a pure linear router over the residual stream.
+            self.gate = nn.Linear(
+                config.hidden_dim, config.num_task_adapters, bias=False
+            )
+
+        def forward(self, hidden):  # noqa: D401 — torch forward
+            logits = self.gate(hidden) / self.temperature
+            if self.top_k < self.num_task_adapters:
+                topv, topi = torch.topk(logits, self.top_k, dim=-1)
+                masked = torch.full_like(logits, float("-inf"))
+                masked.scatter_(-1, topi, topv)
+                logits = masked
+            return torch.softmax(logits, dim=-1)
+
+    return MoleGatingKernel
+
+
+def build_gating_kernel(config: MoleGatingConfig):
+    """Build a live per-token gating kernel for MoLE dispatch (v0.71.12 #222).
+
+    Returns a ``torch.nn.Module`` whose forward maps a ``[..., hidden_dim]``
+    hidden state to ``[..., num_task_adapters]`` per-token routing weights. The
+    gate is the only trainable parameter in a MoLE run — the base model and
+    every task LoRA stay frozen, and the router learns which adapter(s) each
+    token should be routed to.
+
+    Lazy torch import (heavy dep stays out of the module top, per project policy).
     """
     if not isinstance(config, MoleGatingConfig):
         raise TypeError("config must be MoleGatingConfig")
-    raise NotImplementedError(
-        "build_gating_kernel live wiring deferred to v0.67.1"
-    )
+    return _gating_kernel_cls()(config)

@@ -49,21 +49,20 @@ infrastructure instead of improving models. Soup fixes that.
 
 ## What's New
 
-**v0.71.11 — GRPO / RL callbacks (live).** The reward-safety, distillation, and RL-loop
-surfaces from v0.70.0 are now real, validated end-to-end on SmolLM2-135M:
+**v0.71.12 — Architecture, distillation & adapter-training (live).** Seven schema-only surfaces
+from earlier releases are now real, validated end-to-end on tiny models:
 
-- **`soup train --reward-hack-detector info_rm|rm_ensemble`** — a live GRPO callback that watches
-  the per-step rewards, computes an InfoRM cluster-separation drop or RM-ensemble divergence,
-  classifies OK/WARN/HACK, and halts on HACK with `--reward-hack-halt`.
-- **`soup train --echo-trap-enabled`** — catches RAGEN-style degenerate repetition in multi-turn
-  agent RL: scores per-trajectory n-gram repetition, OK/WARN/TRAP, halts with `--echo-trap-halt`.
-- **`soup train --rl-checkpoint-save-every-steps N`** — mid-epoch RL checkpoints (adapter +
-  optimizer state + manifest) so a long GRPO/PPO run survives a crash; pruned to `--rl-checkpoint-keep-last`.
-- **`task: distill` with `--uld-strategy` or `--minillm-enabled`** — live cross-tokenizer ULD
-  (Wasserstein-1 / top-k aligned) and MiniLLM teacher-mixed length-normalised reverse-KL with an
-  optional pretrain anchor.
-- **`soup iterative-dpo`** — runs the full sample → reward-score → build-pairs → DPO-train loop
-  across rounds; each round samples from the previous adapter and trains a fresh LoRA on the harvest.
+- **`soup serve --bank <bank.json>`** — multi-tenant VeRA / VB-LoRA serving: load N personas at
+  KB-per-user (shared projection + per-user vectors) and pick the active one per request via the
+  `X-User-Id` header. An unknown / absent id is a zero-delta no-op (no cross-request leak).
+- **`task: moe_lora_routing`** — MoLE per-token routing trains a small gating network over N frozen
+  task LoRAs (`mole_task_adapters`, `mole_top_k`, `mole_temperature`); only the router trains.
+- **`task: distill` with `distill_mode: sequence`** — sequence-level KD trains the student on the
+  teacher's generated continuations (cross-tokenizer-friendly), alongside the existing token logit-KL.
+- **`task: classifier` with a `lora` section** — train a frozen encoder + LoRA adapter classifier
+  instead of the full model.
+- **`use_mod` (Mixture-of-Depths) · `expand_layers` (LLaMA Pro) · `use_longlora` (S² attention)** —
+  the architecture knobs that were schema-only are now live for Llama / Qwen / Mistral (+ Phi for LongLoRA).
 
 Full history: [CHANGELOG.md](CHANGELOG.md) &middot; [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 

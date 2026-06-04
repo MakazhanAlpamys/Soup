@@ -903,13 +903,21 @@ class TrainingConfig(BaseModel):
             "1000. (v0.41.0)"
         ),
     )
-    # v0.41.0 Part C — Mixture-of-Depths (selective-token routing).
+    # v0.41.0 Part C schema / v0.71.12 #84 live — Mixture-of-Depths routing.
     use_mod: bool = Field(
         default=False,
         description=(
-            "Enable Mixture-of-Depths routing patch. Schema only in v0.41.0; "
-            "live patch deferred to v0.41.1 (mirrors v0.27.0 MII / v0.37.0 "
-            "multipack stub-then-live pattern)."
+            "Enable Mixture-of-Depths selective-token routing (arXiv:2404.02258). "
+            "Live in v0.71.12 #84 for SFT + Pretrain on Llama / Qwen / Mistral; "
+            "each decoder layer gets a router that passes only the top-k tokens "
+            "(k = floor(seq_len * mod_capacity_factor)) through the block."
+        ),
+    )
+    mod_capacity_factor: float = Field(
+        default=0.125, gt=0.0, le=1.0,
+        description=(
+            "Fraction of tokens routed through each block when use_mod=True. "
+            "Bounded (0, 1]; default 0.125 (per the MoD paper). (v0.71.12 #84)"
         ),
     )
     # v0.41.0 Part C — Friendly aliases for `quantization` (LF / Axolotl users).
@@ -1218,6 +1226,32 @@ class TrainingConfig(BaseModel):
             "num_labels. Capped at 1024 entries. (v0.52.0)"
         ),
     )
+    # MoLE per-token adapter routing (v0.67.0 schema / v0.71.12 #222 live)
+    mole_task_adapters: Optional[List[str]] = Field(
+        default=None,
+        description=(
+            "Paths (HF ids or local dirs) to the N pre-trained task LoRA "
+            "adapters routed over by the MoLE gate. Required when "
+            "task='moe_lora_routing'; 2-64 entries, deduplicated. The base "
+            "model + every task adapter stay frozen — only the gate trains. "
+            "(v0.71.12 #222)"
+        ),
+    )
+    mole_top_k: Optional[int] = Field(
+        default=None,
+        description=(
+            "Number of task adapters each token is routed to (sparse top-k "
+            "dispatch). Defaults to num_task_adapters (dense) when unset. "
+            "1 <= top_k <= len(mole_task_adapters). (v0.71.12 #222)"
+        ),
+    )
+    mole_temperature: Optional[float] = Field(
+        default=None,
+        description=(
+            "Softmax temperature for the MoLE router (default 1.0). "
+            "(1e-6, 100.0]. (v0.71.12 #222)"
+        ),
+    )
     # Part C — knowledge distillation
     teacher_model: Optional[str] = Field(
         default=None,
@@ -1241,6 +1275,30 @@ class TrainingConfig(BaseModel):
         description=(
             "Softmax temperature applied to teacher and student logits "
             "before the divergence. Bounded [0.05, 100.0]. (v0.52.0)"
+        ),
+    )
+    distill_mode: Literal["token", "sequence"] = Field(
+        default="token",
+        description=(
+            "Distillation mode. 'token' (default, v0.53.2) = column-aligned "
+            "logit KL — requires a shared tokenizer (or set uld_strategy for "
+            "the cross-tokenizer logit path). 'sequence' (v0.71.12) = "
+            "sequence-level KD: the teacher GENERATES a completion per prompt "
+            "and the student does plain CE on the re-tokenised output, which "
+            "works across ANY tokenizer pair (e.g. Llama-3 student / Qwen-2 "
+            "teacher)."
+        ),
+    )
+    # v0.71.12 #146 — opt-in LoRA / PEFT path for classifier-family tasks.
+    classifier_lora: bool = Field(
+        default=False,
+        description=(
+            "Wrap the sequence-classification head with LoRA (task_type="
+            "'SEQ_CLS') instead of full fine-tuning. Opt-in (default False "
+            "preserves the v0.53.2 full-finetune behaviour). Reuses the "
+            "training.lora block (r / alpha / dropout / target_modules). "
+            "Only honored for task in (classifier, reranker, cross_encoder). "
+            "(v0.71.12 #146)"
         ),
     )
     # Part E — EBFT + GDPO
@@ -1689,6 +1747,26 @@ class TrainingConfig(BaseModel):
 
         return validate_distill_temperature(v)
 
+    @field_validator("distill_mode", mode="before")
+    @classmethod
+    def _validate_distill_mode(cls, v):
+        """v0.71.12 #145 — canonicalise + reject unknown distill modes."""
+        if v is None:
+            return "token"
+        from soup_cli.utils.distill import validate_distill_mode
+
+        return validate_distill_mode(v)
+
+    @field_validator("mod_capacity_factor", mode="before")
+    @classmethod
+    def _validate_mod_capacity_factor(cls, v):
+        """v0.71.12 #84 — bool-before-float guard (bool subclasses int)."""
+        if v is None:
+            return 0.125
+        from soup_cli.utils.mod import validate_capacity_factor
+
+        return validate_capacity_factor(v)
+
     @field_validator("ebft_temperature", mode="before")
     @classmethod
     def _validate_ebft_temperature(cls, v):
@@ -1708,6 +1786,53 @@ class TrainingConfig(BaseModel):
         from soup_cli.utils.classifier import validate_label_names
 
         return validate_label_names(v)
+
+    @field_validator("mole_task_adapters")
+    @classmethod
+    def _validate_mole_task_adapters(cls, v):
+        """v0.71.12 #222 — 2-64 deduplicated non-empty path strings."""
+        if v is None:
+            return None
+        from soup_cli.utils.mole_routing import validate_mole_task_adapters
+
+        return validate_mole_task_adapters(v)
+
+    @field_validator("mole_top_k", mode="before")
+    @classmethod
+    def _validate_mole_top_k(cls, v):
+        """v0.71.12 #222 — bool-before-int guard (bool subclasses int)."""
+        if v is None:
+            return None
+        if isinstance(v, bool):
+            raise ValueError("mole_top_k must be int, not bool")
+        if not isinstance(v, int):
+            raise ValueError("mole_top_k must be int")
+        if v < 1:
+            raise ValueError(f"mole_top_k must be >= 1, got {v}")
+        return v
+
+    @field_validator("mole_temperature", mode="before")
+    @classmethod
+    def _validate_mole_temperature(cls, v):
+        """v0.71.12 #222 — finite float in (1e-6, 100.0]."""
+        if v is None:
+            return None
+        if isinstance(v, bool):
+            raise ValueError("mole_temperature must not be bool")
+        if not isinstance(v, (int, float)):
+            raise ValueError("mole_temperature must be numeric")
+        import math as _math
+
+        fv = float(v)
+        if not _math.isfinite(fv):
+            raise ValueError("mole_temperature must be finite")
+        # Boundary matches MoleGatingConfig._check_finite_positive
+        # (MIN_TEMPERATURE=1e-6 inclusive): reject < 1e-6, accept == 1e-6.
+        if fv < 1e-6 or fv > 100.0:
+            raise ValueError(
+                f"mole_temperature must be in [1e-6, 100.0], got {fv}"
+            )
+        return fv
 
     @field_validator("num_labels", mode="before")
     @classmethod
@@ -3233,6 +3358,10 @@ class SoupConfig(BaseModel):
             tcfg.num_labels is not None
             or tcfg.classifier_kind is not None
             or tcfg.label_names is not None
+            # v0.71.12 #146 — classifier_lora is an opt-in (default False); a
+            # True value outside the classifier family is a silent-no-op
+            # footgun, so it counts as a classifier-only field.
+            or bool(getattr(tcfg, "classifier_lora", False))
         )
         if self.task not in classifier_tasks and not classifier_fields_set:
             return self
@@ -3273,16 +3402,27 @@ class SoupConfig(BaseModel):
                     "(classifier, reranker, cross_encoder); "
                     f"got task={self.task!r}"
                 )
+        if getattr(tcfg, "classifier_lora", False):
+            raise ValueError(
+                "training.classifier_lora requires task in "
+                "(classifier, reranker, cross_encoder); "
+                f"got task={self.task!r}"
+            )
         return self
 
     @model_validator(mode="after")
     def _validate_distill_compat(self) -> "SoupConfig":
         """v0.52.0 Part C — ``task='distill'`` gate."""
         tcfg = self.training
+        # v0.71.12 #145 — distill_mode defaults to "token"; a non-default
+        # "sequence" counts as a distill-only field (silent-no-op footgun
+        # rejection outside task='distill').
+        distill_mode_set = tcfg.distill_mode != "token"
         distill_fields_set = (
             tcfg.teacher_model is not None
             or tcfg.distill_divergence is not None
             or tcfg.distill_temperature is not None
+            or distill_mode_set
         )
         if self.task == "distill":
             from soup_cli.utils.distill import validate_distill_compat
@@ -3302,6 +3442,7 @@ class SoupConfig(BaseModel):
                     ("teacher_model", tcfg.teacher_model),
                     ("distill_divergence", tcfg.distill_divergence),
                     ("distill_temperature", tcfg.distill_temperature),
+                    ("distill_mode", tcfg.distill_mode if distill_mode_set else None),
                 ) if value is not None
             ]
             raise ValueError(
@@ -3973,22 +4114,60 @@ class SoupConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_mole_routing_compat(self) -> "SoupConfig":
-        """v0.67.0 Part C — MoLE per-token routing cross-validator.
+        """v0.67.0 Part C / v0.71.12 #222 — MoLE per-token routing gate.
 
         Rules:
-        * ``task='moe_lora_routing'`` rejects ``backend='mlx'`` (live wiring
-          deferred to v0.67.1; the gating kernel needs torch dispatch).
-        * The full ``MoleGatingConfig`` validation lives in
-          ``soup_cli.utils.mole_routing.validate_mole_compat`` and is
-          exercised at trainer construction time (the v0.67.0 release ships
-          the schema lock-in; live training lands in v0.67.1).
+        * MoLE fields (``mole_task_adapters`` / ``mole_top_k`` /
+          ``mole_temperature``) set outside ``task='moe_lora_routing'`` are
+          rejected — silent-no-op footgun (mirrors v0.52.0 distill / v0.62.0
+          citation task-gates).
+        * ``task='moe_lora_routing'`` rejects ``backend='mlx'`` (the live gate
+          needs torch dispatch).
+        * ``task='moe_lora_routing'`` requires ``mole_task_adapters`` (2-64
+          deduplicated paths — validated by the field validator).
+        * ``mole_top_k`` must not exceed ``len(mole_task_adapters)``.
         """
+        tcfg = self.training
+        mole_fields_set = (
+            tcfg.mole_task_adapters is not None
+            or tcfg.mole_top_k is not None
+            or tcfg.mole_temperature is not None
+        )
+
         if self.task != "moe_lora_routing":
+            if mole_fields_set:
+                offenders = [
+                    name
+                    for name, val in (
+                        ("mole_task_adapters", tcfg.mole_task_adapters),
+                        ("mole_top_k", tcfg.mole_top_k),
+                        ("mole_temperature", tcfg.mole_temperature),
+                    )
+                    if val is not None
+                ]
+                raise ValueError(
+                    f"MoLE field(s) {offenders} require task='moe_lora_routing' "
+                    f"(got task={self.task!r})."
+                )
             return self
+
         if self.backend == "mlx":
             raise ValueError(
                 "MoLE routing (task='moe_lora_routing') is not supported on "
-                "the mlx backend (live wiring deferred to v0.67.1)."
+                "the mlx backend (the gating kernel needs torch dispatch)."
+            )
+        if tcfg.mole_task_adapters is None:
+            raise ValueError(
+                "task='moe_lora_routing' requires training.mole_task_adapters "
+                "(2-64 pre-trained task-LoRA paths to route over)."
+            )
+        if (
+            tcfg.mole_top_k is not None
+            and tcfg.mole_top_k > len(tcfg.mole_task_adapters)
+        ):
+            raise ValueError(
+                f"mole_top_k={tcfg.mole_top_k} exceeds "
+                f"len(mole_task_adapters)={len(tcfg.mole_task_adapters)}."
             )
         return self
 

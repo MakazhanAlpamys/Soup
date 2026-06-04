@@ -706,6 +706,12 @@ class SFTTrainerWrapper:
         self.model = get_peft_model(self.model, lora_config)
         apply_post_lora_patches(self.model)
 
+        # v0.71.12 #84 — Mixture-of-Depths selective-token routing. Applied
+        # AFTER get_peft_model so the freshly-added routers are trainable.
+        from soup_cli.utils.mod import apply_mod_if_configured
+
+        apply_mod_if_configured(self.model, tcfg, cfg.base, console)
+
         self._apply_quantization_aware(tcfg)
 
     def _apply_quantization_aware(self, tcfg) -> None:

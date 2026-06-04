@@ -414,19 +414,26 @@ class TestWriteLoadBank:
 
 
 class TestApplyBankToServe:
-    def test_deferred_v0_67_1(self, tmp_path, monkeypatch) -> None:
-        from soup_cli.utils.vector_bank import VectorBank, apply_bank_to_serve
+    def test_live_returns_loaded_bank(self) -> None:
+        # v0.71.12 #221 — the v0.67.1 deferred stub is lifted: apply_bank_to_serve
+        # now returns a runtime LoadedVectorBank (reconstructed P + per-user vecs).
+        from soup_cli.utils.vector_bank import (
+            BankEntry,
+            LoadedVectorBank,
+            VectorBank,
+            apply_bank_to_serve,
+        )
 
         bank = VectorBank(
             name="b",
             base_model="m",
             projection_seed=0,
-            vector_dim=1,
-            entries=(),
+            vector_dim=4,
+            entries=(BankEntry(user_id="alice", scaling=(0.5, 0.5, 0.5, 0.5)),),
         )
-        with pytest.raises(NotImplementedError) as exc_info:
-            apply_bank_to_serve(bank)
-        assert "v0.67.1" in str(exc_info.value)
+        loaded = apply_bank_to_serve(bank)
+        assert isinstance(loaded, LoadedVectorBank)
+        assert loaded.has_user("alice")
 
     def test_non_bank_rejected(self) -> None:
         from soup_cli.utils.vector_bank import apply_bank_to_serve

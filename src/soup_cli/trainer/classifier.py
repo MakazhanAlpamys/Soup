@@ -206,6 +206,7 @@ class ClassifierTrainerWrapper:
         self.tokenizer: Any = None
         self.trainer: Any = None
         self._output_dir: str | None = None
+        self._lora_active: bool = False
 
     def setup(self, dataset: dict) -> None:
         """Load model + tokenizer, tokenise dataset, build HF Trainer."""
@@ -244,6 +245,44 @@ class ClassifierTrainerWrapper:
             problem_type=problem_type,
             trust_remote_code=self._trust_remote_code,
         )
+
+        # v0.71.12 #146 — opt-in LoRA / PEFT path. Default-off
+        # (``classifier_lora=False``) preserves the v0.53.2 full-finetune
+        # behaviour; opting in wraps the SeqCls head with a SEQ_CLS LoRA so
+        # only the adapter (+ classification head) trains. ``lora.r`` defaults
+        # to 64, so the gate is the explicit ``classifier_lora`` flag AND a
+        # positive rank (a rank of 0 would be a no-op LoRA).
+        self._lora_active = bool(getattr(tcfg, "classifier_lora", False)) and (
+            tcfg.lora.r > 0
+        )
+        if self._lora_active:
+            from peft import LoraConfig, TaskType, get_peft_model
+
+            from soup_cli.utils.peft_wiring import (
+                apply_post_lora_patches,
+                apply_pre_lora_patches,
+            )
+
+            target_modules = tcfg.lora.target_modules
+            if target_modules == "auto":
+                target_modules = None
+            lora_config = LoraConfig(
+                r=tcfg.lora.r,
+                lora_alpha=tcfg.lora.alpha,
+                lora_dropout=tcfg.lora.dropout,
+                target_modules=target_modules,
+                task_type=TaskType.SEQ_CLS,
+                bias="none",
+                use_dora=tcfg.lora.use_dora,
+                use_rslora=tcfg.lora.use_rslora,
+            )
+            apply_pre_lora_patches(self.model, cfg.base)
+            self.model = get_peft_model(self.model, lora_config)
+            apply_post_lora_patches(self.model)
+            console.print(
+                f"[green]Classifier LoRA enabled[/] "
+                f"(r={tcfg.lora.r}, alpha={tcfg.lora.alpha})"
+            )
 
         is_paired = (cfg.task == "cross_encoder")
         label_names = (

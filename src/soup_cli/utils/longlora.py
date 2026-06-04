@@ -281,10 +281,99 @@ def shift_heads_for_s2(
     return torch.cat([first_half, shifted], dim=1)
 
 
-class LongLoRAForwardOverride:
-    """Context manager that installs + restores the S² forward override.
+# v0.71.12 #158 — per-arch projection dispatch. The S² shift is applied to
+# the q_proj / k_proj OUTPUTS (before the attention dot-product), NOT to the
+# attention output. Architectures with SEPARATE q/k/v projections (Llama,
+# Mistral, Qwen2 — GQA handled by deriving the head count per-projection from
+# its output dim) patch q_proj + k_proj independently. Phi-3 fuses Q/K/V into a
+# single ``qkv_proj`` and needs the slice split before shifting.
+_SEPARATE_QKV_FAMILIES: tuple[str, ...] = ("Llama", "Mistral", "Qwen")
+_FUSED_QKV_FAMILIES: tuple[str, ...] = ("Phi",)
 
-    Records the original ``forward`` on each patched attention module and
+
+def _resolve_head_dim(attn: Any) -> int | None:
+    """Best-effort head_dim for an attention module (None if undeterminable)."""
+    hd = getattr(attn, "head_dim", None)
+    if isinstance(hd, int) and not isinstance(hd, bool) and hd > 0:
+        return hd
+    cfg = getattr(attn, "config", None)
+    if cfg is not None:
+        hd = getattr(cfg, "head_dim", None)
+        if isinstance(hd, int) and not isinstance(hd, bool) and hd > 0:
+            return hd
+        n = getattr(cfg, "num_attention_heads", None)
+        hs = getattr(cfg, "hidden_size", None)
+        if (
+            isinstance(n, int)
+            and isinstance(hs, int)
+            and n > 0
+            and hs % n == 0
+        ):
+            return hs // n
+    return None
+
+
+def _resolve_head_counts(attn: Any) -> tuple[int | None, int | None]:
+    """Best-effort (num_q_heads, num_kv_heads) for the fused-QKV split."""
+    n_q = getattr(attn, "num_heads", None) or getattr(
+        attn, "num_attention_heads", None
+    )
+    n_kv = getattr(attn, "num_key_value_heads", None)
+    cfg = getattr(attn, "config", None)
+    if cfg is not None:
+        if n_q is None:
+            n_q = getattr(cfg, "num_attention_heads", None)
+        if n_kv is None:
+            n_kv = getattr(cfg, "num_key_value_heads", None)
+    if n_kv is None:
+        n_kv = n_q
+    return n_q, n_kv
+
+
+def _shift_proj_block(out, *, head_dim: int, n_heads: int, group_size: int):
+    """Shift the second half of ``n_heads`` heads in a projection output.
+
+    ``out`` is a Q or K projection result of shape ``[B, T, n_heads*head_dim]``
+    (or ``[T, n_heads*head_dim]``). The tensor is reshaped to ``[B, H, T, hd]``,
+    :func:`shift_heads_for_s2` rolls the second-half heads along the sequence
+    dim, and the result is reshaped back. Returns the original tensor on any
+    shape mismatch (best-effort).
+    """
+    if not hasattr(out, "shape") or len(out.shape) < 2:
+        return out
+    if n_heads < 2:
+        return out
+    squeeze = False
+    x = out
+    if len(x.shape) == 2:
+        x = x.unsqueeze(0)
+        squeeze = True
+    if len(x.shape) != 3:
+        return out
+    bsz, seq_len, dim = x.shape
+    if dim != n_heads * head_dim:
+        return out
+    try:
+        reshaped = x.reshape(bsz, seq_len, n_heads, head_dim).permute(0, 2, 1, 3)
+        shifted = shift_heads_for_s2(reshaped, group_size=group_size)
+        result = shifted.permute(0, 2, 1, 3).reshape(bsz, seq_len, dim)
+    except (RuntimeError, ValueError, TypeError):
+        return out
+    return result.squeeze(0) if squeeze else result
+
+
+class LongLoRAForwardOverride:
+    """Context manager that installs + restores the S² Q/K-projection shift.
+
+    v0.71.12 #158 — the shift is applied to the **q_proj / k_proj outputs**
+    (before the attention dot-product), NOT to the attention output. This is
+    the canonical S² formulation (LongLoRA paper §3.2): half the heads' Q/K
+    are rolled along the sequence dim so adjacent local-attention windows
+    exchange information at the dot-product level. Per-arch dispatch covers
+    Llama / Mistral / Qwen2 (GQA-aware — the head count is derived per
+    projection from its output dim) and Phi-3 (fused ``qkv_proj`` split).
+
+    Records the original ``forward`` on each patched projection module and
     restores it on ``__exit__`` / ``__del__``. Idempotent — re-entering a
     second context on the same module is a no-op.
 
@@ -292,14 +381,12 @@ class LongLoRAForwardOverride:
 
         with LongLoRAForwardOverride(model, group_size=4):
             trainer.train()
-        # forward restored automatically
+        # projections restored automatically
 
-    The actual S² kernel is a small wrapper around the original forward
-    that calls :func:`shift_heads_for_s2` on the Q / K tensors before the
-    attention pass. We do NOT subclass HF attention modules — the wrapper
-    runs the original forward with shifted projections and trusts HF's own
-    scaled-dot-product math. This keeps the override compatible with FA
-    v2 (FA v3 is rejected at the schema gate).
+    We do NOT subclass HF attention modules — the wrapper runs the original
+    projection forward then shifts its output, and trusts HF's own
+    scaled-dot-product math downstream. This keeps the override compatible
+    with FA v2 (FA v3 is rejected at the schema gate).
     """
 
     def __init__(self, model: Any, *, group_size: int = 4):
@@ -331,10 +418,10 @@ class LongLoRAForwardOverride:
             pass
 
     def _install(self) -> None:
-        # Walk the model and patch every module whose class name matches a
-        # known attention pattern. We touch only Llama / Mistral / Qwen /
-        # Phi attention shells — the schema gate already rejects everything
-        # else at config load.
+        # Walk the model and patch the q_proj / k_proj (or fused qkv_proj) of
+        # every module whose class name matches a known attention pattern. We
+        # touch only Llama / Mistral / Qwen / Phi attention shells — the schema
+        # gate already rejects everything else at config load.
         # v0.53.11 review fix (security MEDIUM) — cap class name length so a
         # crafted model class with an arbitrarily long name does not feed
         # an unbounded string into the regex.
@@ -349,16 +436,111 @@ class LongLoRAForwardOverride:
                 continue
             if not attention_class_re.match(cls_name):
                 continue
-            original_forward = module.forward
-            # v0.53.11 review fix (code-review HIGH) — idempotent install.
-            # Re-entering a second context on the same module must NOT
-            # double-wrap. Detect a previously-patched forward via marker.
-            if getattr(original_forward, "_soup_longlora_patched", False):
-                continue
-            self._patched.append((module, original_forward))
-            new_forward = self._make_s2_forward(original_forward)
-            new_forward._soup_longlora_patched = True  # type: ignore[attr-defined]
-            module.forward = new_forward
+            for proj, wrapper in self._proj_shift_targets(module, cls_name):
+                original_forward = proj.forward
+                # v0.53.11 review fix (code-review HIGH) — idempotent install.
+                # Re-entering a second context on the same projection must NOT
+                # double-wrap. Detect a previously-patched forward via marker.
+                if getattr(original_forward, "_soup_longlora_patched", False):
+                    continue
+                self._patched.append((proj, original_forward))
+                new_forward = wrapper(original_forward)
+                new_forward._soup_longlora_patched = True  # type: ignore[attr-defined]
+                proj.forward = new_forward
+
+    def _proj_shift_targets(self, attn: Any, cls_name: str):
+        """Yield ``(proj_module, wrapper_factory)`` for an attention module.
+
+        Per-arch dispatch (v0.71.12 #158):
+          * Phi-family fused ``qkv_proj`` → split q/k/v then shift q + k.
+          * Separate ``q_proj`` + ``k_proj`` (Llama / Mistral / Qwen2) →
+            shift each independently; GQA is handled by deriving the head
+            count per projection from its own output dim.
+        """
+        head_dim = _resolve_head_dim(attn)
+        if head_dim is None:
+            return  # cannot shift safely without head_dim
+
+        is_fused_family = cls_name.startswith(_FUSED_QKV_FAMILIES)
+        if is_fused_family and hasattr(attn, "qkv_proj"):
+            n_q, n_kv = _resolve_head_counts(attn)
+            if not (isinstance(n_q, int) and isinstance(n_kv, int)):
+                return  # cannot split fused qkv without head counts
+            yield (
+                attn.qkv_proj,
+                self._make_fused_qkv_shift(head_dim, int(n_q), int(n_kv)),
+            )
+            return
+
+        if hasattr(attn, "q_proj") and hasattr(attn, "k_proj"):
+            qk_wrapper = self._make_separate_proj_shift(head_dim)
+            yield (attn.q_proj, qk_wrapper)
+            yield (attn.k_proj, qk_wrapper)
+
+    def _make_separate_proj_shift(self, head_dim: int):
+        """Return a wrapper-factory for a q_proj / k_proj forward.
+
+        The number of heads is derived from the projection's OWN output dim
+        (``D // head_dim``), so GQA (where k_proj has fewer heads than q_proj)
+        is handled automatically.
+        """
+        group_size = self.group_size
+
+        def factory(orig):
+            def s2_proj_shift(*args, **kwargs):
+                out = orig(*args, **kwargs)
+                if not hasattr(out, "shape") or len(out.shape) < 2:
+                    return out
+                dim = out.shape[-1]
+                if head_dim <= 0 or dim % head_dim != 0:
+                    return out
+                return _shift_proj_block(
+                    out,
+                    head_dim=head_dim,
+                    n_heads=dim // head_dim,
+                    group_size=group_size,
+                )
+
+            return s2_proj_shift
+
+        return factory
+
+    def _make_fused_qkv_shift(self, head_dim: int, n_q: int, n_kv: int):
+        """Wrap a fused ``qkv_proj`` forward (Phi-3): split, shift q + k, recombine."""
+        group_size = self.group_size
+        q_dim = n_q * head_dim
+        k_dim = n_kv * head_dim
+
+        def factory(orig):
+            local_orig = orig
+
+            def bound_qkv_shift(*args, **kwargs):
+                out = local_orig(*args, **kwargs)
+                if not hasattr(out, "shape") or len(out.shape) < 2:
+                    return out
+                total = out.shape[-1]
+                if total != q_dim + 2 * k_dim:
+                    return out
+                import torch
+
+                try:
+                    q = out[..., :q_dim]
+                    k = out[..., q_dim:q_dim + k_dim]
+                    v = out[..., q_dim + k_dim:]
+                    q_sh = _shift_proj_block(
+                        q, head_dim=head_dim, n_heads=n_q, group_size=group_size
+                    )
+                    k_sh = _shift_proj_block(
+                        k, head_dim=head_dim, n_heads=n_kv, group_size=group_size
+                    )
+                    return torch.cat([q_sh, k_sh, v], dim=-1)
+                except (RuntimeError, ValueError, TypeError):
+                    return out
+
+            bound_qkv_shift.__name__ = "s2_qkv_shift"
+            return bound_qkv_shift
+
+        return factory
 
     def _restore(self) -> None:
         while self._patched:
@@ -368,38 +550,6 @@ class LongLoRAForwardOverride:
             except Exception:  # noqa: BLE001
                 # If the module was deleted mid-run, ignore.
                 pass
-
-    def _make_s2_forward(self, original):
-        """Wrap ``original`` to shift Q/K projections before attention.
-
-        The original forward computes Q/K/V from ``hidden_states``; we
-        intercept the result by patching the module's q_proj / k_proj
-        attributes via a monkey-patch. To keep the wrapper minimal we
-        instead delegate fully to the original forward and apply the head
-        shift to the OUTPUT — this is a documented approximation of S²
-        (the upstream paper proves both forms converge; the input-side
-        shift is preferred when available but the output-side shift is
-        cheaper).
-        """
-        group_size = self.group_size
-
-        def s2_forward(*args, **kwargs):
-            result = original(*args, **kwargs)
-            # HF Llama-family attention forwards return (attn_output, ...)
-            # tuples. We shift the first tuple element.
-            if isinstance(result, tuple) and result:
-                first = result[0]
-                if hasattr(first, "shape") and len(first.shape) == 4:
-                    try:
-                        shifted = shift_heads_for_s2(first, group_size=group_size)
-                        return (shifted,) + result[1:]
-                    except (TypeError, ValueError):
-                        # Best-effort — shape mismatch falls through to
-                        # the unshifted result rather than crashing training.
-                        return result
-            return result
-
-        return s2_forward
 
 
 def _walk_modules(model: Any):

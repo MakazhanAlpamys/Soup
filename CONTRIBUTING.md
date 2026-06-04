@@ -120,7 +120,7 @@ src/soup_cli/
   templates/          - 17 built-in soup.yaml templates (YAML + manifest.json) with load_template loader (v0.39.0, +bco v0.40.0)
   ui/                 - Web UI (FastAPI + HTML/JS SPA)
 
-tests/                - Test suite (281 files, 13203 tests)
+tests/                - Test suite (283 files, 13329 tests)
 examples/             - Real-world config examples and datasets
 ```
 

@@ -1,4 +1,4 @@
-"""VeRA / VB-LoRA vector-bank storage format (v0.67.0 Part B).
+"""VeRA / VB-LoRA vector-bank storage format (v0.67.0 schema / v0.71.12 #221 live).
 
 A vector bank is the data structure behind multi-tenant LoRA serving at
 MB-per-user instead of hundreds-of-MB per LoRA:
@@ -13,11 +13,11 @@ codebook lookup (VB-LoRA). Storage size is dominated by ``vector_dim``
 per user — a 128-D vector at fp32 is 512 bytes vs ~30 MB for a rank-16
 LoRA on a 7B model.
 
-v0.67.0 ships the schema + atomic disk I/O + validators.
-Live wiring into multi-adapter serving (v0.22.0 surface) is the
-v0.67.1 deliverable — ``apply_bank_to_serve`` raises
-``NotImplementedError`` with explicit marker (matches v0.27.0 MII /
-v0.50.0 GRPO Plus stub-then-live cadence).
+v0.67.0 shipped the schema + atomic disk I/O + validators with a deferred
+``apply_bank_to_serve`` stub; v0.71.12 #221 lifts the stub to a live
+``LoadedVectorBank`` (reconstructed ``P`` + per-user vectors) with a
+decode-time forward hook (``install_serve_hook``) wired into
+``soup serve --bank`` (per-request user via the ``X-User-Id`` header).
 
 Public surface:
 
@@ -25,12 +25,14 @@ Public surface:
 - ``validate_bank_name`` / ``validate_user_id`` / ``validate_scaling_vector``
 - ``estimate_bank_size(num_users, vector_dim)`` -> bytes
 - ``write_bank(bank, path)`` / ``load_bank(path)`` atomic JSON I/O
-- ``apply_bank_to_serve(bank)`` deferred-live stub
+- ``reconstruct_projection(seed, dim)`` -> torch tensor
+- ``LoadedVectorBank`` runtime bank + ``apply_bank_to_serve(bank)``
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import math
 import os
 import re
@@ -43,6 +45,8 @@ from soup_cli.utils.paths import (
     enforce_under_cwd_and_no_symlink,
 )
 
+logger = logging.getLogger(__name__)
+
 # ---------------------------------------------------------------------------
 # Bounds (closed, locked at module load)
 # ---------------------------------------------------------------------------
@@ -54,6 +58,9 @@ MAX_VECTOR_DIM = 16_384
 MIN_VECTOR_DIM = 1
 MAX_ENTRIES_PER_BANK = 1_000_000
 _MAX_FILE_BYTES = 16 * 1024 * 1024  # 16 MiB cap on bank file size
+# Sanity cap on the serve-time steering magnitude (matches the spirit of the
+# v0.62.0 steering ±10 cap, but generous — banks may want stronger personas).
+_MAX_BANK_STRENGTH = 100.0
 
 # kebab-case + `._-`, leading alnum, no path separators / shell metacharacters
 _NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._\-]{0,127}$")
@@ -339,21 +346,148 @@ def load_bank(path: str) -> VectorBank:
 
 
 # ---------------------------------------------------------------------------
-# Deferred-live stub: live serving wiring
+# Live serving wiring (v0.71.12 #221)
 # ---------------------------------------------------------------------------
 
 
-def apply_bank_to_serve(bank: VectorBank, *, server: Any = None) -> None:
-    """Apply a vector bank to a running ``soup serve`` instance.
+def reconstruct_projection(seed: int, dim: int):
+    """Deterministically rebuild the shared projection matrix ``P`` (``[dim, dim]``).
 
-    Deferred to v0.67.1 — live wiring requires the v0.22.0 multi-adapter
-    serving surface plus a real torch path that materialises the shared
-    projection matrix in GPU memory. The schema (this module) ships now
-    so client code can target the API; the live engine integration is
-    the v0.67.1 deliverable.
+    Seeded with ``projection_seed`` so every server reconstructs the same ``P``
+    without storing the (dim × dim) matrix on disk. Returns a float32 torch
+    tensor. Lazy torch import.
+    """
+    import torch
+
+    seed = _validate_seed(seed)
+    dim = _validate_vector_dim(dim)
+    gen = torch.Generator().manual_seed(int(seed))
+    # 1/sqrt(dim) scale keeps Px in a sane magnitude regardless of dim.
+    return torch.randn(dim, dim, generator=gen) * (dim ** -0.5)
+
+
+class LoadedVectorBank:
+    """Runtime VeRA / VB-LoRA bank — reconstructed ``P`` + per-user vectors.
+
+    The per-token delta for the active user ``u`` is ``v_u ⊙ (x @ Pᵀ)`` where
+    ``x`` is a token hidden state of dim ``vector_dim``. ``set_active_user``
+    selects which user the decode hook applies; an unknown / unset user is a
+    no-op (zero delta).
+    """
+
+    def __init__(self, bank: VectorBank):
+        import torch
+
+        if not isinstance(bank, VectorBank):
+            raise TypeError("bank must be VectorBank")
+        self.name = bank.name
+        self.base_model = bank.base_model
+        self.vector_dim = bank.vector_dim
+        self.projection = reconstruct_projection(
+            bank.projection_seed, bank.vector_dim
+        )
+        self._user_vectors = {
+            e.user_id: torch.tensor(e.scaling, dtype=torch.float32)
+            for e in bank.entries
+        }
+        self._active_user: str | None = None
+
+    def has_user(self, user_id: object) -> bool:
+        return isinstance(user_id, str) and user_id in self._user_vectors
+
+    def set_active_user(self, user_id: object) -> bool:
+        """Select the active user for the decode hook. Returns ``True`` if known."""
+        if isinstance(user_id, str) and user_id in self._user_vectors:
+            self._active_user = user_id
+            return True
+        self._active_user = None
+        return False
+
+    def delta_for_user(self, user_id: str, hidden):
+        """Per-token delta ``v_u ⊙ (hidden @ Pᵀ)`` for a known user.
+
+        ``hidden`` is ``[..., vector_dim]``. Raises ``KeyError`` for an unknown
+        user (callers that prefer a no-op use :meth:`set_active_user` + the hook).
+        """
+        if user_id not in self._user_vectors:
+            raise KeyError(f"unknown user_id {user_id!r}")
+        v = self._user_vectors[user_id]
+        proj = self.projection.to(dtype=hidden.dtype, device=hidden.device)
+        v = v.to(dtype=hidden.dtype, device=hidden.device)
+        projected = hidden @ proj.transpose(0, 1)
+        return v * projected
+
+    def install_serve_hook(self, model: Any, *, layer: int = -1, strength: float = 1.0):
+        """Install a decode-time forward hook applying the active user's delta.
+
+        Adds ``strength * delta_for_user(active, x)`` to the chosen decoder
+        layer's residual-stream output. When no active user is set (or the
+        hidden dim does not match ``vector_dim``) the hook is a no-op.
+
+        Returns the hook handle so the caller can ``.remove()`` it on shutdown.
+        """
+        if isinstance(strength, bool) or not isinstance(strength, (int, float)):
+            raise TypeError("strength must be numeric")
+        strength_f = float(strength)
+        if not math.isfinite(strength_f):
+            raise ValueError("strength must be finite")
+        if abs(strength_f) > _MAX_BANK_STRENGTH:
+            raise ValueError(
+                f"bank strength magnitude {strength_f} exceeds "
+                f"{_MAX_BANK_STRENGTH} (sanity cap)"
+            )
+
+        from soup_cli.utils.edit_kernels import _locate_decoder_layers
+
+        layers = _locate_decoder_layers(model)
+        n_layers = len(layers)
+        idx = layer if layer >= 0 else n_layers + layer
+        if idx < 0 or idx >= n_layers:
+            raise ValueError(
+                f"bank serve layer {layer} out of range for {n_layers}-layer model"
+            )
+        block = layers[idx]
+        bank_ref = self
+        warned = {"dim": False}
+
+        def _hook(_mod, _args, output):
+            active = bank_ref._active_user
+            if active is None:
+                return output
+            hidden = output[0] if isinstance(output, (tuple, list)) else output
+            if not hasattr(hidden, "shape") or hidden.shape[-1] != bank_ref.vector_dim:
+                # Hidden-dim mismatch is a misconfiguration, not a legit no-op:
+                # warn once so the operator does not silently see zero effect.
+                if not warned["dim"]:
+                    warned["dim"] = True
+                    logger.warning(
+                        "vector bank %r vector_dim=%d does not match the layer "
+                        "hidden size; the serve hook is a no-op. Check --bank "
+                        "matches the served model.",
+                        bank_ref.name,
+                        bank_ref.vector_dim,
+                    )
+                return output
+            delta = strength_f * bank_ref.delta_for_user(active, hidden)
+            new_hidden = hidden + delta
+            if isinstance(output, (tuple, list)):
+                return (new_hidden,) + tuple(output[1:])
+            return new_hidden
+
+        return block.register_forward_hook(_hook)
+
+
+def apply_bank_to_serve(bank: VectorBank, *, server: Any = None) -> "LoadedVectorBank":
+    """Apply a vector bank to a running ``soup serve`` instance (v0.71.12 #221).
+
+    Reconstructs the shared projection ``P`` from ``projection_seed`` and builds
+    the per-user scaling map, returning a :class:`LoadedVectorBank`. The caller
+    (``soup serve --bank``) installs the decode hook and selects the active user
+    per request via the ``X-User-Id`` header.
+
+    Memory cost ≈ ``vector_dim²`` (the shared P) + ``N × vector_dim`` (per-user
+    vectors) fp32 — far below ``N × rank × hidden`` for native per-user LoRA.
     """
     if not isinstance(bank, VectorBank):
         raise TypeError("bank must be VectorBank")
-    raise NotImplementedError(
-        "apply_bank_to_serve live wiring deferred to v0.67.1"
-    )
+    return LoadedVectorBank(bank)

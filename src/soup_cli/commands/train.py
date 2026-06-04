@@ -572,10 +572,20 @@ def train(
     # head, not a causal-LM LoRA — render "head" instead of LoRA r/alpha.
     classifier_family = ("classifier", "reranker", "cross_encoder")
     if cfg.task in classifier_family:
-        peft_line = (
+        # v0.71.12 #146 — render BOTH the head line AND a LoRA line when the
+        # opt-in classifier LoRA path is active.
+        head_line = (
             f"Head:    [bold]num_labels={cfg.training.num_labels}, "
             f"kind={cfg.training.classifier_kind}[/]"
         )
+        if getattr(cfg.training, "classifier_lora", False) and cfg.training.lora.r > 0:
+            peft_line = (
+                head_line
+                + f"\nLoRA:    [bold]r={cfg.training.lora.r}, "
+                + f"alpha={cfg.training.lora.alpha} (SEQ_CLS)[/]"
+            )
+        else:
+            peft_line = head_line
     else:
         peft_line = (
             f"LoRA:    [bold]r={cfg.training.lora.r}, "
@@ -921,6 +931,11 @@ def train(
         from soup_cli.trainer.unlearn import UnlearnTrainerWrapper
 
         trainer_wrapper = UnlearnTrainerWrapper(cfg, **trainer_kwargs)
+    elif cfg.task == "moe_lora_routing":
+        # v0.71.12 #222 — MoLE per-token routing over N frozen task LoRAs.
+        from soup_cli.trainer.mole_routing import MoleRoutingTrainerWrapper
+
+        trainer_wrapper = MoleRoutingTrainerWrapper(cfg, **trainer_kwargs)
     else:
         trainer_wrapper = SFTTrainerWrapper(cfg, **trainer_kwargs)
     trainer_wrapper.setup(dataset)

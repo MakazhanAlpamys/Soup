@@ -181,11 +181,19 @@ class TestLongLoRAShift:
             pass
 
     def test_override_restore_on_exit(self):
+        # v0.71.12 #158 — the shift now patches q_proj / k_proj (NOT the
+        # attention output). The attention forward itself is untouched.
         from soup_cli.utils.longlora import apply_longlora_forward_override
+
+        class _Proj:
+            def forward(self, x):
+                return x
 
         class LlamaAttention:  # exact name the regex matches
             def __init__(self):
-                self.marker = "ORIGINAL"
+                self.head_dim = 2
+                self.q_proj = _Proj()
+                self.k_proj = _Proj()
 
             def forward(self, x):
                 return (x,)
@@ -198,20 +206,17 @@ class TestLongLoRAShift:
                 yield self.attn
 
         model = _Model()
-        original_forward = model.attn.forward
-        # Capture marker function attribute instead of bound-method identity
-        # (bound methods compare unequal across calls).
         override = apply_longlora_forward_override(model, group_size=4)
         with override:
-            # Patched forward should be a different callable.
-            assert getattr(model.attn.forward, "__name__", None) == "s2_forward"
-        # After exit, the patched closure is gone and the bound method is
-        # back. We check by calling it and verifying we get the (x,) tuple.
-        result = model.attn.forward("hello")
-        assert result == ("hello",)
-        # And confirm the s2_forward wrapper is no longer present.
-        assert getattr(model.attn.forward, "__name__", None) != "s2_forward"
-        del original_forward  # silence linter
+            # q_proj / k_proj forwards are now the shift wrapper.
+            assert getattr(model.attn.q_proj.forward, "__name__", None) == "s2_proj_shift"
+            assert getattr(model.attn.k_proj.forward, "__name__", None) == "s2_proj_shift"
+            # The attention output forward is left alone.
+            assert getattr(model.attn.forward, "__name__", None) != "s2_proj_shift"
+        # After exit, the patched closure is gone and the bound method is back.
+        assert getattr(model.attn.q_proj.forward, "__name__", None) != "s2_proj_shift"
+        assert not getattr(model.attn.q_proj.forward, "_soup_longlora_patched", False)
+        assert model.attn.q_proj.forward("hello") == "hello"
 
 
 # ---------------------------------------------------------------------------
@@ -850,7 +855,16 @@ class TestReviewFixCoverage:
     def test_longlora_idempotent_install(self):
         from soup_cli.utils.longlora import apply_longlora_forward_override
 
+        class _Proj:
+            def forward(self, x):
+                return x
+
         class LlamaAttention:
+            def __init__(self):
+                self.head_dim = 2
+                self.q_proj = _Proj()
+                self.k_proj = _Proj()
+
             def forward(self, x):
                 return (x,)
 
@@ -864,18 +878,27 @@ class TestReviewFixCoverage:
         model = _Model()
         ovr1 = apply_longlora_forward_override(model, group_size=4)
         with ovr1:
-            wrapped_once = model.attn.forward
-            # Nested context on the same module must NOT double-wrap.
+            wrapped_once = model.attn.q_proj.forward
+            # Nested context on the same projection must NOT double-wrap.
             ovr2 = apply_longlora_forward_override(model, group_size=4)
             with ovr2:
-                assert model.attn.forward is wrapped_once
-        # After exiting, original forward restored.
-        assert not getattr(model.attn.forward, "_soup_longlora_patched", False)
+                assert model.attn.q_proj.forward is wrapped_once
+        # After exiting, original projection forward restored.
+        assert not getattr(model.attn.q_proj.forward, "_soup_longlora_patched", False)
 
     def test_longlora_restores_on_exception(self):
         from soup_cli.utils.longlora import apply_longlora_forward_override
 
+        class _Proj:
+            def forward(self, x):
+                return x
+
         class LlamaAttention:
+            def __init__(self):
+                self.head_dim = 2
+                self.q_proj = _Proj()
+                self.k_proj = _Proj()
+
             def forward(self, x):
                 return (x,)
 
@@ -887,13 +910,13 @@ class TestReviewFixCoverage:
                 yield self.attn
 
         model = _Model()
-        original = model.attn.forward
+        original = model.attn.q_proj.forward
         ovr = apply_longlora_forward_override(model, group_size=4)
         with pytest.raises(RuntimeError):
             with ovr:
                 raise RuntimeError("simulated mid-training crash")
-        # Forward restored despite the exception.
-        assert not getattr(model.attn.forward, "_soup_longlora_patched", False)
+        # Projection forwards restored despite the exception.
+        assert not getattr(model.attn.q_proj.forward, "_soup_longlora_patched", False)
         _ = original  # silence lint
 
     # --- MEDIUM: factory cache isolation between base classes ---

@@ -31,10 +31,23 @@ _DIVERGENCE_ALIASES: Mapping[str, str] = MappingProxyType({
 # accepted-input set and the error message in lockstep.
 DIVERGENCES: frozenset[str] = frozenset(_DIVERGENCE_ALIASES)
 
+# v0.71.12 #145 — cross-tokenizer distillation modes.
+#   * token    — column-aligned logit KL (default; requires same tokenizer, or
+#                training.uld_strategy for the cross-tokenizer logit-level path).
+#   * sequence — sequence-level KD (Kim & Rush 2016): the teacher GENERATES a
+#                completion per prompt and the student does plain CE on the
+#                re-tokenised teacher output. Works across ANY tokenizer pair.
+SUPPORTED_DISTILL_MODES: frozenset[str] = frozenset({"token", "sequence"})
+
 _MAX_TEACHER_LEN: int = 512
 _MAX_DIVERGENCE_LEN: int = 16
+_MAX_DISTILL_MODE_LEN: int = 16
 _MIN_TEMPERATURE: float = 0.05
 _MAX_TEMPERATURE: float = 100.0
+# Default teacher generation budget for sequence-level KD. Clamped to
+# ``data.max_length`` by the trainer; bounded here as a DoS guard.
+_DEFAULT_SEQ_MAX_NEW_TOKENS: int = 256
+_MAX_SEQ_MAX_NEW_TOKENS: int = 4096
 
 
 @dataclass(frozen=True)
@@ -102,6 +115,36 @@ def get_divergence_spec(name: str) -> DivergenceSpec:
     """Return the frozen :class:`DivergenceSpec` for ``name`` or raise."""
     canonical = validate_divergence(name)
     return _DIVERGENCE_METADATA[canonical]
+
+
+def validate_distill_mode(value: object) -> str:
+    """Validate ``training.distill_mode`` and return the canonical form.
+
+    Accepts ``token`` (default) or ``sequence`` (case-insensitive). Mirrors
+    the v0.41.0 / v0.52.0 validator policy (bool-first, null-byte, oversize,
+    case-insensitive normalisation).
+    """
+    if isinstance(value, bool):
+        raise TypeError(f"distill_mode must not be bool, got {value!r}")
+    if not isinstance(value, str):
+        raise TypeError(
+            f"distill_mode must be str, got {type(value).__name__}"
+        )
+    if not value:
+        raise ValueError("distill_mode must be non-empty")
+    if "\x00" in value:
+        raise ValueError("distill_mode must not contain null bytes")
+    if len(value) > _MAX_DISTILL_MODE_LEN:
+        raise ValueError(
+            f"distill_mode too long (max {_MAX_DISTILL_MODE_LEN} chars)"
+        )
+    canonical = value.lower()
+    if canonical not in SUPPORTED_DISTILL_MODES:
+        supported = ", ".join(sorted(SUPPORTED_DISTILL_MODES))
+        raise ValueError(
+            f"distill_mode {value!r} not supported. Supported: {supported}"
+        )
+    return canonical
 
 
 def validate_distill_temperature(value: object) -> float:
@@ -189,6 +232,119 @@ def validate_distill_compat(
         )
     # Reuse the standard validator — null-byte / oversize / type check.
     validate_teacher_model(teacher_model)
+
+
+def extract_prompt_messages(messages: object) -> list:
+    """Return the prompt portion of a chat-messages list (v0.71.12 #145).
+
+    The "prompt" is everything up to (and excluding) a trailing assistant
+    turn — the part the teacher should be conditioned on for sequence-level
+    KD. If the final message is not an assistant turn (prompt-only dataset)
+    the whole list is returned.
+
+    Raises:
+        TypeError: ``messages`` is not a list.
+    """
+    if not isinstance(messages, list):
+        raise TypeError(
+            f"messages must be a list, got {type(messages).__name__}"
+        )
+    prompt: list = list(messages)
+    # Strip a single trailing assistant turn (the teacher will regenerate it).
+    while prompt and isinstance(prompt[-1], dict) and prompt[-1].get("role") == "assistant":
+        prompt = prompt[:-1]
+    return prompt
+
+
+def _resolve_seq_max_new_tokens(value: object) -> int:
+    """Clamp the sequence-KD generation budget to ``[1, _MAX_SEQ_MAX_NEW_TOKENS]``."""
+    if value is None:
+        return _DEFAULT_SEQ_MAX_NEW_TOKENS
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError("max_new_tokens must be int")
+    if value < 1:
+        raise ValueError("max_new_tokens must be positive")
+    return min(value, _MAX_SEQ_MAX_NEW_TOKENS)
+
+
+def build_sequence_distill_rows(
+    rows,
+    teacher,
+    teacher_tokenizer,
+    *,
+    max_new_tokens: object = None,
+    device: str | None = None,
+) -> list:
+    """Sequence-level KD dataset builder (v0.71.12 #145 — Kim & Rush 2016).
+
+    For each ``{"messages": [...]}`` row, the teacher GENERATES a completion
+    from the prompt portion (its own tokenizer + chat template), and a new
+    student row is emitted with the teacher's text as the assistant turn::
+
+        {"messages": prompt + [{"role": "assistant", "content": <teacher text>}]}
+
+    The student then trains with plain CE on the re-tokenised teacher output —
+    which works across ANY tokenizer pair. The teacher is used for generation
+    only; it is NOT needed in the student loss loop.
+
+    Args:
+        rows: iterable of dataset rows (each a dict with a ``messages`` list).
+        teacher: a loaded causal-LM with ``.generate`` and ``.parameters()``.
+        teacher_tokenizer: the teacher's tokenizer (its own chat template).
+        max_new_tokens: generation budget (clamped to a DoS-safe ceiling).
+        device: optional device override; defaults to the teacher's device.
+
+    Returns:
+        A list of student ``{"messages": [...]}`` rows.
+    """
+    import torch
+
+    budget = _resolve_seq_max_new_tokens(max_new_tokens)
+    try:
+        teacher_device = next(teacher.parameters()).device
+    except (StopIteration, AttributeError):
+        teacher_device = device or "cpu"
+    pad_id = getattr(teacher_tokenizer, "pad_token_id", None)
+    if pad_id is None:
+        pad_id = getattr(teacher_tokenizer, "eos_token_id", None)
+
+    out_rows: list = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        messages = row.get("messages")
+        if not isinstance(messages, list) or not messages:
+            continue
+        prompt_msgs = extract_prompt_messages(messages)
+        if not prompt_msgs:
+            continue
+        input_ids = teacher_tokenizer.apply_chat_template(
+            prompt_msgs,
+            add_generation_prompt=True,
+            return_tensors="pt",
+            tokenize=True,
+        )
+        if hasattr(input_ids, "to"):
+            input_ids = input_ids.to(teacher_device)
+        prompt_len = int(input_ids.shape[-1])
+        with torch.no_grad():
+            generated = teacher.generate(
+                input_ids=input_ids,
+                max_new_tokens=budget,
+                do_sample=False,
+                pad_token_id=pad_id,
+            )
+        new_tokens = generated[0][prompt_len:]
+        teacher_text = teacher_tokenizer.decode(
+            new_tokens, skip_special_tokens=True
+        ).strip()
+        out_rows.append(
+            {
+                "messages": list(prompt_msgs)
+                + [{"role": "assistant", "content": teacher_text}]
+            }
+        )
+    return out_rows
 
 
 def build_distill_trainer(

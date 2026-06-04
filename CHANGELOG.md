@@ -12,6 +12,50 @@ reproducing 70+ versions of notes.
 
 ## [Unreleased]
 
+## [0.71.12] - 2026-06-04
+
+### Added
+- **Architecture + distillation + adapter-training — live wiring** (closes #145,
+  #146, #148, #158, #84, #221, #222). Seven surfaces that shipped schema-only in
+  earlier releases are now real, validated end-to-end on tiny models
+  (SmolLM2-135M / a locally-built tiny Llama).
+- **Sequence-level knowledge distillation is live** (#145). `task: distill` now
+  accepts `distill_mode: token|sequence`; sequence mode trains the student on the
+  teacher's generated continuations (cross-tokenizer-friendly hard-label KD)
+  instead of per-token logit matching. `sequence` mode is mutually exclusive with
+  the v0.70 cross-tokenizer ULD logit path.
+- **Classifier LoRA is live** (#146). `task: classifier|reranker|cross_encoder`
+  now attaches a LoRA adapter to the sequence-classification head when `lora` is
+  configured, so a frozen encoder + small adapter can be trained instead of the
+  full model.
+- **LLaMA Pro block expansion is per-architecture** (#148). `expand_layers`
+  now interleaves zero-initialised identity blocks for Llama / Qwen / Mistral
+  decoder stacks (was Llama-shaped only), with `freeze_trainable_layers`
+  freezing the original blocks so only the new ones train.
+- **LongLoRA S² shifted-sparse attention is live** (#158). `use_longlora: true`
+  now installs the shifted-sparse-attention forward override on the Q/K
+  projections (Llama / Mistral / Qwen / Phi), restoring the patched forwards on
+  context exit.
+- **Mixture-of-Depths is live** (#84). `use_mod: true` attaches a per-layer
+  top-k token router (`mod_capacity_factor`) so only a subset of tokens receive
+  each block's residual update. Architecture allowlist: Llama / Qwen / Mistral;
+  unsupported bases warn and skip.
+- **VeRA / VB-LoRA multi-tenant serving is live** (#221). `soup serve --bank
+  <bank.json> [--bank-strength S]` reconstructs the shared projection + per-user
+  scaling vectors and installs a decode-time forward hook; the active user is
+  selected per request via the `X-User-Id` header (an unknown/absent id is a
+  zero-delta no-op, so there is no cross-request leak). Serves N personas at
+  ~KB-per-user instead of a full LoRA each.
+- **MoLE per-token adapter routing is live** (#222). `task: moe_lora_routing`
+  with `mole_task_adapters: [...]` trains a per-token gating network that blends
+  N frozen task LoRAs (`mole_top_k` / `mole_temperature`); only the router
+  trains. The gate is saved as `mole_gate.pt` alongside the run.
+
+### Changed
+- `apply_bank_to_serve` (#221) and `build_gating_kernel` (#222) now return live
+  objects (a `LoadedVectorBank` and a `torch.nn.Module` router) instead of the
+  v0.67.0 deferred-stub `NotImplementedError`.
+
 ## [0.71.11] - 2026-06-04
 
 ### Added

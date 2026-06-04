@@ -234,8 +234,43 @@ def serve(
             "modelers. Non-HF hubs require the matching SDK (v0.53.10 #152)."
         ),
     ),
+    bank: Optional[str] = typer.Option(
+        None,
+        "--bank",
+        help=(
+            "Path to a VeRA / VB-LoRA vector bank (JSON). Multi-tenant LoRA "
+            "serving at MB-per-user: the per-token delta is v_u ⊙ Px, routed "
+            "by the X-User-Id request header. Requires --backend transformers. "
+            "(v0.71.12 #221)"
+        ),
+    ),
+    bank_strength: float = typer.Option(
+        1.0,
+        "--bank-strength",
+        help="Vector-bank delta strength multiplier. Ignored when --bank is unset.",
+    ),
 ):
     """Start a local inference server with OpenAI-compatible API."""
+    # v0.71.12 #221 — validate `--bank` up front (path containment + backend)
+    # so a typo / bad path surfaces before backend init.
+    if bank is not None:
+        from rich.markup import escape as _rich_escape
+
+        from soup_cli.utils.paths import is_under_cwd
+
+        if "\x00" in bank or not is_under_cwd(bank):
+            console.print(
+                f"[red]Invalid --bank path:[/] {_rich_escape(str(bank))} "
+                "(must be under the current directory, no null bytes)."
+            )
+            raise typer.Exit(code=2)
+        if backend.lower() != "transformers":
+            console.print(
+                "[red]--bank requires --backend transformers[/] "
+                "(the bank installs a forward hook on the loaded model; "
+                "vLLM / SGLang / MII are not supported)."
+            )
+            raise typer.Exit(code=2)
     # v0.62.0 Part C / v0.71.10 #201 — validate `--steer` name + strength up
     # front so a typo surfaces before backend init. The live decode hook is
     # installed in the transformers branch after model load.
@@ -634,6 +669,32 @@ def serve(
                 f"strength {steer_strength})"
             )
 
+        # v0.71.12 #221 — load a VeRA / VB-LoRA bank + install the per-user
+        # decode hook. The active user is selected per request via X-User-Id.
+        loaded_bank = None
+        if bank is not None:
+            from rich.markup import escape as _esc
+
+            from soup_cli.utils.vector_bank import (
+                apply_bank_to_serve,
+                load_bank,
+            )
+
+            try:
+                bank_obj = load_bank(bank)
+                loaded_bank = apply_bank_to_serve(bank_obj)
+                loaded_bank.install_serve_hook(
+                    model_obj, strength=bank_strength
+                )
+            except (TypeError, ValueError, OSError) as exc:
+                console.print(f"[red]--bank:[/] {_esc(str(exc))}")
+                raise typer.Exit(2) from exc
+            console.print(
+                f"[green]Vector bank active:[/] {_esc(loaded_bank.name)} "
+                f"({len(loaded_bank._user_vectors)} users, "
+                f"dim={loaded_bank.vector_dim}, strength={bank_strength})"
+            )
+
         # Load draft model for speculative decoding (transformers backend)
         draft_model = None
         if speculative_model:
@@ -759,6 +820,7 @@ def serve(
             trace_log_writer=trace_log_writer,
             reasoning_parser=resolved_reasoning_parser,
             record_thumbs_db=record_thumbs_db,
+            loaded_bank=loaded_bank,
         )
 
     console.print(
@@ -1047,6 +1109,7 @@ def _create_app(
     auth_token: Optional[str] = None,
     reasoning_parser: Optional[str] = None,
     record_thumbs_db: Optional[str] = None,
+    loaded_bank: Any = None,
 ):
     """Create the FastAPI application with OpenAI-compatible endpoints.
 
@@ -1120,6 +1183,10 @@ def _create_app(
     # Resolved adapter map (name → path)
     _adapter_map = adapter_map or {}
 
+    # v0.71.12 #221 — VeRA / VB-LoRA bank loaded at startup (or None). The
+    # active user is selected per request via the X-User-Id header.
+    _loaded_bank = loaded_bank
+
     # --- Endpoints ---
 
     def _active_snapshot() -> Optional[str]:
@@ -1189,7 +1256,10 @@ def _create_app(
         }
 
     @app.post("/v1/chat/completions")
-    def chat_completions(request: ChatCompletionRequest):
+    def chat_completions(
+        request: ChatCompletionRequest,
+        x_user_id: Optional[str] = Header(default=None, alias="X-User-Id"),
+    ):
         # Check adapter selection (from request body)
         requested_adapter = request.adapter
         if requested_adapter and _adapter_map:
@@ -1203,6 +1273,13 @@ def _create_app(
                 status_code=404,
                 detail="No adapters loaded.",
             )
+
+        # v0.71.12 #221 — select the active VeRA / VB-LoRA user for this
+        # request. set_active_user(None) (or an unknown id) self-clears, so
+        # a request without the X-User-Id header never inherits the previous
+        # request's per-user steering.
+        if _loaded_bank is not None:
+            _loaded_bank.set_active_user(x_user_id)
 
         messages = [{"role": msg.role, "content": msg.content} for msg in request.messages]
         max_tokens = request.max_tokens or max_tokens_default

@@ -27,10 +27,36 @@ References:
 from __future__ import annotations
 
 import copy
-from typing import Any
+from types import MappingProxyType
+from typing import Any, Mapping, Tuple
 
 _MAX_EXPAND_LAYERS = 64
 _MIN_EXPAND_LAYERS = 1
+
+# v0.71.12 #148 — per-architecture residual-projection paths. Maps the model
+# class name (``type(model).__name__``) to the (submodule, attribute) tuples
+# whose weights/biases must be zeroed so an appended block initially acts as
+# an identity on the residual stream (LLaMA Pro §3.1). Non-Llama-shaped
+# architectures (Falcon, GPT-2, GPT-NeoX) use different projection names — the
+# old heuristic only matched ``mlp.down_proj`` / ``self_attn.o_proj`` and
+# silently degraded on those. ``MappingProxyType`` keeps the table immutable
+# (matches v0.41.0 ``_OPTIMIZER_PACKAGES`` policy).
+_DEFAULT_RESIDUAL_PATHS: Tuple[Tuple[str, str], ...] = (
+    ("mlp", "down_proj"),
+    ("self_attn", "o_proj"),
+)
+_ARCH_RESIDUAL_PATHS: Mapping[str, Tuple[Tuple[str, str], ...]] = MappingProxyType({
+    "LlamaForCausalLM": _DEFAULT_RESIDUAL_PATHS,
+    "MistralForCausalLM": _DEFAULT_RESIDUAL_PATHS,
+    "Qwen2ForCausalLM": _DEFAULT_RESIDUAL_PATHS,
+    "Qwen3ForCausalLM": _DEFAULT_RESIDUAL_PATHS,
+    "Phi3ForCausalLM": _DEFAULT_RESIDUAL_PATHS,
+    "GemmaForCausalLM": _DEFAULT_RESIDUAL_PATHS,
+    "Gemma2ForCausalLM": _DEFAULT_RESIDUAL_PATHS,
+    "FalconForCausalLM": (("mlp", "dense_4h_to_h"), ("self_attention", "dense")),
+    "GPTNeoXForCausalLM": (("mlp", "dense_4h_to_h"), ("attention", "dense")),
+    "GPT2LMHeadModel": (("mlp", "c_proj"), ("attn", "c_proj")),
+})
 
 
 def validate_expand_layers(value: object) -> int:
@@ -94,6 +120,16 @@ def expand_model_blocks(model: Any, num_new_blocks: int) -> int:
             "expand_model_blocks: base model has zero decoder layers; "
             "cannot clone."
         )
+    # v0.71.12 #148 — per-arch residual-projection dispatch. Look up the
+    # model class name in the table; fall back to the default Llama-shape
+    # paths for unknown architectures (and warn so the user knows the
+    # identity-init guarantee may be incomplete).
+    arch = type(model).__name__
+    paths = _ARCH_RESIDUAL_PATHS.get(arch)
+    known_arch = paths is not None
+    if not known_arch:
+        paths = _DEFAULT_RESIDUAL_PATHS
+
     # Clone the last ``min(n, original_count)`` blocks — guards against
     # over-expansion on tiny test models. The LLaMA Pro paper interleaves
     # blocks, but appending-then-zero-init is mathematically equivalent
@@ -103,14 +139,14 @@ def expand_model_blocks(model: Any, num_new_blocks: int) -> int:
     for offset in range(clone_count):
         source = layers[original_count - clone_count + offset]
         clone = copy.deepcopy(source)
-        if _zero_init_block_residual(clone):
+        if _zero_init_block_residual(clone, paths):
             any_zeroed = True
         layers.append(clone)
     if not any_zeroed:
         # v0.53.4 security review LOW — surface that the residual projection
-        # path missed every cloned block (non-Llama-shaped arch). The blocks
-        # still get appended + trained, but they are NOT identity-initialised,
-        # so the user should know their starting point degrades slightly.
+        # path missed every cloned block. The blocks still get appended +
+        # trained, but they are NOT identity-initialised, so the user should
+        # know their starting point degrades slightly.
         import warnings
 
         warnings.warn(
@@ -120,6 +156,21 @@ def expand_model_blocks(model: Any, num_new_blocks: int) -> int:
             "expected for non-Llama-shaped architectures; training will "
             "proceed but the identity-init guarantee from the LLaMA Pro "
             "paper is lost.",
+            stacklevel=2,
+        )
+    elif not known_arch:
+        # v0.71.12 #148 — zeroing succeeded via the default heuristic, but the
+        # architecture is not in ``_ARCH_RESIDUAL_PATHS``. Warn so the user
+        # verifies the identity-init landed on the right submodules (acceptance:
+        # "warning only fires for arches NOT in the table").
+        import warnings
+
+        warnings.warn(
+            f"expand_model_blocks: architecture {arch!r} is not in the "
+            "per-arch residual-projection table; used the default Llama-shape "
+            "heuristic (mlp.down_proj / self_attn.o_proj). Zero-init landed, "
+            "but verify it targets the correct residual projections for this "
+            "architecture.",
             stacklevel=2,
         )
 
@@ -159,12 +210,18 @@ def apply_llama_pro_freeze(model: Any, num_new_blocks: int) -> int:
     return trainable
 
 
-def _zero_init_block_residual(block: Any) -> bool:
+def _zero_init_block_residual(
+    block: Any,
+    paths: Tuple[Tuple[str, str], ...] = _DEFAULT_RESIDUAL_PATHS,
+) -> bool:
     """Zero the output projections so the new block is initially identity.
 
-    Targets the standard HF causal-LM layer shape:
-      * ``block.mlp.down_proj.weight`` (and bias, if any)
-      * ``block.self_attn.o_proj.weight`` (and bias, if any)
+    ``paths`` is a tuple of ``(submodule, attribute)`` pairs naming the
+    residual projections to zero. Defaults to the Llama-shape paths
+    (``mlp.down_proj`` / ``self_attn.o_proj``); v0.71.12 #148 threads
+    per-architecture paths from ``_ARCH_RESIDUAL_PATHS`` so non-Llama-shaped
+    models (Falcon ``mlp.dense_4h_to_h`` / ``self_attention.dense``, GPT-2
+    ``mlp.c_proj`` / ``attn.c_proj``) are zeroed correctly.
 
     Returns ``True`` if at least one residual projection was zeroed, else
     ``False`` (caller can emit a warning so a silent-degradation surface is
@@ -172,7 +229,7 @@ def _zero_init_block_residual(block: Any) -> bool:
     arches).
     """
     zeroed_any = False
-    for path in (("mlp", "down_proj"), ("self_attn", "o_proj")):
+    for path in paths:
         mod = block
         for name in path:
             mod = getattr(mod, name, None)

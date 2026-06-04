@@ -178,6 +178,12 @@ Loss = student CE + (T**2) × KL(teacher_logits / T  ||  student_logits / T).
 Teacher is loaded once, frozen via `requires_grad_(False)` + `.eval()`, and its
 inputs / logits are auto-bridged across CPU / CUDA devices.
 
+Set `distill_mode: sequence` (default `token`) to train on the teacher's **generated
+continuations** instead of per-token logit matching — a hard-label, cross-tokenizer-friendly
+KD that works when student and teacher do not share a vocabulary. `sequence` mode is mutually
+exclusive with the cross-tokenizer `uld_strategy` logit path (they are different objectives over
+the same task; the trainer rejects the combination at setup). (v0.71.12)
+
 
 ## Sequence Classification
 
@@ -206,6 +212,20 @@ training:
 Routes `classifier` / `reranker` / `cross_encoder` through
 `AutoModelForSequenceClassification`. Multi-label heads cap at 1024 entries per
 row, dedup via set conversion, and reject null bytes in label strings.
+
+Add a `lora:` section to train a **frozen encoder + LoRA adapter** classifier instead of the
+full model — the small adapter plus the (freshly-initialised) classification head train, the
+encoder backbone stays frozen:
+
+```yaml
+training:
+  num_labels: 3
+  lora:
+    r: 16
+    alpha: 32
+```
+
+(v0.71.12)
 
 
 ## Reasoning Effort + EOT Control
@@ -1015,5 +1035,64 @@ Energy-Based Fine-Tuning (axolotl) lands as `training.ebft_variant ∈ {structur
 ## gpt-oss `reasoning_effort` + `train_on_eot` (v0.52.0)
 
 `training.reasoning_effort: low | medium | high` injects a system-prefix token at training time for gpt-oss models; `training.train_on_eot: true` includes explicit EOT/EOS control tokens in the SFT loss (axolotl `train_on_eot`). Both are gated to the SFT-family task set (`sft` / `pretrain` / `distill` / `classifier` / `reranker` / `cross_encoder`) — setting them on DPO / GRPO / PPO / etc. fails at config load. Live formatter wiring in v0.52.1.
+
+
+## MoLE — Per-Token Adapter Routing (`task='moe_lora_routing'`)
+
+Train a small **gating network** that routes each token to a weighted blend of N frozen task
+LoRAs (Mixture of LoRA Experts, Wu et al. 2024). The base model and every task adapter stay
+frozen — only the router learns which adapter(s) each token should use.
+
+```yaml
+base: HuggingFaceTB/SmolLM2-135M
+task: moe_lora_routing
+modality: text
+backend: transformers
+
+data:
+  train: ./data/chat.jsonl
+  max_length: 512
+
+training:
+  mole_task_adapters:        # 2-64 LoRA adapter paths (HF ids or local dirs)
+    - ./adapters/math
+    - ./adapters/code
+    - ./adapters/chat
+  mole_top_k: 2              # 1 <= top_k <= len(mole_task_adapters)
+  mole_temperature: 1.0      # [1e-6, 100.0]
+  epochs: 1
+```
+
+The gate is the only trainable parameter; it is saved as `mole_gate.pt` alongside the run.
+`compute_loss` runs N+1 forwards per step (base + each adapter under `torch.no_grad()`, blended
+by the per-token gate weights) so step time scales with the number of task adapters. Training
+only — there is no serve-time MoLE path yet. (v0.71.12)
+
+
+## Architecture Knobs — Mixture-of-Depths, LLaMA Pro, LongLoRA
+
+Three architecture transforms that were schema-only are now live for SFT / Pretrain on
+Llama / Qwen / Mistral (LongLoRA also covers Phi). All apply at trainer setup:
+
+```yaml
+training:
+  # Mixture-of-Depths (arXiv 2404.02258): route only the top-k tokens through each
+  # block. capacity_factor is the fraction of tokens that get the residual update.
+  use_mod: true
+  mod_capacity_factor: 0.125
+
+  # LLaMA Pro: append zero-initialised identity decoder blocks and train only the new
+  # ones (freeze_trainable_layers freezes the originals).
+  expand_layers: 4
+  freeze_trainable_layers: 4
+
+  # LongLoRA S²: shifted-sparse attention on the Q/K projections for long-context tuning.
+  use_longlora: true
+```
+
+`use_mod` / `expand_layers` attach AFTER `get_peft_model` so the new routers / blocks are
+trainable. Unsupported architectures warn + skip (MoD, block expansion); `use_longlora` is
+rejected at the schema gate for non-supported arches and for `use_ring_attention` / FlashAttention-3.
+Pick one of MoD / LLaMA Pro / LongLoRA per run. (v0.71.12)
 
 

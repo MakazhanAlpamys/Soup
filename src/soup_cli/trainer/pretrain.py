@@ -319,6 +319,12 @@ class PretrainTrainerWrapper:
         self.model = get_peft_model(self.model, lora_config)
         apply_post_lora_patches(self.model)
 
+        # v0.71.12 #84 — Mixture-of-Depths selective-token routing (applied
+        # after get_peft_model so the routers are trainable).
+        from soup_cli.utils.mod import apply_mod_if_configured
+
+        apply_mod_if_configured(self.model, tcfg, cfg.base, console)
+
         # QAT — insert fake quantization ops after LoRA
         if tcfg.quantization_aware and tcfg.quantization_aware != "fp8":
             from soup_cli.utils.qat import prepare_model_for_qat

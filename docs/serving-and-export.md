@@ -276,6 +276,34 @@ curl http://localhost:8000/v1/adapters
 
 Names are validated against `^[a-zA-Z0-9][a-zA-Z0-9-]*$`; activate/deactivate calls are thread-safe behind a lock.
 
+### Multi-Tenant Vector Bank (`soup serve --bank`)
+
+Serve many per-user personas from one model at KB-per-user instead of a full LoRA each.
+A VeRA / VB-LoRA bank stores a shared random projection (reconstructed deterministically
+from a seed — never stored on disk) plus a small per-user scaling vector. The active user
+is chosen **per request** via the `X-User-Id` header:
+
+```bash
+# bank.json carries {name, base_model, projection_seed, vector_dim, entries: [{user_id, scaling}, ...]}
+soup serve --model base-model --bank ./bank.json --bank-strength 1.0
+```
+
+```bash
+# Apply alice's persona to this request
+curl -X POST http://localhost:8000/v1/chat/completions \
+  -H "X-User-Id: alice" \
+  -d '{"messages": [{"role": "user", "content": "hi"}]}'
+
+# No / unknown X-User-Id → zero-delta no-op (plain base model, no cross-request leak)
+curl -X POST http://localhost:8000/v1/chat/completions \
+  -d '{"messages": [{"role": "user", "content": "hi"}]}'
+```
+
+The per-token delta is `v_user ⊙ (x @ Pᵀ)`, added to the last decoder layer's residual by a
+decode-time forward hook. `--bank-strength` scales the delta (magnitude capped at 100). The
+`--bank` path must live under your cwd. Serve single-worker: the active user is per-bank state,
+so a multi-worker deployment could race concurrent `X-User-Id` requests. (v0.71.12)
+
 ### Structured Output (JSON Schema / Regex)
 
 Constrain model output to a valid JSON schema or regex pattern:

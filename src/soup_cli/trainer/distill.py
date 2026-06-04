@@ -173,6 +173,18 @@ class DistillTrainerWrapper:
         divergence = validate_divergence(tcfg.distill_divergence or "forward_kl")
         temperature = float(tcfg.distill_temperature or 2.0)
 
+        # v0.71.12 #145 — sequence-level KD vs token-level logit KD.
+        sequence_mode = getattr(tcfg, "distill_mode", "token") == "sequence"
+        if sequence_mode and (
+            tcfg.uld_strategy is not None or tcfg.minillm_enabled
+        ):
+            raise ValueError(
+                "distill_mode='sequence' is incompatible with uld_strategy / "
+                "minillm_enabled (those are token/logit-level distillation). "
+                "Sequence-level KD trains the student with plain CE on "
+                "teacher-generated text — drop uld_strategy / minillm_enabled."
+            )
+
         console.print(f"[dim]Loading tokenizer (student/teacher shared): {cfg.base}[/]")
         self.tokenizer = AutoTokenizer.from_pretrained(
             cfg.base, trust_remote_code=self._trust_remote_code
@@ -238,14 +250,61 @@ class DistillTrainerWrapper:
         for p in self.teacher.parameters():
             p.requires_grad_(False)
 
-        # v0.71.11 #236 — cross-tokenizer ULD projection. When uld_strategy
-        # is set, a vocab-size mismatch is EXPECTED (that's the whole point)
-        # and the ULD loss handles it; otherwise vocab sizes must match so
-        # the column-wise KL is well-defined.
         teacher_vocab = getattr(self.teacher.config, "vocab_size", None)
         student_vocab = getattr(self.model.config, "vocab_size", None)
         uld_projection = None
-        if tcfg.uld_strategy is not None:
+        minillm_cb = None
+
+        if sequence_mode:
+            # v0.71.12 #145 — sequence-level KD. The teacher generates a
+            # completion per prompt using ITS OWN tokenizer; the student then
+            # trains with plain CE on the re-tokenised teacher output. This
+            # works across ANY tokenizer pair, so the vocab-mismatch gate and
+            # the token-level ULD / MiniLLM paths are skipped entirely.
+            from soup_cli.utils.distill import build_sequence_distill_rows
+
+            teacher_tokenizer = AutoTokenizer.from_pretrained(
+                tcfg.teacher_model, trust_remote_code=teacher_trc
+            )
+            if (
+                teacher_tokenizer.pad_token is None
+                and teacher_tokenizer.eos_token is not None
+            ):
+                teacher_tokenizer.pad_token = teacher_tokenizer.eos_token
+            seq_budget = min(int(cfg.data.max_length), 256)
+            console.print(
+                "[green]Sequence-level KD[/] — generating teacher "
+                f"completions (max_new_tokens={seq_budget})"
+            )
+            dataset = dict(dataset)
+            dataset["train"] = build_sequence_distill_rows(
+                dataset["train"],
+                self.teacher,
+                teacher_tokenizer,
+                max_new_tokens=seq_budget,
+            )
+            if dataset.get("val"):
+                dataset["val"] = build_sequence_distill_rows(
+                    dataset["val"],
+                    self.teacher,
+                    teacher_tokenizer,
+                    max_new_tokens=seq_budget,
+                )
+            # Free the teacher — sequence-level KD does NOT need it in the
+            # student loss loop (keeps the 4 GB VRAM budget honest).
+            self.teacher = None
+            try:
+                import torch as _torch
+
+                if _torch.cuda.is_available():
+                    _torch.cuda.empty_cache()
+            except Exception:  # noqa: BLE001 — best-effort cleanup
+                pass
+        elif tcfg.uld_strategy is not None:
+            # v0.71.11 #236 — cross-tokenizer ULD projection. When uld_strategy
+            # is set, a vocab-size mismatch is EXPECTED (that's the whole point)
+            # and the ULD loss handles it; otherwise vocab sizes must match so
+            # the column-wise KL is well-defined.
             from soup_cli.utils.uld import ULDConfig, build_uld_projection
 
             uld_projection = build_uld_projection(
@@ -273,9 +332,9 @@ class DistillTrainerWrapper:
                 "uld_strategy."
             )
 
-        # v0.71.11 #237 — MiniLLM on-policy distillation modifier.
-        minillm_cb = None
-        if tcfg.minillm_enabled:
+        # v0.71.11 #237 — MiniLLM on-policy distillation modifier. Skipped in
+        # sequence mode (mutually exclusive — rejected earlier in setup).
+        if not sequence_mode and tcfg.minillm_enabled:
             from soup_cli.utils.minillm import MiniLLMConfig, build_minillm_callback
 
             minillm_cb = build_minillm_callback(
@@ -353,6 +412,7 @@ class DistillTrainerWrapper:
         _teacher_vocab = teacher_vocab
         _uld_projection = uld_projection
         _minillm_cb = minillm_cb
+        _sequence_mode = sequence_mode
 
         class _DistillTrainer(Trainer):
             def compute_loss(
@@ -377,6 +437,13 @@ class DistillTrainerWrapper:
                         shift_labels.view(-1),
                         ignore_index=-100,
                     )
+
+                # v0.71.12 #145 — sequence-level KD trains the student with
+                # plain CE on teacher-generated text. The teacher has already
+                # been used (and freed) during dataset construction, so there
+                # is no teacher forward / logit term here.
+                if _sequence_mode:
+                    return (ce_loss, outputs) if return_outputs else ce_loss
 
                 # Bridge devices: HF Trainer may auto-move the student to
                 # CUDA while the frozen teacher stays on CPU (or vice versa).
