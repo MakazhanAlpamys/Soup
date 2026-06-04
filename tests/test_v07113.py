@@ -1397,6 +1397,89 @@ class TestCoverageGaps:
 
 
 # ===========================================================================
+# Coverage cushion — reachable internals exercised network/lib-free so the
+# 77% gate does not sit right on the edge (the DSPy/TextGrad/GEPA optimiser
+# bodies are genuinely uncoverable without the [compile] extra installed).
+# ===========================================================================
+
+
+class TestReachableInternals:
+    def test_resolve_metric_callable(self):
+        import types
+
+        import soup_cli.utils.prompt_compile as pc
+
+        mod = types.SimpleNamespace(metric=lambda *a, **k: 1.0)
+        assert callable(pc._resolve_metric(mod))
+
+    def test_resolve_metric_absent_returns_none(self):
+        import types
+
+        import soup_cli.utils.prompt_compile as pc
+
+        assert pc._resolve_metric(types.SimpleNamespace()) is None
+
+    def test_resolve_metric_non_callable_returns_none(self):
+        import types
+
+        import soup_cli.utils.prompt_compile as pc
+
+        assert pc._resolve_metric(types.SimpleNamespace(metric=42)) is None
+
+    def test_build_provider_fn_delegates_to_make_judge(self, monkeypatch):
+        import soup_cli.utils.data_forge as df
+        import soup_cli.utils.prompt_distill as pd
+
+        seen = {}
+
+        def fake_make(provider, *, model, base_url, temperature):
+            seen.update(
+                provider=provider, model=model, base_url=base_url, temperature=temperature
+            )
+            return lambda prompt: {"text": f"R:{prompt}"}
+
+        monkeypatch.setattr(df, "make_judge_provider_fn", fake_make)
+        fn = pd._build_provider_fn(
+            "ollama", "qwen2.5:0.5b", base_url="http://localhost:11434", temperature=0.2
+        )
+        assert fn("hi") == {"text": "R:hi"}
+        assert seen == {
+            "provider": "ollama",
+            "model": "qwen2.5:0.5b",
+            "base_url": "http://localhost:11434",
+            "temperature": 0.2,
+        }
+
+    def test_prepare_distill_default_teacher_wires_provider(self, tmp_path, monkeypatch):
+        """teacher_fn=None routes through _build_provider_fn (default-provider
+        wiring) — covers the no-injected-seam branch of prepare_distill_dataset."""
+        monkeypatch.chdir(tmp_path)
+        import soup_cli.utils.prompt_distill as pd
+
+        _write_traces(str(tmp_path / "traces.jsonl"), ["q1", "q2"])
+        calls = {"n": 0}
+
+        def fake_build(provider, model, *, base_url, temperature):  # noqa: ARG001
+            def _gen(prompt):
+                calls["n"] += 1
+                return {"text": f"T:{prompt}"}
+
+            return _gen
+
+        monkeypatch.setattr(pd, "_build_provider_fn", fake_build)
+        plan = pd.build_distill_prompt_plan(
+            traces_path="traces.jsonl",
+            teacher="qwen2.5:0.5b",
+            student="smol",
+            strategy="sft",
+            output_path="out.jsonl",
+        )
+        n = pd.prepare_distill_dataset(plan, provider="ollama")
+        assert n == 2
+        assert calls["n"] == 2
+
+
+# ===========================================================================
 # Patch invariants
 # ===========================================================================
 

@@ -521,26 +521,78 @@ class TestMiniLLM:
 
     def test_anchor_term_with_file(self, tmp_path, monkeypatch):
         import torch
-        from transformers import AutoModelForCausalLM, AutoTokenizer
 
         from soup_cli.utils.minillm import MiniLLMConfig, build_minillm_callback
+
+        # Loading a tokenizer/model from the Hub flakes on CI runners that get
+        # HF-rate-limited (the cache-warm step is best-effort). Skip on network
+        # failure — the anchor math is covered network-free by
+        # ``test_anchor_term_with_fake_model`` below.
+        try:
+            from transformers import AutoModelForCausalLM, AutoTokenizer
+
+            tok = AutoTokenizer.from_pretrained("hf-internal-testing/tiny-random-gpt2")
+            model = AutoModelForCausalLM.from_pretrained(
+                "hf-internal-testing/tiny-random-gpt2"
+            )
+        except OSError as exc:  # pragma: no cover — network-dependent
+            pytest.skip(f"HF model unavailable (offline / rate-limited): {exc}")
 
         monkeypatch.chdir(tmp_path)
         anchor = tmp_path / "anchor.jsonl"
         anchor.write_text(
             "\n".join(json.dumps({"text": f"sentence number {i}"}) for i in range(4))
         )
-        tok = AutoTokenizer.from_pretrained("hf-internal-testing/tiny-random-gpt2")
         if tok.pad_token is None:
             tok.pad_token = tok.eos_token
-        model = AutoModelForCausalLM.from_pretrained(
-            "hf-internal-testing/tiny-random-gpt2"
-        )
         cb = build_minillm_callback(
             MiniLLMConfig(pretrain_anchor_weight=0.1, pretrain_anchor_path="anchor.jsonl"),
             tokenizer=tok,
         )
         term = cb.anchor_term(model)
+        assert term is not None
+        assert torch.isfinite(term)
+
+    def test_anchor_term_with_fake_model(self, tmp_path, monkeypatch):
+        """Network-free coverage of ``_load_anchor`` + ``anchor_term`` — a fake
+        tokenizer + tiny ``nn.Module`` exercise the same lines as the Hub-backed
+        test above, so the coverage gate does not depend on HF availability."""
+        import torch
+        import torch.nn as nn
+
+        from soup_cli.utils.minillm import MiniLLMConfig, build_minillm_callback
+
+        class _FakeOut:
+            def __init__(self, logits):
+                self.logits = logits
+
+        class _TinyLM(nn.Module):
+            def __init__(self, vocab=16):
+                super().__init__()
+                self.emb = nn.Embedding(vocab, 4)
+                self.head = nn.Linear(4, vocab)
+
+            def forward(self, input_ids, attention_mask=None):  # noqa: ARG002
+                return _FakeOut(self.head(self.emb(input_ids)))
+
+        class _FakeTok:
+            def __call__(
+                self, texts, return_tensors=None, padding=None,
+                truncation=None, max_length=None,
+            ):  # noqa: ARG002
+                ids = torch.tensor([[1, 2, 3, 4] for _ in texts])
+                return {"input_ids": ids, "attention_mask": torch.ones_like(ids)}
+
+        monkeypatch.chdir(tmp_path)
+        anchor = tmp_path / "anchor.jsonl"
+        anchor.write_text(
+            "\n".join(json.dumps({"text": f"sentence {i}"}) for i in range(4))
+        )
+        cb = build_minillm_callback(
+            MiniLLMConfig(pretrain_anchor_weight=0.25, pretrain_anchor_path="anchor.jsonl"),
+            tokenizer=_FakeTok(),
+        )
+        term = cb.anchor_term(_TinyLM())
         assert term is not None
         assert torch.isfinite(term)
 
