@@ -36,6 +36,8 @@ Listed by first contribution. PR numbers link the work.
   - Reject pickle/zip streams renamed to `.safetensors` via magic-byte check ([#198](https://github.com/MakazhanAlpamys/Soup/pull/198))
 - **Shivam** ([@shivam2931120](https://github.com/shivam2931120))
   - Tokenizer-aware repetition scoring for the echo-trap detector ([#242](https://github.com/MakazhanAlpamys/Soup/pull/242))
+- **gittihub-jpg** ([@gittihub-jpg](https://github.com/gittihub-jpg))
+  - Manifest-level dotted-path custom transforms for `soup build` ([#255](https://github.com/MakazhanAlpamys/Soup/pull/255))
 
 ---
 
