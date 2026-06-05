@@ -197,7 +197,9 @@ def test_plan_consolidation_no_shards(tmp_path, monkeypatch):
         plan_consolidation(str(out), str(tmp_path / "x.safetensors"))
 
 
-def test_cli_merge_sharded(tmp_path, monkeypatch):
+def test_cli_merge_sharded_plan_only(tmp_path, monkeypatch):
+    # v0.71.14 #96: --plan-only prints the plan without loading shards, so an
+    # empty placeholder .bin is fine for the planning path.
     monkeypatch.chdir(tmp_path)
     out = tmp_path / "shards"
     out.mkdir()
@@ -210,25 +212,26 @@ def test_cli_merge_sharded(tmp_path, monkeypatch):
             str(out),
             "-o",
             str(target),
-            "--yes",
+            "--plan-only",
         ],
     )
     assert result.exit_code == 0, (result.output, repr(result.exception))
     assert "Plan" in result.output
+    assert not target.exists()
 
 
-def test_cli_merge_sharded_no_yes_warns(tmp_path, monkeypatch):
+def test_cli_merge_sharded_invalid_shard_exits_2(tmp_path, monkeypatch):
+    # v0.71.14 #96: live consolidation of a non-torch .bin fails gracefully.
     monkeypatch.chdir(tmp_path)
     out = tmp_path / "shards"
     out.mkdir()
-    (out / "pytorch_model_fsdp_0.bin").write_bytes(b"")
+    (out / "pytorch_model_fsdp_0.bin").write_bytes(b"not a torch checkpoint")
     target = tmp_path / "merged.safetensors"
     result = runner.invoke(
         app,
         ["merge-sharded-fsdp-weights", str(out), "-o", str(target)],
     )
-    assert result.exit_code == 0
-    assert "--yes" in result.output
+    assert result.exit_code == 2
 
 
 # --- delinearize_llama4 ------------------------------------------------------

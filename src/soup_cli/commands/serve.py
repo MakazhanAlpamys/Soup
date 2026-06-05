@@ -5,6 +5,7 @@ import logging
 import re
 import time
 import uuid
+from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
@@ -249,6 +250,16 @@ def serve(
         "--bank-strength",
         help="Vector-bank delta strength multiplier. Ignored when --bank is unset.",
     ),
+    kv_cache_type: Optional[str] = typer.Option(
+        None,
+        "--kv-cache-type",
+        help=(
+            "KV-cache type for decoding: q8_0 (8-bit quantized, needs hqq) / "
+            "bf16 / f16 (cache dtype) / fp8 (vLLM+Hopper only). Transformers "
+            "backend only — vLLM / SGLang routing is in the blocked tail. "
+            "v0.71.14 (#140)."
+        ),
+    ),
 ):
     """Start a local inference server with OpenAI-compatible API."""
     # v0.71.12 #221 — validate `--bank` up front (path containment + backend)
@@ -298,6 +309,50 @@ def serve(
                 "[red]--steer requires --backend transformers[/] "
                 "(activation steering installs a forward hook on the loaded "
                 "model; vLLM / SGLang / MII are not supported)."
+            )
+            raise typer.Exit(code=2)
+
+    # v0.71.14 #140 — resolve `--kv-cache-type` up front (before model load) so
+    # an invalid type / fp8-on-Ampere / vLLM-backend / missing-quant-backend
+    # surfaces immediately. The resolved runtime is threaded into the
+    # transformers branch below (model dtype + generate kwargs).
+    resolved_kv_runtime = None
+    if kv_cache_type is not None:
+        from rich.markup import escape as _rich_escape
+
+        from soup_cli.utils.kv_cache import (
+            apply_kv_cache_type,
+            quantized_cache_backend_available,
+        )
+
+        cc = None
+        try:
+            import torch as _torch
+
+            if _torch.cuda.is_available():
+                cc = _torch.cuda.get_device_capability(0)
+        except Exception as _cc_exc:  # noqa: BLE001 — torch missing / no CUDA
+            # cc stays None → the fp8 gate falls back to the generic
+            # vLLM-only message instead of the precise capability one.
+            logger.debug("kv-cache CUDA capability probe failed: %r", _cc_exc)
+            cc = None
+        try:
+            resolved_kv_runtime = apply_kv_cache_type(
+                kv_cache_type, backend=backend.lower(), compute_capability=cc
+            )
+        except (TypeError, ValueError, NotImplementedError, RuntimeError) as exc:
+            console.print(
+                f"[red]--kv-cache-type:[/] {_rich_escape(str(exc))}"
+            )
+            raise typer.Exit(code=2) from exc
+        if (
+            resolved_kv_runtime.requires_quant_backend
+            and quantized_cache_backend_available() is None
+        ):
+            console.print(
+                "[red]--kv-cache-type q8_0[/] needs a quantized-cache backend. "
+                "Install one with [bold]pip install hqq[/] "
+                "(or optimum-quanto)."
             )
             raise typer.Exit(code=2)
 
@@ -640,8 +695,16 @@ def serve(
             is_adapter=is_adapter,
             device=device,
             trust_remote_code=resolved_trust,
+            kv_cache_dtype=(
+                resolved_kv_runtime.model_dtype if resolved_kv_runtime else None
+            ),
         )
         console.print("[bold green]Model loaded![/]")
+        if resolved_kv_runtime is not None:
+            console.print(
+                f"[green]KV cache:[/] {resolved_kv_runtime.kv_cache_type} "
+                f"— {resolved_kv_runtime.note}"
+            )
 
         # v0.71.10 #201 — install the activation-steering decode hook. The
         # handle persists for the server's lifetime (process-global model).
@@ -821,6 +884,11 @@ def serve(
             reasoning_parser=resolved_reasoning_parser,
             record_thumbs_db=record_thumbs_db,
             loaded_bank=loaded_bank,
+            kv_cache_generate_kwargs=(
+                _plain_kv_kwargs(resolved_kv_runtime.generate_kwargs)
+                if resolved_kv_runtime
+                else None
+            ),
         )
 
     console.print(
@@ -945,10 +1013,21 @@ def _load_model(
     is_adapter: bool,
     device: str,
     trust_remote_code: bool = False,
+    kv_cache_dtype: Optional[str] = None,
 ):
-    """Load model and tokenizer."""
+    """Load model and tokenizer.
+
+    ``kv_cache_dtype`` (v0.71.14 #140) selects the model compute dtype so the
+    transformers DynamicCache runs in it: ``"bfloat16"`` → bf16, else the
+    default float16. The bf16/f16 ``kv_cache_type`` values map here; q8_0 uses
+    a quantized cache via generate kwargs and leaves the model dtype unchanged.
+    """
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    load_dtype = (
+        torch.bfloat16 if kv_cache_dtype == "bfloat16" else torch.float16
+    )
 
     console.print("[dim]Loading tokenizer...[/]")
     tokenizer = AutoTokenizer.from_pretrained(
@@ -965,7 +1044,7 @@ def _load_model(
             base_model,
             trust_remote_code=trust_remote_code,
             device_map="auto",
-            dtype=torch.float16,
+            dtype=load_dtype,
         )
         console.print(f"[dim]Loading LoRA adapter: {model_path}...[/]")
         model_obj = PeftModel.from_pretrained(base, model_path)
@@ -975,7 +1054,7 @@ def _load_model(
             model_path,
             trust_remote_code=trust_remote_code,
             device_map="auto",
-            dtype=torch.float16,
+            dtype=load_dtype,
         )
 
     model_obj.eval()
@@ -1007,6 +1086,23 @@ def _load_draft_model(speculative_model: str, device: str):
     return draft
 
 
+def _plain_kv_kwargs(mapping: Any) -> Dict[str, Any]:
+    """Deep-convert a (possibly MappingProxyType-nested) mapping to plain dicts.
+
+    The v0.71.14 #140 ``kv_cache_type`` runtime stores ``generate_kwargs`` as
+    immutable ``MappingProxyType`` (incl. a nested ``cache_config``). transformers
+    ``generate`` builds the quantized cache from a plain ``cache_config`` dict,
+    so convert before threading it in.
+    """
+    out: Dict[str, Any] = {}
+    for key, value in dict(mapping).items():
+        if isinstance(value, Mapping):
+            out[key] = _plain_kv_kwargs(value)
+        else:
+            out[key] = value
+    return out
+
+
 def _generate_response(
     model,
     tokenizer,
@@ -1019,6 +1115,7 @@ def _generate_response(
     num_assistant_tokens: int = 5,
     logits_processor=None,
     ngram_config: Any = None,
+    kv_cache_generate_kwargs: Optional[Dict[str, Any]] = None,
 ):
     """Generate a response from the model."""
     import torch
@@ -1079,6 +1176,12 @@ def _generate_response(
                 # is defence-in-depth.
                 pass
 
+        # v0.71.14 #140 — KV-cache-type generate kwargs (quantized cache for
+        # q8_0). bf16/f16 map to the model load dtype, not here, so this is
+        # empty for those. Merged last so it can't be clobbered.
+        if kv_cache_generate_kwargs:
+            gen_kwargs.update(kv_cache_generate_kwargs)
+
         outputs = model.generate(**gen_kwargs)
 
     new_tokens = outputs[0][input_ids.shape[1]:]
@@ -1110,6 +1213,7 @@ def _create_app(
     reasoning_parser: Optional[str] = None,
     record_thumbs_db: Optional[str] = None,
     loaded_bank: Any = None,
+    kv_cache_generate_kwargs: Optional[Dict[str, Any]] = None,
 ):
     """Create the FastAPI application with OpenAI-compatible endpoints.
 
@@ -1297,6 +1401,7 @@ def _create_app(
                     num_assistant_tokens=num_speculative_tokens,
                     trace_log_writer=trace_log_writer,
                     started=stream_started,
+                    kv_cache_generate_kwargs=kv_cache_generate_kwargs,
                 ),
                 media_type="text/event-stream",
             )
@@ -1331,6 +1436,7 @@ def _create_app(
                         num_assistant_tokens=num_speculative_tokens,
                         logits_processor=processors or None,
                         ngram_config=ngram_config,
+                        kv_cache_generate_kwargs=kv_cache_generate_kwargs,
                     )
                 except Exception:
                     logger.exception("Generation error")
@@ -1735,6 +1841,7 @@ def _stream_response(
     max_tokens, temperature, top_p, model_name,
     assistant_model=None, num_assistant_tokens=5,
     trace_log_writer=None, started=None,
+    kv_cache_generate_kwargs=None,
 ):
     """Generator that yields SSE chunks for streaming responses."""
     chat_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
@@ -1750,6 +1857,7 @@ def _stream_response(
             top_p=top_p,
             assistant_model=assistant_model,
             num_assistant_tokens=num_assistant_tokens,
+            kv_cache_generate_kwargs=kv_cache_generate_kwargs,
         )
     except Exception:
         logger.exception("Stream generation error")

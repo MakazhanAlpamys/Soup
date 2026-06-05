@@ -22,6 +22,7 @@ soup chat --model ./output                    Interactive chat
 soup push --model ./output --repo user/name   Upload to HuggingFace
 soup push --model ./output --repo user/name --collection user/coll-abc123  Add to HF Collection
 soup merge --adapter ./output                 Merge LoRA with base model
+soup merge-sharded-fsdp-weights ./shards -o merged.safetensors  Consolidate FSDP shards into one safetensors (v0.71.14; --plan-only previews)
 soup export --model ./output --format gguf    Export to GGUF (Ollama)
 soup export --model ./output --deploy ollama  Export GGUF + auto-deploy to Ollama
 soup export --model ./output --format onnx    Export to ONNX
@@ -57,6 +58,7 @@ soup serve --model <m> --dashboard            Live dashboard + /metrics endpoint
 soup serve --model <m> --trace --trace-endpoint http://localhost:4317  OpenTelemetry tracing
 soup serve --model <m> --trace-log ./serve.jsonl  Per-request JSONL log + rotation + secret redaction
 soup serve --model <m> --record-thumbs ./rl.db  Capture 👍/👎 feedback into local-RL SQLite + POST /v1/thumbs (transformers)
+soup serve --model <m> --kv-cache-type bf16|f16|q8_0|fp8  KV-cache type (transformers; q8_0 needs hqq; fp8 = vLLM+Hopper only) (v0.71.14)
 POST /v1/adapters/activate/<name>             Hot-swap active LoRA adapter
 soup sweep --config soup.yaml --param lr=...  Hyperparameter search
 soup diff --model-a ./a --model-b ./b         Compare two models

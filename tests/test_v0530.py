@@ -249,11 +249,17 @@ class TestKVCache:
         with pytest.raises(Exception):
             spec.requires_hopper = False  # type: ignore[misc]
 
-    def test_apply_deferred(self):
-        from soup_cli.utils.kv_cache import apply_kv_cache_type
+    def test_apply_live_v07114(self):
+        # v0.71.14 #140 lifted the v0.53.1 stub: apply_kv_cache_type now
+        # returns a runtime plan for the transformers backend.
+        from soup_cli.utils.kv_cache import KvCacheRuntime, apply_kv_cache_type
 
-        with pytest.raises(NotImplementedError, match="v0.53.1"):
-            apply_kv_cache_type()
+        rt = apply_kv_cache_type("bf16", backend="transformers")
+        assert isinstance(rt, KvCacheRuntime)
+        assert rt.model_dtype == "bfloat16"
+        # vLLM / SGLang remain deferred (blocked tail).
+        with pytest.raises(NotImplementedError):
+            apply_kv_cache_type("q8_0", backend="vllm")
 
     def test_metadata_immutable(self):
         from soup_cli.utils.kv_cache import _KV_CACHE_METADATA

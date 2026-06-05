@@ -12,6 +12,37 @@ reproducing 70+ versions of notes.
 
 ## [Unreleased]
 
+## [0.71.14] - 2026-06-05
+
+### Added
+- **Live FSDP shard consolidation** (closes #96). `soup merge-sharded-fsdp-weights`
+  lifts the v0.44.0 plan-only stub: it now streams each `pytorch_model_fsdp_*.bin`
+  shard via `torch.load(weights_only=True)` (no arbitrary pickle exec), unions the
+  per-rank parameter fragments into one state-dict, and writes a single
+  `.safetensors` atomically. Memory-friendly (one shard loaded at a time). New
+  `--plan-only` flag prints the plan without writing. Single-process — no
+  multi-GPU needed to MERGE. (Per-rank disjoint-parameter / FULL_STATE_DICT
+  shards; DCP sharded-tensor reconstruction is out of scope — use
+  `accelerate merge-weights` for those.)
+- **Live `kv_cache_type` wiring on the transformers serve backend** (closes #140).
+  `soup serve --kv-cache-type q8_0 | bf16 | f16 | fp8` lifts the v0.53.1
+  `apply_kv_cache_type` `NotImplementedError` stub: `bf16`/`f16` load the model in
+  that dtype (the KV cache inherits it); `q8_0` routes an 8-bit HQQ quantized KV
+  cache through `model.generate` (needs `pip install hqq`); `fp8` raises a friendly
+  runtime error (vLLM + Hopper-only — the transformers backend has no fp8 KV
+  path). vLLM / SGLang KV-cache-dtype routing stays in the infra-blocked tail.
+- **ONNX export QA verified** (closes #71) — `soup export --format onnx` exercised
+  end-to-end on a tiny model: export exits 0, `model.onnx` loads in ONNX Runtime
+  with `input_ids` present, and a forward pass produces a real output. Recorded in
+  `tests/qa/v07114_qa.md`.
+
+### Notes
+- GGUF export (#70), AWQ/GPTQ export (#72), the CUDA + llama.cpp QA doc (#144),
+  HF Hub push/Spaces deploy (#74), and the Community-QA tracking meta-issue (#79)
+  remain open with `infra-blocked` labels — they need a built llama.cpp toolchain,
+  `autoawq`/`auto-gptq` Windows wheels, or HF credentials the QA box lacks. See
+  `tests/qa/v07114_qa.md`.
+
 ## [0.71.13] - 2026-06-04
 
 ### Added

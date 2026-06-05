@@ -1,7 +1,9 @@
-"""v0.44.0 Part D — `soup merge-sharded-fsdp-weights` command.
+"""`soup merge-sharded-fsdp-weights` command.
 
-Schema-only stub: discovers + validates FSDP shards and prints the planned
-operation. Live consolidation lands in v0.44.1.
+v0.44.0 shipped the planner; v0.71.14 (#96) lifts the live torch-side
+consolidation: by default the command loads each FSDP shard and writes a single
+consolidated ``.safetensors``. Pass ``--plan-only`` to print the plan without
+writing anything (single-process — no multi-GPU needed to MERGE).
 """
 
 from __future__ import annotations
@@ -11,7 +13,7 @@ from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
 
-from soup_cli.utils.fsdp_consolidate import plan_consolidation
+from soup_cli.utils.fsdp_consolidate import consolidate_shards, plan_consolidation
 
 console = Console()
 
@@ -27,31 +29,57 @@ def merge_sharded_fsdp_weights(
         "-o",
         help="Destination .safetensors file path (under cwd).",
     ),
-    yes: bool = typer.Option(
+    plan_only: bool = typer.Option(
         False,
-        "--yes",
-        help="Acknowledge that live consolidation lands in v0.44.1 (plan-only now).",
+        "--plan-only",
+        help="Print the consolidation plan and exit without writing anything.",
     ),
 ) -> None:
-    """Plan a consolidation of FSDP shard files into a single safetensors file.
+    """Consolidate FSDP shard files into a single safetensors file.
 
-    v0.44.0 ships the planner; live torch-side consolidation lands in v0.44.1.
+    Streams each ``pytorch_model_fsdp_*.bin`` shard (loaded via
+    ``torch.load(weights_only=True)`` — no arbitrary pickle exec), unions the
+    per-shard parameter fragments, and writes one ``.safetensors`` atomically.
     """
     try:
         plan = plan_consolidation(shard_dir, output)
     except (ValueError, FileNotFoundError, RuntimeError) as exc:
         console.print(f"[red]{escape(str(exc))}[/]")
         raise typer.Exit(code=2) from exc
-    body = (
-        f"Shards found:    {len(plan.shard_files)}\n"
-        f"Source dir:      {escape(plan.shard_dir)}\n"
-        f"Output (target): {escape(plan.output_path)}\n\n"
-        "Live consolidation runtime lands in v0.44.1 — this is a plan-only run."
-    )
-    console.print(Panel(body, title="FSDP Consolidation Plan", border_style="cyan"))
-    if not yes:
+
+    if plan_only:
+        body = (
+            f"Shards found:    {len(plan.shard_files)}\n"
+            f"Source dir:      {escape(plan.shard_dir)}\n"
+            f"Output (target): {escape(plan.output_path)}\n\n"
+            "Plan-only run — pass without --plan-only to write the file."
+        )
         console.print(
-            "[yellow]Pass --yes to acknowledge the deferred runtime "
-            "and exit cleanly.[/]"
+            Panel(body, title="FSDP Consolidation Plan", border_style="cyan")
         )
         raise typer.Exit(code=0)
+
+    console.print(
+        f"[dim]Consolidating {len(plan.shard_files)} shard(s)...[/]"
+    )
+    try:
+        result = consolidate_shards(plan)
+    except (TypeError, ValueError) as exc:
+        console.print(f"[red]{escape(str(exc))}[/]")
+        raise typer.Exit(code=2) from exc
+    except ImportError as exc:
+        console.print(
+            "[red]torch + safetensors are required for consolidation. "
+            "Install with: [bold]pip install 'soup-cli[train]'[/][/]"
+        )
+        raise typer.Exit(code=1) from exc
+
+    body = (
+        f"Tensors written: {result.num_tensors}\n"
+        f"Shards merged:   {result.num_shards}\n"
+        f"Size:            {result.total_bytes / 1e6:.2f} MB\n"
+        f"Output:          {escape(result.output_path)}"
+    )
+    console.print(
+        Panel(body, title="[bold green]FSDP Consolidation Done[/]", border_style="green")
+    )

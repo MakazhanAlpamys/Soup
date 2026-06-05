@@ -49,18 +49,20 @@ infrastructure instead of improving models. Soup fixes that.
 
 ## What's New
 
-**v0.71.13 — Prompt-compile family (live).** Four commands that shipped as deferred stubs in
-v0.68.0 are now real, validated end-to-end on tiny models:
+**v0.71.14 — Export QA + serve finale.** Two deferred-stub runtimes go live (validated on a tiny
+model + the real RTX 3050), plus the ONNX export pipeline verified end-to-end:
 
-- **`soup local-rl train --once`** — harvest your latest 👍/👎 feedback into DPO pairs and train a
-  real DPO/KTO/ORPO round via `soup train` (argv list, no shell). A `state` table tracks the last
-  train so a re-run with no new feedback skips. Without `--once` it renders a systemd/launchd nightly
-  scheduler scaffold you can install.
-- **`soup distill-prompt`** — call a teacher model (Ollama / Anthropic / vLLM) once per trace and
-  write a real distillation dataset: `sft`/`kl` → `{messages}`, `preference` → `{prompt, chosen, rejected}`.
-- **`soup compile`** — DSPy / GEPA / TextGrad prompt-program optimisation, and **`soup compile-tools`**
-  — TextGrad / GEPA tool-schema optimisation, both behind the new `[compile]` extra
-  (`pip install 'soup-cli[compile]'`).
+- **`soup merge-sharded-fsdp-weights`** — live FSDP shard consolidation: streams each
+  `pytorch_model_fsdp_*.bin` shard (no arbitrary pickle exec) and writes one `.safetensors` atomically.
+  Single-process, memory-friendly. `--plan-only` previews without writing.
+- **`soup serve --kv-cache-type bf16 | f16 | q8_0 | fp8`** — live KV-cache wiring on the transformers
+  backend: `bf16`/`f16` set the cache dtype, `q8_0` runs an 8-bit quantized KV cache (needs `hqq`),
+  `fp8` gives a friendly vLLM+Hopper-only error.
+- **ONNX export verified** — `soup export --format onnx` confirmed to produce a runnable ONNX graph
+  loadable in ONNX Runtime.
+
+GGUF / AWQ / GPTQ export + HF Hub push QA stay open with `infra-blocked` labels (need a built
+llama.cpp toolchain, Windows quant wheels, or HF credentials).
 
 Full history: [CHANGELOG.md](CHANGELOG.md) &middot; [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 
