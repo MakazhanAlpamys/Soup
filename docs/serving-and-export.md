@@ -189,6 +189,17 @@ response = client.chat.completions.create(
 )
 ```
 
+### KV Cache Quantization (`soup serve --kv-cache-type`)
+
+Shrink the inference-time KV cache on the transformers backend:
+
+```bash
+soup serve --model ./output --kv-cache-type bf16   # cache in the model compute dtype
+soup serve --model ./output --kv-cache-type q8_0   # 8-bit quantized cache (needs `hqq`)
+```
+
+`bf16`/`f16` need no extra dependency; `q8_0` requires a quant backend (`hqq` / `optimum-quanto`) or the CLI exits with an install hint; `fp8` is Hopper-only. Full detail and the vLLM/SGLang status live in [Performance & Quantization → KV Cache Types](performance-and-quantization.md#kv-cache-types-v0530).
+
 ### vLLM Backend (2-4x Faster Inference)
 
 Use [vLLM](https://github.com/vllm-project/vllm) for significantly better throughput in production:

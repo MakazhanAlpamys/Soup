@@ -389,10 +389,14 @@ CPU sessions and `auto_batch_size_strategy: static` skip the probe. Synthetic ba
 ## FSDP Shard Consolidation
 
 ```bash
-soup merge-sharded-fsdp-weights ./fsdp-checkpoint -o ./merged.safetensors --yes
+# Preview the plan (which shards, total size) without writing
+soup merge-sharded-fsdp-weights ./fsdp-checkpoint -o ./merged.safetensors --plan-only
+
+# Consolidate for real
+soup merge-sharded-fsdp-weights ./fsdp-checkpoint -o ./merged.safetensors
 ```
 
-Plans consolidation of `pytorch_model_fsdp_*.bin` shard files into a single `.safetensors`. v0.44.0 ships the planner with cwd-containment + size-cap (`_MAX_SHARDS=1024`); live torch-side weight consolidation lands in v0.44.1.
+Consolidates `pytorch_model_fsdp_*.bin` shard files into a single `.safetensors`. Each shard is loaded one at a time (streaming, not all-at-once) with `torch.load(weights_only=True)`, tensor shapes validated (a duplicate key with a conflicting shape is rejected; a same-shape duplicate keeps the first and warns), and the merged dict written atomically. cwd-containment + symlink rejection apply to the output path and every shard; per-shard 16 GiB cap; `_MAX_SHARDS=1024`. `--plan-only` prints the plan and exits 0. Live torch-side consolidation shipped in v0.71.14.
 
 
 ## BitNet 1.58-Bit Fine-Tuning (BETA, v0.52.0)
@@ -432,7 +436,19 @@ Both reject silently-no-op combinations: setting either flag without `moe_lora=t
 
 ## KV Cache Types (v0.53.0)
 
-`training.kv_cache_type: q8_0 | bf16 | f16 | fp8` controls the inference-time KV cache element type. `fp8` is Hopper-only; the MLX backend is rejected at config load. The other three types pass through every backend in v0.53.0; v0.53.1 may narrow MLX further once the runtime serve path lands. The Hopper SM-capability check (compute capability ≥ 9.0) is intentionally runtime-only — `pip install -U vllm` users on a Hopper box won't trip it unless they ship a Hopper-incompatible GPU into the runtime.
+`training.kv_cache_type: q8_0 | bf16 | f16 | fp8` controls the inference-time KV cache element type. `fp8` is Hopper-only; the MLX backend is rejected at config load.
+
+The **live serve runtime shipped in v0.71.14** for the transformers backend:
+
+```bash
+soup serve --model ./output --kv-cache-type bf16     # cache stored in the model compute dtype
+soup serve --model ./output --kv-cache-type q8_0     # 8-bit quantized KV cache (needs `hqq`)
+```
+
+- `bf16` / `f16` resolve the model compute dtype for the default `DynamicCache` (no extra dependency).
+- `q8_0` wires the transformers quantized KV cache (`cache_implementation="quantized"`, hqq backend). If no quant backend (`hqq` / `optimum-quanto`) is installed, the CLI exits 2 with an install hint rather than crashing.
+- `fp8` is rejected on pre-Hopper GPUs (compute capability < 9.0) with a friendly runtime error naming vLLM as the path on Ampere/Ada.
+- vLLM / SGLang serve wiring is still tracked under [#140](https://github.com/MakazhanAlpamys/Soup/issues/140) (`infra-blocked`).
 
 
 ## FP8 Attention + NVFP4 + Native `unsloth_bnb_4bit` (v0.53.0)
