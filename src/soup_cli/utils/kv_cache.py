@@ -151,13 +151,28 @@ def quantized_cache_backend_available() -> Optional[str]:
     ``optimum-quanto`` / ``quanto`` (2/4-bit). Returns the first found, else
     ``None`` (the ``q8_0`` path then surfaces a friendly install advisory).
     """
-    if importlib.util.find_spec("hqq") is not None:
+    if _spec_exists("hqq"):
         return "hqq"
-    if importlib.util.find_spec("optimum.quanto") is not None:
+    if _spec_exists("optimum.quanto"):
         return "quanto"
-    if importlib.util.find_spec("quanto") is not None:
+    if _spec_exists("quanto"):
         return "quanto"
     return None
+
+
+def _spec_exists(name: str) -> bool:
+    """``True`` if ``name`` is importable, ``False`` otherwise.
+
+    ``importlib.util.find_spec`` imports the *parent* package to resolve a
+    dotted submodule (e.g. ``optimum.quanto`` imports ``optimum``); when the
+    parent is absent it raises ``ModuleNotFoundError`` rather than returning
+    ``None``. Treat that — and a malformed ``__path__`` (``ValueError``) — as
+    "not available" so the probe never raises on a box missing the optional dep.
+    """
+    try:
+        return importlib.util.find_spec(name) is not None
+    except (ModuleNotFoundError, ValueError):
+        return False
 
 
 def _validate_compute_capability(
