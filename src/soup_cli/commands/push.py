@@ -486,7 +486,7 @@ def generate_model_card_v2(
                 "",
                 "Trained using [Soup CLI]"
                 "(https://github.com/MakazhanAlpamys/Soup) "
-                "— fine-tune LLMs in one command.",
+                "— fine-tune and post-train LLMs in one command.",
                 "",
             ]
         )

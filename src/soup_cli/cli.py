@@ -82,7 +82,7 @@ _GLOBAL_VALUE_OPTS = frozenset({"--log-level"})
 app = typer.Typer(
     name="soup",
     help=(
-        "Fine-tune LLMs in one command. No SSH, no config hell.\n\n"
+        "Fine-tune and post-train LLMs in one command. No SSH, no config hell.\n\n"
         f"[dim]GitHub: {GITHUB_URL}[/]"
     ),
     no_args_is_help=True,
@@ -625,7 +625,7 @@ def main(
         ),
     ),
 ):
-    """Soup — fine-tune LLMs in one command."""
+    """Soup — fine-tune and post-train LLMs in one command."""
     global _verbose, _log_level, _audit_disabled
     _verbose = verbose
     _audit_disabled = no_audit_log

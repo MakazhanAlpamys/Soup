@@ -5,7 +5,7 @@
 <h1 align="center">Soup</h1>
 
 <p align="center">
-  <strong>Fine-tune LLMs in one command. No SSH, no config hell.</strong>
+  <strong>Fine-tune and post-train LLMs in one command. No SSH, no config hell.</strong>
 </p>
 
 <p align="center">
