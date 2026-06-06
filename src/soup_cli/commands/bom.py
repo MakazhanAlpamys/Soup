@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
 import typer
 from rich.console import Console
 from rich.markup import escape
 
-from soup_cli.utils.bom import BomEntry, render_bom, write_bom
+from soup_cli.utils.bom import BomEntry, attach_energy, render_bom, write_bom
+from soup_cli.utils.energy import EnergyMeasurement
+from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
 
 console = Console()
 
@@ -47,6 +51,10 @@ def emit_cmd(
               "this is the prefix and Soup writes <prefix>.cdx.json + "
               "<prefix>.spdx.json."),
     ),
+    energy_path: Optional[str] = typer.Option(
+        None, "--energy", "-e",
+        help="Path to energy measurement JSON.",
+    ),
 ) -> None:
     """Emit a CycloneDX + SPDX BOM from CLI-supplied SHAs."""
     fmt_lc = fmt.lower()
@@ -56,6 +64,32 @@ def emit_cmd(
             "(use cyclonedx | spdx | both)[/]"
         )
         raise typer.Exit(2)
+
+    measurement = None
+    if energy_path is not None:
+        try:
+            validated = enforce_under_cwd_and_no_symlink(energy_path, "--energy")
+        except ValueError as exc:
+            console.print(f"[red]Energy path rejected: {escape(str(exc))}[/]")
+            raise typer.Exit(2)
+        if not Path(validated).is_file():
+            console.print(f"[red]Energy file not found: {escape(validated)}[/]")
+            raise typer.Exit(2)
+        try:
+            raw = Path(validated).read_text()
+        except OSError as exc:
+            console.print(f"[red]Cannot read energy file: {escape(str(exc))}[/]")
+            raise typer.Exit(2)
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            console.print(f"[red]Malformed JSON in energy file: {escape(str(exc))}[/]")
+            raise typer.Exit(2)
+        try:
+            measurement = EnergyMeasurement(**parsed)
+        except (TypeError, ValueError) as exc:
+            console.print(f"[red]Invalid energy measurement: {escape(str(exc))}[/]")
+            raise typer.Exit(2)
 
     try:
         entry = BomEntry(
@@ -74,6 +108,9 @@ def emit_cmd(
     except (TypeError, ValueError) as exc:
         console.print(f"[red]Invalid BOM input: {escape(str(exc))}[/]")
         raise typer.Exit(2)
+
+    if measurement is not None:
+        entry = attach_energy(entry, measurement)
 
     if fmt_lc == "both":
         if output is None:

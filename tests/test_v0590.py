@@ -1433,3 +1433,113 @@ class TestReviewFollowups:
         out = tmp_path / "out.txt"
         atomic_write_text("hello", str(out))
         assert out.read_text() == "hello"
+
+
+# ---------- BOM emit: --energy feature tests ----------
+
+
+class TestBomEnergyCli:
+    def test_emit_energy_happy_path(self, tmp_path, monkeypatch):
+        """Valid JSON energy file produces successful BOM output."""
+        monkeypatch.chdir(tmp_path)
+        energy_file = tmp_path / "energy.json"
+        energy_file.write_text(json.dumps({
+            "energy_kwh": 12.5,
+            "co2_kg": 4.0,
+            "pue": 1.2,
+            "grid_intensity_g_per_kwh": 400.0,
+            "source": "codecarbon",
+        }))
+        out = tmp_path / "bom.json"
+        runner = CliRunner()
+        result = runner.invoke(
+            app,
+            [
+                "bom", "emit",
+                "--name", "adapter-v1",
+                "--version", "0.1.0",
+                "--base-model", "meta-llama/Llama-3.1-8B",
+                "--base-sha", "a" * 64,
+                "--config-sha", "b" * 64,
+                "--task", "sft",
+                "--license", "apache-2.0",
+                "--format", "cyclonedx",
+                "--output", str(out),
+                "--energy", str(energy_file),
+            ],
+        )
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        assert out.is_file()
+
+    def test_emit_energy_malformed_json(self, tmp_path, monkeypatch):
+        """Malformed JSON in energy file produces exit code 2."""
+        monkeypatch.chdir(tmp_path)
+        energy_file = tmp_path / "energy.json"
+        energy_file.write_text("not valid json {{{")
+        runner = CliRunner()
+        result = runner.invoke(
+            app,
+            [
+                "bom", "emit",
+                "--name", "adapter-v1",
+                "--version", "0.1.0",
+                "--base-model", "meta-llama/Llama-3.1-8B",
+                "--base-sha", "a" * 64,
+                "--config-sha", "b" * 64,
+                "--task", "sft",
+                "--format", "cyclonedx",
+                "--energy", str(energy_file),
+            ],
+        )
+        assert result.exit_code == 2
+
+    def test_emit_energy_missing_file(self, tmp_path, monkeypatch):
+        """Missing energy file produces exit code 2."""
+        monkeypatch.chdir(tmp_path)
+        runner = CliRunner()
+        result = runner.invoke(
+            app,
+            [
+                "bom", "emit",
+                "--name", "adapter-v1",
+                "--version", "0.1.0",
+                "--base-model", "meta-llama/Llama-3.1-8B",
+                "--base-sha", "a" * 64,
+                "--config-sha", "b" * 64,
+                "--task", "sft",
+                "--format", "cyclonedx",
+                "--energy", str(tmp_path / "nonexistent_energy.json"),
+            ],
+        )
+        assert result.exit_code == 2
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX symlink rejection")
+    def test_emit_energy_rejects_symlink(self, tmp_path, monkeypatch):
+        """Symlink passed to --energy is rejected with exit code 2."""
+        monkeypatch.chdir(tmp_path)
+        real_file = tmp_path / "real_energy.json"
+        real_file.write_text(json.dumps({
+            "energy_kwh": 1.0,
+            "co2_kg": 0.4,
+            "pue": 1.2,
+            "grid_intensity_g_per_kwh": 400.0,
+            "source": "codecarbon",
+        }))
+        symlink = tmp_path / "symlink_energy.json"
+        os.symlink(str(real_file), str(symlink))
+        runner = CliRunner()
+        result = runner.invoke(
+            app,
+            [
+                "bom", "emit",
+                "--name", "adapter-v1",
+                "--version", "0.1.0",
+                "--base-model", "meta-llama/Llama-3.1-8B",
+                "--base-sha", "a" * 64,
+                "--config-sha", "b" * 64,
+                "--task", "sft",
+                "--format", "cyclonedx",
+                "--energy", str(symlink),
+            ],
+        )
+        assert result.exit_code == 2
