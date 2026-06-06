@@ -360,8 +360,22 @@ soup bom emit \
 
 Root component is `type=machine-learning-model` (per CycloneDX ML-BOM extension). Base
 model + parent adapters + per-artifact files appear as components with SHA-256 hashes.
-License chain uses SPDX identifiers. Energy + CO₂ properties (when attached via the
-energy schema) ship under `metadata.properties`.
+License chain uses SPDX identifiers.
+
+### Attaching energy + CO₂ (`--energy`)
+
+Pass a measurement JSON (e.g. produced by a `--track-energy` run) to record energy and
+carbon in the BOM:
+
+```bash
+soup bom emit ... --format both --output bom --energy energy.json
+```
+
+The file must be a JSON object matching the energy schema
+(`energy_kwh` / `co2_kg` / `pue` / `grid_intensity_g_per_kwh` / `source`); it is path-
+validated (kept under cwd, symlinks rejected) before reading. Energy then lands in
+**both** outputs: under `metadata.properties` (`soup:energy_kwh`, `soup:co2_kg`, …) in
+CycloneDX, and as `OTHER` annotations on the model package in SPDX.
 
 
 ## Provenance Attestations (`soup attest emit`)

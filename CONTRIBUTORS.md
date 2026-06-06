@@ -38,6 +38,7 @@ Listed by first contribution. PR numbers link the work.
   - Tokenizer-aware repetition scoring for the echo-trap detector ([#242](https://github.com/MakazhanAlpamys/Soup/pull/242))
 - **gittihub-jpg** ([@gittihub-jpg](https://github.com/gittihub-jpg))
   - Manifest-level dotted-path custom transforms for `soup build` ([#255](https://github.com/MakazhanAlpamys/Soup/pull/255))
+  - `--energy` flag for `soup bom emit` — thread energy/CO₂ into the ML-BOM ([#256](https://github.com/MakazhanAlpamys/Soup/pull/256))
 
 ---
 
