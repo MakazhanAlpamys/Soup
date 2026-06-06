@@ -163,6 +163,24 @@ def _energy_properties(entry: BomEntry) -> list[dict]:
     return props
 
 
+def _energy_annotations(entry: BomEntry, annotation_date: str) -> list[dict]:
+    """SPDX has no native properties — surface energy as OTHER annotations.
+
+    Mirrors :func:`_energy_properties` (same ``soup:<field>=<value>`` naming) so
+    energy data lands in the SPDX output as well as CycloneDX (the #244 contract
+    is "both outputs").
+    """
+    return [
+        {
+            "annotator": "Tool: soup-cli",
+            "annotationDate": annotation_date,
+            "annotationType": "OTHER",
+            "annotationComment": f"{prop['name']}={prop['value']}",
+        }
+        for prop in _energy_properties(entry)
+    ]
+
+
 def build_cyclonedx_bom(entry: BomEntry) -> dict:
     """Render a CycloneDX 1.6 ML-BOM dict (in-memory)."""
     if not isinstance(entry, BomEntry):
@@ -264,7 +282,8 @@ def build_spdx_bom(entry: BomEntry) -> dict:
                 "annotationDate": entry.created_at,
                 "annotationType": "OTHER",
                 "annotationComment": f"task={entry.task} base={entry.base_model}",
-            }
+            },
+            *_energy_annotations(entry, entry.created_at),
         ],
         "checksums": [{"algorithm": "SHA256", "checksumValue": entry.config_sha}],
     }

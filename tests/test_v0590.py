@@ -1470,6 +1470,51 @@ class TestBomEnergyCli:
         )
         assert result.exit_code == 0, (result.output, repr(result.exception))
         assert out.is_file()
+        # The feature's point: energy values must actually land in the BOM,
+        # not just produce a file (a no-op attach_energy would pass otherwise).
+        written = out.read_text()
+        assert "soup:energy_kwh" in written
+        assert "12.5" in written
+        assert "codecarbon" in written
+
+    def test_emit_energy_both_formats(self, tmp_path, monkeypatch):
+        """--format both writes cdx + spdx, and energy lands in BOTH (#244)."""
+        monkeypatch.chdir(tmp_path)
+        energy_file = tmp_path / "energy.json"
+        energy_file.write_text(json.dumps({
+            "energy_kwh": 12.5,
+            "co2_kg": 4.0,
+            "pue": 1.2,
+            "grid_intensity_g_per_kwh": 400.0,
+            "source": "codecarbon",
+        }))
+        prefix = tmp_path / "bom"
+        runner = CliRunner()
+        result = runner.invoke(
+            app,
+            [
+                "bom", "emit",
+                "--name", "adapter-v1",
+                "--version", "0.1.0",
+                "--base-model", "meta-llama/Llama-3.1-8B",
+                "--base-sha", "a" * 64,
+                "--config-sha", "b" * 64,
+                "--task", "sft",
+                "--license", "apache-2.0",
+                "--format", "both",
+                "--output", str(prefix),
+                "--energy", str(energy_file),
+            ],
+        )
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        cdx = tmp_path / "bom.cdx.json"
+        spdx = tmp_path / "bom.spdx.json"
+        assert cdx.is_file()
+        assert spdx.is_file()
+        for path in (cdx, spdx):
+            body = path.read_text()
+            assert "12.5" in body, f"energy_kwh missing from {path.name}"
+            assert "codecarbon" in body, f"energy_source missing from {path.name}"
 
     def test_emit_energy_malformed_json(self, tmp_path, monkeypatch):
         """Malformed JSON in energy file produces exit code 2."""
