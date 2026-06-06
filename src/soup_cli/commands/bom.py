@@ -67,17 +67,16 @@ def emit_cmd(
 
     measurement = None
     if energy_path is not None:
-        resolved = Path(energy_path).resolve()
         try:
-            enforce_under_cwd_and_no_symlink(str(resolved), "--energy")
+            validated = enforce_under_cwd_and_no_symlink(energy_path, "--energy")
         except ValueError as exc:
             console.print(f"[red]Energy path rejected: {escape(str(exc))}[/]")
             raise typer.Exit(2)
-        if not resolved.is_file():
-            console.print(f"[red]Energy file not found: {escape(str(resolved))}[/]")
+        if not Path(validated).is_file():
+            console.print(f"[red]Energy file not found: {escape(validated)}[/]")
             raise typer.Exit(2)
         try:
-            raw = resolved.read_text()
+            raw = Path(validated).read_text()
         except OSError as exc:
             console.print(f"[red]Cannot read energy file: {escape(str(exc))}[/]")
             raise typer.Exit(2)
