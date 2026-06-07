@@ -147,6 +147,11 @@ soup edit set \
   --target "Lyon" \
   --output ./edited --device cuda
 
+# Covariance-preconditioned ROME (genuine C^-1 k* update) from a stats corpus.
+soup edit set --base ./model --method rome \
+  --subject "..." --target "..." \
+  --cov-corpus ./stats.jsonl --output ./edited
+
 # Plan-only mode validates the request + prints the resolved EditPlan + exits 0.
 soup edit set --base ./model --method rome --subject "..." --target "..." --plan-only
 
@@ -156,9 +161,11 @@ soup edit diff before after \
   --probes probes.jsonl --output diff.json
 ```
 
-The kernels are a covariance-free (`C = I`) variant of the ROME family — well-defined, tractable on a 4 GB box, and validated on SmolLM2-135M (a ROME edit moved `P("Lyon" | "The capital of France is")` from 0.0016 → 0.96). **ROME** edits a single layer; **MEMIT** distributes the residual across a layer band; **AlphaEdit** projects the update orthogonal to the down-proj's top singular direction.
+The kernels run a real rank-1 weight update at an MLP down-projection. They support both the **Llama-family** (`model.model.layers[L].mlp.down_proj`, an `nn.Linear` with `[out, in]` weights) and the **GPT-2-family** (`model.transformer.h[L].mlp.c_proj`, a `Conv1D` with the transposed `[in, out]` layout) — the update is transpose-aware so the post-condition `down(k*) += delta` holds exactly for either layout (validated on real `gpt2`: `P(target)` 0.005 → 0.9996, and on SmolLM2-135M). PEFT-wrapped models are unwrapped automatically. **ROME** edits a single layer; **MEMIT** distributes the residual across a layer band; **AlphaEdit** projects the update orthogonal to the down-proj's top singular direction.
 
-The sequential edit governor is persisted (SQLite, cross-process-locked, `SOUP_EDIT_GOVERNOR_DB` override) so the per-base-model edit count + norm-blowup verdict survive across separate `soup edit set` runs. `soup edit set` consults it automatically: it refuses BEFORE the model load past the per-base cap or after a BLOWUP verdict, and records the measured `||ΔW||_F` after each edit. Pass `--no-governor` to opt out. `--registry-id <id>` attaches the edited model (or GRACE codebook) into the Registry lineage.
+By default ROME uses the covariance-free `C = I` form. Pass `--cov-corpus <jsonl|txt>` to estimate the key covariance `C = E[k kᵀ] + λI` over a stats corpus and apply the genuine ROME closed form `u = C⁻¹ k*` — this spreads the rank-1 update mass per the closed form and reduces collateral interference with other facts (the exact post-condition is preserved either way). The corpus loader is cwd-contained, symlink-rejected, and size/line-capped; `--cov-corpus` is rejected for any method other than `rome`.
+
+The sequential edit governor is persisted (SQLite, cross-process-locked, `SOUP_EDIT_GOVERNOR_DB` override) so the per-base-model edit count + norm-blowup verdict survive across separate `soup edit set` runs. The count increment is atomic — two concurrent `soup edit set` runs on the same base are merged under the cross-process lock (no lost increment). `soup edit set` consults the governor automatically: it refuses BEFORE the model load past the per-base cap or after a BLOWUP verdict, and records the measured `||ΔW||_F` after each edit. Pass `--no-governor` to opt out. `--registry-id <id>` attaches the edited model (or GRACE codebook) into the Registry lineage.
 
 
 ## Activation Steering (`soup steer`)

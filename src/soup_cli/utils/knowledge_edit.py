@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Mapping, Optional, Tuple
+from typing import TYPE_CHECKING, Mapping, Optional, Sequence, Tuple
 
 if TYPE_CHECKING:  # pragma: no cover — type-only import, no runtime cost
     from soup_cli.utils.edit_governor import EditGovernor
@@ -274,8 +274,9 @@ def apply_edit(
     trust_remote_code: bool = False,
     grad_steps: int = 25,
     lr: float = 0.5,
+    cov_corpus: Optional[Sequence[str]] = None,
 ) -> EditResult:
-    """Apply a knowledge edit live (v0.71.9 #194 / #197 / #203).
+    """Apply a knowledge edit live (v0.71.9 #194 / #197 / #203; v0.71.16 #250).
 
     ROME / MEMIT / AlphaEdit run the rank-1 weight-edit kernel; ``grace``
     builds a discrete codebook sidecar. When a ``governor`` is supplied it is
@@ -283,11 +284,25 @@ def apply_edit(
     BEFORE the edit (raising :class:`GovernedEditError` on refusal) and
     :meth:`EditGovernor.record_edit` runs AFTER with the measured norm delta.
 
+    ``cov_corpus`` (v0.71.16 #250) preconditions the ROME update with the key
+    covariance estimated over the supplied prompts (``C^{-1} k*``). It is only
+    valid for ``method='rome'`` — covariance preconditioning is the ROME
+    closed-form update — and is rejected (fail-loud) for any other method.
+
     Re-validates the method so callers passing a duck-typed plan still hit a
     meaningful error before any model load. Returns an :class:`EditResult`.
     """
     method_attr = getattr(plan, "method", None)
     canonical = validate_edit_method(method_attr)
+
+    # v0.71.16 #250 — reject --cov-corpus for non-ROME methods (fail-loud, no
+    # silent no-op). Runs BEFORE any model load.
+    if cov_corpus is not None and canonical != "rome":
+        raise ValueError(
+            "--cov-corpus is only supported for method='rome' (got "
+            f"method={canonical!r}); covariance preconditioning is the ROME "
+            "closed-form update."
+        )
 
     # #197: consult the governor BEFORE doing any work. A refusal must abort
     # before we burn a model load.
@@ -320,6 +335,7 @@ def apply_edit(
         model, tokenizer,
         method=canonical, subject=plan.subject, target=plan.target,
         layer=plan.layer, device=dev, grad_steps=grad_steps, lr=lr,
+        cov_corpus=cov_corpus,
     )
     prob_after = measure_target_prob(
         model, tokenizer, subject=plan.subject, target=plan.target, device=dev,

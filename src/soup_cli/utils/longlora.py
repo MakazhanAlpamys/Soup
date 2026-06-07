@@ -36,6 +36,14 @@ _LLAMA_REGEX = re.compile(r"(?:^|[^a-z0-9])(?:code)?-?llama(?:-?\d+(?:\.\d+)?)?(
 _MISTRAL_REGEX = re.compile(
     r"(?:^|[^a-z0-9])mistral(?:-?\d+(?:\.\d+)?)?(?:[^a-z0-9]|$)"
 )
+# v0.71.16 #147 — Mixtral needs its OWN regex: the bare ``mistral`` token does
+# not appear in ``mixtral`` (m-i-x vs m-i-s), so ``is_mistral_model`` excludes
+# the MoE variant. The Mixtral attention is structurally identical to Mistral's
+# (separate q/k/v projections, GQA) — only the MLP is a sparse MoE — so the S²
+# forward override reuses the separate-QKV projection-shift path.
+_MIXTRAL_REGEX = re.compile(
+    r"(?:^|[^a-z0-9])mixtral(?:-?\d+(?:\.\d+)?)?(?:[^a-z0-9]|$)"
+)
 _QWEN_REGEX = re.compile(r"(?:^|[^a-z0-9])qwen(?:-?\d+(?:\.\d+)?)?(?:[^a-z0-9]|$)")
 _PHI_REGEX = re.compile(r"(?:^|[^a-z0-9])phi(?:-?\d+(?:\.\d+)?)?(?:[^a-z0-9]|$)")
 
@@ -70,14 +78,33 @@ def _check_model_name(model_name: str) -> str | None:
 
 
 def is_mistral_model(model_name: str) -> bool:
-    """Return True if ``model_name`` belongs to the Mistral / Mixtral family.
+    """Return True if ``model_name`` belongs to the dense Mistral family.
 
-    v0.53.4 #120 — LongLoRA architecture allowlist expansion.
+    v0.53.4 #120 — LongLoRA architecture allowlist expansion. NOTE: this
+    deliberately EXCLUDES the Mixtral MoE variant (``mixtral`` does not contain
+    the ``mistral`` token) — use :func:`is_mixtral_model` for Mixtral
+    (v0.71.16 #147).
     """
     lowered = _check_model_name(model_name)
     if lowered is None:
         return False
     return _MISTRAL_REGEX.search(lowered) is not None
+
+
+def is_mixtral_model(model_name: str) -> bool:
+    """Return True if ``model_name`` belongs to the Mixtral MoE family.
+
+    v0.71.16 #147 — dedicated detector. ``is_mistral_model`` deliberately
+    excludes Mixtral (different token), so the LongLoRA allowlist needs this
+    helper to cover Mixtral-8x7B / Mixtral-8x22B. The Mixtral attention is the
+    standard separate-QKV (GQA) shell — the MoE lives in the MLP — so the S²
+    forward override needs no special attention handling, only the family +
+    attention-class-name allowlist entries.
+    """
+    lowered = _check_model_name(model_name)
+    if lowered is None:
+        return False
+    return _MIXTRAL_REGEX.search(lowered) is not None
 
 
 def is_qwen_model(model_name: str) -> bool:
@@ -105,15 +132,12 @@ def is_phi_model(model_name: str) -> bool:
 def is_supported_longlora_arch(model_name: object) -> bool:
     """Return True if ``model_name`` is in the LongLoRA allowlist.
 
-    The v0.53.4 #120 allowlist covers Llama / CodeLlama (Llama 3.x heritage),
-    Mistral, Qwen, and Phi. The S² forward override (deferred to v0.49.1)
-    attaches per-arch; the schema gate uses this helper.
+    The allowlist covers Llama / CodeLlama (Llama 3.x heritage), Mistral,
+    Mixtral (v0.71.16 #147), Qwen, and Phi. The S² forward override attaches
+    per-arch; the schema gate uses this helper.
 
     Returns ``False`` (never raises) on non-string input — matches
     ``is_known_vlm_base`` / ``is_bitnet_model`` defensive-surface policy.
-    Mixtral is intentionally NOT covered (regex matches the bare token
-    ``mistral``, not the Mixtral MoE variant); add a dedicated helper when
-    Mixtral attention upstream lands a stable forward signature.
     """
     if not isinstance(model_name, str):
         return False
@@ -121,6 +145,7 @@ def is_supported_longlora_arch(model_name: object) -> bool:
         return (
             is_llama_model(model_name)
             or is_mistral_model(model_name)
+            or is_mixtral_model(model_name)
             or is_qwen_model(model_name)
             or is_phi_model(model_name)
         )
@@ -173,7 +198,7 @@ def validate_longlora_compat(
     LongLoRA requires:
       * ``task='sft'``  (preference / RL trainers have a different forward path)
       * ``backend='transformers'``  (Unsloth has its own attention; MLX has none)
-      * Llama / Mistral / Qwen / Phi base model (v0.53.4 #120 allowlist)
+      * Llama / Mistral / Mixtral / Qwen / Phi base model (v0.71.16 #147 allowlist)
       * ``use_ring_attention=False`` (mutually exclusive custom attention kernel)
       * No FlashAttention v3 build present (v0.53.4 #122 — incompatible custom-mask)
     """
@@ -209,7 +234,7 @@ def validate_longlora_compat(
         safe_name = _truncate_for_message(model_name)
         raise ValueError(
             "LongLoRA architecture allowlist currently covers Llama / "
-            "CodeLlama, Mistral, Qwen, and Phi families (got "
+            "CodeLlama, Mistral, Mixtral, Qwen, and Phi families (got "
             f"base={safe_name!r}). Open a feature request to add another "
             "architecture."
         )
@@ -287,7 +312,7 @@ def shift_heads_for_s2(
 # Mistral, Qwen2 — GQA handled by deriving the head count per-projection from
 # its output dim) patch q_proj + k_proj independently. Phi-3 fuses Q/K/V into a
 # single ``qkv_proj`` and needs the slice split before shifting.
-_SEPARATE_QKV_FAMILIES: tuple[str, ...] = ("Llama", "Mistral", "Qwen")
+_SEPARATE_QKV_FAMILIES: tuple[str, ...] = ("Llama", "Mistral", "Mixtral", "Qwen")
 _FUSED_QKV_FAMILIES: tuple[str, ...] = ("Phi",)
 
 
@@ -426,8 +451,11 @@ class LongLoRAForwardOverride:
         # crafted model class with an arbitrarily long name does not feed
         # an unbounded string into the regex.
         max_class_name_len = 256
+        # v0.71.16 #147 — ``Mixtral`` added: ``Mistral\w*Attention`` does NOT
+        # match ``MixtralAttention`` (different token), so the override would
+        # silently skip Mixtral without this alternative.
         attention_class_re = re.compile(
-            r"(?:Llama|Mistral|Qwen|Phi)\w*Attention$"
+            r"(?:Llama|Mistral|Mixtral|Qwen|Phi)\w*Attention$"
         )
 
         for module in _walk_modules(self.model):

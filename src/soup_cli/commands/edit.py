@@ -26,6 +26,89 @@ app = typer.Typer(
     rich_markup_mode="rich",
 )
 
+# v0.71.16 #250 — covariance-corpus loader caps.
+_MAX_COV_CORPUS_BYTES = 64 * 1024 * 1024  # 64 MiB
+_MAX_COV_CORPUS_LINES = 100_000
+
+
+def _load_cov_corpus(path: str) -> list[str]:
+    """Load a covariance corpus (JSONL or plain text) for ``--cov-corpus`` (#250).
+
+    Each JSONL object contributes its ``text`` / ``prompt`` / ``content`` field;
+    every other line (non-dict JSON or non-JSON) contributes its raw stripped
+    text. cwd-contained, symlink-rejected (TOCTOU on the raw path), size + line
+    capped. Raises ``FileNotFoundError`` for a missing file and ``ValueError``
+    for a containment / symlink / oversize / empty-corpus failure.
+    """
+    import errno
+    import json as _json
+    import os
+    import stat
+
+    from soup_cli.utils.paths import is_under_cwd
+
+    if not isinstance(path, str) or not path:
+        raise ValueError("--cov-corpus path must be a non-empty string")
+    if "\x00" in path:
+        raise ValueError("--cov-corpus path must not contain null bytes")
+    if not is_under_cwd(path):
+        raise ValueError(
+            f"--cov-corpus path must stay under cwd: {os.path.basename(path)!r}"
+        )
+    # Raw-path symlink guard (the Windows guard, where O_NOFOLLOW is a no-op).
+    try:
+        if os.path.lexists(path) and stat.S_ISLNK(os.lstat(path).st_mode):
+            raise ValueError("--cov-corpus path must not be a symlink")
+    except OSError:
+        pass  # lexists/lstat race — os.open below surfaces the real error
+    # O_NOFOLLOW closes the TOCTOU window between the check and the read: os.open
+    # fails with ELOOP if the final component is a symlink (parity with the
+    # diagnose.live / tunability readers).
+    try:
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(
+            f"--cov-corpus file not found: {os.path.basename(path)!r}"
+        ) from exc
+    except OSError as exc:
+        if getattr(exc, "errno", None) == errno.ELOOP:
+            raise ValueError("--cov-corpus path must not be a symlink") from exc
+        raise ValueError(
+            f"--cov-corpus path is not readable ({type(exc).__name__})"
+        ) from exc
+    rows: list[str] = []
+    with os.fdopen(fd, encoding="utf-8") as fh:
+        st = os.fstat(fh.fileno())
+        if not stat.S_ISREG(st.st_mode):
+            raise ValueError("--cov-corpus path must be a regular file")
+        if st.st_size > _MAX_COV_CORPUS_BYTES:
+            raise ValueError(
+                f"--cov-corpus file too large (> {_MAX_COV_CORPUS_BYTES} bytes)"
+            )
+        for i, line in enumerate(fh):
+            if i >= _MAX_COV_CORPUS_LINES:
+                break
+            stripped = line.strip()
+            if not stripped:
+                continue
+            parsed = None
+            is_json = True
+            try:
+                parsed = _json.loads(stripped)
+            except _json.JSONDecodeError:
+                is_json = False
+            if is_json and isinstance(parsed, dict):
+                for fld in ("text", "prompt", "content"):
+                    val = parsed.get(fld)
+                    if isinstance(val, str) and val.strip():
+                        rows.append(val)
+                        break
+            else:
+                rows.append(stripped)
+    if not rows:
+        raise ValueError("--cov-corpus has no usable text rows")
+    return rows
+
 
 @app.command(name="set")
 def set_edit(
@@ -60,6 +143,13 @@ def set_edit(
     use_governor: bool = typer.Option(
         True, "--governor/--no-governor",
         help="Consult the sequential-edit governor (refuse on norm blowup).",
+    ),
+    cov_corpus: Optional[str] = typer.Option(
+        None, "--cov-corpus",
+        help=(
+            "ROME only: JSONL/text corpus to estimate the key covariance C "
+            "for a C^{-1}-preconditioned update (reduces collateral damage)."
+        ),
     ),
     plan_only: bool = typer.Option(
         False, "--plan-only",
@@ -113,6 +203,16 @@ def set_edit(
         console.print("[green]Plan-only mode — exiting without applying.[/]")
         return
 
+    # v0.71.16 #250 — load the optional covariance corpus (path security lives
+    # here at the CLI boundary; apply_edit rejects it for non-ROME methods).
+    cov_corpus_rows = None
+    if cov_corpus is not None:
+        try:
+            cov_corpus_rows = _load_cov_corpus(cov_corpus)
+        except (ValueError, FileNotFoundError, OSError) as exc:
+            console.print(f"[red]Cannot load --cov-corpus:[/] {escape(str(exc))}")
+            raise typer.Exit(2) from exc
+
     # Load a persisted governor so sequential edits across separate `soup edit
     # set` runs accumulate (#196 / #197). Best-effort — a missing / unreadable
     # governor DB never blocks an edit.
@@ -142,6 +242,7 @@ def set_edit(
             output_dir=output,
             governor=governor,
             device=device,
+            cov_corpus=cov_corpus_rows,
         )
     except GovernedEditError as exc:
         console.print(

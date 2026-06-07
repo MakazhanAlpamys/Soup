@@ -240,6 +240,14 @@ class EditGovernor:
     last_method: str = ""
     last_verdict: str = "OK"
     last_norm_delta: float = 0.0
+    # v0.71.16 #252 — the edit_count this governor was loaded / constructed
+    # with. The atomic store save merges THIS run's increments
+    # (``edit_count - _persisted_edit_count``) onto the freshly-read persisted
+    # count so two concurrent ``soup edit set`` runs cannot lose an increment.
+    # Defaults to ``-1`` (sentinel) and is initialised to ``edit_count`` in
+    # ``__post_init__``. compare/repr-excluded so it never leaks into equality
+    # or snapshots.
+    _persisted_edit_count: int = field(default=-1, compare=False, repr=False)
 
     def __post_init__(self) -> None:
         if not isinstance(self.base_model, str):
@@ -267,6 +275,10 @@ class EditGovernor:
             raise ValueError(
                 f"max_sequential_edits must be <= {_MAX_SEQ_EDITS}"
             )
+        # v0.71.16 #252 — seed the baseline at construction time. ``-1`` is the
+        # "not supplied" sentinel; otherwise honour an explicit baseline.
+        if self._persisted_edit_count < 0:
+            self._persisted_edit_count = self.edit_count
 
     def record_edit(self, *, method: str, norm_delta: float) -> None:
         """Append a completed edit to the governor's history."""
@@ -508,10 +520,27 @@ class EditGovernorStore:
         }
 
     def save_state(self, governor: "EditGovernor") -> None:
-        """Upsert a governor's state under the cross-process lock."""
+        """Upsert a governor's state with an atomic read-modify-write (#252).
+
+        The persisted ``edit_count`` is re-read INSIDE the cross-process lock
+        and merged with THIS run's increments
+        (``governor.edit_count - governor._persisted_edit_count``) so two
+        concurrent ``soup edit set`` runs on the same base cannot lose a count
+        (the pre-#252 absolute write let the last writer clobber the first).
+        The governor's in-memory ``edit_count`` and baseline are then advanced
+        to the merged value so a subsequent save does not double-count.
+        """
         if not isinstance(governor, EditGovernor):
             raise TypeError("governor must be an EditGovernor")
         with self._cross_process_lock():
+            # Read INSIDE the lock so a racing writer's committed row is
+            # observed (closes the get→insert TOCTOU; mirrors namespace_pin).
+            existing = self.get_state(governor.base_model)
+            persisted = existing["edit_count"] if existing is not None else 0
+            pending = governor.edit_count - governor._persisted_edit_count
+            if pending < 0:
+                pending = 0
+            merged = persisted + pending
             self._conn.execute(
                 "INSERT OR REPLACE INTO edit_governors "
                 "(base_model, edit_count, last_method, last_verdict, "
@@ -519,7 +548,7 @@ class EditGovernorStore:
                 "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (
                     governor.base_model,
-                    governor.edit_count,
+                    merged,
                     governor.last_method,
                     governor.last_verdict,
                     governor.last_norm_delta,
@@ -528,6 +557,8 @@ class EditGovernorStore:
                 ),
             )
             self._conn.commit()
+        governor.edit_count = merged
+        governor._persisted_edit_count = merged
 
 
 def save_governor(store: EditGovernorStore, governor: "EditGovernor") -> None:

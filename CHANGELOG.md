@@ -12,6 +12,45 @@ reproducing 70+ versions of notes.
 
 ## [Unreleased]
 
+## [0.71.16] - 2026-06-07
+
+### Added
+- **Covariance-preconditioned ROME via `--cov-corpus`** (closes #250). `soup edit
+  set --method rome --cov-corpus <jsonl|txt>` now estimates the key covariance
+  `C = E[k kᵀ] + λI` over a stats corpus and uses the preconditioned update
+  `u = C⁻¹ k*` instead of the covariance-free `C = I` path — the genuine ROME
+  closed form, which spreads the rank-1 update mass to reduce collateral
+  interference with other facts. Falls back to `C = I` when no corpus is given.
+  The exact post-condition `down(k*) += delta` is preserved either way. The
+  corpus loader is cwd-contained, symlink-rejected (O_NOFOLLOW + raw-path
+  lstat), and size/line-capped; `--cov-corpus` is rejected (fail-loud) for any
+  method other than `rome`. Verified on real `gpt2` (prob 0.005 → 0.9997) and
+  SmolLM2-135M.
+- **GPT-2 (`transformer.h` / `mlp.c_proj`) support in the edit kernels** (closes
+  #251). ROME / MEMIT / AlphaEdit now edit GPT-2-family models, not just
+  Llama-family. The `Conv1D` weight layout (`[in, out]`, transposed relative to
+  `nn.Linear`'s `[out, in]`) gets a transpose-aware rank-1 update, AlphaEdit
+  null-space projection, and MEMIT band dim-check. PEFT-wrapped GPT-2 / Llama
+  models are unwrapped via `get_base_model`. Verified end-to-end on real `gpt2`.
+- **Mixtral joins the LongLoRA architecture allowlist** (closes #147). A bare
+  `mistral` token does not appear in `mixtral` (m-i-x vs m-i-s), so the existing
+  `is_mistral_model` detector excluded the MoE variant. A dedicated
+  `is_mixtral_model` helper + `MixtralAttention` entry in the S² forward-override
+  regex + `_SEPARATE_QKV_FAMILIES` now cover Mixtral-8x7B / 8x22B (the attention
+  is the standard separate-QKV shell; the MoE lives in the MLP).
+
+### Fixed
+- **Atomic `EditGovernor` edit-count increment** (closes #252). Two concurrent
+  `soup edit set` runs on the same base model could lose an increment: each read
+  the persisted count, added locally, and the last writer clobbered the first.
+  `save_state` now re-reads the persisted count INSIDE the cross-process lock and
+  merges this run's delta (`edit_count − persisted_baseline`), mirroring the
+  v0.60.0 `namespace_pin` pattern. Verified: two governors recording 3 + 2 edits
+  from the same baseline persist a merged 5 (not a clobbered 2 or a naive +1).
+
+### Notes
+- Test count: 13511 → 13595 (+84 net; +81 in `tests/test_v07116.py`).
+
 ## [0.71.15] - 2026-06-07
 
 ### Fixed

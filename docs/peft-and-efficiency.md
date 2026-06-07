@@ -30,12 +30,15 @@
 ## LongLoRA Forward Override
 
 When `use_longlora: true` is set on an SFT config with a Llama / CodeLlama /
-Mistral / Qwen / Phi base, the trainer wraps the model in a
+Mistral / Mixtral / Qwen / Phi base, the trainer wraps the model in a
 `LongLoRAForwardOverride` context that monkey-patches every attention forward
 to apply the S² shifted-sparse shift (paper §3.2) — half the heads are rolled
-by `group_size // 2` along the sequence dim. Restoration on context exit is
-idempotent and best-effort safe; FlashAttention v3 builds are rejected at the
-schema gate (the custom-mask kernels conflict).
+by `group_size // 2` along the sequence dim. Mixtral joined the allowlist in
+v0.71.16 (a bare `mistral` token never matched the MoE variant); its attention
+is the standard separate-QKV shell — the MoE lives in the MLP — so the same
+Q/K projection-shift path is reused. Restoration on context exit is idempotent
+and best-effort safe; FlashAttention v3 builds are rejected at the schema gate
+(the custom-mask kernels conflict).
 
 
 ## Multipack — FFD Bin-Packing Sampler

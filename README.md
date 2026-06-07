@@ -49,19 +49,19 @@ infrastructure instead of improving models. Soup fixes that.
 
 ## What's New
 
-**v0.71.15 — Loop & lifecycle polish.** Five fixes across the training-loop, merge, and governance
-surfaces (all validated on the real RTX 3050 + SmolLM2-135M):
+**v0.71.16 — Knowledge edit depth.** Deeper, safer surgical knowledge editing + a wider LongLoRA
+allowlist (validated on real `gpt2` + SmolLM2-135M):
 
-- **Iterative-DPO config bug fixed** — `soup iterative-dpo`'s per-round trainer rendered an invalid
-  `output:` shape that the spawned `soup train` rejected; now it round-trips cleanly.
-- **CMA-ES merge loads the base once** — `soup adapters merge --strategy cmaes` now reuses the base
-  model across the whole candidate population instead of reloading it per candidate.
-- **`soup loop` budget gate estimates real cost** — the pre-wired loop's per-iteration dollar estimate
-  was a `0.0` placeholder; it now derives a forward cost from the last run's GPU + duration.
-- **`--diagnose-gate` is multi-node aware** — the post-training gate (and `--annex-xi` /
-  `--repro-receipt`) now fire once per *cluster* (`RANK==0`), not once per node.
-- **`soup train --track-energy --energy-out <path>`** — persists the measured energy/CO2 so
-  `soup bom emit --energy <path>` can attach it to an ML-BOM.
+- **GPT-2 models are now editable** — `soup edit set` (ROME / MEMIT / AlphaEdit) handles the GPT-2
+  `Conv1D` (`mlp.c_proj`) weight layout alongside Llama, not just Llama-family. Real `gpt2` smoke:
+  target probability 0.005 → 0.9996.
+- **Covariance-preconditioned ROME** — `soup edit set --method rome --cov-corpus <jsonl|txt>` estimates
+  the key covariance and uses the genuine `C⁻¹ k*` update (spreads the edit mass, less collateral
+  interference). Falls back to `C = I` with no corpus.
+- **Atomic edit-governor count** — two concurrent `soup edit set` runs on the same base can no longer
+  lose an increment; the count is merged under the cross-process lock.
+- **Mixtral joins the LongLoRA allowlist** — `use_longlora: true` now accepts Mixtral-8x7B / 8x22B
+  (the bare `mistral` token never matched the MoE variant before).
 
 Full history: [CHANGELOG.md](CHANGELOG.md) &middot; [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 
