@@ -1144,7 +1144,13 @@ class TestReviewFixes:
         )
 
         def slow_train(*, base_model, pairs_path, output_dir, train_method):
-            # Simulate a thumb landing mid-train.
+            # Simulate a thumb landing mid-train. Sleep one clock tick first so
+            # the thumbs' time.time() ts is strictly greater than run_started on
+            # coarse-resolution clocks (Windows time.time() ~15.6ms) — otherwise
+            # a same-tick ts == run_started is dropped by the strict `>` count.
+            import time as _t
+
+            _t.sleep(0.05)
             record_thumb(
                 db_path="db.sqlite", prompt="qZ", response="x", thumb="up"
             )
