@@ -436,26 +436,19 @@ def run_cmaes_merge(
 # ---------------------------------------------------------------------------
 
 
-def _load_adapter_generator(merged_dir: str) -> Callable[[str], str]:
-    """Build a ``generate_fn(prompt) -> str`` from a merged LoRA adapter.
+def _read_merged_base_name(merged_dir: str) -> str:
+    """Read + validate ``base_model_name_or_path`` from a merged adapter dir.
 
-    Loads the base model named in the adapter's ``adapter_config.json`` and
-    applies the merged adapter via PEFT. Heavy imports stay inside the
-    function (project lazy-import policy + the cmaes_merge no-top-level-torch
-    grep guard).
+    On the wired cmaes path ``merged_dir`` is always a Soup-written mkdtemp,
+    but this is a public helper — guard the config read with a symlink
+    rejection + size cap so a caller-supplied dir can't smuggle a symlink or
+    a multi-GB JSON (defence-in-depth, parity with every other config read).
     """
     import json
     import os
     import stat
     from pathlib import Path
 
-    from peft import PeftModel
-    from transformers import AutoModelForCausalLM, AutoTokenizer
-
-    # On the wired cmaes path ``merged_dir`` is always a Soup-written mkdtemp,
-    # but this is a public helper — guard the config read with a symlink
-    # rejection + size cap so a caller-supplied dir can't smuggle a symlink or
-    # a multi-GB JSON (defence-in-depth, parity with every other config read).
     cfg_path = Path(merged_dir) / "adapter_config.json"
     try:
         cst = os.lstat(cfg_path)
@@ -473,34 +466,127 @@ def _load_adapter_generator(merged_dir: str) -> Callable[[str], str]:
         raise ValueError(
             "merged adapter_config.json has no base_model_name_or_path"
         )
+    return base
+
+
+def _generate(model, tokenizer, prompt: str) -> str:
+    """Greedy single-prompt generation (continuation only)."""
+    if not prompt:
+        return ""
+    inputs = tokenizer(prompt, return_tensors="pt", truncation=True)
+    outputs = model.generate(
+        **inputs,
+        max_new_tokens=64,
+        do_sample=False,
+        pad_token_id=tokenizer.eos_token_id,
+    )
+    new_tokens = outputs[0][inputs["input_ids"].shape[1]:]
+    return tokenizer.decode(new_tokens, skip_special_tokens=True)
+
+
+def _load_adapter_generator(merged_dir: str) -> Callable[[str], str]:
+    """Build a ``generate_fn(prompt) -> str`` from a merged LoRA adapter.
+
+    Loads the base model named in the adapter's ``adapter_config.json`` and
+    applies the merged adapter via PEFT. Heavy imports stay inside the
+    function (project lazy-import policy + the cmaes_merge no-top-level-torch
+    grep guard). One-shot: reloads the base on every call. The CMA-ES loop
+    uses :class:`_CachedBaseScorer` instead so the base loads only once.
+    """
+    from peft import PeftModel
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    base = _read_merged_base_name(merged_dir)
     tokenizer = AutoTokenizer.from_pretrained(base, trust_remote_code=False)
     model = AutoModelForCausalLM.from_pretrained(base, trust_remote_code=False)
     model = PeftModel.from_pretrained(model, merged_dir)
     model.eval()
 
     def _gen(prompt: str) -> str:
-        if not prompt:
-            return ""
-        inputs = tokenizer(prompt, return_tensors="pt", truncation=True)
-        outputs = model.generate(
-            **inputs,
-            max_new_tokens=64,
-            do_sample=False,
-            pad_token_id=tokenizer.eos_token_id,
-        )
-        new_tokens = outputs[0][inputs["input_ids"].shape[1]:]
-        return tokenizer.decode(new_tokens, skip_special_tokens=True)
+        return _generate(model, tokenizer, prompt)
 
     return _gen
 
 
-def _default_cmaes_scorer(merged_dir: str, eval_suite: str) -> float:
-    """Score a merged adapter against an eval suite (mean score in [0, 1]).
+class _CachedBaseScorer:
+    """Live CMA-ES default scorer that loads the base model ONCE and reuses it.
 
-    The live default — loads the base + merged adapter and runs the
-    v0.25.0 ``soup_cli.eval.custom`` scorers. Slow (one model load); use
-    the ``scorer=`` injection / ``_CMAES_SCORER_OVERRIDE`` escape hatch for
-    fast offline runs.
+    Every candidate in the CMA-ES population is a *linear merge of the same
+    source LoRAs*, so they all share one base model. The base (multi-GB for a
+    7B model) is loaded lazily on the first candidate and then reused for the
+    whole ``population × max_generations`` loop — each candidate only loads its
+    small merged LoRA, applies it, generates, and unloads it. This amortises
+    the base load across the whole run (v0.71.15 #246; before, the stateless
+    default scorer reloaded the base on every candidate).
+
+    A fresh instance is built per :func:`build_cmaes_eval_fn` call so each
+    merge run gets its own cache (no cross-run leakage).
+    """
+
+    def __init__(self) -> None:
+        self._base = None
+        self._tokenizer = None
+        self._base_name: Optional[str] = None
+
+    def _ensure_base(self, base_name: str) -> None:
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+
+        if self._base is None:
+            self._tokenizer = AutoTokenizer.from_pretrained(
+                base_name, trust_remote_code=False
+            )
+            self._base = AutoModelForCausalLM.from_pretrained(
+                base_name, trust_remote_code=False
+            )
+            self._base_name = base_name
+        elif base_name != self._base_name:
+            # All source adapters in one merge share a base; a mismatch means
+            # a malformed merged dir. Fail loud rather than silently scoring
+            # against the wrong base.
+            raise ValueError(
+                "cmaes candidate base_model mismatch: "
+                f"{base_name!r} != cached {self._base_name!r}"
+            )
+
+    def __call__(self, merged_dir: str, eval_suite: str) -> float:
+        from peft import PeftModel
+
+        from soup_cli.eval.custom import load_eval_tasks, score_task
+
+        base_name = _read_merged_base_name(merged_dir)
+        self._ensure_base(base_name)
+        peft_model = PeftModel.from_pretrained(self._base, merged_dir)
+        peft_model.eval()
+        try:
+            tasks = load_eval_tasks(eval_suite)
+            if not tasks:
+                return 0.0
+            total = 0.0
+            for task in tasks:
+                output = _generate(peft_model, self._tokenizer, task.prompt)
+                total += float(score_task(task, output).score)
+            return total / len(tasks)
+        finally:
+            # Strip the candidate LoRA so the next candidate re-wraps the same
+            # base — restores a clean base model for reuse (no second adapter
+            # accumulating onto the cached base). ``unload()`` removes the LoRA
+            # layers but can leave a ``peft_config`` attribute behind, which
+            # makes the next ``from_pretrained`` warn about "multiple adapters";
+            # clear it so each candidate re-wraps a genuinely clean base.
+            self._base = peft_model.unload()
+            if hasattr(self._base, "peft_config"):
+                try:
+                    delattr(self._base, "peft_config")
+                except (AttributeError, TypeError):
+                    pass
+
+
+def _default_cmaes_scorer(merged_dir: str, eval_suite: str) -> float:
+    """One-shot live scorer (loads base + merged adapter, scores, frees).
+
+    Stateless — reloads the base model on every call. The CMA-ES loop reuses
+    the base via :class:`_CachedBaseScorer` (see :func:`build_cmaes_eval_fn`);
+    this remains for direct / back-compat callers.
     """
     from soup_cli.eval.custom import load_eval_tasks, score_task
 
@@ -524,7 +610,9 @@ def _resolve_cmaes_scorer(
         return scorer
     if _CMAES_SCORER_OVERRIDE is not None:
         return _CMAES_SCORER_OVERRIDE
-    return _default_cmaes_scorer
+    # Fresh cached-base scorer per build → base loads once, reused across the
+    # whole population × generations loop (v0.71.15 #246).
+    return _CachedBaseScorer()
 
 
 def build_cmaes_eval_fn(
@@ -539,12 +627,11 @@ def build_cmaes_eval_fn(
     (default: live model-loading scorer), and cleans up. The *adapter* weights
     are loaded from disk once up front so per-generation cost is merge + score.
 
-    Perf note: the default :func:`_default_cmaes_scorer` reloads the *base
-    model* into a fresh PEFT wrapper on every candidate evaluation (it is
-    stateless by design). For ``population × max_generations`` candidates that
-    is many base-model loads — expensive for non-tiny models. Pass a custom
-    ``scorer=`` that caches the base model (or set ``_CMAES_SCORER_OVERRIDE``)
-    to amortise it; the injection also avoids any model load for tests / smokes.
+    Perf note: the default scorer is :class:`_CachedBaseScorer`, which loads
+    the *base model* exactly once and reuses it across every candidate (each
+    candidate only loads its small merged LoRA — v0.71.15 #246). Pass a custom
+    ``scorer=`` (or set ``_CMAES_SCORER_OVERRIDE``) to avoid any model load for
+    tests / smokes.
 
     ``scorer(merged_dir, eval_suite) -> float`` returns a mean score in
     ``[0, 1]``.

@@ -372,15 +372,44 @@ def deploy_to_canary(
 
 
 def estimate_cost(state: LoopState) -> float:
-    """Per-iteration cost estimate (USD) — currently a hard ``0.0`` placeholder.
+    """Per-iteration cost estimate (USD) for the v0.58 budget gate (#245).
 
-    KNOWN LIMITATION: returning ``0.0`` means the v0.58 budget gate
-    (``monthly_budget_usd`` / ``max_runs_per_day`` in ``run_once``) never trips
-    on *cost* for a pre-wired loop — only the daily run-count cap is effective.
-    Wiring a real estimate (v0.34.0 ``utils/run_cost.estimate_run_cost_usd``,
-    which needs the trained run's GPU + duration) is a tracked follow-up; until
-    then operators relying on a dollar budget should set ``max_runs_per_day``.
+    Wires the cost gate to v0.34 ``run_cost.estimate_run_cost_usd`` using the
+    most-recent *completed* run's GPU + duration as a forward estimate for the
+    next iteration. ``cost_fn`` runs *pre-flight* (before this iteration
+    trains, so the budget gate can refuse a run before spending) — and a
+    pre-wired loop trains the same model on the same box repeatedly, so the
+    previous run's actual GPU-time is the best forward signal.
+
+    Falls back to ``0.0`` (no cost gate) when there is no prior priced run:
+    the first iteration has no data, and a CPU / unpriced GPU returns ``None``
+    from ``estimate_run_cost_usd`` (so the budget gate trips only on a real
+    dollar estimate, never a fabricated one). Never raises — a tracker error
+    must not crash the daemon.
     """
+    try:
+        from soup_cli.experiment.tracker import ExperimentTracker
+        from soup_cli.utils.run_cost import estimate_run_cost_usd
+
+        runs = ExperimentTracker().list_runs(limit=10)
+    except Exception:  # noqa: BLE001 - cost estimation must never crash the loop
+        return 0.0
+    for run in runs:
+        if run.get("status") != "completed":
+            continue
+        device = run.get("device_name")
+        duration = run.get("duration_secs")
+        if not device or duration is None:
+            continue
+        try:
+            cost = estimate_run_cost_usd(str(device), float(duration))
+        except (TypeError, ValueError):
+            continue
+        if cost is not None and cost > 0:
+            return float(cost)
+        # Most-recent completed run was on a CPU / unpriced GPU → no dollar
+        # signal; report 0.0 (no cost gate) rather than scanning older runs.
+        return 0.0
     return 0.0
 
 

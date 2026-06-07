@@ -364,18 +364,22 @@ License chain uses SPDX identifiers.
 
 ### Attaching energy + CO₂ (`--energy`)
 
-Pass a measurement JSON (e.g. produced by a `--track-energy` run) to record energy and
-carbon in the BOM:
+Pass a measurement JSON to record energy and carbon in the BOM:
 
 ```bash
+# 1. Train and persist the measured energy (needs `pip install soup-cli[carbon]`):
+soup train --config soup.yaml --track-energy --energy-out energy.json
+
+# 2. Attach it to the BOM:
 soup bom emit ... --format both --output bom --energy energy.json
 ```
 
-The file must be a JSON object matching the energy schema
-(`energy_kwh` / `co2_kg` / `pue` / `grid_intensity_g_per_kwh` / `source`); it is path-
-validated (kept under cwd, symlinks rejected) before reading. Energy then lands in
-**both** outputs: under `metadata.properties` (`soup:energy_kwh`, `soup:co2_kg`, …) in
-CycloneDX, and as `OTHER` annotations on the model package in SPDX.
+`soup train --track-energy --energy-out <path>` writes the measured reading as JSON in
+exactly the energy schema (`energy_kwh` / `co2_kg` / `pue` / `grid_intensity_g_per_kwh` /
+`source`); `soup bom emit --energy <path>` then consumes it. (You can also hand-write the
+JSON.) The path is validated (kept under cwd, symlinks rejected) on both the write and the
+read. Energy lands in **both** outputs: under `metadata.properties` (`soup:energy_kwh`,
+`soup:co2_kg`, …) in CycloneDX, and as `OTHER` annotations on the model package in SPDX.
 
 
 ## Provenance Attestations (`soup attest emit`)
@@ -433,8 +437,10 @@ so a malicious model name can't inject a forged heading into downstream renderer
 `soup train --track-energy` wraps the training window in a codecarbon **offline** tracker
 (no IP-geolocation network call). It reports kWh / CO₂ / grid intensity and feeds them into
 `--annex-xi`. `--energy-country <ISO3>` picks the grid for the CO₂ estimate (default `USA`;
-the kWh figure itself is country-independent). Requires `pip install soup-cli[carbon]`;
-without it, `--track-energy` is a graceful no-op.
+the kWh figure itself is country-independent). Add `--energy-out <path>` to persist the
+measurement as JSON for `soup bom emit --energy <path>` (the hand-off into an ML-BOM —
+see [Attaching energy + CO₂](#attaching-energy--co2---energy)). Requires `pip install
+soup-cli[carbon]`; without it, `--track-energy` is a graceful no-op.
 
 
 ## Audit Log (`soup audit-log`)

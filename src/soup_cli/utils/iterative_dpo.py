@@ -403,7 +403,10 @@ def _default_train_fn(
             "task": "dpo",
             "data": {"train": pairs_path, "format": "dpo", "max_length": 256},
             "training": {"epochs": 1, "batch_size": 1},
-            "output": {"dir": adapter_path},
+            # SoupConfig.output is a plain string — render it flat, not
+            # nested under a ``dir`` key (v0.71.15 #261, mirrors the
+            # v0.71.13 #229 local_rl fix).
+            "output": adapter_path,
         },
         default_flow_style=False,
         sort_keys=False,

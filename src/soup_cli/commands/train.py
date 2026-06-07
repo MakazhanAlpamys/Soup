@@ -6,6 +6,7 @@ import contextlib
 import os
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import typer
 from rich.console import Console
@@ -17,6 +18,9 @@ from soup_cli.data.loader import load_dataset
 from soup_cli.monitoring.display import TrainingDisplay
 from soup_cli.trainer.sft import SFTTrainerWrapper
 from soup_cli.utils.gpu import detect_device, get_gpu_info
+
+if TYPE_CHECKING:  # pragma: no cover - type hints only, no runtime import
+    from soup_cli.utils.energy import EnergyMeasurement
 
 console = Console()
 
@@ -229,6 +233,15 @@ def train(
         help=(
             "ISO 3166-1 alpha-3 country code for the CO2 grid-intensity "
             "estimate used by --track-energy (default USA)."
+        ),
+    ),
+    energy_out: str = typer.Option(
+        None,
+        "--energy-out",
+        help=(
+            "Write the --track-energy measurement to this JSON file (cwd-"
+            "contained) so `soup bom emit --energy <path>` can consume it. "
+            "v0.71.15."
         ),
     ),
 ):
@@ -1087,6 +1100,26 @@ def train(
                 "(install `pip install soup-cli[carbon]`)"
             )
 
+    # --- v0.71.15 #244 --energy-out: persist for `soup bom emit --energy` -
+    if energy_out and _should_run_diagnose_gate_on_rank():
+        if energy_measurement is not None:
+            try:
+                _write_energy_json(energy_out, energy_measurement)
+                console.print(
+                    "[cyan]--energy-out:[/] wrote "
+                    f"{os.path.basename(energy_out)} "
+                    "(feed to `soup bom emit --energy`)"
+                )
+            except (OSError, ValueError) as exc:
+                console.print(
+                    f"[yellow]--energy-out skipped:[/] {type(exc).__name__}: {exc}"
+                )
+        else:
+            console.print(
+                "[yellow]--energy-out skipped:[/] no energy reading "
+                "(set --track-energy + install `pip install soup-cli[carbon]`)"
+            )
+
     # --- v0.59.0 --annex-xi: Annex XI/XII auto-doc -----------------------
     if annex_xi and _should_run_diagnose_gate_on_rank():
         try:
@@ -1287,17 +1320,47 @@ def _capture_activations(
     return out_path
 
 
-def _should_run_diagnose_gate_on_rank() -> bool:
-    """Return True only for LOCAL_RANK=0 in distributed launches.
+def _write_energy_json(path: str, measurement: "EnergyMeasurement") -> None:
+    """Persist an ``EnergyMeasurement`` as JSON for ``soup bom emit --energy``.
 
-    Uses LOCAL_RANK (per-machine rank) -- not RANK (global rank across all
-    nodes) -- because the diagnose gate reads the local training output
-    directory. We want one gate per machine, not one across the whole
-    cluster. For typical single-machine multi-GPU runs both are equivalent.
+    Writes exactly the five fields ``EnergyMeasurement(**parsed)`` expects so
+    the producer (``soup train --track-energy --energy-out``) and the consumer
+    (``soup bom emit --energy`` — v0.71.3 #256) round-trip cleanly. Atomic +
+    cwd-contained + symlink-rejected via the shared helper (v0.71.15 #244).
+    """
+    import json
+    from dataclasses import asdict
+
+    from soup_cli.utils.paths import atomic_write_text
+
+    payload = json.dumps(asdict(measurement), indent=2)
+    atomic_write_text(payload, path, field="--energy-out")
+
+
+def _should_run_diagnose_gate_on_rank() -> bool:
+    """Return True only for the single chief worker in a distributed launch.
+
+    The diagnose gate (and the --annex-xi / --repro-receipt / capture hooks)
+    write one report and, on a shared filesystem, read one shared output dir
+    -- so they should fire exactly once per *cluster*, not once per node.
+
+    Resolution (v0.71.15 #170 — fixes the v0.56.0 limitation where a shared-FS
+    multi-node run fired the gate once per node):
+      * If RANK is set (multi-node / torchrun launch) -> gate only on the
+        global chief, RANK == 0. On a single-node torchrun this is equivalent
+        to LOCAL_RANK == 0 (both 0 only for the one chief process).
+      * Else fall back to LOCAL_RANK == 0 (plain single-node accelerate launch
+        that doesn't export RANK) so a one-box multi-GPU run still gates once.
 
     Defaults to True (run gate) on any parse error: a malformed env var is
     safer to over-run than to silently skip.
     """
+    rank = os.environ.get("RANK")
+    if rank:  # non-empty -> multi-node / torchrun sets a global RANK
+        try:
+            return int(rank) == 0
+        except ValueError:
+            return True
     try:
         return int(os.environ.get("LOCAL_RANK", "0")) == 0
     except ValueError:
@@ -1313,8 +1376,9 @@ def _run_diagnose_gate(
     refuses to mark the run successful if any mode comes back MAJOR.
     Missing modes fall back to a neutral OK score so partial evidence
     still produces a useful report card. The train command only calls
-    this helper on LOCAL_RANK=0 so distributed runs do not execute the
-    gate once per worker.
+    this helper on the chief worker (RANK==0 in a multi-node launch, else
+    LOCAL_RANK==0) so distributed runs execute the gate once per cluster,
+    not once per worker (v0.71.15 #170).
     """
     import json
 

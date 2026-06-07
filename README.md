@@ -49,20 +49,19 @@ infrastructure instead of improving models. Soup fixes that.
 
 ## What's New
 
-**v0.71.14 — Export QA + serve finale.** Two deferred-stub runtimes go live (validated on a tiny
-model + the real RTX 3050), plus the ONNX export pipeline verified end-to-end:
+**v0.71.15 — Loop & lifecycle polish.** Five fixes across the training-loop, merge, and governance
+surfaces (all validated on the real RTX 3050 + SmolLM2-135M):
 
-- **`soup merge-sharded-fsdp-weights`** — live FSDP shard consolidation: streams each
-  `pytorch_model_fsdp_*.bin` shard (no arbitrary pickle exec) and writes one `.safetensors` atomically.
-  Single-process, memory-friendly. `--plan-only` previews without writing.
-- **`soup serve --kv-cache-type bf16 | f16 | q8_0 | fp8`** — live KV-cache wiring on the transformers
-  backend: `bf16`/`f16` set the cache dtype, `q8_0` runs an 8-bit quantized KV cache (needs `hqq`),
-  `fp8` gives a friendly vLLM+Hopper-only error.
-- **ONNX export verified** — `soup export --format onnx` confirmed to produce a runnable ONNX graph
-  loadable in ONNX Runtime.
-
-GGUF / AWQ / GPTQ export + HF Hub push QA stay open with `infra-blocked` labels (need a built
-llama.cpp toolchain, Windows quant wheels, or HF credentials).
+- **Iterative-DPO config bug fixed** — `soup iterative-dpo`'s per-round trainer rendered an invalid
+  `output:` shape that the spawned `soup train` rejected; now it round-trips cleanly.
+- **CMA-ES merge loads the base once** — `soup adapters merge --strategy cmaes` now reuses the base
+  model across the whole candidate population instead of reloading it per candidate.
+- **`soup loop` budget gate estimates real cost** — the pre-wired loop's per-iteration dollar estimate
+  was a `0.0` placeholder; it now derives a forward cost from the last run's GPU + duration.
+- **`--diagnose-gate` is multi-node aware** — the post-training gate (and `--annex-xi` /
+  `--repro-receipt`) now fire once per *cluster* (`RANK==0`), not once per node.
+- **`soup train --track-energy --energy-out <path>`** — persists the measured energy/CO2 so
+  `soup bom emit --energy <path>` can attach it to an ML-BOM.
 
 Full history: [CHANGELOG.md](CHANGELOG.md) &middot; [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 

@@ -165,6 +165,7 @@ soup attest verify <statement> --signature <sig> [--public-key <pem>]  Verify ed
 soup airgap-bundle --model <m> --output <out.tar> [--repro-receipt <r.json>]  Signed tarball for data-diode transfer (embeds repro-receipt)
 soup train --config soup.yaml --annex-xi <out.md|out.pdf>  EU AI Act Annex XI/XII doc (markdown or PDF; top_domains auto-filled)
 soup train --config soup.yaml --track-energy [--energy-country USA]  codecarbon offline kWh/CO2 → annex-xi (pip install soup-cli[carbon])
+soup train --config soup.yaml --track-energy --energy-out <energy.json>  persist measurement for `soup bom emit --energy <energy.json>`
 soup train --config soup.yaml --repro-receipt <out.json>  SR 11-7 reproducibility receipt
 soup can pack --entry-id <id> --out r.can --attest <statement.json>  Embed in-toto Statements into a v3 can manifest
 soup audit-log tail / rotate  Tail / rotate the per-command HIPAA/SOC2 audit log (~/.soup/audit.jsonl)

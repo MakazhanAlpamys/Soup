@@ -12,6 +12,43 @@ reproducing 70+ versions of notes.
 
 ## [Unreleased]
 
+## [0.71.15] - 2026-06-07
+
+### Fixed
+- **Iterative-DPO config render bug** (closes #261). `soup iterative-dpo`'s
+  default per-round trainer rendered `output: {dir: ...}` (a mapping), which
+  `SoupConfig.output` (a plain string) rejected — so the spawned `soup train`
+  subprocess failed at config validation. Now renders `output: <str>`, mirroring
+  the v0.71.13 #229 `local-rl` fix. A regression test captures the rendered YAML
+  and validates it via `load_config_from_string`; verified end-to-end with a real
+  `soup train` round on SmolLM2-135M.
+
+### Changed
+- **CMA-ES merge loads the base model once** (closes #246). `soup adapters merge
+  --strategy cmaes` previously reloaded the (multi-GB) base model into a fresh
+  PEFT wrapper on every candidate in the population. The default scorer now loads
+  the base once and reuses it across the whole `population × generations` loop —
+  each candidate only loads its small merged LoRA, applies it, generates, and
+  unloads it. Verified on SmolLM2-135M: the base loads exactly once across N
+  candidates.
+- **`soup loop` budget gate now estimates real cost** (closes #245). The
+  pre-wired loop's per-iteration cost estimate was a hard `0.0` placeholder, so
+  the dollar budget gate never tripped. It now wires v0.34 `run_cost.
+  estimate_run_cost_usd` off the most-recent completed run's GPU + duration (the
+  best forward signal for a repeating loop). Falls back to `0.0` on the first
+  iteration / a CPU / unpriced GPU; never crashes the daemon.
+- **`--diagnose-gate` is multi-node aware** (closes #170). The post-training
+  diagnose gate (and the `--annex-xi` / `--repro-receipt` / capture hooks) fired
+  on `LOCAL_RANK==0`, so a shared-filesystem multi-node run ran them once per
+  *node*. They now gate on the global chief (`RANK==0` when `RANK` is set, else
+  `LOCAL_RANK==0`) — once per *cluster*.
+
+### Added
+- **`soup train --track-energy --energy-out <path>`** (closes #244) persists the
+  measured energy/CO2 reading as JSON so `soup bom emit --energy <path>` (the
+  v0.71.3 #256 consumer) can attach it to an ML-BOM. Atomic + cwd-contained +
+  symlink-rejected. Completes the train → BOM energy hand-off.
+
 ## [0.71.14] - 2026-06-05
 
 ### Added
