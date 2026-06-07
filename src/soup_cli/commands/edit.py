@@ -76,15 +76,28 @@ def _load_cov_corpus(path: str) -> list[str]:
         raise ValueError(
             f"--cov-corpus path is not readable ({type(exc).__name__})"
         ) from exc
+    # fstat the RAW fd before wrapping it: on POSIX ``os.open`` succeeds on a
+    # directory, and ``os.fdopen`` then raises ``IsADirectoryError`` before our
+    # ``S_ISREG`` check could run — so reject non-regular files (and oversize)
+    # here, closing the fd to avoid a leak. (On Windows ``os.open`` already
+    # rejects a directory, surfacing via the OSError branch above.)
+    try:
+        st = os.fstat(fd)
+    except OSError as exc:
+        os.close(fd)
+        raise ValueError(
+            f"--cov-corpus path is not readable ({type(exc).__name__})"
+        ) from exc
+    if not stat.S_ISREG(st.st_mode):
+        os.close(fd)
+        raise ValueError("--cov-corpus path must be a regular file")
+    if st.st_size > _MAX_COV_CORPUS_BYTES:
+        os.close(fd)
+        raise ValueError(
+            f"--cov-corpus file too large (> {_MAX_COV_CORPUS_BYTES} bytes)"
+        )
     rows: list[str] = []
     with os.fdopen(fd, encoding="utf-8") as fh:
-        st = os.fstat(fh.fileno())
-        if not stat.S_ISREG(st.st_mode):
-            raise ValueError("--cov-corpus path must be a regular file")
-        if st.st_size > _MAX_COV_CORPUS_BYTES:
-            raise ValueError(
-                f"--cov-corpus file too large (> {_MAX_COV_CORPUS_BYTES} bytes)"
-            )
         for i, line in enumerate(fh):
             if i >= _MAX_COV_CORPUS_LINES:
                 break
