@@ -150,7 +150,7 @@ pytest tests/test_data.py::test_detect_alpaca_format -v
 pytest tests/ --cov=soup_cli --cov-report=html
 ```
 
-### Test Files (281 files)
+### Test Files (287 files)
 
 > A representative sample of the suite below. The full table lives in
 > [`.claude/CLAUDE.md`](.claude/CLAUDE.md); run `pytest tests/ -v` for the complete list.
