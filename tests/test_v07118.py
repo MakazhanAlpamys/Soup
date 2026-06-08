@@ -371,14 +371,20 @@ class TestDistillOnPolicyWiring:
 
 class TestTrainCliMinillmOnPolicy:
     def test_flag_in_help(self):
+        import re
+
         from typer.testing import CliRunner
 
         from soup_cli.cli import app
 
         result = CliRunner().invoke(app, ["train", "--help"])
-        out = result.stdout.replace("\n", " ")
-        # ANSI/Rich may split on dashes — collapse whitespace and check tokens.
-        assert "minillm-on-policy" in out.replace(" ", "")
+        # Rich + FORCE_COLOR on CI inject ANSI codes between the flag's dashes
+        # and may wrap the long flag across lines — strip ANSI + remove ALL
+        # whitespace (incl. newlines) before the substring check. (v0.71.17
+        # CI FORCE_COLOR precedent — `_strip_ansi` is defined later in the file.)
+        out = re.sub(r"\x1b\[[0-9;]*m", "", result.stdout)
+        out = re.sub(r"\s+", "", out)
+        assert "--minillm-on-policy" in out
 
 
 # ===========================================================================
