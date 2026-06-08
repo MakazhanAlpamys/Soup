@@ -18,8 +18,13 @@ wired in v0.70.1):
   via BPE-overlap heuristic to student token ids, distil only on the
   aligned subset. Requires ``top_k`` to be set.
 
-Live wiring deferred to v0.70.1 — mirrors v0.27.0 MII / v0.50.0 GRPO
-Plus / v0.61.0 unlearning / v0.62.0 RAG stub-then-live pattern.
+- ``wasserstein_aligned`` (v0.71.18 #258): for *fully disjoint* tokenizers
+  (different BPE merges, e.g. Llama -> GPT-2) the two token sequences are
+  first aligned over their decoded character spans, the teacher logits are
+  mean-pooled onto the student positions, then the sorted-W1 is applied.
+
+Live wiring landed in v0.71.11 (#236) for wasserstein / topk_align; the
+aligned strategy lands in v0.71.18 (#258).
 
 Security:
 - Closed allowlist (frozenset); arbitrary strategy rejected.
@@ -40,8 +45,14 @@ from typing import Optional
 _MAX_STRATEGY_NAME_LEN = 32
 # 262144 covers multilingual SentencePiece (e.g. NLLB) + GPT-OSS 200K.
 _MAX_VOCAB_SIZE = 262144
+# v0.71.18 #258 — alignment caps. Token/char alignment is O(N·M) in the
+# offset-overlap case; cap both so a pathological sequence can't blow up.
+_MAX_ALIGN_TOKENS = 1024
+_MAX_ALIGN_CHARS = 8192
 
-SUPPORTED_ULD_STRATEGIES: frozenset[str] = frozenset({"wasserstein", "topk_align"})
+SUPPORTED_ULD_STRATEGIES: frozenset[str] = frozenset(
+    {"wasserstein", "topk_align", "wasserstein_aligned"}
+)
 
 
 @dataclass(frozen=True)
@@ -69,6 +80,15 @@ _STRATEGY_METADATA = types.MappingProxyType({
             "top_k to be set."
         ),
         requires_top_k=True,
+    ),
+    "wasserstein_aligned": ULDStrategySpec(
+        name="wasserstein_aligned",
+        description=(
+            "Wasserstein-1 after aligning the student/teacher token "
+            "sequences over their decoded character spans (handles fully "
+            "disjoint tokenizers, e.g. Llama -> GPT-2). No top_k required."
+        ),
+        requires_top_k=False,
     ),
 })
 
@@ -300,3 +320,191 @@ def build_uld_projection(config) -> "ULDProjection":
             f"config must be ULDConfig, got {type(config).__name__}"
         )
     return ULDProjection(config)
+
+
+# ---------------------------------------------------------------------------
+# v0.71.18 #258 — token-sequence alignment for fully-disjoint tokenizers.
+#
+# The v0.71.11 wasserstein / topk_align paths compare the student and
+# teacher distributions per-position assuming the two token sequences line
+# up. For genuinely different tokenizations (Llama -> GPT-2) the sequences
+# have different lengths AND different token boundaries, so they must be
+# aligned over their decoded text first. Both sides decode to (nearly) the
+# same underlying text, so we align by character span; for decode artefacts
+# we fall back to a difflib (Ratcliff-Obershelp) character match — the
+# stdlib analog of the Levenshtein/DTW alignment from the ULD paper
+# (Boizard et al. 2024, arXiv:2402.12030).
+# ---------------------------------------------------------------------------
+def _char_spans(tokens):
+    """Concatenate per-token decoded strings; return (text, char_spans).
+
+    ``char_spans[i]`` is ``(start, end)`` of token ``i`` in the joined text.
+    Non-string tokens are ``str()``-coerced (defence-in-depth).
+    """
+    parts: list[str] = []
+    spans: list[tuple[int, int]] = []
+    pos = 0
+    for tok in tokens:
+        s = tok if isinstance(tok, str) else str(tok)
+        spans.append((pos, pos + len(s)))
+        parts.append(s)
+        pos += len(s)
+    return "".join(parts), spans
+
+
+def _char_map(a: str, b: str) -> list[int]:
+    """Map each char index of ``a`` to an aligned char index of ``b``.
+
+    Uses :class:`difflib.SequenceMatcher` matching blocks. Unmatched
+    positions map to ``-1``. ``autojunk=False`` so long runs aren't
+    silently treated as junk.
+    """
+    import difflib
+
+    amap = [-1] * len(a)
+    matcher = difflib.SequenceMatcher(None, a, b, autojunk=False)
+    for i, j, n in matcher.get_matching_blocks():
+        for k in range(n):
+            amap[i + k] = j + k
+    return amap
+
+
+def align_token_sequences(student_tokens, teacher_tokens):
+    """Align student token positions to teacher token positions.
+
+    Returns ``list[list[int]]`` — for each student position, the (sorted)
+    list of teacher positions whose decoded character span aligns to it.
+
+    When both token sequences decode to the *same* text (the common
+    cross-tokenizer-on-identical-input case) this is an exact character
+    offset-overlap. When the decoded texts differ (decode artefacts) it
+    falls back to a difflib character match. Both inputs are truncated to
+    ``_MAX_ALIGN_TOKENS`` so the O(N·M) overlap stays bounded.
+    """
+    s_tokens = list(student_tokens)[:_MAX_ALIGN_TOKENS]
+    t_tokens = list(teacher_tokens)[:_MAX_ALIGN_TOKENS]
+    if not s_tokens:
+        return []
+    if not t_tokens:
+        return [[] for _ in s_tokens]
+
+    s_text, s_spans = _char_spans(s_tokens)
+    t_text, t_spans = _char_spans(t_tokens)
+    # Cap the char strings so the difflib fallback stays bounded.
+    s_text = s_text[:_MAX_ALIGN_CHARS]
+    t_text = t_text[:_MAX_ALIGN_CHARS]
+
+    if s_text == t_text:
+        result: list[list[int]] = []
+        for (s, e) in s_spans:
+            aligned = [
+                ti for ti, (t, f) in enumerate(t_spans) if s < f and t < e
+            ]
+            result.append(aligned)
+        return result
+
+    # Different decoded text → difflib character alignment.
+    cmap = _char_map(s_text, t_text)
+    result = []
+    for (s, e) in s_spans:
+        tset = set()
+        for c in range(s, min(e, len(cmap))):
+            tc = cmap[c]
+            if tc < 0:
+                continue
+            for ti, (t, f) in enumerate(t_spans):
+                if t <= tc < f:
+                    tset.add(ti)
+                    break
+        result.append(sorted(tset))
+    return result
+
+
+def aggregate_aligned_logits(teacher_logits, alignment):
+    """Mean-pool teacher logits onto student positions via ``alignment``.
+
+    ``teacher_logits`` is ``[Tt, Vt]`` (a single sequence). ``alignment``
+    is ``list[list[int]]`` of length ``Ts``. Returns ``[Ts, Vt]`` — the
+    mean of the aligned teacher logits per student position; positions with
+    no aligned teacher token are zeros. Out-of-range teacher indices are
+    ignored (defence-in-depth against a stale alignment).
+    """
+
+    ts = len(alignment)
+    vt = teacher_logits.shape[-1]
+    tt = teacher_logits.shape[0]
+    out = teacher_logits.new_zeros((ts, vt))
+    for i, idxs in enumerate(alignment):
+        valid = [j for j in idxs if 0 <= j < tt]
+        if valid:
+            out[i] = teacher_logits[valid].mean(dim=0)
+    return out
+
+
+def uld_aligned_loss(
+    student_logits,
+    teacher_logits,
+    student_tokens,
+    teacher_tokens,
+    *,
+    config: ULDConfig,
+    attention_mask=None,
+):
+    """Wasserstein-1 ULD loss with token-sequence alignment (v0.71.18 #258).
+
+    Handles fully-disjoint tokenizers: for each batch element the student
+    and teacher token sequences are aligned over their decoded character
+    spans, the teacher logits are mean-pooled onto the student positions,
+    and the existing sorted-Wasserstein-1 surrogate is applied per student
+    position. Differentiable w.r.t. the student logits.
+
+    The alignment is a heuristic (offset-overlap when both sides decode to the
+    same text, difflib Ratcliff-Obershelp char matching otherwise), so a
+    student token may be mean-pooled against several teacher tokens. That is an
+    accuracy surrogate, not an exact 1:1 map.
+
+    Args:
+        student_logits: ``[B, Ts, Vs]``.
+        teacher_logits: ``[B, Tt, Vt]`` (may differ in length AND vocab).
+        student_tokens: per-batch list of student per-token decoded strings.
+            Must have at least ``B`` entries.
+        teacher_tokens: per-batch list of teacher per-token decoded strings.
+            Must have at least ``B`` entries.
+        config: a :class:`ULDConfig` (strategy ``wasserstein_aligned``).
+        attention_mask: optional ``[B, Ts]`` student mask (1 = real token).
+    """
+    import torch
+
+    if not isinstance(config, ULDConfig):
+        raise TypeError(
+            f"config must be ULDConfig, got {type(config).__name__}"
+        )
+    batch = student_logits.shape[0]
+    if len(student_tokens) < batch or len(teacher_tokens) < batch:
+        raise ValueError(
+            "student_tokens / teacher_tokens must each have at least "
+            f"{batch} entries (logit batch dim), got "
+            f"{len(student_tokens)} / {len(teacher_tokens)}"
+        )
+    per_seq = []
+    for b in range(batch):
+        align = align_token_sequences(student_tokens[b], teacher_tokens[b])
+        agg_t = aggregate_aligned_logits(teacher_logits[b], align)  # [Ts, Vt]
+        ts = min(agg_t.shape[0], student_logits.shape[1])
+        if ts == 0:
+            per_seq.append(student_logits.new_zeros(()))
+            continue
+        s = student_logits[b, :ts]
+        te = agg_t[:ts]
+        p_s = torch.softmax(s, dim=-1)
+        p_t = torch.softmax(te, dim=-1)
+        s_sorted, _ = torch.sort(p_s, dim=-1, descending=True)
+        t_sorted, _ = torch.sort(p_t, dim=-1, descending=True)
+        per_pos = _sorted_w1(s_sorted, t_sorted)  # [Ts]
+        if attention_mask is not None:
+            mask = attention_mask[b, :ts].to(per_pos.dtype)
+            denom = mask.sum().clamp(min=1.0)
+            per_seq.append((per_pos * mask).sum() / denom)
+        else:
+            per_seq.append(per_pos.mean())
+    return torch.stack(per_seq).mean()

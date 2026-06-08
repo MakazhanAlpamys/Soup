@@ -12,6 +12,49 @@ reproducing 70+ versions of notes.
 
 ## [Unreleased]
 
+## [0.71.18] - 2026-06-08
+
+### Added
+- **MiniLLM true on-policy rollout** (closes #257). `training.minillm_on_policy:
+  true` (with `minillm_enabled: true`) replaces the offline distribution blend
+  with the real on-policy procedure of Gu et al. 2024 §3.1: each step samples a
+  fresh autoregressive rollout from the per-token mixture
+  `ratio·teacher + (1-ratio)·student`, then accumulates the length-normalised
+  reverse-KL `KL(student || teacher)` on the full distributions (differentiable
+  w.r.t. the student only; sampled tokens are detached). New
+  `training.minillm_rollout_length` knob ([1, 512]; auto-derives
+  `min(max_length, 32)` when unset — the loop re-forwards the full prefix each
+  step, so keep it small). Verified live: on-policy distill on tiny-gpt2
+  (student + frozen teacher), finite loss, end-to-end train.
+- **Cross-tokenizer ULD with token-sequence alignment** (closes #258). New
+  `training.uld_strategy: wasserstein_aligned` handles **fully-disjoint**
+  tokenizers (not just a vocab-size mismatch): per batch element the student and
+  teacher token sequences are aligned over their decoded character spans
+  (offset-overlap when both decode to the same text, difflib Ratcliff-Obershelp
+  char matching otherwise), the teacher logits are mean-pooled onto the student
+  positions, and the existing sorted-Wasserstein-1 surrogate is applied.
+  Verified live: aligned distill with a GPT-2 BPE student + a Llama SentencePiece
+  teacher, finite loss, end-to-end train.
+- **`soup agent eval --sandbox`** (closes #110). Each heuristic-passing tool-call
+  prediction is now *executed* against a generated mock of the endpoint in the
+  v0.25.0 RLVR `code_exec` sandbox and classified into ok / tool_error / timeout
+  / arg_error. The endpoint path, its required path params, and the predicted
+  arguments are base64-embedded as **data** (no code interpolation). Strong
+  isolation (RLIMIT / namespaces / sandbox-exec) is POSIX-only; on Windows the
+  subprocess + 5 s timeout + 10 KB output cap + network guard still apply (a
+  friendly reduced-isolation advisory is printed). Verified live on Windows:
+  4-prediction scorecard (ok=1 / tool_error=1 / arg_error=2 / timeout=0).
+- **`soup train --cloud modal`** (closes #16). Render a self-contained Modal.com
+  app from `soup.yaml` for serverless GPU training when you have no local GPU.
+  The config YAML is base64-embedded as data (no interpolation, no secrets); the
+  `--gpu` type (t4 / l4 / a10g / a100 / a100-80gb / l40s / h100) is validated
+  against a closed allowlist. Default is **plan-only**: write the stub + print the
+  `modal run` command. `--cloud-submit` attempts a live submit gated on a Modal
+  token (`modal setup` / `MODAL_TOKEN_ID` + `MODAL_TOKEN_SECRET`). New
+  `[modal]` extra (`pip install 'soup-cli[modal]'`; only needed for live submit —
+  plan-only render needs no dependency). Verified live: real stub rendered, exit
+  0.
+
 ## [0.71.17] - 2026-06-08
 
 ### Added

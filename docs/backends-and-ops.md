@@ -136,6 +136,28 @@ Works with all training tasks: SFT, DPO, GRPO, PPO, KTO, ORPO, SimPO, IPO, and P
 > **Tip:** Soup auto-detects unsloth. When installed, you'll see a hint during `soup train` if you haven't enabled it yet.
 
 
+## Cloud GPU Training (Modal)
+
+No local GPU? `soup train --cloud modal` renders a self-contained [Modal.com](https://modal.com)
+app from your `soup.yaml` for serverless, per-second-billed GPU training. The config YAML is
+base64-embedded as **data** — no code interpolation, no secrets in the generated stub.
+
+```bash
+pip install 'soup-cli[modal]'   # only needed for live submit
+
+# Plan-only (default): write the stub + print the `modal run` command.
+soup train --config soup.yaml --cloud modal --gpu a100
+
+# Submit live (authenticate once with `modal setup`, or set
+# MODAL_TOKEN_ID + MODAL_TOKEN_SECRET).
+soup train --config soup.yaml --cloud modal --gpu a100 --cloud-submit
+```
+
+`--gpu` accepts: `t4` / `l4` / `a10g` / `a100` / `a100-80gb` / `l40s` / `h100`. The rendered
+`soup_modal_app.py` builds an image with `soup-cli[train]` pinned to your running version, writes
+the embedded config inside the container, and runs `soup train` on the chosen GPU.
+
+
 ## Chat with your model
 
 ```bash

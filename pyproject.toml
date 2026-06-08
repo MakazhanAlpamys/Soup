@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "soup-cli"
-version = "0.71.17"
+version = "0.71.18"
 description = "Fine-tune and post-train LLMs in one command. No SSH, no config hell."
 readme = "README.md"
 license = "Apache-2.0"
@@ -98,6 +98,10 @@ carbon = ["codecarbon>=2.0.0"]
 # (`soup compile` / `soup compile-tools`). Lazy-imported with a friendly
 # ImportError; not installed by default (heavy dependency trees).
 compile = ["dspy-ai>=2.5.0", "textgrad>=0.1.0", "gepa>=0.0.1"]
+# v0.71.18 #16 — serverless cloud GPU training (`soup train --cloud modal`).
+# Lazy-imported; only needed for `--cloud-submit` (plan-only render needs no
+# dependency). Modal auth is via `modal setup`.
+modal = ["modal>=0.60.0"]
 
 [project.scripts]
 soup = "soup_cli.cli:run"

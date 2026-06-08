@@ -54,12 +54,24 @@ soup train --config soup.yaml \
 # (Universal Logit Distillation, Boizard et al. 2024 arXiv:2402.12030)
 soup train --config soup.yaml --uld-strategy wasserstein
 
+# Cross-tokenizer distillation for FULLY-DISJOINT tokenizers (v0.71.18) —
+# aligns student/teacher token sequences over decoded character spans, so you
+# can distill a GPT-2 BPE student from a Llama SentencePiece teacher.
+#   training:
+#     uld_strategy: wasserstein_aligned
+
 # MiniLLM reverse-KL on-policy distillation — bundles 3 stability tricks
 # (Gu et al. 2024 arXiv:2306.08543)
 soup train --config soup.yaml --minillm-enabled \
     --minillm-teacher-mix-ratio 0.3 \
     --minillm-pretrain-anchor-weight 0.1 \
     --minillm-pretrain-anchor-path ./pretrain.jsonl
+
+# MiniLLM TRUE on-policy rollout (v0.71.18, Gu et al. §3.1) — sample a fresh
+# autoregressive rollout from the per-token teacher/student mixture each step,
+# then length-normalised reverse-KL. training.minillm_rollout_length tunes the
+# rollout (auto min(max_length, 32)).
+soup train --config soup.yaml --minillm-enabled --minillm-on-policy
 
 # Mid-epoch checkpoint for PPO/GRPO — TorchTune punts this; Soup ships it
 soup train --config grpo.yaml \

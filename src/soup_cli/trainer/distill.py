@@ -253,6 +253,7 @@ class DistillTrainerWrapper:
         teacher_vocab = getattr(self.teacher.config, "vocab_size", None)
         student_vocab = getattr(self.model.config, "vocab_size", None)
         uld_projection = None
+        uld_teacher_tokenizer = None
         minillm_cb = None
 
         if sequence_mode:
@@ -315,6 +316,20 @@ class DistillTrainerWrapper:
                     top_k=tcfg.uld_top_k,
                 )
             )
+            # v0.71.18 #258 — the aligned strategy forwards the teacher on ITS
+            # OWN tokenization of the same text, so it needs the teacher's
+            # tokenizer to re-encode + decode per-token strings for alignment.
+            if tcfg.uld_strategy == "wasserstein_aligned":
+                uld_teacher_tokenizer = AutoTokenizer.from_pretrained(
+                    tcfg.teacher_model, trust_remote_code=teacher_trc
+                )
+                if (
+                    uld_teacher_tokenizer.pad_token is None
+                    and uld_teacher_tokenizer.eos_token is not None
+                ):
+                    uld_teacher_tokenizer.pad_token = uld_teacher_tokenizer.eos_token
+            else:
+                uld_teacher_tokenizer = None
             console.print(
                 f"[green]Cross-tokenizer ULD enabled[/] "
                 f"(strategy={tcfg.uld_strategy})"
@@ -337,6 +352,15 @@ class DistillTrainerWrapper:
         if not sequence_mode and tcfg.minillm_enabled:
             from soup_cli.utils.minillm import MiniLLMConfig, build_minillm_callback
 
+            # v0.71.18 #257 — honour an explicit training.minillm_rollout_length
+            # when set; otherwise derive a tractable length from max_length,
+            # capped at 32 so the growing-sequence autoregressive loop (re-
+            # forwards the full prefix each step, ~O(L^2) graph) stays within
+            # the consumer-GPU budget.
+            if tcfg.minillm_rollout_length is not None:
+                rollout_len = int(tcfg.minillm_rollout_length)
+            else:
+                rollout_len = max(1, min(int(cfg.data.max_length), 32))
             minillm_cb = build_minillm_callback(
                 MiniLLMConfig(
                     teacher_mix_ratio=float(tcfg.minillm_teacher_mix_ratio),
@@ -345,13 +369,16 @@ class DistillTrainerWrapper:
                         tcfg.minillm_pretrain_anchor_weight
                     ),
                     pretrain_anchor_path=tcfg.minillm_pretrain_anchor_path,
+                    on_policy=bool(tcfg.minillm_on_policy),
+                    rollout_length=rollout_len,
                 ),
                 tokenizer=self.tokenizer,
                 temperature=temperature,
             )
+            mode = "on-policy rollout" if tcfg.minillm_on_policy else "offline blend"
             console.print(
-                f"[green]MiniLLM distillation enabled[/] "
-                f"(teacher_mix={tcfg.minillm_teacher_mix_ratio}, "
+                f"[green]MiniLLM distillation enabled[/] ({mode}, "
+                f"teacher_mix={tcfg.minillm_teacher_mix_ratio}, "
                 f"anchor={tcfg.minillm_pretrain_anchor_weight})"
             )
 
@@ -413,6 +440,14 @@ class DistillTrainerWrapper:
         _uld_projection = uld_projection
         _minillm_cb = minillm_cb
         _sequence_mode = sequence_mode
+        # v0.71.18 #257 — when on-policy, the rollout does its own teacher
+        # forwards, so the batch-level teacher forward below is skipped.
+        _minillm_on_policy = minillm_cb is not None and minillm_cb.config.on_policy
+        # v0.71.18 #258 — aligned ULD re-encodes the text with the teacher
+        # tokenizer (different vocab + boundaries) and aligns the sequences.
+        _uld_aligned = tcfg.uld_strategy == "wasserstein_aligned"
+        _uld_teacher_tokenizer = uld_teacher_tokenizer
+        _student_tokenizer = self.tokenizer
 
         class _DistillTrainer(Trainer):
             def compute_loss(
@@ -444,6 +479,86 @@ class DistillTrainerWrapper:
                 # is no teacher forward / logit term here.
                 if _sequence_mode:
                     return (ce_loss, outputs) if return_outputs else ce_loss
+
+                # v0.71.18 #257 — true on-policy MiniLLM rollout. Samples a
+                # fresh teacher-mixed rollout (doing its own teacher forwards)
+                # so the batch-level teacher forward below is skipped entirely.
+                if _minillm_on_policy:
+                    rollout_loss = _minillm_cb.on_policy_term(
+                        model,
+                        teacher_ref,
+                        inputs["input_ids"],
+                        inputs.get("attention_mask"),
+                    )
+                    anchor = _minillm_cb.anchor_term(model)
+                    total = _CE_WEIGHT * ce_loss + _DISTILL_WEIGHT * rollout_loss
+                    if anchor is not None:
+                        total = total + anchor
+                    return (total, outputs) if return_outputs else total
+
+                # v0.71.18 #258 — aligned ULD. Decode the student ids to text,
+                # re-encode with the teacher tokenizer (different vocab AND
+                # boundaries), forward the teacher on its own ids, then align
+                # the two token sequences over their decoded character spans.
+                if _uld_aligned and _uld_teacher_tokenizer is not None:
+                    from soup_cli.utils.uld import uld_aligned_loss
+
+                    student_ids = inputs["input_ids"]
+                    s_mask = inputs.get("attention_mask")
+                    texts = _student_tokenizer.batch_decode(
+                        student_ids, skip_special_tokens=True
+                    )
+                    t_enc = _uld_teacher_tokenizer(
+                        texts,
+                        return_tensors="pt",
+                        padding=True,
+                        truncation=True,
+                        max_length=int(student_ids.shape[1]),
+                    )
+                    try:
+                        t_dev = next(teacher_ref.parameters()).device
+                    except StopIteration:
+                        t_dev = student_logits.device
+                    t_ids = t_enc["input_ids"].to(t_dev)
+                    t_mask = t_enc["attention_mask"]
+                    with torch.no_grad():
+                        t_out = teacher_ref(
+                            input_ids=t_ids,
+                            attention_mask=t_mask.to(t_dev),
+                        )
+                        aligned_teacher_logits = t_out.logits.to(
+                            student_logits.device
+                        )
+                    # Per-token decoded strings, trimmed to the real (non-pad)
+                    # length so pad tokens don't pollute the alignment.
+                    s_strings = []
+                    s_ids_list = student_ids.tolist()
+                    for bi, row in enumerate(s_ids_list):
+                        s_len = (
+                            int(s_mask[bi].sum()) if s_mask is not None else len(row)
+                        )
+                        s_strings.append(
+                            [_student_tokenizer.decode([int(i)]) for i in row[:s_len]]
+                        )
+                    t_strings = []
+                    for bi, row in enumerate(t_ids.tolist()):
+                        t_len = int(t_mask[bi].sum())
+                        t_strings.append(
+                            [
+                                _uld_teacher_tokenizer.decode([int(i)])
+                                for i in row[:t_len]
+                            ]
+                        )
+                    distill_loss = uld_aligned_loss(
+                        student_logits,
+                        aligned_teacher_logits,
+                        s_strings,
+                        t_strings,
+                        config=_uld_projection.config,
+                        attention_mask=s_mask,
+                    )
+                    total = _CE_WEIGHT * ce_loss + _DISTILL_WEIGHT * distill_loss
+                    return (total, outputs) if return_outputs else total
 
                 # Bridge devices: HF Trainer may auto-move the student to
                 # CUDA while the frozen teacher stays on CPU (or vice versa).

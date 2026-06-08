@@ -1558,17 +1558,42 @@ class TrainingConfig(BaseModel):
             "Null-byte rejected; capped at 4096 chars. (v0.70.0)"
         ),
     )
+    minillm_on_policy: bool = Field(
+        default=False,
+        description=(
+            "Use the TRUE on-policy MiniLLM teacher-mixed rollout (Gu et al. "
+            "2024 §3.1): sample a fresh autoregressive rollout per step "
+            "(per-token teacher/student mix) then compute length-normalised "
+            "reverse-KL on it. Default off = the cheap offline distribution "
+            "blend. Requires minillm_enabled=True. (v0.71.18 #257)"
+        ),
+    )
+    minillm_rollout_length: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=512,
+        description=(
+            "On-policy rollout length (number of generated tokens per step). "
+            "When None the distill trainer auto-derives min(max_length, 32) "
+            "for the consumer-GPU budget. The autoregressive loop re-forwards "
+            "the full growing prefix each step (~O(L^2) graph), so keep this "
+            "small. Requires minillm_on_policy=True. (v0.71.18 #257)"
+        ),
+    )
 
     # ---- v0.70.0 Part B — Cross-tokenizer ULD ----------------------------
     # Universal Logit Distillation (Boizard et al. 2024). Schema-only;
     # live projection module wired in v0.70.1.
-    uld_strategy: Optional[Literal["wasserstein", "topk_align"]] = Field(
+    uld_strategy: Optional[
+        Literal["wasserstein", "topk_align", "wasserstein_aligned"]
+    ] = Field(
         default=None,
         description=(
             "Cross-tokenizer distillation strategy: 'wasserstein' "
-            "(no alignment needed) or 'topk_align' (requires uld_top_k). "
-            "Requires task='distill' on a non-mlx backend. Schema-only "
-            "in v0.70.0; live projection wired in v0.70.1."
+            "(no alignment needed), 'topk_align' (requires uld_top_k), or "
+            "'wasserstein_aligned' (token-sequence alignment for fully "
+            "disjoint tokenizers, v0.71.18 #258). Requires task='distill' on "
+            "a non-mlx backend."
         ),
     )
     uld_top_k: Optional[int] = Field(
@@ -1653,6 +1678,7 @@ class TrainingConfig(BaseModel):
     @field_validator(
         "minillm_enabled",
         "minillm_length_normalize",
+        "minillm_on_policy",
         mode="before",
     )
     @classmethod
@@ -1678,6 +1704,16 @@ class TrainingConfig(BaseModel):
         from soup_cli.utils.minillm import _check_path_shape
 
         return _check_path_shape(v)
+
+    @field_validator("minillm_rollout_length", mode="before")
+    @classmethod
+    def _validate_minillm_rollout_length(cls, v):
+        """v0.71.18 #257 — reject bool before Pydantic coerces True->1."""
+        if v is None:
+            return v
+        if isinstance(v, bool):
+            raise TypeError("minillm_rollout_length must not be bool")
+        return v
 
     @field_validator(
         "fp8_attention",
@@ -4240,7 +4276,7 @@ class SoupConfig(BaseModel):
             raise ValueError(
                 "uld_strategy='topk_align' requires uld_top_k to be set"
             )
-        if strategy == "wasserstein" and top_k is not None:
+        if strategy != "topk_align" and top_k is not None:
             raise ValueError(
                 "uld_top_k is only valid when uld_strategy='topk_align'; "
                 f"got uld_strategy={strategy!r}"
@@ -4322,6 +4358,8 @@ class SoupConfig(BaseModel):
             or tcfg.minillm_length_normalize is not True
             or tcfg.minillm_pretrain_anchor_weight != 0.0
             or tcfg.minillm_pretrain_anchor_path is not None
+            or tcfg.minillm_on_policy is True
+            or tcfg.minillm_rollout_length is not None
         )
         if not tcfg.minillm_enabled and not any_field_set:
             return self
@@ -4335,6 +4373,10 @@ class SoupConfig(BaseModel):
                 offenders.append("minillm_pretrain_anchor_weight")
             if tcfg.minillm_pretrain_anchor_path is not None:
                 offenders.append("minillm_pretrain_anchor_path")
+            if tcfg.minillm_on_policy is True:
+                offenders.append("minillm_on_policy")
+            if tcfg.minillm_rollout_length is not None:
+                offenders.append("minillm_rollout_length")
             raise ValueError(
                 f"MiniLLM tunables {offenders} require minillm_enabled=True"
             )
@@ -4363,6 +4405,12 @@ class SoupConfig(BaseModel):
             raise ValueError(
                 "minillm_pretrain_anchor_path is set but "
                 "minillm_pretrain_anchor_weight is 0 (silent no-op)"
+            )
+        # v0.71.18 #257 — rollout_length only applies to the on-policy path.
+        if tcfg.minillm_rollout_length is not None and not tcfg.minillm_on_policy:
+            raise ValueError(
+                "minillm_rollout_length requires minillm_on_policy=True "
+                "(unused by the offline distribution blend)"
             )
         return self
 

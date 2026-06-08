@@ -33,6 +33,33 @@ from typing import Optional
 
 _MAX_ANCHOR_PATH_LEN = 4096
 _MAX_ANCHOR_ROW_BYTES = 1_000_000
+# v0.71.18 #257 — on-policy rollout length bounds. The autoregressive loop
+# re-forwards the *full* growing prefix each step with grad ON, so the retained
+# graph (and compute) is ~O(L^2). 512 is a library-API ceiling; the live distill
+# path clamps far lower (min(max_length, 32) by default, or training.
+# minillm_rollout_length when set) to stay within a consumer-GPU budget.
+_MAX_ROLLOUT_LENGTH = 512
+_DEFAULT_ROLLOUT_LENGTH = 16
+
+
+def validate_rollout_length(value: object) -> int:
+    """Validate the MiniLLM on-policy rollout length. Bounds [1, 512].
+
+    Bool rejected before the int check (project bool-as-int policy).
+    """
+    if isinstance(value, bool):
+        raise ValueError("rollout_length must not be bool")
+    if not isinstance(value, int):
+        raise ValueError(
+            f"rollout_length must be int, got {type(value).__name__}"
+        )
+    if value < 1:
+        raise ValueError(f"rollout_length must be >= 1, got {value}")
+    if value > _MAX_ROLLOUT_LENGTH:
+        raise ValueError(
+            f"rollout_length={value} exceeds {_MAX_ROLLOUT_LENGTH} cap"
+        )
+    return value
 
 
 def _check_unit_float(value: object, field: str) -> float:
@@ -110,6 +137,11 @@ class MiniLLMConfig:
     length_normalize: bool = True
     pretrain_anchor_weight: float = 0.0
     pretrain_anchor_path: Optional[str] = None
+    # v0.71.18 #257 — true on-policy teacher-mixed rollout (vs the offline
+    # distribution-blend in ``minillm_distill_term``). ``rollout_length`` is
+    # the number of fresh tokens sampled per step when ``on_policy`` is set.
+    on_policy: bool = False
+    rollout_length: int = _DEFAULT_ROLLOUT_LENGTH
 
     def __post_init__(self) -> None:
         validate_teacher_mix_ratio(self.teacher_mix_ratio)
@@ -118,6 +150,11 @@ class MiniLLMConfig:
                 f"length_normalize must be bool, got "
                 f"{type(self.length_normalize).__name__}"
             )
+        if not isinstance(self.on_policy, bool):
+            raise TypeError(
+                f"on_policy must be bool, got {type(self.on_policy).__name__}"
+            )
+        validate_rollout_length(self.rollout_length)
         validate_pretrain_anchor_weight(self.pretrain_anchor_weight)
         _check_path_shape(self.pretrain_anchor_path)
         if self.pretrain_anchor_weight > 0.0 and self.pretrain_anchor_path is None:
@@ -191,6 +228,102 @@ def minillm_distill_term(
     return loss * (t * t)
 
 
+def _multinomial_sample(probs):
+    """Default per-row multinomial sampler. ``probs`` is ``[B, V]``."""
+    import torch
+
+    return torch.multinomial(probs, num_samples=1)
+
+
+def minillm_on_policy_rollout(
+    student_model,
+    teacher_model,
+    input_ids,
+    attention_mask,
+    *,
+    config: "MiniLLMConfig",
+    max_new_tokens: int,
+    temperature: float = 1.0,
+    sample_fn=None,
+):
+    """True on-policy MiniLLM teacher-mixed rollout (v0.71.18 #257).
+
+    Unlike :func:`minillm_distill_term` (which blends the teacher
+    distribution into the target *offline* on the supplied batch), this
+    samples a fresh autoregressive rollout where each next token is drawn
+    from the per-token mixture ``ratio·teacher + (1-ratio)·student`` — the
+    true on-policy procedure of Gu et al. 2024 (arXiv:2306.08543 §3.1).
+    Sampling from that mixture is equivalent to a per-element Bernoulli
+    coin flip then sampling from the chosen model's distribution.
+
+    At each generated position the reverse-KL ``KL(student || teacher)`` is
+    accumulated on the *full* distributions (differentiable w.r.t. the
+    student logits; the sampled tokens that condition the next step are
+    detached). When ``config.length_normalize`` is set the per-sequence
+    reverse-KL is averaged over the rollout length so longer rollouts don't
+    dominate the gradient.
+
+    Returns ``(loss, num_steps)`` where ``loss`` is a scalar differentiable
+    w.r.t. the student parameters and scaled by ``temperature**2`` (the
+    Hinton convention shared with the offline term).
+    """
+    import torch
+
+    if not isinstance(config, MiniLLMConfig):
+        raise TypeError(
+            f"config must be MiniLLMConfig, got {type(config).__name__}"
+        )
+    if isinstance(max_new_tokens, bool) or not isinstance(max_new_tokens, int):
+        raise TypeError("max_new_tokens must be a non-bool int")
+    if max_new_tokens < 1:
+        raise ValueError(f"max_new_tokens must be >= 1, got {max_new_tokens}")
+    if isinstance(temperature, bool) or not isinstance(temperature, (int, float)):
+        raise TypeError("temperature must be a non-bool number")
+    t = float(temperature)
+    if not math.isfinite(t) or t <= 0.0:
+        raise ValueError("temperature must be finite and positive")
+
+    sampler = sample_fn or _multinomial_sample
+    ratio = float(config.teacher_mix_ratio)
+    cur_ids = input_ids
+    if attention_mask is None:
+        cur_mask = torch.ones_like(input_ids)
+    else:
+        cur_mask = attention_mask
+    kl_terms = []
+    for _ in range(int(max_new_tokens)):
+        s_out = student_model(input_ids=cur_ids, attention_mask=cur_mask)
+        s_logits = s_out.logits[:, -1, :] / t  # [B, Vs]  (grad ON)
+        with torch.no_grad():
+            te_out = teacher_model(input_ids=cur_ids, attention_mask=cur_mask)
+            te_logits = te_out.logits[:, -1, :] / t  # [B, Vt]  (grad OFF)
+        # MiniLLM assumes a shared vocab; clamp to the common min so a
+        # mismatched teacher never index-errors (cross-tokenizer = ULD path).
+        common = min(s_logits.shape[-1], te_logits.shape[-1])
+        log_p_s = torch.log_softmax(s_logits[:, :common], dim=-1)
+        p_s = log_p_s.exp()
+        log_p_t = torch.log_softmax(te_logits[:, :common], dim=-1)
+        # reverse KL(student || teacher) per row — differentiable.
+        kl = (p_s * (log_p_s - log_p_t)).sum(dim=-1)  # [B]
+        kl_terms.append(kl)
+        # Teacher-mixed sampling (fully detached — only conditions the rollout).
+        with torch.no_grad():
+            p_t = log_p_t.exp()
+            mix = ratio * p_t + (1.0 - ratio) * p_s.detach()
+            mix = mix / mix.sum(dim=-1, keepdim=True).clamp(min=1e-12)
+            next_tok = sampler(mix)  # [B, 1]
+            next_tok = next_tok.to(cur_ids.dtype)
+        cur_ids = torch.cat([cur_ids, next_tok], dim=1)
+        cur_mask = torch.cat([cur_mask, torch.ones_like(next_tok)], dim=1)
+
+    stacked = torch.stack(kl_terms, dim=1)  # [B, L]
+    if config.length_normalize:
+        loss = stacked.mean(dim=1).mean()
+    else:
+        loss = stacked.sum(dim=1).mean()
+    return loss * (t * t), len(kl_terms)
+
+
 def _get_trainer_callback_base():
     """Lazy-resolve ``transformers.TrainerCallback`` (mirror v0.53.11)."""
     try:
@@ -252,6 +385,34 @@ class MiniLLMCallback(_TrainerCallbackBase):  # type: ignore[misc, valid-type]
             config=self.config,
             temperature=self.temperature,
         )
+
+    def on_policy_term(
+        self,
+        student_model,
+        teacher_model,
+        input_ids,
+        attention_mask=None,
+        *,
+        sample_fn=None,
+    ):
+        """True on-policy teacher-mixed rollout reverse-KL (v0.71.18 #257).
+
+        Samples a fresh ``config.rollout_length``-token autoregressive
+        rollout from the teacher/student mixture and returns the
+        length-normalised reverse-KL along that path. Returns the scalar
+        loss only (the step count is internal to the rollout).
+        """
+        loss, _ = minillm_on_policy_rollout(
+            student_model,
+            teacher_model,
+            input_ids,
+            attention_mask,
+            config=self.config,
+            max_new_tokens=self.config.rollout_length,
+            temperature=self.temperature,
+            sample_fn=sample_fn,
+        )
+        return loss
 
     def _load_anchor(self) -> Optional[dict]:
         """Lazily tokenise a small pretrain-anchor batch (cwd-contained)."""

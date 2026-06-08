@@ -217,12 +217,23 @@ def eval(
             "{tool: <name>, arguments: {...}}."
         ),
     ),
+    sandbox: bool = typer.Option(
+        False,
+        "--sandbox",
+        help=(
+            "Execute each heuristic-passing prediction against a sandboxed "
+            "mock of the endpoint (v0.71.18 #110): classify ok / tool_error "
+            "/ timeout / arg_error. Strong isolation is POSIX-only (reduced "
+            "isolation on Windows; a friendly advisory is printed)."
+        ),
+    ),
 ):
     """Score predicted tool-calls against the spec's tool catalog.
 
-    Each prediction row gets two checks:
-    1. ``tool`` matches a known endpoint in the spec.
-    2. ``arguments`` only references parameters declared on that endpoint.
+    Without ``--sandbox`` each row gets two heuristic checks: ``tool``
+    matches a known endpoint, and ``arguments`` only references declared
+    parameters. With ``--sandbox`` each heuristic-passing row is also
+    *executed* against a generated mock of the endpoint.
     """
     import os
     import stat as _stat
@@ -253,8 +264,13 @@ def eval(
     except (ValueError, TypeError, FileNotFoundError) as exc:
         console.print(f"[red]Spec error:[/] {escape(str(exc))}")
         raise typer.Exit(1) from exc
-    tool_to_params = {ep.tool: set(ep.parameters) for ep in endpoints}
+    tool_to_endpoint = {ep.tool: ep for ep in endpoints}
 
+    if sandbox:
+        _eval_sandbox(predictions, tool_to_endpoint, max_pred_lines)
+        return
+
+    tool_to_params = {ep.tool: set(ep.parameters) for ep in endpoints}
     total = 0
     tool_ok = 0
     args_ok = 0
@@ -300,5 +316,92 @@ def eval(
             f"Tool match:     [bold]{tool_ok}[/] ({tool_pct:.1f}%)\n"
             f"Args valid:     [bold]{args_ok}[/] ({args_pct:.1f}%)",
             title="[bold green]Agent Forge — eval[/]",
+        )
+    )
+
+
+def _eval_sandbox(predictions: str, tool_to_endpoint: dict, max_pred_lines: int):
+    """v0.71.18 #110 — sandboxed tool-call scorecard (4-way classification).
+
+    Heuristic-failing rows (unknown tool / unknown parameter key) are
+    ``arg_error`` and short-circuit before any sandbox run; heuristic-passing
+    rows are executed against a generated mock and classified ok / tool_error
+    / timeout.
+    """
+    import sys as _sys
+
+    from soup_cli.trainer.rewards import _get_isolation_strategy
+    from soup_cli.utils.agent_sandbox import score_sandbox
+
+    isolation = _get_isolation_strategy()
+    console.print(f"[dim]Sandbox isolation strategy: {escape(isolation)}[/]")
+    if _sys.platform == "win32":
+        console.print(
+            "[yellow]Note:[/] strong sandbox isolation (RLIMIT / namespaces) "
+            "is POSIX-only; running on Windows with reduced isolation "
+            "(subprocess timeout + output cap + network guard only)."
+        )
+
+    total = 0
+    counts = {"ok": 0, "tool_error": 0, "timeout": 0, "arg_error": 0}
+    try:
+        with open(predictions, "r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                if total >= max_pred_lines:
+                    break
+                total += 1
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    counts["arg_error"] += 1
+                    continue
+                if not isinstance(row, dict):
+                    counts["arg_error"] += 1
+                    continue
+                tool = row.get("tool")
+                ep = tool_to_endpoint.get(tool) if isinstance(tool, str) else None
+                if ep is None:
+                    counts["arg_error"] += 1
+                    continue
+                args = row.get("arguments") or {}
+                if not isinstance(args, dict):
+                    counts["arg_error"] += 1
+                    continue
+                declared = set(ep.parameters)
+                if any(k not in declared for k in args):
+                    counts["arg_error"] += 1
+                    continue
+                cls = score_sandbox(
+                    tool=ep.tool,
+                    parameters=ep.parameters,
+                    path=ep.path,
+                    arguments=args,
+                )
+                counts[cls] = counts.get(cls, 0) + 1
+    except OSError as exc:
+        console.print(f"[red]Predictions read failed:[/] {escape(str(exc))}")
+        raise typer.Exit(1) from exc
+
+    if total == 0:
+        console.print("[yellow]No predictions to score.[/]")
+        raise typer.Exit(1)
+
+    def _pct(n: int) -> str:
+        return f"{100.0 * n / total:.1f}%"
+
+    console.print(
+        Panel(
+            f"Predictions:  [bold]{total}[/]\n"
+            f"ok:           [bold green]{counts['ok']}[/] ({_pct(counts['ok'])})\n"
+            f"tool_error:   [bold red]{counts['tool_error']}[/] "
+            f"({_pct(counts['tool_error'])})\n"
+            f"timeout:      [bold yellow]{counts['timeout']}[/] "
+            f"({_pct(counts['timeout'])})\n"
+            f"arg_error:    [bold]{counts['arg_error']}[/] "
+            f"({_pct(counts['arg_error'])})",
+            title="[bold green]Agent Forge — sandbox eval[/]",
         )
     )

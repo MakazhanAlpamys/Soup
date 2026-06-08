@@ -63,6 +63,18 @@ MACOS_SANDBOX_PROFILE = (
     "(deny network*)"
 )
 
+# Python-level socket monkey-patch prepended before any sandboxed user code.
+# Best-effort (bypassable via os.system / ctypes) — defence-in-depth on top of
+# the RLIMIT + namespace / sandbox-exec isolation. Shared so the v0.71.18 #110
+# agent-eval sandbox reuses the exact same network guard.
+SANDBOX_NETWORK_GUARD = (
+    "import socket\n"
+    "def _blocked(*a, **k):\n"
+    "    raise OSError('network disabled in sandbox')\n"
+    "socket.socket = _blocked\n"
+    "socket.create_connection = _blocked\n"
+)
+
 
 def _compute_isolation_strategy() -> str:
     """Detect best-available OS-level sandbox isolation for code_exec_reward.
@@ -326,14 +338,7 @@ def _run_code_sandbox(code: str) -> "str | None":
     """
     _show_code_exec_warning_once()
 
-    guard = (
-        "import socket\n"
-        "def _blocked(*a, **k):\n"
-        "    raise OSError('network disabled in sandbox')\n"
-        "socket.socket = _blocked\n"
-        "socket.create_connection = _blocked\n"
-    )
-    wrapped = guard + "\n" + code
+    wrapped = SANDBOX_NETWORK_GUARD + "\n" + code
 
     preexec = _apply_rlimit if sys.platform != "win32" else None
 

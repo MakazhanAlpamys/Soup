@@ -49,19 +49,22 @@ infrastructure instead of improving models. Soup fixes that.
 
 ## What's New
 
-**v0.71.17 — RAG & serve finish.** The serve-side and RAFT tail of the retrieval/multi-tenant work,
-validated live on SmolLM2-135M:
+**v0.71.18 — Distill + agent depth.** Deeper distillation and agent-eval, validated live on
+Windows + RTX 3050 (tiny-gpt2 + SmolLM2-135M):
 
-- **Serve a trained MoLE** — `soup serve --mole <dir>` loads the base + N frozen task LoRAs + the
-  trained gate and blends them **per token** at decode (non-streaming + SSE). A
-  `task=moe_lora_routing` run now writes a self-describing `mole_manifest.json` next to the gate.
-- **Per-request multi-tenant banks** — `soup serve --bank` resolves the active VeRA/VB-LoRA user per
-  request (`X-User-Id`) via a `contextvars.ContextVar`, so concurrent requests never race. Live smoke:
-  two users get distinct steered outputs, an unknown/absent id self-clears to the clean baseline.
-- **Epoch-aware RAFT shuffle** — `data.raft_epoch_shuffle: true` re-permutes the golden + distractor
-  documents each training epoch so the model can't latch onto a fixed citation slot.
-- **`soup diagnose --citation-style`** — the live citation failure-mode probe now takes the citation
-  style (bracket / inline / footnote) and the RAFT shuffle seed.
+- **MiniLLM true on-policy rollout** — `soup train --minillm-enabled --minillm-on-policy` replaces the
+  offline distribution blend with the real on-policy procedure (sample a fresh autoregressive rollout
+  from the per-token teacher/student mixture, then length-normalised reverse-KL). Tune the rollout with
+  `training.minillm_rollout_length`.
+- **Cross-tokenizer ULD for fully-disjoint tokenizers** — `training.uld_strategy: wasserstein_aligned`
+  aligns the student and teacher token sequences over their decoded character spans, so you can distill
+  across genuinely different tokenizers (e.g. a GPT-2 BPE student from a Llama SentencePiece teacher).
+- **`soup agent eval --sandbox`** — each heuristic-passing tool-call prediction is *executed* against a
+  generated mock of the endpoint in the RLVR sandbox and classified ok / tool_error / timeout /
+  arg_error (strong isolation on POSIX; subprocess + timeout + output cap + network guard everywhere).
+- **`soup train --cloud modal`** — no local GPU? Render a self-contained Modal.com app from your
+  `soup.yaml` (config base64-embedded, no secrets) for serverless GPU training; plan-only by default,
+  `--cloud-submit` submits live. `pip install 'soup-cli[modal]'`.
 
 Full history: [CHANGELOG.md](CHANGELOG.md) &middot; [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 

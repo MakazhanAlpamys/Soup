@@ -167,6 +167,15 @@ def train(
             "training.echo_trap_enabled=true on grpo/ppo."
         ),
     ),
+    minillm_on_policy: bool = typer.Option(
+        False,
+        "--minillm-on-policy",
+        help=(
+            "Use the TRUE on-policy MiniLLM teacher-mixed rollout (v0.71.18 "
+            "#257) instead of the offline distribution blend. Requires "
+            "training.minillm_enabled=true on task='distill'."
+        ),
+    ),
     profile_run: bool = typer.Option(
         False,
         "--profile",
@@ -244,6 +253,32 @@ def train(
             "v0.71.15."
         ),
     ),
+    cloud: str = typer.Option(
+        None,
+        "--cloud",
+        help=(
+            "Train on a serverless cloud GPU instead of locally (v0.71.18 "
+            "#16). Supported: modal. Renders a Modal app stub from the "
+            "config (plan-only); use --cloud-submit to submit live."
+        ),
+    ),
+    gpu: str = typer.Option(
+        "a100",
+        "--gpu",
+        help=(
+            "Cloud GPU type for --cloud (t4 / l4 / a10g / a100 / a100-80gb / "
+            "l40s / h100). Default a100. v0.71.18 #16."
+        ),
+    ),
+    cloud_submit: bool = typer.Option(
+        False,
+        "--cloud-submit",
+        help=(
+            "With --cloud modal, submit the rendered run live via the Modal "
+            "SDK (gated on a Modal token: run `modal setup` first). Default "
+            "is plan-only (render + print the `modal run` command)."
+        ),
+    ),
 ):
     """Start training from a soup.yaml config."""
     config_path = Path(config)
@@ -308,6 +343,68 @@ def train(
             raise typer.Exit(1)
         cfg.training.echo_trap_tokenizer_aware = True
         console.print("[green]Echo-trap tokenizer-aware scoring enabled[/]")
+
+    # --- MiniLLM on-policy rollout shortcut (v0.71.18 #257) ---
+    if minillm_on_policy:
+        if not cfg.training.minillm_enabled:
+            console.print(
+                "[red]--minillm-on-policy requires "
+                "training.minillm_enabled=true (task='distill')[/]"
+            )
+            raise typer.Exit(1)
+        cfg.training.minillm_on_policy = True
+        console.print("[green]MiniLLM on-policy rollout enabled[/]")
+
+    # --- Cloud GPU training (v0.71.18 #16) ---
+    if cloud:
+        from soup_cli import __version__ as _soup_version
+        from soup_cli.cloud import modal as _modal_cloud
+
+        try:
+            _modal_cloud.validate_cloud(cloud)
+            _modal_cloud.validate_gpu(gpu)
+        except ValueError as exc:
+            console.print(
+                f"[red]Invalid --cloud / --gpu:[/] {markup_escape(str(exc))}"
+            )
+            raise typer.Exit(2) from exc
+        try:
+            plan = _modal_cloud.plan_modal_run(
+                str(config_path),
+                gpu=gpu,
+                output_dir=cfg.output,
+                soup_version=_soup_version,
+            )
+            stub_realpath = _modal_cloud.write_stub(plan)
+        except (ValueError, TypeError) as exc:
+            console.print(f"[red]Cloud plan failed:[/] {markup_escape(str(exc))}")
+            raise typer.Exit(2) from exc
+
+        console.print(
+            Panel(
+                f"Cloud:    [bold]modal[/]\n"
+                f"GPU:      [bold]{markup_escape(plan.gpu)}[/]\n"
+                f"Stub:     [bold]{markup_escape(os.path.relpath(stub_realpath))}[/]\n"
+                f"Output:   [bold]{markup_escape(plan.output_dir)}[/]\n\n"
+                f"[bold]Run:[/] {markup_escape(plan.run_command)}",
+                title="[bold green]soup train --cloud modal[/]",
+            )
+        )
+        if cloud_submit:
+            try:
+                rc = _modal_cloud.submit_modal_run(plan)
+            except RuntimeError as exc:
+                console.print(
+                    f"[yellow]Modal submit unavailable:[/] "
+                    f"{markup_escape(str(exc))}"
+                )
+                raise typer.Exit(1) from exc
+            raise typer.Exit(rc)
+        console.print(
+            "[yellow]Note:[/] plan-only. Run `modal setup` once, then the "
+            "command above (or re-run with --cloud-submit)."
+        )
+        raise typer.Exit(0)
 
     # --- --push-as / --hf-resume validation ---
     if push_as:

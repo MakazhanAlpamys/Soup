@@ -17,6 +17,7 @@ soup train --config soup.yaml --gate evals/gate.yaml  Eval-gated training
 soup train --config soup.yaml --push-as user/repo  Auto-push each checkpoint to HF as branch
 soup train --config soup.yaml --push-as user/repo --hf-resume  Resume from latest HF checkpoint branch
 soup train --config soup.yaml --find-lr        LR range finder: write recommended LR JSON
+soup train --config soup.yaml --cloud modal --gpu a100  Render a Modal.com app for serverless GPU training (plan-only; --cloud-submit submits live)
 soup infer --model ./output --input p.jsonl   Batch inference
 soup chat --model ./output                    Interactive chat
 soup push --model ./output --repo user/name   Upload to HuggingFace
@@ -38,6 +39,7 @@ soup deploy autopilot --list                  List all 10 deploy profiles
 soup agent synth --spec api.yaml -o ds.jsonl  Parse OpenAPI/MCP/GraphQL spec into a tool-calling SFT dataset
 soup agent train --spec api.yaml --base model  One-shot synth + planned soup train invocation
 soup agent eval --spec api.yaml --predictions p.jsonl  Score predicted tool-calls vs spec catalog
+soup agent eval --spec api.yaml --predictions p.jsonl --sandbox  Execute each tool-call in the RLVR sandbox: ok/tool_error/timeout/arg_error
 soup eval benchmark --model ./output          Evaluate on standard benchmarks
 soup eval custom --tasks eval.jsonl           Custom eval tasks from JSONL
 soup eval judge --target resp.jsonl           LLM-as-a-judge evaluation
