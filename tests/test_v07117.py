@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import inspect
 import os
+import re
 import sys
 
 import pytest
@@ -25,6 +26,19 @@ from soup_cli.config.loader import load_config_from_string
 # ---------------------------------------------------------------------------
 # Shared fixtures
 # ---------------------------------------------------------------------------
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _clean(output: str) -> str:
+    """Strip ANSI colour codes + collapse whitespace from CLI output.
+
+    Under CI ``FORCE_COLOR``, Typer/Rich injects ANSI codes that split flag
+    names (e.g. ``--mole`` -> ``-\\x1b[..]-mole``) and wraps long panel text
+    across lines, so a raw substring assertion fails even though the flag /
+    message is present. Normalising makes the assertion robust.
+    """
+    return re.sub(r"\s+", " ", _ANSI_RE.sub("", output))
 
 
 def _raft_row(n_distractors: int = 2) -> dict:
@@ -299,7 +313,7 @@ class TestDiagnoseCitationStyle:
 
         result = CliRunner().invoke(app, ["diagnose", "--help"])
         assert result.exit_code == 0
-        assert "--citation-style" in result.output
+        assert "--citation-style" in _clean(result.output)
 
     def test_cli_rejects_bad_style(self):
         from typer.testing import CliRunner
@@ -311,7 +325,7 @@ class TestDiagnoseCitationStyle:
             ["diagnose", "r1", "--base-model", "x", "--citation-style", "nope"],
         )
         assert result.exit_code == 2
-        assert "Invalid --citation-style" in result.output
+        assert "Invalid --citation-style" in _clean(result.output)
 
 
 # ===========================================================================
@@ -860,7 +874,7 @@ class TestServeMoleWiring:
 
         result = CliRunner().invoke(app, ["serve", "--help"])
         assert result.exit_code == 0
-        assert "--mole" in result.output
+        assert "--mole" in _clean(result.output)
 
     def test_mole_outside_cwd_rejected(self, tmp_path, monkeypatch):
         from typer.testing import CliRunner
@@ -872,7 +886,7 @@ class TestServeMoleWiring:
             app, ["serve", "--model", "somemodel", "--mole", "/etc/passwd"]
         )
         assert result.exit_code == 2
-        assert "Invalid --mole path" in result.output
+        assert "Invalid --mole path" in _clean(result.output)
 
     def test_mole_requires_transformers_backend(self, tmp_path, monkeypatch):
         from typer.testing import CliRunner
@@ -886,7 +900,7 @@ class TestServeMoleWiring:
             app, ["serve", "--model", "somemodel", "--mole", "mole_out", "--backend", "vllm"]
         )
         assert result.exit_code == 2
-        assert "requires --backend transformers" in result.output
+        assert "requires --backend transformers" in _clean(result.output)
 
     def test_mole_rejects_bank_combo(self, tmp_path, monkeypatch):
         from typer.testing import CliRunner
@@ -901,8 +915,8 @@ class TestServeMoleWiring:
             ["serve", "--model", "somemodel", "--mole", "mole_out", "--bank", "bank.json"],
         )
         assert result.exit_code == 2
-        assert "cannot be combined" in result.output
-        assert "--bank" in result.output
+        assert "cannot be combined" in _clean(result.output)
+        assert "--bank" in _clean(result.output)
 
     def test_create_app_accepts_mole_runtime(self):
         from soup_cli.commands.serve import _create_app
