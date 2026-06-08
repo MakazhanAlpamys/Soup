@@ -49,19 +49,19 @@ infrastructure instead of improving models. Soup fixes that.
 
 ## What's New
 
-**v0.71.16 — Knowledge edit depth.** Deeper, safer surgical knowledge editing + a wider LongLoRA
-allowlist (validated on real `gpt2` + SmolLM2-135M):
+**v0.71.17 — RAG & serve finish.** The serve-side and RAFT tail of the retrieval/multi-tenant work,
+validated live on SmolLM2-135M:
 
-- **GPT-2 models are now editable** — `soup edit set` (ROME / MEMIT / AlphaEdit) handles the GPT-2
-  `Conv1D` (`mlp.c_proj`) weight layout alongside Llama, not just Llama-family. Real `gpt2` smoke:
-  target probability 0.005 → 0.9996.
-- **Covariance-preconditioned ROME** — `soup edit set --method rome --cov-corpus <jsonl|txt>` estimates
-  the key covariance and uses the genuine `C⁻¹ k*` update (spreads the edit mass, less collateral
-  interference). Falls back to `C = I` with no corpus.
-- **Atomic edit-governor count** — two concurrent `soup edit set` runs on the same base can no longer
-  lose an increment; the count is merged under the cross-process lock.
-- **Mixtral joins the LongLoRA allowlist** — `use_longlora: true` now accepts Mixtral-8x7B / 8x22B
-  (the bare `mistral` token never matched the MoE variant before).
+- **Serve a trained MoLE** — `soup serve --mole <dir>` loads the base + N frozen task LoRAs + the
+  trained gate and blends them **per token** at decode (non-streaming + SSE). A
+  `task=moe_lora_routing` run now writes a self-describing `mole_manifest.json` next to the gate.
+- **Per-request multi-tenant banks** — `soup serve --bank` resolves the active VeRA/VB-LoRA user per
+  request (`X-User-Id`) via a `contextvars.ContextVar`, so concurrent requests never race. Live smoke:
+  two users get distinct steered outputs, an unknown/absent id self-clears to the clean baseline.
+- **Epoch-aware RAFT shuffle** — `data.raft_epoch_shuffle: true` re-permutes the golden + distractor
+  documents each training epoch so the model can't latch onto a fixed citation slot.
+- **`soup diagnose --citation-style`** — the live citation failure-mode probe now takes the citation
+  style (bracket / inline / footnote) and the RAFT shuffle seed.
 
 Full history: [CHANGELOG.md](CHANGELOG.md) &middot; [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 

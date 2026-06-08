@@ -908,6 +908,8 @@ Citation-faithful FT is gated to `task in {sft, pretrain}` + `data.format='raft'
 
 Under the hood, a `format: raft` run trains **answer-only**: each row is composed into a prompt (golden + distractor docs, shuffled deterministically by `data.raft_shuffle_seed`, each labelled `[doc-N]`) followed by the answer; the prompt span is masked out of the loss and — when `citation_faithful: true` — the bracketed `[doc-id]` spans in the answer get a boosted per-token loss weight. Rows whose prompt fills `max_length` (answer fully truncated) are dropped with a warning rather than silently shrinking the dataset.
 
+By default the document order is fixed for the whole run. Set `data.raft_epoch_shuffle: true` to **re-permute** the golden + distractor documents *each epoch* (a per-epoch salt folded into the shuffle seed) so the model can't latch onto a fixed citation slot — useful for multi-epoch runs. `epoch=0` reproduces the legacy single-permutation order exactly, so enabling it never changes the first epoch. (v0.71.17)
+
 Score a trained model's citations from the CLI:
 
 ```bash

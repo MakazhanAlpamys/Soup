@@ -265,6 +265,18 @@ class DataConfig(BaseModel):
             raise ValueError("raft_shuffle_seed must not be a bool")
         return v
 
+    raft_epoch_shuffle: bool = Field(
+        default=False,
+        description=(
+            "Re-permute RAFT golden/distractor documents EACH training epoch "
+            "(data.format='raft'). When False (default) the document order is "
+            "baked once at tokenisation time and fixed across epochs; when "
+            "True the trainer re-composes + re-tokenises rows per epoch with "
+            "an epoch salt so the model cannot memorise a fixed golden-doc "
+            "slot. (v0.71.17 #253)"
+        ),
+    )
+
     # --- v0.42.0 Data Pipeline Pro -----------------------------------------
     video_dir: Optional[str] = Field(
         default=None,

@@ -250,6 +250,17 @@ def serve(
         "--bank-strength",
         help="Vector-bank delta strength multiplier. Ignored when --bank is unset.",
     ),
+    mole: Optional[str] = typer.Option(
+        None,
+        "--mole",
+        help=(
+            "Path to a MoLE training output dir (mole_gate.pt + "
+            "mole_manifest.json). Serves the base + N frozen task LoRAs with "
+            "per-token gate blending at decode time. Requires --backend "
+            "transformers; not combinable with --bank / --steer / --adapters. "
+            "(v0.71.17 #259)"
+        ),
+    ),
     kv_cache_type: Optional[str] = typer.Option(
         None,
         "--kv-cache-type",
@@ -280,6 +291,44 @@ def serve(
                 "[red]--bank requires --backend transformers[/] "
                 "(the bank installs a forward hook on the loaded model; "
                 "vLLM / SGLang / MII are not supported)."
+            )
+            raise typer.Exit(code=2)
+    # v0.71.17 #259 — validate `--mole` up front (path containment + backend +
+    # mutual-exclusion) so a misconfig surfaces before any model load. The MoLE
+    # runtime loads its OWN base + adapters + gate in the transformers branch.
+    if mole is not None:
+        from rich.markup import escape as _rich_escape
+
+        from soup_cli.utils.paths import is_under_cwd
+
+        if "\x00" in mole or not is_under_cwd(mole):
+            console.print(
+                f"[red]Invalid --mole path:[/] {_rich_escape(str(mole))} "
+                "(must be under the current directory, no null bytes)."
+            )
+            raise typer.Exit(code=2)
+        if backend.lower() != "transformers":
+            console.print(
+                "[red]--mole requires --backend transformers[/] "
+                "(MoLE blends per-token over N task adapters with a custom "
+                "decode loop; vLLM / SGLang / MII are not supported)."
+            )
+            raise typer.Exit(code=2)
+        conflicts = [
+            name
+            for name, val in (
+                ("--bank", bank),
+                ("--steer", steer),
+                ("--adapters", adapters),
+                ("--speculative-decoding", speculative_model),
+            )
+            if val
+        ]
+        if conflicts:
+            console.print(
+                "[red]--mole cannot be combined with:[/] "
+                f"{_rich_escape(', '.join(conflicts))} "
+                "(MoLE replaces the served model with its own per-token blend)."
             )
             raise typer.Exit(code=2)
     # v0.62.0 Part C / v0.71.10 #201 — validate `--steer` name + strength up
@@ -689,16 +738,46 @@ def serve(
             requires_remote_code=requires,
         )
 
-        model_obj, tokenizer = _load_model(
-            model_path=str(model_path),
-            base_model=base_model,
-            is_adapter=is_adapter,
-            device=device,
-            trust_remote_code=resolved_trust,
-            kv_cache_dtype=(
-                resolved_kv_runtime.model_dtype if resolved_kv_runtime else None
-            ),
-        )
+        # v0.71.17 #259 — serve-time MoLE loads its OWN base + N task LoRAs +
+        # gate; the `model` CLI arg is the base, the manifest supplies adapters
+        # + gate geometry. Bypasses _load_model entirely.
+        mole_runtime = None
+        if mole is not None:
+            from rich.markup import escape as _esc
+
+            from soup_cli.utils.mole_routing import load_mole_for_serve
+
+            try:
+                # `--model` is the MoLE gate/manifest dir; the base model comes
+                # from `--base` (operator override) or, when None, the manifest's
+                # recorded base (load_mole_for_serve handles the fallback).
+                mole_runtime = load_mole_for_serve(
+                    mole,
+                    base=base_model,
+                    device=device,
+                    trust_remote_code=resolved_trust,
+                )
+            except (TypeError, ValueError, OSError, FileNotFoundError) as exc:
+                console.print(f"[red]--mole:[/] {_esc(str(exc))}")
+                raise typer.Exit(2) from exc
+            model_obj = mole_runtime.model
+            tokenizer = mole_runtime.tokenizer
+            console.print(
+                f"[green]MoLE serve active:[/] "
+                f"adapters={len(mole_runtime.adapter_names)}, "
+                f"top_k={mole_runtime.gate.top_k}, gate=loaded"
+            )
+        else:
+            model_obj, tokenizer = _load_model(
+                model_path=str(model_path),
+                base_model=base_model,
+                is_adapter=is_adapter,
+                device=device,
+                trust_remote_code=resolved_trust,
+                kv_cache_dtype=(
+                    resolved_kv_runtime.model_dtype if resolved_kv_runtime else None
+                ),
+            )
         console.print("[bold green]Model loaded![/]")
         if resolved_kv_runtime is not None:
             console.print(
@@ -884,6 +963,7 @@ def serve(
             reasoning_parser=resolved_reasoning_parser,
             record_thumbs_db=record_thumbs_db,
             loaded_bank=loaded_bank,
+            mole_runtime=mole_runtime,
             kv_cache_generate_kwargs=(
                 _plain_kv_kwargs(resolved_kv_runtime.generate_kwargs)
                 if resolved_kv_runtime
@@ -1213,6 +1293,7 @@ def _create_app(
     reasoning_parser: Optional[str] = None,
     record_thumbs_db: Optional[str] = None,
     loaded_bank: Any = None,
+    mole_runtime: Any = None,
     kv_cache_generate_kwargs: Optional[Dict[str, Any]] = None,
 ):
     """Create the FastAPI application with OpenAI-compatible endpoints.
@@ -1290,6 +1371,9 @@ def _create_app(
     # v0.71.12 #221 — VeRA / VB-LoRA bank loaded at startup (or None). The
     # active user is selected per request via the X-User-Id header.
     _loaded_bank = loaded_bank
+    # v0.71.17 #259 — serve-time MoLE runtime (or None). When set, the chat
+    # handler routes generation through the per-token gate-blend decode loop.
+    _mole_runtime = mole_runtime
 
     # --- Endpoints ---
 
@@ -1402,6 +1486,9 @@ def _create_app(
                     trace_log_writer=trace_log_writer,
                     started=stream_started,
                     kv_cache_generate_kwargs=kv_cache_generate_kwargs,
+                    mole_runtime=_mole_runtime,
+                    loaded_bank=_loaded_bank,
+                    x_user_id=x_user_id,
                 ),
                 media_type="text/event-stream",
             )
@@ -1427,17 +1514,30 @@ def _create_app(
                     processors = build_logits_processors(
                         output_constraint, tokenizer,
                     )
-                    response_text, prompt_tokens, completion_tokens = _generate_response(
-                        model_obj, tokenizer, messages,
-                        max_tokens=max_tokens,
-                        temperature=request.temperature,
-                        top_p=request.top_p,
-                        assistant_model=draft_model,
-                        num_assistant_tokens=num_speculative_tokens,
-                        logits_processor=processors or None,
-                        ngram_config=ngram_config,
-                        kv_cache_generate_kwargs=kv_cache_generate_kwargs,
-                    )
+                    if _mole_runtime is not None:
+                        # v0.71.17 #259 — per-token MoLE gate-blend decode.
+                        (
+                            response_text,
+                            prompt_tokens,
+                            completion_tokens,
+                        ) = _mole_runtime.generate_text(
+                            messages,
+                            max_tokens=max_tokens,
+                            temperature=request.temperature,
+                            top_p=request.top_p,
+                        )
+                    else:
+                        response_text, prompt_tokens, completion_tokens = _generate_response(
+                            model_obj, tokenizer, messages,
+                            max_tokens=max_tokens,
+                            temperature=request.temperature,
+                            top_p=request.top_p,
+                            assistant_model=draft_model,
+                            num_assistant_tokens=num_speculative_tokens,
+                            logits_processor=processors or None,
+                            ngram_config=ngram_config,
+                            kv_cache_generate_kwargs=kv_cache_generate_kwargs,
+                        )
                 except Exception:
                     logger.exception("Generation error")
                     raise HTTPException(status_code=500, detail="Internal server error")
@@ -1842,6 +1942,8 @@ def _stream_response(
     assistant_model=None, num_assistant_tokens=5,
     trace_log_writer=None, started=None,
     kv_cache_generate_kwargs=None,
+    mole_runtime=None,
+    loaded_bank=None, x_user_id=None,
 ):
     """Generator that yields SSE chunks for streaming responses."""
     chat_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
@@ -1850,15 +1952,34 @@ def _stream_response(
     # Generate full response (true token-by-token streaming requires TextIteratorStreamer)
     completion_tokens_for_log = 0
     try:
-        response_text, _, completion_tokens_for_log = _generate_response(
-            model, tokenizer, messages,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            top_p=top_p,
-            assistant_model=assistant_model,
-            num_assistant_tokens=num_assistant_tokens,
-            kv_cache_generate_kwargs=kv_cache_generate_kwargs,
-        )
+        # v0.71.17 #260 — re-select the per-user bank inside the generator's own
+        # context. set_active_user runs in the sync endpoint thread, but this
+        # generator is iterated later by the async event loop in a DIFFERENT
+        # contextvars.Context, so the endpoint's selection is not visible here.
+        # Re-set so streamed requests still apply per-user steering (and fail
+        # closed to no-steering for an unknown / absent id).
+        if loaded_bank is not None:
+            loaded_bank.set_active_user(x_user_id)
+        if mole_runtime is not None:
+            # v0.71.17 #259 — MoLE blends per-token via a custom decode loop;
+            # generate the full text then simulate streaming (same shape as the
+            # transformers path, which also generates-then-streams).
+            response_text, _, completion_tokens_for_log = mole_runtime.generate_text(
+                messages,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                top_p=top_p,
+            )
+        else:
+            response_text, _, completion_tokens_for_log = _generate_response(
+                model, tokenizer, messages,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                top_p=top_p,
+                assistant_model=assistant_model,
+                num_assistant_tokens=num_assistant_tokens,
+                kv_cache_generate_kwargs=kv_cache_generate_kwargs,
+            )
     except Exception:
         logger.exception("Stream generation error")
         yield 'data: {"error": "Internal server error"}\n\n'

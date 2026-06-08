@@ -79,6 +79,7 @@ def build_raft_prompt(
     *,
     shuffle_seed: Optional[int] = None,
     row_index: int = 0,
+    epoch: int = 0,
 ) -> RaftComposed:
     """Compose a RAFT row into ``(prompt, answer, golden_doc_id, doc_ids)``.
 
@@ -91,6 +92,12 @@ def build_raft_prompt(
     its shuffled position, and the golden document's id is returned so callers
     (citation scorer / span-mask) know the ground-truth citation.
 
+    ``epoch`` (#253) folds an epoch salt into the permutation seed so the
+    document order changes each training epoch (the RAFT epoch-shuffle path in
+    :class:`soup_cli.trainer.raft.RaftEpochShuffleCollator`). ``epoch=0``
+    reproduces the legacy ``(shuffle_seed, row_index)`` permutation exactly, so
+    existing single-permutation RAFT runs are unchanged.
+
     Raises ``ValueError`` on malformed rows (mirrors ``_convert_raft`` policy).
     """
     if not isinstance(row, Mapping):
@@ -101,6 +108,8 @@ def build_raft_prompt(
         raise TypeError("shuffle_seed must be int or None")
     if isinstance(row_index, bool) or not isinstance(row_index, int) or row_index < 0:
         raise ValueError("row_index must be a non-negative int")
+    if isinstance(epoch, bool) or not isinstance(epoch, int) or epoch < 0:
+        raise ValueError("epoch must be a non-negative int")
 
     query = _check_str("query", row.get("query"))
     golden_doc = _check_str("golden_doc", row.get("golden_doc"))
@@ -118,7 +127,12 @@ def build_raft_prompt(
     docs: List[Tuple[str, bool]] = [(golden_doc, True)]
     docs.extend((d, False) for d in distractors)
     seed_base = 0 if shuffle_seed is None else int(shuffle_seed)
-    rng = random.Random(seed_base * 1_000_003 + row_index)
+    seed = seed_base * 1_000_003 + row_index
+    # Fold the epoch salt in ONLY when epoch > 0 so epoch=0 keeps the exact
+    # legacy permutation (backward-compat for single-permutation RAFT runs).
+    if epoch:
+        seed = seed * 1_000_003 + epoch
+    rng = random.Random(seed)
     rng.shuffle(docs)
 
     doc_lines: List[str] = []

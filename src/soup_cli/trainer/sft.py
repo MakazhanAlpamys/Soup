@@ -226,9 +226,16 @@ class SFTTrainerWrapper:
         # v0.71.10 #199 — RAFT format: golden/distractor-doc rows are NOT
         # {messages}; build a pre-tokenised answer-only-mask dataset instead.
         self._is_raft = cfg.data.format == "raft"
+        # v0.71.17 #253 — RAFT epoch-aware shuffle: when on, keep RAW rows so
+        # the collator re-permutes documents per epoch (vs one baked order).
+        self._raft_epoch_shuffle = self._is_raft and bool(
+            getattr(cfg.data, "raft_epoch_shuffle", False)
+        )
         pretok = _maybe_load_pretokenized(cfg.data, cfg.base, console)
         if pretok is not None:
             train_ds, eval_ds = pretok
+        elif self._raft_epoch_shuffle:
+            train_ds, eval_ds = self._prepare_raft_raw_dataset(dataset, cfg, tcfg)
         elif self._is_raft:
             train_ds, eval_ds = self._prepare_raft_dataset(dataset, cfg, tcfg)
         elif use_vision:
@@ -412,14 +419,40 @@ class SFTTrainerWrapper:
             )
 
             raft_cls = make_raft_trainer_class(Trainer)
+            if self._raft_epoch_shuffle:
+                # v0.71.17 #253 — RAW rows + per-epoch re-tokenising collator +
+                # a callback that advances the epoch salt at each epoch start.
+                from soup_cli.trainer.raft import (
+                    RaftEpochShuffleCollator,
+                    RaftEpochState,
+                    make_raft_epoch_callback,
+                )
+
+                epoch_state = RaftEpochState()
+                collator = RaftEpochShuffleCollator(
+                    self.tokenizer,
+                    max_length=cfg.data.max_length,
+                    epoch_state=epoch_state,
+                    shuffle_seed=cfg.data.raft_shuffle_seed,
+                    citation_faithful=bool(tcfg.citation_faithful),
+                    citation_style=tcfg.citation_style or "bracket",
+                )
+            else:
+                collator = RaftDataCollator(self.tokenizer)
             self.trainer = raft_cls(
                 model=self.model,
                 args=training_args,
                 train_dataset=train_ds,
                 eval_dataset=eval_ds,
-                data_collator=RaftDataCollator(self.tokenizer),
+                data_collator=collator,
                 processing_class=self.tokenizer,
             )
+            if self._raft_epoch_shuffle:
+                self.trainer.add_callback(make_raft_epoch_callback(epoch_state))
+                console.print(
+                    "[green]RAFT epoch-shuffle:[/] documents re-permuted each "
+                    "epoch (per-epoch salt)"
+                )
             if tcfg.citation_faithful:
                 console.print(
                     "[green]RAFT + citation-faithful:[/] answer-only mask "
@@ -514,6 +547,62 @@ class SFTTrainerWrapper:
         eval_ds = None
         if "val" in dataset and dataset["val"]:
             eval_ds = _map_and_filter(Dataset.from_list(dataset["val"]), "val")
+        return train_ds, eval_ds
+
+    def _prepare_raft_raw_dataset(self, dataset: dict, cfg, tcfg):
+        """v0.71.17 #253 — keep RAW RAFT rows for per-epoch re-shuffling.
+
+        Unlike :meth:`_prepare_raft_dataset` (which bakes one document order at
+        tokenisation time), this keeps the raw ``{query, golden_doc,
+        distractor_docs, answer}`` rows + a stable ``_raft_row_index`` so the
+        :class:`~soup_cli.trainer.raft.RaftEpochShuffleCollator` re-composes +
+        re-tokenises them with a per-epoch salt. Rows whose prompt fills
+        ``max_length`` at epoch 0 (answer fully truncated → all-masked) are
+        dropped up front so the dataset length is stable across epochs.
+        """
+        from datasets import Dataset
+
+        from soup_cli.utils.raft import build_raft_prompt, tokenize_raft_example
+
+        shuffle_seed = cfg.data.raft_shuffle_seed
+        citation = bool(tcfg.citation_faithful)
+        style = tcfg.citation_style or "bracket"
+        max_length = cfg.data.max_length
+        tokenizer = self.tokenizer
+
+        def _survives(raw: dict, idx: int) -> bool:
+            composed = build_raft_prompt(
+                raw, shuffle_seed=shuffle_seed, row_index=idx, epoch=0
+            )
+            tok = tokenize_raft_example(
+                tokenizer,
+                composed,
+                max_length=max_length,
+                citation_faithful=citation,
+                citation_style=style,
+            )
+            return any(w > 0.0 for w in tok["loss_weights"])
+
+        def _build_raw(rows: list, split: str):
+            kept: list[dict] = []
+            for idx, raw in enumerate(rows):
+                if _survives(raw, idx):
+                    row = dict(raw)
+                    row["_raft_row_index"] = idx
+                    kept.append(row)
+            dropped = len(rows) - len(kept)
+            if dropped:
+                console.print(
+                    f"[yellow]RAFT:[/] dropped {dropped} {split} row(s) whose "
+                    f"prompt filled max_length={max_length} (answer fully "
+                    "truncated -> all-masked). Raise max_length to keep them."
+                )
+            return Dataset.from_list(kept)
+
+        train_ds = _build_raw(dataset["train"], "train")
+        eval_ds = None
+        if "val" in dataset and dataset["val"]:
+            eval_ds = _build_raw(dataset["val"], "val")
         return train_ds, eval_ds
 
     def _resolve_mixed_precision(self, tcfg, base_model: str) -> tuple[bool, bool]:

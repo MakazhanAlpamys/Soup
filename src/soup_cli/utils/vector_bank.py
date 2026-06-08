@@ -31,6 +31,7 @@ Public surface:
 
 from __future__ import annotations
 
+import contextvars
 import json
 import logging
 import math
@@ -38,7 +39,7 @@ import os
 import re
 import stat
 from dataclasses import dataclass
-from typing import Any, Iterable, Tuple
+from typing import Any, Iterable, Optional, Tuple
 
 from soup_cli.utils.paths import (
     atomic_write_text,
@@ -390,17 +391,38 @@ class LoadedVectorBank:
             e.user_id: torch.tensor(e.scaling, dtype=torch.float32)
             for e in bank.entries
         }
-        self._active_user: str | None = None
+        # v0.71.17 #260 — the active user is REQUEST-LOCAL, not shared instance
+        # state. A ``ContextVar`` isolates the value per request even when a
+        # threaded server (sync FastAPI endpoints run in an anyio threadpool)
+        # handles two ``X-User-Id`` requests concurrently: each request's
+        # ``set_active_user`` writes its own context, and the decode hook reads
+        # back the value set in the SAME call stack. One ContextVar per bank
+        # instance (there is one bank per ``soup serve`` process).
+        self._active_user_var: contextvars.ContextVar[Optional[str]] = (
+            contextvars.ContextVar(
+                "soup_vector_bank_active_user", default=None
+            )
+        )
+
+    @property
+    def _active_user(self) -> Optional[str]:
+        """The active user for the CURRENT request context (or ``None``)."""
+        return self._active_user_var.get()
 
     def has_user(self, user_id: object) -> bool:
         return isinstance(user_id, str) and user_id in self._user_vectors
 
     def set_active_user(self, user_id: object) -> bool:
-        """Select the active user for the decode hook. Returns ``True`` if known."""
+        """Select the active user for the decode hook. Returns ``True`` if known.
+
+        The selection is request-local (stored in a ``ContextVar``) so a
+        concurrent request never observes another request's user. An unknown /
+        unset id self-clears to ``None`` (zero-delta no-op).
+        """
         if isinstance(user_id, str) and user_id in self._user_vectors:
-            self._active_user = user_id
+            self._active_user_var.set(user_id)
             return True
-        self._active_user = None
+        self._active_user_var.set(None)
         return False
 
     def delta_for_user(self, user_id: str, hidden):

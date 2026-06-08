@@ -312,8 +312,28 @@ curl -X POST http://localhost:8000/v1/chat/completions \
 
 The per-token delta is `v_user ⊙ (x @ Pᵀ)`, added to the last decoder layer's residual by a
 decode-time forward hook. `--bank-strength` scales the delta (magnitude capped at 100). The
-`--bank` path must live under your cwd. Serve single-worker: the active user is per-bank state,
-so a multi-worker deployment could race concurrent `X-User-Id` requests. (v0.71.12)
+`--bank` path must live under your cwd. The active user is resolved **per request** via a
+`contextvars.ContextVar`, so concurrent requests on a threaded server never race on shared state
+— each request (streaming and non-streaming) gets its own isolated active-user selection, and an
+absent / unknown id self-clears to the clean baseline. (v0.71.12 / per-request v0.71.17)
+
+### Serve a Trained MoLE (`soup serve --mole`)
+
+Serve a Mixture-of-LoRA-Experts adapter trained with `task=moe_lora_routing`. The training run
+writes a self-describing `mole_manifest.json` next to `mole_gate.pt`; `soup serve --mole <dir>`
+loads the base model + the N frozen task LoRAs + the trained gate and blends them **per token**
+at decode time (a custom blend loop — both non-streaming and SSE streaming):
+
+```bash
+# <dir> is the MoLE training output (contains mole_gate.pt + mole_manifest.json)
+soup serve --model ./mole_out --mole ./mole_out --device cuda
+```
+
+The base model comes from `--base` if set, otherwise the base recorded in the manifest. `--mole`
+requires `--backend transformers` and is mutually exclusive with `--bank` / `--steer` /
+`--adapters` / `--speculative-decoding`. The manifest + gate are cwd-contained, symlink-rejected,
+and size-capped, and the gate loads with `weights_only=True`. Because the blend recomputes the
+sequence each step (no KV cache), this path is best for small / demo models. (v0.71.17)
 
 ### Structured Output (JSON Schema / Regex)
 

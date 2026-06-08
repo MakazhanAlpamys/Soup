@@ -12,6 +12,41 @@ reproducing 70+ versions of notes.
 
 ## [Unreleased]
 
+## [0.71.17] - 2026-06-08
+
+### Added
+- **Serve-time MoLE** (closes #259). A `task='moe_lora_routing'` run now writes a
+  self-describing `mole_manifest.json` next to `mole_gate.pt`, and
+  `soup serve --mole <dir>` loads the base + N frozen task LoRAs + the trained
+  gate and blends them **per token** at decode time (custom blend loop —
+  non-streaming + streaming). `--mole` requires `--backend transformers` and is
+  mutually exclusive with `--bank` / `--steer` / `--adapters` /
+  `--speculative-decoding`. The base model comes from `--base` (or the manifest
+  when unset). Verified live on SmolLM2-135M (2 task adapters, real generation +
+  SSE streaming).
+- **Per-request multi-tenant vector banks** (closes #260). `soup serve --bank`
+  now resolves the active VeRA/VB-LoRA user per request via a
+  `contextvars.ContextVar`, so concurrent requests on a threaded server never
+  race on shared instance state. The streaming path re-selects the user inside
+  the generator's own context. Verified live: two `X-User-Id` headers produce
+  distinct steered outputs, an absent / unknown id self-clears to the clean
+  baseline (no cross-request leak), and a repeated user is deterministic.
+- **Epoch-aware RAFT document shuffle** (closes #253). `data.raft_epoch_shuffle:
+  true` re-permutes the golden + distractor documents **each training epoch**
+  (per-epoch salt) so the model can't latch onto one fixed citation slot.
+  `epoch=0` reproduces the legacy single-permutation order exactly. Verified live
+  on a 2-epoch SmolLM2-135M RAFT run.
+- **`soup diagnose --citation-style` / `--shuffle-seed`** (closes #254). The live
+  citation failure-mode probe now accepts the citation style (bracket / inline /
+  footnote) and the RAFT shuffle seed so the golden `[doc-N]` ids line up with
+  what the model saw at train time. Verified live (rows=6, mean_recall=1.000).
+
+### Fixed
+- MoLE `train()` now returns the `initial_loss` / `final_loss` / `total_steps` /
+  `duration_secs` / `duration` keys the generic train handler reads, so
+  `soup train task=moe_lora_routing` completes cleanly (previously raised
+  `KeyError: 'initial_loss'` after writing the gate). Surfaced by the #259 smoke.
+
 ## [0.71.16] - 2026-06-07
 
 ### Added

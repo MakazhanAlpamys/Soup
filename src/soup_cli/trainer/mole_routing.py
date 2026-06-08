@@ -220,6 +220,10 @@ class MoleRoutingTrainerWrapper:
         self.trainer = None
         self._adapter_names: list[str] = []
         self._dataset: Optional[dict] = None
+        # Set in setup(); consumed by train() to write the serve manifest (#259).
+        self._gate_cfg: Any = None
+        self._adapter_paths: list[str] = []
+        self._hidden_size: int = 0
 
     def setup(self, dataset: dict) -> None:
         """Load base + N task adapters (frozen) + the trainable gating kernel."""
@@ -282,6 +286,11 @@ class MoleRoutingTrainerWrapper:
             temperature=temperature,
             top_k=top_k,
         )
+        # Keep the resolved gate config + adapter paths for the serve-time
+        # manifest written in train() (#259).
+        self._gate_cfg = gate_cfg
+        self._adapter_paths = list(adapters)
+        self._hidden_size = hidden_size
         gate = build_gating_kernel(gate_cfg)
         gate.requires_grad_(True)
         if self.device == "cuda":
@@ -374,9 +383,44 @@ class MoleRoutingTrainerWrapper:
 
         gate_path = output_dir / "mole_gate.pt"
         torch.save(self.model.mole_gate.state_dict(), str(gate_path))
+        # v0.71.17 #259 — write a self-describing manifest next to the gate so
+        # `soup serve --mole <dir>` can reconstruct the decode-time blend
+        # (base + N frozen task LoRAs + gate geometry).
+        from soup_cli.utils.mole_routing import (
+            MoleServeManifest,
+            write_mole_manifest,
+        )
+
+        manifest = MoleServeManifest(
+            base=cfg.base,
+            adapters=tuple(self._adapter_paths),
+            num_task_adapters=self._gate_cfg.num_task_adapters,
+            hidden_dim=self._gate_cfg.hidden_dim,
+            top_k=self._gate_cfg.top_k,
+            temperature=self._gate_cfg.temperature,
+        )
+        manifest_path = write_mole_manifest(manifest, str(output_dir))
+        console.print(
+            f"[green]MoLE serve manifest written:[/] {manifest_path}"
+        )
+        # Match the generic train.py result shape (initial/final loss, duration,
+        # total_steps) so `soup train task=moe_lora_routing` completes cleanly,
+        # while keeping the MoLE-specific keys (gate_path / manifest_path).
+        logs = self.trainer.state.log_history
+        train_losses = [entry["loss"] for entry in logs if "loss" in entry]
+        duration = float(result.metrics.get("train_runtime", 0.0))
+        hours = int(duration // 3600)
+        minutes = int((duration % 3600) // 60)
+        duration_str = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
         return {
             "status": "ok",
+            "initial_loss": train_losses[0] if train_losses else 0,
+            "final_loss": train_losses[-1] if train_losses else 0,
+            "duration": duration_str,
+            "duration_secs": duration,
+            "total_steps": self.trainer.state.global_step,
             "output_dir": str(output_dir),
             "gate_path": str(gate_path),
+            "manifest_path": str(manifest_path),
             "metrics": result.metrics,
         }

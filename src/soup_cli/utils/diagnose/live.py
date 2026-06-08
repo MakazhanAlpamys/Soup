@@ -200,6 +200,8 @@ def run_live_diagnose(
     device: Optional[str] = None,
     tokenizer: Optional[object] = None,
     soup_version: str = "",
+    citation_style: str = "bracket",
+    shuffle_seed: Optional[int] = None,
 ) -> "FailureReport":
     """Live model-driven diagnose run (#165). Returns a ``FailureReport``.
 
@@ -310,7 +312,12 @@ def run_live_diagnose(
 
         if any(is_raft_row(r) for r in rows):
             try:
-                scores["citation"] = score_citation(rows, adapter_gen)
+                scores["citation"] = score_citation(
+                    rows,
+                    adapter_gen,
+                    citation_style=citation_style,
+                    shuffle_seed=shuffle_seed,
+                )
             except (ValueError, TypeError):
                 scores["citation"] = neutral_score("citation", "probe failed")
 

@@ -255,6 +255,23 @@ def diagnose(
     device: Optional[str] = typer.Option(
         None, "--device", help="Device for the live run (cuda / cpu)."
     ),
+    citation_style: str = typer.Option(
+        "bracket",
+        "--citation-style",
+        help=(
+            "Citation style for the live RAFT citation probe: bracket "
+            "([doc-id]) / inline ((doc-id)) / footnote ([^id]). Must match the "
+            "style the model was trained to emit. (v0.71.17 #254)"
+        ),
+    ),
+    shuffle_seed: Optional[int] = typer.Option(
+        None,
+        "--shuffle-seed",
+        help=(
+            "RAFT document-shuffle seed for the live citation probe (composes "
+            "the [doc-N] ids the model is scored against). (v0.71.17 #254)"
+        ),
+    ),
 ) -> None:
     """Compute a 6-mode FailureReport for a completed run.
 
@@ -266,6 +283,18 @@ def diagnose(
         raise typer.BadParameter("run_id must be a non-empty string")
     if "\x00" in run_id or len(run_id) > 512:
         raise typer.BadParameter("run_id has a null byte or is too long")
+
+    # v0.71.17 #254 — validate the citation style up front (a typo surfaces
+    # before any model load). Reuses the closed allowlist validator.
+    from soup_cli.utils.citation_faithful import validate_citation_style
+
+    try:
+        resolved_citation_style = validate_citation_style(citation_style)
+    except (TypeError, ValueError) as exc:
+        console.print(
+            f"[red]Invalid --citation-style:[/] {escape(str(exc))}"
+        )
+        raise typer.Exit(code=2) from exc
 
     if base_model is not None:
         from soup_cli.utils.diagnose.live import run_live_diagnose
@@ -279,6 +308,8 @@ def diagnose(
                 device=device,
                 tokenizer=tokenizer,
                 soup_version=__version__,
+                citation_style=resolved_citation_style,
+                shuffle_seed=shuffle_seed,
             )
         except (ValueError, TypeError, OSError, RuntimeError) as exc:
             console.print(

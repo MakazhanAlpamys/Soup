@@ -263,6 +263,11 @@ soup diagnose my-run-id
 soup diagnose my-run-id --base-model HuggingFaceTB/SmolLM2-135M \
     --adapter ./out --dataset train.jsonl --tokenizer HuggingFaceTB/SmolLM2-135M
 
+# RAFT models: tell the citation probe which style + shuffle seed the run used
+# so the golden [doc-N] ids line up with what the model saw at train time (v0.71.17)
+soup diagnose my-run-id --base-model HuggingFaceTB/SmolLM2-135M --adapter ./raft_out \
+    --dataset raft.jsonl --citation-style bracket --shuffle-seed 1
+
 # Compute scores from a pre-built evidence JSON
 soup diagnose my-run-id --evidence evidence.json --output diag.json
 
