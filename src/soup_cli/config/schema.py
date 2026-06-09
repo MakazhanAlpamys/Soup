@@ -3823,9 +3823,12 @@ class SoupConfig(BaseModel):
         """v0.40.5 (#66) — Quant Menu (gptq/awq/hqq:Nbit/aqlm/eetq/mxfp4/fp8)
         is wired across every transformer-backend trainer (sft / dpo / grpo /
         kto / orpo / simpo / ipo / ppo / reward_model / pretrain / embedding /
-        bco). MLX backend still rejected (no equivalent kernels). Vision/audio
-        modality multi-trainer wiring deferred (mirrors v0.38.1 stub-then-live
-        pattern for non-text modalities).
+        bco). MLX backend still rejected (no equivalent kernels).
+
+        v0.71.19 (#81) — vision / audio modality wiring landed: the SFT
+        ``_setup_vision_transformers`` / ``_setup_audio_transformers`` paths now
+        thread the unified ``build_quantization_config_for_loader``, so the
+        modality gate is dropped (only the mlx-backend gate remains).
         """
         from soup_cli.utils.quant_menu import is_quant_menu_format
 
@@ -3838,12 +3841,6 @@ class SoupConfig(BaseModel):
                 f"quantization={quant!r} is not supported on the mlx backend "
                 "(no equivalent kernels). Use backend='transformers' or "
                 "switch to quantization in {'4bit', '8bit', 'none'}."
-            )
-        if self.modality != "text":
-            raise ValueError(
-                f"quantization={quant!r} (Quant Menu) is wired for "
-                f"modality='text' only; got modality={self.modality!r}. "
-                "Vision/audio multi-modal wiring is tracked for a follow-up patch."
             )
         return self
 

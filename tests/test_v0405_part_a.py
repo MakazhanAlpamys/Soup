@@ -78,19 +78,22 @@ class TestQuantMenuMultiTrainerMlxRejection:
             load_config_from_string(_build_yaml(task, "gptq", backend="mlx"))
 
 
-class TestQuantMenuVisionStillSftOnly:
-    """Modality gate is independent — Quant Menu still text-only."""
+class TestQuantMenuVisionNowSupported:
+    """v0.71.19 (#81) — the modality gate was dropped: the SFT vision/audio
+    setup paths thread the unified Quant Menu loader, so vision/audio configs
+    with a quant-menu format now load (only the mlx-backend gate remains)."""
 
-    def test_vision_modality_rejected_even_after_widening(self):
-        with pytest.raises(ValueError, match="modality|vision"):
-            load_config_from_string(
-                """base: m
+    def test_vision_modality_now_accepted(self):
+        cfg = load_config_from_string(
+            """base: m
 task: sft
 modality: vision
 data: {train: d.jsonl, format: llava}
 training: {quantization: gptq}
 """
-            )
+        )
+        assert cfg.modality == "vision"
+        assert cfg.training.quantization == "gptq"
 
 
 # ---------------------------------------------------------------------------

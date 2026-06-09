@@ -167,6 +167,12 @@ def make_multipack_trainer_class(base_cls: type) -> type:
             delegate to ``super().get_train_dataloader()`` so the subclass
             is safe to instantiate even when multipack is disabled at
             runtime (matches the ``_get_train_sampler`` fallback policy).
+
+            v0.71.19 #80 — when running distributed (``num_processes > 1`` via
+            FSDP / DeepSpeed ZeRO / DDP) the loader is routed through
+            ``self.accelerator.prepare`` so accelerate shards the packed bins
+            across ranks. The single-process path returns the raw DataLoader
+            unchanged.
             """
             lengths = getattr(self, _LENGTHS_ATTR, None)
             max_seq = getattr(self, _MAX_SEQ_ATTR, None)
@@ -210,13 +216,47 @@ def make_multipack_trainer_class(base_cls: type) -> type:
             )
 
             data_collator = getattr(self, "data_collator", None)
-            return DataLoader(
+            loader = DataLoader(
                 train_dataset,
                 batch_sampler=sampler,
                 collate_fn=data_collator,
                 num_workers=num_workers,
                 pin_memory=pin_memory,
             )
+
+            # v0.71.19 #80 — under FSDP / DeepSpeed ZeRO / DDP the packed bins
+            # must be sharded across ranks, otherwise every rank trains on the
+            # SAME data. Route the DataLoader through ``accelerator.prepare`` —
+            # exactly what HF Trainer's own ``get_train_dataloader`` does — so
+            # accelerate wraps ``batch_sampler`` in a ``BatchSamplerShard`` that
+            # round-robins whole bins to each rank (preserving the FFD packing).
+            # With accelerate's default ``even_batches=True`` the per-rank batch
+            # count is equalised, which is the mechanism that avoids a
+            # collective-op hang at the epoch boundary. The ``seed`` is identical
+            # on every rank (set from the same config), so all ranks agree on the
+            # global bin order BEFORE sharding — do NOT add ``+ rank`` to it.
+            # Full multi-GPU validation is a QA issue (no multi-GPU box here);
+            # this path is mocked-tested.
+            #
+            # Gated on ``num_processes > 1`` so the single-process path stays on
+            # the raw DataLoader (byte-for-byte the validated v0.40.4 behaviour;
+            # HF Trainer's ``_prepare_inputs`` handles single-device placement).
+            # When no accelerator is present (older transformers / a direct
+            # unit-test construction) also fall back to the raw loader. The
+            # ``isinstance(int)`` + ``not isinstance(bool)`` guard is defence-in
+            # -depth: ``MagicMock().num_processes > 1`` is truthy and ``bool`` is
+            # an ``int`` subclass.
+            accelerator = getattr(self, "accelerator", None)
+            prepare = getattr(accelerator, "prepare", None)
+            num_processes = getattr(accelerator, "num_processes", 1)
+            if (
+                callable(prepare)
+                and isinstance(num_processes, int)
+                and not isinstance(num_processes, bool)
+                and num_processes > 1
+            ):
+                return prepare(loader)
+            return loader
 
     MultipackTrainer.__name__ = f"Multipack{base_cls.__name__}"
     MultipackTrainer.__qualname__ = MultipackTrainer.__name__

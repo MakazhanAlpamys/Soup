@@ -12,6 +12,37 @@ reproducing 70+ versions of notes.
 
 ## [Unreleased]
 
+## [0.71.19] - 2026-06-09
+
+### Added
+- **Quant Menu for vision / audio modality** (closes #81). The Quant Menu
+  (`gptq` / `awq` / `hqq:Nbit` / `aqlm` / `eetq` / `mxfp4` / `fp8`) was rejected
+  by the config modality gate for `modality in {vision, audio}` — those paths
+  carried inline `BitsAndBytesConfig` blocks that handled only `4bit` / `8bit`.
+  v0.71.19 drops the gate (the mlx-backend gate is retained) and threads the
+  unified `build_quantization_config_for_loader` through
+  `_setup_vision_transformers` / `_setup_audio_transformers`, so multi-modal SFT
+  can train a LoRA on top of any pre-quantized base. The `4bit` / `8bit` config
+  shapes are byte-for-byte the same as the old inline blocks; `mxfp4` still
+  routes through `prepare_model_for_kbit_training`. Verified: the unified loader
+  returns the right config object for every format on both modalities, and
+  `_setup_vision_transformers` threads a `GPTQConfig` into
+  `AutoModelForVision2Seq.from_pretrained`.
+
+### Fixed
+- **Multipack DataLoader sharding under FSDP / DeepSpeed ZeRO / DDP** (closes
+  #80). The multipack `get_train_dataloader` override built a raw `DataLoader`
+  and returned it directly, so under distribution every rank trained on the
+  **same** packed bins (no data sharding). It now routes the loader through
+  `accelerator.prepare(...)` when `num_processes > 1` — exactly what HF Trainer's
+  own `get_train_dataloader` does — so accelerate's `BatchSamplerShard`
+  round-robins whole bins across ranks (preserving the FFD packing) and
+  equalises per-rank batch counts. The single-process path is unchanged
+  (byte-for-byte the validated v0.40.4 raw-DataLoader behaviour). Verified live:
+  a single-GPU multipack SFT on SmolLM2-135M trains end-to-end (RTX 3050). Full
+  multi-GPU validation remains a QA item (no multi-GPU box); the distributed
+  routing is mocked-tested.
+
 ## [0.71.18] - 2026-06-08
 
 ### Added

@@ -549,17 +549,21 @@ training: {quantization: hqq:4bit}
 """
             )
 
-    def test_quant_menu_with_vision_modality_rejected(self):
-        with pytest.raises(ValueError, match="modality|vision|v0.38.1"):
-            load_config_from_string(
-                """
+    def test_quant_menu_with_vision_modality_now_accepted(self):
+        # v0.71.19 (#81) — vision / audio modality wiring landed: the SFT
+        # vision/audio setup paths thread build_quantization_config_for_loader,
+        # so the Quant Menu modality gate is dropped (only mlx still rejected).
+        cfg = load_config_from_string(
+            """
 base: m
 task: sft
 modality: vision
 data: {train: d.jsonl, format: llava}
 training: {quantization: gptq}
 """
-            )
+        )
+        assert cfg.modality == "vision"
+        assert cfg.training.quantization == "gptq"
 
 
 # ---------------------------------------------------------------------------

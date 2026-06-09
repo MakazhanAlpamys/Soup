@@ -848,7 +848,7 @@ class SFTTrainerWrapper:
     def _setup_vision_transformers(self, cfg, tcfg):
         """Load vision-language model via transformers (LLaMA-Vision, Qwen2-VL, etc.)."""
         from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
-        from transformers import AutoModelForVision2Seq, AutoProcessor, BitsAndBytesConfig
+        from transformers import AutoModelForVision2Seq, AutoProcessor
 
         console.print(f"[dim]Loading vision processor: {cfg.base}[/]")
         self.processor = AutoProcessor.from_pretrained(
@@ -856,19 +856,16 @@ class SFTTrainerWrapper:
         )
         self.tokenizer = self.processor  # SFTTrainer uses processing_class
 
-        # Quantization
-        bnb_config = None
-        if tcfg.quantization == "4bit":
-            from soup_cli.utils.gpu import get_compute_dtype
+        # Quantization (v0.71.19 #81) — unified Quant Menu loader. Replaces the
+        # inline BitsAndBytesConfig block so vision training gets the full menu
+        # (gptq / awq / hqq:Nbit / aqlm / eetq / mxfp4 / fp8 + bnb 4bit/8bit).
+        from soup_cli.utils.quant_menu import build_quantization_config_for_loader
 
-            bnb_config = BitsAndBytesConfig(
-                load_in_4bit=True,
-                bnb_4bit_quant_type="nf4",
-                bnb_4bit_compute_dtype=get_compute_dtype(),
-                bnb_4bit_use_double_quant=True,
-            )
-        elif tcfg.quantization == "8bit":
-            bnb_config = BitsAndBytesConfig(load_in_8bit=True)
+        quant_config_obj = build_quantization_config_for_loader(
+            tcfg=tcfg,
+            base=cfg.base,
+            console=console,
+        )
 
         console.print(f"[dim]Loading vision model: {cfg.base}[/]")
         dev_map = "cpu" if self.device == "cpu" else "auto"
@@ -876,8 +873,8 @@ class SFTTrainerWrapper:
             "trust_remote_code": self._trust_remote_code,
             "device_map": dev_map,
         }
-        if bnb_config:
-            model_kwargs["quantization_config"] = bnb_config
+        if quant_config_obj is not None:
+            model_kwargs["quantization_config"] = quant_config_obj
 
         self.model = AutoModelForVision2Seq.from_pretrained(cfg.base, **model_kwargs)
 
@@ -943,7 +940,7 @@ class SFTTrainerWrapper:
         """Load audio-language model via transformers (Qwen2-Audio, Whisper, etc.)."""
         from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
         from rich.panel import Panel as RichPanel
-        from transformers import AutoModel, AutoProcessor, BitsAndBytesConfig
+        from transformers import AutoModel, AutoProcessor
 
         console.print(
             RichPanel(
@@ -962,19 +959,16 @@ class SFTTrainerWrapper:
         )
         self.tokenizer = self.processor  # SFTTrainer uses processing_class
 
-        # Quantization
-        bnb_config = None
-        if tcfg.quantization == "4bit":
-            from soup_cli.utils.gpu import get_compute_dtype
+        # Quantization (v0.71.19 #81) — unified Quant Menu loader. Replaces the
+        # inline BitsAndBytesConfig block so audio training gets the full menu
+        # (gptq / awq / hqq:Nbit / aqlm / eetq / mxfp4 / fp8 + bnb 4bit/8bit).
+        from soup_cli.utils.quant_menu import build_quantization_config_for_loader
 
-            bnb_config = BitsAndBytesConfig(
-                load_in_4bit=True,
-                bnb_4bit_quant_type="nf4",
-                bnb_4bit_compute_dtype=get_compute_dtype(),
-                bnb_4bit_use_double_quant=True,
-            )
-        elif tcfg.quantization == "8bit":
-            bnb_config = BitsAndBytesConfig(load_in_8bit=True)
+        quant_config_obj = build_quantization_config_for_loader(
+            tcfg=tcfg,
+            base=cfg.base,
+            console=console,
+        )
 
         console.print(f"[dim]Loading audio model: {cfg.base}[/]")
         dev_map = "cpu" if self.device == "cpu" else "auto"
@@ -982,8 +976,8 @@ class SFTTrainerWrapper:
             "trust_remote_code": self._trust_remote_code,
             "device_map": dev_map,
         }
-        if bnb_config:
-            model_kwargs["quantization_config"] = bnb_config
+        if quant_config_obj is not None:
+            model_kwargs["quantization_config"] = quant_config_obj
 
         # Use AutoModel for audio models — AutoModelForCausalLM doesn't handle
         # audio-language architectures (Qwen2-Audio, Whisper, etc.)

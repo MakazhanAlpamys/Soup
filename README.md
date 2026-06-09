@@ -49,22 +49,16 @@ infrastructure instead of improving models. Soup fixes that.
 
 ## What's New
 
-**v0.71.18 — Distill + agent depth.** Deeper distillation and agent-eval, validated live on
-Windows + RTX 3050 (tiny-gpt2 + SmolLM2-135M):
+**v0.71.19 — Quant-menu + multipack hardening.** Two fixes validated on Windows + RTX 3050:
 
-- **MiniLLM true on-policy rollout** — `soup train --minillm-enabled --minillm-on-policy` replaces the
-  offline distribution blend with the real on-policy procedure (sample a fresh autoregressive rollout
-  from the per-token teacher/student mixture, then length-normalised reverse-KL). Tune the rollout with
-  `training.minillm_rollout_length`.
-- **Cross-tokenizer ULD for fully-disjoint tokenizers** — `training.uld_strategy: wasserstein_aligned`
-  aligns the student and teacher token sequences over their decoded character spans, so you can distill
-  across genuinely different tokenizers (e.g. a GPT-2 BPE student from a Llama SentencePiece teacher).
-- **`soup agent eval --sandbox`** — each heuristic-passing tool-call prediction is *executed* against a
-  generated mock of the endpoint in the RLVR sandbox and classified ok / tool_error / timeout /
-  arg_error (strong isolation on POSIX; subprocess + timeout + output cap + network guard everywhere).
-- **`soup train --cloud modal`** — no local GPU? Render a self-contained Modal.com app from your
-  `soup.yaml` (config base64-embedded, no secrets) for serverless GPU training; plan-only by default,
-  `--cloud-submit` submits live. `pip install 'soup-cli[modal]'`.
+- **Quant Menu for vision / audio** — the full quant menu (`gptq` / `awq` / `hqq:Nbit` / `aqlm` /
+  `eetq` / `mxfp4` / `fp8`) now works for `modality: vision` and `modality: audio`, not just text.
+  The vision/audio setup paths thread the same unified quantization loader as the text path, so you
+  can fine-tune a LoRA on top of a pre-quantized multi-modal base.
+- **Multipack sharding under multi-GPU** — `training.multipack: true` now shards the FFD-packed bins
+  correctly across ranks under FSDP / DeepSpeed ZeRO / DDP (the DataLoader is routed through accelerate
+  exactly as HF Trainer does). The single-GPU path is unchanged. Full multi-GPU validation remains a
+  QA item; the routing is mocked-tested.
 
 Full history: [CHANGELOG.md](CHANGELOG.md) &middot; [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 
