@@ -204,8 +204,11 @@ trainers (SFT / DPO / GRPO / KTO / ORPO / SimPO / IPO / PPO / RewardModel /
 Pretrain / Embedding / BCO). PPO's reward model also loads with the same Quant
 Menu config as the policy when `tcfg` is passed in, so a GPTQ-policy + GPTQ-reward
 run does not silently OOM in fp16. MLX backend is rejected with a distinct error
-message; vision / audio modality is still SFT-only inline-BNB (multi-modal
-Quant Menu wiring tracked as a follow-up).
+message; vision and audio modality now thread the same unified Quant Menu loader
+(the `modality: text` gate was dropped in v0.71.19), so the full menu —
+`gptq` / `awq` / `hqq:*` / `aqlm` / `eetq` / `mxfp4` / `fp8` — applies to
+multi-modal SFT too (a given vision/audio checkpoint still needs a class + kernel
+that supports the chosen format, e.g. `autoawq` for awq).
 
 
 ## Activation Offloading (Small-VRAM Large-Batch)
