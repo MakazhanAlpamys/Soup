@@ -292,6 +292,30 @@ class GRPOTrainerWrapper:
         # --- Dataset ---
         # GRPO expects prompts — extract from messages or use prompt field
         train_data = _prepare_grpo_dataset(dataset["train"])
+
+        # v0.71.21 #125 — multi-turn agent rollout backend. The backend
+        # receives the dataset prompts as seeds; its rows REPLACE the
+        # prompt dataset (the env is the data source).
+        if tcfg.rollout_backend is not None:
+            from soup_cli.utils.agent_rollout import launch_rollout
+
+            rollout_result = launch_rollout(
+                tcfg.rollout_backend,
+                prompts=[row["prompt"] for row in train_data],
+                rollout_func=tcfg.rollout_func,
+                model=self.model,
+                tokenizer=self.tokenizer,
+                reward_fn=reward_fn,
+            )
+            train_data = _prepare_grpo_dataset(
+                [dict(row) for row in rollout_result.rows]
+            )
+            console.print(
+                f"[green]Rollout backend '{tcfg.rollout_backend}':[/] "
+                f"{len(train_data)} prompts collected "
+                "(replacing dataset prompts)"
+            )
+
         train_ds = Dataset.from_list(train_data)
         eval_ds = None
         if "val" in dataset and dataset["val"]:
@@ -345,6 +369,22 @@ class GRPOTrainerWrapper:
             "num_generations": tcfg.num_generations,
             "max_completion_length": cfg.data.max_length,
         }
+
+        # v0.71.21 #124 — vLLM sleep mode: set TRL's GRPOConfig hook when the
+        # installed TRL exposes it; otherwise print a friendly advisory
+        # (Soup's own vLLM engine factory honors sleep_mode=True).
+        if tcfg.vllm_sleep_mode:
+            import inspect as _inspect
+
+            from soup_cli.utils.grpo_long_context import (
+                maybe_enable_trl_sleep_mode,
+            )
+
+            maybe_enable_trl_sleep_mode(
+                grpo_kwargs,
+                _inspect.signature(GRPOConfig).parameters,
+                console,
+            )
 
         # CPU support: set use_cpu and prevent empty generations
         if self.device == "cpu":

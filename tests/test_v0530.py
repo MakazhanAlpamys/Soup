@@ -412,11 +412,12 @@ class TestFP8Attention:
                 "training: {fp8_attention: true}\n"
             )
 
-    def test_apply_deferred(self):
+    def test_apply_live_gated(self):
+        """v0.71.21 #141 lifted the stub — now a friendly hw/dep gate."""
         from soup_cli.utils.advanced_precision import apply_fp8_attention
 
-        with pytest.raises(NotImplementedError, match="v0.53.1"):
-            apply_fp8_attention()
+        with pytest.raises((RuntimeError, ValueError), match="(?i)torchao|hopper"):
+            apply_fp8_attention(object())
 
 
 class TestNVFP4:
@@ -495,11 +496,12 @@ class TestNVFP4:
                 "training: {nvfp4: true}\n"
             )
 
-    def test_apply_deferred(self):
+    def test_apply_live_gated(self):
+        """v0.71.21 #141 lifted the stub — now a friendly Blackwell gate."""
         from soup_cli.utils.advanced_precision import apply_nvfp4
 
-        with pytest.raises(NotImplementedError, match="v0.53.1"):
-            apply_nvfp4()
+        with pytest.raises(RuntimeError, match="Blackwell"):
+            apply_nvfp4(object())
 
 
 class TestUnslothBNB4Bit:

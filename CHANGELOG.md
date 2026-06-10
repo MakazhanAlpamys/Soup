@@ -12,6 +12,68 @@ reproducing 70+ versions of notes.
 
 ## [Unreleased]
 
+## [0.71.21] - 2026-06-10
+
+### Added
+- **Precision & rollout lift (BETA, hw-gated)** — lifts five deferred
+  `NotImplementedError` stubs to live code.
+  - **FP8 attention + NVFP4 (closes #141).** `training.fp8_attention: true`
+    now converts the model's attention projections (q/k/v/o + fused qkv
+    variants) to FP8 training modules via torchao's
+    `convert_to_float8_training` with an attention-only `module_filter_fn`
+    (Hopper SM ≥ 9.0 gate); `training.nvfp4: true` quantises via torchao's
+    `NVFP4Config` (Blackwell SM ≥ 10.0 gate). Both are wired into the v0.28
+    speed/memory pipeline and degrade to a visible yellow advisory when the
+    gate fires — a conversion failing partway raises an honest "model may be
+    PARTIALLY converted" error rather than silently training on a
+    half-converted model.
+  - **vLLM sleep mode (closes #124).** `training.vllm_sleep_mode: true` is
+    live: `create_vllm_engine(sleep_mode=True)` sets
+    `AsyncEngineArgs.enable_sleep_mode` (vLLM ≥ 0.7 gate with a friendly
+    upgrade message), the new `vllm_sleep_cycle(engine, level=1|2)` context
+    manager wraps the optimisation step (wake in `finally`), and the GRPO
+    trainer threads the flag into TRL's `GRPOConfig` when the installed TRL
+    exposes the hook (advisory otherwise).
+  - **Multi-turn agent rollout launchers (closes #125).** `soup train` with
+    `task: grpo` + `training.rollout_backend: openenv` +
+    `training.rollout_func: my_module:fn` now runs a LIVE rollout: the
+    resolver imports the operator's callable (same trusted-code policy as
+    `data.prompt_strategy`), feeds it the dataset prompts as seeds, and the
+    returned `{prompt, answer?}` rows replace the prompt dataset. Rows are
+    normalised (extra keys stripped, message-list prompts deep-copied,
+    non-string answers rejected loudly). `art` / `ruler` / `nemo_gym` raise a
+    friendly ImportError when the backend package is missing and an honest
+    BETA gate when present (injectable `_EXTERNAL_ROLLOUT_RUNNERS` seam).
+    Validated by a real GRPO + openenv rollout train on SmolLM2-135M.
+  - **Apple-adapter conversion (closes #228).** `soup apple-adapter` is live
+    for `hf-to-mlx` / `mlx-to-hf`: PEFT LoRA safetensors ↔ mlx-lm adapters
+    with both matrices transposed (`lora_A [r,in]` ↔ `lora_a [in,r]`),
+    bf16 sources upcast via the torch loader, `adapters.safetensors` +
+    `num_layers` emitted for mlx-lm's `load_adapters`, rank/alpha/dropout
+    carried through, legacy `adapters.npz` still read, optional v0.60
+    Merkle-root signing. The `*-to-apple` directions stay upstream-gated
+    (no published FoundationModels adapter spec). Validated by a real bf16
+    PEFT adapter round-tripping with numeric equality.
+  - **Llama-4 expert delinearization (closes #97).** `soup
+    delinearize-llama4` now runs a live torch runtime: fused 2-D expert
+    tensors `[E*dim_in, dim_out]` reshape to 3-D `[E, dim_in, dim_out]`
+    (expert count from `config.json` or `--num-experts`), other tensors pass
+    through, JSON sidecars are copied, writes are atomic. `--plan-only`
+    keeps the old render-and-exit flow.
+
+### Fixed
+- `safetensors.numpy.save` silently mangles non-contiguous (transposed)
+  arrays — the apple-adapter writer now makes every array C-contiguous
+  first (caught by the new round-trip assertions).
+
+### Known limitations
+- fp8_attention / nvfp4 / vllm_sleep_mode are BETA hardware-gated — the
+  converters and gates ship validated via capability probes and fake-module
+  dispatch tests, but end-to-end runs need a Hopper/Blackwell GPU + torchao
+  (or vLLM ≥ 0.7), none of which exist on the maintainer's RTX 3050 /
+  Windows box. The `art` / `ruler` / `nemo_gym` rollout adapters are
+  honestly BETA-gated until validated against the upstream packages.
+
 ## [0.71.20] - 2026-06-09
 
 ### Added

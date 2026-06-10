@@ -468,12 +468,13 @@ soup serve --model ./output --kv-cache-type q8_0     # 8-bit quantized KV cache 
 - vLLM / SGLang serve wiring is still tracked under [#140](https://github.com/MakazhanAlpamys/Soup/issues/140) (`infra-blocked`).
 
 
-## FP8 Attention + NVFP4 + Native `unsloth_bnb_4bit` (v0.53.0)
+## FP8 Attention + NVFP4 + Native `unsloth_bnb_4bit`
 
-Three new TrainingConfig bools extend the v0.28.0 FP8 menu:
+Three TrainingConfig bools extend the v0.28.0 FP8 menu. `fp8_attention` and `nvfp4` are LIVE
+torchao converters as of v0.71.21 (hardware-gated):
 
-- `fp8_attention: true` — requires `quantization_aware: fp8` AND a non-MLX backend. Targets axolotl parity for FP8 attention on Hopper+ GPUs.
-- `nvfp4: true` — Blackwell-only FP4 training. Gated to non-MLX + `modality: text`; the SM ≥ 12.0 runtime check fires at trainer construction.
+- `fp8_attention: true` — requires `quantization_aware: fp8` AND a non-MLX backend. Converts the attention projections (q/k/v/o and fused variants) to torchao float8 training on Hopper+ GPUs. Missing torchao or a pre-Hopper GPU degrades to a clear advisory; a conversion-phase failure raises an honest "model may be PARTIALLY converted" error instead of training on a half-converted model.
+- `nvfp4: true` — Blackwell-only FP4 training via torchao `NVFP4Config` + `quantize_`. Gated to non-MLX + `modality: text`; the SM ≥ 10 runtime check fires at trainer construction.
 - `unsloth_bnb_4bit: true` — promotes "Unsloth Dynamic 4-bit" from an implicit `backend=unsloth + quantization=4bit` combo to a named flag. Mutual rejection of inconsistent combos at config load.
 
 Cross-validator ordering picks the most actionable error: `quantization_aware='fp8'` prerequisite fires before the MLX rejection on `fp8_attention`, so a YAML missing both surfaces the deeper issue first.

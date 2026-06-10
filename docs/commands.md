@@ -24,6 +24,7 @@ soup push --model ./output --repo user/name   Upload to HuggingFace
 soup push --model ./output --repo user/name --collection user/coll-abc123  Add to HF Collection
 soup merge --adapter ./output                 Merge LoRA with base model
 soup merge-sharded-fsdp-weights ./shards -o merged.safetensors  Consolidate FSDP shards into one safetensors (v0.71.14; --plan-only previews)
+soup delinearize-llama4 ./src --target ./out [--num-experts N] [--plan-only]  Live Llama-4 fused-expert reshape [E*din,dout] -> [E,din,dout] + sidecar copy (v0.71.21)
 soup export --model ./output --format gguf    Export to GGUF (Ollama)
 soup export --model ./output --deploy ollama  Export GGUF + auto-deploy to Ollama
 soup export --model ./output --format onnx    Export to ONNX
@@ -225,7 +226,7 @@ soup lock show / soup lock check              Show + drift-check (exit 3 on drif
 soup compile <program.py> --eval <suite> [--optimizer mipro|gepa|textgrad|copro|bootstrap_fewshot] [--plan-only]  DSPy / GEPA / TextGrad prompt-program compiler — live (v0.71.13; pip install 'soup-cli[compile]')
 soup distill-prompt --traces <jsonl> --teacher <m> --student <m> --strategy sft|preference|kl [--provider ollama|anthropic|vllm] [--base-url <url>] [--temperature F] [--max-rows N]  Distill prompt-heavy traces via a live teacher (v0.71.13)
 soup compile-tools <spec.json|yaml> --eval <jsonl> [--optimizer textgrad|gepa] [--plan-only]  TextGrad / GEPA tool-schema optimiser — live (v0.71.13; pip install 'soup-cli[compile]')
-soup apple-adapter <source-dir> --direction hf-to-mlx|mlx-to-hf|hf-to-apple|mlx-to-apple --output <dir> [--sign]  HF / MLX / Apple FoundationModels adapter conversion (v0.68.0)
+soup apple-adapter <source-dir> --direction hf-to-mlx|mlx-to-hf|hf-to-apple|mlx-to-apple --output <dir> [--sign] [--plan-only]  PEFT LoRA <-> mlx-lm adapter conversion — live (v0.71.21; *-to-apple upstream-gated exit 3)
 soup local-rl init --db <path>                Create personal-LLM flywheel SQLite schema (v0.68.0)
 soup local-rl status --db <path>              Print interactions / thumbs-up / thumbs-down counters
 soup local-rl record --db <path> --prompt <q> --response <r> --thumb up|down  Append thumbs record

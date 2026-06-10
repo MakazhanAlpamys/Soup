@@ -41,6 +41,7 @@ def create_vllm_engine(
     num_speculative_tokens: int = 5,
     enable_prefix_caching: bool = False,
     quantization: Optional[str] = None,
+    sleep_mode: bool = False,
 ):
     """Create a vLLM AsyncLLMEngine for serving.
 
@@ -54,6 +55,8 @@ def create_vllm_engine(
         dtype: Data type for model weights.
         enable_prefix_caching: Enable vLLM's automatic prefix cache — big
             win for RAG / agent workloads with shared system prompts.
+        sleep_mode: Enable vLLM sleep/standby support (v0.71.21 #124 —
+            requires vLLM >= 0.7; raises a friendly RuntimeError otherwise).
 
     Returns:
         (engine, engine_model_name) tuple.
@@ -110,6 +113,13 @@ def create_vllm_engine(
             )
         engine_args.speculative_model = speculative_model
         engine_args.num_speculative_tokens = num_speculative_tokens
+
+    # v0.71.21 #124 — vLLM sleep/standby support (engine.sleep()/wake_up()).
+    # apply_vllm_sleep_mode raises a friendly RuntimeError on vLLM < 0.7.
+    if sleep_mode:
+        from soup_cli.utils.grpo_long_context import apply_vllm_sleep_mode
+
+        apply_vllm_sleep_mode(engine_args)
 
     engine = AsyncLLMEngine.from_engine_args(engine_args)
     return engine, engine_model_name

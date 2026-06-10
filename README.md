@@ -49,20 +49,23 @@ infrastructure instead of improving models. Soup fixes that.
 
 ## What's New
 
-**v0.71.20 — Modality II trainers (BETA, hardware-gated).** Three v0.52.0 schema stubs become real
-trainers:
+**v0.71.21 — Precision & rollout lift (BETA, hardware-gated).** Five long-deferred stubs go live:
 
-- **TTS fine-tuning** — `task: tts` now trains a real text-to-speech model. The five families
-  (Orpheus / Sesame-CSM / Llasa / Spark / Oute) are decoder LMs, so a TTS fine-tune is next-token
-  cross-entropy over `[text][audio-codec-token]` chat sequences. Pre-encode your audio to codec tokens
-  offline and train with `data.format: chat` — Soup adds per-family emotion control + codec
-  special-token registration. (The encode-at-train-time path is dependency-gated on each family's codec.)
-- **BitNet 1.58-bit** — `soup export --format bitnet | tq1_0` runs a real llama.cpp TQ1_0 ternary
-  export, and `quantization: bitnet_1.58` routes to a live BitNet trainer (gated on `onebitllms`).
-- **MoE expert quant** — `training.moe_expert_quant: nf4 | int8_rowwise` quantizes just the
-  fused-MoE expert layers with bitsandbytes (attention + router stay full precision), and
-  `training.train_router_only: true` freezes the experts to train only the gating router. Validated
-  live on an RTX 3050.
+- **Multi-turn agent rollouts for GRPO** — `training.rollout_backend: openenv` +
+  `training.rollout_func: my_module:my_fn` runs a live multi-turn rollout at the start of GRPO
+  training; the rows your function returns replace the prompt dataset. ART / RULER / NeMo-Gym
+  adapters ship behind honest dependency gates.
+- **FP8 attention + NVFP4 training** — `training.fp8_attention: true` converts the attention
+  projections to torchao float8 (Hopper-gated) and `training.nvfp4: true` applies torchao NVFP4
+  quantization (Blackwell-gated). Unsupported hardware degrades to a clear advisory, never a crash.
+- **vLLM sleep mode for RL** — `training.vllm_sleep_mode: true` puts the vLLM engine on standby
+  between GRPO rollouts (vLLM ≥ 0.7), freeing VRAM for the training step.
+- **Apple-adapter conversion is live** — `soup apple-adapter <dir> --direction hf-to-mlx | mlx-to-hf`
+  converts PEFT LoRA safetensors ↔ mlx-lm adapters with a numerically-equal round trip
+  (rank / scale / dropout / num_layers carried).
+- **Llama-4 expert delinearization is live** — `soup delinearize-llama4 <src> --target <out>`
+  reshapes fused `[E*din, dout]` expert weights to `[E, din, dout]` shard-by-shard and copies the
+  JSON sidecars so the target stays loadable.
 
 Full history: [CHANGELOG.md](CHANGELOG.md) &middot; [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 

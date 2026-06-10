@@ -1096,7 +1096,7 @@ class TrainingConfig(BaseModel):
             "in v0.50.1."
         ),
     )
-    # v0.50.0 Part C — Multi-turn agent rollout backend
+    # v0.50.0 Part C — Multi-turn agent rollout backend (live v0.71.21 #125)
     rollout_backend: Optional[Literal[
         "art", "ruler", "nemo_gym", "openenv"
     ]] = Field(
@@ -1104,10 +1104,31 @@ class TrainingConfig(BaseModel):
         description=(
             "Multi-turn agent rollout backend (unsloth / axolotl parity): "
             "art (OpenPipe ART) / ruler / nemo_gym / openenv. "
-            "Requires task='grpo'. Schema-only in v0.50.0; live launcher "
-            "wired in v0.50.1."
+            "Requires task='grpo'. openenv runs live (v0.71.21 #125) via "
+            "training.rollout_func; art/ruler/nemo_gym are lazy-import "
+            "gated."
         ),
     )
+    # v0.71.21 #125 — user-supplied OpenEnv rollout callable.
+    rollout_func: Optional[str] = Field(
+        default=None,
+        description=(
+            "OpenEnv rollout function as 'module.path:function_name' "
+            "(v0.71.21 #125). Requires rollout_backend='openenv'. The "
+            "callable receives the seed prompts list and returns rollout "
+            "rows ({'prompt': str|messages, 'answer'?: str}) that replace "
+            "the GRPO prompt dataset. Trusted-input policy: names "
+            "operator-controlled code (mirrors data.prompt_strategy)."
+        ),
+    )
+
+    @field_validator("rollout_func", mode="before")
+    @classmethod
+    def _validate_rollout_func_field(cls, value):
+        """v0.71.21 #125 — module:fn shape validation at config load."""
+        from soup_cli.utils.agent_rollout import validate_rollout_func
+
+        return validate_rollout_func(value)
     # v0.50.0 Part D — GRPO stability / efficiency knobs (axolotl + unsloth).
     # All schema-only in v0.50.0; live trainer callbacks wired in v0.50.1.
     ref_model_ema_alpha: Optional[float] = Field(
@@ -3609,7 +3630,17 @@ class SoupConfig(BaseModel):
     @model_validator(mode="after")
     def _validate_rollout_backend(self) -> "SoupConfig":
         """v0.50.0 Part C — ``rollout_backend`` requires task='grpo' and a
-        non-mlx backend. Live launcher wired in v0.50.1."""
+        non-mlx backend. Live launcher wired in v0.71.21 (#125):
+        openenv requires ``rollout_func`` and ``rollout_func`` is
+        openenv-only (silent-no-op footgun rejection)."""
+        if (
+            self.training.rollout_func is not None
+            and self.training.rollout_backend != "openenv"
+        ):
+            raise ValueError(
+                "rollout_func requires rollout_backend='openenv'; got "
+                f"rollout_backend={self.training.rollout_backend!r}"
+            )
         if self.training.rollout_backend is None:
             return self
         if self.task != "grpo":
@@ -3619,6 +3650,14 @@ class SoupConfig(BaseModel):
         if self.backend == "mlx":
             raise ValueError(
                 "rollout_backend is not supported on backend=mlx in v0.50.0"
+            )
+        if (
+            self.training.rollout_backend == "openenv"
+            and self.training.rollout_func is None
+        ):
+            raise ValueError(
+                "rollout_backend='openenv' requires training.rollout_func "
+                "('module.path:function_name')"
             )
         return self
 

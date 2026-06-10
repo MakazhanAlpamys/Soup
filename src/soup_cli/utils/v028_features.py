@@ -84,6 +84,31 @@ def apply_v028_speed_memory(
                 "compatible linears", style="yellow",
             )
 
+    # --- FP8 attention (v0.71.21 #141) ---------------------------------------
+    # Key added only when the flag is set — keeps the legacy 3-key dict
+    # contract on the no-features path (test_part_c exact-equality).
+    if getattr(tcfg, "fp8_attention", False):
+        recipe = getattr(tcfg, "fp8_recipe", "tensorwise")
+        try:
+            from soup_cli.utils.advanced_precision import apply_fp8_attention
+            converted = apply_fp8_attention(model, recipe=recipe)
+            applied["fp8_attention"] = True
+            _say(f"FP8 attention enabled ({converted} projections)")
+        except (RuntimeError, ValueError, TypeError) as exc:
+            applied["fp8_attention"] = False
+            _say(f"FP8 attention: {exc}", style="yellow")
+
+    # --- NVFP4 (v0.71.21 #141 — Blackwell-only) ------------------------------
+    if getattr(tcfg, "nvfp4", False):
+        try:
+            from soup_cli.utils.advanced_precision import apply_nvfp4
+            targeted = apply_nvfp4(model)
+            applied["nvfp4"] = True
+            _say(f"NVFP4 quantisation applied ({targeted} linears)")
+        except (RuntimeError, ValueError, TypeError) as exc:
+            applied["nvfp4"] = False
+            _say(f"NVFP4: {exc}", style="yellow")
+
     # --- Kernel auto-compose -------------------------------------------------
     if getattr(tcfg, "kernel_auto_compose", False):
         picked_name = _bench_and_pick_kernel(

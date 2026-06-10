@@ -641,10 +641,10 @@ Closed catalog (`MappingProxyType`) of ready-to-edit YAML / JSON. Output path cw
 ## Llama 4 Delinearizer
 
 ```bash
-soup delinearize-llama4 ./llama4-checkpoint --target ./out-delinearized --yes
+soup delinearize-llama4 ./llama4-checkpoint --target ./out-delinearized [--num-experts N] [--plan-only]
 ```
 
-Plans Llama 4 expert-weight reshape for export. v0.44.0 ships the planner; live runtime in v0.44.1. `is_llama4_model` uses a word-boundary regex matching the `is_gemma4_model` pattern — `ungemma-llama-4ish` is rejected.
+LIVE (v0.71.21): reshapes fused Llama-4 expert weights `[E*din, dout]` → `[E, din, dout]` shard-by-shard (atomic writes, per-shard 16 GiB cap, cwd containment) and copies the JSON sidecars so the target stays loadable. The expert count defaults from `config.json` (`text_config.num_local_experts`); pass `--num-experts` when the config doesn't carry it (exit 2 otherwise). `--plan-only` keeps the original preview flow and writes nothing. `is_llama4_model` uses a word-boundary regex matching the `is_gemma4_model` pattern — `ungemma-llama-4ish` is rejected.
 
 
 ## Ctrl+C Graceful Save

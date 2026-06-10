@@ -61,13 +61,37 @@ def apple_adapter_cmd(
     if plan_only:
         return
 
+    # v0.71.21 #228 — live conversion. Exit codes: 2 = validation /
+    # missing-input, 3 = upstream-gated (Apple spec not yet public),
+    # 1 = missing dependency, 0 = success.
     try:
-        convert_apple_adapter(plan)
-    except NotImplementedError as exc:
+        report = convert_apple_adapter(plan)
+    except RuntimeError as exc:
         console.print(
             Panel(
                 f"[yellow]{escape(str(exc))}[/]",
-                title="Live apple-adapter deferred",
+                title="apple-adapter — upstream-gated",
             )
         )
         raise typer.Exit(3) from exc
+    except (ValueError, FileNotFoundError) as exc:
+        console.print(f"[red]{escape(str(exc))}[/]")
+        raise typer.Exit(2) from exc
+    except ImportError as exc:
+        console.print(f"[red]{escape(str(exc))}[/]")
+        raise typer.Exit(1) from exc
+
+    skipped_note = (
+        f"\nSkipped (non-LoRA): [bold]{len(report.skipped_keys)}[/]"
+        if report.skipped_keys
+        else ""
+    )
+    console.print(
+        Panel(
+            f"Converted LoRA keys: [bold]{report.converted_keys}[/]\n"
+            f"Output:              [bold]{escape(report.output_dir)}[/]\n"
+            f"Signed:              [bold]{report.signed}[/]{skipped_note}",
+            title="soup apple-adapter — converted",
+            border_style="green",
+        )
+    )

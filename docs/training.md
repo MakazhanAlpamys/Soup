@@ -484,9 +484,10 @@ training:
   grpo_fp16: true                     # FP16 RL (unsloth parity)
   # Long-context + memory-efficient RL
   long_context_grpo: true             # wires Tiled MLP when available
-  vllm_sleep_mode: true               # between-rollouts vLLM standby
-  # Multi-turn agent rollout
-  rollout_backend: art                # one of: art / ruler / nemo_gym / openenv
+  vllm_sleep_mode: true               # between-rollouts vLLM standby — LIVE (vLLM >= 0.7)
+  # Multi-turn agent rollout — openenv is LIVE: your function's rows replace the prompt dataset
+  rollout_backend: openenv            # one of: art / ruler / nemo_gym / openenv
+  rollout_func: my_module:my_rollout  # module:function resolver (openenv; trusted operator code)
   # Stability / efficiency knobs
   ref_model_ema_alpha: 0.99           # EMA sync policy → reference
   replay_buffer_size: 2048

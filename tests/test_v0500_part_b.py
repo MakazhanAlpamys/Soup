@@ -143,13 +143,15 @@ def test_vllm_sleep_mode_null_byte_backend():
 
 
 # ---------------------------------------------------------------------------
-# Deferred live wiring
+# Live wiring (lifted in v0.71.21 #124 — vLLM-present gate)
 # ---------------------------------------------------------------------------
 
 
-def test_apply_vllm_sleep_mode_deferred():
-    """tdd-guide MEDIUM fix: assert v0.50.1 marker in error msg."""
-    with pytest.raises(NotImplementedError, match=r"v0\.50\.1"):
+def test_apply_vllm_sleep_mode_live_gated():
+    """v0.71.21 #124 lifted the stub — friendly gate when vLLM is absent
+    or too old; sets enable_sleep_mode=True on modern vLLM (covered in
+    test_v07121.py with a fake vllm module)."""
+    with pytest.raises(RuntimeError, match=r"vLLM >= 0\.7"):
         apply_vllm_sleep_mode(object())
 
 

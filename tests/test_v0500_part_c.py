@@ -80,10 +80,15 @@ def test_required_rollout_package_unknown_raises():
         required_rollout_package("trlx")
 
 
-@pytest.mark.parametrize("name", ["art", "ruler", "nemo_gym", "openenv"])
-def test_rollout_backend_spec_not_live_wired(name):
-    """tdd-guide LOW fix: exercise live_wired field."""
+@pytest.mark.parametrize("name", ["art", "ruler", "nemo_gym"])
+def test_external_rollout_backends_stay_gated(name):
+    """v0.71.21 #125 — external backends stay lazy-import gated."""
     assert get_rollout_backend_spec(name).live_wired is False
+
+
+def test_openenv_rollout_backend_live_wired():
+    """v0.71.21 #125 — openenv runs fully live via rollout_func."""
+    assert get_rollout_backend_spec("openenv").live_wired is True
 
 
 def test_get_rollout_backend_spec_frozen():
@@ -108,10 +113,19 @@ def test_metadata_immutable():
         agent_rollout._BACKEND_METADATA["evil"] = None  # type: ignore[index]
 
 
-@pytest.mark.parametrize("name", ["art", "ruler", "nemo_gym", "openenv"])
-def test_launch_rollout_deferred(name):
-    with pytest.raises(NotImplementedError, match="v0.50.1"):
+@pytest.mark.parametrize("name", ["art", "ruler", "nemo_gym"])
+def test_launch_rollout_external_gated(name):
+    """v0.71.21 #125 lifted the stub — external backends now raise a
+    friendly ImportError (package missing) or an honest BETA RuntimeError
+    (package present, adapter not yet validated)."""
+    with pytest.raises((ImportError, RuntimeError), match="rollout"):
         launch_rollout(name)
+
+
+def test_launch_rollout_openenv_requires_func():
+    """v0.71.21 #125 — openenv is live and requires rollout_func."""
+    with pytest.raises(ValueError, match="rollout_func"):
+        launch_rollout("openenv")
 
 
 def test_launch_rollout_unknown_validation_first():

@@ -178,10 +178,13 @@ class TestAppleAdapterPlan:
             )
 
 
-class TestConvertDeferred:
-    def test_raises_v068_1(
+class TestConvertLive:
+    def test_missing_weights_friendly(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        """v0.71.21 #228 lifted the stub — live conversion now runs; a
+        source dir without weights surfaces a friendly FileNotFoundError
+        (full happy-path round-trip coverage lives in test_v07121.py)."""
         from soup_cli.utils.apple_adapter import (
             build_apple_adapter_plan,
             convert_apple_adapter,
@@ -197,7 +200,7 @@ class TestConvertDeferred:
             direction="hf-to-mlx",
             sign=False,
         )
-        with pytest.raises(NotImplementedError, match="v0.68.1"):
+        with pytest.raises(FileNotFoundError, match="adapter_model"):
             convert_apple_adapter(plan)
 
     def test_non_plan_rejected(self) -> None:
@@ -263,9 +266,11 @@ class TestCli:
         )
         assert result.exit_code == 2
 
-    def test_live_exits_3(
+    def test_live_missing_weights_exits_2(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        """v0.71.21 #228 — the runner is live; a weight-less source dir is
+        a validation failure (exit 2), not the old deferred exit 3."""
         from soup_cli.cli import app
 
         monkeypatch.chdir(tmp_path)
@@ -284,7 +289,7 @@ class TestCli:
                 "out",
             ],
         )
-        assert result.exit_code == 3, (result.output, repr(result.exception))
+        assert result.exit_code == 2, (result.output, repr(result.exception))
 
 
 class TestSourceWiring:

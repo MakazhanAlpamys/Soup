@@ -277,6 +277,7 @@ def test_plan_delinearize_outside_cwd_rejected(tmp_path, monkeypatch):
 
 
 def test_cli_delinearize_llama4(tmp_path, monkeypatch):
+    """v0.71.21 #97 — the runtime is live; --plan-only keeps the old flow."""
     monkeypatch.chdir(tmp_path)
     src = tmp_path / "model"
     src.mkdir()
@@ -290,7 +291,7 @@ def test_cli_delinearize_llama4(tmp_path, monkeypatch):
             str(src),
             "--target",
             str(target),
-            "--yes",
+            "--plan-only",
         ],
     )
     assert result.exit_code == 0, (result.output, repr(result.exception))
