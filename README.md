@@ -49,23 +49,22 @@ infrastructure instead of improving models. Soup fixes that.
 
 ## What's New
 
-**v0.71.21 — Precision & rollout lift (BETA, hardware-gated).** Five long-deferred stubs go live:
+**v0.71.22 — Perf & measure polish.** Four live paths from the recent BETA lifts get tighter:
 
-- **Multi-turn agent rollouts for GRPO** — `training.rollout_backend: openenv` +
-  `training.rollout_func: my_module:my_fn` runs a live multi-turn rollout at the start of GRPO
-  training; the rows your function returns replace the prompt dataset. ART / RULER / NeMo-Gym
-  adapters ship behind honest dependency gates.
-- **FP8 attention + NVFP4 training** — `training.fp8_attention: true` converts the attention
-  projections to torchao float8 (Hopper-gated) and `training.nvfp4: true` applies torchao NVFP4
-  quantization (Blackwell-gated). Unsupported hardware degrades to a clear advisory, never a crash.
-- **vLLM sleep mode for RL** — `training.vllm_sleep_mode: true` puts the vLLM engine on standby
-  between GRPO rollouts (vLLM ≥ 0.7), freeing VRAM for the training step.
-- **Apple-adapter conversion is live** — `soup apple-adapter <dir> --direction hf-to-mlx | mlx-to-hf`
-  converts PEFT LoRA safetensors ↔ mlx-lm adapters with a numerically-equal round trip
-  (rank / scale / dropout / num_layers carried).
-- **Llama-4 expert delinearization is live** — `soup delinearize-llama4 <src> --target <out>`
-  reshapes fused `[E*din, dout]` expert weights to `[E, din, dout]` shard-by-shard and copies the
-  JSON sidecars so the target stays loadable.
+- **MiniLLM on-policy distillation is fast** — the on-policy rollout
+  (`training.minillm_on_policy: true`) now threads a KV cache so each step forwards only the new
+  token instead of re-feeding the whole prefix, resolving the earlier O(L²) cost. A LoRA student
+  activates the cache too (the PEFT wrapper is unwrapped before the cache check).
+- **`soup serve --mole` uses a KV cache** — each task adapter in a served MoLE keeps its own cache
+  in lockstep, created fresh per request (no cross-request leak). Output is byte-identical to the
+  previous no-cache path.
+- **`soup deploy autopilot --measure` is real and frugal** — a first-party transformers loader
+  factory loads each candidate live (per-candidate quant config), scores the baseline **once**, and
+  pre-validates the whole `--measure-candidates` list up front, so a typo fails before any model
+  load instead of burning N loads or doubling peak VRAM.
+- **Live-codec TTS via SNAC (Orpheus)** — encoding raw audio at train time (`data.format: audio`)
+  is validated for Orpheus: audio is duration- and byte-capped from `soundfile.info` **before**
+  decoding into RAM, and read through a symlink-safe file descriptor.
 
 Full history: [CHANGELOG.md](CHANGELOG.md) &middot; [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 

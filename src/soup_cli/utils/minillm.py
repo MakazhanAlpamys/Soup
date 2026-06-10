@@ -235,6 +235,39 @@ def _multinomial_sample(probs):
     return torch.multinomial(probs, num_samples=1)
 
 
+def _supports_kv_cache(model: object) -> bool:
+    """Capability probe: does ``model.forward`` explicitly take a KV cache?
+
+    Requires BOTH ``past_key_values`` and ``use_cache`` to be declared as
+    explicit parameters (every HF ``*ForCausalLM`` does). A bare ``**kwargs``
+    does NOT count — a model that merely swallows the kwarg would silently
+    ignore the cache and the rollout would feed it a single token per step
+    against an empty context. PEFT wrappers
+    (``PeftModel.forward(*args, **kwargs)``) — the common live distill case —
+    are probed through ``get_base_model()`` so a LoRA student still gets the
+    cached path (mirrors :func:`mole_routing._model_supports_cache`). The real
+    forwards already go through the wrapper; only the probe is unwrapped. Never
+    raises.
+    """
+    import inspect
+
+    target = model
+    get_base = getattr(model, "get_base_model", None)
+    if callable(get_base):
+        try:
+            target = get_base()
+        except Exception:  # noqa: BLE001 — probe must never raise
+            target = model
+    forward = getattr(target, "forward", None)
+    if forward is None:
+        return False
+    try:
+        params = inspect.signature(forward).parameters
+    except (TypeError, ValueError):
+        return False
+    return "past_key_values" in params and "use_cache" in params
+
+
 def minillm_on_policy_rollout(
     student_model,
     teacher_model,
@@ -245,6 +278,7 @@ def minillm_on_policy_rollout(
     max_new_tokens: int,
     temperature: float = 1.0,
     sample_fn=None,
+    use_cache: bool = True,
 ):
     """True on-policy MiniLLM teacher-mixed rollout (v0.71.18 #257).
 
@@ -263,6 +297,28 @@ def minillm_on_policy_rollout(
     reverse-KL is averaged over the rollout length so longer rollouts don't
     dominate the gradient.
 
+    KV-cache (v0.71.22 #263): when ``use_cache`` is True (default) and BOTH
+    models declare ``past_key_values``/``use_cache`` on their forward
+    (:func:`_supports_kv_cache`), each step forwards only the new token
+    against the cached context — O(L) compute instead of the O(L²) full
+    re-forward. Forward logits are identical either way (modulo float
+    noise), so the loss trajectory matches the no-cache path. Gradients are
+    mathematically equivalent too — both paths are full
+    backprop-through-rollout — so only the retained-graph *shape* differs:
+
+    - **Teacher** cache lives under ``torch.no_grad()`` — trivially safe.
+    - **Student** cache is grad-carrying: cached KVs from earlier steps stay
+      in the autograd graph, so the cached path keeps ONE shared graph
+      spanning the whole rollout, whereas the no-cache path builds L separate
+      per-step graphs (each its own fresh full-prefix re-forward). Both
+      backprop through every step; the cached shared-graph form has retained
+      activations of ~one full-sequence forward — at or below the no-cache
+      peak.
+
+    Models whose forward does not declare the cache params (or that ignore
+    ``use_cache`` and return no ``past_key_values``) transparently keep the
+    legacy full re-forward path.
+
     Returns ``(loss, num_steps)`` where ``loss`` is a scalar differentiable
     w.r.t. the student parameters and scaled by ``temperature**2`` (the
     Hinton convention shared with the offline term).
@@ -279,6 +335,8 @@ def minillm_on_policy_rollout(
         raise ValueError(f"max_new_tokens must be >= 1, got {max_new_tokens}")
     if isinstance(temperature, bool) or not isinstance(temperature, (int, float)):
         raise TypeError("temperature must be a non-bool number")
+    if not isinstance(use_cache, bool):
+        raise TypeError("use_cache must be bool")
     t = float(temperature)
     if not math.isfinite(t) or t <= 0.0:
         raise ValueError("temperature must be finite and positive")
@@ -290,13 +348,51 @@ def minillm_on_policy_rollout(
         cur_mask = torch.ones_like(input_ids)
     else:
         cur_mask = attention_mask
+    cache_ok = (
+        use_cache
+        and _supports_kv_cache(student_model)
+        and _supports_kv_cache(teacher_model)
+    )
+    s_past = None
+    t_past = None
+    step_ids = cur_ids  # full prompt on the first step; the delta afterwards
     kl_terms = []
     for _ in range(int(max_new_tokens)):
-        s_out = student_model(input_ids=cur_ids, attention_mask=cur_mask)
+        if cache_ok:
+            s_out = student_model(
+                input_ids=step_ids,
+                attention_mask=cur_mask,
+                past_key_values=s_past,
+                use_cache=True,
+            )
+        else:
+            s_out = student_model(input_ids=cur_ids, attention_mask=cur_mask)
         s_logits = s_out.logits[:, -1, :] / t  # [B, Vs]  (grad ON)
         with torch.no_grad():
-            te_out = teacher_model(input_ids=cur_ids, attention_mask=cur_mask)
+            if cache_ok:
+                te_out = teacher_model(
+                    input_ids=step_ids,
+                    attention_mask=cur_mask,
+                    past_key_values=t_past,
+                    use_cache=True,
+                )
+            else:
+                te_out = teacher_model(
+                    input_ids=cur_ids, attention_mask=cur_mask
+                )
             te_logits = te_out.logits[:, -1, :] / t  # [B, Vt]  (grad OFF)
+        if cache_ok:
+            new_s_past = getattr(s_out, "past_key_values", None)
+            new_t_past = getattr(te_out, "past_key_values", None)
+            if new_s_past is None or new_t_past is None:
+                # Model ignored use_cache — degrade to full re-forwards for
+                # the remaining steps (cur_ids is maintained either way).
+                cache_ok = False
+                s_past = None
+                t_past = None
+            else:
+                s_past = new_s_past
+                t_past = new_t_past
         # MiniLLM assumes a shared vocab; clamp to the common min so a
         # mismatched teacher never index-errors (cross-tokenizer = ULD path).
         common = min(s_logits.shape[-1], te_logits.shape[-1])
@@ -315,6 +411,7 @@ def minillm_on_policy_rollout(
             next_tok = next_tok.to(cur_ids.dtype)
         cur_ids = torch.cat([cur_ids, next_tok], dim=1)
         cur_mask = torch.cat([cur_mask, torch.ones_like(next_tok)], dim=1)
+        step_ids = next_tok if cache_ok else cur_ids
 
     stacked = torch.stack(kl_terms, dim=1)  # [B, L]
     if config.length_normalize:
@@ -348,11 +445,14 @@ class MiniLLMCallback(_TrainerCallbackBase):  # type: ignore[misc, valid-type]
       lazily from ``pretrain_anchor_path``, scaled by
       ``pretrain_anchor_weight`` (prevents the student drifting away from
       coherent language).
+    - :meth:`on_policy_term` — true on-policy teacher-mixed autoregressive
+      rollout (sample → teacher-score) via
+      :func:`minillm_on_policy_rollout` (shipped v0.71.18 #257; KV-cache
+      accelerated v0.71.22 #263).
 
-    Honest scope: the teacher-mix is the offline distribution-blend
-    analog of MiniLLM's on-policy teacher-mixed *sampling*; a full
-    autoregressive rollout loop (sample → teacher-score) is a larger
-    follow-up documented as a known limitation.
+    The offline :meth:`distill_term` teacher-mix and the live on-policy
+    rollout are both available; pick per the ``training.minillm_on_policy``
+    flag.
     """
 
     def __init__(
@@ -394,6 +494,7 @@ class MiniLLMCallback(_TrainerCallbackBase):  # type: ignore[misc, valid-type]
         attention_mask=None,
         *,
         sample_fn=None,
+        use_cache: bool = True,
     ):
         """True on-policy teacher-mixed rollout reverse-KL (v0.71.18 #257).
 
@@ -401,6 +502,11 @@ class MiniLLMCallback(_TrainerCallbackBase):  # type: ignore[misc, valid-type]
         rollout from the teacher/student mixture and returns the
         length-normalised reverse-KL along that path. Returns the scalar
         loss only (the step count is internal to the rollout).
+
+        ``use_cache`` (v0.71.22 #263) threads through to
+        :func:`minillm_on_policy_rollout` — cache-capable models forward only
+        the new token per step (see the rollout docstring for the gradient
+        trade-off).
         """
         loss, _ = minillm_on_policy_rollout(
             student_model,
@@ -411,6 +517,7 @@ class MiniLLMCallback(_TrainerCallbackBase):  # type: ignore[misc, valid-type]
             max_new_tokens=self.config.rollout_length,
             temperature=self.temperature,
             sample_fn=sample_fn,
+            use_cache=use_cache,
         )
         return loss
 

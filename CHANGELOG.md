@@ -12,6 +12,61 @@ reproducing 70+ versions of notes.
 
 ## [Unreleased]
 
+## [0.71.22] - 2026-06-10
+
+### Added
+- **Perf & measure polish** — a 4-issue patch tightening four live paths from
+  the recent BETA lifts. Pure code, validated on Windows + RTX 3050.
+  - **MiniLLM on-policy KV-cache (closes #263).** The on-policy distillation
+    rollout (`soup train` with `training.minillm_on_policy: true`) now threads
+    `past_key_values` so each step forwards only the new token instead of
+    re-feeding the whole prefix — resolving the O(L²) per-step cost from
+    v0.71.18. A LoRA student (the common distill case) activates the cache
+    too: the new `_supports_kv_cache` probe unwraps the PEFT model via
+    `get_base_model()` before deciding. The teacher is always cached; the
+    student cache respects the retained autograd graph and degrades gracefully
+    if a model returns no cache mid-loop.
+  - **`soup serve --mole` KV-cache (closes #262).** Each of the N task adapters
+    in a served MoLE now keeps its own KV cache in lockstep, created fresh per
+    `generate()` call (never stored on the instance, so there is no
+    cross-request leak). Top-k zero-weight adapters are still skipped, and the
+    output is byte-identical to the no-cache path on a real MoLE.
+  - **Deploy-autopilot live measure factories (closes #143).** `soup deploy
+    autopilot --measure` ships a first-party transformers loader factory (lazy
+    import, per-candidate quant config via the Quant Menu loader; `before` =
+    base, `after` = quantised) replacing the inject-only test hooks. The
+    baseline is now scored **once** and the whole candidate list is
+    **pre-validated up front**, so a typo in `--measure-candidates` raises
+    before any model load instead of burning N live loads or doubling peak
+    VRAM.
+  - **Live-codec TTS via SNAC, partial (#265-partial).** The live-codec
+    encode path (`data.format='audio'`) is validated for **Orpheus**:
+    `load_audio_mono` now probes `soundfile.info` (duration + byte cap)
+    *before* `soundfile.read` (no multi-GB decode into RAM) and reads through
+    an `O_NOFOLLOW` file descriptor; a real SNAC-backed encode of a 24 kHz wav
+    produced 42 Orpheus codec tokens.
+
+### Fixed
+- MiniLLM on-policy KV-cache was silently disabled for LoRA students (the
+  PEFT wrapper hid the base model's `past_key_values` support) — now probed
+  via `get_base_model()`.
+- Deploy-measure no longer re-scores the baseline once per candidate or burns
+  live model loads on a bad candidate (per-candidate validation moved up front).
+- `load_audio_mono` capped audio duration only *after* decoding into RAM —
+  the cap is now checked from `soundfile.info` before reading.
+
+### Known limitations
+- KV-cache correctness is validated (cache == no-cache equality on real tiny
+  artifacts) but large-model throughput gains were not measured on the 4 GB
+  dev box.
+- **#265 stays open** — the live-codec `data.format='audio'` SNAC encode path
+  is validated for Orpheus only; the other four TTS families keep their
+  per-family codec dependency gate.
+- The deploy-measure first-party factory's real quantized (bitsandbytes 4-bit)
+  load is CUDA + bitsandbytes-gated; on Windows / no-bnb the injected test
+  seams are the validated path.
+- The MoLE serve KV-cache assumes single-sequence (`B == 1`) decode.
+
 ## [0.71.21] - 2026-06-10
 
 ### Added

@@ -200,7 +200,20 @@ class TestTtsTrainerSetup:
         with pytest.raises(RuntimeError, match="sparktts"):
             w.setup({"train": []})
 
-    def test_live_codec_mode_orpheus_names_snac(self):
+    def test_live_codec_mode_orpheus_names_snac(self, monkeypatch):
+        # v0.71.22 #265 lifted the unconditional not-yet-validated gate —
+        # orpheus is live when snac IS installed, so force the missing-dep
+        # branch to keep exercising the friendly pip hint.
+        import importlib.util as ilu
+
+        real_find_spec = ilu.find_spec
+        monkeypatch.setattr(
+            ilu,
+            "find_spec",
+            lambda name, *a, **k: None
+            if name == "snac"
+            else real_find_spec(name, *a, **k),
+        )
         w = self._wrapper(data_format="audio", family="orpheus")
         with pytest.raises(RuntimeError, match="snac"):
             w.setup({"train": []})

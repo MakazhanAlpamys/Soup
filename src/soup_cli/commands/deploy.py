@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, List, Optional
+from typing import TYPE_CHECKING, List, Optional
 
 import typer
 
@@ -792,25 +792,21 @@ def _run_deploy_autopilot_measure(
         f"against {Path(tasks_file).name}...[/]"
     )
 
-    def _placeholder_before(prompt: str) -> str:
-        # The full v0.46.1 live measurement plumbs in real
-        # transformers / vllm generators. v0.53.1 ships the orchestrator
-        # surface; callers / smoke runs can monkeypatch this in.
-        return ""
-
-    def _placeholder_after_factory(candidate: str) -> Callable[[str], str]:
-        def _gen(prompt: str) -> str:
-            return ""
-        return _gen
-
-    # Pull injected generators if the caller registered them via env (escape
-    # hatch for tests + advanced operator workflows)
+    # Injected generators (test seam / advanced operator workflows) still win;
+    # otherwise v0.71.22 #143 first-party transformers factories load the real
+    # base (before) + per-candidate Quant-Menu-quantized model (after), lazily
+    # on first prompt so a cache hit never loads a model.
     from soup_cli.utils import deploy_measure as _dm
-    before_gen = getattr(_dm, "_DEPLOY_MEASURE_BEFORE_GEN", None) or _placeholder_before
-    after_factory = (
-        getattr(_dm, "_DEPLOY_MEASURE_AFTER_FACTORY", None)
-        or _placeholder_after_factory
-    )
+
+    injected_before = getattr(_dm, "_DEPLOY_MEASURE_BEFORE_GEN", None)
+    injected_after = getattr(_dm, "_DEPLOY_MEASURE_AFTER_FACTORY", None)
+    if injected_before is None and injected_after is None:
+        console.print(
+            "[dim]Using live transformers generators (greedy decode; models "
+            "load lazily per candidate)...[/]"
+        )
+    before_gen = injected_before or _dm.build_before_generator(base)
+    after_factory = injected_after or _dm.build_after_generator_factory(base)
 
     try:
         results, cache_hit = run_measure(
@@ -824,10 +820,18 @@ def _run_deploy_autopilot_measure(
     except (TypeError, ValueError, FileNotFoundError) as exc:
         console.print(f"[red]Measure failed:[/] {escape(str(exc))}")
         raise typer.Exit(1) from exc
+    except (RuntimeError, ImportError, OSError) as exc:
+        # Model-load failures from the live factories (missing quant kernel,
+        # OOM, network) — friendly exit, no traceback dump.
+        console.print(f"[red]Live measure failed:[/] {escape(str(exc))}")
+        raise typer.Exit(1) from exc
 
     console.print(render_measure_table(results))
     if cache_hit:
-        console.print("[dim](cache hit — re-run with --no-cache to refresh)[/]")
+        console.print(
+            "[dim](cache hit — delete ~/.soup/deploy_autopilot_cache.json or "
+            "change --tasks to refresh)[/]"
+        )
     best = pick_best(results)
     if best is not None:
         console.print(

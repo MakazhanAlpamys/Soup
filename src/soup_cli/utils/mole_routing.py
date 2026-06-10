@@ -33,7 +33,7 @@ import math
 import os
 import stat
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Any, Optional, Tuple
 
@@ -61,42 +61,42 @@ _MAX_ADAPTER_PATH_LEN = 4096
 # ---------------------------------------------------------------------------
 
 
-def _check_int(value: object, field: str, lo: int, hi: int) -> int:
+def _check_int(value: object, field_name: str, lo: int, hi: int) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
-        raise TypeError(f"{field} must be int")
+        raise TypeError(f"{field_name} must be int")
     if value < lo:
-        raise ValueError(f"{field} {value} below floor {lo}")
+        raise ValueError(f"{field_name} {value} below floor {lo}")
     if value > hi:
-        raise ValueError(f"{field} {value} above cap {hi}")
+        raise ValueError(f"{field_name} {value} above cap {hi}")
     return value
 
 
 def _check_finite_positive(
-    value: object, field: str, lo: float, hi: float
+    value: object, field_name: str, lo: float, hi: float
 ) -> float:
     if isinstance(value, bool):
-        raise TypeError(f"{field} must not be bool")
+        raise TypeError(f"{field_name} must not be bool")
     if not isinstance(value, (int, float)):
-        raise TypeError(f"{field} must be numeric")
+        raise TypeError(f"{field_name} must be numeric")
     val = float(value)
     if not math.isfinite(val):
-        raise ValueError(f"{field} must be finite")
+        raise ValueError(f"{field_name} must be finite")
     if val < lo:
-        raise ValueError(f"{field} {val} below floor {lo}")
+        raise ValueError(f"{field_name} {val} below floor {lo}")
     if val > hi:
-        raise ValueError(f"{field} {val} above cap {hi}")
+        raise ValueError(f"{field_name} {val} above cap {hi}")
     return val
 
 
-def _check_str_field(value: object, field: str) -> str:
+def _check_str_field(value: object, field_name: str) -> str:
     if isinstance(value, bool):
-        raise TypeError(f"{field} must not be bool")
+        raise TypeError(f"{field_name} must not be bool")
     if not isinstance(value, str):
-        raise TypeError(f"{field} must be str")
+        raise TypeError(f"{field_name} must be str")
     if not value:
-        raise ValueError(f"{field} must be non-empty")
+        raise ValueError(f"{field_name} must be non-empty")
     if "\x00" in value:
-        raise ValueError(f"{field} must not contain null bytes")
+        raise ValueError(f"{field_name} must not contain null bytes")
     return value
 
 
@@ -441,6 +441,56 @@ def load_mole_manifest(directory: str) -> MoleServeManifest:
     return _manifest_from_dict(data)
 
 
+def _model_supports_cache(model: object) -> bool:
+    """Capability probe: can this model take a per-call KV cache? (#262)
+
+    Requires BOTH ``past_key_values`` and ``use_cache`` as EXPLICIT params on
+    the forward signature — a bare ``**kwargs`` does not count (a model that
+    merely swallows the kwarg would silently ignore the cache). PEFT wrappers
+    (``PeftModel.forward(*args, **kwargs)``) are probed through
+    ``get_base_model()`` so real HF causal LMs get the cached path. Never
+    raises.
+    """
+    import inspect
+
+    target = model
+    get_base = getattr(model, "get_base_model", None)
+    if callable(get_base):
+        try:
+            target = get_base()
+        except Exception:  # noqa: BLE001 — probe must never raise
+            target = model
+    forward = getattr(target, "forward", None)
+    if forward is None:
+        return False
+    try:
+        params = inspect.signature(forward).parameters
+    except (TypeError, ValueError):
+        return False
+    return "past_key_values" in params and "use_cache" in params
+
+
+@dataclass
+class _MoleKvState:
+    """Per-``generate()`` KV-cache state — one cache per adapter + the base.
+
+    ``caches[i]`` / ``lens[i]`` track adapter ``i``'s cache object and how
+    many tokens of the current sequence it has seen. An adapter skipped by
+    top-k masking simply falls behind; when it becomes active again it is fed
+    the missed tokens in one catch-up forward (caches stay in lockstep with
+    the sequence without paying for inactive adapters every step).
+    ``enabled`` flips off when the model ignores ``use_cache`` (no
+    ``past_key_values`` on the output) — the call degrades to the legacy
+    full-re-forward path.
+    """
+
+    enabled: bool = True
+    base_cache: Any = None
+    base_len: int = 0
+    caches: dict = field(default_factory=dict)
+    lens: dict = field(default_factory=dict)
+
+
 class LoadedMole:
     """Runtime serve-time MoLE: base + N frozen task LoRAs + the trained gate.
 
@@ -450,10 +500,14 @@ class LoadedMole:
     blended by the per-token gate weights. At decode we only need the LAST
     token's blend per step.
 
-    Generation recomputes the full sequence each step (no shared KV cache —
-    each task adapter would need its own cache, so recompute keeps the blend
-    correct). This is fine for short demo generations on a tiny model; large
-    serving deployments should expect linear-per-step cost.
+    KV-cache (v0.71.22 #262): cache-capable models (probe:
+    :func:`_model_supports_cache`) keep one KV cache per adapter plus one for
+    the base/router forward, all scoped to a single ``generate()`` call. Each
+    step then feeds only the new token (or, for an adapter that was skipped
+    by top-k masking, the tokens it missed — a catch-up delta) instead of
+    re-forwarding the whole sequence through every adapter. Models without
+    explicit cache support keep the legacy full-re-forward path, which is
+    fine for short demo generations on a tiny model.
     """
 
     def __init__(
@@ -507,6 +561,68 @@ class LoadedMole:
         model.set_adapter(self.adapter_names[0])
         return blended
 
+    def _blended_last_logits_cached(self, input_ids, attention_mask, state):
+        """KV-cached per-token blend (#262) — returns ``[B, V]``.
+
+        Feeds each forward only the tokens its cache has not seen yet
+        (``input_ids[:, cached_len:]``) with the FULL attention mask, so the
+        base/router and every active adapter pay one-token cost per step
+        instead of re-processing the whole sequence. Falls back to the legacy
+        path (and disables the state) when the model ignores ``use_cache``.
+        """
+        import torch
+
+        model = self.model
+        seq_len = int(input_ids.shape[1])
+        base_delta = input_ids[:, state.base_len:]
+        with torch.no_grad(), model.disable_adapter():
+            base_out = model(
+                input_ids=base_delta,
+                attention_mask=attention_mask,
+                past_key_values=state.base_cache,
+                use_cache=True,
+                output_hidden_states=True,
+            )
+        new_base_cache = getattr(base_out, "past_key_values", None)
+        if new_base_cache is None:
+            state.enabled = False
+            return self._blended_last_logits(input_ids, attention_mask)
+        state.base_cache = new_base_cache
+        state.base_len = seq_len
+        # hidden_states cover only the fed tokens; -1 is the newest token.
+        router_hidden = base_out.hidden_states[-1][:, -1, :]  # [B, H]
+        weights = self.gate(router_hidden.to(self.gate.gate.weight.dtype))  # [B, N]
+        col_max = weights.abs().amax(dim=tuple(range(weights.dim() - 1)))  # [N]
+        active = [i for i in range(len(self.adapter_names)) if float(col_max[i]) > 0.0]
+        if not active:  # degenerate (softmax should always keep >=1) — run all
+            active = list(range(len(self.adapter_names)))
+        blended = None
+        for i in active:
+            model.set_adapter(self.adapter_names[i])
+            # Catch-up delta: an adapter skipped by top-k on earlier steps is
+            # behind the sequence — feed it everything it missed at once.
+            delta_i = input_ids[:, state.lens.get(i, 0):]
+            with torch.no_grad():
+                out_i = model(
+                    input_ids=delta_i,
+                    attention_mask=attention_mask,
+                    past_key_values=state.caches.get(i),
+                    use_cache=True,
+                )
+            cache_i = getattr(out_i, "past_key_values", None)
+            if cache_i is None:
+                state.enabled = False
+                model.set_adapter(self.adapter_names[0])
+                return self._blended_last_logits(input_ids, attention_mask)
+            state.caches[i] = cache_i
+            state.lens[i] = seq_len
+            logits_i = out_i.logits[:, -1, :].detach()  # [B, V]
+            w_i = weights[..., i : i + 1].to(logits_i.dtype)
+            term = w_i * logits_i
+            blended = term if blended is None else blended + term
+        model.set_adapter(self.adapter_names[0])
+        return blended
+
     def generate(
         self,
         input_ids,
@@ -522,6 +638,9 @@ class LoadedMole:
         Single-sequence (``B == 1``): the EOS stop inspects row 0, so a batched
         caller would stop the whole batch on the first row's EOS. The serve
         handler always sends one sequence; ``B > 1`` is rejected.
+
+        Cache state (#262) is local to this call — two concurrent or
+        sequential ``generate()`` calls never share KV caches.
         """
         import torch
 
@@ -538,8 +657,12 @@ class LoadedMole:
         do_sample = isinstance(temperature, (int, float)) and not isinstance(
             temperature, bool
         ) and float(temperature) > 0.0
+        state = _MoleKvState() if _model_supports_cache(self.model) else None
         for _ in range(int(max_new_tokens)):
-            logits = self._blended_last_logits(seq, attn)  # [B, V]
+            if state is not None and state.enabled:
+                logits = self._blended_last_logits_cached(seq, attn, state)
+            else:
+                logits = self._blended_last_logits(seq, attn)  # [B, V]
             if do_sample:
                 next_id = _sample_next(logits, float(temperature), float(top_p))
             else:

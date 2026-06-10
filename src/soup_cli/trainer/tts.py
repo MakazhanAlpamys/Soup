@@ -64,20 +64,27 @@ class TTSTrainerWrapper(SFTTrainerWrapper):
 
         data_format = getattr(cfg.data, "format", None)
         if data_format in _LIVE_CODEC_FORMATS:
-            # Live-codec mode: encoding raw audio needs the family's codec.
+            # Live-codec mode (v0.71.22 #265-partial): encode raw audio into
+            # codec-token strings at setup time, then fall through to the
+            # validated pre-encoded CE path. The per-family codec dep gate
+            # fires first (friendly pip hint); families without a validated
+            # encoder raise inside encode_tts_dataset (tracked in #265 —
+            # Orpheus/SNAC is the v0.71.22 live family).
             self._require_tts_codec(family)
-            # If the codec IS importable (never validated on the maintainer's
-            # box — no codecs/large models installed), the encode-then-CE path
-            # would run here. It is intentionally surfaced as an explicit
-            # not-yet-validated error so we never silently ship an unrun path.
-            pkg = tts_codec_package(family)
-            raise RuntimeError(
-                f"TTS live-codec mode (data.format='audio') for family "
-                f"'{family}' requires encoding audio with the {pkg!r} codec at "
-                "train time. This path is hardware/dependency-gated and not "
-                "yet validated. Use the pre-encoded chat workflow (encode "
-                "audio to codec tokens offline, then train with "
-                "data.format=chat) for a runnable TTS fine-tune."
+            from soup_cli.utils.tts_codec import encode_tts_dataset
+
+            console.print(
+                f"[green]TTS live-codec:[/] encoding audio with the "
+                f"{tts_codec_package(family)!r} codec (family={family})"
+            )
+            # device is set by the SFTTrainerWrapper.__init__; getattr keeps a
+            # bare object.__new__ test fixture (no device) working — default
+            # None falls through to CPU encoding in encode_tts_dataset.
+            dataset = encode_tts_dataset(
+                dataset,
+                family,
+                device=getattr(self, "device", None),
+                console=console,
             )
 
         # Pre-encoded chat mode: plain SFT cross-entropy over the codec tokens.

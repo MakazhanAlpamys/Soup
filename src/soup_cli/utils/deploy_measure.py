@@ -16,6 +16,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import stat
 import tempfile
 from dataclasses import asdict, dataclass
@@ -31,12 +32,21 @@ DEFAULT_MAJOR_THRESHOLD: float = 0.05
 
 _MAX_CACHE_BYTES: int = 1 * 1024 * 1024  # 1 MB cap on cache file
 _MAX_CANDIDATES: int = 32
+_MAX_BASE_LEN: int = 512  # mirrors v0.40.5 reward_model / v0.62.0 --base policy
+
+# v0.71.22 #143 — closed candidate allowlist for the first-party generator
+# factories. Mirrors the TrainingConfig.quantization Quant Menu surface
+# ("none" = the unquantized baseline; HQQ uses the hqq:Nbit shape).
+MEASURABLE_QUANT_CANDIDATES: frozenset[str] = frozenset(
+    {"none", "4bit", "8bit", "gptq", "awq", "aqlm", "eetq", "mxfp4", "fp8"}
+)
+_HQQ_CANDIDATE_RE = re.compile(r"^hqq:[12348]bit$")
 
 # Test + advanced-operator escape hatch: when set on this module, the deploy
-# CLI uses these callables instead of the v0.46.1 model-loading generators.
-# Documented as v0.53.1 deferral — see the v0.53.1 Known Limitations entry
-# in plan.md. NOT a public API; the live transformers / vLLM generators land
-# alongside v0.53.2.
+# CLI uses these callables INSTEAD of the first-party transformers factories
+# below (v0.71.22 #143 lifted the v0.53.1 placeholder deferral — the live
+# loaders are ``build_before_generator`` / ``build_after_generator_factory``).
+# NOT a public API; kept as the test seam.
 _DEPLOY_MEASURE_BEFORE_GEN: Optional[Callable[[str], str]] = None
 _DEPLOY_MEASURE_AFTER_FACTORY: Optional[
     Callable[[str], Callable[[str], str]]
@@ -227,12 +237,21 @@ def measure_candidate(
     *,
     candidate: str,
     tasks_file: str,
-    before_gen: Callable[[str], str],
+    before_gen: Optional[Callable[[str], str]] = None,
     after_gen: Callable[[str], str],
+    before_score: Optional[float] = None,
 ) -> MeasureResult:
     """Score one quant candidate against the baseline.
 
     Returns a :class:`MeasureResult` with classify_delta verdict.
+
+    The baseline is deterministic across candidates, so the orchestrator
+    (:func:`run_measure`) computes it ONCE and threads the float in via
+    ``before_score`` — this avoids re-running full greedy generation over
+    every task once per candidate (N× redundant GPU time) and keeps the
+    baseline model out of VRAM while a quantized candidate is loaded.
+    Direct / back-compat callers may instead pass ``before_gen`` and the
+    baseline is scored here. Exactly one of the two must be supplied.
     """
     if isinstance(candidate, bool) or not isinstance(candidate, str):
         raise TypeError("candidate must be a non-bool str")
@@ -241,7 +260,18 @@ def measure_candidate(
     if "\x00" in candidate:
         raise ValueError("candidate must not contain null bytes")
 
-    before = _score_tasks(tasks_file, before_gen)
+    if before_score is not None:
+        if isinstance(before_score, bool) or not isinstance(
+            before_score, (int, float)
+        ):
+            raise TypeError("before_score must be a non-bool number")
+        before = float(before_score)
+    elif before_gen is not None:
+        before = _score_tasks(tasks_file, before_gen)
+    else:
+        raise ValueError(
+            "measure_candidate requires either before_gen or before_score"
+        )
     after = _score_tasks(tasks_file, after_gen)
     delta = after - before
     if delta >= 0:
@@ -276,6 +306,221 @@ def pick_best(results: Sequence[MeasureResult]) -> Optional[MeasureResult]:
     return max(results, key=lambda r: r.delta)
 
 
+# --- v0.71.22 #143 — first-party transformers generator factories -----------
+
+
+def validate_measure_candidate(candidate: object) -> str:
+    """Validate + canonicalise a quant candidate for the live measure loop.
+
+    Accepts the closed :data:`MEASURABLE_QUANT_CANDIDATES` allowlist plus the
+    ``hqq:{1,2,3,4,8}bit`` shape. Case-insensitive; returns the lowercase
+    canonical form. Bool rejected before the str check (project policy).
+    """
+    if isinstance(candidate, bool):
+        raise TypeError("candidate must not be bool")
+    if not isinstance(candidate, str):
+        raise TypeError(f"candidate must be str, got {type(candidate).__name__}")
+    if not candidate:
+        raise ValueError("candidate must be non-empty")
+    if "\x00" in candidate:
+        raise ValueError("candidate must not contain null bytes")
+    canonical = candidate.lower()
+    if canonical in MEASURABLE_QUANT_CANDIDATES or _HQQ_CANDIDATE_RE.match(
+        canonical
+    ):
+        return canonical
+    supported = ", ".join(sorted(MEASURABLE_QUANT_CANDIDATES))
+    # Truncate the echoed candidate (mirrors longlora._truncate_for_message
+    # policy) so a pathologically long value can't bloat the error message.
+    shown = candidate if len(candidate) <= 64 else candidate[:64] + "…"
+    raise ValueError(
+        f"candidate {shown!r} is not a measurable quant. Supported: "
+        f"{supported}, hqq:Nbit (N in 1/2/3/4/8)"
+    )
+
+
+def _check_base_id(base: object) -> str:
+    """Shape-validate a base model id / path for the factory builders."""
+    # NOTE: this raises ValueError (not TypeError) for bool/non-str wrong-type
+    # input — DELIBERATELY inconsistent with validate_measure_candidate (which
+    # raises TypeError for the same class). The ValueError behaviour is pinned
+    # by tests (test_v07122.test_builders_validate_max_new_tokens); changing it
+    # would break them, so we keep it and document the seam here.
+    if isinstance(base, bool) or not isinstance(base, str):
+        raise ValueError("base must be a non-bool string")
+    if not base:
+        raise ValueError("base must be non-empty")
+    if "\x00" in base:
+        raise ValueError("base must not contain null bytes")
+    if len(base) > _MAX_BASE_LEN:
+        raise ValueError(f"base exceeds {_MAX_BASE_LEN} chars")
+    return base
+
+
+def _check_max_new_tokens(value: object) -> int:
+    # NOTE: raises ValueError (not TypeError) for bool/non-int wrong-type input
+    # — deliberately inconsistent with validate_measure_candidate's TypeError;
+    # the ValueError behaviour is pinned by tests (see _check_base_id note).
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError("max_new_tokens must be a non-bool int")
+    if value < 1:
+        raise ValueError(f"max_new_tokens must be >= 1, got {value}")
+    return value
+
+
+def _free_accelerator_memory() -> None:
+    """Best-effort GC + CUDA cache flush between candidate model loads."""
+    import gc
+
+    gc.collect()
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:  # noqa: BLE001 — torch missing / CUDA error: best-effort
+        pass
+
+
+def _import_transformers():
+    """Lazy transformers import — module-level seam for tests."""
+    import transformers
+
+    return transformers
+
+
+def _load_measure_model(
+    base: str,
+    *,
+    quantization: str,
+    device: Optional[str] = None,
+    trust_remote_code: bool = False,
+):
+    """Load ``base`` with the candidate quant via the Quant Menu loader.
+
+    Returns a ``(model, tokenizer, device)`` triple shaped for
+    :func:`soup_cli.utils.live_eval.make_generator`'s ``loaded=`` kwarg.
+    ``quantization='none'`` loads the plain baseline. Heavy imports are lazy.
+    """
+    from soup_cli.config.schema import TrainingConfig
+    from soup_cli.utils.live_eval import resolve_device
+    from soup_cli.utils.quant_menu import build_quantization_config_for_loader
+
+    transformers = _import_transformers()
+    dev = resolve_device(device)
+    tcfg = TrainingConfig(quantization=quantization)
+    quant_config = build_quantization_config_for_loader(
+        tcfg=tcfg, base=base, console=None
+    )
+    tokenizer = transformers.AutoTokenizer.from_pretrained(
+        base, trust_remote_code=trust_remote_code
+    )
+    if getattr(tokenizer, "pad_token", None) is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    if quant_config is not None:
+        # Quantized loads place weights themselves (bnb/gptq/awq need
+        # device_map on CUDA; a post-hoc .to() would break bnb layouts).
+        model = transformers.AutoModelForCausalLM.from_pretrained(
+            base,
+            quantization_config=quant_config,
+            device_map="auto" if dev == "cuda" else None,
+            trust_remote_code=trust_remote_code,
+        )
+    else:
+        model = transformers.AutoModelForCausalLM.from_pretrained(
+            base, trust_remote_code=trust_remote_code
+        ).to(dev)
+    model.eval()
+    return model, tokenizer, dev
+
+
+def _lazy_generator(
+    base: str,
+    *,
+    quantization: str,
+    device: Optional[str],
+    max_new_tokens: int,
+    trust_remote_code: bool,
+) -> Callable[[str], str]:
+    """Closure that loads the model on FIRST call (cache hits never load)."""
+    holder: dict[str, Callable[[str], str]] = {}
+
+    def _gen(prompt: str) -> str:
+        if "fn" not in holder:
+            _free_accelerator_memory()
+            loaded = _load_measure_model(
+                base,
+                quantization=quantization,
+                device=device,
+                trust_remote_code=trust_remote_code,
+            )
+            from soup_cli.utils import live_eval
+
+            holder["fn"] = live_eval.make_generator(
+                base, loaded=loaded, max_new_tokens=max_new_tokens
+            )
+        return holder["fn"](prompt)
+
+    return _gen
+
+
+def build_before_generator(
+    base: str,
+    *,
+    device: Optional[str] = None,
+    max_new_tokens: int = 64,
+    trust_remote_code: bool = False,
+) -> Callable[[str], str]:
+    """First-party baseline generator for ``deploy autopilot --measure``.
+
+    Lazy-loads the UNQUANTIZED ``base`` (greedy decode via
+    :func:`soup_cli.utils.live_eval.make_generator`) on the first prompt —
+    a cache-hit measure run never touches the model. (v0.71.22 #143)
+    """
+    _check_base_id(base)
+    _check_max_new_tokens(max_new_tokens)
+    return _lazy_generator(
+        base,
+        quantization="none",
+        device=device,
+        max_new_tokens=max_new_tokens,
+        trust_remote_code=trust_remote_code,
+    )
+
+
+def build_after_generator_factory(
+    base: str,
+    *,
+    device: Optional[str] = None,
+    max_new_tokens: int = 64,
+    trust_remote_code: bool = False,
+) -> Callable[[str], Callable[[str], str]]:
+    """First-party per-candidate quantized generator factory (#143).
+
+    ``factory(candidate)`` validates the candidate eagerly (fail-fast at the
+    measure loop boundary) and returns a generator that lazy-loads ``base``
+    with that candidate's quant config from the Quant Menu loader on first
+    use. CUDA memory from the previous candidate is freed before each load.
+    """
+    _check_base_id(base)
+    _check_max_new_tokens(max_new_tokens)
+
+    def factory(candidate: str) -> Callable[[str], str]:
+        canonical = validate_measure_candidate(candidate)
+        return _lazy_generator(
+            base,
+            quantization=canonical,
+            device=device,
+            max_new_tokens=max_new_tokens,
+            trust_remote_code=trust_remote_code,
+        )
+
+    # Marker so run_measure can pre-validate the whole candidate list up front
+    # for the first-party path (M2) without touching injected test seams.
+    factory._soup_first_party_measure_factory = True  # type: ignore[attr-defined]
+    return factory
+
+
 def run_measure(
     *,
     profile_name: str,
@@ -303,6 +548,15 @@ def run_measure(
             f"too many candidates ({len(candidates)}; cap {_MAX_CANDIDATES})"
         )
 
+    # M2 — pre-validate the ENTIRE candidate list up front so a typo'd Nth
+    # candidate fails BEFORE any (expensive) model load, rather than burning a
+    # live load + eval on every preceding candidate. Only enforced when the
+    # first-party factory is in play; an injected test seam factory is left
+    # untouched (it may legitimately use non-Quant-Menu candidate names).
+    if getattr(after_gen_factory, "_soup_first_party_measure_factory", False):
+        for candidate in candidates:
+            validate_measure_candidate(candidate)
+
     tasks_sha = sha_of_file(tasks_file)
     key = compute_cache_key(
         base_sha=base_sha, profile_name=profile_name, tasks_sha=tasks_sha,
@@ -320,13 +574,16 @@ def run_measure(
             except (TypeError, ValueError):
                 pass
 
-    # Cache miss — run the eval loop
+    # Cache miss — compute the deterministic baseline ONCE (M3), then run each
+    # candidate against it. This keeps the baseline model out of VRAM while a
+    # quantized candidate is loaded and avoids N× redundant baseline scoring.
+    before_score = _score_tasks(tasks_file, before_gen)
     results: list[MeasureResult] = []
     for candidate in candidates:
         after_gen = after_gen_factory(candidate)
         result = measure_candidate(
             candidate=candidate, tasks_file=tasks_file,
-            before_gen=before_gen, after_gen=after_gen,
+            after_gen=after_gen, before_score=before_score,
         )
         results.append(result)
 

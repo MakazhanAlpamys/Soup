@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "soup-cli"
-version = "0.71.21"
+version = "0.71.22"
 description = "Fine-tune and post-train LLMs in one command. No SSH, no config hell."
 readme = "README.md"
 license = "Apache-2.0"
@@ -22,7 +22,7 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 # Core install (`pip install soup-cli`) is intentionally light: the CLI, config
-# system, and data tools — no PyTorch. v0.71.0 split the heavy training stack
+# system, and data tools вЂ” no PyTorch. v0.71.0 split the heavy training stack
 # (torch / transformers / peft / trl / datasets / bitsandbytes / accelerate)
 # into the `[train]` extra below.
 dependencies = [
@@ -35,7 +35,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# v0.71.0 — heavy training stack. `pip install 'soup-cli[train]'` to fine-tune.
+# v0.71.0 вЂ” heavy training stack. `pip install 'soup-cli[train]'` to fine-tune.
 # These were core dependencies through v0.70.0; pins are unchanged.
 train = [
     "torch>=2.0.0",
@@ -46,7 +46,7 @@ train = [
     "bitsandbytes>=0.41.0",
     "accelerate>=0.25.0",
 ]
-# v0.71.0 — convenience meta-extra pulling the main optional stacks.
+# v0.71.0 вЂ” convenience meta-extra pulling the main optional stacks.
 all = ["soup-cli[train,serve,ui,data]"]
 eval = ["lm-eval>=0.4.0"]
 data = ["datasketch>=1.6.0"]
@@ -74,31 +74,31 @@ sglang = ["sglang>=0.2.0", "fastapi>=0.104.0", "uvicorn>=0.24.0"]
 mlx = ["mlx>=0.20.0", "mlx-lm>=0.20.0"]
 cce = ["cut-cross-entropy>=24.10.0"]
 tui = ["textual>=0.50.0"]
-# v0.53.8 #89 — bundle MLflow / SwanLab / Trackio for `--tracker` users.
+# v0.53.8 #89 вЂ” bundle MLflow / SwanLab / Trackio for `--tracker` users.
 trackers = ["mlflow>=2.0.0", "swanlab>=0.3.0", "trackio>=0.0.1"]
-# v0.53.8 #85 — fsspec backends for remote dataset loading (s3 / gs / az / oci).
+# v0.53.8 #85 вЂ” fsspec backends for remote dataset loading (s3 / gs / az / oci).
 remote = ["fsspec>=2024.1.0", "s3fs>=2024.1.0", "gcsfs>=2024.1.0", "adlfs>=2024.1.0"]
-# v0.53.10 #150 — bundle scikit-optimize so `soup data mix --optimize` runs the
+# v0.53.10 #150 вЂ” bundle scikit-optimize so `soup data mix --optimize` runs the
 # Bayesian-style loop instead of falling back to the v0.48.0 Dirichlet sampler.
 mix = ["scikit-optimize>=0.9.0"]
-# v0.53.10 #113 — production-grade data quality: langdetect (language) +
+# v0.53.10 #113 вЂ” production-grade data quality: langdetect (language) +
 # presidio-analyzer (PII). Llama-Guard-3-1B is documented as a manual recipe
 # (license + ~600 MB weight blob too large to bundle by default).
 data-pro = ["langdetect>=1.0.9", "presidio-analyzer>=2.2.0"]
-# v0.71.2 #179/#185 — ed25519 detached signing for `soup attest` / `soup
+# v0.71.2 #179/#185 вЂ” ed25519 detached signing for `soup attest` / `soup
 # adapters sign`. Pure-offline; Sigstore keyless (OIDC + Fulcio/Rekor network)
 # stays infra-blocked and is NOT bundled here.
 sign = ["cryptography>=41.0.0"]
-# v0.71.3 #181 — reportlab PDF rendering for `soup train --annex-xi *.pdf`.
+# v0.71.3 #181 вЂ” reportlab PDF rendering for `soup train --annex-xi *.pdf`.
 pdf = ["reportlab>=4.0.0"]
-# v0.71.3 #180 — codecarbon offline energy/CO2 measurement for
+# v0.71.3 #180 вЂ” codecarbon offline energy/CO2 measurement for
 # `soup train --track-energy` (offline; no IP-geolocation network call).
 carbon = ["codecarbon>=2.0.0"]
-# v0.71.13 #225/#227 — prompt-program / tool-schema compilers
+# v0.71.13 #225/#227 вЂ” prompt-program / tool-schema compilers
 # (`soup compile` / `soup compile-tools`). Lazy-imported with a friendly
 # ImportError; not installed by default (heavy dependency trees).
 compile = ["dspy-ai>=2.5.0", "textgrad>=0.1.0", "gepa>=0.0.1"]
-# v0.71.18 #16 — serverless cloud GPU training (`soup train --cloud modal`).
+# v0.71.18 #16 вЂ” serverless cloud GPU training (`soup train --cloud modal`).
 # Lazy-imported; only needed for `--cloud-submit` (plan-only render needs no
 # dependency). Modal auth is via `modal setup`.
 modal = ["modal>=0.60.0"]
@@ -113,7 +113,7 @@ Issues = "https://github.com/MakazhanAlpamys/Soup/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/soup_cli"]
-# v0.53.8 #93 — include bundled fixture JSONLs as package data so
+# v0.53.8 #93 вЂ” include bundled fixture JSONLs as package data so
 # `soup data demo` works in zipapp / namespace-package installs.
 # Hatchling's ``packages = ["src/soup_cli"]`` already recurses into the
 # package directory, so we use the artifacts directive (NOT
@@ -146,7 +146,7 @@ follow_imports = "silent"
 testpaths = ["tests"]
 markers = [
     "smoke: slow smoke tests that download models and run training (run with: pytest -m smoke)",
-    "unit: fast isolated tests — no subprocess, network, filesystem, or real model load",
+    "unit: fast isolated tests вЂ” no subprocess, network, filesystem, or real model load",
     "integration: tests that touch real subprocess, SQLite, filesystem, or HTTP",
 ]
 addopts = "-m 'not smoke' --cov=soup_cli --cov-fail-under=77 --cov-report=term-missing:skip-covered"
