@@ -1026,10 +1026,13 @@ prepends the family's emotion control string to the first user turn.
 **Live-codec (hardware/dependency-gated).** Setting `data.format: audio` asks
 the trainer to encode raw audio into codec tokens **at train time**, which needs
 the family's heavyweight codec package (`snac` for Orpheus, `moshi` for
-Sesame-CSM, `xcodec2` for Llasa, `sparktts` for Spark, `outetts` for Oute). This
-path surfaces a friendly per-family `RuntimeError` naming the required `pip
-install` and is not validated on the maintainer's box — use the pre-encoded
-workflow above for a runnable fine-tune.
+Sesame-CSM, `xcodec2` for Llasa, `sparktts` for Spark, `outetts` for Oute). The
+**Orpheus** path is live — install `pip install snac` and a 24 kHz mono wav is
+encoded to SNAC codec tokens end-to-end (audio is duration- and byte-capped and
+read through an `O_NOFOLLOW` fd). The other four families still surface a
+friendly per-family `RuntimeError` naming the required `pip install` and are not
+yet validated on the maintainer's box — use the pre-encoded workflow above for a
+runnable fine-tune with those.
 
 Five ready-made recipes ship: `orpheus-tts-sft`, `sesame-csm-tts`, `llasa-tts`,
 `spark-tts`, `oute-tts` — copy with `soup recipes use <name>`. Cross-validators
