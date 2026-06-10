@@ -41,22 +41,7 @@ report.xml
 *.key
 
 # Internal plan + Claude Code local dev instructions (not for repo)
-.claude/plan.md
-.claude/CLAUDE.md
-.claude/settings.json
-.claude/scheduled_tasks.lock
-.claude/*.lock
-.claude/settings.local.json
-
-# ECC plugin (local only)
-.claude/agents/
-.claude/commands/
-.claude/examples/
-.claude/hooks/
-.claude/mcp-configs/
-.claude/rules/
-.claude/skills/
-.claude/settings.json
+.claude/
 .coverage
 
 # Local scratch / temp scripts at repo root (e.g. _smoke.py, _scratch.py) — never committed
