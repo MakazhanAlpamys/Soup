@@ -19,9 +19,9 @@ Security:
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Mapping
 
 # Closed allowlist — wrapped via MappingProxyType so callers cannot mutate
 # the registry at runtime (mirrors v0.36.0 ``_REGISTRY`` / v0.51.0 ``hubs``
@@ -202,13 +202,101 @@ def validate_tts_compat(*, task: str, modality: str, backend: str) -> None:
         )
 
 
-def build_tts_trainer() -> None:
-    """Live TTS trainer factory — deferred to v0.52.1.
+# v0.71.20 #131 — per-family audio-codec package map.
+#
+# Two TTS training workflows are supported (see ``trainer/tts.py``):
+#
+# * **Pre-encoded chat mode** (``data.format`` in {chat, sharegpt, chatml, auto}):
+#   the operator runs the family's audio codec OFFLINE so the assistant turn
+#   already contains the discrete codec-token string. Training is then plain
+#   next-token cross-entropy — identical to SFT — and runs on any GPU. This is
+#   the live, validated path.
+# * **Live-codec mode** (``data.format == 'audio'`` + ``audio_dir``): the
+#   trainer must encode raw audio into codec tokens AT TRAIN TIME via the
+#   family's codec. Those codecs are heavyweight per-family deps (SNAC,
+#   BiCodec, XCodec2, …) — this mode is hardware/dependency-gated and surfaces
+#   a friendly per-family ``RuntimeError`` naming the required package when it
+#   is missing.
+TTS_CODEC_PACKAGES: Mapping[str, str] = MappingProxyType({
+    "orpheus": "snac",
+    "sesame_csm": "moshi",
+    "llasa": "xcodec2",
+    "spark": "sparktts",
+    "oute": "outetts",
+})
 
-    Mirrors v0.50.0 ``build_prm_trainer`` / v0.49.0 ``apply_longlora_forward_override``
-    stub-then-live pattern.
+# Per-family emotion control templating. Emotion-conditioned families
+# (Orpheus / Oute) prepend a family-specific control string to the user turn.
+# Kept deliberately small + documented — the codec-token contents live in the
+# operator's data; Soup's per-family contribution is the emotion convention.
+_TTS_EMOTION_TEMPLATE: Mapping[str, str] = MappingProxyType({
+    "orpheus": "<|emotion|>{emotion}<|/emotion|> ",
+    "oute": "[emotion: {emotion}] ",
+})
+
+
+def tts_codec_package(family: str) -> str:
+    """Return the pip package the live-codec path needs for ``family``."""
+    canonical = validate_tts_family(family)
+    return TTS_CODEC_PACKAGES[canonical]
+
+
+def format_tts_messages(
+    messages: object,
+    family: str,
+    *,
+    emotion: object = None,
+) -> list[dict]:
+    """Apply per-family emotion templating to a chat-message list.
+
+    Returns a NEW deep-copied list of message dicts (caller's list and its
+    nested values are never mutated — mirrors v0.33.0 #47 / v0.53.2
+    ``apply_reasoning_effort_prefix`` policy). The emotion control is prepended
+    to the FIRST user turn for the families that support emotion conditioning;
+    a non-string ``content`` (e.g. multimodal parts) is left unchanged.
     """
-    raise NotImplementedError(
-        "TTS trainer (task='tts') live wiring deferred to v0.52.1. "
-        "Schema accepts the value but no trainer wrapper is registered yet."
-    )
+    import copy
+
+    canonical_family = validate_tts_family(family)
+    if not isinstance(messages, (list, tuple)):
+        raise TypeError(
+            f"messages must be a list, got {type(messages).__name__}"
+        )
+    out: list[dict] = []
+    for msg in messages:
+        if not isinstance(msg, dict):
+            raise TypeError("each message must be a dict")
+        out.append(copy.deepcopy(msg))
+
+    if emotion is None:
+        return out
+
+    canonical_emotion = validate_emotion_tag(emotion, family=canonical_family)
+    template = _TTS_EMOTION_TEMPLATE.get(canonical_family)
+    if template is None:
+        # Family validated as emotion-supporting but no template registered —
+        # defence-in-depth (should not happen given _FAMILY_EMOTIONS coverage).
+        return out
+    prefix = template.format(emotion=canonical_emotion)
+    for msg in out:
+        if msg.get("role") == "user":
+            content = msg.get("content", "")
+            if isinstance(content, str):
+                msg["content"] = prefix + content
+            break
+    return out
+
+
+def build_tts_trainer(config: object, **kwargs: object):
+    """Live TTS trainer factory (v0.71.20 #131).
+
+    Returns a :class:`~soup_cli.trainer.tts.TTSTrainerWrapper`. The wrapper
+    reuses the SFT next-token cross-entropy path: TTS families are all
+    decoder language models whose training objective over interleaved
+    ``[text][audio-codec-token]`` sequences IS cross-entropy.
+
+    Lazy import keeps ``soup_cli.utils.tts`` torch-free for the schema path.
+    """
+    from soup_cli.trainer.tts import TTSTrainerWrapper
+
+    return TTSTrainerWrapper(config, **kwargs)

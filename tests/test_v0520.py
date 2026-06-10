@@ -11,7 +11,6 @@ import math
 from types import MappingProxyType
 
 import pytest
-import typer
 
 from soup_cli.config.loader import load_config_from_string
 
@@ -109,10 +108,13 @@ class TestTTSUtils:
         with pytest.raises(ValueError, match=match):
             validate_tts_compat(**kwargs)
 
-    def test_build_tts_trainer_deferred(self):
+    def test_build_tts_trainer_lifted_v07120(self):
+        """v0.52.0 shipped as a NotImplementedError stub; v0.71.20 #131 lifts it
+        into a real TTSTrainerWrapper factory taking ``config``. No-arg call now
+        raises TypeError rather than NotImplementedError."""
         from soup_cli.utils.tts import build_tts_trainer
 
-        with pytest.raises(NotImplementedError, match="v0.52.1"):
+        with pytest.raises(TypeError):
             build_tts_trainer()
 
 
@@ -567,16 +569,20 @@ class TestBitNetUtils:
         with pytest.raises(exc):
             validate_bitnet_export(bad)
 
-    def test_build_bitnet_trainer_deferred(self):
+    def test_build_bitnet_trainer_lifted_v07120(self):
+        """v0.52.0 stub lifted in v0.71.20 #134 to a BitNetTrainerWrapper
+        factory taking ``config``. No-arg call now raises TypeError."""
         from soup_cli.utils.bitnet import build_bitnet_trainer
 
-        with pytest.raises(NotImplementedError, match="v0.52.1"):
+        with pytest.raises(TypeError):
             build_bitnet_trainer()
 
-    def test_export_bitnet_gguf_deferred(self):
+    def test_export_bitnet_gguf_lifted_v07120(self):
+        """v0.52.0 stub lifted in v0.71.20 #134 to a real export taking
+        required kwargs. No-arg call now raises TypeError."""
         from soup_cli.utils.bitnet import export_bitnet_gguf
 
-        with pytest.raises(NotImplementedError, match="v0.52.1"):
+        with pytest.raises(TypeError):
             export_bitnet_gguf()
 
 
@@ -785,10 +791,12 @@ class TestMoeQuantUtils:
         with pytest.raises(ValueError, match="mlx"):
             validate_moe_expert_quant_compat(backend="mlx", moe_lora=True)
 
-    def test_apply_moe_expert_quant_deferred(self):
+    def test_apply_moe_expert_quant_lifted_v07120(self):
+        """v0.52.0 stub lifted in v0.71.20 #136 to take (model, quant_format).
+        No-arg call now raises TypeError."""
         from soup_cli.utils.moe_quant import apply_moe_expert_quant
 
-        with pytest.raises(NotImplementedError, match="v0.52.1"):
+        with pytest.raises(TypeError):
             apply_moe_expert_quant()
 
 
@@ -1093,39 +1101,14 @@ class TestTddReviewGaps:
 
 
 class TestBitnetExportCli:
-    """v0.52.0 Part D — `soup export --format bitnet/tq1_0` stub CLI."""
-
-    def _runner(self):
-        from typer.testing import CliRunner
-
-        from soup_cli.commands.export import export
-
-        app = typer.Typer()
-        app.command()(export)
-        return CliRunner(), app
+    """v0.52.0 Part D format allowlist — live wiring in v0.71.20 #134
+    (see test_v07120.py for the live bitnet-export CLI coverage)."""
 
     def test_export_format_bitnet_lists_in_help(self):
         from soup_cli.commands.export import SUPPORTED_FORMATS
 
         assert "bitnet" in SUPPORTED_FORMATS
         assert "tq1_0" in SUPPORTED_FORMATS
-
-    def test_export_format_bitnet_stub_exits_zero(self, tmp_path):
-        runner, app = self._runner()
-        model = tmp_path / "fake-model"
-        model.mkdir()
-        result = runner.invoke(app, ["--model", str(model), "--format", "bitnet"])
-        assert result.exit_code == 0, (result.output, repr(result.exception))
-        assert "bitnet" in result.output.lower()
-        assert "v0.52.1" in result.output
-
-    def test_export_format_tq1_0_stub_exits_zero(self, tmp_path):
-        runner, app = self._runner()
-        model = tmp_path / "fake-model"
-        model.mkdir()
-        result = runner.invoke(app, ["--model", str(model), "--format", "tq1_0"])
-        assert result.exit_code == 0, (result.output, repr(result.exception))
-        assert "tq1_0" in result.output.lower()
 
 
 class TestReviewFixes:

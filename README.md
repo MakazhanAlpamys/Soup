@@ -49,16 +49,20 @@ infrastructure instead of improving models. Soup fixes that.
 
 ## What's New
 
-**v0.71.19 — Quant-menu + multipack hardening.** Two fixes validated on Windows + RTX 3050:
+**v0.71.20 — Modality II trainers (BETA, hardware-gated).** Three v0.52.0 schema stubs become real
+trainers:
 
-- **Quant Menu for vision / audio** — the full quant menu (`gptq` / `awq` / `hqq:Nbit` / `aqlm` /
-  `eetq` / `mxfp4` / `fp8`) now works for `modality: vision` and `modality: audio`, not just text.
-  The vision/audio setup paths thread the same unified quantization loader as the text path, so you
-  can fine-tune a LoRA on top of a pre-quantized multi-modal base.
-- **Multipack sharding under multi-GPU** — `training.multipack: true` now shards the FFD-packed bins
-  correctly across ranks under FSDP / DeepSpeed ZeRO / DDP (the DataLoader is routed through accelerate
-  exactly as HF Trainer does). The single-GPU path is unchanged. Full multi-GPU validation remains a
-  QA item; the routing is mocked-tested.
+- **TTS fine-tuning** — `task: tts` now trains a real text-to-speech model. The five families
+  (Orpheus / Sesame-CSM / Llasa / Spark / Oute) are decoder LMs, so a TTS fine-tune is next-token
+  cross-entropy over `[text][audio-codec-token]` chat sequences. Pre-encode your audio to codec tokens
+  offline and train with `data.format: chat` — Soup adds per-family emotion control + codec
+  special-token registration. (The encode-at-train-time path is dependency-gated on each family's codec.)
+- **BitNet 1.58-bit** — `soup export --format bitnet | tq1_0` runs a real llama.cpp TQ1_0 ternary
+  export, and `quantization: bitnet_1.58` routes to a live BitNet trainer (gated on `onebitllms`).
+- **MoE expert quant** — `training.moe_expert_quant: nf4 | int8_rowwise` quantizes just the
+  fused-MoE expert layers with bitsandbytes (attention + router stay full precision), and
+  `training.train_router_only: true` freezes the experts to train only the gating router. Validated
+  live on an RTX 3050.
 
 Full history: [CHANGELOG.md](CHANGELOG.md) &middot; [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 

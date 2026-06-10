@@ -1046,6 +1046,12 @@ def train(
         from soup_cli.trainer.mole_routing import MoleRoutingTrainerWrapper
 
         trainer_wrapper = MoleRoutingTrainerWrapper(cfg, **trainer_kwargs)
+    elif cfg.task == "tts":
+        # v0.71.20 #131 — TTS fine-tuning (SFT-style next-token CE over
+        # text + audio-codec-token sequences; per-family templating).
+        from soup_cli.trainer.tts import TTSTrainerWrapper
+
+        trainer_wrapper = TTSTrainerWrapper(cfg, **trainer_kwargs)
     else:
         trainer_wrapper = SFTTrainerWrapper(cfg, **trainer_kwargs)
     trainer_wrapper.setup(dataset)

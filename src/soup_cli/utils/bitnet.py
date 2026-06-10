@@ -9,9 +9,9 @@ deferred to v0.52.1 (mirrors v0.50.0 stub-then-live pattern).
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Mapping
 
 # Closed allowlist of BitNet-flavoured quant strings exposed to YAML.
 BITNET_QUANT_FORMATS: frozenset[str] = frozenset({"bitnet_1.58"})
@@ -155,19 +155,91 @@ def validate_bitnet_export(format_name: object) -> str:
     return canonical
 
 
-def build_bitnet_trainer() -> None:
-    """Live BitNet trainer factory — deferred to v0.52.1."""
-    raise NotImplementedError(
-        "BitNet 1.58-bit fine-tuning live wiring deferred to v0.52.1. "
-        "Schema accepts quantization='bitnet_1.58' but no trainer integration "
-        "is registered yet."
-    )
+# BitNet export-format → llama.cpp ternary quantize CLI arg. Both the
+# friendly ``bitnet`` alias and the explicit ``tq1_0`` map to TQ1_0 (the
+# llama.cpp 1.58-bit ternary GGUF type).
+_BITNET_GGUF_QUANT_ARG: Mapping[str, str] = MappingProxyType({
+    "bitnet": "TQ1_0",
+    "tq1_0": "TQ1_0",
+})
 
 
-def export_bitnet_gguf() -> None:
-    """Live BitNet GGUF export — deferred to v0.52.1."""
-    raise NotImplementedError(
-        "BitNet / TQ1_0 GGUF export live wiring deferred to v0.52.1. "
-        "Schema accepts --format bitnet / --format tq1_0 but no export "
-        "pipeline is registered yet."
+def build_bitnet_trainer(config: object, **kwargs: object):
+    """Live BitNet 1.58-bit trainer factory (v0.71.20 #134).
+
+    Returns a :class:`~soup_cli.trainer.bitnet.BitNetTrainerWrapper`. BitNet
+    1.58 fine-tuning trains an SFT-style next-token CE objective on a model
+    whose ``BitLinear`` layers carry ternary weights. The faithful training
+    path needs the upstream ``onebitllms`` package (CUDA / Linux only); the
+    wrapper surfaces a friendly ``RuntimeError`` naming it when absent.
+
+    Lazy import keeps ``soup_cli.utils.bitnet`` torch-free.
+    """
+    from soup_cli.trainer.bitnet import BitNetTrainerWrapper
+
+    return BitNetTrainerWrapper(config, **kwargs)
+
+
+def export_bitnet_gguf(
+    *,
+    model_dir: str,
+    output_path: str,
+    export_format: str,
+    llama_cpp_dir: str,
+) -> None:
+    """Export a BitNet model as a TQ1_0 (1.58-bit ternary) GGUF (v0.71.20 #134).
+
+    Two-stage llama.cpp pipeline (reuses the v0.53.1 gguf machinery):
+    1. ``convert_hf_to_gguf.py`` → ``f16.gguf``
+    2. ``llama-quantize`` with the ``TQ1_0`` flavour → ``output_path``
+
+    No importance matrix is needed — ternary weights export directly. All
+    subprocess invocations use argv-list form (no shell). cwd containment +
+    symlink rejection mirror ``export_advanced_gguf``.
+
+    Requires a built llama.cpp toolchain; the convert/quantize binaries raise a
+    friendly ``FileNotFoundError`` naming the missing piece when absent.
+    """
+    import os
+    import tempfile
+    from pathlib import Path
+
+    from soup_cli.utils.gguf_quant import (
+        _enforce_under_cwd_and_no_symlink,
+        _run_convert_to_f16,
+        _run_quantize_binary,
     )
+
+    flavour = validate_bitnet_export(export_format)
+    quant_arg = _BITNET_GGUF_QUANT_ARG[flavour]
+
+    _enforce_under_cwd_and_no_symlink(model_dir, "model_dir")
+    _enforce_under_cwd_and_no_symlink(output_path, "output_path")
+    _enforce_under_cwd_and_no_symlink(llama_cpp_dir, "llama_cpp_dir")
+
+    if not os.path.isdir(model_dir):
+        raise FileNotFoundError(
+            f"model_dir not a directory: {os.path.basename(model_dir)!r}"
+        )
+    if not os.path.isdir(llama_cpp_dir):
+        raise FileNotFoundError(
+            f"llama_cpp_dir not a directory: {os.path.basename(llama_cpp_dir)!r}"
+        )
+
+    with tempfile.TemporaryDirectory(
+        prefix=".soup_bitnet_gguf_", dir=str(Path.cwd()),
+    ) as staged:
+        f16_path = Path(staged) / "model.f16.gguf"
+        _run_convert_to_f16(llama_cpp_dir, model_dir, str(f16_path))
+        _run_quantize_binary(
+            llama_cpp_dir=llama_cpp_dir,
+            f16_path=str(f16_path),
+            output_path=output_path,
+            flavour=quant_arg,
+            imatrix_path=None,
+        )
+
+    if not os.path.isfile(output_path):
+        raise RuntimeError(
+            f"llama-quantize did not produce {os.path.basename(output_path)!r}"
+        )

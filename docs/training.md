@@ -983,26 +983,57 @@ Visualise the recorded bucket-weight evolution with `soup runs curriculum-curve 
 DDP / grad-accum safety: multi-rank launches must wire an `all_reduce` hook on per-bucket stats (a cross-validator rejects un-coordinated multi-rank runs upfront). Multi-trainer expansion beyond `sft` / `pretrain` is tracked for v0.48.1.
 
 
-## TTS Fine-Tuning (BETA, v0.52.0)
+## TTS Fine-Tuning (`task='tts'`, BETA, live in v0.71.20)
 
-Schema-only this release; live trainer wiring lands in v0.52.1.
+Live as of v0.71.20 (lifted from the v0.52.0 schema stub). The five families
+(`orpheus`, `sesame_csm`, `llasa`, `spark`, `oute`) are all decoder language
+models, so a TTS fine-tune is **next-token cross-entropy over interleaved
+`[text][audio-codec-token]` chat sequences** — the same objective the SFT
+trainer already runs. `TTSTrainerWrapper` reuses the SFT model/tokenizer/LoRA/CE
+machinery and adds two TTS-specific pieces: per-family emotion-control
+templating and registration of operator-supplied codec special tokens.
 
-Five upstream model families are recognised: `orpheus`, `sesame_csm`, `llasa`, `spark`, `oute`. Pair `task: tts` with `modality: audio_out` and set `training.tts_family`. Orpheus + Oute support emotion conditioning via `training.tts_emotion` from a per-family allowlist (Orpheus: neutral / happy / sad / angry / excited / calm / whisper / laugh; Oute: neutral / happy / sad / angry / calm / excited).
+There are two workflows:
+
+**Pre-encoded chat (live, validated).** Run the family's audio codec **offline**
+so the assistant turn already contains the discrete codec-token string, then
+train with `data.format: chat`. This is plain cross-entropy and runs on any GPU
+(validated end-to-end on SmolLM2-135M-Instruct).
 
 ```yaml
-base: canopylabs/orpheus-3b-0.1-ft
+base: HuggingFaceTB/SmolLM2-135M-Instruct   # or canopylabs/orpheus-3b-0.1-ft
 task: tts
 modality: audio_out
 data:
-  train: ./data/tts_train.jsonl
-  format: audio
-  audio_dir: ./data/audio
+  train: ./data/tts_pre_encoded.jsonl   # assistant turns carry codec tokens
+  format: chat
+  new_special_tokens: ["<|codec_0|>", "<|codec_1|>"]   # your codec vocab
 training:
   tts_family: orpheus
-  tts_emotion: neutral
+  tts_emotion: neutral   # Orpheus + Oute only
+  lora: true
 ```
 
-Five ready-made recipes ship in v0.52.0: `orpheus-tts-sft`, `sesame-csm-tts`, `llasa-tts`, `spark-tts`, `oute-tts` — copy with `soup recipes use <name>`. Cross-validators reject the `mlx` backend, `modality != audio_out`, and emotion tags outside the per-family allowlist.
+Operator-supplied `data.new_special_tokens` are registered (deduplicated, only
+tokens not already in the vocab) and the embedding matrix is resized through the
+(possibly PEFT-wrapped) model so the codec-token ids have rows. Orpheus + Oute
+support emotion conditioning via `training.tts_emotion` from a per-family
+allowlist (Orpheus: neutral / happy / sad / angry / excited / calm / whisper /
+laugh; Oute: neutral / happy / sad / angry / calm / excited) — the wrapper
+prepends the family's emotion control string to the first user turn.
+
+**Live-codec (hardware/dependency-gated).** Setting `data.format: audio` asks
+the trainer to encode raw audio into codec tokens **at train time**, which needs
+the family's heavyweight codec package (`snac` for Orpheus, `moshi` for
+Sesame-CSM, `xcodec2` for Llasa, `sparktts` for Spark, `outetts` for Oute). This
+path surfaces a friendly per-family `RuntimeError` naming the required `pip
+install` and is not validated on the maintainer's box — use the pre-encoded
+workflow above for a runnable fine-tune.
+
+Five ready-made recipes ship: `orpheus-tts-sft`, `sesame-csm-tts`, `llasa-tts`,
+`spark-tts`, `oute-tts` — copy with `soup recipes use <name>`. Cross-validators
+reject the `mlx` backend, `modality != audio_out`, and emotion tags outside the
+per-family allowlist.
 
 
 ## Classifier / Reranker / Cross-Encoder Training (BETA, v0.52.0)

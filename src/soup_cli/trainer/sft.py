@@ -763,6 +763,15 @@ class SFTTrainerWrapper:
 
         apply_block_expansion_if_configured(self.model, tcfg, console)
 
+        # v0.71.20 #136 — MoE expert quant. Applied BEFORE get_peft_model so
+        # PEFT attaches its adapters to the quantized base (QLoRA-on-experts)
+        # rather than the swap destroying freshly-injected expert adapters.
+        from soup_cli.utils.moe_quant import (
+            apply_moe_expert_quant_if_configured,
+        )
+
+        apply_moe_expert_quant_if_configured(self.model, tcfg, console)
+
         # LoRA — with MoE-aware target modules if moe_lora is enabled
         target_modules = tcfg.lora.target_modules
         if target_modules == "auto":
@@ -800,6 +809,15 @@ class SFTTrainerWrapper:
         from soup_cli.utils.mod import apply_mod_if_configured
 
         apply_mod_if_configured(self.model, tcfg, cfg.base, console)
+
+        # v0.71.20 #136 — MoE router-only training (train_router_only). Applied
+        # AFTER get_peft_model so the final PEFT-wrapped parameter set is frozen
+        # consistently. (The expert quant ran pre-LoRA — see below.)
+        from soup_cli.utils.moe_quant import (
+            apply_router_only_freeze_if_configured,
+        )
+
+        apply_router_only_freeze_if_configured(self.model, tcfg, console)
 
         self._apply_quantization_aware(tcfg)
 

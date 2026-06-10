@@ -82,6 +82,23 @@ soup export --model ./output --format tensorrt
 soup export --model ./output --format tensorrt --output ./model_trt
 ```
 
+### BitNet 1.58 TQ1_0 GGUF Export (live in v0.71.20)
+
+Export a BitNet 1.58-bit model as a `TQ1_0` (1.58-bit ternary) GGUF via
+llama.cpp's convert→quantize pipeline. Both the `bitnet` alias and the explicit
+`tq1_0` flavour map to the same `TQ1_0` quantization (no importance matrix is
+needed — ternary weights export directly):
+
+```bash
+soup export --model ./output --format bitnet   # → TQ1_0 ternary GGUF
+soup export --model ./output --format tq1_0     # same flavour
+soup export --model ./output --format bitnet --llama-cpp /path/to/llama.cpp
+```
+
+A built llama.cpp toolchain is required; LoRA adapters are auto-merged before
+export. See [Performance & Quantization → BitNet](performance-and-quantization.md)
+for the training side.
+
 After export, use with Ollama manually or auto-deploy:
 ```bash
 # Manual (3-step)

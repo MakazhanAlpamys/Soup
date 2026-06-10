@@ -12,6 +12,52 @@ reproducing 70+ versions of notes.
 
 ## [Unreleased]
 
+## [0.71.20] - 2026-06-09
+
+### Added
+- **Modality II trainers — TTS / BitNet / MoE expert quant (BETA, hw-gated)**
+  — lifts three v0.52.0 schema-only `NotImplementedError` stubs to real code.
+  - **TTS fine-tuning** (closes #131). `soup train` with `task='tts'` +
+    `modality='audio_out'` now routes to a live `TTSTrainerWrapper`. TTS
+    families (Orpheus / Sesame-CSM / Llasa / Spark / Oute) are decoder
+    language models, so a TTS fine-tune is next-token cross-entropy over
+    interleaved `[text][audio-codec-token]` chat sequences — the wrapper
+    reuses the SFT path and adds per-family emotion-control templating
+    (Orpheus / Oute) and registration of operator-supplied codec special
+    tokens (`data.new_special_tokens`) with an embedding resize. The
+    **pre-encoded chat workflow** (codec tokens produced offline, then trained
+    with `data.format=chat`) is the live, validated path; the **live-codec
+    workflow** (`data.format='audio'`, encode raw audio at train time) needs
+    the family's heavyweight codec dependency (SNAC / BiCodec / XCodec2 / …)
+    and is hardware/dependency-gated with a friendly per-family `RuntimeError`.
+    Verified end-to-end on SmolLM2-135M-Instruct.
+  - **BitNet 1.58-bit** (closes #134). `build_bitnet_trainer` returns a live
+    `BitNetTrainerWrapper` that gates on the upstream `onebitllms` package
+    (absent → friendly `RuntimeError` naming it). `soup export --format
+    bitnet | tq1_0` now runs a real llama.cpp TQ1_0 ternary export (reuses the
+    v0.53.1 gguf convert→quantize pipeline) instead of the deferred panel; it
+    requires a built llama.cpp toolchain (friendly `FileNotFoundError` when
+    absent).
+  - **MoE expert quant + router-only training** (closes #136).
+    `apply_moe_expert_quant` detects fused-MoE expert `nn.Linear` blocks and
+    replaces them with bitsandbytes `Linear4bit` (`nf4`) / `Linear8bitLt`
+    (`int8_rowwise`), leaving attention + the router in full precision; it
+    runs **before** `get_peft_model` (QLoRA-on-experts) so PEFT attaches to the
+    quantized base. `train_router_only` freezes every expert and keeps the
+    gating router trainable, applied after LoRA. CUDA-gated (friendly
+    `RuntimeError` when bitsandbytes/CUDA absent). Validated live on an
+    RTX 3050: 8 expert Linears → 8 `Linear4bit` with dequant error 0.0155 vs
+    source (weights genuinely carried), router-only freeze, and device-aware
+    placement.
+
+### Known limitations
+- The TTS live-codec workflow, BitNet 1.58 training (`onebitllms`), and BitNet
+  GGUF export (llama.cpp) are hardware/dependency-gated — the friendly gates
+  ship and the plumbing is validated, but the end-to-end runs against real TTS
+  models + audio codecs / a BitNet base + onebitllms / a built llama.cpp
+  toolchain stay open infra-blocked items on the maintainer's RTX 3050 / Windows
+  box.
+
 ## [0.71.19] - 2026-06-09
 
 ### Added

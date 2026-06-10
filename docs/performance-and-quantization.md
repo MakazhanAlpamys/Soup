@@ -19,8 +19,8 @@
 - [Performance + Long-Context](#performance--long-context)
 - [Live CUDA Batch-Size Probe](#live-cuda-batch-size-probe)
 - [FSDP Shard Consolidation](#fsdp-shard-consolidation)
-- [BitNet 1.58-Bit Fine-Tuning (BETA, v0.52.0)](#bitnet-158-bit-fine-tuning-beta-v0520)
-- [MoE Expert Quantization + Router-Only Training (v0.52.0)](#moe-expert-quantization--router-only-training-v0520)
+- [BitNet 1.58-Bit Fine-Tuning (BETA, live in v0.71.20)](#bitnet-158-bit-fine-tuning-beta-live-in-v07120)
+- [MoE Expert Quantization + Router-Only Training (live in v0.71.20)](#moe-expert-quantization--router-only-training-live-in-v07120)
 - [Unsloth Dynamic 2.0 GGUF Ladder (v0.53.0)](#unsloth-dynamic-20-gguf-ladder-v0530)
 - [KV Cache Types (v0.53.0)](#kv-cache-types-v0530)
 - [FP8 Attention + NVFP4 + Native `unsloth_bnb_4bit` (v0.53.0)](#fp8-attention--nvfp4--native-unsloth_bnb_4bit-v0530)
@@ -402,17 +402,23 @@ soup merge-sharded-fsdp-weights ./fsdp-checkpoint -o ./merged.safetensors
 Consolidates `pytorch_model_fsdp_*.bin` shard files into a single `.safetensors`. Each shard is loaded one at a time (streaming, not all-at-once) with `torch.load(weights_only=True)`, tensor shapes validated (a duplicate key with a conflicting shape is rejected; a same-shape duplicate keeps the first and warns), and the merged dict written atomically. cwd-containment + symlink rejection apply to the output path and every shard; per-shard 16 GiB cap; `_MAX_SHARDS=1024`. `--plan-only` prints the plan and exits 0. Live torch-side consolidation shipped in v0.71.14.
 
 
-## BitNet 1.58-Bit Fine-Tuning (BETA, v0.52.0)
+## BitNet 1.58-Bit Fine-Tuning (BETA, live in v0.71.20)
 
-New `training.quantization: bitnet_1.58` for ternary-weight training (axolotl + onebitllms wrapping). Schema-only on the trainer side; the new export targets are wired as CLI stubs:
+`training.quantization: bitnet_1.58` routes to a live `BitNetTrainerWrapper`
+(an SFT subclass) for ternary-weight training. It is gated on the upstream
+`onebitllms` package — when absent, training fails fast with a friendly
+`RuntimeError` naming it (`onebitllms` is CUDA/Linux-only). The export targets
+run a **real llama.cpp TQ1_0 ternary GGUF** export (reusing the v0.53.1
+convert→quantize pipeline) instead of a stub:
 
 ```bash
-# Schema-locked; live export lands in v0.52.1.
-soup export --model ./output --format bitnet
-soup export --model ./output --format tq1_0
+soup export --model ./output --format bitnet   # → TQ1_0 ternary GGUF
+soup export --model ./output --format tq1_0     # same flavour, explicit name
 ```
 
-A ready-made `falcon-e-bitnet-sft` recipe is shipped:
+The export requires a built llama.cpp toolchain (the convert/quantize binaries
+raise a friendly `FileNotFoundError` when missing). A ready-made
+`falcon-e-bitnet-sft` recipe is shipped:
 
 ```bash
 soup recipes use falcon-e-bitnet-sft
@@ -422,12 +428,20 @@ soup train --config soup.yaml
 Restricted to `task ∈ {sft, pretrain, dpo}` on `backend ∈ {transformers, unsloth}` with text modality; the cross-validator rejects MLX and vision/audio configurations loudly at config load.
 
 
-## MoE Expert Quantization + Router-Only Training (v0.52.0)
+## MoE Expert Quantization + Router-Only Training (live in v0.71.20)
 
-For fused-MoE models trained with `moe_lora: true`, two new toggles ship:
+For fused-MoE models trained with `moe_lora: true`, two live toggles:
 
-- `training.moe_expert_quant: nf4 | int8_rowwise` — per-expert weight quantization (axolotl).
-- `training.train_router_only: true` — freeze every expert and train only the gating router (unsloth pattern).
+- `training.moe_expert_quant: nf4 | int8_rowwise` — quantizes **just the
+  fused-MoE expert `nn.Linear` layers** with bitsandbytes (`Linear4bit` for
+  `nf4`, `Linear8bitLt` for `int8_rowwise`), leaving attention + the gating
+  router in full precision. The swap runs **before** `get_peft_model`
+  (QLoRA-on-experts), so PEFT attaches its adapters to the quantized base. The
+  source weights are genuinely carried into the quantized layer (validated
+  dequant error 0.0155 vs source on an RTX 3050). CUDA + bitsandbytes are
+  required — a friendly `RuntimeError` fires on CPU / without bnb.
+- `training.train_router_only: true` — freeze every expert parameter and train
+  only the gating router (applied after LoRA, on the final parameter set).
 
 Both reject silently-no-op combinations: setting either flag without `moe_lora=true` fails at config load with an actionable message.
 

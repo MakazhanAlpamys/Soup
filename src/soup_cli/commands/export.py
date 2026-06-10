@@ -215,28 +215,20 @@ def export(
         )
         return
 
-    # --- BitNet 1.58-bit / TQ1_0 GGUF — schema-only stubs (v0.52.0) ---
-    # Live conversion via onebitllms + llama.cpp TQ1_0 lands in v0.52.1.
+    # --- BitNet 1.58-bit / TQ1_0 GGUF (v0.71.20 #134) ---
+    # Live llama.cpp TQ1_0 ternary export. Requires a built llama.cpp
+    # toolchain; the convert/quantize binaries surface a friendly
+    # FileNotFoundError when absent (infra-blocked, mirrors gguf-ud).
     if fmt in ("bitnet", "tq1_0"):
-        from soup_cli.utils.bitnet import validate_bitnet_export
-        try:
-            canonical = validate_bitnet_export(fmt)
-        except (TypeError, ValueError) as exc:
-            console.print(f"[red]{exc}[/]")
-            raise typer.Exit(2)
-        console.print(Panel.fit(
-            (
-                f"[yellow]{canonical} export is schema-locked in v0.52.0; "
-                "live conversion lands in v0.52.1.[/]\n\n"
-                "The format flag is accepted so existing scripts pinned to "
-                "v0.52.0 will not break, but no artifact is written yet. "
-                "Watch the v0.52.1 release notes for the live "
-                "onebitllms / llama.cpp wiring."
-            ),
-            title=f"export --format {canonical} (deferred)",
-            border_style="yellow",
-        ))
-        raise typer.Exit(0)
+        _export_bitnet_gguf(
+            model_path=model_path,
+            output=output,
+            base=base,
+            export_format=fmt,
+            llama_cpp_path=llama_cpp_path,
+            trust_remote_code=trust_remote_code,
+        )
+        return
 
     if quant not in GGUF_QUANT_TYPES:
         console.print(
@@ -1250,6 +1242,80 @@ def _export_torchao_cli(
 
 
 # --- v0.53.1 #139 — Advanced GGUF export CLI dispatch -----------------------
+
+
+def _export_bitnet_gguf(
+    *,
+    model_path: Path,
+    output: Optional[str],
+    base: Optional[str],
+    export_format: str,
+    llama_cpp_path: Optional[str],
+    trust_remote_code: bool,
+) -> None:
+    """Dispatch ``soup export --format bitnet | tq1_0`` (v0.71.20 #134).
+
+    Reuses the v0.53.1 gguf convert→quantize pipeline with the TQ1_0 ternary
+    flavour. Pre-merges a LoRA adapter when one is detected. Requires a built
+    llama.cpp toolchain.
+    """
+    from soup_cli.utils.bitnet import export_bitnet_gguf, validate_bitnet_export
+
+    try:
+        canonical = validate_bitnet_export(export_format)
+    except (TypeError, ValueError) as exc:
+        console.print(f"[red]{exc}[/]")
+        raise typer.Exit(2)
+
+    if output is None:
+        output_path = model_path.parent / f"{model_path.name}.{canonical}.gguf"
+    else:
+        output_path = Path(output)
+
+    adapter_config_path = model_path / "adapter_config.json"
+    merge_dir = None
+    if adapter_config_path.exists():
+        console.print("[yellow]LoRA adapter detected — merging first...[/]")
+        base_model = base or _detect_base_model(adapter_config_path)
+        if not base_model:
+            console.print("[red]Cannot detect base model. Pass --base.[/]")
+            raise typer.Exit(2)
+        merge_dir = model_path.parent / f".soup_merge_tmp_{model_path.name}"
+        _merge_adapter(
+            str(model_path), base_model, str(merge_dir), trust_remote_code,
+        )
+        source_model_dir = merge_dir
+    else:
+        source_model_dir = model_path
+
+    llama_dir = _find_llama_cpp(llama_cpp_path)
+
+    console.print(Panel(
+        f"Model:   [bold]{source_model_dir}[/]\n"
+        f"Format:  [bold]{canonical}[/] (TQ1_0 ternary)\n"
+        f"Output:  [bold]{output_path}[/]",
+        title="BitNet GGUF Export",
+    ))
+
+    try:
+        export_bitnet_gguf(
+            model_dir=str(source_model_dir),
+            output_path=str(output_path),
+            export_format=canonical,
+            llama_cpp_dir=str(llama_dir),
+        )
+    except (FileNotFoundError, RuntimeError, ValueError) as exc:
+        console.print(f"[red]BitNet GGUF export failed: {exc}[/]")
+        raise typer.Exit(1)
+    finally:
+        if merge_dir and merge_dir.exists():
+            shutil.rmtree(merge_dir, ignore_errors=True)
+
+    console.print(Panel(
+        f"Output: [bold]{output_path}[/]\n"
+        f"Format: [bold]{canonical}[/]",
+        title="[bold green]BitNet GGUF Export Complete[/]",
+    ))
 
 
 def _export_gguf_advanced(
