@@ -25,6 +25,7 @@ soup push --model ./output --repo user/name --collection user/coll-abc123  Add t
 soup merge --adapter ./output                 Merge LoRA with base model
 soup merge-sharded-fsdp-weights ./shards -o merged.safetensors  Consolidate FSDP shards into one safetensors (v0.71.14; --plan-only previews)
 soup delinearize-llama4 ./src --target ./out [--num-experts N] [--plan-only]  Live Llama-4 fused-expert reshape [E*din,dout] -> [E,din,dout] + sidecar copy (v0.71.21)
+soup spectrum scan --model <id|path> --top-percent 50 [--modules mlp,attn] [-o patch.yaml]  Spectrum SNR scan (no model load) -> training.unfrozen_parameters YAML patch (v0.71.23)
 soup export --model ./output --format gguf    Export to GGUF (Ollama)
 soup export --model ./output --deploy ollama  Export GGUF + auto-deploy to Ollama
 soup export --model ./output --format onnx    Export to ONNX

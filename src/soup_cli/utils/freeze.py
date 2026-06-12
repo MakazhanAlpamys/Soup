@@ -71,3 +71,72 @@ def freeze_model_layers(
                 frozen_count += 1
 
     return frozen_count
+
+
+def apply_unfrozen_parameters(model: Any, patterns: list) -> int:
+    """Freeze every parameter, then unfreeze those matching ``patterns``.
+
+    This is the Spectrum (#266) targeted-training mechanism: full fine-tuning
+    of a hand-picked parameter set (LoRA off). Each pattern is treated as a
+    regular expression (``re.search`` against the parameter name) — the
+    ``soup spectrum scan`` output uses parameter-name prefixes such as
+    ``model.layers.0.self_attn.q_proj``.
+
+    Args:
+        model: A PyTorch model with ``named_parameters()``.
+        patterns: Regex strings; a parameter is kept trainable if any matches.
+
+    Returns:
+        The number of parameter tensors left trainable.
+
+    Raises:
+        ValueError: If ``patterns`` is empty or a pattern is not valid regex.
+    """
+    if not patterns:
+        raise ValueError("apply_unfrozen_parameters: patterns must be non-empty")
+
+    compiled = []
+    for pat in patterns:
+        try:
+            compiled.append(re.compile(pat))
+        except re.error as exc:
+            raise ValueError(
+                f"apply_unfrozen_parameters: invalid regex {pat!r}: {exc}"
+            ) from exc
+
+    # Single pass over named_parameters() (cheaper than two walks on a large
+    # model): a parameter is trainable iff a pattern matches AND it is a
+    # float/complex tensor; everything else is frozen.
+    trainable = 0
+    skipped_non_float = []
+    for name, param in model.named_parameters():
+        matched = any(rx.search(name) for rx in compiled)
+        if matched and not (param.is_floating_point() or param.is_complex()):
+            # A matched quantized (uint8) weight cannot be full-fine-tuned —
+            # skip it loudly rather than crash. The schema gate
+            # (quantization='none') normally prevents this, but stay robust.
+            skipped_non_float.append(name)
+            matched = False
+        param.requires_grad = matched
+        if matched:
+            trainable += 1
+
+    if skipped_non_float:
+        logger.warning(
+            "apply_unfrozen_parameters: %d matched parameter(s) are non-float "
+            "(e.g. quantized) and cannot be trained — skipped. Spectrum "
+            "targeted training requires quantization: none. First skipped: %s",
+            len(skipped_non_float),
+            skipped_non_float[0],
+        )
+
+    if trainable == 0:
+        logger.warning(
+            "apply_unfrozen_parameters: no parameter matched any of "
+            "%d pattern(s) — the model has NO trainable parameters. Check "
+            "your training.unfrozen_parameters against the model's parameter "
+            "names (run `soup spectrum scan` to regenerate).",
+            len(patterns),
+        )
+
+    return trainable

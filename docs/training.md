@@ -1145,3 +1145,48 @@ rejected at the schema gate for non-supported arches and for `use_ring_attention
 Pick one of MoD / LLaMA Pro / LongLoRA per run. (v0.71.12)
 
 
+## Spectrum — Targeted Training on Layer SNR (`soup spectrum scan`, v0.71.23)
+
+Spectrum (arXiv:2406.06623) fine-tunes only the layers with the most signal. `soup spectrum scan`
+streams a model's `.safetensors` shards **one tensor at a time** — there is no model load, so it
+runs on a CPU box even for very large models — and computes a singular-value signal-to-noise ratio
+per weight matrix with a Marchenko-Pastur noise threshold. It ranks the layers within each
+module-type group and prints the top `--top-percent` as a ready-to-paste config block:
+
+```bash
+soup spectrum scan --model HuggingFaceTB/SmolLM2-135M --top-percent 25 --modules mlp,attn -o patch.yaml
+```
+
+```yaml
+# patch.yaml — paste into your soup.yaml
+training:
+  unfrozen_parameters:
+  - model.layers.0.mlp.down_proj
+  - model.layers.29.self_attn.v_proj
+  # ...
+```
+
+Then train with the patch — the SFT trainer freezes **every** parameter and unfreezes only the
+matched set (full fine-tuning, LoRA off):
+
+```yaml
+base: HuggingFaceTB/SmolLM2-135M
+task: sft
+training:
+  quantization: none        # Spectrum trains float weights — quantization off
+  unfrozen_parameters:
+  - model.layers.0.mlp.down_proj
+  - model.layers.29.self_attn.v_proj
+```
+
+`unfrozen_parameters` entries are regex patterns matched against parameter names. It requires
+`task: sft`, `backend: transformers`, `modality: text`, and `quantization: none`, and is mutually
+exclusive with LoRA features (`use_dora` / `use_vera` / `moe_lora` / `relora_steps` / …) and the
+other freezing knobs (`freeze_layers` / `freeze_ratio` / `train_router_only` / `expand_layers`) —
+a conflicting combo is rejected loudly at config load. Scans cache under `~/.soup/spectrum/`
+(override with `SOUP_SPECTRUM_CACHE_DIR`); `--no-cache` skips it. `--modules mlp,attn` (vs the
+`all` default) is recommended for very large models — it skips the giant embedding/lm_head matrices.
+The SNR kernel is pure-numpy and transpose-invariant, so GPT-2 `Conv1D` weights score the same as
+Linear weights. (v0.71.23)
+
+

@@ -12,6 +12,39 @@ reproducing 70+ versions of notes.
 
 ## [Unreleased]
 
+## [0.71.23] - 2026-06-12
+
+### Added
+- **Native Spectrum targeted training (closes #266).** A new `soup spectrum
+  scan` reads a model's `.safetensors` shards **one tensor at a time** (no
+  model load — peak RAM is the largest single weight matrix), computes a
+  singular-value SNR per weight matrix with a Marchenko-Pastur noise threshold
+  (arXiv:2406.06623), ranks layers within each module-type group and prints
+  the top `--top-percent` as a ready-to-paste `training.unfrozen_parameters`
+  YAML block. This lets you scan even a very large model's layer SNR on a CPU
+  box and then full-fine-tune only the high-signal layers.
+  - `soup spectrum scan --model <id|path> --top-percent 50 [--modules mlp,attn|all] [--output patch.yaml]`
+    — SNR table + the YAML patch; results cache at `~/.soup/spectrum/<slug>.json`
+    (override via `SOUP_SPECTRUM_CACHE_DIR`).
+  - New schema field `training.unfrozen_parameters: list[str]` — regex patterns
+    of parameter names to keep trainable; the SFT trainer freezes every
+    parameter then unfreezes the matched set (full fine-tuning, LoRA off).
+    Mutually exclusive with LoRA features / `freeze_layers` / `freeze_ratio` /
+    `train_router_only` / `expand_layers`; requires `task=sft`,
+    `backend=transformers`, `modality=text`, and `quantization=none`.
+  - The SNR kernel is pure-numpy and transpose-invariant (singular values are
+    identical for `W` and `W.T`); GPT-2 `Conv1D` naming
+    (`c_attn`/`c_fc`/`c_proj`) is recognised alongside Llama-style names.
+  - The existing `spectrum` trainer-plugin wrapper is untouched (back-compat).
+    LISA (per-step layer sampling) is tracked separately in #267.
+
+### Security
+- `soup spectrum scan` validates `unfrozen_parameters` patterns at parse time:
+  rejects nested-unbounded-quantifier regexes (ReDoS), null bytes, empties, and
+  caps count (50k) and length (512). Hub downloads route through the
+  SSRF-hardened, namespace-pinned `hubs.snapshot_download`; symlinked shards and
+  matrices above a 2^31-element SVD cap are skipped; `--output` stays under cwd.
+
 ## [0.71.22] - 2026-06-10
 
 ### Added

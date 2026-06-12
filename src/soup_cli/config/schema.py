@@ -9,6 +9,15 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 _MAX_LORA_RANK_PATTERN_KEYS = 256
 _MAX_LORA_RANK_PATTERN_VALUE = 1024
 
+# v0.71.23 #266 — Spectrum targeted-training unfrozen-parameter caps
+_MAX_UNFROZEN_PARAMETERS = 50_000
+_MAX_UNFROZEN_PATTERN_LEN = 512
+# Reject nested-unbounded-quantifier regexes — e.g. ``(x+)+y`` / ``(a*)*`` —
+# which catastrophically backtrack (ReDoS) when re.search'd against parameter
+# names in apply_unfrozen_parameters. soup.yaml is shareable config, so the
+# pattern *class* is rejected at parse time, not just compile failures.
+_UNFROZEN_REDOS_RE = re.compile(r"\([^)]*[+*][^)]*\)\s*[+*]")
+
 
 class LoraConfig(BaseModel):
     r: int = Field(default=64, description="LoRA rank")
@@ -2319,6 +2328,62 @@ class TrainingConfig(BaseModel):
         lt=1.0,
         description="Freeze this fraction of layers (0.75 = freeze 75% from bottom).",
     )
+    # v0.71.23 #266 — Spectrum targeted training: full FT of selected params
+    unfrozen_parameters: Optional[List[str]] = Field(
+        default=None,
+        description=(
+            "Spectrum (#266) targeted training: regex patterns of parameter "
+            "names to keep trainable — every other parameter is frozen. Full "
+            "fine-tuning, LoRA off. Generate with `soup spectrum scan`. "
+            "Mutually exclusive with LoRA features / freeze_layers / "
+            "freeze_ratio / train_router_only; sft + transformers backend only."
+        ),
+    )
+
+    @field_validator("unfrozen_parameters")
+    @classmethod
+    def _validate_unfrozen_parameters(
+        cls, value: Optional[List[str]]
+    ) -> Optional[List[str]]:
+        """v0.71.23 #266 — caps + NUL + non-empty + regex-compilability."""
+        if value is None:
+            return None
+        if len(value) > _MAX_UNFROZEN_PARAMETERS:
+            raise ValueError(
+                f"training.unfrozen_parameters: too many patterns "
+                f"({len(value)} > {_MAX_UNFROZEN_PARAMETERS})"
+            )
+        for pat in value:
+            # pydantic's List[str] already guarantees each entry is a str.
+            if not pat:
+                raise ValueError(
+                    "training.unfrozen_parameters entries must be non-empty"
+                )
+            if "\x00" in pat:
+                raise ValueError(
+                    "training.unfrozen_parameters entries must not contain "
+                    "null bytes"
+                )
+            if len(pat) > _MAX_UNFROZEN_PATTERN_LEN:
+                raise ValueError(
+                    f"training.unfrozen_parameters entries must be "
+                    f"<= {_MAX_UNFROZEN_PATTERN_LEN} chars"
+                )
+            try:
+                re.compile(pat)
+            except re.error as exc:
+                raise ValueError(
+                    f"training.unfrozen_parameters: invalid regex {pat!r}: {exc}"
+                ) from exc
+            if _UNFROZEN_REDOS_RE.search(pat):
+                raise ValueError(
+                    f"training.unfrozen_parameters: pattern {pat!r} has nested "
+                    f"unbounded quantifiers (ReDoS risk). Use a literal "
+                    f"parameter-name prefix such as "
+                    f"'model.layers.0.mlp.down_proj' (run `soup spectrum scan`)."
+                )
+        return value
+
     # Sample packing — pack multiple short samples into one sequence
     packing: bool = Field(
         default=False,
@@ -3625,6 +3690,84 @@ class SoupConfig(BaseModel):
                 )
             except ValueError as exc:
                 raise ValueError(str(exc)) from exc
+        return self
+
+    @model_validator(mode="after")
+    def _validate_unfrozen_parameters(self) -> "SoupConfig":
+        """v0.71.23 #266 — Spectrum targeted-training compatibility gates.
+
+        ``unfrozen_parameters`` is full fine-tuning of a hand-picked parameter
+        set (LoRA off), so it is mutually exclusive with the LoRA feature
+        flags and with the other parameter-freezing mechanisms. Wired only in
+        the transformers SFT trainer.
+        """
+        tcfg = self.training
+        if not tcfg.unfrozen_parameters:
+            return self
+        if self.task != "sft":
+            raise ValueError(
+                f"training.unfrozen_parameters (Spectrum targeted training) "
+                f"requires task='sft'; got task={self.task!r}"
+            )
+        if self.backend != "transformers":
+            raise ValueError(
+                f"training.unfrozen_parameters requires backend='transformers'; "
+                f"got backend={self.backend!r}"
+            )
+        if self.modality != "text":
+            raise ValueError(
+                f"training.unfrozen_parameters requires modality='text' "
+                f"(the Spectrum branch is wired in the text SFT trainer); "
+                f"got modality={self.modality!r}"
+            )
+        if tcfg.quantization != "none":
+            raise ValueError(
+                f"training.unfrozen_parameters (Spectrum full fine-tuning) "
+                f"requires quantization='none' (got {tcfg.quantization!r}); "
+                f"quantized weights cannot be trained directly. For a quantized "
+                f"run, drop unfrozen_parameters and use LoRA (QLoRA)."
+            )
+        freeze_conflicts = []
+        if tcfg.freeze_layers is not None:
+            freeze_conflicts.append("freeze_layers")
+        if tcfg.freeze_ratio is not None:
+            freeze_conflicts.append("freeze_ratio")
+        if tcfg.train_router_only:
+            freeze_conflicts.append("train_router_only")
+        if tcfg.expand_layers is not None:
+            freeze_conflicts.append("expand_layers")
+        if tcfg.freeze_trainable_layers is not None:
+            freeze_conflicts.append("freeze_trainable_layers")
+        if freeze_conflicts:
+            raise ValueError(
+                f"training.unfrozen_parameters is mutually exclusive with "
+                f"{', '.join(freeze_conflicts)} (each independently selects "
+                f"which parameters train)"
+            )
+        lcfg = tcfg.lora
+        lora_conflicts = []
+        if lcfg.use_dora:
+            lora_conflicts.append("lora.use_dora")
+        if lcfg.use_vera:
+            lora_conflicts.append("lora.use_vera")
+        if lcfg.use_olora:
+            lora_conflicts.append("lora.use_olora")
+        if lcfg.use_rslora:
+            lora_conflicts.append("lora.use_rslora")
+        if tcfg.moe_lora:
+            lora_conflicts.append("moe_lora")
+        if tcfg.use_longlora:
+            lora_conflicts.append("use_longlora")
+        if tcfg.relora_steps is not None:
+            lora_conflicts.append("relora_steps")
+        if tcfg.loraplus_lr_ratio is not None:
+            lora_conflicts.append("loraplus_lr_ratio")
+        if lora_conflicts:
+            raise ValueError(
+                f"training.unfrozen_parameters (Spectrum full fine-tuning, "
+                f"LoRA off) is mutually exclusive with LoRA features: "
+                f"{', '.join(lora_conflicts)}"
+            )
         return self
 
     @model_validator(mode="after")

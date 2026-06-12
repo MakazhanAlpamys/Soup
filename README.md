@@ -49,22 +49,19 @@ infrastructure instead of improving models. Soup fixes that.
 
 ## What's New
 
-**v0.71.22 — Perf & measure polish.** Four live paths from the recent BETA lifts get tighter:
+**v0.71.23 — Native Spectrum targeted training.** Fine-tune only the layers that matter — no 8×H100 needed to find them:
 
-- **MiniLLM on-policy distillation is fast** — the on-policy rollout
-  (`training.minillm_on_policy: true`) now threads a KV cache so each step forwards only the new
-  token instead of re-feeding the whole prefix, resolving the earlier O(L²) cost. A LoRA student
-  activates the cache too (the PEFT wrapper is unwrapped before the cache check).
-- **`soup serve --mole` uses a KV cache** — each task adapter in a served MoLE keeps its own cache
-  in lockstep, created fresh per request (no cross-request leak). Output is byte-identical to the
-  previous no-cache path.
-- **`soup deploy autopilot --measure` is real and frugal** — a first-party transformers loader
-  factory loads each candidate live (per-candidate quant config), scores the baseline **once**, and
-  pre-validates the whole `--measure-candidates` list up front, so a typo fails before any model
-  load instead of burning N loads or doubling peak VRAM.
-- **Live-codec TTS via SNAC (Orpheus)** — encoding raw audio at train time (`data.format: audio`)
-  is validated for Orpheus: audio is duration- and byte-capped from `soundfile.info` **before**
-  decoding into RAM, and read through a symlink-safe file descriptor.
+- **`soup spectrum scan --model <id|path> --top-percent 50`** — streams a model's weights one
+  tensor at a time (no model load, runs on a CPU box even for very large models) and computes a
+  singular-value signal-to-noise ratio per weight matrix (Marchenko-Pastur, arXiv:2406.06623).
+- **Ready-to-paste patch** — prints a per-group SNR table and a `training.unfrozen_parameters`
+  YAML block; pipe it straight into your `soup.yaml`. Results cache under `~/.soup/spectrum/`.
+- **Targeted full fine-tuning** — with `training.unfrozen_parameters` set, `soup train` freezes
+  every parameter and unfreezes only the matched high-SNR layers (full FT, LoRA off) — train
+  fewer parameters, keep more of the base model intact.
+- **Honest guards** — the scan is pure-numpy and transpose-invariant; patterns are ReDoS-checked,
+  Hub downloads go through the SSRF-hardened loader, and the config gates `quantization: none` +
+  `task: sft` so a mis-set flag fails loudly, not silently.
 
 Full history: [CHANGELOG.md](CHANGELOG.md) &middot; [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 

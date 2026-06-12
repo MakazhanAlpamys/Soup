@@ -151,10 +151,22 @@ class SFTTrainerWrapper:
         else:
             self._setup_transformers(cfg, tcfg)
 
-        trainable, total = self.model.get_nb_trainable_parameters()
-        pct = 100 * trainable / total
+        # v0.71.23 #266 — the Spectrum full-FT branch leaves a raw (non-PEFT)
+        # model, which has no get_nb_trainable_parameters(); fall back to a
+        # direct parameter count.
+        if hasattr(self.model, "get_nb_trainable_parameters"):
+            trainable, total = self.model.get_nb_trainable_parameters()
+        else:
+            trainable = sum(
+                p.numel() for p in self.model.parameters() if p.requires_grad
+            )
+            total = sum(p.numel() for p in self.model.parameters())
+        pct = 100 * trainable / total if total else 0.0
+        label = (
+            "Spectrum targeted FT" if tcfg.unfrozen_parameters else "LoRA applied"
+        )
         console.print(
-            f"[green]LoRA applied:[/] {trainable:,} trainable"
+            f"[green]{label}:[/] {trainable:,} trainable"
             f" / {total:,} total ({pct:.2f}%)"
         )
 
@@ -772,52 +784,76 @@ class SFTTrainerWrapper:
 
         apply_moe_expert_quant_if_configured(self.model, tcfg, console)
 
-        # LoRA — with MoE-aware target modules if moe_lora is enabled
-        target_modules = tcfg.lora.target_modules
-        if target_modules == "auto":
-            target_modules = None
+        # v0.71.23 #266 — Spectrum targeted training. When unfrozen_parameters
+        # is set we do FULL fine-tuning of the matched parameters (no LoRA
+        # adapter): freeze every parameter, then unfreeze the matched set. The
+        # schema cross-validator guarantees no LoRA-feature / freeze flag is
+        # combined, so this branch fully replaces the LoRA path.
+        if tcfg.unfrozen_parameters:
+            from soup_cli.utils.freeze import apply_unfrozen_parameters
 
-        if tcfg.moe_lora and is_moe:
-            moe_targets = get_moe_target_modules(self.model)
-            if moe_targets:
-                target_modules = moe_targets
-                console.print(
-                    f"[green]ScatterMoE LoRA:[/] targeting {len(moe_targets)} module patterns"
-                )
+            n_trainable = apply_unfrozen_parameters(
+                self.model, tcfg.unfrozen_parameters
+            )
+            # Spectrum unfreezes mid-stack layers but leaves the input
+            # embeddings frozen. With gradient checkpointing that breaks the
+            # backward pass ("None of the inputs have requires_grad"), so make
+            # the embedding output require grad — exactly what get_peft_model
+            # does internally for the LoRA path. Harmless without checkpointing.
+            if hasattr(self.model, "enable_input_require_grads"):
+                self.model.enable_input_require_grads()
+            console.print(
+                f"[green]Spectrum targeted FT:[/] {n_trainable} parameter "
+                f"tensor(s) unfrozen (LoRA off)"
+            )
+        else:
+            # LoRA — with MoE-aware target modules if moe_lora is enabled
+            target_modules = tcfg.lora.target_modules
+            if target_modules == "auto":
+                target_modules = None
 
-        lora_config = LoraConfig(
-            r=tcfg.lora.r,
-            lora_alpha=tcfg.lora.alpha,
-            lora_dropout=tcfg.lora.dropout,
-            target_modules=target_modules,
-            task_type=TaskType.CAUSAL_LM,
-            bias="none",
-            use_dora=tcfg.lora.use_dora,
-            use_rslora=tcfg.lora.use_rslora,
-        )
-        # v0.39.0 Part D / v0.40.6 #67 — surgical PEFT patches via shared helpers.
-        from soup_cli.utils.peft_wiring import (
-            apply_post_lora_patches,
-            apply_pre_lora_patches,
-        )
-        apply_pre_lora_patches(self.model, cfg.base)
-        self.model = get_peft_model(self.model, lora_config)
-        apply_post_lora_patches(self.model)
+            if tcfg.moe_lora and is_moe:
+                moe_targets = get_moe_target_modules(self.model)
+                if moe_targets:
+                    target_modules = moe_targets
+                    console.print(
+                        f"[green]ScatterMoE LoRA:[/] targeting "
+                        f"{len(moe_targets)} module patterns"
+                    )
 
-        # v0.71.12 #84 — Mixture-of-Depths selective-token routing. Applied
-        # AFTER get_peft_model so the freshly-added routers are trainable.
-        from soup_cli.utils.mod import apply_mod_if_configured
+            lora_config = LoraConfig(
+                r=tcfg.lora.r,
+                lora_alpha=tcfg.lora.alpha,
+                lora_dropout=tcfg.lora.dropout,
+                target_modules=target_modules,
+                task_type=TaskType.CAUSAL_LM,
+                bias="none",
+                use_dora=tcfg.lora.use_dora,
+                use_rslora=tcfg.lora.use_rslora,
+            )
+            # v0.39.0 Part D / v0.40.6 #67 — surgical PEFT patches via shared helpers.
+            from soup_cli.utils.peft_wiring import (
+                apply_post_lora_patches,
+                apply_pre_lora_patches,
+            )
+            apply_pre_lora_patches(self.model, cfg.base)
+            self.model = get_peft_model(self.model, lora_config)
+            apply_post_lora_patches(self.model)
 
-        apply_mod_if_configured(self.model, tcfg, cfg.base, console)
+            # v0.71.12 #84 — Mixture-of-Depths selective-token routing. Applied
+            # AFTER get_peft_model so the freshly-added routers are trainable.
+            from soup_cli.utils.mod import apply_mod_if_configured
 
-        # v0.71.20 #136 — MoE router-only training (train_router_only). Applied
-        # AFTER get_peft_model so the final PEFT-wrapped parameter set is frozen
-        # consistently. (The expert quant ran pre-LoRA — see below.)
-        from soup_cli.utils.moe_quant import (
-            apply_router_only_freeze_if_configured,
-        )
+            apply_mod_if_configured(self.model, tcfg, cfg.base, console)
 
-        apply_router_only_freeze_if_configured(self.model, tcfg, console)
+            # v0.71.20 #136 — MoE router-only training (train_router_only).
+            # Applied AFTER get_peft_model so the final PEFT-wrapped parameter
+            # set is frozen consistently. (Expert quant ran pre-LoRA above.)
+            from soup_cli.utils.moe_quant import (
+                apply_router_only_freeze_if_configured,
+            )
+
+            apply_router_only_freeze_if_configured(self.model, tcfg, console)
 
         self._apply_quantization_aware(tcfg)
 
