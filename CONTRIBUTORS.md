@@ -39,6 +39,8 @@ Listed by first contribution. PR numbers link the work.
 - **gittihub-jpg** ([@gittihub-jpg](https://github.com/gittihub-jpg))
   - Manifest-level dotted-path custom transforms for `soup build` ([#255](https://github.com/MakazhanAlpamys/Soup/pull/255))
   - `--energy` flag for `soup bom emit` — thread energy/CO₂ into the ML-BOM ([#256](https://github.com/MakazhanAlpamys/Soup/pull/256))
+- **shatakshi-1404** ([@shatakshi-1404](https://github.com/shatakshi-1404))
+  - Unit tests for the `warmup.py` auto-warmup-steps helper ([#274](https://github.com/MakazhanAlpamys/Soup/pull/274))
 
 ---
 

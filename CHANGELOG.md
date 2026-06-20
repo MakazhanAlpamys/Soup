@@ -12,6 +12,10 @@ reproducing 70+ versions of notes.
 
 ## [Unreleased]
 
+### Added
+- Unit-test coverage for the `warmup.py` auto-warmup-steps helper
+  ([#274](https://github.com/MakazhanAlpamys/Soup/pull/274) by [@shatakshi-1404](https://github.com/shatakshi-1404)).
+
 ## [0.71.23] - 2026-06-12
 
 ### Added
