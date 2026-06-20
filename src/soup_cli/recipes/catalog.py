@@ -48,7 +48,7 @@ def search_recipes(
 
 
 # ---------------------------------------------------------------------------
-# Recipe catalog (~30 recipes)
+# Recipe catalog (116 recipes)
 # ---------------------------------------------------------------------------
 
 RECIPES: Dict[str, RecipeMeta] = {
@@ -3286,7 +3286,7 @@ output: ./output
         task="tts",
         size="3B",
         tags=("tts", "orpheus", "audio_out", "v0.52.0"),
-        description="Orpheus emotional TTS — schema-only stub (live in v0.52.1)",
+        description="Orpheus emotional TTS — live (v0.71.20)",
         yaml_str="""\
 base: canopylabs/orpheus-3b-0.1-ft
 task: tts
@@ -3317,7 +3317,7 @@ output: ./output
         task="tts",
         size="1B",
         tags=("tts", "sesame", "audio_out", "v0.52.0"),
-        description="Sesame CSM conversational speech — schema-only stub",
+        description="Sesame CSM conversational TTS — live (v0.71.20)",
         yaml_str="""\
 base: sesame/csm-1b
 task: tts
@@ -3343,7 +3343,7 @@ output: ./output
         task="tts",
         size="1B",
         tags=("tts", "llasa", "audio_out", "v0.52.0"),
-        description="Llasa-TTS — schema-only stub",
+        description="Llasa-TTS — live (v0.71.20)",
         yaml_str="""\
 base: HKUSTAudio/Llasa-1B
 task: tts
@@ -3369,7 +3369,7 @@ output: ./output
         task="tts",
         size="0.5B",
         tags=("tts", "spark", "audio_out", "v0.52.0"),
-        description="Spark-TTS — schema-only stub",
+        description="Spark-TTS — live (v0.71.20)",
         yaml_str="""\
 base: SparkAudio/Spark-TTS-0.5B
 task: tts
@@ -3395,7 +3395,7 @@ output: ./output
         task="tts",
         size="0.5B",
         tags=("tts", "oute", "audio_out", "emotion", "v0.52.0"),
-        description="Oute-TTS with emotion conditioning — schema-only stub",
+        description="Oute-TTS with emotion conditioning — live (v0.71.20)",
         yaml_str="""\
 base: OuteAI/OuteTTS-0.3-500M
 task: tts
@@ -3516,7 +3516,7 @@ output: ./output
         task="sft",
         size="1B",
         tags=("bitnet", "1.58bit", "falcon-e", "ternary", "v0.52.0"),
-        description="Falcon-E BitNet 1.58-bit SFT — schema-only stub",
+        description="Falcon-E BitNet 1.58-bit SFT — live (v0.71.20)",
         yaml_str="""\
 base: tiiuae/Falcon-E-1B-Instruct
 task: sft
