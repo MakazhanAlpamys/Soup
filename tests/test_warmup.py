@@ -95,3 +95,4 @@ def test_raises_for_ratio_above_max():
 def test_raises_for_negative_ratio():
     with pytest.raises(ValueError, match="ratio"):
         compute_warmup_steps(1000, 8, 1, 3, ratio=-0.1)
+        
