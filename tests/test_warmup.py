@@ -1,5 +1,6 @@
 import pytest
-from soup_cli.utils.warmup import compute_warmup_steps, MIN_WARMUP, MAX_WARMUP
+
+from soup_cli.utils.warmup import MAX_WARMUP, MIN_WARMUP, compute_warmup_steps
 
 
 # --- Happy path ---
