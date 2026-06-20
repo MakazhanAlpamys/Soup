@@ -20,16 +20,16 @@ ERROR_MAP = [
         "CUDA out of memory",
         "GPU ran out of memory during training.",
         (
-            "Try --batch-size <half> or --grad-accum <double> (keeps effective "
-            "batch size); or use quantization: 4bit, or use a smaller model."
+            "Try a smaller batch_size, enable gradient_checkpointing, "
+            "use 4bit quantization, or use a smaller model."
         ),
     ),
     (
         "OutOfMemoryError",
         "GPU ran out of memory.",
         (
-            "Try --batch-size <half> or --grad-accum <double> (keeps effective "
-            "batch size); or use quantization: 4bit, or use a smaller model."
+            "Try a smaller batch_size, enable gradient_checkpointing, "
+            "use 4bit quantization, or use a smaller model."
         ),
     ),
     # Missing optional deps
@@ -164,6 +164,51 @@ ERROR_MAP = [
         "Config validation failed.",
         "Check your soup.yaml values. Run 'soup init' to generate a valid config.",
     ),
+    # Hugging Face gated/private model access
+    (
+        "gated repo",
+        "This Hugging Face model requires authentication or license acceptance.",
+        (
+            "Run: huggingface-cli login or set HF_TOKEN. "
+            "Also accept the model license on Hugging Face."
+        ),
+    ),
+    (
+        "gated-repo",
+        "This Hugging Face model requires authentication or license acceptance.",
+        (
+        "Run: huggingface-cli login or set HF_TOKEN. "
+        "Also accept the model license on Hugging Face."
+        ),
+    ),
+    (
+        "GatedRepoError",
+        "This Hugging Face model requires authentication or license acceptance.",
+        (
+            "Run: huggingface-cli login or set HF_TOKEN. "
+            "Also accept the model license on Hugging Face."
+        ),
+    ),
+
+    # trust_remote_code errors
+    (
+        "trust_remote_code",
+        "This model requires remote code execution approval.",
+        (
+            "Set trust_remote_code=True in your config or command "
+            "if you trust the model source."
+        ),
+    ),
+    (
+        "requires you to execute the configuration file",
+        "This model requires remote code execution approval.",
+        (
+            "Set trust_remote_code=True in your config or command "
+            "if you trust the model source."
+        ),
+    ),
+
+
     # Auth errors
     (
         "401",
