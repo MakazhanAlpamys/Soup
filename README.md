@@ -49,19 +49,17 @@ infrastructure instead of improving models. Soup fixes that.
 
 ## What's New
 
-**v0.71.23 — Native Spectrum targeted training.** Fine-tune only the layers that matter — no 8×H100 needed to find them:
+**v0.71.24 — 2026 model-family recipes (catalog 116 → 133).** 17 new ready-made SFT recipes for the open-weight models that shipped Feb–Jun 2026:
 
-- **`soup spectrum scan --model <id|path> --top-percent 50`** — streams a model's weights one
-  tensor at a time (no model load, runs on a CPU box even for very large models) and computes a
-  singular-value signal-to-noise ratio per weight matrix (Marchenko-Pastur, arXiv:2406.06623).
-- **Ready-to-paste patch** — prints a per-group SNR table and a `training.unfrozen_parameters`
-  YAML block; pipe it straight into your `soup.yaml`. Results cache under `~/.soup/spectrum/`.
-- **Targeted full fine-tuning** — with `training.unfrozen_parameters` set, `soup train` freezes
-  every parameter and unfreezes only the matched high-SNR layers (full FT, LoRA off) — train
-  fewer parameters, keep more of the base model intact.
-- **Honest guards** — the scan is pure-numpy and transpose-invariant; patterns are ReDoS-checked,
-  Hub downloads go through the SSRF-hardened loader, and the config gates `quantization: none` +
-  `task: sft` so a mis-set flag fails loudly, not silently.
+- **Qwen 3.5 family (Apache-2.0)** — `qwen3.5-0.8b/2b/4b/9b/27b-sft` dense, plus the
+  `35b-a3b` / `122b-a10b` / `397b-a17b` MoE sizes (262K context, native vision).
+- **Qwen 3.6 (Apache-2.0)** — `qwen3.6-27b-sft` + `qwen3.6-35b-a3b-sft`.
+- **Frontier MoE** — `deepseek-v4-flash-sft` / `deepseek-v4-pro-sft` (MIT),
+  `glm-5.1-sft` (MIT), `kimi-k2.5-sft` / `kimi-k2.6-sft` (Modified MIT),
+  `minimax-m3-sft` (MiniMax Community License), `mistral-large-3-sft` (Apache-2.0).
+- **Stale repo-ID fix** — `glm-5-sft` now points at `zai-org/GLM-5` (the org migrated from `THUDM`).
+- Every base repo-ID was verified to resolve on Hugging Face. Grab one with
+  `soup recipes use <name>` or browse all 133 via `soup recipes list`.
 
 Full history: [CHANGELOG.md](CHANGELOG.md) &middot; [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 

@@ -48,7 +48,7 @@ def search_recipes(
 
 
 # ---------------------------------------------------------------------------
-# Recipe catalog (116 recipes)
+# Recipe catalog (133 recipes)
 # ---------------------------------------------------------------------------
 
 RECIPES: Dict[str, RecipeMeta] = {
@@ -2594,13 +2594,13 @@ output: ./output
 """,
     ),
     "glm-5-sft": RecipeMeta(
-        model="THUDM/glm-5",
+        model="zai-org/GLM-5",
         task="sft",
         size="9B",
-        tags=("glm", "thudm", "chat", "next-gen"),
+        tags=("glm", "zai-org", "chat", "next-gen"),
         description="GLM 5 SFT (next-gen GLM family)",
         yaml_str="""\
-base: THUDM/glm-5
+base: zai-org/GLM-5
 task: sft
 
 data:
@@ -3535,6 +3535,553 @@ training:
     r: 16
     alpha: 32
     target_modules: auto
+
+output: ./output
+""",
+    ),
+    # ------------------------------------------------------------------
+    # v0.71.24 — 2026 model-family expansion (catalog 116 -> 133)
+    # 17 SFT recipes for the open-weight models released Feb-Jun 2026.
+    # Every base repo-ID verified to resolve on Hugging Face.
+    # ------------------------------------------------------------------
+    "qwen3.5-0.8b-sft": RecipeMeta(
+        model="Qwen/Qwen3.5-0.8B",
+        task="sft",
+        size="0.8B",
+        tags=("qwen", "qwen3.5", "sft", "tiny", "edge", "mobile"),
+        description="Qwen 3.5 0.8B SFT (Apache-2.0, tiny / mobile)",
+        yaml_str="""\
+base: Qwen/Qwen3.5-0.8B
+task: sft
+
+data:
+  train: ./data/train.jsonl
+  format: auto
+  max_length: 2048
+
+training:
+  epochs: 3
+  lr: 3e-4
+  batch_size: auto
+  lora:
+    r: 8
+    alpha: 16
+    target_modules: auto
+  quantization: 4bit
+
+output: ./output
+""",
+    ),
+    "qwen3.5-2b-sft": RecipeMeta(
+        model="Qwen/Qwen3.5-2B",
+        task="sft",
+        size="2B",
+        tags=("qwen", "qwen3.5", "sft", "small", "edge"),
+        description="Qwen 3.5 2B SFT (Apache-2.0, small / edge)",
+        yaml_str="""\
+base: Qwen/Qwen3.5-2B
+task: sft
+
+data:
+  train: ./data/train.jsonl
+  format: auto
+  max_length: 2048
+
+training:
+  epochs: 3
+  lr: 2e-4
+  batch_size: auto
+  lora:
+    r: 8
+    alpha: 16
+    target_modules: auto
+  quantization: 4bit
+
+output: ./output
+""",
+    ),
+    "qwen3.5-4b-sft": RecipeMeta(
+        model="Qwen/Qwen3.5-4B",
+        task="sft",
+        size="4B",
+        tags=("qwen", "qwen3.5", "sft", "small"),
+        description="Qwen 3.5 4B SFT (Apache-2.0, 262K context)",
+        yaml_str="""\
+base: Qwen/Qwen3.5-4B
+task: sft
+
+data:
+  train: ./data/train.jsonl
+  format: auto
+  max_length: 4096
+
+training:
+  epochs: 3
+  lr: 2e-4
+  batch_size: auto
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  quantization: 4bit
+
+output: ./output
+""",
+    ),
+    "qwen3.5-9b-sft": RecipeMeta(
+        model="Qwen/Qwen3.5-9B",
+        task="sft",
+        size="9B",
+        tags=("qwen", "qwen3.5", "sft", "chat", "instruction"),
+        description="Qwen 3.5 9B SFT (Apache-2.0, 262K context)",
+        yaml_str="""\
+base: Qwen/Qwen3.5-9B
+task: sft
+
+data:
+  train: ./data/train.jsonl
+  format: auto
+  max_length: 4096
+
+training:
+  epochs: 3
+  lr: 2e-4
+  batch_size: auto
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  quantization: 4bit
+
+output: ./output
+""",
+    ),
+    "qwen3.5-27b-sft": RecipeMeta(
+        model="Qwen/Qwen3.5-27B",
+        task="sft",
+        size="27B",
+        tags=("qwen", "qwen3.5", "sft", "large", "deepspeed"),
+        description="Qwen 3.5 27B SFT (Apache-2.0) with DeepSpeed ZeRO-2",
+        yaml_str="""\
+base: Qwen/Qwen3.5-27B
+task: sft
+
+data:
+  train: ./data/train.jsonl
+  format: auto
+  max_length: 4096
+
+training:
+  epochs: 3
+  lr: 1e-5
+  batch_size: auto
+  gradient_accumulation_steps: 8
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  quantization: 4bit
+
+output: ./output
+""",
+    ),
+    "qwen3.5-35b-a3b-sft": RecipeMeta(
+        model="Qwen/Qwen3.5-35B-A3B",
+        task="sft",
+        size="35B",
+        tags=("qwen", "qwen3.5", "sft", "moe", "mixture-of-experts"),
+        description="Qwen 3.5 35B-A3B MoE SFT (Apache-2.0, 3B active)",
+        yaml_str="""\
+base: Qwen/Qwen3.5-35B-A3B
+task: sft
+
+data:
+  train: ./data/train.jsonl
+  format: auto
+  max_length: 4096
+
+training:
+  epochs: 3
+  lr: 1e-4
+  batch_size: auto
+  gradient_accumulation_steps: 8
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  quantization: 4bit
+  moe_lora: true
+  moe_aux_loss_coeff: 0.01
+
+output: ./output
+""",
+    ),
+    "qwen3.5-122b-a10b-sft": RecipeMeta(
+        model="Qwen/Qwen3.5-122B-A10B",
+        task="sft",
+        size="122B",
+        tags=("qwen", "qwen3.5", "sft", "moe", "large", "multi-gpu"),
+        description=(
+            "Qwen 3.5 122B-A10B MoE SFT (Apache-2.0, 10B active). "
+            "Multi-GPU recommended (8 x A100/H100 80GB)."
+        ),
+        yaml_str="""\
+base: Qwen/Qwen3.5-122B-A10B
+task: sft
+
+data:
+  train: ./data/train.jsonl
+  format: auto
+  max_length: 4096
+
+training:
+  epochs: 1
+  lr: 1e-5
+  batch_size: 1
+  gradient_accumulation_steps: 16
+  lora:
+    r: 32
+    alpha: 64
+    target_modules: auto
+  quantization: 4bit
+  moe_lora: true
+  moe_aux_loss_coeff: 0.01
+  gradient_checkpointing: true
+
+output: ./output
+""",
+    ),
+    "qwen3.5-397b-a17b-sft": RecipeMeta(
+        model="Qwen/Qwen3.5-397B-A17B",
+        task="sft",
+        size="397B",
+        tags=("qwen", "qwen3.5", "sft", "moe", "large", "multi-gpu"),
+        description=(
+            "Qwen 3.5 397B-A17B flagship MoE SFT (Apache-2.0, 17B active). "
+            "Requires multi-node DeepSpeed / FSDP."
+        ),
+        yaml_str="""\
+base: Qwen/Qwen3.5-397B-A17B
+task: sft
+
+data:
+  train: ./data/train.jsonl
+  format: auto
+  max_length: 4096
+
+training:
+  epochs: 1
+  lr: 5e-6
+  batch_size: 1
+  gradient_accumulation_steps: 32
+  lora:
+    r: 32
+    alpha: 64
+    target_modules: auto
+  quantization: 4bit
+  moe_lora: true
+  moe_aux_loss_coeff: 0.01
+  gradient_checkpointing: true
+
+output: ./output
+""",
+    ),
+    "qwen3.6-27b-sft": RecipeMeta(
+        model="Qwen/Qwen3.6-27B",
+        task="sft",
+        size="27B",
+        tags=("qwen", "qwen3.6", "sft", "large", "deepspeed"),
+        description="Qwen 3.6 27B SFT (Apache-2.0) with DeepSpeed ZeRO-2",
+        yaml_str="""\
+base: Qwen/Qwen3.6-27B
+task: sft
+
+data:
+  train: ./data/train.jsonl
+  format: auto
+  max_length: 4096
+
+training:
+  epochs: 3
+  lr: 1e-5
+  batch_size: auto
+  gradient_accumulation_steps: 8
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  quantization: 4bit
+
+output: ./output
+""",
+    ),
+    "qwen3.6-35b-a3b-sft": RecipeMeta(
+        model="Qwen/Qwen3.6-35B-A3B",
+        task="sft",
+        size="35B",
+        tags=("qwen", "qwen3.6", "sft", "moe", "mixture-of-experts"),
+        description="Qwen 3.6 35B-A3B MoE SFT (Apache-2.0, 3B active)",
+        yaml_str="""\
+base: Qwen/Qwen3.6-35B-A3B
+task: sft
+
+data:
+  train: ./data/train.jsonl
+  format: auto
+  max_length: 4096
+
+training:
+  epochs: 3
+  lr: 1e-4
+  batch_size: auto
+  gradient_accumulation_steps: 8
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  quantization: 4bit
+  moe_lora: true
+  moe_aux_loss_coeff: 0.01
+
+output: ./output
+""",
+    ),
+    "deepseek-v4-flash-sft": RecipeMeta(
+        model="deepseek-ai/DeepSeek-V4-Flash",
+        task="sft",
+        size="N/A",
+        tags=("deepseek", "deepseek-v4", "sft", "moe", "mixture-of-experts"),
+        description="DeepSeek V4 Flash MoE SFT (MIT, efficiency-tier)",
+        yaml_str="""\
+base: deepseek-ai/DeepSeek-V4-Flash
+task: sft
+
+data:
+  train: ./data/train.jsonl
+  format: auto
+  max_length: 4096
+
+training:
+  epochs: 3
+  lr: 1e-4
+  batch_size: auto
+  gradient_accumulation_steps: 8
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  quantization: 4bit
+  moe_lora: true
+  moe_aux_loss_coeff: 0.01
+
+output: ./output
+""",
+    ),
+    "deepseek-v4-pro-sft": RecipeMeta(
+        model="deepseek-ai/DeepSeek-V4-Pro",
+        task="sft",
+        size="N/A",
+        tags=("deepseek", "deepseek-v4", "sft", "moe", "large", "multi-gpu"),
+        description=(
+            "DeepSeek V4 Pro flagship MoE SFT (MIT, 1.6T-class). "
+            "Requires multi-node DeepSpeed."
+        ),
+        yaml_str="""\
+base: deepseek-ai/DeepSeek-V4-Pro
+task: sft
+
+data:
+  train: ./data/train.jsonl
+  format: auto
+  max_length: 4096
+
+training:
+  epochs: 1
+  lr: 5e-6
+  batch_size: 1
+  gradient_accumulation_steps: 32
+  lora:
+    r: 32
+    alpha: 64
+    target_modules: auto
+  quantization: 4bit
+  moe_lora: true
+  moe_aux_loss_coeff: 0.01
+  gradient_checkpointing: true
+
+output: ./output
+""",
+    ),
+    "glm-5.1-sft": RecipeMeta(
+        model="zai-org/GLM-5.1",
+        task="sft",
+        size="754B",
+        tags=("glm", "zai-org", "sft", "moe", "large", "multi-gpu"),
+        description=(
+            "GLM 5.1 MoE SFT (MIT, 754B). Multi-GPU / multi-node recommended."
+        ),
+        yaml_str="""\
+base: zai-org/GLM-5.1
+task: sft
+
+data:
+  train: ./data/train.jsonl
+  format: auto
+  max_length: 8192
+
+training:
+  epochs: 1
+  lr: 1e-5
+  batch_size: 1
+  gradient_accumulation_steps: 16
+  lora:
+    r: 32
+    alpha: 64
+    target_modules: auto
+  quantization: 4bit
+  moe_lora: true
+  moe_aux_loss_coeff: 0.01
+  gradient_checkpointing: true
+
+output: ./output
+""",
+    ),
+    "kimi-k2.5-sft": RecipeMeta(
+        model="moonshotai/Kimi-K2.5",
+        task="sft",
+        size="1T",
+        tags=("kimi", "moonshot", "sft", "moe", "large", "multi-gpu"),
+        description=(
+            "Kimi K2.5 MoE SFT (Modified MIT, ~1T / 32B active). "
+            "Requires multi-node DeepSpeed."
+        ),
+        yaml_str="""\
+base: moonshotai/Kimi-K2.5
+task: sft
+
+data:
+  train: ./data/train.jsonl
+  format: auto
+  max_length: 8192
+
+training:
+  epochs: 1
+  lr: 1e-5
+  batch_size: 1
+  gradient_accumulation_steps: 16
+  lora:
+    r: 32
+    alpha: 64
+    target_modules: auto
+  quantization: 4bit
+  moe_lora: true
+  moe_aux_loss_coeff: 0.01
+  gradient_checkpointing: true
+
+output: ./output
+""",
+    ),
+    "kimi-k2.6-sft": RecipeMeta(
+        model="moonshotai/Kimi-K2.6",
+        task="sft",
+        size="1T",
+        tags=("kimi", "moonshot", "sft", "moe", "large", "multi-gpu"),
+        description=(
+            "Kimi K2.6 MoE SFT (Modified MIT, ~1T / 32B active). "
+            "Requires multi-node DeepSpeed."
+        ),
+        yaml_str="""\
+base: moonshotai/Kimi-K2.6
+task: sft
+
+data:
+  train: ./data/train.jsonl
+  format: auto
+  max_length: 8192
+
+training:
+  epochs: 1
+  lr: 5e-6
+  batch_size: 1
+  gradient_accumulation_steps: 32
+  lora:
+    r: 32
+    alpha: 64
+    target_modules: auto
+  quantization: 4bit
+  moe_lora: true
+  moe_aux_loss_coeff: 0.01
+  gradient_checkpointing: true
+
+output: ./output
+""",
+    ),
+    "minimax-m3-sft": RecipeMeta(
+        model="MiniMaxAI/MiniMax-M3",
+        task="sft",
+        size="428B",
+        tags=("minimax", "sft", "moe", "large", "multi-gpu"),
+        description=(
+            "MiniMax M3 MoE SFT (428B / 23B active). MiniMax Community License "
+            "- commercial use requires a separate agreement. Multi-GPU recommended."
+        ),
+        yaml_str="""\
+base: MiniMaxAI/MiniMax-M3
+task: sft
+
+data:
+  train: ./data/train.jsonl
+  format: auto
+  max_length: 4096
+
+training:
+  epochs: 1
+  lr: 1e-5
+  batch_size: 1
+  gradient_accumulation_steps: 16
+  lora:
+    r: 32
+    alpha: 64
+    target_modules: auto
+  quantization: 4bit
+  moe_lora: true
+  moe_aux_loss_coeff: 0.01
+  gradient_checkpointing: true
+
+output: ./output
+""",
+    ),
+    "mistral-large-3-sft": RecipeMeta(
+        model="mistralai/Mistral-Large-3-675B-Instruct-2512",
+        task="sft",
+        size="675B",
+        tags=("mistral", "mistral-large", "sft", "moe", "large", "multi-gpu"),
+        description=(
+            "Mistral Large 3 MoE SFT (Apache-2.0, 675B / 41B active, multimodal). "
+            "Requires multi-node DeepSpeed."
+        ),
+        yaml_str="""\
+base: mistralai/Mistral-Large-3-675B-Instruct-2512
+task: sft
+
+data:
+  train: ./data/train.jsonl
+  format: auto
+  max_length: 4096
+
+training:
+  epochs: 1
+  lr: 5e-6
+  batch_size: 1
+  gradient_accumulation_steps: 32
+  lora:
+    r: 32
+    alpha: 64
+    target_modules: auto
+  quantization: 4bit
+  moe_lora: true
+  moe_aux_loss_coeff: 0.01
+  gradient_checkpointing: true
 
 output: ./output
 """,

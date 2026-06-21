@@ -12,9 +12,30 @@ reproducing 70+ versions of notes.
 
 ## [Unreleased]
 
+## [0.71.24] - 2026-06-21
+
 ### Added
+- **2026 model-family recipe expansion (catalog 116 → 133).** 17 new ready-made
+  SFT recipes for the open-weight models released Feb–Jun 2026, each with its
+  Hugging Face repo-ID verified to resolve:
+  - **Qwen 3.5 (Apache-2.0):** `qwen3.5-0.8b-sft`, `qwen3.5-2b-sft`,
+    `qwen3.5-4b-sft`, `qwen3.5-9b-sft`, `qwen3.5-27b-sft`, and the
+    `qwen3.5-35b-a3b-sft` / `qwen3.5-122b-a10b-sft` / `qwen3.5-397b-a17b-sft`
+    MoE sizes.
+  - **Qwen 3.6 (Apache-2.0):** `qwen3.6-27b-sft`, `qwen3.6-35b-a3b-sft`.
+  - **DeepSeek-V4 (MIT):** `deepseek-v4-flash-sft`, `deepseek-v4-pro-sft`.
+  - **GLM (MIT):** `glm-5.1-sft`.
+  - **Kimi (Modified MIT):** `kimi-k2.5-sft`, `kimi-k2.6-sft`.
+  - **MiniMax (MiniMax Community License — commercial use needs a separate
+    agreement):** `minimax-m3-sft`.
+  - **Mistral Large 3 (Apache-2.0, 675B/41B-active multimodal MoE):**
+    `mistral-large-3-sft`.
 - Unit-test coverage for the `warmup.py` auto-warmup-steps helper
   ([#274](https://github.com/MakazhanAlpamys/Soup/pull/274) by [@shatakshi-1404](https://github.com/shatakshi-1404)).
+
+### Fixed
+- **Stale recipe repo-ID:** `glm-5-sft` now points at `zai-org/GLM-5` (the org
+  migrated from `THUDM`).
 
 ## [0.71.23] - 2026-06-12
 

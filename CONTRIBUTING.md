@@ -110,7 +110,7 @@ src/soup_cli/
   experiment/         - SQLite experiment tracking
   eval/               - Eval platform (custom tasks, LLM judge, human eval, leaderboard)
   migrate/            - Config migration (LLaMA-Factory, Axolotl, Unsloth)
-  recipes/            - Ready-made configs for popular models (116 recipes)
+  recipes/            - Ready-made configs for popular models (133 recipes)
   autopilot/          - Zero-config decision engine (v0.25.0)
   registry/           - Model Registry (hashing, store, diff, attach) (v0.26.0 + v0.33.0)
   cans/               - Shareable .can artifact format + run/publish orchestrator (v0.26.0 + v0.33.0)
@@ -120,7 +120,7 @@ src/soup_cli/
   templates/          - 17 built-in soup.yaml templates (YAML + manifest.json) with load_template loader (v0.39.0, +bco v0.40.0)
   ui/                 - Web UI (FastAPI + HTML/JS SPA)
 
-tests/                - Test suite (294 files, 14278 tests)
+tests/                - Test suite (296 files, 14514 tests)
 examples/             - Real-world config examples and datasets
 ```
 
@@ -150,7 +150,7 @@ pytest tests/test_data.py::test_detect_alpaca_format -v
 pytest tests/ --cov=soup_cli --cov-report=html
 ```
 
-### Test Files (293 files)
+### Test Files (296 files)
 
 > A representative sample of the suite below. The full table lives in
 > [`.claude/CLAUDE.md`](.claude/CLAUDE.md); run `pytest tests/ -v` for the complete list.
