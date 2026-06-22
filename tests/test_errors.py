@@ -24,6 +24,7 @@ def test_cuda_oom_error():
         exc = RuntimeError("CUDA out of memory. Tried to allocate 2.00 GiB")
         format_friendly_error(exc, verbose=False)
     output = buf.getvalue()
+    assert "--batch-size" in output
     assert "GPU ran out of memory" in output
     # v0.53.4 #11 — message now suggests --batch-size / --grad-accum CLI flags.
     assert "gradient_checkpointing" in output

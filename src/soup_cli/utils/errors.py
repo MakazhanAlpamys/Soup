@@ -20,7 +20,8 @@ ERROR_MAP = [
         "CUDA out of memory",
         "GPU ran out of memory during training.",
         (
-            "Try a smaller batch_size, enable gradient_checkpointing, "
+            "Try --batch-size <half> or --grad-accum <double> "
+            "(keeps effective batch size); enable gradient_checkpointing, "
             "use 4bit quantization, or use a smaller model."
         ),
     ),
@@ -28,7 +29,8 @@ ERROR_MAP = [
         "OutOfMemoryError",
         "GPU ran out of memory.",
         (
-            "Try a smaller batch_size, enable gradient_checkpointing, "
+            "Try --batch-size <half> or --grad-accum <double> "
+            "(keeps effective batch size); enable gradient_checkpointing, "
             "use 4bit quantization, or use a smaller model."
         ),
     ),
