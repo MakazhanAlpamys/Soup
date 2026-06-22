@@ -24,9 +24,11 @@ def test_cuda_oom_error():
         exc = RuntimeError("CUDA out of memory. Tried to allocate 2.00 GiB")
         format_friendly_error(exc, verbose=False)
     output = buf.getvalue()
+    assert "--batch-size" in output
     assert "GPU ran out of memory" in output
     # v0.53.4 #11 — message now suggests --batch-size / --grad-accum CLI flags.
-    assert "--batch-size" in output
+    assert "gradient_checkpointing" in output
+    assert "4bit" in output
 
 
 def test_missing_fastapi_error():
@@ -203,3 +205,58 @@ def test_help_shows_doctor_and_quickstart():
     assert result.exit_code == 0
     assert "doctor" in result.output
     assert "quickstart" in result.output
+
+def test_cuda_oom_mentions_gradient_checkpointing():
+    """CUDA OOM hint should mention gradient_checkpointing and 4bit."""
+    buf = StringIO()
+    test_console = Console(file=buf, stderr=False)
+
+    with patch("soup_cli.utils.errors.console", test_console):
+        exc = RuntimeError("CUDA out of memory")
+        format_friendly_error(exc, verbose=False)
+
+    output = buf.getvalue()
+    assert "gradient_checkpointing" in output
+    assert "4bit" in output
+
+
+def test_gated_repo_error():
+    """HF gated repos should suggest login and HF_TOKEN."""
+    buf = StringIO()
+    test_console = Console(file=buf, stderr=False)
+
+    with patch("soup_cli.utils.errors.console", test_console):
+        exc = Exception("GatedRepoError: Cannot access gated repo")
+        format_friendly_error(exc, verbose=False)
+
+    output = buf.getvalue()
+    assert "huggingface-cli login" in output
+    assert "HF_TOKEN" in output
+
+
+def test_gated_repo_hyphenated_error():
+    """Hyphenated gated-repo errors should match."""
+    buf = StringIO()
+    test_console = Console(file=buf, stderr=False)
+
+    with patch("soup_cli.utils.errors.console", test_console):
+        exc = Exception("Access denied to gated-repo")
+        format_friendly_error(exc, verbose=False)
+
+    output = buf.getvalue()
+    assert "huggingface-cli login" in output
+
+
+def test_trust_remote_code_error():
+    """trust_remote_code errors should provide actionable hint."""
+    buf = StringIO()
+    test_console = Console(file=buf, stderr=False)
+
+    with patch("soup_cli.utils.errors.console", test_console):
+        exc = Exception(
+            "This repository requires you to execute the configuration file"
+        )
+        format_friendly_error(exc, verbose=False)
+
+    output = buf.getvalue()
+    assert "trust_remote_code=True" in output
