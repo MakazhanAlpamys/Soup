@@ -12,6 +12,13 @@ reproducing 70+ versions of notes.
 
 ## [Unreleased]
 
+### Added
+- Friendlier error messages: the CUDA-OOM hint now also suggests
+  `gradient_checkpointing` and `4bit` quantization, plus new mappings for
+  Hugging Face gated repos (`huggingface-cli login` / `HF_TOKEN`) and
+  `trust_remote_code` errors. Closes #272
+  ([#282](https://github.com/MakazhanAlpamys/Soup/pull/282) by [@Akshaya-reddy18](https://github.com/Akshaya-reddy18)).
+
 ## [0.71.24] - 2026-06-21
 
 ### Added

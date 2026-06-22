@@ -41,6 +41,8 @@ Listed by first contribution. PR numbers link the work.
   - `--energy` flag for `soup bom emit` — thread energy/CO₂ into the ML-BOM ([#256](https://github.com/MakazhanAlpamys/Soup/pull/256))
 - **shatakshi-1404** ([@shatakshi-1404](https://github.com/shatakshi-1404))
   - Unit tests for the `warmup.py` auto-warmup-steps helper ([#274](https://github.com/MakazhanAlpamys/Soup/pull/274))
+- **Kondamwar Akshaya Shrikant** ([@Akshaya-reddy18](https://github.com/Akshaya-reddy18))
+  - Friendlier error messages — richer CUDA-OOM hint + Hugging Face gated-repo and `trust_remote_code` mappings + tests ([#282](https://github.com/MakazhanAlpamys/Soup/pull/282))
 
 ---
 
