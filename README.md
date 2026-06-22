@@ -245,6 +245,13 @@ pre-commit install                 # optional: ruff lint+format on commit
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow and [SECURITY.md](SECURITY.md) to
 report a vulnerability.
 
+## Contributors
+
+Built by the community ❤️ — thank you to everyone who has contributed. See
+[CONTRIBUTORS.md](CONTRIBUTORS.md).
+
+[![Contributors](https://contrib.rocks/image?repo=MakazhanAlpamys/Soup)](https://github.com/MakazhanAlpamys/Soup/graphs/contributors)
+
 ## License
 
 [Apache-2.0](LICENSE). Copyright © the Soup contributors.
