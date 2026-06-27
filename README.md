@@ -49,17 +49,21 @@ infrastructure instead of improving models. Soup fixes that.
 
 ## What's New
 
-**v0.71.24 — 2026 model-family recipes (catalog 116 → 133).** 17 new ready-made SFT recipes for the open-weight models that shipped Feb–Jun 2026:
+**v0.71.25 — `soup ship`: the SHIP / DON'T-SHIP verdict.** After fine-tuning, answer one question — did the model get better, or did I break it?
 
-- **Qwen 3.5 family (Apache-2.0)** — `qwen3.5-0.8b/2b/4b/9b/27b-sft` dense, plus the
-  `35b-a3b` / `122b-a10b` / `397b-a17b` MoE sizes (262K context, native vision).
-- **Qwen 3.6 (Apache-2.0)** — `qwen3.6-27b-sft` + `qwen3.6-35b-a3b-sft`.
-- **Frontier MoE** — `deepseek-v4-flash-sft` / `deepseek-v4-pro-sft` (MIT),
-  `glm-5.1-sft` (MIT), `kimi-k2.5-sft` / `kimi-k2.6-sft` (Modified MIT),
-  `minimax-m3-sft` (MiniMax Community License), `mistral-large-3-sft` (Apache-2.0).
-- **Stale repo-ID fix** — `glm-5-sft` now points at `zai-org/GLM-5` (the org migrated from `THUDM`).
-- Every base repo-ID was verified to resolve on Hugging Face. Grab one with
-  `soup recipes use <name>` or browse all 133 via `soup recipes list`.
+- **One binary decision, not a dashboard.** `soup ship` SHIPs only when **(1)** the task
+  metric *strictly* improved AND **(2)** no general benchmark regressed past a forgetting
+  threshold (default 5% absolute). Otherwise DON'T SHIP — *even if the task metric looks great*.
+- **The moat is leg 2.** A catastrophic-forgetting / regression gate, fused with the task win
+  into a single verdict + a one-screen reason.
+- **CI-gateable.** Exit `0 = SHIP`, `2 = DON'T SHIP`, `1 = runtime error`.
+- **Works offline.** `soup ship --evidence ev.json` decides from pre-computed scores (no model
+  load); leg-2 defaults to built-in mini benchmarks (CPU, instant). `--general-suite` routes
+  lm-eval benchmarks; `--baseline registry://… | file.json` supplies recorded base scores.
+
+```bash
+soup ship --base <model> --adapter <lora> --task-eval tasks.jsonl   # → SHIP / DON'T SHIP
+```
 
 Full history: [CHANGELOG.md](CHANGELOG.md) &middot; [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 

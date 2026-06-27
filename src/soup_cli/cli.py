@@ -233,6 +233,18 @@ app.command(
     ),
 )(_diagnose_cmd.diagnose)
 
+# v0.71.25 — `soup ship` SHIP / DON'T-SHIP verdict engine.
+from soup_cli.commands import ship as _ship_cmd  # noqa: E402
+
+app.add_typer(
+    _ship_cmd.app,
+    name="ship",
+    help=(
+        "SHIP / DON'T SHIP verdict after fine-tuning: task win AND no "
+        "catastrophic forgetting, fused into one decision (v0.71.25)."
+    ),
+)
+
 # v0.58.0 — `soup loop` CLI-first data flywheel capstone.
 from soup_cli.commands import loop as _loop_cmd  # noqa: E402
 

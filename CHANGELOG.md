@@ -12,12 +12,37 @@ reproducing 70+ versions of notes.
 
 ## [Unreleased]
 
+## [0.71.25] - 2026-06-27
+
 ### Added
+- **`soup ship` — the SHIP / DON'T-SHIP verdict.** After fine-tuning, answer one
+  question: did the model get better, or did I break it? `soup ship` fuses two
+  checks into a single binary decision — **leg 1**: the task metric *strictly*
+  improved (base → tuned); AND **leg 2**: no general benchmark regressed past a
+  forgetting threshold (default 0.05 absolute points). It SHIPs only when both
+  hold — otherwise DON'T SHIP, *even if the task metric looks great*. The output
+  is a one-screen verdict + the reason, with CI-gateable exit codes
+  (0 = SHIP, 2 = DON'T SHIP, 1 = runtime error).
+  - Leg-1 modes: `--task-mode metric` (eval accuracy) or `judge_score`
+    (LLM-as-a-judge); pairwise win-rate is planned for a later release.
+  - Leg-2 suite: built-in mini benchmarks by default (offline, CPU), or
+    `--general-suite <names>` to route lm-eval benchmarks; `--baseline
+    registry://… | file.json` supplies recorded base scores.
+  - `--evidence ev.json` decides offline from pre-computed scores (no model
+    load); `--output verdict.json` persists the machine-readable verdict.
 - Friendlier error messages: the CUDA-OOM hint now also suggests
   `gradient_checkpointing` and `4bit` quantization, plus new mappings for
   Hugging Face gated repos (`huggingface-cli login` / `HF_TOKEN`) and
   `trust_remote_code` errors. Closes #272
   ([#282](https://github.com/MakazhanAlpamys/Soup/pull/282) by [@Akshaya-reddy18](https://github.com/Akshaya-reddy18)).
+
+### Security
+- `soup ship` input hardening: `--evidence` is opened with `O_NOFOLLOW` + an
+  fstat size cap (16 MiB) under cwd containment; `--task-eval` is cwd-contained
+  and symlink-rejected; `--judge-model` is validated by scheme/host via
+  `urlparse` (blocks the `http://localhost.attacker.com` prefix bypass);
+  lm-eval model ids reject `,`/`=` injection; `--general-suite` is bounded
+  (≤ 50 names, ≤ 256 chars each).
 
 ## [0.71.24] - 2026-06-21
 

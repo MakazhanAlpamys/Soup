@@ -14,6 +14,7 @@
 - [Sequential A/B Harness (`soup ab`)](#sequential-ab-harness-soup-ab)
 - [Drift Alarm (`soup drift-alarm`)](#drift-alarm-soup-drift-alarm)
 - [Diagnose (Post-Training Report Card)](#diagnose-post-training-report-card)
+- [Ship Verdict (`soup ship`)](#ship-verdict-soup-ship)
 - [NLG Evaluation Metrics (BLEU + ROUGE)](#nlg-evaluation-metrics-bleu--rouge)
 - [Quant Calibration (KL Divergence)](#quant-calibration-kl-divergence)
 - [Model Arena (Elo Tournament)](#model-arena-elo-tournament)
@@ -299,6 +300,61 @@ a built-in probe set; `format` only fires when the dataset's own targets look li
 **Verdict pill colours:** OK (≥ 0.85) green / MINOR (≥ 0.60) amber / MAJOR (< 0.60) red. `soup diagnose` exits 2 when the overall verdict is MAJOR — wire into CI to fail the build on regression.
 
 **Post-training gate:** `soup train --diagnose-gate <evidence.json>` runs the same scorer after training finishes and refuses to mark the run successful when any mode comes back MAJOR. Composes with `--gate <eval-suite>` (v0.26) — the eval gate catches accuracy regressions vs a baseline; the diagnose gate catches behaviour regressions the eval suite is blind to.
+
+
+## Ship Verdict (`soup ship`)
+
+After fine-tuning, `soup ship` answers one question — did the model get better, or did I
+break it? — as a single binary **SHIP / DON'T SHIP** plus a one-screen reason. It fuses two
+legs into one decision:
+
+- **Leg 1 (task win):** the task metric *strictly* improved, base → tuned.
+- **Leg 2 (the moat):** *no* general benchmark regressed past the forgetting threshold
+  (default `0.05` **absolute** points — same semantics as `EvalGateConfig.regression_threshold`).
+
+```
+SHIP  ⇔  task_tuned > task_base  AND  ∀ benchmark: base − tuned ≤ forgetting_threshold
+else DON'T SHIP — even if the task metric looks great.
+```
+
+Exit codes are CI-gateable: **0 = SHIP, 2 = DON'T SHIP, 1 = runtime error**. A tie on leg 1, a
+single regressed benchmark, or a missing baseline all yield DON'T SHIP (a missing baseline
+*refuses* rather than silently shipping).
+
+```bash
+# Live: base vs a LoRA adapter, metric leg + default mini benchmarks
+soup ship --base HuggingFaceTB/SmolLM2-135M-Instruct --adapter ./out \
+  --task-eval tasks.jsonl --device cuda
+
+# Leg-1 via LLM-as-a-judge instead of an accuracy metric
+soup ship --base <m> --adapter ./out --task-eval tasks.jsonl \
+  --task-mode judge_score --judge-model ollama://llama3.1
+
+# Leg-2 via lm-eval benchmarks, base scores supplied by --baseline
+soup ship --base <m> --tuned ./out --task-eval tasks.jsonl \
+  --general-suite mmlu,hellaswag --baseline registry://abc123
+
+# Offline: decide from pre-computed scores, persist the verdict JSON
+soup ship --evidence evidence.json --output verdict.json
+```
+
+**`--evidence` shape** (no model load — the offline / CI path):
+
+```json
+{
+  "task": {"mode": "metric", "base": 0.40, "tuned": 0.55},
+  "benchmarks": {
+    "mini_mmlu": {"base": 0.80, "tuned": 0.79},
+    "mini_common_sense": {"base": 0.60, "tuned": 0.62}
+  }
+}
+```
+
+Leg-2 defaults to the built-in mini benchmarks (`mini_mmlu` / `mini_common_sense` /
+`mini_instruction`) — offline, CPU, instant. `--general-suite <names>` with non-mini names
+routes through the lm-eval harness. Pairwise judge win-rate (`--task-mode pairwise`) is planned
+for a later release. The engine lives in `soup_cli.utils.ship_verdict` (`decide_ship` is a pure
+function — the whole truth table is CPU-testable).
 
 
 ## NLG Evaluation Metrics (BLEU + ROUGE)
