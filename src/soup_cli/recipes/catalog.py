@@ -48,7 +48,7 @@ def search_recipes(
 
 
 # ---------------------------------------------------------------------------
-# Recipe catalog (133 recipes)
+# Recipe catalog (134 recipes)
 # ---------------------------------------------------------------------------
 
 RECIPES: Dict[str, RecipeMeta] = {
@@ -251,6 +251,34 @@ training:
     alpha: 16
     target_modules: auto
   quantization: 8bit
+
+output: ./output
+""",
+    ),
+    "qwen2.5-coder-7b-sft": RecipeMeta(
+        model="Qwen/Qwen2.5-Coder-7B-Instruct",
+        task="sft",
+        size="7B",
+        tags=("qwen", "qwen2.5", "coder", "code", "sft"),
+        description="Qwen 2.5 Coder 7B instruction tuning with LoRA",
+        yaml_str="""\
+base: Qwen/Qwen2.5-Coder-7B-Instruct
+task: sft
+
+data:
+  train: ./data/train.jsonl
+  format: auto
+  max_length: 2048
+
+training:
+  epochs: 3
+  lr: 2e-4
+  batch_size: auto
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  quantization: 4bit
 
 output: ./output
 """,
