@@ -264,13 +264,13 @@ class TestGlm5RepoIdFix:
 
 
 # ---------------------------------------------------------------------------
-# Catalog count — 116 -> 133
+# Catalog count — 116 -> 134
 # ---------------------------------------------------------------------------
 
 
 class TestCatalogCount:
-    def test_total_recipe_count_is_133(self) -> None:
-        assert len(RECIPES) == 133
+    def test_total_recipe_count_is_134(self) -> None:
+        assert len(RECIPES) == 134
 
     def test_list_recipes_matches_dict(self) -> None:
         assert len(list_recipes()) == len(RECIPES)
