@@ -12,6 +12,11 @@ reproducing 70+ versions of notes.
 
 ## [Unreleased]
 
+### Added
+- Ready-made `qwen2.5-coder-7b-sft` recipe for `Qwen/Qwen2.5-Coder-7B-Instruct`
+  (catalog 133 → 134)
+  ([#285](https://github.com/MakazhanAlpamys/Soup/pull/285) by [@Deadpool2000](https://github.com/Deadpool2000)).
+
 ## [0.71.25] - 2026-06-27
 
 ### Added

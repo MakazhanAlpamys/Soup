@@ -25,6 +25,7 @@ Listed by first contribution. PR numbers link the work.
   - Happy-path + CPU-warning tests for `soup bench` ([#31](https://github.com/MakazhanAlpamys/Soup/pull/31))
   - `soup cost` — cloud GPU training cost estimation ([#42](https://github.com/MakazhanAlpamys/Soup/pull/42))
   - `--nccl` flag for `soup doctor` multi-GPU bandwidth checks ([#178](https://github.com/MakazhanAlpamys/Soup/pull/178))
+  - Ready-made `qwen2.5-coder-7b-sft` recipe ([#285](https://github.com/MakazhanAlpamys/Soup/pull/285))
 - **Chinmaya Sahu** ([@csking101](https://github.com/csking101))
   - DPO example config, sample data, and tests ([#48](https://github.com/MakazhanAlpamys/Soup/pull/48))
   - FP8 `rowwise` + `rowwise_with_gw_hp` scaling recipes ([#62](https://github.com/MakazhanAlpamys/Soup/pull/62))
