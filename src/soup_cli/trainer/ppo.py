@@ -200,6 +200,9 @@ class PPOTrainerWrapper:
         from soup_cli.utils.peft_wiring import rl_callbacks_need_buffer
 
         if rl_callbacks_need_buffer(tcfg) and reward_funcs:
+            # v0.71.26 Stage 3 — reward-shaping shim over callable reward fns,
+            # BEFORE the buffer capture (no-op when shaping is off).
+            from soup_cli.utils.reward_hack_control import apply_reward_shaping
             from soup_cli.utils.rl_signal_buffer import (
                 RLSignalBuffer,
                 wrap_reward_funcs,
@@ -207,7 +210,9 @@ class PPOTrainerWrapper:
 
             self._rl_buffer = RLSignalBuffer()
             reward_funcs = [
-                wrap_reward_funcs(fn, self._rl_buffer)
+                wrap_reward_funcs(
+                    apply_reward_shaping(fn, tcfg), self._rl_buffer
+                )
                 if callable(fn) and not hasattr(fn, "forward")
                 else fn
                 for fn in reward_funcs

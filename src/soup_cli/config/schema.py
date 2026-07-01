@@ -1793,14 +1793,64 @@ class TrainingConfig(BaseModel):
             "training (terminal rung of the escalation ladder)."
         ),
     )
+    # ---- v0.71.26 Stage 3 — anti-gaming hardening ------------------------
+    reward_hack_signal_smoothing: Literal["none", "ema", "median"] = Field(
+        default="none",
+        description=(
+            "v0.71.26 — per-signal smoothing before the controller vote: "
+            "'none', 'ema' (0.5·prev+0.5·new), or 'median' over a window."
+        ),
+    )
+    reward_hack_smoothing_window: int = Field(
+        default=8,
+        ge=2,
+        le=256,
+        description="v0.71.26 — window length for signal smoothing.",
+    )
+    reward_hack_conservative_on_disagreement: bool = Field(
+        default=False,
+        description=(
+            "v0.71.26 — when detectors disagree, keep KL high (use the MAX "
+            "signal) instead of relaxing."
+        ),
+    )
+    reward_hack_reward_shaping: bool = Field(
+        default=False,
+        description=(
+            "v0.71.26 — apply a bounded penalty on the gamed proxy "
+            "(length/repetition/sentinel) via a shaping shim over the reward "
+            "fn. Requires reward_hack_shaping_strength > 0 and a control mode."
+        ),
+    )
+    reward_hack_shaping_kind: Literal["length", "repetition", "sentinel"] = Field(
+        default="length",
+        description=(
+            "v0.71.26 — which gamed proxy the reward-shaping shim penalises."
+        ),
+    )
+    reward_hack_shaping_strength: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "v0.71.26 — magnitude of the bounded reward-shaping penalty [0, 1]."
+        ),
+    )
 
-    @field_validator("reward_hack_rollback", mode="before")
+    @field_validator(
+        "reward_hack_rollback",
+        "reward_hack_conservative_on_disagreement",
+        "reward_hack_reward_shaping",
+        mode="before",
+    )
     @classmethod
-    def _validate_reward_hack_rollback(cls, v):
+    def _validate_reward_hack_bool_fields(cls, v):
         """v0.71.26 — bool guard so YAML ``yes`` / ``1`` cannot silently coerce."""
         if v is None or isinstance(v, bool):
             return v
-        raise TypeError(f"reward_hack_rollback must be bool, got {type(v).__name__}")
+        raise TypeError(
+            f"reward-hack bool flag must be bool, got {type(v).__name__}"
+        )
 
     @field_validator("reward_hack_mitigation", mode="before")
     @classmethod
@@ -3220,6 +3270,16 @@ _REWARD_HACK_STAGE2_DEFAULTS: dict = {
     "reward_hack_max_recovery_attempts": 2,
 }
 
+# Stage-3 (anti-gaming) tunables — meaningful for any non-off mode.
+_REWARD_HACK_STAGE3_DEFAULTS: dict = {
+    "reward_hack_signal_smoothing": "none",
+    "reward_hack_smoothing_window": 8,
+    "reward_hack_conservative_on_disagreement": False,
+    "reward_hack_reward_shaping": False,
+    "reward_hack_shaping_kind": "length",
+    "reward_hack_shaping_strength": 0.0,
+}
+
 _REWARD_HACK_TUNABLE_DEFAULTS: dict = {
     "reward_hack_beta_floor": 0.02,
     "reward_hack_beta_ceil": 1.0,
@@ -3230,6 +3290,7 @@ _REWARD_HACK_TUNABLE_DEFAULTS: dict = {
     "reward_hack_kl_gain": 1.5,
     "reward_hack_signals": ["info_rm"],
     **_REWARD_HACK_STAGE2_DEFAULTS,
+    **_REWARD_HACK_STAGE3_DEFAULTS,
 }
 
 
@@ -3297,6 +3358,19 @@ def _validate_reward_hack_controller(tcfg) -> None:
             "reward_hack_rollback=True requires rl_checkpoint_save_every_steps "
             "to be set (a cadence to roll back to)"
         )
+    # v0.71.26 Stage 3 — reward shaping MUTATES rewards, so it is only valid
+    # for a control mode (log_only must stay observe-only).
+    if tcfg.reward_hack_reward_shaping:
+        if tcfg.reward_hack_mitigation not in ("kl_control", "pid_lagrangian"):
+            raise ValueError(
+                "reward_hack_reward_shaping requires a control mode "
+                "(kl_control / pid_lagrangian); log_only is observe-only"
+            )
+        if tcfg.reward_hack_shaping_strength <= 0.0:
+            raise ValueError(
+                "reward_hack_reward_shaping=True requires "
+                "reward_hack_shaping_strength > 0"
+            )
 
 
 class SoupConfig(BaseModel):

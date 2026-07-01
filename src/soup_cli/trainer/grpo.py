@@ -235,11 +235,16 @@ class GRPOTrainerWrapper:
 
         self._rl_buffer = None
         if rl_callbacks_need_buffer(tcfg):
+            # v0.71.26 Stage 3 — apply the reward-shaping shim BEFORE the buffer
+            # capture so the controller observes (and GRPO optimises) the shaped
+            # reward. No-op when reward_hack_reward_shaping is off.
+            from soup_cli.utils.reward_hack_control import apply_reward_shaping
             from soup_cli.utils.rl_signal_buffer import (
                 RLSignalBuffer,
                 wrap_reward_funcs,
             )
 
+            reward_fn = apply_reward_shaping(reward_fn, tcfg)
             self._rl_buffer = RLSignalBuffer()
             reward_fn = wrap_reward_funcs(reward_fn, self._rl_buffer)
 

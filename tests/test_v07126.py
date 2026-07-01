@@ -15,7 +15,9 @@ task on one RTX 3050. PPO ships BETA (unit-tested; GPU proof is GRPO-only).
 from __future__ import annotations
 
 import json
+import math
 import os
+import random
 import types
 
 import pytest
@@ -565,7 +567,14 @@ class TestMitigationCallbackLogOnly:
         assert len(lines) == 1
         entry = json.loads(lines[0])
         assert entry["mode"] == "log_only" and entry["step"] == 1
-        for key in ("drop_pct", "verdict", "beta", "reward_mean", "completion_length_mean", "repetition"):
+        for key in (
+            "drop_pct",
+            "verdict",
+            "beta",
+            "reward_mean",
+            "completion_length_mean",
+            "repetition",
+        ):
             assert key in entry
 
     def test_no_buffer_is_noop(self, tmp_path, monkeypatch):
@@ -1431,3 +1440,396 @@ class TestAttachPidControl:
         ckpts = [c for c in added if isinstance(c, RLCheckpointCallback)]
         assert len(ckpts) == 1
         assert mit[0].rl_checkpoint_cb is ckpts[0]
+
+
+# =====================================================================
+# Part D / Stage 3 — schema fields (smoothing / conservative / shaping) (Task D1)
+# =====================================================================
+
+
+class TestStage3Schema:
+    """Anti-gaming tunables: smoothing, conservative-on-disagreement, shaping."""
+
+    def _cfg(self, extra: str = "", *, mitigation: str = "kl_control"):
+        from soup_cli.config.loader import load_config_from_string
+
+        return load_config_from_string(_yaml("grpo", mitigation=mitigation, extra=extra))
+
+    def test_smoothing_parses(self):
+        cfg = self._cfg("reward_hack_signal_smoothing: ema\nreward_hack_smoothing_window: 16")
+        assert cfg.training.reward_hack_signal_smoothing == "ema"
+        assert cfg.training.reward_hack_smoothing_window == 16
+
+    def test_defaults(self):
+        from soup_cli.config.schema import TrainingConfig
+
+        t = TrainingConfig()
+        assert t.reward_hack_signal_smoothing == "none"
+        assert t.reward_hack_smoothing_window == 8
+        assert t.reward_hack_conservative_on_disagreement is False
+        assert t.reward_hack_reward_shaping is False
+        assert t.reward_hack_shaping_kind == "length"
+        assert t.reward_hack_shaping_strength == 0.0
+
+    def test_shaping_parses(self):
+        cfg = self._cfg(
+            "reward_hack_reward_shaping: true\n"
+            "reward_hack_shaping_kind: repetition\n"
+            "reward_hack_shaping_strength: 0.2"
+        )
+        assert cfg.training.reward_hack_reward_shaping is True
+        assert cfg.training.reward_hack_shaping_kind == "repetition"
+
+    def test_shaping_requires_strength(self):
+        with pytest.raises(ValueError, match="shaping_strength"):
+            self._cfg("reward_hack_reward_shaping: true")
+
+    def test_shaping_requires_control_mode(self):
+        # log_only is observe-only — reward shaping mutates rewards, reject.
+        with pytest.raises(ValueError, match="log_only|control|kl_control"):
+            self._cfg(
+                "reward_hack_reward_shaping: true\nreward_hack_shaping_strength: 0.2",
+                mitigation="log_only",
+            )
+
+    def test_smoothing_window_bounds(self):
+        with pytest.raises(ValueError):
+            self._cfg("reward_hack_smoothing_window: 1")
+
+    def test_shaping_strength_bounds(self):
+        with pytest.raises(ValueError):
+            self._cfg("reward_hack_shaping_strength: 2.0\nreward_hack_reward_shaping: true")
+
+    def test_stage3_tunable_under_off_rejected(self):
+        from soup_cli.config.loader import load_config_from_string
+
+        with pytest.raises(ValueError, match="reward_hack_mitigation"):
+            load_config_from_string(
+                _yaml(
+                    "grpo",
+                    detector=None,
+                    mitigation="off",
+                    extra="reward_hack_signal_smoothing: ema",
+                )
+            )
+
+
+# =====================================================================
+# Part D / Stage 3 — conservative vote + distribution-drift guard (Task D2)
+# =====================================================================
+
+
+class TestConservativeAndDrift:
+    """conservative-on-disagreement + reward-distribution-drift guard (pure)."""
+
+    def test_conservative_agreement_uses_mean(self):
+        from soup_cli.utils.reward_hack_control import combine_conservative
+
+        assert combine_conservative([0.4, 0.42], disagree_tol=0.2) == pytest.approx(0.41)
+
+    def test_conservative_disagreement_uses_max(self):
+        from soup_cli.utils.reward_hack_control import combine_conservative
+
+        # detectors disagree beyond tol → stay cautious (keep KL high).
+        assert combine_conservative([0.1, 0.9], disagree_tol=0.2) == 0.9
+
+    def test_conservative_empty_zero(self):
+        from soup_cli.utils.reward_hack_control import combine_conservative
+
+        assert combine_conservative([], disagree_tol=0.2) == 0.0
+
+    def test_drift_flags_bimodal_collapse(self):
+        from soup_cli.utils.reward_hack_control import (
+            detect_reward_distribution_drift,
+        )
+
+        assert detect_reward_distribution_drift([0, 0, 0, 0, 1, 1, 1, 1]) is True
+
+    def test_drift_ignores_spread(self):
+        from soup_cli.utils.reward_hack_control import (
+            detect_reward_distribution_drift,
+        )
+
+        assert (
+            detect_reward_distribution_drift([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.9])
+            is False
+        )
+
+    def test_drift_ignores_constant(self):
+        from soup_cli.utils.reward_hack_control import (
+            detect_reward_distribution_drift,
+        )
+
+        assert detect_reward_distribution_drift([0.5] * 8) is False
+
+    def test_drift_too_few(self):
+        from soup_cli.utils.reward_hack_control import (
+            detect_reward_distribution_drift,
+        )
+
+        assert detect_reward_distribution_drift([0.0, 1.0]) is False
+
+
+# =====================================================================
+# Part D / Stage 3 — reward-shaping shim (Task D3)
+# =====================================================================
+
+
+def _inner_reward(prompts, completions, **kwargs):
+    return [1.0 for _ in completions]
+
+
+class TestRewardShaping:
+    """Bounded reward-shaping shim over the wrap_reward_funcs seam."""
+
+    def test_length_penalises_long(self):
+        from soup_cli.utils.reward_hack_control import shape_reward_fn
+
+        shaped = shape_reward_fn(_inner_reward, kind="length", strength=0.5)
+        out = shaped(["p", "p"], ["short", "w " * 40])
+        assert out[1] < out[0] <= 1.0
+        assert all(o >= 1.0 - 0.5 - 1e-9 for o in out)  # penalty ≤ strength
+
+    def test_strength_zero_is_verbatim(self):
+        from soup_cli.utils.reward_hack_control import shape_reward_fn
+
+        shaped = shape_reward_fn(_inner_reward, kind="length", strength=0.0)
+        assert shaped(["p"], ["w " * 40]) == [1.0]
+
+    def test_inner_called_once(self):
+        from soup_cli.utils.reward_hack_control import shape_reward_fn
+
+        calls = []
+
+        def counted(prompts, completions, **kwargs):
+            calls.append(1)
+            return [1.0 for _ in completions]
+
+        shape_reward_fn(counted, kind="length", strength=0.5)(["p"], ["a b c"])
+        assert len(calls) == 1
+
+    def test_sentinel_penalty(self):
+        from soup_cli.utils.reward_hack_control import shape_reward_fn
+
+        shaped = shape_reward_fn(_inner_reward, kind="sentinel", strength=0.3)
+        assert shaped(["p"], ["say GOLD"])[0] == pytest.approx(0.7)
+        assert shaped(["p"], ["nope"])[0] == pytest.approx(1.0)
+
+    def test_preserves_name(self):
+        from soup_cli.utils.reward_hack_control import shape_reward_fn
+
+        shaped = shape_reward_fn(_inner_reward, kind="length", strength=0.5)
+        assert shaped.__name__ == "_inner_reward"
+
+    def test_bad_kind_rejected(self):
+        from soup_cli.utils.reward_hack_control import shape_reward_fn
+
+        with pytest.raises(ValueError, match="kind"):
+            shape_reward_fn(_inner_reward, kind="bogus", strength=0.5)
+
+    def test_bad_strength_rejected(self):
+        from soup_cli.utils.reward_hack_control import shape_reward_fn
+
+        with pytest.raises(ValueError, match="strength"):
+            shape_reward_fn(_inner_reward, kind="length", strength=2.0)
+
+    def test_apply_reward_shaping_from_tcfg(self):
+        from soup_cli.config.schema import TrainingConfig
+        from soup_cli.utils.reward_hack_control import apply_reward_shaping
+
+        tcfg = TrainingConfig(
+            reward_hack_reward_shaping=True,
+            reward_hack_shaping_kind="length",
+            reward_hack_shaping_strength=0.5,
+        )
+        wrapped = apply_reward_shaping(_inner_reward, tcfg)
+        assert wrapped(["p"], ["w " * 40])[0] < 1.0
+
+    def test_apply_reward_shaping_noop_when_disabled(self):
+        from soup_cli.config.schema import TrainingConfig
+        from soup_cli.utils.reward_hack_control import apply_reward_shaping
+
+        tcfg = TrainingConfig(reward_hack_reward_shaping=False)
+        assert apply_reward_shaping(_inner_reward, tcfg) is _inner_reward
+
+
+# =====================================================================
+# Part D / Stage 3 — give-up explainer (Task D4a)
+# =====================================================================
+
+
+class TestExplainGiveup:
+    """Plain-English give-up explanation (mirrors why.py)."""
+
+    def test_names_signal_and_attempts(self):
+        from soup_cli.utils.reward_hack_control import ControllerState, explain_giveup
+
+        state = ControllerState(recovery_attempts=2, last_signal=0.8)
+        text = explain_giveup(
+            state, signal_name="info_rm", action_history=["raise", "rollback"]
+        )
+        assert "info_rm" in text
+        assert "2" in text
+        assert "gave up" in text.lower()
+
+    def test_handles_empty_history(self):
+        from soup_cli.utils.reward_hack_control import ControllerState, explain_giveup
+
+        text = explain_giveup(
+            ControllerState(), signal_name="rm_ensemble", action_history=[]
+        )
+        assert isinstance(text, str) and "rm_ensemble" in text
+
+
+# =====================================================================
+# Part D / Stage 3 — smoothing/conservative/drift + give-up wiring (Task D4b)
+# =====================================================================
+
+
+class TestStage3CallbackWiring:
+    """Callback honours smoothing / conservative / drift-guard + logs give-up."""
+
+    def _cb(self, tmp_path, buffer, *, conservative=False, smoothing="none"):
+        from soup_cli.utils.reward_hack_control import (
+            MitigationLogWriter,
+            RewardHackMitigationCallback,
+        )
+
+        return RewardHackMitigationCallback(
+            mode="kl_control",
+            detector="info_rm",
+            log_writer=MitigationLogWriter(str(tmp_path / "m.jsonl")),
+            buffer=buffer,
+            task="grpo",
+            bang_bang=_kl_policy(),
+            conservative_on_disagreement=conservative,
+            smoothing=smoothing,
+            smoothing_window=4,
+        )
+
+    def test_constructs_with_stage3_params(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        cb = self._cb(tmp_path, None, conservative=True, smoothing="ema")
+        assert cb.smoothing == "ema" and cb.conservative_on_disagreement is True
+
+    def test_drift_logged_when_conservative(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        bimodal = _grpo_snapshot(
+            [0, 0, 0, 0, 1, 1, 1, 1], ["a", "b", "c", "d", "e", "f", "g", "h"]
+        )
+        cb = self._cb(tmp_path, _SeqBuffer([bimodal]), conservative=True)
+        cb.attach(_fake_grpo_trainer(beta=0.02))
+        cb.on_step_end(None, types.SimpleNamespace(global_step=1), None)
+        entry = json.loads((tmp_path / "m.jsonl").read_text().strip().splitlines()[-1])
+        assert entry.get("drift") is True
+
+    def test_no_drift_key_when_not_conservative(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        bimodal = _grpo_snapshot(
+            [0, 0, 0, 0, 1, 1, 1, 1], ["a", "b", "c", "d", "e", "f", "g", "h"]
+        )
+        cb = self._cb(tmp_path, _SeqBuffer([bimodal]), conservative=False)
+        cb.attach(_fake_grpo_trainer(beta=0.02))
+        cb.on_step_end(None, types.SimpleNamespace(global_step=1), None)
+        entry = json.loads((tmp_path / "m.jsonl").read_text().strip().splitlines()[-1])
+        assert "drift" not in entry  # drift guard is opt-in
+
+    def test_giveup_explanation_logged_on_early_stop(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        ckpt = _FakeCkptCb(saved=[10])
+        cb = _pid_callback(
+            tmp_path,
+            _SeqBuffer([_HEALTHY, _HACK, _HACK, _HACK, _HACK]),
+            rollback=True,
+            rollback_patience=2,
+            max_recovery_attempts=1,
+            ckpt_cb=ckpt,
+        )
+        cb.attach(_fake_grpo_trainer(beta=0.02))
+        control = types.SimpleNamespace(should_training_stop=False)
+        for step in range(1, 6):
+            control = cb.on_step_end(
+                None, types.SimpleNamespace(global_step=step), control,
+                model=object(), optimizer=object(),
+            )
+        entries = [
+            json.loads(line)
+            for line in (tmp_path / "m.jsonl").read_text().strip().splitlines()
+        ]
+        explained = [e for e in entries if "explanation" in e]
+        assert explained and "gave up" in explained[-1]["explanation"].lower()
+
+
+class TestRewardShapingWiring:
+    """Reward-shaping shim is applied over the reward fn in grpo/ppo."""
+
+    def test_grpo_applies_shaping(self):
+        import inspect
+
+        from soup_cli.trainer import grpo
+
+        assert "apply_reward_shaping" in inspect.getsource(grpo)
+
+    def test_ppo_applies_shaping(self):
+        import inspect
+
+        from soup_cli.trainer import ppo
+
+        assert "apply_reward_shaping" in inspect.getsource(ppo)
+
+
+# =====================================================================
+# Part D / Stage 3 — adversarial controller fuzz suite (Task D4d)
+# =====================================================================
+
+
+def _fuzz_traces():
+    """Sawtooth / step / noisy / adversarial-flip / out-of-range signal traces."""
+    rng = random.Random(1234)
+    return [
+        [(i / 10.0) % 1.0 for i in range(50)],  # sawtooth
+        [0.0] * 10 + [0.9] * 10 + [0.0] * 10,  # step
+        [rng.random() for _ in range(60)],  # noisy
+        [0.9 if i % 2 == 0 else 0.0 for i in range(60)],  # adversarial flip
+        [-1.0, 2.0, 0.5, 5.0, -3.0, 0.7],  # out-of-range (must not escape bounds)
+    ]
+
+
+class TestControllerFuzz:
+    """No adversarial signal trace can drive the controller out of bounds,
+    make it flap, or defeat anti-windup."""
+
+    def test_bang_bang_bounded_and_no_unbounded_jump(self):
+        from soup_cli.utils.reward_hack_control import ControllerState, bang_bang_step
+
+        policy = _bang_policy()
+        for trace in _fuzz_traces():
+            state = ControllerState(beta=policy.beta_floor)
+            prev = state.beta
+            for vote in trace:
+                state, _ = bang_bang_step(policy, state, vote=vote)
+                assert policy.beta_floor - 1e-9 <= state.beta <= policy.beta_ceil + 1e-9
+                assert state.beta > 0.0 and math.isfinite(state.beta)
+                assert state.beta / prev <= policy.kl_gain + 1e-9  # geometric only
+                prev = state.beta
+
+    def test_bang_bang_no_flap_on_alternation(self):
+        from soup_cli.utils.reward_hack_control import ControllerState, bang_bang_step
+
+        policy = _bang_policy(dwell_steps=2, release_patience=2)
+        state = ControllerState(beta=policy.beta_floor)
+        for i in range(40):
+            state, _ = bang_bang_step(policy, state, vote=0.9 if i % 2 == 0 else 0.0)
+        assert state.beta == pytest.approx(policy.beta_floor) and not state.tripped
+
+    def test_pid_bounded_and_anti_windup_holds(self):
+        from soup_cli.utils.reward_hack_control import ControllerState, pid_step
+
+        policy = _pid_policy(ki=1.0, integral_clamp=0.5, beta_ceil=5.0)
+        for trace in _fuzz_traces():
+            state = ControllerState(beta=policy.beta_floor)
+            for signal in trace:
+                state, _ = pid_step(policy, state, signal=signal)
+                assert policy.beta_floor - 1e-9 <= state.beta <= policy.beta_ceil + 1e-9
+                assert state.beta > 0.0 and math.isfinite(state.beta)
+                assert abs(state.integral) <= policy.integral_clamp + 1e-9

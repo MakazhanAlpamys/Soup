@@ -289,6 +289,13 @@ def _attach_reward_hack(
                     getattr(tcfg, "reward_hack_max_recovery_attempts", 2)
                 ),
                 rl_checkpoint_cb=rl_checkpoint_cb,
+                smoothing=getattr(tcfg, "reward_hack_signal_smoothing", "none"),
+                smoothing_window=int(
+                    getattr(tcfg, "reward_hack_smoothing_window", 8)
+                ),
+                conservative_on_disagreement=bool(
+                    getattr(tcfg, "reward_hack_conservative_on_disagreement", False)
+                ),
             )
             trainer.add_callback(callback)
             callback.attach(trainer)

@@ -55,8 +55,10 @@ SIGNAL_NAMES: frozenset[str] = frozenset(
     {"info_rm", "rm_ensemble", "length_trend", "repetition"}
 )
 SMOOTHING_METHODS: frozenset[str] = frozenset({"none", "ema", "median"})
+SHAPING_KINDS: frozenset[str] = frozenset({"length", "repetition", "sentinel"})
 
 _EMA_ALPHA = 0.5  # fixed EMA weight on the new sample (documented, Stage 3)
+_CONSERVATIVE_DISAGREE_TOL = 0.2  # detectors differ beyond this → stay cautious
 
 
 # --- pure validators (mirror reward_hacking.py bool-before-int policy) ---
@@ -165,6 +167,191 @@ def smooth_signal(new: float, window: Sequence[float], *, method: str) -> float:
             return fnew
         return _EMA_ALPHA * win[-1] + (1.0 - _EMA_ALPHA) * fnew
     return float(statistics.median(win + [fnew]))
+
+
+def combine_conservative(votes: Sequence[float], *, disagree_tol: float) -> float:
+    """Conservative-on-disagreement vote (Stage 3).
+
+    Clamps each finite vote to ``[0, 1]``. When the detectors disagree beyond
+    ``disagree_tol`` (``max - min > tol``), return the MAX (stay cautious — keep
+    KL high, don't relax on a possibly-fooled detector). Otherwise the mean.
+    Empty → ``0.0``.
+    """
+    finite = [
+        min(1.0, max(0.0, float(v)))
+        for v in votes
+        if not isinstance(v, bool) and isinstance(v, (int, float)) and math.isfinite(float(v))
+    ]
+    if not finite:
+        return 0.0
+    if max(finite) - min(finite) > float(disagree_tol):
+        return max(finite)
+    return sum(finite) / len(finite)
+
+
+def _std(values: Sequence[float]) -> float:
+    if not values:
+        return 0.0
+    mean = sum(values) / len(values)
+    return math.sqrt(sum((v - mean) ** 2 for v in values) / len(values))
+
+
+def detect_reward_distribution_drift(
+    rewards: Sequence[Any], *, degenerate_frac: float = 0.1
+) -> bool:
+    """Flag a bimodal reward-distribution collapse (Stage 3 anti-gaming).
+
+    A policy can shift the reward distribution into two tight, well-separated
+    clusters to fool the InfoRM top/bottom-half split into reporting healthy
+    separation while it games the proxy. Heuristic: split sorted rewards in
+    half; if the within-half spread is near-degenerate (< ``degenerate_frac`` of
+    the between-half gap), the distribution has collapsed to two clusters →
+    drift. Natural unimodal spreads and constant rewards are NOT flagged.
+    Needs ≥ 4 finite rewards.
+    """
+    values = [
+        float(r)
+        for r in rewards
+        if not isinstance(r, bool) and isinstance(r, (int, float)) and math.isfinite(float(r))
+    ]
+    if len(values) < 4:
+        return False
+    ordered = sorted(values)
+    half = len(ordered) // 2
+    low, high = ordered[:half], ordered[half:]
+    gap = (sum(high) / len(high)) - (sum(low) / len(low))
+    if gap <= 0.0:
+        return False
+    within = (_std(low) + _std(high)) / 2.0
+    return within < degenerate_frac * gap
+
+
+# --- reward-shaping shim (Stage 3) ---
+
+_SHAPING_LENGTH_SAT = 32.0
+_DEFAULT_SENTINEL = "GOLD"
+
+
+def _completion_text(completion: Any) -> str:
+    """Assistant text from a string / dict / list-of-message-dicts completion."""
+    from soup_cli.utils.rl_signal_buffer import _completion_to_text
+
+    return _completion_to_text(completion)
+
+
+def _extract_completions(args: tuple, kwargs: dict) -> Any:
+    """Pull the ``completions`` arg from a TRL reward-fn call."""
+    completions = kwargs.get("completions")
+    if completions is None:
+        if len(args) >= 2:
+            completions = args[1]
+        elif len(args) == 1:
+            completions = args[0]
+    return completions
+
+
+def _shaping_penalty(kind: str, text: str, *, sentinel: str) -> float:
+    """Bounded ``[0, 1]`` penalty on the gamed proxy for one completion."""
+    if kind == "length":
+        return min(1.0, len(text.split()) / _SHAPING_LENGTH_SAT)
+    if kind == "repetition":
+        tokens = text.split()
+        if not tokens:
+            return 0.0
+        from soup_cli.utils.echo_trap import score_trajectory_repetition
+
+        try:
+            return float(score_trajectory_repetition(tokens))
+        except (TypeError, ValueError):
+            return 0.0
+    # sentinel
+    return 1.0 if sentinel in text else 0.0
+
+
+def shape_reward_fn(
+    inner: Any, *, kind: str, strength: float, sentinel: str = _DEFAULT_SENTINEL
+) -> Any:
+    """Wrap a reward fn to subtract a bounded penalty on a gamed proxy.
+
+    The inner fn is called exactly once (verbatim) and its reward is reduced by
+    ``strength · penalty`` where ``penalty ∈ [0, 1]`` — so the reduction never
+    exceeds ``strength``. ``strength=0`` is a pure passthrough. A shim error can
+    never corrupt training: on any exception the verbatim reward is returned.
+    ``__name__`` is preserved so TRL's per-function logging keys stay correct.
+    """
+    if kind not in SHAPING_KINDS:
+        raise ValueError(f"kind must be one of {sorted(SHAPING_KINDS)}, got {kind!r}")
+    strength_val = _check_finite_float(strength, "strength", nonneg=True)
+    if strength_val > 1.0:
+        raise ValueError(f"strength must be <= 1, got {strength_val}")
+
+    def _shaped(*args: Any, **kwargs: Any) -> Any:
+        rewards = inner(*args, **kwargs)  # verbatim — inner runs exactly once
+        if strength_val <= 0.0:
+            return rewards
+        try:
+            completions = _extract_completions(args, kwargs)
+            if completions is None:
+                return rewards
+            comp_list = list(completions)
+            out = []
+            for idx, reward in enumerate(rewards):
+                if (
+                    idx < len(comp_list)
+                    and isinstance(reward, (int, float))
+                    and not isinstance(reward, bool)
+                ):
+                    penalty = _shaping_penalty(
+                        kind, _completion_text(comp_list[idx]), sentinel=sentinel
+                    )
+                    out.append(float(reward) - strength_val * penalty)
+                else:
+                    out.append(reward)
+            return out
+        except Exception:  # noqa: BLE001 — shim MUST NOT corrupt the reward
+            return rewards
+
+    _shaped.__name__ = getattr(inner, "__name__", "reward")
+    return _shaped
+
+
+def apply_reward_shaping(reward_funcs: Any, tcfg: Any) -> Any:
+    """Wrap the reward fn(s) with the shaping shim when ``reward_hack_reward_shaping``
+    is set; otherwise return them unchanged. Preserves the single-vs-list shape."""
+    if not getattr(tcfg, "reward_hack_reward_shaping", False):
+        return reward_funcs
+    kind = getattr(tcfg, "reward_hack_shaping_kind", "length")
+    strength = float(getattr(tcfg, "reward_hack_shaping_strength", 0.0))
+    if isinstance(reward_funcs, (list, tuple)):
+        return [shape_reward_fn(fn, kind=kind, strength=strength) for fn in reward_funcs]
+    return shape_reward_fn(reward_funcs, kind=kind, strength=strength)
+
+
+def explain_giveup(
+    state: ControllerState, *, signal_name: str, action_history: Sequence[str]
+) -> str:
+    """Plain-English explanation of why the controller gave up (mirrors why.py).
+
+    Names the signal, how long it stayed elevated, and the actions tried, so
+    ``soup diagnose`` / ``soup why`` can surface it to the operator.
+    """
+    lines = [
+        "Reward-hacking mitigation gave up: the controller could not suppress "
+        "the hacking signal.",
+        f"It exhausted {state.recovery_attempts} recovery attempt(s) and then "
+        "early-stopped training.",
+        f"The '{signal_name}' signal stayed elevated (last smoothed drop_pct="
+        f"{state.last_signal:.3f}).",
+    ]
+    recent = [str(a) for a in list(action_history)[-5:]]
+    if recent:
+        lines.append("Recent actions tried: " + " | ".join(recent))
+    lines.append(
+        "Next steps: use a stronger / ensemble reward model, enable reward "
+        "shaping on the gamed proxy, or review the reward function for a "
+        "gameable shortcut."
+    )
+    return "\n".join(lines)
 
 
 # --- telemetry helpers for the log_only stream (pure) ---
@@ -571,6 +758,9 @@ class RewardHackMitigationCallback(_TrainerCallbackBase):  # type: ignore[misc, 
         rollback_patience: int = 3,
         max_recovery_attempts: int = 2,
         rl_checkpoint_cb: Any = None,
+        smoothing: str = "none",
+        smoothing_window: int = 8,
+        conservative_on_disagreement: bool = False,
     ) -> None:
         if mode not in MITIGATION_MODES:
             raise ValueError(
@@ -603,6 +793,14 @@ class RewardHackMitigationCallback(_TrainerCallbackBase):  # type: ignore[misc, 
         self.rollback_patience = int(rollback_patience)
         self.max_recovery_attempts = int(max_recovery_attempts)
         self.rl_checkpoint_cb = rl_checkpoint_cb
+        if smoothing not in SMOOTHING_METHODS:
+            raise ValueError(
+                f"smoothing must be one of {sorted(SMOOTHING_METHODS)}, "
+                f"got {smoothing!r}"
+            )
+        self.smoothing = smoothing
+        self.smoothing_window = int(smoothing_window)
+        self.conservative_on_disagreement = bool(conservative_on_disagreement)
         # Compose the v0.70.0 detector callback for the info_rm/rm_ensemble
         # baseline + drop_pct logic (DRY — no re-implementation).
         self._detector_cb = RewardHackCallback(
@@ -613,6 +811,9 @@ class RewardHackMitigationCallback(_TrainerCallbackBase):  # type: ignore[misc, 
         self._length_baseline: float | None = None
         self._hack_streak = 0
         self._last_good_step: int | None = None
+        self._signal_windows: dict[str, list[float]] = {}
+        self._action_history: list[str] = []
+        self._last_drift = False
 
     def attach(self, trainer: Any) -> None:
         """Store the trainer reference (the β / kl_coef mutation target)."""
@@ -676,7 +877,39 @@ class RewardHackMitigationCallback(_TrainerCallbackBase):  # type: ignore[misc, 
             "repetition": repetition,
             "length_trend": length_trend,
         }
+        # Stage 3 — reward-distribution drift guard is opt-in (conservative
+        # mode) since the snapshot detector can't distinguish a healthy
+        # well-separated distribution from a gamed bimodal collapse.
+        self._last_drift = False
+        if self.conservative_on_disagreement:
+            self._last_drift = detect_reward_distribution_drift(rewards)
+            telemetry["drift"] = self._last_drift
         return telemetry, signals
+
+    def _compute_vote(self, signals: Mapping[str, float]) -> float:
+        """Combine the enabled per-signal drops into the controller vote,
+        applying smoothing + conservative-on-disagreement + the drift guard."""
+        signals_for_vote = dict(signals)
+        if self.smoothing != "none":
+            for name in self.signals:
+                if name not in signals:
+                    continue
+                window = self._signal_windows.setdefault(name, [])
+                signals_for_vote[name] = smooth_signal(
+                    signals[name], window, method=self.smoothing
+                )
+                window.append(float(signals[name]))
+                if len(window) > self.smoothing_window:
+                    del window[0]
+        if self.conservative_on_disagreement:
+            votes = [signals_for_vote[n] for n in self.signals if n in signals_for_vote]
+            vote = combine_conservative(votes, disagree_tol=_CONSERVATIVE_DISAGREE_TOL)
+            if self._last_drift:
+                # suspected distribution-shift attack — don't relax.
+                vote = max(vote, self._state.last_signal)
+        else:
+            vote = combine_signals(signals_for_vote, self.signals)
+        return vote
 
     def _apply_coefficient(self, value: float) -> None:
         """Write the controller's coefficient to the trainer.
@@ -728,10 +961,11 @@ class RewardHackMitigationCallback(_TrainerCallbackBase):  # type: ignore[misc, 
         if policy is None:
             return
         self._seed_coefficient(policy.beta_floor)
-        vote = combine_signals(signals, self.signals)
+        vote = self._compute_vote(signals)
         new_state, action = bang_bang_step(policy, self._state, vote=vote)
         self._state = new_state
         self._apply_coefficient(action.new_beta)
+        self._action_history.append(action.reason)
         telemetry["vote"] = vote
         telemetry["new_beta"] = action.new_beta
         telemetry["tripped"] = action.tripped
@@ -750,6 +984,11 @@ class RewardHackMitigationCallback(_TrainerCallbackBase):  # type: ignore[misc, 
         """Escalation ladder rung: rollback to last-good, else early-stop."""
         if self._state.recovery_attempts >= self.max_recovery_attempts:
             telemetry["escalation"] = "early_stop"
+            telemetry["explanation"] = explain_giveup(
+                self._state,
+                signal_name=self.detector,
+                action_history=self._action_history,
+            )
             self._request_stop(control)
             return control
         target = self._last_good_step
@@ -783,10 +1022,11 @@ class RewardHackMitigationCallback(_TrainerCallbackBase):  # type: ignore[misc, 
         if policy is None:
             return control
         self._seed_coefficient(policy.beta_floor)
-        vote = combine_signals(signals, self.signals)
+        vote = self._compute_vote(signals)
         new_state, action = pid_step(policy, self._state, signal=vote)
         self._state = new_state
         self._apply_coefficient(action.new_beta)
+        self._action_history.append(action.reason)
         telemetry["vote"] = vote
         telemetry["new_beta"] = action.new_beta
         telemetry["tripped"] = action.tripped
