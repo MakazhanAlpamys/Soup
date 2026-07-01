@@ -12,10 +12,43 @@ reproducing 70+ versions of notes.
 
 ## [Unreleased]
 
+## [0.71.26] - 2026-07-01
+
 ### Added
+- **Closed-loop reward-hacking auto-mitigation.** The trainer now *detects*
+  reward hacking mid-run and *self-corrects* — instead of only halting. Set
+  `training.reward_hack_mitigation` (or `soup train --reward-hack-mitigation`)
+  to one of four modes on a GRPO/PPO run (requires `reward_hack_detector`):
+  - `log_only` — instrument only: append a per-step `mitigation_log.jsonl`
+    (drop_pct, verdict, reward mean/std, completion-length trend, repetition)
+    and *never* touch training.
+  - `kl_control` — a reversible **bang-bang + hysteresis** controller: when the
+    hacking signal trips, raise the KL coefficient β (geometric, clamped to
+    `[floor, ceil]`, never crossing 0); relax it when the signal recovers.
+    Dwell + release-patience prevent flapping; a multi-signal vote combines the
+    detector drop with a length-trend and repetition signal.
+  - `pid_lagrangian` — a **PID-Lagrangian** controller (Stooke et al.) that
+    holds the hacking signal at a target, plus an **escalation ladder**:
+    raise β → roll back to the last-good RL checkpoint → early-stop.
+  - Anti-gaming hardening: per-signal EMA/median smoothing,
+    conservative-on-disagreement voting, a reward-distribution-drift guard, and
+    optional bounded **reward shaping** on the gamed proxy (length / repetition
+    / sentinel). A plain-English give-up explanation is logged on early-stop.
+  - **Proof-of-mechanism only** (see Known Limitations): validated on
+    SmolLM2-135M + a synthetic length-hacking task on a single RTX 3050 — all
+    four stages pass live, including a real mid-run rollback. PPO ships **BETA**
+    (mechanism unit-tested; the on-GPU proof is GRPO-only).
 - Ready-made `qwen2.5-coder-7b-sft` recipe for `Qwen/Qwen2.5-Coder-7B-Instruct`
   (catalog 133 → 134)
   ([#285](https://github.com/MakazhanAlpamys/Soup/pull/285) by [@Deadpool2000](https://github.com/Deadpool2000)).
+
+### Security
+- `RLCheckpointCallback.restore_checkpoint` / `save_checkpoint` refuse a
+  **symlinked** `optimizer.pt` — `torch.load(weights_only=False)` on an
+  attacker-placed symlink in a shared checkpoint dir was an RCE vector.
+- Bool-before-int/float guards on every new `reward_hack_*` numeric field;
+  `reward_hack_signals` bounded (`max_length=4`); the mitigation log writer is
+  cwd-contained with symlink-reject-on-rotate and secret redaction.
 
 ## [0.71.25] - 2026-06-27
 

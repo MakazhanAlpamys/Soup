@@ -402,6 +402,17 @@ output_dir: ./output_advanced/
 
 See the [config schema](../src/soup_cli/config/schema.py) (the single source of truth) for all available options.
 
+## Reward-hacking mitigation demo
+
+`reward_hacking/rewards.py` provides synthetic reward functions for the
+closed-loop reward-hacking mitigation feature (`soup train
+--reward-hack-mitigation`): a gameable `length_hack_reward` / `sentinel_reward`
+proxy decoupled from a held-out `true_score`. Point a GRPO config's
+`training.reward_fn` at a `.py` that re-exports one as `reward_fn`, enable
+`reward_hack_detector: info_rm` + `reward_hack_mitigation: kl_control`, and watch
+`mitigation_log.jsonl` under the run's output dir. See
+[docs/training.md](../docs/training.md#closed-loop-reward-hacking-auto-mitigation-v07126).
+
 ## Learn More
 
 - **README**: [Main documentation](../README.md)

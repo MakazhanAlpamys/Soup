@@ -49,20 +49,21 @@ infrastructure instead of improving models. Soup fixes that.
 
 ## What's New
 
-**v0.71.25 — `soup ship`: the SHIP / DON'T-SHIP verdict.** After fine-tuning, answer one question — did the model get better, or did I break it?
+**v0.71.26 — Closed-loop reward-hacking auto-mitigation.** Your GRPO/PPO trainer now *detects* reward hacking mid-run and *self-corrects* — instead of only halting. No OSS RLHF library closes this loop.
 
-- **One binary decision, not a dashboard.** `soup ship` SHIPs only when **(1)** the task
-  metric *strictly* improved AND **(2)** no general benchmark regressed past a forgetting
-  threshold (default 5% absolute). Otherwise DON'T SHIP — *even if the task metric looks great*.
-- **The moat is leg 2.** A catastrophic-forgetting / regression gate, fused with the task win
-  into a single verdict + a one-screen reason.
-- **CI-gateable.** Exit `0 = SHIP`, `2 = DON'T SHIP`, `1 = runtime error`.
-- **Works offline.** `soup ship --evidence ev.json` decides from pre-computed scores (no model
-  load); leg-2 defaults to built-in mini benchmarks (CPU, instant). `--general-suite` routes
-  lm-eval benchmarks; `--baseline registry://… | file.json` supplies recorded base scores.
+- **Detect → correct → continue.** When the hacking signal trips, the controller raises the
+  KL coefficient β (bang-bang + hysteresis, or a PID-Lagrangian controller), and — if hacking
+  persists — **rolls back to the last-good checkpoint**, then early-stops as a last resort.
+- **Anti-gaming hardening.** Multi-signal voting (RM cluster-separation + length-trend +
+  repetition), signal smoothing, conservative-on-disagreement, a reward-distribution-drift
+  guard, and optional bounded **reward shaping** on the gamed proxy.
+- **Observe first.** `reward_hack_mitigation=log_only` streams a per-step `mitigation_log.jsonl`
+  and never touches training — see the hacking happen before you let the controller act.
+- **Honest scope.** Proof-of-mechanism on SmolLM2-135M + a synthetic hacking task on one RTX
+  3050 (all four stages validated live, including a real rollback). PPO ships BETA.
 
 ```bash
-soup ship --base <model> --adapter <lora> --task-eval tasks.jsonl   # → SHIP / DON'T SHIP
+soup train --config grpo.yaml --reward-hack-mitigation kl_control   # detect → raise KL → recover
 ```
 
 Full history: [CHANGELOG.md](CHANGELOG.md) &middot; [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
