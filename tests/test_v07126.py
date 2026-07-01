@@ -1017,10 +1017,15 @@ class TestRewardHackMitigationCli:
         return CliRunner(), app
 
     def test_help_shows_flag(self):
+        import re
+
         runner, app = self._runner()
-        result = runner.invoke(app, ["train", "--help"])
-        assert result.exit_code == 0, result.output
-        assert "--reward-hack-mitigation" in result.output
+        # Wide terminal avoids option-name line-wrapping; ANSI strip handles the
+        # color codes CI runners inject mid-token (see test_eval_gate.py).
+        result = runner.invoke(app, ["train", "--help"], env={"COLUMNS": "200"})
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        cleaned = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
+        assert "--reward-hack-mitigation" in cleaned
 
     def test_override_without_detector_rejected(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
@@ -1048,11 +1053,14 @@ class TestRewardHackMitigationCli:
         assert "cfg.training.reward_hack_mitigation" in src
 
     def test_help_shows_detector_and_halt_flags(self):
+        import re
+
         runner, app = self._runner()
-        result = runner.invoke(app, ["train", "--help"])
-        assert result.exit_code == 0, result.output
-        assert "--reward-hack-detector" in result.output
-        assert "--reward-hack-halt" in result.output
+        result = runner.invoke(app, ["train", "--help"], env={"COLUMNS": "200"})
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        cleaned = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
+        assert "--reward-hack-detector" in cleaned
+        assert "--reward-hack-halt" in cleaned
 
     def test_bad_detector_value_rejected(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
