@@ -36,7 +36,7 @@ import statistics
 import threading
 import time
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -217,6 +217,147 @@ def mean_repetition(completions: Sequence[Any]) -> float:
         return 0.0
 
 
+# --- bang-bang controller (Stage 1) ---
+
+
+@dataclass(frozen=True)
+class MitigationAction:
+    """One controller step's decision (frozen).
+
+    - ``new_beta``: the β / kl_coef the trainer should apply next step.
+    - ``tripped``: whether the controller is in the raised band.
+    - ``verdict``: OK / WARN / HACK from the classifier over the vote.
+    - ``reason``: human-readable summary for the mitigation log.
+    """
+
+    new_beta: float
+    tripped: bool
+    verdict: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class BangBangPolicy:
+    """Reversible bang-bang + hysteresis controller policy.
+
+    Two bands with a dead-zone between them: the controller wants to RAISE β
+    when the vote is at/above ``trip_band`` and RELAX when at/below
+    ``release_band``. ``dwell_steps`` consecutive want-raise steps are required
+    before the first trip, and ``release_patience`` consecutive want-relax
+    steps before relaxing — so a signal that flaps across the bands does not
+    flap β. β moves geometrically by ``kl_gain`` and is clamped to
+    ``[beta_floor, beta_ceil]`` (never crossing 0).
+    """
+
+    beta_floor: float
+    beta_ceil: float
+    trip_band: float
+    release_band: float
+    dwell_steps: int
+    release_patience: int
+    kl_gain: float
+
+    def __post_init__(self) -> None:
+        _check_finite_float(self.beta_floor, "beta_floor", nonneg=True)
+        _check_finite_float(self.beta_ceil, "beta_ceil", nonneg=True)
+        _check_finite_float(self.trip_band, "trip_band", nonneg=True)
+        _check_finite_float(self.release_band, "release_band", nonneg=True)
+        _check_finite_float(self.kl_gain, "kl_gain", nonneg=True)
+        _check_nonneg_int(self.dwell_steps, "dwell_steps")
+        _check_nonneg_int(self.release_patience, "release_patience")
+        if self.beta_floor <= 0.0:
+            raise ValueError(f"beta_floor must be > 0, got {self.beta_floor}")
+        if self.beta_floor >= self.beta_ceil:
+            raise ValueError(
+                f"beta_floor ({self.beta_floor}) must be < "
+                f"beta_ceil ({self.beta_ceil})"
+            )
+        if not 0.0 <= self.release_band < self.trip_band <= 1.0:
+            raise ValueError(
+                "require 0 <= release_band < trip_band <= 1, got "
+                f"release_band={self.release_band}, trip_band={self.trip_band}"
+            )
+        if self.dwell_steps < 1:
+            raise ValueError("dwell_steps must be >= 1")
+        if self.release_patience < 1:
+            raise ValueError("release_patience must be >= 1")
+        if self.kl_gain <= 1.0:
+            raise ValueError(f"kl_gain must be > 1, got {self.kl_gain}")
+
+
+def _verdict_for(vote: float) -> str:
+    from soup_cli.utils.reward_hacking import classify_hack_signal
+
+    return classify_hack_signal(min(1.0, max(0.0, float(vote))))
+
+
+def bang_bang_step(
+    policy: BangBangPolicy, state: ControllerState, *, vote: float
+) -> tuple[ControllerState, MitigationAction]:
+    """Advance the bang-bang controller one step given the multi-signal ``vote``.
+
+    ``vote`` is the combined hacking signal in ``[0, 1]`` (see
+    :func:`combine_signals`). Returns the next :class:`ControllerState` and the
+    :class:`MitigationAction` (the β the trainer should apply).
+    """
+    fvote = float(vote)
+    beta = state.beta if state.beta > 0.0 else policy.beta_floor
+    tripped = state.tripped
+    dwell = state.dwell_count
+    release = state.release_count
+    reason = "hold"
+
+    if fvote >= policy.trip_band:
+        release = 0
+        if not tripped:
+            dwell += 1
+            if dwell >= policy.dwell_steps:
+                beta = min(policy.beta_ceil, beta * policy.kl_gain)
+                tripped = True
+                dwell = 0
+                reason = f"trip: raise beta to {beta:.4f} (vote={fvote:.3f})"
+        else:
+            new_beta = min(policy.beta_ceil, beta * policy.kl_gain)
+            if new_beta != beta:
+                reason = f"raise beta to {new_beta:.4f} (vote={fvote:.3f})"
+            beta = new_beta
+    elif fvote <= policy.release_band:
+        dwell = 0
+        if tripped:
+            release += 1
+            if release >= policy.release_patience:
+                new_beta = max(policy.beta_floor, beta / policy.kl_gain)
+                if new_beta != beta:
+                    reason = f"relax beta to {new_beta:.4f} (vote={fvote:.3f})"
+                beta = new_beta
+                if beta <= policy.beta_floor:
+                    tripped = False
+                    release = 0
+        else:
+            release = 0
+    else:
+        # dead-band: hold and decay both counters (hysteresis).
+        dwell = 0
+        release = 0
+
+    new_state = replace(
+        state,
+        step=state.step + 1,
+        beta=beta,
+        tripped=tripped,
+        dwell_count=dwell,
+        release_count=release,
+        last_signal=min(1.0, max(0.0, fvote)),
+    )
+    action = MitigationAction(
+        new_beta=beta,
+        tripped=tripped,
+        verdict=_verdict_for(fvote),
+        reason=reason,
+    )
+    return new_state, action
+
+
 class MitigationLogWriter:
     """Thread-safe append-only JSONL log for the reward-hack controller.
 
@@ -341,6 +482,7 @@ class RewardHackMitigationCallback(_TrainerCallbackBase):  # type: ignore[misc, 
         buffer: Any = None,
         tokenizer: Any = None,
         task: str = "grpo",
+        bang_bang: BangBangPolicy | None = None,
     ) -> None:
         if mode not in MITIGATION_MODES:
             raise ValueError(
@@ -363,6 +505,9 @@ class RewardHackMitigationCallback(_TrainerCallbackBase):  # type: ignore[misc, 
         self.buffer = buffer
         self.tokenizer = tokenizer
         self.task = task
+        self.bang_bang = bang_bang
+        if mode == "kl_control" and bang_bang is None:
+            raise ValueError("kl_control mode requires a BangBangPolicy")
         # Compose the v0.70.0 detector callback for the info_rm/rm_ensemble
         # baseline + drop_pct logic (DRY — no re-implementation).
         self._detector_cb = RewardHackCallback(
@@ -370,6 +515,7 @@ class RewardHackMitigationCallback(_TrainerCallbackBase):  # type: ignore[misc, 
         )
         self._trainer: Any = None
         self._state = ControllerState()
+        self._length_baseline: float | None = None
 
     def attach(self, trainer: Any) -> None:
         """Store the trainer reference (the β / kl_coef mutation target)."""
@@ -386,8 +532,22 @@ class RewardHackMitigationCallback(_TrainerCallbackBase):  # type: ignore[misc, 
             return getattr(args, "kl_coef", None) if args is not None else None
         return getattr(trainer, "beta", None)
 
-    def _build_telemetry(self, snapshot: Mapping[str, Any], step: int) -> dict[str, Any]:
-        """Compute the per-step telemetry entry from a buffer snapshot."""
+    def _length_trend(self, length_mean: float) -> float:
+        """Relative growth of the mean completion length vs its baseline, in
+        ``[0, 1]``. Rising = the policy is padding output (length hacking)."""
+        if self._length_baseline is None:
+            if length_mean > 0:
+                self._length_baseline = length_mean
+            return 0.0
+        base = self._length_baseline
+        if base <= 0:
+            return 0.0
+        return min(1.0, max(0.0, (length_mean - base) / base))
+
+    def _observe(
+        self, snapshot: Mapping[str, Any], step: int
+    ) -> tuple[dict[str, Any], dict[str, float]]:
+        """Compute the telemetry entry + the per-signal vote inputs."""
         raw = self._detector_cb.compute_signal(snapshot)
         drop_pct = 0.0
         verdict = "OK"
@@ -398,7 +558,15 @@ class RewardHackMitigationCallback(_TrainerCallbackBase):  # type: ignore[misc, 
         completions = snapshot.get("completions", []) or []
         rewards = snapshot.get("rewards", []) or []
         reward_mean, reward_std = reward_mean_std(rewards)
-        return {
+        length_mean = mean_token_len(completions)
+        repetition = mean_repetition(completions)
+        length_trend = self._length_trend(length_mean)
+        signals = {
+            self.detector: drop_pct,
+            "length_trend": length_trend,
+            "repetition": repetition,
+        }
+        telemetry = {
             "mode": self.mode,
             "detector": self.detector,
             "raw_signal": raw,
@@ -407,9 +575,70 @@ class RewardHackMitigationCallback(_TrainerCallbackBase):  # type: ignore[misc, 
             "beta": self._current_coefficient(),
             "reward_mean": reward_mean,
             "reward_std": reward_std,
-            "completion_length_mean": mean_token_len(completions),
-            "repetition": mean_repetition(completions),
+            "completion_length_mean": length_mean,
+            "repetition": repetition,
+            "length_trend": length_trend,
         }
+        return telemetry, signals
+
+    def _apply_coefficient(self, value: float) -> None:
+        """Write the controller's coefficient to the trainer.
+
+        GRPO: β must be dual-written — stock ``GRPOTrainer.compute_loss`` reads
+        ``self.beta`` (the instance) while Soup's ``_GRPOTrainerVariant`` reads
+        ``self.args.beta`` (the config). PPO: ``args.kl_coef``.
+        """
+        trainer = self._trainer
+        if trainer is None:
+            return
+        args = getattr(trainer, "args", None)
+        if self.task == "ppo":
+            if args is not None:
+                try:
+                    args.kl_coef = value
+                except Exception:  # noqa: BLE001 — never crash training
+                    pass
+            return
+        try:
+            trainer.beta = value
+        except Exception:  # noqa: BLE001
+            pass
+        if args is not None:
+            try:
+                args.beta = value
+            except Exception:  # noqa: BLE001
+                pass
+
+    def _seed_coefficient(self, floor: float) -> None:
+        """Seed the controller β from the live trainer coefficient on step 1."""
+        if self._state.beta > 0.0:
+            return
+        current = self._current_coefficient()
+        seed = (
+            float(current)
+            if isinstance(current, (int, float))
+            and not isinstance(current, bool)
+            and current > 0
+            else floor
+        )
+        self._state = replace(self._state, beta=seed)
+
+    def _run_bang_bang(
+        self, telemetry: dict[str, Any], signals: Mapping[str, float]
+    ) -> None:
+        """kl_control: vote → bang-bang step → mutate the trainer coefficient."""
+        policy = self.bang_bang
+        if policy is None:
+            return
+        self._seed_coefficient(policy.beta_floor)
+        vote = combine_signals(signals, self.signals)
+        new_state, action = bang_bang_step(policy, self._state, vote=vote)
+        self._state = new_state
+        self._apply_coefficient(action.new_beta)
+        telemetry["vote"] = vote
+        telemetry["new_beta"] = action.new_beta
+        telemetry["tripped"] = action.tripped
+        telemetry["action"] = action.reason
 
     def on_step_end(self, args, state, control, **kwargs):
         """Per-step hook — read the buffer, compute telemetry, act by mode.
@@ -422,10 +651,11 @@ class RewardHackMitigationCallback(_TrainerCallbackBase):  # type: ignore[misc, 
         try:
             snapshot = self.buffer.snapshot()
             step = int(getattr(state, "global_step", 0) or 0)
-            telemetry = self._build_telemetry(snapshot, step)
-            # Stage 0: log_only observes; control modes (kl_control /
-            # pid_lagrangian) are wired in later stages. In every mode we
-            # record the telemetry line.
+            telemetry, signals = self._observe(snapshot, step)
+            # log_only observes; kl_control drives the bang-bang controller.
+            # pid_lagrangian is wired in Stage 2.
+            if self.mode == "kl_control":
+                self._run_bang_bang(telemetry, signals)
             self.log_writer.record(step=step, snapshot=telemetry)
             return control
         except Exception:  # noqa: BLE001 — instrumentation must never crash

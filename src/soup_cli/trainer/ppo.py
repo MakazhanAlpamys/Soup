@@ -191,6 +191,28 @@ class PPOTrainerWrapper:
         if self.reward_fn is not None:
             reward_funcs.append(self.reward_fn)
 
+        # v0.71.26 — reward-hack mitigation buffer parity with GRPO. When a
+        # detector / mitigation mode is set, capture the callable reward fns'
+        # rewards + completions into a shared RLSignalBuffer so the mitigation
+        # callback can observe the step (BETA — the on-GPU proof is GRPO-only).
+        # nn.Module reward models are skipped (their call shape differs).
+        self._rl_buffer = None
+        from soup_cli.utils.peft_wiring import rl_callbacks_need_buffer
+
+        if rl_callbacks_need_buffer(tcfg) and reward_funcs:
+            from soup_cli.utils.rl_signal_buffer import (
+                RLSignalBuffer,
+                wrap_reward_funcs,
+            )
+
+            self._rl_buffer = RLSignalBuffer()
+            reward_funcs = [
+                wrap_reward_funcs(fn, self._rl_buffer)
+                if callable(fn) and not hasattr(fn, "forward")
+                else fn
+                for fn in reward_funcs
+            ]
+
         # --- Trainer ---
         ppo_trainer_params = inspect.signature(ppo_trainer_cls.__init__).parameters
 
@@ -254,6 +276,19 @@ class PPOTrainerWrapper:
             }
             self._dataset_in_constructor = True
             self.trainer = ppo_trainer_cls(**trainer_kwargs)
+
+        # v0.71.26 — reward-hack mitigation / echo-trap / RL-checkpoint callbacks
+        # (PPO parity with GRPO; kl_coef mutation for the controller).
+        from soup_cli.utils.peft_wiring import attach_rl_callbacks
+
+        attach_rl_callbacks(
+            self.trainer,
+            tcfg,
+            buffer=self._rl_buffer,
+            tokenizer=self.tokenizer,
+            output_dir=str(output_dir),
+            task="ppo",
+        )
 
         # v0.40.6 #67 — ReLoRA callback (magnitude-prune LoRA every N steps).
         from soup_cli.utils.peft_wiring import (

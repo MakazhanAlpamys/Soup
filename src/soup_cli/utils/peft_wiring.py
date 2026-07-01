@@ -233,6 +233,7 @@ def _attach_reward_hack(
     mitigation = getattr(tcfg, "reward_hack_mitigation", "off")
     if mitigation != "off" and detector is not None:
         from soup_cli.utils.reward_hack_control import (
+            BangBangPolicy,
             MitigationLogWriter,
             RewardHackMitigationCallback,
         )
@@ -244,6 +245,17 @@ def _attach_reward_hack(
             signals = tuple(
                 getattr(tcfg, "reward_hack_signals", None) or ("info_rm",)
             )
+            bang_bang = None
+            if mitigation == "kl_control":
+                bang_bang = BangBangPolicy(
+                    beta_floor=tcfg.reward_hack_beta_floor,
+                    beta_ceil=tcfg.reward_hack_beta_ceil,
+                    trip_band=tcfg.reward_hack_trip_band,
+                    release_band=tcfg.reward_hack_release_band,
+                    dwell_steps=tcfg.reward_hack_dwell_steps,
+                    release_patience=tcfg.reward_hack_release_patience,
+                    kl_gain=tcfg.reward_hack_kl_gain,
+                )
             callback = RewardHackMitigationCallback(
                 mode=mitigation,
                 detector=detector,
@@ -252,6 +264,7 @@ def _attach_reward_hack(
                 buffer=buffer,
                 tokenizer=tokenizer,
                 task=task,
+                bang_bang=bang_bang,
             )
             trainer.add_callback(callback)
             callback.attach(trainer)

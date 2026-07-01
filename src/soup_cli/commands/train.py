@@ -167,6 +167,15 @@ def train(
             "training.echo_trap_enabled=true on grpo/ppo."
         ),
     ),
+    reward_hack_mitigation: str = typer.Option(
+        None,
+        "--reward-hack-mitigation",
+        help=(
+            "Closed-loop reward-hacking mitigation mode: off | log_only | "
+            "kl_control | pid_lagrangian. Requires training.reward_hack_detector "
+            "on grpo/ppo. Overrides training.reward_hack_mitigation. (v0.71.26)"
+        ),
+    ),
     minillm_on_policy: bool = typer.Option(
         False,
         "--minillm-on-policy",
@@ -343,6 +352,29 @@ def train(
             raise typer.Exit(1)
         cfg.training.echo_trap_tokenizer_aware = True
         console.print("[green]Echo-trap tokenizer-aware scoring enabled[/]")
+
+    # --- Reward-hack mitigation shortcut (v0.71.26) ---
+    if reward_hack_mitigation is not None:
+        valid_modes = ("off", "log_only", "kl_control", "pid_lagrangian")
+        if reward_hack_mitigation not in valid_modes:
+            console.print(
+                "[red]--reward-hack-mitigation must be one of "
+                f"{', '.join(valid_modes)}[/]"
+            )
+            raise typer.Exit(1)
+        if (
+            reward_hack_mitigation != "off"
+            and cfg.training.reward_hack_detector is None
+        ):
+            console.print(
+                "[red]--reward-hack-mitigation requires "
+                "training.reward_hack_detector to be set (the signal source)[/]"
+            )
+            raise typer.Exit(1)
+        cfg.training.reward_hack_mitigation = reward_hack_mitigation
+        console.print(
+            f"[green]Reward-hack mitigation:[/] {reward_hack_mitigation}"
+        )
 
     # --- MiniLLM on-policy rollout shortcut (v0.71.18 #257) ---
     if minillm_on_policy:
@@ -618,6 +650,10 @@ def train(
                     script_args.append("--tensorboard")
                 if echo_trap_tokenizer_aware:
                     script_args.append("--echo-trap-tokenizer-aware")
+                if reward_hack_mitigation is not None:
+                    script_args.extend(
+                        ["--reward-hack-mitigation", reward_hack_mitigation]
+                    )
                 if yes:
                     script_args.append("--yes")
                 argv = build_accelerate_argv(

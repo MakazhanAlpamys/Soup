@@ -1672,6 +1672,75 @@ class TrainingConfig(BaseModel):
             "{'grpo', 'ppo'} on a non-mlx backend."
         ),
     )
+    reward_hack_beta_floor: float = Field(
+        default=0.02,
+        gt=0.0,
+        description=(
+            "v0.71.26 — lower β/kl_coef bound for the mitigation controller. "
+            "Must be > 0 (β=0 gates off the ref-log-prob path at generation)."
+        ),
+    )
+    reward_hack_beta_ceil: float = Field(
+        default=1.0,
+        gt=0.0,
+        le=1000.0,
+        description=(
+            "v0.71.26 — upper β/kl_coef bound for the mitigation controller. "
+            "Must be > reward_hack_beta_floor."
+        ),
+    )
+    reward_hack_trip_band: float = Field(
+        default=0.30,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "v0.71.26 — hacking drop_pct at/above which the controller wants "
+            "to RAISE β. Must be > reward_hack_release_band."
+        ),
+    )
+    reward_hack_release_band: float = Field(
+        default=0.10,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "v0.71.26 — hacking drop_pct at/below which the controller wants "
+            "to RELAX β. Must be < reward_hack_trip_band."
+        ),
+    )
+    reward_hack_dwell_steps: int = Field(
+        default=2,
+        ge=1,
+        le=100_000,
+        description=(
+            "v0.71.26 — consecutive trip-band steps required before the "
+            "controller raises β (hysteresis)."
+        ),
+    )
+    reward_hack_release_patience: int = Field(
+        default=3,
+        ge=1,
+        le=100_000,
+        description=(
+            "v0.71.26 — consecutive release-band steps required before the "
+            "controller relaxes β."
+        ),
+    )
+    reward_hack_kl_gain: float = Field(
+        default=1.5,
+        gt=1.0,
+        le=100.0,
+        description=(
+            "v0.71.26 — multiplicative β step per trip (>1). β is multiplied "
+            "on trip / divided on release, clamped to [floor, ceil]."
+        ),
+    )
+    reward_hack_signals: List[str] = Field(
+        default_factory=lambda: ["info_rm"],
+        description=(
+            "v0.71.26 — signals combined into the controller's multi-signal "
+            "vote. Allowlist: info_rm, rm_ensemble, length_trend, repetition."
+        ),
+    )
 
     @field_validator("reward_hack_mitigation", mode="before")
     @classmethod
@@ -3071,6 +3140,72 @@ class EvalConfig(BaseModel):
         default=None,
         description="LLM-as-a-judge config: model, rubric, provider",
     )
+
+
+# --- v0.71.26 reward-hack mitigation validation helpers ---
+
+# Control tunables that are meaningless unless a mitigation mode is set. Setting
+# any to a non-default value while reward_hack_mitigation='off' is a silent
+# no-op footgun (mirrors the v0.70.0 minillm offenders-list policy). Extended
+# per stage (Stage 2/3 tunables added with their fields).
+_REWARD_HACK_TUNABLE_DEFAULTS: dict = {
+    "reward_hack_beta_floor": 0.02,
+    "reward_hack_beta_ceil": 1.0,
+    "reward_hack_trip_band": 0.30,
+    "reward_hack_release_band": 0.10,
+    "reward_hack_dwell_steps": 2,
+    "reward_hack_release_patience": 3,
+    "reward_hack_kl_gain": 1.5,
+    "reward_hack_signals": ["info_rm"],
+}
+
+
+def _customized_reward_hack_tunables(tcfg) -> list:
+    """Return the reward-hack control tunables set to a non-default value."""
+    offenders = []
+    for field_name, default in _REWARD_HACK_TUNABLE_DEFAULTS.items():
+        if getattr(tcfg, field_name, default) != default:
+            offenders.append(field_name)
+    return offenders
+
+
+def _validate_reward_hack_controller(tcfg) -> None:
+    """Validate the mitigation-controller config (only when a mode is active).
+
+    Numeric consistency (β floor < ceil, release < trip band), the signal
+    allowlist, and the β-schedule mutual exclusion.
+    """
+    floor = tcfg.reward_hack_beta_floor
+    ceil = tcfg.reward_hack_beta_ceil
+    if floor >= ceil:
+        raise ValueError(
+            f"reward_hack_beta_floor ({floor}) must be < "
+            f"reward_hack_beta_ceil ({ceil})"
+        )
+    release = tcfg.reward_hack_release_band
+    trip = tcfg.reward_hack_trip_band
+    if release >= trip:
+        raise ValueError(
+            f"reward_hack_release_band ({release}) must be < "
+            f"reward_hack_trip_band ({trip})"
+        )
+    from soup_cli.utils.reward_hack_control import SIGNAL_NAMES
+
+    for name in tcfg.reward_hack_signals or []:
+        if name not in SIGNAL_NAMES:
+            raise ValueError(
+                f"reward_hack_signals contains unknown signal {name!r}; "
+                f"valid: {sorted(SIGNAL_NAMES)}"
+            )
+    # A control mode drives the KL/ref dynamics; a competing β schedule
+    # (ref_model_ema_alpha regenerates the reference) fights it — reject.
+    if tcfg.reward_hack_mitigation in ("kl_control", "pid_lagrangian"):
+        if getattr(tcfg, "ref_model_ema_alpha", None) is not None:
+            raise ValueError(
+                "reward_hack_mitigation kl_control/pid_lagrangian is mutually "
+                "exclusive with ref_model_ema_alpha (both drive the KL/ref "
+                "dynamics); pick one"
+            )
 
 
 class SoupConfig(BaseModel):
@@ -4643,6 +4778,14 @@ class SoupConfig(BaseModel):
         detector = tcfg.reward_hack_detector
         halt = tcfg.reward_hack_halt
         mitigation = getattr(tcfg, "reward_hack_mitigation", "off")
+        # v0.71.26 — footgun: control tunables set while mitigation is off.
+        if mitigation == "off":
+            offenders = _customized_reward_hack_tunables(tcfg)
+            if offenders:
+                raise ValueError(
+                    f"reward-hack tunables {offenders} require "
+                    "reward_hack_mitigation to be set (not 'off')"
+                )
         if detector is None and not halt and mitigation == "off":
             return self
         # halt without detector is a silent no-op footgun — reject.
@@ -4657,6 +4800,10 @@ class SoupConfig(BaseModel):
                 f"reward_hack_mitigation={mitigation!r} requires "
                 "reward_hack_detector to be set (the signal source)"
             )
+        # v0.71.26 — controller config (numeric bounds, signal allowlist,
+        # β-schedule mutual exclusion) only when a mode is active.
+        if mitigation != "off":
+            _validate_reward_hack_controller(tcfg)
         if self.task not in ("grpo", "ppo"):
             raise ValueError(
                 "reward_hack_detector / reward_hack_halt / "

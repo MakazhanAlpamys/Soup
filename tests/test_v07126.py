@@ -49,6 +49,24 @@ def _fake_ppo_trainer(kl_coef=0.2):
     args = types.SimpleNamespace(kl_coef=kl_coef)
     return types.SimpleNamespace(args=args)
 
+
+class _SeqBuffer:
+    """Fake RLSignalBuffer returning a scripted sequence of snapshots."""
+
+    def __init__(self, snapshots):
+        self._snapshots = snapshots
+        self._index = 0
+
+    def snapshot(self):
+        snap = self._snapshots[min(self._index, len(self._snapshots) - 1)]
+        self._index += 1
+        return snap
+
+
+# Well-separated rewards (healthy) vs bunched rewards (reward model losing grip).
+_HEALTHY = _grpo_snapshot([0.0, 0.0, 1.0, 1.0], ["a", "b", "c", "d"])
+_HACK = _grpo_snapshot([0.5, 0.5, 0.5, 0.5], ["a", "b", "c", "d"])
+
 # =====================================================================
 # Part A / Stage 0 — schema: reward_hack_mitigation field + gate (Task A1)
 # =====================================================================
@@ -658,3 +676,364 @@ class TestAttachMitigationWiring:
         )
         assert any(isinstance(c, RewardHackCallback) for c in added)
         assert not any(isinstance(c, RewardHackMitigationCallback) for c in added)
+
+
+# =====================================================================
+# Part B / Stage 1 — schema fields + validators (Task B1)
+# =====================================================================
+
+
+class TestStage1Schema:
+    """Bang-bang controller tunables + bounds + mutual-exclusion."""
+
+    def _cfg(self, extra: str, *, mitigation: str = "kl_control"):
+        from soup_cli.config.loader import load_config_from_string
+
+        return load_config_from_string(_yaml("grpo", mitigation=mitigation, extra=extra))
+
+    def test_kl_control_parses(self):
+        cfg = self._cfg("reward_hack_beta_floor: 0.05\nreward_hack_beta_ceil: 2.0")
+        assert cfg.training.reward_hack_mitigation == "kl_control"
+        assert cfg.training.reward_hack_beta_floor == 0.05
+        assert cfg.training.reward_hack_beta_ceil == 2.0
+
+    def test_defaults(self):
+        from soup_cli.config.schema import TrainingConfig
+
+        t = TrainingConfig()
+        assert t.reward_hack_beta_floor == 0.02 and t.reward_hack_beta_ceil == 1.0
+        assert t.reward_hack_trip_band == 0.30 and t.reward_hack_release_band == 0.10
+        assert t.reward_hack_dwell_steps == 2 and t.reward_hack_release_patience == 3
+        assert t.reward_hack_kl_gain == 1.5 and t.reward_hack_signals == ["info_rm"]
+
+    def test_floor_ge_ceil_rejected(self):
+        with pytest.raises(ValueError, match="beta_floor"):
+            self._cfg("reward_hack_beta_floor: 1.0\nreward_hack_beta_ceil: 0.5")
+
+    def test_release_ge_trip_rejected(self):
+        with pytest.raises(ValueError, match="release_band"):
+            self._cfg("reward_hack_trip_band: 0.2\nreward_hack_release_band: 0.3")
+
+    def test_unknown_signal_rejected(self):
+        with pytest.raises(ValueError, match="signal"):
+            self._cfg("reward_hack_signals: [info_rm, not_a_signal]")
+
+    def test_known_signals_accepted(self):
+        cfg = self._cfg("reward_hack_signals: [info_rm, length_trend, repetition]")
+        assert cfg.training.reward_hack_signals == ["info_rm", "length_trend", "repetition"]
+
+    def test_kl_control_excludes_ref_ema(self):
+        with pytest.raises(ValueError, match="ref_model_ema_alpha"):
+            self._cfg("ref_model_ema_alpha: 0.9")
+
+    def test_beta_floor_must_be_positive(self):
+        with pytest.raises(ValueError):
+            self._cfg("reward_hack_beta_floor: 0.0")
+
+    def test_kl_gain_must_exceed_one(self):
+        with pytest.raises(ValueError):
+            self._cfg("reward_hack_kl_gain: 1.0")
+
+    def test_dwell_must_be_positive(self):
+        with pytest.raises(ValueError):
+            self._cfg("reward_hack_dwell_steps: 0")
+
+    def test_tunable_without_mode_rejected(self):
+        # footgun: setting a control tunable while mitigation is off.
+        from soup_cli.config.loader import load_config_from_string
+
+        with pytest.raises(ValueError, match="reward_hack_mitigation"):
+            load_config_from_string(
+                _yaml(
+                    "grpo", detector=None, mitigation="off", extra="reward_hack_kl_gain: 2.0"
+                )
+            )
+
+
+# =====================================================================
+# Part B / Stage 1 — BangBangPolicy + bang_bang_step (Task B2)
+# =====================================================================
+
+
+def _bang_policy(**kw):
+    from soup_cli.utils.reward_hack_control import BangBangPolicy
+
+    defaults = dict(
+        beta_floor=0.02,
+        beta_ceil=1.0,
+        trip_band=0.3,
+        release_band=0.1,
+        dwell_steps=2,
+        release_patience=2,
+        kl_gain=1.5,
+    )
+    defaults.update(kw)
+    return BangBangPolicy(**defaults)
+
+
+def _run_bang(policy, votes, beta0=None):
+    from soup_cli.utils.reward_hack_control import ControllerState, bang_bang_step
+
+    state = ControllerState(beta=beta0 if beta0 is not None else policy.beta_floor)
+    actions = []
+    for vote in votes:
+        state, action = bang_bang_step(policy, state, vote=vote)
+        actions.append(action)
+    return state, actions
+
+
+class TestBangBang:
+    """Reversible bang-bang controller with dwell + release hysteresis."""
+
+    def test_policy_floor_lt_ceil(self):
+        from soup_cli.utils.reward_hack_control import BangBangPolicy
+
+        with pytest.raises(ValueError, match="floor"):
+            BangBangPolicy(
+                beta_floor=1.0,
+                beta_ceil=0.5,
+                trip_band=0.3,
+                release_band=0.1,
+                dwell_steps=2,
+                release_patience=2,
+                kl_gain=1.5,
+            )
+
+    def test_policy_release_lt_trip(self):
+        with pytest.raises(ValueError, match="release"):
+            _bang_policy(trip_band=0.2, release_band=0.3)
+
+    def test_policy_kl_gain_gt_one(self):
+        with pytest.raises(ValueError, match="kl_gain"):
+            _bang_policy(kl_gain=1.0)
+
+    def test_policy_beta_floor_positive(self):
+        with pytest.raises(ValueError, match="beta_floor"):
+            _bang_policy(beta_floor=0.0)
+
+    def test_below_band_no_trip(self):
+        state, _ = _run_bang(_bang_policy(), [0.1, 0.1, 0.1, 0.1])
+        assert not state.tripped and state.beta == pytest.approx(0.02)
+
+    def test_dwell_then_trip(self):
+        state, _ = _run_bang(_bang_policy(), [0.5, 0.5])
+        assert state.tripped and state.beta == pytest.approx(0.03)  # 0.02 * 1.5
+
+    def test_keeps_raising_while_hacking(self):
+        state, _ = _run_bang(_bang_policy(), [0.5, 0.5, 0.5, 0.5])
+        assert state.tripped and state.beta == pytest.approx(0.02 * 1.5**3)
+
+    def test_no_flap_on_alternating(self):
+        # A naive controller would flap; dwell + release hysteresis prevents it.
+        state, _ = _run_bang(_bang_policy(), [0.5, 0.05, 0.5, 0.05, 0.5, 0.05])
+        assert not state.tripped and state.beta == pytest.approx(0.02)
+
+    def test_release_reverses(self):
+        # trip (2 steps) then release_patience (2 steps low) → β back to floor.
+        state, _ = _run_bang(_bang_policy(), [0.5, 0.5, 0.05, 0.05])
+        assert state.beta == pytest.approx(0.02) and not state.tripped
+
+    def test_beta_clamped_to_ceil(self):
+        state, _ = _run_bang(_bang_policy(beta_ceil=0.05), [0.5] * 10)
+        assert state.beta == pytest.approx(0.05)
+
+    def test_action_is_frozen(self):
+        from dataclasses import FrozenInstanceError
+
+        from soup_cli.utils.reward_hack_control import ControllerState, bang_bang_step
+
+        _, action = bang_bang_step(_bang_policy(), ControllerState(beta=0.02), vote=0.5)
+        with pytest.raises(FrozenInstanceError):
+            action.new_beta = 1.0  # type: ignore[misc]
+
+    def test_action_verdict_and_reason(self):
+        from soup_cli.utils.reward_hack_control import ControllerState, bang_bang_step
+
+        _, action = bang_bang_step(
+            _bang_policy(dwell_steps=1), ControllerState(beta=0.02), vote=0.9
+        )
+        assert action.verdict == "HACK" and "raise" in action.reason.lower()
+
+
+# =====================================================================
+# Part B / Stage 1 — kl_control callback: β dual-write + kl_coef (Task B3)
+# =====================================================================
+
+
+def _kl_policy(**kw):
+    from soup_cli.utils.reward_hack_control import BangBangPolicy
+
+    defaults = dict(
+        beta_floor=0.02,
+        beta_ceil=1.0,
+        trip_band=0.3,
+        release_band=0.1,
+        dwell_steps=1,
+        release_patience=1,
+        kl_gain=2.0,
+    )
+    defaults.update(kw)
+    return BangBangPolicy(**defaults)
+
+
+def _kl_callback(tmp_path, buffer, *, task="grpo", signals=("info_rm",), policy=None):
+    from soup_cli.utils.reward_hack_control import (
+        MitigationLogWriter,
+        RewardHackMitigationCallback,
+    )
+
+    return RewardHackMitigationCallback(
+        mode="kl_control",
+        detector="info_rm",
+        log_writer=MitigationLogWriter(str(tmp_path / "m.jsonl")),
+        signals=signals,
+        buffer=buffer,
+        task=task,
+        bang_bang=policy or _kl_policy(),
+    )
+
+
+class TestKlControlCallback:
+    """kl_control mutates β (GRPO, dual-write) / kl_coef (PPO) via the controller."""
+
+    def test_kl_control_requires_policy(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        from soup_cli.utils.reward_hack_control import (
+            MitigationLogWriter,
+            RewardHackMitigationCallback,
+        )
+
+        with pytest.raises(ValueError, match="kl_control"):
+            RewardHackMitigationCallback(
+                mode="kl_control",
+                detector="info_rm",
+                log_writer=MitigationLogWriter("m.jsonl"),
+            )
+
+    def test_grpo_dual_write_on_hack(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        cb = _kl_callback(tmp_path, _SeqBuffer([_HEALTHY, _HACK]))
+        trainer = _fake_grpo_trainer(beta=0.02)
+        cb.attach(trainer)
+        cb.on_step_end(None, types.SimpleNamespace(global_step=1), None)  # baseline
+        cb.on_step_end(None, types.SimpleNamespace(global_step=2), None)  # hack → raise
+        assert trainer.beta == pytest.approx(0.04)  # 0.02 * 2.0
+        assert trainer.args.beta == pytest.approx(0.04)  # DUAL write (variant path)
+
+    def test_ppo_kl_coef_mutated(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        cb = _kl_callback(tmp_path, _SeqBuffer([_HEALTHY, _HACK]), task="ppo")
+        trainer = _fake_ppo_trainer(kl_coef=0.2)
+        cb.attach(trainer)
+        cb.on_step_end(None, types.SimpleNamespace(global_step=1), None)
+        cb.on_step_end(None, types.SimpleNamespace(global_step=2), None)
+        assert trainer.args.kl_coef == pytest.approx(0.4)  # 0.2 * 2.0
+
+    def test_recovery_relaxes_beta(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        cb = _kl_callback(tmp_path, _SeqBuffer([_HEALTHY, _HACK, _HEALTHY]))
+        trainer = _fake_grpo_trainer(beta=0.02)
+        cb.attach(trainer)
+        for step in (1, 2, 3):  # baseline, hack (raise), recovery (relax)
+            cb.on_step_end(None, types.SimpleNamespace(global_step=step), None)
+        assert trainer.beta == pytest.approx(0.02)  # relaxed back to floor
+        assert not cb._state.tripped
+
+    def test_kl_control_logs_vote_and_action(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        cb = _kl_callback(tmp_path, _SeqBuffer([_HEALTHY, _HACK]))
+        cb.attach(_fake_grpo_trainer(beta=0.02))
+        cb.on_step_end(None, types.SimpleNamespace(global_step=1), None)
+        cb.on_step_end(None, types.SimpleNamespace(global_step=2), None)
+        lines = (tmp_path / "m.jsonl").read_text().strip().splitlines()
+        last = json.loads(lines[-1])
+        for key in ("vote", "new_beta", "tripped", "action"):
+            assert key in last
+
+
+class TestAttachKlControl:
+    """attach_rl_callbacks builds the bang-bang policy from tcfg for kl_control."""
+
+    def test_attach_kl_control_builds_policy(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        from soup_cli.config.schema import TrainingConfig
+        from soup_cli.utils.peft_wiring import attach_rl_callbacks
+        from soup_cli.utils.reward_hack_control import RewardHackMitigationCallback
+
+        tcfg = TrainingConfig(
+            reward_hack_mitigation="kl_control",
+            reward_hack_detector="info_rm",
+            reward_hack_kl_gain=3.0,
+            reward_hack_signals=["info_rm", "length_trend"],
+        )
+        added: list = []
+        attach_rl_callbacks(
+            _fake_trainer_recording(added),
+            tcfg,
+            buffer=object(),
+            output_dir=str(tmp_path),
+            task="grpo",
+        )
+        mit = [c for c in added if isinstance(c, RewardHackMitigationCallback)]
+        assert len(mit) == 1
+        assert mit[0].mode == "kl_control"
+        assert mit[0].bang_bang is not None and mit[0].bang_bang.kl_gain == 3.0
+        assert mit[0].signals == ("info_rm", "length_trend")
+
+
+class TestPpoBufferParity:
+    """PPO wires the RLSignalBuffer + mitigation callback (BETA — GRPO gets the
+    on-GPU proof; PPO's kl_coef mutation is unit-tested in TestKlControlCallback)."""
+
+    def test_ppo_setup_wires_buffer_and_mitigation(self):
+        import inspect
+
+        from soup_cli.trainer import ppo
+
+        src = inspect.getsource(ppo)
+        assert "RLSignalBuffer" in src
+        assert "rl_callbacks_need_buffer" in src
+        assert "attach_rl_callbacks" in src
+        assert 'task="ppo"' in src or "task='ppo'" in src
+
+
+class TestRewardHackMitigationCli:
+    """`soup train --reward-hack-mitigation <mode>` flag + re-exec passthrough."""
+
+    def _runner(self):
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        return CliRunner(), app
+
+    def test_help_shows_flag(self):
+        runner, app = self._runner()
+        result = runner.invoke(app, ["train", "--help"])
+        assert result.exit_code == 0, result.output
+        assert "--reward-hack-mitigation" in result.output
+
+    def test_override_without_detector_rejected(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "cfg.yaml").write_text(
+            "base: HuggingFaceTB/SmolLM2-135M\n"
+            "task: grpo\n"
+            "data:\n  train: ./train.jsonl\n  format: chatml\n"
+            "training:\n  reward_fn: accuracy\n"
+        )
+        runner, app = self._runner()
+        result = runner.invoke(
+            app,
+            ["train", "--config", "cfg.yaml", "--reward-hack-mitigation", "log_only", "--yes"],
+        )
+        assert result.exit_code == 1
+        assert "reward_hack_detector" in result.output
+
+    def test_reexec_passthrough_present(self):
+        import inspect
+
+        from soup_cli.commands import train as train_mod
+
+        src = inspect.getsource(train_mod)
+        assert "--reward-hack-mitigation" in src
+        assert "cfg.training.reward_hack_mitigation" in src
