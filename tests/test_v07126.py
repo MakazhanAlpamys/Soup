@@ -1037,3 +1037,397 @@ class TestRewardHackMitigationCli:
         src = inspect.getsource(train_mod)
         assert "--reward-hack-mitigation" in src
         assert "cfg.training.reward_hack_mitigation" in src
+
+
+# =====================================================================
+# Part C / Stage 2 — schema fields (PID + rollback) (Task C1)
+# =====================================================================
+
+
+class TestStage2Schema:
+    """PID-Lagrangian + rollback tunables + bounds + cross-validators."""
+
+    def _cfg(self, extra: str = "", *, mitigation: str = "pid_lagrangian"):
+        from soup_cli.config.loader import load_config_from_string
+
+        return load_config_from_string(_yaml("grpo", mitigation=mitigation, extra=extra))
+
+    def test_pid_parses(self):
+        cfg = self._cfg("reward_hack_pid_kp: 0.8\nreward_hack_signal_target: 0.2")
+        assert cfg.training.reward_hack_mitigation == "pid_lagrangian"
+        assert cfg.training.reward_hack_pid_kp == 0.8
+        assert cfg.training.reward_hack_signal_target == 0.2
+
+    def test_defaults(self):
+        from soup_cli.config.schema import TrainingConfig
+
+        t = TrainingConfig()
+        assert t.reward_hack_pid_kp == 0.5 and t.reward_hack_pid_ki == 0.1
+        assert t.reward_hack_pid_kd == 0.05 and t.reward_hack_signal_target == 0.15
+        assert t.reward_hack_rollback is False
+        assert t.reward_hack_rollback_patience == 3
+        assert t.reward_hack_max_recovery_attempts == 2
+
+    def test_rollback_requires_checkpoint_cadence(self):
+        with pytest.raises(ValueError, match="rl_checkpoint_save_every_steps"):
+            self._cfg("reward_hack_rollback: true")
+
+    def test_rollback_with_cadence_ok(self):
+        cfg = self._cfg("reward_hack_rollback: true\nrl_checkpoint_save_every_steps: 10")
+        assert cfg.training.reward_hack_rollback is True
+
+    def test_pid_param_requires_pid_mode(self):
+        # setting a PID param under kl_control is a no-op footgun.
+        with pytest.raises(ValueError, match="pid_lagrangian"):
+            self._cfg("reward_hack_pid_kp: 0.9", mitigation="kl_control")
+
+    def test_pid_param_under_off_rejected(self):
+        from soup_cli.config.loader import load_config_from_string
+
+        with pytest.raises(ValueError, match="reward_hack_mitigation"):
+            load_config_from_string(
+                _yaml(
+                    "grpo",
+                    detector=None,
+                    mitigation="off",
+                    extra="reward_hack_pid_kp: 0.9",
+                )
+            )
+
+    def test_pid_kp_non_negative(self):
+        with pytest.raises(ValueError):
+            self._cfg("reward_hack_pid_kp: -0.1")
+
+    def test_signal_target_below_one(self):
+        with pytest.raises(ValueError):
+            self._cfg("reward_hack_signal_target: 1.0")
+
+
+# =====================================================================
+# Part C / Stage 2 — PIDLagrangianPolicy + pid_step (Task C2)
+# =====================================================================
+
+
+def _pid_policy(**kw):
+    from soup_cli.utils.reward_hack_control import PIDLagrangianPolicy
+
+    defaults = dict(
+        kp=1.0,
+        ki=0.0,
+        kd=0.0,
+        signal_target=0.15,
+        beta_floor=0.02,
+        beta_ceil=10.0,
+        integral_clamp=10.0,
+    )
+    defaults.update(kw)
+    return PIDLagrangianPolicy(**defaults)
+
+
+def _run_pid(policy, signals, beta0=None):
+    from soup_cli.utils.reward_hack_control import ControllerState, pid_step
+
+    state = ControllerState(beta=beta0 if beta0 is not None else policy.beta_floor)
+    states = []
+    for signal in signals:
+        state, _ = pid_step(policy, state, signal=signal)
+        states.append(state)
+    return states
+
+
+class TestPidLagrangian:
+    """PID-Lagrangian controller: P/I/D isolated, anti-windup, output clamp."""
+
+    def test_policy_gains_non_negative(self):
+        with pytest.raises(ValueError, match="kp"):
+            _pid_policy(kp=-1.0)
+
+    def test_policy_floor_lt_ceil(self):
+        with pytest.raises(ValueError, match="floor"):
+            _pid_policy(beta_floor=5.0, beta_ceil=1.0)
+
+    def test_policy_integral_clamp_positive(self):
+        with pytest.raises(ValueError, match="integral_clamp"):
+            _pid_policy(integral_clamp=0.0)
+
+    def test_proportional_only(self):
+        # kp=1, error = 0.65 - 0.15 = 0.5 → β = floor + 0.5
+        states = _run_pid(_pid_policy(kp=1.0, ki=0.0, kd=0.0), [0.65])
+        assert states[0].beta == pytest.approx(0.02 + 0.5)
+
+    def test_integral_accumulates(self):
+        states = _run_pid(_pid_policy(kp=0.0, ki=1.0, kd=0.0), [0.35, 0.35])
+        assert states[1].beta > states[0].beta  # integral grows β
+
+    def test_integral_anti_windup(self):
+        # constant error 0.5 with clamp 0.3 → integral saturates → β flat.
+        states = _run_pid(
+            _pid_policy(kp=0.0, ki=1.0, kd=0.0, integral_clamp=0.3, beta_ceil=100.0),
+            [0.65] * 5,
+        )
+        assert states[0].beta == pytest.approx(0.02 + 0.3)
+        assert states[4].beta == pytest.approx(states[0].beta)
+
+    def test_derivative_spikes_then_settles(self):
+        # kd=1: β spikes on the error jump then returns to floor on constant error.
+        states = _run_pid(
+            _pid_policy(kp=0.0, ki=0.0, kd=1.0), [0.15, 0.65, 0.65]
+        )
+        assert states[1].beta > 0.02  # jump
+        assert states[2].beta == pytest.approx(0.02)  # deriv back to 0
+
+    def test_output_clamped_to_ceil(self):
+        states = _run_pid(_pid_policy(kp=1000.0, beta_ceil=0.5), [0.9])
+        assert states[0].beta == pytest.approx(0.5)
+
+    def test_output_clamped_to_floor(self):
+        # negative error → control negative → β clamped to floor (never < 0).
+        states = _run_pid(_pid_policy(kp=1.0), [0.0])
+        assert states[0].beta == pytest.approx(0.02)
+
+    def test_relaxes_after_raise(self):
+        # raise on positive error, then relax when the signal drops below target.
+        pol = _pid_policy(kp=0.0, ki=1.0, kd=0.0, integral_clamp=10.0, beta_ceil=100.0)
+        states = _run_pid(pol, [0.65, 0.65, 0.0, 0.0, 0.0])
+        assert states[-1].beta < states[1].beta
+
+
+# =====================================================================
+# Part C / Stage 2 — RLCheckpointCallback.restore_checkpoint (Task C3)
+# =====================================================================
+
+
+class _FakeSavableModel:
+    def __init__(self):
+        self.saved_to = None
+
+    def save_pretrained(self, path):
+        import os
+
+        os.makedirs(path, exist_ok=True)
+        self.saved_to = path
+
+
+class TestRestoreCheckpoint:
+    """restore_checkpoint reloads adapter + optimizer state (RL rollback)."""
+
+    def _cb(self, tmp_path):
+        from soup_cli.utils.rl_checkpoint import (
+            RLCheckpointConfig,
+            build_rl_checkpoint_callback,
+        )
+
+        return build_rl_checkpoint_callback(
+            RLCheckpointConfig(save_every_steps=1), output_dir="run", task="grpo"
+        )
+
+    def test_restore_optimizer_roundtrip(self, tmp_path, monkeypatch):
+        import copy
+
+        import torch
+
+        monkeypatch.chdir(tmp_path)
+        cb = self._cb(tmp_path)
+        param = torch.nn.Parameter(torch.zeros(2))
+        opt = torch.optim.SGD([param], lr=0.1, momentum=0.9)
+        param.grad = torch.ones(2)
+        opt.step()  # creates a momentum buffer
+        saved = copy.deepcopy(opt.state_dict()["state"][0]["momentum_buffer"])
+        cb.save_checkpoint(step=1, model=_FakeSavableModel(), optimizer=opt)
+        # mutate optimizer state
+        param.grad = torch.ones(2) * 7
+        opt.step()
+        assert not torch.allclose(
+            opt.state_dict()["state"][0]["momentum_buffer"], saved
+        )
+        ok = cb.restore_checkpoint(step=1, model=_FakeSavableModel(), optimizer=opt)
+        assert ok is True
+        assert torch.allclose(
+            opt.state_dict()["state"][0]["momentum_buffer"], saved
+        )
+
+    def test_restore_missing_step_returns_false(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        cb = self._cb(tmp_path)
+        assert cb.restore_checkpoint(step=99, model=None, optimizer=None) is False
+
+    def test_restore_adapter_roundtrip(self, tmp_path, monkeypatch):
+        torch = pytest.importorskip("torch")
+        peft = pytest.importorskip("peft")
+        import torch.nn as nn
+
+        monkeypatch.chdir(tmp_path)
+
+        class Tiny(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.lin = nn.Linear(4, 4, bias=False)
+
+            def forward(self, x):
+                return self.lin(x)
+
+        model = peft.get_peft_model(
+            Tiny(), peft.LoraConfig(target_modules=["lin"], r=2)
+        )
+        key = "base_model.model.lin.lora_A.default.weight"
+        original = model.state_dict()[key].clone()
+        cb = self._cb(tmp_path)
+        cb.save_checkpoint(step=1, model=model, optimizer=None)
+        # mutate the LoRA weight in place
+        with torch.no_grad():
+            dict(model.named_parameters())[
+                "base_model.model.lin.lora_A.default.weight"
+            ].add_(5.0)
+        assert not torch.allclose(model.state_dict()[key], original)
+        ok = cb.restore_checkpoint(step=1, model=model, optimizer=None)
+        assert ok is True
+        assert torch.allclose(model.state_dict()[key], original)
+
+
+# =====================================================================
+# Part C / Stage 2 — pid_lagrangian callback + escalation ladder (Task C4)
+# =====================================================================
+
+
+class _FakeCkptCb:
+    def __init__(self, saved):
+        self._saved = list(saved)
+        self.restore_calls = []
+
+    def restore_checkpoint(self, *, step, model, optimizer):
+        self.restore_calls.append(step)
+        return True
+
+
+def _pid_callback(tmp_path, buffer, *, rollback=False, rollback_patience=2,
+                  max_recovery_attempts=1, ckpt_cb=None):
+    from soup_cli.utils.reward_hack_control import (
+        MitigationLogWriter,
+        PIDLagrangianPolicy,
+        RewardHackMitigationCallback,
+    )
+
+    pid = PIDLagrangianPolicy(
+        kp=1.0, ki=0.0, kd=0.0, signal_target=0.15,
+        beta_floor=0.02, beta_ceil=10.0, integral_clamp=10.0,
+    )
+    return RewardHackMitigationCallback(
+        mode="pid_lagrangian",
+        detector="info_rm",
+        log_writer=MitigationLogWriter(str(tmp_path / "m.jsonl")),
+        buffer=buffer,
+        task="grpo",
+        pid=pid,
+        rollback=rollback,
+        rollback_patience=rollback_patience,
+        max_recovery_attempts=max_recovery_attempts,
+        rl_checkpoint_cb=ckpt_cb,
+    )
+
+
+class TestPidCallback:
+    """pid_lagrangian drives β via PID and runs the rollback escalation ladder."""
+
+    def test_pid_requires_policy(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        from soup_cli.utils.reward_hack_control import (
+            MitigationLogWriter,
+            RewardHackMitigationCallback,
+        )
+
+        with pytest.raises(ValueError, match="pid_lagrangian"):
+            RewardHackMitigationCallback(
+                mode="pid_lagrangian",
+                detector="info_rm",
+                log_writer=MitigationLogWriter("m.jsonl"),
+            )
+
+    def test_pid_mutates_beta_on_hack(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        cb = _pid_callback(tmp_path, _SeqBuffer([_HEALTHY, _HACK]))
+        trainer = _fake_grpo_trainer(beta=0.02)
+        cb.attach(trainer)
+        cb.on_step_end(None, types.SimpleNamespace(global_step=1), None)
+        cb.on_step_end(None, types.SimpleNamespace(global_step=2), None)
+        assert trainer.beta > 0.5  # PID raised β on the hacking step
+        assert trainer.args.beta == trainer.beta  # dual write
+
+    def test_escalation_rollback_then_stop(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        ckpt = _FakeCkptCb(saved=[10])
+        cb = _pid_callback(
+            tmp_path,
+            _SeqBuffer([_HEALTHY, _HACK, _HACK, _HACK, _HACK]),
+            rollback=True,
+            rollback_patience=2,
+            max_recovery_attempts=1,
+            ckpt_cb=ckpt,
+        )
+        cb.attach(_fake_grpo_trainer(beta=0.02))
+        control = types.SimpleNamespace(should_training_stop=False)
+        model, opt = object(), object()
+        for step in range(1, 6):
+            control = cb.on_step_end(
+                None,
+                types.SimpleNamespace(global_step=step),
+                control,
+                model=model,
+                optimizer=opt,
+            )
+        # rolled back to the last-good saved checkpoint (step 10)…
+        assert ckpt.restore_calls == [10]
+        # …then early-stopped after recovery attempts were exhausted.
+        assert control.should_training_stop is True
+
+    def test_no_rollback_when_disabled(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        ckpt = _FakeCkptCb(saved=[10])
+        cb = _pid_callback(
+            tmp_path,
+            _SeqBuffer([_HEALTHY, _HACK, _HACK, _HACK]),
+            rollback=False,
+            ckpt_cb=ckpt,
+        )
+        cb.attach(_fake_grpo_trainer(beta=0.02))
+        control = types.SimpleNamespace(should_training_stop=False)
+        for step in range(1, 5):
+            control = cb.on_step_end(
+                None, types.SimpleNamespace(global_step=step), control,
+                model=object(), optimizer=object(),
+            )
+        assert ckpt.restore_calls == []  # rollback disabled
+        assert control.should_training_stop is False
+
+
+class TestAttachPidControl:
+    """attach_rl_callbacks builds the PID policy + wires the checkpoint ref."""
+
+    def test_attach_pid_builds_policy_and_ckpt_ref(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        from soup_cli.config.schema import TrainingConfig
+        from soup_cli.utils.peft_wiring import attach_rl_callbacks
+        from soup_cli.utils.reward_hack_control import RewardHackMitigationCallback
+        from soup_cli.utils.rl_checkpoint import RLCheckpointCallback
+
+        tcfg = TrainingConfig(
+            reward_hack_mitigation="pid_lagrangian",
+            reward_hack_detector="info_rm",
+            reward_hack_rollback=True,
+            rl_checkpoint_save_every_steps=5,
+            reward_hack_pid_kp=0.7,
+        )
+        added: list = []
+        attach_rl_callbacks(
+            _fake_trainer_recording(added),
+            tcfg,
+            buffer=object(),
+            output_dir=str(tmp_path),
+            task="grpo",
+        )
+        mit = [c for c in added if isinstance(c, RewardHackMitigationCallback)]
+        assert len(mit) == 1 and mit[0].mode == "pid_lagrangian"
+        assert mit[0].pid is not None and mit[0].pid.kp == 0.7
+        assert mit[0].rollback is True
+        ckpts = [c for c in added if isinstance(c, RLCheckpointCallback)]
+        assert len(ckpts) == 1
+        assert mit[0].rl_checkpoint_cb is ckpts[0]

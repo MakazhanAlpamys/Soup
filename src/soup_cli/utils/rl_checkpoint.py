@@ -313,6 +313,52 @@ class RLCheckpointCallback(_TrainerCallbackBase):  # type: ignore[misc, valid-ty
         self._prune()
         return ckpt_dir
 
+    def restore_checkpoint(self, *, step: int, model, optimizer) -> bool:
+        """Reload a saved checkpoint's PEFT adapter + optimizer state (v0.71.26).
+
+        Used by the reward-hack mitigation rollback ladder to hop back to the
+        last-good checkpoint. Reloads the adapter via
+        ``set_peft_model_state_dict`` and the optimizer via ``load_state_dict``.
+        Best-effort — returns ``True`` when at least one artifact was restored,
+        ``False`` otherwise, and NEVER raises (rollback must not crash the run).
+        """
+        import os
+
+        ckpt_dir = os.path.join(self._ckpt_root(), f"step-{int(step)}")
+        if not os.path.isdir(ckpt_dir):
+            return False
+        restored = False
+        if model is not None:
+            try:
+                from peft import (
+                    PeftModel,
+                    load_peft_weights,
+                    set_peft_model_state_dict,
+                )
+
+                if isinstance(model, PeftModel):
+                    set_peft_model_state_dict(model, load_peft_weights(ckpt_dir))
+                    restored = True
+            except Exception:  # noqa: BLE001 — best-effort restore, never crash
+                pass
+        if optimizer is not None:
+            opt_path = os.path.join(ckpt_dir, "optimizer.pt")
+            if os.path.isfile(opt_path):
+                try:
+                    import torch
+
+                    # Trusted file (we wrote it under the cwd-contained run dir);
+                    # weights_only=False loads the full optimizer state_dict.
+                    optimizer.load_state_dict(
+                        torch.load(
+                            opt_path, map_location="cpu", weights_only=False
+                        )
+                    )
+                    restored = True
+                except Exception:  # noqa: BLE001
+                    pass
+        return restored
+
     def _prune(self) -> None:
         """Keep only the ``keep_last`` most-recent step checkpoints."""
         import os

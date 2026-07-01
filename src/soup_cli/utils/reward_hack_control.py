@@ -358,6 +358,89 @@ def bang_bang_step(
     return new_state, action
 
 
+# --- PID-Lagrangian controller (Stage 2) ---
+
+
+@dataclass(frozen=True)
+class PIDLagrangianPolicy:
+    """PID-Lagrangian controller policy (Stooke et al. 2020).
+
+    Treats "hacking signal ≤ ``signal_target``" as a constraint whose Lagrange
+    multiplier (the β / kl_coef) is updated by a PID law on the constraint
+    violation ``error = signal - target``. The integral term is clamped
+    (anti-windup) and the output is clamped to ``[beta_floor, beta_ceil]`` and
+    never crosses 0.
+    """
+
+    kp: float
+    ki: float
+    kd: float
+    signal_target: float
+    beta_floor: float
+    beta_ceil: float
+    integral_clamp: float
+
+    def __post_init__(self) -> None:
+        _check_finite_float(self.kp, "kp", nonneg=True)
+        _check_finite_float(self.ki, "ki", nonneg=True)
+        _check_finite_float(self.kd, "kd", nonneg=True)
+        _check_finite_float(self.signal_target, "signal_target", nonneg=True)
+        _check_finite_float(self.beta_floor, "beta_floor", nonneg=True)
+        _check_finite_float(self.beta_ceil, "beta_ceil", nonneg=True)
+        _check_finite_float(self.integral_clamp, "integral_clamp", nonneg=True)
+        if not 0.0 <= self.signal_target < 1.0:
+            raise ValueError(
+                f"signal_target must be in [0, 1), got {self.signal_target}"
+            )
+        if self.beta_floor <= 0.0:
+            raise ValueError(f"beta_floor must be > 0, got {self.beta_floor}")
+        if self.beta_floor >= self.beta_ceil:
+            raise ValueError(
+                f"beta_floor ({self.beta_floor}) must be < "
+                f"beta_ceil ({self.beta_ceil})"
+            )
+        if self.integral_clamp <= 0.0:
+            raise ValueError(
+                f"integral_clamp must be > 0, got {self.integral_clamp}"
+            )
+
+
+def pid_step(
+    policy: PIDLagrangianPolicy, state: ControllerState, *, signal: float
+) -> tuple[ControllerState, MitigationAction]:
+    """Advance the PID-Lagrangian controller one step for the hacking ``signal``.
+
+    ``error = signal - target``; the integral accumulates (clamped ±
+    ``integral_clamp``); the multiplier β = clamp(floor..ceil, floor + Kp·error
+    + Ki·∫error + Kd·Δerror). β never crosses 0.
+    """
+    fsignal = float(signal)
+    error = fsignal - policy.signal_target
+    integral = state.integral + error
+    integral = max(-policy.integral_clamp, min(policy.integral_clamp, integral))
+    derivative = error - state.prev_error
+    control = policy.kp * error + policy.ki * integral + policy.kd * derivative
+    beta = max(policy.beta_floor, min(policy.beta_ceil, policy.beta_floor + control))
+    tripped = beta > policy.beta_floor
+
+    new_state = replace(
+        state,
+        step=state.step + 1,
+        beta=beta,
+        tripped=tripped,
+        integral=integral,
+        prev_error=error,
+        last_signal=min(1.0, max(0.0, fsignal)),
+    )
+    action = MitigationAction(
+        new_beta=beta,
+        tripped=tripped,
+        verdict=_verdict_for(fsignal),
+        reason=f"pid: error={error:.3f} integral={integral:.3f} beta={beta:.4f}",
+    )
+    return new_state, action
+
+
 class MitigationLogWriter:
     """Thread-safe append-only JSONL log for the reward-hack controller.
 
@@ -483,6 +566,11 @@ class RewardHackMitigationCallback(_TrainerCallbackBase):  # type: ignore[misc, 
         tokenizer: Any = None,
         task: str = "grpo",
         bang_bang: BangBangPolicy | None = None,
+        pid: PIDLagrangianPolicy | None = None,
+        rollback: bool = False,
+        rollback_patience: int = 3,
+        max_recovery_attempts: int = 2,
+        rl_checkpoint_cb: Any = None,
     ) -> None:
         if mode not in MITIGATION_MODES:
             raise ValueError(
@@ -508,6 +596,13 @@ class RewardHackMitigationCallback(_TrainerCallbackBase):  # type: ignore[misc, 
         self.bang_bang = bang_bang
         if mode == "kl_control" and bang_bang is None:
             raise ValueError("kl_control mode requires a BangBangPolicy")
+        self.pid = pid
+        if mode == "pid_lagrangian" and pid is None:
+            raise ValueError("pid_lagrangian mode requires a PIDLagrangianPolicy")
+        self.rollback = bool(rollback)
+        self.rollback_patience = int(rollback_patience)
+        self.max_recovery_attempts = int(max_recovery_attempts)
+        self.rl_checkpoint_cb = rl_checkpoint_cb
         # Compose the v0.70.0 detector callback for the info_rm/rm_ensemble
         # baseline + drop_pct logic (DRY — no re-implementation).
         self._detector_cb = RewardHackCallback(
@@ -516,6 +611,8 @@ class RewardHackMitigationCallback(_TrainerCallbackBase):  # type: ignore[misc, 
         self._trainer: Any = None
         self._state = ControllerState()
         self._length_baseline: float | None = None
+        self._hack_streak = 0
+        self._last_good_step: int | None = None
 
     def attach(self, trainer: Any) -> None:
         """Store the trainer reference (the β / kl_coef mutation target)."""
@@ -640,6 +737,72 @@ class RewardHackMitigationCallback(_TrainerCallbackBase):  # type: ignore[misc, 
         telemetry["tripped"] = action.tripped
         telemetry["action"] = action.reason
 
+    def _request_stop(self, control: Any) -> None:
+        if control is not None:
+            try:
+                control.should_training_stop = True
+            except Exception:  # noqa: BLE001
+                pass
+
+    def _escalate(
+        self, model: Any, optimizer: Any, control: Any, telemetry: dict[str, Any]
+    ) -> Any:
+        """Escalation ladder rung: rollback to last-good, else early-stop."""
+        if self._state.recovery_attempts >= self.max_recovery_attempts:
+            telemetry["escalation"] = "early_stop"
+            self._request_stop(control)
+            return control
+        target = self._last_good_step
+        restored = False
+        if target is not None and self.rl_checkpoint_cb is not None:
+            try:
+                restored = bool(
+                    self.rl_checkpoint_cb.restore_checkpoint(
+                        step=target, model=model, optimizer=optimizer
+                    )
+                )
+            except Exception:  # noqa: BLE001 — rollback must never crash the run
+                restored = False
+        self._state = replace(
+            self._state, recovery_attempts=self._state.recovery_attempts + 1
+        )
+        self._hack_streak = 0
+        telemetry["escalation"] = f"rollback to step {target} (restored={restored})"
+        return control
+
+    def _run_pid(
+        self,
+        telemetry: dict[str, Any],
+        signals: Mapping[str, float],
+        model: Any,
+        optimizer: Any,
+        control: Any,
+    ) -> Any:
+        """pid_lagrangian: PID β update + rollback escalation ladder."""
+        policy = self.pid
+        if policy is None:
+            return control
+        self._seed_coefficient(policy.beta_floor)
+        vote = combine_signals(signals, self.signals)
+        new_state, action = pid_step(policy, self._state, signal=vote)
+        self._state = new_state
+        self._apply_coefficient(action.new_beta)
+        telemetry["vote"] = vote
+        telemetry["new_beta"] = action.new_beta
+        telemetry["tripped"] = action.tripped
+        telemetry["action"] = action.reason
+        # Escalation ladder: raise (above) → rollback → early-stop.
+        if action.verdict == "HACK":
+            self._hack_streak += 1
+        else:
+            self._hack_streak = 0
+            saved = getattr(self.rl_checkpoint_cb, "_saved", None)
+            if saved:
+                self._last_good_step = max(saved)
+        if self.rollback and self._hack_streak >= self.rollback_patience:
+            control = self._escalate(model, optimizer, control, telemetry)
+        return control
+
     def on_step_end(self, args, state, control, **kwargs):
         """Per-step hook — read the buffer, compute telemetry, act by mode.
 
@@ -652,10 +815,18 @@ class RewardHackMitigationCallback(_TrainerCallbackBase):  # type: ignore[misc, 
             snapshot = self.buffer.snapshot()
             step = int(getattr(state, "global_step", 0) or 0)
             telemetry, signals = self._observe(snapshot, step)
-            # log_only observes; kl_control drives the bang-bang controller.
-            # pid_lagrangian is wired in Stage 2.
+            # log_only observes; kl_control drives bang-bang; pid_lagrangian
+            # drives the PID controller + rollback escalation ladder.
             if self.mode == "kl_control":
                 self._run_bang_bang(telemetry, signals)
+            elif self.mode == "pid_lagrangian":
+                control = self._run_pid(
+                    telemetry,
+                    signals,
+                    kwargs.get("model"),
+                    kwargs.get("optimizer"),
+                    control,
+                )
             self.log_writer.record(step=step, snapshot=telemetry)
             return control
         except Exception:  # noqa: BLE001 — instrumentation must never crash

@@ -219,13 +219,16 @@ def _attach_reward_hack(
     tokenizer: Any,
     output_dir: str,
     task: str,
+    rl_checkpoint_cb: Any = None,
 ) -> int:
     """Attach the reward-hack callback: mitigation controller (v0.71.26) when a
     ``reward_hack_mitigation`` mode is set, else the plain v0.70.0 detector.
 
     Returns 1 when a callback was attached, 0 otherwise. The mitigation
     controller SUBSUMES the plain detector (they share the same signal), so
-    exactly one of the two is ever attached.
+    exactly one of the two is ever attached. ``rl_checkpoint_cb`` is the
+    (already-built) RL-checkpoint callback the pid_lagrangian rollback ladder
+    restores from.
     """
     import os
 
@@ -235,6 +238,7 @@ def _attach_reward_hack(
         from soup_cli.utils.reward_hack_control import (
             BangBangPolicy,
             MitigationLogWriter,
+            PIDLagrangianPolicy,
             RewardHackMitigationCallback,
         )
 
@@ -246,6 +250,7 @@ def _attach_reward_hack(
                 getattr(tcfg, "reward_hack_signals", None) or ("info_rm",)
             )
             bang_bang = None
+            pid = None
             if mitigation == "kl_control":
                 bang_bang = BangBangPolicy(
                     beta_floor=tcfg.reward_hack_beta_floor,
@@ -256,6 +261,16 @@ def _attach_reward_hack(
                     release_patience=tcfg.reward_hack_release_patience,
                     kl_gain=tcfg.reward_hack_kl_gain,
                 )
+            elif mitigation == "pid_lagrangian":
+                pid = PIDLagrangianPolicy(
+                    kp=tcfg.reward_hack_pid_kp,
+                    ki=tcfg.reward_hack_pid_ki,
+                    kd=tcfg.reward_hack_pid_kd,
+                    signal_target=tcfg.reward_hack_signal_target,
+                    beta_floor=tcfg.reward_hack_beta_floor,
+                    beta_ceil=tcfg.reward_hack_beta_ceil,
+                    integral_clamp=tcfg.reward_hack_beta_ceil,
+                )
             callback = RewardHackMitigationCallback(
                 mode=mitigation,
                 detector=detector,
@@ -265,6 +280,15 @@ def _attach_reward_hack(
                 tokenizer=tokenizer,
                 task=task,
                 bang_bang=bang_bang,
+                pid=pid,
+                rollback=bool(getattr(tcfg, "reward_hack_rollback", False)),
+                rollback_patience=int(
+                    getattr(tcfg, "reward_hack_rollback_patience", 3)
+                ),
+                max_recovery_attempts=int(
+                    getattr(tcfg, "reward_hack_max_recovery_attempts", 2)
+                ),
+                rl_checkpoint_cb=rl_checkpoint_cb,
             )
             trainer.add_callback(callback)
             callback.attach(trainer)
@@ -310,8 +334,21 @@ def attach_rl_callbacks(
     non-mlx backends, so this helper trusts the caller's config.
     """
     attached = 0
+    # Build the RL-checkpoint callback FIRST so the pid_lagrangian rollback
+    # ladder can be handed a reference to restore from.
+    ckpt_cb = _build_rl_checkpoint_cb(tcfg, output_dir=output_dir, task=task)
+    if ckpt_cb is not None:
+        trainer.add_callback(ckpt_cb)
+        attached += 1
+
     attached += _attach_reward_hack(
-        trainer, tcfg, buffer=buffer, tokenizer=tokenizer, output_dir=output_dir, task=task
+        trainer,
+        tcfg,
+        buffer=buffer,
+        tokenizer=tokenizer,
+        output_dir=output_dir,
+        task=task,
+        rl_checkpoint_cb=ckpt_cb,
     )
 
     if bool(getattr(tcfg, "echo_trap_enabled", False)):
@@ -333,37 +370,39 @@ def attach_rl_callbacks(
         except (TypeError, ValueError) as exc:
             logger.debug("attach echo-trap callback rejected: %s", exc)
 
-    save_every = getattr(tcfg, "rl_checkpoint_save_every_steps", None)
-    if save_every is not None:
-        from soup_cli.utils.rl_checkpoint import (
-            RLCheckpointConfig,
-            build_rl_checkpoint_callback,
-        )
-
-        try:
-            ckpt_cfg = RLCheckpointConfig(
-                save_every_steps=int(save_every),
-                include_optimizer_state=bool(
-                    getattr(tcfg, "rl_checkpoint_include_optimizer", True)
-                ),
-                include_ref_model=bool(
-                    getattr(tcfg, "rl_checkpoint_include_ref_model", False)
-                ),
-                include_rollout_buffer=bool(
-                    getattr(tcfg, "rl_checkpoint_include_rollout_buffer", False)
-                ),
-                keep_last=int(getattr(tcfg, "rl_checkpoint_keep_last", 3)),
-            )
-            trainer.add_callback(
-                build_rl_checkpoint_callback(
-                    ckpt_cfg, output_dir=output_dir, task=task
-                )
-            )
-            attached += 1
-        except (TypeError, ValueError) as exc:
-            logger.debug("attach RL-checkpoint callback rejected: %s", exc)
-
     return attached
+
+
+def _build_rl_checkpoint_cb(tcfg: Any, *, output_dir: str, task: str) -> Any:
+    """Build the mid-epoch RL-checkpoint callback (or None if not configured)."""
+    save_every = getattr(tcfg, "rl_checkpoint_save_every_steps", None)
+    if save_every is None:
+        return None
+    from soup_cli.utils.rl_checkpoint import (
+        RLCheckpointConfig,
+        build_rl_checkpoint_callback,
+    )
+
+    try:
+        ckpt_cfg = RLCheckpointConfig(
+            save_every_steps=int(save_every),
+            include_optimizer_state=bool(
+                getattr(tcfg, "rl_checkpoint_include_optimizer", True)
+            ),
+            include_ref_model=bool(
+                getattr(tcfg, "rl_checkpoint_include_ref_model", False)
+            ),
+            include_rollout_buffer=bool(
+                getattr(tcfg, "rl_checkpoint_include_rollout_buffer", False)
+            ),
+            keep_last=int(getattr(tcfg, "rl_checkpoint_keep_last", 3)),
+        )
+        return build_rl_checkpoint_callback(
+            ckpt_cfg, output_dir=output_dir, task=task
+        )
+    except (TypeError, ValueError) as exc:
+        logger.debug("build RL-checkpoint callback rejected: %s", exc)
+        return None
 
 
 def attach_plugin_callback(trainer: Any, console: Any = None) -> bool:

@@ -1741,6 +1741,66 @@ class TrainingConfig(BaseModel):
             "vote. Allowlist: info_rm, rm_ensemble, length_trend, repetition."
         ),
     )
+    # ---- v0.71.26 Stage 2 — PID-Lagrangian controller + rollback ---------
+    reward_hack_pid_kp: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1000.0,
+        description="v0.71.26 — PID proportional gain (pid_lagrangian mode).",
+    )
+    reward_hack_pid_ki: float = Field(
+        default=0.1,
+        ge=0.0,
+        le=1000.0,
+        description="v0.71.26 — PID integral gain (pid_lagrangian mode).",
+    )
+    reward_hack_pid_kd: float = Field(
+        default=0.05,
+        ge=0.0,
+        le=1000.0,
+        description="v0.71.26 — PID derivative gain (pid_lagrangian mode).",
+    )
+    reward_hack_signal_target: float = Field(
+        default=0.15,
+        ge=0.0,
+        lt=1.0,
+        description=(
+            "v0.71.26 — target hacking drop_pct the PID controller holds "
+            "(pid_lagrangian mode)."
+        ),
+    )
+    reward_hack_rollback: bool = Field(
+        default=False,
+        description=(
+            "v0.71.26 — enable rollback to the last-good RL checkpoint in the "
+            "escalation ladder. Requires rl_checkpoint_save_every_steps set."
+        ),
+    )
+    reward_hack_rollback_patience: int = Field(
+        default=3,
+        ge=1,
+        le=100_000,
+        description=(
+            "v0.71.26 — consecutive HACK steps before a rollback is triggered."
+        ),
+    )
+    reward_hack_max_recovery_attempts: int = Field(
+        default=2,
+        ge=0,
+        le=1000,
+        description=(
+            "v0.71.26 — max rollbacks before the controller early-stops "
+            "training (terminal rung of the escalation ladder)."
+        ),
+    )
+
+    @field_validator("reward_hack_rollback", mode="before")
+    @classmethod
+    def _validate_reward_hack_rollback(cls, v):
+        """v0.71.26 — bool guard so YAML ``yes`` / ``1`` cannot silently coerce."""
+        if v is None or isinstance(v, bool):
+            return v
+        raise TypeError(f"reward_hack_rollback must be bool, got {type(v).__name__}")
 
     @field_validator("reward_hack_mitigation", mode="before")
     @classmethod
@@ -3148,6 +3208,18 @@ class EvalConfig(BaseModel):
 # any to a non-default value while reward_hack_mitigation='off' is a silent
 # no-op footgun (mirrors the v0.70.0 minillm offenders-list policy). Extended
 # per stage (Stage 2/3 tunables added with their fields).
+# Stage-2 (PID-Lagrangian + rollback) tunables — meaningful only in
+# pid_lagrangian mode. Setting one under any other mode is a no-op footgun.
+_REWARD_HACK_STAGE2_DEFAULTS: dict = {
+    "reward_hack_pid_kp": 0.5,
+    "reward_hack_pid_ki": 0.1,
+    "reward_hack_pid_kd": 0.05,
+    "reward_hack_signal_target": 0.15,
+    "reward_hack_rollback": False,
+    "reward_hack_rollback_patience": 3,
+    "reward_hack_max_recovery_attempts": 2,
+}
+
 _REWARD_HACK_TUNABLE_DEFAULTS: dict = {
     "reward_hack_beta_floor": 0.02,
     "reward_hack_beta_ceil": 1.0,
@@ -3157,6 +3229,7 @@ _REWARD_HACK_TUNABLE_DEFAULTS: dict = {
     "reward_hack_release_patience": 3,
     "reward_hack_kl_gain": 1.5,
     "reward_hack_signals": ["info_rm"],
+    **_REWARD_HACK_STAGE2_DEFAULTS,
 }
 
 
@@ -3206,6 +3279,24 @@ def _validate_reward_hack_controller(tcfg) -> None:
                 "exclusive with ref_model_ema_alpha (both drive the KL/ref "
                 "dynamics); pick one"
             )
+    # v0.71.26 Stage 2 — PID / rollback tunables require pid_lagrangian mode.
+    if tcfg.reward_hack_mitigation != "pid_lagrangian":
+        stage2_offenders = [
+            name
+            for name, default in _REWARD_HACK_STAGE2_DEFAULTS.items()
+            if getattr(tcfg, name, default) != default
+        ]
+        if stage2_offenders:
+            raise ValueError(
+                f"PID/rollback tunables {stage2_offenders} require "
+                "reward_hack_mitigation='pid_lagrangian'"
+            )
+    # Rollback needs an RL-checkpoint cadence to roll back to.
+    if tcfg.reward_hack_rollback and tcfg.rl_checkpoint_save_every_steps is None:
+        raise ValueError(
+            "reward_hack_rollback=True requires rl_checkpoint_save_every_steps "
+            "to be set (a cadence to roll back to)"
+        )
 
 
 class SoupConfig(BaseModel):
