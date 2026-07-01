@@ -1047,6 +1047,53 @@ class TestRewardHackMitigationCli:
         assert "--reward-hack-mitigation" in src
         assert "cfg.training.reward_hack_mitigation" in src
 
+    def test_help_shows_detector_and_halt_flags(self):
+        runner, app = self._runner()
+        result = runner.invoke(app, ["train", "--help"])
+        assert result.exit_code == 0, result.output
+        assert "--reward-hack-detector" in result.output
+        assert "--reward-hack-halt" in result.output
+
+    def test_bad_detector_value_rejected(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "cfg.yaml").write_text(
+            "base: HuggingFaceTB/SmolLM2-135M\n"
+            "task: grpo\n"
+            "data:\n  train: ./train.jsonl\n  format: chatml\n"
+            "training:\n  reward_fn: accuracy\n"
+        )
+        runner, app = self._runner()
+        result = runner.invoke(
+            app,
+            ["train", "--config", "cfg.yaml", "--reward-hack-detector", "bogus", "--yes"],
+        )
+        assert result.exit_code == 1
+        assert "info_rm" in result.output
+
+    def test_halt_flag_without_detector_rejected(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "cfg.yaml").write_text(
+            "base: HuggingFaceTB/SmolLM2-135M\n"
+            "task: grpo\n"
+            "data:\n  train: ./train.jsonl\n  format: chatml\n"
+            "training:\n  reward_fn: accuracy\n"
+        )
+        runner, app = self._runner()
+        result = runner.invoke(
+            app, ["train", "--config", "cfg.yaml", "--reward-hack-halt", "--yes"]
+        )
+        assert result.exit_code == 1
+        assert "reward-hack-detector" in result.output
+
+    def test_detector_reexec_passthrough_present(self):
+        import inspect
+
+        from soup_cli.commands import train as train_mod
+
+        src = inspect.getsource(train_mod)
+        assert "--reward-hack-detector" in src
+        assert "cfg.training.reward_hack_detector = reward_hack_detector" in src
+
 
 # =====================================================================
 # Part C / Stage 2 — schema fields (PID + rollback) (Task C1)

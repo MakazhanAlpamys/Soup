@@ -167,6 +167,22 @@ def train(
             "training.echo_trap_enabled=true on grpo/ppo."
         ),
     ),
+    reward_hack_detector: str = typer.Option(
+        None,
+        "--reward-hack-detector",
+        help=(
+            "Reward-hacking detector for GRPO/PPO: info_rm | rm_ensemble. "
+            "Overrides training.reward_hack_detector. (v0.71.26)"
+        ),
+    ),
+    reward_hack_halt: bool = typer.Option(
+        False,
+        "--reward-hack-halt",
+        help=(
+            "Auto-halt training on a HACK verdict. Requires "
+            "--reward-hack-detector (or training.reward_hack_detector). (v0.71.26)"
+        ),
+    ),
     reward_hack_mitigation: str = typer.Option(
         None,
         "--reward-hack-mitigation",
@@ -352,6 +368,25 @@ def train(
             raise typer.Exit(1)
         cfg.training.echo_trap_tokenizer_aware = True
         console.print("[green]Echo-trap tokenizer-aware scoring enabled[/]")
+
+    # --- Reward-hack detector / halt shortcut (v0.71.26) ---
+    if reward_hack_detector is not None:
+        if reward_hack_detector not in ("info_rm", "rm_ensemble"):
+            console.print(
+                "[red]--reward-hack-detector must be info_rm or rm_ensemble[/]"
+            )
+            raise typer.Exit(1)
+        cfg.training.reward_hack_detector = reward_hack_detector
+        console.print(f"[green]Reward-hack detector:[/] {reward_hack_detector}")
+    if reward_hack_halt:
+        if cfg.training.reward_hack_detector is None:
+            console.print(
+                "[red]--reward-hack-halt requires --reward-hack-detector "
+                "(or training.reward_hack_detector)[/]"
+            )
+            raise typer.Exit(1)
+        cfg.training.reward_hack_halt = True
+        console.print("[green]Reward-hack auto-halt enabled[/]")
 
     # --- Reward-hack mitigation shortcut (v0.71.26) ---
     if reward_hack_mitigation is not None:
@@ -650,6 +685,12 @@ def train(
                     script_args.append("--tensorboard")
                 if echo_trap_tokenizer_aware:
                     script_args.append("--echo-trap-tokenizer-aware")
+                if reward_hack_detector is not None:
+                    script_args.extend(
+                        ["--reward-hack-detector", reward_hack_detector]
+                    )
+                if reward_hack_halt:
+                    script_args.append("--reward-hack-halt")
                 if reward_hack_mitigation is not None:
                     script_args.extend(
                         ["--reward-hack-mitigation", reward_hack_mitigation]
