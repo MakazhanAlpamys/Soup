@@ -28,8 +28,11 @@ Security:
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
 
 _MAX_SAVE_EVERY_STEPS = 10_000_000
 _MIN_KEEP_LAST = 1
@@ -285,16 +288,19 @@ class RLCheckpointCallback(_TrainerCallbackBase):  # type: ignore[misc, valid-ty
 
         has_optimizer = False
         if self.config.include_optimizer_state and optimizer is not None:
-            try:
-                import torch
-
-                torch.save(
-                    optimizer.state_dict(),
-                    os.path.join(ckpt_dir, "optimizer.pt"),
-                )
-                has_optimizer = True
-            except Exception:  # noqa: BLE001 — best-effort, manifest reflects it
+            opt_out = os.path.join(ckpt_dir, "optimizer.pt")
+            # Refuse to write THROUGH a pre-placed symlink (write-to-arbitrary
+            # path in a shared checkpoint dir; security-review LOW #6).
+            if os.path.islink(opt_out):
                 has_optimizer = False
+            else:
+                try:
+                    import torch
+
+                    torch.save(optimizer.state_dict(), opt_out)
+                    has_optimizer = True
+                except Exception:  # noqa: BLE001 — best-effort, manifest reflects it
+                    has_optimizer = False
 
         manifest = RLCheckpointState(
             step=int(step),
@@ -343,12 +349,22 @@ class RLCheckpointCallback(_TrainerCallbackBase):  # type: ignore[misc, valid-ty
                 pass
         if optimizer is not None:
             opt_path = os.path.join(ckpt_dir, "optimizer.pt")
-            if os.path.isfile(opt_path):
+            # SECURITY (review HIGH #1): torch.load(weights_only=False) executes
+            # arbitrary pickle. Refuse a SYMLINKED optimizer.pt — an attacker
+            # with write access to a shared checkpoint dir could swap the file
+            # for a symlink to a malicious pickle between save and restore (RCE).
+            # opt_path is otherwise contained (output_dir is_under_cwd-verified in
+            # __init__ + int-cast step); the symlink check closes the TOCTOU.
+            if os.path.islink(opt_path):
+                logger.warning(
+                    "refusing to restore optimizer state from a symlinked "
+                    "optimizer.pt (%s) — possible tampering",
+                    opt_path,
+                )
+            elif os.path.isfile(opt_path):
                 try:
                     import torch
 
-                    # Trusted file (we wrote it under the cwd-contained run dir);
-                    # weights_only=False loads the full optimizer state_dict.
                     optimizer.load_state_dict(
                         torch.load(
                             opt_path, map_location="cpu", weights_only=False
@@ -376,11 +392,16 @@ class RLCheckpointCallback(_TrainerCallbackBase):  # type: ignore[misc, valid-ty
                 continue
             entries.append((_step_number(name), full))
         entries.sort(key=lambda t: t[0], reverse=True)
-        for _, path in entries[self.config.keep_last:]:
+        for step_num, path in entries[self.config.keep_last:]:
             try:
                 shutil.rmtree(path)
             except OSError:
-                pass
+                continue
+            # Keep the in-memory ledger in sync with disk so a rollback target
+            # (max(_saved)) can never point at a deleted checkpoint (v0.71.26
+            # code-review HIGH — the reward-hack rollback ladder reads _saved).
+            if step_num in self._saved:
+                self._saved.remove(step_num)
 
     def on_step_end(self, args, state, control, model=None, **kwargs):
         """Per-step hook — save a checkpoint on the configured cadence."""

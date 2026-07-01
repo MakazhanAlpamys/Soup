@@ -29,6 +29,7 @@ Security:
 from __future__ import annotations
 
 import json
+import logging
 import math
 import os
 import stat
@@ -42,6 +43,10 @@ from typing import Any
 
 from soup_cli.monitoring.trace_logger import redact_value
 from soup_cli.utils.paths import is_under_cwd
+
+logger = logging.getLogger(__name__)
+
+_MAX_ACTION_HISTORY = 1000  # cap the in-memory action log for long runs
 
 _DEFAULT_CAP_MB = 100
 _MIN_CAP_MB = 1
@@ -57,7 +62,7 @@ SIGNAL_NAMES: frozenset[str] = frozenset(
 SMOOTHING_METHODS: frozenset[str] = frozenset({"none", "ema", "median"})
 SHAPING_KINDS: frozenset[str] = frozenset({"length", "repetition", "sentinel"})
 
-_EMA_ALPHA = 0.5  # fixed EMA weight on the new sample (documented, Stage 3)
+_EMA_ALPHA = 0.5  # EMA smoothing factor: weight on the NEW sample (1 - it on prev)
 _CONSERVATIVE_DISAGREE_TOL = 0.2  # detectors differ beyond this → stay cautious
 
 
@@ -150,9 +155,10 @@ def combine_signals(signals: Mapping[str, Any], names: Sequence[str]) -> float:
 
 
 def smooth_signal(new: float, window: Sequence[float], *, method: str) -> float:
-    """Smooth a scalar signal. ``none`` → new; ``ema`` → 0.5·prev + 0.5·new
-    (prev = ``window[-1]``, or ``new`` when the window is empty); ``median`` →
-    median of ``window + [new]``.
+    """Smooth a scalar signal. ``none`` → new; ``ema`` → ``alpha·new +
+    (1-alpha)·prev`` with alpha = ``_EMA_ALPHA`` = 0.5 (prev = ``window[-1]``,
+    or ``new`` when the window is empty); ``median`` → median of
+    ``window + [new]``.
     """
     if method not in SMOOTHING_METHODS:
         raise ValueError(
@@ -165,7 +171,8 @@ def smooth_signal(new: float, window: Sequence[float], *, method: str) -> float:
     if method == "ema":
         if not win:
             return fnew
-        return _EMA_ALPHA * win[-1] + (1.0 - _EMA_ALPHA) * fnew
+        # Standard EMA convention: alpha weights the NEW sample.
+        return _EMA_ALPHA * fnew + (1.0 - _EMA_ALPHA) * win[-1]
     return float(statistics.median(win + [fnew]))
 
 
@@ -239,7 +246,7 @@ def _completion_text(completion: Any) -> str:
     return _completion_to_text(completion)
 
 
-def _extract_completions(args: tuple, kwargs: dict) -> Any:
+def _extract_completions(args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
     """Pull the ``completions`` arg from a TRL reward-fn call."""
     completions = kwargs.get("completions")
     if completions is None:
@@ -279,6 +286,10 @@ def shape_reward_fn(
     never corrupt training: on any exception the verbatim reward is returned.
     ``__name__`` is preserved so TRL's per-function logging keys stay correct.
     """
+    if not callable(inner):
+        raise TypeError(
+            f"shape_reward_fn inner must be callable, got {type(inner).__name__}"
+        )
     if kind not in SHAPING_KINDS:
         raise ValueError(f"kind must be one of {sorted(SHAPING_KINDS)}, got {kind!r}")
     strength_val = _check_finite_float(strength, "strength", nonneg=True)
@@ -343,7 +354,7 @@ def explain_giveup(
         f"The '{signal_name}' signal stayed elevated (last smoothed drop_pct="
         f"{state.last_signal:.3f}).",
     ]
-    recent = [str(a) for a in list(action_history)[-5:]]
+    recent = [str(a) for a in action_history[-5:]]
     if recent:
         lines.append("Recent actions tried: " + " | ".join(recent))
     lines.append(
@@ -517,9 +528,13 @@ def bang_bang_step(
                 if new_beta != beta:
                     reason = f"relax beta to {new_beta:.4f} (vote={fvote:.3f})"
                 beta = new_beta
+                # Reset the patience counter after EACH relaxation so the
+                # descent is hysteretic — β must see release_patience fresh
+                # below-band steps before the next geometric relaxation
+                # (v0.71.26 code-review HIGH: raise fast, relax cautiously).
+                release = 0
                 if beta <= policy.beta_floor:
                     tripped = False
-                    release = 0
         else:
             release = 0
     else:
@@ -775,6 +790,10 @@ class RewardHackMitigationCallback(_TrainerCallbackBase):  # type: ignore[misc, 
         self.detector = validate_hack_detector(detector)
         self.log_writer = log_writer
         self.signals = tuple(signals)
+        if not self.signals:
+            # An empty signal set makes the vote always 0.0 → the controller is
+            # active but permanently inert (security-review LOW #4).
+            raise ValueError("signals must be non-empty (the controller vote)")
         for name in self.signals:
             if name not in SIGNAL_NAMES:
                 raise ValueError(
@@ -814,6 +833,13 @@ class RewardHackMitigationCallback(_TrainerCallbackBase):  # type: ignore[misc, 
         self._signal_windows: dict[str, list[float]] = {}
         self._action_history: list[str] = []
         self._last_drift = False
+        self._warned_error = False
+
+    def _record_action(self, reason: str) -> None:
+        """Append an action reason, capping the in-memory history (LOW #9)."""
+        self._action_history.append(reason)
+        if len(self._action_history) > _MAX_ACTION_HISTORY:
+            del self._action_history[:-_MAX_ACTION_HISTORY]
 
     def attach(self, trainer: Any) -> None:
         """Store the trainer reference (the β / kl_coef mutation target)."""
@@ -965,7 +991,7 @@ class RewardHackMitigationCallback(_TrainerCallbackBase):  # type: ignore[misc, 
         new_state, action = bang_bang_step(policy, self._state, vote=vote)
         self._state = new_state
         self._apply_coefficient(action.new_beta)
-        self._action_history.append(action.reason)
+        self._record_action(action.reason)
         telemetry["vote"] = vote
         telemetry["new_beta"] = action.new_beta
         telemetry["tripped"] = action.tripped
@@ -982,6 +1008,16 @@ class RewardHackMitigationCallback(_TrainerCallbackBase):  # type: ignore[misc, 
         self, model: Any, optimizer: Any, control: Any, telemetry: dict[str, Any]
     ) -> Any:
         """Escalation ladder rung: rollback to last-good, else early-stop."""
+        target = self._last_good_step
+        # No last-good checkpoint yet — do NOT burn a recovery attempt or
+        # early-stop; keep training until a good checkpoint exists or the real
+        # rollback budget is spent (v0.71.26 code-review MEDIUM).
+        if target is None or self.rl_checkpoint_cb is None:
+            telemetry["escalation"] = (
+                "no rollback target available yet (no saved checkpoint)"
+            )
+            self._hack_streak = 0
+            return control
         if self._state.recovery_attempts >= self.max_recovery_attempts:
             telemetry["escalation"] = "early_stop"
             telemetry["explanation"] = explain_giveup(
@@ -991,17 +1027,19 @@ class RewardHackMitigationCallback(_TrainerCallbackBase):  # type: ignore[misc, 
             )
             self._request_stop(control)
             return control
-        target = self._last_good_step
         restored = False
-        if target is not None and self.rl_checkpoint_cb is not None:
-            try:
-                restored = bool(
-                    self.rl_checkpoint_cb.restore_checkpoint(
-                        step=target, model=model, optimizer=optimizer
-                    )
+        try:
+            restored = bool(
+                self.rl_checkpoint_cb.restore_checkpoint(
+                    step=target, model=model, optimizer=optimizer
                 )
-            except Exception:  # noqa: BLE001 — rollback must never crash the run
-                restored = False
+            )
+        except Exception:  # noqa: BLE001 — rollback must never crash the run
+            restored = False
+        # NOTE (known limitation): the rollback restores the model weights +
+        # optimizer, but the controller's β / integral state is intentionally
+        # NOT reset — we keep KL elevated while recovering from hacking. The PID
+        # continues from its last state, which is the conservative choice.
         self._state = replace(
             self._state, recovery_attempts=self._state.recovery_attempts + 1
         )
@@ -1026,7 +1064,7 @@ class RewardHackMitigationCallback(_TrainerCallbackBase):  # type: ignore[misc, 
         new_state, action = pid_step(policy, self._state, signal=vote)
         self._state = new_state
         self._apply_coefficient(action.new_beta)
-        self._action_history.append(action.reason)
+        self._record_action(action.reason)
         telemetry["vote"] = vote
         telemetry["new_beta"] = action.new_beta
         telemetry["tripped"] = action.tripped
@@ -1043,7 +1081,7 @@ class RewardHackMitigationCallback(_TrainerCallbackBase):  # type: ignore[misc, 
             control = self._escalate(model, optimizer, control, telemetry)
         return control
 
-    def on_step_end(self, args, state, control, **kwargs):
+    def on_step_end(self, args: Any, state: Any, control: Any, **kwargs: Any) -> Any:
         """Per-step hook — read the buffer, compute telemetry, act by mode.
 
         Instrumentation must NEVER crash training: a broad except returns the
@@ -1069,5 +1107,16 @@ class RewardHackMitigationCallback(_TrainerCallbackBase):  # type: ignore[misc, 
                 )
             self.log_writer.record(step=step, snapshot=telemetry)
             return control
-        except Exception:  # noqa: BLE001 — instrumentation must never crash
+        except Exception as exc:  # noqa: BLE001 — instrumentation must never crash
+            # Training must not crash, but a persistent controller bug silently
+            # disabling the safety loop must be visible — warn ONCE (code-review
+            # LOW #10), not every step.
+            if not self._warned_error:
+                self._warned_error = True
+                logger.warning(
+                    "reward-hack mitigation callback error (%s): %s. The "
+                    "controller is inactive this step; training continues.",
+                    type(exc).__name__,
+                    exc,
+                )
             return control

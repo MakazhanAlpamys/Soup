@@ -269,7 +269,7 @@ def _attach_reward_hack(
                     signal_target=tcfg.reward_hack_signal_target,
                     beta_floor=tcfg.reward_hack_beta_floor,
                     beta_ceil=tcfg.reward_hack_beta_ceil,
-                    integral_clamp=tcfg.reward_hack_beta_ceil,
+                    integral_clamp=tcfg.reward_hack_integral_clamp,
                 )
             callback = RewardHackMitigationCallback(
                 mode=mitigation,
@@ -301,7 +301,15 @@ def _attach_reward_hack(
             callback.attach(trainer)
             return 1
         except (TypeError, ValueError, OSError) as exc:
-            logger.debug("attach reward-hack mitigation callback rejected: %s", exc)
+            # A user explicitly enabled mitigation — a silent drop would leave
+            # them believing a safety controller is active when it is not.
+            # Warn LOUDLY (e.g. output dir outside cwd fails the log writer).
+            logger.warning(
+                "reward-hack mitigation callback NOT attached (%s): %s. "
+                "Training will proceed WITHOUT mitigation.",
+                type(exc).__name__,
+                exc,
+            )
             return 0
     if detector is not None:
         from soup_cli.utils.reward_hacking import build_reward_hack_callback

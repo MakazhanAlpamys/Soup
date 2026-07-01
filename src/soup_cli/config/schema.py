@@ -1736,9 +1736,11 @@ class TrainingConfig(BaseModel):
     )
     reward_hack_signals: List[str] = Field(
         default_factory=lambda: ["info_rm"],
+        max_length=4,
         description=(
             "v0.71.26 — signals combined into the controller's multi-signal "
-            "vote. Allowlist: info_rm, rm_ensemble, length_trend, repetition."
+            "vote. Allowlist (max 4): info_rm, rm_ensemble, length_trend, "
+            "repetition."
         ),
     )
     # ---- v0.71.26 Stage 2 — PID-Lagrangian controller + rollback ---------
@@ -1767,6 +1769,15 @@ class TrainingConfig(BaseModel):
         description=(
             "v0.71.26 — target hacking drop_pct the PID controller holds "
             "(pid_lagrangian mode)."
+        ),
+    )
+    reward_hack_integral_clamp: float = Field(
+        default=1.0,
+        gt=0.0,
+        le=1000.0,
+        description=(
+            "v0.71.26 — PID anti-windup bound on the integral accumulator "
+            "(pid_lagrangian mode). Independent of beta_ceil."
         ),
     )
     reward_hack_rollback: bool = Field(
@@ -1851,6 +1862,36 @@ class TrainingConfig(BaseModel):
         raise TypeError(
             f"reward-hack bool flag must be bool, got {type(v).__name__}"
         )
+
+    @field_validator(
+        "reward_hack_dwell_steps",
+        "reward_hack_release_patience",
+        "reward_hack_rollback_patience",
+        "reward_hack_max_recovery_attempts",
+        "reward_hack_smoothing_window",
+        "reward_hack_beta_floor",
+        "reward_hack_beta_ceil",
+        "reward_hack_trip_band",
+        "reward_hack_release_band",
+        "reward_hack_kl_gain",
+        "reward_hack_pid_kp",
+        "reward_hack_pid_ki",
+        "reward_hack_pid_kd",
+        "reward_hack_signal_target",
+        "reward_hack_integral_clamp",
+        "reward_hack_shaping_strength",
+        mode="before",
+    )
+    @classmethod
+    def _reject_bool_on_reward_hack_numerics(cls, v):
+        """v0.71.26 — bool-before-int/float policy (security-review MEDIUM): a
+        YAML ``yes`` must not silently coerce to 1 on a numeric tunable."""
+        if isinstance(v, bool):
+            raise ValueError(
+                "reward-hack numeric tunable must not be bool "
+                "(YAML on/off/yes/no coerces to a number)"
+            )
+        return v
 
     @field_validator("reward_hack_mitigation", mode="before")
     @classmethod
@@ -3260,18 +3301,19 @@ class EvalConfig(BaseModel):
 # per stage (Stage 2/3 tunables added with their fields).
 # Stage-2 (PID-Lagrangian + rollback) tunables — meaningful only in
 # pid_lagrangian mode. Setting one under any other mode is a no-op footgun.
-_REWARD_HACK_STAGE2_DEFAULTS: dict = {
+_REWARD_HACK_STAGE2_DEFAULTS: dict[str, Any] = {
     "reward_hack_pid_kp": 0.5,
     "reward_hack_pid_ki": 0.1,
     "reward_hack_pid_kd": 0.05,
     "reward_hack_signal_target": 0.15,
+    "reward_hack_integral_clamp": 1.0,
     "reward_hack_rollback": False,
     "reward_hack_rollback_patience": 3,
     "reward_hack_max_recovery_attempts": 2,
 }
 
 # Stage-3 (anti-gaming) tunables — meaningful for any non-off mode.
-_REWARD_HACK_STAGE3_DEFAULTS: dict = {
+_REWARD_HACK_STAGE3_DEFAULTS: dict[str, Any] = {
     "reward_hack_signal_smoothing": "none",
     "reward_hack_smoothing_window": 8,
     "reward_hack_conservative_on_disagreement": False,
@@ -3280,7 +3322,7 @@ _REWARD_HACK_STAGE3_DEFAULTS: dict = {
     "reward_hack_shaping_strength": 0.0,
 }
 
-_REWARD_HACK_TUNABLE_DEFAULTS: dict = {
+_REWARD_HACK_TUNABLE_DEFAULTS: dict[str, Any] = {
     "reward_hack_beta_floor": 0.02,
     "reward_hack_beta_ceil": 1.0,
     "reward_hack_trip_band": 0.30,
@@ -3288,22 +3330,28 @@ _REWARD_HACK_TUNABLE_DEFAULTS: dict = {
     "reward_hack_dwell_steps": 2,
     "reward_hack_release_patience": 3,
     "reward_hack_kl_gain": 1.5,
-    "reward_hack_signals": ["info_rm"],
+    # tuple (not list) so a caller cannot mutate this module-level default.
+    "reward_hack_signals": ("info_rm",),
     **_REWARD_HACK_STAGE2_DEFAULTS,
     **_REWARD_HACK_STAGE3_DEFAULTS,
 }
 
 
-def _customized_reward_hack_tunables(tcfg) -> list:
+def _customized_reward_hack_tunables(tcfg: Any) -> list[str]:
     """Return the reward-hack control tunables set to a non-default value."""
-    offenders = []
+    offenders: list[str] = []
     for field_name, default in _REWARD_HACK_TUNABLE_DEFAULTS.items():
-        if getattr(tcfg, field_name, default) != default:
+        current = getattr(tcfg, field_name, default)
+        # Normalise list/tuple so a list value compares equal to a tuple default.
+        if isinstance(default, tuple) and isinstance(current, (list, tuple)):
+            if tuple(current) != default:
+                offenders.append(field_name)
+        elif current != default:
             offenders.append(field_name)
     return offenders
 
 
-def _validate_reward_hack_controller(tcfg) -> None:
+def _validate_reward_hack_controller(tcfg: Any) -> None:
     """Validate the mitigation-controller config (only when a mode is active).
 
     Numeric consistency (β floor < ceil, release < trip band), the signal
@@ -3325,12 +3373,29 @@ def _validate_reward_hack_controller(tcfg) -> None:
         )
     from soup_cli.utils.reward_hack_control import SIGNAL_NAMES
 
-    for name in tcfg.reward_hack_signals or []:
+    # The controller votes on the ACTIVE detector's signal plus the auxiliary
+    # signals. Listing the other detector's name (never produced) or omitting
+    # the active detector silently drops the primary signal from the vote —
+    # reject both so the config is coherent (python-review CRITICAL #1).
+    signals = list(tcfg.reward_hack_signals or [])
+    allowed = {tcfg.reward_hack_detector, "length_trend", "repetition"}
+    for name in signals:
         if name not in SIGNAL_NAMES:
             raise ValueError(
                 f"reward_hack_signals contains unknown signal {name!r}; "
                 f"valid: {sorted(SIGNAL_NAMES)}"
             )
+        if name not in allowed:
+            raise ValueError(
+                f"reward_hack_signals contains {name!r}, but the active "
+                f"detector is {tcfg.reward_hack_detector!r}; valid signals "
+                f"are {sorted(allowed)}"
+            )
+    if tcfg.reward_hack_detector is not None and tcfg.reward_hack_detector not in signals:
+        raise ValueError(
+            "reward_hack_signals must include the active detector "
+            f"{tcfg.reward_hack_detector!r} (its signal is the primary vote)"
+        )
     # A control mode drives the KL/ref dynamics; a competing β schedule
     # (ref_model_ema_alpha regenerates the reference) fights it — reject.
     if tcfg.reward_hack_mitigation in ("kl_control", "pid_lagrangian"):
@@ -3357,6 +3422,14 @@ def _validate_reward_hack_controller(tcfg) -> None:
         raise ValueError(
             "reward_hack_rollback=True requires rl_checkpoint_save_every_steps "
             "to be set (a cadence to roll back to)"
+        )
+    # max_recovery_attempts=0 with rollback would early-stop on the first HACK
+    # streak WITHOUT a single rollback — a footgun (code-review MEDIUM).
+    if tcfg.reward_hack_rollback and tcfg.reward_hack_max_recovery_attempts < 1:
+        raise ValueError(
+            "reward_hack_rollback=True requires "
+            "reward_hack_max_recovery_attempts >= 1 (0 would early-stop "
+            "before any rollback)"
         )
     # v0.71.26 Stage 3 — reward shaping MUTATES rewards, so it is only valid
     # for a control mode (log_only must stay observe-only).
@@ -4965,10 +5038,9 @@ class SoupConfig(BaseModel):
                 f"reward_hack_mitigation={mitigation!r} requires "
                 "reward_hack_detector to be set (the signal source)"
             )
-        # v0.71.26 — controller config (numeric bounds, signal allowlist,
-        # β-schedule mutual exclusion) only when a mode is active.
-        if mitigation != "off":
-            _validate_reward_hack_controller(tcfg)
+        # v0.71.26 — the task / backend gate runs BEFORE the controller-config
+        # checks so a task mismatch surfaces the actionable error (not a
+        # numeric-bounds error) — python-review HIGH #3.
         if self.task not in ("grpo", "ppo"):
             raise ValueError(
                 "reward_hack_detector / reward_hack_halt / "
@@ -4980,6 +5052,10 @@ class SoupConfig(BaseModel):
                 "reward_hack_detector / reward_hack_mitigation are not "
                 "supported on backend=mlx (RL detectors are transformers-only)"
             )
+        # Controller config (numeric bounds, signal allowlist, β-schedule
+        # mutual exclusion) only when a mode is active.
+        if mitigation != "off":
+            _validate_reward_hack_controller(tcfg)
         return self
 
 

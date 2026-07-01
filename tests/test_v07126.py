@@ -1807,11 +1807,26 @@ class TestControllerFuzz:
             state = ControllerState(beta=policy.beta_floor)
             prev = state.beta
             for vote in trace:
-                state, _ = bang_bang_step(policy, state, vote=vote)
+                state, action = bang_bang_step(policy, state, vote=vote)
                 assert policy.beta_floor - 1e-9 <= state.beta <= policy.beta_ceil + 1e-9
                 assert state.beta > 0.0 and math.isfinite(state.beta)
                 assert state.beta / prev <= policy.kl_gain + 1e-9  # geometric only
+                # field-validity invariants (tdd review LOW #8)
+                assert 0.0 <= state.last_signal <= 1.0
+                assert state.dwell_count >= 0 and state.release_count >= 0
+                assert isinstance(state.tripped, bool)
+                assert action.new_beta == state.beta
                 prev = state.beta
+
+    def test_bang_bang_converges_on_sustained_signal(self):
+        # convergence property: sustained above-band input eventually trips.
+        from soup_cli.utils.reward_hack_control import ControllerState, bang_bang_step
+
+        policy = _bang_policy(dwell_steps=3)
+        state = ControllerState(beta=0.02)
+        for _ in range(5):
+            state, _ = bang_bang_step(policy, state, vote=0.9)
+        assert state.tripped and state.beta > 0.02
 
     def test_bang_bang_no_flap_on_alternation(self):
         from soup_cli.utils.reward_hack_control import ControllerState, bang_bang_step
@@ -1833,3 +1848,413 @@ class TestControllerFuzz:
                 assert policy.beta_floor - 1e-9 <= state.beta <= policy.beta_ceil + 1e-9
                 assert state.beta > 0.0 and math.isfinite(state.beta)
                 assert abs(state.integral) <= policy.integral_clamp + 1e-9
+                assert math.isfinite(state.integral) and math.isfinite(state.prev_error)
+                assert 0.0 <= state.last_signal <= 1.0
+
+
+# =====================================================================
+# python-review fixes (v0.71.26)
+# =====================================================================
+
+
+class TestReviewFixesPython:
+    """Regression tests for the python-review findings."""
+
+    def _cfg(self, extra, *, mitigation="kl_control", detector="info_rm", task="grpo"):
+        from soup_cli.config.loader import load_config_from_string
+
+        return load_config_from_string(
+            _yaml(task, mitigation=mitigation, detector=detector, extra=extra)
+        )
+
+    def test_signals_must_include_active_detector(self):
+        # CRITICAL #1 — a signal set that omits the active detector silently
+        # drops the primary signal from the vote; reject it.
+        with pytest.raises(ValueError, match="detector"):
+            self._cfg("reward_hack_signals: [length_trend]")
+
+    def test_signals_reject_inactive_detector_name(self):
+        # detector=info_rm but signals lists rm_ensemble (never produced) → reject.
+        with pytest.raises(ValueError, match="rm_ensemble|active detector"):
+            self._cfg("reward_hack_signals: [info_rm, rm_ensemble]")
+
+    def test_integral_clamp_is_a_field(self):
+        # CRITICAL #2 — integral_clamp must be its own tunable, not beta_ceil.
+        from soup_cli.config.schema import TrainingConfig
+
+        assert TrainingConfig().reward_hack_integral_clamp == 1.0
+        cfg = self._cfg(
+            "reward_hack_integral_clamp: 5.0", mitigation="pid_lagrangian"
+        )
+        assert cfg.training.reward_hack_integral_clamp == 5.0
+
+    def test_integral_clamp_wired_into_pid_policy(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        from soup_cli.config.schema import TrainingConfig
+        from soup_cli.utils.peft_wiring import attach_rl_callbacks
+        from soup_cli.utils.reward_hack_control import RewardHackMitigationCallback
+
+        tcfg = TrainingConfig(
+            reward_hack_mitigation="pid_lagrangian",
+            reward_hack_detector="info_rm",
+            reward_hack_integral_clamp=7.0,
+            reward_hack_beta_ceil=3.0,
+        )
+        added: list = []
+        attach_rl_callbacks(
+            _fake_trainer_recording(added),
+            tcfg,
+            buffer=object(),
+            output_dir=str(tmp_path),
+            task="grpo",
+        )
+        mit = [c for c in added if isinstance(c, RewardHackMitigationCallback)][0]
+        assert mit.pid.integral_clamp == 7.0  # not beta_ceil (3.0)
+
+    def test_task_gate_before_controller_checks(self):
+        # HIGH #3 — a bad beta bound on an sft task should surface the task
+        # error, not the numeric one.
+        with pytest.raises(ValueError, match="grpo|ppo|task"):
+            self._cfg(
+                "reward_hack_beta_floor: 1.0\nreward_hack_beta_ceil: 0.5",
+                task="sft",
+            )
+
+    def test_shape_reward_fn_rejects_non_callable(self):
+        # MEDIUM #10 — non-callable inner must fail fast, not at train time.
+        from soup_cli.utils.reward_hack_control import shape_reward_fn
+
+        with pytest.raises((TypeError, ValueError), match="callable"):
+            shape_reward_fn("not a fn", kind="length", strength=0.5)
+
+
+class TestReviewFixesCode:
+    """Regression tests for the code-review findings."""
+
+    def test_prune_trims_saved_list(self, tmp_path, monkeypatch):
+        # HIGH #1 — _prune must keep _saved in sync with surviving dirs so the
+        # rollback target can never point at a deleted checkpoint.
+        import os
+
+        monkeypatch.chdir(tmp_path)
+        from soup_cli.utils.rl_checkpoint import (
+            RLCheckpointConfig,
+            build_rl_checkpoint_callback,
+        )
+
+        cb = build_rl_checkpoint_callback(
+            RLCheckpointConfig(save_every_steps=1, keep_last=2),
+            output_dir="run",
+            task="grpo",
+        )
+        for step in (1, 2, 3, 4):
+            cb.save_checkpoint(step=step, model=_FakeSavableModel(), optimizer=None)
+        root = os.path.join("run", "rl-checkpoints")
+        on_disk = sorted(
+            int(d.split("-")[1]) for d in os.listdir(root) if d.startswith("step-")
+        )
+        assert on_disk == [3, 4]
+        assert sorted(cb._saved) == on_disk  # in-memory list matches disk
+
+    def test_bang_release_requires_patience_per_relaxation(self):
+        # HIGH #4 — each geometric relaxation must re-accumulate release_patience.
+        from soup_cli.utils.reward_hack_control import ControllerState, bang_bang_step
+
+        policy = _bang_policy(dwell_steps=1, release_patience=2, kl_gain=1.5, beta_ceil=1.0)
+        state = ControllerState(beta=0.02)
+        for _ in range(3):  # raise β three times → ~0.0675
+            state, _ = bang_bang_step(policy, state, vote=0.9)
+        high = state.beta
+        state, _ = bang_bang_step(policy, state, vote=0.0)  # release=1, no relax
+        assert state.beta == pytest.approx(high)
+        state, _ = bang_bang_step(policy, state, vote=0.0)  # release=2 → relax
+        after_first = state.beta
+        assert after_first < high
+        state, _ = bang_bang_step(policy, state, vote=0.0)  # release reset → 1, no relax
+        assert state.beta == pytest.approx(after_first)
+        state, _ = bang_bang_step(policy, state, vote=0.0)  # release=2 → relax again
+        assert state.beta < after_first
+
+    def test_rollback_requires_nonzero_recovery_attempts(self):
+        # MEDIUM #5 — rollback=True with max_recovery_attempts=0 is a footgun.
+        from soup_cli.config.loader import load_config_from_string
+
+        with pytest.raises(ValueError, match="max_recovery_attempts"):
+            load_config_from_string(
+                _yaml(
+                    "grpo",
+                    mitigation="pid_lagrangian",
+                    extra=(
+                        "reward_hack_rollback: true\n"
+                        "rl_checkpoint_save_every_steps: 2\n"
+                        "reward_hack_max_recovery_attempts: 0"
+                    ),
+                )
+            )
+
+    def test_escalate_no_target_does_not_waste_attempt(self, tmp_path, monkeypatch):
+        # MEDIUM #6 — a rollback with no last-good checkpoint must not burn a
+        # recovery attempt nor early-stop.
+        monkeypatch.chdir(tmp_path)
+        ckpt = _FakeCkptCb(saved=[])  # no checkpoints saved yet
+        cb = _pid_callback(
+            tmp_path,
+            _SeqBuffer([_HEALTHY, _HACK, _HACK, _HACK, _HACK]),
+            rollback=True,
+            rollback_patience=2,
+            max_recovery_attempts=1,
+            ckpt_cb=ckpt,
+        )
+        cb.attach(_fake_grpo_trainer(beta=0.02))
+        control = types.SimpleNamespace(should_training_stop=False)
+        for step in range(1, 6):
+            control = cb.on_step_end(
+                None, types.SimpleNamespace(global_step=step), control,
+                model=object(), optimizer=object(),
+            )
+        assert ckpt.restore_calls == []
+        assert cb._state.recovery_attempts == 0  # not wasted on a None target
+
+    def test_action_history_is_bounded(self, tmp_path, monkeypatch):
+        # LOW #9 — _action_history must not grow unbounded.
+        monkeypatch.chdir(tmp_path)
+        from itertools import repeat
+
+        cb = _kl_callback(tmp_path, _SeqBuffer(list(repeat(_HACK, 1))))
+        cb.attach(_fake_grpo_trainer(beta=0.02))
+        for step in range(1, 60):
+            cb.on_step_end(None, types.SimpleNamespace(global_step=step), None)
+        assert len(cb._action_history) <= 1000
+
+
+class TestReviewFixesSecurity:
+    """Regression tests for the security-review findings."""
+
+    @pytest.mark.skipif(os.name == "nt", reason="symlink needs privilege on Windows")
+    def test_restore_refuses_symlink_optimizer(self, tmp_path, monkeypatch):
+        # HIGH #1 — torch.load(weights_only=False) on an attacker-symlinked
+        # optimizer.pt is RCE; restore must refuse a symlinked file.
+        import torch
+
+        monkeypatch.chdir(tmp_path)
+        from soup_cli.utils.rl_checkpoint import (
+            RLCheckpointConfig,
+            build_rl_checkpoint_callback,
+        )
+
+        cb = build_rl_checkpoint_callback(
+            RLCheckpointConfig(save_every_steps=1), output_dir="run", task="grpo"
+        )
+        param = torch.nn.Parameter(torch.zeros(2))
+        opt = torch.optim.SGD([param], lr=0.1)
+        cb.save_checkpoint(step=1, model=_FakeSavableModel(), optimizer=opt)
+        opt_path = os.path.join("run", "rl-checkpoints", "step-1", "optimizer.pt")
+        evil = tmp_path / "evil.pt"
+        evil.write_bytes(b"junk")
+        os.remove(opt_path)
+        os.symlink(str(evil), opt_path)
+        # must refuse the symlinked optimizer (return False, never torch.load it)
+        assert cb.restore_checkpoint(step=1, model=None, optimizer=opt) is False
+
+    def test_bool_rejected_on_int_fields(self):
+        # MEDIUM #2 — bool-before-int policy on the new integer fields.
+        from soup_cli.config.schema import TrainingConfig
+
+        for field in (
+            "reward_hack_dwell_steps",
+            "reward_hack_release_patience",
+            "reward_hack_rollback_patience",
+            "reward_hack_max_recovery_attempts",
+            "reward_hack_smoothing_window",
+        ):
+            with pytest.raises((ValueError, TypeError), match="bool"):
+                TrainingConfig(**{field: True})
+
+    def test_bool_rejected_on_float_fields(self):
+        from soup_cli.config.schema import TrainingConfig
+
+        # pid_kp has ge=0 so True→1.0 would pass the bound without a bool guard.
+        with pytest.raises((ValueError, TypeError), match="bool"):
+            TrainingConfig(reward_hack_pid_kp=True)
+
+    def test_signals_length_capped(self):
+        # MEDIUM #3 — unbounded signals list is a per-step DoS.
+        from soup_cli.config.schema import TrainingConfig
+
+        with pytest.raises((ValueError, TypeError)):
+            TrainingConfig(reward_hack_signals=["info_rm"] * 100)
+
+    def test_callback_rejects_empty_signals(self, tmp_path, monkeypatch):
+        # LOW #4 — an empty signals tuple silently disables the controller.
+        monkeypatch.chdir(tmp_path)
+        from soup_cli.utils.reward_hack_control import (
+            MitigationLogWriter,
+            RewardHackMitigationCallback,
+        )
+
+        with pytest.raises(ValueError, match="signal"):
+            RewardHackMitigationCallback(
+                mode="log_only",
+                detector="info_rm",
+                log_writer=MitigationLogWriter("m.jsonl"),
+                signals=(),
+            )
+
+
+class TestReviewFixesTdd:
+    """Coverage gaps identified by the tdd review."""
+
+    def test_bang_bang_deadband_hold_while_tripped(self):
+        # GAP 1 (HIGH) — the dead-band 'hold' branch while tripped must keep β
+        # and reset both counters, without relaxing.
+        from soup_cli.utils.reward_hack_control import ControllerState, bang_bang_step
+
+        policy = _bang_policy(dwell_steps=2, release_patience=2, trip_band=0.3, release_band=0.1)
+        state = ControllerState(beta=0.02)
+        state, _ = bang_bang_step(policy, state, vote=0.5)
+        state, _ = bang_bang_step(policy, state, vote=0.5)  # trip → β=0.03
+        assert state.tripped and state.beta == pytest.approx(0.03)
+        state, action = bang_bang_step(policy, state, vote=0.2)  # dead-band
+        assert state.beta == pytest.approx(0.03) and state.tripped
+        assert state.release_count == 0 and state.dwell_count == 0
+        assert action.reason == "hold"
+
+    def test_shape_reward_verbatim_on_shim_error(self, monkeypatch):
+        # GAP 2 (HIGH) — a shim error must return the verbatim inner reward.
+        import soup_cli.utils.reward_hack_control as rhc
+
+        def boom(*a, **k):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(rhc, "_shaping_penalty", boom)
+        shaped = rhc.shape_reward_fn(_inner_reward, kind="length", strength=0.5)
+        assert shaped(["p"], ["w " * 40]) == [1.0]  # verbatim despite shim error
+
+    def test_conservative_disagreement_boundary(self):
+        # GAP 3 (MEDIUM) — max-min == tol is NOT > tol → mean (not max).
+        from soup_cli.utils.reward_hack_control import combine_conservative
+
+        assert combine_conservative([0.1, 0.3], disagree_tol=0.2) == pytest.approx(0.2)
+        assert combine_conservative([0.1, 0.301], disagree_tol=0.2) == pytest.approx(0.301)
+
+    def test_dual_write_survives_readonly_beta(self, tmp_path, monkeypatch):
+        # GAP 4 (MEDIUM) — a read-only trainer.beta must not block args.beta.
+        monkeypatch.chdir(tmp_path)
+
+        class _ROTrainer:
+            def __init__(self):
+                self.args = types.SimpleNamespace(beta=0.02)
+
+            @property
+            def beta(self):
+                return 0.02  # read-only property
+
+        cb = _kl_callback(tmp_path, _SeqBuffer([_HEALTHY, _HACK]))
+        trainer = _ROTrainer()
+        cb.attach(trainer)
+        cb.on_step_end(None, types.SimpleNamespace(global_step=1), None)
+        cb.on_step_end(None, types.SimpleNamespace(global_step=2), None)
+        assert trainer.args.beta == pytest.approx(0.04)  # args.beta still updated
+
+    def test_escalation_postconditions(self, tmp_path, monkeypatch):
+        # GAP 5 (MEDIUM) — recovery_attempts increments to 1, hack_streak resets.
+        monkeypatch.chdir(tmp_path)
+        ckpt = _FakeCkptCb(saved=[10])
+        cb = _pid_callback(
+            tmp_path,
+            _SeqBuffer([_HEALTHY, _HACK, _HACK]),
+            rollback=True,
+            rollback_patience=2,
+            max_recovery_attempts=2,
+            ckpt_cb=ckpt,
+        )
+        cb.attach(_fake_grpo_trainer(beta=0.02))
+        control = types.SimpleNamespace(should_training_stop=False)
+        for step in (1, 2, 3):
+            control = cb.on_step_end(
+                None, types.SimpleNamespace(global_step=step), control,
+                model=object(), optimizer=object(),
+            )
+        assert ckpt.restore_calls == [10]
+        assert cb._state.recovery_attempts == 1
+        assert cb._hack_streak == 0
+        assert control.should_training_stop is False  # max=2 → not stopped yet
+
+    def test_pid_derivative_exact_spike(self):
+        # GAP 2b — pin the exact D-term magnitude, not just > floor.
+        states = _run_pid(
+            _pid_policy(kp=0.0, ki=0.0, kd=1.0), [0.65]
+        )
+        # error=0.65-0.15=0.5, prev_error=0 → deriv=0.5 → β=floor+0.5=0.52
+        assert states[0].beta == pytest.approx(0.52)
+        assert states[0].prev_error == pytest.approx(0.5)
+
+    def test_drift_negative_gap(self):
+        from soup_cli.utils.reward_hack_control import detect_reward_distribution_drift
+
+        # gap <= 0 (sorted halves can't reverse, but constant-ish → gap 0) → False
+        assert detect_reward_distribution_drift([1, 1, 1, 1, 1, 1]) is False
+
+    def test_smoothing_window_lower_boundary_ok(self):
+        from soup_cli.config.loader import load_config_from_string
+
+        cfg = load_config_from_string(
+            _yaml("grpo", mitigation="kl_control", extra="reward_hack_smoothing_window: 2")
+        )
+        assert cfg.training.reward_hack_smoothing_window == 2
+
+    def test_log_cap_boundaries(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        from soup_cli.utils.reward_hack_control import MitigationLogWriter
+
+        assert MitigationLogWriter("a.jsonl", cap_mb=1).cap_bytes == 1024 * 1024
+        assert MitigationLogWriter("b.jsonl", cap_mb=10_000).cap_bytes == 10_000 * 1024 * 1024
+        with pytest.raises(ValueError):
+            MitigationLogWriter("c.jsonl", cap_mb=10_001)
+
+    def test_log_concurrent_writes(self, tmp_path, monkeypatch):
+        import threading
+
+        monkeypatch.chdir(tmp_path)
+        from soup_cli.utils.reward_hack_control import MitigationLogWriter
+
+        writer = MitigationLogWriter("cc.jsonl")
+
+        def worker(base):
+            for i in range(50):
+                writer.record(step=base + i, snapshot={"x": i})
+
+        threads = [threading.Thread(target=worker, args=(b,)) for b in (0, 1000, 2000)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        lines = (tmp_path / "cc.jsonl").read_text().strip().splitlines()
+        assert len(lines) == 150  # no interleaved/corrupt lines
+        for line in lines:
+            json.loads(line)  # every line is a complete JSON object
+
+    def test_record_action_caps_at_max(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        from soup_cli.utils.reward_hack_control import _MAX_ACTION_HISTORY
+
+        cb = _kl_callback(tmp_path, None)
+        for i in range(_MAX_ACTION_HISTORY + 100):
+            cb._record_action(f"a{i}")
+        assert len(cb._action_history) == _MAX_ACTION_HISTORY
+        assert cb._action_history[-1] == f"a{_MAX_ACTION_HISTORY + 99}"  # keeps the tail
+
+    def test_no_top_level_heavy_import_in_source(self):
+        import inspect
+
+        from soup_cli.utils import reward_hack_control
+
+        src = inspect.getsource(reward_hack_control)
+        for line in src.splitlines():
+            stripped = line.strip()
+            # module-scope imports have no indentation
+            if line and not line[0].isspace():
+                assert not stripped.startswith(("import torch", "from torch")), line
+                assert not stripped.startswith(
+                    ("import transformers", "from transformers")
+                ), line

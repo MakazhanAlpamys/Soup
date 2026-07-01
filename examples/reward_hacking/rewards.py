@@ -15,8 +15,6 @@ Reward-function signature (TRL GRPO/PPO): ``fn(prompts, completions, **kwargs)
 lists of ``{"role", "content"}`` message dicts (conversational).
 """
 
-from __future__ import annotations
-
 from typing import Any
 
 # The synthetic "correct answer" the TRUE scorer looks for. Orthogonal to both
