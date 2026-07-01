@@ -58,6 +58,11 @@ def _redact_value(value: Any) -> Any:
         return [_redact_value(v) for v in value]
     return value
 
+
+# Public alias so other subsystems (e.g. the v0.71.26 reward-hack mitigation
+# log) reuse the ONE redaction implementation instead of duplicating the regex.
+redact_value = _redact_value
+
 DEFAULT_CAP_MB: int = 100
 
 _MIN_CAP_MB: int = 1

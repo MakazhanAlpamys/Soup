@@ -428,6 +428,9 @@ class RewardHackCallback(_TrainerCallbackBase):  # type: ignore[misc, valid-type
         )
         self._last_report: Optional[RewardHackReport] = None
         self._hacks_seen = 0
+        # v0.71.26 — the numeric relative drop from the last observe_signal,
+        # consumed by the closed-loop mitigation controller.
+        self._last_drop_pct = 0.0
 
     # --- pure signal computation (testable without transformers) ---
 
@@ -497,6 +500,7 @@ class RewardHackCallback(_TrainerCallbackBase):  # type: ignore[misc, valid-type
         else:
             drop_pct = max(0.0, (base_health - health) / base_health)
         verdict = classify_hack_signal(drop_pct)
+        self._last_drop_pct = drop_pct
         if verdict == "HACK":
             self._hacks_seen += 1
         report = RewardHackReport(
@@ -517,6 +521,14 @@ class RewardHackCallback(_TrainerCallbackBase):  # type: ignore[misc, valid-type
     def last_report(self) -> Optional[RewardHackReport]:
         """Return the most recent :class:`RewardHackReport` (or None)."""
         return self._last_report
+
+    def last_drop_pct(self) -> float:
+        """Return the numeric relative drop from the last ``observe_signal``.
+
+        v0.71.26 — the closed-loop mitigation controller consumes this as the
+        ``info_rm`` / ``rm_ensemble`` component of its multi-signal vote.
+        """
+        return self._last_drop_pct
 
     # --- HF TrainerCallback surface ---
 

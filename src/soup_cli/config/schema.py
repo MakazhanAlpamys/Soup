@@ -1657,6 +1657,42 @@ class TrainingConfig(BaseModel):
         ),
     )
 
+    # ---- v0.71.26 — Closed-loop reward-hacking auto-mitigation -----------
+    reward_hack_mitigation: Literal[
+        "off", "log_only", "kl_control", "pid_lagrangian"
+    ] = Field(
+        default="off",
+        description=(
+            "Closed-loop reward-hacking mitigation mode (v0.71.26). 'off' = "
+            "no mitigation; 'log_only' = instrument + append a mitigation "
+            "log without touching training; 'kl_control' = reversible "
+            "bang-bang KL/β controller; 'pid_lagrangian' = PID-Lagrangian "
+            "controller + rollback escalation ladder. Any non-'off' mode "
+            "requires reward_hack_detector (the signal source) and task in "
+            "{'grpo', 'ppo'} on a non-mlx backend."
+        ),
+    )
+
+    @field_validator("reward_hack_mitigation", mode="before")
+    @classmethod
+    def _coerce_reward_hack_mitigation(cls, v):
+        """v0.71.26 — DWIM for the YAML-1.1 boolean coercion footgun.
+
+        Unquoted ``off`` / ``no`` parse as bool ``False`` under YAML 1.1;
+        map that back to the ``"off"`` mode so ``reward_hack_mitigation: off``
+        works without quotes. ``on`` / ``yes`` / ``true`` parse as ``True``,
+        which is ambiguous (no ``"on"`` mode) — reject with a hint to quote.
+        """
+        if v is False:
+            return "off"
+        if v is True:
+            raise ValueError(
+                "reward_hack_mitigation got boolean True (YAML coerced "
+                "on/yes/true) — quote the mode explicitly, e.g. "
+                "reward_hack_mitigation: 'log_only'"
+            )
+        return v
+
     @field_validator("reward_hack_halt", mode="before")
     @classmethod
     def _validate_reward_hack_halt(cls, v):
@@ -4606,22 +4642,31 @@ class SoupConfig(BaseModel):
         tcfg = self.training
         detector = tcfg.reward_hack_detector
         halt = tcfg.reward_hack_halt
-        if detector is None and not halt:
+        mitigation = getattr(tcfg, "reward_hack_mitigation", "off")
+        if detector is None and not halt and mitigation == "off":
             return self
         # halt without detector is a silent no-op footgun — reject.
         if detector is None and halt:
             raise ValueError(
                 "reward_hack_halt=True requires reward_hack_detector to be set"
             )
+        # v0.71.26 — a non-'off' mitigation mode needs the detector as its
+        # signal source; setting it without a detector is a silent no-op.
+        if mitigation != "off" and detector is None:
+            raise ValueError(
+                f"reward_hack_mitigation={mitigation!r} requires "
+                "reward_hack_detector to be set (the signal source)"
+            )
         if self.task not in ("grpo", "ppo"):
             raise ValueError(
-                "reward_hack_detector / reward_hack_halt are only valid on "
+                "reward_hack_detector / reward_hack_halt / "
+                "reward_hack_mitigation are only valid on "
                 f"task in {{'grpo', 'ppo'}}; got task={self.task!r}"
             )
         if self.backend == "mlx":
             raise ValueError(
-                "reward_hack_detector is not supported on backend=mlx in "
-                "v0.70.0 (RL detectors are transformers-only)"
+                "reward_hack_detector / reward_hack_mitigation are not "
+                "supported on backend=mlx (RL detectors are transformers-only)"
             )
         return self
 

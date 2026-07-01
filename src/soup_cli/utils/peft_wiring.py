@@ -207,7 +207,74 @@ def rl_callbacks_need_buffer(tcfg: Any) -> bool:
     return (
         getattr(tcfg, "reward_hack_detector", None) is not None
         or bool(getattr(tcfg, "echo_trap_enabled", False))
+        or getattr(tcfg, "reward_hack_mitigation", "off") != "off"
     )
+
+
+def _attach_reward_hack(
+    trainer: Any,
+    tcfg: Any,
+    *,
+    buffer: Any,
+    tokenizer: Any,
+    output_dir: str,
+    task: str,
+) -> int:
+    """Attach the reward-hack callback: mitigation controller (v0.71.26) when a
+    ``reward_hack_mitigation`` mode is set, else the plain v0.70.0 detector.
+
+    Returns 1 when a callback was attached, 0 otherwise. The mitigation
+    controller SUBSUMES the plain detector (they share the same signal), so
+    exactly one of the two is ever attached.
+    """
+    import os
+
+    detector = getattr(tcfg, "reward_hack_detector", None)
+    mitigation = getattr(tcfg, "reward_hack_mitigation", "off")
+    if mitigation != "off" and detector is not None:
+        from soup_cli.utils.reward_hack_control import (
+            MitigationLogWriter,
+            RewardHackMitigationCallback,
+        )
+
+        try:
+            writer = MitigationLogWriter(
+                os.path.join(output_dir, "mitigation_log.jsonl")
+            )
+            signals = tuple(
+                getattr(tcfg, "reward_hack_signals", None) or ("info_rm",)
+            )
+            callback = RewardHackMitigationCallback(
+                mode=mitigation,
+                detector=detector,
+                log_writer=writer,
+                signals=signals,
+                buffer=buffer,
+                tokenizer=tokenizer,
+                task=task,
+            )
+            trainer.add_callback(callback)
+            callback.attach(trainer)
+            return 1
+        except (TypeError, ValueError, OSError) as exc:
+            logger.debug("attach reward-hack mitigation callback rejected: %s", exc)
+            return 0
+    if detector is not None:
+        from soup_cli.utils.reward_hacking import build_reward_hack_callback
+
+        try:
+            trainer.add_callback(
+                build_reward_hack_callback(
+                    detector=detector,
+                    halt_on_hack=bool(getattr(tcfg, "reward_hack_halt", False)),
+                    buffer=buffer,
+                )
+            )
+            return 1
+        except (TypeError, ValueError) as exc:
+            logger.debug("attach reward-hack callback rejected: %s", exc)
+            return 0
+    return 0
 
 
 def attach_rl_callbacks(
@@ -230,22 +297,9 @@ def attach_rl_callbacks(
     non-mlx backends, so this helper trusts the caller's config.
     """
     attached = 0
-
-    detector = getattr(tcfg, "reward_hack_detector", None)
-    if detector is not None:
-        from soup_cli.utils.reward_hacking import build_reward_hack_callback
-
-        try:
-            trainer.add_callback(
-                build_reward_hack_callback(
-                    detector=detector,
-                    halt_on_hack=bool(getattr(tcfg, "reward_hack_halt", False)),
-                    buffer=buffer,
-                )
-            )
-            attached += 1
-        except (TypeError, ValueError) as exc:
-            logger.debug("attach reward-hack callback rejected: %s", exc)
+    attached += _attach_reward_hack(
+        trainer, tcfg, buffer=buffer, tokenizer=tokenizer, output_dir=output_dir, task=task
+    )
 
     if bool(getattr(tcfg, "echo_trap_enabled", False)):
         from soup_cli.utils.echo_trap import build_echo_trap_callback
