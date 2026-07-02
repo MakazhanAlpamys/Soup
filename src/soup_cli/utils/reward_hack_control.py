@@ -171,7 +171,10 @@ def smooth_signal(new: float, window: Sequence[float], *, method: str) -> float:
     if method == "ema":
         if not win:
             return fnew
-        # Standard EMA convention: alpha weights the NEW sample.
+        # Standard recursive EMA: alpha weights the NEW sample against the
+        # previous value (window[-1]). Note: a true EMA is inherently
+        # window-size-independent, so `reward_hack_smoothing_window` only
+        # affects the `median` method — see the v0.71.26 known limitation.
         return _EMA_ALPHA * fnew + (1.0 - _EMA_ALPHA) * win[-1]
     return float(statistics.median(win + [fnew]))
 

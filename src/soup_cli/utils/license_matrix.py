@@ -88,7 +88,11 @@ LICENSE_KINDS = types.MappingProxyType(dict(_LICENSE_KINDS_RAW))
 # be safely combined with. Conservative-by-design — when legal counsel is
 # uncertain, flag the operator (they can `--license-override <reason>`).
 _COMPAT_RAW: dict[str, Tuple[str, ...]] = {
-    _PERMISSIVE: (_PERMISSIVE,),
+    # Permissive ↔ weak-copyleft is symmetric (e.g. MIT + LGPL combine fine).
+    # Listing WEAK_COPYLEFT here mirrors the WEAK_COPYLEFT entry below —
+    # without it the (permissive, weak) ordered pair failed the pairwise check
+    # and flagged the merge regardless of input order.
+    _PERMISSIVE: (_PERMISSIVE, _WEAK_COPYLEFT),
     _WEAK_COPYLEFT: (_WEAK_COPYLEFT, _PERMISSIVE),
     _STRONG_COPYLEFT: (_STRONG_COPYLEFT,),
     _NON_COMMERCIAL: (_NON_COMMERCIAL,),

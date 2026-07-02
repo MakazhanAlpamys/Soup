@@ -300,6 +300,21 @@ def generate(
                 )
             except Exception as exc:
                 console.print(f"[red]Generation error: {exc}[/]")
+                # Partial save: don't discard paid API spend on a mid-run
+                # failure — persist whatever was generated so far.
+                if all_examples:
+                    try:
+                        partial_path = Path(output).resolve()
+                        if _path_within_cwd(partial_path, cwd):
+                            with open(partial_path, "w", encoding="utf-8") as f:
+                                for row in all_examples:
+                                    f.write(json.dumps(row, ensure_ascii=False) + "\n")
+                            console.print(
+                                f"[yellow]Saved {len(all_examples)} examples "
+                                f"generated before the error to {partial_path}[/]"
+                            )
+                    except OSError:
+                        pass
                 raise typer.Exit(1)
 
             last_request_time = time.monotonic()

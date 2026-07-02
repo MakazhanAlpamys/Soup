@@ -109,6 +109,13 @@ def _scores_from_evidence(payload: dict) -> dict:
         if not isinstance(entry, dict):
             raise typer.BadParameter(f"scores.{mode} must be an object")
         score = entry.get("score", 1.0)
+        # Validate numeric before float() — a non-numeric score otherwise raised
+        # ValueError that exited 1 with zero output. BadParameter prints a clear
+        # message.
+        if isinstance(score, bool) or not isinstance(score, (int, float)):
+            raise typer.BadParameter(
+                f"scores.{mode}.score must be a number, got {score!r}"
+            )
         evidence = entry.get("evidence", "supplied by --evidence")
         verdict = entry.get("verdict") or classify_score(score)
         out[mode] = FailureScore(

@@ -46,11 +46,13 @@ def detect_format(data: list[dict]) -> str:
     keys = set(sample.keys())
 
     # Check more specific formats first (llava/sharegpt4v before sharegpt).
-    # tool-calling checked before chatml (signature is a superset of chatml).
-    # plaintext ("text" key only) checked last to avoid false matches.
+    # tool-calling (messages+tools+tool_calls) is checked BEFORE audio
+    # (audio+messages): a row carrying both would otherwise match audio first
+    # and silently drop its tools/tool_calls. tool-calling before chatml
+    # (signature is a superset of chatml). plaintext ("text" key only) last.
     check_order = [
         "alpaca", "llava", "sharegpt4v", "kto", "dpo", "embedding",
-        "audio", "tool-calling", "sharegpt", "chatml", "plaintext",
+        "tool-calling", "audio", "sharegpt", "chatml", "plaintext",
     ]
     for fmt in check_order:
         required_keys = FORMAT_SIGNATURES[fmt]
@@ -127,10 +129,23 @@ def format_to_messages(row: dict, fmt: str) -> Optional[dict]:
         return None
 
 
+def _require_str_content(value: object, field: str) -> str:
+    """Reject non-string message content (e.g. a JSON ``null``).
+
+    The older converters passed row values through verbatim, so a JSON
+    ``null`` became literal ``None`` message content. Raising here routes the
+    row to ``format_to_messages``'s drop path instead of silently corrupting
+    the dataset with a ``None``-content turn.
+    """
+    if not isinstance(value, str):
+        raise TypeError(f"{field} must be a string, got {type(value).__name__}")
+    return value
+
+
 def _convert_alpaca(row: dict) -> dict:
-    instruction = row["instruction"]
-    input_text = row.get("input", "")
-    output = row["output"]
+    instruction = _require_str_content(row["instruction"], "alpaca.instruction")
+    input_text = row.get("input") or ""  # missing / null -> ""
+    output = _require_str_content(row["output"], "alpaca.output")
 
     user_content = f"{instruction}\n{input_text}".strip() if input_text else instruction
 
@@ -152,7 +167,9 @@ def _convert_sharegpt(row: dict) -> dict:
     messages = []
     for turn in conversations:
         role = role_map.get(turn["from"], turn["from"])
-        messages.append({"role": role, "content": turn["value"]})
+        messages.append(
+            {"role": role, "content": _require_str_content(turn["value"], "sharegpt.value")}
+        )
 
     return {"messages": messages}
 
@@ -163,7 +180,15 @@ def _convert_chatml(row: dict) -> dict:
 
 
 def _convert_dpo(row: dict) -> dict:
-    """Convert DPO preference row to {prompt, chosen, rejected} for trl.DPOTrainer."""
+    """Convert DPO preference row to {prompt, chosen, rejected} for trl.DPOTrainer.
+
+    Note: chosen/rejected may legitimately be message LISTS (conversational
+    DPO), so this converter only rejects an explicit null rather than requiring
+    a plain string (unlike the alpaca / sharegpt / vision text converters).
+    """
+    for field in ("prompt", "chosen", "rejected"):
+        if row.get(field) is None:
+            raise TypeError(f"dpo.{field} must not be null")
     return {
         "prompt": row["prompt"],
         "chosen": row["chosen"],
@@ -258,7 +283,9 @@ def _convert_vision(row: dict) -> dict:
     messages = []
     for turn in conversations:
         role = role_map.get(turn["from"], turn["from"])
-        messages.append({"role": role, "content": turn["value"]})
+        messages.append(
+            {"role": role, "content": _require_str_content(turn["value"], "vision.value")}
+        )
 
     result = {"messages": messages, "image": row["image"]}
     # Preserve optional id field

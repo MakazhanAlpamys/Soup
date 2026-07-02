@@ -82,6 +82,10 @@ class DeployTarget(BaseModel):
             raise ValueError("deploy path contains null byte")
         if value.startswith("/") or value.startswith("\\"):
             raise ValueError(f"deploy path '{value}' must be relative")
+        # Windows drive-absolute (``C:\...`` / ``C:/...``) is absolute too but
+        # starts with a letter, so it slipped past the ``/`` / ``\`` check.
+        if len(value) >= 2 and value[1] == ":" and value[0].isalpha():
+            raise ValueError(f"deploy path '{value}' must be relative")
         # Normalise separators first, then split — a mixed-separator path
         # like ``foo/..\\bar`` would otherwise slip past a single-separator
         # split because ``"..\\bar"`` != ``".."``.

@@ -195,9 +195,11 @@ class SoupTrainerCallback(TrainerCallback):
                     type="metric",
                     step=int(step) if step is not None else None,
                     epoch=float(epoch) if epoch is not None else None,
-                    loss=float(loss) if loss else None,
-                    lr=float(lr) if lr else None,
-                    grad_norm=float(grad_norm) if grad_norm else None,
+                    # `is not None`, not truthiness — a real 0.0 loss / lr (e.g.
+                    # end of an LR schedule) must not be reported as None.
+                    loss=float(loss) if loss is not None else None,
+                    lr=float(lr) if lr is not None else None,
+                    grad_norm=float(grad_norm) if grad_norm is not None else None,
                 )
             )
         except Exception:
