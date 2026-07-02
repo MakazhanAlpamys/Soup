@@ -86,8 +86,10 @@ def resolve_dataset(
 ) -> Optional[dict]:
     """Resolve a dataset name to its entry (path + format). None if not found.
 
-    Callers must apply resolve + relative_to(cwd) before trusting the path.
-    The returned path is validated for null bytes.
+    Callers must apply ``utils.paths.is_under_cwd`` (realpath + commonpath)
+    before trusting the path — NOT ``Path.resolve()+relative_to()``, which
+    breaks on Windows 8.3 short names. The returned path is validated for null
+    bytes here.
     """
     registry = load_registry(registry_path)
     entry = registry.get(name)
