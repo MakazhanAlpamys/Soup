@@ -380,6 +380,7 @@ class PretrainTrainerWrapper:
                     loss_watchdog=self.config.training.loss_watchdog,
                     loss_watchdog_threshold=self.config.training.loss_watchdog_threshold,
                     loss_watchdog_patience=self.config.training.loss_watchdog_patience,
+                    eval_gate_config=self.config.training.eval_gate,
                 )
             )
 

@@ -378,7 +378,9 @@ class PPOTrainerWrapper:
         if tcfg.reward_fn:
             from soup_cli.trainer.rewards import load_reward_fn
 
-            self.reward_fn = load_reward_fn(tcfg.reward_fn)
+            self.reward_fn = load_reward_fn(
+                tcfg.reward_fn, verifiable_domain=tcfg.verifiable_domain
+            )
 
         if self.reward_model_instance is None and self.reward_fn is None:
             console.print(
@@ -519,6 +521,7 @@ class PPOTrainerWrapper:
                     loss_watchdog=self.config.training.loss_watchdog,
                     loss_watchdog_threshold=self.config.training.loss_watchdog_threshold,
                     loss_watchdog_patience=self.config.training.loss_watchdog_patience,
+                    eval_gate_config=self.config.training.eval_gate,
                 )
             )
 

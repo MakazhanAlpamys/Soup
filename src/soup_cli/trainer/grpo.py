@@ -224,7 +224,9 @@ class GRPOTrainerWrapper:
         # --- Load reward function ---
         from soup_cli.trainer.rewards import load_reward_fn
 
-        reward_fn = load_reward_fn(tcfg.reward_fn)
+        reward_fn = load_reward_fn(
+            tcfg.reward_fn, verifiable_domain=tcfg.verifiable_domain
+        )
 
         # v0.71.11 #235/#240 — when the reward-hack or echo-trap detector is
         # enabled, wrap the reward function(s) with a capture shim so the
@@ -566,6 +568,7 @@ class GRPOTrainerWrapper:
                     loss_watchdog=self.config.training.loss_watchdog,
                     loss_watchdog_threshold=self.config.training.loss_watchdog_threshold,
                     loss_watchdog_patience=self.config.training.loss_watchdog_patience,
+                    eval_gate_config=self.config.training.eval_gate,
                 )
             )
 

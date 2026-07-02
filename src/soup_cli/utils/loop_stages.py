@@ -335,7 +335,12 @@ def deploy_to_canary(
     from soup_cli.utils.drift_alarm import validate_webhook_url
 
     try:
-        endpoint = validate_webhook_url(raw_endpoint)
+        # A serve endpoint legitimately targets the operator's own LAN box, so
+        # opt into private hosts here; the deploy surface is then tightened to
+        # loopback/LAN by `_endpoint_is_local` below. The default webhook policy
+        # (allow_private_hosts=False) still blocks private IPs for --slack-url /
+        # --discord-url, where the URL is not operator-trusted.
+        endpoint = validate_webhook_url(raw_endpoint, allow_private_hosts=True)
     except (TypeError, ValueError):
         _LOG.warning("SOUP_LOOP_SERVE_ENDPOINT rejected by SSRF guard")
         return {

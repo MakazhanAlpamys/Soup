@@ -1163,6 +1163,7 @@ class SFTTrainerWrapper:
                         tcfg_local, "gradient_accumulation_steps", 1,
                     ),
                     grad_accum_current_batch=self._batch_size,
+                    eval_gate_config=tcfg_local.eval_gate,
                 )
             )
 

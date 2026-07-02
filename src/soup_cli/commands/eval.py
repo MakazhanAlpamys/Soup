@@ -21,6 +21,24 @@ app = typer.Typer(
 )
 
 
+def _reject_lm_eval_injection(value: str, field: str) -> None:
+    """Block ``,`` / ``=`` in a value interpolated into lm-eval ``model_args``.
+
+    lm-eval parses ``model_args`` as comma-separated ``key=value`` pairs, so a
+    crafted ``base_model_name_or_path`` in an adapter's own
+    ``adapter_config.json`` (e.g. ``attacker/m,trust_remote_code=True``) would
+    otherwise smuggle ``trust_remote_code=True`` and enable RCE on load.
+    Mirrors the ``commands/ship.py`` guard (v0.71.25).
+    """
+    if "," in value or "=" in value:
+        console.print(
+            f"[red]Refusing to evaluate:[/] {field} contains ',' or '=' "
+            f"({value!r}); these are lm-eval model_args delimiters and could "
+            "smuggle trust_remote_code=True (arbitrary code execution)."
+        )
+        raise typer.Exit(1)
+
+
 # ─── soup eval benchmark ───
 
 
@@ -57,6 +75,11 @@ def benchmark(
         console.print(f"[red]Model path not found: {model_path}[/]")
         raise typer.Exit(1)
 
+    # Both the user-supplied path and the adapter's declared base model are
+    # interpolated into lm-eval ``model_args`` below; reject the ','/'=' that
+    # would smuggle extra kwargs (e.g. trust_remote_code=True).
+    _reject_lm_eval_injection(str(model_path), "--model path")
+
     # Check for LoRA adapter and resolve base model
     adapter_config = model_path / "adapter_config.json"
     model_arg = str(model_path)
@@ -64,6 +87,9 @@ def benchmark(
         adapter_info = json.loads(adapter_config.read_text())
         base_model = adapter_info.get("base_model_name_or_path", "")
         if base_model:
+            _reject_lm_eval_injection(
+                base_model, "base_model_name_or_path (from adapter_config.json)"
+            )
             model_arg = f"pretrained={base_model},peft={model_path}"
             console.print(
                 f"[dim]LoRA adapter detected. Base model: {base_model}[/]"

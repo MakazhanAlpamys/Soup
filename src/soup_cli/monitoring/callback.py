@@ -91,6 +91,13 @@ class SoupTrainerCallback(TrainerCallback):
         control: TrainerControl, **kwargs,
     ):
         self.display.start(total_steps=state.max_steps)
+        # Prod wiring for the eval gate: load the suite + baseline and build a
+        # live generate_fn from the training model. Before this, ``_gate_suite``
+        # was only ever set by tests, so ``_run_eval_gate`` returned immediately
+        # and ``--gate`` never halted a real run.
+        model = kwargs.get("model")
+        tokenizer = kwargs.get("tokenizer") or kwargs.get("processing_class")
+        self._setup_eval_gate(model, tokenizer)
 
     def on_step_end(
         self, args: TrainingArguments, state: TrainerState,
@@ -283,6 +290,81 @@ class SoupTrainerCallback(TrainerCallback):
     ):
         """Run the eval gate, if configured."""
         self._run_eval_gate(state, control)
+
+    def _setup_eval_gate(self, model: object, tokenizer: object) -> None:
+        """Load the gate suite/baseline and build a live generator.
+
+        Called once from ``on_train_begin`` with the trainer's model +
+        tokenizer. Each piece is only initialised when a test has not already
+        injected it, so unit tests that pre-set ``_gate_suite`` /
+        ``_gate_generate_fn`` still control the harness. Failures are logged and
+        leave the gate inert rather than crashing training setup — the CLI
+        (``soup train --gate``) already validated the suite path up front.
+        """
+        cfg = self.eval_gate_config
+        if cfg is None or not getattr(cfg, "enabled", False):
+            return
+
+        if self._gate_suite is None:
+            suite_path = getattr(cfg, "suite", None)
+            if not suite_path:
+                logger.warning("eval gate enabled but no suite configured")
+                return
+            try:
+                from soup_cli.eval.gate import load_suite
+
+                self._gate_suite = load_suite(suite_path)
+            except (ValueError, FileNotFoundError, OSError) as exc:
+                logger.warning("eval gate: could not load suite %r: %s", suite_path, exc)
+                self._gate_suite = None
+                return
+
+        if self._gate_baseline is None:
+            try:
+                from soup_cli.eval.gate import resolve_baseline
+
+                self._gate_baseline = resolve_baseline(getattr(cfg, "baseline", None))
+            except (ValueError, FileNotFoundError, OSError) as exc:
+                logger.warning("eval gate: could not resolve baseline: %s", exc)
+                self._gate_baseline = {}
+
+        if self._gate_generate_fn is None and model is not None and tokenizer is not None:
+            try:
+                self._gate_generate_fn = self._build_gate_generate_fn(model, tokenizer)
+            except Exception as exc:  # noqa: BLE001 — never crash training setup
+                logger.warning("eval gate: could not build generator: %s", exc)
+                self._gate_generate_fn = None
+
+    def _build_gate_generate_fn(self, model: object, tokenizer: object):
+        """Build a greedy ``(prompt) -> str`` closure over the training model.
+
+        Reuses ``utils.live_eval.make_generator`` (shared with the offline live
+        runners). Toggles eval mode around each call and swallows per-prompt
+        generation errors (returning ``""``) so a single bad prompt cannot take
+        down training — the gate treats an empty completion as a low score.
+        """
+        from soup_cli.utils.live_eval import make_generator
+
+        try:
+            device = next(model.parameters()).device  # type: ignore[attr-defined]
+        except (StopIteration, AttributeError):
+            device = None
+        base_gen = make_generator("", loaded=(model, tokenizer, device))
+
+        def _gen(prompt: str) -> str:
+            was_training = getattr(model, "training", False)
+            try:
+                if hasattr(model, "eval"):
+                    model.eval()
+                return base_gen(prompt)
+            except Exception as exc:  # noqa: BLE001 — degrade to empty completion
+                logger.warning("eval gate: generation failed: %s", exc)
+                return ""
+            finally:
+                if was_training and hasattr(model, "train"):
+                    model.train()
+
+        return _gen
 
     def _run_eval_gate(self, state: TrainerState, control: TrainerControl) -> None:
         """Execute the eval gate and react per ``on_regression`` policy."""

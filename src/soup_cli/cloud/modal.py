@@ -196,7 +196,12 @@ def render_modal_stub(
         "@app.local_entrypoint()\n"
         "def main() -> None:\n"
         "    train.remote()\n"
-        f'    print("Training submitted; download checkpoints to {output_dir}")\n'
+        # Reference the already-repr()-embedded ``_LOCAL_OUTPUT`` via a runtime
+        # f-string in the GENERATED code — no user value is interpolated into
+        # the stub source here. (Interpolating raw ``{output_dir}`` was a code-
+        # injection hole; ``{output_dir!r}`` alone would still break for a path
+        # containing a quote because the repr is nested inside a "..." literal.)
+        '    print(f"Training submitted; download checkpoints to {_LOCAL_OUTPUT}")\n'
     )
 
 

@@ -80,9 +80,13 @@ def serve(
         help="Port to serve on",
     ),
     host: str = typer.Option(
-        "0.0.0.0",
+        "127.0.0.1",
         "--host",
-        help="Host to bind to",
+        help=(
+            "Host to bind to. Defaults to loopback (127.0.0.1); the server "
+            "exposes an unauthenticated code-exec tool endpoint, so binding a "
+            "public interface (0.0.0.0) should be paired with --tool-auth-token."
+        ),
     ),
     device: Optional[str] = typer.Option(
         None,
@@ -271,8 +275,31 @@ def serve(
             "v0.71.14 (#140)."
         ),
     ),
+    tool_auth_token: Optional[str] = typer.Option(
+        None,
+        "--tool-auth-token",
+        help=(
+            "Require 'Authorization: Bearer <token>' on the code-exec tool "
+            "endpoints (/v1/tools/python, /v1/tools/web_search). Strongly "
+            "recommended whenever --host is not loopback, since those "
+            "endpoints run caller-supplied Python in a best-effort sandbox."
+        ),
+    ),
 ):
     """Start a local inference server with OpenAI-compatible API."""
+    # Security: the transformers backend exposes a best-effort code-exec tool
+    # endpoint (/v1/tools/python). Binding a non-loopback host without a tool
+    # auth token puts that endpoint on the network unauthenticated.
+    if host not in {"127.0.0.1", "localhost", "::1"} and not tool_auth_token:
+        from rich.markup import escape as _rich_escape
+
+        console.print(
+            f"[bold yellow]Security warning:[/] binding non-loopback host "
+            f"'{_rich_escape(str(host))}' exposes the unauthenticated code-exec "
+            "tool endpoint (/v1/tools/python) to the network. Pass "
+            "[bold]--tool-auth-token <secret>[/] to require a bearer token, or "
+            "use [bold]--host 127.0.0.1[/] (the default)."
+        )
     # v0.71.12 #221 — validate `--bank` up front (path containment + backend)
     # so a typo / bad path surfaces before backend init.
     if bank is not None:
@@ -962,6 +989,7 @@ def serve(
             trace_log_writer=trace_log_writer,
             reasoning_parser=resolved_reasoning_parser,
             record_thumbs_db=record_thumbs_db,
+            auth_token=tool_auth_token,
             loaded_bank=loaded_bank,
             mole_runtime=mole_runtime,
             kv_cache_generate_kwargs=(

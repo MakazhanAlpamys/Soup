@@ -47,8 +47,18 @@ def _is_private_or_link_local(host: str) -> bool:
     )
 
 
-def validate_webhook_url(url: object) -> str:
-    """SSRF-hardened webhook URL validator (returns the canonical URL)."""
+def validate_webhook_url(url: object, *, allow_private_hosts: bool = False) -> str:
+    """SSRF-hardened webhook URL validator (returns the canonical URL).
+
+    ``allow_private_hosts`` defaults to ``False`` — the safe webhook policy that
+    rejects private / link-local / reserved IPs on BOTH http and https (so a
+    crafted ``https://169.254.169.254`` cloud-metadata URL cannot be reached).
+    A trusted, operator-controlled caller that legitimately targets a LAN box
+    (e.g. ``loop_stages.deploy_to_canary`` promoting an adapter to an on-prem
+    serve endpoint, which applies its own loopback/LAN tightening afterwards)
+    may pass ``allow_private_hosts=True``. Plain HTTP to a non-loopback host is
+    still rejected regardless.
+    """
     if isinstance(url, bool):
         raise TypeError("webhook URL must be str, not bool")
     if not isinstance(url, str):
@@ -74,13 +84,19 @@ def validate_webhook_url(url: object) -> str:
         raise ValueError(
             "webhook URL 0.0.0.0 is ambiguous; use 127.0.0.1 or localhost"
         )
-    if parsed.scheme == "http" and host not in _LOOPBACK_HOSTS:
-        if _is_private_or_link_local(host):
+    # SSRF gate — runs for BOTH http and https. Nesting this inside the
+    # http-only branch (the pre-fix bug) let ``https://169.254.169.254`` and
+    # any ``https://10.x`` / ``192.168.x`` sail straight through to the return.
+    # Loopback hosts stay allowed (they are handled by the ``_LOOPBACK_HOSTS``
+    # guard below), so an explicit ``http://localhost`` webhook still works.
+    if host not in _LOOPBACK_HOSTS:
+        if _is_private_or_link_local(host) and not allow_private_hosts:
             raise ValueError(
-                "webhook URL plain HTTP is only allowed for loopback; "
-                "private/link-local hosts require HTTPS"
+                "webhook URL private/link-local/reserved hosts are not "
+                "allowed (SSRF protection)"
             )
-        raise ValueError("webhook URL for remote hosts must use HTTPS")
+        if parsed.scheme == "http":
+            raise ValueError("webhook URL for remote hosts must use HTTPS")
     return stripped
 
 

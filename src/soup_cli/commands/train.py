@@ -500,6 +500,28 @@ def train(
         cfg.training.eval_gate = EvalGateConfig(enabled=True, suite=gate)
         console.print(f"[green]Eval gate enabled[/] with suite: {gate}")
 
+    # Honesty guard: these knobs are accepted (and `soup autopilot` turns them
+    # on by default) but are not enforced mid-training in this build — the eval
+    # gate wired above is the live safety net. Warn instead of silently no-op'ing
+    # so a "zero-config" run does not advertise protection it does not have.
+    _unwired_gates = [
+        name
+        for name, on in (
+            ("forgetting_detection", cfg.training.forgetting_detection),
+            ("checkpoint_intelligence", cfg.training.checkpoint_intelligence),
+            ("early_stop_on_regression", cfg.training.early_stop_on_regression),
+        )
+        if on
+    ]
+    if _unwired_gates:
+        console.print(
+            "[yellow]Note:[/] "
+            + ", ".join(_unwired_gates)
+            + " are set but not enforced during training in this build. "
+            "Use [bold]--gate <suite.yaml>[/] for a live eval gate, or run "
+            "[bold]soup eval[/] / [bold]soup diagnose[/] after training."
+        )
+
     # --- Resolve resume checkpoint (fail fast before heavy operations) ---
     resume_from = None
     if resume:
