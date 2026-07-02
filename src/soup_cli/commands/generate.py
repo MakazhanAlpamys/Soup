@@ -924,11 +924,11 @@ def _validate_preference(example: dict) -> bool:
 
 def _path_within_cwd(path: Path, cwd: Path) -> bool:
     """Check that a resolved path is within the current working directory."""
-    try:
-        path.relative_to(cwd)
-        return True
-    except ValueError:
-        return False
+    # realpath + commonpath containment (is_under) — Path.relative_to() breaks
+    # on Windows 8.3 short names.
+    from soup_cli.utils.paths import is_under
+
+    return is_under(path, cwd)
 
 
 def _row_to_text(row: dict) -> str:

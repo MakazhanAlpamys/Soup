@@ -9,12 +9,13 @@ MAX_CONFIG_FILE_SIZE = 10 * 1024 * 1024
 
 def validate_input_path(path: Path) -> Path:
     """Validate that input path exists and is under cwd (path traversal protection)."""
+    # realpath + commonpath containment (is_under_cwd) — Path.resolve() +
+    # relative_to() breaks on Windows 8.3 short names.
+    from soup_cli.utils.paths import is_under_cwd
+
     resolved = path.resolve()
-    cwd = Path.cwd().resolve()
     # Check path traversal first (before checking existence)
-    try:
-        resolved.relative_to(cwd)
-    except ValueError:
+    if not is_under_cwd(path):
         raise ValueError(
             f"Input path is outside the current directory: {path}"
         )
@@ -30,11 +31,10 @@ def validate_input_path(path: Path) -> Path:
 
 def validate_output_path(path: Path) -> Path:
     """Validate that output path is under cwd (path traversal protection)."""
+    from soup_cli.utils.paths import is_under_cwd
+
     resolved = (Path.cwd() / path).resolve()
-    cwd = Path.cwd().resolve()
-    try:
-        resolved.relative_to(cwd)
-    except ValueError:
+    if not is_under_cwd(resolved):
         raise ValueError(
             f"Output path is outside the current directory: {path}"
         )

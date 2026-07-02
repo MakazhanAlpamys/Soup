@@ -290,11 +290,14 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
                     status_code=400, detail="Invalid training configuration"
                 )
 
-            # Write config to a fixed safe location (never user-controlled path)
-            config_path = os.path.join(
-                tempfile.gettempdir(), "soup_ui_config.yaml"
+            # Securely-created temp file. A FIXED name in the shared temp dir
+            # let a local attacker pre-place a symlink there and redirect this
+            # write; mkstemp creates a fresh O_EXCL file (no symlink following,
+            # unpredictable name).
+            fd, config_path = tempfile.mkstemp(
+                prefix="soup_ui_config_", suffix=".yaml"
             )
-            with open(config_path, "w", encoding="utf-8") as fh:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 fh.write(req.config_yaml)
 
             _train_config_path = config_path

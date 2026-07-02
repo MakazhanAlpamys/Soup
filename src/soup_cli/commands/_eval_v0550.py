@@ -43,7 +43,7 @@ def register(app: typer.Typer, console: Console) -> None:
         try:
             rows = load_advise_dataset(data)
         except (FileNotFoundError, ValueError, TypeError) as exc:
-            console.print(f"[red]Cannot read dataset:[/] {exc}")
+            console.print(f"[red]Cannot read dataset:[/] {escape(str(exc))}")
             raise typer.Exit(1) from exc
 
         try:
@@ -105,7 +105,7 @@ def register(app: typer.Typer, console: Console) -> None:
         try:
             rows = load_advise_dataset(data)
         except (FileNotFoundError, ValueError, TypeError) as exc:
-            console.print(f"[red]Cannot read dataset:[/] {exc}")
+            console.print(f"[red]Cannot read dataset:[/] {escape(str(exc))}")
             raise typer.Exit(1) from exc
 
         try:

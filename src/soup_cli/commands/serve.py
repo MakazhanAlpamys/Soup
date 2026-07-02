@@ -30,14 +30,17 @@ def _validate_adapter_name(name: str) -> bool:
 
 def _validate_adapter_path(path: str, cwd: Optional[str] = None) -> bool:
     """Validate adapter path: must exist and stay under cwd."""
+    # realpath + commonpath containment (is_under) — Path.resolve() +
+    # relative_to() breaks on Windows 8.3 short names.
+    from soup_cli.utils.paths import is_under
+
     if cwd is None:
         cwd = str(Path.cwd())
+    if not is_under(path, cwd):
+        return False
     try:
-        resolved = Path(path).resolve()
-        cwd_resolved = Path(cwd).resolve()
-        resolved.relative_to(cwd_resolved)
-        return resolved.exists()
-    except (ValueError, OSError):
+        return Path(path).resolve().exists()
+    except OSError:
         return False
 
 

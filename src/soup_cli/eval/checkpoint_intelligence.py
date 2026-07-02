@@ -146,10 +146,12 @@ class CheckpointTracker:
                 continue
             if step in keep:
                 continue
-            # Safety: double-check path stays inside output_dir.
-            try:
-                child.resolve().relative_to(output_dir)
-            except ValueError:
+            # Safety: double-check path stays inside output_dir. realpath +
+            # commonpath (is_under) — Path.resolve()+relative_to() breaks on
+            # Windows 8.3 short names.
+            from soup_cli.utils.paths import is_under
+
+            if not is_under(child, output_dir):
                 continue
             try:
                 shutil.rmtree(child, onerror=_abort_on_symlink)

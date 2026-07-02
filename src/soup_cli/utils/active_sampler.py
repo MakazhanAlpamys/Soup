@@ -280,9 +280,13 @@ def sample_uncertain_rows(
         total = sum(_row_uncertainty(r) for r in top)
         mean_unc = total / len(top)
 
-    with open(output_path, "w", encoding="utf-8") as fh_out:
-        for row in top:
-            fh_out.write(json.dumps(row, ensure_ascii=False) + "\n")
+    # Atomic, cwd-contained, symlink-rejecting write (the project helper) —
+    # the previous plain open(..., "w") followed a pre-placed symlink at
+    # output_path and could clobber its target.
+    from soup_cli.utils.paths import atomic_write_text
+
+    body = "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in top)
+    atomic_write_text(body, output_path)
 
     return ActiveLearningPlan(
         rows_in=len(rows),

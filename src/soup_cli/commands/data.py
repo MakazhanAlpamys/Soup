@@ -754,11 +754,12 @@ def sample_data(
     if output is None:
         out_path = file_path.parent / f"{file_path.stem}_sampled_{strategy}.jsonl"
     else:
+        from soup_cli.utils.paths import is_under_cwd
+
         out_path = Path(output).resolve()
-        cwd = Path.cwd().resolve()
-        try:
-            out_path.relative_to(cwd)
-        except ValueError:
+        # realpath + commonpath (is_under_cwd) — Path.resolve()+relative_to()
+        # breaks on Windows 8.3 short names.
+        if not is_under_cwd(output):
             console.print("[red]Output path must be under the current working directory.[/]")
             raise typer.Exit(1)
 
@@ -1272,25 +1273,23 @@ def download_dataset(
         raise typer.Exit(1)
 
     # Resolve output path
+    from soup_cli.utils.paths import is_under_cwd
+
     if output is None:
         ds_name = dataset_id.split("/")[-1] if "/" in dataset_id else dataset_id
         # Strip embedded path separators to prevent traversal
         ds_name = Path(ds_name).name
         out_path = (Path.cwd() / f"{ds_name}.jsonl").resolve()
-        cwd = Path.cwd().resolve()
-        try:
-            out_path.relative_to(cwd)
-        except ValueError:
+        # realpath + commonpath (is_under_cwd) — Path.resolve()+relative_to()
+        # breaks on Windows 8.3 short names.
+        if not is_under_cwd(out_path):
             console.print(
                 "[red]Derived output path escapes working directory.[/]"
             )
             raise typer.Exit(1)
     else:
         out_path = Path(output).resolve()
-        cwd = Path.cwd().resolve()
-        try:
-            out_path.relative_to(cwd)
-        except ValueError:
+        if not is_under_cwd(output):
             console.print(
                 "[red]Output path must be under the current working directory.[/]"
             )

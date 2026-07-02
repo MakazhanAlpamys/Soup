@@ -197,9 +197,10 @@ def _validate_audio_files(data: list[dict], audio_dir: Path) -> list[dict]:
     Resolves relative paths against audio_dir. Rejects path traversal.
     """
     valid = []
+    from soup_cli.utils.paths import is_under
+
     missing = 0
     traversal = 0
-    resolved_base = audio_dir.resolve()
     for row in data:
         if "audio" not in row or not row["audio"]:
             missing += 1
@@ -207,9 +208,11 @@ def _validate_audio_files(data: list[dict], audio_dir: Path) -> list[dict]:
         audio_path = Path(row["audio"])
         if not audio_path.is_absolute():
             audio_path = audio_dir / audio_path
-        # Path traversal protection: resolved path must stay under audio_dir
+        # Path traversal protection: resolved path must stay under audio_dir.
+        # realpath + commonpath (is_under) — Path.is_relative_to() breaks on
+        # Windows 8.3 short names.
         resolved = audio_path.resolve()
-        if not resolved.is_relative_to(resolved_base):
+        if not is_under(audio_path, audio_dir):
             traversal += 1
             continue
         valid.append({**row, "audio": str(resolved)})

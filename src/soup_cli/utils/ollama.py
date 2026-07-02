@@ -109,12 +109,12 @@ def validate_gguf_path(gguf_path: Path) -> Tuple[bool, str]:
         return False, f"GGUF path is not a file: {gguf_path}"
     if gguf_path.suffix.lower() != ".gguf":
         return False, "File must have a .gguf extension"
-    # Path traversal protection: resolve and check it's under cwd
-    resolved = gguf_path.resolve()
-    cwd = Path.cwd().resolve()
-    try:
-        resolved.relative_to(cwd)
-    except ValueError:
+    # Path traversal protection: realpath + commonpath containment
+    # (is_under_cwd) — Path.resolve() + relative_to() breaks on Windows 8.3
+    # short names.
+    from soup_cli.utils.paths import is_under_cwd
+
+    if not is_under_cwd(gguf_path):
         return False, "GGUF path must be under the current working directory"
     return True, ""
 
