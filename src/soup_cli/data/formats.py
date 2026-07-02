@@ -184,6 +184,13 @@ def _convert_kto(row: dict) -> dict:
             raise ValueError(
                 f"KTO label must be true/false, got string: {raw_label!r}"
             )
+    elif isinstance(raw_label, bool):
+        label = raw_label
+    elif isinstance(raw_label, (int, float)):
+        # Both the ±1 convention (+1 desirable / -1 undesirable) and the 0/1
+        # convention map "positive == desirable". `bool(-1)` is True, which
+        # would silently INVERT a -1 "bad" label — flip it to False here.
+        label = raw_label > 0
     else:
         label = bool(raw_label)
     return {

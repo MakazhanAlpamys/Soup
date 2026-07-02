@@ -254,6 +254,15 @@ def register(app: typer.Typer, console: Console) -> None:
             False, "--json-only",
             help="Suppress Rich output; emit a single JSON verdict line.",
         ),
+        suite: str = typer.Option(
+            None, "--suite",
+            help=(
+                "Locked eval suite (from `soup eval lock`) to validate as a gate "
+                "precondition — a missing / unparseable suite BLOCKS the check "
+                "(exit 1). cwd-contained. The generated pre-push hook passes "
+                "$GATE_SUITE here so the locked suite is actually enforced."
+            ),
+        ),
     ) -> None:
         """Run-vs-run regression check (paired-bootstrap CI).
 
@@ -264,6 +273,26 @@ def register(app: typer.Typer, console: Console) -> None:
         ``soup eval gate-install``.
         """
         import json as _json
+
+        # The locked suite is a hard precondition when supplied: validate it
+        # exists, is under cwd, and parses. Previously the hook wrote $GATE_SUITE
+        # but never used it, so a deleted / tampered locked suite silently
+        # passed the gate.
+        if suite:
+            from soup_cli.utils.eval_lock_coverage import load_locked_suite
+            from soup_cli.utils.paths import is_under_cwd
+
+            if not is_under_cwd(suite):
+                console.print(f"[red]--suite is outside cwd:[/] {escape(str(suite))}")
+                raise typer.Exit(1)
+            try:
+                load_locked_suite(suite)
+            except (FileNotFoundError, ValueError, OSError) as exc:
+                console.print(
+                    f"[red]Locked eval suite invalid — gate blocked:[/] "
+                    f"{escape(str(exc))}"
+                )
+                raise typer.Exit(1) from exc
 
         from soup_cli.experiment.tracker import ExperimentTracker
         from soup_cli.utils.eval_gate_hook import (

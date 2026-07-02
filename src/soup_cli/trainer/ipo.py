@@ -292,7 +292,10 @@ class IPOTrainerWrapper:
 
         tcfg = self.config.training
         variant_cbs = build_dpo_variant_callbacks(
-            beta_start=tcfg.dpo_beta,
+            # IPO's regularization strength is `ipo_tau` (passed as trl's beta,
+            # see setup()); the β-schedule must anneal from that, not the DPO
+            # default `dpo_beta`, which would overwrite the user's τ at step 0.
+            beta_start=tcfg.ipo_tau,
             beta_end=tcfg.dpo_beta_end,
             schedule=tcfg.dpo_beta_schedule,
             total_steps=0,

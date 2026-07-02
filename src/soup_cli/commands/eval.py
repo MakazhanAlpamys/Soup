@@ -516,7 +516,11 @@ def auto(
                 run_id=None,
                 device=None,
             )
-        except SystemExit:
+        except (typer.Exit, SystemExit):
+            # benchmark() signals failure with typer.Exit (a RuntimeError, NOT
+            # SystemExit), so the old `except SystemExit` never caught it and a
+            # benchmark failure aborted the whole auto-eval instead of falling
+            # through to the custom eval below.
             console.print("[yellow]Benchmark eval skipped (see above).[/]")
 
     # Run custom eval if specified

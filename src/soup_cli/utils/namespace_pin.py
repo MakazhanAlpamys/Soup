@@ -297,6 +297,22 @@ def _is_backward(current: str, recorded: str) -> bool:
         return current < recorded
 
 
+def _created_at_differs(current: str, recorded: str) -> bool:
+    """Return True when ``current`` is a DIFFERENT moment than ``recorded``.
+
+    A pinned repo's ``created_at`` is immutable, so ANY drift — forward OR
+    backward — means the namespace was re-created (the AI-Jacking / repo-
+    recreation attack this pin targets). The previous gate only flagged a
+    *backward* jump, but a recreated repo gets a *later* timestamp and sailed
+    straight through. Offset-aware equality via ``fromisoformat``; falls back
+    to string inequality when either value fails to parse (legacy rows).
+    """
+    try:
+        return datetime.fromisoformat(current) != datetime.fromisoformat(recorded)
+    except ValueError:
+        return current != recorded
+
+
 def record_repo_first_seen(
     store: NamespacePinStore,
     *,
@@ -386,13 +402,13 @@ def verify_namespace(
         )
 
     author_match = existing.author == current_author
-    # Compare timestamps numerically rather than lexicographically — the
-    # latter works for fixed-format UTC strings but is fragile if a non-Z
-    # offset arrives from HF Hub. Fall back to a lexicographic compare
-    # only when parsing fails (legacy data).
-    created_at_backward = _is_backward(current_created_at, existing.created_at)
+    # Flag ANY created_at drift (forward or backward): a pinned repo's creation
+    # time is immutable, so a changed timestamp means the namespace was
+    # re-created. The old `_is_backward`-only check missed the repo-recreation
+    # attack (which produces a LATER timestamp).
+    created_at_changed = _created_at_differs(current_created_at, existing.created_at)
 
-    if author_match and not created_at_backward:
+    if author_match and not created_at_changed:
         return NamespaceVerifyReport(
             repo_id=repo_id,
             ok=True,
@@ -400,8 +416,8 @@ def verify_namespace(
             recorded=existing,
         )
 
-    # Mismatch — either author changed or created_at jumped backward.
-    # Author comparison is case-insensitive: HF Hub authors are
+    # Mismatch — either author changed or created_at drifted (in either
+    # direction). Author comparison is case-insensitive: HF Hub authors are
     # case-insensitive, and a user typing the wrong case should not
     # fail the gate (security-review LOW fix).
     if override is not None and override.lower() == current_author.lower():

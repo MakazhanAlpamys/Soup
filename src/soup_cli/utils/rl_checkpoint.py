@@ -217,6 +217,33 @@ def _step_number(name: str) -> int:
         return -1
 
 
+def _is_main_process() -> bool:
+    """True on the rank-0 / non-distributed process.
+
+    Only the main process may write RL checkpoints — concurrent writes from
+    every rank to the same directory race and corrupt the (non-atomic) saves.
+    Prefers ``torch.distributed`` when initialised; otherwise reads the
+    launcher env vars (accelerate / torchrun set ``RANK`` / ``LOCAL_RANK``).
+    """
+    import os
+
+    try:
+        import torch.distributed as dist
+
+        if dist.is_available() and dist.is_initialized():
+            return dist.get_rank() == 0
+    except Exception:  # noqa: BLE001 — torch missing / not initialised
+        pass
+    for var in ("RANK", "LOCAL_RANK"):
+        raw = os.environ.get(var)
+        if raw is not None:
+            try:
+                return int(raw) == 0
+            except ValueError:
+                return True
+    return True
+
+
 class RLCheckpointCallback(_TrainerCallbackBase):  # type: ignore[misc, valid-type]
     """Live HF TrainerCallback for mid-epoch RL checkpoints (v0.71.11 #238).
 
@@ -281,6 +308,15 @@ class RLCheckpointCallback(_TrainerCallbackBase):  # type: ignore[misc, valid-ty
 
         root = self._ckpt_root()
         ckpt_dir = os.path.join(root, f"step-{int(step)}")
+
+        # Multi-process guard: only the main (rank-0) process writes. Every rank
+        # would otherwise race on the SAME paths — the non-atomic
+        # torch.save(optimizer.pt) + save_pretrained can interleave and corrupt
+        # the checkpoint, after which the rollback ladder silently restores
+        # nothing. Non-main ranks return the (rank-0-written) path unchanged.
+        if not _is_main_process():
+            return ckpt_dir
+
         os.makedirs(ckpt_dir, exist_ok=True)
 
         if model is not None and hasattr(model, "save_pretrained"):
@@ -297,7 +333,11 @@ class RLCheckpointCallback(_TrainerCallbackBase):  # type: ignore[misc, valid-ty
                 try:
                     import torch
 
-                    torch.save(optimizer.state_dict(), opt_out)
+                    # Atomic write: torch.save straight to opt_out could leave a
+                    # truncated file if interrupted. Stage to .tmp then rename.
+                    tmp_out = opt_out + ".tmp"
+                    torch.save(optimizer.state_dict(), tmp_out)
+                    os.replace(tmp_out, opt_out)
                     has_optimizer = True
                 except Exception:  # noqa: BLE001 — best-effort, manifest reflects it
                     has_optimizer = False

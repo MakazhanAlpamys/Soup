@@ -219,10 +219,25 @@ _DEFAULT_SPOT_PRICE = 0.30  # ~$/hr for a 24 GB consumer GPU
 _DEFAULT_PEAK_VRAM = 8.0
 
 
+def _to_float(value: Any, default: float) -> float:
+    """Coerce a config number to float, tolerating ``batch_size: "auto"``.
+
+    ``soup train`` accepts ``batch_size: "auto"`` (int-or-"auto" per schema), so
+    the plan estimator must not crash on ``float("auto")`` — fall back to the
+    baseline for the heuristic instead.
+    """
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def _estimate_runtime_minutes(config: Mapping[str, Any]) -> float:
     training = config.get("training", {}) if isinstance(config, Mapping) else {}
-    epochs = float(training.get("epochs", 1) if isinstance(training, Mapping) else 1)
-    batch_size = float(training.get("batch_size", 4) if isinstance(training, Mapping) else 4)
+    if not isinstance(training, Mapping):
+        training = {}
+    epochs = _to_float(training.get("epochs", 1), 1.0)
+    batch_size = _to_float(training.get("batch_size", 4), 4.0)
     # Soft heuristic: 5 minutes per epoch at batch_size=4 baseline.
     base = 5.0 * epochs
     if batch_size > 0:

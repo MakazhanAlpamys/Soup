@@ -128,19 +128,41 @@ def compute_simpo_term(
     return -_logsigmoid(logits).mean()
 
 
-def compute_orpo_term(pol_chosen, pol_rejected, alpha: float):
+def compute_orpo_term(
+    pol_chosen,
+    pol_rejected,
+    alpha: float,
+    chosen_lens=None,
+    rejected_lens=None,
+):
     """Reference-free odds-ratio preference loss (ORPO).
 
     Uses the response-log-prob formulation ``-log σ(log(p_w) - log(p_l) +
     log(1-p_l) - log(1-p_w))`` scaled by ``alpha``. Approximates the full
     ORPO loss without the SFT term — caller is expected to mix in SFT via
     its own weight if desired.
+
+    ``pol_chosen`` / ``pol_rejected`` are *summed* sequence log-probs. On a real
+    sequence the summed log-prob is ≈ −45, so ``exp()`` underflows to 0 and the
+    ``log(1 − p)`` odds-ratio correction collapses to 0 — degenerating the loss
+    to a plain log-prob difference. TRL avoids this with ``average_log_prob``;
+    pass ``chosen_lens`` / ``rejected_lens`` (response token counts) to
+    length-normalise the log-probs here so ``exp()`` yields a real per-token
+    probability and the odds-ratio term is meaningful.
     """
     import torch
 
-    log_odds_chosen = pol_chosen - torch.log1p(-torch.exp(pol_chosen).clamp(max=1 - 1e-7))
-    log_odds_rejected = pol_rejected - torch.log1p(
-        -torch.exp(pol_rejected).clamp(max=1 - 1e-7)
+    if chosen_lens is not None and rejected_lens is not None:
+        chosen_lens = torch.clamp(chosen_lens.float(), min=1.0)
+        rejected_lens = torch.clamp(rejected_lens.float(), min=1.0)
+        lp_chosen = pol_chosen / chosen_lens
+        lp_rejected = pol_rejected / rejected_lens
+    else:
+        lp_chosen = pol_chosen
+        lp_rejected = pol_rejected
+    log_odds_chosen = lp_chosen - torch.log1p(-torch.exp(lp_chosen).clamp(max=1 - 1e-7))
+    log_odds_rejected = lp_rejected - torch.log1p(
+        -torch.exp(lp_rejected).clamp(max=1 - 1e-7)
     )
     sigm_term = _logsigmoid(log_odds_chosen - log_odds_rejected)
     return (-alpha * sigm_term).mean()
@@ -271,8 +293,13 @@ def attach_weighted_preference_combine(trainer: object, weights: Mapping[str, fl
                         alpha = (
                             float(alpha_attr) if alpha_attr is not None else 1.0
                         )
+                        # Length-normalise when the batch carries response
+                        # lengths/labels — otherwise summed log-probs underflow
+                        # exp() and the odds-ratio correction degenerates.
                         terms["orpo"] = compute_orpo_term(
-                            pol_chosen, pol_rejected, alpha
+                            pol_chosen, pol_rejected, alpha,
+                            chosen_lens=_read_lens(inputs, "chosen"),
+                            rejected_lens=_read_lens(inputs, "rejected"),
                         )
                     elif name == "bco":
                         # BCO is data-format-incompatible — already rejected
@@ -309,6 +336,30 @@ def _read_logps(obj, name: str):
         if val is not None:
             return val
     return getattr(obj, name, None)
+
+
+def _read_lens(obj, prefix: str):
+    """Best-effort per-side response-length tensor for length-normalised terms.
+
+    Tries an explicit ``<prefix>_lens`` key first, then derives the count from
+    ``<prefix>_labels`` (non-``-100`` tokens = the loss-masked response). Returns
+    None when neither is present, in which case the caller keeps the (degenerate)
+    summed-log-prob behaviour rather than crashing.
+    """
+    lens = _read_logps(obj, f"{prefix}_lens")
+    if lens is not None:
+        return lens
+    labels = _read_logps(obj, f"{prefix}_labels")
+    if labels is None:
+        return None
+    try:
+        import torch
+
+        if not isinstance(labels, torch.Tensor):
+            return None
+        return (labels != -100).sum(dim=-1)
+    except Exception:  # noqa: BLE001 — best-effort; degrade to no normalisation
+        return None
 
 
 def _pick_primary(weights: Mapping[str, float]) -> str:

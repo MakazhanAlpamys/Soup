@@ -112,10 +112,13 @@ def create_sglang_app(
 
     app = FastAPI(title="Soup Inference Server (SGLang)", version="1.0.0")
 
+    # Loopback-only CORS (parity with the transformers / vLLM servers). The
+    # wildcard the loopback fix never reached let any web page read this local
+    # server's responses.
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
-        allow_methods=["*"],
+        allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
+        allow_methods=["GET", "POST", "OPTIONS"],
         allow_headers=["*"],
     )
 

@@ -64,7 +64,13 @@ class MeasureResult:
     verdict: str     # "OK" | "MINOR" | "MAJOR"
 
 
-def compute_cache_key(*, base_sha: str, profile_name: str, tasks_sha: str) -> str:
+def compute_cache_key(
+    *,
+    base_sha: str,
+    profile_name: str,
+    tasks_sha: str,
+    candidates: "Optional[Sequence[str]]" = None,
+) -> str:
     """Build a deterministic cache key from the input tuple.
 
     Callers should pass FULL SHA-256 hex strings (64 chars) for the two
@@ -74,6 +80,13 @@ def compute_cache_key(*, base_sha: str, profile_name: str, tasks_sha: str) -> st
     probability ≈ 1 in 2³² across ~4 billion cache entries) but is the
     operator-facing policy, not a property enforced here. Future callers
     that truncate further should expect collisions in proportion.
+
+    ``candidates`` MUST be included in the key: the cached rows are one
+    :class:`MeasureResult` per candidate, so a run measuring ``["4bit"]``
+    must not be served for a later ``["4bit", "8bit"]`` request (which would
+    silently drop the 8bit measurement). Omitting ``candidates`` reproduces
+    the pre-fix key for back-compat, but the live orchestrator always passes
+    the list.
     """
     for name, value in (
         ("base_sha", base_sha),
@@ -96,6 +109,17 @@ def compute_cache_key(*, base_sha: str, profile_name: str, tasks_sha: str) -> st
     hasher.update(profile_name.encode("utf-8"))
     hasher.update(b"\x1f")
     hasher.update(tasks_sha.encode("utf-8"))
+    if candidates is not None:
+        if isinstance(candidates, (str, bytes)) or not isinstance(candidates, Sequence):
+            raise TypeError("candidates must be a sequence of strings")
+        hasher.update(b"\x1f")
+        for cand in candidates:
+            if not isinstance(cand, str):
+                raise TypeError(
+                    f"each candidate must be str, got {type(cand).__name__}"
+                )
+            hasher.update(cand.encode("utf-8"))
+            hasher.update(b"\x1e")
     return hasher.hexdigest()[:32]
 
 
@@ -560,6 +584,7 @@ def run_measure(
     tasks_sha = sha_of_file(tasks_file)
     key = compute_cache_key(
         base_sha=base_sha, profile_name=profile_name, tasks_sha=tasks_sha,
+        candidates=list(candidates),
     )
 
     cache = load_cache(cache_path)

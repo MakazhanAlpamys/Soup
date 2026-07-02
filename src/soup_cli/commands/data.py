@@ -812,6 +812,13 @@ def split_data(
         console.print("[red]Specify at least one of --val or --test.[/]")
         raise typer.Exit(1)
 
+    # Reject negatives: a negative val/test slipped past the `>= total` check
+    # and produced a negative slice (e.g. --val -10 sent 90 rows to val, 10 to
+    # train — a silently inverted split).
+    if (val is not None and val < 0) or (test is not None and test < 0):
+        console.print("[red]--val and --test must be non-negative.[/]")
+        raise typer.Exit(1)
+
     data = load_raw_data(file_path)
     if not data:
         console.print("[red]Dataset is empty.[/]")

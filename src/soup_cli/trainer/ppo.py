@@ -262,7 +262,9 @@ class PPOTrainerWrapper:
                 trainer_kwargs["ref_model"] = None
             if "reward_model" in ppo_trainer_params:
                 trainer_kwargs["reward_model"] = self._get_or_create_reward_model(
-                    cfg, tcfg
+                    cfg, tcfg,
+                    reward_funcs_supplied=bool(reward_funcs)
+                    and "reward_funcs" in ppo_trainer_params,
                 )
             if "value_model" in ppo_trainer_params:
                 trainer_kwargs["value_model"] = self._create_value_model(cfg, tcfg)
@@ -313,13 +315,17 @@ class PPOTrainerWrapper:
         self._num_epochs = tcfg.epochs
         self._max_length = cfg.data.max_length
 
-    def _get_or_create_reward_model(self, cfg, tcfg):
-        """Get existing reward model or create one for trl experimental PPO API.
+    def _get_or_create_reward_model(self, cfg, tcfg, *, reward_funcs_supplied=False):
+        """Get the reward model for trl's PPO API (an nn.Module, not a callable).
 
-        The experimental PPOTrainer requires an nn.Module reward model (not a callable).
-        If we have a loaded reward model instance, use it. Otherwise, load one from
-        the configured reward_model path, or create a fresh AutoModelForSequenceClassification
-        from the base model.
+        Uses a loaded instance, else loads the configured ``reward_model`` path.
+        If neither exists, PPO has NO real reward signal: a fresh
+        ``AutoModelForSequenceClassification`` has a randomly-initialised
+        regression head, so optimising the policy against it trains toward
+        noise (silent, GPU-hours wasted). A ``reward_fn`` (callable) cannot fill
+        this nn.Module slot on trl's PPO API. Fail loudly instead — unless the
+        trainer is separately consuming ``reward_funcs`` (a newer trl API), in
+        which case the reward model is unused and a neutral head is fine.
         """
         if self.reward_model_instance is not None:
             return self.reward_model_instance
@@ -331,12 +337,23 @@ class PPOTrainerWrapper:
                 tcfg=tcfg,
             )
 
-        # Fallback: create a sequence classification model from the base model
+        if not reward_funcs_supplied:
+            raise RuntimeError(
+                "PPO requires a trained reward_model (set training.reward_model "
+                "to a path or HF id). trl's PPO reward-model slot needs an "
+                "nn.Module; a reward_fn cannot drive it, and creating one from "
+                "the base model would train the policy against a randomly-"
+                "initialised reward head. Use `task: grpo` for reward-function-"
+                "based RL instead."
+            )
+
+        # reward_funcs handles the reward signal on this trl API; the reward
+        # model is a required-but-unused formality (neutral head is fine).
         from transformers import AutoModelForSequenceClassification
 
         console.print(
-            "[yellow]No reward_model path specified. Creating reward model "
-            f"from base model: {cfg.base}[/]"
+            "[dim]reward_funcs active; creating a neutral reward-model "
+            f"placeholder from base model: {cfg.base}[/]"
         )
         reward_model = AutoModelForSequenceClassification.from_pretrained(
             cfg.base,

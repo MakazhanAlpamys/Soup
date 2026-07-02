@@ -47,12 +47,18 @@ def _compute_distill_term(
     teacher_logits: "_torch_typ.Tensor",
     divergence: str,
     temperature: float,
+    labels: "_torch_typ.Tensor | None" = None,
+    attention_mask: "_torch_typ.Tensor | None" = None,
 ) -> "_torch_typ.Tensor":
     """Pure tensor kernel: divergence between student and teacher logits.
 
     Both logits are ``(batch, seq, vocab)``. Temperature softens the
     distributions before the divergence is computed (Hinton). The result is
-    a scalar mean over the token-level divergences.
+    a scalar mean over the token-level divergences, restricted to the trained
+    tokens: ``labels != -100`` when ``labels`` is given (excludes padding AND
+    prompt), else ``attention_mask`` (excludes padding), else all positions.
+    Averaging over padding/prompt tokens (the pre-fix behaviour) diluted the
+    signal with the divergence on positions the student is not trained on.
 
     Raises:
         TypeError: ``temperature`` not numeric or is bool.
@@ -74,20 +80,32 @@ def _compute_distill_term(
     temp = float(temperature)
     s = student_logits / temp
     t = teacher_logits / temp
+
+    def _masked_mean(per_token: "_torch_typ.Tensor") -> "_torch_typ.Tensor":
+        """Mean of a ``(batch, seq)`` per-token divergence over trained tokens."""
+        if labels is not None:
+            mask = labels != -100
+        elif attention_mask is not None:
+            mask = attention_mask.bool()
+        else:
+            return per_token.mean()
+        mask = mask.to(per_token.dtype)
+        denom = mask.sum().clamp(min=1.0)
+        return (per_token * mask).sum() / denom
+
+    kl_div = torch.nn.functional.kl_div
     if divergence == "forward_kl":
-        # KL(teacher || student). Use kl_div which expects log-probs of the
-        # student and probs of the teacher.
+        # KL(teacher || student): student log-probs, teacher probs. reduction=
+        # "none" keeps per-token so we can mask before averaging.
         log_s = torch.log_softmax(s, dim=-1)
         p_t = torch.softmax(t, dim=-1)
-        return torch.nn.functional.kl_div(
-            log_s, p_t, reduction="batchmean"
-        ) * (temp * temp)
+        per_token = kl_div(log_s, p_t, reduction="none").sum(dim=-1)
+        return _masked_mean(per_token) * (temp * temp)
     if divergence == "reverse_kl":
         log_t = torch.log_softmax(t, dim=-1)
         p_s = torch.softmax(s, dim=-1)
-        return torch.nn.functional.kl_div(
-            log_t, p_s, reduction="batchmean"
-        ) * (temp * temp)
+        per_token = kl_div(log_t, p_s, reduction="none").sum(dim=-1)
+        return _masked_mean(per_token) * (temp * temp)
     if divergence == "js":
         # Jensen-Shannon: 0.5 (KL(p||m) + KL(q||m)), m = 0.5 (p + q).
         log_s = torch.log_softmax(s, dim=-1)
@@ -96,9 +114,9 @@ def _compute_distill_term(
         p_t = log_t.exp()
         m = 0.5 * (p_s + p_t)
         log_m = m.clamp(min=1e-12).log()
-        kl_pm = torch.nn.functional.kl_div(log_m, p_s, reduction="batchmean")
-        kl_qm = torch.nn.functional.kl_div(log_m, p_t, reduction="batchmean")
-        return 0.5 * (kl_pm + kl_qm) * (temp * temp)
+        kl_pm = kl_div(log_m, p_s, reduction="none").sum(dim=-1)
+        kl_qm = kl_div(log_m, p_t, reduction="none").sum(dim=-1)
+        return 0.5 * (_masked_mean(kl_pm) + _masked_mean(kl_qm)) * (temp * temp)
     raise ValueError(f"Unknown divergence {divergence!r}")
 
 
@@ -605,8 +623,12 @@ class DistillTrainerWrapper:
                     )
                     anchor = _minillm_cb.anchor_term(model)
                 else:
+                    # Mask padding + prompt tokens so the divergence is measured
+                    # only over the completion tokens (parity with the ULD path).
                     distill_loss = _compute_distill_term(
-                        student_logits, teacher_logits, divergence, temperature
+                        student_logits, teacher_logits, divergence, temperature,
+                        labels=labels,
+                        attention_mask=inputs.get("attention_mask"),
                     )
                 total = _CE_WEIGHT * ce_loss + _DISTILL_WEIGHT * distill_loss
                 if anchor is not None:

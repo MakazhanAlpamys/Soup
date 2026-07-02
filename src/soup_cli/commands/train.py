@@ -717,6 +717,34 @@ def train(
                     script_args.extend(
                         ["--reward-hack-mitigation", reward_hack_mitigation]
                     )
+                # Pass through the remaining run-shaping flags — these were
+                # silently dropped on re-exec, so a multi-GPU run ignored the
+                # eval gate, HF push, trust-remote-code, tracker, diagnose gate,
+                # and the governance/energy artifacts the user asked for.
+                if gate:
+                    script_args.extend(["--gate", gate])
+                if push_as:
+                    script_args.extend(["--push-as", push_as])
+                if hf_resume:
+                    script_args.append("--hf-resume")
+                if trust_remote_code:
+                    script_args.append("--trust-remote-code")
+                if tracker:
+                    script_args.extend(["--tracker", tracker])
+                if diagnose_gate:
+                    script_args.extend(["--diagnose-gate", diagnose_gate])
+                if annex_xi:
+                    script_args.extend(["--annex-xi", annex_xi])
+                if repro_receipt:
+                    script_args.extend(["--repro-receipt", repro_receipt])
+                if profile_run:
+                    script_args.append("--profile")
+                if track_energy:
+                    script_args.append("--track-energy")
+                    if energy_country:
+                        script_args.extend(["--energy-country", energy_country])
+                    if energy_out:
+                        script_args.extend(["--energy-out", energy_out])
                 if yes:
                     script_args.append("--yes")
                 argv = build_accelerate_argv(

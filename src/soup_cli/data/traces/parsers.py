@@ -178,7 +178,10 @@ def parse_soup_serve(path: str) -> Iterator[Trace]:
     if not dir_path.is_dir():
         return
     for file_path in sorted(dir_path.glob("*.jsonl")):
-        for line in file_path.read_text(encoding="utf-8").splitlines():
+        # utf-8-sig strips a leading BOM (common on Windows-written JSONL);
+        # plain utf-8 left the BOM on line 1, so json.loads failed and the
+        # first record of every BOM'd file was silently dropped.
+        for line in file_path.read_text(encoding="utf-8-sig").splitlines():
             if not line.strip():
                 continue
             try:

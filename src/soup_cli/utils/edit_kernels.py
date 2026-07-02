@@ -520,7 +520,10 @@ def apply_alphaedit_edit(
     )
     key_t = key.to(down.weight.dtype)
     denom = float(torch.dot(key_t, key_t).item())
-    if denom <= 0.0:
+    # NaN <= 0.0 is False, so a non-finite denom would slip past a bare
+    # `denom <= 0.0` and corrupt the weights in place (matches the sibling
+    # `_rank1_update` guard). Reject non-finite AND non-positive.
+    if not math.isfinite(denom) or denom <= 0.0:
         raise ValueError("key vector has zero norm; cannot apply AlphaEdit update")
     # Logical [out, in] ROME update (delta is OUTPUT-space, key is INPUT-space).
     rome_update = torch.outer(delta.to(down.weight.dtype), key_t) / denom

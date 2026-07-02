@@ -393,7 +393,14 @@ def _prepare_calibration_text(calibration_data: str, staged_dir: Path) -> Path:
                 "calibration_data became a symlink during the export "
                 "(TOCTOU defence): refusing to open."
             ) from exc
-        os.close(fd)
+        # Read from THIS fd. The previous code closed it and re-opened `src`
+        # with a plain open(), re-introducing the symlink-swap window between
+        # the O_NOFOLLOW check and the actual read.
+        src_fh = os.fdopen(fd, encoding="utf-8")
+    else:
+        # No O_NOFOLLOW (Windows): enforce_under_cwd_and_no_symlink's
+        # dispatch-time check is the portable backstop.
+        src_fh = open(src, encoding="utf-8")
     out = staged_dir / "calib.txt"
     line_count = 0
     total_bytes = 0
@@ -405,9 +412,7 @@ def _prepare_calibration_text(calibration_data: str, staged_dir: Path) -> Path:
         sanitised = text.replace("\x00", "").replace("\n", " ")
         return sanitised[:max_per_line]
 
-    with open(src, encoding="utf-8") as fh_in, open(
-        out, "w", encoding="utf-8"
-    ) as fh_out:
+    with src_fh as fh_in, open(out, "w", encoding="utf-8") as fh_out:
         for raw_line in fh_in:
             line = raw_line.strip()
             if not line:

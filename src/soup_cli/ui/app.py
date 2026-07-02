@@ -334,15 +334,17 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
     @app.post("/api/data/inspect", dependencies=[Depends(_verify_token)])
     def inspect_data(req: DataInspectRequest):
         from soup_cli.data.loader import load_raw_data
+        from soup_cli.utils.paths import is_under_cwd
 
-        # Path traversal protection: resolve and check against cwd
-        allowed_root = Path.cwd().resolve()
+        # Path traversal protection. Use realpath + commonpath containment
+        # (is_under_cwd) — the old str.startswith check let a sibling like
+        # ".../project-secrets" pass as under ".../project".
         try:
             resolved = Path(req.path).resolve()
         except (ValueError, OSError):
             raise HTTPException(status_code=400, detail="Invalid path")
 
-        if not str(resolved).startswith(str(allowed_root)):
+        if not is_under_cwd(req.path):
             raise HTTPException(
                 status_code=403, detail="Access denied: path outside working directory"
             )

@@ -197,6 +197,11 @@ def apply_llama_pro_freeze(model: Any, num_new_blocks: int) -> int:
     if layers is None:
         return 0
     total = len(layers)
+    # Defence-in-depth: never treat more than `total` layers as "new" — an
+    # unclamped over-request would push `new_start` to 0 and unfreeze the whole
+    # model. Callers should pass the actual appended count (see the shared
+    # helper), but clamp here too so direct callers stay safe.
+    n = min(n, total)
     new_start = max(0, total - n)
     # Freeze everything first.
     for param in model.parameters():
@@ -278,22 +283,28 @@ def apply_block_expansion_if_configured(
     n = getattr(tcfg, "expand_layers", None)
     if not n:
         return _count_layers(model)
+    orig_total = _count_layers(model)
     new_total = expand_model_blocks(model, n)
+    # expand_model_blocks CLAMPS the requested count to the available base
+    # blocks, so the number actually appended can be < n. The freeze below must
+    # target that real count — passing the raw request would leave original
+    # layers trainable when over-requested, defeating LLaMA Pro entirely.
+    added = int(new_total) - int(orig_total)
     if console is not None:
         console.print(
             f"[green]LLaMA Pro:[/] expanded to {int(new_total)} layers "
-            f"(+{int(n)} zero-init blocks)"
+            f"(+{added} zero-init blocks)"
         )
     freeze = getattr(tcfg, "freeze_trainable_layers", None)
     # Project policy ``is None`` over falsy — but a value of 0 means "no
     # positive freeze direction", so the canonical "train only new blocks"
     # path runs iff the user opted in with a positive ``freeze_trainable_layers``.
-    if freeze is not None and freeze > 0:
-        trainable = apply_llama_pro_freeze(model, n)
+    if freeze is not None and freeze > 0 and added > 0:
+        trainable = apply_llama_pro_freeze(model, added)
         if console is not None:
             console.print(
                 f"[green]LLaMA Pro freeze:[/] {trainable:,} parameters "
-                f"trainable (only the {int(n)} new blocks)"
+                f"trainable (only the {added} new blocks)"
             )
     return new_total
 

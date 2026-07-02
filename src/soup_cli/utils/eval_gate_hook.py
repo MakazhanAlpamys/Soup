@@ -296,7 +296,8 @@ if [ -z "$CANDIDATE_RUN_ID" ]; then
     exit 0
 fi
 
-soup eval against "$BASELINE_RUN_ID" --candidate "$CANDIDATE_RUN_ID" --json-only \\
+soup eval against "$BASELINE_RUN_ID" --candidate "$CANDIDATE_RUN_ID" \\
+    --suite "$GATE_SUITE" --json-only \\
     || {{
         echo "[soup] pre-push gate blocked: regression vs $BASELINE_RUN_ID" >&2
         exit 1

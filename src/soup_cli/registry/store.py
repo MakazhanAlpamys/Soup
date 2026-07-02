@@ -534,14 +534,15 @@ class RegistryStore:
         if self.get(parent_id) is None:
             raise ValueError(f"parent entry not found: {parent_id}")
         # Cycle check: if parent already has child as an ancestor, adding this
-        # edge would close a loop. Walk from parent_id upward and reject if
-        # child_id is reachable.
-        for anc in self.get_ancestors(parent_id):
-            if anc["id"] == child_id:
-                raise ValueError(
-                    "lineage would introduce a cycle "
-                    f"({child_id} -> {parent_id} -> ... -> {child_id})"
-                )
+        # edge would close a loop. Use an UNBOUNDED reachability walk — the old
+        # code walked get_ancestors(parent_id) whose max_depth=10 cap silently
+        # accepted a cycle-closing edge >10 hops away (the `soup loop watch`
+        # daemon builds long chains), corrupting the DAG.
+        if self._reaches_ancestor(parent_id, child_id):
+            raise ValueError(
+                "lineage would introduce a cycle "
+                f"({child_id} -> {parent_id} -> ... -> {child_id})"
+            )
         now = datetime.now().isoformat()
         conn = self._get_conn()
         conn.execute(
@@ -579,6 +580,36 @@ class RegistryStore:
                 new_frontier.append(pid)
             frontier = new_frontier
         return ancestors
+
+    def _reaches_ancestor(self, start_id: str, target_id: str) -> bool:
+        """True iff ``target_id`` is an ancestor of ``start_id`` (any depth).
+
+        Unbounded BFS terminated by a ``seen`` set — used for cycle detection in
+        :meth:`add_lineage`, where a depth cap would let a far-away cycle-closing
+        edge slip through. Queries only ``parent_id`` (no hydrate) so it stays
+        cheap even on long lineage chains.
+        """
+        conn = self._get_conn()
+        seen: set[str] = set()
+        frontier = [start_id]
+        while frontier:
+            placeholders = ",".join("?" * len(frontier))
+            rows = conn.execute(
+                f"""SELECT parent_id FROM registry_lineage
+                    WHERE child_id IN ({placeholders})""",
+                tuple(frontier),
+            ).fetchall()
+            new_frontier: list[str] = []
+            for row in rows:
+                pid = row["parent_id"]
+                if pid == target_id:
+                    return True
+                if pid in seen:
+                    continue
+                seen.add(pid)
+                new_frontier.append(pid)
+            frontier = new_frontier
+        return False
 
     def get_descendants(self, entry_id: str, *, max_depth: int = 10) -> list[dict]:
         """BFS walk downwards from entry_id across lineage children."""

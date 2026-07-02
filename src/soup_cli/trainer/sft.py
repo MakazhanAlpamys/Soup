@@ -1203,9 +1203,31 @@ class SFTTrainerWrapper:
                     f"{self._output_dir!r}"
                 )
             offload_save_dir = candidate
-        with offload_context(
-            tcfg.activation_offloading, save_dir=offload_save_dir
-        ):
+        import contextlib
+
+        with contextlib.ExitStack() as _train_ctx:
+            _train_ctx.enter_context(
+                offload_context(tcfg.activation_offloading, save_dir=offload_save_dir)
+            )
+            # LongLoRA S² shifted-sparse attention (v0.49.0 schema). The override
+            # monkeypatches attention.forward for the duration of training and
+            # was previously never installed (use_longlora validated but shipped
+            # plain attention). Enter defensively: an install failure on the
+            # current transformers degrades to plain attention with a warning
+            # instead of crashing the run. Arch compat is already schema-gated.
+            if getattr(tcfg, "use_longlora", False) and self.config.backend == "transformers":
+                from soup_cli.utils.longlora import apply_longlora_forward_override
+
+                try:
+                    _train_ctx.enter_context(
+                        apply_longlora_forward_override(self.model)
+                    )
+                    console.print("[green]LongLoRA S² attention override active[/]")
+                except Exception as exc:  # noqa: BLE001 — fall back to plain attn
+                    console.print(
+                        "[yellow]LongLoRA override could not be installed "
+                        f"({exc}); training with plain attention.[/]"
+                    )
             self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         duration = time.time() - start
 

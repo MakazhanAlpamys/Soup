@@ -194,6 +194,11 @@ def bench(
     start_load = time.time()
     try:
         model_obj, tokenizer = _load_model(str(model_path), base, device)
+    except typer.Exit:
+        # typer.Exit subclasses RuntimeError, so the broad except below would
+        # swallow an already-reported CLI exit and mis-print "Failed to load
+        # model: 1". Let it propagate unchanged.
+        raise
     except (OSError, ImportError, RuntimeError, ValueError) as exc:
         console.print(f"[red]Failed to load model:[/] {exc}")
         raise typer.Exit(1) from exc

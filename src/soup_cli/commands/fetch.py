@@ -94,8 +94,11 @@ def fetch(
     # Symlink-at-target rejection (TOCTOU defence) — matches v0.33.0 #22 /
     # v0.40.2 #51 / v0.43.0 Part C policy. Apply BEFORE the existence check
     # so a symlink-with-no-real-file can never be silently overwritten.
+    # lstat the ORIGINAL path — os.path.realpath() already resolved any symlink,
+    # so lstat(real_target) inspected the link's TARGET and S_ISLNK was never
+    # true, letting the write follow the link and clobber its target.
     try:
-        link_stat = os.lstat(real_target)
+        link_stat = os.lstat(target_path)
     except FileNotFoundError:
         link_stat = None
     except OSError as exc:
