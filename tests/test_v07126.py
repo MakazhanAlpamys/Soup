@@ -343,8 +343,13 @@ class TestSmoothSignal:
     def test_ema(self):
         from soup_cli.utils.reward_hack_control import smooth_signal
 
-        # 0.5*prev + 0.5*new; prev = window[-1] = 0.2
-        assert smooth_signal(0.4, [0.1, 0.2], method="ema") == pytest.approx(0.3)
+        # Windowed EMA folds alpha over the whole retained window (oldest first)
+        # then the new sample, so smoothing_window has effect:
+        #   ema0 = 0.1 -> ema1 = 0.5*0.2 + 0.5*0.1 = 0.15
+        #   out  = 0.5*0.4 + 0.5*0.15 = 0.275
+        assert smooth_signal(0.4, [0.1, 0.2], method="ema") == pytest.approx(0.275)
+        # A 1-element window reduces to the 2-tap form (0.5*0.4 + 0.5*0.2 = 0.3).
+        assert smooth_signal(0.4, [0.2], method="ema") == pytest.approx(0.3)
 
     def test_ema_empty_window_returns_new(self):
         from soup_cli.utils.reward_hack_control import smooth_signal

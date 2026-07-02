@@ -155,10 +155,11 @@ def combine_signals(signals: Mapping[str, Any], names: Sequence[str]) -> float:
 
 
 def smooth_signal(new: float, window: Sequence[float], *, method: str) -> float:
-    """Smooth a scalar signal. ``none`` → new; ``ema`` → ``alpha·new +
-    (1-alpha)·prev`` with alpha = ``_EMA_ALPHA`` = 0.5 (prev = ``window[-1]``,
-    or ``new`` when the window is empty); ``median`` → median of
-    ``window + [new]``.
+    """Smooth a scalar signal. ``none`` → new; ``ema`` → windowed EMA (alpha =
+    ``_EMA_ALPHA`` = 0.5) folded over the RETAINED window (oldest→newest) then
+    the new sample, so a larger ``reward_hack_smoothing_window`` incorporates
+    more history; an empty window returns ``new`` and a 1-element window reduces
+    to ``alpha·new + (1-alpha)·prev``. ``median`` → median of ``window + [new]``.
     """
     if method not in SMOOTHING_METHODS:
         raise ValueError(
@@ -171,11 +172,14 @@ def smooth_signal(new: float, window: Sequence[float], *, method: str) -> float:
     if method == "ema":
         if not win:
             return fnew
-        # Standard recursive EMA: alpha weights the NEW sample against the
-        # previous value (window[-1]). Note: a true EMA is inherently
-        # window-size-independent, so `reward_hack_smoothing_window` only
-        # affects the `median` method — see the v0.71.26 known limitation.
-        return _EMA_ALPHA * fnew + (1.0 - _EMA_ALPHA) * win[-1]
+        # Windowed EMA: previously only ``win[-1]`` was read, so the retained
+        # window size had no effect. Fold alpha over the whole window so that
+        # ``reward_hack_smoothing_window`` genuinely bounds how much history the
+        # smoother incorporates.
+        ema = win[0]
+        for prev in win[1:]:
+            ema = _EMA_ALPHA * prev + (1.0 - _EMA_ALPHA) * ema
+        return _EMA_ALPHA * fnew + (1.0 - _EMA_ALPHA) * ema
     return float(statistics.median(win + [fnew]))
 
 

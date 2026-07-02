@@ -59,14 +59,17 @@ def test_tool_call_args_subset_penalizes_hallucinated_args():
     assert "0.5 if not out_args else 0.5" not in src
 
 
-def test_median_smoothing_uses_window():
+def test_ema_and_median_use_window_size():
     from soup_cli.utils.reward_hack_control import smooth_signal
 
-    # `median` genuinely uses the retained window (smoothing_window has effect
-    # here). EMA is recursive/window-independent by design — see the v0.71.26
-    # known-limitation note; its 2-tap form is asserted by test_v07126.
+    # Windowed EMA: a longer retained window folds in more history, so the
+    # result differs from the 1-element (2-tap) case — proving
+    # reward_hack_smoothing_window now has effect for EMA.
+    short = smooth_signal(1.0, [0.0], method="ema")
+    longer = smooth_signal(1.0, [1.0, 0.0, 0.0], method="ema")
+    assert short != longer
+    # median genuinely uses the retained window too.
     assert smooth_signal(10.0, [1.0, 2.0], method="median") == 2.0
-    assert smooth_signal(1.0, [0.0], method="ema") == 0.5
 
 
 def test_sse_metric_push_preserves_zero():

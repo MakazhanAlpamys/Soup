@@ -148,36 +148,119 @@ def _resolve_hidden_size(model: Any, layers: Any) -> int | None:
     return None
 
 
+def _gather_dim1(tensor, idx):
+    """Gather ``tensor`` along its sequence dim (1) by ``idx`` ``[B, cap]``.
+
+    Handles a leading batch of 1 (broadcast RoPE cos/sin) by expanding first,
+    and trailing feature dims of any rank. ``[B, T]`` -> ``[B, cap]``;
+    ``[B, T, D]`` -> ``[B, cap, D]``; ``[1, T, D]`` -> ``[B, cap, D]``.
+    """
+    import torch
+
+    bsz, cap = idx.shape
+    lead = tensor.shape[0]
+    extra = tuple(tensor.shape[2:])
+    if lead == 1 and bsz > 1:
+        tensor = tensor.expand(bsz, *tensor.shape[1:])
+    view = idx.reshape(bsz, cap, *([1] * len(extra))).expand(bsz, cap, *extra)
+    return torch.gather(tensor, 1, view)
+
+
+def _gather_block_inputs(hidden_states, topk, args, kwargs):
+    """Gather the decoder-block inputs for the selected sub-sequence.
+
+    Returns ``(sub_hidden, sub_kwargs)`` when the positional inputs can be
+    gathered SAFELY, else ``None`` (the caller then falls back to running the
+    full block + gate-blend). Conservative by design: any positional forward
+    args, a KV cache, ``use_cache``, or a non-4D-causal attention mask abort the
+    savings path so a mis-gathered mask can never silently corrupt attention.
+    """
+    import torch
+
+    if args:  # older positional signature — don't risk mis-identifying args
+        return None
+    if kwargs.get("use_cache"):
+        return None
+    if (
+        kwargs.get("past_key_value") is not None
+        or kwargs.get("past_key_values") is not None
+    ):
+        return None
+
+    bsz, cap = topk.shape
+    seq_len = hidden_states.shape[1]
+    hidden = hidden_states.shape[-1]
+    new_kwargs = dict(kwargs)
+
+    sub_hidden = _gather_dim1(hidden_states, topk)  # [B, cap, H]
+    if sub_hidden.shape != (bsz, cap, hidden):
+        return None
+
+    am = kwargs.get("attention_mask")
+    if am is not None:
+        # Only a square 4D causal mask [B, h, T, T] can be safely narrowed to
+        # [B, h, cap, cap] (gather query dim then key dim). Anything else aborts.
+        if am.dim() != 4 or am.shape[-1] != seq_len or am.shape[-2] != seq_len:
+            return None
+        heads = am.shape[1]
+        qi = topk.reshape(bsz, 1, cap, 1).expand(bsz, heads, cap, seq_len)
+        am_q = torch.gather(am, 2, qi)  # [B, h, cap, T]
+        ki = topk.reshape(bsz, 1, 1, cap).expand(bsz, heads, cap, cap)
+        new_kwargs["attention_mask"] = torch.gather(am_q, 3, ki)  # [B, h, cap, cap]
+
+    pid = kwargs.get("position_ids")
+    if pid is not None:
+        if pid.dim() != 2 or pid.shape[-1] != seq_len:
+            return None
+        new_kwargs["position_ids"] = _gather_dim1(pid, topk)
+
+    cache_pos = kwargs.get("cache_position")
+    if cache_pos is not None:
+        if cache_pos.dim() != 1 or cache_pos.shape[0] != seq_len:
+            return None
+        # [T] -> gather with the first row of indices (cache_position is shared)
+        new_kwargs["cache_position"] = cache_pos.index_select(0, topk[0])
+
+    pe = kwargs.get("position_embeddings")
+    if pe is not None:
+        if not (isinstance(pe, (tuple, list)) and len(pe) == 2):
+            return None
+        gathered = []
+        for part in pe:
+            if (
+                not hasattr(part, "dim")
+                or part.dim() != 3
+                or part.shape[1] != seq_len
+            ):
+                return None
+            gathered.append(_gather_dim1(part, topk))
+        new_kwargs["position_embeddings"] = tuple(gathered)
+
+    return sub_hidden, new_kwargs
+
+
 def _make_mod_forward(original, router, capacity_factor: float):
     """Wrap a decoder-layer forward to route only the top-k tokens.
 
     The router scores every token; the top ``floor(T * capacity_factor)`` tokens
-    receive the block's residual update (gated by the router weight so the router
-    learns), the rest keep their input hidden state. Returns the original output
-    on any shape mismatch (best-effort — never crashes training).
+    are GATHERED into a shorter sub-sequence, the block runs on ONLY those
+    tokens (real compute saving), and the gated result is scattered back —
+    unselected tokens keep their input hidden state unchanged. When the block's
+    positional inputs can't be safely gathered, it falls back to running the
+    full block once and gate-blending (correct, but no saving). Never crashes
+    training (returns the original output on any shape mismatch).
     """
 
-    def mod_forward(hidden_states, *args, **kwargs):
+    def _fallback(hidden_states, args, kwargs, router_logits, topk):
         import torch
 
         out = original(hidden_states, *args, **kwargs)
         new_hidden = out[0] if isinstance(out, tuple) else out
         if (
-            not hasattr(hidden_states, "shape")
-            or len(hidden_states.shape) != 3
-            or not hasattr(new_hidden, "shape")
+            not hasattr(new_hidden, "shape")
             or new_hidden.shape != hidden_states.shape
         ):
             return out
-        seq_len = hidden_states.shape[1]
-        try:
-            cap = mod_capacity(int(seq_len), capacity_factor)
-        except (TypeError, ValueError):
-            return out
-        if cap >= seq_len:
-            return out  # no routing benefit
-        router_logits = router(hidden_states).squeeze(-1)  # [B, T]
-        topk = torch.topk(router_logits, k=cap, dim=-1).indices  # [B, cap]
         mask = torch.zeros_like(router_logits)
         mask.scatter_(1, topk, 1.0)
         weights = (torch.sigmoid(router_logits) * mask).unsqueeze(-1)
@@ -185,6 +268,47 @@ def _make_mod_forward(original, router, capacity_factor: float):
         if isinstance(out, tuple):
             return (blended,) + tuple(out[1:])
         return blended
+
+    def mod_forward(hidden_states, *args, **kwargs):
+        import torch
+
+        if not hasattr(hidden_states, "shape") or len(hidden_states.shape) != 3:
+            return original(hidden_states, *args, **kwargs)
+        seq_len = hidden_states.shape[1]
+        try:
+            cap = mod_capacity(int(seq_len), capacity_factor)
+        except (TypeError, ValueError):
+            return original(hidden_states, *args, **kwargs)
+        if cap >= seq_len:
+            return original(hidden_states, *args, **kwargs)  # no routing benefit
+
+        router_logits = router(hidden_states).squeeze(-1)  # [B, T]
+        # Sort the selected indices ascending so the gathered sub-sequence keeps
+        # causal order for its self-attention + RoPE positions.
+        topk = torch.topk(router_logits, k=cap, dim=-1).indices  # [B, cap]
+        topk, _ = torch.sort(topk, dim=-1)
+
+        gathered = _gather_block_inputs(hidden_states, topk, args, kwargs)
+        if gathered is None:
+            return _fallback(hidden_states, args, kwargs, router_logits, topk)
+
+        sub_hidden, sub_kwargs = gathered
+        sub_out = original(sub_hidden, **sub_kwargs)  # block on cap tokens only
+        sub_new = sub_out[0] if isinstance(sub_out, tuple) else sub_out
+        if not hasattr(sub_new, "shape") or sub_new.shape != sub_hidden.shape:
+            # Unexpected sub-block output — bail to the safe full path.
+            return _fallback(hidden_states, args, kwargs, router_logits, topk)
+
+        # Learnable depth gate on the selected tokens.
+        sel_logits = torch.gather(router_logits, 1, topk)  # [B, cap]
+        gate = torch.sigmoid(sel_logits).unsqueeze(-1)  # [B, cap, 1]
+        sub_updated = sub_hidden + gate * (sub_new - sub_hidden)
+
+        idx = topk.unsqueeze(-1).expand(-1, -1, hidden_states.shape[-1])
+        result = hidden_states.scatter(1, idx, sub_updated)
+        if isinstance(sub_out, tuple):
+            return (result,) + tuple(sub_out[1:])
+        return result
 
     mod_forward.__name__ = "mod_forward"
     return mod_forward

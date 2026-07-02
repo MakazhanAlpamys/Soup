@@ -24,6 +24,118 @@ if TYPE_CHECKING:  # pragma: no cover - type hints only, no runtime import
 
 console = Console()
 
+# Optimizers the analytical hardware-fit predictor understands (mirror of
+# hardware_fit._VALID_OPTIMIZERS); an unknown optimizer maps to the
+# highest-state default so the estimate stays conservative.
+_HW_FIT_OPTIMIZERS = frozenset({
+    "adamw_torch", "adamw_torch_fused", "adafactor", "sgd",
+    "adamw_bnb_8bit", "paged_adamw_8bit", "lion_8bit",
+    "lomo", "adalomo", "schedule_free_adamw",
+})
+
+
+def _build_hardware_fit_input(cfg):
+    """Best-effort ``HardwareFitInput`` from a ``SoupConfig``.
+
+    Returns ``None`` when the run is not statically predictable (batch_size
+    ``"auto"``, unknown model size, unsupported quant, out-of-range dims), in
+    which case the caller skips the gate rather than guess.
+    """
+    from soup_cli.utils.gpu import model_size_from_name
+    from soup_cli.utils.hardware_fit import HardwareFitInput
+
+    tcfg = cfg.training
+    bs = getattr(tcfg, "batch_size", None)
+    if not isinstance(bs, int) or isinstance(bs, bool):
+        return None  # "auto" resolves later — can't predict yet
+    params_b = model_size_from_name(getattr(cfg, "base", "") or "")
+    if not isinstance(params_b, (int, float)) or params_b <= 0:
+        return None
+    seq_len = getattr(cfg.data, "max_length", None)
+    if not isinstance(seq_len, int) or isinstance(seq_len, bool):
+        return None
+    quant = {"none": "none", "4bit": "4bit", "8bit": "8bit"}.get(
+        str(getattr(tcfg, "quantization", "none") or "none")
+    )
+    if quant is None:
+        return None
+    if quant == "4bit":
+        peft = "qlora"
+    elif (
+        getattr(tcfg, "unfrozen_parameters", None)
+        or getattr(tcfg, "freeze_layers", None)
+        or getattr(tcfg, "freeze_ratio", None)
+    ):
+        peft = "full"  # Spectrum / freeze-based full fine-tuning
+    else:
+        peft = "lora"
+    optimizer = str(getattr(tcfg, "optimizer", "adamw_torch") or "adamw_torch")
+    if optimizer not in _HW_FIT_OPTIMIZERS:
+        optimizer = "adamw_torch"
+    gc = bool(getattr(tcfg, "gradient_checkpointing", False))
+    try:
+        return HardwareFitInput(
+            params_b=float(params_b),
+            seq_len=int(seq_len),
+            batch_size=int(bs),
+            optimizer=optimizer,
+            quant=quant,
+            peft=peft,
+            gradient_checkpointing=gc,
+        )
+    except (ValueError, TypeError):
+        return None  # dims out of the predictor's supported range
+
+
+def _hardware_fit_preflight(cfg, gpu_info, *, allow_oom_attempt: bool) -> None:
+    """Refuse (or warn) before launch when the predicted peak VRAM won't fit.
+
+    Skips silently on CPU / when VRAM is unknown / when the run isn't
+    statically predictable, so CI and small runs are unaffected. Honors the
+    documented ``--allow-oom-attempt`` opt-out.
+    """
+    total_bytes = 0
+    try:
+        total_bytes = int(gpu_info.get("memory_total_bytes", 0) or 0)
+    except (AttributeError, TypeError, ValueError):
+        return
+    if total_bytes <= 0:
+        return  # no CUDA VRAM to predict against
+    inp = _build_hardware_fit_input(cfg)
+    if inp is None:
+        return
+    from soup_cli.utils.hardware_fit import VRAM_SAFETY_MARGIN, decide_hardware_fit
+
+    report = decide_hardware_fit(inp, available_vram_gb=total_bytes / 1e9)
+    if report.ok:
+        return
+    b = report.breakdown
+    tail = (
+        "[yellow]--allow-oom-attempt set: launching anyway.[/]"
+        if allow_oom_attempt
+        else "Reduce batch_size / max_length, enable gradient_checkpointing or "
+        "quantization, or pass [bold]--allow-oom-attempt[/] to try anyway."
+    )
+    console.print(
+        Panel(
+            f"Predicted peak VRAM [bold]{report.peak_vram_gb:.1f} GB[/] "
+            f"(+{int(VRAM_SAFETY_MARGIN * 100)}% margin = "
+            f"{report.required_with_margin_gb:.1f} GB) exceeds "
+            f"{report.available_vram_gb:.1f} GB available.\n"
+            f"weights {b.weights_gb:.1f} | optim {b.optimizer_gb:.1f} | "
+            f"grads {b.gradients_gb:.1f} | activations {b.activations_gb:.1f} "
+            f"| overhead {b.overhead_gb:.1f} GB\n\n" + tail,
+            title=(
+                "[yellow]Hardware-fit warning[/]"
+                if allow_oom_attempt
+                else "[bold red]Hardware-fit gate[/]"
+            ),
+            border_style="yellow" if allow_oom_attempt else "red",
+        )
+    )
+    if not allow_oom_attempt:
+        raise typer.Exit(1)
+
 
 def train(
     config: str = typer.Option(
@@ -207,6 +319,14 @@ def train(
         help=(
             "Record a torch.profiler trace (Chrome trace JSON) during early "
             "training steps. Output: <output>/profiles/<run_id>.trace.json"
+        ),
+    ),
+    allow_oom_attempt: bool = typer.Option(
+        False,
+        "--allow-oom-attempt",
+        help=(
+            "Bypass the analytical hardware-fit VRAM gate and launch even when "
+            "the run is predicted to run out of GPU memory (opt-out)."
         ),
     ),
     diagnose_gate: str = typer.Option(
@@ -739,6 +859,8 @@ def train(
                     script_args.extend(["--repro-receipt", repro_receipt])
                 if profile_run:
                     script_args.append("--profile")
+                if allow_oom_attempt:
+                    script_args.append("--allow-oom-attempt")
                 if track_energy:
                     script_args.append("--track-energy")
                     if energy_country:
@@ -796,6 +918,11 @@ def train(
             "supported on CPU. Switching to quantization: none.[/]"
         )
         cfg.training.quantization = "none"
+
+    # Hardware-fit preflight: refuse (unless --allow-oom-attempt) when the
+    # analytical VRAM predictor says the run won't fit. Skips silently on CPU
+    # or when the config isn't statically predictable (e.g. batch_size='auto').
+    _hardware_fit_preflight(cfg, gpu_info, allow_oom_attempt=allow_oom_attempt)
 
     backend_label = cfg.backend
     if cfg.backend == "unsloth":
