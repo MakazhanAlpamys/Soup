@@ -12,6 +12,18 @@ reproducing 70+ versions of notes.
 
 ## [Unreleased]
 
+### Fixed
+- Harden judge-model URL validation against a hostname prefix bypass
+  (`http://localhost.attacker.com`) — `GateTask._valid_judge_url` /
+  `_parse_judge_url` now use `urllib.parse.urlparse` + hostname checks instead
+  of `startswith`. Closes #283
+  ([#288](https://github.com/MakazhanAlpamys/Soup/pull/288) by [@CODING-DARSH](https://github.com/CODING-DARSH)).
+- `SFTTrainerWrapper` now applies configured vocabulary expansion
+  (`data.add_new_tokens` / `data.new_special_tokens`) and resizes the model
+  embeddings during initialization — previously these fields were accepted by
+  the schema but silently ignored. Closes #289
+  ([#287](https://github.com/MakazhanAlpamys/Soup/pull/287) by [@CODING-DARSH](https://github.com/CODING-DARSH)).
+
 ## [0.71.26] - 2026-07-01
 
 ### Added

@@ -44,6 +44,9 @@ Listed by first contribution. PR numbers link the work.
   - Unit tests for the `warmup.py` auto-warmup-steps helper ([#274](https://github.com/MakazhanAlpamys/Soup/pull/274))
 - **Kondamwar Akshaya Shrikant** ([@Akshaya-reddy18](https://github.com/Akshaya-reddy18))
   - Friendlier error messages — richer CUDA-OOM hint + Hugging Face gated-repo and `trust_remote_code` mappings + tests ([#282](https://github.com/MakazhanAlpamys/Soup/pull/282))
+- **Darsh** ([@CODING-DARSH](https://github.com/CODING-DARSH))
+  - Harden judge-URL validation against hostname prefix bypass (`startswith` → `urlparse`) in `eval/gate.py` ([#288](https://github.com/MakazhanAlpamys/Soup/pull/288))
+  - Apply configured vocabulary expansion (`data.add_new_tokens` / `new_special_tokens`) during SFT trainer init ([#287](https://github.com/MakazhanAlpamys/Soup/pull/287))
 
 ---
 
