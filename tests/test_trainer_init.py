@@ -45,6 +45,125 @@ class TestSFTTrainerInit:
         )
         assert wrapper.deepspeed_config == "/path/to/ds.json"
 
+    def test_transformers_vocab_expansion_adds_tokens_and_resizes(
+        self, monkeypatch
+    ):
+        """data.add_new_tokens/new_special_tokens must affect text trainers."""
+        import sys
+        import types
+        from types import SimpleNamespace
+
+        from soup_cli.trainer.sft import SFTTrainerWrapper
+
+        cfg = _make_config(
+            data={
+                "train": "./data.jsonl",
+                "format": "alpaca",
+                "add_new_tokens": ["<new_a>", "<old>"],
+                "new_special_tokens": ["<special_a>"],
+                "resize_vocab": True,
+            },
+            training={"quantization": "none"},
+        )
+        calls = {"add_tokens": None, "add_special_tokens": None, "resize": None}
+
+        class _Tokenizer:
+            pad_token = None
+            eos_token = "<eos>"
+
+            def __init__(self):
+                self.vocab = {"<old>": 0}
+
+            def add_tokens(self, tokens):
+                calls["add_tokens"] = list(tokens)
+                added = 0
+                for token in tokens:
+                    if token not in self.vocab:
+                        self.vocab[token] = len(self.vocab)
+                        added += 1
+                return added
+
+            def add_special_tokens(self, data):
+                tokens = list(data["additional_special_tokens"])
+                calls["add_special_tokens"] = tokens
+                added = 0
+                for token in tokens:
+                    if token not in self.vocab:
+                        self.vocab[token] = len(self.vocab)
+                        added += 1
+                return added
+
+            def __len__(self):
+                return len(self.vocab)
+
+        class _Model:
+            config = SimpleNamespace()
+
+            def resize_token_embeddings(self, size):
+                calls["resize"] = size
+
+            def parameters(self):
+                return []
+
+        tokenizer = _Tokenizer()
+        model = _Model()
+
+        fake_transformers = types.SimpleNamespace(
+            AutoTokenizer=types.SimpleNamespace(
+                from_pretrained=lambda *args, **kwargs: tokenizer
+            ),
+            AutoModelForCausalLM=types.SimpleNamespace(
+                from_pretrained=lambda *args, **kwargs: model
+            ),
+        )
+        fake_peft = types.SimpleNamespace(
+            LoraConfig=lambda **kwargs: SimpleNamespace(**kwargs),
+            TaskType=SimpleNamespace(CAUSAL_LM="CAUSAL_LM"),
+            get_peft_model=lambda model_obj, _cfg: model_obj,
+            prepare_model_for_kbit_training=lambda model_obj: model_obj,
+        )
+        monkeypatch.setitem(sys.modules, "transformers", fake_transformers)
+        monkeypatch.setitem(sys.modules, "peft", fake_peft)
+        monkeypatch.setattr(
+            "soup_cli.utils.quant_menu.build_quantization_config_for_loader",
+            lambda **kwargs: None,
+        )
+        monkeypatch.setattr("soup_cli.utils.moe.detect_moe_model", lambda _m: False)
+        monkeypatch.setattr("soup_cli.utils.moe.get_moe_target_modules", lambda _m: [])
+        monkeypatch.setattr(
+            "soup_cli.utils.block_expansion.apply_block_expansion_if_configured",
+            lambda *args, **kwargs: None,
+        )
+        monkeypatch.setattr(
+            "soup_cli.utils.moe_quant.apply_moe_expert_quant_if_configured",
+            lambda *args, **kwargs: None,
+        )
+        monkeypatch.setattr(
+            "soup_cli.utils.peft_wiring.apply_pre_lora_patches",
+            lambda *args, **kwargs: None,
+        )
+        monkeypatch.setattr(
+            "soup_cli.utils.peft_wiring.apply_post_lora_patches",
+            lambda *args, **kwargs: None,
+        )
+        monkeypatch.setattr(
+            "soup_cli.utils.v028_features.apply_v028_speed_memory",
+            lambda *args, **kwargs: None,
+        )
+
+        wrapper = object.__new__(SFTTrainerWrapper)
+        wrapper.config = cfg
+        wrapper.device = "cpu"
+        wrapper._trust_remote_code = False
+        wrapper.model = None
+        wrapper.tokenizer = None
+
+        wrapper._setup_transformers(cfg, cfg.training)
+
+        assert calls["add_tokens"] == ["<new_a>", "<old>"]
+        assert calls["add_special_tokens"] == ["<special_a>"]
+        assert calls["resize"] == len(tokenizer)
+
 
 class TestDPOTrainerInit:
     """Test DPOTrainerWrapper constructor."""

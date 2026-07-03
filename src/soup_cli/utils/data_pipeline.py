@@ -417,6 +417,53 @@ def validate_new_tokens(value: Optional[List[str]]) -> Optional[List[str]]:
     return cleaned
 
 
+def apply_vocab_expansion(tokenizer: Any, model: Any, data_cfg: Any) -> int:
+    """Add configured tokens to ``tokenizer`` and resize ``model`` embeddings.
+
+    The helper is intentionally shared by every text trainer so
+    ``data.add_new_tokens`` / ``data.new_special_tokens`` are applied in one
+    place. It is safe to call even when no expansion is configured.
+
+    Returns:
+        Number of tokens added to the tokenizer.
+    """
+    regular = list(dict.fromkeys(getattr(data_cfg, "add_new_tokens", None) or []))
+    special = list(
+        dict.fromkeys(getattr(data_cfg, "new_special_tokens", None) or [])
+    )
+    if not regular and not special:
+        return 0
+
+    existing = set()
+    if hasattr(tokenizer, "get_vocab"):
+        try:
+            existing = set(tokenizer.get_vocab().keys())
+        except Exception:
+            existing = set()
+
+    # Special tokens take precedence if the same string appears in both lists.
+    special = [token for token in special if token not in existing]
+    special_set = set(special)
+    regular = [
+        token for token in regular
+        if token not in existing and token not in special_set
+    ]
+
+    added = 0
+    if regular and hasattr(tokenizer, "add_tokens"):
+        result = tokenizer.add_tokens(regular)
+        added += int(result or 0)
+    if special and hasattr(tokenizer, "add_special_tokens"):
+        result = tokenizer.add_special_tokens(
+            {"additional_special_tokens": special}
+        )
+        added += int(result or 0)
+
+    if added > 0 and hasattr(model, "resize_token_embeddings"):
+        model.resize_token_embeddings(len(tokenizer))
+    return added
+
+
 # --- Part E: Custom prompt strategies -------------------------------------
 
 # Module:fn syntax allowlist — mirrors how Axolotl exposes user transforms.

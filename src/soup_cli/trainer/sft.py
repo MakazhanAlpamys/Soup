@@ -720,7 +720,13 @@ class SFTTrainerWrapper:
                 console.print(f"[green]FlashAttention enabled:[/] {attn_impl}")
 
         self.model = AutoModelForCausalLM.from_pretrained(cfg.base, **model_kwargs)
+        from soup_cli.utils.data_pipeline import apply_vocab_expansion
 
+        apply_vocab_expansion(
+        self.tokenizer,
+        self.model,
+        cfg.data,
+        )
         # Long-context — apply RoPE scaling after model load
         if tcfg.rope_scaling_type:
             from soup_cli.utils.long_context import apply_long_context_config
