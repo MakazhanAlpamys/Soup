@@ -11,12 +11,13 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Literal, Optional
+from urllib.parse import urlparse
 
 import yaml
 from pydantic import BaseModel, Field, field_validator
 
 from soup_cli.utils.paths import is_under_cwd
-from urllib.parse import urlparse
+
 
 @dataclass(frozen=True)
 class GateTaskResult:
