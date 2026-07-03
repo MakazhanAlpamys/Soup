@@ -53,7 +53,14 @@ class TestParseJudgeURL:
         assert provider == "server"
         assert model == "Qwen2.5"
         assert base == "http://localhost:8000"
+    def test_rejects_localhost_prefix_bypass(self):
+        from soup_cli.eval.gate import _parse_judge_url
 
+        with pytest.raises(ValueError, match="unsupported scheme"):
+            _parse_judge_url("http://localhost.attacker.com/model")
+
+        with pytest.raises(ValueError, match="unsupported scheme"):
+            _parse_judge_url("http://127.0.0.1.evil/model")
     def test_rejects_unsupported_scheme(self):
         from soup_cli.eval.gate import _parse_judge_url
 
