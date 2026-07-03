@@ -498,3 +498,15 @@ class TestTrainGateFlag:
         cleaned = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
         assert "--gate" in cleaned
         assert "eval-gated" in cleaned
+class TestJudgeModelValidation:
+    def test_rejects_localhost_prefix_bypass(self):
+        from soup_cli.eval.gate import GateTask
+
+        with pytest.raises(ValueError, match="judge_model"):
+            GateTask(
+                type="judge",
+                name="judge",
+                threshold=0.5,
+                prompts="prompts.jsonl",
+                judge_model="http://localhost.attacker.com/model",
+            )

@@ -16,7 +16,7 @@ import yaml
 from pydantic import BaseModel, Field, field_validator
 
 from soup_cli.utils.paths import is_under_cwd
-
+from urllib.parse import urlparse
 
 @dataclass(frozen=True)
 class GateTaskResult:
@@ -81,13 +81,18 @@ class GateTask(BaseModel):
         if value is None:
             return None
         # Allowlist of schemes — SSRF hardening consistent with the project.
-        allowed = ("ollama://", "https://", "http://localhost", "http://127.0.0.1")
-        if not value.startswith(allowed):
-            raise ValueError(
-                f"judge_model URL '{value}' uses disallowed scheme - "
-                "use ollama://, https://, or http://localhost"
-            )
-        return value
+        parsed = urlparse(value)
+
+        if parsed.scheme in ("ollama","https"):
+            return value
+
+        if (parsed.scheme == "http" and parsed.hostname in {"localhost", "127.0.0.1"}):
+            return value
+
+        raise ValueError(
+            f"judge_model URL '{value}' uses disallowed scheme - "
+            "use ollama://, https://, or http://localhost"
+        )
 
 
 class EvalSuite(BaseModel):
@@ -168,31 +173,37 @@ def _parse_judge_url(judge_model: str) -> tuple[str, str, Optional[str]]:
       ``http://localhost:8000/Qwen2.5`` -> ("server", "Qwen2.5", "http://localhost:8000")
       ``https://api.openai.com/gpt-4o-mini`` -> ("openai", "gpt-4o-mini", "https://api.openai.com")
     """
-    if judge_model.startswith("ollama://"):
-        return ("ollama", judge_model[len("ollama://"):], None)
-    # http(s):// — last path segment is the model id; the rest is api_base.
-    # Defence-in-depth: GateTask._valid_judge_url already restricts the
-    # scheme to ollama:// / https:// / http://localhost / http://127.0.0.1.
-    # We match prefixes in the same order here. We do NOT include a bare
-    # ``http://`` catch-all — if validation is ever bypassed and a non-loopback
-    # http URL reaches us, the trailing ``raise ValueError`` will fire.
-    for prefix, default_provider in (
-        ("http://localhost", "server"),
-        ("http://127.0.0.1", "server"),
-        ("https://", "openai"),
-    ):
-        if judge_model.startswith(prefix):
-            try:
-                base, model = judge_model.rsplit("/", 1)
-            except ValueError as exc:
-                raise ValueError(
-                    f"judge_model '{judge_model}' missing model id"
-                ) from exc
-            if not model:
-                raise ValueError(f"judge_model '{judge_model}' missing model id")
-            return (default_provider, model, base)
-    raise ValueError(f"judge_model '{judge_model}' uses unsupported scheme")
 
+    parsed = urlparse(judge_model)
+
+    if parsed.scheme == "ollama":
+        return ("ollama", judge_model[len("ollama://"):], None)
+
+    if parsed.scheme == "https":
+        default_provider = "openai"
+    elif (
+        parsed.scheme == "http"
+        and parsed.hostname in ("localhost", "127.0.0.1")
+    ):
+        default_provider = "server"
+    else:
+        raise ValueError(
+            f"judge_model '{judge_model}' uses unsupported scheme"
+        )
+
+    try:
+        base, model = judge_model.rsplit("/", 1)
+    except ValueError as exc:
+        raise ValueError(
+            f"judge_model '{judge_model}' missing model id"
+        ) from exc
+
+    if not model:
+        raise ValueError(
+            f"judge_model '{judge_model}' missing model id"
+        )
+
+    return (default_provider, model, base)
 
 def _run_judge_task(
     task: GateTask, generate_fn: Callable[[str], str],
