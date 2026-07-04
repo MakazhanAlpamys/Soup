@@ -18,6 +18,11 @@ reproducing 70+ versions of notes.
   `apply_vocab_expansion()` helper during setup, consistent with the SFT path —
   they previously ignored it. Closes #292
   ([#293](https://github.com/MakazhanAlpamys/Soup/pull/293) by [@CODING-DARSH](https://github.com/CODING-DARSH)).
+- The ORPO / SimPO / GRPO trainers now also apply configured vocabulary
+  expansion via the shared `apply_vocab_expansion()` helper — completing
+  consistent vocab-expansion behavior across every SFT/preference/RL trainer.
+  Closes #294
+  ([#295](https://github.com/MakazhanAlpamys/Soup/pull/295) by [@CODING-DARSH](https://github.com/CODING-DARSH)).
 
 ## [0.71.27] - 2026-07-03
 

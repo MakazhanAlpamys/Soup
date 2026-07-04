@@ -49,6 +49,7 @@ Listed by first contribution. PR numbers link the work.
   - Apply configured vocabulary expansion (`data.add_new_tokens` / `new_special_tokens`) during SFT trainer init ([#287](https://github.com/MakazhanAlpamys/Soup/pull/287))
   - Reuse the shared vocab-expansion helper in the vision + audio SFT paths ([#291](https://github.com/MakazhanAlpamys/Soup/pull/291))
   - Honor configured vocab expansion in the DPO / IPO / KTO / BCO trainers ([#293](https://github.com/MakazhanAlpamys/Soup/pull/293))
+  - Honor configured vocab expansion in the ORPO / SimPO / GRPO trainers ([#295](https://github.com/MakazhanAlpamys/Soup/pull/295))
 
 ---
 
