@@ -156,6 +156,8 @@ soup ship --base <m> --adapter <lora> --task-eval t.jsonl  SHIP / DON'T-SHIP ver
 soup ship --evidence ev.json [--output v.json]  Decide offline from pre-computed scores (no model load)
 soup ship ... --task-mode judge_score --judge-model ollama://llama3.1  Leg-1 via LLM-as-a-judge
 soup ship ... --general-suite mmlu,gsm8k --baseline base.json  lm-eval leg-2 + recorded base scores
+soup mcp serve                                MCP server over stdio (drive Soup from Claude Code / Cursor / Cline; requires [mcp] extra) (v0.71.28)
+soup mcp serve --allow-mutating               Also expose plan-only train_start / export tools (never execute) (v0.71.28)
 soup tui                                      Full-screen Textual dashboard (requires [tui] extra)
 soup train --config soup.yaml --profile       Record torch.profiler trace to <output>/profiles/
 soup --log-level quiet|normal|verbose|debug   Global logging tier (Rich-formatted)
@@ -266,5 +268,38 @@ soup export --model ./output --format bitnet|tq1_0  BitNet 1.58 TQ1_0 ternary GG
 soup version [--full] [--json]                Show version (--full: system info, --json: JSON output)
 soup --verbose <command>                      Full traceback on errors
 ```
+
+## Fine-tune from your coding agent (MCP)
+
+`soup mcp serve` runs a [Model Context Protocol](https://modelcontextprotocol.io)
+server over **stdio**, so any MCP client — Claude Code, Cursor, Cline, Continue —
+can drive Soup conversationally. Install the extra first:
+
+```bash
+pip install 'soup-cli[mcp]'
+```
+
+Register it with your client. For **Claude Code** (`.mcp.json` in the repo) or
+the **Claude Desktop** config (`claude_desktop_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "soup": { "command": "soup", "args": ["mcp", "serve"] }
+  }
+}
+```
+
+The server exposes 14 read-only tools — `advise`, `data_inspect`,
+`data_validate`, `data_score`, `data_doctor`, `recipes_search`, `recipes_show`,
+`runs_list`, `runs_show`, `registry_list`, `registry_show`, `profile`,
+`diagnose_evidence`, `ship_evidence` — each returning JSON. Two **plan-only**
+mutating tools (`train_start`, `export`) are gated behind `--allow-mutating`
+(`"args": ["mcp", "serve", "--allow-mutating"]`); even then they only render the
+exact command that would run — they never execute training or export.
+
+**Security:** stdio only (no network listener); every path argument stays under
+the working directory and rejects symlinks; tool output is control-char
+sanitized; error messages never leak filesystem paths.
 
 

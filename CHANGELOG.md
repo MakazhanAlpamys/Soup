@@ -12,6 +12,23 @@ reproducing 70+ versions of notes.
 
 ## [Unreleased]
 
+## [0.71.28] - 2026-07-04
+
+### Added
+- **MCP server (`soup mcp serve`)** — drive Soup from any Model Context Protocol
+  client (Claude Code / Cursor / Cline / Continue) over stdio. No fine-tuning
+  CLI ships an MCP server. Exposes 14 read-only tools as JSON — `advise`,
+  `data_inspect` / `data_validate` / `data_score` / `data_doctor`,
+  `recipes_search` / `recipes_show`, `runs_list` / `runs_show`,
+  `registry_list` / `registry_show`, `profile`, `diagnose_evidence`,
+  `ship_evidence` — plus two **plan-only** mutating tools (`train_start`,
+  `export`) gated behind `--allow-mutating` (they render the exact command that
+  would run; they never execute). The official `mcp` SDK is behind a new
+  `[mcp]` extra (`pip install 'soup-cli[mcp]'`), lazy-imported so the core CLI
+  stays light. Security: stdio-only (no network listener); every path argument
+  re-enters cwd-containment + symlink rejection; output is control-char
+  sanitized; errors are path-free; string / size / int bounds enforced.
+
 ### Fixed
 - The DPO / IPO / KTO / BCO trainers now apply configured vocabulary expansion
   (`data.add_new_tokens` / `data.new_special_tokens`) via the shared

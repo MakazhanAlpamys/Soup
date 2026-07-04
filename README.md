@@ -49,25 +49,25 @@ infrastructure instead of improving models. Soup fixes that.
 
 ## What's New
 
-**v0.71.27 — Fine-tune Doctor: catch silent failures before they burn a training run.** `soup data doctor` and `soup data lint` — no competitor (Unsloth/Axolotl/LlamaFactory) ships either.
+**v0.71.28 — Drive Soup from your coding agent: `soup mcp serve`.** A Model Context Protocol server, so Claude Code / Cursor / Cline / Continue can run Soup conversationally. No other fine-tuning CLI ships one.
 
-- **The #1 "model never stops generating" bug, caught pre-flight.** `soup data doctor` checks
-  whether every trained turn actually contains an EOS token — plus BOS duplication,
-  no-system-role templates, unknown roles, and truncation risk — before you burn GPU hours on
-  a broken chat template.
-- **See exactly what's trained, token by token.** `--show-mask N` renders sample rows through
-  the REAL collator path (answer-only / RAFT / packing-aware), so an assistant-mask bug is
-  visible instantly instead of silently degrading the whole run.
-- **Stop silently-worse DPO runs.** `soup data lint` flags length bias (the #1 silent
-  preference-tuning degradation, reported as an effect size), near-duplicate pairs,
-  chosen==rejected rows, and prompt leakage — across dpo/orpo/simpo/ipo/bco/kto data.
-- **Found real bugs on a real tokenizer.** Live-validated against
-  `HuggingFaceTB/SmolLM2-135M-Instruct` on Windows + RTX 3050 — the smoke pass itself caught
-  two genuine template-handling bugs before release.
+- **14 read-only tools, JSON out.** `advise`, `data_inspect` / `validate` / `score` / `doctor`,
+  `recipes_search` / `show`, `runs_list` / `show`, `registry_list` / `show`, `profile`,
+  `diagnose_evidence`, `ship_evidence` — your agent can inspect data, search recipes, read runs,
+  and get a ship verdict without you leaving the chat.
+- **Plan-only by default, safe by design.** stdio transport only (no network listener); the two
+  mutating tools (`train_start`, `export`) are gated behind `--allow-mutating` and only ever
+  render the exact command that would run. Every path argument re-enters cwd containment +
+  symlink rejection; output is control-char sanitized; errors are path-free.
+- **Light install.** The official `mcp` SDK lives behind a new `[mcp]` extra
+  (`pip install 'soup-cli[mcp]'`), lazy-imported so the core CLI stays torch-free and fast.
+- **Live-validated on Windows.** A real stdio MCP client drove `initialize → list_tools →
+  call` end-to-end on Windows + RTX 3050 — read tools return real JSON, the mutating tools
+  refuse without the flag, and a path-traversal argument is rejected.
 
-```bash
-soup data doctor train.jsonl --model meta-llama/Llama-3.1-8B-Instruct --show-mask 3
-soup data lint prefs.jsonl --model meta-llama/Llama-3.1-8B-Instruct
+```jsonc
+// .mcp.json (Claude Code) or claude_desktop_config.json
+{ "mcpServers": { "soup": { "command": "soup", "args": ["mcp", "serve"] } } }
 ```
 
 Full history: [CHANGELOG.md](CHANGELOG.md) &middot; [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).

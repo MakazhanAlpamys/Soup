@@ -120,7 +120,7 @@ src/soup_cli/
   templates/          - 17 built-in soup.yaml templates (YAML + manifest.json) with load_template loader (v0.39.0, +bco v0.40.0)
   ui/                 - Web UI (FastAPI + HTML/JS SPA)
 
-tests/                - Test suite (304 files, 15042 tests)
+tests/                - Test suite (305 files, 15140 tests)
 examples/             - Real-world config examples and datasets
 ```
 
@@ -150,7 +150,7 @@ pytest tests/test_data.py::test_detect_alpaca_format -v
 pytest tests/ --cov=soup_cli --cov-report=html
 ```
 
-### Test Files (304 files)
+### Test Files (305 files)
 
 > A representative sample of the suite below. The full table lives in
 > [`.claude/CLAUDE.md`](.claude/CLAUDE.md); run `pytest tests/ -v` for the complete list.
