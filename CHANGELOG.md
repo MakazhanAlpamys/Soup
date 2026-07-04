@@ -12,7 +12,55 @@ reproducing 70+ versions of notes.
 
 ## [Unreleased]
 
+## [0.71.27] - 2026-07-03
+
+### Added
+- **Fine-tune Doctor** — kill the top *silent* fine-tune failures before a
+  single training step; no competitor (Unsloth/Axolotl/LlamaFactory) ships
+  any of these three:
+  - `soup data doctor <data> --model <id|path>` — chat-template
+    compatibility report over 8 checks: `chat_template` present,
+    `template_render`s cleanly, has `{% generation %}` markers,
+    `eos_in_labels` (the **#1 "model never stops generating" bug** — every
+    assistant turn's trained span must actually contain an EOS/EOT token;
+    checks every turn, not just the last), `bos_duplication` (template +
+    tokenizer both prepending BOS), `system_role` support (Mistral-style
+    templates reject a leading system turn), `unknown_roles`, and
+    `truncation_risk` (p95 rendered length vs `max_length`). Same OK / MINOR
+    / MAJOR taxonomy as `soup diagnose`; exit 0 = OK/MINOR, exit 2 = MAJOR.
+    `--train-on-responses-only` / `--train-on-messages-with-train-field`
+    select the same masking strategy `soup train` would use, so the report
+    and `--show-mask` never disagree about what's actually trained.
+  - `soup data doctor ... --show-mask N` — render N sample rows with
+    per-token trained/masked colouring through the REAL collator path
+    (answer-only / per-message-train-field / RAFT span-mask) — not a
+    reimplementation — so an assistant-mask bug is visible instantly.
+  - `soup data lint <data>` — preference-data linter for
+    dpo/orpo/simpo/ipo/bco/kto: `length_bias` (chosen systematically longer
+    than rejected — the **#1 silent DPO degradation**, reported as a
+    Cohen's d effect size), `label_imbalance` (KTO desirable:undesirable
+    ratio), `near_duplicates` (MinHash/LSH, reuses the `soup data dedup`
+    kernel), `identical_pairs` (chosen == rejected — zero preference
+    signal), and `prompt_leak` (the prompt echoed verbatim inside the
+    completion — a common synthetic-data pipeline bug). Optional `--model`
+    for exact token-length bias (default: word count).
+  - Validated live against the real `HuggingFaceTB/SmolLM2-135M-Instruct`
+    tokenizer on Windows + RTX 3050 — this smoke pass found and fixed two
+    genuine bugs beyond what synthetic fixtures alone caught: an EOS check
+    that required the EOS token to be the *literal last* trained token
+    (real templates often have a trailing formatting token after the
+    closing tag that stays inside the trained span), and two call sites
+    that only caught `(ValueError, TypeError)` around a tokenizer's
+    `apply_chat_template` when a real Jinja `raise_exception()`
+    (Mistral-style no-system-role guard) raises
+    `jinja2.exceptions.TemplateError`.
+
 ### Fixed
+- Harden `commands/diagnose.py`'s `--evidence` loader against a TOCTOU
+  symlink swap: opens with `O_NOFOLLOW` and size-checks the open fd via
+  `os.fstat` instead of `os.path.getsize` on the path before the open —
+  backports the hardened loader shipped for `soup ship` in v0.71.25 (closes
+  v0.71.25 known-limitation (4)).
 - Harden judge-model URL validation against a hostname prefix bypass
   (`http://localhost.attacker.com`) — `GateTask._valid_judge_url` /
   `_parse_judge_url` now use `urllib.parse.urlparse` + hostname checks instead
@@ -23,6 +71,17 @@ reproducing 70+ versions of notes.
   embeddings during initialization — previously these fields were accepted by
   the schema but silently ignored. Closes #289
   ([#287](https://github.com/MakazhanAlpamys/Soup/pull/287) by [@CODING-DARSH](https://github.com/CODING-DARSH)).
+
+### Security
+- `soup data doctor` strips C0 control characters (keeping tab/newline/CR)
+  from dataset-derived content before it reaches the terminal — Rich's
+  `markup.escape()` only neutralises `[...]` tag syntax, not raw escape
+  sequences, so an untrusted training row (e.g. an unknown `role` field, or
+  `--show-mask`'s decoded token text on a byte-level BPE tokenizer) could
+  otherwise carry a literal ESC byte through to the terminal (title-bar /
+  OSC-8 link spoofing, or obscuring a MAJOR verdict via cursor tricks).
+  `--output` JSON is unaffected (`json.dumps` already escapes control
+  characters).
 
 ## [0.71.26] - 2026-07-01
 

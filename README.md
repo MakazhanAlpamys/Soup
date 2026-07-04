@@ -49,21 +49,25 @@ infrastructure instead of improving models. Soup fixes that.
 
 ## What's New
 
-**v0.71.26 — Closed-loop reward-hacking auto-mitigation.** Your GRPO/PPO trainer now *detects* reward hacking mid-run and *self-corrects* — instead of only halting. No OSS RLHF library closes this loop.
+**v0.71.27 — Fine-tune Doctor: catch silent failures before they burn a training run.** `soup data doctor` and `soup data lint` — no competitor (Unsloth/Axolotl/LlamaFactory) ships either.
 
-- **Detect → correct → continue.** When the hacking signal trips, the controller raises the
-  KL coefficient β (bang-bang + hysteresis, or a PID-Lagrangian controller), and — if hacking
-  persists — **rolls back to the last-good checkpoint**, then early-stops as a last resort.
-- **Anti-gaming hardening.** Multi-signal voting (RM cluster-separation + length-trend +
-  repetition), signal smoothing, conservative-on-disagreement, a reward-distribution-drift
-  guard, and optional bounded **reward shaping** on the gamed proxy.
-- **Observe first.** `reward_hack_mitigation=log_only` streams a per-step `mitigation_log.jsonl`
-  and never touches training — see the hacking happen before you let the controller act.
-- **Honest scope.** Proof-of-mechanism on SmolLM2-135M + a synthetic hacking task on one RTX
-  3050 (all four stages validated live, including a real rollback). PPO ships BETA.
+- **The #1 "model never stops generating" bug, caught pre-flight.** `soup data doctor` checks
+  whether every trained turn actually contains an EOS token — plus BOS duplication,
+  no-system-role templates, unknown roles, and truncation risk — before you burn GPU hours on
+  a broken chat template.
+- **See exactly what's trained, token by token.** `--show-mask N` renders sample rows through
+  the REAL collator path (answer-only / RAFT / packing-aware), so an assistant-mask bug is
+  visible instantly instead of silently degrading the whole run.
+- **Stop silently-worse DPO runs.** `soup data lint` flags length bias (the #1 silent
+  preference-tuning degradation, reported as an effect size), near-duplicate pairs,
+  chosen==rejected rows, and prompt leakage — across dpo/orpo/simpo/ipo/bco/kto data.
+- **Found real bugs on a real tokenizer.** Live-validated against
+  `HuggingFaceTB/SmolLM2-135M-Instruct` on Windows + RTX 3050 — the smoke pass itself caught
+  two genuine template-handling bugs before release.
 
 ```bash
-soup train --config grpo.yaml --reward-hack-mitigation kl_control   # detect → raise KL → recover
+soup data doctor train.jsonl --model meta-llama/Llama-3.1-8B-Instruct --show-mask 3
+soup data lint prefs.jsonl --model meta-llama/Llama-3.1-8B-Instruct
 ```
 
 Full history: [CHANGELOG.md](CHANGELOG.md) &middot; [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).

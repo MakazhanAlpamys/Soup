@@ -510,6 +510,13 @@ app.add_typer(
     help="RA-DIT two-stage orchestrator: retriever -> generator (v0.71.10).",
 )
 
+# v0.71.27 — Fine-tune Doctor: chat-template doctor + loss-mask X-ray +
+# preference linter.
+from soup_cli.commands import data_doctor as _data_doctor_cmd  # noqa: E402
+
+data.app.command(name="doctor")(_data_doctor_cmd.doctor)
+data.app.command(name="lint")(_data_doctor_cmd.lint)
+
 
 def _rewrite_advise_argv(argv: list) -> list:
     """Inject `run` between `advise` and a non-subcommand first argument.

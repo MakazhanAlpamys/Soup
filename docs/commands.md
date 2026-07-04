@@ -68,6 +68,9 @@ soup sweep --config soup.yaml --param lr=...  Hyperparameter search
 soup diff --model-a ./a --model-b ./b         Compare two models
 soup data inspect <path>                      View dataset stats
 soup data validate <path>                     Check format (auto-detect)
+soup data doctor <path> --model <id>          Chat-template compat report: 8 checks, OK/MINOR/MAJOR
+soup data doctor <path> --model <id> --show-mask N  Per-token trained/masked colouring via the real collator
+soup data lint <path>                         Preference-data linter: length bias, near-dups, chosen==rejected
 soup data convert <path> --to chatml          Convert between formats
 soup data merge data1.jsonl data2.jsonl       Combine datasets
 soup data dedup <path> --threshold 0.8        Remove duplicates (MinHash)
@@ -81,7 +84,8 @@ soup data generate ... --quality-pipeline     Auto validate + filter + dedup
 soup data augment <path> --strategy rephrase|translate|style [--provider ollama|vllm --model <m> --base-url <url>]  LLM-driven augmentation
 soup data from-traces --logs l.jsonl --format langchain --signal thumbs_up --output p.jsonl  Preference pairs from traces
 soup data from-traces ... --judge --min-confidence 0.7  LLM-judge confidence filter
-soup data review prefs.jsonl --sample 10      Preview preference pairssoup data filter <path> --coherence 0.3       Quality filter (perplexity/coherence)
+soup data review prefs.jsonl --sample 10      Preview preference pairs
+soup data filter <path> --coherence 0.3       Quality filter (perplexity/coherence)
 soup data sample <path> --n 1000             Random sample subset
 soup data sample <path> --n 1000 --strategy diverse  Cluster-based diverse sampling
 soup data sample <path> --n 1000 --strategy hard     Sample hardest examples

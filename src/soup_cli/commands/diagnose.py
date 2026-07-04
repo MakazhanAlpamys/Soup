@@ -80,16 +80,24 @@ def _render_report(report: FailureReport) -> None:
 
 
 def _load_evidence(path: str) -> dict:
+    """Load an evidence JSON (cwd-contained, symlink-rejected, size-capped).
+
+    Opens with ``O_NOFOLLOW`` (where available) and fstats the open fd so a
+    symlink swapped in after the containment check cannot redirect the read
+    (TOCTOU defence — backports the v0.71.25 ``soup ship`` hardened loader;
+    v0.71.25 known-limitation (4)).
+    """
     enforce_under_cwd_and_no_symlink(path, "evidence path")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
     try:
-        size = os.path.getsize(path)
+        fd = os.open(path, flags)
     except OSError as exc:
         raise typer.BadParameter(f"evidence path unreadable: {exc}") from exc
-    if size > _MAX_EVIDENCE_BYTES:
-        raise typer.BadParameter(
-            f"evidence file exceeds {_MAX_EVIDENCE_BYTES} bytes"
-        )
-    with open(path, encoding="utf-8") as handle:
+    with os.fdopen(fd, "r", encoding="utf-8") as handle:
+        if os.fstat(handle.fileno()).st_size > _MAX_EVIDENCE_BYTES:
+            raise typer.BadParameter(
+                f"evidence file exceeds {_MAX_EVIDENCE_BYTES} bytes"
+            )
         payload = json.load(handle)
     if not isinstance(payload, dict):
         raise typer.BadParameter("evidence file must contain a JSON object")

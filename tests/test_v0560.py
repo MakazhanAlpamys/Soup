@@ -850,16 +850,21 @@ class TestReviewFixCoverage:
             _write_badge(str(link), "<svg/>")
 
     # security-review HIGH — evidence file size cap (16 MiB).
+    # v0.71.27: the loader was hardened to O_NOFOLLOW + fstat (mirrors
+    # `soup ship`'s loader) so the size check now reads via os.fstat on the
+    # OPEN fd rather than os.path.getsize on the path (closes the TOCTOU
+    # window a symlink swap could exploit between check and open).
     def test_evidence_size_cap(self, tmp_path: Path) -> None:
         os.chdir(tmp_path)
-        # Use a tiny file but monkeypatch getsize to exceed the cap.
+        # Use a tiny file but monkeypatch fstat to report an oversize length.
         ev = tmp_path / "ev.json"
         ev.write_text("{}", encoding="utf-8")
-        from unittest.mock import patch
+        from unittest.mock import MagicMock, patch
 
         from soup_cli.commands.diagnose import _load_evidence
 
-        with patch("os.path.getsize", return_value=20 * 1024 * 1024):
+        fake_stat = MagicMock(st_size=20 * 1024 * 1024)
+        with patch("os.fstat", return_value=fake_stat):
             with pytest.raises(Exception, match="exceeds"):
                 _load_evidence(str(ev))
 

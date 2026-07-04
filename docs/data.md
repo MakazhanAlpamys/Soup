@@ -637,3 +637,49 @@ written per node; resume rehydrates from per-node sidecars. Failed rows logged w
 redacted reasons (paths stripped, capped at 256 chars).
 
 
+## Fine-tune Doctor (`soup data doctor`)
+
+Chat-template compatibility report — catches the top *silent* fine-tuning failures
+before a single training step:
+
+```bash
+soup data doctor ./data/train.jsonl --model meta-llama/Llama-3.1-8B-Instruct
+
+# Render N sample rows with per-token trained/masked colouring, through the REAL
+# collator path (answer-only / per-message-train-field / RAFT span-mask)
+soup data doctor ./data/train.jsonl --model meta-llama/Llama-3.1-8B-Instruct --show-mask 5
+```
+
+Eight checks, same OK/MINOR/MAJOR taxonomy as `soup diagnose` (exit 0 on OK/MINOR,
+exit 2 on MAJOR): `chat_template` (tokenizer has one), `template_render` (renders
+cleanly on a sample), `generation_markers` (`{% generation %}` support),
+`eos_in_labels` — the **#1 "model never stops generating" bug**: every trained
+assistant turn must actually contain an EOS/EOT token, checked across the *whole*
+trained span, not just the last turn — `bos_duplication` (template + tokenizer both
+prepending BOS), `system_role` (Mistral-style templates that reject a leading system
+turn), `unknown_roles`, and `truncation_risk` (p95 rendered length vs
+`data.max_length`). `--train-on-responses-only` / `--train-on-messages-with-train-field`
+select the same masking strategy `soup train` would use, so the report and
+`--show-mask` preview can never disagree about what's actually trained.
+
+
+## Preference-Data Linter (`soup data lint`)
+
+Catches the top silent degradations in DPO/ORPO/SimPO/IPO/BCO/KTO preference data:
+
+```bash
+soup data lint ./data/prefs.jsonl
+soup data lint ./data/prefs.jsonl --model meta-llama/Llama-3.1-8B-Instruct  # exact token-length bias, not word count
+```
+
+Five checks: `length_bias` — the **#1 silent DPO degradation**: `chosen`
+systematically longer than `rejected`, reported as a Cohen's d effect size —
+`label_imbalance` (KTO desirable:undesirable ratio), `near_duplicates`
+(MinHash/LSH, reuses the `soup data dedup` kernel; requires
+`pip install 'soup-cli[data]'`, degrades to an advisory skip otherwise),
+`identical_pairs` (`chosen == rejected` — zero preference signal), and
+`prompt_leak` (the prompt echoed verbatim inside the completion, a common
+synthetic-data pipeline bug). Same OK/MINOR/MAJOR taxonomy and exit codes as
+`soup data doctor`.
+
+
