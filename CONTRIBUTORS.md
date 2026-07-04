@@ -47,6 +47,7 @@ Listed by first contribution. PR numbers link the work.
 - **Darsh** ([@CODING-DARSH](https://github.com/CODING-DARSH))
   - Harden judge-URL validation against hostname prefix bypass (`startswith` → `urlparse`) in `eval/gate.py` ([#288](https://github.com/MakazhanAlpamys/Soup/pull/288))
   - Apply configured vocabulary expansion (`data.add_new_tokens` / `new_special_tokens`) during SFT trainer init ([#287](https://github.com/MakazhanAlpamys/Soup/pull/287))
+  - Reuse the shared vocab-expansion helper in the vision + audio SFT paths ([#291](https://github.com/MakazhanAlpamys/Soup/pull/291))
 
 ---
 

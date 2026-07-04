@@ -12,6 +12,13 @@ reproducing 70+ versions of notes.
 
 ## [Unreleased]
 
+### Fixed
+- Vision and audio SFT paths now apply configured vocabulary expansion
+  (`data.add_new_tokens` / `data.new_special_tokens`) via the shared
+  `apply_vocab_expansion()` helper, consistent with the text SFT path — they
+  previously ignored it. Closes #290
+  ([#291](https://github.com/MakazhanAlpamys/Soup/pull/291) by [@CODING-DARSH](https://github.com/CODING-DARSH)).
+
 ## [0.71.27] - 2026-07-03
 
 ### Added
