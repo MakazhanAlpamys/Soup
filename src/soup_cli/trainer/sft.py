@@ -937,7 +937,13 @@ class SFTTrainerWrapper:
             model_kwargs["quantization_config"] = quant_config_obj
 
         self.model = AutoModelForVision2Seq.from_pretrained(cfg.base, **model_kwargs)
+        from soup_cli.utils.data_pipeline import apply_vocab_expansion
 
+        apply_vocab_expansion(
+            self.processor.tokenizer,
+            self.model,
+            cfg.data,
+        )
         if tcfg.quantization in ("4bit", "8bit", "mxfp4"):
             self.model = prepare_model_for_kbit_training(self.model)
 
@@ -1042,7 +1048,13 @@ class SFTTrainerWrapper:
         # Use AutoModel for audio models — AutoModelForCausalLM doesn't handle
         # audio-language architectures (Qwen2-Audio, Whisper, etc.)
         self.model = AutoModel.from_pretrained(cfg.base, **model_kwargs)
+        from soup_cli.utils.data_pipeline import apply_vocab_expansion
 
+        apply_vocab_expansion(
+            self.processor.tokenizer,
+            self.model,
+            cfg.data,
+        )
         if tcfg.quantization in ("4bit", "8bit", "mxfp4"):
             self.model = prepare_model_for_kbit_training(self.model)
 

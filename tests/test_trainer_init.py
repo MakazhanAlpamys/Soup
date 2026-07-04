@@ -163,7 +163,197 @@ class TestSFTTrainerInit:
         assert calls["add_tokens"] == ["<new_a>", "<old>"]
         assert calls["add_special_tokens"] == ["<special_a>"]
         assert calls["resize"] == len(tokenizer)
+    def test_vision_vocab_expansion_adds_tokens_and_resizes(self, monkeypatch):
+        """Vision SFT should apply configured vocabulary expansion."""
 
+        import sys
+        import types
+        from types import SimpleNamespace
+
+        from soup_cli.trainer.sft import SFTTrainerWrapper
+
+        cfg = _make_config(
+            modality="vision",
+            data={
+                "train": "./data.jsonl",
+                "format": "llava",
+                "add_new_tokens": ["<vision_new>", "<old>"],
+                "new_special_tokens": ["<vision_special>"],
+                "resize_vocab": True,
+            },
+            training={"quantization": "none"},
+        )
+
+        calls = {
+            "add_tokens": None,
+            "add_special_tokens": None,
+            "resize": None,
+        }
+
+        class _Tokenizer:
+            def __init__(self):
+                self.vocab = {"<old>": 0}
+
+            def get_vocab(self):
+                return self.vocab
+
+            def add_tokens(self, tokens):
+                calls["add_tokens"] = list(tokens)
+                for t in tokens:
+                    self.vocab.setdefault(t, len(self.vocab))
+                return len(tokens)
+
+            def add_special_tokens(self, data):
+                tokens = list(data["additional_special_tokens"])
+                calls["add_special_tokens"] = tokens
+                for t in tokens:
+                    self.vocab.setdefault(t, len(self.vocab))
+                return len(tokens)
+
+            def __len__(self):
+                return len(self.vocab)
+
+        class _Processor:
+            def __init__(self):
+                self.tokenizer = _Tokenizer()
+
+        class _Model:
+            config = SimpleNamespace()
+
+            def resize_token_embeddings(self, size):
+                calls["resize"] = size
+
+            def parameters(self):
+                return []
+
+        processor = _Processor()
+        model = _Model()
+
+        fake_transformers = types.SimpleNamespace(
+            AutoProcessor=types.SimpleNamespace(from_pretrained=lambda *a, **k: processor),
+            AutoModelForVision2Seq=types.SimpleNamespace(from_pretrained=lambda *a, **k: model),
+        )
+
+        fake_peft = types.SimpleNamespace(
+            LoraConfig=lambda **kwargs: SimpleNamespace(**kwargs),
+            get_peft_model=lambda m, cfg: m,
+            prepare_model_for_kbit_training=lambda m: m,
+        )
+
+        monkeypatch.setitem(sys.modules, "transformers", fake_transformers)
+        monkeypatch.setitem(sys.modules, "peft", fake_peft)
+
+        monkeypatch.setattr(
+            "soup_cli.utils.quant_menu.build_quantization_config_for_loader",
+            lambda **kwargs: None,
+        )
+
+        wrapper = object.__new__(SFTTrainerWrapper)
+        wrapper.config = cfg
+        wrapper.device = "cpu"
+        wrapper._trust_remote_code = False
+
+        wrapper._setup_vision_transformers(cfg, cfg.training)
+
+        assert calls["add_tokens"] == ["<vision_new>"]
+        assert calls["add_special_tokens"] == ["<vision_special>"]
+        assert calls["resize"] == len(processor.tokenizer)
+
+    def test_audio_vocab_expansion_adds_tokens_and_resizes(self, monkeypatch):
+        """Audio SFT should apply configured vocabulary expansion."""
+
+        import sys
+        import types
+        from types import SimpleNamespace
+
+        from soup_cli.trainer.sft import SFTTrainerWrapper
+
+        cfg = _make_config(
+            modality="audio",
+            data={
+                "train": "./data.jsonl",
+                "format": "audio",
+                "add_new_tokens": ["<audio_new>", "<old>"],
+                "new_special_tokens": ["<audio_special>"],
+                "resize_vocab": True,
+            },
+            training={"quantization": "none"},
+        )
+
+        calls = {
+            "add_tokens": None,
+            "add_special_tokens": None,
+            "resize": None,
+        }
+
+        class _Tokenizer:
+            def __init__(self):
+                self.vocab = {"<old>": 0}
+
+            def get_vocab(self):
+                return self.vocab
+
+            def add_tokens(self, tokens):
+                calls["add_tokens"] = list(tokens)
+                for t in tokens:
+                    self.vocab.setdefault(t, len(self.vocab))
+                return len(tokens)
+
+            def add_special_tokens(self, data):
+                tokens = list(data["additional_special_tokens"])
+                calls["add_special_tokens"] = tokens
+                for t in tokens:
+                    self.vocab.setdefault(t, len(self.vocab))
+                return len(tokens)
+
+            def __len__(self):
+                return len(self.vocab)
+
+        class _Processor:
+            def __init__(self):
+                self.tokenizer = _Tokenizer()
+
+        class _Model:
+            config = SimpleNamespace()
+
+            def resize_token_embeddings(self, size):
+                calls["resize"] = size
+
+            def parameters(self):
+                return []
+
+        processor = _Processor()
+        model = _Model()
+
+        fake_transformers = types.SimpleNamespace(
+            AutoProcessor=types.SimpleNamespace(from_pretrained=lambda *a, **k: processor),
+            AutoModel=types.SimpleNamespace(from_pretrained=lambda *a, **k: model),
+        )
+
+        fake_peft = types.SimpleNamespace(
+            LoraConfig=lambda **kwargs: SimpleNamespace(**kwargs),
+            get_peft_model=lambda m, cfg: m,
+            prepare_model_for_kbit_training=lambda m: m,
+        )
+
+        monkeypatch.setitem(sys.modules, "transformers", fake_transformers)
+        monkeypatch.setitem(sys.modules, "peft", fake_peft)
+
+        monkeypatch.setattr(
+            "soup_cli.utils.quant_menu.build_quantization_config_for_loader",
+            lambda **kwargs: None,
+        )
+
+        wrapper = object.__new__(SFTTrainerWrapper)
+        wrapper.config = cfg
+        wrapper.device = "cpu"
+        wrapper._trust_remote_code = False
+
+        wrapper._setup_audio_transformers(cfg, cfg.training)
+
+        assert calls["add_tokens"] == ["<audio_new>"]
+        assert calls["add_special_tokens"] == ["<audio_special>"]
+        assert calls["resize"] == len(processor.tokenizer)
 
 class TestDPOTrainerInit:
     """Test DPOTrainerWrapper constructor."""
