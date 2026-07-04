@@ -47,9 +47,11 @@ def serve(
     try:
         from soup_cli.mcp_server.server import run_stdio_server
     except ImportError:
+        # NB: escape the '[' in 'soup-cli[mcp]' so Rich prints it literally
+        # instead of parsing '[mcp]' as a (dropped) markup tag.
         console.print(
             "[red]The MCP server needs the 'mcp' SDK.[/] "
-            "Install it with: [bold]pip install 'soup-cli[mcp]'[/]"
+            "Install it with: [bold]pip install 'soup-cli\\[mcp]'[/]"
         )
         raise typer.Exit(1) from None
 

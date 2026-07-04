@@ -7,6 +7,7 @@ Covers the pure tool registry (handlers + guards), the SDK server wiring
 from __future__ import annotations
 
 import json
+import os
 
 import pytest
 
@@ -170,6 +171,29 @@ class TestDataInspectValidateHandlers:
         with pytest.raises(reg.McpToolError):
             reg.tool_data_inspect({"data": "nope.jsonl"})
 
+    def test_oversize_data_rejected(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(reg, "_MAX_DATA_BYTES", 1)
+        p = tmp_path / "d.jsonl"
+        _write_jsonl(p, _ADVISE_ROWS)
+        with pytest.raises(reg.McpToolError) as exc:
+            reg.tool_data_inspect({"data": "d.jsonl"})
+        assert "exceeds" in str(exc.value)
+
+
+class TestArgHelperBounds:
+    def test_require_str_rejects_overlong(self):
+        with pytest.raises(reg.McpToolError):
+            reg.tool_recipes_show({"name": "x" * (reg._MAX_STR_LEN + 1)})
+
+    def test_opt_str_rejects_overlong(self):
+        with pytest.raises(reg.McpToolError):
+            reg.tool_recipes_search({"query": "x" * (reg._MAX_STR_LEN + 1)})
+
+    def test_opt_str_rejects_non_string(self):
+        with pytest.raises(reg.McpToolError):
+            reg.tool_recipes_search({"query": 123})
+
 
 class TestDataScoreHandler:
     def test_returns_scorecard(self, tmp_path, monkeypatch):
@@ -211,12 +235,13 @@ class TestDataDoctorHandler:
         assert "checks" in out and isinstance(out["checks"], list)
 
     def test_missing_transformers_friendly_error(self, tmp_path, monkeypatch):
+        import sys
+
         monkeypatch.chdir(tmp_path)
-
-        def _boom(model, **kw):
-            raise ImportError("no transformers")
-
-        monkeypatch.setattr("soup_cli.utils.data_doctor.resolve_tokenizer", _boom)
+        # Simulate the REAL absence path: `import transformers` fails. (The
+        # handler probes the dependency directly rather than relying on
+        # resolve_tokenizer's wrapped exception type.)
+        monkeypatch.setitem(sys.modules, "transformers", None)
         p = tmp_path / "chat.jsonl"
         _write_jsonl(p, [{"messages": [{"role": "user", "content": "hi"}]}])
         with pytest.raises(reg.McpToolError) as exc:
@@ -226,9 +251,13 @@ class TestDataDoctorHandler:
 
 class TestRecipesHandlers:
     def test_search_returns_results(self):
+        from soup_cli.recipes.catalog import RECIPES
+
         out = reg.tool_recipes_search({"query": "qwen"})
         assert out["count"] >= 1
         assert all("name" in r and "model" in r for r in out["results"])
+        # each name resolves to a real catalog entry (not the "?" id() fallback)
+        assert all(r["name"] in RECIPES for r in out["results"])
         # search results stay compact — no full yaml body
         assert all("yaml_str" not in r for r in out["results"])
 
@@ -255,6 +284,16 @@ class TestRunsHandlers:
         monkeypatch.setenv("SOUP_DB_PATH", str(tmp_path / "exp.db"))
         with pytest.raises(reg.McpToolError):
             reg.tool_runs_show({"run_id": "nope"})
+
+    def test_limit_out_of_range_rejected(self, tmp_path, monkeypatch):
+        # _opt_int rejects (not clamps) out-of-range values, before DB access.
+        monkeypatch.setenv("SOUP_DB_PATH", str(tmp_path / "exp.db"))
+        with pytest.raises(reg.McpToolError):
+            reg.tool_runs_list({"limit": 999999})
+        with pytest.raises(reg.McpToolError):
+            reg.tool_runs_list({"limit": 0})
+        with pytest.raises(reg.McpToolError):
+            reg.tool_runs_list({"limit": "ten"})
 
 
 class TestRegistryHandlers:
@@ -315,11 +354,6 @@ class TestBuildRegistry:
             assert callable(spec.handler)
             assert isinstance(spec.mutating, bool)
 
-    def test_no_mutating_in_readonly_registry_is_executable(self):
-        # read-only build has no non-mutating gap: every listed tool is callable
-        for spec in reg.build_registry(allow_mutating=False):
-            assert callable(spec.handler)
-
 
 # ---------------------------------------------------------------------------
 # Flagged read-only handlers (Part B): profile / diagnose / ship evidence
@@ -365,6 +399,16 @@ class TestDiagnoseEvidenceHandler:
         (tmp_path / "ev.json").write_text(json.dumps(ev), encoding="utf-8")
         with pytest.raises(reg.McpToolError):
             reg.tool_diagnose_evidence({"run_id": "r1", "evidence": "ev.json"})
+
+    def test_out_of_range_score_raises_specific(self, tmp_path, monkeypatch):
+        # score outside [0,1] -> classify_score raises ValueError; the handler
+        # must surface a specific McpToolError, not a generic internal error.
+        monkeypatch.chdir(tmp_path)
+        ev = {"scores": {"forgetting": {"score": 1.5}}}
+        (tmp_path / "ev.json").write_text(json.dumps(ev), encoding="utf-8")
+        with pytest.raises(reg.McpToolError) as exc:
+            reg.tool_diagnose_evidence({"run_id": "r1", "evidence": "ev.json"})
+        assert "forgetting" in str(exc.value)
 
     def test_missing_evidence_raises(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
@@ -584,6 +628,66 @@ class TestServerRoundTrip:
         payload = json.loads(res.content[0].text)
         assert payload["v"] == "abc"  # control bytes stripped by _sanitize
 
+    def test_error_message_is_sanitized(self):
+        from soup_cli.mcp_server.registry import McpToolError, ToolSpec
+        from soup_cli.mcp_server.server import build_server
+
+        def _boom(args):
+            raise McpToolError("bad\x1b[31mvalue\x07")
+
+        spec = ToolSpec(
+            name="boom",
+            title="Boom",
+            description="boom",
+            input_schema={"type": "object", "properties": {}},
+            handler=_boom,
+            mutating=False,
+        )
+        server = build_server([spec])
+        res = _roundtrip(server, "boom", {})
+        assert res.isError is True
+        text = res.content[0].text
+        assert "\x1b" not in text and "\x07" not in text
+
+    def test_handler_stdout_is_redirected_off_the_jsonrpc_channel(self, capsys):
+        from soup_cli.mcp_server.registry import ToolSpec
+        from soup_cli.mcp_server.server import build_server
+
+        def _noisy(args):
+            print("LEAK-TO-STDOUT")
+            return {"ok": True}
+
+        spec = ToolSpec(
+            name="noisy",
+            title="Noisy",
+            description="noisy",
+            input_schema={"type": "object", "properties": {}},
+            handler=_noisy,
+            mutating=False,
+        )
+        server = build_server([spec])
+        res = _roundtrip(server, "noisy", {})
+        assert res.isError is False
+        # the handler's stdout print must NOT reach the process stdout channel
+        assert "LEAK-TO-STDOUT" not in capsys.readouterr().out
+
+    def test_non_serializable_result_is_error_not_crash(self):
+        from soup_cli.mcp_server.registry import ToolSpec
+        from soup_cli.mcp_server.server import build_server
+
+        spec = ToolSpec(
+            name="bad",
+            title="Bad",
+            description="bad",
+            input_schema={"type": "object", "properties": {}},
+            handler=lambda args: {"bad": {1, 2, 3}},  # a set is not JSON-serializable
+            mutating=False,
+        )
+        server = build_server([spec])
+        res = _roundtrip(server, "bad", {})
+        assert res.isError is True
+        assert "internal error" in res.content[0].text
+
 
 # ---------------------------------------------------------------------------
 # CLI wiring (Part D)
@@ -626,6 +730,8 @@ class TestMcpCli:
         monkeypatch.setitem(sys.modules, "soup_cli.mcp_server.server", None)
         r = CliRunner().invoke(app, ["mcp", "serve"])
         assert r.exit_code == 1
+        # the hint must name the exact extra (Rich must not eat the '[mcp]')
+        assert "soup-cli[mcp]" in r.output
 
 
 class TestRegistryNoSdkImport:
@@ -637,3 +743,196 @@ class TestRegistryNoSdkImport:
         src = inspect.getsource(registry_mod)
         assert "import mcp" not in src
         assert "from mcp" not in src
+
+
+# ---------------------------------------------------------------------------
+# Additional coverage (tdd-review gaps)
+# ---------------------------------------------------------------------------
+
+
+class TestReadGuardsExtra:
+    def test_malformed_json_raises(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "bad.json").write_text("{not valid json", encoding="utf-8")
+        with pytest.raises(reg.McpToolError):
+            reg._read_json_under_cwd("bad.json", "evidence")
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX symlink semantics")
+    def test_read_json_rejects_symlink(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "real.json").write_text('{"a": 1}', encoding="utf-8")
+        os.symlink(tmp_path / "real.json", tmp_path / "link.json")
+        with pytest.raises(reg.McpToolError):
+            reg._read_json_under_cwd("link.json", "evidence")
+
+    def test_sanitize_handles_tuple(self):
+        out = reg._sanitize(("a\x1bb", "c"))
+        assert out == ["ab", "c"]
+
+
+class TestOptIntBoolGuard:
+    def test_bool_limit_rejected(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("SOUP_DB_PATH", str(tmp_path / "exp.db"))
+        with pytest.raises(reg.McpToolError):
+            reg.tool_runs_list({"limit": True})
+
+
+class TestRunsRegistryHappyPaths:
+    def test_runs_show_happy(self, tmp_path, monkeypatch):
+        from soup_cli.experiment.tracker import ExperimentTracker
+
+        monkeypatch.setenv("SOUP_DB_PATH", str(tmp_path / "exp.db"))
+        run_id = ExperimentTracker().start_run(
+            {"base": "m", "task": "sft"}, "cpu", "CPU", {}
+        )
+        out = reg.tool_runs_show({"run_id": run_id})
+        assert out["run_id"] == run_id
+
+    def test_registry_show_happy(self, tmp_path, monkeypatch):
+        from soup_cli.registry.store import RegistryStore
+
+        monkeypatch.setenv("SOUP_REGISTRY_DB_PATH", str(tmp_path / "reg.db"))
+        with RegistryStore() as store:
+            entry_id = store.push(
+                name="mymodel", tag="v1", base_model="b", task="sft",
+                run_id=None, config={"base": "b"},
+            )
+        out = reg.tool_registry_show({"ref": entry_id})
+        assert out["id"] == entry_id
+
+    def test_registry_list_filter_narrows(self, tmp_path, monkeypatch):
+        from soup_cli.registry.store import RegistryStore
+
+        monkeypatch.setenv("SOUP_REGISTRY_DB_PATH", str(tmp_path / "reg.db"))
+        with RegistryStore() as store:
+            store.push(name="alpha", tag="v1", base_model="b", task="sft",
+                       run_id=None, config={"base": "b"})
+            store.push(name="beta", tag="v1", base_model="b", task="dpo",
+                       run_id=None, config={"base": "b"})
+        assert reg.tool_registry_list({})["count"] == 2
+        narrowed = reg.tool_registry_list({"name": "alpha"})
+        assert narrowed["count"] == 1
+        assert narrowed["entries"][0]["name"] == "alpha"
+
+    def test_registry_show_ambiguous_ref(self, tmp_path, monkeypatch):
+        from soup_cli.registry.store import AmbiguousRefError, RegistryStore
+
+        monkeypatch.setenv("SOUP_REGISTRY_DB_PATH", str(tmp_path / "reg.db"))
+
+        def _raise(self, ref):
+            raise AmbiguousRefError("matches many")
+
+        monkeypatch.setattr(RegistryStore, "resolve", _raise)
+        with pytest.raises(reg.McpToolError) as exc:
+            reg.tool_registry_show({"ref": "ab"})
+        assert "ambiguous" in str(exc.value).lower()
+
+    def test_show_missing_required_raises(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("SOUP_DB_PATH", str(tmp_path / "exp.db"))
+        monkeypatch.setenv("SOUP_REGISTRY_DB_PATH", str(tmp_path / "reg.db"))
+        with pytest.raises(reg.McpToolError):
+            reg.tool_runs_show({})
+        with pytest.raises(reg.McpToolError):
+            reg.tool_registry_show({})
+
+
+class TestLoadDataTranslation:
+    def test_loader_csv_error_translated(self, tmp_path, monkeypatch):
+        import csv
+
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "d.jsonl").write_text('{"a": 1}', encoding="utf-8")
+
+        def _raise(path):
+            raise csv.Error("bad csv")
+
+        monkeypatch.setattr("soup_cli.data.loader.load_raw_data", _raise)
+        with pytest.raises(reg.McpToolError) as exc:
+            reg.tool_data_inspect({"data": "d.jsonl"})
+        assert "cannot load data" in str(exc.value)
+
+
+class TestDataDoctorBranches:
+    def test_auto_detect_failure(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        _write_jsonl(tmp_path / "d.jsonl", [{"random_field": 1}, {"random_field": 2}])
+        with pytest.raises(reg.McpToolError) as exc:
+            reg.tool_data_doctor({"data": "d.jsonl", "model": "x"})
+        assert "auto-detect" in str(exc.value)
+
+
+class TestDiagnoseEvidenceBranches:
+    def test_scores_not_object(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "ev.json").write_text(json.dumps({"scores": [1, 2]}), encoding="utf-8")
+        with pytest.raises(reg.McpToolError):
+            reg.tool_diagnose_evidence({"run_id": "r", "evidence": "ev.json"})
+
+    def test_score_entry_not_object(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "ev.json").write_text(
+            json.dumps({"scores": {"forgetting": "high"}}), encoding="utf-8"
+        )
+        with pytest.raises(reg.McpToolError):
+            reg.tool_diagnose_evidence({"run_id": "r", "evidence": "ev.json"})
+
+
+class TestShipEvidenceMalformed:
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            {"benchmarks": {}},  # task missing
+            {"task": [1, 2], "benchmarks": {}},  # task not object
+            {"task": {"mode": "metric", "base": 0.5}, "benchmarks": {}},  # tuned missing
+            # non-numeric base
+            {"task": {"mode": "metric", "base": "x", "tuned": 0.8}, "benchmarks": {}},
+            # benchmarks not an object
+            {"task": {"mode": "metric", "base": 0.5, "tuned": 0.8}, "benchmarks": [1]},
+            {
+                "task": {"mode": "metric", "base": 0.5, "tuned": 0.8},
+                "benchmarks": {"m": {"base": 0.7}},  # entry missing tuned
+            },
+        ],
+    )
+    def test_malformed_ship_evidence_rejected(self, tmp_path, monkeypatch, payload):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "ev.json").write_text(json.dumps(payload), encoding="utf-8")
+        with pytest.raises(reg.McpToolError):
+            reg.tool_ship_evidence({"evidence": "ev.json"})
+
+    def test_bad_threshold_rejected(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        ev = {"task": {"mode": "metric", "base": 0.5, "tuned": 0.8}, "benchmarks": {}}
+        (tmp_path / "ev.json").write_text(json.dumps(ev), encoding="utf-8")
+        with pytest.raises(reg.McpToolError):
+            reg.tool_ship_evidence({"evidence": "ev.json", "forgetting_threshold": "high"})
+        with pytest.raises(reg.McpToolError):
+            reg.tool_ship_evidence({"evidence": "ev.json", "forgetting_threshold": 5.0})
+
+
+class TestExportOutputArg:
+    def test_export_includes_output(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        out = _spec("export", allow_mutating=True).handler(
+            {"model": "out/adapter", "format": "gguf", "output": "dist/model.gguf"}
+        )
+        assert "--output" in out["would_run"]
+
+
+class TestServePlumbing:
+    def test_allow_mutating_flag_reaches_runner(self, monkeypatch):
+        pytest.importorskip("mcp")
+        from typer.testing import CliRunner
+
+        import soup_cli.mcp_server.server as srv
+        from soup_cli.cli import app
+
+        calls = []
+        monkeypatch.setattr(
+            srv, "run_stdio_server", lambda *, allow_mutating: calls.append(allow_mutating)
+        )
+        r1 = CliRunner().invoke(app, ["mcp", "serve"])
+        r2 = CliRunner().invoke(app, ["mcp", "serve", "--allow-mutating"])
+        assert r1.exit_code == 0, (r1.output, repr(r1.exception))
+        assert r2.exit_code == 0, (r2.output, repr(r2.exception))
+        assert calls == [False, True]

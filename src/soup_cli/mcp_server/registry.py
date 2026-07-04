@@ -11,15 +11,25 @@ importing this module stays cheap and torch-free.
 
 from __future__ import annotations
 
+import csv
 import json
 import os
-from dataclasses import dataclass
-from typing import Any, Callable, Mapping
+import shlex
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Callable, Mapping
 
 from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
 
+if TYPE_CHECKING:
+    from soup_cli.config.schema import SoupConfig
+
 # Default read cap for JSON tool arguments (mirrors ship/diagnose evidence).
 _MAX_JSON_BYTES = 16 * 1024 * 1024
+# Cap on `data` dataset loads — the server is long-lived, so a client must not
+# be able to point `data` at an arbitrarily large file and exhaust memory
+# (mirrors advise's own 1 GiB cap; security-review MEDIUM).
+_MAX_DATA_BYTES = 1024 * 1024 * 1024
 
 # C0 control bytes (keep tab / newline / CR) + DEL, stripped from every string
 # in a handler result before it reaches the MCP client. ``rich.markup.escape``
@@ -41,7 +51,12 @@ class McpToolError(Exception):
 
 @dataclass(frozen=True)
 class ToolSpec:
-    """One entry in the MCP tool table."""
+    """One entry in the MCP tool table.
+
+    ``frozen=True`` blocks attribute rebinding; ``input_schema`` contents are
+    still technically mutable, but the table is built fresh per server and
+    never mutated in place.
+    """
 
     name: str
     title: str
@@ -111,19 +126,28 @@ def _read_json_under_cwd(path: str, field: str, *, max_bytes: int = _MAX_JSON_BY
 # ---------------------------------------------------------------------------
 
 
+# Generous cap on free-text string args (paths, ids, goals, queries). Bounds a
+# pathological input without constraining any legitimate value (security-review).
+_MAX_STR_LEN = 4096
+
+
 def _require_str(args: dict, key: str) -> str:
     val = args.get(key)
     if not isinstance(val, str) or not val:
         raise McpToolError(f"'{key}' must be a non-empty string")
+    if len(val) > _MAX_STR_LEN:
+        raise McpToolError(f"'{key}' must be at most {_MAX_STR_LEN} characters")
     return val
 
 
-def _opt_str(args: dict, key: str) -> "str | None":
+def _opt_str(args: dict, key: str) -> str | None:
     val = args.get(key)
     if val is None:
         return None
     if not isinstance(val, str):
         raise McpToolError(f"'{key}' must be a string")
+    if len(val) > _MAX_STR_LEN:
+        raise McpToolError(f"'{key}' must be at most {_MAX_STR_LEN} characters")
     return val
 
 
@@ -131,7 +155,11 @@ def _opt_int(args: dict, key: str, default: int, *, lo: int, hi: int) -> int:
     val = args.get(key, default)
     if isinstance(val, bool) or not isinstance(val, int):
         raise McpToolError(f"'{key}' must be an integer")
-    return max(lo, min(hi, val))
+    # Reject rather than silently clamp — clamping hides the user's error and
+    # bypasses the core's own bounds check (code-review MEDIUM).
+    if not lo <= val <= hi:
+        raise McpToolError(f"'{key}' must be between {lo} and {hi}")
+    return val
 
 
 def _enforce_data_path(path: str, field: str = "data") -> None:
@@ -150,8 +178,6 @@ def _enforce_data_path(path: str, field: str = "data") -> None:
 
 def tool_advise(args: dict) -> dict:
     """`soup advise` — pre-flight PROMPT_ENG / RAG / SFT / DPO / GRPO verdict."""
-    import dataclasses
-
     from soup_cli.utils import advise as _advise
 
     data = _require_str(args, "data")
@@ -164,18 +190,27 @@ def tool_advise(args: dict) -> dict:
         verdict = _advise.build_verdict(profile, task, goal=goal)
     except (OSError, ValueError, TypeError) as exc:
         raise McpToolError(f"advise failed ({type(exc).__name__})") from exc
-    return dataclasses.asdict(verdict)
+    return asdict(verdict)
 
 
-def _load_data_rows(path: str) -> list:
-    from pathlib import Path
-
+def _load_data_rows(path: str) -> list[dict]:
     from soup_cli.data.loader import load_raw_data
 
     _enforce_data_path(path)
+    # Best-effort size cap before load_raw_data reads the whole file into memory
+    # (the path is already confirmed non-symlink + under cwd).
+    try:
+        size = os.path.getsize(path)
+    except OSError as exc:
+        raise McpToolError(f"data is unreadable ({type(exc).__name__})") from exc
+    if size > _MAX_DATA_BYTES:
+        raise McpToolError(f"data exceeds {_MAX_DATA_BYTES} bytes")
+    # load_raw_data dispatches by extension: parquet raises bare ImportError
+    # without pandas, CSV raises csv.Error (NOT a ValueError subclass) on
+    # malformed input. Translate every loader failure here (code-review MEDIUM).
     try:
         return load_raw_data(Path(path))
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, ImportError, csv.Error) as exc:
         raise McpToolError(f"cannot load data ({type(exc).__name__})") from exc
 
 
@@ -227,13 +262,18 @@ def tool_data_doctor(args: dict) -> dict:
             fmt = _formats.detect_format(rows)
         except ValueError as exc:
             raise McpToolError("could not auto-detect data format; pass 'format'") from exc
+    # `resolve_tokenizer` catches the transformers-missing case internally and
+    # re-raises it as a ValueError, so probe the dependency directly to keep the
+    # actionable "install the extra" hint (python-review HIGH).
     try:
-        tok = _dd.resolve_tokenizer(model, trust_remote_code=False)
+        import transformers  # noqa: F401
     except ImportError as exc:
         raise McpToolError(
             "data_doctor needs the tokenizer stack: pip install 'soup-cli[train]'"
         ) from exc
-    except (ValueError, TypeError, OSError) as exc:
+    try:
+        tok = _dd.resolve_tokenizer(model, trust_remote_code=False)
+    except (ImportError, ValueError, TypeError, OSError) as exc:
         raise McpToolError(f"could not load tokenizer ({type(exc).__name__})") from exc
     try:
         report = _dd.run_doctor(
@@ -338,7 +378,7 @@ def tool_registry_show(args: dict) -> dict:
     return entry
 
 
-def _resolve_gpu_memory_mcp(gpu: "str | None") -> float:
+def _resolve_gpu_memory_mcp(gpu: str | None) -> float:
     """GPU memory in GB from a flag or auto-detection (non-Typer mirror of
     ``commands/profile.py::_resolve_gpu_memory``)."""
     from soup_cli.utils.profiler import GPU_MEMORY
@@ -360,7 +400,7 @@ def _resolve_gpu_memory_mcp(gpu: "str | None") -> float:
     return 24.0
 
 
-def _load_config_under_cwd(config: str):
+def _load_config_under_cwd(config: str) -> SoupConfig:
     """Read + validate a soup.yaml via the API-safe loader.
 
     Uses ``load_config_from_string`` (raises ``ValueError``) NOT ``load_config``
@@ -439,13 +479,19 @@ def tool_diagnose_evidence(args: dict) -> dict:
         score = entry.get("score", 1.0)
         if isinstance(score, bool) or not isinstance(score, (int, float)):
             raise McpToolError(f"evidence.scores.{mode}.score must be a number")
-        verdict = entry.get("verdict") or classify_score(score)
-        scores[mode] = FailureScore(
-            mode=mode,
-            score=float(score),
-            verdict=verdict,
-            evidence=str(entry.get("evidence", "supplied via evidence")),
-        )
+        # classify_score rejects a score outside [0, 1] / non-finite, and
+        # FailureScore.__post_init__ rejects a mismatched/unknown verdict — both
+        # ValueError. Guard them into a specific McpToolError (code-review HIGH).
+        try:
+            verdict = entry.get("verdict") or classify_score(score)
+            scores[mode] = FailureScore(
+                mode=mode,
+                score=float(score),
+                verdict=verdict,
+                evidence=str(entry.get("evidence", "supplied via evidence")),
+            )
+        except (ValueError, TypeError, OverflowError) as exc:
+            raise McpToolError(f"evidence.scores.{mode} is invalid ({type(exc).__name__})") from exc
     try:
         report = build_report(
             run_id=run_id, base=base, adapter=adapter, scores=scores, soup_version=__version__
@@ -470,8 +516,10 @@ def tool_ship_evidence(args: dict) -> dict:
     if isinstance(threshold, bool) or not isinstance(threshold, (int, float)):
         raise McpToolError("'forgetting_threshold' must be a number")
     threshold = float(threshold)
-    if not 0.0 < threshold < 1.0:
-        raise McpToolError("'forgetting_threshold' must be in (0, 1)")
+    # Inclusive [0, 1] matches ship_verdict._validate_threshold + the CLI (a
+    # 0.0 zero-tolerance gate is legitimate) (code-review LOW).
+    if not 0.0 <= threshold <= 1.0:
+        raise McpToolError("'forgetting_threshold' must be in [0, 1]")
 
     task = payload.get("task")
     if not isinstance(task, dict):
@@ -517,8 +565,6 @@ _MUTATING_NOTE = (
 
 def tool_train_start(args: dict) -> dict:
     """`soup train` (plan-only) — validate a soup.yaml + render the command."""
-    import shlex
-
     config = _require_str(args, "config")
     cfg = _load_config_under_cwd(config)
     return {
@@ -532,8 +578,6 @@ def tool_train_start(args: dict) -> dict:
 
 def tool_export(args: dict) -> dict:
     """`soup export` (plan-only) — validate format + render the command."""
-    import shlex
-
     from soup_cli.commands.export import SUPPORTED_FORMATS
 
     model = _require_str(args, "model")
@@ -557,7 +601,7 @@ _DATA_ARG = {
 }
 
 
-def _readonly_specs() -> "list[ToolSpec]":
+def _readonly_specs() -> list[ToolSpec]:
     return [
         ToolSpec(
             name="advise",
@@ -791,8 +835,8 @@ def _readonly_specs() -> "list[ToolSpec]":
                     },
                     "forgetting_threshold": {
                         "type": "number",
-                        "exclusiveMinimum": 0,
-                        "exclusiveMaximum": 1,
+                        "minimum": 0,
+                        "maximum": 1,
                     },
                 },
                 "required": ["evidence"],
@@ -815,7 +859,7 @@ def _refuse_mutating(name: str) -> Callable[[dict], dict]:
     return _handler
 
 
-def _mutating_specs(*, allow_mutating: bool) -> "list[ToolSpec]":
+def _mutating_specs(*, allow_mutating: bool) -> list[ToolSpec]:
     """The plan-only mutating tools.
 
     Always LISTED (so clients can discover them), but their handler refuses
@@ -857,23 +901,20 @@ def _mutating_specs(*, allow_mutating: bool) -> "list[ToolSpec]":
             tool_export,
         ),
     ]
-    specs = []
-    for name, title, description, schema, real in entries:
-        handler = real if allow_mutating else _refuse_mutating(name)
-        specs.append(
-            ToolSpec(
-                name=name,
-                title=title,
-                description=description,
-                input_schema=schema,
-                handler=handler,
-                mutating=True,
-            )
+    return [
+        ToolSpec(
+            name=name,
+            title=title,
+            description=description,
+            input_schema=schema,
+            handler=real if allow_mutating else _refuse_mutating(name),
+            mutating=True,
         )
-    return specs
+        for name, title, description, schema, real in entries
+    ]
 
 
-def build_registry(*, allow_mutating: bool) -> "list[ToolSpec]":
+def build_registry(*, allow_mutating: bool) -> list[ToolSpec]:
     """Assemble the MCP tool table.
 
     The read-only tools are always present and executable. The mutating tools

@@ -53,15 +53,19 @@ def build_server(specs: List[ToolSpec]) -> Server:
             raise ValueError("unknown tool")
         try:
             # Any core that prints (e.g. a Rich warning) must not corrupt the
-            # JSON-RPC stdout channel — send stray stdout to stderr for the
-            # duration of the (synchronous) handler call.
+            # JSON-RPC stdout channel - send stray stdout to stderr for the
+            # duration of the (synchronous) handler call. Serialization stays
+            # INSIDE the try so a non-JSON-serializable result also becomes a
+            # sanitized isError (never a raw TypeError the SDK would echo).
             with redirect_stdout(sys.stderr):
                 result = spec.handler(arguments or {})
+            text = json.dumps(_sanitize(result), indent=2, ensure_ascii=False)
         except McpToolError as exc:
-            raise ValueError(str(exc)) from None
+            # _sanitize the message too so the C0/ESC guarantee is structural,
+            # not just a convention every handler must remember (security-review).
+            raise ValueError(_sanitize(str(exc))) from None
         except Exception as exc:  # never leak a stack trace / path to the client
             raise ValueError(f"internal error ({type(exc).__name__})") from None
-        text = json.dumps(_sanitize(result), indent=2, ensure_ascii=False)
         return [types.TextContent(type="text", text=text)]
 
     return server
