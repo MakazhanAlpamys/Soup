@@ -499,6 +499,114 @@ class TestGRPOTrainerInit:
         assert wrapper.model is None
         assert wrapper.tokenizer is None
 
+    def test_grpo_vocab_expansion_adds_tokens_and_resizes(self, monkeypatch):
+        """GRPO should apply configured vocabulary expansion."""
+
+        import sys
+        import types
+        from types import SimpleNamespace
+
+        from soup_cli.trainer.grpo import GRPOTrainerWrapper
+
+        cfg = _make_config(
+            task="grpo",
+            data={
+                "train": "./data.jsonl",
+                "format": "chatml",
+                "add_new_tokens": ["<grpo_new>", "<old>"],
+                "new_special_tokens": ["<grpo_special>"],
+                "resize_vocab": True,
+            },
+            training={"quantization": "none"},
+        )
+
+        calls = {
+            "add_tokens": None,
+            "add_special_tokens": None,
+            "resize": None,
+        }
+
+        class _Tokenizer:
+            pad_token = None
+            eos_token = "<eos>"
+
+            def __init__(self):
+                self.vocab = {"<old>": 0}
+
+            def get_vocab(self):
+                return self.vocab
+
+            def add_tokens(self, tokens):
+                calls["add_tokens"] = list(tokens)
+                added = 0
+                for token in tokens:
+                    if token not in self.vocab:
+                        self.vocab[token] = len(self.vocab)
+                        added += 1
+                return added
+
+            def add_special_tokens(self, data):
+                tokens = list(data["additional_special_tokens"])
+                calls["add_special_tokens"] = tokens
+                added = 0
+                for token in tokens:
+                    if token not in self.vocab:
+                        self.vocab[token] = len(self.vocab)
+                        added += 1
+                return added
+
+            def __len__(self):
+                return len(self.vocab)
+
+        class _Model:
+            config = SimpleNamespace()
+
+            def resize_token_embeddings(self, size):
+                calls["resize"] = size
+
+            def parameters(self):
+                return []
+
+        tokenizer = _Tokenizer()
+        model = _Model()
+
+        fake_transformers = types.SimpleNamespace(
+            AutoTokenizer=types.SimpleNamespace(
+                from_pretrained=lambda *args, **kwargs: tokenizer
+            ),
+            AutoModelForCausalLM=types.SimpleNamespace(
+                from_pretrained=lambda *args, **kwargs: model
+            ),
+        )
+
+        fake_peft = types.SimpleNamespace(
+            LoraConfig=lambda **kwargs: SimpleNamespace(**kwargs),
+            TaskType=SimpleNamespace(CAUSAL_LM="CAUSAL_LM"),
+            get_peft_model=lambda model_obj, _cfg: model_obj,
+            prepare_model_for_kbit_training=lambda model_obj: model_obj,
+        )
+
+        monkeypatch.setitem(sys.modules, "transformers", fake_transformers)
+        monkeypatch.setitem(sys.modules, "peft", fake_peft)
+
+        monkeypatch.setattr(
+            "soup_cli.utils.quant_menu.build_quantization_config_for_loader",
+            lambda **kwargs: None,
+        )
+
+        wrapper = object.__new__(GRPOTrainerWrapper)
+        wrapper.config = cfg
+        wrapper.device = "cpu"
+        wrapper._trust_remote_code = False
+        wrapper.model = None
+        wrapper.tokenizer = None
+
+        wrapper._setup_transformers(cfg, cfg.training)
+
+        assert calls["add_tokens"] == ["<grpo_new>"]
+        assert calls["add_special_tokens"] == ["<grpo_special>"]
+        assert calls["resize"] == len(tokenizer)
+
 
 class TestRewardModelTrainerInit:
     """Test RewardModelTrainerWrapper constructor."""
@@ -851,6 +959,224 @@ class TestBCOTrainerInit:
 
         assert calls["add_tokens"] == ["<bco_new>"]
         assert calls["add_special_tokens"] == ["<bco_special>"]
+        assert calls["resize"] == len(tokenizer)
+
+class TestORPOTrainerInit:
+    def test_orpo_vocab_expansion_adds_tokens_and_resizes(self, monkeypatch):
+        """ORPO should apply configured vocabulary expansion."""
+
+        import sys
+        import types
+        from types import SimpleNamespace
+
+        from soup_cli.trainer.orpo import ORPOTrainerWrapper
+
+        cfg = _make_config(
+            task="orpo",
+            data={
+                "train": "./data.jsonl",
+                "format": "chatml",
+                "add_new_tokens": ["<orpo_new>", "<old>"],
+                "new_special_tokens": ["<orpo_special>"],
+                "resize_vocab": True,
+            },
+            training={"quantization": "none"},
+        )
+
+        calls = {
+            "add_tokens": None,
+            "add_special_tokens": None,
+            "resize": None,
+        }
+
+        class _Tokenizer:
+            pad_token = None
+            eos_token = "<eos>"
+
+            def __init__(self):
+                self.vocab = {"<old>": 0}
+
+            def get_vocab(self):
+                return self.vocab
+
+            def add_tokens(self, tokens):
+                calls["add_tokens"] = list(tokens)
+                added = 0
+                for token in tokens:
+                    if token not in self.vocab:
+                        self.vocab[token] = len(self.vocab)
+                        added += 1
+                return added
+
+            def add_special_tokens(self, data):
+                tokens = list(data["additional_special_tokens"])
+                calls["add_special_tokens"] = tokens
+                added = 0
+                for token in tokens:
+                    if token not in self.vocab:
+                        self.vocab[token] = len(self.vocab)
+                        added += 1
+                return added
+
+            def __len__(self):
+                return len(self.vocab)
+
+        class _Model:
+            config = SimpleNamespace()
+
+            def resize_token_embeddings(self, size):
+                calls["resize"] = size
+
+            def parameters(self):
+                return []
+
+        tokenizer = _Tokenizer()
+        model = _Model()
+
+        fake_transformers = types.SimpleNamespace(
+            AutoTokenizer=types.SimpleNamespace(
+                from_pretrained=lambda *args, **kwargs: tokenizer
+            ),
+            AutoModelForCausalLM=types.SimpleNamespace(
+                from_pretrained=lambda *args, **kwargs: model
+            ),
+        )
+
+        fake_peft = types.SimpleNamespace(
+            LoraConfig=lambda **kwargs: SimpleNamespace(**kwargs),
+            TaskType=SimpleNamespace(CAUSAL_LM="CAUSAL_LM"),
+            get_peft_model=lambda model_obj, _cfg: model_obj,
+            prepare_model_for_kbit_training=lambda model_obj: model_obj,
+        )
+
+        monkeypatch.setitem(sys.modules, "transformers", fake_transformers)
+        monkeypatch.setitem(sys.modules, "peft", fake_peft)
+
+        monkeypatch.setattr(
+            "soup_cli.utils.quant_menu.build_quantization_config_for_loader",
+            lambda **kwargs: None,
+        )
+
+        wrapper = object.__new__(ORPOTrainerWrapper)
+        wrapper.config = cfg
+        wrapper.device = "cpu"
+        wrapper._trust_remote_code = False
+        wrapper.model = None
+        wrapper.tokenizer = None
+
+        wrapper._setup_transformers(cfg, cfg.training)
+
+        assert calls["add_tokens"] == ["<orpo_new>"]
+        assert calls["add_special_tokens"] == ["<orpo_special>"]
+        assert calls["resize"] == len(tokenizer)
+
+class TestSIMPOTrainerInit:
+    def test_simpo_vocab_expansion_adds_tokens_and_resizes(self, monkeypatch):
+        """SIMPO should apply configured vocabulary expansion."""
+
+        import sys
+        import types
+        from types import SimpleNamespace
+
+        from soup_cli.trainer.simpo import SimPOTrainerWrapper
+
+        cfg = _make_config(
+            task="simpo",
+            data={
+                "train": "./data.jsonl",
+                "format": "chatml",
+                "add_new_tokens": ["<simpo_new>", "<old>"],
+                "new_special_tokens": ["<simpo_special>"],
+                "resize_vocab": True,
+            },
+            training={"quantization": "none"},
+        )
+
+        calls = {
+            "add_tokens": None,
+            "add_special_tokens": None,
+            "resize": None,
+        }
+
+        class _Tokenizer:
+            pad_token = None
+            eos_token = "<eos>"
+
+            def __init__(self):
+                self.vocab = {"<old>": 0}
+
+            def get_vocab(self):
+                return self.vocab
+
+            def add_tokens(self, tokens):
+                calls["add_tokens"] = list(tokens)
+                added = 0
+                for token in tokens:
+                    if token not in self.vocab:
+                        self.vocab[token] = len(self.vocab)
+                        added += 1
+                return added
+
+            def add_special_tokens(self, data):
+                tokens = list(data["additional_special_tokens"])
+                calls["add_special_tokens"] = tokens
+                added = 0
+                for token in tokens:
+                    if token not in self.vocab:
+                        self.vocab[token] = len(self.vocab)
+                        added += 1
+                return added
+
+            def __len__(self):
+                return len(self.vocab)
+
+        class _Model:
+            config = SimpleNamespace()
+
+            def resize_token_embeddings(self, size):
+                calls["resize"] = size
+
+            def parameters(self):
+                return []
+
+        tokenizer = _Tokenizer()
+        model = _Model()
+
+        fake_transformers = types.SimpleNamespace(
+            AutoTokenizer=types.SimpleNamespace(
+                from_pretrained=lambda *args, **kwargs: tokenizer
+            ),
+            AutoModelForCausalLM=types.SimpleNamespace(
+                from_pretrained=lambda *args, **kwargs: model
+            ),
+        )
+
+        fake_peft = types.SimpleNamespace(
+            LoraConfig=lambda **kwargs: SimpleNamespace(**kwargs),
+            TaskType=SimpleNamespace(CAUSAL_LM="CAUSAL_LM"),
+            get_peft_model=lambda model_obj, _cfg: model_obj,
+            prepare_model_for_kbit_training=lambda model_obj: model_obj,
+        )
+
+        monkeypatch.setitem(sys.modules, "transformers", fake_transformers)
+        monkeypatch.setitem(sys.modules, "peft", fake_peft)
+
+        monkeypatch.setattr(
+            "soup_cli.utils.quant_menu.build_quantization_config_for_loader",
+            lambda **kwargs: None,
+        )
+
+        wrapper = object.__new__(SimPOTrainerWrapper)
+        wrapper.config = cfg
+        wrapper.device = "cpu"
+        wrapper._trust_remote_code = False
+        wrapper.model = None
+        wrapper.tokenizer = None
+
+        wrapper._setup_transformers(cfg, cfg.training)
+
+        assert calls["add_tokens"] == ["<simpo_new>"]
+        assert calls["add_special_tokens"] == ["<simpo_special>"]
         assert calls["resize"] == len(tokenizer)
 
 class TestTrainTaskRouting:
