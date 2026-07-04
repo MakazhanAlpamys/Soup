@@ -12,6 +12,13 @@ reproducing 70+ versions of notes.
 
 ## [Unreleased]
 
+### Fixed
+- The DPO / IPO / KTO / BCO trainers now apply configured vocabulary expansion
+  (`data.add_new_tokens` / `data.new_special_tokens`) via the shared
+  `apply_vocab_expansion()` helper during setup, consistent with the SFT path —
+  they previously ignored it. Closes #292
+  ([#293](https://github.com/MakazhanAlpamys/Soup/pull/293) by [@CODING-DARSH](https://github.com/CODING-DARSH)).
+
 ## [0.71.27] - 2026-07-03
 
 ### Added
