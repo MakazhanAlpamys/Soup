@@ -286,6 +286,9 @@ _EXPECTED_READONLY = {
     "runs_show",
     "registry_list",
     "registry_show",
+    "profile",
+    "diagnose_evidence",
+    "ship_evidence",
 }
 
 
@@ -316,3 +319,97 @@ class TestBuildRegistry:
         # read-only build has no non-mutating gap: every listed tool is callable
         for spec in reg.build_registry(allow_mutating=False):
             assert callable(spec.handler)
+
+
+# ---------------------------------------------------------------------------
+# Flagged read-only handlers (Part B): profile / diagnose / ship evidence
+# ---------------------------------------------------------------------------
+
+_MIN_CONFIG = "base: Qwen/Qwen2.5-0.5B\ntask: sft\ndata:\n  train: data.jsonl\n"
+
+
+class TestProfileHandler:
+    def test_returns_estimate(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "soup.yaml").write_text(_MIN_CONFIG, encoding="utf-8")
+        out = reg.tool_profile({"config": "soup.yaml"})
+        assert "total_memory_gb" in out
+        assert "recommended_batch_size" in out
+        assert "compatible_gpus" in out
+
+    def test_unknown_gpu_raises(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "soup.yaml").write_text(_MIN_CONFIG, encoding="utf-8")
+        with pytest.raises(reg.McpToolError):
+            reg.tool_profile({"config": "soup.yaml", "gpu": "nonesuch-gpu"})
+
+    def test_missing_config_raises(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        with pytest.raises(reg.McpToolError):
+            reg.tool_profile({"config": "missing.yaml"})
+
+
+class TestDiagnoseEvidenceHandler:
+    def test_returns_report(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        ev = {"scores": {"forgetting": {"score": 0.95}, "refusal": {"score": 0.99}}}
+        (tmp_path / "ev.json").write_text(json.dumps(ev), encoding="utf-8")
+        out = reg.tool_diagnose_evidence({"run_id": "r1", "evidence": "ev.json"})
+        assert out["run_id"] == "r1"
+        assert out["overall"] in ("OK", "MINOR", "MAJOR")
+        assert "scores" in out and "forgetting" in out["scores"]
+
+    def test_non_numeric_score_raises(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        ev = {"scores": {"forgetting": {"score": "high"}}}
+        (tmp_path / "ev.json").write_text(json.dumps(ev), encoding="utf-8")
+        with pytest.raises(reg.McpToolError):
+            reg.tool_diagnose_evidence({"run_id": "r1", "evidence": "ev.json"})
+
+    def test_missing_evidence_raises(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        with pytest.raises(reg.McpToolError):
+            reg.tool_diagnose_evidence({"run_id": "r1", "evidence": "nope.json"})
+
+
+class TestShipEvidenceHandler:
+    def test_ship_verdict(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        ev = {
+            "task": {"mode": "metric", "base": 0.5, "tuned": 0.8},
+            "benchmarks": {"mmlu": {"base": 0.70, "tuned": 0.72}},
+        }
+        (tmp_path / "ev.json").write_text(json.dumps(ev), encoding="utf-8")
+        out = reg.tool_ship_evidence({"evidence": "ev.json"})
+        assert out["decision"] == "SHIP"
+        assert "task_win" in out and "benchmark_deltas" in out
+
+    def test_dont_ship_on_regression(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        ev = {
+            "task": {"mode": "metric", "base": 0.5, "tuned": 0.8},
+            "benchmarks": {"mmlu": {"base": 0.70, "tuned": 0.50}},
+        }
+        (tmp_path / "ev.json").write_text(json.dumps(ev), encoding="utf-8")
+        out = reg.tool_ship_evidence({"evidence": "ev.json"})
+        assert out["decision"] == "DON'T SHIP"
+
+    def test_bad_mode_raises(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        ev = {"task": {"mode": "pairwise", "base": 0.5, "tuned": 0.8}, "benchmarks": {}}
+        (tmp_path / "ev.json").write_text(json.dumps(ev), encoding="utf-8")
+        with pytest.raises(reg.McpToolError):
+            reg.tool_ship_evidence({"evidence": "ev.json"})
+
+    def test_forgetting_threshold_arg(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        # 8-point drop: regresses at default 0.05, OK at 0.10
+        ev = {
+            "task": {"mode": "metric", "base": 0.5, "tuned": 0.8},
+            "benchmarks": {"mmlu": {"base": 0.70, "tuned": 0.62}},
+        }
+        (tmp_path / "ev.json").write_text(json.dumps(ev), encoding="utf-8")
+        strict = reg.tool_ship_evidence({"evidence": "ev.json"})
+        loose = reg.tool_ship_evidence({"evidence": "ev.json", "forgetting_threshold": 0.10})
+        assert strict["decision"] == "DON'T SHIP"
+        assert loose["decision"] == "SHIP"

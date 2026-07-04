@@ -331,6 +331,168 @@ def tool_registry_show(args: dict) -> dict:
     return entry
 
 
+def _resolve_gpu_memory_mcp(gpu: "str | None") -> float:
+    """GPU memory in GB from a flag or auto-detection (non-Typer mirror of
+    ``commands/profile.py::_resolve_gpu_memory``)."""
+    from soup_cli.utils.profiler import GPU_MEMORY
+
+    if gpu is not None:
+        gpu_key = gpu.lower().replace(" ", "").replace("-", "")
+        if gpu_key not in GPU_MEMORY:
+            raise McpToolError("unknown gpu (see 'soup profile --help' for valid options)")
+        return float(GPU_MEMORY[gpu_key])
+    try:
+        from soup_cli.utils.gpu import get_gpu_info
+
+        info = get_gpu_info()
+        mem_bytes = info.get("memory_total_bytes", 0)
+        if mem_bytes > 0:
+            return mem_bytes / (1024**3)
+    except (ImportError, RuntimeError, OSError):
+        pass
+    return 24.0
+
+
+def tool_profile(args: dict) -> dict:
+    """`soup profile` — memory / speed / GPU estimate from a soup.yaml (no model load)."""
+    from pathlib import Path
+
+    import yaml
+    from pydantic import ValidationError
+
+    from soup_cli.config.loader import load_config
+    from soup_cli.utils.gpu import model_size_from_name
+    from soup_cli.utils.profiler import (
+        estimate_speed,
+        estimate_total,
+        recommend_batch_size,
+        recommend_gpu,
+    )
+
+    config = _require_str(args, "config")
+    gpu = _opt_str(args, "gpu")
+    _enforce_data_path(config, "config")
+    try:
+        cfg = load_config(Path(config))
+    except (OSError, ValueError, yaml.YAMLError, ValidationError) as exc:
+        raise McpToolError(f"invalid config ({type(exc).__name__})") from exc
+
+    model_params_b = model_size_from_name(cfg.base)
+    batch_size = cfg.training.batch_size
+    batch_size = 4 if batch_size == "auto" else int(batch_size)
+    gpu_memory_gb = _resolve_gpu_memory_mcp(gpu)
+
+    result = estimate_total(
+        model_name=cfg.base,
+        model_params_b=model_params_b,
+        quantization=cfg.training.quantization,
+        lora_r=cfg.training.lora.r,
+        lora_alpha=cfg.training.lora.alpha,
+        batch_size=batch_size,
+        seq_len=cfg.data.max_length,
+        optimizer=cfg.training.optimizer,
+        gradient_checkpointing=cfg.training.gradient_checkpointing,
+    )
+    tokens_per_sec = estimate_speed(model_params_b, cfg.training.quantization, batch_size)
+    result["tokens_per_sec"] = round(tokens_per_sec, 1)
+    result["samples_per_sec"] = round(tokens_per_sec / max(cfg.data.max_length, 1), 2)
+    result["recommended_batch_size"] = recommend_batch_size(
+        result["total_memory_gb"], gpu_memory_gb
+    )
+    result["compatible_gpus"] = recommend_gpu(result["total_memory_gb"])
+    result["gpu_memory_gb"] = gpu_memory_gb
+    return result
+
+
+def tool_diagnose_evidence(args: dict) -> dict:
+    """`soup diagnose --evidence` — failure-mode report card from pre-computed scores."""
+    from soup_cli import __version__
+    from soup_cli.utils.diagnose.report import FAILURE_MODES, FailureScore, classify_score
+    from soup_cli.utils.diagnose.runner import build_report
+
+    run_id = _require_str(args, "run_id")
+    payload = _read_json_under_cwd(_require_str(args, "evidence"), "evidence")
+    base = _opt_str(args, "base") or ""
+    adapter = _opt_str(args, "adapter") or ""
+
+    raw_scores = payload.get("scores", {})
+    if not isinstance(raw_scores, dict):
+        raise McpToolError("evidence.scores must be an object")
+    scores = {}
+    for mode in FAILURE_MODES:  # closed set — safe to echo in errors
+        entry = raw_scores.get(mode)
+        if entry is None:
+            continue
+        if not isinstance(entry, dict):
+            raise McpToolError(f"evidence.scores.{mode} must be an object")
+        score = entry.get("score", 1.0)
+        if isinstance(score, bool) or not isinstance(score, (int, float)):
+            raise McpToolError(f"evidence.scores.{mode}.score must be a number")
+        verdict = entry.get("verdict") or classify_score(score)
+        scores[mode] = FailureScore(
+            mode=mode,
+            score=float(score),
+            verdict=verdict,
+            evidence=str(entry.get("evidence", "supplied via evidence")),
+        )
+    try:
+        report = build_report(
+            run_id=run_id, base=base, adapter=adapter, scores=scores, soup_version=__version__
+        )
+    except (ValueError, TypeError) as exc:
+        raise McpToolError(f"diagnose failed ({type(exc).__name__})") from exc
+    return report.to_dict()
+
+
+def tool_ship_evidence(args: dict) -> dict:
+    """`soup ship --evidence` — SHIP / DON'T-SHIP verdict from pre-computed scores."""
+    from soup_cli.utils.ship_verdict import (
+        SUPPORTED_TASK_MODES,
+        build_task_win,
+        compute_benchmark_deltas,
+        decide_ship,
+        verdict_to_dict,
+    )
+
+    payload = _read_json_under_cwd(_require_str(args, "evidence"), "evidence")
+    threshold = args.get("forgetting_threshold", 0.05)
+    if isinstance(threshold, bool) or not isinstance(threshold, (int, float)):
+        raise McpToolError("'forgetting_threshold' must be a number")
+    threshold = float(threshold)
+    if not 0.0 < threshold < 1.0:
+        raise McpToolError("'forgetting_threshold' must be in (0, 1)")
+
+    task = payload.get("task")
+    if not isinstance(task, dict):
+        raise McpToolError("evidence.task must be an object with mode/base/tuned")
+    mode = task.get("mode", "metric")
+    if mode not in SUPPORTED_TASK_MODES:
+        raise McpToolError("evidence.task.mode must be 'metric' or 'judge_score'")
+    if "base" not in task or "tuned" not in task:
+        raise McpToolError("evidence.task needs both 'base' and 'tuned'")
+    try:
+        task_win = build_task_win(mode, task["base"], task["tuned"])
+    except (TypeError, ValueError) as exc:
+        raise McpToolError(f"invalid evidence.task ({type(exc).__name__})") from exc
+
+    raw_bench = payload.get("benchmarks", {})
+    if not isinstance(raw_bench, dict):
+        raise McpToolError("evidence.benchmarks must be an object of {name: {base, tuned}}")
+    base_scores: dict = {}
+    tuned_scores: dict = {}
+    for name, entry in raw_bench.items():
+        if not isinstance(entry, dict) or "base" not in entry or "tuned" not in entry:
+            raise McpToolError("each evidence.benchmarks entry needs 'base' and 'tuned'")
+        base_scores[str(name)] = entry["base"]
+        tuned_scores[str(name)] = entry["tuned"]
+    try:
+        deltas = compute_benchmark_deltas(base_scores, tuned_scores, forgetting_threshold=threshold)
+        verdict = decide_ship(task_win, deltas, forgetting_threshold=threshold)
+    except (TypeError, ValueError) as exc:
+        raise McpToolError(f"invalid evidence.benchmarks ({type(exc).__name__})") from exc
+    return verdict_to_dict(verdict)
+
+
 # ---------------------------------------------------------------------------
 # Tool table
 # ---------------------------------------------------------------------------
@@ -514,6 +676,75 @@ def _readonly_specs() -> "list[ToolSpec]":
                 "additionalProperties": False,
             },
             handler=tool_registry_show,
+        ),
+        ToolSpec(
+            name="profile",
+            title="Profile training",
+            description=(
+                "Estimate memory / speed / GPU fit from a soup.yaml before "
+                "training (no model load)."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "config": {
+                        "type": "string",
+                        "description": "Path to a soup.yaml under cwd.",
+                    },
+                    "gpu": {"type": "string", "description": "Target GPU, e.g. rtx4090 / a100."},
+                },
+                "required": ["config"],
+                "additionalProperties": False,
+            },
+            handler=tool_profile,
+        ),
+        ToolSpec(
+            name="diagnose_evidence",
+            title="Diagnose (evidence)",
+            description=(
+                "Post-training failure-mode report card from a pre-computed "
+                "evidence JSON (no model load)."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "run_id": {"type": "string"},
+                    "evidence": {
+                        "type": "string",
+                        "description": "Path to a diagnose evidence JSON under cwd.",
+                    },
+                    "base": {"type": "string"},
+                    "adapter": {"type": "string"},
+                },
+                "required": ["run_id", "evidence"],
+                "additionalProperties": False,
+            },
+            handler=tool_diagnose_evidence,
+        ),
+        ToolSpec(
+            name="ship_evidence",
+            title="Ship verdict (evidence)",
+            description=(
+                "SHIP / DON'T-SHIP verdict from a pre-computed evidence JSON "
+                "(task win AND no regression)."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "evidence": {
+                        "type": "string",
+                        "description": "Path to a ship evidence JSON under cwd.",
+                    },
+                    "forgetting_threshold": {
+                        "type": "number",
+                        "exclusiveMinimum": 0,
+                        "exclusiveMaximum": 1,
+                    },
+                },
+                "required": ["evidence"],
+                "additionalProperties": False,
+            },
+            handler=tool_ship_evidence,
         ),
     ]
 
