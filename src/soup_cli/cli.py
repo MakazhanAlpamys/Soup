@@ -524,7 +524,7 @@ from soup_cli.commands import mcp as _mcp_cmd  # noqa: E402
 app.add_typer(
     _mcp_cmd.app,
     name="mcp",
-    help="Model Context Protocol server — drive Soup from any MCP client (v0.71.28).",
+    help="Model Context Protocol server - drive Soup from any MCP client (v0.71.28).",
 )
 
 
