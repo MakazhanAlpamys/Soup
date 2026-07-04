@@ -478,3 +478,162 @@ class TestMutatingTools:
     def test_registry_count_is_16_with_mutating(self):
         assert len(reg.build_registry(allow_mutating=True)) == 16
         assert len(reg.build_registry(allow_mutating=False)) == 16
+
+
+# ---------------------------------------------------------------------------
+# Server wiring (Part D) — via the SDK's in-memory transport
+# ---------------------------------------------------------------------------
+
+
+def _run(coro):
+    import asyncio
+
+    return asyncio.run(coro)
+
+
+def _roundtrip(server, tool_name, args):
+    from mcp.shared.memory import create_connected_server_and_client_session
+
+    async def _go():
+        async with create_connected_server_and_client_session(server) as client:
+            await client.initialize()
+            return await client.call_tool(tool_name, args)
+
+    return _run(_go())
+
+
+class TestServerRoundTrip:
+    @pytest.fixture(autouse=True)
+    def _need_mcp(self):
+        # The SDK + its in-memory transport are only present with the [mcp]
+        # extra. Installing `mcp` forces anyio>=4.5 at resolve time, so this one
+        # guard covers both. Skips cleanly on a partial install.
+        pytest.importorskip("mcp")
+
+    def test_list_tools_returns_all_16(self):
+        from mcp.shared.memory import create_connected_server_and_client_session
+
+        from soup_cli.mcp_server.registry import build_registry
+        from soup_cli.mcp_server.server import build_server
+
+        server = build_server(build_registry(allow_mutating=True))
+
+        async def _go():
+            async with create_connected_server_and_client_session(server) as client:
+                await client.initialize()
+                return await client.list_tools()
+
+        result = _run(_go())
+        names = {t.name for t in result.tools}
+        assert len(names) == 16
+        assert "recipes_search" in names and "train_start" in names
+        # every advertised tool carries an inputSchema object
+        assert all(t.inputSchema.get("type") == "object" for t in result.tools)
+
+    def test_call_recipes_search_returns_json(self):
+        from soup_cli.mcp_server.registry import build_registry
+        from soup_cli.mcp_server.server import build_server
+
+        server = build_server(build_registry(allow_mutating=False))
+        res = _roundtrip(server, "recipes_search", {"query": "qwen"})
+        assert res.isError is False
+        payload = json.loads(res.content[0].text)
+        assert payload["count"] >= 1
+
+    def test_unknown_tool_is_error(self):
+        from soup_cli.mcp_server.registry import build_registry
+        from soup_cli.mcp_server.server import build_server
+
+        server = build_server(build_registry(allow_mutating=False))
+        res = _roundtrip(server, "no_such_tool", {})
+        assert res.isError is True
+
+    def test_mutating_refused_without_allow(self, tmp_path, monkeypatch):
+        from soup_cli.mcp_server.registry import build_registry
+        from soup_cli.mcp_server.server import build_server
+
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "soup.yaml").write_text(_MIN_CONFIG, encoding="utf-8")
+        server = build_server(build_registry(allow_mutating=False))
+        res = _roundtrip(server, "train_start", {"config": "soup.yaml"})
+        assert res.isError is True
+
+    def test_bad_arg_is_error_not_crash(self, tmp_path, monkeypatch):
+        from soup_cli.mcp_server.registry import build_registry
+        from soup_cli.mcp_server.server import build_server
+
+        monkeypatch.chdir(tmp_path)
+        server = build_server(build_registry(allow_mutating=False))
+        res = _roundtrip(server, "data_inspect", {"data": "does-not-exist.jsonl"})
+        assert res.isError is True
+
+    def test_output_is_sanitized(self):
+        from soup_cli.mcp_server.registry import ToolSpec
+        from soup_cli.mcp_server.server import build_server
+
+        spec = ToolSpec(
+            name="echo",
+            title="Echo",
+            description="echo",
+            input_schema={"type": "object", "properties": {}},
+            handler=lambda a: {"v": "a\x1bb\x07c"},
+            mutating=False,
+        )
+        server = build_server([spec])
+        res = _roundtrip(server, "echo", {})
+        payload = json.loads(res.content[0].text)
+        assert payload["v"] == "abc"  # control bytes stripped by _sanitize
+
+
+# ---------------------------------------------------------------------------
+# CLI wiring (Part D)
+# ---------------------------------------------------------------------------
+
+
+def _strip_ansi(text):
+    import re
+
+    return re.sub(r"\x1b\[[0-9;]*m", "", text)
+
+
+class TestMcpCli:
+    def test_registered_in_main_app(self):
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        r = CliRunner().invoke(app, ["mcp", "--help"], env={"COLUMNS": "200"})
+        assert r.exit_code == 0, (r.output, repr(r.exception))
+        assert "serve" in _strip_ansi(r.output)
+
+    def test_serve_help(self):
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        r = CliRunner().invoke(app, ["mcp", "serve", "--help"], env={"COLUMNS": "200"})
+        assert r.exit_code == 0, (r.output, repr(r.exception))
+        assert "mutating" in _strip_ansi(r.output).lower()
+
+    def test_missing_sdk_exits_friendly(self, monkeypatch):
+        import sys
+
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        # Simulate the `mcp` SDK being absent: importing the server module fails.
+        monkeypatch.setitem(sys.modules, "soup_cli.mcp_server.server", None)
+        r = CliRunner().invoke(app, ["mcp", "serve"])
+        assert r.exit_code == 1
+
+
+class TestRegistryNoSdkImport:
+    def test_registry_source_has_no_mcp_import(self):
+        import inspect
+
+        import soup_cli.mcp_server.registry as registry_mod
+
+        src = inspect.getsource(registry_mod)
+        assert "import mcp" not in src
+        assert "from mcp" not in src

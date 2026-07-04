@@ -517,6 +517,16 @@ from soup_cli.commands import data_doctor as _data_doctor_cmd  # noqa: E402
 data.app.command(name="doctor")(_data_doctor_cmd.doctor)
 data.app.command(name="lint")(_data_doctor_cmd.lint)
 
+# v0.71.28 — MCP server: drive Soup from any MCP client (Claude Code / Cursor /
+# Cline / Continue) over stdio.
+from soup_cli.commands import mcp as _mcp_cmd  # noqa: E402
+
+app.add_typer(
+    _mcp_cmd.app,
+    name="mcp",
+    help="Model Context Protocol server — drive Soup from any MCP client (v0.71.28).",
+)
+
 
 def _rewrite_advise_argv(argv: list) -> list:
     """Inject `run` between `advise` and a non-subcommand first argument.

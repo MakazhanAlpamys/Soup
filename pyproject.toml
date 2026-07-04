@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "soup-cli"
-version = "0.71.27"
+version = "0.71.28"
 description = "Fine-tune and post-train LLMs in one command. No SSH, no config hell."
 readme = "README.md"
 license = "Apache-2.0"
@@ -47,14 +47,14 @@ train = [
     "accelerate>=0.25.0",
 ]
 # v0.71.0 вЂ” convenience meta-extra pulling the main optional stacks.
-all = ["soup-cli[train,serve,ui,data]"]
+all = ["soup-cli[train,serve,ui,data,mcp]"]
 eval = ["lm-eval>=0.4.0"]
 data = ["datasketch>=1.6.0"]
 wandb = ["wandb>=0.15.0,<0.18.0"]
 # Self-references `[train]` so CI / contributors get the full training stack
 # (CI runs `pip install -e ".[dev]"`; without this every test would fail at
 # `import torch`).
-dev = ["soup-cli[train]", "cryptography>=41.0.0", "reportlab>=4.0.0", "pytest>=7.0", "ruff>=0.1.0", "pytest-cov>=4.0", "httpx>=0.24.0", "mypy>=1.8.0", "pre-commit>=3.5.0"]
+dev = ["soup-cli[train,mcp]", "cryptography>=41.0.0", "reportlab>=4.0.0", "pytest>=7.0", "ruff>=0.1.0", "pytest-cov>=4.0", "httpx>=0.24.0", "mypy>=1.8.0", "pre-commit>=3.5.0"]
 ui = ["fastapi>=0.104.0", "uvicorn>=0.24.0"]
 serve = ["fastapi>=0.104.0", "uvicorn>=0.24.0"]
 serve-fast = ["vllm>=0.4.0", "fastapi>=0.104.0", "uvicorn>=0.24.0"]
@@ -102,6 +102,10 @@ compile = ["dspy-ai>=2.5.0", "textgrad>=0.1.0", "gepa>=0.0.1"]
 # Lazy-imported; only needed for `--cloud-submit` (plan-only render needs no
 # dependency). Modal auth is via `modal setup`.
 modal = ["modal>=0.60.0"]
+# v0.71.28 - `soup mcp serve` MCP server. The official `mcp` python SDK is
+# lazy-imported (only src/soup_cli/mcp_server/server.py touches it), so the CLI
+# stays light without it. Floor pinned to guard against SDK API churn.
+mcp = ["mcp>=1.2.0"]
 
 [project.scripts]
 soup = "soup_cli.cli:run"
