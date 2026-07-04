@@ -66,8 +66,8 @@ def _sanitize(obj: Any) -> Any:
     return obj
 
 
-def _read_json_under_cwd(path: str, field: str, *, max_bytes: int = _MAX_JSON_BYTES) -> dict:
-    """Load a JSON object argument (cwd-contained, symlink-rejected, size-capped).
+def _read_text_under_cwd(path: str, field: str, *, max_bytes: int = _MAX_JSON_BYTES) -> str:
+    """Read a text file argument (cwd-contained, symlink-rejected, size-capped).
 
     Opens with ``O_NOFOLLOW`` (where available) and fstats the open fd so a
     symlink swapped in after the containment check cannot redirect the read
@@ -87,11 +87,18 @@ def _read_json_under_cwd(path: str, field: str, *, max_bytes: int = _MAX_JSON_BY
         with os.fdopen(handle_fd, "r", encoding="utf-8") as handle:
             if os.fstat(handle.fileno()).st_size > max_bytes:
                 raise McpToolError(f"{field} exceeds {max_bytes} bytes")
-            payload = json.load(handle)
+            return handle.read()
+    except (OSError, UnicodeDecodeError) as exc:
+        raise McpToolError(f"{field} is unreadable ({type(exc).__name__})") from exc
+
+
+def _read_json_under_cwd(path: str, field: str, *, max_bytes: int = _MAX_JSON_BYTES) -> dict:
+    """Read a JSON *object* argument (delegates to :func:`_read_text_under_cwd`)."""
+    text = _read_text_under_cwd(path, field, max_bytes=max_bytes)
+    try:
+        payload = json.loads(text)
     except json.JSONDecodeError as exc:
         raise McpToolError(f"{field} is not valid JSON") from exc
-    except OSError as exc:
-        raise McpToolError(f"{field} is unreadable ({type(exc).__name__})") from exc
     if not isinstance(payload, dict):
         raise McpToolError(f"{field} must contain a JSON object")
     return payload
@@ -353,14 +360,23 @@ def _resolve_gpu_memory_mcp(gpu: "str | None") -> float:
     return 24.0
 
 
+def _load_config_under_cwd(config: str):
+    """Read + validate a soup.yaml via the API-safe loader.
+
+    Uses ``load_config_from_string`` (raises ``ValueError``) NOT ``load_config``
+    (which prints to stdout + ``sys.exit`` — both fatal to the MCP stdio stream).
+    """
+    from soup_cli.config.loader import load_config_from_string
+
+    text = _read_text_under_cwd(config, "config")
+    try:
+        return load_config_from_string(text)
+    except ValueError as exc:
+        raise McpToolError(f"invalid config ({type(exc).__name__})") from exc
+
+
 def tool_profile(args: dict) -> dict:
     """`soup profile` — memory / speed / GPU estimate from a soup.yaml (no model load)."""
-    from pathlib import Path
-
-    import yaml
-    from pydantic import ValidationError
-
-    from soup_cli.config.loader import load_config
     from soup_cli.utils.gpu import model_size_from_name
     from soup_cli.utils.profiler import (
         estimate_speed,
@@ -369,13 +385,8 @@ def tool_profile(args: dict) -> dict:
         recommend_gpu,
     )
 
-    config = _require_str(args, "config")
+    cfg = _load_config_under_cwd(_require_str(args, "config"))
     gpu = _opt_str(args, "gpu")
-    _enforce_data_path(config, "config")
-    try:
-        cfg = load_config(Path(config))
-    except (OSError, ValueError, yaml.YAMLError, ValidationError) as exc:
-        raise McpToolError(f"invalid config ({type(exc).__name__})") from exc
 
     model_params_b = model_size_from_name(cfg.base)
     batch_size = cfg.training.batch_size
@@ -491,6 +502,49 @@ def tool_ship_evidence(args: dict) -> dict:
     except (TypeError, ValueError) as exc:
         raise McpToolError(f"invalid evidence.benchmarks ({type(exc).__name__})") from exc
     return verdict_to_dict(verdict)
+
+
+# ---------------------------------------------------------------------------
+# Mutating tool handlers — PLAN-ONLY in v1: they validate + render the exact
+# command that WOULD run, but never execute. Live execution is a follow-up.
+# ---------------------------------------------------------------------------
+
+_MUTATING_NOTE = (
+    "plan-only: 'soup mcp serve' does not execute this. Run the command "
+    "yourself to proceed."
+)
+
+
+def tool_train_start(args: dict) -> dict:
+    """`soup train` (plan-only) — validate a soup.yaml + render the command."""
+    import shlex
+
+    config = _require_str(args, "config")
+    cfg = _load_config_under_cwd(config)
+    return {
+        "config_valid": True,
+        "task": cfg.task,
+        "base": cfg.base,
+        "would_run": f"soup train --config {shlex.quote(config)}",
+        "note": _MUTATING_NOTE,
+    }
+
+
+def tool_export(args: dict) -> dict:
+    """`soup export` (plan-only) — validate format + render the command."""
+    import shlex
+
+    from soup_cli.commands.export import SUPPORTED_FORMATS
+
+    model = _require_str(args, "model")
+    fmt = _require_str(args, "format")
+    if fmt not in SUPPORTED_FORMATS:
+        raise McpToolError("unsupported export format (see 'soup export --help')")
+    output = _opt_str(args, "output")
+    cmd = f"soup export --model {shlex.quote(model)} --format {fmt}"
+    if output:
+        cmd += f" --output {shlex.quote(output)}"
+    return {"format": fmt, "would_run": cmd, "note": _MUTATING_NOTE}
 
 
 # ---------------------------------------------------------------------------
@@ -749,11 +803,81 @@ def _readonly_specs() -> "list[ToolSpec]":
     ]
 
 
+def _refuse_mutating(name: str) -> Callable[[dict], dict]:
+    """Handler used for a mutating tool when ``--allow-mutating`` is off."""
+
+    def _handler(args: dict) -> dict:
+        raise McpToolError(
+            f"'{name}' can change state and is disabled; restart with "
+            "'soup mcp serve --allow-mutating' to enable (still plan-only in v1)."
+        )
+
+    return _handler
+
+
+def _mutating_specs(*, allow_mutating: bool) -> "list[ToolSpec]":
+    """The plan-only mutating tools.
+
+    Always LISTED (so clients can discover them), but their handler refuses
+    unless ``allow_mutating`` is set. Even when enabled they only render the
+    command that would run — v1 never executes training or export.
+    """
+    entries = [
+        (
+            "train_start",
+            "Start training (plan-only)",
+            "Validate a soup.yaml and render the 'soup train' command (does not execute).",
+            {
+                "type": "object",
+                "properties": {
+                    "config": {
+                        "type": "string",
+                        "description": "Path to a soup.yaml under cwd.",
+                    }
+                },
+                "required": ["config"],
+                "additionalProperties": False,
+            },
+            tool_train_start,
+        ),
+        (
+            "export",
+            "Export model (plan-only)",
+            "Validate a format and render the 'soup export' command (does not execute).",
+            {
+                "type": "object",
+                "properties": {
+                    "model": {"type": "string", "description": "Adapter/model path or id."},
+                    "format": {"type": "string", "description": "gguf / onnx / awq / gptq / ..."},
+                    "output": {"type": "string", "description": "Optional output path."},
+                },
+                "required": ["model", "format"],
+                "additionalProperties": False,
+            },
+            tool_export,
+        ),
+    ]
+    specs = []
+    for name, title, description, schema, real in entries:
+        handler = real if allow_mutating else _refuse_mutating(name)
+        specs.append(
+            ToolSpec(
+                name=name,
+                title=title,
+                description=description,
+                input_schema=schema,
+                handler=handler,
+                mutating=True,
+            )
+        )
+    return specs
+
+
 def build_registry(*, allow_mutating: bool) -> "list[ToolSpec]":
     """Assemble the MCP tool table.
 
-    The read-only tools are always present. ``allow_mutating`` gates the
-    plan-only mutating tools (added in a later part).
+    The read-only tools are always present and executable. The mutating tools
+    are always listed but refuse unless ``allow_mutating`` is set (and are
+    plan-only even then).
     """
-    specs = _readonly_specs()
-    return specs
+    return _readonly_specs() + _mutating_specs(allow_mutating=allow_mutating)

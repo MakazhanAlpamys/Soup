@@ -413,3 +413,68 @@ class TestShipEvidenceHandler:
         loose = reg.tool_ship_evidence({"evidence": "ev.json", "forgetting_threshold": 0.10})
         assert strict["decision"] == "DON'T SHIP"
         assert loose["decision"] == "SHIP"
+
+
+# ---------------------------------------------------------------------------
+# Mutating tools (Part C): plan-only train_start / export + --allow-mutating gate
+# ---------------------------------------------------------------------------
+
+
+def _spec(name, *, allow_mutating):
+    return {s.name: s for s in reg.build_registry(allow_mutating=allow_mutating)}[name]
+
+
+class TestMutatingTools:
+    def test_present_and_marked_in_both_registries(self):
+        for allow in (False, True):
+            specs = {s.name: s for s in reg.build_registry(allow_mutating=allow)}
+            assert "train_start" in specs and "export" in specs
+            assert specs["train_start"].mutating is True
+            assert specs["export"].mutating is True
+
+    def test_train_start_refused_without_allow(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "soup.yaml").write_text(_MIN_CONFIG, encoding="utf-8")
+        with pytest.raises(reg.McpToolError) as exc:
+            _spec("train_start", allow_mutating=False).handler({"config": "soup.yaml"})
+        assert "allow-mutating" in str(exc.value)
+
+    def test_export_refused_without_allow(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        with pytest.raises(reg.McpToolError) as exc:
+            _spec("export", allow_mutating=False).handler({"model": "m", "format": "gguf"})
+        assert "allow-mutating" in str(exc.value)
+
+    def test_train_start_plan_only_with_allow(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "soup.yaml").write_text(_MIN_CONFIG, encoding="utf-8")
+        out = _spec("train_start", allow_mutating=True).handler({"config": "soup.yaml"})
+        assert out["config_valid"] is True
+        assert out["would_run"].startswith("soup train")
+        assert "plan-only" in out["note"]
+
+    def test_train_start_invalid_config_raises(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "bad.yaml").write_text("task: sft\n", encoding="utf-8")  # missing base
+        with pytest.raises(reg.McpToolError):
+            _spec("train_start", allow_mutating=True).handler({"config": "bad.yaml"})
+
+    def test_export_plan_only_with_allow(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        out = _spec("export", allow_mutating=True).handler(
+            {"model": "out/adapter", "format": "gguf"}
+        )
+        assert out["would_run"].startswith("soup export")
+        assert out["format"] == "gguf"
+        assert "plan-only" in out["note"]
+
+    def test_export_bad_format_raises(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        with pytest.raises(reg.McpToolError):
+            _spec("export", allow_mutating=True).handler(
+                {"model": "out/adapter", "format": "nonsense-format"}
+            )
+
+    def test_registry_count_is_16_with_mutating(self):
+        assert len(reg.build_registry(allow_mutating=True)) == 16
+        assert len(reg.build_registry(allow_mutating=False)) == 16
