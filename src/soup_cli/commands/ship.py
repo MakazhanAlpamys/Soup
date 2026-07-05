@@ -286,6 +286,32 @@ def _leg1_judge(
     return build_task_win("judge_score", _score(base_gen), _score(tuned_gen))
 
 
+def _leg1_pairwise(
+    base_gen: Callable[[str], str],
+    tuned_gen: Callable[[str], str],
+    task_eval: str,
+    judge_model: str,
+) -> TaskWin:
+    """Leg-1 via a true pairwise judge win-rate (#284).
+
+    For each task prompt, generate a base and a tuned response and ask the judge
+    which is better (swap-debiased). The tuned win-rate becomes leg 1, framed as
+    ``TaskWin(base=0.5 coin-flip, tuned=win-rate)`` so ``won <=> win-rate > 0.5``.
+    """
+    from soup_cli.eval.custom import load_eval_tasks
+    from soup_cli.eval.gate import _parse_judge_url
+    from soup_cli.eval.judge import JudgeEvaluator, pairwise_winrate
+
+    tasks = load_eval_tasks(task_eval)
+    if not tasks:
+        raise ValueError(f"task-eval file {task_eval!r} has no tasks")
+    provider, model, api_base = _parse_judge_url(judge_model)
+    evaluator = JudgeEvaluator(provider=provider, model=model, api_base=api_base)
+    pairs = [(t.prompt, base_gen(t.prompt), tuned_gen(t.prompt)) for t in tasks]
+    winrate = pairwise_winrate(pairs, evaluator)
+    return build_task_win("pairwise", 0.5, winrate)
+
+
 def _mini_score(gen: Callable[[str], str], benchmark: str) -> float:
     from soup_cli.eval.forgetting import ForgettingDetector
 
@@ -483,6 +509,11 @@ def _verdict_live(
                 _fail("--task-mode judge_score needs --judge-model <url>", 2)
             _validate_judge_model_url(judge_model)
             task_win = _leg1_judge(base_gen, tuned_gen, task_eval, judge_model)
+        elif task_mode == "pairwise":
+            if not judge_model:
+                _fail("--task-mode pairwise needs --judge-model <url>", 2)
+            _validate_judge_model_url(judge_model)
+            task_win = _leg1_pairwise(base_gen, tuned_gen, task_eval, judge_model)
         else:
             task_win = _leg1_metric(base_gen, tuned_gen, base, tuned_id, task_eval)
         base_scores, tuned_scores = _leg2_scores(
@@ -546,7 +577,7 @@ def ship(
     task_mode: str = typer.Option(
         "metric",
         "--task-mode",
-        help="Leg-1 mode: metric | judge_score (pairwise: later release).",
+        help="Leg-1 mode: metric | judge_score | pairwise (judge win-rate).",
     ),
     judge_model: Optional[str] = typer.Option(
         None, "--judge-model", help="Judge model URL for --task-mode judge_score."

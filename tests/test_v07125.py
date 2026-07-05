@@ -106,9 +106,9 @@ class TestBuildTaskWin:
         assert set(SUPPORTED_TASK_MODES).issubset(set(TASK_MODES))
         assert "metric" in SUPPORTED_TASK_MODES
         assert "judge_score" in SUPPORTED_TASK_MODES
-        # pairwise is reserved for a later release — in the enum, not supported.
+        # pairwise became supported in v0.71.31 (#284).
         assert "pairwise" in TASK_MODES
-        assert "pairwise" not in SUPPORTED_TASK_MODES
+        assert "pairwise" in SUPPORTED_TASK_MODES
 
 
 # ---------------------------------------------------------------------------
@@ -575,7 +575,10 @@ class TestShipCliEvidence:
             assert res.exit_code == 2, (res.output, repr(res.exception))
             assert "threshold" in res.output.lower()
 
-    def test_pairwise_mode_rejected_for_now(self):
+    def test_pairwise_mode_now_supported(self):
+        # v0.71.31 (#284): --task-mode pairwise is no longer rejected. The
+        # evidence path reads mode from the file (metric here -> SHIP), so the
+        # flag is simply accepted (not an exit-2 "later release" refusal).
         from soup_cli.commands import ship as ship_cmd
 
         with runner.isolated_filesystem():
@@ -584,8 +587,8 @@ class TestShipCliEvidence:
                 ship_cmd.app,
                 ["--evidence", "ev.json", "--task-mode", "pairwise"],
             )
-            assert res.exit_code == 2, (res.output, repr(res.exception))
-            assert "pairwise" in res.output.lower()
+            assert res.exit_code == 0, (res.output, repr(res.exception))
+            assert "later release" not in res.output.lower()
 
     def test_evidence_outside_cwd_rejected(self):
         from soup_cli.commands import ship as ship_cmd

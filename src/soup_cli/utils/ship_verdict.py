@@ -46,11 +46,10 @@ from soup_cli import __version__
 # Public constants
 # ---------------------------------------------------------------------------
 
-# Leg-1 task-win modes. ``pairwise`` (true judge win-rate) is reserved for a
-# later release — it is in the enum so the engine stays pluggable, but is not
-# in SUPPORTED_TASK_MODES yet (the CLI rejects it for now).
+# Leg-1 task-win modes. ``pairwise`` (true judge win-rate) landed in v0.71.31:
+# a ``TaskWin(base=0.5 coin-flip, tuned=win-rate)`` where ``won = tuned > 0.5``.
 TASK_MODES: Tuple[str, ...] = ("metric", "judge_score", "pairwise")
-SUPPORTED_TASK_MODES: Tuple[str, ...] = ("metric", "judge_score")
+SUPPORTED_TASK_MODES: Tuple[str, ...] = ("metric", "judge_score", "pairwise")
 
 DECISION_SHIP = "SHIP"
 DECISION_DONT_SHIP = "DON'T SHIP"

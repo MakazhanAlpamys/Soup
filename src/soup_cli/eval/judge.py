@@ -294,6 +294,18 @@ class JudgeEvaluator:
         results.compute()
         return results
 
+    def compare_pair(self, prompt: str, resp_a: str, resp_b: str) -> int:
+        """One pairwise A/B judgment -> 0 (A) / 1 (B) / -1 (tie / parse fail)."""
+        judge_prompt = _PAIRWISE_INSTRUCTIONS.format(
+            prompt=prompt, resp_a=resp_a, resp_b=resp_b
+        )
+        try:
+            reply = self._call_llm(judge_prompt)
+        except Exception as exc:  # noqa: BLE001 — network/parse variety -> tie
+            logger.debug("pairwise judge call failed: %s", exc)
+            return -1
+        return _parse_pairwise(reply)
+
     def _call_llm(self, prompt: str) -> str:
         """Call the judge LLM. Uses OpenAI-compatible API for all providers."""
         import httpx
@@ -324,3 +336,136 @@ class JudgeEvaluator:
 
         data = resp.json()
         return data["choices"][0]["message"]["content"]
+
+
+# ---------------------------------------------------------------------------
+# Pairwise judging (v0.71.31) — shared by online-DPO + `soup ship --task-mode
+# pairwise`. `compare_pair` (above) issues one A/B judgment; the free functions
+# add swap-debiasing and a win-rate reduction.
+# ---------------------------------------------------------------------------
+
+_PAIRWISE_INSTRUCTIONS = (
+    "You are comparing two AI responses to the same prompt.\n\n"
+    "## Prompt\n{prompt}\n\n"
+    "## Response A\n{resp_a}\n\n"
+    "## Response B\n{resp_b}\n\n"
+    "## Task\nWhich response is better overall (helpfulness, accuracy, "
+    "safety)? Reply with a JSON object: {{\"winner\": \"A\"}} or "
+    "{{\"winner\": \"B\"}}. Return ONLY the JSON object."
+)
+
+
+def _parse_pairwise(text: str) -> int:
+    """Parse a judge reply into 0 (A) / 1 (B) / -1 (tie or unparseable)."""
+    match = re.search(r'\{[^{}]*\}', text or "", re.DOTALL)
+    if match:
+        try:
+            data = json.loads(match.group())
+            winner = str(data.get("winner", "")).strip().upper()
+            if winner == "A":
+                return 0
+            if winner == "B":
+                return 1
+        except (json.JSONDecodeError, TypeError, ValueError):
+            pass
+    # Fallback: a bare "A" / "B" token.
+    stripped = (text or "").strip().upper()
+    if stripped.startswith("A") and not stripped.startswith("B"):
+        return 0
+    if stripped.startswith("B"):
+        return 1
+    return -1
+
+
+def pairwise_compare(
+    prompt: str,
+    resp_a: str,
+    resp_b: str,
+    evaluator: object,
+    *,
+    swap: bool = True,
+) -> int:
+    """Return 0 (A preferred), 1 (B preferred), or -1 (tie / disagreement).
+
+    When ``swap`` is True the pair is judged in BOTH orders (A,B and B,A) and a
+    winner is returned only if the two runs agree — the standard defence against
+    a judge's positional bias. Disagreement -> -1 (tie).
+    """
+    first = evaluator.compare_pair(prompt, resp_a, resp_b)
+    if not swap:
+        return first
+    swapped = evaluator.compare_pair(prompt, resp_b, resp_a)
+    # Translate the swapped verdict back into A/B space: 0 -> B(1), 1 -> A(0).
+    if swapped == 0:
+        second = 1
+    elif swapped == 1:
+        second = 0
+    else:
+        second = -1
+    if first == -1 and second == -1:
+        return -1
+    if first == -1:
+        return second
+    if second == -1:
+        return first
+    return first if first == second else -1
+
+
+def pairwise_winrate(pairs: list, evaluator: object) -> float:
+    """Tuned win-rate in [0, 1] over ``(prompt, base_resp, tuned_resp)`` triples.
+
+    Base is compared as A, tuned as B. A tuned win (verdict 1) scores 1.0, a tie
+    (-1) scores 0.5, a loss (0) scores 0.0. Empty input -> 0.5 (no evidence).
+    """
+    if not pairs:
+        return 0.5
+    total = 0.0
+    for prompt, base_resp, tuned_resp in pairs:
+        verdict = pairwise_compare(prompt, base_resp, tuned_resp, evaluator, swap=True)
+        if verdict == 1:
+            total += 1.0
+        elif verdict == -1:
+            total += 0.5
+    return total / len(pairs)
+
+
+def _base_pairwise_judge_cls():
+    """Lazily import TRL's ``BasePairwiseJudge`` with a friendly error."""
+    try:
+        from trl import BasePairwiseJudge
+    except ImportError as exc:  # pragma: no cover — trl ships in [train]/[dev]
+        raise ImportError(
+            "SoupPairwiseJudge needs trl>=0.19 (pip install 'soup-cli[train]')"
+        ) from exc
+    return BasePairwiseJudge
+
+
+def make_soup_pairwise_judge(evaluator: "JudgeEvaluator"):
+    """Build a TRL ``BasePairwiseJudge`` bound to a Soup ``JudgeEvaluator``.
+
+    Factory (not a module-level subclass) so ``eval/judge.py`` stays importable
+    without trl for the pure ``pairwise_*`` functions. ``judge`` returns, per
+    prompt, the index of the best completion (0/1), or ``-1`` on tie/failure —
+    the exact ``BasePairwiseJudge`` contract (TRL treats -1 as a dropped sample).
+    """
+    base_cls = _base_pairwise_judge_cls()
+
+    class _SoupPairwiseJudge(base_cls):
+        def __init__(self, ev):
+            self.evaluator = ev
+
+        def judge(self, prompts, completions, shuffle_order: bool = True):
+            out = []
+            for prompt, pair in zip(prompts, completions):
+                if not isinstance(pair, (list, tuple)) or len(pair) != 2:
+                    out.append(-1)
+                    continue
+                out.append(
+                    pairwise_compare(
+                        prompt, pair[0], pair[1], self.evaluator,
+                        swap=shuffle_order,
+                    )
+                )
+            return out
+
+    return _SoupPairwiseJudge(evaluator)
