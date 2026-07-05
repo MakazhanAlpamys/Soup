@@ -350,6 +350,69 @@ class TestBuildPrmRewardFn:
 
 
 # ---------------------------------------------------------------------------
+# Task 5 — bundled rollout envs
+# ---------------------------------------------------------------------------
+_ENV_MODULES = ["calculator", "retrieval_qa", "guess_number"]
+
+
+class TestEnvs:
+    @pytest.mark.parametrize("modname", _ENV_MODULES)
+    def test_rows_normalise(self, modname):
+        import importlib
+
+        from soup_cli.utils.agent_rollout import _normalise_rollout_rows
+
+        mod = importlib.import_module(f"soup_cli.envs.{modname}")
+        rows = mod.rollout([])
+        assert rows, "env must produce a non-empty row set"
+        norm = _normalise_rollout_rows(rows, "openenv")
+        assert len(norm) == len(rows)
+        for row in rows:
+            assert isinstance(row["prompt"], str) and row["prompt"]
+            assert isinstance(row["answer"], str) and row["answer"]
+
+    @pytest.mark.parametrize("modname", _ENV_MODULES)
+    def test_deterministic(self, modname):
+        import importlib
+
+        mod = importlib.import_module(f"soup_cli.envs.{modname}")
+        assert mod.rollout([]) == mod.rollout([])
+
+    @pytest.mark.parametrize("modname", _ENV_MODULES)
+    def test_rollout_signature_ignores_prompt_content(self, modname):
+        import importlib
+
+        mod = importlib.import_module(f"soup_cli.envs.{modname}")
+        # Passing seed prompts must not crash and stays deterministic.
+        assert mod.rollout(["seed a", "seed b"]) == mod.rollout(["x", "y"])
+
+    def test_calculator_answers_correct(self):
+        import re
+
+        from soup_cli.envs.calculator import rollout
+
+        for row in rollout([]):
+            m = re.search(r"(-?\d+)\s*([+\-*])\s*(-?\d+)", row["prompt"])
+            assert m is not None, row["prompt"]
+            a, op, b = int(m.group(1)), m.group(2), int(m.group(3))
+            expected = {"+": a + b, "-": a - b, "*": a * b}[op]
+            assert row["answer"] == str(expected)
+
+    def test_guess_number_answer_is_int(self):
+        from soup_cli.envs.guess_number import rollout
+
+        for row in rollout([]):
+            assert row["answer"].lstrip("-").isdigit()
+
+    def test_retrieval_qa_answer_in_prompt(self):
+        from soup_cli.envs.retrieval_qa import rollout
+
+        for row in rollout([]):
+            # The answer span must appear in the document/prompt.
+            assert row["answer"] in row["prompt"]
+
+
+# ---------------------------------------------------------------------------
 # Task 4 — GRPO wiring
 # ---------------------------------------------------------------------------
 class TestGrpoPrmWiring:
