@@ -134,6 +134,24 @@ def _read_attr(obj: Any, name: str) -> Any:
         return obj.get(name)
     return getattr(obj, name, None)
 
+
+def _select_reward_fn(tcfg: Any, device: str, trust_remote_code: bool) -> Any:
+    """Choose the GRPO reward function (v0.71.30).
+
+    When ``tcfg.prm_reward`` is set, a trained Soup PRM scores each completion's
+    steps and REPLACES the configured ``reward_fn`` (process-supervision). The
+    returned callable rides the existing shaping + ``wrap_reward_funcs`` seam in
+    :meth:`GRPOTrainerWrapper.setup` unchanged, so the v0.71.26 reward-hack
+    mitigation controller observes the PRM reward for free.
+    """
+    if tcfg.prm_reward is not None:
+        from soup_cli.utils.prm_reward import build_prm_reward_fn
+
+        return build_prm_reward_fn(tcfg, device, trust_remote_code)
+    from soup_cli.trainer.rewards import load_reward_fn
+
+    return load_reward_fn(tcfg.reward_fn, verifiable_domain=tcfg.verifiable_domain)
+
 class GRPOTrainerWrapper:
     """High-level wrapper for GRPO training from SoupConfig.
 
@@ -222,11 +240,9 @@ class GRPOTrainerWrapper:
         use_unsloth = cfg.backend == "unsloth"
 
         # --- Load reward function ---
-        from soup_cli.trainer.rewards import load_reward_fn
-
-        reward_fn = load_reward_fn(
-            tcfg.reward_fn, verifiable_domain=tcfg.verifiable_domain
-        )
+        # v0.71.30 — when tcfg.prm_reward is set, a trained Soup PRM replaces
+        # the configured reward (process-supervision); otherwise load reward_fn.
+        reward_fn = _select_reward_fn(tcfg, self.device, self._trust_remote_code)
 
         # v0.71.11 #235/#240 — when the reward-hack or echo-trap detector is
         # enabled, wrap the reward function(s) with a capture shim so the

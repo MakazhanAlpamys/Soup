@@ -349,6 +349,50 @@ class TestBuildPrmRewardFn:
             mod.build_prm_reward_fn(_T(), device="cpu", trust_remote_code=False)
 
 
+# ---------------------------------------------------------------------------
+# Task 4 — GRPO wiring
+# ---------------------------------------------------------------------------
+class TestGrpoPrmWiring:
+    def test_prm_reward_selected(self, monkeypatch):
+        import soup_cli.trainer.grpo as grpo
+
+        sentinel = object()
+        monkeypatch.setattr(
+            "soup_cli.utils.prm_reward.build_prm_reward_fn",
+            lambda tcfg, device, trust_remote_code: sentinel,
+        )
+
+        class _T:
+            prm_reward = "./prm"
+            prm_aggregate = "min"
+            reward_fn = "accuracy"
+            verifiable_domain = None
+
+        out = grpo._select_reward_fn(_T(), "cpu", False)
+        assert out is sentinel
+
+    def test_standard_reward_selected(self, monkeypatch):
+        import soup_cli.trainer.grpo as grpo
+
+        captured = {}
+
+        def _fake_load(spec, verifiable_domain=None):
+            captured["spec"] = spec
+            return "REWARD_FN"
+
+        monkeypatch.setattr("soup_cli.trainer.rewards.load_reward_fn", _fake_load)
+
+        class _T:
+            prm_reward = None
+            prm_aggregate = "min"
+            reward_fn = "accuracy"
+            verifiable_domain = None
+
+        out = grpo._select_reward_fn(_T(), "cpu", False)
+        assert out == "REWARD_FN"
+        assert captured["spec"] == "accuracy"
+
+
 class TestNoTopLevelTorch:
     def test_prm_reward_has_no_top_level_torch(self):
         import soup_cli.utils.prm_reward as mod
