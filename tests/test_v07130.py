@@ -230,13 +230,14 @@ def _make_fake_scorer(aggregate="min"):
     reward_head averages H → each step boundary scores its token position.
     Fake tokenizer: one token per whitespace word (>=1).
     """
+    from types import SimpleNamespace
+
     import torch
     from torch import nn
-    from types import SimpleNamespace
 
     from soup_cli.utils.prm_reward import PRMScorer
 
-    H = 8
+    hidden = 8
 
     class _FakeTok:
         pad_token = "<pad>"
@@ -246,17 +247,17 @@ def _make_fake_scorer(aggregate="min"):
             n = max(1, len(text.split())) if text else 0
             return {"input_ids": [1] * n}
 
-    head = nn.Linear(H, 1, bias=True)
+    head = nn.Linear(hidden, 1, bias=True)
     with torch.no_grad():
-        head.weight.copy_(torch.ones(1, H) / H)
+        head.weight.copy_(torch.ones(1, hidden) / hidden)
         head.bias.zero_()
 
     class _FakeModel:
         reward_head = head
 
         def __call__(self, input_ids, output_hidden_states=False):
-            T = input_ids.shape[1]
-            hs = torch.arange(T).float().reshape(1, T, 1).repeat(1, 1, H)
+            seq_len = input_ids.shape[1]
+            hs = torch.arange(seq_len).float().reshape(1, seq_len, 1).repeat(1, 1, hidden)
             return SimpleNamespace(hidden_states=[hs])
 
     scorer = PRMScorer("./prm", aggregate=aggregate, device="cpu")
