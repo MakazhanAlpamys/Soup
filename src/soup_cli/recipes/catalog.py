@@ -4114,4 +4114,103 @@ training:
 output: ./output
 """,
     ),
+    # v0.71.30 — bundled openenv rollout envs (out-of-the-box GRPO).
+    "grpo-env-calculator": RecipeMeta(
+        model="HuggingFaceTB/SmolLM2-135M-Instruct",
+        task="grpo",
+        size="135M",
+        tags=("grpo", "openenv", "rollout", "calculator", "reasoning"),
+        description="SmolLM2-135M GRPO on the bundled calculator env (openenv rollout)",
+        yaml_str="""\
+base: HuggingFaceTB/SmolLM2-135M-Instruct
+task: grpo
+
+data:
+  train: ./data/seed_prompts.jsonl
+  format: auto
+  max_length: 512
+
+training:
+  epochs: 1
+  lr: 1e-6
+  batch_size: 4
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  grpo_beta: 0.04
+  num_generations: 4
+  reward_fn: verifiable
+  verifiable_domain: math
+  rollout_backend: openenv
+  rollout_func: soup_cli.envs.calculator:rollout
+
+output: ./output
+""",
+    ),
+    "grpo-env-retrieval-qa": RecipeMeta(
+        model="HuggingFaceTB/SmolLM2-135M-Instruct",
+        task="grpo",
+        size="135M",
+        tags=("grpo", "openenv", "rollout", "retrieval", "qa"),
+        description="SmolLM2-135M GRPO on the bundled retrieval-QA env (openenv rollout)",
+        yaml_str="""\
+base: HuggingFaceTB/SmolLM2-135M-Instruct
+task: grpo
+
+data:
+  train: ./data/seed_prompts.jsonl
+  format: auto
+  max_length: 512
+
+training:
+  epochs: 1
+  lr: 1e-6
+  batch_size: 4
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  grpo_beta: 0.04
+  num_generations: 4
+  reward_fn: accuracy
+  rollout_backend: openenv
+  rollout_func: soup_cli.envs.retrieval_qa:rollout
+
+output: ./output
+""",
+    ),
+    "grpo-env-guess-number": RecipeMeta(
+        model="HuggingFaceTB/SmolLM2-135M-Instruct",
+        task="grpo",
+        size="135M",
+        tags=("grpo", "openenv", "rollout", "deduction", "game"),
+        description="SmolLM2-135M GRPO on the bundled number-deduction env (openenv rollout)",
+        yaml_str="""\
+base: HuggingFaceTB/SmolLM2-135M-Instruct
+task: grpo
+
+data:
+  train: ./data/seed_prompts.jsonl
+  format: auto
+  max_length: 512
+
+training:
+  epochs: 1
+  lr: 1e-6
+  batch_size: 4
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  grpo_beta: 0.04
+  num_generations: 4
+  reward_fn: verifiable
+  verifiable_domain: math
+  rollout_backend: openenv
+  rollout_func: soup_cli.envs.guess_number:rollout
+
+output: ./output
+""",
+    ),
 }

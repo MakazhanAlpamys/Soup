@@ -456,6 +456,38 @@ class TestGrpoPrmWiring:
         assert captured["spec"] == "accuracy"
 
 
+# ---------------------------------------------------------------------------
+# Task 6 — recipes
+# ---------------------------------------------------------------------------
+_NEW_RECIPES = ["grpo-env-calculator", "grpo-env-retrieval-qa", "grpo-env-guess-number"]
+
+
+class TestRecipes:
+    @pytest.mark.parametrize("name", _NEW_RECIPES)
+    def test_recipe_resolves(self, name):
+        from soup_cli.recipes.catalog import get_recipe
+
+        recipe = get_recipe(name)
+        assert recipe is not None
+        assert recipe.task == "grpo"
+
+    @pytest.mark.parametrize("name", _NEW_RECIPES)
+    def test_recipe_yaml_parses(self, name):
+        from soup_cli.config.loader import load_config_from_string
+        from soup_cli.recipes.catalog import get_recipe
+
+        recipe = get_recipe(name)
+        cfg = load_config_from_string(recipe.yaml_str)
+        assert cfg.task == "grpo"
+        assert cfg.training.rollout_backend == "openenv"
+        assert cfg.training.rollout_func.startswith("soup_cli.envs.")
+
+    def test_catalog_size_is_137(self):
+        from soup_cli.recipes.catalog import RECIPES
+
+        assert len(RECIPES) == 137
+
+
 class TestNoTopLevelTorch:
     def test_prm_reward_has_no_top_level_torch(self):
         import soup_cli.utils.prm_reward as mod
