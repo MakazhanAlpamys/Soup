@@ -1,0 +1,47 @@
+name: Notify on Push
+
+on:
+  push:
+    branches: ['**']
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      files_added: ${{ steps.changes.outputs.files_added }}
+      files_modified: ${{ steps.changes.outputs.files_modified }}
+      files_removed: ${{ steps.changes.outputs.files_removed }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 2
+
+      - name: Get changed files
+        id: changes
+        run: |
+          ADDED=$(git diff --name-only --diff-filter=A HEAD~1 HEAD | tr '\n' ',' | sed 's/,$//')
+          MODIFIED=$(git diff --name-only --diff-filter=M HEAD~1 HEAD | tr '\n' ',' | sed 's/,$//')
+          REMOVED=$(git diff --name-only --diff-filter=D HEAD~1 HEAD | tr '\n' ',' | sed 's/,$//')
+          echo "files_added=${ADDED:-none}" >> $GITHUB_OUTPUT
+          echo "files_modified=${MODIFIED:-none}" >> $GITHUB_OUTPUT
+          echo "files_removed=${REMOVED:-none}" >> $GITHUB_OUTPUT
+
+  call-notifier:
+    needs: prepare
+    uses: Ekaanksh-dev/devops-ai-notifier/.github/workflows/ai-notify.yml@master
+    with:
+      repo_name: ${{ github.repository }}
+      branch: ${{ github.ref_name }}
+      commit_sha: ${{ github.sha }}
+      commit_message: ${{ github.event.head_commit.message }}
+      pusher: ${{ github.actor }}
+      files_added: ${{ needs.prepare.outputs.files_added }}
+      files_modified: ${{ needs.prepare.outputs.files_modified }}
+      files_removed: ${{ needs.prepare.outputs.files_removed }}
+      timestamp: ${{ github.event.head_commit.timestamp }}
+    secrets:
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      SENDER_EMAIL: ${{ secrets.SENDER_EMAIL }}
+      SENDER_PASSWORD: ${{ secrets.SENDER_PASSWORD }}
+      RECEIVER_EMAIL: ${{ secrets.RECEIVER_EMAIL }}
