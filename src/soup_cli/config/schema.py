@@ -1098,6 +1098,45 @@ class TrainingConfig(BaseModel):
             raise ValueError("prm_reward must be <= 512 chars")
         return value
 
+    # v0.71.31 — Online DPO (task='online_dpo'): on-policy generation judged by
+    # a pairwise judge (online_dpo_judge URL) OR a reward_model. beta reuses
+    # dpo_beta; loss_type + max_new_tokens map to OnlineDPOConfig.
+    online_dpo_judge: Optional[str] = Field(
+        default=None,
+        description=(
+            "Judge URL (ollama://model | https://... | http://localhost) for "
+            "task='online_dpo'. Mutually exclusive with reward_model."
+        ),
+    )
+    online_dpo_loss_type: Literal["sigmoid", "ipo"] = Field(
+        default="sigmoid",
+        description="Online DPO loss type (maps to OnlineDPOConfig.loss_type).",
+    )
+    online_dpo_max_new_tokens: int = Field(
+        default=64,
+        ge=1,
+        le=4096,
+        description="Max new tokens generated per online-DPO step.",
+    )
+
+    @field_validator("online_dpo_judge", mode="before")
+    @classmethod
+    def _validate_online_dpo_judge_field(cls, value: Any) -> Optional[str]:
+        """v0.71.31 — shape-only validation (SSRF enforced at trainer setup)."""
+        if value is None:
+            return None
+        if isinstance(value, bool) or not isinstance(value, str):
+            raise ValueError(
+                f"online_dpo_judge must be a string URL, got {type(value).__name__}"
+            )
+        if not value.strip():
+            raise ValueError("online_dpo_judge must be a non-empty string")
+        if "\x00" in value:
+            raise ValueError("online_dpo_judge must not contain null bytes")
+        if len(value) > 512:
+            raise ValueError("online_dpo_judge must be <= 512 chars")
+        return value
+
     # v0.50.0 Part A — GRPO objective variants (unsloth + axolotl parity).
     # Schema-only in v0.50.0; live loss kernels wired in v0.50.1.
     grpo_variant: Optional[Literal[
@@ -3502,6 +3541,9 @@ class SoupConfig(BaseModel):
         "unlearn",
         # v0.67.0 Part C — MoLE per-token adapter routing (Mixture of LoRA Experts).
         "moe_lora_routing",
+        # v0.71.31 — Online DPO (on-policy generation judged by a pairwise
+        # judge OR a reward_model in the loop).
+        "online_dpo",
     ] = Field(
         default="sft",
         description=(
@@ -4285,6 +4327,52 @@ class SoupConfig(BaseModel):
         if self.modality != "text":
             raise ValueError(
                 f"prm_reward requires modality='text'; got modality={self.modality!r}"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_online_dpo_compat(self) -> "SoupConfig":
+        """v0.71.31 — Online DPO gate.
+
+        ``task='online_dpo'`` generates on-policy and needs exactly one reward
+        signal — a pairwise judge (``online_dpo_judge``) OR a ``reward_model``.
+        It runs a transformers generation + LoRA loop, so it requires
+        ``backend='transformers'`` with ``modality='text'``. Any
+        ``online_dpo_*`` field set on another task silently no-ops → reject as a
+        footgun.
+        """
+        t = self.training
+        online_set = (
+            t.online_dpo_judge is not None
+            or t.online_dpo_loss_type != "sigmoid"
+            or t.online_dpo_max_new_tokens != 64
+        )
+        if self.task == "online_dpo":
+            if self.backend != "transformers":
+                raise ValueError(
+                    "task='online_dpo' requires backend='transformers'; "
+                    f"got backend={self.backend!r}"
+                )
+            if self.modality != "text":
+                raise ValueError(
+                    "task='online_dpo' requires modality='text'; "
+                    f"got modality={self.modality!r}"
+                )
+            has_judge = t.online_dpo_judge is not None
+            has_rm = t.reward_model is not None
+            if has_judge and has_rm:
+                raise ValueError(
+                    "task='online_dpo': set exactly one of "
+                    "training.online_dpo_judge or training.reward_model, not both"
+                )
+            if not has_judge and not has_rm:
+                raise ValueError(
+                    "task='online_dpo' needs a judge (training.online_dpo_judge) "
+                    "or a training.reward_model"
+                )
+        elif online_set:
+            raise ValueError(
+                "training.online_dpo_* fields require task='online_dpo'"
             )
         return self
 

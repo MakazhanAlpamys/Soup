@@ -1231,6 +1231,10 @@ def train(
         from soup_cli.trainer.dpo import DPOTrainerWrapper
 
         trainer_wrapper = DPOTrainerWrapper(cfg, **trainer_kwargs)
+    elif cfg.task == "online_dpo":
+        from soup_cli.trainer.online_dpo import OnlineDPOTrainerWrapper
+
+        trainer_wrapper = OnlineDPOTrainerWrapper(cfg, **trainer_kwargs)
     elif cfg.task == "grpo":
         from soup_cli.trainer.grpo import GRPOTrainerWrapper
 

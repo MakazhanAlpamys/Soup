@@ -220,3 +220,203 @@ class TestShipPairwise:
             assert "DON'T SHIP" in result.output
         finally:
             os.remove(path)
+
+
+# ---------------------------------------------------------------------------
+# Task 4 — online_dpo schema (task literal + fields + cross-validator)
+# ---------------------------------------------------------------------------
+
+_ODPO = """
+base: sshleifer/tiny-gpt2
+task: online_dpo
+data:
+  train: x.jsonl
+training:
+  online_dpo_judge: "ollama://llama3"
+"""
+
+
+class TestOnlineDpoSchema:
+    def test_happy_parse(self):
+        from soup_cli.config.loader import load_config_from_string
+
+        cfg = load_config_from_string(_ODPO)
+        assert cfg.task == "online_dpo"
+        assert cfg.training.online_dpo_judge == "ollama://llama3"
+        assert cfg.training.online_dpo_loss_type == "sigmoid"
+        assert cfg.training.online_dpo_max_new_tokens == 64
+
+    def test_reward_model_leg_parses(self):
+        from soup_cli.config.loader import load_config_from_string
+
+        cfg = load_config_from_string(
+            "base: sshleifer/tiny-gpt2\ntask: online_dpo\n"
+            "data:\n  train: x.jsonl\n"
+            "training:\n  reward_model: some/rm\n"
+        )
+        assert cfg.training.reward_model == "some/rm"
+        assert cfg.training.online_dpo_judge is None
+
+    def test_reject_both_judge_and_reward(self):
+        import pytest
+
+        from soup_cli.config.loader import load_config_from_string
+
+        with pytest.raises(Exception, match="exactly one"):
+            load_config_from_string(_ODPO + "  reward_model: some/rm\n")
+
+    def test_reject_neither(self):
+        import pytest
+
+        from soup_cli.config.loader import load_config_from_string
+
+        with pytest.raises(Exception, match="judge|reward_model"):
+            load_config_from_string(
+                "base: sshleifer/tiny-gpt2\ntask: online_dpo\n"
+                "data:\n  train: x.jsonl\n"
+            )
+
+    def test_reject_mlx_backend(self):
+        import pytest
+
+        from soup_cli.config.loader import load_config_from_string
+
+        with pytest.raises(Exception, match="transformers"):
+            load_config_from_string(
+                "base: sshleifer/tiny-gpt2\ntask: online_dpo\nbackend: mlx\n"
+                "data:\n  train: x.jsonl\n"
+                "training:\n  online_dpo_judge: \"ollama://m\"\n"
+            )
+
+    def test_footgun_field_without_task(self):
+        import pytest
+
+        from soup_cli.config.loader import load_config_from_string
+
+        with pytest.raises(Exception, match="online_dpo"):
+            load_config_from_string(
+                "base: sshleifer/tiny-gpt2\ntask: sft\n"
+                "data:\n  train: x.jsonl\n"
+                "training:\n  online_dpo_judge: \"ollama://m\"\n"
+            )
+
+    def test_reject_empty_judge(self):
+        import pytest
+
+        from soup_cli.config.loader import load_config_from_string
+
+        with pytest.raises(Exception, match="non-empty|empty"):
+            load_config_from_string(
+                "base: sshleifer/tiny-gpt2\ntask: online_dpo\n"
+                "data:\n  train: x.jsonl\n"
+                "training:\n  online_dpo_judge: \"\"\n"
+            )
+
+    def test_loss_type_and_max_new_tokens(self):
+        from soup_cli.config.loader import load_config_from_string
+
+        cfg = load_config_from_string(
+            _ODPO + "  online_dpo_loss_type: ipo\n  online_dpo_max_new_tokens: 128\n"
+        )
+        assert cfg.training.online_dpo_loss_type == "ipo"
+        assert cfg.training.online_dpo_max_new_tokens == 128
+
+
+# ---------------------------------------------------------------------------
+# Task 5 — OnlineDPOTrainerWrapper
+# ---------------------------------------------------------------------------
+
+
+def _make_len_judge():
+    """A synthetic length-preferring BasePairwiseJudge (no network)."""
+    from trl import BasePairwiseJudge
+
+    class _LenJudge(BasePairwiseJudge):
+        def judge(self, prompts, completions, shuffle_order=True):
+            return [0 if len(c[0]) >= len(c[1]) else 1 for c in completions]
+
+    return _LenJudge()
+
+
+class TestOnlineDpoWrapper:
+    def test_prompt_rows_from_messages(self):
+        from soup_cli.trainer.online_dpo import OnlineDPOTrainerWrapper
+
+        rows = [
+            {
+                "messages": [
+                    {"role": "user", "content": "hi"},
+                    {"role": "assistant", "content": "yo"},
+                ]
+            }
+        ]
+        out = OnlineDPOTrainerWrapper._to_prompt_rows(rows)
+        assert out == [{"prompt": [{"role": "user", "content": "hi"}]}]
+
+    def test_prompt_rows_from_prompt_field(self):
+        from soup_cli.trainer.online_dpo import OnlineDPOTrainerWrapper
+
+        out = OnlineDPOTrainerWrapper._to_prompt_rows([{"prompt": "hello"}])
+        assert out == [{"prompt": [{"role": "user", "content": "hello"}]}]
+
+    def test_prompt_rows_keeps_system(self):
+        from soup_cli.trainer.online_dpo import OnlineDPOTrainerWrapper
+
+        rows = [
+            {
+                "messages": [
+                    {"role": "system", "content": "be nice"},
+                    {"role": "user", "content": "hi"},
+                    {"role": "assistant", "content": "yo"},
+                ]
+            }
+        ]
+        out = OnlineDPOTrainerWrapper._to_prompt_rows(rows)
+        assert out == [
+            {"prompt": [{"role": "system", "content": "be nice"},
+                        {"role": "user", "content": "hi"}]}
+        ]
+
+    def test_synthetic_judge_prefers_longer(self):
+        j = _make_len_judge()
+        # completion 0 longer -> index 0; completion 1 longer -> index 1
+        assert j.judge(["p"], [["longer", "s"]]) == [0]
+        assert j.judge(["p"], [["s", "longer"]]) == [1]
+
+    def test_setup_builds_trainer_with_synthetic_judge(self):
+        import soup_cli.trainer.online_dpo as od
+        from soup_cli.config.loader import load_config_from_string
+        from soup_cli.trainer.online_dpo import OnlineDPOTrainerWrapper
+
+        cfg = load_config_from_string(
+            "base: hf-internal-testing/tiny-random-gpt2\ntask: online_dpo\n"
+            "data:\n  train: x.jsonl\n  max_length: 64\n"
+            "training:\n  online_dpo_judge: \"ollama://m\"\n"
+            "  epochs: 1\n  batch_size: 2\n  online_dpo_max_new_tokens: 8\n"
+        )
+        od._ONLINE_DPO_JUDGE_OVERRIDE = _make_len_judge()
+        try:
+            wrapper = OnlineDPOTrainerWrapper(cfg, device="cpu")
+            wrapper.setup(
+                {"train": [{"messages": [{"role": "user", "content": "hi there"}]},
+                           {"messages": [{"role": "user", "content": "hello"}]}]}
+            )
+            assert wrapper.trainer is not None
+        finally:
+            od._ONLINE_DPO_JUDGE_OVERRIDE = None
+
+
+# ---------------------------------------------------------------------------
+# Task 6 — train.py routing
+# ---------------------------------------------------------------------------
+
+
+class TestOnlineDpoRouting:
+    def test_train_routes_online_dpo(self):
+        import inspect
+
+        from soup_cli.commands import train as train_cmd
+
+        src = inspect.getsource(train_cmd)
+        assert 'cfg.task == "online_dpo"' in src
+        assert "OnlineDPOTrainerWrapper" in src
