@@ -252,12 +252,12 @@ def shrink(
         None, "--drop-layers", help="Explicit number of contiguous layers to drop."
     ),
     calib: str = typer.Option(
-        ..., "--calib", help="Calibration JSONL (prompts) — must stay under cwd."
+        ..., "--calib", help="Calibration JSONL (prompts) - must stay under cwd."
     ),
     heal: Optional[str] = typer.Option(
         None,
         "--heal",
-        help="Heal JSONL (chat rows) — distill the original into the pruned model.",
+        help="Heal JSONL (chat rows) - distill the original into the pruned model.",
     ),
     heal_steps: int = typer.Option(
         200, "--heal-steps", help="Approx. optimiser steps for the distill heal."
