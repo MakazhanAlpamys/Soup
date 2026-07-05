@@ -4,8 +4,9 @@ Tests the pure verdict half, the torch-lazy prune/importance half, the CLI
 orchestration, the subprocess distill-heal wiring, and registry attach.
 """
 import ast
+import inspect
 import math
-import pathlib
+import re
 from io import StringIO
 
 import pytest
@@ -19,6 +20,12 @@ from soup_cli.utils.shrink import (
     render_shrink_panel,
     shrink_verdict_to_dict,
 )
+
+
+def _strip_ansi(text: str) -> str:
+    """Drop ANSI SGR codes so Rich-split flag names (``--drop`` + color +
+    ``-ratio``) become contiguous substrings on colour-enabled CI terminals."""
+    return re.sub(r"\x1b\[[0-9;]*m", "", text)
 
 
 # ---------------------------------------------------------------------------
@@ -105,7 +112,9 @@ class TestDecideShrink:
 
 class TestNoTopLevelTorch:
     def test_shrink_module_has_no_top_level_heavy_import(self):
-        src = pathlib.Path("src/soup_cli/utils/shrink.py").read_text(encoding="utf-8")
+        import soup_cli.utils.shrink as _mod
+
+        src = inspect.getsource(_mod)  # cwd-independent (CI runs from a temp cwd)
         tree = ast.parse(src)
         names: list[str] = []
         for node in tree.body:
@@ -448,8 +457,9 @@ class TestShrinkCli:
 
         r = CliRunner().invoke(app, ["shrink", "--help"])
         assert r.exit_code == 0, (r.output, repr(r.exception))
-        assert "drop-ratio" in r.output
-        assert "calib" in r.output
+        clean = _strip_ansi(r.output)  # Rich splits flag names with colour codes
+        assert "drop-ratio" in clean
+        assert "calib" in clean
 
     def test_rejects_both_drop_flags(self, tmp_path, monkeypatch):
         from typer.testing import CliRunner
@@ -758,7 +768,9 @@ class TestReviewFixes:
 
     def test_perplexity_no_top_level_math_import_uses_isnan(self):
         """The NaN filter uses math.isnan, not the x == x self-compare idiom."""
-        src = pathlib.Path("src/soup_cli/commands/shrink.py").read_text(encoding="utf-8")
+        import soup_cli.commands.shrink as _mod
+
+        src = inspect.getsource(_mod)
         assert "loss == loss" not in src
         assert "math.isnan(loss)" in src
 
@@ -1220,7 +1232,9 @@ class TestDecideShrinkBoundaries:
 
 class TestCommandsNoTopLevelTorch:
     def test_commands_shrink_has_no_top_level_heavy_import(self):
-        src = pathlib.Path("src/soup_cli/commands/shrink.py").read_text(encoding="utf-8")
+        import soup_cli.commands.shrink as _mod
+
+        src = inspect.getsource(_mod)  # cwd-independent (CI runs from a temp cwd)
         tree = ast.parse(src)
         names: list[str] = []
         for node in tree.body:
