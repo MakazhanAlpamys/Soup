@@ -49,25 +49,22 @@ infrastructure instead of improving models. Soup fixes that.
 
 ## What's New
 
-**v0.71.28 — Drive Soup from your coding agent: `soup mcp serve`.** A Model Context Protocol server, so Claude Code / Cursor / Cline / Continue can run Soup conversationally. No other fine-tuning CLI ships one.
+**v0.71.29 — Make your model smaller, locally: `soup shrink`.** Depth-prune the least-important layers, then distill-heal — with a binary SHIP / DON'T-SHIP verdict. Based on "The Unreasonable Ineffectiveness of the Deeper Layers" (arXiv:2403.17887).
 
-- **14 read-only tools, JSON out.** `advise`, `data_inspect` / `validate` / `score` / `doctor`,
-  `recipes_search` / `show`, `runs_list` / `show`, `registry_list` / `show`, `profile`,
-  `diagnose_evidence`, `ship_evidence` — your agent can inspect data, search recipes, read runs,
-  and get a ship verdict without you leaving the chat.
-- **Plan-only by default, safe by design.** stdio transport only (no network listener); the two
-  mutating tools (`train_start`, `export`) are gated behind `--allow-mutating` and only ever
-  render the exact command that would run. Every path argument re-enters cwd containment +
-  symlink rejection; output is control-char sanitized; errors are path-free.
-- **Light install.** The official `mcp` SDK lives behind a new `[mcp]` extra
-  (`pip install 'soup-cli[mcp]'`), lazy-imported so the core CLI stays torch-free and fast.
-- **Live-validated on Windows.** A real stdio MCP client drove `initialize → list_tools →
-  call` end-to-end on Windows + RTX 3050 — read tools return real JSON, the mutating tools
-  refuse without the flag, and a path-traversal argument is rejected.
+- **Importance-ranked depth pruning.** One forward pass per calibration prompt scores each
+  contiguous layer block by the angular distance of the residual stream across it; the
+  least-important block is dropped (the first and last layer are always protected).
+- **Distill-heal, Minitron-style.** `--heal` distills the original model into the pruned
+  student (LoRA logit-KD) as an isolated `soup train` run, then fuses the adapter back so you
+  ship a single dense smaller model — not a base + adapter.
+- **A verdict, not a dashboard.** Every run ends in **SHIP** or **DON'T SHIP** on a
+  before/after perplexity ratio (`exit 0 = SHIP`, `2 = DON'T`, `1 = error`), so it drops into CI.
+- **Runs on a laptop GPU.** Live-validated on Windows + RTX 3050 with SmolLM2-135M: drop 25 %
+  (30 → 22 layers, 21 % params) and drop-4 + CPU heal (perplexity recovered to ×1.35).
 
-```jsonc
-// .mcp.json (Claude Code) or claude_desktop_config.json
-{ "mcpServers": { "soup": { "command": "soup", "args": ["mcp", "serve"] } } }
+```bash
+soup shrink --model HuggingFaceTB/SmolLM2-135M-Instruct --drop-ratio 0.25 \
+    --calib calib.jsonl --heal heal.jsonl --heal-steps 200 -o shrunk --device cpu
 ```
 
 Full history: [CHANGELOG.md](CHANGELOG.md) &middot; [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).

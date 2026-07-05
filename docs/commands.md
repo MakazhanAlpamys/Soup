@@ -158,6 +158,9 @@ soup ship ... --task-mode judge_score --judge-model ollama://llama3.1  Leg-1 via
 soup ship ... --general-suite mmlu,gsm8k --baseline base.json  lm-eval leg-2 + recorded base scores
 soup mcp serve                                MCP server over stdio (drive Soup from Claude Code / Cursor / Cline; requires [mcp] extra) (v0.71.28)
 soup mcp serve --allow-mutating               Also expose plan-only train_start / export tools (never execute) (v0.71.28)
+soup shrink --model <id|path> --drop-ratio 0.25 --calib c.jsonl -o shrunk  Depth-prune least-important layer block + SHIP/DON'T-SHIP ppl verdict (exit 0/2/1) (v0.71.29)
+soup shrink ... --drop-layers N --heal h.jsonl --heal-steps 200 --device cpu  Drop N layers + distill-heal (fuse LoRA back to one dense model)
+soup shrink ... --tolerance 0.10 --plan-only [--attach-to-registry <id>]  Ppl-regression tolerance / print importance table only / registry attach
 soup tui                                      Full-screen Textual dashboard (requires [tui] extra)
 soup train --config soup.yaml --profile       Record torch.profiler trace to <output>/profiles/
 soup --log-level quiet|normal|verbose|debug   Global logging tier (Rich-formatted)

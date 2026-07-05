@@ -24,6 +24,57 @@
 - [Training Stability & Auto-Tuning](#training-stability--auto-tuning)
 - [Training Intelligence (Forgetting + Checkpoint Quality)](#training-intelligence-forgetting--checkpoint-quality)
 - [GaLore (Memory-Efficient Full-Parameter Training)](#galore-memory-efficient-full-parameter-training)
+- [Depth Pruning + Distill-Heal (`soup shrink`)](#depth-pruning--distill-heal-soup-shrink)
+
+---
+
+## Depth Pruning + Distill-Heal (`soup shrink`)
+
+`soup shrink` makes a model smaller by dropping its least-important **contiguous
+block of decoder layers**, then optionally *healing* the loss with knowledge
+distillation. It implements "The Unreasonable Ineffectiveness of the Deeper
+Layers" (Gromov et al., arXiv:2403.17887), with a Minitron-style distillation
+heal instead of the paper's plain LoRA fine-tune.
+
+**How it ranks layers.** For each candidate block `[L, L+n)`, one forward pass
+per calibration prompt (`output_hidden_states=True`) measures the **angular
+distance** of the residual stream entering (`hidden_states[L]`) vs leaving
+(`hidden_states[L+n]`) the block, averaged over every non-pad token across the
+calibration set. The block with the *lowest* distance transforms the residual
+stream least, so it is the safest to drop. The first and last decoder layers are
+always protected (they carry the most transformation).
+
+```bash
+# See the importance table + chosen block without writing anything:
+soup shrink --model HuggingFaceTB/SmolLM2-135M-Instruct --drop-ratio 0.25 \
+    --calib calib.jsonl --device cpu --plan-only
+
+# Prune 25% + heal (distill the original into the pruned student, fuse to one
+# dense model) + get a SHIP/DON'T-SHIP perplexity verdict:
+soup shrink --model HuggingFaceTB/SmolLM2-135M-Instruct --drop-ratio 0.25 \
+    --calib calib.jsonl --heal heal.jsonl --heal-steps 200 \
+    --tolerance 0.10 -o shrunk --device cpu --attach-to-registry <id>
+```
+
+- **`--drop-ratio F` / `--drop-layers N`** (exactly one) — how many contiguous
+  layers to drop; the *position* is chosen automatically by the importance scan.
+- **`--calib <jsonl>`** — calibration prompts (`{"text": ...}` / `{"prompt":
+  ...}` / chat `messages`). Must stay under cwd.
+- **`--heal <jsonl> --heal-steps N`** — distill the full-depth original into the
+  pruned student (LoRA logit-KD) as an isolated `soup train` subprocess, then
+  fuse the adapter back into the pruned base so the output is a single dense
+  model. Heal keeps the teacher resident (~2× model memory); with `--device
+  cpu` the heal runs on CPU (validated ≤ 3 B on a 4 GB card).
+- **`--tolerance F`** — ship if the perplexity regression stays within `F`
+  (default `0.10` = 10 %). Exit code `0 = SHIP`, `2 = DON'T SHIP`, `1 = error`.
+- **`-o <dir>`** — the shrunk model lands in `<dir>/model`; the verdict in
+  `<dir>/shrink_report.json`.
+
+**Arch support (v1):** Llama / Qwen / SmolLM. Others are a friendly reject.
+The importance pass loads the model, so live-validated on ≤ 3 B; larger models
+work but are unvalidated on the reference hardware. Perplexity is an unweighted
+mean of per-example perplexities — valid for the before/after *ratio* the
+verdict uses, not directly comparable to `soup eval` absolute numbers.
 
 ---
 

@@ -12,6 +12,35 @@ reproducing 70+ versions of notes.
 
 ## [Unreleased]
 
+## [0.71.29] - 2026-07-05
+
+### Added
+- **`soup shrink`** — depth-prune a model + optional distill-heal
+  ("The Unreasonable Ineffectiveness of the Deeper Layers", arXiv:2403.17887).
+  Ranks decoder layers by the angular distance of the residual stream across a
+  contiguous block over a calibration set, drops the least-important block
+  (first and last layer always protected), optionally *heals* by distilling the
+  original model into the pruned student, and emits a single dense smaller model
+  plus a one-screen **SHIP / DON'T SHIP** perplexity verdict.
+  `soup shrink --model <id|path> [--drop-ratio 0.25 | --drop-layers N] --calib
+  <calib.jsonl> [--heal <heal.jsonl> --heal-steps N] [--tolerance 0.10]
+  [-o <dir>] [--device cpu] [--attach-to-registry <id>] [--plan-only]`.
+  Exit codes: 0 = SHIP, 2 = DON'T SHIP, 1 = error. The heal runs as an isolated
+  `soup train` subprocess (LoRA-student logit distillation) and the adapter is
+  fused back so the shipped artifact stays a single dense model. Arch allowlist
+  v1: Llama / Qwen / SmolLM. Validated live on SmolLM2-135M (drop 25 %: 30 -> 22
+  layers, ppl x2.98 unhealed; drop 4 + heal: ppl x1.35, recovered).
+
+### Security
+- `soup shrink` contains `--calib` / `--heal` / `--output-dir` (and every
+  derived write path: `<out>/model`, `<out>/heal_adapter`, the fuse staging dir)
+  under cwd with `os.path.realpath` + `commonpath` + O_NOFOLLOW + symlink
+  rejection, re-validating derived paths right before each write (TOCTOU). The
+  heal subprocess uses an argv list (no shell) with a timeout; its config is
+  schema-validated before spawn; subprocess output is C0/ESC-stripped before it
+  reaches the terminal. `--model` defaults `trust_remote_code=False` with a
+  probe + warn.
+
 ## [0.71.28] - 2026-07-04
 
 ### Added
