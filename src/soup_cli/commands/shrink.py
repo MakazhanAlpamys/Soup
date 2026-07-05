@@ -201,6 +201,14 @@ def shrink(
     calib: str = typer.Option(
         ..., "--calib", help="Calibration JSONL (prompts) — must stay under cwd."
     ),
+    heal: Optional[str] = typer.Option(
+        None,
+        "--heal",
+        help="Heal JSONL (chat rows) — distill the original into the pruned model.",
+    ),
+    heal_steps: int = typer.Option(
+        200, "--heal-steps", help="Approx. optimiser steps for the distill heal."
+    ),
     tolerance: float = typer.Option(
         0.10, "--tolerance", help="Perplexity-regression tolerance for the verdict."
     ),
@@ -227,6 +235,8 @@ def shrink(
             drop_ratio=drop_ratio,
             drop_layers=drop_layers,
             calib=calib,
+            heal=heal,
+            heal_steps=heal_steps,
             tolerance=tolerance,
             output_dir=output_dir,
             device=device,
@@ -247,6 +257,8 @@ def _shrink_impl(
     drop_ratio: Optional[float],
     drop_layers: Optional[int],
     calib: str,
+    heal: Optional[str],
+    heal_steps: int,
     tolerance: float,
     output_dir: str,
     device: Optional[str],
@@ -259,6 +271,12 @@ def _shrink_impl(
     # Fail fast on the flag combination BEFORE loading a multi-GB model.
     if (drop_ratio is None) == (drop_layers is None):
         raise typer.BadParameter("set exactly one of --drop-ratio / --drop-layers")
+    if heal is not None:
+        if not isinstance(heal_steps, int) or isinstance(heal_steps, bool):
+            raise typer.BadParameter("--heal-steps must be an int")
+        if not (1 <= heal_steps <= _MAX_HEAL_STEPS):
+            raise typer.BadParameter(f"--heal-steps must be in [1, {_MAX_HEAL_STEPS}]")
+        heal_rows = _count_jsonl_rows(heal)  # validates cwd containment + O_NOFOLLOW
     prompts = _load_calib(calib)
 
     console.print(f"[dim]Loading {escape(model)} ...[/]")
@@ -302,6 +320,22 @@ def _shrink_impl(
     tokenizer.save_pretrained(str(model_out))
     del mdl
 
+    healed = False
+    if heal is not None:
+        adapter_dir = out_root / "heal_adapter"
+        console.print(
+            f"[dim]Healing (distill original -> pruned, ~{heal_steps} steps) ...[/]"
+        )
+        _run_heal(
+            pruned_dir=str(model_out),
+            teacher=model,
+            heal_data=heal,
+            steps=heal_steps,
+            out_dir=str(adapter_dir),
+            heal_rows=heal_rows,
+        )
+        healed = True
+
     reloaded, tok2, dev2 = _load_for_shrink(str(model_out), device, trust_remote_code)
     layers_after = int(reloaded.config.num_hidden_layers)
     params_after = _count_params(reloaded)
@@ -317,7 +351,7 @@ def _shrink_impl(
         layers_before=n_layers,
         layers_after=layers_after,
         params_saved_pct=params_saved_pct,
-        healed=False,
+        healed=healed,
     )
     console.print(render_shrink_panel(verdict))
 
@@ -350,3 +384,138 @@ def _attach_to_registry(registry_id: str, report_path: str) -> None:
         )
     except Exception as exc:  # noqa: BLE001
         console.print(f"[yellow]Warning:[/] could not attach to registry: {escape(str(exc))}")
+
+
+# ---------------------------------------------------------------------------
+# Distill-heal (subprocess) + fuse
+# ---------------------------------------------------------------------------
+_HEAL_BATCH_SIZE = 4
+_HEAL_TIMEOUT_SECONDS = 24 * 60 * 60
+
+
+def _count_jsonl_rows(path: str) -> int:
+    """Count non-empty lines in a JSONL file (cwd-contained, O_NOFOLLOW, capped)."""
+    _under_cwd(path, "heal path")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(path, flags)
+    except OSError as exc:
+        raise typer.BadParameter(f"heal path unreadable: {exc}") from exc
+    with os.fdopen(fd, "r", encoding="utf-8") as handle:
+        if os.fstat(handle.fileno()).st_size > _MAX_CALIB_BYTES:
+            raise typer.BadParameter(f"heal file exceeds {_MAX_CALIB_BYTES} bytes")
+        rows = sum(1 for line in handle if line.strip())
+    if rows == 0:
+        raise typer.BadParameter("heal file has no rows")
+    return rows
+
+
+def _build_heal_config_yaml(
+    *,
+    pruned_dir: str,
+    teacher: str,
+    heal_data: str,
+    steps: int,
+    out_dir: str,
+    heal_rows: int,
+) -> str:
+    """Render a distill ``soup.yaml`` that heals the pruned student.
+
+    ``--heal-steps`` maps to epochs (there is no ``max_steps`` knob): epochs =
+    ceil(steps * batch / rows), clamped to >= 1, so ~``steps`` optimiser steps
+    run over the heal set. LoRA student (DistillTrainer always LoRA-trains) +
+    logit-KL distillation from the full-depth teacher.
+    """
+    import math
+
+    epochs = max(1, math.ceil(steps * _HEAL_BATCH_SIZE / max(1, heal_rows)))
+    return (
+        "base: {pruned}\n"
+        "task: distill\n"
+        "output: {out}\n"
+        "data:\n"
+        "  train: {data}\n"
+        "  format: auto\n"
+        "training:\n"
+        "  teacher_model: {teacher}\n"
+        "  epochs: {epochs}\n"
+        "  batch_size: {batch}\n"
+        "  lora:\n"
+        "    r: 16\n"
+        "    alpha: 32\n"
+    ).format(
+        pruned=json.dumps(pruned_dir),
+        out=json.dumps(out_dir),
+        data=json.dumps(heal_data),
+        teacher=json.dumps(teacher),
+        epochs=epochs,
+        batch=_HEAL_BATCH_SIZE,
+    )
+
+
+def _run_heal(
+    *,
+    pruned_dir: str,
+    teacher: str,
+    heal_data: str,
+    steps: int,
+    out_dir: str,
+    heal_rows: int,
+) -> None:
+    """Distill the teacher into the pruned student, then fuse the adapter.
+
+    Writes a validated distill config, runs ``soup train`` as a subprocess
+    (argv list, no shell — mirrors ``ra_dit_run._run_train_subprocess``), and
+    merges the resulting LoRA adapter back into ``pruned_dir`` so the shipped
+    artifact stays a single dense model.
+    """
+    import subprocess
+    import sys
+
+    from soup_cli.config.loader import load_config_from_string
+
+    yaml_text = _build_heal_config_yaml(
+        pruned_dir=pruned_dir,
+        teacher=teacher,
+        heal_data=heal_data,
+        steps=steps,
+        out_dir=out_dir,
+        heal_rows=heal_rows,
+    )
+    load_config_from_string(yaml_text)  # validate before spending a subprocess
+    config_path = Path(pruned_dir).parent / "heal_config.yaml"
+    config_path.write_text(yaml_text, encoding="utf-8")
+
+    argv = [
+        sys.executable,
+        "-m",
+        "soup_cli.cli",
+        "train",
+        "--config",
+        str(config_path),
+        "--yes",
+    ]
+    try:
+        result = subprocess.run(  # noqa: S603 — argv list, no shell.
+            argv, capture_output=True, check=False, timeout=_HEAL_TIMEOUT_SECONDS
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            f"heal distill exceeded {_HEAL_TIMEOUT_SECONDS}s timeout"
+        ) from exc
+    if result.returncode != 0:
+        tail = (result.stderr or b"").decode("utf-8", "replace")[-500:]
+        raise RuntimeError(f"heal distill failed (rc={result.returncode}): {tail}")
+
+    _fuse_adapter(base_dir=pruned_dir, adapter_dir=out_dir)
+
+
+def _fuse_adapter(*, base_dir: str, adapter_dir: str) -> None:
+    """Merge a LoRA adapter into ``base_dir`` in place (dense healed model)."""
+    from peft import PeftModel
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    base = AutoModelForCausalLM.from_pretrained(base_dir)
+    merged = PeftModel.from_pretrained(base, adapter_dir).merge_and_unload()
+    merged.save_pretrained(base_dir)
+    AutoTokenizer.from_pretrained(base_dir).save_pretrained(base_dir)

@@ -505,3 +505,99 @@ class TestShrinkCli:
         )
         assert r.exit_code != 0
         assert "support" in r.output.lower() or "support" in str(r.exception).lower()
+
+
+# ---------------------------------------------------------------------------
+# Task 5 — subprocess distill-heal + fuse
+# ---------------------------------------------------------------------------
+class TestHeal:
+    def test_build_heal_config_parses(self):
+        from soup_cli.commands.shrink import _build_heal_config_yaml
+        from soup_cli.config.loader import load_config_from_string
+
+        y = _build_heal_config_yaml(
+            pruned_dir="./out/model",
+            teacher="orig/model",
+            heal_data="./heal.jsonl",
+            steps=200,
+            out_dir="./out/heal_adapter",
+            heal_rows=50,
+        )
+        cfg = load_config_from_string(y)
+        assert cfg.task == "distill"
+        assert cfg.training.teacher_model == "orig/model"
+        assert cfg.base == "./out/model"
+        assert cfg.output == "./out/heal_adapter"
+        assert cfg.training.epochs >= 1
+
+    def test_build_heal_config_epochs_scale_with_steps(self):
+        from soup_cli.commands.shrink import _build_heal_config_yaml
+        from soup_cli.config.loader import load_config_from_string
+
+        few = load_config_from_string(
+            _build_heal_config_yaml(
+                pruned_dir="./m", teacher="t", heal_data="./h.jsonl",
+                steps=10, out_dir="./o", heal_rows=100,
+            )
+        )
+        many = load_config_from_string(
+            _build_heal_config_yaml(
+                pruned_dir="./m", teacher="t", heal_data="./h.jsonl",
+                steps=800, out_dir="./o", heal_rows=100,
+            )
+        )
+        assert many.training.epochs > few.training.epochs
+
+    def test_heal_path_sets_healed(self, tmp_path, monkeypatch):
+        """With --heal, the report records healed=True (subprocess + fuse are
+        stubbed so no real training runs)."""
+        import json
+
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+        from soup_cli.commands import shrink as shrink_cmd
+
+        # Stub the heavy heal step: no subprocess, no fuse (pruned model stays).
+        monkeypatch.setattr(shrink_cmd, "_run_heal", lambda *a, **k: None)
+
+        monkeypatch.chdir(tmp_path)
+        model_dir = _write_tiny_model(tmp_path / "src_model_h", layers=6)
+        calib = tmp_path / "calib.jsonl"
+        calib.write_text('{"text":"the quick brown fox jumps over"}\n', encoding="utf-8")
+        heal = tmp_path / "heal.jsonl"
+        heal.write_text(
+            '{"messages":[{"role":"user","content":"hi"},'
+            '{"role":"assistant","content":"hello"}]}\n',
+            encoding="utf-8",
+        )
+        out_dir = tmp_path / "shrunk_h"
+        r = CliRunner().invoke(
+            app,
+            ["shrink", "--model", model_dir, "--drop-layers", "2",
+             "--calib", "calib.jsonl", "--heal", "heal.jsonl", "--heal-steps", "5",
+             "--device", "cpu", "--output-dir", str(out_dir), "--tolerance", "5.0"],
+        )
+        assert r.exit_code == 0, (r.output, repr(r.exception))
+        report = json.loads((out_dir / "shrink_report.json").read_text(encoding="utf-8"))
+        assert report["healed"] is True
+
+    def test_heal_outside_cwd_rejected(self, tmp_path, monkeypatch):
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        work = tmp_path / "work"
+        work.mkdir()
+        outside = tmp_path / "outside_heal.jsonl"
+        outside.write_text('{"text":"hi"}\n', encoding="utf-8")
+        monkeypatch.chdir(work)
+        model_dir = _write_tiny_model(work / "m", layers=6)
+        calib = work / "calib.jsonl"
+        calib.write_text('{"text":"hi there friend"}\n', encoding="utf-8")
+        r = CliRunner().invoke(
+            app,
+            ["shrink", "--model", model_dir, "--drop-layers", "2",
+             "--calib", "calib.jsonl", "--heal", str(outside), "--device", "cpu"],
+        )
+        assert r.exit_code != 0
