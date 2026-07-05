@@ -689,14 +689,15 @@ class TestReviewFixes:
         assert "loss == loss" not in src
         assert "math.isnan(loss)" in src
 
-    def test_fuse_adapter_produces_dense_model(self, tmp_path):
-        """_fuse_adapter merges a LoRA adapter back into the base in place, so
-        the shipped dir is a single dense model (no adapter_config.json)."""
+    def test_fuse_adapter_produces_dense_model(self, tmp_path, monkeypatch):
+        """_fuse_adapter merges a LoRA adapter back into the base (atomic swap),
+        so the shipped dir is a single dense model (no adapter_config.json)."""
         from peft import LoraConfig, TaskType, get_peft_model
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
         from soup_cli.commands.shrink import _fuse_adapter
 
+        monkeypatch.chdir(tmp_path)  # base_dir must stay under cwd (containment)
         base_dir = tmp_path / "base"
         tok = AutoTokenizer.from_pretrained("HuggingFaceTB/SmolLM2-135M-Instruct")
         _tiny_llama(4, vocab_size=len(tok)).save_pretrained(str(base_dir))
@@ -717,6 +718,45 @@ class TestReviewFixes:
         assert not (base_dir / "adapter_config.json").exists()
         fused = AutoModelForCausalLM.from_pretrained(str(base_dir))
         assert fused.config.num_hidden_layers == 4
+
+    def test_output_model_symlink_rejected(self, tmp_path, monkeypatch):
+        """A symlink planted at <output_dir>/model is rejected before any write
+        (derived-path TOCTOU guard). POSIX-only (needs os.symlink)."""
+        import os as _os
+
+        if not hasattr(_os, "symlink"):
+            pytest.skip("no os.symlink")
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        monkeypatch.chdir(tmp_path)
+        model_dir = _write_tiny_model(tmp_path / "src_sym", layers=6)
+        calib = tmp_path / "calib.jsonl"
+        calib.write_text('{"text":"the quick brown fox"}\n', encoding="utf-8")
+        out_dir = tmp_path / "shrunk_sym"
+        out_dir.mkdir()
+        escape_target = tmp_path / "escape_target"
+        escape_target.mkdir()
+        try:
+            _os.symlink(str(escape_target), str(out_dir / "model"),
+                        target_is_directory=True)
+        except (OSError, NotImplementedError):
+            pytest.skip("symlink creation not permitted on this platform")
+        r = CliRunner().invoke(
+            app,
+            ["shrink", "--model", model_dir, "--drop-layers", "2",
+             "--calib", "calib.jsonl", "--device", "cpu",
+             "--output-dir", str(out_dir), "--tolerance", "5.0"],
+        )
+        assert r.exit_code != 0
+
+    def test_for_terminal_strips_control_bytes(self):
+        from soup_cli.commands.shrink import _for_terminal
+
+        assert _for_terminal("a\x1b]0;evilbc") == "a]0;evilbc"
+        # tab / LF / CR preserved.
+        assert _for_terminal("a\tb\nc\rd") == "a\tb\nc\rd"
 
     def test_dont_ship_exit_code_2(self, tmp_path, monkeypatch):
         """A genuine perplexity regression past tolerance exits 2 (DON'T SHIP)."""

@@ -52,6 +52,17 @@ _MAX_HEAL_EPOCHS = 100
 _PPL_MAX_LENGTH = 512
 
 
+# Strip C0 / ESC / DEL before subprocess- or model-derived text hits the
+# terminal (rich.markup.escape only neutralises [...] markup, not raw ESC bytes
+# — mirrors commands/data_doctor.py::_for_terminal, v0.71.27).
+_CONTROL_STRIP_TABLE = {i: None for i in range(0x20) if i not in (0x09, 0x0A, 0x0D)}
+_CONTROL_STRIP_TABLE[0x7F] = None
+
+
+def _for_terminal(text: str) -> str:
+    return text.translate(_CONTROL_STRIP_TABLE)
+
+
 # ---------------------------------------------------------------------------
 # Path + data helpers
 # ---------------------------------------------------------------------------
@@ -369,6 +380,9 @@ def _shrink_impl(
     prune_model_layers(mdl, chosen.start, chosen.block_size)
     out_root = Path(output_dir)
     model_out = out_root / "model"
+    # Re-validate the DERIVED write path (a symlink could have been planted at
+    # <output_dir>/model since the top-of-command check on <output_dir>).
+    enforce_under_cwd_and_no_symlink(str(model_out), "output model dir")
     model_out.mkdir(parents=True, exist_ok=True)
     mdl.save_pretrained(str(model_out))
     tokenizer.save_pretrained(str(model_out))
@@ -381,6 +395,7 @@ def _shrink_impl(
     healed = False
     if heal is not None:
         adapter_dir = out_root / "heal_adapter"
+        enforce_under_cwd_and_no_symlink(str(adapter_dir), "heal adapter dir")
         console.print(
             f"[dim]Healing (distill original -> pruned, ~{heal_steps} steps) ...[/]"
         )
@@ -572,7 +587,10 @@ def _run_heal(
             f"heal distill exceeded {_HEAL_TIMEOUT_SECONDS}s timeout"
         ) from exc
     if result.returncode != 0:
-        tail = (result.stderr or b"").decode("utf-8", "replace")[-500:]
+        # Strip control bytes: the child's stderr is attacker-influenceable and
+        # reaches the terminal via the friendly error handler (escape() does not
+        # neutralise raw ESC/OSC sequences).
+        tail = _for_terminal((result.stderr or b"").decode("utf-8", "replace")[-500:])
         raise RuntimeError(f"heal distill failed (rc={result.returncode}): {tail}")
 
     _fuse_adapter(base_dir=pruned_dir, adapter_dir=out_dir, trc=trc)
@@ -594,6 +612,9 @@ def _fuse_adapter(*, base_dir: str, adapter_dir: str, trc: bool = False) -> None
     from peft import PeftModel
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
+    # Re-validate the swap target right before mutating it (the heal subprocess
+    # ran for potentially hours — re-close the TOCTOU window on base_dir).
+    enforce_under_cwd_and_no_symlink(base_dir, "fuse base dir")
     base = AutoModelForCausalLM.from_pretrained(
         base_dir, trust_remote_code=trc, torch_dtype="auto"
     )
