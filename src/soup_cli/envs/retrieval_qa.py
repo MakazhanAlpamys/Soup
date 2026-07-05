@@ -38,7 +38,7 @@ def _make_row(rng: random.Random) -> dict[str, str]:
     doc = " ".join(f"{e} {a} {v}." for (e, a, v) in facts)
     prompt = (
         f"Document: {doc}\n"
-        f"Question: What does {entity} {attribute.rstrip()}? "
+        f"Question: What value completes '{entity} {attribute.rstrip()} ___'? "
         "Reply with just the value."
     )
     return {"prompt": prompt, "answer": value}

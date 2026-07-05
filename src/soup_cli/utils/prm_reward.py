@@ -16,8 +16,16 @@ Design:
   controller observes the PRM reward for free.
 
 Honesty: proof-of-mechanism only — a tiny PRM signal is noisy; this is NOT a
-production reward-model claim (see #286). The step split is a newline
-heuristic (v1).
+production reward-model claim (see #286). Known v1 caveats:
+- The step split is a newline heuristic.
+- ``prm_aggregate='prod'`` assumes per-step scores in ~[0,1]; the PRM head is
+  trained with unconstrained MSE, so 'prod' can blow up on uncalibrated labels
+  — the default 'min' (weakest-link) is the safe choice.
+- The prompt context is rendered by joining message contents (matching the
+  PRM's plaintext training field), NOT via the tokenizer chat template the
+  policy model sees — a distributional gap, acceptable for a proof of mechanism.
+- Completions are scored one forward pass each (no batching) — fine for tiny
+  models; a batched path is a future optimisation.
 
 Security:
 - ``prm_reward`` local paths are containment-checked (realpath + commonpath
@@ -315,6 +323,14 @@ def build_prm_reward_fn(
         prm_path = real
 
     resolved_trust = _resolve_trust(prm_path, trust_remote_code, console)
+    # Announce that the PRM reward is active AND replaces the configured
+    # reward_fn — otherwise a user who also set reward_fn/verifiable_domain has
+    # no signal those are being ignored (code-review MEDIUM/LOW).
+    console.print(
+        f"[dim]Using PRM reward: prm_reward={prm_path!r}, "
+        f"aggregate={tcfg.prm_aggregate!r} "
+        "(this replaces reward_fn/verifiable_domain).[/]"
+    )
     return PRMScorer(
         prm_path=prm_path,
         aggregate=tcfg.prm_aggregate,

@@ -1071,7 +1071,12 @@ class TrainingConfig(BaseModel):
         default="min",
         description=(
             "How PRM per-step scores fold into one reward: min (weakest-link, "
-            "default) | prod | last. Only meaningful when prm_reward is set."
+            "default) | prod | last. Only meaningful when prm_reward is set. "
+            "NOTE: 'prod' assumes per-step scores are bounded in ~[0,1] (a "
+            "probability of step-correctness). Soup's PRM head is trained with "
+            "unconstrained MSE regression, so 'prod' can blow up / flip sign on "
+            "unbounded labels — prefer the default 'min' unless your PRM labels "
+            "are calibrated to [0,1]."
         ),
     )
 
@@ -1085,6 +1090,8 @@ class TrainingConfig(BaseModel):
             raise ValueError(
                 f"prm_reward must be a string path/id, got {type(value).__name__}"
             )
+        if not value:
+            raise ValueError("prm_reward must not be an empty string")
         if "\x00" in value:
             raise ValueError("prm_reward must not contain null bytes")
         if len(value) > 512:

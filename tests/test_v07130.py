@@ -171,6 +171,12 @@ class TestPrmSchema:
         )
         assert cfg.training.prm_reward is None
 
+    def test_rejects_empty_string(self):
+        from soup_cli.config.schema import TrainingConfig
+
+        with pytest.raises(ValueError, match="empty"):
+            TrainingConfig(prm_reward="")
+
     def test_rejects_null_byte(self):
         from soup_cli.config.schema import TrainingConfig
 

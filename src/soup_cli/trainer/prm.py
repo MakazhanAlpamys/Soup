@@ -220,7 +220,11 @@ class PRMTrainerWrapper:
             torch_dtype=torch.bfloat16 if self.device == "cuda" else torch.float32,
         )
         hidden_size = base_model.config.hidden_size
-        base_model.reward_head = nn.Linear(hidden_size, 1, bias=True)
+        # Cast the reward head to the base model's dtype. On CUDA the base loads
+        # in bf16 while nn.Linear defaults to fp32, so without this cast the
+        # first compute_loss forward (hidden_states[bf16] @ reward_head[fp32])
+        # raises a dtype-mismatch RuntimeError (v0.71.30 code-review fix).
+        base_model.reward_head = nn.Linear(hidden_size, 1, bias=True).to(base_model.dtype)
         self.model = base_model
         self._dataset = dataset
         console.print(
