@@ -196,17 +196,26 @@ class TestPrune:
 # ---------------------------------------------------------------------------
 class TestImportance:
     def test_off_by_one_boundary_indices(self):
-        """Pin: block [L, L+n) uses hidden_states[L] and hidden_states[L+n];
-        hidden_states has num_layers+1 entries. A fake model returns per-layer
-        constant hidden states so the boundary maths is asserted, not just that
-        the pass runs."""
+        """Pin the EXACT indices: block [L, L+n) uses hidden_states[L] and
+        hidden_states[L+n]; hidden_states has num_layers+1 entries. Per-layer
+        directions are mutually non-colinear with a NON-linear angle schedule
+        (theta_k = 0.1*k^2) so the hand-computed distance for each start is
+        unique — an off-by-one (hs[L-1]/hs[L+n-1]) or a block_size-ignoring bug
+        would produce a different number and FAIL."""
+        import math as _math
+
         import torch
 
         from soup_cli.utils import shrink
 
-        num_layers = 4
-        # len must be num_layers+1; index 0 = embeddings, index k = layer k-1 out.
-        hs = tuple(torch.ones(1, 3, 8) * (k + 1) for k in range(num_layers + 1))
+        num_layers = 5  # -> valid starts for block_size=2: L in [1, 2]
+
+        def _vec(k: int):
+            theta = 0.1 * k * k
+            row = torch.tensor([_math.cos(theta), _math.sin(theta)])
+            return row.repeat(1, 3, 1)  # (1, 3, 2): 3 identical seq rows
+
+        hs = tuple(_vec(k) for k in range(num_layers + 1))
 
         class _Cfg:
             model_type = "llama"
@@ -234,14 +243,74 @@ class TestImportance:
                 }
 
         imps = shrink.compute_layer_importance(
-            _Model(), _Tok(), ["hi"], block_size=1, device="cpu"
+            _Model(), _Tok(), ["hi"], block_size=2, device="cpu"
         )
-        # valid starts for n=1, num_layers=4: L in [1, 4-1-1=2] -> {1, 2}
-        starts = sorted(i.start for i in imps)
-        assert starts == [1, 2]
-        # constant (colinear) vectors -> cos == 1 -> angular distance 0.
-        assert all(abs(i.angular_distance) < 1e-6 for i in imps)
-        assert all(i.block_size == 1 for i in imps)
+        by_start = {i.start: i.angular_distance for i in imps}
+        assert sorted(by_start) == [1, 2]
+        # start=1 -> hs[1] vs hs[3]: |theta_1 - theta_3| = |0.1 - 0.9| = 0.8 rad.
+        assert by_start[1] == pytest.approx(0.8 / _math.pi, abs=1e-6)
+        # start=2 -> hs[2] vs hs[4]: |theta_2 - theta_4| = |0.4 - 1.6| = 1.2 rad.
+        assert by_start[2] == pytest.approx(1.2 / _math.pi, abs=1e-6)
+        assert all(i.block_size == 2 for i in imps)
+
+    def test_importance_averages_over_all_tokens_across_prompts(self):
+        """The distance is a mean over EVERY token across the whole calib set,
+        not a mean-of-per-prompt-means. Two prompts of different token counts
+        with different per-token distances must weight by token count."""
+        import math as _math
+
+        import torch
+
+        from soup_cli.utils import shrink
+
+        num_layers = 3  # valid starts for block_size=1: L in [1, 1]
+
+        class _Cfg:
+            model_type = "llama"
+            architectures = ["LlamaForCausalLM"]
+            num_hidden_layers = num_layers
+
+        # Two calls: prompt A has 1 token at angle 0 (distance 0), prompt B has
+        # 3 tokens at 90deg (distance 0.5). Token-weighted mean = 3*0.5/4 = 0.375;
+        # mean-of-means would be (0 + 0.5)/2 = 0.25.
+        calls = {"n": 0}
+
+        def _hs_for(seq_len: int, theta_out: float):
+            in_row = torch.tensor([1.0, 0.0]).repeat(1, seq_len, 1)
+            out_row = torch.tensor(
+                [_math.cos(theta_out), _math.sin(theta_out)]
+            ).repeat(1, seq_len, 1)
+            # layer 0 (emb) + layer1 out (in) + layer2 out (out) — index1 vs index2
+            return (in_row, in_row, out_row, out_row)
+
+        class _Out:
+            def __init__(self, hs):
+                self.hidden_states = hs
+
+        class _Model:
+            config = _Cfg()
+
+            def eval(self):
+                return self
+
+            def __call__(self, **kw):
+                if calls["n"] == 0:
+                    calls["n"] = 1
+                    return _Out(_hs_for(1, 0.0))       # 1 token, dist 0
+                return _Out(_hs_for(3, _math.pi / 2))  # 3 tokens, dist 0.5
+
+        class _Tok:
+            def __call__(self, text, **kw):
+                n = 1 if calls["n"] == 0 else 3
+                return {
+                    "input_ids": torch.ones(1, n, dtype=torch.long),
+                    "attention_mask": torch.ones(1, n, dtype=torch.long),
+                }
+
+        imps = shrink.compute_layer_importance(
+            _Model(), _Tok(), ["a", "b"], block_size=1, device="cpu"
+        )
+        assert imps[0].angular_distance == pytest.approx(0.375, abs=1e-6)
 
     def test_hidden_states_length_mismatch_raises(self):
         import torch
@@ -395,7 +464,7 @@ class TestShrinkCli:
             ["shrink", "--model", "x", "--drop-ratio", "0.25", "--drop-layers",
              "2", "--calib", "c.jsonl"],
         )
-        assert r.exit_code != 0
+        assert r.exit_code == 1, (r.output, repr(r.exception))
         assert "exactly one" in r.output.lower() or "exactly one" in str(r.exception).lower()
 
     def test_rejects_calib_outside_cwd(self, tmp_path, monkeypatch):
@@ -412,7 +481,8 @@ class TestShrinkCli:
             app,
             ["shrink", "--model", "x", "--drop-layers", "2", "--calib", str(outside)],
         )
-        assert r.exit_code != 0
+        assert r.exit_code == 1, (r.output, repr(r.exception))
+        assert "cwd" in r.output.lower()
 
     def test_rejects_bad_tolerance(self, tmp_path, monkeypatch):
         from typer.testing import CliRunner
@@ -427,7 +497,8 @@ class TestShrinkCli:
             ["shrink", "--model", "x", "--drop-layers", "2", "--calib", "c.jsonl",
              "--tolerance", "9.0"],
         )
-        assert r.exit_code != 0
+        assert r.exit_code == 1, (r.output, repr(r.exception))
+        assert "tolerance" in r.output.lower()
 
     def test_prune_happy_path_cpu(self, tmp_path, monkeypatch):
         """End-to-end prune (no heal) on a tiny CPU Llama: pruned config has
@@ -503,7 +574,7 @@ class TestShrinkCli:
             ["shrink", "--model", str(mdir), "--drop-layers", "2",
              "--calib", "calib.jsonl", "--device", "cpu"],
         )
-        assert r.exit_code != 0
+        assert r.exit_code == 1, (r.output, repr(r.exception))
         assert "support" in r.output.lower() or "support" in str(r.exception).lower()
 
 
@@ -600,7 +671,8 @@ class TestHeal:
             ["shrink", "--model", model_dir, "--drop-layers", "2",
              "--calib", "calib.jsonl", "--heal", str(outside), "--device", "cpu"],
         )
-        assert r.exit_code != 0
+        assert r.exit_code == 1, (r.output, repr(r.exception))
+        assert "cwd" in r.output.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -669,7 +741,8 @@ class TestReviewFixes:
              "--calib", "calib.jsonl", "--device", "cpu",
              "--output-dir", str(tmp_path / "escape")],
         )
-        assert r.exit_code != 0
+        assert r.exit_code == 1, (r.output, repr(r.exception))
+        assert "cwd" in r.output.lower()
 
     def test_heal_epochs_clamp_rejects_absurd_combo(self):
         """Huge --heal-steps over a tiny heal set is refused, not silently run."""
@@ -749,7 +822,8 @@ class TestReviewFixes:
              "--calib", "calib.jsonl", "--device", "cpu",
              "--output-dir", str(out_dir), "--tolerance", "5.0"],
         )
-        assert r.exit_code != 0
+        assert r.exit_code == 1, (r.output, repr(r.exception))
+        assert "symlink" in r.output.lower()
 
     def test_for_terminal_strips_control_bytes(self):
         from soup_cli.commands.shrink import _for_terminal
@@ -781,3 +855,367 @@ class TestReviewFixes:
              "--output-dir", str(out_dir), "--tolerance", "0.10"],
         )
         assert r.exit_code == 2, (r.output, repr(r.exception))
+
+
+# ---------------------------------------------------------------------------
+# TDD-review gap closure (tdd agent findings #3-#17)
+# ---------------------------------------------------------------------------
+class _StubProc:
+    def __init__(self, returncode=0, stderr=b""):
+        self.returncode = returncode
+        self.stderr = stderr
+
+
+class TestRunHeal:
+    def test_success_calls_fuse_with_right_dirs(self, tmp_path, monkeypatch):
+        import soup_cli.commands.shrink as sc
+
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "model").mkdir()
+        seen = {}
+        monkeypatch.setattr("subprocess.run", lambda *a, **k: _StubProc(returncode=0))
+        monkeypatch.setattr(sc, "_fuse_adapter",
+                            lambda **kw: seen.update(kw))
+        sc._run_heal(pruned_dir="./model", teacher="t", heal_data="./h.jsonl",
+                     steps=5, out_dir="./adapter", heal_rows=10, trc=False)
+        assert seen["base_dir"] == "./model"
+        assert seen["adapter_dir"] == "./adapter"
+        assert (tmp_path / "heal_config.yaml").exists()
+
+    def test_nonzero_returncode_raises_with_tail(self, tmp_path, monkeypatch):
+        import soup_cli.commands.shrink as sc
+
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "model").mkdir()
+        monkeypatch.setattr(
+            "subprocess.run", lambda *a, **k: _StubProc(returncode=1, stderr=b"boom")
+        )
+        monkeypatch.setattr(sc, "_fuse_adapter", lambda **kw: None)
+        with pytest.raises(RuntimeError, match="heal distill failed"):
+            sc._run_heal(pruned_dir="./model", teacher="t", heal_data="./h.jsonl",
+                         steps=5, out_dir="./adapter", heal_rows=10)
+
+    def test_nonzero_tail_control_bytes_stripped(self, tmp_path, monkeypatch):
+        import soup_cli.commands.shrink as sc
+
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "model").mkdir()
+        monkeypatch.setattr("subprocess.run",
+                            lambda *a, **k: _StubProc(returncode=1, stderr=b"a\x1bb"))
+        with pytest.raises(RuntimeError) as exc:
+            sc._run_heal(pruned_dir="./model", teacher="t", heal_data="./h.jsonl",
+                         steps=5, out_dir="./adapter", heal_rows=10)
+        assert "\x1b" not in str(exc.value)
+
+    def test_timeout_raises(self, tmp_path, monkeypatch):
+        import subprocess as _sp
+
+        import soup_cli.commands.shrink as sc
+
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "model").mkdir()
+
+        def _boom(*a, **k):
+            raise _sp.TimeoutExpired(cmd="soup train", timeout=1)
+
+        monkeypatch.setattr("subprocess.run", _boom)
+        with pytest.raises(RuntimeError, match="timeout"):
+            sc._run_heal(pruned_dir="./model", teacher="t", heal_data="./h.jsonl",
+                         steps=5, out_dir="./adapter", heal_rows=10)
+
+
+class TestDropCountEdges:
+    def test_ratio_rounds_to_zero_rejected(self):
+        from soup_cli.utils.shrink import resolve_drop_count
+
+        with pytest.raises(ValueError, match="range"):
+            resolve_drop_count(10, drop_ratio=0.01, drop_layers=None)  # round(0.1)=0
+
+    def test_accepted_max_boundary(self):
+        from soup_cli.utils.shrink import resolve_drop_count
+
+        assert resolve_drop_count(6, drop_ratio=None, drop_layers=4) == 4  # n-2
+
+    def test_rejects_bool_drop_layers(self):
+        from soup_cli.utils.shrink import resolve_drop_count
+
+        with pytest.raises(ValueError):
+            resolve_drop_count(10, drop_ratio=None, drop_layers=True)
+
+    def test_rejects_bool_drop_ratio(self):
+        from soup_cli.utils.shrink import resolve_drop_count
+
+        with pytest.raises(ValueError):
+            resolve_drop_count(10, drop_ratio=True, drop_layers=None)
+
+    def test_max_count_agrees_across_three_functions(self):
+        from soup_cli.utils.shrink import prune_model_layers, resolve_drop_count
+
+        assert resolve_drop_count(6, drop_ratio=None, drop_layers=4) == 4
+        m = _tiny_llama(6)
+        prune_model_layers(m, start=1, block_size=4)  # leaves layers 0 and 5
+        assert len(m.model.layers) == 2
+        # one count higher is rejected by prune (would touch the last layer)
+        m2 = _tiny_llama(6)
+        with pytest.raises(ValueError, match="protected"):
+            prune_model_layers(m2, start=1, block_size=5)
+
+
+class TestPruneBool:
+    def test_rejects_bool_start_and_block(self):
+        from soup_cli.utils.shrink import prune_model_layers
+
+        m = _tiny_llama(6)
+        with pytest.raises(ValueError):
+            prune_model_layers(m, start=True, block_size=2)
+        m2 = _tiny_llama(6)
+        with pytest.raises(ValueError):
+            prune_model_layers(m2, start=1, block_size=True)
+
+    def test_layer_list_missing_modulelist(self):
+        from soup_cli.utils.shrink import layer_list
+
+        class _Cfg:
+            model_type = "llama"
+            architectures = ["LlamaForCausalLM"]
+
+        class _M:
+            config = _Cfg()
+
+        with pytest.raises(ValueError, match="ModuleList"):
+            layer_list(_M())
+
+
+class TestReloadFixesLayerIdx:
+    def test_prune_leaves_stale_idx_reload_fixes(self, tmp_path):
+        from transformers import AutoModelForCausalLM
+
+        from soup_cli.utils.shrink import prune_model_layers
+
+        m = _tiny_llama(6)
+        attn = m.model.layers[4].self_attn
+        if not hasattr(attn, "layer_idx"):
+            pytest.skip("transformers version has no self_attn.layer_idx")
+        prune_model_layers(m, start=2, block_size=2)  # drop 2,3 -> old-4 now at pos 2
+        # In-memory slice leaves the stale original index on the moved layer.
+        assert m.model.layers[2].self_attn.layer_idx == 4
+        out = tmp_path / "pruned"
+        m.save_pretrained(str(out))
+        reloaded = AutoModelForCausalLM.from_pretrained(str(out))
+        # from_pretrained rebuilds contiguous indices 0..3.
+        assert [reloaded.model.layers[i].self_attn.layer_idx for i in range(4)] == [0, 1, 2, 3]
+
+
+class TestArchQwen:
+    def test_qwen_detected(self):
+        from soup_cli.utils.shrink import arch_family_of_config
+
+        class _Cfg:
+            model_type = "qwen2"
+            architectures = ["Qwen2ForCausalLM"]
+
+        assert arch_family_of_config(_Cfg()) == "qwen"
+
+
+class TestExtractText:
+    def test_plain_string(self):
+        from soup_cli.commands.shrink import _extract_text
+
+        assert _extract_text("hello") == "hello"
+
+    def test_prompt_and_content_and_instruction_keys(self):
+        from soup_cli.commands.shrink import _extract_text
+
+        assert _extract_text({"prompt": "p"}) == "p"
+        assert _extract_text({"content": "c"}) == "c"
+        assert _extract_text({"instruction": "i"}) == "i"
+
+    def test_messages_join(self):
+        from soup_cli.commands.shrink import _extract_text
+
+        row = {"messages": [{"role": "user", "content": "a"},
+                            {"role": "assistant", "content": "b"}]}
+        assert _extract_text(row) == "a\nb"
+
+    def test_text_precedence_over_messages(self):
+        from soup_cli.commands.shrink import _extract_text
+
+        row = {"text": "T", "messages": [{"role": "user", "content": "M"}]}
+        assert _extract_text(row) == "T"
+
+    def test_no_usable_field_returns_empty(self):
+        from soup_cli.commands.shrink import _extract_text
+
+        assert _extract_text({"other": 1}) == ""
+
+
+class TestLoadCalibEdges:
+    def _run(self, tmp_path, monkeypatch, content):
+        monkeypatch.chdir(tmp_path)
+        p = tmp_path / "c.jsonl"
+        p.write_text(content, encoding="utf-8")
+        from soup_cli.commands.shrink import _load_calib
+
+        return _load_calib("c.jsonl")
+
+    def test_empty_file_rejected(self, tmp_path, monkeypatch):
+        import typer
+
+        with pytest.raises(typer.BadParameter, match="no usable prompt"):
+            self._run(tmp_path, monkeypatch, "")
+
+    def test_whitespace_only_rejected(self, tmp_path, monkeypatch):
+        import typer
+
+        with pytest.raises(typer.BadParameter, match="no usable prompt"):
+            self._run(tmp_path, monkeypatch, "   \n\n\t\n")
+
+    def test_rows_with_no_usable_field_rejected(self, tmp_path, monkeypatch):
+        import typer
+
+        with pytest.raises(typer.BadParameter, match="no usable prompt"):
+            self._run(tmp_path, monkeypatch, '{"foo":"bar"}\n')
+
+    def test_raw_text_line_tolerated(self, tmp_path, monkeypatch):
+        prompts = self._run(tmp_path, monkeypatch, "the quick brown fox jumps\n")
+        assert prompts == ["the quick brown fox jumps"]
+
+    def test_row_cap_truncates(self, tmp_path, monkeypatch):
+        from soup_cli.commands import shrink as sc
+
+        monkeypatch.setattr(sc, "_MAX_CALIB_ROWS", 3)
+        prompts = self._run(
+            tmp_path, monkeypatch,
+            "\n".join('{"text":"row %d"}' % i for i in range(10)),
+        )
+        assert len(prompts) == 3
+
+    def test_size_cap_rejected(self, tmp_path, monkeypatch):
+        import typer
+
+        from soup_cli.commands import shrink as sc
+
+        monkeypatch.setattr(sc, "_MAX_INPUT_BYTES", 10)
+        with pytest.raises(typer.BadParameter, match="exceeds"):
+            self._run(tmp_path, monkeypatch, '{"text":"a long enough line to exceed"}\n')
+
+
+class TestPerplexityInf:
+    def test_returns_inf_when_all_single_token(self):
+        import torch
+
+        from soup_cli.commands.shrink import _perplexity
+
+        class _Tok:
+            def __call__(self, text, **kw):
+                return {"input_ids": torch.ones(1, 1, dtype=torch.long)}
+
+        class _M:
+            def eval(self):
+                return self
+
+        # input_ids has < 2 tokens for every prompt -> skipped -> inf.
+        assert _perplexity(_M(), _Tok(), ["a", "b"], "cpu") == float("inf")
+
+
+class TestImportanceCaps:
+    def _model_tok(self, num_layers=4):
+        import torch
+
+        class _Cfg:
+            model_type = "llama"
+            architectures = ["LlamaForCausalLM"]
+            num_hidden_layers = num_layers
+
+        class _Out:
+            hidden_states = tuple(torch.ones(1, 2, 4) for _ in range(num_layers + 1))
+
+        counter = {"n": 0}
+
+        class _Model:
+            config = _Cfg()
+
+            def eval(self):
+                return self
+
+            def __call__(self, **kw):
+                counter["n"] += 1
+                return _Out()
+
+        class _Tok:
+            def __call__(self, text, **kw):
+                return {"input_ids": torch.ones(1, 2, dtype=torch.long)}  # no mask
+
+        return _Model(), _Tok(), counter
+
+    def test_mask_none_branch(self):
+        from soup_cli.utils.shrink import compute_layer_importance
+
+        model, tok, _ = self._model_tok()
+        imps = compute_layer_importance(model, tok, ["hi"], block_size=1, device="cpu")
+        assert imps  # no attention_mask key -> mask None branch, still scores
+
+    def test_max_prompts_truncates_forward_calls(self):
+        from soup_cli.utils.shrink import compute_layer_importance
+
+        model, tok, counter = self._model_tok()
+        compute_layer_importance(
+            model, tok, ["a", "b", "c", "d"], block_size=1, device="cpu", max_prompts=2
+        )
+        assert counter["n"] == 2
+
+
+class TestDecideShrinkBoundaries:
+    def test_just_past_tolerance_dont_ship(self):
+        from soup_cli.utils.shrink import DECISION_DONT_SHIP, decide_shrink
+
+        v = decide_shrink(10.0, 10.0 * (1.10 + 5e-9), tolerance=0.10,
+                          layers_before=30, layers_after=24)
+        assert v.decision == DECISION_DONT_SHIP
+
+    def test_match_keywords_on_validation(self):
+        from soup_cli.utils.shrink import decide_shrink
+
+        with pytest.raises(ValueError, match="ppl_original must be"):
+            decide_shrink(0.0, 5.0, layers_before=30, layers_after=24)
+        with pytest.raises(ValueError, match="ppl_final must be"):
+            decide_shrink(5.0, 0.0, layers_before=30, layers_after=24)
+        with pytest.raises(ValueError, match="tolerance must be a number"):
+            decide_shrink(5.0, 5.0, tolerance="x", layers_before=30, layers_after=24)
+        with pytest.raises(ValueError, match="tolerance must be in"):
+            decide_shrink(5.0, 5.0, tolerance=9.0, layers_before=30, layers_after=24)
+
+
+class TestCommandsNoTopLevelTorch:
+    def test_commands_shrink_has_no_top_level_heavy_import(self):
+        src = pathlib.Path("src/soup_cli/commands/shrink.py").read_text(encoding="utf-8")
+        tree = ast.parse(src)
+        names: list[str] = []
+        for node in tree.body:
+            if isinstance(node, ast.Import):
+                names += [a.name for a in node.names]
+            elif isinstance(node, ast.ImportFrom):
+                names.append(node.module or "")
+        assert not any(
+            m.split(".")[0] in {"torch", "transformers", "peft"} for m in names
+        ), names
+
+
+class TestFuseAdapterSymlinkGuard:
+    def test_symlinked_base_dir_rejected(self, tmp_path, monkeypatch):
+        import os as _os
+
+        if not hasattr(_os, "symlink"):
+            pytest.skip("no os.symlink")
+        monkeypatch.chdir(tmp_path)
+        target = tmp_path / "target"
+        target.mkdir()
+        link = tmp_path / "base"
+        try:
+            _os.symlink(str(target), str(link), target_is_directory=True)
+        except (OSError, NotImplementedError):
+            pytest.skip("symlink creation not permitted")
+        from soup_cli.commands.shrink import _fuse_adapter
+
+        with pytest.raises(ValueError, match="symlink"):
+            _fuse_adapter(base_dir="base", adapter_dir="adapter")
