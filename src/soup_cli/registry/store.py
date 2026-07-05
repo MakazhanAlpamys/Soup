@@ -50,6 +50,8 @@ _VALID_KINDS = frozenset(
         # v0.71.9 #194/#203 — knowledge-edited models + GRACE codebooks.
         "edited_model",
         "grace_codebook",
+        # v0.71.29 — depth-prune + distill-heal shrink reports.
+        "shrink_report",
     }
 )
 _VALID_RELATIONS = frozenset(

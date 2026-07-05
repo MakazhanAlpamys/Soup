@@ -601,3 +601,47 @@ class TestHeal:
              "--calib", "calib.jsonl", "--heal", str(outside), "--device", "cpu"],
         )
         assert r.exit_code != 0
+
+
+# ---------------------------------------------------------------------------
+# Task 6 — registry attach (real round-trip)
+# ---------------------------------------------------------------------------
+class TestRegistryAttach:
+    def test_attach_round_trip(self, tmp_path, monkeypatch):
+        """_attach_to_registry attaches a shrink_report artifact to a real
+        registry entry (keyword-correct call; not the diagnose positional bug)."""
+        monkeypatch.setenv("SOUP_REGISTRY_DB_PATH", str(tmp_path / "reg.db"))
+        monkeypatch.chdir(tmp_path)
+
+        from soup_cli.commands.shrink import _attach_to_registry
+        from soup_cli.registry.store import RegistryStore
+
+        with RegistryStore() as store:
+            entry_id = store.push(
+                name="tiny-shrunk",
+                tag="test",
+                base_model="HuggingFaceTB/SmolLM2-135M",
+                task="sft",
+                run_id=None,
+                config={"task": "sft"},
+            )
+
+        report = tmp_path / "shrink_report.json"
+        report.write_text('{"decision":"SHIP"}', encoding="utf-8")
+
+        _attach_to_registry(entry_id, str(report))
+
+        with RegistryStore() as store:
+            artifacts = store.get_artifacts(entry_id)
+        assert any(a.get("kind") == "shrink_report" for a in artifacts), artifacts
+
+    def test_attach_unknown_entry_warns_no_raise(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("SOUP_REGISTRY_DB_PATH", str(tmp_path / "reg2.db"))
+        monkeypatch.chdir(tmp_path)
+
+        from soup_cli.commands.shrink import _attach_to_registry
+
+        report = tmp_path / "shrink_report.json"
+        report.write_text('{"decision":"SHIP"}', encoding="utf-8")
+        # Must not raise even for a nonexistent entry (best-effort warn).
+        _attach_to_registry("nonexistent-id", str(report))

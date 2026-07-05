@@ -378,7 +378,7 @@ def _attach_to_registry(registry_id: str, report_path: str) -> None:
         )
         return
     try:
-        attach_artifact(registry_id, "shrink_report", report_path)
+        attach_artifact(registry_id, path=report_path, kind="shrink_report")
         console.print(
             f"[green]Attached[/] shrink_report to registry entry [bold]{escape(registry_id)}[/]"
         )
