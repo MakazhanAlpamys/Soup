@@ -184,6 +184,170 @@ class TestPrmSchema:
             TrainingConfig(prm_reward="x" * 5000)
 
 
+# ---------------------------------------------------------------------------
+# Task 3 — PRMScorer + build_prm_reward_fn
+# ---------------------------------------------------------------------------
+class TestLoadRewardHeadWeights:
+    def test_loads_head_from_safetensors(self, tmp_path):
+        import torch
+        from safetensors.torch import save_file
+
+        from soup_cli.utils.prm_reward import load_reward_head_weights
+
+        save_file(
+            {
+                "model.embed": torch.zeros(4, 4),
+                "reward_head.weight": torch.ones(1, 8),
+                "reward_head.bias": torch.zeros(1),
+            },
+            str(tmp_path / "model.safetensors"),
+        )
+        head = load_reward_head_weights(str(tmp_path))
+        assert set(head.keys()) == {"weight", "bias"}
+        assert tuple(head["weight"].shape) == (1, 8)
+
+    def test_missing_head_rejected(self, tmp_path):
+        import torch
+        from safetensors.torch import save_file
+
+        from soup_cli.utils.prm_reward import load_reward_head_weights
+
+        save_file({"model.embed": torch.zeros(4, 4)}, str(tmp_path / "model.safetensors"))
+        with pytest.raises(ValueError, match="reward_head|Soup-trained PRM"):
+            load_reward_head_weights(str(tmp_path))
+
+    def test_non_directory_rejected(self, tmp_path):
+        from soup_cli.utils.prm_reward import load_reward_head_weights
+
+        with pytest.raises(ValueError, match="directory"):
+            load_reward_head_weights(str(tmp_path / "does_not_exist"))
+
+
+def _make_fake_scorer(aggregate="min"):
+    """A PRMScorer with an injected fake model + tokenizer (no network).
+
+    Fake model: hidden_states[-1] = arange(T) broadcast over H, and
+    reward_head averages H → each step boundary scores its token position.
+    Fake tokenizer: one token per whitespace word (>=1).
+    """
+    import torch
+    from torch import nn
+    from types import SimpleNamespace
+
+    from soup_cli.utils.prm_reward import PRMScorer
+
+    H = 8
+
+    class _FakeTok:
+        pad_token = "<pad>"
+        eos_token = "<eos>"
+
+        def __call__(self, text, add_special_tokens=False):
+            n = max(1, len(text.split())) if text else 0
+            return {"input_ids": [1] * n}
+
+    head = nn.Linear(H, 1, bias=True)
+    with torch.no_grad():
+        head.weight.copy_(torch.ones(1, H) / H)
+        head.bias.zero_()
+
+    class _FakeModel:
+        reward_head = head
+
+        def __call__(self, input_ids, output_hidden_states=False):
+            T = input_ids.shape[1]
+            hs = torch.arange(T).float().reshape(1, T, 1).repeat(1, 1, H)
+            return SimpleNamespace(hidden_states=[hs])
+
+    scorer = PRMScorer("./prm", aggregate=aggregate, device="cpu")
+    scorer._model = _FakeModel()
+    scorer._tokenizer = _FakeTok()
+    return scorer
+
+
+class TestPRMScorer:
+    def test_name_is_prm_reward(self):
+        s = _make_fake_scorer()
+        assert s.__name__ == "prm_reward"
+
+    def test_bad_aggregate_rejected(self):
+        from soup_cli.utils.prm_reward import PRMScorer
+
+        with pytest.raises(ValueError, match="min|prod|last"):
+            PRMScorer("./prm", aggregate="mean")
+
+    def test_scores_step_boundaries_min(self):
+        s = _make_fake_scorer("min")
+        # completion "a b\nc d e" -> steps ["a b"(2 tok), "c d e"(3 tok)]
+        # boundaries at positions 1 and 4 -> scores [1.0, 4.0] -> min 1.0
+        out = s([[{"role": "assistant", "content": "a b\nc d e"}]])
+        assert out == pytest.approx([1.0])
+
+    def test_scores_last(self):
+        s = _make_fake_scorer("last")
+        out = s([[{"role": "assistant", "content": "a b\nc d e"}]])
+        assert out == pytest.approx([4.0])
+
+    def test_multiple_completions_len(self):
+        s = _make_fake_scorer("min")
+        out = s(["a\nb", "c\nd\ne", "x"])
+        assert len(out) == 3
+        assert all(isinstance(v, float) for v in out)
+
+    def test_empty_completion_scores_zero(self):
+        s = _make_fake_scorer("min")
+        out = s([""])
+        assert out == [0.0]
+
+    def test_prompt_prepended_as_context(self):
+        # With a prompt prefix of 3 tokens, boundaries shift by +3.
+        s = _make_fake_scorer("min")
+        out = s(
+            [[{"role": "assistant", "content": "a b\nc d e"}]],
+            prompts=[[{"role": "user", "content": "one two three"}]],
+        )
+        # prefix len 3 -> boundaries at 4 and 7 -> min 4.0
+        assert out == pytest.approx([4.0])
+
+
+class TestBuildPrmRewardFn:
+    def test_returns_named_scorer(self, monkeypatch):
+        import soup_cli.utils.prm_reward as mod
+
+        monkeypatch.setattr(mod, "_resolve_trust", lambda *a, **k: False)
+
+        class _T:
+            prm_reward = "some/hf-id-not-on-disk"
+            prm_aggregate = "prod"
+
+        fn = mod.build_prm_reward_fn(_T(), device="cpu", trust_remote_code=False)
+        assert fn.__name__ == "prm_reward"
+        assert fn.aggregate == "prod"
+
+    def test_outside_cwd_rejected(self, tmp_path, monkeypatch):
+        import soup_cli.utils.prm_reward as mod
+
+        monkeypatch.setattr(mod, "_resolve_trust", lambda *a, **k: False)
+        # tmp_path is outside cwd and exists on disk -> containment reject.
+
+        class _T:
+            prm_reward = str(tmp_path)
+            prm_aggregate = "min"
+
+        with pytest.raises(ValueError, match="working directory"):
+            mod.build_prm_reward_fn(_T(), device="cpu", trust_remote_code=False)
+
+    def test_none_path_rejected(self):
+        import soup_cli.utils.prm_reward as mod
+
+        class _T:
+            prm_reward = None
+            prm_aggregate = "min"
+
+        with pytest.raises(ValueError, match="prm_reward=None"):
+            mod.build_prm_reward_fn(_T(), device="cpu", trust_remote_code=False)
+
+
 class TestNoTopLevelTorch:
     def test_prm_reward_has_no_top_level_torch(self):
         import soup_cli.utils.prm_reward as mod
