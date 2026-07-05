@@ -622,3 +622,235 @@ class TestBestOfNCli:
             assert result.exit_code == 0, (result.output, repr(result.exception))
         finally:
             os.remove(path)
+
+
+# ---------------------------------------------------------------------------
+# Task 9 — utils/evolve.py
+# ---------------------------------------------------------------------------
+
+
+class TestEvolve:
+    def test_depth_round_produces_lineage(self):
+        from soup_cli.utils.evolve import run_evolve
+
+        # A generate_fn that returns a fresh, distinct instruction each call
+        # (so no evolution is eliminated as "unchanged").
+        counter = {"i": 0}
+
+        def _gen(prompt):
+            counter["i"] += 1
+            return f"evolved instruction number {counter['i']}"
+
+        rows = run_evolve(["write a poem"], "depth", 2, _gen)
+        assert len(rows) == 2  # one per round
+        assert rows[0].round == 1 and rows[1].round == 2
+        assert rows[0].seed == "write a poem"
+        assert rows[1].seed == "evolved instruction number 1"  # lineage chains
+        assert all(r.strategy == "depth" for r in rows)
+
+    def test_breadth_strategy(self):
+        from soup_cli.utils.evolve import run_evolve
+
+        rows = run_evolve(["x"], "breadth", 1, lambda p: "brand new instruction")
+        assert rows and rows[0].strategy == "breadth"
+        assert rows[0].instruction == "brand new instruction"
+
+    def test_unchanged_is_eliminated(self):
+        from soup_cli.utils.evolve import run_evolve
+
+        rows = run_evolve(["same"], "depth", 1, lambda p: "same")  # echoes seed
+        assert rows == []
+
+    def test_empty_is_eliminated(self):
+        from soup_cli.utils.evolve import run_evolve
+
+        assert run_evolve(["x"], "depth", 1, lambda p: "   ") == []
+
+    def test_meta_prompt_echo_eliminated(self):
+        from soup_cli.utils.evolve import run_evolve
+
+        rows = run_evolve(["x"], "depth", 1, lambda p: "#Given Prompt#: x")
+        assert rows == []
+
+    def test_bad_strategy(self):
+        import pytest
+
+        from soup_cli.utils.evolve import run_evolve
+
+        with pytest.raises(ValueError, match="strategy"):
+            run_evolve(["x"], "sideways", 1, lambda p: "y")
+
+    def test_bad_rounds(self):
+        import pytest
+
+        from soup_cli.utils.evolve import run_evolve
+
+        with pytest.raises(ValueError, match="rounds"):
+            run_evolve(["x"], "depth", 0, lambda p: "y")
+        with pytest.raises(ValueError, match="rounds"):
+            run_evolve(["x"], "depth", 6, lambda p: "y")
+
+    def test_evolve_instruction_renders_seed(self):
+        from soup_cli.utils.evolve import evolve_instruction
+
+        captured = {}
+
+        def _gen(prompt):
+            captured["prompt"] = prompt
+            return "evolved"
+
+        out = evolve_instruction("my seed", "depth", _gen)
+        assert out == "evolved"
+        assert "my seed" in captured["prompt"]
+
+    def test_no_top_level_torch(self):
+        import ast
+        import pathlib
+
+        tree = ast.parse(
+            pathlib.Path("src/soup_cli/utils/evolve.py").read_text(encoding="utf-8")
+        )
+        top = {
+            n.module.split(".")[0]
+            for n in ast.walk(tree)
+            if isinstance(n, ast.ImportFrom) and n.col_offset == 0 and n.module
+        }
+        assert "torch" not in top
+
+
+# ---------------------------------------------------------------------------
+# Task 10 — soup data evolve command
+# ---------------------------------------------------------------------------
+
+
+def _write_seeds(name):
+    import os
+
+    path = os.path.join(os.getcwd(), name)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write('{"prompt": "write a poem"}\n{"instruction": "sort a list"}\n')
+    return path
+
+
+class TestEvolveCli:
+    def test_help(self):
+        from typer.testing import CliRunner
+
+        from soup_cli.commands.data import app
+
+        result = CliRunner().invoke(app, ["evolve", "--help"])
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        assert "evolve" in result.output.lower()
+
+    def test_reject_bad_strategy(self):
+        import os
+
+        from typer.testing import CliRunner
+
+        from soup_cli.commands.data import app
+
+        path = _write_seeds("_evolve_badstrat.jsonl")
+        try:
+            result = CliRunner().invoke(
+                app,
+                ["evolve", "--input", path, "--provider", "ollama", "--model", "m",
+                 "--strategy", "sideways", "-o", "o.jsonl"],
+            )
+            assert result.exit_code == 2, (result.output, repr(result.exception))
+            assert "strategy" in result.output.lower()
+        finally:
+            os.remove(path)
+
+    def test_reject_bad_rounds(self):
+        import os
+
+        from typer.testing import CliRunner
+
+        from soup_cli.commands.data import app
+
+        path = _write_seeds("_evolve_badrounds.jsonl")
+        try:
+            result = CliRunner().invoke(
+                app,
+                ["evolve", "--input", path, "--provider", "ollama", "--model", "m",
+                 "--rounds", "9", "-o", "o.jsonl"],
+            )
+            assert result.exit_code == 2, (result.output, repr(result.exception))
+            assert "rounds" in result.output.lower()
+        finally:
+            os.remove(path)
+
+    def test_reject_anthropic(self):
+        import os
+
+        from typer.testing import CliRunner
+
+        from soup_cli.commands.data import app
+
+        path = _write_seeds("_evolve_anthropic.jsonl")
+        try:
+            result = CliRunner().invoke(
+                app,
+                ["evolve", "--input", path, "--provider", "anthropic", "--model", "m",
+                 "-o", "o.jsonl"],
+            )
+            assert result.exit_code == 2, (result.output, repr(result.exception))
+        finally:
+            os.remove(path)
+
+    def test_plan_only(self):
+        import os
+
+        from typer.testing import CliRunner
+
+        from soup_cli.commands.data import app
+
+        path = _write_seeds("_evolve_plan.jsonl")
+        try:
+            result = CliRunner().invoke(
+                app,
+                ["evolve", "--input", path, "--provider", "ollama", "--model", "m",
+                 "--plan-only"],
+            )
+            assert result.exit_code == 0, (result.output, repr(result.exception))
+        finally:
+            os.remove(path)
+
+    def test_happy_path(self, monkeypatch):
+        import json
+        import os
+
+        from typer.testing import CliRunner
+
+        from soup_cli.commands.data import app
+
+        counter = {"i": 0}
+
+        def _fake_make(*args, **kwargs):
+            def _gen(prompt):
+                counter["i"] += 1
+                return f"evolved {counter['i']}"
+
+            return _gen
+
+        monkeypatch.setattr("soup_cli.utils.magpie.make_magpie_generate_fn", _fake_make)
+
+        ipath = _write_seeds("_evolve_ok_in.jsonl")
+        opath = os.path.join(os.getcwd(), "_evolve_ok_out.jsonl")
+        try:
+            result = CliRunner().invoke(
+                app,
+                ["evolve", "--input", ipath, "--provider", "ollama", "--model", "m",
+                 "--strategy", "depth", "--rounds", "1", "-o", opath],
+            )
+            assert result.exit_code == 0, (result.output, repr(result.exception))
+            rows = [json.loads(x) for x in open(opath, encoding="utf-8") if x.strip()]
+            assert len(rows) == 2  # 2 seeds, 1 round
+            assert rows[0]["messages"][0]["role"] == "user"
+            assert rows[0]["messages"][0]["content"].startswith("evolved")
+            assert rows[0]["_evolve"]["strategy"] == "depth"
+            assert rows[0]["_evolve"]["round"] == 1
+        finally:
+            for p in (ipath, opath):
+                if os.path.exists(p):
+                    os.remove(p)

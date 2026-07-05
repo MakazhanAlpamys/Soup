@@ -2896,6 +2896,112 @@ def best_of_n(
     console.print(Panel(body, title="soup data best-of-n — done"))
 
 
+# v0.71.31 — Evol-Instruct (WizardLM depth/breadth) instruction evolution.
+@app.command(name="evolve")
+def evolve(
+    input: str = typer.Option(
+        ..., "--input", help="Seed JSONL ({prompt|instruction|messages} per row)"
+    ),
+    provider: str = typer.Option(..., "--provider", help="ollama | vllm"),
+    model: str = typer.Option(..., "--model", help="Provider model id"),
+    strategy: str = typer.Option("depth", "--strategy", help="depth | breadth"),
+    rounds: int = typer.Option(1, "--rounds", help="Evolution rounds [1, 5]"),
+    output: str = typer.Option(
+        "", "--output", "-o", help="Output JSONL (required unless --plan-only)"
+    ),
+    base_url: str = typer.Option("", "--base-url", help="Provider base URL"),
+    temperature: float = typer.Option(1.0, "--temperature", help="Sampling temp [0, 2]"),
+    max_tokens: int = typer.Option(512, "--max-tokens", help="Max tokens [1, 16384]"),
+    plan_only: bool = typer.Option(False, "--plan-only", help="Validate + print plan"),
+) -> None:
+    """Evol-Instruct: deepen (depth) or diversify (breadth) seed instructions.
+
+    Reads ``--input`` seeds, evolves each for ``--rounds`` rounds via a live
+    ``--provider`` (ollama / vllm raw completion), and writes evolved user-turn
+    rows (``{"messages": [...], "_evolve": {...}}``). Completes the synthetic
+    suite (Magpie / Forge / Persona / evolve). (v0.71.31)
+    """
+    from rich.markup import escape as _escape
+    from rich.panel import Panel
+
+    from soup_cli.utils.evolve import STRATEGIES, run_evolve
+    from soup_cli.utils.magpie import make_magpie_generate_fn
+    from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
+
+    if strategy not in STRATEGIES:
+        console.print(
+            f"[red]--strategy must be one of {', '.join(STRATEGIES)}; got {strategy!r}[/]"
+        )
+        raise typer.Exit(2)
+    if not isinstance(rounds, int) or isinstance(rounds, bool) or not (1 <= rounds <= 5):
+        console.print("[red]--rounds must be in [1, 5][/]")
+        raise typer.Exit(2)
+
+    try:
+        seeds = _bon_load_prompts(input)
+        if output:
+            enforce_under_cwd_and_no_symlink(output, "--output path")
+        generate_fn = make_magpie_generate_fn(
+            provider,
+            model=model,
+            base_url=base_url or None,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+    except (FileNotFoundError, TypeError, ValueError, ImportError) as exc:
+        console.print(f"[red]{_escape(str(exc))}[/]")
+        raise typer.Exit(2) from exc
+    if not seeds:
+        console.print("[red]--input produced no usable seed instructions[/]")
+        raise typer.Exit(2)
+
+    console.print(
+        Panel(
+            f"Seeds:     [bold]{len(seeds)}[/]\n"
+            f"Provider:  [bold]{_escape(provider)}[/]\n"
+            f"Strategy:  [bold]{_escape(strategy)}[/]\n"
+            f"Rounds:    [bold]{rounds}[/]",
+            title="soup data evolve — plan",
+        )
+    )
+    if plan_only:
+        return
+    if not output:
+        console.print("[red]--output is required unless --plan-only is set.[/]")
+        raise typer.Exit(2)
+
+    evolved_rows = run_evolve(seeds, strategy, rounds, generate_fn)
+    with open(output, "w", encoding="utf-8") as out_fh:
+        for row in evolved_rows:
+            out_fh.write(
+                json.dumps(
+                    {
+                        "messages": [{"role": "user", "content": row.instruction}],
+                        "_evolve": {
+                            "seed": row.seed,
+                            "strategy": row.strategy,
+                            "round": row.round,
+                        },
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+
+    console.print(
+        Panel(
+            f"Evolved rows: [bold]{len(evolved_rows)}[/]\n"
+            f"Output:       [bold]{_escape(os.path.relpath(output))}[/]",
+            title="soup data evolve — done",
+        )
+    )
+    if not evolved_rows:
+        console.print(
+            "[yellow]Warning:[/] 0 rows — is the provider reachable and the "
+            "model pulled? (all evolutions may have been eliminated)"
+        )
+
+
 # v0.69.0 Part D — Persona-Hub diversity sampler.
 @app.command(name="persona-mix")
 def persona_mix(
