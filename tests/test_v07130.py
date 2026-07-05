@@ -727,6 +727,60 @@ class TestRecipes:
         assert len(RECIPES) == 137
 
 
+# ---------------------------------------------------------------------------
+# PRM producer fixes surfaced by the live smoke (train-result shape + tokenizer)
+# ---------------------------------------------------------------------------
+class TestBuildPrmTrainResult:
+    def test_has_all_summary_keys(self):
+        from soup_cli.trainer.prm import build_prm_train_result
+
+        out = build_prm_train_result(
+            log_history=[{"loss": 3.2}, {"loss": 1.1}],
+            metrics={"train_loss": 2.0},
+            global_step=6,
+            duration_secs=125.0,
+            output_dir="./out",
+        )
+        # These are exactly the keys commands/train.py's summary indexes.
+        for key in (
+            "initial_loss",
+            "final_loss",
+            "duration",
+            "duration_secs",
+            "total_steps",
+            "output_dir",
+        ):
+            assert key in out, key
+        assert out["initial_loss"] == pytest.approx(3.2)
+        assert out["final_loss"] == pytest.approx(1.1)
+        assert out["total_steps"] == 6
+        assert out["duration"] == "2m"
+
+    def test_empty_log_history_falls_back_to_metrics(self):
+        from soup_cli.trainer.prm import build_prm_train_result
+
+        out = build_prm_train_result(
+            log_history=[],
+            metrics={"train_loss": 2.5},
+            global_step=0,
+            duration_secs=3700.0,
+            output_dir="./out",
+        )
+        assert out["initial_loss"] == pytest.approx(2.5)
+        assert out["final_loss"] == pytest.approx(2.5)
+        assert out["duration"] == "1h 1m"
+
+    def test_train_saves_tokenizer(self):
+        # Guard: PRMTrainerWrapper.train() must persist the tokenizer so the
+        # PRM checkpoint is loadable standalone by PRMScorer.
+        import inspect
+
+        from soup_cli.trainer.prm import PRMTrainerWrapper
+
+        src = inspect.getsource(PRMTrainerWrapper.train)
+        assert "self.tokenizer.save_pretrained" in src
+
+
 class TestNoTopLevelTorch:
     def test_prm_reward_has_no_top_level_torch(self):
         import soup_cli.utils.prm_reward as mod

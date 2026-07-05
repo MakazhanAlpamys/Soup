@@ -16,6 +16,7 @@ per project policy — ``python -m soup_cli.cli --help`` must not pull torch.
 from __future__ import annotations
 
 import logging
+import time
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Optional
@@ -83,6 +84,45 @@ def make_prm_trainer_class(base_cls: type) -> type:
 
     _PRMTrainer.__name__ = f"_PRMTrainer_{base_cls.__name__}"
     return _PRMTrainer
+
+
+def build_prm_train_result(
+    *,
+    log_history: list,
+    metrics: Any,
+    global_step: int,
+    duration_secs: float,
+    output_dir: str,
+) -> dict:
+    """Build the standard trainer-result dict for the PRM path (v0.71.30).
+
+    Mirrors the shape every other trainer wrapper returns so ``commands/train.py``
+    can render its summary — previously the PRM wrapper returned a bespoke dict
+    missing ``initial_loss`` / ``final_loss`` / ``duration`` / ``total_steps``,
+    crashing the CLI with a ``KeyError`` right after ``save_model``.
+    """
+    train_losses = [e["loss"] for e in log_history if isinstance(e, dict) and "loss" in e]
+    fallback = 0.0
+    if isinstance(metrics, dict):
+        try:
+            fallback = float(metrics.get("train_loss", 0.0))
+        except (TypeError, ValueError):
+            fallback = 0.0
+    initial = train_losses[0] if train_losses else fallback
+    final = train_losses[-1] if train_losses else fallback
+    hours = int(duration_secs // 3600)
+    minutes = int((duration_secs % 3600) // 60)
+    duration = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
+    return {
+        "status": "ok",
+        "initial_loss": initial,
+        "final_loss": final,
+        "duration": duration,
+        "duration_secs": duration_secs,
+        "total_steps": global_step,
+        "output_dir": output_dir,
+        "metrics": metrics,
+    }
 
 
 def _prepare_prm_dataset(raw_rows: list[dict], tokenizer: Any, max_length: int) -> list[dict]:
@@ -294,6 +334,18 @@ class PRMTrainerWrapper:
             data_collator=collator,
         )
         console.print("[green]Starting PRM training...[/]")
+        start = time.time()
         result = self.trainer.train()
         self.trainer.save_model(str(output_dir))
-        return {"status": "ok", "output_dir": str(output_dir), "metrics": result.metrics}
+        # v0.71.30 — save the tokenizer alongside the model so the PRM
+        # checkpoint is loadable standalone (soup shrink / PRMScorer /
+        # `soup train prm_reward=<dir>` all call AutoTokenizer.from_pretrained
+        # on the dir). Previously the tokenizer was never persisted.
+        self.tokenizer.save_pretrained(str(output_dir))
+        return build_prm_train_result(
+            log_history=self.trainer.state.log_history,
+            metrics=result.metrics,
+            global_step=self.trainer.state.global_step,
+            duration_secs=time.time() - start,
+            output_dir=str(output_dir),
+        )
