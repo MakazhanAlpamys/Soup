@@ -420,3 +420,205 @@ class TestOnlineDpoRouting:
         src = inspect.getsource(train_cmd)
         assert 'cfg.task == "online_dpo"' in src
         assert "OnlineDPOTrainerWrapper" in src
+
+
+# ---------------------------------------------------------------------------
+# Task 7 — utils/best_of_n.py
+# ---------------------------------------------------------------------------
+
+
+class _ScoreJudge:
+    """evaluate(prompt, response) -> JudgeScore(weighted_score=len(response))."""
+
+    def evaluate(self, prompt, response, category="default"):
+        from soup_cli.eval.judge import JudgeScore
+
+        return JudgeScore(
+            prompt=prompt, response=response, weighted_score=float(len(response))
+        )
+
+
+class TestBestOfN:
+    def test_pick_best_argmax(self):
+        from soup_cli.utils.best_of_n import judge_pick_best
+
+        pick = judge_pick_best("p", ["a", "abcd", "ab"], _ScoreJudge())
+        assert pick.winner_idx == 1
+        assert pick.winner == "abcd"
+        assert pick.scores == (1.0, 4.0, 2.0)
+
+    def test_pick_best_ties_first(self):
+        from soup_cli.utils.best_of_n import judge_pick_best
+
+        pick = judge_pick_best("p", ["ab", "cd"], _ScoreJudge())
+        assert pick.winner_idx == 0
+
+    def test_pick_best_empty_raises(self):
+        import pytest
+
+        from soup_cli.utils.best_of_n import judge_pick_best
+
+        with pytest.raises(ValueError, match="candidate"):
+            judge_pick_best("p", [], _ScoreJudge())
+
+    def test_build_sft_row(self):
+        from soup_cli.utils.best_of_n import BestOfNPick, build_sft_row
+
+        row = build_sft_row(
+            "p", BestOfNPick(1, "win", (1.0, 3.0)), judge_model="ollama://m"
+        )
+        assert row["messages"] == [
+            {"role": "user", "content": "p"},
+            {"role": "assistant", "content": "win"},
+        ]
+        assert row["_best_of_n"]["winner_idx"] == 1
+        assert row["_best_of_n"]["judge_model"] == "ollama://m"
+        assert row["_best_of_n"]["n"] == 2
+        assert row["_best_of_n"]["scores"] == [1.0, 3.0]
+
+    def test_build_dpo_pair(self):
+        from soup_cli.utils.best_of_n import BestOfNPick, build_dpo_pair
+
+        pair = build_dpo_pair("p", BestOfNPick(1, "win", (1.0, 3.0)), ["lose", "win"])
+        assert pair == {"prompt": "p", "chosen": "win", "rejected": "lose"}
+
+    def test_build_dpo_pair_all_equal_none(self):
+        from soup_cli.utils.best_of_n import BestOfNPick, build_dpo_pair
+
+        assert build_dpo_pair("p", BestOfNPick(0, "x", (2.0, 2.0)), ["x", "x"]) is None
+
+    def test_no_top_level_torch(self):
+        import ast
+        import pathlib
+
+        src = pathlib.Path("src/soup_cli/utils/best_of_n.py").read_text(encoding="utf-8")
+        tree = ast.parse(src)
+        top = {
+            n.names[0].name.split(".")[0]
+            for n in ast.walk(tree)
+            if isinstance(n, ast.Import) and n.col_offset == 0
+        }
+        top |= {
+            n.module.split(".")[0]
+            for n in ast.walk(tree)
+            if isinstance(n, ast.ImportFrom) and n.col_offset == 0 and n.module
+        }
+        assert "torch" not in top
+        assert "transformers" not in top
+
+
+# ---------------------------------------------------------------------------
+# Task 8 — soup data best-of-n command
+# ---------------------------------------------------------------------------
+
+
+class TestBestOfNCli:
+    def test_help(self):
+        from typer.testing import CliRunner
+
+        from soup_cli.commands.data import app
+
+        result = CliRunner().invoke(app, ["best-of-n", "--help"])
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        assert "best-of-n" in result.output.lower() or "best of n" in result.output.lower()
+
+    def test_reject_bad_n(self):
+        import os
+
+        from typer.testing import CliRunner
+
+        from soup_cli.commands.data import app
+
+        path = os.path.join(os.getcwd(), "_bon_prompts_bad_n.jsonl")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write('{"prompt": "hi"}\n')
+        try:
+            result = CliRunner().invoke(
+                app,
+                ["best-of-n", "--base", "m", "--prompts", path, "--n", "1",
+                 "--judge", "ollama://m", "-o", "o.jsonl"],
+            )
+            assert result.exit_code == 2, (result.output, repr(result.exception))
+            assert "n must be" in result.output or "between 2" in result.output
+        finally:
+            os.remove(path)
+
+    def test_reject_ssrf_judge(self):
+        import os
+
+        from typer.testing import CliRunner
+
+        from soup_cli.commands.data import app
+
+        path = os.path.join(os.getcwd(), "_bon_prompts_ssrf.jsonl")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write('{"prompt": "hi"}\n')
+        try:
+            result = CliRunner().invoke(
+                app,
+                ["best-of-n", "--base", "m", "--prompts", path, "--n", "4",
+                 "--judge", "http://evil.example.com/m", "-o", "o.jsonl"],
+            )
+            assert result.exit_code == 2, (result.output, repr(result.exception))
+        finally:
+            os.remove(path)
+
+    def test_happy_path(self, monkeypatch):
+        import json
+        import os
+
+        from typer.testing import CliRunner
+
+        import soup_cli.commands.data as data_cmd
+        import soup_cli.utils.best_of_n as bon
+        from soup_cli.commands.data import app
+
+        monkeypatch.setattr(data_cmd, "_load_bon_model", lambda base, device, trust: (None, None))
+        monkeypatch.setattr(
+            bon, "sample_candidates",
+            lambda model, tok, prompt, **kw: ["a", "abcd", "xy"],
+        )
+        monkeypatch.setattr("soup_cli.eval.judge.JudgeEvaluator", lambda **kw: _ScoreJudge())
+
+        ppath = os.path.join(os.getcwd(), "_bon_prompts_ok.jsonl")
+        opath = os.path.join(os.getcwd(), "_bon_out.jsonl")
+        dpath = os.path.join(os.getcwd(), "_bon_pairs.jsonl")
+        with open(ppath, "w", encoding="utf-8") as fh:
+            fh.write('{"prompt": "q1"}\n{"prompt": "q2"}\n')
+        try:
+            result = CliRunner().invoke(
+                app,
+                ["best-of-n", "--base", "m", "--prompts", ppath, "--n", "3",
+                 "--judge", "ollama://m", "-o", opath, "--emit-pairs", dpath],
+            )
+            assert result.exit_code == 0, (result.output, repr(result.exception))
+            rows = [json.loads(x) for x in open(opath, encoding="utf-8") if x.strip()]
+            assert len(rows) == 2
+            assert rows[0]["messages"][1]["content"] == "abcd"  # longest wins
+            assert rows[0]["_best_of_n"]["n"] == 3
+            pairs = [json.loads(x) for x in open(dpath, encoding="utf-8") if x.strip()]
+            assert pairs[0] == {"prompt": "q1", "chosen": "abcd", "rejected": "a"}
+        finally:
+            for p in (ppath, opath, dpath):
+                if os.path.exists(p):
+                    os.remove(p)
+
+    def test_plan_only(self):
+        import os
+
+        from typer.testing import CliRunner
+
+        from soup_cli.commands.data import app
+
+        path = os.path.join(os.getcwd(), "_bon_prompts_plan.jsonl")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write('{"prompt": "hi"}\n')
+        try:
+            result = CliRunner().invoke(
+                app,
+                ["best-of-n", "--base", "m", "--prompts", path, "--n", "4",
+                 "--judge", "ollama://m", "--plan-only"],
+            )
+            assert result.exit_code == 0, (result.output, repr(result.exception))
+        finally:
+            os.remove(path)

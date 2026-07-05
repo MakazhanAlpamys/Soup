@@ -2683,6 +2683,219 @@ def gen_magpie(
         )
 
 
+# v0.71.31 — Best-of-N rejection sampling (local sampling + judge).
+_BON_MAX_PROMPTS = 100_000
+_BON_MAX_JSONL_BYTES = 100 * 1024 * 1024  # 100 MiB
+
+
+def _load_bon_model(base: str, device: str, trust: bool):
+    """Seam: load ``(model, tokenizer)`` for best-of-n (patched in tests)."""
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    tok = AutoTokenizer.from_pretrained(base, trust_remote_code=trust)
+    if tok.pad_token is None:
+        tok.pad_token = tok.eos_token
+    dev_map = "cpu" if device == "cpu" else "auto"
+    model = AutoModelForCausalLM.from_pretrained(
+        base, trust_remote_code=trust, device_map=dev_map
+    )
+    return model, tok
+
+
+def _bon_load_prompts(path: str) -> list:
+    """Read a JSONL of {prompt|messages|instruction} rows -> list[str]."""
+    from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
+
+    enforce_under_cwd_and_no_symlink(path, "--prompts path")
+    real = os.path.realpath(path)
+    if not os.path.isfile(real):
+        raise FileNotFoundError(path)
+    if os.path.getsize(real) > _BON_MAX_JSONL_BYTES:
+        raise ValueError(f"--prompts file exceeds {_BON_MAX_JSONL_BYTES} bytes")
+    prompts: list = []
+    with open(real, "r", encoding="utf-8") as handle:
+        for raw_line in handle:
+            stripped = raw_line.strip()
+            if not stripped:
+                continue
+            if len(prompts) >= _BON_MAX_PROMPTS:
+                raise ValueError(f"--prompts file exceeds {_BON_MAX_PROMPTS} rows")
+            try:
+                row = json.loads(stripped)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(row, dict):
+                continue
+            text = None
+            if isinstance(row.get("prompt"), str):
+                text = row["prompt"]
+            elif isinstance(row.get("instruction"), str):
+                text = row["instruction"]
+            elif isinstance(row.get("messages"), list):
+                users = [
+                    m.get("content")
+                    for m in row["messages"]
+                    if isinstance(m, dict) and m.get("role") == "user"
+                ]
+                if users and isinstance(users[-1], str):
+                    text = users[-1]
+            if text:
+                prompts.append(text)
+    return prompts
+
+
+@app.command(name="best-of-n")
+def best_of_n(
+    base: str = typer.Option(..., "--base", help="Base model id/path to sample from"),
+    prompts: str = typer.Option(..., "--prompts", help="JSONL of {prompt|messages} rows"),
+    judge: str = typer.Option(
+        ..., "--judge", help="Judge URL (ollama://|https://|http://localhost)"
+    ),
+    n: int = typer.Option(8, "--n", help="Candidates per prompt [2, 64]"),
+    output: str = typer.Option(
+        "", "--output", "-o", help="Output SFT JSONL (required unless --plan-only)"
+    ),
+    emit_pairs: str = typer.Option(
+        "", "--emit-pairs", help="Also write winner/loser DPO pairs to this JSONL"
+    ),
+    temperature: float = typer.Option(1.0, "--temperature", help="Sampling temp [0, 2]"),
+    max_new_tokens: int = typer.Option(
+        256, "--max-new-tokens", help="Max new tokens per candidate [1, 4096]"
+    ),
+    device: str = typer.Option("", "--device", help="cuda | cpu"),
+    seed: int = typer.Option(0, "--seed", help="Sampling seed"),
+    trust_remote_code: bool = typer.Option(
+        False, "--trust-remote-code", help="Allow custom model code on --base"
+    ),
+    plan_only: bool = typer.Option(False, "--plan-only", help="Validate + print plan"),
+) -> None:
+    """Best-of-N rejection sampling: sample N per prompt, a judge picks the winner.
+
+    Samples ``--n`` candidates from ``--base`` locally (transformers), scores each
+    with ``--judge`` pointwise, and writes the winner as an SFT chat row (with
+    ``_best_of_n`` provenance). ``--emit-pairs`` additionally writes winner-vs-
+    loser DPO pairs. BOND-lite (Best-of-N distillation, v0.71.31).
+    """
+    from rich.markup import escape as _escape
+    from rich.panel import Panel
+
+    from soup_cli.eval.gate import _parse_judge_url
+    from soup_cli.eval.judge import JudgeEvaluator
+    from soup_cli.utils import best_of_n as bon
+    from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
+    from soup_cli.utils.trust_remote import (
+        model_requires_trust_remote_code,
+        resolve_trust_remote_code,
+    )
+
+    # --- Bounds ---
+    if not isinstance(n, int) or isinstance(n, bool) or not (2 <= n <= 64):
+        console.print("[red]--n must be between 2 and 64[/]")
+        raise typer.Exit(2)
+    if not (0.0 <= temperature <= 2.0):
+        console.print("[red]--temperature must be in [0, 2][/]")
+        raise typer.Exit(2)
+    if not (1 <= max_new_tokens <= 4096):
+        console.print("[red]--max-new-tokens must be in [1, 4096][/]")
+        raise typer.Exit(2)
+
+    # --- Judge URL (SSRF via JudgeEvaluator construction) ---
+    try:
+        provider, judge_model_id, api_base = _parse_judge_url(judge)
+        evaluator = JudgeEvaluator(
+            provider=provider, model=judge_model_id, api_base=api_base
+        )
+    except (ValueError, TypeError) as exc:
+        console.print(f"[red]Invalid --judge: {_escape(str(exc))}[/]")
+        raise typer.Exit(2) from exc
+
+    # --- Paths ---
+    try:
+        prompt_list = _bon_load_prompts(prompts)
+        if output:
+            enforce_under_cwd_and_no_symlink(output, "--output path")
+        if emit_pairs:
+            enforce_under_cwd_and_no_symlink(emit_pairs, "--emit-pairs path")
+    except (FileNotFoundError, TypeError, ValueError) as exc:
+        console.print(f"[red]{_escape(str(exc))}[/]")
+        raise typer.Exit(2) from exc
+    if not prompt_list:
+        console.print("[red]--prompts produced no usable rows[/]")
+        raise typer.Exit(2)
+
+    trust = resolve_trust_remote_code(
+        base,
+        requested=trust_remote_code,
+        console=console,
+        requires_remote_code=model_requires_trust_remote_code(base) or False,
+    )
+
+    console.print(
+        Panel(
+            f"Base model:   [bold]{_escape(base)}[/]\n"
+            f"Prompts:      [bold]{len(prompt_list)}[/]\n"
+            f"N candidates: [bold]{n}[/]\n"
+            f"Judge:        [bold]{_escape(judge)}[/]",
+            title="soup data best-of-n — plan",
+        )
+    )
+    if plan_only:
+        return
+    if not output:
+        console.print("[red]--output is required unless --plan-only is set.[/]")
+        raise typer.Exit(2)
+
+    import torch
+
+    torch.manual_seed(seed)
+    model, tokenizer = _load_bon_model(base, device, trust)
+
+    sft_count = 0
+    pair_count = 0
+    dev = device or None
+    pairs_fh = open(emit_pairs, "w", encoding="utf-8") if emit_pairs else None
+    try:
+        with open(output, "w", encoding="utf-8") as out_fh:
+            for prompt in prompt_list:
+                candidates = bon.sample_candidates(
+                    model,
+                    tokenizer,
+                    prompt,
+                    n=n,
+                    temperature=temperature,
+                    max_new_tokens=max_new_tokens,
+                    device=dev,
+                )
+                pick = bon.judge_pick_best(prompt, candidates, evaluator)
+                out_fh.write(
+                    json.dumps(
+                        bon.build_sft_row(prompt, pick, judge_model=judge),
+                        ensure_ascii=False,
+                    )
+                    + "\n"
+                )
+                sft_count += 1
+                if pairs_fh is not None:
+                    pair = bon.build_dpo_pair(prompt, pick, candidates)
+                    if pair is not None:
+                        pairs_fh.write(json.dumps(pair, ensure_ascii=False) + "\n")
+                        pair_count += 1
+    finally:
+        if pairs_fh is not None:
+            pairs_fh.close()
+
+    body = (
+        f"SFT rows:   [bold]{sft_count}[/]\n"
+        f"Output:     [bold]{_escape(os.path.relpath(output))}[/]"
+    )
+    if emit_pairs:
+        body += (
+            f"\nDPO pairs:  [bold]{pair_count}[/]\n"
+            f"Pairs out:  [bold]{_escape(os.path.relpath(emit_pairs))}[/]"
+        )
+    console.print(Panel(body, title="soup data best-of-n — done"))
+
+
 # v0.69.0 Part D — Persona-Hub diversity sampler.
 @app.command(name="persona-mix")
 def persona_mix(
