@@ -19,6 +19,7 @@ from __future__ import annotations
 import math
 import re
 from dataclasses import asdict, dataclass
+from typing import Any, Optional, Sequence
 
 from rich.panel import Panel
 
@@ -115,7 +116,7 @@ def decide_shrink(
     )
 
 
-def shrink_verdict_to_dict(verdict: ShrinkVerdict) -> dict:
+def shrink_verdict_to_dict(verdict: ShrinkVerdict) -> dict[str, Any]:
     """Plain-dict view of a ``ShrinkVerdict`` (JSON-serialisable)."""
     return asdict(verdict)
 
@@ -137,6 +138,9 @@ def render_shrink_panel(verdict: ShrinkVerdict) -> Panel:
 # ---------------------------------------------------------------------------
 # Arch allowlist + prune (torch-lazy)
 # ---------------------------------------------------------------------------
+# Note: real SmolLM/SmolLM2 checkpoints report model_type="llama", so the
+# "smollm" entry is aspirational (any HF model that literally reports a "smol"
+# model_type) — "llama" is matched first and wins for the released checkpoints.
 _ARCH_PATTERNS = {
     "llama": re.compile(r"llama", re.I),
     "qwen": re.compile(r"qwen", re.I),
@@ -167,7 +171,7 @@ def shrink_arch_of(model: object) -> str:
     )
 
 
-def layer_list(model: object):
+def layer_list(model: object) -> Any:
     """Return ``model.model.layers`` (the decoder ``ModuleList``), arch-guarded."""
     shrink_arch_of(model)  # raises on unsupported arch
     try:
@@ -215,7 +219,9 @@ _IMPORTANCE_MAX_LENGTH = 512
 _DEFAULT_MAX_PROMPTS = 256
 
 
-def resolve_drop_count(num_layers: int, *, drop_ratio, drop_layers) -> int:
+def resolve_drop_count(
+    num_layers: int, *, drop_ratio: Optional[float], drop_layers: Optional[int]
+) -> int:
     """Resolve the block **count** from exactly one of ratio / explicit count.
 
     ``drop_layers = round(drop_ratio * num_layers)`` when a ratio is given.
@@ -246,7 +252,7 @@ def resolve_drop_count(num_layers: int, *, drop_ratio, drop_layers) -> int:
 def compute_layer_importance(
     model: object,
     tokenizer: object,
-    prompts,
+    prompts: Sequence[str],
     *,
     block_size: int,
     device: str,
@@ -323,7 +329,7 @@ def compute_layer_importance(
     return imps
 
 
-def select_drop_block(importances) -> LayerImportance:
+def select_drop_block(importances: Sequence[LayerImportance]) -> LayerImportance:
     """Return the least-important (min angular-distance) candidate block."""
     if not importances:
         raise ValueError("no importance scores to select from")

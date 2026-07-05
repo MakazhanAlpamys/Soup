@@ -17,7 +17,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional, Sequence
 
 import typer
 from rich.console import Console
@@ -25,24 +25,30 @@ from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
-from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
+from soup_cli.utils.paths import atomic_write_text, enforce_under_cwd_and_no_symlink
 from soup_cli.utils.shrink import (
     DECISION_SHIP,
+    MAX_TOLERANCE,
+    LayerImportance,
     compute_layer_importance,
     decide_shrink,
     prune_model_layers,
     render_shrink_panel,
     resolve_drop_count,
     select_drop_block,
+    shrink_arch_of,
     shrink_verdict_to_dict,
 )
 
 console = Console()
 
-# 64 MiB cap on the calibration JSONL (symlink-pointed-to-/dev/zero DoS guard).
-_MAX_CALIB_BYTES = 64 * 1024 * 1024
+# 64 MiB cap on the calibration / heal JSONL (symlink-to-/dev/zero DoS guard).
+_MAX_INPUT_BYTES = 64 * 1024 * 1024
 _MAX_CALIB_ROWS = 10_000
 _MAX_HEAL_STEPS = 1_000_000
+# Guard against an innocuous flag combo (huge --heal-steps, tiny heal set)
+# expanding into millions of epochs; refuse rather than emit an absurd config.
+_MAX_HEAL_EPOCHS = 100
 _PPL_MAX_LENGTH = 512
 
 
@@ -91,9 +97,9 @@ def _load_calib(path: str) -> list[str]:
     except OSError as exc:
         raise typer.BadParameter(f"calib path unreadable: {exc}") from exc
     with os.fdopen(fd, "r", encoding="utf-8") as handle:
-        if os.fstat(handle.fileno()).st_size > _MAX_CALIB_BYTES:
+        if os.fstat(handle.fileno()).st_size > _MAX_INPUT_BYTES:
             raise typer.BadParameter(
-                f"calib file exceeds {_MAX_CALIB_BYTES} bytes"
+                f"calib file exceeds {_MAX_INPUT_BYTES} bytes"
             )
         prompts: list[str] = []
         for line in handle:
@@ -122,11 +128,17 @@ def _count_params(model: object) -> int:
     return sum(p.numel() for p in model.parameters())  # type: ignore[attr-defined]
 
 
-def _perplexity(model: object, tokenizer: object, prompts: list[str], device: str) -> float:
-    """Mean unconditional-LM perplexity of ``model`` over ``prompts``.
+def _perplexity(
+    model: object, tokenizer: object, prompts: Sequence[str], device: str
+) -> float:
+    """Unweighted mean of per-example perplexities of ``model`` over ``prompts``.
 
     ``exp(mean per-example cross-entropy)`` with ``labels = input_ids`` (the
-    whole sequence is the target). Returns ``inf`` when no example is usable.
+    whole sequence is the target). Each prompt is weighted equally regardless of
+    length — this is NOT token-count-weighted corpus perplexity, so the absolute
+    numbers are not directly comparable to ``soup eval`` / lm-eval-harness; the
+    identical procedure is applied before and after, so the SHIP/DON'T-SHIP
+    *ratio* is valid. Returns ``inf`` when no example is usable.
     """
     import math
 
@@ -147,14 +159,16 @@ def _perplexity(model: object, tokenizer: object, prompts: list[str], device: st
                 continue
             out = model(input_ids=input_ids, labels=input_ids)  # type: ignore[operator]
             loss = float(out.loss.item())
-            if loss == loss:  # not NaN
+            if not math.isnan(loss):
                 losses.append(loss)
     if not losses:
         return float("inf")
     return math.exp(sum(losses) / len(losses))
 
 
-def _load_for_shrink(model_id: str, device: Optional[str], trust_remote_code: bool):
+def _load_for_shrink(
+    model_id: str, device: Optional[str], trust_remote_code: bool
+) -> tuple[Any, Any, str]:
     """Load a model + tokenizer for shrinking (trust_remote_code probe + warn)."""
     from soup_cli.utils.live_eval import load_model_and_tokenizer
     from soup_cli.utils.trust_remote import (
@@ -169,7 +183,9 @@ def _load_for_shrink(model_id: str, device: Optional[str], trust_remote_code: bo
     return load_model_and_tokenizer(model_id, device=device, trust_remote_code=trc)
 
 
-def _render_importance_table(importances, chosen) -> None:
+def _render_importance_table(
+    importances: Sequence[LayerImportance], chosen: LayerImportance
+) -> None:
     table = Table(title="soup shrink — layer importance (lower = safer to drop)")
     table.add_column("Rank", justify="right")
     table.add_column("Block (start..end)")
@@ -246,7 +262,7 @@ def shrink(
         )
     except typer.Exit:
         raise
-    except (typer.BadParameter, ValueError) as exc:
+    except (typer.BadParameter, ValueError, RuntimeError, OSError, ImportError) as exc:
         console.print(f"[red]Error:[/] {escape(str(exc))}")
         raise typer.Exit(1) from exc
 
@@ -266,8 +282,11 @@ def _shrink_impl(
     attach_to_registry: Optional[str],
     plan_only: bool,
 ) -> None:
-    if not (0.0 <= tolerance <= 5.0):
-        raise typer.BadParameter("--tolerance must be in [0.0, 5.0]")
+    if not (0.0 <= tolerance <= MAX_TOLERANCE):
+        raise typer.BadParameter(f"--tolerance must be in [0.0, {MAX_TOLERANCE}]")
+    # Contain the output dir (arbitrary-write / symlink-redirect guard) BEFORE
+    # any mkdir / save_pretrained / report write.
+    enforce_under_cwd_and_no_symlink(output_dir, "--output-dir")
     # Fail fast on the flag combination BEFORE loading a multi-GB model.
     if (drop_ratio is None) == (drop_layers is None):
         raise typer.BadParameter("set exactly one of --drop-ratio / --drop-layers")
@@ -282,8 +301,6 @@ def _shrink_impl(
     console.print(f"[dim]Loading {escape(model)} ...[/]")
     mdl, tokenizer, dev = _load_for_shrink(model, device, trust_remote_code)
     # Reject an unsupported architecture up front (before the importance scan).
-    from soup_cli.utils.shrink import shrink_arch_of
-
     shrink_arch_of(mdl)
     n_layers = int(mdl.config.num_hidden_layers)
     count = resolve_drop_count(n_layers, drop_ratio=drop_ratio, drop_layers=drop_layers)
@@ -359,7 +376,9 @@ def _shrink_impl(
     report = shrink_verdict_to_dict(verdict)
     report["model"] = model
     report["dropped_block"] = [chosen.start, chosen.start + chosen.block_size - 1]
-    report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    atomic_write_text(
+        json.dumps(report, indent=2), str(report_path), field="shrink report"
+    )
     console.print(f"[green]Wrote[/] {escape(str(report_path))}")
 
     if attach_to_registry:
@@ -372,7 +391,7 @@ def _attach_to_registry(registry_id: str, report_path: str) -> None:
     """Attach the shrink report JSON as a registry artifact (best-effort)."""
     try:
         from soup_cli.registry.attach import attach_artifact
-    except Exception as exc:  # noqa: BLE001 — registry is optional
+    except ImportError as exc:
         console.print(
             f"[yellow]Warning:[/] could not import registry attach helper: {escape(str(exc))}"
         )
@@ -402,8 +421,8 @@ def _count_jsonl_rows(path: str) -> int:
     except OSError as exc:
         raise typer.BadParameter(f"heal path unreadable: {exc}") from exc
     with os.fdopen(fd, "r", encoding="utf-8") as handle:
-        if os.fstat(handle.fileno()).st_size > _MAX_CALIB_BYTES:
-            raise typer.BadParameter(f"heal file exceeds {_MAX_CALIB_BYTES} bytes")
+        if os.fstat(handle.fileno()).st_size > _MAX_INPUT_BYTES:
+            raise typer.BadParameter(f"heal file exceeds {_MAX_INPUT_BYTES} bytes")
         rows = sum(1 for line in handle if line.strip())
     if rows == 0:
         raise typer.BadParameter("heal file has no rows")
@@ -429,6 +448,12 @@ def _build_heal_config_yaml(
     import math
 
     epochs = max(1, math.ceil(steps * _HEAL_BATCH_SIZE / max(1, heal_rows)))
+    if epochs > _MAX_HEAL_EPOCHS:
+        raise typer.BadParameter(
+            f"--heal-steps {steps} over {heal_rows} heal rows expands to "
+            f"{epochs} epochs (> {_MAX_HEAL_EPOCHS}); reduce --heal-steps or "
+            "grow the heal set."
+        )
     return (
         "base: {pruned}\n"
         "task: distill\n"
@@ -484,7 +509,7 @@ def _run_heal(
     )
     load_config_from_string(yaml_text)  # validate before spending a subprocess
     config_path = Path(pruned_dir).parent / "heal_config.yaml"
-    config_path.write_text(yaml_text, encoding="utf-8")
+    atomic_write_text(yaml_text, str(config_path), field="heal config")
 
     argv = [
         sys.executable,

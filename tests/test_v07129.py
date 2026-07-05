@@ -645,3 +645,46 @@ class TestRegistryAttach:
         report.write_text('{"decision":"SHIP"}', encoding="utf-8")
         # Must not raise even for a nonexistent entry (best-effort warn).
         _attach_to_registry("nonexistent-id", str(report))
+
+
+# ---------------------------------------------------------------------------
+# Review-fix regression guards (python-review CRITICAL + MEDIUM-2)
+# ---------------------------------------------------------------------------
+class TestReviewFixes:
+    def test_output_dir_outside_cwd_rejected(self, tmp_path, monkeypatch):
+        """--output-dir must be cwd-contained (arbitrary-write guard)."""
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        work = tmp_path / "work"
+        work.mkdir()
+        monkeypatch.chdir(work)
+        calib = work / "calib.jsonl"
+        calib.write_text('{"text":"hi there friend"}\n', encoding="utf-8")
+        model_dir = _write_tiny_model(work / "m", layers=6)
+        r = CliRunner().invoke(
+            app,
+            ["shrink", "--model", model_dir, "--drop-layers", "2",
+             "--calib", "calib.jsonl", "--device", "cpu",
+             "--output-dir", str(tmp_path / "escape")],
+        )
+        assert r.exit_code != 0
+
+    def test_heal_epochs_clamp_rejects_absurd_combo(self):
+        """Huge --heal-steps over a tiny heal set is refused, not silently run."""
+        import typer
+
+        from soup_cli.commands.shrink import _build_heal_config_yaml
+
+        with pytest.raises(typer.BadParameter):
+            _build_heal_config_yaml(
+                pruned_dir="./m", teacher="t", heal_data="./h.jsonl",
+                steps=1_000_000, out_dir="./o", heal_rows=1,
+            )
+
+    def test_perplexity_no_top_level_math_import_uses_isnan(self):
+        """The NaN filter uses math.isnan, not the x == x self-compare idiom."""
+        src = pathlib.Path("src/soup_cli/commands/shrink.py").read_text(encoding="utf-8")
+        assert "loss == loss" not in src
+        assert "math.isnan(loss)" in src
