@@ -12,6 +12,44 @@ reproducing 70+ versions of notes.
 
 ## [Unreleased]
 
+## [0.71.30] - 2026-07-05
+
+### Added
+- **PRM-guided GRPO** — use a trained Process Reward Model as the *per-step*
+  reward inside GRPO (the o1-era process-supervision signal). Set
+  `training.prm_reward: <PRM dir|id>` (a model produced by `soup train`
+  `task=prm`) and `training.prm_aggregate: min|prod|last`; the PRM splits each
+  generated completion into reasoning steps, scores every step with its reward
+  head, and folds the per-step scores into one scalar reward that GRPO
+  optimises. The PRM reward *replaces* `reward_fn` and rides the existing
+  reward-shaping + reward-hack-mitigation seam, so the v0.71.26 controller
+  observes it. Cross-validators gate `task='grpo'` + `backend='transformers'` +
+  `modality='text'`. Default aggregation is `min` (weakest-link); `prod`
+  assumes calibrated `[0,1]` step scores.
+- **Bundled rollout environments** — three pure-Python toy environments
+  (`soup_cli.envs.calculator` / `retrieval_qa` / `guess_number`) exposing a
+  `rollout(prompts)` entry point so the live `openenv` GRPO rollout path runs
+  out-of-the-box: `training.rollout_backend=openenv` +
+  `training.rollout_func=soup_cli.envs.calculator:rollout`. Three ready-made
+  recipes added (`grpo-env-calculator` / `grpo-env-retrieval-qa` /
+  `grpo-env-guess-number`); catalog 134 → 137.
+
+### Fixed
+- **`soup train task=prm` producer conformance** (surfaced by the v0.71.30 live
+  smoke): the PRM trainer now casts its reward head to the base-model dtype
+  (bf16 CUDA runs previously crashed on the first `compute_loss`), saves the
+  tokenizer alongside the model (so a PRM checkpoint is loadable standalone),
+  and returns the standard trainer-result shape (previously the CLI crashed with
+  a `KeyError: 'initial_loss'` right after saving).
+
+### Notes
+- Proof-of-mechanism only: validated on a tiny model (SmolLM2-135M) with a tiny
+  synthetic PRM and synthetic reward — not a production reward-model claim
+  (scale ask tracked in #286). The bundled environments are deterministic
+  single-shot *seeders*, not interactive multi-turn model-in-the-loop episodes
+  (the live `openenv` contract passes only prompts). Step split is a newline
+  heuristic; PRM completions are scored one forward pass each.
+
 ## [0.71.29] - 2026-07-05
 
 ### Added

@@ -15,6 +15,7 @@
 - [EBFT / GDPO Loss Variants](#ebft--gdpo-loss-variants)
 - [GRPO Objective Variants](#grpo-objective-variants)
 - [Process Reward Model (PRM)](#process-reward-model-prm)
+- [PRM-guided GRPO (process-supervised RL)](#prm-guided-grpo-process-supervised-rl)
 - [Weighted Multi-Objective Preference Loss](#weighted-multi-objective-preference-loss)
 - [MoE Model Support](#moe-model-support)
 - [Vision / Multimodal Fine-tuning](#vision--multimodal-fine-tuning)
@@ -343,7 +344,61 @@ training:
 
 The trainer loads `AutoModelForCausalLM`, attaches an `nn.Linear(hidden, 1)`
 reward head, and computes MSE between predicted scalars at step-boundary tokens
-and the per-step labels.
+and the per-step labels. The reward head is saved inside the model checkpoint
+(`reward_head.*` in `model.safetensors`) and the tokenizer is saved alongside it,
+so the resulting directory is loadable standalone.
+
+
+## PRM-guided GRPO (process-supervised RL)
+
+Use a trained PRM as the **per-step reward** inside GRPO — the o1-era
+process-supervision signal. Set `training.prm_reward` to a PRM directory (a
+`task=prm` checkpoint) or HF id; the PRM splits each generated completion into
+reasoning steps (newline heuristic), scores every step with its reward head, and
+folds the per-step scores into one scalar reward that GRPO optimises. It
+**replaces** `reward_fn` and rides the existing reward-shaping +
+reward-hack-mitigation seam, so the v0.71.26 controller still observes it (TRL
+logs it as `rewards/prm_reward`).
+
+```yaml
+task: grpo
+backend: transformers        # required (the PRM reward runs a transformers forward)
+modality: text               # required
+data:
+  format: chatml
+  train: ./grpo_prompts.jsonl
+training:
+  prm_reward: ./my-prm       # a `soup train task=prm` checkpoint dir (or HF id)
+  prm_aggregate: min         # weakest-link (default) | prod | last
+  num_generations: 4
+  grpo_beta: 0.04
+```
+
+`prm_aggregate='min'` (weakest-link, the standard PRM aggregation) is the safe
+default; `prod` assumes calibrated `[0,1]` step scores (Soup's PRM head is
+trained with unconstrained MSE, so `prod` can blow up on uncalibrated labels).
+
+**Bundled rollout environments.** Three deterministic pure-Python toy
+environments seed the openenv rollout path out-of-the-box — pair any of them
+with `rollout_backend=openenv`:
+
+```yaml
+training:
+  rollout_backend: openenv
+  rollout_func: soup_cli.envs.calculator:rollout   # or retrieval_qa / guess_number
+  reward_fn: verifiable
+  verifiable_domain: math
+```
+
+Ready-made recipes: `grpo-env-calculator`, `grpo-env-retrieval-qa`,
+`grpo-env-guess-number`. The environments are deterministic single-shot
+prompt/answer *seeders* (the live openenv contract passes only the seed prompts,
+not the model) — not interactive multi-turn episodes.
+
+**Scope:** proof-of-mechanism only — validated on SmolLM2-135M with a tiny
+synthetic PRM (the PRM reward scores good completions above bad and drives GRPO's
+advantages). Not a production reward-model claim; scale validation is help-wanted
+(#286).
 
 
 ## Weighted Multi-Objective Preference Loss

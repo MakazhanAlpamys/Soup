@@ -49,22 +49,27 @@ infrastructure instead of improving models. Soup fixes that.
 
 ## What's New
 
-**v0.71.29 — Make your model smaller, locally: `soup shrink`.** Depth-prune the least-important layers, then distill-heal — with a binary SHIP / DON'T-SHIP verdict. Based on "The Unreasonable Ineffectiveness of the Deeper Layers" (arXiv:2403.17887).
+**v0.71.30 — Process-supervised RL: PRM-guided GRPO.** Use a trained Process Reward Model to score each *reasoning step* of a GRPO completion — the o1-era training signal — plus bundled toy environments so the openenv rollout path runs out-of-the-box.
 
-- **Importance-ranked depth pruning.** One forward pass per calibration prompt scores each
-  contiguous layer block by the angular distance of the residual stream across it; the
-  least-important block is dropped (the first and last layer are always protected).
-- **Distill-heal, Minitron-style.** `--heal` distills the original model into the pruned
-  student (LoRA logit-KD) as an isolated `soup train` run, then fuses the adapter back so you
-  ship a single dense smaller model — not a base + adapter.
-- **A verdict, not a dashboard.** Every run ends in **SHIP** or **DON'T SHIP** on a
-  before/after perplexity ratio (`exit 0 = SHIP`, `2 = DON'T`, `1 = error`), so it drops into CI.
-- **Runs on a laptop GPU.** Live-validated on Windows + RTX 3050 with SmolLM2-135M: drop 25 %
-  (30 → 22 layers, 21 % params) and drop-4 + CPU heal (perplexity recovered to ×1.35).
+- **PRM as the GRPO reward.** Point `training.prm_reward` at a PRM you trained with
+  `soup train task=prm`; it splits each completion into steps, scores every step with the PRM's
+  reward head, and folds them (`min` / `prod` / `last`) into one reward that GRPO optimises —
+  replacing `reward_fn`. It rides the reward-shaping + reward-hack-mitigation seam, so the
+  v0.71.26 controller still watches it.
+- **Bundled rollout environments.** `soup_cli.envs.calculator` / `retrieval_qa` / `guess_number`
+  each expose a `rollout(prompts)` entry point; wire one with `rollout_backend=openenv` +
+  `rollout_func=soup_cli.envs.calculator:rollout` (three ready-made `grpo-env-*` recipes ship it).
+- **Producer fixes too.** `soup train task=prm` now saves its tokenizer and no longer crashes on
+  its own summary — a PRM checkpoint is loadable standalone.
+- **Proof-of-mechanism, honestly.** Live-validated on SmolLM2-135M (CPU): the PRM reward scores
+  good completions above bad and drives GRPO's advantages (`rewards/prm_reward` logged). Tiny
+  model + synthetic PRM — not a production reward-model claim (scale help wanted: #286).
 
-```bash
-soup shrink --model HuggingFaceTB/SmolLM2-135M-Instruct --drop-ratio 0.25 \
-    --calib calib.jsonl --heal heal.jsonl --heal-steps 200 -o shrunk --device cpu
+```yaml
+task: grpo
+training:
+  prm_reward: ./my-prm            # a `soup train task=prm` checkpoint dir
+  prm_aggregate: min              # weakest-link (default) | prod | last
 ```
 
 Full history: [CHANGELOG.md](CHANGELOG.md) &middot; [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
