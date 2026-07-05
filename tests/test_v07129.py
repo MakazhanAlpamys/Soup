@@ -116,3 +116,76 @@ class TestNoTopLevelTorch:
         assert not any(
             m.split(".")[0] in {"torch", "transformers", "peft"} for m in names
         ), names
+
+
+# ---------------------------------------------------------------------------
+# Task 2 — arch allowlist + prune_model_layers (torch, tiny CPU model)
+# ---------------------------------------------------------------------------
+def _tiny_llama(layers: int = 6):
+    from transformers import LlamaConfig, LlamaForCausalLM
+
+    cfg = LlamaConfig(
+        hidden_size=32,
+        intermediate_size=64,
+        num_hidden_layers=layers,
+        num_attention_heads=4,
+        num_key_value_heads=4,
+        vocab_size=128,
+        max_position_embeddings=64,
+    )
+    return LlamaForCausalLM(cfg)
+
+
+class TestPrune:
+    def test_arch_detected(self):
+        from soup_cli.utils.shrink import shrink_arch_of
+
+        assert shrink_arch_of(_tiny_llama()) == "llama"
+
+    def test_arch_rejects_unsupported(self):
+        from soup_cli.utils.shrink import shrink_arch_of
+
+        class _Cfg:
+            model_type = "gpt_neox"
+            architectures = ["GPTNeoXForCausalLM"]
+
+        class _M:
+            config = _Cfg()
+
+        with pytest.raises(ValueError, match="supports"):
+            shrink_arch_of(_M())
+
+    def test_prune_removes_block_and_patches_config(self):
+        from soup_cli.utils.shrink import prune_model_layers
+
+        m = _tiny_llama(6)
+        prune_model_layers(m, start=2, block_size=2)  # drop layers 2,3
+        assert len(m.model.layers) == 4
+        assert m.config.num_hidden_layers == 4
+
+    def test_prune_rejects_touching_last_layer(self):
+        from soup_cli.utils.shrink import prune_model_layers
+
+        m = _tiny_llama(6)
+        with pytest.raises(ValueError, match="protected"):
+            prune_model_layers(m, start=4, block_size=2)  # would include last (idx 5)
+
+    def test_prune_rejects_touching_first_layer(self):
+        from soup_cli.utils.shrink import prune_model_layers
+
+        m = _tiny_llama(6)
+        with pytest.raises(ValueError, match="protected"):
+            prune_model_layers(m, start=0, block_size=2)
+
+    def test_prune_rejects_block_too_large(self):
+        from soup_cli.utils.shrink import prune_model_layers
+
+        m = _tiny_llama(6)
+        with pytest.raises(ValueError, match="block_size"):
+            prune_model_layers(m, start=1, block_size=6)
+
+    def test_layer_list_arch_guarded(self):
+        from soup_cli.utils.shrink import layer_list
+
+        m = _tiny_llama(4)
+        assert len(layer_list(m)) == 4

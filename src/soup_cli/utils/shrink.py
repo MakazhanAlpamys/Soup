@@ -17,6 +17,7 @@ This module has two halves:
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import asdict, dataclass
 
 from rich.panel import Panel
@@ -131,3 +132,77 @@ def render_shrink_panel(verdict: ShrinkVerdict) -> Panel:
         f"Healed: {'yes' if verdict.healed else 'no'}"
     )
     return Panel(body, title="soup shrink", border_style=color)
+
+
+# ---------------------------------------------------------------------------
+# Arch allowlist + prune (torch-lazy)
+# ---------------------------------------------------------------------------
+_ARCH_PATTERNS = {
+    "llama": re.compile(r"llama", re.I),
+    "qwen": re.compile(r"qwen", re.I),
+    "smollm": re.compile(r"smol", re.I),
+}
+SUPPORTED_SHRINK_ARCHS = tuple(_ARCH_PATTERNS)
+
+
+def shrink_arch_of(model: object) -> str:
+    """Return the supported family name for ``model`` or raise ``ValueError``.
+
+    Detection is over ``config.model_type`` + ``config.architectures`` with
+    regex word-family matching (mirrors ``longlora.is_*_model``). Only the v1
+    families in :data:`SUPPORTED_SHRINK_ARCHS` (Llama / Qwen / SmolLM — all of
+    which expose ``model.model.layers`` + ``config.num_hidden_layers``) are
+    accepted; anything else is a friendly reject.
+    """
+    config = getattr(model, "config", None)
+    model_type = getattr(config, "model_type", "") or ""
+    architectures = list(getattr(config, "architectures", []) or [])
+    haystack = " ".join([str(model_type), *[str(a) for a in architectures]])
+    for family, pattern in _ARCH_PATTERNS.items():
+        if pattern.search(haystack):
+            return family
+    raise ValueError(
+        f"soup shrink v1 supports {SUPPORTED_SHRINK_ARCHS}; got "
+        f"model_type={model_type!r} (unsupported). Open an issue to add it."
+    )
+
+
+def layer_list(model: object):
+    """Return ``model.model.layers`` (the decoder ``ModuleList``), arch-guarded."""
+    shrink_arch_of(model)  # raises on unsupported arch
+    try:
+        return model.model.layers  # type: ignore[attr-defined]
+    except AttributeError as exc:
+        raise ValueError("model has no .model.layers ModuleList") from exc
+
+
+def prune_model_layers(model: object, start: int, block_size: int) -> None:
+    """Drop decoder layers ``[start, start + block_size)`` in place.
+
+    Slices ``model.model.layers`` and patches ``config.num_hidden_layers``. The
+    first and last decoder layers are protected (they carry the most residual
+    transformation, per the paper), so the dropped block must stay within
+    ``[1, num_layers - 1)``. Callers MUST reload the model from the saved dir
+    before measuring/generating — slicing leaves each surviving layer's
+    ``self_attn.layer_idx`` stale, which ``from_pretrained`` reconstructs
+    correctly.
+    """
+    import torch.nn as nn
+
+    layers = layer_list(model)
+    n_total = len(layers)
+    if not isinstance(start, int) or isinstance(start, bool):
+        raise ValueError("start must be an int")
+    if not isinstance(block_size, int) or isinstance(block_size, bool):
+        raise ValueError("block_size must be an int")
+    if block_size < 1 or block_size >= n_total:
+        raise ValueError(f"block_size must be in [1, {n_total - 1}], got {block_size}")
+    end = start + block_size  # exclusive
+    if start < 1 or end > n_total - 1:
+        raise ValueError(
+            f"dropped block [{start}, {end}) must stay within [1, {n_total - 1}) "
+            "(the first and last layer are protected)"
+        )
+    kept = [layers[i] for i in range(n_total) if not (start <= i < end)]
+    model.model.layers = nn.ModuleList(kept)  # type: ignore[attr-defined]
+    model.config.num_hidden_layers = len(kept)  # type: ignore[attr-defined]
