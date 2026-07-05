@@ -66,7 +66,7 @@ class OnlineDPOTrainerWrapper:
         )
 
     @staticmethod
-    def _to_prompt_rows(rows: list) -> list:
+    def _to_prompt_rows(rows: list[dict]) -> list[dict]:
         """Normalize Soup rows -> OnlineDPO prompt-only rows (chat ``prompt``).
 
         - ``{"prompt": "text"}`` -> a single user turn.

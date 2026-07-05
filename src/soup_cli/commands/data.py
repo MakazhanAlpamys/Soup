@@ -2845,6 +2845,8 @@ def best_of_n(
         console.print("[red]--output is required unless --plan-only is set.[/]")
         raise typer.Exit(2)
 
+    import contextlib
+
     import torch
 
     torch.manual_seed(seed)
@@ -2853,36 +2855,37 @@ def best_of_n(
     sft_count = 0
     pair_count = 0
     dev = device or None
-    pairs_fh = open(emit_pairs, "w", encoding="utf-8") if emit_pairs else None
-    try:
-        with open(output, "w", encoding="utf-8") as out_fh:
-            for prompt in prompt_list:
-                candidates = bon.sample_candidates(
-                    model,
-                    tokenizer,
-                    prompt,
-                    n=n,
-                    temperature=temperature,
-                    max_new_tokens=max_new_tokens,
-                    device=dev,
+    with contextlib.ExitStack() as stack:
+        out_fh = stack.enter_context(open(output, "w", encoding="utf-8"))
+        pairs_fh = (
+            stack.enter_context(open(emit_pairs, "w", encoding="utf-8"))
+            if emit_pairs
+            else None
+        )
+        for prompt in prompt_list:
+            candidates = bon.sample_candidates(
+                model,
+                tokenizer,
+                prompt,
+                n=n,
+                temperature=temperature,
+                max_new_tokens=max_new_tokens,
+                device=dev,
+            )
+            pick = bon.judge_pick_best(prompt, candidates, evaluator)
+            out_fh.write(
+                json.dumps(
+                    bon.build_sft_row(prompt, pick, judge_model=judge),
+                    ensure_ascii=False,
                 )
-                pick = bon.judge_pick_best(prompt, candidates, evaluator)
-                out_fh.write(
-                    json.dumps(
-                        bon.build_sft_row(prompt, pick, judge_model=judge),
-                        ensure_ascii=False,
-                    )
-                    + "\n"
-                )
-                sft_count += 1
-                if pairs_fh is not None:
-                    pair = bon.build_dpo_pair(prompt, pick, candidates)
-                    if pair is not None:
-                        pairs_fh.write(json.dumps(pair, ensure_ascii=False) + "\n")
-                        pair_count += 1
-    finally:
-        if pairs_fh is not None:
-            pairs_fh.close()
+                + "\n"
+            )
+            sft_count += 1
+            if pairs_fh is not None:
+                pair = bon.build_dpo_pair(prompt, pick, candidates)
+                if pair is not None:
+                    pairs_fh.write(json.dumps(pair, ensure_ascii=False) + "\n")
+                    pair_count += 1
 
     body = (
         f"SFT rows:   [bold]{sft_count}[/]\n"
@@ -2899,7 +2902,7 @@ def best_of_n(
 # v0.71.31 — Evol-Instruct (WizardLM depth/breadth) instruction evolution.
 @app.command(name="evolve")
 def evolve(
-    input: str = typer.Option(
+    input_path: str = typer.Option(
         ..., "--input", help="Seed JSONL ({prompt|instruction|messages} per row)"
     ),
     provider: str = typer.Option(..., "--provider", help="ollama | vllm"),
@@ -2938,7 +2941,7 @@ def evolve(
         raise typer.Exit(2)
 
     try:
-        seeds = _bon_load_prompts(input)
+        seeds = _bon_load_prompts(input_path)
         if output:
             enforce_under_cwd_and_no_symlink(output, "--output path")
         generate_fn = make_magpie_generate_fn(

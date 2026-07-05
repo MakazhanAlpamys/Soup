@@ -9,6 +9,7 @@ Completes the synthetic-data suite (Magpie / Forge / Persona / evolve).
 """
 
 from dataclasses import dataclass
+from typing import Callable, Iterable, Optional
 
 STRATEGIES = ("depth", "breadth")
 
@@ -68,7 +69,13 @@ def _is_valid(evolved: str, seed: str) -> bool:
     return True
 
 
-def evolve_instruction(seed, strategy, generate_fn, *, method=None) -> str:
+def evolve_instruction(
+    seed: str,
+    strategy: str,
+    generate_fn: Callable[[str], str],
+    *,
+    method: Optional[str] = None,
+) -> str:
     """Evolve a single seed instruction one step via ``generate_fn``."""
     if strategy not in STRATEGIES:
         raise ValueError(f"strategy must be one of {STRATEGIES}, got {strategy!r}")
@@ -76,7 +83,12 @@ def evolve_instruction(seed, strategy, generate_fn, *, method=None) -> str:
     return (generate_fn(_render(seed, strategy, the_method)) or "").strip()
 
 
-def run_evolve(seeds, strategy, rounds, generate_fn) -> list:
+def run_evolve(
+    seeds: Iterable[str],
+    strategy: str,
+    rounds: int,
+    generate_fn: Callable[[str], str],
+) -> "list[EvolvedRow]":
     """Evolve ``seeds`` for ``rounds`` rounds; return valid ``EvolvedRow``s.
 
     Each round evolves every currently-live instruction; invalid evolutions

@@ -8,10 +8,19 @@ import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional, Protocol
 from urllib.parse import urlparse
 
+if TYPE_CHECKING:
+    from trl import BasePairwiseJudge
+
 logger = logging.getLogger(__name__)
+
+
+class PairwiseJudge(Protocol):
+    """Anything that can compare two responses -> 0 (A) / 1 (B) / -1 (tie)."""
+
+    def compare_pair(self, prompt: str, resp_a: str, resp_b: str) -> int: ...
 
 DEFAULT_RUBRIC = {
     "criteria": [
@@ -381,7 +390,7 @@ def pairwise_compare(
     prompt: str,
     resp_a: str,
     resp_b: str,
-    evaluator: object,
+    evaluator: "PairwiseJudge",
     *,
     swap: bool = True,
 ) -> int:
@@ -411,7 +420,9 @@ def pairwise_compare(
     return first if first == second else -1
 
 
-def pairwise_winrate(pairs: list, evaluator: object) -> float:
+def pairwise_winrate(
+    pairs: "list[tuple[str, str, str]]", evaluator: "PairwiseJudge"
+) -> float:
     """Tuned win-rate in [0, 1] over ``(prompt, base_resp, tuned_resp)`` triples.
 
     Base is compared as A, tuned as B. A tuned win (verdict 1) scores 1.0, a tie
@@ -429,7 +440,7 @@ def pairwise_winrate(pairs: list, evaluator: object) -> float:
     return total / len(pairs)
 
 
-def _base_pairwise_judge_cls():
+def _base_pairwise_judge_cls() -> type:
     """Lazily import TRL's ``BasePairwiseJudge`` with a friendly error."""
     try:
         from trl import BasePairwiseJudge
@@ -440,7 +451,7 @@ def _base_pairwise_judge_cls():
     return BasePairwiseJudge
 
 
-def make_soup_pairwise_judge(evaluator: "JudgeEvaluator"):
+def make_soup_pairwise_judge(evaluator: "PairwiseJudge") -> "BasePairwiseJudge":
     """Build a TRL ``BasePairwiseJudge`` bound to a Soup ``JudgeEvaluator``.
 
     Factory (not a module-level subclass) so ``eval/judge.py`` stays importable
@@ -450,13 +461,18 @@ def make_soup_pairwise_judge(evaluator: "JudgeEvaluator"):
     """
     base_cls = _base_pairwise_judge_cls()
 
-    class _SoupPairwiseJudge(base_cls):
-        def __init__(self, ev):
+    class _SoupPairwiseJudge(base_cls):  # type: ignore[misc, valid-type]
+        def __init__(self, ev: "PairwiseJudge") -> None:
             self.evaluator = ev
 
-        def judge(self, prompts, completions, shuffle_order: bool = True):
-            out = []
-            for prompt, pair in zip(prompts, completions):
+        def judge(
+            self,
+            prompts: "list[str]",
+            completions: "list[list[str]]",
+            shuffle_order: bool = True,
+        ) -> "list[int]":
+            out: list[int] = []
+            for prompt, pair in zip(prompts, completions, strict=False):
                 if not isinstance(pair, (list, tuple)) or len(pair) != 2:
                     out.append(-1)
                     continue

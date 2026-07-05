@@ -11,7 +11,18 @@ emits a winner-vs-loser preference pair.
 """
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import TYPE_CHECKING, Optional, Protocol
+
+if TYPE_CHECKING:
+    from transformers import PreTrainedModel, PreTrainedTokenizerBase
+
+    from soup_cli.eval.judge import JudgeScore
+
+
+class PointwiseJudge(Protocol):
+    """Anything that can score one response (has a ``.weighted_score``)."""
+
+    def evaluate(self, prompt: str, response: str) -> "JudgeScore": ...
 
 
 @dataclass(frozen=True)
@@ -20,19 +31,19 @@ class BestOfNPick:
 
     winner_idx: int
     winner: str
-    scores: tuple  # tuple[float, ...]
+    scores: "tuple[float, ...]"
 
 
 def sample_candidates(
-    model,
-    tokenizer,
+    model: "PreTrainedModel",
+    tokenizer: "PreTrainedTokenizerBase",
     prompt: str,
     *,
     n: int,
     temperature: float,
     max_new_tokens: int,
     device: Optional[str] = None,
-) -> list:
+) -> "list[str]":
     """Sample ``n`` diverse continuations for ``prompt`` (do_sample)."""
     import torch
 
@@ -61,7 +72,9 @@ def sample_candidates(
     ]
 
 
-def judge_pick_best(prompt: str, candidates: list, evaluator) -> BestOfNPick:
+def judge_pick_best(
+    prompt: str, candidates: "list[str]", evaluator: "PointwiseJudge"
+) -> BestOfNPick:
     """Score each candidate pointwise; argmax wins (ties -> lowest index)."""
     if not candidates:
         raise ValueError("no candidates to judge")
@@ -88,7 +101,9 @@ def build_sft_row(prompt: str, pick: BestOfNPick, *, judge_model: str) -> dict:
     }
 
 
-def build_dpo_pair(prompt: str, pick: BestOfNPick, candidates: list) -> Optional[dict]:
+def build_dpo_pair(
+    prompt: str, pick: BestOfNPick, candidates: "list[str]"
+) -> Optional[dict]:
     """Winner vs lowest-scored candidate as a DPO pair; None if they coincide."""
     loser_idx = min(range(len(pick.scores)), key=lambda i: pick.scores[i])
     if loser_idx == pick.winner_idx:
