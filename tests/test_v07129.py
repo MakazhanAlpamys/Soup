@@ -121,7 +121,7 @@ class TestNoTopLevelTorch:
 # ---------------------------------------------------------------------------
 # Task 2 — arch allowlist + prune_model_layers (torch, tiny CPU model)
 # ---------------------------------------------------------------------------
-def _tiny_llama(layers: int = 6):
+def _tiny_llama(layers: int = 6, vocab_size: int = 128):
     from transformers import LlamaConfig, LlamaForCausalLM
 
     cfg = LlamaConfig(
@@ -130,8 +130,8 @@ def _tiny_llama(layers: int = 6):
         num_hidden_layers=layers,
         num_attention_heads=4,
         num_key_value_heads=4,
-        vocab_size=128,
-        max_position_embeddings=64,
+        vocab_size=vocab_size,
+        max_position_embeddings=512,
     )
     return LlamaForCausalLM(cfg)
 
@@ -355,3 +355,153 @@ class TestImportance:
             shrink.compute_layer_importance(
                 _Model(), _Tok(), ["hi"], block_size=3, device="cpu"
             )
+
+
+# ---------------------------------------------------------------------------
+# Task 4 — commands/shrink.py prune orchestration + CLI registration
+# ---------------------------------------------------------------------------
+def _write_tiny_model(dir_path, layers: int = 6):
+    """Save a tiny CPU Llama + tokenizer to ``dir_path`` for CLI smoke."""
+    from transformers import AutoTokenizer
+
+    tok = AutoTokenizer.from_pretrained("HuggingFaceTB/SmolLM2-135M-Instruct")
+    m = _tiny_llama(layers, vocab_size=len(tok))
+    m.save_pretrained(str(dir_path))
+    tok.save_pretrained(str(dir_path))
+    return str(dir_path)
+
+
+class TestShrinkCli:
+    def test_registered_and_help(self):
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        r = CliRunner().invoke(app, ["shrink", "--help"])
+        assert r.exit_code == 0, (r.output, repr(r.exception))
+        assert "drop-ratio" in r.output
+        assert "calib" in r.output
+
+    def test_rejects_both_drop_flags(self, tmp_path, monkeypatch):
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        monkeypatch.chdir(tmp_path)
+        calib = tmp_path / "c.jsonl"
+        calib.write_text('{"text":"hello world"}\n', encoding="utf-8")
+        r = CliRunner().invoke(
+            app,
+            ["shrink", "--model", "x", "--drop-ratio", "0.25", "--drop-layers",
+             "2", "--calib", "c.jsonl"],
+        )
+        assert r.exit_code != 0
+        assert "exactly one" in r.output.lower() or "exactly one" in str(r.exception).lower()
+
+    def test_rejects_calib_outside_cwd(self, tmp_path, monkeypatch):
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        work = tmp_path / "work"
+        work.mkdir()
+        outside = tmp_path / "outside.jsonl"
+        outside.write_text('{"text":"hi"}\n', encoding="utf-8")
+        monkeypatch.chdir(work)
+        r = CliRunner().invoke(
+            app,
+            ["shrink", "--model", "x", "--drop-layers", "2", "--calib", str(outside)],
+        )
+        assert r.exit_code != 0
+
+    def test_rejects_bad_tolerance(self, tmp_path, monkeypatch):
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        monkeypatch.chdir(tmp_path)
+        calib = tmp_path / "c.jsonl"
+        calib.write_text('{"text":"hi"}\n', encoding="utf-8")
+        r = CliRunner().invoke(
+            app,
+            ["shrink", "--model", "x", "--drop-layers", "2", "--calib", "c.jsonl",
+             "--tolerance", "9.0"],
+        )
+        assert r.exit_code != 0
+
+    def test_prune_happy_path_cpu(self, tmp_path, monkeypatch):
+        """End-to-end prune (no heal) on a tiny CPU Llama: pruned config has
+        fewer layers, report JSON written, exit 0 (SHIP) — tolerance wide."""
+        import json
+
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        monkeypatch.chdir(tmp_path)
+        model_dir = _write_tiny_model(tmp_path / "src_model", layers=6)
+        calib = tmp_path / "calib.jsonl"
+        calib.write_text(
+            "\n".join('{"text":"the quick brown fox jumps over the lazy dog"}'
+                      for _ in range(4)),
+            encoding="utf-8",
+        )
+        out_dir = tmp_path / "shrunk"
+        r = CliRunner().invoke(
+            app,
+            ["shrink", "--model", model_dir, "--drop-layers", "2",
+             "--calib", "calib.jsonl", "--device", "cpu",
+             "--output-dir", str(out_dir), "--tolerance", "5.0"],
+        )
+        assert r.exit_code == 0, (r.output, repr(r.exception))
+        cfg = json.loads((out_dir / "model" / "config.json").read_text(encoding="utf-8"))
+        assert cfg["num_hidden_layers"] == 4
+        report = json.loads((out_dir / "shrink_report.json").read_text(encoding="utf-8"))
+        assert report["layers_before"] == 6 and report["layers_after"] == 4
+        assert report["healed"] is False
+        assert "ppl_original" in report
+
+    def test_plan_only_writes_nothing(self, tmp_path, monkeypatch):
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        monkeypatch.chdir(tmp_path)
+        model_dir = _write_tiny_model(tmp_path / "src_model2", layers=6)
+        calib = tmp_path / "calib.jsonl"
+        calib.write_text('{"text":"the quick brown fox jumps"}\n', encoding="utf-8")
+        out_dir = tmp_path / "shrunk2"
+        r = CliRunner().invoke(
+            app,
+            ["shrink", "--model", model_dir, "--drop-layers", "2",
+             "--calib", "calib.jsonl", "--device", "cpu",
+             "--output-dir", str(out_dir), "--plan-only"],
+        )
+        assert r.exit_code == 0, (r.output, repr(r.exception))
+        assert not (out_dir / "model").exists()
+
+    def test_reject_unsupported_arch(self, tmp_path, monkeypatch):
+        """A GPT-NeoX-family tiny model is a friendly reject (arch allowlist)."""
+        from transformers import AutoTokenizer, GPTNeoXConfig, GPTNeoXForCausalLM
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        monkeypatch.chdir(tmp_path)
+        tok = AutoTokenizer.from_pretrained("HuggingFaceTB/SmolLM2-135M-Instruct")
+        cfg = GPTNeoXConfig(
+            hidden_size=32, intermediate_size=64, num_hidden_layers=6,
+            num_attention_heads=4, vocab_size=len(tok), max_position_embeddings=512,
+        )
+        mdir = tmp_path / "neox"
+        GPTNeoXForCausalLM(cfg).save_pretrained(str(mdir))
+        tok.save_pretrained(str(mdir))
+        calib = tmp_path / "calib.jsonl"
+        calib.write_text('{"text":"hi there"}\n', encoding="utf-8")
+        r = CliRunner().invoke(
+            app,
+            ["shrink", "--model", str(mdir), "--drop-layers", "2",
+             "--calib", "calib.jsonl", "--device", "cpu"],
+        )
+        assert r.exit_code != 0
+        assert "support" in r.output.lower() or "support" in str(r.exception).lower()

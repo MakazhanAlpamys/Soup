@@ -527,6 +527,17 @@ app.add_typer(
     help="Model Context Protocol server - drive Soup from any MCP client (v0.71.28).",
 )
 
+# v0.71.29 — `soup shrink` depth-prune + distill-heal.
+from soup_cli.commands import shrink as _shrink_cmd  # noqa: E402
+
+app.command(
+    name="shrink",
+    help=(
+        "Depth-prune a model (drop the least-important contiguous layer block "
+        "by residual angular distance) + optional distill-heal (v0.71.29)."
+    ),
+)(_shrink_cmd.shrink)
+
 
 def _rewrite_advise_argv(argv: list) -> list:
     """Inject `run` between `advise` and a non-subcommand first argument.
