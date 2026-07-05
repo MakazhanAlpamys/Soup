@@ -688,3 +688,56 @@ class TestReviewFixes:
         src = pathlib.Path("src/soup_cli/commands/shrink.py").read_text(encoding="utf-8")
         assert "loss == loss" not in src
         assert "math.isnan(loss)" in src
+
+    def test_fuse_adapter_produces_dense_model(self, tmp_path):
+        """_fuse_adapter merges a LoRA adapter back into the base in place, so
+        the shipped dir is a single dense model (no adapter_config.json)."""
+        from peft import LoraConfig, TaskType, get_peft_model
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+
+        from soup_cli.commands.shrink import _fuse_adapter
+
+        base_dir = tmp_path / "base"
+        tok = AutoTokenizer.from_pretrained("HuggingFaceTB/SmolLM2-135M-Instruct")
+        _tiny_llama(4, vocab_size=len(tok)).save_pretrained(str(base_dir))
+        tok.save_pretrained(str(base_dir))
+
+        adapter_dir = tmp_path / "adapter"
+        base = AutoModelForCausalLM.from_pretrained(str(base_dir))
+        peft_model = get_peft_model(
+            base,
+            LoraConfig(r=4, lora_alpha=8, target_modules=["q_proj", "v_proj"],
+                       task_type=TaskType.CAUSAL_LM),
+        )
+        peft_model.save_pretrained(str(adapter_dir))
+
+        _fuse_adapter(base_dir=str(base_dir), adapter_dir=str(adapter_dir))
+
+        # In-place overwrite yields a dense model — no adapter marker survives.
+        assert not (base_dir / "adapter_config.json").exists()
+        fused = AutoModelForCausalLM.from_pretrained(str(base_dir))
+        assert fused.config.num_hidden_layers == 4
+
+    def test_dont_ship_exit_code_2(self, tmp_path, monkeypatch):
+        """A genuine perplexity regression past tolerance exits 2 (DON'T SHIP)."""
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+        from soup_cli.commands import shrink as shrink_cmd
+
+        # Force a regression: original 10.0 -> pruned 20.0 (ratio 2.0 >> tol).
+        seq = iter([10.0, 20.0])
+        monkeypatch.setattr(shrink_cmd, "_perplexity", lambda *a, **k: next(seq))
+
+        monkeypatch.chdir(tmp_path)
+        model_dir = _write_tiny_model(tmp_path / "m_ds", layers=6)
+        calib = tmp_path / "calib.jsonl"
+        calib.write_text('{"text":"the quick brown fox"}\n', encoding="utf-8")
+        out_dir = tmp_path / "shrunk_ds"
+        r = CliRunner().invoke(
+            app,
+            ["shrink", "--model", model_dir, "--drop-layers", "2",
+             "--calib", "calib.jsonl", "--device", "cpu",
+             "--output-dir", str(out_dir), "--tolerance", "0.10"],
+        )
+        assert r.exit_code == 2, (r.output, repr(r.exception))

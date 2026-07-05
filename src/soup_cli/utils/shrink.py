@@ -149,16 +149,16 @@ _ARCH_PATTERNS = {
 SUPPORTED_SHRINK_ARCHS = tuple(_ARCH_PATTERNS)
 
 
-def shrink_arch_of(model: object) -> str:
-    """Return the supported family name for ``model`` or raise ``ValueError``.
+def arch_family_of_config(config: object) -> str:
+    """Return the supported family name for an HF ``config`` or raise ``ValueError``.
 
     Detection is over ``config.model_type`` + ``config.architectures`` with
     regex word-family matching (mirrors ``longlora.is_*_model``). Only the v1
     families in :data:`SUPPORTED_SHRINK_ARCHS` (Llama / Qwen / SmolLM — all of
     which expose ``model.model.layers`` + ``config.num_hidden_layers``) are
-    accepted; anything else is a friendly reject.
+    accepted; anything else is a friendly reject. Taking a bare config lets the
+    CLI fail fast before loading weights.
     """
-    config = getattr(model, "config", None)
     model_type = getattr(config, "model_type", "") or ""
     architectures = list(getattr(config, "architectures", []) or [])
     haystack = " ".join([str(model_type), *[str(a) for a in architectures]])
@@ -169,6 +169,11 @@ def shrink_arch_of(model: object) -> str:
         f"soup shrink v1 supports {SUPPORTED_SHRINK_ARCHS}; got "
         f"model_type={model_type!r} (unsupported). Open an issue to add it."
     )
+
+
+def shrink_arch_of(model: object) -> str:
+    """Return the supported family name for a loaded ``model`` or raise."""
+    return arch_family_of_config(getattr(model, "config", None))
 
 
 def layer_list(model: object) -> Any:

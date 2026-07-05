@@ -128,6 +128,20 @@ def _count_params(model: object) -> int:
     return sum(p.numel() for p in model.parameters())  # type: ignore[attr-defined]
 
 
+def _release_cuda() -> None:
+    """Return the CUDA caching-allocator pool to the driver (best-effort)."""
+    import gc
+
+    gc.collect()
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except ImportError:
+        pass
+
+
 def _perplexity(
     model: object, tokenizer: object, prompts: Sequence[str], device: str
 ) -> float:
@@ -166,21 +180,33 @@ def _perplexity(
     return math.exp(sum(losses) / len(losses))
 
 
-def _load_for_shrink(
-    model_id: str, device: Optional[str], trust_remote_code: bool
-) -> tuple[Any, Any, str]:
-    """Load a model + tokenizer for shrinking (trust_remote_code probe + warn)."""
-    from soup_cli.utils.live_eval import load_model_and_tokenizer
+def _resolve_trc(model_id: str, requested: bool) -> bool:
+    """Resolve trust_remote_code once (probe + warn), reused across loads."""
     from soup_cli.utils.trust_remote import (
         model_requires_trust_remote_code,
         resolve_trust_remote_code,
     )
 
     requires = model_requires_trust_remote_code(model_id) or False
-    trc = resolve_trust_remote_code(
-        model_id, requested=trust_remote_code, console=console, requires_remote_code=requires
+    return resolve_trust_remote_code(
+        model_id, requested=requested, console=console, requires_remote_code=requires
     )
-    return load_model_and_tokenizer(model_id, device=device, trust_remote_code=trc)
+
+
+def _load_for_shrink(
+    model_id: str, device: Optional[str], trc: bool
+) -> tuple[Any, Any, str]:
+    """Load a model + tokenizer for shrinking, preserving the checkpoint dtype.
+
+    ``dtype="auto"`` keeps the model at its native precision so the shipped
+    smaller model is not silently upcast to fp32 (which would shrink the layer
+    count while widening the bytes-per-parameter).
+    """
+    from soup_cli.utils.live_eval import load_model_and_tokenizer
+
+    return load_model_and_tokenizer(
+        model_id, device=device, trust_remote_code=trc, dtype="auto"
+    )
 
 
 def _render_importance_table(
@@ -290,6 +316,7 @@ def _shrink_impl(
     # Fail fast on the flag combination BEFORE loading a multi-GB model.
     if (drop_ratio is None) == (drop_layers is None):
         raise typer.BadParameter("set exactly one of --drop-ratio / --drop-layers")
+    heal_rows = 0
     if heal is not None:
         if not isinstance(heal_steps, int) or isinstance(heal_steps, bool):
             raise typer.BadParameter("--heal-steps must be an int")
@@ -298,12 +325,22 @@ def _shrink_impl(
         heal_rows = _count_jsonl_rows(heal)  # validates cwd containment + O_NOFOLLOW
     prompts = _load_calib(calib)
 
-    console.print(f"[dim]Loading {escape(model)} ...[/]")
-    mdl, tokenizer, dev = _load_for_shrink(model, device, trust_remote_code)
-    # Reject an unsupported architecture up front (before the importance scan).
-    shrink_arch_of(mdl)
-    n_layers = int(mdl.config.num_hidden_layers)
+    trc = _resolve_trc(model, trust_remote_code)
+    # Fail fast on arch + drop-count from the CONFIG before loading weights.
+    from transformers import AutoConfig
+
+    from soup_cli.utils.shrink import arch_family_of_config
+
+    pre_config = AutoConfig.from_pretrained(model, trust_remote_code=trc)
+    arch_family_of_config(pre_config)
+    n_layers = int(pre_config.num_hidden_layers)
     count = resolve_drop_count(n_layers, drop_ratio=drop_ratio, drop_layers=drop_layers)
+
+    console.print(f"[dim]Loading {escape(model)} ...[/]")
+    mdl, tokenizer, dev = _load_for_shrink(model, device, trc)
+    # Defence-in-depth: re-check the loaded model's arch (layer_list also
+    # re-guards independently before any slice).
+    shrink_arch_of(mdl)
 
     console.print(f"[dim]Scoring importance over {len(prompts)} calib prompts ...[/]")
     importances = compute_layer_importance(
@@ -335,7 +372,11 @@ def _shrink_impl(
     model_out.mkdir(parents=True, exist_ok=True)
     mdl.save_pretrained(str(model_out))
     tokenizer.save_pretrained(str(model_out))
+    # Free the parent's VRAM before spawning the heal subprocess (teacher +
+    # student both load in the child; del alone leaves the caching-allocator
+    # pool resident — mirrors utils/interference_live.py).
     del mdl
+    _release_cuda()
 
     healed = False
     if heal is not None:
@@ -350,10 +391,11 @@ def _shrink_impl(
             steps=heal_steps,
             out_dir=str(adapter_dir),
             heal_rows=heal_rows,
+            trc=trc,
         )
         healed = True
 
-    reloaded, tok2, dev2 = _load_for_shrink(str(model_out), device, trust_remote_code)
+    reloaded, tok2, dev2 = _load_for_shrink(str(model_out), device, trc)
     layers_after = int(reloaded.config.num_hidden_layers)
     params_after = _count_params(reloaded)
     ppl_final = _perplexity(reloaded, tok2, prompts, dev2)
@@ -486,6 +528,7 @@ def _run_heal(
     steps: int,
     out_dir: str,
     heal_rows: int,
+    trc: bool = False,
 ) -> None:
     """Distill the teacher into the pruned student, then fuse the adapter.
 
@@ -532,15 +575,41 @@ def _run_heal(
         tail = (result.stderr or b"").decode("utf-8", "replace")[-500:]
         raise RuntimeError(f"heal distill failed (rc={result.returncode}): {tail}")
 
-    _fuse_adapter(base_dir=pruned_dir, adapter_dir=out_dir)
+    _fuse_adapter(base_dir=pruned_dir, adapter_dir=out_dir, trc=trc)
 
 
-def _fuse_adapter(*, base_dir: str, adapter_dir: str) -> None:
-    """Merge a LoRA adapter into ``base_dir`` in place (dense healed model)."""
+def _fuse_adapter(*, base_dir: str, adapter_dir: str, trc: bool = False) -> None:
+    """Merge a LoRA adapter into ``base_dir`` (dense healed model), atomically.
+
+    The merged model is written to a sibling temp dir and only then swapped in
+    for ``base_dir``. An in-place ``save_pretrained`` over the just-loaded
+    ``base_dir`` fails on Windows (error 1224 — the source ``.safetensors`` is
+    still memory-mapped by the loaded weights), so the temp-dir swap is the
+    cross-platform-safe path.
+    """
+    import gc
+    import shutil
+    import tempfile
+
     from peft import PeftModel
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
-    base = AutoModelForCausalLM.from_pretrained(base_dir)
+    base = AutoModelForCausalLM.from_pretrained(
+        base_dir, trust_remote_code=trc, torch_dtype="auto"
+    )
     merged = PeftModel.from_pretrained(base, adapter_dir).merge_and_unload()
-    merged.save_pretrained(base_dir)
-    AutoTokenizer.from_pretrained(base_dir).save_pretrained(base_dir)
+    tokenizer = AutoTokenizer.from_pretrained(base_dir, trust_remote_code=trc)
+
+    parent = os.path.dirname(os.path.abspath(base_dir)) or "."
+    staging = tempfile.mkdtemp(prefix=".fuse_", dir=parent)
+    try:
+        merged.save_pretrained(staging)
+        tokenizer.save_pretrained(staging)
+    finally:
+        # Drop every reference so Windows releases the base_dir mmap before we
+        # remove it; otherwise rmtree(base_dir) also hits error 1224.
+        del merged, base, tokenizer
+        gc.collect()
+        _release_cuda()
+    shutil.rmtree(base_dir)
+    os.replace(staging, base_dir)

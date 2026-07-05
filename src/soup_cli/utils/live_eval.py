@@ -118,11 +118,15 @@ def load_model_and_tokenizer(
     adapter: Optional[str] = None,
     device: Optional[str] = None,
     trust_remote_code: bool = False,
+    dtype: Optional[str] = None,
 ):
     """Load an ``AutoModelForCausalLM`` + tokenizer, optionally with a LoRA adapter.
 
     Returns ``(model, tokenizer, device)``. ``model`` is ``.eval()``-ed and
-    moved to the resolved device. Heavy imports are local.
+    moved to the resolved device. Heavy imports are local. ``dtype`` (e.g.
+    ``"auto"``) is forwarded as ``torch_dtype`` so a caller can preserve the
+    checkpoint's native precision instead of upcasting to fp32 (``soup shrink``
+    needs this so the shipped smaller model is not silently re-widened).
     """
     if not isinstance(model_id, str) or not model_id.strip():
         raise ValueError("model_id must be a non-empty string")
@@ -133,7 +137,10 @@ def load_model_and_tokenizer(
     tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=trust_remote_code)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
-    model = AutoModelForCausalLM.from_pretrained(model_id, trust_remote_code=trust_remote_code)
+    model_kwargs = {"trust_remote_code": trust_remote_code}
+    if dtype is not None:
+        model_kwargs["torch_dtype"] = dtype
+    model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)
     if adapter is not None:
         if not isinstance(adapter, str) or not adapter.strip():
             raise ValueError("adapter must be a non-empty string or None")
