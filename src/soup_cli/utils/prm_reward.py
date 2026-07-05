@@ -180,10 +180,13 @@ class PRMScorer:
         if isinstance(prompt, (list, tuple)):
             parts: list[str] = []
             for msg in prompt:
+                # Truncate each message BEFORE joining so an adversarial giant
+                # content field cannot force a huge transient allocation
+                # (security-review LOW).
                 if isinstance(msg, dict):
-                    parts.append(str(msg.get("content", "")))
+                    parts.append(str(msg.get("content", ""))[:_MAX_PROMPT_CHARS])
                 else:
-                    parts.append(str(msg))
+                    parts.append(str(msg)[:_MAX_PROMPT_CHARS])
             return "\n".join(p for p in parts if p)[:_MAX_PROMPT_CHARS]
         return ""
 
@@ -305,30 +308,35 @@ def build_prm_reward_fn(
     import os
 
     from rich.console import Console
+    from rich.markup import escape
+
+    from soup_cli.utils.paths import is_under_cwd
 
     console = Console()
     prm_path = tcfg.prm_reward
     if prm_path is None:
         raise ValueError("build_prm_reward_fn called with prm_reward=None")
 
-    # Containment: only enforce for a path that exists on disk. A bare repo id
-    # (no local existence) is handled by from_pretrained's own network path.
+    # Containment: only enforce for a path that exists on disk (a bare repo id
+    # with no local existence is handled by from_pretrained). Reuse the shared
+    # is_under_cwd helper (realpath + commonpath, Windows-safe) so future
+    # hardening applies here too (security-review LOW).
     if os.path.exists(prm_path):
-        real = os.path.realpath(prm_path)
-        cwd = os.path.realpath(os.getcwd())
-        if os.path.commonpath([real, cwd]) != cwd:
+        if not is_under_cwd(prm_path):
             raise ValueError(
-                f"prm_reward path must stay under the current working directory; got {prm_path!r}"
+                "prm_reward path must stay under the current working "
+                f"directory; got {prm_path!r}"
             )
-        prm_path = real
+        prm_path = os.path.realpath(prm_path)
 
     resolved_trust = _resolve_trust(prm_path, trust_remote_code, console)
     # Announce that the PRM reward is active AND replaces the configured
     # reward_fn — otherwise a user who also set reward_fn/verifiable_domain has
-    # no signal those are being ignored (code-review MEDIUM/LOW).
+    # no signal those are being ignored (code-review MEDIUM/LOW). escape() the
+    # path so a crafted config value cannot inject Rich markup (security MEDIUM).
     console.print(
-        f"[dim]Using PRM reward: prm_reward={prm_path!r}, "
-        f"aggregate={tcfg.prm_aggregate!r} "
+        f"[dim]Using PRM reward: prm_reward={escape(repr(prm_path))}, "
+        f"aggregate={escape(repr(tcfg.prm_aggregate))} "
         "(this replaces reward_fn/verifiable_domain).[/]"
     )
     return PRMScorer(
