@@ -1077,7 +1077,7 @@ class TrainingConfig(BaseModel):
 
     @field_validator("prm_reward", mode="before")
     @classmethod
-    def _validate_prm_reward_field(cls, value):
+    def _validate_prm_reward_field(cls, value: Any) -> Optional[str]:
         """v0.71.30 — shape-only validation (containment enforced at load)."""
         if value is None:
             return None

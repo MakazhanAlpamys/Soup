@@ -17,27 +17,28 @@ from __future__ import annotations
 import random
 from typing import Any
 
+from soup_cli.envs._common import seeded_rows
+
 _SEED = 20731
-_DEFAULT_ROWS = 64
 
 
-def rollout(prompts: Any = None) -> list[dict]:
+def _make_row(rng: random.Random) -> dict[str, str]:
+    a = rng.randint(2, 9)
+    b = rng.randint(2, 9)
+    answer = a * b
+    prompt = (
+        f"I'm thinking of a number between 1 and 100. "
+        f"It equals {a} times {b}. What is the number? "
+        "Reply with just the number."
+    )
+    return {"prompt": prompt, "answer": str(answer)}
+
+
+def rollout(prompts: Any = None) -> list[dict[str, str]]:
     """Return a deterministic list of ``{"prompt", "answer"}`` deduction rows.
 
     Each puzzle states two factors whose product is the answer, plus a range,
     so the answer is uniquely deducible. ``prompts`` is accepted for the
     openenv contract but does not change the curriculum.
     """
-    rng = random.Random(_SEED)
-    rows: list[dict] = []
-    for _ in range(_DEFAULT_ROWS):
-        a = rng.randint(2, 9)
-        b = rng.randint(2, 9)
-        answer = a * b
-        prompt = (
-            f"I'm thinking of a number between 1 and 100. "
-            f"It equals {a} times {b}. What is the number? "
-            "Reply with just the number."
-        )
-        rows.append({"prompt": prompt, "answer": str(answer)})
-    return rows
+    return seeded_rows(_SEED, _make_row)

@@ -29,7 +29,13 @@ Security:
 from __future__ import annotations
 
 import math
-from typing import Any
+from typing import TYPE_CHECKING, Any, Union
+
+if TYPE_CHECKING:  # pragma: no cover — type-only, keeps the module torch-free
+    from soup_cli.config.schema import TrainingConfig
+
+# A GRPO completion is either a plain string or a chat message list.
+Completion = Union[str, list]
 
 # Aggregation modes for folding per-step scores into a scalar reward.
 AGGREGATE_MODES: tuple[str, ...] = ("min", "prod", "last")
@@ -37,6 +43,14 @@ AGGREGATE_MODES: tuple[str, ...] = ("min", "prod", "last")
 # Bounds — a pathological completion cannot blow up the forward pass.
 _MAX_STEPS = 64
 _MAX_STEP_CHARS = 2_000
+# Hard ceiling on the assembled (prompt + steps) token length fed to the PRM
+# forward pass. The PRM is a second, independently-loaded model whose context
+# window may differ from the policy model's, and the reward fires every GRPO
+# step, so cap defensively regardless of the policy-side max_length.
+_MAX_INPUT_TOKENS = 8_192
+# Cap the rendered prompt CONTEXT chars before tokenising (a huge prompt is
+# expensive to tokenise even before the token cap applies).
+_MAX_PROMPT_CHARS = 8_000
 
 
 def split_steps(text: Any) -> list[str]:
@@ -75,9 +89,7 @@ def aggregate_step_scores(scores: list[float], mode: Any) -> float:
     not poison the whole reward).
     """
     if isinstance(mode, bool) or not isinstance(mode, str) or mode not in AGGREGATE_MODES:
-        raise ValueError(
-            f"prm_aggregate must be one of {AGGREGATE_MODES}; got {mode!r}"
-        )
+        raise ValueError(f"prm_aggregate must be one of {AGGREGATE_MODES}; got {mode!r}")
     if not scores:
         return 0.0
     clean = [_finite(s) for s in scores]
@@ -108,9 +120,7 @@ class PRMScorer:
         trust_remote_code: bool = False,
     ) -> None:
         if isinstance(aggregate, bool) or aggregate not in AGGREGATE_MODES:
-            raise ValueError(
-                f"aggregate must be one of {AGGREGATE_MODES}; got {aggregate!r}"
-            )
+            raise ValueError(f"aggregate must be one of {AGGREGATE_MODES}; got {aggregate!r}")
         self.prm_path = prm_path
         self.aggregate = aggregate
         self.device = device
@@ -158,7 +168,7 @@ class PRMScorer:
     def _render_prompt(self, prompt: Any) -> str:
         """Best-effort render of a GRPO prompt (str or message list) to text."""
         if isinstance(prompt, str):
-            return prompt
+            return prompt[:_MAX_PROMPT_CHARS]
         if isinstance(prompt, (list, tuple)):
             parts: list[str] = []
             for msg in prompt:
@@ -166,18 +176,17 @@ class PRMScorer:
                     parts.append(str(msg.get("content", "")))
                 else:
                     parts.append(str(msg))
-            return "\n".join(p for p in parts if p)
+            return "\n".join(p for p in parts if p)[:_MAX_PROMPT_CHARS]
         return ""
 
-    def _completion_text(self, completion: Any) -> str:
+    def _completion_text(self, completion: Completion) -> str:
         if isinstance(completion, str):
             return completion
         if isinstance(completion, dict):
             return str(completion.get("content", ""))
         if isinstance(completion, (list, tuple)):
             parts = [
-                str(m.get("content", "")) if isinstance(m, dict) else str(m)
-                for m in completion
+                str(m.get("content", "")) if isinstance(m, dict) else str(m) for m in completion
             ]
             return "".join(parts)
         return str(completion)
@@ -190,9 +199,7 @@ class PRMScorer:
         tokenizer = self._tokenizer
         # Prompt context (trained distribution) then step boundaries.
         prefix_ids = (
-            tokenizer(prompt_text, add_special_tokens=False)["input_ids"]
-            if prompt_text
-            else []
+            tokenizer(prompt_text, add_special_tokens=False)["input_ids"] if prompt_text else []
         )
         input_ids = list(prefix_ids)
         step_positions: list[int] = []
@@ -204,6 +211,19 @@ class PRMScorer:
             step_positions.append(len(input_ids) - 1)
         if not step_positions:
             return 0.0
+        # Cap the assembled length to the PRM's own context window (bounded by a
+        # hard ceiling) — the PRM may have a smaller window than the policy
+        # model, and this reward fires every GRPO step. Keep the early steps.
+        config = getattr(self._model, "config", None)
+        max_pos = getattr(config, "max_position_embeddings", _MAX_INPUT_TOKENS)
+        cap = _MAX_INPUT_TOKENS
+        if isinstance(max_pos, int) and not isinstance(max_pos, bool):
+            cap = min(max_pos, _MAX_INPUT_TOKENS)
+        if len(input_ids) > cap:
+            input_ids = input_ids[:cap]
+            step_positions = [p for p in step_positions if p < cap]
+            if not step_positions:
+                return 0.0
         ids = torch.tensor([input_ids], dtype=torch.long, device=self.device)
         with torch.no_grad():
             outputs = self._model(input_ids=ids, output_hidden_states=True)
@@ -227,7 +247,7 @@ class PRMScorer:
         return rewards
 
 
-def load_reward_head_weights(prm_path: str) -> dict:
+def load_reward_head_weights(prm_path: str) -> dict[str, Any]:
     """Load ``reward_head.{weight,bias}`` tensors from a Soup-trained PRM dir.
 
     Scans every ``*.safetensors`` shard in ``prm_path`` via
@@ -253,7 +273,7 @@ def load_reward_head_weights(prm_path: str) -> dict:
         with safe_open(shard, framework="pt") as handle:
             for key in handle.keys():  # noqa: SIM118 — safe_open handle API
                 if key.startswith("reward_head."):
-                    collected[key[len("reward_head."):]] = handle.get_tensor(key)
+                    collected[key[len("reward_head.") :]] = handle.get_tensor(key)
     if "weight" not in collected or "bias" not in collected:
         raise ValueError(
             f"No reward_head weights found in {prm_path!r} — this is not a "
@@ -263,7 +283,7 @@ def load_reward_head_weights(prm_path: str) -> dict:
 
 
 def build_prm_reward_fn(
-    tcfg: Any,
+    tcfg: "TrainingConfig",
     device: str,
     trust_remote_code: bool,
 ) -> PRMScorer:
@@ -290,8 +310,7 @@ def build_prm_reward_fn(
         cwd = os.path.realpath(os.getcwd())
         if os.path.commonpath([real, cwd]) != cwd:
             raise ValueError(
-                "prm_reward path must stay under the current working "
-                f"directory; got {prm_path!r}"
+                f"prm_reward path must stay under the current working directory; got {prm_path!r}"
             )
         prm_path = real
 

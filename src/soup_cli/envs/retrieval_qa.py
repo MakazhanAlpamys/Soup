@@ -13,8 +13,9 @@ from __future__ import annotations
 import random
 from typing import Any
 
+from soup_cli.envs._common import seeded_rows
+
 _SEED = 20732
-_DEFAULT_ROWS = 64
 
 # (entity, attribute, value) fact templates — the answer is always ``value``,
 # which is embedded verbatim in the document so it is a retrievable span.
@@ -30,25 +31,24 @@ _FACTS = (
 )
 
 
-def rollout(prompts: Any = None) -> list[dict]:
+def _make_row(rng: random.Random) -> dict[str, str]:
+    # Pick 3 distinct facts as the document; ask about one of them.
+    facts = rng.sample(_FACTS, 3)
+    entity, attribute, value = facts[rng.randrange(len(facts))]
+    doc = " ".join(f"{e} {a} {v}." for (e, a, v) in facts)
+    prompt = (
+        f"Document: {doc}\n"
+        f"Question: What does {entity} {attribute.rstrip()}? "
+        "Reply with just the value."
+    )
+    return {"prompt": prompt, "answer": value}
+
+
+def rollout(prompts: Any = None) -> list[dict[str, str]]:
     """Return a deterministic list of ``{"prompt", "answer"}`` retrieval rows.
 
     Each row embeds a short document containing several facts and asks about
     one of them; the answer is a span present in the document. ``prompts`` is
     accepted for the openenv contract but does not change the curriculum.
     """
-    rng = random.Random(_SEED)
-    rows: list[dict] = []
-    for _ in range(_DEFAULT_ROWS):
-        # Pick 3 distinct facts as the document; ask about one of them.
-        facts = rng.sample(_FACTS, 3)
-        target = facts[rng.randrange(len(facts))]
-        entity, attribute, value = target
-        doc = " ".join(f"{e} {a} {v}." for (e, a, v) in facts)
-        prompt = (
-            f"Document: {doc}\n"
-            f"Question: What does {entity} {attribute.rstrip()}? "
-            "Reply with just the value."
-        )
-        rows.append({"prompt": prompt, "answer": value})
-    return rows
+    return seeded_rows(_SEED, _make_row)
