@@ -186,8 +186,16 @@ class TestPrmSchema:
     def test_rejects_oversize(self):
         from soup_cli.config.schema import TrainingConfig
 
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="512|chars"):
             TrainingConfig(prm_reward="x" * 5000)
+
+    def test_prm_aggregate_invalid_literal_rejected_by_schema(self):
+        from pydantic import ValidationError
+
+        from soup_cli.config.schema import TrainingConfig
+
+        with pytest.raises(ValidationError, match="prm_aggregate"):
+            TrainingConfig(prm_aggregate="mean")
 
 
 # ---------------------------------------------------------------------------
@@ -316,6 +324,94 @@ class TestPRMScorer:
         # prefix len 3 -> boundaries at 4 and 7 -> min 4.0
         assert out == pytest.approx([4.0])
 
+    def test_prompt_multi_message_joined(self):
+        # Two non-empty prompt messages join with "\n" -> 1 + 2 = 3 prefix tokens.
+        s = _make_fake_scorer("min")
+        out = s(
+            [[{"role": "assistant", "content": "a"}]],
+            prompts=[
+                [
+                    {"role": "system", "content": "one"},
+                    {"role": "user", "content": "two three"},
+                ]
+            ],
+        )
+        # prefix 3 tokens, single step "a" (1 tok) -> boundary at position 3
+        assert out == pytest.approx([3.0])
+
+    def test_string_prompt_context(self):
+        s = _make_fake_scorer("min")
+        out = s(["a"], prompts=["one two"])
+        # prefix 2 tokens + step "a" -> boundary at position 2
+        assert out == pytest.approx([2.0])
+
+    def test_bare_dict_completion(self):
+        # _completion_text dict branch (completion not wrapped in a list).
+        s = _make_fake_scorer("min")
+        out = s([{"role": "assistant", "content": "a b\nc d e"}])
+        assert out == pytest.approx([1.0])
+
+    def test_tuple_completion(self):
+        # _completion_text tuple branch -> "".join -> single step.
+        s = _make_fake_scorer("last")
+        out = s([("a", "b")])
+        assert len(out) == 1
+        assert isinstance(out[0], float)
+
+
+def _make_capped_scorer(max_pos, aggregate="min"):
+    """PRMScorer whose fake model advertises a tiny max_position_embeddings."""
+    from types import SimpleNamespace
+
+    import torch
+    from torch import nn
+
+    from soup_cli.utils.prm_reward import PRMScorer
+
+    hidden = 8
+
+    class _FakeTok:
+        pad_token = "<pad>"
+        eos_token = "<eos>"
+
+        def __call__(self, text, add_special_tokens=False):
+            n = max(1, len(text.split())) if text else 0
+            return {"input_ids": [1] * n}
+
+    head = nn.Linear(hidden, 1, bias=True)
+    with torch.no_grad():
+        head.weight.copy_(torch.ones(1, hidden) / hidden)
+        head.bias.zero_()
+
+    class _FakeModelCapped:
+        reward_head = head
+        config = SimpleNamespace(max_position_embeddings=max_pos)
+
+        def __call__(self, input_ids, output_hidden_states=False):
+            seq_len = input_ids.shape[1]
+            hs = torch.arange(seq_len).float().reshape(1, seq_len, 1).repeat(1, 1, hidden)
+            return SimpleNamespace(hidden_states=[hs])
+
+    scorer = PRMScorer("./prm", aggregate=aggregate, device="cpu")
+    scorer._model = _FakeModelCapped()
+    scorer._tokenizer = _FakeTok()
+    return scorer
+
+
+class TestPRMScorerInputCap:
+    def test_truncates_to_max_position_embeddings(self):
+        # steps "a b"(2 tok)->boundary 1, "c d"(2 tok)->boundary 3; cap=3 keeps
+        # only positions < 3, dropping boundary 3.
+        s = _make_capped_scorer(max_pos=3, aggregate="min")
+        out = s([[{"role": "assistant", "content": "a b\nc d"}]])
+        assert out == pytest.approx([1.0])
+
+    def test_cap_below_first_boundary_returns_zero(self):
+        # cap=0 -> no boundary survives -> 0.0
+        s = _make_capped_scorer(max_pos=0, aggregate="min")
+        out = s([[{"role": "assistant", "content": "a b\nc d"}]])
+        assert out == [0.0]
+
 
 class TestBuildPrmRewardFn:
     def test_returns_named_scorer(self, monkeypatch):
@@ -354,11 +450,69 @@ class TestBuildPrmRewardFn:
         with pytest.raises(ValueError, match="prm_reward=None"):
             mod.build_prm_reward_fn(_T(), device="cpu", trust_remote_code=False)
 
+    def test_local_existing_dir_under_cwd_accepted(self, tmp_path, monkeypatch):
+        import os
+
+        import soup_cli.utils.prm_reward as mod
+
+        monkeypatch.setattr(mod, "_resolve_trust", lambda *a, **k: False)
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "my_prm").mkdir()
+
+        class _T:
+            prm_reward = "./my_prm"
+            prm_aggregate = "min"
+
+        fn = mod.build_prm_reward_fn(_T(), device="cpu", trust_remote_code=False)
+        assert fn.prm_path == os.path.realpath(str(tmp_path / "my_prm"))
+
+
+class TestResolveTrust:
+    def test_delegates_with_requires_flag(self, monkeypatch):
+        import soup_cli.utils.trust_remote as trust_mod
+        from soup_cli.utils.prm_reward import _resolve_trust
+
+        captured = {}
+        monkeypatch.setattr(
+            trust_mod, "model_requires_trust_remote_code", lambda base: True
+        )
+
+        def _fake_resolve(base, requested, console, requires_remote_code):
+            captured["requires"] = requires_remote_code
+            captured["requested"] = requested
+            return True
+
+        monkeypatch.setattr(trust_mod, "resolve_trust_remote_code", _fake_resolve)
+        assert _resolve_trust("some/base", False, console=object()) is True
+        assert captured["requires"] is True
+        assert captured["requested"] is False
+
+
+class TestLoadRewardHeadMultiShard:
+    def test_collects_head_across_shards(self, tmp_path):
+        import torch
+        from safetensors.torch import save_file
+
+        from soup_cli.utils.prm_reward import load_reward_head_weights
+
+        # Head split across two shards (weight in one, bias in the other).
+        save_file(
+            {"model.a": torch.zeros(2, 2), "reward_head.weight": torch.ones(1, 8)},
+            str(tmp_path / "model-00001-of-00002.safetensors"),
+        )
+        save_file(
+            {"model.b": torch.zeros(2, 2), "reward_head.bias": torch.zeros(1)},
+            str(tmp_path / "model-00002-of-00002.safetensors"),
+        )
+        head = load_reward_head_weights(str(tmp_path))
+        assert set(head.keys()) == {"weight", "bias"}
+
 
 # ---------------------------------------------------------------------------
 # Task 5 — bundled rollout envs
 # ---------------------------------------------------------------------------
 _ENV_MODULES = ["calculator", "retrieval_qa", "guess_number"]
+_NEW_RECIPES = ["grpo-env-calculator", "grpo-env-retrieval-qa", "grpo-env-guess-number"]
 
 
 class TestEnvs:
@@ -404,18 +558,78 @@ class TestEnvs:
             expected = {"+": a + b, "-": a - b, "*": a * b}[op]
             assert row["answer"] == str(expected)
 
-    def test_guess_number_answer_is_int(self):
+    def test_guess_number_answer_matches_product(self):
+        import re
+
         from soup_cli.envs.guess_number import rollout
 
         for row in rollout([]):
-            assert row["answer"].lstrip("-").isdigit()
+            m = re.search(r"equals (\d+) times (\d+)", row["prompt"])
+            assert m is not None, row["prompt"]
+            a, b = int(m.group(1)), int(m.group(2))
+            assert row["answer"] == str(a * b)
 
-    def test_retrieval_qa_answer_in_prompt(self):
+    def test_retrieval_qa_answer_matches_asked_fact(self):
+        import re
+
         from soup_cli.envs.retrieval_qa import rollout
 
         for row in rollout([]):
-            # The answer span must appear in the document/prompt.
-            assert row["answer"] in row["prompt"]
+            # Tie the answer to the SPECIFIC asked fact, not just "any embedded
+            # value" — a wrong-index pairing bug must fail here.
+            m = re.search(r"completes '(.+?) ___'", row["prompt"])
+            assert m is not None, row["prompt"]
+            entity_attr = m.group(1)
+            assert f"{entity_attr} {row['answer']}." in row["prompt"], row
+
+    @pytest.mark.parametrize("modname", _ENV_MODULES)
+    def test_row_count_is_default(self, modname):
+        import importlib
+
+        from soup_cli.envs._common import DEFAULT_ROWS
+
+        mod = importlib.import_module(f"soup_cli.envs.{modname}")
+        assert len(mod.rollout([])) == DEFAULT_ROWS
+
+    def test_envs_produce_distinct_output(self):
+        # Guard against an accidental seed / module copy-paste across envs.
+        from soup_cli.envs import calculator, guess_number, retrieval_qa
+
+        outs = [
+            tuple(r["prompt"] for r in calculator.rollout([])),
+            tuple(r["prompt"] for r in guess_number.rollout([])),
+            tuple(r["prompt"] for r in retrieval_qa.rollout([])),
+        ]
+        assert len(set(outs)) == 3
+
+
+class TestRecipeRolloutFunc:
+    _EXPECTED_REWARD = {
+        "grpo-env-calculator": ("verifiable", "math"),
+        "grpo-env-retrieval-qa": ("accuracy", None),
+        "grpo-env-guess-number": ("verifiable", "math"),
+    }
+
+    @pytest.mark.parametrize("name", _NEW_RECIPES)
+    def test_rollout_func_resolves_and_runs(self, name):
+        from soup_cli.config.loader import load_config_from_string
+        from soup_cli.recipes.catalog import get_recipe
+        from soup_cli.utils.agent_rollout import resolve_rollout_func
+
+        cfg = load_config_from_string(get_recipe(name).yaml_str)
+        fn = resolve_rollout_func(cfg.training.rollout_func)
+        rows = fn([])
+        assert rows, "resolved rollout_func must produce rows"
+
+    @pytest.mark.parametrize("name", _NEW_RECIPES)
+    def test_recipe_reward_matches_env(self, name):
+        from soup_cli.config.loader import load_config_from_string
+        from soup_cli.recipes.catalog import get_recipe
+
+        cfg = load_config_from_string(get_recipe(name).yaml_str)
+        expected_fn, expected_domain = self._EXPECTED_REWARD[name]
+        assert cfg.training.reward_fn == expected_fn
+        assert cfg.training.verifiable_domain == expected_domain
 
 
 # ---------------------------------------------------------------------------
@@ -461,13 +675,32 @@ class TestGrpoPrmWiring:
         assert out == "REWARD_FN"
         assert captured["spec"] == "accuracy"
 
+    def test_verifiable_domain_threaded(self, monkeypatch):
+        import soup_cli.trainer.grpo as grpo
+
+        captured = {}
+
+        def _fake_load(spec, verifiable_domain=None):
+            captured["spec"] = spec
+            captured["domain"] = verifiable_domain
+            return "REWARD_FN"
+
+        monkeypatch.setattr("soup_cli.trainer.rewards.load_reward_fn", _fake_load)
+
+        class _T:
+            prm_reward = None
+            prm_aggregate = "min"
+            reward_fn = "verifiable"
+            verifiable_domain = "math"
+
+        grpo._select_reward_fn(_T(), "cpu", False)
+        assert captured["spec"] == "verifiable"
+        assert captured["domain"] == "math"
+
 
 # ---------------------------------------------------------------------------
 # Task 6 — recipes
 # ---------------------------------------------------------------------------
-_NEW_RECIPES = ["grpo-env-calculator", "grpo-env-retrieval-qa", "grpo-env-guess-number"]
-
-
 class TestRecipes:
     @pytest.mark.parametrize("name", _NEW_RECIPES)
     def test_recipe_resolves(self, name):
