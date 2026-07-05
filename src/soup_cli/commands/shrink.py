@@ -407,6 +407,7 @@ def _shrink_impl(
             out_dir=str(adapter_dir),
             heal_rows=heal_rows,
             trc=trc,
+            device=dev,
         )
         healed = True
 
@@ -465,7 +466,10 @@ def _attach_to_registry(registry_id: str, report_path: str) -> None:
 # ---------------------------------------------------------------------------
 # Distill-heal (subprocess) + fuse
 # ---------------------------------------------------------------------------
-_HEAL_BATCH_SIZE = 4
+# batch 1 + gradient checkpointing + a bounded max_length keep the heal within a
+# consumer-GPU / CPU budget (teacher + student are both resident during distill).
+_HEAL_BATCH_SIZE = 1
+_HEAL_MAX_LENGTH = 1024
 _HEAL_TIMEOUT_SECONDS = 24 * 60 * 60
 
 
@@ -518,10 +522,12 @@ def _build_heal_config_yaml(
         "data:\n"
         "  train: {data}\n"
         "  format: auto\n"
+        "  max_length: {max_length}\n"
         "training:\n"
         "  teacher_model: {teacher}\n"
         "  epochs: {epochs}\n"
         "  batch_size: {batch}\n"
+        "  gradient_checkpointing: true\n"
         "  lora:\n"
         "    r: 16\n"
         "    alpha: 32\n"
@@ -532,6 +538,7 @@ def _build_heal_config_yaml(
         teacher=json.dumps(teacher),
         epochs=epochs,
         batch=_HEAL_BATCH_SIZE,
+        max_length=_HEAL_MAX_LENGTH,
     )
 
 
@@ -544,13 +551,16 @@ def _run_heal(
     out_dir: str,
     heal_rows: int,
     trc: bool = False,
+    device: Optional[str] = None,
 ) -> None:
     """Distill the teacher into the pruned student, then fuse the adapter.
 
     Writes a validated distill config, runs ``soup train`` as a subprocess
     (argv list, no shell — mirrors ``ra_dit_run._run_train_subprocess``), and
     merges the resulting LoRA adapter back into ``pruned_dir`` so the shipped
-    artifact stays a single dense model.
+    artifact stays a single dense model. When ``device == "cpu"`` the subprocess
+    runs with ``CUDA_VISIBLE_DEVICES=""`` so the heal honours the requested
+    device (and sidesteps the GPU hardware-fit gate on a small card).
     """
     import subprocess
     import sys
@@ -569,6 +579,12 @@ def _run_heal(
     config_path = Path(pruned_dir).parent / "heal_config.yaml"
     atomic_write_text(yaml_text, str(config_path), field="heal config")
 
+    env = dict(os.environ)
+    if device is not None and device.lower() == "cpu":
+        # -1 is the canonical "hide every GPU" value; an empty string trips an
+        # "Invalid device id" assertion in some torch/accelerate paths.
+        env["CUDA_VISIBLE_DEVICES"] = "-1"
+
     argv = [
         sys.executable,
         "-m",
@@ -580,17 +596,21 @@ def _run_heal(
     ]
     try:
         result = subprocess.run(  # noqa: S603 — argv list, no shell.
-            argv, capture_output=True, check=False, timeout=_HEAL_TIMEOUT_SECONDS
+            argv, capture_output=True, check=False, timeout=_HEAL_TIMEOUT_SECONDS, env=env
         )
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError(
             f"heal distill exceeded {_HEAL_TIMEOUT_SECONDS}s timeout"
         ) from exc
     if result.returncode != 0:
-        # Strip control bytes: the child's stderr is attacker-influenceable and
+        # Strip control bytes: the child's output is attacker-influenceable and
         # reaches the terminal via the friendly error handler (escape() does not
-        # neutralise raw ESC/OSC sequences).
-        tail = _for_terminal((result.stderr or b"").decode("utf-8", "replace")[-500:])
+        # neutralise raw ESC/OSC sequences). Include stdout since Rich panels
+        # (e.g. the hardware-fit gate) print there, not to stderr.
+        combined = (result.stderr or b"").decode("utf-8", "replace") + (
+            result.stdout or b""
+        ).decode("utf-8", "replace")
+        tail = _for_terminal(combined[-800:])
         raise RuntimeError(f"heal distill failed (rc={result.returncode}): {tail}")
 
     _fuse_adapter(base_dir=pruned_dir, adapter_dir=out_dir, trc=trc)

@@ -861,9 +861,10 @@ class TestReviewFixes:
 # TDD-review gap closure (tdd agent findings #3-#17)
 # ---------------------------------------------------------------------------
 class _StubProc:
-    def __init__(self, returncode=0, stderr=b""):
+    def __init__(self, returncode=0, stderr=b"", stdout=b""):
         self.returncode = returncode
         self.stderr = stderr
+        self.stdout = stdout
 
 
 class TestRunHeal:
@@ -922,6 +923,37 @@ class TestRunHeal:
         with pytest.raises(RuntimeError, match="timeout"):
             sc._run_heal(pruned_dir="./model", teacher="t", heal_data="./h.jsonl",
                          steps=5, out_dir="./adapter", heal_rows=10)
+
+    def test_device_cpu_hides_gpu_in_subprocess_env(self, tmp_path, monkeypatch):
+        """device='cpu' must run the heal with CUDA_VISIBLE_DEVICES=-1 so the
+        distill honours CPU (and dodges the GPU hardware-fit gate)."""
+        import soup_cli.commands.shrink as sc
+
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "model").mkdir()
+        seen = {}
+
+        def _capture(*a, **k):
+            seen["env"] = k.get("env")
+            return _StubProc(returncode=0)
+
+        monkeypatch.setattr("subprocess.run", _capture)
+        monkeypatch.setattr(sc, "_fuse_adapter", lambda **kw: None)
+        sc._run_heal(pruned_dir="./model", teacher="t", heal_data="./h.jsonl",
+                     steps=5, out_dir="./adapter", heal_rows=10, device="cpu")
+        assert seen["env"]["CUDA_VISIBLE_DEVICES"] == "-1"
+
+    def test_config_has_gradient_checkpointing_and_batch1(self):
+        from soup_cli.commands.shrink import _build_heal_config_yaml
+        from soup_cli.config.loader import load_config_from_string
+
+        cfg = load_config_from_string(
+            _build_heal_config_yaml(pruned_dir="./m", teacher="t",
+                                    heal_data="./h.jsonl", steps=8, out_dir="./o",
+                                    heal_rows=8)
+        )
+        assert cfg.training.batch_size == 1
+        assert cfg.training.gradient_checkpointing is True
 
 
 class TestDropCountEdges:
