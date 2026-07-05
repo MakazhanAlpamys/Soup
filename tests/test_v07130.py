@@ -87,6 +87,103 @@ class TestAggregate:
         assert set(AGGREGATE_MODES) == {"min", "prod", "last"}
 
 
+# ---------------------------------------------------------------------------
+# Task 2 — schema fields + cross-validators
+# ---------------------------------------------------------------------------
+def _prm_yaml(
+    *,
+    task: str = "grpo",
+    backend: str = "transformers",
+    modality: str = "text",
+    prm_reward: str | None = "./prm",
+    prm_aggregate: str | None = None,
+) -> str:
+    lines = [
+        "base: HuggingFaceTB/SmolLM2-135M",
+        f"task: {task}",
+        f"backend: {backend}",
+        f"modality: {modality}",
+        "data:",
+        "  train: ./data/train.jsonl",
+        "  format: chatml",
+        "training:",
+    ]
+    if prm_reward is not None:
+        lines.append(f"  prm_reward: {prm_reward}")
+    if prm_aggregate is not None:
+        lines.append(f"  prm_aggregate: {prm_aggregate}")
+    return "\n".join(lines) + "\n"
+
+
+class TestPrmSchema:
+    def test_default_fields(self):
+        from soup_cli.config.schema import TrainingConfig
+
+        tc = TrainingConfig()
+        assert tc.prm_reward is None
+        assert tc.prm_aggregate == "min"
+
+    def test_happy_grpo_parses(self):
+        from soup_cli.config.loader import load_config_from_string
+
+        cfg = load_config_from_string(_prm_yaml(prm_aggregate="prod"))
+        assert cfg.training.prm_reward == "./prm"
+        assert cfg.training.prm_aggregate == "prod"
+
+    def test_rejects_non_grpo_task(self):
+        from soup_cli.config.loader import load_config_from_string
+
+        with pytest.raises(ValueError, match="task='grpo'"):
+            load_config_from_string(_prm_yaml(task="sft"))
+
+    def test_rejects_mlx_backend(self):
+        from soup_cli.config.loader import load_config_from_string
+
+        with pytest.raises(ValueError, match="transformers"):
+            load_config_from_string(_prm_yaml(backend="mlx"))
+
+    def test_rejects_unsloth_backend(self):
+        from soup_cli.config.loader import load_config_from_string
+
+        with pytest.raises(ValueError, match="transformers"):
+            load_config_from_string(_prm_yaml(backend="unsloth"))
+
+    def test_rejects_non_text_modality(self):
+        from soup_cli.config.loader import load_config_from_string
+
+        with pytest.raises(ValueError, match="modality='text'"):
+            load_config_from_string(_prm_yaml(modality="vision"))
+
+    def test_aggregate_without_prm_reward_is_footgun(self):
+        from soup_cli.config.loader import load_config_from_string
+
+        with pytest.raises(ValueError, match="prm_reward"):
+            load_config_from_string(
+                _prm_yaml(prm_reward=None, prm_aggregate="prod")
+            )
+
+    def test_default_aggregate_without_prm_reward_ok(self):
+        from soup_cli.config.loader import load_config_from_string
+
+        # prm_aggregate at its default is fine even without prm_reward.
+        cfg = load_config_from_string(
+            _prm_yaml(task="sft", prm_reward=None, prm_aggregate="min")
+        )
+        assert cfg.training.prm_reward is None
+
+    def test_rejects_null_byte(self):
+        from soup_cli.config.schema import TrainingConfig
+
+        with pytest.raises(ValueError, match="null"):
+            TrainingConfig(prm_reward="./prm\x00evil")
+
+    def test_rejects_oversize(self):
+        from soup_cli.config.schema import TrainingConfig
+
+        with pytest.raises(ValueError):
+            TrainingConfig(prm_reward="x" * 5000)
+
+
 class TestNoTopLevelTorch:
     def test_prm_reward_has_no_top_level_torch(self):
         import soup_cli.utils.prm_reward as mod

@@ -1055,6 +1055,42 @@ class TrainingConfig(BaseModel):
             "Required when reward_fn='verifiable'."
         ),
     )
+    # v0.71.30 — PRM-guided GRPO: use a trained Soup PRM as the per-step
+    # reward inside GRPO. ``prm_reward`` names the PRM directory (or HF id);
+    # ``prm_aggregate`` folds the per-step scalars into one reward.
+    prm_reward: Optional[str] = Field(
+        default=None,
+        description=(
+            "Path (or HF id) to a Soup-trained PRM (task='prm') used as the "
+            "GRPO per-step reward (v0.71.30). When set, the PRM replaces "
+            "reward_fn. Requires task='grpo', backend='transformers', "
+            "modality='text'."
+        ),
+    )
+    prm_aggregate: Literal["min", "prod", "last"] = Field(
+        default="min",
+        description=(
+            "How PRM per-step scores fold into one reward: min (weakest-link, "
+            "default) | prod | last. Only meaningful when prm_reward is set."
+        ),
+    )
+
+    @field_validator("prm_reward", mode="before")
+    @classmethod
+    def _validate_prm_reward_field(cls, value):
+        """v0.71.30 — shape-only validation (containment enforced at load)."""
+        if value is None:
+            return None
+        if isinstance(value, bool) or not isinstance(value, str):
+            raise ValueError(
+                f"prm_reward must be a string path/id, got {type(value).__name__}"
+            )
+        if "\x00" in value:
+            raise ValueError("prm_reward must not contain null bytes")
+        if len(value) > 512:
+            raise ValueError("prm_reward must be <= 512 chars")
+        return value
+
     # v0.50.0 Part A — GRPO objective variants (unsloth + axolotl parity).
     # Schema-only in v0.50.0; live loss kernels wired in v0.50.1.
     grpo_variant: Optional[Literal[
@@ -4210,6 +4246,38 @@ class SoupConfig(BaseModel):
             raise ValueError(
                 "rollout_backend='openenv' requires training.rollout_func "
                 "('module.path:function_name')"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_prm_reward(self) -> "SoupConfig":
+        """v0.71.30 — PRM-guided GRPO gate.
+
+        ``prm_reward`` runs a PRM (base CausalLM + reward head) forward as the
+        GRPO reward, so it requires ``task='grpo'`` on ``backend='transformers'``
+        with ``modality='text'``. A non-default ``prm_aggregate`` while
+        ``prm_reward`` is unset silently no-ops → reject as a footgun.
+        """
+        if self.training.prm_reward is None:
+            if self.training.prm_aggregate != "min":
+                raise ValueError(
+                    "prm_aggregate is only meaningful with prm_reward set; "
+                    f"got prm_aggregate={self.training.prm_aggregate!r} and "
+                    "prm_reward=None"
+                )
+            return self
+        if self.task != "grpo":
+            raise ValueError(
+                f"prm_reward requires task='grpo'; got task={self.task!r}"
+            )
+        if self.backend != "transformers":
+            raise ValueError(
+                "prm_reward requires backend='transformers' (the PRM reward "
+                f"runs a transformers forward); got backend={self.backend!r}"
+            )
+        if self.modality != "text":
+            raise ValueError(
+                f"prm_reward requires modality='text'; got modality={self.modality!r}"
             )
         return self
 
