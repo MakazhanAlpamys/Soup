@@ -189,3 +189,169 @@ class TestPrune:
 
         m = _tiny_llama(4)
         assert len(layer_list(m)) == 4
+
+
+# ---------------------------------------------------------------------------
+# Task 3 — importance scan (off-by-one pinned) + selection + drop count
+# ---------------------------------------------------------------------------
+class TestImportance:
+    def test_off_by_one_boundary_indices(self):
+        """Pin: block [L, L+n) uses hidden_states[L] and hidden_states[L+n];
+        hidden_states has num_layers+1 entries. A fake model returns per-layer
+        constant hidden states so the boundary maths is asserted, not just that
+        the pass runs."""
+        import torch
+
+        from soup_cli.utils import shrink
+
+        num_layers = 4
+        # len must be num_layers+1; index 0 = embeddings, index k = layer k-1 out.
+        hs = tuple(torch.ones(1, 3, 8) * (k + 1) for k in range(num_layers + 1))
+
+        class _Cfg:
+            model_type = "llama"
+            architectures = ["LlamaForCausalLM"]
+            num_hidden_layers = num_layers
+
+        class _Out:
+            hidden_states = hs
+
+        class _Model:
+            config = _Cfg()
+
+            def eval(self):
+                return self
+
+            def __call__(self, **kw):
+                assert kw.get("output_hidden_states") is True
+                return _Out()
+
+        class _Tok:
+            def __call__(self, text, **kw):
+                return {
+                    "input_ids": torch.ones(1, 3, dtype=torch.long),
+                    "attention_mask": torch.ones(1, 3, dtype=torch.long),
+                }
+
+        imps = shrink.compute_layer_importance(
+            _Model(), _Tok(), ["hi"], block_size=1, device="cpu"
+        )
+        # valid starts for n=1, num_layers=4: L in [1, 4-1-1=2] -> {1, 2}
+        starts = sorted(i.start for i in imps)
+        assert starts == [1, 2]
+        # constant (colinear) vectors -> cos == 1 -> angular distance 0.
+        assert all(abs(i.angular_distance) < 1e-6 for i in imps)
+        assert all(i.block_size == 1 for i in imps)
+
+    def test_hidden_states_length_mismatch_raises(self):
+        import torch
+
+        from soup_cli.utils import shrink
+
+        class _Cfg:
+            model_type = "llama"
+            architectures = ["LlamaForCausalLM"]
+            num_hidden_layers = 4
+
+        class _Out:
+            hidden_states = tuple(torch.ones(1, 3, 8) for _ in range(3))  # wrong len
+
+        class _Model:
+            config = _Cfg()
+
+            def eval(self):
+                return self
+
+            def __call__(self, **kw):
+                return _Out()
+
+        class _Tok:
+            def __call__(self, text, **kw):
+                return {
+                    "input_ids": torch.ones(1, 3, dtype=torch.long),
+                    "attention_mask": torch.ones(1, 3, dtype=torch.long),
+                }
+
+        with pytest.raises(ValueError, match="hidden states"):
+            shrink.compute_layer_importance(
+                _Model(), _Tok(), ["hi"], block_size=1, device="cpu"
+            )
+
+    def test_select_drop_block_min(self):
+        from soup_cli.utils.shrink import LayerImportance, select_drop_block
+
+        imps = [
+            LayerImportance(1, 2, 0.9),
+            LayerImportance(3, 2, 0.1),
+            LayerImportance(5, 2, 0.5),
+        ]
+        chosen = select_drop_block(imps)
+        assert chosen.start == 3 and chosen.angular_distance == 0.1
+
+    def test_select_drop_block_empty_raises(self):
+        from soup_cli.utils.shrink import select_drop_block
+
+        with pytest.raises(ValueError):
+            select_drop_block([])
+
+    def test_resolve_drop_count_ratio(self):
+        from soup_cli.utils.shrink import resolve_drop_count
+
+        assert resolve_drop_count(30, drop_ratio=0.25, drop_layers=None) == 8  # round(7.5)
+        assert resolve_drop_count(30, drop_ratio=None, drop_layers=6) == 6
+
+    def test_resolve_drop_count_rejects_both_or_neither(self):
+        from soup_cli.utils.shrink import resolve_drop_count
+
+        with pytest.raises(ValueError, match="exactly one"):
+            resolve_drop_count(30, drop_ratio=0.25, drop_layers=6)
+        with pytest.raises(ValueError, match="exactly one"):
+            resolve_drop_count(30, drop_ratio=None, drop_layers=None)
+
+    def test_resolve_drop_count_position_bound(self):
+        from soup_cli.utils.shrink import resolve_drop_count
+
+        with pytest.raises(ValueError, match="range"):
+            resolve_drop_count(4, drop_ratio=None, drop_layers=3)  # > num_layers-2
+
+    def test_resolve_drop_count_ratio_bounds(self):
+        from soup_cli.utils.shrink import resolve_drop_count
+
+        with pytest.raises(ValueError):
+            resolve_drop_count(30, drop_ratio=1.5, drop_layers=None)
+        with pytest.raises(ValueError):
+            resolve_drop_count(30, drop_ratio=0.0, drop_layers=None)
+
+    def test_compute_importance_no_valid_starts_raises(self):
+        import torch
+
+        from soup_cli.utils import shrink
+
+        class _Cfg:
+            model_type = "llama"
+            architectures = ["LlamaForCausalLM"]
+            num_hidden_layers = 4
+
+        class _Out:
+            hidden_states = tuple(torch.ones(1, 3, 8) for _ in range(5))
+
+        class _Model:
+            config = _Cfg()
+
+            def eval(self):
+                return self
+
+            def __call__(self, **kw):
+                return _Out()
+
+        class _Tok:
+            def __call__(self, text, **kw):
+                return {
+                    "input_ids": torch.ones(1, 3, dtype=torch.long),
+                    "attention_mask": torch.ones(1, 3, dtype=torch.long),
+                }
+
+        with pytest.raises(ValueError, match="position-valid"):
+            shrink.compute_layer_importance(
+                _Model(), _Tok(), ["hi"], block_size=3, device="cpu"
+            )

@@ -206,3 +206,125 @@ def prune_model_layers(model: object, start: int, block_size: int) -> None:
     kept = [layers[i] for i in range(n_total) if not (start <= i < end)]
     model.model.layers = nn.ModuleList(kept)  # type: ignore[attr-defined]
     model.config.num_hidden_layers = len(kept)  # type: ignore[attr-defined]
+
+
+# ---------------------------------------------------------------------------
+# Importance scan + block selection + drop-count resolution
+# ---------------------------------------------------------------------------
+_IMPORTANCE_MAX_LENGTH = 512
+_DEFAULT_MAX_PROMPTS = 256
+
+
+def resolve_drop_count(num_layers: int, *, drop_ratio, drop_layers) -> int:
+    """Resolve the block **count** from exactly one of ratio / explicit count.
+
+    ``drop_layers = round(drop_ratio * num_layers)`` when a ratio is given.
+    Validated against the position bound ``1 <= count <= num_layers - 2`` (the
+    first and last layer are always protected).
+    """
+    if (drop_ratio is None) == (drop_layers is None):
+        raise ValueError("set exactly one of --drop-ratio / --drop-layers")
+    if drop_layers is not None:
+        if isinstance(drop_layers, bool) or not isinstance(drop_layers, int):
+            raise ValueError("drop_layers must be an int")
+        count = drop_layers
+    else:
+        if isinstance(drop_ratio, bool) or not isinstance(drop_ratio, (int, float)):
+            raise ValueError("drop_ratio must be a number")
+        if not (0.0 < float(drop_ratio) < 1.0):
+            raise ValueError("drop_ratio must be in (0, 1)")
+        count = round(float(drop_ratio) * num_layers)
+    max_count = num_layers - 2  # protect first + last
+    if not (1 <= count <= max_count):
+        raise ValueError(
+            f"drop count {count} out of range [1, {max_count}] for {num_layers} "
+            "layers (first and last layer protected)"
+        )
+    return count
+
+
+def compute_layer_importance(
+    model: object,
+    tokenizer: object,
+    prompts,
+    *,
+    block_size: int,
+    device: str,
+    max_prompts: int = _DEFAULT_MAX_PROMPTS,
+) -> list[LayerImportance]:
+    """Rank every position-valid contiguous block by residual angular distance.
+
+    One ``output_hidden_states=True`` forward per calibration prompt captures
+    every layer boundary at once (``hidden_states`` has ``num_layers + 1``
+    entries; index 0 is the embedding output, index ``k`` the output of decoder
+    layer ``k - 1``). For a block ``[L, L + block_size)`` the residual entering
+    the block is ``hidden_states[L]`` and the residual leaving it is
+    ``hidden_states[L + block_size]``. The block importance is the mean, over
+    every non-pad token across the whole calib set, of the per-token angular
+    distance ``arccos(cos) / pi`` between those two residuals (Gromov et al.).
+
+    Only position-valid starts ``L in [1, num_layers - block_size - 1]`` are
+    scored (first and last layer protected). Returns the blocks sorted by
+    ascending distance (safest to drop first).
+    """
+    import torch
+
+    n_layers = int(model.config.num_hidden_layers)  # type: ignore[attr-defined]
+    valid_starts = list(range(1, n_layers - block_size))  # L in [1, n-bs-1]
+    if not valid_starts:
+        raise ValueError(
+            f"block_size {block_size} leaves no position-valid block for "
+            f"{n_layers} layers (first and last layer protected)"
+        )
+    prompt_list = [p for p in prompts if isinstance(p, str) and p.strip()][:max_prompts]
+    if not prompt_list:
+        raise ValueError("calib prompts must contain at least one non-empty string")
+
+    sums = {s: 0.0 for s in valid_starts}
+    counts = {s: 0 for s in valid_starts}
+    model.eval()  # type: ignore[attr-defined]
+    with torch.no_grad():
+        for text in prompt_list:
+            raw = tokenizer(
+                text,
+                return_tensors="pt",
+                truncation=True,
+                max_length=_IMPORTANCE_MAX_LENGTH,
+            )
+            inputs = {k: v.to(device) for k, v in dict(raw).items()}
+            out = model(**inputs, output_hidden_states=True)  # type: ignore[operator]
+            hidden = out.hidden_states
+            if len(hidden) != n_layers + 1:
+                raise ValueError(
+                    f"expected {n_layers + 1} hidden states, got {len(hidden)}"
+                )
+            mask = inputs.get("attention_mask")
+            for start in valid_starts:
+                h_in = hidden[start][0].to(torch.float32)  # [seq, D]
+                h_out = hidden[start + block_size][0].to(torch.float32)
+                cos = torch.nn.functional.cosine_similarity(h_in, h_out, dim=-1)
+                cos = cos.clamp(-1.0, 1.0)
+                dist = torch.arccos(cos) / torch.pi  # [seq]
+                if mask is not None:
+                    keep = mask[0].to(torch.bool)
+                    dist = dist[keep]
+                sums[start] += float(dist.sum().item())
+                counts[start] += int(dist.numel())
+
+    imps = [
+        LayerImportance(
+            start=s,
+            block_size=block_size,
+            angular_distance=(sums[s] / counts[s]) if counts[s] else float("inf"),
+        )
+        for s in valid_starts
+    ]
+    imps.sort(key=lambda x: x.angular_distance)
+    return imps
+
+
+def select_drop_block(importances) -> LayerImportance:
+    """Return the least-important (min angular-distance) candidate block."""
+    if not importances:
+        raise ValueError("no importance scores to select from")
+    return min(importances, key=lambda x: x.angular_distance)
