@@ -65,6 +65,21 @@ class TestPairwiseCompare:
 
         assert pairwise_compare("p", "x", "y", _PosBias(), swap=False) == 0
 
+    def test_one_side_failure_is_tie(self):
+        from soup_cli.eval.judge import pairwise_compare
+
+        # Definite verdict on the first order, failure (-1) on the swap -> the
+        # single unconfirmed verdict must NOT be trusted; result is a tie.
+        class _Flaky:
+            def __init__(self):
+                self.calls = 0
+
+            def compare_pair(self, prompt, resp_a, resp_b):
+                self.calls += 1
+                return 0 if self.calls == 1 else -1
+
+        assert pairwise_compare("p", "x", "y", _Flaky(), swap=True) == -1
+
 
 class TestPairwiseWinrate:
     def test_tuned_always_wins(self):
@@ -376,6 +391,40 @@ class TestOnlineDpoWrapper:
             {"prompt": [{"role": "system", "content": "be nice"},
                         {"role": "user", "content": "hi"}]}
         ]
+
+    def test_prompt_rows_multiturn_keeps_alternation(self):
+        from soup_cli.trainer.online_dpo import OnlineDPOTrainerWrapper
+
+        rows = [
+            {
+                "messages": [
+                    {"role": "user", "content": "u1"},
+                    {"role": "assistant", "content": "a1"},
+                    {"role": "user", "content": "u2"},
+                    {"role": "assistant", "content": "a2"},
+                ]
+            }
+        ]
+        out = OnlineDPOTrainerWrapper._to_prompt_rows(rows)
+        # Interleaved assistant turn kept; conversation ends on the last user
+        # turn (trailing assistant dropped -> model generates it on-policy).
+        assert out == [
+            {
+                "prompt": [
+                    {"role": "user", "content": "u1"},
+                    {"role": "assistant", "content": "a1"},
+                    {"role": "user", "content": "u2"},
+                ]
+            }
+        ]
+
+    def test_prompt_rows_no_user_skipped(self):
+        from soup_cli.trainer.online_dpo import OnlineDPOTrainerWrapper
+
+        out = OnlineDPOTrainerWrapper._to_prompt_rows(
+            [{"messages": [{"role": "assistant", "content": "x"}]}]
+        )
+        assert out == []
 
     def test_synthetic_judge_prefers_longer(self):
         j = _make_len_judge()

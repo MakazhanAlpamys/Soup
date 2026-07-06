@@ -95,6 +95,11 @@ def run_evolve(
     (empty / unchanged / meta-echo) are eliminated. If a round eliminates
     everything, the previous generation is carried forward so later rounds still
     have material to work on.
+
+    Caveat: depth rotates its rewrite method per round (so a carried-forward
+    retry differs), but breadth resends an identical prompt. With a *deterministic*
+    backend (temperature 0), a fully-eliminated breadth round can repeat with no
+    new result; the CLI default (temperature 1.0) samples, so retries vary.
     """
     if strategy not in STRATEGIES:
         raise ValueError(f"strategy must be one of {STRATEGIES}, got {strategy!r}")

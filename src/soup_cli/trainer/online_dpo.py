@@ -29,6 +29,22 @@ console = Console()
 # synthetic-judge smoke). A ``trl.BasePairwiseJudge`` instance or None.
 _ONLINE_DPO_JUDGE_OVERRIDE = None
 
+# Fallback chat template for base models that ship none. Unlike the shared
+# ``constants.DEFAULT_CHAT_TEMPLATE``, this one emits an assistant generation
+# cue on ``add_generation_prompt`` so on-policy generation continues the
+# model's turn (TRL always renders prompts with ``add_generation_prompt=True``).
+_FALLBACK_CHAT_TEMPLATE = (
+    "{% for message in messages %}"
+    "{% if message['role'] == 'system' %}"
+    "{{ message['content'] + '\n' }}"
+    "{% elif message['role'] == 'user' %}"
+    "{{ 'User: ' + message['content'] + '\n' }}"
+    "{% elif message['role'] == 'assistant' %}"
+    "{{ 'Assistant: ' + message['content'] + '\n' }}"
+    "{% endif %}{% endfor %}"
+    "{% if add_generation_prompt %}{{ 'Assistant: ' }}{% endif %}"
+)
+
 
 class OnlineDPOTrainerWrapper:
     """High-level wrapper for Online DPO training from SoupConfig."""
@@ -70,21 +86,29 @@ class OnlineDPOTrainerWrapper:
         """Normalize Soup rows -> OnlineDPO prompt-only rows (chat ``prompt``).
 
         - ``{"prompt": "text"}`` -> a single user turn.
-        - ``{"messages": [...]}`` -> the system/user turns (assistant dropped;
-          the model generates the assistant turn on-policy).
+        - ``{"messages": [...]}`` -> the conversation up to and INCLUDING the
+          last user turn (interleaved assistant turns are KEPT so multi-turn
+          context and user/assistant alternation are preserved); the trailing
+          assistant turn is dropped because the model generates it on-policy.
         """
         out = []
         for row in rows:
             if isinstance(row.get("prompt"), str):
                 out.append({"prompt": [{"role": "user", "content": row["prompt"]}]})
             elif isinstance(row.get("messages"), list):
-                msgs = [
-                    m
-                    for m in row["messages"]
-                    if isinstance(m, dict) and m.get("role") in ("system", "user")
-                ]
-                if msgs:
-                    out.append({"prompt": msgs})
+                msgs = row["messages"]
+                last_user = -1
+                for idx, msg in enumerate(msgs):
+                    if isinstance(msg, dict) and msg.get("role") == "user":
+                        last_user = idx
+                if last_user >= 0:
+                    prompt_msgs = [
+                        m
+                        for m in msgs[: last_user + 1]
+                        if isinstance(m, dict)
+                        and m.get("role") in ("system", "user", "assistant")
+                    ]
+                    out.append({"prompt": prompt_msgs})
         return out
 
     def setup(self, dataset: dict):
@@ -204,8 +228,6 @@ class OnlineDPOTrainerWrapper:
         from peft import LoraConfig, TaskType
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
-        from soup_cli.utils.constants import DEFAULT_CHAT_TEMPLATE
-
         console.print(f"[dim]Loading tokenizer: {cfg.base}[/]")
         self.tokenizer = AutoTokenizer.from_pretrained(
             cfg.base, trust_remote_code=self._trust_remote_code
@@ -213,9 +235,10 @@ class OnlineDPOTrainerWrapper:
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
         # Online DPO renders conversational prompts -> a chat template is
-        # required. Fall back to Soup's default when the model ships none.
+        # required. Fall back to a template WITH a generation cue when the model
+        # ships none (so add_generation_prompt actually opens the assistant turn).
         if self.tokenizer.chat_template is None:
-            self.tokenizer.chat_template = DEFAULT_CHAT_TEMPLATE
+            self.tokenizer.chat_template = _FALLBACK_CHAT_TEMPLATE
 
         from soup_cli.utils.quant_menu import build_quantization_config_for_loader
 
@@ -236,6 +259,14 @@ class OnlineDPOTrainerWrapper:
         from soup_cli.utils.data_pipeline import apply_vocab_expansion
 
         apply_vocab_expansion(self.tokenizer, self.model, cfg.data)
+
+        # QLoRA stabilization: k-bit-loaded models need fp32 layer-norm casting +
+        # input-grad enabling BEFORE LoRA. OnlineDPOTrainer's peft_config path
+        # does NOT do this internally (unlike DPOTrainer), so do it here.
+        if tcfg.quantization in ("4bit", "8bit", "mxfp4"):
+            from peft import prepare_model_for_kbit_training
+
+            self.model = prepare_model_for_kbit_training(self.model)
 
         target_modules = tcfg.lora.target_modules
         if target_modules == "auto":

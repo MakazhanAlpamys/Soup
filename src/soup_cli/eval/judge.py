@@ -397,8 +397,12 @@ def pairwise_compare(
     """Return 0 (A preferred), 1 (B preferred), or -1 (tie / disagreement).
 
     When ``swap`` is True the pair is judged in BOTH orders (A,B and B,A) and a
-    winner is returned only if the two runs agree — the standard defence against
-    a judge's positional bias. Disagreement -> -1 (tie).
+    winner is returned ONLY if the two runs produce the same definite verdict —
+    the standard defence against a judge's positional bias. Anything else — a
+    tie, a failure (``compare_pair`` returns -1 for both), or a disagreement —
+    yields -1, so a single un-cross-checked verdict is never trusted. This
+    doubles the judge calls per pair vs a one-shot random-flip; the stronger
+    guarantee is intentional.
     """
     first = evaluator.compare_pair(prompt, resp_a, resp_b)
     if not swap:
@@ -411,13 +415,10 @@ def pairwise_compare(
         second = 0
     else:
         second = -1
-    if first == -1 and second == -1:
-        return -1
-    if first == -1:
-        return second
-    if second == -1:
+    # Winner only when BOTH orders agree on a definite (0/1) verdict.
+    if first in (0, 1) and first == second:
         return first
-    return first if first == second else -1
+    return -1
 
 
 def pairwise_winrate(
