@@ -2144,6 +2144,42 @@ training:
 output: ./output
 """,
     ),
+    "online-dpo-smollm2-135m": RecipeMeta(
+        model="HuggingFaceTB/SmolLM2-135M-Instruct",
+        task="online_dpo",
+        size="135M",
+        tags=("smollm", "smollm2", "online_dpo", "judge", "rlhf", "tiny", "edge"),
+        description="SmolLM2 135M Online DPO — on-policy generation judged by a "
+        "pairwise LLM judge (point --online-dpo-judge at a local ollama model)",
+        yaml_str="""\
+base: HuggingFaceTB/SmolLM2-135M-Instruct
+task: online_dpo
+
+data:
+  train: ./data/prompts.jsonl
+  format: auto
+  max_length: 1024
+
+training:
+  # On-policy: the model generates 2 completions per prompt each step and the
+  # judge picks chosen/rejected. Point online_dpo_judge at a local judge, OR set
+  # reward_model instead (exactly one of the two).
+  online_dpo_judge: "ollama://llama3.1"
+  online_dpo_loss_type: sigmoid
+  online_dpo_max_new_tokens: 64
+  dpo_beta: 0.1
+  epochs: 1
+  lr: 5e-5
+  batch_size: auto
+  lora:
+    r: 8
+    alpha: 16
+    target_modules: auto
+  quantization: none
+
+output: ./output
+""",
+    ),
     "smollm2-360m-sft": RecipeMeta(
         model="HuggingFaceTB/SmolLM2-360M-Instruct",
         task="sft",

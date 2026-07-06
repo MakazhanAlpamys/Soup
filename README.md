@@ -49,27 +49,29 @@ infrastructure instead of improving models. Soup fixes that.
 
 ## What's New
 
-**v0.71.30 — Process-supervised RL: PRM-guided GRPO.** Use a trained Process Reward Model to score each *reasoning step* of a GRPO completion — the o1-era training signal — plus bundled toy environments so the openenv rollout path runs out-of-the-box.
+**v0.71.31 — Judge-in-the-loop suite.** Put an LLM judge in the loop across the whole workflow: train against a judge, mine winners from a base model, grow instruction diversity, and decide SHIP with a true pairwise judge win-rate.
 
-- **PRM as the GRPO reward.** Point `training.prm_reward` at a PRM you trained with
-  `soup train task=prm`; it splits each completion into steps, scores every step with the PRM's
-  reward head, and folds them (`min` / `prod` / `last`) into one reward that GRPO optimises —
-  replacing `reward_fn`. It rides the reward-shaping + reward-hack-mitigation seam, so the
-  v0.71.26 controller still watches it.
-- **Bundled rollout environments.** `soup_cli.envs.calculator` / `retrieval_qa` / `guess_number`
-  each expose a `rollout(prompts)` entry point; wire one with `rollout_backend=openenv` +
-  `rollout_func=soup_cli.envs.calculator:rollout` (three ready-made `grpo-env-*` recipes ship it).
-- **Producer fixes too.** `soup train task=prm` now saves its tokenizer and no longer crashes on
-  its own summary — a PRM checkpoint is loadable standalone.
-- **Proof-of-mechanism, honestly.** Live-validated on SmolLM2-135M (CPU): the PRM reward scores
-  good completions above bad and drives GRPO's advantages (`rewards/prm_reward` logged). Tiny
-  model + synthetic PRM — not a production reward-model claim (scale help wanted: #286).
+- **`task='online_dpo'`.** Online DPO (wraps TRL `OnlineDPOTrainer`): the model generates two
+  completions per prompt on-policy each step and a *judge* (a pairwise LLM judge over your local
+  ollama / OpenAI-compatible endpoint) — or a `reward_model` — picks the winner. Set
+  `training.online_dpo_judge: "ollama://llama3.1"` (or `reward_model`, exactly one).
+- **`soup data best-of-n`.** Best-of-N rejection sampling: sample N completions from `--base`
+  locally, a `--judge` scores each, and the winner becomes an SFT row (`--emit-pairs` also writes
+  winner-vs-loser DPO pairs).
+- **`soup data evolve`.** WizardLM Evol-Instruct (depth / breadth) over an ollama / vllm provider —
+  completing the synthetic-data suite (Magpie / Forge / Persona / evolve).
+- **`soup ship --task-mode pairwise` (#284).** A true swap-debiased judge win-rate as the ship
+  leg-1 task-win, fused with the catastrophic-forgetting guard into one SHIP / DON'T-SHIP verdict.
+- **Proof-of-mechanism, honestly.** Live-validated on SmolLM2-135M: online-DPO trains with a
+  synthetic judge (`rewards/*` + `objective/kl` logged), best-of-N samples + picks, evolve loops.
+  Not a production RLHF claim (scale help wanted: #286).
 
 ```yaml
-task: grpo
+task: online_dpo
 training:
-  prm_reward: ./my-prm            # a `soup train task=prm` checkpoint dir
-  prm_aggregate: min              # weakest-link (default) | prod | last
+  online_dpo_judge: "ollama://llama3.1"   # a pairwise judge (or set reward_model)
+  online_dpo_loss_type: sigmoid           # sigmoid | ipo
+  online_dpo_max_new_tokens: 64
 ```
 
 Full history: [CHANGELOG.md](CHANGELOG.md) &middot; [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).

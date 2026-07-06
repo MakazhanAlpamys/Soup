@@ -8,7 +8,6 @@ pairwise`` (#284), ``task='online_dpo'`` (schema + trainer + routing),
 
 from __future__ import annotations
 
-
 # ---------------------------------------------------------------------------
 # Shared test doubles
 # ---------------------------------------------------------------------------
@@ -566,8 +565,9 @@ def _online_dpo_wrapper():
 
 class TestBuildJudgeOrReward:
     def test_judge_url_branch(self):
-        import soup_cli.trainer.online_dpo as od
         from trl import BasePairwiseJudge
+
+        import soup_cli.trainer.online_dpo as od
 
         od._ONLINE_DPO_JUDGE_OVERRIDE = None
         result = _online_dpo_wrapper()._build_judge_or_reward(_Tcfg(judge="ollama://m"))

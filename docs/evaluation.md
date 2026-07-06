@@ -330,6 +330,11 @@ soup ship --base HuggingFaceTB/SmolLM2-135M-Instruct --adapter ./out \
 soup ship --base <m> --adapter ./out --task-eval tasks.jsonl \
   --task-mode judge_score --judge-model ollama://llama3.1
 
+# Leg-1 via a true pairwise judge win-rate (v0.71.31 #284) — the judge picks
+# base vs tuned per prompt (swap-debiased); base = 0.5 coin-flip, won <=> winrate > 0.5
+soup ship --base <m> --adapter ./out --task-eval tasks.jsonl \
+  --task-mode pairwise --judge-model ollama://llama3.1
+
 # Leg-2 via lm-eval benchmarks, base scores supplied by --baseline
 soup ship --base <m> --tuned ./out --task-eval tasks.jsonl \
   --general-suite mmlu,hellaswag --baseline registry://abc123

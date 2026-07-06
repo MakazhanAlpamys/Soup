@@ -721,10 +721,10 @@ class TestRecipes:
         assert cfg.training.rollout_backend == "openenv"
         assert cfg.training.rollout_func.startswith("soup_cli.envs.")
 
-    def test_catalog_size_is_137(self):
+    def test_catalog_size_is_138(self):
         from soup_cli.recipes.catalog import RECIPES
 
-        assert len(RECIPES) == 137
+        assert len(RECIPES) == 138
 
 
 # ---------------------------------------------------------------------------

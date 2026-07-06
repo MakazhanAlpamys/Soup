@@ -401,6 +401,34 @@ advantages). Not a production reward-model claim; scale validation is help-wante
 (#286).
 
 
+## Online DPO (`task='online_dpo'`) — judge in the loop (v0.71.31)
+
+Unlike offline DPO (static `prompt/chosen/rejected` rows), **Online DPO** generates
+two completions per prompt **on-policy** each step and asks a *judge* — or a
+*reward model* — which is better; the winner becomes `chosen`, the loser
+`rejected`. The judge closes the loop. Wraps TRL `OnlineDPOTrainer`; data is
+prompt-only (like GRPO). Transformers + text only.
+
+```yaml
+base: HuggingFaceTB/SmolLM2-135M-Instruct
+task: online_dpo
+data:
+  train: ./data/prompts.jsonl      # prompt-only (or any format — prompts are extracted)
+training:
+  online_dpo_judge: "ollama://llama3.1"   # a pairwise judge (ollama://|https://|http://localhost)
+  # OR: reward_model: ./my-reward-model   # exactly one of judge / reward_model
+  online_dpo_loss_type: sigmoid           # sigmoid | ipo
+  online_dpo_max_new_tokens: 64
+  dpo_beta: 0.1
+  lora: { r: 8, alpha: 16, target_modules: auto }
+```
+
+The judge is Soup's own OpenAI-compatible `JudgeEvaluator` adapted to TRL's
+`BasePairwiseJudge` (swap-debiased: a winner is only recorded when both A,B and
+B,A orders agree). Recipe: `online-dpo-smollm2-135m`. Proof-of-mechanism was
+validated on SmolLM2-135M with a synthetic judge (not a production RLHF claim; #286).
+
+
 ## Weighted Multi-Objective Preference Loss
 
 Mix DPO / SimPO / ORPO / IPO terms in one training run by setting

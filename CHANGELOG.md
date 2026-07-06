@@ -12,6 +12,35 @@ reproducing 70+ versions of notes.
 
 ## [Unreleased]
 
+## [0.71.31] - 2026-07-06
+
+### Added
+- **Judge-in-the-loop suite** — put an LLM judge in the loop across the workflow:
+  - **`task='online_dpo'`** — Online DPO training (wraps TRL `OnlineDPOTrainer`):
+    the model generates two completions per prompt on-policy each step and a
+    *judge* (a pairwise LLM judge over the existing ollama/openai-compatible
+    backend) OR a `reward_model` picks the winner. Config:
+    `training.online_dpo_judge: "ollama://model"` (or set `reward_model` —
+    exactly one), `online_dpo_loss_type: sigmoid|ipo`, `online_dpo_max_new_tokens`;
+    `beta` reuses `dpo_beta`. Transformers + text only. Recipe:
+    `online-dpo-smollm2-135m`.
+  - **`soup data best-of-n`** — Best-of-N rejection sampling (BOND-lite): sample
+    N completions from `--base` locally, a `--judge` scores each pointwise, and
+    the winner is written as an SFT chat row (with provenance). `--emit-pairs`
+    also writes winner-vs-loser DPO pairs.
+  - **`soup data evolve`** — Evol-Instruct instruction evolution (WizardLM depth
+    / breadth) over an ollama/vllm provider, completing the synthetic-data suite
+    (Magpie / Forge / Persona / evolve).
+  - **`soup ship --task-mode pairwise`** — a true pairwise judge win-rate as the
+    ship leg-1 task-win (base = 0.5 coin-flip, tuned = its win-rate; swap-debiased),
+    fusing with the catastrophic-forgetting guard into one SHIP / DON'T-SHIP verdict.
+
+### Security
+- `soup data best-of-n` / `evolve` write outputs via atomic `mkstemp` + `os.replace`
+  (re-validated cwd containment), closing the TOCTOU symlink-swap window between the
+  containment check and the write. All judge/provider URLs are SSRF-validated; model
+  loads probe `trust_remote_code`.
+
 ## [0.71.30] - 2026-07-05
 
 ### Added

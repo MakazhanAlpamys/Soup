@@ -62,6 +62,15 @@ soup data persona-mix --prompts prompts.jsonl --n 500 --output mixed.jsonl
 
 # Brain-rot detector (arXiv 2510.13928) — refuses to train on excessive slop
 soup data brain-rot data.jsonl --strict --max-major-fraction 0.10
+
+# Best-of-N rejection sampling (v0.71.31) — sample N locally, a judge picks the winner
+soup data best-of-n --base HuggingFaceTB/SmolLM2-135M-Instruct \
+    --prompts prompts.jsonl --n 8 --judge ollama://llama3.1 \
+    -o best_of_n.jsonl --emit-pairs pairs.jsonl
+
+# Evol-Instruct (WizardLM depth/breadth, v0.71.31) — grow instruction diversity
+soup data evolve --input seeds.jsonl --provider ollama --model llama3.1 \
+    --strategy depth --rounds 2 -o evolved.jsonl
 ```
 
 Every command applies the project-wide TOCTOU policy (`os.lstat + S_ISLNK` symlink rejection before any open) and cwd containment via the shared `paths.enforce_under_cwd_and_no_symlink` helper. All five are LIVE: `soup build` materialises with five built-in transforms (`identity` / `drop_empty` / `lowercase` / `strip` / `dedup_exact`) and SQLite-tracked incremental re-transform (v0.71.6); `soup data gen-magpie` harvests via raw completion against `--provider ollama|vllm` (loopback-only; `anthropic` rejected — no raw-completion endpoint, v0.71.6).
