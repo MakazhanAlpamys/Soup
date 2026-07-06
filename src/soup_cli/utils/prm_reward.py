@@ -238,7 +238,7 @@ class PRMScorer:
         ids = torch.tensor([input_ids], dtype=torch.long, device=self.device)
         with torch.no_grad():
             outputs = self._model(input_ids=ids, output_hidden_states=True)
-            last_hidden = outputs.hidden_states[-1][0]  # [T, H]  
+            last_hidden = outputs.hidden_states[-1][0]  # [T, H]
             pos = torch.tensor(step_positions, dtype=torch.long, device=self.device)
             step_hidden = last_hidden.index_select(0, pos)  # [S, H]
             scores = self._model.reward_head(step_hidden).squeeze(-1)  # [S]
@@ -287,7 +287,7 @@ class PRMScorer:
             if len(input_ids)>cap:
                 input_ids=input_ids[:cap]
                 step_positions = [p for p in step_positions if p<cap]
-            
+
             if not step_positions:
                 skip_indices.add(i)
                 all_input_ids.append([])
@@ -295,16 +295,15 @@ class PRMScorer:
                 continue
             all_input_ids.append(input_ids)
             all_step_positions.append(step_positions)
-        
+
         valid_indices = [i for i in range(len(completion_list)) if i not in skip_indices]
         rewards = [0.0]*len(completion_list)
         if valid_indices:
             valid_ids = [all_input_ids[i] for i in valid_indices]
-            valid_positions = [all_step_positions[i] for i in valid_indices]
             max_len = max(len(ids) for ids in valid_ids)
-            B = len(valid_ids)
-            padded = torch.zeros(B, max_len, dtype=torch.long,device=self.device)
-            attn_mask = torch.zeros(B,max_len, dtype=torch.long,device=self.device)
+            batch_size = len(valid_ids)
+            padded = torch.zeros(batch_size, max_len, dtype=torch.long,device=self.device)
+            attn_mask = torch.zeros(batch_size,max_len, dtype=torch.long,device=self.device)
             for b,ids in enumerate(valid_ids):
                 length = len(ids)
                 padded[b, :length] = torch.tensor(ids,dtype=torch.long,device=self.device)
