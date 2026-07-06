@@ -331,6 +331,71 @@ class TestAsrPrefixCustomized:
         assert _prefix_customized(None, "translate") is True
 
 
+class TestAsrCollatorStrip:
+    @pytest.mark.skipif(not _TORCH, reason="needs torch")
+    def test_strips_leading_decoder_start(self):
+        import torch
+
+        from soup_cli.trainer.asr import _strip_decoder_start
+
+        labels = torch.tensor([[50258, 100, 200, 50257], [50258, 300, 400, 50257]])
+        out = _strip_decoder_start(labels, 50258)
+        assert out.shape[1] == 3
+        assert out[0].tolist() == [100, 200, 50257]
+
+    @pytest.mark.skipif(not _TORCH, reason="needs torch")
+    def test_does_not_strip_when_not_all_start(self):
+        import torch
+
+        from soup_cli.trainer.asr import _strip_decoder_start
+
+        labels = torch.tensor([[50258, 100], [999, 100]])
+        out = _strip_decoder_start(labels, 50258)
+        assert out.shape[1] == 2  # unchanged
+
+    @pytest.mark.skipif(not _TORCH, reason="needs torch")
+    def test_none_decoder_start_is_noop(self):
+        import torch
+
+        from soup_cli.trainer.asr import _strip_decoder_start
+
+        labels = torch.tensor([[50258, 100]])
+        assert _strip_decoder_start(labels, None).shape[1] == 2
+
+
+class TestAsrSidecar:
+    def test_write_read_roundtrip(self, tmp_path):
+        from soup_cli.trainer.asr import read_asr_sidecar, write_asr_sidecar
+
+        write_asr_sidecar(str(tmp_path), "spanish", "translate")
+        got = read_asr_sidecar(str(tmp_path))
+        assert got == {"language": "spanish", "task": "translate"}
+
+    def test_read_absent_is_empty(self, tmp_path):
+        from soup_cli.trainer.asr import read_asr_sidecar
+
+        assert read_asr_sidecar(str(tmp_path)) == {}
+
+
+class TestAsrLoraGate:
+    def test_default_is_full_ft(self):
+        from soup_cli.config.loader import load_config_from_string
+        from soup_cli.trainer.asr import AsrTrainerWrapper
+
+        cfg = load_config_from_string(_asr_yaml())
+        # Bare task: asr with the schema-default lora block must NOT enable LoRA.
+        assert AsrTrainerWrapper._should_use_lora(None, cfg.training) is False
+
+    def test_opt_in_enables_lora(self):
+        from soup_cli.config.loader import load_config_from_string
+        from soup_cli.trainer.asr import AsrTrainerWrapper
+
+        yaml = _asr_yaml() + "  asr_lora: true\n  lora:\n    r: 8\n"
+        cfg = load_config_from_string(yaml)
+        assert cfg.training.asr_lora is True
+        assert AsrTrainerWrapper._should_use_lora(None, cfg.training) is True
+
+
 class TestAsrDataFormat:
     def test_is_audio_format_includes_asr(self):
         from soup_cli.data.formats import is_audio_format

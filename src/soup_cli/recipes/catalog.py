@@ -2204,6 +2204,7 @@ training:
   batch_size: auto
   asr_language: en
   asr_task: transcribe
+  asr_lora: true
   lora:
     r: 16
     alpha: 32
@@ -2235,6 +2236,7 @@ training:
   batch_size: auto
   asr_language: en
   asr_task: transcribe
+  asr_lora: true
   lora:
     r: 16
     alpha: 32
@@ -2266,6 +2268,7 @@ training:
   batch_size: auto
   asr_language: en
   asr_task: transcribe
+  asr_lora: true
   lora:
     r: 32
     alpha: 64

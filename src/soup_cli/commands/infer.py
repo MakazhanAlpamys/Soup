@@ -103,6 +103,16 @@ def infer(
             "\"text\": reference]})."
         ),
     ),
+    asr_language: Optional[str] = typer.Option(
+        None,
+        "--asr-language",
+        help="ASR decode language (overrides the training sidecar). --task asr only.",
+    ),
+    asr_task: Optional[str] = typer.Option(
+        None,
+        "--asr-task",
+        help="ASR decode objective: transcribe | translate. --task asr only.",
+    ),
     trust_remote_code: bool = typer.Option(
         False,
         "--trust-remote-code",
@@ -153,6 +163,8 @@ def infer(
             output_file=output_file,
             max_tokens=max_tokens,
             trust_remote_code=trust_remote_code,
+            asr_language=asr_language,
+            asr_task=asr_task,
         )
         return
     if task != "text":
@@ -234,7 +246,7 @@ def infer(
             console=console,
         ) as progress,
     ):
-        task = progress.add_task("Generating...", total=len(prompts))
+        progress_task = progress.add_task("Generating...", total=len(prompts))
 
         for prompt_text in prompts:
             messages = [{"role": "user", "content": prompt_text}]
@@ -252,7 +264,7 @@ def infer(
             out_f.flush()
             total_tokens += token_count
             num_results += 1
-            progress.update(task, advance=1)
+            progress.update(progress_task, advance=1)
 
     elapsed = time.time() - start_time
     tokens_per_sec = total_tokens / elapsed if elapsed > 0 else 0
@@ -312,9 +324,18 @@ def _build_asr_transcriber(
     device: Optional[str],
     max_tokens: int,
     trust_remote_code: bool,
+    asr_language: Optional[str] = None,
+    asr_task: Optional[str] = None,
 ) -> Callable[[str], str]:
-    """Build a ``transcribe(audio_path) -> str`` closure over a Whisper model."""
-    from soup_cli.trainer.asr import _require_whisper_base
+    """Build a ``transcribe(audio_path) -> str`` closure over a Whisper model.
+
+    Handles both a full fine-tuned Whisper directory and a PEFT/LoRA adapter
+    dir (base resolved from ``--base`` or the adapter's
+    ``base_model_name_or_path``). The decode language/task come from (in order)
+    the explicit CLI flags, then the training ``asr_generation.json`` sidecar,
+    then the model default.
+    """
+    from soup_cli.trainer.asr import _require_whisper_base, read_asr_sidecar
     from soup_cli.utils.tts_codec import load_audio_mono
 
     if not device:
@@ -324,24 +345,60 @@ def _build_asr_transcriber(
 
     from soup_cli.utils.trust_remote import resolve_trust_remote_code
 
-    source = base or model
+    # Detect a PEFT/LoRA adapter dir; resolve its base for the weight load.
+    model_path = Path(model)
+    adapter_cfg = model_path / "adapter_config.json"
+    is_adapter = adapter_cfg.exists()
+    base_ref = base
+    if is_adapter and not base_ref:
+        try:
+            with open(adapter_cfg, encoding="utf-8") as fh:
+                base_ref = json.load(fh).get("base_model_name_or_path")
+        except (json.JSONDecodeError, OSError):
+            base_ref = None
+        if not base_ref:
+            console.print(
+                f"[red]Cannot detect base model for adapter {model_path}; "
+                "pass --base.[/]"
+            )
+            raise typer.Exit(1)
+
+    # The base (adapter case) or the model itself carries the Whisper weights
+    # AND the processor / arch identity.
+    weights_ref = base_ref if is_adapter else model
     resolved_trust = resolve_trust_remote_code(
-        source, requested=trust_remote_code, console=console,
+        weights_ref, requested=trust_remote_code, console=console,
     )
     # Arch guard: reject a non-Whisper base before the (large) weight load.
-    _require_whisper_base(source, resolved_trust)
+    _require_whisper_base(weights_ref, resolved_trust)
 
     from transformers import WhisperForConditionalGeneration, WhisperProcessor
 
     console.print(f"[dim]Loading Whisper model: {model}[/]")
+    # Prefer the fine-tuned dir's processor (carries any resized vocab); fall
+    # back to the base for an adapter-only dir.
     processor = WhisperProcessor.from_pretrained(
-        source, trust_remote_code=resolved_trust
+        model if not is_adapter else weights_ref, trust_remote_code=resolved_trust
     )
     whisper = WhisperForConditionalGeneration.from_pretrained(
-        model, trust_remote_code=resolved_trust
+        weights_ref, trust_remote_code=resolved_trust
     )
+    if is_adapter:
+        from peft import PeftModel
+
+        whisper = PeftModel.from_pretrained(whisper, model)
     whisper.to(device)
     whisper.eval()
+
+    # Resolve decode prefix: explicit flags > training sidecar > model default.
+    sidecar = read_asr_sidecar(model)
+    language = asr_language or sidecar.get("language")
+    task = asr_task or sidecar.get("task")
+    gen_kwargs: dict = {"max_new_tokens": max_tokens}
+    if language:
+        gen_kwargs["language"] = language
+    if task:
+        gen_kwargs["task"] = task
 
     def transcribe(audio_path: str) -> str:
         import torch
@@ -351,7 +408,7 @@ def _build_asr_transcriber(
             wave, sampling_rate=16000, return_tensors="pt"
         ).input_features.to(device)
         with torch.no_grad():
-            generated = whisper.generate(features, max_new_tokens=max_tokens)
+            generated = whisper.generate(features, **gen_kwargs)
         return processor.batch_decode(generated, skip_special_tokens=True)[0].strip()
 
     return transcribe
@@ -366,6 +423,8 @@ def _infer_asr(
     output_file: str,
     max_tokens: int,
     trust_remote_code: bool,
+    asr_language: Optional[str] = None,
+    asr_task: Optional[str] = None,
 ) -> None:
     """Transcribe an ASR JSONL input and (optionally) report WER/CER."""
     from soup_cli.utils.asr_metrics import cer, corpus_wer, wer
@@ -387,7 +446,8 @@ def _infer_asr(
     else:
         try:
             transcribe = _build_asr_transcriber(
-                model, base, device, max_tokens, trust_remote_code
+                model, base, device, max_tokens, trust_remote_code,
+                asr_language=asr_language, asr_task=asr_task,
             )
         except ImportError as exc:
             console.print(f"[red]{exc}[/]")

@@ -1155,6 +1155,15 @@ class TrainingConfig(BaseModel):
             "language) or 'translate' (to English)."
         ),
     )
+    asr_lora: bool = Field(
+        default=False,
+        description=(
+            "Opt-in LoRA for task='asr' (adapts q/v attention projections). "
+            "Default False = full fine-tune (tiny Whisper fits a 4 GB GPU). "
+            "Mirrors classifier_lora — the standard training.lora block still "
+            "supplies r/alpha/dropout when enabled."
+        ),
+    )
 
     @field_validator("asr_language", mode="before")
     @classmethod

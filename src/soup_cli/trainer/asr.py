@@ -22,6 +22,7 @@ Security / robustness:
 from __future__ import annotations
 
 import math
+import os
 import time
 from pathlib import Path
 from typing import Any
@@ -34,6 +35,35 @@ console = Console()
 
 # Whisper always expects 16 kHz mono audio.
 _ASR_SAMPLE_RATE: int = 16000
+
+# Sidecar file recording the decode-time language/task so inference can restore
+# them (WhisperProcessor.save_pretrained does NOT persist set_prefix_tokens —
+# the v0.71.32 code-review CRITICAL).
+_ASR_SIDECAR: str = "asr_generation.json"
+
+
+def write_asr_sidecar(output_dir: str, language: str | None, task: str) -> None:
+    """Persist the ASR decode prefix (language/task) next to the model."""
+    import json
+
+    payload = {"language": language, "task": task}
+    with open(os.path.join(output_dir, _ASR_SIDECAR), "w", encoding="utf-8") as fh:
+        json.dump(payload, fh)
+
+
+def read_asr_sidecar(model_dir: str) -> dict:
+    """Read the ASR decode prefix sidecar; ``{}`` when absent/unreadable."""
+    import json
+
+    path = os.path.join(model_dir, _ASR_SIDECAR)
+    if not os.path.isfile(path):
+        return {}
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
 
 
 def _validate_asr_row(row: dict) -> tuple[str, str]:
@@ -131,6 +161,7 @@ class AsrTrainerWrapper:
         self.trainer: Any = None
         self._output_dir: str | None = None
         self._lora_active: bool = False
+        self._prefix_customized: bool = False
 
     def setup(self, dataset: dict) -> None:
         """Load Whisper + processor, encode the dataset, build Seq2SeqTrainer."""
@@ -159,6 +190,7 @@ class AsrTrainerWrapper:
         # (asr_language=None) must still set the translate prefix, not silently
         # train as transcribe.
         prefix_customized = _prefix_customized(tcfg.asr_language, tcfg.asr_task)
+        self._prefix_customized = prefix_customized
         if prefix_customized:
             self.processor.tokenizer.set_prefix_tokens(
                 language=tcfg.asr_language, task=tcfg.asr_task
@@ -179,9 +211,8 @@ class AsrTrainerWrapper:
             else None
         )
 
-        # Optional LoRA on the attention q/v projections (on iff the config
-        # declares a positive-rank ``training.lora`` block; default full-FT —
-        # tiny Whisper fits the dev box).
+        # Optional LoRA on the attention q/v projections — opt-in via
+        # ``training.asr_lora`` (default full-FT; tiny Whisper fits the dev box).
         if self._should_use_lora(tcfg):
             from peft import LoraConfig, get_peft_model
 
@@ -261,7 +292,10 @@ class AsrTrainerWrapper:
             **(self.fsdp_config or {}),
         )
 
-        collator = _SpeechSeq2SeqCollator(self.processor)
+        collator = _SpeechSeq2SeqCollator(
+            self.processor,
+            decoder_start_token_id=self._unwrapped_model().config.decoder_start_token_id,
+        )
         self.trainer = Seq2SeqTrainer(
             model=self.model,
             args=args,
@@ -272,10 +306,24 @@ class AsrTrainerWrapper:
         )
         self._output_dir = str(output_dir)
 
+    def _unwrapped_model(self) -> Any:
+        """Return the underlying Whisper model (unwrap a PEFT wrapper)."""
+        model = self.model
+        get_base = getattr(model, "get_base_model", None)
+        return get_base() if callable(get_base) else model
+
     def _should_use_lora(self, tcfg: TrainingConfig) -> bool:
-        """LoRA is on iff the config declares a positive-rank LoRA block."""
+        """LoRA is on iff ``asr_lora`` is opted in AND rank > 0.
+
+        Mirrors ``classifier_lora`` — a bare ``task: asr`` config must default
+        to full fine-tune, not silently apply the schema-default rank-64 LoRA.
+        """
         lora = getattr(tcfg, "lora", None)
-        return lora is not None and getattr(lora, "r", 0) > 0
+        return (
+            bool(getattr(tcfg, "asr_lora", False))
+            and lora is not None
+            and getattr(lora, "r", 0) > 0
+        )
 
     def train(
         self,
@@ -307,6 +355,14 @@ class AsrTrainerWrapper:
 
         self.trainer.save_model(self._output_dir)
         self.processor.save_pretrained(self._output_dir)
+        # Persist language/task so `soup infer --task asr` restores them
+        # (set_prefix_tokens is NOT serialized by the processor).
+        if self._prefix_customized:
+            write_asr_sidecar(
+                self._output_dir,
+                self.config.training.asr_language,
+                self.config.training.asr_task,
+            )
 
         logs = self.trainer.state.log_history
         train_losses = [entry["loss"] for entry in logs if "loss" in entry]
@@ -324,17 +380,36 @@ class AsrTrainerWrapper:
         }
 
 
+def _strip_decoder_start(labels: Any, decoder_start_token_id: int | None) -> Any:
+    """Drop a leading ``decoder_start_token_id`` column if every row has it.
+
+    Whisper's ``tokenizer(text)`` prepends ``<|startoftranscript|>`` (=
+    ``decoder_start_token_id``, e.g. 50258), and the model re-adds it via
+    ``shift_tokens_right`` — so it MUST be stripped from the labels or every
+    example teaches "after SOT predict SOT". This is keyed on
+    ``decoder_start_token_id``, NOT ``bos_token_id`` (for Whisper ``bos`` ==
+    ``eos`` == 50257, which never equals the leading token — the v0.71.32
+    code-review CRITICAL).
+    """
+    if decoder_start_token_id is None or labels.shape[1] == 0:
+        return labels
+    if bool((labels[:, 0] == decoder_start_token_id).all().cpu().item()):
+        return labels[:, 1:]
+    return labels
+
+
 class _SpeechSeq2SeqCollator:
     """Pad Whisper ``input_features`` + ``labels`` (labels pad -> -100).
 
     Standard HF speech-seq2seq collator: the feature extractor pads the log-mel
     features to a fixed shape; the tokenizer pads the label ids, and pad tokens
     are replaced with ``-100`` so they do not contribute to the loss. A leading
-    BOS equal to the decoder start token is stripped (the model prepends it).
+    ``decoder_start_token_id`` is stripped (the model re-prepends it).
     """
 
-    def __init__(self, processor: Any) -> None:
+    def __init__(self, processor: Any, decoder_start_token_id: int | None = None) -> None:
         self.processor = processor
+        self.decoder_start_token_id = decoder_start_token_id
 
     def __call__(self, features: list[dict]) -> dict:
         input_features = [
@@ -350,9 +425,6 @@ class _SpeechSeq2SeqCollator:
         labels = labels_batch["input_ids"].masked_fill(
             labels_batch.attention_mask.ne(1), -100
         )
-        # Strip the decoder-start BOS token the model re-adds internally.
-        bos = self.processor.tokenizer.bos_token_id
-        if bos is not None and (labels[:, 0] == bos).all().cpu().item():
-            labels = labels[:, 1:]
+        labels = _strip_decoder_start(labels, self.decoder_start_token_id)
         batch["labels"] = labels
         return batch
