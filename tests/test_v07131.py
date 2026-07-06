@@ -108,6 +108,50 @@ class TestPairwiseWinrate:
         assert pairwise_winrate(pairs, _FakeJudge()) == (1.0 + 0.0 + 0.5) / 3
 
 
+class TestParsePairwise:
+    def test_json_winner_a(self):
+        from soup_cli.eval.judge import _parse_pairwise
+
+        assert _parse_pairwise('{"winner": "A"}') == 0
+
+    def test_json_winner_b_lowercase(self):
+        from soup_cli.eval.judge import _parse_pairwise
+
+        assert _parse_pairwise('the answer is {"winner": "b"}') == 1
+
+    def test_bare_token_fallback(self):
+        from soup_cli.eval.judge import _parse_pairwise
+
+        assert _parse_pairwise("A is clearly better") == 0
+        assert _parse_pairwise("B wins here") == 1
+
+    def test_unparseable_is_tie(self):
+        from soup_cli.eval.judge import _parse_pairwise
+
+        assert _parse_pairwise("I cannot decide") == -1
+        assert _parse_pairwise("") == -1
+
+
+class TestCompareePairMethod:
+    def test_compare_pair_parses_llm_reply(self, monkeypatch):
+        from soup_cli.eval.judge import JudgeEvaluator
+
+        ev = JudgeEvaluator(provider="ollama", model="m")
+        monkeypatch.setattr(ev, "_call_llm", lambda prompt: '{"winner": "B"}')
+        assert ev.compare_pair("p", "x", "y") == 1
+
+    def test_compare_pair_llm_failure_is_tie(self, monkeypatch):
+        from soup_cli.eval.judge import JudgeEvaluator
+
+        ev = JudgeEvaluator(provider="ollama", model="m")
+
+        def _boom(prompt):
+            raise RuntimeError("network down")
+
+        monkeypatch.setattr(ev, "_call_llm", _boom)
+        assert ev.compare_pair("p", "x", "y") == -1
+
+
 # ---------------------------------------------------------------------------
 # Task 2 — make_soup_pairwise_judge (TRL BasePairwiseJudge adapter)
 # ---------------------------------------------------------------------------
@@ -336,6 +380,51 @@ class TestOnlineDpoSchema:
         assert cfg.training.online_dpo_loss_type == "ipo"
         assert cfg.training.online_dpo_max_new_tokens == 128
 
+    def test_reject_vision_modality(self):
+        import pytest
+
+        from soup_cli.config.loader import load_config_from_string
+
+        with pytest.raises(Exception, match="modality"):
+            load_config_from_string(
+                "base: hf-internal-testing/tiny-random-gpt2\ntask: online_dpo\n"
+                "modality: vision\ndata:\n  train: x.jsonl\n"
+                "training:\n  online_dpo_judge: \"ollama://m\"\n"
+            )
+
+    def test_footgun_loss_type_without_task(self):
+        import pytest
+
+        from soup_cli.config.loader import load_config_from_string
+
+        with pytest.raises(Exception, match="online_dpo"):
+            load_config_from_string(
+                "base: m\ntask: sft\ndata:\n  train: x.jsonl\n"
+                "training:\n  online_dpo_loss_type: ipo\n"
+            )
+
+    def test_field_validator_direct(self):
+        import pytest
+
+        from soup_cli.config.schema import TrainingConfig
+
+        with pytest.raises(Exception, match="null"):
+            TrainingConfig(online_dpo_judge="ollama://\x00m")
+        with pytest.raises(Exception, match="512"):
+            TrainingConfig(online_dpo_judge="x" * 513)
+        with pytest.raises(Exception, match="string"):
+            TrainingConfig(online_dpo_judge=123)
+
+    def test_max_new_tokens_bounds(self):
+        import pytest
+
+        from soup_cli.config.schema import TrainingConfig
+
+        with pytest.raises(Exception):
+            TrainingConfig(online_dpo_max_new_tokens=0)
+        with pytest.raises(Exception):
+            TrainingConfig(online_dpo_max_new_tokens=4097)
+
 
 # ---------------------------------------------------------------------------
 # Task 5 — OnlineDPOTrainerWrapper
@@ -455,6 +544,71 @@ class TestOnlineDpoWrapper:
             od._ONLINE_DPO_JUDGE_OVERRIDE = None
 
 
+class _Tcfg:
+    """Minimal tcfg stub for _build_judge_or_reward (reads two attrs)."""
+
+    def __init__(self, judge=None, reward=None):
+        self.online_dpo_judge = judge
+        self.reward_model = reward
+
+
+def _online_dpo_wrapper():
+    from soup_cli.config.loader import load_config_from_string
+    from soup_cli.trainer.online_dpo import OnlineDPOTrainerWrapper
+
+    cfg = load_config_from_string(
+        "base: hf-internal-testing/tiny-random-gpt2\ntask: online_dpo\n"
+        "data:\n  train: x.jsonl\n"
+        "training:\n  online_dpo_judge: \"ollama://m\"\n"
+    )
+    return OnlineDPOTrainerWrapper(cfg, device="cpu")
+
+
+class TestBuildJudgeOrReward:
+    def test_judge_url_branch(self):
+        import soup_cli.trainer.online_dpo as od
+        from trl import BasePairwiseJudge
+
+        od._ONLINE_DPO_JUDGE_OVERRIDE = None
+        result = _online_dpo_wrapper()._build_judge_or_reward(_Tcfg(judge="ollama://m"))
+        assert isinstance(result["judge"], BasePairwiseJudge)
+        assert "reward_model" not in result
+
+    def test_reward_model_branch(self, monkeypatch):
+        import soup_cli.trainer.online_dpo as od
+
+        od._ONLINE_DPO_JUDGE_OVERRIDE = None
+        monkeypatch.setattr(
+            "transformers.AutoModelForSequenceClassification.from_pretrained",
+            lambda *a, **k: object(),
+        )
+        monkeypatch.setattr(
+            "transformers.AutoTokenizer.from_pretrained", lambda *a, **k: object()
+        )
+        result = _online_dpo_wrapper()._build_judge_or_reward(_Tcfg(reward="some/rm"))
+        assert set(result.keys()) == {"reward_model", "reward_processing_class"}
+
+    def test_precedence_override_wins(self):
+        import soup_cli.trainer.online_dpo as od
+
+        sentinel = object()
+        od._ONLINE_DPO_JUDGE_OVERRIDE = sentinel
+        try:
+            result = _online_dpo_wrapper()._build_judge_or_reward(_Tcfg(judge="ollama://m"))
+            assert result["judge"] is sentinel  # seam beats the URL branch
+        finally:
+            od._ONLINE_DPO_JUDGE_OVERRIDE = None
+
+    def test_neither_raises(self):
+        import pytest
+
+        import soup_cli.trainer.online_dpo as od
+
+        od._ONLINE_DPO_JUDGE_OVERRIDE = None
+        with pytest.raises(ValueError, match="judge|reward_model"):
+            _online_dpo_wrapper()._build_judge_or_reward(_Tcfg())
+
+
 # ---------------------------------------------------------------------------
 # Task 6 — train.py routing
 # ---------------------------------------------------------------------------
@@ -462,13 +616,15 @@ class TestOnlineDpoWrapper:
 
 class TestOnlineDpoRouting:
     def test_train_routes_online_dpo(self):
+        # A distinct-string `elif cfg.task == ...` branch (cannot be shadowed by
+        # another equality branch) that instantiates the wrapper.
         import inspect
 
         from soup_cli.commands import train as train_cmd
 
         src = inspect.getsource(train_cmd)
-        assert 'cfg.task == "online_dpo"' in src
-        assert "OnlineDPOTrainerWrapper" in src
+        assert 'elif cfg.task == "online_dpo":' in src
+        assert "OnlineDPOTrainerWrapper(cfg, **trainer_kwargs)" in src
 
 
 # ---------------------------------------------------------------------------
@@ -535,6 +691,16 @@ class TestBestOfN:
         from soup_cli.utils.best_of_n import BestOfNPick, build_dpo_pair
 
         assert build_dpo_pair("p", BestOfNPick(0, "x", (2.0, 2.0)), ["x", "x"]) is None
+
+    def test_three_candidates_non_boundary_winner_and_loser(self):
+        from soup_cli.utils.best_of_n import build_dpo_pair, judge_pick_best
+
+        # scores by length: ["xx"(2), "xxxx"(4), "x"(1)] -> winner idx1, loser idx2
+        cands = ["xx", "xxxx", "x"]
+        pick = judge_pick_best("p", cands, _ScoreJudge())
+        assert pick.winner_idx == 1 and pick.winner == "xxxx"
+        pair = build_dpo_pair("p", pick, cands)
+        assert pair == {"prompt": "p", "chosen": "xxxx", "rejected": "x"}
 
     def test_no_top_level_torch(self):
         import ast
@@ -759,6 +925,21 @@ class TestEvolve:
         with pytest.raises(ValueError, match="rounds"):
             run_evolve(["x"], "depth", 6, lambda p: "y")
 
+    def test_full_elimination_carries_forward_seed(self):
+        from soup_cli.utils.evolve import run_evolve
+
+        calls = {"i": 0}
+
+        def _gen(prompt):
+            calls["i"] += 1
+            # Round 1 echoes the seed (eliminated for all); round 2+ is valid.
+            return "seedX" if calls["i"] == 1 else "evolved-real"
+
+        rows = run_evolve(["seedX"], "depth", 2, _gen)
+        assert len(rows) == 1
+        assert rows[0].round == 2  # round 1 fully eliminated
+        assert rows[0].seed == "seedX"  # original seed carried forward
+
     def test_evolve_instruction_renders_seed(self):
         from soup_cli.utils.evolve import evolve_instruction
 
@@ -864,6 +1045,7 @@ class TestEvolveCli:
                  "-o", "o.jsonl"],
             )
             assert result.exit_code == 2, (result.output, repr(result.exception))
+            assert "anthropic" in result.output.lower()
         finally:
             os.remove(path)
 
