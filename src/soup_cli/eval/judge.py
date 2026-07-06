@@ -441,6 +441,77 @@ def pairwise_winrate(
     return total / len(pairs)
 
 
+def _as_prompt_text(prompt) -> str:
+    """Best-effort text of a prompt (string or conversational message list)."""
+    if isinstance(prompt, str):
+        return prompt
+    if isinstance(prompt, list):
+        users = [
+            m["content"]
+            for m in prompt
+            if isinstance(m, dict) and m.get("role") == "user"
+            and isinstance(m.get("content"), str)
+        ]
+        if users:
+            return users[-1]
+        return " ".join(
+            m["content"]
+            for m in prompt
+            if isinstance(m, dict) and isinstance(m.get("content"), str)
+        )
+    return str(prompt)
+
+
+def _as_completion_text(completion) -> str:
+    """Best-effort text of a completion (string, message, or message list)."""
+    if isinstance(completion, str):
+        return completion
+    if isinstance(completion, dict):
+        content = completion.get("content")
+        return content if isinstance(content, str) else str(completion)
+    if isinstance(completion, list):
+        return " ".join(
+            m["content"]
+            for m in completion
+            if isinstance(m, dict) and isinstance(m.get("content"), str)
+        )
+    return str(completion)
+
+
+def make_judge_reward_func(evaluator: object, *, name: str = "soup_judge"):
+    """Build a trl-1.x OnlineDPO POINTWISE reward function from a Soup evaluator.
+
+    trl 1.x removed the pairwise-judge Online DPO API (``BasePairwiseJudge``) and
+    ranks the two on-policy completions by a per-completion ``reward_funcs``
+    signal instead. This adapts Soup's ``JudgeEvaluator`` by scoring each
+    completion pointwise with ``evaluator.evaluate(prompt, completion)`` — the
+    SAME pointwise judge ``soup data best-of-n`` uses — returning its
+    ``weighted_score``. Note the semantic difference vs the trl-0.19.x path,
+    which uses the swap-debiased *pairwise* comparison; per-version behaviour is
+    documented as a known difference.
+
+    The returned callable matches trl's reward-func contract
+    ``fn(prompts, completions, **kwargs) -> list[float]`` and carries ``name`` as
+    ``__name__`` so trl logs ``rewards/<name>``.
+    """
+
+    def _reward(prompts, completions, **kwargs):
+        scores: list[float] = []
+        for prompt, completion in zip(prompts, completions, strict=False):
+            prompt_text = _as_prompt_text(prompt)
+            completion_text = _as_completion_text(completion)
+            try:
+                score = evaluator.evaluate(prompt_text, completion_text).weighted_score
+                scores.append(float(score))
+            except Exception as exc:  # noqa: BLE001 — judge/network variety
+                logger.debug("judge reward func failed: %s", exc)
+                scores.append(0.0)
+        return scores
+
+    _reward.__name__ = name
+    return _reward
+
+
 def _base_pairwise_judge_cls() -> type:
     """Lazily import TRL's ``BasePairwiseJudge`` with a friendly error."""
     try:

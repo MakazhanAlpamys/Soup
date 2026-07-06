@@ -23,7 +23,10 @@ reproducing 70+ versions of notes.
     `training.online_dpo_judge: "ollama://model"` (or set `reward_model` —
     exactly one), `online_dpo_loss_type: sigmoid|ipo`, `online_dpo_max_new_tokens`;
     `beta` reuses `dpo_beta`. Transformers + text only. Recipe:
-    `online-dpo-smollm2-135m`.
+    `online-dpo-smollm2-135m`. Adapts to the installed TRL: on trl 0.19.x the
+    judge is a swap-debiased *pairwise* comparison; on trl 1.x (which removed
+    pairwise judges) the same `JudgeEvaluator` is used as a *pointwise*
+    reward function — a documented per-version behaviour difference.
   - **`soup data best-of-n`** — Best-of-N rejection sampling (BOND-lite): sample
     N completions from `--base` locally, a `--judge` scores each pointwise, and
     the winner is written as an SFT chat row (with provenance). `--emit-pairs`

@@ -2,16 +2,28 @@
 
 Unlike offline DPO (which reads static ``prompt/chosen/rejected`` rows), Online
 DPO generates two completions per prompt ON-POLICY at each step and asks a
-*judge* (a pairwise LLM judge) OR a *reward model* which is better — the winner
-becomes ``chosen``, the loser ``rejected``. The judge closes the loop.
+*judge* (an LLM judge) OR a *reward model* which is better — the winner becomes
+``chosen``, the loser ``rejected``. The judge closes the loop.
 
 Data is prompt-only (like GRPO): Soup's ``{"messages": [...]}`` rows are
 normalized to the OnlineDPO ``prompt`` column (chat, minus the assistant turn).
 
-The judge is a Soup :func:`soup_cli.eval.judge.make_soup_pairwise_judge` adapter
-over the project's httpx ``JudgeEvaluator`` (ollama / server / openai), so it
-works with a local judge on the dev box. ``_ONLINE_DPO_JUDGE_OVERRIDE`` is a
-test seam for injecting a synthetic judge (offline proof-of-mechanism).
+**Cross-version adapter.** TRL changed the OnlineDPO API between 0.19.x and 1.x:
+
+- **trl 0.19.x** — ``from trl import OnlineDPOTrainer``; the judge is a
+  ``BasePairwiseJudge`` (swap-debiased *pairwise* comparison, via
+  :func:`soup_cli.eval.judge.make_soup_pairwise_judge`); a reward model is
+  passed as ``reward_model=`` / ``reward_processing_class=``.
+- **trl 1.x** — pairwise judges were removed; ``OnlineDPOTrainer`` moved to
+  ``trl.experimental.online_dpo`` and ranks completions by ``reward_funcs=``. The
+  same Soup ``JudgeEvaluator`` is adapted to a *pointwise* reward function
+  (:func:`soup_cli.eval.judge.make_judge_reward_func`) — the same pointwise judge
+  ``soup data best-of-n`` uses. Reward models pass as ``reward_funcs=[rm]`` /
+  ``reward_processing_classes=[tok]``.
+
+``_ONLINE_DPO_JUDGE_OVERRIDE`` is a test seam for injecting a synthetic Soup
+evaluator (has ``.compare_pair`` + ``.evaluate``); it is adapted to whichever
+API the installed trl exposes.
 """
 
 import time
@@ -26,8 +38,41 @@ from soup_cli.utils.gpu import estimate_batch_size, model_size_from_name
 console = Console()
 
 # Test seam: when set, replaces the URL-built judge (used by the offline
-# synthetic-judge smoke). A ``trl.BasePairwiseJudge`` instance or None.
+# synthetic-judge smoke). A Soup evaluator (``.compare_pair`` + ``.evaluate``).
 _ONLINE_DPO_JUDGE_OVERRIDE = None
+
+
+def _import_online_dpo():
+    """Import ``OnlineDPOConfig``/``OnlineDPOTrainer`` across trl versions.
+
+    trl 0.19.x exposes them at the top level; trl 1.x moved them to
+    ``trl.experimental.online_dpo``.
+    """
+    try:
+        from trl import OnlineDPOConfig, OnlineDPOTrainer
+
+        return OnlineDPOConfig, OnlineDPOTrainer
+    except ImportError:
+        pass
+    try:
+        from trl.experimental.online_dpo import OnlineDPOConfig, OnlineDPOTrainer
+
+        return OnlineDPOConfig, OnlineDPOTrainer
+    except ImportError as exc:  # pragma: no cover — trl ships in [train]
+        raise ImportError(
+            "task='online_dpo' requires trl with OnlineDPO support "
+            "(pip install 'soup-cli[train]')"
+        ) from exc
+
+
+def _trl_has_judges() -> bool:
+    """True on trl 0.19.x (pairwise ``BasePairwiseJudge`` API), False on trl 1.x."""
+    try:
+        from trl import BasePairwiseJudge  # noqa: F401
+
+        return True
+    except ImportError:
+        return False
 
 # Fallback chat template for base models that ship none. Unlike the shared
 # ``constants.DEFAULT_CHAT_TEMPLATE``, this one emits an assistant generation
@@ -115,13 +160,7 @@ class OnlineDPOTrainerWrapper:
         """Load model, tokenizer, build the OnlineDPO trainer (judge in loop)."""
         from datasets import Dataset
 
-        try:
-            from trl import OnlineDPOConfig, OnlineDPOTrainer
-        except ImportError as exc:  # pragma: no cover — trl ships in [train]
-            raise ImportError(
-                "task='online_dpo' requires trl>=0.19 with OnlineDPO support "
-                "(pip install 'soup-cli[train]')"
-            ) from exc
+        OnlineDPOConfig, OnlineDPOTrainer = _import_online_dpo()  # noqa: N806 (classes)
 
         from soup_cli.trainer.sft import _enable_hf_transfer_progress
 
@@ -288,27 +327,37 @@ class OnlineDPOTrainerWrapper:
 
         apply_pre_lora_patches(self.model, cfg.base)
 
+    @staticmethod
+    def _judge_kwargs(evaluator, has_judges: bool) -> dict:
+        """Adapt a Soup evaluator to the installed trl's judge/reward API."""
+        if has_judges:  # trl 0.19.x — swap-debiased pairwise judge
+            from soup_cli.eval.judge import make_soup_pairwise_judge
+
+            return {"judge": make_soup_pairwise_judge(evaluator)}
+        # trl 1.x — pointwise reward function (judges were removed)
+        from soup_cli.eval.judge import make_judge_reward_func
+
+        return {"reward_funcs": [make_judge_reward_func(evaluator)]}
+
     def _build_judge_or_reward(self, tcfg) -> dict:
         """Resolve the OnlineDPO reward signal: judge OR reward_model.
 
         Precedence: the test seam, then the judge URL, then a reward model. The
         schema cross-validator guarantees exactly one of judge/reward is set for
-        a real config.
+        a real config. The returned kwargs adapt to the installed trl version
+        (``judge=`` on 0.19.x, ``reward_funcs=`` on 1.x).
         """
+        has_judges = _trl_has_judges()
         if _ONLINE_DPO_JUDGE_OVERRIDE is not None:
-            return {"judge": _ONLINE_DPO_JUDGE_OVERRIDE}
+            return self._judge_kwargs(_ONLINE_DPO_JUDGE_OVERRIDE, has_judges)
         if tcfg.online_dpo_judge:
             from soup_cli.eval.gate import _parse_judge_url
-            from soup_cli.eval.judge import (
-                JudgeEvaluator,
-                make_soup_pairwise_judge,
-                validate_judge_api_base,
-            )
+            from soup_cli.eval.judge import JudgeEvaluator, validate_judge_api_base
 
             provider, model, api_base = _parse_judge_url(tcfg.online_dpo_judge)
             validate_judge_api_base(api_base)
             evaluator = JudgeEvaluator(provider=provider, model=model, api_base=api_base)
-            return {"judge": make_soup_pairwise_judge(evaluator)}
+            return self._judge_kwargs(evaluator, has_judges)
         if tcfg.reward_model:
             from transformers import (
                 AutoModelForSequenceClassification,
@@ -323,7 +372,13 @@ class OnlineDPOTrainerWrapper:
             reward_tok = AutoTokenizer.from_pretrained(
                 tcfg.reward_model, trust_remote_code=self._trust_remote_code
             )
-            return {"reward_model": reward, "reward_processing_class": reward_tok}
+            if has_judges:  # trl 0.19.x
+                return {"reward_model": reward, "reward_processing_class": reward_tok}
+            # trl 1.x — a reward model is one of reward_funcs
+            return {
+                "reward_funcs": [reward],
+                "reward_processing_classes": [reward_tok],
+            }
         raise ValueError(
             "online_dpo needs training.online_dpo_judge or training.reward_model"
         )

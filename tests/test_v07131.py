@@ -8,13 +8,32 @@ pairwise`` (#284), ``task='online_dpo'`` (schema + trainer + routing),
 
 from __future__ import annotations
 
+import pytest
+
 # ---------------------------------------------------------------------------
 # Shared test doubles
 # ---------------------------------------------------------------------------
 
 
+def _trl_has_judges():
+    """True on trl 0.19.x (pairwise BasePairwiseJudge API), False on trl 1.x."""
+    try:
+        from trl import BasePairwiseJudge  # noqa: F401
+
+        return True
+    except ImportError:
+        return False
+
+
+_TRL_HAS_JUDGES = _trl_has_judges()
+
+
 class _FakeJudge:
-    """Deterministic pairwise judge: prefers the LONGER response (A vs B)."""
+    """Synthetic length-preferring Soup evaluator: prefers the LONGER response.
+
+    Provides BOTH shapes so it drives either trl API: ``compare_pair`` (pairwise,
+    trl 0.19.x) and ``evaluate`` (pointwise, trl 1.x reward-func path).
+    """
 
     def __init__(self, rubric=None):
         self.rubric = rubric or {"scale": {"min": 1, "max": 5}, "criteria": []}
@@ -23,6 +42,13 @@ class _FakeJudge:
         if len(resp_a) == len(resp_b):
             return -1
         return 0 if len(resp_a) > len(resp_b) else 1
+
+    def evaluate(self, prompt, response, category="default"):
+        from soup_cli.eval.judge import JudgeScore
+
+        return JudgeScore(
+            prompt=prompt, response=response, weighted_score=float(len(response))
+        )
 
 
 class _PosBias:
@@ -152,10 +178,16 @@ class TestCompareePairMethod:
 
 
 # ---------------------------------------------------------------------------
-# Task 2 — make_soup_pairwise_judge (TRL BasePairwiseJudge adapter)
+# Task 2 — make_soup_pairwise_judge (trl 0.19.x pairwise BasePairwiseJudge
+# adapter). trl 1.x removed judges -> the 1.x-equivalent coverage is
+# TestJudgeRewardFunc below (the pointwise reward-func adapter). Together they
+# cover whichever adapter the installed trl actually exposes.
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.skipif(
+    not _TRL_HAS_JUDGES, reason="pairwise BasePairwiseJudge adapter is trl<1.0 only"
+)
 class TestSoupPairwiseJudge:
     def test_judge_returns_best_index(self):
         from soup_cli.eval.judge import make_soup_pairwise_judge
@@ -189,6 +221,45 @@ class TestSoupPairwiseJudge:
         from soup_cli.eval.judge import make_soup_pairwise_judge
 
         assert isinstance(make_soup_pairwise_judge(_FakeJudge()), BasePairwiseJudge)
+
+
+# ---------------------------------------------------------------------------
+# make_judge_reward_func (trl 1.x pointwise reward-func adapter) — version-
+# independent (uses evaluator.evaluate), so it runs on every trl.
+# ---------------------------------------------------------------------------
+
+
+class TestJudgeRewardFunc:
+    def test_named_and_scores_by_evaluate(self):
+        from soup_cli.eval.judge import make_judge_reward_func
+
+        fn = make_judge_reward_func(_FakeJudge())
+        assert fn.__name__ == "soup_judge"
+        # _FakeJudge.evaluate -> weighted_score == len(response)
+        scores = fn(["p", "p"], ["ab", "abcd"])
+        assert scores == [2.0, 4.0]
+
+    def test_custom_name(self):
+        from soup_cli.eval.judge import make_judge_reward_func
+
+        assert make_judge_reward_func(_FakeJudge(), name="mine").__name__ == "mine"
+
+    def test_conversational_prompt_and_completion(self):
+        from soup_cli.eval.judge import make_judge_reward_func
+
+        fn = make_judge_reward_func(_FakeJudge())
+        prompts = [[{"role": "user", "content": "hi"}]]
+        completions = [[{"role": "assistant", "content": "abcd"}]]
+        assert fn(prompts, completions) == [4.0]
+
+    def test_evaluate_failure_scores_zero(self):
+        from soup_cli.eval.judge import make_judge_reward_func
+
+        class _Boom:
+            def evaluate(self, prompt, response, category="default"):
+                raise RuntimeError("network down")
+
+        assert make_judge_reward_func(_Boom())(["p"], ["x"]) == [0.0]
 
 
 # ---------------------------------------------------------------------------
@@ -430,17 +501,6 @@ class TestOnlineDpoSchema:
 # ---------------------------------------------------------------------------
 
 
-def _make_len_judge():
-    """A synthetic length-preferring BasePairwiseJudge (no network)."""
-    from trl import BasePairwiseJudge
-
-    class _LenJudge(BasePairwiseJudge):
-        def judge(self, prompts, completions, shuffle_order=True):
-            return [0 if len(c[0]) >= len(c[1]) else 1 for c in completions]
-
-    return _LenJudge()
-
-
 class TestOnlineDpoWrapper:
     def test_prompt_rows_from_messages(self):
         from soup_cli.trainer.online_dpo import OnlineDPOTrainerWrapper
@@ -514,13 +574,18 @@ class TestOnlineDpoWrapper:
         )
         assert out == []
 
-    def test_synthetic_judge_prefers_longer(self):
-        j = _make_len_judge()
-        # completion 0 longer -> index 0; completion 1 longer -> index 1
-        assert j.judge(["p"], [["longer", "s"]]) == [0]
-        assert j.judge(["p"], [["s", "longer"]]) == [1]
+    def test_synthetic_evaluator_double_both_shapes(self):
+        # The seam is a Soup evaluator (compare_pair + evaluate), adapted per
+        # trl version. Verify both shapes on the length-preferring double.
+        ev = _FakeJudge()
+        assert ev.compare_pair("p", "longer", "s") == 0
+        assert ev.compare_pair("p", "s", "longer") == 1
+        assert ev.evaluate("p", "abcd").weighted_score == 4.0
 
     def test_setup_builds_trainer_with_synthetic_judge(self):
+        # Parametrized over trl version by the wrapper itself: the seam evaluator
+        # is adapted to judge= (trl 0.19.x) or reward_funcs= (trl 1.x). Builds a
+        # real trainer on either.
         import soup_cli.trainer.online_dpo as od
         from soup_cli.config.loader import load_config_from_string
         from soup_cli.trainer.online_dpo import OnlineDPOTrainerWrapper
@@ -531,7 +596,7 @@ class TestOnlineDpoWrapper:
             "training:\n  online_dpo_judge: \"ollama://m\"\n"
             "  epochs: 1\n  batch_size: 2\n  online_dpo_max_new_tokens: 8\n"
         )
-        od._ONLINE_DPO_JUDGE_OVERRIDE = _make_len_judge()
+        od._ONLINE_DPO_JUDGE_OVERRIDE = _FakeJudge()
         try:
             wrapper = OnlineDPOTrainerWrapper(cfg, device="cpu")
             wrapper.setup(
@@ -564,17 +629,21 @@ def _online_dpo_wrapper():
 
 
 class TestBuildJudgeOrReward:
-    def test_judge_url_branch(self):
-        from trl import BasePairwiseJudge
-
+    def test_judge_url_branch_adapts_to_trl_version(self):
         import soup_cli.trainer.online_dpo as od
 
         od._ONLINE_DPO_JUDGE_OVERRIDE = None
         result = _online_dpo_wrapper()._build_judge_or_reward(_Tcfg(judge="ollama://m"))
-        assert isinstance(result["judge"], BasePairwiseJudge)
-        assert "reward_model" not in result
+        if _TRL_HAS_JUDGES:  # trl 0.19.x -> pairwise judge=
+            from trl import BasePairwiseJudge
 
-    def test_reward_model_branch(self, monkeypatch):
+            assert isinstance(result["judge"], BasePairwiseJudge)
+            assert "reward_funcs" not in result
+        else:  # trl 1.x -> pointwise reward_funcs=
+            assert callable(result["reward_funcs"][0])
+            assert "judge" not in result
+
+    def test_reward_model_branch_adapts_to_trl_version(self, monkeypatch):
         import soup_cli.trainer.online_dpo as od
 
         od._ONLINE_DPO_JUDGE_OVERRIDE = None
@@ -586,22 +655,27 @@ class TestBuildJudgeOrReward:
             "transformers.AutoTokenizer.from_pretrained", lambda *a, **k: object()
         )
         result = _online_dpo_wrapper()._build_judge_or_reward(_Tcfg(reward="some/rm"))
-        assert set(result.keys()) == {"reward_model", "reward_processing_class"}
+        if _TRL_HAS_JUDGES:  # trl 0.19.x
+            assert set(result.keys()) == {"reward_model", "reward_processing_class"}
+        else:  # trl 1.x — a reward model is one of reward_funcs
+            assert set(result.keys()) == {"reward_funcs", "reward_processing_classes"}
+            assert len(result["reward_funcs"]) == 1
 
     def test_precedence_override_wins(self):
         import soup_cli.trainer.online_dpo as od
 
-        sentinel = object()
-        od._ONLINE_DPO_JUDGE_OVERRIDE = sentinel
+        od._ONLINE_DPO_JUDGE_OVERRIDE = _FakeJudge()
         try:
-            result = _online_dpo_wrapper()._build_judge_or_reward(_Tcfg(judge="ollama://m"))
-            assert result["judge"] is sentinel  # seam beats the URL branch
+            # A URL that _parse_judge_url would REJECT if the URL branch ran.
+            # No exception -> the seam took precedence (URL never parsed).
+            result = _online_dpo_wrapper()._build_judge_or_reward(
+                _Tcfg(judge="not-a-valid-url")
+            )
+            assert "judge" in result or "reward_funcs" in result
         finally:
             od._ONLINE_DPO_JUDGE_OVERRIDE = None
 
     def test_neither_raises(self):
-        import pytest
-
         import soup_cli.trainer.online_dpo as od
 
         od._ONLINE_DPO_JUDGE_OVERRIDE = None
