@@ -28,6 +28,20 @@ from typing import List, Sequence
 # or adversarial row must not allocate an O(n*m) table without bound.
 _MAX_SEQ: int = 100_000
 
+# Cheap raw-character cap applied BEFORE normalization / tokenization so a
+# hostile transcript field can't force an O(n) lower()/translate()/split() pass
+# ahead of the DP-table cap above.
+_MAX_RAW_CHARS: int = 1_000_000
+
+
+def _guard_raw_len(*texts: str) -> None:
+    for text in texts:
+        if isinstance(text, str) and len(text) > _MAX_RAW_CHARS:
+            raise ValueError(
+                f"input too long ({len(text)} chars > {_MAX_RAW_CHARS}); "
+                "split the input"
+            )
+
 # Punctuation stripped by the default normalizer (removed, not spaced —
 # mirrors jiwer's RemovePunctuation default).
 _PUNCT_TABLE = str.maketrans("", "", string.punctuation)
@@ -99,6 +113,7 @@ def _error_rate(ref_units: Sequence, hyp_units: Sequence) -> float:
 
 def wer(ref: str, hyp: str, *, normalize: bool = True) -> float:
     """Word error rate — word-level edit distance / reference word count."""
+    _guard_raw_len(ref, hyp)
     if normalize:
         ref = normalize_text(ref)
         hyp = normalize_text(hyp)
@@ -107,6 +122,7 @@ def wer(ref: str, hyp: str, *, normalize: bool = True) -> float:
 
 def cer(ref: str, hyp: str, *, normalize: bool = True) -> float:
     """Character error rate — char-level edit distance / reference char count."""
+    _guard_raw_len(ref, hyp)
     if normalize:
         ref = normalize_text(ref)
         hyp = normalize_text(hyp)
@@ -128,6 +144,7 @@ def corpus_wer(refs: Sequence[str], hyps: Sequence[str], *, normalize: bool = Tr
     total_ref = 0
     empty_ref_errors = 0
     for ref, hyp in zip(refs, hyps):
+        _guard_raw_len(ref, hyp)
         if normalize:
             ref = normalize_text(ref)
             hyp = normalize_text(hyp)

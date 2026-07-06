@@ -52,7 +52,13 @@ def write_asr_sidecar(output_dir: str, language: str | None, task: str) -> None:
 
 
 def read_asr_sidecar(model_dir: str) -> dict:
-    """Read the ASR decode prefix sidecar; ``{}`` when absent/unreadable."""
+    """Read the ASR decode prefix sidecar; ``{}`` when absent/unreadable.
+
+    Values are shape-validated (a shared / downloaded model directory could
+    carry a hostile sidecar): ``language`` must be a str <= 32 chars with no
+    NUL; ``task`` must be one of transcribe/translate. Anything else is
+    dropped so it never reaches ``whisper.generate``.
+    """
     import json
 
     path = os.path.join(model_dir, _ASR_SIDECAR)
@@ -61,9 +67,18 @@ def read_asr_sidecar(model_dir: str) -> dict:
     try:
         with open(path, encoding="utf-8") as fh:
             data = json.load(fh)
-        return data if isinstance(data, dict) else {}
     except (OSError, ValueError):
         return {}
+    if not isinstance(data, dict):
+        return {}
+    out: dict = {}
+    language = data.get("language")
+    if isinstance(language, str) and language and "\x00" not in language and len(language) <= 32:
+        out["language"] = language
+    task = data.get("task")
+    if task in ("transcribe", "translate"):
+        out["task"] = task
+    return out
 
 
 def _validate_asr_row(row: dict) -> tuple[str, str]:

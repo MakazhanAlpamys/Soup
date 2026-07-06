@@ -537,6 +537,71 @@ class TestAsrInfer:
         # rows with no 'audio' are dropped -> empty
         assert rows == []
 
+    def test_resolve_asr_audio_rejects_traversal(self, tmp_path):
+        import soup_cli.commands.infer as infer_mod
+
+        with pytest.raises(ValueError, match="under"):
+            infer_mod._resolve_asr_audio("../../etc/passwd", tmp_path)
+
+    def test_resolve_asr_audio_rejects_unc(self, tmp_path):
+        import soup_cli.commands.infer as infer_mod
+
+        with pytest.raises(ValueError, match="UNC"):
+            infer_mod._resolve_asr_audio("\\\\attacker\\share\\x.wav", tmp_path)
+
+    def test_resolve_asr_audio_allows_contained(self, tmp_path):
+        import soup_cli.commands.infer as infer_mod
+
+        got = infer_mod._resolve_asr_audio("clip.wav", tmp_path)
+        assert got == str(tmp_path / "clip.wav")
+
+    def test_infer_asr_skips_traversal_row(self, tmp_path, monkeypatch):
+        import json
+
+        import soup_cli.commands.infer as infer_mod
+
+        monkeypatch.setattr(
+            infer_mod, "_ASR_TRANSCRIBER_OVERRIDE", lambda audio_path: "hi"
+        )
+        in_path = tmp_path / "in.jsonl"
+        in_path.write_text(
+            json.dumps({"audio": "../evil.wav", "text": "x"}) + "\n"
+            + json.dumps({"audio": "ok.wav", "text": "hi"}) + "\n",
+            encoding="utf-8",
+        )
+        monkeypatch.chdir(tmp_path)
+        infer_mod._infer_asr(
+            model="openai/whisper-tiny", base=None, input_file="in.jsonl",
+            device="cpu", output_file="out.jsonl", max_tokens=8,
+            trust_remote_code=False,
+        )
+        lines = [json.loads(x) for x in (tmp_path / "out.jsonl").read_text().splitlines()]
+        # traversal row dropped, only the contained one survives
+        assert len(lines) == 1
+        assert lines[0]["audio"] == "ok.wav"
+
+
+class TestAsrMetricsDoS:
+    def test_raw_char_cap(self):
+        from soup_cli.utils.asr_metrics import _MAX_RAW_CHARS, wer
+
+        huge = "a" * (_MAX_RAW_CHARS + 1)
+        with pytest.raises(ValueError, match="too long"):
+            wer(huge, "b")
+
+
+class TestAsrSidecarValidation:
+    def test_read_sidecar_drops_hostile_values(self, tmp_path):
+        import json
+
+        from soup_cli.trainer.asr import _ASR_SIDECAR, read_asr_sidecar
+
+        (tmp_path / _ASR_SIDECAR).write_text(
+            json.dumps({"language": "x" * 100, "task": "rm -rf"}), encoding="utf-8"
+        )
+        # oversize language + invalid task both dropped
+        assert read_asr_sidecar(str(tmp_path)) == {}
+
 
 # ---------------------------------------------------------------------------
 # Task 5 — recipes (138 -> 142)
