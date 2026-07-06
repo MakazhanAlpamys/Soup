@@ -212,6 +212,8 @@ class DataConfig(BaseModel):
         "prm", "pre_tokenized", "input_output", "video", "multimodal",
         # v0.62.0 Part A — RAFT (Retrieval-Augmented Fine-Tuning)
         "raft",
+        # v0.71.32 — ASR (Whisper): rows are {"audio": path, "text": transcript}
+        "asr",
     ] = Field(
         default="auto",
         description="Data format",
@@ -1135,6 +1137,41 @@ class TrainingConfig(BaseModel):
             raise ValueError("online_dpo_judge must not contain null bytes")
         if len(value) > 512:
             raise ValueError("online_dpo_judge must be <= 512 chars")
+        return value
+
+    # v0.71.32 — ASR (Whisper) fine-tuning knobs.
+    asr_language: Optional[str] = Field(
+        default=None,
+        description=(
+            "Target language for task='asr' (Whisper), e.g. 'en' or 'spanish'. "
+            "Sets the forced decoder prompt; None uses the model default / "
+            "language detection."
+        ),
+    )
+    asr_task: Literal["transcribe", "translate"] = Field(
+        default="transcribe",
+        description=(
+            "Whisper decoding objective for task='asr': 'transcribe' (same "
+            "language) or 'translate' (to English)."
+        ),
+    )
+
+    @field_validator("asr_language", mode="before")
+    @classmethod
+    def _validate_asr_language_field(cls, value: Any) -> Optional[str]:
+        """v0.71.32 — shape-only validation of the ASR language code."""
+        if value is None:
+            return None
+        if isinstance(value, bool) or not isinstance(value, str):
+            raise ValueError(
+                f"asr_language must be a string, got {type(value).__name__}"
+            )
+        if not value.strip():
+            raise ValueError("asr_language must be a non-empty string")
+        if "\x00" in value:
+            raise ValueError("asr_language must not contain null bytes")
+        if len(value) > 32:
+            raise ValueError("asr_language must be <= 32 chars")
         return value
 
     # v0.50.0 Part A — GRPO objective variants (unsloth + axolotl parity).
@@ -3544,6 +3581,8 @@ class SoupConfig(BaseModel):
         # v0.71.31 — Online DPO (on-policy generation judged by a pairwise
         # judge OR a reward_model in the loop).
         "online_dpo",
+        # v0.71.32 — ASR (Whisper) fine-tuning.
+        "asr",
     ] = Field(
         default="sft",
         description=(
@@ -4373,6 +4412,30 @@ class SoupConfig(BaseModel):
         elif online_set:
             raise ValueError(
                 "training.online_dpo_* fields require task='online_dpo'"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_asr_compat(self) -> "SoupConfig":
+        """v0.71.32 — ASR (Whisper) gate.
+
+        ``task='asr'`` runs a transformers ``Seq2SeqTrainer`` on
+        ``WhisperForConditionalGeneration``; it requires
+        ``backend='transformers'`` (mlx / unsloth have no Whisper path). The
+        ``asr_language`` / ``asr_task`` knobs only affect the ASR decoder, so
+        setting them on another task silently no-ops → reject as a footgun.
+        """
+        t = self.training
+        asr_set = t.asr_language is not None or t.asr_task != "transcribe"
+        if self.task == "asr":
+            if self.backend != "transformers":
+                raise ValueError(
+                    "task='asr' requires backend='transformers'; "
+                    f"got backend={self.backend!r}"
+                )
+        elif asr_set:
+            raise ValueError(
+                "training.asr_language / asr_task require task='asr'"
             )
         return self
 

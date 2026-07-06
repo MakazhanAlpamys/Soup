@@ -128,3 +128,95 @@ class TestNoTopLevelTorch:
             elif isinstance(node, ast.ImportFrom):
                 if node.module:
                     assert node.module.split(".")[0] not in banned
+
+
+# ---------------------------------------------------------------------------
+# Task 2 — schema (task=asr / format=asr / asr fields + validators)
+# ---------------------------------------------------------------------------
+
+
+def _asr_yaml(
+    *,
+    task="asr",
+    backend="transformers",
+    fmt="asr",
+    asr_language=None,
+    asr_task=None,
+):
+    lines = [
+        "base: openai/whisper-tiny",
+        f"task: {task}",
+        f"backend: {backend}",
+        "data:",
+        "  train: ./data/train.jsonl",
+        f"  format: {fmt}",
+        "training:",
+        "  epochs: 1",
+        "  lr: 1e-4",
+        "  batch_size: 4",
+    ]
+    if asr_language is not None:
+        lines.append(f"  asr_language: {asr_language}")
+    if asr_task is not None:
+        lines.append(f"  asr_task: {asr_task}")
+    return "\n".join(lines) + "\n"
+
+
+class TestAsrSchema:
+    def test_happy_parse_defaults(self):
+        from soup_cli.config.loader import load_config_from_string
+
+        cfg = load_config_from_string(_asr_yaml())
+        assert cfg.task == "asr"
+        assert cfg.data.format == "asr"
+        assert cfg.training.asr_language is None
+        assert cfg.training.asr_task == "transcribe"
+
+    def test_language_and_task_parse(self):
+        from soup_cli.config.loader import load_config_from_string
+
+        cfg = load_config_from_string(_asr_yaml(asr_language="en", asr_task="translate"))
+        assert cfg.training.asr_language == "en"
+        assert cfg.training.asr_task == "translate"
+
+    def test_reject_mlx_backend(self):
+        from soup_cli.config.loader import load_config_from_string
+
+        with pytest.raises(ValueError, match="transformers"):
+            load_config_from_string(_asr_yaml(backend="mlx"))
+
+    def test_reject_unsloth_backend(self):
+        from soup_cli.config.loader import load_config_from_string
+
+        with pytest.raises(ValueError, match="transformers"):
+            load_config_from_string(_asr_yaml(backend="unsloth"))
+
+    def test_footgun_language_on_non_asr(self):
+        from soup_cli.config.loader import load_config_from_string
+
+        with pytest.raises(ValueError, match="asr"):
+            load_config_from_string(_asr_yaml(task="sft", fmt="alpaca", asr_language="en"))
+
+    def test_footgun_translate_on_non_asr(self):
+        from soup_cli.config.loader import load_config_from_string
+
+        with pytest.raises(ValueError, match="asr"):
+            load_config_from_string(_asr_yaml(task="sft", fmt="alpaca", asr_task="translate"))
+
+    def test_field_validator_empty_language(self):
+        from soup_cli.config.loader import load_config_from_string
+
+        with pytest.raises(ValueError, match="asr_language"):
+            load_config_from_string(_asr_yaml(asr_language='"   "'))
+
+    def test_field_validator_oversize_language(self):
+        from soup_cli.config.loader import load_config_from_string
+
+        with pytest.raises(ValueError, match="asr_language"):
+            load_config_from_string(_asr_yaml(asr_language="x" * 40))
+
+    def test_invalid_asr_task_literal(self):
+        from soup_cli.config.loader import load_config_from_string
+
+        with pytest.raises(ValueError):
+            load_config_from_string(_asr_yaml(asr_task="frobnicate"))
