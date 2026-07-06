@@ -706,7 +706,11 @@ class TestBestOfN:
         import ast
         import pathlib
 
-        src = pathlib.Path("src/soup_cli/utils/best_of_n.py").read_text(encoding="utf-8")
+        import soup_cli
+
+        src = (
+            pathlib.Path(soup_cli.__file__).parent / "utils" / "best_of_n.py"
+        ).read_text(encoding="utf-8")
         tree = ast.parse(src)
         top = {
             n.names[0].name.split(".")[0]
@@ -957,8 +961,12 @@ class TestEvolve:
         import ast
         import pathlib
 
+        import soup_cli
+
         tree = ast.parse(
-            pathlib.Path("src/soup_cli/utils/evolve.py").read_text(encoding="utf-8")
+            (pathlib.Path(soup_cli.__file__).parent / "utils" / "evolve.py").read_text(
+                encoding="utf-8"
+            )
         )
         top = {
             n.module.split(".")[0]

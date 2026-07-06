@@ -440,7 +440,8 @@ class TestShipEvidenceHandler:
 
     def test_bad_mode_raises(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        ev = {"task": {"mode": "pairwise", "base": 0.5, "tuned": 0.8}, "benchmarks": {}}
+        # "pairwise" became a supported mode in v0.71.31; use a truly invalid one.
+        ev = {"task": {"mode": "not_a_real_mode", "base": 0.5, "tuned": 0.8}, "benchmarks": {}}
         (tmp_path / "ev.json").write_text(json.dumps(ev), encoding="utf-8")
         with pytest.raises(reg.McpToolError):
             reg.tool_ship_evidence({"evidence": "ev.json"})
