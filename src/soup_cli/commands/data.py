@@ -2782,7 +2782,7 @@ def best_of_n(
     from soup_cli.eval.gate import _parse_judge_url
     from soup_cli.eval.judge import JudgeEvaluator
     from soup_cli.utils import best_of_n as bon
-    from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
+    from soup_cli.utils.paths import atomic_write_text, enforce_under_cwd_and_no_symlink
     from soup_cli.utils.trust_remote import (
         model_requires_trust_remote_code,
         resolve_trust_remote_code,
@@ -2845,47 +2845,48 @@ def best_of_n(
         console.print("[red]--output is required unless --plan-only is set.[/]")
         raise typer.Exit(2)
 
-    import contextlib
-
     import torch
 
     torch.manual_seed(seed)
     model, tokenizer = _load_bon_model(base, device, trust)
 
-    sft_count = 0
-    pair_count = 0
     dev = device or None
-    with contextlib.ExitStack() as stack:
-        out_fh = stack.enter_context(open(output, "w", encoding="utf-8"))
-        pairs_fh = (
-            stack.enter_context(open(emit_pairs, "w", encoding="utf-8"))
-            if emit_pairs
-            else None
+    sft_lines: list = []
+    pair_lines: list = []
+    for prompt in prompt_list:
+        candidates = bon.sample_candidates(
+            model,
+            tokenizer,
+            prompt,
+            n=n,
+            temperature=temperature,
+            max_new_tokens=max_new_tokens,
+            device=dev,
         )
-        for prompt in prompt_list:
-            candidates = bon.sample_candidates(
-                model,
-                tokenizer,
-                prompt,
-                n=n,
-                temperature=temperature,
-                max_new_tokens=max_new_tokens,
-                device=dev,
+        pick = bon.judge_pick_best(prompt, candidates, evaluator)
+        sft_lines.append(
+            json.dumps(bon.build_sft_row(prompt, pick, judge_model=judge), ensure_ascii=False)
+        )
+        if emit_pairs:
+            pair = bon.build_dpo_pair(prompt, pick, candidates)
+            if pair is not None:
+                pair_lines.append(json.dumps(pair, ensure_ascii=False))
+
+    # Atomic writes (mkstemp + os.replace + re-validated containment) so a
+    # symlink swapped in after the fast-fail check cannot redirect the write.
+    try:
+        atomic_write_text("\n".join(sft_lines) + "\n", output, field="output")
+        if emit_pairs:
+            atomic_write_text(
+                ("\n".join(pair_lines) + "\n") if pair_lines else "",
+                emit_pairs,
+                field="emit-pairs",
             )
-            pick = bon.judge_pick_best(prompt, candidates, evaluator)
-            out_fh.write(
-                json.dumps(
-                    bon.build_sft_row(prompt, pick, judge_model=judge),
-                    ensure_ascii=False,
-                )
-                + "\n"
-            )
-            sft_count += 1
-            if pairs_fh is not None:
-                pair = bon.build_dpo_pair(prompt, pick, candidates)
-                if pair is not None:
-                    pairs_fh.write(json.dumps(pair, ensure_ascii=False) + "\n")
-                    pair_count += 1
+    except (OSError, ValueError, TypeError) as exc:
+        console.print(f"[red]Failed to write output: {_escape(str(exc))}[/]")
+        raise typer.Exit(1) from exc
+    sft_count = len(sft_lines)
+    pair_count = len(pair_lines)
 
     body = (
         f"SFT rows:   [bold]{sft_count}[/]\n"
@@ -2929,7 +2930,7 @@ def evolve(
 
     from soup_cli.utils.evolve import STRATEGIES, run_evolve
     from soup_cli.utils.magpie import make_magpie_generate_fn
-    from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
+    from soup_cli.utils.paths import atomic_write_text, enforce_under_cwd_and_no_symlink
 
     if strategy not in STRATEGIES:
         console.print(
@@ -2974,22 +2975,27 @@ def evolve(
         raise typer.Exit(2)
 
     evolved_rows = run_evolve(seeds, strategy, rounds, generate_fn)
-    with open(output, "w", encoding="utf-8") as out_fh:
-        for row in evolved_rows:
-            out_fh.write(
-                json.dumps(
-                    {
-                        "messages": [{"role": "user", "content": row.instruction}],
-                        "_evolve": {
-                            "seed": row.seed,
-                            "strategy": row.strategy,
-                            "round": row.round,
-                        },
-                    },
-                    ensure_ascii=False,
-                )
-                + "\n"
-            )
+    out_lines = [
+        json.dumps(
+            {
+                "messages": [{"role": "user", "content": row.instruction}],
+                "_evolve": {
+                    "seed": row.seed,
+                    "strategy": row.strategy,
+                    "round": row.round,
+                },
+            },
+            ensure_ascii=False,
+        )
+        for row in evolved_rows
+    ]
+    try:
+        atomic_write_text(
+            ("\n".join(out_lines) + "\n") if out_lines else "", output, field="output"
+        )
+    except (OSError, ValueError, TypeError) as exc:
+        console.print(f"[red]Failed to write output: {_escape(str(exc))}[/]")
+        raise typer.Exit(1) from exc
 
     console.print(
         Panel(

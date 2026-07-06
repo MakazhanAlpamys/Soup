@@ -612,6 +612,26 @@ class TestBestOfNCli:
         finally:
             os.remove(path)
 
+    def test_reject_output_outside_cwd(self):
+        import os
+
+        from typer.testing import CliRunner
+
+        from soup_cli.commands.data import app
+
+        path = os.path.join(os.getcwd(), "_bon_prompts_outcwd.jsonl")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write('{"prompt": "hi"}\n')
+        try:
+            result = CliRunner().invoke(
+                app,
+                ["best-of-n", "--base", "m", "--prompts", path, "--n", "4",
+                 "--judge", "ollama://m", "-o", "../escape.jsonl"],
+            )
+            assert result.exit_code == 2, (result.output, repr(result.exception))
+        finally:
+            os.remove(path)
+
     def test_happy_path(self, monkeypatch):
         import json
         import os
@@ -862,6 +882,24 @@ class TestEvolveCli:
                  "--plan-only"],
             )
             assert result.exit_code == 0, (result.output, repr(result.exception))
+        finally:
+            os.remove(path)
+
+    def test_reject_output_outside_cwd(self):
+        import os
+
+        from typer.testing import CliRunner
+
+        from soup_cli.commands.data import app
+
+        path = _write_seeds("_evolve_outcwd.jsonl")
+        try:
+            result = CliRunner().invoke(
+                app,
+                ["evolve", "--input", path, "--provider", "ollama", "--model", "m",
+                 "-o", "../escape.jsonl"],
+            )
+            assert result.exit_code == 2, (result.output, repr(result.exception))
         finally:
             os.remove(path)
 
