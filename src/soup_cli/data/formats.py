@@ -32,6 +32,8 @@ FORMAT_SIGNATURES = {
     "sharegpt4v": {"image", "conversations"},
     "embedding": {"anchor", "positive"},
     "audio": {"audio", "messages"},
+    # v0.71.32 — ASR (Whisper): audio path + reference transcript.
+    "asr": {"audio", "text"},
     "plaintext": {"text"},
     "tool-calling": {"messages", "tools", "tool_calls"},
 }
@@ -49,10 +51,12 @@ def detect_format(data: list[dict]) -> str:
     # tool-calling (messages+tools+tool_calls) is checked BEFORE audio
     # (audio+messages): a row carrying both would otherwise match audio first
     # and silently drop its tools/tool_calls. tool-calling before chatml
-    # (signature is a superset of chatml). plaintext ("text" key only) last.
+    # (signature is a superset of chatml). asr ({audio, text}) is checked
+    # BEFORE plaintext ({text}) — its signature is a superset, so plaintext
+    # would otherwise win and silently drop the audio path. plaintext last.
     check_order = [
         "alpaca", "llava", "sharegpt4v", "kto", "dpo", "embedding",
-        "tool-calling", "audio", "sharegpt", "chatml", "plaintext",
+        "tool-calling", "audio", "asr", "sharegpt", "chatml", "plaintext",
     ]
     for fmt in check_order:
         required_keys = FORMAT_SIGNATURES[fmt]
@@ -282,14 +286,13 @@ def _convert_asr(row: dict) -> dict:
     Output: {"audio": "path.wav", "text": "transcript"}
 
     Unlike other formats, ASR rows are NOT normalized to messages — the Whisper
-    trainer consumes the raw audio path + reference transcript directly.
+    trainer consumes the raw audio path + reference transcript directly. Row
+    validation delegates to the trainer's ``_validate_asr_row`` so the two never
+    drift (lazy import — the trainer module has no top-level heavy deps).
     """
-    audio = row["audio"]
-    if not isinstance(audio, str) or not audio.strip():
-        raise ValueError("ASR row must have a non-empty 'audio' field")
-    text = row["text"]
-    if not isinstance(text, str):
-        raise ValueError("ASR row must have a string 'text' transcript field")
+    from soup_cli.trainer.asr import _validate_asr_row
+
+    audio, text = _validate_asr_row(row)
     return {"audio": audio, "text": text}
 
 

@@ -220,6 +220,19 @@ class TestAsrSchema:
         with pytest.raises(ValueError):
             load_config_from_string(_asr_yaml(asr_task="frobnicate"))
 
+    def test_asr_rejects_wrong_data_format(self):
+        # task=asr must pin data.format to asr/auto (python-review MEDIUM).
+        from soup_cli.config.loader import load_config_from_string
+
+        with pytest.raises(ValueError, match="data.format"):
+            load_config_from_string(_asr_yaml(fmt="alpaca"))
+
+    def test_asr_allows_auto_format(self):
+        from soup_cli.config.loader import load_config_from_string
+
+        cfg = load_config_from_string(_asr_yaml(fmt="auto"))
+        assert cfg.data.format == "auto"
+
 
 # ---------------------------------------------------------------------------
 # Task 3 — AsrTrainerWrapper + routing + data format
@@ -299,6 +312,25 @@ class TestAsrArchGuard:
         assert asrmod._require_whisper_base("openai/whisper-tiny", False).model_type == "whisper"
 
 
+class TestAsrPrefixCustomized:
+    def test_default_is_not_customized(self):
+        from soup_cli.trainer.asr import _prefix_customized
+
+        assert _prefix_customized(None, "transcribe") is False
+
+    def test_language_customizes(self):
+        from soup_cli.trainer.asr import _prefix_customized
+
+        assert _prefix_customized("en", "transcribe") is True
+
+    def test_bare_translate_customizes(self):
+        # python-review HIGH: asr_task='translate' with no language must NOT
+        # silently fall back to transcribe.
+        from soup_cli.trainer.asr import _prefix_customized
+
+        assert _prefix_customized(None, "translate") is True
+
+
 class TestAsrDataFormat:
     def test_is_audio_format_includes_asr(self):
         from soup_cli.data.formats import is_audio_format
@@ -315,6 +347,20 @@ class TestAsrDataFormat:
         from soup_cli.data.formats import format_to_messages
 
         assert format_to_messages({"audio": "a.wav"}, "asr") is None
+
+    def test_detect_format_asr_not_plaintext(self):
+        # {"audio","text"} must auto-detect as asr, NOT plaintext (which would
+        # silently drop the audio path). Regression for the python-review HIGH.
+        from soup_cli.data.formats import detect_format
+
+        assert detect_format([{"audio": "clip.wav", "text": "hello"}]) == "asr"
+
+    def test_convert_asr_delegates_to_validate(self):
+        # _convert_asr reuses the trainer's canonical validator (single source
+        # of truth) — a missing text still yields None via the wrapper.
+        from soup_cli.data.formats import format_to_messages
+
+        assert format_to_messages({"audio": "a.wav", "text": 5}, "asr") is None
 
 
 class TestAsrRouting:

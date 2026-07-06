@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 import typer
 from rich.console import Console
@@ -312,7 +312,7 @@ def _build_asr_transcriber(
     device: Optional[str],
     max_tokens: int,
     trust_remote_code: bool,
-):
+) -> Callable[[str], str]:
     """Build a ``transcribe(audio_path) -> str`` closure over a Whisper model."""
     from soup_cli.trainer.asr import _require_whisper_base
     from soup_cli.utils.tts_codec import load_audio_mono

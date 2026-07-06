@@ -4433,6 +4433,11 @@ class SoupConfig(BaseModel):
                     "task='asr' requires backend='transformers'; "
                     f"got backend={self.backend!r}"
                 )
+            if self.data.format not in ("asr", "auto"):
+                raise ValueError(
+                    "task='asr' requires data.format='asr' (or 'auto'); "
+                    f"got data.format={self.data.format!r}"
+                )
         elif asr_set:
             raise ValueError(
                 "training.asr_language / asr_task require task='asr'"

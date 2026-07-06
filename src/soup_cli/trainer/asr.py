@@ -24,11 +24,11 @@ from __future__ import annotations
 import math
 import time
 from pathlib import Path
-from typing import Any, List, Tuple
+from typing import Any
 
 from rich.console import Console
 
-from soup_cli.config.schema import SoupConfig
+from soup_cli.config.schema import SoupConfig, TrainingConfig
 
 console = Console()
 
@@ -36,7 +36,7 @@ console = Console()
 _ASR_SAMPLE_RATE: int = 16000
 
 
-def _validate_asr_row(row: dict) -> Tuple[str, str]:
+def _validate_asr_row(row: dict) -> tuple[str, str]:
     """Extract ``(audio_path, transcript)`` from an ASR row.
 
     Raises:
@@ -58,6 +58,16 @@ def _validate_asr_row(row: dict) -> Tuple[str, str]:
             f"ASR row 'text' must be a string, got {type(text).__name__}"
         )
     return audio, text
+
+
+def _prefix_customized(asr_language: str | None, asr_task: str) -> bool:
+    """True when the Whisper decoder prefix departs from the default.
+
+    A bare ``asr_task='translate'`` (``asr_language=None``) must still customize
+    the prefix — otherwise the translate objective silently trains/decodes as
+    plain transcribe.
+    """
+    return bool(asr_language) or asr_task != "transcribe"
 
 
 def _load_autoconfig(base: str, trust_remote_code: bool) -> Any:
@@ -144,8 +154,12 @@ class AsrTrainerWrapper:
         )
         # For fine-tuning, the decoder prefix (language / task) is baked into
         # the tokenized labels; forced_decoder_ids must be cleared so training
-        # does not double-force them (HF Whisper fine-tuning guide).
-        if tcfg.asr_language:
+        # does not double-force them (HF Whisper fine-tuning guide). Fire when
+        # EITHER knob departs from the default — a bare asr_task='translate'
+        # (asr_language=None) must still set the translate prefix, not silently
+        # train as transcribe.
+        prefix_customized = _prefix_customized(tcfg.asr_language, tcfg.asr_task)
+        if prefix_customized:
             self.processor.tokenizer.set_prefix_tokens(
                 language=tcfg.asr_language, task=tcfg.asr_task
             )
@@ -161,7 +175,7 @@ class AsrTrainerWrapper:
             self.processor.get_decoder_prompt_ids(
                 language=tcfg.asr_language, task=tcfg.asr_task
             )
-            if tcfg.asr_language
+            if prefix_customized
             else None
         )
 
@@ -258,7 +272,7 @@ class AsrTrainerWrapper:
         )
         self._output_dir = str(output_dir)
 
-    def _should_use_lora(self, tcfg: Any) -> bool:
+    def _should_use_lora(self, tcfg: TrainingConfig) -> bool:
         """LoRA is on iff the config declares a positive-rank LoRA block."""
         lora = getattr(tcfg, "lora", None)
         return lora is not None and getattr(lora, "r", 0) > 0
@@ -322,7 +336,7 @@ class _SpeechSeq2SeqCollator:
     def __init__(self, processor: Any) -> None:
         self.processor = processor
 
-    def __call__(self, features: List[dict]) -> dict:
+    def __call__(self, features: list[dict]) -> dict:
         input_features = [
             {"input_features": f["input_features"]} for f in features
         ]
