@@ -1310,6 +1310,11 @@ def train(
         from soup_cli.trainer.tts import TTSTrainerWrapper
 
         trainer_wrapper = TTSTrainerWrapper(cfg, **trainer_kwargs)
+    elif cfg.task == "asr":
+        # v0.71.32 — ASR (Whisper) fine-tuning via Seq2SeqTrainer.
+        from soup_cli.trainer.asr import AsrTrainerWrapper
+
+        trainer_wrapper = AsrTrainerWrapper(cfg, **trainer_kwargs)
     else:
         trainer_wrapper = SFTTrainerWrapper(cfg, **trainer_kwargs)
     trainer_wrapper.setup(dataset)

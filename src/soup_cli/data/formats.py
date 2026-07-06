@@ -89,6 +89,8 @@ def format_to_messages(row: dict, fmt: str) -> Optional[dict]:
         "prm", "pre_tokenized", "input_output", "video", "multimodal",
         # v0.62.0 Part A — RAFT (Retrieval-Augmented Fine-Tuning).
         "raft",
+        # v0.71.32 — ASR (Whisper): {"audio": path, "text": transcript}.
+        "asr",
     )
     if fmt not in valid_formats:
         raise ValueError(f"Unknown format: {fmt}")
@@ -123,6 +125,8 @@ def format_to_messages(row: dict, fmt: str) -> Optional[dict]:
             return _convert_multimodal(row)
         elif fmt == "raft":
             return _convert_raft(row)
+        elif fmt == "asr":
+            return _convert_asr(row)
         else:
             return _convert_vision(row)
     except (KeyError, TypeError, IndexError, ValueError):
@@ -271,6 +275,24 @@ def _convert_audio(row: dict) -> dict:
     return {"messages": messages, "audio": audio}
 
 
+def _convert_asr(row: dict) -> dict:
+    """Convert an ASR row to the pass-through training shape (v0.71.32).
+
+    Input:  {"audio": "path.wav", "text": "transcript"}
+    Output: {"audio": "path.wav", "text": "transcript"}
+
+    Unlike other formats, ASR rows are NOT normalized to messages — the Whisper
+    trainer consumes the raw audio path + reference transcript directly.
+    """
+    audio = row["audio"]
+    if not isinstance(audio, str) or not audio.strip():
+        raise ValueError("ASR row must have a non-empty 'audio' field")
+    text = row["text"]
+    if not isinstance(text, str):
+        raise ValueError("ASR row must have a string 'text' transcript field")
+    return {"audio": audio, "text": text}
+
+
 def _convert_vision(row: dict) -> dict:
     """Convert LLaVA / ShareGPT4V vision format to unified messages + image.
 
@@ -404,7 +426,7 @@ def is_vision_format(fmt: str) -> bool:
 
 def is_audio_format(fmt: str) -> bool:
     """Check if a format is an audio/speech format."""
-    return fmt == "audio"
+    return fmt in ("audio", "asr")
 
 
 # --- Reverse conversion: messages → target format ---

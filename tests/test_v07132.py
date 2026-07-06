@@ -10,7 +10,6 @@ recipes.
 from __future__ import annotations
 
 import ast
-import math
 from pathlib import Path
 
 import pytest
@@ -220,3 +219,148 @@ class TestAsrSchema:
 
         with pytest.raises(ValueError):
             load_config_from_string(_asr_yaml(asr_task="frobnicate"))
+
+
+# ---------------------------------------------------------------------------
+# Task 3 — AsrTrainerWrapper + routing + data format
+# ---------------------------------------------------------------------------
+
+
+def _torch_available() -> bool:
+    try:
+        import torch  # noqa: F401
+        import transformers  # noqa: F401
+
+        return True
+    except ImportError:
+        return False
+
+
+_TORCH = _torch_available()
+_TINY_WHISPER = "hf-internal-testing/tiny-random-WhisperForConditionalGeneration"
+
+
+def _write_sine_wav(path, *, seconds: float = 1.0, sr: int = 16000):
+    import numpy as np
+    import soundfile as sf
+
+    t = np.linspace(0.0, seconds, int(sr * seconds), endpoint=False)
+    wave = 0.1 * np.sin(2 * np.pi * 220.0 * t)
+    sf.write(str(path), wave.astype("float32"), sr)
+
+
+class TestAsrRow:
+    def test_validate_asr_row_ok(self):
+        from soup_cli.trainer.asr import _validate_asr_row
+
+        assert _validate_asr_row({"audio": "a.wav", "text": "hello"}) == (
+            "a.wav",
+            "hello",
+        )
+
+    def test_validate_asr_row_missing_audio(self):
+        from soup_cli.trainer.asr import _validate_asr_row
+
+        with pytest.raises(ValueError, match="audio"):
+            _validate_asr_row({"text": "hi"})
+
+    def test_validate_asr_row_missing_text(self):
+        from soup_cli.trainer.asr import _validate_asr_row
+
+        with pytest.raises(ValueError, match="text"):
+            _validate_asr_row({"audio": "a.wav"})
+
+    def test_validate_asr_row_non_str_audio(self):
+        from soup_cli.trainer.asr import _validate_asr_row
+
+        with pytest.raises((ValueError, TypeError)):
+            _validate_asr_row({"audio": 123, "text": "hi"})
+
+
+class TestAsrArchGuard:
+    def test_require_whisper_rejects_non_whisper(self, monkeypatch):
+        from soup_cli.trainer import asr as asrmod
+
+        class _FakeCfg:
+            model_type = "gpt2"
+
+        monkeypatch.setattr(asrmod, "_load_autoconfig", lambda base, trust: _FakeCfg())
+        with pytest.raises(ValueError, match="whisper"):
+            asrmod._require_whisper_base("some/gpt2-model", False)
+
+    def test_require_whisper_accepts_whisper(self, monkeypatch):
+        from soup_cli.trainer import asr as asrmod
+
+        class _FakeCfg:
+            model_type = "whisper"
+
+        monkeypatch.setattr(asrmod, "_load_autoconfig", lambda base, trust: _FakeCfg())
+        # Returns the config, does not raise.
+        assert asrmod._require_whisper_base("openai/whisper-tiny", False).model_type == "whisper"
+
+
+class TestAsrDataFormat:
+    def test_is_audio_format_includes_asr(self):
+        from soup_cli.data.formats import is_audio_format
+
+        assert is_audio_format("asr")
+
+    def test_format_to_messages_asr_passthrough(self):
+        from soup_cli.data.formats import format_to_messages
+
+        row = format_to_messages({"audio": "a.wav", "text": "hi there"}, "asr")
+        assert row == {"audio": "a.wav", "text": "hi there"}
+
+    def test_format_to_messages_asr_missing_text(self):
+        from soup_cli.data.formats import format_to_messages
+
+        assert format_to_messages({"audio": "a.wav"}, "asr") is None
+
+
+class TestAsrRouting:
+    def test_train_routes_asr(self):
+        import inspect
+
+        import soup_cli.commands.train as train_mod
+
+        src = inspect.getsource(train_mod)
+        assert 'cfg.task == "asr"' in src
+        assert "AsrTrainerWrapper" in src
+
+
+class TestAsrTrainerSetup:
+    @pytest.mark.skipif(not _TORCH, reason="needs torch + transformers")
+    def test_setup_builds_seq2seq_trainer(self, tmp_path):
+        pytest.importorskip("soundfile")
+        from soup_cli.config.loader import load_config_from_string
+        from soup_cli.trainer.asr import AsrTrainerWrapper
+
+        clip = tmp_path / "clip0.wav"
+        _write_sine_wav(clip)
+        dataset = {"train": [{"audio": str(clip), "text": "hello world"}]}
+        yaml = (
+            f"base: {_TINY_WHISPER}\n"
+            "task: asr\n"
+            "backend: transformers\n"
+            f"output: {str(tmp_path / 'out').replace(chr(92), '/')}\n"
+            "data:\n"
+            "  train: ./data/train.jsonl\n"
+            "  format: asr\n"
+            "training:\n"
+            "  epochs: 1\n"
+            "  lr: 1e-4\n"
+            "  batch_size: 2\n"
+        )
+        cfg = load_config_from_string(yaml)
+        wrapper = AsrTrainerWrapper(cfg, device="cpu")
+        try:
+            wrapper.setup(dataset)
+        except (OSError, ImportError) as exc:  # network / hub unavailable
+            pytest.skip(f"tiny whisper unavailable: {exc}")
+        except ValueError as exc:  # torch<2.6 .bin-load restriction (dev env)
+            if "torch" in str(exc).lower() or "safetensors" in str(exc).lower():
+                pytest.skip(f"tiny whisper not loadable in this env: {exc}")
+            raise
+        assert wrapper.trainer is not None
+        # Seq2SeqTrainer with predict_with_generate wired.
+        assert wrapper.trainer.args.predict_with_generate is True
