@@ -364,3 +364,64 @@ class TestAsrTrainerSetup:
         assert wrapper.trainer is not None
         # Seq2SeqTrainer with predict_with_generate wired.
         assert wrapper.trainer.args.predict_with_generate is True
+
+
+# ---------------------------------------------------------------------------
+# Task 4 — soup infer --task asr
+# ---------------------------------------------------------------------------
+
+
+class TestAsrInfer:
+    def test_help_shows_task_option(self):
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        result = CliRunner().invoke(app, ["infer", "--help"])
+        assert result.exit_code == 0, result.output
+        assert "--task" in result.output
+
+    def test_infer_asr_writes_transcriptions_and_wer(self, tmp_path, monkeypatch):
+        import json
+
+        import soup_cli.commands.infer as infer_mod
+
+        # Test seam: skip the real Whisper load, return a fixed hypothesis.
+        monkeypatch.setattr(
+            infer_mod, "_ASR_TRANSCRIBER_OVERRIDE", lambda audio_path: "hello world"
+        )
+
+        in_path = tmp_path / "in.jsonl"
+        in_path.write_text(
+            json.dumps({"audio": "clip.wav", "text": "hello world"}) + "\n"
+            + json.dumps({"audio": "clip2.wav", "text": "goodbye"}) + "\n",
+            encoding="utf-8",
+        )
+        out_path = tmp_path / "out.jsonl"
+        # Run under cwd so the output-containment check passes.
+        monkeypatch.chdir(tmp_path)
+        infer_mod._infer_asr(
+            model="openai/whisper-tiny",
+            base=None,
+            input_file="in.jsonl",
+            device="cpu",
+            output_file="out.jsonl",
+            max_tokens=64,
+            trust_remote_code=False,
+        )
+        lines = [json.loads(x) for x in out_path.read_text(encoding="utf-8").splitlines()]
+        assert lines[0]["transcription"] == "hello world"
+        assert lines[0]["wer"] == 0.0
+        # ref "goodbye" (1 word) vs hyp "hello world" -> 2 edits / 1 = 2.0
+        assert lines[1]["wer"] == 2.0
+
+    def test_read_asr_rows_rejects_missing_audio(self, tmp_path):
+        import json
+
+        import soup_cli.commands.infer as infer_mod
+
+        p = tmp_path / "bad.jsonl"
+        p.write_text(json.dumps({"text": "no audio"}) + "\n", encoding="utf-8")
+        rows = infer_mod._read_asr_rows(p)
+        # rows with no 'audio' are dropped -> empty
+        assert rows == []

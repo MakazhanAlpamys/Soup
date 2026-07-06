@@ -94,6 +94,15 @@ def infer(
         "--device",
         help="Device: cuda, mps, cpu. Auto-detected if not set.",
     ),
+    task: str = typer.Option(
+        "text",
+        "--task",
+        help=(
+            "Inference task: 'text' (default, chat generation) or 'asr' "
+            "(Whisper transcription; input rows are {\"audio\": path[, "
+            "\"text\": reference]})."
+        ),
+    ),
     trust_remote_code: bool = typer.Option(
         False,
         "--trust-remote-code",
@@ -132,6 +141,23 @@ def infer(
     if not input_path.exists():
         console.print(f"[red]Input file not found: {input_path}[/]")
         raise typer.Exit(1)
+
+    # v0.71.32 — ASR (Whisper) transcription branch. Diverts before the chat
+    # model-resolution path; _infer_asr owns its own Whisper load + output.
+    if task == "asr":
+        _infer_asr(
+            model=model,
+            base=base,
+            input_file=input_file,
+            device=device,
+            output_file=output_file,
+            max_tokens=max_tokens,
+            trust_remote_code=trust_remote_code,
+        )
+        return
+    if task != "text":
+        console.print(f"[red]Unknown --task {task!r}; expected 'text' or 'asr'.[/]")
+        raise typer.Exit(2)
 
     # Resolve model: local path or HF repo id (auto-fallback, #N7).
     try:
@@ -241,6 +267,156 @@ def infer(
             title="[bold green]Inference Complete![/]",
         )
     )
+
+
+# v0.71.32 — test seam: when set to ``callable(audio_path) -> str`` it replaces
+# the real Whisper transcriber, so the ASR path is unit-testable without a
+# model download.
+_ASR_TRANSCRIBER_OVERRIDE = None
+
+
+def _read_asr_rows(path: Path) -> list[dict]:
+    """Read ASR rows ``{"audio": path[, "text": reference]}`` from JSONL.
+
+    Rows without a non-empty string ``audio`` are dropped (a warning is
+    printed once). ``text``, when present, is the reference transcript used for
+    WER reporting.
+    """
+    rows: list[dict] = []
+    dropped = 0
+    with open(path, encoding="utf-8") as f:
+        for raw_line in f:
+            line = raw_line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                dropped += 1
+                continue
+            audio = obj.get("audio") if isinstance(obj, dict) else None
+            if not isinstance(audio, str) or not audio.strip():
+                dropped += 1
+                continue
+            rows.append(obj)
+    if dropped:
+        console.print(
+            f"[yellow]Skipped {dropped} row(s) with no 'audio' path.[/]"
+        )
+    return rows
+
+
+def _build_asr_transcriber(
+    model: str,
+    base: Optional[str],
+    device: Optional[str],
+    max_tokens: int,
+    trust_remote_code: bool,
+):
+    """Build a ``transcribe(audio_path) -> str`` closure over a Whisper model."""
+    from soup_cli.trainer.asr import _require_whisper_base
+    from soup_cli.utils.tts_codec import load_audio_mono
+
+    if not device:
+        from soup_cli.utils.gpu import detect_device
+
+        device, _ = detect_device()
+
+    from soup_cli.utils.trust_remote import resolve_trust_remote_code
+
+    source = base or model
+    resolved_trust = resolve_trust_remote_code(
+        source, requested=trust_remote_code, console=console,
+    )
+    # Arch guard: reject a non-Whisper base before the (large) weight load.
+    _require_whisper_base(source, resolved_trust)
+
+    from transformers import WhisperForConditionalGeneration, WhisperProcessor
+
+    console.print(f"[dim]Loading Whisper model: {model}[/]")
+    processor = WhisperProcessor.from_pretrained(
+        source, trust_remote_code=resolved_trust
+    )
+    whisper = WhisperForConditionalGeneration.from_pretrained(
+        model, trust_remote_code=resolved_trust
+    )
+    whisper.to(device)
+    whisper.eval()
+
+    def transcribe(audio_path: str) -> str:
+        import torch
+
+        wave = load_audio_mono(audio_path, target_sr=16000)
+        features = processor.feature_extractor(
+            wave, sampling_rate=16000, return_tensors="pt"
+        ).input_features.to(device)
+        with torch.no_grad():
+            generated = whisper.generate(features, max_new_tokens=max_tokens)
+        return processor.batch_decode(generated, skip_special_tokens=True)[0].strip()
+
+    return transcribe
+
+
+def _infer_asr(
+    *,
+    model: str,
+    base: Optional[str],
+    input_file: str,
+    device: Optional[str],
+    output_file: str,
+    max_tokens: int,
+    trust_remote_code: bool,
+) -> None:
+    """Transcribe an ASR JSONL input and (optionally) report WER/CER."""
+    from soup_cli.utils.asr_metrics import cer, corpus_wer, wer
+    from soup_cli.utils.paths import is_under_cwd
+
+    if not is_under_cwd(output_file):
+        console.print(
+            "[red]--output must stay under the current working directory.[/]"
+        )
+        raise typer.Exit(1)
+
+    rows = _read_asr_rows(Path(input_file))
+    if not rows:
+        console.print("[red]No ASR rows found (need {\"audio\": path} JSONL).[/]")
+        raise typer.Exit(1)
+
+    if _ASR_TRANSCRIBER_OVERRIDE is not None:
+        transcribe = _ASR_TRANSCRIBER_OVERRIDE
+    else:
+        try:
+            transcribe = _build_asr_transcriber(
+                model, base, device, max_tokens, trust_remote_code
+            )
+        except ImportError as exc:
+            console.print(f"[red]{exc}[/]")
+            raise typer.Exit(1) from exc
+        except ValueError as exc:  # arch guard / bad base
+            console.print(f"[red]{exc}[/]")
+            raise typer.Exit(2) from exc
+
+    refs: list[str] = []
+    hyps: list[str] = []
+    output_path = Path(output_file)
+    with open(output_path, "w", encoding="utf-8") as out_f:
+        for row in rows:
+            audio = row["audio"]
+            hyp = transcribe(audio)
+            rec = {"audio": audio, "transcription": hyp}
+            ref = row.get("text")
+            if isinstance(ref, str):
+                rec["reference"] = ref
+                rec["wer"] = wer(ref, hyp)
+                rec["cer"] = cer(ref, hyp)
+                refs.append(ref)
+                hyps.append(hyp)
+            out_f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+
+    summary = f"Transcribed [bold]{len(rows)}[/] clip(s) -> {output_path}"
+    if refs:
+        summary += f"\nCorpus WER: [bold]{corpus_wer(refs, hyps):.3f}[/]"
+    console.print(Panel(summary, title="[bold green]ASR Complete![/]"))
 
 
 def _read_prompts(path: Path) -> list[str]:
