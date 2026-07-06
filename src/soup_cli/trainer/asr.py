@@ -438,7 +438,7 @@ class _SpeechSeq2SeqCollator:
             label_features, return_tensors="pt"
         )
         labels = labels_batch["input_ids"].masked_fill(
-            labels_batch.attention_mask.ne(1), -100
+            labels_batch["attention_mask"].ne(1), -100
         )
         labels = _strip_decoder_start(labels, self.decoder_start_token_id)
         batch["labels"] = labels

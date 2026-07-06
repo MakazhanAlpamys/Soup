@@ -367,6 +367,24 @@ def _resolve_asr_audio(audio: str, base_dir: Path) -> str:
     return str(candidate)
 
 
+def _resolve_asr_gen_prefix(
+    asr_language: Optional[str], asr_task: Optional[str], sidecar: dict
+) -> dict:
+    """Decode-prefix precedence: explicit CLI flags > training sidecar.
+
+    Returns the ``language``/``task`` kwargs to pass to ``whisper.generate``
+    (omitting either when unresolved so the model default applies).
+    """
+    gen_kwargs: dict = {}
+    language = asr_language or sidecar.get("language")
+    task = asr_task or sidecar.get("task")
+    if language:
+        gen_kwargs["language"] = language
+    if task:
+        gen_kwargs["task"] = task
+    return gen_kwargs
+
+
 def _build_asr_transcriber(
     model: str,
     base: Optional[str],
@@ -445,13 +463,8 @@ def _build_asr_transcriber(
 
     # Resolve decode prefix: explicit flags > training sidecar > model default.
     sidecar = read_asr_sidecar(model)
-    language = asr_language or sidecar.get("language")
-    task = asr_task or sidecar.get("task")
-    gen_kwargs: dict = {"max_new_tokens": max_tokens}
-    if language:
-        gen_kwargs["language"] = language
-    if task:
-        gen_kwargs["task"] = task
+    gen_kwargs = _resolve_asr_gen_prefix(asr_language, asr_task, sidecar)
+    gen_kwargs["max_new_tokens"] = max_tokens
 
     def transcribe(audio_path: str) -> str:
         import torch

@@ -113,6 +113,29 @@ class TestAsrMetrics:
             wer(long_ref, "short", normalize=False)
 
 
+class TestAsrMetricsBranches:
+    def test_normalize_text_type_error(self):
+        from soup_cli.utils.asr_metrics import normalize_text
+
+        with pytest.raises(TypeError):
+            normalize_text(123)
+
+    def test_wer_empty_hyp_nonempty_ref(self):
+        from soup_cli.utils.asr_metrics import wer
+
+        # 3 ref words, empty hyp -> 3 deletions / 3 = 1.0
+        assert wer("the cat sat", "") == 1.0
+
+    def test_corpus_wer_mixed_empty_ref_counts_hallucination(self):
+        # Regression for the tdd-review correctness gap: an empty-ref row with a
+        # hallucinated hypothesis must NOT vanish from the numerator.
+        from soup_cli.utils.asr_metrics import corpus_wer
+
+        # row0: ref='' hyp='x' -> 1 insertion; row1: ref='a b' hyp='a b' -> 0.
+        # edits=1, ref words=2 -> 0.5 (would be 0.0 if the empty-ref row dropped).
+        assert corpus_wer(["", "a b"], ["x", "a b"]) == pytest.approx(0.5)
+
+
 class TestNoTopLevelTorch:
     def test_asr_metrics_has_no_heavy_top_level_import(self):
         import soup_cli.utils.asr_metrics as mod
@@ -289,6 +312,12 @@ class TestAsrRow:
         with pytest.raises((ValueError, TypeError)):
             _validate_asr_row({"audio": 123, "text": "hi"})
 
+    def test_validate_asr_row_empty_audio_string(self):
+        from soup_cli.trainer.asr import _validate_asr_row
+
+        with pytest.raises(ValueError, match="audio"):
+            _validate_asr_row({"audio": "   ", "text": "hi"})
+
 
 class TestAsrArchGuard:
     def test_require_whisper_rejects_non_whisper(self, monkeypatch):
@@ -363,6 +392,158 @@ class TestAsrCollatorStrip:
         assert _strip_decoder_start(labels, None).shape[1] == 2
 
 
+class TestAsrCollatorCall:
+    @pytest.mark.skipif(not _TORCH, reason="needs torch")
+    def test_masks_pad_and_strips_decoder_start(self):
+        import torch
+
+        from soup_cli.trainer.asr import _SpeechSeq2SeqCollator
+
+        class _FE:
+            def pad(self, feats, return_tensors="pt"):
+                return {"input_features": torch.zeros((2, 4))}
+
+        class _Tok:
+            def pad(self, feats, return_tensors="pt"):
+                # row0 len 3, row1 len 2 padded to 3 -> attention_mask marks pad.
+                ids = torch.tensor([[50258, 7, 9], [50258, 8, 0]])
+                mask = torch.tensor([[1, 1, 1], [1, 1, 0]])
+                return {"input_ids": ids, "attention_mask": mask}
+
+        class _Proc:
+            feature_extractor = _FE()
+            tokenizer = _Tok()
+
+        collator = _SpeechSeq2SeqCollator(_Proc(), decoder_start_token_id=50258)
+        batch = collator([{"input_features": None, "labels": [50258, 7, 9]},
+                          {"input_features": None, "labels": [50258, 8]}])
+        labels = batch["labels"]
+        # decoder-start column stripped -> width 2
+        assert labels.shape[1] == 2
+        # pad position masked to -100
+        assert labels[1, 1].item() == -100
+
+
+class TestAsrGenPrefix:
+    def test_flag_beats_sidecar(self):
+        from soup_cli.commands.infer import _resolve_asr_gen_prefix
+
+        got = _resolve_asr_gen_prefix("en", "translate", {"language": "es", "task": "transcribe"})
+        assert got == {"language": "en", "task": "translate"}
+
+    def test_sidecar_when_no_flag(self):
+        from soup_cli.commands.infer import _resolve_asr_gen_prefix
+
+        got = _resolve_asr_gen_prefix(None, None, {"language": "es", "task": "translate"})
+        assert got == {"language": "es", "task": "translate"}
+
+    def test_empty_when_neither(self):
+        from soup_cli.commands.infer import _resolve_asr_gen_prefix
+
+        assert _resolve_asr_gen_prefix(None, None, {}) == {}
+
+
+class TestAsrBuildTranscriberGuards:
+    def test_adapter_without_base_exits(self, tmp_path, monkeypatch):
+        import json
+
+        import typer
+
+        import soup_cli.commands.infer as infer_mod
+
+        (tmp_path / "adapter_config.json").write_text(json.dumps({}), encoding="utf-8")
+        with pytest.raises(typer.Exit) as exc:
+            infer_mod._build_asr_transcriber(
+                str(tmp_path), None, "cpu", 8, False
+            )
+        assert exc.value.exit_code == 1
+
+
+class TestAsrInferExitPaths:
+    def test_output_outside_cwd_exits(self, tmp_path, monkeypatch):
+        import typer
+
+        import soup_cli.commands.infer as infer_mod
+
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "in.jsonl").write_text('{"audio": "a.wav"}\n', encoding="utf-8")
+        with pytest.raises(typer.Exit) as exc:
+            infer_mod._infer_asr(
+                model="m", base=None, input_file="in.jsonl", device="cpu",
+                output_file="../evil.jsonl", max_tokens=8, trust_remote_code=False,
+            )
+        assert exc.value.exit_code == 1
+
+    def test_audio_dir_outside_cwd_exits(self, tmp_path, monkeypatch):
+        import typer
+
+        import soup_cli.commands.infer as infer_mod
+
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "in.jsonl").write_text('{"audio": "a.wav"}\n', encoding="utf-8")
+        with pytest.raises(typer.Exit) as exc:
+            infer_mod._infer_asr(
+                model="m", base=None, input_file="in.jsonl", device="cpu",
+                output_file="out.jsonl", max_tokens=8, trust_remote_code=False,
+                audio_dir="../elsewhere",
+            )
+        assert exc.value.exit_code == 1
+
+    def test_zero_rows_exits(self, tmp_path, monkeypatch):
+        import typer
+
+        import soup_cli.commands.infer as infer_mod
+
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "in.jsonl").write_text('{"text": "no audio"}\n', encoding="utf-8")
+        with pytest.raises(typer.Exit) as exc:
+            infer_mod._infer_asr(
+                model="m", base=None, input_file="in.jsonl", device="cpu",
+                output_file="out.jsonl", max_tokens=8, trust_remote_code=False,
+            )
+        assert exc.value.exit_code == 1
+
+    def test_build_importerror_exits_1(self, tmp_path, monkeypatch):
+        import typer
+
+        import soup_cli.commands.infer as infer_mod
+
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "in.jsonl").write_text('{"audio": "a.wav"}\n', encoding="utf-8")
+        monkeypatch.setattr(infer_mod, "_ASR_TRANSCRIBER_OVERRIDE", None)
+
+        def _boom(*a, **k):
+            raise ImportError("no soundfile")
+
+        monkeypatch.setattr(infer_mod, "_build_asr_transcriber", _boom)
+        with pytest.raises(typer.Exit) as exc:
+            infer_mod._infer_asr(
+                model="m", base=None, input_file="in.jsonl", device="cpu",
+                output_file="out.jsonl", max_tokens=8, trust_remote_code=False,
+            )
+        assert exc.value.exit_code == 1
+
+    def test_build_valueerror_exits_2(self, tmp_path, monkeypatch):
+        import typer
+
+        import soup_cli.commands.infer as infer_mod
+
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "in.jsonl").write_text('{"audio": "a.wav"}\n', encoding="utf-8")
+        monkeypatch.setattr(infer_mod, "_ASR_TRANSCRIBER_OVERRIDE", None)
+
+        def _boom(*a, **k):
+            raise ValueError("not a whisper base")
+
+        monkeypatch.setattr(infer_mod, "_build_asr_transcriber", _boom)
+        with pytest.raises(typer.Exit) as exc:
+            infer_mod._infer_asr(
+                model="m", base=None, input_file="in.jsonl", device="cpu",
+                output_file="out.jsonl", max_tokens=8, trust_remote_code=False,
+            )
+        assert exc.value.exit_code == 2
+
+
 class TestAsrSidecar:
     def test_write_read_roundtrip(self, tmp_path):
         from soup_cli.trainer.asr import read_asr_sidecar, write_asr_sidecar
@@ -375,6 +556,90 @@ class TestAsrSidecar:
         from soup_cli.trainer.asr import read_asr_sidecar
 
         assert read_asr_sidecar(str(tmp_path)) == {}
+
+    def test_read_malformed_json_is_empty(self, tmp_path):
+        from soup_cli.trainer.asr import _ASR_SIDECAR, read_asr_sidecar
+
+        (tmp_path / _ASR_SIDECAR).write_text("{not json", encoding="utf-8")
+        assert read_asr_sidecar(str(tmp_path)) == {}
+
+    def test_read_non_dict_is_empty(self, tmp_path):
+        from soup_cli.trainer.asr import _ASR_SIDECAR, read_asr_sidecar
+
+        (tmp_path / _ASR_SIDECAR).write_text("[1, 2, 3]", encoding="utf-8")
+        assert read_asr_sidecar(str(tmp_path)) == {}
+
+
+class TestAsrUnwrapModel:
+    def test_unwraps_peft(self):
+        from soup_cli.trainer.asr import AsrTrainerWrapper
+
+        class _Base:
+            pass
+
+        base = _Base()
+
+        class _Peft:
+            def get_base_model(self):
+                return base
+
+        w = object.__new__(AsrTrainerWrapper)
+        w.model = _Peft()
+        assert w._unwrapped_model() is base
+
+    def test_returns_plain_model(self):
+        from soup_cli.trainer.asr import AsrTrainerWrapper
+
+        plain = object()
+        w = object.__new__(AsrTrainerWrapper)
+        w.model = plain
+        assert w._unwrapped_model() is plain
+
+
+class TestAsrTrainSidecar:
+    def _fake_wrapper(self, tmp_path, *, prefix_customized, language, task):
+        from types import SimpleNamespace
+
+        from soup_cli.config.loader import load_config_from_string
+        from soup_cli.trainer.asr import AsrTrainerWrapper
+
+        yaml = _asr_yaml(asr_language=language, asr_task=task)
+        cfg = load_config_from_string(yaml)
+        w = object.__new__(AsrTrainerWrapper)
+        w.config = cfg
+        w._output_dir = str(tmp_path)
+        w._prefix_customized = prefix_customized
+        saved = {"model": False, "proc": False}
+
+        w.trainer = SimpleNamespace(
+            train=lambda resume_from_checkpoint=None: None,
+            save_model=lambda d: saved.__setitem__("model", True),
+            state=SimpleNamespace(log_history=[{"loss": 1.0}], global_step=1),
+        )
+        w.processor = SimpleNamespace(
+            save_pretrained=lambda d: saved.__setitem__("proc", True)
+        )
+        return w
+
+    def test_writes_sidecar_when_customized(self, tmp_path):
+        from soup_cli.trainer.asr import read_asr_sidecar
+
+        w = self._fake_wrapper(
+            tmp_path, prefix_customized=True, language="es", task="translate"
+        )
+        w.train()
+        assert read_asr_sidecar(str(tmp_path)) == {"language": "es", "task": "translate"}
+
+    def test_no_sidecar_when_default(self, tmp_path):
+        import os
+
+        from soup_cli.trainer.asr import _ASR_SIDECAR
+
+        w = self._fake_wrapper(
+            tmp_path, prefix_customized=False, language=None, task=None
+        )
+        w.train()
+        assert not os.path.exists(os.path.join(str(tmp_path), _ASR_SIDECAR))
 
 
 class TestAsrLoraGate:
@@ -394,6 +659,26 @@ class TestAsrLoraGate:
         cfg = load_config_from_string(yaml)
         assert cfg.training.asr_lora is True
         assert AsrTrainerWrapper._should_use_lora(None, cfg.training) is True
+
+    def test_opt_in_but_zero_rank_stays_off(self):
+        from soup_cli.config.loader import load_config_from_string
+        from soup_cli.trainer.asr import AsrTrainerWrapper
+
+        yaml = _asr_yaml() + "  asr_lora: true\n  lora:\n    r: 0\n"
+        cfg = load_config_from_string(yaml)
+        assert AsrTrainerWrapper._should_use_lora(None, cfg.training) is False
+
+    def test_asr_lora_footgun_on_non_asr(self):
+        from soup_cli.config.loader import load_config_from_string
+
+        yaml = (
+            "base: HuggingFaceTB/SmolLM2-135M-Instruct\n"
+            "task: sft\n"
+            "data:\n  train: ./d.jsonl\n  format: alpaca\n"
+            "training:\n  epochs: 1\n  lr: 1e-4\n  batch_size: 4\n  asr_lora: true\n"
+        )
+        with pytest.raises(ValueError, match="asr_lora"):
+            load_config_from_string(yaml)
 
 
 class TestAsrDataFormat:

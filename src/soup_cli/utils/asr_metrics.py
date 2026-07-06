@@ -2,9 +2,9 @@
 
 Word- and character-level error rates via Levenshtein edit distance, with a
 light Whisper-style text normalizer. No heavy dependency (no torch /
-transformers / datasets) — usable from ``soup infer --task asr`` and reused as
-``soup ship``'s task-win metric via :func:`word_accuracy` (= ``1 - WER``, so
-ship's "higher is better" leg works unchanged).
+transformers / datasets) — usable from ``soup infer --task asr``.
+:func:`word_accuracy` (= ``1 - WER``) is provided so ASR quality can feed a
+higher-is-better metric leg (e.g. ``soup ship --task-mode metric``) unchanged.
 
 Semantics:
 - ``wer`` / ``cer`` are true error *rates* — edits divided by the reference
@@ -142,7 +142,6 @@ def corpus_wer(refs: Sequence[str], hyps: Sequence[str], *, normalize: bool = Tr
         )
     total_edits = 0
     total_ref = 0
-    empty_ref_errors = 0
     for ref, hyp in zip(refs, hyps):
         _guard_raw_len(ref, hyp)
         if normalize:
@@ -151,12 +150,15 @@ def corpus_wer(refs: Sequence[str], hyps: Sequence[str], *, normalize: bool = Tr
         ref_words = ref.split()
         hyp_words = hyp.split()
         if len(ref_words) == 0:
-            # No reference words to divide by — count a full error when the
-            # hypothesis is non-empty so the corpus rate is not silently 0.
-            empty_ref_errors += 1 if len(hyp_words) else 0
+            # No reference words to divide by — fold the hypothesis words in as
+            # pure insertions so a hallucination on an empty-ref row is NOT
+            # dropped from the numerator (it would be if we skipped the row and
+            # only special-cased the all-empty corpus).
+            total_edits += len(hyp_words)
             continue
         total_edits += _levenshtein(ref_words, hyp_words)
         total_ref += len(ref_words)
     if total_ref == 0:
-        return 0.0 if empty_ref_errors == 0 else 1.0
+        # Every reference was empty: 0.0 if nothing was hallucinated, else 1.0.
+        return 0.0 if total_edits == 0 else 1.0
     return total_edits / total_ref

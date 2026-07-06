@@ -4435,7 +4435,11 @@ class SoupConfig(BaseModel):
         setting them on another task silently no-ops → reject as a footgun.
         """
         t = self.training
-        asr_set = t.asr_language is not None or t.asr_task != "transcribe"
+        asr_set = (
+            t.asr_language is not None
+            or t.asr_task != "transcribe"
+            or bool(t.asr_lora)
+        )
         if self.task == "asr":
             if self.backend != "transformers":
                 raise ValueError(
@@ -4449,7 +4453,7 @@ class SoupConfig(BaseModel):
                 )
         elif asr_set:
             raise ValueError(
-                "training.asr_language / asr_task require task='asr'"
+                "training.asr_language / asr_task / asr_lora require task='asr'"
             )
         return self
 
