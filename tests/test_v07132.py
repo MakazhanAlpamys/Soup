@@ -425,3 +425,45 @@ class TestAsrInfer:
         rows = infer_mod._read_asr_rows(p)
         # rows with no 'audio' are dropped -> empty
         assert rows == []
+
+
+# ---------------------------------------------------------------------------
+# Task 5 — recipes (138 -> 142)
+# ---------------------------------------------------------------------------
+
+
+class TestAsrRecipes:
+    def test_new_recipes_resolve(self):
+        from soup_cli.recipes.catalog import get_recipe
+
+        for name in (
+            "whisper-tiny-asr",
+            "whisper-base-asr",
+            "whisper-large-v3-asr",
+            "smolvlm-256m-sft",
+        ):
+            assert get_recipe(name) is not None, name
+
+    def test_whisper_recipes_are_asr(self):
+        from soup_cli.config.loader import load_config_from_string
+        from soup_cli.recipes.catalog import get_recipe
+
+        for name in ("whisper-tiny-asr", "whisper-base-asr", "whisper-large-v3-asr"):
+            recipe = get_recipe(name)
+            cfg = load_config_from_string(recipe.yaml_str)
+            assert cfg.task == "asr", name
+            assert cfg.data.format == "asr", name
+
+    def test_smolvlm_recipe_is_vision_sft(self):
+        from soup_cli.config.loader import load_config_from_string
+        from soup_cli.recipes.catalog import get_recipe
+
+        recipe = get_recipe("smolvlm-256m-sft")
+        cfg = load_config_from_string(recipe.yaml_str)
+        assert cfg.task == "sft"
+        assert cfg.modality == "vision"
+
+    def test_catalog_size_is_142(self):
+        from soup_cli.recipes.catalog import RECIPES
+
+        assert len(RECIPES) == 142

@@ -260,7 +260,7 @@ class TestV025NewRecipes:
             assert cfg.base == recipe.model
             assert cfg.task == recipe.task
 
-    def test_catalog_size_is_138(self):
+    def test_catalog_size_is_142(self):
         """Total catalog size — grew with each release.
 
         v0.25.0 shipped 43 recipes (29 + 9 Part A + 2 Part B tools + 3 Part E MLX).
@@ -274,10 +274,11 @@ class TestV025NewRecipes:
         v0.71.25 added 1 (qwen2.5-coder-7b-sft) -> 134.
         v0.71.30 added 3 (grpo-env-calculator/retrieval-qa/guess-number) -> 137.
         v0.71.31 added 1 (online-dpo-smollm2-135m) -> 138.
+        v0.71.32 added 3 (whisper-tiny/base/large-v3-asr) + 1 (smolvlm-256m-sft) -> 142.
         """
         from soup_cli.recipes.catalog import RECIPES
 
-        assert len(RECIPES) == 138
+        assert len(RECIPES) == 142
 
     def test_new_recipes_searchable(self):
         """Search returns the new recipes via keyword/task filter."""

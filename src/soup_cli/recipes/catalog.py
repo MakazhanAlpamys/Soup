@@ -48,7 +48,7 @@ def search_recipes(
 
 
 # ---------------------------------------------------------------------------
-# Recipe catalog (134 recipes)
+# Recipe catalog (142 recipes)
 # ---------------------------------------------------------------------------
 
 RECIPES: Dict[str, RecipeMeta] = {
@@ -2174,6 +2174,132 @@ training:
   lora:
     r: 8
     alpha: 16
+    target_modules: auto
+  quantization: none
+
+output: ./output
+""",
+    ),
+    "whisper-tiny-asr": RecipeMeta(
+        model="openai/whisper-tiny",
+        task="asr",
+        size="39M",
+        tags=("whisper", "asr", "speech", "audio", "tiny", "edge"),
+        description="Whisper tiny (39M) ASR fine-tune with LoRA on q/v "
+        "projections — fits a 4 GB GPU. Rows: {\"audio\": path, \"text\": "
+        "transcript}",
+        yaml_str="""\
+base: openai/whisper-tiny
+task: asr
+
+data:
+  train: ./data/train.jsonl
+  format: asr
+  # Relative audio paths resolve against audio_dir (defaults to the data dir).
+  audio_dir: ./data/audio
+
+training:
+  epochs: 3
+  lr: 1e-4
+  batch_size: auto
+  asr_language: en
+  asr_task: transcribe
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: [q_proj, v_proj]
+  quantization: none
+
+output: ./output
+""",
+    ),
+    "whisper-base-asr": RecipeMeta(
+        model="openai/whisper-base",
+        task="asr",
+        size="74M",
+        tags=("whisper", "asr", "speech", "audio", "base", "edge"),
+        description="Whisper base (74M) ASR fine-tune with LoRA on q/v "
+        "projections — fits a 4 GB GPU",
+        yaml_str="""\
+base: openai/whisper-base
+task: asr
+
+data:
+  train: ./data/train.jsonl
+  format: asr
+  audio_dir: ./data/audio
+
+training:
+  epochs: 3
+  lr: 1e-4
+  batch_size: auto
+  asr_language: en
+  asr_task: transcribe
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: [q_proj, v_proj]
+  quantization: none
+
+output: ./output
+""",
+    ),
+    "whisper-large-v3-asr": RecipeMeta(
+        model="openai/whisper-large-v3",
+        task="asr",
+        size="1.5B",
+        tags=("whisper", "asr", "speech", "audio", "large", "multi-gpu"),
+        description="Whisper large-v3 (1.5B) ASR fine-tune with LoRA — needs a "
+        "larger GPU (>= 16 GB); the tiny/base recipes fit a 4 GB card",
+        yaml_str="""\
+base: openai/whisper-large-v3
+task: asr
+
+data:
+  train: ./data/train.jsonl
+  format: asr
+  audio_dir: ./data/audio
+
+training:
+  epochs: 2
+  lr: 5e-5
+  batch_size: auto
+  asr_language: en
+  asr_task: transcribe
+  lora:
+    r: 32
+    alpha: 64
+    target_modules: [q_proj, v_proj]
+  quantization: none
+
+output: ./output
+""",
+    ),
+    "smolvlm-256m-sft": RecipeMeta(
+        model="HuggingFaceTB/SmolVLM-256M-Instruct",
+        task="sft",
+        size="256M",
+        tags=("smolvlm", "vision", "multimodal", "vlm", "sft", "tiny", "edge"),
+        description="SmolVLM 256M vision SFT (llava format) — a tiny VLM that "
+        "fine-tunes on a 4 GB GPU",
+        yaml_str="""\
+base: HuggingFaceTB/SmolVLM-256M-Instruct
+task: sft
+modality: vision
+
+data:
+  train: ./data/train.jsonl
+  format: llava
+  image_dir: ./data/images
+  max_length: 2048
+
+training:
+  epochs: 3
+  lr: 1e-4
+  batch_size: auto
+  lora:
+    r: 16
+    alpha: 32
     target_modules: auto
   quantization: none
 
