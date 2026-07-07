@@ -789,13 +789,19 @@ class TestAsrTrainerSetup:
 
 class TestAsrInfer:
     def test_help_shows_task_option(self):
+        import re
+
         from typer.testing import CliRunner
 
         from soup_cli.cli import app
 
-        result = CliRunner().invoke(app, ["infer", "--help"])
+        # Wide COLUMNS + ANSI-strip: Rich splits flag names with color codes and
+        # wraps at a narrow CI terminal, so a raw substring check is flaky
+        # (v0.71.26 precedent).
+        result = CliRunner().invoke(app, ["infer", "--help"], env={"COLUMNS": "200"})
         assert result.exit_code == 0, result.output
-        assert "--task" in result.output
+        cleaned = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
+        assert "--task" in cleaned
 
     def test_infer_asr_writes_transcriptions_and_wer(self, tmp_path, monkeypatch):
         import json
