@@ -2283,8 +2283,11 @@ output: ./output
         task="sft",
         size="256M",
         tags=("smolvlm", "vision", "multimodal", "vlm", "sft", "tiny", "edge"),
-        description="SmolVLM 256M vision SFT (llava format) — a tiny VLM that "
-        "fine-tunes on a 4 GB GPU",
+        description="SmolVLM 256M vision SFT (llava format) — a tiny VLM. NOTE: "
+        "SmolVLM uses an Idefics3 processor; live vision SFT needs Idefics3 "
+        "vision-path support (the LLaVA path assumes a different processor "
+        "API) — tracked as a follow-up. target_modules pinned to q_proj/v_proj "
+        "(auto cannot infer them for Idefics3).",
         yaml_str="""\
 base: HuggingFaceTB/SmolVLM-256M-Instruct
 task: sft
@@ -2303,7 +2306,7 @@ training:
   lora:
     r: 16
     alpha: 32
-    target_modules: auto
+    target_modules: [q_proj, v_proj]
   quantization: none
 
 output: ./output
