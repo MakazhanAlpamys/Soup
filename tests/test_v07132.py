@@ -113,6 +113,26 @@ class TestAsrMetrics:
             wer(long_ref, "short", normalize=False)
 
 
+class TestWhisperSizeGate:
+    # Regression for the live-smoke finding: model_size_from_name returned the
+    # 7.0-billion default for whisper checkpoints, making the hardware-fit gate
+    # predict ~19 GB and block ASR training on any consumer GPU.
+    def test_whisper_sizes_not_default(self):
+        from soup_cli.utils.gpu import model_size_from_name
+
+        assert model_size_from_name("openai/whisper-tiny") == pytest.approx(0.039)
+        assert model_size_from_name("openai/whisper-base") == pytest.approx(0.074)
+        assert model_size_from_name("openai/whisper-small") == pytest.approx(0.244)
+        assert model_size_from_name("openai/whisper-large-v3") == pytest.approx(1.55)
+
+    def test_non_whisper_still_defaults(self):
+        from soup_cli.utils.gpu import model_size_from_name
+
+        # unchanged behaviour for a nameless model
+        assert model_size_from_name("some/unknown-model") == 7.0
+        assert model_size_from_name("meta-llama/Llama-3.1-8B") == 8
+
+
 class TestAsrMetricsBranches:
     def test_normalize_text_type_error(self):
         from soup_cli.utils.asr_metrics import normalize_text

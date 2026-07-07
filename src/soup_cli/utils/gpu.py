@@ -102,6 +102,19 @@ def model_size_from_name(model_name: str) -> float:
     """Guess model size in billions from model name."""
     name_lower = model_name.lower()
 
+    # Whisper ASR checkpoints carry the size in the name suffix, not an "Nb"
+    # token — check these first so a 39M whisper-tiny isn't mistaken for the
+    # 7B default (v0.71.32: the default guess blocked ASR training on the
+    # hardware-fit gate).
+    whisper_markers = [
+        ("whisper-large", 1.55), ("whisper-medium", 0.769),
+        ("whisper-small", 0.244), ("whisper-base", 0.074),
+        ("whisper-tiny", 0.039),
+    ]
+    for marker, size in whisper_markers:
+        if marker in name_lower:
+            return size
+
     size_markers = [
         ("70b", 70), ("65b", 65), ("34b", 34), ("33b", 33),
         ("13b", 13), ("8b", 8), ("7b", 7), ("3b", 3),
