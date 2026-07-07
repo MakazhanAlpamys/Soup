@@ -561,6 +561,48 @@ training:
 {"audio": "recording.wav", "messages": [{"role": "user", "content": "Transcribe this audio."}, {"role": "assistant", "content": "Hello world."}]}
 ```
 
+### ASR fine-tuning (`task='asr'`, Whisper) — v0.71.32
+
+Fine-tune Whisper on your accent or domain. whisper-tiny (39M) and base (74M)
+train on a 4 GB GPU. Rows are `{"audio": <path>, "text": <transcript>}` under
+`data.format='asr'`; audio decodes to 16 kHz mono through the hardened loader.
+
+```yaml
+base: openai/whisper-tiny
+task: asr
+data:
+  train: ./data/train.jsonl
+  format: asr                 # rows: {"audio": "clip.wav", "text": "hello world"}
+  audio_dir: ./data/audio     # audio paths resolve here (containment-checked)
+training:
+  epochs: 3
+  lr: 1e-4
+  batch_size: 2
+  asr_language: en            # optional; sets + persists the decoder prefix
+  asr_task: transcribe        # transcribe | translate
+  asr_lora: true              # optional LoRA on q/v; default = full fine-tune
+  quantization: none
+output: ./out
+```
+
+```json
+{"audio": "clip0.wav", "text": "hello world"}
+```
+
+Transcribe + score after training:
+
+```bash
+soup infer --task asr --model ./out --input eval.jsonl --output preds.jsonl --audio-dir ./data/audio
+# -> preds carry {"transcription", "wer", "cer"} per row + a corpus WER summary
+```
+
+Notes: `task='asr'` requires `backend='transformers'` and a Whisper base (a
+non-Whisper base is rejected before download). `asr_language`/`asr_task` persist
+to an `asr_generation.json` sidecar so `soup infer --task asr` restores them
+(override with `--asr-language`/`--asr-task`). WER/CER use a light normalizer —
+good for before/after deltas, not leaderboard-comparable absolutes.
+`whisper-large-v3-asr` ships parse-only (needs a larger GPU).
+
 
 ## GRPO Plus — Objective Variants, Long-Context RL, Multi-Turn Agents
 

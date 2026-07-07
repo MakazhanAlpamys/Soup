@@ -19,6 +19,7 @@ soup train --config soup.yaml --push-as user/repo --hf-resume  Resume from lates
 soup train --config soup.yaml --find-lr        LR range finder: write recommended LR JSON
 soup train --config soup.yaml --cloud modal --gpu a100  Render a Modal.com app for serverless GPU training (plan-only; --cloud-submit submits live)
 soup infer --model ./output --input p.jsonl   Batch inference
+soup infer --task asr --model <whisper|adapter> --input a.jsonl --output o.jsonl [--audio-dir d --asr-language en --asr-task transcribe|translate]  Whisper transcription + WER/CER
 soup chat --model ./output                    Interactive chat
 soup push --model ./output --repo user/name   Upload to HuggingFace
 soup push --model ./output --repo user/name --collection user/coll-abc123  Add to HF Collection

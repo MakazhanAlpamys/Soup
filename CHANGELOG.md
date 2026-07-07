@@ -12,6 +12,36 @@ reproducing 70+ versions of notes.
 
 ## [Unreleased]
 
+## [0.71.32] - 2026-07-07
+
+### Added
+- **ASR fine-tuning (`task='asr'`, Whisper)** — fine-tune Whisper on your accent
+  or domain, locally. whisper-tiny (39M) / base (74M) train on a 4 GB GPU.
+  - New `AsrTrainerWrapper` (HF `Seq2SeqTrainer` + `WhisperProcessor`); data rows
+    are `{"audio": <path>, "text": <transcript>}` under the new `data.format='asr'`.
+    Audio decodes via the hardened `load_audio_mono` (16 kHz mono, soundfile
+    pre-probe + `O_NOFOLLOW` + symlink/size guards); transcripts become decoder
+    labels (pad → −100, decoder-start token stripped).
+  - Optional LoRA on q/v attention projections via `training.asr_lora: true`
+    (default full fine-tune); `training.asr_language` / `training.asr_task`
+    (`transcribe`|`translate`) set the decoder prefix and are persisted to an
+    `asr_generation.json` sidecar so inference restores them.
+  - **`soup infer --task asr`** — transcribe an `{"audio": path[, "text": ref]}`
+    JSONL; reports per-row and corpus WER/CER when references are present. Loads a
+    full model or a PEFT/LoRA adapter dir. Flags: `--asr-language`, `--asr-task`,
+    `--audio-dir` (audio paths are cwd/dir-contained; UNC/traversal rejected).
+  - New pure-python `utils/asr_metrics.py` — WER / CER / `word_accuracy`
+    (= 1 − WER, for a higher-is-better ship metric leg) / `corpus_wer`, with a
+    light Whisper-style text normalizer (no new dependency).
+  - Recipes: `whisper-tiny-asr`, `whisper-base-asr` (live-trainable),
+    `whisper-large-v3-asr` (parse-only, needs a larger GPU), plus
+    `smolvlm-256m-sft` (vision). Catalog 138 → 142.
+
+### Fixed
+- `model_size_from_name` now knows Whisper checkpoint sizes (tiny…large), so the
+  hardware-fit gate no longer mistakes a 39M whisper-tiny for the 7B default and
+  blocks ASR training on consumer GPUs.
+
 ## [0.71.31] - 2026-07-06
 
 ### Added

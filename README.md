@@ -49,29 +49,33 @@ infrastructure instead of improving models. Soup fixes that.
 
 ## What's New
 
-**v0.71.31 — Judge-in-the-loop suite.** Put an LLM judge in the loop across the whole workflow: train against a judge, mine winners from a base model, grow instruction diversity, and decide SHIP with a true pairwise judge win-rate.
+**v0.71.32 — ASR fine-tuning (Whisper).** Fine-tune Whisper on your accent or domain, locally. whisper-tiny (39M) and base (74M) train on a 4 GB GPU — a new modality that actually runs on a laptop card.
 
-- **`task='online_dpo'`.** Online DPO (wraps TRL `OnlineDPOTrainer`): the model generates two
-  completions per prompt on-policy each step and a *judge* (a pairwise LLM judge over your local
-  ollama / OpenAI-compatible endpoint) — or a `reward_model` — picks the winner. Set
-  `training.online_dpo_judge: "ollama://llama3.1"` (or `reward_model`, exactly one).
-- **`soup data best-of-n`.** Best-of-N rejection sampling: sample N completions from `--base`
-  locally, a `--judge` scores each, and the winner becomes an SFT row (`--emit-pairs` also writes
-  winner-vs-loser DPO pairs).
-- **`soup data evolve`.** WizardLM Evol-Instruct (depth / breadth) over an ollama / vllm provider —
-  completing the synthetic-data suite (Magpie / Forge / Persona / evolve).
-- **`soup ship --task-mode pairwise` (#284).** A true swap-debiased judge win-rate as the ship
-  leg-1 task-win, fused with the catastrophic-forgetting guard into one SHIP / DON'T-SHIP verdict.
-- **Proof-of-mechanism, honestly.** Live-validated on SmolLM2-135M: online-DPO trains with a
-  synthetic judge (`rewards/*` + `objective/kl` logged), best-of-N samples + picks, evolve loops.
-  Not a production RLHF claim (scale help wanted: #286).
+- **`task='asr'`.** A new `AsrTrainerWrapper` (HF `Seq2SeqTrainer` + `WhisperProcessor`). Data rows
+  are `{"audio": <path>, "text": <transcript>}` under `data.format='asr'`; audio decodes to 16 kHz
+  mono through the hardened loader (soundfile pre-probe + symlink/size guards). Opt-in LoRA on q/v
+  via `training.asr_lora: true` (default full fine-tune); `training.asr_language` / `asr_task`
+  (`transcribe`|`translate`) set — and persist — the decoder prefix for inference.
+- **`soup infer --task asr`.** Transcribe an `{"audio"[, "text"]}` JSONL and get per-row + corpus
+  **WER / CER** when references are present. Loads a full model or a LoRA adapter dir; audio paths
+  are containment-checked (traversal / UNC rejected).
+- **Pure-python metrics.** New `soup_cli.utils.asr_metrics` (WER / CER / `word_accuracy` /
+  `corpus_wer`) — no new dependency, reusable as a higher-is-better ship metric leg.
+- **Recipes.** `whisper-tiny-asr` / `whisper-base-asr` (live-trainable), `whisper-large-v3-asr`
+  (parse-only). Catalog 138 → 142.
+- **Proof-of-mechanism, honestly.** Live-validated on an RTX 3050: a memorization task drove
+  WER 1.000 → 0.000 (loss 7.2 → 0.0005 at 0.4/4 GB). Real accent/domain gains need real audio;
+  WER/CER use a light normalizer, not the full Whisper text normalizer.
 
 ```yaml
-task: online_dpo
+base: openai/whisper-tiny
+task: asr
+data:
+  format: asr            # rows: {"audio": "clip.wav", "text": "hello world"}
+  audio_dir: ./data/audio
 training:
-  online_dpo_judge: "ollama://llama3.1"   # a pairwise judge (or set reward_model)
-  online_dpo_loss_type: sigmoid           # sigmoid | ipo
-  online_dpo_max_new_tokens: 64
+  asr_language: en
+  asr_lora: true         # optional; default = full fine-tune
 ```
 
 Full history: [CHANGELOG.md](CHANGELOG.md) &middot; [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).

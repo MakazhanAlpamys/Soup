@@ -40,6 +40,17 @@ Soup works with **any** of the **340,000+** text-generation models on [HuggingFa
 | Qwen2-VL-7B-Instruct | 7B | LLaVA, ShareGPT4V |
 | Pixtral-12B-2409 | 12B | LLaVA, ShareGPT4V |
 
+### ASR Models (`task: asr`, Whisper — v0.71.32)
+
+| Recipe | Base | Size | Status |
+|---|---|---|---|
+| `whisper-tiny-asr` | openai/whisper-tiny | 39M | Live on 4 GB |
+| `whisper-base-asr` | openai/whisper-base | 74M | Live on 4 GB |
+| `whisper-large-v3-asr` | openai/whisper-large-v3 | 1.5B | Parse-only (larger GPU) |
+
+Rows are `{"audio": <path>, "text": <transcript>}` with `data.format: asr`. See
+[Training → ASR fine-tuning](training.md).
+
 ### Quick Size Guide
 
 | VRAM | Max Model (QLoRA 4-bit) | Example |

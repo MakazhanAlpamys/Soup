@@ -352,6 +352,13 @@ Or use `.txt` files directly (one document per line).
 {"audio": "recording.wav", "messages": [{"role": "user", "content": "Transcribe."}, {"role": "assistant", "content": "Hello world."}]}
 ```
 
+**ASR (Whisper transcription — `data.format: asr`, v0.71.32):**
+```json
+{"audio": "clip.wav", "text": "hello world"}
+```
+Audio paths resolve under `data.audio_dir` (containment-checked). Used by
+`task: asr` and `soup infer --task asr`. See [Training → ASR](training.md).
+
 **PRM (process reward, stepwise-supervised):**
 ```json
 {"prompt": "Solve 2+2", "completions": ["First, add", "Result is 4"], "labels": [true, true]}
