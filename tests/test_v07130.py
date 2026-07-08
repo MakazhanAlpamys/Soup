@@ -269,9 +269,10 @@ def _make_fake_scorer(aggregate="min"):
     class _FakeModel:
         reward_head = head
 
-        def __call__(self, input_ids, output_hidden_states=False):
+        def __call__(self, input_ids, output_hidden_states=False, **kwargs):
             seq_len = input_ids.shape[1]
-            hs = torch.arange(seq_len).float().reshape(1, seq_len, 1).repeat(1, 1, hidden)
+            batch = input_ids.shape[0]
+            hs = torch.arange(seq_len).float().reshape(1, seq_len, 1).expand(batch, seq_len, hidden)
             return SimpleNamespace(hidden_states=[hs])
 
     scorer = PRMScorer("./prm", aggregate=aggregate, device="cpu")
@@ -358,6 +359,21 @@ class TestPRMScorer:
         assert len(out) == 1
         assert isinstance(out[0], float)
 
+    def test_batched_parity_with_per_completion(self):
+        s = _make_fake_scorer("min")
+        completions = ["a\nb", "c\nd\ne"]
+        batched = s(completions)
+        for i, c in enumerate(completions):
+            single = s([c])
+            assert abs(batched[i] - single[0]) < 1e-5, f"mismatch at {i}"
+
+    def test_mixed_length_no_cross_row_contamination(self):
+        s = _make_fake_scorer("min")
+        short = s(["a\nb"])
+        long_ = s(["c\nd\ne\nf\ng"])
+        both = s(["a\nb", "c\nd\ne\nf\ng"])
+        assert abs(both[0] - short[0]) < 1e-5
+        assert abs(both[1] - long_[0]) < 1e-5
 
 def _make_capped_scorer(max_pos, aggregate="min"):
     """PRMScorer whose fake model advertises a tiny max_position_embeddings."""
@@ -387,16 +403,16 @@ def _make_capped_scorer(max_pos, aggregate="min"):
         reward_head = head
         config = SimpleNamespace(max_position_embeddings=max_pos)
 
-        def __call__(self, input_ids, output_hidden_states=False):
+        def __call__(self, input_ids, output_hidden_states=False, **kwargs):
             seq_len = input_ids.shape[1]
-            hs = torch.arange(seq_len).float().reshape(1, seq_len, 1).repeat(1, 1, hidden)
+            batch = input_ids.shape[0]
+            hs = torch.arange(seq_len).float().reshape(1, seq_len, 1).expand(batch, seq_len, hidden)
             return SimpleNamespace(hidden_states=[hs])
 
     scorer = PRMScorer("./prm", aggregate=aggregate, device="cpu")
     scorer._model = _FakeModelCapped()
     scorer._tokenizer = _FakeTok()
     return scorer
-
 
 class TestPRMScorerInputCap:
     def test_truncates_to_max_position_embeddings(self):

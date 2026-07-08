@@ -246,17 +246,86 @@ class PRMScorer:
         return aggregate_step_scores(per_step, self.aggregate)
 
     def __call__(self, completions: Any, **kwargs: Any) -> list[float]:
+        import torch
+
         self._ensure_loaded()
         prompts = kwargs.get("prompts")
         rewards: list[float] = []
         completion_list = list(completions) if completions is not None else []
-        for i, completion in enumerate(completion_list):
-            prompt = prompts[i] if isinstance(prompts, (list, tuple)) and i < len(prompts) else None
+        if not completion_list:
+             return []
+        config = getattr(self._model,"config",None)
+        max_pos = getattr(config,"max_position_embeddings",_MAX_INPUT_TOKENS)
+        cap = _MAX_INPUT_TOKENS
+        if isinstance(max_pos,int)and not isinstance(max_pos,bool):
+            cap = min(max_pos,_MAX_INPUT_TOKENS)
+        all_input_ids: list[list[int]]=[]
+        all_step_positions: list[list[int]]=[]
+        skip_indices: set[int]= set()
+
+        for i,completion in enumerate(completion_list):
+            prompt = prompts[i] if isinstance(prompts,(list, tuple)) and i<len(prompts)else None
             prompt_text = self._render_prompt(prompt)
             steps = split_steps(self._completion_text(completion))
-            rewards.append(self._score_one(prompt_text, steps))
-        return rewards
+            if not steps:
+                skip_indices.add(i)
+                all_input_ids.append([])
+                all_step_positions.append([])
+                continue
+            prefix_ids =(
+                self._tokenizer(prompt_text,add_special_tokens=False)["input_ids"]
+                if prompt_text else[])
+            input_ids = list(prefix_ids)
+            step_positions: list[int]=[]
+            for step in steps:
+                step_ids = self._tokenizer(step,add_special_tokens=False)["input_ids"]
+                if not step_ids:
+                    continue
+                input_ids.extend(step_ids)
+                step_positions.append(len(input_ids)-1)
 
+            if len(input_ids)>cap:
+                input_ids=input_ids[:cap]
+                step_positions = [p for p in step_positions if p<cap]
+
+            if not step_positions:
+                skip_indices.add(i)
+                all_input_ids.append([])
+                all_step_positions.append([])
+                continue
+            all_input_ids.append(input_ids)
+            all_step_positions.append(step_positions)
+
+        valid_indices = [i for i in range(len(completion_list)) if i not in skip_indices]
+        rewards = [0.0]*len(completion_list)
+        if valid_indices:
+            valid_ids = [all_input_ids[i] for i in valid_indices]
+            max_len = max(len(ids) for ids in valid_ids)
+            batch_size = len(valid_ids)
+            padded = torch.zeros(batch_size, max_len, dtype=torch.long,device=self.device)
+            attn_mask = torch.zeros(batch_size,max_len, dtype=torch.long,device=self.device)
+            for b,ids in enumerate(valid_ids):
+                length = len(ids)
+                padded[b, :length] = torch.tensor(ids,dtype=torch.long,device=self.device)
+                attn_mask[b, :length] = 1
+            with torch.no_grad():
+                outputs = self._model(
+                    input_ids=padded,
+                    attention_mask=attn_mask,
+                    output_hidden_states=True,
+                )
+                last_hidden = outputs.hidden_states[-1]  # [B, T, H]
+                for b, orig_idx in enumerate(valid_indices):
+                    row_len = len(all_input_ids[orig_idx])
+                    steps_pos = [p for p in all_step_positions[orig_idx] if p < row_len]
+                    if not steps_pos:
+                        continue
+                    pos = torch.tensor(steps_pos, dtype=torch.long, device=self.device)
+                    step_hidden = last_hidden[b].index_select(0, pos)
+                    scores = self._model.reward_head(step_hidden).squeeze(-1)
+                    per_step = scores.detach().float().cpu().tolist()
+                    rewards[orig_idx] = aggregate_step_scores(per_step, self.aggregate)
+        return rewards
 
 def load_reward_head_weights(prm_path: str) -> dict[str, Any]:
     """Load ``reward_head.{weight,bias}`` tensors from a Soup-trained PRM dir.
