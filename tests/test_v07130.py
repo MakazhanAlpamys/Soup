@@ -271,8 +271,8 @@ def _make_fake_scorer(aggregate="min"):
 
         def __call__(self, input_ids, output_hidden_states=False, **kwargs):
             seq_len = input_ids.shape[1]
-            B = input_ids.shape[0]
-            hs = torch.arange(seq_len).float().reshape(1, seq_len, 1).expand(B, seq_len, hidden)
+            batch = input_ids.shape[0]
+            hs = torch.arange(seq_len).float().reshape(1, seq_len, 1).expand(batch, seq_len, hidden)
             return SimpleNamespace(hidden_states=[hs])
 
     scorer = PRMScorer("./prm", aggregate=aggregate, device="cpu")
@@ -405,8 +405,8 @@ def _make_capped_scorer(max_pos, aggregate="min"):
 
         def __call__(self, input_ids, output_hidden_states=False, **kwargs):
             seq_len = input_ids.shape[1]
-            B = input_ids.shape[0]
-            hs = torch.arange(seq_len).float().reshape(1, seq_len, 1).expand(B, seq_len, hidden)
+            batch = input_ids.shape[0]
+            hs = torch.arange(seq_len).float().reshape(1, seq_len, 1).expand(batch, seq_len, hidden)
             return SimpleNamespace(hidden_states=[hs])
 
     scorer = PRMScorer("./prm", aggregate=aggregate, device="cpu")
