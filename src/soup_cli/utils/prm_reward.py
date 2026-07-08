@@ -309,27 +309,19 @@ class PRMScorer:
                 padded[b, :length] = torch.tensor(ids,dtype=torch.long,device=self.device)
                 attn_mask[b, :length] = 1
             with torch.no_grad():
-                import inspect
+                outputs = self._model(
+                    input_ids=padded,
+                    attention_mask=attn_mask,
+                    output_hidden_states=True,
+                )
+                last_hidden = outputs.hidden_states[-1]  # [B, T, H]
                 for b, orig_idx in enumerate(valid_indices):
-                    single_ids = padded[b:b+1]
-                    single_mask = attn_mask[b:b+1]
-                    model_kwargs = {"input_ids": single_ids, "output_hidden_states": True}
-                    try:
-                        sig = inspect.signature(self._model.__call__)
-                        if "attention_mask" in sig.parameters:
-                            model_kwargs["attention_mask"] = single_mask
-                    except (ValueError, TypeError):
-                        model_kwargs["attention_mask"] = single_mask
-                    outputs = self._model(**model_kwargs)
-                    last_hidden = outputs.hidden_states[-1]
-                    if last_hidden.dim() == 2:
-                        last_hidden = last_hidden.unsqueeze(0)
                     row_len = len(all_input_ids[orig_idx])
                     steps_pos = [p for p in all_step_positions[orig_idx] if p < row_len]
                     if not steps_pos:
                         continue
                     pos = torch.tensor(steps_pos, dtype=torch.long, device=self.device)
-                    step_hidden = last_hidden[0].index_select(0, pos)
+                    step_hidden = last_hidden[b].index_select(0, pos)
                     scores = self._model.reward_head(step_hidden).squeeze(-1)
                     per_step = scores.detach().float().cpu().tolist()
                     rewards[orig_idx] = aggregate_step_scores(per_step, self.aggregate)
