@@ -170,11 +170,17 @@ def load_dataset(data_config: DataConfig) -> dict:
 def _validate_vision_images(data: list[dict], image_dir: Path) -> list[dict]:
     """Validate and resolve image paths in vision dataset rows.
 
-    Each row must have an 'image' key with a filename or path.
-    Resolves relative paths against image_dir.
+    Each row must have an 'image' key with a filename or path. Resolves
+    relative paths against image_dir and rejects path traversal — a crafted
+    llava/sharegpt4v row like ``{"image": "/etc/passwd"}`` must not be handed
+    to ``PIL.Image.open``. Mirrors :func:`_validate_audio_files` (the sibling
+    audio path got this fix in v0.71.32; the vision path was missed).
     """
+    from soup_cli.utils.paths import is_under
+
     valid = []
     missing = 0
+    traversal = 0
     for row in data:
         if "image" not in row or not row["image"]:
             missing += 1
@@ -182,11 +188,21 @@ def _validate_vision_images(data: list[dict], image_dir: Path) -> list[dict]:
         image_path = Path(row["image"])
         if not image_path.is_absolute():
             image_path = image_dir / image_path
-        row["image"] = str(image_path)
-        valid.append(row)
+        # Path traversal protection: resolved path must stay under image_dir.
+        # realpath + commonpath (is_under) — Path.is_relative_to() breaks on
+        # Windows 8.3 short names.
+        if not is_under(image_path, image_dir):
+            traversal += 1
+            continue
+        valid.append({**row, "image": str(image_path.resolve())})
 
     if missing > 0:
         console.print(f"[yellow]Warning: {missing} rows skipped (missing image path)[/]")
+    if traversal > 0:
+        console.print(
+            f"[yellow]Warning: {traversal} rows skipped "
+            f"(image path outside {image_dir})[/]"
+        )
     return valid
 
 

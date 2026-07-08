@@ -1,8 +1,10 @@
 """soup serve — local inference server with OpenAI-compatible API."""
 
+import contextlib
 import json
 import logging
 import re
+import threading
 import time
 import uuid
 from collections.abc import Mapping
@@ -722,6 +724,25 @@ def serve(
             console.print(f"[red]{exc}[/]")
             raise typer.Exit(1)
 
+    # v0.36.0 Part B: --trust-remote-code default-deny, resolved ONCE for
+    # every backend. vLLM previously loaded with an unconditional
+    # trust_remote_code=True (arbitrary repo code, zero notice) — resolve the
+    # same gate + warning panel the transformers path uses so no backend
+    # silently executes an untrusted repo's code.
+    from soup_cli.utils.trust_remote import (
+        model_requires_trust_remote_code,
+        resolve_trust_remote_code,
+    )
+
+    _trust_probe_target = base_model or str(model_path)
+    _trust_requires = model_requires_trust_remote_code(str(model_path)) or False
+    resolved_trust = resolve_trust_remote_code(
+        _trust_probe_target,
+        requested=trust_remote_code,
+        console=console,
+        requires_remote_code=_trust_requires,
+    )
+
     if backend == "vllm":
         if speculative_model:
             console.print(
@@ -741,6 +762,7 @@ def serve(
             num_speculative_tokens=num_speculative_tokens,
             enable_prefix_caching=prefix_cache,
             quantization=auto_quant_kwargs.get("quantization"),
+            trust_remote_code=resolved_trust,
         )
     elif backend == "sglang":
         app = _serve_sglang(
@@ -752,21 +774,8 @@ def serve(
             gpu_memory_utilization=gpu_memory_utilization,
         )
     else:
-        # Transformers backend (original).
-        # v0.36.0 Part B: --trust-remote-code default-deny.
-        from soup_cli.utils.trust_remote import (
-            model_requires_trust_remote_code,
-            resolve_trust_remote_code,
-        )
-
-        probe_target = base_model or str(model_path)
-        requires = model_requires_trust_remote_code(str(model_path)) or False
-        resolved_trust = resolve_trust_remote_code(
-            probe_target,
-            requested=trust_remote_code,
-            console=console,
-            requires_remote_code=requires,
-        )
+        # Transformers backend (original). ``resolved_trust`` was computed
+        # once above (v0.36.0 Part B default-deny) and shared across backends.
 
         # v0.71.17 #259 — serve-time MoLE loads its OWN base + N task LoRAs +
         # gate; the `model` CLI arg is the base, the manifest supplies adapters
@@ -813,6 +822,27 @@ def serve(
             console.print(
                 f"[green]KV cache:[/] {resolved_kv_runtime.kv_cache_type} "
                 f"— {resolved_kv_runtime.note}"
+            )
+
+        # v0.71.33 — actually load the --adapters map into the model so
+        # /v1/adapters/activate + the per-request `adapter` field switch the
+        # served weights (previously validated + tracked but never applied).
+        peft_adapter_names: set = set()
+        if adapter_map:
+            from rich.markup import escape as _esc
+
+            try:
+                model_obj, peft_adapter_names = _load_named_adapters(
+                    model_obj, adapter_map
+                )
+            except Exception as exc:  # noqa: BLE001 — surface any PEFT error
+                console.print(
+                    f"[red]Failed to load --adapters:[/] {_esc(str(exc))}"
+                )
+                raise typer.Exit(1) from exc
+            console.print(
+                "[green]Adapters ready:[/] "
+                + ", ".join(sorted(peft_adapter_names))
             )
 
         # v0.71.10 #201 — install the activation-steering decode hook. The
@@ -986,6 +1016,7 @@ def serve(
             draft_model=draft_model,
             num_speculative_tokens=num_speculative_tokens,
             adapter_map=adapter_map if adapter_map else None,
+            peft_adapter_names=peft_adapter_names,
             output_constraint=constraint,
             enable_dashboard=dashboard,
             tracer=tracer,
@@ -1035,6 +1066,7 @@ def _serve_vllm(
     num_speculative_tokens: int = 5,
     enable_prefix_caching: bool = False,
     quantization: Optional[str] = None,
+    trust_remote_code: bool = False,
 ):
     """Set up vLLM engine and create FastAPI app."""
     from soup_cli.utils.vllm import create_vllm_app, create_vllm_engine
@@ -1050,6 +1082,7 @@ def _serve_vllm(
         num_speculative_tokens=num_speculative_tokens,
         enable_prefix_caching=enable_prefix_caching,
         quantization=quantization,
+        trust_remote_code=trust_remote_code,
     )
     console.print("[bold green]vLLM engine ready![/]")
 
@@ -1170,6 +1203,67 @@ def _load_model(
 
     model_obj.eval()
     return model_obj, tokenizer
+
+
+def _load_named_adapters(model_obj, adapter_map: Dict[str, str]):
+    """Load the ``--adapters name=path`` map into ``model_obj`` for hot-swap.
+
+    Returns ``(model_obj, adapter_names)``. The returned model is a PeftModel
+    carrying every named adapter; ``adapter_names`` is the set actually loaded.
+    Request-time selection is done by :func:`_adapter_scope`.
+
+    Without this, ``--adapters`` / ``POST /v1/adapters/activate`` / the
+    per-request ``adapter`` field were validated + tracked but NEVER applied —
+    every request silently ran the startup model (v0.71.33 fix).
+    """
+    from peft import PeftModel
+
+    names = list(adapter_map)
+    already_peft = isinstance(model_obj, PeftModel)
+    for idx, name in enumerate(names):
+        path = adapter_map[name]
+        if idx == 0 and not already_peft:
+            # Wrap the plain base model into a multi-adapter PeftModel.
+            model_obj = PeftModel.from_pretrained(
+                model_obj, path, adapter_name=name
+            )
+        else:
+            model_obj.load_adapter(path, adapter_name=name)
+        console.print(f"[dim]Loaded adapter '{name}' from {path}[/]")
+    model_obj.eval()
+    return model_obj, set(names)
+
+
+@contextlib.contextmanager
+def _adapter_scope(model, lock, names, requested, active):
+    """Select the LoRA adapter for one generation, serialized by ``lock``.
+
+    ``requested`` (request body ``adapter`` field) overrides ``active`` (the
+    ``/v1/adapters/activate`` selection). A name not in ``names`` (or ``None``)
+    runs the base model with adapters disabled. No-op when no named adapters
+    were loaded (``names`` empty), so the ordinary single-model serve path is
+    completely unaffected.
+
+    The lock spans the whole generation because the PeftModel is process-global
+    and ``set_adapter`` mutates shared state — two concurrent requests on
+    different adapters would otherwise race. Generation is one blocking call in
+    every path (chat / stream / completions all generate-then-return), so this
+    serializes adapter-selected requests but never holds across true streaming.
+    """
+    if not names or lock is None:
+        yield
+        return
+    name = requested or active
+    with lock:
+        if name and name in names and hasattr(model, "set_adapter"):
+            model.set_adapter(name)
+            yield
+        elif hasattr(model, "disable_adapter"):
+            # No (or unknown) adapter selected → base model for this request.
+            with model.disable_adapter():
+                yield
+        else:
+            yield
 
 
 def _load_draft_model(speculative_model: str, device: str):
@@ -1313,6 +1407,7 @@ def _create_app(
     draft_model=None,
     num_speculative_tokens: int = 5,
     adapter_map: Optional[Dict[str, str]] = None,
+    peft_adapter_names: Optional[set] = None,
     output_constraint: Optional[Dict] = None,
     enable_dashboard: bool = False,
     tracer=None,
@@ -1398,6 +1493,10 @@ def _create_app(
 
     # Resolved adapter map (name → path)
     _adapter_map = adapter_map or {}
+    # v0.71.33 — adapters actually loaded into the PeftModel + the lock that
+    # serializes set_adapter + generate (the model is process-global).
+    _peft_adapter_names = peft_adapter_names or set()
+    _generation_lock = threading.Lock()
 
     # v0.71.12 #221 — VeRA / VB-LoRA bank loaded at startup (or None). The
     # active user is selected per request via the X-User-Id header.
@@ -1520,6 +1619,10 @@ def _create_app(
                     mole_runtime=_mole_runtime,
                     loaded_bank=_loaded_bank,
                     x_user_id=x_user_id,
+                    adapter_lock=_generation_lock,
+                    adapter_names=_peft_adapter_names,
+                    requested_adapter=requested_adapter,
+                    active_adapter=_active_snapshot(),
                 ),
                 media_type="text/event-stream",
             )
@@ -1558,17 +1661,28 @@ def _create_app(
                             top_p=request.top_p,
                         )
                     else:
-                        response_text, prompt_tokens, completion_tokens = _generate_response(
-                            model_obj, tokenizer, messages,
-                            max_tokens=max_tokens,
-                            temperature=request.temperature,
-                            top_p=request.top_p,
-                            assistant_model=draft_model,
-                            num_assistant_tokens=num_speculative_tokens,
-                            logits_processor=processors or None,
-                            ngram_config=ngram_config,
-                            kv_cache_generate_kwargs=kv_cache_generate_kwargs,
-                        )
+                        # v0.71.33 — select the request's LoRA adapter (base =
+                        # disabled) under the generation lock for the duration
+                        # of generate().
+                        with _adapter_scope(
+                            model_obj, _generation_lock, _peft_adapter_names,
+                            requested_adapter, _active_snapshot(),
+                        ):
+                            (
+                                response_text,
+                                prompt_tokens,
+                                completion_tokens,
+                            ) = _generate_response(
+                                model_obj, tokenizer, messages,
+                                max_tokens=max_tokens,
+                                temperature=request.temperature,
+                                top_p=request.top_p,
+                                assistant_model=draft_model,
+                                num_assistant_tokens=num_speculative_tokens,
+                                logits_processor=processors or None,
+                                ngram_config=ngram_config,
+                                kv_cache_generate_kwargs=kv_cache_generate_kwargs,
+                            )
                 except Exception:
                     logger.exception("Generation error")
                     raise HTTPException(status_code=500, detail="Internal server error")
@@ -1975,6 +2089,8 @@ def _stream_response(
     kv_cache_generate_kwargs=None,
     mole_runtime=None,
     loaded_bank=None, x_user_id=None,
+    adapter_lock=None, adapter_names=None,
+    requested_adapter=None, active_adapter=None,
 ):
     """Generator that yields SSE chunks for streaming responses."""
     chat_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
@@ -2002,15 +2118,21 @@ def _stream_response(
                 top_p=top_p,
             )
         else:
-            response_text, _, completion_tokens_for_log = _generate_response(
-                model, tokenizer, messages,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                top_p=top_p,
-                assistant_model=assistant_model,
-                num_assistant_tokens=num_assistant_tokens,
-                kv_cache_generate_kwargs=kv_cache_generate_kwargs,
-            )
+            # v0.71.33 — select the request's LoRA adapter under the generation
+            # lock (resolved in the endpoint, applied here where generate runs).
+            with _adapter_scope(
+                model, adapter_lock, adapter_names,
+                requested_adapter, active_adapter,
+            ):
+                response_text, _, completion_tokens_for_log = _generate_response(
+                    model, tokenizer, messages,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    top_p=top_p,
+                    assistant_model=assistant_model,
+                    num_assistant_tokens=num_assistant_tokens,
+                    kv_cache_generate_kwargs=kv_cache_generate_kwargs,
+                )
     except Exception:
         logger.exception("Stream generation error")
         yield 'data: {"error": "Internal server error"}\n\n'

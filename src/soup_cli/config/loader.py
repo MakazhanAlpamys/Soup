@@ -41,6 +41,13 @@ def load_config_from_string(yaml_str: str) -> SoupConfig:
     raw = yaml.safe_load(yaml_str)
     if raw is None:
         raise ValueError("Config is empty")
+    if not isinstance(raw, dict):
+        # A non-mapping document (e.g. a bare list "- a") would make
+        # SoupConfig(**raw) raise TypeError, breaking this function's
+        # ValueError-only contract (API/UI callers only catch ValueError).
+        raise ValueError(
+            f"Config must be a YAML mapping, got {type(raw).__name__}"
+        )
 
     try:
         return SoupConfig(**raw)

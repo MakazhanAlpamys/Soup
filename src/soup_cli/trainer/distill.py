@@ -77,6 +77,21 @@ def _compute_distill_term(
         raise ValueError(
             f"temperature must be finite and positive, got {temperature!r}"
         )
+
+    # Causal-LM alignment: logits at position i predict token i+1, so the CE
+    # term shifts (logits[:, :-1] vs labels[:, 1:]). The KD term must shift the
+    # SAME way — otherwise the trained-token mask (labels != -100) is applied
+    # one position off: it drops each assistant span's first predicted token and
+    # leaks the boundary token just before the span. Shift here so both terms
+    # measure the same positions.
+    if labels is not None or attention_mask is not None:
+        student_logits = student_logits[:, :-1, :]
+        teacher_logits = teacher_logits[:, :-1, :]
+        if labels is not None:
+            labels = labels[:, 1:]
+        if attention_mask is not None:
+            attention_mask = attention_mask[:, 1:]
+
     temp = float(temperature)
     s = student_logits / temp
     t = teacher_logits / temp

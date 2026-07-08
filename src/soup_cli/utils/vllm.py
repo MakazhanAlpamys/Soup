@@ -42,6 +42,7 @@ def create_vllm_engine(
     enable_prefix_caching: bool = False,
     quantization: Optional[str] = None,
     sleep_mode: bool = False,
+    trust_remote_code: bool = False,
 ):
     """Create a vLLM AsyncLLMEngine for serving.
 
@@ -57,6 +58,10 @@ def create_vllm_engine(
             win for RAG / agent workloads with shared system prompts.
         sleep_mode: Enable vLLM sleep/standby support (v0.71.21 #124 —
             requires vLLM >= 0.7; raises a friendly RuntimeError otherwise).
+        trust_remote_code: Execute custom repo code on model load. Default
+            False — the caller (``serve``) resolves this through the shared
+            v0.36.0 ``resolve_trust_remote_code`` gate (flag + warning panel)
+            so an untrusted HF repo never runs code silently.
 
     Returns:
         (engine, engine_model_name) tuple.
@@ -72,7 +77,7 @@ def create_vllm_engine(
             tensor_parallel_size=tensor_parallel_size,
             gpu_memory_utilization=gpu_memory_utilization,
             dtype=dtype,
-            trust_remote_code=True,
+            trust_remote_code=trust_remote_code,
             enable_prefix_caching=enable_prefix_caching,
         )
         if max_model_len is not None:
@@ -84,7 +89,7 @@ def create_vllm_engine(
             tensor_parallel_size=tensor_parallel_size,
             gpu_memory_utilization=gpu_memory_utilization,
             dtype=dtype,
-            trust_remote_code=True,
+            trust_remote_code=trust_remote_code,
             enable_prefix_caching=enable_prefix_caching,
         )
         if max_model_len is not None:

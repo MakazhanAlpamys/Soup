@@ -785,7 +785,16 @@ def train(
                 is_in_distributed,
             )
 
-            if not is_in_distributed():
+            if dry_run and not is_in_distributed():
+                # --dry-run must NEVER os.execvp into a real multi-GPU run.
+                # Without this guard the re-exec fired before the dry_run check
+                # (~350 lines below), so `soup train --dry-run --gpus N` launched
+                # a full accelerate run instead of just validating.
+                console.print(
+                    f"[dim]--dry-run: skipping accelerate re-exec "
+                    f"({num_gpus} GPUs, {topo['interconnect']}).[/]"
+                )
+            elif not is_in_distributed():
                 # v0.33.0 #37 — auto-reexec under accelerate launch unless
                 # --no-reexec was passed. Reexec uses os.execvp so the new
                 # accelerate process replaces this process; no leftover PID
@@ -869,6 +878,15 @@ def train(
                         script_args.extend(["--energy-out", energy_out])
                 if yes:
                     script_args.append("--yes")
+                # Distillation / activation-capture flags — same drop-on-reexec
+                # bug class as the block above: a multi-GPU run silently ignored
+                # them (MiniLLM stayed offline, no activation snapshot written).
+                if minillm_on_policy:
+                    script_args.append("--minillm-on-policy")
+                if capture_activations:
+                    script_args.extend(["--capture-activations", capture_activations])
+                if capture_prompts:
+                    script_args.extend(["--capture-prompts", capture_prompts])
                 argv = build_accelerate_argv(
                     num_processes=num_gpus, script_args=script_args,
                 )
@@ -890,22 +908,25 @@ def train(
                         "the launch command for manual execution."
                     )
                     raise typer.Exit(1) from exc
-            console.print(
-                f"[green]Distributed run detected[/] "
-                f"({num_gpus} procs, {topo['interconnect']} interconnect)"
-            )
-            # Apply NCCL env hints. All current keys (``NCCL_P2P_DISABLE`` /
-            # ``NCCL_IB_DISABLE`` / ``NCCL_NVLS_ENABLE``) are rank-idempotent
-            # string literals so it is safe to run on every rank. If a
-            # rank-sensitive key is ever added to ``suggest_nccl_env``, this
-            # loop must be gated to ``LOCAL_RANK == 0``. ``setdefault`` keeps
-            # user / launcher overrides winning over our suggestions.
-            from soup_cli.utils.topology import suggest_nccl_env
+            elif is_in_distributed():
+                # Already a launched rank — announce + apply NCCL hints. (The
+                # dry_run branch above intentionally does neither.)
+                console.print(
+                    f"[green]Distributed run detected[/] "
+                    f"({num_gpus} procs, {topo['interconnect']} interconnect)"
+                )
+                # Apply NCCL env hints. All current keys (``NCCL_P2P_DISABLE`` /
+                # ``NCCL_IB_DISABLE`` / ``NCCL_NVLS_ENABLE``) are rank-idempotent
+                # string literals so it is safe to run on every rank. If a
+                # rank-sensitive key is ever added to ``suggest_nccl_env``, this
+                # loop must be gated to ``LOCAL_RANK == 0``. ``setdefault`` keeps
+                # user / launcher overrides winning over our suggestions.
+                from soup_cli.utils.topology import suggest_nccl_env
 
-            for key, val in suggest_nccl_env(
-                gpu_count=num_gpus, interconnect=topo["interconnect"]
-            ).items():
-                os.environ.setdefault(key, val)
+                for key, val in suggest_nccl_env(
+                    gpu_count=num_gpus, interconnect=topo["interconnect"]
+                ).items():
+                    os.environ.setdefault(key, val)
 
     # Detect hardware
     device, device_name = detect_device()

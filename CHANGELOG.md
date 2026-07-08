@@ -12,6 +12,42 @@ reproducing 70+ versions of notes.
 
 ## [Unreleased]
 
+### Fixed
+- **`soup serve --backend vllm` no longer force-enables `trust_remote_code`.** The
+  vLLM path now goes through the same `--trust-remote-code` default-deny gate (and
+  warning panel) as the transformers backend, so serving an untrusted repo never
+  executes its code silently.
+- **Multi-adapter serving (`soup serve --adapters name=path`) now actually switches
+  adapters.** The named adapters are loaded into the model and selected per request
+  (via `POST /v1/adapters/activate/{name}` or the request `adapter` field);
+  previously every request silently ran the startup model. The base model is served
+  when no adapter is selected.
+- **Vision datasets reject out-of-directory image paths.** `llava` / `sharegpt4v`
+  rows are containment-checked against `image_dir` (mirroring the audio loader), so a
+  crafted `{"image": "/etc/passwd"}` row can no longer read arbitrary local files.
+- **`soup train --dry-run --gpus N` no longer launches a real multi-GPU run.** The
+  accelerate re-exec is skipped under `--dry-run`. The re-exec also now forwards
+  `--minillm-on-policy`, `--capture-activations`, and `--capture-prompts` (previously
+  dropped on multi-GPU runs).
+- **MLX SFT now builds a real optimizer** (`AdamW` from the configured LR) instead of
+  passing `optimizer=None`, which left the model untrained.
+- **`soup data inspect` / `preview` / `search` escape dataset- and Hub-derived text**
+  so a stray `[/]` no longer crashes the command and a crafted `[link=…]` tag can't
+  render a phishing hyperlink. `soup runs` list/show escape config-derived fields too.
+- **`soup infer --task asr` hardening** — an oversized reference no longer crashes the
+  whole batch after transcription (that row's metric is skipped); an all-skipped run
+  exits non-zero instead of reporting success; `--asr-task` is validated upfront; and
+  dataset-derived filenames are control-stripped before printing. ASR training now
+  caps transcript labels to Whisper's decoder limit, warns on >30 s audio, and picks
+  fp16 on pre-Ampere GPUs instead of hardcoding bf16.
+- **Knowledge-distillation KD term aligns with the CE term.** The token-level
+  divergence is now computed over causal-shifted positions, so the distillation signal
+  covers exactly the trained tokens (previously off by one).
+- **Miscellaneous robustness** — `load_config_from_string` raises `ValueError` (not
+  `TypeError`) on a non-mapping YAML document; the Web UI Bearer-token check is
+  constant-time; and `soup doctor --vscode` / the LR-finder report use the centralised
+  atomic, symlink-rejecting writer.
+
 ## [0.71.32] - 2026-07-07
 
 ### Added

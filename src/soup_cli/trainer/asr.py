@@ -257,13 +257,34 @@ class AsrTrainerWrapper:
 
         from soup_cli.utils.tts_codec import load_audio_mono
 
+        # Whisper's decoder is capped at max_target_positions (448 for every
+        # size). A transcript that tokenizes longer would crash mid-training
+        # with an opaque positional-embedding index error, so cap the labels —
+        # honouring a smaller data.max_length when the user set one (previously
+        # ignored). Audio > 30 s is silently truncated to 3000 mel frames by the
+        # feature extractor while the full transcript stays in the labels (that
+        # teaches hallucination), so count both and warn once after the map.
+        max_target_positions = int(
+            getattr(self._unwrapped_model().config, "max_target_positions", 448)
+        )
+        label_cap = max_target_positions
+        if cfg.data.max_length and int(cfg.data.max_length) < label_cap:
+            label_cap = int(cfg.data.max_length)
+        max_audio_samples = _ASR_SAMPLE_RATE * 30
+        trunc = {"labels": 0, "audio": 0}
+
         def encode(row: dict) -> dict:
             audio_path, text = _validate_asr_row(row)
             wave = load_audio_mono(audio_path, target_sr=_ASR_SAMPLE_RATE)
+            if len(wave) > max_audio_samples:
+                trunc["audio"] += 1
             features = feature_extractor(
                 wave, sampling_rate=_ASR_SAMPLE_RATE
             ).input_features[0]
             labels = tokenizer(text).input_ids
+            if len(labels) > label_cap:
+                labels = labels[:label_cap]
+                trunc["labels"] += 1
             return {"input_features": features, "labels": labels}
 
         raw_train = Dataset.from_list(dataset["train"])
@@ -272,6 +293,16 @@ class AsrTrainerWrapper:
         if dataset.get("val"):
             raw_val = Dataset.from_list(dataset["val"])
             eval_ds = raw_val.map(encode, remove_columns=raw_val.column_names)
+        if trunc["labels"]:
+            console.print(
+                f"[yellow]{trunc['labels']} row(s) had transcripts longer than "
+                f"{label_cap} tokens; labels truncated (Whisper decoder limit).[/]"
+            )
+        if trunc["audio"]:
+            console.print(
+                f"[yellow]{trunc['audio']} row(s) had audio >30s; the feature "
+                f"extractor truncates to 30s — the transcript may not align.[/]"
+            )
 
         output_dir = Path(cfg.output)
         if cfg.experiment_name:
@@ -284,6 +315,18 @@ class AsrTrainerWrapper:
             * tcfg.epochs
         )
         warmup_steps = int(total_steps * tcfg.warmup_ratio)
+
+        # Mixed precision by GPU capability — bf16=cuda was hardcoded, which
+        # crashes on pre-Ampere cards (T4 / GTX 16xx) that lack bf16. Fall back
+        # to fp16 there; fp32 on CPU.
+        use_bf16 = use_fp16 = False
+        if self.device == "cuda":
+            import torch
+
+            if torch.cuda.is_bf16_supported():
+                use_bf16 = True
+            else:
+                use_fp16 = True
 
         args = Seq2SeqTrainingArguments(
             output_dir=str(output_dir),
@@ -299,7 +342,8 @@ class AsrTrainerWrapper:
             logging_steps=tcfg.logging_steps,
             save_steps=tcfg.save_steps,
             save_total_limit=3,
-            bf16=self.device == "cuda",
+            bf16=use_bf16,
+            fp16=use_fp16,
             report_to=self.report_to,
             deepspeed=self.deepspeed_config,
             predict_with_generate=True,

@@ -101,10 +101,17 @@ class MLXSFTTrainerWrapper:
             adapter_file=str(output_dir / "adapters.safetensors"),
         )
 
+        # mlx_lm.tuner.trainer.train requires a real optimizer — passing None
+        # left the model untrained (AttributeError on optimizer.update, or a
+        # silent no-op checkpoint). Build an AdamW from the configured LR.
+        import mlx.optimizers as optim  # type: ignore
+
+        optimizer = optim.AdamW(learning_rate=float(cfg.training.lr))
+
         train(
             model=self.model,
             tokenizer=self.tokenizer,
-            optimizer=None,
+            optimizer=optimizer,
             train_dataset=self._dataset.get("train", []),
             val_dataset=self._dataset.get("val", []),
             training_callback=None,

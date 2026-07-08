@@ -53,12 +53,20 @@ def inspect(
 
     # Print sample rows
     if rows > 0 and len(data) > 0:
+        # Escape dataset-derived cell content + column names: a stray '[/]' in
+        # ordinary data crashes Rich with MarkupError; a crafted '[link=...]'
+        # renders a phishing hyperlink. Mirrors `soup data review`.
+        from rich.markup import escape as _escape
+
         console.print(f"\n[bold]Sample rows ({min(rows, len(data))}):[/]")
         sample_table = Table(show_lines=True)
         for col in result["columns"][:5]:  # max 5 columns
-            sample_table.add_column(col, max_width=60)
+            sample_table.add_column(_escape(str(col)), max_width=60)
         for row in data[: min(rows, len(data))]:
-            values = [str(row.get(col, ""))[:60] for col in result["columns"][:5]]
+            values = [
+                _escape(str(row.get(col, ""))[:60])
+                for col in result["columns"][:5]
+            ]
             sample_table.add_row(*values)
         console.print(sample_table)
 
@@ -1102,16 +1110,20 @@ def search_datasets(
     table.add_column("Likes", justify="right")
     table.add_column("Tags", max_width=30)
 
+    # HF-hub metadata (ids, tags) is attacker-authored — escape before it
+    # reaches a Rich table (MarkupError crash / phishing-link injection).
+    from rich.markup import escape as _escape
+
     for ds_item in datasets[:limit]:
         ds_tags = getattr(ds_item, "tags", []) or []
-        tag_str = ", ".join(ds_tags[:5])
+        tag_str = ", ".join(str(t) for t in ds_tags[:5])
         if len(ds_tags) > 5:
             tag_str += "..."
         table.add_row(
-            ds_item.id,
+            _escape(str(ds_item.id)),
             _format_count(getattr(ds_item, "downloads", 0) or 0),
             _format_count(getattr(ds_item, "likes", 0) or 0),
-            tag_str,
+            _escape(tag_str),
         )
 
     console.print(table)
@@ -1137,22 +1149,26 @@ def preview_dataset(
         )
         raise typer.Exit(1)
 
-    table = Table(title=f"Dataset: {info['id']}")
+    # HF-hub metadata (id, description, tags, feature/split names) is
+    # attacker-authored — escape before it reaches a Rich table.
+    from rich.markup import escape as _escape
+
+    table = Table(title=f"Dataset: {_escape(str(info['id']))}")
     table.add_column("Field", style="bold")
     table.add_column("Value", max_width=80)
 
-    table.add_row("ID", info["id"])
+    table.add_row("ID", _escape(str(info["id"])))
     desc = info["description"]
     if len(desc) > 200:
         desc = desc[:200] + "..."
-    table.add_row("Description", desc or "[dim]No description[/]")
+    table.add_row("Description", _escape(desc) if desc else "[dim]No description[/]")
     table.add_row("Downloads", _format_count(info["downloads"]))
     table.add_row("Likes", _format_count(info["likes"]))
     table.add_row("Size", _format_size_bytes(info["size_bytes"]))
 
     if info["splits"]:
         splits_str = ", ".join(
-            f"{name} ({_format_count(count)})"
+            f"{_escape(str(name))} ({_format_count(count)})"
             for name, count in info["splits"].items()
         )
         table.add_row("Splits", splits_str)
@@ -1160,10 +1176,10 @@ def preview_dataset(
         table.add_row("Splits", "[dim]Not available (use streaming to explore)[/]")
 
     if info["features"]:
-        table.add_row("Features", ", ".join(info["features"]))
+        table.add_row("Features", ", ".join(_escape(str(f)) for f in info["features"]))
 
     if info["tags"]:
-        table.add_row("Tags", ", ".join(info["tags"][:10]))
+        table.add_row("Tags", ", ".join(_escape(str(t)) for t in info["tags"][:10]))
 
     console.print(table)
 

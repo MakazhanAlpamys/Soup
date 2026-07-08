@@ -114,7 +114,9 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
         auth = request.headers.get("Authorization", "")
         with _auth_token_lock:
             expected = f"Bearer {_auth_token}"
-        if auth != expected:
+        # Constant-time compare — a plain != leaks the token byte-by-byte via
+        # response timing when `soup ui --public` is exposed on a LAN.
+        if not secrets.compare_digest(auth, expected):
             raise HTTPException(status_code=401, detail="Unauthorized")
 
     # --- Static files ---
@@ -504,7 +506,11 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
         run_id: Optional[str] = Query(default=None),
     ):
         """Return current training progress snapshot."""
-        proc = _train_process
+        # Read the shared process handle under the lock, like every sibling
+        # endpoint (start/status/stop) — avoids a torn read racing a concurrent
+        # start/stop.
+        with _train_lock:
+            proc = _train_process
         is_running = proc is not None and proc.poll() is None
 
         if not is_running and run_id is None:

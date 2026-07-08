@@ -164,6 +164,15 @@ def infer(
     # v0.71.32 — ASR (Whisper) transcription branch. Diverts before the chat
     # model-resolution path; _infer_asr owns its own Whisper load + output.
     if task == "asr":
+        # Validate --asr-task up front: a typo would otherwise be passed to
+        # whisper.generate(task=...) and fail INSIDE every row (100k confusing
+        # per-row skips instead of one upfront rejection).
+        if asr_task is not None and asr_task not in ("transcribe", "translate"):
+            console.print(
+                f"[red]--asr-task must be 'transcribe' or 'translate', "
+                f"got {asr_task!r}.[/]"
+            )
+            raise typer.Exit(2)
         _infer_asr(
             model=model,
             base=base,
@@ -300,6 +309,19 @@ _ASR_TRANSCRIBER_OVERRIDE = None
 # costlier than a text prompt, so an unbounded --input is a resource-exhaustion
 # vector (mirrors the project's 10k custom-eval / 1e6 HF-download caps).
 _MAX_ASR_ROWS: int = 100_000
+
+# C0 control bytes (keep tab/newline/CR) + DEL, stripped from dataset-derived
+# strings before they reach the terminal. rich.markup.escape() neutralises Rich
+# '[...]' tags but NOT raw ESC bytes, and a row's audio path / an exception
+# carrying it is untrusted (title-bar / OSC-8 spoofing). Mirrors v0.71.27
+# data_doctor._for_terminal.
+_CONTROL_STRIP_TABLE = {i: None for i in range(0x20) if i not in (0x09, 0x0A, 0x0D)}
+_CONTROL_STRIP_TABLE[0x7F] = None
+
+
+def _for_terminal(text: str) -> str:
+    """Strip C0/ESC/DEL control bytes from a dataset-derived string."""
+    return str(text).translate(_CONTROL_STRIP_TABLE)
 
 
 def _read_asr_rows(path: Path) -> list[dict]:
@@ -537,6 +559,8 @@ def _infer_asr(
             console.print(f"[red]{exc}[/]")
             raise typer.Exit(2) from exc
 
+    from rich.markup import escape as _escape
+
     refs: list[str] = []
     hyps: list[str] = []
     out_lines: list[str] = []
@@ -548,20 +572,47 @@ def _infer_asr(
             hyp = transcribe(resolved)
         except (ValueError, OSError, ImportError) as exc:
             skipped += 1
-            console.print(f"[yellow]Skipped {Path(str(audio)).name!r}: {exc}[/]")
+            # Escape + control-strip the dataset-derived filename AND the
+            # exception (whose message embeds that filename) before printing.
+            name = _escape(_for_terminal(Path(str(audio)).name))
+            console.print(
+                f"[yellow]Skipped {name!r}: {_escape(_for_terminal(str(exc)))}[/]"
+            )
             continue
         rec = {"audio": audio, "transcription": hyp}
         ref = row.get("text")
         if isinstance(ref, str):
-            rec["reference"] = ref
-            rec["wer"] = wer(ref, hyp)
-            rec["cer"] = cer(ref, hyp)
-            refs.append(ref)
-            hyps.append(hyp)
+            # WER/CER can raise ValueError (the _MAX_RAW_CHARS DoS guard) on an
+            # oversized reference. Keep it INSIDE a try so one hostile row is
+            # skipped-unscored, not an uncaught crash that loses every already
+            # transcribed row's output (transcription cost is already paid).
+            try:
+                row_wer = wer(ref, hyp)
+                row_cer = cer(ref, hyp)
+            except ValueError as exc:
+                name = _escape(_for_terminal(Path(str(audio)).name))
+                console.print(
+                    f"[yellow]Metric skipped for {name!r}: "
+                    f"{_escape(_for_terminal(str(exc)))}[/]"
+                )
+            else:
+                rec["reference"] = ref
+                rec["wer"] = row_wer
+                rec["cer"] = row_cer
+                refs.append(ref)
+                hyps.append(hyp)
         out_lines.append(json.dumps(rec, ensure_ascii=False))
 
-    atomic_write_text("\n".join(out_lines) + ("\n" if out_lines else ""), output_file,
-                      field="--output")
+    # All rows failed to transcribe — do not write an empty file and claim
+    # success; a scripted pipeline (soup ship, CI) must see a non-zero exit.
+    if not out_lines:
+        console.print(
+            f"[red]No clips transcribed ({skipped} skipped). "
+            "Check --audio-dir and the input audio paths.[/]"
+        )
+        raise typer.Exit(2)
+
+    atomic_write_text("\n".join(out_lines) + "\n", output_file, field="--output")
 
     summary = f"Transcribed [bold]{len(out_lines)}[/] clip(s) -> {output_file}"
     if skipped:
