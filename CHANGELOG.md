@@ -12,6 +12,15 @@ reproducing 70+ versions of notes.
 
 ## [Unreleased]
 
+### Changed
+- **PRM-guided GRPO scores completions in a single batched forward.**
+  `PRMScorer.__call__` now right-pads all completions into one `[B, T]` tensor
+  (+ attention mask) and runs one `output_hidden_states` pass instead of one
+  forward per completion, cutting per-step reward latency on non-tiny models.
+  Numerically identical to the per-completion path (parity + mixed-length tests).
+  Closes #298
+  ([#301](https://github.com/MakazhanAlpamys/Soup/pull/301) by [@Ekaanksh-dev](https://github.com/Ekaanksh-dev)).
+
 ### Fixed
 - **`soup serve --backend vllm` no longer force-enables `trust_remote_code`.** The
   vLLM path now goes through the same `--trust-remote-code` default-deny gate (and
