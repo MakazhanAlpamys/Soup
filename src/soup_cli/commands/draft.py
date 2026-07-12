@@ -34,7 +34,7 @@ from rich.markup import escape
 from rich.table import Table
 
 from soup_cli import __version__
-from soup_cli.utils.adapter_fuse import fuse_adapter_into
+from soup_cli.utils.adapter_fuse import merge_adapter_to_dense
 from soup_cli.utils.draft import (
     AcceptanceReport,
     acceptance_rate,
@@ -66,6 +66,10 @@ _DISTILL_MAX_LENGTH = 1024
 _MAX_DISTILL_EPOCHS = 100
 # How much of a failed subprocess's output to surface (mirrors shrink.py).
 _SUBPROCESS_ERROR_TAIL_CHARS = 800
+# The distill trainer writes a LoRA adapter (never dense base weights), so it
+# trains into this subdirectory of -o; the merge then replaces -o with the
+# dense model.
+_ADAPTER_SUBDIR = "_adapter"
 
 # Strip C0 / ESC / DEL before subprocess- or model-derived text hits the
 # terminal (rich.markup.escape only neutralises [...] markup, not raw ESC
@@ -127,7 +131,7 @@ def _vocab_size_of(model_id: str, trc: bool = False) -> int:
     return int(vocab)
 
 
-def _resolve_trust(model_id: str) -> bool:
+def _resolve_trust(model_id: str, requested: bool = False) -> bool:
     from soup_cli.utils.trust_remote import (
         model_requires_trust_remote_code,
         resolve_trust_remote_code,
@@ -135,7 +139,7 @@ def _resolve_trust(model_id: str) -> bool:
 
     requires = model_requires_trust_remote_code(model_id) or False
     return resolve_trust_remote_code(
-        model_id, requested=False, console=console, requires_remote_code=requires
+        model_id, requested=requested, console=console, requires_remote_code=requires
     )
 
 
@@ -218,29 +222,40 @@ def _run_distill(
     device: Optional[str] = None,
     trc: bool = False,
 ) -> None:
-    """Distil the target into the draft base, then fuse the adapter to dense.
+    """Distil the target into the draft base, then merge the adapter to dense.
 
     Writes a validated distill config, runs ``soup train`` as a subprocess
-    (argv list, no shell — mirrors ``commands/shrink.py::_run_heal``), and
-    merges the resulting LoRA adapter into ``out_dir`` so the shipped draft is a
-    single dense model loadable as ``assistant_model=``.
+    (argv list, no shell — mirrors ``commands/shrink.py::_run_heal``), then
+    merges the trained LoRA into the draft base so the shipped artifact is a
+    single DENSE model loadable as ``assistant_model=``.
+
+    ``DistillTrainerWrapper`` always LoRA-wraps the student and its
+    ``save_model`` therefore writes ONLY ``adapter_config.json`` +
+    ``adapter_model.safetensors`` — never full base weights. So the trainer's
+    output goes to a nested ``_adapter`` directory and the base weights are
+    re-loaded from ``draft_base`` for the merge; the merge then atomically
+    replaces ``out_dir`` (adapter subdir and all) with the dense result.
     """
     import subprocess
     import sys
 
     from soup_cli.config.loader import load_config_from_string
 
+    adapter_dir = os.path.join(out_dir, _ADAPTER_SUBDIR)
+
     yaml_text = _build_distill_config_yaml(
         draft_base=draft_base,
         target=target,
         data=data,
-        out_dir=out_dir,
+        out_dir=adapter_dir,
         steps=steps,
         data_rows=data_rows,
     )
     load_config_from_string(yaml_text)  # validate before spending a subprocess
 
-    config_path = Path(out_dir).parent / "draft_distill_config.yaml"
+    # The config lives BESIDE out_dir, not inside it: the merge below replaces
+    # out_dir wholesale, which would otherwise delete the config we just wrote.
+    config_path = Path(out_dir).parent / f"{Path(out_dir).name}_distill_config.yaml"
     atomic_write_text(yaml_text, str(config_path), field="draft distill config")
 
     env = dict(os.environ)
@@ -277,10 +292,17 @@ def _run_distill(
         tail = _for_terminal(combined[-_SUBPROCESS_ERROR_TAIL_CHARS:])
         raise RuntimeError(f"draft distill failed (rc={result.returncode}): {tail}")
 
-    # The trainer saves the student's LoRA adapter into out_dir. Merge it into a
-    # dense checkpoint IN PLACE: transformers cannot use a PEFT adapter dir as
-    # an assistant_model.
-    fuse_adapter_into(base_dir=out_dir, adapter_dir=out_dir, trc=trc)
+    if not os.path.isdir(adapter_dir):
+        raise RuntimeError(
+            f"distill finished but wrote no adapter to {adapter_dir} — "
+            "cannot build a dense draft"
+        )
+
+    # transformers cannot use a PEFT adapter dir as an assistant_model, so merge
+    # the LoRA into the base weights and write a dense model to out_dir.
+    merge_adapter_to_dense(
+        base_model=draft_base, adapter_dir=adapter_dir, out_dir=out_dir, trc=trc
+    )
 
 
 @app.command()
@@ -312,6 +334,12 @@ def distill(
         help="Do not record the draft in ~/.soup/drafts.json "
         "(it then won't be picked up by `soup serve --auto-spec`).",
     ),
+    trust_remote_code: bool = typer.Option(
+        False,
+        "--trust-remote-code",
+        help="Allow custom modelling code from the target / draft-base "
+        "(required for architectures that ship an auto_map).",
+    ),
     plan_only: bool = typer.Option(
         False, "--plan-only", help="Print the distill config and exit; write nothing."
     ),
@@ -325,8 +353,8 @@ def distill(
     if not rows:
         _fail(f"data file has no usable rows: {data}")
 
-    target_trc = _resolve_trust(target)
-    draft_trc = _resolve_trust(draft_base)
+    target_trc = _resolve_trust(target, trust_remote_code)
+    draft_trc = _resolve_trust(draft_base, trust_remote_code)
 
     # Same-tokenizer gate. Speculative decoding proposes DRAFT token ids into
     # the TARGET's vocabulary — a mismatch silently produces garbage rather
@@ -454,6 +482,12 @@ def measure(
         max=1.0,
         help="Exit 2 if the acceptance rate falls below this (for CI gating).",
     ),
+    trust_remote_code: bool = typer.Option(
+        False,
+        "--trust-remote-code",
+        help="Allow custom modelling code from the target / draft "
+        "(required for architectures that ship an auto_map).",
+    ),
     output: Optional[str] = typer.Option(
         None, "-o", "--output", help="Write the report as JSON."
     ),
@@ -472,8 +506,8 @@ def measure(
         except ValueError as exc:
             _fail(str(exc))
 
-    target_trc = _resolve_trust(target)
-    draft_trc = _resolve_trust(draft)
+    target_trc = _resolve_trust(target, trust_remote_code)
+    draft_trc = _resolve_trust(draft, trust_remote_code)
 
     console.print(f"[dim]Loading target: {escape(target)}[/]")
     try:

@@ -28,7 +28,9 @@ import json
 import math
 import os
 import tempfile
+import threading
 import time
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -244,6 +246,71 @@ def draft_registry_path() -> str:
     return str(Path.home() / ".soup" / "drafts.json")
 
 
+# Serialises threads INSIDE this process. The OS file lock below is per-process
+# on both Windows (msvcrt) and POSIX (flock), so it does NOT serialise two
+# threads of the same interpreter — both locks are needed.
+_REGISTRY_THREAD_LOCK = threading.Lock()
+
+
+@contextmanager
+def _registry_lock():
+    """Best-effort exclusive lock on the registry, in-process AND cross-process.
+
+    The registry is a read-modify-write file (replace the entry for one target,
+    keep the rest), so two ``soup draft distill`` runs finishing at the same
+    time could otherwise lose one registration entirely — the second writer's
+    snapshot predates the first writer's commit.
+
+    Cross-process: a sidecar ``<registry>.lock`` file, mirroring
+    ``utils/advise_history._append_with_lock`` (a separate file, so the lock
+    never depends on the data file's seek position). If OS locking is
+    unavailable on the host, the update proceeds unlocked — degraded, not
+    broken.
+    """
+    with _REGISTRY_THREAD_LOCK:
+        lock_path = draft_registry_path() + ".lock"
+        handle = None
+        try:
+            os.makedirs(
+                os.path.dirname(os.path.abspath(lock_path)) or ".", exist_ok=True
+            )
+            handle = open(lock_path, "a+")  # noqa: SIM115 — released in finally
+        except OSError:
+            handle = None
+
+        locked = False
+        if handle is not None:
+            try:
+                if os.name == "nt":
+                    import msvcrt  # type: ignore[import-not-found]
+
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+                else:
+                    import fcntl  # type: ignore[import-not-found]
+
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+                locked = True
+            except (ImportError, OSError):
+                locked = False
+        try:
+            yield
+        finally:
+            if handle is not None:
+                try:
+                    if locked and os.name == "nt":
+                        import msvcrt  # type: ignore[import-not-found]
+
+                        handle.seek(0)
+                        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+                    elif locked:
+                        import fcntl  # type: ignore[import-not-found]
+
+                        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                except (ImportError, OSError):
+                    pass
+                handle.close()
+
+
 def _atomic_write_json(payload: dict, path: str) -> str:
     """Atomic JSON write into the draft registry.
 
@@ -324,11 +391,13 @@ def register_draft(
         ),
         "created": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
-    entries = [item for item in _read_registry() if item.get("target") != key]
-    entries.append(entry)
-    entries = entries[-_MAX_REGISTRY_ENTRIES:]
-
-    _atomic_write_json({"drafts": entries}, draft_registry_path())
+    # Read-modify-write under a cross-process lock: two concurrent distill runs
+    # must not lose one another's registration.
+    with _registry_lock():
+        entries = [item for item in _read_registry() if item.get("target") != key]
+        entries.append(entry)
+        entries = entries[-_MAX_REGISTRY_ENTRIES:]
+        _atomic_write_json({"drafts": entries}, draft_registry_path())
 
 
 def lookup_draft(target: str) -> Optional[str]:

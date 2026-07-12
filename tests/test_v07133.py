@@ -107,6 +107,81 @@ class TestAdapterFuse:
         assert list(tmp_path.glob(".fuse_*")) == [], "staging dir was orphaned"
         assert base.exists(), "the base model must survive a failed fuse"
 
+    def test_fuse_adapter_into_is_the_in_place_special_case(self, monkeypatch):
+        """shrink's in-place fuse == merge(base=out=base_dir)."""
+        from soup_cli.utils import adapter_fuse
+
+        seen: dict = {}
+        monkeypatch.setattr(
+            adapter_fuse,
+            "merge_adapter_to_dense",
+            lambda **kw: seen.update(kw),
+        )
+        adapter_fuse.fuse_adapter_into(base_dir="model", adapter_dir="ad", trc=True)
+        assert seen["base_model"] == "model"
+        assert seen["out_dir"] == "model"
+        assert seen["adapter_dir"] == "ad"
+        assert seen["trc"] is True
+
+    def test_merge_loads_base_weights_from_the_base_model_not_out_dir(
+        self, tmp_path, monkeypatch
+    ):
+        """The whole point of the CRITICAL fix: an adapter-only dir has no base
+        weights, so the base must be loaded from a separate model id/path."""
+        import sys
+        import types
+
+        from soup_cli.utils import adapter_fuse
+
+        monkeypatch.chdir(tmp_path)
+        adapter = tmp_path / "out" / "_adapter"
+        adapter.mkdir(parents=True)
+        loaded: dict = {}
+
+        class _Merged:
+            def save_pretrained(self, path):
+                Path(path).joinpath("model.safetensors").write_bytes(b"dense")
+
+        class _Base:
+            @staticmethod
+            def from_pretrained(model_id, **kw):
+                loaded["base"] = model_id
+                return _Base()
+
+        class _Peft:
+            @staticmethod
+            def from_pretrained(base, adapter_dir, **kw):
+                loaded["adapter"] = adapter_dir
+                obj = _Peft()
+                obj.merge_and_unload = lambda: _Merged()  # noqa: E731
+                return obj
+
+        class _Tok:
+            @staticmethod
+            def from_pretrained(model_id, **kw):
+                return _Tok()
+
+            def save_pretrained(self, path):
+                Path(path).joinpath("tokenizer.json").write_text("{}", encoding="utf-8")
+
+        fake_tf = types.ModuleType("transformers")
+        fake_tf.AutoModelForCausalLM = _Base
+        fake_tf.AutoTokenizer = _Tok
+        fake_peft = types.ModuleType("peft")
+        fake_peft.PeftModel = _Peft
+        monkeypatch.setitem(sys.modules, "transformers", fake_tf)
+        monkeypatch.setitem(sys.modules, "peft", fake_peft)
+
+        adapter_fuse.merge_adapter_to_dense(
+            base_model="org/tiny", adapter_dir=str(adapter), out_dir="out"
+        )
+        assert loaded["base"] == "org/tiny"
+        assert loaded["adapter"] == str(adapter)
+        # out/ is now the DENSE model, and the adapter subdir is gone.
+        assert (tmp_path / "out" / "model.safetensors").exists()
+        assert not (tmp_path / "out" / "_adapter").exists()
+        assert list(tmp_path.glob(".fuse_*")) == []
+
     def test_fuse_revalidates_base_dir_before_swapping(self, tmp_path, monkeypatch):
         """The subprocess ran for hours — the swap target is re-checked."""
         from soup_cli.utils import adapter_fuse
@@ -437,6 +512,34 @@ class TestDraftRegistry:
         leftovers = [p.name for p in draft_registry.parent.glob(".soup.*")]
         assert leftovers == []
 
+    def test_concurrent_registration_does_not_lose_an_entry(
+        self, draft_registry, tmp_path
+    ):
+        """code-review MEDIUM: read-modify-write under a cross-process lock."""
+        import threading
+
+        from soup_cli.utils.draft import list_drafts, register_draft
+
+        draft = tmp_path / "d"
+        draft.mkdir()
+        errors: list[BaseException] = []
+
+        def _register(idx: int) -> None:
+            try:
+                register_draft(f"hf/target-{idx}", str(draft))
+            except BaseException as exc:  # noqa: BLE001
+                errors.append(exc)
+
+        threads = [threading.Thread(target=_register, args=(i,)) for i in range(12)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        assert not errors, errors
+        targets = {entry["target"] for entry in list_drafts()}
+        assert targets == {f"hf/target-{i}" for i in range(12)}
+
     def test_rejects_empty_target_and_bad_rate(self, draft_registry, tmp_path):
         from soup_cli.utils.draft import register_draft
 
@@ -739,6 +842,36 @@ class TestDraftCliPlumbing:
             result = runner.invoke(app, [sub, "--help"])
             assert result.exit_code == 0, (sub, result.output)
 
+    @pytest.mark.parametrize("sub", ["distill", "measure"])
+    def test_trust_remote_code_flag_exists(self, runner, sub):
+        """code-review MEDIUM: without it, any auto_map model is a dead end."""
+        import re
+
+        from soup_cli.commands.draft import app
+
+        result = runner.invoke(app, [sub, "--help"])
+        plain = re.sub(r"\x1b\[[0-9;]*m", "", result.output).replace("\n", " ")
+        assert "--trust-remote-code" in re.sub(r"\s+", " ", plain)
+
+    def test_trust_flag_is_threaded_into_resolution(self, monkeypatch):
+        from soup_cli.commands import draft as draft_cmd
+
+        seen: dict = {}
+
+        def _fake_resolve(model_id, requested, console, requires_remote_code):
+            seen["requested"] = requested
+            return requested
+
+        monkeypatch.setattr(
+            "soup_cli.utils.trust_remote.resolve_trust_remote_code", _fake_resolve
+        )
+        monkeypatch.setattr(
+            "soup_cli.utils.trust_remote.model_requires_trust_remote_code",
+            lambda mid: False,
+        )
+        assert draft_cmd._resolve_trust("org/x", True) is True
+        assert seen["requested"] is True
+
 
 class TestDraftDistillCli:
     def _data(self, tmp_path, rows: int = 200):
@@ -840,6 +973,98 @@ class TestDraftDistillCli:
         assert cfg.task == "distill"
         assert cfg.base == "org/tiny"
         assert cfg.training.teacher_model == "org/target"
+
+    def test_trainer_output_goes_to_a_nested_adapter_dir(self, in_tmp_cwd):
+        """code-review CRITICAL: the distill trainer only ever writes a LoRA
+        adapter (never dense base weights), so it must NOT train straight into
+        -o — the merge needs a separate adapter dir plus the base weights."""
+        import yaml
+
+        from soup_cli.commands.draft import _ADAPTER_SUBDIR, _build_distill_config_yaml
+
+        yaml_text = _build_distill_config_yaml(
+            draft_base="org/tiny",
+            target="org/target",
+            data="d.jsonl",
+            out_dir=os.path.join("draftout", _ADAPTER_SUBDIR),
+            steps=100,
+            data_rows=200,
+        )
+        parsed = yaml.safe_load(yaml_text)
+        assert parsed["output"].endswith(_ADAPTER_SUBDIR)
+        assert parsed["base"] == "org/tiny"  # student = the draft base
+
+    def test_run_distill_merges_base_plus_adapter_not_out_dir_into_itself(
+        self, in_tmp_cwd, monkeypatch
+    ):
+        """The merge must load base weights from --draft-base and the adapter
+        from the nested dir. Fusing out_dir into itself (the original bug) can
+        never work: out_dir holds no base weights."""
+        from soup_cli.commands import draft as draft_cmd
+
+        calls: dict = {}
+
+        class _Result:
+            returncode = 0
+            stdout = b""
+            stderr = b""
+
+        def _fake_run(argv, **kwargs):
+            # Simulate the trainer writing ONLY an adapter into its output dir.
+            adapter = Path("draftout") / draft_cmd._ADAPTER_SUBDIR
+            adapter.mkdir(parents=True, exist_ok=True)
+            (adapter / "adapter_config.json").write_text("{}", encoding="utf-8")
+            return _Result()
+
+        def _fake_merge(*, base_model, adapter_dir, out_dir, trc=False):
+            calls.update(
+                base_model=base_model, adapter_dir=adapter_dir, out_dir=out_dir
+            )
+
+        import subprocess as _sp
+
+        monkeypatch.setattr(_sp, "run", _fake_run)
+        monkeypatch.setattr(draft_cmd, "merge_adapter_to_dense", _fake_merge)
+
+        self._data(in_tmp_cwd)
+        draft_cmd._run_distill(
+            draft_base="org/tiny",
+            target="org/target",
+            data="d.jsonl",
+            out_dir="draftout",
+            steps=100,
+            data_rows=200,
+        )
+        assert calls["base_model"] == "org/tiny", "base weights must come from --draft-base"
+        assert calls["adapter_dir"].endswith(draft_cmd._ADAPTER_SUBDIR)
+        assert calls["out_dir"] == "draftout"
+        assert calls["adapter_dir"] != calls["out_dir"]
+
+    def test_run_distill_fails_loudly_when_no_adapter_was_written(
+        self, in_tmp_cwd, monkeypatch
+    ):
+        from soup_cli.commands import draft as draft_cmd
+
+        class _Result:
+            returncode = 0
+            stdout = b""
+            stderr = b""
+
+        import subprocess as _sp
+
+        monkeypatch.setattr(_sp, "run", lambda argv, **kw: _Result())
+        monkeypatch.setattr(
+            draft_cmd, "merge_adapter_to_dense", lambda **kw: None
+        )
+        with pytest.raises(RuntimeError, match="no adapter"):
+            draft_cmd._run_distill(
+                draft_base="org/tiny",
+                target="org/target",
+                data="d.jsonl",
+                out_dir="draftout",
+                steps=100,
+                data_rows=200,
+            )
 
     def test_newline_in_model_id_cannot_inject_yaml_keys(self, in_tmp_cwd):
         """python-review CRITICAL: raw interpolation let a crafted --target

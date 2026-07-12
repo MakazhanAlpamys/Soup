@@ -1,4 +1,4 @@
-"""Shared LoRA -> dense fuse (v0.71.33).
+"""Shared LoRA -> dense merge (v0.71.33).
 
 Extracted from ``commands/shrink.py`` (v0.71.29) so both ``soup shrink`` (fuse
 the distill-heal adapter back into the pruned model) and ``soup draft`` (a
@@ -6,7 +6,10 @@ speculative-decoding draft must be loadable standalone as ``assistant_model=``,
 so the distilled adapter has to be merged into a dense checkpoint) go through
 ONE implementation instead of two copies that can drift.
 
-Heavy imports (torch / transformers / peft) stay inside the functions.
+:func:`merge_adapter_to_dense` is the general form — base model + adapter ->
+dense model at an arbitrary destination. :func:`fuse_adapter_into` is the
+in-place special case (destination == the base directory) that ``soup shrink``
+uses. Heavy imports (torch / transformers / peft) stay inside the functions.
 """
 
 from __future__ import annotations
@@ -30,16 +33,23 @@ def release_cuda() -> None:
         pass
 
 
-def fuse_adapter_into(*, base_dir: str, adapter_dir: str, trc: bool = False) -> None:
-    """Merge a LoRA adapter into ``base_dir`` (a dense model), atomically.
+def merge_adapter_to_dense(
+    *, base_model: str, adapter_dir: str, out_dir: str, trc: bool = False
+) -> None:
+    """Merge a LoRA adapter into ``base_model`` and write a DENSE model to ``out_dir``.
+
+    ``base_model`` may be a local directory OR a hub id — PEFT only ever writes
+    ``adapter_config.json`` + ``adapter_model.safetensors``, so the base weights
+    always have to come from somewhere else.
 
     The merged model is written to a sibling temp dir and only then swapped in
-    for ``base_dir``. An in-place ``save_pretrained`` over the just-loaded
-    ``base_dir`` fails on Windows (error 1224 — the source ``.safetensors`` is
+    for ``out_dir``. An in-place ``save_pretrained`` over a just-loaded model
+    directory fails on Windows (error 1224 — the source ``.safetensors`` is
     still memory-mapped by the loaded weights), so the temp-dir swap is the
-    cross-platform-safe path.
+    cross-platform-safe path, and it also makes the destination replacement
+    atomic.
 
-    ``base_dir`` is re-validated immediately before the swap: the training
+    ``out_dir`` is re-validated immediately before the swap: the training
     subprocess that produced ``adapter_dir`` may have run for hours, so the
     containment check done at command entry is stale by now (TOCTOU).
     """
@@ -50,34 +60,53 @@ def fuse_adapter_into(*, base_dir: str, adapter_dir: str, trc: bool = False) -> 
     # Cheap containment check BEFORE the heavy (and, on a core-only install,
     # ImportError-raising) transformers/peft imports, so a bad path reports the
     # actual problem instead of a confusing missing-dependency error.
-    enforce_under_cwd_and_no_symlink(base_dir, "fuse base dir")
+    enforce_under_cwd_and_no_symlink(out_dir, "fused output dir")
 
     from peft import PeftModel
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
     base = AutoModelForCausalLM.from_pretrained(
-        base_dir, trust_remote_code=trc, torch_dtype="auto"
+        base_model, trust_remote_code=trc, torch_dtype="auto"
     )
     merged = PeftModel.from_pretrained(base, adapter_dir).merge_and_unload()
-    tokenizer = AutoTokenizer.from_pretrained(base_dir, trust_remote_code=trc)
 
-    parent = os.path.dirname(os.path.abspath(base_dir)) or "."
+    # The trainer saves the tokenizer alongside the adapter; fall back to the
+    # base model's own tokenizer if it didn't.
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(adapter_dir, trust_remote_code=trc)
+    except (OSError, ValueError):
+        tokenizer = AutoTokenizer.from_pretrained(base_model, trust_remote_code=trc)
+
+    parent = os.path.dirname(os.path.abspath(out_dir)) or "."
+    os.makedirs(parent, exist_ok=True)
     staging = tempfile.mkdtemp(prefix=".fuse_", dir=parent)
     try:
         try:
             merged.save_pretrained(staging)
             tokenizer.save_pretrained(staging)
         finally:
-            # Drop every reference so Windows releases the base_dir mmap before
-            # we remove it; otherwise rmtree(base_dir) also hits error 1224.
+            # Drop every reference so Windows releases the out_dir mmap before
+            # we remove it; otherwise rmtree(out_dir) also hits error 1224.
             del merged, base, tokenizer
             gc.collect()
             release_cuda()
-        shutil.rmtree(base_dir)
-        os.replace(staging, base_dir)
+        if os.path.isdir(out_dir):
+            shutil.rmtree(out_dir)
+        os.replace(staging, out_dir)
     except BaseException:
         # A half-written staging dir (disk full, interrupted save) must not be
         # orphaned next to the model — it would silently accumulate a full
         # model's worth of bytes per failed run.
         shutil.rmtree(staging, ignore_errors=True)
         raise
+
+
+def fuse_adapter_into(*, base_dir: str, adapter_dir: str, trc: bool = False) -> None:
+    """Merge a LoRA adapter into ``base_dir`` in place (``soup shrink``'s case).
+
+    ``base_dir`` is BOTH the base weights and the destination: the healed model
+    replaces the pruned one. Thin wrapper over :func:`merge_adapter_to_dense`.
+    """
+    merge_adapter_to_dense(
+        base_model=base_dir, adapter_dir=adapter_dir, out_dir=base_dir, trc=trc
+    )
