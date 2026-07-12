@@ -197,8 +197,8 @@ class TestAdapterFuse:
         assert not (tmp_path / "out" / "_adapter").exists()
         assert list(tmp_path.glob(".fuse_*")) == []
 
-    def test_fuse_revalidates_base_dir_before_swapping(self, tmp_path, monkeypatch):
-        """The subprocess ran for hours — the swap target is re-checked."""
+    def test_containment_checked_before_any_model_load(self, tmp_path, monkeypatch):
+        """The cheap containment check runs before the heavy imports/loads."""
         from soup_cli.utils import adapter_fuse
 
         seen: list[tuple[str, str]] = []
@@ -207,13 +207,138 @@ class TestAdapterFuse:
             seen.append((path, field))
             raise ValueError("refused")
 
-        monkeypatch.setattr(adapter_fuse, "enforce_under_cwd_and_no_symlink", _fake_enforce)
+        monkeypatch.setattr(
+            adapter_fuse, "enforce_under_cwd_and_no_symlink", _fake_enforce
+        )
         with pytest.raises(ValueError, match="refused"):
             adapter_fuse.fuse_adapter_into(
                 base_dir=str(tmp_path / "base"), adapter_dir=str(tmp_path / "ad")
             )
-        # Refused BEFORE any model load.
         assert seen and seen[0][0] == str(tmp_path / "base")
+
+    def test_rechecks_immediately_before_the_destructive_swap(
+        self, tmp_path, monkeypatch
+    ):
+        """TOCTOU: a mock that raised on EVERY call could not distinguish
+        'checked once at entry' from 'rechecked right before rmtree'. This one
+        succeeds first and fails on the SECOND call, so it can only pass if the
+        code truly re-validates immediately before the swap."""
+        import sys
+        import types
+
+        from soup_cli.utils import adapter_fuse
+
+        monkeypatch.chdir(tmp_path)
+        base = tmp_path / "base"
+        base.mkdir()
+        adapter = tmp_path / "out" / "_adapter"
+        adapter.mkdir(parents=True)
+
+        calls = {"n": 0}
+        real = adapter_fuse.enforce_under_cwd_and_no_symlink
+
+        def _flaky(path, field):
+            calls["n"] += 1
+            if calls["n"] >= 2:
+                raise ValueError("swap-time refusal")
+            return real(path, field)
+
+        monkeypatch.setattr(adapter_fuse, "enforce_under_cwd_and_no_symlink", _flaky)
+
+        class _Merged:
+            def save_pretrained(self, path):
+                Path(path).joinpath("model.safetensors").write_bytes(b"dense")
+
+        class _Base:
+            @staticmethod
+            def from_pretrained(*a, **kw):
+                return _Base()
+
+        class _Peft:
+            @staticmethod
+            def from_pretrained(*a, **kw):
+                obj = _Peft()
+                obj.merge_and_unload = lambda: _Merged()  # noqa: E731
+                return obj
+
+        class _Tok:
+            @staticmethod
+            def from_pretrained(*a, **kw):
+                return _Tok()
+
+            def save_pretrained(self, path):
+                pass
+
+        fake_tf = types.ModuleType("transformers")
+        fake_tf.AutoModelForCausalLM = _Base
+        fake_tf.AutoTokenizer = _Tok
+        fake_peft = types.ModuleType("peft")
+        fake_peft.PeftModel = _Peft
+        monkeypatch.setitem(sys.modules, "transformers", fake_tf)
+        monkeypatch.setitem(sys.modules, "peft", fake_peft)
+
+        with pytest.raises(ValueError, match="swap-time refusal"):
+            adapter_fuse.merge_adapter_to_dense(
+                base_model=str(base), adapter_dir=str(adapter), out_dir="out"
+            )
+        assert calls["n"] == 2, "must recheck immediately before the destructive swap"
+        # The swap never completed: no dense model landed, and the staging dir
+        # was cleaned up rather than orphaned.
+        assert not (tmp_path / "out" / "model.safetensors").exists()
+        assert list(tmp_path.glob(".fuse_*")) == []
+
+    def test_merge_falls_back_to_base_tokenizer_when_adapter_lacks_one(
+        self, tmp_path, monkeypatch
+    ):
+        import sys
+        import types
+
+        from soup_cli.utils import adapter_fuse
+
+        monkeypatch.chdir(tmp_path)
+        adapter = tmp_path / "out" / "_adapter"
+        adapter.mkdir(parents=True)
+        seen = {"tok_from": []}
+
+        class _Merged:
+            def save_pretrained(self, path):
+                Path(path).joinpath("model.safetensors").write_bytes(b"dense")
+
+        class _Base:
+            @staticmethod
+            def from_pretrained(*a, **kw):
+                return _Base()
+
+        class _Peft:
+            @staticmethod
+            def from_pretrained(*a, **kw):
+                obj = _Peft()
+                obj.merge_and_unload = lambda: _Merged()  # noqa: E731
+                return obj
+
+        class _Tok:
+            @staticmethod
+            def from_pretrained(model_id, **kw):
+                seen["tok_from"].append(model_id)
+                if model_id == str(adapter):
+                    raise OSError("no tokenizer files here")
+                return _Tok()
+
+            def save_pretrained(self, path):
+                pass
+
+        fake_tf = types.ModuleType("transformers")
+        fake_tf.AutoModelForCausalLM = _Base
+        fake_tf.AutoTokenizer = _Tok
+        fake_peft = types.ModuleType("peft")
+        fake_peft.PeftModel = _Peft
+        monkeypatch.setitem(sys.modules, "transformers", fake_tf)
+        monkeypatch.setitem(sys.modules, "peft", fake_peft)
+
+        adapter_fuse.merge_adapter_to_dense(
+            base_model="org/tiny", adapter_dir=str(adapter), out_dir="out"
+        )
+        assert seen["tok_from"] == [str(adapter), "org/tiny"]
 
 
 # ---------------------------------------------------------------------------
@@ -318,6 +443,8 @@ class TestClassify:
 
         with pytest.raises(ValueError, match="between 0 and 1"):
             classify_acceptance(1.5)
+        with pytest.raises(ValueError, match="between 0 and 1"):
+            classify_acceptance(-0.1)
 
 
 class TestSameTokenizer:
@@ -346,6 +473,16 @@ class TestSameTokenizer:
         from soup_cli.utils.draft import same_tokenizer
 
         assert same_tokenizer(_FakeTok(32000), _FakeTok(49152)) is False
+
+    def test_missing_vocab_size_attribute_is_false(self):
+        from soup_cli.utils.draft import same_tokenizer
+
+        class _NoVocab:
+            def encode(self, text, add_special_tokens=False):
+                return [1, 2, 3]
+
+        assert same_tokenizer(_NoVocab(), _FakeTok(32000)) is False
+        assert same_tokenizer(_FakeTok(32000), _NoVocab()) is False
 
     def test_probe_corpus_is_non_trivial(self):
         """A single-ASCII-word probe would miss most real tokenizer splits."""
@@ -509,14 +646,37 @@ class TestDraftRegistry:
         assert list_drafts() == []
         assert lookup_draft("x") is None
 
-    def test_entry_cap(self, draft_registry, tmp_path):
-        from soup_cli.utils.draft import _MAX_REGISTRY_ENTRIES, list_drafts, register_draft
+    def test_entry_cap_evicts_oldest_first(self, draft_registry, tmp_path):
+        from soup_cli.utils.draft import (
+            _MAX_REGISTRY_ENTRIES,
+            list_drafts,
+            register_draft,
+        )
 
         draft = tmp_path / "d"
         draft.mkdir()
         for i in range(_MAX_REGISTRY_ENTRIES + 5):
             register_draft(f"hf/target-{i}", str(draft))
-        assert len(list_drafts()) == _MAX_REGISTRY_ENTRIES
+        targets = {entry["target"] for entry in list_drafts()}
+        assert len(targets) == _MAX_REGISTRY_ENTRIES
+        # oldest evicted, newest kept
+        assert "hf/target-0" not in targets
+        assert "hf/target-4" not in targets
+        assert "hf/target-5" in targets
+        assert f"hf/target-{_MAX_REGISTRY_ENTRIES + 4}" in targets
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX symlink semantics")
+    def test_registry_symlink_is_not_followed_on_read(self, draft_registry, tmp_path):
+        """O_NOFOLLOW: a symlink at the registry path must degrade to empty,
+        not leak an arbitrary file's parsed content into serve --auto-spec."""
+        from soup_cli.utils.draft import list_drafts
+
+        secret = tmp_path / "secret.json"
+        secret.write_text(
+            '{"drafts": [{"target": "leaked", "draft": "/tmp"}]}', encoding="utf-8"
+        )
+        draft_registry.symlink_to(secret)
+        assert list_drafts() == []
 
     def test_atomic_write_leaves_no_temp_file(self, draft_registry, tmp_path):
         from soup_cli.utils.draft import register_draft
@@ -958,6 +1118,7 @@ class TestDraftDistillCli:
              "--data", data, "-o", "../escape", "--plan-only"],
         )
         assert result.exit_code == 1
+        assert "cwd" in result.output.lower()
 
     def test_output_is_cwd_rejected(self, runner, in_tmp_cwd, monkeypatch):
         """security CRITICAL: -o . would rmtree the whole working dir on success."""
@@ -1020,6 +1181,120 @@ class TestDraftDistillCli:
              "--data", "nope.jsonl", "-o", "draftout", "--plan-only"],
         )
         assert result.exit_code == 1
+        assert "unreadable" in result.output.lower()
+
+    def test_force_overwrites_a_preexisting_nondraft_dir(
+        self, runner, in_tmp_cwd, monkeypatch
+    ):
+        from soup_cli.commands.draft import app
+
+        self._patch_configs(monkeypatch, 49152, 49152)
+        data = self._data(in_tmp_cwd)
+        victim = in_tmp_cwd / "important"
+        victim.mkdir()
+        (victim / "notes.txt").write_text("keep me", encoding="utf-8")
+        result = runner.invoke(
+            app,
+            ["distill", "--target", "org/target", "--draft-base", "org/tiny",
+             "--data", data, "-o", "important", "--force", "--plan-only"],
+        )
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+
+    def test_empty_preexisting_dir_allowed_without_force(
+        self, runner, in_tmp_cwd, monkeypatch
+    ):
+        from soup_cli.commands.draft import app
+
+        self._patch_configs(monkeypatch, 49152, 49152)
+        data = self._data(in_tmp_cwd)
+        (in_tmp_cwd / "draftout").mkdir()  # empty, no config.json
+        result = runner.invoke(
+            app,
+            ["distill", "--target", "org/target", "--draft-base", "org/tiny",
+             "--data", data, "-o", "draftout", "--plan-only"],
+        )
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+
+    def test_config_unreadable_reports_friendly_error(
+        self, runner, in_tmp_cwd, monkeypatch
+    ):
+        from soup_cli.commands import draft as draft_cmd
+        from soup_cli.commands.draft import app
+
+        def _boom(model_id, trc=False):
+            raise OSError("model not found")
+
+        monkeypatch.setattr(draft_cmd, "_vocab_size_of", _boom)
+        data = self._data(in_tmp_cwd)
+        result = runner.invoke(
+            app,
+            ["distill", "--target", "org/nope", "--draft-base", "org/tiny",
+             "--data", data, "-o", "draftout", "--plan-only"],
+        )
+        assert result.exit_code == 1
+        assert "could not read model config" in result.output.lower()
+
+    def test_run_distill_surfaces_subprocess_failure(self, in_tmp_cwd, monkeypatch):
+        import subprocess as _sp
+
+        from soup_cli.commands import draft as draft_cmd
+
+        class _Result:
+            returncode = 1
+            stdout = b"partial log\n"
+            stderr = b"error: exploded\x1b[31m"
+
+        monkeypatch.setattr(_sp, "run", lambda argv, **kw: _Result())
+        self._data(in_tmp_cwd)
+        with pytest.raises(RuntimeError, match="rc=1"):
+            draft_cmd._run_distill(
+                draft_base="org/tiny", target="org/target", data="d.jsonl",
+                out_dir="draftout", steps=100, data_rows=200,
+            )
+
+    def test_run_distill_timeout_raises_friendly_error(self, in_tmp_cwd, monkeypatch):
+        import subprocess as _sp
+
+        from soup_cli.commands import draft as draft_cmd
+
+        def _boom(argv, **kw):
+            raise _sp.TimeoutExpired(cmd=argv, timeout=kw.get("timeout", 1))
+
+        monkeypatch.setattr(_sp, "run", _boom)
+        self._data(in_tmp_cwd)
+        with pytest.raises(RuntimeError, match="timeout"):
+            draft_cmd._run_distill(
+                draft_base="org/tiny", target="org/target", data="d.jsonl",
+                out_dir="draftout", steps=100, data_rows=200,
+            )
+
+    def test_run_distill_cpu_device_hides_gpus(self, in_tmp_cwd, monkeypatch):
+        import subprocess as _sp
+
+        from soup_cli.commands import draft as draft_cmd
+
+        captured: dict = {}
+
+        class _Result:
+            returncode = 0
+            stdout = b""
+            stderr = b""
+
+        def _fake_run(argv, **kwargs):
+            captured["env"] = kwargs.get("env")
+            (Path("draftout") / draft_cmd._ADAPTER_SUBDIR).mkdir(
+                parents=True, exist_ok=True
+            )
+            return _Result()
+
+        monkeypatch.setattr(_sp, "run", _fake_run)
+        monkeypatch.setattr(draft_cmd, "merge_adapter_to_dense", lambda **kw: None)
+        self._data(in_tmp_cwd)
+        draft_cmd._run_distill(
+            draft_base="org/tiny", target="org/target", data="d.jsonl",
+            out_dir="draftout", steps=100, data_rows=200, device="cpu",
+        )
+        assert captured["env"]["CUDA_VISIBLE_DEVICES"] == "-1"
 
     def test_generated_config_is_schema_valid(self, in_tmp_cwd):
         """The rendered YAML must actually load as a SoupConfig."""
@@ -1336,6 +1611,65 @@ class TestDraftMeasureCli:
         )
         assert result.exit_code != 0
 
+    def test_model_load_failure_reports_friendly_error(
+        self, runner, in_tmp_cwd, monkeypatch
+    ):
+        from soup_cli.commands import draft as draft_cmd
+        from soup_cli.commands.draft import app
+
+        def _boom(model_id, **kw):
+            raise OSError("model not found")
+
+        monkeypatch.setattr(draft_cmd, "_load_pair_member", _boom)
+        prompts = self._prompts(in_tmp_cwd)
+        result = runner.invoke(
+            app,
+            ["measure", "--target", "org/nope", "--draft", "org/tiny",
+             "--prompts", prompts],
+        )
+        assert result.exit_code == 1
+        assert "could not load the model pair" in result.output.lower()
+
+    def test_report_output_outside_cwd_rejected(
+        self, runner, in_tmp_cwd, monkeypatch
+    ):
+        from soup_cli.commands import draft as draft_cmd
+        from soup_cli.commands.draft import app
+
+        self._patch_load(monkeypatch)
+        monkeypatch.setattr(draft_cmd, "measure_acceptance", lambda *a, **k: (75, 100))
+        monkeypatch.setattr(draft_cmd, "measure_throughput", lambda *a, **k: 20.0)
+        prompts = self._prompts(in_tmp_cwd)
+        result = runner.invoke(
+            app,
+            ["measure", "--target", "org/target", "--draft", "org/tiny",
+             "--prompts", prompts, "-o", "../escape.json"],
+        )
+        assert result.exit_code == 1
+        assert "cwd" in result.output.lower()
+
+    def test_zero_throughput_renders_as_na(self, runner, in_tmp_cwd, monkeypatch):
+        import json as _json
+
+        from soup_cli.commands import draft as draft_cmd
+        from soup_cli.commands.draft import app
+
+        self._patch_load(monkeypatch)
+        monkeypatch.setattr(draft_cmd, "measure_acceptance", lambda *a, **k: (75, 100))
+        monkeypatch.setattr(draft_cmd, "measure_throughput", lambda *a, **k: 0.0)
+        prompts = self._prompts(in_tmp_cwd)
+        result = runner.invoke(
+            app,
+            ["measure", "--target", "org/target", "--draft", "org/tiny",
+             "--prompts", prompts, "-o", "report.json"],
+        )
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        assert "n/a" in result.output.lower()
+        data = _json.loads((in_tmp_cwd / "report.json").read_text(encoding="utf-8"))
+        assert data["tok_s_plain"] is None
+        assert data["tok_s_assisted"] is None
+        assert data["speedup"] is None
+
     def test_zero_generated_tokens_is_not_a_crash(
         self, runner, in_tmp_cwd, monkeypatch
     ):
@@ -1377,3 +1711,45 @@ class TestDraftListCli:
         result = runner.invoke(app, ["list"])
         assert result.exit_code == 0
         assert "no draft" in result.output.lower()
+
+    def test_renders_dash_for_unmeasured_acceptance(
+        self, runner, draft_registry, tmp_path
+    ):
+        from soup_cli.commands.draft import app
+        from soup_cli.utils.draft import register_draft
+
+        draft = tmp_path / "d"
+        draft.mkdir()
+        register_draft("org/no-rate", str(draft))  # acceptance_rate=None
+        result = runner.invoke(app, ["list"])
+        assert result.exit_code == 0
+        assert "org/no-rate" in result.output
+
+    def test_escapes_markup_in_registered_target(
+        self, runner, draft_registry, tmp_path
+    ):
+        from soup_cli.commands.draft import app
+        from soup_cli.utils.draft import register_draft
+
+        draft = tmp_path / "d"
+        draft.mkdir()
+        register_draft("[bold red]org/evil[/]", str(draft))
+        result = runner.invoke(app, ["list"])
+        assert result.exit_code == 0
+        assert "org/evil" in result.output  # literal, not interpreted as markup
+
+
+class TestPromptTexts:
+    def test_extracts_messages_and_drops_unusable_rows(self):
+        from soup_cli.commands.draft import _prompt_texts
+
+        rows = [
+            {"messages": [
+                {"role": "system", "content": "sys"},
+                {"role": "user", "content": "hi"},
+            ]},
+            {"prompt": "direct"},
+            {"nothing": "useful"},  # dropped
+            {"messages": [{"role": "assistant", "content": "no user turn"}]},  # dropped
+        ]
+        assert _prompt_texts(rows) == ["hi", "direct"]
