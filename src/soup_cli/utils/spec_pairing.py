@@ -58,8 +58,20 @@ def _is_valid_hf_id(name: str) -> bool:
     return bool(_HF_ID_RE.match(name))
 
 
+def _lookup_local_draft(target: str) -> Optional[str]:
+    """Draft trained locally by ``soup draft distill`` (v0.71.33), or None."""
+    from soup_cli.utils.draft import lookup_draft
+
+    return lookup_draft(target)
+
+
 def pick_draft_model(target: str) -> Optional[str]:
     """Pick a known-good draft model for the target.
+
+    A draft the user trained themselves via ``soup draft distill`` (recorded in
+    the local registry, v0.71.33) wins over the built-in pairing table — it was
+    distilled from *this* target, so its acceptance rate is strictly better
+    informed than a generic same-family pick.
 
     Returns None for unknown / too-small targets. Target names are normalised
     to lowercase for matching. URLs and null-byte names are rejected for
@@ -69,5 +81,15 @@ def pick_draft_model(target: str) -> Optional[str]:
     if not _is_valid_hf_id(target):
         return None
     key = target.strip().lower()
+
+    # This runs on `soup serve` startup: a corrupt or unreadable registry must
+    # degrade to the static map, never take the server down.
+    try:
+        local = _lookup_local_draft(key)
+    except Exception:  # noqa: BLE001 — registry problems are never fatal here
+        local = None
+    if local:
+        return local
+
     # Strip trailing path segments (e.g. revisions) not present in map
     return _DRAFT_PAIRS.get(key)

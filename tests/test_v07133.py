@@ -12,6 +12,7 @@ Covers:
 from __future__ import annotations
 
 import ast
+import os
 from pathlib import Path
 
 import pytest
@@ -254,6 +255,151 @@ class TestReport:
         report = self._report(tok_s_plain=None, tok_s_assisted=None, speedup=None)
         Console(file=buf, width=100).print(render_draft_panel(report))
         assert "STRONG" in buf.getvalue()
+
+
+# ---------------------------------------------------------------------------
+# Task 3 — local draft registry + spec_pairing lookup
+# ---------------------------------------------------------------------------
+@pytest.fixture()
+def draft_registry(tmp_path, monkeypatch):
+    """Point the draft registry at a temp file (never touch the real ~/.soup)."""
+    path = tmp_path / "drafts.json"
+    monkeypatch.setenv("SOUP_DRAFT_REGISTRY_PATH", str(path))
+    return path
+
+
+class TestDraftRegistry:
+    def test_round_trip(self, draft_registry, tmp_path):
+        from soup_cli.utils.draft import list_drafts, lookup_draft, register_draft
+
+        draft = tmp_path / "mydraft"
+        draft.mkdir()
+        register_draft("HF/Target-7B", str(draft), 0.62)
+
+        assert lookup_draft("HF/Target-7B") == os.path.realpath(str(draft))
+        entries = list_drafts()
+        assert len(entries) == 1
+        assert entries[0]["acceptance_rate"] == 0.62
+        assert entries[0]["target"] == "hf/target-7b"
+
+    def test_lookup_is_case_insensitive(self, draft_registry, tmp_path):
+        """Must match pick_draft_model's .lower() normalisation."""
+        from soup_cli.utils.draft import lookup_draft, register_draft
+
+        draft = tmp_path / "d"
+        draft.mkdir()
+        register_draft("Qwen/Qwen2.5-72B", str(draft))
+        assert lookup_draft("qwen/qwen2.5-72b") is not None
+        assert lookup_draft("QWEN/QWEN2.5-72B") is not None
+
+    def test_stale_dir_is_skipped(self, draft_registry, tmp_path):
+        """A moved/deleted draft degrades to 'no draft', never a crash in serve."""
+        import shutil
+
+        from soup_cli.utils.draft import lookup_draft, register_draft
+
+        draft = tmp_path / "gone"
+        draft.mkdir()
+        register_draft("hf/target", str(draft))
+        shutil.rmtree(draft)
+        assert lookup_draft("hf/target") is None
+
+    def test_reregister_replaces(self, draft_registry, tmp_path):
+        from soup_cli.utils.draft import list_drafts, lookup_draft, register_draft
+
+        first = tmp_path / "one"
+        first.mkdir()
+        second = tmp_path / "two"
+        second.mkdir()
+        register_draft("hf/t", str(first))
+        register_draft("hf/t", str(second))
+        assert len(list_drafts()) == 1
+        assert lookup_draft("hf/t") == os.path.realpath(str(second))
+
+    def test_malformed_json_reads_as_empty(self, draft_registry):
+        from soup_cli.utils.draft import list_drafts, lookup_draft
+
+        draft_registry.write_text("{ not json", encoding="utf-8")
+        assert list_drafts() == []
+        assert lookup_draft("anything") is None
+
+    def test_non_dict_payload_reads_as_empty(self, draft_registry):
+        from soup_cli.utils.draft import list_drafts
+
+        draft_registry.write_text('["nope"]', encoding="utf-8")
+        assert list_drafts() == []
+
+    def test_missing_file_reads_as_empty(self, draft_registry):
+        from soup_cli.utils.draft import list_drafts, lookup_draft
+
+        assert not draft_registry.exists()
+        assert list_drafts() == []
+        assert lookup_draft("x") is None
+
+    def test_entry_cap(self, draft_registry, tmp_path):
+        from soup_cli.utils.draft import _MAX_REGISTRY_ENTRIES, list_drafts, register_draft
+
+        draft = tmp_path / "d"
+        draft.mkdir()
+        for i in range(_MAX_REGISTRY_ENTRIES + 5):
+            register_draft(f"hf/target-{i}", str(draft))
+        assert len(list_drafts()) == _MAX_REGISTRY_ENTRIES
+
+    def test_atomic_write_leaves_no_temp_file(self, draft_registry, tmp_path):
+        from soup_cli.utils.draft import register_draft
+
+        draft = tmp_path / "d"
+        draft.mkdir()
+        register_draft("hf/t", str(draft))
+        leftovers = [p.name for p in draft_registry.parent.glob(".soup.*")]
+        assert leftovers == []
+
+    def test_rejects_empty_target_and_bad_rate(self, draft_registry, tmp_path):
+        from soup_cli.utils.draft import register_draft
+
+        draft = tmp_path / "d"
+        draft.mkdir()
+        with pytest.raises(ValueError, match="non-empty"):
+            register_draft("  ", str(draft))
+        with pytest.raises(ValueError, match="between 0 and 1"):
+            register_draft("hf/t", str(draft), 1.5)
+
+
+class TestSpecPairingLocal:
+    def test_local_registry_beats_static_map(self, draft_registry, tmp_path):
+        """A draft you trained yourself wins over the built-in pairing."""
+        from soup_cli.utils.draft import register_draft
+        from soup_cli.utils.spec_pairing import pick_draft_model
+
+        draft = tmp_path / "mydraft"
+        draft.mkdir()
+        register_draft("qwen/qwen2.5-72b", str(draft))  # also in the static map
+        assert pick_draft_model("Qwen/Qwen2.5-72B") == os.path.realpath(str(draft))
+
+    def test_falls_back_to_static_map(self, draft_registry):
+        from soup_cli.utils.spec_pairing import pick_draft_model
+
+        assert pick_draft_model("Qwen/Qwen2.5-72B") == "Qwen/Qwen2.5-0.5B"
+
+    def test_unknown_target_still_none(self, draft_registry):
+        from soup_cli.utils.spec_pairing import pick_draft_model
+
+        assert pick_draft_model("nobody/nothing-1b") is None
+
+    def test_url_target_still_rejected(self, draft_registry):
+        from soup_cli.utils.spec_pairing import pick_draft_model
+
+        assert pick_draft_model("https://evil.example/model") is None
+
+    def test_registry_blowup_does_not_crash_serve(self, draft_registry, monkeypatch):
+        """pick_draft_model is on serve's startup path — it must never raise."""
+        from soup_cli.utils import spec_pairing
+
+        def _boom(target):
+            raise RuntimeError("registry on fire")
+
+        monkeypatch.setattr(spec_pairing, "_lookup_local_draft", _boom)
+        assert spec_pairing.pick_draft_model("Qwen/Qwen2.5-72B") == "Qwen/Qwen2.5-0.5B"
 
 
 class TestDraftNoTopLevelTorch:
