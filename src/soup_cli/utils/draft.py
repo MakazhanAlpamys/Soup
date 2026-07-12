@@ -68,13 +68,10 @@ _MAX_REGISTRY_BYTES = 4 * 1024 * 1024
 # ---------------------------------------------------------------------------
 # Pure kernels
 # ---------------------------------------------------------------------------
-def compute_acceptance(
-    draft_argmax: Sequence[int], target_ids: Sequence[int]
-) -> float:
-    """Fraction of positions where the draft's argmax matches the target token.
+def count_accepted(draft_argmax: Sequence[int], target_ids: Sequence[int]) -> int:
+    """Number of positions where the draft's argmax matches the target token.
 
-    Both sequences cover the SAME generated positions. An empty pair scores
-    0.0 (nothing was proposed, so nothing was accepted).
+    Both sequences must cover the SAME generated positions.
 
     Raises:
         ValueError: the two sequences differ in length — that would silently
@@ -85,12 +82,33 @@ def compute_acceptance(
             "draft_argmax and target_ids must be the same length, got "
             f"{len(draft_argmax)} and {len(target_ids)}"
         )
-    if not target_ids:
-        return 0.0
-    matched = sum(
+    return sum(
         1 for proposed, actual in zip(draft_argmax, target_ids) if proposed == actual
     )
-    return matched / len(target_ids)
+
+
+def compute_acceptance(
+    draft_argmax: Sequence[int], target_ids: Sequence[int]
+) -> float:
+    """Fraction of positions where the draft's argmax matches the target token.
+
+    An empty pair scores 0.0 (nothing was proposed, so nothing was accepted).
+    """
+    if not target_ids:
+        count_accepted(draft_argmax, target_ids)  # still length-checks
+        return 0.0
+    return count_accepted(draft_argmax, target_ids) / len(target_ids)
+
+
+def acceptance_rate(accepted: int, total: int) -> float:
+    """Aggregate acceptance over a corpus. ``total == 0`` scores 0.0."""
+    if total < 0 or accepted < 0:
+        raise ValueError("accepted and total must be non-negative")
+    if accepted > total:
+        raise ValueError(f"accepted ({accepted}) exceeds total ({total})")
+    if total == 0:
+        return 0.0
+    return accepted / total
 
 
 def classify_acceptance(rate: float) -> str:
@@ -377,10 +395,13 @@ def measure_acceptance(
         # - 1]; the last generated token needs no prediction beyond it, hence
         # the -1 upper bound.
         proposal_logits = logits[0, prompt_len - 1 : full_ids.shape[1] - 1, :]
-        proposals = proposal_logits.argmax(dim=-1)
+        proposals = proposal_logits.argmax(dim=-1).cpu().tolist()
+        actual = generated.cpu().tolist()
 
-        accepted += int((proposals.cpu() == generated.cpu()).sum().item())
-        total += int(generated.numel())
+        # The pure kernel does the comparison — one implementation, and the one
+        # the off-by-one fixture pins.
+        accepted += count_accepted(proposals, actual)
+        total += len(actual)
 
     return accepted, total
 

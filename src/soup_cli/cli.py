@@ -538,6 +538,18 @@ app.command(
     ),
 )(_shrink_cmd.shrink)
 
+# v0.71.33 — `soup draft` train-your-own speculative-decoding draft.
+from soup_cli.commands import draft as _draft_cmd  # noqa: E402
+
+app.add_typer(
+    _draft_cmd.app,
+    name="draft",
+    help=(
+        "Train + measure a speculative-decoding draft model: distil your tuned "
+        "model into a tiny draft, then serve it with --auto-spec (v0.71.33)."
+    ),
+)
+
 
 def _rewrite_advise_argv(argv: list) -> list:
     """Inject `run` between `advise` and a non-subcommand first argument.
