@@ -25,6 +25,8 @@ from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
+from soup_cli.utils.adapter_fuse import fuse_adapter_into as _fuse_adapter
+from soup_cli.utils.adapter_fuse import release_cuda as _release_cuda
 from soup_cli.utils.paths import atomic_write_text, enforce_under_cwd_and_no_symlink
 from soup_cli.utils.shrink import (
     DECISION_SHIP,
@@ -137,20 +139,6 @@ def _load_calib(path: str) -> list[str]:
 # ---------------------------------------------------------------------------
 def _count_params(model: object) -> int:
     return sum(p.numel() for p in model.parameters())  # type: ignore[attr-defined]
-
-
-def _release_cuda() -> None:
-    """Return the CUDA caching-allocator pool to the driver (best-effort)."""
-    import gc
-
-    gc.collect()
-    try:
-        import torch
-
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-    except ImportError:
-        pass
 
 
 def _perplexity(
@@ -616,41 +604,3 @@ def _run_heal(
     _fuse_adapter(base_dir=pruned_dir, adapter_dir=out_dir, trc=trc)
 
 
-def _fuse_adapter(*, base_dir: str, adapter_dir: str, trc: bool = False) -> None:
-    """Merge a LoRA adapter into ``base_dir`` (dense healed model), atomically.
-
-    The merged model is written to a sibling temp dir and only then swapped in
-    for ``base_dir``. An in-place ``save_pretrained`` over the just-loaded
-    ``base_dir`` fails on Windows (error 1224 — the source ``.safetensors`` is
-    still memory-mapped by the loaded weights), so the temp-dir swap is the
-    cross-platform-safe path.
-    """
-    import gc
-    import shutil
-    import tempfile
-
-    from peft import PeftModel
-    from transformers import AutoModelForCausalLM, AutoTokenizer
-
-    # Re-validate the swap target right before mutating it (the heal subprocess
-    # ran for potentially hours — re-close the TOCTOU window on base_dir).
-    enforce_under_cwd_and_no_symlink(base_dir, "fuse base dir")
-    base = AutoModelForCausalLM.from_pretrained(
-        base_dir, trust_remote_code=trc, torch_dtype="auto"
-    )
-    merged = PeftModel.from_pretrained(base, adapter_dir).merge_and_unload()
-    tokenizer = AutoTokenizer.from_pretrained(base_dir, trust_remote_code=trc)
-
-    parent = os.path.dirname(os.path.abspath(base_dir)) or "."
-    staging = tempfile.mkdtemp(prefix=".fuse_", dir=parent)
-    try:
-        merged.save_pretrained(staging)
-        tokenizer.save_pretrained(staging)
-    finally:
-        # Drop every reference so Windows releases the base_dir mmap before we
-        # remove it; otherwise rmtree(base_dir) also hits error 1224.
-        del merged, base, tokenizer
-        gc.collect()
-        _release_cuda()
-    shutil.rmtree(base_dir)
-    os.replace(staging, base_dir)
