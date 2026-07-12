@@ -274,7 +274,11 @@ def _registry_lock():
             os.makedirs(
                 os.path.dirname(os.path.abspath(lock_path)) or ".", exist_ok=True
             )
-            handle = open(lock_path, "a+")  # noqa: SIM115 — released in finally
+            # O_NOFOLLOW so a pre-planted symlink at <registry>.lock can't
+            # redirect the lock (defence-in-depth — nothing is written to it).
+            flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+            fd = os.open(lock_path, flags, 0o600)
+            handle = os.fdopen(fd, "a+")
         except OSError:
             handle = None
 
@@ -350,9 +354,13 @@ def _read_registry() -> list[dict]:
     try:
         if not os.path.isfile(path):
             return []
-        if os.path.getsize(path) > _MAX_REGISTRY_BYTES:
-            return []
-        with open(path, "r", encoding="utf-8") as handle:
+        # O_NOFOLLOW: this runs on every `soup serve` startup, so a symlink
+        # planted at ~/.soup/drafts.json must not be transparently followed.
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(path, flags)
+        with os.fdopen(fd, "r", encoding="utf-8") as handle:
+            if os.fstat(handle.fileno()).st_size > _MAX_REGISTRY_BYTES:
+                return []
             data = json.load(handle)
         drafts = data.get("drafts") if isinstance(data, dict) else None
         if not isinstance(drafts, list):

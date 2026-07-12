@@ -123,6 +123,21 @@ class TestAdapterFuse:
         assert seen["adapter_dir"] == "ad"
         assert seen["trc"] is True
 
+    def test_merge_rejects_pickle_weights_in_adapter_dir(self, tmp_path, monkeypatch):
+        """security CRITICAL: the adapter dir may be attacker-produced; refuse
+        pickle weights before PEFT torch.load's them."""
+        from soup_cli.utils import adapter_fuse
+
+        monkeypatch.chdir(tmp_path)
+        adapter = tmp_path / "out" / "_adapter"
+        adapter.mkdir(parents=True)
+        (adapter / "adapter_model.bin").write_bytes(b"\x80\x04pickle")  # unsafe ext
+
+        with pytest.raises(ValueError, match="(?i)unsafe|pickle|safetensors"):
+            adapter_fuse.merge_adapter_to_dense(
+                base_model="org/tiny", adapter_dir=str(adapter), out_dir="out"
+            )
+
     def test_merge_loads_base_weights_from_the_base_model_not_out_dir(
         self, tmp_path, monkeypatch
     ):
@@ -943,6 +958,57 @@ class TestDraftDistillCli:
              "--data", data, "-o", "../escape", "--plan-only"],
         )
         assert result.exit_code == 1
+
+    def test_output_is_cwd_rejected(self, runner, in_tmp_cwd, monkeypatch):
+        """security CRITICAL: -o . would rmtree the whole working dir on success."""
+        from soup_cli.commands.draft import app
+
+        self._patch_configs(monkeypatch, 49152, 49152)
+        data = self._data(in_tmp_cwd)
+        result = runner.invoke(
+            app,
+            ["distill", "--target", "org/target", "--draft-base", "org/tiny",
+             "--data", data, "-o", ".", "--plan-only"],
+        )
+        assert result.exit_code == 1
+        assert "current directory" in result.output.lower()
+
+    def test_output_preexisting_nondraft_dir_rejected(
+        self, runner, in_tmp_cwd, monkeypatch
+    ):
+        """security CRITICAL: overwriting an unrelated dir needs --force."""
+        from soup_cli.commands.draft import app
+
+        self._patch_configs(monkeypatch, 49152, 49152)
+        data = self._data(in_tmp_cwd)
+        victim = in_tmp_cwd / "important"
+        victim.mkdir()
+        (victim / "notes.txt").write_text("keep me", encoding="utf-8")
+        result = runner.invoke(
+            app,
+            ["distill", "--target", "org/target", "--draft-base", "org/tiny",
+             "--data", data, "-o", "important", "--plan-only"],
+        )
+        assert result.exit_code == 1
+        assert "--force" in result.output
+
+    def test_output_preexisting_draft_dir_allowed(
+        self, runner, in_tmp_cwd, monkeypatch
+    ):
+        """Re-distilling into a prior draft (has config.json) is fine."""
+        from soup_cli.commands.draft import app
+
+        self._patch_configs(monkeypatch, 49152, 49152)
+        data = self._data(in_tmp_cwd)
+        prior = in_tmp_cwd / "draftout"
+        prior.mkdir()
+        (prior / "config.json").write_text("{}", encoding="utf-8")
+        result = runner.invoke(
+            app,
+            ["distill", "--target", "org/target", "--draft-base", "org/tiny",
+             "--data", data, "-o", "draftout", "--plan-only"],
+        )
+        assert result.exit_code == 0, (result.output, repr(result.exception))
 
     def test_missing_data_file_rejected(self, runner, in_tmp_cwd, monkeypatch):
         from soup_cli.commands.draft import app

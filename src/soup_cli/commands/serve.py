@@ -624,20 +624,32 @@ def serve(
 
     # Auto-pair draft model for speculative decoding
     if auto_spec and not speculative_model:
+        from rich.markup import escape as _esc
+
         from soup_cli.utils.spec_pairing import pick_draft_model
+
+        # A paired value can come from the local draft registry (a file that
+        # may be edited outside this invocation), so strip control bytes and
+        # escape Rich markup before printing — escape() alone leaves raw
+        # ESC/OSC sequences live (mirrors commands/draft.py::_for_terminal).
+        _ctrl = {i: None for i in range(0x20) if i not in (0x09, 0x0A, 0x0D)}
+        _ctrl[0x7F] = None
+
+        def _safe(value: str) -> str:
+            return _esc(str(value).translate(_ctrl))
 
         target_for_pairing = base_model or str(model_path)
         paired = pick_draft_model(target_for_pairing)
         if paired:
             speculative_model = paired
             console.print(
-                f"[green]Auto-paired draft model:[/] {paired} "
-                f"(target: {target_for_pairing})"
+                f"[green]Auto-paired draft model:[/] {_safe(paired)} "
+                f"(target: {_safe(target_for_pairing)})"
             )
         else:
             console.print(
                 f"[yellow]--auto-spec: no known draft model for "
-                f"{target_for_pairing}. Skipping speculative decoding.[/]"
+                f"{_safe(target_for_pairing)}. Skipping speculative decoding.[/]"
             )
 
     # Validate structured-output flags up front
@@ -900,10 +912,13 @@ def serve(
         # Load draft model for speculative decoding (transformers backend)
         draft_model = None
         if speculative_model:
+            from rich.markup import escape as _esc
+
+            _spec_display = _esc(str(speculative_model))
             console.print(
                 Panel(
                     f"[bold yellow]WARNING:[/] Loading draft model: "
-                    f"[bold]{speculative_model}[/]\n"
+                    f"[bold]{_spec_display}[/]\n"
                     "If this model contains custom code, it will execute "
                     "on this machine.\n"
                     "Only use models you trust.",
@@ -913,7 +928,7 @@ def serve(
             )
             draft_model = _load_draft_model(speculative_model, device)
             console.print(
-                f"[green]Speculative decoding enabled:[/] draft={speculative_model}, "
+                f"[green]Speculative decoding enabled:[/] draft={_spec_display}, "
                 f"tokens={num_speculative_tokens}"
             )
 
@@ -1268,9 +1283,11 @@ def _adapter_scope(model, lock, names, requested, active):
 
 def _load_draft_model(speculative_model: str, device: str):
     """Load a smaller draft model for speculative decoding."""
+    import os
     import re
 
     import torch
+    from rich.markup import escape
     from transformers import AutoModelForCausalLM
 
     # SSRF protection: block URL-based model paths
@@ -1281,7 +1298,16 @@ def _load_draft_model(speculative_model: str, device: str):
         )
         raise typer.Exit(1)
 
-    console.print(f"[dim]Loading draft model: {speculative_model}...[/]")
+    # A locally-registered draft (soup draft distill, v0.71.33) can be selected
+    # here via --auto-spec. Refuse pickle / PyTorch-classic weights before
+    # from_pretrained torch.load's them — a poisoned ~/.soup/drafts.json entry
+    # must not become a load-time RCE.
+    if os.path.isdir(speculative_model):
+        from soup_cli.utils.strict_safetensors import check_strict_safetensors
+
+        check_strict_safetensors(speculative_model, strict=True)
+
+    console.print(f"[dim]Loading draft model: {escape(speculative_model)}...[/]")
     draft = AutoModelForCausalLM.from_pretrained(
         speculative_model,
         device_map="auto" if device != "cpu" else "cpu",

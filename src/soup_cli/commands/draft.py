@@ -143,6 +143,29 @@ def _resolve_trust(model_id: str, requested: bool = False) -> bool:
     )
 
 
+def _guard_output_target(output: str, *, force: bool) -> None:
+    """Refuse a destructive ``-o`` that would delete cwd or unrelated content.
+
+    ``merge_adapter_to_dense`` does ``rmtree(out_dir)`` then ``os.replace``, so
+    ``-o`` must not be cwd itself and must not be a pre-existing directory that
+    isn't already a Soup draft (contains ``config.json``) unless ``--force``.
+    """
+    resolved = os.path.realpath(output)
+    if resolved == os.path.realpath(os.getcwd()):
+        _fail(
+            "-o must not be the current directory: the finished draft REPLACES "
+            "this path, which would delete everything under it."
+        )
+    if os.path.isdir(output) and not force:
+        looks_like_draft = os.path.isfile(os.path.join(output, "config.json"))
+        if os.listdir(output) and not looks_like_draft:
+            _fail(
+                f"-o {output!r} already exists and is not a Soup draft — the "
+                "distilled model would REPLACE it. Choose an empty/new directory "
+                "or pass --force to overwrite."
+            )
+
+
 def _load_pair_member(
     model_id: str, *, device: Optional[str] = None, trc: bool = False
 ) -> tuple["PreTrainedModel", "PreTrainedTokenizerBase", str]:
@@ -340,6 +363,11 @@ def distill(
         help="Allow custom modelling code from the target / draft-base "
         "(required for architectures that ship an auto_map).",
     ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Overwrite -o even if it already contains a non-draft directory.",
+    ),
     plan_only: bool = typer.Option(
         False, "--plan-only", help="Print the distill config and exit; write nothing."
     ),
@@ -352,6 +380,12 @@ def distill(
         _fail(str(exc))
     if not rows:
         _fail(f"data file has no usable rows: {data}")
+
+    # The merge REPLACES -o wholesale (rmtree + os.replace). Guard against
+    # nuking the working directory or an unrelated pre-existing directory: the
+    # subprocess can run for hours, and a distracted `-o .` would otherwise
+    # delete everything under cwd on success.
+    _guard_output_target(output, force=force)
 
     target_trc = _resolve_trust(target, trust_remote_code)
     draft_trc = _resolve_trust(draft_base, trust_remote_code)
@@ -616,9 +650,9 @@ def list_registered() -> None:
     for entry in entries:
         rate = entry.get("acceptance_rate")
         table.add_row(
-            escape(str(entry.get("target", "?"))),
-            escape(str(entry.get("draft", "?"))),
+            escape(_for_terminal(str(entry.get("target", "?")))),
+            escape(_for_terminal(str(entry.get("draft", "?")))),
             "-" if rate is None else f"{float(rate) * 100:.1f}%",
-            escape(str(entry.get("created", "?"))),
+            escape(_for_terminal(str(entry.get("created", "?")))),
         )
     console.print(table)

@@ -62,6 +62,15 @@ def merge_adapter_to_dense(
     # actual problem instead of a confusing missing-dependency error.
     enforce_under_cwd_and_no_symlink(out_dir, "fused output dir")
 
+    # Refuse pickle / PyTorch-classic weights in the adapter dir before PEFT
+    # torch.load's them — the adapter dir may have been produced (or swapped)
+    # by an untrusted process. Mirrors the strict-safetensors policy applied on
+    # other weight-loading paths.
+    from soup_cli.utils.strict_safetensors import check_strict_safetensors
+
+    if os.path.isdir(adapter_dir):
+        check_strict_safetensors(adapter_dir, strict=True)
+
     from peft import PeftModel
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -90,6 +99,12 @@ def merge_adapter_to_dense(
             del merged, base, tokenizer
             gc.collect()
             release_cuda()
+        # Re-validate the swap target IMMEDIATELY before the destructive
+        # rmtree/replace — the model load + merge + save above took minutes, a
+        # real window in which a junction/symlink could be planted at out_dir
+        # (the entry-time check is now stale). enforce_* refuses symlinks AND
+        # Windows reparse points, so rmtree cannot be redirected outside cwd.
+        enforce_under_cwd_and_no_symlink(out_dir, "fused output dir")
         if os.path.isdir(out_dir):
             shutil.rmtree(out_dir)
         os.replace(staging, out_dir)
