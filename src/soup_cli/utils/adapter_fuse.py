@@ -47,10 +47,14 @@ def fuse_adapter_into(*, base_dir: str, adapter_dir: str, trc: bool = False) -> 
     import shutil
     import tempfile
 
+    # Cheap containment check BEFORE the heavy (and, on a core-only install,
+    # ImportError-raising) transformers/peft imports, so a bad path reports the
+    # actual problem instead of a confusing missing-dependency error.
+    enforce_under_cwd_and_no_symlink(base_dir, "fuse base dir")
+
     from peft import PeftModel
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
-    enforce_under_cwd_and_no_symlink(base_dir, "fuse base dir")
     base = AutoModelForCausalLM.from_pretrained(
         base_dir, trust_remote_code=trc, torch_dtype="auto"
     )
@@ -60,13 +64,20 @@ def fuse_adapter_into(*, base_dir: str, adapter_dir: str, trc: bool = False) -> 
     parent = os.path.dirname(os.path.abspath(base_dir)) or "."
     staging = tempfile.mkdtemp(prefix=".fuse_", dir=parent)
     try:
-        merged.save_pretrained(staging)
-        tokenizer.save_pretrained(staging)
-    finally:
-        # Drop every reference so Windows releases the base_dir mmap before we
-        # remove it; otherwise rmtree(base_dir) also hits error 1224.
-        del merged, base, tokenizer
-        gc.collect()
-        release_cuda()
-    shutil.rmtree(base_dir)
-    os.replace(staging, base_dir)
+        try:
+            merged.save_pretrained(staging)
+            tokenizer.save_pretrained(staging)
+        finally:
+            # Drop every reference so Windows releases the base_dir mmap before
+            # we remove it; otherwise rmtree(base_dir) also hits error 1224.
+            del merged, base, tokenizer
+            gc.collect()
+            release_cuda()
+        shutil.rmtree(base_dir)
+        os.replace(staging, base_dir)
+    except BaseException:
+        # A half-written staging dir (disk full, interrupted save) must not be
+        # orphaned next to the model — it would silently accumulate a full
+        # model's worth of bytes per failed run.
+        shutil.rmtree(staging, ignore_errors=True)
+        raise

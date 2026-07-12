@@ -52,6 +52,61 @@ class TestAdapterFuse:
                     ("torch", "transformers", "peft")
                 ), f"top-level import from {node.module}"
 
+    def test_failed_save_does_not_orphan_the_staging_dir(self, tmp_path, monkeypatch):
+        """python-review HIGH: a save that raises mid-write used to leave a
+        full model's worth of bytes in a .fuse_* dir next to the model."""
+        import sys
+        import types
+
+        from soup_cli.utils import adapter_fuse
+
+        base = tmp_path / "base"
+        base.mkdir()
+        (base / "config.json").write_text("{}", encoding="utf-8")
+        monkeypatch.chdir(tmp_path)
+
+        class _Merged:
+            def save_pretrained(self, path):
+                # The staging dir already exists at this point — this is exactly
+                # where a disk-full / interrupted write lands.
+                Path(path).joinpath("partial.bin").write_bytes(b"xxxx")
+                raise RuntimeError("disk full")
+
+        class _Base:
+            @staticmethod
+            def from_pretrained(*a, **kw):
+                return _Base()
+
+        class _Peft:
+            @staticmethod
+            def from_pretrained(*a, **kw):
+                obj = _Peft()
+                obj.merge_and_unload = lambda: _Merged()  # noqa: E731
+                return obj
+
+        class _Tok:
+            @staticmethod
+            def from_pretrained(*a, **kw):
+                return _Tok()
+
+            def save_pretrained(self, path):
+                pass
+
+        fake_tf = types.ModuleType("transformers")
+        fake_tf.AutoModelForCausalLM = _Base
+        fake_tf.AutoTokenizer = _Tok
+        fake_peft = types.ModuleType("peft")
+        fake_peft.PeftModel = _Peft
+        monkeypatch.setitem(sys.modules, "transformers", fake_tf)
+        monkeypatch.setitem(sys.modules, "peft", fake_peft)
+
+        with pytest.raises(RuntimeError, match="disk full"):
+            adapter_fuse.fuse_adapter_into(
+                base_dir="base", adapter_dir=str(tmp_path / "ad")
+            )
+        assert list(tmp_path.glob(".fuse_*")) == [], "staging dir was orphaned"
+        assert base.exists(), "the base model must survive a failed fuse"
+
     def test_fuse_revalidates_base_dir_before_swapping(self, tmp_path, monkeypatch):
         """The subprocess ran for hours — the swap target is re-checked."""
         from soup_cli.utils import adapter_fuse
@@ -785,6 +840,29 @@ class TestDraftDistillCli:
         assert cfg.task == "distill"
         assert cfg.base == "org/tiny"
         assert cfg.training.teacher_model == "org/target"
+
+    def test_newline_in_model_id_cannot_inject_yaml_keys(self, in_tmp_cwd):
+        """python-review CRITICAL: raw interpolation let a crafted --target
+        smuggle sibling keys into the training: block. Every user string is
+        json.dumps'd, so a newline stays inside the scalar."""
+        import yaml
+
+        from soup_cli.commands.draft import _build_distill_config_yaml
+
+        hostile = "org/x\ntraining:\n  reward_fn: ../../evil.py"
+        yaml_text = _build_distill_config_yaml(
+            draft_base="org/tiny",
+            target=hostile,
+            data="d.jsonl",
+            out_dir="draftout",
+            steps=100,
+            data_rows=200,
+        )
+        parsed = yaml.safe_load(yaml_text)
+        # The payload landed as a VALUE, not as new keys.
+        assert parsed["training"]["teacher_model"] == hostile
+        assert "reward_fn" not in parsed["training"]
+        assert parsed["task"] == "distill"
 
     def test_absurd_steps_over_tiny_data_is_refused(self, in_tmp_cwd):
         """500 steps over 4 rows = 125 epochs — refuse rather than emit it."""

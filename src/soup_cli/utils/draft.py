@@ -32,10 +32,13 @@ import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional, Sequence
+from typing import TYPE_CHECKING, Optional, Sequence
 
 from rich.panel import Panel
 from rich.table import Table
+
+if TYPE_CHECKING:  # pragma: no cover — typing only; torch stays lazy at runtime
+    from transformers import PreTrainedModel, PreTrainedTokenizerBase
 
 # Verdict bands. STRONG at >= 0.70 is where speculative decoding starts paying
 # for the draft's forward pass on realistic hardware.
@@ -90,14 +93,17 @@ def count_accepted(draft_argmax: Sequence[int], target_ids: Sequence[int]) -> in
 def compute_acceptance(
     draft_argmax: Sequence[int], target_ids: Sequence[int]
 ) -> float:
-    """Fraction of positions where the draft's argmax matches the target token.
+    """Acceptance rate for a SINGLE generated sequence.
 
-    An empty pair scores 0.0 (nothing was proposed, so nothing was accepted).
+    Public convenience kernel over :func:`count_accepted` (the corpus-level
+    aggregate path uses ``count_accepted`` + :func:`acceptance_rate` instead, so
+    the division happens once over the whole corpus rather than per sequence).
+    An empty pair scores 0.0 — nothing was proposed, so nothing was accepted.
     """
+    matched = count_accepted(draft_argmax, target_ids)  # also length-checks
     if not target_ids:
-        count_accepted(draft_argmax, target_ids)  # still length-checks
         return 0.0
-    return count_accepted(draft_argmax, target_ids) / len(target_ids)
+    return matched / len(target_ids)
 
 
 def acceptance_rate(accepted: int, total: int) -> float:
@@ -131,7 +137,9 @@ def classify_acceptance(rate: float) -> str:
     return VERDICT_WEAK
 
 
-def same_tokenizer(tok_a: Any, tok_b: Any) -> bool:
+def same_tokenizer(
+    tok_a: "PreTrainedTokenizerBase", tok_b: "PreTrainedTokenizerBase"
+) -> bool:
     """True when two tokenizers are interchangeable for speculative decoding.
 
     Equal ``vocab_size`` AND identical ids over :data:`PROBE_CORPUS`. The probe
@@ -143,9 +151,11 @@ def same_tokenizer(tok_a: Any, tok_b: Any) -> bool:
     than crashing the caller.
     """
     try:
-        if int(getattr(tok_a, "vocab_size", -1)) != int(
-            getattr(tok_b, "vocab_size", -2)
-        ):
+        if not hasattr(tok_a, "vocab_size") or not hasattr(tok_b, "vocab_size"):
+            # A tokenizer that cannot report its vocab size cannot be proven
+            # compatible — refuse rather than assume.
+            return False
+        if int(tok_a.vocab_size) != int(tok_b.vocab_size):
             return False
         for probe in PROBE_CORPUS:
             ids_a = tok_a.encode(probe, add_special_tokens=False)
@@ -344,9 +354,9 @@ def lookup_draft(target: str) -> Optional[str]:
 # Measurement (torch-lazy)
 # ---------------------------------------------------------------------------
 def measure_acceptance(
-    target_model: Any,
-    draft_model: Any,
-    tokenizer: Any,
+    target_model: "PreTrainedModel",
+    draft_model: "PreTrainedModel",
+    tokenizer: "PreTrainedTokenizerBase",
     prompts: Sequence[str],
     *,
     max_new_tokens: int = 64,
@@ -371,16 +381,18 @@ def measure_acceptance(
         input_ids = encoded["input_ids"].to(device)
         prompt_len = int(input_ids.shape[1])
 
+        gen_kwargs: dict = {
+            "input_ids": input_ids,
+            "max_new_tokens": max_new_tokens,
+            "do_sample": False,  # greedy: a sampled target makes alpha noisy
+            "pad_token_id": tokenizer.pad_token_id or tokenizer.eos_token_id,
+        }
+        mask = encoded.get("attention_mask", None)
+        if mask is not None:
+            gen_kwargs["attention_mask"] = mask.to(device)
+
         with torch.no_grad():
-            full_ids = target_model.generate(
-                input_ids=input_ids,
-                attention_mask=encoded.get("attention_mask", None).to(device)
-                if encoded.get("attention_mask", None) is not None
-                else None,
-                max_new_tokens=max_new_tokens,
-                do_sample=False,
-                pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id,
-            )
+            full_ids = target_model.generate(**gen_kwargs)
 
         generated = full_ids[0, prompt_len:]
         if generated.numel() == 0:
@@ -407,11 +419,11 @@ def measure_acceptance(
 
 
 def measure_throughput(
-    model: Any,
-    tokenizer: Any,
+    model: "PreTrainedModel",
+    tokenizer: "PreTrainedTokenizerBase",
     prompts: Sequence[str],
     *,
-    assistant_model: Any = None,
+    assistant_model: Optional["PreTrainedModel"] = None,
     num_assistant_tokens: int = 5,
     max_new_tokens: int = 64,
 ) -> float:

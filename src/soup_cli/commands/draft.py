@@ -23,9 +23,10 @@ Draft and target MUST share a tokenizer (v1). Heavy imports are lazy.
 from __future__ import annotations
 
 import json
+import math
 import os
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, NoReturn, Optional
 
 import typer
 from rich.console import Console
@@ -48,6 +49,9 @@ from soup_cli.utils.draft import (
 )
 from soup_cli.utils.paths import atomic_write_text, enforce_under_cwd_and_no_symlink
 
+if TYPE_CHECKING:  # pragma: no cover — typing only, keeps the CLI import light
+    from transformers import PreTrainedModel, PreTrainedTokenizerBase
+
 app = typer.Typer(help="Train + measure a speculative-decoding draft model.")
 console = Console()
 
@@ -60,6 +64,8 @@ _DISTILL_TIMEOUT_SECONDS = 24 * 60 * 60
 _DISTILL_BATCH_SIZE = 1
 _DISTILL_MAX_LENGTH = 1024
 _MAX_DISTILL_EPOCHS = 100
+# How much of a failed subprocess's output to surface (mirrors shrink.py).
+_SUBPROCESS_ERROR_TAIL_CHARS = 800
 
 # Strip C0 / ESC / DEL before subprocess- or model-derived text hits the
 # terminal (rich.markup.escape only neutralises [...] markup, not raw ESC
@@ -75,9 +81,12 @@ def _for_terminal(text: str) -> str:
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
-def _fail(message: str) -> "typer.Exit":
+def _fail(message: str, code: int = 1) -> NoReturn:
+    """Print a red error and exit. Raises internally so a forgotten ``raise``
+    at a call site can never silently turn a failure into a no-op (mirrors
+    ``commands/ship.py::_fail``)."""
     console.print(f"[red]{escape(message)}[/]")
-    return typer.Exit(1)
+    raise typer.Exit(code)
 
 
 def _read_jsonl(path: str, label: str, max_rows: int) -> list[dict]:
@@ -130,7 +139,9 @@ def _resolve_trust(model_id: str) -> bool:
     )
 
 
-def _load_pair_member(model_id: str, *, device: Optional[str] = None, trc: bool = False):
+def _load_pair_member(
+    model_id: str, *, device: Optional[str] = None, trc: bool = False
+) -> tuple["PreTrainedModel", "PreTrainedTokenizerBase", str]:
     """Load one half of the (target, draft) pair. Returns (model, tokenizer, device)."""
     from soup_cli.utils.live_eval import load_model_and_tokenizer
 
@@ -151,33 +162,48 @@ def _build_distill_config_yaml(
     steps: int,
     data_rows: int,
 ) -> str:
-    """Render the ``task: distill`` config: student = draft base, teacher = target."""
+    """Render the ``task: distill`` config: student = draft base, teacher = target.
+
+    Every user-supplied string is embedded via ``json.dumps`` — a JSON string
+    literal is always a valid YAML scalar, so a model id or path containing a
+    newline cannot inject sibling YAML keys into the ``training:`` block.
+    Mirrors ``commands/shrink.py::_build_heal_config_yaml``.
+    """
     per_epoch = max(1, data_rows // _DISTILL_BATCH_SIZE)
-    epochs = max(1, min(_MAX_DISTILL_EPOCHS, -(-steps // per_epoch)))
-    if -(-steps // per_epoch) > _MAX_DISTILL_EPOCHS:
+    raw_epochs = math.ceil(steps / per_epoch)
+    if raw_epochs > _MAX_DISTILL_EPOCHS:
         raise ValueError(
-            f"--steps {steps} over {data_rows} rows expands to more than "
-            f"{_MAX_DISTILL_EPOCHS} epochs; reduce --steps or grow --data."
+            f"--steps {steps} over {data_rows} rows expands to {raw_epochs} "
+            f"epochs (> {_MAX_DISTILL_EPOCHS}); reduce --steps or grow --data."
         )
+    epochs = max(1, raw_epochs)
     return (
-        f"base: {draft_base}\n"
+        "base: {draft_base}\n"
         "task: distill\n"
-        f"output: {out_dir}\n"
+        "output: {out}\n"
         "data:\n"
-        f"  train: {data}\n"
+        "  train: {data}\n"
         "  format: auto\n"
-        f"  max_length: {_DISTILL_MAX_LENGTH}\n"
+        "  max_length: {max_length}\n"
         "training:\n"
-        f"  teacher_model: {target}\n"
+        "  teacher_model: {target}\n"
         "  distill_divergence: forward_kl\n"
         "  distill_temperature: 2.0\n"
-        f"  epochs: {epochs}\n"
-        f"  batch_size: {_DISTILL_BATCH_SIZE}\n"
+        "  epochs: {epochs}\n"
+        "  batch_size: {batch}\n"
         "  gradient_checkpointing: true\n"
         "  quantization: none\n"
         "  lora:\n"
         "    r: 16\n"
         "    alpha: 32\n"
+    ).format(
+        draft_base=json.dumps(draft_base),
+        out=json.dumps(out_dir),
+        data=json.dumps(data),
+        target=json.dumps(target),
+        max_length=_DISTILL_MAX_LENGTH,
+        epochs=epochs,
+        batch=_DISTILL_BATCH_SIZE,
     )
 
 
@@ -248,7 +274,7 @@ def _run_distill(
         combined = (result.stderr or b"").decode("utf-8", "replace") + (
             result.stdout or b""
         ).decode("utf-8", "replace")
-        tail = _for_terminal(combined[-800:])
+        tail = _for_terminal(combined[-_SUBPROCESS_ERROR_TAIL_CHARS:])
         raise RuntimeError(f"draft distill failed (rc={result.returncode}): {tail}")
 
     # The trainer saves the student's LoRA adapter into out_dir. Merge it into a
@@ -295,9 +321,9 @@ def distill(
         enforce_under_cwd_and_no_symlink(output, "output dir")
         rows = _read_jsonl(data, "data path", _MAX_DATA_ROWS)
     except ValueError as exc:
-        raise _fail(str(exc)) from exc
+        _fail(str(exc))
     if not rows:
-        raise _fail(f"data file has no usable rows: {data}")
+        _fail(f"data file has no usable rows: {data}")
 
     target_trc = _resolve_trust(target)
     draft_trc = _resolve_trust(draft_base)
@@ -309,10 +335,10 @@ def distill(
         target_vocab = _vocab_size_of(target, target_trc)
         draft_vocab = _vocab_size_of(draft_base, draft_trc)
     except Exception as exc:  # noqa: BLE001 — surface as a friendly CLI error
-        raise _fail(f"could not read model config: {exc}") from exc
+        _fail(f"could not read model config: {exc}")
 
     if target_vocab != draft_vocab:
-        raise _fail(
+        _fail(
             f"Draft and target must share a tokenizer, but vocab sizes differ "
             f"(target={target_vocab}, draft={draft_vocab}). Speculative decoding "
             f"proposes draft token ids into the target's vocabulary, so a "
@@ -332,7 +358,7 @@ def distill(
             data_rows=len(rows),
         )
     except ValueError as exc:
-        raise _fail(str(exc)) from exc
+        _fail(str(exc))
 
     if plan_only:
         console.print(
@@ -360,7 +386,7 @@ def distill(
             trc=draft_trc,
         )
     except (RuntimeError, ValueError, OSError) as exc:
-        raise _fail(f"distill failed: {exc}") from exc
+        _fail(f"distill failed: {exc}")
 
     if not no_register:
         register_draft(target, output)
@@ -436,15 +462,15 @@ def measure(
     try:
         rows = _read_jsonl(prompts, "prompts path", _MAX_PROMPT_ROWS)
     except ValueError as exc:
-        raise _fail(str(exc)) from exc
+        _fail(str(exc))
     prompt_texts = _prompt_texts(rows)
     if not prompt_texts:
-        raise _fail(f"prompts file yielded no usable prompt text: {prompts}")
+        _fail(f"prompts file yielded no usable prompt text: {prompts}")
     if output is not None:
         try:
             enforce_under_cwd_and_no_symlink(output, "output path")
         except ValueError as exc:
-            raise _fail(str(exc)) from exc
+            _fail(str(exc))
 
     target_trc = _resolve_trust(target)
     draft_trc = _resolve_trust(draft)
@@ -459,10 +485,10 @@ def measure(
             draft, device=resolved_device, trc=draft_trc
         )
     except Exception as exc:  # noqa: BLE001 — friendly CLI error
-        raise _fail(f"could not load the model pair: {exc}") from exc
+        _fail(f"could not load the model pair: {exc}")
 
     if not same_tokenizer(target_tok, draft_tok):
-        raise _fail(
+        _fail(
             "Draft and target do not share a tokenizer. Speculative decoding "
             "proposes draft token ids into the target's vocabulary, so this "
             "pair cannot be used together — the draft's proposals would be "
@@ -478,7 +504,7 @@ def measure(
         max_new_tokens=max_new_tokens,
     )
     if total == 0:
-        raise _fail(
+        _fail(
             "the target generated no tokens for any prompt — nothing to measure "
             "(check the prompts file and --max-new-tokens)"
         )
@@ -497,11 +523,11 @@ def measure(
         num_assistant_tokens=num_assistant_tokens,
         max_new_tokens=max_new_tokens,
     )
-    speedup = (
-        tok_s_assisted / tok_s_plain
-        if tok_s_plain and tok_s_plain > 0
-        else None
-    )
+    # A measured 0.0 tok/s means "we could not time it", not "zero throughput";
+    # normalise explicitly rather than leaning on 0.0 being falsy.
+    plain = None if tok_s_plain <= 0 else tok_s_plain
+    assisted = None if tok_s_assisted <= 0 else tok_s_assisted
+    speedup = assisted / plain if (plain and assisted) else None
 
     report = AcceptanceReport(
         target=target,
@@ -510,8 +536,8 @@ def measure(
         n_generated_tokens=total,
         acceptance_rate=rate,
         verdict=verdict,
-        tok_s_plain=tok_s_plain or None,
-        tok_s_assisted=tok_s_assisted or None,
+        tok_s_plain=plain,
+        tok_s_assisted=assisted,
         speedup=speedup,
         num_assistant_tokens=num_assistant_tokens,
         soup_version=__version__,
@@ -527,11 +553,10 @@ def measure(
         console.print(f"[dim]Report written to {escape(output)}[/]")
 
     if min_acceptance is not None and rate < min_acceptance:
-        console.print(
-            f"[red]Acceptance {rate:.1%} is below the required "
-            f"{min_acceptance:.1%}.[/]"
+        _fail(
+            f"Acceptance {rate:.1%} is below the required {min_acceptance:.1%}.",
+            code=2,
         )
-        raise typer.Exit(2)
 
 
 # ---------------------------------------------------------------------------
