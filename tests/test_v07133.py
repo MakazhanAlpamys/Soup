@@ -402,6 +402,190 @@ class TestSpecPairingLocal:
         assert spec_pairing.pick_draft_model("Qwen/Qwen2.5-72B") == "Qwen/Qwen2.5-0.5B"
 
 
+# ---------------------------------------------------------------------------
+# Task 4 — torch-lazy measurement
+# ---------------------------------------------------------------------------
+class _TensorTok:
+    """Minimal tokenizer over torch tensors."""
+
+    pad_token_id = 0
+    eos_token_id = 0
+
+    def __init__(self, prompt_ids: list[int]):
+        self._prompt_ids = prompt_ids
+
+    def __call__(self, text, return_tensors=None):
+        import torch
+
+        ids = torch.tensor([self._prompt_ids])
+        return {"input_ids": ids, "attention_mask": torch.ones_like(ids)}
+
+
+class _FakeTarget:
+    """Greedy-generates a fixed continuation."""
+
+    def __init__(self, full_ids: list[int], n_prompt: int):
+        self._full_ids = full_ids
+        self._n_prompt = n_prompt
+        self.calls: list[dict] = []
+
+    def parameters(self):
+        import torch
+
+        yield torch.zeros(1)
+
+    def generate(self, **kwargs):
+        import torch
+
+        self.calls.append(kwargs)
+        return torch.tensor([self._full_ids])
+
+
+class _FakeDraft:
+    """Returns logits whose per-position argmax is a scripted sequence."""
+
+    def __init__(self, argmax_per_position: list[int], vocab: int = 100):
+        self._argmax = argmax_per_position
+        self._vocab = vocab
+
+    def parameters(self):
+        import torch
+
+        yield torch.zeros(1)
+
+    def __call__(self, input_ids=None, **kwargs):
+        import torch
+
+        seq = int(input_ids.shape[1])
+        logits = torch.zeros(1, seq, self._vocab)
+        for pos in range(seq):
+            logits[0, pos, self._argmax[pos]] = 10.0
+
+        class _Out:
+            pass
+
+        out = _Out()
+        out.logits = logits
+        return out
+
+
+class TestMeasureAcceptance:
+    # prompt = [5, 6] (len 2); target generates [10, 11, 12] at positions 2,3,4.
+    FULL_IDS = [5, 6, 10, 11, 12]
+    N_PROMPT = 2
+    # Draft argmax per position. Causal alignment: logits[p-1] predicts token p,
+    # so the proposals for the generated positions 2,3,4 are ARGMAX[1:4].
+    #   correct     -> ARGMAX[1:4] = [10, 99, 12]  vs [10, 11, 12] -> 2 matches
+    #   off-by-one+ -> ARGMAX[2:5] = [99, 12, 99]  vs [10, 11, 12] -> 0 matches
+    #   off-by-one- -> ARGMAX[0:3] = [99, 10, 99]  vs [10, 11, 12] -> 0 matches
+    # The three alignments give DIFFERENT answers, so this test can actually
+    # fail on an off-by-one (an unfalsifiable test is worse than none).
+    ARGMAX = [99, 10, 99, 12, 99]
+
+    def test_shift_convention_is_pinned(self):
+        from soup_cli.utils.draft import measure_acceptance
+
+        accepted, total = measure_acceptance(
+            _FakeTarget(self.FULL_IDS, self.N_PROMPT),
+            _FakeDraft(self.ARGMAX),
+            _TensorTok([5, 6]),
+            ["hello"],
+            max_new_tokens=8,
+        )
+        assert (accepted, total) == (2, 3)
+
+    def test_off_by_one_alternatives_would_score_differently(self):
+        """Guards the guard: the fixture must discriminate, not just pass."""
+        from soup_cli.utils.draft import compute_acceptance
+
+        generated = [10, 11, 12]
+        correct = self.ARGMAX[1:4]
+        off_plus = self.ARGMAX[2:5]
+        off_minus = self.ARGMAX[0:3]
+        assert compute_acceptance(correct, generated) == pytest.approx(2 / 3)
+        assert compute_acceptance(off_plus, generated) == 0.0
+        assert compute_acceptance(off_minus, generated) == 0.0
+
+    def test_multiple_prompts_accumulate(self):
+        from soup_cli.utils.draft import measure_acceptance
+
+        accepted, total = measure_acceptance(
+            _FakeTarget(self.FULL_IDS, self.N_PROMPT),
+            _FakeDraft(self.ARGMAX),
+            _TensorTok([5, 6]),
+            ["a", "b", "c"],
+            max_new_tokens=8,
+        )
+        assert (accepted, total) == (6, 9)
+
+    def test_empty_generation_is_skipped_not_counted(self):
+        from soup_cli.utils.draft import measure_acceptance
+
+        # Target returns the prompt unchanged -> nothing was generated.
+        accepted, total = measure_acceptance(
+            _FakeTarget([5, 6], 2),
+            _FakeDraft([99, 99]),
+            _TensorTok([5, 6]),
+            ["a"],
+            max_new_tokens=8,
+        )
+        assert (accepted, total) == (0, 0)
+
+    def test_generation_is_greedy(self):
+        """Sampling would make the acceptance rate non-deterministic."""
+        from soup_cli.utils.draft import measure_acceptance
+
+        target = _FakeTarget(self.FULL_IDS, self.N_PROMPT)
+        measure_acceptance(
+            target, _FakeDraft(self.ARGMAX), _TensorTok([5, 6]), ["a"],
+            max_new_tokens=8,
+        )
+        assert target.calls[0]["do_sample"] is False
+        assert target.calls[0]["max_new_tokens"] == 8
+
+
+class TestMeasureThroughput:
+    def test_discards_a_warmup_generate(self):
+        from soup_cli.utils.draft import measure_throughput
+
+        target = _FakeTarget([5, 6, 10, 11, 12], 2)
+        rate = measure_throughput(
+            target, _TensorTok([5, 6]), ["a", "b"], max_new_tokens=8
+        )
+        # 2 prompts + 1 warm-up = 3 generate calls; only 2 are timed.
+        assert len(target.calls) == 3
+        assert rate > 0
+
+    def test_empty_prompts_is_zero(self):
+        from soup_cli.utils.draft import measure_throughput
+
+        target = _FakeTarget([5, 6], 2)
+        assert measure_throughput(target, _TensorTok([5, 6]), []) == 0.0
+        assert target.calls == []
+
+    def test_assistant_model_is_forwarded(self):
+        from soup_cli.utils.draft import measure_throughput
+
+        target = _FakeTarget([5, 6, 10, 11, 12], 2)
+        draft = _FakeDraft([0, 0, 0, 0, 0])
+        measure_throughput(
+            target,
+            _TensorTok([5, 6]),
+            ["a"],
+            assistant_model=draft,
+            num_assistant_tokens=7,
+        )
+        assert target.calls[0]["assistant_model"] is draft
+        assert target.calls[0]["num_assistant_tokens"] == 7
+
+    def test_plain_run_passes_no_assistant(self):
+        from soup_cli.utils.draft import measure_throughput
+
+        target = _FakeTarget([5, 6, 10, 11, 12], 2)
+        measure_throughput(target, _TensorTok([5, 6]), ["a"])
+        assert "assistant_model" not in target.calls[0]
+
+
 class TestDraftNoTopLevelTorch:
     def test_utils_draft_is_torch_free(self):
         import soup_cli
