@@ -49,23 +49,35 @@ infrastructure instead of improving models. Soup fixes that.
 
 ## What's New
 
-**v0.71.32 — ASR fine-tuning (Whisper).** Fine-tune Whisper on your accent or domain, locally. whisper-tiny (39M) and base (74M) train on a 4 GB GPU — a new modality that actually runs on a laptop card.
+**v0.71.33 — `soup draft`: know whether speculative decoding is actually worth it.** Everyone tells you to bolt a draft model onto your server for a free speedup. Nobody tells you to *measure* it first. Now you can.
 
-- **`task='asr'`.** A new `AsrTrainerWrapper` (HF `Seq2SeqTrainer` + `WhisperProcessor`). Data rows
-  are `{"audio": <path>, "text": <transcript>}` under `data.format='asr'`; audio decodes to 16 kHz
-  mono through the hardened loader (soundfile pre-probe + symlink/size guards). Opt-in LoRA on q/v
-  via `training.asr_lora: true` (default full fine-tune); `training.asr_language` / `asr_task`
-  (`transcribe`|`translate`) set — and persist — the decoder prefix for inference.
-- **`soup infer --task asr`.** Transcribe an `{"audio"[, "text"]}` JSONL and get per-row + corpus
-  **WER / CER** when references are present. Loads a full model or a LoRA adapter dir; audio paths
-  are containment-checked (traversal / UNC rejected).
-- **Pure-python metrics.** New `soup_cli.utils.asr_metrics` (WER / CER / `word_accuracy` /
-  `corpus_wer`) — no new dependency, reusable as a higher-is-better ship metric leg.
-- **Recipes.** `whisper-tiny-asr` / `whisper-base-asr` (live-trainable), `whisper-large-v3-asr`
-  (parse-only). Catalog 138 → 142.
-- **Proof-of-mechanism, honestly.** Live-validated on an RTX 3050: a memorization task drove
-  WER 1.000 → 0.000 (loss 7.2 → 0.0005 at 0.4/4 GB). Real accent/domain gains need real audio;
-  WER/CER use a light normalizer, not the full Whisper text normalizer.
+- **`soup draft measure`.** Reports a draft's **acceptance rate** — the fraction of your target's
+  own greedy tokens the draft would have proposed correctly — plus **real plain-vs-assisted
+  tok/s**. Exit 0 / 2 (below `--min-acceptance`) / 1, so CI can gate on it.
+- **`soup draft distill`.** Distils your tuned target into a tiny draft base (logit KD over the
+  existing `task: distill` trainer) and emits a **dense** model, loadable straight as an
+  `assistant_model`.
+- **Auto-wired into serving.** Drafts land in a local registry that `soup serve --auto-spec`
+  consults *before* the built-in pairing table — so a draft you trained yourself just gets used.
+- **What the measurement actually told us (honestly).** On `SmolLM2-360M-Instruct` ←
+  `SmolLM2-135M-Instruct`: the stock draft already scored **69.3%**, and distilling it changed
+  nothing (69.7% at 2 epochs, 69.3% at 10). Assisted decoding was a **net slowdown** (0.55–0.64×).
+  A small same-family draft is already at its ceiling. **That negative result is the feature
+  working** — it's the number you want *before* you ship speculative decoding, not after.
+  Whether distillation pays off on a larger or genuinely diverged pair is unproven on a 4 GB box.
+
+```bash
+soup draft measure --target ./my-tuned-model --draft HuggingFaceTB/SmolLM2-135M-Instruct \
+  --prompts prod-prompts.jsonl        # -> acceptance %, real tok/s, ship-or-not
+```
+
+<details>
+<summary>Previous release — v0.71.32, ASR fine-tuning (Whisper)</summary>
+
+Fine-tune Whisper on your accent or domain, locally: `task='asr'` (`AsrTrainerWrapper` over HF
+`Seq2SeqTrainer` + `WhisperProcessor`), `soup infer --task asr` with per-row + corpus **WER/CER**,
+pure-python metrics in `soup_cli.utils.asr_metrics`, and 4 new recipes (catalog 138 → 142).
+whisper-tiny (39M) / base (74M) train on a 4 GB GPU.
 
 ```yaml
 base: openai/whisper-tiny
@@ -77,6 +89,8 @@ training:
   asr_language: en
   asr_lora: true         # optional; default = full fine-tune
 ```
+
+</details>
 
 Full history: [CHANGELOG.md](CHANGELOG.md) &middot; [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 

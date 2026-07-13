@@ -23,6 +23,7 @@
 - [Anthropic Messages API Converter](#anthropic-messages-api-converter)
 - [Server-Side Tools](#server-side-tools)
 - [Anthropic Messages Endpoint](#anthropic-messages-endpoint)
+- [Train + measure your own draft (`soup draft`)](#train--measure-your-own-draft-soup-draft)
 - [N-gram Speculative Decoding](#n-gram-speculative-decoding)
 - [Server-Side Tool Endpoints](#server-side-tool-endpoints)
 
@@ -254,7 +255,10 @@ soup serve --model ./output --backend sglang --tensor-parallel 2
 
 ### Speculative Decoding
 
-Use a smaller draft model to speed up generation (2-3x faster):
+Use a smaller draft model to speed up generation. **Measure before you trust it** — see
+[Train + measure your own draft](#train--measure-your-own-draft-soup-draft) below. Speculative
+decoding is only a win when the draft agrees with the target often enough to pay for its own
+forward pass; on a small target it is frequently a *slowdown*.
 
 ```bash
 # Transformers backend — uses HF assisted generation
@@ -268,7 +272,46 @@ soup serve --model meta-llama/Llama-3.1-70B-Instruct --backend vllm --auto-spec
 # → auto-paired: meta-llama/Llama-3.2-1B-Instruct (target: Llama-3.1-70B-Instruct)
 ```
 
-`--auto-spec` handles Llama 3.1/3.3/4, Qwen 2.5/3, Mistral Large, Mixtral, DeepSeek V3/R1, and Gemma 2/3. Models without a known draft pairing (e.g. 8B-or-smaller targets where draft+target overhead outweighs the gain) print a yellow "no draft" note and fall back to standard decoding.
+`--auto-spec` handles Llama 3.1/3.3/4, Qwen 2.5/3, Mistral Large, Mixtral, DeepSeek V3/R1, and Gemma 2/3. Models without a known draft pairing (e.g. 8B-or-smaller targets where draft+target overhead outweighs the gain) print a yellow "no draft" note and fall back to standard decoding. A draft you trained yourself with `soup draft distill` is picked up **before** this built-in table.
+
+### Train + measure your own draft (`soup draft`)
+
+The question nobody answers before enabling speculative decoding: *would the draft actually
+propose the tokens my model is going to emit?* `soup draft measure` answers it.
+
+```bash
+# Would this draft pay off? Acceptance rate + REAL plain-vs-assisted throughput.
+soup draft measure --target ./my-tuned-model \
+  --draft HuggingFaceTB/SmolLM2-135M-Instruct \
+  --prompts prod-prompts.jsonl
+
+# Distil a draft from your own target, then serve it automatically.
+soup draft distill --target ./my-tuned-model \
+  --draft-base HuggingFaceTB/SmolLM2-135M-Instruct \
+  --data traffic.jsonl -o draft/
+soup serve --model ./my-tuned-model --auto-spec     # picks up ./draft
+soup draft list
+```
+
+**Acceptance rate** is the fraction of the target's own greedy tokens the draft would have
+proposed correctly (teacher-forced argmax agreement — the metric the Medusa/EAGLE papers report).
+Higher is better; roughly, ≥70% is where speculative decoding starts paying for the draft's
+forward pass on realistic hardware. `--min-acceptance 0.6` exits **2** below the floor, so CI can
+gate on it (exit 0 = ok, 2 = below floor, 1 = error).
+
+`distill` runs logit KD through the existing `task: distill` trainer and emits a **dense** model
+(a PEFT adapter directory cannot be loaded as an `assistant_model`). Draft and target must share a
+tokenizer — a mismatch is refused up front, because speculative decoding proposes *draft* token ids
+into the *target's* vocabulary and a mismatched pair silently produces garbage instead of failing.
+A `soup shrink` output makes a good draft base: same tokenizer by construction.
+
+**Measured reality check (be sceptical of speedup claims, including ours).** On
+`SmolLM2-360M-Instruct` with a `SmolLM2-135M-Instruct` draft, the *stock* draft already scored
+**69.3%** acceptance, distilling it changed nothing (69.7% after 2 epochs, 69.3% after 10), and
+assisted decoding came out **0.55–0.64×** — a net slowdown. A small same-family draft is already
+near its ceiling for agreeing with the target, and the draft's forward pass costs more than the
+tokens it saves. Whether distillation pays off on a larger or genuinely diverged target/draft pair
+is unproven on a 4 GB box. Run `soup draft measure` on *your* pair rather than assuming.
 
 ### Prefix Caching
 

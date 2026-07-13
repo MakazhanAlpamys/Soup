@@ -12,6 +12,49 @@ reproducing 70+ versions of notes.
 
 ## [Unreleased]
 
+## [0.71.33] - 2026-07-13
+
+### Added
+- **`soup draft` — train and, above all, MEASURE a speculative-decoding draft model.**
+  - `soup draft measure --target <m> --draft <d> --prompts p.jsonl` reports a draft's
+    **acceptance rate** (the fraction of the target's own greedy tokens the draft
+    would have proposed correctly) plus **real plain-vs-assisted throughput**. This is
+    the honest gate: it tells you whether speculative decoding is worth enabling
+    *before* you ship it. Exit 0 / 2 (below `--min-acceptance`, for CI) / 1.
+  - `soup draft distill --target <tuned> --draft-base <tiny> --data d.jsonl -o draft/`
+    distils your target into the tiny base (logit KD via the existing `task: distill`
+    trainer) and emits a **dense** draft model, ready to load as an `assistant_model`.
+  - `soup draft list`, plus a local draft registry (`~/.soup/drafts.json`) that
+    `soup serve --auto-spec` consults **before** the built-in pairing table — so a
+    draft you trained yourself is picked up automatically.
+  - Draft and target must share a tokenizer; a mismatched pair is refused up front
+    (speculative decoding proposes draft token ids into the target's vocabulary, so a
+    mismatch silently produces garbage rather than failing).
+
+  **Read the measured results before you use this** — see *Known limitations* below.
+  On the validated pair, distillation did **not** improve acceptance, and speculative
+  decoding was a net **slowdown**. `soup draft measure` is what tells you that.
+
+### Known limitations
+- **Distilling a draft did not improve its acceptance rate on the validated pair.**
+  Measured on `SmolLM2-360M-Instruct` (target) with a `SmolLM2-135M-Instruct` draft:
+  the *stock* draft already scored **69.3%**, and distilling it moved that to 69.7%
+  after 2 epochs and back to **69.3%** after 10 epochs — i.e. no gain beyond noise.
+  A small same-family draft is already near its capacity ceiling for agreeing with
+  the target, and logit KD cannot buy capacity it does not have. Whether distillation
+  materially raises acceptance for a genuinely diverged fine-tune, or a larger
+  target/draft pair, is **unproven** on a 4 GB box — tracked as a scale issue.
+- **Speculative decoding was a net slowdown on that pair** (measured 0.55–0.64×): the
+  draft's forward pass costs more than the tokens it saves at this size.
+  `soup draft measure` reports this truthfully rather than assuming a speedup — which
+  is precisely the point of shipping the measurement.
+- **Acceptance is teacher-forced greedy agreement**, the metric the Medusa/EAGLE
+  papers report. It is exact and deterministic, and it is the right number for
+  comparing drafts — but it is not the accepted-token count of a *sampling* run, which
+  also depends on the rejection-resample cascade.
+- **Same-tokenizer only.** Cross-tokenizer drafts (ULD-aligned + universal assisted
+  decoding) are deferred.
+
 ### Changed
 - **PRM-guided GRPO scores completions in a single batched forward.**
   `PRMScorer.__call__` now right-pads all completions into one `[B, T]` tensor
@@ -22,6 +65,12 @@ reproducing 70+ versions of notes.
   ([#301](https://github.com/MakazhanAlpamys/Soup/pull/301) by [@Ekaanksh-dev](https://github.com/Ekaanksh-dev)).
 
 ### Fixed
+- **The hardware-fit gate no longer refuses to train small models.**
+  `model_size_from_name` did not understand an `M` (millions) suffix, so
+  `SmolLM2-135M` fell through to the 7B default, was predicted to need ~14 GB of
+  weights, and was blocked. Every draft-sized model hit this. `1.7B` was also being
+  read as `7B` (the `7b` marker matched inside `1.7b`), while `Qwen2.5-7B-Instruct-1M`
+  correctly stays 7B (1M is the *context*, not the parameter count).
 - **`soup serve --backend vllm` no longer force-enables `trust_remote_code`.** The
   vLLM path now goes through the same `--trust-remote-code` default-deny gate (and
   warning panel) as the transformers backend, so serving an untrusted repo never
