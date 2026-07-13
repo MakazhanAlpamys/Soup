@@ -138,6 +138,68 @@ class TestAdapterFuse:
                 base_model="org/tiny", adapter_dir=str(adapter), out_dir="out"
             )
 
+    def test_trainer_checkpoint_pickles_are_not_mistaken_for_an_attack(
+        self, tmp_path, monkeypatch
+    ):
+        """Live-smoke regression: the HF Trainer writes checkpoint-N/optimizer.pt
+        (a pickle IT wrote). A recursive scan refused Soup's own distill output
+        and made `soup draft distill` impossible. Only TOP-LEVEL weights — the
+        ones PEFT actually loads — are the threat surface."""
+        from soup_cli.utils.strict_safetensors import (
+            assert_safe_top_level_weights,
+            check_strict_safetensors,
+        )
+
+        monkeypatch.chdir(tmp_path)  # check_strict_safetensors is cwd-contained
+        adapter = tmp_path / "_adapter"
+        (adapter / "checkpoint-60").mkdir(parents=True)
+        (adapter / "adapter_config.json").write_text("{}", encoding="utf-8")
+        # Both pickles below are written by the HF Trainer itself, and NEITHER is
+        # ever deserialized by from_pretrained. Both broke the live smoke.
+        (adapter / "training_args.bin").write_bytes(b"\x80\x04pickle")
+        (adapter / "checkpoint-60" / "optimizer.pt").write_bytes(b"\x80\x04pickle")
+
+        # The RECURSIVE, extension-only scan flags them — that is exactly what
+        # made `soup draft distill` refuse its own trainer's output...
+        with pytest.raises(ValueError, match="(?i)unsafe"):
+            check_strict_safetensors(str(adapter), strict=True)
+        # ...while the shallow weight-name scan (what the merge uses) accepts it.
+        assert_safe_top_level_weights(str(adapter))
+
+        # A top-level pickle ADAPTER — the file PEFT actually unpickles, i.e.
+        # the real threat — is still refused.
+        (adapter / "adapter_model.bin").write_bytes(b"\x80\x04pickle")
+        with pytest.raises(ValueError, match="(?i)unsafe"):
+            assert_safe_top_level_weights(str(adapter))
+
+    def test_shallow_scan_ignores_trainer_bookkeeping_pickles(self, tmp_path):
+        from soup_cli.utils.strict_safetensors import (
+            assert_safe_top_level_weights,
+            find_unsafe_weight_files_shallow,
+        )
+
+        adapter = tmp_path / "_adapter"
+        (adapter / "checkpoint-60").mkdir(parents=True)
+        (adapter / "adapter_config.json").write_text("{}", encoding="utf-8")
+        (adapter / "training_args.bin").write_bytes(b"\x80\x04pickle")
+        (adapter / "checkpoint-60" / "optimizer.pt").write_bytes(b"\x80\x04pickle")
+
+        assert find_unsafe_weight_files_shallow(str(adapter)) == ()
+        assert_safe_top_level_weights(str(adapter))  # must not raise
+
+    def test_shallow_scan_still_catches_a_pickle_model_file(self, tmp_path):
+        """serve --auto-spec loads a registry draft dir: pytorch_model.bin is
+        the file from_pretrained would unpickle."""
+        from soup_cli.utils.strict_safetensors import assert_safe_top_level_weights
+
+        model_dir = tmp_path / "draft"
+        model_dir.mkdir()
+        (model_dir / "config.json").write_text("{}", encoding="utf-8")
+        (model_dir / "pytorch_model.bin").write_bytes(b"\x80\x04pickle")
+
+        with pytest.raises(ValueError, match="(?i)unsafe"):
+            assert_safe_top_level_weights(str(model_dir))
+
     def test_merge_loads_base_weights_from_the_base_model_not_out_dir(
         self, tmp_path, monkeypatch
     ):
@@ -1737,6 +1799,47 @@ class TestDraftListCli:
         result = runner.invoke(app, ["list"])
         assert result.exit_code == 0
         assert "org/evil" in result.output  # literal, not interpreted as markup
+
+
+class TestMillionParamSizeGate:
+    """Live-smoke regression: `soup draft distill` on SmolLM2-135M was REFUSED
+    by the hardware-fit gate, which predicted 14 GB of weights — because
+    model_size_from_name knew no "M" (millions) suffix and fell back to the 7B
+    default. Every draft-sized model hit this. Same class as the v0.71.32
+    whisper fix."""
+
+    def test_million_suffix_is_parsed(self):
+        from soup_cli.utils.gpu import model_size_from_name
+
+        assert model_size_from_name(
+            "HuggingFaceTB/SmolLM2-135M-Instruct"
+        ) == pytest.approx(0.135)
+        assert model_size_from_name(
+            "HuggingFaceTB/SmolLM2-360M-Instruct"
+        ) == pytest.approx(0.360)
+        assert model_size_from_name("HuggingFaceTB/SmolVLM-256M") == pytest.approx(
+            0.256
+        )
+
+    def test_billion_marker_still_wins_over_a_context_length_suffix(self):
+        """`Qwen2.5-7B-Instruct-1M` is a 7B model with a 1M CONTEXT — the "1M"
+        must not be read as 1M parameters."""
+        from soup_cli.utils.gpu import model_size_from_name
+
+        assert model_size_from_name("Qwen/Qwen2.5-7B-Instruct-1M") == 7
+
+    def test_one_point_seven_b_is_not_seven_b(self):
+        """"1.7b" contains "7b" — the marker list must match the longer one."""
+        from soup_cli.utils.gpu import model_size_from_name
+
+        assert model_size_from_name(
+            "HuggingFaceTB/SmolLM2-1.7B-Instruct"
+        ) == pytest.approx(1.7)
+
+    def test_unknown_model_still_defaults_to_7b(self):
+        from soup_cli.utils.gpu import model_size_from_name
+
+        assert model_size_from_name("some-unknown-model") == 7.0
 
 
 class TestPromptTexts:

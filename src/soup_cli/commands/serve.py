@@ -1303,9 +1303,9 @@ def _load_draft_model(speculative_model: str, device: str):
     # from_pretrained torch.load's them — a poisoned ~/.soup/drafts.json entry
     # must not become a load-time RCE.
     if os.path.isdir(speculative_model):
-        from soup_cli.utils.strict_safetensors import check_strict_safetensors
+        from soup_cli.utils.strict_safetensors import assert_safe_top_level_weights
 
-        check_strict_safetensors(speculative_model, strict=True)
+        assert_safe_top_level_weights(speculative_model)
 
     console.print(f"[dim]Loading draft model: {escape(speculative_model)}...[/]")
     draft = AutoModelForCausalLM.from_pretrained(

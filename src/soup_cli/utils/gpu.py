@@ -1,6 +1,7 @@
 """GPU detection, memory calculation, and auto batch size."""
 
 import math
+import re
 
 
 def detect_device() -> tuple[str, str]:
@@ -115,15 +116,30 @@ def model_size_from_name(model_name: str) -> float:
         if marker in name_lower:
             return size
 
+    # Longer markers first: "1.7b" contains "7b", so a naive scan would call a
+    # 1.7B model a 7B one (and over-predict its VRAM by 4x).
     size_markers = [
         ("70b", 70), ("65b", 65), ("34b", 34), ("33b", 33),
-        ("13b", 13), ("8b", 8), ("7b", 7), ("3b", 3),
-        ("1.5b", 1.5), ("1b", 1), ("0.5b", 0.5),
+        ("13b", 13), ("8b", 8), ("3b", 3),
+        ("1.5b", 1.5), ("1.7b", 1.7), ("0.5b", 0.5), ("0.6b", 0.6),
+        ("7b", 7), ("1b", 1),
     ]
 
     for marker, size in size_markers:
         if marker in name_lower:
             return size
+
+    # Sub-billion checkpoints carry their size in MILLIONS (SmolLM2-135M,
+    # SmolVLM-256M, ...). Without this they fell through to the 7B default and
+    # the hardware-fit gate refused to train them — which blocked `soup draft`
+    # for exactly the tiny models drafts are made of (v0.71.33 live smoke;
+    # same class as the v0.71.32 whisper fix).
+    #
+    # Checked AFTER the "b" markers on purpose: `Qwen2.5-7B-Instruct-1M` is a
+    # 7B model with a 1M *context*, not a 1M-parameter model.
+    million = re.search(r"(?<![a-z0-9.])(\d+(?:\.\d+)?)m(?![a-z0-9])", name_lower)
+    if million:
+        return float(million.group(1)) / 1000.0
 
     return 7.0  # default guess
 

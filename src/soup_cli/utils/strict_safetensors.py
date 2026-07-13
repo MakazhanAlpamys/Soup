@@ -144,6 +144,72 @@ def find_unsafe_weight_files(model_dir: str) -> Tuple[str, ...]:
     return tuple(sorted(offenders))
 
 
+# Filenames that ``from_pretrained`` / ``PeftModel.from_pretrained`` actually
+# deserialize as WEIGHTS. A training output dir is full of other pickles the HF
+# Trainer wrote itself (``training_args.bin``, ``checkpoint-N/optimizer.pt``) —
+# those are never loaded by ``from_pretrained``, so treating them as an attack
+# just makes Soup refuse its own trainer's output.
+_WEIGHT_STEM_PREFIXES = (
+    "adapter_model",
+    "pytorch_model",
+    "model",
+    "consolidated",
+)
+
+
+def _is_loadable_weight_name(filename: str) -> bool:
+    stem = os.path.splitext(filename)[0].lower()
+    return any(stem.startswith(prefix) for prefix in _WEIGHT_STEM_PREFIXES)
+
+
+def find_unsafe_weight_files_shallow(model_dir: str) -> Tuple[str, ...]:
+    """Unsafe *loadable* weight files at the TOP LEVEL of ``model_dir`` (v0.71.33).
+
+    Narrower than the recursive :func:`find_unsafe_weight_files` in two ways,
+    both deliberate:
+
+    * **Top level only** — ``from_pretrained`` loads weights from the top level;
+      ``checkpoint-N/optimizer.pt`` below it is the Trainer's own pickle.
+    * **Weight filenames only** — ``training_args.bin`` is a pickled
+      ``TrainingArguments``, not a tensor file, and ``from_pretrained`` never
+      deserializes it.
+
+    What it still catches is the actual threat: a pickle ``adapter_model.bin`` /
+    ``pytorch_model.bin`` sitting exactly where the loader will unpickle it.
+    """
+    if not isinstance(model_dir, str) or not model_dir:
+        raise ValueError("model_dir must be a non-empty str")
+    if not os.path.isdir(model_dir):
+        return ()
+
+    offenders: list[str] = []
+    for filename in os.listdir(model_dir):
+        full = os.path.join(model_dir, filename)
+        if not os.path.isfile(full) or not _is_loadable_weight_name(filename):
+            continue
+        ext = os.path.splitext(filename)[1].lower()
+        if ext in UNSAFE_EXTENSIONS:
+            offenders.append(full)
+        elif ext == SAFETENSORS_EXTENSION and not is_safetensors_magic(full):
+            offenders.append(full)
+    return tuple(sorted(offenders))
+
+
+def assert_safe_top_level_weights(model_dir: str) -> None:
+    """Raise ``ValueError`` if ``model_dir`` has loadable pickle weights.
+
+    Shallow counterpart of ``check_strict_safetensors(strict=True)``; see
+    :func:`find_unsafe_weight_files_shallow` for the (deliberate) scope.
+    """
+    offenders = find_unsafe_weight_files_shallow(model_dir)
+    if offenders:
+        names = ", ".join(os.path.basename(path) for path in offenders)
+        raise ValueError(
+            "unsafe weight file (pickle / PyTorch-classic / invalid "
+            f"safetensors): {names}. Re-save the model as safetensors."
+        )
+
+
 def check_strict_safetensors(
     model_dir: str, *, strict: bool = False,
 ) -> StrictSafetensorsReport:

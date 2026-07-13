@@ -64,12 +64,13 @@ def merge_adapter_to_dense(
 
     # Refuse pickle / PyTorch-classic weights in the adapter dir before PEFT
     # torch.load's them — the adapter dir may have been produced (or swapped)
-    # by an untrusted process. Mirrors the strict-safetensors policy applied on
-    # other weight-loading paths.
-    from soup_cli.utils.strict_safetensors import check_strict_safetensors
+    # by an untrusted process. Shallow scan: PEFT loads adapter_model.* from
+    # the TOP LEVEL, while a training output dir also holds the HF Trainer's
+    # own checkpoint-N/optimizer.pt pickles, which are not the threat (a
+    # recursive scan would make Soup refuse its own trainer's output).
+    from soup_cli.utils.strict_safetensors import assert_safe_top_level_weights
 
-    if os.path.isdir(adapter_dir):
-        check_strict_safetensors(adapter_dir, strict=True)
+    assert_safe_top_level_weights(adapter_dir)
 
     from peft import PeftModel
     from transformers import AutoModelForCausalLM, AutoTokenizer
