@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 
 import pytest
 import yaml
@@ -21,6 +22,18 @@ from soup_cli.templates import list_templates, load_template
 runner = CliRunner()
 
 COMPLIANCE_TEMPLATES = ["hipaa", "soc2", "eu-ai-act", "sr-11-7"]
+
+
+def _clean(output: str) -> str:
+    """ANSI-strip + collapse whitespace.
+
+    Rich colourises flag names (``--card`` -> ESC-split fragments) and wraps at
+    the CI terminal's narrow width, so raw substring checks on CLI output are
+    flaky. This normalises both. (v0.71.26 / v0.71.32 precedent; this release's
+    `--card` assertion went red on CI for exactly this reason.)
+    """
+    return re.sub(r"\s+", " ", re.sub(r"\[[0-9;]*m", "", output))
+
 
 
 # --------------------------------------------------------------------------- #
@@ -209,7 +222,7 @@ class TestCardCli:
         monkeypatch.chdir(tmp_path)
         result = runner.invoke(app, ["card", "reg_nonexistent", "-o", "CARD.md"])
         assert result.exit_code == 1
-        assert "not found" in result.output.lower()
+        assert "not found" in _clean(result.output).lower()
 
     def test_card_output_outside_cwd_rejected(self, tmp_path, monkeypatch):
         from soup_cli.cli import app
@@ -229,9 +242,12 @@ class TestPushCardRider:
     def test_push_has_card_option(self):
         from soup_cli.cli import app
 
-        result = runner.invoke(app, ["push", "--help"])
+        # Wide COLUMNS + ANSI-strip: Rich splits flag names with color codes and
+        # wraps at a narrow CI terminal, so a raw substring check is flaky
+        # (v0.71.26 / v0.71.32 precedent — this exact assertion went red on CI).
+        result = runner.invoke(app, ["push", "--help"], env={"COLUMNS": "200"})
         assert result.exit_code == 0, (result.output, repr(result.exception))
-        assert "--card" in result.output
+        assert "--card" in _clean(result.output)
 
     def test_build_card_for_ref_unknown_raises(self, tmp_path, monkeypatch):
         from soup_cli.commands.card import CardError, build_card_for_ref
@@ -345,7 +361,7 @@ class TestCiInitCli:
         assert first.exit_code == 0, (first.output, repr(first.exception))
         second = runner.invoke(app, ["ci", "init"])
         assert second.exit_code == 1
-        assert "exists" in second.output.lower()
+        assert "exists" in _clean(second.output).lower()
         forced = runner.invoke(app, ["ci", "init", "--force"])
         assert forced.exit_code == 0, (forced.output, repr(forced.exception))
 
@@ -545,7 +561,7 @@ class TestPushCardIntegration:
             app, ["push", "--model", "out", "--repo", "user/m", "--card", "reg_nope"]
         )
         assert result.exit_code == 1
-        assert "--card" in result.output
+        assert "--card" in _clean(result.output)
         # fails fast: no repo creation / upload attempted
         assert not fake_api.create_repo.called
         assert not fake_api.upload_folder.called
@@ -571,7 +587,7 @@ class TestPushCardIntegration:
              "--card", eid],
         )
         assert result.exit_code == 0, (result.output, repr(result.exception))
-        assert "HF-only" in result.output
+        assert "HF-only" in _clean(result.output)
         assert uploaded.get("hub") == "modelscope"
 
 
@@ -610,7 +626,7 @@ class TestCardErrorPaths:
         monkeypatch.chdir(tmp_path)
         result = runner.invoke(app, ["card", eid, "-o", "."])
         assert result.exit_code == 1
-        assert "cannot write card" in result.output.lower()
+        assert "cannot write card" in _clean(result.output).lower()
 
     def test_card_overwrites_existing_output(self, tmp_path, monkeypatch):
         """L7 — pin the intended behaviour: regeneration overwrites, no --force."""
@@ -752,7 +768,8 @@ class TestCiWorkflowEdges:
         monkeypatch.chdir(tmp_path)
         result = runner.invoke(app, ["ci", "init", "--python", "3.x"])
         assert result.exit_code == 1
-        assert "python_version" in result.output or "3.11" in result.output
+        cleaned = _clean(result.output)
+        assert "python_version" in cleaned or "3.11" in cleaned
 
 
 class TestAdapterInference:
