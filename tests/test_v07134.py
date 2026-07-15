@@ -605,3 +605,50 @@ class TestLisaCallback:
 class _State:
     def __init__(self, global_step):
         self.global_step = global_step
+
+
+# ---------------------------------------------------------------------------
+# Task B3 — wiring
+# ---------------------------------------------------------------------------
+class _FakeTrainer:
+    def __init__(self):
+        self.callbacks = []
+
+    def add_callback(self, cb):
+        self.callbacks.append(cb)
+
+
+class _TCfg:
+    lisa_enabled = True
+    lisa_num_layers = 3
+    lisa_interval_steps = 15
+    lisa_reset_optimizer = True
+    seed = 0
+
+
+class TestAttachLisa:
+    def test_attaches_when_enabled(self):
+        from soup_cli.utils.lisa import LisaCallback
+        from soup_cli.utils.peft_wiring import attach_lisa_callback
+
+        tr = _FakeTrainer()
+        assert attach_lisa_callback(tr, _TCfg()) is True
+        assert any(isinstance(c, LisaCallback) for c in tr.callbacks)
+
+    def test_noop_when_disabled(self):
+        from soup_cli.utils.peft_wiring import attach_lisa_callback
+
+        cfg = _TCfg()
+        cfg.lisa_enabled = False
+        tr = _FakeTrainer()
+        assert attach_lisa_callback(tr, cfg) is False
+        assert tr.callbacks == []
+
+
+class TestSftRouting:
+    def test_branch_and_attach_present(self):
+        import soup_cli.trainer.sft as sft
+
+        src = Path(sft.__file__).read_text(encoding="utf-8")
+        assert "tcfg.lisa_enabled" in src
+        assert "attach_lisa_callback(" in src

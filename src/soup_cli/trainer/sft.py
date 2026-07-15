@@ -812,6 +812,21 @@ class SFTTrainerWrapper:
                 f"[green]Spectrum targeted FT:[/] {n_trainable} parameter "
                 f"tensor(s) unfrozen (LoRA off)"
             )
+        elif tcfg.lisa_enabled:
+            # v0.71.34 #267 — LISA layerwise importance sampling. Full-FT of a
+            # rotating set of decoder layers (LoRA off). The model stays FULLY
+            # trainable here so HF's create_optimizer (built before
+            # on_train_begin) includes every decoder param in its param groups;
+            # LisaCallback then flips requires_grad each interval — frozen
+            # params get grad=None and AdamW skips them. enable_input_require_grads
+            # keeps grad-checkpointing safe.
+            if hasattr(self.model, "enable_input_require_grads"):
+                self.model.enable_input_require_grads()
+            console.print(
+                f"[green]LISA:[/] layerwise importance sampling "
+                f"({tcfg.lisa_num_layers} layer(s) every "
+                f"{tcfg.lisa_interval_steps} steps, LoRA off)"
+            )
         else:
             # LoRA — with MoE-aware target modules if moe_lora is enabled
             target_modules = tcfg.lora.target_modules
@@ -1188,10 +1203,13 @@ class SFTTrainerWrapper:
         # ReLoRA callback (v0.39.0 Part B / v0.40.6 #67) via shared helper.
         from soup_cli.utils.peft_wiring import (
             attach_curriculum_callback,
+            attach_lisa_callback,
             attach_plugin_callback,
             attach_relora_callback,
         )
         attach_relora_callback(self.trainer, self.config.training)
+        # LISA layerwise importance sampling (v0.71.34 #267).
+        attach_lisa_callback(self.trainer, self.config.training)
         # v0.53.5 #114/#115 — dynamic curriculum live callback.
         attach_curriculum_callback(
             self.trainer, self.config.training, self._output_dir, console

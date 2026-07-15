@@ -76,6 +76,28 @@ def attach_relora_callback(trainer: Any, tcfg: Any) -> bool:
     return True
 
 
+def attach_lisa_callback(trainer: Any, tcfg: Any) -> bool:
+    """Attach :class:`LisaCallback` when ``training.lisa_enabled`` is set.
+
+    Returns ``True`` when a callback was attached, ``False`` otherwise. The
+    schema-level cross-validator (``_validate_lisa_compat``) already enforces
+    the sft / transformers / text / quantization=none gate and mutual
+    exclusion, so this helper trusts the caller's task/backend (v0.71.34 #267).
+    """
+    if not getattr(tcfg, "lisa_enabled", False):
+        return False
+    from soup_cli.utils.lisa import LisaCallback, LisaPolicy
+
+    policy = LisaPolicy(
+        num_layers=int(tcfg.lisa_num_layers),
+        interval_steps=int(tcfg.lisa_interval_steps),
+        reset_optimizer=bool(getattr(tcfg, "lisa_reset_optimizer", True)),
+        seed=int(getattr(tcfg, "seed", 0) or 0),
+    )
+    trainer.add_callback(LisaCallback(policy=policy))
+    return True
+
+
 def attach_curriculum_callback(
     trainer: Any,
     tcfg: Any,
