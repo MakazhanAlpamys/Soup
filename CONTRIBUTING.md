@@ -150,7 +150,7 @@ pytest tests/test_data.py::test_detect_alpaca_format -v
 pytest tests/ --cov=soup_cli --cov-report=html
 ```
 
-### Test Files (307 files)
+### Test Files (313 files)
 
 > A representative sample of the suite below. Run `pytest tests/ -v` for the complete list.
 
@@ -388,7 +388,7 @@ If adding a new training algorithm:
 
 1. Create `trainer/your_trainer.py` wrapping the appropriate TRL trainer
 2. Add config fields to `config/schema.py` (Pydantic v2)
-3. Add template to `config/schema.py` (see existing 15 templates)
+3. Add a template YAML under `src/soup_cli/templates/` + a `manifest.json` entry (see the existing 21 templates)
 4. Update `commands/train.py` to route to your trainer
 5. Add 30+ tests in `tests/test_your_trainer.py`
 6. Update `README.md` + the relevant page under `docs/`

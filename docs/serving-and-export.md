@@ -63,6 +63,35 @@ soup export --model ./output --format gguf --llama-cpp /path/to/llama.cpp
 
 Supported quantizations: `q4_0`, `q4_k_m`, `q5_k_m`, `q8_0`, `f16`, `f32`
 
+### Building llama.cpp (required for quantized GGUF)
+
+Soup auto-clones llama.cpp (pinned tag `b5270`) to `~/.soup/llama.cpp` on first use,
+but it does **not** build it. The conversion step (`f16` / `f32`) works from the
+Python script alone; every *quantized* type additionally needs the `llama-quantize`
+binary, so build it once:
+
+```bash
+cd ~/.soup/llama.cpp
+cmake -B build -DGGML_NATIVE=OFF -DLLAMA_CURL=OFF -DCMAKE_BUILD_TYPE=Release
+cmake --build build --config Release --target llama-quantize -j 4
+```
+
+Soup finds the binary in both single-config (`build/bin/llama-quantize`, Make/Ninja)
+and multi-config (`build/bin/Release/llama-quantize.exe`, MSVC/Xcode) layouts, or on
+`PATH`. Point at an existing checkout with `--llama-cpp /path/to/llama.cpp` or the
+`LLAMA_CPP_PATH` env var.
+
+**Toolchain validated on Windows** (all six quants, then `soup deploy ollama` →
+inference): Visual Studio 2022 Build Tools with the *Desktop development with C++*
+workload (`Microsoft.VisualStudio.Component.VC.Tools.x86.x64`) + CMake ≥ 3.14, CPU-only.
+Linux/macOS need only a C++ toolchain + CMake. CUDA llama.cpp builds are untested
+(see [#144](https://github.com/MakazhanAlpamys/Soup/issues/144)).
+
+> Do **not** run `pip install -r ~/.soup/llama.cpp/requirements.txt` — it pins
+> `torch~=2.2.1` against the CPU wheel index and will downgrade a CUDA PyTorch,
+> breaking training. Soup deliberately installs only the convert script's extra
+> dependencies (`gguf`, `sentencepiece`, `protobuf`), unpinned.
+
 ### ONNX Export
 
 Export models to ONNX format for use with [ONNX Runtime](https://onnxruntime.ai/):
