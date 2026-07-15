@@ -18,12 +18,14 @@ import json
 import math
 import os
 import re
+import stat
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 _MAX_EXPR_LEN = 4096
 _MAX_TERMS = 64
+_MAX_COEFF = 1e6
 _MAX_ADAPTER_CONFIG_BYTES = 256 * 1024
 
 _NAME_RE = re.compile(r"[A-Za-z0-9_.\-]+")
@@ -142,6 +144,11 @@ def parse_expression(expr: str, known_names: set[str]) -> list[TaskTerm]:
 
         if not math.isfinite(coeff):
             raise ValueError("coefficient must be finite")
+        if abs(coeff) > _MAX_COEFF:
+            raise ValueError(
+                f"coefficient magnitude {coeff} exceeds cap {_MAX_COEFF} "
+                "(would overflow the float32 output)"
+            )
         if name not in known_names:
             raise ValueError(
                 f"unknown adapter name {name!r} "
@@ -240,9 +247,18 @@ def read_adapter_base(adapter_dir: str) -> str | None:
     is symlink-rejecting (O_NOFOLLOW) and size-capped at 256 KiB (mirrors
     ``adapter_merge.write_merged_adapter``'s config-read guards).
     """
+    from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
+
+    # Defence-in-depth: re-validate the adapter dir stays under cwd (the caller
+    # already checks, but read_adapter_base is public) and is not a symlink.
+    enforce_under_cwd_and_no_symlink(adapter_dir, "adapter")
     cfg_path = Path(adapter_dir) / "adapter_config.json"
     if not os.path.lexists(str(cfg_path)):
         return None
+    # O_NOFOLLOW is a no-op on Windows, so explicitly reject a symlinked config
+    # file (an attacker-shipped adapter could point it at an arbitrary file).
+    if stat.S_ISLNK(os.lstat(str(cfg_path)).st_mode):
+        raise ValueError("adapter_config.json must not be a symlink")
     try:
         fd = os.open(str(cfg_path), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
     except OSError as exc:

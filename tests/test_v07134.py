@@ -191,22 +191,45 @@ class TestMergeTaskArithmetic:
 
 
 class TestReadAdapterBase:
-    def test_reads_base(self, tmp_path):
+    def test_reads_base(self, tmp_path, monkeypatch):
         from soup_cli.utils.adapter_arithmetic import read_adapter_base
 
+        monkeypatch.chdir(tmp_path)
         d = tmp_path / "ad"
         d.mkdir()
         (d / "adapter_config.json").write_text(
             json.dumps({"base_model_name_or_path": "meta/x"}), encoding="utf-8"
         )
-        assert read_adapter_base(str(d)) == "meta/x"
+        assert read_adapter_base("ad") == "meta/x"
 
-    def test_missing_returns_none(self, tmp_path):
+    def test_missing_returns_none(self, tmp_path, monkeypatch):
         from soup_cli.utils.adapter_arithmetic import read_adapter_base
 
+        monkeypatch.chdir(tmp_path)
         d = tmp_path / "ad"
         d.mkdir()
-        assert read_adapter_base(str(d)) is None
+        assert read_adapter_base("ad") is None
+
+    @pytest.mark.skipif(os.name == "nt", reason="symlink needs admin on Windows")
+    def test_symlinked_config_rejected(self, tmp_path, monkeypatch):
+        from soup_cli.utils.adapter_arithmetic import read_adapter_base
+
+        monkeypatch.chdir(tmp_path)
+        secret = tmp_path / "secret.json"
+        secret.write_text(json.dumps({"base_model_name_or_path": "leak"}), encoding="utf-8")
+        d = tmp_path / "ad"
+        d.mkdir()
+        (d / "adapter_config.json").symlink_to(secret)
+        with pytest.raises(ValueError, match="symlink"):
+            read_adapter_base("ad")
+
+
+class TestCoeffCap:
+    def test_over_cap_rejected(self):
+        from soup_cli.utils.adapter_arithmetic import parse_expression
+
+        with pytest.raises(ValueError, match="cap"):
+            parse_expression("1e300*coder", {"coder"})
 
 
 # ---------------------------------------------------------------------------
