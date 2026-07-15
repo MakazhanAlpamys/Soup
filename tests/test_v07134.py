@@ -442,3 +442,166 @@ class TestLisaSchema:
         )
         with pytest.raises(Exception, match="use_dora"):
             _load(y)
+
+
+# ---------------------------------------------------------------------------
+# Task B2 — utils/lisa.py
+# ---------------------------------------------------------------------------
+def _fake_lm(num_layers=6):
+    """Tiny module shaped like a decoder LM: embed + N layers + norm + head."""
+    import torch.nn as nn
+
+    class Layer(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.q = nn.Linear(4, 4)
+
+    class LM(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.model = nn.Module()
+            self.model.embed_tokens = nn.Embedding(10, 4)
+            self.model.layers = nn.ModuleList([Layer() for _ in range(num_layers)])
+            self.model.norm = nn.LayerNorm(4)
+            self.lm_head = nn.Linear(4, 10)
+
+    return LM()
+
+
+class _FakeOpt:
+    def __init__(self):
+        self.state = {}
+
+
+class TestLisaPolicy:
+    def test_valid(self):
+        from soup_cli.utils.lisa import LisaPolicy
+
+        p = LisaPolicy(num_layers=2, interval_steps=20)
+        assert p.num_layers == 2 and p.interval_steps == 20
+
+    def test_bool_rejected(self):
+        from soup_cli.utils.lisa import LisaPolicy
+
+        with pytest.raises((ValueError, TypeError)):
+            LisaPolicy(num_layers=True, interval_steps=20)
+
+    def test_bounds_rejected(self):
+        from soup_cli.utils.lisa import LisaPolicy
+
+        with pytest.raises(ValueError):
+            LisaPolicy(num_layers=0, interval_steps=20)
+        with pytest.raises(ValueError):
+            LisaPolicy(num_layers=2, interval_steps=0)
+
+
+class TestLisaCallback:
+    def _trainable_layer_indices(self, model):
+        import re
+
+        pat = re.compile(r"layers\.(\d+)\.")
+        idxs = set()
+        for name, p in model.named_parameters():
+            m = pat.search(name)
+            if m and p.requires_grad:
+                idxs.add(int(m.group(1)))
+        return idxs
+
+    def _flag(self, model, substr):
+        return all(
+            p.requires_grad
+            for name, p in model.named_parameters()
+            if substr in name
+        )
+
+    def test_initial_selection(self):
+        from soup_cli.utils.lisa import LisaCallback, LisaPolicy
+
+        model = _fake_lm(6)
+        cb = LisaCallback(LisaPolicy(num_layers=2, interval_steps=20, seed=0))
+        cb.on_train_begin(None, _State(0), None, model=model)
+        assert len(self._trainable_layer_indices(model)) == 2
+        assert self._flag(model, "embed_tokens")
+        assert self._flag(model, "lm_head")
+        assert self._flag(model, "model.norm")
+
+    def test_resample_changes_set(self):
+        from soup_cli.utils.lisa import LisaCallback, LisaPolicy
+
+        model = _fake_lm(6)
+        cb = LisaCallback(LisaPolicy(num_layers=2, interval_steps=10, seed=0))
+        cb.on_train_begin(None, _State(0), None, model=model)
+        first = frozenset(self._trainable_layer_indices(model))
+        # non-interval step -> no change
+        cb.on_step_end(None, _State(5), None, model=model, optimizer=_FakeOpt())
+        assert frozenset(self._trainable_layer_indices(model)) == first
+        # interval step -> re-sample (may differ)
+        cb.on_step_end(None, _State(10), None, model=model, optimizer=_FakeOpt())
+        assert cb.fire_count == 1
+        assert len(self._trainable_layer_indices(model)) == 2
+
+    def test_deterministic_by_seed(self):
+        from soup_cli.utils.lisa import LisaCallback, LisaPolicy
+
+        picks = []
+        for _ in range(2):
+            model = _fake_lm(8)
+            cb = LisaCallback(LisaPolicy(num_layers=3, interval_steps=5, seed=42))
+            cb.on_train_begin(None, _State(0), None, model=model)
+            cb.on_step_end(None, _State(5), None, model=model, optimizer=_FakeOpt())
+            picks.append(frozenset(self._trainable_layer_indices(model)))
+        assert picks[0] == picks[1]
+
+    def test_clamp_num_layers(self):
+        from soup_cli.utils.lisa import LisaCallback, LisaPolicy
+
+        model = _fake_lm(4)
+        cb = LisaCallback(LisaPolicy(num_layers=10, interval_steps=20, seed=0))
+        cb.on_train_begin(None, _State(0), None, model=model)
+        assert len(self._trainable_layer_indices(model)) == 4  # clamped
+
+    def test_optimizer_state_cleared_on_refreeze(self):
+        from soup_cli.utils.lisa import LisaCallback, LisaPolicy
+
+        model = _fake_lm(6)
+        cb = LisaCallback(LisaPolicy(num_layers=2, interval_steps=10, seed=0))
+        cb.on_train_begin(None, _State(0), None, model=model)
+        opt = _FakeOpt()
+        # seed optimizer state for every currently-trainable decoder param
+        import re
+
+        pat = re.compile(r"layers\.(\d+)\.")
+        active_params = [
+            p for n, p in model.named_parameters()
+            if pat.search(n) and p.requires_grad
+        ]
+        for p in active_params:
+            opt.state[p] = {"exp_avg": 1}
+        cb.on_step_end(None, _State(10), None, model=model, optimizer=opt)
+        # any param that got frozen should have had its optimizer state cleared
+        frozen_now = [
+            p for n, p in model.named_parameters()
+            if pat.search(n) and not p.requires_grad
+        ]
+        for p in frozen_now:
+            assert p not in opt.state or opt.state[p] == {}
+
+    def test_no_top_level_torch(self):
+        import soup_cli.utils.lisa as mod
+
+        src = Path(mod.__file__).read_text(encoding="utf-8")
+        tree = ast.parse(src)
+        for node in tree.body:
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                names = (
+                    [a.name for a in node.names]
+                    if isinstance(node, ast.Import)
+                    else [node.module or ""]
+                )
+                for nm in names:
+                    assert nm.split(".")[0] not in {"torch", "transformers", "peft"}
+
+
+class _State:
+    def __init__(self, global_step):
+        self.global_step = global_step
