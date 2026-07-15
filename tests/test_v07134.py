@@ -338,3 +338,107 @@ class TestArithmeticCli:
             tmp_path,
         )
         assert res.exit_code == 1
+
+
+# ---------------------------------------------------------------------------
+# Task B1 — LISA schema
+# ---------------------------------------------------------------------------
+_LISA_BASE = """
+base: HuggingFaceTB/SmolLM2-135M
+task: sft
+backend: transformers
+modality: text
+data:
+  train: data.jsonl
+  format: chatml
+training:
+  quantization: none
+  lisa_enabled: true
+  lisa_num_layers: 4
+  lisa_interval_steps: 25
+"""
+
+
+def _load(yaml_str):
+    from soup_cli.config.loader import load_config_from_string
+
+    return load_config_from_string(yaml_str)
+
+
+class TestLisaSchema:
+    def test_happy(self):
+        cfg = _load(_LISA_BASE)
+        assert cfg.training.lisa_enabled is True
+        assert cfg.training.lisa_num_layers == 4
+        assert cfg.training.lisa_interval_steps == 25
+
+    def test_defaults_when_disabled(self):
+        cfg = _load(_LISA_BASE.replace("lisa_enabled: true", "lisa_enabled: false")
+                    .replace("lisa_num_layers: 4\n", "")
+                    .replace("lisa_interval_steps: 25\n", ""))
+        assert cfg.training.lisa_enabled is False
+        assert cfg.training.lisa_num_layers == 2
+        assert cfg.training.lisa_interval_steps == 20
+
+    @pytest.mark.parametrize(
+        "sub,kw",
+        [
+            ("task: sft", "task"),  # -> dpo
+            ("backend: transformers", "backend"),
+            ("modality: text", "modality"),
+            ("quantization: none", "quantization"),
+        ],
+    )
+    def test_gate_rejects(self, sub, kw):
+        import pytest as _pt
+
+        repl = {
+            "task: sft": "task: dpo",
+            "backend: transformers": "backend: mlx",
+            "modality: text": "modality: vision",
+            "quantization: none": "quantization: 4bit",
+        }[sub]
+        with _pt.raises(Exception) as ei:
+            _load(_LISA_BASE.replace(sub, repl))
+        assert kw in str(ei.value).lower() or "lisa" in str(ei.value).lower()
+
+    def test_bool_as_int_rejected(self):
+        with pytest.raises(Exception, match="bool"):
+            _load(_LISA_BASE.replace("lisa_num_layers: 4", "lisa_num_layers: true"))
+
+    def test_bounds(self):
+        with pytest.raises(Exception):
+            _load(_LISA_BASE.replace("lisa_num_layers: 4", "lisa_num_layers: 0"))
+        with pytest.raises(Exception):
+            _load(_LISA_BASE.replace("lisa_num_layers: 4", "lisa_num_layers: 65"))
+        with pytest.raises(Exception):
+            _load(_LISA_BASE.replace("lisa_interval_steps: 25", "lisa_interval_steps: 0"))
+
+    def test_footgun_disabled_but_set(self):
+        y = _LISA_BASE.replace("lisa_enabled: true", "lisa_enabled: false")
+        with pytest.raises(Exception, match="lisa_enabled"):
+            _load(y)
+
+    @pytest.mark.parametrize(
+        "extra,kw",
+        [
+            ("  freeze_layers: 2\n", "freeze_layers"),
+            ("  freeze_ratio: 0.5\n", "freeze_ratio"),
+            ("  train_router_only: true\n", "train_router_only"),
+            ("  relora_steps: 100\n", "relora_steps"),
+            ("  loraplus_lr_ratio: 4.0\n", "loraplus_lr_ratio"),
+            ("  unfrozen_parameters: ['model.layers.0.mlp']\n", "unfrozen_parameters"),
+        ],
+    )
+    def test_mutual_exclusion(self, extra, kw):
+        y = _LISA_BASE.rstrip("\n") + "\n" + extra
+        with pytest.raises(Exception, match=kw):
+            _load(y)
+
+    def test_lora_flag_exclusion(self):
+        y = (
+            _LISA_BASE.rstrip("\n")
+            + "\n  lora:\n    use_dora: true\n"
+        )
+        with pytest.raises(Exception, match="use_dora"):
+            _load(y)

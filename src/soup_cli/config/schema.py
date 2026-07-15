@@ -2768,6 +2768,43 @@ class TrainingConfig(BaseModel):
                 )
         return value
 
+    # v0.71.34 #267 — LISA (Layerwise Importance Sampled AdamW,
+    # arXiv:2403.17919). Full-FT quality at LoRA-like memory: randomly
+    # re-activate a small set of decoder layers every N steps (embeddings +
+    # head always trainable). The dynamic cousin of Spectrum's static
+    # unfrozen_parameters selection.
+    lisa_enabled: bool = Field(
+        default=False,
+        description=(
+            "Enable LISA layerwise importance sampling (#267): every "
+            "lisa_interval_steps, freeze all decoder layers except a random "
+            "lisa_num_layers set (embeddings + head always trainable). Full "
+            "fine-tuning, LoRA off. sft + transformers + text + "
+            "quantization=none only; mutually exclusive with LoRA features / "
+            "freeze_layers / unfrozen_parameters."
+        ),
+    )
+    lisa_num_layers: int = Field(
+        default=2, ge=1, le=64,
+        description=(
+            "LISA: number of decoder layers kept trainable per interval "
+            "(clamped to the model's layer count). Small = LoRA-like memory."
+        ),
+    )
+    lisa_interval_steps: int = Field(
+        default=20, ge=1, le=1_000_000,
+        description="LISA: re-sample the active decoder layers every N global steps.",
+    )
+
+    @field_validator("lisa_num_layers", "lisa_interval_steps", mode="before")
+    @classmethod
+    def _validate_lisa_ints(cls, v):
+        """v0.71.34 #267 — reject bool-as-int (bool subclasses int). Mirrors the
+        v0.41.0 ``expand_layers`` / v0.50.0 GRPO numeric-field policy."""
+        if isinstance(v, bool):
+            raise ValueError("LISA integer fields must be int, not bool")
+        return v
+
     # Sample packing — pack multiple short samples into one sequence
     packing: bool = Field(
         default=False,
@@ -4308,6 +4345,93 @@ class SoupConfig(BaseModel):
             raise ValueError(
                 f"training.unfrozen_parameters (Spectrum full fine-tuning, "
                 f"LoRA off) is mutually exclusive with LoRA features: "
+                f"{', '.join(lora_conflicts)}"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_lisa_compat(self) -> "SoupConfig":
+        """v0.71.34 #267 — LISA compatibility gates.
+
+        LISA is full-FT of a rotating set of decoder layers (LoRA off), so it
+        shares Spectrum's ``unfrozen_parameters`` gate: sft + transformers +
+        text + quantization=none, mutually exclusive with the LoRA feature
+        flags, the other freeze mechanisms, and ``unfrozen_parameters`` itself.
+        """
+        tcfg = self.training
+        if not tcfg.lisa_enabled:
+            # Footgun: a non-default lisa_* while LISA is off almost certainly
+            # means the user forgot lisa_enabled=true.
+            if tcfg.lisa_num_layers != 2 or tcfg.lisa_interval_steps != 20:
+                raise ValueError(
+                    "training.lisa_num_layers / lisa_interval_steps set but "
+                    "lisa_enabled is false — set lisa_enabled=true to use LISA "
+                    "layer sampling."
+                )
+            return self
+        if self.task != "sft":
+            raise ValueError(
+                f"training.lisa_enabled (LISA layerwise sampling) requires "
+                f"task='sft'; got task={self.task!r}"
+            )
+        if self.backend != "transformers":
+            raise ValueError(
+                f"training.lisa_enabled requires backend='transformers'; "
+                f"got backend={self.backend!r}"
+            )
+        if self.modality != "text":
+            raise ValueError(
+                f"training.lisa_enabled requires modality='text' (the LISA "
+                f"callback is wired in the text SFT trainer); "
+                f"got modality={self.modality!r}"
+            )
+        if tcfg.quantization != "none":
+            raise ValueError(
+                f"training.lisa_enabled (LISA full fine-tuning) requires "
+                f"quantization='none' (got {tcfg.quantization!r}); quantized "
+                f"weights cannot be trained directly."
+            )
+        freeze_conflicts = []
+        if tcfg.freeze_layers is not None:
+            freeze_conflicts.append("freeze_layers")
+        if tcfg.freeze_ratio is not None:
+            freeze_conflicts.append("freeze_ratio")
+        if tcfg.train_router_only:
+            freeze_conflicts.append("train_router_only")
+        if tcfg.expand_layers is not None:
+            freeze_conflicts.append("expand_layers")
+        if tcfg.freeze_trainable_layers is not None:
+            freeze_conflicts.append("freeze_trainable_layers")
+        if tcfg.unfrozen_parameters:
+            freeze_conflicts.append("unfrozen_parameters")
+        if freeze_conflicts:
+            raise ValueError(
+                f"training.lisa_enabled is mutually exclusive with "
+                f"{', '.join(freeze_conflicts)} (each independently selects "
+                f"which parameters train)"
+            )
+        lcfg = tcfg.lora
+        lora_conflicts = []
+        if lcfg.use_dora:
+            lora_conflicts.append("lora.use_dora")
+        if lcfg.use_vera:
+            lora_conflicts.append("lora.use_vera")
+        if lcfg.use_olora:
+            lora_conflicts.append("lora.use_olora")
+        if lcfg.use_rslora:
+            lora_conflicts.append("lora.use_rslora")
+        if tcfg.moe_lora:
+            lora_conflicts.append("moe_lora")
+        if tcfg.use_longlora:
+            lora_conflicts.append("use_longlora")
+        if tcfg.relora_steps is not None:
+            lora_conflicts.append("relora_steps")
+        if tcfg.loraplus_lr_ratio is not None:
+            lora_conflicts.append("loraplus_lr_ratio")
+        if lora_conflicts:
+            raise ValueError(
+                f"training.lisa_enabled (LISA full fine-tuning, LoRA off) is "
+                f"mutually exclusive with LoRA features: "
                 f"{', '.join(lora_conflicts)}"
             )
         return self
