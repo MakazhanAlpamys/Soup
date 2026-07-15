@@ -99,6 +99,60 @@ class TestParseExpression:
         with pytest.raises(ValueError):
             parse_expression("nan*coder", self._names())
 
+    def test_double_negative_folds_positive(self):
+        from soup_cli.utils.adapter_arithmetic import parse_expression
+
+        terms = parse_expression("- -coder", self._names())
+        assert terms[0].name == "coder" and terms[0].coeff == 1.0
+
+    def test_mixed_signs_fold(self):
+        from soup_cli.utils.adapter_arithmetic import parse_expression
+
+        assert parse_expression("+ -coder", self._names())[0].coeff == -1.0
+        assert parse_expression("coder - + math", self._names())[1].coeff == -1.0
+
+    def test_spaced_coeff_forms(self):
+        from soup_cli.utils.adapter_arithmetic import parse_expression
+
+        assert parse_expression("coder * 2", self._names())[0].coeff == 2.0
+        assert parse_expression("2 * coder", self._names())[0].coeff == 2.0
+
+    def test_overflow_coeff_rejected_as_non_finite(self):
+        from soup_cli.utils.adapter_arithmetic import parse_expression
+
+        # 1e400 overflows Python float -> inf -> caught by the isfinite guard
+        with pytest.raises(ValueError, match="finite"):
+            parse_expression("1e400*coder", self._names())
+
+    @pytest.mark.parametrize(
+        "expr,kw",
+        [
+            ("coder math", "between terms"),
+            ("coder +", "dangling"),
+            ("2*", "expected adapter name"),
+            ("coder*", "expected coefficient"),
+        ],
+    )
+    def test_malformed_grammar(self, expr, kw):
+        from soup_cli.utils.adapter_arithmetic import parse_expression
+
+        with pytest.raises(ValueError, match=kw):
+            parse_expression(expr, self._names())
+
+    def test_too_many_terms_rejected(self):
+        from soup_cli.utils.adapter_arithmetic import parse_expression
+
+        names = {f"a{i}" for i in range(70)}
+        expr = " + ".join(sorted(names))
+        with pytest.raises(ValueError, match="too many"):
+            parse_expression(expr, names)
+
+    def test_non_str_input_rejected(self):
+        from soup_cli.utils.adapter_arithmetic import parse_expression
+
+        with pytest.raises(TypeError):
+            parse_expression(123, self._names())
+
     def test_no_top_level_torch(self):
         import soup_cli.utils.adapter_arithmetic as mod
 
@@ -166,6 +220,39 @@ class TestMergeTaskArithmetic:
         delta = merged[bk] @ merged[ak]
         assert np.allclose(delta, 0.5 * (b_mat @ a_mat), atol=1e-4)
 
+    def test_two_adapter_lora_ab_hand_computed(self):
+        import math
+
+        from soup_cli.utils.adapter_arithmetic import merge_task_arithmetic
+
+        rng = np.random.default_rng(2)
+        a1 = rng.standard_normal((3, 5)).astype(np.float32)
+        a2 = rng.standard_normal((3, 5)).astype(np.float32)
+        b1 = rng.standard_normal((5, 3)).astype(np.float32)
+        b2 = rng.standard_normal((5, 3)).astype(np.float32)
+        ak = "m.lora_A.weight"
+        bk = "m.lora_B.weight"
+        merged, _ = merge_task_arithmetic(
+            [{ak: a1, bk: b1}, {ak: a2, bk: b2}], [0.5, -2.0]
+        )
+        # A-factor coeff = sqrt(|c|); B-factor = sign(c)*sqrt(|c|)
+        exp_a = math.sqrt(0.5) * a1 + math.sqrt(2.0) * a2
+        exp_b = math.sqrt(0.5) * b1 + (-math.sqrt(2.0)) * b2
+        assert np.allclose(merged[ak], exp_a, atol=1e-4)
+        assert np.allclose(merged[bk], exp_b, atol=1e-4)
+
+    def test_lora_embedding_factor_branch(self):
+        import math
+
+        from soup_cli.utils.adapter_arithmetic import merge_task_arithmetic
+
+        a = np.ones((2, 2), dtype=np.float32)
+        merged, _ = merge_task_arithmetic(
+            [{"x.lora_embedding_A": a, "x.lora_embedding_B": a}], [4.0]
+        )
+        assert np.allclose(merged["x.lora_embedding_A"], math.sqrt(4.0))
+        assert np.allclose(merged["x.lora_embedding_B"], math.sqrt(4.0))
+
     def test_mixed_rank_rejected(self):
         from soup_cli.utils.adapter_arithmetic import merge_task_arithmetic
 
@@ -222,6 +309,40 @@ class TestReadAdapterBase:
         (d / "adapter_config.json").symlink_to(secret)
         with pytest.raises(ValueError, match="symlink"):
             read_adapter_base("ad")
+
+    def _write_cfg(self, tmp_path, monkeypatch, text):
+        monkeypatch.chdir(tmp_path)
+        d = tmp_path / "ad"
+        d.mkdir()
+        (d / "adapter_config.json").write_text(text, encoding="utf-8")
+        return "ad"
+
+    def test_oversize_config_rejected(self, tmp_path, monkeypatch):
+        from soup_cli.utils.adapter_arithmetic import read_adapter_base
+
+        big = '{"base_model_name_or_path": "' + "x" * (300 * 1024) + '"}'
+        ad = self._write_cfg(tmp_path, monkeypatch, big)
+        with pytest.raises(ValueError, match="cap"):
+            read_adapter_base(ad)
+
+    def test_malformed_json_rejected(self, tmp_path, monkeypatch):
+        from soup_cli.utils.adapter_arithmetic import read_adapter_base
+
+        ad = self._write_cfg(tmp_path, monkeypatch, "{not json")
+        with pytest.raises(ValueError, match="valid JSON"):
+            read_adapter_base(ad)
+
+    def test_non_dict_returns_none(self, tmp_path, monkeypatch):
+        from soup_cli.utils.adapter_arithmetic import read_adapter_base
+
+        ad = self._write_cfg(tmp_path, monkeypatch, "[1, 2, 3]")
+        assert read_adapter_base(ad) is None
+
+    def test_non_string_base_returns_none(self, tmp_path, monkeypatch):
+        from soup_cli.utils.adapter_arithmetic import read_adapter_base
+
+        ad = self._write_cfg(tmp_path, monkeypatch, '{"base_model_name_or_path": 42}')
+        assert read_adapter_base(ad) is None
 
 
 class TestCoeffCap:
@@ -289,8 +410,14 @@ class TestArithmeticCli:
             tmp_path,
         )
         assert res.exit_code == 0, (res.output, repr(res.exception))
-        assert (tmp_path / "out" / "adapter_model.safetensors").is_file()
         assert (tmp_path / "out" / "adapter_config.json").is_file()
+        # verify the merged VALUE, not just that a file exists (non-lora key
+        # -> linear combine)
+        from safetensors.numpy import load_file
+
+        merged = load_file(str(tmp_path / "out" / "adapter_model.safetensors"))
+        assert np.allclose(merged[key], self._rng_tensor((8, 16), 1)
+                           + self._rng_tensor((8, 16), 2), atol=1e-4)
 
     def test_negate_self_is_zero(self, tmp_path):
         key = "base_model.model.layers.0.mlp.down_proj.lora_B.weight"
@@ -379,6 +506,7 @@ class TestArithmeticCli:
             tmp_path,
         )
         assert res.exit_code == 1
+        assert "name=path" in res.output
 
     def test_output_outside_cwd_exit_1(self, tmp_path):
         a = _make_adapter(tmp_path / "coder", "meta/x", {"w": self._rng_tensor((8, 16), 10)})
@@ -388,6 +516,53 @@ class TestArithmeticCli:
             tmp_path,
         )
         assert res.exit_code == 1
+        assert "refused" in res.output.lower()
+
+    def test_duplicate_adapter_name_exit_1(self, tmp_path):
+        a = _make_adapter(tmp_path / "coder", "meta/x", {"w": self._rng_tensor((8, 16), 11)})
+        res = self._run(
+            ["arithmetic", "coder", "--adapter", f"coder={a}",
+             "--adapter", f"coder={a}", "-o", "out", "--allow-unscanned"],
+            tmp_path,
+        )
+        assert res.exit_code == 1
+        assert "duplicate" in res.output.lower()
+
+    def test_empty_adapter_path_exit_1(self, tmp_path):
+        res = self._run(
+            ["arithmetic", "coder", "--adapter", "coder=", "-o", "out"],
+            tmp_path,
+        )
+        assert res.exit_code == 1
+        assert "empty path" in res.output.lower()
+
+    def test_invalid_adapter_name_exit_1(self, tmp_path):
+        a = _make_adapter(tmp_path / "coder", "meta/x", {"w": self._rng_tensor((8, 16), 12)})
+        res = self._run(
+            ["arithmetic", "bad", "--adapter", f"bad name!={a}", "-o", "out"],
+            tmp_path,
+        )
+        assert res.exit_code == 1
+        assert "invalid adapter name" in res.output.lower()
+
+    def test_adapter_path_outside_cwd_exit_1(self, tmp_path):
+        res = self._run(
+            ["arithmetic", "coder", "--adapter", "coder=../elsewhere", "-o", "out"],
+            tmp_path,
+        )
+        assert res.exit_code == 1
+        assert "refused" in res.output.lower()
+
+    def test_no_shared_tensors_exit_1(self, tmp_path):
+        a = _make_adapter(tmp_path / "coder", "meta/x", {"a_only": self._rng_tensor((8, 16), 13)})
+        b = _make_adapter(tmp_path / "math", "meta/x", {"b_only": self._rng_tensor((8, 16), 14)})
+        res = self._run(
+            ["arithmetic", "coder + math", "--adapter", f"coder={a}",
+             "--adapter", f"math={b}", "-o", "out", "--allow-unscanned"],
+            tmp_path,
+        )
+        assert res.exit_code == 1
+        assert "no shared" in res.output.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -450,7 +625,8 @@ class TestLisaSchema:
         }[sub]
         with _pt.raises(Exception) as ei:
             _load(_LISA_BASE.replace(sub, repl))
-        assert kw in str(ei.value).lower() or "lisa" in str(ei.value).lower()
+        # require the SPECIFIC keyword — not just "lisa" (which every message has)
+        assert kw in str(ei.value).lower()
 
     def test_bool_as_int_rejected(self):
         with pytest.raises(Exception, match="bool"):
@@ -498,6 +674,8 @@ training:
             ("  relora_steps: 100\n", "relora_steps"),
             ("  loraplus_lr_ratio: 4.0\n", "loraplus_lr_ratio"),
             ("  unfrozen_parameters: ['model.layers.0.mlp']\n", "unfrozen_parameters"),
+            ("  expand_layers: 2\n", "expand_layers"),
+            ("  freeze_trainable_layers: 3\n", "freeze_trainable_layers"),
         ],
     )
     def test_mutual_exclusion(self, extra, kw):
@@ -505,12 +683,23 @@ training:
         with pytest.raises(Exception, match=kw):
             _load(y)
 
-    def test_lora_flag_exclusion(self):
-        y = (
-            _LISA_BASE.rstrip("\n")
-            + "\n  lora:\n    use_dora: true\n"
-        )
-        with pytest.raises(Exception, match="use_dora"):
+    @pytest.mark.parametrize(
+        "flag,kw",
+        [
+            ("use_dora: true", "use_dora"),
+            ("use_vera: true", "use_vera"),
+            ("use_olora: true", "use_olora"),
+            ("use_rslora: true", "use_rslora"),
+        ],
+    )
+    def test_lora_flag_exclusion(self, flag, kw):
+        y = _LISA_BASE.rstrip("\n") + f"\n  lora:\n    {flag}\n"
+        with pytest.raises(Exception, match=kw):
+            _load(y)
+
+    def test_moe_lora_exclusion(self):
+        y = _LISA_BASE.rstrip("\n") + "\n  moe_lora: true\n"
+        with pytest.raises(Exception, match="moe_lora"):
             _load(y)
 
 
@@ -564,12 +753,24 @@ class TestLisaPolicy:
         with pytest.raises(ValueError):
             LisaPolicy(num_layers=2, interval_steps=0)
 
+    def test_negative_seed_rejected(self):
+        from soup_cli.utils.lisa import LisaPolicy
+
+        with pytest.raises(ValueError, match="seed"):
+            LisaPolicy(num_layers=2, interval_steps=20, seed=-1)
+
+    def test_non_bool_reset_optimizer_rejected(self):
+        from soup_cli.utils.lisa import LisaPolicy
+
+        with pytest.raises(TypeError, match="reset_optimizer"):
+            LisaPolicy(num_layers=2, interval_steps=20, reset_optimizer=1)
+
 
 class TestLisaCallback:
     def _trainable_layer_indices(self, model):
         import re
 
-        pat = re.compile(r"layers\.(\d+)\.")
+        pat = re.compile(r"(?:layers|h)\.(\d+)\.")
         idxs = set()
         for name, p in model.named_parameters():
             m = pat.search(name)
@@ -656,6 +857,89 @@ class TestLisaCallback:
         for p in frozen_now:
             assert p not in opt.state or opt.state[p] == {}
 
+    def test_optimizer_state_preserved_when_reset_disabled(self):
+        import re
+
+        from soup_cli.utils.lisa import LisaCallback, LisaPolicy
+
+        model = _fake_lm(6)
+        cb = LisaCallback(
+            LisaPolicy(num_layers=2, interval_steps=10, seed=0, reset_optimizer=False)
+        )
+        cb.on_train_begin(None, _State(0), None, model=model)
+        opt = _FakeOpt()
+        pat = re.compile(r"layers\.(\d+)\.")
+        for n, p in model.named_parameters():
+            if pat.search(n) and p.requires_grad:
+                opt.state[p] = {"exp_avg": 1}
+        cb.on_step_end(None, _State(10), None, model=model, optimizer=opt)
+        # reset disabled -> state stays populated even for re-frozen params
+        assert all(v == {"exp_avg": 1} for v in opt.state.values())
+
+    def test_non_float_param_in_chosen_layer_skipped(self):
+        import torch
+
+        from soup_cli.utils.lisa import LisaCallback, LisaPolicy
+
+        model = _fake_lm(4)
+        # force every decoder param non-float so any chosen one is skipped
+        orig = torch.Tensor.is_floating_point
+        cb = LisaCallback(LisaPolicy(num_layers=2, interval_steps=5, seed=0))
+        try:
+            torch.Tensor.is_floating_point = lambda self: False  # type: ignore
+            cb.on_train_begin(None, _State(0), None, model=model)
+        finally:
+            torch.Tensor.is_floating_point = orig  # type: ignore
+        assert len(self._trainable_layer_indices(model)) == 0
+        assert cb._active_decoder_params == []
+
+    def test_always_on_persist_after_resample(self):
+        from soup_cli.utils.lisa import LisaCallback, LisaPolicy
+
+        model = _fake_lm(6)
+        cb = LisaCallback(LisaPolicy(num_layers=2, interval_steps=10, seed=1))
+        cb.on_train_begin(None, _State(0), None, model=model)
+        cb.on_step_end(None, _State(10), None, model=model, optimizer=_FakeOpt())
+        assert self._flag(model, "embed_tokens")
+        assert self._flag(model, "lm_head")
+        assert self._flag(model, "model.norm")
+
+    def test_gpt2_style_naming(self):
+        import torch.nn as nn
+
+        from soup_cli.utils.lisa import LisaCallback, LisaPolicy
+
+        class GPT2ish(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.wte = nn.Embedding(8, 4)
+                self.wpe = nn.Embedding(8, 4)
+                self.h = nn.ModuleList([nn.Linear(4, 4) for _ in range(5)])
+                self.ln_f = nn.LayerNorm(4)
+                self.lm_head = nn.Linear(4, 8)
+
+        model = GPT2ish()
+        cb = LisaCallback(LisaPolicy(num_layers=2, interval_steps=5, seed=0))
+        cb.on_train_begin(None, _State(0), None, model=model)
+        # h.N.* layers detected; wte/wpe/ln_f/lm_head stay on
+        assert len(self._trainable_layer_indices(model)) == 2
+        for sub in ("wte", "wpe", "ln_f", "lm_head"):
+            assert self._flag(model, sub)
+
+    def test_model_none_is_noop(self):
+        from soup_cli.utils.lisa import LisaCallback, LisaPolicy
+
+        cb = LisaCallback(LisaPolicy(num_layers=1, interval_steps=5))
+        # no model kwarg -> returns control, no crash
+        assert cb.on_train_begin(None, _State(0), None) is None
+        assert cb.on_step_end(None, _State(5), None) is None
+
+    def test_clear_optimizer_state_tolerates_stateless_opt(self):
+        from soup_cli.utils.lisa import LisaCallback
+
+        # optimizer object with no .state attr -> best-effort no-op, no raise
+        LisaCallback._clear_optimizer_state(object(), [])
+
     def test_is_real_trainer_callback_subclass(self):
         # CRITICAL: HF dispatches every event via getattr(cb, event) with no
         # hasattr guard, so LisaCallback must inherit TrainerCallback's no-op
@@ -731,7 +1015,12 @@ class TestAttachLisa:
 
         tr = _FakeTrainer()
         assert attach_lisa_callback(tr, _TCfg()) is True
-        assert any(isinstance(c, LisaCallback) for c in tr.callbacks)
+        cbs = [c for c in tr.callbacks if isinstance(c, LisaCallback)]
+        assert len(cbs) == 1
+        # policy fields threaded correctly (guards against a field-swap bug)
+        assert cbs[0].policy.num_layers == 3
+        assert cbs[0].policy.interval_steps == 15
+        assert cbs[0].policy.reset_optimizer is True
 
     def test_noop_when_disabled(self):
         from soup_cli.utils.peft_wiring import attach_lisa_callback
