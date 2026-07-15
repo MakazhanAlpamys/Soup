@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 from pathlib import Path
 
 import numpy as np
@@ -179,3 +180,161 @@ class TestReadAdapterBase:
         d = tmp_path / "ad"
         d.mkdir()
         assert read_adapter_base(str(d)) is None
+
+
+# ---------------------------------------------------------------------------
+# Task A3 — soup adapters arithmetic command
+# ---------------------------------------------------------------------------
+def _make_adapter(directory: Path, base: str, tensors: dict) -> str:
+    """Write a minimal loadable LoRA adapter dir; return its path string."""
+    from safetensors.numpy import save_file
+
+    directory.mkdir(parents=True, exist_ok=True)
+    save_file(
+        {k: np.asarray(v, dtype=np.float32) for k, v in tensors.items()},
+        str(directory / "adapter_model.safetensors"),
+    )
+    (directory / "adapter_config.json").write_text(
+        json.dumps({"peft_type": "LORA", "base_model_name_or_path": base, "r": 8}),
+        encoding="utf-8",
+    )
+    return str(directory)
+
+
+class TestArithmeticCli:
+    def _run(self, args, cwd):
+        from typer.testing import CliRunner
+
+        from soup_cli.commands.adapters import app
+
+        runner = CliRunner()
+        # invoke inside cwd so cwd-containment checks pass
+        old = os.getcwd()
+        os.chdir(cwd)
+        try:
+            return runner.invoke(app, args)
+        finally:
+            os.chdir(old)
+
+    def test_help_registered(self):
+        from typer.testing import CliRunner
+
+        from soup_cli.commands.adapters import app
+
+        res = CliRunner().invoke(app, ["arithmetic", "--help"])
+        assert res.exit_code == 0, (res.output, repr(res.exception))
+        assert "arithmetic" in res.output.lower()
+
+    def _rng_tensor(self, shape, seed):
+        # Non-degenerate (not rank-1) so the backdoor scanner passes.
+        return np.random.default_rng(seed).standard_normal(shape).astype(np.float32)
+
+    def test_add_two_adapters(self, tmp_path):
+        key = "base_model.model.layers.0.self_attn.q_proj.lora_A.weight"
+        a = _make_adapter(tmp_path / "coder", "meta/x", {key: self._rng_tensor((8, 16), 1)})
+        b = _make_adapter(tmp_path / "math", "meta/x", {key: self._rng_tensor((8, 16), 2)})
+        res = self._run(
+            ["arithmetic", "coder + math", "--adapter", f"coder={a}",
+             "--adapter", f"math={b}", "-o", "out"],
+            tmp_path,
+        )
+        assert res.exit_code == 0, (res.output, repr(res.exception))
+        assert (tmp_path / "out" / "adapter_model.safetensors").is_file()
+        assert (tmp_path / "out" / "adapter_config.json").is_file()
+
+    def test_negate_self_is_zero(self, tmp_path):
+        key = "base_model.model.layers.0.mlp.down_proj.lora_B.weight"
+        t = self._rng_tensor((16, 8), 7)
+        a = _make_adapter(tmp_path / "coder", "meta/x", {key: t})
+        b = _make_adapter(tmp_path / "toxic", "meta/x", {key: t})
+        res = self._run(
+            ["arithmetic", "coder - toxic", "--adapter", f"coder={a}",
+             "--adapter", f"toxic={b}", "-o", "out"],
+            tmp_path,
+        )
+        assert res.exit_code == 0, (res.output, repr(res.exception))
+        from safetensors.numpy import load_file
+
+        merged = load_file(str(tmp_path / "out" / "adapter_model.safetensors"))
+        assert np.allclose(merged[key], 0.0, atol=1e-5)
+
+    def test_scan_fail_gate(self, tmp_path):
+        # A rank-1 ones-matrix trips the backdoor scanner.
+        a = _make_adapter(tmp_path / "coder", "meta/x", {"w": np.ones((8, 16))})
+        b = _make_adapter(tmp_path / "math", "meta/x", {"w": np.ones((8, 16))})
+        res = self._run(
+            ["arithmetic", "coder + math", "--adapter", f"coder={a}",
+             "--adapter", f"math={b}", "-o", "out"],
+            tmp_path,
+        )
+        assert res.exit_code == 1
+        assert "scan" in res.output.lower()
+
+    def test_scan_fail_bypassed_with_flag(self, tmp_path):
+        a = _make_adapter(tmp_path / "coder", "meta/x", {"w": np.ones((8, 16))})
+        b = _make_adapter(tmp_path / "math", "meta/x", {"w": np.ones((8, 16))})
+        res = self._run(
+            ["arithmetic", "coder + math", "--adapter", f"coder={a}",
+             "--adapter", f"math={b}", "-o", "out", "--allow-unscanned"],
+            tmp_path,
+        )
+        assert res.exit_code == 0, (res.output, repr(res.exception))
+
+    def test_unknown_name_exit_1(self, tmp_path):
+        a = _make_adapter(tmp_path / "coder", "meta/x", {"w": np.ones((2, 2))})
+        res = self._run(
+            ["arithmetic", "coder + ghost", "--adapter", f"coder={a}", "-o", "out"],
+            tmp_path,
+        )
+        assert res.exit_code == 1
+        assert "ghost" in res.output
+
+    def test_mixed_rank_exit_1(self, tmp_path):
+        key = "w"
+        a = _make_adapter(tmp_path / "coder", "meta/x", {key: self._rng_tensor((8, 16), 3)})
+        b = _make_adapter(tmp_path / "math", "meta/x", {key: self._rng_tensor((4, 16), 4)})
+        res = self._run(
+            ["arithmetic", "coder + math", "--adapter", f"coder={a}",
+             "--adapter", f"math={b}", "-o", "out", "--allow-unscanned"],
+            tmp_path,
+        )
+        assert res.exit_code == 1
+        assert "rank" in res.output.lower()
+
+    def test_cross_base_rejected(self, tmp_path):
+        a = _make_adapter(tmp_path / "coder", "meta/x", {"w": self._rng_tensor((8, 16), 5)})
+        b = _make_adapter(tmp_path / "math", "meta/DIFFERENT", {"w": self._rng_tensor((8, 16), 6)})
+        res = self._run(
+            ["arithmetic", "coder + math", "--adapter", f"coder={a}",
+             "--adapter", f"math={b}", "-o", "out", "--allow-unscanned"],
+            tmp_path,
+        )
+        assert res.exit_code == 1
+        assert "base" in res.output.lower()
+
+    def test_cross_base_allowed_with_flag(self, tmp_path):
+        a = _make_adapter(tmp_path / "coder", "meta/x", {"w": self._rng_tensor((8, 16), 8)})
+        b = _make_adapter(tmp_path / "math", "meta/DIFFERENT", {"w": self._rng_tensor((8, 16), 9)})
+        res = self._run(
+            ["arithmetic", "coder + math", "--adapter", f"coder={a}",
+             "--adapter", f"math={b}", "-o", "out",
+             "--allow-unscanned", "--allow-cross-base"],
+            tmp_path,
+        )
+        assert res.exit_code == 0, (res.output, repr(res.exception))
+
+    def test_bad_adapter_spec_exit_1(self, tmp_path):
+        res = self._run(
+            ["arithmetic", "coder", "--adapter", "noequalsign", "-o", "out"],
+            tmp_path,
+        )
+        assert res.exit_code == 1
+
+    def test_output_outside_cwd_exit_1(self, tmp_path):
+        a = _make_adapter(tmp_path / "coder", "meta/x", {"w": self._rng_tensor((8, 16), 10)})
+        res = self._run(
+            ["arithmetic", "coder", "--adapter", f"coder={a}",
+             "-o", "../escape", "--allow-unscanned"],
+            tmp_path,
+        )
+        assert res.exit_code == 1

@@ -665,6 +665,219 @@ def merge(
 
 
 @app.command()
+def arithmetic(
+    expression: str = typer.Argument(
+        ...,
+        help='Task-vector expression, e.g. "coder + 0.5*math - toxic".',
+    ),
+    adapter: list[str] = typer.Option(
+        ...,
+        "--adapter",
+        help=(
+            "name=path mapping for each adapter referenced in the expression "
+            "(repeatable). Names use [A-Za-z0-9_.-]."
+        ),
+    ),
+    output: str = typer.Option(
+        ..., "--output", "-o", help="Output directory for the merged adapter"
+    ),
+    allow_unscanned: bool = typer.Option(
+        False,
+        "--allow-unscanned",
+        help=(
+            "Skip the backdoor-scan gate (v0.71.2 #192). By default refuses an "
+            "input whose `adapters scan` returns FAIL or cannot be scanned."
+        ),
+    ),
+    allow_cross_base: bool = typer.Option(
+        False,
+        "--allow-cross-base",
+        help=(
+            "Allow combining adapters trained on different base models. By "
+            "default a base-model mismatch is refused (task vectors from "
+            "different bases are not comparable)."
+        ),
+    ),
+):
+    """Task-vector arithmetic over LoRA adapters (add / scale / negate) (v0.71.34).
+
+    Applies task arithmetic (arXiv:2212.04089) element-wise to LoRA deltas of
+    same-rank adapters. Example:
+
+        soup adapters arithmetic "coder + 0.5*math - toxic" \\
+            --adapter coder=./coder --adapter math=./math \\
+            --adapter toxic=./toxic -o ./merged
+
+    Exit 0 = success, 1 = any refusal (bad expression, unknown adapter, rank
+    mismatch, cross-base without --allow-cross-base, scan FAIL, path escape).
+    """
+    import re as _re
+
+    from soup_cli.utils.adapter_arithmetic import (
+        ArithmeticReport,
+        merge_task_arithmetic,
+        parse_expression,
+        read_adapter_base,
+    )
+    from soup_cli.utils.adapter_diff import load_adapter_weights
+    from soup_cli.utils.adapter_merge import write_merged_adapter
+    from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
+
+    # 1. Parse the --adapter name=path map.
+    name_re = _re.compile(r"^[A-Za-z0-9_.\-]+$")
+    mapping: dict[str, str] = {}
+    for spec in adapter:
+        if "=" not in spec:
+            console.print(
+                f"[red]--adapter must be name=path, got {escape(spec)}[/]"
+            )
+            raise typer.Exit(1)
+        name, _, path = spec.partition("=")
+        name, path = name.strip(), path.strip()
+        if not name_re.match(name):
+            console.print(
+                f"[red]Invalid adapter name {escape(name)!r} "
+                "(use [A-Za-z0-9_.-]).[/]"
+            )
+            raise typer.Exit(1)
+        if not path:
+            console.print(f"[red]--adapter {escape(name)} has an empty path[/]")
+            raise typer.Exit(1)
+        if name in mapping:
+            console.print(f"[red]Duplicate --adapter name {escape(name)}[/]")
+            raise typer.Exit(1)
+        try:
+            enforce_under_cwd_and_no_symlink(path, "adapter")
+        except (ValueError, OSError) as exc:
+            console.print(
+                f"[red]Adapter path refused for {escape(name)}: "
+                f"{escape(str(exc))}[/]"
+            )
+            raise typer.Exit(1) from exc
+        mapping[name] = path
+
+    # 2. Parse the expression against the declared names.
+    try:
+        terms = parse_expression(expression, set(mapping))
+    except (ValueError, TypeError) as exc:
+        console.print(f"[red]Bad expression: {escape(str(exc))}[/]")
+        raise typer.Exit(1) from exc
+
+    referenced = [t.name for t in terms]
+    ref_paths = [mapping[n] for n in referenced]
+
+    # 3. Backdoor-scan gate (mirrors `adapters merge`, #192). Refuse FAIL /
+    #    un-scannable inputs unless --allow-unscanned; WARN is advisory.
+    if not allow_unscanned:
+        from soup_cli.utils.adapter_scan import scan_adapter
+
+        for name, path in zip(referenced, ref_paths):
+            try:
+                scan_report = scan_adapter(path)
+            except (FileNotFoundError, ValueError, TypeError, RuntimeError) as exc:
+                console.print(
+                    f"[red]Could not scan {escape(name)} "
+                    f"({escape(str(exc))}).[/]\n"
+                    "[dim]Pass --allow-unscanned to proceed anyway.[/]"
+                )
+                raise typer.Exit(1) from exc
+            if scan_report.overall == "FAIL":
+                console.print(
+                    f"[red]Backdoor scan FAILED for {escape(name)}: "
+                    f"{escape(scan_report.summary)}[/]\n"
+                    "[dim]Pass --allow-unscanned to proceed anyway "
+                    "(not recommended).[/]"
+                )
+                raise typer.Exit(1)
+            if scan_report.overall == "WARN":
+                console.print(
+                    f"[yellow]Backdoor scan WARN for {escape(name)}: "
+                    f"{escape(scan_report.summary)} — proceeding.[/]"
+                )
+
+    # 4. Same-base check (unless overridden).
+    bases: dict[str, str | None] = {}
+    for name, path in zip(referenced, ref_paths):
+        try:
+            bases[name] = read_adapter_base(path)
+        except (ValueError, OSError) as exc:
+            console.print(
+                f"[red]Could not read base model for {escape(name)}: "
+                f"{escape(str(exc))}[/]"
+            )
+            raise typer.Exit(1) from exc
+    distinct = {b for b in bases.values() if b is not None}
+    if len(distinct) > 1:
+        if not allow_cross_base:
+            listed = ", ".join(
+                f"{escape(n)}={escape(str(b))}" for n, b in bases.items()
+            )
+            console.print(
+                f"[red]Base-model mismatch across adapters: {listed}.[/]\n"
+                "[dim]Task vectors from different bases are not comparable. "
+                "Pass --allow-cross-base to proceed anyway.[/]"
+            )
+            raise typer.Exit(1)
+        console.print(
+            "[yellow]--allow-cross-base: combining adapters from different "
+            "base models (results may be meaningless).[/]"
+        )
+
+    # 5. Output containment.
+    try:
+        enforce_under_cwd_and_no_symlink(output, "output")
+    except (ValueError, OSError) as exc:
+        console.print(f"[red]Output path refused: {escape(str(exc))}[/]")
+        raise typer.Exit(1) from exc
+
+    # 6. Load, signed-merge, write.
+    try:
+        weights_list = [load_adapter_weights(mapping[n]) for n in referenced]
+    except (FileNotFoundError, ValueError, RuntimeError) as exc:
+        console.print(f"[red]Could not load adapter weights: {escape(str(exc))}[/]")
+        raise typer.Exit(1) from exc
+    coeffs = [t.coeff for t in terms]
+    try:
+        merged, skipped = merge_task_arithmetic(weights_list, coeffs)
+    except ValueError as exc:
+        console.print(f"[red]Merge failed: {escape(str(exc))}[/]")
+        raise typer.Exit(1) from exc
+    if not merged:
+        console.print(
+            "[red]No shared LoRA tensors across the referenced adapters — "
+            "nothing to merge.[/]"
+        )
+        raise typer.Exit(1)
+    try:
+        write_merged_adapter(output, ref_paths[0], merged)
+    except (ValueError, RuntimeError, OSError) as exc:
+        console.print(f"[red]Could not write merged adapter: {escape(str(exc))}[/]")
+        raise typer.Exit(1) from exc
+
+    report = ArithmeticReport(
+        expression=expression,
+        terms=tuple(terms),
+        output_dir=output,
+        merged_layers=len(merged),
+        skipped_layers=skipped,
+        base_model=next(iter(distinct)) if len(distinct) == 1 else None,
+    )
+    terms_str = "  ".join(
+        f"[bold]{t.coeff:+g}[/]·{escape(t.name)}" for t in report.terms
+    )
+    panel = Panel(
+        f"Expression:     {escape(report.expression)}\n"
+        f"Terms:          {terms_str}\n"
+        f"Base model:     {escape(str(report.base_model))}\n"
+        f"Merged tensors: [bold]{report.merged_layers}[/]\n"
+        f"Skipped tensors:{len(report.skipped_layers)}\n"
+        f"Output:         [bold]{escape(report.output_dir)}[/]",
+        title="Adapter arithmetic",
+    )
+    console.print(panel)
+
+
+@app.command()
 def blame(
     adapter_dir: str = typer.Argument(..., help="Path to trained adapter"),
     dataset: str = typer.Option(..., "--dataset", help="Training JSONL the adapter was built on"),
