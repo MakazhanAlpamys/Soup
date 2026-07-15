@@ -13,9 +13,13 @@ groups. This callback then toggles ``requires_grad`` — frozen parameters produ
 re-freeze — so peak optimizer memory ≈ (embed + head + ``num_layers`` active)
 rather than the whole model.
 
-No top-level torch/transformers — the callback is duck-typed (mirrors
-``ReLoRACallback``); torch is never imported here at all (pure ``requires_grad``
-toggling + optimizer ``.state`` dict operations).
+No top-level torch/transformers — torch is never imported (pure
+``requires_grad`` toggling + optimizer ``.state`` dict operations), and the HF
+``TrainerCallback`` base is resolved lazily via ``_try_import_callback_base``
+(mirrors ``monitoring/curriculum_callback.py``) so the module stays import-cheap
+while ``LisaCallback`` still inherits the no-op defaults for every Trainer event
+(HF dispatches every event with ``getattr(cb, event)`` and no ``hasattr`` guard,
+so a bare duck-typed callback would crash on ``on_epoch_begin``).
 """
 
 from __future__ import annotations
@@ -68,6 +72,21 @@ class LisaPolicy:
             raise TypeError("LisaPolicy.reset_optimizer must be bool")
 
 
+def _try_import_callback_base():
+    """Return HF ``TrainerCallback`` (or ``object`` when transformers is absent).
+
+    Imported inside the function so the module has no top-level transformers
+    dependency; the class below still inherits every no-op event stub the HF
+    dispatch loop requires. Mirrors ``monitoring/curriculum_callback.py``.
+    """
+    try:
+        from transformers import TrainerCallback  # noqa: PLC0415
+
+        return TrainerCallback
+    except Exception:  # noqa: BLE001 — transformers optional in slim test envs.
+        return object
+
+
 def _is_always_on(name: str) -> bool:
     return any(sub in name for sub in _ALWAYS_ON)
 
@@ -82,11 +101,12 @@ def locate_decoder_layer_indices(model: Any) -> list[int]:
     return sorted(seen)
 
 
-class LisaCallback:
-    """Duck-typed HF ``TrainerCallback`` implementing LISA layer sampling.
+class LisaCallback(_try_import_callback_base()):  # type: ignore[misc]
+    """HF ``TrainerCallback`` implementing LISA layer sampling.
 
-    Not a ``transformers.TrainerCallback`` subclass so importing this module
-    never loads transformers — the Trainer's callback dispatch is structural.
+    Subclasses the lazily-resolved ``TrainerCallback`` so it inherits the no-op
+    default for every Trainer event; only ``on_train_begin`` /
+    ``on_step_end`` are overridden.
     """
 
     def __init__(self, policy: LisaPolicy, console: Any = None) -> None:
@@ -128,11 +148,15 @@ class LisaCallback:
     def _resample(self, model: Any, optimizer: Any) -> None:
         indices = locate_decoder_layer_indices(model)
         if not indices:
-            logger.warning(
+            # Fail loud rather than silently full-fine-tune with none of LISA's
+            # memory savings: the callback left the whole model trainable and
+            # cannot select a decoder subset for this architecture.
+            raise RuntimeError(
                 "LISA: could not detect numbered decoder layers "
-                "('layers.N.' / 'h.N.') — no layer sampling applied."
+                "('layers.N.' / 'h.N.') in the model — LISA layer sampling "
+                "cannot be applied to this architecture. Disable lisa_enabled "
+                "or use a supported decoder LM."
             )
-            return
         k = min(self.policy.num_layers, len(indices))
         chosen = set(self._rng.sample(indices, k))
 

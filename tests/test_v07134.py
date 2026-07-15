@@ -123,21 +123,48 @@ class TestParseExpression:
 # Task A2 — signed merge + base reader
 # ---------------------------------------------------------------------------
 class TestMergeTaskArithmetic:
-    def test_subtract(self):
+    def test_linear_on_non_lora_tensor(self):
         from soup_cli.utils.adapter_arithmetic import merge_task_arithmetic
 
-        a = {"lora_A": np.ones((2, 3), dtype=np.float32)}
-        b = {"lora_A": np.full((2, 3), 4.0, dtype=np.float32)}
+        # A tensor that is neither lora_A nor lora_B combines linearly by c.
+        a = {"modules_to_save.weight": np.ones((2, 3), dtype=np.float32)}
+        b = {"modules_to_save.weight": np.full((2, 3), 4.0, dtype=np.float32)}
         merged, skipped = merge_task_arithmetic([a, b], [1.0, -1.0])
-        assert np.allclose(merged["lora_A"], -3.0)
+        assert np.allclose(merged["modules_to_save.weight"], -3.0)
         assert skipped == ()
 
-    def test_scale(self):
+    def test_scale_non_lora(self):
         from soup_cli.utils.adapter_arithmetic import merge_task_arithmetic
 
         a = {"w": np.ones((2, 2), dtype=np.float32)}
         merged, _ = merge_task_arithmetic([a], [2.5])
         assert np.allclose(merged["w"], 2.5)
+
+    def test_reconstructed_delta_negates(self):
+        # For a real LoRA, negating the task vector must negate ΔW = B @ A.
+        from soup_cli.utils.adapter_arithmetic import merge_task_arithmetic
+
+        rng = np.random.default_rng(0)
+        a_mat = rng.standard_normal((4, 8)).astype(np.float32)
+        b_mat = rng.standard_normal((8, 4)).astype(np.float32)
+        ak = "base_model.model.layers.0.mlp.down_proj.lora_A.weight"
+        bk = "base_model.model.layers.0.mlp.down_proj.lora_B.weight"
+        merged, _ = merge_task_arithmetic([{ak: a_mat, bk: b_mat}], [-1.0])
+        delta_orig = b_mat @ a_mat
+        delta_neg = merged[bk] @ merged[ak]
+        assert np.allclose(delta_neg, -delta_orig, atol=1e-4)
+
+    def test_reconstructed_delta_scales_linearly(self):
+        from soup_cli.utils.adapter_arithmetic import merge_task_arithmetic
+
+        rng = np.random.default_rng(1)
+        a_mat = rng.standard_normal((4, 8)).astype(np.float32)
+        b_mat = rng.standard_normal((8, 4)).astype(np.float32)
+        ak = "x.lora_A.weight"
+        bk = "x.lora_B.weight"
+        merged, _ = merge_task_arithmetic([{ak: a_mat, bk: b_mat}], [0.5])
+        delta = merged[bk] @ merged[ak]
+        assert np.allclose(delta, 0.5 * (b_mat @ a_mat), atol=1e-4)
 
     def test_mixed_rank_rejected(self):
         from soup_cli.utils.adapter_arithmetic import merge_task_arithmetic
@@ -605,6 +632,34 @@ class TestLisaCallback:
         ]
         for p in frozen_now:
             assert p not in opt.state or opt.state[p] == {}
+
+    def test_is_real_trainer_callback_subclass(self):
+        # CRITICAL: HF dispatches every event via getattr(cb, event) with no
+        # hasattr guard, so LisaCallback must inherit TrainerCallback's no-op
+        # stubs or training crashes on on_epoch_begin.
+        from transformers import TrainerCallback
+
+        from soup_cli.utils.lisa import LisaCallback, LisaPolicy
+
+        cb = LisaCallback(LisaPolicy(num_layers=1, interval_steps=5))
+        assert isinstance(cb, TrainerCallback)
+        # a non-overridden event exists and is callable (inherited no-op)
+        assert callable(cb.on_epoch_begin)
+
+    def test_no_decoder_layers_raises(self):
+        import torch.nn as nn
+
+        from soup_cli.utils.lisa import LisaCallback, LisaPolicy
+
+        class NoLayers(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.embed_tokens = nn.Embedding(4, 4)
+                self.lm_head = nn.Linear(4, 4)
+
+        cb = LisaCallback(LisaPolicy(num_layers=1, interval_steps=5))
+        with pytest.raises(RuntimeError, match="decoder layer"):
+            cb.on_train_begin(None, _State(0), None, model=NoLayers())
 
     def test_no_top_level_torch(self):
         import soup_cli.utils.lisa as mod

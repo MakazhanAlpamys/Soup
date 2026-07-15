@@ -165,15 +165,39 @@ def parse_expression(expr: str, known_names: set[str]) -> list[TaskTerm]:
     return terms
 
 
+def _factor_coeff(name: str, c: float) -> float:
+    """Per-factor coefficient so the reconstructed delta scales *linearly*.
+
+    A LoRA contributes ``ΔW = B @ A``. Applying the raw coefficient ``c`` to
+    both ``lora_A`` and ``lora_B`` would scale ``ΔW`` by ``c²`` (so negation is
+    a no-op and 0.5·adapter halves twice). Instead split the magnitude as
+    ``√|c|`` across both factors and carry the sign on ``lora_B`` only, so the
+    self (diagonal) term of the reconstruction is exactly ``c·B@A``
+    (``√|c| · sign(c)√|c| = c``). Mirrors PEFT's ``combination_type='linear'``
+    task-arithmetic. Non-LoRA tensors (biases / direct deltas) scale linearly
+    by ``c``.
+    """
+    lname = name.lower()
+    if "lora_a" in lname or "lora_embedding_a" in lname:
+        return math.sqrt(abs(c))
+    if "lora_b" in lname or "lora_embedding_b" in lname:
+        return math.copysign(math.sqrt(abs(c)), c)
+    return float(c)
+
+
 def merge_task_arithmetic(
     weights_list: Sequence[Mapping[str, Any]],
     coeffs: Sequence[float],
 ) -> tuple[dict[str, Any], tuple[str, ...]]:
-    """Signed, un-normalized element-wise ``out[k] = Σ cᵢ·tensorᵢ[k]``.
+    """Signed task-vector combine over the intersection of tensor names.
 
-    Operates over the intersection of tensor names; names present in only some
-    adapters are reported in ``skipped``. A shape mismatch on a *shared* name is
-    a rank mismatch and raises (same-rank contract).
+    Per adapter ``i`` and tensor ``k`` the effective factor coefficient is
+    :func:`_factor_coeff` of ``coeffs[i]`` so that the reconstructed LoRA delta
+    ``B_out @ A_out`` scales linearly with each coefficient (negation flips the
+    delta, ``0.5·`` halves it — not the ``c²`` a naive element-wise sum gives).
+    Names present in only some adapters are reported in ``skipped``. A shape
+    mismatch on a *shared* name is a rank mismatch and raises (same-rank
+    contract).
     """
     import numpy as np
 
@@ -202,7 +226,7 @@ def merge_task_arithmetic(
             )
         acc = np.zeros_like(tensors[0])
         for c, t in zip(coeffs, tensors):
-            acc += float(c) * t
+            acc += _factor_coeff(name, float(c)) * t
         merged[name] = acc.astype(np.float32)
 
     skipped = tuple(sorted(all_keys - shared))
