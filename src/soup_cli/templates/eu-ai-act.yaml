@@ -1,0 +1,45 @@
+# Soup compliance template: EU AI Act (Annex XI/XII technical documentation)
+# Starting point for fine-tuning a model destined for the EU market.
+#
+# This file is a normal training config — the compliance controls are Soup
+# CLI flags/commands, not config keys. Run them around your training:
+#
+#   1. Clean the training data (Annex XI data-governance obligations):
+#        soup data decontaminate ./data/train.jsonl # drop public-benchmark overlap
+#        soup data pii ./data/train.jsonl           # flag personal data
+#
+#   2. Auto-generate the Annex XI/XII technical documentation + measure energy:
+#        soup train --config soup.yaml \
+#            --annex-xi annex_xi.md \                # or annex_xi.pdf (pip install 'soup-cli[pdf]')
+#            --track-energy --energy-country DEU \   # codecarbon (pip install 'soup-cli[carbon]')
+#            --energy-out energy.json
+#
+#   3. Fold the measured energy into the ML-BOM (transparency):
+#        soup bom emit --name model --base-sha <hex> --config-sha <hex> \
+#            --energy energy.json --format both
+#
+#   4. The audit log is ON by default (record-keeping obligations):
+#        soup audit-log tail
+#
+# License note: use a license-clean base for EU deployments (Apache-2.0 below).
+
+base: Qwen/Qwen2.5-7B-Instruct
+task: sft
+
+data:
+  train: ./data/train.jsonl
+  format: alpaca
+  val_split: 0.1
+  max_length: 2048
+
+training:
+  epochs: 3
+  lr: 2e-5
+  batch_size: auto
+  lora:
+    r: 64
+    alpha: 16
+    target_modules: auto
+  quantization: 4bit
+
+output: ./output

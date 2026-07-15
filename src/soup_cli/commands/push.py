@@ -66,6 +66,15 @@ def push(
             "Collections / model-card auto-render path (v0.53.10 #152)."
         ),
     ),
+    card: Optional[str] = typer.Option(
+        None,
+        "--card",
+        help=(
+            "Registry entry id / prefix / name:tag — render its provenance-rich "
+            "model card (via `soup card`) and upload it as README.md, overriding "
+            "the auto-generated card (v0.71.35). HF hub only."
+        ),
+    ),
 ):
     """Push a trained model to HuggingFace Hub (or alternate hub)."""
     # v0.53.10 #152 — validate hub at the CLI boundary; only HF is the
@@ -163,6 +172,26 @@ def push(
     )
 
     # --- Upload ---
+    # v0.71.35 — --card renders a provenance-rich card from a registry entry
+    # and uploads it as README.md (HF only). Resolve it up front so a bad ref
+    # fails fast, before any network upload.
+    card_override: Optional[str] = None
+    if card:
+        if hub_canonical != "hf":
+            console.print("[yellow]--card is HF-only; ignoring for non-HF hub.[/]")
+        else:
+            from rich.markup import escape
+
+            from soup_cli.commands.card import CardError, build_card_for_ref
+
+            try:
+                card_override = build_card_for_ref(card)
+            except CardError as exc:
+                # escape: an AmbiguousRefError message embeds registry-derived
+                # entry names (v0.71.35 security review).
+                console.print(f"[red]--card: {escape(str(exc))}[/]")
+                raise typer.Exit(1) from exc
+
     # v0.53.10 #152 — non-HF hubs route through utils.hubs.upload_repo
     # before we reach the HF-specific Collections / model-card auto-render
     # path. Each backend lazy-imports its own SDK; missing-dep surfaces
@@ -216,10 +245,18 @@ def push(
             commit_message=commit_message,
         )
 
-        # Generate and upload model card if not present (v2 — includes
-        # training config and optional eval scorecard)
+        # Model card: --card <ref> overrides with a registry-driven card;
+        # otherwise fall back to the path-based v2 card when README is absent
+        # (v2 — includes training config and optional eval scorecard).
         readme_path = model_path / "README.md"
-        if not readme_path.exists():
+        if card_override is not None:
+            api.upload_file(
+                path_or_fileobj=card_override.encode("utf-8"),
+                path_in_repo="README.md",
+                repo_id=repo,
+                commit_message="Add model card (soup card)",
+            )
+        elif not readme_path.exists():
             model_card = generate_model_card_v2(
                 model_path, repo_id=repo, is_adapter=is_adapter,
             )
@@ -327,13 +364,19 @@ def _load_training_config(model_path: Path) -> dict:
     return {}
 
 
-_UNSAFE_MD_CHARS = re.compile(r"[\|\[\]\(\)!\n\r\t<>]")
+_UNSAFE_MD_CHARS = re.compile(r"[\|\[\]\(\)!\n\r\t<>`]")
 
 
 def _safe_md_cell(value: str) -> str:
     """Neutralise Markdown-active chars so ``value`` cannot inject table rows,
-    links, images, or raw HTML when rendered on HF Hub."""
-    return _UNSAFE_MD_CHARS.sub(" ", str(value)).strip()
+    links, images, raw HTML, or break out of a code span when rendered on HF Hub.
+
+    Also strips C0/ESC control bytes (v0.71.35 security review): the rendered
+    card is a file an operator may later ``cat``/``less``, where an embedded
+    ANSI/OSC sequence could manipulate the terminal.
+    """
+    text = "".join(ch for ch in str(value) if ord(ch) >= 0x20 or ch in "\n\r\t")
+    return _UNSAFE_MD_CHARS.sub(" ", text).strip()
 
 
 def _render_eval_scorecard(eval_scorecard: Optional[dict]) -> str:
@@ -353,20 +396,28 @@ def _render_eval_scorecard(eval_scorecard: Optional[dict]) -> str:
 
 
 def _render_training_section(training_cfg: dict) -> str:
+    """Render the ``## Training`` section.
+
+    Every interpolated value is passed through :func:`_safe_md_cell`
+    (v0.71.35 security review): ``base`` / ``scheduler`` have no charset
+    validator in ``SoupConfig``, so a crafted-but-schema-valid config could
+    otherwise smuggle raw markdown/HTML (or a backtick that breaks out of the
+    surrounding code span) into a card published to the HF Hub.
+    """
     if not training_cfg:
         return ""
-    task = training_cfg.get("task") or "sft"
+    task = _safe_md_cell(training_cfg.get("task") or "sft")
     training = training_cfg.get("training", {}) or {}
-    base = training_cfg.get("base") or ""
+    base = _safe_md_cell(training_cfg.get("base") or "")
     lines = ["## Training", "", f"- **Task:** {task}"]
     if base:
         lines.append(f"- **Base model:** `{base}`")
     for key in ("epochs", "lr", "batch_size", "optimizer", "scheduler"):
         if key in training:
-            lines.append(f"- **{key}:** {training[key]}")
+            lines.append(f"- **{key}:** {_safe_md_cell(training[key])}")
     recipe = training_cfg.get("recipe")
     if recipe:
-        lines.append(f"- **Recipe:** `{recipe}`")
+        lines.append(f"- **Recipe:** `{_safe_md_cell(recipe)}`")
     lines.append("")
     return "\n".join(lines)
 

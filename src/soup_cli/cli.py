@@ -21,7 +21,9 @@ from soup_cli.commands import (  # noqa: E402
     autopilot,
     bench,
     can,
+    card,
     chat,
+    ci,
     cost,
     data,
     deploy,
@@ -98,6 +100,8 @@ app.command()(cost.cost)
 app.command()(push.push)
 app.command(name="export")(export.export)
 app.command()(merge.merge)
+app.command(name="card")(card.card)
+app.add_typer(ci.app, name="ci", help="Fine-tuning CI: init a PR gate workflow.")
 app.add_typer(
     data.app, name="data",
     help="Dataset tools: inspect, convert, merge, dedup, validate, stats.",

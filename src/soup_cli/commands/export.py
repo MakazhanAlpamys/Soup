@@ -9,6 +9,7 @@ from typing import Optional
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 
 console = Console()
@@ -404,6 +405,36 @@ def _merge_adapter(
     console.print("[green]Adapter merged successfully.[/]")
 
 
+# llama.cpp's own requirements.txt pins `torch~=2.2.1` against the CPU wheel
+# index plus an old `transformers`. Installing it into the user's interpreter
+# silently DOWNGRADES a CUDA torch to CPU-only and breaks their training setup
+# (observed live on Windows during the v0.71.35 GGUF validation: torch
+# 2.5.1+cu -> 2.2.2+cpu, transformers 4.57 -> 4.46). Soup's `[train]` extra
+# already provides torch / transformers / numpy, so install ONLY the extra
+# packages the convert script needs, unpinned, and never touch the rest.
+_CONVERT_EXTRA_DEPS = ("gguf", "sentencepiece", "protobuf")
+
+
+def _install_convert_deps() -> None:
+    """Install the convert script's extra deps without disturbing torch."""
+    try:
+        subprocess.run(
+            [sys.executable, "-m", "pip", "install", "-q", *_CONVERT_EXTRA_DEPS],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError) as exc:
+        # Non-fatal: the user may already have them, or manage deps themselves.
+        detail = getattr(exc, "stderr", "") or type(exc).__name__
+        console.print(
+            "[yellow]Could not auto-install the GGUF convert dependencies "
+            f"({', '.join(_CONVERT_EXTRA_DEPS)}).[/]\n"
+            f"[dim]{escape(str(detail)[:200])}[/]\n"
+            "Install them manually if the conversion fails."
+        )
+
+
 def _find_llama_cpp(user_path: Optional[str] = None) -> Path:
     """Find or clone llama.cpp directory."""
     from soup_cli.utils.constants import SOUP_DIR
@@ -426,7 +457,12 @@ def _find_llama_cpp(user_path: Optional[str] = None) -> Path:
             return path
 
     # 3. Check ~/.soup/llama.cpp
-    soup_llama = Path(SOUP_DIR) / LLAMA_CPP_DIR_NAME
+    # SOUP_DIR is a bare name (".soup"), so it MUST be anchored to the home
+    # directory the way tracker.py / registry/store.py do. Using it relatively
+    # made the lookup cwd-dependent: llama.cpp was never found in the canonical
+    # ~/.soup, and the auto-clone dropped a fresh ~200 MB checkout into whatever
+    # directory the user happened to run from (v0.71.35 GGUF validation).
+    soup_llama = Path.home() / SOUP_DIR / LLAMA_CPP_DIR_NAME
     if soup_llama.exists() and (soup_llama / "convert_hf_to_gguf.py").exists():
         return soup_llama
 
@@ -442,15 +478,7 @@ def _find_llama_cpp(user_path: Optional[str] = None) -> Path:
             capture_output=True,
             text=True,
         )
-        # Install Python requirements for the convert script
-        requirements = soup_llama / "requirements.txt"
-        if requirements.exists():
-            subprocess.run(
-                [sys.executable, "-m", "pip", "install", "-r", str(requirements), "-q"],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
+        _install_convert_deps()
         console.print("[green]llama.cpp cloned successfully.[/]")
         return soup_llama
     except subprocess.CalledProcessError as exc:
@@ -505,6 +533,14 @@ def _run_quantize(llama_dir: Path, input_path: Path, output_path: Path, quant_ty
         raise typer.Exit(1)
 
 
+# MSVC / Xcode are multi-config generators: they nest binaries under a
+# per-configuration subdirectory (build/bin/Release/llama-quantize.exe) rather
+# than the flat build/bin/ that single-config generators (Make/Ninja) produce.
+# Without these, `soup export --format gguf` cannot find a correctly-built
+# llama.cpp on Windows (v0.71.35 GGUF-on-Windows validation, #70/#144).
+_CMAKE_CONFIG_DIRS = ("Release", "RelWithDebInfo", "MinSizeRel", "Debug")
+
+
 def _find_quantize_binary(llama_dir: Path) -> Optional[Path]:
     """Find the llama-quantize binary."""
     # Check common locations
@@ -515,6 +551,11 @@ def _find_quantize_binary(llama_dir: Path) -> Optional[Path]:
         llama_dir / "llama-quantize.exe",
         llama_dir / "build" / "llama-quantize",
     ]
+    # Multi-config generator layouts (MSVC on Windows, Xcode on macOS).
+    for config in _CMAKE_CONFIG_DIRS:
+        candidates.append(llama_dir / "build" / "bin" / config / "llama-quantize")
+        candidates.append(llama_dir / "build" / "bin" / config / "llama-quantize.exe")
+        candidates.append(llama_dir / "build" / config / "llama-quantize.exe")
     for candidate in candidates:
         if candidate.exists():
             return candidate

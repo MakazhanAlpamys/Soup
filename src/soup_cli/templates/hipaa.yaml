@@ -1,0 +1,46 @@
+# Soup compliance template: HIPAA (Protected Health Information)
+# Starting point for fine-tuning on health data under HIPAA safeguards.
+#
+# This file is a normal training config — the compliance controls are Soup
+# CLI flags/commands, not config keys. Run them around your training:
+#
+#   1. Scrub PHI BEFORE training (keep raw PHI off the training box):
+#        soup data pii ./data/train.jsonl          # flag emails / phones / SSNs / MRNs
+#        soup data decontaminate ./data/train.jsonl # drop public-benchmark overlap
+#
+#   2. The HIPAA/SOC2 audit log is ON by default (do NOT pass --no-audit-log):
+#        soup audit-log tail                        # review the per-command trail
+#
+#   3. Train with a reproducibility receipt (who/what/when, SR 11-7 style):
+#        soup train --config soup.yaml --repro-receipt receipt.json
+#
+#   4. Prove provenance + integrity of the artifact you ship:
+#        soup bom emit --name phi-model --base-sha <hex> --config-sha <hex> --format both
+#        soup adapters sign ./output --backend ed25519 --generate-key key.pem
+#        soup attest emit --stage train --subject phi-model --sha <hex> --sign ed25519 --key key.pem
+#
+#   5. Move the model across a data diode without exposing PHI:
+#        soup airgap-bundle --model ./output --output phi-model.tar --repro-receipt receipt.json
+#
+# License note: use a license-clean base for regulated deployments (Apache-2.0 below).
+
+base: Qwen/Qwen2.5-7B-Instruct
+task: sft
+
+data:
+  train: ./data/train.jsonl
+  format: alpaca
+  val_split: 0.1
+  max_length: 2048
+
+training:
+  epochs: 3
+  lr: 2e-5
+  batch_size: auto
+  lora:
+    r: 64
+    alpha: 16
+    target_modules: auto
+  quantization: 4bit
+
+output: ./output

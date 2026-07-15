@@ -49,18 +49,28 @@ infrastructure instead of improving models. Soup fixes that.
 
 ## What's New
 
-**v0.71.34 — adapter algebra + LISA.** Compose fine-tunes like vectors, and train big-model quality on a small-model memory budget.
+**v0.71.35 — the compliance pack.** Ship a regulated fine-tune with the paperwork it needs: start from a regulation-shaped config, publish a provenance-carrying model card, and gate every PR in CI.
 
-- **`soup adapters arithmetic "coder + 0.5*math - toxic"`.** Task-vector algebra over LoRA
-  adapters (arXiv:2212.04089) — **add, scale, and NEGATE** trained behaviours into one merged
-  adapter. The math is done right: a LoRA's effective delta `ΔW = B·A` scales *linearly* with
-  each coefficient (subtracting an adapter actually removes its behaviour), not quadratically.
-  Same-base + backdoor-scan gated; mixed ranks refused with a clear message.
-- **LISA — layerwise importance sampling (`training.lisa_enabled`).** Full-fine-tuning quality
-  at LoRA-like memory (arXiv:2403.17919): every N steps LISA re-activates a small random set of
-  decoder layers (embeddings + head always on) and freezes the rest. Live on a 4 GB GPU.
-- **Verified on real models (RTX 3050).** LISA trains SmolLM2-135M end-to-end; `2·a` produces an
-  adapter whose ΔW is *exactly* 2× the original's — the merged adapter loads and serves.
+- **`soup init --template hipaa|soc2|eu-ai-act|sr-11-7`.** Four regulation-shaped starting
+  configs, each documenting the exact commands for that regime — PHI scrubbing + air-gap,
+  BOM/attest/sign, EU Annex XI + energy tracking, or repro-receipt + diagnose/ship.
+- **`soup card <registry-id>` → `MODELCARD.md`.** Turn a registry entry into a publishable HF
+  model card: training config, eval scorecard, config/data hashes, lineage, and every
+  registered artifact. `soup push --card` uploads it as the README, so every public push
+  carries its provenance.
+- **`soup ci init` — fine-tuning CI.** Writes a GitHub Actions gate that runs
+  `data validate` → `expect` → `ship --evidence` on each PR; a regression exits 2 and
+  blocks the merge.
+- **Compliance quickstart** ([docs/compliance.md](docs/compliance.md)) — the whole path from
+  template to air-gapped, signed, attested, carded model.
+- **GGUF export fixed on Windows.** Validated end-to-end for the first time (SmolLM2 →
+  q4_0/q4_k_m/q8_0/f16 → Ollama → live inference), which surfaced four real bugs: the export
+  cloned llama.cpp into your *current directory*, its first run **downgraded your PyTorch to
+  CPU-only** (breaking CUDA), a correctly-built llama.cpp wasn't found under MSVC, and
+  `deploy ollama` rejected relative GGUF paths. All fixed.
+- **Hardening:** the model-card generator (including the existing `soup push` card) no longer
+  interpolates unescaped config values — a crafted `base`/`scheduler` can't smuggle HTML into
+  a card published on the Hub.
 
 ```bash
 soup adapters arithmetic "coder - toxic" \

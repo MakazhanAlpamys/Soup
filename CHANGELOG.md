@@ -12,6 +12,65 @@ reproducing 70+ versions of notes.
 
 ## [Unreleased]
 
+## [0.71.35] - 2026-07-15
+
+### Added
+- **Compliance templates — `soup init --template hipaa|soc2|eu-ai-act|sr-11-7`.**
+  Four regulation-shaped starting configs. Soup's compliance controls are CLI
+  flags/commands rather than config keys, so each template is a valid training
+  config plus header comments naming the exact commands for that regime
+  (PHI scrubbing + air-gap for HIPAA, BOM/attest/sign for SOC 2, Annex XI +
+  energy tracking for the EU AI Act, repro-receipt + diagnose/ship for SR 11-7).
+  Templates default to a license-clean Apache-2.0 base.
+- **`soup card <registry-id> -o MODELCARD.md` — model-card autogen.** Turns a
+  Local Model Registry entry into a publishable, provenance-carrying HF model
+  card: base model, training config, eval scorecard, config/data hashes,
+  lineage (ancestors) and a table of every registered artifact. Adapter vs
+  full-model is inferred from registered artifacts, falling back to the training
+  config (LoRA rank, with Spectrum/LISA full-FT correctly treated as dense), so
+  the card sets the right `library_name` and never misreports the model type.
+- **`soup push --card <registry-id>`** — render that registry-driven card and
+  upload it as `README.md`, overriding the auto-generated one. A bad ref fails
+  fast before any network call; HF hub only.
+- **`soup ci init` — fine-tuning CI.** Writes `.github/workflows/soup-gate.yml`,
+  a PR gate chaining `soup data validate` → `soup expect` →
+  `soup ship --evidence` (exit 2 blocks the merge). Every interpolated path is
+  validated to stay under the repo root and shell-quoted; the branch and Python
+  version are regex-gated; the write is atomic, symlink-rejecting, and refuses
+  to clobber an existing workflow without `--force`.
+- **Compliance quickstart** — a new [docs/compliance.md](docs/compliance.md)
+  walkthrough: template → PII scrub → train with receipt/Annex XI/energy →
+  registry → BOM + attestation → scan/sign/verify → air-gap → model card → CI gate.
+
+### Fixed
+- **GGUF export now actually works on Windows** (validated end-to-end against a
+  locally-built llama.cpp: SmolLM2-135M → q4_0 / q4_k_m / q8_0 / f16 → `soup deploy
+  ollama` → live inference). Four real bugs, each of which independently broke the
+  path:
+  - **`soup export --format gguf` cloned llama.cpp into your current directory.**
+    `SOUP_DIR` is the bare name `.soup`, but the lookup used it relatively rather
+    than anchoring to `~` like the rest of the codebase — so the canonical
+    `~/.soup/llama.cpp` was never found and a fresh ~200 MB checkout was dropped
+    into whatever directory you ran from.
+  - **The first GGUF export downgraded your PyTorch and broke CUDA.** The auto-clone
+    ran `pip install -r <llama.cpp>/requirements.txt` into your interpreter, and
+    llama.cpp pins `torch~=2.2.1` against the CPU wheel index (observed:
+    torch 2.5.1+cu → 2.2.2+cpu, transformers 4.57 → 4.46). Soup now installs only
+    the convert script's extra dependencies, unpinned, and never touches torch.
+  - **A correctly-built llama.cpp was not found on Windows.** MSVC (like Xcode) is a
+    multi-config generator and emits `build/bin/Release/llama-quantize.exe`; only the
+    flat single-config layout was searched.
+  - **`soup deploy ollama` failed on a relative GGUF path** with "pull model manifest:
+    file does not exist" — Ollama resolves `FROM` against the Modelfile's directory,
+    and Soup writes the Modelfile to a temp dir. The Modelfile now emits an absolute path.
+- **Model-card injection hardening (affects the pre-existing `soup push` card too).**
+  The `## Training` section interpolated `base` / `task` / `scheduler` / `recipe`
+  unescaped. Since `SoupConfig.base` and `scheduler` have no charset validator, a
+  crafted-but-valid config could smuggle raw HTML — or a backtick breaking out of
+  the surrounding code span — into a card published to the Hub. All values now go
+  through the markdown escaper, which additionally neutralises backticks and
+  strips C0/ESC control bytes.
+
 ## [0.71.34] - 2026-07-15
 
 ### Added
