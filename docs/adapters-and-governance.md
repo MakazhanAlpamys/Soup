@@ -270,6 +270,12 @@ soup adapters merge ./run-v17 ./run-v18 ./run-v19 -o ./merged --strategy ties \
 soup adapters merge ./run-v17 ./run-v18 -o ./merged --strategy dare \
   --density 0.5 --seed 42
 
+# Task-vector arithmetic (v0.71.34) — add / scale / NEGATE trained behaviours
+# into one adapter (arXiv:2212.04089). Names map to dirs via --adapter name=path.
+soup adapters arithmetic "coder + 0.5*math - toxic" \
+  --adapter coder=./coder-lora --adapter math=./math-lora \
+  --adapter toxic=./toxic-lora -o ./blended
+
 # Leave-one-out ablation plan against a 4-hour wall-clock budget
 soup adapters blame ./run-v18 --dataset train.jsonl --layer q_proj.7 \
   --budget 4h --shards 10 --plan-only
@@ -313,6 +319,8 @@ soup adapters branches
 **v0.66.0:** `soup adapters blame` is now LIVE — the v0.57 `NotImplementedError` stub (#171) is lifted via a DataInf-style influence-function approximation. Pass `--top-k 50` to control the reported top-influencer count; pass a real `probe_fn` (Python API) to feed real gradients, or use the default deterministic synthetic probe for offline planning.
 
 **v0.71.4:** the merge verdict is now LIVE — `soup adapters merge … --canary suite.json` lifts the `MergeReport.verdict` `UNKNOWN` stub. A pre-scored `{"baseline_scores","candidate_scores"}` suite classifies the blend OK / MINOR / MAJOR with no model load; a `{"tasks":[...]}` suite uses an injectable scorer. `--strict-verdict` exits 2 on MAJOR. The backdoor-scan and license-conflict gates now run for **every** strategy, including `cmaes`. `soup adapters branch <name> --from-registry <id>` / `--attach-to-registry <id>` link training-env snapshots into the Registry lineage DAG (shown as a `branches` node in `soup history`).
+
+**v0.71.34 — task-vector arithmetic.** `soup adapters arithmetic "<expr>"` applies task arithmetic (arXiv:2212.04089) to LoRA deltas: **add** (blend two skills), **scale** (`2*coder`), and — the differentiator — **negate** (`- toxic` removes a behaviour). Names in the expression map to adapter dirs via repeatable `--adapter name=path`. The math is done at the effective-delta level: a LoRA contributes `ΔW = B·A`, so the coefficient is applied so that `ΔW` scales **linearly** (subtracting an adapter actually negates its delta — a naïve element-wise sum would scale by `c²`, making negation a no-op). Adapters must share the base model (`--allow-cross-base` to override) and rank (mixed ranks are refused, not silently approximated). Each input passes the v0.71.2 backdoor-scan gate (`--allow-unscanned` to skip). Output is a single loadable adapter; exit 0 = ok, 1 = refusal.
 
 
 ## Soup Cans (Shareable Recipes)

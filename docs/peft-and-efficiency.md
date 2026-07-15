@@ -380,6 +380,25 @@ training:
 
 Works with and without LoRA. When used with LoRA, LoRA is applied only to unfrozen layers.
 
+## LISA — Layerwise Importance Sampling (v0.71.34)
+
+LISA (Layerwise Importance Sampled AdamW, [arXiv:2403.17919](https://arxiv.org/abs/2403.17919)) targets full-fine-tuning quality at LoRA-like memory. Instead of picking layers once (that's Spectrum's static `unfrozen_parameters`), LISA re-samples a small random set of decoder layers **every N steps** and freezes the rest; the input embeddings, the LM head, and the final norm stay trainable throughout.
+
+```yaml
+task: sft
+backend: transformers
+modality: text
+training:
+  quantization: none      # LISA is full-FT of the active layers
+  lisa_enabled: true
+  lisa_num_layers: 2       # decoder layers active per interval (clamped to model depth)
+  lisa_interval_steps: 20  # re-sample cadence, in global steps
+```
+
+Because only a handful of layers train at any moment (and their optimizer state is cleared when they're re-frozen), peak optimizer memory is roughly `embeddings + head + lisa_num_layers` — far below a full fine-tune, while every layer still gets updated over the course of training. LISA is `sft` + `transformers` + `text` + `quantization: none` only, and is mutually exclusive with LoRA features, `freeze_layers`/`freeze_ratio`, and Spectrum's `unfrozen_parameters` (each independently decides what trains).
+
+Implementation note: the model is left fully trainable at trainer-setup time so HF's optimizer (built before the first callback fires) contains every decoder parameter; the LISA callback then toggles `requires_grad` per interval — frozen parameters produce no gradient and the optimizer skips them.
+
 
 ## Loss Watchdog
 

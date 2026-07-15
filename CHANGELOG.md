@@ -12,6 +12,27 @@ reproducing 70+ versions of notes.
 
 ## [Unreleased]
 
+## [0.71.34] - 2026-07-15
+
+### Added
+- **`soup adapters arithmetic` — task-vector algebra over LoRA adapters (add / scale / negate).**
+  Apply task arithmetic (arXiv:2212.04089) to LoRA deltas via an expression such as
+  `"coder + 0.5*math - toxic"`, mapping names to adapter dirs with repeatable
+  `--adapter name=path`. Produces one merged adapter you can serve or merge.
+  - Signed, un-normalized element-wise combine over same-rank adapters; the effective
+    delta `ΔW = B @ A` scales **linearly** with each coefficient (negation flips the
+    delta, `0.5·` halves it) via a √|c| factor split — not the `c²` a naive sum gives.
+    Mixed-rank inputs are refused with a clear "harmonize rank" message.
+  - Reuses the backdoor-scan gate (refuses a FAIL-scanned input unless `--allow-unscanned`)
+    and a same-base-model check (`--allow-cross-base` to override). Hand-written expression
+    parser (no `eval`), cwd-contained/symlink-rejecting paths, exit 0 = ok / 1 = refusal.
+- **LISA — Layerwise Importance Sampled AdamW (arXiv:2403.17919).** Full-fine-tuning
+  quality at LoRA-like memory: every N steps LISA freezes all decoder layers except a
+  small random set (embeddings + head always trainable). Enable with
+  `training.lisa_enabled: true` (+ `lisa_num_layers`, `lisa_interval_steps`) on a
+  `task: sft`, transformers, text, `quantization: none` run; mutually exclusive with
+  LoRA features and the other freeze mechanisms. Live on a 4 GB GPU for small models.
+
 ## [0.71.33] - 2026-07-13
 
 ### Added

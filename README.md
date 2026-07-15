@@ -49,45 +49,38 @@ infrastructure instead of improving models. Soup fixes that.
 
 ## What's New
 
-**v0.71.33 — `soup draft`: know whether speculative decoding is actually worth it.** Everyone tells you to bolt a draft model onto your server for a free speedup. Nobody tells you to *measure* it first. Now you can.
+**v0.71.34 — adapter algebra + LISA.** Compose fine-tunes like vectors, and train big-model quality on a small-model memory budget.
 
-- **`soup draft measure`.** Reports a draft's **acceptance rate** — the fraction of your target's
-  own greedy tokens the draft would have proposed correctly — plus **real plain-vs-assisted
-  tok/s**. Exit 0 / 2 (below `--min-acceptance`) / 1, so CI can gate on it.
-- **`soup draft distill`.** Distils your tuned target into a tiny draft base (logit KD over the
-  existing `task: distill` trainer) and emits a **dense** model, loadable straight as an
-  `assistant_model`.
-- **Auto-wired into serving.** Drafts land in a local registry that `soup serve --auto-spec`
-  consults *before* the built-in pairing table — so a draft you trained yourself just gets used.
-- **What the measurement actually told us (honestly).** On `SmolLM2-360M-Instruct` ←
-  `SmolLM2-135M-Instruct`: the stock draft already scored **69.3%**, and distilling it changed
-  nothing (69.7% at 2 epochs, 69.3% at 10). Assisted decoding was a **net slowdown** (0.55–0.64×).
-  A small same-family draft is already at its ceiling. **That negative result is the feature
-  working** — it's the number you want *before* you ship speculative decoding, not after.
-  Whether distillation pays off on a larger or genuinely diverged pair is unproven on a 4 GB box.
+- **`soup adapters arithmetic "coder + 0.5*math - toxic"`.** Task-vector algebra over LoRA
+  adapters (arXiv:2212.04089) — **add, scale, and NEGATE** trained behaviours into one merged
+  adapter. The math is done right: a LoRA's effective delta `ΔW = B·A` scales *linearly* with
+  each coefficient (subtracting an adapter actually removes its behaviour), not quadratically.
+  Same-base + backdoor-scan gated; mixed ranks refused with a clear message.
+- **LISA — layerwise importance sampling (`training.lisa_enabled`).** Full-fine-tuning quality
+  at LoRA-like memory (arXiv:2403.17919): every N steps LISA re-activates a small random set of
+  decoder layers (embeddings + head always on) and freezes the rest. Live on a 4 GB GPU.
+- **Verified on real models (RTX 3050).** LISA trains SmolLM2-135M end-to-end; `2·a` produces an
+  adapter whose ΔW is *exactly* 2× the original's — the merged adapter loads and serves.
+
+```bash
+soup adapters arithmetic "coder - toxic" \
+  --adapter coder=./coder-lora --adapter toxic=./toxic-lora -o ./cleaned
+
+soup train --config sft.yaml   # with training.lisa_enabled: true, lisa_num_layers: 2
+```
+
+<details>
+<summary>Previous release — v0.71.33, <code>soup draft</code> (measure speculative decoding)</summary>
+
+`soup draft measure` reports a draft model's **acceptance rate** + real plain-vs-assisted tok/s
+(exit 0/2/1 for CI); `soup draft distill` distils your target into a dense tiny draft, auto-wired
+into `soup serve --auto-spec`. The honest result on a small same-family pair: distillation didn't
+move acceptance (69.3% → 69.3%) and assisted decoding was a net slowdown — which is exactly the
+number you want *before* shipping speculative decoding.
 
 ```bash
 soup draft measure --target ./my-tuned-model --draft HuggingFaceTB/SmolLM2-135M-Instruct \
   --prompts prod-prompts.jsonl        # -> acceptance %, real tok/s, ship-or-not
-```
-
-<details>
-<summary>Previous release — v0.71.32, ASR fine-tuning (Whisper)</summary>
-
-Fine-tune Whisper on your accent or domain, locally: `task='asr'` (`AsrTrainerWrapper` over HF
-`Seq2SeqTrainer` + `WhisperProcessor`), `soup infer --task asr` with per-row + corpus **WER/CER**,
-pure-python metrics in `soup_cli.utils.asr_metrics`, and 4 new recipes (catalog 138 → 142).
-whisper-tiny (39M) / base (74M) train on a 4 GB GPU.
-
-```yaml
-base: openai/whisper-tiny
-task: asr
-data:
-  format: asr            # rows: {"audio": "clip.wav", "text": "hello world"}
-  audio_dir: ./data/audio
-training:
-  asr_language: en
-  asr_lora: true         # optional; default = full fine-tune
 ```
 
 </details>
