@@ -711,7 +711,7 @@ def arithmetic(
     Exit 0 = success, 1 = any refusal (bad expression, unknown adapter, rank
     mismatch, cross-base without --allow-cross-base, scan FAIL, path escape).
     """
-    import re as _re
+    import re
 
     from soup_cli.utils.adapter_arithmetic import (
         ArithmeticReport,
@@ -724,7 +724,7 @@ def arithmetic(
     from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
 
     # 1. Parse the --adapter name=path map.
-    name_re = _re.compile(r"^[A-Za-z0-9_.\-]+$")
+    name_re = re.compile(r"^[A-Za-z0-9_.\-]+$")
     mapping: dict[str, str] = {}
     for spec in adapter:
         if "=" not in spec:

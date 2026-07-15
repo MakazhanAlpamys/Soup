@@ -20,7 +20,7 @@ import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping, Sequence, Set, Tuple
+from typing import Any, Mapping, Sequence
 
 _MAX_EXPR_LEN = 4096
 _MAX_TERMS = 64
@@ -43,14 +43,14 @@ class ArithmeticReport:
     """Result of a ``soup adapters arithmetic`` run."""
 
     expression: str
-    terms: Tuple[TaskTerm, ...]
+    terms: tuple[TaskTerm, ...]
     output_dir: str
     merged_layers: int
-    skipped_layers: Tuple[str, ...]
+    skipped_layers: tuple[str, ...]
     base_model: str | None
 
 
-def parse_expression(expr: str, known_names: Set[str]) -> list[TaskTerm]:
+def parse_expression(expr: str, known_names: set[str]) -> list[TaskTerm]:
     """Parse a task-arithmetic expression into signed ``TaskTerm``s.
 
     Grammar (NO ``eval``): ``expr := term (('+'|'-') term)*`` where
@@ -168,7 +168,7 @@ def parse_expression(expr: str, known_names: Set[str]) -> list[TaskTerm]:
 def merge_task_arithmetic(
     weights_list: Sequence[Mapping[str, Any]],
     coeffs: Sequence[float],
-) -> Tuple[dict[str, Any], Tuple[str, ...]]:
+) -> tuple[dict[str, Any], tuple[str, ...]]:
     """Signed, un-normalized element-wise ``out[k] = Σ cᵢ·tensorᵢ[k]``.
 
     Operates over the intersection of tensor names; names present in only some

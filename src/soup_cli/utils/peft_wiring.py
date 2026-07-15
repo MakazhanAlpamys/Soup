@@ -88,11 +88,15 @@ def attach_lisa_callback(trainer: Any, tcfg: Any) -> bool:
         return False
     from soup_cli.utils.lisa import LisaCallback, LisaPolicy
 
+    # Read schema fields directly (they are guaranteed to exist on
+    # TrainingConfig) so a misnamed attr fails loudly — mirrors
+    # attach_relora_callback. seed is a fixed 0 (LISA reproducibility does not
+    # need a user knob today; add a schema field if that changes).
     policy = LisaPolicy(
         num_layers=int(tcfg.lisa_num_layers),
         interval_steps=int(tcfg.lisa_interval_steps),
-        reset_optimizer=bool(getattr(tcfg, "lisa_reset_optimizer", True)),
-        seed=int(getattr(tcfg, "seed", 0) or 0),
+        reset_optimizer=bool(tcfg.lisa_reset_optimizer),
+        seed=0,
     )
     trainer.add_callback(LisaCallback(policy=policy))
     return True

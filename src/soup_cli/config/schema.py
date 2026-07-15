@@ -2795,10 +2795,18 @@ class TrainingConfig(BaseModel):
         default=20, ge=1, le=1_000_000,
         description="LISA: re-sample the active decoder layers every N global steps.",
     )
+    lisa_reset_optimizer: bool = Field(
+        default=True,
+        description=(
+            "Clear optimizer state for decoder layers that LISA re-freezes on "
+            "each interval (avoids stale Adam moments). Mirrors "
+            "relora_reset_optimizer."
+        ),
+    )
 
     @field_validator("lisa_num_layers", "lisa_interval_steps", mode="before")
     @classmethod
-    def _validate_lisa_ints(cls, v):
+    def _validate_lisa_ints(cls, v: Any) -> Any:
         """v0.71.34 #267 — reject bool-as-int (bool subclasses int). Mirrors the
         v0.41.0 ``expand_layers`` / v0.50.0 GRPO numeric-field policy."""
         if isinstance(v, bool):
@@ -4362,11 +4370,14 @@ class SoupConfig(BaseModel):
         if not tcfg.lisa_enabled:
             # Footgun: a non-default lisa_* while LISA is off almost certainly
             # means the user forgot lisa_enabled=true.
-            if tcfg.lisa_num_layers != 2 or tcfg.lisa_interval_steps != 20:
+            if (
+                tcfg.lisa_num_layers != 2
+                or tcfg.lisa_interval_steps != 20
+                or tcfg.lisa_reset_optimizer is not True
+            ):
                 raise ValueError(
-                    "training.lisa_num_layers / lisa_interval_steps set but "
-                    "lisa_enabled is false — set lisa_enabled=true to use LISA "
-                    "layer sampling."
+                    "training.lisa_* set but lisa_enabled is false — set "
+                    "lisa_enabled=true to use LISA layer sampling."
                 )
             return self
         if self.task != "sft":

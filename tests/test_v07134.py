@@ -419,6 +419,26 @@ class TestLisaSchema:
         with pytest.raises(Exception, match="lisa_enabled"):
             _load(y)
 
+    def test_reset_optimizer_default_and_footgun(self):
+        cfg = _load(_LISA_BASE)
+        assert cfg.training.lisa_reset_optimizer is True
+        # setting it non-default while LISA is off is a footgun
+        y = """
+base: HuggingFaceTB/SmolLM2-135M
+task: sft
+backend: transformers
+modality: text
+data:
+  train: data.jsonl
+  format: chatml
+training:
+  quantization: none
+  lisa_enabled: false
+  lisa_reset_optimizer: false
+"""
+        with pytest.raises(Exception, match="lisa_enabled"):
+            _load(y)
+
     @pytest.mark.parametrize(
         "extra,kw",
         [
