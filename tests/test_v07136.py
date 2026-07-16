@@ -2495,3 +2495,79 @@ class TestTrainReplayFlags:
         cfg = self._cfg()
         _apply_replay_overrides(cfg, replay="old.jsonl", replay_ratio=0.2)
         assert cfg.data.replay is None, "input config must not be mutated"
+
+
+class TestNoTopLevelTorch:
+    """The light core must stay importable without the [train] extra.
+
+    v0.71.0 split the deps deliberately; a stray top-level `import torch`
+    in a data module would silently undo that for every `soup data ...`
+    user.
+    """
+
+    _BANNED = {"torch", "transformers", "peft"}
+
+    @pytest.mark.parametrize(
+        "module", ["semdedup", "topics", "canary", "rehearsal", "embed"]
+    )
+    def test_no_top_level_heavy_import(self, module):
+        import ast
+        import pathlib
+
+        import soup_cli
+
+        path = pathlib.Path(soup_cli.__file__).parent / "utils" / f"{module}.py"
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in tree.body:  # TOP LEVEL only — lazy imports are the point
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    assert alias.name.split(".")[0] not in self._BANNED, (
+                        f"{module}.py imports {alias.name} at top level"
+                    )
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                assert node.module.split(".")[0] not in self._BANNED, (
+                    f"{module}.py imports from {node.module} at top level"
+                )
+
+    def test_the_guard_can_actually_fail(self):
+        """Guard the guard: prove the AST walk detects a top-level import."""
+        import ast
+
+        tree = ast.parse("import torch\n\ndef f():\n    import peft\n")
+        top = [
+            alias.name
+            for node in tree.body
+            if isinstance(node, ast.Import)
+            for alias in node.names
+        ]
+        assert "torch" in top, "walk must see a real top-level import"
+        assert "peft" not in top, "and must ignore a lazy one inside a function"
+
+    @pytest.mark.parametrize(
+        "module",
+        [
+            "soup_cli.utils.semdedup",
+            "soup_cli.utils.topics",
+            "soup_cli.utils.canary",
+            "soup_cli.utils.rehearsal",
+            "soup_cli.utils.embed",
+            "soup_cli.commands.data_topics",
+            "soup_cli.commands.data_canary",
+        ],
+    )
+    def test_module_imports_cleanly(self, module):
+        import importlib
+
+        assert importlib.import_module(module) is not None
+
+    def test_new_commands_are_registered(self):
+        """The CLI must actually expose what this release built."""
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        res = CliRunner(env={"COLUMNS": "200"}).invoke(app, ["data", "--help"])
+        assert res.exit_code == 0, (res.output, repr(res.exception))
+        cleaned = _clean(res.output)
+        assert "topics" in cleaned
+        assert "canary" in cleaned
