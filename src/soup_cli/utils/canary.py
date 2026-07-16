@@ -166,6 +166,10 @@ def _harden_permissions(path: str) -> None:
 def load_manifest(path: str) -> tuple[Canary, ...]:
     """Read a canary manifest written by :func:`write_manifest`."""
     safe = enforce_under_cwd_and_no_symlink(str(path), "manifest")
+    if not os.path.isfile(safe):
+        # Without this the caller surfaces a raw (locale-dependent) OS error
+        # from getsize — e.g. "[WinError 2] Не удается найти указанный файл".
+        raise ValueError(f"manifest not found: {path}")
     if os.path.getsize(safe) > _MAX_MANIFEST_BYTES:
         raise ValueError(
             f"manifest too large (max {_MAX_MANIFEST_BYTES} bytes)"

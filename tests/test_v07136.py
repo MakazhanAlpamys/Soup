@@ -1430,6 +1430,18 @@ class TestCanaryManifest:
                 generate_canaries(count=1, seed=0), str(tmp_path / "esc.json")
             )
 
+    def test_missing_manifest_is_a_friendly_message(self, tmp_path, monkeypatch):
+        """Not a raw locale-dependent OS error.
+
+        Live smoke surfaced "[WinError 2] Не удается найти указанный файл"
+        leaking straight through from os.path.getsize.
+        """
+        from soup_cli.utils.canary import load_manifest
+
+        monkeypatch.chdir(tmp_path)
+        with pytest.raises(ValueError, match="manifest not found"):
+            load_manifest("nope.json")
+
     def test_malformed_manifest_rejected(self, tmp_path, monkeypatch):
         from pathlib import Path
 
