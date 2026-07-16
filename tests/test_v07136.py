@@ -2266,3 +2266,152 @@ class TestMixReplay:
         )
         with pytest.raises(dataclasses.FrozenInstanceError):
             rep.n_replay = 99
+
+
+class TestLoaderReplay:
+    def _write(self, path, rows):
+        path.write_text(
+            "\n".join(json.dumps(r) for r in rows), encoding="utf-8"
+        )
+
+    def _chat(self, tag, count):
+        return [
+            {"messages": [
+                {"role": "user", "content": "q"},
+                {"role": "assistant", "content": f"{tag}{i}"},
+            ]}
+            for i in range(count)
+        ]
+
+    def _answers(self, rows):
+        return [r["messages"][-1]["content"] for r in rows]
+
+    def test_replay_mixed_into_train(self, tmp_path, monkeypatch):
+        from soup_cli.config.schema import DataConfig
+        from soup_cli.data.loader import load_dataset
+
+        monkeypatch.chdir(tmp_path)
+        self._write(tmp_path / "new.jsonl", self._chat("new", 90))
+        self._write(tmp_path / "old.jsonl", self._chat("old", 90))
+        cfg = DataConfig(
+            train="new.jsonl", replay="old.jsonl",
+            replay_ratio=0.1, replay_seed=0, val_split=0.0,
+        )
+        out = load_dataset(cfg)
+        answers = self._answers(out["train"])
+        assert sum(1 for a in answers if a.startswith("old")) == 10
+        assert len(out["train"]) == 100
+
+    def test_val_stays_pure_new_task(self, tmp_path, monkeypatch):
+        """Replay must NOT leak into val — it is the new-task yardstick."""
+        from soup_cli.config.schema import DataConfig
+        from soup_cli.data.loader import load_dataset
+
+        monkeypatch.chdir(tmp_path)
+        self._write(tmp_path / "new.jsonl", self._chat("new", 100))
+        self._write(tmp_path / "old.jsonl", self._chat("old", 100))
+        cfg = DataConfig(
+            train="new.jsonl", replay="old.jsonl",
+            replay_ratio=0.2, replay_seed=0, val_split=0.2,
+        )
+        out = load_dataset(cfg)
+        assert out["val"], "val must be non-empty for this test to mean anything"
+        assert all(
+            a.startswith("new") for a in self._answers(out["val"])
+        ), "val must contain no replay rows"
+
+    def test_no_replay_is_unchanged(self, tmp_path, monkeypatch):
+        from soup_cli.config.schema import DataConfig
+        from soup_cli.data.loader import load_dataset
+
+        monkeypatch.chdir(tmp_path)
+        self._write(tmp_path / "new.jsonl", self._chat("new", 10))
+        cfg = DataConfig(train="new.jsonl", val_split=0.0)
+        out = load_dataset(cfg)
+        assert len(out["train"]) == 10
+        assert self._answers(out["train"]) == [f"new{i}" for i in range(10)]
+
+    def test_replay_file_gets_its_own_format_detection(
+        self, tmp_path, monkeypatch
+    ):
+        """New data is chat, old data is alpaca -> both must normalize."""
+        from soup_cli.config.schema import DataConfig
+        from soup_cli.data.loader import load_dataset
+
+        monkeypatch.chdir(tmp_path)
+        self._write(tmp_path / "new.jsonl", self._chat("new", 90))
+        self._write(
+            tmp_path / "old.jsonl",
+            [
+                {"instruction": f"old-q{i}", "output": f"old{i}"}
+                for i in range(90)
+            ],
+        )
+        cfg = DataConfig(
+            train="new.jsonl", replay="old.jsonl",
+            replay_ratio=0.1, replay_seed=0, val_split=0.0,
+        )
+        out = load_dataset(cfg)
+        assert len(out["train"]) == 100
+        for row in out["train"]:
+            assert "messages" in row, (
+                "the alpaca replay file must be normalized via its OWN format "
+                "detection, not the new file's"
+            )
+        assert sum(
+            1 for a in self._answers(out["train"]) if a.startswith("old")
+        ) == 10
+
+    def test_missing_replay_file_raises(self, tmp_path, monkeypatch):
+        from soup_cli.config.schema import DataConfig
+        from soup_cli.data.loader import load_dataset
+
+        monkeypatch.chdir(tmp_path)
+        self._write(tmp_path / "new.jsonl", self._chat("new", 10))
+        cfg = DataConfig(train="new.jsonl", replay="nope.jsonl", val_split=0.0)
+        with pytest.raises((FileNotFoundError, ValueError), match="replay"):
+            load_dataset(cfg)
+
+    def test_replay_outside_cwd_rejected(self, tmp_path, monkeypatch):
+        from soup_cli.config.schema import DataConfig
+        from soup_cli.data.loader import load_dataset
+
+        work = tmp_path / "work"
+        work.mkdir()
+        self._write(work / "new.jsonl", self._chat("new", 10))
+        self._write(tmp_path / "old.jsonl", self._chat("old", 10))
+        monkeypatch.chdir(work)
+        cfg = DataConfig(
+            train="new.jsonl", replay=str(tmp_path / "old.jsonl"),
+            val_split=0.0,
+        )
+        with pytest.raises(ValueError, match="outside"):
+            load_dataset(cfg)
+
+    def test_shortfall_is_reported_not_upsampled(self, tmp_path, monkeypatch):
+        from soup_cli.config.schema import DataConfig
+        from soup_cli.data.loader import load_dataset
+
+        monkeypatch.chdir(tmp_path)
+        self._write(tmp_path / "new.jsonl", self._chat("new", 90))
+        self._write(tmp_path / "old.jsonl", self._chat("old", 3))
+        cfg = DataConfig(
+            train="new.jsonl", replay="old.jsonl",
+            replay_ratio=0.1, replay_seed=0, val_split=0.0,
+        )
+        out = load_dataset(cfg)
+        old = [a for a in self._answers(out["train"]) if a.startswith("old")]
+        assert len(old) == 3
+        assert len(set(old)) == 3, "rows must not be repeated"
+
+    def test_finalize_is_the_single_seam(self):
+        """All three load paths must route through _finalize, or replay
+        would silently apply to some datasets and not others."""
+        import inspect
+
+        from soup_cli.data import loader
+
+        source = inspect.getsource(loader)
+        assert source.count("def _finalize(") == 1
+        # local + remote + hf paths
+        assert source.count("_finalize(") >= 4
