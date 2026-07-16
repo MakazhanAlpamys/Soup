@@ -293,6 +293,44 @@ def _tokenize_pair(tokenizer: object, prompt: str, target: str, *, max_length: i
     )
 
 
+def compute_pair_losses(
+    model: object,
+    tokenizer: object,
+    pairs: Sequence[Tuple[str, str]],
+    *,
+    device: str,
+    max_length: int = 256,
+) -> List[float]:
+    """Per-pair masked cross-entropy, INDEX-ALIGNED with ``pairs``.
+
+    Unusable pairs (empty target span) and NaN losses yield ``nan`` in
+    place rather than being dropped. Callers that need per-item scores —
+    e.g. the v0.71.36 canary exposure probe, which ranks one canary's loss
+    against a control distribution — depend on that alignment;
+    :func:`compute_eval_loss` compacts the list and so cannot be used for
+    it.
+    """
+    _check_positive_int(max_length, "max_length")
+    import torch
+
+    out: List[float] = []
+    model.eval()
+    with torch.no_grad():
+        for prompt, target in pairs:
+            input_ids, labels = _tokenize_pair(
+                tokenizer, prompt, target, max_length=max_length
+            )
+            if (labels != -100).sum().item() == 0:
+                out.append(float("nan"))
+                continue
+            input_ids = input_ids.to(device)
+            labels = labels.to(device)
+            result = model(input_ids=input_ids, labels=labels)
+            loss = float(result.loss.item())
+            out.append(loss if loss == loss else float("nan"))  # nan-safe
+    return out
+
+
 def compute_eval_loss(
     model: object,
     tokenizer: object,
@@ -304,25 +342,15 @@ def compute_eval_loss(
     """Mean masked cross-entropy of ``model`` over (prompt, target) pairs.
 
     Returns ``float('nan')`` when no usable pair has a non-empty target span.
+    Thin mean over :func:`compute_pair_losses` — behaviour is unchanged.
     """
-    _check_positive_int(max_length, "max_length")
-    import torch
-
-    losses: List[float] = []
-    model.eval()
-    with torch.no_grad():
-        for prompt, target in pairs:
-            input_ids, labels = _tokenize_pair(
-                tokenizer, prompt, target, max_length=max_length
-            )
-            if (labels != -100).sum().item() == 0:
-                continue
-            input_ids = input_ids.to(device)
-            labels = labels.to(device)
-            out = model(input_ids=input_ids, labels=labels)
-            loss = float(out.loss.item())
-            if loss == loss:  # not NaN
-                losses.append(loss)
+    losses = [
+        value
+        for value in compute_pair_losses(
+            model, tokenizer, pairs, device=device, max_length=max_length
+        )
+        if value == value  # drop nan
+    ]
     if not losses:
         return float("nan")
     return sum(losses) / len(losses)

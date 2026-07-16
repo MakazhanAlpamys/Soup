@@ -1180,3 +1180,106 @@ class TestDataTopicsCli:
         )
         assert res.exit_code == 0, (res.output, repr(res.exception))
         assert "thin" in _clean(res.output).lower()
+
+
+class TestComputePairLosses:
+    """compute_eval_loss returns only the MEAN and silently compacts the
+    list, so a skipped pair shifts every later index. Canary exposure needs
+    per-item losses aligned to the input.
+    """
+
+    def _fake_torch_env(self, monkeypatch, loss_value=1.5):
+        from soup_cli.utils import live_eval
+
+        torch = pytest.importorskip("torch")
+
+        def _fake_tokenize(tokenizer, prompt, target, *, max_length):
+            if target == "":
+                return torch.tensor([[1]]), torch.tensor([[-100]])
+            return torch.tensor([[1, 2]]), torch.tensor([[-100, 2]])
+
+        monkeypatch.setattr(live_eval, "_tokenize_pair", _fake_tokenize)
+
+        class _Model:
+            def eval(self):
+                return self
+
+            def __call__(self, **kwargs):
+                class _Out:
+                    loss = torch.tensor(loss_value)
+
+                return _Out()
+
+        return live_eval, _Model()
+
+    def test_index_aligned_with_nan_for_skipped(self, monkeypatch):
+        import math
+
+        live_eval, model = self._fake_torch_env(monkeypatch)
+        out = live_eval.compute_pair_losses(
+            model, object(), [("p", "a"), ("p", ""), ("p", "b")], device="cpu"
+        )
+        assert len(out) == 3, "must be index-aligned with pairs"
+        assert out[0] == pytest.approx(1.5)
+        assert math.isnan(out[1]), "unusable pair must be nan, not dropped"
+        assert out[2] == pytest.approx(1.5)
+
+    def test_empty_pairs_returns_empty_list(self, monkeypatch):
+        live_eval, model = self._fake_torch_env(monkeypatch)
+        assert live_eval.compute_pair_losses(
+            model, object(), [], device="cpu"
+        ) == []
+
+    def test_compute_eval_loss_is_mean_of_non_nan(self, monkeypatch):
+        from soup_cli.utils import live_eval
+
+        monkeypatch.setattr(
+            live_eval, "compute_pair_losses",
+            lambda *a, **k: [1.0, float("nan"), 3.0],
+        )
+        assert live_eval.compute_eval_loss(
+            object(), object(), [("p", "a")] * 3, device="cpu"
+        ) == pytest.approx(2.0)
+
+    def test_compute_eval_loss_all_nan_returns_nan(self, monkeypatch):
+        import math
+
+        from soup_cli.utils import live_eval
+
+        monkeypatch.setattr(
+            live_eval, "compute_pair_losses", lambda *a, **k: [float("nan")]
+        )
+        assert math.isnan(
+            live_eval.compute_eval_loss(
+                object(), object(), [("p", "a")], device="cpu"
+            )
+        )
+
+    def test_compute_eval_loss_empty_returns_nan(self, monkeypatch):
+        import math
+
+        from soup_cli.utils import live_eval
+
+        monkeypatch.setattr(live_eval, "compute_pair_losses", lambda *a, **k: [])
+        assert math.isnan(
+            live_eval.compute_eval_loss(object(), object(), [], device="cpu")
+        )
+
+    def test_refactor_preserves_mean_behaviour(self, monkeypatch):
+        """compute_eval_loss must equal mean(non-nan compute_pair_losses)."""
+        live_eval, model = self._fake_torch_env(monkeypatch, loss_value=2.0)
+        pairs = [("p", "a"), ("p", ""), ("p", "b")]
+        losses = live_eval.compute_pair_losses(
+            model, object(), pairs, device="cpu"
+        )
+        finite = [x for x in losses if x == x]
+        assert live_eval.compute_eval_loss(
+            model, object(), pairs, device="cpu"
+        ) == pytest.approx(sum(finite) / len(finite))
+
+    def test_max_length_still_validated(self, monkeypatch):
+        live_eval, model = self._fake_torch_env(monkeypatch)
+        with pytest.raises((ValueError, TypeError)):
+            live_eval.compute_pair_losses(
+                model, object(), [("p", "a")], device="cpu", max_length=0
+            )
