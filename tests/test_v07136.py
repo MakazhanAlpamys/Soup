@@ -2073,3 +2073,196 @@ class TestReplaySchema:
         dumped = cfg.model_dump()
         assert dumped["data"]["replay"] == "old.jsonl"
         assert dumped["data"]["replay_ratio"] == 0.2
+
+
+class TestResolveReplayCount:
+    def test_the_locked_example(self):
+        from soup_cli.utils.rehearsal import resolve_replay_count
+
+        assert resolve_replay_count(1000, 0.1) == 111
+
+    def test_final_fraction_really_is_the_ratio(self):
+        """The whole point: r is a share of the FINAL set, not of the new."""
+        from soup_cli.utils.rehearsal import resolve_replay_count
+
+        n_replay = resolve_replay_count(1000, 0.1)
+        assert n_replay / (1000 + n_replay) == pytest.approx(0.1, abs=1e-3)
+
+    def test_naive_reading_is_not_used(self):
+        """r * n_new = 100 would give 9.09% — the wrong reading."""
+        from soup_cli.utils.rehearsal import resolve_replay_count
+
+        assert resolve_replay_count(1000, 0.1) != 100
+
+    def test_ratio_half_doubles_the_set(self):
+        from soup_cli.utils.rehearsal import resolve_replay_count
+
+        assert resolve_replay_count(100, 0.5) == 100
+
+    def test_zero_new_rows(self):
+        from soup_cli.utils.rehearsal import resolve_replay_count
+
+        assert resolve_replay_count(0, 0.1) == 0
+
+    @pytest.mark.parametrize("bad", [0.0, 0.9, 1.0, -0.1, True, "x"])
+    def test_rejects_bad_ratio(self, bad):
+        from soup_cli.utils.rehearsal import resolve_replay_count
+
+        with pytest.raises((ValueError, TypeError)):
+            resolve_replay_count(100, bad)
+
+    @pytest.mark.parametrize("bad", [-1, True, 1.5, "10"])
+    def test_rejects_bad_n_new(self, bad):
+        from soup_cli.utils.rehearsal import resolve_replay_count
+
+        with pytest.raises((ValueError, TypeError)):
+            resolve_replay_count(bad, 0.1)
+
+
+class TestMixReplay:
+    def _rows(self, tag, count):
+        return [
+            {"messages": [{"role": "assistant", "content": f"{tag}{i}"}]}
+            for i in range(count)
+        ]
+
+    def _tags(self, mixed):
+        return [row["messages"][0]["content"] for row in mixed]
+
+    def test_counts(self):
+        from soup_cli.utils.rehearsal import mix_replay
+
+        mixed, rep = mix_replay(
+            self._rows("new", 1000), self._rows("old", 500), ratio=0.1, seed=0
+        )
+        assert rep.n_new == 1000
+        assert rep.n_replay == 111
+        assert rep.n_final == 1111
+        assert len(mixed) == 1111
+        assert rep.shortfall == 0
+
+    def test_replay_rows_are_interleaved_not_appended(self):
+        """The correctness crux: a trailing block is not rehearsal.
+
+        `new + replay` puts every replay row in the final steps -- a second
+        mini-finetune, which is what replay exists to avoid.
+        """
+        from soup_cli.utils.rehearsal import mix_replay
+
+        mixed, rep = mix_replay(
+            self._rows("new", 900), self._rows("old", 500), ratio=0.1, seed=0
+        )
+        positions = [
+            i for i, tag in enumerate(self._tags(mixed)) if tag.startswith("old")
+        ]
+        assert len(positions) == rep.n_replay
+        first_half = sum(1 for p in positions if p < len(mixed) / 2)
+        assert first_half > 0, "replay rows must appear in the first half"
+        assert first_half < len(positions), "and in the second half"
+
+    def test_replay_is_not_clustered_at_the_tail(self):
+        """Sharper than the halves check: the mean position of replay rows
+        should sit near the middle, not near the end."""
+        from soup_cli.utils.rehearsal import mix_replay
+
+        mixed, _ = mix_replay(
+            self._rows("new", 900), self._rows("old", 500), ratio=0.1, seed=0
+        )
+        tags = self._tags(mixed)
+        positions = [i for i, t in enumerate(tags) if t.startswith("old")]
+        mean_pos = sum(positions) / len(positions) / len(tags)
+        assert 0.35 < mean_pos < 0.65, (
+            f"replay rows cluster at {mean_pos:.2f} of the run — not interleaved"
+        )
+
+    def test_undersized_replay_uses_all_and_reports_shortfall(self):
+        from soup_cli.utils.rehearsal import mix_replay
+
+        mixed, rep = mix_replay(
+            self._rows("new", 1000), self._rows("old", 10), ratio=0.1, seed=0
+        )
+        assert rep.requested == 111
+        assert rep.n_replay == 10
+        assert rep.shortfall == 101
+        assert len(mixed) == 1010
+
+    def test_no_upsampling_on_shortfall(self):
+        """Repeating rows would silently change epoch semantics."""
+        from soup_cli.utils.rehearsal import mix_replay
+
+        mixed, _ = mix_replay(
+            self._rows("new", 1000), self._rows("old", 10), ratio=0.1, seed=0
+        )
+        old = [t for t in self._tags(mixed) if t.startswith("old")]
+        assert len(old) == len(set(old))
+
+    def test_sampling_without_replacement(self):
+        from soup_cli.utils.rehearsal import mix_replay
+
+        mixed, _ = mix_replay(
+            self._rows("new", 90), self._rows("old", 500), ratio=0.1, seed=0
+        )
+        old = [t for t in self._tags(mixed) if t.startswith("old")]
+        assert len(old) == len(set(old))
+
+    def test_every_new_row_survives(self):
+        """Replay must ADD rehearsal, never displace the new task."""
+        from soup_cli.utils.rehearsal import mix_replay
+
+        new = self._rows("new", 100)
+        mixed, _ = mix_replay(new, self._rows("old", 100), ratio=0.1, seed=0)
+        kept = {t for t in self._tags(mixed) if t.startswith("new")}
+        assert kept == {f"new{i}" for i in range(100)}
+
+    def test_deterministic_by_seed(self):
+        from soup_cli.utils.rehearsal import mix_replay
+
+        args = (self._rows("new", 100), self._rows("old", 100))
+        first, _ = mix_replay(*args, ratio=0.1, seed=42)
+        second, _ = mix_replay(*args, ratio=0.1, seed=42)
+        assert first == second
+
+    def test_different_seeds_differ(self):
+        from soup_cli.utils.rehearsal import mix_replay
+
+        args = (self._rows("new", 100), self._rows("old", 100))
+        first, _ = mix_replay(*args, ratio=0.1, seed=1)
+        second, _ = mix_replay(*args, ratio=0.1, seed=2)
+        assert first != second
+
+    def test_none_seed_is_deterministic(self):
+        """seed=None must not mean 'random' — runs must reproduce."""
+        from soup_cli.utils.rehearsal import mix_replay
+
+        args = (self._rows("new", 100), self._rows("old", 100))
+        first, _ = mix_replay(*args, ratio=0.1, seed=None)
+        second, _ = mix_replay(*args, ratio=0.1, seed=None)
+        assert first == second
+
+    def test_empty_replay_is_noop(self):
+        from soup_cli.utils.rehearsal import mix_replay
+
+        new = self._rows("new", 10)
+        mixed, rep = mix_replay(new, [], ratio=0.1, seed=0)
+        assert mixed == new
+        assert rep.n_replay == 0
+        assert rep.ratio_actual == 0.0
+
+    def test_ratio_actual_reported(self):
+        from soup_cli.utils.rehearsal import mix_replay
+
+        _, rep = mix_replay(
+            self._rows("new", 1000), self._rows("old", 500), ratio=0.1, seed=0
+        )
+        assert rep.ratio_actual == pytest.approx(111 / 1111)
+
+    def test_report_is_frozen(self):
+        import dataclasses
+
+        from soup_cli.utils.rehearsal import mix_replay
+
+        _, rep = mix_replay(
+            self._rows("new", 10), self._rows("old", 10), ratio=0.1, seed=0
+        )
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            rep.n_replay = 99
