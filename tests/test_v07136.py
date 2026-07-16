@@ -112,12 +112,56 @@ class TestResolvePooling:
             embed.resolve_pooling("org/other-encoder")
         assert "max" in str(exc.value)
 
-    @pytest.mark.parametrize("bad", ["", "   ", None, 123, True])
-    def test_bad_model_id_rejected(self, bad):
+    @pytest.mark.parametrize("bad", [None, 123, True, 1.5, b"bytes"])
+    def test_non_string_model_id_rejected(self, bad):
         from soup_cli.utils.embed import resolve_pooling
 
-        with pytest.raises((ValueError, TypeError)):
+        with pytest.raises(TypeError, match="must be str"):
             resolve_pooling(bad)
+
+    # Each guard below asserts its OWN message. A bare
+    # `pytest.raises((ValueError, TypeError))` was vacuous here: with the
+    # empty-check deleted, "" falls through to the FALLBACK refusal
+    # ("cannot verify pooling") and still raises ValueError, so the broad
+    # form could not tell the two apart — proven by mutation.
+    @pytest.mark.parametrize("bad", ["", "   ", "\t\n"])
+    def test_empty_model_id_names_the_empty_guard(self, bad, monkeypatch):
+        from soup_cli.utils import embed
+
+        monkeypatch.setattr(
+            embed, "_fetch_pooling_config",
+            lambda mid: pytest.fail("must reject before any fetch"),
+        )
+        with pytest.raises(ValueError, match="non-empty"):
+            embed.resolve_pooling(bad)
+
+    def test_null_byte_model_id_names_the_null_guard(self, monkeypatch):
+        from soup_cli.utils import embed
+
+        monkeypatch.setattr(
+            embed, "_fetch_pooling_config",
+            lambda mid: pytest.fail("must reject before any fetch"),
+        )
+        with pytest.raises(ValueError, match="null byte"):
+            embed.resolve_pooling("org/model\x00evil")
+
+    def test_overlong_model_id_names_the_length_guard(self, monkeypatch):
+        from soup_cli.utils import embed
+
+        monkeypatch.setattr(
+            embed, "_fetch_pooling_config",
+            lambda mid: pytest.fail("must reject before any fetch"),
+        )
+        with pytest.raises(ValueError, match="too long"):
+            embed.resolve_pooling("o/" + "x" * (embed._MAX_MODEL_ID_CHARS + 1))
+
+    def test_model_id_is_stripped_not_just_validated(self):
+        from soup_cli.utils.embed import resolve_pooling
+
+        # surrounding whitespace must not defeat the allowlist
+        assert resolve_pooling(
+            "  sentence-transformers/all-MiniLM-L6-v2  "
+        ) == "mean"
 
 
 class TestEmbedTexts:
