@@ -2831,6 +2831,100 @@ class TestTrainReplayFlags:
         assert cfg.data.replay is None, "input config must not be mutated"
 
 
+class TestLocalModelSizeGate:
+    """The v0.71.36 replay smoke found this: `soup merge` writes a dir like
+    ./denseA whose NAME carries no size marker, so model_size_from_name fell
+    through to the 7B default, the hardware-fit gate predicted 16.3 GB and
+    REFUSED to train a 135M model — blocking merge -> train-from-merged, the
+    ordinary continual-learning flow --replay exists for. Same class as the
+    v0.71.32 whisper and v0.71.33 "M suffix" fixes.
+    """
+
+    def _fake_checkpoint(self, tmp_path, shapes):
+        """Write a real safetensors header (u64 len + JSON), no weights."""
+        import struct
+
+        header = {
+            name: {"dtype": "F16", "shape": list(shape),
+                   "data_offsets": [0, 0]}
+            for name, shape in shapes.items()
+        }
+        blob = json.dumps(header).encode("utf-8")
+        path = tmp_path / "model.safetensors"
+        path.write_bytes(struct.pack("<Q", len(blob)) + blob)
+        return tmp_path
+
+    def test_local_checkpoint_is_measured_not_guessed(self, tmp_path):
+        from soup_cli.utils.gpu import model_size_from_name
+
+        # 2 tensors x 1e8 params = 0.2B
+        self._fake_checkpoint(
+            tmp_path, {"a.weight": [10000, 10000], "b.weight": [10000, 10000]}
+        )
+        assert model_size_from_name(str(tmp_path)) == pytest.approx(0.2)
+
+    def test_nameless_local_dir_does_not_become_7b(self, tmp_path):
+        from soup_cli.utils.gpu import model_size_from_name
+
+        merged = tmp_path / "denseA"  # no size marker anywhere in the name
+        merged.mkdir()
+        self._fake_checkpoint(merged, {"w": [1000, 1000]})
+        assert model_size_from_name(str(merged)) < 1.0, (
+            "a nameless local checkpoint must not hit the 7B default"
+        )
+
+    def test_sharded_checkpoint_sums_all_shards(self, tmp_path):
+        import struct
+
+        from soup_cli.utils.gpu import model_size_from_name
+
+        for idx in range(2):
+            header = {
+                "w": {"dtype": "F16", "shape": [10000, 5000],
+                      "data_offsets": [0, 0]}
+            }
+            blob = json.dumps(header).encode("utf-8")
+            (tmp_path / f"model-0000{idx}.safetensors").write_bytes(
+                struct.pack("<Q", len(blob)) + blob
+            )
+        assert model_size_from_name(str(tmp_path)) == pytest.approx(0.1)
+
+    def test_hub_ids_still_use_the_name_guess(self):
+        from soup_cli.utils.gpu import model_size_from_name
+
+        assert model_size_from_name("meta-llama/Meta-Llama-3-8B") == 8
+        assert model_size_from_name(
+            "HuggingFaceTB/SmolLM2-135M-Instruct"
+        ) == pytest.approx(0.135)
+
+    def test_missing_dir_falls_back_to_the_guess(self):
+        from soup_cli.utils.gpu import model_size_from_name
+
+        assert model_size_from_name("./definitely-not-here") == 7.0
+
+    def test_dir_without_safetensors_falls_back(self, tmp_path):
+        from soup_cli.utils.gpu import model_size_from_name
+
+        (tmp_path / "config.json").write_text("{}", encoding="utf-8")
+        assert model_size_from_name(str(tmp_path)) == 7.0
+
+    def test_corrupt_header_falls_back_rather_than_crashing(self, tmp_path):
+        from soup_cli.utils.gpu import model_size_from_name
+
+        (tmp_path / "model.safetensors").write_bytes(b"\xff" * 4)  # truncated
+        assert model_size_from_name(str(tmp_path)) == 7.0
+
+    def test_absurd_header_length_is_refused(self, tmp_path):
+        import struct
+
+        from soup_cli.utils.gpu import model_size_from_name
+
+        (tmp_path / "model.safetensors").write_bytes(
+            struct.pack("<Q", 2**40) + b"{}"
+        )
+        assert model_size_from_name(str(tmp_path)) == 7.0
+
+
 class TestNoTopLevelTorch:
     """The light core must stay importable without the [train] extra.
 

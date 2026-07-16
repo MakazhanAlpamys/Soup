@@ -1,7 +1,63 @@
 """GPU detection, memory calculation, and auto batch size."""
 
+import json
 import math
+import os
 import re
+
+# A safetensors file starts with a u64 little-endian header length, then a
+# JSON header carrying each tensor's dtype + shape. Reading it costs a few
+# KB — the weights themselves are never touched.
+_ST_HEADER_LEN_BYTES = 8
+_MAX_ST_HEADER_BYTES = 100 * 1024 * 1024  # sanity bound on a crafted file
+
+
+def _params_from_local_safetensors(path: str) -> float | None:
+    """EXACT parameter count (billions) for a local checkpoint, or None.
+
+    A local directory's NAME often carries no size marker at all — a model
+    merged to ``./denseA`` or ``./out`` looks nameless to the size guesser,
+    which then falls back to the 7B default and makes the hardware-fit gate
+    refuse to train a 135M model. The checkpoint knows its own size, so ask
+    it instead of guessing.
+    """
+    try:
+        if not os.path.isdir(path):
+            return None
+        shards = [
+            entry.path
+            for entry in os.scandir(path)
+            if entry.is_file() and entry.name.endswith(".safetensors")
+        ]
+        if not shards:
+            return None
+        total = 0
+        for shard in shards:
+            with open(shard, "rb") as handle:
+                raw = handle.read(_ST_HEADER_LEN_BYTES)
+                if len(raw) < _ST_HEADER_LEN_BYTES:
+                    return None
+                header_len = int.from_bytes(raw, "little")
+                if header_len <= 0 or header_len > _MAX_ST_HEADER_BYTES:
+                    return None
+                header = json.loads(handle.read(header_len))
+            if not isinstance(header, dict):
+                return None
+            for name, meta in header.items():
+                if name == "__metadata__" or not isinstance(meta, dict):
+                    continue
+                shape = meta.get("shape")
+                if not isinstance(shape, list) or not shape:
+                    continue
+                numel = 1
+                for dim in shape:
+                    if not isinstance(dim, int) or dim < 0:
+                        return None
+                    numel *= dim
+                total += numel
+        return (total / 1e9) if total else None
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return None  # unreadable/crafted -> fall back to the name guess
 
 
 def detect_device() -> tuple[str, str]:
@@ -100,7 +156,20 @@ def estimate_batch_size(
 
 
 def model_size_from_name(model_name: str) -> float:
-    """Guess model size in billions from model name."""
+    """Model size in billions: exact for a local checkpoint, else guessed.
+
+    A LOCAL path is measured, not guessed — `soup merge` writes directories
+    like ``./denseA`` whose name carries no size marker, so the name-based
+    fallback called them 7B and the hardware-fit gate refused to train a
+    135M model. That blocked merge -> train-from-merged, the ordinary
+    continual-learning flow (found by the v0.71.36 replay smoke; same class
+    as the v0.71.32 whisper and v0.71.33 "M suffix" fixes, which were both
+    the name guess over-predicting a small model).
+    """
+    exact = _params_from_local_safetensors(model_name)
+    if exact is not None:
+        return exact
+
     name_lower = model_name.lower()
 
     # Whisper ASR checkpoints carry the size in the name suffix, not an "Nb"
