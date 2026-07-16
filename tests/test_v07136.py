@@ -976,3 +976,207 @@ class TestBuildTopicReport:
         rep = build_topic_report(self._rows("a", 2), [0, 0], k=1)
         with pytest.raises(dataclasses.FrozenInstanceError):
             rep.n_rows = 99
+
+
+class TestDataTopicsCli:
+    def _write(self, tmp_path, rows):
+        path = tmp_path / "data.jsonl"
+        path.write_text(
+            "\n".join(json.dumps(r) for r in rows), encoding="utf-8"
+        )
+        return path
+
+    def _rows(self):
+        rows = [
+            {"messages": [
+                {"role": "user", "content": "q"},
+                {"role": "assistant", "content": f"python function def {i}"},
+            ]}
+            for i in range(5)
+        ]
+        rows += [
+            {"messages": [
+                {"role": "user", "content": "q"},
+                {"role": "assistant", "content": f"protein enzyme fold {i}"},
+            ]}
+            for i in range(5)
+        ]
+        return rows
+
+    def _fake_vecs(self):
+        import numpy as np
+
+        return np.vstack([
+            np.tile([1.0, 0.0], (5, 1)), np.tile([0.0, 1.0], (5, 1))
+        ]).astype(np.float32)
+
+    def test_help(self):
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        res = CliRunner().invoke(app, ["data", "topics", "--help"])
+        assert res.exit_code == 0, (res.output, repr(res.exception))
+        assert "cluster" in _clean(res.output).lower()
+
+    def test_happy_path_writes_report(self, tmp_path, monkeypatch):
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+        from soup_cli.commands import data_topics as cmd
+
+        path = self._write(tmp_path, self._rows())
+        monkeypatch.setattr(cmd, "embed_texts", lambda *a, **k: self._fake_vecs())
+        monkeypatch.chdir(tmp_path)
+        res = CliRunner().invoke(
+            app,
+            ["data", "topics", str(path), "--clusters", "2", "-o", "topics.json"],
+        )
+        assert res.exit_code == 0, (res.output, repr(res.exception))
+        data = json.loads((tmp_path / "topics.json").read_text(encoding="utf-8"))
+        assert data["n_rows"] == 10
+        assert len(data["topics"]) == 2
+        assert sum(t["fraction"] for t in data["topics"]) == pytest.approx(1.0)
+        # the two synthetic domains must separate
+        labels = " ".join(t["label"] for t in data["topics"])
+        assert "python" in labels and "protein" in labels
+
+    def test_auto_clusters_runs(self, tmp_path, monkeypatch):
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+        from soup_cli.commands import data_topics as cmd
+
+        path = self._write(tmp_path, self._rows())
+        monkeypatch.setattr(cmd, "embed_texts", lambda *a, **k: self._fake_vecs())
+        monkeypatch.chdir(tmp_path)
+        res = CliRunner().invoke(app, ["data", "topics", str(path)])
+        assert res.exit_code == 0, (res.output, repr(res.exception))
+
+    def test_bad_clusters_value_rejected(self, tmp_path, monkeypatch):
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        path = self._write(tmp_path, self._rows())
+        monkeypatch.chdir(tmp_path)
+        res = CliRunner().invoke(
+            app, ["data", "topics", str(path), "--clusters", "banana"]
+        )
+        assert res.exit_code == 1
+        assert "auto" in _clean(res.output).lower()
+
+    def test_output_outside_cwd_rejected(self, tmp_path, monkeypatch):
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        path = self._write(tmp_path, self._rows())
+        work = tmp_path / "work"
+        work.mkdir()
+        monkeypatch.chdir(work)
+        res = CliRunner().invoke(
+            app, ["data", "topics", str(path), "-o", str(tmp_path / "esc.json")]
+        )
+        assert res.exit_code == 1
+        assert "outside" in _clean(res.output).lower()
+
+    def test_missing_file(self, tmp_path, monkeypatch):
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        monkeypatch.chdir(tmp_path)
+        res = CliRunner().invoke(app, ["data", "topics", "nope.jsonl"])
+        assert res.exit_code == 1
+        assert "not found" in _clean(res.output).lower()
+
+    def test_empty_dataset(self, tmp_path, monkeypatch):
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        path = tmp_path / "empty.jsonl"
+        path.write_text("", encoding="utf-8")
+        monkeypatch.chdir(tmp_path)
+        res = CliRunner().invoke(app, ["data", "topics", str(path)])
+        assert res.exit_code == 1
+        assert "empty" in _clean(res.output).lower()
+
+    def test_import_error_friendly(self, tmp_path, monkeypatch):
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+        from soup_cli.commands import data_topics as cmd
+
+        def _boom(*a, **k):
+            raise ImportError("No module named 'torch'")
+
+        monkeypatch.setattr(cmd, "embed_texts", _boom)
+        path = self._write(tmp_path, self._rows())
+        monkeypatch.chdir(tmp_path)
+        res = CliRunner().invoke(app, ["data", "topics", str(path)])
+        assert res.exit_code == 1
+        assert "soup-cli[train]" in _clean(res.output)
+
+    def test_pooling_refusal_surfaces(self, tmp_path, monkeypatch):
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+        from soup_cli.commands import data_topics as cmd
+
+        def _refuse(*a, **k):
+            raise ValueError("cannot verify pooling for 'x/y'")
+
+        monkeypatch.setattr(cmd, "embed_texts", _refuse)
+        path = self._write(tmp_path, self._rows())
+        monkeypatch.chdir(tmp_path)
+        res = CliRunner().invoke(app, ["data", "topics", str(path)])
+        assert res.exit_code == 1
+        assert "pooling" in _clean(res.output)
+
+    def test_markup_in_data_is_escaped(self, tmp_path, monkeypatch):
+        """A crafted row must not inject Rich markup into the table."""
+        import numpy as np
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+        from soup_cli.commands import data_topics as cmd
+
+        rows = [
+            {"messages": [{"role": "assistant", "content": "[red]boom[/] alpha"}]}
+        ] * 4
+        path = self._write(tmp_path, rows)
+        monkeypatch.setattr(
+            cmd, "embed_texts",
+            lambda *a, **k: np.tile([1.0, 0.0], (4, 1)).astype(np.float32),
+        )
+        monkeypatch.chdir(tmp_path)
+        res = CliRunner().invoke(
+            app, ["data", "topics", str(path), "--clusters", "1"]
+        )
+        assert res.exit_code == 0, (res.output, repr(res.exception))
+
+    def test_gap_warning_surfaces_in_output(self, tmp_path, monkeypatch):
+        import numpy as np
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+        from soup_cli.commands import data_topics as cmd
+
+        rows = [
+            {"messages": [{"role": "assistant", "content": f"code {i}"}]}
+            for i in range(99)
+        ]
+        rows += [{"messages": [{"role": "assistant", "content": "safety"}]}]
+        path = self._write(tmp_path, rows)
+        vecs = np.vstack([
+            np.tile([1.0, 0.0], (99, 1)), np.tile([0.0, 1.0], (1, 1))
+        ]).astype(np.float32)
+        monkeypatch.setattr(cmd, "embed_texts", lambda *a, **k: vecs)
+        monkeypatch.chdir(tmp_path)
+        res = CliRunner().invoke(
+            app, ["data", "topics", str(path), "--clusters", "2"]
+        )
+        assert res.exit_code == 0, (res.output, repr(res.exception))
+        assert "thin" in _clean(res.output).lower()
