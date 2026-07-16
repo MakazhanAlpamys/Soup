@@ -14,6 +14,9 @@ from rich.table import Table
 
 from soup_cli.data.loader import load_raw_data
 from soup_cli.data.validator import validate_and_stats
+from soup_cli.utils.embed import DEFAULT_EMBED_MODEL, embed_texts
+from soup_cli.utils.paths import is_under_cwd
+from soup_cli.utils.semdedup import greedy_semdedup
 
 console = Console()
 
@@ -230,6 +233,56 @@ def merge(
     )
 
 
+def _row_embed_text(row: dict, field: Optional[str]) -> str:
+    """What gets embedded for a row: one field, or all text values joined.
+
+    Mirrors the MinHash branch's text selection so ``--field`` means the
+    same thing for both backends.
+    """
+    if field:
+        return str(row.get(field, ""))
+    return " ".join(str(value) for value in row.values() if value)
+
+
+def _semantic_dedup(
+    data: list,
+    *,
+    threshold: float,
+    field: Optional[str],
+    embed_model: str,
+    device: str,
+    out_path: Path,
+):
+    """SemDeDup branch of ``soup data dedup --semantic``."""
+    texts = [_row_embed_text(row, field) for row in data]
+    try:
+        vectors = embed_texts(texts, model_id=embed_model, device=device)
+    except ImportError:
+        console.print(
+            "[red]Semantic dedup needs PyTorch + transformers.[/]\n"
+            # \[train] is escaped: Rich would otherwise eat the bracket as a
+            # markup tag and print `pip install 'soup-cli'` -- a command that
+            # installs the package WITHOUT the extra the user is missing.
+            "Install with: [bold]pip install 'soup-cli\\[train]'[/]"
+        )
+        raise typer.Exit(1)
+    except (ValueError, TypeError) as exc:
+        from rich.markup import escape as _esc
+
+        console.print(f"[red]{_esc(str(exc))}[/]")
+        raise typer.Exit(1)
+
+    report = greedy_semdedup(vectors, threshold=threshold)
+    unique = [data[idx] for idx in report.kept]
+    _write_jsonl(out_path, unique)
+    console.print(
+        f"[green]Semantic dedup complete:[/] {len(data)} -> {len(unique)} rows "
+        f"([red]-{len(report.dropped)}[/] near-duplicates)\n"
+        f"Output: [bold]{out_path}[/]"
+    )
+    return report
+
+
 @app.command()
 def dedup(
     path: str = typer.Argument(..., help="Path to dataset file"),
@@ -243,19 +296,26 @@ def dedup(
     ),
     field: str = typer.Option(
         None, "--field", "-f",
-        help="Field to hash (default: all text fields concatenated)",
+        help="Field to hash/embed (default: all text fields concatenated)",
+    ),
+    semantic: bool = typer.Option(
+        False, "--semantic",
+        help="Use embedding cosine (SemDeDup) instead of MinHash. Catches "
+             "paraphrases MinHash misses. Requires soup-cli[train].",
+    ),
+    embed_model: str = typer.Option(
+        DEFAULT_EMBED_MODEL, "--embed-model",
+        help="Embedding model used by --semantic.",
+    ),
+    device: str = typer.Option(
+        "auto", "--device", help="Device for --semantic (auto/cpu/cuda)."
     ),
 ):
-    """Remove near-duplicate rows using MinHash (locality-sensitive hashing)."""
-    try:
-        from datasketch import MinHash, MinHashLSH
-    except ImportError:
-        console.print(
-            "[red]datasketch not installed.[/]\n"
-            "Install with: [bold]pip install 'soup-cli[data]'[/]"
-        )
-        raise typer.Exit(1)
+    """Remove near-duplicate rows: MinHash (default) or embeddings (--semantic).
 
+    ``--threshold`` is backend-dependent: MinHash Jaccard similarity by
+    default, embedding cosine under ``--semantic``.
+    """
     file_path = Path(path)
     if not file_path.exists():
         console.print(f"[red]File not found: {file_path}[/]")
@@ -264,6 +324,38 @@ def dedup(
     data = load_raw_data(file_path)
     if not data:
         console.print("[red]Dataset is empty.[/]")
+        raise typer.Exit(1)
+
+    # Output resolution + containment is shared by BOTH backends.
+    if output is None:
+        output = str(file_path.stem) + "_deduped.jsonl"
+    out_path = Path(output)
+    if not is_under_cwd(out_path):
+        console.print(
+            f"[red]Output path is outside the working directory: {out_path}[/]"
+        )
+        raise typer.Exit(1)
+
+    if semantic:
+        console.print(
+            f"[dim]Semantic dedup of {len(data)} rows "
+            f"(threshold={threshold}, model={embed_model})...[/]"
+        )
+        _semantic_dedup(
+            data, threshold=threshold, field=field,
+            embed_model=embed_model, device=device, out_path=out_path,
+        )
+        return
+
+    # MinHash branch. The import lives HERE, not at the top of the function:
+    # the semantic path must not require the [data] extra it never uses.
+    try:
+        from datasketch import MinHash, MinHashLSH
+    except ImportError:
+        console.print(
+            "[red]datasketch not installed.[/]\n"
+            "Install with: [bold]pip install 'soup-cli\\[data]'[/]"
+        )
         raise typer.Exit(1)
 
     console.print(f"[dim]Deduplicating {len(data)} rows (threshold={threshold})...[/]")
@@ -308,11 +400,6 @@ def dedup(
 
     unique_data = [data[idx] for idx in unique_indices]
     removed = len(data) - len(unique_data)
-
-    # Write output
-    if output is None:
-        output = str(file_path.stem) + "_deduped.jsonl"
-    out_path = Path(output)
 
     _write_jsonl(out_path, unique_data)
 

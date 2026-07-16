@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 
 import pytest
@@ -375,3 +376,198 @@ class TestGreedySemdedup:
         rep = DedupReport(kept=(0,), dropped=(), pairs=(), threshold=0.9)
         with pytest.raises(dataclasses.FrozenInstanceError):
             rep.threshold = 0.5
+
+
+class TestDedupSemanticCli:
+    def _write(self, tmp_path, rows):
+        path = tmp_path / "data.jsonl"
+        path.write_text(
+            "\n".join(json.dumps(r) for r in rows), encoding="utf-8"
+        )
+        return path
+
+    def test_help_mentions_semantic(self):
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        res = CliRunner().invoke(app, ["data", "dedup", "--help"])
+        assert res.exit_code == 0, (res.output, repr(res.exception))
+        assert "semantic" in _clean(res.output)
+
+    def test_semantic_dedups_via_injected_embedder(self, tmp_path, monkeypatch):
+        """CLI wiring tested without a model download."""
+        import numpy as np
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+        from soup_cli.commands import data as data_cmd
+
+        rows = [
+            {"text": "the cat sat on the mat"},
+            {"text": "a feline rested upon the rug"},
+            {"text": "quantum chromodynamics is hard"},
+        ]
+        path = self._write(tmp_path, rows)
+        # rows 0 and 1 are "paraphrases" -> near-identical vectors
+        fake = np.array(
+            [[1.0, 0.0], [0.999, 0.0447], [0.0, 1.0]], dtype=np.float32
+        )
+        monkeypatch.setattr(data_cmd, "embed_texts", lambda *a, **k: fake)
+        monkeypatch.chdir(tmp_path)
+        res = CliRunner().invoke(
+            app,
+            ["data", "dedup", str(path), "--semantic",
+             "--threshold", "0.9", "-o", "out.jsonl"],
+        )
+        assert res.exit_code == 0, (res.output, repr(res.exception))
+        kept = [
+            json.loads(ln)
+            for ln in (tmp_path / "out.jsonl").read_text().splitlines() if ln
+        ]
+        assert len(kept) == 2
+        assert kept[0]["text"] == "the cat sat on the mat"
+        assert kept[1]["text"] == "quantum chromodynamics is hard"
+
+    def test_semantic_does_not_require_datasketch(self, tmp_path, monkeypatch):
+        """--semantic must work for a user with [train] but NOT [data].
+
+        The datasketch import used to sit at the TOP of dedup(), before the
+        file check, so the semantic path would have died with 'datasketch
+        not installed' despite never needing MinHash.
+        """
+        import builtins
+
+        import numpy as np
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+        from soup_cli.commands import data as data_cmd
+
+        real_import = builtins.__import__
+
+        def _no_datasketch(name, *args, **kwargs):
+            if name == "datasketch":
+                raise ImportError("No module named 'datasketch'")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", _no_datasketch)
+        monkeypatch.setattr(
+            data_cmd, "embed_texts",
+            lambda *a, **k: np.array(
+                [[1.0, 0.0], [0.0, 1.0]], dtype=np.float32
+            ),
+        )
+        path = self._write(tmp_path, [{"text": "a"}, {"text": "b"}])
+        monkeypatch.chdir(tmp_path)
+        res = CliRunner().invoke(
+            app, ["data", "dedup", str(path), "--semantic", "-o", "out.jsonl"]
+        )
+        assert res.exit_code == 0, (res.output, repr(res.exception))
+        assert "datasketch" not in _clean(res.output)
+
+    def test_semantic_import_error_is_friendly(self, tmp_path, monkeypatch):
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+        from soup_cli.commands import data as data_cmd
+
+        path = self._write(tmp_path, [{"text": "a"}])
+
+        def _boom(*a, **k):
+            raise ImportError("No module named 'torch'")
+
+        monkeypatch.setattr(data_cmd, "embed_texts", _boom)
+        monkeypatch.chdir(tmp_path)
+        res = CliRunner().invoke(
+            app, ["data", "dedup", str(path), "--semantic"]
+        )
+        assert res.exit_code == 1
+        assert "soup-cli[train]" in _clean(res.output)
+
+    def test_semantic_pooling_refusal_surfaces(self, tmp_path, monkeypatch):
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+        from soup_cli.commands import data as data_cmd
+
+        path = self._write(tmp_path, [{"text": "a"}])
+
+        def _refuse(*a, **k):
+            raise ValueError("cannot verify pooling for 'x/y'")
+
+        monkeypatch.setattr(data_cmd, "embed_texts", _refuse)
+        monkeypatch.chdir(tmp_path)
+        res = CliRunner().invoke(
+            app, ["data", "dedup", str(path), "--semantic"]
+        )
+        assert res.exit_code == 1
+        assert "pooling" in _clean(res.output)
+
+    def test_minhash_path_untouched_without_flag(self, tmp_path, monkeypatch):
+        """--semantic absent -> embed_texts must never be called."""
+        pytest.importorskip("datasketch")
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+        from soup_cli.commands import data as data_cmd
+
+        called = []
+        monkeypatch.setattr(
+            data_cmd, "embed_texts",
+            lambda *a, **k: called.append(1) or None,
+        )
+        path = self._write(
+            tmp_path, [{"text": "a b c"}, {"text": "x y z"}]
+        )
+        monkeypatch.chdir(tmp_path)
+        res = CliRunner().invoke(app, ["data", "dedup", str(path)])
+        assert res.exit_code == 0, (res.output, repr(res.exception))
+        assert called == [], "MinHash path must not touch the embedder"
+
+    def test_field_selects_what_is_embedded(self, tmp_path, monkeypatch):
+        """--field composes with --semantic (same meaning as for MinHash)."""
+        import numpy as np
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+        from soup_cli.commands import data as data_cmd
+
+        seen = {}
+
+        def _capture(texts, **kwargs):
+            seen["texts"] = list(texts)
+            return np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32)
+
+        monkeypatch.setattr(data_cmd, "embed_texts", _capture)
+        rows = [
+            {"text": "keep me", "noise": "IGNORED"},
+            {"text": "other", "noise": "IGNORED"},
+        ]
+        path = self._write(tmp_path, rows)
+        monkeypatch.chdir(tmp_path)
+        res = CliRunner().invoke(
+            app,
+            ["data", "dedup", str(path), "--semantic",
+             "--field", "text", "-o", "out.jsonl"],
+        )
+        assert res.exit_code == 0, (res.output, repr(res.exception))
+        assert seen["texts"] == ["keep me", "other"]
+        assert not any("IGNORED" in t for t in seen["texts"])
+
+    def test_output_outside_cwd_rejected(self, tmp_path, monkeypatch):
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        path = self._write(tmp_path, [{"text": "a"}])
+        work = tmp_path / "work"
+        work.mkdir()
+        monkeypatch.chdir(work)
+        res = CliRunner().invoke(
+            app,
+            ["data", "dedup", str(path), "--semantic",
+             "-o", str(tmp_path / "escape.jsonl")],
+        )
+        assert res.exit_code == 1
+        assert "outside" in _clean(res.output).lower()
