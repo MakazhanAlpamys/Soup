@@ -22,6 +22,7 @@ from rich.table import Table
 
 from soup_cli.data.loader import load_raw_data
 from soup_cli.utils.canary import (
+    _harden_permissions,
     build_canary_report,
     canary_report_to_dict,
     canary_rows,
@@ -40,6 +41,22 @@ console = Console()
 app = typer.Typer(
     no_args_is_help=True, help="Dataset canaries (memorization probe)."
 )
+
+# Strip C0/DEL before any manifest-derived string reaches the terminal.
+# rich.markup.escape() only neutralises Rich's own [...] tag syntax — a raw
+# ESC byte survives it. The manifest is explicitly a shareable artifact, so
+# a hostile one is a realistic input: an OSC 52 / cursor sequence in a
+# `secret` could spoof the title bar or obscure the MAJOR verdict printed
+# right below the table. Mirrors commands/data_doctor.py + commands/shrink.py.
+# --output JSON is unaffected: json.dumps already \\u00XX-escapes these.
+_CONTROL_STRIP_TABLE = {
+    i: None for i in range(0x20) if i not in (0x09, 0x0A, 0x0D)
+}
+_CONTROL_STRIP_TABLE[0x7F] = None
+
+
+def _for_terminal(text: str) -> str:
+    return text.translate(_CONTROL_STRIP_TABLE)
 
 # Fixed seed for the control draw: controls are a null distribution, not a
 # secret, so reproducibility is the useful property here.
@@ -210,7 +227,7 @@ def check(
             "nan" if math.isnan(exposure.loss) else f"{exposure.loss:.4f}"
         )
         table.add_row(
-            escape(exposure.secret.strip()),
+            escape(_for_terminal(exposure.secret.strip())),
             loss_text,
             f"{exposure.percentile * 100:.1f}%",
             "[red]YES[/]" if exposure.memorized else "no",
@@ -220,10 +237,18 @@ def check(
     console.print(f"[{colour}]Verdict: {report.verdict}[/]")
 
     if output is not None:
+        # The report embeds every secret, so it is as sensitive as the
+        # manifest and gets the same 0600 + warning. `insert` warns about
+        # the manifest; without this the report would be the quiet leak.
         atomic_write_text(
             json.dumps(canary_report_to_dict(report), indent=2), output
         )
+        _harden_permissions(output)
         console.print(f"[green]Report written:[/] [bold]{escape(output)}[/]")
+        console.print(
+            "[yellow]The report lists the canary secrets — treat it like the "
+            "manifest and do not commit it.[/]"
+        )
 
     if report.verdict == "MAJOR":
         raise typer.Exit(2)

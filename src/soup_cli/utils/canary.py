@@ -132,7 +132,10 @@ def write_manifest(canaries: Sequence[Canary], path: str) -> str:
     """Persist the secrets. THIS FILE IS THE SENSITIVE ARTIFACT.
 
     Anyone holding it can reproduce the canaries, so it must not be
-    committed alongside the dataset it protects.
+    committed alongside the dataset it protects, and it is chmod-600'd on
+    POSIX: under the usual 022 umask a generic write lands 0644, letting
+    any local user on a shared box read every canary without ever running
+    ``check``. Mirrors registry/store.py, adapter_sign.py, audit_log.py.
     """
     safe = enforce_under_cwd_and_no_symlink(str(path), "manifest")
     payload = {
@@ -145,7 +148,17 @@ def write_manifest(canaries: Sequence[Canary], path: str) -> str:
         ],
     }
     atomic_write_text(json.dumps(payload, indent=2), safe)
+    _harden_permissions(safe)
     return safe
+
+
+def _harden_permissions(path: str) -> None:
+    """Best-effort 0600 on a secret-bearing file (POSIX; no-op on Windows)."""
+    if os.name != "nt":
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
 
 
 def load_manifest(path: str) -> tuple[Canary, ...]:
@@ -165,6 +178,13 @@ def load_manifest(path: str) -> tuple[Canary, ...]:
     entries = payload.get("canaries")
     if not isinstance(entries, list):
         raise ValueError("manifest 'canaries' must be a list")
+    if len(entries) > _MAX_CANARIES:
+        # `check` runs one model forward pass per entry; the 4 MB size cap
+        # alone still admits tens of thousands of minimal entries.
+        raise ValueError(
+            f"too many canaries in manifest ({len(entries)}); "
+            f"max {_MAX_CANARIES}"
+        )
     out = []
     for entry in entries:
         if not isinstance(entry, dict):

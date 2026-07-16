@@ -1431,6 +1431,40 @@ class TestCanaryManifest:
             load_manifest("big.json")
 
     @pytest.mark.skipif(
+        __import__("os").name == "nt", reason="POSIX permissions only"
+    )
+    def test_manifest_is_not_world_readable(self, tmp_path, monkeypatch):
+        """The manifest IS the secret. On a shared box a 0644 file lets any
+        local user read every canary without ever running check."""
+        import os
+        import stat
+
+        from soup_cli.utils.canary import generate_canaries, write_manifest
+
+        monkeypatch.chdir(tmp_path)
+        write_manifest(generate_canaries(count=2, seed=0), "m.json")
+        mode = stat.S_IMODE(os.stat("m.json").st_mode)
+        assert not (mode & stat.S_IRGRP), f"group-readable: {oct(mode)}"
+        assert not (mode & stat.S_IROTH), f"world-readable: {oct(mode)}"
+
+    def test_load_manifest_caps_entry_count(self, tmp_path, monkeypatch):
+        """A manifest packed with entries would run unbounded forward passes."""
+        from pathlib import Path
+
+        from soup_cli.utils.canary import _MAX_CANARIES, load_manifest
+
+        monkeypatch.chdir(tmp_path)
+        entries = [
+            {"carrier": "c", "secret": f"s{i}"}
+            for i in range(_MAX_CANARIES + 1)
+        ]
+        Path("big.json").write_text(
+            json.dumps({"canaries": entries}), encoding="utf-8"
+        )
+        with pytest.raises(ValueError, match="too many canaries"):
+            load_manifest("big.json")
+
+    @pytest.mark.skipif(
         not hasattr(__import__("os"), "symlink"), reason="POSIX only"
     )
     def test_symlinked_manifest_rejected(self, tmp_path, monkeypatch):
@@ -1968,6 +2002,45 @@ class TestDataCanaryCli:
         )
         assert res.exit_code == 1
         assert "could not load" in _clean(res.output).lower()
+
+    def test_esc_bytes_from_a_manifest_are_stripped(self, tmp_path, monkeypatch):
+        """rich escape() neutralises [...] but NOT raw ESC bytes.
+
+        The manifest is a shareable artifact ("anyone holding it can
+        reproduce the canaries"), so a hostile one is a realistic input. An
+        OSC 52 sequence in a secret would reach the terminal raw and could
+        obscure the MAJOR verdict printed right below the table.
+        """
+        from pathlib import Path
+
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+        from soup_cli.commands import data_canary as cmd
+
+        monkeypatch.chdir(tmp_path)
+        evil = "7c3f\x1b]52;c;ZXZpbA==\x07-9a21"
+        Path("m.json").write_text(
+            json.dumps({"canaries": [{"carrier": "c", "secret": evil}]}),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(
+            cmd, "_load_pair", lambda *a, **k: (object(), object(), "cpu")
+        )
+        monkeypatch.setattr(
+            cmd, "compute_pair_losses",
+            lambda model, tok, pairs, **kw: (
+                [5.0] + [float(i) for i in range(len(pairs) - 1)]
+            ),
+        )
+        res = CliRunner().invoke(
+            app, ["data", "canary", "check", "--manifest", "m.json",
+                  "--base", "fake/model", "--controls", "8"],
+        )
+        assert res.exit_code == 0, (res.output, repr(res.exception))
+        assert "\x1b" not in res.output, (
+            "a raw ESC byte from the manifest reached the terminal"
+        )
 
     def test_check_missing_manifest(self, tmp_path, monkeypatch):
         from typer.testing import CliRunner
