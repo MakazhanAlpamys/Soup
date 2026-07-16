@@ -92,13 +92,30 @@ def insert(
         raise typer.Exit(1)
 
     mixed = list(rows) + canary_rows(canaries)
-    atomic_write_text(
-        "\n".join(json.dumps(row) for row in mixed) + "\n", output
-    )
+    # Manifest FIRST. If the dataset were written first and the manifest
+    # then failed (disk full, permissions), a canary-poisoned dataset would
+    # survive on disk with nothing left to identify the secrets in it — a
+    # user who missed the error and trained on it could never audit what
+    # was inserted. Failing before the data is written leaves no artifact.
     try:
         write_manifest(canaries, manifest)
     except (ValueError, OSError) as exc:
         console.print(f"[red]{escape(str(exc))}[/]")
+        raise typer.Exit(1)
+    try:
+        atomic_write_text(
+            "\n".join(json.dumps(row) for row in mixed) + "\n", output
+        )
+    except (ValueError, OSError) as exc:
+        # The manifest now describes canaries that are in no dataset. Say so
+        # rather than leaving a manifest that looks authoritative.
+        console.print(
+            f"[red]Could not write {escape(str(output))}: "
+            f"{escape(str(exc))}[/]\n"
+            f"[yellow]{escape(str(manifest))} was already written and now "
+            "describes canaries that were NOT inserted — delete it or re-run."
+            "[/]"
+        )
         raise typer.Exit(1)
 
     console.print(

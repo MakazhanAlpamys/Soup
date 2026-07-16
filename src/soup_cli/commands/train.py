@@ -137,8 +137,8 @@ def _hardware_fit_preflight(cfg, gpu_info, *, allow_oom_attempt: bool) -> None:
         raise typer.Exit(1)
 
 
-def _apply_replay_overrides(cfg, *, replay, replay_ratio):
-    """Apply ``--replay`` / ``--replay-ratio``, then RE-VALIDATE.
+def _apply_replay_overrides(cfg, *, replay, replay_ratio, replay_seed=None):
+    """Apply the ``--replay*`` flags, then RE-VALIDATE.
 
     Re-validation is the point: a CLI override must clear the same
     cross-validators as YAML, or ``--replay`` on ``task='dpo'`` would slip
@@ -146,13 +146,15 @@ def _apply_replay_overrides(cfg, *, replay, replay_ratio):
     mutating in place) is what re-runs them, and leaves the caller's config
     untouched.
     """
-    if replay is None and replay_ratio is None:
+    if replay is None and replay_ratio is None and replay_seed is None:
         return cfg
     payload = cfg.model_dump()
     if replay is not None:
         payload["data"]["replay"] = replay
     if replay_ratio is not None:
         payload["data"]["replay_ratio"] = replay_ratio
+    if replay_seed is not None:
+        payload["data"]["replay_seed"] = replay_seed
     return type(cfg)(**payload)
 
 
@@ -330,6 +332,13 @@ def train(
             "(default 0.1). Overrides data.replay_ratio. (v0.71.36)"
         ),
     ),
+    replay_seed: int = typer.Option(
+        None, "--replay-seed",
+        help=(
+            "Seed for the replay sample + interleave. Overrides "
+            "data.replay_seed. (v0.71.36)"
+        ),
+    ),
     reward_hack_mitigation: str = typer.Option(
         None,
         "--reward-hack-mitigation",
@@ -504,7 +513,10 @@ def train(
     # --- v0.71.36 replay passthrough ---
     try:
         cfg = _apply_replay_overrides(
-            cfg, replay=replay, replay_ratio=replay_ratio
+            cfg,
+            replay=replay,
+            replay_ratio=replay_ratio,
+            replay_seed=replay_seed,
         )
     except Exception as exc:  # noqa: BLE001 — pydantic ValidationError et al.
         console.print(f"[red]{markup_escape(str(exc))}[/]")

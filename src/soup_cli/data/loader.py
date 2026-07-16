@@ -116,6 +116,15 @@ def _load_replay_rows(data_config: DataConfig) -> list[dict]:
 
     The old dataset may be alpaca while the new one is sharegpt, so the
     replay file cannot inherit ``data_config.format``.
+
+    It also gets its OWN media-containment pass. ``load_dataset`` runs
+    :func:`_validate_vision_images` / :func:`_validate_audio_files` on the
+    primary dataset, and the replay file is loaded here rather than there —
+    so without this, a llava-shaped replay row's ``image`` value survives
+    ``format_to_messages`` untouched and a traversal path would reach
+    ``PIL.Image.open`` in the trainer. Media resolve against the REPLAY
+    file's own directory unless an explicit dir is configured: the old
+    dataset's images live with the old dataset.
     """
     replay_path = Path(data_config.replay)
     if not is_under_cwd(replay_path):
@@ -129,7 +138,23 @@ def _load_replay_rows(data_config: DataConfig) -> list[dict]:
     raw = load_raw_data(replay_path)
     fmt = detect_format(raw)
     rows = [format_to_messages(row, fmt) for row in raw]
-    return [row for row in rows if row is not None]
+    rows = [row for row in rows if row is not None]
+
+    if is_vision_format(fmt):
+        image_dir = (
+            Path(data_config.image_dir)
+            if data_config.image_dir
+            else replay_path.parent
+        )
+        rows = _validate_vision_images(rows, image_dir)
+    if is_audio_format(fmt):
+        audio_dir = (
+            Path(data_config.audio_dir)
+            if data_config.audio_dir
+            else replay_path.parent
+        )
+        rows = _validate_audio_files(rows, audio_dir)
+    return rows
 
 
 def _finalize(

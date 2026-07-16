@@ -295,7 +295,8 @@ def dedup(
     ),
     threshold: float = typer.Option(
         0.8, "--threshold",
-        help="MinHash similarity threshold (0.0-1.0)",
+        help="Similarity threshold (0.0-1.0): MinHash Jaccard by default, "
+             "embedding cosine under --semantic.",
     ),
     field: str = typer.Option(
         None, "--field", "-f",

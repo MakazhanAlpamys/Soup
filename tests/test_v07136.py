@@ -1718,6 +1718,63 @@ class TestDataCanaryCli:
         out = _clean(res.output).lower()
         assert "commit" in out or "secret" in out
 
+    def test_manifest_is_written_before_the_poisoned_dataset(
+        self, tmp_path, monkeypatch
+    ):
+        """Order matters: a dataset with no manifest is unauditable.
+
+        If the data were written first and the manifest then failed, a
+        canary-poisoned dataset would survive on disk with nothing left to
+        say what was inserted into it.
+        """
+        from pathlib import Path
+
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+        from soup_cli.commands import data_canary as cmd
+
+        monkeypatch.chdir(tmp_path)
+        src = self._dataset(tmp_path, count=3)
+
+        def _boom(canaries, path):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(cmd, "write_manifest", _boom)
+        res = CliRunner().invoke(
+            app,
+            ["data", "canary", "insert", str(src), "-o", "out.jsonl",
+             "--manifest", "m.json"],
+        )
+        assert res.exit_code == 1
+        assert not Path("out.jsonl").exists(), (
+            "a canary-poisoned dataset must not survive a manifest failure"
+        )
+
+    def test_data_write_failure_warns_the_manifest_is_now_stale(
+        self, tmp_path, monkeypatch
+    ):
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+        from soup_cli.commands import data_canary as cmd
+
+        monkeypatch.chdir(tmp_path)
+        src = self._dataset(tmp_path, count=3)
+
+        def _boom(text, path):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(cmd, "atomic_write_text", _boom)
+        res = CliRunner().invoke(
+            app,
+            ["data", "canary", "insert", str(src), "-o", "out.jsonl",
+             "--manifest", "m.json"],
+        )
+        assert res.exit_code == 1
+        out = _clean(res.output).lower()
+        assert "not inserted" in out or "re-run" in out
+
     def test_insert_output_outside_cwd_rejected(self, tmp_path, monkeypatch):
         from typer.testing import CliRunner
 
@@ -2404,6 +2461,86 @@ class TestLoaderReplay:
         assert len(old) == 3
         assert len(set(old)) == 3, "rows must not be repeated"
 
+    def _llava(self, tag, image, count):
+        return [
+            {
+                "image": image,
+                "conversations": [
+                    {"from": "human", "value": "<image>\ndescribe"},
+                    {"from": "gpt", "value": f"{tag}{i}"},
+                ],
+            }
+            for i in range(count)
+        ]
+
+    def test_replay_vision_rows_get_traversal_protection(
+        self, tmp_path, monkeypatch
+    ):
+        """The replay file must get the SAME image containment as the main one.
+
+        load_dataset runs _validate_vision_images on the primary dataset
+        (it exists to reject `{"image": "/etc/passwd"}`), but the replay
+        file is loaded by its own path. A genuinely llava-shaped replay row
+        keeps its `image` value through format_to_messages, so without a
+        validation pass a traversal path would reach PIL.Image.open.
+        """
+        from soup_cli.config.schema import DataConfig
+        from soup_cli.data.loader import load_dataset
+
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "ok.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+        self._write(tmp_path / "new.jsonl", self._llava("new", "ok.png", 90))
+        self._write(
+            tmp_path / "old.jsonl",
+            self._llava("old", "../../../../../../etc/passwd", 90),
+        )
+        cfg = DataConfig(
+            train="new.jsonl", format="llava", replay="old.jsonl",
+            replay_ratio=0.1, replay_seed=0, val_split=0.0,
+        )
+        out = load_dataset(cfg)
+        escaped = [
+            row for row in out["train"]
+            if "etc/passwd" in str(row.get("image", ""))
+        ]
+        assert not escaped, (
+            "a traversal image path from the replay file reached the mix "
+            "unvalidated"
+        )
+
+    def test_replay_audio_rows_get_traversal_protection(
+        self, tmp_path, monkeypatch
+    ):
+        from soup_cli.config.schema import DataConfig
+        from soup_cli.data.loader import load_dataset
+
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "ok.wav").write_bytes(b"RIFF....WAVE")
+        self._write(
+            tmp_path / "new.jsonl",
+            [{"audio": "ok.wav", "text": f"new{i}"} for i in range(90)],
+        )
+        self._write(
+            tmp_path / "old.jsonl",
+            [
+                {"audio": "../../../../../../etc/shadow", "text": f"old{i}"}
+                for i in range(90)
+            ],
+        )
+        cfg = DataConfig(
+            train="new.jsonl", format="asr", replay="old.jsonl",
+            replay_ratio=0.1, replay_seed=0, val_split=0.0,
+        )
+        out = load_dataset(cfg)
+        escaped = [
+            row for row in out["train"]
+            if "etc/shadow" in str(row.get("audio", ""))
+        ]
+        assert not escaped, (
+            "a traversal audio path from the replay file reached the mix "
+            "unvalidated"
+        )
+
     def test_finalize_is_the_single_seam(self):
         """All three load paths must route through _finalize, or replay
         would silently apply to some datasets and not others."""
@@ -2428,6 +2565,24 @@ class TestTrainReplayFlags:
         cleaned = _clean(res.output)
         assert "--replay" in cleaned
         assert "--replay-ratio" in cleaned
+        assert "--replay-seed" in cleaned
+
+    def test_seed_override(self):
+        from soup_cli.commands.train import _apply_replay_overrides
+
+        out = _apply_replay_overrides(
+            self._cfg(_REPLAY_YAML), replay=None, replay_ratio=None,
+            replay_seed=7,
+        )
+        assert out.data.replay_seed == 7
+
+    def test_seed_without_replay_rejected(self):
+        from soup_cli.commands.train import _apply_replay_overrides
+
+        with pytest.raises(Exception, match="replay"):
+            _apply_replay_overrides(
+                self._cfg(), replay=None, replay_ratio=None, replay_seed=7
+            )
 
     def _cfg(self, yaml_str=None):
         from soup_cli.config.loader import load_config_from_string
