@@ -42,6 +42,8 @@ _MAX_MANIFEST_BYTES = 4 * 1024 * 1024
 # owns the SHIP/DON'T-SHIP threshold.
 _MEMORIZED_PERCENTILE = 0.01
 _SUSPICIOUS_PERCENTILE = 0.10
+# Significance level for "more low-percentile canaries than chance explains".
+_ALPHA = 0.05
 
 
 @dataclass(frozen=True)
@@ -263,16 +265,49 @@ def compute_exposure(
     return tuple(out)
 
 
+def _binomial_tail(k: int, n: int, prob: float) -> float:
+    """P(X >= k) for X ~ Binomial(n, prob). Exact; n is small (<= 10k)."""
+    if k <= 0:
+        return 1.0
+    if k > n:
+        return 0.0
+    return sum(
+        math.comb(n, i) * (prob ** i) * ((1.0 - prob) ** (n - i))
+        for i in range(k, n + 1)
+    )
+
+
 def classify_canary(exposures: Sequence[CanaryExposure]) -> str:
-    """OK / MINOR / MAJOR — the single source of truth for the verdict."""
+    """OK / MINOR / MAJOR — the single source of truth for the verdict.
+
+    The verdict asks whether MORE canaries look memorized than chance alone
+    explains, NOT whether any single one dipped low.
+
+    Why: under the null (no memorization) each canary's percentile is
+    ~Uniform(0,1), so P(percentile <= 0.01) = 0.01 PER CANARY — but with K
+    canaries the chance that at least one dips below is 1 - 0.99^K. At the
+    default K=16 that is ~15%, so an "any single canary" rule would fire
+    MAJOR on a perfectly clean model roughly one run in seven — and MAJOR
+    exits 2, which blocks a CI gate. Measured live on SmolLM2-135M: an
+    untrained model produced percentiles spanning 1.6%-93%, with two under
+    10%, purely from noise.
+
+    So the count is tested against a binomial tail: a verdict fires only
+    when observing that many low-percentile canaries would be unlikely
+    (<5%) by chance. A genuinely memorized set is unmistakable — every
+    canary lands at percentile 0.0 — so this costs no real sensitivity.
+    """
     items = list(exposures)
     if not items:
         return "OK"
-    if any(exposure.memorized for exposure in items):
+    n_canaries = len(items)
+    n_memorized = sum(1 for e in items if e.memorized)
+    n_suspicious = sum(
+        1 for e in items if e.percentile <= _SUSPICIOUS_PERCENTILE
+    )
+    if _binomial_tail(n_memorized, n_canaries, _MEMORIZED_PERCENTILE) < _ALPHA:
         return "MAJOR"
-    if any(
-        exposure.percentile <= _SUSPICIOUS_PERCENTILE for exposure in items
-    ):
+    if _binomial_tail(n_suspicious, n_canaries, _SUSPICIOUS_PERCENTILE) < _ALPHA:
         return "MINOR"
     return "OK"
 

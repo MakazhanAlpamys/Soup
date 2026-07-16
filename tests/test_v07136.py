@@ -1620,42 +1620,104 @@ class TestClassifyCanary:
             losses, controls, [f"s{i}" for i in range(len(losses))]
         )
 
-    def test_any_memorized_is_major(self):
+    def test_every_canary_memorized_is_major(self):
+        """The real signal: a memorized set lands at percentile 0.0."""
         from soup_cli.utils.canary import classify_canary
 
-        assert classify_canary(self._exposures([0.01, 0.5])) == "MAJOR"
+        assert classify_canary(self._exposures([0.0] * 10)) == "MAJOR"
 
-    def test_bottom_ten_percent_is_minor(self):
+    def test_two_of_ten_memorized_is_major(self):
+        """A partial leak must still fire: P(X>=2 | K=10, p=.01) = 0.4%."""
         from soup_cli.utils.canary import classify_canary
 
-        assert classify_canary(self._exposures([0.05, 0.5])) == "MINOR"
+        assert classify_canary(
+            self._exposures([0.0, 0.01, 0.5, 0.6, 0.4, 0.7, 0.3, 0.8, 0.5, 0.9])
+        ) == "MAJOR"
 
-    def test_boundary_0_10_is_minor(self):
+    def test_one_of_sixteen_memorized_is_not_major(self):
+        """THE LIVE-SMOKE FIX. P(X>=1 | K=16, p=.01) = 15% — one canary
+        dipping low is what a CLEAN model does one run in seven, and MAJOR
+        exits 2. Firing here would make the CI gate cry wolf."""
         from soup_cli.utils.canary import classify_canary
 
-        exposures = self._exposures([0.10, 0.5])
-        assert exposures[0].percentile == 0.10
-        assert classify_canary(exposures) == "MINOR"
+        pcts = [0.0] + [0.3 + 0.04 * i for i in range(15)]
+        assert classify_canary(self._exposures(pcts)) != "MAJOR"
 
-    def test_just_above_0_10_is_ok(self):
+    def test_the_observed_clean_model_is_ok(self):
+        """Measured live: SmolLM2-135M that never saw the canaries.
+
+        Two of ten under 10% — pure noise. The old any-canary rule called
+        this MINOR; it must be OK.
+        """
         from soup_cli.utils.canary import classify_canary
 
-        assert classify_canary(self._exposures([0.11, 0.5])) == "OK"
+        observed = [0.609, 0.391, 0.930, 0.383, 0.328,
+                    0.016, 0.609, 0.695, 0.156, 0.039]
+        assert classify_canary(self._exposures(observed)) == "OK"
+
+    def test_many_suspicious_is_minor(self):
+        """5 of 10 under 10% is 100x chance — worth flagging, not MAJOR."""
+        from soup_cli.utils.canary import classify_canary
+
+        pcts = [0.02, 0.03, 0.05, 0.07, 0.09, 0.5, 0.6, 0.7, 0.8, 0.9]
+        assert classify_canary(self._exposures(pcts)) == "MINOR"
 
     def test_all_typical_is_ok(self):
         from soup_cli.utils.canary import classify_canary
 
         assert classify_canary(self._exposures([0.5, 0.6])) == "OK"
 
-    def test_major_beats_minor_when_both_present(self):
-        from soup_cli.utils.canary import classify_canary
-
-        assert classify_canary(self._exposures([0.01, 0.05])) == "MAJOR"
-
     def test_empty_exposures_is_ok(self):
         from soup_cli.utils.canary import classify_canary
 
         assert classify_canary(()) == "OK"
+
+    def test_single_canary_needs_percentile_zero_to_fire(self):
+        from soup_cli.utils.canary import classify_canary
+
+        assert classify_canary(self._exposures([0.0])) == "MAJOR"
+        assert classify_canary(self._exposures([0.5])) == "OK"
+
+
+class TestBinomialTail:
+    def test_known_values(self):
+        from soup_cli.utils.canary import _binomial_tail
+
+        # P(X>=1 | n=16, p=.01) = 1 - .99^16
+        assert _binomial_tail(1, 16, 0.01) == pytest.approx(1 - 0.99 ** 16)
+        # P(X>=0) is certain; P(X>n) impossible
+        assert _binomial_tail(0, 10, 0.1) == 1.0
+        assert _binomial_tail(11, 10, 0.1) == 0.0
+
+    def test_tail_shrinks_as_k_grows(self):
+        from soup_cli.utils.canary import _binomial_tail
+
+        tails = [_binomial_tail(k, 10, 0.01) for k in range(1, 5)]
+        assert tails == sorted(tails, reverse=True)
+
+    def test_false_alarm_rate_is_bounded_at_the_default_count(self):
+        """The property the rule exists for: on a CLEAN model (percentiles
+        ~Uniform), the chance of a MAJOR must sit under alpha — NOT the 15%
+        the any-canary rule gave at K=16."""
+        import random
+
+        from soup_cli.utils.canary import CanaryExposure, classify_canary
+
+        rng = random.Random(0)
+        majors = 0
+        trials = 2000
+        for _ in range(trials):
+            exposures = tuple(
+                CanaryExposure(
+                    secret=f"s{i}", loss=1.0, percentile=pct,
+                    memorized=pct <= 0.01,
+                )
+                for i, pct in enumerate(rng.random() for _ in range(16))
+            )
+            if classify_canary(exposures) == "MAJOR":
+                majors += 1
+        rate = majors / trials
+        assert rate < 0.05, f"false MAJOR rate {rate:.1%} on clean models"
 
 
 class TestBuildCanaryReport:
