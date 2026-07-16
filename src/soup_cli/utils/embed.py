@@ -104,3 +104,116 @@ def resolve_pooling(model_id: str) -> str:
             f"{cleaned!r} does not declare mean-token pooling; refusing."
         )
     return "mean"
+
+
+# ---------------------------------------------------------------------------
+# Batched encode
+# ---------------------------------------------------------------------------
+
+_MAX_ROWS = 200_000
+_MAX_CHARS_PER_ROW = 8_192
+_MAX_BATCH_SIZE = 512
+_MAX_SEQ_TOKENS = 512
+
+
+def _mean_pool(hidden, attention_mask):
+    """Attention-masked mean over the token axis. Padding contributes 0.
+
+    An unmasked ``hidden.mean(dim=1)`` averages padded positions too, which
+    silently drags every vector toward the pad embedding.
+    """
+    mask = attention_mask.unsqueeze(-1).to(hidden.dtype)
+    summed = (hidden * mask).sum(dim=1)
+    counts = mask.sum(dim=1).clamp(min=1e-9)  # never divide by zero
+    return summed / counts
+
+
+def _l2_normalize(vectors):
+    """Row-wise L2 normalize so cosine == dot product. Zero rows stay zero."""
+    import numpy as np
+
+    norms = np.linalg.norm(vectors, axis=1, keepdims=True)
+    norms = np.where(norms < 1e-12, 1.0, norms)
+    return (vectors / norms).astype(np.float32)
+
+
+def _validate_texts(texts: object) -> list:
+    """Coerce + bound-check the input rows.
+
+    A bare ``str`` is rejected: it is a sequence of characters, so accepting
+    it would silently embed one row per letter.
+    """
+    if isinstance(texts, (str, bytes)) or not hasattr(texts, "__len__"):
+        raise TypeError("texts must be a sequence of str")
+    items = list(texts)
+    if not items:
+        raise ValueError("texts must contain at least one text")
+    if len(items) > _MAX_ROWS:
+        raise ValueError(
+            f"too many texts ({len(items)}); cap is {_MAX_ROWS}. Sample the "
+            "dataset first (`soup data sample`) — Soup refuses rather than "
+            "silently subsampling."
+        )
+    for idx, item in enumerate(items):
+        if not isinstance(item, str):
+            raise TypeError(
+                f"texts[{idx}] must be str, got {type(item).__name__}"
+            )
+    return [item[:_MAX_CHARS_PER_ROW] for item in items]
+
+
+def _require_batch_size(batch_size: object) -> int:
+    if isinstance(batch_size, bool) or not isinstance(batch_size, int):
+        raise TypeError(
+            f"batch_size must be int, got {type(batch_size).__name__}"
+        )
+    if batch_size < 1 or batch_size > _MAX_BATCH_SIZE:
+        raise ValueError(
+            f"batch_size must be in [1, {_MAX_BATCH_SIZE}], got {batch_size}"
+        )
+    return batch_size
+
+
+def embed_texts(
+    texts,
+    *,
+    model_id: str = DEFAULT_EMBED_MODEL,
+    device: str = "auto",
+    batch_size: int = 32,
+):
+    """Embed ``texts`` -> an ``(n, d)`` float32 array with L2-normalized rows.
+
+    Torch / transformers / numpy are imported lazily so this module stays
+    importable on the light core (a ``pip install soup-cli`` without the
+    ``[train]`` extra).
+    """
+    items = _validate_texts(texts)
+    batch = _require_batch_size(batch_size)
+    # Refuse an unverified model BEFORE any download starts.
+    resolve_pooling(model_id)
+
+    import numpy as np
+    import torch
+    from transformers import AutoModel, AutoTokenizer
+
+    from soup_cli.utils.live_eval import resolve_device
+
+    dev = resolve_device(device)
+    tokenizer = AutoTokenizer.from_pretrained(model_id)
+    model = AutoModel.from_pretrained(model_id).to(dev)
+    model.eval()
+
+    chunks = []
+    with torch.no_grad():
+        for start in range(0, len(items), batch):
+            encoded = tokenizer(
+                items[start: start + batch],
+                padding=True,
+                truncation=True,
+                max_length=_MAX_SEQ_TOKENS,
+                return_tensors="pt",
+            ).to(dev)
+            out = model(**encoded)
+            pooled = _mean_pool(out.last_hidden_state, encoded["attention_mask"])
+            chunks.append(pooled.float().cpu().numpy())
+    return _l2_normalize(np.vstack(chunks))
