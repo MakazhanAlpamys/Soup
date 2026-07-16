@@ -1939,3 +1939,137 @@ class TestDataCanaryCli:
         )
         assert res.exit_code == 1
         assert "no canaries" in _clean(res.output).lower()
+
+
+_REPLAY_YAML = """
+base: HuggingFaceTB/SmolLM2-135M-Instruct
+task: sft
+data:
+  train: train.jsonl
+  replay: old.jsonl
+  replay_ratio: 0.2
+training:
+  epochs: 1
+"""
+
+_PLAIN_YAML = (
+    "base: m\ntask: sft\ndata:\n  train: t.jsonl\ntraining:\n  epochs: 1\n"
+)
+
+
+class TestReplaySchema:
+    def _load(self, yaml_str):
+        from soup_cli.config.loader import load_config_from_string
+
+        return load_config_from_string(yaml_str)
+
+    def test_happy_path(self):
+        cfg = self._load(_REPLAY_YAML)
+        assert cfg.data.replay == "old.jsonl"
+        assert cfg.data.replay_ratio == 0.2
+
+    def test_default_is_off(self):
+        cfg = self._load(_PLAIN_YAML)
+        assert cfg.data.replay is None
+        assert cfg.data.replay_ratio == 0.1
+        assert cfg.data.replay_seed is None
+
+    def test_pretrain_allowed(self):
+        cfg = self._load(
+            _REPLAY_YAML.replace("task: sft", "task: pretrain").replace(
+                "  train: train.jsonl",
+                "  train: train.jsonl\n  format: plaintext",
+            )
+        )
+        assert cfg.data.replay == "old.jsonl"
+
+    def test_rejected_on_dpo(self):
+        with pytest.raises(Exception, match="replay"):
+            self._load(
+                _REPLAY_YAML.replace("task: sft", "task: dpo").replace(
+                    "  train: train.jsonl",
+                    "  train: train.jsonl\n  format: dpo",
+                )
+            )
+
+    def test_footgun_ratio_without_replay(self):
+        yaml_str = (
+            "base: m\ntask: sft\ndata:\n  train: t.jsonl\n"
+            "  replay_ratio: 0.3\ntraining:\n  epochs: 1\n"
+        )
+        with pytest.raises(Exception, match="data.replay"):
+            self._load(yaml_str)
+
+    def test_footgun_seed_without_replay(self):
+        yaml_str = (
+            "base: m\ntask: sft\ndata:\n  train: t.jsonl\n"
+            "  replay_seed: 7\ntraining:\n  epochs: 1\n"
+        )
+        with pytest.raises(Exception, match="data.replay"):
+            self._load(yaml_str)
+
+    def test_mutually_exclusive_with_packing(self):
+        yaml_str = _REPLAY_YAML.replace(
+            "training:\n  epochs: 1", "training:\n  epochs: 1\n  packing: true"
+        )
+        with pytest.raises(Exception, match="packing"):
+            self._load(yaml_str)
+
+    def test_mutually_exclusive_with_multipack(self):
+        yaml_str = _REPLAY_YAML.replace(
+            "training:\n  epochs: 1",
+            "training:\n  epochs: 1\n  multipack: true",
+        )
+        with pytest.raises(Exception, match="multipack"):
+            self._load(yaml_str)
+
+    @pytest.mark.parametrize("bad", ["0.0", "0.6", "1.0", "-0.1"])
+    def test_ratio_bounds(self, bad):
+        with pytest.raises(Exception):
+            self._load(
+                _REPLAY_YAML.replace("replay_ratio: 0.2", f"replay_ratio: {bad}")
+            )
+
+    def test_ratio_boundary_0_5_allowed(self):
+        cfg = self._load(
+            _REPLAY_YAML.replace("replay_ratio: 0.2", "replay_ratio: 0.5")
+        )
+        assert cfg.data.replay_ratio == 0.5
+
+    @pytest.mark.parametrize("bad", ['""', '"   "'])
+    def test_replay_field_validator_rejects_blank(self, bad):
+        with pytest.raises(Exception):
+            self._load(_REPLAY_YAML.replace("replay: old.jsonl", f"replay: {bad}"))
+
+    def test_replay_rejects_null_byte(self):
+        from soup_cli.config.schema import DataConfig
+
+        with pytest.raises(Exception, match="null"):
+            DataConfig(train="t.jsonl", replay="a\x00b")
+
+    def test_replay_rejects_overlong_path(self):
+        from soup_cli.config.schema import DataConfig
+
+        with pytest.raises(Exception, match="too long"):
+            DataConfig(train="t.jsonl", replay="x" * 5000)
+
+    def test_ratio_rejects_bool(self):
+        with pytest.raises(Exception):
+            self._load(
+                _REPLAY_YAML.replace("replay_ratio: 0.2", "replay_ratio: true")
+            )
+
+    def test_seed_rejects_bool(self):
+        with pytest.raises(Exception):
+            self._load(
+                _REPLAY_YAML.replace(
+                    "replay_ratio: 0.2", "replay_seed: true"
+                )
+            )
+
+    def test_replay_survives_model_dump(self):
+        """Provenance rides the schema — the tracker/registry capture it."""
+        cfg = self._load(_REPLAY_YAML)
+        dumped = cfg.model_dump()
+        assert dumped["data"]["replay"] == "old.jsonl"
+        assert dumped["data"]["replay_ratio"] == 0.2

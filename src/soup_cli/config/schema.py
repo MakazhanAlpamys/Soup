@@ -288,6 +288,68 @@ class DataConfig(BaseModel):
         ),
     )
 
+    # --- v0.71.36 Data Moat II: continual-learning rehearsal ---------------
+    replay: Optional[str] = Field(
+        default=None,
+        description=(
+            "Path to an OLD dataset to interleave into training as "
+            "continual-learning rehearsal, so fine-tuning on a new task does "
+            "not erase the previous one. Rows are mixed into train ONLY "
+            "(never val, which stays pure new-task). sft / pretrain only; "
+            "incompatible with packing / multipack. (v0.71.36)"
+        ),
+    )
+    replay_ratio: float = Field(
+        default=0.1,
+        gt=0.0,
+        le=0.5,
+        description=(
+            "Fraction of the FINAL mixed train set that is replay rows: "
+            "n_replay = round(r/(1-r) * n_new). At 0.1 over 1000 new rows "
+            "that is 111 replay rows -> 1111 total -> 10.0%. (v0.71.36)"
+        ),
+    )
+    replay_seed: Optional[int] = Field(
+        default=None,
+        ge=0,
+        le=2_147_483_647,
+        description=(
+            "Seed for the replay sample + interleave. None = seed 0. "
+            "(v0.71.36)"
+        ),
+    )
+
+    @field_validator("replay")
+    @classmethod
+    def _validate_replay_path(cls, v):
+        if v is None:
+            return None
+        if not isinstance(v, str):
+            raise ValueError("data.replay must be a string path")
+        cleaned = v.strip()
+        if not cleaned:
+            raise ValueError("data.replay must be a non-empty path")
+        if "\x00" in cleaned:
+            raise ValueError("data.replay must not contain null bytes")
+        if len(cleaned) > 4096:
+            raise ValueError("data.replay path too long (max 4096 chars)")
+        return cleaned
+
+    @field_validator("replay_ratio", mode="before")
+    @classmethod
+    def _validate_replay_ratio(cls, v):
+        # Bool is a subclass of int/float — reject before coercion.
+        if isinstance(v, bool):
+            raise ValueError("data.replay_ratio must not be a bool")
+        return v
+
+    @field_validator("replay_seed", mode="before")
+    @classmethod
+    def _validate_replay_seed(cls, v):
+        if isinstance(v, bool):
+            raise ValueError("data.replay_seed must not be a bool")
+        return v
+
     # --- v0.42.0 Data Pipeline Pro -----------------------------------------
     video_dir: Optional[str] = Field(
         default=None,
@@ -4589,6 +4651,47 @@ class SoupConfig(BaseModel):
         elif asr_set:
             raise ValueError(
                 "training.asr_language / asr_task / asr_lora require task='asr'"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_replay_compat(self) -> "SoupConfig":
+        """v0.71.36 — continual-learning rehearsal gate.
+
+        Replay interleaves rows from an OLD dataset into train so the model
+        does not forget the previous task. v1 covers the plain
+        instruction / continued-pretraining paths only.
+
+        packing / multipack concatenate rows into fixed-length blocks, so
+        the replay ratio stops being meaningful at block boundaries —
+        reject rather than silently mis-mix. Setting replay_ratio /
+        replay_seed without data.replay silently no-ops, so reject that as
+        a footgun.
+        """
+        data = self.data
+        replay_knobs_set = (
+            data.replay_ratio != 0.1 or data.replay_seed is not None
+        )
+        if data.replay is not None:
+            if self.task not in ("sft", "pretrain"):
+                raise ValueError(
+                    "data.replay requires task='sft' or task='pretrain'; "
+                    f"got task={self.task!r}"
+                )
+            if self.training.packing:
+                raise ValueError(
+                    "data.replay is incompatible with training.packing "
+                    "(packing concatenates rows into fixed blocks, so the "
+                    "replay ratio stops being meaningful)"
+                )
+            if getattr(self.training, "multipack", False):
+                raise ValueError(
+                    "data.replay is incompatible with training.multipack "
+                    "(bin-packing breaks the replay ratio)"
+                )
+        elif replay_knobs_set:
+            raise ValueError(
+                "data.replay_ratio / data.replay_seed require data.replay"
             )
         return self
 
