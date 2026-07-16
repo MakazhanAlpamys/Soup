@@ -137,6 +137,25 @@ def _hardware_fit_preflight(cfg, gpu_info, *, allow_oom_attempt: bool) -> None:
         raise typer.Exit(1)
 
 
+def _apply_replay_overrides(cfg, *, replay, replay_ratio):
+    """Apply ``--replay`` / ``--replay-ratio``, then RE-VALIDATE.
+
+    Re-validation is the point: a CLI override must clear the same
+    cross-validators as YAML, or ``--replay`` on ``task='dpo'`` would slip
+    past ``_validate_replay_compat``. Rebuilding the model (rather than
+    mutating in place) is what re-runs them, and leaves the caller's config
+    untouched.
+    """
+    if replay is None and replay_ratio is None:
+        return cfg
+    payload = cfg.model_dump()
+    if replay is not None:
+        payload["data"]["replay"] = replay
+    if replay_ratio is not None:
+        payload["data"]["replay_ratio"] = replay_ratio
+    return type(cfg)(**payload)
+
+
 def train(
     config: str = typer.Option(
         "soup.yaml",
@@ -293,6 +312,22 @@ def train(
         help=(
             "Auto-halt training on a HACK verdict. Requires "
             "--reward-hack-detector (or training.reward_hack_detector). (v0.71.26)"
+        ),
+    ),
+    replay: str = typer.Option(
+        None, "--replay",
+        help=(
+            "Old dataset to interleave as continual-learning rehearsal, so "
+            "training on the new task does not erase the previous one. "
+            "sft/pretrain only; incompatible with packing/multipack. "
+            "Overrides data.replay. (v0.71.36)"
+        ),
+    ),
+    replay_ratio: float = typer.Option(
+        None, "--replay-ratio",
+        help=(
+            "Fraction of the FINAL mixed train set that is replay rows "
+            "(default 0.1). Overrides data.replay_ratio. (v0.71.36)"
         ),
     ),
     reward_hack_mitigation: str = typer.Option(
@@ -465,6 +500,15 @@ def train(
     # Load & validate config
     console.print(f"[dim]Loading config from {config_path}...[/]")
     cfg = load_config(config_path)
+
+    # --- v0.71.36 replay passthrough ---
+    try:
+        cfg = _apply_replay_overrides(
+            cfg, replay=replay, replay_ratio=replay_ratio
+        )
+    except Exception as exc:  # noqa: BLE001 — pydantic ValidationError et al.
+        console.print(f"[red]{markup_escape(str(exc))}[/]")
+        raise typer.Exit(code=2) from exc
 
     # --- RA-DIT generator-stage auto-link (v0.71.10 #200) ---
     # When a generator stage has no retriever model set, splice in the latest

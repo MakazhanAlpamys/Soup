@@ -2415,3 +2415,83 @@ class TestLoaderReplay:
         assert source.count("def _finalize(") == 1
         # local + remote + hf paths
         assert source.count("_finalize(") >= 4
+
+
+class TestTrainReplayFlags:
+    def test_help_lists_replay(self):
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        res = CliRunner(env={"COLUMNS": "200"}).invoke(app, ["train", "--help"])
+        assert res.exit_code == 0, (res.output, repr(res.exception))
+        cleaned = _clean(res.output)
+        assert "--replay" in cleaned
+        assert "--replay-ratio" in cleaned
+
+    def _cfg(self, yaml_str=None):
+        from soup_cli.config.loader import load_config_from_string
+
+        return load_config_from_string(yaml_str or _PLAIN_YAML)
+
+    def test_apply_replay_overrides(self):
+        from soup_cli.commands.train import _apply_replay_overrides
+
+        out = _apply_replay_overrides(
+            self._cfg(), replay="old.jsonl", replay_ratio=0.25
+        )
+        assert out.data.replay == "old.jsonl"
+        assert out.data.replay_ratio == 0.25
+
+    def test_no_flags_is_identity(self):
+        from soup_cli.commands.train import _apply_replay_overrides
+
+        cfg = self._cfg()
+        out = _apply_replay_overrides(cfg, replay=None, replay_ratio=None)
+        assert out is cfg
+        assert out.data.replay is None
+
+    def test_override_is_revalidated_against_the_gate(self):
+        """--replay on task=dpo must hit _validate_replay_compat.
+
+        A CLI override that skipped re-validation would slip past every
+        cross-validator that YAML has to satisfy.
+        """
+        from soup_cli.commands.train import _apply_replay_overrides
+
+        dpo = self._cfg(
+            "base: m\ntask: dpo\ndata:\n  train: t.jsonl\n  format: dpo\n"
+            "training:\n  epochs: 1\n"
+        )
+        with pytest.raises(Exception, match="replay"):
+            _apply_replay_overrides(dpo, replay="old.jsonl", replay_ratio=None)
+
+    def test_ratio_without_replay_flag_rejected(self):
+        from soup_cli.commands.train import _apply_replay_overrides
+
+        with pytest.raises(Exception, match="replay"):
+            _apply_replay_overrides(self._cfg(), replay=None, replay_ratio=0.3)
+
+    def test_bad_ratio_rejected(self):
+        from soup_cli.commands.train import _apply_replay_overrides
+
+        with pytest.raises(Exception):
+            _apply_replay_overrides(
+                self._cfg(), replay="old.jsonl", replay_ratio=0.9
+            )
+
+    def test_yaml_value_preserved_when_flag_absent(self):
+        """--replay-ratio alone must not clobber a YAML data.replay."""
+        from soup_cli.commands.train import _apply_replay_overrides
+
+        cfg = self._cfg(_REPLAY_YAML)
+        out = _apply_replay_overrides(cfg, replay=None, replay_ratio=0.3)
+        assert out.data.replay == "old.jsonl"
+        assert out.data.replay_ratio == 0.3
+
+    def test_override_does_not_mutate_the_input_config(self):
+        from soup_cli.commands.train import _apply_replay_overrides
+
+        cfg = self._cfg()
+        _apply_replay_overrides(cfg, replay="old.jsonl", replay_ratio=0.2)
+        assert cfg.data.replay is None, "input config must not be mutated"
