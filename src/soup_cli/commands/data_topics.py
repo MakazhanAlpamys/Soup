@@ -50,16 +50,16 @@ def _report_to_dict(report) -> dict:
     }
 
 
-def _parse_clusters(value: str):
+def _parse_clusters(value: str) -> "int | str":
     """``"auto"`` stays a string; anything else must be an int."""
     if value.strip().lower() == "auto":
         return "auto"
     try:
         return int(value)
-    except ValueError:
+    except ValueError as exc:
         raise ValueError(
             f"--clusters must be an integer or 'auto', got {value!r}"
-        )
+        ) from exc
 
 
 def topics(

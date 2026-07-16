@@ -14,6 +14,7 @@ from soup_cli.data.formats import (
     is_audio_format,
     is_vision_format,
 )
+from soup_cli.utils.paths import is_under_cwd
 
 console = Console()
 
@@ -110,14 +111,12 @@ def _load_txt(path: Path) -> list[dict]:
     return [{"text": line} for line in lines]
 
 
-def _load_replay_rows(data_config: DataConfig) -> list:
+def _load_replay_rows(data_config: DataConfig) -> list[dict]:
     """Load + normalize the replay file with its OWN format detection.
 
     The old dataset may be alpaca while the new one is sharegpt, so the
     replay file cannot inherit ``data_config.format``.
     """
-    from soup_cli.utils.paths import is_under_cwd
-
     replay_path = Path(data_config.replay)
     if not is_under_cwd(replay_path):
         raise ValueError(
@@ -134,7 +133,10 @@ def _load_replay_rows(data_config: DataConfig) -> list:
 
 
 def _finalize(
-    formatted: list, data_config: DataConfig, *, val: list | None = None
+    formatted: list[dict],
+    data_config: DataConfig,
+    *,
+    val: list[dict] | None = None,
 ) -> dict:
     """Split train/val, then mix replay into train ONLY.
 

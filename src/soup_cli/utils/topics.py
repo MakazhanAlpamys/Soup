@@ -17,6 +17,10 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Sequence
+
+if TYPE_CHECKING:  # static types only — numpy stays a lazy runtime import
+    from numpy.typing import NDArray
 
 _MAX_TOPIC_ROWS = 200_000
 # 'auto' never proposes more than this, so the coverage table stays one
@@ -29,21 +33,21 @@ class Topic:
     """One cluster: its label, its share of the corpus, and its members."""
 
     label: str
-    terms: tuple
+    terms: tuple[str, ...]
     size: int
     fraction: float
-    member_indices: tuple
+    member_indices: tuple[int, ...]
 
 
 @dataclass(frozen=True)
 class TopicReport:
-    topics: tuple
+    topics: tuple[Topic, ...]
     n_rows: int
     n_clusters: int
-    warnings: tuple
+    warnings: tuple[str, ...]
 
 
-def resolve_k(n_rows: int, requested) -> int:
+def resolve_k(n_rows: int, requested: "int | str") -> int:
     """Pick the cluster count.
 
     An explicit int is honoured (clamped to ``[1, n_rows]``). ``"auto"``
@@ -70,7 +74,13 @@ def resolve_k(n_rows: int, requested) -> int:
     return max(1, min(requested, n_rows)) if n_rows else 1
 
 
-def kmeans(vectors, *, k: int, seed: int, max_iter: int = 50):
+def kmeans(
+    vectors: "Any | NDArray[Any]",
+    *,
+    k: int,
+    seed: int,
+    max_iter: int = 50,
+) -> "NDArray[Any]":
     """Deterministic k-means++ over ``vectors``; returns integer labels."""
     import numpy as np
 
@@ -117,7 +127,13 @@ def kmeans(vectors, *, k: int, seed: int, max_iter: int = 50):
     return labels
 
 
-def ctfidf_labels(token_docs, labels, *, k: int, top_n: int = 3) -> list:
+def ctfidf_labels(
+    token_docs: Sequence[Sequence[str]],
+    labels: Sequence[int],
+    *,
+    k: int,
+    top_n: int = 3,
+) -> list[tuple[str, ...]]:
     """Class-based TF-IDF: each CLUSTER is one document.
 
     A term frequent in one cluster and rare across clusters scores high; a
@@ -137,7 +153,7 @@ def ctfidf_labels(token_docs, labels, *, k: int, top_n: int = 3) -> list:
     if isinstance(top_n, bool) or not isinstance(top_n, int) or top_n < 1:
         raise ValueError("top_n must be an int >= 1")
 
-    per_class: list = [Counter() for _ in range(k)]
+    per_class: list[Counter] = [Counter() for _ in range(k)]
     for tokens, label in zip(docs, label_list):
         idx = int(label)
         if 0 <= idx < k:
@@ -167,7 +183,11 @@ def ctfidf_labels(token_docs, labels, *, k: int, top_n: int = 3) -> list:
 
 
 def build_topic_report(
-    rows, labels, *, k: int, min_fraction: float = 0.02
+    rows: Sequence[dict],
+    labels: Sequence[int],
+    *,
+    k: int,
+    min_fraction: float = 0.02,
 ) -> TopicReport:
     """Assemble the coverage table + gap warnings from cluster labels."""
     from soup_cli.utils._eval_text import row_text, tokenize
@@ -186,8 +206,8 @@ def build_topic_report(
     token_docs = [tokenize(row_text(row)) for row in row_list]
     label_terms = ctfidf_labels(token_docs, label_list, k=k, top_n=3)
 
-    topics = []
-    warnings = []
+    topics: list[Topic] = []
+    warnings: list[str] = []
     for idx in range(k):
         members = tuple(
             i for i, label in enumerate(label_list) if label == idx

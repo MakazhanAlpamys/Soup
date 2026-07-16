@@ -4684,7 +4684,7 @@ class SoupConfig(BaseModel):
                     "(packing concatenates rows into fixed blocks, so the "
                     "replay ratio stops being meaningful)"
                 )
-            if getattr(self.training, "multipack", False):
+            if self.training.multipack:
                 raise ValueError(
                     "data.replay is incompatible with training.multipack "
                     "(bin-packing breaks the replay ratio)"

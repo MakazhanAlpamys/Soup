@@ -12,7 +12,10 @@ importable on the light core.
 from __future__ import annotations
 
 import json
+import logging
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 # Models whose pooling is verified pure-mean. Short-circuits the hub fetch.
 # all-mpnet-base-v2 already ships as the `ra-dit-retriever` recipe base.
@@ -57,7 +60,10 @@ def _fetch_pooling_config(model_id: str) -> Optional[dict]:
     """Read ``1_Pooling/config.json`` from the hub repo.
 
     Returns None when the file is absent or unreadable — the caller then
-    REFUSES rather than assuming mean pooling.
+    REFUSES rather than assuming mean pooling, so every failure here is
+    fail-CLOSED. The breadth of the ``except`` is therefore safe, but a
+    hub outage and a genuinely-absent file are indistinguishable to the
+    user, so the reason is logged at debug level before returning.
     """
     try:
         from huggingface_hub import hf_hub_download
@@ -68,7 +74,13 @@ def _fetch_pooling_config(model_id: str) -> Optional[dict]:
         with open(path, "r", encoding="utf-8") as handle:
             data = json.load(handle)
         return data if isinstance(data, dict) else None
-    except Exception:
+    except Exception as exc:  # noqa: BLE001 — fail-closed; caller refuses
+        logger.debug(
+            "could not fetch 1_Pooling/config.json for %r: %s: %s",
+            model_id,
+            type(exc).__name__,
+            exc,
+        )
         return None
 
 

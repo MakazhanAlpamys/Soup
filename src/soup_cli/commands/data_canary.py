@@ -11,8 +11,9 @@ Mirrors ``soup diagnose`` / ``soup ship`` exit conventions so CI can gate.
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import typer
 from rich.console import Console
@@ -32,6 +33,9 @@ from soup_cli.utils.canary import (
 from soup_cli.utils.live_eval import compute_pair_losses
 from soup_cli.utils.paths import atomic_write_text, is_under_cwd
 
+if TYPE_CHECKING:  # static types only — transformers stays a lazy import
+    from transformers import PreTrainedModel, PreTrainedTokenizerBase
+
 console = Console()
 app = typer.Typer(
     no_args_is_help=True, help="Dataset canaries (memorization probe)."
@@ -43,7 +47,9 @@ _CONTROL_SEED = 12345
 _VERDICT_COLOUR = {"OK": "green", "MINOR": "yellow", "MAJOR": "red"}
 
 
-def _load_pair(base: str, adapter: Optional[str], device: str):
+def _load_pair(
+    base: str, adapter: Optional[str], device: str
+) -> "tuple[PreTrainedModel, PreTrainedTokenizerBase, str]":
     """Seam: load ``(model, tokenizer, device)``. Patched in tests."""
     from soup_cli.utils.live_eval import load_model_and_tokenizer
 
@@ -184,7 +190,7 @@ def check(
     table.add_column("Memorized", justify="right")
     for exposure in report.exposures:
         loss_text = (
-            "nan" if exposure.loss != exposure.loss else f"{exposure.loss:.4f}"
+            "nan" if math.isnan(exposure.loss) else f"{exposure.loss:.4f}"
         )
         table.add_row(
             escape(exposure.secret.strip()),

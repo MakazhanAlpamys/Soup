@@ -22,7 +22,7 @@ import math
 import os
 import random
 from dataclasses import dataclass
-from typing import Collection
+from typing import Any, Collection, Sequence
 
 from soup_cli.utils.paths import atomic_write_text, enforce_under_cwd_and_no_symlink
 
@@ -60,7 +60,7 @@ class CanaryExposure:
 
 @dataclass(frozen=True)
 class CanaryReport:
-    exposures: tuple
+    exposures: tuple[CanaryExposure, ...]
     n_controls: int
     verdict: str
 
@@ -83,7 +83,9 @@ def _make_secret(rng: random.Random) -> str:
     return " " + "-".join(groups)
 
 
-def _generate(count: int, seed: int, exclude: Collection) -> tuple:
+def _generate(
+    count: int, seed: int, exclude: Collection[str]
+) -> tuple[Canary, ...]:
     rng = random.Random(seed)
     carrier = CARRIER_TEMPLATE.format(slug=_SLUG)
     seen = set(exclude)
@@ -97,12 +99,14 @@ def _generate(count: int, seed: int, exclude: Collection) -> tuple:
     return tuple(out)
 
 
-def generate_canaries(*, count: int, seed: int) -> tuple:
+def generate_canaries(*, count: int, seed: int) -> tuple[Canary, ...]:
     """K unique canaries, deterministic in ``seed``."""
     return _generate(_require_count(count, "count"), seed, ())
 
 
-def generate_controls(*, count: int, seed: int, exclude: Collection) -> tuple:
+def generate_controls(
+    *, count: int, seed: int, exclude: Collection[str]
+) -> tuple[Canary, ...]:
     """N controls from the SAME space, sharing the carrier, never inserted.
 
     Sharing the carrier is what isolates the secret: if the controls used a
@@ -111,7 +115,7 @@ def generate_controls(*, count: int, seed: int, exclude: Collection) -> tuple:
     return _generate(_require_count(count, "count"), seed, exclude)
 
 
-def canary_rows(canaries) -> list:
+def canary_rows(canaries: Sequence[Canary]) -> list[dict]:
     """Render canaries as ``{"messages": [...]}`` training rows."""
     return [
         {
@@ -124,7 +128,7 @@ def canary_rows(canaries) -> list:
     ]
 
 
-def write_manifest(canaries, path: str) -> str:
+def write_manifest(canaries: Sequence[Canary], path: str) -> str:
     """Persist the secrets. THIS FILE IS THE SENSITIVE ARTIFACT.
 
     Anyone holding it can reproduce the canaries, so it must not be
@@ -144,7 +148,7 @@ def write_manifest(canaries, path: str) -> str:
     return safe
 
 
-def load_manifest(path: str) -> tuple:
+def load_manifest(path: str) -> tuple[Canary, ...]:
     """Read a canary manifest written by :func:`write_manifest`."""
     safe = enforce_under_cwd_and_no_symlink(str(path), "manifest")
     if os.path.getsize(safe) > _MAX_MANIFEST_BYTES:
@@ -175,7 +179,11 @@ def load_manifest(path: str) -> tuple:
     return tuple(out)
 
 
-def compute_exposure(canary_losses, control_losses, secrets) -> tuple:
+def compute_exposure(
+    canary_losses: Sequence[float],
+    control_losses: Sequence[float],
+    secrets: Sequence[str],
+) -> tuple[CanaryExposure, ...]:
     """Rank each canary's loss against the control distribution.
 
     ``percentile`` = fraction of controls STRICTLY cheaper than the canary.
@@ -196,7 +204,7 @@ def compute_exposure(canary_losses, control_losses, secrets) -> tuple:
     strongest possible leak.
     """
     losses = list(canary_losses)
-    controls = [value for value in control_losses if value == value]  # drop nan
+    controls = [value for value in control_losses if not math.isnan(value)]
     secret_list = list(secrets)
     if len(losses) != len(secret_list):
         raise ValueError(
@@ -235,7 +243,7 @@ def compute_exposure(canary_losses, control_losses, secrets) -> tuple:
     return tuple(out)
 
 
-def classify_canary(exposures) -> str:
+def classify_canary(exposures: Sequence[CanaryExposure]) -> str:
     """OK / MINOR / MAJOR — the single source of truth for the verdict."""
     items = list(exposures)
     if not items:
@@ -249,17 +257,21 @@ def classify_canary(exposures) -> str:
     return "OK"
 
 
-def build_canary_report(canary_losses, control_losses, secrets) -> CanaryReport:
+def build_canary_report(
+    canary_losses: Sequence[float],
+    control_losses: Sequence[float],
+    secrets: Sequence[str],
+) -> CanaryReport:
     """Exposure + verdict in one frozen object (mirrors ship_verdict.py)."""
     exposures = compute_exposure(canary_losses, control_losses, secrets)
     return CanaryReport(
         exposures=exposures,
-        n_controls=len([v for v in control_losses if v == v]),
+        n_controls=len([v for v in control_losses if not math.isnan(v)]),
         verdict=classify_canary(exposures),
     )
 
 
-def canary_report_to_dict(report: CanaryReport) -> dict:
+def canary_report_to_dict(report: CanaryReport) -> dict[str, Any]:
     """JSON-safe rendering. NaN losses become null, never 0.0."""
     return {
         "verdict": report.verdict,
@@ -267,7 +279,9 @@ def canary_report_to_dict(report: CanaryReport) -> dict:
         "exposures": [
             {
                 "secret": exposure.secret,
-                "loss": None if exposure.loss != exposure.loss else exposure.loss,
+                "loss": (
+                    None if math.isnan(exposure.loss) else exposure.loss
+                ),
                 "percentile": exposure.percentile,
                 "memorized": exposure.memorized,
             }

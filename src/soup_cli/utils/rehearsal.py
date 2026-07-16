@@ -20,6 +20,7 @@ from __future__ import annotations
 import math
 import random
 from dataclasses import dataclass
+from typing import Optional, Sequence
 
 
 @dataclass(frozen=True)
@@ -67,7 +68,13 @@ def resolve_replay_count(n_new: int, ratio: float) -> int:
     return int(round(rate / (1.0 - rate) * rows))
 
 
-def mix_replay(new_rows, replay_rows, *, ratio: float, seed=None):
+def mix_replay(
+    new_rows: Sequence[dict],
+    replay_rows: Sequence[dict],
+    *,
+    ratio: float,
+    seed: Optional[int] = None,
+) -> tuple[list[dict], ReplayReport]:
     """Interleave a seeded sample of ``replay_rows`` into ``new_rows``.
 
     Interleaved, NOT appended. ``new + replay`` would put every replay row

@@ -20,6 +20,10 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:  # static types only — numpy stays a lazy runtime import
+    from numpy.typing import NDArray
 
 # O(n^2) in the worst case — refuse loudly rather than silently subsample.
 _MAX_SEMDEDUP_ROWS = 50_000
@@ -34,9 +38,9 @@ class DedupReport:
     makes a MinHash-vs-semantic comparison checkable rather than a vibe.
     """
 
-    kept: tuple
-    dropped: tuple
-    pairs: tuple
+    kept: tuple[int, ...]
+    dropped: tuple[int, ...]
+    pairs: tuple[tuple[int, int, float], ...]
     threshold: float
 
 
@@ -53,7 +57,9 @@ def _require_threshold(value: object) -> float:
     return num
 
 
-def greedy_semdedup(vectors, *, threshold: float) -> DedupReport:
+def greedy_semdedup(
+    vectors: "Any | NDArray[Any]", *, threshold: float
+) -> DedupReport:
     """Greedy cosine near-duplicate removal over L2-normalized ``vectors``.
 
     Rows are visited in order. The first row of any near-duplicate cluster
@@ -76,9 +82,9 @@ def greedy_semdedup(vectors, *, threshold: float) -> DedupReport:
             "Soup refuses rather than silently subsampling."
         )
 
-    kept: list = []
-    dropped: list = []
-    pairs: list = []
+    kept: list[int] = []
+    dropped: list[int] = []
+    pairs: list[tuple[int, int, float]] = []
     for idx in range(n_rows):
         if not kept:
             kept.append(idx)

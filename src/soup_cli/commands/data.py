@@ -16,7 +16,7 @@ from soup_cli.data.loader import load_raw_data
 from soup_cli.data.validator import validate_and_stats
 from soup_cli.utils.embed import DEFAULT_EMBED_MODEL, embed_texts
 from soup_cli.utils.paths import is_under_cwd
-from soup_cli.utils.semdedup import greedy_semdedup
+from soup_cli.utils.semdedup import DedupReport, greedy_semdedup
 
 console = Console()
 
@@ -237,7 +237,10 @@ def _row_embed_text(row: dict, field: Optional[str]) -> str:
     """What gets embedded for a row: one field, or all text values joined.
 
     Mirrors the MinHash branch's text selection so ``--field`` means the
-    same thing for both backends.
+    same thing for both backends. NOTE: ``soup data topics`` deliberately
+    picks row text differently — it prefers ``_eval_text.row_text``'s
+    assistant-turn extraction, because a topic map should cluster on what
+    the model is taught to SAY, whereas dedup must consider the whole row.
     """
     if field:
         return str(row.get(field, ""))
@@ -245,14 +248,14 @@ def _row_embed_text(row: dict, field: Optional[str]) -> str:
 
 
 def _semantic_dedup(
-    data: list,
+    data: list[dict],
     *,
     threshold: float,
     field: Optional[str],
     embed_model: str,
     device: str,
     out_path: Path,
-):
+) -> DedupReport:
     """SemDeDup branch of ``soup data dedup --semantic``."""
     texts = [_row_embed_text(row, field) for row in data]
     try:

@@ -24,6 +24,7 @@ model load is covered by the release-step-6 smoke on SmolLM2-135M.
 
 from __future__ import annotations
 
+import math
 import re
 import time
 from collections.abc import Mapping, Sequence
@@ -349,7 +350,7 @@ def compute_eval_loss(
         for value in compute_pair_losses(
             model, tokenizer, pairs, device=device, max_length=max_length
         )
-        if value == value  # drop nan
+        if not math.isnan(value)
     ]
     if not losses:
         return float("nan")
