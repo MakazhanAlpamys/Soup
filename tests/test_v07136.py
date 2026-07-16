@@ -672,3 +672,307 @@ class TestDedupSemanticCli:
         )
         assert res.exit_code == 1
         assert "outside" in _clean(res.output).lower()
+
+
+class TestResolveK:
+    @pytest.mark.parametrize(
+        "n_rows,expected",
+        [(1, 1), (3, 1), (4, 2), (8, 2), (200, 10), (1000, 22), (100_000, 25)],
+    )
+    def test_auto_heuristic(self, n_rows, expected):
+        from soup_cli.utils.topics import resolve_k
+
+        assert resolve_k(n_rows, "auto") == expected
+
+    def test_auto_is_capped_so_the_table_stays_one_screen(self):
+        from soup_cli.utils.topics import _MAX_K, resolve_k
+
+        assert resolve_k(10_000_000, "auto") == _MAX_K
+
+    def test_explicit_k_used_as_is(self):
+        from soup_cli.utils.topics import resolve_k
+
+        assert resolve_k(1000, 7) == 7
+
+    def test_explicit_k_is_not_capped_by_max_k(self):
+        """--clusters is the operator's call; only 'auto' is capped."""
+        from soup_cli.utils.topics import _MAX_K, resolve_k
+
+        assert resolve_k(1000, _MAX_K + 5) == _MAX_K + 5
+
+    def test_explicit_k_clamped_to_n_rows(self):
+        from soup_cli.utils.topics import resolve_k
+
+        assert resolve_k(3, 10) == 3
+
+    def test_auto_is_case_and_space_insensitive(self):
+        from soup_cli.utils.topics import resolve_k
+
+        assert resolve_k(200, " AUTO ") == 10
+
+    @pytest.mark.parametrize("bad", [0, -1, True, "seven", 1.5])
+    def test_rejects_bad_k(self, bad):
+        from soup_cli.utils.topics import resolve_k
+
+        with pytest.raises((ValueError, TypeError)):
+            resolve_k(100, bad)
+
+
+class TestKmeans:
+    def _blobs(self):
+        import numpy as np
+
+        rng = np.random.default_rng(0)
+        left = rng.normal([-5.0, 0.0], 0.1, size=(20, 2))
+        right = rng.normal([5.0, 0.0], 0.1, size=(20, 2))
+        return np.vstack([left, right]).astype(np.float32)
+
+    def test_separates_two_obvious_blobs(self):
+        from soup_cli.utils.topics import kmeans
+
+        labels = kmeans(self._blobs(), k=2, seed=0)
+        assert len(set(labels[:20].tolist())) == 1
+        assert len(set(labels[20:].tolist())) == 1
+        assert labels[0] != labels[20]
+
+    def _unstructured(self):
+        """Points with NO cluster structure, so k-means++ init decides.
+
+        Two well-separated blobs converge to the same partition from any
+        init, which makes the seed untestable on them (verified: 6 distinct
+        seeds -> 2 partitions, and an unseeded RNG passes a same-seed
+        equality check by luck). Unstructured points give 6 distinct
+        partitions for 6 seeds, so ignoring the seed is detectable.
+        """
+        import numpy as np
+
+        return np.random.default_rng(0).random((60, 4)).astype(np.float32)
+
+    def test_deterministic_by_seed(self):
+        import numpy as np
+
+        from soup_cli.utils.topics import kmeans
+
+        vecs = self._unstructured()
+        first = kmeans(vecs, k=5, seed=42)
+        for _ in range(3):
+            np.testing.assert_array_equal(
+                first, kmeans(vecs, k=5, seed=42),
+                err_msg="same seed must give the same partition",
+            )
+
+    def test_seed_actually_influences_the_result(self):
+        """Guard the guard: if seeds stopped mattering, the test above
+        would pass even with the seed ignored."""
+        from soup_cli.utils.topics import kmeans
+
+        vecs = self._unstructured()
+        partitions = {
+            tuple(kmeans(vecs, k=5, seed=seed).tolist()) for seed in range(6)
+        }
+        assert len(partitions) > 1, (
+            "seeds produce identical partitions on this fixture — it cannot "
+            "detect an unseeded RNG"
+        )
+
+    def test_k_equals_one(self):
+        from soup_cli.utils.topics import kmeans
+
+        labels = kmeans(self._blobs(), k=1, seed=0)
+        assert set(labels.tolist()) == {0}
+
+    def test_k_greater_than_n_is_clamped(self):
+        import numpy as np
+
+        from soup_cli.utils.topics import kmeans
+
+        vecs = np.array([[0.0, 0.0], [1.0, 1.0]], dtype=np.float32)
+        labels = kmeans(vecs, k=5, seed=0)
+        assert len(labels) == 2
+        assert set(labels.tolist()) <= {0, 1}
+
+    def test_labels_are_in_range(self):
+        from soup_cli.utils.topics import kmeans
+
+        labels = kmeans(self._blobs(), k=3, seed=1)
+        assert all(0 <= int(x) < 3 for x in labels)
+
+    def test_empty_input(self):
+        import numpy as np
+
+        from soup_cli.utils.topics import kmeans
+
+        labels = kmeans(np.zeros((0, 2), dtype=np.float32), k=2, seed=0)
+        assert len(labels) == 0
+
+    def test_rejects_non_2d(self):
+        import numpy as np
+
+        from soup_cli.utils.topics import kmeans
+
+        with pytest.raises(ValueError, match="2-D"):
+            kmeans(np.zeros((5,), dtype=np.float32), k=2, seed=0)
+
+    def test_rejects_over_cap(self):
+        import numpy as np
+
+        from soup_cli.utils.topics import _MAX_TOPIC_ROWS, kmeans
+
+        vecs = np.zeros((_MAX_TOPIC_ROWS + 1, 2), dtype=np.float32)
+        with pytest.raises(ValueError, match="too many rows"):
+            kmeans(vecs, k=2, seed=0)
+
+    def test_identical_points_do_not_crash(self):
+        """All-duplicate input makes every k-means++ distance zero."""
+        import numpy as np
+
+        from soup_cli.utils.topics import kmeans
+
+        vecs = np.ones((10, 3), dtype=np.float32)
+        labels = kmeans(vecs, k=3, seed=0)
+        assert len(labels) == 10
+
+
+class TestCtfidfLabels:
+    def _global_vs_specific(self):
+        """5 clusters, each ``["the", "the", "term_i"]``.
+
+        The filler word is deliberately MORE frequent in-cluster than the
+        specific term, so plain per-cluster TF picks "the" every time and
+        ONLY the inverse-cluster-frequency term can demote it. The obvious
+        fixture (specific term more frequent than the filler) is vacuous:
+        plain TF already picks the specific term, so deleting the idf
+        changes nothing.
+
+        The margin is arithmetic, not luck: the idf ratio at 5 clusters is
+        log(1+5/1)/log(1+5/5) = 2.58, and tf("the")/tf(term) = 2.0 < 2.58.
+        """
+        docs = [["the", "the", f"term{i}"] for i in range(5)]
+        return docs, list(range(5))
+
+    def test_cluster_specific_term_beats_global_term(self):
+        """The property that makes c-TF-IDF != plain TF-IDF."""
+        from soup_cli.utils.topics import ctfidf_labels
+
+        docs, labels = self._global_vs_specific()
+        out = ctfidf_labels(docs, labels, k=5, top_n=1)
+        assert out == [(f"term{i}",) for i in range(5)], (
+            "a term unique to one cluster must outrank a filler word that is "
+            "more frequent but present in every cluster"
+        )
+
+    def test_the_filler_is_the_plain_tf_winner(self):
+        """Guard the guard: prove plain TF really would pick the filler.
+
+        If this ever fails, the fixture stopped discriminating and the test
+        above would pass even with the idf term deleted.
+        """
+        from collections import Counter
+
+        docs, _ = self._global_vs_specific()
+        counts = Counter(docs[0])
+        assert counts["the"] > counts["term0"]
+
+    def test_top_n_respected(self):
+        from soup_cli.utils.topics import ctfidf_labels
+
+        out = ctfidf_labels(
+            [["alpha", "beta", "gamma"], ["delta"]], [0, 1], k=2, top_n=2
+        )
+        assert len(out[0]) <= 2
+
+    def test_empty_cluster_yields_empty_terms(self):
+        from soup_cli.utils.topics import ctfidf_labels
+
+        out = ctfidf_labels([["a"]], [0], k=3, top_n=2)
+        assert out[1] == ()
+        assert out[2] == ()
+
+    def test_length_mismatch_rejected(self):
+        from soup_cli.utils.topics import ctfidf_labels
+
+        with pytest.raises(ValueError, match="same length"):
+            ctfidf_labels([["a"], ["b"]], [0], k=1, top_n=1)
+
+    def test_out_of_range_label_ignored(self):
+        from soup_cli.utils.topics import ctfidf_labels
+
+        out = ctfidf_labels([["a"], ["b"]], [0, 99], k=1, top_n=1)
+        assert out[0] == ("a",)
+
+    @pytest.mark.parametrize("bad", [0, -1, True])
+    def test_rejects_bad_top_n(self, bad):
+        from soup_cli.utils.topics import ctfidf_labels
+
+        with pytest.raises((ValueError, TypeError)):
+            ctfidf_labels([["a"]], [0], k=1, top_n=bad)
+
+
+class TestBuildTopicReport:
+    def _rows(self, tag, count):
+        return [
+            {"messages": [{"role": "assistant", "content": f"{tag} {i}"}]}
+            for i in range(count)
+        ]
+
+    def test_fractions_sum_to_one(self):
+        from soup_cli.utils.topics import build_topic_report
+
+        rows = self._rows("python code", 6) + self._rows("protein fold", 4)
+        rep = build_topic_report(rows, [0] * 6 + [1] * 4, k=2)
+        assert rep.n_rows == 10
+        assert sum(t.fraction for t in rep.topics) == pytest.approx(1.0)
+        assert {t.size for t in rep.topics} == {6, 4}
+
+    def test_topics_sorted_by_coverage_desc(self):
+        from soup_cli.utils.topics import build_topic_report
+
+        rows = self._rows("small", 2) + self._rows("big", 8)
+        rep = build_topic_report(rows, [0] * 2 + [1] * 8, k=2)
+        assert [t.size for t in rep.topics] == [8, 2]
+
+    def test_small_cluster_raises_gap_warning(self):
+        from soup_cli.utils.topics import build_topic_report
+
+        rows = self._rows("code", 99) + self._rows("safety", 1)
+        rep = build_topic_report(
+            rows, [0] * 99 + [1], k=2, min_fraction=0.02
+        )
+        assert any("thin" in w.lower() for w in rep.warnings)
+
+    def test_no_warning_when_all_clusters_healthy(self):
+        from soup_cli.utils.topics import build_topic_report
+
+        rows = self._rows("code", 5) + self._rows("math", 5)
+        rep = build_topic_report(rows, [0] * 5 + [1] * 5, k=2, min_fraction=0.02)
+        assert rep.warnings == ()
+
+    def test_member_indices_partition_the_input(self):
+        from soup_cli.utils.topics import build_topic_report
+
+        rows = self._rows("a", 3) + self._rows("b", 2)
+        rep = build_topic_report(rows, [1, 0, 1, 0, 1], k=2)
+        allidx = sorted(sum((list(t.member_indices) for t in rep.topics), []))
+        assert allidx == [0, 1, 2, 3, 4]
+
+    def test_zero_rows(self):
+        from soup_cli.utils.topics import build_topic_report
+
+        rep = build_topic_report([], [], k=1)
+        assert rep.n_rows == 0
+        assert rep.topics == ()
+
+    def test_length_mismatch_rejected(self):
+        from soup_cli.utils.topics import build_topic_report
+
+        with pytest.raises(ValueError, match="same length"):
+            build_topic_report(self._rows("a", 2), [0], k=1)
+
+    def test_report_is_frozen(self):
+        import dataclasses
+
+        from soup_cli.utils.topics import build_topic_report
+
+        rep = build_topic_report(self._rows("a", 2), [0, 0], k=1)
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            rep.n_rows = 99
