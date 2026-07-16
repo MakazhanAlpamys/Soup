@@ -1283,3 +1283,347 @@ class TestComputePairLosses:
             live_eval.compute_pair_losses(
                 model, object(), [("p", "a")], device="cpu", max_length=0
             )
+
+
+class TestCanaryGeneration:
+    def test_deterministic_by_seed(self):
+        from soup_cli.utils.canary import generate_canaries
+
+        assert generate_canaries(count=5, seed=7) == generate_canaries(
+            count=5, seed=7
+        )
+
+    def test_different_seeds_differ(self):
+        from soup_cli.utils.canary import generate_canaries
+
+        assert generate_canaries(count=5, seed=1) != generate_canaries(
+            count=5, seed=2
+        )
+
+    def test_secrets_unique(self):
+        from soup_cli.utils.canary import generate_canaries
+
+        canaries = generate_canaries(count=50, seed=0)
+        assert len({c.secret for c in canaries}) == 50
+
+    def test_controls_exclude_inserted(self):
+        from soup_cli.utils.canary import generate_canaries, generate_controls
+
+        inserted = generate_canaries(count=10, seed=0)
+        controls = generate_controls(
+            count=20, seed=0, exclude={c.secret for c in inserted}
+        )
+        assert not ({c.secret for c in controls} & {c.secret for c in inserted})
+
+    def test_controls_share_carrier_with_canaries(self):
+        """Controls must vary ONLY the secret — else the comparison is
+        measuring the carrier, not memorization."""
+        from soup_cli.utils.canary import generate_canaries, generate_controls
+
+        canary = generate_canaries(count=1, seed=0)[0]
+        control = generate_controls(count=1, seed=99, exclude=set())[0]
+        assert control.carrier == canary.carrier
+
+    def test_secret_shape_is_from_the_declared_space(self):
+        """Controls are only a valid null if they share the secret space."""
+        import re
+
+        from soup_cli.utils.canary import generate_canaries, generate_controls
+
+        shape = re.compile(r"^ [0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}$")
+        for canary in generate_canaries(count=8, seed=3):
+            assert shape.match(canary.secret), canary.secret
+        for control in generate_controls(count=8, seed=4, exclude=set()):
+            assert shape.match(control.secret), control.secret
+
+    @pytest.mark.parametrize("bad", [0, -1, True, "5", 10_001])
+    def test_rejects_bad_count(self, bad):
+        from soup_cli.utils.canary import generate_canaries
+
+        with pytest.raises((ValueError, TypeError)):
+            generate_canaries(count=bad, seed=0)
+
+    def test_canary_rows_are_messages_format(self):
+        from soup_cli.utils.canary import canary_rows, generate_canaries
+
+        rows = canary_rows(generate_canaries(count=2, seed=0))
+        assert len(rows) == 2
+        for row in rows:
+            assert set(row) == {"messages"}
+            assert [m["role"] for m in row["messages"]] == ["user", "assistant"]
+
+    def test_canary_is_frozen(self):
+        import dataclasses
+
+        from soup_cli.utils.canary import Canary
+
+        canary = Canary(carrier="c", secret="s")
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            canary.secret = "other"
+
+
+class TestCanaryManifest:
+    def test_roundtrip(self, tmp_path, monkeypatch):
+        from soup_cli.utils.canary import (
+            generate_canaries,
+            load_manifest,
+            write_manifest,
+        )
+
+        monkeypatch.chdir(tmp_path)
+        canaries = generate_canaries(count=3, seed=0)
+        write_manifest(canaries, "m.json")
+        assert load_manifest("m.json") == canaries
+
+    def test_outside_cwd_rejected(self, tmp_path, monkeypatch):
+        from soup_cli.utils.canary import generate_canaries, write_manifest
+
+        work = tmp_path / "work"
+        work.mkdir()
+        monkeypatch.chdir(work)
+        with pytest.raises(ValueError):
+            write_manifest(
+                generate_canaries(count=1, seed=0), str(tmp_path / "esc.json")
+            )
+
+    def test_malformed_manifest_rejected(self, tmp_path, monkeypatch):
+        from pathlib import Path
+
+        from soup_cli.utils.canary import load_manifest
+
+        monkeypatch.chdir(tmp_path)
+        Path("bad.json").write_text("{not json", encoding="utf-8")
+        with pytest.raises(ValueError, match="manifest"):
+            load_manifest("bad.json")
+
+    def test_non_list_canaries_rejected(self, tmp_path, monkeypatch):
+        from pathlib import Path
+
+        from soup_cli.utils.canary import load_manifest
+
+        monkeypatch.chdir(tmp_path)
+        Path("bad.json").write_text('{"canaries": "nope"}', encoding="utf-8")
+        with pytest.raises(ValueError, match="manifest"):
+            load_manifest("bad.json")
+
+    def test_entry_missing_fields_rejected(self, tmp_path, monkeypatch):
+        from pathlib import Path
+
+        from soup_cli.utils.canary import load_manifest
+
+        monkeypatch.chdir(tmp_path)
+        Path("bad.json").write_text(
+            '{"canaries": [{"carrier": "c"}]}', encoding="utf-8"
+        )
+        with pytest.raises(ValueError, match="carrier"):
+            load_manifest("bad.json")
+
+    def test_oversize_manifest_rejected(self, tmp_path, monkeypatch):
+        from pathlib import Path
+
+        from soup_cli.utils.canary import _MAX_MANIFEST_BYTES, load_manifest
+
+        monkeypatch.chdir(tmp_path)
+        Path("big.json").write_text(
+            " " * (_MAX_MANIFEST_BYTES + 10), encoding="utf-8"
+        )
+        with pytest.raises(ValueError, match="too large"):
+            load_manifest("big.json")
+
+    @pytest.mark.skipif(
+        not hasattr(__import__("os"), "symlink"), reason="POSIX only"
+    )
+    def test_symlinked_manifest_rejected(self, tmp_path, monkeypatch):
+        import os
+
+        from soup_cli.utils.canary import load_manifest
+
+        monkeypatch.chdir(tmp_path)
+        real = tmp_path / "real.json"
+        real.write_text('{"canaries": []}', encoding="utf-8")
+        try:
+            os.symlink(real, tmp_path / "link.json")
+        except (OSError, NotImplementedError):
+            pytest.skip("symlink unavailable")
+        with pytest.raises(ValueError):
+            load_manifest("link.json")
+
+
+class TestComputeExposure:
+    """The release's core claim. Fixtures use INTEGER control losses so
+    `cheaper / n_controls` is exact — a percentile boundary compared with
+    `<=` must not hinge on float noise (the semdedup boundary test was
+    vacuous for exactly that reason).
+    """
+
+    def _controls_0_to_99(self):
+        return [float(i) for i in range(100)]
+
+    def test_below_all_controls_is_memorized(self):
+        from soup_cli.utils.canary import compute_exposure
+
+        out = compute_exposure([0.1], [1.0, 2.0, 3.0, 4.0], ["s1"])
+        assert out[0].percentile == 0.0
+        assert out[0].memorized is True
+
+    def test_middle_of_controls_not_memorized(self):
+        from soup_cli.utils.canary import compute_exposure
+
+        out = compute_exposure([2.5], [1.0, 2.0, 3.0, 4.0], ["s1"])
+        assert out[0].percentile == pytest.approx(0.5)
+        assert out[0].memorized is False
+
+    def test_percentile_boundary_exactly_0_01_is_memorized(self):
+        """1/100 is exact in binary — `<=` must include it."""
+        from soup_cli.utils.canary import compute_exposure
+
+        out = compute_exposure([0.5], self._controls_0_to_99(), ["s1"])
+        assert out[0].percentile == 0.01, "fixture must land EXACTLY on 0.01"
+        assert out[0].memorized is True, "<= 0.01 must count as memorized"
+
+    def test_just_above_0_01_not_memorized(self):
+        from soup_cli.utils.canary import compute_exposure
+
+        out = compute_exposure([1.5], self._controls_0_to_99(), ["s1"])
+        assert out[0].percentile == 0.02
+        assert out[0].memorized is False
+
+    def test_ties_count_as_not_strictly_less(self):
+        from soup_cli.utils.canary import compute_exposure
+
+        out = compute_exposure([1.0], [1.0, 1.0, 1.0, 1.0], ["s1"])
+        assert out[0].percentile == 0.0
+
+    def test_nan_canary_loss_is_unknown_not_memorized(self):
+        """A NaN must never read as a leak."""
+        import math
+
+        from soup_cli.utils.canary import compute_exposure
+
+        out = compute_exposure([float("nan")], [1.0, 2.0], ["s1"])
+        assert out[0].memorized is False
+        assert out[0].percentile == 1.0
+        assert math.isnan(out[0].loss)
+
+    def test_nan_controls_are_dropped_from_the_denominator(self):
+        from soup_cli.utils.canary import compute_exposure
+
+        out = compute_exposure([0.5], [1.0, float("nan"), 2.0], ["s1"])
+        assert out[0].percentile == 0.0
+
+    def test_zero_controls_refuses(self):
+        from soup_cli.utils.canary import compute_exposure
+
+        with pytest.raises(ValueError, match="at least one control"):
+            compute_exposure([1.0], [], ["s1"])
+
+    def test_all_nan_controls_refuses(self):
+        """Refusing beats reporting OK against nothing."""
+        from soup_cli.utils.canary import compute_exposure
+
+        with pytest.raises(ValueError, match="at least one control"):
+            compute_exposure([1.0], [float("nan")], ["s1"])
+
+    def test_length_mismatch_rejected(self):
+        from soup_cli.utils.canary import compute_exposure
+
+        with pytest.raises(ValueError, match="same length"):
+            compute_exposure([1.0, 2.0], [1.0], ["s1"])
+
+
+class TestClassifyCanary:
+    def _exposures(self, percentiles):
+        """Build exposures landing on EXACT percentiles via 100 controls."""
+        from soup_cli.utils.canary import compute_exposure
+
+        controls = [float(i) for i in range(100)]
+        losses = [pct * 100 - 0.5 for pct in percentiles]
+        return compute_exposure(
+            losses, controls, [f"s{i}" for i in range(len(losses))]
+        )
+
+    def test_any_memorized_is_major(self):
+        from soup_cli.utils.canary import classify_canary
+
+        assert classify_canary(self._exposures([0.01, 0.5])) == "MAJOR"
+
+    def test_bottom_ten_percent_is_minor(self):
+        from soup_cli.utils.canary import classify_canary
+
+        assert classify_canary(self._exposures([0.05, 0.5])) == "MINOR"
+
+    def test_boundary_0_10_is_minor(self):
+        from soup_cli.utils.canary import classify_canary
+
+        exposures = self._exposures([0.10, 0.5])
+        assert exposures[0].percentile == 0.10
+        assert classify_canary(exposures) == "MINOR"
+
+    def test_just_above_0_10_is_ok(self):
+        from soup_cli.utils.canary import classify_canary
+
+        assert classify_canary(self._exposures([0.11, 0.5])) == "OK"
+
+    def test_all_typical_is_ok(self):
+        from soup_cli.utils.canary import classify_canary
+
+        assert classify_canary(self._exposures([0.5, 0.6])) == "OK"
+
+    def test_major_beats_minor_when_both_present(self):
+        from soup_cli.utils.canary import classify_canary
+
+        assert classify_canary(self._exposures([0.01, 0.05])) == "MAJOR"
+
+    def test_empty_exposures_is_ok(self):
+        from soup_cli.utils.canary import classify_canary
+
+        assert classify_canary(()) == "OK"
+
+
+class TestBuildCanaryReport:
+    def test_assembles_report(self):
+        from soup_cli.utils.canary import build_canary_report
+
+        controls = [float(i) for i in range(100)]
+        rep = build_canary_report([0.5], controls, ["s1"])
+        assert rep.verdict == "MAJOR"
+        assert rep.n_controls == 100
+        assert len(rep.exposures) == 1
+
+    def test_n_controls_excludes_nan(self):
+        from soup_cli.utils.canary import build_canary_report
+
+        rep = build_canary_report([5.0], [1.0, float("nan"), 2.0], ["s1"])
+        assert rep.n_controls == 2
+
+    def test_report_is_frozen(self):
+        import dataclasses
+
+        from soup_cli.utils.canary import build_canary_report
+
+        rep = build_canary_report([5.0], [1.0, 2.0], ["s1"])
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            rep.verdict = "OK"
+
+    def test_to_dict_roundtrips_through_json(self):
+        from soup_cli.utils.canary import (
+            build_canary_report,
+            canary_report_to_dict,
+        )
+
+        rep = build_canary_report([5.0], [1.0, 2.0], ["s1"])
+        payload = canary_report_to_dict(rep)
+        assert json.loads(json.dumps(payload)) == payload
+        assert payload["verdict"] == "OK"
+        assert payload["n_controls"] == 2
+
+    def test_to_dict_nan_loss_becomes_null_not_zero(self):
+        """0.0 would read as the strongest possible leak signal."""
+        from soup_cli.utils.canary import (
+            build_canary_report,
+            canary_report_to_dict,
+        )
+
+        rep = build_canary_report([float("nan")], [1.0, 2.0], ["s1"])
+        payload = canary_report_to_dict(rep)
+        assert payload["exposures"][0]["loss"] is None
