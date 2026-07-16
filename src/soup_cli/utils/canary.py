@@ -182,6 +182,15 @@ def compute_exposure(canary_losses, control_losses, secrets) -> tuple:
     Low percentile => the model finds this secret unusually likely =>
     memorized.
 
+    Ties are counted as not-strictly-less, so an exact tie against every
+    control yields percentile 0.0 and flags MAJOR. On real losses exact
+    ties are vanishingly unlikely (they are float cross-entropies); where
+    they do occur — e.g. a degenerate model emitting a constant loss — a
+    false MAJOR is the safe direction for a leak detector, which must not
+    under-report. Do not "fix" this by switching to ``<=``: that would let
+    a genuinely memorized canary tying the cheapest control read as
+    typical.
+
     A NaN canary loss is reported as unknown (percentile 1.0, not
     memorized) rather than silently scoring 0.0, which would read as the
     strongest possible leak.

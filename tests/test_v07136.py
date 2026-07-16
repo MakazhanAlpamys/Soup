@@ -1627,3 +1627,315 @@ class TestBuildCanaryReport:
         rep = build_canary_report([float("nan")], [1.0, 2.0], ["s1"])
         payload = canary_report_to_dict(rep)
         assert payload["exposures"][0]["loss"] is None
+
+
+class TestDataCanaryCli:
+    def _dataset(self, tmp_path, count=10):
+        path = tmp_path / "d.jsonl"
+        path.write_text(
+            "\n".join(
+                json.dumps({"messages": [
+                    {"role": "user", "content": "q"},
+                    {"role": "assistant", "content": "a"},
+                ]})
+                for _ in range(count)
+            ),
+            encoding="utf-8",
+        )
+        return path
+
+    def test_insert_help(self):
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        res = CliRunner().invoke(app, ["data", "canary", "insert", "--help"])
+        assert res.exit_code == 0, (res.output, repr(res.exception))
+
+    def test_check_help(self):
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        res = CliRunner().invoke(app, ["data", "canary", "check", "--help"])
+        assert res.exit_code == 0, (res.output, repr(res.exception))
+
+    def test_insert_adds_k_rows_and_manifest(self, tmp_path, monkeypatch):
+        from pathlib import Path
+
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        monkeypatch.chdir(tmp_path)
+        src = self._dataset(tmp_path, count=10)
+        res = CliRunner().invoke(
+            app,
+            ["data", "canary", "insert", str(src), "-o", "out.jsonl",
+             "--count", "4", "--manifest", "m.json"],
+        )
+        assert res.exit_code == 0, (res.output, repr(res.exception))
+        rows = [
+            json.loads(x)
+            for x in Path("out.jsonl").read_text().splitlines() if x
+        ]
+        assert len(rows) == 14
+        manifest = json.loads(Path("m.json").read_text())
+        assert len(manifest["canaries"]) == 4
+
+    def test_inserted_rows_carry_the_manifest_secrets(self, tmp_path, monkeypatch):
+        """The manifest must describe what actually landed in the data."""
+        from pathlib import Path
+
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        monkeypatch.chdir(tmp_path)
+        src = self._dataset(tmp_path, count=5)
+        res = CliRunner().invoke(
+            app,
+            ["data", "canary", "insert", str(src), "-o", "out.jsonl",
+             "--count", "3", "--manifest", "m.json"],
+        )
+        assert res.exit_code == 0, (res.output, repr(res.exception))
+        blob = Path("out.jsonl").read_text()
+        for entry in json.loads(Path("m.json").read_text())["canaries"]:
+            assert entry["secret"].strip() in blob
+
+    def test_insert_warns_manifest_is_sensitive(self, tmp_path, monkeypatch):
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        monkeypatch.chdir(tmp_path)
+        src = self._dataset(tmp_path, count=2)
+        res = CliRunner().invoke(
+            app, ["data", "canary", "insert", str(src), "-o", "o.jsonl",
+                  "--manifest", "m.json"],
+        )
+        assert res.exit_code == 0, (res.output, repr(res.exception))
+        out = _clean(res.output).lower()
+        assert "commit" in out or "secret" in out
+
+    def test_insert_output_outside_cwd_rejected(self, tmp_path, monkeypatch):
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        src = self._dataset(tmp_path, count=2)
+        work = tmp_path / "work"
+        work.mkdir()
+        monkeypatch.chdir(work)
+        res = CliRunner().invoke(
+            app,
+            ["data", "canary", "insert", str(src),
+             "-o", str(tmp_path / "esc.jsonl"), "--manifest", "m.json"],
+        )
+        assert res.exit_code == 1
+        assert "outside" in _clean(res.output).lower()
+
+    def test_insert_manifest_outside_cwd_rejected(self, tmp_path, monkeypatch):
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        src = self._dataset(tmp_path, count=2)
+        work = tmp_path / "work"
+        work.mkdir()
+        monkeypatch.chdir(work)
+        res = CliRunner().invoke(
+            app,
+            ["data", "canary", "insert", str(src), "-o", "o.jsonl",
+             "--manifest", str(tmp_path / "esc.json")],
+        )
+        assert res.exit_code == 1
+        assert "outside" in _clean(res.output).lower()
+
+    def _seed_manifest(self, tmp_path, count=2):
+        from soup_cli.utils.canary import generate_canaries, write_manifest
+
+        write_manifest(generate_canaries(count=count, seed=0), "m.json")
+
+    def test_check_major_exits_2(self, tmp_path, monkeypatch):
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+        from soup_cli.commands import data_canary as cmd
+
+        monkeypatch.chdir(tmp_path)
+        self._seed_manifest(tmp_path, count=2)
+        monkeypatch.setattr(
+            cmd, "_load_pair", lambda *a, **k: (object(), object(), "cpu")
+        )
+
+        def _losses(model, tok, pairs, **kwargs):
+            # first 2 are the canaries -> far cheaper than every control
+            return [0.01 if i < 2 else float(i) for i in range(len(pairs))]
+
+        monkeypatch.setattr(cmd, "compute_pair_losses", _losses)
+        res = CliRunner().invoke(
+            app, ["data", "canary", "check", "--manifest", "m.json",
+                  "--base", "fake/model", "--controls", "16"],
+        )
+        assert res.exit_code == 2, (res.output, repr(res.exception))
+        assert "MAJOR" in _clean(res.output)
+
+    def test_check_ok_exits_0(self, tmp_path, monkeypatch):
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+        from soup_cli.commands import data_canary as cmd
+
+        monkeypatch.chdir(tmp_path)
+        self._seed_manifest(tmp_path, count=2)
+        monkeypatch.setattr(
+            cmd, "_load_pair", lambda *a, **k: (object(), object(), "cpu")
+        )
+        # Canaries sit mid-distribution: 5 of 16 controls are cheaper ->
+        # percentile 0.31 -> OK. (An all-equal fixture would make NO control
+        # strictly cheaper -> percentile 0.0 -> MAJOR, which is the rule
+        # working correctly on an unrealistic input.)
+        monkeypatch.setattr(
+            cmd, "compute_pair_losses",
+            lambda model, tok, pairs, **kw: (
+                [5.0] * 2 + [float(i) for i in range(len(pairs) - 2)]
+            ),
+        )
+        res = CliRunner().invoke(
+            app, ["data", "canary", "check", "--manifest", "m.json",
+                  "--base", "fake/model", "--controls", "16"],
+        )
+        assert res.exit_code == 0, (res.output, repr(res.exception))
+        assert "OK" in _clean(res.output)
+
+    def test_check_splits_canary_and_control_losses_correctly(
+        self, tmp_path, monkeypatch
+    ):
+        """The canary/control split must follow the manifest length."""
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+        from soup_cli.commands import data_canary as cmd
+
+        monkeypatch.chdir(tmp_path)
+        self._seed_manifest(tmp_path, count=3)
+        monkeypatch.setattr(
+            cmd, "_load_pair", lambda *a, **k: (object(), object(), "cpu")
+        )
+        seen = {}
+
+        def _losses(model, tok, pairs, **kwargs):
+            seen["n_pairs"] = len(pairs)
+            return [5.0] * 3 + [float(i) for i in range(len(pairs) - 3)]
+
+        monkeypatch.setattr(cmd, "compute_pair_losses", _losses)
+        res = CliRunner().invoke(
+            app, ["data", "canary", "check", "--manifest", "m.json",
+                  "--base", "fake/model", "--controls", "8", "-o", "r.json"],
+        )
+        assert res.exit_code == 0, (res.output, repr(res.exception))
+        assert seen["n_pairs"] == 3 + 8, "3 canaries + 8 controls"
+        from pathlib import Path
+
+        report = json.loads(Path("r.json").read_text())
+        assert len(report["exposures"]) == 3
+        assert report["n_controls"] == 8
+
+    def test_check_writes_report(self, tmp_path, monkeypatch):
+        from pathlib import Path
+
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+        from soup_cli.commands import data_canary as cmd
+
+        monkeypatch.chdir(tmp_path)
+        self._seed_manifest(tmp_path, count=1)
+        monkeypatch.setattr(
+            cmd, "_load_pair", lambda *a, **k: (object(), object(), "cpu")
+        )
+        monkeypatch.setattr(
+            cmd, "compute_pair_losses",
+            lambda model, tok, pairs, **kw: (
+                [5.0] + [float(i) for i in range(len(pairs) - 1)]
+            ),
+        )
+        res = CliRunner().invoke(
+            app, ["data", "canary", "check", "--manifest", "m.json",
+                  "--base", "fake/model", "-o", "r.json", "--controls", "8"],
+        )
+        assert res.exit_code == 0, (res.output, repr(res.exception))
+        report = json.loads(Path("r.json").read_text())
+        assert report["verdict"] == "OK"
+        assert report["n_controls"] == 8
+
+    def test_check_model_load_import_error_is_friendly(
+        self, tmp_path, monkeypatch
+    ):
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+        from soup_cli.commands import data_canary as cmd
+
+        monkeypatch.chdir(tmp_path)
+        self._seed_manifest(tmp_path, count=1)
+
+        def _boom(*a, **k):
+            raise ImportError("No module named 'torch'")
+
+        monkeypatch.setattr(cmd, "_load_pair", _boom)
+        res = CliRunner().invoke(
+            app, ["data", "canary", "check", "--manifest", "m.json",
+                  "--base", "fake/model"],
+        )
+        assert res.exit_code == 1
+        assert "soup-cli[train]" in _clean(res.output)
+
+    def test_check_model_load_failure_is_friendly(self, tmp_path, monkeypatch):
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+        from soup_cli.commands import data_canary as cmd
+
+        monkeypatch.chdir(tmp_path)
+        self._seed_manifest(tmp_path, count=1)
+
+        def _boom(*a, **k):
+            raise OSError("no such model")
+
+        monkeypatch.setattr(cmd, "_load_pair", _boom)
+        res = CliRunner().invoke(
+            app, ["data", "canary", "check", "--manifest", "m.json",
+                  "--base", "nope/model"],
+        )
+        assert res.exit_code == 1
+        assert "could not load" in _clean(res.output).lower()
+
+    def test_check_missing_manifest(self, tmp_path, monkeypatch):
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        monkeypatch.chdir(tmp_path)
+        res = CliRunner().invoke(
+            app, ["data", "canary", "check", "--manifest", "nope.json",
+                  "--base", "m"],
+        )
+        assert res.exit_code == 1
+
+    def test_check_empty_manifest_refuses(self, tmp_path, monkeypatch):
+        from pathlib import Path
+
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        monkeypatch.chdir(tmp_path)
+        Path("m.json").write_text('{"canaries": []}', encoding="utf-8")
+        res = CliRunner().invoke(
+            app, ["data", "canary", "check", "--manifest", "m.json",
+                  "--base", "m"],
+        )
+        assert res.exit_code == 1
+        assert "no canaries" in _clean(res.output).lower()

@@ -521,10 +521,14 @@ from soup_cli.commands import data_doctor as _data_doctor_cmd  # noqa: E402
 data.app.command(name="doctor")(_data_doctor_cmd.doctor)
 data.app.command(name="lint")(_data_doctor_cmd.lint)
 
-# v0.71.36 — Data Moat II: topic map over training data.
+# v0.71.36 — Data Moat II: topic map + Secret-Sharer canaries.
 from soup_cli.commands import data_topics as _data_topics_cmd  # noqa: E402
 
 data.app.command(name="topics")(_data_topics_cmd.topics)
+
+from soup_cli.commands import data_canary as _data_canary_cmd  # noqa: E402
+
+data.app.add_typer(_data_canary_cmd.app, name="canary")
 
 # v0.71.28 — MCP server: drive Soup from any MCP client (Claude Code / Cursor /
 # Cline / Continue) over stdio.
