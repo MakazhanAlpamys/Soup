@@ -378,6 +378,107 @@ class TestGreedySemdedup:
             rep.threshold = 0.5
 
 
+class TestExtrasHintsAreEscaped:
+    """Rich eats `[extra]` as a markup tag unless it is escaped.
+
+    Unescaped, `pip install 'soup-cli[eval]'` renders as
+    `pip install 'soup-cli'` -- which installs the base package WITHOUT the
+    extra the user is missing, so following the hint appears to succeed and
+    the feature still fails. Found during v0.71.36; same class as the
+    v0.71.28 \\[mcp] fix, which only fixed its own site.
+
+    Sites that do NOT go through Rich (plain exception text, docstrings)
+    must NOT be escaped -- a backslash would show up literally.
+    """
+
+    # Rich style tags. A hint string carrying one of these is console.print
+    # output; a bare `raise ImportError("... soup-cli[mlx]")` is NOT and must
+    # be left alone (escaping it would print a literal backslash).
+    _RICH_TAGS = ("[/]", "[bold]", "[red]", "[yellow]", "[green]", "[dim]")
+
+    def test_rich_renders_unescaped_bracket_away(self):
+        """Pin the underlying Rich behaviour this whole class exists for."""
+        from io import StringIO
+
+        from rich.console import Console
+
+        def render(markup):
+            buf = StringIO()
+            Console(file=buf, force_terminal=False, width=100).print(markup)
+            return buf.getvalue().strip()
+
+        assert render("[bold]pip install 'soup-cli[train]'[/]") == (
+            "pip install 'soup-cli'"
+        ), "unescaped bracket must be eaten (this is the bug)"
+        assert render("[bold]pip install 'soup-cli\\[train]'[/]") == (
+            "pip install 'soup-cli[train]'"
+        ), "escaped bracket must survive (this is the fix)"
+
+    def test_no_unescaped_extras_hint_in_rich_markup(self):
+        """Every hint carrying Rich markup must escape its bracket."""
+        import pathlib
+        import re
+
+        import soup_cli
+
+        root = pathlib.Path(soup_cli.__file__).parent
+        bad_re = re.compile(r"(?<!\\)soup-cli\[[a-z][a-z0-9-]*\]")
+        offenders = []
+        for path in sorted(root.rglob("*.py")):
+            rel = path.relative_to(root).as_posix()
+            for lineno, line in enumerate(
+                path.read_text(encoding="utf-8").splitlines(), start=1
+            ):
+                if line.strip().startswith("#"):
+                    continue  # a code comment never reaches Rich
+                if not any(tag in line for tag in self._RICH_TAGS):
+                    continue  # not Rich output — must NOT be escaped
+                if bad_re.search(line):
+                    offenders.append(f"{rel}:{lineno}: {line.strip()}")
+        assert not offenders, (
+            "unescaped soup-cli[extra] inside Rich markup — the bracket is "
+            "eaten and the printed command installs WITHOUT the extra:\n"
+            + "\n".join(offenders)
+        )
+
+    @pytest.mark.parametrize(
+        "argv,extra",
+        [
+            (["data", "dedup", "--help"], "soup-cli[train]"),
+            (["train", "--help"], "soup-cli[carbon]"),
+        ],
+    )
+    def test_typer_help_keeps_the_extra_bracket(self, argv, extra):
+        """Typer help is Rich-rendered too — the bracket must survive.
+
+        `--semantic` help shipped as "Requires soup-cli." before this fix.
+        """
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        res = CliRunner(env={"COLUMNS": "200"}).invoke(app, argv)
+        assert res.exit_code == 0, (res.output, repr(res.exception))
+        assert extra in _clean(res.output), (
+            f"{extra!r} missing from `{' '.join(argv)}` — Rich ate the bracket"
+        )
+
+    def test_plain_exception_hints_are_not_escaped(self):
+        """The counter-rule: non-Rich text must NOT gain a backslash.
+
+        `raise ImportError("... pip install 'soup-cli[mlx]'")` never reaches
+        Rich, so escaping it would surface a literal backslash to the user.
+        """
+        import pathlib
+
+        import soup_cli
+
+        root = pathlib.Path(soup_cli.__file__).parent
+        text = (root / "trainer" / "mlx_sft.py").read_text(encoding="utf-8")
+        assert "'soup-cli[mlx]'" in text
+        assert "soup-cli\\[mlx]" not in text
+
+
 class TestDedupSemanticCli:
     def _write(self, tmp_path, rows):
         path = tmp_path / "data.jsonl"

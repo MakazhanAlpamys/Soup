@@ -579,7 +579,7 @@ def _export_onnx(
     except ImportError:
         console.print(
             "[red]optimum not installed.[/]\n"
-            "Install with: [bold]pip install 'soup-cli[onnx]'[/]\n"
+            "Install with: [bold]pip install 'soup-cli\\[onnx]'[/]\n"
             "Or directly: [bold]pip install optimum[onnx][/]"
         )
         raise typer.Exit(1)
@@ -664,7 +664,7 @@ def _export_tensorrt(
     if not trtllm_available:
         console.print(
             "[red]tensorrt_llm not installed.[/]\n"
-            "Install with: [bold]pip install 'soup-cli[tensorrt]'[/]\n"
+            "Install with: [bold]pip install 'soup-cli\\[tensorrt]'[/]\n"
             "Or follow: https://github.com/NVIDIA/TensorRT-LLM#installation"
         )
         raise typer.Exit(1)
@@ -857,7 +857,7 @@ def _export_awq(
     except ImportError:
         console.print(
             "[red]autoawq not installed.[/]\n"
-            "Install with: [bold]pip install 'soup-cli[awq]'[/]\n"
+            "Install with: [bold]pip install 'soup-cli\\[awq]'[/]\n"
             "Or directly: [bold]pip install autoawq[/]"
         )
         raise typer.Exit(1)
@@ -989,7 +989,7 @@ def _export_gptq(
     except ImportError:
         console.print(
             "[red]auto-gptq not installed.[/]\n"
-            "Install with: [bold]pip install 'soup-cli[gptq]'[/]\n"
+            "Install with: [bold]pip install 'soup-cli\\[gptq]'[/]\n"
             "Or directly: [bold]pip install auto-gptq[/]"
         )
         raise typer.Exit(1)

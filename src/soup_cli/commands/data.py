@@ -301,7 +301,7 @@ def dedup(
     semantic: bool = typer.Option(
         False, "--semantic",
         help="Use embedding cosine (SemDeDup) instead of MinHash. Catches "
-             "paraphrases MinHash misses. Requires soup-cli[train].",
+             "paraphrases MinHash misses. Requires soup-cli\\[train].",
     ),
     embed_model: str = typer.Option(
         DEFAULT_EMBED_MODEL, "--embed-model",

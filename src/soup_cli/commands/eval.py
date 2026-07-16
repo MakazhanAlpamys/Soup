@@ -108,7 +108,7 @@ def benchmark(
     except ImportError:
         console.print(
             "[red]lm-eval not installed.[/]\n"
-            "Install with: [bold]pip install 'soup-cli[eval]'[/]"
+            "Install with: [bold]pip install 'soup-cli\\[eval]'[/]"
         )
         raise typer.Exit(1)
 

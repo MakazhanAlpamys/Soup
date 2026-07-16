@@ -460,7 +460,7 @@ def serve(
     except ImportError:
         console.print(
             "[red]FastAPI/uvicorn not installed.[/]\n"
-            "Install with: [bold]pip install 'soup-cli[serve]'[/]"
+            "Install with: [bold]pip install 'soup-cli\\[serve]'[/]"
         )
         raise typer.Exit(1)
 
@@ -537,7 +537,7 @@ def serve(
         if not is_vllm_available():
             console.print(
                 "[red]vLLM not installed.[/]\n"
-                "Install with: [bold]pip install 'soup-cli[serve-fast]'[/]"
+                "Install with: [bold]pip install 'soup-cli\\[serve-fast]'[/]"
             )
             raise typer.Exit(1)
 
@@ -548,7 +548,7 @@ def serve(
         if not check_sglang_available():
             console.print(
                 "[red]SGLang not installed.[/]\n"
-                "Install with: [bold]pip install 'soup-cli[sglang]'[/]"
+                "Install with: [bold]pip install 'soup-cli\\[sglang]'[/]"
             )
             raise typer.Exit(1)
 

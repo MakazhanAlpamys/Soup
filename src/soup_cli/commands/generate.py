@@ -487,7 +487,7 @@ def _run_dedup_pipeline(path: Path) -> None:
     except ImportError:
         console.print(
             "[yellow]Dedup: datasketch not installed, skipping. "
-            "Install: pip install 'soup-cli[data]'[/]"
+            "Install: pip install 'soup-cli\\[data]'[/]"
         )
 
 

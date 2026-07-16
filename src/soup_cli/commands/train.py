@@ -377,7 +377,7 @@ def train(
         "--track-energy",
         help=(
             "Measure the training window's energy + CO2 via codecarbon "
-            "(offline; requires `pip install soup-cli[carbon]`). Feeds the "
+            "(offline; requires `pip install soup-cli\\[carbon]`). Feeds the "
             "kWh / CO2 into --annex-xi. v0.71.3."
         ),
     ),
@@ -711,7 +711,7 @@ def train(
         except ImportError:
             console.print(
                 "[red]wandb not installed.[/]\n"
-                "Run: [bold]pip install 'soup-cli[wandb]'[/]"
+                "Run: [bold]pip install 'soup-cli\\[wandb]'[/]"
             )
             raise typer.Exit(1)
         except Exception as wandb_err:
@@ -1484,7 +1484,7 @@ def train(
         else:
             console.print(
                 "[yellow]--track-energy:[/] no reading "
-                "(install `pip install soup-cli[carbon]`)"
+                "(install `pip install soup-cli\\[carbon]`)"
             )
 
     # --- v0.71.15 #244 --energy-out: persist for `soup bom emit --energy` -
@@ -1504,7 +1504,7 @@ def train(
         else:
             console.print(
                 "[yellow]--energy-out skipped:[/] no energy reading "
-                "(set --track-energy + install `pip install soup-cli[carbon]`)"
+                "(set --track-energy + install `pip install soup-cli\\[carbon]`)"
             )
 
     # --- v0.59.0 --annex-xi: Annex XI/XII auto-doc -----------------------

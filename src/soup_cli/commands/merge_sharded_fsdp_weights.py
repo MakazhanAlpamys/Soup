@@ -70,7 +70,7 @@ def merge_sharded_fsdp_weights(
     except ImportError as exc:
         console.print(
             "[red]torch + safetensors are required for consolidation. "
-            "Install with: [bold]pip install 'soup-cli[train]'[/][/]"
+            "Install with: [bold]pip install 'soup-cli\\[train]'[/][/]"
         )
         raise typer.Exit(code=1) from exc
 
