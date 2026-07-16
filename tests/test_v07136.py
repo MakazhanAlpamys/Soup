@@ -210,3 +210,168 @@ class TestEmbedTexts:
         monkeypatch.setattr(embed, "_fetch_pooling_config", lambda mid: None)
         with pytest.raises(ValueError, match="cannot verify pooling"):
             embed.embed_texts(["hello"], model_id="org/unverified-encoder")
+
+
+class TestGreedySemdedup:
+    def _vecs(self, rows):
+        import numpy as np
+
+        arr = np.array(rows, dtype=np.float32)
+        norms = np.linalg.norm(arr, axis=1, keepdims=True)
+        return arr / np.where(norms < 1e-12, 1.0, norms)
+
+    def test_identical_vectors_collapse_to_one(self):
+        from soup_cli.utils.semdedup import greedy_semdedup
+
+        vecs = self._vecs([[1.0, 0.0], [1.0, 0.0], [1.0, 0.0]])
+        rep = greedy_semdedup(vecs, threshold=0.9)
+        assert rep.kept == (0,)
+        assert rep.dropped == (1, 2)
+
+    def test_orthogonal_vectors_all_kept(self):
+        from soup_cli.utils.semdedup import greedy_semdedup
+
+        vecs = self._vecs([[1.0, 0.0], [0.0, 1.0]])
+        rep = greedy_semdedup(vecs, threshold=0.9)
+        assert rep.kept == (0, 1)
+        assert rep.dropped == ()
+
+    def _exact_half_cosine(self):
+        """Two UNIT vectors whose cosine is EXACTLY 0.5 in float32.
+
+        The obvious construction — arccos(0.8) then cos/sin — yields
+        0.800000011920929, i.e. strictly ABOVE the threshold, so `>=` and
+        `>` behave identically and the boundary is never actually tested.
+        Here x=0.5 is dyadic (exact in binary) and the first vector's y is
+        exactly 0.0, so the dot product is exactly 0.5 with no rounding.
+        """
+        import numpy as np
+
+        return np.array([[1.0, 0.0], [0.5, np.sqrt(3) / 2]], dtype=np.float32)
+
+    def test_boundary_fixture_is_exact(self):
+        """Guard the guard: if this drifts, the boundary tests go vacuous."""
+        import numpy as np
+
+        vecs = self._exact_half_cosine()
+        assert float(vecs[0] @ vecs[1]) == 0.5
+        assert float(np.linalg.norm(vecs[1])) == pytest.approx(1.0, abs=1e-6)
+
+    def test_threshold_boundary_is_inclusive(self):
+        """cosine == threshold must DROP (>=), not keep."""
+        from soup_cli.utils.semdedup import greedy_semdedup
+
+        rep = greedy_semdedup(self._exact_half_cosine(), threshold=0.5)
+        assert rep.dropped == (1,), "cosine == threshold must drop"
+
+    def test_just_below_threshold_is_kept(self):
+        from soup_cli.utils.semdedup import greedy_semdedup
+
+        rep = greedy_semdedup(self._exact_half_cosine(), threshold=0.51)
+        assert rep.dropped == ()
+
+    def test_pairs_record_which_kept_row_and_cosine(self):
+        from soup_cli.utils.semdedup import greedy_semdedup
+
+        vecs = self._vecs([[1.0, 0.0], [0.0, 1.0], [1.0, 0.0]])
+        rep = greedy_semdedup(vecs, threshold=0.9)
+        assert len(rep.pairs) == 1
+        dropped_idx, kept_idx, cosine = rep.pairs[0]
+        assert (dropped_idx, kept_idx) == (2, 0)
+        assert cosine == pytest.approx(1.0, abs=1e-5)
+
+    def test_pairs_name_the_nearest_kept_row_not_just_any(self):
+        """The provenance must identify WHICH kept row it collided with.
+
+        Row 2 is near row 1 and far from row 0; a report that blindly cited
+        kept[0] would pass a weaker test.
+        """
+        import numpy as np
+
+        from soup_cli.utils.semdedup import greedy_semdedup
+
+        theta = float(np.arccos(0.95))
+        vecs = self._vecs([
+            [1.0, 0.0],
+            [0.0, 1.0],
+            [float(np.sin(theta)), float(np.cos(theta))],
+        ])
+        rep = greedy_semdedup(vecs, threshold=0.9)
+        assert rep.pairs[0][0] == 2
+        assert rep.pairs[0][1] == 1, "must cite the NEAREST kept row"
+
+    def test_transitive_chain_keeps_first_only(self):
+        """A~B, B~C but A!~C: greedy keeps A, drops B; C compared to A only."""
+        import numpy as np
+
+        from soup_cli.utils.semdedup import greedy_semdedup
+
+        t1 = float(np.arccos(0.95))
+        vecs = self._vecs([
+            [1.0, 0.0],
+            [float(np.cos(t1)), float(np.sin(t1))],
+            [float(np.cos(2 * t1)), float(np.sin(2 * t1))],
+        ])
+        rep = greedy_semdedup(vecs, threshold=0.9)
+        assert rep.kept == (0, 2)
+        assert rep.dropped == (1,)
+
+    def test_single_row(self):
+        from soup_cli.utils.semdedup import greedy_semdedup
+
+        rep = greedy_semdedup(self._vecs([[1.0, 0.0]]), threshold=0.9)
+        assert rep.kept == (0,)
+
+    def test_empty_input(self):
+        import numpy as np
+
+        from soup_cli.utils.semdedup import greedy_semdedup
+
+        rep = greedy_semdedup(
+            np.zeros((0, 2), dtype=np.float32), threshold=0.9
+        )
+        assert rep.kept == ()
+        assert rep.dropped == ()
+
+    def test_rejects_non_2d(self):
+        import numpy as np
+
+        from soup_cli.utils.semdedup import greedy_semdedup
+
+        with pytest.raises(ValueError, match="2-D"):
+            greedy_semdedup(np.zeros((5,), dtype=np.float32), threshold=0.9)
+
+    def test_rejects_over_cap(self):
+        import numpy as np
+
+        from soup_cli.utils.semdedup import _MAX_SEMDEDUP_ROWS, greedy_semdedup
+
+        vecs = np.zeros((_MAX_SEMDEDUP_ROWS + 1, 2), dtype=np.float32)
+        with pytest.raises(ValueError, match="too many rows"):
+            greedy_semdedup(vecs, threshold=0.9)
+
+    @pytest.mark.parametrize("bad", [-0.1, 1.1, float("nan"), True, "x"])
+    def test_rejects_bad_threshold(self, bad):
+        from soup_cli.utils.semdedup import greedy_semdedup
+
+        with pytest.raises((ValueError, TypeError)):
+            greedy_semdedup(self._vecs([[1.0, 0.0]]), threshold=bad)
+
+    def test_kept_and_dropped_partition_the_input(self):
+        from soup_cli.utils.semdedup import greedy_semdedup
+
+        vecs = self._vecs(
+            [[1.0, 0.0], [1.0, 0.0], [0.0, 1.0], [0.0, 1.0], [1.0, 1.0]]
+        )
+        rep = greedy_semdedup(vecs, threshold=0.9)
+        assert sorted(rep.kept + rep.dropped) == list(range(5))
+        assert not set(rep.kept) & set(rep.dropped)
+
+    def test_report_is_frozen(self):
+        import dataclasses
+
+        from soup_cli.utils.semdedup import DedupReport
+
+        rep = DedupReport(kept=(0,), dropped=(), pairs=(), threshold=0.9)
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            rep.threshold = 0.5
