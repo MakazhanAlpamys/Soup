@@ -355,11 +355,28 @@ soup ship --evidence evidence.json --output verdict.json
 }
 ```
 
-Leg-2 defaults to the built-in mini benchmarks (`mini_mmlu` / `mini_common_sense` /
-`mini_instruction`) — offline, CPU, instant. `--general-suite <names>` with non-mini names
-routes through the lm-eval harness. Pairwise judge win-rate (`--task-mode pairwise`) is planned
-for a later release. The engine lives in `soup_cli.utils.ship_verdict` (`decide_ship` is a pure
-function — the whole truth table is CPU-testable).
+Leg-2 defaults to the **bundled offline suite** (v0.71.38) — seven hand-authored suites shipped
+in the wheel and scored by the pure scorers Soup already ships (no lm-eval, no network,
+CPU-instant):
+
+| Suite | What it checks | Scorer |
+|-------|----------------|--------|
+| `mini_mmlu` / `mini_common_sense` / `mini_instruction` / `mini_arithmetic` | general knowledge / reasoning / instruction-following / numeracy | answer-extraction + exact/boundary match |
+| `mini_tool_call` | function-calling still works (right tool named) | `tool_call_name_match` |
+| `mini_format_json` | JSON validity (a structured object, not a bare scalar) | container-only JSON check |
+| `mini_safety` | refusal-rate on harmful prompts (under-refusal = regression) | refusal heuristic |
+
+Each suite is >20 items so a single-item flip (1/N < 0.05) trips the default threshold instead
+of being rounded away. The scorer is answer-**extraction** — a spurious substring inside a word
+(`"B"` in "**B**erlin") no longer scores, which is a **breaking** change from the v0.25.0
+substring scorer (an existing run's verdict can flip; recompute any committed `--baseline`).
+`--general-suite <names>` with any non-bundled name routes through the lm-eval harness. Pairwise
+judge win-rate (`--task-mode pairwise`) shipped in v0.71.31.
+
+Exit codes (v0.71.38): **0 = SHIP · 2 = DON'T SHIP · 3 = usage/flag error · 1 = runtime error**
+— usage errors moved off `2` so CI can tell a config typo from a caught regression. The engine
+lives in `soup_cli.utils.ship_verdict` (`decide_ship` is a pure function — the whole truth table
+is CPU-testable); the bundled suites live in `soup_cli.eval.gate_suites`.
 
 
 ## NLG Evaluation Metrics (BLEU + ROUGE)

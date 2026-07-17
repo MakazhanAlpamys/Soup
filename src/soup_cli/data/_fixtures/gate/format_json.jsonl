@@ -1,0 +1,40 @@
+{"prompt": "Return a JSON object with keys 'name' and 'age'.", "kind": "json", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "Give me a JSON array of the numbers 1, 2, and 3.", "kind": "json", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "Respond with valid JSON describing a book: title and author.", "kind": "json", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "Output a JSON object mapping 'red' to 1 and 'blue' to 2.", "kind": "json", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "Return only JSON: an object with a 'status' field set to 'ok'.", "kind": "json", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "Give the coordinates as JSON with 'lat' and 'lon' keys.", "kind": "json", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "Respond with a JSON list of three fruit names.", "kind": "json", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "Output a JSON object with a boolean field 'active'.", "kind": "json", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "Return JSON describing a person: first name, last name, and email.", "kind": "json", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "Give me a JSON object with a nested 'address' object.", "kind": "json", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "Respond with valid JSON: an empty object.", "kind": "json", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "Output a JSON array of two objects, each with an 'id'.", "kind": "json", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "Return a JSON object with a null 'middle_name' field.", "kind": "json", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "Give the result as JSON with keys 'sum' and 'count'.", "kind": "json", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "Respond with JSON: a list of the first four even numbers.", "kind": "json", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "Output a JSON object with a floating-point 'price' field.", "kind": "json", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "Return JSON with a key 'items' whose value is an array.", "kind": "json", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "Give me a JSON object representing a color with 'r', 'g', 'b'.", "kind": "json", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "Respond with valid JSON containing a 'message' string.", "kind": "json", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "Output a JSON object with a 'tags' array of strings.", "kind": "json", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "Return JSON: an object with keys 'width' and 'height'.", "kind": "json", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "Give the weekday as JSON with a single 'day' key.", "kind": "json", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "Respond with a JSON object that has exactly one key 'ok'.", "kind": "json", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "Output a JSON array containing the strings 'a', 'b', 'c'.", "kind": "json", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "Return JSON describing a movie: title, year, and rating.", "kind": "json", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "Give me a JSON object with a 'count' set to zero.", "kind": "json", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "Respond with JSON: a nested object under key 'meta'.", "kind": "json", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "Output a JSON object with a 'coordinates' array of two numbers.", "kind": "json", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "Return valid JSON with a 'success' boolean and a 'code' number.", "kind": "json", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "Give the temperature reading as JSON with 'value' and 'unit'.", "kind": "json", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "Respond with a JSON list of three boolean values.", "kind": "json", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "Output a JSON object mapping days to numbers.", "kind": "json", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "Return JSON with a 'user' object containing 'id' and 'name'.", "kind": "json", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "Give me valid JSON: an object with a 'total' field.", "kind": "json", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "Respond with JSON containing an array of two integers.", "kind": "json", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "Output a JSON object with keys 'question' and 'answer'.", "kind": "json", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "Return JSON describing a car: make, model, and year.", "kind": "json", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "Give the score as JSON with 'home' and 'away' keys.", "kind": "json", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "Respond with a JSON object that includes an empty array.", "kind": "json", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "Output valid JSON with a single string field 'greeting'.", "kind": "json", "source": "hand-authored, original, v0.71.38"}

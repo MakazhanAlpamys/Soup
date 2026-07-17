@@ -131,9 +131,13 @@ class TestRunGateErrorPropagation:
         result = run_gate(suite, generate_fn=lambda _p: "B")
         row = result.task_results[0]
 
-        # 0.4 == 2/5: exactly two MINI_MMLU answers are "B". Editing that
-        # fixture in forgetting.py moves this number.
-        assert row.score == 0.4
+        # A model that always answers "B" scores exactly the fraction of
+        # MINI_MMLU items whose answer is "B" (v0.71.38 expanded the suite, so
+        # this is computed from the fixture, not hard-coded to the old 2/5).
+        from soup_cli.eval.forgetting import MINI_MMLU
+
+        expected = sum(1 for it in MINI_MMLU if it["answer"] == "B") / len(MINI_MMLU)
+        assert row.score == pytest.approx(expected)
         assert row.error is None
         assert row.passed is True
 

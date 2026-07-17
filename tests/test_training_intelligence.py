@@ -89,10 +89,13 @@ class TestForgettingDetector:
         assert "mini_common_sense" in MINI_BENCHMARKS
         assert "mini_instruction" in MINI_BENCHMARKS
 
-        # v0.25.0 ships each mini benchmark with 5 questions as a starter set.
-        # Future releases can expand to the 100-question target from the plan.
+        # v0.71.38 expands the v0.25.0 5-item starter sets so a single-item flip
+        # (1/N < 0.05) actually trips the ship gate. Every suite is now large
+        # enough that its quantum is finer than the 0.05 forgetting threshold.
+        assert "mini_arithmetic" in MINI_BENCHMARKS
         for name, bench in MINI_BENCHMARKS.items():
-            assert len(bench) == 5, f"{name} expected 5 items, got {len(bench)}"
+            assert len(bench) > 20, f"{name} expected >20 items, got {len(bench)}"
+            assert 1.0 / len(bench) < 0.05, f"{name} quantum too coarse"
             for item in bench:
                 assert "question" in item
                 assert "answer" in item

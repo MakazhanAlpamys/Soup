@@ -12,6 +12,48 @@ reproducing 70+ versions of notes.
 
 ## [Unreleased]
 
+## [0.71.38] - 2026-07-17
+
+**`soup ship`'s regression leg now has teeth.** Leg 2 (the catastrophic-forgetting
+/ regression gate that carries the whole SHIP / DON'T-SHIP claim) was 15
+hand-written trivia prompts scored by case-insensitive **substring** containment
+— it scored `"B"` for "**B**erlin", `"ok"` for "lo**ok**", `"3"` for "1**3**", and
+had **zero** items for tool-calling, safety, or JSON validity. This release makes
+the gate real: a fixed, extraction-based scorer + bundled, offline, zero-dep eval
+suites that catch a regression the old gate waved through.
+
+### Changed
+
+- **Fixed answer scorer (breaking — verdicts can change).** `soup ship`'s leg-2
+  MCQ / instruction / arithmetic answers are now scored by answer-**extraction**
+  + a boundary-aware match, replacing the raw substring test. A spurious
+  substring inside another word ("Berlin", "look", "13") no longer scores a
+  correct answer, so an existing run's verdict may flip — intentionally, because
+  the old gate was reporting false negatives.
+- **Bundled, offline general suite.** The default `--general-suite` is now seven
+  hand-authored suites shipped in the wheel: `mini_mmlu` / `mini_common_sense` /
+  `mini_instruction` (expanded), a new `mini_arithmetic`, and three behavioural
+  suites the old gate had no coverage for — `mini_tool_call` (function-calling),
+  `mini_format_json` (JSON validity), and `mini_safety` (refusal-rate). Each is
+  scored to a per-model absolute score by the pure scorers Soup already ships
+  (`eval/custom`, `utils/diagnose`); no lm-eval, no network, no download. Every
+  suite is large enough that a single-item flip (1/N < 0.05) trips the default
+  threshold instead of being rounded away.
+- **`soup ship` exit codes: usage errors moved 2 → 3.** Exit `2` now means only
+  DON'T-SHIP; a typo'd flag or bad `--general-suite` exits `3` (mirroring
+  `soup plan` / `soup env check`), so CI can tell a config error from a caught
+  regression. Offline `--evidence` read/parse errors stay `1`. **Breaking** for
+  anyone parsing exit `2` as "usage error".
+
+### Fixed
+
+- `soup ship` help + docstrings no longer describe `--task-mode pairwise` as
+  "reserved for a later release" (it shipped in v0.71.31); the dead
+  `SUPPORTED_TASK_MODES` gate is removed.
+- `soup diagnose`'s package docstring said "Six" probes (there are seven —
+  citation) and pointed live loading at an unshipped version; it now re-exports
+  all seven `score_*` probe functions so callers need not reach into submodules.
+
 ## [0.71.37] - 2026-07-17
 
 **Every `pip install soup-cli[extra]` command now works on Windows `cmd.exe`**, and

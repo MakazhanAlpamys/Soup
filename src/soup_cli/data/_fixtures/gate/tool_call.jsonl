@@ -1,0 +1,40 @@
+{"prompt": "What's the weather in Paris right now?", "expected": "{\"function\": {\"name\": \"get_weather\", \"arguments\": {\"city\": \"Paris\"}}}", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "Set a timer for 10 minutes.", "expected": "{\"function\": {\"name\": \"set_timer\", \"arguments\": {\"minutes\": 10}}}", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "Add milk to my shopping list.", "expected": "{\"function\": {\"name\": \"add_to_list\", \"arguments\": {\"item\": \"milk\"}}}", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "Send an email to bob@example.com saying hi.", "expected": "{\"function\": {\"name\": \"send_email\", \"arguments\": {\"to\": \"bob@example.com\", \"body\": \"hi\"}}}", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "What is 45 times 12?", "expected": "{\"function\": {\"name\": \"calculator\", \"arguments\": {\"expression\": \"45*12\"}}}", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "Play some jazz music.", "expected": "{\"function\": {\"name\": \"play_music\", \"arguments\": {\"genre\": \"jazz\"}}}", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "Turn off the living room lights.", "expected": "{\"function\": {\"name\": \"set_lights\", \"arguments\": {\"room\": \"living room\", \"on\": false}}}", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "Book a table for two at 7pm.", "expected": "{\"function\": {\"name\": \"book_table\", \"arguments\": {\"party_size\": 2, \"time\": \"19:00\"}}}", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "Translate 'hello' into Spanish.", "expected": "{\"function\": {\"name\": \"translate\", \"arguments\": {\"text\": \"hello\", \"to\": \"es\"}}}", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "What time is it in Tokyo?", "expected": "{\"function\": {\"name\": \"get_time\", \"arguments\": {\"timezone\": \"Asia/Tokyo\"}}}", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "Search the web for python tutorials.", "expected": "{\"function\": {\"name\": \"web_search\", \"arguments\": {\"query\": \"python tutorials\"}}}", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "Create a calendar event for Friday at noon.", "expected": "{\"function\": {\"name\": \"create_event\", \"arguments\": {\"day\": \"Friday\", \"time\": \"12:00\"}}}", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "Convert 100 US dollars to euros.", "expected": "{\"function\": {\"name\": \"convert_currency\", \"arguments\": {\"amount\": 100, \"from\": \"USD\", \"to\": \"EUR\"}}}", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "Remind me to call mom tomorrow.", "expected": "{\"function\": {\"name\": \"set_reminder\", \"arguments\": {\"text\": \"call mom\", \"when\": \"tomorrow\"}}}", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "How far is it from Boston to New York?", "expected": "{\"function\": {\"name\": \"get_distance\", \"arguments\": {\"origin\": \"Boston\", \"destination\": \"New York\"}}}", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "Look up the stock price of Acme.", "expected": "{\"function\": {\"name\": \"get_stock_price\", \"arguments\": {\"ticker\": \"ACME\"}}}", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "Start a 30 second countdown.", "expected": "{\"function\": {\"name\": \"set_timer\", \"arguments\": {\"seconds\": 30}}}", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "Order a large pepperoni pizza.", "expected": "{\"function\": {\"name\": \"order_food\", \"arguments\": {\"item\": \"pizza\", \"size\": \"large\", \"topping\": \"pepperoni\"}}}", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "What's on my calendar today?", "expected": "{\"function\": {\"name\": \"list_events\", \"arguments\": {\"day\": \"today\"}}}", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "Mute the volume.", "expected": "{\"function\": {\"name\": \"set_volume\", \"arguments\": {\"level\": 0}}}", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "Find a hotel in Rome.", "expected": "{\"function\": {\"name\": \"search_hotels\", \"arguments\": {\"city\": \"Rome\"}}}", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "Add a todo: finish the report.", "expected": "{\"function\": {\"name\": \"add_todo\", \"arguments\": {\"task\": \"finish the report\"}}}", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "What is the capital of Canada? Use the lookup tool.", "expected": "{\"function\": {\"name\": \"lookup_fact\", \"arguments\": {\"query\": \"capital of Canada\"}}}", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "Increase the thermostat to 72 degrees.", "expected": "{\"function\": {\"name\": \"set_thermostat\", \"arguments\": {\"temperature\": 72}}}", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "Take a screenshot.", "expected": "{\"function\": {\"name\": \"take_screenshot\", \"arguments\": {}}}", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "Show me directions to the airport.", "expected": "{\"function\": {\"name\": \"get_directions\", \"arguments\": {\"destination\": \"airport\"}}}", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "Post 'good morning' to my feed.", "expected": "{\"function\": {\"name\": \"post_status\", \"arguments\": {\"text\": \"good morning\"}}}", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "Cancel my 3pm meeting.", "expected": "{\"function\": {\"name\": \"cancel_event\", \"arguments\": {\"time\": \"15:00\"}}}", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "What is 256 divided by 8?", "expected": "{\"function\": {\"name\": \"calculator\", \"arguments\": {\"expression\": \"256/8\"}}}", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "Turn on airplane mode.", "expected": "{\"function\": {\"name\": \"set_airplane_mode\", \"arguments\": {\"on\": true}}}", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "Save this note: buy tickets.", "expected": "{\"function\": {\"name\": \"save_note\", \"arguments\": {\"text\": \"buy tickets\"}}}", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "Search my files for 'budget'.", "expected": "{\"function\": {\"name\": \"file_search\", \"arguments\": {\"query\": \"budget\"}}}", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "Call the pharmacy.", "expected": "{\"function\": {\"name\": \"make_call\", \"arguments\": {\"contact\": \"pharmacy\"}}}", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "What's the forecast for tomorrow in London?", "expected": "{\"function\": {\"name\": \"get_weather\", \"arguments\": {\"city\": \"London\", \"day\": \"tomorrow\"}}}", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "Set an alarm for 6:30 am.", "expected": "{\"function\": {\"name\": \"set_alarm\", \"arguments\": {\"time\": \"06:30\"}}}", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "Add an appointment: dentist at 9am.", "expected": "{\"function\": {\"name\": \"create_event\", \"arguments\": {\"title\": \"dentist\", \"time\": \"09:00\"}}}", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "Look up the definition of 'ephemeral'.", "expected": "{\"function\": {\"name\": \"dictionary\", \"arguments\": {\"word\": \"ephemeral\"}}}", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "Send $20 to Alice.", "expected": "{\"function\": {\"name\": \"send_payment\", \"arguments\": {\"to\": \"Alice\", \"amount\": 20}}}", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "What's the population of France?", "expected": "{\"function\": {\"name\": \"lookup_fact\", \"arguments\": {\"query\": \"population of France\"}}}", "source": "hand-authored, original, v0.71.38"}
+{"prompt": "Dim the bedroom lights to 30 percent.", "expected": "{\"function\": {\"name\": \"set_lights\", \"arguments\": {\"room\": \"bedroom\", \"brightness\": 30}}}", "source": "hand-authored, original, v0.71.38"}

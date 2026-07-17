@@ -11,14 +11,19 @@ break it? The decision fuses two legs (task win + catastrophic-forgetting
 guard) into a single binary verdict — see ``utils/ship_verdict.py`` for the
 moat (``decide_ship``).
 
-Exit codes mirror ``soup diagnose`` so CI can gate on the result:
-**0 = SHIP, 2 = DON'T SHIP, 1 = runtime error**.
+Exit codes so CI can gate on the result:
+**0 = SHIP, 2 = DON'T SHIP, 3 = usage/validation error, 1 = runtime error**.
+Usage errors moved off ``2`` in v0.71.38 — a typo'd flag was previously
+indistinguishable from a caught regression (both exited ``2``); ``3`` mirrors
+``soup plan`` / ``soup env check``. Offline ``--evidence`` read/parse errors
+stay ``1``.
 
-Leg 1 (task win) modes: ``metric`` (reuses ``eval/custom.run_eval`` accuracy)
-and ``judge_score`` (reuses ``eval/judge.JudgeEvaluator``). True pairwise
-win-rate is reserved for a later release. Leg 2 (general suite) defaults to the
-built-in mini benchmarks (``eval/forgetting``); ``--general-suite`` with
-non-mini names routes through the existing lm-eval runner.
+Leg 1 (task win) modes: ``metric`` (reuses ``eval/custom.run_eval`` accuracy),
+``judge_score`` (reuses ``eval/judge.JudgeEvaluator``), and ``pairwise`` (true
+judge win-rate, v0.71.31). Leg 2 (general suite) defaults to the bundled offline
+suite (``eval/gate_suites`` — MCQ/arithmetic + tool-call/JSON/safety, scored by
+the pure diagnose/custom scorers, v0.71.38); ``--general-suite`` with any
+non-bundled name routes through the existing lm-eval runner.
 """
 
 from __future__ import annotations
@@ -50,6 +55,11 @@ console = Console()
 
 app = typer.Typer(no_args_is_help=False)
 
+# Exit-code taxonomy (v0.71.38): keep DON'T-SHIP distinct from a config typo.
+_EXIT_RUNTIME = 1  # something went wrong actually running (IO, model load, ...)
+_EXIT_DONT_SHIP = 2  # a verdict: leg 1 or leg 2 said don't ship
+_EXIT_USAGE = 3  # bad flags / validation (mirrors `soup plan` / `env check`)
+
 # 16 MiB cap on evidence JSON (mirrors `soup diagnose` — prevents a
 # multi-GB / symlink-pointed file from OOMing at json.load time).
 _MAX_EVIDENCE_BYTES = 16 * 1024 * 1024
@@ -74,29 +84,26 @@ def _fail(message: str, code: int) -> NoReturn:
 
 
 def _validate_threshold_flag(value: float) -> float:
-    # Fast-fail a bad flag with an exit-2 USAGE error here; the engine's own
+    # Fast-fail a bad flag with a usage error (exit 3) here; the engine's own
     # _validate_threshold raises ValueError (-> exit 1 runtime), which is the
     # wrong exit code for a CLI typo. Intentional, narrow duplication.
     if not isinstance(value, (int, float)) or isinstance(value, bool):
-        _fail("--forgetting-threshold must be a number", 2)
+        _fail("--forgetting-threshold must be a number", _EXIT_USAGE)
     fvalue = float(value)
     # NaN fails both comparisons -> rejected.
     if not (0.0 <= fvalue <= 1.0):
-        _fail("--forgetting-threshold must be in [0.0, 1.0]", 2)
+        _fail("--forgetting-threshold must be in [0.0, 1.0]", _EXIT_USAGE)
     return fvalue
 
 
 def _validate_task_mode_flag(task_mode: str) -> None:
+    # All three modes (metric / judge_score / pairwise) ship as of v0.71.31, so
+    # SUPPORTED_TASK_MODES == TASK_MODES and the old "pairwise reserved" gate is
+    # gone (it was dead code).
     if task_mode not in TASK_MODES:
         _fail(
             f"--task-mode must be one of {', '.join(TASK_MODES)}; got {task_mode!r}",
-            2,
-        )
-    if task_mode not in SUPPORTED_TASK_MODES:
-        _fail(
-            f"--task-mode {task_mode!r} (pairwise judge win-rate) ships in a "
-            "later release; use 'metric' or 'judge_score' for now",
-            2,
+            _EXIT_USAGE,
         )
 
 
@@ -116,7 +123,7 @@ def _validate_judge_model_url(url: str) -> None:
     _fail(
         f"--judge-model {url!r} uses a disallowed scheme/host; "
         "use ollama://, https://, or http://localhost",
-        2,
+        _EXIT_USAGE,
     )
 
 
@@ -165,33 +172,33 @@ def _verdict_from_evidence(path: str, *, forgetting_threshold: float) -> ShipVer
     try:
         payload = _load_evidence(path)
     except (OSError, ValueError, json.JSONDecodeError) as exc:
-        _fail(f"cannot read --evidence: {exc}", 1)
+        _fail(f"cannot read --evidence: {exc}", _EXIT_RUNTIME)
 
     task = payload.get("task")
     if not isinstance(task, dict):
-        _fail("evidence.task must be an object with 'mode', 'base', 'tuned'", 1)
+        _fail("evidence.task must be an object with 'mode', 'base', 'tuned'", _EXIT_RUNTIME)
     mode = task.get("mode", "metric")
     if mode not in SUPPORTED_TASK_MODES:
         _fail(
             f"evidence.task.mode must be one of {', '.join(SUPPORTED_TASK_MODES)}; "
             f"got {mode!r}",
-            1,
+            _EXIT_RUNTIME,
         )
     if "base" not in task or "tuned" not in task:
-        _fail("evidence.task needs both 'base' and 'tuned' scores", 1)
+        _fail("evidence.task needs both 'base' and 'tuned' scores", _EXIT_RUNTIME)
     try:
         task_win = build_task_win(mode, task["base"], task["tuned"])
     except (TypeError, ValueError) as exc:
-        _fail(f"invalid evidence.task: {exc}", 1)
+        _fail(f"invalid evidence.task: {exc}", _EXIT_RUNTIME)
 
     raw_benchmarks = payload.get("benchmarks", {})
     if not isinstance(raw_benchmarks, dict):
-        _fail("evidence.benchmarks must be an object of {name: {base, tuned}}", 1)
+        _fail("evidence.benchmarks must be an object of {name: {base, tuned}}", _EXIT_RUNTIME)
     base_scores: Dict[str, object] = {}
     tuned_scores: Dict[str, object] = {}
     for name, entry in raw_benchmarks.items():
         if not isinstance(entry, dict) or "base" not in entry or "tuned" not in entry:
-            _fail(f"evidence.benchmarks[{name!r}] needs 'base' and 'tuned'", 1)
+            _fail(f"evidence.benchmarks[{name!r}] needs 'base' and 'tuned'", _EXIT_RUNTIME)
         base_scores[str(name)] = entry["base"]
         tuned_scores[str(name)] = entry["tuned"]
 
@@ -201,7 +208,7 @@ def _verdict_from_evidence(path: str, *, forgetting_threshold: float) -> ShipVer
         )
         return decide_ship(task_win, deltas, forgetting_threshold=forgetting_threshold)
     except (TypeError, ValueError) as exc:
-        _fail(f"invalid evidence.benchmarks: {exc}", 1)
+        _fail(f"invalid evidence.benchmarks: {exc}", _EXIT_RUNTIME)
 
 
 # ---------------------------------------------------------------------------
@@ -312,12 +319,6 @@ def _leg1_pairwise(
     return build_task_win("pairwise", 0.5, winrate)
 
 
-def _mini_score(gen: Callable[[str], str], benchmark: str) -> float:
-    from soup_cli.eval.forgetting import ForgettingDetector
-
-    return ForgettingDetector(generate_fn=gen, benchmark=benchmark).run_baseline()
-
-
 def _extract_lm_score(bench_data: Mapping[str, object]) -> Optional[float]:
     """Pull a single accuracy metric from an lm-eval per-task result block."""
     for key in ("acc,none", "acc_norm,none", "exact_match,none", "em,none"):
@@ -399,24 +400,26 @@ def _leg2_scores(
 ) -> Tuple[Dict[str, object], Dict[str, object]]:
     """Compute leg-2 ``(base_scores, tuned_scores)`` maps over the general suite.
 
-    Mini-benchmark names run live via ForgettingDetector; any other names route
-    through the lm-eval override. ``baseline_scores`` supplies base scores
-    directly (skipping the base run) for any name it covers.
+    Bundled suite names (v0.71.38 — the MCQ/arithmetic *and* the behavioural
+    tool-call / JSON-format / safety suites) are scored offline via
+    ``gate_suites.score_bundled_suite``; any other name routes through the
+    lm-eval override. ``baseline_scores`` supplies base scores directly
+    (skipping the base run) for any name it covers.
     """
-    from soup_cli.eval.forgetting import MINI_BENCHMARKS
+    from soup_cli.eval.gate_suites import is_bundled_suite, score_bundled_suite
 
-    mini_names = [n for n in suite_names if n in MINI_BENCHMARKS]
-    other_names = [n for n in suite_names if n not in MINI_BENCHMARKS]
+    bundled_names = [n for n in suite_names if is_bundled_suite(n)]
+    other_names = [n for n in suite_names if not is_bundled_suite(n)]
 
     base_map: Dict[str, object] = {}
     tuned_map: Dict[str, object] = {}
 
-    for name in mini_names:
-        tuned_map[name] = _mini_score(tuned_gen, name)
+    for name in bundled_names:
+        tuned_map[name] = score_bundled_suite(name, tuned_gen)
         if name in baseline_scores:
             base_map[name] = float(baseline_scores[name])
         else:
-            base_map[name] = _mini_score(base_gen, name)
+            base_map[name] = score_bundled_suite(name, base_gen)
 
     if other_names:
         lm_base, lm_tuned = _lm_eval_leg2(
@@ -439,10 +442,10 @@ def _leg2_scores(
 
 
 def _parse_suite(general_suite: Optional[str]) -> List[str]:
-    from soup_cli.eval.forgetting import MINI_BENCHMARKS
+    from soup_cli.eval.gate_suites import DEFAULT_GENERAL_SUITE
 
     if not general_suite:
-        return list(MINI_BENCHMARKS.keys())
+        return list(DEFAULT_GENERAL_SUITE)
     names = [chunk.strip() for chunk in general_suite.split(",")]
     return [name for name in names if name]
 
@@ -462,32 +465,32 @@ def _verdict_live(
 ) -> ShipVerdict:
     """Run a live verdict — validate flags (exit 2), then evaluate (exit 1)."""
     if not base:
-        _fail("live run needs --base <model>", 2)
+        _fail("live run needs --base <model>", _EXIT_USAGE)
     if adapter and tuned:
-        _fail("pass --adapter OR --tuned, not both", 2)
+        _fail("pass --adapter OR --tuned, not both", _EXIT_USAGE)
     if not adapter and not tuned:
-        _fail("live run needs --tuned <model> or --adapter <adapter-path>", 2)
+        _fail("live run needs --tuned <model> or --adapter <adapter-path>", _EXIT_USAGE)
     if not task_eval:
-        _fail("live run needs --task-eval <tasks.jsonl> for the leg-1 task win", 2)
+        _fail("live run needs --task-eval <tasks.jsonl> for the leg-1 task win", _EXIT_USAGE)
     try:
         enforce_under_cwd_and_no_symlink(task_eval, "--task-eval path")
     except (ValueError, TypeError) as exc:
-        _fail(str(exc), 2)
+        _fail(str(exc), _EXIT_USAGE)
 
     suite_names = _parse_suite(general_suite)
     if not suite_names:
-        _fail("--general-suite resolved to no benchmarks", 2)
+        _fail("--general-suite resolved to no benchmarks", _EXIT_USAGE)
     if len(suite_names) > _MAX_SUITE_BENCHMARKS:
         _fail(
             f"--general-suite has too many benchmarks (max {_MAX_SUITE_BENCHMARKS})",
-            2,
+            _EXIT_USAGE,
         )
     for _name in suite_names:
         if "\x00" in _name or len(_name) > _MAX_BENCHMARK_NAME_CHARS:
             _fail(
                 "--general-suite names must be null-free and "
                 f"< {_MAX_BENCHMARK_NAME_CHARS} chars",
-                2,
+                _EXIT_USAGE,
             )
 
     # Resolve --baseline up front so a bad spec (outside cwd / missing file /
@@ -499,19 +502,19 @@ def _verdict_live(
         try:
             baseline_scores = resolve_baseline(baseline_spec)
         except (ValueError, FileNotFoundError, OSError) as exc:
-            _fail(f"--baseline: {exc}", 2)
+            _fail(f"--baseline: {exc}", _EXIT_USAGE)
 
     tuned_id = tuned if tuned else base
     try:
         base_gen, tuned_gen = _resolve_generators(base, tuned, adapter, device)
         if task_mode == "judge_score":
             if not judge_model:
-                _fail("--task-mode judge_score needs --judge-model <url>", 2)
+                _fail("--task-mode judge_score needs --judge-model <url>", _EXIT_USAGE)
             _validate_judge_model_url(judge_model)
             task_win = _leg1_judge(base_gen, tuned_gen, task_eval, judge_model)
         elif task_mode == "pairwise":
             if not judge_model:
-                _fail("--task-mode pairwise needs --judge-model <url>", 2)
+                _fail("--task-mode pairwise needs --judge-model <url>", _EXIT_USAGE)
             _validate_judge_model_url(judge_model)
             task_win = _leg1_pairwise(base_gen, tuned_gen, task_eval, judge_model)
         else:
@@ -532,10 +535,10 @@ def _verdict_live(
         return decide_ship(task_win, deltas, forgetting_threshold=forgetting_threshold)
     except typer.Exit:
         # typer.Exit subclasses RuntimeError — re-raise so in-try _fail() usage
-        # errors (exit 2) keep their code instead of being re-coded as exit 1.
+        # errors (exit 3) keep their code instead of being re-coded as exit 1.
         raise
     except (ValueError, TypeError, OSError, RuntimeError, ImportError) as exc:
-        _fail(f"live ship verdict failed: {type(exc).__name__}: {exc}", 1)
+        _fail(f"live ship verdict failed: {type(exc).__name__}: {exc}", _EXIT_RUNTIME)
 
 
 # ---------------------------------------------------------------------------
@@ -551,9 +554,9 @@ def _emit_and_exit(verdict: ShipVerdict, output: Optional[str]) -> None:
             )
             console.print(f"[green]Wrote[/] {escape(output)}")
         except (OSError, ValueError, TypeError) as exc:
-            _fail(f"cannot write --output: {type(exc).__name__}: {exc}", 1)
+            _fail(f"cannot write --output: {type(exc).__name__}: {exc}", _EXIT_RUNTIME)
     if verdict.decision != DECISION_SHIP:
-        raise typer.Exit(code=2)
+        raise typer.Exit(code=_EXIT_DONT_SHIP)
 
 
 # ---------------------------------------------------------------------------
@@ -580,18 +583,23 @@ def ship(
         help="Leg-1 mode: metric | judge_score | pairwise (judge win-rate).",
     ),
     judge_model: Optional[str] = typer.Option(
-        None, "--judge-model", help="Judge model URL for --task-mode judge_score."
+        None,
+        "--judge-model",
+        help="Judge model URL for --task-mode judge_score or pairwise.",
     ),
     general_suite: Optional[str] = typer.Option(
         None,
         "--general-suite",
-        help="Comma list of leg-2 benchmarks (default: the 3 mini benchmarks; "
-        "non-mini names route through lm-eval).",
+        help="Comma list of leg-2 benchmarks (default: the bundled offline suite "
+        "— MCQ/arithmetic + tool-call/JSON/safety; non-bundled names route "
+        "through lm-eval).",
     ),
     baseline: Optional[str] = typer.Option(
         None,
         "--baseline",
-        help="registry://<id> or JSON file of base leg-2 scores (skips base run).",
+        help="registry://<id> or JSON file of base leg-2 scores (skips base run). "
+        "Recompute baselines captured before v0.71.38 — the leg-2 scorer changed, "
+        "so an old baseline is not comparable to a freshly-scored tuned model.",
     ),
     forgetting_threshold: float = typer.Option(
         DEFAULT_FORGETTING_THRESHOLD,
@@ -631,7 +639,7 @@ def ship(
         _fail(
             "provide --evidence <json> for an offline verdict, or "
             "--base + (--tuned|--adapter) + --task-eval for a live run",
-            2,
+            _EXIT_USAGE,
         )
 
     _emit_and_exit(verdict, output)

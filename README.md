@@ -49,37 +49,44 @@ infrastructure instead of improving models. Soup fixes that.
 
 ## What's New
 
-**v0.71.36 — Data Moat II.** A semantic layer over your training data, plus two tools for what a fine-tune forgets and what it leaks.
+**v0.71.38 — The gate grows teeth.** `soup ship` answers the one question that matters after a fine-tune — *did my task improve WITHOUT silently breaking everything else?* This release makes the "without breaking everything else" half real.
 
-- **`soup data dedup --semantic`** — dedup by meaning, not by shared tokens. Catches
-  *reworded* duplicates MinHash's shingling scores as distinct. Zero new dependencies.
-- **`soup data topics <data>`** — cluster your data and get a coverage table
-  (`82% code · 6% math · 1% safety`) with a warning for thin topics, so you can see what
-  you are actually training on.
-- **`soup data canary insert|check`** — insert unique secrets, then prove whether a model
-  memorized them: each secret's loss is ranked against never-inserted controls. Exit 2 on a
-  leak, so CI can gate. On SmolLM2-135M a memorized set lands at percentile 0.0 against a
-  clean model's 4%–93% spread.
-- **`soup train --replay old.jsonl`** — continual-learning rehearsal: interleave your old
-  data so the new task doesn't erase it.
-- **Honest result:** semantic dedup is **not** a paraphrase detector. Measured, paraphrase
-  cosines (0.49–0.76) *overlap* with genuinely-distinct rows (0.54–0.76) — "Add two numbers"
-  vs "Multiply two numbers" scores **higher** than a real paraphrase — so no threshold
-  separates them. The default is deliberately conservative; see the CHANGELOG.
-- **Two blocking bugs fixed:** the hardware-fit gate **refused to train any model you merged
-  yourself** (a local checkpoint's name has no size marker, so it guessed 7B and predicted
-  16 GB), and every `pip install "soup-cli[extra]"` hint printed **without the extra** —
-  17 sites where the suggested command succeeds and leaves the feature still broken.
+- **A gate that actually catches regressions.** The regression leg used to be 15 trivia
+  prompts scored by raw substring — it credited `"B"` for "**B**erlin", `"3"` for "1**3**", and
+  had **zero** items for tool-calling, safety, or JSON. Now it's a fixed, extraction-based
+  scorer over seven bundled, offline suites (MCQ · arithmetic · **tool-calling** · **JSON
+  validity** · **safety/refusal**). A tune that WINS your task but quietly breaks tool-calling
+  now gets a **DON'T SHIP** — the old gate waved it through.
+- **Zero new dependencies, no network.** Every suite ships in the wheel and is scored by the
+  pure scorers Soup already has — no lm-eval, no download. `soup ci init`'s core-only gate keeps
+  working.
+- **Distinct exit codes for CI.** Usage errors moved off exit `2` to `3`, so `2` now means only
+  DON'T-SHIP — a typo'd flag is no longer indistinguishable from a caught regression.
+- **Breaking, on purpose.** The fixed scorer can change an existing run's verdict — because the
+  old one was reporting false negatives. Recompute any committed `--baseline`.
 
 ```bash
-soup data topics train.jsonl                    # what am I actually training on?
-soup data dedup train.jsonl --semantic -o clean.jsonl
+# leg 1 (task win) AND leg 2 (no regression on the bundled suite) -> one verdict
+soup ship --base ./base --adapter ./my-lora --task-eval my_task.jsonl
+#   exit 0 = SHIP · 2 = DON'T SHIP · 3 = bad flags · 1 = runtime error
 
-soup data canary insert train.jsonl -o canaried.jsonl --manifest secrets.json
+soup ship --evidence scores.json    # offline verdict from pre-computed scores
+```
+
+<details>
+<summary>Previous release — v0.71.36, Data Moat II (semantic dedup · topics · canaries · replay)</summary>
+
+`soup data dedup --semantic` dedups by meaning; `soup data topics` shows a coverage table;
+`soup data canary insert|check` proves whether a model memorized inserted secrets (exit 2 on a
+leak); `soup train --replay old.jsonl` interleaves old data so a new task doesn't erase it.
+
+```bash
+soup data topics train.jsonl
 soup data canary check --manifest secrets.json --base ./my-model  # exit 2 = leak
-
 soup train --config sft.yaml --replay old_task.jsonl --replay-ratio 0.1
 ```
+
+</details>
 
 <details>
 <summary>Previous release — v0.71.33, <code>soup draft</code> (measure speculative decoding)</summary>
