@@ -49,34 +49,36 @@ infrastructure instead of improving models. Soup fixes that.
 
 ## What's New
 
-**v0.71.35 — the compliance pack.** Ship a regulated fine-tune with the paperwork it needs: start from a regulation-shaped config, publish a provenance-carrying model card, and gate every PR in CI.
+**v0.71.36 — Data Moat II.** A semantic layer over your training data, plus two tools for what a fine-tune forgets and what it leaks.
 
-- **`soup init --template hipaa|soc2|eu-ai-act|sr-11-7`.** Four regulation-shaped starting
-  configs, each documenting the exact commands for that regime — PHI scrubbing + air-gap,
-  BOM/attest/sign, EU Annex XI + energy tracking, or repro-receipt + diagnose/ship.
-- **`soup card <registry-id>` → `MODELCARD.md`.** Turn a registry entry into a publishable HF
-  model card: training config, eval scorecard, config/data hashes, lineage, and every
-  registered artifact. `soup push --card` uploads it as the README, so every public push
-  carries its provenance.
-- **`soup ci init` — fine-tuning CI.** Writes a GitHub Actions gate that runs
-  `data validate` → `expect` → `ship --evidence` on each PR; a regression exits 2 and
-  blocks the merge.
-- **Compliance quickstart** ([docs/compliance.md](docs/compliance.md)) — the whole path from
-  template to air-gapped, signed, attested, carded model.
-- **GGUF export fixed on Windows.** Validated end-to-end for the first time (SmolLM2 →
-  q4_0/q4_k_m/q8_0/f16 → Ollama → live inference), which surfaced four real bugs: the export
-  cloned llama.cpp into your *current directory*, its first run **downgraded your PyTorch to
-  CPU-only** (breaking CUDA), a correctly-built llama.cpp wasn't found under MSVC, and
-  `deploy ollama` rejected relative GGUF paths. All fixed.
-- **Hardening:** the model-card generator (including the existing `soup push` card) no longer
-  interpolates unescaped config values — a crafted `base`/`scheduler` can't smuggle HTML into
-  a card published on the Hub.
+- **`soup data dedup --semantic`** — dedup by meaning, not by shared tokens. Catches
+  *reworded* duplicates MinHash's shingling scores as distinct. Zero new dependencies.
+- **`soup data topics <data>`** — cluster your data and get a coverage table
+  (`82% code · 6% math · 1% safety`) with a warning for thin topics, so you can see what
+  you are actually training on.
+- **`soup data canary insert|check`** — insert unique secrets, then prove whether a model
+  memorized them: each secret's loss is ranked against never-inserted controls. Exit 2 on a
+  leak, so CI can gate. On SmolLM2-135M a memorized set lands at percentile 0.0 against a
+  clean model's 4%–93% spread.
+- **`soup train --replay old.jsonl`** — continual-learning rehearsal: interleave your old
+  data so the new task doesn't erase it.
+- **Honest result:** semantic dedup is **not** a paraphrase detector. Measured, paraphrase
+  cosines (0.49–0.76) *overlap* with genuinely-distinct rows (0.54–0.76) — "Add two numbers"
+  vs "Multiply two numbers" scores **higher** than a real paraphrase — so no threshold
+  separates them. The default is deliberately conservative; see the CHANGELOG.
+- **Two blocking bugs fixed:** the hardware-fit gate **refused to train any model you merged
+  yourself** (a local checkpoint's name has no size marker, so it guessed 7B and predicted
+  16 GB), and every `pip install 'soup-cli[extra]'` hint printed **without the extra** —
+  17 sites where the suggested command succeeds and leaves the feature still broken.
 
 ```bash
-soup adapters arithmetic "coder - toxic" \
-  --adapter coder=./coder-lora --adapter toxic=./toxic-lora -o ./cleaned
+soup data topics train.jsonl                    # what am I actually training on?
+soup data dedup train.jsonl --semantic -o clean.jsonl
 
-soup train --config sft.yaml   # with training.lisa_enabled: true, lisa_num_layers: 2
+soup data canary insert train.jsonl -o canaried.jsonl --manifest secrets.json
+soup data canary check --manifest secrets.json --base ./my-model  # exit 2 = leak
+
+soup train --config sft.yaml --replay old_task.jsonl --replay-ratio 0.1
 ```
 
 <details>

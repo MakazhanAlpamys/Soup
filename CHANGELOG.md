@@ -12,6 +12,71 @@ reproducing 70+ versions of notes.
 
 ## [Unreleased]
 
+## [0.71.36] - 2026-07-16
+
+**Data Moat II** — a semantic layer over your training data, plus two tools for
+what a fine-tune forgets and leaks.
+
+### Added
+
+- **`soup data dedup --semantic`** — near-duplicate removal over embedding
+  cosine instead of MinHash shingling. Catches *reworded* duplicates that
+  MinHash misses (measured: 0.88–0.91 cosine on rewordings MinHash scored as
+  distinct) while correctly keeping distinct-but-similar instructions. Zero new
+  dependencies: uses `transformers` from the `[train]` extra. **Read the
+  known-limitation below before lowering `--threshold`.**
+- **`soup data topics <data>`** — cluster a dataset and label each cluster with
+  c-TF-IDF terms, plus a coverage table (`82% code · 6% math`) and a warning for
+  thin topics. Labels are *emergent term clusters*, not a fixed taxonomy.
+- **`soup data canary insert|check`** — Secret-Sharer memorization probe. Insert
+  K high-entropy secrets, then check any model/adapter: each secret's loss is
+  ranked against never-inserted controls drawn from the same space. Exit 2 on
+  MAJOR so CI can gate. Measured on SmolLM2-135M: a memorized set lands at
+  percentile 0.0 (loss 1.7–2.5) against a clean model's 4.1–6.2.
+- **`soup train --replay old.jsonl --replay-ratio 0.1`** — continual-learning
+  rehearsal. Interleaves a seeded sample of an old dataset into training so a
+  new task does not erase the old one. `r` is the fraction of the **final**
+  mixed set (`n_replay = round(r/(1-r) · n_new)`), rows are interleaved rather
+  than appended, and an undersized pool reports the shortfall instead of
+  repeating rows. Mixed into `train` only — validation stays pure new-task.
+
+### Fixed
+
+- **The hardware-fit gate refused to train any local checkpoint.** A merged
+  model (`soup merge -o ./mymodel`) has no size marker in its name, so the size
+  guesser returned its 7B default, predicted ~16 GB of VRAM and refused. Local
+  checkpoints are now *measured* from their safetensors header (0.135B actual vs
+  7.0B guessed) — this had blocked `soup merge` → train-from-merged entirely.
+  Third instance of this class after the v0.71.32 (Whisper) and v0.71.33
+  (`M` suffix) fixes.
+- **`pip install 'soup-cli[extra]'` hints printed without the extra.** Rich ate
+  the bracket, so every "install the missing dependency" message across 17 sites
+  told users to run `pip install 'soup-cli'` — which succeeds and still leaves
+  the feature broken. Affected `[eval]`, `[data]`, `[serve]`, `[ui]`, `[tui]`,
+  `[compile]`, `[mcp]`, `[carbon]` and others, including Typer help text.
+- Replay rows bypassed the image/audio path-traversal validation that the
+  primary dataset receives.
+
+### Known limitations
+
+- **Semantic dedup is not a paraphrase detector.** Measured with
+  all-MiniLM-L6-v2, paraphrase cosines (0.49–0.76) **overlap** with
+  genuinely-distinct rows (0.54–0.76): "Add two numbers" vs "Multiply two
+  numbers" scores 0.759, *higher* than the true paraphrase "reverse a string" /
+  "invert the order of characters" at 0.491. **No threshold separates them**, so
+  lowering `--threshold` to chase paraphrases deletes real training rows. The
+  default (0.8) is deliberately conservative.
+- **Replay is validated at proof-of-mechanism scale.** On SmolLM2-135M + LoRA,
+  replay retained the old task 7% better than a no-replay control — the correct
+  direction — but forgetting without it was only +4%, i.e. mild. The effect size
+  at full fine-tuning or 7B+ is unproven on a 4 GB box.
+- **Canary exposure is the sampled-control approximation**, not full-space rank
+  enumeration. "No exposure" is not proof of no memorization.
+- **`data topics` / `dedup --semantic` require `[train]`** (torch) and download
+  an embedding model. Plain MinHash `dedup` stays on the light core.
+- Replay v1 is `sft`/`pretrain` only and is incompatible with
+  `packing`/`multipack`.
+
 ## [0.71.35] - 2026-07-15
 
 ### Added

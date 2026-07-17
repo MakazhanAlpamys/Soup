@@ -11,6 +11,7 @@ soup init [--template chat|code|...|audio]       Create config
 soup init --template hipaa|soc2|eu-ai-act|sr-11-7  Compliance-shaped starting config + the commands for that regime (v0.71.35)
 soup autopilot --model <id> --data d.jsonl --goal <g>  Zero-configsoup train --config soup.yaml                 Start training
 soup train --config soup.yaml --tensorboard   Train with TensorBoard logging
+soup train --config soup.yaml --replay old.jsonl --replay-ratio 0.1  Continual-learning rehearsal: interleave old data so the new task doesn't erase it (sft/pretrain)
 soup train --config soup.yaml --fsdp full_shard  Train with FSDP2
 soup train --config soup.yaml --deepspeed zero++  DeepSpeed ZeRO++ (quantized comms)
 soup train --config soup.yaml --gpus auto|N      Multi-GPU launch hint
@@ -77,6 +78,10 @@ soup data lint <path>                         Preference-data linter: length bia
 soup data convert <path> --to chatml          Convert between formats
 soup data merge data1.jsonl data2.jsonl       Combine datasets
 soup data dedup <path> --threshold 0.8        Remove duplicates (MinHash)
+soup data dedup <path> --semantic             Dedup by embedding cosine — catches rewordings MinHash misses ([train])
+soup data topics <path> [--clusters N|auto]   Cluster + c-TF-IDF labels + coverage table + thin-topic warnings ([train])
+soup data canary insert <path> -o <out> --manifest <m>  Insert K secrets to later prove memorization (manifest = SECRET)
+soup data canary check --manifest <m> --base <model>    Rank each secret's loss vs never-inserted controls; exit 2 = leak
 soup data stats <path>                        Extended statistics
 soup data generate --prompt "..." --count 100 Generate synthetic data
 soup data generate ... --provider ollama      Use local Ollama instance

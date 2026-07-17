@@ -6,6 +6,7 @@
 
 **Contents:**
 
+- [Continual-learning rehearsal (`--replay`)](#continual-learning-rehearsal---replay)
 - [Loop Hardening](#loop-hardening)
 - [Unlearning (`task='unlearn'`, NPO / SimNPO / RMU)](#unlearning-taskunlearn-npo--simnpo--rmu)
 - [Continued Pre-training](#continued-pre-training)
@@ -40,6 +41,59 @@
 - [gpt-oss `reasoning_effort` + `train_on_eot` (v0.52.0)](#gpt-oss-reasoning_effort--train_on_eot-v0520)
 
 ---
+
+## Continual-learning rehearsal (`--replay`)
+
+Fine-tuning on a new task can erase the old one. Rehearsal is the standard
+defence: mix a slice of the old data back in.
+
+```bash
+soup train --config new_task.yaml --replay old_task.jsonl --replay-ratio 0.1
+```
+
+or in `soup.yaml`:
+
+```yaml
+data:
+  train: new_task.jsonl
+  replay: old_task.jsonl
+  replay_ratio: 0.1      # fraction of the FINAL mixed set
+  replay_seed: 0
+```
+
+**The ratio is a share of the final set**, not of the new data:
+`n_replay = round(r/(1-r) · n_new)`. At `0.1` over 1000 new rows that is 111
+replay rows → 1111 total → exactly 10%. The console reports what it did:
+
+```
+Replay: +26 old rows interleaved (30.2% of 86)
+```
+
+Three guarantees worth knowing:
+
+- **Interleaved, never appended.** A trailing block of old rows would mean the
+  model sees them all in the final steps — a second mini-finetune, which is the
+  failure rehearsal exists to prevent.
+- **`train` only; validation stays pure new-task**, so your eval still measures
+  the task you are learning. Measure old-task retention separately with
+  `soup eval custom` / `soup ship`.
+- **An undersized pool reports a shortfall rather than repeating rows** — a row
+  seen twice per epoch is a different experiment.
+
+The replay file gets its own format detection, so the old set may be alpaca while
+the new one is sharegpt.
+
+**Scope (v1):** `sft` and `pretrain` only, and incompatible with
+`packing`/`multipack` — those concatenate rows into fixed blocks, so the ratio
+stops being meaningful at block boundaries. Both are rejected with a clear error
+rather than silently mis-mixing.
+
+**Honest result.** Validated at proof-of-mechanism scale (SmolLM2-135M + LoRA):
+training task B from a model that knew task A, replay retained A **7% better than
+a no-replay control** (loss 0.565 → 0.526) at a ~5% cost to task B — the expected
+trade. But forgetting without replay was only **+4%**, i.e. mild: LoRA on a 135M
+model barely drifts. The direction and the mechanism are proven; the effect size
+at full fine-tuning or 7B+ is unproven on a 4 GB box.
 
 ## Loop Hardening
 
