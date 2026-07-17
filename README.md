@@ -109,6 +109,22 @@ pip install 'soup-cli[train]'   # add the training stack (torch, transformers, p
 pip install git+https://github.com/MakazhanAlpamys/Soup.git   # latest dev
 ```
 
+> **On Windows `cmd.exe`, swap the single quotes for double quotes:**
+> `pip install "soup-cli[train]"`
+>
+> The commands above are written for bash / zsh / PowerShell, where `'…'` quotes a
+> string. `cmd.exe` has no single-quote quoting — it passes the characters straight
+> to pip, which then rejects them:
+>
+> ```
+> ERROR: Invalid requirement: "'soup-cli[train]'": Expected package name at the start of dependency specifier
+> ```
+>
+> That is pip parsing a literal `'`, not a problem with the package. Double quotes
+> work in **every** shell — cmd, PowerShell, bash, and zsh — so `pip install
+> "soup-cli[train]"` is always safe. (Unquoted `pip install soup-cli[train]` also
+> works in cmd and PowerShell, but zsh reads `[train]` as a glob and fails.)
+
 `soup init`, `soup data …`, and the other data/inspection commands work on the light install.
 Fine-tuning (`soup train`) needs the `[train]` extra.
 
