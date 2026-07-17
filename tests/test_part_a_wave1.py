@@ -131,6 +131,8 @@ class TestRunGateErrorPropagation:
         result = run_gate(suite, generate_fn=lambda _p: "B")
         row = result.task_results[0]
 
+        # 0.4 == 2/5: exactly two MINI_MMLU answers are "B". Editing that
+        # fixture in forgetting.py moves this number.
         assert row.score == 0.4
         assert row.error is None
         assert row.passed is True
