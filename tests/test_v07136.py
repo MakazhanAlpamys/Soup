@@ -510,8 +510,11 @@ class TestExtrasHintsAreEscaped:
     def test_plain_exception_hints_are_not_escaped(self):
         """The counter-rule: non-Rich text must NOT gain a backslash.
 
-        `raise ImportError("... pip install 'soup-cli[mlx]'")` never reaches
+        `raise ImportError('... pip install "soup-cli[mlx]"')` never reaches
         Rich, so escaping it would surface a literal backslash to the user.
+
+        The quoting itself is v0.71.37's business (cmd.exe cannot strip `'`);
+        this test only cares that the bracket stays bare here.
         """
         import pathlib
 
@@ -519,7 +522,9 @@ class TestExtrasHintsAreEscaped:
 
         root = pathlib.Path(soup_cli.__file__).parent
         text = (root / "trainer" / "mlx_sft.py").read_text(encoding="utf-8")
-        assert "'soup-cli[mlx]'" in text
+        # Quote-agnostic on purpose: the shell quoting around the name is
+        # v0.71.37's concern, this rule is only about the bracket staying bare.
+        assert "soup-cli[mlx]" in text
         assert "soup-cli\\[mlx]" not in text
 
 

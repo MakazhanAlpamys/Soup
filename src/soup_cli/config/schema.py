@@ -5554,7 +5554,7 @@ TEMPLATES: dict[str, str] = {
 
 base: meta-llama/Llama-3.1-8B-Instruct
 task: sft
-# backend: unsloth  # 2-5x faster, pip install 'soup-cli[fast]'
+# backend: unsloth  # 2-5x faster, pip install "soup-cli[fast]"
 
 data:
   train: ./data/train.jsonl
@@ -5579,7 +5579,7 @@ output: ./output
 
 base: codellama/CodeLlama-7b-Instruct-hf
 task: sft
-# backend: unsloth  # 2-5x faster, pip install 'soup-cli[fast]'
+# backend: unsloth  # 2-5x faster, pip install "soup-cli[fast]"
 
 data:
   train: ./data/code_train.jsonl
@@ -5604,7 +5604,7 @@ output: ./output
 
 base: meta-llama/Llama-3.1-8B-Instruct
 task: grpo
-# backend: unsloth  # 2-5x faster, pip install 'soup-cli[fast]'
+# backend: unsloth  # 2-5x faster, pip install "soup-cli[fast]"
 
 data:
   train: ./data/reasoning_train.jsonl
@@ -5634,7 +5634,7 @@ output: ./output
 base: meta-llama/Llama-3.2-11B-Vision-Instruct
 task: sft
 modality: vision
-# backend: unsloth  # 2-5x faster, pip install 'soup-cli[fast]'
+# backend: unsloth  # 2-5x faster, pip install "soup-cli[fast]"
 
 data:
   train: ./data/vision_train.jsonl
@@ -5660,7 +5660,7 @@ output: ./output
 
 base: meta-llama/Llama-3.1-8B-Instruct
 task: sft
-# backend: unsloth  # 2-5x faster, pip install 'soup-cli[fast]'
+# backend: unsloth  # 2-5x faster, pip install "soup-cli[fast]"
 
 data:
   train: ./data/medical_train.jsonl
@@ -5690,7 +5690,7 @@ output: ./output
 
 base: meta-llama/Llama-3.1-8B-Instruct
 task: kto
-# backend: unsloth  # 2-5x faster, pip install 'soup-cli[fast]'
+# backend: unsloth  # 2-5x faster, pip install "soup-cli[fast]"
 
 data:
   train: ./data/kto_train.jsonl
@@ -5720,7 +5720,7 @@ output: ./output
 
 base: meta-llama/Llama-3.1-8B-Instruct
 task: orpo
-# backend: unsloth  # 2-5x faster, pip install 'soup-cli[fast]'
+# backend: unsloth  # 2-5x faster, pip install "soup-cli[fast]"
 
 data:
   train: ./data/preference_train.jsonl
@@ -5750,7 +5750,7 @@ output: ./output
 
 base: meta-llama/Llama-3.1-8B-Instruct
 task: bco
-# backend: unsloth  # 2-5x faster, pip install 'soup-cli[fast]'
+# backend: unsloth  # 2-5x faster, pip install "soup-cli[fast]"
 
 data:
   train: ./data/preference_train.jsonl
@@ -5780,7 +5780,7 @@ output: ./output
 
 base: meta-llama/Llama-3.1-8B-Instruct
 task: simpo
-# backend: unsloth  # 2-5x faster, pip install 'soup-cli[fast]'
+# backend: unsloth  # 2-5x faster, pip install "soup-cli[fast]"
 
 data:
   train: ./data/preference_train.jsonl
@@ -5811,7 +5811,7 @@ output: ./output
 
 base: meta-llama/Llama-3.1-8B-Instruct
 task: ipo
-# backend: unsloth  # 2-5x faster, pip install 'soup-cli[fast]'
+# backend: unsloth  # 2-5x faster, pip install "soup-cli[fast]"
 
 data:
   train: ./data/preference_train.jsonl
@@ -5843,7 +5843,7 @@ output: ./output
 
 base: meta-llama/Llama-3.1-8B
 task: pretrain
-# backend: unsloth  # 2-5x faster, pip install 'soup-cli[fast]'
+# backend: unsloth  # 2-5x faster, pip install "soup-cli[fast]"
 
 data:
   train: ./data/corpus.jsonl
@@ -5871,7 +5871,7 @@ output: ./output_pretrain
 
 base: Qwen/Qwen3-30B-A3B
 task: sft
-# backend: unsloth  # 2-5x faster, pip install 'soup-cli[fast]'
+# backend: unsloth  # 2-5x faster, pip install "soup-cli[fast]"
 
 data:
   train: ./data/train.jsonl
@@ -5902,7 +5902,7 @@ output: ./output
 
 base: meta-llama/Llama-3.1-8B-Instruct
 task: sft
-# backend: unsloth  # 2-5x faster, pip install 'soup-cli[fast]'
+# backend: unsloth  # 2-5x faster, pip install "soup-cli[fast]"
 
 data:
   train: ./data/long_context_train.jsonl
@@ -5923,7 +5923,7 @@ training:
   gradient_checkpointing: true
   rope_scaling_type: dynamic
   use_flash_attn: true
-  # use_liger: true       # pip install 'soup-cli[liger]' for fused ops
+  # use_liger: true       # pip install "soup-cli[liger]" for fused ops
   # use_ring_attention: true  # Multi-GPU sequence parallelism
 
 output: ./output_longctx
@@ -5939,7 +5939,7 @@ output: ./output_longctx
 
 base: BAAI/bge-base-en-v1.5
 task: embedding
-# backend: unsloth  # 2-5x faster, pip install 'soup-cli[fast]'
+# backend: unsloth  # 2-5x faster, pip install "soup-cli[fast]"
 
 data:
   train: ./data/embedding_train.jsonl
@@ -5976,7 +5976,7 @@ output: ./output_embedding
 base: Qwen/Qwen2-Audio-7B-Instruct
 task: sft
 modality: audio
-# backend: unsloth  # 2-5x faster, pip install 'soup-cli[fast]'
+# backend: unsloth  # 2-5x faster, pip install "soup-cli[fast]"
 
 data:
   train: ./data/audio_train.jsonl
@@ -6017,7 +6017,7 @@ output: ./output_audio
 
 base: meta-llama/Llama-3.1-8B-Instruct
 task: sft
-# backend: unsloth  # 2-5x faster, pip install 'soup-cli[fast]'
+# backend: unsloth  # 2-5x faster, pip install "soup-cli[fast]"
 
 data:
   train: ./data/tool_calling_train.jsonl
@@ -6051,7 +6051,7 @@ output: ./output
 
 base: meta-llama/Llama-3.1-8B-Instruct
 task: ppo
-# backend: unsloth  # 2-5x faster, pip install 'soup-cli[fast]'
+# backend: unsloth  # 2-5x faster, pip install "soup-cli[fast]"
 
 data:
   train: ./data/prompts.jsonl

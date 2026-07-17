@@ -79,7 +79,7 @@ Fine-tune on M1-M4 Macs via Apple's [MLX](https://github.com/ml-explore/mlx) fra
 
 ```bash
 # Install MLX support
-pip install 'soup-cli[mlx]'
+pip install "soup-cli[mlx]"
 ```
 
 ```yaml
@@ -108,7 +108,7 @@ Use the [Unsloth](https://github.com/unslothai/unsloth) backend for significantl
 
 ```bash
 # Install unsloth support
-pip install 'soup-cli[fast]'
+pip install "soup-cli[fast]"
 ```
 
 Then add one line to your config:
@@ -143,7 +143,7 @@ app from your `soup.yaml` for serverless, per-second-billed GPU training. The co
 base64-embedded as **data** — no code interpolation, no secrets in the generated stub.
 
 ```bash
-pip install 'soup-cli[modal]'   # only needed for live submit
+pip install "soup-cli[modal]"   # only needed for live submit
 
 # Plan-only (default): write the stub + print the `modal run` command.
 soup train --config soup.yaml --cloud modal --gpu a100
@@ -585,7 +585,7 @@ Full-screen Textual dashboard. Two-pane: run list (left) + selected-run detail
 (right). `r` refreshes, `q` quits.
 
 ```bash
-pip install 'soup-cli[tui]'
+pip install "soup-cli[tui]"
 soup tui --refresh 1.0 --limit 50
 ```
 

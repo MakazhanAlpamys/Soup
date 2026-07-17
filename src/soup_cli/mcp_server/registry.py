@@ -269,7 +269,7 @@ def tool_data_doctor(args: dict) -> dict:
         import transformers  # noqa: F401
     except ImportError as exc:
         raise McpToolError(
-            "data_doctor needs the tokenizer stack: pip install 'soup-cli[train]'"
+            "data_doctor needs the tokenizer stack: pip install \"soup-cli[train]\""
         ) from exc
     try:
         tok = _dd.resolve_tokenizer(model, trust_remote_code=False)

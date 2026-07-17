@@ -32,7 +32,7 @@
 Soup turns the pain of LLM fine-tuning into a simple workflow. One config, one command, done.
 
 ```bash
-pip install 'soup-cli[train]'   # add [train] to fine-tune; bare `soup-cli` is the light CLI
+pip install "soup-cli[train]"   # add [train] to fine-tune; bare `soup-cli` is the light CLI
 soup init --template chat
 soup train
 ```
@@ -68,7 +68,7 @@ infrastructure instead of improving models. Soup fixes that.
   separates them. The default is deliberately conservative; see the CHANGELOG.
 - **Two blocking bugs fixed:** the hardware-fit gate **refused to train any model you merged
   yourself** (a local checkpoint's name has no size marker, so it guessed 7B and predicted
-  16 GB), and every `pip install 'soup-cli[extra]'` hint printed **without the extra** —
+  16 GB), and every `pip install "soup-cli[extra]"` hint printed **without the extra** —
   17 sites where the suggested command succeeds and leaves the feature still broken.
 
 ```bash
@@ -104,26 +104,37 @@ Full history: [CHANGELOG.md](CHANGELOG.md) &middot; [GitHub Releases](https://gi
 ### 1. Install
 
 ```bash
-pip install soup-cli            # light: CLI + config + data tools (no PyTorch)
-pip install 'soup-cli[train]'   # add the training stack (torch, transformers, peft, trl, …)
-pip install git+https://github.com/MakazhanAlpamys/Soup.git   # latest dev
+# Light core: CLI + config + data tools, no PyTorch
+pip install soup-cli
+
+# Add the training stack (torch, transformers, peft, trl, datasets, …)
+pip install "soup-cli[train]"
+
+# Everything (train + serve + ui + data) in one shot
+pip install "soup-cli[all]"
+
+# Or from GitHub (latest dev)
+pip install git+https://github.com/MakazhanAlpamys/Soup.git
 ```
 
-> **On Windows `cmd.exe`, swap the single quotes for double quotes:**
-> `pip install "soup-cli[train]"`
+The full extras table (`fast`, `mlx`, `serve`, `eval`, `ui`, `vision`, `audio`, …) lives in
+[`docs/models.md`](docs/models.md#optional-extras).
+
+> **Use double quotes around the extra.** They are the only spelling that works in
+> every shell — `cmd.exe`, PowerShell, bash, and zsh.
 >
-> The commands above are written for bash / zsh / PowerShell, where `'…'` quotes a
-> string. `cmd.exe` has no single-quote quoting — it passes the characters straight
-> to pip, which then rejects them:
+> Older tutorials and videos (including some of ours) show the single-quoted
+> `pip install 'soup-cli[train]'`. That is bash / zsh / PowerShell syntax, and it
+> fails on Windows `cmd.exe`, which has no single-quote quoting and hands the
+> quotes straight to pip:
 >
 > ```
 > ERROR: Invalid requirement: "'soup-cli[train]'": Expected package name at the start of dependency specifier
 > ```
 >
-> That is pip parsing a literal `'`, not a problem with the package. Double quotes
-> work in **every** shell — cmd, PowerShell, bash, and zsh — so `pip install
-> "soup-cli[train]"` is always safe. (Unquoted `pip install soup-cli[train]` also
-> works in cmd and PowerShell, but zsh reads `[train]` as a glob and fails.)
+> If you hit that, swap the `'` for `"` — pip is rejecting a literal quote
+> character, nothing is wrong with the package. (Dropping the quotes entirely
+> works on Windows too, but zsh then reads `[train]` as a glob and fails.)
 
 `soup init`, `soup data …`, and the other data/inspection commands work on the light install.
 Fine-tuning (`soup train`) needs the `[train]` extra.
@@ -159,7 +170,7 @@ A complete `soup.yaml`:
 ```yaml
 base: meta-llama/Llama-3.1-8B-Instruct
 task: sft
-# backend: unsloth  # 2-5x faster, pip install 'soup-cli[fast]'
+# backend: unsloth  # 2-5x faster, pip install "soup-cli[fast]"
 
 data:
   train: ./data/train.jsonl

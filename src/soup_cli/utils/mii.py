@@ -49,7 +49,7 @@ def create_mii_pipeline(
     if not is_mii_available():
         raise ImportError(
             "deepspeed-mii is not installed. "
-            "Install with: pip install 'soup-cli[mii]' "
+            "Install with: pip install \"soup-cli[mii]\" "
             "or pip install deepspeed-mii"
         )
 

@@ -767,7 +767,7 @@ def train(
         except ImportError:
             console.print(
                 "[red]wandb not installed.[/]\n"
-                "Run: [bold]pip install 'soup-cli\\[wandb]'[/]"
+                "Run: [bold]pip install \"soup-cli\\[wandb]\"[/]"
             )
             raise typer.Exit(1)
         except Exception as wandb_err:

@@ -6,7 +6,7 @@
 
 base: meta-llama/Llama-3.1-8B-Instruct
 task: sft
-# backend: unsloth  # 2-5x faster, pip install 'soup-cli[fast]'
+# backend: unsloth  # 2-5x faster, pip install "soup-cli[fast]"
 
 data:
   train: ./data/long_context_train.jsonl
@@ -27,7 +27,7 @@ training:
   gradient_checkpointing: true
   rope_scaling_type: dynamic
   use_flash_attn: true
-  # use_liger: true       # pip install 'soup-cli[liger]' for fused ops
+  # use_liger: true       # pip install "soup-cli[liger]" for fused ops
   # use_ring_attention: true  # Multi-GPU sequence parallelism
 
 output: ./output_longctx

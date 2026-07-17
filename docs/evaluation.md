@@ -432,7 +432,7 @@ Full-featured evaluation platform with standard benchmarks, custom evals, LLM-as
 
 ```bash
 # Install eval dependencies
-pip install 'soup-cli[eval]'
+pip install "soup-cli[eval]"
 
 # Standard benchmarks (wraps lm-evaluation-harness)
 soup eval benchmark --model ./output --benchmarks mmlu,gsm8k,hellaswag

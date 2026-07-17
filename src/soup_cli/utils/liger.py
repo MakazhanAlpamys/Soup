@@ -115,7 +115,7 @@ def validate_liger_config(use_liger: bool, backend: str, device: str) -> list[st
     if not check_liger_available():
         errors.append(
             "liger-kernel is not installed. "
-            "Install it with: pip install 'soup-cli[liger]'"
+            "Install it with: pip install \"soup-cli[liger]\""
         )
 
     if backend == "unsloth":

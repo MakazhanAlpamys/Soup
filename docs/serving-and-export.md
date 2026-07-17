@@ -97,7 +97,7 @@ Linux/macOS need only a C++ toolchain + CMake. CUDA llama.cpp builds are unteste
 Export models to ONNX format for use with [ONNX Runtime](https://onnxruntime.ai/):
 
 ```bash
-pip install 'soup-cli[onnx]'
+pip install "soup-cli[onnx]"
 soup export --model ./output --format onnx
 soup export --model ./output --format onnx --output ./model_onnx
 ```
@@ -107,7 +107,7 @@ soup export --model ./output --format onnx --output ./model_onnx
 Export models to TensorRT-LLM format for high-throughput GPU inference:
 
 ```bash
-pip install 'soup-cli[tensorrt]'
+pip install "soup-cli[tensorrt]"
 soup export --model ./output --format tensorrt
 soup export --model ./output --format tensorrt --output ./model_trt
 ```
@@ -212,7 +212,7 @@ Start a local OpenAI-compatible inference server:
 
 ```bash
 # Install server dependencies
-pip install 'soup-cli[serve]'
+pip install "soup-cli[serve]"
 
 # Start server
 soup serve --model ./output --port 8000
@@ -253,7 +253,7 @@ Use [vLLM](https://github.com/vllm-project/vllm) for significantly better throug
 
 ```bash
 # Install vLLM support
-pip install 'soup-cli[serve-fast]'
+pip install "soup-cli[serve-fast]"
 
 # Start with vLLM backend
 soup serve --model ./output --backend vllm
@@ -273,7 +273,7 @@ Use [SGLang](https://github.com/sgl-project/sglang) as an alternative high-throu
 
 ```bash
 # Install SGLang support
-pip install 'soup-cli[sglang]'
+pip install "soup-cli[sglang]"
 
 # Start with SGLang backend
 soup serve --model ./output --backend sglang
@@ -482,7 +482,7 @@ The OTLP endpoint is SSRF-hardened: only http/https schemes, plain HTTP only for
 Launch a local web interface to manage experiments, start training, explore data, and chat with models — all from your browser.
 
 ```bash
-pip install 'soup-cli[ui]'
+pip install "soup-cli[ui]"
 soup ui
 # -> opens http://127.0.0.1:7860 in your browser
 # -> prints auth token to console

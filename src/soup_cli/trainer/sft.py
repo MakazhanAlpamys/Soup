@@ -1098,7 +1098,7 @@ class SFTTrainerWrapper:
         except ImportError:
             raise ImportError(
                 "librosa is required for audio training. "
-                "Install with: pip install 'soup-cli[audio]'"
+                "Install with: pip install \"soup-cli[audio]\""
             )
 
         def load_and_format_audio(example):

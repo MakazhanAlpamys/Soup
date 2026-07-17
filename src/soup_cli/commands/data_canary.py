@@ -191,7 +191,7 @@ def check(
             "[red]soup data canary check needs PyTorch + transformers.[/]\n"
             # \[train] escaped: Rich would eat the bracket and print a
             # command that installs WITHOUT the extra.
-            "Install with: [bold]pip install 'soup-cli\\[train]'[/]"
+            "Install with: [bold]pip install \"soup-cli\\[train]\"[/]"
         )
         raise typer.Exit(1)
     except (ValueError, OSError, RuntimeError) as exc:

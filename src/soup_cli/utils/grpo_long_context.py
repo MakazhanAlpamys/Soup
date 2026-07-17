@@ -150,7 +150,7 @@ def apply_vllm_sleep_mode(engine_args: object) -> object:
     if version is None:
         raise RuntimeError(
             "vllm_sleep_mode requires vLLM >= 0.7 but vLLM is not "
-            "installed (pip install 'soup-cli[serve-fast]')."
+            "installed (pip install \"soup-cli[serve-fast]\")."
         )
     if version < _MIN_VLLM_SLEEP_VERSION:
         found = ".".join(str(part) for part in version) or "unknown"

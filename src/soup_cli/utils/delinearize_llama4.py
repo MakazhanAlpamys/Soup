@@ -305,7 +305,7 @@ def run_delinearize(
     except ImportError as exc:
         raise ImportError(
             "delinearize-llama4 requires torch + safetensors "
-            "(pip install 'soup-cli[train]')"
+            "(pip install \"soup-cli[train]\")"
         ) from exc
 
     # Containment BEFORE makedirs — a directly constructed plan must not

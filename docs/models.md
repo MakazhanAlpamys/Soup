@@ -70,29 +70,29 @@ no PyTorch. Add `[train]` to fine-tune, or install other extras only when you ne
 
 | Extra | Install | What it adds |
 |---|---|---|
-| `train` | `pip install 'soup-cli[train]'` | Training stack: torch, transformers, peft, trl, datasets, bitsandbytes, accelerate |
-| `all` | `pip install 'soup-cli[all]'` | `train` + `serve` + `ui` + `data` in one shot |
-| `fast` | `pip install 'soup-cli[fast]'` | Unsloth backend (2-5x faster, lower VRAM) |
-| `vision` | `pip install 'soup-cli[vision]'` | Vision / multimodal fine-tuning (Pillow) |
-| `audio` | `pip install 'soup-cli[audio]'` | Audio / speech fine-tuning (librosa, soundfile) |
-| `mlx` | `pip install 'soup-cli[mlx]'` | Apple Silicon backend (mlx, mlx-lm) |
-| `qat` | `pip install 'soup-cli[qat]'` | Quantization-Aware Training (torchao) |
-| `serve` | `pip install 'soup-cli[serve]'` | Inference server (FastAPI + uvicorn) |
-| `serve-fast` | `pip install 'soup-cli[serve-fast]'` | vLLM inference backend (2-4x throughput) |
-| `sglang` | `pip install 'soup-cli[sglang]'` | SGLang inference backend |
-| `ui` | `pip install 'soup-cli[ui]'` | Web UI + inference server |
-| `tui` | `pip install 'soup-cli[tui]'` | Full-screen Textual dashboard (`soup tui`) |
-| `eval` | `pip install 'soup-cli[eval]'` | Benchmark evaluation (lm-evaluation-harness) |
-| `data` | `pip install 'soup-cli[data]'` | Deduplication (MinHash via datasketch) |
-| `data-pro` | `pip install 'soup-cli[data-pro]'` | Language detection + PII (langdetect, presidio) |
-| `deepspeed` | `pip install 'soup-cli[deepspeed]'` | Multi-GPU training (DeepSpeed ZeRO) |
-| `liger` | `pip install 'soup-cli[liger]'` | Liger Kernel fused ops |
-| `ring-attn` | `pip install 'soup-cli[ring-attn]'` | Ring FlashAttention (sequence parallelism) |
-| `onnx` / `tensorrt` | `pip install 'soup-cli[onnx]'` | ONNX / TensorRT-LLM export |
-| `awq` / `gptq` | `pip install 'soup-cli[awq]'` | AWQ / GPTQ quantized export |
-| `trackers` | `pip install 'soup-cli[trackers]'` | MLflow / SwanLab / Trackio logging |
-| `remote` | `pip install 'soup-cli[remote]'` | Remote datasets (s3 / gs / az / oci) |
-| `dev` | `pip install 'soup-cli[dev]'` | Tests + lint + types (pytest, ruff, mypy, pre-commit) |
+| `train` | `pip install "soup-cli[train]"` | Training stack: torch, transformers, peft, trl, datasets, bitsandbytes, accelerate |
+| `all` | `pip install "soup-cli[all]"` | `train` + `serve` + `ui` + `data` in one shot |
+| `fast` | `pip install "soup-cli[fast]"` | Unsloth backend (2-5x faster, lower VRAM) |
+| `vision` | `pip install "soup-cli[vision]"` | Vision / multimodal fine-tuning (Pillow) |
+| `audio` | `pip install "soup-cli[audio]"` | Audio / speech fine-tuning (librosa, soundfile) |
+| `mlx` | `pip install "soup-cli[mlx]"` | Apple Silicon backend (mlx, mlx-lm) |
+| `qat` | `pip install "soup-cli[qat]"` | Quantization-Aware Training (torchao) |
+| `serve` | `pip install "soup-cli[serve]"` | Inference server (FastAPI + uvicorn) |
+| `serve-fast` | `pip install "soup-cli[serve-fast]"` | vLLM inference backend (2-4x throughput) |
+| `sglang` | `pip install "soup-cli[sglang]"` | SGLang inference backend |
+| `ui` | `pip install "soup-cli[ui]"` | Web UI + inference server |
+| `tui` | `pip install "soup-cli[tui]"` | Full-screen Textual dashboard (`soup tui`) |
+| `eval` | `pip install "soup-cli[eval]"` | Benchmark evaluation (lm-evaluation-harness) |
+| `data` | `pip install "soup-cli[data]"` | Deduplication (MinHash via datasketch) |
+| `data-pro` | `pip install "soup-cli[data-pro]"` | Language detection + PII (langdetect, presidio) |
+| `deepspeed` | `pip install "soup-cli[deepspeed]"` | Multi-GPU training (DeepSpeed ZeRO) |
+| `liger` | `pip install "soup-cli[liger]"` | Liger Kernel fused ops |
+| `ring-attn` | `pip install "soup-cli[ring-attn]"` | Ring FlashAttention (sequence parallelism) |
+| `onnx` / `tensorrt` | `pip install "soup-cli[onnx]"` | ONNX / TensorRT-LLM export |
+| `awq` / `gptq` | `pip install "soup-cli[awq]"` | AWQ / GPTQ quantized export |
+| `trackers` | `pip install "soup-cli[trackers]"` | MLflow / SwanLab / Trackio logging |
+| `remote` | `pip install "soup-cli[remote]"` | Remote datasets (s3 / gs / az / oci) |
+| `dev` | `pip install "soup-cli[dev]"` | Tests + lint + types (pytest, ruff, mypy, pre-commit) |
 
 The complete, authoritative extras list is in [`pyproject.toml`](../pyproject.toml).
 

@@ -241,7 +241,7 @@ def build_compile_plan(
 
 
 _INSTALL_HINT = (
-    "Run: pip install 'soup-cli[compile]'  (installs dspy-ai / textgrad / gepa)"
+    "Run: pip install \"soup-cli[compile]\"  (installs dspy-ai / textgrad / gepa)"
 )
 
 

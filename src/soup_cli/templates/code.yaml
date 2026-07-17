@@ -3,7 +3,7 @@
 
 base: codellama/CodeLlama-7b-Instruct-hf
 task: sft
-# backend: unsloth  # 2-5x faster, pip install 'soup-cli[fast]'
+# backend: unsloth  # 2-5x faster, pip install "soup-cli[fast]"
 
 data:
   train: ./data/code_train.jsonl

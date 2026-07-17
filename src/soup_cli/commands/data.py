@@ -264,9 +264,11 @@ def _semantic_dedup(
         console.print(
             "[red]Semantic dedup needs PyTorch + transformers.[/]\n"
             # \[train] is escaped: Rich would otherwise eat the bracket as a
-            # markup tag and print `pip install 'soup-cli'` -- a command that
+            # markup tag and print `pip install "soup-cli"` -- a command that
             # installs the package WITHOUT the extra the user is missing.
-            "Install with: [bold]pip install 'soup-cli\\[train]'[/]"
+            # Double quotes, not single: cmd.exe cannot strip `'` and pip then
+            # rejects the requirement outright.
+            "Install with: [bold]pip install \"soup-cli\\[train]\"[/]"
         )
         raise typer.Exit(1)
     except (ValueError, TypeError) as exc:
@@ -358,7 +360,7 @@ def dedup(
     except ImportError:
         console.print(
             "[red]datasketch not installed.[/]\n"
-            "Install with: [bold]pip install 'soup-cli\\[data]'[/]"
+            "Install with: [bold]pip install \"soup-cli\\[data]\"[/]"
         )
         raise typer.Exit(1)
 

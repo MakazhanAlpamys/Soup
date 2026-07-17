@@ -68,7 +68,7 @@ def ui(
     except ImportError:
         console.print(
             "[red]FastAPI/uvicorn not installed.[/]\n"
-            "Install with: [bold]pip install 'soup-cli\\[ui]'[/]"
+            "Install with: [bold]pip install \"soup-cli\\[ui]\"[/]"
         )
         raise typer.Exit(1)
 

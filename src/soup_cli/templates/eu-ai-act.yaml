@@ -10,8 +10,8 @@
 #
 #   2. Auto-generate the Annex XI/XII technical documentation + measure energy:
 #        soup train --config soup.yaml \
-#            --annex-xi annex_xi.md \                # or annex_xi.pdf (pip install 'soup-cli[pdf]')
-#            --track-energy --energy-country DEU \   # codecarbon (pip install 'soup-cli[carbon]')
+#            --annex-xi annex_xi.md \                # or annex_xi.pdf (pip install "soup-cli[pdf]")
+#            --track-energy --energy-country DEU \   # codecarbon (pip install "soup-cli[carbon]")
 #            --energy-out energy.json
 #
 #   3. Fold the measured energy into the ML-BOM (transparency):

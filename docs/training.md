@@ -531,7 +531,7 @@ Fine-tune vision-language models (LLaMA-3.2-Vision, Qwen2-VL, Pixtral) on image+
 
 ```bash
 # Install vision support
-pip install 'soup-cli[vision]'
+pip install "soup-cli[vision]"
 
 # Create a vision config
 soup init --template vision
@@ -581,7 +581,7 @@ Fine-tune audio-language models (Qwen2-Audio, Whisper) on audio+text data:
 
 ```bash
 # Install audio support
-pip install 'soup-cli[audio]'
+pip install "soup-cli[audio]"
 
 # Create an audio config
 soup init --template audio

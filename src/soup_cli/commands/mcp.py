@@ -51,7 +51,7 @@ def serve(
         # instead of parsing '[mcp]' as a (dropped) markup tag.
         console.print(
             "[red]The MCP server needs the 'mcp' SDK.[/] "
-            "Install it with: [bold]pip install 'soup-cli\\[mcp]'[/]"
+            "Install it with: [bold]pip install \"soup-cli\\[mcp]\"[/]"
         )
         raise typer.Exit(1) from None
 

@@ -318,7 +318,7 @@ def _load_safetensors_arrays(path: str, field: str) -> dict[str, Any]:
             raise ImportError(
                 "this adapter holds non-numpy dtypes (likely bf16); "
                 "converting it requires torch "
-                "(pip install 'soup-cli[train]')"
+                "(pip install \"soup-cli[train]\")"
             ) from exc
         try:
             tensors = torch_load_file(path)

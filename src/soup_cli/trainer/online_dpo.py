@@ -61,7 +61,7 @@ def _import_online_dpo():
     except ImportError as exc:  # pragma: no cover — trl ships in [train]
         raise ImportError(
             "task='online_dpo' requires trl with OnlineDPO support "
-            "(pip install 'soup-cli[train]')"
+            "(pip install \"soup-cli[train]\")"
         ) from exc
 
 

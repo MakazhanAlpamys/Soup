@@ -36,7 +36,7 @@ Train with simulated quantization for significantly better post-quantization qua
 
 ```bash
 # Install QAT support
-pip install 'soup-cli[qat]'
+pip install "soup-cli[qat]"
 ```
 
 ```yaml
@@ -71,7 +71,7 @@ QAT works with all training tasks (SFT, DPO, GRPO, PPO, KTO, ORPO, SimPO, IPO, P
 For H100 / H200 / B100 / B200 GPUs, train with float8 matmuls for ~2x speedup vs bf16 at comparable quality. This extends QAT infrastructure via `torchao.float8`:
 
 ```bash
-pip install 'soup-cli[qat]'   # torchao >= 0.5.0 includes torchao.float8
+pip install "soup-cli[qat]"   # torchao >= 0.5.0 includes torchao.float8
 ```
 
 ```yaml
@@ -106,7 +106,7 @@ Bool `true` stays on the int8 QAT path for backward compatibility. FP8 requires 
 Models with 128k+ vocabularies (Llama 3.1, Qwen2) materialise a huge `(batch, seq, vocab)` logits tensor that dominates VRAM. Cut Cross-Entropy computes the loss in chunks instead:
 
 ```bash
-pip install 'soup-cli[cce]'    # or: pip install cut-cross-entropy
+pip install "soup-cli[cce]"    # or: pip install cut-cross-entropy
 ```
 
 ```yaml
@@ -368,9 +368,9 @@ data:
 Install optional performance packages:
 
 ```bash
-pip install 'soup-cli[liger]'     # Liger Kernel fused operations
+pip install "soup-cli[liger]"     # Liger Kernel fused operations
 pip install flash-attn --no-build-isolation  # FlashAttention
-pip install 'soup-cli[ring-attn]' # Ring FlashAttention (sequence parallelism)
+pip install "soup-cli[ring-attn]" # Ring FlashAttention (sequence parallelism)
 ```
 
 

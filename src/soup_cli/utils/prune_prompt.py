@@ -244,7 +244,7 @@ def _resolve_tokenizer(tokenizer: Union[str, Any]) -> Any:
     except ImportError as exc:
         raise ValueError(
             "tokenizer-aware prune-prompt needs transformers — "
-            "install with: pip install 'soup-cli[train]'"
+            "install with: pip install \"soup-cli[train]\""
         ) from exc
     try:
         return AutoTokenizer.from_pretrained(tokenizer)

@@ -3,7 +3,7 @@
 Generate tool schemas + descriptions optimized via textual gradients.
 Schema + validators from v0.68.0 Part C; the live optimizer pass lands in
 v0.71.13 (#227), lazy-importing TextGrad / GEPA with a friendly
-``ImportError`` (``pip install 'soup-cli[compile]'``).
+``ImportError`` (``pip install "soup-cli[compile]"``).
 
 Composes with v0.46 Agent Forge (OpenAPI / MCP / GraphQL parser) — Agent
 Forge produces the spec, ``compile-tools`` optimises the descriptions.
@@ -26,7 +26,7 @@ _SUPPORTED_SPEC_EXTENSIONS: frozenset[str] = frozenset({".json", ".yaml", ".yml"
 
 _MAX_OPTIMIZER_NAME_LEN = 32
 _INSTALL_HINT = (
-    "Run: pip install 'soup-cli[compile]'  (installs textgrad / gepa)"
+    "Run: pip install \"soup-cli[compile]\"  (installs textgrad / gepa)"
 )
 
 # Injectable seam: tests set this to a ``(description, examples, optimizer)

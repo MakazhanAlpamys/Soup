@@ -137,7 +137,7 @@ soup train
 - Uses RoPE scaling (dynamic) to extend context to 128k tokens
 - Enables gradient checkpointing and FlashAttention for memory efficiency
 - Supports `linear`, `dynamic`, `yarn`, `longrope` scaling types
-- Optional Liger Kernel for fused ops: `pip install 'soup-cli[liger]'`
+- Optional Liger Kernel for fused ops: `pip install "soup-cli[liger]"`
 
 ### 9. Embedding Model Fine-Tuning
 
@@ -159,7 +159,7 @@ soup train
 Fine-tune audio-language models (Qwen2-Audio, Whisper):
 
 ```bash
-pip install 'soup-cli[audio]'
+pip install "soup-cli[audio]"
 soup init --template audio
 soup train
 ```
@@ -301,7 +301,7 @@ quantization: int8  # Reduces memory by 4x
 Unsloth is 2-5x faster training:
 
 ```bash
-pip install 'soup-cli[fast]'
+pip install "soup-cli[fast]"
 ```
 
 Then in your config:

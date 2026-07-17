@@ -12,7 +12,34 @@ reproducing 70+ versions of notes.
 
 ## [Unreleased]
 
+## [0.71.37] - 2026-07-17
+
+**Every `pip install soup-cli[extra]` command now works on Windows `cmd.exe`**, and
+eval-gate benchmark tasks run instead of always failing.
+
 ### Fixed
+
+- **Install hints are now quoted so they work in every shell.** Soup printed
+  `pip install 'soup-cli[ui]'` — bash / zsh / PowerShell syntax. `cmd.exe` has no
+  single-quote quoting, so it hands the quotes to pip verbatim and pip refuses:
+
+  ```
+  ERROR: Invalid requirement: "'soup-cli[train]'": Expected package name at the start of dependency specifier
+  ```
+
+  Every hint, README command, and docs example now uses `pip install
+  "soup-cli[extra]"`, which works in cmd, PowerShell, bash, and zsh alike — the
+  same spelling the repo already used for `pip install -e ".[dev]"`. Measured on
+  Windows: single quotes fail only on `cmd.exe`; double quotes pass everywhere;
+  dropping the quotes passes on Windows but breaks zsh, which globs the bracket.
+
+  Nothing in Soup can rescue the command after it is typed — pip and the shell
+  own it, and Soup is not installed yet when the README command runs — so the
+  fix is the spelling we print. A regression test now scans the package and every
+  docs code block for the single-quoted form.
+
+  If you followed an older tutorial and hit `Invalid requirement`, swap the `'`
+  for `"`; nothing is wrong with the package.
 
 - **Eval-gate `type: benchmark` tasks now actually run.** `eval/gate.py` probed
   for a `forgetting.run_mini_benchmark` helper that never existed, so every

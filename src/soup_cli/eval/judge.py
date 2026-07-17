@@ -518,7 +518,7 @@ def _base_pairwise_judge_cls() -> type:
         from trl import BasePairwiseJudge
     except ImportError as exc:  # pragma: no cover — trl ships in [train]/[dev]
         raise ImportError(
-            "SoupPairwiseJudge needs trl>=0.19 (pip install 'soup-cli[train]')"
+            "SoupPairwiseJudge needs trl>=0.19 (pip install \"soup-cli[train]\")"
         ) from exc
     return BasePairwiseJudge
 
