@@ -268,15 +268,12 @@ def _run_benchmark_task(
         raise ValueError(
             f"task '{task.name}' is type=benchmark but 'benchmark' is missing"
         )
-    from soup_cli.eval import forgetting
+    from soup_cli.eval.forgetting import ForgettingDetector
 
-    runner = getattr(forgetting, "run_mini_benchmark", None)
-    if runner is None:
-        raise RuntimeError(
-            "mini-benchmark runner unavailable - "
-            "install [eval] extras or update soup-cli"
-        )
-    score = runner(benchmark=task.benchmark, generate_fn=generate_fn)
+    score = ForgettingDetector(
+        generate_fn=generate_fn,
+        benchmark=task.benchmark,
+    ).run_baseline()
     return max(0.0, min(1.0, float(score)))
 
 

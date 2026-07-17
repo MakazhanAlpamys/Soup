@@ -121,28 +121,32 @@ class TestRunGateErrorPropagation:
         assert row.error
         assert row.passed is False
 
-    def test_benchmark_task_unavailable(self, tmp_path, monkeypatch):
-        from soup_cli.eval import forgetting
+    def test_benchmark_task_runs_builtin_benchmark(self):
         from soup_cli.eval.gate import EvalSuite, GateTask, run_gate
 
-        # Strip the runner attr to force the RuntimeError branch
-        monkeypatch.setattr(
-            forgetting, "run_mini_benchmark", None, raising=False,
-        )
-        # Ensure attribute lookup returns None
-        if hasattr(forgetting, "run_mini_benchmark"):
-            monkeypatch.delattr(
-                forgetting, "run_mini_benchmark", raising=False,
-            )
+        suite = EvalSuite(suite="t", tasks=[GateTask(
+            type="benchmark", name="bench", threshold=0.2,
+            benchmark="mini_mmlu",
+        )])
+        result = run_gate(suite, generate_fn=lambda _p: "B")
+        row = result.task_results[0]
+
+        assert row.score == 0.4
+        assert row.error is None
+        assert row.passed is True
+
+    def test_benchmark_task_unknown_name_lists_options(self):
+        from soup_cli.eval.gate import EvalSuite, GateTask, run_gate
 
         suite = EvalSuite(suite="t", tasks=[GateTask(
             type="benchmark", name="bench", threshold=0.3,
-            benchmark="mini_mmlu",
+            benchmark="not_a_benchmark",
         )])
         result = run_gate(suite, generate_fn=lambda _p: "")
         row = result.task_results[0]
+
         assert row.score is None
-        assert row.error and "unavailable" in row.error
+        assert row.error and "Options: mini_mmlu" in row.error
         assert row.passed is False
 
 
