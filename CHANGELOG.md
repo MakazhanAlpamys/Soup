@@ -12,6 +12,18 @@ reproducing 70+ versions of notes.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Eval-gate `type: benchmark` tasks now actually run.** `eval/gate.py` probed
+  for a `forgetting.run_mini_benchmark` helper that never existed, so every
+  `type: benchmark` task in a gate suite failed 100% of the time — while
+  advising an `[eval]` extras install that could not fix it. The gate now calls
+  `ForgettingDetector` directly (the same way `soup ship` already did), and an
+  unknown benchmark name fails with the list of valid names. Thanks
+  [@Sanjays2402](https://github.com/Sanjays2402)!
+  ([#315](https://github.com/MakazhanAlpamys/Soup/pull/315), closes
+  [#310](https://github.com/MakazhanAlpamys/Soup/issues/310))
+
 ## [0.71.36] - 2026-07-16
 
 **Data Moat II** — a semantic layer over your training data, plus two tools for

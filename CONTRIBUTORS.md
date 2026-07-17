@@ -52,6 +52,8 @@ Listed by first contribution. PR numbers link the work.
   - Honor configured vocab expansion in the ORPO / SimPO / GRPO trainers ([#295](https://github.com/MakazhanAlpamys/Soup/pull/295))
 - **Ekaanksh Patil** ([@Ekaanksh-dev](https://github.com/Ekaanksh-dev))
   - Batch the PRM reward forward pass in `PRMScorer.__call__` (single `[B, T]` forward) ([#301](https://github.com/MakazhanAlpamys/Soup/pull/301))
+- **Sanjay Santhanam** ([@Sanjays2402](https://github.com/Sanjays2402))
+  - Run built-in benchmark gate tasks through `ForgettingDetector` — every `type: benchmark` eval-gate task had always failed ([#315](https://github.com/MakazhanAlpamys/Soup/pull/315))
 
 ---
 
