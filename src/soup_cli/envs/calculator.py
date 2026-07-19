@@ -1,7 +1,8 @@
 """Calculator tool-use rollout env — v0.71.30.
 
 Generates a deterministic set of single-operation arithmetic problems as GRPO
-prompt+answer rows. Score with ``reward_fn='math'`` (or ``'accuracy'``).
+prompt+answer rows. Score with ``reward_fn: verifiable`` +
+``verifiable_domain: math`` (or ``reward_fn: accuracy``).
 
 Usage: ``training.rollout_backend='openenv'`` +
 ``training.rollout_func='soup_cli.envs.calculator:rollout'``.

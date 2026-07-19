@@ -12,6 +12,45 @@ reproducing 70+ versions of notes.
 
 ## [Unreleased]
 
+## [0.71.40] - 2026-07-19
+
+**`soup reward synth`: auto-generate a deterministic reward verifier from your data.**
+Point it at a JSONL of reference (gold) outputs and it infers a verifier, emits a
+readable / committable `.py` reward function, and — the moat — *refuses* to emit one
+that can't tell your references from auto-generated bad answers. Nothing in
+TRL / Unsloth / Axolotl / OpenRLHF synthesizes a reward; every reward today is
+hand-written, hand-picked, or a trained-weights artifact.
+
+### Added
+
+- **`soup reward synth <references.jsonl> -o reward.py`** — deterministic verifier
+  synthesis. Four families, auto-detected (or pick with `--kind`): `numeric`
+  (last-number / `\boxed{}` / `####` extraction, exact or `--tolerance`), `json_schema`
+  (induced keys + types + required), `regex` (positional char-classes over
+  equal-length golds), `tool_call` (per-tool `required`/`allowed` argument binding).
+  The emitted file is self-contained and rides `load_reward_fn`'s existing `.py`
+  path — no new trusted-exec surface; you read, edit, commit, and diff it.
+- **Mandatory calibration report** — the synthesized verifier is loaded back and run
+  against its own references (must accept ≥90%) and auto-perturbed negatives (must
+  reject). A degenerate always-accept verifier is **refused** (`exit 2`), never
+  silently emitted. `--plan-only` reports the induced spec without writing;
+  `--output-report` persists the calibration JSON.
+- **Comma-separated `reward_fn` (`"accuracy,format"`)** now trains — it resolves to a
+  reward *ensemble* (`GRPOTrainer(reward_funcs=[...])`, and unlocks the `rm_ensemble`
+  reward-hack detector which needs ≥2 rewards). GRPO-only, validated at config-parse
+  time. Fixes a recipe (`deepseek-v3-reasoning`) that shipped exactly this and
+  previously crashed with `Unknown reward function` (#311).
+
+### Changed / Fixed
+
+- `training.reward_fn` gains a field validator (null-byte / blank / oversize /
+  empty-comma-segment rejection) — the oldest arbitrary-code field was the least
+  guarded. Comma + `verifiable` without a `verifiable_domain` now fails at parse
+  time like the bare `verifiable` form.
+- `envs/calculator.py` / `envs/guess_number.py` docstrings corrected: the reward is
+  `reward_fn: verifiable` + `verifiable_domain: math` (the bare `reward_fn='math'`
+  they showed was never valid).
+
 ## [0.71.39] - 2026-07-19
 
 **"CI for weights, not prompts": close the evidence loop.** `soup ship`'s verdict is

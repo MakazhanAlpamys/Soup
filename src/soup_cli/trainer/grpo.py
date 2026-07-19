@@ -129,7 +129,9 @@ def _read_attr(obj: Any, name: str) -> Any:
     return getattr(obj, name, None)
 
 
-def _select_reward_fn(tcfg: TrainingConfig, device: str, trust_remote_code: bool) -> Any:
+def _select_reward_fn(
+    tcfg: TrainingConfig, device: str, trust_remote_code: bool
+) -> "Any":  # Callable | list[Callable] (a single reward or a comma-split ensemble)
     """Choose the GRPO reward function (v0.71.30).
 
     When ``tcfg.prm_reward`` is set, a trained Soup PRM scores each completion's
@@ -142,9 +144,13 @@ def _select_reward_fn(tcfg: TrainingConfig, device: str, trust_remote_code: bool
         from soup_cli.utils.prm_reward import build_prm_reward_fn
 
         return build_prm_reward_fn(tcfg, device, trust_remote_code)
-    from soup_cli.trainer.rewards import load_reward_fn
+    # v0.71.40 #311 — ``reward_fn`` may be comma-separated ("accuracy,format").
+    # Return a single callable for one reward (back-compat) or a list for several
+    # (TRL's reward_funcs=[...] + the rm_ensemble detector both accept the list).
+    from soup_cli.trainer.rewards import load_reward_fns
 
-    return load_reward_fn(tcfg.reward_fn, verifiable_domain=tcfg.verifiable_domain)
+    fns = load_reward_fns(tcfg.reward_fn, verifiable_domain=tcfg.verifiable_domain)
+    return fns[0] if len(fns) == 1 else fns
 
 
 class GRPOTrainerWrapper:

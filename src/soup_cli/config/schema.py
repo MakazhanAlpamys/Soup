@@ -1107,10 +1107,38 @@ class TrainingConfig(BaseModel):
     reward_fn: Optional[str] = Field(
         default="accuracy",
         description=(
-            "Reward function: 'accuracy', 'format', 'verifiable', "
-            "or path to custom .py file"
+            "Reward function: 'accuracy', 'format', 'verifiable', a path to a "
+            "custom .py file, or a comma-separated ensemble of the above "
+            "(e.g. 'accuracy,format') — the comma form is GRPO-only (v0.71.40)."
         ),
     )
+    @field_validator("reward_fn", mode="before")
+    @classmethod
+    def _validate_reward_fn_field(cls, value: Any) -> Optional[str]:
+        """v0.71.40 #311 — shape-only validation (containment enforced at load).
+
+        Accepts a comma-separated spec ("accuracy,format"); rejects null bytes,
+        oversize, and empty comma segments so a stray comma fails loud rather
+        than silently dropping a reward.
+        """
+        if value is None:
+            return None
+        if isinstance(value, bool) or not isinstance(value, str):
+            raise ValueError(
+                f"reward_fn must be a string, got {type(value).__name__}"
+            )
+        if "\x00" in value:
+            raise ValueError("reward_fn must not contain null bytes")
+        if len(value) > 512:
+            raise ValueError("reward_fn must be <= 512 chars")
+        if not value.strip():
+            raise ValueError("reward_fn must not be blank")
+        if any(not seg.strip() for seg in value.split(",")):
+            raise ValueError(
+                "reward_fn has an empty comma segment — remove the stray comma"
+            )
+        return value
+
     # RLVR — verifiable reward domain (Part C of v0.25.0)
     verifiable_domain: Optional[Literal["math", "code", "json_schema"]] = Field(
         default=None,
@@ -2978,8 +3006,18 @@ class TrainingConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_verifiable_reward(self) -> "TrainingConfig":
-        """RLVR: reward_fn='verifiable' requires verifiable_domain."""
-        if self.reward_fn == "verifiable" and self.verifiable_domain is None:
+        """RLVR: reward_fn='verifiable' requires verifiable_domain.
+
+        Comma-aware (v0.71.40 #311): ``"accuracy,verifiable"`` must fail at
+        config-parse time exactly like the bare ``"verifiable"`` form, not only
+        at trainer construction.
+        """
+        segments = (
+            [s.strip() for s in self.reward_fn.split(",")]
+            if isinstance(self.reward_fn, str)
+            else []
+        )
+        if "verifiable" in segments and self.verifiable_domain is None:
             raise ValueError(
                 "reward_fn='verifiable' requires verifiable_domain "
                 "(one of: math, code, json_schema)"
@@ -4659,6 +4697,25 @@ class SoupConfig(BaseModel):
         elif online_set:
             raise ValueError(
                 "training.online_dpo_* fields require task='online_dpo'"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_reward_fn_multi_compat(self) -> "SoupConfig":
+        """v0.71.40 #311 — a comma-separated reward_fn is GRPO-only.
+
+        Only ``trainer/grpo.py::_select_reward_fn`` resolves a multi-reward spec
+        into a ``reward_funcs=[...]`` list; ``trainer/ppo.py`` (and every other
+        consumer) calls the single-name loader, so a comma there would silently
+        pass config validation and then crash at training start with
+        ``Unknown reward function``. Footgun-reject it up front (mirrors the
+        online_dpo / asr / lisa task gates).
+        """
+        rf = self.training.reward_fn
+        if isinstance(rf, str) and "," in rf and self.task != "grpo":
+            raise ValueError(
+                f"a comma-separated training.reward_fn (an ensemble, {rf!r}) is "
+                f"only supported for task='grpo'; got task={self.task!r}"
             )
         return self
 

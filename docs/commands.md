@@ -182,6 +182,10 @@ soup draft measure ... --min-acceptance 0.6 -o report.json  Exit 2 below the flo
 soup draft distill --target <tuned> --draft-base <tiny> --data d.jsonl -o draft/  Distil a DENSE speculative-decoding draft + register it (v0.71.33)
 soup draft distill ... --steps N --device cpu --force --plan-only  Training budget / device / overwrite -o / render the config only
 soup draft list                               List local drafts that `soup serve --auto-spec` will pick up (v0.71.33)
+soup reward synth refs.jsonl -o reward.py     Synthesize a deterministic reward verifier from gold outputs (v0.71.40)
+soup reward synth ... --kind numeric|json_schema|regex|tool_call  Force a verifier family (default: auto-detect)
+soup reward synth ... --plan-only             Report the induced spec + calibration plan; write nothing
+soup reward synth ... --output-report r.json --min-discrimination 0.5  Save the calibration JSON / set the refusal threshold (exit 0 emit / 2 refuse / 1 error)
 soup tui                                      Full-screen Textual dashboard (requires [tui] extra)
 soup train --config soup.yaml --profile       Record torch.profiler trace to <output>/profiles/
 soup --log-level quiet|normal|verbose|debug   Global logging tier (Rich-formatted)

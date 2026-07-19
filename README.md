@@ -49,28 +49,36 @@ infrastructure instead of improving models. Soup fixes that.
 
 ## What's New
 
-**v0.71.39 — CI for weights, not prompts.** `soup ship`'s verdict is now something Soup can emit, commit, review, and bind to the exact model that produced it — so a fine-tuning gate renders on every PR instead of asking you to hand-edit a JSON file.
+**v0.71.40 — `soup reward synth`: generate a reward verifier from your data.** Point it at a JSONL of reference (gold) outputs and it infers a deterministic verifier, writes a readable / committable `.py` reward function, and — the part nobody else does — *refuses* to emit one that can't tell your references from bad answers. Nothing in TRL / Unsloth / Axolotl synthesizes a reward.
 
-- **Output is finally input.** `soup ship --emit-evidence ev.json` writes the scores in the
-  `--evidence` schema, so a run replays offline into an identical verdict — the round-trip the
-  old `--output` couldn't do.
-- **Commit the gate policy.** Put `eval.ship` in your `soup.yaml` (`forgetting_threshold`,
-  `general_suite`, `task_mode`, …) and `soup ship --config soup.yaml` reads it — the gate is now
-  reviewable in a PR diff. Explicit flags still win.
-- **Provenance-bound evidence.** `--config --emit-evidence` STAMPS a `config_sha` onto the
-  evidence; `--config --evidence` GATES on it — a PR that changed the recipe but forgot to
-  recompute its evidence is refused (exit 3). Tuning the threshold never falsely invalidates it.
-- **The verdict on your PR.** `soup ship --push owner/repo#N` posts the SHIP / DON'T-SHIP card as
-  a GitHub comment; `soup ci init --config soup.yaml` wires the whole thing into CI.
+- **Four families, auto-detected** (or pick with `--kind`): `numeric` (`\boxed{}` / `####` / last-number,
+  exact or `--tolerance`), `json_schema` (induced keys + types + required), `regex`, and `tool_call`
+  (per-tool `required`/`allowed` argument binding — a call can't borrow another tool's keys).
+- **A calibration report is the moat.** The verifier is loaded back and run against its own references
+  (must accept ≥ 90%) and auto-generated bad answers (must reject). A degenerate always-accept verifier
+  is **refused** (exit 2), never silently shipped. `--plan-only` previews; `--output-report` saves the JSON.
+- **No new exec surface.** The emitted file rides the existing `reward_fn: reward.py` path — you read,
+  edit, commit, and diff it like any other reward.
+- **Reward ensembles now train.** `reward_fn: "accuracy,format"` loads as multiple rewards (and unlocks
+  the `rm_ensemble` reward-hack detector) — a recipe that shipped exactly this used to crash. (#311)
 
 ```bash
-# producer (train job): stamp the scores with the config that produced them
-soup ship --evidence scores.json --config soup.yaml --emit-evidence ship_evidence.json
+# synth a verifier from reference answers, calibrate it, keep it only if it discriminates
+soup reward synth references.jsonl -o reward.py --output-report calib.json
 
-# gate (PR CI): refuse evidence that doesn't match the committed config
-soup ship --evidence ship_evidence.json --config soup.yaml --push owner/repo#42
-soup ci init --config soup.yaml   # writes .github/workflows/soup-gate.yml
+# then train against the reward you just generated
+# training: { reward_fn: reward.py }   (or an ensemble: reward_fn: "accuracy,format")
 ```
+
+<details>
+<summary>Previous release — v0.71.39, CI for weights not prompts (emit + provenance-bind the ship verdict)</summary>
+
+`soup ship`'s verdict became emittable, committable, and provenance-bound: `--emit-evidence` makes a
+run replay into an identical verdict, `eval.ship` in `soup.yaml` + `--config` makes the gate policy
+reviewable, and `--config` binds evidence to the exact recipe that produced it (stale evidence → exit 3).
+`soup ship --push owner/repo#N` posts the SHIP / DON'T-SHIP card on the PR.
+
+</details>
 
 <details>
 <summary>Previous release — v0.71.38, The gate grows teeth (real leg-2 regression gate)</summary>

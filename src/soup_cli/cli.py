@@ -563,6 +563,18 @@ app.add_typer(
     ),
 )
 
+# v0.71.40 — `soup reward synth` auto-generate a deterministic verifier.
+from soup_cli.commands import reward as _reward_cmd  # noqa: E402
+
+app.add_typer(
+    _reward_cmd.app,
+    name="reward",
+    help=(
+        "Synthesize a deterministic reward verifier from reference outputs, with "
+        "a calibration report that refuses degenerate verifiers (v0.71.40)."
+    ),
+)
+
 
 def _rewrite_advise_argv(argv: list) -> list:
     """Inject `run` between `advise` and a non-subcommand first argument.

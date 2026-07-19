@@ -2,7 +2,7 @@
 
 Generates deterministic single-shot number-deduction puzzles (constraints that
 pin a unique integer) as GRPO prompt+answer rows. Score with
-``reward_fn='math'`` (or ``'accuracy'``).
+``reward_fn: verifiable`` + ``verifiable_domain: math`` (or ``reward_fn: accuracy``).
 
 Honesty: this is single-shot *deduction*, not interactive guess-and-feedback —
 the live openenv contract does not pass the model, so a true guessing loop is

@@ -866,6 +866,37 @@ training:
   reward_fn: ./my_reward.py
 ```
 
+**Reward ensembles** — list several rewards, comma-separated, and they combine (GRPO only).
+This also unlocks the `rm_ensemble` reward-hack detector, which needs ≥ 2 rewards:
+```yaml
+training:
+  reward_fn: "accuracy,format"   # both are scored every step
+```
+
+### Synthesize a verifier from your data (`soup reward synth`)
+
+Don't hand-write a verifier — generate one from reference (gold) outputs. Soup infers a
+*deterministic* verifier (numeric / JSON-schema / regex / tool-call), writes a readable, editable
+`.py`, and **refuses to emit** one that can't tell your references from auto-generated bad answers
+(the mandatory calibration report). The emitted file is a normal `reward_fn: reward.py`.
+
+```bash
+# infer + calibrate + emit (exit 0 kept, 2 refused, 1 error)
+soup reward synth references.jsonl -o reward.py --output-report calib.json
+
+# preview the induced spec without writing anything
+soup reward synth references.jsonl --plan-only
+
+# force a family instead of auto-detecting
+soup reward synth answers.jsonl -o reward.py --kind numeric --tolerance 1e-6
+```
+
+References are a JSONL where each row's gold answer is in an `answer` field (override with
+`--field`) or the last assistant turn of a `messages` list. `--min-discrimination` sets how
+strongly the verifier must separate references from perturbed negatives before it's emitted.
+v1 is deterministic families only — a `\boxed{}`/`####` marker helps the numeric verifier, and
+completions are prompted to mark their answer (standard RLVR practice).
+
 ### Verifiable Rewards (RLVR)
 
 Use `reward_fn: verifiable` with a `verifiable_domain` for deterministic, math-checkable rewards — no judge model, no heuristics. Great for GRPO on math, code, or structured-output tasks.
