@@ -12,6 +12,34 @@ reproducing 70+ versions of notes.
 
 ## [Unreleased]
 
+## [0.71.41] - 2026-07-19
+
+**`soup reward stress`: is your reward verifier gameable?** Turn the reward-hacking
+detector on the *verifier itself*. `soup reward synth` (v0.71.40) proves a verifier
+separates your references from friendly perturbations; `stress` asks the adversarial
+question a reward-hacking model asks at train time — *does the verifier pay out for
+degenerate junk?* It feeds empty, length-padded, repetition, and sentinel-spam
+completions and flags any the verifier accepts. Pure, offline, exit 0 = robust /
+2 = gameable / 1 = error. Nothing in TRL / Unsloth / Axolotl / OpenRLHF tests a
+verifier for gameability.
+
+### Added
+
+- **`soup reward stress <reward.py|builtin> [--references golds.jsonl]`** — adversarial
+  verifier probe. Attacks (`--attacks empty,length,repetition,sentinel`, `--sentinel`)
+  are scored against the real gold, so numeric / tool_call / json_schema verifiers get a
+  valid target and still must reject the junk. Reports a per-attack accept-rate table +
+  an overall gameability verdict (`--max-gameable`, `--threshold`, `--output-report`).
+  Loads the target through the existing reward loader, so it probes a synthesized `.py`
+  **and** a builtin (`accuracy` / `format` / `verifiable`). A gold-requiring verifier
+  probed with no `--references` is a hard error, never a false "robust".
+
+### Fixed
+
+- Corrected the Telemetry section in the ops docs: Soup's telemetry primitives exist but
+  are **not wired to any command** — no data is ever sent today (the previous wording
+  implied a live opt-in sender). Wiring is deferred until a public privacy policy ships.
+
 ## [0.71.40] - 2026-07-19
 
 **`soup reward synth`: auto-generate a deterministic reward verifier from your data.**

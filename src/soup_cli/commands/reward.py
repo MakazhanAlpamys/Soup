@@ -17,14 +17,16 @@ from __future__ import annotations
 import json
 import math
 import os
+from dataclasses import asdict
 from typing import NoReturn, Optional
 
 import typer
-from rich.console import Console
+from rich.console import Console, Group
 from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
+from soup_cli.utils import reward_stress
 from soup_cli.utils import reward_synth as rs
 from soup_cli.utils.paths import atomic_write_text, enforce_under_cwd_and_no_symlink
 
@@ -34,6 +36,7 @@ console = Console()
 _MAX_INPUT_BYTES = 64 * 1024 * 1024
 _MAX_ROWS = 1_000_000
 _ALLOWED_KINDS = ("auto",) + rs.KINDS
+_MAX_SENTINEL_LEN = 256
 
 
 @app.callback()
@@ -201,7 +204,6 @@ def synth(
     # not delete an otherwise-valid verifier.
     if output_report:
         try:
-            from dataclasses import asdict
             atomic_write_text(json.dumps(asdict(report), indent=2), output_report)
         except OSError as exc:
             console.print(f"[yellow]Warning: could not write report: {escape(str(exc))}[/]")
@@ -223,3 +225,129 @@ def _cleanup(path: str) -> None:
         os.remove(path)
     except OSError:
         pass
+
+
+def _render_stress_panel(report: reward_stress.StressReport, target: str) -> Panel:
+    table = Table(show_header=True, box=None, pad_edge=False)
+    table.add_column("attack", style="cyan")
+    table.add_column("n", justify="right")
+    table.add_column("accepted", justify="right")
+    table.add_column("accept-rate", justify="right")
+    for a in report.attacks:
+        # Any junk this attack slipped through is red — a correct verifier rejects
+        # all of it. (The aggregate --max-gameable tolerance sets the verdict, not
+        # the per-row colour, so the two never contradict.)
+        style = "red" if a.accept_rate > 0 else "green"
+        table.add_row(
+            escape(a.kind), str(a.n), str(a.accepted),
+            f"[{style}]{a.accept_rate:.0%}[/]",
+        )
+    ref = "n/a" if report.reference_accept is None else f"{report.reference_accept:.0%}"
+    verdict = ("[bold red]GAMEABLE[/]" if report.gameable
+               else "[bold green]robust (not gameable)[/]")
+    footer = (f"\nreference accept: {ref}   "
+              f"gameability: {report.gameability:.0%}   verdict: {verdict}")
+    border = "red" if report.gameable else "green"
+    return Panel(
+        Group(table, footer),
+        title=f"[bold]reward stress: {escape(target)}[/]", border_style=border,
+    )
+
+
+@app.command()
+def stress(
+    reward_target: str = typer.Argument(
+        ..., help="Verifier to probe: a .py path, a builtin name, or 'verifiable'."
+    ),
+    references: Optional[str] = typer.Option(
+        None, "--references", help="JSONL of gold outputs (enables gold-aware probing)."
+    ),
+    field: str = typer.Option("answer", "--field", help="Gold field (default: answer)."),
+    verifiable_domain: Optional[str] = typer.Option(
+        None, "--verifiable-domain", help="Domain for a 'verifiable' target."
+    ),
+    sentinel: str = typer.Option(
+        reward_stress.DEFAULT_SENTINEL, "--sentinel", help="Sentinel-spam token."
+    ),
+    threshold: float = typer.Option(
+        reward_stress.DEFAULT_THRESHOLD, "--threshold", help="Reward >= this = accept."
+    ),
+    max_gameable: float = typer.Option(
+        reward_stress.DEFAULT_MAX_GAMEABLE, "--max-gameable",
+        help="Max junk accept-rate allowed before the verdict flips to gameable.",
+    ),
+    attacks: str = typer.Option(
+        ",".join(reward_stress.ATTACKS), "--attacks",
+        help="Comma list: empty,length,repetition,sentinel.",
+    ),
+    output_report: Optional[str] = typer.Option(
+        None, "--output-report", help="Also write the stress report as JSON."
+    ),
+) -> None:
+    """Adversarially probe a reward verifier for gameability (exit 0 robust / 2 gameable)."""
+    if not 0.0 <= threshold <= 1.0:
+        _fail("--threshold must be in [0.0, 1.0]")
+    if not 0.0 <= max_gameable <= 1.0:
+        _fail("--max-gameable must be in [0.0, 1.0]")
+    # Dedupe while preserving order — 'empty,empty' must not double-weight.
+    kinds = list(dict.fromkeys(k.strip() for k in attacks.split(",") if k.strip()))
+    if not kinds:
+        _fail("--attacks must name at least one attack kind")
+    bad = [k for k in kinds if k not in reward_stress.ATTACKS]
+    if bad:
+        _fail(f"unknown attack kind(s): {', '.join(bad)}; "
+              f"options: {', '.join(reward_stress.ATTACKS)}")
+    if len(sentinel) > _MAX_SENTINEL_LEN:
+        _fail(f"--sentinel must be <= {_MAX_SENTINEL_LEN} characters")
+
+    # A .py target is cwd-contained; a builtin name passes to load_reward_fn as-is.
+    if reward_target.endswith(".py"):
+        try:
+            enforce_under_cwd_and_no_symlink(reward_target, "reward target")
+        except (ValueError, OSError) as exc:
+            _fail(str(exc))
+        if not os.path.exists(reward_target):
+            _fail(f"reward target {reward_target!r} not found")
+
+    # Validate every write/read path UP FRONT — before load_reward_fn executes the
+    # target file's arbitrary module code — so a bad --output-report typo costs no
+    # extra code execution (mirrors synth's validate-before-load ordering).
+    if output_report:
+        try:
+            enforce_under_cwd_and_no_symlink(output_report, "report path")
+        except (ValueError, OSError) as exc:
+            _fail(str(exc))
+
+    golds: list[str] = []
+    if references:
+        try:
+            rows = _read_jsonl(references, "references path")
+        except (ValueError, OSError) as exc:
+            _fail(str(exc))
+        try:
+            golds = rs.extract_golds(rows, field=field)
+        except (ValueError, TypeError) as exc:
+            _fail(str(exc))
+
+    try:
+        from soup_cli.trainer.rewards import load_reward_fn
+        reward_fn = load_reward_fn(reward_target, verifiable_domain=verifiable_domain)
+    except Exception as exc:  # noqa: BLE001 — the target file runs arbitrary code
+        _fail(f"could not load reward target: {exc}")
+
+    try:
+        report = reward_stress.run_stress(
+            reward_fn, golds, sentinel=sentinel, threshold=threshold,
+            max_gameable=max_gameable, attacks=kinds,
+        )
+    except Exception as exc:  # noqa: BLE001 — a broken reward fn is a usage error
+        _fail(f"stress run failed: {exc}")
+
+    if output_report:
+        try:
+            atomic_write_text(json.dumps(asdict(report), indent=2), output_report)
+        except OSError as exc:
+            console.print(f"[yellow]Warning: could not write report: {escape(str(exc))}[/]")
+
+    console.print(_render_stress_panel(report, reward_target))
+    raise typer.Exit(2 if report.gameable else 0)

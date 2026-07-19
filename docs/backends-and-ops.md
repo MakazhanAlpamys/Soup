@@ -743,15 +743,9 @@ pip install soup-cli[trackers]   # mlflow + swanlab + trackio
 ```
 
 
-## Telemetry (opt-IN, hardware-info-only)
+## Telemetry (not yet wired)
 
-Soup ships an opt-IN telemetry sender that POSTs hardware-info-only payloads (`soup_version` / `command` / `python` major.minor / `os` / `arch` / optional `duration_seconds`) — no dataset paths, model names, or config contents. Enable per-shell:
-
-```bash
-SOUP_TELEMETRY=1 soup train --config soup.yaml
-```
-
-The sender uses a 1-second hard timeout, HTTPS-only with private-IP / link-local rejection (same SSRF policy as hub endpoints), and swallows every exception silently — telemetry can never crash training. Disabled by default until a public privacy policy ships.
+Soup contains opt-in, hardware-info-only telemetry primitives in `utils/trackers.py` (`build_telemetry_payload` / `send_telemetry_payload`), but they are **not wired to any command** — no data is ever sent, and no environment variable enables sending today. When wired, the payload will carry only `soup_version` / `command` / `python` major.minor / `os` / `arch` / optional `duration_seconds` — never dataset paths, model names, or config contents — behind a 1-second hard timeout and the same HTTPS-only, private-IP-rejecting SSRF policy as hub endpoints, swallowing every exception so telemetry can never crash training. Wiring is deferred until a public privacy policy is published.
 
 
 ## Plugin System

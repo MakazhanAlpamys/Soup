@@ -49,26 +49,41 @@ infrastructure instead of improving models. Soup fixes that.
 
 ## What's New
 
-**v0.71.40 — `soup reward synth`: generate a reward verifier from your data.** Point it at a JSONL of reference (gold) outputs and it infers a deterministic verifier, writes a readable / committable `.py` reward function, and — the part nobody else does — *refuses* to emit one that can't tell your references from bad answers. Nothing in TRL / Unsloth / Axolotl synthesizes a reward.
+**v0.71.41 — `soup reward stress`: is your reward verifier gameable?** Turn the reward-hacking
+detector on the verifier *itself*. `soup reward synth` (v0.71.40) proves a verifier can tell your
+references from friendly bad answers; `stress` asks the adversarial question a reward-hacking model
+asks at train time — *does it pay out for degenerate junk?* Nothing in TRL / Unsloth / Axolotl tests
+a verifier for gameability.
 
-- **Four families, auto-detected** (or pick with `--kind`): `numeric` (`\boxed{}` / `####` / last-number,
-  exact or `--tolerance`), `json_schema` (induced keys + types + required), `regex`, and `tool_call`
-  (per-tool `required`/`allowed` argument binding — a call can't borrow another tool's keys).
-- **A calibration report is the moat.** The verifier is loaded back and run against its own references
-  (must accept ≥ 90%) and auto-generated bad answers (must reject). A degenerate always-accept verifier
-  is **refused** (exit 2), never silently shipped. `--plan-only` previews; `--output-report` saves the JSON.
-- **No new exec surface.** The emitted file rides the existing `reward_fn: reward.py` path — you read,
-  edit, commit, and diff it like any other reward.
-- **Reward ensembles now train.** `reward_fn: "accuracy,format"` loads as multiple rewards (and unlocks
-  the `rm_ensemble` reward-hack detector) — a recipe that shipped exactly this used to crash. (#311)
+- **Four attacks, scored against the real gold.** Empty, length-padded, repetition, and
+  sentinel-spam completions are fed to the verifier; any it **accepts** is a false positive. A
+  per-attack accept-rate table plus one **robust / GAMEABLE** verdict — exit 0 / 2 (1 on error).
+- **Probes a synth `.py` or a builtin.** `soup reward stress reward.py --references golds.jsonl`,
+  or `soup reward stress verifiable --verifiable-domain math --references golds.jsonl`. A
+  gold-requiring verifier probed with no `--references` is a hard error, never a false "robust".
+- **Tune the strictness.** `--attacks`, `--sentinel`, `--threshold`, `--max-gameable`,
+  `--output-report`. Pure, offline, no new deps.
 
 ```bash
-# synth a verifier from reference answers, calibrate it, keep it only if it discriminates
-soup reward synth references.jsonl -o reward.py --output-report calib.json
-
-# then train against the reward you just generated
-# training: { reward_fn: reward.py }   (or an ensemble: reward_fn: "accuracy,format")
+# probe a verifier you synthesized (or a builtin) for gameability
+soup reward stress reward.py --references golds.jsonl --output-report stress.json
+#   exit 0 = robust · 2 = gameable · 1 = error
 ```
+
+<details>
+<summary>Previous release — v0.71.40, soup reward synth (generate a reward verifier from your data)</summary>
+
+Point `soup reward synth` at a JSONL of reference outputs and it infers a deterministic verifier,
+writes a readable / committable `.py` reward function, and — the part nobody else does — *refuses* to
+emit one that can't tell your references from bad answers (four families: `numeric` / `json_schema` /
+`regex` / `tool_call`; a mandatory calibration report is the moat). Reward ensembles
+(`reward_fn: "accuracy,format"`) also train now. (#311)
+
+```bash
+soup reward synth references.jsonl -o reward.py --output-report calib.json
+```
+
+</details>
 
 <details>
 <summary>Previous release — v0.71.39, CI for weights not prompts (emit + provenance-bind the ship verdict)</summary>

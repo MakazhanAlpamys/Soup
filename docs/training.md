@@ -897,6 +897,31 @@ strongly the verifier must separate references from perturbed negatives before i
 v1 is deterministic families only — a `\boxed{}`/`####` marker helps the numeric verifier, and
 completions are prompted to mark their answer (standard RLVR practice).
 
+### Stress-test a verifier for gameability (`soup reward stress`)
+
+A verifier that passes calibration still might pay out for junk. `soup reward stress` feeds the
+verifier deterministic degenerate completions — empty, length-padded, repeated, and
+sentinel-spam — scored against your real gold answers, and flags any it **accepts**. It's the
+adversarial counterpart to `synth`: calibration proves the verifier tells references from
+*friendly* bad answers; `stress` asks whether a reward-hacking model could game it.
+
+```bash
+# probe a synthesized verifier (or any reward .py) — exit 0 robust, 2 gameable, 1 error
+soup reward stress reward.py --references golds.jsonl --output-report stress.json
+
+# probe a builtin verifier instead of a .py file
+soup reward stress verifiable --verifiable-domain math --references golds.jsonl
+
+# tune the attack set / accept threshold / gameability tolerance
+soup reward stress reward.py --references golds.jsonl \
+    --attacks empty,length,repetition,sentinel --sentinel GOLD \
+    --threshold 0.5 --max-gameable 0.0
+```
+
+The report shows a per-attack accept-rate and an overall verdict. A gold-requiring verifier probed
+with **no** `--references` is a hard error (it can't be measured), never a false "robust". Probing a
+`.py` executes its module code, like any custom reward — only stress files you trust.
+
 ### Verifiable Rewards (RLVR)
 
 Use `reward_fn: verifiable` with a `verifiable_domain` for deterministic, math-checkable rewards — no judge model, no heuristics. Great for GRPO on math, code, or structured-output tasks.

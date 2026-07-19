@@ -186,6 +186,10 @@ soup reward synth refs.jsonl -o reward.py     Synthesize a deterministic reward 
 soup reward synth ... --kind numeric|json_schema|regex|tool_call  Force a verifier family (default: auto-detect)
 soup reward synth ... --plan-only             Report the induced spec + calibration plan; write nothing
 soup reward synth ... --output-report r.json --min-discrimination 0.5  Save the calibration JSON / set the refusal threshold (exit 0 emit / 2 refuse / 1 error)
+soup reward stress reward.py --references golds.jsonl  Adversarially probe a verifier for gameability — empty/length/repetition/sentinel junk (v0.71.41)
+soup reward stress verifiable --verifiable-domain math --references golds.jsonl  Probe a builtin verifier instead of a .py file
+soup reward stress ... --attacks empty,length,repetition,sentinel --sentinel GOLD --threshold 0.5 --max-gameable 0.0  Tune the attack set / accept threshold / tolerance
+soup reward stress ... --output-report r.json  Save the per-attack report JSON (exit 0 robust / 2 gameable / 1 error)
 soup tui                                      Full-screen Textual dashboard (requires [tui] extra)
 soup train --config soup.yaml --profile       Record torch.profiler trace to <output>/profiles/
 soup --log-level quiet|normal|verbose|debug   Global logging tier (Rich-formatted)
