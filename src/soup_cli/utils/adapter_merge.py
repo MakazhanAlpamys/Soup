@@ -357,6 +357,7 @@ def write_merged_adapter(
     output_dir: str,
     template_source: str,
     weights: Mapping[str, Any],
+    config_overrides: Optional[Mapping[str, Any]] = None,
 ) -> None:
     """Write adapter_model.safetensors + copy adapter_config.json from source.
 
@@ -364,6 +365,11 @@ def write_merged_adapter(
     symlinks at the target path (TOCTOU defence; mirrors v0.53.1 policy).
     The source config is lstat-checked before reading and size-capped at
     256 KB per the v0.53.0 ``load_quant_config`` precedent.
+
+    ``config_overrides`` (e.g. ``{"r": 12, "lora_alpha": 12}``) is shallow-merged
+    into the copied config before writing — used by the mixed-rank concat path
+    (#305) so the emitted ``adapter_config.json``'s ``r`` matches the
+    concatenated tensors and the adapter stays loadable.
     """
     try:
         from safetensors.numpy import save_file
@@ -407,6 +413,13 @@ def write_merged_adapter(
                 f"source adapter_config.json > {_MAX_ADAPTER_CONFIG_BYTES} byte cap"
             )
         cfg = json.loads(source_cfg.read_text(encoding="utf-8"))
+        if config_overrides:
+            if not isinstance(cfg, dict):
+                raise ValueError(
+                    "source adapter_config.json is not a JSON object; cannot "
+                    "apply config overrides"
+                )
+            cfg.update(dict(config_overrides))
         target_cfg = out_path / "adapter_config.json"
         _atomic_write_bytes(
             target_cfg,

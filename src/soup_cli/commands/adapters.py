@@ -692,6 +692,18 @@ def arithmetic(
     output: str = typer.Option(
         ..., "--output", "-o", help="Output directory for the merged adapter"
     ),
+    rank: Optional[int] = typer.Option(
+        None,
+        "--rank",
+        min=1,
+        help=(
+            "Truncated-SVD rank cap. Passing it routes the merge through the "
+            "exact concat path and caps the output rank at N via SVD (works for "
+            "same-rank AND mixed-rank inputs). Without it, mixed-rank inputs keep "
+            "the full concatenated rank (Σ rᵢ) and same-rank inputs use the fast "
+            "element-wise path."
+        ),
+    ),
     allow_unscanned: bool = typer.Option(
         False,
         "--allow-unscanned",
@@ -712,23 +724,29 @@ def arithmetic(
 ):
     """Task-vector arithmetic over LoRA adapters (add / scale / negate) (v0.71.34).
 
-    Applies task arithmetic (arXiv:2212.04089) element-wise to LoRA deltas of
-    same-rank adapters. Example:
+    Applies task arithmetic (arXiv:2212.04089) to LoRA deltas. Same-rank adapters
+    take a fast element-wise path; mixed-rank adapters take an exact
+    concatenation path (#305) so ``B_out @ A_out = Σ cᵢ·(Bᵢ@Aᵢ)`` for any
+    per-adapter rank — pass ``--rank N`` to cap the concatenated rank via
+    truncated SVD. Example:
 
         soup adapters arithmetic "coder + 0.5*math - toxic" \\
             --adapter coder=./coder --adapter math=./math \\
             --adapter toxic=./toxic -o ./merged
 
-    Exit 0 = success, 1 = any refusal (bad expression, unknown adapter, rank
+    Exit 0 = success, 1 = any refusal (bad expression, unknown adapter, shape
     mismatch, cross-base without --allow-cross-base, scan FAIL, path escape).
     """
     import re
 
     from soup_cli.utils.adapter_arithmetic import (
         ArithmeticReport,
+        _detect_lora_rank,
         merge_task_arithmetic,
+        merge_task_arithmetic_concat,
         parse_expression,
         read_adapter_base,
+        read_adapter_lora_scaling,
     )
     from soup_cli.utils.adapter_diff import load_adapter_weights
     from soup_cli.utils.adapter_merge import write_merged_adapter
@@ -849,19 +867,63 @@ def arithmetic(
         console.print(f"[red]Could not load adapter weights: {escape(str(exc))}[/]")
         raise typer.Exit(1) from exc
     coeffs = [t.coeff for t in terms]
+
+    # Route: mixed-rank inputs (or an explicit --rank truncation) take the exact
+    # concat path (#305); same-rank inputs keep the fast element-wise path.
+    ranks = [_detect_lora_rank(w) for w in weights_list]
+    distinct_ranks = {r for r in ranks if r is not None}
+    use_concat = len(distinct_ranks) > 1 or rank is not None
+    config_overrides: Optional[dict[str, object]] = None
+
+    if use_concat:
+        # Bake each adapter's own decode-time scaling (lora_alpha/r) into its A
+        # block so a single-scaling output reproduces Σ cᵢ·(effective ΔWᵢ). Use
+        # an explicit `is None` fallback so a valid scaling of 0.0 (lora_alpha=0,
+        # r>0 — an intentionally zeroed task vector) is NOT silently promoted to
+        # 1.0 by `or`.
+        scalings = []
+        for n in referenced:
+            s = read_adapter_lora_scaling(mapping[n])
+            scalings.append(s if s is not None else 1.0)
+        try:
+            merged, skipped, new_rank = merge_task_arithmetic_concat(
+                weights_list, coeffs, scalings=scalings, rank=rank
+            )
+        except ValueError as exc:
+            console.print(f"[red]Merge failed: {escape(str(exc))}[/]")
+            raise typer.Exit(1) from exc
+        if not merged:
+            console.print(
+                "[red]No shared LoRA A/B pairs across the referenced adapters — "
+                "nothing to merge.[/]"
+            )
+            raise typer.Exit(1)
+        # Output is a single-scaling adapter: r == lora_alpha == new_rank. Clear
+        # any per-module rank_pattern/alpha_pattern (v0.39.0) carried over from
+        # the template source — the concat output is uniform-rank, so stale
+        # per-module overrides would mis-scale it.
+        config_overrides = {
+            "r": new_rank,
+            "lora_alpha": new_rank,
+            "rank_pattern": {},
+            "alpha_pattern": {},
+        }
+    else:
+        try:
+            merged, skipped = merge_task_arithmetic(weights_list, coeffs)
+        except ValueError as exc:
+            console.print(f"[red]Merge failed: {escape(str(exc))}[/]")
+            raise typer.Exit(1) from exc
+        if not merged:
+            console.print(
+                "[red]No shared LoRA tensors across the referenced adapters — "
+                "nothing to merge.[/]"
+            )
+            raise typer.Exit(1)
     try:
-        merged, skipped = merge_task_arithmetic(weights_list, coeffs)
-    except ValueError as exc:
-        console.print(f"[red]Merge failed: {escape(str(exc))}[/]")
-        raise typer.Exit(1) from exc
-    if not merged:
-        console.print(
-            "[red]No shared LoRA tensors across the referenced adapters — "
-            "nothing to merge.[/]"
+        write_merged_adapter(
+            output, ref_paths[0], merged, config_overrides=config_overrides
         )
-        raise typer.Exit(1)
-    try:
-        write_merged_adapter(output, ref_paths[0], merged)
     except (ValueError, RuntimeError, OSError) as exc:
         console.print(f"[red]Could not write merged adapter: {escape(str(exc))}[/]")
         raise typer.Exit(1) from exc
