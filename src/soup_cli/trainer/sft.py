@@ -16,6 +16,64 @@ logger = logging.getLogger(__name__)
 
 console = Console()
 
+# Text-token surface TRL's SFTTrainer reads directly off ``processing_class``
+# (trl/trainer/sft_trainer.py: ``pad_token`` / ``eos_token`` / ``eos_token_id``
+# resolution) — mirrored from a vision processor's nested tokenizer in #302.
+_PROCESSOR_TOKEN_ATTRS = (
+    "pad_token",
+    "eos_token",
+    "pad_token_id",
+    "eos_token_id",
+    "bos_token",
+    "bos_token_id",
+)
+
+
+def _ensure_vision_processor_pad_token(processor: object) -> None:
+    """Mirror a vision processor's nested-tokenizer token surface onto itself.
+
+    HF vision processors (Idefics3/SmolVLM, LLaVA, Qwen2-VL, ...) keep the text
+    tokenizer nested at ``processor.tokenizer`` and do NOT forward token-level
+    attributes — ``ProcessorMixin`` has no ``__getattr__``. TRL's ``SFTTrainer``
+    reads ``processing_class.pad_token`` / ``.eos_token`` /
+    ``.convert_tokens_to_ids`` directly, so passing such a processor as
+    ``processing_class`` crashes with e.g. ``'Idefics3Processor' object has no
+    attribute 'pad_token'`` (#302).
+
+    Fix: when the processor exposes a nested ``.tokenizer``, set
+    ``pad_token = eos_token`` on that tokenizer if unset, then copy the token
+    surface + ``convert_tokens_to_ids`` onto the processor — but only for
+    attributes it does not already expose, so a processor that already behaves
+    like a tokenizer (or a plain tokenizer) is left untouched (no LLaVA-path
+    regression). Best-effort per attribute: a read-only property on either side
+    is skipped rather than fatal.
+    """
+    tok = getattr(processor, "tokenizer", None)
+    if tok is None:
+        # Already tokenizer-like, or an unknown shape — nothing to mirror.
+        return
+    # A padless tokenizer trains fine once pad == eos (the standard causal-LM
+    # convention already used by the text path, sft.py:_setup_transformers).
+    if getattr(tok, "pad_token", None) is None and getattr(tok, "eos_token", None) is not None:
+        try:
+            tok.pad_token = tok.eos_token
+        except (AttributeError, TypeError):
+            pass
+    for attr in _PROCESSOR_TOKEN_ATTRS:
+        if hasattr(processor, attr):
+            continue  # processor already exposes it — don't clobber
+        try:
+            setattr(processor, attr, getattr(tok, attr, None))
+        except (AttributeError, TypeError):
+            pass
+    if not hasattr(processor, "convert_tokens_to_ids"):
+        inner = getattr(tok, "convert_tokens_to_ids", None)
+        if callable(inner):
+            try:
+                processor.convert_tokens_to_ids = inner
+            except (AttributeError, TypeError):
+                pass
+
 
 def _maybe_load_pretokenized(
     dcfg, base: str, console_obj: Console,
@@ -929,6 +987,10 @@ class SFTTrainerWrapper:
         self.processor = AutoProcessor.from_pretrained(
             cfg.base, trust_remote_code=self._trust_remote_code
         )
+        # Idefics3/SmolVLM (and other) processors keep the text tokenizer nested
+        # and don't forward pad_token/eos_token — mirror them onto the processor
+        # so TRL's SFTTrainer processing_class access doesn't crash (#302).
+        _ensure_vision_processor_pad_token(self.processor)
         self.tokenizer = self.processor  # SFTTrainer uses processing_class
 
         # Quantization (v0.71.19 #81) — unified Quant Menu loader. Replaces the
