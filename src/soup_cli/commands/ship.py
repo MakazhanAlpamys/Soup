@@ -5,6 +5,9 @@ Top-level CLI command (NOT a sub-group) — operators type::
     soup ship --base <m> --adapter <lora> --task-eval tasks.jsonl
     soup ship --evidence ev.json            # offline, pre-computed scores
     soup ship ... --output verdict.json
+    soup ship ... --config soup.yaml        # read eval.ship defaults + bind provenance
+    soup ship ... --emit-evidence ev.json   # re-serialise scores as replayable input
+    soup ship --evidence ev.json --push owner/repo#42   # verdict as a PR comment
 
 After fine-tuning, answer ONE question: did the model get better, or did I
 break it? The decision fuses two legs (task win + catastrophic-forgetting
@@ -30,13 +33,26 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Callable, Dict, List, Mapping, NoReturn, Optional, Tuple
+import re
+from typing import (
+    TYPE_CHECKING,
+    Callable,
+    Dict,
+    List,
+    Mapping,
+    NoReturn,
+    Optional,
+    Tuple,
+)
 
 import typer
 from rich.console import Console
 from rich.markup import escape
 
 from soup_cli.utils.paths import atomic_write_text, enforce_under_cwd_and_no_symlink
+
+if TYPE_CHECKING:  # pydantic models — import for typing only (no eager cost)
+    from soup_cli.config.schema import ShipConfig, SoupConfig
 from soup_cli.utils.ship_verdict import (
     DECISION_SHIP,
     DEFAULT_FORGETTING_THRESHOLD,
@@ -49,6 +65,7 @@ from soup_cli.utils.ship_verdict import (
     decide_ship,
     render_ship_panel,
     verdict_to_dict,
+    verdict_to_evidence,
 )
 
 console = Console()
@@ -63,6 +80,18 @@ _EXIT_USAGE = 3  # bad flags / validation (mirrors `soup plan` / `env check`)
 # 16 MiB cap on evidence JSON (mirrors `soup diagnose` — prevents a
 # multi-GB / symlink-pointed file from OOMing at json.load time).
 _MAX_EVIDENCE_BYTES = 16 * 1024 * 1024
+
+# 4 MiB cap on a soup.yaml passed via --config (configs are small).
+_MAX_CONFIG_BYTES = 4 * 1024 * 1024
+
+# 8 GiB cap on the training file we fingerprint for provenance.data_sha
+# (best-effort — skipped above this, never fatal).
+_MAX_DATA_SHA_BYTES = 8 * 1024 * 1024 * 1024
+
+# A canonical hex SHA-256 digest — used to sanity-check the config_sha we read
+# out of an untrusted evidence file before echoing it in an error message (a
+# raw value could smuggle terminal ESC bytes past rich.markup.escape).
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 # lm-eval override defaults (kept minimal; the override is for users who
 # already run lm-eval — they can tune via a future flag if needed).
@@ -142,38 +171,184 @@ def _reject_lm_eval_injection(value: str, field: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Offline path — --evidence
+# --config — read leg-1/leg-2 defaults from a committed soup.yaml (v0.71.39)
 # ---------------------------------------------------------------------------
 
-def _load_evidence(path: str) -> dict:
-    """Load an evidence JSON (cwd-contained, symlink-rejected, size-capped).
+def _safe_read_text(path: str, field: str, max_bytes: int) -> str:
+    """O_NOFOLLOW + fstat-capped read of a cwd-contained file.
 
-    Opens with ``O_NOFOLLOW`` (where available) and fstats the open fd so a
-    symlink swapped in after the containment check cannot redirect the read
-    (TOCTOU defence, mirrors v0.71.22 ``load_audio_mono``).
+    Shared TOCTOU-safe reader (mirrors v0.71.22 ``load_audio_mono``): opens with
+    ``O_NOFOLLOW`` where available and fstats the open fd, so a symlink swapped
+    in after the containment check cannot redirect the read. Raises ``ValueError``
+    (incl. via ``enforce_under_cwd_and_no_symlink``) on any failure; callers map
+    it to the right exit code.
     """
-    enforce_under_cwd_and_no_symlink(path, "evidence path")
+    enforce_under_cwd_and_no_symlink(path, field)
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
     try:
         fd = os.open(path, flags)
     except OSError as exc:
-        raise ValueError(f"evidence path unreadable: {type(exc).__name__}") from exc
+        raise ValueError(f"{field} unreadable: {type(exc).__name__}") from exc
     with os.fdopen(fd, "r", encoding="utf-8") as handle:
-        if os.fstat(handle.fileno()).st_size > _MAX_EVIDENCE_BYTES:
-            raise ValueError(f"evidence file exceeds {_MAX_EVIDENCE_BYTES} bytes")
-        payload = json.load(handle)
+        if os.fstat(handle.fileno()).st_size > max_bytes:
+            raise ValueError(f"{field} exceeds {max_bytes} bytes")
+        return handle.read()
+
+
+def _parse_ship_config(path: str) -> "Tuple[SoupConfig, Optional[ShipConfig]]":
+    """Load a soup.yaml and return ``(SoupConfig, ShipConfig | None)``.
+
+    A read / parse / validation failure is a USAGE error (exit 3), mirroring
+    ``soup plan`` / ``soup env check``.
+    """
+    import yaml
+
+    from soup_cli.config.loader import load_config_from_string
+
+    try:
+        text = _safe_read_text(path, "--config path", _MAX_CONFIG_BYTES)
+        cfg = load_config_from_string(text)
+    except (ValueError, TypeError, yaml.YAMLError) as exc:
+        _fail(f"--config: {exc}", _EXIT_USAGE)
+    ship_cfg = cfg.eval.ship if cfg.eval is not None else None
+    return cfg, ship_cfg
+
+
+def _config_sha_of(cfg: "SoupConfig") -> str:
+    """Canonical (order/whitespace-insensitive) SHA-256 of the training recipe.
+
+    Semantic, not textual: a reformatted soup.yaml keeps the same sha but a real
+    recipe change does not. Cheap — hashes only the config dict, never the data
+    file (that's the ``data_sha`` in the full provenance).
+
+    The gate's own read-time policy (``eval.ship`` — threshold / suite / judge)
+    is EXCLUDED: it is applied at verdict time, not training time, so loosening
+    ``forgetting_threshold`` must NOT invalidate evidence about an unchanged
+    model (the staleness gate fingerprints the recipe, not the gate config).
+    """
+    from soup_cli.registry.hashing import hash_config
+
+    return hash_config(cfg.model_dump(mode="json", exclude={"eval": {"ship"}}))
+
+
+def _safe_hash_file(path: str, max_bytes: int) -> Optional[str]:
+    """SHA-256 of a cwd-local file via an O_NOFOLLOW fd (TOCTOU + size capped).
+
+    ``data.train`` comes from a parsed ``--config`` YAML, so it must not follow a
+    symlink out of the tree or stream an unbounded file. This mirrors
+    ``_safe_read_text`` but hashes bytes and is best-effort — returns ``None``
+    (never raises) for an absent / oversized / unreadable / out-of-cwd path,
+    because ``data_sha`` is informational provenance, not a hard requirement.
+    """
+    import hashlib
+
+    try:
+        enforce_under_cwd_and_no_symlink(path, "data.train")
+    except (ValueError, TypeError):
+        return None
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(path, flags)
+    except OSError:
+        return None
+    try:
+        with os.fdopen(fd, "rb") as handle:
+            if os.fstat(handle.fileno()).st_size > max_bytes:
+                return None
+            digest = hashlib.sha256()
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+    except OSError:
+        return None
+    return digest.hexdigest()
+
+
+def _compute_provenance(cfg: "SoupConfig") -> Dict[str, str]:
+    """Bind emitted evidence to the exact config that produced it (v0.71.39).
+
+    ``config_sha`` (semantic recipe hash) + ``base_model`` + a best-effort
+    ``data_sha`` over a cwd-local training file. Built only when we actually
+    ``--emit-evidence`` (the ``data_sha`` streams the whole training file).
+    """
+    prov: Dict[str, str] = {"config_sha": _config_sha_of(cfg)}
+    base = cfg.base
+    if base:
+        prov["base_model"] = base
+    data = cfg.data.train
+    if data:
+        data_sha = _safe_hash_file(data, _MAX_DATA_SHA_BYTES)
+        if data_sha is not None:
+            prov["data_sha"] = data_sha
+    return prov
+
+
+def _check_evidence_staleness(payload: dict, expected_sha: str) -> None:
+    """Refuse evidence whose ``config_sha`` != the committed config's (exit 3).
+
+    Catches DRIFT: a PR that changed ``soup.yaml`` but forgot to recompute its
+    ``ship_evidence.json`` is caught here instead of shipping a verdict about a
+    *different* recipe than the one in the diff. This is staleness detection,
+    NOT tamper-resistance — ``config_sha`` is an unkeyed hash, so it verifies
+    "this evidence claims to describe the config at HEAD", not "these scores were
+    actually produced by that config" (the ``--evidence`` trust model has always
+    assumed a trusted artifact from your own pipeline; ``soup attest`` /
+    ``adapters sign`` provide ed25519 signing if forgery is in scope). Pure — the
+    payload is already loaded (read once per invocation).
+    """
+    prov = payload.get("provenance")
+    got = prov.get("config_sha") if isinstance(prov, dict) else None
+    # Validate the SHAPE before ever printing it: a non-hex value is both
+    # malformed provenance AND a terminal-escape vector (rich.markup.escape does
+    # not strip raw C0/ESC bytes). Never echo an unvalidated value.
+    if not isinstance(got, str) or not _SHA256_RE.match(got):
+        _fail(
+            "evidence has no valid provenance.config_sha to verify against "
+            "--config; re-produce it with "
+            "`soup ship ... --config <cfg> --emit-evidence <ev>`",
+            _EXIT_USAGE,
+        )
+    if got != expected_sha:
+        # Both sides are now guaranteed [0-9a-f]{64}, so slicing is print-safe.
+        _fail(
+            "stale evidence: its config_sha does not match --config "
+            f"(evidence={got[:12]}..., config={expected_sha[:12]}...). "
+            "Re-run training + emit evidence against the current config.",
+            _EXIT_USAGE,
+        )
+
+
+def _flag_is_default(ctx: typer.Context, name: str) -> bool:
+    """True when ``name`` was left at its default (so --config may fill it).
+
+    Uses Click's parameter-source tracking so an explicit CLI flag (or env var)
+    always wins over the config value (CLI > config > hard default). Only a
+    genuine ``DEFAULT`` source returns True; an untrackable / unknown name
+    (source is None) returns False, so a future param rename cannot silently
+    make a flag config-overridable.
+    """
+    try:
+        from click.core import ParameterSource
+
+        source = ctx.get_parameter_source(name)
+    except (ImportError, AttributeError):  # pragma: no cover — defensive
+        return False
+    return source == ParameterSource.DEFAULT
+
+
+# ---------------------------------------------------------------------------
+# Offline path — --evidence
+# ---------------------------------------------------------------------------
+
+def _load_evidence(path: str) -> dict:
+    """Load an evidence JSON (cwd-contained, symlink-rejected, size-capped)."""
+    payload = json.loads(_safe_read_text(path, "evidence path", _MAX_EVIDENCE_BYTES))
     if not isinstance(payload, dict):
         raise ValueError("evidence file must contain a JSON object")
     return payload
 
 
-def _verdict_from_evidence(path: str, *, forgetting_threshold: float) -> ShipVerdict:
-    """Build a verdict from pre-computed scores (no model load)."""
-    try:
-        payload = _load_evidence(path)
-    except (OSError, ValueError, json.JSONDecodeError) as exc:
-        _fail(f"cannot read --evidence: {exc}", _EXIT_RUNTIME)
-
+def _verdict_from_evidence(payload: dict, *, forgetting_threshold: float) -> ShipVerdict:
+    """Build a verdict from an already-loaded evidence payload (no model load)."""
     task = payload.get("task")
     if not isinstance(task, dict):
         _fail("evidence.task must be an object with 'mode', 'base', 'tuned'", _EXIT_RUNTIME)
@@ -545,7 +720,41 @@ def _verdict_live(
 # Render + exit
 # ---------------------------------------------------------------------------
 
-def _emit_and_exit(verdict: ShipVerdict, output: Optional[str]) -> None:
+def _push_pr_comment(verdict: ShipVerdict, target: str) -> None:
+    """Post the verdict as a GitHub PR comment — best-effort (reuses adapter_pr).
+
+    A comment-posting failure (missing token, ``gh`` not installed, API error)
+    must NOT flip the verdict's exit code: the SHIP / DON'T-SHIP decision is the
+    gate's contract, and a flaky CI runner should not turn a real SHIP into a
+    "runtime error". So transport failures WARN loudly and preserve the exit
+    code. The target *shape* is validated up front (a typo is a usage error).
+    """
+    from soup_cli.utils import adapter_pr
+    from soup_cli.utils.ship_verdict import render_ship_pr_markdown
+
+    body = render_ship_pr_markdown(verdict)
+    try:
+        url = adapter_pr.post_pr_comment(target, body)
+    except (RuntimeError, TypeError, ValueError) as exc:
+        console.print(
+            f"[yellow]Warning:[/] could not post the PR comment to "
+            f"{escape(target)}: {escape(str(exc))}"
+        )
+        return
+    console.print(
+        f"[green]Posted PR comment to[/] {escape(target)}"
+        + (f" -> {escape(url)}" if url else "")
+    )
+
+
+def _emit_and_exit(
+    verdict: ShipVerdict,
+    output: Optional[str],
+    *,
+    emit_evidence: Optional[str] = None,
+    provenance: Optional[Mapping[str, object]] = None,
+    push: Optional[str] = None,
+) -> None:
     console.print(render_ship_panel(verdict))
     if output:
         try:
@@ -555,6 +764,22 @@ def _emit_and_exit(verdict: ShipVerdict, output: Optional[str]) -> None:
             console.print(f"[green]Wrote[/] {escape(output)}")
         except (OSError, ValueError, TypeError) as exc:
             _fail(f"cannot write --output: {type(exc).__name__}: {exc}", _EXIT_RUNTIME)
+    if emit_evidence:
+        try:
+            payload = verdict_to_evidence(verdict, provenance=provenance)
+            atomic_write_text(
+                json.dumps(payload, indent=2), emit_evidence, field="emit-evidence"
+            )
+            console.print(f"[green]Wrote evidence[/] {escape(emit_evidence)}")
+        except (OSError, ValueError, TypeError) as exc:
+            _fail(
+                f"cannot write --emit-evidence: {type(exc).__name__}: {exc}",
+                _EXIT_RUNTIME,
+            )
+    # Post the PR comment BEFORE the DON'T-SHIP exit so a regression is still
+    # announced on the PR (the gate then blocks with exit 2).
+    if push:
+        _push_pr_comment(verdict, push)
     if verdict.decision != DECISION_SHIP:
         raise typer.Exit(code=_EXIT_DONT_SHIP)
 
@@ -565,6 +790,7 @@ def _emit_and_exit(verdict: ShipVerdict, output: Optional[str]) -> None:
 
 @app.callback(invoke_without_command=True)
 def ship(
+    ctx: typer.Context,
     base: Optional[str] = typer.Option(
         None, "--base", help="Base model id/path (the 'before')."
     ),
@@ -612,16 +838,83 @@ def ship(
     output: Optional[str] = typer.Option(
         None, "--output", "-o", help="Write the verdict JSON to this path."
     ),
+    emit_evidence: Optional[str] = typer.Option(
+        None,
+        "--emit-evidence",
+        help="Write the scores in the --evidence INPUT schema so this run can be "
+        "replayed offline (output-is-input). With --config it also STAMPS the "
+        "config's provenance onto the emitted evidence.",
+    ),
+    config: Optional[str] = typer.Option(
+        None,
+        "--config",
+        help="soup.yaml whose eval.ship block supplies defaults (CLI flags win). "
+        "With --evidence alone it GATES (refuses evidence whose config_sha drifted "
+        "from this config); with --emit-evidence it STAMPS this config's provenance.",
+    ),
+    push: Optional[str] = typer.Option(
+        None,
+        "--push",
+        help="Post the verdict as a GitHub PR comment (owner/repo#N). Auth via "
+        "GITHUB_TOKEN / GH_TOKEN; needs the `gh` CLI.",
+    ),
     device: Optional[str] = typer.Option(
         None, "--device", help="Device for the live run (cuda / cpu)."
     ),
 ) -> None:
     """Decide SHIP / DON'T SHIP for a fine-tune (exit 0 = SHIP, 2 = DON'T)."""
+    soup_config = None
+    # `is not None` (not truthiness): an explicit empty --config must fail loud
+    # through _parse_ship_config, not silently disable the staleness gate.
+    if config is not None:
+        soup_config, ship_cfg = _parse_ship_config(config)
+        if ship_cfg is not None:
+            if _flag_is_default(ctx, "task_eval") and ship_cfg.task_eval is not None:
+                task_eval = ship_cfg.task_eval
+            if _flag_is_default(ctx, "task_mode"):
+                task_mode = ship_cfg.task_mode
+            if _flag_is_default(ctx, "general_suite") and ship_cfg.general_suite is not None:
+                general_suite = ship_cfg.general_suite
+            if _flag_is_default(ctx, "judge_model") and ship_cfg.judge_model is not None:
+                judge_model = ship_cfg.judge_model
+            if _flag_is_default(ctx, "baseline") and ship_cfg.baseline is not None:
+                baseline = ship_cfg.baseline
+            if _flag_is_default(ctx, "forgetting_threshold"):
+                forgetting_threshold = ship_cfg.forgetting_threshold
+
     _validate_task_mode_flag(task_mode)
     threshold = _validate_threshold_flag(forgetting_threshold)
 
+    # Fail a mistyped --push target FAST (usage error) — before computing the
+    # verdict — so a typo can't waste a live run; the actual POST later is
+    # best-effort and never changes the verdict's exit code.
+    if push is not None:
+        from soup_cli.utils.adapter_pr import parse_pr_target
+
+        try:
+            parse_pr_target(push)
+        except (ValueError, TypeError) as exc:
+            _fail(f"--push: {exc}", _EXIT_USAGE)
+
+    # config_sha is cheap (hashes only the config dict); the full provenance
+    # (incl. data_sha over the training file) is built lazily, only when we
+    # actually --emit-evidence.
+    config_sha = _config_sha_of(soup_config) if soup_config is not None else None
+
     if evidence:
-        verdict = _verdict_from_evidence(evidence, forgetting_threshold=threshold)
+        try:
+            payload = _load_evidence(evidence)
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            _fail(f"cannot read --evidence: {exc}", _EXIT_RUNTIME)
+        # --config has two intents here:
+        #   * GATE (no --emit-evidence): verify this committed evidence is bound
+        #     to the committed config — refuse if config_sha drifted or is absent.
+        #   * PRODUCER (--emit-evidence): STAMP the config's provenance onto these
+        #     scores (raw scores from an external eval tool -> bound evidence), so
+        #     the input is NOT required to already carry a matching provenance.
+        if config_sha is not None and not emit_evidence:
+            _check_evidence_staleness(payload, config_sha)
+        verdict = _verdict_from_evidence(payload, forgetting_threshold=threshold)
     elif base or tuned or adapter or task_eval:
         verdict = _verdict_live(
             base=base,
@@ -642,7 +935,15 @@ def ship(
             _EXIT_USAGE,
         )
 
-    _emit_and_exit(verdict, output)
+    # Full provenance (incl. data_sha) is only needed when writing evidence.
+    provenance = (
+        _compute_provenance(soup_config)
+        if emit_evidence and soup_config is not None
+        else None
+    )
+    _emit_and_exit(
+        verdict, output, emit_evidence=emit_evidence, push=push, provenance=provenance
+    )
 
 
 __all__ = ["app", "ship"]

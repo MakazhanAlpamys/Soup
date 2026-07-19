@@ -3507,6 +3507,42 @@ class TrainingConfig(BaseModel):
         return validate_grace_codebook_dim(v)
 
 
+class ShipConfig(BaseModel):
+    """`soup ship` verdict config (v0.71.39) — mirrors ``EvalGateConfig``.
+
+    Committing the gate config to ``soup.yaml`` (under ``eval.ship``) makes the
+    SHIP / DON'T-SHIP decision reviewable in a PR diff and reproducible across
+    runs. ``soup ship --config soup.yaml`` reads these as defaults; an explicit
+    CLI flag always wins (CLI > config > hard default).
+    """
+
+    task_eval: Optional[str] = Field(
+        default=None,
+        description="JSONL of leg-1 task-win eval tasks",
+    )
+    # Keep these values in sync with soup_cli.utils.ship_verdict.TASK_MODES.
+    task_mode: Literal["metric", "judge_score", "pairwise"] = Field(
+        default="metric",
+        description="Leg-1 mode: metric | judge_score | pairwise (judge win-rate)",
+    )
+    general_suite: Optional[str] = Field(
+        default=None,
+        description="Comma list of leg-2 benchmarks (default: bundled offline suite)",
+    )
+    forgetting_threshold: float = Field(
+        default=0.05, ge=0.0, le=1.0,
+        description="Max allowed leg-2 drop in absolute points before DON'T SHIP",
+    )
+    judge_model: Optional[str] = Field(
+        default=None,
+        description="Judge model URL for task_mode judge_score / pairwise",
+    )
+    baseline: Optional[str] = Field(
+        default=None,
+        description="registry://<id> | file JSON of base leg-2 scores",
+    )
+
+
 class EvalConfig(BaseModel):
     """Evaluation configuration for auto-eval after training."""
 
@@ -3525,6 +3561,11 @@ class EvalConfig(BaseModel):
     judge: Optional[dict] = Field(
         default=None,
         description="LLM-as-a-judge config: model, rubric, provider",
+    )
+    ship: Optional[ShipConfig] = Field(
+        default=None,
+        description="soup ship verdict defaults (task_eval / task_mode / "
+        "general_suite / forgetting_threshold / judge_model / baseline)",
     )
 
 

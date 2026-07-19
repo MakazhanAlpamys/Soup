@@ -378,6 +378,36 @@ Exit codes (v0.71.38): **0 = SHIP · 2 = DON'T SHIP · 3 = usage/flag error · 1
 lives in `soup_cli.utils.ship_verdict` (`decide_ship` is a pure function — the whole truth table
 is CPU-testable); the bundled suites live in `soup_cli.eval.gate_suites`.
 
+### Closing the evidence loop (v0.71.39)
+
+The verdict is now emittable, committable, and provenance-bound so a fine-tuning gate runs on
+every PR instead of relying on a hand-edited JSON file.
+
+- **`--emit-evidence <path>`** re-serialises the scores into the `--evidence` INPUT schema, so a
+  run's output is replayable as input — feeding it back through `--evidence` (same threshold)
+  reproduces an identical verdict.
+- **`--config soup.yaml`** reads a committed `eval.ship` block for the gate defaults
+  (`task_eval` / `task_mode` / `general_suite` / `forgetting_threshold` / `judge_model` /
+  `baseline`); an explicit CLI flag always wins. This makes the gate reviewable in a PR diff.
+- **Provenance + staleness.** With `--emit-evidence`, `--config` STAMPS a `provenance` block
+  (`config_sha` — a semantic, order-insensitive recipe hash that EXCLUDES the `eval.ship` gate
+  policy, so tuning the threshold never invalidates evidence — plus `base_model` and a
+  best-effort `data_sha`). With `--evidence` alone, `--config` GATES: it refuses (exit 3)
+  evidence whose `config_sha` drifted from the committed config.
+- **`--push owner/repo#N`** posts the verdict as a GitHub PR comment (best-effort — a missing
+  token or `gh` failure warns but never flips the SHIP / DON'T-SHIP exit code).
+
+```bash
+# Producer (train job): compute or stamp scores, bound to the committed recipe
+soup ship --evidence scores.json --config soup.yaml --emit-evidence ship_evidence.json
+
+# Gate (PR CI): refuse evidence that doesn't match the committed config, comment the verdict
+soup ship --evidence ship_evidence.json --config soup.yaml --push owner/repo#42
+```
+
+`soup ci init --config soup.yaml` binds the generated workflow's ship step to the committed
+config, so the whole loop runs in CI (see [commands.md](commands.md)).
+
 
 ## NLG Evaluation Metrics (BLEU + ROUGE)
 

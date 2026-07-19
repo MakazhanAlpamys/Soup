@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+from typing import Optional
+
 import typer
 from rich.console import Console
 from rich.markup import escape
@@ -33,6 +35,10 @@ def init(
         "3.11", "--python", help="Python version for the CI runner (e.g. 3.11)"
     ),
     branch: str = typer.Option("main", "--branch", help="Branch the workflow triggers on"),
+    config: Optional[str] = typer.Option(
+        None, "--config",
+        help="Bind the ship gate to a committed soup.yaml (refuses stale evidence)",
+    ),
     output: str = typer.Option(
         ".github/workflows/soup-gate.yml", "-o", "--output", help="Workflow output path"
     ),
@@ -48,6 +54,7 @@ def init(
             branch=branch,
             output_path=output,
             overwrite=force,
+            config_path=config,
         )
     except (ValueError, TypeError, OSError) as exc:
         console.print(f"[red]{escape(str(exc))}[/]")

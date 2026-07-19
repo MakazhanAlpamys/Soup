@@ -12,6 +12,53 @@ reproducing 70+ versions of notes.
 
 ## [Unreleased]
 
+## [0.71.39] - 2026-07-19
+
+**"CI for weights, not prompts": close the evidence loop.** `soup ship`'s verdict is
+now something Soup can emit, commit, review, and bind to the exact model that
+produced it — turning the `soup ci init` gate from "edit two numbers in a JSON file"
+into a reproducible, provenance-bound check that renders on every PR.
+
+### Added
+
+- **`soup ship --emit-evidence <path>`** — re-serialises the verdict into the
+  `--evidence` INPUT schema, so a run's output is replayable as input: feeding it
+  back through `--evidence` (same `--forgetting-threshold`) reproduces an identical
+  verdict. Output is finally input.
+- **`ShipConfig` under `eval.ship` in `soup.yaml` + `soup ship --config soup.yaml`** —
+  commit the gate policy (`task_eval` / `task_mode` / `general_suite` /
+  `forgetting_threshold` / `judge_model` / `baseline`) so the verdict is reviewable in
+  a PR diff and reproducible. An explicit CLI flag always wins (CLI > config > default).
+- **`soup ship --push owner/repo#N`** — post the verdict as a GitHub PR comment
+  (reuses the `soup adapters pr --push` `gh api` plumbing). Best-effort: a missing
+  token / `gh` failure warns but never flips the SHIP / DON'T-SHIP exit code.
+- **Evidence provenance + staleness gate.** With `--emit-evidence`, `--config` STAMPS
+  a `provenance` block (`config_sha` — a semantic, order-insensitive recipe hash — plus
+  `base_model` and a best-effort `data_sha`) onto the evidence. With `--evidence`
+  alone, `--config` GATES: it refuses (exit 3) evidence whose `config_sha` drifted
+  from the committed config, so a PR that changed `soup.yaml` but forgot to recompute
+  its evidence is caught. The gate policy (`eval.ship`) is EXCLUDED from the hash, so
+  tuning `forgetting_threshold` never falsely invalidates evidence about an unchanged
+  model.
+- **`soup ci init --config <soup.yaml>`** — binds the generated gate's `soup ship`
+  step to the committed config (provenance/staleness enforcement in CI).
+
+### Changed
+
+- **Exit-code note:** `soup ship --config` usage / staleness errors are exit `3`
+  (usage), preserving `0 = SHIP`, `2 = DON'T SHIP`, `1 = runtime` from v0.71.38.
+
+### Security
+
+- `provenance.config_sha` read from untrusted evidence is shape-validated as a hex
+  digest before being echoed (a raw value could smuggle terminal ESC bytes past
+  `rich.markup.escape`).
+- `provenance.data_sha` hashes the training file through an `O_NOFOLLOW` fd with a
+  symlink-rejecting containment check and an 8 GiB cap (was an unguarded `hash_file`).
+- `soup ci init`'s path validation now rejects `#` and the YAML 1.1 line breaks
+  (NEL / LS / PS), closing a plain-scalar comment-truncation of the generated `run:`
+  step (also hardens the pre-existing `--data` / `--suite` / `--evidence` args).
+
 ## [0.71.38] - 2026-07-17
 
 **`soup ship`'s regression leg now has teeth.** Leg 2 (the catastrophic-forgetting

@@ -49,41 +49,39 @@ infrastructure instead of improving models. Soup fixes that.
 
 ## What's New
 
-**v0.71.38 — The gate grows teeth.** `soup ship` answers the one question that matters after a fine-tune — *did my task improve WITHOUT silently breaking everything else?* This release makes the "without breaking everything else" half real.
+**v0.71.39 — CI for weights, not prompts.** `soup ship`'s verdict is now something Soup can emit, commit, review, and bind to the exact model that produced it — so a fine-tuning gate renders on every PR instead of asking you to hand-edit a JSON file.
 
-- **A gate that actually catches regressions.** The regression leg used to be 15 trivia
-  prompts scored by raw substring — it credited `"B"` for "**B**erlin", `"3"` for "1**3**", and
-  had **zero** items for tool-calling, safety, or JSON. Now it's a fixed, extraction-based
-  scorer over seven bundled, offline suites (MCQ · arithmetic · **tool-calling** · **JSON
-  validity** · **safety/refusal**). A tune that WINS your task but quietly breaks tool-calling
-  now gets a **DON'T SHIP** — the old gate waved it through.
-- **Zero new dependencies, no network.** Every suite ships in the wheel and is scored by the
-  pure scorers Soup already has — no lm-eval, no download. `soup ci init`'s core-only gate keeps
-  working.
-- **Distinct exit codes for CI.** Usage errors moved off exit `2` to `3`, so `2` now means only
-  DON'T-SHIP — a typo'd flag is no longer indistinguishable from a caught regression.
-- **Breaking, on purpose.** The fixed scorer can change an existing run's verdict — because the
-  old one was reporting false negatives. Recompute any committed `--baseline`.
+- **Output is finally input.** `soup ship --emit-evidence ev.json` writes the scores in the
+  `--evidence` schema, so a run replays offline into an identical verdict — the round-trip the
+  old `--output` couldn't do.
+- **Commit the gate policy.** Put `eval.ship` in your `soup.yaml` (`forgetting_threshold`,
+  `general_suite`, `task_mode`, …) and `soup ship --config soup.yaml` reads it — the gate is now
+  reviewable in a PR diff. Explicit flags still win.
+- **Provenance-bound evidence.** `--config --emit-evidence` STAMPS a `config_sha` onto the
+  evidence; `--config --evidence` GATES on it — a PR that changed the recipe but forgot to
+  recompute its evidence is refused (exit 3). Tuning the threshold never falsely invalidates it.
+- **The verdict on your PR.** `soup ship --push owner/repo#N` posts the SHIP / DON'T-SHIP card as
+  a GitHub comment; `soup ci init --config soup.yaml` wires the whole thing into CI.
 
 ```bash
-# leg 1 (task win) AND leg 2 (no regression on the bundled suite) -> one verdict
-soup ship --base ./base --adapter ./my-lora --task-eval my_task.jsonl
-#   exit 0 = SHIP · 2 = DON'T SHIP · 3 = bad flags · 1 = runtime error
+# producer (train job): stamp the scores with the config that produced them
+soup ship --evidence scores.json --config soup.yaml --emit-evidence ship_evidence.json
 
-soup ship --evidence scores.json    # offline verdict from pre-computed scores
+# gate (PR CI): refuse evidence that doesn't match the committed config
+soup ship --evidence ship_evidence.json --config soup.yaml --push owner/repo#42
+soup ci init --config soup.yaml   # writes .github/workflows/soup-gate.yml
 ```
 
 <details>
-<summary>Previous release — v0.71.36, Data Moat II (semantic dedup · topics · canaries · replay)</summary>
+<summary>Previous release — v0.71.38, The gate grows teeth (real leg-2 regression gate)</summary>
 
-`soup data dedup --semantic` dedups by meaning; `soup data topics` shows a coverage table;
-`soup data canary insert|check` proves whether a model memorized inserted secrets (exit 2 on a
-leak); `soup train --replay old.jsonl` interleaves old data so a new task doesn't erase it.
+`soup ship`'s regression leg became real: a fixed, extraction-based scorer over seven bundled,
+offline suites (MCQ · arithmetic · tool-calling · JSON validity · safety/refusal). A tune that
+wins your task but quietly breaks tool-calling now gets a **DON'T SHIP**. Zero new deps.
 
 ```bash
-soup data topics train.jsonl
-soup data canary check --manifest secrets.json --base ./my-model  # exit 2 = leak
-soup train --config sft.yaml --replay old_task.jsonl --replay-ratio 0.1
+soup ship --base ./base --adapter ./my-lora --task-eval my_task.jsonl
+#   exit 0 = SHIP · 2 = DON'T SHIP · 3 = bad flags · 1 = runtime error
 ```
 
 </details>
