@@ -40,13 +40,31 @@ _CHECKPOINT_ALLOW_PATTERNS = [
 ]
 
 
-class HFPushCallback:
-    """TrainerCallback-shaped auto-pusher.
+def _try_import_callback_base():
+    """Return HF ``TrainerCallback`` (or ``object`` when transformers is absent).
 
-    We don't inherit from :class:`transformers.TrainerCallback` here to keep
-    the module importable without transformers (tests mock it anyway). The
-    ``train`` command attaches an instance via ``trainer.add_callback`` so
-    duck-typing is sufficient.
+    Imported inside the function so the module has no top-level transformers
+    dependency; the class below still inherits every no-op event stub the HF
+    dispatch loop requires. Mirrors ``monitoring/curriculum_callback.py`` /
+    ``utils/lisa.py``.
+    """
+    try:
+        from transformers import TrainerCallback  # noqa: PLC0415
+
+        return TrainerCallback
+    except Exception:  # noqa: BLE001 — transformers optional in slim test envs.
+        return object
+
+
+class HFPushCallback(_try_import_callback_base()):  # type: ignore[misc]
+    """Real HF ``TrainerCallback`` auto-pusher.
+
+    Subclasses the lazily-resolved ``TrainerCallback`` so it inherits the no-op
+    default for every Trainer event — HF's ``CallbackHandler.call_event``
+    dispatches every event via ``getattr(cb, event)`` with no ``hasattr`` guard,
+    so a bare duck-typed callback crashes on ``on_epoch_begin`` (#308). Only
+    ``on_train_begin`` / ``on_save`` are overridden. The lazy factory keeps the
+    module import free of transformers.
     """
 
     def __init__(
