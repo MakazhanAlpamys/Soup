@@ -324,6 +324,9 @@ class TestMlxOptimizer:
         wrapper.tokenizer = object()
         wrapper._dataset = {"train": [{"messages": []}], "val": []}
         monkeypatch.setattr(wrapper, "_require_mlx", lambda: None)
+        # v0.73.0 rewrite: LoRA application is exercised elsewhere; stub it
+        # here so the optimizer contract is what this test asserts.
+        monkeypatch.setattr(wrapper, "_apply_lora", lambda model: None)
 
         seen: dict = {}
 
@@ -340,6 +343,18 @@ class TestMlxOptimizer:
         trainer_mod.TrainingArgs = _FakeArgs
         trainer_mod.train = _fake_train
         tuner_mod = types.ModuleType("mlx_lm.tuner")
+        tuner_mod.__path__ = []  # mark as package so submodules import
+
+        class _FakeCallback:
+            def on_train_loss_report(self, train_info):
+                pass
+
+        callbacks_mod = types.ModuleType("mlx_lm.tuner.callbacks")
+        callbacks_mod.TrainingCallback = _FakeCallback
+        datasets_mod = types.ModuleType("mlx_lm.tuner.datasets")
+        datasets_mod.CacheDataset = lambda ds: ds
+        datasets_mod.create_dataset = lambda data, tokenizer, args: data
+
         mlx_lm_mod = types.ModuleType("mlx_lm")
         opt_mod = types.ModuleType("mlx.optimizers")
         opt_mod.AdamW = lambda learning_rate=None: sentinel
@@ -350,6 +365,8 @@ class TestMlxOptimizer:
         monkeypatch.setitem(sys.modules, "mlx_lm", mlx_lm_mod)
         monkeypatch.setitem(sys.modules, "mlx_lm.tuner", tuner_mod)
         monkeypatch.setitem(sys.modules, "mlx_lm.tuner.trainer", trainer_mod)
+        monkeypatch.setitem(sys.modules, "mlx_lm.tuner.callbacks", callbacks_mod)
+        monkeypatch.setitem(sys.modules, "mlx_lm.tuner.datasets", datasets_mod)
 
         wrapper.train()
         assert "optimizer" in seen

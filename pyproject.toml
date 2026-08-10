@@ -130,7 +130,7 @@ audio = ["librosa>=0.10.0", "soundfile>=0.12.0"]
 awq = ["autoawq>=0.2.0"]
 gptq = ["auto-gptq>=0.7.0"]
 sglang = ["sglang>=0.2.0", "fastapi>=0.104.0", "uvicorn>=0.24.0"]
-mlx = ["mlx>=0.20.0", "mlx-lm>=0.20.0"]
+mlx = ["mlx>=0.20.0", "mlx-lm>=0.31.3"]
 cce = ["cut-cross-entropy>=24.10.0"]
 tui = ["textual>=0.50.0"]
 # v0.53.8 #89 — bundle MLflow / SwanLab / Trackio for `--tracker` users.

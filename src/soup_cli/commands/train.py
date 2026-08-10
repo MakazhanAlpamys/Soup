@@ -1328,7 +1328,12 @@ def train(
     # v0.40.4 #63 — every transformer-backend trainer now threads
     # --trust-remote-code through the wrapper (closes the v0.36.0 Part B gap).
     trainer_kwargs = dict(trainer_kwargs, trust_remote_code=trust_remote_code)
-    if cfg.task == "dpo":
+    from soup_cli.trainer.mlx_routing import resolve_trainer
+
+    mlx_cls, trainer_kwargs = resolve_trainer(cfg, trainer_kwargs)
+    if mlx_cls is not None:
+        trainer_wrapper = mlx_cls(cfg, **trainer_kwargs)
+    elif cfg.task == "dpo":
         from soup_cli.trainer.dpo import DPOTrainerWrapper
 
         trainer_wrapper = DPOTrainerWrapper(cfg, **trainer_kwargs)
@@ -1416,13 +1421,6 @@ def train(
         from soup_cli.trainer.asr import AsrTrainerWrapper
 
         trainer_wrapper = AsrTrainerWrapper(cfg, **trainer_kwargs)
-    elif cfg.backend == "mlx" and cfg.task == "sft":
-        # FIX: dispatch to the real MLX trainer — previously the CLI always
-        # fell through to the transformers SFTTrainerWrapper, silently
-        # ignoring backend: mlx (trainer ran on MPS/CUDA instead of MLX).
-        from soup_cli.trainer.mlx_sft import MLXSFTTrainerWrapper
-
-        trainer_wrapper = MLXSFTTrainerWrapper(cfg)
     else:
         trainer_wrapper = SFTTrainerWrapper(cfg, **trainer_kwargs)
     trainer_wrapper.setup(dataset)

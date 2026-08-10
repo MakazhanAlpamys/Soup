@@ -49,3 +49,17 @@ def get_mlx_trainer(task: str):
             f"MLX backend does not support task '{task}'. "
             f"Supported: {supported}. Use backend=transformers for full task coverage."
         ) from exc
+
+
+def resolve_trainer(cfg, trainer_kwargs: dict | None = None):
+    """Backend-first trainer resolution used by the train CLI.
+
+    Returns ``(trainer_cls, kwargs)`` — ``trainer_cls`` is the MLX trainer
+    class when ``cfg.backend == "mlx"`` (raising ValueError for unsupported
+    tasks), or ``None`` so the caller falls through to the transformers task
+    chain. ``trainer_kwargs`` are forwarded unchanged in both cases.
+    """
+    kwargs = dict(trainer_kwargs or {})
+    if getattr(cfg, "backend", None) == "mlx":
+        return get_mlx_trainer(cfg.task), kwargs
+    return None, kwargs

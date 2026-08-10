@@ -1,12 +1,14 @@
 """MLX SFT trainer — Apple Silicon fine-tuning via mlx-lm.
 
-Rewritten for mlx-lm >= 0.31 (v0.73.0 local fix):
+Rewritten for mlx-lm >= 0.31 (v0.73.0 fix, PR #362):
 - ``mlx_lm.tuner.trainer.train`` no longer takes a ``tokenizer`` argument;
-  datasets are built with ``mlx_lm.tuner.datasets.create_dataset`` and loss is
-  reported through ``TrainingCallback.on_train_loss_report``.
+  datasets are built with ``mlx_lm.tuner.datasets.create_dataset``, wrapped in
+  ``CacheDataset`` (bare ``ChatDataset`` lacks ``__len__``/``__getitem__``),
+  and loss is reported through ``TrainingCallback.on_train_loss_report``.
 - LoRA layers are applied with ``mlx_lm.tuner.utils.linear_to_lora_layers``
-  (the previous wrapper never applied LoRA, which would have silently
-  full-fine-tuned the model).
+  after ``model.freeze()``: ``mlx_lm.load`` does NOT freeze, and without it
+  every parameter is trainable and the saved "adapter" is actually a full
+  fine-tune (172 tensors vs 24 LoRA tensors on a 1.2B model).
 - Implements the CLI trainer contract: ``train()`` accepts the common kwargs
   (display/tracker/run_id/resume_from_checkpoint) and returns the metrics
   dict that ``commands/train.py`` expects.
@@ -14,6 +16,8 @@ Rewritten for mlx-lm >= 0.31 (v0.73.0 local fix):
 
 from __future__ import annotations
 
+import json
+import math
 import time
 from pathlib import Path
 
@@ -27,8 +31,9 @@ console = Console()
 class MLXSFTTrainerWrapper:
     """High-level wrapper for MLX supervised fine-tuning."""
 
-    def __init__(self, config: SoupConfig) -> None:
+    def __init__(self, config: SoupConfig, **kwargs) -> None:
         self.config = config
+        self.extra_kwargs = kwargs
         self.model = None
         self.tokenizer = None
         self.trainer = None
@@ -90,8 +95,12 @@ class MLXSFTTrainerWrapper:
         cfg = self.config
         lora_cfg = cfg.training.lora
         target_keys = lora_cfg.target_modules
-        if not target_keys or target_keys == ["auto"] or target_keys == "auto":
+        if not target_keys or target_keys in (["auto"], "auto"):
             target_keys = ["self_attn.q_proj", "self_attn.v_proj"]
+            console.print(
+                "[yellow]MLX backend: target_modules: auto cannot be resolved for "
+                f"all architectures; defaulting to {target_keys}[/]"
+            )
         keys = set(target_keys)
         num_layers = len(getattr(model, "layers", []))
         linear_to_lora_layers(
@@ -100,14 +109,20 @@ class MLXSFTTrainerWrapper:
             {
                 "rank": int(lora_cfg.r),
                 "scale": float(lora_cfg.alpha) / max(1.0, float(lora_cfg.r)),
-                "dropout": 0.0,
+                "dropout": float(getattr(lora_cfg, "dropout", 0.0) or 0.0),
                 "keys": keys,
             },
         )
 
     def train(self, display=None, tracker=None, run_id=None, resume_from_checkpoint=None) -> dict:
         """Run MLX training loop via mlx-lm (mlx-lm >= 0.31 API)."""
-        del display, tracker, run_id, resume_from_checkpoint  # unused on MLX path
+        del display, tracker, run_id  # accepted for CLI-contract parity
+
+        if resume_from_checkpoint is not None:
+            console.print(
+                "[yellow]MLX backend does not support --resume yet; "
+                "starting training from scratch.[/]"
+            )
 
         self._require_mlx()
 
@@ -132,16 +147,23 @@ class MLXSFTTrainerWrapper:
         )
         train_rows = list(self._dataset.get("train", []))
         val_rows = list(self._dataset.get("val", []))
-        iters = int(cfg.training.epochs * max(1, len(train_rows)))
+        iters = int(
+            cfg.training.epochs * max(1, math.ceil(len(train_rows) / batch_size))
+        )
 
         max_seq_length = int(getattr(cfg.data, "max_length", 2048) or 2048)
+        steps_per_report = int(getattr(cfg.training, "logging_steps", 10) or 10)
+        steps_per_save = int(getattr(cfg.training, "save_steps", 0) or 0)
+        if steps_per_save <= 0:
+            steps_per_save = iters
+        steps_per_eval = max(1000, iters + 1)
         args = TrainingArgs(
             batch_size=batch_size,
             iters=iters,
             max_seq_length=max_seq_length,
-            steps_per_report=10,
-            steps_per_eval=max(1000, iters + 1),
-            steps_per_save=iters,
+            steps_per_report=steps_per_report,
+            steps_per_eval=steps_per_eval,
+            steps_per_save=steps_per_save,
             adapter_file=str(output_dir / "adapters.safetensors"),
         )
 
@@ -176,11 +198,9 @@ class MLXSFTTrainerWrapper:
         # mlx-lm's tuner only saves adapters.safetensors; write the
         # adapter_config.json so the output dir is directly loadable with
         # mlx_lm.load(..., adapter_path=output).
-        import json as _json
-
         lora_cfg = cfg.training.lora
         (output_dir / "adapter_config.json").write_text(
-            _json.dumps(
+            json.dumps(
                 {
                     "fine_tune_type": "lora",
                     "model": str(cfg.base),
@@ -188,16 +208,16 @@ class MLXSFTTrainerWrapper:
                     "batch_size": batch_size,
                     "iters": iters,
                     "learning_rate": float(cfg.training.lr),
-                    "steps_per_report": args.steps_per_report,
-                    "steps_per_eval": args.steps_per_eval,
-                    "steps_per_save": args.steps_per_save,
+                    "steps_per_report": steps_per_report,
+                    "steps_per_eval": steps_per_eval,
+                    "steps_per_save": steps_per_save,
                     "max_seq_length": max_seq_length,
                     "adapter_path": str(output_dir),
                     "lora_parameters": {
                         "rank": int(lora_cfg.r),
                         "scale": float(lora_cfg.alpha)
                         / max(1.0, float(lora_cfg.r)),
-                        "dropout": 0.0,
+                        "dropout": float(getattr(lora_cfg, "dropout", 0.0) or 0.0),
                         "keys": list(
                             lora_cfg.target_modules
                             if isinstance(lora_cfg.target_modules, list)
