@@ -1429,6 +1429,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
 
         # ReLoRA callback (v0.39.0 Part B / v0.40.6 #67) via shared helper.
         from soup_cli.utils.peft_wiring import (
+            attach_compile_prefix_callback,
             attach_curriculum_callback,
             attach_lisa_callback,
             attach_plugin_callback,
@@ -1443,6 +1444,13 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         )
         # v0.53.6 #101 — Soup plugin TrainerCallback.
         attach_plugin_callback(self.trainer, console)
+        # #351: normalise every checkpoint-* adapter as it is written. The
+        # final save is repaired separately at the end of this method; HF
+        # dispatches on_save only for the periodic checkpoints, so the two call
+        # sites cover different files and neither is redundant.
+        attach_compile_prefix_callback(
+            self.trainer, self.config.training, self._output_dir, console
+        )
 
         # v0.53.2 #135 — EBFT compute_loss hook (no-op if ebft_variant unset).
         from soup_cli.utils.ebft_gdpo import attach_ebft_compute_loss
@@ -1500,6 +1508,11 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         # none of them: it warns and leaves lora_B at zero init, i.e. the run
         # exits 0 having written an adapter that does nothing. Measured 0/96
         # non-zero against 96/96 for the paired non-compile run.
+        # #351: this call covers the FINAL save only. The periodic
+        # `checkpoint-*` directories are written by the same `save_model` and are
+        # normalised by attach_compile_prefix_callback above, which runs on HF's
+        # `on_save` event. `on_save` is not dispatched for the save below, so
+        # both are needed.
         if getattr(self.config.training, "use_fsdp2_compile", False):
             from soup_cli.utils.peft_wiring import strip_compile_prefix
 

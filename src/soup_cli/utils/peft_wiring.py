@@ -13,6 +13,7 @@ training never crashes because a Gemma4 swap or 3-D dropout strip failed.
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -556,3 +557,138 @@ def strip_compile_prefix(output_dir: str) -> int:
             os.unlink(tmp_path)
         raise
     return changed
+
+
+def _build_compile_prefix_callback_class() -> type:
+    """Construct ``CompilePrefixCallback`` with transformers as its parent.
+
+    Built inside a function rather than at module scope so importing this module
+    stays free of transformers: every transformer-backend trainer imports it for
+    the ``attach_*`` helpers above, and today that import pulls in neither
+    transformers nor torch. Mirrors
+    ``monitoring/plugin_callback._build_callback_class``.
+    """
+    from rich.markup import escape
+    from transformers import TrainerCallback
+
+    class CompilePrefixCallback(TrainerCallback):
+        """Normalise each ``checkpoint-*`` adapter as the Trainer writes it.
+
+        #351: :func:`strip_compile_prefix` ran once, on ``self._output_dir``
+        after the final ``save_model``. The HF Trainer writes its periodic
+        checkpoints through that SAME ``save_model``, with
+        ``output_dir=<run>/checkpoint-N``, so they come out carrying the prefix
+        exactly as the final save did and nothing ever repaired them. Measured
+        at 70B on 8xH100: 320 canonical keys in the output root, 320 prefixed
+        ones in ``checkpoint-100``.
+
+        Resuming is the case that decides how bad that is.
+        ``PeftModel.from_pretrained`` at least warns.
+        ``Trainer._load_from_checkpoint`` calls ``model.load_adapter(...)`` and
+        drops the return value, and ``load_adapter`` deliberately does not warn
+        (it returns the missing keys in the load result instead), while the
+        unexpected ``_orig_mod.`` keys are dropped by
+        ``load_state_dict(strict=False)``. So a resumed run silently continues
+        from a re-zeroed ``lora_B``, which is #335's failure with its one
+        warning removed.
+
+        Subclasses ``TrainerCallback`` so it inherits the no-op default for
+        every other event: HF's ``CallbackHandler.call_event`` dispatches via
+        ``getattr(cb, event)`` with no ``hasattr`` guard, so a duck-typed
+        callback survives wiring and then dies on ``on_epoch_begin`` (#308).
+        """
+
+        def __init__(self, output_dir: str = "", console: Any = None) -> None:
+            super().__init__()
+            # Fallback only: under real training the run directory comes from
+            # ``args.output_dir``. Mirrors HFPushCallback.
+            self.output_dir = output_dir
+            self.console = console
+
+        def on_save(self, args, state, control, **kwargs) -> None:
+            """Normalise the checkpoint ``_save_checkpoint`` has just written."""
+            # ``save_model`` writes the adapter only where ``args.should_save``
+            # is true, but this event is dispatched on every rank. Without the
+            # guard all 8 ranks of the run this was measured on would rewrite
+            # one file at once. Default True so a single-process run (and a
+            # test driving the callback directly) still does the work.
+            if not getattr(state, "is_world_process_zero", True):
+                return
+            step = int(getattr(state, "global_step", 0) or 0)
+            if step <= 0:
+                return
+            output_dir = getattr(args, "output_dir", None) or self.output_dir
+            if not output_dir:
+                return
+
+            checkpoint = os.path.join(output_dir, f"checkpoint-{step}")
+            try:
+                renamed = strip_compile_prefix(checkpoint)
+            except Exception as exc:  # noqa: BLE001
+                # Never take a multi-hour run down over one checkpoint: the
+                # rewrite is atomic, so the prefixed file is still there and
+                # still holds the trained numbers. But say so loudly: the
+                # checkpoint that was left alone is a dead adapter, and a dead
+                # adapter nobody hears about is the entire defect.
+                message = (
+                    f"could not normalise {checkpoint}: {exc}. It keeps "
+                    "torch.compile's key prefix, so it will load as an adapter "
+                    "of zeros; the run directory's final save is unaffected."
+                )
+                logger.warning("CompilePrefixCallback: %s", message)
+                # escape: the path and the exception text are both interpolated,
+                # and an unescaped `[` in either would be eaten as Rich markup.
+                self._print(f"[yellow]{escape(message)}[/]")
+                return
+            if renamed:
+                self._print(
+                    f"[dim]Normalised {renamed} adapter keys in "
+                    f"checkpoint-{step} saved through torch.compile's wrapper[/]"
+                )
+
+        def _print(self, message: str) -> None:
+            if self.console is None:
+                return
+            try:
+                self.console.print(message)
+            except Exception:  # noqa: BLE001 (never crash on console issues)
+                pass
+
+    return CompilePrefixCallback
+
+
+def build_compile_prefix_callback(output_dir: str = "", console: Any = None) -> Any:
+    """Return a ``CompilePrefixCallback`` for ``output_dir``."""
+    callback_cls = _build_compile_prefix_callback_class()
+    return callback_cls(output_dir=output_dir, console=console)
+
+
+def attach_compile_prefix_callback(
+    trainer: Any,
+    tcfg: Any,
+    output_dir: str,
+    console: Any = None,
+) -> bool:
+    """Attach :class:`CompilePrefixCallback` when ``use_fsdp2_compile`` is set.
+
+    Returns ``True`` when attached, ``False`` otherwise. Gated on
+    ``use_fsdp2_compile`` alone, matching the final-save call site in
+    ``sft.py``: ``torch_compile`` is only really switched on when an FSDP config
+    is present too (see :func:`utils.fsdp.apply_fsdp_training_kwargs`), but
+    :func:`strip_compile_prefix` is a no-op on an adapter that has no prefix, so
+    the narrower condition would buy nothing and let the two gates drift.
+
+    Args:
+        trainer: HF Trainer (or duck-typed equivalent with ``add_callback``).
+        tcfg: ``SoupConfig.training`` model.
+        output_dir: The run directory HF writes ``checkpoint-N`` under. Used
+            only if ``TrainingArguments.output_dir`` is missing at save time.
+        console: Optional Rich Console, for the same per-save note the final
+            save prints.
+    """
+    if not getattr(tcfg, "use_fsdp2_compile", False):
+        return False
+    trainer.add_callback(
+        build_compile_prefix_callback(output_dir=output_dir, console=console)
+    )
+    return True
