@@ -63,9 +63,17 @@ reproducing 70+ versions of notes.
   does not warn (it hands the missing keys back in the load result instead, which
   nothing reads), while `load_state_dict(strict=False)` discards the `_orig_mod.` keys
   without a word. A resumed run therefore continues from a re-zeroed `lora_B` in total
-  silence: #335's failure shape with its one warning removed. Normalising now happens
-  on HF's `on_save`, as each checkpoint is written, guarded to the main process because
-  `save_model` writes on one rank while `on_save` fires on all of them.
+  silence: #335's failure shape with its one warning removed. `load_best_model_at_end`
+  was reloading a dead adapter for the same reason, since the Trainer restores
+  `state.best_model_checkpoint` through that same `load_adapter`, and this repairs that
+  path too. Normalising now happens on HF's `on_save`, as each checkpoint is written.
+  Both that callback and the final save are gated on `args.should_save`, the condition
+  `save_model` writes under, so exactly the rank holding the file repairs it rather
+  than all eight opening it at once. The callback is attached in `setup()`, ahead of
+  anything a caller adds later: `HFPushCallback.on_save` uploads `checkpoint-{step}` on
+  this same event and `CallbackHandler` dispatches in insertion order, so a
+  normalisation attached after it would leave `--push-as` publishing the prefixed
+  adapter and keeping the repaired one on local disk.
 
 ## [0.73.0] - 2026-08-09
 

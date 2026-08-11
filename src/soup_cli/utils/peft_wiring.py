@@ -612,7 +612,15 @@ def _build_compile_prefix_callback_class() -> type:
             # guard all 8 ranks of the run this was measured on would rewrite
             # one file at once. Default True so a single-process run (and a
             # test driving the callback directly) still does the work.
-            if not getattr(state, "is_world_process_zero", True):
+            #
+            # ``args.should_save`` rather than ``state.is_world_process_zero``
+            # because it is the same condition that decided whether this rank
+            # wrote the file at all: ``TrainingArguments.should_save`` is
+            # ``local_process_index == 0`` under ``save_on_each_node`` and
+            # ``process_index == 0`` otherwise. Under ``save_on_each_node`` the
+            # two disagree, and every node but the first would then keep a
+            # checkpoint it had written and never repaired.
+            if not getattr(args, "should_save", True):
                 return
             step = int(getattr(state, "global_step", 0) or 0)
             if step <= 0:
