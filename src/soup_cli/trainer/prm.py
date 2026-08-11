@@ -24,6 +24,7 @@ from typing import Any, Optional
 from rich.console import Console
 
 from soup_cli.config.schema import SoupConfig
+from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 
 logger = logging.getLogger(__name__)
 console = Console()
@@ -248,6 +249,10 @@ class PRMTrainerWrapper:
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
         cfg = self.config
+
+        # #353: seed before the model and any adapter are built.
+        apply_training_seed(cfg.training)
+
         self.tokenizer = AutoTokenizer.from_pretrained(
             cfg.base, trust_remote_code=self._trust_remote_code
         )
@@ -318,6 +323,7 @@ class PRMTrainerWrapper:
             report_to=self.report_to,
             remove_unused_columns=False,
             deepspeed=self.deepspeed_config,
+            **training_seed_kwargs(tcfg),
         )
 
         prm_trainer_cls = make_prm_trainer_class(Trainer)

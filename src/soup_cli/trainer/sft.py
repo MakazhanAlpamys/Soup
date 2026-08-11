@@ -16,16 +16,15 @@ from soup_cli.utils.gpu import (
     model_size_from_name,
     resolve_device_map,
 )
+from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 
 logger = logging.getLogger(__name__)
 
 console = Console()
 
-# #341 — what an UNSET ``training.seed`` resolves to. This is HF's own
-# ``TrainingArguments.seed`` default, restated here so the "unset behaves
-# exactly as before" guarantee is a written constant rather than an accident
-# of whichever transformers version is installed.
-DEFAULT_TRAINING_SEED = 42
+# #341's DEFAULT_TRAINING_SEED moved to ``utils.seeding`` in #353, where every
+# other task trainer needs the same constant. The multipack default below is
+# SFT-local and stays here.
 
 # #341 — what an unset seed gives the multipack FFD sampler. NOT 42: the
 # sampler has been seeded 0 since v0.37.0 because ``getattr(tcfg, "seed", 0)``
@@ -212,6 +211,12 @@ class SFTTrainerWrapper(StreamingSetupMixin):
 
         cfg = self.config
         tcfg = cfg.training
+
+        # #353: seed before the model exists. Threading `seed` into
+        # TrainingArguments is not enough on its own, because `get_peft_model`
+        # draws `lora_A` before there is a Trainer to run `set_seed(args.seed)`.
+        apply_training_seed(tcfg)
+
         use_unsloth = cfg.backend == "unsloth"
         use_vision = cfg.modality == "vision"
 
@@ -409,14 +414,14 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             "report_to": self.report_to,
             "remove_unused_columns": False,
             "deepspeed": self.deepspeed_config,
-            # #341 — the general training seed. Until this landed there was no
-            # knob at all: every run took HF's defaults (seed=42,
-            # data_seed=None), so replicates of one config differed only by
-            # row permutation and GPU nondeterminism. `None` means "unset", and
-            # unset must reproduce the pre-#341 numbers exactly — hence 42
-            # here rather than a new default.
-            "seed": DEFAULT_TRAINING_SEED if tcfg.seed is None else tcfg.seed,
-            "data_seed": tcfg.data_seed,
+            # #341: the general training seed. Until this landed there was no
+            # knob at all, so every run took HF's defaults (seed=42,
+            # data_seed=None) and replicates of one config differed only by row
+            # permutation and GPU nondeterminism. `None` means "unset", and
+            # unset must reproduce the pre-#341 numbers exactly, hence 42 rather
+            # than a new default. #353 moved the resolution into utils.seeding
+            # so the other 17 task wrappers resolve it identically.
+            **training_seed_kwargs(tcfg),
         }
 
         # FSDP2 — alternative to DeepSpeed. The helper also enables

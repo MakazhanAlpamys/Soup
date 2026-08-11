@@ -13,6 +13,7 @@ from soup_cli.utils.gpu import (
     model_size_from_name,
     resolve_device_map,
 )
+from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 
 console = Console()
 
@@ -74,6 +75,10 @@ class IPOTrainerWrapper:
 
         cfg = self.config
         tcfg = cfg.training
+
+        # #353: seed before the model and any adapter are built.
+        apply_training_seed(tcfg)
+
         use_unsloth = cfg.backend == "unsloth"
 
         if use_unsloth:
@@ -145,6 +150,7 @@ class IPOTrainerWrapper:
             report_to=self.report_to,
             remove_unused_columns=False,
             deepspeed=self.deepspeed_config,
+            **training_seed_kwargs(tcfg),
             **(self.fsdp_config or {}),
             loss_type="ipo",
             beta=tcfg.ipo_tau,

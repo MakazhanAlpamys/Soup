@@ -19,6 +19,7 @@ from soup_cli.utils.gpu import (
     model_size_from_name,
     resolve_device_map,
 )
+from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 
 console = Console()
 
@@ -84,6 +85,10 @@ class PPOTrainerWrapper:
 
         cfg = self.config
         tcfg = cfg.training
+
+        # #353: seed before the model and any adapter are built.
+        apply_training_seed(tcfg)
+
         use_unsloth = cfg.backend == "unsloth"
 
         # --- Load reward source ---
@@ -152,6 +157,7 @@ class PPOTrainerWrapper:
             "per_device_train_batch_size": batch_size,
             "gradient_accumulation_steps": tcfg.gradient_accumulation_steps,
             "learning_rate": tcfg.lr,
+            **training_seed_kwargs(tcfg),
         }
 
         # FSDP2 — alternative to DeepSpeed

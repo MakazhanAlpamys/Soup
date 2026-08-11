@@ -24,6 +24,7 @@ from typing import Any, Optional
 from rich.console import Console
 
 from soup_cli.config.schema import SoupConfig
+from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 
 logger = logging.getLogger(__name__)
 console = Console()
@@ -243,6 +244,10 @@ class MoleRoutingTrainerWrapper:
             )
         cfg = self.config
         tcfg = cfg.training
+
+        # #353: seed before the model and any adapter are built.
+        apply_training_seed(tcfg)
+
         adapters = list(tcfg.mole_task_adapters or [])
         if len(adapters) < 2:
             raise RuntimeError(
@@ -363,6 +368,7 @@ class MoleRoutingTrainerWrapper:
             report_to=self.report_to,
             remove_unused_columns=False,
             deepspeed=self.deepspeed_config,
+            **training_seed_kwargs(tcfg),
         )
 
         mole_trainer_cls = make_mole_trainer_class(Trainer)

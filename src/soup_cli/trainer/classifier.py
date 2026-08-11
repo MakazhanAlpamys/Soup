@@ -32,6 +32,7 @@ from typing import Any, List, Union
 from rich.console import Console
 
 from soup_cli.config.schema import SoupConfig
+from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 
 console = Console()
 
@@ -221,6 +222,9 @@ class ClassifierTrainerWrapper:
         cfg = self.config
         tcfg = cfg.training
 
+        # #353: seed before the model and any adapter are built.
+        apply_training_seed(tcfg)
+
         if tcfg.num_labels is None:
             raise ValueError(
                 f"task={cfg.task!r} requires training.num_labels to be set"
@@ -346,6 +350,7 @@ class ClassifierTrainerWrapper:
             bf16=self.device == "cuda",
             report_to=self.report_to,
             deepspeed=self.deepspeed_config,
+            **training_seed_kwargs(tcfg),
             **(self.fsdp_config or {}),
         )
 

@@ -31,6 +31,7 @@ from rich.console import Console
 
 from soup_cli.config.schema import SoupConfig
 from soup_cli.utils.gpu import resolve_device_map
+from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 
 if TYPE_CHECKING:
     import torch as _torch_typ
@@ -199,6 +200,9 @@ class DistillTrainerWrapper:
 
         cfg = self.config
         tcfg = cfg.training
+
+        # #353: seed before the model and any adapter are built.
+        apply_training_seed(tcfg)
 
         if tcfg.teacher_model is None:
             raise ValueError(
@@ -466,6 +470,7 @@ class DistillTrainerWrapper:
             report_to=self.report_to,
             remove_unused_columns=False,
             deepspeed=self.deepspeed_config,
+            **training_seed_kwargs(tcfg),
             **(self.fsdp_config or {}),
         )
 

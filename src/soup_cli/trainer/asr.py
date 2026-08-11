@@ -30,6 +30,7 @@ from typing import Any
 from rich.console import Console
 
 from soup_cli.config.schema import SoupConfig, TrainingConfig
+from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 
 console = Console()
 
@@ -191,6 +192,9 @@ class AsrTrainerWrapper:
         cfg = self.config
         tcfg = cfg.training
 
+        # #353: seed before the model and any adapter are built.
+        apply_training_seed(tcfg)
+
         # Arch guard BEFORE any weight download.
         _require_whisper_base(cfg.base, self._trust_remote_code)
 
@@ -346,6 +350,7 @@ class AsrTrainerWrapper:
             fp16=use_fp16,
             report_to=self.report_to,
             deepspeed=self.deepspeed_config,
+            **training_seed_kwargs(tcfg),
             predict_with_generate=True,
             remove_unused_columns=False,
             **(self.fsdp_config or {}),

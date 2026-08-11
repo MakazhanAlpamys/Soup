@@ -16,6 +16,23 @@ reproducing 70+ versions of notes.
 
 - **MLX backend now actually dispatches to the MLX trainer for `task: sft`.** Previously `backend: mlx` silently fell through to the transformers `SFTTrainerWrapper`, training on MPS/CUDA instead of MLX. The trainer was also rewritten for mlx-lm >= 0.31 (`create_dataset` + `CacheDataset`, `TrainingCallback`), with `model.freeze()` before LoRA — without it the saved "adapter" was a full fine-tune (172 tensors vs 24 LoRA tensors on a 1.2B model) — and an `adapter_config.json` is written so the output dir loads directly with `mlx_lm.load(..., adapter_path=dir)`. (#362)
 - **`mlx-lm` floor raised to >= 0.31.3** (the version the MLX SFT path is built against).
+- **`training.seed` reached the SFT wrapper and nothing else (#353).** #341 added the
+  knob and wired it into `trainer/sft.py`. The other seventeen task wrappers each build
+  their own `TrainingArguments` subclass (`GRPOConfig`, `DPOConfig`, `RewardConfig`, and
+  so on) and none of them read the field, so `task: grpo` with `training.seed: 7`
+  trained at HF's default of 42 with no error and no warning. Replicates that differed
+  only in `training.seed` were therefore the same run, which is what happened to STEP 25
+  of the H100 record: its five "replicates" were five runs of seed 42, measured against
+  a within-mode spread produced by the very thing it thought it was varying.
+  Threading the config is only half the repair. `Trainer.__init__` runs
+  `set_seed(args.seed)`, but `get_peft_model` has already drawn `lora_A` by then, and
+  `classifier` / `reward_model` / `prm` have already drawn a freshly initialised head
+  inside `from_pretrained`, so every wrapper now applies the seed at the top of
+  `setup()` as well, before the model is loaded. `unlearn` builds no `Trainer` at all
+  and drew its RMU control vector from a generator hard-coded to 0; that draw now
+  follows `training.seed`, staying at 0 when the seed is unset so existing runs keep
+  their control direction. An unset seed still resolves to 42 everywhere, so runs that
+  set neither field reproduce their pre-#353 numbers exactly.
 
 ## [0.73.0] - 2026-08-09
 

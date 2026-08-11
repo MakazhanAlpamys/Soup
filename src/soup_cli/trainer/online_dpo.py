@@ -38,6 +38,7 @@ from soup_cli.utils.gpu import (
     model_size_from_name,
     resolve_device_map,
 )
+from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 
 console = Console()
 
@@ -237,6 +238,9 @@ class OnlineDPOTrainerWrapper:
         cfg = self.config
         tcfg = cfg.training
 
+        # #353: seed before the model and any adapter are built.
+        apply_training_seed(tcfg)
+
         self._setup_transformers(cfg, tcfg)
 
         # --- Batch size (online DPO generates -> ~2x memory per sample) ---
@@ -296,6 +300,7 @@ class OnlineDPOTrainerWrapper:
             save_total_limit=3,
             bf16=self.device == "cuda",
             report_to=self.report_to,
+            **training_seed_kwargs(tcfg),
             beta=tcfg.dpo_beta,
             loss_type=tcfg.online_dpo_loss_type,
             max_new_tokens=tcfg.online_dpo_max_new_tokens,
