@@ -82,13 +82,25 @@ for s in 1 2 3; do
 done
 ```
 
-**Defaults are unchanged, deliberately.** Leaving both unset reproduces every
-pre-existing run exactly: `TrainingArguments` still gets `seed=42`
-(HuggingFace's own default) and `data_seed=None`, and the multipack sampler
-still gets `0` — the value it has had since v0.37.0. The fields are
-`Optional[int]` rather than defaulting to 42 precisely so the trainer can tell
-"unset" from "explicitly 42" and keep those two different historical defaults
-intact.
+**"Unset" does not mean the same thing for both fields.** An unset `seed`
+resolves to 42, HuggingFace's own `TrainingArguments` default. An unset
+`data_seed` stays `None`, which HF reads as "follow `seed`" rather than as a
+seed of its own, so leaving it out is not the same kind of default as leaving
+`seed` out. The multipack sampler still gets `0`, the value it has had since
+v0.37.0. The fields are `Optional[int]` rather than defaulting to 42 precisely
+so the trainer can tell "unset" from "explicitly 42" and keep those different
+historical defaults intact.
+
+**What changes for a run that sets neither field.** The values it trains at are
+the same as before: seed 42, `data_seed` at `None`. What is new is *when* the
+seed arrives. Before #353 nothing called `set_seed` ahead of `get_peft_model`,
+so `lora_A` and any freshly initialised classification head were drawn from
+torch's default generator, which is seeded from entropy once per process. An
+unseeded run's initialisation therefore varied from one process to the next, and
+it is now deterministic at 42. If you were getting replicate spread out of runs
+that set no seed, that is where it was coming from: those runs are identical to
+each other now, and varying a replicate means setting `training.seed` on
+purpose.
 
 Bounds: `[0, 2**32 - 1]` (`set_seed` feeds `numpy.random.seed`, which rejects
 anything outside that range), `0` is a legitimate seed, and a YAML `true` is
@@ -96,12 +108,19 @@ rejected rather than silently becoming seed 1. `data_seed` is forwarded to
 Accelerate's dataloader configuration and needs `accelerate >= 1.1.0`;
 below that, transformers warns and ignores it (`seed` is unaffected).
 
-**Scope.** `training.seed` / `training.data_seed` currently reach
-`TrainingArguments` on the **SFT** trainer (`task: sft`). The other task
-wrappers build their own `TrainingArguments` and still take HF's defaults, so
-setting the field on e.g. a DPO run is accepted but has no effect there yet.
-(The `pretrain` and layer-streaming paths do pick `seed` up for their
-samplers.)
+**Scope.** Every task wrapper threads both fields into the `TrainingArguments`
+subclass it builds, and applies `seed` before it loads the model, so the LoRA
+adapter and any freshly initialised head are drawn at the configured seed rather
+than at whatever the process happened to be sitting on (#353). `unlearn` builds
+no `Trainer` at all, and its RMU control vector follows `training.seed` too,
+staying at 0 when the seed is unset. The `pretrain` and layer-streaming paths
+pick `seed` up for their samplers as well.
+
+Through v0.73.0 this reached the **SFT** trainer only, so `training.seed: 7` on
+a DPO or GRPO run was accepted and silently trained at 42.
+
+The one path that still ignores both fields is the **MLX backend**
+(`backend: mlx`), whose trainers seed nothing at all.
 
 **Not a determinism guarantee.** A fixed seed makes the *software* RNG
 reproducible. It does not make CUDA kernels bit-reproducible — non-deterministic

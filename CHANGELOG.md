@@ -31,8 +31,16 @@ reproducing 70+ versions of notes.
   `setup()` as well, before the model is loaded. `unlearn` builds no `Trainer` at all
   and drew its RMU control vector from a generator hard-coded to 0; that draw now
   follows `training.seed`, staying at 0 when the seed is unset so existing runs keep
-  their control direction. An unset seed still resolves to 42 everywhere, so runs that
-  set neither field reproduce their pre-#353 numbers exactly.
+  their control direction.
+  An unset seed still resolves to 42 and leaves `data_seed` at `None`, so the values a
+  run trains at are unchanged. What changes is when they arrive. Nothing called
+  `set_seed` before `get_peft_model` previously, so `lora_A` was drawn from torch's
+  default generator, which is seeded from entropy once per process: an unseeded run's
+  adapter and classification-head initialisation varied from one process to the next,
+  and it is now deterministic at 42. Replicate variation that came out of runs setting
+  no seed was coming from exactly that, so those runs are now identical to each other
+  and varying a replicate means setting `training.seed` on purpose. The MLX backend
+  (`backend: mlx`) is the one path that still reads neither field.
 
 ## [0.73.0] - 2026-08-09
 

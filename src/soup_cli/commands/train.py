@@ -1056,6 +1056,18 @@ def train(
             f"LoRA:    [bold]r={cfg.training.lora.r}, "
             f"alpha={cfg.training.lora.alpha}[/]"
         )
+    # #353 review-fix: a wrong seed is invisible, which is how `training.seed`
+    # reaching one wrapper out of nineteen survived releases. Report the value
+    # the run actually trains at, and say when it is the unset default, so
+    # "did my seed take?" is answered by looking rather than by reading source.
+    from soup_cli.utils.seeding import resolve_training_seed
+
+    seed_label = str(resolve_training_seed(cfg.training))
+    if cfg.training.seed is None:
+        seed_label += " [dim](unset default)[/]"
+    if cfg.training.data_seed is not None:
+        seed_label += f", data_seed={cfg.training.data_seed}"
+
     console.print(
         Panel(
             f"Device:  [bold]{device_name}[/]\n"
@@ -1064,7 +1076,8 @@ def train(
             f"Task:    [bold]{cfg.task}[/]\n"
             f"Backend: [bold]{backend_label}[/]\n"
             f"{peft_line}\n"
-            f"Quant:   [bold]{quant_label}[/]",
+            f"Quant:   [bold]{quant_label}[/]\n"
+            f"Seed:    [bold]{seed_label}[/]",
             title="Training Setup",
         )
     )

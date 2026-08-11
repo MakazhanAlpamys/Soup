@@ -487,6 +487,52 @@ class TestEveryTaskIsAccountedFor:
         assert not stale, f"{sorted(stale)} are listed here but not in the schema"
 
 
+#: Trainer modules that define a `setup()` and legitimately do not seed in it,
+#: each with the reason. Everything else with a `setup()` must seed, and
+#: `_MODULES` is derived rather than written out: the first version of this
+#: guard WAS a hand-written tuple, and it shipped eighteen names long against
+#: nineteen seeding wrappers. `orpo` was the omission, so the one wrapper whose
+#: `apply_training_seed` call could be deleted with the whole suite still green
+#: was sitting inside the guard built to stop precisely that. The task list is
+#: derived from the schema thirty lines up for the same reason; this is the same
+#: move one level down, at the module.
+_NOT_SEEDED = {
+    "tts": "delegates to sft's setup() via super().setup(dataset)",
+    "preference": "delegates to an inner wrapper, which _make_inner_cfg's "
+                  "model_copy carries the seed into",
+    "bitnet": "raises before it builds anything; hardware-gated path",
+    "mlx_sft": "MLX backend, which seeds nothing on any path yet",
+    "mlx_dpo": "MLX backend, which seeds nothing on any path yet",
+    "mlx_grpo": "MLX backend, which seeds nothing on any path yet",
+}
+
+
+def _modules_defining_setup():
+    """`soup_cli.trainer` module name -> its `setup()` AST node.
+
+    Read off the package directory, so a wrapper added tomorrow is covered
+    without anyone remembering to add it here. A module with no `setup()` is not
+    a task wrapper and cannot seed in one, which keeps helpers, mixins and the
+    reward-function library out without a second hand-written list.
+    """
+    import ast
+    import importlib.util
+    from pathlib import Path
+
+    spec = importlib.util.find_spec("soup_cli.trainer")
+    found = {}
+    for path in sorted(Path(spec.origin).parent.glob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name == "setup":
+                found[path.stem] = node
+                break
+    return found
+
+
+_MODULES = tuple(sorted(set(_modules_defining_setup()) - set(_NOT_SEEDED)))
+
+
 class TestEveryWrapperAppliesTheSeed:
     """Every task wrapper calls `apply_training_seed` before it builds a model.
 
@@ -494,29 +540,68 @@ class TestEveryWrapperAppliesTheSeed:
     need a reward model, a judge, a teacher, or audio, and it fails when a new
     wrapper is added without the call. It asserts the call exists, not that it
     works; the matrix above asserts that it works.
-    """
 
-    #: module -> the method that must apply the seed. `prm` seeds in `setup()`
-    #: (it builds a randomly initialised reward head there) and threads the
-    #: kwargs in `train()`.
-    _MODULES = (
-        "asr", "bco", "classifier", "distill", "dpo", "embedding", "grpo",
-        "ipo", "kto", "mole_routing", "online_dpo", "ppo", "pretrain", "prm",
-        "reward_model", "sft", "simpo", "unlearn",
-    )
+    `prm` is here rather than in the matrix because it seeds in `setup()` (it
+    builds a randomly initialised reward head there) and threads the kwargs in
+    `train()`.
+    """
 
     @staticmethod
     def _setup_body(name):
-        import ast
-        import importlib.util
+        setups = _modules_defining_setup()
+        assert name in setups, f"soup_cli.trainer.{name} defines no setup()"
+        return setups[name]
 
-        spec = importlib.util.find_spec(f"soup_cli.trainer.{name}")
-        with open(spec.origin, encoding="utf-8") as handle:
-            tree = ast.parse(handle.read())
-        for node in ast.walk(tree):
-            if isinstance(node, ast.FunctionDef) and node.name == "setup":
-                return node
-        raise AssertionError(f"soup_cli.trainer.{name} defines no setup()")
+    @staticmethod
+    def _calls_apply_training_seed(setup):
+        import ast
+
+        return [
+            node.lineno
+            for node in ast.walk(setup)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "apply_training_seed"
+        ]
+
+    def test_the_derivation_found_the_wrappers(self):
+        """Non-vacuity. A glob that returns nothing passes every test below it.
+
+        `_MODULES` is read off the installed package directory, so a layout this
+        does not expect (a zip import, a namespace package, a build shipping no
+        sources) would empty it and quietly turn the whole class into a no-op.
+        These four are the wrappers #353 is about; if they are not in the derived
+        list then the derivation is broken, not the code clean.
+        """
+        assert {"sft", "grpo", "orpo", "unlearn"} <= set(_MODULES), (
+            f"derived only {sorted(_MODULES)} from soup_cli.trainer, which "
+            f"cannot be right; the module discovery has gone stale"
+        )
+
+    def test_the_not_seeded_list_does_not_rot(self):
+        """A module that leaves the package, or loses its `setup()`, must leave
+        `_NOT_SEEDED` too, or the list slowly stops describing anything."""
+        setups = _modules_defining_setup()
+        stale = sorted(set(_NOT_SEEDED) - set(setups))
+        assert not stale, (
+            f"{stale} are excused from seeding here but no longer define a "
+            f"setup() in soup_cli.trainer"
+        )
+
+    def test_nothing_on_the_not_seeded_list_secretly_seeds(self):
+        """The other direction. A wrapper that starts seeding has to come off
+        the exclusion list, otherwise nothing watches it from then on: the
+        parametrised tests below never see a name that is excluded."""
+        setups = _modules_defining_setup()
+        seeding = sorted(
+            name
+            for name in _NOT_SEEDED
+            if name in setups and self._calls_apply_training_seed(setups[name])
+        )
+        assert not seeding, (
+            f"{seeding} call apply_training_seed() but are listed in "
+            f"_NOT_SEEDED, so the guard skips them; remove them from the list"
+        )
 
     @pytest.mark.parametrize("name", _MODULES)
     def test_the_wrapper_seeds_inside_setup(self, name):
@@ -548,7 +633,7 @@ class TestEveryWrapperAppliesTheSeed:
         `load_model_and_tokenizer`, or one of the `self._setup_*` helpers the
         wrappers delegate the load to. Most of them go through the last of
         those, so matching only the direct calls would make this vacuous for
-        twelve of the eighteen.
+        thirteen of the nineteen.
         """
         import ast
 
@@ -574,6 +659,11 @@ class TestEveryWrapperAppliesTheSeed:
         assert built, (
             f"soup_cli.trainer.{name}.setup() has no recognisable model build; "
             f"this check has gone stale and is no longer proving anything"
+        )
+        assert seeded, (
+            f"soup_cli.trainer.{name}.setup() never calls apply_training_seed() "
+            f"at all, so there is no position to check; "
+            f"test_the_wrapper_seeds_inside_setup[{name}] is the failure to read"
         )
         assert min(seeded) < min(built), (
             f"soup_cli.trainer.{name}: apply_training_seed() is called at line "
