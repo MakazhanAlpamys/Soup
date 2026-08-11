@@ -33,6 +33,9 @@ class MLXSFTTrainerWrapper:
 
     def __init__(self, config: SoupConfig, **kwargs) -> None:
         self.config = config
+        # Accepted for CLI-contract parity (trainer_kwargs forward). Stored
+        # intentionally unused: trust_remote_code has no MLX meaning and
+        # load_mlx_model does not take it.
         self.extra_kwargs = kwargs
         self.model = None
         self.tokenizer = None
@@ -136,7 +139,9 @@ class MLXSFTTrainerWrapper:
         output_dir.mkdir(parents=True, exist_ok=True)
 
         if self.model is None or self.tokenizer is None:
-            self.setup({})
+            raise RuntimeError(
+                "MLX backend: setup(dataset) must be called before train()"
+            )
 
         self._apply_lora(self.model)
 
@@ -156,7 +161,9 @@ class MLXSFTTrainerWrapper:
         steps_per_save = int(getattr(cfg.training, "save_steps", 0) or 0)
         if steps_per_save <= 0:
             steps_per_save = iters
-        steps_per_eval = max(1000, iters + 1)
+        # Real eval cadence when a val split exists; otherwise the value is
+        # irrelevant (val_dataset stays None and mlx-lm skips evaluation).
+        steps_per_eval = max(1, iters // 4) if val_rows else max(1000, iters + 1)
         args = TrainingArgs(
             batch_size=batch_size,
             iters=iters,
