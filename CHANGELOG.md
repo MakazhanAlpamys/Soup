@@ -74,6 +74,16 @@ reproducing 70+ versions of notes.
   this same event and `CallbackHandler` dispatches in insertion order, so a
   normalisation attached after it would leave `--push-as` publishing the prefixed
   adapter and keeping the repaired one on local disk.
+- **A streamed model's `named_parameters()`/`named_modules()` still carried the wrapper's
+  `.inner.` segment, so a name-keyed comparison against a resident model of the same
+  checkpoint saw no overlap (#369).** v0.72.1 made `state_dict()` canonical for
+  serialisation; this issue is the first time something compared the two model kinds by
+  parameter name instead, and the #331 repair gate read the resulting empty intersection
+  (`grads exact 0/0`) as a pass. `layer_stream_runtime.canonical_named_parameters()`
+  strips `.inner.` the same way `state_dict()` already does, and
+  `assert_canonical_parameters_intersect()` raises instead of reporting an empty
+  intersection as success. Neither the forward path nor `state_dict()` changed, so the
+  v0.72.0 bit-exactness gates remain valid unexercised.
 
 ## [0.73.0] - 2026-08-09
 
