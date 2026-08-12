@@ -721,9 +721,11 @@ def _build_streamed_layer_class():
             #
             # Serialisation-only, deliberately: the forward path is untouched,
             # so v0.72.0's bit-exactness gates remain valid. The cost is that
-            # `named_parameters()` still shows `.inner.`, i.e. loading INTO a
-            # streamed model stays unsupported (`--resume` is refused; the
-            # checkpoint/resume slot is v0.72.3).
+            # `named_parameters()` still shows `.inner.`, which is why
+            # `canonical_named_parameters()` below exists. `--resume` /
+            # `--hf-resume` load INTO a streamed model fine (v0.72.3,
+            # `train.py`): a separate load-side pre-hook redirects canonical
+            # keys at load time, mirroring this save-side delegation.
             #
             # The wrapper owns no parameters or buffers of its own — they all
             # live on `inner` — so nothing is lost by not serialising it. It

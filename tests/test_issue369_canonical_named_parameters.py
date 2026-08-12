@@ -223,3 +223,4 @@ class TestAssertCanonicalParametersIntersect:
         shared = assert_canonical_parameters_intersect(wrapper.model, resident_peft)
         assert shared
         assert all(".inner." not in name for name in shared)
+        assert any("lora_" in name for name in shared)
