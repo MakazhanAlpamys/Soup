@@ -811,6 +811,21 @@ def decide_stream_fit(*, predicted_bytes: int, available_bytes: int) -> VramFit:
     )
 
 
+def resolve_available_vram_bytes(
+    *, measured_bytes: int, override_bytes: Optional[int]
+) -> int:
+    """The free-VRAM figure the pre-flight fit check measures against.
+
+    ``mem_get_info()`` is a device-level driver query, so it cannot see a
+    per-process cap (``set_per_process_memory_fraction``, a MIG slice, a card
+    another process is also using). ``training.stream_vram_override``, when
+    set, REPLACES the driver reading rather than padding it, in either
+    direction: raised to let a documented over-prediction through, or lowered
+    to enforce a cap the driver itself cannot report.
+    """
+    return measured_bytes if override_bytes is None else override_bytes
+
+
 #: Measured (GATE 3) speed-up from reaching an effective batch by raising
 #: ``batch_size`` rather than ``gradient_accumulation_steps``: Qwen2.5-0.5B bf16,
 #: S=256, pinned store — 1393.4 tok/s at batch 4 / accum 1 against 553.2 at

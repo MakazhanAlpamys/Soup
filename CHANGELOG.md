@@ -87,6 +87,19 @@ reproducing 70+ versions of notes.
   `named_buffers()` carry the same segment and are deliberately not covered — the
   comparison that produced the false green was over parameter names.
 
+### Added
+
+- **`training.stream_vram_override` gives the layer-streaming VRAM pre-flight an
+  explicit escape hatch (#347).** `decide_stream_fit` refused any run it predicted
+  would not fit, with no way through except lowering `batch_size` or `max_length`.
+  Setting this field now replaces the measured free-VRAM figure the pre-flight
+  checks against, in either direction: raised past a documented over-prediction to
+  let a known-safe config through, or lowered to enforce a cap `mem_get_info()`
+  cannot see, such as `set_per_process_memory_fraction` on a shared or capped card
+  (a Colab/Kaggle T4, a MIG slice). Rejected at config load when set while
+  `stream_layers` is false, mirroring the existing `stream_source`/`stream_buffers`
+  footgun gate.
+
 ### Fixed
 
 - **bf16 was assumed on every CUDA card, so the entire free GPU tier failed (#385, #387).**

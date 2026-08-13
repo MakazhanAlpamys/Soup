@@ -760,12 +760,43 @@ class TestStreamSchemaDefaults:
         assert cfg.training.stream_layers is False
         assert cfg.training.stream_source == "auto"
         assert cfg.training.stream_buffers == 2
+        assert cfg.training.stream_vram_override is None
 
     def test_happy_path_parses(self):
         cfg = _load(_stream_yaml(training={"stream_source": "ram", "stream_buffers": 3}))
         assert cfg.training.stream_layers is True
         assert cfg.training.stream_source == "ram"
         assert cfg.training.stream_buffers == 3
+
+
+class TestStreamVramOverride:
+    def test_defaults_to_none(self):
+        assert _load(_stream_yaml()).training.stream_vram_override is None
+
+    def test_accepts_an_explicit_byte_count(self):
+        cfg = _load(_stream_yaml(training={"stream_vram_override": 4_000_000_000}))
+        assert cfg.training.stream_vram_override == 4_000_000_000
+
+    def test_zero_is_accepted(self):
+        """A degenerate but legal value: 'assume nothing is free'."""
+        cfg = _load(_stream_yaml(training={"stream_vram_override": 0}))
+        assert cfg.training.stream_vram_override == 0
+
+    def test_negative_rejected(self):
+        with pytest.raises(ValueError, match="stream_vram_override"):
+            _load(_stream_yaml(training={"stream_vram_override": -1}))
+
+    def test_bool_rejected(self):
+        with pytest.raises(ValueError, match="bool"):
+            _load(_stream_yaml(training={"stream_vram_override": True}))
+
+    def test_without_stream_layers_rejected(self):
+        with pytest.raises(ValueError, match="stream_layers"):
+            _load(
+                _stream_yaml(
+                    training={"stream_layers": False, "stream_vram_override": 4_000_000_000}
+                )
+            )
 
 
 class TestStreamTaskAndBackendGates:

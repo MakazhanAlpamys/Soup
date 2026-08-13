@@ -3019,6 +3019,31 @@ class TrainingConfig(BaseModel):
             raise ValueError("training.stream_buffers must be an int, not bool")
         return v
 
+    stream_vram_override: Optional[int] = Field(
+        default=None,
+        ge=0,
+        description=(
+            "Bytes to assume free instead of measuring "
+            "torch.cuda.mem_get_info(). mem_get_info() is a device-level "
+            "driver query, so it cannot see a per-process cap "
+            "(set_per_process_memory_fraction, a MIG slice, a card another "
+            "process is also using), so on that hardware the pre-flight sees the "
+            "whole device's free VRAM regardless of what this process can "
+            "actually use. Set this to replace the measured figure in either "
+            "direction: raise it to let a known-safe over-prediction through, "
+            "or lower it to make the pre-flight enforce a cap the driver "
+            "itself cannot report."
+        ),
+    )
+
+    @field_validator("stream_vram_override", mode="before")
+    @classmethod
+    def _validate_stream_vram_override_int(cls, v: Any) -> Any:
+        """Reject bool-as-int (bool subclasses int), mirrors stream_buffers."""
+        if isinstance(v, bool):
+            raise ValueError("training.stream_vram_override must be an int (bytes), not bool")
+        return v
+
     # Sample packing — pack multiple short samples into one sequence
     packing: bool = Field(
         default=False,
@@ -4807,11 +4832,16 @@ class SoupConfig(BaseModel):
         if not tcfg.stream_layers:
             # Footgun: a non-default stream_* while streaming is off almost
             # certainly means the user forgot stream_layers=true.
-            if tcfg.stream_source != "auto" or tcfg.stream_buffers != 2:
+            if (
+                tcfg.stream_source != "auto"
+                or tcfg.stream_buffers != 2
+                or tcfg.stream_vram_override is not None
+            ):
                 raise ValueError(
-                    "training.stream_source / training.stream_buffers set but "
-                    "stream_layers is false — set stream_layers=true to stream "
-                    "the base layer-by-layer."
+                    "training.stream_source / training.stream_buffers / "
+                    "training.stream_vram_override set but stream_layers is "
+                    "false; set stream_layers=true to stream the base "
+                    "layer-by-layer."
                 )
             return self
         # v0.72.4 — the four preference losses join SFT. DPO and KTO take their

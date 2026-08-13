@@ -284,6 +284,54 @@ class TestStreamFitDecision:
         assert "batch_size" in reason and "max_length" in reason
 
 
+class TestResolveAvailableVramBytes:
+    """training.stream_vram_override (#347): the driver's mem_get_info() is a
+    device-level query and cannot see a per-process cap, so the override must
+    fully REPLACE the measured figure, not adjust it."""
+
+    def test_no_override_uses_the_measured_figure(self):
+        from soup_cli.utils.layer_stream import resolve_available_vram_bytes
+
+        got = resolve_available_vram_bytes(measured_bytes=3_445_000_000, override_bytes=None)
+        assert got == 3_445_000_000
+
+    def test_override_replaces_a_larger_measured_figure(self):
+        """Raising the budget: let a documented over-prediction through even
+        though the driver reports plenty of headroom."""
+        from soup_cli.utils.layer_stream import resolve_available_vram_bytes
+
+        got = resolve_available_vram_bytes(
+            measured_bytes=16_000_000_000, override_bytes=3_541_000_000
+        )
+        assert got == 3_541_000_000
+
+    def test_override_replaces_a_smaller_measured_figure(self):
+        """Lowering the budget below what the driver reports: the Colab/Kaggle
+        case from #347's follow-up comment, where set_per_process_memory_fraction
+        caps the process but mem_get_info() still reports the whole card."""
+        from soup_cli.utils.layer_stream import resolve_available_vram_bytes
+
+        got = resolve_available_vram_bytes(
+            measured_bytes=16_000_000_000, override_bytes=4_000_000_000
+        )
+        assert got == 4_000_000_000
+
+    def test_override_below_real_free_vram_makes_a_fitting_config_refused(self):
+        """The acceptance test #347's follow-up comment asks for verbatim: an
+        override set below the real free VRAM must turn an otherwise-fitting
+        config into a refusal, because that is the assertion nothing can fake."""
+        from soup_cli.utils.layer_stream import decide_stream_fit, resolve_available_vram_bytes
+
+        predicted = 5_000_000_000
+        measured_free = 16_000_000_000  # plenty, would normally fit
+        assert decide_stream_fit(predicted_bytes=predicted, available_bytes=measured_free).fits
+
+        capped = resolve_available_vram_bytes(
+            measured_bytes=measured_free, override_bytes=4_000_000_000
+        )
+        assert not decide_stream_fit(predicted_bytes=predicted, available_bytes=capped).fits
+
+
 class TestThroughputForecast:
     def test_ceiling_uses_c_equals_six(self):
         from soup_cli.utils.layer_stream import forecast_stream_throughput
@@ -796,7 +844,7 @@ class TestAutoTierFallback:
 
     def _run(
         self, tmp_path, monkeypatch, *, free_ram, stream_source,
-        disk_kind="nvme", device="cpu",
+        disk_kind="nvme", device="cpu", extra_training_yaml="",
     ):
         from soup_cli.config.loader import load_config_from_string
         from soup_cli.trainer.sft import SFTTrainerWrapper
@@ -823,7 +871,7 @@ class TestAutoTierFallback:
             "data:\n  train: data.jsonl\n  format: alpaca\n"
             "training:\n  batch_size: 1\n  gradient_accumulation_steps: 1\n"
             f"  quantization: none\n  stream_layers: true\n"
-            f"  stream_source: {stream_source}\n"
+            f"  stream_source: {stream_source}\n{extra_training_yaml}"
             "  lora:\n    r: 4\n    target_modules: [q_proj, v_proj]\n"
         )
         wrapper = SFTTrainerWrapper(cfg)
@@ -892,6 +940,45 @@ class TestAutoTierFallback:
                 tmp_path, monkeypatch, free_ram=10_000_000_000,
                 stream_source="auto", device="cuda",
             )
+
+    @requires_cuda
+    def test_stream_vram_override_below_measured_free_refuses_a_fitting_config(
+        self, tmp_path, monkeypatch
+    ):
+        """#347: mem_get_info() is device-level and cannot see a per-process cap
+        (a Colab/Kaggle set_per_process_memory_fraction, a MIG slice, a shared
+        card), so it reports plenty of free VRAM here on purpose. The override
+        must still make the pre-flight refuse, because on the real hardware this
+        models that is the whole point."""
+        import torch
+
+        monkeypatch.setattr(
+            torch.cuda, "mem_get_info", lambda *_a, **_k: (16_000_000_000, 16_000_000_000)
+        )
+        with pytest.raises(ValueError, match="predicted to need"):
+            self._run(
+                tmp_path, monkeypatch, free_ram=10_000_000_000,
+                stream_source="auto", device="cuda",
+                extra_training_yaml="  stream_vram_override: 1000000\n",
+            )
+
+    @requires_cuda
+    def test_stream_vram_override_above_measured_free_lets_a_refused_config_through(
+        self, tmp_path, monkeypatch
+    ):
+        """The other direction: a documented over-prediction that would
+        otherwise refuse a known-safe config now proceeds."""
+        import torch
+
+        monkeypatch.setattr(
+            torch.cuda, "mem_get_info", lambda *_a, **_k: (1_000_000, 4_000_000_000)
+        )
+        wrapper = self._run(
+            tmp_path, monkeypatch, free_ram=10_000_000_000,
+            stream_source="auto", device="cuda",
+            extra_training_yaml="  stream_vram_override: 16000000000\n",
+        )
+        assert wrapper._stream_runtime is not None
 
     def test_the_fallback_says_the_cost_is_unmeasured(self, tmp_path, monkeypatch):
         """A silent fallback to a slower path is the failure mode this project

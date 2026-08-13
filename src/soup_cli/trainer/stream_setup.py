@@ -431,6 +431,7 @@ class StreamingSetupMixin:
             estimate_logits_bytes,
             estimate_stream_peak_vram,
             forecast_stream_throughput,
+            resolve_available_vram_bytes,
         )
         from soup_cli.utils.layer_stream_runtime import measure_gemm_tflops
 
@@ -483,11 +484,20 @@ class StreamingSetupMixin:
 
         import torch
 
-        available = int(torch.cuda.mem_get_info()[0])
+        measured_available = int(torch.cuda.mem_get_info()[0])
+        available = resolve_available_vram_bytes(
+            measured_bytes=measured_available, override_bytes=tcfg.stream_vram_override
+        )
         fit = decide_stream_fit(predicted_bytes=predicted, available_bytes=available)
         if not fit.fits:
             raise ValueError(fit.reason)
-        lines.append(f"  free VRAM    {available / 1e9:.2f} GB")
+        if tcfg.stream_vram_override is None:
+            lines.append(f"  free VRAM    {available / 1e9:.2f} GB")
+        else:
+            lines.append(
+                f"  free VRAM    {available / 1e9:.2f} GB (training.stream_vram_override; "
+                f"driver reports {measured_available / 1e9:.2f} GB)"
+            )
 
         # A per-card TFLOPS constant baked into the source would be a
         # fabrication; measuring the user's own card in this session is the only
