@@ -316,6 +316,20 @@ class TestResolveAvailableVramBytes:
         )
         assert got == 4_000_000_000
 
+    def test_override_zero_is_honoured_not_treated_as_absent(self):
+        """0 is a legitimate override ("assume nothing is free, refuse
+        everything") and the value someone sets first to confirm the flag is
+        wired at all, expecting a refusal. The `is None` check in
+        resolve_available_vram_bytes is correct, but nothing previously
+        exercised it at the resolver: a `override_bytes or measured_bytes`
+        mutation (falsy-0 falls back to the driver figure) still passed the
+        full suite (review on #386, blocking item). This pins the resolver
+        itself, not just that 0 survives config load."""
+        from soup_cli.utils.layer_stream import resolve_available_vram_bytes
+
+        got = resolve_available_vram_bytes(measured_bytes=15_360_000_000, override_bytes=0)
+        assert got == 0
+
     def test_override_below_real_free_vram_makes_a_fitting_config_refused(self):
         """The acceptance test #347's follow-up comment asks for verbatim: an
         override set below the real free VRAM must turn an otherwise-fitting
