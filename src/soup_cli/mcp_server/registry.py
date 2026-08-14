@@ -918,7 +918,7 @@ def _refuse_execute(name: str) -> Callable[[dict], dict]:
 
 
 def _mutating_specs(
-    *, allow_mutating: bool, allow_execute: bool, execution: ExecutionManager | None
+    *, allow_mutating: bool, allow_execute: bool = False, execution: ExecutionManager | None
 ) -> list[ToolSpec]:
     """The plan-only mutating tools.
 
@@ -1000,7 +1000,7 @@ def _mutating_specs(
 
 
 def build_registry(
-    *, allow_mutating: bool, allow_execute: bool, execution: ExecutionManager | None = None
+    *, allow_mutating: bool, allow_execute: bool = False, execution: ExecutionManager | None = None
 ) -> list[ToolSpec]:
     """Assemble the MCP tool table.
 
