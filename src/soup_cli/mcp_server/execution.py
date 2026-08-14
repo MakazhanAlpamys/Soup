@@ -52,8 +52,11 @@ def digest_file(path: str, field: str) -> ProtectedFile:
                 f"dir:{stat_result.st_mtime_ns}:{stat_result.st_size}".encode("ascii")
             ).hexdigest()
         else:
+            hasher = hashlib.sha256()
             with open(real, "rb") as handle:
-                digest = hashlib.file_digest(handle, "sha256").hexdigest()
+                while chunk := handle.read(65536):
+                    hasher.update(chunk)
+            digest = hasher.hexdigest()
     except (OSError, ValueError) as exc:
         raise ExecutionError(f"{field} is unavailable for execution") from exc
     return ProtectedFile(path=real, digest=digest)

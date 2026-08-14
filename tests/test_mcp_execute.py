@@ -1,5 +1,6 @@
 """Tests for MCP execution capability (Part E - Execution Slice)."""
 
+import hashlib
 import os
 import subprocess
 import sys
@@ -9,7 +10,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import soup_cli.mcp_server.registry as reg
-from soup_cli.mcp_server.execution import ExecutionError, ExecutionManager
+from soup_cli.mcp_server.execution import ExecutionError, ExecutionManager, digest_file
 
 _MIN_CONFIG = "base: Qwen/Qwen2.5-0.5B\ntask: sft\ndata:\n  train: data.jsonl\n"
 
@@ -157,6 +158,28 @@ class TestTokenSecurity:
         with pytest.raises(ExecutionError) as exc:
             manager.execute(token=token, kind="train")
         assert "planned input changed" in str(exc.value).lower()
+
+
+class TestDigestFile:
+    def test_digest_file_computes_sha256_chunked(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        test_file = tmp_path / "test.bin"
+        content = b"hello world 12345" * 10000
+        test_file.write_bytes(content)
+
+        protected = digest_file("test.bin", "field")
+        expected_digest = hashlib.sha256(content).hexdigest()
+        assert protected.digest == expected_digest
+        assert protected.path == os.path.realpath(str(test_file))
+
+    def test_digest_directory(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        test_dir = tmp_path / "model_dir"
+        test_dir.mkdir()
+
+        protected = digest_file("model_dir", "field")
+        assert len(protected.digest) == 64
+        assert protected.path == os.path.realpath(str(test_dir))
 
 
 class TestSubprocessIsolationAndConcurrency:
