@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import secrets
+import stat
 import subprocess
 import threading
 import time
@@ -13,9 +14,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from soup_cli.experiment.tracker import ExperimentTracker, generate_run_id
-from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
+from soup_cli.utils.paths import atomic_write_text, enforce_under_cwd_and_no_symlink
 
 TOKEN_TTL_SECONDS = 5 * 60
+DEFAULT_MAX_TREE_FILES = 10_000
+DEFAULT_MAX_TREE_BYTES = 10 * 1024 * 1024 * 1024  # 10 GiB
 
 
 class ExecutionError(ValueError):
@@ -38,25 +41,80 @@ class PendingPlan:
     protected_files: tuple[ProtectedFile, ...]
     created_at: float
     expires_at: float
+    run_id: str = ""
     consumed: bool = False
 
 
-def digest_file(path: str, field: str) -> ProtectedFile:
-    """Return a cwd-contained, non-symlink file's canonical path and digest."""
+def digest_file(
+    path: str,
+    field: str,
+    *,
+    max_files: int = DEFAULT_MAX_TREE_FILES,
+    max_bytes: int = DEFAULT_MAX_TREE_BYTES,
+) -> ProtectedFile:
+    """Return a cwd-contained, non-symlink file or directory tree's canonical path and digest."""
     try:
         enforce_under_cwd_and_no_symlink(path, field)
         real = os.path.realpath(path)
         if os.path.isdir(real):
-            stat_result = os.stat(real)
-            digest = hashlib.sha256(
-                f"dir:{stat_result.st_mtime_ns}:{stat_result.st_size}".encode("ascii")
-            ).hexdigest()
+            entries: list[tuple[str, str]] = []
+            total_files = 0
+            total_bytes = 0
+
+            for root, dirs, files in os.walk(real, topdown=True, followlinks=False):
+                for d in dirs:
+                    dir_path = os.path.join(root, d)
+                    enforce_under_cwd_and_no_symlink(dir_path, field)
+
+                for f in files:
+                    file_path = os.path.join(root, f)
+                    enforce_under_cwd_and_no_symlink(file_path, field)
+                    st = os.lstat(file_path)
+                    if not stat.S_ISREG(st.st_mode):
+                        raise ExecutionError(f"{field} contains non-regular file: {file_path}")
+                    total_files += 1
+                    if total_files > max_files:
+                        raise ExecutionError(
+                            f"{field} exceeds maximum file count limit ({max_files})"
+                        )
+
+                    rel_path = os.path.relpath(file_path, real)
+                    rel_posix = Path(rel_path).as_posix()
+
+                    file_hasher = hashlib.sha256()
+                    with open(file_path, "rb") as handle:
+                        while chunk := handle.read(65536):
+                            total_bytes += len(chunk)
+                            if total_bytes > max_bytes:
+                                raise ExecutionError(
+                                    f"{field} exceeds maximum byte limit ({max_bytes} bytes)"
+                                )
+                            file_hasher.update(chunk)
+                    entries.append((rel_posix, file_hasher.hexdigest()))
+
+            # Sort entries deterministically by relative path
+            entries.sort(key=lambda item: item[0])
+            tree_hasher = hashlib.sha256()
+            for rel_posix, f_digest in entries:
+                tree_hasher.update(f"{rel_posix}\0{f_digest}\n".encode("utf-8"))
+            digest = tree_hasher.hexdigest()
         else:
+            st = os.lstat(real)
+            if not stat.S_ISREG(st.st_mode):
+                raise ExecutionError(f"{field} is not a regular file")
             hasher = hashlib.sha256()
+            total_bytes = 0
             with open(real, "rb") as handle:
                 while chunk := handle.read(65536):
+                    total_bytes += len(chunk)
+                    if total_bytes > max_bytes:
+                        raise ExecutionError(
+                            f"{field} exceeds maximum byte limit ({max_bytes} bytes)"
+                        )
                     hasher.update(chunk)
             digest = hasher.hexdigest()
+    except ExecutionError:
+        raise
     except (OSError, ValueError) as exc:
         raise ExecutionError(f"{field} is unavailable for execution") from exc
     return ProtectedFile(path=real, digest=digest)
@@ -72,6 +130,17 @@ class ExecutionManager:
         self._active_run_id: str | None = None
         self._lock = threading.Lock()
 
+    def allocate_run_id(self) -> str:
+        return generate_run_id()
+
+    def snapshot_config(self, run_id: str, content: str) -> str:
+        """Write the exact validated config content to .soup/mcp-runs/<run_id>/config.yaml."""
+        run_dir = Path(self.cwd) / ".soup" / "mcp-runs" / run_id
+        run_dir.mkdir(parents=True, exist_ok=True)
+        snapshot_file = str(run_dir / "config.yaml")
+        atomic_write_text(content, snapshot_file, field="config snapshot")
+        return os.path.realpath(snapshot_file)
+
     def issue(
         self,
         *,
@@ -79,9 +148,11 @@ class ExecutionManager:
         argv: list[str],
         display_command: str,
         protected_files: tuple[ProtectedFile, ...] = (),
+        run_id: str | None = None,
     ) -> str:
         now = time.monotonic()
         token = secrets.token_urlsafe(32)
+        allocated_run_id = run_id or generate_run_id()
         with self._lock:
             self._cleanup(now)
             self._plans[token] = PendingPlan(
@@ -93,6 +164,7 @@ class ExecutionManager:
                 protected_files=protected_files,
                 created_at=now,
                 expires_at=now + self.ttl_seconds,
+                run_id=allocated_run_id,
             )
         return token
 
@@ -115,7 +187,7 @@ class ExecutionManager:
             # Consumption and capacity acquisition occur before Popen. A failed
             # spawn deliberately requires a fresh plan rather than enabling replay.
             plan.consumed = True
-            run_id = generate_run_id()
+            run_id = plan.run_id or generate_run_id()
             self._active_run_id = run_id
 
         log_path = self._log_path(run_id)
