@@ -427,7 +427,9 @@ class StreamingSetupMixin:
         is merely slow.
         """
         from soup_cli.utils.layer_stream import (
+            LOGITS_BYTES_PER_ELEMENT,
             accumulation_advice,
+            calibrated_logits_bytes_per_element,
             decide_stream_fit,
             estimate_logits_bytes,
             estimate_stream_peak_vram,
@@ -459,6 +461,9 @@ class StreamingSetupMixin:
             )
             return ()
 
+        # calibrated_logits_bytes_per_element() is floored at LOGITS_BYTES_PER_ELEMENT,
+        # so forwarding it here can only raise the budget, never lower it (issue #348).
+        calibrated = calibrated_logits_bytes_per_element()
         predicted = estimate_stream_peak_vram(
             layer_bytes=layer_bytes,
             buffers=tcfg.stream_buffers,
@@ -470,8 +475,11 @@ class StreamingSetupMixin:
             n_layers=index.n_layers,
             seq_len=seq_len,
             batch_size=rows,
+            logits_bytes_per_element=calibrated,
         )
-        logits = estimate_logits_bytes(vocab_size=vocab, seq_len=seq_len, batch_size=rows)
+        logits = estimate_logits_bytes(
+            vocab_size=vocab, seq_len=seq_len, batch_size=rows, bytes_per_element=calibrated
+        )
         paired = (
             "" if rows == batch else f" ({rows} rows — chosen+rejected are one concatenated tensor)"
         )
@@ -479,6 +487,11 @@ class StreamingSetupMixin:
             f"  peak VRAM    ~{predicted / 1e9:.2f} GB at batch {batch} x seq "
             f"{seq_len}{paired} (logits {logits / 1e9:.2f} GB)"
         ]
+        if calibrated > LOGITS_BYTES_PER_ELEMENT:
+            lines.append(
+                f"  logits       calibrated {calibrated:.3f} B/element on this stack, "
+                f"above the shipped {LOGITS_BYTES_PER_ELEMENT:.0f}: budget raised to match"
+            )
 
         if not on_cuda:
             return tuple(lines)

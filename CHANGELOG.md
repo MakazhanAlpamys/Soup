@@ -14,6 +14,15 @@ reproducing 70+ versions of notes.
 
 ### Fixed
 
+- **Layer streaming's VRAM pre-flight now actually calls its own calibration hook (#348).**
+  `calibrated_logits_bytes_per_element()` exists to raise the budget when a stack's loss
+  path measures a heavier retention than the shipped constant assumes, guarding against a
+  future stack silently under-budgeting by 12.5% with nothing to catch it. `_stream_budget_lines`
+  called `estimate_stream_peak_vram()` without `logits_bytes_per_element=`, so the parameter
+  was always `None` and the calibration never ran outside its own test. It is now forwarded to
+  both the budget and the panel's `logits` figure; the value can only raise the prediction
+  (floored at the shipped constant), and the panel prints an extra line naming both numbers
+  when the calibration measures above it.
 - **MLX backend now actually dispatches to the MLX trainer for `task: sft`.** Previously `backend: mlx` silently fell through to the transformers `SFTTrainerWrapper`, training on MPS/CUDA instead of MLX. The trainer was also rewritten for mlx-lm >= 0.31 (`create_dataset` + `CacheDataset`, `TrainingCallback`), with `model.freeze()` before LoRA — without it the saved "adapter" was a full fine-tune (172 tensors vs 24 LoRA tensors on a 1.2B model) — and an `adapter_config.json` is written so the output dir loads directly with `mlx_lm.load(..., adapter_path=dir)`. (#362)
 - **`mlx-lm` floor raised to >= 0.31.3** (the version the MLX SFT path is built against).
 - **`training.seed` reached the SFT wrapper and nothing else (#353).** #341 added the
