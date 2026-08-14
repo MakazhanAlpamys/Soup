@@ -158,6 +158,7 @@ soup ship ... --task-mode judge_score --judge-model ollama://llama3.1  Leg-1 via
 soup ship ... --general-suite mmlu,gsm8k --baseline base.json  lm-eval leg-2 + recorded base scores
 soup mcp serve                                MCP server over stdio (drive Soup from Claude Code / Cursor / Cline; requires [mcp] extra) (v0.71.28)
 soup mcp serve --allow-mutating               Also expose plan-only train_start / export tools (never execute) (v0.71.28)
+soup mcp serve --allow-execute                Implies --allow-mutating; reserves the future execution gate (still never executes) (v0.71.28)
 soup tui                                      Full-screen Textual dashboard (requires [tui] extra)
 soup train --config soup.yaml --profile       Record torch.profiler trace to <output>/profiles/
 soup --log-level quiet|normal|verbose|debug   Global logging tier (Rich-formatted)
@@ -297,6 +298,10 @@ The server exposes 14 read-only tools — `advise`, `data_inspect`,
 mutating tools (`train_start`, `export`) are gated behind `--allow-mutating`
 (`"args": ["mcp", "serve", "--allow-mutating"]`); even then they only render the
 exact command that would run — they never execute training or export.
+
+`--allow-execute` implies `--allow-mutating` and is threaded through the server
+as a separate future execution gate, but it does not enable execution yet:
+these tools remain plan-only in this release.
 
 **Security:** stdio only (no network listener); every path argument stays under
 the working directory and rejects symlinks; tool output is control-char

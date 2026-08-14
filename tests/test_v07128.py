@@ -333,23 +333,26 @@ _EXPECTED_READONLY = {
 
 class TestBuildRegistry:
     def test_readonly_tools_present(self):
-        names = {s.name for s in reg.build_registry(allow_mutating=False)}
+        names = {
+            spec.name
+            for spec in reg.build_registry(allow_mutating=False, allow_execute=False)
+        }
         assert _EXPECTED_READONLY <= names
 
     def test_names_unique(self):
-        specs = reg.build_registry(allow_mutating=True)
+        specs = reg.build_registry(allow_mutating=True, allow_execute=False)
         names = [s.name for s in specs]
         assert len(names) == len(set(names))
 
     def test_every_schema_is_valid_json_schema(self):
         import jsonschema
 
-        for spec in reg.build_registry(allow_mutating=True):
+        for spec in reg.build_registry(allow_mutating=True, allow_execute=False):
             jsonschema.Draft202012Validator.check_schema(spec.input_schema)
             assert spec.input_schema.get("type") == "object"
 
     def test_every_spec_well_formed(self):
-        for spec in reg.build_registry(allow_mutating=True):
+        for spec in reg.build_registry(allow_mutating=True, allow_execute=False):
             assert spec.name and spec.description
             assert callable(spec.handler)
             assert isinstance(spec.mutating, bool)
@@ -464,14 +467,26 @@ class TestShipEvidenceHandler:
 # ---------------------------------------------------------------------------
 
 
-def _spec(name, *, allow_mutating):
-    return {s.name: s for s in reg.build_registry(allow_mutating=allow_mutating)}[name]
+def _spec(name, *, allow_mutating, allow_execute=False):
+    return {
+        spec.name: spec
+        for spec in reg.build_registry(
+            allow_mutating=allow_mutating,
+            allow_execute=allow_execute,
+        )
+    }[name]
 
 
 class TestMutatingTools:
-    def test_present_and_marked_in_both_registries(self):
-        for allow in (False, True):
-            specs = {s.name: s for s in reg.build_registry(allow_mutating=allow)}
+    def test_present_and_marked_for_each_gate_configuration(self):
+        for allow_mutating, allow_execute in ((False, False), (True, False), (False, True)):
+            specs = {
+                spec.name: spec
+                for spec in reg.build_registry(
+                    allow_mutating=allow_mutating,
+                    allow_execute=allow_execute,
+                )
+            }
             assert "train_start" in specs and "export" in specs
             assert specs["train_start"].mutating is True
             assert specs["export"].mutating is True
@@ -497,6 +512,23 @@ class TestMutatingTools:
         assert out["would_run"].startswith("soup train")
         assert "plan-only" in out["note"]
 
+    def test_allow_execute_implies_plan_only_mutating_tools(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "soup.yaml").write_text(_MIN_CONFIG, encoding="utf-8")
+        out = _spec(
+            "train_start",
+            allow_mutating=False,
+            allow_execute=True,
+        ).handler({"config": "soup.yaml"})
+        assert out["would_run"].startswith("soup train")
+        assert "plan-only" in out["note"]
+
+    def test_execute_refusal_names_flag_and_preserves_no_execution(self):
+        with pytest.raises(reg.McpToolError) as exc:
+            reg._refuse_execute("train_execute")({})
+        assert "allow-execute" in str(exc.value)
+        assert "not implemented" in str(exc.value)
+
     def test_train_start_invalid_config_raises(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         (tmp_path / "bad.yaml").write_text("task: sft\n", encoding="utf-8")  # missing base
@@ -520,8 +552,8 @@ class TestMutatingTools:
             )
 
     def test_registry_count_is_16_with_mutating(self):
-        assert len(reg.build_registry(allow_mutating=True)) == 16
-        assert len(reg.build_registry(allow_mutating=False)) == 16
+        assert len(reg.build_registry(allow_mutating=True, allow_execute=False)) == 16
+        assert len(reg.build_registry(allow_mutating=False, allow_execute=False)) == 16
 
 
 # ---------------------------------------------------------------------------
@@ -560,7 +592,7 @@ class TestServerRoundTrip:
         from soup_cli.mcp_server.registry import build_registry
         from soup_cli.mcp_server.server import build_server
 
-        server = build_server(build_registry(allow_mutating=True))
+        server = build_server(build_registry(allow_mutating=True, allow_execute=False))
 
         async def _go():
             async with create_connected_server_and_client_session(server) as client:
@@ -578,7 +610,7 @@ class TestServerRoundTrip:
         from soup_cli.mcp_server.registry import build_registry
         from soup_cli.mcp_server.server import build_server
 
-        server = build_server(build_registry(allow_mutating=False))
+        server = build_server(build_registry(allow_mutating=False, allow_execute=False))
         res = _roundtrip(server, "recipes_search", {"query": "qwen"})
         assert res.isError is False
         payload = json.loads(res.content[0].text)
@@ -588,7 +620,7 @@ class TestServerRoundTrip:
         from soup_cli.mcp_server.registry import build_registry
         from soup_cli.mcp_server.server import build_server
 
-        server = build_server(build_registry(allow_mutating=False))
+        server = build_server(build_registry(allow_mutating=False, allow_execute=False))
         res = _roundtrip(server, "no_such_tool", {})
         assert res.isError is True
 
@@ -598,7 +630,7 @@ class TestServerRoundTrip:
 
         monkeypatch.chdir(tmp_path)
         (tmp_path / "soup.yaml").write_text(_MIN_CONFIG, encoding="utf-8")
-        server = build_server(build_registry(allow_mutating=False))
+        server = build_server(build_registry(allow_mutating=False, allow_execute=False))
         res = _roundtrip(server, "train_start", {"config": "soup.yaml"})
         assert res.isError is True
 
@@ -607,7 +639,7 @@ class TestServerRoundTrip:
         from soup_cli.mcp_server.server import build_server
 
         monkeypatch.chdir(tmp_path)
-        server = build_server(build_registry(allow_mutating=False))
+        server = build_server(build_registry(allow_mutating=False, allow_execute=False))
         res = _roundtrip(server, "data_inspect", {"data": "does-not-exist.jsonl"})
         assert res.isError is True
 
@@ -718,6 +750,7 @@ class TestMcpCli:
         r = CliRunner().invoke(app, ["mcp", "serve", "--help"], env={"COLUMNS": "200"})
         assert r.exit_code == 0, (r.output, repr(r.exception))
         assert "mutating" in _strip_ansi(r.output).lower()
+        assert "allow-execute" in _strip_ansi(r.output)
 
     def test_missing_sdk_exits_friendly(self, monkeypatch):
         import sys
@@ -920,19 +953,24 @@ class TestExportOutputArg:
 
 
 class TestServePlumbing:
-    def test_allow_mutating_flag_reaches_runner(self, monkeypatch):
-        pytest.importorskip("mcp")
+    def test_allow_flags_reach_runner(self, monkeypatch):
+        import sys
+        from types import ModuleType
+
         from typer.testing import CliRunner
 
-        import soup_cli.mcp_server.server as srv
         from soup_cli.cli import app
 
         calls = []
-        monkeypatch.setattr(
-            srv, "run_stdio_server", lambda *, allow_mutating: calls.append(allow_mutating)
+        fake_server = ModuleType("soup_cli.mcp_server.server")
+        fake_server.run_stdio_server = (
+            lambda *, allow_mutating, allow_execute: calls.append((allow_mutating, allow_execute))
         )
+        monkeypatch.setitem(sys.modules, "soup_cli.mcp_server.server", fake_server)
         r1 = CliRunner().invoke(app, ["mcp", "serve"])
         r2 = CliRunner().invoke(app, ["mcp", "serve", "--allow-mutating"])
+        r3 = CliRunner().invoke(app, ["mcp", "serve", "--allow-execute"])
         assert r1.exit_code == 0, (r1.output, repr(r1.exception))
         assert r2.exit_code == 0, (r2.output, repr(r2.exception))
-        assert calls == [False, True]
+        assert r3.exit_code == 0, (r3.output, repr(r3.exception))
+        assert calls == [(False, False), (True, False), (True, True)]

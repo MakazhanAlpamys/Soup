@@ -71,9 +71,11 @@ def build_server(specs: List[ToolSpec]) -> Server:
     return server
 
 
-def run_stdio_server(*, allow_mutating: bool) -> None:
+def run_stdio_server(*, allow_mutating: bool, allow_execute: bool) -> None:
     """Run the MCP server over stdio until the client disconnects."""
-    server = build_server(build_registry(allow_mutating=allow_mutating))
+    server = build_server(
+        build_registry(allow_mutating=allow_mutating, allow_execute=allow_execute)
+    )
 
     async def _main() -> None:
         async with stdio_server() as (read_stream, write_stream):

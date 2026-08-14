@@ -859,7 +859,20 @@ def _refuse_mutating(name: str) -> Callable[[dict], dict]:
     return _handler
 
 
-def _mutating_specs(*, allow_mutating: bool) -> list[ToolSpec]:
+def _refuse_execute(name: str) -> Callable[[dict], dict]:
+    """Handler used for an execution tool when ``--allow-execute`` is off."""
+
+    def _handler(args: dict) -> dict:
+        raise McpToolError(
+            f"'{name}' can execute commands and is disabled; restart with "
+            "'soup mcp serve --allow-execute' to enable. Execution tools are "
+            "not implemented in this version."
+        )
+
+    return _handler
+
+
+def _mutating_specs(*, allow_mutating: bool, allow_execute: bool) -> list[ToolSpec]:
     """The plan-only mutating tools.
 
     Always LISTED (so clients can discover them), but their handler refuses
@@ -914,11 +927,16 @@ def _mutating_specs(*, allow_mutating: bool) -> list[ToolSpec]:
     ]
 
 
-def build_registry(*, allow_mutating: bool) -> list[ToolSpec]:
+def build_registry(*, allow_mutating: bool, allow_execute: bool) -> list[ToolSpec]:
     """Assemble the MCP tool table.
 
     The read-only tools are always present and executable. The mutating tools
     are always listed but refuse unless ``allow_mutating`` is set (and are
-    plan-only even then).
+    plan-only even then). ``allow_execute`` is retained separately for future
+    execution tools, and implies ``allow_mutating`` for the existing tools.
     """
-    return _readonly_specs() + _mutating_specs(allow_mutating=allow_mutating)
+    allow_mutating = allow_mutating or allow_execute
+    return _readonly_specs() + _mutating_specs(
+        allow_mutating=allow_mutating,
+        allow_execute=allow_execute,
+    )
