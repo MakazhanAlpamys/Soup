@@ -20,6 +20,7 @@ import logging
 import math
 import os
 import sys
+import time
 from dataclasses import dataclass
 from typing import Any, Dict, FrozenSet, Iterator, Mapping, Optional, Tuple, Union
 
@@ -959,6 +960,155 @@ def measure_gemm_tflops(
     if best <= 0:
         return None
     return GemmCeiling(tflops=best, sm_clock_mhz=sm_clock_mhz(), size=size)
+
+
+@dataclass(frozen=True)
+class StepPeak:
+    """Peak VRAM of ONE real forward+backward, measured on THIS model and shape.
+
+    Three outcomes, deliberately not two. ``oom`` is a measurement RESULT ("this
+    shape does not fit"). ``failed`` means the probe ran a real CUDA op and that
+    op raised — the fit is unknown AND the context may no longer be usable, so
+    proceeding is not safe merely because the formula was happy. A ``None``
+    return from :func:`measure_step_peak_bytes` is the third: the probe was never
+    attempted (no CUDA, no torch), nothing was touched, and falling back to the
+    prediction is correct. Collapsing ``failed`` into ``None`` would let a run
+    continue past a broken CUDA context on the strength of arithmetic.
+    """
+
+    peak_bytes: int
+    reserved_bytes: int
+    seconds: float
+    rows: int
+    seq_len: int
+    oom: bool = False
+    failed: bool = False
+    error: Optional[str] = None
+
+
+def measure_step_peak_bytes(
+    model: Any,
+    *,
+    rows: int,
+    seq_len: int,
+    vocab_size: int,
+    device: str = "cuda",
+) -> Optional[StepPeak]:
+    """Run one forward+backward at the configured shape and read the real peak.
+
+    This is the #349 instrument. The pre-flight's formula is fitted and, measured
+    here, under-predicts past seq 4096 (0.830x at seq 5120) — a formula cannot
+    model a term nobody has identified, so past that point only a measurement is
+    honest. Synthetic ``input_ids`` are used rather than a real batch because the
+    quantity being bounded is the CONFIGURED shape, which is the worst case any
+    real batch can pad up to; a real batch would measure whatever length it
+    happened to have. Validated against a full ``soup train`` run of the same
+    config: probe 4.3117 GB reserved vs the real run's 4.3159 GB, 0.1% apart.
+
+    Costs one step. Measured on an RTX 3050 Laptop: 1.02-1.15 s for
+    SmolLM2-135M at 1x1024, 5.09 s at 2x2048, and 5.33 s for Llama-3.1-8B NF4 at
+    1x512 — against a training run of minutes to hours.
+
+    Returns ``None`` off CUDA or when the probe itself breaks, rather than
+    raising: a pre-flight that dies because its own instrument failed is worse
+    than one that falls back to the shipped prediction. That is the same contract
+    :func:`~soup_cli.utils.layer_stream.measure_logits_loss_bytes_per_element`
+    already keeps.
+    """
+    if not str(device).startswith("cuda"):
+        return None
+    try:
+        import torch
+    except ImportError:  # pragma: no cover - torch is a [train] extra
+        return None
+    if not torch.cuda.is_available():
+        return None
+    if rows < 1 or seq_len < 1 or vocab_size < 1:
+        raise ValueError(
+            f"rows/seq_len/vocab_size must all be >= 1; got "
+            f"{rows}/{seq_len}/{vocab_size}"
+        )
+    ids = None
+    out = None
+    # Bound before the try: `synchronize()` and `reset_peak_memory_stats()` can
+    # both surface an earlier async CUDA error as an OOM, and the OOM handler
+    # reads `started`. Assigning it inside the try would turn that into an
+    # UnboundLocalError escaping setup() instead of the clean refusal below.
+    started = time.perf_counter()
+    try:  # pragma: no cover - exercised only where torch + CUDA exist
+        torch.cuda.synchronize()
+        torch.cuda.reset_peak_memory_stats(device)
+        started = time.perf_counter()
+        ids = torch.randint(0, vocab_size, (rows, seq_len), device=device)
+        out = model(input_ids=ids, labels=ids)
+        out.loss.backward()
+        torch.cuda.synchronize()
+        elapsed = time.perf_counter() - started
+        peak = int(torch.cuda.max_memory_allocated(device))
+        reserved = int(torch.cuda.max_memory_reserved(device))
+    except torch.cuda.OutOfMemoryError:  # pragma: no cover - needs a real OOM
+        # A result, not a failure: the shape provably does not fit. Linux raises
+        # here; Windows/WDDM spills to host memory instead and reaches the
+        # success path with a peak above free VRAM, which the caller refuses just
+        # the same.
+        return StepPeak(
+            peak_bytes=0,
+            reserved_bytes=0,
+            seconds=time.perf_counter() - started,
+            rows=rows,
+            seq_len=seq_len,
+            oom=True,
+        )
+    except Exception as exc:  # pragma: no cover - a real CUDA op raised
+        # NOT `return None`. None means "never attempted"; this op ran and broke,
+        # which can leave the CUDA context poisoned (an illegal access or device
+        # assert surfaces exactly here). Reporting that as "cannot tell" would
+        # let the caller proceed on the prediction alone, into a context that may
+        # no longer work.
+        logger.warning("stream VRAM probe raised during the step: %r", exc)
+        return StepPeak(
+            peak_bytes=0,
+            reserved_bytes=0,
+            seconds=time.perf_counter() - started,
+            rows=rows,
+            seq_len=seq_len,
+            failed=True,
+            error=type(exc).__name__,
+        )
+    finally:  # pragma: no cover - exercised only where torch + CUDA exist
+        del ids, out
+        _zero_probe_grads(model)
+        torch.cuda.empty_cache()
+    return StepPeak(
+        peak_bytes=peak,
+        reserved_bytes=reserved,
+        seconds=elapsed,
+        rows=rows,
+        seq_len=seq_len,
+    )
+
+
+def _zero_probe_grads(model: Any) -> None:
+    """Drop the gradients the probe's backward left on the adapter.
+
+    Without this the first real optimizer step would apply a gradient computed
+    from random token ids — training on noise for one step, silently, and only
+    when the probe is enabled.
+
+    A failure here is never re-raised (it would mask the measurement the caller
+    came for) but it is never silent either: swallowing it would leave exactly
+    the corruption this function exists to prevent, with nothing to find it by.
+    """
+    try:
+        for param in model.parameters():
+            if param.grad is not None:
+                param.grad = None
+    except Exception as exc:  # pragma: no cover - never let cleanup mask the result
+        logger.warning(
+            "could not clear the VRAM probe's gradients (%r); the first "
+            "optimizer step may include a gradient computed from random tokens",
+            exc,
+        )
 
 
 def expandable_segments_status() -> tuple[bool, str]:

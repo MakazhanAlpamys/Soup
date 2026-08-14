@@ -34,6 +34,10 @@ class _Lora:
 class _TrainConfig:
     batch_size = 1
     stream_buffers = 2
+    # v0.73.1 (#349): `_stream_budget_lines` reads this on every path, including
+    # the `on_cuda=False` one this file exercises. Left off, so this file keeps
+    # asserting the #348 calibration wiring and nothing else.
+    stream_vram_probe = False
     lora = _Lora()
 
 
@@ -49,8 +53,15 @@ def _budget_lines():
     """``on_cuda=False`` exercises the panel without needing a GPU: the fit
     decision is skipped, but the calibrated budget and its display line are
     built either way (a CPU dry run reports the same peak VRAM figure a CUDA
-    run would refuse or accept against)."""
-    return StreamingSetupMixin()._stream_budget_lines(
+    run would refuse or accept against).
+
+    v0.73.1 (#349): ``_stream_budget_lines`` now returns ``(lines, probe_plan)``.
+    Only the lines are this file's subject, so the plan is dropped HERE rather
+    than at every call site — indexing ``[0]`` at the call sites would silently
+    start meaning "the whole lines tuple" instead of "the first line" and the
+    assertions would go on passing against the wrong object.
+    """
+    lines, _probe_plan = StreamingSetupMixin()._stream_budget_lines(
         _Config(),
         _TrainConfig(),
         model_config=_ModelConfig(),
@@ -59,6 +70,7 @@ def _budget_lines():
         index=_Index(),
         on_cuda=False,
     )
+    return lines
 
 
 def _peak_gb(line: str) -> str:

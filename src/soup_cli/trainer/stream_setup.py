@@ -22,10 +22,36 @@ NO top-level torch: this module is imported by five trainer modules.
 import contextlib
 import math
 import os
+from dataclasses import dataclass
 
 from rich.console import Console
 
 console = Console()
+
+
+#: How far over the predicted budget `training.stream_vram_probe` may still
+#: defer to a measurement. The formula's worst measured error is 0.787x (21%
+#: under, seq 6144), so anything beyond a small multiple is not the formula
+#: being wrong — it is the config being too big, and that is refusable by
+#: arithmetic without touching the GPU.
+_PROBE_DEFERRAL_CEILING = 4.0
+
+
+@dataclass(frozen=True)
+class _ProbePlan:
+    """What the post-build measured probe (#349) needs from the pre-flight.
+
+    Carried forward rather than recomputed so the shape the probe measures and
+    the shape the formula budgeted are the same by construction — two
+    independent derivations of ``rows`` would be free to drift, and the whole
+    point is to compare the two numbers against each other.
+    """
+
+    rows: int
+    seq_len: int
+    vocab_size: int
+    predicted_bytes: int
+    available_bytes: int
 
 
 def _distributed_launch() -> bool:
@@ -323,7 +349,7 @@ class StreamingSetupMixin:
         # seq. On a large-vocab model the logits term alone dwarfs the buffer
         # pool (measured: 146x at batch 8), so a plan that reports only tier and
         # buffer sizes will happily green-light a config that cannot run.
-        forecast_lines = self._stream_budget_lines(
+        forecast_lines, probe_plan = self._stream_budget_lines(
             cfg,
             tcfg,
             model_config=model_config,
@@ -375,6 +401,8 @@ class StreamingSetupMixin:
         )
         self.model = model
         self._stream_runtime = runtime
+        if probe_plan is not None:
+            self._run_stream_vram_probe(model, probe_plan)
         stats = runtime.stats()
         if stats["tier"] == TIER_RAM:
             source_line = (
@@ -420,11 +448,15 @@ class StreamingSetupMixin:
     ):
         """Predict peak VRAM + bracket throughput, and REFUSE a run that cannot fit.
 
-        Returns the extra lines for the pre-flight panel. Raises when the step is
-        predicted not to fit: on Linux that would be a hard OOM, and on Windows
-        something worse — WDDM spills to host memory without raising, so the run
-        silently becomes an order of magnitude slower and looks like the feature
-        is merely slow.
+        Returns ``(panel_lines, probe_plan)``, where ``probe_plan`` is ``None``
+        unless ``training.stream_vram_probe`` asked for the measured gate (#349).
+
+        Raises when the step is predicted not to fit: on Linux that would be a
+        hard OOM, and on Windows something worse — WDDM spills to host memory
+        without raising, so the run silently becomes an order of magnitude
+        slower and looks like the feature is merely slow. Under the probe the
+        prediction is demoted to advice instead, because refusing here would
+        prevent the measurement that exists to overrule it.
         """
         from soup_cli.utils.layer_stream import (
             LOGITS_BYTES_PER_ELEMENT,
@@ -459,7 +491,9 @@ class StreamingSetupMixin:
                 "be predicted — the pre-flight fit check is SKIPPED for this "
                 "run.[/]"
             )
-            return ()
+            # No shape to probe either: the probe needs vocab_size to build the
+            # synthetic batch, which is one of the fields that could not be read.
+            return (), None
 
         # calibrated_logits_bytes_per_element() is floored at LOGITS_BYTES_PER_ELEMENT,
         # so forwarding it here can only raise the budget, never lower it (issue #348).
@@ -494,7 +528,16 @@ class StreamingSetupMixin:
             )
 
         if not on_cuda:
-            return tuple(lines)
+            # Nothing to measure against: the probe reads CUDA peak counters.
+            # Say so rather than no-opping, mirroring the unreadable-config skip
+            # above — a silently inactive gate reads exactly like an active one.
+            if tcfg.stream_vram_probe:
+                console.print(
+                    "[yellow]training.stream_vram_probe is set but this run is "
+                    "not on CUDA, so there is no peak to measure — the pre-flight "
+                    "falls back to the predicted budget.[/]"
+                )
+            return tuple(lines), None
 
         import torch
 
@@ -504,7 +547,32 @@ class StreamingSetupMixin:
         )
         fit = decide_stream_fit(predicted_bytes=predicted, available_bytes=available)
         if not fit.fits:
-            raise ValueError(fit.reason)
+            if not tcfg.stream_vram_probe:
+                raise ValueError(fit.reason)
+            if predicted > available * _PROBE_DEFERRAL_CEILING:
+                # The probe exists to settle a DISAGREEMENT, and the largest
+                # disagreement ever measured is 21% (formula 0.787x the real peak
+                # at seq 6144). A config predicted several times over budget is
+                # not a disagreement, and deferring it would trade a free
+                # arithmetic refusal for minutes of sharding plus a real
+                # allocation attempt at that shape — driven by a soup.yaml whose
+                # author need not be whoever runs it.
+                raise ValueError(
+                    f"{fit.reason} training.stream_vram_probe cannot overrule a "
+                    f"prediction this far over budget "
+                    f"({predicted / available:.1f}x): the probe corrects a "
+                    f"margin, not an order of magnitude."
+                )
+            # #349 — with the probe on, the formula is advisory: refusing here
+            # would stop the measurement that exists to overrule it from ever
+            # being taken. Say so rather than passing silently, because the
+            # build about to happen is minutes of work that may still be refused.
+            console.print(
+                f"[yellow]Predicted over budget "
+                f"({predicted / 1e9:.2f} GB vs {available / 1e9:.2f} GB free), but "
+                f"training.stream_vram_probe is on: measuring the real peak "
+                f"before deciding.[/]"
+            )
         if tcfg.stream_vram_override is None:
             lines.append(f"  free VRAM    {available / 1e9:.2f} GB")
         else:
@@ -538,4 +606,98 @@ class StreamingSetupMixin:
         advice = accumulation_advice(batch_size=batch, accum=tcfg.gradient_accumulation_steps)
         if advice is not None:
             lines.append(f"  [yellow]![/] {advice}")
-        return tuple(lines)
+        plan = None
+        if tcfg.stream_vram_probe:
+            plan = _ProbePlan(
+                rows=rows,
+                seq_len=seq_len,
+                vocab_size=vocab,
+                predicted_bytes=predicted,
+                available_bytes=available,
+            )
+        return tuple(lines), plan
+
+    def _run_stream_vram_probe(self, model, plan: _ProbePlan) -> None:
+        """Measure one real step and let THAT decide, not the formula (#349).
+
+        Raises when the measured peak does not fit. The streaming runtime is
+        released first: it holds the pinned RAM store, and `setup()` raising is
+        outside the ExitStack that `_training_context` installs around training.
+        """
+        from soup_cli.utils.layer_stream import decide_measured_fit
+        from soup_cli.utils.layer_stream_runtime import measure_step_peak_bytes
+
+        try:
+            peak = measure_step_peak_bytes(
+                model,
+                rows=plan.rows,
+                seq_len=plan.seq_len,
+                vocab_size=plan.vocab_size,
+                device=str(self.device),
+            )
+        except Exception:
+            # measure_step_peak_bytes validates its own arguments and raises
+            # before its internal handler exists. Unreachable today (the plan is
+            # only built from a validated shape), but the docstring promises the
+            # runtime is released before anything propagates, and a promise that
+            # holds only for the paths written so far is the kind that breaks
+            # when a second caller appears.
+            self._close_stream_runtime()
+            raise
+        if peak is None:
+            # Instrument failure, not a verdict. Fall back to the formula so the
+            # run is never left with no gate at all — but if the formula had
+            # already refused, honour that refusal rather than proceeding on
+            # the strength of a probe that did not happen.
+            console.print(
+                "[yellow]The measured VRAM probe could not run; falling back to "
+                "the predicted budget.[/]"
+            )
+            if plan.predicted_bytes > plan.available_bytes:
+                self._close_stream_runtime()
+                raise ValueError(
+                    f"a streaming step is predicted to need "
+                    f"{plan.predicted_bytes / 1e9:.2f} GB of VRAM but only "
+                    f"{plan.available_bytes / 1e9:.2f} GB is free, and the "
+                    f"measured probe that could have overruled that prediction "
+                    f"failed to run. Lower training.batch_size or "
+                    f"data.max_length."
+                )
+            return
+        if peak.failed:
+            # The probe ran a real CUDA op and it raised. The fit is unknown and
+            # the context may be unusable, so this refuses rather than falling
+            # back to the prediction: "the arithmetic was happy" is not a reason
+            # to keep driving a device that just failed.
+            self._close_stream_runtime()
+            raise ValueError(
+                f"the measured VRAM probe raised {peak.error} while running one "
+                f"step at batch {plan.rows} x seq {plan.seq_len}. The fit could "
+                f"not be established and the CUDA context may no longer be "
+                f"usable, so this run is refused rather than continued on the "
+                f"predicted budget ({plan.predicted_bytes / 1e9:.2f} GB). Re-run "
+                f"without training.stream_vram_probe to use the prediction."
+            )
+        if peak.oom:
+            self._close_stream_runtime()
+            raise ValueError(
+                f"a streaming step at batch {plan.rows} x seq {plan.seq_len} ran "
+                f"out of VRAM while being measured (predicted "
+                f"{plan.predicted_bytes / 1e9:.2f} GB, "
+                f"{plan.available_bytes / 1e9:.2f} GB free). Lower "
+                f"training.batch_size or data.max_length."
+            )
+        fit = decide_measured_fit(
+            measured_bytes=peak.peak_bytes,
+            predicted_bytes=plan.predicted_bytes,
+            available_bytes=plan.available_bytes,
+        )
+        console.print(
+            f"[dim]measured peak {peak.peak_bytes / 1e9:.2f} GB "
+            f"({peak.reserved_bytes / 1e9:.2f} GB reserved) in "
+            f"{peak.seconds:.2f} s at batch {plan.rows} x seq {plan.seq_len}; "
+            f"predicted {plan.predicted_bytes / 1e9:.2f} GB[/]"
+        )
+        if not fit.fits:
+            self._close_stream_runtime()
+            raise ValueError(fit.reason)

@@ -769,12 +769,19 @@ def estimate_stream_peak_vram(
 
 @dataclass(frozen=True)
 class VramFit:
-    """Whether a streaming step is predicted to fit in the VRAM actually free."""
+    """Whether a streaming step is predicted to fit in the VRAM actually free.
+
+    ``measured_bytes`` is ``None`` for a decision taken from the prediction alone
+    and carries the real peak once :func:`decide_measured_fit` has run, so a
+    caller can print both numbers and let a divergence be seen rather than
+    silently replacing one with the other.
+    """
 
     fits: bool
     predicted_bytes: int
     available_bytes: int
     reason: str
+    measured_bytes: Optional[int] = None
 
 
 def decide_stream_fit(*, predicted_bytes: int, available_bytes: int) -> VramFit:
@@ -807,6 +814,59 @@ def decide_stream_fit(*, predicted_bytes: int, available_bytes: int) -> VramFit:
             f"WEIGHTS, not the activations or the logits — lower "
             f"training.batch_size or data.max_length, both of which scale this "
             f"linearly."
+        ),
+    )
+
+
+def decide_measured_fit(
+    *, measured_bytes: int, predicted_bytes: int, available_bytes: int
+) -> VramFit:
+    """Decide the fit on the REAL peak of one step, with the prediction beside it.
+
+    :func:`decide_stream_fit` compares a formula against free VRAM, and the
+    formula's documented contract is that it never under-predicts. Measured on an
+    RTX 3050 Laptop against SmolLM2-135M streamed in bf16, that holds to seq 3072
+    (prediction 1.6%-2.9% high) and then fails: at seq 4096 the prediction is
+    0.992x the real peak and at seq 5120 it is 0.830x, i.e. it under-predicts by
+    17% on a shape a user can reach by editing one line of YAML. Three repeats at
+    4096 returned a bit-identical peak, so it is deterministic. The mechanism is
+    NOT established — an attention ``seq**2`` term is the obvious candidate and
+    does not fit the numbers — which is exactly why this takes a measurement
+    rather than another coefficient: a formula cannot model a term nobody has
+    identified.
+
+    ``measured_bytes`` is ``torch.cuda.max_memory_allocated``, deliberately not
+    ``max_memory_reserved``. Reserved runs 1.08x-1.41x allocated here and
+    overshoots what has to fit, because the caching allocator keeps freed blocks
+    and hands them back under pressure: the flagship Llama-3.1-8B NF4
+    configuration reserved 3.70 GB against 3.45 GB free and runs, with
+    ``num_alloc_retries`` at 0 on every shape measured. Gating on reserved would
+    refuse the headline config of the feature it protects.
+    """
+    if measured_bytes <= available_bytes:
+        return VramFit(
+            fits=True,
+            predicted_bytes=predicted_bytes,
+            available_bytes=available_bytes,
+            measured_bytes=measured_bytes,
+            reason=(
+                f"measured peak {measured_bytes / 1e9:.2f} GB fits in "
+                f"{available_bytes / 1e9:.2f} GB of free VRAM "
+                f"(predicted {predicted_bytes / 1e9:.2f} GB)"
+            ),
+        )
+    return VramFit(
+        fits=False,
+        predicted_bytes=predicted_bytes,
+        available_bytes=available_bytes,
+        measured_bytes=measured_bytes,
+        reason=(
+            f"a streaming step MEASURED {measured_bytes / 1e9:.2f} GB of VRAM at "
+            f"the configured shape but only {available_bytes / 1e9:.2f} GB is "
+            f"free (the formula predicted {predicted_bytes / 1e9:.2f} GB). "
+            f"Streaming bounds the WEIGHTS, not the activations or the logits — "
+            f"lower training.batch_size or data.max_length, both of which scale "
+            f"this. This run was measured, not estimated: it does not fit."
         ),
     )
 

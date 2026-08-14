@@ -150,7 +150,21 @@ class TestPeakVramReproducesTheMeasuredGrid:
     @pytest.mark.parametrize("row", MEASURED_VRAM_GRID, ids=lambda r: r["label"])
     def test_never_under_predicts(self, row):
         """The only safe direction for a gate that refuses configs. An estimator
-        that is accurate on average but sometimes low still OOMs users."""
+        that is accurate on average but sometimes low still OOMs users.
+
+        SCOPE, narrowed in v0.73.1 (#349): every row of this grid is at seq 256
+        or 512. The grid varies BATCH (1..8), so this pins "never under-predicts
+        as batch grows" and nothing about sequence length — a control only covers
+        the variable it varies. Measured later on the same box, the property
+        fails as seq grows: 0.992x the real peak at seq 4096 and 0.830x at 5120,
+        deterministically. Read this as a bound on the regime below, not as the
+        global guarantee the phrase suggests; `training.stream_vram_probe`
+        exists because no fitted formula can carry that guarantee everywhere.
+        """
+        assert row["seq"] <= 512, (
+            "this grid's evidence is seq<=512; a longer row added here would "
+            "silently widen a claim the measurements do not support (#349)"
+        )
         assert _predict(row) >= row["peak"], row["label"]
 
     def test_logits_term_dominates_at_large_batch(self):
@@ -993,6 +1007,71 @@ class TestAutoTierFallback:
             extra_training_yaml="  stream_vram_override: 16000000000\n",
         )
         assert wrapper._stream_runtime is not None
+
+    @requires_cuda
+    def test_the_measured_probe_actually_runs_from_setup(self, tmp_path, monkeypatch):
+        """v0.73.1 (#349): `_run_stream_vram_probe` is unit-tested by calling it
+        directly, which proves the method and NOT that anything calls it. This
+        drives the real `_setup_streaming_transformers`, so a probe that were
+        wired up but never invoked would fail here.
+
+        It also pins the shape: the probe must be asked about the SAME rows and
+        seq the formula budgeted, or the two numbers printed side by side are
+        about different runs.
+        """
+        import torch
+
+        seen = {}
+
+        def _fake_probe(model, *, rows, seq_len, vocab_size, device):
+            from soup_cli.utils.layer_stream_runtime import StepPeak
+
+            seen.update(rows=rows, seq_len=seq_len, vocab_size=vocab_size)
+            return StepPeak(
+                peak_bytes=1_000, reserved_bytes=1_000, seconds=0.01,
+                rows=rows, seq_len=seq_len,
+            )
+
+        monkeypatch.setattr(
+            "soup_cli.utils.layer_stream_runtime.measure_step_peak_bytes", _fake_probe
+        )
+        monkeypatch.setattr(
+            torch.cuda, "mem_get_info", lambda *_a, **_k: (4_000_000_000, 4_000_000_000)
+        )
+        wrapper = self._run(
+            tmp_path, monkeypatch, free_ram=10_000_000_000,
+            stream_source="auto", device="cuda",
+            extra_training_yaml="  stream_vram_probe: true\n",
+        )
+        assert seen, "setup() never invoked the measured VRAM probe"
+        assert seen["rows"] == 1, seen
+        assert seen["seq_len"] == wrapper.config.data.max_length, seen
+        assert seen["vocab_size"] > 0, seen
+
+    @requires_cuda
+    def test_a_measured_miss_stops_setup_from_completing(self, tmp_path, monkeypatch):
+        """Control for the test above: it asserts the probe is CALLED, which a
+        wiring that ignored the answer would also satisfy."""
+        import torch
+
+        from soup_cli.utils.layer_stream_runtime import StepPeak
+
+        monkeypatch.setattr(
+            "soup_cli.utils.layer_stream_runtime.measure_step_peak_bytes",
+            lambda *_a, **kw: StepPeak(
+                peak_bytes=9_000_000_000, reserved_bytes=9_000_000_000,
+                seconds=0.01, rows=kw["rows"], seq_len=kw["seq_len"],
+            ),
+        )
+        monkeypatch.setattr(
+            torch.cuda, "mem_get_info", lambda *_a, **_k: (4_000_000_000, 4_000_000_000)
+        )
+        with pytest.raises(ValueError, match="MEASURED"):
+            self._run(
+                tmp_path, monkeypatch, free_ram=10_000_000_000,
+                stream_source="auto", device="cuda",
+                extra_training_yaml="  stream_vram_probe: true\n",
+            )
 
     def test_the_fallback_says_the_cost_is_unmeasured(self, tmp_path, monkeypatch):
         """A silent fallback to a slower path is the failure mode this project

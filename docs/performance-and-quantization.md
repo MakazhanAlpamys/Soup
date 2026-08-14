@@ -236,6 +236,7 @@ training:
   stream_source: auto          # 'auto' (same-host RAM), 'ram', 'disk' (v0.72.3)
   stream_buffers: 2            # Double-buffering; range [2, 8]
   # stream_vram_override: 4_000_000_000   # Bytes to assume free (v0.73.x); see below
+  # stream_vram_probe: true    # Decide the fit by MEASURING one step (sft only); see below
 ```
 
 ```bash
@@ -351,7 +352,8 @@ prints this advice when it sees you accumulating.
 - `task: kto` with `batch_size: 1` → TRL's KL term is degenerate at batch 1; refused when the config is read rather than minutes later after sharding
 - `lora.use_dora` / `lora.use_vera` / `lora.init_strategy` other than `random` → these initialise from the real base weight, which is on the meta device under streaming
 - `unfrozen_parameters`, `lisa_enabled`, `packing`, `multipack`, `use_fsdp2_compile`, `train_router_only`, `expand_layers` → each independently rewrites or re-freezes the same layers
-- `stream_source` / `stream_buffers` / `stream_vram_override` set while `stream_layers: false` → a footgun, refused
+- `stream_source` / `stream_buffers` / `stream_vram_override` / `stream_vram_probe` set while `stream_layers: false` → a footgun, refused
+- `stream_vram_probe` on any task other than `sft` → the probe runs a plain causal-LM step, which *is* the SFT step but is not a preference loss. Measured at one matching shape it is conservative there too (6.02 GB against a real DPO step's 5.30 GB, +13.5%), but one shape is not a validation, so it is not offered for `dpo`/`orpo`/`simpo`/`kto` yet
 - an architecture outside the supported list (llama / qwen2 / qwen3 / mistral / gemma / gemma2 / gemma3_text / phi / phi3) → named explicitly
 
 **Config example:**
@@ -402,7 +404,8 @@ output: ./output
 - **"layer streaming needs the base to fit in RAM"** — the base is larger than free RAM. Set `stream_source: auto` to fall back to the NVMe disk tier, free RAM, or pick a smaller base.
 - **"could not page-lock the base … falling back to a PAGEABLE RAM store"** — expected on a busy machine. Training continues, more slowly. Close other applications to keep the pinned store.
 - **"layer streaming does not support model_type=…"** — the supported list is llama / qwen2 / qwen3 / mistral / gemma / gemma2 / gemma3_text / phi / phi3. Multimodal `gemma3` is excluded on purpose; use `gemma3_text`.
-- **"predicted peak … exceeds free VRAM" and you believe it is wrong** — the pre-flight deliberately over-predicts, because on Windows an under-prediction does not raise, it silently spills to host memory. Lower `batch_size` or `data.max_length` first. If you have measured your configuration and know it fits, `training.stream_vram_override: <bytes>` **replaces** the figure the check runs against. Raising it past a real limit is an OOM on Linux and a silent spill on Windows, so treat it as a claim you have verified, not a way to skip the check.
+- **"predicted peak … exceeds free VRAM" and you believe it is wrong** — lower `batch_size` or `data.max_length` first. Otherwise there are two escape hatches and they are not interchangeable. `training.stream_vram_probe: true` (`sft` only) **measures** one real forward+backward at your configured shape and decides on that, printing the prediction beside it; it costs one step (1–5 s measured) and it can also refuse a run the formula accepted. `training.stream_vram_override: <bytes>` instead **replaces** the free-VRAM figure the check runs against — that is an assertion you are making, not a measurement, so raising it past a real limit is an OOM on Linux and a silent spill on Windows. Prefer the probe when you want to be told the truth; use the override when you know something the driver cannot report.
+- **The prediction is not equally trustworthy at every sequence length.** Measured on a 4 GB RTX 3050 with SmolLM2-135M streamed in bf16 at batch 1, the formula over-predicts by 8% at seq 4352 (safe) and then **under-predicts — 0.934x the real peak at seq 5120 and 0.787x at 6144**. The grid it was fitted on only ever varied batch size, at seq 256 and 512, so long-context streaming is exactly where it has the least evidence behind it. If you are streaming at multi-thousand-token sequences, turn on `stream_vram_probe`. Record: [`benchmarks/gate-v0.73.1-measured-vram-fit.md`](../benchmarks/gate-v0.73.1-measured-vram-fit.md).
 - **The pre-flight reports the whole card on a capped or shared GPU** — `torch.cuda.mem_get_info()` is a device-level driver query and cannot see `set_per_process_memory_fraction`, a MIG slice, or another process on the same card. Set `training.stream_vram_override` to what your process may actually use; the check then refuses configurations that would exceed *that*, which is also how you rehearse a 4 GB card on a 16 GB one.
 - **Slower than you expected** — layer streaming trades time for memory. If the model already fits resident on your card, do not enable it.
 

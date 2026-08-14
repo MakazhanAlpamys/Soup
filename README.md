@@ -79,44 +79,34 @@ infrastructure instead of improving models. Soup fixes that.
 
 ## What's New
 
-**v0.73.0 — three days on somebody else's hardware.** Every number Soup had ever published
-came from one machine: a 4 GB RTX 3050 laptop running Windows. From 5–9 August it ran on a
-borrowed 8×H100 box. That found real bugs, and it confirmed the headline claim on hardware
-nothing like the one it was made on.
+**v0.73.1 — the free GPU tier, and a formula caught under-predicting.** A patch release
+carrying everything that landed since v0.73.0, headed by a fix that made Soup unusable on
+the cards most people actually have.
 
-- **The laptop result reproduces elsewhere.** Llama-3.1-8B NF4 streamed: 119.6 tok/s in a
-  3.32 GB peak on the RTX 3050, against a **median 113.00 tok/s in the same 3.32 GB** on an
-  H100 — a hundredfold jump in available FLOPs that does not show up in the number, so
-  whatever bounds the step is common to both machines and is not the GPU's compute. We first
-  published that as "bound by host-to-device transfer"; a later probe measured it and
-  [refuted it](benchmarks/probe-v0.73.0-what-bounds-streaming.md) — deleting every
-  host-to-device byte buys 1.4%.
-- **A silent wrong-gradient bug, found and fixed.** On NF4 models above ~165 MiB per layer
-  (32B and up), `bitsandbytes` kept a weight reference where gradient checkpointing could
-  not see it, so the forward stayed exact and the loss curve looked healthy while the
-  *gradients* were wrong. Repaired and gated on real 32B (**256/256 gradient tensors exact**
-  against a control's 8–12/256) and real 72B (**320/320** against 8/320), at −4.8% and
-  −3.7% throughput.
-- **Four backends that had never actually run, now do.** `soup train --gpus N` handed
-  `accelerate` the Python binary and every rank died parsing it as source. DeepSpeed could
-  not train a LoRA model on any stage. SGLang returned 500 on 100% of generations. And
-  `use_fsdp2_compile` wrote adapters that reload as **all zeros** (0 of 96 tensors live).
-- **The vLLM backend now uses your model's chat template**, instead of a hand-rolled
-  `"User:/Assistant:"` string it was never trained on. Same server, same sampling: a run-on
-  loop burning 200 tokens before, an 8-token answer after.
-- **New: `training.seed`** (every run was hardcoded to 42) and **full fine-tuning via
-  `lora.r: 0`** (the code path existed but was unreachable).
-- **A streamed model is as good as a resident one** — paired over five training subsets and
-  judged by Soup's own `soup ship`: mean difference **+0.006** against a **0.013**
-  within-arm spread.
-- **Written up as a preprint** — v2 (10 Aug) carries all of the above; **v3 (13 Aug) retracts one
-  explanation v2 gave** and changes no measured number —
-  [DOI 10.5281/zenodo.21918325](https://doi.org/10.5281/zenodo.21918325), details under
-  [Citing Soup](#citing-soup).
+- **bf16 was assumed on every CUDA card, in fourteen places.** Anything pre-Ampere — T4,
+  P100, V100, GTX 16xx, i.e. the entire free tier on Colab and Kaggle — failed on **every**
+  task, not just streaming. The trap worth knowing: `torch.cuda.is_bf16_supported()`
+  defaults to `including_emulation=True`, so a T4 answers **True** and the first attempt at
+  this fix was a no-op on the exact hardware it was written for.
+- **New: `training.stream_vram_probe`** decides the layer-streaming VRAM check by
+  *measuring* one real step instead of predicting it. Measured on a 4 GB RTX 3050, the
+  prediction formula **under-predicts at long sequence** — 0.934x the real peak at seq 5120
+  and **0.787x at seq 6144** — which is the direction that does not announce itself (an OOM
+  on Linux, a silent spill to host memory on Windows). The grid it was fitted on only ever
+  varied *batch size*, at seq 256 and 512, so it had no evidence there at all.
+- **Under `use_fsdp2_compile`, every `checkpoint-*` still loaded as a dead adapter.** The
+  final save was repaired in v0.73.0; the periodic checkpoints were not, so `--resume` and
+  `load_best_model_at_end` silently continued from a re-zeroed `lora_B`. Measured at 70B:
+  320 canonical keys in the output root, 320 prefixed ones in `checkpoint-100`.
+- **`backend: mlx` never dispatched to the MLX trainer**, and `training.seed` reached the
+  SFT wrapper and nothing else — so a seeded `task: grpo` run trained at 42 and replicates
+  that differed only in their seed were the same run.
+- **Three published claims retracted** where the evidence did not support them, including
+  "bound by host-to-device transfer". No measured number changed.
 
-The full measurement record, published as written including the rejected hypotheses and the
-false positives that controls caught, is
-[`benchmarks/gate-h100-validation.md`](benchmarks/gate-h100-validation.md).
+The measurement record for the VRAM work, published as written — including the **three
+readings withdrawn during it**, two of which briefly looked like the headline result — is
+[`benchmarks/gate-v0.73.1-measured-vram-fit.md`](benchmarks/gate-v0.73.1-measured-vram-fit.md).
 
 ```yaml
 # soup.yaml — then just `soup train --config soup.yaml`

@@ -109,6 +109,7 @@ soup data sample <path> --pct 10             Sample by percentage
 soup data split <path> --val 10 --test 10    Split into train/val/test
 soup data split <path> --val 500 --absolute  Split with absolute counts
 soup data split <path> --val 10 --stratify category  Stratified by field
+soup data split <path> --val 10 --stratify-semantic --num-clusters 5  Semantic stratified split
 soup data search "code instructions"         Search HuggingFace Hub for datasets
 soup data search --sort likes --limit 10     Sort and paginate search results
 soup data preview teknium/OpenHermes-2.5     Preview remote dataset metadata

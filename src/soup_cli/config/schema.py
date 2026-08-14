@@ -905,6 +905,19 @@ class TrainingConfig(BaseModel):
         default="auto",
         description="Batch size. 'auto' = find max that fits in memory.",
     )
+
+    @field_validator("batch_size")
+    @classmethod
+    def _validate_batch_size_positive(cls, v: Any) -> Any:
+        """Reject 0 and negatives, which parsed happily before v0.73.1.
+
+        `Union[int, Literal["auto"]]` carried no lower bound, so `batch_size: -4`
+        loaded and then meant whatever each trainer's arithmetic happened to do
+        with it — including the VRAM pre-flight, which multiplies by it.
+        """
+        if isinstance(v, int) and not isinstance(v, bool) and v < 1:
+            raise ValueError(f"training.batch_size must be >= 1 or 'auto'; got {v}")
+        return v
     auto_batch_size_strategy: Literal["auto", "static", "probe"] = Field(
         default="auto",
         description=(
@@ -3044,6 +3057,25 @@ class TrainingConfig(BaseModel):
             raise ValueError("training.stream_vram_override must be an int (bytes), not bool")
         return v
 
+    stream_vram_probe: bool = Field(
+        default=False,
+        description=(
+            "Decide the layer-streaming VRAM pre-flight on a MEASUREMENT "
+            "instead of the fitted formula. One real forward+backward runs at "
+            "the configured shape after the streamed model is built, and its "
+            "peak decides whether the run proceeds; the prediction is printed "
+            "beside it so a divergence is visible. The formula under-predicts "
+            "past seq 4096 (measured 0.830x the real peak at seq 5120), which "
+            "is the direction that does not announce itself — an OOM on Linux, "
+            "a silent spill to host memory on Windows. Off by default: it costs "
+            "one step (1-5 s measured) and it can refuse a run the formula "
+            "accepts. task='sft' only: the probe runs a plain causal-LM "
+            "forward+backward, which IS the SFT step but is not a preference "
+            "loss, and it under-measures those badly enough to make the gate "
+            "unsafe."
+        ),
+    )
+
     # Sample packing — pack multiple short samples into one sequence
     packing: bool = Field(
         default=False,
@@ -4836,12 +4868,13 @@ class SoupConfig(BaseModel):
                 tcfg.stream_source != "auto"
                 or tcfg.stream_buffers != 2
                 or tcfg.stream_vram_override is not None
+                or tcfg.stream_vram_probe
             ):
                 raise ValueError(
                     "training.stream_source / training.stream_buffers / "
-                    "training.stream_vram_override set but stream_layers is "
-                    "false; set stream_layers=true to stream the base "
-                    "layer-by-layer."
+                    "training.stream_vram_override / training.stream_vram_probe "
+                    "set but stream_layers is false; set stream_layers=true to "
+                    "stream the base layer-by-layer."
                 )
             return self
         # v0.72.4 — the four preference losses join SFT. DPO and KTO take their
@@ -4860,6 +4893,26 @@ class SoupConfig(BaseModel):
             raise ValueError(
                 f"training.stream_layers supports task in "
                 f"{sorted(_STREAM_SUPPORTED_TASKS)}; got task={self.task!r}."
+            )
+        if tcfg.stream_vram_probe and self.task != "sft":
+            # v0.73.1 #349 — the probe runs a plain causal-LM forward+backward,
+            # which IS the SFT step. A preference loss concatenates chosen and
+            # rejected and reduces logits to per-token log-probs, so the probe is
+            # measuring a different computation and its agreement with the real
+            # step is not established. ONE shape was measured (SmolLM2-135M,
+            # batch 2 x seq 2048: probe 6.02 GB against a real DPO step's
+            # 5.30 GB, i.e. +13.5%, the same safe direction it shows for SFT) —
+            # one point is not a validation, and the failure mode if the sign
+            # ever flips is a gate that waves through over-budget runs, which is
+            # worse than no probe. Restricted until it is measured across shapes.
+            raise ValueError(
+                f"training.stream_vram_probe supports task='sft' only; got "
+                f"task={self.task!r}. The probe measures a causal-LM step, which "
+                f"is the SFT step but not a preference loss — its agreement with "
+                f"DPO/ORPO/SimPO/KTO is measured at one shape only, so it is not "
+                f"offered for them yet. Use the predicted budget, or "
+                f"training.stream_vram_override if you have measured this "
+                f"configuration yourself."
             )
         if self.backend != "transformers":
             raise ValueError(

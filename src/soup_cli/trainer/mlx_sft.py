@@ -28,6 +28,51 @@ from soup_cli.config.schema import SoupConfig
 console = Console()
 
 
+#: What `target_modules: auto` means on MLX. peft resolves `auto` per
+#: architecture; mlx-lm has no equivalent, so the streamed-down default is
+#: attention Q/V — the modules `_apply_lora` has always actually trained.
+MLX_DEFAULT_TARGET_KEYS = ["self_attn.q_proj", "self_attn.v_proj"]
+
+
+def resolve_mlx_target_keys(lora_cfg: object) -> list[str]:
+    """THE answer to "which modules does this MLX run train?" (#392).
+
+    Both the trainer and the ``adapter_config.json`` writer must use it. They
+    used to resolve separately — ``_apply_lora`` into a local, the writer not at
+    all — so a default run trained Q/V and then shipped ``{"keys": ["auto"]}``.
+    ``linear_to_lora_layers`` matches nothing against that and
+    ``load_weights(strict=False)`` drops every LoRA tensor in silence, leaving
+    an adapter whose generations are bit-identical to the base model.
+    """
+    raw = getattr(lora_cfg, "target_modules", None)
+    if not raw or raw in (["auto"], "auto"):
+        return list(MLX_DEFAULT_TARGET_KEYS)
+    return list(raw) if isinstance(raw, list) else [raw]
+
+
+def build_mlx_adapter_config(lora_cfg: object, *, adapter_path: str, **extra: object) -> dict:
+    """The ``lora_parameters`` block, keyed off the RESOLVED module list.
+
+    Separate from the writer so a test can assert the file's ``keys`` against
+    :func:`resolve_mlx_target_keys` without running a training loop — the
+    disagreement between those two values is the whole of #392.
+    """
+    rank = int(getattr(lora_cfg, "r", 0))
+    alpha = float(getattr(lora_cfg, "alpha", 0.0))
+    config: dict = {
+        "fine_tune_type": "lora",
+        "adapter_path": adapter_path,
+        "lora_parameters": {
+            "rank": rank,
+            "scale": alpha / max(1.0, float(rank)),
+            "dropout": float(getattr(lora_cfg, "dropout", 0.0) or 0.0),
+            "keys": resolve_mlx_target_keys(lora_cfg),
+        },
+    }
+    config.update(extra)
+    return config
+
+
 class MLXSFTTrainerWrapper:
     """High-level wrapper for MLX supervised fine-tuning."""
 
@@ -105,9 +150,13 @@ class MLXSFTTrainerWrapper:
 
         cfg = self.config
         lora_cfg = cfg.training.lora
-        target_keys = lora_cfg.target_modules
-        if not target_keys or target_keys in (["auto"], "auto"):
-            target_keys = ["self_attn.q_proj", "self_attn.v_proj"]
+        target_keys = resolve_mlx_target_keys(lora_cfg)
+        if target_keys == MLX_DEFAULT_TARGET_KEYS and lora_cfg.target_modules in (
+            None,
+            [],
+            "auto",
+            ["auto"],
+        ):
             console.print(
                 "[yellow]MLX backend: target_modules: auto cannot be resolved for "
                 f"all architectures; defaulting to {target_keys}[/]"
@@ -228,17 +277,10 @@ class MLXSFTTrainerWrapper:
                     "steps_per_save": steps_per_save,
                     "max_seq_length": max_seq_length,
                     "adapter_path": str(output_dir),
-                    "lora_parameters": {
-                        "rank": int(lora_cfg.r),
-                        "scale": float(lora_cfg.alpha)
-                        / max(1.0, float(lora_cfg.r)),
-                        "dropout": float(getattr(lora_cfg, "dropout", 0.0) or 0.0),
-                        "keys": list(
-                            lora_cfg.target_modules
-                            if isinstance(lora_cfg.target_modules, list)
-                            else [lora_cfg.target_modules]
-                        ),
-                    },
+                    # #392: the RESOLVED module list, never the raw `auto`.
+                    "lora_parameters": build_mlx_adapter_config(
+                        lora_cfg, adapter_path=str(output_dir)
+                    )["lora_parameters"],
                     "mask_prompt": False,
                     "grad_checkpoint": False,
                     "grad_accumulation_steps": 1,

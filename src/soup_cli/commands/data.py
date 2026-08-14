@@ -903,6 +903,17 @@ def split_data(
         None, "--stratify",
         help="Field name for stratified splitting (preserves category distribution)",
     ),
+    stratify_semantic: bool = typer.Option(
+        False, "--stratify-semantic",
+        help=(
+            "Use semantic clustering (TF-IDF + K-Means) to perform stratified "
+            "splitting without requiring a category field"
+        ),
+    ),
+    num_clusters: Optional[int] = typer.Option(
+        None, "--num-clusters",
+        help="Number of semantic clusters to use for semantic stratified splitting (default: 5)",
+    ),
 ):
     """Split dataset into train/val/test files."""
     file_path = Path(path)
@@ -920,6 +931,20 @@ def split_data(
     if (val is not None and val < 0) or (test is not None and test < 0):
         console.print("[red]--val and --test must be non-negative.[/]")
         raise typer.Exit(1)
+
+    if stratify and stratify_semantic:
+        console.print("[red]Cannot use --stratify and --stratify-semantic together. Pick one.[/]")
+        raise typer.Exit(1)
+
+    if num_clusters is not None and num_clusters <= 0:
+        console.print("[red]--num-clusters must be a positive integer.[/]")
+        raise typer.Exit(1)
+
+    if not stratify_semantic and num_clusters is not None:
+        console.print(
+            "[yellow]Warning: --num-clusters was passed but --stratify-semantic is not enabled. "
+            "It will have no effect.[/]"
+        )
 
     data = load_raw_data(file_path)
     if not data:
@@ -950,6 +975,12 @@ def split_data(
     if stratify:
         train_data, val_data, test_data = _stratified_split(
             data, val_count, test_count, stratify, seed=seed,
+        )
+    elif stratify_semantic:
+        resolved_clusters = num_clusters or 5
+        labels = _get_semantic_labels(data, resolved_clusters, seed=seed)
+        train_data, val_data, test_data = _stratified_split(
+            data, val_count, test_count, labels, seed=seed,
         )
     else:
         train_data, val_data, test_data = _random_split(
@@ -1007,15 +1038,66 @@ def _random_split(
     return train_data, val_data, test_data
 
 
+def _get_semantic_labels(
+    data: list[dict], num_clusters: int, seed: int | None = None
+) -> list[str]:
+    """Infers semantic category labels using TF-IDF + K-Means."""
+    # Medium: row count limit to prevent OOM / slowness on pathological datasets
+    if len(data) > 50000:
+        console.print(
+            f"[red]Semantic stratified splitting is capped at 50,000 rows. "
+            f"Got {len(data):,} rows.[/]"
+        )
+        raise typer.Exit(1)
+
+    # Extract text representations
+    texts = [
+        " ".join(str(val) for val in row.values() if val) for row in data
+    ]
+
+    try:
+        from sklearn.cluster import MiniBatchKMeans
+        from sklearn.feature_extraction.text import TfidfVectorizer
+    except ImportError:
+        console.print(
+            "[red]Semantic stratified splitting requires scikit-learn.[/]\n"
+            "Install with: [bold]pip install \"soup-cli\\[data]\"[/]"
+        )
+        raise typer.Exit(1)
+
+    try:
+        vectorizer = TfidfVectorizer(max_features=1000, stop_words="english")
+        tfidf_matrix = vectorizer.fit_transform(texts)
+    except ValueError as exc:
+        console.print(
+            f"[red]Semantic stratified splitting failed: {exc}[/]\n"
+            "Check that your dataset contains vectorizable words (not just stop words)."
+        )
+        raise typer.Exit(1)
+
+    actual_clusters = min(num_clusters, len(data))
+    if actual_clusters <= 1:
+        return ["cluster_0"] * len(data)
+
+    kmeans = MiniBatchKMeans(
+        n_clusters=actual_clusters, random_state=seed or 0, n_init=3
+    )
+    labels = kmeans.fit_predict(tfidf_matrix)
+    return [f"cluster_{label}" for label in labels]
+
+
 def _stratified_split(
     data: list, val_count: int, test_count: int,
-    stratify_field: str, seed: int | None = None,
+    stratify_keys: str | list[str], seed: int | None = None,
 ) -> tuple:
     """Stratified split preserving category distribution."""
-    # Group by stratify field
+    # Group by stratify keys
     groups: dict[str, list[int]] = {}
     for idx, row in enumerate(data):
-        key = str(row.get(stratify_field, "unknown"))
+        if isinstance(stratify_keys, list):
+            key = str(stratify_keys[idx])
+        else:
+            key = str(row.get(stratify_keys, "unknown"))
         groups.setdefault(key, []).append(idx)
 
     rng = random.Random(seed)
