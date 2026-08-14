@@ -198,6 +198,9 @@ soup reward stress reward.py --references golds.jsonl  Adversarially probe a ver
 soup reward stress verifiable --verifiable-domain math --references golds.jsonl  Probe a builtin verifier instead of a .py file
 soup reward stress ... --attacks empty,length,repetition,sentinel --sentinel GOLD --threshold 0.5 --max-gameable 0.0  Tune the attack set / accept threshold / tolerance
 soup reward stress ... --output-report r.json  Save the per-attack report JSON (exit 0 robust / 2 gameable / 1 error)
+=======
+soup mcp serve --allow-execute                Implies --allow-mutating; reserves the future execution gate (still never executes) (v0.71.28)
+>>>>>>> 815a46a (feat(mcp): add allow-execute gate)
 soup tui                                      Full-screen Textual dashboard (requires [tui] extra)
 soup train --config soup.yaml --profile       Record torch.profiler trace to <output>/profiles/
 soup --log-level quiet|normal|verbose|debug   Global logging tier (Rich-formatted)
@@ -345,6 +348,10 @@ The server exposes 14 read-only tools — `advise`, `data_inspect`,
 mutating tools (`train_start`, `export`) are gated behind `--allow-mutating`
 (`"args": ["mcp", "serve", "--allow-mutating"]`); even then they only render the
 exact command that would run — they never execute training or export.
+
+`--allow-execute` implies `--allow-mutating` and is threaded through the server
+as a separate future execution gate, but it does not enable execution yet:
+these tools remain plan-only in this release.
 
 **Security:** stdio only (no network listener); every path argument stays under
 the working directory and rejects symlinks; tool output is control-char

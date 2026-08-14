@@ -31,6 +31,15 @@ def serve(
             "refuse."
         ),
     ),
+    allow_execute: bool = typer.Option(
+        False,
+        "--allow-execute",
+        help=(
+            "Reserve the execution gate for future MCP tools. Implies "
+            "--allow-mutating, but train_start and export remain plan-only "
+            "and never execute in this version."
+        ),
+    ),
 ) -> None:
     """Start the stdio MCP server (read-only tools by default).
 
@@ -55,8 +64,17 @@ def serve(
         )
         raise typer.Exit(1) from None
 
-    mode = "mutating tools ENABLED (plan-only)" if allow_mutating else "read-only"
+    # Execution is intentionally not implemented yet. Keep the raw
+    # ``allow_execute`` value for the server/registry, while its stronger
+    # opt-in also enables the existing plan-only mutating tools.
+    allow_mutating = allow_mutating or allow_execute
+    if allow_execute:
+        mode = "mutating tools ENABLED (plan-only; execution disabled)"
+    elif allow_mutating:
+        mode = "mutating tools ENABLED (plan-only)"
+    else:
+        mode = "read-only"
     console.print(
         f"[dim]soup mcp serve - stdio transport - {mode}. Waiting for a client...[/]"
     )
-    run_stdio_server(allow_mutating=allow_mutating)
+    run_stdio_server(allow_mutating=allow_mutating, allow_execute=allow_execute)
