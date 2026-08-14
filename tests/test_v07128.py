@@ -552,9 +552,9 @@ class TestMutatingTools:
                 {"model": "out/adapter", "format": "nonsense-format"}
             )
 
-    def test_registry_count_is_16_with_mutating(self):
-        assert len(reg.build_registry(allow_mutating=True, allow_execute=False)) == 16
-        assert len(reg.build_registry(allow_mutating=False, allow_execute=False)) == 16
+    def test_registry_count_includes_execution_tools(self):
+        assert len(reg.build_registry(allow_mutating=True, allow_execute=False)) == 18
+        assert len(reg.build_registry(allow_mutating=False, allow_execute=False)) == 18
 
 
 # ---------------------------------------------------------------------------
@@ -587,7 +587,7 @@ class TestServerRoundTrip:
         # guard covers both. Skips cleanly on a partial install.
         pytest.importorskip("mcp")
 
-    def test_list_tools_returns_all_16(self):
+    def test_list_tools_returns_all_18(self):
         from mcp.shared.memory import create_connected_server_and_client_session
 
         from soup_cli.mcp_server.registry import build_registry
@@ -602,7 +602,7 @@ class TestServerRoundTrip:
 
         result = _run(_go())
         names = {t.name for t in result.tools}
-        assert len(names) == 16
+        assert len(names) == 18
         assert "recipes_search" in names and "train_start" in names
         # every advertised tool carries an inputSchema object
         assert all(t.inputSchema.get("type") == "object" for t in result.tools)

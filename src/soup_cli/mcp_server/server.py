@@ -17,6 +17,7 @@ import mcp.types as types
 from mcp.server.lowlevel import Server
 from mcp.server.stdio import stdio_server
 
+from soup_cli.mcp_server.execution import ExecutionManager
 from soup_cli.mcp_server.registry import McpToolError, ToolSpec, _sanitize, build_registry
 
 SERVER_NAME = "soup"
@@ -41,6 +42,7 @@ def build_server(specs: List[ToolSpec]) -> Server:
                 title=spec.title,
                 description=spec.description,
                 inputSchema=spec.input_schema,
+                annotations=spec.annotations,
             )
             for spec in specs
         ]
@@ -73,9 +75,12 @@ def build_server(specs: List[ToolSpec]) -> Server:
 
 def run_stdio_server(*, allow_mutating: bool, allow_execute: bool) -> None:
     """Run the MCP server over stdio until the client disconnects."""
-    server = build_server(
-        build_registry(allow_mutating=allow_mutating, allow_execute=allow_execute)
-    )
+    execution = ExecutionManager()
+    server = build_server(build_registry(
+        allow_mutating=allow_mutating,
+        allow_execute=allow_execute,
+        execution=execution,
+    ))
 
     async def _main() -> None:
         async with stdio_server() as (read_stream, write_stream):

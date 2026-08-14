@@ -1257,6 +1257,7 @@ def train(
         device_name=device_name,
         gpu_info=gpu_info,
         experiment_name=experiment_name,
+        run_id=os.environ.get("SOUP_MCP_RUN_ID") or None,
     )
     console.print(f"[dim]Run ID: {run_id}[/]")
 

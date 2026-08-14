@@ -36,7 +36,12 @@ CREATE TABLE IF NOT EXISTS runs (
     base_model      TEXT,
     task            TEXT,
     cost_usd        REAL,
-    cost_gpu_label  TEXT
+    cost_gpu_label  TEXT,
+    run_kind        TEXT NOT NULL DEFAULT 'train',
+    pid             INTEGER,
+    command_digest  TEXT,
+    log_path        TEXT,
+    exit_code       INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS metrics (
@@ -141,6 +146,11 @@ class ExperimentTracker:
         for column, ddl in (
             ("cost_usd", "ALTER TABLE runs ADD COLUMN cost_usd REAL"),
             ("cost_gpu_label", "ALTER TABLE runs ADD COLUMN cost_gpu_label TEXT"),
+            ("run_kind", "ALTER TABLE runs ADD COLUMN run_kind TEXT NOT NULL DEFAULT 'train'"),
+            ("pid", "ALTER TABLE runs ADD COLUMN pid INTEGER"),
+            ("command_digest", "ALTER TABLE runs ADD COLUMN command_digest TEXT"),
+            ("log_path", "ALTER TABLE runs ADD COLUMN log_path TEXT"),
+            ("exit_code", "ALTER TABLE runs ADD COLUMN exit_code INTEGER"),
         ):
             existing = {row[1] for row in conn.execute("PRAGMA table_info(runs)").fetchall()}
             if column in existing:
@@ -166,9 +176,10 @@ class ExperimentTracker:
         device_name: str,
         gpu_info: dict,
         experiment_name: Optional[str] = None,
+        run_id: Optional[str] = None,
     ) -> str:
         """Insert a new run and return its run_id."""
-        run_id = generate_run_id()
+        run_id = run_id or generate_run_id()
         now = datetime.now().isoformat()
         config_json = json.dumps(config_dict, default=str)
 
@@ -177,6 +188,19 @@ class ExperimentTracker:
         gpu_memory = gpu_info.get("memory_total", "")
 
         conn = self._get_conn()
+        existing = conn.execute("SELECT run_id FROM runs WHERE run_id = ?", (run_id,)).fetchone()
+        if existing is not None:
+            conn.execute(
+                """UPDATE runs SET status = 'running', config_json = ?, device = ?,
+                   device_name = ?, gpu_memory = ?, experiment_name = ?, base_model = ?, task = ?
+                   WHERE run_id = ?""",
+                (
+                    config_json, device, device_name, gpu_memory, experiment_name, base_model, task,
+                    run_id,
+                ),
+            )
+            conn.commit()
+            return run_id
         conn.execute(
             """INSERT INTO runs
                (run_id, experiment_name, created_at, status, config_json,
@@ -189,6 +213,45 @@ class ExperimentTracker:
         )
         conn.commit()
         return run_id
+
+    def launch_run(
+        self,
+        *,
+        run_id: str,
+        kind: str,
+        config_dict: dict,
+        command_digest: str,
+        log_path: str,
+    ) -> None:
+        """Create an asynchronously launched CLI run before its child starts."""
+        now = datetime.now().isoformat()
+        conn = self._get_conn()
+        conn.execute(
+            """INSERT INTO runs
+               (run_id, created_at, status, config_json, base_model, task,
+                run_kind, command_digest, log_path)
+               VALUES (?, ?, 'launching', ?, '', ?, ?, ?, ?)""",
+            (
+                run_id, now, json.dumps(config_dict, default=str), kind, kind, command_digest,
+                log_path,
+            ),
+        )
+        conn.commit()
+
+    def mark_running(self, run_id: str, *, pid: int) -> None:
+        conn = self._get_conn()
+        conn.execute("UPDATE runs SET status = 'running', pid = ? WHERE run_id = ?", (pid, run_id))
+        conn.commit()
+
+    def finish_execution(self, run_id: str, *, status: str, exit_code: Optional[int]) -> None:
+        """Record child exit without overwriting a train child's richer terminal status."""
+        conn = self._get_conn()
+        conn.execute(
+            """UPDATE runs SET status = ?, exit_code = ? WHERE run_id = ?
+               AND status NOT IN ('completed', 'failed')""",
+            (status, exit_code, run_id),
+        )
+        conn.commit()
 
     def log_metrics(
         self,
