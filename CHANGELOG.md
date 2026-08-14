@@ -22,7 +22,13 @@ reproducing 70+ versions of notes.
   was always `None` and the calibration never ran outside its own test. It is now forwarded to
   both the budget and the panel's `logits` figure; the value can only raise the prediction
   (floored at the shipped constant), and the panel prints an extra line naming both numbers
-  when the calibration measures above it.
+  when the calibration measures above it. This makes the probe unconditional rather than
+  opt-in (see #327 below, whose wording is updated to match): every streamed run now pays
+  one transient `14 * vocab_size * max(tokens)` allocation (96 MiB at the defaults) plus two
+  `torch.cuda.synchronize()` calls before the fit decision is taken. On today's measured
+  stacks this is a no-op in effect (`measured` is 12.0 with zero spread, `max(14, 14)` is
+  14, no extra line prints), so the cost buys nothing yet, which is the point of a guard
+  against a stack that hasn't shipped.
 - **MLX backend now actually dispatches to the MLX trainer for `task: sft`.** Previously `backend: mlx` silently fell through to the transformers `SFTTrainerWrapper`, training on MPS/CUDA instead of MLX. The trainer was also rewritten for mlx-lm >= 0.31 (`create_dataset` + `CacheDataset`, `TrainingCallback`), with `model.freeze()` before LoRA — without it the saved "adapter" was a full fine-tune (172 tensors vs 24 LoRA tensors on a 1.2B model) — and an `adapter_config.json` is written so the output dir loads directly with `mlx_lm.load(..., adapter_path=dir)`. (#362)
 - **`mlx-lm` floor raised to >= 0.31.3** (the version the MLX SFT path is built against).
 - **`training.seed` reached the SFT wrapper and nothing else (#353).** #341 added the
@@ -335,10 +341,12 @@ exist, and repairs four backends.
 - **`LOGITS_BYTES_PER_ELEMENT` is split into two independently measured terms** (#327).
   The 14 is 12 + 2, measured stage by stage on an H100 with zero spread across three
   repeats, and only the 2 differs between stacks. It is deliberately **not lowered** —
-  see Known Limitations. What is new is an opt-in, upward-only calibration
+  see Known Limitations. What is new is an upward-only calibration
   (`max(14, measured + 2)`), which closes a real unguarded hole: a future stack that
   grew a fourth fp32 buffer would be under-budgeted by 12.5% today with nothing to catch
   it. Default behaviour is byte-identical and the pre-flight path takes no new CUDA.
+  (Originally landed as an opt-in probe with no caller; #348 above wires it into the
+  pre-flight itself, so it now runs on every streamed run rather than sitting inert.)
 
 ### Fixed — eval, ship and export
 

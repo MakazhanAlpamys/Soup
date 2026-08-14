@@ -61,6 +61,13 @@ def _budget_lines():
     )
 
 
+def _peak_gb(line: str) -> str:
+    """Isolate the peak-VRAM figure from the trailing ``(logits ... GB)`` aside,
+    so a change confined to the logits display cannot satisfy an assertion about
+    the peak (the budget that actually refuses a run)."""
+    return line.split("~", 1)[1].split(" GB", 1)[0]
+
+
 class TestCalibrationIsForwardedToTheBudget:
     def test_a_high_calibration_raises_the_predicted_peak(self, monkeypatch):
         from soup_cli.utils import layer_stream
@@ -71,7 +78,20 @@ class TestCalibrationIsForwardedToTheBudget:
         monkeypatch.setattr(layer_stream, "calibrated_logits_bytes_per_element", lambda: 40.0)
         raised = _budget_lines()[0]
 
-        assert baseline != raised
+        assert _peak_gb(baseline) != _peak_gb(raised)
+
+    def test_a_high_calibration_also_raises_the_displayed_logits_figure(self, monkeypatch):
+        """The panel's logits figure is a separate claim from the peak above,
+        and moving together is not itself proof either one is wired correctly."""
+        from soup_cli.utils import layer_stream
+
+        monkeypatch.setattr(layer_stream, "calibrated_logits_bytes_per_element", lambda: 14.0)
+        baseline = _budget_lines()[0]
+
+        monkeypatch.setattr(layer_stream, "calibrated_logits_bytes_per_element", lambda: 40.0)
+        raised = _budget_lines()[0]
+
+        assert baseline.split("(logits ", 1)[1] != raised.split("(logits ", 1)[1]
 
     def test_a_below_constant_calibration_does_not_lower_the_peak(self, monkeypatch):
         """calibrated_logits_bytes_per_element() itself floors at the shipped
