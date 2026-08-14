@@ -872,7 +872,7 @@ def _refuse_execute(name: str) -> Callable[[dict], dict]:
     return _handler
 
 
-def _mutating_specs(*, allow_mutating: bool, allow_execute: bool) -> list[ToolSpec]:
+def _mutating_specs(*, allow_mutating: bool, allow_execute: bool = False) -> list[ToolSpec]:
     """The plan-only mutating tools.
 
     Always LISTED (so clients can discover them), but their handler refuses
@@ -927,7 +927,7 @@ def _mutating_specs(*, allow_mutating: bool, allow_execute: bool) -> list[ToolSp
     ]
 
 
-def build_registry(*, allow_mutating: bool, allow_execute: bool) -> list[ToolSpec]:
+def build_registry(*, allow_mutating: bool, allow_execute: bool = False) -> list[ToolSpec]:
     """Assemble the MCP tool table.
 
     The read-only tools are always present and executable. The mutating tools
