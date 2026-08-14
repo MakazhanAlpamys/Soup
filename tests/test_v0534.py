@@ -73,40 +73,52 @@ class TestOomFriendlyMessage:
 
 
 class TestFlashAttnV3Available:
-    def test_returns_false_when_missing(self, monkeypatch):
-        monkeypatch.setitem(sys.modules, "flash_attn", None)
-        from soup_cli.utils.flash_attn import is_flash_attn_v3_available
+    """#334 rewrote what this class pins.
 
-        # ``None`` in sys.modules makes ``import flash_attn`` raise ImportError.
-        assert is_flash_attn_v3_available() is False
+    Every case below used to spoof ``flash_attn.__version__`` and assert the
+    answer followed it. That IS the defect: FlashAttention 3 ships as a separate
+    ``flash_attn_3`` package, ``flash_attn`` never reports 3.x, and transformers
+    gates FA3 on ``_is_package_available("flash_attn_3")`` — so the old
+    ``test_returns_true_for_v3`` asserted an outcome that could not happen for any
+    real install, and that transformers would have rejected if it had.
 
-    def test_returns_true_for_v3(self, monkeypatch):
-        fake = SimpleNamespace(__version__="3.0.0")
-        monkeypatch.setitem(sys.modules, "flash_attn", fake)
-        from soup_cli.utils.flash_attn import is_flash_attn_v3_available
+    The detector now delegates to transformers, so these pin agreement with the
+    library that actually loads the kernel. The version-parsing edge cases
+    (unparseable, non-string) went with the version parsing; ``get_flash_attn_version``
+    still has its own coverage.
+    """
 
-        assert is_flash_attn_v3_available() is True
+    def test_returns_false_when_transformers_says_no(self, monkeypatch):
+        from soup_cli.utils import flash_attn as mod
 
-    def test_returns_false_for_v2(self, monkeypatch):
-        fake = SimpleNamespace(__version__="2.5.7")
-        monkeypatch.setitem(sys.modules, "flash_attn", fake)
-        from soup_cli.utils.flash_attn import is_flash_attn_v3_available
+        monkeypatch.setattr(mod, "_transformers_says_fa3", lambda: False)
+        assert mod.is_flash_attn_v3_available() is False
 
-        assert is_flash_attn_v3_available() is False
+    def test_returns_true_when_transformers_says_yes(self, monkeypatch):
+        from soup_cli.utils import flash_attn as mod
 
-    def test_returns_false_on_unparseable_version(self, monkeypatch):
-        fake = SimpleNamespace(__version__="abc")
-        monkeypatch.setitem(sys.modules, "flash_attn", fake)
-        from soup_cli.utils.flash_attn import is_flash_attn_v3_available
+        monkeypatch.setattr(mod, "_transformers_says_fa3", lambda: True)
+        assert mod.is_flash_attn_v3_available() is True
 
-        assert is_flash_attn_v3_available() is False
+    def test_a_3x_flash_attn_alone_is_not_enough(self, monkeypatch):
+        """The case that used to assert the opposite, kept pointing the other way
+        so the regression cannot come back quietly."""
+        from soup_cli.utils import flash_attn as mod
 
-    def test_returns_false_on_non_string_version(self, monkeypatch):
-        fake = SimpleNamespace(__version__=3)  # not a string
-        monkeypatch.setitem(sys.modules, "flash_attn", fake)
-        from soup_cli.utils.flash_attn import is_flash_attn_v3_available
+        monkeypatch.setitem(sys.modules, "flash_attn", SimpleNamespace(__version__="3.0.0"))
+        monkeypatch.setattr(mod, "_transformers_says_fa3", lambda: False)
+        assert mod.is_flash_attn_v3_available() is False
 
-        assert is_flash_attn_v3_available() is False
+    def test_a_broken_transformers_probe_does_not_raise(self, monkeypatch):
+        """A detection helper must never break model loading."""
+        from soup_cli.utils import flash_attn as mod
+
+        def _boom():
+            raise RuntimeError("transformers exploded")
+
+        monkeypatch.setattr(mod, "_transformers_says_fa3", _boom)
+        with pytest.raises(RuntimeError):
+            mod.is_flash_attn_v3_available()
 
 
 class TestLongLoraRejectsFlashAttnV3:

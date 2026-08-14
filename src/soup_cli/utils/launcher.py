@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import shlex
+import sys
 from typing import Sequence
 
 VALID_MIXED_PRECISION = ("no", "fp16", "bf16", "fp8")
@@ -76,8 +77,42 @@ def build_accelerate_argv(
         argv.extend(["--num_machines", str(num_machines)])
     if mixed_precision is not None:
         argv.extend(["--mixed_precision", mixed_precision])
-    argv.extend(script_list)
+    argv.extend(_as_accelerate_target(script_list))
     return argv
+
+
+def _is_python_interpreter(path: str) -> bool:
+    name = os.path.basename(path).lower()
+    if name.endswith(".exe"):
+        name = name[: -len(".exe")]
+    return path == sys.executable or name.startswith("python") or name.startswith("pypy")
+
+
+def _as_accelerate_target(script_list: list[str]) -> list[str]:
+    """Turn ``[python, "-m", "pkg.mod", ...]`` into ``["--module", "pkg.mod", ...]``.
+
+    #77 — ``accelerate launch`` takes a **script path** positionally, or a module
+    behind ``--module``. Soup passed ``sys.executable``, so accelerate opened the
+    Python ELF binary and parsed it as source::
+
+        File "/root/venv/bin/python", line 1
+          ELF
+        SyntaxError: source code cannot contain null bytes
+
+    Every rank died before the trainer existed, i.e. ``soup train --gpus N`` — the
+    documented multi-GPU entry point — never ran at all. Measured on 4xH100; every
+    arm of the #77 matrix had to be launched by hand.
+
+    A real script path is returned untouched, because that form is valid and
+    translating it would break it.
+    """
+    if (
+        len(script_list) >= 3
+        and script_list[1] == "-m"
+        and _is_python_interpreter(script_list[0])
+    ):
+        return ["--module", script_list[2], *script_list[3:]]
+    return list(script_list)
 
 
 def format_advice(num_processes: int, script_args: Sequence[str]) -> str:

@@ -330,6 +330,11 @@ soup ship --base HuggingFaceTB/SmolLM2-135M-Instruct --adapter ./out \
 soup ship --base <m> --adapter ./out --task-eval tasks.jsonl \
   --task-mode judge_score --judge-model ollama://llama3.1
 
+# Leg-1 via a true pairwise judge win-rate (v0.71.31 #284) — the judge picks
+# base vs tuned per prompt (swap-debiased); base = 0.5 coin-flip, won <=> winrate > 0.5
+soup ship --base <m> --adapter ./out --task-eval tasks.jsonl \
+  --task-mode pairwise --judge-model ollama://llama3.1
+
 # Leg-2 via lm-eval benchmarks, base scores supplied by --baseline
 soup ship --base <m> --tuned ./out --task-eval tasks.jsonl \
   --general-suite mmlu,hellaswag --baseline registry://abc123
@@ -350,11 +355,58 @@ soup ship --evidence evidence.json --output verdict.json
 }
 ```
 
-Leg-2 defaults to the built-in mini benchmarks (`mini_mmlu` / `mini_common_sense` /
-`mini_instruction`) — offline, CPU, instant. `--general-suite <names>` with non-mini names
-routes through the lm-eval harness. Pairwise judge win-rate (`--task-mode pairwise`) is planned
-for a later release. The engine lives in `soup_cli.utils.ship_verdict` (`decide_ship` is a pure
-function — the whole truth table is CPU-testable).
+Leg-2 defaults to the **bundled offline suite** (v0.71.38) — seven hand-authored suites shipped
+in the wheel and scored by the pure scorers Soup already ships (no lm-eval, no network,
+CPU-instant):
+
+| Suite | What it checks | Scorer |
+|-------|----------------|--------|
+| `mini_mmlu` / `mini_common_sense` / `mini_instruction` / `mini_arithmetic` | general knowledge / reasoning / instruction-following / numeracy | answer-extraction + exact/boundary match |
+| `mini_tool_call` | function-calling still works (right tool named) | `tool_call_name_match` |
+| `mini_format_json` | JSON validity (a structured object, not a bare scalar) | container-only JSON check |
+| `mini_safety` | refusal-rate on harmful prompts (under-refusal = regression) | refusal heuristic |
+
+Each suite is >20 items so a single-item flip (1/N < 0.05) trips the default threshold instead
+of being rounded away. The scorer is answer-**extraction** — a spurious substring inside a word
+(`"B"` in "**B**erlin") no longer scores, which is a **breaking** change from the v0.25.0
+substring scorer (an existing run's verdict can flip; recompute any committed `--baseline`).
+`--general-suite <names>` with any non-bundled name routes through the lm-eval harness. Pairwise
+judge win-rate (`--task-mode pairwise`) shipped in v0.71.31.
+
+Exit codes (v0.71.38): **0 = SHIP · 2 = DON'T SHIP · 3 = usage/flag error · 1 = runtime error**
+— usage errors moved off `2` so CI can tell a config typo from a caught regression. The engine
+lives in `soup_cli.utils.ship_verdict` (`decide_ship` is a pure function — the whole truth table
+is CPU-testable); the bundled suites live in `soup_cli.eval.gate_suites`.
+
+### Closing the evidence loop (v0.71.39)
+
+The verdict is now emittable, committable, and provenance-bound so a fine-tuning gate runs on
+every PR instead of relying on a hand-edited JSON file.
+
+- **`--emit-evidence <path>`** re-serialises the scores into the `--evidence` INPUT schema, so a
+  run's output is replayable as input — feeding it back through `--evidence` (same threshold)
+  reproduces an identical verdict.
+- **`--config soup.yaml`** reads a committed `eval.ship` block for the gate defaults
+  (`task_eval` / `task_mode` / `general_suite` / `forgetting_threshold` / `judge_model` /
+  `baseline`); an explicit CLI flag always wins. This makes the gate reviewable in a PR diff.
+- **Provenance + staleness.** With `--emit-evidence`, `--config` STAMPS a `provenance` block
+  (`config_sha` — a semantic, order-insensitive recipe hash that EXCLUDES the `eval.ship` gate
+  policy, so tuning the threshold never invalidates evidence — plus `base_model` and a
+  best-effort `data_sha`). With `--evidence` alone, `--config` GATES: it refuses (exit 3)
+  evidence whose `config_sha` drifted from the committed config.
+- **`--push owner/repo#N`** posts the verdict as a GitHub PR comment (best-effort — a missing
+  token or `gh` failure warns but never flips the SHIP / DON'T-SHIP exit code).
+
+```bash
+# Producer (train job): compute or stamp scores, bound to the committed recipe
+soup ship --evidence scores.json --config soup.yaml --emit-evidence ship_evidence.json
+
+# Gate (PR CI): refuse evidence that doesn't match the committed config, comment the verdict
+soup ship --evidence ship_evidence.json --config soup.yaml --push owner/repo#42
+```
+
+`soup ci init --config soup.yaml` binds the generated workflow's ship step to the committed
+config, so the whole loop runs in CI (see [commands.md](commands.md)).
 
 
 ## NLG Evaluation Metrics (BLEU + ROUGE)
@@ -427,7 +479,7 @@ Full-featured evaluation platform with standard benchmarks, custom evals, LLM-as
 
 ```bash
 # Install eval dependencies
-pip install 'soup-cli[eval]'
+pip install "soup-cli[eval]"
 
 # Standard benchmarks (wraps lm-evaluation-harness)
 soup eval benchmark --model ./output --benchmarks mmlu,gsm8k,hellaswag
@@ -606,5 +658,3 @@ soup eval irt-subset per_item_correctness.jsonl --size small --model 2pl
 ```
 
 `--model` picks the item-response model (default `1pl`). `1pl` is the closed-form Rasch fit (`β̂_i = -log(p̂_i / (1 - p̂_i))`); `2pl` adds a per-item discrimination parameter and `3pl` a guessing floor, both via joint coordinate-ascent MLE (v0.71.6). Items rank by Fisher information at θ=0 (`p̂ · (1-p̂)` in 1PL — maximised at 50/50 items, since extremes carry no new ranking information). `full` keeps 100%, `small` keeps 30%, `tiny` keeps 10%.
-
-

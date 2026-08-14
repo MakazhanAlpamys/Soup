@@ -30,6 +30,8 @@ from typing import TYPE_CHECKING, Any
 from rich.console import Console
 
 from soup_cli.config.schema import SoupConfig
+from soup_cli.utils.gpu import bf16_fp16_flags, resolve_device_map
+from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 
 if TYPE_CHECKING:
     import torch as _torch_typ
@@ -77,6 +79,21 @@ def _compute_distill_term(
         raise ValueError(
             f"temperature must be finite and positive, got {temperature!r}"
         )
+
+    # Causal-LM alignment: logits at position i predict token i+1, so the CE
+    # term shifts (logits[:, :-1] vs labels[:, 1:]). The KD term must shift the
+    # SAME way — otherwise the trained-token mask (labels != -100) is applied
+    # one position off: it drops each assistant span's first predicted token and
+    # leaks the boundary token just before the span. Shift here so both terms
+    # measure the same positions.
+    if labels is not None or attention_mask is not None:
+        student_logits = student_logits[:, :-1, :]
+        teacher_logits = teacher_logits[:, :-1, :]
+        if labels is not None:
+            labels = labels[:, 1:]
+        if attention_mask is not None:
+            attention_mask = attention_mask[:, 1:]
+
     temp = float(temperature)
     s = student_logits / temp
     t = teacher_logits / temp
@@ -184,6 +201,9 @@ class DistillTrainerWrapper:
         cfg = self.config
         tcfg = cfg.training
 
+        # #353: seed before the model and any adapter are built.
+        apply_training_seed(tcfg)
+
         if tcfg.teacher_model is None:
             raise ValueError(
                 "task='distill' requires training.teacher_model to be set"
@@ -211,7 +231,7 @@ class DistillTrainerWrapper:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
         console.print(f"[dim]Loading student: {cfg.base}[/]")
-        dev_map = "cpu" if self.device == "cpu" else "auto"
+        dev_map = resolve_device_map(self.device)
         self.model = AutoModelForCausalLM.from_pretrained(
             cfg.base,
             trust_remote_code=self._trust_remote_code,
@@ -432,6 +452,7 @@ class DistillTrainerWrapper:
         )
         warmup_steps = int(total_steps * tcfg.warmup_ratio)
 
+        _bf16, _fp16 = bf16_fp16_flags(self.device)
         args = TrainingArguments(
             output_dir=str(output_dir),
             num_train_epochs=tcfg.epochs,
@@ -446,10 +467,12 @@ class DistillTrainerWrapper:
             logging_steps=tcfg.logging_steps,
             save_steps=tcfg.save_steps,
             save_total_limit=3,
-            bf16=self.device == "cuda",
+            bf16=_bf16,
+            fp16=_fp16,
             report_to=self.report_to,
             remove_unused_columns=False,
             deepspeed=self.deepspeed_config,
+            **training_seed_kwargs(tcfg),
             **(self.fsdp_config or {}),
         )
 

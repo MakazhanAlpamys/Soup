@@ -165,10 +165,16 @@ class UnlearnTrainerWrapper:
         from peft import LoraConfig, get_peft_model
 
         from soup_cli.utils.live_eval import load_model_and_tokenizer
+        from soup_cli.utils.seeding import apply_training_seed
         from soup_cli.utils.unlearning import validate_unlearn_method
 
         cfg = self.config
         tcfg = cfg.training
+
+        # #353: seed before the model and any adapter are built. This wrapper
+        # never builds a Trainer, so nothing else would apply the seed at all.
+        apply_training_seed(tcfg)
+
         method = validate_unlearn_method(self.method)
         self.method = method
 
@@ -250,7 +256,16 @@ class UnlearnTrainerWrapper:
         rmu_layer = None
         if method == "rmu":
             hidden = int(self.model.config.hidden_size)
-            gen = torch.Generator(device="cpu").manual_seed(0)
+            # #353: the control direction follows training.seed, so two RMU
+            # replicates at different seeds really are different runs. An unset
+            # seed stays 0 rather than resolving to 42: this draw has been
+            # seeded 0 since RMU landed, and moving it would silently change
+            # every existing unseeded run (same reasoning as the multipack
+            # sampler's DEFAULT_MULTIPACK_SEED in #341).
+            rmu_seed = getattr(tcfg, "seed", None)
+            gen = torch.Generator(device="cpu").manual_seed(
+                0 if rmu_seed is None else rmu_seed
+            )
             control_vec = (
                 torch.randn(hidden, generator=gen).to(dev) * _RMU_CONTROL_SCALE
             )

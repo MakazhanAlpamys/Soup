@@ -7,12 +7,19 @@ from typing import Optional
 from rich.console import Console
 
 from soup_cli.config.schema import SoupConfig
-from soup_cli.utils.gpu import estimate_batch_size, model_size_from_name
+from soup_cli.trainer.stream_setup import StreamingSetupMixin
+from soup_cli.utils.gpu import (
+    bf16_fp16_flags,
+    estimate_batch_size,
+    model_size_from_name,
+    resolve_device_map,
+)
+from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 
 console = Console()
 
 
-class DPOTrainerWrapper:
+class DPOTrainerWrapper(StreamingSetupMixin):
     """High-level wrapper for DPO training from SoupConfig.
 
     DPO requires preference data with three fields:
@@ -20,6 +27,11 @@ class DPOTrainerWrapper:
     - chosen: the preferred response
     - rejected: the less preferred response
     """
+
+    #: TRL builds this loss's forward through ``concatenated_inputs`` +
+    #: ``torch.cat``, so chosen and rejected arrive as ONE tensor of twice
+    #: the configured batch. The VRAM pre-flight must budget for that.
+    _STREAM_ROWS_PER_EXAMPLE = 2
 
     def __init__(
         self,
@@ -61,6 +73,8 @@ class DPOTrainerWrapper:
         from datasets import Dataset
         from trl import DPOConfig, DPOTrainer
 
+        from soup_cli.trainer._trl_compat import prompt_length_kwargs
+
         # Enable Rich progress bar for HuggingFace downloads
         from soup_cli.trainer.sft import _enable_hf_transfer_progress
 
@@ -68,15 +82,33 @@ class DPOTrainerWrapper:
 
         cfg = self.config
         tcfg = cfg.training
-        use_unsloth = cfg.backend == "unsloth"
 
-        if use_unsloth:
+        # #353: seed before the model and any adapter are built.
+        apply_training_seed(tcfg)
+
+        use_unsloth = cfg.backend == "unsloth"
+        # v0.72.4 — layer streaming replaces the model-load path entirely (meta
+        # skeleton, never a resident load), so it dispatches ahead of the backend
+        # branches. The schema already rejects streaming + unsloth/mlx.
+        use_streaming = bool(getattr(tcfg, "stream_layers", False))
+
+        if use_streaming:
+            self._setup_streaming_transformers(cfg, tcfg)
+        elif use_unsloth:
             self._setup_unsloth(cfg, tcfg)
         else:
             self._setup_transformers(cfg, tcfg)
 
         trainable, total = self.model.get_nb_trainable_parameters()
-        pct = 100 * trainable / total
+        # v0.72.4 (mirrors sft.py) — under NF4 streaming PEFT's total is wrong
+        # by ~6.5x: it sizes Params4bit as `numel * 2 * quant_storage.itemsize`,
+        # right for a RESIDENT one but not for our `meta` placeholder, which
+        # still carries the LOGICAL shape. The sharder counted the real source
+        # elements, so prefer that.
+        stream_total = getattr(self._stream_runtime, "total_params", 0)
+        if stream_total:
+            total = stream_total
+        pct = 100 * trainable / total if total else 0.0
         console.print(
             f"[green]LoRA applied:[/] {trainable:,} trainable"
             f" / {total:,} total ({pct:.2f}%)"
@@ -123,6 +155,9 @@ class DPOTrainerWrapper:
         warmup_steps = int(total_steps * tcfg.warmup_ratio)
 
         # --- DPO config ---
+        from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
+
+        _bf16, _fp16 = bf16_fp16_flags(self.device)
         dpo_config = DPOConfig(
             output_dir=str(output_dir),
             num_train_epochs=tcfg.epochs,
@@ -130,6 +165,18 @@ class DPOTrainerWrapper:
             gradient_accumulation_steps=tcfg.gradient_accumulation_steps,
             learning_rate=tcfg.lr,
             warmup_steps=warmup_steps,
+            # #328 — StreamedDecoderLayer already wraps every layer in
+            # checkpoint(use_reentrant=False). Letting HF check-point the INNER
+            # decoder layer as well recomputes it after functional_call's
+            # reparametrisation context has exited and restored the `meta`
+            # placeholders, which on torch 2.13 + CUDA dies with "Tensor on device
+            # cuda:0 is not on the expected device meta!". Passing this explicitly
+            # also stops the value being decided by TRL's default, which is not
+            # stable across versions (False on trl 0.19.1, True on 0.26.2) and was
+            # silently dropping the user's own setting on the older one.
+            gradient_checkpointing=should_enable_hf_gradient_checkpointing(
+                tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
+            ),
             weight_decay=tcfg.weight_decay,
             max_grad_norm=tcfg.max_grad_norm,
             optim=tcfg.optimizer,
@@ -137,14 +184,20 @@ class DPOTrainerWrapper:
             logging_steps=tcfg.logging_steps,
             save_steps=tcfg.save_steps,
             save_total_limit=3,
-            bf16=self.device == "cuda",
+            bf16=_bf16,
+            fp16=_fp16,
             report_to=self.report_to,
             remove_unused_columns=False,
             deepspeed=self.deepspeed_config,
+            **training_seed_kwargs(tcfg),
             **(self.fsdp_config or {}),
             beta=tcfg.dpo_beta,
             max_length=cfg.data.max_length,
-            max_prompt_length=cfg.data.max_length // 2,
+            # #326 — trl dropped `max_prompt_length` from DPOConfig at 0.29.0
+            # with no successor field; `max_length` absorbs it. Asked of the
+            # class rather than of trl.__version__, because a version table is
+            # exactly what was wrong twice before.
+            **prompt_length_kwargs(DPOConfig, cfg.data.max_length // 2),
             **({"neftune_noise_alpha": tcfg.neftune_alpha}
                if tcfg.neftune_alpha is not None else {}),
         )
@@ -197,7 +250,7 @@ class DPOTrainerWrapper:
 
         console.print(f"[dim]Loading model: {cfg.base}[/]")
         # On CPU, use device_map="cpu" to avoid meta tensors from "auto"
-        dev_map = "cpu" if self.device == "cpu" else "auto"
+        dev_map = resolve_device_map(self.device)
         model_kwargs = {
             "trust_remote_code": self._trust_remote_code, "device_map": dev_map,
         }
@@ -311,8 +364,10 @@ class DPOTrainerWrapper:
 
         from soup_cli.utils.v028_features import activation_offloading_context
 
-        with activation_offloading_context(
-            self.config.training, self._output_dir,
+        # v0.72.4 — the shared context releases the streaming weight source even
+        # if training raises (see StreamingSetupMixin._training_context).
+        with self._training_context(
+            activation_offloading_context(self.config.training, self._output_dir)
         ):
             self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         duration = time.time() - start

@@ -50,6 +50,19 @@ Listed by first contribution. PR numbers link the work.
   - Reuse the shared vocab-expansion helper in the vision + audio SFT paths ([#291](https://github.com/MakazhanAlpamys/Soup/pull/291))
   - Honor configured vocab expansion in the DPO / IPO / KTO / BCO trainers ([#293](https://github.com/MakazhanAlpamys/Soup/pull/293))
   - Honor configured vocab expansion in the ORPO / SimPO / GRPO trainers ([#295](https://github.com/MakazhanAlpamys/Soup/pull/295))
+- **Ekaanksh Patil** ([@Ekaanksh-dev](https://github.com/Ekaanksh-dev))
+  - Batch the PRM reward forward pass in `PRMScorer.__call__` (single `[B, T]` forward) ([#301](https://github.com/MakazhanAlpamys/Soup/pull/301))
+- **Sanjay Santhanam** ([@Sanjays2402](https://github.com/Sanjays2402))
+  - Run built-in benchmark gate tasks through `ForgettingDetector` — every `type: benchmark` eval-gate task had always failed ([#315](https://github.com/MakazhanAlpamys/Soup/pull/315))
+- **Nicolás Ramos** ([@nicolasramos](https://github.com/nicolasramos))
+  - `backend: mlx` was never dispatched — every MLX run trained through the transformers wrapper instead, and the saved MLX "adapter" was a full fine-tune because the model was never frozen before LoRA ([#362](https://github.com/MakazhanAlpamys/Soup/pull/362))
+- **William Yang** ([@wilyan09007](https://github.com/wilyan09007))
+  - `training.seed` reached the SFT wrapper and nothing else — seventeen other task wrappers trained at HF's default 42 with no error, so replicates that differed only in the seed were the same run; the seed is now applied before the adapter is drawn, not only inside `Trainer` ([#381](https://github.com/MakazhanAlpamys/Soup/pull/381))
+  - Under `use_fsdp2_compile`, every `checkpoint-*` kept `torch.compile`'s key prefix and resumed **silently** from a re-zeroed adapter — normalisation now runs as each checkpoint is written, ahead of anything that publishes it ([#380](https://github.com/MakazhanAlpamys/Soup/pull/380))
+- **Amir Fathi** ([@AmirF194](https://github.com/AmirF194))
+  - A streamed model's `named_parameters()` carried the wrapper's `.inner.` segment, so a name-keyed comparison against a resident model shared no names at all and a correctness gate reported `0/0` as a pass ([#384](https://github.com/MakazhanAlpamys/Soup/pull/384))
+  - `training.stream_vram_override` — the layer-streaming pre-flight measured free VRAM with a device-level driver query, so it could not see a per-process cap and there was no way to make it simulate one ([#386](https://github.com/MakazhanAlpamys/Soup/pull/386))
+  - The VRAM pre-flight never called its own calibration hook, so the guard against a stack whose loss path under-budgets by 12.5% sat inert with no caller ([#390](https://github.com/MakazhanAlpamys/Soup/pull/390))
 
 ---
 

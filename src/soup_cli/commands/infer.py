@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 import typer
 from rich.console import Console
@@ -94,6 +94,34 @@ def infer(
         "--device",
         help="Device: cuda, mps, cpu. Auto-detected if not set.",
     ),
+    task: str = typer.Option(
+        "text",
+        "--task",
+        help=(
+            "Inference task: 'text' (default, chat generation) or 'asr' "
+            "(Whisper transcription; input rows are {\"audio\": path[, "
+            "\"text\": reference]})."
+        ),
+    ),
+    asr_language: Optional[str] = typer.Option(
+        None,
+        "--asr-language",
+        help="ASR decode language (overrides the training sidecar). --task asr only.",
+    ),
+    asr_task: Optional[str] = typer.Option(
+        None,
+        "--asr-task",
+        help="ASR decode objective: transcribe | translate. --task asr only.",
+    ),
+    audio_dir: Optional[str] = typer.Option(
+        None,
+        "--audio-dir",
+        help=(
+            "Base directory audio paths in --input must stay under (--task asr; "
+            "defaults to the --input file's directory). Traversal / UNC paths "
+            "are rejected."
+        ),
+    ),
     trust_remote_code: bool = typer.Option(
         False,
         "--trust-remote-code",
@@ -132,6 +160,35 @@ def infer(
     if not input_path.exists():
         console.print(f"[red]Input file not found: {input_path}[/]")
         raise typer.Exit(1)
+
+    # v0.71.32 — ASR (Whisper) transcription branch. Diverts before the chat
+    # model-resolution path; _infer_asr owns its own Whisper load + output.
+    if task == "asr":
+        # Validate --asr-task up front: a typo would otherwise be passed to
+        # whisper.generate(task=...) and fail INSIDE every row (100k confusing
+        # per-row skips instead of one upfront rejection).
+        if asr_task is not None and asr_task not in ("transcribe", "translate"):
+            console.print(
+                f"[red]--asr-task must be 'transcribe' or 'translate', "
+                f"got {asr_task!r}.[/]"
+            )
+            raise typer.Exit(2)
+        _infer_asr(
+            model=model,
+            base=base,
+            input_file=input_file,
+            device=device,
+            output_file=output_file,
+            max_tokens=max_tokens,
+            trust_remote_code=trust_remote_code,
+            asr_language=asr_language,
+            asr_task=asr_task,
+            audio_dir=audio_dir,
+        )
+        return
+    if task != "text":
+        console.print(f"[red]Unknown --task {task!r}; expected 'text' or 'asr'.[/]")
+        raise typer.Exit(2)
 
     # Resolve model: local path or HF repo id (auto-fallback, #N7).
     try:
@@ -208,7 +265,7 @@ def infer(
             console=console,
         ) as progress,
     ):
-        task = progress.add_task("Generating...", total=len(prompts))
+        progress_task = progress.add_task("Generating...", total=len(prompts))
 
         for prompt_text in prompts:
             messages = [{"role": "user", "content": prompt_text}]
@@ -226,7 +283,7 @@ def infer(
             out_f.flush()
             total_tokens += token_count
             num_results += 1
-            progress.update(task, advance=1)
+            progress.update(progress_task, advance=1)
 
     elapsed = time.time() - start_time
     tokens_per_sec = total_tokens / elapsed if elapsed > 0 else 0
@@ -241,6 +298,328 @@ def infer(
             title="[bold green]Inference Complete![/]",
         )
     )
+
+
+# v0.71.32 — test seam: when set to ``callable(audio_path) -> str`` it replaces
+# the real Whisper transcriber, so the ASR path is unit-testable without a
+# model download.
+_ASR_TRANSCRIBER_OVERRIDE = None
+
+# Cap on ASR batch rows — each row is an audio decode + a full generate(), far
+# costlier than a text prompt, so an unbounded --input is a resource-exhaustion
+# vector (mirrors the project's 10k custom-eval / 1e6 HF-download caps).
+_MAX_ASR_ROWS: int = 100_000
+
+# C0 control bytes (keep tab/newline/CR) + DEL, stripped from dataset-derived
+# strings before they reach the terminal. rich.markup.escape() neutralises Rich
+# '[...]' tags but NOT raw ESC bytes, and a row's audio path / an exception
+# carrying it is untrusted (title-bar / OSC-8 spoofing). Mirrors v0.71.27
+# data_doctor._for_terminal.
+_CONTROL_STRIP_TABLE = {i: None for i in range(0x20) if i not in (0x09, 0x0A, 0x0D)}
+_CONTROL_STRIP_TABLE[0x7F] = None
+
+
+def _for_terminal(text: str) -> str:
+    """Strip C0/ESC/DEL control bytes from a dataset-derived string."""
+    return str(text).translate(_CONTROL_STRIP_TABLE)
+
+
+def _read_asr_rows(path: Path) -> list[dict]:
+    """Read ASR rows ``{"audio": path[, "text": reference]}`` from JSONL.
+
+    Rows without a non-empty string ``audio`` are dropped (a warning is
+    printed once). ``text``, when present, is the reference transcript used for
+    WER reporting. Capped at ``_MAX_ASR_ROWS``.
+    """
+    rows: list[dict] = []
+    dropped = 0
+    capped = False
+    with open(path, encoding="utf-8") as f:
+        for raw_line in f:
+            line = raw_line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                dropped += 1
+                continue
+            audio = obj.get("audio") if isinstance(obj, dict) else None
+            if not isinstance(audio, str) or not audio.strip():
+                dropped += 1
+                continue
+            rows.append(obj)
+            if len(rows) >= _MAX_ASR_ROWS:
+                capped = True
+                break
+    if dropped:
+        console.print(
+            f"[yellow]Skipped {dropped} row(s) with no 'audio' path.[/]"
+        )
+    if capped:
+        console.print(
+            f"[yellow]Capped at {_MAX_ASR_ROWS} rows; remaining input ignored.[/]"
+        )
+    return rows
+
+
+def _resolve_asr_audio(audio: str, base_dir: Path) -> str:
+    """Resolve a row's audio path against ``base_dir`` with containment.
+
+    Rejects UNC / network paths and anything that resolves outside
+    ``base_dir`` (realpath + commonpath) — the infer path is fed JSONL the
+    operator may not have authored (the training path already enforces this
+    via ``_validate_audio_files``). Raises ``ValueError`` on rejection.
+    """
+    from soup_cli.utils.paths import is_under
+
+    if "\x00" in audio:
+        raise ValueError("audio path must not contain null bytes")
+    # UNC (\\host\share) / network (//host) paths trigger outbound SMB on
+    # Windows — reject before any filesystem touch.
+    if audio.startswith(("\\\\", "//")):
+        raise ValueError("audio path must not be a UNC / network path")
+    candidate = Path(audio)
+    if not candidate.is_absolute():
+        candidate = base_dir / candidate
+    if not is_under(candidate, base_dir):
+        raise ValueError(
+            f"audio path {Path(audio).name!r} must stay under the audio dir"
+        )
+    return str(candidate)
+
+
+def _resolve_asr_gen_prefix(
+    asr_language: Optional[str], asr_task: Optional[str], sidecar: dict
+) -> dict:
+    """Decode-prefix precedence: explicit CLI flags > training sidecar.
+
+    Returns the ``language``/``task`` kwargs to pass to ``whisper.generate``
+    (omitting either when unresolved so the model default applies).
+    """
+    gen_kwargs: dict = {}
+    language = asr_language or sidecar.get("language")
+    task = asr_task or sidecar.get("task")
+    if language:
+        gen_kwargs["language"] = language
+    if task:
+        gen_kwargs["task"] = task
+    return gen_kwargs
+
+
+def _build_asr_transcriber(
+    model: str,
+    base: Optional[str],
+    device: Optional[str],
+    max_tokens: int,
+    trust_remote_code: bool,
+    asr_language: Optional[str] = None,
+    asr_task: Optional[str] = None,
+) -> Callable[[str], str]:
+    """Build a ``transcribe(audio_path) -> str`` closure over a Whisper model.
+
+    Handles both a full fine-tuned Whisper directory and a PEFT/LoRA adapter
+    dir (base resolved from ``--base`` or the adapter's
+    ``base_model_name_or_path``). The decode language/task come from (in order)
+    the explicit CLI flags, then the training ``asr_generation.json`` sidecar,
+    then the model default.
+    """
+    from soup_cli.trainer.asr import _require_whisper_base, read_asr_sidecar
+    from soup_cli.utils.tts_codec import load_audio_mono
+
+    if not device:
+        from soup_cli.utils.gpu import detect_device
+
+        device, _ = detect_device()
+
+    from soup_cli.utils.trust_remote import resolve_trust_remote_code
+
+    # Detect a PEFT/LoRA adapter dir; resolve its base for the weight load.
+    model_path = Path(model)
+    adapter_cfg = model_path / "adapter_config.json"
+    is_adapter = adapter_cfg.exists()
+    base_ref = base
+    if is_adapter and not base_ref:
+        try:
+            with open(adapter_cfg, encoding="utf-8") as fh:
+                base_ref = json.load(fh).get("base_model_name_or_path")
+        except (json.JSONDecodeError, OSError):
+            base_ref = None
+        if not base_ref:
+            console.print(
+                f"[red]Cannot detect base model for adapter {model_path}; "
+                "pass --base.[/]"
+            )
+            raise typer.Exit(1)
+
+    # The base (adapter case) or the model itself carries the Whisper weights
+    # AND the processor / arch identity.
+    weights_ref = base_ref if is_adapter else model
+    from soup_cli.utils.trust_remote import model_requires_trust_remote_code
+
+    requires = model_requires_trust_remote_code(weights_ref) or False
+    resolved_trust = resolve_trust_remote_code(
+        weights_ref, requested=trust_remote_code, console=console,
+        requires_remote_code=requires,
+    )
+    # Arch guard: reject a non-Whisper base before the (large) weight load.
+    _require_whisper_base(weights_ref, resolved_trust)
+
+    from transformers import WhisperForConditionalGeneration, WhisperProcessor
+
+    console.print(f"[dim]Loading Whisper model: {model}[/]")
+    # Prefer the fine-tuned dir's processor (carries any resized vocab); fall
+    # back to the base for an adapter-only dir.
+    processor = WhisperProcessor.from_pretrained(
+        model if not is_adapter else weights_ref, trust_remote_code=resolved_trust
+    )
+    whisper = WhisperForConditionalGeneration.from_pretrained(
+        weights_ref, trust_remote_code=resolved_trust
+    )
+    if is_adapter:
+        from peft import PeftModel
+
+        whisper = PeftModel.from_pretrained(whisper, model)
+    whisper.to(device)
+    whisper.eval()
+
+    # Resolve decode prefix: explicit flags > training sidecar > model default.
+    sidecar = read_asr_sidecar(model)
+    gen_kwargs = _resolve_asr_gen_prefix(asr_language, asr_task, sidecar)
+    gen_kwargs["max_new_tokens"] = max_tokens
+
+    def transcribe(audio_path: str) -> str:
+        import torch
+
+        wave = load_audio_mono(audio_path, target_sr=16000)
+        features = processor.feature_extractor(
+            wave, sampling_rate=16000, return_tensors="pt"
+        ).input_features.to(device)
+        with torch.no_grad():
+            generated = whisper.generate(features, **gen_kwargs)
+        return processor.batch_decode(generated, skip_special_tokens=True)[0].strip()
+
+    return transcribe
+
+
+def _infer_asr(
+    *,
+    model: str,
+    base: Optional[str],
+    input_file: str,
+    device: Optional[str],
+    output_file: str,
+    max_tokens: int,
+    trust_remote_code: bool,
+    asr_language: Optional[str] = None,
+    asr_task: Optional[str] = None,
+    audio_dir: Optional[str] = None,
+) -> None:
+    """Transcribe an ASR JSONL input and (optionally) report WER/CER."""
+    from soup_cli.utils.asr_metrics import cer, corpus_wer, wer
+    from soup_cli.utils.paths import (
+        atomic_write_text,
+        enforce_under_cwd_and_no_symlink,
+        is_under_cwd,
+    )
+
+    # Output containment + no-symlink (TOCTOU). Atomic write at the end.
+    try:
+        enforce_under_cwd_and_no_symlink(output_file, "--output")
+    except (TypeError, ValueError) as exc:
+        console.print(f"[red]{exc}[/]")
+        raise typer.Exit(1) from exc
+
+    # Audio containment base: --audio-dir (must be under cwd) or the input's dir.
+    if audio_dir:
+        if not is_under_cwd(audio_dir):
+            console.print("[red]--audio-dir must stay under the cwd.[/]")
+            raise typer.Exit(1)
+        base_dir = Path(audio_dir)
+    else:
+        base_dir = Path(input_file).resolve().parent
+
+    rows = _read_asr_rows(Path(input_file))
+    if not rows:
+        console.print("[red]No ASR rows found (need {\"audio\": path} JSONL).[/]")
+        raise typer.Exit(1)
+
+    if _ASR_TRANSCRIBER_OVERRIDE is not None:
+        transcribe = _ASR_TRANSCRIBER_OVERRIDE
+    else:
+        try:
+            transcribe = _build_asr_transcriber(
+                model, base, device, max_tokens, trust_remote_code,
+                asr_language=asr_language, asr_task=asr_task,
+            )
+        except ImportError as exc:
+            console.print(f"[red]{exc}[/]")
+            raise typer.Exit(1) from exc
+        except ValueError as exc:  # arch guard / bad base
+            console.print(f"[red]{exc}[/]")
+            raise typer.Exit(2) from exc
+
+    from rich.markup import escape as _escape
+
+    refs: list[str] = []
+    hyps: list[str] = []
+    out_lines: list[str] = []
+    skipped = 0
+    for row in rows:
+        audio = row["audio"]
+        try:
+            resolved = _resolve_asr_audio(audio, base_dir)
+            hyp = transcribe(resolved)
+        except (ValueError, OSError, ImportError) as exc:
+            skipped += 1
+            # Escape + control-strip the dataset-derived filename AND the
+            # exception (whose message embeds that filename) before printing.
+            name = _escape(_for_terminal(Path(str(audio)).name))
+            console.print(
+                f"[yellow]Skipped {name!r}: {_escape(_for_terminal(str(exc)))}[/]"
+            )
+            continue
+        rec = {"audio": audio, "transcription": hyp}
+        ref = row.get("text")
+        if isinstance(ref, str):
+            # WER/CER can raise ValueError (the _MAX_RAW_CHARS DoS guard) on an
+            # oversized reference. Keep it INSIDE a try so one hostile row is
+            # skipped-unscored, not an uncaught crash that loses every already
+            # transcribed row's output (transcription cost is already paid).
+            try:
+                row_wer = wer(ref, hyp)
+                row_cer = cer(ref, hyp)
+            except ValueError as exc:
+                name = _escape(_for_terminal(Path(str(audio)).name))
+                console.print(
+                    f"[yellow]Metric skipped for {name!r}: "
+                    f"{_escape(_for_terminal(str(exc)))}[/]"
+                )
+            else:
+                rec["reference"] = ref
+                rec["wer"] = row_wer
+                rec["cer"] = row_cer
+                refs.append(ref)
+                hyps.append(hyp)
+        out_lines.append(json.dumps(rec, ensure_ascii=False))
+
+    # All rows failed to transcribe — do not write an empty file and claim
+    # success; a scripted pipeline (soup ship, CI) must see a non-zero exit.
+    if not out_lines:
+        console.print(
+            f"[red]No clips transcribed ({skipped} skipped). "
+            "Check --audio-dir and the input audio paths.[/]"
+        )
+        raise typer.Exit(2)
+
+    atomic_write_text("\n".join(out_lines) + "\n", output_file, field="--output")
+
+    summary = f"Transcribed [bold]{len(out_lines)}[/] clip(s) -> {output_file}"
+    if skipped:
+        summary += f"  ([yellow]{skipped} skipped[/])"
+    if refs:
+        summary += f"\nCorpus WER: [bold]{corpus_wer(refs, hyps):.3f}[/]"
+    console.print(Panel(summary, title="[bold green]ASR Complete![/]"))
 
 
 def _read_prompts(path: Path) -> list[str]:

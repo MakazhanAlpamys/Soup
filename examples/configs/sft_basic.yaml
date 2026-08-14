@@ -1,32 +1,44 @@
 # SFT Basic Example
-# Fine-tune TinyLlama-1.1B on instruction-following data
-# Quick to train (2-3 minutes on consumer GPU) — perfect for testing
+# Fine-tune TinyLlama-1.1B on instruction-following data.
+#
+# The bundled dataset is a 10-row FORMAT sample, not a training set. This
+# config runs end-to-end so you can verify your setup, but it will not
+# produce a usefully fine-tuned model — point `data.train` at your own data
+# for that. See examples/data/README.md.
+#
+# Usage:
+#   soup train --config examples/configs/sft_basic.yaml
 
-model: TinyLlama/TinyLlama-1.1B-Chat-v1.0
-data:
-  path: examples/data/alpaca_tiny.jsonl
-  format: alpaca
+base: TinyLlama/TinyLlama-1.1B-Chat-v1.0
 task: sft
 backend: transformers
-quantization: null
-lora_r: 16
-lora_alpha: 32
-lora_dropout: 0.05
-lora_target_modules:
-  - q_proj
-  - v_proj
-batch_size: 16
-gradient_accumulation_steps: 1
-num_epochs: 1
-learning_rate: 5e-4
-lr_scheduler_type: linear
-warmup_ratio: 0.05
-weight_decay: 0.0
-max_seq_length: 512
-output_dir: ./output_sft_basic/
-seed: 42
-logging_steps: 10
-save_steps: 50
-eval_steps: 50
-eval_strategy: steps
-load_best_model_at_end: false
+
+data:
+  train: examples/data/alpaca_tiny.jsonl
+  format: alpaca
+  # 512: the longest row in any bundled fixture is ~233 tokens, so nothing is
+  # truncated and there is 2x headroom. A larger value only inflates the
+  # activation memory the VRAM pre-flight budgets for. Raise it when you point
+  # this config at longer data of your own.
+  max_length: 512
+
+training:
+  epochs: 1
+  lr: 5e-4
+  batch_size: 4
+  gradient_accumulation_steps: 1
+  quantization: none
+  scheduler: linear
+  warmup_ratio: 0.05
+  weight_decay: 0.0
+  logging_steps: 10
+  save_steps: 50
+  lora:
+    r: 16
+    alpha: 32
+    dropout: 0.05
+    target_modules:
+      - q_proj
+      - v_proj
+
+output: ./output_sft_basic/

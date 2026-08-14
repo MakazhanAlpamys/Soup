@@ -7,8 +7,8 @@ running the most recent version from PyPI (`pip install -U soup-cli`).
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 0.71.x  | :white_check_mark: |
-| < 0.71  | :x:                |
+| 0.73.x  | :white_check_mark: |
+| < 0.73  | :x:                |
 
 ## Reporting a Vulnerability
 
@@ -17,6 +17,9 @@ for anything security-sensitive.
 
 - Preferred: open a private report via
   [GitHub Security Advisories](https://github.com/MakazhanAlpamys/Soup/security/advisories/new).
+- If you cannot use GitHub, email **team@trysoup.dev** (the project address), or
+  **makazanalpamys@gmail.com** (the maintainer's personal address) if that bounces.
+  Please do not report security issues in Discord — it is a public channel.
 
 We aim to acknowledge reports within 5 business days and to ship a fix or
 mitigation for confirmed, in-scope issues as promptly as is practical. When
@@ -40,8 +43,18 @@ in-scope issues:
 - secret leakage in logs, crash bundles, or generated artifacts;
 - sandbox escape in the RLVR code-execution reward path.
 
-Out of scope: vulnerabilities in third-party model weights or datasets you
-choose to load, and issues that require an already-compromised host.
+Out of scope:
+
+- vulnerabilities in third-party model weights or datasets you choose to load;
+- issues that require an already-compromised host;
+- DNS and email configuration of `trysoup.dev` — a missing or permissive
+  DMARC / SPF / DKIM record, and anything else established by a public DNS
+  query. These are worth fixing and we do fix them, but they are not findings
+  in Soup and they are not eligible for anything.
+
+**There is no bug bounty and no monetary reward.** We credit reporters by name
+in the release notes, which is the whole of what we offer. Reports that open
+with a request for payment get this paragraph as the reply.
 
 ## Disclosure
 

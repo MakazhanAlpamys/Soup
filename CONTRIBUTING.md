@@ -13,7 +13,9 @@ cd Soup
 
 ### 2. Set Up Development Environment
 
-**Requirements:** Python 3.10+
+**Requirements:** Python 3.10, 3.11 or 3.12 (`requires-python = ">=3.10,<3.13"`). CI runs
+exactly those three; `tests/test_requires_python_bound.py` derives the declared bound from
+the CI matrix, so widening one without the other fails the suite.
 
 Install the project in editable mode with dev dependencies:
 
@@ -110,17 +112,17 @@ src/soup_cli/
   experiment/         - SQLite experiment tracking
   eval/               - Eval platform (custom tasks, LLM judge, human eval, leaderboard)
   migrate/            - Config migration (LLaMA-Factory, Axolotl, Unsloth)
-  recipes/            - Ready-made configs for popular models (134 recipes)
+  recipes/            - Ready-made configs for popular models (142 recipes)
   autopilot/          - Zero-config decision engine (v0.25.0)
   registry/           - Model Registry (hashing, store, diff, attach) (v0.26.0 + v0.33.0)
   cans/               - Shareable .can artifact format + run/publish orchestrator (v0.26.0 + v0.33.0)
   data/traces/        - Trace-to-Preference harvester (v0.26.0)
   data/collators.py   - CrossDocCollator for sample packing (v0.33.0)
-  utils/              - GPU, errors, MoE, GaLore, QAT, Unsloth, vLLM, SGLang, Liger, FlashAttn, FSDP, Ring Attention, long-context, quality, curriculum, freeze, dataset-registry, mlx, peft_builder, paths, topology, launcher, mii, pipeline, cut_ce, fp8, gradient_ckpt, kernel_picker, cross_doc_attn, activation_offload, hf, spec_pairing, structured_output, metrics, tracing, auto_quant, lr_finder, grad_accum, mixed_precision, warmup, spike_recovery, convergence, v028_features, multipack_sampler, multipack, neat_packing, jinja_analyzer, quant_menu, relora, peft_patches, peft_wiring, dpo_variants, optimizer_zoo, lr_groups, loftq_init, block_expansion, tts, classifier, distill, bitnet, ebft_gdpo, moe_quant, reasoning_effort, gguf_quant, kv_cache, advanced_precision, save_formats, deploy_measure, advise, advise_history, adapter_diff, adapter_merge, blame, adapter_branch, unlearning, unlearning_eval, knowledge_edit, edit_governor, edit_diff, ra_dit, steering, citation_faithful, grace_codebook, ingest_sources, prune_prompt, active_sampler, ab_test, drift_alarm, tunability, terraform_plan, env_lock, hardware_fit, completions, license_advisor, behavior_battery, capability_suite, checklist_dsl, irt, sae_diff, sleeper_probe, interference, probe_pack, cmaes_merge, vector_bank, mole_routing, adapter_pr, soup_lock, adapter_bisect, prompt_compile, prompt_distill, compile_tools, apple_adapter, local_rl, build_dag, expectations, magpie, persona_hub, brain_rot, reward_hacking, uld, minillm, rl_checkpoint, iterative_dpo, echo_trap, mod, local_rl_scheduler, spectrum_scan, ship_verdict, reward_hack_control, data_doctor, data_lint
-  templates/          - 17 built-in soup.yaml templates (YAML + manifest.json) with load_template loader (v0.39.0, +bco v0.40.0)
+  utils/              - GPU, errors, MoE, GaLore, QAT, Unsloth, vLLM, SGLang, Liger, FlashAttn, FSDP, Ring Attention, long-context, quality, curriculum, freeze, dataset-registry, mlx, peft_builder, paths, topology, launcher, mii, pipeline, cut_ce, fp8, gradient_ckpt, kernel_picker, cross_doc_attn, activation_offload, hf, spec_pairing, structured_output, metrics, tracing, auto_quant, lr_finder, grad_accum, mixed_precision, warmup, spike_recovery, convergence, v028_features, multipack_sampler, multipack, neat_packing, jinja_analyzer, quant_menu, relora, peft_patches, peft_wiring, dpo_variants, optimizer_zoo, lr_groups, loftq_init, block_expansion, tts, classifier, distill, bitnet, ebft_gdpo, moe_quant, reasoning_effort, gguf_quant, kv_cache, advanced_precision, save_formats, deploy_measure, advise, advise_history, adapter_diff, adapter_merge, blame, adapter_branch, unlearning, unlearning_eval, knowledge_edit, edit_governor, edit_diff, ra_dit, steering, citation_faithful, grace_codebook, ingest_sources, prune_prompt, active_sampler, ab_test, drift_alarm, tunability, terraform_plan, env_lock, hardware_fit, completions, license_advisor, behavior_battery, capability_suite, checklist_dsl, irt, sae_diff, sleeper_probe, interference, probe_pack, cmaes_merge, vector_bank, mole_routing, adapter_pr, soup_lock, adapter_bisect, prompt_compile, prompt_distill, compile_tools, apple_adapter, local_rl, build_dag, expectations, magpie, persona_hub, brain_rot, reward_hacking, uld, minillm, rl_checkpoint, iterative_dpo, echo_trap, mod, local_rl_scheduler, spectrum_scan, ship_verdict, reward_hack_control, data_doctor, data_lint, shrink, best_of_n, evolve, reward_synth, reward_stress, layer_stream, layer_shard, layer_stream_runtime
+  templates/          - 21 built-in soup.yaml templates (YAML + manifest.json) with load_template loader (v0.39.0, +bco v0.40.0, +4 compliance v0.71.35)
   ui/                 - Web UI (FastAPI + HTML/JS SPA)
 
-tests/                - Test suite (305 files, 15140 tests)
+tests/                - Test suite (347 files, 17344 tests)
 examples/             - Real-world config examples and datasets
 ```
 
@@ -150,10 +152,9 @@ pytest tests/test_data.py::test_detect_alpaca_format -v
 pytest tests/ --cov=soup_cli --cov-report=html
 ```
 
-### Test Files (305 files)
+### Test Files (347 files)
 
-> A representative sample of the suite below. The full table lives in
-> [`.claude/CLAUDE.md`](.claude/CLAUDE.md); run `pytest tests/ -v` for the complete list.
+> A representative sample of the suite below. Run `pytest tests/ -v` for the complete list.
 
 
 | File | Covers |
@@ -292,6 +293,28 @@ pytest tests/ --cov=soup_cli --cov-report=html
 
 (Note: the test-file table above is a representative subset, not exhaustive — every `tests/test_*.py` file maps to a feature area or release.)
 
+## Claiming an Issue
+
+Comment on it saying you are taking it. GitHub only lets us set the formal
+assignee badge for repo collaborators, so the comment **is** the claim — it will
+look unassigned either way, and we treat the thread as the record.
+
+Two commitments in return:
+
+- **If a maintainer ends up doing the work instead, you get told, in the thread,
+  before or when it lands.** This has been broken once ([#313](https://github.com/MakazhanAlpamys/Soup/issues/313)):
+  a contributor was green-lit, scoped a careful protocol, and then the
+  measurement was run on borrowed hardware and the issue closed without a word
+  to them. That was a process failure on our side, and this paragraph exists
+  because of it.
+- **A claim that goes quiet is released with a comment, not silently.** We check
+  in first, and "life got in the way" needs no explanation — see
+  [#280](https://github.com/MakazhanAlpamys/Soup/issues/280) for the shape.
+
+If an issue needs hardware you do not have, say so in the claim. Several open
+issues are labelled `infra-blocked` for exactly that reason, and knowing early
+is more useful than a stalled branch.
+
 ## Making Changes
 
 ### 1. Create a Branch
@@ -389,7 +412,7 @@ If adding a new training algorithm:
 
 1. Create `trainer/your_trainer.py` wrapping the appropriate TRL trainer
 2. Add config fields to `config/schema.py` (Pydantic v2)
-3. Add template to `config/schema.py` (see existing 15 templates)
+3. Add a template YAML under `src/soup_cli/templates/` + a `manifest.json` entry (see the existing 21 templates)
 4. Update `commands/train.py` to route to your trainer
 5. Add 30+ tests in `tests/test_your_trainer.py`
 6. Update `README.md` + the relevant page under `docs/`
@@ -460,8 +483,10 @@ If you contributed and aren't credited somewhere, that's a bug — open a PR or 
 
 - **Issues:** Report bugs and request features on [GitHub Issues](https://github.com/MakazhanAlpamys/Soup/issues)
 - **Discussions:** Ask questions on [GitHub Discussions](https://github.com/MakazhanAlpamys/Soup/discussions)
-- **Code of Conduct:** Please read [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
-- **Security:** Report security issues via [SECURITY.md](SECURITY.md)
+- **Discord:** Chat with maintainers and other users on [Discord](https://discord.gg/8RgVbFA6Zq) — good for
+  quick questions and pairing on a PR; anything worth finding later still belongs in Issues or Discussions
+- **Code of Conduct:** Please read [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) — it applies on Discord too
+- **Security:** Report security issues via [SECURITY.md](SECURITY.md) — privately, never in Discord
 
 ## Questions?
 

@@ -27,7 +27,7 @@ class MLXDPOTrainerWrapper:
         except ImportError as exc:
             raise ImportError(
                 "MLX backend requires the 'mlx' and 'mlx-lm' packages. "
-                "Install with: pip install 'soup-cli[mlx]'"
+                "Install with: pip install \"soup-cli[mlx]\""
             ) from exc
 
     def setup(self, dataset: dict) -> None:

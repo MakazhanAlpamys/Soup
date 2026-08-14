@@ -131,15 +131,41 @@ class TestRunLRSweep:
 
 
 class TestResolveMixedPrecision:
-    def test_auto_flag_off_preserves_legacy(self):
+    def test_auto_flag_off_asks_the_card(self, monkeypatch):
+        """Was ``test_auto_flag_off_preserves_legacy``, asserting bf16 on any
+        CUDA device. That "legacy" is what transformers refuses outright on a
+        pre-Ampere card — *"Your setup doesn't support bf16/gpu"* — so every
+        run on a T4 or P100 died before step 0 (#385). The contract is now: bf16
+        when the card has it, fp16 when it does not. Both directions asserted,
+        because a resolver hardcoded either way would satisfy only one."""
+        import torch
+
         from soup_cli.trainer.sft import SFTTrainerWrapper
 
         wrapper = SFTTrainerWrapper.__new__(SFTTrainerWrapper)
         wrapper.device = "cuda"
         tcfg = SimpleNamespace(auto_mixed_precision=False)
-        bf16, fp16 = wrapper._resolve_mixed_precision(tcfg, "any")
-        assert bf16 is True
-        assert fp16 is False
+
+        class _Cuda:
+            def __init__(self, bf16):
+                self._bf16 = bf16
+
+            def is_available(self):
+                return True
+
+            def is_bf16_supported(self, including_emulation: bool = True):
+                # Mirrors the real signature: the bare call is permissive
+                # and says True on a T4 through emulation (#385 follow-up).
+                return self._bf16 if not including_emulation else True
+
+            def get_device_capability(self, device=None):
+                return (8, 0) if self._bf16 else (7, 5)
+
+        monkeypatch.setattr(torch, "cuda", _Cuda(True))
+        assert wrapper._resolve_mixed_precision(tcfg, "any") == (True, False)
+
+        monkeypatch.setattr(torch, "cuda", _Cuda(False))
+        assert wrapper._resolve_mixed_precision(tcfg, "any") == (False, True)
 
     def test_auto_flag_off_cpu(self):
         from soup_cli.trainer.sft import SFTTrainerWrapper

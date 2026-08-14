@@ -557,3 +557,44 @@ def load_reward_fn(
         f"Options: {', '.join(BUILTIN_REWARDS.keys())}, 'verifiable', "
         f"or path to a .py file"
     )
+
+
+def load_reward_fns(
+    reward_fn_spec: str, verifiable_domain: "str | None" = None,
+) -> list[Callable]:
+    """Load one OR MORE reward functions from a comma-separated spec (v0.71.40 #311).
+
+    ``reward_fn`` may name several rewards, e.g. ``"accuracy,format"`` — each is
+    resolved via :func:`load_reward_fn` and returned as a list, which TRL's
+    ``GRPOTrainer(reward_funcs=[...])`` accepts and which the ``rm_ensemble``
+    reward-hack detector (needs >= 2 reward fns) unlocks. A single name still
+    returns a one-element list, so callers can always treat the result uniformly.
+
+    Splitting is on ``,``; blank / empty segments raise (``"accuracy,"`` is a typo,
+    not "accuracy plus nothing"), and duplicate segments raise (they would collide
+    by ``__name__`` in the ``rm_ensemble`` capture buffer, silently shrinking the
+    ensemble). A ``.py`` path containing a literal comma is not supported — rename
+    the file.
+    """
+    if not isinstance(reward_fn_spec, str):
+        raise ValueError(
+            "reward_fn must be a string (a name, a .py path, or a comma-separated "
+            f"list), got {type(reward_fn_spec).__name__}"
+        )
+    if not reward_fn_spec.strip():
+        raise ValueError("reward_fn must not be blank")
+    segments = [seg.strip() for seg in reward_fn_spec.split(",")]
+    if any(not seg for seg in segments):
+        raise ValueError(
+            f"reward_fn {reward_fn_spec!r} has an empty comma segment — "
+            "remove the stray comma"
+        )
+    seen: set[str] = set()
+    for seg in segments:
+        if seg in seen:
+            raise ValueError(
+                f"reward_fn {reward_fn_spec!r} lists {seg!r} twice — "
+                "duplicate rewards collide in the ensemble"
+            )
+        seen.add(seg)
+    return [load_reward_fn(seg, verifiable_domain=verifiable_domain) for seg in segments]

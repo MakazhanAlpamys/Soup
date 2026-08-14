@@ -21,7 +21,9 @@ from soup_cli.commands import (  # noqa: E402
     autopilot,
     bench,
     can,
+    card,
     chat,
+    ci,
     cost,
     data,
     deploy,
@@ -98,6 +100,8 @@ app.command()(cost.cost)
 app.command()(push.push)
 app.command(name="export")(export.export)
 app.command()(merge.merge)
+app.command(name="card")(card.card)
+app.add_typer(ci.app, name="ci", help="Fine-tuning CI: init a PR gate workflow.")
 app.add_typer(
     data.app, name="data",
     help="Dataset tools: inspect, convert, merge, dedup, validate, stats.",
@@ -517,6 +521,15 @@ from soup_cli.commands import data_doctor as _data_doctor_cmd  # noqa: E402
 data.app.command(name="doctor")(_data_doctor_cmd.doctor)
 data.app.command(name="lint")(_data_doctor_cmd.lint)
 
+# v0.71.36 — Data Moat II: topic map + Secret-Sharer canaries.
+from soup_cli.commands import data_topics as _data_topics_cmd  # noqa: E402
+
+data.app.command(name="topics")(_data_topics_cmd.topics)
+
+from soup_cli.commands import data_canary as _data_canary_cmd  # noqa: E402
+
+data.app.add_typer(_data_canary_cmd.app, name="canary")
+
 # v0.71.28 — MCP server: drive Soup from any MCP client (Claude Code / Cursor /
 # Cline / Continue) over stdio.
 from soup_cli.commands import mcp as _mcp_cmd  # noqa: E402
@@ -525,6 +538,41 @@ app.add_typer(
     _mcp_cmd.app,
     name="mcp",
     help="Model Context Protocol server - drive Soup from any MCP client (v0.71.28).",
+)
+
+# v0.71.29 — `soup shrink` depth-prune + distill-heal.
+from soup_cli.commands import shrink as _shrink_cmd  # noqa: E402
+
+app.command(
+    name="shrink",
+    help=(
+        "Depth-prune a model (drop the least-important contiguous layer block "
+        "by residual angular distance) + optional distill-heal (v0.71.29)."
+    ),
+)(_shrink_cmd.shrink)
+
+# v0.71.33 — `soup draft` train-your-own speculative-decoding draft.
+from soup_cli.commands import draft as _draft_cmd  # noqa: E402
+
+app.add_typer(
+    _draft_cmd.app,
+    name="draft",
+    help=(
+        "Train + measure a speculative-decoding draft model: distil your tuned "
+        "model into a tiny draft, then serve it with --auto-spec (v0.71.33)."
+    ),
+)
+
+# v0.71.40 — `soup reward synth` auto-generate a deterministic verifier.
+from soup_cli.commands import reward as _reward_cmd  # noqa: E402
+
+app.add_typer(
+    _reward_cmd.app,
+    name="reward",
+    help=(
+        "Synthesize a deterministic reward verifier from reference outputs, with "
+        "a calibration report that refuses degenerate verifiers (v0.71.40)."
+    ),
 )
 
 

@@ -40,6 +40,17 @@ Soup works with **any** of the **340,000+** text-generation models on [HuggingFa
 | Qwen2-VL-7B-Instruct | 7B | LLaVA, ShareGPT4V |
 | Pixtral-12B-2409 | 12B | LLaVA, ShareGPT4V |
 
+### ASR Models (`task: asr`, Whisper — v0.71.32)
+
+| Recipe | Base | Size | Status |
+|---|---|---|---|
+| `whisper-tiny-asr` | openai/whisper-tiny | 39M | Live on 4 GB |
+| `whisper-base-asr` | openai/whisper-base | 74M | Live on 4 GB |
+| `whisper-large-v3-asr` | openai/whisper-large-v3 | 1.5B | Parse-only (larger GPU) |
+
+Rows are `{"audio": <path>, "text": <transcript>}` with `data.format: asr`. See
+[Training → ASR fine-tuning](training.md).
+
 ### Quick Size Guide
 
 | VRAM | Max Model (QLoRA 4-bit) | Example |
@@ -54,35 +65,58 @@ Soup works with **any** of the **340,000+** text-generation models on [HuggingFa
 
 ## Optional Extras
 
+> **Python 3.10, 3.11 or 3.12.** Since v0.73.0 the package declares
+> `requires-python = ">=3.10,<3.13"`. Those are exactly the versions CI tests. Without the
+> upper bound, pip on 3.13+ resolved PyTorch wheels nobody had validated, and the failure was
+> not a Soup error message — it was a loader crash inside `c10.dll` / `libc10.so` before any
+> Soup code ran. If you are on 3.13+, create a 3.12 environment; support widens when CI does.
+
+### Quoting the extra
+
+**Use double quotes.** `pip install "soup-cli[train]"` is the only spelling that works in every
+shell — `cmd.exe`, PowerShell, bash, and zsh. Every command in the table below uses it.
+
+Older tutorials and videos (including some of ours) show the single-quoted
+`pip install 'soup-cli[train]'`. That is bash / zsh / PowerShell syntax, and it fails on Windows
+`cmd.exe`, which has no single-quote quoting and hands the quotes straight to pip:
+
+```
+ERROR: Invalid requirement: "'soup-cli[train]'": Expected package name at the start of dependency specifier
+```
+
+If you hit that, swap the `'` for `"` — pip is rejecting a literal quote character, nothing is
+wrong with the package. (Dropping the quotes entirely works on Windows too, but zsh then reads
+`[train]` as a glob and fails.)
+
+### The extras table
+
 The core `pip install soup-cli` is a light install — the CLI, config system, and data tools, with
 no PyTorch. Add `[train]` to fine-tune, or install other extras only when you need them:
 
 | Extra | Install | What it adds |
 |---|---|---|
-| `train` | `pip install 'soup-cli[train]'` | Training stack: torch, transformers, peft, trl, datasets, bitsandbytes, accelerate |
-| `all` | `pip install 'soup-cli[all]'` | `train` + `serve` + `ui` + `data` in one shot |
-| `fast` | `pip install 'soup-cli[fast]'` | Unsloth backend (2-5x faster, lower VRAM) |
-| `vision` | `pip install 'soup-cli[vision]'` | Vision / multimodal fine-tuning (Pillow) |
-| `audio` | `pip install 'soup-cli[audio]'` | Audio / speech fine-tuning (librosa, soundfile) |
-| `mlx` | `pip install 'soup-cli[mlx]'` | Apple Silicon backend (mlx, mlx-lm) |
-| `qat` | `pip install 'soup-cli[qat]'` | Quantization-Aware Training (torchao) |
-| `serve` | `pip install 'soup-cli[serve]'` | Inference server (FastAPI + uvicorn) |
-| `serve-fast` | `pip install 'soup-cli[serve-fast]'` | vLLM inference backend (2-4x throughput) |
-| `sglang` | `pip install 'soup-cli[sglang]'` | SGLang inference backend |
-| `ui` | `pip install 'soup-cli[ui]'` | Web UI + inference server |
-| `tui` | `pip install 'soup-cli[tui]'` | Full-screen Textual dashboard (`soup tui`) |
-| `eval` | `pip install 'soup-cli[eval]'` | Benchmark evaluation (lm-evaluation-harness) |
-| `data` | `pip install 'soup-cli[data]'` | Deduplication (MinHash via datasketch) |
-| `data-pro` | `pip install 'soup-cli[data-pro]'` | Language detection + PII (langdetect, presidio) |
-| `deepspeed` | `pip install 'soup-cli[deepspeed]'` | Multi-GPU training (DeepSpeed ZeRO) |
-| `liger` | `pip install 'soup-cli[liger]'` | Liger Kernel fused ops |
-| `ring-attn` | `pip install 'soup-cli[ring-attn]'` | Ring FlashAttention (sequence parallelism) |
-| `onnx` / `tensorrt` | `pip install 'soup-cli[onnx]'` | ONNX / TensorRT-LLM export |
-| `awq` / `gptq` | `pip install 'soup-cli[awq]'` | AWQ / GPTQ quantized export |
-| `trackers` | `pip install 'soup-cli[trackers]'` | MLflow / SwanLab / Trackio logging |
-| `remote` | `pip install 'soup-cli[remote]'` | Remote datasets (s3 / gs / az / oci) |
-| `dev` | `pip install 'soup-cli[dev]'` | Tests + lint + types (pytest, ruff, mypy, pre-commit) |
+| `train` | `pip install "soup-cli[train]"` | Training stack: torch, transformers, peft, trl, datasets, bitsandbytes, accelerate |
+| `all` | `pip install "soup-cli[all]"` | `train` + `serve` + `ui` + `data` in one shot |
+| `fast` | `pip install "soup-cli[fast]"` | Unsloth backend (2-5x faster, lower VRAM) |
+| `vision` | `pip install "soup-cli[vision]"` | Vision / multimodal fine-tuning (Pillow) |
+| `audio` | `pip install "soup-cli[audio]"` | Audio / speech fine-tuning (librosa, soundfile) |
+| `mlx` | `pip install "soup-cli[mlx]"` | Apple Silicon backend (mlx, mlx-lm) |
+| `qat` | `pip install "soup-cli[qat]"` | Quantization-Aware Training (torchao) |
+| `serve` | `pip install "soup-cli[serve]"` | Inference server (FastAPI + uvicorn) |
+| `serve-fast` | `pip install "soup-cli[serve-fast]"` | vLLM inference backend (2-4x throughput) |
+| `sglang` | `pip install "soup-cli[sglang]"` | SGLang inference backend |
+| `ui` | `pip install "soup-cli[ui]"` | Web UI + inference server |
+| `tui` | `pip install "soup-cli[tui]"` | Full-screen Textual dashboard (`soup tui`) |
+| `eval` | `pip install "soup-cli[eval]"` | Benchmark evaluation (lm-evaluation-harness) |
+| `data` | `pip install "soup-cli[data]"` | Deduplication (MinHash via datasketch) |
+| `data-pro` | `pip install "soup-cli[data-pro]"` | Language detection + PII (langdetect, presidio) |
+| `deepspeed` | `pip install "soup-cli[deepspeed]"` | Multi-GPU training (DeepSpeed ZeRO) |
+| `liger` | `pip install "soup-cli[liger]"` | Liger Kernel fused ops |
+| `ring-attn` | `pip install "soup-cli[ring-attn]"` | Ring FlashAttention (sequence parallelism) |
+| `onnx` / `tensorrt` | `pip install "soup-cli[onnx]"` | ONNX / TensorRT-LLM export |
+| `awq` / `gptq` | `pip install "soup-cli[awq]"` | AWQ / GPTQ quantized export |
+| `trackers` | `pip install "soup-cli[trackers]"` | MLflow / SwanLab / Trackio logging |
+| `remote` | `pip install "soup-cli[remote]"` | Remote datasets (s3 / gs / az / oci) |
+| `dev` | `pip install "soup-cli[dev]"` | Tests + lint + types (pytest, ruff, mypy, pre-commit) |
 
 The complete, authoritative extras list is in [`pyproject.toml`](../pyproject.toml).
-
-

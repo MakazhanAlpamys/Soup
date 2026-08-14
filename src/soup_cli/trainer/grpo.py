@@ -10,8 +10,14 @@ from typing import Any, Optional
 
 from rich.console import Console
 
-from soup_cli.config.schema import SoupConfig
-from soup_cli.utils.gpu import estimate_batch_size, model_size_from_name
+from soup_cli.config.schema import SoupConfig, TrainingConfig
+from soup_cli.utils.gpu import (
+    bf16_fp16_flags,
+    estimate_batch_size,
+    model_size_from_name,
+    resolve_device_map,
+)
+from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 
 console = Console()
 logger = logging.getLogger(__name__)
@@ -91,9 +97,7 @@ def _make_grpo_trainer_variant_cached(base_cls: type, variant: str) -> type:
                 # Fall back to the original loss — defence-in-depth so a
                 # TRL internal rename does not crash the training loop.
                 self._warn_fallback("missing per-token log-prob inputs")
-                return super().compute_loss(
-                    model, inputs, return_outputs=return_outputs, **kwargs
-                )
+                return super().compute_loss(model, inputs, return_outputs=return_outputs, **kwargs)
 
             beta_attr = getattr(self.args, "beta", None)
             beta = float(beta_attr) if beta_attr is not None else 0.0
@@ -110,14 +114,10 @@ def _make_grpo_trainer_variant_cached(base_cls: type, variant: str) -> type:
                 )
             except (TypeError, ValueError) as exc:
                 self._warn_fallback(f"kernel error: {exc}")
-                return super().compute_loss(
-                    model, inputs, return_outputs=return_outputs, **kwargs
-                )
+                return super().compute_loss(model, inputs, return_outputs=return_outputs, **kwargs)
             if variant_loss is None:
                 self._warn_fallback("kernel returned None")
-                return super().compute_loss(
-                    model, inputs, return_outputs=return_outputs, **kwargs
-                )
+                return super().compute_loss(model, inputs, return_outputs=return_outputs, **kwargs)
             if return_outputs:
                 return variant_loss, None
             return variant_loss
@@ -133,6 +133,31 @@ def _read_attr(obj: Any, name: str) -> Any:
     if hasattr(obj, "get"):
         return obj.get(name)
     return getattr(obj, name, None)
+
+
+def _select_reward_fn(
+    tcfg: TrainingConfig, device: str, trust_remote_code: bool
+) -> "Any":  # Callable | list[Callable] (a single reward or a comma-split ensemble)
+    """Choose the GRPO reward function (v0.71.30).
+
+    When ``tcfg.prm_reward`` is set, a trained Soup PRM scores each completion's
+    steps and REPLACES the configured ``reward_fn`` (process-supervision). The
+    returned callable rides the existing shaping + ``wrap_reward_funcs`` seam in
+    :meth:`GRPOTrainerWrapper.setup` unchanged, so the v0.71.26 reward-hack
+    mitigation controller observes the PRM reward for free.
+    """
+    if tcfg.prm_reward is not None:
+        from soup_cli.utils.prm_reward import build_prm_reward_fn
+
+        return build_prm_reward_fn(tcfg, device, trust_remote_code)
+    # v0.71.40 #311 — ``reward_fn`` may be comma-separated ("accuracy,format").
+    # Return a single callable for one reward (back-compat) or a list for several
+    # (TRL's reward_funcs=[...] + the rm_ensemble detector both accept the list).
+    from soup_cli.trainer.rewards import load_reward_fns
+
+    fns = load_reward_fns(tcfg.reward_fn, verifiable_domain=tcfg.verifiable_domain)
+    return fns[0] if len(fns) == 1 else fns
+
 
 class GRPOTrainerWrapper:
     """High-level wrapper for GRPO training from SoupConfig.
@@ -187,7 +212,11 @@ class GRPOTrainerWrapper:
           regress this branch silently.
         - ``grpo_fp16=True`` (CUDA) → ``fp16=True, bf16=False`` (unsloth
           parity).
-        - Default CUDA → ``fp16=False, bf16=True`` (legacy v0.50.0 path).
+        - Default CUDA → bf16 when the card supports it, fp16 when it does
+          not. This branch used to be a flat ``bf16=True``, which transformers
+          refuses on a pre-Ampere card (T4 / P100 / V100 / GTX 16xx) — see
+          #387; ``grpo_fp16`` was the only way to run GRPO there and nothing
+          said so.
 
         ``auto_mixed_precision`` is mutually exclusive with ``grpo_fp16``
         (rejected at schema load via ``_validate_grpo_fp16_amp_exclusive``);
@@ -200,7 +229,8 @@ class GRPOTrainerWrapper:
         # access (no getattr fallback) so a typo would fail loudly.
         if self.config.training.grpo_fp16:
             return {"fp16": True, "bf16": False}
-        return {"fp16": False, "bf16": True}
+        bf16, fp16 = bf16_fp16_flags(self.device)
+        return {"fp16": fp16, "bf16": bf16}
 
     def setup(self, dataset: dict):
         """Load model, tokenizer, apply LoRA, create GRPO trainer."""
@@ -219,14 +249,16 @@ class GRPOTrainerWrapper:
 
         cfg = self.config
         tcfg = cfg.training
+
+        # #353: seed before the model and any adapter are built.
+        apply_training_seed(tcfg)
+
         use_unsloth = cfg.backend == "unsloth"
 
         # --- Load reward function ---
-        from soup_cli.trainer.rewards import load_reward_fn
-
-        reward_fn = load_reward_fn(
-            tcfg.reward_fn, verifiable_domain=tcfg.verifiable_domain
-        )
+        # v0.71.30 — when tcfg.prm_reward is set, a trained Soup PRM replaces
+        # the configured reward (process-supervision); otherwise load reward_fn.
+        reward_fn = _select_reward_fn(tcfg, self.device, self._trust_remote_code)
 
         # v0.71.11 #235/#240 — when the reward-hack or echo-trap detector is
         # enabled, wrap the reward function(s) with a capture shim so the
@@ -260,16 +292,13 @@ class GRPOTrainerWrapper:
         # lists) and will raise ValueError if the template is missing.
         if not getattr(self.tokenizer, "chat_template", None):
             self.tokenizer.chat_template = (
-                "{% for msg in messages %}"
-                "{{ msg['content'] }}\n"
-                "{% endfor %}"
+                "{% for msg in messages %}{{ msg['content'] }}\n{% endfor %}"
             )
 
         trainable, total = self.model.get_nb_trainable_parameters()
         pct = 100 * trainable / total
         console.print(
-            f"[green]LoRA applied:[/] {trainable:,} trainable"
-            f" / {total:,} total ({pct:.2f}%)"
+            f"[green]LoRA applied:[/] {trainable:,} trainable / {total:,} total ({pct:.2f}%)"
         )
 
         # --- Batch size ---
@@ -314,9 +343,7 @@ class GRPOTrainerWrapper:
                 tokenizer=self.tokenizer,
                 reward_fn=reward_fn,
             )
-            train_data = _prepare_grpo_dataset(
-                [dict(row) for row in rollout_result.rows]
-            )
+            train_data = _prepare_grpo_dataset([dict(row) for row in rollout_result.rows])
             console.print(
                 f"[green]Rollout backend '{tcfg.rollout_backend}':[/] "
                 f"{len(train_data)} prompts collected "
@@ -339,8 +366,7 @@ class GRPOTrainerWrapper:
         import math
 
         total_steps = (
-            math.ceil(len(train_ds) / batch_size / tcfg.gradient_accumulation_steps)
-            * tcfg.epochs
+            math.ceil(len(train_ds) / batch_size / tcfg.gradient_accumulation_steps) * tcfg.epochs
         )
         warmup_steps = int(total_steps * tcfg.warmup_ratio)
 
@@ -371,6 +397,7 @@ class GRPOTrainerWrapper:
             "report_to": self.report_to,
             "remove_unused_columns": False,
             "deepspeed": self.deepspeed_config,
+            **training_seed_kwargs(tcfg),
             **(self.fsdp_config or {}),
             "beta": tcfg.grpo_beta,
             "num_generations": tcfg.num_generations,
@@ -432,11 +459,13 @@ class GRPOTrainerWrapper:
             self.trainer._soup_grpo_delta = float(tcfg.grpo_delta)
         # v0.53.11 #127 — wire the live stability callback.
         from soup_cli.utils.peft_wiring import attach_grpo_stability_callback
+
         attach_grpo_stability_callback(self.trainer, tcfg)
 
         # v0.71.11 #235/#238/#240 — wire the live RL callbacks (reward-hack,
         # echo-trap, mid-epoch RL checkpoint).
         from soup_cli.utils.peft_wiring import attach_rl_callbacks
+
         attach_rl_callbacks(
             self.trainer,
             tcfg,
@@ -452,6 +481,7 @@ class GRPOTrainerWrapper:
             attach_plugin_callback,
             attach_relora_callback,
         )
+
         attach_relora_callback(self.trainer, tcfg)
         # v0.53.5 #114/#115 — dynamic curriculum live callback.
         attach_curriculum_callback(self.trainer, tcfg, str(output_dir), console)
@@ -476,14 +506,17 @@ class GRPOTrainerWrapper:
         from soup_cli.utils.quant_menu import build_quantization_config_for_loader
 
         quant_config_obj = build_quantization_config_for_loader(
-            tcfg=tcfg, base=cfg.base, console=console,
+            tcfg=tcfg,
+            base=cfg.base,
+            console=console,
         )
 
         console.print(f"[dim]Loading model: {cfg.base}[/]")
         # On CPU, use device_map="cpu" to avoid meta tensors from "auto"
-        dev_map = "cpu" if self.device == "cpu" else "auto"
+        dev_map = resolve_device_map(self.device)
         model_kwargs = {
-            "trust_remote_code": self._trust_remote_code, "device_map": dev_map,
+            "trust_remote_code": self._trust_remote_code,
+            "device_map": dev_map,
         }
         if quant_config_obj is not None:
             model_kwargs["quantization_config"] = quant_config_obj
@@ -519,6 +552,7 @@ class GRPOTrainerWrapper:
             apply_post_lora_patches,
             apply_pre_lora_patches,
         )
+
         apply_pre_lora_patches(self.model, cfg.base)
         self.model = get_peft_model(self.model, lora_config)
         apply_post_lora_patches(self.model)
@@ -532,9 +566,14 @@ class GRPOTrainerWrapper:
 
         # v0.35.0 #60 — multi-trainer wiring of v0.28.0 speed/memory features.
         from soup_cli.utils.v028_features import apply_v028_speed_memory
+
         apply_v028_speed_memory(
-            model=self.model, tcfg=tcfg, base_model=cfg.base,
-            console=console, device=self.device, backend=cfg.backend,
+            model=self.model,
+            tcfg=tcfg,
+            base_model=cfg.base,
+            console=console,
+            device=self.device,
+            backend=cfg.backend,
         )
 
     def _setup_unsloth(self, cfg, tcfg):
@@ -570,7 +609,9 @@ class GRPOTrainerWrapper:
 
             self.trainer.add_callback(
                 SoupTrainerCallback(
-                    display, tracker=tracker, run_id=run_id,
+                    display,
+                    tracker=tracker,
+                    run_id=run_id,
                     loss_watchdog=self.config.training.loss_watchdog,
                     loss_watchdog_threshold=self.config.training.loss_watchdog_threshold,
                     loss_watchdog_patience=self.config.training.loss_watchdog_patience,
@@ -581,7 +622,8 @@ class GRPOTrainerWrapper:
         from soup_cli.utils.v028_features import activation_offloading_context
 
         with activation_offloading_context(
-            self.config.training, self._output_dir,
+            self.config.training,
+            self._output_dir,
         ):
             self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         duration = time.time() - start

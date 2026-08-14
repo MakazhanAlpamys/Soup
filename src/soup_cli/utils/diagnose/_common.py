@@ -134,7 +134,7 @@ def resolve_tokenizer(tokenizer: object) -> object:
     except ImportError as exc:
         raise ValueError(
             "tokenizer-aware diagnose needs transformers — "
-            "install with: pip install 'soup-cli[train]'"
+            "install with: pip install \"soup-cli[train]\""
         ) from exc
     try:
         return AutoTokenizer.from_pretrained(tokenizer)

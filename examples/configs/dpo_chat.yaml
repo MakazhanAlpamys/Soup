@@ -1,35 +1,43 @@
 # DPO Chat Example
-# Train a chat model with Direct Preference Optimization
-# Uses Llama2-7B and preference data (chosen vs rejected)
+# Train a chat model with Direct Preference Optimization.
+# Uses Llama-2-7B-chat and preference data (prompt / chosen / rejected).
+#
+# The bundled dataset is a 5-row FORMAT sample, not a training set.
+# Point `data.train` at your own preference pairs for a real run.
+# See examples/data/README.md.
+#
+# Usage:
+#   soup train --config examples/configs/dpo_chat.yaml
 
-model: meta-llama/Llama-2-7b-chat-hf
-data:
-  path: examples/data/chat_preferences.jsonl
-  format: sharegpt
+base: meta-llama/Llama-2-7b-chat-hf
 task: dpo
 backend: transformers
-quantization: int8
-lora_r: 64
-lora_alpha: 128
-lora_dropout: 0.05
-lora_target_modules:
-  - q_proj
-  - v_proj
-  - k_proj
-  - out_proj
-batch_size: 8
-gradient_accumulation_steps: 2
-num_epochs: 2
-learning_rate: 5e-4
-lr_scheduler_type: cosine
-warmup_ratio: 0.1
-weight_decay: 0.01
-max_seq_length: 2048
-output_dir: ./output_dpo_chat/
-seed: 42
-logging_steps: 10
-save_steps: 100
-eval_steps: 100
-eval_strategy: steps
-load_best_model_at_end: true
-dpo_beta: 0.1
+
+data:
+  train: examples/data/chat_preferences.jsonl
+  format: dpo
+  max_length: 2048
+
+training:
+  epochs: 2
+  lr: 5e-4
+  dpo_beta: 0.1
+  batch_size: 8
+  gradient_accumulation_steps: 2
+  quantization: 8bit
+  scheduler: cosine
+  warmup_ratio: 0.1
+  weight_decay: 0.01
+  logging_steps: 10
+  save_steps: 100
+  lora:
+    r: 64
+    alpha: 128
+    dropout: 0.05
+    target_modules:
+      - q_proj
+      - v_proj
+      - k_proj
+      - o_proj
+
+output: ./output_dpo_chat/

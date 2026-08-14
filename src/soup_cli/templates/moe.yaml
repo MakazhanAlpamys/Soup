@@ -5,7 +5,7 @@
 
 base: Qwen/Qwen3-30B-A3B
 task: sft
-# backend: unsloth  # 2-5x faster, pip install 'soup-cli[fast]'
+# backend: unsloth  # 2-5x faster, pip install "soup-cli[fast]"
 
 data:
   train: ./data/train.jsonl

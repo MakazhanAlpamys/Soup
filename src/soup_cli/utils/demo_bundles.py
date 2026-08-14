@@ -27,21 +27,31 @@ class DemoBundle:
     name: str
     fixture: str  # filename under examples/data/
     description: str
-    format: str   # alpaca / sharegpt / dpo / reasoning
+    # The format a config must declare for this fixture. Must equal what
+    # data.formats.detect_format() returns for it — pinned by a test, because
+    # two of these were wrong and the value is what a user copies into
+    # `data.format`.
+    format: str   # alpaca / dpo
 
 
+# Descriptions carry no row counts on purpose. `alpaca_demo` advertised
+# "20-row" against a 10-row file: a number describing a file, hardcoded in a
+# different file, with nothing checking the two agree. `soup data inspect
+# <file>` reports the real count, and examples/data/README.md tabulates them.
 _BUNDLES: Mapping[str, DemoBundle] = MappingProxyType({
     "alpaca_demo": DemoBundle(
         name="alpaca_demo",
         fixture="alpaca_tiny.jsonl",
-        description="20-row Alpaca-style instruction tuning fixture",
+        description="Alpaca-style instruction tuning fixture",
         format="alpaca",
     ),
     "sharegpt_demo": DemoBundle(
         name="sharegpt_demo",
         fixture="chat_preferences.jsonl",
-        description="ShareGPT-style multi-turn chat fixture",
-        format="sharegpt",
+        # The fixture is prompt/chosen/rejected, not ShareGPT conversations.
+        # The bundle name is kept because it is a public CLI argument.
+        description="Preference pairs whose chosen/rejected are chat turns",
+        format="dpo",
     ),
     "dpo_demo": DemoBundle(
         name="dpo_demo",
@@ -52,8 +62,9 @@ _BUNDLES: Mapping[str, DemoBundle] = MappingProxyType({
     "grpo_demo": DemoBundle(
         name="grpo_demo",
         fixture="reasoning_math.jsonl",
+        # Alpaca-shaped rows; "reasoning" is not a format Soup accepts.
         description="Math reasoning fixture for GRPO/RLVR",
-        format="reasoning",
+        format="alpaca",
     ),
 })
 

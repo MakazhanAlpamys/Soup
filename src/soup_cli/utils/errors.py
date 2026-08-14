@@ -11,7 +11,7 @@ console = Console(stderr=True)
 # datasets / bitsandbytes / accelerate) moved out of the core install into the
 # `[train]` extra. A missing one of these surfaces this single, actionable fix.
 # The `\\[` escapes the literal `[` for Rich markup (it renders as `[train]`).
-_TRAIN_FIX = "Training needs the \\[train] extra. Run: pip install 'soup-cli\\[train]'"
+_TRAIN_FIX = "Training needs the \\[train] extra. Run: pip install \"soup-cli\\[train]\""
 
 # Map known error patterns to (short message, fix suggestion)
 ERROR_MAP = [
@@ -38,22 +38,22 @@ ERROR_MAP = [
     (
         "No module named 'fastapi'",
         "FastAPI is not installed (needed for soup serve).",
-        "Run: pip install 'soup-cli\\[serve]'",
+        "Run: pip install \"soup-cli\\[serve]\"",
     ),
     (
         "No module named 'uvicorn'",
         "Uvicorn is not installed (needed for soup serve).",
-        "Run: pip install 'soup-cli\\[serve]'",
+        "Run: pip install \"soup-cli\\[serve]\"",
     ),
     (
         "No module named 'datasketch'",
         "Datasketch is not installed (needed for dedup).",
-        "Run: pip install 'soup-cli\\[data]'",
+        "Run: pip install \"soup-cli\\[data]\"",
     ),
     (
         "No module named 'lm_eval'",
         "lm-evaluation-harness is not installed (needed for eval).",
-        "Run: pip install 'soup-cli\\[eval]'",
+        "Run: pip install \"soup-cli\\[eval]\"",
     ),
     (
         "No module named 'wandb'",
@@ -63,12 +63,12 @@ ERROR_MAP = [
     (
         "No module named 'deepspeed'",
         "DeepSpeed is not installed.",
-        "Run: pip install 'soup-cli\\[deepspeed]'",
+        "Run: pip install \"soup-cli\\[deepspeed]\"",
     ),
     (
         "No module named 'httpx'",
         "httpx is not installed (needed for data generate).",
-        "Run: pip install 'soup-cli\\[generate]'",
+        "Run: pip install \"soup-cli\\[generate]\"",
     ),
     # Heavy training stack — all moved to the [train] extra in v0.71.0.
     (
@@ -131,6 +131,20 @@ ERROR_MAP = [
         "nms does not exist",
         "torchvision version is incompatible with torch.",
         "Run: pip install torchvision --force-reinstall (or check soup doctor).",
+    ),
+    # peft's is_torchao_available() RAISES ImportError instead of returning
+    # False when a too-old torchao is installed (peft/import_utils.py) — hit
+    # nine frames inside get_peft_model on hosted notebooks (Colab, Kaggle)
+    # that preinstall an old torchao. v0.73.x #389.
+    (
+        "Found an incompatible version of torchao",
+        "Your installed peft refuses to load with the preinstalled torchao version.",
+        (
+            "Run: pip uninstall -y torchao (or upgrade it past the version peft "
+            "demands). Soup does not need torchao unless you set "
+            "training.quantization_aware. This usually comes from a hosted "
+            "notebook (Colab, Kaggle) that preinstalls an old torchao."
+        ),
     ),
     # Connection errors
     (

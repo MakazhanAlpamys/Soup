@@ -95,3 +95,42 @@ def test_package_docstring_has_no_mojibake():
     assert soup_cli.__doc__ is not None
     assert "вЂ" not in soup_cli.__doc__
     assert "—" in soup_cli.__doc__
+
+
+def test_pyproject_has_no_mojibake():
+    """The guard above covered only the package docstring, and `pyproject.toml`
+    quietly carried 14 double-encoded em-dashes for several releases. Thirteen
+    were comments; one was the `unit` marker description, which
+    `pytest --markers` prints to users. Widened here because the file is not
+    importable Python and so was invisible to every source-level check."""
+    import pathlib
+
+    text = (pathlib.Path(__file__).resolve().parents[1] / "pyproject.toml").read_text(
+        encoding="utf-8"
+    )
+    assert "вЂ" not in text, "cp1251 round-tripped em-dash in pyproject.toml"
+    assert "Ð" not in text, "double-encoded UTF-8 in pyproject.toml"
+
+
+def test_docs_commands_lists_every_registered_command():
+    """`docs/commands.md` calls itself "the full soup command list". It was
+    missing eight, three of them because absent newlines glued commands onto
+    the end of a previous line — invisible when reading the rendered page.
+    Asserted against the live Typer app so the claim stays true by
+    construction rather than by anyone remembering to update the page."""
+    import pathlib
+    import re
+
+    from soup_cli.cli import app
+
+    registered = {c.name or c.callback.__name__.replace("_", "-") for c in app.registered_commands}
+    registered |= {group.name for group in app.registered_groups}
+    registered = {name for name in registered if name}
+
+    doc = (pathlib.Path(__file__).resolve().parents[1] / "docs" / "commands.md").read_text(
+        encoding="utf-8"
+    )
+    documented = set(re.findall(r"^soup ([a-z0-9-]+)", doc, re.M))
+
+    missing = sorted(registered - documented)
+    assert not missing, f"undocumented in docs/commands.md: {missing}"

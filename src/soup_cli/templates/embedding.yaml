@@ -9,7 +9,7 @@
 
 base: BAAI/bge-base-en-v1.5
 task: embedding
-# backend: unsloth  # 2-5x faster, pip install 'soup-cli[fast]'
+# backend: unsloth  # 2-5x faster, pip install "soup-cli[fast]"
 
 data:
   train: ./data/embedding_train.jsonl

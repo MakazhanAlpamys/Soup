@@ -296,14 +296,18 @@ class TestVisionDataLoader:
     """Test vision image validation in data loader."""
 
     def test_validate_vision_images_resolves_relative(self):
-        """Relative image paths should be resolved against image_dir."""
+        """Relative image paths are resolved against image_dir (realpath).
+
+        v0.71.33: the validator now stores the resolved path (mirrors
+        _validate_audio_files) after a containment check.
+        """
         from soup_cli.data.loader import _validate_vision_images
 
         data = [{"messages": [{"role": "user", "content": "Hi"}], "image": "photo.jpg"}]
         image_dir = Path("/data/images")
         result = _validate_vision_images(data, image_dir)
         assert len(result) == 1
-        assert result[0]["image"] == str(image_dir / "photo.jpg")
+        assert result[0]["image"] == str((image_dir / "photo.jpg").resolve())
 
     def test_validate_vision_images_skips_missing(self):
         """Rows without image field should be skipped."""
@@ -326,15 +330,29 @@ class TestVisionDataLoader:
         result = _validate_vision_images(data, image_dir)
         assert len(result) == 0
 
-    def test_validate_vision_images_absolute_path(self):
-        """Absolute image paths should be kept as-is."""
+    def test_validate_vision_images_absolute_inside_kept(self, tmp_path):
+        """An absolute image path INSIDE image_dir is kept (resolved)."""
         from soup_cli.data.loader import _validate_vision_images
 
-        abs_path = str(Path("/absolute/path/photo.jpg"))
-        data = [{"messages": [{"role": "user", "content": "Hi"}], "image": abs_path}]
-        image_dir = Path("/different/dir")
-        result = _validate_vision_images(data, image_dir)
-        assert result[0]["image"] == abs_path
+        img_dir = tmp_path / "imgs"
+        img_dir.mkdir()
+        inside = img_dir / "photo.jpg"
+        inside.write_bytes(b"x")
+        data = [{"messages": [{"role": "user", "content": "Hi"}], "image": str(inside)}]
+        result = _validate_vision_images(data, img_dir)
+        assert len(result) == 1
+        assert Path(result[0]["image"]).name == "photo.jpg"
+
+    def test_validate_vision_images_rejects_out_of_dir(self, tmp_path):
+        """v0.71.33 security fix: an absolute path OUTSIDE image_dir is dropped
+        (previously it was handed straight to PIL.Image.open — arbitrary read)."""
+        from soup_cli.data.loader import _validate_vision_images
+
+        img_dir = tmp_path / "imgs"
+        img_dir.mkdir()
+        data = [{"messages": [{"role": "user", "content": "Hi"}], "image": "/etc/passwd"}]
+        result = _validate_vision_images(data, img_dir)
+        assert result == []
 
     def test_load_dataset_with_vision_format(self):
         """load_dataset should handle llava format data files."""

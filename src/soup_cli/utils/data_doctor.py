@@ -192,7 +192,7 @@ def resolve_tokenizer(tokenizer: Any, *, trust_remote_code: bool = False) -> Any
     except ImportError as exc:
         raise ValueError(
             "soup data doctor needs transformers to load a tokenizer — "
-            "install with: pip install 'soup-cli[train]'"
+            "install with: pip install \"soup-cli[train]\""
         ) from exc
     try:
         return AutoTokenizer.from_pretrained(tokenizer, trust_remote_code=trust_remote_code)

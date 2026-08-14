@@ -2,7 +2,7 @@
 
 Renders a ``CompilePlan`` panel and, when ``--plan-only`` is omitted, runs
 the live optimizer (v0.71.13 #225). A missing optimizer library surfaces a
-friendly exit-2 advisory naming ``pip install 'soup-cli[compile]'``.
+friendly exit-2 advisory naming ``pip install "soup-cli[compile]"``.
 """
 
 from __future__ import annotations

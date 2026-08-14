@@ -8,7 +8,7 @@
 
 base: meta-llama/Llama-3.1-8B
 task: pretrain
-# backend: unsloth  # 2-5x faster, pip install 'soup-cli[fast]'
+# backend: unsloth  # 2-5x faster, pip install "soup-cli[fast]"
 
 data:
   train: ./data/corpus.jsonl

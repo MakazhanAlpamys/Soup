@@ -11,7 +11,7 @@ import math
 from pathlib import Path
 from typing import Optional, Sequence, TypedDict
 
-from soup_cli.utils.paths import is_under_cwd
+from soup_cli.utils.paths import atomic_write_text, is_under_cwd
 
 
 class LRFinderResult(TypedDict):
@@ -217,11 +217,11 @@ def save_lr_finder_report(
         "min_loss_lr": summary["min_loss_lr"],
         "diverged_at": summary["diverged_at"],
     }
-    output.parent.mkdir(parents=True, exist_ok=True)
     # ``allow_nan=False`` is belt-and-braces: report_* are already finite,
     # but ``smoothed_losses`` could carry a non-finite if the input loss
-    # somehow drifted. Reject rather than emit ``NaN`` (invalid JSON).
-    output.write_text(
-        json.dumps(payload, indent=2, allow_nan=False),
-        encoding="utf-8",
-    )
+    # somehow drifted. Reject (raises ValueError) rather than emit ``NaN``
+    # (invalid JSON) — computed before the write so nothing partial lands.
+    body = json.dumps(payload, indent=2, allow_nan=False)
+    # Atomic write + symlink rejection (centralised TOCTOU defence) instead of
+    # a plain write_text with no symlink check.
+    atomic_write_text(body, str(output), field="output_path")

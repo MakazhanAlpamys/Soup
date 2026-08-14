@@ -106,4 +106,3 @@ def test_version_full_json():
     assert data["version"] == __version__
     assert data["python"] == platform.python_version()
     assert "platform" in data
-

@@ -115,5 +115,3 @@ def diagnose(
         soup_version=soup_version,
         extras=extras,
     )
-
-

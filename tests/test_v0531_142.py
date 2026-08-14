@@ -537,4 +537,3 @@ class TestDetectPrequantizedSymlinkRejection:
         link.symlink_to(real_config)
         # Symlink config.json → soft-probe returns None instead of reading
         assert detect_prequantized_format_from_path("./model") is None
-

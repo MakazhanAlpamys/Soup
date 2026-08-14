@@ -16,6 +16,19 @@ jobs:
           python-version: "3.11"
       - run: pip install ruff
       - run: ruff check src/soup_cli/ tests/
+      - name: Lint the workflows themselves
+        # `check-yaml` and a YAML parser both accept a workflow GitHub will
+        # reject: 195d60b used the `runner` context in a job-level `env:` block,
+        # which is valid YAML and invalid Actions, and the whole matrix died
+        # before any job produced a log. actionlint checks context availability,
+        # expression syntax, action inputs, and shellchecks `run:` blocks.
+        #
+        # Pinned and installed from source rather than `curl | bash` of the
+        # upstream install script, matching how the rest of this repo pulls
+        # third-party tooling. Go is preinstalled on ubuntu-latest.
+        run: |
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+          "$(go env GOPATH)/bin/actionlint" -color
 
   type-check:
     runs-on: ubuntu-latest
@@ -54,32 +67,122 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+      - name: Pin the HF cache to a deterministic path
+        # Set here and not in the job-level `env:` block: the `runner` context
+        # is not available there (only github / needs / strategy / matrix /
+        # vars / secrets / inputs are), and referencing it makes GitHub reject
+        # the whole workflow file before any job starts.
+        #
+        # Why a fixed path at all: the default ~/.cache/huggingface sits under
+        # a different user on each runner OS, so actions/cache cannot restore
+        # it by one key. Kept OUTSIDE the checkout because it lands ~0.5 GB,
+        # which the tests that walk cwd for containment would otherwise scan.
+        shell: bash
+        run: echo "HF_HOME=$RUNNER_TEMP/hf-cache" >> "$GITHUB_ENV"
+      - name: Restore HF Hub cache
+        id: hf-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/hf-cache
+          # Keyed on this file, so editing the model list below re-warms.
+          key: hf-${{ runner.os }}-${{ hashFiles('.github/workflows/ci.yml') }}
+          restore-keys: hf-${{ runner.os }}-
       - name: Install dependencies
         run: pip install -e ".[dev]"
-      - name: Warm HF Hub cache (tiny test models)
-        # Pre-download the tiny models the unit tests load, with retries, so a
+      - name: Warm HF Hub cache (models the tests load)
+        # Pre-download the models the unit tests load, with retries, so a
         # transient HF Hub 429 (Too Many Requests) on a single matrix cell does
-        # not red the whole run. Observed: ~5/7 cells download fine and ~2/7 hit
-        # a 429 — a retry loop reliably populates the cache so the tests then
-        # read from disk (no network). Never fails the job: if warming can't
-        # complete it emits a ::warning:: and lets the test step run as before.
+        # not red the whole run. Never fails the job: if warming can't complete
+        # it emits a ::warning:: and lets the test step run as before.
+        #
+        # The list is EMPIRICAL — it is what a full local run actually leaves in
+        # ~/.cache/huggingface, not what greps for repo-shaped strings in
+        # tests/ suggest (most of those are config fixtures that never
+        # download). The list grew because run 30942028585 reddened
+        # windows/3.10 on a 429 for SmolLM2-135M-Instruct/config.json — a repo
+        # this step did not warm, so the retry loop above never protected it.
+        #
+        # "gpt2" is deliberately unqualified: tests ask for the bare id, which
+        # caches as models--gpt2. Warming "openai-community/gpt2" instead would
+        # fill a different directory and every test would still miss.
+        id: warm
         shell: python
         run: |
+          import os
           import time
           from huggingface_hub import snapshot_download
 
-          models = ["sshleifer/tiny-gpt2", "hf-internal-testing/tiny-random-gpt2"]
-          for repo in models:
-              for attempt in range(1, 7):
+          # Per-repo file sets, also empirical: these are the files a populated
+          # local cache actually holds after running the suite. Downloading
+          # whole snapshots instead costs 1.6 GB per cell — mostly the TF /
+          # Flax copies and the pytorch_model.bin twin of a safetensors file
+          # that transformers never opens when safetensors is present.
+          TEXT_ONLY = ["*.json", "*.txt", "*.model"]      # config + tokenizer
+          SAFETENSORS = TEXT_ONLY + ["*.safetensors"]
+          # Two of the fixture repos predate safetensors and ship weights ONLY
+          # as pytorch_model.bin. Both are a few MB, so pulling the .bin costs
+          # nothing here — but excluding it left the ASR test unable to build a
+          # model offline, which a full offline run of the suite caught.
+          LEGACY_BIN = TEXT_ONLY + ["*.bin"]
+
+          models = [
+              ("sshleifer/tiny-gpt2", LEGACY_BIN),
+              ("hf-internal-testing/tiny-random-gpt2", SAFETENSORS),
+              ("hf-internal-testing/tiny-random-WhisperForConditionalGeneration", LEGACY_BIN),
+              # Weights are never loaded for these two — only the config the
+              # 429 above was raised on.
+              ("HuggingFaceTB/SmolLM2-135M", TEXT_ONLY),
+              ("HuggingFaceTB/SmolLM2-135M-Instruct", TEXT_ONLY),
+              ("gpt2", SAFETENSORS),
+          ]
+
+          # One budget for the whole list, not per repo. Run 30947949103
+          # showed why: on windows/3.11 ALL SIX repos failed EVERY attempt,
+          # including the tiny fixtures every other cell fetched in under a
+          # second. The Hub had cut that runner off for the duration — so
+          # burning a fresh retry ladder on repo #2 the moment repo #1 gave up
+          # just spends the budget faster without ever waiting out the block.
+          deadline = time.monotonic() + 360
+          pending = list(models)
+          delay = 10
+
+          while pending and time.monotonic() < deadline:
+              still_pending = []
+              for repo, allow in pending:
                   try:
-                      snapshot_download(repo)
+                      snapshot_download(repo, allow_patterns=allow)
                       print(f"warmed {repo}")
-                      break
                   except Exception as exc:  # noqa: BLE001 — best effort, never fail the job
-                      print(f"attempt {attempt}/6 for {repo} failed: {type(exc).__name__}: {exc}")
-                      time.sleep(min(5 * attempt, 30))
-              else:
-                  print(f"::warning title=HF cache::could not warm {repo} after 6 attempts")
+                      print(f"{repo}: {type(exc).__name__}: {exc}")
+                      still_pending.append((repo, allow))
+              pending = still_pending
+              if pending:
+                  print(f"{len(pending)} repo(s) left; retrying in {delay}s")
+                  time.sleep(delay)
+                  delay = min(delay * 2, 60)
+
+          for repo, _ in pending:
+              print(f"::warning title=HF cache::could not warm {repo} within the retry budget")
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+              fh.write(f"warmed={'partial' if pending else 'all'}\n")
+      - name: Save HF Hub cache
+        # Only a COMPLETE warm is saved. A partial one would freeze the very
+        # gap this step exists to close: the key is content-addressed, so a
+        # cache written while a model was 429-ing is never replaced, and every
+        # later run would restore the same hole.
+        #
+        # ANY cell may save, deliberately. Restricting this to 3.11 to avoid
+        # redundant uploads is what left Windows with no cache at all in run
+        # 30947949103: 3.11 was the one cell the Hub cut off, so the two
+        # healthy Windows cells were not allowed to save what they had. The
+        # losers of the resulting race log "unable to reserve cache" and move
+        # on, which is far cheaper than an OS that never gets a cache.
+        if: always() && steps.warm.outputs.warmed == 'all' && steps.hf-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/hf-cache
+          key: hf-${{ runner.os }}-${{ hashFiles('.github/workflows/ci.yml') }}
       - name: Run unit tests with coverage
         run: pytest tests/ -v --tb=short --junitxml=report.xml --cov=soup_cli --cov-report=xml:coverage.xml --cov-report=term-missing:skip-covered
       - name: Upload coverage to Codecov

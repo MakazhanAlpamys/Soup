@@ -11,7 +11,7 @@
 base: Qwen/Qwen2-Audio-7B-Instruct
 task: sft
 modality: audio
-# backend: unsloth  # 2-5x faster, pip install 'soup-cli[fast]'
+# backend: unsloth  # 2-5x faster, pip install "soup-cli[fast]"
 
 data:
   train: ./data/audio_train.jsonl

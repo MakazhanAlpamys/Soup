@@ -62,11 +62,11 @@ class TestCutCEAvailability:
     def test_get_cut_ce_version_not_installed(self):
         from soup_cli.utils.cut_ce import get_cut_ce_version
 
-        with patch(
-            "soup_cli.utils.cut_ce.check_cut_ce_available", return_value=False
-        ):
-            result = get_cut_ce_version()
-            assert result is None
+        # get_cut_ce_version() imports the package itself rather than going
+        # through check_cut_ce_available(), so patching that predicate is a
+        # no-op — the absence has to be simulated at the import, as above.
+        with patch.dict("sys.modules", {"cut_cross_entropy": None}):
+            assert get_cut_ce_version() is None
 
 
 class TestCutCEApplication:

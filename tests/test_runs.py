@@ -179,4 +179,3 @@ def test_runs_clean_with_data(tracker, tmp_path):
         import shutil
         if out_dir.exists():
             shutil.rmtree(out_dir)
-

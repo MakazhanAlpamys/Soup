@@ -48,7 +48,7 @@ def search_recipes(
 
 
 # ---------------------------------------------------------------------------
-# Recipe catalog (134 recipes)
+# Recipe catalog (142 recipes)
 # ---------------------------------------------------------------------------
 
 RECIPES: Dict[str, RecipeMeta] = {
@@ -2144,6 +2144,176 @@ training:
 output: ./output
 """,
     ),
+    "online-dpo-smollm2-135m": RecipeMeta(
+        model="HuggingFaceTB/SmolLM2-135M-Instruct",
+        task="online_dpo",
+        size="135M",
+        tags=("smollm", "smollm2", "online_dpo", "judge", "rlhf", "tiny", "edge"),
+        description="SmolLM2 135M Online DPO — on-policy generation judged by a "
+        "pairwise LLM judge (point --online-dpo-judge at a local ollama model)",
+        yaml_str="""\
+base: HuggingFaceTB/SmolLM2-135M-Instruct
+task: online_dpo
+
+data:
+  train: ./data/prompts.jsonl
+  format: auto
+  max_length: 1024
+
+training:
+  # On-policy: the model generates 2 completions per prompt each step and the
+  # judge picks chosen/rejected. Point online_dpo_judge at a local judge, OR set
+  # reward_model instead (exactly one of the two).
+  online_dpo_judge: "ollama://llama3.1"
+  online_dpo_loss_type: sigmoid
+  online_dpo_max_new_tokens: 64
+  dpo_beta: 0.1
+  epochs: 1
+  lr: 5e-5
+  batch_size: auto
+  lora:
+    r: 8
+    alpha: 16
+    target_modules: auto
+  quantization: none
+
+output: ./output
+""",
+    ),
+    "whisper-tiny-asr": RecipeMeta(
+        model="openai/whisper-tiny",
+        task="asr",
+        size="39M",
+        tags=("whisper", "asr", "speech", "audio", "tiny", "edge"),
+        description="Whisper tiny (39M) ASR fine-tune with LoRA on q/v "
+        "projections — fits a 4 GB GPU. Rows: {\"audio\": path, \"text\": "
+        "transcript}",
+        yaml_str="""\
+base: openai/whisper-tiny
+task: asr
+
+data:
+  train: ./data/train.jsonl
+  format: asr
+  # Relative audio paths resolve against audio_dir (defaults to the data dir).
+  audio_dir: ./data/audio
+
+training:
+  epochs: 3
+  lr: 1e-4
+  batch_size: auto
+  asr_language: en
+  asr_task: transcribe
+  asr_lora: true
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: [q_proj, v_proj]
+  quantization: none
+
+output: ./output
+""",
+    ),
+    "whisper-base-asr": RecipeMeta(
+        model="openai/whisper-base",
+        task="asr",
+        size="74M",
+        tags=("whisper", "asr", "speech", "audio", "base", "edge"),
+        description="Whisper base (74M) ASR fine-tune with LoRA on q/v "
+        "projections — fits a 4 GB GPU",
+        yaml_str="""\
+base: openai/whisper-base
+task: asr
+
+data:
+  train: ./data/train.jsonl
+  format: asr
+  audio_dir: ./data/audio
+
+training:
+  epochs: 3
+  lr: 1e-4
+  batch_size: auto
+  asr_language: en
+  asr_task: transcribe
+  asr_lora: true
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: [q_proj, v_proj]
+  quantization: none
+
+output: ./output
+""",
+    ),
+    "whisper-large-v3-asr": RecipeMeta(
+        model="openai/whisper-large-v3",
+        task="asr",
+        size="1.5B",
+        tags=("whisper", "asr", "speech", "audio", "large", "multi-gpu"),
+        description="Whisper large-v3 (1.5B) ASR fine-tune with LoRA — needs a "
+        "larger GPU (>= 16 GB); the tiny/base recipes fit a 4 GB card",
+        yaml_str="""\
+base: openai/whisper-large-v3
+task: asr
+
+data:
+  train: ./data/train.jsonl
+  format: asr
+  audio_dir: ./data/audio
+
+training:
+  epochs: 2
+  lr: 5e-5
+  batch_size: auto
+  asr_language: en
+  asr_task: transcribe
+  asr_lora: true
+  lora:
+    r: 32
+    alpha: 64
+    target_modules: [q_proj, v_proj]
+  quantization: none
+
+output: ./output
+""",
+    ),
+    "smolvlm-256m-sft": RecipeMeta(
+        model="HuggingFaceTB/SmolVLM-256M-Instruct",
+        task="sft",
+        size="256M",
+        tags=("smolvlm", "vision", "multimodal", "vlm", "sft", "tiny", "edge"),
+        description="SmolVLM 256M vision SFT (llava format) — a tiny VLM. NOTE: "
+        "SmolVLM uses an Idefics3 processor. The processor pad_token blocker is "
+        "fixed (#302 — the nested tokenizer's token surface is mirrored onto the "
+        "processor), so setup + tokenization now run; a full training STEP still "
+        "needs Idefics3-aware vision collation (pixel_values + image-token "
+        "expansion) — parse-tested for now, tracked in #302. target_modules "
+        "pinned to q_proj/v_proj (auto cannot infer them for Idefics3).",
+        yaml_str="""\
+base: HuggingFaceTB/SmolVLM-256M-Instruct
+task: sft
+modality: vision
+
+data:
+  train: ./data/train.jsonl
+  format: llava
+  image_dir: ./data/images
+  max_length: 2048
+
+training:
+  epochs: 3
+  lr: 1e-4
+  batch_size: auto
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: [q_proj, v_proj]
+  quantization: none
+
+output: ./output
+""",
+    ),
     "smollm2-360m-sft": RecipeMeta(
         model="HuggingFaceTB/SmolLM2-360M-Instruct",
         task="sft",
@@ -4110,6 +4280,105 @@ training:
   moe_lora: true
   moe_aux_loss_coeff: 0.01
   gradient_checkpointing: true
+
+output: ./output
+""",
+    ),
+    # v0.71.30 — bundled openenv rollout envs (out-of-the-box GRPO).
+    "grpo-env-calculator": RecipeMeta(
+        model="HuggingFaceTB/SmolLM2-135M-Instruct",
+        task="grpo",
+        size="135M",
+        tags=("grpo", "openenv", "rollout", "calculator", "reasoning"),
+        description="SmolLM2-135M GRPO on the bundled calculator env (openenv rollout)",
+        yaml_str="""\
+base: HuggingFaceTB/SmolLM2-135M-Instruct
+task: grpo
+
+data:
+  train: ./data/seed_prompts.jsonl
+  format: auto
+  max_length: 512
+
+training:
+  epochs: 1
+  lr: 1e-6
+  batch_size: 4
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  grpo_beta: 0.04
+  num_generations: 4
+  reward_fn: verifiable
+  verifiable_domain: math
+  rollout_backend: openenv
+  rollout_func: soup_cli.envs.calculator:rollout
+
+output: ./output
+""",
+    ),
+    "grpo-env-retrieval-qa": RecipeMeta(
+        model="HuggingFaceTB/SmolLM2-135M-Instruct",
+        task="grpo",
+        size="135M",
+        tags=("grpo", "openenv", "rollout", "retrieval", "qa"),
+        description="SmolLM2-135M GRPO on the bundled retrieval-QA env (openenv rollout)",
+        yaml_str="""\
+base: HuggingFaceTB/SmolLM2-135M-Instruct
+task: grpo
+
+data:
+  train: ./data/seed_prompts.jsonl
+  format: auto
+  max_length: 512
+
+training:
+  epochs: 1
+  lr: 1e-6
+  batch_size: 4
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  grpo_beta: 0.04
+  num_generations: 4
+  reward_fn: accuracy
+  rollout_backend: openenv
+  rollout_func: soup_cli.envs.retrieval_qa:rollout
+
+output: ./output
+""",
+    ),
+    "grpo-env-guess-number": RecipeMeta(
+        model="HuggingFaceTB/SmolLM2-135M-Instruct",
+        task="grpo",
+        size="135M",
+        tags=("grpo", "openenv", "rollout", "deduction", "game"),
+        description="SmolLM2-135M GRPO on the bundled number-deduction env (openenv rollout)",
+        yaml_str="""\
+base: HuggingFaceTB/SmolLM2-135M-Instruct
+task: grpo
+
+data:
+  train: ./data/seed_prompts.jsonl
+  format: auto
+  max_length: 512
+
+training:
+  epochs: 1
+  lr: 1e-6
+  batch_size: 4
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  grpo_beta: 0.04
+  num_generations: 4
+  reward_fn: verifiable
+  verifiable_domain: math
+  rollout_backend: openenv
+  rollout_func: soup_cli.envs.guess_number:rollout
 
 output: ./output
 """,

@@ -23,6 +23,7 @@
 - [Anthropic Messages API Converter](#anthropic-messages-api-converter)
 - [Server-Side Tools](#server-side-tools)
 - [Anthropic Messages Endpoint](#anthropic-messages-endpoint)
+- [Train + measure your own draft (`soup draft`)](#train--measure-your-own-draft-soup-draft)
 - [N-gram Speculative Decoding](#n-gram-speculative-decoding)
 - [Server-Side Tool Endpoints](#server-side-tool-endpoints)
 
@@ -62,12 +63,41 @@ soup export --model ./output --format gguf --llama-cpp /path/to/llama.cpp
 
 Supported quantizations: `q4_0`, `q4_k_m`, `q5_k_m`, `q8_0`, `f16`, `f32`
 
+### Building llama.cpp (required for quantized GGUF)
+
+Soup auto-clones llama.cpp (pinned tag `b5270`) to `~/.soup/llama.cpp` on first use,
+but it does **not** build it. The conversion step (`f16` / `f32`) works from the
+Python script alone; every *quantized* type additionally needs the `llama-quantize`
+binary, so build it once:
+
+```bash
+cd ~/.soup/llama.cpp
+cmake -B build -DGGML_NATIVE=OFF -DLLAMA_CURL=OFF -DCMAKE_BUILD_TYPE=Release
+cmake --build build --config Release --target llama-quantize -j 4
+```
+
+Soup finds the binary in both single-config (`build/bin/llama-quantize`, Make/Ninja)
+and multi-config (`build/bin/Release/llama-quantize.exe`, MSVC/Xcode) layouts, or on
+`PATH`. Point at an existing checkout with `--llama-cpp /path/to/llama.cpp` or the
+`LLAMA_CPP_PATH` env var.
+
+**Toolchain validated on Windows** (all six quants, then `soup deploy ollama` →
+inference): Visual Studio 2022 Build Tools with the *Desktop development with C++*
+workload (`Microsoft.VisualStudio.Component.VC.Tools.x86.x64`) + CMake ≥ 3.14, CPU-only.
+Linux/macOS need only a C++ toolchain + CMake. CUDA llama.cpp builds are untested
+(see [#144](https://github.com/MakazhanAlpamys/Soup/issues/144)).
+
+> Do **not** run `pip install -r ~/.soup/llama.cpp/requirements.txt` — it pins
+> `torch~=2.2.1` against the CPU wheel index and will downgrade a CUDA PyTorch,
+> breaking training. Soup deliberately installs only the convert script's extra
+> dependencies (`gguf`, `sentencepiece`, `protobuf`), unpinned.
+
 ### ONNX Export
 
 Export models to ONNX format for use with [ONNX Runtime](https://onnxruntime.ai/):
 
 ```bash
-pip install 'soup-cli[onnx]'
+pip install "soup-cli[onnx]"
 soup export --model ./output --format onnx
 soup export --model ./output --format onnx --output ./model_onnx
 ```
@@ -77,7 +107,7 @@ soup export --model ./output --format onnx --output ./model_onnx
 Export models to TensorRT-LLM format for high-throughput GPU inference:
 
 ```bash
-pip install 'soup-cli[tensorrt]'
+pip install "soup-cli[tensorrt]"
 soup export --model ./output --format tensorrt
 soup export --model ./output --format tensorrt --output ./model_trt
 ```
@@ -182,7 +212,7 @@ Start a local OpenAI-compatible inference server:
 
 ```bash
 # Install server dependencies
-pip install 'soup-cli[serve]'
+pip install "soup-cli[serve]"
 
 # Start server
 soup serve --model ./output --port 8000
@@ -223,7 +253,7 @@ Use [vLLM](https://github.com/vllm-project/vllm) for significantly better throug
 
 ```bash
 # Install vLLM support
-pip install 'soup-cli[serve-fast]'
+pip install "soup-cli[serve-fast]"
 
 # Start with vLLM backend
 soup serve --model ./output --backend vllm
@@ -233,9 +263,19 @@ soup serve --model ./output --backend vllm --tensor-parallel 2
 
 # Control GPU memory usage
 soup serve --model ./output --backend vllm --gpu-memory 0.8
+
+# Cap the sequence length when the KV cache does not fit
+soup serve --model ./output --backend vllm --max-model-len 8192
 ```
 
 > **Tip:** Soup auto-detects vLLM. When installed, you'll see a hint during `soup serve` if you haven't enabled it yet.
+
+The vLLM backend applies the **model's own chat template**, exactly like the
+transformers backend — both call one shared prompt builder. A model that ships
+no chat template falls back to a generic `User:` / `Assistant:` prompt, and the
+server says so at startup. `finish_reason` reports `"length"` when a response
+hits `max_tokens` and `"stop"` otherwise (`/v1/messages` maps those to
+`max_tokens` / `end_turn`).
 
 ### SGLang Backend
 
@@ -243,7 +283,7 @@ Use [SGLang](https://github.com/sgl-project/sglang) as an alternative high-throu
 
 ```bash
 # Install SGLang support
-pip install 'soup-cli[sglang]'
+pip install "soup-cli[sglang]"
 
 # Start with SGLang backend
 soup serve --model ./output --backend sglang
@@ -254,7 +294,10 @@ soup serve --model ./output --backend sglang --tensor-parallel 2
 
 ### Speculative Decoding
 
-Use a smaller draft model to speed up generation (2-3x faster):
+Use a smaller draft model to speed up generation. **Measure before you trust it** — see
+[Train + measure your own draft](#train--measure-your-own-draft-soup-draft) below. Speculative
+decoding is only a win when the draft agrees with the target often enough to pay for its own
+forward pass; on a small target it is frequently a *slowdown*.
 
 ```bash
 # Transformers backend — uses HF assisted generation
@@ -268,7 +311,46 @@ soup serve --model meta-llama/Llama-3.1-70B-Instruct --backend vllm --auto-spec
 # → auto-paired: meta-llama/Llama-3.2-1B-Instruct (target: Llama-3.1-70B-Instruct)
 ```
 
-`--auto-spec` handles Llama 3.1/3.3/4, Qwen 2.5/3, Mistral Large, Mixtral, DeepSeek V3/R1, and Gemma 2/3. Models without a known draft pairing (e.g. 8B-or-smaller targets where draft+target overhead outweighs the gain) print a yellow "no draft" note and fall back to standard decoding.
+`--auto-spec` handles Llama 3.1/3.3/4, Qwen 2.5/3, Mistral Large, Mixtral, DeepSeek V3/R1, and Gemma 2/3. Models without a known draft pairing (e.g. 8B-or-smaller targets where draft+target overhead outweighs the gain) print a yellow "no draft" note and fall back to standard decoding. A draft you trained yourself with `soup draft distill` is picked up **before** this built-in table.
+
+### Train + measure your own draft (`soup draft`)
+
+The question nobody answers before enabling speculative decoding: *would the draft actually
+propose the tokens my model is going to emit?* `soup draft measure` answers it.
+
+```bash
+# Would this draft pay off? Acceptance rate + REAL plain-vs-assisted throughput.
+soup draft measure --target ./my-tuned-model \
+  --draft HuggingFaceTB/SmolLM2-135M-Instruct \
+  --prompts prod-prompts.jsonl
+
+# Distil a draft from your own target, then serve it automatically.
+soup draft distill --target ./my-tuned-model \
+  --draft-base HuggingFaceTB/SmolLM2-135M-Instruct \
+  --data traffic.jsonl -o draft/
+soup serve --model ./my-tuned-model --auto-spec     # picks up ./draft
+soup draft list
+```
+
+**Acceptance rate** is the fraction of the target's own greedy tokens the draft would have
+proposed correctly (teacher-forced argmax agreement — the metric the Medusa/EAGLE papers report).
+Higher is better; roughly, ≥70% is where speculative decoding starts paying for the draft's
+forward pass on realistic hardware. `--min-acceptance 0.6` exits **2** below the floor, so CI can
+gate on it (exit 0 = ok, 2 = below floor, 1 = error).
+
+`distill` runs logit KD through the existing `task: distill` trainer and emits a **dense** model
+(a PEFT adapter directory cannot be loaded as an `assistant_model`). Draft and target must share a
+tokenizer — a mismatch is refused up front, because speculative decoding proposes *draft* token ids
+into the *target's* vocabulary and a mismatched pair silently produces garbage instead of failing.
+A `soup shrink` output makes a good draft base: same tokenizer by construction.
+
+**Measured reality check (be sceptical of speedup claims, including ours).** On
+`SmolLM2-360M-Instruct` with a `SmolLM2-135M-Instruct` draft, the *stock* draft already scored
+**69.3%** acceptance, distilling it changed nothing (69.7% after 2 epochs, 69.3% after 10), and
+assisted decoding came out **0.55–0.64×** — a net slowdown. A small same-family draft is already
+near its ceiling for agreeing with the target, and the draft's forward pass costs more than the
+tokens it saves. Whether distillation pays off on a larger or genuinely diverged target/draft pair
+is unproven on a 4 GB box. Run `soup draft measure` on *your* pair rather than assuming.
 
 ### Prefix Caching
 
@@ -386,6 +468,11 @@ curl http://localhost:8000/metrics
 # }
 ```
 
+`/metrics` is served by the **transformers** and **vLLM** backends (on both,
+whether or not `--dashboard` is passed — the flag only records intent). The
+**SGLang** and **MII** backends do not expose it; passing `--dashboard` there
+prints a warning at startup rather than silently collecting nothing.
+
 Latency percentiles are computed from the last 1000 requests; counters include failure paths so the dashboard shows true reliability, not just success rate.
 
 ### OpenTelemetry Request Tracing
@@ -410,7 +497,7 @@ The OTLP endpoint is SSRF-hardened: only http/https schemes, plain HTTP only for
 Launch a local web interface to manage experiments, start training, explore data, and chat with models — all from your browser.
 
 ```bash
-pip install 'soup-cli[ui]'
+pip install "soup-cli[ui]"
 soup ui
 # -> opens http://127.0.0.1:7860 in your browser
 # -> prints auth token to console
@@ -418,7 +505,7 @@ soup ui
 
 **Pages:**
 - **Dashboard** — view all experiment runs, loss charts, system info, multi-run comparison
-- **New Training** — create configs from templates or 134 ready-made recipes, validate, start training with live SSE log streaming and progress bar
+- **New Training** — create configs from templates or 142 ready-made recipes, validate, start training with live SSE log streaming and progress bar
 - **Data Explorer** — browse and inspect datasets (JSONL, JSON, CSV, Parquet)
 - **Model Chat** — chat with streaming responses, configurable temperature/top_p/max_tokens, system prompt, adapter selection, markdown rendering, chat export
 
@@ -427,7 +514,7 @@ soup ui
 - **Enhanced Metrics** — 2x2 chart grid (loss, LR, grad_norm, throughput) + GPU memory chart, eval results table
 - **Multi-Run Compare** — overlay loss curves from up to 5 runs side-by-side
 - **Chat Upgrade** — SSE streaming via proxy, typing indicator, cancel button, markdown renderer (bold, italic, code blocks), chat export as JSON
-- **Config Builder** — recipe dropdown (134 recipes), config schema API for dynamic form generation
+- **Config Builder** — recipe dropdown (142 recipes), config schema API for dynamic form generation
 
 **Security:** The Web UI generates a random auth token at startup (printed to console). All mutating endpoints (start/stop training, delete runs, inspect data, validate config) require `Authorization: Bearer <token>` header. CORS is restricted to the served origin. Data inspection is sandboxed to the working directory.
 
@@ -587,8 +674,10 @@ is_domain_allowed("[::1]", config.domain_allowlist)                   # False
 
 ## Anthropic Messages Endpoint
 
-Both `soup serve --backend transformers` and `soup serve --backend vllm` now expose
-a POST `/v1/messages` route that accepts Anthropic Messages-shaped payloads:
+`soup serve --backend transformers` and `soup serve --backend vllm` expose
+a POST `/v1/messages` route that accepts Anthropic Messages-shaped payloads
+(the **SGLang** backend does not — it serves `/v1/chat/completions`, `/v1/models`
+and `/health` only):
 
 ```bash
 curl http://localhost:8000/v1/messages -H "Content-Type: application/json" -d '{
@@ -629,5 +718,3 @@ Three POST routes are now available on `soup serve`:
 - **`POST /v1/tools/bash`** — Deferred to v0.53.8. Current child-process isolation
   insufficient for `/bin/sh -c` (subprocess escapes the RLVR sandbox). Returns 501 with
   v0.53.8 marker pending container/namespace work.
-
-

@@ -37,6 +37,45 @@ class TestDeepSpeedConfigs:
         assert offload["device"] == "cpu"
         assert offload["pin_memory"] is True
 
+    def test_zero3_offload_config(self):
+        """The configuration a VRAM-constrained user actually wants: stage 3
+        with the PARAMETERS on the CPU. Until this preset existed the only
+        offload config Soup shipped was stage 2, optimizer-only, so the
+        H100 comparison in benchmarks/gate-h100-validation.md (STEP 3) had to
+        supply hand-written JSON."""
+        from soup_cli.utils.deepspeed import get_deepspeed_config
+
+        config = get_deepspeed_config("zero3_offload")
+        assert config["zero_optimization"]["stage"] == 3
+        offload_param = config["zero_optimization"]["offload_param"]
+        assert offload_param["device"] == "cpu"
+        assert offload_param["pin_memory"] is True
+        assert config["zero_optimization"]["stage3_gather_16bit_weights_on_model_save"] is True
+        assert config["bf16"]["enabled"] is True
+
+    def test_zero3_offload_does_not_require_optimizer_offload(self):
+        """`offload_optimizer: cpu` JIT-builds DeepSpeed's `cpu_adam` op and
+        needs a matching CUDA toolkit; on a box without `nvcc` it fails with
+        `CUDAMismatchException` and then `'DeepSpeedCPUAdam' object has no
+        attribute 'ds_opt_adam'` (measured, STEP 3 of the H100 record). Making
+        it mandatory would make the preset unusable on such a box, so it is off
+        — which is also the fairer comparison against layer streaming, whose
+        optimizer covers only the LoRA parameters and stays on the GPU."""
+        from soup_cli.utils.deepspeed import get_deepspeed_config
+
+        config = get_deepspeed_config("zero3_offload")
+        assert config["zero_optimization"]["offload_optimizer"]["device"] == "none"
+
+    def test_zero3_offload_is_the_only_new_thing_zero3_is_not_touched(self):
+        """A regression guard with a control: the plain `zero3` preset must keep
+        offloading nothing, or every existing multi-GPU run silently changes
+        behaviour."""
+        from soup_cli.utils.deepspeed import get_deepspeed_config
+
+        plain = get_deepspeed_config("zero3")
+        assert plain["zero_optimization"]["offload_param"]["device"] == "none"
+        assert plain["zero_optimization"]["offload_optimizer"]["device"] == "none"
+
     def test_invalid_config_name(self):
         """Should raise ValueError for unknown config name."""
         from soup_cli.utils.deepspeed import get_deepspeed_config
@@ -85,7 +124,7 @@ class TestWriteDeepSpeedConfig:
         """Written file should be parseable JSON."""
         from soup_cli.utils.deepspeed import write_deepspeed_config
 
-        for stage in ["zero2", "zero3", "zero2_offload"]:
+        for stage in ["zero2", "zero3", "zero2_offload", "zero3_offload"]:
             path = write_deepspeed_config(stage)
             with open(path) as f:
                 config = json.load(f)
@@ -161,6 +200,21 @@ class TestResolveDeepSpeed:
             config = json.load(f)
         assert config["zero_optimization"]["stage"] == 2
         os.unlink(path)
+
+    def test_resolve_zero3_offload_preset(self):
+        """`--deepspeed zero3_offload` must reach the same resolver path every
+        other preset does, or the config exists but is unreachable from the CLI.
+        """
+        from soup_cli.commands.train import _resolve_deepspeed
+
+        path = _resolve_deepspeed("zero3_offload")
+        try:
+            with open(path) as f:
+                config = json.load(f)
+            assert config["zero_optimization"]["stage"] == 3
+            assert config["zero_optimization"]["offload_param"]["device"] == "cpu"
+        finally:
+            os.unlink(path)
 
     def test_resolve_json_file(self, tmp_path):
         """Should resolve path to JSON file."""

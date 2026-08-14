@@ -10,6 +10,7 @@ around a topic:
 
 ```bash
 soup data generate \
+  --prompt "You write concise Python instruction/response pairs for developers." \
   --provider ollama \
   --model llama3.2:3b \
   --topic "Python error handling" \
@@ -25,21 +26,22 @@ For Anthropic / vLLM / server providers, swap `--provider` and follow the
 Drop low-perplexity / low-coherence rows:
 
 ```bash
-soup data filter \
-  --input ./synth_raw.jsonl \
+soup data filter ./synth_raw.jsonl \
   --output ./synth_filtered.jsonl \
   --min-coherence 0.5
 ```
 
 ## 3. Score for safety + diversity
 
-Run the v0.47.0 quality moat to fingerprint PII / toxicity / language /
-educational value, and decontaminate against your downstream evals:
+Fingerprint PII / toxicity / language / educational value, then decontaminate
+against your downstream evals. `soup data score` reports a scorecard to the
+terminal and does not write a file, so the decontamination step reads the
+filtered set:
 
 ```bash
-soup data score --input ./synth_filtered.jsonl --output ./synth_scored.jsonl
+soup data score --input ./synth_filtered.jsonl
 soup data decontaminate \
-  --input ./synth_scored.jsonl \
+  --input ./synth_filtered.jsonl \
   --output ./synth_clean.jsonl \
   --benchmarks mmlu,gsm8k
 ```

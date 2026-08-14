@@ -5,6 +5,8 @@
     "chat": "chat.yaml",
     "code": "code.yaml",
     "embedding": "embedding.yaml",
+    "eu-ai-act": "eu-ai-act.yaml",
+    "hipaa": "hipaa.yaml",
     "ipo": "ipo.yaml",
     "kto": "kto.yaml",
     "longcontext": "longcontext.yaml",
@@ -15,6 +17,8 @@
     "reasoning": "reasoning.yaml",
     "rlhf": "rlhf.yaml",
     "simpo": "simpo.yaml",
+    "soc2": "soc2.yaml",
+    "sr-11-7": "sr-11-7.yaml",
     "tool-calling": "tool-calling.yaml",
     "vision": "vision.yaml"
   },

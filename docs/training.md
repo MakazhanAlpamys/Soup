@@ -4,8 +4,17 @@
 
 > SFT, DPO/GRPO/PPO/KTO/ORPO/SimPO/IPO/BCO, tool-calling, PRM, pre-training, distillation, classification, vision/audio/TTS, unlearning, RAFT/RA-DIT, and the loop-hardening detectors.
 
+> **Training a model bigger than your GPU?** `training.stream_layers: true` streams the
+> frozen base from CPU RAM (with NVMe disk overflow) one decoder layer at a time, so peak
+> VRAM is bounded by one layer instead of the whole model. Add `quantization: 4bit` and an
+> 8B base fits a 4 GB card. Works for `sft` and, from v0.72.4, for `dpo` / `orpo` /
+> `simpo` / `kto` — DPO's reference model is the same streamed base with its adapters
+> switched off, so it costs no extra weights — see
+> [Layer Streaming](performance-and-quantization.md#layer-streaming-beta-v0720-nf4-v0722-disk--wider-archs-v0723-preference-losses-v0724).
+
 **Contents:**
 
+- [Continual-learning rehearsal (`--replay`)](#continual-learning-rehearsal---replay)
 - [Loop Hardening](#loop-hardening)
 - [Unlearning (`task='unlearn'`, NPO / SimNPO / RMU)](#unlearning-taskunlearn-npo--simnpo--rmu)
 - [Continued Pre-training](#continued-pre-training)
@@ -15,6 +24,7 @@
 - [EBFT / GDPO Loss Variants](#ebft--gdpo-loss-variants)
 - [GRPO Objective Variants](#grpo-objective-variants)
 - [Process Reward Model (PRM)](#process-reward-model-prm)
+- [PRM-guided GRPO (process-supervised RL)](#prm-guided-grpo-process-supervised-rl)
 - [Weighted Multi-Objective Preference Loss](#weighted-multi-objective-preference-loss)
 - [MoE Model Support](#moe-model-support)
 - [Vision / Multimodal Fine-tuning](#vision--multimodal-fine-tuning)
@@ -37,8 +47,199 @@
 - [Knowledge Distillation (BETA, v0.52.0)](#knowledge-distillation-beta-v0520)
 - [EBFT + GDPO (BETA, v0.52.0)](#ebft--gdpo-beta-v0520)
 - [gpt-oss `reasoning_effort` + `train_on_eot` (v0.52.0)](#gpt-oss-reasoning_effort--train_on_eot-v0520)
+- [Seeds & reproducibility (`training.seed`)](#seeds--reproducibility-trainingseed)
+- [Full fine-tuning (`lora.r: 0`)](#full-fine-tuning-lorar-0)
 
 ---
+
+## Seeds & reproducibility (`training.seed`)
+
+Two knobs, both unset by default:
+
+```yaml
+training:
+  seed: 1234        # weight init of new params, data order, dropout
+  data_seed: 99     # optional — data order ONLY, so init stays fixed
+```
+
+`seed` reaches `TrainingArguments.seed` (which `Trainer.__init__` hands to
+`transformers.set_seed`, covering `random`, `numpy` and `torch`) and the
+multipack FFD sampler. `data_seed` reaches `TrainingArguments.data_seed`; set it
+alongside `seed` to vary only the order rows are seen in while holding
+initialisation fixed.
+
+**Why you want this.** Without a seed knob every run of a config took the same
+default, so "run it again with a different seed" was impossible: replicates of
+one arm differed only by row permutation and GPU nondeterminism. That understates
+run-to-run spread, and spread is the yardstick a real between-arm difference has
+to beat. Three replicates at three seeds is the cheapest honest error bar you can
+put on a training change:
+
+```bash
+for s in 1 2 3; do
+  soup train --config soup.yaml --output "runs/seed-$s" \
+    && echo "seed $s done"   # set training.seed: $s in the config per run
+done
+```
+
+**"Unset" does not mean the same thing for both fields.** An unset `seed`
+resolves to 42, HuggingFace's own `TrainingArguments` default. An unset
+`data_seed` stays `None`, which HF reads as "follow `seed`" rather than as a
+seed of its own, so leaving it out is not the same kind of default as leaving
+`seed` out. The multipack sampler still gets `0`, the value it has had since
+v0.37.0. The fields are `Optional[int]` rather than defaulting to 42 precisely
+so the trainer can tell "unset" from "explicitly 42" and keep those different
+historical defaults intact.
+
+**What changes for a run that sets neither field.** The values it trains at are
+the same as before: seed 42, `data_seed` at `None`. What is new is *when* the
+seed arrives. Before #353 nothing called `set_seed` ahead of `get_peft_model`,
+so `lora_A` and any freshly initialised classification head were drawn from
+torch's default generator, which is seeded from entropy once per process. An
+unseeded run's initialisation therefore varied from one process to the next, and
+it is now deterministic at 42. If you were getting replicate spread out of runs
+that set no seed, that is where it was coming from: those runs are identical to
+each other now, and varying a replicate means setting `training.seed` on
+purpose.
+
+Bounds: `[0, 2**32 - 1]` (`set_seed` feeds `numpy.random.seed`, which rejects
+anything outside that range), `0` is a legitimate seed, and a YAML `true` is
+rejected rather than silently becoming seed 1. `data_seed` is forwarded to
+Accelerate's dataloader configuration and needs `accelerate >= 1.1.0`;
+below that, transformers warns and ignores it (`seed` is unaffected).
+
+**Scope.** Every task wrapper threads both fields into the `TrainingArguments`
+subclass it builds, and applies `seed` before it loads the model, so the LoRA
+adapter and any freshly initialised head are drawn at the configured seed rather
+than at whatever the process happened to be sitting on (#353). `unlearn` builds
+no `Trainer` at all, and its RMU control vector follows `training.seed` too,
+staying at 0 when the seed is unset. The `pretrain` and layer-streaming paths
+pick `seed` up for their samplers as well.
+
+Through v0.73.0 this reached the **SFT** trainer only, so `training.seed: 7` on
+a DPO or GRPO run was accepted and silently trained at 42.
+
+The one path that still ignores both fields is the **MLX backend**
+(`backend: mlx`), whose trainers seed nothing at all — MLX has its own RNG
+(`mx.random`). Setting either field there now prints a warning naming it
+(`MLX backend ignores: training.seed ...`) rather than accepting it in silence,
+so an MLX run cannot look seeded while it is not.
+
+**Not a determinism guarantee.** A fixed seed makes the *software* RNG
+reproducible. It does not make CUDA kernels bit-reproducible — non-deterministic
+atomics, autotuned algorithms and a different GPU or library version can still
+move the last digits. For bit-exact reruns you also need
+`torch.use_deterministic_algorithms(True)`, which Soup does not set for you.
+
+## Full fine-tuning (`lora.r: 0`)
+
+Train every parameter, no adapter:
+
+```yaml
+base: HuggingFaceTB/SmolLM2-135M
+task: sft
+training:
+  quantization: none    # full-FT trains float weights
+  lora:
+    r: 0                # <- no adapter; the base itself trains
+```
+
+`lora.r: 0` is the supported spelling for plain full fine-tuning. It is the one
+`soup`'s classifier trainer has read as "no adapter" since v0.71.12, and the one
+`soup card` already resolves to a dense model rather than an adapter — so the
+model card, the registry entry and the trainer all agree without extra flags. On
+a rank of 0 the SFT trainer skips `get_peft_model` entirely: `soup train` prints
+`Full fine-tuning: N parameter tensor(s) trainable (lora.r=0, no adapter)`
+instead of `LoRA applied`, and the output directory holds a complete model, not
+an adapter to merge.
+
+Requirements, each rejected at config load with the reason named:
+`task: sft`, `backend: transformers`, `modality: text`, and
+`quantization: none` (quantized weights cannot be trained directly — use LoRA
+on top of them, i.e. QLoRA). It is mutually exclusive with every LoRA feature
+(`use_dora` / `use_vera` / `use_olora` / `use_rslora` / `rank_pattern` /
+`alpha_pattern` / `init_strategy` / `moe_lora` / `use_longlora` /
+`relora_steps` / `loraplus_lr_ratio`) — a LoRA knob next to `r: 0` is a
+contradiction rather than something to silently ignore — and with the other two
+"LoRA off" modes, [Spectrum](#spectrum--targeted-training-on-layer-snr-soup-spectrum-scan-v07123)
+(`unfrozen_parameters`) and LISA (`lisa_enabled`), since each independently
+decides what trains. It cannot be combined with layer streaming: streaming keeps
+the decoder on the meta device and trains only the adapter, so there would be
+nothing to full fine-tune.
+
+`freeze_layers` / `freeze_ratio` **do** stay legal with `r: 0` — "train
+everything above layer N" is a real technique — and the trainer respects
+whatever they froze instead of silently unfreezing it. If they leave nothing
+trainable the run is refused rather than burning GPU-hours on a no-op.
+
+Pick between the three "LoRA off" modes by how much you want to train:
+
+| Spelling | Trains | Use when |
+| --- | --- | --- |
+| `lora.r: 0` | everything | you have the VRAM and want the strongest baseline |
+| `unfrozen_parameters` ([Spectrum](#spectrum--targeted-training-on-layer-snr-soup-spectrum-scan-v07123)) | a hand-picked / SNR-ranked set | you want full-FT quality on the layers that matter |
+| `lisa_enabled` (LISA) | a rotating random subset | you want full-FT quality at LoRA-like memory |
+
+> Full fine-tuning needs far more memory than LoRA: optimizer state alone is
+> ~8 bytes per parameter for AdamW. `batch_size: "auto"` estimates memory from
+> a LoRA-shaped model, so on a full-FT run it errs optimistic — set
+> `batch_size` explicitly, or start low and raise it. (This is not new to
+> `r: 0`; the same is true of the Spectrum and LISA full-FT paths.)
+
+---
+
+## Continual-learning rehearsal (`--replay`)
+
+Fine-tuning on a new task can erase the old one. Rehearsal is the standard
+defence: mix a slice of the old data back in.
+
+```bash
+soup train --config new_task.yaml --replay old_task.jsonl --replay-ratio 0.1
+```
+
+or in `soup.yaml`:
+
+```yaml
+data:
+  train: new_task.jsonl
+  replay: old_task.jsonl
+  replay_ratio: 0.1      # fraction of the FINAL mixed set
+  replay_seed: 0
+```
+
+**The ratio is a share of the final set**, not of the new data:
+`n_replay = round(r/(1-r) · n_new)`. At `0.1` over 1000 new rows that is 111
+replay rows → 1111 total → exactly 10%. The console reports what it did:
+
+```
+Replay: +26 old rows interleaved (30.2% of 86)
+```
+
+Three guarantees worth knowing:
+
+- **Interleaved, never appended.** A trailing block of old rows would mean the
+  model sees them all in the final steps — a second mini-finetune, which is the
+  failure rehearsal exists to prevent.
+- **`train` only; validation stays pure new-task**, so your eval still measures
+  the task you are learning. Measure old-task retention separately with
+  `soup eval custom` / `soup ship`.
+- **An undersized pool reports a shortfall rather than repeating rows** — a row
+  seen twice per epoch is a different experiment.
+
+The replay file gets its own format detection, so the old set may be alpaca while
+the new one is sharegpt.
+
+**Scope (v1):** `sft` and `pretrain` only, and incompatible with
+`packing`/`multipack` — those concatenate rows into fixed blocks, so the ratio
+stops being meaningful at block boundaries. Both are rejected with a clear error
+rather than silently mis-mixing.
+
+**Honest result.** Validated at proof-of-mechanism scale (SmolLM2-135M + LoRA):
+training task B from a model that knew task A, replay retained A **7% better than
+a no-replay control** (loss 0.565 → 0.526) at a ~5% cost to task B — the expected
+trade. But forgetting without replay was only **+4%**, i.e. mild: LoRA on a 135M
+model barely drifts. The direction and the mechanism are proven; the effect size
+at full fine-tuning or 7B+ is unproven on a 4 GB box.
 
 ## Loop Hardening
 
@@ -147,7 +348,7 @@ soup train --config unlearn.yaml --yes
 soup eval unlearning <run-id> --benchmark tofu --evidence evidence.json --output report.json
 ```
 
-`soup train --task unlearn` is live (v0.71.9): it loads a LoRA-wrapped policy, a frozen reference copy (NPO / RMU), and the forget / retain JSONL sets, then optimises the per-method loss — NPO's `(2/β)·mean(-logσ(-β·(π_logp − ref_logp)))` drives the policy's forget-set log-prob below the reference (= forgetting), while the retain set anchors capability. Run NPO/SimNPO **with** a `retain_set` — without one the policy has no utility anchor and Soup warns loudly.
+`task: unlearn` is live (v0.71.9): it loads a LoRA-wrapped policy, a frozen reference copy (NPO / RMU), and the forget / retain JSONL sets, then optimises the per-method loss — NPO's `(2/β)·mean(-logσ(-β·(π_logp − ref_logp)))` drives the policy's forget-set log-prob below the reference (= forgetting), while the retain set anchors capability. Run NPO/SimNPO **with** a `retain_set` — without one the policy has no utility anchor and Soup warns loudly.
 
 Three orthogonal axes: **Forget Quality** (pre/post forget-loss delta), **Model Utility** (retain-accuracy preserved), **PrivLeak** (membership-inference AUC distance from 0.5). Bundled mini-fixtures for all three benchmarks ship in the box (v0.71.1 added MUSE + WMDP alongside the existing TOFU set), so `--benchmark muse|wmdp` runs without supplying evidence. The WMDP forget-set probes ship **redacted** (placeholder prompts + `REFUSED` responses) — Soup never bundles verbatim hazardous-knowledge content.
 
@@ -343,7 +544,89 @@ training:
 
 The trainer loads `AutoModelForCausalLM`, attaches an `nn.Linear(hidden, 1)`
 reward head, and computes MSE between predicted scalars at step-boundary tokens
-and the per-step labels.
+and the per-step labels. The reward head is saved inside the model checkpoint
+(`reward_head.*` in `model.safetensors`) and the tokenizer is saved alongside it,
+so the resulting directory is loadable standalone.
+
+
+## PRM-guided GRPO (process-supervised RL)
+
+Use a trained PRM as the **per-step reward** inside GRPO — the o1-era
+process-supervision signal. Set `training.prm_reward` to a PRM directory (a
+`task=prm` checkpoint) or HF id; the PRM splits each generated completion into
+reasoning steps (newline heuristic), scores every step with its reward head, and
+folds the per-step scores into one scalar reward that GRPO optimises. It
+**replaces** `reward_fn` and rides the existing reward-shaping +
+reward-hack-mitigation seam, so the v0.71.26 controller still observes it (TRL
+logs it as `rewards/prm_reward`).
+
+```yaml
+task: grpo
+backend: transformers        # required (the PRM reward runs a transformers forward)
+modality: text               # required
+data:
+  format: chatml
+  train: ./grpo_prompts.jsonl
+training:
+  prm_reward: ./my-prm       # a `soup train task=prm` checkpoint dir (or HF id)
+  prm_aggregate: min         # weakest-link (default) | prod | last
+  num_generations: 4
+  grpo_beta: 0.04
+```
+
+`prm_aggregate='min'` (weakest-link, the standard PRM aggregation) is the safe
+default; `prod` assumes calibrated `[0,1]` step scores (Soup's PRM head is
+trained with unconstrained MSE, so `prod` can blow up on uncalibrated labels).
+
+**Bundled rollout environments.** Three deterministic pure-Python toy
+environments seed the openenv rollout path out-of-the-box — pair any of them
+with `rollout_backend=openenv`:
+
+```yaml
+training:
+  rollout_backend: openenv
+  rollout_func: soup_cli.envs.calculator:rollout   # or retrieval_qa / guess_number
+  reward_fn: verifiable
+  verifiable_domain: math
+```
+
+Ready-made recipes: `grpo-env-calculator`, `grpo-env-retrieval-qa`,
+`grpo-env-guess-number`. The environments are deterministic single-shot
+prompt/answer *seeders* (the live openenv contract passes only the seed prompts,
+not the model) — not interactive multi-turn episodes.
+
+**Scope:** proof-of-mechanism only — validated on SmolLM2-135M with a tiny
+synthetic PRM (the PRM reward scores good completions above bad and drives GRPO's
+advantages). Not a production reward-model claim; scale validation is help-wanted
+(#286).
+
+
+## Online DPO (`task='online_dpo'`) — judge in the loop (v0.71.31)
+
+Unlike offline DPO (static `prompt/chosen/rejected` rows), **Online DPO** generates
+two completions per prompt **on-policy** each step and asks a *judge* — or a
+*reward model* — which is better; the winner becomes `chosen`, the loser
+`rejected`. The judge closes the loop. Wraps TRL `OnlineDPOTrainer`; data is
+prompt-only (like GRPO). Transformers + text only.
+
+```yaml
+base: HuggingFaceTB/SmolLM2-135M-Instruct
+task: online_dpo
+data:
+  train: ./data/prompts.jsonl      # prompt-only (or any format — prompts are extracted)
+training:
+  online_dpo_judge: "ollama://llama3.1"   # a pairwise judge (ollama://|https://|http://localhost)
+  # OR: reward_model: ./my-reward-model   # exactly one of judge / reward_model
+  online_dpo_loss_type: sigmoid           # sigmoid | ipo
+  online_dpo_max_new_tokens: 64
+  dpo_beta: 0.1
+  lora: { r: 8, alpha: 16, target_modules: auto }
+```
+
+The judge is Soup's own OpenAI-compatible `JudgeEvaluator` adapted to TRL's
+`BasePairwiseJudge` (swap-debiased: a winner is only recorded when both A,B and
+B,A orders agree). Recipe: `online-dpo-smollm2-135m`. Proof-of-mechanism was
+validated on SmolLM2-135M with a synthetic judge (not a production RLHF claim; #286).
 
 
 ## Weighted Multi-Objective Preference Loss
@@ -394,7 +677,7 @@ Fine-tune vision-language models (LLaMA-3.2-Vision, Qwen2-VL, Pixtral) on image+
 
 ```bash
 # Install vision support
-pip install 'soup-cli[vision]'
+pip install "soup-cli[vision]"
 
 # Create a vision config
 soup init --template vision
@@ -444,7 +727,7 @@ Fine-tune audio-language models (Qwen2-Audio, Whisper) on audio+text data:
 
 ```bash
 # Install audio support
-pip install 'soup-cli[audio]'
+pip install "soup-cli[audio]"
 
 # Create an audio config
 soup init --template audio
@@ -477,6 +760,48 @@ training:
 ```json
 {"audio": "recording.wav", "messages": [{"role": "user", "content": "Transcribe this audio."}, {"role": "assistant", "content": "Hello world."}]}
 ```
+
+### ASR fine-tuning (`task='asr'`, Whisper) — v0.71.32
+
+Fine-tune Whisper on your accent or domain. whisper-tiny (39M) and base (74M)
+train on a 4 GB GPU. Rows are `{"audio": <path>, "text": <transcript>}` under
+`data.format='asr'`; audio decodes to 16 kHz mono through the hardened loader.
+
+```yaml
+base: openai/whisper-tiny
+task: asr
+data:
+  train: ./data/train.jsonl
+  format: asr                 # rows: {"audio": "clip.wav", "text": "hello world"}
+  audio_dir: ./data/audio     # audio paths resolve here (containment-checked)
+training:
+  epochs: 3
+  lr: 1e-4
+  batch_size: 2
+  asr_language: en            # optional; sets + persists the decoder prefix
+  asr_task: transcribe        # transcribe | translate
+  asr_lora: true              # optional LoRA on q/v; default = full fine-tune
+  quantization: none
+output: ./out
+```
+
+```json
+{"audio": "clip0.wav", "text": "hello world"}
+```
+
+Transcribe + score after training:
+
+```bash
+soup infer --task asr --model ./out --input eval.jsonl --output preds.jsonl --audio-dir ./data/audio
+# -> preds carry {"transcription", "wer", "cer"} per row + a corpus WER summary
+```
+
+Notes: `task='asr'` requires `backend='transformers'` and a Whisper base (a
+non-Whisper base is rejected before download). `asr_language`/`asr_task` persist
+to an `asr_generation.json` sidecar so `soup infer --task asr` restores them
+(override with `--asr-language`/`--asr-task`). WER/CER use a light normalizer —
+good for before/after deltas, not leaderboard-comparable absolutes.
+`whisper-large-v3-asr` ships parse-only (needs a larger GPU).
 
 
 ## GRPO Plus — Objective Variants, Long-Context RL, Multi-Turn Agents
@@ -686,6 +1011,62 @@ def reward_fn(completions, **kwargs):
 training:
   reward_fn: ./my_reward.py
 ```
+
+**Reward ensembles** — list several rewards, comma-separated, and they combine (GRPO only).
+This also unlocks the `rm_ensemble` reward-hack detector, which needs ≥ 2 rewards:
+```yaml
+training:
+  reward_fn: "accuracy,format"   # both are scored every step
+```
+
+### Synthesize a verifier from your data (`soup reward synth`)
+
+Don't hand-write a verifier — generate one from reference (gold) outputs. Soup infers a
+*deterministic* verifier (numeric / JSON-schema / regex / tool-call), writes a readable, editable
+`.py`, and **refuses to emit** one that can't tell your references from auto-generated bad answers
+(the mandatory calibration report). The emitted file is a normal `reward_fn: reward.py`.
+
+```bash
+# infer + calibrate + emit (exit 0 kept, 2 refused, 1 error)
+soup reward synth references.jsonl -o reward.py --output-report calib.json
+
+# preview the induced spec without writing anything
+soup reward synth references.jsonl --plan-only
+
+# force a family instead of auto-detecting
+soup reward synth answers.jsonl -o reward.py --kind numeric --tolerance 1e-6
+```
+
+References are a JSONL where each row's gold answer is in an `answer` field (override with
+`--field`) or the last assistant turn of a `messages` list. `--min-discrimination` sets how
+strongly the verifier must separate references from perturbed negatives before it's emitted.
+v1 is deterministic families only — a `\boxed{}`/`####` marker helps the numeric verifier, and
+completions are prompted to mark their answer (standard RLVR practice).
+
+### Stress-test a verifier for gameability (`soup reward stress`)
+
+A verifier that passes calibration still might pay out for junk. `soup reward stress` feeds the
+verifier deterministic degenerate completions — empty, length-padded, repeated, and
+sentinel-spam — scored against your real gold answers, and flags any it **accepts**. It's the
+adversarial counterpart to `synth`: calibration proves the verifier tells references from
+*friendly* bad answers; `stress` asks whether a reward-hacking model could game it.
+
+```bash
+# probe a synthesized verifier (or any reward .py) — exit 0 robust, 2 gameable, 1 error
+soup reward stress reward.py --references golds.jsonl --output-report stress.json
+
+# probe a builtin verifier instead of a .py file
+soup reward stress verifiable --verifiable-domain math --references golds.jsonl
+
+# tune the attack set / accept threshold / gameability tolerance
+soup reward stress reward.py --references golds.jsonl \
+    --attacks empty,length,repetition,sentinel --sentinel GOLD \
+    --threshold 0.5 --max-gameable 0.0
+```
+
+The report shows a per-attack accept-rate and an overall verdict. A gold-requiring verifier probed
+with **no** `--references` is a hard error (it can't be measured), never a false "robust". Probing a
+`.py` executes its module code, like any custom reward — only stress files you trust.
 
 ### Verifiable Rewards (RLVR)
 
@@ -1203,5 +1584,3 @@ a conflicting combo is rejected loudly at config load. Scans cache under `~/.sou
 `all` default) is recommended for very large models — it skips the giant embedding/lm_head matrices.
 The SNR kernel is pure-numpy and transpose-invariant, so GPT-2 `Conv1D` weights score the same as
 Linear weights. (v0.71.23)
-
-

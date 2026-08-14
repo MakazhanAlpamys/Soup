@@ -8,7 +8,13 @@ from typing import Optional
 from rich.console import Console
 
 from soup_cli.config.schema import SoupConfig
-from soup_cli.utils.gpu import estimate_batch_size, model_size_from_name
+from soup_cli.utils.gpu import (
+    bf16_fp16_flags,
+    estimate_batch_size,
+    model_size_from_name,
+    resolve_device_map,
+)
+from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 
 console = Console()
 
@@ -66,6 +72,10 @@ class PretrainTrainerWrapper:
 
         cfg = self.config
         tcfg = cfg.training
+
+        # #353: seed before the model and any adapter are built.
+        apply_training_seed(tcfg)
+
         use_unsloth = cfg.backend == "unsloth"
 
         if use_unsloth:
@@ -127,6 +137,7 @@ class PretrainTrainerWrapper:
         warmup_steps = int(total_steps * tcfg.warmup_ratio)
 
         # --- Training args ---
+        _bf16, _fp16 = bf16_fp16_flags(self.device)
         training_kwargs = {
             "output_dir": str(output_dir),
             "num_train_epochs": tcfg.epochs,
@@ -141,10 +152,12 @@ class PretrainTrainerWrapper:
             "logging_steps": tcfg.logging_steps,
             "save_steps": tcfg.save_steps,
             "save_total_limit": 3,
-            "bf16": self.device == "cuda",
+            "bf16": _bf16,
+            "fp16": _fp16,
             "report_to": self.report_to,
             "remove_unused_columns": False,
             "deepspeed": self.deepspeed_config,
+            **training_seed_kwargs(tcfg),
         }
 
         # FSDP2 — alternative to DeepSpeed
@@ -257,7 +270,7 @@ class PretrainTrainerWrapper:
 
         console.print(f"[dim]Loading model: {cfg.base}[/]")
         # On CPU, use device_map="cpu" to avoid meta tensors from "auto"
-        dev_map = "cpu" if self.device == "cpu" else "auto"
+        dev_map = resolve_device_map(self.device)
         model_kwargs = {
             "trust_remote_code": self._trust_remote_code, "device_map": dev_map,
         }

@@ -10,11 +10,86 @@ from typing import Optional, Tuple
 from rich.console import Console
 
 from soup_cli.config.schema import SoupConfig
-from soup_cli.utils.gpu import estimate_batch_size, model_size_from_name
+from soup_cli.trainer.stream_setup import StreamingSetupMixin
+from soup_cli.utils.gpu import (
+    bf16_fp16_flags,
+    estimate_batch_size,
+    model_size_from_name,
+    resolve_device_map,
+)
+from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 
 logger = logging.getLogger(__name__)
 
 console = Console()
+
+# #341's DEFAULT_TRAINING_SEED moved to ``utils.seeding`` in #353, where every
+# other task trainer needs the same constant. The multipack default below is
+# SFT-local and stays here.
+
+# #341 — what an unset seed gives the multipack FFD sampler. NOT 42: the
+# sampler has been seeded 0 since v0.37.0 because ``getattr(tcfg, "seed", 0)``
+# never found an attribute, and changing it would silently re-order every
+# existing ``multipack: true`` run.
+DEFAULT_MULTIPACK_SEED = 0
+
+# Text-token surface TRL's SFTTrainer reads directly off ``processing_class``
+# (trl/trainer/sft_trainer.py: ``pad_token`` / ``eos_token`` / ``eos_token_id``
+# resolution) — mirrored from a vision processor's nested tokenizer in #302.
+_PROCESSOR_TOKEN_ATTRS = (
+    "pad_token",
+    "eos_token",
+    "pad_token_id",
+    "eos_token_id",
+    "bos_token",
+    "bos_token_id",
+)
+
+
+def _ensure_vision_processor_pad_token(processor: object) -> None:
+    """Mirror a vision processor's nested-tokenizer token surface onto itself.
+
+    HF vision processors (Idefics3/SmolVLM, LLaVA, Qwen2-VL, ...) keep the text
+    tokenizer nested at ``processor.tokenizer`` and do NOT forward token-level
+    attributes — ``ProcessorMixin`` has no ``__getattr__``. TRL's ``SFTTrainer``
+    reads ``processing_class.pad_token`` / ``.eos_token`` /
+    ``.convert_tokens_to_ids`` directly, so passing such a processor as
+    ``processing_class`` crashes with e.g. ``'Idefics3Processor' object has no
+    attribute 'pad_token'`` (#302).
+
+    Fix: when the processor exposes a nested ``.tokenizer``, set
+    ``pad_token = eos_token`` on that tokenizer if unset, then copy the token
+    surface + ``convert_tokens_to_ids`` onto the processor — but only for
+    attributes it does not already expose, so a processor that already behaves
+    like a tokenizer (or a plain tokenizer) is left untouched (no LLaVA-path
+    regression). Best-effort per attribute: a read-only property on either side
+    is skipped rather than fatal.
+    """
+    tok = getattr(processor, "tokenizer", None)
+    if tok is None:
+        # Already tokenizer-like, or an unknown shape — nothing to mirror.
+        return
+    # A padless tokenizer trains fine once pad == eos (the standard causal-LM
+    # convention already used by the text path, sft.py:_setup_transformers).
+    if getattr(tok, "pad_token", None) is None and getattr(tok, "eos_token", None) is not None:
+        try:
+            tok.pad_token = tok.eos_token
+        except (AttributeError, TypeError):
+            pass
+    for attr in _PROCESSOR_TOKEN_ATTRS:
+        if hasattr(processor, attr):
+            continue  # processor already exposes it — don't clobber
+        try:
+            setattr(processor, attr, getattr(tok, attr, None))
+        except (AttributeError, TypeError):
+            pass
+    if not hasattr(processor, "convert_tokens_to_ids"):
+        inner = getattr(tok, "convert_tokens_to_ids", None)
+        if callable(inner):
+            try:
+                processor.convert_tokens_to_ids = inner
+            except (AttributeError, TypeError):
+                pass
 
 
 def _maybe_load_pretokenized(
@@ -88,7 +163,7 @@ def _maybe_load_pretokenized(
     return train_ds, eval_ds
 
 
-class SFTTrainerWrapper:
+class SFTTrainerWrapper(StreamingSetupMixin):
     """High-level wrapper that sets up model + tokenizer + trainer from SoupConfig."""
 
     def __init__(
@@ -137,15 +212,29 @@ class SFTTrainerWrapper:
 
         cfg = self.config
         tcfg = cfg.training
+
+        # #353: seed before the model exists. Threading `seed` into
+        # TrainingArguments is not enough on its own, because `get_peft_model`
+        # draws `lora_A` before there is a Trainer to run `set_seed(args.seed)`.
+        apply_training_seed(tcfg)
+
         use_unsloth = cfg.backend == "unsloth"
         use_vision = cfg.modality == "vision"
 
         use_audio = cfg.modality == "audio"
 
+        # v0.72.0 BETA — layer streaming replaces the model-load path entirely
+        # (meta skeleton, never a resident load), so it dispatches ahead of the
+        # backend branches. The schema already rejects streaming + unsloth/mlx
+        # and streaming + vision/audio.
+        use_streaming = bool(getattr(tcfg, "stream_layers", False))
+
         if use_vision:
             self._setup_vision_transformers(cfg, tcfg)
         elif use_audio:
             self._setup_audio_transformers(cfg, tcfg)
+        elif use_streaming:
+            self._setup_streaming_transformers(cfg, tcfg)
         elif use_unsloth:
             self._setup_unsloth(cfg, tcfg)
         else:
@@ -161,10 +250,24 @@ class SFTTrainerWrapper:
                 p.numel() for p in self.model.parameters() if p.requires_grad
             )
             total = sum(p.numel() for p in self.model.parameters())
+        # v0.72.2 — under NF4 streaming PEFT's total is wrong by ~6.5x. It
+        # special-cases Params4bit as `numel * 2 * quant_storage.itemsize`,
+        # which is right for a RESIDENT one (whose numel is the packed count)
+        # but not for our `meta` placeholder, which still carries the LOGICAL
+        # shape. Measured on SmolLM2-135M: 878,154,048 vs a true 134,515,008.
+        # The sharder counted the real source elements, so use that.
+        stream_total = getattr(self._stream_runtime, "total_params", 0)
+        if stream_total:
+            total = stream_total
         pct = 100 * trainable / total if total else 0.0
-        label = (
-            "Spectrum targeted FT" if tcfg.unfrozen_parameters else "LoRA applied"
-        )
+        # #340 — "LoRA applied" is a false statement on a full-FT run, and this
+        # is the line an operator screenshots to show what trained.
+        if tcfg.unfrozen_parameters:
+            label = "Spectrum targeted FT"
+        elif tcfg.lora.r == 0 and cfg.modality == "text" and cfg.backend == "transformers":
+            label = "Full fine-tuning"
+        else:
+            label = "LoRA applied"
         console.print(
             f"[green]{label}:[/] {trainable:,} trainable"
             f" / {total:,} total ({pct:.2f}%)"
@@ -312,6 +415,14 @@ class SFTTrainerWrapper:
             "report_to": self.report_to,
             "remove_unused_columns": False,
             "deepspeed": self.deepspeed_config,
+            # #341: the general training seed. Until this landed there was no
+            # knob at all, so every run took HF's defaults (seed=42,
+            # data_seed=None) and replicates of one config differed only by row
+            # permutation and GPU nondeterminism. `None` means "unset", and
+            # unset must reproduce the pre-#341 numbers exactly, hence 42 rather
+            # than a new default. #353 moved the resolution into utils.seeding
+            # so the other 17 task wrappers resolve it identically.
+            **training_seed_kwargs(tcfg),
         }
 
         # FSDP2 — alternative to DeepSpeed. The helper also enables
@@ -327,7 +438,19 @@ class SFTTrainerWrapper:
             console.print("[green]torch.compile enabled on FSDP2[/]")
 
         # Gradient checkpointing — tiered (v0.28.0): bool or tier string.
-        if tcfg.gradient_checkpointing:
+        # v0.72.0: layer streaming checkpoints every layer itself, so enabling
+        # HF's too would double-recompute silently (see layer_stream).
+        from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
+
+        hf_grad_ckpt = should_enable_hf_gradient_checkpointing(
+            tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
+        )
+        if tcfg.gradient_checkpointing and not hf_grad_ckpt:
+            console.print(
+                "[dim]Gradient checkpointing: handled per-layer by layer "
+                "streaming (HF's own is left off to avoid double recompute)[/]"
+            )
+        if hf_grad_ckpt:
             from soup_cli.utils.gpu import get_gpu_info
             from soup_cli.utils.gradient_ckpt import (
                 describe_tier,
@@ -380,7 +503,22 @@ class SFTTrainerWrapper:
                 f"update_gap={tcfg.galore_update_proj_gap}, scale={tcfg.galore_scale}"
             )
 
+        # #78 — only when Soup's own patch actually landed, so an unsupported
+        # architecture keeps today's warning instead of becoming an HF exception.
+        if getattr(self, "_liger_applied", False):
+            training_kwargs["use_liger_kernel"] = True
+
         training_args = TrainingArguments(**training_kwargs)
+
+        # #78 — `data.max_length` above 1024 was silently ignored on EVERY SFT run.
+        # `SFTTrainer.__init__` converts a plain `TrainingArguments` with
+        # `SFTConfig(**args.to_dict())`, and `max_length` is an SFT-only field that
+        # `TrainingArguments` does not carry, so it always took SFTConfig's own
+        # default of 1024. Measured before the fix: max_length=4096 produced 1024
+        # tokens per sample, with no warning. Building the SFTConfig here mirrors
+        # TRL's own conversion (including the hub_token dance it does) and adds the
+        # one field that was being dropped.
+        training_args = self._as_sft_config(training_args, cfg.data.max_length)
 
         # --- Trainer ---
         trainer_kwargs = {
@@ -494,14 +632,50 @@ class SFTTrainerWrapper:
                 lengths=lengths_from_dataset(train_ds),
                 max_seq_len=cfg.data.max_length,
                 batch_size=batch_size,
-                seed=getattr(tcfg, "seed", 0) or 0,
+                # #341 — this lookup used to be defensive cover for an
+                # attribute that did not exist, so it was always 0. The field
+                # exists now; unset still resolves to 0 so existing multipack
+                # runs keep their row order.
+                seed=(
+                    DEFAULT_MULTIPACK_SEED if tcfg.seed is None else tcfg.seed
+                ),
             )
             console.print("[green]Multipack FFD bin-packing sampler enabled[/]")
         else:
             self.trainer = SFTTrainer(**trainer_kwargs)
 
+        # #336 — DeepSpeed + LoRA died on every stage before the first step.
+        # HF builds two optimizer parameter groups (decay / no-decay) and with
+        # LoRA the no-decay group is empty; DeepSpeed drops it while the LR
+        # scheduler keeps two ``base_lrs``, and torch >= 2.13's strict ``zip``
+        # raises at ``lr_scheduler.step()``. The guard prunes the empty group
+        # inside ``create_optimizer``, i.e. before the scheduler is built.
+        # Only under DeepSpeed: full fine-tuning populates both groups and the
+        # ordinary path must not have its optimizer rewritten.
+        if self.deepspeed_config:
+            from soup_cli.utils.deepspeed import attach_empty_param_group_guard
+
+            attach_empty_param_group_guard(self.trainer)
+
         self._output_dir = str(output_dir)
         self._batch_size = batch_size
+
+        # #351: normalise every `checkpoint-*` adapter as the Trainer writes it.
+        # The final save is repaired at the end of `train()`; HF dispatches
+        # `on_save` only for the periodic checkpoints, so the two call sites
+        # cover different files and neither is redundant.
+        #
+        # Attached in `setup()` rather than alongside the other callbacks in
+        # `train()` because `CallbackHandler.call_event` dispatches in insertion
+        # order and `HFPushCallback.on_save` UPLOADS `checkpoint-{step}` on this
+        # same event. `--push-as` adds that callback straight to this trainer
+        # once `setup()` has returned (`commands/train.py`), so a normalisation
+        # attached any later than it would publish the prefixed adapter and keep
+        # the repaired one to itself. Being ahead of anything the caller adds is
+        # the whole point of the position.
+        from soup_cli.utils.peft_wiring import attach_compile_prefix_callback
+
+        attach_compile_prefix_callback(self.trainer, tcfg, self._output_dir, console)
 
     def _prepare_raft_dataset(self, dataset: dict, cfg, tcfg):
         """v0.71.10 #199 — build pre-tokenised RAFT rows (answer-only mask).
@@ -622,10 +796,20 @@ class SFTTrainerWrapper:
 
         - When ``tcfg.auto_mixed_precision`` is True: query GPU compute
           capability and call :func:`pick_mixed_precision` to decide.
-        - Otherwise: preserve legacy default (bf16 on CUDA, no fp16).
+        - Otherwise: bf16 on a CUDA card that supports it, fp16 on one that
+          does not.
+
+        The default used to be a flat ``bf16 on CUDA``, which is not a
+        preference on a pre-Ampere card but a hard stop: transformers raises
+        *"Your setup doesn't support bf16/gpu. You need Ampere+ GPU with
+        cuda>=11.0"* while building TrainingArguments, so every run on a T4 or
+        a P100 — Colab's and Kaggle's free tiers — died before step 0 whether
+        it streamed or not (found by the #385 live smoke). Asking the card
+        cannot regress a working setup: where bf16 is supported the answer is
+        unchanged, and where it is not the previous behaviour was a crash.
         """
         if not getattr(tcfg, "auto_mixed_precision", False):
-            return (self.device == "cuda", False)
+            return bf16_fp16_flags(self.device)
 
         if self.device != "cuda":
             return (False, False)
@@ -651,6 +835,32 @@ class SFTTrainerWrapper:
         )
         return (mode == "bf16", mode == "fp16")
 
+    @staticmethod
+    def _as_sft_config(training_args, max_length):
+        """Convert `TrainingArguments` -> `SFTConfig`, carrying `max_length` over.
+
+        Mirrors what `SFTTrainer.__init__` does with a plain `TrainingArguments`,
+        so nothing else about the run changes. Falls back to the original object if
+        this TRL cannot be converted that way — the caller then gets exactly the
+        previous behaviour rather than a crash, and the shipped test pins the
+        conversion so a silent fallback cannot hide a regression.
+        """
+        try:
+            from trl import SFTConfig
+        except ImportError:
+            return training_args
+        if isinstance(training_args, SFTConfig):
+            training_args.max_length = max_length
+            return training_args
+        try:
+            dict_args = training_args.to_dict()
+            dict_args["hub_token"] = training_args.hub_token  # to_dict hides it
+            dict_args.pop("push_to_hub_token", None)
+            dict_args["max_length"] = max_length
+            return SFTConfig(**dict_args)
+        except (TypeError, ValueError):
+            return training_args
+
     def _setup_transformers(self, cfg, tcfg):
         """Load model via standard transformers + peft pipeline."""
         from peft import LoraConfig, TaskType, get_peft_model, prepare_model_for_kbit_training
@@ -662,7 +872,15 @@ class SFTTrainerWrapper:
         if tcfg.use_liger:
             from soup_cli.utils.liger import apply_liger_kernel
 
-            if apply_liger_kernel(cfg.base):
+            # #78 — record whether the patch actually landed. `_build_trainer`
+            # needs it: patching the model is only half the job, because TRL and
+            # HF read `TrainingArguments.use_liger_kernel` to know the fused path
+            # returns `logits=None`. Without that flag TRL's entropy metric is not
+            # guarded and `entropy_from_logits(None)` raises at step 0, so
+            # `use_liger: true` crashed instead of running. Reproduced on trl
+            # 0.26.2 and 0.19.1, i.e. across the whole supported pin.
+            self._liger_applied = bool(apply_liger_kernel(cfg.base))
+            if self._liger_applied:
                 console.print(
                     "[green]Liger Kernel enabled:[/] fused RMSNorm, SwiGLU, CrossEntropy, RoPE"
                 )
@@ -702,7 +920,7 @@ class SFTTrainerWrapper:
 
         console.print(f"[dim]Loading model: {cfg.base}[/]")
         # On CPU, use device_map="cpu" to avoid meta tensors from "auto"
-        dev_map = "cpu" if self.device == "cpu" else "auto"
+        dev_map = resolve_device_map(self.device)
         model_kwargs = {
             "trust_remote_code": self._trust_remote_code,
             "device_map": dev_map,
@@ -812,6 +1030,54 @@ class SFTTrainerWrapper:
                 f"[green]Spectrum targeted FT:[/] {n_trainable} parameter "
                 f"tensor(s) unfrozen (LoRA off)"
             )
+        elif tcfg.lisa_enabled:
+            # v0.71.34 #267 — LISA layerwise importance sampling. Full-FT of a
+            # rotating set of decoder layers (LoRA off). The model stays FULLY
+            # trainable here so HF's create_optimizer (built before
+            # on_train_begin) includes every decoder param in its param groups;
+            # LisaCallback then flips requires_grad each interval — frozen
+            # params get grad=None and AdamW skips them. enable_input_require_grads
+            # keeps grad-checkpointing safe.
+            if hasattr(self.model, "enable_input_require_grads"):
+                self.model.enable_input_require_grads()
+            console.print(
+                f"[green]LISA:[/] layerwise importance sampling "
+                f"({tcfg.lisa_num_layers} layer(s) every "
+                f"{tcfg.lisa_interval_steps} steps, LoRA off)"
+            )
+        elif tcfg.lora.r == 0:
+            # #340 — plain full fine-tuning. Until now the `else` below applied
+            # LoRA unconditionally and the only way to train without an adapter
+            # was `unfrozen_parameters: ['.*']`, i.e. the Spectrum regex feature
+            # used as a workaround. `r: 0` is the spelling classifier.py has
+            # read as "no adapter" since v0.71.12 and the one card.py already
+            # resolves to a dense model.
+            #
+            # Deliberately NOT `requires_grad_(True)`: `freeze_layers` /
+            # `freeze_ratio` ran above and stay legal here (training everything
+            # above layer N is a real technique), so this branch respects
+            # whatever they froze instead of silently undoing it. The schema
+            # already guarantees quantization='none', so no k-bit prep has
+            # frozen the base underneath us.
+            trainable = [
+                param for param in self.model.parameters() if param.requires_grad
+            ]
+            if not trainable:
+                raise ValueError(
+                    "training.lora.r=0 requests full fine-tuning but no "
+                    "parameter is trainable — check training.freeze_layers / "
+                    "training.freeze_ratio, or set lora.r >= 1 to train an "
+                    "adapter instead. Refusing rather than running a no-op."
+                )
+            # Mirrors the Spectrum branch: with gradient checkpointing a frozen
+            # input embedding breaks the backward pass, and get_peft_model does
+            # this internally on the LoRA path. Harmless without checkpointing.
+            if hasattr(self.model, "enable_input_require_grads"):
+                self.model.enable_input_require_grads()
+            console.print(
+                f"[green]Full fine-tuning:[/] {len(trainable)} parameter "
+                f"tensor(s) trainable (lora.r=0, no adapter)"
+            )
         else:
             # LoRA — with MoE-aware target modules if moe_lora is enabled
             target_modules = tcfg.lora.target_modules
@@ -914,6 +1180,10 @@ class SFTTrainerWrapper:
         self.processor = AutoProcessor.from_pretrained(
             cfg.base, trust_remote_code=self._trust_remote_code
         )
+        # Idefics3/SmolVLM (and other) processors keep the text tokenizer nested
+        # and don't forward pad_token/eos_token — mirror them onto the processor
+        # so TRL's SFTTrainer processing_class access doesn't crash (#302).
+        _ensure_vision_processor_pad_token(self.processor)
         self.tokenizer = self.processor  # SFTTrainer uses processing_class
 
         # Quantization (v0.71.19 #81) — unified Quant Menu loader. Replaces the
@@ -928,7 +1198,7 @@ class SFTTrainerWrapper:
         )
 
         console.print(f"[dim]Loading vision model: {cfg.base}[/]")
-        dev_map = "cpu" if self.device == "cpu" else "auto"
+        dev_map = resolve_device_map(self.device)
         model_kwargs = {
             "trust_remote_code": self._trust_remote_code,
             "device_map": dev_map,
@@ -1037,7 +1307,7 @@ class SFTTrainerWrapper:
         )
 
         console.print(f"[dim]Loading audio model: {cfg.base}[/]")
-        dev_map = "cpu" if self.device == "cpu" else "auto"
+        dev_map = resolve_device_map(self.device)
         model_kwargs = {
             "trust_remote_code": self._trust_remote_code,
             "device_map": dev_map,
@@ -1083,7 +1353,7 @@ class SFTTrainerWrapper:
         except ImportError:
             raise ImportError(
                 "librosa is required for audio training. "
-                "Install with: pip install 'soup-cli[audio]'"
+                "Install with: pip install \"soup-cli[audio]\""
             )
 
         def load_and_format_audio(example):
@@ -1188,10 +1458,13 @@ class SFTTrainerWrapper:
         # ReLoRA callback (v0.39.0 Part B / v0.40.6 #67) via shared helper.
         from soup_cli.utils.peft_wiring import (
             attach_curriculum_callback,
+            attach_lisa_callback,
             attach_plugin_callback,
             attach_relora_callback,
         )
         attach_relora_callback(self.trainer, self.config.training)
+        # LISA layerwise importance sampling (v0.71.34 #267).
+        attach_lisa_callback(self.trainer, self.config.training)
         # v0.53.5 #114/#115 — dynamic curriculum live callback.
         attach_curriculum_callback(
             self.trainer, self.config.training, self._output_dir, console
@@ -1221,12 +1494,11 @@ class SFTTrainerWrapper:
                     f"{self._output_dir!r}"
                 )
             offload_save_dir = candidate
-        import contextlib
-
-        with contextlib.ExitStack() as _train_ctx:
-            _train_ctx.enter_context(
-                offload_context(tcfg.activation_offloading, save_dir=offload_save_dir)
-            )
+        # v0.72.3 — the shared context releases the streaming weight source even
+        # if training raises (see StreamingSetupMixin._training_context).
+        with self._training_context(
+            offload_context(tcfg.activation_offloading, save_dir=offload_save_dir)
+        ) as train_ctx:
             # LongLoRA S² shifted-sparse attention (v0.49.0 schema). The override
             # monkeypatches attention.forward for the duration of training and
             # was previously never installed (use_longlora validated but shipped
@@ -1237,7 +1509,7 @@ class SFTTrainerWrapper:
                 from soup_cli.utils.longlora import apply_longlora_forward_override
 
                 try:
-                    _train_ctx.enter_context(
+                    train_ctx.enter_context(
                         apply_longlora_forward_override(self.model)
                     )
                     console.print("[green]LongLoRA S² attention override active[/]")
@@ -1251,6 +1523,33 @@ class SFTTrainerWrapper:
 
         # Save final model (LoRA adapter)
         self.trainer.save_model(self._output_dir)
+        # #335 — under torch.compile the Trainer saves THROUGH the wrapper, so
+        # every key gains `_orig_mod.` and PeftModel.from_pretrained then matches
+        # none of them: it warns and leaves lora_B at zero init, i.e. the run
+        # exits 0 having written an adapter that does nothing. Measured 0/96
+        # non-zero against 96/96 for the paired non-compile run.
+        # #351: this call covers the FINAL save only. The periodic
+        # `checkpoint-*` directories are written by the same `save_model` and are
+        # normalised by the callback `setup()` attaches, which runs on HF's
+        # `on_save` event. `on_save` is not dispatched for the save below, so
+        # both are needed.
+        #
+        # Gated on `args.should_save` for the reason the callback is: that is the
+        # condition `save_model` gates the write on, so it names the rank that
+        # actually has a file here to repair. Eight ranks opening and rewriting
+        # one adapter is safe only by accident, and `os.replace` on a shared
+        # filesystem is not the guarantee it is on local disk.
+        if getattr(self.config.training, "use_fsdp2_compile", False) and getattr(
+            self.trainer.args, "should_save", True
+        ):
+            from soup_cli.utils.peft_wiring import strip_compile_prefix
+
+            renamed = strip_compile_prefix(self._output_dir)
+            if renamed:
+                console.print(
+                    f"[dim]Normalised {renamed} adapter keys saved through "
+                    "torch.compile's wrapper[/]"
+                )
         self.tokenizer.save_pretrained(self._output_dir)
 
         # Extract metrics

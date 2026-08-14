@@ -1,6 +1,97 @@
 """GPU detection, memory calculation, and auto batch size."""
 
+import json
 import math
+import os
+import re
+
+# A safetensors file starts with a u64 little-endian header length, then a
+# JSON header carrying each tensor's dtype + shape. Reading it costs a few
+# KB — the weights themselves are never touched.
+_ST_HEADER_LEN_BYTES = 8
+_MAX_ST_HEADER_BYTES = 100 * 1024 * 1024  # sanity bound on a crafted file
+
+
+def _params_from_local_safetensors(path: str) -> float | None:
+    """EXACT parameter count (billions) for a local checkpoint, or None.
+
+    A local directory's NAME often carries no size marker at all — a model
+    merged to ``./denseA`` or ``./out`` looks nameless to the size guesser,
+    which then falls back to the 7B default and makes the hardware-fit gate
+    refuse to train a 135M model. The checkpoint knows its own size, so ask
+    it instead of guessing.
+    """
+    try:
+        if not os.path.isdir(path):
+            return None
+        shards = [
+            entry.path
+            for entry in os.scandir(path)
+            if entry.is_file() and entry.name.endswith(".safetensors")
+        ]
+        if not shards:
+            return None
+        total = 0
+        for shard in shards:
+            with open(shard, "rb") as handle:
+                raw = handle.read(_ST_HEADER_LEN_BYTES)
+                if len(raw) < _ST_HEADER_LEN_BYTES:
+                    return None
+                header_len = int.from_bytes(raw, "little")
+                if header_len <= 0 or header_len > _MAX_ST_HEADER_BYTES:
+                    return None
+                header = json.loads(handle.read(header_len))
+            if not isinstance(header, dict):
+                return None
+            for name, meta in header.items():
+                if name == "__metadata__" or not isinstance(meta, dict):
+                    continue
+                shape = meta.get("shape")
+                if not isinstance(shape, list) or not shape:
+                    continue
+                numel = 1
+                for dim in shape:
+                    if not isinstance(dim, int) or dim < 0:
+                        return None
+                    numel *= dim
+                total += numel
+        return (total / 1e9) if total else None
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return None  # unreadable/crafted -> fall back to the name guess
+
+
+def resolve_device_map(device: str):
+    """``device_map`` for ``from_pretrained``, correct under a distributed launch.
+
+    ``device_map="auto"`` shards one model across every visible GPU. Under
+    ``torchrun`` / ``accelerate launch`` / ``deepspeed`` that is wrong twice
+    over — every rank would try to shard across every card — and transformers
+    refuses outright:
+
+        ValueError: You can't train a model that has been loaded with
+        `device_map='auto'` in any distributed mode.
+
+    Each rank must pin its own GPU instead. Measured on 8x H100
+    (benchmarks/gate-h100-validation.md, FINDING 4): without this, the exact
+    ``accelerate launch --num_processes 8 soup train -c ...`` command that
+    ``soup train --gpus 8`` prints fails immediately, with and without
+    ``--deepspeed``.
+
+    A malformed ``LOCAL_RANK`` / ``WORLD_SIZE`` falls back to ``"auto"``: that is
+    the single-process behaviour, which is what a process with no usable
+    distributed environment actually is.
+    """
+    if str(device) == "cpu":
+        return "cpu"
+    local_rank = os.environ.get("LOCAL_RANK")
+    if local_rank is None:
+        return "auto"
+    try:
+        if int(os.environ.get("WORLD_SIZE", "1") or "1") <= 1:
+            return "auto"
+        return {"": int(local_rank)}
+    except (TypeError, ValueError):
+        return "auto"
 
 
 def detect_device() -> tuple[str, str]:
@@ -99,20 +190,133 @@ def estimate_batch_size(
 
 
 def model_size_from_name(model_name: str) -> float:
-    """Guess model size in billions from model name."""
+    """Model size in billions: exact for a local checkpoint, else guessed.
+
+    A LOCAL path is measured, not guessed — `soup merge` writes directories
+    like ``./denseA`` whose name carries no size marker, so the name-based
+    fallback called them 7B and the hardware-fit gate refused to train a
+    135M model. That blocked merge -> train-from-merged, the ordinary
+    continual-learning flow (found by the v0.71.36 replay smoke; same class
+    as the v0.71.32 whisper and v0.71.33 "M suffix" fixes, which were both
+    the name guess over-predicting a small model).
+    """
+    exact = _params_from_local_safetensors(model_name)
+    if exact is not None:
+        return exact
+
     name_lower = model_name.lower()
 
+    # Whisper ASR checkpoints carry the size in the name suffix, not an "Nb"
+    # token — check these first so a 39M whisper-tiny isn't mistaken for the
+    # 7B default (v0.71.32: the default guess blocked ASR training on the
+    # hardware-fit gate).
+    whisper_markers = [
+        ("whisper-large", 1.55), ("whisper-medium", 0.769),
+        ("whisper-small", 0.244), ("whisper-base", 0.074),
+        ("whisper-tiny", 0.039),
+    ]
+    for marker, size in whisper_markers:
+        if marker in name_lower:
+            return size
+
+    # Longer markers first: "1.7b" contains "7b", so a naive scan would call a
+    # 1.7B model a 7B one (and over-predict its VRAM by 4x).
     size_markers = [
         ("70b", 70), ("65b", 65), ("34b", 34), ("33b", 33),
-        ("13b", 13), ("8b", 8), ("7b", 7), ("3b", 3),
-        ("1.5b", 1.5), ("1b", 1), ("0.5b", 0.5),
+        ("13b", 13), ("8b", 8), ("3b", 3),
+        ("1.5b", 1.5), ("1.7b", 1.7), ("0.5b", 0.5), ("0.6b", 0.6),
+        ("7b", 7), ("1b", 1),
     ]
 
     for marker, size in size_markers:
         if marker in name_lower:
             return size
 
+    # Sub-billion checkpoints carry their size in MILLIONS (SmolLM2-135M,
+    # SmolVLM-256M, ...). Without this they fell through to the 7B default and
+    # the hardware-fit gate refused to train them — which blocked `soup draft`
+    # for exactly the tiny models drafts are made of (v0.71.33 live smoke;
+    # same class as the v0.71.32 whisper fix).
+    #
+    # Checked AFTER the "b" markers on purpose: `Qwen2.5-7B-Instruct-1M` is a
+    # 7B model with a 1M *context*, not a 1M-parameter model.
+    million = re.search(r"(?<![a-z0-9.])(\d+(?:\.\d+)?)m(?![a-z0-9])", name_lower)
+    if million:
+        return float(million.group(1)) / 1000.0
+
     return 7.0  # default guess
+
+
+def cuda_supports_bf16() -> bool:
+    """Does the current CUDA device support bf16? Ampere (sm_80) and later.
+
+    A T4 (sm_75, Colab's free tier), a P100 (Kaggle), a V100, a GTX 16xx or an
+    RTX 20xx does not. Every trainer wrapper used to spell this as
+    ``bf16=self.device == "cuda"``, so all fourteen of them asked for a dtype
+    the card has no units for (#385, #387).
+
+    This docstring used to say that transformers refuses outright on that
+    hardware, quoting *"Your setup doesn't support bf16/gpu. You need Ampere+
+    GPU with cuda>=11.0"*, and that every task therefore died before step 0.
+    **That was wrong and is retracted in the CHANGELOG**: the error had been
+    produced by a local stub forcing ``is_bf16_supported()`` to False, while
+    transformers gates on the same permissive call described below, which a T4
+    answers True to. So on the current stack nothing raised; the run simply
+    proceeded in an emulated dtype. Established by running it on a real T4
+    rather than by reasoning about one.
+
+    One function rather than a per-wrapper expression, and it asks the driver
+    rather than comparing a compute-capability number, so it cannot disagree
+    with :func:`get_compute_dtype` below.
+    """
+    try:
+        import torch
+
+        if not torch.cuda.is_available():
+            return False
+        try:
+            # NOT the bare call. ``is_bf16_supported()`` defaults to
+            # ``including_emulation=True``, and its fast path (CUDA >= 11 AND
+            # compute capability >= 8) is only the FIRST branch: when that
+            # fails it falls through to merely constructing a bf16 tensor,
+            # which succeeds on a T4 through software emulation. So the default
+            # answers "can this device hold a bf16 value", while every caller
+            # here is asking "does this device have bf16 hardware".
+            return bool(torch.cuda.is_bf16_supported(including_emulation=False))
+        except TypeError:
+            # torch too old for the keyword, and its bare answer is the
+            # permissive one we are trying to avoid — ask the capability.
+            major, _ = torch.cuda.get_device_capability()
+            return major >= 8
+    except (ImportError, RuntimeError, AssertionError, OSError):
+        # The same narrow set ``sft._resolve_mixed_precision`` already catches —
+        # broad ``except Exception`` here would swallow a real CUDA error and
+        # silently downgrade a working card to fp16.
+        return False
+
+
+def bf16_fp16_flags(device: str) -> tuple[bool, bool]:
+    """``(bf16, fp16)`` for ``TrainingArguments`` on ``device``.
+
+    bf16 where the card has it, fp16 where it does not, neither on CPU. Cannot
+    regress a working setup: on a bf16-capable card the answer is what every
+    wrapper hardcoded, and on the rest the previous answer was a crash.
+
+    A ``"cuda"`` string with no CUDA runtime behind it gets neither, rather than
+    fp16 on a card that is not there — the run cannot proceed either way, and
+    asking for mixed precision on a phantom device only obscures the real error.
+    """
+    if not str(device).lower().startswith("cuda"):
+        return (False, False)
+    try:
+        import torch
+
+        if not torch.cuda.is_available():
+            return (False, False)
+    except (ImportError, RuntimeError, AssertionError, OSError):
+        return (False, False)
+    supported = cuda_supports_bf16()
+    return (supported, not supported)
 
 
 def get_compute_dtype():
@@ -120,11 +324,16 @@ def get_compute_dtype():
 
     Uses bfloat16 on CUDA GPUs that support it, float16 otherwise.
     On CPU, uses float32 to avoid dtype mismatch errors.
+
+    Delegates the capability question to :func:`cuda_supports_bf16` rather than
+    calling ``is_bf16_supported()`` itself: the bare call includes software
+    EMULATION and answers True on a T4, so this function used to hand bf16 to
+    cards with no bf16 units (#385 follow-up, found on a real T4).
     """
     import torch
 
     if torch.cuda.is_available():
-        if torch.cuda.is_bf16_supported():
+        if cuda_supports_bf16():
             return torch.bfloat16
         return torch.float16
     return torch.float32

@@ -342,6 +342,18 @@ class TestZeroPlusPlus:
         assert "zero_quantized_gradients" in zopt
 
     def test_zero_pp_write_file(self):
+        """#336 — the written config is the *resolved* one.
+
+        This test used to assert ``zero_quantized_weights is True`` on the
+        written file. That is the setting that crashed on real hardware: the
+        preset enables bf16 and DeepSpeed's quantiser is the fp16 kernel, so
+        the dequantised all-gather returned Half into a BFloat16 activation.
+        The key is still present — it is a ZeRO++ knob, see
+        ``test_zero_pp_has_hierarchical_comms`` — but resolved to ``False``
+        for a bf16 run. ``tests/test_issue336_deepspeed_lora.py`` carries the
+        fp16 control proving quantisation is a dtype decision, not a blanket
+        disable.
+        """
         from soup_cli.utils.deepspeed import write_deepspeed_config
 
         path = write_deepspeed_config("zero++")
@@ -349,7 +361,8 @@ class TestZeroPlusPlus:
             assert os.path.exists(path)
             with open(path) as f:
                 cfg = json.load(f)
-            assert cfg["zero_optimization"]["zero_quantized_weights"] is True
+            assert cfg["zero_optimization"]["zero_quantized_weights"] is False
+            assert "zero_hpz_partition_size" in cfg["zero_optimization"]
         finally:
             if os.path.exists(path):
                 os.unlink(path)

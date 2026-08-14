@@ -24,6 +24,7 @@ model load is covered by the release-step-6 smoke on SmolLM2-135M.
 
 from __future__ import annotations
 
+import math
 import re
 import time
 from collections.abc import Mapping, Sequence
@@ -118,11 +119,15 @@ def load_model_and_tokenizer(
     adapter: Optional[str] = None,
     device: Optional[str] = None,
     trust_remote_code: bool = False,
+    dtype: Optional[str] = None,
 ):
     """Load an ``AutoModelForCausalLM`` + tokenizer, optionally with a LoRA adapter.
 
     Returns ``(model, tokenizer, device)``. ``model`` is ``.eval()``-ed and
-    moved to the resolved device. Heavy imports are local.
+    moved to the resolved device. Heavy imports are local. ``dtype`` (e.g.
+    ``"auto"``) is forwarded as ``torch_dtype`` so a caller can preserve the
+    checkpoint's native precision instead of upcasting to fp32 (``soup shrink``
+    needs this so the shipped smaller model is not silently re-widened).
     """
     if not isinstance(model_id, str) or not model_id.strip():
         raise ValueError("model_id must be a non-empty string")
@@ -133,7 +138,10 @@ def load_model_and_tokenizer(
     tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=trust_remote_code)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
-    model = AutoModelForCausalLM.from_pretrained(model_id, trust_remote_code=trust_remote_code)
+    model_kwargs = {"trust_remote_code": trust_remote_code}
+    if dtype is not None:
+        model_kwargs["torch_dtype"] = dtype
+    model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)
     if adapter is not None:
         if not isinstance(adapter, str) or not adapter.strip():
             raise ValueError("adapter must be a non-empty string or None")
@@ -286,6 +294,44 @@ def _tokenize_pair(tokenizer: object, prompt: str, target: str, *, max_length: i
     )
 
 
+def compute_pair_losses(
+    model: object,
+    tokenizer: object,
+    pairs: Sequence[Tuple[str, str]],
+    *,
+    device: str,
+    max_length: int = 256,
+) -> List[float]:
+    """Per-pair masked cross-entropy, INDEX-ALIGNED with ``pairs``.
+
+    Unusable pairs (empty target span) and NaN losses yield ``nan`` in
+    place rather than being dropped. Callers that need per-item scores —
+    e.g. the v0.71.36 canary exposure probe, which ranks one canary's loss
+    against a control distribution — depend on that alignment;
+    :func:`compute_eval_loss` compacts the list and so cannot be used for
+    it.
+    """
+    _check_positive_int(max_length, "max_length")
+    import torch
+
+    out: List[float] = []
+    model.eval()
+    with torch.no_grad():
+        for prompt, target in pairs:
+            input_ids, labels = _tokenize_pair(
+                tokenizer, prompt, target, max_length=max_length
+            )
+            if (labels != -100).sum().item() == 0:
+                out.append(float("nan"))
+                continue
+            input_ids = input_ids.to(device)
+            labels = labels.to(device)
+            result = model(input_ids=input_ids, labels=labels)
+            loss = float(result.loss.item())
+            out.append(loss if loss == loss else float("nan"))  # nan-safe
+    return out
+
+
 def compute_eval_loss(
     model: object,
     tokenizer: object,
@@ -297,25 +343,15 @@ def compute_eval_loss(
     """Mean masked cross-entropy of ``model`` over (prompt, target) pairs.
 
     Returns ``float('nan')`` when no usable pair has a non-empty target span.
+    Thin mean over :func:`compute_pair_losses` — behaviour is unchanged.
     """
-    _check_positive_int(max_length, "max_length")
-    import torch
-
-    losses: List[float] = []
-    model.eval()
-    with torch.no_grad():
-        for prompt, target in pairs:
-            input_ids, labels = _tokenize_pair(
-                tokenizer, prompt, target, max_length=max_length
-            )
-            if (labels != -100).sum().item() == 0:
-                continue
-            input_ids = input_ids.to(device)
-            labels = labels.to(device)
-            out = model(input_ids=input_ids, labels=labels)
-            loss = float(out.loss.item())
-            if loss == loss:  # not NaN
-                losses.append(loss)
+    losses = [
+        value
+        for value in compute_pair_losses(
+            model, tokenizer, pairs, device=device, max_length=max_length
+        )
+        if not math.isnan(value)
+    ]
     if not losses:
         return float("nan")
     return sum(losses) / len(losses)

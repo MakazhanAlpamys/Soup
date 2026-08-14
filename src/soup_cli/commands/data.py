@@ -14,6 +14,9 @@ from rich.table import Table
 
 from soup_cli.data.loader import load_raw_data
 from soup_cli.data.validator import validate_and_stats
+from soup_cli.utils.embed import DEFAULT_EMBED_MODEL, embed_texts
+from soup_cli.utils.paths import is_under_cwd
+from soup_cli.utils.semdedup import DedupReport, greedy_semdedup
 
 console = Console()
 
@@ -53,12 +56,20 @@ def inspect(
 
     # Print sample rows
     if rows > 0 and len(data) > 0:
+        # Escape dataset-derived cell content + column names: a stray '[/]' in
+        # ordinary data crashes Rich with MarkupError; a crafted '[link=...]'
+        # renders a phishing hyperlink. Mirrors `soup data review`.
+        from rich.markup import escape as _escape
+
         console.print(f"\n[bold]Sample rows ({min(rows, len(data))}):[/]")
         sample_table = Table(show_lines=True)
         for col in result["columns"][:5]:  # max 5 columns
-            sample_table.add_column(col, max_width=60)
+            sample_table.add_column(_escape(str(col)), max_width=60)
         for row in data[: min(rows, len(data))]:
-            values = [str(row.get(col, ""))[:60] for col in result["columns"][:5]]
+            values = [
+                _escape(str(row.get(col, ""))[:60])
+                for col in result["columns"][:5]
+            ]
             sample_table.add_row(*values)
         console.print(sample_table)
 
@@ -222,6 +233,61 @@ def merge(
     )
 
 
+def _row_embed_text(row: dict, field: Optional[str]) -> str:
+    """What gets embedded for a row: one field, or all text values joined.
+
+    Mirrors the MinHash branch's text selection so ``--field`` means the
+    same thing for both backends. NOTE: ``soup data topics`` deliberately
+    picks row text differently — it prefers ``_eval_text.row_text``'s
+    assistant-turn extraction, because a topic map should cluster on what
+    the model is taught to SAY, whereas dedup must consider the whole row.
+    """
+    if field:
+        return str(row.get(field, ""))
+    return " ".join(str(value) for value in row.values() if value)
+
+
+def _semantic_dedup(
+    data: list[dict],
+    *,
+    threshold: float,
+    field: Optional[str],
+    embed_model: str,
+    device: str,
+    out_path: Path,
+) -> DedupReport:
+    """SemDeDup branch of ``soup data dedup --semantic``."""
+    texts = [_row_embed_text(row, field) for row in data]
+    try:
+        vectors = embed_texts(texts, model_id=embed_model, device=device)
+    except ImportError:
+        console.print(
+            "[red]Semantic dedup needs PyTorch + transformers.[/]\n"
+            # \[train] is escaped: Rich would otherwise eat the bracket as a
+            # markup tag and print `pip install "soup-cli"` -- a command that
+            # installs the package WITHOUT the extra the user is missing.
+            # Double quotes, not single: cmd.exe cannot strip `'` and pip then
+            # rejects the requirement outright.
+            "Install with: [bold]pip install \"soup-cli\\[train]\"[/]"
+        )
+        raise typer.Exit(1)
+    except (ValueError, TypeError) as exc:
+        from rich.markup import escape as _esc
+
+        console.print(f"[red]{_esc(str(exc))}[/]")
+        raise typer.Exit(1)
+
+    report = greedy_semdedup(vectors, threshold=threshold)
+    unique = [data[idx] for idx in report.kept]
+    _write_jsonl(out_path, unique)
+    console.print(
+        f"[green]Semantic dedup complete:[/] {len(data)} -> {len(unique)} rows "
+        f"([red]-{len(report.dropped)}[/] near-duplicates)\n"
+        f"Output: [bold]{out_path}[/]"
+    )
+    return report
+
+
 @app.command()
 def dedup(
     path: str = typer.Argument(..., help="Path to dataset file"),
@@ -231,23 +297,31 @@ def dedup(
     ),
     threshold: float = typer.Option(
         0.8, "--threshold",
-        help="MinHash similarity threshold (0.0-1.0)",
+        help="Similarity threshold (0.0-1.0): MinHash Jaccard by default, "
+             "embedding cosine under --semantic.",
     ),
     field: str = typer.Option(
         None, "--field", "-f",
-        help="Field to hash (default: all text fields concatenated)",
+        help="Field to hash/embed (default: all text fields concatenated)",
+    ),
+    semantic: bool = typer.Option(
+        False, "--semantic",
+        help="Use embedding cosine (SemDeDup) instead of MinHash. Catches "
+             "paraphrases MinHash misses. Requires soup-cli\\[train].",
+    ),
+    embed_model: str = typer.Option(
+        DEFAULT_EMBED_MODEL, "--embed-model",
+        help="Embedding model used by --semantic.",
+    ),
+    device: str = typer.Option(
+        "auto", "--device", help="Device for --semantic (auto/cpu/cuda)."
     ),
 ):
-    """Remove near-duplicate rows using MinHash (locality-sensitive hashing)."""
-    try:
-        from datasketch import MinHash, MinHashLSH
-    except ImportError:
-        console.print(
-            "[red]datasketch not installed.[/]\n"
-            "Install with: [bold]pip install 'soup-cli[data]'[/]"
-        )
-        raise typer.Exit(1)
+    """Remove near-duplicate rows: MinHash (default) or embeddings (--semantic).
 
+    ``--threshold`` is backend-dependent: MinHash Jaccard similarity by
+    default, embedding cosine under ``--semantic``.
+    """
     file_path = Path(path)
     if not file_path.exists():
         console.print(f"[red]File not found: {file_path}[/]")
@@ -256,6 +330,38 @@ def dedup(
     data = load_raw_data(file_path)
     if not data:
         console.print("[red]Dataset is empty.[/]")
+        raise typer.Exit(1)
+
+    # Output resolution + containment is shared by BOTH backends.
+    if output is None:
+        output = str(file_path.stem) + "_deduped.jsonl"
+    out_path = Path(output)
+    if not is_under_cwd(out_path):
+        console.print(
+            f"[red]Output path is outside the working directory: {out_path}[/]"
+        )
+        raise typer.Exit(1)
+
+    if semantic:
+        console.print(
+            f"[dim]Semantic dedup of {len(data)} rows "
+            f"(threshold={threshold}, model={embed_model})...[/]"
+        )
+        _semantic_dedup(
+            data, threshold=threshold, field=field,
+            embed_model=embed_model, device=device, out_path=out_path,
+        )
+        return
+
+    # MinHash branch. The import lives HERE, not at the top of the function:
+    # the semantic path must not require the [data] extra it never uses.
+    try:
+        from datasketch import MinHash, MinHashLSH
+    except ImportError:
+        console.print(
+            "[red]datasketch not installed.[/]\n"
+            "Install with: [bold]pip install \"soup-cli\\[data]\"[/]"
+        )
         raise typer.Exit(1)
 
     console.print(f"[dim]Deduplicating {len(data)} rows (threshold={threshold})...[/]")
@@ -300,11 +406,6 @@ def dedup(
 
     unique_data = [data[idx] for idx in unique_indices]
     removed = len(data) - len(unique_data)
-
-    # Write output
-    if output is None:
-        output = str(file_path.stem) + "_deduped.jsonl"
-    out_path = Path(output)
 
     _write_jsonl(out_path, unique_data)
 
@@ -1102,16 +1203,20 @@ def search_datasets(
     table.add_column("Likes", justify="right")
     table.add_column("Tags", max_width=30)
 
+    # HF-hub metadata (ids, tags) is attacker-authored — escape before it
+    # reaches a Rich table (MarkupError crash / phishing-link injection).
+    from rich.markup import escape as _escape
+
     for ds_item in datasets[:limit]:
         ds_tags = getattr(ds_item, "tags", []) or []
-        tag_str = ", ".join(ds_tags[:5])
+        tag_str = ", ".join(str(t) for t in ds_tags[:5])
         if len(ds_tags) > 5:
             tag_str += "..."
         table.add_row(
-            ds_item.id,
+            _escape(str(ds_item.id)),
             _format_count(getattr(ds_item, "downloads", 0) or 0),
             _format_count(getattr(ds_item, "likes", 0) or 0),
-            tag_str,
+            _escape(tag_str),
         )
 
     console.print(table)
@@ -1137,22 +1242,26 @@ def preview_dataset(
         )
         raise typer.Exit(1)
 
-    table = Table(title=f"Dataset: {info['id']}")
+    # HF-hub metadata (id, description, tags, feature/split names) is
+    # attacker-authored — escape before it reaches a Rich table.
+    from rich.markup import escape as _escape
+
+    table = Table(title=f"Dataset: {_escape(str(info['id']))}")
     table.add_column("Field", style="bold")
     table.add_column("Value", max_width=80)
 
-    table.add_row("ID", info["id"])
+    table.add_row("ID", _escape(str(info["id"])))
     desc = info["description"]
     if len(desc) > 200:
         desc = desc[:200] + "..."
-    table.add_row("Description", desc or "[dim]No description[/]")
+    table.add_row("Description", _escape(desc) if desc else "[dim]No description[/]")
     table.add_row("Downloads", _format_count(info["downloads"]))
     table.add_row("Likes", _format_count(info["likes"]))
     table.add_row("Size", _format_size_bytes(info["size_bytes"]))
 
     if info["splits"]:
         splits_str = ", ".join(
-            f"{name} ({_format_count(count)})"
+            f"{_escape(str(name))} ({_format_count(count)})"
             for name, count in info["splits"].items()
         )
         table.add_row("Splits", splits_str)
@@ -1160,10 +1269,10 @@ def preview_dataset(
         table.add_row("Splits", "[dim]Not available (use streaming to explore)[/]")
 
     if info["features"]:
-        table.add_row("Features", ", ".join(info["features"]))
+        table.add_row("Features", ", ".join(_escape(str(f)) for f in info["features"]))
 
     if info["tags"]:
-        table.add_row("Tags", ", ".join(info["tags"][:10]))
+        table.add_row("Tags", ", ".join(_escape(str(t)) for t in info["tags"][:10]))
 
     console.print(table)
 
@@ -2680,6 +2789,334 @@ def gen_magpie(
         console.print(
             "[yellow]Warning:[/] 0 rows generated — is the provider reachable "
             "and the model pulled?"
+        )
+
+
+# v0.71.31 — Best-of-N rejection sampling (local sampling + judge).
+_BON_MAX_PROMPTS = 100_000
+_BON_MAX_JSONL_BYTES = 100 * 1024 * 1024  # 100 MiB
+
+
+def _load_bon_model(base: str, device: str, trust: bool):
+    """Seam: load ``(model, tokenizer)`` for best-of-n (patched in tests)."""
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    tok = AutoTokenizer.from_pretrained(base, trust_remote_code=trust)
+    if tok.pad_token is None:
+        tok.pad_token = tok.eos_token
+    dev_map = "cpu" if device == "cpu" else "auto"
+    model = AutoModelForCausalLM.from_pretrained(
+        base, trust_remote_code=trust, device_map=dev_map
+    )
+    return model, tok
+
+
+def _bon_load_prompts(path: str) -> list:
+    """Read a JSONL of {prompt|messages|instruction} rows -> list[str]."""
+    from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
+
+    enforce_under_cwd_and_no_symlink(path, "--prompts path")
+    real = os.path.realpath(path)
+    if not os.path.isfile(real):
+        raise FileNotFoundError(path)
+    if os.path.getsize(real) > _BON_MAX_JSONL_BYTES:
+        raise ValueError(f"--prompts file exceeds {_BON_MAX_JSONL_BYTES} bytes")
+    prompts: list = []
+    with open(real, "r", encoding="utf-8") as handle:
+        for raw_line in handle:
+            stripped = raw_line.strip()
+            if not stripped:
+                continue
+            if len(prompts) >= _BON_MAX_PROMPTS:
+                raise ValueError(f"--prompts file exceeds {_BON_MAX_PROMPTS} rows")
+            try:
+                row = json.loads(stripped)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(row, dict):
+                continue
+            text = None
+            if isinstance(row.get("prompt"), str):
+                text = row["prompt"]
+            elif isinstance(row.get("instruction"), str):
+                text = row["instruction"]
+            elif isinstance(row.get("messages"), list):
+                users = [
+                    m.get("content")
+                    for m in row["messages"]
+                    if isinstance(m, dict) and m.get("role") == "user"
+                ]
+                if users and isinstance(users[-1], str):
+                    text = users[-1]
+            if text:
+                prompts.append(text)
+    return prompts
+
+
+@app.command(name="best-of-n")
+def best_of_n(
+    base: str = typer.Option(..., "--base", help="Base model id/path to sample from"),
+    prompts: str = typer.Option(..., "--prompts", help="JSONL of {prompt|messages} rows"),
+    judge: str = typer.Option(
+        ..., "--judge", help="Judge URL (ollama://|https://|http://localhost)"
+    ),
+    n: int = typer.Option(8, "--n", help="Candidates per prompt [2, 64]"),
+    output: str = typer.Option(
+        "", "--output", "-o", help="Output SFT JSONL (required unless --plan-only)"
+    ),
+    emit_pairs: str = typer.Option(
+        "", "--emit-pairs", help="Also write winner/loser DPO pairs to this JSONL"
+    ),
+    temperature: float = typer.Option(1.0, "--temperature", help="Sampling temp [0, 2]"),
+    max_new_tokens: int = typer.Option(
+        256, "--max-new-tokens", help="Max new tokens per candidate [1, 4096]"
+    ),
+    device: str = typer.Option("", "--device", help="cuda | cpu"),
+    seed: int = typer.Option(0, "--seed", help="Sampling seed"),
+    trust_remote_code: bool = typer.Option(
+        False, "--trust-remote-code", help="Allow custom model code on --base"
+    ),
+    plan_only: bool = typer.Option(False, "--plan-only", help="Validate + print plan"),
+) -> None:
+    """Best-of-N rejection sampling: sample N per prompt, a judge picks the winner.
+
+    Samples ``--n`` candidates from ``--base`` locally (transformers), scores each
+    with ``--judge`` pointwise, and writes the winner as an SFT chat row (with
+    ``_best_of_n`` provenance). ``--emit-pairs`` additionally writes winner-vs-
+    loser DPO pairs. BOND-lite (Best-of-N distillation, v0.71.31).
+    """
+    from rich.markup import escape as _escape
+    from rich.panel import Panel
+
+    from soup_cli.eval.gate import _parse_judge_url
+    from soup_cli.eval.judge import JudgeEvaluator
+    from soup_cli.utils import best_of_n as bon
+    from soup_cli.utils.paths import atomic_write_text, enforce_under_cwd_and_no_symlink
+    from soup_cli.utils.trust_remote import (
+        model_requires_trust_remote_code,
+        resolve_trust_remote_code,
+    )
+
+    # --- Bounds ---
+    if not isinstance(n, int) or isinstance(n, bool) or not (2 <= n <= 64):
+        console.print("[red]--n must be between 2 and 64[/]")
+        raise typer.Exit(2)
+    if not (0.0 <= temperature <= 2.0):
+        console.print("[red]--temperature must be in [0, 2][/]")
+        raise typer.Exit(2)
+    if not (1 <= max_new_tokens <= 4096):
+        console.print("[red]--max-new-tokens must be in [1, 4096][/]")
+        raise typer.Exit(2)
+
+    # --- Judge URL (SSRF via JudgeEvaluator construction) ---
+    try:
+        provider, judge_model_id, api_base = _parse_judge_url(judge)
+        evaluator = JudgeEvaluator(
+            provider=provider, model=judge_model_id, api_base=api_base
+        )
+    except (ValueError, TypeError) as exc:
+        console.print(f"[red]Invalid --judge: {_escape(str(exc))}[/]")
+        raise typer.Exit(2) from exc
+
+    # --- Paths ---
+    try:
+        prompt_list = _bon_load_prompts(prompts)
+        if output:
+            enforce_under_cwd_and_no_symlink(output, "--output path")
+        if emit_pairs:
+            enforce_under_cwd_and_no_symlink(emit_pairs, "--emit-pairs path")
+    except (FileNotFoundError, TypeError, ValueError) as exc:
+        console.print(f"[red]{_escape(str(exc))}[/]")
+        raise typer.Exit(2) from exc
+    if not prompt_list:
+        console.print("[red]--prompts produced no usable rows[/]")
+        raise typer.Exit(2)
+
+    trust = resolve_trust_remote_code(
+        base,
+        requested=trust_remote_code,
+        console=console,
+        requires_remote_code=model_requires_trust_remote_code(base) or False,
+    )
+
+    console.print(
+        Panel(
+            f"Base model:   [bold]{_escape(base)}[/]\n"
+            f"Prompts:      [bold]{len(prompt_list)}[/]\n"
+            f"N candidates: [bold]{n}[/]\n"
+            f"Judge:        [bold]{_escape(judge)}[/]",
+            title="soup data best-of-n — plan",
+        )
+    )
+    if plan_only:
+        return
+    if not output:
+        console.print("[red]--output is required unless --plan-only is set.[/]")
+        raise typer.Exit(2)
+
+    import torch
+
+    torch.manual_seed(seed)
+    model, tokenizer = _load_bon_model(base, device, trust)
+
+    dev = device or None
+    sft_lines: list = []
+    pair_lines: list = []
+    for prompt in prompt_list:
+        candidates = bon.sample_candidates(
+            model,
+            tokenizer,
+            prompt,
+            n=n,
+            temperature=temperature,
+            max_new_tokens=max_new_tokens,
+            device=dev,
+        )
+        pick = bon.judge_pick_best(prompt, candidates, evaluator)
+        sft_lines.append(
+            json.dumps(bon.build_sft_row(prompt, pick, judge_model=judge), ensure_ascii=False)
+        )
+        if emit_pairs:
+            pair = bon.build_dpo_pair(prompt, pick, candidates)
+            if pair is not None:
+                pair_lines.append(json.dumps(pair, ensure_ascii=False))
+
+    # Atomic writes (mkstemp + os.replace + re-validated containment) so a
+    # symlink swapped in after the fast-fail check cannot redirect the write.
+    try:
+        atomic_write_text("\n".join(sft_lines) + "\n", output, field="output")
+        if emit_pairs:
+            atomic_write_text(
+                ("\n".join(pair_lines) + "\n") if pair_lines else "",
+                emit_pairs,
+                field="emit-pairs",
+            )
+    except (OSError, ValueError, TypeError) as exc:
+        console.print(f"[red]Failed to write output: {_escape(str(exc))}[/]")
+        raise typer.Exit(1) from exc
+    sft_count = len(sft_lines)
+    pair_count = len(pair_lines)
+
+    body = (
+        f"SFT rows:   [bold]{sft_count}[/]\n"
+        f"Output:     [bold]{_escape(os.path.relpath(output))}[/]"
+    )
+    if emit_pairs:
+        body += (
+            f"\nDPO pairs:  [bold]{pair_count}[/]\n"
+            f"Pairs out:  [bold]{_escape(os.path.relpath(emit_pairs))}[/]"
+        )
+    console.print(Panel(body, title="soup data best-of-n — done"))
+
+
+# v0.71.31 — Evol-Instruct (WizardLM depth/breadth) instruction evolution.
+@app.command(name="evolve")
+def evolve(
+    input_path: str = typer.Option(
+        ..., "--input", help="Seed JSONL ({prompt|instruction|messages} per row)"
+    ),
+    provider: str = typer.Option(..., "--provider", help="ollama | vllm"),
+    model: str = typer.Option(..., "--model", help="Provider model id"),
+    strategy: str = typer.Option("depth", "--strategy", help="depth | breadth"),
+    rounds: int = typer.Option(1, "--rounds", help="Evolution rounds [1, 5]"),
+    output: str = typer.Option(
+        "", "--output", "-o", help="Output JSONL (required unless --plan-only)"
+    ),
+    base_url: str = typer.Option("", "--base-url", help="Provider base URL"),
+    temperature: float = typer.Option(1.0, "--temperature", help="Sampling temp [0, 2]"),
+    max_tokens: int = typer.Option(512, "--max-tokens", help="Max tokens [1, 16384]"),
+    plan_only: bool = typer.Option(False, "--plan-only", help="Validate + print plan"),
+) -> None:
+    """Evol-Instruct: deepen (depth) or diversify (breadth) seed instructions.
+
+    Reads ``--input`` seeds, evolves each for ``--rounds`` rounds via a live
+    ``--provider`` (ollama / vllm raw completion), and writes evolved user-turn
+    rows (``{"messages": [...], "_evolve": {...}}``). Completes the synthetic
+    suite (Magpie / Forge / Persona / evolve). (v0.71.31)
+    """
+    from rich.markup import escape as _escape
+    from rich.panel import Panel
+
+    from soup_cli.utils.evolve import STRATEGIES, run_evolve
+    from soup_cli.utils.magpie import make_magpie_generate_fn
+    from soup_cli.utils.paths import atomic_write_text, enforce_under_cwd_and_no_symlink
+
+    if strategy not in STRATEGIES:
+        console.print(
+            f"[red]--strategy must be one of {', '.join(STRATEGIES)}; got {strategy!r}[/]"
+        )
+        raise typer.Exit(2)
+    if not isinstance(rounds, int) or isinstance(rounds, bool) or not (1 <= rounds <= 5):
+        console.print("[red]--rounds must be in [1, 5][/]")
+        raise typer.Exit(2)
+
+    try:
+        seeds = _bon_load_prompts(input_path)
+        if output:
+            enforce_under_cwd_and_no_symlink(output, "--output path")
+        generate_fn = make_magpie_generate_fn(
+            provider,
+            model=model,
+            base_url=base_url or None,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+    except (FileNotFoundError, TypeError, ValueError, ImportError) as exc:
+        console.print(f"[red]{_escape(str(exc))}[/]")
+        raise typer.Exit(2) from exc
+    if not seeds:
+        console.print("[red]--input produced no usable seed instructions[/]")
+        raise typer.Exit(2)
+
+    console.print(
+        Panel(
+            f"Seeds:     [bold]{len(seeds)}[/]\n"
+            f"Provider:  [bold]{_escape(provider)}[/]\n"
+            f"Strategy:  [bold]{_escape(strategy)}[/]\n"
+            f"Rounds:    [bold]{rounds}[/]",
+            title="soup data evolve — plan",
+        )
+    )
+    if plan_only:
+        return
+    if not output:
+        console.print("[red]--output is required unless --plan-only is set.[/]")
+        raise typer.Exit(2)
+
+    evolved_rows = run_evolve(seeds, strategy, rounds, generate_fn)
+    out_lines = [
+        json.dumps(
+            {
+                "messages": [{"role": "user", "content": row.instruction}],
+                "_evolve": {
+                    "seed": row.seed,
+                    "strategy": row.strategy,
+                    "round": row.round,
+                },
+            },
+            ensure_ascii=False,
+        )
+        for row in evolved_rows
+    ]
+    try:
+        atomic_write_text(
+            ("\n".join(out_lines) + "\n") if out_lines else "", output, field="output"
+        )
+    except (OSError, ValueError, TypeError) as exc:
+        console.print(f"[red]Failed to write output: {_escape(str(exc))}[/]")
+        raise typer.Exit(1) from exc
+
+    console.print(
+        Panel(
+            f"Evolved rows: [bold]{len(evolved_rows)}[/]\n"
+            f"Output:       [bold]{_escape(os.path.relpath(output))}[/]",
+            title="soup data evolve — done",
+        )
+    )
+    if not evolved_rows:
+        console.print(
+            "[yellow]Warning:[/] 0 rows — is the provider reachable and the "
+            "model pulled? (all evolutions may have been eliminated)"
         )
 
 

@@ -303,4 +303,3 @@ class TestRealTrainerIntegration:
         assert issubclass(sub, Trainer)
         # MRO must place our override above Trainer.
         assert sub.__mro__[1] is Trainer
-

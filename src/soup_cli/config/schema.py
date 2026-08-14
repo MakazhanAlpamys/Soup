@@ -5,6 +5,20 @@ from typing import Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+# Buffer bounds live with the streaming planner so the schema bound and the
+# runtime validator's message can never disagree (layer_stream has no torch).
+from soup_cli.utils.layer_stream import (
+    DEFAULT_STREAM_BUFFERS,
+    MAX_STREAM_BUFFERS,
+    MIN_STREAM_BUFFERS,
+)
+from soup_cli.utils.layer_stream import (
+    ROLLOUT_STREAM_TASKS as _STREAM_ROLLOUT_TASKS,
+)
+from soup_cli.utils.layer_stream import (
+    SUPPORTED_STREAM_TASKS as _STREAM_SUPPORTED_TASKS,
+)
+
 # v0.39.0 Part C — per-pattern LoRA rank/alpha bounds
 _MAX_LORA_RANK_PATTERN_KEYS = 256
 _MAX_LORA_RANK_PATTERN_VALUE = 1024
@@ -20,7 +34,23 @@ _UNFROZEN_REDOS_RE = re.compile(r"\([^)]*[+*][^)]*\)\s*[+*]")
 
 
 class LoraConfig(BaseModel):
-    r: int = Field(default=64, description="LoRA rank")
+    # #340 — `r: 0` is the first-class full-fine-tuning switch: no
+    # adapter is applied and the base weights train directly. It is the
+    # spelling `trainer/classifier.py` has read as "no adapter" since
+    # v0.71.12 (#146) and the one `commands/card.py::_is_adapter` already
+    # resolves to "dense model". Before #340 a rank of 0 reached peft and
+    # died with "`r` should be a positive integer value", so nothing that
+    # worked before changes meaning. `ge=0` closes the pre-existing hole
+    # where a NEGATIVE rank parsed and failed the same way, deep in peft.
+    r: int = Field(
+        default=64,
+        ge=0,
+        description=(
+            "LoRA rank. 0 = full fine-tuning: no adapter, every base "
+            "parameter trains (sft + transformers + text + "
+            "quantization='none' only)."
+        ),
+    )
     alpha: int = Field(default=16, description="LoRA alpha")
     dropout: float = Field(default=0.05, description="LoRA dropout")
     target_modules: Union[str, List[str]] = Field(
@@ -212,6 +242,8 @@ class DataConfig(BaseModel):
         "prm", "pre_tokenized", "input_output", "video", "multimodal",
         # v0.62.0 Part A — RAFT (Retrieval-Augmented Fine-Tuning)
         "raft",
+        # v0.71.32 — ASR (Whisper): rows are {"audio": path, "text": transcript}
+        "asr",
     ] = Field(
         default="auto",
         description="Data format",
@@ -285,6 +317,68 @@ class DataConfig(BaseModel):
             "slot. (v0.71.17 #253)"
         ),
     )
+
+    # --- v0.71.36 Data Moat II: continual-learning rehearsal ---------------
+    replay: Optional[str] = Field(
+        default=None,
+        description=(
+            "Path to an OLD dataset to interleave into training as "
+            "continual-learning rehearsal, so fine-tuning on a new task does "
+            "not erase the previous one. Rows are mixed into train ONLY "
+            "(never val, which stays pure new-task). sft / pretrain only; "
+            "incompatible with packing / multipack. (v0.71.36)"
+        ),
+    )
+    replay_ratio: float = Field(
+        default=0.1,
+        gt=0.0,
+        le=0.5,
+        description=(
+            "Fraction of the FINAL mixed train set that is replay rows: "
+            "n_replay = round(r/(1-r) * n_new). At 0.1 over 1000 new rows "
+            "that is 111 replay rows -> 1111 total -> 10.0%. (v0.71.36)"
+        ),
+    )
+    replay_seed: Optional[int] = Field(
+        default=None,
+        ge=0,
+        le=2_147_483_647,
+        description=(
+            "Seed for the replay sample + interleave. None = seed 0. "
+            "(v0.71.36)"
+        ),
+    )
+
+    @field_validator("replay")
+    @classmethod
+    def _validate_replay_path(cls, v):
+        if v is None:
+            return None
+        if not isinstance(v, str):
+            raise ValueError("data.replay must be a string path")
+        cleaned = v.strip()
+        if not cleaned:
+            raise ValueError("data.replay must be a non-empty path")
+        if "\x00" in cleaned:
+            raise ValueError("data.replay must not contain null bytes")
+        if len(cleaned) > 4096:
+            raise ValueError("data.replay path too long (max 4096 chars)")
+        return cleaned
+
+    @field_validator("replay_ratio", mode="before")
+    @classmethod
+    def _validate_replay_ratio(cls, v):
+        # Bool is a subclass of int/float — reject before coercion.
+        if isinstance(v, bool):
+            raise ValueError("data.replay_ratio must not be a bool")
+        return v
+
+    @field_validator("replay_seed", mode="before")
+    @classmethod
+    def _validate_replay_seed(cls, v):
+        if isinstance(v, bool):
+            raise ValueError("data.replay_seed must not be a bool")
+        return v
 
     # --- v0.42.0 Data Pipeline Pro -----------------------------------------
     video_dir: Optional[str] = Field(
@@ -820,6 +914,50 @@ class TrainingConfig(BaseModel):
         ),
     )
     gradient_accumulation_steps: int = Field(default=4, ge=1)
+    # #341 — the general training seed. Before this there was none:
+    # `TrainingArguments` took HF's defaults on every run, so two runs of the
+    # same config differed only by GPU nondeterminism and "run it again with a
+    # different seed" was impossible. Both default to None rather than to 42
+    # so the trainer can distinguish "unset" from "explicitly 42" — the
+    # multipack FFD sampler's historical seed of 0 has to survive an unset
+    # seed, while `TrainingArguments.seed` keeps HF's 42.
+    #
+    # Upper bound: `transformers.set_seed` feeds the value to
+    # `numpy.random.seed`, which rejects anything outside [0, 2**32-1]. Bound
+    # it here so a too-large seed is a config error, not a numpy traceback at
+    # step 0.
+    seed: Optional[int] = Field(
+        default=None,
+        ge=0,
+        le=2**32 - 1,
+        description=(
+            "Training seed (weight init of new params, data order, dropout). "
+            "Reaches TrainingArguments.seed and the multipack sampler. "
+            "Unset = HF's default of 42."
+        ),
+    )
+    data_seed: Optional[int] = Field(
+        default=None,
+        ge=0,
+        le=2**32 - 1,
+        description=(
+            "Separate seed for data sampling only (TrainingArguments."
+            "data_seed). Set it alongside `seed` to vary data order while "
+            "holding initialisation fixed. Unset = follow `seed`."
+        ),
+    )
+
+    @field_validator("seed", "data_seed", mode="before")
+    @classmethod
+    def _validate_seed_ints(cls, v: Any) -> Any:
+        """#341 — reject bool-as-int (`bool` subclasses `int`, so `seed: true`
+        would silently become seed 1). Mirrors the v0.71.34 LISA policy."""
+        if isinstance(v, bool):
+            raise ValueError(
+                "training.seed / training.data_seed must be int, not bool"
+            )
+        return v
+
     warmup_ratio: float = Field(default=0.03, ge=0.0, le=0.5)
     weight_decay: float = Field(default=0.01, ge=0.0)
     max_grad_norm: float = Field(default=1.0, gt=0)
@@ -1043,10 +1181,38 @@ class TrainingConfig(BaseModel):
     reward_fn: Optional[str] = Field(
         default="accuracy",
         description=(
-            "Reward function: 'accuracy', 'format', 'verifiable', "
-            "or path to custom .py file"
+            "Reward function: 'accuracy', 'format', 'verifiable', a path to a "
+            "custom .py file, or a comma-separated ensemble of the above "
+            "(e.g. 'accuracy,format') — the comma form is GRPO-only (v0.71.40)."
         ),
     )
+    @field_validator("reward_fn", mode="before")
+    @classmethod
+    def _validate_reward_fn_field(cls, value: Any) -> Optional[str]:
+        """v0.71.40 #311 — shape-only validation (containment enforced at load).
+
+        Accepts a comma-separated spec ("accuracy,format"); rejects null bytes,
+        oversize, and empty comma segments so a stray comma fails loud rather
+        than silently dropping a reward.
+        """
+        if value is None:
+            return None
+        if isinstance(value, bool) or not isinstance(value, str):
+            raise ValueError(
+                f"reward_fn must be a string, got {type(value).__name__}"
+            )
+        if "\x00" in value:
+            raise ValueError("reward_fn must not contain null bytes")
+        if len(value) > 512:
+            raise ValueError("reward_fn must be <= 512 chars")
+        if not value.strip():
+            raise ValueError("reward_fn must not be blank")
+        if any(not seg.strip() for seg in value.split(",")):
+            raise ValueError(
+                "reward_fn has an empty comma segment — remove the stray comma"
+            )
+        return value
+
     # RLVR — verifiable reward domain (Part C of v0.25.0)
     verifiable_domain: Optional[Literal["math", "code", "json_schema"]] = Field(
         default=None,
@@ -1055,6 +1221,132 @@ class TrainingConfig(BaseModel):
             "Required when reward_fn='verifiable'."
         ),
     )
+    # v0.71.30 — PRM-guided GRPO: use a trained Soup PRM as the per-step
+    # reward inside GRPO. ``prm_reward`` names the PRM directory (or HF id);
+    # ``prm_aggregate`` folds the per-step scalars into one reward.
+    prm_reward: Optional[str] = Field(
+        default=None,
+        description=(
+            "Path (or HF id) to a Soup-trained PRM (task='prm') used as the "
+            "GRPO per-step reward (v0.71.30). When set, the PRM replaces "
+            "reward_fn. Requires task='grpo', backend='transformers', "
+            "modality='text'."
+        ),
+    )
+    prm_aggregate: Literal["min", "prod", "last"] = Field(
+        default="min",
+        description=(
+            "How PRM per-step scores fold into one reward: min (weakest-link, "
+            "default) | prod | last. Only meaningful when prm_reward is set. "
+            "NOTE: 'prod' assumes per-step scores are bounded in ~[0,1] (a "
+            "probability of step-correctness). Soup's PRM head is trained with "
+            "unconstrained MSE regression, so 'prod' can blow up / flip sign on "
+            "unbounded labels — prefer the default 'min' unless your PRM labels "
+            "are calibrated to [0,1]."
+        ),
+    )
+
+    @field_validator("prm_reward", mode="before")
+    @classmethod
+    def _validate_prm_reward_field(cls, value: Any) -> Optional[str]:
+        """v0.71.30 — shape-only validation (containment enforced at load)."""
+        if value is None:
+            return None
+        if isinstance(value, bool) or not isinstance(value, str):
+            raise ValueError(
+                f"prm_reward must be a string path/id, got {type(value).__name__}"
+            )
+        if not value:
+            raise ValueError("prm_reward must not be an empty string")
+        if "\x00" in value:
+            raise ValueError("prm_reward must not contain null bytes")
+        if len(value) > 512:
+            raise ValueError("prm_reward must be <= 512 chars")
+        return value
+
+    # v0.71.31 — Online DPO (task='online_dpo'): on-policy generation judged by
+    # a pairwise judge (online_dpo_judge URL) OR a reward_model. beta reuses
+    # dpo_beta; loss_type + max_new_tokens map to OnlineDPOConfig.
+    online_dpo_judge: Optional[str] = Field(
+        default=None,
+        description=(
+            "Judge URL (ollama://model | https://... | http://localhost) for "
+            "task='online_dpo'. Mutually exclusive with reward_model."
+        ),
+    )
+    online_dpo_loss_type: Literal["sigmoid", "ipo"] = Field(
+        default="sigmoid",
+        description="Online DPO loss type (maps to OnlineDPOConfig.loss_type).",
+    )
+    online_dpo_max_new_tokens: int = Field(
+        default=64,
+        ge=1,
+        le=4096,
+        description="Max new tokens generated per online-DPO step.",
+    )
+
+    @field_validator("online_dpo_judge", mode="before")
+    @classmethod
+    def _validate_online_dpo_judge_field(cls, value: Any) -> Optional[str]:
+        """v0.71.31 — shape-only validation (SSRF enforced at trainer setup)."""
+        if value is None:
+            return None
+        if isinstance(value, bool) or not isinstance(value, str):
+            raise ValueError(
+                f"online_dpo_judge must be a string URL, got {type(value).__name__}"
+            )
+        if not value.strip():
+            raise ValueError("online_dpo_judge must be a non-empty string")
+        if "\x00" in value:
+            raise ValueError("online_dpo_judge must not contain null bytes")
+        if len(value) > 512:
+            raise ValueError("online_dpo_judge must be <= 512 chars")
+        return value
+
+    # v0.71.32 — ASR (Whisper) fine-tuning knobs.
+    asr_language: Optional[str] = Field(
+        default=None,
+        description=(
+            "Target language for task='asr' (Whisper), e.g. 'en' or 'spanish'. "
+            "Sets the forced decoder prompt; None uses the model default / "
+            "language detection."
+        ),
+    )
+    asr_task: Literal["transcribe", "translate"] = Field(
+        default="transcribe",
+        description=(
+            "Whisper decoding objective for task='asr': 'transcribe' (same "
+            "language) or 'translate' (to English)."
+        ),
+    )
+    asr_lora: bool = Field(
+        default=False,
+        description=(
+            "Opt-in LoRA for task='asr' (adapts q/v attention projections). "
+            "Default False = full fine-tune (tiny Whisper fits a 4 GB GPU). "
+            "Mirrors classifier_lora — the standard training.lora block still "
+            "supplies r/alpha/dropout when enabled."
+        ),
+    )
+
+    @field_validator("asr_language", mode="before")
+    @classmethod
+    def _validate_asr_language_field(cls, value: Any) -> Optional[str]:
+        """v0.71.32 — shape-only validation of the ASR language code."""
+        if value is None:
+            return None
+        if isinstance(value, bool) or not isinstance(value, str):
+            raise ValueError(
+                f"asr_language must be a string, got {type(value).__name__}"
+            )
+        if not value.strip():
+            raise ValueError("asr_language must be a non-empty string")
+        if "\x00" in value:
+            raise ValueError("asr_language must not contain null bytes")
+        if len(value) > 32:
+            raise ValueError("asr_language must be <= 32 chars")
+        return value
+
     # v0.50.0 Part A — GRPO objective variants (unsloth + axolotl parity).
     # Schema-only in v0.50.0; live loss kernels wired in v0.50.1.
     grpo_variant: Optional[Literal[
@@ -2640,6 +2932,118 @@ class TrainingConfig(BaseModel):
                 )
         return value
 
+    # v0.71.34 #267 — LISA (Layerwise Importance Sampled AdamW,
+    # arXiv:2403.17919). Full-FT quality at LoRA-like memory: randomly
+    # re-activate a small set of decoder layers every N steps (embeddings +
+    # head always trainable). The dynamic cousin of Spectrum's static
+    # unfrozen_parameters selection.
+    lisa_enabled: bool = Field(
+        default=False,
+        description=(
+            "Enable LISA layerwise importance sampling (#267): every "
+            "lisa_interval_steps, freeze all decoder layers except a random "
+            "lisa_num_layers set (embeddings + head always trainable). Full "
+            "fine-tuning, LoRA off. sft + transformers + text + "
+            "quantization=none only; mutually exclusive with LoRA features / "
+            "freeze_layers / unfrozen_parameters."
+        ),
+    )
+    lisa_num_layers: int = Field(
+        default=2, ge=1, le=64,
+        description=(
+            "LISA: number of decoder layers kept trainable per interval "
+            "(clamped to the model's layer count). Small = LoRA-like memory."
+        ),
+    )
+    lisa_interval_steps: int = Field(
+        default=20, ge=1, le=1_000_000,
+        description="LISA: re-sample the active decoder layers every N global steps.",
+    )
+    lisa_reset_optimizer: bool = Field(
+        default=True,
+        description=(
+            "Clear optimizer state for decoder layers that LISA re-freezes on "
+            "each interval (avoids stale Adam moments). Mirrors "
+            "relora_reset_optimizer."
+        ),
+    )
+
+    @field_validator("lisa_num_layers", "lisa_interval_steps", mode="before")
+    @classmethod
+    def _validate_lisa_ints(cls, v: Any) -> Any:
+        """v0.71.34 #267 — reject bool-as-int (bool subclasses int). Mirrors the
+        v0.41.0 ``expand_layers`` / v0.50.0 GRPO numeric-field policy."""
+        if isinstance(v, bool):
+            raise ValueError("LISA integer fields must be int, not bool")
+        return v
+
+    # v0.72.0 BETA — Layer streaming. The frozen base lives in CPU RAM and is
+    # streamed into a small pool of pre-allocated VRAM buffers one decoder
+    # layer at a time, so peak VRAM is bounded by ONE layer instead of the
+    # whole model. Only the LoRA adapters, their grads and optimizer state stay
+    # resident. See soup_cli.utils.layer_stream.
+    stream_layers: bool = Field(
+        default=False,
+        description=(
+            "BETA — stream the frozen base layer-by-layer from CPU RAM so a "
+            "model larger than VRAM can be fine-tuned. sft + transformers + "
+            "text + quantization=none only; batch_size 1, no gradient "
+            "accumulation. Slower than resident training, but these models did "
+            "not run on the card at all."
+        ),
+    )
+    stream_source: Literal["auto", "ram", "disk"] = Field(
+        default="auto",
+        description=(
+            "Where the streamed base lives. 'ram' (the only tier implemented in "
+            "v0.72.0) pins the base in CPU RAM; 'disk' is the v0.72.3 overflow "
+            "tier; 'auto' picks per free RAM."
+        ),
+    )
+    stream_buffers: int = Field(
+        default=DEFAULT_STREAM_BUFFERS,
+        ge=MIN_STREAM_BUFFERS,
+        le=MAX_STREAM_BUFFERS,
+        description=(
+            "Pre-allocated VRAM layer buffers. 2 = double buffering, which is "
+            "what lets the next layer load while the current one computes. A "
+            "single buffer cannot overlap load with compute."
+        ),
+    )
+
+    @field_validator("stream_buffers", mode="before")
+    @classmethod
+    def _validate_stream_buffers_int(cls, v: Any) -> Any:
+        """v0.72.0 — reject bool-as-int (bool subclasses int)."""
+        if isinstance(v, bool):
+            raise ValueError("training.stream_buffers must be an int, not bool")
+        return v
+
+    stream_vram_override: Optional[int] = Field(
+        default=None,
+        ge=0,
+        description=(
+            "Bytes to assume free instead of measuring "
+            "torch.cuda.mem_get_info(). mem_get_info() is a device-level "
+            "driver query, so it cannot see a per-process cap "
+            "(set_per_process_memory_fraction, a MIG slice, a card another "
+            "process is also using), so on that hardware the pre-flight sees the "
+            "whole device's free VRAM regardless of what this process can "
+            "actually use. Set this to replace the measured figure in either "
+            "direction: raise it to let a known-safe over-prediction through, "
+            "or lower it to make the pre-flight enforce a cap the driver "
+            "itself cannot report."
+        ),
+    )
+
+    @field_validator("stream_vram_override", mode="before")
+    @classmethod
+    def _validate_stream_vram_override_int(cls, v: Any) -> Any:
+        """Reject bool-as-int (bool subclasses int), mirrors stream_buffers."""
+        if isinstance(v, bool):
+            raise ValueError("training.stream_vram_override must be an int (bytes), not bool")
+        return v
+
     # Sample packing — pack multiple short samples into one sequence
     packing: bool = Field(
         default=False,
@@ -2743,8 +3147,18 @@ class TrainingConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_verifiable_reward(self) -> "TrainingConfig":
-        """RLVR: reward_fn='verifiable' requires verifiable_domain."""
-        if self.reward_fn == "verifiable" and self.verifiable_domain is None:
+        """RLVR: reward_fn='verifiable' requires verifiable_domain.
+
+        Comma-aware (v0.71.40 #311): ``"accuracy,verifiable"`` must fail at
+        config-parse time exactly like the bare ``"verifiable"`` form, not only
+        at trainer construction.
+        """
+        segments = (
+            [s.strip() for s in self.reward_fn.split(",")]
+            if isinstance(self.reward_fn, str)
+            else []
+        )
+        if "verifiable" in segments and self.verifiable_domain is None:
             raise ValueError(
                 "reward_fn='verifiable' requires verifiable_domain "
                 "(one of: math, code, json_schema)"
@@ -3272,6 +3686,42 @@ class TrainingConfig(BaseModel):
         return validate_grace_codebook_dim(v)
 
 
+class ShipConfig(BaseModel):
+    """`soup ship` verdict config (v0.71.39) — mirrors ``EvalGateConfig``.
+
+    Committing the gate config to ``soup.yaml`` (under ``eval.ship``) makes the
+    SHIP / DON'T-SHIP decision reviewable in a PR diff and reproducible across
+    runs. ``soup ship --config soup.yaml`` reads these as defaults; an explicit
+    CLI flag always wins (CLI > config > hard default).
+    """
+
+    task_eval: Optional[str] = Field(
+        default=None,
+        description="JSONL of leg-1 task-win eval tasks",
+    )
+    # Keep these values in sync with soup_cli.utils.ship_verdict.TASK_MODES.
+    task_mode: Literal["metric", "judge_score", "pairwise"] = Field(
+        default="metric",
+        description="Leg-1 mode: metric | judge_score | pairwise (judge win-rate)",
+    )
+    general_suite: Optional[str] = Field(
+        default=None,
+        description="Comma list of leg-2 benchmarks (default: bundled offline suite)",
+    )
+    forgetting_threshold: float = Field(
+        default=0.05, ge=0.0, le=1.0,
+        description="Max allowed leg-2 drop in absolute points before DON'T SHIP",
+    )
+    judge_model: Optional[str] = Field(
+        default=None,
+        description="Judge model URL for task_mode judge_score / pairwise",
+    )
+    baseline: Optional[str] = Field(
+        default=None,
+        description="registry://<id> | file JSON of base leg-2 scores",
+    )
+
+
 class EvalConfig(BaseModel):
     """Evaluation configuration for auto-eval after training."""
 
@@ -3290,6 +3740,11 @@ class EvalConfig(BaseModel):
     judge: Optional[dict] = Field(
         default=None,
         description="LLM-as-a-judge config: model, rubric, provider",
+    )
+    ship: Optional[ShipConfig] = Field(
+        default=None,
+        description="soup ship verdict defaults (task_eval / task_mode / "
+        "general_suite / forgetting_threshold / judge_model / baseline)",
     )
 
 
@@ -3459,6 +3914,11 @@ class SoupConfig(BaseModel):
         "unlearn",
         # v0.67.0 Part C — MoLE per-token adapter routing (Mixture of LoRA Experts).
         "moe_lora_routing",
+        # v0.71.31 — Online DPO (on-policy generation judged by a pairwise
+        # judge OR a reward_model in the loop).
+        "online_dpo",
+        # v0.71.32 — ASR (Whisper) fine-tuning.
+        "asr",
     ] = Field(
         default="sft",
         description=(
@@ -4180,6 +4640,345 @@ class SoupConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def _validate_lisa_compat(self) -> "SoupConfig":
+        """v0.71.34 #267 — LISA compatibility gates.
+
+        LISA is full-FT of a rotating set of decoder layers (LoRA off), so it
+        shares Spectrum's ``unfrozen_parameters`` gate: sft + transformers +
+        text + quantization=none, mutually exclusive with the LoRA feature
+        flags, the other freeze mechanisms, and ``unfrozen_parameters`` itself.
+        """
+        tcfg = self.training
+        if not tcfg.lisa_enabled:
+            # Footgun: a non-default lisa_* while LISA is off almost certainly
+            # means the user forgot lisa_enabled=true.
+            if (
+                tcfg.lisa_num_layers != 2
+                or tcfg.lisa_interval_steps != 20
+                or tcfg.lisa_reset_optimizer is not True
+            ):
+                raise ValueError(
+                    "training.lisa_* set but lisa_enabled is false — set "
+                    "lisa_enabled=true to use LISA layer sampling."
+                )
+            return self
+        if self.task != "sft":
+            raise ValueError(
+                f"training.lisa_enabled (LISA layerwise sampling) requires "
+                f"task='sft'; got task={self.task!r}"
+            )
+        if self.backend != "transformers":
+            raise ValueError(
+                f"training.lisa_enabled requires backend='transformers'; "
+                f"got backend={self.backend!r}"
+            )
+        if self.modality != "text":
+            raise ValueError(
+                f"training.lisa_enabled requires modality='text' (the LISA "
+                f"callback is wired in the text SFT trainer); "
+                f"got modality={self.modality!r}"
+            )
+        if tcfg.quantization != "none":
+            raise ValueError(
+                f"training.lisa_enabled (LISA full fine-tuning) requires "
+                f"quantization='none' (got {tcfg.quantization!r}); quantized "
+                f"weights cannot be trained directly."
+            )
+        freeze_conflicts = []
+        if tcfg.freeze_layers is not None:
+            freeze_conflicts.append("freeze_layers")
+        if tcfg.freeze_ratio is not None:
+            freeze_conflicts.append("freeze_ratio")
+        if tcfg.train_router_only:
+            freeze_conflicts.append("train_router_only")
+        if tcfg.expand_layers is not None:
+            freeze_conflicts.append("expand_layers")
+        if tcfg.freeze_trainable_layers is not None:
+            freeze_conflicts.append("freeze_trainable_layers")
+        if tcfg.unfrozen_parameters:
+            freeze_conflicts.append("unfrozen_parameters")
+        if freeze_conflicts:
+            raise ValueError(
+                f"training.lisa_enabled is mutually exclusive with "
+                f"{', '.join(freeze_conflicts)} (each independently selects "
+                f"which parameters train)"
+            )
+        lcfg = tcfg.lora
+        lora_conflicts = []
+        if lcfg.use_dora:
+            lora_conflicts.append("lora.use_dora")
+        if lcfg.use_vera:
+            lora_conflicts.append("lora.use_vera")
+        if lcfg.use_olora:
+            lora_conflicts.append("lora.use_olora")
+        if lcfg.use_rslora:
+            lora_conflicts.append("lora.use_rslora")
+        if tcfg.moe_lora:
+            lora_conflicts.append("moe_lora")
+        if tcfg.use_longlora:
+            lora_conflicts.append("use_longlora")
+        if tcfg.relora_steps is not None:
+            lora_conflicts.append("relora_steps")
+        if tcfg.loraplus_lr_ratio is not None:
+            lora_conflicts.append("loraplus_lr_ratio")
+        if lora_conflicts:
+            raise ValueError(
+                f"training.lisa_enabled (LISA full fine-tuning, LoRA off) is "
+                f"mutually exclusive with LoRA features: "
+                f"{', '.join(lora_conflicts)}"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_full_finetune(self) -> "SoupConfig":
+        """#340 — ``lora.r: 0`` = full fine-tuning (no adapter).
+
+        The third member of the "LoRA off" family, sharing Spectrum's and
+        LISA's gate: sft + transformers + text + ``quantization='none'``,
+        mutually exclusive with the LoRA feature flags and with the other two
+        (each independently decides what trains).
+
+        Scoped to ``task='sft'`` ON PURPOSE. ``classifier`` / ``reranker`` /
+        ``cross_encoder`` (``classifier_lora``, v0.71.12 #146) and ``asr``
+        (``asr_lora``, v0.71.32) have gated LoRA behind their own opt-in flag
+        for releases, so ``lora.r: 0`` already parses and is already harmless
+        there; a blanket gate would break configs that work today. Tasks that
+        do pass the rank straight to peft keep their existing behaviour
+        (peft's "`r` should be a positive integer value") rather than gaining
+        a new refusal this issue never measured.
+        """
+        tcfg = self.training
+        if tcfg.lora.r != 0 or self.task != "sft":
+            return self
+        if tcfg.stream_layers:
+            # Streaming has its own, more specific refusal (the decoder lives
+            # on the meta device, so there is nothing to full fine-tune).
+            # Let it speak rather than reporting a quantization mismatch.
+            return self
+        if self.backend != "transformers":
+            raise ValueError(
+                f"training.lora.r=0 (full fine-tuning) requires "
+                f"backend='transformers'; got backend={self.backend!r}. The "
+                f"full-FT branch is wired in the transformers SFT trainer."
+            )
+        if self.modality != "text":
+            raise ValueError(
+                f"training.lora.r=0 (full fine-tuning) requires "
+                f"modality='text'; got modality={self.modality!r}. The "
+                f"vision / audio setups always attach an adapter."
+            )
+        if tcfg.quantization != "none":
+            raise ValueError(
+                f"training.lora.r=0 (full fine-tuning) requires "
+                f"quantization='none' (got {tcfg.quantization!r}); quantized "
+                f"weights cannot be trained directly. For a quantized run use "
+                f"LoRA (QLoRA) with lora.r >= 1."
+            )
+        mode_conflicts = []
+        if tcfg.unfrozen_parameters:
+            mode_conflicts.append("unfrozen_parameters")
+        if tcfg.lisa_enabled:
+            mode_conflicts.append("lisa_enabled")
+        if tcfg.train_router_only:
+            mode_conflicts.append("train_router_only")
+        if mode_conflicts:
+            raise ValueError(
+                f"training.lora.r=0 (full fine-tuning) is mutually exclusive "
+                f"with {', '.join(mode_conflicts)} (each independently selects "
+                f"which parameters train)"
+            )
+        lcfg = tcfg.lora
+        lora_conflicts = []
+        if lcfg.use_dora:
+            lora_conflicts.append("lora.use_dora")
+        if lcfg.use_vera:
+            lora_conflicts.append("lora.use_vera")
+        if lcfg.use_olora:
+            lora_conflicts.append("lora.use_olora")
+        if lcfg.use_rslora:
+            lora_conflicts.append("lora.use_rslora")
+        if lcfg.rank_pattern is not None:
+            lora_conflicts.append("lora.rank_pattern")
+        if lcfg.alpha_pattern is not None:
+            lora_conflicts.append("lora.alpha_pattern")
+        if getattr(lcfg, "init_strategy", "random") != "random":
+            lora_conflicts.append("lora.init_strategy")
+        if tcfg.moe_lora:
+            lora_conflicts.append("moe_lora")
+        if tcfg.use_longlora:
+            lora_conflicts.append("use_longlora")
+        if tcfg.relora_steps is not None:
+            lora_conflicts.append("relora_steps")
+        if tcfg.loraplus_lr_ratio is not None:
+            lora_conflicts.append("loraplus_lr_ratio")
+        if lora_conflicts:
+            raise ValueError(
+                f"training.lora.r=0 means full fine-tuning (no adapter), so it "
+                f"is mutually exclusive with LoRA features: "
+                f"{', '.join(lora_conflicts)}. Set lora.r >= 1 to use them."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_stream_layers_compat(self) -> "SoupConfig":
+        """v0.72.0 BETA — layer-streaming compatibility gates.
+
+        Scope is deliberately narrow for the first cut: RAM tier, bf16, sft,
+        Llama/Qwen, batch 1, no gradient accumulation. Every refusal names the
+        release that lifts it, so a rejected config tells the user what to wait
+        for rather than just saying no.
+        """
+        tcfg = self.training
+        if not tcfg.stream_layers:
+            # Footgun: a non-default stream_* while streaming is off almost
+            # certainly means the user forgot stream_layers=true.
+            if (
+                tcfg.stream_source != "auto"
+                or tcfg.stream_buffers != 2
+                or tcfg.stream_vram_override is not None
+            ):
+                raise ValueError(
+                    "training.stream_source / training.stream_buffers / "
+                    "training.stream_vram_override set but stream_layers is "
+                    "false; set stream_layers=true to stream the base "
+                    "layer-by-layer."
+                )
+            return self
+        # v0.72.4 — the four preference losses join SFT. DPO and KTO take their
+        # reference from the SAME streamed base with adapters disabled (TRL's
+        # `null_ref_context`), so the reference costs no extra weights: measured
+        # 0.914x SFT peak VRAM where a second instance was 9.92x.
+        if self.task in _STREAM_ROLLOUT_TASKS:
+            raise ValueError(
+                f"training.stream_layers cannot be used with task={self.task!r}: "
+                f"it needs generation rollouts, which re-read every layer once "
+                f"per generated token. That destroys the amortisation streaming "
+                f"depends on (one weight read per step, not per token), so this "
+                f"is a permanent exclusion rather than an unimplemented one."
+            )
+        if self.task not in _STREAM_SUPPORTED_TASKS:
+            raise ValueError(
+                f"training.stream_layers supports task in "
+                f"{sorted(_STREAM_SUPPORTED_TASKS)}; got task={self.task!r}."
+            )
+        if self.backend != "transformers":
+            raise ValueError(
+                f"training.stream_layers requires backend='transformers'; got "
+                f"backend={self.backend!r}. Streaming replaces the model load "
+                f"path, which unsloth and mlx own themselves."
+            )
+        if self.modality != "text":
+            raise ValueError(
+                f"training.stream_layers requires modality='text'; got "
+                f"modality={self.modality!r}."
+            )
+        if tcfg.quantization not in ("none", "4bit"):
+            raise ValueError(
+                f"training.stream_layers supports quantization='none' or "
+                f"'4bit' (NF4); got {tcfg.quantization!r}. Other quantisations "
+                f"store weights in formats that cannot be streamed into a "
+                f"pooled buffer."
+            )
+        # v0.72.3: the disk overflow tier is live. It is still NVMe-only —
+        # `choose_tier` refuses spinning disks, where each step costs two seeks
+        # per layer (plan P11) and the run thrashes rather than merely running
+        # slower. `soup doctor` reports the detected media type.
+        # v0.72.3: any concrete batch size is supported — bigger batches are
+        # where streaming PAYS OFF, since one weight read is amortised over more
+        # tokens. "auto" is still refused: it resolves by OOM-probing a resident
+        # model, and under streaming that model never loads, so the probe would
+        # measure something that does not exist.
+        if tcfg.batch_size == "auto":
+            raise ValueError(
+                "training.stream_layers cannot use batch_size='auto': the probe "
+                "sizes a RESIDENT model, which a streaming run never loads. Set "
+                "a concrete batch_size — the pre-flight predicts peak VRAM for "
+                "it and refuses the run if it will not fit."
+            )
+        # v0.72.3: accumulation is supported. Measured on this box, it is
+        # per-TOKEN I/O-neutral — layer reads per 1k tokens held constant across
+        # accum 1/2/4 — because N micro-batches read the base N times but also
+        # process N times the tokens. Its cost is opportunity cost: reaching the
+        # same effective batch by raising batch_size was 2.52x faster. The
+        # pre-flight says so rather than the schema refusing it, because
+        # accumulation is the ONLY way to raise effective batch once the VRAM
+        # budget is exhausted (peak moved 0.842 -> 0.846 GB across accum 1->4).
+        # v0.72.4 — KTO's KL term is degenerate at a per-device batch of 1, so
+        # TRL refuses it outright ("Actual (not effective) batch size must be
+        # > 1"). Under streaming that ValueError arrives only AFTER the RAM
+        # pre-flight, the checkpoint sharding and — at quantization='4bit' —
+        # the NF4 quantisation pass: minutes of disk I/O on a real base, to
+        # fail on a config that was already invalid. Refuse it at parse time.
+        if (
+            self.task == "kto"
+            and isinstance(tcfg.batch_size, int)
+            and tcfg.batch_size < 2
+        ):
+            raise ValueError(
+                "task='kto' requires training.batch_size >= 2 (TRL's KL term is "
+                "degenerate at batch 1). Checked here rather than in the "
+                "trainer so a streaming run fails before sharding the "
+                "checkpoint, not minutes into it."
+            )
+        if tcfg.lora.r < 1:
+            raise ValueError(
+                "training.stream_layers requires LoRA (training.lora.r >= 1) — "
+                "the streamed base is frozen and its decoder weights live on "
+                "the meta device, so full fine-tuning (lora.r=0) is not merely "
+                "unwise here, it is impossible: there would be nothing "
+                "trainable and the run would be a no-op."
+            )
+        # LoRA variants that READ the real base weight during
+        # get_peft_model() cannot work against a meta skeleton: DoRA computes a
+        # weight norm, PiSSA/OLoRA take an SVD of it, VeRA shares projections
+        # sized from it. Refuse by name rather than let torch raise an opaque
+        # "Fan in and fan out can not be computed" from the meta tensor.
+        if tcfg.lora.use_dora:
+            raise ValueError(
+                "training.stream_layers is incompatible with lora.use_dora: "
+                "DoRA initialises from the base weight's norm, but the "
+                "streamed base is on the meta device at adapter-build time. "
+                "Use plain LoRA (lora.use_rslora is fine)."
+            )
+        if tcfg.lora.use_vera:
+            raise ValueError(
+                "training.stream_layers is incompatible with lora.use_vera: "
+                "VeRA's shared projections are built from the materialised "
+                "base weights, which streaming keeps on the meta device."
+            )
+        if getattr(tcfg.lora, "init_strategy", "random") != "random":
+            raise ValueError(
+                f"training.stream_layers requires lora.init_strategy='random' "
+                f"(got {tcfg.lora.init_strategy!r}): PiSSA/OLoRA/LoftQ "
+                f"initialise the adapter from an SVD of the base weight, which "
+                f"is on the meta device under streaming."
+            )
+        conflicts = []
+        if tcfg.unfrozen_parameters:
+            conflicts.append("unfrozen_parameters")
+        if tcfg.lisa_enabled:
+            conflicts.append("lisa_enabled")
+        if tcfg.packing:
+            conflicts.append("packing")
+        if tcfg.multipack:
+            conflicts.append("multipack")
+        if tcfg.use_fsdp2_compile:
+            conflicts.append("use_fsdp2_compile")
+        if tcfg.train_router_only:
+            conflicts.append("train_router_only")
+        if tcfg.expand_layers is not None:
+            conflicts.append("expand_layers")
+        if conflicts:
+            raise ValueError(
+                f"training.stream_layers is mutually exclusive with "
+                f"{', '.join(conflicts)}: streaming owns the model-construction "
+                f"path (meta skeleton + per-layer weight substitution) and "
+                f"cannot share it with a feature that rewrites or re-freezes "
+                f"the same layers."
+            )
+        return self
+
+    @model_validator(mode="after")
     def _validate_rollout_backend(self) -> "SoupConfig":
         """v0.50.0 Part C — ``rollout_backend`` requires task='grpo' and a
         non-mlx backend. Live launcher wired in v0.71.21 (#125):
@@ -4210,6 +5009,177 @@ class SoupConfig(BaseModel):
             raise ValueError(
                 "rollout_backend='openenv' requires training.rollout_func "
                 "('module.path:function_name')"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_prm_reward(self) -> "SoupConfig":
+        """v0.71.30 — PRM-guided GRPO gate.
+
+        ``prm_reward`` runs a PRM (base CausalLM + reward head) forward as the
+        GRPO reward, so it requires ``task='grpo'`` on ``backend='transformers'``
+        with ``modality='text'``. A non-default ``prm_aggregate`` while
+        ``prm_reward`` is unset silently no-ops → reject as a footgun.
+        """
+        if self.training.prm_reward is None:
+            if self.training.prm_aggregate != "min":
+                raise ValueError(
+                    "prm_aggregate is only meaningful with prm_reward set; "
+                    f"got prm_aggregate={self.training.prm_aggregate!r} and "
+                    "prm_reward=None"
+                )
+            return self
+        if self.task != "grpo":
+            raise ValueError(
+                f"prm_reward requires task='grpo'; got task={self.task!r}"
+            )
+        if self.backend != "transformers":
+            raise ValueError(
+                "prm_reward requires backend='transformers' (the PRM reward "
+                f"runs a transformers forward); got backend={self.backend!r}"
+            )
+        if self.modality != "text":
+            raise ValueError(
+                f"prm_reward requires modality='text'; got modality={self.modality!r}"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_online_dpo_compat(self) -> "SoupConfig":
+        """v0.71.31 — Online DPO gate.
+
+        ``task='online_dpo'`` generates on-policy and needs exactly one reward
+        signal — a pairwise judge (``online_dpo_judge``) OR a ``reward_model``.
+        It runs a transformers generation + LoRA loop, so it requires
+        ``backend='transformers'`` with ``modality='text'``. Any
+        ``online_dpo_*`` field set on another task silently no-ops → reject as a
+        footgun.
+        """
+        t = self.training
+        online_set = (
+            t.online_dpo_judge is not None
+            or t.online_dpo_loss_type != "sigmoid"
+            or t.online_dpo_max_new_tokens != 64
+        )
+        if self.task == "online_dpo":
+            if self.backend != "transformers":
+                raise ValueError(
+                    "task='online_dpo' requires backend='transformers'; "
+                    f"got backend={self.backend!r}"
+                )
+            if self.modality != "text":
+                raise ValueError(
+                    "task='online_dpo' requires modality='text'; "
+                    f"got modality={self.modality!r}"
+                )
+            has_judge = t.online_dpo_judge is not None
+            has_rm = t.reward_model is not None
+            if has_judge and has_rm:
+                raise ValueError(
+                    "task='online_dpo': set exactly one of "
+                    "training.online_dpo_judge or training.reward_model, not both"
+                )
+            if not has_judge and not has_rm:
+                raise ValueError(
+                    "task='online_dpo' needs a judge (training.online_dpo_judge) "
+                    "or a training.reward_model"
+                )
+        elif online_set:
+            raise ValueError(
+                "training.online_dpo_* fields require task='online_dpo'"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_reward_fn_multi_compat(self) -> "SoupConfig":
+        """v0.71.40 #311 — a comma-separated reward_fn is GRPO-only.
+
+        Only ``trainer/grpo.py::_select_reward_fn`` resolves a multi-reward spec
+        into a ``reward_funcs=[...]`` list; ``trainer/ppo.py`` (and every other
+        consumer) calls the single-name loader, so a comma there would silently
+        pass config validation and then crash at training start with
+        ``Unknown reward function``. Footgun-reject it up front (mirrors the
+        online_dpo / asr / lisa task gates).
+        """
+        rf = self.training.reward_fn
+        if isinstance(rf, str) and "," in rf and self.task != "grpo":
+            raise ValueError(
+                f"a comma-separated training.reward_fn (an ensemble, {rf!r}) is "
+                f"only supported for task='grpo'; got task={self.task!r}"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_asr_compat(self) -> "SoupConfig":
+        """v0.71.32 — ASR (Whisper) gate.
+
+        ``task='asr'`` runs a transformers ``Seq2SeqTrainer`` on
+        ``WhisperForConditionalGeneration``; it requires
+        ``backend='transformers'`` (mlx / unsloth have no Whisper path). The
+        ``asr_language`` / ``asr_task`` knobs only affect the ASR decoder, so
+        setting them on another task silently no-ops → reject as a footgun.
+        """
+        t = self.training
+        asr_set = (
+            t.asr_language is not None
+            or t.asr_task != "transcribe"
+            or bool(t.asr_lora)
+        )
+        if self.task == "asr":
+            if self.backend != "transformers":
+                raise ValueError(
+                    "task='asr' requires backend='transformers'; "
+                    f"got backend={self.backend!r}"
+                )
+            if self.data.format not in ("asr", "auto"):
+                raise ValueError(
+                    "task='asr' requires data.format='asr' (or 'auto'); "
+                    f"got data.format={self.data.format!r}"
+                )
+        elif asr_set:
+            raise ValueError(
+                "training.asr_language / asr_task / asr_lora require task='asr'"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_replay_compat(self) -> "SoupConfig":
+        """v0.71.36 — continual-learning rehearsal gate.
+
+        Replay interleaves rows from an OLD dataset into train so the model
+        does not forget the previous task. v1 covers the plain
+        instruction / continued-pretraining paths only.
+
+        packing / multipack concatenate rows into fixed-length blocks, so
+        the replay ratio stops being meaningful at block boundaries —
+        reject rather than silently mis-mix. Setting replay_ratio /
+        replay_seed without data.replay silently no-ops, so reject that as
+        a footgun.
+        """
+        data = self.data
+        replay_knobs_set = (
+            data.replay_ratio != 0.1 or data.replay_seed is not None
+        )
+        if data.replay is not None:
+            if self.task not in ("sft", "pretrain"):
+                raise ValueError(
+                    "data.replay requires task='sft' or task='pretrain'; "
+                    f"got task={self.task!r}"
+                )
+            if self.training.packing:
+                raise ValueError(
+                    "data.replay is incompatible with training.packing "
+                    "(packing concatenates rows into fixed blocks, so the "
+                    "replay ratio stops being meaningful)"
+                )
+            if self.training.multipack:
+                raise ValueError(
+                    "data.replay is incompatible with training.multipack "
+                    "(bin-packing breaks the replay ratio)"
+                )
+        elif replay_knobs_set:
+            raise ValueError(
+                "data.replay_ratio / data.replay_seed require data.replay"
             )
         return self
 
@@ -5072,7 +6042,7 @@ TEMPLATES: dict[str, str] = {
 
 base: meta-llama/Llama-3.1-8B-Instruct
 task: sft
-# backend: unsloth  # 2-5x faster, pip install 'soup-cli[fast]'
+# backend: unsloth  # 2-5x faster, pip install "soup-cli[fast]"
 
 data:
   train: ./data/train.jsonl
@@ -5097,7 +6067,7 @@ output: ./output
 
 base: codellama/CodeLlama-7b-Instruct-hf
 task: sft
-# backend: unsloth  # 2-5x faster, pip install 'soup-cli[fast]'
+# backend: unsloth  # 2-5x faster, pip install "soup-cli[fast]"
 
 data:
   train: ./data/code_train.jsonl
@@ -5122,7 +6092,7 @@ output: ./output
 
 base: meta-llama/Llama-3.1-8B-Instruct
 task: grpo
-# backend: unsloth  # 2-5x faster, pip install 'soup-cli[fast]'
+# backend: unsloth  # 2-5x faster, pip install "soup-cli[fast]"
 
 data:
   train: ./data/reasoning_train.jsonl
@@ -5152,7 +6122,7 @@ output: ./output
 base: meta-llama/Llama-3.2-11B-Vision-Instruct
 task: sft
 modality: vision
-# backend: unsloth  # 2-5x faster, pip install 'soup-cli[fast]'
+# backend: unsloth  # 2-5x faster, pip install "soup-cli[fast]"
 
 data:
   train: ./data/vision_train.jsonl
@@ -5178,7 +6148,7 @@ output: ./output
 
 base: meta-llama/Llama-3.1-8B-Instruct
 task: sft
-# backend: unsloth  # 2-5x faster, pip install 'soup-cli[fast]'
+# backend: unsloth  # 2-5x faster, pip install "soup-cli[fast]"
 
 data:
   train: ./data/medical_train.jsonl
@@ -5208,7 +6178,7 @@ output: ./output
 
 base: meta-llama/Llama-3.1-8B-Instruct
 task: kto
-# backend: unsloth  # 2-5x faster, pip install 'soup-cli[fast]'
+# backend: unsloth  # 2-5x faster, pip install "soup-cli[fast]"
 
 data:
   train: ./data/kto_train.jsonl
@@ -5238,7 +6208,7 @@ output: ./output
 
 base: meta-llama/Llama-3.1-8B-Instruct
 task: orpo
-# backend: unsloth  # 2-5x faster, pip install 'soup-cli[fast]'
+# backend: unsloth  # 2-5x faster, pip install "soup-cli[fast]"
 
 data:
   train: ./data/preference_train.jsonl
@@ -5268,7 +6238,7 @@ output: ./output
 
 base: meta-llama/Llama-3.1-8B-Instruct
 task: bco
-# backend: unsloth  # 2-5x faster, pip install 'soup-cli[fast]'
+# backend: unsloth  # 2-5x faster, pip install "soup-cli[fast]"
 
 data:
   train: ./data/preference_train.jsonl
@@ -5298,7 +6268,7 @@ output: ./output
 
 base: meta-llama/Llama-3.1-8B-Instruct
 task: simpo
-# backend: unsloth  # 2-5x faster, pip install 'soup-cli[fast]'
+# backend: unsloth  # 2-5x faster, pip install "soup-cli[fast]"
 
 data:
   train: ./data/preference_train.jsonl
@@ -5329,7 +6299,7 @@ output: ./output
 
 base: meta-llama/Llama-3.1-8B-Instruct
 task: ipo
-# backend: unsloth  # 2-5x faster, pip install 'soup-cli[fast]'
+# backend: unsloth  # 2-5x faster, pip install "soup-cli[fast]"
 
 data:
   train: ./data/preference_train.jsonl
@@ -5361,7 +6331,7 @@ output: ./output
 
 base: meta-llama/Llama-3.1-8B
 task: pretrain
-# backend: unsloth  # 2-5x faster, pip install 'soup-cli[fast]'
+# backend: unsloth  # 2-5x faster, pip install "soup-cli[fast]"
 
 data:
   train: ./data/corpus.jsonl
@@ -5389,7 +6359,7 @@ output: ./output_pretrain
 
 base: Qwen/Qwen3-30B-A3B
 task: sft
-# backend: unsloth  # 2-5x faster, pip install 'soup-cli[fast]'
+# backend: unsloth  # 2-5x faster, pip install "soup-cli[fast]"
 
 data:
   train: ./data/train.jsonl
@@ -5420,7 +6390,7 @@ output: ./output
 
 base: meta-llama/Llama-3.1-8B-Instruct
 task: sft
-# backend: unsloth  # 2-5x faster, pip install 'soup-cli[fast]'
+# backend: unsloth  # 2-5x faster, pip install "soup-cli[fast]"
 
 data:
   train: ./data/long_context_train.jsonl
@@ -5441,7 +6411,7 @@ training:
   gradient_checkpointing: true
   rope_scaling_type: dynamic
   use_flash_attn: true
-  # use_liger: true       # pip install 'soup-cli[liger]' for fused ops
+  # use_liger: true       # pip install "soup-cli[liger]" for fused ops
   # use_ring_attention: true  # Multi-GPU sequence parallelism
 
 output: ./output_longctx
@@ -5457,7 +6427,7 @@ output: ./output_longctx
 
 base: BAAI/bge-base-en-v1.5
 task: embedding
-# backend: unsloth  # 2-5x faster, pip install 'soup-cli[fast]'
+# backend: unsloth  # 2-5x faster, pip install "soup-cli[fast]"
 
 data:
   train: ./data/embedding_train.jsonl
@@ -5494,7 +6464,7 @@ output: ./output_embedding
 base: Qwen/Qwen2-Audio-7B-Instruct
 task: sft
 modality: audio
-# backend: unsloth  # 2-5x faster, pip install 'soup-cli[fast]'
+# backend: unsloth  # 2-5x faster, pip install "soup-cli[fast]"
 
 data:
   train: ./data/audio_train.jsonl
@@ -5535,7 +6505,7 @@ output: ./output_audio
 
 base: meta-llama/Llama-3.1-8B-Instruct
 task: sft
-# backend: unsloth  # 2-5x faster, pip install 'soup-cli[fast]'
+# backend: unsloth  # 2-5x faster, pip install "soup-cli[fast]"
 
 data:
   train: ./data/tool_calling_train.jsonl
@@ -5569,7 +6539,7 @@ output: ./output
 
 base: meta-llama/Llama-3.1-8B-Instruct
 task: ppo
-# backend: unsloth  # 2-5x faster, pip install 'soup-cli[fast]'
+# backend: unsloth  # 2-5x faster, pip install "soup-cli[fast]"
 
 data:
   train: ./data/prompts.jsonl

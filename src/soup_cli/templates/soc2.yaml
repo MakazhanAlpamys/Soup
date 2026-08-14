@@ -1,0 +1,45 @@
+# Soup compliance template: SOC 2 (Trust Services Criteria)
+# Starting point for fine-tuning under a SOC 2 change-management + audit regime.
+#
+# This file is a normal training config — the compliance controls are Soup
+# CLI flags/commands, not config keys. Run them around your training:
+#
+#   1. The audit log is ON by default (evidence for the Security criterion):
+#        soup audit-log tail                        # tail the per-command trail
+#        soup audit-log rotate                      # force a rotation pass
+#
+#   2. Pin the exact inputs so a run is reproducible (Change Management):
+#        soup lock write --base-sha <hex> --dataset-sha <hex> --env-lock soup-env.lock
+#        soup train --config soup.yaml --repro-receipt receipt.json
+#
+#   3. Emit an ML-BOM + signed attestation for every shipped artifact:
+#        soup bom emit --name model --base-sha <hex> --config-sha <hex> --format both
+#        soup adapters sign ./output --backend ed25519 --generate-key key.pem
+#        soup adapters verify ./output --strict --public-key key.pub.pem
+#        soup attest emit --stage train --subject model --sha <hex> --sign ed25519 --key key.pem
+#
+#   4. Gate merges/deploys on a SHIP verdict (Availability / Processing Integrity):
+#        soup ship --evidence ev.json               # exit 0 = SHIP, 2 = DON'T SHIP
+#
+# License note: use a license-clean base for regulated deployments (Apache-2.0 below).
+
+base: Qwen/Qwen2.5-7B-Instruct
+task: sft
+
+data:
+  train: ./data/train.jsonl
+  format: alpaca
+  val_split: 0.1
+  max_length: 2048
+
+training:
+  epochs: 3
+  lr: 2e-5
+  batch_size: auto
+  lora:
+    r: 64
+    alpha: 16
+    target_modules: auto
+  quantization: 4bit
+
+output: ./output

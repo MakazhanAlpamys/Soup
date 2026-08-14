@@ -2,7 +2,11 @@
 
 Liger Kernel provides fused CUDA kernels (RMSNorm, SwiGLU, CrossEntropy, RoPE, etc.)
 that replace standard HuggingFace operations with optimized fused versions.
-This can yield 20-60% memory savings and 20-40% throughput improvement.
+Measured on an H100 (sm90) with Llama-3.1-8B + LoRA, batch 4, seq 1024,
+5 interleaved repeats: **12.9% memory saving and 5.1% throughput**, verified by
+confirming the module classes were actually swapped for Liger's. The saving would
+shrink further with gradient checkpointing on.
+Numbers: benchmarks/gate-h100-validation.md.
 
 Requires: liger-kernel >= 0.3.0
 """
@@ -49,17 +53,48 @@ def apply_liger_kernel(model_name: str) -> bool:
 
     model_lower = model_name.lower()
 
-    try:
-        from liger_kernel.transformers import (
-            AutoLigerKernelForCausalLM,
-        )
+    # Detect the architecture from the CONFIG, not from the path.
+    #
+    # This used to call `AutoLigerKernelForCausalLM._apply_liger_kernel(model_name)`
+    # and fall back to matching "llama" / "mistral" / "qwen2" as a SUBSTRING of the
+    # model name. That private classmethod does not exist in liger-kernel 0.8.1
+    # (`AttributeError: type object 'AutoLigerKernelForCausalLM' has no attribute
+    # '_apply_liger_kernel'`, verified), so the fallback was the only live path —
+    # and a model loaded from a local directory carries no architecture in its
+    # name. Every such run printed "no matching architecture found" and trained
+    # WITHOUT Liger, on a flag the user had explicitly set.
+    #
+    # `AutoConfig.model_type` is exactly the string liger's module-level
+    # `_apply_liger_kernel(model_type)` expects, and a directory cannot rename it.
+    model_type = _detect_model_type(model_name)
+    if model_type:
+        try:
+            from liger_kernel.transformers import _apply_liger_kernel
 
-        # AutoLigerKernelForCausalLM handles architecture detection automatically
-        AutoLigerKernelForCausalLM._apply_liger_kernel(model_name)
-        return True
-    except (ImportError, AttributeError, NotImplementedError):
-        # Fallback: try manual patching for known architectures
-        return _apply_liger_manual(model_lower)
+            _apply_liger_kernel(model_type)
+            return True
+        except (ImportError, AttributeError, NotImplementedError, KeyError, ValueError):
+            # liger does not support this architecture, or moved the entry point
+            # again — fall through to the name-based attempt rather than claiming
+            # success we cannot back.
+            pass
+
+    return _apply_liger_manual(model_lower)
+
+
+def _detect_model_type(model_name: str) -> str:
+    """``config.model_type`` for a local path or hub id, or "" when unavailable.
+
+    Deliberately quiet: a missing config is not an error here, it just means the
+    caller falls back to the older name-based match and the run still trains.
+    """
+    try:
+        from transformers import AutoConfig
+
+        config = AutoConfig.from_pretrained(model_name, trust_remote_code=False)
+    except Exception:  # noqa: BLE001 — detection is best-effort by design
+        return ""
+    return str(getattr(config, "model_type", "") or "")
 
 
 def _apply_liger_manual(model_lower: str) -> bool:
@@ -115,7 +150,7 @@ def validate_liger_config(use_liger: bool, backend: str, device: str) -> list[st
     if not check_liger_available():
         errors.append(
             "liger-kernel is not installed. "
-            "Install it with: pip install 'soup-cli[liger]'"
+            "Install it with: pip install \"soup-cli[liger]\""
         )
 
     if backend == "unsloth":

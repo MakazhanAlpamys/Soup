@@ -156,4 +156,3 @@ lora:
 """
         with pytest.raises((ValidationError, ValueError), match="init_strategy"):
             load_config_from_string(yaml_text)
-

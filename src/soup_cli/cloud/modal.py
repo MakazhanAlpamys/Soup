@@ -280,7 +280,7 @@ def submit_modal_run(plan: CloudPlan, *, env: Optional[Mapping] = None) -> int:
         import modal  # noqa: F401 — presence check only
     except ImportError as exc:
         raise RuntimeError(
-            "Modal SDK not installed. Run `pip install 'soup-cli[modal]'`."
+            "Modal SDK not installed. Run `pip install \"soup-cli[modal]\"`."
         ) from exc
     import subprocess
 

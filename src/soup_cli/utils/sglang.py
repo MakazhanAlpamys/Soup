@@ -1,9 +1,42 @@
 """SGLang backend utilities for soup serve."""
 
+import json
 import logging
-from typing import Optional
+from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
+
+
+def decode_sglang_response(response: Any) -> dict:
+    """Normalise whatever ``Runtime.generate`` returned into a dict.
+
+    #76 — sglang 0.5.16's ``Runtime.generate`` ends with
+    ``return json.dumps(response.json())``, i.e. a **string**. Indexing it as a
+    dict raised ``TypeError: string indices must be integers`` on EVERY request,
+    so `--backend sglang` started cleanly and then 500'd on every generation.
+
+    Older sglang returned the dict directly, so both shapes are accepted rather
+    than one hard assumption being swapped for another.
+    """
+    if isinstance(response, dict):
+        return response
+    if isinstance(response, (str, bytes, bytearray)):
+        try:
+            decoded = json.loads(response)
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise ValueError(
+                "SGLang returned a response that is neither a dict nor JSON; "
+                "the installed sglang may have changed its Runtime.generate "
+                "contract again"
+            ) from exc
+        if not isinstance(decoded, dict):
+            raise ValueError(
+                f"SGLang returned JSON of type {type(decoded).__name__}, expected an object"
+            )
+        return decoded
+    raise ValueError(
+        f"SGLang returned an unsupported response type {type(response).__name__}"
+    )
 
 
 def check_sglang_available() -> bool:
@@ -179,9 +212,8 @@ def create_sglang_app(
 
         # Non-streaming
         try:
-            response = runtime.generate(
-                prompt,
-                sampling_params=sampling_params,
+            response = decode_sglang_response(
+                runtime.generate(prompt, sampling_params=sampling_params)
             )
             response_text = response["text"]
             prompt_tokens = response.get("meta_info", {}).get("prompt_tokens", 0)
@@ -241,9 +273,8 @@ def create_sglang_app(
         created = int(time.time())
 
         try:
-            response = runtime.generate(
-                prompt,
-                sampling_params=sampling_params,
+            response = decode_sglang_response(
+                runtime.generate(prompt, sampling_params=sampling_params)
             )
             response_text = response["text"]
         except Exception:

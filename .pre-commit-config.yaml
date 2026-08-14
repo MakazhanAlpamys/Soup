@@ -4,17 +4,45 @@
 #   Run on staged:  pre-commit run
 #   Run everything: pre-commit run --all-files
 #
-# NOTE: `ruff format` has never been run across this codebase, so the FIRST
-# `pre-commit run --all-files` will reformat MANY files. That one-time churn is
-# expected. Normal commits only run the hooks against staged files, so day-to-
-# day use is non-invasive.
+# NOTE: `ruff-format` is DISABLED ON PURPOSE. Do not just uncomment it.
+#
+# `ruff format` has never been run across this codebase: it would rewrite 722
+# of 811 files, i.e. nearly everything. Nothing enforces formatting today — CI
+# runs `ruff check`, never `ruff format --check` — so enabling the hook alone
+# would impose a standard no gate actually checks, and would quietly fold
+# whole-file reformatting into unrelated commits as people touch files.
+#
+# It also finds no bugs. `ruff check` is already clean repo-wide; formatting
+# only moves whitespace, while a repo-wide reformat destroys `git blame` (every
+# line points at the reformat instead of its author).
+#
+# To adopt it, do all three IN ONE commit, not just this line:
+#   1. re-enable the hook below
+#   2. run `ruff format src/soup_cli/ tests/` and commit the result alone,
+#      then add that commit's SHA to `.git-blame-ignore-revs` so blame skips it
+#   3. add `ruff format --check src/soup_cli/ tests/` to the CI lint job, or
+#      the hook is the only thing enforcing it and drifts the moment someone
+#      commits without hooks installed
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.9.4
     hooks:
       - id: ruff
         args: [--fix]
-      - id: ruff-format
+      # - id: ruff-format   # see the NOTE at the top before enabling
+
+  # Validates .github/workflows/*.yml against the GitHub Actions schema —
+  # context availability, expression syntax, action inputs, shellcheck over
+  # `run:` blocks. `check-yaml` below cannot see any of that: a workflow can be
+  # perfectly valid YAML and still be rejected by GitHub before a single job
+  # starts, which is exactly what happened in 195d60b.
+  #
+  # Builds with Go. If a contributor has no Go toolchain, swap this for the
+  # `actionlint-docker` id from the same repo.
+  - repo: https://github.com/rhysd/actionlint
+    rev: v1.7.12
+    hooks:
+      - id: actionlint
 
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0
@@ -25,3 +53,9 @@ repos:
       - id: check-toml
       - id: check-merge-conflict
       - id: check-added-large-files
+        # 5 MB, not the 500 KB default. README and the docs carry demo assets
+        # (docs/assets/layer-streaming.gif is 4.7 MB), and the default blocked
+        # those while catching nothing else. The real accidents this guards
+        # against — model weights, checkpoints, core dumps — are orders of
+        # magnitude past 5 MB and are still caught.
+        args: ['--maxkb=5000']

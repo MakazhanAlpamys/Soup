@@ -40,9 +40,12 @@ report.xml
 .env
 *.key
 
-# Internal plan + Claude Code local dev instructions (not for repo)
+# Internal plan + local dev instructions (not for repo)
 .claude/
 .coverage
+
+# Internal brainstorming plans + design specs (local-only, not for repo)
+docs/superpowers/
 
 # Local scratch / temp scripts at repo root (e.g. _smoke.py, _scratch.py) — never committed
 /_*.py

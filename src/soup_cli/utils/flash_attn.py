@@ -3,7 +3,12 @@
 Detects FlashAttention availability (v2/v3/v4) and configures models
 to use the best available attention implementation automatically.
 
-FlashAttention provides 2-4x speedup and significant memory savings
+Measured on an H100 (sm90) with Llama-3.1-8B + LoRA, batch 4, seq 1024,
+5 interleaved repeats: **1.015x throughput and no memory saving** against the
+default. That is not a defect in FlashAttention -- torch SDPA already dispatches
+to a cuDNN Hopper flash kernel there, so the comparison is flash against flash.
+The advantage grows with sequence length, so a longer-context run may differ.
+Numbers: benchmarks/gate-h100-validation.md.
 for long sequences by avoiding materializing the full attention matrix.
 """
 
@@ -11,6 +16,41 @@ from __future__ import annotations
 
 # Ordered by preference (newest first)
 FLASH_ATTN_VERSIONS = ("flash_attention_3", "flash_attention_2")
+
+
+def _transformers_says_fa3() -> bool:
+    """Is FlashAttention 3 usable, according to the library that will load it?
+
+    #334 — Soup used to decide this from ``flash_attn.__version__ >= 3``. No such
+    distribution exists: Dao-AILab ships FA3 as package ``flash_attn_3`` / module
+    ``flash_attn_interface`` and FA4 as ``flash_attn_4``, while ``flash_attn``
+    itself stays in the 2.x line. transformers gates on
+    ``_is_package_available("flash_attn_3")``, so the version sniff could never
+    fire for a real install — and if it somehow did, transformers would reject
+    the ``flash_attention_3`` value it produced.
+
+    Asking transformers is the only answer that cannot disagree with the loader.
+    """
+    try:
+        from transformers.utils import is_flash_attn_3_available
+    except ImportError:
+        return False
+    try:
+        return bool(is_flash_attn_3_available())
+    except Exception:  # noqa: BLE001 - a probe must never break model loading
+        return False
+
+
+def _transformers_says_fa2() -> bool:
+    """Same question for FlashAttention 2."""
+    try:
+        from transformers.utils import is_flash_attn_2_available
+    except ImportError:
+        return False
+    try:
+        return bool(is_flash_attn_2_available())
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def check_flash_attn_available() -> str | None:
@@ -30,24 +70,12 @@ def check_flash_attn_available() -> str | None:
         return None
 
     # Check FlashAttention 3 (Hopper architecture, H100+)
-    try:
-        import flash_attn  # noqa: F401
-
-        version = getattr(flash_attn, "__version__", "0.0.0")
-        major = int(version.split(".")[0])
-        if major >= 3:
-            return "flash_attention_3"
-    except (ImportError, ValueError, IndexError):
-        pass
+    if _transformers_says_fa3():
+        return "flash_attention_3"
 
     # Check FlashAttention 2
-    try:
-        from transformers.utils import is_flash_attn_2_available
-
-        if is_flash_attn_2_available():
-            return "flash_attention_2"
-    except ImportError:
-        pass
+    if _transformers_says_fa2():
+        return "flash_attention_2"
 
     # Direct import check for flash_attn 2.x
     try:
@@ -71,21 +99,11 @@ def is_flash_attn_v3_available() -> bool:
     override that conflicts with FlashAttention v3's native custom-mask
     kernel; allowing both would silently corrupt outputs.
 
-    Returns False (never raises) when ``flash_attn`` is not installed, has
-    no parseable ``__version__``, or reports a major version below 3.
+    Returns False (never raises). #334 — this asked ``flash_attn.__version__``,
+    which can never report 3.x because FA3 ships as a separate ``flash_attn_3``
+    package; it now agrees with transformers, which is what actually loads it.
     """
-    try:
-        import flash_attn  # noqa: F401
-    except ImportError:
-        return False
-    version = getattr(flash_attn, "__version__", "")
-    if not isinstance(version, str):
-        return False
-    head = version.split(".", 1)[0]
-    try:
-        return int(head) >= 3
-    except (TypeError, ValueError):
-        return False
+    return _transformers_says_fa3()
 
 
 def get_flash_attn_version() -> str | None:

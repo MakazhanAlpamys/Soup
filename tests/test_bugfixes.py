@@ -954,80 +954,71 @@ class TestPPOResumeCheckpoint:
 
 
 class TestCPUDeviceMap:
-    """Test that all trainers use device_map='cpu' on CPU instead of 'auto'."""
+    """BUG-010: `device_map="auto"` produces meta tensors on CPU, so the CPU path
+    must never receive it.
 
-    def test_grpo_setup_uses_cpu_device_map(self):
-        """GRPO _setup_transformers should use device_map='cpu' on CPU."""
+    Rewritten. Each test used to read the function's source and assert the
+    literal `'"cpu"'` appeared in it. Once the device map moved behind
+    `utils/gpu.resolve_device_map` (so a distributed launch pins one GPU per rank
+    instead of asking every rank to shard across all of them), that check stopped
+    describing behaviour: for grpo / ppo / sft / dpo it was satisfied by the
+    leftover comment `# On CPU, use device_map="cpu" ...`, i.e. it would have
+    passed on a function that had lost the behaviour entirely, and for
+    reward_model and PPO's `_load_reward_model` it failed on a function that had
+    kept it. Both halves are the same defect: a string in the source is not the
+    property.
+
+    What is asserted now: every one of these loaders takes its device map from
+    the one helper, and none of them hardcodes `"auto"`; plus the helper itself
+    still maps CPU to `"cpu"`, which is the actual bug this class was opened for.
+    """
+
+    #: (module, dotted attribute) for every loader that picks a device map.
+    LOADERS = [
+        ("soup_cli.trainer.grpo", "GRPOTrainerWrapper._setup_transformers"),
+        ("soup_cli.trainer.ppo", "PPOTrainerWrapper._setup_transformers"),
+        ("soup_cli.trainer.ppo", "PPOTrainerWrapper._get_or_create_reward_model"),
+        ("soup_cli.trainer.ppo", "PPOTrainerWrapper._create_value_model"),
+        ("soup_cli.trainer.ppo", "_load_reward_model"),
+        ("soup_cli.trainer.sft", "SFTTrainerWrapper._setup_transformers"),
+        ("soup_cli.trainer.dpo", "DPOTrainerWrapper._setup_transformers"),
+        ("soup_cli.trainer.reward_model", "RewardModelTrainerWrapper._setup_transformers"),
+    ]
+
+    @staticmethod
+    def _source(module_name, dotted):
+        import importlib
         import inspect
 
-        from soup_cli.trainer.grpo import GRPOTrainerWrapper
-        source = inspect.getsource(GRPOTrainerWrapper._setup_transformers)
-        assert '"cpu"' in source
-        assert "self.device" in source
+        obj = importlib.import_module(module_name)
+        for part in dotted.split("."):
+            obj = getattr(obj, part)
+        return inspect.getsource(obj)
 
-    def test_ppo_setup_uses_cpu_device_map(self):
-        """PPO _setup_transformers should use device_map='cpu' on CPU."""
-        import inspect
+    def test_the_helper_maps_cpu_to_cpu(self):
+        """The behaviour BUG-010 is about, asserted directly rather than by
+        grepping for a quoted string."""
+        from soup_cli.utils.gpu import resolve_device_map
 
-        from soup_cli.trainer.ppo import PPOTrainerWrapper
-        source = inspect.getsource(PPOTrainerWrapper._setup_transformers)
-        assert '"cpu"' in source
-        assert "self.device" in source
+        assert resolve_device_map("cpu") == "cpu"
 
-    def test_sft_setup_uses_cpu_device_map(self):
-        """SFT _setup_transformers should use device_map='cpu' on CPU."""
-        import inspect
+    @pytest.mark.parametrize("module_name,dotted", LOADERS)
+    def test_loader_takes_its_device_map_from_the_helper(self, module_name, dotted):
+        source = self._source(module_name, dotted)
+        assert "resolve_device_map" in source, dotted
 
-        from soup_cli.trainer.sft import SFTTrainerWrapper
-        source = inspect.getsource(SFTTrainerWrapper._setup_transformers)
-        assert '"cpu"' in source
-        assert "self.device" in source
-
-    def test_dpo_setup_uses_cpu_device_map(self):
-        """DPO _setup_transformers should use device_map='cpu' on CPU."""
-        import inspect
-
-        from soup_cli.trainer.dpo import DPOTrainerWrapper
-        source = inspect.getsource(DPOTrainerWrapper._setup_transformers)
-        assert '"cpu"' in source
-        assert "self.device" in source
-
-    def test_reward_model_setup_uses_cpu_device_map(self):
-        """RewardModel _setup_transformers should use device_map='cpu' on CPU."""
-        import inspect
-
-        from soup_cli.trainer.reward_model import RewardModelTrainerWrapper
-        source = inspect.getsource(RewardModelTrainerWrapper._setup_transformers)
-        assert '"cpu"' in source
-        assert "self.device" in source
-
-    def test_ppo_load_reward_model_uses_cpu_device_map(self):
-        """_load_reward_model should use device_map='cpu' when device is cpu."""
-        import inspect
-
-        from soup_cli.trainer.ppo import _load_reward_model
-        source = inspect.getsource(_load_reward_model)
-        assert '"cpu"' in source
-        assert "device" in source
-
-    def test_ppo_get_or_create_reward_model_cpu(self):
-        """_get_or_create_reward_model should not use device_map='auto' on CPU."""
-        import inspect
-
-        from soup_cli.trainer.ppo import PPOTrainerWrapper
-        source = inspect.getsource(PPOTrainerWrapper._get_or_create_reward_model)
-        # Should conditionally set device_map based on self.device
-        assert "self.device" in source
-        assert '"cpu"' in source
-
-    def test_ppo_create_value_model_cpu(self):
-        """_create_value_model should not use device_map='auto' on CPU."""
-        import inspect
-
-        from soup_cli.trainer.ppo import PPOTrainerWrapper
-        source = inspect.getsource(PPOTrainerWrapper._create_value_model)
-        assert "self.device" in source
-        assert '"cpu"' in source
+    @pytest.mark.parametrize("module_name,dotted", LOADERS)
+    def test_loader_does_not_hardcode_auto(self, module_name, dotted):
+        source = self._source(module_name, dotted)
+        code = "\n".join(line.split("#", 1)[0] for line in source.splitlines())
+        # scoped to the device-map lines: these functions also carry an
+        # unrelated `target_modules == "auto"` LoRA branch.
+        offending = [
+            line.strip()
+            for line in code.splitlines()
+            if '"auto"' in line and ("device_map" in line or "dev_map" in line)
+        ]
+        assert not offending, (dotted, offending)
 
 
 # --- BUG-011: GRPO missing chat_template causes ValueError (v0.10.8) ---

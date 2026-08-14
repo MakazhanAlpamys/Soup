@@ -69,6 +69,17 @@ def enforce_under_cwd_and_no_symlink(path: str, field: str) -> str:
             raise ValueError(
                 f"{field} must not be a symlink (TOCTOU defence)"
             )
+        # Windows junctions / mount-point reparse points do NOT report
+        # S_ISLNK (they carry IO_REPARSE_TAG_MOUNT_POINT, not _SYMLINK), so
+        # the check above misses them — yet shutil.rmtree would happily delete
+        # the junction TARGET's contents. Refuse any reparse point on Windows.
+        if os.name == "nt":
+            reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+            if getattr(st, "st_file_attributes", 0) & reparse:
+                raise ValueError(
+                    f"{field} must not be a reparse point / junction "
+                    "(TOCTOU defence)"
+                )
     return path
 
 

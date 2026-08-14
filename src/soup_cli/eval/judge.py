@@ -8,10 +8,19 @@ import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional, Protocol
 from urllib.parse import urlparse
 
+if TYPE_CHECKING:
+    from trl import BasePairwiseJudge
+
 logger = logging.getLogger(__name__)
+
+
+class PairwiseJudge(Protocol):
+    """Anything that can compare two responses -> 0 (A) / 1 (B) / -1 (tie)."""
+
+    def compare_pair(self, prompt: str, resp_a: str, resp_b: str) -> int: ...
 
 DEFAULT_RUBRIC = {
     "criteria": [
@@ -294,6 +303,18 @@ class JudgeEvaluator:
         results.compute()
         return results
 
+    def compare_pair(self, prompt: str, resp_a: str, resp_b: str) -> int:
+        """One pairwise A/B judgment -> 0 (A) / 1 (B) / -1 (tie / parse fail)."""
+        judge_prompt = _PAIRWISE_INSTRUCTIONS.format(
+            prompt=prompt, resp_a=resp_a, resp_b=resp_b
+        )
+        try:
+            reply = self._call_llm(judge_prompt)
+        except Exception as exc:  # noqa: BLE001 — network/parse variety -> tie
+            logger.debug("pairwise judge call failed: %s", exc)
+            return -1
+        return _parse_pairwise(reply)
+
     def _call_llm(self, prompt: str) -> str:
         """Call the judge LLM. Uses OpenAI-compatible API for all providers."""
         import httpx
@@ -324,3 +345,215 @@ class JudgeEvaluator:
 
         data = resp.json()
         return data["choices"][0]["message"]["content"]
+
+
+# ---------------------------------------------------------------------------
+# Pairwise judging (v0.71.31) — shared by online-DPO + `soup ship --task-mode
+# pairwise`. `compare_pair` (above) issues one A/B judgment; the free functions
+# add swap-debiasing and a win-rate reduction.
+# ---------------------------------------------------------------------------
+
+_PAIRWISE_INSTRUCTIONS = (
+    "You are comparing two AI responses to the same prompt.\n\n"
+    "## Prompt\n{prompt}\n\n"
+    "## Response A\n{resp_a}\n\n"
+    "## Response B\n{resp_b}\n\n"
+    "## Task\nWhich response is better overall (helpfulness, accuracy, "
+    "safety)? Reply with a JSON object: {{\"winner\": \"A\"}} or "
+    "{{\"winner\": \"B\"}}. Return ONLY the JSON object."
+)
+
+
+def _parse_pairwise(text: str) -> int:
+    """Parse a judge reply into 0 (A) / 1 (B) / -1 (tie or unparseable)."""
+    match = re.search(r'\{[^{}]*\}', text or "", re.DOTALL)
+    if match:
+        try:
+            data = json.loads(match.group())
+            winner = str(data.get("winner", "")).strip().upper()
+            if winner == "A":
+                return 0
+            if winner == "B":
+                return 1
+        except (json.JSONDecodeError, TypeError, ValueError):
+            pass
+    # Fallback: a bare "A" / "B" token.
+    stripped = (text or "").strip().upper()
+    if stripped.startswith("A") and not stripped.startswith("B"):
+        return 0
+    if stripped.startswith("B"):
+        return 1
+    return -1
+
+
+def pairwise_compare(
+    prompt: str,
+    resp_a: str,
+    resp_b: str,
+    evaluator: "PairwiseJudge",
+    *,
+    swap: bool = True,
+) -> int:
+    """Return 0 (A preferred), 1 (B preferred), or -1 (tie / disagreement).
+
+    When ``swap`` is True the pair is judged in BOTH orders (A,B and B,A) and a
+    winner is returned ONLY if the two runs produce the same definite verdict —
+    the standard defence against a judge's positional bias. Anything else — a
+    tie, a failure (``compare_pair`` returns -1 for both), or a disagreement —
+    yields -1, so a single un-cross-checked verdict is never trusted. This
+    doubles the judge calls per pair vs a one-shot random-flip; the stronger
+    guarantee is intentional.
+    """
+    first = evaluator.compare_pair(prompt, resp_a, resp_b)
+    if not swap:
+        return first
+    swapped = evaluator.compare_pair(prompt, resp_b, resp_a)
+    # Translate the swapped verdict back into A/B space: 0 -> B(1), 1 -> A(0).
+    if swapped == 0:
+        second = 1
+    elif swapped == 1:
+        second = 0
+    else:
+        second = -1
+    # Winner only when BOTH orders agree on a definite (0/1) verdict.
+    if first in (0, 1) and first == second:
+        return first
+    return -1
+
+
+def pairwise_winrate(
+    pairs: "list[tuple[str, str, str]]", evaluator: "PairwiseJudge"
+) -> float:
+    """Tuned win-rate in [0, 1] over ``(prompt, base_resp, tuned_resp)`` triples.
+
+    Base is compared as A, tuned as B. A tuned win (verdict 1) scores 1.0, a tie
+    (-1) scores 0.5, a loss (0) scores 0.0. Empty input -> 0.5 (no evidence).
+    """
+    if not pairs:
+        return 0.5
+    total = 0.0
+    for prompt, base_resp, tuned_resp in pairs:
+        verdict = pairwise_compare(prompt, base_resp, tuned_resp, evaluator, swap=True)
+        if verdict == 1:
+            total += 1.0
+        elif verdict == -1:
+            total += 0.5
+    return total / len(pairs)
+
+
+def _as_prompt_text(prompt) -> str:
+    """Best-effort text of a prompt (string or conversational message list)."""
+    if isinstance(prompt, str):
+        return prompt
+    if isinstance(prompt, list):
+        users = [
+            m["content"]
+            for m in prompt
+            if isinstance(m, dict) and m.get("role") == "user"
+            and isinstance(m.get("content"), str)
+        ]
+        if users:
+            return users[-1]
+        return " ".join(
+            m["content"]
+            for m in prompt
+            if isinstance(m, dict) and isinstance(m.get("content"), str)
+        )
+    return str(prompt)
+
+
+def _as_completion_text(completion) -> str:
+    """Best-effort text of a completion (string, message, or message list)."""
+    if isinstance(completion, str):
+        return completion
+    if isinstance(completion, dict):
+        content = completion.get("content")
+        return content if isinstance(content, str) else str(completion)
+    if isinstance(completion, list):
+        return " ".join(
+            m["content"]
+            for m in completion
+            if isinstance(m, dict) and isinstance(m.get("content"), str)
+        )
+    return str(completion)
+
+
+def make_judge_reward_func(evaluator: object, *, name: str = "soup_judge"):
+    """Build a trl-1.x OnlineDPO POINTWISE reward function from a Soup evaluator.
+
+    trl 1.x removed the pairwise-judge Online DPO API (``BasePairwiseJudge``) and
+    ranks the two on-policy completions by a per-completion ``reward_funcs``
+    signal instead. This adapts Soup's ``JudgeEvaluator`` by scoring each
+    completion pointwise with ``evaluator.evaluate(prompt, completion)`` — the
+    SAME pointwise judge ``soup data best-of-n`` uses — returning its
+    ``weighted_score``. Note the semantic difference vs the trl-0.19.x path,
+    which uses the swap-debiased *pairwise* comparison; per-version behaviour is
+    documented as a known difference.
+
+    The returned callable matches trl's reward-func contract
+    ``fn(prompts, completions, **kwargs) -> list[float]`` and carries ``name`` as
+    ``__name__`` so trl logs ``rewards/<name>``.
+    """
+
+    def _reward(prompts, completions, **kwargs):
+        scores: list[float] = []
+        for prompt, completion in zip(prompts, completions, strict=False):
+            prompt_text = _as_prompt_text(prompt)
+            completion_text = _as_completion_text(completion)
+            try:
+                score = evaluator.evaluate(prompt_text, completion_text).weighted_score
+                scores.append(float(score))
+            except Exception as exc:  # noqa: BLE001 — judge/network variety
+                logger.debug("judge reward func failed: %s", exc)
+                scores.append(0.0)
+        return scores
+
+    _reward.__name__ = name
+    return _reward
+
+
+def _base_pairwise_judge_cls() -> type:
+    """Lazily import TRL's ``BasePairwiseJudge`` with a friendly error."""
+    try:
+        from trl import BasePairwiseJudge
+    except ImportError as exc:  # pragma: no cover — trl ships in [train]/[dev]
+        raise ImportError(
+            "SoupPairwiseJudge needs trl>=0.19 (pip install \"soup-cli[train]\")"
+        ) from exc
+    return BasePairwiseJudge
+
+
+def make_soup_pairwise_judge(evaluator: "PairwiseJudge") -> "BasePairwiseJudge":
+    """Build a TRL ``BasePairwiseJudge`` bound to a Soup ``JudgeEvaluator``.
+
+    Factory (not a module-level subclass) so ``eval/judge.py`` stays importable
+    without trl for the pure ``pairwise_*`` functions. ``judge`` returns, per
+    prompt, the index of the best completion (0/1), or ``-1`` on tie/failure —
+    the exact ``BasePairwiseJudge`` contract (TRL treats -1 as a dropped sample).
+    """
+    base_cls = _base_pairwise_judge_cls()
+
+    class _SoupPairwiseJudge(base_cls):  # type: ignore[misc, valid-type]
+        def __init__(self, ev: "PairwiseJudge") -> None:
+            self.evaluator = ev
+
+        def judge(
+            self,
+            prompts: "list[str]",
+            completions: "list[list[str]]",
+            shuffle_order: bool = True,
+        ) -> "list[int]":
+            out: list[int] = []
+            for prompt, pair in zip(prompts, completions, strict=False):
+                if not isinstance(pair, (list, tuple)) or len(pair) != 2:
+                    out.append(-1)
+                    continue
+                out.append(
+                    pairwise_compare(
+                        prompt, pair[0], pair[1], self.evaluator,
+                        swap=shuffle_order,
+                    )
+                )
+            return out
+
+    return _SoupPairwiseJudge(evaluator)

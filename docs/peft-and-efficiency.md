@@ -24,6 +24,57 @@
 - [Training Stability & Auto-Tuning](#training-stability--auto-tuning)
 - [Training Intelligence (Forgetting + Checkpoint Quality)](#training-intelligence-forgetting--checkpoint-quality)
 - [GaLore (Memory-Efficient Full-Parameter Training)](#galore-memory-efficient-full-parameter-training)
+- [Depth Pruning + Distill-Heal (`soup shrink`)](#depth-pruning--distill-heal-soup-shrink)
+
+---
+
+## Depth Pruning + Distill-Heal (`soup shrink`)
+
+`soup shrink` makes a model smaller by dropping its least-important **contiguous
+block of decoder layers**, then optionally *healing* the loss with knowledge
+distillation. It implements "The Unreasonable Ineffectiveness of the Deeper
+Layers" (Gromov et al., arXiv:2403.17887), with a Minitron-style distillation
+heal instead of the paper's plain LoRA fine-tune.
+
+**How it ranks layers.** For each candidate block `[L, L+n)`, one forward pass
+per calibration prompt (`output_hidden_states=True`) measures the **angular
+distance** of the residual stream entering (`hidden_states[L]`) vs leaving
+(`hidden_states[L+n]`) the block, averaged over every non-pad token across the
+calibration set. The block with the *lowest* distance transforms the residual
+stream least, so it is the safest to drop. The first and last decoder layers are
+always protected (they carry the most transformation).
+
+```bash
+# See the importance table + chosen block without writing anything:
+soup shrink --model HuggingFaceTB/SmolLM2-135M-Instruct --drop-ratio 0.25 \
+    --calib calib.jsonl --device cpu --plan-only
+
+# Prune 25% + heal (distill the original into the pruned student, fuse to one
+# dense model) + get a SHIP/DON'T-SHIP perplexity verdict:
+soup shrink --model HuggingFaceTB/SmolLM2-135M-Instruct --drop-ratio 0.25 \
+    --calib calib.jsonl --heal heal.jsonl --heal-steps 200 \
+    --tolerance 0.10 -o shrunk --device cpu --attach-to-registry <id>
+```
+
+- **`--drop-ratio F` / `--drop-layers N`** (exactly one) — how many contiguous
+  layers to drop; the *position* is chosen automatically by the importance scan.
+- **`--calib <jsonl>`** — calibration prompts (`{"text": ...}` / `{"prompt":
+  ...}` / chat `messages`). Must stay under cwd.
+- **`--heal <jsonl> --heal-steps N`** — distill the full-depth original into the
+  pruned student (LoRA logit-KD) as an isolated `soup train` subprocess, then
+  fuse the adapter back into the pruned base so the output is a single dense
+  model. Heal keeps the teacher resident (~2× model memory); with `--device
+  cpu` the heal runs on CPU (validated ≤ 3 B on a 4 GB card).
+- **`--tolerance F`** — ship if the perplexity regression stays within `F`
+  (default `0.10` = 10 %). Exit code `0 = SHIP`, `2 = DON'T SHIP`, `1 = error`.
+- **`-o <dir>`** — the shrunk model lands in `<dir>/model`; the verdict in
+  `<dir>/shrink_report.json`.
+
+**Arch support (v1):** Llama / Qwen / SmolLM. Others are a friendly reject.
+The importance pass loads the model, so live-validated on ≤ 3 B; larger models
+work but are unvalidated on the reference hardware. Perplexity is an unweighted
+mean of per-example perplexities — valid for the before/after *ratio* the
+verdict uses, not directly comparable to `soup eval` absolute numbers.
 
 ---
 
@@ -197,7 +248,7 @@ configs where expert FFNs need lower rank than attention. Caps: 256 keys × valu
 `lora_dropout` strip) auto-fire when the model name and architecture match. Both are
 gated and silent on unrelated models.
 
-**Template registry** — the 16 built-in templates now live as
+**Template registry** — the 21 built-in templates now live as
 `src/soup_cli/templates/*.yaml` with a `manifest.json` index. `soup init --template <name>`
 reads the YAML; the inline copies in `schema.py` stay as a back-compat fallback,
 deprecated in favour of the YAML registry.
@@ -328,6 +379,75 @@ training:
 ```
 
 Works with and without LoRA. When used with LoRA, LoRA is applied only to unfrozen layers.
+
+## LISA — Layerwise Importance Sampling (v0.71.34)
+
+LISA (Layerwise Importance Sampled AdamW, [arXiv:2403.17919](https://arxiv.org/abs/2403.17919)) targets full-fine-tuning quality at LoRA-like memory. **Measured at 7B+, it delivers the first half and not the second** — see [what it actually costs](#what-lisa-actually-costs-measured-at-3b-and-8b) below before choosing it over LoRA. Instead of picking layers once (that's Spectrum's static `unfrozen_parameters`), LISA re-samples a small random set of decoder layers **every N steps** and freezes the rest; the input embeddings, the LM head, and the final norm stay trainable throughout.
+
+```yaml
+task: sft
+backend: transformers
+modality: text
+training:
+  quantization: none      # LISA is full-FT of the active layers
+  lisa_enabled: true
+  lisa_num_layers: 2       # decoder layers active per interval (clamped to model depth)
+  lisa_interval_steps: 20  # re-sample cadence, in global steps
+```
+
+Because only a handful of layers train at any moment (and their optimizer state is cleared when they're re-frozen), peak optimizer memory is roughly `embeddings + head + lisa_num_layers` — far below a full fine-tune, while every layer still gets updated over the course of training. LISA is `sft` + `transformers` + `text` + `quantization: none` only, and is mutually exclusive with LoRA features, `freeze_layers`/`freeze_ratio`, and Spectrum's `unfrozen_parameters` (each independently decides what trains).
+
+### What LISA actually costs, measured at 3B and 8B
+
+Measured on one H100 80GB, Alpaca, 200 steps, 3 interleaved repeats per arm, SM
+clock pinned at 1980 MHz throughout. LISA engagement was verified rather than
+assumed: the trainable-layer set rotates exactly on the interval, the trainable
+parameter count matches the arithmetic to the unit, and `lisa_num_layers` set to
+*all* layers reproduces the full-fine-tuning arm to three decimals.
+
+**Llama-3.1-8B-Instruct:**
+
+| arm | peak VRAM | held-out loss |
+|---|---|---|
+| full fine-tuning | **does not fit** (OOM at 73.94 GB, also at `batch_size 1`) | – |
+| LISA (2 layers / 20 steps) | 52.14 GB | 1.294 |
+| LoRA r=16 | **34.56 GB** | **1.275** |
+
+**Qwen2.5-3B-Instruct, each arm at its own better learning rate:**
+
+| arm | peak VRAM | held-out loss |
+|---|---|---|
+| full fine-tuning | 57.60 GB | 1.2905 |
+| LISA | 19.37 GB | **1.2463** |
+| LoRA r=16 | **15.93 GB** | **1.2420** |
+
+**The quality claim holds — LISA beat full fine-tuning at both learning rates.**
+The memory claim does not: LISA is **1.22x LoRA at 3B and 1.51x at 8B**, and the
+gap *widens* with scale.
+
+The reason is structural rather than a tuning miss. The input embeddings, LM head
+and final norm stay trainable **every** interval, and at 8B those are **70.7%** of
+everything LISA trains (66.9% at 3B). So `lisa_num_layers` only controls about
+30% of the cost, and the other 70% grows with vocabulary x hidden size — an
+overhead LoRA never pays at all.
+
+**Choose LISA when you need full-rank updates on a model too large to
+full-fine-tune** — its real win is that 8B trains on a single 80 GB card where
+full fine-tuning needs about 120 GB. Otherwise prefer LoRA: at these sizes it
+matched or beat LISA on held-out loss while using a third less memory.
+
+Defaults are well chosen and need no change at 7B+. Raising `lisa_num_layers`
+degrades memory, speed **and** quality monotonically (3B held-out: 1.2504 at 2,
+1.2673 at 8, 1.2950 at 16), and above 8 it OOMs an 80 GB card at 8B.
+`lisa_interval_steps` sits in a wide flat optimum — 1 through 50 are
+indistinguishable, and only 200 (a single sample over the run) degrades.
+
+One caveat on the numbers: held-out quality here is in-distribution loss and token
+accuracy on an Alpaca validation split, not a downstream benchmark, so it cannot
+see capability regressions a task benchmark would. Full measurement record:
+[`benchmarks/gate-h100-validation.md`](../benchmarks/gate-h100-validation.md).
+
+Implementation note: the model is left fully trainable at trainer-setup time so HF's optimizer (built before the first callback fires) contains every decoder parameter; the LISA callback then toggles `requires_grad` per interval — frozen parameters produce no gradient and the optimizer skips them.
 
 
 ## Loss Watchdog
@@ -470,5 +590,3 @@ training:
 ```
 
 > **Note:** GaLore requires `quantization: none` and `backend: transformers` (not unsloth).
-
-

@@ -1,1 +1,7 @@
-github: MakazhanAlpamys
+# Sponsor button shown in the repo sidebar and on every issue / PR.
+#
+# `github:` only renders once the account is enrolled in GitHub Sponsors
+# (https://github.com/sponsors) — it is not, so it stays commented out.
+# github: MakazhanAlpamys
+
+custom: ["https://buy.stripe.com/4gMcN441k3pha3T19ye7m04"]

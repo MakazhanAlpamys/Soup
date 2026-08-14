@@ -7,7 +7,7 @@
 
 base: meta-llama/Llama-3.1-8B-Instruct
 task: dpo
-# backend: unsloth  # 2-5x faster, pip install 'soup-cli[fast]'
+# backend: unsloth  # 2-5x faster, pip install "soup-cli[fast]"
 
 data:
   train: examples/data/dpo_sample.jsonl
@@ -32,7 +32,7 @@ training:
   # gradient_checkpointing: true  # Save memory on long sequences
   # packing: true                 # Pack short samples for faster training
   # use_flash_attn: true          # FlashAttention for faster attention
-  # use_liger: true               # Liger Kernel fused ops, pip install 'soup-cli[liger]'
+  # use_liger: true               # Liger Kernel fused ops, pip install "soup-cli[liger]"
   lora:
     r: 16
     alpha: 32

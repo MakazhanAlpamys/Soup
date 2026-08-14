@@ -290,7 +290,7 @@ def check_near_duplicates(
             name="near_duplicates",
             verdict="OK",
             message="near-dup check skipped (datasketch not installed)",
-            evidence="pip install 'soup-cli[data]' to enable",
+            evidence="pip install \"soup-cli[data]\" to enable",
         )
     if len(rows) < 2:
         return LintCheck(

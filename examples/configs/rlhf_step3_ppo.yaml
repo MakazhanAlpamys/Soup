@@ -1,33 +1,48 @@
 # RLHF Step 3: PPO Training
-# Optimize with reinforcement learning using the reward model
-# Generates outputs and ranks them with the reward model
+# Optimize the policy with reinforcement learning against the reward model
+# trained in step 2. Run rlhf_step2_reward.yaml first — `training.reward_model`
+# points at its output directory.
+#
+# The bundled dataset is a 10-row FORMAT sample, not a training set.
+# See examples/data/README.md.
+#
+# Usage:
+#   soup train --config examples/configs/rlhf_step3_ppo.yaml
 
-model: TinyLlama/TinyLlama-1.1B-Chat-v1.0
-data:
-  path: examples/data/alpaca_tiny.jsonl
-  format: alpaca
+base: TinyLlama/TinyLlama-1.1B-Chat-v1.0
 task: ppo
 backend: transformers
-quantization: null
-lora_r: 64
-lora_alpha: 128
-lora_dropout: 0.05
-lora_target_modules:
-  - q_proj
-  - v_proj
-batch_size: 8
-gradient_accumulation_steps: 2
-num_epochs: 2
-learning_rate: 1e-5
-lr_scheduler_type: cosine
-warmup_ratio: 0.1
-weight_decay: 0.01
-max_seq_length: 2048
-output_dir: ./output_ppo/
-seed: 42
-ppo_epochs: 4
-ppo_clip_ratio: 0.2
-ppo_kl_penalty: 0.05
-reward_model: ./output_reward_model/
-logging_steps: 10
-save_steps: 50
+
+data:
+  train: examples/data/alpaca_tiny.jsonl
+  format: alpaca
+  # 512, not 2048: the longest row in any bundled fixture is ~233 tokens, so
+  # nothing is truncated and there is 2x headroom. A larger value only inflates
+  # the activation memory the VRAM pre-flight budgets for. Raise it when you
+  # point this config at longer data of your own.
+  max_length: 512
+
+training:
+  epochs: 2
+  lr: 1e-5
+  batch_size: 4
+  gradient_accumulation_steps: 2
+  quantization: none
+  scheduler: cosine
+  warmup_ratio: 0.1
+  weight_decay: 0.01
+  logging_steps: 10
+  save_steps: 50
+  ppo_epochs: 4
+  ppo_clip_ratio: 0.2
+  ppo_kl_penalty: 0.05
+  reward_model: ./output_reward_model/
+  lora:
+    r: 64
+    alpha: 128
+    dropout: 0.05
+    target_modules:
+      - q_proj
+      - v_proj
+
+output: ./output_ppo/

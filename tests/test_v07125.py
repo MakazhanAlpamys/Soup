@@ -106,9 +106,9 @@ class TestBuildTaskWin:
         assert set(SUPPORTED_TASK_MODES).issubset(set(TASK_MODES))
         assert "metric" in SUPPORTED_TASK_MODES
         assert "judge_score" in SUPPORTED_TASK_MODES
-        # pairwise is reserved for a later release — in the enum, not supported.
+        # pairwise became supported in v0.71.31 (#284).
         assert "pairwise" in TASK_MODES
-        assert "pairwise" not in SUPPORTED_TASK_MODES
+        assert "pairwise" in SUPPORTED_TASK_MODES
 
 
 # ---------------------------------------------------------------------------
@@ -563,7 +563,9 @@ class TestShipCliEvidence:
             )
             assert lenient.exit_code == 0, (lenient.output, repr(lenient.exception))
 
-    def test_bad_threshold_rejected_exit_2(self):
+    def test_bad_threshold_rejected_usage_exit_3(self):
+        # v0.71.38: usage/validation errors exit 3 (was 2), so CI can tell a
+        # config typo from a DON'T-SHIP verdict.
         from soup_cli.commands import ship as ship_cmd
 
         with runner.isolated_filesystem():
@@ -572,10 +574,13 @@ class TestShipCliEvidence:
                 ship_cmd.app,
                 ["--evidence", "ev.json", "--forgetting-threshold", "2.0"],
             )
-            assert res.exit_code == 2, (res.output, repr(res.exception))
+            assert res.exit_code == 3, (res.output, repr(res.exception))
             assert "threshold" in res.output.lower()
 
-    def test_pairwise_mode_rejected_for_now(self):
+    def test_pairwise_mode_now_supported(self):
+        # v0.71.31 (#284): --task-mode pairwise is no longer rejected. The
+        # evidence path reads mode from the file (metric here -> SHIP), so the
+        # flag is simply accepted (not an exit-2 "later release" refusal).
         from soup_cli.commands import ship as ship_cmd
 
         with runner.isolated_filesystem():
@@ -584,8 +589,8 @@ class TestShipCliEvidence:
                 ship_cmd.app,
                 ["--evidence", "ev.json", "--task-mode", "pairwise"],
             )
-            assert res.exit_code == 2, (res.output, repr(res.exception))
-            assert "pairwise" in res.output.lower()
+            assert res.exit_code == 0, (res.output, repr(res.exception))
+            assert "later release" not in res.output.lower()
 
     def test_evidence_outside_cwd_rejected(self):
         from soup_cli.commands import ship as ship_cmd
@@ -609,7 +614,7 @@ class TestShipCliEvidence:
         from soup_cli.commands import ship as ship_cmd
 
         res = runner.invoke(ship_cmd.app, [])
-        assert res.exit_code == 2, (res.output, repr(res.exception))
+        assert res.exit_code == 3, (res.output, repr(res.exception))  # usage (v0.71.38)
         assert "evidence" in res.output.lower()
 
 
@@ -726,7 +731,7 @@ class TestShipCliLive:
         res = runner.invoke(
             ship_cmd.app, ["--base", "fake-base", "--adapter", "fake-adapter"]
         )
-        assert res.exit_code == 2, (res.output, repr(res.exception))
+        assert res.exit_code == 3, (res.output, repr(res.exception))
         assert "task-eval" in res.output.lower() or "task_eval" in res.output.lower()
 
     def test_live_baseline_override_supplies_base_scores(self, monkeypatch):
@@ -799,7 +804,7 @@ class TestShipCliLive:
                     "--baseline", "../escape.json",
                 ],
             )
-            assert res.exit_code == 2, (res.output, repr(res.exception))
+            assert res.exit_code == 3, (res.output, repr(res.exception))
             assert "baseline" in res.output.lower()
 
 
@@ -922,7 +927,7 @@ class TestShipCliSecurity:
                     "--judge-model", "http://localhost.attacker.com/model",
                 ],
             )
-            assert res.exit_code == 2, (res.output, repr(res.exception))
+            assert res.exit_code == 3, (res.output, repr(res.exception))
             assert "disallowed" in res.output.lower()
 
     def test_judge_url_ollama_allowed(self, monkeypatch):
@@ -976,7 +981,7 @@ class TestShipCliSecurity:
                 "--task-eval", "../escape.jsonl",
             ],
         )
-        assert res.exit_code == 2, (res.output, repr(res.exception))
+        assert res.exit_code == 3, (res.output, repr(res.exception))
         assert "cwd" in res.output.lower()
 
     def test_general_suite_too_large_rejected(self):
@@ -994,7 +999,7 @@ class TestShipCliSecurity:
                     "--general-suite", big,
                 ],
             )
-            assert res.exit_code == 2, (res.output, repr(res.exception))
+            assert res.exit_code == 3, (res.output, repr(res.exception))
             assert "too many" in res.output.lower()
 
     def test_general_suite_long_name_rejected(self):
@@ -1011,4 +1016,4 @@ class TestShipCliSecurity:
                     "--general-suite", "a" * 300,
                 ],
             )
-            assert res.exit_code == 2, (res.output, repr(res.exception))
+            assert res.exit_code == 3, (res.output, repr(res.exception))

@@ -8,12 +8,19 @@ from typing import Optional
 from rich.console import Console
 
 from soup_cli.config.schema import SoupConfig
-from soup_cli.utils.gpu import estimate_batch_size, model_size_from_name
+from soup_cli.trainer.stream_setup import StreamingSetupMixin
+from soup_cli.utils.gpu import (
+    bf16_fp16_flags,
+    estimate_batch_size,
+    model_size_from_name,
+    resolve_device_map,
+)
+from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 
 console = Console()
 
 
-class SimPOTrainerWrapper:
+class SimPOTrainerWrapper(StreamingSetupMixin):
     """High-level wrapper for SimPO training from SoupConfig.
 
     SimPO is a reference-free preference optimization method that uses
@@ -25,6 +32,11 @@ class SimPOTrainerWrapper:
     - chosen: the preferred response
     - rejected: the less preferred response
     """
+
+    #: TRL builds this loss's forward through ``concatenated_inputs`` +
+    #: ``torch.cat``, so chosen and rejected arrive as ONE tensor of twice
+    #: the configured batch. The VRAM pre-flight must budget for that.
+    _STREAM_ROWS_PER_EXAMPLE = 2
 
     def __init__(
         self,
@@ -61,23 +73,50 @@ class SimPOTrainerWrapper:
     def setup(self, dataset: dict) -> None:
         """Load model, tokenizer, apply LoRA, create SimPO (CPO) trainer."""
         from datasets import Dataset
-        from trl import CPOConfig, CPOTrainer
 
+        from soup_cli.trainer._trl_compat import (
+            prompt_length_kwargs,
+            resolve_trl_symbol,
+        )
         from soup_cli.trainer.sft import _enable_hf_transfer_progress
+
+        # #326 — trl 0.29.0 dropped CPOConfig / CPOTrainer from the public
+        # `trl` namespace; they live on under `trl.experimental.cpo`. SimPO is
+        # CPO with loss_type='simpo', so it moves with CPO.
+        cpo_config_cls = resolve_trl_symbol("CPOConfig", "trl.experimental.cpo")
+        cpo_trainer_cls = resolve_trl_symbol("CPOTrainer", "trl.experimental.cpo")
 
         _enable_hf_transfer_progress()
 
         cfg = self.config
         tcfg = cfg.training
-        use_unsloth = cfg.backend == "unsloth"
 
-        if use_unsloth:
+        # #353: seed before the model and any adapter are built.
+        apply_training_seed(tcfg)
+
+        use_unsloth = cfg.backend == "unsloth"
+        # v0.72.4 — layer streaming replaces the model-load path entirely (meta
+        # skeleton, never a resident load), so it dispatches ahead of the backend
+        # branches. The schema already rejects streaming + unsloth/mlx.
+        use_streaming = bool(getattr(tcfg, "stream_layers", False))
+
+        if use_streaming:
+            self._setup_streaming_transformers(cfg, tcfg)
+        elif use_unsloth:
             self._setup_unsloth(cfg, tcfg)
         else:
             self._setup_transformers(cfg, tcfg)
 
         trainable, total = self.model.get_nb_trainable_parameters()
-        pct = 100 * trainable / total
+        # v0.72.4 (mirrors sft.py) — under NF4 streaming PEFT's total is wrong
+        # by ~6.5x: it sizes Params4bit as `numel * 2 * quant_storage.itemsize`,
+        # right for a RESIDENT one but not for our `meta` placeholder, which
+        # still carries the LOGICAL shape. The sharder counted the real source
+        # elements, so prefer that.
+        stream_total = getattr(self._stream_runtime, "total_params", 0)
+        if stream_total:
+            total = stream_total
+        pct = 100 * trainable / total if total else 0.0
         console.print(
             f"[green]LoRA applied:[/] {trainable:,} trainable"
             f" / {total:,} total ({pct:.2f}%)"
@@ -121,13 +160,28 @@ class SimPOTrainerWrapper:
         warmup_steps = int(total_steps * tcfg.warmup_ratio)
 
         # --- SimPO config (via CPOTrainer with loss_type='simpo') ---
-        cpo_config = CPOConfig(
+        from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
+
+        _bf16, _fp16 = bf16_fp16_flags(self.device)
+        cpo_config = cpo_config_cls(
             output_dir=str(output_dir),
             num_train_epochs=tcfg.epochs,
             per_device_train_batch_size=batch_size,
             gradient_accumulation_steps=tcfg.gradient_accumulation_steps,
             learning_rate=tcfg.lr,
             warmup_steps=warmup_steps,
+            # #328 — StreamedDecoderLayer already wraps every layer in
+            # checkpoint(use_reentrant=False). Letting HF check-point the INNER
+            # decoder layer as well recomputes it after functional_call's
+            # reparametrisation context has exited and restored the `meta`
+            # placeholders, which on torch 2.13 + CUDA dies with "Tensor on device
+            # cuda:0 is not on the expected device meta!". Passing this explicitly
+            # also stops the value being decided by TRL's default, which is not
+            # stable across versions (False on trl 0.19.1, True on 0.26.2) and was
+            # silently dropping the user's own setting on the older one.
+            gradient_checkpointing=should_enable_hf_gradient_checkpointing(
+                tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
+            ),
             weight_decay=tcfg.weight_decay,
             max_grad_norm=tcfg.max_grad_norm,
             optim=tcfg.optimizer,
@@ -135,22 +189,25 @@ class SimPOTrainerWrapper:
             logging_steps=tcfg.logging_steps,
             save_steps=tcfg.save_steps,
             save_total_limit=3,
-            bf16=self.device == "cuda",
+            bf16=_bf16,
+            fp16=_fp16,
             report_to=self.report_to,
             remove_unused_columns=False,
             deepspeed=self.deepspeed_config,
+            **training_seed_kwargs(tcfg),
             **(self.fsdp_config or {}),
             loss_type="simpo",
             cpo_alpha=tcfg.cpo_alpha,
             simpo_gamma=tcfg.simpo_gamma,
             max_length=cfg.data.max_length,
-            max_prompt_length=cfg.data.max_length // 2,
+            # #326 — CPOConfig lost `max_prompt_length` at 0.28.0. See dpo.py.
+            **prompt_length_kwargs(cpo_config_cls, cfg.data.max_length // 2),
             **({"neftune_noise_alpha": tcfg.neftune_alpha}
                if tcfg.neftune_alpha is not None else {}),
         )
 
         # --- Trainer ---
-        self.trainer = CPOTrainer(
+        self.trainer = cpo_trainer_cls(
             model=self.model,
             args=cpo_config,
             train_dataset=train_ds,
@@ -192,7 +249,7 @@ class SimPOTrainerWrapper:
         )
 
         console.print(f"[dim]Loading model: {cfg.base}[/]")
-        dev_map = "cpu" if self.device == "cpu" else "auto"
+        dev_map = resolve_device_map(self.device)
         model_kwargs = {
             "trust_remote_code": self._trust_remote_code, "device_map": dev_map,
         }
@@ -293,8 +350,10 @@ class SimPOTrainerWrapper:
 
         from soup_cli.utils.v028_features import activation_offloading_context
 
-        with activation_offloading_context(
-            self.config.training, self._output_dir,
+        # v0.72.4 — the shared context releases the streaming weight source even
+        # if training raises (see StreamingSetupMixin._training_context).
+        with self._training_context(
+            activation_offloading_context(self.config.training, self._output_dir)
         ):
             self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         duration = time.time() - start

@@ -8,7 +8,13 @@ from typing import Optional
 from rich.console import Console
 
 from soup_cli.config.schema import SoupConfig
-from soup_cli.utils.gpu import estimate_batch_size, model_size_from_name
+from soup_cli.utils.gpu import (
+    bf16_fp16_flags,
+    estimate_batch_size,
+    model_size_from_name,
+    resolve_device_map,
+)
+from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 
 console = Console()
 
@@ -63,12 +69,17 @@ class IPOTrainerWrapper:
         from datasets import Dataset
         from trl import DPOConfig, DPOTrainer
 
+        from soup_cli.trainer._trl_compat import prompt_length_kwargs
         from soup_cli.trainer.sft import _enable_hf_transfer_progress
 
         _enable_hf_transfer_progress()
 
         cfg = self.config
         tcfg = cfg.training
+
+        # #353: seed before the model and any adapter are built.
+        apply_training_seed(tcfg)
+
         use_unsloth = cfg.backend == "unsloth"
 
         if use_unsloth:
@@ -122,6 +133,7 @@ class IPOTrainerWrapper:
 
         # --- IPO config (DPO with loss_type='ipo') ---
         # In IPO, the beta parameter acts as tau (regularization strength)
+        _bf16, _fp16 = bf16_fp16_flags(self.device)
         dpo_config = DPOConfig(
             output_dir=str(output_dir),
             num_train_epochs=tcfg.epochs,
@@ -136,15 +148,18 @@ class IPOTrainerWrapper:
             logging_steps=tcfg.logging_steps,
             save_steps=tcfg.save_steps,
             save_total_limit=3,
-            bf16=self.device == "cuda",
+            bf16=_bf16,
+            fp16=_fp16,
             report_to=self.report_to,
             remove_unused_columns=False,
             deepspeed=self.deepspeed_config,
+            **training_seed_kwargs(tcfg),
             **(self.fsdp_config or {}),
             loss_type="ipo",
             beta=tcfg.ipo_tau,
             max_length=cfg.data.max_length,
-            max_prompt_length=cfg.data.max_length // 2,
+            # #326 — see dpo.py; IPO rides the same DPOConfig.
+            **prompt_length_kwargs(DPOConfig, cfg.data.max_length // 2),
             **({"neftune_noise_alpha": tcfg.neftune_alpha}
                if tcfg.neftune_alpha is not None else {}),
         )
@@ -192,7 +207,7 @@ class IPOTrainerWrapper:
         )
 
         console.print(f"[dim]Loading model: {cfg.base}[/]")
-        dev_map = "cpu" if self.device == "cpu" else "auto"
+        dev_map = resolve_device_map(self.device)
         model_kwargs = {
             "trust_remote_code": self._trust_remote_code, "device_map": dev_map,
         }

@@ -22,10 +22,132 @@
 - [Synthetic Data Forge](#synthetic-data-forge)
 - [Data Quality Scorecard](#data-quality-scorecard)
 - [Remote Datasets (S3 / GCS / Azure / OCI)](#remote-datasets-s3--gcs--azure--oci)
+- [Semantic dedup (`soup data dedup --semantic`)](#semantic-dedup-soup-data-dedup---semantic)
+- [Topic map (`soup data topics`)](#topic-map-soup-data-topics)
+- [Canaries (`soup data canary insertcheck`)](#canaries-soup-data-canary-insertcheck)
 - [Data Recipe DAG](#data-recipe-dag)
 - [Data Mixing Optimizer (BETA)](#data-mixing-optimizer-beta)
 - [AOT Tokenization with `soup data preprocess`](#aot-tokenization-with-soup-data-preprocess)
 - [Data Recipe DAG Runner (`soup data recipe --execute`)](#data-recipe-dag-runner-soup-data-recipe---execute)
+
+---
+
+## Semantic dedup (`soup data dedup --semantic`)
+
+`soup data dedup` removes near-duplicates with MinHash by default — fast, no
+torch, but **lexical**: it compares shared token shingles, so two rows that say
+the same thing in different words look unrelated to it.
+
+`--semantic` compares embedding cosine instead:
+
+```bash
+soup data dedup train.jsonl --semantic -o clean.jsonl
+soup data dedup train.jsonl --semantic --threshold 0.85 --field text -o clean.jsonl
+soup data dedup train.jsonl --semantic --embed-model sentence-transformers/all-mpnet-base-v2
+```
+
+Requires the `[train]` extra (it reuses `transformers`; there is no new
+dependency) and downloads a small embedding model on first use. Plain MinHash
+`dedup` stays on the light core.
+
+**What it buys you.** Measured against MinHash on the same rows
+(all-MiniLM-L6-v2):
+
+| pair | cosine | MinHash | `--semantic` |
+|---|---|---|---|
+| exact duplicate | 1.000 | caught | caught |
+| "sorts **a list** of integers" / "sorts **an array** of integers" | 0.908 | **missed** | caught |
+| "which sorts a list of **ints**" (reworded) | 0.880 | **missed** | caught |
+| "Add two numbers" / "Multiply two numbers" | 0.759 | kept | kept (correct) |
+
+So `--semantic` catches **rewordings** MinHash's shingling scores as distinct.
+
+### It is not a paraphrase detector — and why the default is 0.8
+
+Heavier paraphrases are **not** reliably separable. Measured, paraphrase cosines
+(0.49–0.76) *overlap* with genuinely-distinct rows (0.54–0.76):
+
+- "reverse a string" / "invert the order of characters" — a **true paraphrase** — scores **0.491**
+- "Add two numbers" / "Multiply two numbers" — **two rows you must keep** — scores **0.759**
+
+A real paraphrase can score *lower* than two rows that must both survive, so **no
+threshold cleanly separates them**. Lowering `--threshold` to chase paraphrase
+recall deletes real training rows — silent data loss, which is worse than keeping
+a duplicate. The 0.8 default is deliberately conservative. Raise or lower it only
+against your own data, and check what got dropped.
+
+`--threshold` means Jaccard for MinHash and cosine for `--semantic`. They are
+different scales; a value tuned for one is not meaningful for the other.
+
+## Topic map (`soup data topics`)
+
+See what you are actually training on:
+
+```bash
+soup data topics train.jsonl                       # 'auto' picks the cluster count
+soup data topics train.jsonl --clusters 8 -o topics.json
+```
+
+Embeds every row, clusters with k-means, and labels each cluster with c-TF-IDF
+terms — terms frequent in *that* cluster and rare elsewhere, so filler words like
+"the" never become a label. Prints a coverage table plus a warning for any topic
+under 2% of the data:
+
+```
+        Topic map — 4200 rows, 6 clusters
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━┳━━━━━━━━━━┓
+┃ Topic                    ┃ Rows ┃ Coverage ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━╇━━━━━━━━━━┩
+│ function / python / code │ 3444 │    82.0% │
+│ theorem / proof / math   │  252 │     6.0% │
+│ refuse / harmful / safe  │   42 │     1.0% │
+└──────────────────────────┴──────┴──────────┘
+topic 'refuse / harmful / safe' is thin: 1.0% of rows (42/4200)
+```
+
+Labels are **emergent term clusters**, not a classification against a fixed
+taxonomy: "82% code" means 82% of rows landed in a cluster whose top terms look
+like code. Requires `[train]`.
+
+## Canaries (`soup data canary insert|check`)
+
+Prove whether a model memorized your data — for leak detection and provenance.
+
+```bash
+# 1. insert K unique secrets (keep the manifest OUT of your repo)
+soup data canary insert train.jsonl -o canaried.jsonl --count 16 --manifest secrets.json
+
+# 2. train on canaried.jsonl as usual, then:
+soup data canary check --manifest secrets.json --base ./my-model --adapter ./lora
+```
+
+`check` measures the model's loss on each inserted secret and ranks it against
+never-inserted **controls** drawn from the same secret space and sharing the same
+carrier prompt — so a low loss means the *secret* is unusually likely, not the
+prompt. Exit **2** on MAJOR, so CI can gate on a leak.
+
+This is loss-vs-controls (Carlini et al., *The Secret Sharer*), not "ask the model
+and see if it says the secret": a model can memorize a canary and still not emit
+it under greedy decoding, so "nothing came back" would be false reassurance.
+
+The verdict asks whether **more** canaries look memorized than chance explains
+(binomial tail, α=0.05) rather than whether any single one dipped low — with 16
+canaries, an "any single one" rule fires on a **clean** model about 15% of the
+time, which would make a CI gate useless.
+
+Measured on SmolLM2-135M:
+
+| model | loss | percentiles | verdict |
+|---|---|---|---|
+| trained on the canaries | 1.7–2.5 | all 0.0% | **MAJOR** (exit 2) |
+| never saw them | 4.1–6.2 | 1.6%–93% | OK (exit 0) |
+
+**The manifest is the sensitive artifact**, not the dataset: anyone holding it can
+reproduce the secrets. It is written `0600` on POSIX and must not be committed
+alongside the data it protects. `check --output` embeds the same secrets.
+
+Exposure is a **sampled-control approximation**, not full-space rank enumeration —
+"no exposure" is not proof of no memorization.
 
 ---
 
@@ -62,6 +184,15 @@ soup data persona-mix --prompts prompts.jsonl --n 500 --output mixed.jsonl
 
 # Brain-rot detector (arXiv 2510.13928) — refuses to train on excessive slop
 soup data brain-rot data.jsonl --strict --max-major-fraction 0.10
+
+# Best-of-N rejection sampling (v0.71.31) — sample N locally, a judge picks the winner
+soup data best-of-n --base HuggingFaceTB/SmolLM2-135M-Instruct \
+    --prompts prompts.jsonl --n 8 --judge ollama://llama3.1 \
+    -o best_of_n.jsonl --emit-pairs pairs.jsonl
+
+# Evol-Instruct (WizardLM depth/breadth, v0.71.31) — grow instruction diversity
+soup data evolve --input seeds.jsonl --provider ollama --model llama3.1 \
+    --strategy depth --rounds 2 -o evolved.jsonl
 ```
 
 Every command applies the project-wide TOCTOU policy (`os.lstat + S_ISLNK` symlink rejection before any open) and cwd containment via the shared `paths.enforce_under_cwd_and_no_symlink` helper. All five are LIVE: `soup build` materialises with five built-in transforms (`identity` / `drop_empty` / `lowercase` / `strip` / `dedup_exact`) and SQLite-tracked incremental re-transform (v0.71.6); `soup data gen-magpie` harvests via raw completion against `--provider ollama|vllm` (loopback-only; `anthropic` rejected — no raw-completion endpoint, v0.71.6).
@@ -206,7 +337,7 @@ soup data generate --prompt "..." --validate
 # Auto-filter by quality (coherence scoring)
 soup data generate --prompt "..." --filter
 
-# Auto-dedup (MinHash, requires: pip install 'soup-cli[data]')
+# Auto-dedup (MinHash, requires: pip install "soup-cli[data]")
 soup data generate --prompt "..." --dedup
 
 # Full quality pipeline: validate + filter + dedup
@@ -343,6 +474,13 @@ Or use `.txt` files directly (one document per line).
 {"audio": "recording.wav", "messages": [{"role": "user", "content": "Transcribe."}, {"role": "assistant", "content": "Hello world."}]}
 ```
 
+**ASR (Whisper transcription — `data.format: asr`, v0.71.32):**
+```json
+{"audio": "clip.wav", "text": "hello world"}
+```
+Audio paths resolve under `data.audio_dir` (containment-checked). Used by
+`task: asr` and `soup infer --task asr`. See [Training → ASR](training.md).
+
 **PRM (process reward, stepwise-supervised):**
 ```json
 {"prompt": "Solve 2+2", "completions": ["First, add", "Result is 4"], "labels": [true, true]}
@@ -453,7 +591,7 @@ soup data convert ./data/train.jsonl --to sharegpt --output converted.jsonl
 # Merge multiple datasets
 soup data merge data1.jsonl data2.jsonl --output merged.jsonl --shuffle
 
-# Remove near-duplicates (requires: pip install 'soup-cli[data]')
+# Remove near-duplicates (requires: pip install "soup-cli[data]")
 soup data dedup ./data/train.jsonl --threshold 0.8
 
 # Extended statistics (length distribution, token counts, languages)
@@ -676,10 +814,8 @@ Five checks: `length_bias` — the **#1 silent DPO degradation**: `chosen`
 systematically longer than `rejected`, reported as a Cohen's d effect size —
 `label_imbalance` (KTO desirable:undesirable ratio), `near_duplicates`
 (MinHash/LSH, reuses the `soup data dedup` kernel; requires
-`pip install 'soup-cli[data]'`, degrades to an advisory skip otherwise),
+`pip install "soup-cli[data]"`, degrades to an advisory skip otherwise),
 `identical_pairs` (`chosen == rejected` — zero preference signal), and
 `prompt_leak` (the prompt echoed verbatim inside the completion, a common
 synthetic-data pipeline bug). Same OK/MINOR/MAJOR taxonomy and exit codes as
 `soup data doctor`.
-
-

@@ -18,7 +18,13 @@ from typing import TYPE_CHECKING, Optional
 from rich.console import Console
 
 from soup_cli.config.schema import SoupConfig
-from soup_cli.utils.gpu import estimate_batch_size, model_size_from_name
+from soup_cli.utils.gpu import (
+    bf16_fp16_flags,
+    estimate_batch_size,
+    model_size_from_name,
+    resolve_device_map,
+)
+from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 
 if TYPE_CHECKING:
     from soup_cli.config.schema import TrainingConfig  # noqa: F401
@@ -98,14 +104,26 @@ class BCOTrainerWrapper:
     def setup(self, dataset: dict) -> None:
         """Load model, tokenizer, apply LoRA, create BCO trainer."""
         from datasets import Dataset
-        from trl import BCOConfig, BCOTrainer
 
+        from soup_cli.trainer._trl_compat import (
+            prompt_length_kwargs,
+            resolve_trl_symbol,
+        )
         from soup_cli.trainer.sft import _enable_hf_transfer_progress
+
+        # #326 — trl 0.29.0 dropped BCOConfig / BCOTrainer from the public
+        # `trl` namespace; they live on under `trl.experimental.bco`.
+        bco_config_cls = resolve_trl_symbol("BCOConfig", "trl.experimental.bco")
+        bco_trainer_cls = resolve_trl_symbol("BCOTrainer", "trl.experimental.bco")
 
         _enable_hf_transfer_progress()
 
         cfg = self.config
         tcfg = cfg.training
+
+        # #353: seed before the model and any adapter are built.
+        apply_training_seed(tcfg)
+
         use_unsloth = cfg.backend == "unsloth"
 
         if use_unsloth:
@@ -166,7 +184,8 @@ class BCOTrainerWrapper:
         warmup_steps = int(total_steps * tcfg.warmup_ratio)
 
         # --- BCO config ---
-        bco_config = BCOConfig(
+        _bf16, _fp16 = bf16_fp16_flags(self.device)
+        bco_config = bco_config_cls(
             output_dir=str(output_dir),
             num_train_epochs=tcfg.epochs,
             per_device_train_batch_size=batch_size,
@@ -180,14 +199,17 @@ class BCOTrainerWrapper:
             logging_steps=tcfg.logging_steps,
             save_steps=tcfg.save_steps,
             save_total_limit=3,
-            bf16=self.device == "cuda",
+            bf16=_bf16,
+            fp16=_fp16,
             report_to=self.report_to,
             remove_unused_columns=False,
             deepspeed=self.deepspeed_config,
+            **training_seed_kwargs(tcfg),
             **(self.fsdp_config or {}),
             beta=tcfg.bco_beta,
             max_length=cfg.data.max_length,
-            max_prompt_length=cfg.data.max_length // 2,
+            # #326 — BCOConfig lost `max_prompt_length` at 0.28.0. See dpo.py.
+            **prompt_length_kwargs(bco_config_cls, cfg.data.max_length // 2),
             **(
                 {"neftune_noise_alpha": tcfg.neftune_alpha}
                 if tcfg.neftune_alpha is not None
@@ -196,7 +218,7 @@ class BCOTrainerWrapper:
         )
 
         # --- Trainer ---
-        self.trainer = BCOTrainer(
+        self.trainer = bco_trainer_cls(
             model=self.model,
             args=bco_config,
             train_dataset=train_ds,
@@ -238,7 +260,7 @@ class BCOTrainerWrapper:
         )
 
         console.print(f"[dim]Loading model: {cfg.base}[/]")
-        dev_map = "cpu" if self.device == "cpu" else "auto"
+        dev_map = resolve_device_map(self.device)
         model_kwargs = {
             "trust_remote_code": self._trust_remote_code, "device_map": dev_map,
         }

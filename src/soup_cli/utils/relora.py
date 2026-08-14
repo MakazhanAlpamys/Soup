@@ -103,12 +103,31 @@ def _is_lora_param_name(name: str) -> bool:
     return ("lora_A" in name) or ("lora_B" in name)
 
 
-class ReLoRACallback:
-    """HF TrainerCallback that magnitude-prunes LoRA weights every N steps.
+def _try_import_callback_base():
+    """Return HF ``TrainerCallback`` (or ``object`` when transformers is absent).
 
-    We don't subclass ``transformers.TrainerCallback`` here so importing
-    this module never loads transformers. The Trainer's callback dispatch
-    works structurally — any object with the right method names is fine.
+    Imported inside the function so the module has no top-level transformers
+    dependency; the class below still inherits every no-op event stub the HF
+    dispatch loop requires. Mirrors ``monitoring/curriculum_callback.py`` /
+    ``utils/lisa.py``.
+    """
+    try:
+        from transformers import TrainerCallback  # noqa: PLC0415
+
+        return TrainerCallback
+    except Exception:  # noqa: BLE001 — transformers optional in slim test envs.
+        return object
+
+
+class ReLoRACallback(_try_import_callback_base()):  # type: ignore[misc]
+    """HF ``TrainerCallback`` that magnitude-prunes LoRA weights every N steps.
+
+    Subclasses the lazily-resolved ``TrainerCallback`` so it inherits the no-op
+    default for every Trainer event — HF's ``CallbackHandler.call_event``
+    dispatches every event via ``getattr(cb, event)`` with no ``hasattr`` guard,
+    so a bare duck-typed callback crashes on ``on_epoch_begin`` (#308). Only
+    ``on_step_end`` is overridden. The lazy factory keeps the module import free
+    of transformers.
     """
 
     def __init__(self, policy: Optional[ReLoRAPolicy], console: Any = None) -> None:

@@ -56,6 +56,15 @@ def doctor(
     nccl: bool = typer.Option(
         False, "--nccl", help="Measure NCCL bandwidth and check against reference table."
     ),
+    disk: bool = typer.Option(
+        False,
+        "--disk",
+        help=(
+            "Detect the disk media type (NVMe / SSD / HDD). Layer streaming's "
+            "disk overflow tier needs NVMe. Off by default: the probe costs ~9 s "
+            "on Windows."
+        ),
+    ),
 ):
     """Check system dependencies, GPU, and compatibility."""
     console.print("[bold]Soup Doctor[/] - checking your environment...\n")
@@ -75,7 +84,7 @@ def doctor(
     _check_gpu()
 
     # Resources check
-    _check_resources()
+    _check_resources(probe_disk=disk)
 
     # Dependencies table
     table = Table(title="Dependencies")
@@ -367,7 +376,7 @@ def _get_ram_gb() -> str:
     return "Unknown"
 
 
-def _check_resources():
+def _check_resources(probe_disk: bool = False):
     """Check RAM and Disk space and display info."""
     import shutil
 
@@ -384,6 +393,32 @@ def _check_resources():
         disk_str = "Unknown"
 
     table.add_row("Disk", disk_str)
+
+    # v0.72.3 — layer streaming's disk overflow tier needs NVMe: on a spinning
+    # disk each step costs 2 seeks per layer (plan P11), which does not merely
+    # run slower, it thrashes. Reported here so the refusal is not the first
+    # time an operator hears about it.
+    #
+    # Opt-in behind --disk, matching this command's own --nccl convention for
+    # expensive probes. Measured on the dev box: the Windows PowerShell query
+    # costs ~9 s cold and ~2.4 s warm (17.6 s -> 20.0 s on `soup doctor`), paid
+    # by every user including the majority who never touch layer streaming. A
+    # streaming run does its own lazy probe when the tier decision actually
+    # depends on the answer, so nothing is lost by defaulting this off.
+    if probe_disk:
+        try:
+            from soup_cli.utils.layer_stream import detect_disk_kind
+
+            kind = detect_disk_kind(".")
+        except Exception:  # noqa: BLE001 — a diagnostic must never crash the report
+            kind = "unknown"
+        verdict = {
+            "nvme": "[green]NVMe[/] — layer streaming can use the disk overflow tier",
+            "ssd": "[yellow]SATA SSD[/] — layer streaming refuses the disk tier (RAM only)",
+            "hdd": "[red]HDD[/] — layer streaming refuses the disk tier (RAM only)",
+        }.get(kind, "[yellow]Unknown[/] — layer streaming will refuse the disk tier")
+        table.add_row("Disk type", verdict)
+
     console.print(table)
     console.print()
 

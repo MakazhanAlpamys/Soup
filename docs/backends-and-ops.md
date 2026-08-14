@@ -79,7 +79,7 @@ Fine-tune on M1-M4 Macs via Apple's [MLX](https://github.com/ml-explore/mlx) fra
 
 ```bash
 # Install MLX support
-pip install 'soup-cli[mlx]'
+pip install "soup-cli[mlx]"
 ```
 
 ```yaml
@@ -99,7 +99,7 @@ training:
     alpha: 32
 ```
 
-MLX backend supports SFT, DPO, and GRPO. Use `soup recipes search --tag mlx` for ready-made Apple Silicon configs.
+MLX backend supports SFT. `backend: mlx` with `task: dpo` or `task: grpo` is refused when the config is loaded, with an error naming the task — upstream `mlx-lm` ships no DPO/GRPO training helper, so those wrappers exist only as a backstop for callers that bypass config validation. Requires `mlx-lm >= 0.31.3`. Use `soup recipes search --tag mlx` for ready-made Apple Silicon configs.
 
 
 ## Unsloth Backend (2-5x Faster Training)
@@ -108,7 +108,7 @@ Use the [Unsloth](https://github.com/unslothai/unsloth) backend for significantl
 
 ```bash
 # Install unsloth support
-pip install 'soup-cli[fast]'
+pip install "soup-cli[fast]"
 ```
 
 Then add one line to your config:
@@ -143,7 +143,7 @@ app from your `soup.yaml` for serverless, per-second-billed GPU training. The co
 base64-embedded as **data** — no code interpolation, no secrets in the generated stub.
 
 ```bash
-pip install 'soup-cli[modal]'   # only needed for live submit
+pip install "soup-cli[modal]"   # only needed for live submit
 
 # Plan-only (default): write the stub + print the `modal run` command.
 soup train --config soup.yaml --cloud modal --gpu a100
@@ -585,7 +585,7 @@ Full-screen Textual dashboard. Two-pane: run list (left) + selected-run detail
 (right). `r` refreshes, `q` quits.
 
 ```bash
-pip install 'soup-cli[tui]'
+pip install "soup-cli[tui]"
 soup tui --refresh 1.0 --limit 50
 ```
 
@@ -743,15 +743,9 @@ pip install soup-cli[trackers]   # mlflow + swanlab + trackio
 ```
 
 
-## Telemetry (opt-IN, hardware-info-only)
+## Telemetry (not yet wired)
 
-Soup ships an opt-IN telemetry sender that POSTs hardware-info-only payloads (`soup_version` / `command` / `python` major.minor / `os` / `arch` / optional `duration_seconds`) — no dataset paths, model names, or config contents. Enable per-shell:
-
-```bash
-SOUP_TELEMETRY=1 soup train --config soup.yaml
-```
-
-The sender uses a 1-second hard timeout, HTTPS-only with private-IP / link-local rejection (same SSRF policy as hub endpoints), and swallows every exception silently — telemetry can never crash training. Disabled by default until a public privacy policy ships.
+Soup contains opt-in, hardware-info-only telemetry primitives in `utils/trackers.py` (`build_telemetry_payload` / `send_telemetry_payload`), but they are **not wired to any command** — no data is ever sent, and no environment variable enables sending today. When wired, the payload will carry only `soup_version` / `command` / `python` major.minor / `os` / `arch` / optional `duration_seconds` — never dataset paths, model names, or config contents — behind a 1-second hard timeout and the same HTTPS-only, private-IP-rejecting SSRF policy as hub endpoints, swallowing every exception so telemetry can never crash training. Wiring is deferred until a public privacy policy is published.
 
 
 ## Plugin System
@@ -926,5 +920,3 @@ soup license-advisor --target b2c --license llama-3 --monthly-active-users 80000
 ```
 
 The Llama-family allowlist is tight (no `.startswith` over-match), so a hypothetical future `llama-permissive-2030` won't false-trigger the 700M-MAU gate. Composes with v0.60 `soup adapters merge --license <id>` for the merge-time conflict gate.
-
-

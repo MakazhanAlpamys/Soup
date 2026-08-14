@@ -1227,4 +1227,3 @@ class TestEnableHfTransferProgress:
 
         # Should not raise
         _enable_hf_transfer_progress()
-

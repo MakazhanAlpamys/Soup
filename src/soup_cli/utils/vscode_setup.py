@@ -9,9 +9,8 @@ from __future__ import annotations
 
 import json
 import os
-import stat
 
-from soup_cli.utils.paths import is_under_cwd
+from soup_cli.utils.paths import atomic_write_text, is_under_cwd
 
 
 def build_launch_json(*, config_path: str = "soup.yaml") -> dict:
@@ -81,24 +80,15 @@ def write_vscode_launch(
     payload = build_launch_json(config_path=config_path)
     os.makedirs(real, exist_ok=True)
     out_path = os.path.join(real, "launch.json")
-    # TOCTOU defence: reject symlinks at the target path regardless of
-    # `force` (mirrors v0.33.0 #22 prune_checkpoints policy). Without this
-    # guard, force=True would follow a pre-placed symlink and overwrite a
-    # file outside cwd.
-    try:
-        st = os.lstat(out_path)
-    except FileNotFoundError:
-        st = None
-    if st is not None:
-        if stat.S_ISLNK(st.st_mode):
-            raise ValueError(
-                "launch.json target is a symlink; aborting"
-            )
-        if not force:
-            raise FileExistsError(
-                f"{out_path} already exists; pass force=True to overwrite"
-            )
-    with open(out_path, "w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=2, ensure_ascii=False)
-        f.write("\n")
+    # Refuse to clobber an existing non-symlink file unless force. A symlink at
+    # the target (regardless of force) is rejected by atomic_write_text's
+    # enforce_under_cwd_and_no_symlink, which also closes the lstat-then-open
+    # TOCTOU window: bytes go to a fresh mkstemp file + os.replace, never
+    # through a swapped-in symlink.
+    if not force and os.path.lexists(out_path) and not os.path.islink(out_path):
+        raise FileExistsError(
+            f"{out_path} already exists; pass force=True to overwrite"
+        )
+    body = json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
+    atomic_write_text(body, out_path, field="launch.json")
     return out_path

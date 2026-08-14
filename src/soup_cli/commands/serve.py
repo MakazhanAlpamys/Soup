@@ -1,8 +1,10 @@
 """soup serve — local inference server with OpenAI-compatible API."""
 
+import contextlib
 import json
 import logging
 import re
+import threading
 import time
 import uuid
 from collections.abc import Mapping
@@ -116,6 +118,19 @@ def serve(
         0.9,
         "--gpu-memory",
         help="Fraction of GPU memory to use (vLLM only, 0.0-1.0)",
+    ),
+    max_model_len: Optional[int] = typer.Option(
+        None,
+        "--max-model-len",
+        # NOTE: deliberately no ``min=`` — click renders it as an
+        # "INTEGER RANGE [x>=1]" metavar, which widens the type column and
+        # truncates every other option name in ``serve --help``. Bounds are
+        # checked in the body instead.
+        help=(
+            "Maximum sequence length for the vLLM engine (vLLM only). Lower "
+            "this when the engine refuses to start because the KV cache does "
+            "not fit. Default: the model's own maximum."
+        ),
     ),
     speculative_model: Optional[str] = typer.Option(
         None,
@@ -458,7 +473,7 @@ def serve(
     except ImportError:
         console.print(
             "[red]FastAPI/uvicorn not installed.[/]\n"
-            "Install with: [bold]pip install 'soup-cli[serve]'[/]"
+            "Install with: [bold]pip install \"soup-cli\\[serve]\"[/]"
         )
         raise typer.Exit(1)
 
@@ -471,6 +486,26 @@ def serve(
             "[bold]sglang[/], [bold]mii[/]"
         )
         raise typer.Exit(1)
+
+    # #333 — --dashboard used to be accepted and then do nothing on backends
+    # whose app has no /metrics route. Say so instead of no-opping.
+    if dashboard:
+        _dashboard_note = _dashboard_warning(backend)
+        if _dashboard_note:
+            console.print(f"[yellow]Warning:[/] {_dashboard_note}")
+
+    # #333 — --max-model-len is a vLLM engine argument. Bounds are checked
+    # here (see the flag definition for why not via ``min=``), and using it on
+    # another backend warns rather than being silently dropped.
+    if max_model_len is not None:
+        if max_model_len < 1:
+            console.print("[red]--max-model-len:[/] must be >= 1.")
+            raise typer.Exit(1)
+        if backend != "vllm":
+            console.print(
+                "[yellow]Warning:[/] --max-model-len applies to "
+                f"--backend vllm only; ignored for the {backend} backend."
+            )
 
     # DeepSpeed-MII v0.27.0: dependency check only — live pipeline wiring
     # ships in v0.27.1 once we stabilize the OpenAI-compat shim. We exit
@@ -535,7 +570,7 @@ def serve(
         if not is_vllm_available():
             console.print(
                 "[red]vLLM not installed.[/]\n"
-                "Install with: [bold]pip install 'soup-cli[serve-fast]'[/]"
+                "Install with: [bold]pip install \"soup-cli\\[serve-fast]\"[/]"
             )
             raise typer.Exit(1)
 
@@ -546,7 +581,7 @@ def serve(
         if not check_sglang_available():
             console.print(
                 "[red]SGLang not installed.[/]\n"
-                "Install with: [bold]pip install 'soup-cli[sglang]'[/]"
+                "Install with: [bold]pip install \"soup-cli\\[sglang]\"[/]"
             )
             raise typer.Exit(1)
 
@@ -622,20 +657,32 @@ def serve(
 
     # Auto-pair draft model for speculative decoding
     if auto_spec and not speculative_model:
+        from rich.markup import escape as _esc
+
         from soup_cli.utils.spec_pairing import pick_draft_model
+
+        # A paired value can come from the local draft registry (a file that
+        # may be edited outside this invocation), so strip control bytes and
+        # escape Rich markup before printing — escape() alone leaves raw
+        # ESC/OSC sequences live (mirrors commands/draft.py::_for_terminal).
+        _ctrl = {i: None for i in range(0x20) if i not in (0x09, 0x0A, 0x0D)}
+        _ctrl[0x7F] = None
+
+        def _safe(value: str) -> str:
+            return _esc(str(value).translate(_ctrl))
 
         target_for_pairing = base_model or str(model_path)
         paired = pick_draft_model(target_for_pairing)
         if paired:
             speculative_model = paired
             console.print(
-                f"[green]Auto-paired draft model:[/] {paired} "
-                f"(target: {target_for_pairing})"
+                f"[green]Auto-paired draft model:[/] {_safe(paired)} "
+                f"(target: {_safe(target_for_pairing)})"
             )
         else:
             console.print(
                 f"[yellow]--auto-spec: no known draft model for "
-                f"{target_for_pairing}. Skipping speculative decoding.[/]"
+                f"{_safe(target_for_pairing)}. Skipping speculative decoding.[/]"
             )
 
     # Validate structured-output flags up front
@@ -722,6 +769,25 @@ def serve(
             console.print(f"[red]{exc}[/]")
             raise typer.Exit(1)
 
+    # v0.36.0 Part B: --trust-remote-code default-deny, resolved ONCE for
+    # every backend. vLLM previously loaded with an unconditional
+    # trust_remote_code=True (arbitrary repo code, zero notice) — resolve the
+    # same gate + warning panel the transformers path uses so no backend
+    # silently executes an untrusted repo's code.
+    from soup_cli.utils.trust_remote import (
+        model_requires_trust_remote_code,
+        resolve_trust_remote_code,
+    )
+
+    _trust_probe_target = base_model or str(model_path)
+    _trust_requires = model_requires_trust_remote_code(str(model_path)) or False
+    resolved_trust = resolve_trust_remote_code(
+        _trust_probe_target,
+        requested=trust_remote_code,
+        console=console,
+        requires_remote_code=_trust_requires,
+    )
+
     if backend == "vllm":
         if speculative_model:
             console.print(
@@ -741,6 +807,9 @@ def serve(
             num_speculative_tokens=num_speculative_tokens,
             enable_prefix_caching=prefix_cache,
             quantization=auto_quant_kwargs.get("quantization"),
+            trust_remote_code=resolved_trust,
+            max_model_len=max_model_len,
+            enable_dashboard=dashboard,
         )
     elif backend == "sglang":
         app = _serve_sglang(
@@ -752,21 +821,8 @@ def serve(
             gpu_memory_utilization=gpu_memory_utilization,
         )
     else:
-        # Transformers backend (original).
-        # v0.36.0 Part B: --trust-remote-code default-deny.
-        from soup_cli.utils.trust_remote import (
-            model_requires_trust_remote_code,
-            resolve_trust_remote_code,
-        )
-
-        probe_target = base_model or str(model_path)
-        requires = model_requires_trust_remote_code(str(model_path)) or False
-        resolved_trust = resolve_trust_remote_code(
-            probe_target,
-            requested=trust_remote_code,
-            console=console,
-            requires_remote_code=requires,
-        )
+        # Transformers backend (original). ``resolved_trust`` was computed
+        # once above (v0.36.0 Part B default-deny) and shared across backends.
 
         # v0.71.17 #259 — serve-time MoLE loads its OWN base + N task LoRAs +
         # gate; the `model` CLI arg is the base, the manifest supplies adapters
@@ -813,6 +869,27 @@ def serve(
             console.print(
                 f"[green]KV cache:[/] {resolved_kv_runtime.kv_cache_type} "
                 f"— {resolved_kv_runtime.note}"
+            )
+
+        # v0.71.33 — actually load the --adapters map into the model so
+        # /v1/adapters/activate + the per-request `adapter` field switch the
+        # served weights (previously validated + tracked but never applied).
+        peft_adapter_names: set = set()
+        if adapter_map:
+            from rich.markup import escape as _esc
+
+            try:
+                model_obj, peft_adapter_names = _load_named_adapters(
+                    model_obj, adapter_map
+                )
+            except Exception as exc:  # noqa: BLE001 — surface any PEFT error
+                console.print(
+                    f"[red]Failed to load --adapters:[/] {_esc(str(exc))}"
+                )
+                raise typer.Exit(1) from exc
+            console.print(
+                "[green]Adapters ready:[/] "
+                + ", ".join(sorted(peft_adapter_names))
             )
 
         # v0.71.10 #201 — install the activation-steering decode hook. The
@@ -870,10 +947,13 @@ def serve(
         # Load draft model for speculative decoding (transformers backend)
         draft_model = None
         if speculative_model:
+            from rich.markup import escape as _esc
+
+            _spec_display = _esc(str(speculative_model))
             console.print(
                 Panel(
                     f"[bold yellow]WARNING:[/] Loading draft model: "
-                    f"[bold]{speculative_model}[/]\n"
+                    f"[bold]{_spec_display}[/]\n"
                     "If this model contains custom code, it will execute "
                     "on this machine.\n"
                     "Only use models you trust.",
@@ -883,7 +963,7 @@ def serve(
             )
             draft_model = _load_draft_model(speculative_model, device)
             console.print(
-                f"[green]Speculative decoding enabled:[/] draft={speculative_model}, "
+                f"[green]Speculative decoding enabled:[/] draft={_spec_display}, "
                 f"tokens={num_speculative_tokens}"
             )
 
@@ -986,6 +1066,7 @@ def serve(
             draft_model=draft_model,
             num_speculative_tokens=num_speculative_tokens,
             adapter_map=adapter_map if adapter_map else None,
+            peft_adapter_names=peft_adapter_names,
             output_constraint=constraint,
             enable_dashboard=dashboard,
             tracer=tracer,
@@ -1035,6 +1116,9 @@ def _serve_vllm(
     num_speculative_tokens: int = 5,
     enable_prefix_caching: bool = False,
     quantization: Optional[str] = None,
+    trust_remote_code: bool = False,
+    max_model_len: Optional[int] = None,
+    enable_dashboard: bool = False,
 ):
     """Set up vLLM engine and create FastAPI app."""
     from soup_cli.utils.vllm import create_vllm_app, create_vllm_engine
@@ -1050,10 +1134,35 @@ def _serve_vllm(
         num_speculative_tokens=num_speculative_tokens,
         enable_prefix_caching=enable_prefix_caching,
         quantization=quantization,
+        trust_remote_code=trust_remote_code,
+        max_model_len=max_model_len,
     )
     console.print("[bold green]vLLM engine ready![/]")
 
     adapter_path = str(model_path) if is_adapter else None
+
+    # #332 — the served model's own chat template. Loaded from the adapter /
+    # model dir first (soup writes the tokenizer beside the adapter), then the
+    # base model. A failure here is announced, never silent: falling back to
+    # the legacy role-prefixed prompt is what made Llama-3.1-8B loop.
+    tokenizer = _load_serve_tokenizer(
+        model_path=model_path,
+        base_model=base_model,
+        trust_remote_code=trust_remote_code,
+    )
+    if tokenizer is None:
+        console.print(
+            "[yellow]Warning:[/] no tokenizer could be loaded for this model — "
+            "falling back to a generic 'User:/Assistant:' prompt. Chat-tuned "
+            "models can run on past their stop token with this format."
+        )
+    elif not getattr(tokenizer, "chat_template", None):
+        console.print(
+            "[yellow]Warning:[/] this model ships no chat template — using the "
+            "generic 'User:/Assistant:' prompt format."
+        )
+    else:
+        console.print("[green]Chat template:[/] applying the model's own template.")
 
     app = create_vllm_app(
         engine=engine,
@@ -1061,9 +1170,54 @@ def _serve_vllm(
         model_name=str(model_path.name),
         adapter_path=adapter_path,
         max_tokens_default=max_tokens_default,
+        tokenizer=tokenizer,
+        enable_dashboard=enable_dashboard,
     )
 
     return app
+
+
+def _load_serve_tokenizer(
+    model_path: Path,
+    base_model: Optional[str],
+    trust_remote_code: bool = False,
+):
+    """Load the tokenizer whose chat template the vLLM backend applies (#332).
+
+    Returns None when neither the model dir nor the base model yields one —
+    the caller warns and the prompt builder degrades to the legacy format.
+    """
+    from transformers import AutoTokenizer
+
+    candidates = [str(model_path)]
+    if base_model and str(base_model) != str(model_path):
+        candidates.append(str(base_model))
+
+    for candidate in candidates:
+        try:
+            return AutoTokenizer.from_pretrained(
+                candidate, trust_remote_code=trust_remote_code
+            )
+        except Exception as exc:  # noqa: BLE001 — any load failure is a fallback
+            logger.debug("tokenizer load failed for %s: %s", candidate, exc)
+    return None
+
+
+# Backends whose FastAPI app actually serves /metrics (#333). ``--dashboard``
+# on anything else used to no-op in silence.
+_METRICS_BACKENDS = frozenset({"transformers", "vllm"})
+
+
+def _dashboard_warning(backend: str) -> Optional[str]:
+    """Return the operator warning for ``--dashboard`` on a backend that does
+    not serve ``/metrics``, or None when the backend does."""
+    if backend in _METRICS_BACKENDS:
+        return None
+    return (
+        f"--dashboard: the {backend} backend does not serve /metrics — "
+        "no metrics will be collected. Use --backend transformers or vllm "
+        "for the dashboard."
+    )
 
 
 def _serve_sglang(
@@ -1172,11 +1326,74 @@ def _load_model(
     return model_obj, tokenizer
 
 
+def _load_named_adapters(model_obj, adapter_map: Dict[str, str]):
+    """Load the ``--adapters name=path`` map into ``model_obj`` for hot-swap.
+
+    Returns ``(model_obj, adapter_names)``. The returned model is a PeftModel
+    carrying every named adapter; ``adapter_names`` is the set actually loaded.
+    Request-time selection is done by :func:`_adapter_scope`.
+
+    Without this, ``--adapters`` / ``POST /v1/adapters/activate`` / the
+    per-request ``adapter`` field were validated + tracked but NEVER applied —
+    every request silently ran the startup model (v0.71.33 fix).
+    """
+    from peft import PeftModel
+
+    names = list(adapter_map)
+    already_peft = isinstance(model_obj, PeftModel)
+    for idx, name in enumerate(names):
+        path = adapter_map[name]
+        if idx == 0 and not already_peft:
+            # Wrap the plain base model into a multi-adapter PeftModel.
+            model_obj = PeftModel.from_pretrained(
+                model_obj, path, adapter_name=name
+            )
+        else:
+            model_obj.load_adapter(path, adapter_name=name)
+        console.print(f"[dim]Loaded adapter '{name}' from {path}[/]")
+    model_obj.eval()
+    return model_obj, set(names)
+
+
+@contextlib.contextmanager
+def _adapter_scope(model, lock, names, requested, active):
+    """Select the LoRA adapter for one generation, serialized by ``lock``.
+
+    ``requested`` (request body ``adapter`` field) overrides ``active`` (the
+    ``/v1/adapters/activate`` selection). A name not in ``names`` (or ``None``)
+    runs the base model with adapters disabled. No-op when no named adapters
+    were loaded (``names`` empty), so the ordinary single-model serve path is
+    completely unaffected.
+
+    The lock spans the whole generation because the PeftModel is process-global
+    and ``set_adapter`` mutates shared state — two concurrent requests on
+    different adapters would otherwise race. Generation is one blocking call in
+    every path (chat / stream / completions all generate-then-return), so this
+    serializes adapter-selected requests but never holds across true streaming.
+    """
+    if not names or lock is None:
+        yield
+        return
+    name = requested or active
+    with lock:
+        if name and name in names and hasattr(model, "set_adapter"):
+            model.set_adapter(name)
+            yield
+        elif hasattr(model, "disable_adapter"):
+            # No (or unknown) adapter selected → base model for this request.
+            with model.disable_adapter():
+                yield
+        else:
+            yield
+
+
 def _load_draft_model(speculative_model: str, device: str):
     """Load a smaller draft model for speculative decoding."""
+    import os
     import re
 
     import torch
+    from rich.markup import escape
     from transformers import AutoModelForCausalLM
 
     # SSRF protection: block URL-based model paths
@@ -1187,7 +1404,16 @@ def _load_draft_model(speculative_model: str, device: str):
         )
         raise typer.Exit(1)
 
-    console.print(f"[dim]Loading draft model: {speculative_model}...[/]")
+    # A locally-registered draft (soup draft distill, v0.71.33) can be selected
+    # here via --auto-spec. Refuse pickle / PyTorch-classic weights before
+    # from_pretrained torch.load's them — a poisoned ~/.soup/drafts.json entry
+    # must not become a load-time RCE.
+    if os.path.isdir(speculative_model):
+        from soup_cli.utils.strict_safetensors import assert_safe_top_level_weights
+
+        assert_safe_top_level_weights(speculative_model)
+
+    console.print(f"[dim]Loading draft model: {escape(speculative_model)}...[/]")
     draft = AutoModelForCausalLM.from_pretrained(
         speculative_model,
         device_map="auto" if device != "cpu" else "cpu",
@@ -1231,24 +1457,11 @@ def _generate_response(
     """Generate a response from the model."""
     import torch
 
-    # Apply chat template
-    if hasattr(tokenizer, "apply_chat_template") and tokenizer.chat_template:
-        text = tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True
-        )
-    else:
-        parts = []
-        for msg in messages:
-            role = msg["role"]
-            content = msg["content"]
-            if role == "system":
-                parts.append(f"System: {content}")
-            elif role == "user":
-                parts.append(f"User: {content}")
-            elif role == "assistant":
-                parts.append(f"Assistant: {content}")
-        parts.append("Assistant:")
-        text = "\n".join(parts)
+    from soup_cli.utils.vllm import build_chat_prompt
+
+    # Apply chat template. #332 — THE shared builder; the vLLM backend calls
+    # the same function so the two backends cannot drift apart again.
+    text = build_chat_prompt(messages, tokenizer)
 
     inputs = tokenizer(text, return_tensors="pt")
     input_ids = inputs["input_ids"].to(model.device)
@@ -1313,6 +1526,7 @@ def _create_app(
     draft_model=None,
     num_speculative_tokens: int = 5,
     adapter_map: Optional[Dict[str, str]] = None,
+    peft_adapter_names: Optional[set] = None,
     output_constraint: Optional[Dict] = None,
     enable_dashboard: bool = False,
     tracer=None,
@@ -1398,6 +1612,10 @@ def _create_app(
 
     # Resolved adapter map (name → path)
     _adapter_map = adapter_map or {}
+    # v0.71.33 — adapters actually loaded into the PeftModel + the lock that
+    # serializes set_adapter + generate (the model is process-global).
+    _peft_adapter_names = peft_adapter_names or set()
+    _generation_lock = threading.Lock()
 
     # v0.71.12 #221 — VeRA / VB-LoRA bank loaded at startup (or None). The
     # active user is selected per request via the X-User-Id header.
@@ -1520,6 +1738,10 @@ def _create_app(
                     mole_runtime=_mole_runtime,
                     loaded_bank=_loaded_bank,
                     x_user_id=x_user_id,
+                    adapter_lock=_generation_lock,
+                    adapter_names=_peft_adapter_names,
+                    requested_adapter=requested_adapter,
+                    active_adapter=_active_snapshot(),
                 ),
                 media_type="text/event-stream",
             )
@@ -1558,17 +1780,28 @@ def _create_app(
                             top_p=request.top_p,
                         )
                     else:
-                        response_text, prompt_tokens, completion_tokens = _generate_response(
-                            model_obj, tokenizer, messages,
-                            max_tokens=max_tokens,
-                            temperature=request.temperature,
-                            top_p=request.top_p,
-                            assistant_model=draft_model,
-                            num_assistant_tokens=num_speculative_tokens,
-                            logits_processor=processors or None,
-                            ngram_config=ngram_config,
-                            kv_cache_generate_kwargs=kv_cache_generate_kwargs,
-                        )
+                        # v0.71.33 — select the request's LoRA adapter (base =
+                        # disabled) under the generation lock for the duration
+                        # of generate().
+                        with _adapter_scope(
+                            model_obj, _generation_lock, _peft_adapter_names,
+                            requested_adapter, _active_snapshot(),
+                        ):
+                            (
+                                response_text,
+                                prompt_tokens,
+                                completion_tokens,
+                            ) = _generate_response(
+                                model_obj, tokenizer, messages,
+                                max_tokens=max_tokens,
+                                temperature=request.temperature,
+                                top_p=request.top_p,
+                                assistant_model=draft_model,
+                                num_assistant_tokens=num_speculative_tokens,
+                                logits_processor=processors or None,
+                                ngram_config=ngram_config,
+                                kv_cache_generate_kwargs=kv_cache_generate_kwargs,
+                            )
                 except Exception:
                     logger.exception("Generation error")
                     raise HTTPException(status_code=500, detail="Internal server error")
@@ -1975,6 +2208,8 @@ def _stream_response(
     kv_cache_generate_kwargs=None,
     mole_runtime=None,
     loaded_bank=None, x_user_id=None,
+    adapter_lock=None, adapter_names=None,
+    requested_adapter=None, active_adapter=None,
 ):
     """Generator that yields SSE chunks for streaming responses."""
     chat_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
@@ -2002,15 +2237,21 @@ def _stream_response(
                 top_p=top_p,
             )
         else:
-            response_text, _, completion_tokens_for_log = _generate_response(
-                model, tokenizer, messages,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                top_p=top_p,
-                assistant_model=assistant_model,
-                num_assistant_tokens=num_assistant_tokens,
-                kv_cache_generate_kwargs=kv_cache_generate_kwargs,
-            )
+            # v0.71.33 — select the request's LoRA adapter under the generation
+            # lock (resolved in the endpoint, applied here where generate runs).
+            with _adapter_scope(
+                model, adapter_lock, adapter_names,
+                requested_adapter, active_adapter,
+            ):
+                response_text, _, completion_tokens_for_log = _generate_response(
+                    model, tokenizer, messages,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    top_p=top_p,
+                    assistant_model=assistant_model,
+                    num_assistant_tokens=num_assistant_tokens,
+                    kv_cache_generate_kwargs=kv_cache_generate_kwargs,
+                )
     except Exception:
         logger.exception("Stream generation error")
         yield 'data: {"error": "Internal server error"}\n\n'

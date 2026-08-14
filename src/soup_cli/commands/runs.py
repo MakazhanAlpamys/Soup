@@ -119,11 +119,14 @@ def list_runs(
         # Shorten run_id for display
         short_id = run["run_id"]
 
+        # experiment_name / base_model / task are config-derived — escape so a
+        # crafted value can't inject Rich markup (registry.py escapes the same
+        # fields).
         table.add_row(
-            short_id,
-            run.get("experiment_name") or "",
-            run.get("base_model") or "",
-            run.get("task") or "",
+            markup_escape(str(short_id)),
+            markup_escape(str(run.get("experiment_name") or "")),
+            markup_escape(str(run.get("base_model") or "")),
+            markup_escape(str(run.get("task") or "")),
             status_str,
             loss_str,
             str(run.get("total_steps") or ""),
@@ -167,23 +170,25 @@ def show(
         minutes = int((secs % 3600) // 60)
         duration_str = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
 
-    # Build info panel
+    # Build info panel — config-derived fields escaped (mirrors registry.py).
+    _esc = markup_escape
     info_lines = [
-        f"Run ID:     [bold]{run['run_id']}[/]",
-        f"Name:       {run.get('experiment_name') or '-'}",
+        f"Run ID:     [bold]{_esc(str(run['run_id']))}[/]",
+        f"Name:       {_esc(str(run.get('experiment_name') or '-'))}",
         f"Status:     {status_str}",
         f"Date:       {run['created_at'][:19].replace('T', ' ')}",
         "",
-        f"Model:      [bold]{run.get('base_model') or '-'}[/]",
-        f"Task:       {run.get('task') or '-'}",
-        f"Device:     {run.get('device_name') or '-'} ({run.get('device') or '-'})",
-        f"GPU Memory: {run.get('gpu_memory') or '-'}",
+        f"Model:      [bold]{_esc(str(run.get('base_model') or '-'))}[/]",
+        f"Task:       {_esc(str(run.get('task') or '-'))}",
+        f"Device:     {_esc(str(run.get('device_name') or '-'))} "
+        f"({_esc(str(run.get('device') or '-'))})",
+        f"GPU Memory: {_esc(str(run.get('gpu_memory') or '-'))}",
         "",
         f"Loss:       {_fmt_loss(run)}",
         f"Steps:      {run.get('total_steps') or '-'}",
         f"Duration:   {duration_str}",
         f"Cost:       {_fmt_cost(run)}",
-        f"Output:     {run.get('output_dir') or '-'}",
+        f"Output:     {_esc(str(run.get('output_dir') or '-'))}",
     ]
     console.print(Panel("\n".join(info_lines), title="Run Details"))
 

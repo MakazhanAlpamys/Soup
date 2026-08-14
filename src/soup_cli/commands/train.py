@@ -94,6 +94,14 @@ def _hardware_fit_preflight(cfg, gpu_info, *, allow_oom_attempt: bool) -> None:
     statically predictable, so CI and small runs are unaffected. Honors the
     documented ``--allow-oom-attempt`` opt-out.
     """
+    # v0.72.0 — layer streaming bounds peak VRAM by ONE decoder layer, so the
+    # resident prediction (full weights + optimizer + grads on the card) is the
+    # wrong model entirely: it refuses exactly the runs streaming exists to
+    # enable. The streaming path runs its own pre-flight instead (RAM-tier fit
+    # + the plan panel in _setup_streaming_transformers).
+    if getattr(cfg.training, "stream_layers", False):
+        return
+
     total_bytes = 0
     try:
         total_bytes = int(gpu_info.get("memory_total_bytes", 0) or 0)
@@ -135,6 +143,27 @@ def _hardware_fit_preflight(cfg, gpu_info, *, allow_oom_attempt: bool) -> None:
     )
     if not allow_oom_attempt:
         raise typer.Exit(1)
+
+
+def _apply_replay_overrides(cfg, *, replay, replay_ratio, replay_seed=None):
+    """Apply the ``--replay*`` flags, then RE-VALIDATE.
+
+    Re-validation is the point: a CLI override must clear the same
+    cross-validators as YAML, or ``--replay`` on ``task='dpo'`` would slip
+    past ``_validate_replay_compat``. Rebuilding the model (rather than
+    mutating in place) is what re-runs them, and leaves the caller's config
+    untouched.
+    """
+    if replay is None and replay_ratio is None and replay_seed is None:
+        return cfg
+    payload = cfg.model_dump()
+    if replay is not None:
+        payload["data"]["replay"] = replay
+    if replay_ratio is not None:
+        payload["data"]["replay_ratio"] = replay_ratio
+    if replay_seed is not None:
+        payload["data"]["replay_seed"] = replay_seed
+    return type(cfg)(**payload)
 
 
 def train(
@@ -183,7 +212,8 @@ def train(
         None,
         "--deepspeed",
         help=(
-            "Enable DeepSpeed: zero2, zero3, zero2_offload, zero++ (ZeRO++), "
+            "Enable DeepSpeed: zero2, zero3, zero2_offload, zero3_offload "
+            "(stage 3 + CPU parameter offload), zero++ (ZeRO++), "
             "or path to config JSON"
         ),
     ),
@@ -295,6 +325,29 @@ def train(
             "--reward-hack-detector (or training.reward_hack_detector). (v0.71.26)"
         ),
     ),
+    replay: str = typer.Option(
+        None, "--replay",
+        help=(
+            "Old dataset to interleave as continual-learning rehearsal, so "
+            "training on the new task does not erase the previous one. "
+            "sft/pretrain only; incompatible with packing/multipack. "
+            "Overrides data.replay. (v0.71.36)"
+        ),
+    ),
+    replay_ratio: float = typer.Option(
+        None, "--replay-ratio",
+        help=(
+            "Fraction of the FINAL mixed train set that is replay rows "
+            "(default 0.1). Overrides data.replay_ratio. (v0.71.36)"
+        ),
+    ),
+    replay_seed: int = typer.Option(
+        None, "--replay-seed",
+        help=(
+            "Seed for the replay sample + interleave. Overrides "
+            "data.replay_seed. (v0.71.36)"
+        ),
+    ),
     reward_hack_mitigation: str = typer.Option(
         None,
         "--reward-hack-mitigation",
@@ -377,7 +430,7 @@ def train(
         "--track-energy",
         help=(
             "Measure the training window's energy + CO2 via codecarbon "
-            "(offline; requires `pip install soup-cli[carbon]`). Feeds the "
+            "(offline; requires `pip install soup-cli\\[carbon]`). Feeds the "
             "kWh / CO2 into --annex-xi. v0.71.3."
         ),
     ),
@@ -465,6 +518,26 @@ def train(
     # Load & validate config
     console.print(f"[dim]Loading config from {config_path}...[/]")
     cfg = load_config(config_path)
+
+    # --- v0.71.36 replay passthrough ---
+    try:
+        cfg = _apply_replay_overrides(
+            cfg,
+            replay=replay,
+            replay_ratio=replay_ratio,
+            replay_seed=replay_seed,
+        )
+    except Exception as exc:  # noqa: BLE001 — pydantic ValidationError et al.
+        console.print(f"[red]{markup_escape(str(exc))}[/]")
+        raise typer.Exit(code=2) from exc
+
+    # v0.72.3 — --resume / --hf-resume now work with layer streaming. v0.72.0-.2
+    # refused them because a streamed model's `named_parameters()` carry an
+    # `.inner.` segment that `load_state_dict` narrows away, so PEFT matched
+    # NOTHING and silently continued with a freshly initialised adapter (measured:
+    # 0 of 12 tensors, and a resumed loss curve byte-identical to a from-scratch
+    # one). `StreamedDecoderLayer` now redirects canonical keys at load time,
+    # mirroring the v0.72.1 save-side delegation.
 
     # --- RA-DIT generator-stage auto-link (v0.71.10 #200) ---
     # When a generator stage has no retriever model set, splice in the latest
@@ -711,7 +784,7 @@ def train(
         except ImportError:
             console.print(
                 "[red]wandb not installed.[/]\n"
-                "Run: [bold]pip install 'soup-cli[wandb]'[/]"
+                "Run: [bold]pip install \"soup-cli\\[wandb]\"[/]"
             )
             raise typer.Exit(1)
         except Exception as wandb_err:
@@ -785,30 +858,20 @@ def train(
                 is_in_distributed,
             )
 
-            if not is_in_distributed():
+            if dry_run and not is_in_distributed():
+                # --dry-run must NEVER os.execvp into a real multi-GPU run.
+                # Without this guard the re-exec fired before the dry_run check
+                # (~350 lines below), so `soup train --dry-run --gpus N` launched
+                # a full accelerate run instead of just validating.
+                console.print(
+                    f"[dim]--dry-run: skipping accelerate re-exec "
+                    f"({num_gpus} GPUs, {topo['interconnect']}).[/]"
+                )
+            elif not is_in_distributed():
                 # v0.33.0 #37 — auto-reexec under accelerate launch unless
                 # --no-reexec was passed. Reexec uses os.execvp so the new
                 # accelerate process replaces this process; no leftover PID
                 # tree, stdio passes through unchanged.
-                if no_reexec:
-                    safe_config = markup_escape(config)
-                    console.print(
-                        Panel(
-                            markup_escape(
-                                format_advice(
-                                    num_gpus,
-                                    ["soup", "train", "-c", safe_config],
-                                )
-                            ),
-                            title="[yellow]Multi-GPU launch required[/]",
-                        )
-                    )
-                    console.print(
-                        f"[dim]Detected topology: {topo['gpu_count']} GPUs, "
-                        f"{topo['interconnect']}[/]"
-                    )
-                    raise typer.Exit(1)
-
                 # Reconstruct argv. Pass through critical flags so the
                 # reexec'd run sees what the user typed.
                 script_args: list[str] = [
@@ -869,6 +932,41 @@ def train(
                         script_args.extend(["--energy-out", energy_out])
                 if yes:
                     script_args.append("--yes")
+                # Distillation / activation-capture flags — same drop-on-reexec
+                # bug class as the block above: a multi-GPU run silently ignored
+                # them (MiniLLM stayed offline, no activation snapshot written).
+                if minillm_on_policy:
+                    script_args.append("--minillm-on-policy")
+                if capture_activations:
+                    script_args.extend(["--capture-activations", capture_activations])
+                if capture_prompts:
+                    script_args.extend(["--capture-prompts", capture_prompts])
+                if no_reexec:
+                    # #77 — this hint used to be hand-built as
+                    # ["soup", "train", "-c", config] and silently dropped every
+                    # other flag the user typed, so following it literally ran
+                    # WITHOUT --fsdp, --deepspeed, --gate and the rest. It is now
+                    # derived from the same script_args the auto-reexec uses, so
+                    # the two cannot drift: one source for "what the user typed".
+                    # --no-reexec itself is dropped because under `accelerate
+                    # launch` the run is already distributed and never re-execs.
+                    hint_args = [
+                        "soup",
+                        "train",
+                        *(a for a in script_args[4:] if a != "--no-reexec"),
+                    ]
+                    console.print(
+                        Panel(
+                            markup_escape(format_advice(num_gpus, hint_args)),
+                            title="[yellow]Multi-GPU launch required[/]",
+                        )
+                    )
+                    console.print(
+                        f"[dim]Detected topology: {topo['gpu_count']} GPUs, "
+                        f"{topo['interconnect']}[/]"
+                    )
+                    raise typer.Exit(1)
+
                 argv = build_accelerate_argv(
                     num_processes=num_gpus, script_args=script_args,
                 )
@@ -890,22 +988,25 @@ def train(
                         "the launch command for manual execution."
                     )
                     raise typer.Exit(1) from exc
-            console.print(
-                f"[green]Distributed run detected[/] "
-                f"({num_gpus} procs, {topo['interconnect']} interconnect)"
-            )
-            # Apply NCCL env hints. All current keys (``NCCL_P2P_DISABLE`` /
-            # ``NCCL_IB_DISABLE`` / ``NCCL_NVLS_ENABLE``) are rank-idempotent
-            # string literals so it is safe to run on every rank. If a
-            # rank-sensitive key is ever added to ``suggest_nccl_env``, this
-            # loop must be gated to ``LOCAL_RANK == 0``. ``setdefault`` keeps
-            # user / launcher overrides winning over our suggestions.
-            from soup_cli.utils.topology import suggest_nccl_env
+            elif is_in_distributed():
+                # Already a launched rank — announce + apply NCCL hints. (The
+                # dry_run branch above intentionally does neither.)
+                console.print(
+                    f"[green]Distributed run detected[/] "
+                    f"({num_gpus} procs, {topo['interconnect']} interconnect)"
+                )
+                # Apply NCCL env hints. All current keys (``NCCL_P2P_DISABLE`` /
+                # ``NCCL_IB_DISABLE`` / ``NCCL_NVLS_ENABLE``) are rank-idempotent
+                # string literals so it is safe to run on every rank. If a
+                # rank-sensitive key is ever added to ``suggest_nccl_env``, this
+                # loop must be gated to ``LOCAL_RANK == 0``. ``setdefault`` keeps
+                # user / launcher overrides winning over our suggestions.
+                from soup_cli.utils.topology import suggest_nccl_env
 
-            for key, val in suggest_nccl_env(
-                gpu_count=num_gpus, interconnect=topo["interconnect"]
-            ).items():
-                os.environ.setdefault(key, val)
+                for key, val in suggest_nccl_env(
+                    gpu_count=num_gpus, interconnect=topo["interconnect"]
+                ).items():
+                    os.environ.setdefault(key, val)
 
     # Detect hardware
     device, device_name = detect_device()
@@ -955,6 +1056,18 @@ def train(
             f"LoRA:    [bold]r={cfg.training.lora.r}, "
             f"alpha={cfg.training.lora.alpha}[/]"
         )
+    # #353 review-fix: a wrong seed is invisible, which is how `training.seed`
+    # reaching one wrapper out of nineteen survived releases. Report the value
+    # the run actually trains at, and say when it is the unset default, so
+    # "did my seed take?" is answered by looking rather than by reading source.
+    from soup_cli.utils.seeding import resolve_training_seed
+
+    seed_label = str(resolve_training_seed(cfg.training))
+    if cfg.training.seed is None:
+        seed_label += " [dim](unset default)[/]"
+    if cfg.training.data_seed is not None:
+        seed_label += f", data_seed={cfg.training.data_seed}"
+
     console.print(
         Panel(
             f"Device:  [bold]{device_name}[/]\n"
@@ -963,7 +1076,8 @@ def train(
             f"Task:    [bold]{cfg.task}[/]\n"
             f"Backend: [bold]{backend_label}[/]\n"
             f"{peft_line}\n"
-            f"Quant:   [bold]{quant_label}[/]",
+            f"Quant:   [bold]{quant_label}[/]\n"
+            f"Seed:    [bold]{seed_label}[/]",
             title="Training Setup",
         )
     )
@@ -1227,10 +1341,19 @@ def train(
     # v0.40.4 #63 — every transformer-backend trainer now threads
     # --trust-remote-code through the wrapper (closes the v0.36.0 Part B gap).
     trainer_kwargs = dict(trainer_kwargs, trust_remote_code=trust_remote_code)
-    if cfg.task == "dpo":
+    from soup_cli.trainer.mlx_routing import resolve_trainer
+
+    mlx_cls, trainer_kwargs = resolve_trainer(cfg, trainer_kwargs)
+    if mlx_cls is not None:
+        trainer_wrapper = mlx_cls(cfg, **trainer_kwargs)
+    elif cfg.task == "dpo":
         from soup_cli.trainer.dpo import DPOTrainerWrapper
 
         trainer_wrapper = DPOTrainerWrapper(cfg, **trainer_kwargs)
+    elif cfg.task == "online_dpo":
+        from soup_cli.trainer.online_dpo import OnlineDPOTrainerWrapper
+
+        trainer_wrapper = OnlineDPOTrainerWrapper(cfg, **trainer_kwargs)
     elif cfg.task == "grpo":
         from soup_cli.trainer.grpo import GRPOTrainerWrapper
 
@@ -1306,6 +1429,11 @@ def train(
         from soup_cli.trainer.tts import TTSTrainerWrapper
 
         trainer_wrapper = TTSTrainerWrapper(cfg, **trainer_kwargs)
+    elif cfg.task == "asr":
+        # v0.71.32 — ASR (Whisper) fine-tuning via Seq2SeqTrainer.
+        from soup_cli.trainer.asr import AsrTrainerWrapper
+
+        trainer_wrapper = AsrTrainerWrapper(cfg, **trainer_kwargs)
     else:
         trainer_wrapper = SFTTrainerWrapper(cfg, **trainer_kwargs)
     trainer_wrapper.setup(dataset)
@@ -1454,7 +1582,7 @@ def train(
         else:
             console.print(
                 "[yellow]--track-energy:[/] no reading "
-                "(install `pip install soup-cli[carbon]`)"
+                "(install `pip install soup-cli\\[carbon]`)"
             )
 
     # --- v0.71.15 #244 --energy-out: persist for `soup bom emit --energy` -
@@ -1474,7 +1602,7 @@ def train(
         else:
             console.print(
                 "[yellow]--energy-out skipped:[/] no energy reading "
-                "(set --track-energy + install `pip install soup-cli[carbon]`)"
+                "(set --track-energy + install `pip install soup-cli\\[carbon]`)"
             )
 
     # --- v0.59.0 --annex-xi: Annex XI/XII auto-doc -----------------------

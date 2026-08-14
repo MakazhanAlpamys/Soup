@@ -14,6 +14,7 @@ from soup_cli.data.formats import (
     is_audio_format,
     is_vision_format,
 )
+from soup_cli.utils.paths import is_under_cwd
 
 console = Console()
 
@@ -110,6 +111,101 @@ def _load_txt(path: Path) -> list[dict]:
     return [{"text": line} for line in lines]
 
 
+def _load_replay_rows(data_config: DataConfig) -> list[dict]:
+    """Load + normalize the replay file with its OWN format detection.
+
+    The old dataset may be alpaca while the new one is sharegpt, so the
+    replay file cannot inherit ``data_config.format``.
+
+    It also gets its OWN media-containment pass. ``load_dataset`` runs
+    :func:`_validate_vision_images` / :func:`_validate_audio_files` on the
+    primary dataset, and the replay file is loaded here rather than there —
+    so without this, a llava-shaped replay row's ``image`` value survives
+    ``format_to_messages`` untouched and a traversal path would reach
+    ``PIL.Image.open`` in the trainer. Media resolve against the REPLAY
+    file's own directory unless an explicit dir is configured: the old
+    dataset's images live with the old dataset.
+    """
+    replay_path = Path(data_config.replay)
+    if not is_under_cwd(replay_path):
+        raise ValueError(
+            f"data.replay path is outside the working directory: {replay_path}"
+        )
+    if not replay_path.exists():
+        raise FileNotFoundError(
+            f"data.replay file not found: {replay_path}"
+        )
+    raw = load_raw_data(replay_path)
+    fmt = detect_format(raw)
+    rows = [format_to_messages(row, fmt) for row in raw]
+    rows = [row for row in rows if row is not None]
+
+    if is_vision_format(fmt):
+        image_dir = (
+            Path(data_config.image_dir)
+            if data_config.image_dir
+            else replay_path.parent
+        )
+        rows = _validate_vision_images(rows, image_dir)
+    if is_audio_format(fmt):
+        audio_dir = (
+            Path(data_config.audio_dir)
+            if data_config.audio_dir
+            else replay_path.parent
+        )
+        rows = _validate_audio_files(rows, audio_dir)
+    return rows
+
+
+def _finalize(
+    formatted: list[dict],
+    data_config: DataConfig,
+    *,
+    val: list[dict] | None = None,
+) -> dict:
+    """Split train/val, then mix replay into train ONLY.
+
+    Single exit point for every load path (local / remote / HF) so replay
+    behaviour cannot drift between them — `soup sweep` and
+    `soup train --dry-run` go through the same seam.
+
+    Replay is mixed AFTER the split so val stays pure new-task: it is the
+    yardstick for the task being learned. Old-task retention is measured
+    externally with `soup eval custom` / `soup ship`, which adds no new
+    eval machinery here.
+    """
+    if val is not None:
+        result = {"train": formatted, "val": val}
+    elif data_config.val_split > 0:
+        split_idx = int(len(formatted) * (1 - data_config.val_split))
+        result = {"train": formatted[:split_idx], "val": formatted[split_idx:]}
+    else:
+        result = {"train": formatted}
+
+    if getattr(data_config, "replay", None):
+        from soup_cli.utils.rehearsal import mix_replay
+
+        replay_rows = _load_replay_rows(data_config)
+        mixed, report = mix_replay(
+            result["train"],
+            replay_rows,
+            ratio=data_config.replay_ratio,
+            seed=data_config.replay_seed,
+        )
+        result["train"] = mixed
+        console.print(
+            f"[dim]Replay: +{report.n_replay} old rows interleaved "
+            f"({report.ratio_actual * 100:.1f}% of {report.n_final})[/]"
+        )
+        if report.shortfall:
+            console.print(
+                f"[yellow]Replay pool too small: wanted {report.requested}, "
+                f"used {report.n_replay} (short {report.shortfall}). Rows are "
+                "NOT repeated.[/]"
+            )
+    return result
+
+
 def load_dataset(data_config: DataConfig) -> dict:
     """Load dataset for training. Returns dict with 'train' and optionally 'val' keys.
 
@@ -156,25 +252,24 @@ def load_dataset(data_config: DataConfig) -> dict:
         audio_dir = Path(data_config.audio_dir) if data_config.audio_dir else path.parent
         formatted = _validate_audio_files(formatted, audio_dir)
 
-    # Split into train/val
-    if data_config.val_split > 0:
-        split_idx = int(len(formatted) * (1 - data_config.val_split))
-        return {
-            "train": formatted[:split_idx],
-            "val": formatted[split_idx:],
-        }
-
-    return {"train": formatted}
+    # Split into train/val, then mix replay into train (v0.71.36).
+    return _finalize(formatted, data_config)
 
 
 def _validate_vision_images(data: list[dict], image_dir: Path) -> list[dict]:
     """Validate and resolve image paths in vision dataset rows.
 
-    Each row must have an 'image' key with a filename or path.
-    Resolves relative paths against image_dir.
+    Each row must have an 'image' key with a filename or path. Resolves
+    relative paths against image_dir and rejects path traversal — a crafted
+    llava/sharegpt4v row like ``{"image": "/etc/passwd"}`` must not be handed
+    to ``PIL.Image.open``. Mirrors :func:`_validate_audio_files` (the sibling
+    audio path got this fix in v0.71.32; the vision path was missed).
     """
+    from soup_cli.utils.paths import is_under
+
     valid = []
     missing = 0
+    traversal = 0
     for row in data:
         if "image" not in row or not row["image"]:
             missing += 1
@@ -182,11 +277,21 @@ def _validate_vision_images(data: list[dict], image_dir: Path) -> list[dict]:
         image_path = Path(row["image"])
         if not image_path.is_absolute():
             image_path = image_dir / image_path
-        row["image"] = str(image_path)
-        valid.append(row)
+        # Path traversal protection: resolved path must stay under image_dir.
+        # realpath + commonpath (is_under) — Path.is_relative_to() breaks on
+        # Windows 8.3 short names.
+        if not is_under(image_path, image_dir):
+            traversal += 1
+            continue
+        valid.append({**row, "image": str(image_path.resolve())})
 
     if missing > 0:
         console.print(f"[yellow]Warning: {missing} rows skipped (missing image path)[/]")
+    if traversal > 0:
+        console.print(
+            f"[yellow]Warning: {traversal} rows skipped "
+            f"(image path outside {image_dir})[/]"
+        )
     return valid
 
 
@@ -339,13 +444,7 @@ def _load_remote_dataset(train_path: str, data_config: DataConfig) -> dict:
     formatted = [format_to_messages(row, fmt) for row in raw_data]
     formatted = [r for r in formatted if r is not None]
 
-    if data_config.val_split > 0:
-        split_idx = int(len(formatted) * (1 - data_config.val_split))
-        return {
-            "train": formatted[:split_idx],
-            "val": formatted[split_idx:],
-        }
-    return {"train": formatted}
+    return _finalize(formatted, data_config)
 
 
 def _load_hf_dataset(name: str, data_config: DataConfig) -> dict:
@@ -369,14 +468,15 @@ def _load_hf_dataset(name: str, data_config: DataConfig) -> dict:
     formatted = [format_to_messages(row, fmt) for row in raw_data]
     formatted = [r for r in formatted if r is not None]
 
-    if data_config.val_split > 0 and "validation" not in ds:
-        split_idx = int(len(formatted) * (1 - data_config.val_split))
-        return {"train": formatted[:split_idx], "val": formatted[split_idx:]}
-
-    result = {"train": formatted}
     if "validation" in ds:
+        # The hub split wins over val_split; pass it through so _finalize
+        # does not re-derive one from the train rows.
         val_data = [dict(row) for row in ds["validation"]]
         val_formatted = [format_to_messages(row, fmt) for row in val_data]
-        result["val"] = [r for r in val_formatted if r is not None]
+        return _finalize(
+            formatted,
+            data_config,
+            val=[r for r in val_formatted if r is not None],
+        )
 
-    return result
+    return _finalize(formatted, data_config)

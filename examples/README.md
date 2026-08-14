@@ -1,428 +1,359 @@
 # Soup Examples
 
-Real-world configuration examples and sample datasets to get you running quickly.
+Configuration examples and sample datasets.
 
-## Quick Start with Examples
+Two kinds of files live here, and they promise different things:
 
-### 1. Basic SFT (Supervised Fine-Tuning)
+- **Runnable examples** — parse and run as-is against the bundled fixtures in
+  [`data/`](data/). They exist to prove your setup works end-to-end. The fixtures are
+  5–10 rows, so these runs finish quickly and produce **nothing useful** — they are a
+  smoke test, not training. Point `data.train` at real data for that.
+- **Templates** — valid configs where you supply the data. They will not run until
+  you do.
 
-Fine-tune TinyLlama on a small instruction-following dataset:
+See [data/README.md](data/README.md) for what the fixtures are and where to get real data.
+
+---
+
+## Runnable examples
+
+| Config | Task | Base model | Fixture | Needs |
+|--------|------|------------|---------|-------|
+| [`configs/sft_basic.yaml`](configs/sft_basic.yaml) | sft | TinyLlama-1.1B-Chat | `alpaca_tiny.jsonl` (10 rows) | 4 GB |
+| [`configs/grpo_reasoning.yaml`](configs/grpo_reasoning.yaml) | grpo | TinyLlama-1.1B-Chat | `reasoning_math.jsonl` (5 rows) | 4 GB |
+| [`configs/rlhf_step1_sft.yaml`](configs/rlhf_step1_sft.yaml) | sft | TinyLlama-1.1B-Chat | `alpaca_tiny.jsonl` (10 rows) | 4 GB |
+| [`configs/rlhf_step2_reward.yaml`](configs/rlhf_step2_reward.yaml) | reward_model | TinyLlama-1.1B-Chat | `chat_preferences.jsonl` (5 rows) | 4 GB |
+| [`configs/rlhf_step3_ppo.yaml`](configs/rlhf_step3_ppo.yaml) | ppo | TinyLlama-1.1B-Chat | `alpaca_tiny.jsonl` (10 rows) | 4 GB |
+| [`configs/dpo_example.yaml`](configs/dpo_example.yaml) | dpo | Llama-3.1-8B-Instruct | `dpo_sample.jsonl` (8 rows) | ~13 GB |
+| [`configs/dpo_chat.yaml`](configs/dpo_chat.yaml) | dpo | Llama-2-7b-chat | `chat_preferences.jsonl` (5 rows) | ~22 GB |
+
+The five TinyLlama configs are verified to clear the pre-flight on a 4 GB card. The two
+larger-base configs cannot — their weights alone are 4.0 GB and 7.0 GB — so the "Needs"
+column is what `soup train` predicts for them, margin included.
+
+Run any of them:
 
 ```bash
 soup train --config examples/configs/sft_basic.yaml
 ```
 
-**What it does:**
-- Trains TinyLlama-1.1B for 1 epoch
-- Uses LoRA for efficient memory usage
-- Outputs to `./output_sft_basic/`
-- Takes ~2-3 minutes on a consumer GPU
-
-### 2. Chat Assistant (DPO)
-
-Train a chat model with preference learning:
+Validate a config without training:
 
 ```bash
-soup train --config examples/configs/dpo_chat.yaml
+soup train --config examples/configs/sft_basic.yaml --dry-run
 ```
 
-**What it does:**
-- Uses Llama 2 7B base model
-- Trains with DPO (Direct Preference Optimization) on chat preferences
-- Better alignment than SFT alone
-- Outputs to `./output_dpo_chat/`
+Gated models (Llama-2, Llama-3.1) need Hugging Face access and a login first:
+`huggingface-cli login`. The TinyLlama configs need neither.
 
-### DPO with QLoRA (Llama 3.1)
+`soup train` estimates peak VRAM before it loads anything and refuses to start a run it
+predicts won't fit, printing the breakdown and what to change. The TinyLlama configs are
+sized for a small card (`batch_size: 4`, `max_length: 512`) — on a bigger one you can
+raise both.
 
-Train a preference-aligned model using DPO with 4-bit quantization:
+### Basic SFT
+
+`sft_basic.yaml` — instruction tuning with LoRA (r=16) on alpaca-format rows. The
+smallest complete config in the repo; a good base to copy.
+
+### Preference alignment (DPO)
+
+`dpo_chat.yaml` and `dpo_example.yaml` both train on `prompt` / `chosen` / `rejected`
+pairs. `dpo_example.yaml` adds QLoRA (`quantization: 4bit`) for memory-efficient
+training on a larger base, and `dpo_beta: 0.1` sets how hard the KL penalty pulls
+back toward the reference model.
+
+### Reasoning (GRPO)
+
+`grpo_reasoning.yaml` generates `num_generations: 4` completions per prompt and scores
+them with the built-in `accuracy` reward. See
+[docs/training.md](../docs/training.md) for custom reward functions.
+
+### Full RLHF pipeline
+
+Three configs, run in order — step 3 reads the reward model that step 2 writes:
 
 ```bash
-soup train --config examples/configs/dpo_example.yaml
+soup train --config examples/configs/rlhf_step1_sft.yaml
+soup train --config examples/configs/rlhf_step2_reward.yaml
+soup train --config examples/configs/rlhf_step3_ppo.yaml
 ```
 
-**What it does:**
-- Uses Llama 3.1 8B Instruct as the base model
-- Trains with DPO on simple prompt/chosen/rejected preference pairs
-- Uses QLoRA (4-bit quantization) for memory-efficient training
-- `dpo_beta: 0.1` controls the KL divergence penalty strength
-- Outputs to `./output_dpo_example/`
+---
 
-### 3. Reasoning Model (GRPO)
+## Templates
 
-Fine-tune a reasoning model with step-by-step answer verification:
+Valid configs that need your data before they run.
 
-```bash
-soup train --config examples/configs/grpo_reasoning.yaml
-```
+### Vision
 
-**What it does:**
-- Trains on reasoning tasks (math, logic)
-- Uses GRPO (Group Relative Policy Optimization) to optimize for correctness
-- Generates multiple outputs per prompt and selects the best
-- Outputs to `./output_reasoning/`
-
-### 4. Vision Model
-
-Fine-tune LLaMA-Vision on image-caption pairs:
+[`configs/vision_llama.yaml`](configs/vision_llama.yaml) — LLaMA-3.2-11B-Vision on
+image + conversation pairs in LLaVA format. There is no vision fixture in this repo
+because we do not commit image files, so `data.train` and `data.image_dir` are
+placeholders. Replace both, then:
 
 ```bash
 soup train --config examples/configs/vision_llama.yaml
 ```
 
-**What it does:**
-- Trains LLaMA-3.2-Vision-90B on image-text data
-- Uses LLaVA format for images + text
-- Outputs to `./output_vision/`
+### Built-in templates
 
-### 5. Alignment Methods (KTO / ORPO / SimPO / IPO)
-
-Train with alternative preference optimization:
+`soup init` writes a starter `soup.yaml` you fill in with your own data:
 
 ```bash
-# KTO — unpaired preference (only needs thumbs up/down labels)
-soup init --template kto
-soup train
-
-# ORPO — reference-free alignment (no reference model needed)
-soup init --template orpo
-soup train
-
-# SimPO — length-normalized preference optimization
-soup init --template simpo
-soup train
-
-# IPO — regularized preference (squared hinge loss)
-soup init --template ipo
+soup init --template kto     # unpaired preference (thumbs up/down labels)
+soup init --template orpo    # reference-free alignment
+soup init --template simpo   # length-normalized preference
+soup init --template ipo     # regularized preference (squared hinge)
+soup init --template pretrain    # continued pre-training on raw text
+soup init --template moe         # Mixture-of-Experts (Qwen3, Mixtral, DeepSeek V3)
+soup init --template longcontext # RoPE scaling for 128k+ context
+soup init --template embedding   # sentence embeddings (BGE, E5, GTE)
+soup init --template vision      # vision-language
+soup init --template audio       # audio/speech — needs pip install "soup-cli[audio]"
 soup train
 ```
 
-### 6. Continued Pre-training
+Full list: `soup init --help`. Available templates are `audio`, `bco`, `chat`, `code`,
+`embedding`, `eu-ai-act`, `hipaa`, `ipo`, `kto`, `longcontext`, `medical`, `moe`,
+`orpo`, `pretrain`, `reasoning`, `rlhf`, `simpo`, `soc2`, `sr-11-7`, `tool-calling`,
+`vision`.
 
-Continue training on raw text corpora:
+---
 
-```bash
-soup init --template pretrain
-soup train
-```
+## Synthetic-data workflow
 
-**What it does:**
-- Trains on plain text (`.txt` files or JSONL with `text` field)
-- No instruction format needed — just raw text
-- Useful for domain adaptation (legal, medical, code)
+Generate training data from a local LLM, filter and score it, then train on the result.
+Walkthrough in [synthetic_workflow.md](synthetic_workflow.md); the config it trains with
+is [synthetic_workflow.yaml](synthetic_workflow.yaml) (a template — it reads
+`./synth_clean.jsonl`, which the workflow produces).
 
-### 7. MoE Models
+## Reward-hacking mitigation demo
 
-Fine-tune Mixture-of-Experts models (Qwen3, Mixtral, DeepSeek V3):
+[`reward_hacking/rewards.py`](reward_hacking/rewards.py) provides synthetic reward
+functions for the closed-loop mitigation feature (`soup train
+--reward-hack-mitigation`): a gameable `length_hack_reward` / `sentinel_reward` proxy
+decoupled from a held-out `true_score`. Point a GRPO config's `training.reward_fn` at a
+`.py` that re-exports one as `reward_fn`, enable `reward_hack_detector: info_rm` +
+`reward_hack_mitigation: kl_control`, and watch `mitigation_log.jsonl` under the run's
+output dir. See
+[docs/training.md](../docs/training.md#closed-loop-reward-hacking-auto-mitigation-v07126).
 
-```bash
-soup init --template moe
-soup train
-```
+---
 
-**What it does:**
-- Auto-detects MoE architecture (ScatterMoE / SwitchTransformers)
-- `moe_lora: true` targets expert-specific LoRA modules
-- Optional `moe_aux_loss_coeff` for load balancing
+## Dataset formats
 
-### 8. Long-Context Fine-Tuning (128k+)
+Soup auto-detects and normalizes:
 
-Extend context windows for long-document understanding:
-
-```bash
-soup init --template longcontext
-soup train
-```
-
-**What it does:**
-- Uses RoPE scaling (dynamic) to extend context to 128k tokens
-- Enables gradient checkpointing and FlashAttention for memory efficiency
-- Supports `linear`, `dynamic`, `yarn`, `longrope` scaling types
-- Optional Liger Kernel for fused ops: `pip install 'soup-cli[liger]'`
-
-### 9. Embedding Model Fine-Tuning
-
-Fine-tune sentence embedding models (BGE, E5, GTE) with contrastive or triplet loss:
-
-```bash
-soup init --template embedding
-soup train
-```
-
-**What it does:**
-- Supports contrastive, triplet, and cosine loss functions
-- Configurable pooling: mean, CLS, or last token
-- Works with pair data (`anchor` + `positive`) or triplets (`+ negative`)
-- Compatible with BGE, E5, GTE, INSTRUCTOR, and any HuggingFace model
-
-### 10. Audio / Speech Model
-
-Fine-tune audio-language models (Qwen2-Audio, Whisper):
-
-```bash
-pip install 'soup-cli[audio]'
-soup init --template audio
-soup train
-```
-
-**What it does:**
-- Trains on audio+text pairs (WAV/MP3 files + conversation)
-- Supported models: Qwen2-Audio, Whisper (via transformers)
-- Uses `modality: audio` with `format: audio` data
-
-### 11. Batch Inference
-
-Run inference on a batch of prompts:
-
-```bash
-soup infer --model ./output_sft_basic/ --input prompts.jsonl --output results.jsonl
-```
-
-### 13. Synthetic-data workflow
-
-End-to-end recipe that generates training data from a local LLM, filters
-+ scores + decontaminates it, then trains on the cleaned set. See
-[synthetic_workflow.md](synthetic_workflow.md) for the walkthrough and
-[synthetic_workflow.yaml](synthetic_workflow.yaml) for the bundled config.
-
-```bash
-soup data generate --provider ollama --output ./synth_raw.jsonl
-soup data filter --input ./synth_raw.jsonl --output ./synth_filtered.jsonl
-soup data score --input ./synth_filtered.jsonl --output ./synth_scored.jsonl
-soup data decontaminate --input ./synth_scored.jsonl \
-    --output ./synth_clean.jsonl --benchmarks mmlu,gsm8k
-soup train --config examples/synthetic_workflow.yaml --yes
-```
-
-### 12. Full RLHF Pipeline
-
-Complete reinforcement learning from human feedback:
-
-```bash
-# Step 1: Pre-train with SFT
-soup train --config examples/configs/rlhf_step1_sft.yaml
-
-# Step 2: Train a reward model
-soup train --config examples/configs/rlhf_step2_reward.yaml
-
-# Step 3: PPO with reward model
-soup train --config examples/configs/rlhf_step3_ppo.yaml
-```
-
-## Dataset Formats
-
-Datasets are included in JSONL format. Soup auto-detects and normalizes:
-
-- **Alpaca**: `instruction`, `input`, `output` fields
-- **ShareGPT**: `conversations` with `from`/`value` fields
+- **Alpaca**: `instruction`, `input`, `output`
+- **ShareGPT**: `conversations` with `from`/`value`
 - **ChatML**: OpenAI-style `messages` with `role`/`content`
-- **DPO/ORPO/SimPO/IPO**: `prompt` + `chosen` + `rejected` fields
-- **KTO**: `prompt` + `completion` + `label` fields
-- **LLaVA / ShareGPT4V**: Vision format with `image` + `conversations`
-- **Plaintext**: Raw `.txt` files or JSONL with `text` field (for pre-training)
-- **Audio**: `audio` path + `messages` (for audio/speech models)
+- **DPO/ORPO/SimPO/IPO**: `prompt` + `chosen` + `rejected`
+- **KTO**: `prompt` + `completion` + `label`
+- **LLaVA / ShareGPT4V**: `image` + `conversations`
+- **Plaintext**: raw `.txt` or JSONL with a `text` field (pre-training)
+- **Audio**: `audio` path + `messages`
 
-### Example: Inspect a Dataset
+### Inspect a dataset
 
 ```bash
 soup data inspect examples/data/alpaca_tiny.jsonl
 ```
 
-Output:
 ```
-📊 Dataset Statistics
-
-Format detected: alpaca
-Total entries: 50
-Sample 1:
-  instruction: "Identify the odd one out"
-  input: "twitter, instagram, skype"
-  output: "skype"
+                   Dataset Stats
+┌────────────────────┬────────────────────────────┐
+│ Metric             │ Value                      │
+├────────────────────┼────────────────────────────┤
+│ Total samples      │ 10                         │
+│ Columns            │ instruction, input, output │
+│ Avg length (chars) │ 180                        │
+│ Min length         │ 60                         │
+│ Max length         │ 368                        │
+│ Empty fields       │ 0                          │
+│ Duplicates         │ 0                          │
+└────────────────────┴────────────────────────────┘
 ```
 
-### Example: Convert Between Formats
+### Convert between formats
+
+The source format is auto-detected; you name the target:
 
 ```bash
-# Convert Alpaca to ChatML
 soup data convert examples/data/alpaca_tiny.jsonl \
-  --from alpaca --to chatml \
+  --to chatml \
   --output alpaca_as_chatml.jsonl
 ```
 
-## Directory Structure
+## Directory structure
 
 ```
 examples/
-  configs/              # YAML configuration files
-    sft_basic.yaml
-    dpo_chat.yaml
-    dpo_example.yaml
-    grpo_reasoning.yaml
-    vision_llama.yaml
-    rlhf_step1_sft.yaml
-    rlhf_step2_reward.yaml
-    rlhf_step3_ppo.yaml
-  
-  data/                 # Sample datasets (JSONL)
+  configs/                    # YAML configs
+    sft_basic.yaml            # runnable
+    dpo_chat.yaml             # runnable
+    dpo_example.yaml          # runnable
+    grpo_reasoning.yaml       # runnable
+    rlhf_step1_sft.yaml       # runnable
+    rlhf_step2_reward.yaml    # runnable
+    rlhf_step3_ppo.yaml       # runnable
+    vision_llama.yaml         # template — bring your own images
+  data/                       # format fixtures (see data/README.md)
     alpaca_tiny.jsonl
     chat_preferences.jsonl
     dpo_sample.jsonl
     reasoning_math.jsonl
+  reward_hacking/             # synthetic reward fns for the mitigation demo
+  synthetic_workflow.md       # synthetic-data walkthrough
+  synthetic_workflow.yaml     # template config for that walkthrough
 ```
 
-## Using Your Own Data
+## Using your own data
 
-1. **Prepare data** in one of the supported formats
-2. **Update the config** with your data path:
+1. Put your data in one of the supported formats above.
+2. Point the config at it:
 
 ```yaml
 data:
-  path: /path/to/your/data.jsonl
-  format: alpaca  # or sharegpt, chatml, llava
+  train: /path/to/your/data.jsonl
+  format: alpaca   # or sharegpt, chatml, dpo, llava, ... — omit for auto-detect
 ```
 
-3. **Run training**:
+3. Train:
 
 ```bash
 soup train --config your_config.yaml
 ```
 
-## Tips & Tricks
+## Config shape
 
-### Save Space: Use Quantization
+Configs are nested: `base`, `task`, `data`, `training`, `output` at the top level.
+[`config/schema.py`](../src/soup_cli/config/schema.py) is the single source of truth.
 
-Add quantization to reduce model size:
+### Minimal
 
 ```yaml
-quantization: int8  # Reduces memory by 4x
+base: TinyLlama/TinyLlama-1.1B-Chat-v1.0
+task: sft
+
+data:
+  train: ./your_data.jsonl
+  format: alpaca
+  max_length: 512
+
+training:
+  epochs: 3
+  lr: 5e-4
+  batch_size: 16
+  lora:
+    r: 16
+    alpha: 32
+
+output: ./output/
 ```
 
-### Speed Up Training: Use Unsloth Backend
+### More options
 
-Unsloth is 2-5x faster training:
+```yaml
+base: meta-llama/Llama-2-7b-hf
+task: dpo
+backend: transformers        # or unsloth, mlx
+
+data:
+  train: ./dataset.jsonl
+  format: dpo
+  max_length: 2048
+  val_split: 0.1
+
+training:
+  epochs: 2
+  lr: 1e-4
+  dpo_beta: 0.1
+  batch_size: 16             # or "auto" to probe for the largest that fits
+  gradient_accumulation_steps: 4
+  quantization: 4bit         # 4bit, 8bit, none, gptq, awq, fp8, ...
+  scheduler: cosine
+  warmup_ratio: 0.1
+  gradient_checkpointing: true
+  lora:
+    r: 64
+    alpha: 128
+    dropout: 0.05
+    target_modules: auto
+    # use_dora: true         # Weight-Decomposed LoRA
+    # use_rslora: true       # rank-stabilized scaling
+
+output: ./output_advanced/
+```
+
+## After training
+
+### Batch inference
 
 ```bash
-pip install 'soup-cli[fast]'
+soup infer --model ./output_sft_basic/ --input prompts.jsonl --output results.jsonl
 ```
 
-Then in your config:
+### Merge the LoRA adapter into a full model
 
-```yaml
-backend: unsloth
+```bash
+soup merge --adapter ./output_sft_basic/ --output ./merged_model/
 ```
 
-### Monitor Training: Use Weights & Biases
+### Export to GGUF
 
-Enable W&B logging:
+```bash
+soup export --model ./output_sft_basic/ --format gguf --quant q8_0 --output model.gguf
+```
+
+Requires a built llama.cpp — see [docs/serving-and-export.md](../docs/serving-and-export.md).
+`soup export --model ... --deploy ollama` exports and registers with Ollama in one step.
+
+### Monitor with Weights & Biases
 
 ```bash
 pip install wandb
 soup train --config your_config.yaml --wandb
 ```
 
-### Export for Inference: Convert to GGUF
-
-After training, convert for Ollama/llama.cpp:
-
-```bash
-soup export output_sft_basic/ --output model.gguf --quant q8_0
-```
-
-Then use with Ollama:
-
-```bash
-ollama create my-model -f Ollama.modelfile
-```
-
-### Merge LoRA Adapter
-
-Merge your LoRA adapter into a standalone model:
-
-```bash
-soup merge output_sft_basic/ --output merged_model/
-```
-
-## Common Issues
+## Common issues
 
 ### "CUDA out of memory"
 
-- Reduce `batch_size` in config
-- Enable quantization: `quantization: int8`
-- Use smaller model: Mistral-7B instead of Llama-70B
+- Lower `training.batch_size`, or set it to `"auto"` to probe for a size that fits
+- Add `training.quantization: 4bit`
+- Add `training.gradient_checkpointing: true`
+- Use a smaller base model
+- Or stream the base layer-by-layer: `training.stream_layers: true`
+  (see [docs/training.md](../docs/training.md))
 
 ### "Dataset not found"
 
-- Check file path in config (use absolute path if unsure)
-- Verify format is correct: `soup data inspect your_data.jsonl`
+- Paths in a config resolve from the directory you run `soup` in, not from the config's
+  location. Run from the repo root, or use an absolute path.
+- Check the file parses: `soup data validate your_data.jsonl`
 
 ### "Model not found on Hugging Face"
 
-- Check model ID spelling
-- Ensure you have HuggingFace token: `huggingface-cli login`
-- Or use a different model that's publicly available
+- Check the model id spelling
+- Gated models (Llama, Gemma) need `huggingface-cli login` and accepted terms
 
-## Creating Your Own Configs
+### Config validation errors
 
-### Minimal Config Template
+`soup train` validates before doing any work. `base: Field required` or
+`data -> train: Field required` means the config uses an old flat layout — see
+[Config shape](#config-shape) above for the current nesting.
 
-```yaml
-model: tinyllama-1.1b
-data:
-  path: ./your_data.jsonl
-  format: alpaca
-task: sft
-lora_r: 16
-lora_alpha: 32
-batch_size: 32
-num_epochs: 3
-learning_rate: 5e-4
-output_dir: ./output/
-```
+## Learn more
 
-### Advanced Config Template
-
-```yaml
-model: llama-2-7b
-data:
-  path: ./dataset.jsonl
-  format: sharegpt
-task: dpo
-backend: unsloth
-quantization: int8
-lora_r: 64
-lora_alpha: 128
-lora_dropout: 0.05
-batch_size: 16
-gradient_accumulation_steps: 4
-num_epochs: 2
-learning_rate: 1e-4
-warmup_ratio: 0.1
-max_seq_length: 2048
-output_dir: ./output_advanced/
-```
-
-See the [config schema](../src/soup_cli/config/schema.py) (the single source of truth) for all available options.
-
-## Reward-hacking mitigation demo
-
-`reward_hacking/rewards.py` provides synthetic reward functions for the
-closed-loop reward-hacking mitigation feature (`soup train
---reward-hack-mitigation`): a gameable `length_hack_reward` / `sentinel_reward`
-proxy decoupled from a held-out `true_score`. Point a GRPO config's
-`training.reward_fn` at a `.py` that re-exports one as `reward_fn`, enable
-`reward_hack_detector: info_rm` + `reward_hack_mitigation: kl_control`, and watch
-`mitigation_log.jsonl` under the run's output dir. See
-[docs/training.md](../docs/training.md#closed-loop-reward-hacking-auto-mitigation-v07126).
-
-## Learn More
-
-- **README**: [Main documentation](../README.md)
-- **Docs**: [Full feature reference](../docs/README.md)
-- **CONTRIBUTING**: [How to contribute](../CONTRIBUTING.md)
+- [Main README](../README.md)
+- [Full docs](../docs/README.md)
+- [Data engineering](../docs/data.md)
+- [Training](../docs/training.md)
+- [CONTRIBUTING](../CONTRIBUTING.md)
 
 ## Questions?
 
-- Check the [GitHub Discussions](https://github.com/MakazhanAlpamys/Soup/discussions)
-- Open an [Issue](https://github.com/MakazhanAlpamys/Soup/issues)
-- Read [SECURITY.md](../SECURITY.md) for security questions
-
-Happy training! 🍲
+- [GitHub Discussions](https://github.com/MakazhanAlpamys/Soup/discussions)
+- [Issues](https://github.com/MakazhanAlpamys/Soup/issues)
+- [SECURITY.md](../SECURITY.md)

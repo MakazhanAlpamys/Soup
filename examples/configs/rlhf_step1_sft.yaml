@@ -1,30 +1,43 @@
 # RLHF Step 1: Supervised Fine-Tuning (SFT)
-# Pre-train the model before reward model training
-# Use high-quality examples
+# Train the base policy before reward-model training.
+# Use high-quality examples.
+#
+# The bundled dataset is a 10-row FORMAT sample, not a training set.
+# See examples/data/README.md.
+#
+# Usage:
+#   soup train --config examples/configs/rlhf_step1_sft.yaml
 
-model: TinyLlama/TinyLlama-1.1B-Chat-v1.0
-data:
-  path: examples/data/alpaca_tiny.jsonl
-  format: alpaca
+base: TinyLlama/TinyLlama-1.1B-Chat-v1.0
 task: sft
 backend: transformers
-quantization: null
-lora_r: 64
-lora_alpha: 128
-lora_dropout: 0.05
-lora_target_modules:
-  - q_proj
-  - v_proj
-batch_size: 16
-gradient_accumulation_steps: 1
-num_epochs: 1
-learning_rate: 5e-4
-lr_scheduler_type: linear
-warmup_ratio: 0.05
-weight_decay: 0.0
-max_seq_length: 2048
-output_dir: ./output_rlhf_sft/
-seed: 42
-logging_steps: 10
-save_steps: 50
-save_strategy: steps
+
+data:
+  train: examples/data/alpaca_tiny.jsonl
+  format: alpaca
+  # 512, not 2048: the longest row in any bundled fixture is ~233 tokens, so
+  # nothing is truncated and there is 2x headroom. A larger value only inflates
+  # the activation memory the VRAM pre-flight budgets for. Raise it when you
+  # point this config at longer data of your own.
+  max_length: 512
+
+training:
+  epochs: 1
+  lr: 5e-4
+  batch_size: 4
+  gradient_accumulation_steps: 1
+  quantization: none
+  scheduler: linear
+  warmup_ratio: 0.05
+  weight_decay: 0.0
+  logging_steps: 10
+  save_steps: 50
+  lora:
+    r: 64
+    alpha: 128
+    dropout: 0.05
+    target_modules:
+      - q_proj
+      - v_proj
+
+output: ./output_rlhf_sft/

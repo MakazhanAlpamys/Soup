@@ -102,24 +102,39 @@ def test_beta_schedule_callback_sets_beta_from_start():
 
 
 def test_distill_term_masks_padding_and_prompt():
-    """The default distillation divergence must be measured only over trained
-    tokens (labels != -100), not padding/prompt."""
+    """The default distillation divergence is measured only over trained tokens,
+    CAUSALLY ALIGNED with the CE term: logit position i is trained iff
+    labels[i+1] != -100 (v0.71.33 off-by-one fix — the mask was previously
+    applied to the unshifted labels, dropping each span's first predicted token
+    and leaking the boundary token past it)."""
     torch = pytest.importorskip("torch")
     from soup_cli.trainer.distill import _compute_distill_term
 
     student = torch.zeros(1, 3, 4)
     teacher = torch.zeros(1, 3, 4)
-    # Positions 0,1 diverge wildly; position 2 is identical (KL 0).
-    student[0, 0, 0] = 10.0
-    teacher[0, 0, 3] = 10.0
+    # Divergence localised at logit position 1, which predicts token index 2.
     student[0, 1, 1] = 10.0
     teacher[0, 1, 2] = 10.0
-    labels = torch.tensor([[-100, -100, 5]])  # only the last token is trained
 
-    masked = float(_compute_distill_term(student, teacher, "forward_kl", 1.0, labels=labels))
+    # Token index 2 is the only trained target → logit position 1 is trained →
+    # the divergence there IS measured.
+    labels_trained = torch.tensor([[-100, -100, 5]])
+    masked = float(
+        _compute_distill_term(student, teacher, "forward_kl", 1.0, labels=labels_trained)
+    )
+    assert masked > 0.1, masked
+
+    # Token index 1 trained instead → logit position 0 is the trained one, but
+    # the divergence lives at position 1 → excluded → ~0.
+    labels_other = torch.tensor([[-100, 5, -100]])
+    masked_other = float(
+        _compute_distill_term(student, teacher, "forward_kl", 1.0, labels=labels_other)
+    )
+    assert masked_other < 1e-5, masked_other
+
+    # Unmasked averages over every position → the divergent one still shows.
     unmasked = float(_compute_distill_term(student, teacher, "forward_kl", 1.0))
-    assert masked < 1e-5, masked  # only the identical (trained) position counts
-    assert unmasked > 0.1, unmasked  # divergent prompt positions dominate unmasked
+    assert unmasked > 0.05, unmasked
 
 
 def test_kto_negative_one_label_is_undesirable():

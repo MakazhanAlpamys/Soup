@@ -109,13 +109,40 @@ class TestGRPOFP16Routing:
         kwargs = wrapper._build_precision_kwargs()
         assert kwargs == {"fp16": True, "bf16": False}
 
-    def test_grpo_wrapper_default_bf16_when_no_flag(self) -> None:
+    def test_grpo_wrapper_default_asks_the_card(self, monkeypatch) -> None:
+        """Was ``test_grpo_wrapper_default_bf16_when_no_flag``, asserting bf16
+        on any CUDA device. transformers refuses bf16 on a pre-Ampere card, so
+        that default killed GRPO on a T4/P100 before step 0 (#387). Note this
+        test passed locally on an Ampere box AND in CI — where there is no GPU
+        at all and the old code never asked — which is why the capability is
+        stubbed here in both directions."""
+        import torch
+
         from soup_cli.trainer.grpo import GRPOTrainerWrapper
 
         cfg = load_config_from_string(_minimal_grpo_yaml())
         wrapper = GRPOTrainerWrapper(cfg, device="cuda")
-        kwargs = wrapper._build_precision_kwargs()
-        assert kwargs == {"fp16": False, "bf16": True}
+
+        class _Cuda:
+            def __init__(self, bf16):
+                self._bf16 = bf16
+
+            def is_available(self):
+                return True
+
+            def is_bf16_supported(self, including_emulation: bool = True):
+                # The bare call is permissive and answers True on a T4 via
+                # emulation; only the no-emulation form means bf16 hardware.
+                return self._bf16 if not including_emulation else True
+
+            def get_device_capability(self, device=None):
+                return (8, 0) if self._bf16 else (7, 5)
+
+        monkeypatch.setattr(torch, "cuda", _Cuda(True))
+        assert wrapper._build_precision_kwargs() == {"fp16": False, "bf16": True}
+
+        monkeypatch.setattr(torch, "cuda", _Cuda(False))
+        assert wrapper._build_precision_kwargs() == {"fp16": True, "bf16": False}
 
     def test_grpo_wrapper_cpu_no_precision(self) -> None:
         from soup_cli.trainer.grpo import GRPOTrainerWrapper
@@ -337,8 +364,11 @@ class TestReviewFixes:
         prefix = "a" * (512 - len("-pixtral"))
         assert is_known_vlm_base(prefix + "-pixtral") is True
 
-    def test_precision_kwargs_explicit_false(self) -> None:
-        """tdd-review LOW — explicit `grpo_fp16: false` produces bf16 path."""
+    def test_precision_kwargs_explicit_false(self, monkeypatch) -> None:
+        """tdd-review LOW — explicit `grpo_fp16: false` leaves the choice to the
+        card rather than forcing fp16 (#387: it used to force bf16 instead)."""
+        import torch
+
         from soup_cli.trainer.grpo import GRPOTrainerWrapper
 
         cfg = load_config_from_string(_minimal_grpo_yaml(
@@ -349,6 +379,18 @@ class TestReviewFixes:
             },
         ))
         wrapper = GRPOTrainerWrapper(cfg, device="cuda")
+
+        class _Cuda:
+            def is_available(self):
+                return True
+
+            def is_bf16_supported(self, including_emulation: bool = True):
+                return True
+
+            def get_device_capability(self, device=None):
+                return (8, 0)
+
+        monkeypatch.setattr(torch, "cuda", _Cuda())
         assert wrapper._build_precision_kwargs() == {"fp16": False, "bf16": True}
 
     def test_precision_kwargs_mps_device(self) -> None:

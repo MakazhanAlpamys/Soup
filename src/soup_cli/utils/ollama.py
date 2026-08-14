@@ -1,5 +1,6 @@
 """Ollama integration utilities — detect, deploy, list, remove models."""
 
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -167,7 +168,12 @@ def create_modelfile(
     Returns:
         Modelfile content as string.
     """
-    lines = [f"FROM {gguf_path}"]
+    # `ollama create` resolves a relative FROM against the Modelfile's own
+    # directory, and we write the Modelfile to a temp dir — so a relative GGUF
+    # path made Ollama treat it as a remote model name and fail with
+    # "pull model manifest: file does not exist". Always emit an absolute path
+    # (v0.71.35 GGUF-on-Windows validation).
+    lines = [f"FROM {os.path.abspath(str(gguf_path))}"]
 
     # Template
     if template:

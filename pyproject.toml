@@ -4,13 +4,19 @@ build-backend = "hatchling.build"
 
 [project]
 name = "soup-cli"
-version = "0.71.28"
+version = "0.73.0"
 description = "Fine-tune and post-train LLMs in one command. No SSH, no config hell."
 readme = "README.md"
 license = "Apache-2.0"
-requires-python = ">=3.10"
+# Upper-bounded on purpose (#358). CI tests 3.10 / 3.11 / 3.12 and nothing above.
+# Without a ceiling, pip on 3.13+ resolves torch wheels nobody here has run, and
+# the failure is not a Soup error message — it is a loader crash inside c10.dll /
+# libc10.so before any Soup code executes, so the user has nothing to act on.
+# `tests/test_requires_python_bound.py` derives this bound from the CI matrix, so
+# widening one without the other fails the suite.
+requires-python = ">=3.10,<3.13"
 authors = [
-    { name = "Soup Team" },
+    { name = "Soup Team", email = "team@trysoup.dev" },
 ]
 keywords = ["llm", "fine-tuning", "lora", "qlora", "machine-learning"]
 classifiers = [
@@ -22,7 +28,7 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 # Core install (`pip install soup-cli`) is intentionally light: the CLI, config
-# system, and data tools вЂ” no PyTorch. v0.71.0 split the heavy training stack
+# system, and data tools — no PyTorch. v0.71.0 split the heavy training stack
 # (torch / transformers / peft / trl / datasets / bitsandbytes / accelerate)
 # into the `[train]` extra below.
 dependencies = [
@@ -35,18 +41,71 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# v0.71.0 вЂ” heavy training stack. `pip install 'soup-cli[train]'` to fine-tune.
+# v0.71.0 — heavy training stack. `pip install 'soup-cli[train]'` to fine-tune.
 # These were core dependencies through v0.70.0; pins are unchanged.
 train = [
     "torch>=2.0.0",
     "transformers>=4.36.0,<5.0.0",
     "peft>=0.7.0",
-    "trl>=0.7.0",
+    # Capped below 0.29. #326 raised this from `<0.27` after migrating the six
+    # preference trainers (bco, dpo, ipo, kto, orpo, simpo) off the two trl APIs
+    # that moved. The cap is no longer set by those trainers at all — see the
+    # 0.29 note at the bottom, which is about `online_dpo`.
+    #
+    # trl removed `max_prompt_length` from the preference configs in STAGES
+    # rather than in one release — which is why a single spot-check gives the
+    # wrong answer. This table is now verified the only way that settles it, by
+    # CONSTRUCTING each config with the exact kwargs the wrappers pass:
+    #
+    #   version          dpo   kto   orpo   cpo   bco
+    #   0.14.0 - 0.26.2  yes   yes   yes    yes   yes
+    #   0.27.0 - 0.27.2  yes   NO    yes    yes   yes
+    #   0.28.0           yes   NO    NO     NO    NO
+    #   0.29.0 - 1.9.2   NO    NO    NO     NO    NO
+    #
+    # There is NO successor field: `max_length` survives on every version and
+    # absorbs prompt truncation, so the migration is to stop passing the keyword
+    # to a config that no longer has it, not to rename it. The trainers now ask
+    # the config class whether it accepts the keyword (trainer/_trl_compat.py)
+    # instead of comparing versions, because a version table is exactly what was
+    # wrong twice before. On every trl that still has the field the behaviour is
+    # byte-identical — measured: the six train to identical losses on 0.26.2,
+    # 0.28.0 and 1.9.2 on the same fixture.
+    #
+    # Separately, trl 0.29.0 dropped ORPOConfig / CPOConfig / BCOConfig (and
+    # their trainers) from the public `trl` namespace. They were not deleted —
+    # they live on under `trl.experimental.<algo>` — so those three trainers now
+    # fall back to that path when the public import is gone.
+    #
+    # WHY THE CAP IS 0.29 AND NOT HIGHER: `soup train --task online_dpo` is
+    # broken on 0.29.x, and the cause is not in these trainers. trl 0.29 moved
+    # `BasePairwiseJudge` to `trl.experimental.judges` while still accepting
+    # `judge=`, so the wrapper correctly selects the judge path and then
+    # `eval/judge.py::_base_pairwise_judge_cls` cannot import the base class.
+    # trl 1.x drops `judge=` entirely, so the wrapper falls back to
+    # `reward_funcs=` and online_dpo works again — measured: all nine tasks build
+    # on 1.9.2, and the six preference tasks train there. Raising the cap past
+    # 0.29 therefore needs (a) a `trl.experimental.judges` fallback in
+    # eval/judge.py and (b) validation of the trl surfaces this bump did not
+    # exercise (serve, GRPO variants, PPO with a real reward model). Shipping
+    # against a release nobody has validated is not a substitute for that.
+    #
+    # The underlying bug was latent, not new: the trl imports live inside
+    # `setup()`, which no test had ever called on those wrappers, so CI stayed
+    # green while anyone pip-installing got a broken install. v0.72.4's
+    # end-to-end preference tests are what surfaced it.
+    #
+    # The floor is 0.14.0, not 0.7.0: `setup()` imports GRPOTrainer
+    # unconditionally and trl first exports it at 0.14.0 (OnlineDPO / KTO / BCO /
+    # BasePairwiseJudge arrive at 0.11.0; trl 0.7.0 has none of them). Resolvers
+    # normally pick the newest allowed version, so the impossible floor only bit
+    # under a constraints file or anyone reading the metadata as a support claim.
+    "trl>=0.14.0,<0.29",
     "datasets>=2.14.0",
     "bitsandbytes>=0.41.0",
     "accelerate>=0.25.0",
 ]
-# v0.71.0 вЂ” convenience meta-extra pulling the main optional stacks.
+# v0.71.0 — convenience meta-extra pulling the main optional stacks.
 all = ["soup-cli[train,serve,ui,data,mcp]"]
 eval = ["lm-eval>=0.4.0"]
 data = ["datasketch>=1.6.0"]
@@ -71,41 +130,48 @@ audio = ["librosa>=0.10.0", "soundfile>=0.12.0"]
 awq = ["autoawq>=0.2.0"]
 gptq = ["auto-gptq>=0.7.0"]
 sglang = ["sglang>=0.2.0", "fastapi>=0.104.0", "uvicorn>=0.24.0"]
-mlx = ["mlx>=0.20.0", "mlx-lm>=0.20.0"]
+mlx = ["mlx>=0.20.0", "mlx-lm>=0.31.3"]
 cce = ["cut-cross-entropy>=24.10.0"]
 tui = ["textual>=0.50.0"]
-# v0.53.8 #89 вЂ” bundle MLflow / SwanLab / Trackio for `--tracker` users.
+# v0.53.8 #89 — bundle MLflow / SwanLab / Trackio for `--tracker` users.
 trackers = ["mlflow>=2.0.0", "swanlab>=0.3.0", "trackio>=0.0.1"]
-# v0.53.8 #85 вЂ” fsspec backends for remote dataset loading (s3 / gs / az / oci).
+# v0.53.8 #85 — fsspec backends for remote dataset loading (s3 / gs / az / oci).
 remote = ["fsspec>=2024.1.0", "s3fs>=2024.1.0", "gcsfs>=2024.1.0", "adlfs>=2024.1.0"]
-# v0.53.10 #150 вЂ” bundle scikit-optimize so `soup data mix --optimize` runs the
+# v0.53.10 #150 — bundle scikit-optimize so `soup data mix --optimize` runs the
 # Bayesian-style loop instead of falling back to the v0.48.0 Dirichlet sampler.
 mix = ["scikit-optimize>=0.9.0"]
-# v0.53.10 #113 вЂ” production-grade data quality: langdetect (language) +
+# v0.53.10 #113 — production-grade data quality: langdetect (language) +
 # presidio-analyzer (PII). Llama-Guard-3-1B is documented as a manual recipe
 # (license + ~600 MB weight blob too large to bundle by default).
 data-pro = ["langdetect>=1.0.9", "presidio-analyzer>=2.2.0"]
-# v0.71.2 #179/#185 вЂ” ed25519 detached signing for `soup attest` / `soup
+# v0.71.2 #179/#185 — ed25519 detached signing for `soup attest` / `soup
 # adapters sign`. Pure-offline; Sigstore keyless (OIDC + Fulcio/Rekor network)
 # stays infra-blocked and is NOT bundled here.
 sign = ["cryptography>=41.0.0"]
-# v0.71.3 #181 вЂ” reportlab PDF rendering for `soup train --annex-xi *.pdf`.
+# v0.71.3 #181 — reportlab PDF rendering for `soup train --annex-xi *.pdf`.
 pdf = ["reportlab>=4.0.0"]
-# v0.71.3 #180 вЂ” codecarbon offline energy/CO2 measurement for
+# v0.71.3 #180 — codecarbon offline energy/CO2 measurement for
 # `soup train --track-energy` (offline; no IP-geolocation network call).
 carbon = ["codecarbon>=2.0.0"]
-# v0.71.13 #225/#227 вЂ” prompt-program / tool-schema compilers
+# v0.71.13 #225/#227 — prompt-program / tool-schema compilers
 # (`soup compile` / `soup compile-tools`). Lazy-imported with a friendly
 # ImportError; not installed by default (heavy dependency trees).
 compile = ["dspy-ai>=2.5.0", "textgrad>=0.1.0", "gepa>=0.0.1"]
-# v0.71.18 #16 вЂ” serverless cloud GPU training (`soup train --cloud modal`).
+# v0.71.18 #16 — serverless cloud GPU training (`soup train --cloud modal`).
 # Lazy-imported; only needed for `--cloud-submit` (plan-only render needs no
 # dependency). Modal auth is via `modal setup`.
 modal = ["modal>=0.60.0"]
 # v0.71.28 - `soup mcp serve` MCP server. The official `mcp` python SDK is
 # lazy-imported (only src/soup_cli/mcp_server/server.py touches it), so the CLI
 # stays light without it. Floor pinned to guard against SDK API churn.
-mcp = ["mcp>=1.2.0"]
+#
+# v0.72.3: capped below 2.0. The floor alone was not enough — mcp 2.0.0 removed
+# `mcp.shared.memory.create_connected_server_and_client_session` and dropped
+# `Server.list_tools`, which broke every `soup mcp serve` round-trip test on all
+# nine CI jobs the day it was published. 1.29.0 (the newest 1.x) still exposes
+# both, verified directly. Migrating to the 2.x API is its own piece of work,
+# and shipping against a major nobody has validated is not a substitute for it.
+mcp = ["mcp>=1.2.0,<2"]
 
 [project.scripts]
 soup = "soup_cli.cli:run"
@@ -114,10 +180,11 @@ soup = "soup_cli.cli:run"
 Homepage = "https://github.com/MakazhanAlpamys/Soup"
 Repository = "https://github.com/MakazhanAlpamys/Soup"
 Issues = "https://github.com/MakazhanAlpamys/Soup/issues"
+Discord = "https://discord.gg/8RgVbFA6Zq"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/soup_cli"]
-# v0.53.8 #93 вЂ” include bundled fixture JSONLs as package data so
+# v0.53.8 #93 — include bundled fixture JSONLs as package data so
 # `soup data demo` works in zipapp / namespace-package installs.
 # Hatchling's ``packages = ["src/soup_cli"]`` already recurses into the
 # package directory, so we use the artifacts directive (NOT
@@ -127,6 +194,7 @@ artifacts = [
   "src/soup_cli/data/_fixtures/*.jsonl",
   "src/soup_cli/data/_fixtures/unlearning/*.jsonl",
   "src/soup_cli/data/_fixtures/behavior/*.jsonl",
+  "src/soup_cli/data/_fixtures/gate/*.jsonl",
 ]
 
 [tool.ruff]
@@ -150,7 +218,7 @@ follow_imports = "silent"
 testpaths = ["tests"]
 markers = [
     "smoke: slow smoke tests that download models and run training (run with: pytest -m smoke)",
-    "unit: fast isolated tests вЂ” no subprocess, network, filesystem, or real model load",
+    "unit: fast isolated tests — no subprocess, network, filesystem, or real model load",
     "integration: tests that touch real subprocess, SQLite, filesystem, or HTTP",
 ]
 addopts = "-m 'not smoke' --cov=soup_cli --cov-fail-under=77 --cov-report=term-missing:skip-covered"
