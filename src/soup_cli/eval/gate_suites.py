@@ -163,14 +163,21 @@ def load_suite_items(name: str) -> Tuple[dict, ...]:
     return _load_gate_fixture(filename)
 
 
-def _call(gen: GeneratorFn, prompt: str) -> str:
-    """Invoke ``gen`` for one prompt; a generation error / non-str result scores
-    as a failure (empty string) and an oversized result is truncated to
-    ``_MAX_OUTPUT_LEN`` — so one bad generation never aborts a run."""
+def _call(gen: GeneratorFn, prompt: str) -> str | None:
+    """Invoke ``gen`` for one prompt, returning the (length-capped) string output.
+
+    Returns ``None`` only when the generator *raised* — an errored item, distinct
+    from one that produced output. A non-str return still scores as a failed item
+    (empty string), preserving the documented "non-str generation scores 0, never
+    raises" contract. One errored item never aborts a run
+    (:func:`_fraction_passing` isolates it), but an *entire suite* of items that
+    all raised is a broken generator rather than a model scoring zero, and the
+    caller surfaces that instead of reporting a misleading unanimous ``0.0``
+    (#355)."""
     try:
         out = gen(prompt)
     except Exception:  # noqa: BLE001 — a generation error is a failed item, not a crash
-        return ""
+        return None
     if not isinstance(out, str):
         return ""
     return out[:_MAX_OUTPUT_LEN]
@@ -184,17 +191,34 @@ def _fraction_passing(
     Each item is scored independently: a predicate that raises (e.g. a
     ``RecursionError`` from ``json.loads`` on a pathologically-nested output)
     scores that one item as a failure rather than aborting the whole leg-2 run.
+
+    Raises :class:`RuntimeError` when the generator *raised* on every item — a
+    broken generator, not a model that genuinely scores zero. Isolating a single
+    bad item is a feature; converting a total generator failure into a plausible
+    unanimous ``0.0`` (a DON'T-SHIP verdict) is the #355 defect this guards. A
+    generator that *returns* a non-str is a scored failure, not an error, so the
+    documented "non-str generation scores 0, never raises" contract is unchanged.
     """
     if not items:
         return 0.0
     passed = 0
+    errored = 0
     for item in items:
         output = _call(gen, item.get("prompt", ""))
+        if output is None:
+            errored += 1
+            continue
         try:
             if predicate(item, output):
                 passed += 1
         except Exception:  # noqa: BLE001 — a scoring error is a failed item, not a crash
             continue
+    if errored == len(items):
+        raise RuntimeError(
+            f"generator raised on every one of {len(items)} items — this is a "
+            f"broken generator, not a model scoring zero; check the generator is "
+            f"callable and returns str"
+        )
     return passed / len(items)
 
 
@@ -334,8 +358,17 @@ def score_bundled_suite(name: str, gen: GeneratorFn) -> float:
 
     MCQ / arithmetic suites route through the (fixed) ``ForgettingDetector``
     scorer; behavioural suites through their bundled pure scorer. Raises
-    ``ValueError`` for an unknown suite (never silently 0.0).
+    ``TypeError`` for a non-callable ``gen`` and ``ValueError`` for an unknown
+    suite — never a silent ``0.0``, which reads as "the model failed every item"
+    (a DON'T-SHIP verdict) and makes a caller error indistinguishable from a real
+    regression (#355).
     """
+    if not callable(gen):
+        raise TypeError(
+            f"score_bundled_suite() gen must be callable, got "
+            f"{type(gen).__name__!r}; a non-callable generator would otherwise "
+            f"score a misleading 0.0 rather than surfacing the caller error"
+        )
     if name in MINI_BENCHMARKS:
         return ForgettingDetector(generate_fn=gen, benchmark=name).run_baseline()
     if name in _EXTENDED_SUITES:

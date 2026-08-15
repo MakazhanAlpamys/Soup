@@ -18,6 +18,19 @@ reproducing 70+ versions of notes.
 
 ### Fixed
 
+- **`score_bundled_suite` returned `0.0` for a non-callable `gen` instead of
+  raising, so a caller error was indistinguishable from a model failing every
+  item (#355).** The function feeds `soup ship`'s leg 2, where `0.0` is a
+  DON'T-SHIP verdict. A non-callable `gen` (a list, `None`, a string) reached the
+  per-item exception isolation in `_fraction_passing`, which turned a programming
+  error into a plausible unanimous zero — the docstring already promised the
+  opposite ("Raises `ValueError` for an unknown suite, never silently 0.0"), but
+  the guarantee was only half enforced. `score_bundled_suite` now raises
+  `TypeError` for a non-callable `gen` (covering both the MCQ and behavioural
+  routes), and a generator that *raises* on every item raises `RuntimeError`
+  rather than reporting `0.0`. A generator that *returns* a non-str still scores
+  as a failed item, so the existing "non-str generation scores 0, never raises"
+  contract is unchanged.
 
 - **The MLX `adapter_config.json` shipped `target_modules` unresolved, so a default
   MLX adapter loaded as a silent no-op (#392).** `_apply_lora` resolved
