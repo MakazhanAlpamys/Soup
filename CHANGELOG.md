@@ -69,6 +69,20 @@ reproducing 70+ versions of notes.
   the wrong kernel or crashing. The two call sites that separately hand-wrote
   the "no matching architecture" advisory now share one message.
 
+- **`soup draft measure` now refuses a mismatched pair up front and no longer
+  discards a completed measurement when the assisted arm fails (#344).** `measure`
+  gated on `same_tokenizer()` (tokenizer vocab + probe ids), which accepts a pair
+  whose tokenizers are identical but whose `config.vocab_size` differs by padded
+  embedding rows (e.g. Qwen2.5 large←small) — exactly the pair `distill` refuses.
+  Transformers' assisted generation gates on `config.vocab_size`, so the run died
+  with "different tokenizers" deep inside `generate()`, after the expensive load,
+  and because the report was written only after that arm every completed
+  acceptance/plain-throughput number was thrown away. `measure` now uses the same
+  `config.vocab_size` precondition as `distill` (refusing before any model loads),
+  keeps `same_tokenizer()` as an additional check, and writes the report
+  incrementally so a failing assisted arm leaves the acceptance rate and plain
+  throughput on disk.
+
 ## [0.73.3] - 2026-08-18
 
 ### Added

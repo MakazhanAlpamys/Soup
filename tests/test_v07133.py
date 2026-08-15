@@ -1572,6 +1572,12 @@ class TestDraftMeasureCli:
         tok_a = _FakeTok(49152)
         tok_b = _FakeTok(49152) if compatible else _FakeTok(151936)
 
+        # measure now gates on config.vocab_size before loading (issue #344). Make
+        # that gate pass (equal config vocab) so these tests keep exercising the
+        # load / same_tokenizer / measurement paths; the tokenizer-vocab mismatch
+        # `compatible=False` sets still trips same_tokenizer as before.
+        monkeypatch.setattr(draft_cmd, "_vocab_size_of", lambda mid, trc=False: 49152)
+
         def _fake_load(model_id, **kwargs):
             tok = tok_a if "target" in model_id else tok_b
             return object(), tok, "cpu"
@@ -1683,6 +1689,9 @@ class TestDraftMeasureCli:
         def _boom(model_id, **kw):
             raise OSError("model not found")
 
+        # Config gate passes (issue #344) so the flow reaches the load, which is
+        # what this test exercises.
+        monkeypatch.setattr(draft_cmd, "_vocab_size_of", lambda mid, trc=False: 49152)
         monkeypatch.setattr(draft_cmd, "_load_pair_member", _boom)
         prompts = self._prompts(in_tmp_cwd)
         result = runner.invoke(
@@ -1752,6 +1761,101 @@ class TestDraftMeasureCli:
         )
         assert result.exit_code == 1
         assert "no tokens" in result.output.lower()
+
+
+class TestDraftMeasureVocabGate:
+    """issue #344 — measure must refuse the SAME pairs distill refuses (on
+    config.vocab_size, before loading), and must not discard a completed
+    measurement when the assisted arm fails inside transformers."""
+
+    def _prompts(self, tmp_path):
+        return _write_jsonl(
+            tmp_path / "p.jsonl", [{"prompt": "What is 2+2?"}, {"prompt": "Hi"}]
+        )
+
+    def test_config_vocab_mismatch_refused_before_any_model_loads(
+        self, runner, in_tmp_cwd, monkeypatch
+    ):
+        # Qwen2.5 large<-small: identical tokenizers, but config.vocab_size differs
+        # by padded embedding rows (152064 vs 151936). same_tokenizer() accepts it;
+        # transformers' assisted generation does not. measure must gate on the
+        # config vocab up front, exactly like distill.
+        from soup_cli.commands import draft as draft_cmd
+        from soup_cli.commands.draft import app
+
+        monkeypatch.setattr(
+            draft_cmd,
+            "_vocab_size_of",
+            lambda mid, trc=False: 152064 if "target" in mid else 151936,
+        )
+        loaded: list[str] = []
+
+        def _fake_load(model_id, **kwargs):
+            loaded.append(model_id)
+            return object(), _FakeTok(151643), "cpu"
+
+        # Everything past the gate is patched out, so the only thing that can make
+        # this test pass is the gate itself refusing before the load.
+        monkeypatch.setattr(draft_cmd, "_load_pair_member", _fake_load)
+        monkeypatch.setattr(draft_cmd, "measure_acceptance", lambda *a, **k: (75, 100))
+        monkeypatch.setattr(draft_cmd, "measure_throughput", lambda *a, **k: 20.0)
+
+        prompts = self._prompts(in_tmp_cwd)
+        result = runner.invoke(
+            app,
+            ["measure", "--target", "org/target-qwen-32b", "--draft", "org/qwen-0_5b",
+             "--prompts", prompts, "-o", "report.json"],
+        )
+        assert result.exit_code == 1, (result.output, repr(result.exception))
+        assert "vocab" in result.output.lower()
+        # Refused BEFORE the expensive load, and no report written.
+        assert loaded == []
+        assert not (in_tmp_cwd / "report.json").exists()
+
+    def test_assisted_arm_failure_keeps_acceptance_and_plain_on_disk(
+        self, runner, in_tmp_cwd, monkeypatch
+    ):
+        import json as _json
+
+        from soup_cli.commands import draft as draft_cmd
+        from soup_cli.commands.draft import app
+
+        monkeypatch.setattr(draft_cmd, "_vocab_size_of", lambda mid, trc=False: 49152)
+        monkeypatch.setattr(
+            draft_cmd,
+            "_load_pair_member",
+            lambda model_id, **kw: (object(), _FakeTok(49152), "cpu"),
+        )
+        monkeypatch.setattr(draft_cmd, "measure_acceptance", lambda *a, **k: (75, 100))
+
+        def _throughput(model, tok, prompts, *, assistant_model=None,
+                        num_assistant_tokens=5, max_new_tokens=64):
+            # The assisted arm is the one transformers refuses (issue #344); the
+            # plain arm has already succeeded by the time it runs.
+            if assistant_model is not None:
+                raise ValueError(
+                    "The main and assistant models have different tokenizers"
+                )
+            return 20.0
+
+        monkeypatch.setattr(draft_cmd, "measure_throughput", _throughput)
+
+        prompts = self._prompts(in_tmp_cwd)
+        result = runner.invoke(
+            app,
+            ["measure", "--target", "org/target", "--draft", "org/tiny",
+             "--prompts", prompts, "-o", "report.json"],
+        )
+        # A failed assisted arm is a loud warning, not a crash: the acceptance rate
+        # and plain throughput already succeeded and must survive on disk.
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        report = in_tmp_cwd / "report.json"
+        assert report.exists()
+        data = _json.loads(report.read_text(encoding="utf-8"))
+        assert data["acceptance_rate"] == 0.75
+        assert data["tok_s_plain"] == 20.0
+        assert data["tok_s_assisted"] is None
+        assert data["speedup"] is None
 
 
 class TestDraftListCli:
