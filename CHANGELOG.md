@@ -114,6 +114,19 @@ reproducing 70+ versions of notes.
   attestations also attach the detached `.sig` sidecar. The flag needs
   `--output` (omitting it exits 2), and a requested registry attachment failure
   exits 1 after preserving files already emitted.
+- **`training.stream_pin` makes layer-streaming pinning configurable (#366).**
+  Page-locking the RAM store is chosen automatically by `decide_pinning`, and
+  until now nothing could override it — so while #331 was live, `pin=False` was
+  the only known mitigation for silently wrong NF4 gradients yet was unreachable
+  from `soup.yaml`. `stream_pin: false` now forces the pageable store (and the
+  pre-flight states the throughput it costs, up to 6.56x measured, rather than
+  absorbing it silently); `stream_pin: true` forces the pinned store and refuses
+  the run — naming the store size, not the ceiling (#366 AC3): `pinned_limit_bytes`
+  is passed as `None`, so the page-lock ceiling is deliberately left unprobed and
+  the store size is the only figure the refusal can honestly cite — if the box
+  cannot page-lock it, instead of degrading silently; unset keeps today's
+  automatic behaviour. Set while `stream_layers: false` it is rejected as a
+  footgun, like the other stream keys.
 
 ### Fixed
 

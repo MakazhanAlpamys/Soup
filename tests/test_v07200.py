@@ -143,6 +143,30 @@ class TestDecidePinning:
 
         assert decide_pinning(7 * 10**9, 7 * 10**9).pinned is True
 
+    def test_stream_pin_false_forces_pageable_and_states_the_cost(self):
+        """#366: pinning could not be turned off from config. stream_pin=false
+        forces the pageable store even where the box could page-lock it, and the
+        reason states the throughput it costs rather than absorbing it."""
+        from soup_cli.utils.layer_stream import decide_pinning
+
+        decision = decide_pinning(2 * 10**9, 7 * 10**9, stream_pin=False)
+        assert decision.pinned is False
+        assert "throughput" in decision.reason.lower()
+
+    def test_stream_pin_true_forces_pinned_even_above_ceiling(self):
+        """The override pins where the automatic path would have fallen back."""
+        from soup_cli.utils.layer_stream import decide_pinning
+
+        decision = decide_pinning(50 * 10**9, 7 * 10**9, stream_pin=True)
+        assert decision.pinned is True
+        assert "refuses" in decision.reason.lower()
+
+    def test_stream_pin_none_keeps_automatic_behaviour(self):
+        from soup_cli.utils.layer_stream import decide_pinning
+
+        assert decide_pinning(8 * 10**9, 7 * 10**9, stream_pin=None).pinned is False
+        assert decide_pinning(2 * 10**9, 7 * 10**9, stream_pin=None).pinned is True
+
 
 class TestBufferValidation:
     def test_default_is_two(self):
@@ -319,6 +343,26 @@ class TestStreamPlan:
         )
         assert plan.pinned is False
         assert any("pageable" in note.lower() for note in plan.notes)
+
+    def test_stream_pin_false_reaches_the_plan_as_pageable_with_cost(self):
+        """#366 criteria 1+2: stream_pin=false proceeds pageable AND the
+        pre-flight note states the throughput cost — the store here fits under
+        the pinned ceiling, so the automatic path would otherwise pin it."""
+        from soup_cli.utils.layer_stream import build_stream_plan
+
+        plan = build_stream_plan(
+            arch="qwen2",
+            n_layers=36,
+            layer_bytes=154 * 10**6,
+            embed_bytes=622 * 10**6,
+            available_ram_bytes=12 * 10**9,
+            pinned_limit_bytes=7 * 10**9,
+            buffers=2,
+            disk_kind="nvme",
+            stream_pin=False,
+        )
+        assert plan.pinned is False
+        assert any("throughput" in note.lower() for note in plan.notes)
 
     def test_plan_is_frozen(self):
         import dataclasses
@@ -873,6 +917,13 @@ class TestStreamScopeGates:
         with pytest.raises(ValueError, match="LoRA"):
             _load(_stream_yaml(training={"lora": {"r": 0}}))
 
+    def test_stream_pin_is_committable_to_config(self):
+        """#366: the pinning override joins the streaming config keys. Default
+        is None so today's automatic behaviour is unchanged."""
+        assert _load(_stream_yaml(training={"stream_pin": False})).training.stream_pin is False
+        assert _load(_stream_yaml(training={"stream_pin": True})).training.stream_pin is True
+        assert _load(_stream_yaml()).training.stream_pin is None
+
 
 class TestStreamMutualExclusions:
     def test_unfrozen_parameters_conflict(self):
@@ -920,6 +971,11 @@ class TestStreamFootgunRejection:
     def test_stream_source_without_stream_layers_rejected(self):
         with pytest.raises(ValueError, match="stream_layers"):
             _load(_stream_yaml(training={"stream_layers": False, "stream_source": "ram"}))
+
+    def test_stream_pin_without_stream_layers_rejected(self):
+        """#366 criterion 4: stream_pin set while streaming is off is a footgun."""
+        with pytest.raises(ValueError, match="stream_layers"):
+            _load(_stream_yaml(training={"stream_layers": False, "stream_pin": False}))
 
 
 class TestStreamBufferBounds:
@@ -2123,6 +2179,38 @@ class TestPinnedFallbackRuntime:
         assert source.nbytes > 0
         assert any("pageable" in msg.lower() for msg in printed)
         assert any("utilisation" in msg.lower() for msg in printed)
+
+
+class TestStreamPinRuntimeRefusal:
+    """#366 criterion 3: training.stream_pin=true (require_pin) must refuse
+    loudly when the box cannot page-lock the store, instead of silently
+    degrading to a pageable one and spending the whole throughput margin."""
+
+    _SPEC = {"weight": ((2, 2), "float32")}
+
+    def _patch_ramsource_to_fail_pinning(self, monkeypatch):
+        import soup_cli.utils.layer_stream_runtime as rt
+
+        class _FailsWhenPinned:
+            def __init__(self, shard_dir, n_layers, spec, *, pin=True):
+                if pin:
+                    raise RuntimeError("CUDA error: cannot allocate pinned memory")
+                self.nbytes = 1
+
+        monkeypatch.setattr(rt, "RamSource", _FailsWhenPinned)
+        return rt
+
+    def test_auto_falls_back_to_pageable(self, monkeypatch):
+        """Without the override, a page-lock failure still falls back (default)."""
+        rt = self._patch_ramsource_to_fail_pinning(monkeypatch)
+        source, pinned = rt._build_source("d", 1, self._SPEC, True, None)
+        assert pinned is False
+        assert source.nbytes > 0
+
+    def test_forced_pin_refuses_instead_of_falling_back(self, monkeypatch):
+        rt = self._patch_ramsource_to_fail_pinning(monkeypatch)
+        with pytest.raises(RuntimeError, match="stream_pin"):
+            rt._build_source("d", 1, self._SPEC, True, None, require_pin=True)
 
 
 class TestCachedIndexInvalidation:

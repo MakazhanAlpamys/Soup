@@ -331,6 +331,9 @@ class StreamingSetupMixin:
             disk_kind=lambda: resolve_disk_kind(
                 shard_dir, tcfg.stream_disk_kind, notify=console.print
             ),
+            # #366: training.stream_pin (None/False/True) overrides the automatic
+            # pinning choice so the pageable escape hatch is reachable from config.
+            stream_pin=tcfg.stream_pin,
         )
         # v0.72.3 — the disk overflow tier is live, so a base that does not fit
         # in RAM is no longer fatal. `stream_source` decides: 'ram' insists,
@@ -406,6 +409,9 @@ class StreamingSetupMixin:
             dtype=dtype,
             buffers=tcfg.stream_buffers,
             pin=plan.pinned and on_cuda,
+            # #366: stream_pin=true must refuse rather than silently fall back to
+            # a pageable store when the box cannot page-lock it.
+            require_pin=(tcfg.stream_pin is True) and on_cuda,
             seed=tcfg.seed if getattr(tcfg, "seed", None) is not None else 0,
             trust_remote_code=self._trust_remote_code,
             console=console,

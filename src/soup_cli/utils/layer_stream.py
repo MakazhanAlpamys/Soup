@@ -36,6 +36,13 @@ STREAM_SOURCES = ("auto", "ram", "disk")
 #: model_bytes must be under this fraction of free RAM to claim the RAM tier.
 RAM_TIER_HEADROOM = 0.7
 
+# Measured throughput a page-locked RAM store buys over a pageable one
+# (benchmarks/gate-h100-validation.md): 6.56x on real Qwen2.5-32B NF4, 7.41x on
+# a 32-layer synthetic. Stated out loud whenever pinning is disabled so the cost
+# is not absorbed silently — a silent fallback spends the entire margin.
+PIN_THROUGHPUT_GAIN_REAL = 6.56
+PIN_THROUGHPUT_GAIN_SYNTHETIC = 7.41
+
 # --- buffers --------------------------------------------------------------
 MIN_STREAM_BUFFERS = 2
 MAX_STREAM_BUFFERS = 8
@@ -625,7 +632,12 @@ class PinDecision:
     reason: str
 
 
-def decide_pinning(store_bytes: int, pinned_limit_bytes: Optional[int]) -> PinDecision:
+def decide_pinning(
+    store_bytes: int,
+    pinned_limit_bytes: Optional[int],
+    *,
+    stream_pin: Optional[bool] = None,
+) -> PinDecision:
     """Pin the RAM store when the box can actually page-lock it.
 
     Measured on the dev box (RTX 3050 4 GB / 16.9 GB RAM): the maximum
@@ -635,7 +647,35 @@ def decide_pinning(store_bytes: int, pinned_limit_bytes: Optional[int]) -> PinDe
     ``copy_(non_blocking=True)`` synchronous and therefore costs overlap:
     measured GPU utilisation dropped from 96.8% (pinned) to 79.3% (pageable).
     That cost is stated out loud rather than absorbed silently.
+
+    ``stream_pin`` (``training.stream_pin``) overrides the automatic choice:
+    ``None`` keeps the behaviour above; ``False`` forces the pageable store and
+    states its throughput cost; ``True`` forces the pinned store — the run then
+    refuses (in the runtime) rather than falling back if the box cannot
+    page-lock it. The refusal itself lives where the pin is actually attempted;
+    here ``True`` only records the intent so the pre-flight reflects it.
     """
+    if stream_pin is False:
+        return PinDecision(
+            pinned=False,
+            reason=(
+                "training.stream_pin=false forces a pageable RAM store. "
+                "Host-to-device copies become synchronous, which costs overlap: "
+                f"page-locking is worth up to {PIN_THROUGHPUT_GAIN_REAL:.2f}x "
+                "measured throughput (Qwen2.5-32B NF4), "
+                f"{PIN_THROUGHPUT_GAIN_SYNTHETIC:.2f}x on a synthetic. Unset "
+                "stream_pin to let the box page-lock when it can."
+            ),
+        )
+    if stream_pin is True:
+        return PinDecision(
+            pinned=True,
+            reason=(
+                "training.stream_pin=true forces a page-locked store; the run "
+                "refuses rather than falling back to a pageable store if the box "
+                "cannot page-lock it."
+            ),
+        )
     if pinned_limit_bytes is None:
         return PinDecision(
             pinned=True,
@@ -1238,6 +1278,7 @@ def build_stream_plan(
     pinned_limit_bytes: Optional[int],
     buffers: int = DEFAULT_STREAM_BUFFERS,
     disk_kind: DiskKind = _NVME,
+    stream_pin: Optional[bool] = None,
 ) -> StreamPlan:
     """Decide tier + pinning and record every caveat as a visible note."""
     buffers = validate_stream_buffers(buffers)
@@ -1259,7 +1300,7 @@ def build_stream_plan(
             "tier is unmeasured on this hardware. Set stream_source='ram' to "
             "refuse rather than fall back."
         )
-    decision = decide_pinning(store_bytes, pinned_limit_bytes)
+    decision = decide_pinning(store_bytes, pinned_limit_bytes, stream_pin=stream_pin)
     if not decision.pinned:
         notes.append(decision.reason)
     return StreamPlan(
