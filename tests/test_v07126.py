@@ -15,9 +15,11 @@ task on one RTX 3050. PPO ships BETA (unit-tested; GPU proof is GRPO-only).
 from __future__ import annotations
 
 import json
+import logging
 import math
 import os
 import random
+import shutil
 import types
 
 import pytest
@@ -244,6 +246,40 @@ class TestMitigationLogWriter:
         for i in range(6):
             w.record(step=i, snapshot={"x": i})
         assert target.read_text() == "keep me"  # symlink target untouched
+
+    def test_vanished_directory_is_not_silently_dropped(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        """A parent dir deleted mid-stream must not silently swallow the next
+        record (#343): the writer recreates the directory, the entry lands, and
+        the loss is surfaced once via a warning naming the path."""
+        monkeypatch.chdir(tmp_path)
+        from soup_cli.utils.reward_hack_control import MitigationLogWriter
+
+        w = MitigationLogWriter("logs/mit.jsonl")
+        w.record(step=1, snapshot={"x": 1})
+
+        # Another process wipes the shared temp root mid-run.
+        shutil.rmtree(tmp_path / "logs")
+        with caplog.at_level(logging.WARNING):
+            w.record(step=2, snapshot={"x": 2})
+
+        # 1. The loss is surfaced once, naming the path — not swallowed silently.
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 1
+        assert "mit.jsonl" in warnings[0].getMessage()
+
+        # 2. The record itself is not lost — the directory is recreated and the
+        #    entry lands.
+        lines = (tmp_path / "logs" / "mit.jsonl").read_text().strip().splitlines()
+        assert [json.loads(line)["step"] for line in lines] == [2]
+
+        # 3. Warns at most once even if the directory vanishes again.
+        shutil.rmtree(tmp_path / "logs")
+        with caplog.at_level(logging.WARNING):
+            w.record(step=3, snapshot={"x": 3})
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 1
 
 
 # =====================================================================

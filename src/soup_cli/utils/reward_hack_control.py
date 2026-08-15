@@ -677,6 +677,10 @@ class MitigationLogWriter:
         self._cap_bytes = cap_mb * 1024 * 1024
         # Single-process lock: protects rotate + write within ONE run process.
         self._lock = threading.Lock()
+        # Warn only once about a failed write (e.g. the parent directory
+        # vanished mid-run) — the controller records every step, so warning on
+        # each dropped write would flood the log.
+        self._warned_write_failed = False
 
     @property
     def path(self) -> Path:
@@ -702,11 +706,47 @@ class MitigationLogWriter:
         line_bytes = (line + "\n").encode("utf-8")
         with self._lock:
             self._maybe_rotate(extra=len(line_bytes))
-            try:
-                with self._path.open("ab") as handle:
-                    handle.write(line_bytes)
-            except OSError:
+            if self._append(line_bytes):
                 return
+            # The first write failed. The dominant cause in the wild is the
+            # parent directory disappearing mid-run (a shared temp root cleaned
+            # by another process, #343). Silently dropping every subsequent
+            # record is the one outcome this log must never have: the run
+            # completes while its evidence quietly goes missing. Recreate the
+            # directory and retry once, then surface the loss via a one-time
+            # warning naming the path. record() stays non-raising so a
+            # vanished log never takes down the training run.
+            recovered = False
+            try:
+                self._path.parent.mkdir(parents=True, exist_ok=True)
+                recovered = self._append(line_bytes)
+            except OSError:
+                recovered = False
+            if not self._warned_write_failed:
+                self._warned_write_failed = True
+                if recovered:
+                    logger.warning(
+                        "mitigation log directory for %s vanished mid-run and "
+                        "was recreated; earlier records may have been lost.",
+                        self._path,
+                    )
+                else:
+                    logger.warning(
+                        "mitigation log write to %s failed and could not be "
+                        "recovered; subsequent records may be lost.",
+                        self._path,
+                    )
+
+    def _append(self, line_bytes: bytes) -> bool:
+        """Append raw bytes to the active log. Returns ``False`` on ``OSError``
+        (disk full, permissions, vanished parent directory) instead of raising —
+        the caller decides how to recover."""
+        try:
+            with self._path.open("ab") as handle:
+                handle.write(line_bytes)
+        except OSError:
+            return False
+        return True
 
     def _maybe_rotate(self, *, extra: int) -> None:
         try:

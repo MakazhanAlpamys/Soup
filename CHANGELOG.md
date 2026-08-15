@@ -12,6 +12,17 @@ reproducing 70+ versions of notes.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`MitigationLogWriter` silently dropped every record once its parent directory
+  vanished mid-run (#343).** `record()` reopens the log per call and swallowed the
+  `OSError` from `open("ab")` with a bare `return`, so when a shared temp root was
+  cleaned by another process the controller kept acting while its log quietly stopped
+  growing — the run completes while its evidence goes missing, the failure shape this
+  project treats as the worst kind. The writer now recreates the directory and retries
+  the write, and surfaces the loss once via a warning naming the path. `record()` still
+  never raises, so a vanished log never takes down the training run.
+
 ## [0.73.2] - 2026-08-15
 
 `soup ship`'s leg 2 is the project's differentiator, and it was lying in both
