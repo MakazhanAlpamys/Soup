@@ -12,6 +12,20 @@ reproducing 70+ versions of notes.
 
 ## [Unreleased]
 
+### Added
+
+- **`eval.ship.noise_floor` is now committable to `soup.yaml` (#406).** Every
+  `soup ship` gate-policy flag was settable in a committed config and read back by
+  `--config` — except `--noise-floor` (added in v0.73.2), which had no field and
+  could only be passed on the command line, so a team enforcing a floor in CI had
+  to hand-edit the workflow. `ShipConfig` gains a bounded `noise_floor`
+  (`[2, 10]`, imported from `ship_verdict` so the schema and the CLI validator
+  cannot disagree; bool-as-int rejected), wired with the same CLI > config >
+  default precedence as the other five flags. As a live-measurement input it is
+  measured only when producing evidence and refused under `--evidence` exactly as
+  the flag is; it follows `forgetting_threshold` in being excluded from the
+  recipe `config_sha`, so setting a floor never invalidates evidence.
+
 ### Fixed
 
 - **`soup draft distill --steps N` now delivers ~N optimiser steps instead of

@@ -239,6 +239,40 @@ class TestShipConfigSchema:
         with pytest.raises(pydantic.ValidationError):
             ShipConfig(forgetting_threshold=bad)
 
+    def test_noise_floor_default_is_none(self):
+        # #406 — the field exists and defaults to None (unset = no floor).
+        from soup_cli.config.schema import ShipConfig
+
+        assert ShipConfig().noise_floor is None
+
+    def test_parses_noise_floor_under_eval(self):
+        # #406 — a committed eval.ship.noise_floor is honoured, not dropped.
+        from soup_cli.config.loader import load_config_from_string
+
+        cfg = load_config_from_string(_CONFIG_LENIENT + "    noise_floor: 3\n")
+        assert cfg.eval.ship.noise_floor == 3
+
+    @pytest.mark.parametrize("bad", [1, 11])
+    def test_rejects_out_of_bounds_noise_floor(self, bad):
+        # #406 — same [MIN_NOISE_FLOOR_RUNS, MAX_NOISE_FLOOR_RUNS] bounds the CLI
+        # validator enforces, imported from ship_verdict so they cannot drift.
+        import pydantic
+
+        from soup_cli.config.schema import ShipConfig
+
+        with pytest.raises(pydantic.ValidationError):
+            ShipConfig(noise_floor=bad)
+
+    @pytest.mark.parametrize("bad", [True, False])
+    def test_rejects_bool_noise_floor(self, bad):
+        # #406 — bool subclasses int; reject it like stream_buffers does.
+        import pydantic
+
+        from soup_cli.config.schema import ShipConfig
+
+        with pytest.raises(pydantic.ValidationError):
+            ShipConfig(noise_floor=bad)
+
 
 class TestShipConfigReader:
     def _ev_010_bound(self) -> dict:
@@ -321,6 +355,62 @@ class TestShipConfigReader:
             assert captured["general_suite"] == "mini_mmlu"
             assert captured["judge_model"] == "https://judge.example"
             assert captured["baseline_spec"] == "registry://abc"
+
+    def _capture_live(self, monkeypatch):
+        """Patch _verdict_live to a SHIP verdict and record its kwargs."""
+        from soup_cli.commands import ship as ship_cmd
+
+        captured: dict = {}
+
+        def _fake_live(**kwargs):
+            captured.update(kwargs)
+            win = build_task_win("metric", 0.5, 0.7)
+            deltas = compute_benchmark_deltas({"b": 0.6}, {"b": 0.6})
+            return decide_ship(win, deltas)
+
+        monkeypatch.setattr(ship_cmd, "_verdict_live", _fake_live)
+        return ship_cmd, captured
+
+    def test_config_noise_floor_threads_to_live(self, monkeypatch):
+        """#406 — a committed noise_floor reaches the live run (CLI > config)."""
+        ship_cmd, captured = self._capture_live(monkeypatch)
+        cfg = _CONFIG_MIN + "eval:\n  ship:\n    noise_floor: 3\n"
+        with runner.isolated_filesystem():
+            Path("soup.yaml").write_text(cfg, encoding="utf-8")
+            res = runner.invoke(
+                ship_cmd.app, ["--base", "m", "--adapter", "a", "--config", "soup.yaml"]
+            )
+            assert res.exit_code == 0, (res.output, repr(res.exception))
+            assert captured["noise_floor_runs"] == 3
+
+    def test_explicit_noise_floor_overrides_config(self, monkeypatch):
+        """#406 — an explicit --noise-floor wins over the config value."""
+        ship_cmd, captured = self._capture_live(monkeypatch)
+        cfg = _CONFIG_MIN + "eval:\n  ship:\n    noise_floor: 3\n"
+        with runner.isolated_filesystem():
+            Path("soup.yaml").write_text(cfg, encoding="utf-8")
+            res = runner.invoke(
+                ship_cmd.app,
+                ["--base", "m", "--adapter", "a", "--config", "soup.yaml",
+                 "--noise-floor", "5"],
+            )
+            assert res.exit_code == 0, (res.output, repr(res.exception))
+            assert captured["noise_floor_runs"] == 5
+
+    def test_config_noise_floor_refused_under_evidence(self):
+        """#406 — a config floor under --evidence is refused, exactly as the CLI
+        flag is (nothing to re-run offline), not silently ignored."""
+        from soup_cli.commands import ship as ship_cmd
+
+        cfg = _CONFIG_MIN + "eval:\n  ship:\n    noise_floor: 3\n"
+        with runner.isolated_filesystem():
+            _write_evidence(Path("ev.json"), _ship_evidence())
+            Path("soup.yaml").write_text(cfg, encoding="utf-8")
+            res = runner.invoke(
+                ship_cmd.app, ["--evidence", "ev.json", "--config", "soup.yaml"]
+            )
+            assert res.exit_code == 3, (res.output, repr(res.exception))
+            assert "noise-floor" in res.output
 
 
 def _dont_ship_evidence_010() -> dict:
@@ -532,6 +622,17 @@ class TestComputeProvenance:
         assert _config_sha(with_ship) == _config_sha(different_ship)
         # ...and a ship block hashes the same as no ship block at all.
         assert _config_sha(with_ship) == _config_sha(no_ship)
+
+    def test_config_sha_excludes_noise_floor(self):
+        """#406 — noise_floor is gate policy, so it follows the same exclusion:
+        adding it must NOT change the recipe hash (a floor tunes the verdict,
+        not the trained model)."""
+        no_floor = (
+            _CONFIG_MIN + "eval:\n  auto_eval: false\n  ship:\n"
+            "    forgetting_threshold: 0.20\n"
+        )
+        with_floor = no_floor + "    noise_floor: 3\n"
+        assert _config_sha(with_floor) == _config_sha(no_floor)
 
     def test_config_sha_changes_on_real_recipe_edit(self):
         """A genuine base/data change DOES change the sha (the gate still bites)."""

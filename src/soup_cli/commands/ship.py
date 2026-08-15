@@ -1095,6 +1095,13 @@ def ship(
                 baseline = ship_cfg.baseline
             if _flag_is_default(ctx, "forgetting_threshold"):
                 forgetting_threshold = ship_cfg.forgetting_threshold
+            if _flag_is_default(ctx, "noise_floor") and ship_cfg.noise_floor is not None:
+                # A config floor is a live-measurement request just like the CLI
+                # flag: _validate_noise_floor_flag re-checks bounds below, and the
+                # --evidence guard refuses it there exactly as it refuses the flag
+                # (a floor is measured against a live base, nothing to run
+                # offline; a floor already in the evidence is applied on read).
+                noise_floor = ship_cfg.noise_floor
 
     _validate_task_mode_flag(task_mode)
     threshold = _validate_threshold_flag(forgetting_threshold)

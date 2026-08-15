@@ -463,7 +463,10 @@ every PR instead of relying on a hand-edited JSON file.
   reproduces an identical verdict.
 - **`--config soup.yaml`** reads a committed `eval.ship` block for the gate defaults
   (`task_eval` / `task_mode` / `general_suite` / `forgetting_threshold` / `judge_model` /
-  `baseline`); an explicit CLI flag always wins. This makes the gate reviewable in a PR diff.
+  `baseline` / `noise_floor`); an explicit CLI flag always wins. This makes the gate reviewable
+  in a PR diff. `noise_floor` is a live-measurement input like the `--noise-floor` flag: it is
+  measured when a live run produces evidence and, like the flag, is refused under `--evidence`
+  (there is nothing to re-run offline — a floor already recorded in the evidence is applied).
 - **Provenance + staleness.** With `--emit-evidence`, `--config` STAMPS a `provenance` block
   (`config_sha` — a semantic, order-insensitive recipe hash that EXCLUDES the `eval.ship` gate
   policy, so tuning the threshold never invalidates evidence — plus `base_model` and a

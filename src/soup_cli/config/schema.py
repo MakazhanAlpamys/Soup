@@ -19,6 +19,14 @@ from soup_cli.utils.layer_stream import (
     SUPPORTED_STREAM_TASKS as _STREAM_SUPPORTED_TASKS,
 )
 
+# Noise-floor bounds live with the ship verdict so the schema bound and the
+# `--noise-floor` CLI validator can never disagree (ship_verdict has no torch,
+# same reasoning as stream_buffers importing its bounds from layer_stream).
+from soup_cli.utils.ship_verdict import (
+    MAX_NOISE_FLOOR_RUNS,
+    MIN_NOISE_FLOOR_RUNS,
+)
+
 # v0.39.0 Part C — per-pattern LoRA rank/alpha bounds
 _MAX_LORA_RANK_PATTERN_KEYS = 256
 _MAX_LORA_RANK_PATTERN_VALUE = 1024
@@ -3752,6 +3760,30 @@ class ShipConfig(BaseModel):
         default=None,
         description="registry://<id> | file JSON of base leg-2 scores",
     )
+    # v0.73.2 shipped `--noise-floor` (#376) without its config surface, so it
+    # was the one gate-policy flag that could not be committed to soup.yaml
+    # (#406). Bounds import from ship_verdict so the schema and the CLI
+    # validator (_validate_noise_floor_flag) share one source of truth.
+    noise_floor: Optional[int] = Field(
+        default=None,
+        ge=MIN_NOISE_FLOOR_RUNS,
+        le=MAX_NOISE_FLOOR_RUNS,
+        description=(
+            "Repeats of the BASE run used to measure a leg-2 noise floor; a "
+            "leg-2 drop within the floor is treated as noise, not regression. "
+            f"Bounded [{MIN_NOISE_FLOOR_RUNS}, {MAX_NOISE_FLOOR_RUNS}]. A live "
+            "input: measured when producing evidence, refused under --evidence."
+        ),
+    )
+
+    @field_validator("noise_floor", mode="before")
+    @classmethod
+    def _validate_noise_floor_int(cls, v: Any) -> Any:
+        """Reject bool-as-int (bool subclasses int), mirrors stream_buffers and
+        the ``--noise-floor`` CLI validator."""
+        if isinstance(v, bool):
+            raise ValueError("eval.ship.noise_floor must be an int, not bool")
+        return v
 
 
 class EvalConfig(BaseModel):
@@ -3776,7 +3808,8 @@ class EvalConfig(BaseModel):
     ship: Optional[ShipConfig] = Field(
         default=None,
         description="soup ship verdict defaults (task_eval / task_mode / "
-        "general_suite / forgetting_threshold / judge_model / baseline)",
+        "general_suite / forgetting_threshold / judge_model / baseline / "
+        "noise_floor)",
     )
 
 
