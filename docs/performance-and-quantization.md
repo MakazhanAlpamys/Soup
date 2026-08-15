@@ -237,6 +237,7 @@ training:
   stream_buffers: 2            # Double-buffering; range [2, 8]
   # stream_vram_override: 4_000_000_000   # Bytes to assume free (v0.73.x); see below
   # stream_vram_probe: true    # Decide the fit by MEASURING one step (sft only); see below
+  # stream_disk_kind: nvme     # Override auto disk-kind detection: nvme/ssd/hdd; see below
 ```
 
 ```bash
@@ -277,7 +278,7 @@ The 3B NF4-vs-bf16 rows differ by 1.85×, but attribute that to **pinning, not a
 Untied `embed_tokens` + `lm_head` stay resident and unquantised (2.10 GB of the 8B row's 3.32 GB), which is why 8B sits close to this card's ceiling; treating them as streamed large layers is deferred beyond v0.72.3.
 
 **Honest scope:**
-- **RAM tier + disk overflow (v0.72.3).** `stream_source: auto` picks RAM when it fits, falls back to NVMe disk when not; SATA/HDD rejected. Correctness verified; disk performance unmeasured on the reference box.
+- **RAM tier + disk overflow (v0.72.3).** `stream_source: auto` picks RAM when it fits, falls back to NVMe disk when not; SATA/HDD rejected. Correctness verified; disk performance unmeasured on the reference box. A paravirtual (virtio) disk reports `rotational=1` with no media hint, so a genuinely NVMe-backed cloud disk was misread as an HDD and refused (#365); detection now measures a bounded O_DIRECT sequential read when the rotational flag is unreliable and admits NVMe-class throughput (>= 1 GB/s), while a genuinely slow disk stays rejected. Set `training.stream_disk_kind: nvme` (or `ssd`/`hdd`) to override when detection is still wrong — the resolved value is printed beside what was detected.
 - **Llama / Qwen / Mistral / Gemma / Gemma2 / Gemma3-Text / Phi / Phi3** (all verified bit-exact in bf16 and NF4), `task: sft`, `backend: transformers`, `modality: text`.
 - **Batch sizes, gradient accumulation, `--resume` / `--hf-resume`** all now work (v0.72.3).
 - **Pre-Ampere cards (T4, P100, V100, GTX 16xx, RTX 20xx) now stream in fp16 instead of bf16.** Until this fix the store dtype was hardcoded to bf16 on every CUDA device, so the entire free notebook tier was streaming a dtype its GPU has no units for, and nothing said so — it could not fail on the Ampere card every number above was measured on. fp16 is bit-exact against a resident reference of matching numerics, `0.000000e+00` in both quantisations, exactly as bf16 is.
@@ -352,7 +353,7 @@ prints this advice when it sees you accumulating.
 - `task: kto` with `batch_size: 1` → TRL's KL term is degenerate at batch 1; refused when the config is read rather than minutes later after sharding
 - `lora.use_dora` / `lora.use_vera` / `lora.init_strategy` other than `random` → these initialise from the real base weight, which is on the meta device under streaming
 - `unfrozen_parameters`, `lisa_enabled`, `packing`, `multipack`, `use_fsdp2_compile`, `train_router_only`, `expand_layers` → each independently rewrites or re-freezes the same layers
-- `stream_source` / `stream_buffers` / `stream_vram_override` / `stream_vram_probe` set while `stream_layers: false` → a footgun, refused
+- `stream_source` / `stream_buffers` / `stream_vram_override` / `stream_vram_probe` / `stream_disk_kind` set while `stream_layers: false` → a footgun, refused
 - `stream_vram_probe` on any task other than `sft` → the probe runs a plain causal-LM step, which *is* the SFT step but is not a preference loss. Measured at one matching shape it is conservative there too (6.02 GB against a real DPO step's 5.30 GB, +13.5%), but one shape is not a validation, so it is not offered for `dpo`/`orpo`/`simpo`/`kto` yet
 - an architecture outside the supported list (llama / qwen2 / qwen3 / mistral / gemma / gemma2 / gemma3_text / phi / phi3) → named explicitly
 
@@ -402,6 +403,7 @@ output: ./output
 
 **Troubleshooting:**
 - **"layer streaming needs the base to fit in RAM"** — the base is larger than free RAM. Set `stream_source: auto` to fall back to the NVMe disk tier, free RAM, or pick a smaller base.
+- **"layer streaming needs NVMe or more RAM … the detected disk is 'hdd'"** on a fast cloud disk — a virtio device reports `rotational=1` with no media hint. Detection now measures the disk when the flag is unreliable; if it still misreads yours, set `training.stream_disk_kind: nvme` to force the tier on (`ssd`/`hdd` force it off).
 - **"could not page-lock the base … falling back to a PAGEABLE RAM store"** — expected on a busy machine. Training continues, more slowly. Close other applications to keep the pinned store.
 - **"layer streaming does not support model_type=…"** — the supported list is llama / qwen2 / qwen3 / mistral / gemma / gemma2 / gemma3_text / phi / phi3. Multimodal `gemma3` is excluded on purpose; use `gemma3_text`.
 - **"predicted peak … exceeds free VRAM" and you believe it is wrong** — lower `batch_size` or `data.max_length` first. Otherwise there are two escape hatches and they are not interchangeable. `training.stream_vram_probe: true` (`sft` only) **measures** one real forward+backward at your configured shape and decides on that, printing the prediction beside it; it costs one step (1–5 s measured) and it can also refuse a run the formula accepted. `training.stream_vram_override: <bytes>` instead **replaces** the free-VRAM figure the check runs against — that is an assertion you are making, not a measurement, so raising it past a real limit is an OOM on Linux and a silent spill on Windows. Prefer the probe when you want to be told the truth; use the override when you know something the driver cannot report.

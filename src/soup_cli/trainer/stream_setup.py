@@ -172,11 +172,11 @@ class StreamingSetupMixin:
             TIER_DISK,
             TIER_RAM,
             build_stream_plan,
-            detect_disk_kind,
             dtype_bytes,
             estimate_stream_store_bytes,
             free_ram_bytes,
             render_stream_panel,
+            resolve_disk_kind,
             resolve_stream_dtype,
             stream_arch_of,
         )
@@ -316,8 +316,12 @@ class StreamingSetupMixin:
             buffers=tcfg.stream_buffers,
             # v0.72.3: the REAL media type, not a constant. Passed as a callable
             # because probing costs ~9 s on Windows and the answer only matters
-            # when the base does not fit in RAM.
-            disk_kind=lambda: detect_disk_kind(shard_dir),
+            # when the base does not fit in RAM. #365: honour a
+            # stream_disk_kind override (with a loud detected-vs-override notice)
+            # for a disk the auto-probe still misreads.
+            disk_kind=lambda: resolve_disk_kind(
+                shard_dir, tcfg.stream_disk_kind, notify=console.print
+            ),
         )
         # v0.72.3 — the disk overflow tier is live, so a base that does not fit
         # in RAM is no longer fatal. `stream_source` decides: 'ram' insists,

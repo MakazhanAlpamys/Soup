@@ -3083,6 +3083,19 @@ class TrainingConfig(BaseModel):
             "unsafe."
         ),
     )
+    stream_disk_kind: Optional[Literal["nvme", "ssd", "hdd"]] = Field(
+        default=None,
+        description=(
+            "Override the auto-detected disk media type for the streaming disk "
+            "overflow tier. Detection classifies a device by a measured "
+            "sequential read when the kernel's rotational flag is unreliable — "
+            "virtio and other paravirtual disks report spinning with no media "
+            "hint, so a fast cloud disk is otherwise refused (#365). Set this "
+            "for the case where even that is wrong: 'nvme' forces the disk tier "
+            "on, 'ssd'/'hdd' force it off. The resolved value is printed beside "
+            "what was detected."
+        ),
+    )
 
     # Sample packing — pack multiple short samples into one sequence
     packing: bool = Field(
@@ -4902,12 +4915,13 @@ class SoupConfig(BaseModel):
                 or tcfg.stream_buffers != 2
                 or tcfg.stream_vram_override is not None
                 or tcfg.stream_vram_probe
+                or tcfg.stream_disk_kind is not None
             ):
                 raise ValueError(
                     "training.stream_source / training.stream_buffers / "
                     "training.stream_vram_override / training.stream_vram_probe "
-                    "set but stream_layers is false; set stream_layers=true to "
-                    "stream the base layer-by-layer."
+                    "/ training.stream_disk_kind set but stream_layers is false; "
+                    "set stream_layers=true to stream the base layer-by-layer."
                 )
             return self
         # v0.72.4 — the four preference losses join SFT. DPO and KTO take their

@@ -249,6 +249,20 @@ DiskKind = Union[str, Callable[[], str]]
 
 _DISK_KIND_CACHE: Dict[str, str] = {}
 
+# --- measured-throughput fallback (#365) ----------------------------------
+#: Bytes read by the O_DIRECT probe when the rotational flag is untrustworthy.
+#: 64 MiB clears a device's small write-back window yet reads in well under a
+#: second on anything at or above the tier floor (~0.06 s at 1 GB/s), keeping
+#: the fallback bounded (criterion 4).
+_MEASURE_READ_BYTES = 64 * 1024 * 1024
+#: A device must sustain at least this sequential read rate to earn the NVMe
+#: disk-overflow tier. The tier is NVMe-class by policy — ``choose_tier``
+#: already refuses a SATA SSD (~550 MB/s) — so the floor sits above SATA at
+#: 1.0 GB/s: the reported virtio disk (1.5 GB/s read) clears it, a spinning
+#: disk (~0.1-0.25 GB/s) does not. Consulted ONLY when the rotational flag is
+#: unreliable; where a real media type is readable that route still wins.
+NVME_TIER_MIN_BYTES_PER_S = 1_000_000_000
+
 
 def detect_disk_kind(path: str = ".") -> str:
     """Media type of the volume holding ``path``: nvme / ssd / hdd / unknown.
@@ -277,6 +291,35 @@ def detect_disk_kind(path: str = ".") -> str:
     return kind
 
 
+def resolve_disk_kind(
+    path: str,
+    override: Optional[str] = None,
+    *,
+    notify: Optional[Callable[[str], None]] = None,
+) -> str:
+    """Detected media type, or an explicit override with a loud notice (#365).
+
+    ``training.stream_disk_kind`` is the escape hatch for the case where even
+    the measured fallback is wrong. When set it wins, but detection still runs
+    so the notice can report what was overridden and what was detected;
+    ``choose_tier`` then sees the override. Detection is wrapped because a
+    diagnostic read must not break a run the user has already told us how to
+    classify.
+    """
+    if override is None:
+        return detect_disk_kind(path)
+    try:
+        detected = detect_disk_kind(path)
+    except Exception:  # noqa: BLE001 — never let the probe break an overridden run
+        detected = "unknown"
+    if notify is not None:
+        notify(
+            f"[yellow]disk kind overridden:[/] using "
+            f"training.stream_disk_kind={override!r} (detected {detected!r})"
+        )
+    return override
+
+
 def _resolve_tool(name: str, *fallbacks: str) -> Optional[str]:
     """Absolute path to a system tool, or None.
 
@@ -302,6 +345,93 @@ def _resolve_tool(name: str, *fallbacks: str) -> Optional[str]:
 _POWERSHELL_FALLBACK = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
 
 
+def _classify_measured_read(measured_bps: Optional[float]) -> str:
+    """Classify by a measured read a device the rotational flag calls spinning.
+
+    virtio and other paravirtual block devices expose no media hint, so the
+    guest kernel defaults ``rotational`` to 1 and a genuinely NVMe-backed cloud
+    disk is otherwise refused the overflow tier (#365). An actual HDD refusal is
+    correct (80 shards x 2 reads = 160 seeks per step, plan P11), so the
+    discriminator is throughput, not the flag: at or above
+    ``NVME_TIER_MIN_BYTES_PER_S`` the device is NVMe-class and usable; below it —
+    or unmeasurable (``None``) — it is treated as ``hdd`` and refused, the safe
+    direction.
+    """
+    if measured_bps is not None and measured_bps >= NVME_TIER_MIN_BYTES_PER_S:
+        return _NVME
+    return "hdd"
+
+
+def _measure_seq_read_bytes_per_s(path: str) -> Optional[float]:
+    """Sequential ``O_DIRECT`` read throughput of the volume holding ``path``.
+
+    Writes a small scratch file beside ``path``, reopens it with ``O_DIRECT`` to
+    bypass the page cache, and times one page-aligned sequential read. Best
+    effort: any failure (no ``O_DIRECT`` on this filesystem, no write
+    permission, no monotonic clock) returns ``None`` so the caller stays
+    conservative, and the scratch file is always removed. Bounded by
+    ``_MEASURE_READ_BYTES`` so it cannot become the ~9 s cost the Windows probe
+    already carries (criterion 4).
+    """
+    import mmap
+    import os
+    import tempfile
+    import time
+
+    o_direct = getattr(os, "O_DIRECT", None)
+    if o_direct is None:  # non-Linux — the caller only reaches here on Linux
+        return None
+    # Probe the volume that actually holds the shards. The caller passes a
+    # DIRECTORY (shard_dir), so write the scratch file inside it; only fall back
+    # to the parent for a file path. Taking dirname of a directory would measure
+    # the PARENT filesystem — wrong when the target is its own mount point.
+    resolved = os.path.realpath(os.path.expanduser(path))
+    directory = resolved if os.path.isdir(resolved) else (os.path.dirname(resolved) or ".")
+    fd_w = None
+    fd_r = None
+    scratch = None
+    buf = None
+    try:
+        fd_w, scratch = tempfile.mkstemp(dir=directory, prefix=".soup-diskprobe-")
+        block = b"\0" * (1024 * 1024)
+        written = 0
+        while written < _MEASURE_READ_BYTES:
+            written += os.write(fd_w, block[: _MEASURE_READ_BYTES - written])
+        os.fsync(fd_w)
+        os.close(fd_w)
+        fd_w = None
+
+        buf = mmap.mmap(-1, _MEASURE_READ_BYTES)  # page-aligned for O_DIRECT
+        fd_r = os.open(scratch, os.O_RDONLY | o_direct)
+        start = time.monotonic()
+        read_total = os.readv(fd_r, [buf])
+        elapsed = time.monotonic() - start
+        if elapsed <= 0 or read_total <= 0:
+            return None
+        return read_total / elapsed
+    except (OSError, ValueError):
+        return None
+    finally:
+        for fd in (fd_w, fd_r):
+            if fd is not None:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+        if buf is not None:
+            try:
+                buf.close()
+            except (BufferError, ValueError):
+                # Isolated from the unlink below so a mmap-close failure can
+                # never leak the 64 MiB scratch file.
+                pass
+        if scratch is not None:
+            try:
+                os.unlink(scratch)
+            except OSError:
+                pass
+
+
 def _probe_disk_kind(path: str) -> str:
     import os
     import platform
@@ -311,7 +441,11 @@ def _probe_disk_kind(path: str) -> str:
     try:
         if system == "Linux":
             # /sys/block/<dev>/queue/rotational: 1 spinning, 0 solid state.
-            # Instant and authoritative; the device name distinguishes NVMe.
+            # The device name distinguishes NVMe, and rotational=0 is
+            # authoritative — a device that declares itself solid state is one.
+            # rotational=1 is NOT authoritative: virtio defaults it to 1 with no
+            # media hint, so a fast cloud disk lies as spinning (#365). Fall back
+            # to a measured read there rather than trust the flag.
             names = sorted(os.listdir("/sys/block"))
             for dev in names:
                 if not dev.startswith("nvme"):
@@ -321,7 +455,10 @@ def _probe_disk_kind(path: str) -> str:
                 rot = os.path.join("/sys/block", dev, "queue", "rotational")
                 if os.path.exists(rot):
                     with open(rot, encoding="utf-8") as handle:
-                        return "hdd" if handle.read().strip() == "1" else "ssd"
+                        value = handle.read().strip()
+                    if value == "0":
+                        return "ssd"
+                    return _classify_measured_read(_measure_seq_read_bytes_per_s(path))
             return "unknown"
         if system == "Windows":
             shell = _resolve_tool("powershell", _POWERSHELL_FALLBACK)

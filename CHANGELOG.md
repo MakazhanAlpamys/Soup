@@ -57,6 +57,19 @@ reproducing 70+ versions of notes.
   unknown outcome is never recorded as success, and the richer
   `completed`/`failed` terminal statuses are left untouched. `soup runs` no
   longer hardcodes `running` for a non-running row.
+- **Layer streaming now accepts a fast virtio/cloud disk instead of refusing it
+  as an HDD (#365).** `detect_disk_kind` trusted `/sys/block/<dev>/queue/rotational`,
+  which a paravirtual (virtio) block device defaults to `1` with no media hint —
+  so a genuinely NVMe-backed cloud disk (measured 1.5 GB/s read) was classified
+  `hdd` and denied the disk-overflow tier, the very audience the tier targets.
+  `rotational=0` stays authoritative (solid state); when the flag is unreliable
+  (`rotational=1`), the media type is now decided by a bounded, O_DIRECT
+  sequential-read measurement rather than the flag — NVMe-class throughput
+  (>= 1 GB/s) earns the tier, a genuinely slow disk still classifies `hdd` and is
+  still refused (160 seeks/step, plan P11). A new `training.stream_disk_kind`
+  override (`nvme`/`ssd`/`hdd`) is the escape hatch for the case where even that
+  is wrong; it prints what it overrode beside what was detected. Disk detection
+  may write a small scratch file next to the streamed shards to run the probe.
 
 ### Fixed
 

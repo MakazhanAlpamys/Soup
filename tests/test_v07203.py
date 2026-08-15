@@ -626,6 +626,189 @@ class TestDiskKindDetection:
         assert _windows_kind({"MediaType": "5", "BusType": "SATA"}) == "unknown"
 
 
+class TestDiskKindMeasuredFallback:
+    """#365 — a virtio disk reports ``rotational=1`` with no media hint, so the
+    flag alone refused a genuinely NVMe-backed cloud disk the overflow tier. When
+    the flag is unreliable, classify on a measured sequential read instead; the
+    HDD refusal (160 seeks/step, plan P11) must survive as a control."""
+
+    def test_throughput_at_or_above_the_floor_is_nvme_class(self):
+        from soup_cli.utils.layer_stream import (
+            NVME_TIER_MIN_BYTES_PER_S,
+            _classify_measured_read,
+        )
+
+        assert _classify_measured_read(NVME_TIER_MIN_BYTES_PER_S) == "nvme"
+        assert _classify_measured_read(1.5e9) == "nvme"  # the reported virtio disk
+
+    def test_slow_or_unmeasurable_stays_hdd(self):
+        from soup_cli.utils.layer_stream import (
+            NVME_TIER_MIN_BYTES_PER_S,
+            _classify_measured_read,
+        )
+
+        assert _classify_measured_read(NVME_TIER_MIN_BYTES_PER_S - 1) == "hdd"
+        assert _classify_measured_read(150e6) == "hdd"  # a real spinning disk
+        assert _classify_measured_read(None) == "hdd"  # can't tell -> refuse
+
+    @staticmethod
+    def _fake_linux(monkeypatch, *, devices, rotational, measured_bps):
+        """Simulate a Linux ``/sys/block`` layout so the real probe branch runs."""
+        import builtins
+        import io
+        import os
+        import platform
+
+        import soup_cli.utils.layer_stream as ls
+
+        real_listdir = os.listdir
+        real_open = builtins.open
+        real_exists = os.path.exists
+
+        monkeypatch.setattr(platform, "system", lambda: "Linux")
+        monkeypatch.setattr(
+            os,
+            "listdir",
+            lambda p: list(devices) if str(p) == "/sys/block" else real_listdir(p),
+        )
+        monkeypatch.setattr(
+            os.path,
+            "exists",
+            lambda p: True if "/queue/rotational" in str(p) else real_exists(p),
+        )
+
+        def fake_open(p, *a, **k):
+            if "/queue/rotational" in str(p):
+                return io.StringIO(f"{rotational}\n")
+            return real_open(p, *a, **k)
+
+        monkeypatch.setattr(builtins, "open", fake_open)
+        monkeypatch.setattr(ls, "_measure_seq_read_bytes_per_s", lambda _p: measured_bps)
+        monkeypatch.setattr(ls, "_DISK_KIND_CACHE", {})
+
+    def test_virtio_fast_disk_now_earns_the_disk_tier(self, monkeypatch):
+        """Criterion 1: no NVMe device, ``rotational=1``, fast measured read."""
+        import soup_cli.utils.layer_stream as ls
+
+        self._fake_linux(monkeypatch, devices=["vda"], rotational=1, measured_bps=1.5e9)
+        assert ls.detect_disk_kind("/data") == "nvme"
+        # ...and choose_tier accepts it where the pre-fix "hdd" would have raised.
+        assert ls.choose_tier(1000, 10, ls.detect_disk_kind("/data")) == ls.TIER_DISK
+
+    def test_a_genuinely_slow_device_is_still_refused(self, monkeypatch):
+        """Criterion 2 (the control): the fix cannot be satisfied by 'always allow'."""
+        import soup_cli.utils.layer_stream as ls
+
+        self._fake_linux(monkeypatch, devices=["vda"], rotational=1, measured_bps=150e6)
+        assert ls.detect_disk_kind("/data") == "hdd"
+        with pytest.raises(ValueError, match="NVMe"):
+            ls.choose_tier(1000, 10, ls.detect_disk_kind("/data"))
+
+    def test_rotational_zero_is_authoritative_and_never_measures(self, monkeypatch):
+        """A device that declares itself solid state is trusted — no probe cost."""
+        import soup_cli.utils.layer_stream as ls
+
+        self._fake_linux(monkeypatch, devices=["sda"], rotational=0, measured_bps=None)
+        calls = []
+        monkeypatch.setattr(
+            ls, "_measure_seq_read_bytes_per_s", lambda _p: calls.append(1) or 9e9
+        )
+        assert ls.detect_disk_kind("/data") == "ssd"
+        assert calls == [], "measured probe ran on an authoritative rotational=0"
+
+    def test_measurement_is_bounded_and_best_effort(self, monkeypatch):
+        """Criterion 4: no O_DIRECT (or any failure) degrades to None -> refused,
+        never an unbounded or crashing probe."""
+        import os
+
+        import soup_cli.utils.layer_stream as ls
+
+        monkeypatch.delattr(os, "O_DIRECT", raising=False)
+        assert ls._measure_seq_read_bytes_per_s(".") is None
+
+    def test_probe_writes_into_the_target_volume_not_its_parent(
+        self, monkeypatch, tmp_path
+    ):
+        """The caller passes shard_dir (a directory); the scratch probe must land
+        INSIDE it, not its parent — else a mount point's throughput is measured
+        on the wrong filesystem."""
+        import os
+        import tempfile
+
+        import soup_cli.utils.layer_stream as ls
+
+        if not hasattr(os, "O_DIRECT"):
+            pytest.skip("O_DIRECT is Linux-only")
+
+        target = tmp_path / "shards"
+        target.mkdir()
+        seen = {}
+        real_mkstemp = tempfile.mkstemp
+
+        def spy_mkstemp(*a, **k):
+            seen["dir"] = k.get("dir")
+            return real_mkstemp(*a, **k)
+
+        monkeypatch.setattr(tempfile, "mkstemp", spy_mkstemp)
+        ls._measure_seq_read_bytes_per_s(str(target))  # O_DIRECT may fail on tmpfs; fine
+        assert seen.get("dir") == str(target)
+
+    def test_override_wins_and_reports_what_it_overrode(self, monkeypatch):
+        """Criterion 3: the override is used AND the notice names both values."""
+        import soup_cli.utils.layer_stream as ls
+
+        monkeypatch.setattr(ls, "detect_disk_kind", lambda *_a, **_k: "hdd")
+        notes = []
+        assert ls.resolve_disk_kind("/data", "nvme", notify=notes.append) == "nvme"
+        assert notes and "nvme" in notes[0] and "hdd" in notes[0]
+
+    def test_no_override_returns_the_detected_kind_silently(self, monkeypatch):
+        import soup_cli.utils.layer_stream as ls
+
+        monkeypatch.setattr(ls, "detect_disk_kind", lambda *_a, **_k: "ssd")
+        notes = []
+        assert ls.resolve_disk_kind("/data", None, notify=notes.append) == "ssd"
+        assert notes == []
+
+    def test_stream_disk_kind_is_a_footgun_without_stream_layers(self):
+        import yaml
+
+        from soup_cli.config.loader import load_config_from_string
+
+        with pytest.raises(ValueError, match="stream_disk_kind"):
+            load_config_from_string(
+                yaml.safe_dump(_stream_disk_kind_config(stream_layers=False))
+            )
+
+    def test_stream_disk_kind_is_accepted_while_streaming(self):
+        import yaml
+
+        from soup_cli.config.loader import load_config_from_string
+
+        cfg = load_config_from_string(
+            yaml.safe_dump(_stream_disk_kind_config(stream_layers=True))
+        )
+        assert cfg.training.stream_disk_kind == "nvme"
+
+
+def _stream_disk_kind_config(*, stream_layers):
+    return {
+        "base": "hf-internal-testing/tiny-random-LlamaForCausalLM",
+        "task": "sft",
+        "backend": "transformers",
+        "modality": "text",
+        "data": {"train": "train.jsonl", "max_length": 64, "chat_template": "chatml"},
+        "training": {
+            "stream_layers": stream_layers,
+            "stream_disk_kind": "nvme",
+            "quantization": "none",
+            "batch_size": 1,
+            "epochs": 1,
+            "lora": {"r": 4, "alpha": 8, "target_modules": ["q_proj", "v_proj"]},
+        },
+    }
+
+
 class TestDoctorReportsTheDiskKind:
     """The rider's CLI half. Each branch of the verdict table is exercised —
     including the exception path, because a diagnostic that crashes the report
