@@ -1066,6 +1066,32 @@ class TestKlControlCallback:
         statuses = [json.loads(line)["mitigation_status"] for line in lines]
         assert statuses == ["held", "acted", "released"]
 
+    def test_sentinel_is_resolved_before_the_first_hold_step(
+        self, tmp_path, monkeypatch
+    ):
+        """``bang_bang_step`` falls back to ``policy.beta_floor`` whenever
+        ``state.beta <= 0.0`` (the unseeded sentinel). ``_run_bang_bang`` seeds
+        ``state.beta`` from the live trainer coefficient *before* calling
+        ``bang_bang_step``, which is what keeps the hold-implies-no-write skip
+        safe: on a hold, ``new_beta == beta``, so nothing is lost by not
+        writing. If seeding ever moved to run after the hold check (or were
+        dropped), a hold on step 1 would silently commit ``beta_floor`` into
+        the controller's state instead of the trainer's actual live
+        coefficient, with no write and no error to reveal it.
+
+        Assert on the *state* the step observes rather than on call order, so
+        this survives a refactor that keeps the seed-before-step behaviour.
+        """
+        monkeypatch.chdir(tmp_path)
+        cb = _kl_callback(tmp_path, _SeqBuffer([_HEALTHY]))
+        trainer = _fake_grpo_trainer(beta=0.05)  # != beta_floor (0.02)
+        cb.attach(trainer)
+        assert cb._state.beta == 0.0  # unseeded sentinel, before the first step
+        cb.on_step_end(None, types.SimpleNamespace(global_step=1), None)  # hold
+        assert cb._state.beta == pytest.approx(0.05)  # seeded from the trainer,
+        # not left at 0.0 and not silently dropped to beta_floor (0.02)
+        assert trainer.beta == 0.05  # hold performed no write, as expected
+
 
 class TestAttachKlControl:
     """attach_rl_callbacks builds the bang-bang policy from tcfg for kl_control."""
