@@ -14,6 +14,22 @@ reproducing 70+ versions of notes.
 
 ### Fixed
 
+- **A run whose watcher died was reported `running` forever (#401).**
+  `ExecutionManager._watch` runs as a `daemon=True` thread, so when the MCP
+  server process exits it is killed without unwinding and `finish_execution`
+  never runs — `ExperimentTracker` kept the run at `running` with no watcher
+  left to correct it, training the operator to ignore the one status field that
+  guards against a second concurrent run. The tracker now reconciles on read:
+  when a `running` row carries a pid whose process is gone, `list_runs` /
+  `get_run` rewrite it to `terminated` with an unknown (`None`) exit code — an
+  unknown outcome is never recorded as success, and the richer
+  `completed`/`failed` terminal statuses are left untouched. `soup runs` no
+  longer hardcodes `running` for a non-running row.
+
+### Fixed
+
+### Fixed
+
 - **`kl_control` rewrote the trainer's β/kl_coef on every step, including a `hold`, so a
   non-acting run was numerically identical to `log_only` (#371).** `_run_bang_bang` called
   `_apply_coefficient` unconditionally; on a `hold` the controller writes back the value

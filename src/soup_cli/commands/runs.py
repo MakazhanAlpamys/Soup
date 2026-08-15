@@ -95,7 +95,10 @@ def list_runs(
         elif status == "failed":
             status_str = "[red]failed[/]"
         else:
-            status_str = "[yellow]running[/]"
+            # Show the real status (e.g. 'terminated' reconciled from a dead
+            # watcher, issue #401) — never hardcode 'running' for a row that is
+            # no longer running.
+            status_str = f"[yellow]{status}[/]"
 
         # Format loss
         loss_str = ""
