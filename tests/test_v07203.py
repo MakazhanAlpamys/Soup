@@ -658,6 +658,16 @@ class TestDiskKindMeasuredFallback:
         import io
         import os
         import platform
+        import sys
+
+        import pytest
+
+        # detect_disk_kind is a Linux /sys/block feature (it returns "unknown"
+        # elsewhere by design). This helper hardcodes forward-slash /sys paths,
+        # which os.path.join mangles on Windows, so the simulation is meaningful
+        # only on Linux — where the real CI cells and local runs exercise it.
+        if sys.platform != "linux":
+            pytest.skip("simulates a Linux /sys/block layout; disk-tier detection is Linux-only")
 
         import soup_cli.utils.layer_stream as ls
 
