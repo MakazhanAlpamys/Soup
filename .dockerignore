@@ -1,10 +1,9 @@
 # Git
 .git
-.gitignore
 .github
 
 # Python
-__pycache__/
+/__pycache__/
 *.py[cod]
 *$py.class
 *.so
@@ -29,7 +28,6 @@ wheels/
 # Virtual Environment
 venv/
 .venv/
-env/
 .env
 
 # Ide/Editor
@@ -44,4 +42,4 @@ env/
 *.db
 experiments.db
 output/
-checkpoint-*/
+checkpoint-*
