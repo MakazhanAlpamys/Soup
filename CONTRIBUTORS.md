@@ -69,6 +69,7 @@ Listed by first contribution. PR numbers link the work.
 - **Ben Younes** ([@ousamabenyounes](https://github.com/ousamabenyounes))
   - `MitigationLogWriter` dropped every record in silence once its parent directory vanished mid-run — the controller kept acting while its evidence stopped growing ([#398](https://github.com/MakazhanAlpamys/Soup/pull/398))
   - `soup draft distill --steps N` delivered only ~N/4.44 optimiser steps — `val_split` and `gradient_accumulation_steps` both divide the budget, and the epoch arithmetic ignored them ([#399](https://github.com/MakazhanAlpamys/Soup/pull/399))
+  - The `soup ship` MCQ scorer read `oxed {A}` as no-answer — LaTeX permits a space before the brace and models emit it, and the cue tier cannot rescue it ([#396](https://github.com/MakazhanAlpamys/Soup/pull/396))
 
 ---
 

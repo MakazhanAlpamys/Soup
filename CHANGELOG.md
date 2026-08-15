@@ -22,7 +22,11 @@ reproducing 70+ versions of notes.
   `acted` / `released`) so a non-acting step is distinguishable from an acting one without
   parsing the free-text `action` reason.
 
-### Fixed
+- **`extract_mcq_letter` scored zero for `\boxed {A}` — whitespace between the
+  command and the brace (#357).** The shipped `\boxed\{` regex tolerates spaces
+  *inside* the braces but not between `\boxed` and `{`; LaTeX permits it there and
+  models emit it, so `\boxed { C }` still read as no answer and was not rescued by
+  the cue tier either. The boxed-letter regex now allows `\s*` after the command.
 
 - **`soup draft distill --steps N` now delivers ~N optimiser steps instead of
   N/4.44 (#364).** The epoch count that realised `--steps` divided the request
