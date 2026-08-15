@@ -13,6 +13,7 @@ import json
 import os
 import secrets
 import sqlite3
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -27,24 +28,75 @@ from soup_cli.utils.constants import EXPERIMENTS_DB, SOUP_DIR
 _STATUS_RUNNING = "running"
 _STATUS_TERMINATED = "terminated"
 
+# Windows liveness constants (see _windows_process_is_alive). GetExitCodeProcess
+# returns STILL_ACTIVE for a running process; a failed OpenProcess distinguishes
+# a missing pid (ERROR_INVALID_PARAMETER) from one we merely cannot open
+# (ERROR_ACCESS_DENIED — it exists).
+_WIN_STILL_ACTIVE = 259
+_WIN_PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+_WIN_ERROR_ACCESS_DENIED = 5
+
+
+def _windows_process_is_alive(pid: int) -> bool:
+    """Liveness check for Windows, where ``os.kill(pid, 0)`` cannot be used.
+
+    On Windows ``CTRL_C_EVENT`` is ``0``, so ``os.kill(pid, 0)`` routes signal 0
+    to ``GenerateConsoleCtrlEvent`` — it sends a console Ctrl+C to the process
+    group and never checks existence (it raises KeyboardInterrupt in-process
+    instead). Query the process directly: open a limited-information handle and
+    read its exit code — a live process reads ``STILL_ACTIVE`` (259). A failed
+    open means the pid is gone (ERROR_INVALID_PARAMETER) unless it is only
+    ERROR_ACCESS_DENIED, which means the process exists but we lack rights.
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.GetExitCodeProcess.argtypes = [
+        wintypes.HANDLE,
+        ctypes.POINTER(wintypes.DWORD),
+    ]
+    kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+
+    handle = kernel32.OpenProcess(
+        _WIN_PROCESS_QUERY_LIMITED_INFORMATION, False, pid
+    )
+    if not handle:
+        return ctypes.get_last_error() == _WIN_ERROR_ACCESS_DENIED
+    try:
+        exit_code = wintypes.DWORD()
+        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+            return True  # opened but could not query — assume alive (conservative)
+        return exit_code.value == _WIN_STILL_ACTIVE
+    finally:
+        kernel32.CloseHandle(handle)
+
 
 def _process_is_alive(pid: int) -> bool:
     """Return True if a process with this PID currently exists.
 
-    Signal 0 runs the OS existence/permission check without delivering a
-    signal. A PID owned by another user raises PermissionError and still counts
-    as alive; only a missing process (ProcessLookupError / ESRCH) is dead.
+    POSIX uses signal 0 — a genuine existence/permission check that delivers no
+    signal: a PID owned by another user raises PermissionError and counts as
+    alive; only a missing process (ProcessLookupError / ESRCH) is dead. Any
+    other OSError is treated as not-alive so a corrupt record reconciles instead
+    of sticking on 'running' forever.
 
-    The ``except OSError: return False`` branch is not an optional tidy-up: on
-    Windows a dead PID surfaces as ``OSError`` (winerror 87), never
-    ProcessLookupError, so on Windows that branch is the *primary* path every
-    reconciliation arrives through — do not narrow it away.
+    Windows needs a different primitive entirely: ``os.kill(pid, 0)`` there
+    sends a console Ctrl+C (``CTRL_C_EVENT == 0``) rather than checking
+    existence, so liveness goes through OpenProcess + GetExitCodeProcess (see
+    ``_windows_process_is_alive``).
 
     Known limitation — PID reuse: a dead run whose PID has since been recycled
     by an unrelated process reads as alive forever, so reconciliation never
-    fires for it. That is inherent to PID-liveness (a start-time comparison
-    would be needed to close it) and is out of scope for issue #401.
+    fires for it. That is inherent to PID-liveness (a recorded process
+    start-time comparison would be needed to close it) and is out of scope for
+    issue #401.
     """
+    if sys.platform == "win32":
+        return _windows_process_is_alive(pid)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
