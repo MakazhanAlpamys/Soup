@@ -14,6 +14,18 @@ reproducing 70+ versions of notes.
 
 ### Fixed
 
+- **The one-active-execution cap could double-book after a server restart (#402).**
+  `ExecutionManager._active_run_id` is in-memory, so a restarted MCP server
+  started with an empty slot, saw free capacity, and would launch a second
+  training while a child from the previous server (which survives a client
+  disconnect, #297) was still using the GPU. The cap is now gated on a
+  persisted run whose recorded pid is still alive: a live prior child blocks a
+  new execution across restarts, while a stale record whose process is gone
+  frees the slot rather than wedging it shut. `docs/commands.md` now states the
+  actual scope of the cap.
+
+### Fixed
+
 - **`kl_control` rewrote the trainer's β/kl_coef on every step, including a `hold`, so a
   non-acting run was numerically identical to `log_only` (#371).** `_run_bang_bang` called
   `_apply_coefficient` unconditionally; on a `hold` the controller writes back the value

@@ -6,6 +6,19 @@ from pathlib import Path
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _isolate_experiments_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Point the experiments DB at a per-test temp file.
+
+    The MCP capacity gate now reads persisted runs from the tracker (issue
+    #402), so a test must not see 'running' rows left in the real
+    ``~/.soup/experiments.db`` by earlier tests or by the developer's own runs.
+    A test that needs a specific DB overrides ``SOUP_DB_PATH`` itself; this only
+    provides a clean, isolated default.
+    """
+    monkeypatch.setenv("SOUP_DB_PATH", str(tmp_path / "experiments.db"))
+
+
 @pytest.fixture
 def tmp_data_dir(tmp_path: Path) -> Path:
     """Create a temp directory with sample training data."""

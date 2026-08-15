@@ -20,6 +20,33 @@ TOKEN_TTL_SECONDS = 5 * 60
 DEFAULT_MAX_TREE_FILES = 10_000
 DEFAULT_MAX_TREE_BYTES = 10 * 1024 * 1024 * 1024  # 10 GiB
 
+# The one-active-execution cap is gated on this persisted status + a liveness
+# check so it survives a server restart (issue #402): the in-memory slot resets
+# to None on restart, but a child launched by a prior server is still recorded
+# as _STATUS_RUNNING. A recorded run only counts as active while its pid is
+# alive, so a stale record whose process is gone never blocks execution forever.
+_STATUS_RUNNING = "running"
+
+
+def _pid_is_alive(pid: int) -> bool:
+    """Return True if a process with this PID currently exists.
+
+    Signal 0 runs the OS existence/permission check without delivering a
+    signal. A PID owned by another user raises PermissionError and still counts
+    as alive; only a missing process (ProcessLookupError / ESRCH) is dead. Any
+    other OSError is treated as not-alive so a corrupt record does not wedge the
+    capacity gate shut.
+    """
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
 
 class ExecutionError(ValueError):
     """Safe execution failure intended for translation to an MCP tool error."""
@@ -168,6 +195,29 @@ class ExecutionManager:
             )
         return token
 
+    def _live_persisted_run(self) -> str | None:
+        """Return the run_id of a persisted 'running' run whose process is alive.
+
+        This is what makes the one-active-execution cap survive a server
+        restart (issue #402): the tracker records every MCP-launched child, so a
+        freshly-started server (empty in-memory slot) still sees a prior child
+        that is genuinely training. Only a live pid counts — a stale 'running'
+        record whose process is gone must not permanently block execution.
+        Returns None (never raises) if the tracker is unreadable, so a tracker
+        problem degrades to the in-memory-only behaviour rather than wedging.
+        """
+        try:
+            runs = ExperimentTracker().list_runs()
+        except Exception:
+            return None
+        for run in runs:
+            if run.get("status") != _STATUS_RUNNING:
+                continue
+            pid = run.get("pid")
+            if pid is not None and _pid_is_alive(pid):
+                return run.get("run_id")
+        return None
+
     def execute(self, *, token: str, kind: str) -> dict:
         if not isinstance(token, str) or not token or len(token) > 4096:
             raise ExecutionError("'confirmation_token' must be a non-empty string")
@@ -183,6 +233,11 @@ class ExecutionManager:
                 raise ExecutionError("confirmation token has already been consumed")
             if self._active_run_id is not None:
                 raise ExecutionError("an execution is already active for this MCP server")
+            # Survive a restart: a child launched by a prior server (in-memory
+            # slot lost) is still recorded as running. Gate on liveness so the
+            # machine never double-books a training, while a dead record frees.
+            if self._live_persisted_run() is not None:
+                raise ExecutionError("an execution is already active on this machine")
             self._revalidate(plan)
             # Consumption and capacity acquisition occur before Popen. A failed
             # spawn deliberately requires a fresh plan rather than enabling replay.
