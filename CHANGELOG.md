@@ -46,6 +46,12 @@ reproducing 70+ versions of notes.
 
 ### Fixed
 
+- **`soup train --no-reexec` now prints the flags you actually typed (#372).**
+  The advisory `accelerate launch` command is derived from the same argv the
+  auto-reexec would have used, so `--fsdp` / `--deepspeed` / `--config` (and the
+  rest of the run-shaping tail, including `--name` and `--replay`) cannot silently
+  fall off the printed hint. Following that line used to train without FSDP.
+
 - **A run whose watcher died was reported `running` forever (#401).**
   `ExecutionManager._watch` runs as a `daemon=True` thread, so when the MCP
   server process exits it is killed without unwinding and `finish_execution`
