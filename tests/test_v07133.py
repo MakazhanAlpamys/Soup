@@ -12,6 +12,7 @@ Covers:
 from __future__ import annotations
 
 import ast
+import math
 import os
 from pathlib import Path
 
@@ -1856,3 +1857,81 @@ class TestPromptTexts:
             {"messages": [{"role": "assistant", "content": "no user turn"}]},  # dropped
         ]
         assert _prompt_texts(rows) == ["hi", "direct"]
+
+
+class TestDistillStepBudget:
+    """#364 — ``soup draft distill --steps N`` must deliver ~N optimiser steps.
+
+    The epoch count that realises ``--steps`` used to divide the request by
+    ``rows // batch_size``, ignoring that ``val_split`` removes rows from
+    training and ``gradient_accumulation_steps`` micro-batches make one
+    optimiser step. Both divide the budget, so ``--steps N`` delivered ~N/4.44.
+    """
+
+    @staticmethod
+    def _epochs_from_yaml(yaml_text: str) -> int:
+        import yaml  # noqa: PLC0415
+
+        return int(yaml.safe_load(yaml_text)["training"]["epochs"])
+
+    @staticmethod
+    def _true_steps_per_epoch(rows: int, *, val_split: float, batch: int, accum: int) -> int:
+        # The optimiser-step count one epoch actually delivers.
+        train_rows = math.floor(rows * (1.0 - val_split))
+        return max(1, train_rows // (batch * accum))
+
+    def test_steps_are_delivered_not_quartered(self):
+        """Asking for 100 steps must reach ~100, not ~22 (100 / 4.44)."""
+        from soup_cli.commands import draft
+        from soup_cli.config.schema import DataConfig, TrainingConfig
+
+        rows, requested = 100, 100
+        val_split = float(DataConfig.model_fields["val_split"].default)
+        accum = int(TrainingConfig.model_fields["gradient_accumulation_steps"].default)
+        yaml_text = draft._build_distill_config_yaml(
+            draft_base="org/tiny", target="org/target", data="d.jsonl",
+            out_dir="draft/_adapter", steps=requested, data_rows=rows,
+        )
+        epochs = self._epochs_from_yaml(yaml_text)
+        per_epoch = self._true_steps_per_epoch(
+            rows, val_split=val_split, batch=draft._DISTILL_BATCH_SIZE, accum=accum
+        )
+        delivered = epochs * per_epoch
+        # Nearest reachable at this granularity: the request is met or overshot
+        # by less than one epoch — never the old ~1/4.44 undershoot.
+        assert delivered >= requested
+        assert delivered - requested < per_epoch
+
+    @pytest.mark.parametrize(
+        "val_split,accum",
+        [(0.0, 1), (0.1, 1), (0.0, 4), (0.1, 4), (0.2, 8)],
+    )
+    def test_delivered_steps_track_request_across_shapes(self, val_split, accum):
+        """val_split and gradient_accumulation_steps each divide the budget —
+        vary them independently (one arm at defaults is not discriminating)."""
+        from soup_cli.commands import draft
+
+        rows, requested = 500, 120
+        per_epoch = draft._distill_steps_per_epoch(
+            rows, val_split=val_split, batch_size=1, grad_accum=accum
+        )
+        epochs = draft._distill_epochs_for_steps(
+            requested, rows, val_split=val_split, batch_size=1, grad_accum=accum
+        )
+        delivered = epochs * per_epoch
+        assert delivered >= requested
+        assert delivered - requested < per_epoch
+
+    def test_emitted_config_pins_the_run_shape_and_loads(self):
+        """The config must pin the shape the epoch math assumed, so a
+        schema-default change cannot silently reintroduce the drift (#364)."""
+        from soup_cli.commands import draft
+        from soup_cli.config.loader import load_config_from_string
+
+        yaml_text = draft._build_distill_config_yaml(
+            draft_base="HuggingFaceTB/SmolLM2-135M", target="org/target",
+            data="d.jsonl", out_dir="draft/_adapter", steps=50, data_rows=200,
+        )
+        cfg = load_config_from_string(yaml_text)
+        assert cfg.data.val_split == draft._DISTILL_VAL_SPLIT
+        assert cfg.training.gradient_accumulation_steps == draft._DISTILL_GRAD_ACCUM

@@ -14,6 +14,18 @@ reproducing 70+ versions of notes.
 
 ### Fixed
 
+- **`soup draft distill --steps N` now delivers ~N optimiser steps instead of
+  N/4.44 (#364).** The epoch count that realised `--steps` divided the request
+  by `rows // batch_size`, ignoring that `val_split` (0.1) removes rows from
+  training and `gradient_accumulation_steps` (4) micro-batches make one
+  optimiser step — both divide the budget, so every distill run trained for
+  roughly a fifth of the requested steps, silently. Epochs are now derived from
+  the effective steps-per-epoch, the emitted config pins the run shape
+  (`val_split`, `gradient_accumulation_steps`) so the arithmetic and the trainer
+  cannot drift, and the pre-flight prints the resolved step count.
+
+### Fixed
+
 - **`MitigationLogWriter` silently dropped every record once its parent directory
   vanished mid-run (#343).** `record()` reopens the log per call and swallowed the
   `OSError` from `open("ab")` with a bare `return`, so when a shared temp root was

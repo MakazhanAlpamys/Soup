@@ -64,6 +64,14 @@ _DISTILL_TIMEOUT_SECONDS = 24 * 60 * 60
 _DISTILL_BATCH_SIZE = 1
 _DISTILL_MAX_LENGTH = 1024
 _MAX_DISTILL_EPOCHS = 100
+# #364 — the epoch count that realises ``--steps N`` is derived from the
+# EFFECTIVE optimiser-step budget, which depends on the run shape: ``val_split``
+# removes rows from training and ``gradient_accumulation_steps`` micro-batches
+# make one optimiser step, so both divide the naive ``rows // batch``. Pin that
+# shape here (equal to the schema defaults) AND emit it into the config, so the
+# builder's arithmetic and the trainer's behaviour cannot drift apart.
+_DISTILL_VAL_SPLIT = 0.1   # DataConfig.val_split default
+_DISTILL_GRAD_ACCUM = 4    # TrainingConfig.gradient_accumulation_steps default
 # How much of a failed subprocess's output to surface (mirrors shrink.py).
 _SUBPROCESS_ERROR_TAIL_CHARS = 800
 # The distill trainer writes a LoRA adapter (never dense base weights), so it
@@ -180,6 +188,43 @@ def _load_pair_member(
 # ---------------------------------------------------------------------------
 # distill
 # ---------------------------------------------------------------------------
+def _distill_steps_per_epoch(
+    data_rows: int, *, val_split: float, batch_size: int, grad_accum: int
+) -> int:
+    """Optimiser steps one epoch actually delivers for the distill run shape.
+
+    ``val_split`` removes rows from training and ``grad_accum`` micro-batches
+    make one optimiser step, so both divide the naive ``rows // batch_size``
+    the epoch count used to assume (#364).
+    """
+    train_rows = math.floor(data_rows * (1.0 - val_split))
+    return max(1, train_rows // (batch_size * grad_accum))
+
+
+def _distill_epochs_for_steps(
+    steps: int,
+    data_rows: int,
+    *,
+    val_split: float,
+    batch_size: int,
+    grad_accum: int,
+) -> int:
+    """Epochs whose delivered optimiser steps land nearest to ``steps``.
+
+    There is no ``max_steps`` knob in the trainer (see
+    ``commands/shrink.py::_build_heal_config_yaml``), so ``--steps`` is realised
+    through the epoch count. Rounding up means the request is met or overshot by
+    less than one epoch, never the ~1/4.44 undershoot of the old arithmetic.
+    """
+    per_epoch = _distill_steps_per_epoch(
+        data_rows,
+        val_split=val_split,
+        batch_size=batch_size,
+        grad_accum=grad_accum,
+    )
+    return max(1, math.ceil(steps / per_epoch))
+
+
 def _build_distill_config_yaml(
     *,
     draft_base: str,
@@ -196,14 +241,18 @@ def _build_distill_config_yaml(
     newline cannot inject sibling YAML keys into the ``training:`` block.
     Mirrors ``commands/shrink.py::_build_heal_config_yaml``.
     """
-    per_epoch = max(1, data_rows // _DISTILL_BATCH_SIZE)
-    raw_epochs = math.ceil(steps / per_epoch)
-    if raw_epochs > _MAX_DISTILL_EPOCHS:
+    epochs = _distill_epochs_for_steps(
+        steps,
+        data_rows,
+        val_split=_DISTILL_VAL_SPLIT,
+        batch_size=_DISTILL_BATCH_SIZE,
+        grad_accum=_DISTILL_GRAD_ACCUM,
+    )
+    if epochs > _MAX_DISTILL_EPOCHS:
         raise ValueError(
-            f"--steps {steps} over {data_rows} rows expands to {raw_epochs} "
+            f"--steps {steps} over {data_rows} rows expands to {epochs} "
             f"epochs (> {_MAX_DISTILL_EPOCHS}); reduce --steps or grow --data."
         )
-    epochs = max(1, raw_epochs)
     return (
         "base: {draft_base}\n"
         "task: distill\n"
@@ -212,12 +261,14 @@ def _build_distill_config_yaml(
         "  train: {data}\n"
         "  format: auto\n"
         "  max_length: {max_length}\n"
+        "  val_split: {val_split}\n"
         "training:\n"
         "  teacher_model: {target}\n"
         "  distill_divergence: forward_kl\n"
         "  distill_temperature: 2.0\n"
         "  epochs: {epochs}\n"
         "  batch_size: {batch}\n"
+        "  gradient_accumulation_steps: {grad_accum}\n"
         "  gradient_checkpointing: true\n"
         "  quantization: none\n"
         "  lora:\n"
@@ -229,8 +280,10 @@ def _build_distill_config_yaml(
         data=json.dumps(data),
         target=json.dumps(target),
         max_length=_DISTILL_MAX_LENGTH,
+        val_split=_DISTILL_VAL_SPLIT,
         epochs=epochs,
         batch=_DISTILL_BATCH_SIZE,
+        grad_accum=_DISTILL_GRAD_ACCUM,
     )
 
 
@@ -275,6 +328,28 @@ def _run_distill(
         data_rows=data_rows,
     )
     load_config_from_string(yaml_text)  # validate before spending a subprocess
+
+    # #364 — surface the resolved optimiser-step budget before the run. Epoch
+    # granularity can only land NEAR ``--steps``; printing it makes any mismatch
+    # visible up front rather than after a full training run.
+    per_epoch = _distill_steps_per_epoch(
+        data_rows,
+        val_split=_DISTILL_VAL_SPLIT,
+        batch_size=_DISTILL_BATCH_SIZE,
+        grad_accum=_DISTILL_GRAD_ACCUM,
+    )
+    epochs = _distill_epochs_for_steps(
+        steps,
+        data_rows,
+        val_split=_DISTILL_VAL_SPLIT,
+        batch_size=_DISTILL_BATCH_SIZE,
+        grad_accum=_DISTILL_GRAD_ACCUM,
+    )
+    console.print(
+        f"[dim]--steps {steps} -> {epochs} epoch(s) ~= {epochs * per_epoch} "
+        f"optimiser steps ({data_rows} rows, val_split {_DISTILL_VAL_SPLIT}, "
+        f"accum {_DISTILL_GRAD_ACCUM}, batch {_DISTILL_BATCH_SIZE})[/]"
+    )
 
     # The config lives BESIDE out_dir, not inside it: the merge below replaces
     # out_dir wholesale, which would otherwise delete the config we just wrote.
