@@ -1127,6 +1127,14 @@ class TestDraftDistillCli:
 
         monkeypatch.setattr(draft_cmd, "_vocab_size_of", _fake_vocab)
 
+        tok_target = _FakeTok(target_vocab)
+        tok_draft = _FakeTok(draft_vocab)
+
+        def _fake_tok(model_id: str, **kwargs):
+            return tok_target if "target" in model_id else tok_draft
+
+        monkeypatch.setattr("transformers.AutoTokenizer.from_pretrained", _fake_tok)
+
     def test_plan_only_writes_nothing(self, runner, in_tmp_cwd, monkeypatch):
         from soup_cli.commands.draft import app
 
@@ -1141,7 +1149,9 @@ class TestDraftDistillCli:
         assert "task: distill" in result.output
         assert not (in_tmp_cwd / "draftout").exists()
 
-    def test_vocab_mismatch_rejected(self, runner, in_tmp_cwd, monkeypatch):
+    def test_vocab_mismatch_routes_to_cross_tokenizer_uld(
+        self, runner, in_tmp_cwd, monkeypatch
+    ):
         from soup_cli.commands.draft import app
 
         self._patch_configs(monkeypatch, 49152, 151936)
@@ -1149,11 +1159,11 @@ class TestDraftDistillCli:
         result = runner.invoke(
             app,
             ["distill", "--target", "org/target", "--draft-base", "org/tiny",
-             "--data", data, "-o", "draftout"],
+             "--data", data, "-o", "draftout", "--plan-only"],
         )
-        assert result.exit_code == 1
-        assert "tokenizer" in result.output.lower()
-        assert "uld_strategy" in result.output
+        assert result.exit_code == 0
+        assert "uld_strategy: wasserstein_aligned" in result.output
+        assert "cross-tokenizer" in result.output.lower()
 
     def test_data_outside_cwd_rejected(self, runner, in_tmp_cwd, tmp_path_factory,
                                        monkeypatch):
@@ -1621,10 +1631,40 @@ class TestDraftMeasureCli:
         assert "60.0%" in result.output
         assert "below" in result.output.lower()
 
-    def test_mismatched_tokenizer_exits_one(self, runner, in_tmp_cwd, monkeypatch):
+    def test_mismatched_tokenizer_measures_cross_tokenizer(
+        self, runner, in_tmp_cwd, monkeypatch
+    ):
+        from soup_cli.commands import draft as draft_cmd
         from soup_cli.commands.draft import app
 
         self._patch_load(monkeypatch, compatible=False)
+        monkeypatch.setattr(draft_cmd, "measure_acceptance", lambda *a, **k: (60, 100))
+        monkeypatch.setattr(draft_cmd, "measure_throughput", lambda *a, **k: 15.0)
+
+        prompts = self._prompts(in_tmp_cwd)
+        result = runner.invoke(
+            app,
+            ["measure", "--target", "org/target", "--draft", "org/tiny",
+             "--prompts", prompts],
+        )
+        assert result.exit_code == 0
+        assert "Cross-tokenizer draft detected" in result.output
+        assert "60.0%" in result.output
+
+    def test_mismatched_tokenizer_unsupported_uad_exits_one(
+        self, runner, in_tmp_cwd, monkeypatch
+    ):
+        from soup_cli.commands import draft as draft_cmd
+        from soup_cli.commands.draft import app
+
+        self._patch_load(monkeypatch, compatible=False)
+        monkeypatch.setattr(draft_cmd, "measure_acceptance", lambda *a, **k: (60, 100))
+
+        def _boom(*a, **k):
+            raise RuntimeError("Universal Assisted Decoding requires transformers>=4.45.0")
+
+        monkeypatch.setattr(draft_cmd, "measure_throughput", _boom)
+
         prompts = self._prompts(in_tmp_cwd)
         result = runner.invoke(
             app,
@@ -1632,7 +1672,7 @@ class TestDraftMeasureCli:
              "--prompts", prompts],
         )
         assert result.exit_code == 1
-        assert "tokenizer" in result.output.lower()
+        assert "Universal Assisted Decoding" in result.output
 
     def test_prompts_outside_cwd_rejected(
         self, runner, in_tmp_cwd, tmp_path_factory, monkeypatch

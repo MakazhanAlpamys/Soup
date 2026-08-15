@@ -92,6 +92,51 @@ def count_accepted(draft_argmax: Sequence[int], target_ids: Sequence[int]) -> in
     )
 
 
+def count_accepted_spans(
+    draft_pieces: Sequence[str], target_pieces: Sequence[str]
+) -> int:
+    """Number of target token positions accepted by draft proposals across tokenizers.
+
+    Unlike :func:`count_accepted` which requires identical token IDs and identical
+    tokenization boundaries, this operates on decoded text pieces. It aligns the
+    character spans of the draft's proposed tokens against the target's tokens using
+    exact span overlap when text matches, or :class:`difflib.SequenceMatcher` when
+    decoded texts differ.
+
+    A target token position is accepted if its full character span in the target
+    sequence is matched by the draft's proposals.
+    """
+    import difflib
+
+    from soup_cli.utils.uld import _char_spans
+
+    if not target_pieces:
+        return 0
+    if not draft_pieces:
+        return 0
+
+    d_text, d_spans = _char_spans(draft_pieces)
+    t_text, t_spans = _char_spans(target_pieces)
+
+    if d_text == t_text:
+        return len(target_pieces)
+
+    matcher = difflib.SequenceMatcher(None, d_text, t_text, autojunk=False)
+    matching_blocks = [b for b in matcher.get_matching_blocks() if b[2] > 0]
+    if not matching_blocks:
+        return 0
+
+    accepted = 0
+    for s, e in t_spans:
+        if s == e:
+            if any(t_start <= s <= t_start + size for _, t_start, size in matching_blocks):
+                accepted += 1
+        else:
+            if any(t_start <= s and e <= t_start + size for _, t_start, size in matching_blocks):
+                accepted += 1
+    return accepted
+
+
 def compute_acceptance(
     draft_argmax: Sequence[int], target_ids: Sequence[int]
 ) -> float:
@@ -106,6 +151,16 @@ def compute_acceptance(
     if not target_ids:
         return 0.0
     return matched / len(target_ids)
+
+
+def compute_acceptance_spans(
+    draft_pieces: Sequence[str], target_pieces: Sequence[str]
+) -> float:
+    """Acceptance rate for a single sequence across tokenizers."""
+    if not target_pieces:
+        return 0.0
+    matched = count_accepted_spans(draft_pieces, target_pieces)
+    return matched / len(target_pieces)
 
 
 def acceptance_rate(accepted: int, total: int) -> float:
@@ -167,6 +222,18 @@ def same_tokenizer(
     except Exception:  # noqa: BLE001 — a broken tokenizer is "not compatible"
         return False
     return True
+
+
+def supports_universal_assisted_decoding() -> bool:
+    """True if installed transformers supports cross-tokenizer assisted decoding (UAD)."""
+    try:
+        from transformers.generation import candidate_generator
+
+        return hasattr(
+            candidate_generator, "AssistedCandidateGeneratorDifferentTokenizers"
+        )
+    except Exception:
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -437,6 +504,7 @@ def measure_acceptance(
     prompts: Sequence[str],
     *,
     max_new_tokens: int = 64,
+    draft_tokenizer: Optional["PreTrainedTokenizerBase"] = None,
 ) -> tuple[int, int]:
     """Teacher-forced acceptance of ``draft_model`` against ``target_model``.
 
@@ -445,6 +513,11 @@ def measure_acceptance(
     predicts token ``i + 1``, so the draft's prediction for generated position
     ``p`` is read from ``logits[p - 1]``.
 
+    When ``draft_tokenizer`` is provided and differs from ``tokenizer``, acceptance
+    is measured using decoded character span alignment (:func:`count_accepted_spans`),
+    allowing speculative evaluation across different vocabularies and tokenization
+    boundaries.
+
     Returns ``(accepted, total)`` summed over prompts.
     """
     import torch
@@ -452,6 +525,9 @@ def measure_acceptance(
     accepted = 0
     total = 0
     device = next(target_model.parameters()).device
+    draft_device = next(draft_model.parameters()).device
+
+    is_same = draft_tokenizer is None or same_tokenizer(tokenizer, draft_tokenizer)
 
     for prompt in prompts:
         encoded = tokenizer(prompt, return_tensors="pt")
@@ -475,22 +551,55 @@ def measure_acceptance(
         if generated.numel() == 0:
             continue
 
-        draft_device = next(draft_model.parameters()).device
-        with torch.no_grad():
-            logits = draft_model(input_ids=full_ids.to(draft_device)).logits
-
-        # logits[p - 1] predicts the token at position p. The first generated
-        # token sits at index prompt_len, so its prediction is logits[prompt_len
-        # - 1]; the last generated token needs no prediction beyond it, hence
-        # the -1 upper bound.
-        proposal_logits = logits[0, prompt_len - 1 : full_ids.shape[1] - 1, :]
-        proposals = proposal_logits.argmax(dim=-1).cpu().tolist()
         actual = generated.cpu().tolist()
 
-        # The pure kernel does the comparison — one implementation, and the one
-        # the off-by-one fixture pins.
-        accepted += count_accepted(proposals, actual)
-        total += len(actual)
+        if is_same:
+            with torch.no_grad():
+                logits = draft_model(input_ids=full_ids.to(draft_device)).logits
+
+            # logits[p - 1] predicts the token at position p. The first generated
+            # token sits at index prompt_len, so its prediction is logits[prompt_len
+            # - 1]; the last generated token needs no prediction beyond it, hence
+            # the -1 upper bound.
+            proposal_logits = logits[0, prompt_len - 1 : full_ids.shape[1] - 1, :]
+            proposals = proposal_logits.argmax(dim=-1).cpu().tolist()
+
+            # The pure kernel does the comparison — one implementation, and the one
+            # the off-by-one fixture pins.
+            accepted += count_accepted(proposals, actual)
+            total += len(actual)
+        else:
+            assert draft_tokenizer is not None
+            target_pieces = [
+                tokenizer.decode([tid], skip_special_tokens=False) for tid in actual
+            ]
+            total += len(target_pieces)
+
+            prompt_draft_enc = draft_tokenizer(prompt, return_tensors="pt")
+            draft_prompt_len = int(prompt_draft_enc["input_ids"].shape[1])
+
+            full_ids_list = full_ids[0].cpu().tolist()
+            full_text = tokenizer.decode(full_ids_list, skip_special_tokens=False)
+            draft_full_enc = draft_tokenizer(full_text, return_tensors="pt")
+            draft_full_ids = draft_full_enc["input_ids"].to(draft_device)
+
+            if draft_full_ids.shape[1] <= draft_prompt_len:
+                continue
+
+            with torch.no_grad():
+                draft_logits = draft_model(input_ids=draft_full_ids).logits
+
+            draft_proposal_logits = draft_logits[
+                0, draft_prompt_len - 1 : draft_full_ids.shape[1] - 1, :
+            ]
+            draft_proposals = draft_proposal_logits.argmax(dim=-1).cpu().tolist()
+
+            draft_pieces = [
+                draft_tokenizer.decode([did], skip_special_tokens=False)
+                for did in draft_proposals
+            ]
+
+            accepted += count_accepted_spans(draft_pieces, target_pieces)
 
     return accepted, total
 
@@ -501,6 +610,7 @@ def measure_throughput(
     prompts: Sequence[str],
     *,
     assistant_model: Optional["PreTrainedModel"] = None,
+    assistant_tokenizer: Optional["PreTrainedTokenizerBase"] = None,
     num_assistant_tokens: int = 5,
     max_new_tokens: int = 64,
 ) -> float:
@@ -532,6 +642,17 @@ def measure_throughput(
         if assistant_model is not None:
             kwargs["assistant_model"] = assistant_model
             kwargs["num_assistant_tokens"] = num_assistant_tokens
+            if assistant_tokenizer is not None and not same_tokenizer(
+                tokenizer, assistant_tokenizer
+            ):
+                if not supports_universal_assisted_decoding():
+                    raise RuntimeError(
+                        "Universal Assisted Decoding (cross-tokenizer speculative decoding) "
+                        "requires transformers with cross-tokenizer support. "
+                        "Please upgrade transformers (pip install --upgrade transformers)."
+                    )
+                kwargs["tokenizer"] = tokenizer
+                kwargs["assistant_tokenizer"] = assistant_tokenizer
         with torch.no_grad():
             out = model.generate(**kwargs)
         return int(out.shape[1] - input_ids.shape[1])

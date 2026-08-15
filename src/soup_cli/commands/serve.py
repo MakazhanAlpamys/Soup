@@ -946,6 +946,7 @@ def serve(
 
         # Load draft model for speculative decoding (transformers backend)
         draft_model = None
+        draft_tokenizer = None
         if speculative_model:
             from rich.markup import escape as _esc
 
@@ -962,10 +963,34 @@ def serve(
                 )
             )
             draft_model = _load_draft_model(speculative_model, device)
-            console.print(
-                f"[green]Speculative decoding enabled:[/] draft={_spec_display}, "
-                f"tokens={num_speculative_tokens}"
+            draft_tokenizer = _load_draft_tokenizer(
+                speculative_model, trust_remote_code=resolved_trust
             )
+
+            from soup_cli.utils.draft import (
+                same_tokenizer,
+                supports_universal_assisted_decoding,
+            )
+
+            if draft_tokenizer is not None and not same_tokenizer(tokenizer, draft_tokenizer):
+                if not supports_universal_assisted_decoding():
+                    console.print(
+                        "[red]Error: Target model and draft model have different tokenizers, "
+                        "which requires Universal Assisted Decoding. "
+                        "The installed transformers version does not support cross-tokenizer "
+                        "speculative decoding. Please upgrade transformers.[/]"
+                    )
+                    raise typer.Exit(1)
+                console.print(
+                    f"[green]Cross-tokenizer speculative decoding enabled:[/] "
+                    f"draft={_spec_display}, tokens={num_speculative_tokens} "
+                    "(Universal Assisted Decoding)"
+                )
+            else:
+                console.print(
+                    f"[green]Speculative decoding enabled:[/] draft={_spec_display}, "
+                    f"tokens={num_speculative_tokens}"
+                )
 
         if speculative_model:
             console.print(
@@ -1064,6 +1089,7 @@ def serve(
             model_name=str(model_path.name),
             max_tokens_default=max_tokens_default,
             draft_model=draft_model,
+            draft_tokenizer=draft_tokenizer,
             num_speculative_tokens=num_speculative_tokens,
             adapter_map=adapter_map if adapter_map else None,
             peft_adapter_names=peft_adapter_names,
@@ -1423,6 +1449,23 @@ def _load_draft_model(speculative_model: str, device: str):
     return draft
 
 
+def _load_draft_tokenizer(speculative_model: str, trust_remote_code: bool = False):
+    """Load the tokenizer for a draft model if available."""
+    import re
+
+    from transformers import AutoTokenizer
+
+    if re.match(r'^https?://', speculative_model):
+        return None
+    try:
+        return AutoTokenizer.from_pretrained(
+            speculative_model,
+            trust_remote_code=trust_remote_code,
+        )
+    except Exception:
+        return None
+
+
 def _plain_kv_kwargs(mapping: Any) -> Dict[str, Any]:
     """Deep-convert a (possibly MappingProxyType-nested) mapping to plain dicts.
 
@@ -1449,6 +1492,7 @@ def _generate_response(
     top_p: float = 0.9,
     stream: bool = False,
     assistant_model=None,
+    assistant_tokenizer=None,
     num_assistant_tokens: int = 5,
     logits_processor=None,
     ngram_config: Any = None,
@@ -1481,6 +1525,20 @@ def _generate_response(
         if assistant_model is not None:
             gen_kwargs["assistant_model"] = assistant_model
             gen_kwargs["num_assistant_tokens"] = num_assistant_tokens
+            if assistant_tokenizer is not None:
+                from soup_cli.utils.draft import (
+                    same_tokenizer,
+                    supports_universal_assisted_decoding,
+                )
+
+                if not same_tokenizer(tokenizer, assistant_tokenizer):
+                    if not supports_universal_assisted_decoding():
+                        raise RuntimeError(
+                            "Universal Assisted Decoding (cross-tokenizer speculative decoding) "
+                            "requires transformers with cross-tokenizer support."
+                        )
+                    gen_kwargs["tokenizer"] = tokenizer
+                    gen_kwargs["assistant_tokenizer"] = assistant_tokenizer
         # v0.33.0 #53 — structured-output LogitsProcessor list (may be empty).
         if logits_processor:
             gen_kwargs["logits_processor"] = logits_processor
@@ -1524,6 +1582,7 @@ def _create_app(
     model_name: str,
     max_tokens_default: int,
     draft_model=None,
+    draft_tokenizer=None,
     num_speculative_tokens: int = 5,
     adapter_map: Optional[Dict[str, str]] = None,
     peft_adapter_names: Optional[set] = None,
@@ -1731,6 +1790,7 @@ def _create_app(
                     top_p=request.top_p,
                     model_name=model_name,
                     assistant_model=draft_model,
+                    assistant_tokenizer=draft_tokenizer,
                     num_assistant_tokens=num_speculative_tokens,
                     trace_log_writer=trace_log_writer,
                     started=stream_started,
@@ -1797,6 +1857,7 @@ def _create_app(
                                 temperature=request.temperature,
                                 top_p=request.top_p,
                                 assistant_model=draft_model,
+                                assistant_tokenizer=draft_tokenizer,
                                 num_assistant_tokens=num_speculative_tokens,
                                 logits_processor=processors or None,
                                 ngram_config=ngram_config,
@@ -2203,7 +2264,7 @@ def _stream_anthropic_messages(
 def _stream_response(
     model, tokenizer, messages,
     max_tokens, temperature, top_p, model_name,
-    assistant_model=None, num_assistant_tokens=5,
+    assistant_model=None, assistant_tokenizer=None, num_assistant_tokens=5,
     trace_log_writer=None, started=None,
     kv_cache_generate_kwargs=None,
     mole_runtime=None,
@@ -2249,6 +2310,7 @@ def _stream_response(
                     temperature=temperature,
                     top_p=top_p,
                     assistant_model=assistant_model,
+                    assistant_tokenizer=assistant_tokenizer,
                     num_assistant_tokens=num_assistant_tokens,
                     kv_cache_generate_kwargs=kv_cache_generate_kwargs,
                 )
