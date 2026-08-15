@@ -66,7 +66,7 @@ shipped v0.73.1 code before a line was changed.
   execution tools will use. `train_start` and `export` stay **plan-only** —
   nothing in this slice executes anything, and the help text says so in the
   present tense. `build_registry(allow_mutating=True)` still returns the same 16
-  tools. Contributed by [@darshvit20](https://github.com/darshvit20).
+  tools. Contributed by [@CODING-DARSH](https://github.com/CODING-DARSH).
 
 ### Fixed
 
