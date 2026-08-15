@@ -14,6 +14,12 @@ reproducing 70+ versions of notes.
 
 ### Fixed
 
+- **`extract_mcq_letter` scored zero for `\boxed {A}` — whitespace between the
+  command and the brace (#357).** The shipped `\boxed\{` regex tolerates spaces
+  *inside* the braces but not between `\boxed` and `{`; LaTeX permits it there and
+  models emit it, so `\boxed { C }` still read as no answer and was not rescued by
+  the cue tier either. The boxed-letter regex now allows `\s*` after the command.
+
 - **`soup draft distill --steps N` now delivers ~N optimiser steps instead of
   N/4.44 (#364).** The epoch count that realised `--steps` divided the request
   by `rows // batch_size`, ignoring that `val_split` (0.1) removes rows from

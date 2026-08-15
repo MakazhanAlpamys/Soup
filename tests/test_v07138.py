@@ -144,8 +144,14 @@ class TestExtractMcqLetterBoxed:
     def test_boxed_tolerates_whitespace_and_lowercase(self):
         from soup_cli.eval.forgetting import extract_mcq_letter
 
+        # Whitespace inside the braces, and a lowercase letter.
         assert extract_mcq_letter("\\boxed{ C }") == "C"
         assert extract_mcq_letter("\\boxed{b}") == "B"
+        # Whitespace BETWEEN the command and the brace: LaTeX permits it and
+        # models emit it, so the spaced spelling must resolve too (#357).
+        assert extract_mcq_letter("\\boxed { C }") == "C"
+        assert extract_mcq_letter("\\boxed  {B}") == "B"
+        assert extract_mcq_letter("The answer is \\boxed {A}.") == "A"
 
     def test_last_box_wins(self):
         from soup_cli.eval.forgetting import extract_mcq_letter

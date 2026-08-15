@@ -47,7 +47,10 @@ _PAREN_RE = re.compile(r"(?<![A-Za-z0-9])\(?([A-Ja-j])\)(?![A-Za-z0-9])")
 # a single A–J letter. ``\boxed{4}`` is the model answering with a VALUE, and
 # reading that as "option 4" would be a wrong credit rather than a repair — the
 # prompt is what has to change there (see ``_MCQ_ANSWER_CUE``). #357.
-_BOXED_LETTER_RE = re.compile(r"\\boxed\{\s*([A-Ja-j])\s*\}")
+# The ``\s*`` after ``\boxed`` matters: LaTeX permits whitespace between the
+# command and its brace and models emit it (``\boxed {A}``), so without it the
+# spaced spelling scores zero — the same #357 defect, one space to the left.
+_BOXED_LETTER_RE = re.compile(r"\\boxed\s*\{\s*([A-Ja-j])\s*\}")
 # Bare standalone UPPERCASE letter that TERMINATES a clause — i.e. followed by
 # end-of-string or sentence punctuation, not by more words. Requiring upper-case
 # skips the lower-case article "a"/"an", and the terminating look-ahead skips a
