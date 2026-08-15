@@ -119,6 +119,55 @@ class TestExtractMcqLetter:
         assert extract_mcq_letter(None) is None  # type: ignore[arg-type]
 
 
+class TestExtractMcqLetterBoxed:
+    """`\\boxed{X}` is how math/reasoning models mark a final answer (#357).
+
+    The v0.71.38 scorer had no boxed tier, so a Llama-3.1-8B that answered
+    ``\\boxed{C}`` scored zero on every such item and was ranked below a 0.5B
+    model. A boxed letter is the model's definitive choice, so it outranks the
+    cue/paren/bare tiers, and the LAST box wins when a trace draws more than one.
+    """
+
+    def test_boxed_letter_is_extracted(self):
+        from soup_cli.eval.forgetting import extract_mcq_letter
+
+        assert extract_mcq_letter("\\boxed{C}") == "C"
+        assert extract_mcq_letter("The answer is \\boxed{B}.") == "B"
+        assert extract_mcq_letter("...long reasoning trace... \\boxed{A}") == "A"
+
+    def test_boxed_letter_scores(self):
+        from soup_cli.eval.forgetting import score_answer
+
+        # The item Llama-3.1-8B lost before the fix: right letter, boxed.
+        assert score_answer("Paris is the capital, so \\boxed{C}.", "C") is True
+
+    def test_boxed_tolerates_whitespace_and_lowercase(self):
+        from soup_cli.eval.forgetting import extract_mcq_letter
+
+        assert extract_mcq_letter("\\boxed{ C }") == "C"
+        assert extract_mcq_letter("\\boxed{b}") == "B"
+
+    def test_last_box_wins(self):
+        from soup_cli.eval.forgetting import extract_mcq_letter
+
+        # A reasoning model boxes a candidate, reconsiders, boxes its decision.
+        assert extract_mcq_letter("first \\boxed{A} then \\boxed{C}") == "C"
+
+    def test_boxed_letter_outranks_earlier_prose_cue(self):
+        from soup_cli.eval.forgetting import extract_mcq_letter
+
+        # The final boxed choice must beat an option letter named mid-reasoning.
+        assert extract_mcq_letter("Option A looks plausible, but \\boxed{B}") == "B"
+
+    def test_boxed_value_is_not_a_letter(self):
+        from soup_cli.eval.forgetting import extract_mcq_letter
+
+        # A boxed free-text VALUE (not an A-J option letter) is not an MCQ
+        # choice — fix 1's scope is boxed letters only (#357).
+        assert extract_mcq_letter("\\boxed{Paris}") is None
+        assert extract_mcq_letter("\\boxed{42}") is None
+
+
 class TestForgettingDetectorUsesNewScorer:
     def test_detector_evaluate_uses_boundary_scorer(self):
         from soup_cli.eval.forgetting import ForgettingDetector
