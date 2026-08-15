@@ -14,6 +14,16 @@ reproducing 70+ versions of notes.
 
 ### Fixed
 
+- **`kl_control` rewrote the trainer's β/kl_coef on every step, including a `hold`, so a
+  non-acting run was numerically identical to `log_only` (#371).** `_run_bang_bang` called
+  `_apply_coefficient` unconditionally; on a `hold` the controller writes back the value
+  already there, which is a no-op value but not a no-op write. The write is now skipped when
+  the bang-bang step holds, and the mitigation log records `mitigation_status` (`held` /
+  `acted` / `released`) so a non-acting step is distinguishable from an acting one without
+  parsing the free-text `action` reason.
+
+### Fixed
+
 - **`soup draft distill --steps N` now delivers ~N optimiser steps instead of
   N/4.44 (#364).** The epoch count that realised `--steps` divided the request
   by `rows // batch_size`, ignoring that `val_split` (0.1) removes rows from

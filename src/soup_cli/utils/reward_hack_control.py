@@ -1037,12 +1037,23 @@ class RewardHackMitigationCallback(_TrainerCallbackBase):  # type: ignore[misc, 
         vote = self._compute_vote(signals)
         new_state, action = bang_bang_step(policy, self._state, vote=vote)
         self._state = new_state
-        self._apply_coefficient(action.new_beta)
+        held = action.reason == "hold"
+        # bang_bang_step leaves reason == "hold" only when new_beta == beta,
+        # so skipping the write here changes no committed β.
+        if not held:
+            self._apply_coefficient(action.new_beta)
         self._record_action(action.reason)
         telemetry["vote"] = vote
         telemetry["new_beta"] = action.new_beta
         telemetry["tripped"] = action.tripped
         telemetry["action"] = action.reason
+        telemetry["mitigation_status"] = (
+            "held"
+            if held
+            else "released"
+            if action.reason.startswith("relax")
+            else "acted"
+        )
 
     def _request_stop(self, control: Any) -> None:
         if control is not None:

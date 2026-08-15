@@ -1000,6 +1000,72 @@ class TestKlControlCallback:
         for key in ("vote", "new_beta", "tripped", "action"):
             assert key in last
 
+    def test_hold_step_performs_no_coefficient_write(self, tmp_path, monkeypatch):
+        """A dead-band (hold) step must not touch the trainer at all, so a
+        non-acting kl_control run is observably identical to log_only."""
+        monkeypatch.chdir(tmp_path)
+
+        class _WriteCountingTrainer:
+            def __init__(self, beta):
+                self._beta = beta
+                self.writes = 0
+                self.args = types.SimpleNamespace(beta=beta)
+
+            @property
+            def beta(self):
+                return self._beta
+
+            @beta.setter
+            def beta(self, value):
+                self.writes += 1
+                self._beta = value
+
+        cb = _kl_callback(tmp_path, _SeqBuffer([_HEALTHY, _HEALTHY]))
+        trainer = _WriteCountingTrainer(0.02)
+        cb.attach(trainer)
+        cb.on_step_end(None, types.SimpleNamespace(global_step=1), None)
+        cb.on_step_end(None, types.SimpleNamespace(global_step=2), None)
+        assert trainer.writes == 0
+        assert trainer.beta == 0.02
+
+    def test_hold_then_raise_writes_exactly_once(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+
+        class _WriteCountingTrainer:
+            def __init__(self, beta):
+                self._beta = beta
+                self.writes = 0
+                self.args = types.SimpleNamespace(beta=beta)
+
+            @property
+            def beta(self):
+                return self._beta
+
+            @beta.setter
+            def beta(self, value):
+                self.writes += 1
+                self._beta = value
+
+        cb = _kl_callback(tmp_path, _SeqBuffer([_HEALTHY, _HACK]))
+        trainer = _WriteCountingTrainer(0.02)
+        cb.attach(trainer)
+        cb.on_step_end(None, types.SimpleNamespace(global_step=1), None)  # hold
+        cb.on_step_end(None, types.SimpleNamespace(global_step=2), None)  # raise
+        assert trainer.writes == 1
+        assert trainer.beta == pytest.approx(0.04)
+
+    def test_mitigation_status_distinguishes_held_acted_released(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.chdir(tmp_path)
+        cb = _kl_callback(tmp_path, _SeqBuffer([_HEALTHY, _HACK, _HEALTHY]))
+        cb.attach(_fake_grpo_trainer(beta=0.02))
+        for step in (1, 2, 3):  # hold, raise (acted), relax (released)
+            cb.on_step_end(None, types.SimpleNamespace(global_step=step), None)
+        lines = (tmp_path / "m.jsonl").read_text().strip().splitlines()
+        statuses = [json.loads(line)["mitigation_status"] for line in lines]
+        assert statuses == ["held", "acted", "released"]
+
 
 class TestAttachKlControl:
     """attach_rl_callbacks builds the bang-bang policy from tcfg for kl_control."""
