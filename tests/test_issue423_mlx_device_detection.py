@@ -15,6 +15,8 @@ from __future__ import annotations
 import sys
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from soup_cli.utils import gpu as gpu_utils
 from soup_cli.utils.gpu import resolve_quantization
 
@@ -191,3 +193,59 @@ class TestIssue423QuantizationDecision:
         )
         assert resolved == "8bit"
         assert warning is None
+
+
+class TestHardwareFitGateIsMlxAware:
+    """The CUDA-shaped analytical VRAM predictor must skip on ``backend='mlx'``.
+
+    Mirrors ``TestHardwareFitGateIsStreamingAware`` in ``test_v07200.py``.
+    Apple Silicon MLX uses unified system RAM managed by Metal, not fixed CUDA
+    VRAM, so the resident-memory prediction is the wrong model entirely.  On a
+    non-Apple host, ``backend: mlx`` still skips the preflight harmlessly
+    because ``resolve_trainer`` fails on the ``mlx_lm`` import before training
+    starts — there is no silent hazard.
+    """
+
+    def _cfg(self, backend: str):
+        import yaml
+
+        from soup_cli.config.loader import load_config_from_string
+
+        body = {
+            "base": "Qwen/Qwen2.5-3B",
+            "task": "sft",
+            "backend": backend,
+            "modality": "text",
+            "data": {"train": "train.jsonl", "max_length": 512},
+            "training": {
+                "batch_size": 1,
+                "gradient_accumulation_steps": 1,
+                "quantization": "none",
+                "lora": {"r": 8, "alpha": 16},
+            },
+        }
+        return load_config_from_string(yaml.safe_dump(body))
+
+    def test_resident_run_is_still_gated(self):
+        """Control: without MLX the gate must still fire on a 4 GB card,
+        otherwise this test proves nothing about the MLX branch."""
+        import typer
+
+        from soup_cli.commands.train import _hardware_fit_preflight
+
+        gpu = {"memory_total_bytes": 4 * 10**9}
+        with pytest.raises(typer.Exit):
+            _hardware_fit_preflight(
+                self._cfg("transformers"), gpu, allow_oom_attempt=False,
+            )
+
+    def test_mlx_run_is_not_blocked_by_the_resident_prediction(self):
+        """``backend='mlx'`` with real unified memory bytes must not trip the
+        CUDA VRAM gate — the predictor is skipped entirely."""
+        from soup_cli.commands.train import _hardware_fit_preflight
+
+        gpu = {"memory_total_bytes": 4 * 10**9}  # real bytes, not zero
+        # Must not raise typer.Exit.
+        _hardware_fit_preflight(
+            self._cfg("mlx"), gpu, allow_oom_attempt=False,
+        )

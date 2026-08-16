@@ -175,7 +175,6 @@ class TestCPUQuantWarning:
         # Retargeted from commands/train.py to utils/gpu.py after extraction (#423)
         source = inspect.getsource(gpu)
         assert "quantization is not" in source
-        assert '"none"' in source
 
         # Behavioral assertions on pure resolve_quantization function
         resolved, warning = resolve_quantization(

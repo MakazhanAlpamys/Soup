@@ -100,7 +100,10 @@ def _hardware_fit_preflight(cfg, gpu_info, *, allow_oom_attempt: bool) -> None:
     if getattr(cfg.training, "stream_layers", False):
         return
     # MLX uses Apple unified memory and its own runtime allocator, so the
-    # CUDA-shaped analytical VRAM predictor is skipped.
+    # CUDA-shaped analytical VRAM predictor is skipped.  On a non-Apple host,
+    # ``backend: mlx`` still skips harmlessly: ``resolve_trainer`` fails on
+    # the ``mlx_lm`` import before training starts, so there is no silent
+    # hazard from bypassing the gate.
     if getattr(cfg, "backend", None) == "mlx":
         return
 
