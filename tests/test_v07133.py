@@ -965,7 +965,26 @@ class TestMeasureAcceptance:
             max_new_tokens=8,
         )
         assert target.calls[0]["do_sample"] is False
+        assert target.calls[0]["repetition_penalty"] == 1.0
         assert target.calls[0]["max_new_tokens"] == 8
+
+    def test_repetition_penalty_neutralized_for_self_acceptance(self):
+        """When target and draft are identical, repetition_penalty is neutralized."""
+        from soup_cli.utils.draft import measure_acceptance
+
+        # Target generates [10, 11, 12] from prompt [5, 6].
+        # An identical draft produces predictions [10, 11, 12] for those positions.
+        identical_draft_argmax = [99, 10, 11, 12, 99]
+        target = _FakeTarget([5, 6, 10, 11, 12], 2)
+        draft = _FakeDraft(identical_draft_argmax)
+
+        accepted, total = measure_acceptance(
+            target, draft, _TensorTok([5, 6]), ["hello"], max_new_tokens=8
+        )
+        assert target.calls[0]["repetition_penalty"] == 1.0
+        assert total == 3
+        assert accepted == 3
+
 
 
 class TestMeasureThroughput:

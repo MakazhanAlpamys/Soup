@@ -538,6 +538,7 @@ def measure_acceptance(
             "input_ids": input_ids,
             "max_new_tokens": max_new_tokens,
             "do_sample": False,  # greedy: a sampled target makes alpha noisy
+            "repetition_penalty": 1.0,  # neutralise checkpoint penalty: raw argmax agreement
             "pad_token_id": tokenizer.pad_token_id or tokenizer.eos_token_id,
         }
         mask = encoded.get("attention_mask", None)
