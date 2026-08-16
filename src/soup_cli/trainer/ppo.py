@@ -20,6 +20,7 @@ from soup_cli.utils.gpu import (
     resolve_device_map,
     resolve_frozen_base_load_dtype,
 )
+from soup_cli.utils.mixed_precision import align_trainable_dtype_for_fp16
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 
 console = Console()
@@ -575,6 +576,11 @@ class PPOTrainerWrapper:
             self.config.training, self._output_dir,
         ):
             if resume_from_checkpoint and "resume_from_checkpoint" in train_params:
+                align_trainable_dtype_for_fp16(
+                    self.trainer.model,
+                    fp16=getattr(self.trainer.args, "fp16", False),
+                    bf16=getattr(self.trainer.args, "bf16", False),
+                )
                 self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
             else:
                 if resume_from_checkpoint:
@@ -582,6 +588,11 @@ class PPOTrainerWrapper:
                         "[yellow]Warning: This PPOTrainer does not support "
                         "resume_from_checkpoint -- starting from scratch.[/]"
                     )
+                align_trainable_dtype_for_fp16(
+                    self.trainer.model,
+                    fp16=getattr(self.trainer.args, "fp16", False),
+                    bf16=getattr(self.trainer.args, "bf16", False),
+                )
                 self.trainer.train()
         duration = time.time() - start
 
