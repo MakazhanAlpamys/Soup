@@ -36,6 +36,8 @@ from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 if TYPE_CHECKING:
     import torch as _torch_typ
 
+from soup_cli.utils.mixed_precision import align_trainable_dtype_for_fp16
+
 console = Console()
 
 # 50/50 CE / distillation blend — matches Hinton et al. 2015.
@@ -721,6 +723,11 @@ class DistillTrainerWrapper:
                     eval_gate_config=self.config.training.eval_gate,
                 )
             )
+        align_trainable_dtype_for_fp16(
+            self.trainer.model,
+            fp16=getattr(self.trainer.args, "fp16", False),
+            bf16=getattr(self.trainer.args, "bf16", False),
+        )
         self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         duration = time.time() - start
 
