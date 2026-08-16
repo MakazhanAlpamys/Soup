@@ -251,12 +251,37 @@ def load_quant_config(path: object) -> Mapping[str, Any]:
     return data
 
 
+def _build_merge_4bit_bnb_kwargs(
+    *, compute_dtype: Any, forced: bool, double_quant: bool
+) -> dict[str, Any]:
+    """Kwargs for the 4-bit save path's ``BitsAndBytesConfig``.
+
+    Dict-shaped (like the quant-menu helpers) so tests can assert the wiring —
+    #321: ``bnb_4bit_use_double_quant`` is threaded from the caller's config
+    field, not hardcoded True — without constructing the heavy config object.
+    """
+    bnb_kwargs: dict[str, Any] = {
+        "load_in_4bit": True,
+        "bnb_4bit_quant_type": "nf4",
+        "bnb_4bit_compute_dtype": compute_dtype,
+        "bnb_4bit_use_double_quant": double_quant,
+    }
+    if forced:
+        # ``forced`` => no skip-modules, so every Linear (incl. lm_head) is
+        # 4-bit quantized. BNB 4-bit uses ``bnb_4bit_skip_modules`` (the
+        # legacy 8-bit name was ``llm_int8_skip_modules`` — only emit it
+        # when the installed BNB exposes the 8-bit kwarg as a fallback).
+        bnb_kwargs["bnb_4bit_skip_modules"] = []
+    return bnb_kwargs
+
+
 def merge_4bit(
     *,
     merged_dir: str,
     output_dir: str,
     forced: bool = False,
     dtype: str = "bfloat16",
+    double_quant: bool = True,
     trust_remote_code: bool = False,
 ) -> None:
     """Write a single BNB-4bit-quantized merged checkpoint.
@@ -264,10 +289,17 @@ def merge_4bit(
     Unsloth ``merged_4bit`` / ``4bit_forced`` recipe — no
     dequant → merge → requant cycle. ``forced=True`` quantizes ALL linear
     layers including embeddings; default ``False`` follows BNB's default
-    skip-modules behaviour.
+    skip-modules behaviour. ``double_quant`` mirrors
+    ``training.bnb_4bit_use_double_quant`` (#321) so the save path agrees with
+    the resident and streamed loaders; it defaults True to match shipped
+    behaviour.
     """
     if not isinstance(forced, bool):
         raise TypeError(f"forced must be bool, got {type(forced).__name__}")
+    if not isinstance(double_quant, bool):
+        raise TypeError(
+            f"double_quant must be bool, got {type(double_quant).__name__}"
+        )
     if not isinstance(dtype, str):
         raise TypeError(f"dtype must be str, got {type(dtype).__name__}")
     if dtype not in {"float16", "bfloat16", "float32"}:
@@ -296,18 +328,11 @@ def merge_4bit(
         "float32": torch.float32,
     }
 
-    bnb_kwargs: dict[str, Any] = {
-        "load_in_4bit": True,
-        "bnb_4bit_quant_type": "nf4",
-        "bnb_4bit_compute_dtype": dtype_map[dtype],
-        "bnb_4bit_use_double_quant": True,
-    }
-    if forced:
-        # ``forced`` => no skip-modules, so every Linear (incl. lm_head) is
-        # 4-bit quantized. BNB 4-bit uses ``bnb_4bit_skip_modules`` (the
-        # legacy 8-bit name was ``llm_int8_skip_modules`` — only emit it
-        # when the installed BNB exposes the 8-bit kwarg as a fallback).
-        bnb_kwargs["bnb_4bit_skip_modules"] = []
+    bnb_kwargs = _build_merge_4bit_bnb_kwargs(
+        compute_dtype=dtype_map[dtype],
+        forced=forced,
+        double_quant=double_quant,
+    )
     bnb_config = BitsAndBytesConfig(**bnb_kwargs)
 
     os.makedirs(output_dir, exist_ok=True)

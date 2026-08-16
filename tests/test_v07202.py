@@ -909,6 +909,35 @@ class TestPeftDispatchesTheBnbLoraPath:
         )
         assert streamed.load_in_4bit is resident.load_in_4bit
 
+    def test_build_nf4_config_honours_double_quant_false(self):
+        """#321 — the streamed skeleton's config builder honours the flag.
+        ``stream_setup`` reads ``training.bnb_4bit_use_double_quant`` once and
+        threads the SAME value into the sharder and this builder, so honouring
+        it here can never make the streamed and resident sides drift."""
+        from soup_cli.utils.layer_stream_runtime import build_nf4_config
+
+        cfg = build_nf4_config("bfloat16", double_quant=False)
+        assert cfg.bnb_4bit_use_double_quant is False
+        assert cfg.load_in_4bit is True
+        # Default still double-quantizes (parity with the resident default).
+        assert build_nf4_config("bfloat16").bnb_4bit_use_double_quant is True
+
+    def test_stream_setup_threads_double_quant_from_config(self):
+        """#321 — both the sharder and the skeleton builder must be handed the
+        configured flag from the SAME tcfg field, or the two sides could quantise
+        differently. Source-level guard against a call site regressing to the
+        hardcoded default."""
+        import inspect
+
+        from soup_cli.trainer import stream_setup
+
+        src = inspect.getsource(
+            stream_setup.StreamingSetupMixin._setup_streaming_transformers
+        )
+        assert "double_quant = tcfg.bnb_4bit_use_double_quant" in src
+        # Threaded into the sharder (its cache keys on double_quant) ...
+        assert src.count("double_quant=double_quant") >= 2
+
     def test_unquantised_skeleton_is_untouched(self, tmp_path):
         """v0.72.0's bit-exact bf16 gates only stay valid if that path is
         byte-identical to what it was."""

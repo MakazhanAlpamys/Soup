@@ -76,6 +76,17 @@ reproducing 70+ versions of notes.
   block so it is never read as a decode-only number. `--help` states the extra
   judge-API cost.
 
+- **`training.bnb_4bit_use_double_quant` was validated but never read — every 4-bit
+  path hardcoded double-quantization to `True`, so `bnb_4bit_use_double_quant: false`
+  passed validation and was silently ignored (#321).** The flag is now threaded through
+  all three call sites together — the resident loader (`build_quantization_config_for_loader`),
+  the layer-streaming path (`stream_setup` reads it once and passes the SAME value to the
+  sharder and the meta skeleton, so streamed-vs-resident bit-exactness cannot drift), and the
+  4bit save path (`soup merge --no-double-quant` for the `4bit` / `4bit_forced` save formats).
+  The schema default is reconciled to `True` to match what every 4-bit load has always shipped,
+  so existing runs are unaffected; the config-load footgun (`=true` requires `quantization: 4bit`)
+  now fires only on an explicitly set flag, not on the inherited default.
+
 - **`kl_control` rewrote the trainer's β/kl_coef on every step, including a `hold`, so a
   non-acting run was numerically identical to `log_only` (#371).** `_run_bang_bang` called
   `_apply_coefficient` unconditionally; on a `hold` the controller writes back the value

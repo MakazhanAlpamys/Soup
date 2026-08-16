@@ -570,11 +570,39 @@ class TestUnslothBNB4Bit:
 
 
 class TestLFParity:
-    def test_double_quant_default_false(self):
+    def test_double_quant_default_true(self):
+        # #321 — reconciled to True: every 4-bit load path has always
+        # double-quantized, so the schema default now matches shipped behaviour
+        # (the flag was previously validated but never read).
         cfg = load_config_from_string(
             "base: a/b\n"
             "task: sft\n"
             "data: {train: x.jsonl}\n"
+        )
+        assert cfg.training.bnb_4bit_use_double_quant is True
+
+    def test_double_quant_default_does_not_trip_non_4bit_footgun(self):
+        # #321 — the default is now True, so a config that never sets the flag
+        # must NOT be rejected for using a non-4bit quantization. The footgun
+        # only fires on an *explicitly set* flag (an unset field carries no
+        # intent). Guards the model_fields_set gate in the validator.
+        cfg = load_config_from_string(
+            "base: a/b\n"
+            "task: sft\n"
+            "data: {train: x.jsonl}\n"
+            "training: {quantization: 8bit}\n"
+        )
+        assert cfg.training.quantization == "8bit"
+        assert cfg.training.bnb_4bit_use_double_quant is True
+
+    def test_double_quant_explicit_false_allowed_without_4bit(self):
+        # Explicit False on a non-4bit config is a no-op, not a footgun —
+        # unchanged behaviour (the raise only guards an explicit True).
+        cfg = load_config_from_string(
+            "base: a/b\n"
+            "task: sft\n"
+            "data: {train: x.jsonl}\n"
+            "training: {bnb_4bit_use_double_quant: false, quantization: none}\n"
         )
         assert cfg.training.bnb_4bit_use_double_quant is False
 
@@ -854,6 +882,38 @@ class TestSaveFormats:
 
         with pytest.raises(TypeError):
             merge_4bit()  # type: ignore[call-arg]
+
+    def test_merge_4bit_bnb_kwargs_honours_double_quant(self):
+        """#321 — the 4-bit save path threads its ``double_quant`` argument into
+        the BNB kwargs instead of hardcoding True. Dict-shaped helper keeps this
+        assertable without constructing the heavy config."""
+        from soup_cli.utils.save_formats import _build_merge_4bit_bnb_kwargs
+
+        off = _build_merge_4bit_bnb_kwargs(
+            compute_dtype="bfloat16", forced=False, double_quant=False
+        )
+        assert off["bnb_4bit_use_double_quant"] is False
+        assert off["load_in_4bit"] is True
+        assert off["bnb_4bit_quant_type"] == "nf4"
+        assert "bnb_4bit_skip_modules" not in off
+
+        on = _build_merge_4bit_bnb_kwargs(
+            compute_dtype="bfloat16", forced=True, double_quant=True
+        )
+        assert on["bnb_4bit_use_double_quant"] is True
+        # ``forced`` still quantizes every Linear (empty skip list) — unchanged.
+        assert on["bnb_4bit_skip_modules"] == []
+
+    def test_merge_4bit_rejects_non_bool_double_quant(self):
+        """Matches the existing ``forced``/``dtype`` type guards."""
+        from soup_cli.utils.save_formats import merge_4bit
+
+        with pytest.raises(TypeError, match="double_quant must be bool"):
+            merge_4bit(
+                merged_dir="m",
+                output_dir="o",
+                double_quant=1,  # type: ignore[arg-type]
+            )
 
     def test_export_torchao_now_live(self):
         """v0.53.1 #142 — live wiring landed; signature now requires kwargs."""

@@ -1162,14 +1162,15 @@ def build_nf4_config(dtype: str, *, double_quant: bool = True):
     """The BitsAndBytesConfig the streamed skeleton and the sharder share.
 
     ``double_quant`` defaults to True to match
-    ``quant_menu.build_quantization_config_for_loader``, which hardcodes it for
-    every resident 4-bit load in this repo. That agreement is load-bearing, not
-    cosmetic: the release's central claim is that a streamed NF4 run is
-    bit-exact against a resident one, and it holds only while both sides
-    quantise with the same settings. ``training.bnb_4bit_use_double_quant`` is
-    therefore deliberately NOT threaded in here — honouring it on the streamed
-    side alone would silently break that parity. (That the flag is ignored
-    repo-wide is a pre-existing gap, tracked separately.)
+    ``quant_menu.build_quantization_config_for_loader``, whose own default is
+    True for every resident 4-bit load in this repo. That agreement is
+    load-bearing, not cosmetic: the release's central claim is that a streamed
+    NF4 run is bit-exact against a resident one, and it holds only while both
+    sides quantise with the same settings. Since #321,
+    ``training.bnb_4bit_use_double_quant`` IS threaded through both paths from
+    the SAME config field (``stream_setup`` reads it once and passes it to the
+    sharder and this skeleton together), so honouring it can no longer make the
+    two sides drift apart.
     """
     from transformers import BitsAndBytesConfig
 

@@ -1746,10 +1746,15 @@ class TrainingConfig(BaseModel):
     )
     # Part E — LF / Axolotl parity.
     bnb_4bit_use_double_quant: bool = Field(
-        default=False,
+        # #321 — every 4-bit load path in the repo has always double-quantized,
+        # so the default is True to match shipped behaviour; the flag is now
+        # honoured (previously validated but never read), letting a user turn it
+        # off. Only meaningful when quantization='4bit'.
+        default=True,
         description=(
             "Apply BNB 4-bit double-quantization (LF / Axolotl parity). "
-            "Only meaningful when quantization='4bit'. (v0.53.0)"
+            "Defaults to true to match every 4-bit load path; set false to "
+            "disable it. Only meaningful when quantization='4bit'. (v0.53.0)"
         ),
     )
     llm_int8: bool = Field(
@@ -5362,8 +5367,14 @@ class SoupConfig(BaseModel):
     def _validate_bnb_4bit_double_quant(self) -> "SoupConfig":
         """v0.53.0 Part E — ``bnb_4bit_use_double_quant=True`` requires
         ``quantization='4bit'`` (silent-no-op footgun otherwise).
+
+        #321 — the field now defaults to True, so the footgun must only fire on
+        an *explicitly set* flag; otherwise every non-4bit config would inherit
+        the default True and be rejected. An unset field carries no intent.
         """
         tcfg = self.training
+        if "bnb_4bit_use_double_quant" not in tcfg.model_fields_set:
+            return self
         if not tcfg.bnb_4bit_use_double_quant:
             return self
         if tcfg.quantization != "4bit":

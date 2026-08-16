@@ -53,6 +53,15 @@ def merge(
             "cycle (v0.53.1 #142)."
         ),
     ),
+    double_quant: bool = typer.Option(
+        True,
+        "--double-quant/--no-double-quant",
+        help=(
+            "BNB double-quantization for the 4bit / 4bit_forced save formats "
+            "(#321). Default on, matching the training loaders; pass "
+            "--no-double-quant to disable. Ignored for the fp16 save format."
+        ),
+    ),
     hub: str = typer.Option(
         "hf",
         "--hub",
@@ -219,6 +228,7 @@ def merge(
                     output_dir=str(output_path),
                     forced=(save_format_canonical == "4bit_forced"),
                     dtype="bfloat16" if dtype == "bfloat16" else "float16",
+                    double_quant=double_quant,
                     trust_remote_code=trc,
                 )
 
