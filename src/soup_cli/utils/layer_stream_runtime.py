@@ -1659,6 +1659,7 @@ def install_streaming(
         console,
         tier,
         require_pin=require_pin,
+        device=device,
     )
     pool = LayerBufferPool(
         spec,
@@ -1703,7 +1704,17 @@ def install_streaming(
     )
 
 
-def _build_source(shard_dir, n_layers, spec, pin, console, tier="ram", require_pin=False):
+def _build_source(
+    shard_dir,
+    n_layers,
+    spec,
+    pin,
+    console,
+    tier="ram",
+    require_pin=False,
+    *,
+    device="cuda",
+):
     """Build the weight source for the chosen tier.
 
     On the RAM tier, page-locking is bounded by the box rather than by free RAM
@@ -1736,6 +1747,11 @@ def _build_source(shard_dir, n_layers, spec, pin, console, tier="ram", require_p
             else:
                 logger.warning(message)
         return DiskSource(shard_dir, n_layers, spec), False
+    # Page-locking only helps the asynchronous CUDA transfer path.  On MPS,
+    # torch's pinned-memory handling can even place the allocation on MPS
+    # despite this store explicitly requesting CPU, so never try it for a
+    # non-CUDA destination.
+    pin = bool(pin and str(device).startswith("cuda"))
     if not pin:
         return RamSource(shard_dir, n_layers, spec, pin=False), False
     try:
