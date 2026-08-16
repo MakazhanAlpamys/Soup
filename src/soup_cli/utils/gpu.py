@@ -6,8 +6,7 @@ import json
 import math
 import os
 import re
-import sys
-from typing import Any, Optional
+from typing import Optional
 
 # A safetensors file starts with a u64 little-endian header length, then a
 # JSON header carrying each tensor's dtype + shape. Reading it costs a few
@@ -59,7 +58,7 @@ def _params_from_local_safetensors(path: str) -> float | None:
                         return None
                     numel *= dim
                 total += numel
-        return (total / 1e9) if total else None
+            return (total / 1e9) if total else None
     except (OSError, ValueError, TypeError, json.JSONDecodeError):
         return None  # unreadable/crafted -> fall back to the name guess
 
@@ -103,18 +102,19 @@ def detect_device(backend: Optional[str] = None) -> tuple[str, str]:
 
     Args:
         backend: Optional configured backend ('mlx', 'unsloth', 'transformers').
-                 When 'mlx' is specified or active, prioritizes Apple Silicon MLX
+                 When 'mlx' is specified, prioritizes Apple Silicon MLX
                  runtime over PyTorch MPS.
 
     Returns:
         tuple[str, str]: (device_string, human_name)
             device_string is one of: 'cuda', 'mps', 'mlx', 'cpu'
-            human_name is a descriptive string (e.g. 'NVIDIA A100-SXM4-80GB', 'Apple Silicon (Apple M2 Max)', 'CPU (no GPU detected)')
+            human_name is a descriptive string (e.g. 'NVIDIA A100-SXM4-80GB',
+            'Apple Silicon (Apple M2 Max)', 'CPU (no GPU detected)')
     """
-    # 1. If MLX backend is explicitly requested or active in process, prioritize MLX
-    if backend == "mlx" or (backend is None and "mlx" in sys.modules):
+    # 1. If MLX backend is explicitly requested, prioritize MLX
+    if backend == "mlx":
         try:
-            from soup_cli.utils.mlx import detect_mlx, is_apple_silicon, get_chip_info
+            from soup_cli.utils.mlx import detect_mlx, get_chip_info, is_apple_silicon
 
             if is_apple_silicon() and detect_mlx():
                 chip_name = get_chip_info().get("chip")
@@ -132,12 +132,12 @@ def detect_device(backend: Optional[str] = None) -> tuple[str, str]:
             return "cuda", name
         if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
             return "mps", "Apple Silicon (MPS)"
-    except (ImportError, OSError):
+    except ImportError:
         pass
 
     # 3. Fallback: Opportunistic Apple Silicon MLX probe if torch is absent or non-accelerated
     try:
-        from soup_cli.utils.mlx import detect_mlx, is_apple_silicon, get_chip_info
+        from soup_cli.utils.mlx import detect_mlx, get_chip_info, is_apple_silicon
 
         if is_apple_silicon() and detect_mlx():
             chip_name = get_chip_info().get("chip")
@@ -160,10 +160,10 @@ def get_gpu_info(backend: Optional[str] = None) -> dict:
         - memory_total_bytes: Exact bytes (int)
         - gpu_count: Number of accelerator devices (int)
     """
-    # 1. If MLX backend is explicitly requested or active, query Apple Silicon unified memory
-    if backend == "mlx" or (backend is None and "mlx" in sys.modules):
+    # 1. If MLX backend is explicitly requested, query Apple Silicon unified memory
+    if backend == "mlx":
         try:
-            from soup_cli.utils.mlx import detect_mlx, is_apple_silicon, get_unified_memory_bytes
+            from soup_cli.utils.mlx import detect_mlx, get_unified_memory_bytes, is_apple_silicon
 
             if is_apple_silicon() and detect_mlx():
                 mem = get_unified_memory_bytes()
@@ -195,30 +195,17 @@ def get_gpu_info(backend: Optional[str] = None) -> dict:
                 "gpu_count": torch.cuda.device_count(),
             }
         if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-            try:
-                from soup_cli.utils.mlx import get_unified_memory_bytes
-
-                mem = get_unified_memory_bytes()
-                if mem and mem > 0:
-                    mem_gb = mem / (1024**3)
-                    return {
-                        "memory_total": f"{mem_gb:.1f} GB (unified)",
-                        "memory_total_bytes": mem,
-                        "gpu_count": 1,
-                    }
-            except Exception:
-                pass
             return {
                 "memory_total": "shared (Apple Silicon)",
                 "memory_total_bytes": 0,
                 "gpu_count": 1,
             }
-    except (ImportError, OSError):
+    except ImportError:
         pass
 
     # 3. Fallback: MLX unified memory check
     try:
-        from soup_cli.utils.mlx import detect_mlx, is_apple_silicon, get_unified_memory_bytes
+        from soup_cli.utils.mlx import detect_mlx, get_unified_memory_bytes, is_apple_silicon
 
         if is_apple_silicon() and detect_mlx():
             mem = get_unified_memory_bytes()

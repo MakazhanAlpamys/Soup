@@ -970,7 +970,12 @@ def train(
     device, device_name = detect_device(backend=cfg.backend)
     gpu_info = get_gpu_info(backend=cfg.backend)
 
-    # Auto-disable quantization on CPU (bitsandbytes doesn't support CPU)
+    # Auto-disable quantization on CPU (bitsandbytes does not support CPU).
+    # On MLX (device == "mlx"), 4-bit quantization does not use bitsandbytes; it loads
+    # pre-quantized weights directly via mlx-lm (mlx-community 4bit checkpoints in
+    # MLXTrainer.setup -> load_mlx_model). Thus cfg.training.quantization is left intact
+    # for MLX execution without downgrading. (Note: MLX backend explicitly rejects 8bit
+    # in MLXTrainer._check_unsupported()).
     if device == "cpu" and cfg.training.quantization in ("4bit", "8bit"):
         console.print(
             f"[yellow]Warning: {cfg.training.quantization} quantization is not "

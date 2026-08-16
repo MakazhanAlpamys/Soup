@@ -61,6 +61,15 @@ reproducing 70+ versions of notes.
   rest of the run-shaping tail, including `--name` and `--replay`) cannot silently
   fall off the printed hint. Following that line used to train without FSDP.
 
+- **`detect_device()` and `get_gpu_info()` now recognise Apple Silicon MLX (#423).**
+  Previously on Apple Silicon, `detect_device()` only probed PyTorch MPS and fell back
+  to `'cpu'`, triggering a false `Warning: 4bit quantization is not supported on CPU`
+  alert and silently downgrading `quantization` from `4bit` to `none`. Device and GPU
+  info detection now accept an optional `backend=` parameter: passing `backend="mlx"`
+  resolves to `'mlx'` with the chip name (e.g. `Apple Silicon (Apple M2 Max)`), preserves
+  4-bit quantization intact for `mlx-lm` pre-quantized models, reports Apple unified
+  memory in telemetry, and skips the CUDA-shaped analytical VRAM preflight on MLX runs.
+
 - **A run whose watcher died was reported `running` forever (#401).**
   `ExecutionManager._watch` runs as a `daemon=True` thread, so when the MCP
   server process exits it is killed without unwinding and `finish_execution`
