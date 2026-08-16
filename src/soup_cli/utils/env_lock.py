@@ -34,9 +34,10 @@ import hashlib
 import json
 import os
 import platform as _platform
+import re
 import sys
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import Iterable, Mapping, Optional, Tuple
 
 from soup_cli.utils.paths import atomic_write_text, is_under_cwd
 
@@ -156,6 +157,155 @@ class AbiCheck:
         for entry in self.changes:
             if not isinstance(entry, str):
                 raise TypeError("changes entries must be str")
+
+
+# Distribution whose declared bounds `check_declared_bounds` audits — Soup's own.
+_SELF_DIST = "soup-cli"
+# Matches the `extra == "name"` marker importlib.metadata attaches to an
+# optional-dependency requirement, so a violation can name the extra it came from.
+_EXTRA_MARKER_RE = re.compile(r'extra\s*==\s*["\']([A-Za-z0-9._-]+)["\']')
+
+
+@dataclass(frozen=True)
+class BoundViolation:
+    """One installed package that violates Soup's own declared version bound."""
+
+    name: str
+    installed: str
+    specifier: str
+    extra: Optional[str]
+
+    def __post_init__(self) -> None:
+        _check_non_empty_str(self.name, "name", max_len=_MAX_NAME_LEN)
+        _check_non_empty_str(self.installed, "installed", max_len=_MAX_VERSION_LEN)
+        _check_non_empty_str(self.specifier, "specifier", max_len=_MAX_VERSION_LEN)
+        if self.extra is not None:
+            _check_non_empty_str(self.extra, "extra", max_len=_MAX_NAME_LEN)
+
+
+@dataclass(frozen=True)
+class BoundsCheck:
+    """Outcome of auditing installed packages against Soup's declared bounds."""
+
+    ok: bool
+    violation_count: int
+    violations: Tuple[BoundViolation, ...]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.ok, bool):
+            raise TypeError("ok must be bool")
+        if isinstance(self.violation_count, bool) or not isinstance(
+            self.violation_count, int
+        ):
+            raise TypeError("violation_count must be int")
+        if self.violation_count < 0:
+            raise ValueError("violation_count must be >= 0")
+        if not isinstance(self.violations, tuple):
+            raise TypeError("violations must be a tuple of BoundViolation")
+        for entry in self.violations:
+            if not isinstance(entry, BoundViolation):
+                raise TypeError("every violation must be BoundViolation")
+
+
+def check_declared_bounds(
+    requirements: Iterable[str],
+    installed: Mapping[str, str],
+) -> BoundsCheck:
+    """Flag any *installed* package whose version violates Soup's declared bound.
+
+    ``requirements`` are raw PEP 508 strings exactly as
+    ``importlib.metadata.requires`` returns them, so the bound is read from
+    package metadata and never a hardcoded second copy — that second copy is
+    the drift this is meant to catch (#368). ``installed`` maps package name to
+    the installed version.
+
+    A requirement whose package is *not* installed is skipped: an optional
+    ``[train]`` dependency you never installed is not drift. An unparseable
+    requirement or version is skipped rather than crashing the diagnostic.
+    """
+    # ``packaging`` ships with pip/setuptools and is pulled in by huggingface-hub
+    # (a core dependency), so it is present wherever Soup runs. If it somehow is
+    # not, the audit degrades to "clean" rather than breaking `env check`.
+    try:
+        from packaging.requirements import InvalidRequirement, Requirement
+        from packaging.utils import canonicalize_name
+        from packaging.version import InvalidVersion
+    except ImportError:  # pragma: no cover — packaging virtually always present
+        return BoundsCheck(ok=True, violation_count=0, violations=())
+
+    installed_by_key = {canonicalize_name(k): v for k, v in installed.items()}
+
+    violations: list[BoundViolation] = []
+    for raw in requirements:
+        try:
+            req = Requirement(raw)
+        except InvalidRequirement:
+            continue
+        if not req.specifier:
+            continue
+        have = installed_by_key.get(canonicalize_name(req.name))
+        if have is None:
+            continue
+        try:
+            satisfied = req.specifier.contains(have, prereleases=True)
+        except InvalidVersion:
+            continue
+        if satisfied:
+            continue
+        extra_match = _EXTRA_MARKER_RE.search(str(req.marker)) if req.marker else None
+        violations.append(
+            BoundViolation(
+                name=req.name,
+                installed=have,
+                specifier=str(req.specifier),
+                extra=extra_match.group(1) if extra_match else None,
+            )
+        )
+
+    return BoundsCheck(
+        ok=not violations,
+        violation_count=len(violations),
+        violations=tuple(violations),
+    )
+
+
+def current_declared_bounds_check(dist_name: str = _SELF_DIST) -> BoundsCheck:
+    """Audit the *running* environment against ``dist_name``'s declared bounds.
+
+    Reads the requirement strings from installed metadata and the installed
+    versions via ``importlib.metadata``. An absent distribution (e.g. running
+    from source without an install) yields a clean report — there is no
+    declared metadata to audit against.
+    """
+    try:
+        from importlib.metadata import PackageNotFoundError, requires
+    except ImportError:  # pragma: no cover — py < 3.8
+        return BoundsCheck(ok=True, violation_count=0, violations=())
+    try:
+        reqs = requires(dist_name)
+    except PackageNotFoundError:
+        return BoundsCheck(ok=True, violation_count=0, violations=())
+    if not reqs:
+        return BoundsCheck(ok=True, violation_count=0, violations=())
+
+    try:
+        from packaging.requirements import InvalidRequirement, Requirement
+    except ImportError:  # pragma: no cover — packaging virtually always present
+        return BoundsCheck(ok=True, violation_count=0, violations=())
+
+    installed: dict[str, str] = {}
+    for raw in reqs:
+        try:
+            name = Requirement(raw).name
+        except InvalidRequirement:
+            continue
+        if name in installed:
+            continue
+        ver = _detect_package_version(name)
+        if ver is not None:
+            installed[name] = ver
+
+    return check_declared_bounds(reqs, installed)
 
 
 def _detect_cuda_version() -> Optional[str]:
@@ -448,12 +598,16 @@ def check_abi_compat(a: EnvLock, b: EnvLock) -> AbiCheck:
 
 __all__ = [
     "AbiCheck",
+    "BoundViolation",
+    "BoundsCheck",
     "DEFAULT_LOCK_FILE",
     "EnvEntry",
     "EnvLock",
     "TRACKED_PACKAGES",
     "check_abi_compat",
+    "check_declared_bounds",
     "compute_env_hash",
+    "current_declared_bounds_check",
     "read_lock",
     "render_install_plan",
     "snapshot_env",

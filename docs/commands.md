@@ -259,7 +259,7 @@ soup tunability --dataset <jsonl> [--candidates a,b,c]   Probe candidate bases +
 soup tunability --dataset <jsonl> --live [--device cpu]  LIVE per-candidate LoRA probe (loads each repo)
 soup plan --config soup.yaml                             Pre-flight summary + write soup.tfstate
 soup apply --config soup.yaml [--dry-run]                Lock-and-execute; refuses on drift (exit 3)
-soup env lock | status | check                           Hermetic env lockfile + ABI drift detection (exit 3)
+soup env lock | status | check                           Hermetic env lockfile + ABI drift + declared-bound violation detection (exit 3)
 soup env fix [--format uv-pip|requirements] [--output req.txt]  Render a reproducible install plan from soup-env.lock (print-only)
 soup completions bash | zsh | fish                       Shell completion script (sourceable via eval)
 soup license-advisor --target b2c|defense|embedded       Recommend license-clean base for deploy target

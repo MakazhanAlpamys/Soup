@@ -20,6 +20,7 @@ from rich.table import Table
 from soup_cli.utils.env_lock import (
     DEFAULT_LOCK_FILE,
     check_abi_compat,
+    current_declared_bounds_check,
     read_lock,
     render_install_plan,
     snapshot_env,
@@ -29,6 +30,10 @@ from soup_cli.utils.env_lock import (
 from soup_cli.utils.paths import is_under_cwd
 
 console = Console()
+
+# Both an ABI drift against the lock and an installed package violating Soup's
+# own declared dependency bound exit with this code (#368).
+DRIFT_EXIT_CODE = 3
 
 env_app = typer.Typer(
     name="env",
@@ -125,6 +130,30 @@ def env_check_cmd(
     ),
 ) -> None:
     """Compare the current env against the lock and report drift."""
+    # Audit installed packages against Soup's OWN declared bounds first — this
+    # is independent of any lock file, so it catches the `pip install vllm`
+    # transformers/torch downgrade even for a user who never ran `soup env lock`
+    # (#368). The bound is read from package metadata, not a hardcoded copy.
+    bounds = current_declared_bounds_check()
+    if not bounds.ok:
+        rows = "\n".join(
+            f"- {escape(v.name)} {escape(v.installed)} violates declared bound "
+            f"{escape(v.specifier)}"
+            + (f" (extra: {escape(v.extra)})" if v.extra else "")
+            for v in bounds.violations
+        )
+        console.print(
+            Panel(
+                f"[red]{bounds.violation_count} package(s) violate this "
+                f"distribution's own declared bounds:[/]\n{rows}\n\n"
+                "[yellow]Install '[serve-fast]' in a separate environment from "
+                "'[train]' — their resolutions are incompatible today.[/]",
+                title="env check",
+                border_style="red",
+            )
+        )
+        raise typer.Exit(DRIFT_EXIT_CODE)
+
     try:
         locked = read_lock(lock_path)
     except FileNotFoundError:
@@ -157,7 +186,7 @@ def env_check_cmd(
             border_style="red",
         )
     )
-    raise typer.Exit(3)
+    raise typer.Exit(DRIFT_EXIT_CODE)
 
 
 @env_app.command("fix")

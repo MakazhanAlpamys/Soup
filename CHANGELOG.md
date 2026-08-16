@@ -86,10 +86,6 @@ reproducing 70+ versions of notes.
   is wrong; it prints what it overrode beside what was detected. Disk detection
   may write a small scratch file next to the streamed shards to run the probe.
 
-### Fixed
-
-### Fixed
-
 - **The one-active-execution cap could double-book after a server restart (#402).**
   `ExecutionManager._active_run_id` is in-memory, so a restarted MCP server
   started with an empty slot, saw free capacity, and would launch a second
@@ -99,8 +95,6 @@ reproducing 70+ versions of notes.
   new execution across restarts, while a stale record whose process is gone
   frees the slot rather than wedging it shut. `docs/commands.md` now states the
   actual scope of the cap.
-
-### Fixed
 
 - **`soup ship --noise-floor` now measures the leg-1 task axis in the judge modes,
   so a judge-scored win smaller than the judge's own noise no longer counts (#403).**
@@ -131,6 +125,16 @@ reproducing 70+ versions of notes.
   unchanged. The config-load footgun (`=true` requires `quantization: 4bit`) fires only on an
   explicit `true`, and unset serializes as `None`, so a dumped-and-reloaded config no longer
   trips it.
+- **`soup env check` now flags an installed package that violates Soup's own
+  declared version bound (#368).** `pip install "soup-cli[serve-fast]"` (vllm)
+  into a training venv silently downgrades `torch` and pushes `transformers`
+  past the `<5.0.0` cap declared in `[train]`, producing an environment Soup's
+  own metadata says is unsupported with no warning at any point. `env check`
+  now audits the installed versions against the bounds read from package
+  metadata — not a hardcoded copy, since a second copy of the cap is exactly the
+  drift this catches — and exits 3 when one is violated, independent of any lock
+  file. `docs/serving-and-export.md` states the separate-environment guidance
+  for `[serve-fast]`.
 
 - **`kl_control` rewrote the trainer's β/kl_coef on every step, including a `hold`, so a
   non-acting run was numerically identical to `log_only` (#371).** `_run_bang_bang` called

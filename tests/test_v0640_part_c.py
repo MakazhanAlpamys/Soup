@@ -721,3 +721,112 @@ def test_cli_env_lock_null_byte_output_rejected(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     result = runner.invoke(app, ["env", "lock", "--output", "a\x00b"])
     assert result.exit_code == 2, result.output
+
+
+# ---------------------------------------------------------------------------
+# check_declared_bounds — an installed package that violates soup-cli's OWN
+# declared version bound (#368). Reads the bound from package metadata, never
+# from a hardcoded copy, so it also catches every future instance of the shape.
+# ---------------------------------------------------------------------------
+
+# The exact strings importlib.metadata.requires("soup-cli") returns for the
+# [train] extra — the transformers cap is the one #368 was reported against.
+_TRAIN_REQS = (
+    'torch>=2.0.0; extra == "train"',
+    'transformers>=4.36.0,<5.0.0; extra == "train"',
+    'peft>=0.7.0; extra == "train"',
+)
+
+
+def test_check_declared_bounds_flags_package_over_cap():
+    from soup_cli.utils.env_lock import check_declared_bounds
+
+    # `pip install vllm` moved transformers to 5.14.1, past the <5.0.0 cap.
+    report = check_declared_bounds(
+        _TRAIN_REQS, {"transformers": "5.14.1", "torch": "2.11.0"}
+    )
+    assert not report.ok
+    assert report.violation_count == 1
+    (v,) = report.violations
+    assert v.name == "transformers"
+    assert v.installed == "5.14.1"
+    # The bound is quoted from the requirement string, not a second hardcoded
+    # copy of `<5.0.0` — that second copy is exactly the drift this catches.
+    assert "<5.0.0" in v.specifier
+    assert v.extra == "train"
+
+
+def test_check_declared_bounds_control_compliant_passes():
+    from soup_cli.utils.env_lock import check_declared_bounds
+
+    # Control: an in-bounds environment passes, so the check cannot be
+    # satisfied by always failing.
+    report = check_declared_bounds(
+        _TRAIN_REQS, {"transformers": "4.57.6", "torch": "2.13.0", "peft": "0.7.0"}
+    )
+    assert report.ok
+    assert report.violation_count == 0
+    assert report.violations == ()
+
+
+def test_check_declared_bounds_skips_uninstalled_extra():
+    from soup_cli.utils.env_lock import check_declared_bounds
+
+    # A [train] package you never installed is not drift — only installed
+    # packages that violate a bound are reported.
+    report = check_declared_bounds(_TRAIN_REQS, {"typer": "0.19.0"})
+    assert report.ok
+
+
+def test_check_declared_bounds_reads_bound_from_given_requirements():
+    from soup_cli.utils.env_lock import check_declared_bounds
+
+    # Proof the bound is data-driven: change ONLY the requirement string and
+    # the same installed version flips from compliant to violating.
+    installed = {"widget": "2.0.0"}
+    assert check_declared_bounds(('widget<3.0.0; extra == "x"',), installed).ok
+    bad = check_declared_bounds(('widget<2.0.0; extra == "x"',), installed)
+    assert not bad.ok
+    assert bad.violations[0].name == "widget"
+
+
+def test_check_declared_bounds_ignores_unparseable_requirement():
+    from soup_cli.utils.env_lock import check_declared_bounds
+
+    # A malformed requirement line must not crash the diagnostic.
+    report = check_declared_bounds(("!!! not a requirement",), {"x": "1.0.0"})
+    assert report.ok
+
+
+def test_current_declared_bounds_check_returns_bounds_check():
+    from soup_cli.utils.env_lock import BoundsCheck, current_declared_bounds_check
+
+    # Reading the real distribution metadata never raises; an uninstalled or
+    # packaging-less environment degrades to a clean report.
+    report = current_declared_bounds_check("this-distribution-does-not-exist")
+    assert isinstance(report, BoundsCheck)
+    assert report.ok
+
+
+def test_cli_env_check_declared_bound_violation_exits_3(tmp_path, monkeypatch):
+    from soup_cli.cli import app
+    from soup_cli.commands import env as env_cmd
+    from soup_cli.utils.env_lock import BoundsCheck, BoundViolation
+
+    monkeypatch.chdir(tmp_path)
+    violation = BoundViolation(
+        name="transformers",
+        installed="5.14.1",
+        specifier=">=4.36.0,<5.0.0",
+        extra="train",
+    )
+    monkeypatch.setattr(
+        env_cmd,
+        "current_declared_bounds_check",
+        lambda: BoundsCheck(ok=False, violation_count=1, violations=(violation,)),
+    )
+    # No lock file present, yet the declared-bound violation is still caught
+    # (the vllm-downgrade scenario: the user never ran `soup env lock`).
+    result = runner.invoke(app, ["env", "check"])
+    assert result.exit_code == 3, result.output
+    assert "transformers" in result.output

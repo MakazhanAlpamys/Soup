@@ -251,8 +251,15 @@ soup serve --model ./output --kv-cache-type q8_0   # 8-bit quantized cache (need
 
 Use [vLLM](https://github.com/vllm-project/vllm) for significantly better throughput in production:
 
+> **Install `[serve-fast]` in a separate environment from `[train]`.** Their
+> resolutions are genuinely incompatible today — `pip install vllm` into a
+> training venv silently downgrades `torch` and pushes `transformers` past
+> Soup's own `<5.0.0` cap. `soup env check` now flags an installed package that
+> violates this distribution's declared bounds (exit code 3), so you can catch a
+> contaminated venv before a run relies on it.
+
 ```bash
-# Install vLLM support
+# Install vLLM support (in its own environment, not the training one)
 pip install "soup-cli[serve-fast]"
 
 # Start with vLLM backend
