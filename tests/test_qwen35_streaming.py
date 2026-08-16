@@ -210,7 +210,7 @@ class TestQwen35StreamingRuntime:
             {"self_attn.q_proj.weight", "linear_attn.in_proj_qkv.weight"}
         )
 
-    def test_install_streaming_accepts_heterogeneous_layer_sets(self, tmp_path):
+    def test_install_streaming_accepts_heterogeneous_layer_sets(self, tmp_path, monkeypatch):
         from soup_cli.utils.layer_shard import shard_checkpoint
         from soup_cli.utils.layer_stream_runtime import install_streaming
 
@@ -219,10 +219,19 @@ class TestQwen35StreamingRuntime:
         index = shard_checkpoint(weights, out, dtype="float32", arch="qwen3")
         model = _heterogeneous_meta_model()
 
-        # A process-wide accelerator default must not move the host store off CPU.
-        with torch.device("meta"):
-            runtime = install_streaming(model, shard_dir=out, index=index, device="cpu")
+        host_alloc_devices = []
+        real_empty = torch.empty
+
+        def _track_host_alloc(*args, **kwargs):
+            if "pin_memory" in kwargs:
+                host_alloc_devices.append(kwargs.get("device"))
+            return real_empty(*args, **kwargs)
+
+        monkeypatch.setattr(torch, "empty", _track_host_alloc)
+        runtime = install_streaming(model, shard_dir=out, index=index, device="cpu")
         try:
+            assert host_alloc_devices
+            assert all(str(device) == "cpu" for device in host_alloc_devices)
             runtime.pool.load_async(0, runtime.source)
             buffers0 = runtime.pool.wait(0)
             assert runtime.source.get(0, "self_attn.q_proj.weight").device.type == "cpu"
