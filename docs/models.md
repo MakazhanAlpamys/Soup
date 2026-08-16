@@ -100,7 +100,7 @@ no PyTorch. Add `[train]` to fine-tune, or install other extras only when you ne
 | `fast` | `pip install "soup-cli[fast]"` | Unsloth backend (2-5x faster, lower VRAM) |
 | `vision` | `pip install "soup-cli[vision]"` | Vision / multimodal fine-tuning (Pillow) |
 | `audio` | `pip install "soup-cli[audio]"` | Audio / speech fine-tuning (librosa, soundfile) |
-| `mlx` | `pip install "soup-cli[mlx]"` | Apple Silicon backend (mlx, mlx-lm) |
+| `mlx` | `pip install "soup-cli[mlx]"` | Standalone Apple Silicon SFT backend for local data; `[train]` is not required |
 | `qat` | `pip install "soup-cli[qat]"` | Quantization-Aware Training (torchao) |
 | `serve` | `pip install "soup-cli[serve]"` | Inference server (FastAPI + uvicorn) |
 | `serve-fast` | `pip install "soup-cli[serve-fast]"` | vLLM inference backend (2-4x throughput) |

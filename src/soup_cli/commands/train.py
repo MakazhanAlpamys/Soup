@@ -16,7 +16,6 @@ from rich.panel import Panel
 from soup_cli.config.loader import load_config
 from soup_cli.data.loader import load_dataset
 from soup_cli.monitoring.display import TrainingDisplay
-from soup_cli.trainer.sft import SFTTrainerWrapper
 from soup_cli.utils.gpu import detect_device, get_gpu_info
 
 if TYPE_CHECKING:  # pragma: no cover - type hints only, no runtime import
@@ -1436,6 +1435,11 @@ def train(
 
         trainer_wrapper = AsrTrainerWrapper(cfg, **trainer_kwargs)
     else:
+        # Keep the transformers/TRL SFT surface outside the backend-first MLX
+        # route. The wrapper is import-light today, but importing it eagerly
+        # makes an MLX-only install depend on that remaining true forever.
+        from soup_cli.trainer.sft import SFTTrainerWrapper
+
         trainer_wrapper = SFTTrainerWrapper(cfg, **trainer_kwargs)
     trainer_wrapper.setup(dataset)
 

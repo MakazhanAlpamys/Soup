@@ -82,6 +82,12 @@ Fine-tune on M1-M4 Macs via Apple's [MLX](https://github.com/ml-explore/mlx) fra
 pip install "soup-cli[mlx]"
 ```
 
+For SFT with local JSONL, JSON, or CSV data, `[mlx]` is a standalone install:
+do not add `[train]`. The latter is the PyTorch/TRL stack used by the
+Transformers backend. A Hugging Face `datasets` source or streaming dataset
+still needs `datasets` because that data source owns the dependency; the local
+file path below does not.
+
 ```yaml
 base: mlx-community/Llama-3.2-3B-Instruct-4bit
 task: sft

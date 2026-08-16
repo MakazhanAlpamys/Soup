@@ -48,6 +48,27 @@ jobs:
         run: |
           mypy || echo "::warning title=mypy::Type issues reported (non-blocking baseline — see the log above)"
 
+  mlx-smoke:
+    # #394: prove the documented standalone install on an Apple Silicon runner.
+    # Keep this separate from the main matrix because `.[dev]` deliberately
+    # installs the PyTorch/TRL stack and would hide an accidental MLX dependency.
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install only the MLX runtime and smoke-test dependency
+        run: pip install -e ".[mlx]" pytest
+      - name: Verify the PyTorch training stack is absent
+        run: >-
+          python -c "import importlib.util;
+          names=('torch','trl','datasets','peft','accelerate','bitsandbytes');
+          present=[name for name in names if importlib.util.find_spec(name)];
+          assert not present, f'unexpected training dependencies: {present}'"
+      - name: Run one-step MLX SFT through the real CLI
+        run: pytest -o addopts= -m smoke -k mlx_sft_smoke -q tests/test_smoke_train.py
+
   test:
     strategy:
       fail-fast: false
