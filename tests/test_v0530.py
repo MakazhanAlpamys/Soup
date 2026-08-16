@@ -570,22 +570,23 @@ class TestUnslothBNB4Bit:
 
 
 class TestLFParity:
-    def test_double_quant_default_true(self):
-        # #321 — reconciled to True: every 4-bit load path has always
-        # double-quantized, so the schema default now matches shipped behaviour
-        # (the flag was previously validated but never read).
+    def test_double_quant_default_is_unset_but_resolves_on(self):
+        # #321 — the schema field is tri-state: unset is None (so it round-trips
+        # through model_dump() without emitting `true` and tripping the footgun),
+        # while `double_quant_on` resolves the shipped default: every 4-bit load
+        # path has always double-quantized.
         cfg = load_config_from_string(
             "base: a/b\n"
             "task: sft\n"
             "data: {train: x.jsonl}\n"
         )
-        assert cfg.training.bnb_4bit_use_double_quant is True
+        assert cfg.training.bnb_4bit_use_double_quant is None
+        assert cfg.training.double_quant_on is True
 
     def test_double_quant_default_does_not_trip_non_4bit_footgun(self):
-        # #321 — the default is now True, so a config that never sets the flag
-        # must NOT be rejected for using a non-4bit quantization. The footgun
-        # only fires on an *explicitly set* flag (an unset field carries no
-        # intent). Guards the model_fields_set gate in the validator.
+        # #321 — an unset flag (None) carries no intent, so a config that never
+        # sets it must NOT be rejected for using a non-4bit quantization. The
+        # footgun fires only on an explicit `true`.
         cfg = load_config_from_string(
             "base: a/b\n"
             "task: sft\n"
@@ -593,7 +594,8 @@ class TestLFParity:
             "training: {quantization: 8bit}\n"
         )
         assert cfg.training.quantization == "8bit"
-        assert cfg.training.bnb_4bit_use_double_quant is True
+        assert cfg.training.bnb_4bit_use_double_quant is None
+        assert cfg.training.double_quant_on is True
 
     def test_double_quant_explicit_false_allowed_without_4bit(self):
         # Explicit False on a non-4bit config is a no-op, not a footgun —

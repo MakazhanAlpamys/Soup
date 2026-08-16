@@ -218,9 +218,10 @@ class StreamingSetupMixin:
         quant = QUANT_NF4 if tcfg.quantization == "4bit" else QUANT_NONE
         # #321 — the streamed skeleton and the shards must quantise with the
         # SAME double-quant setting or the streamed-vs-resident bit-exactness
-        # claim breaks. Read the flag once here and thread it into both the
-        # sharder (its cache already keys on double_quant) and the skeleton.
-        double_quant = tcfg.bnb_4bit_use_double_quant
+        # claim breaks. Read the flag once here (resolving the tri-state unset to
+        # the shipped default) and thread it into both the sharder (its cache
+        # already keys on double_quant) and the skeleton.
+        double_quant = tcfg.double_quant_on
 
         weights_dir = resolve_model_weights(cfg.base)
         shard_dir = resolve_shard_dir(cfg.base)
@@ -233,7 +234,9 @@ class StreamingSetupMixin:
         early_free_ram = free_ram_bytes()
         if early_free_ram is not None:
             source_bytes = source_weight_bytes(weights_dir)
-            store_estimate = estimate_stream_store_bytes(source_bytes, dtype=dtype, quant=quant)
+            store_estimate = estimate_stream_store_bytes(
+                source_bytes, dtype=dtype, quant=quant, double_quant=double_quant
+            )
             if store_estimate >= early_free_ram * RAM_TIER_HEADROOM and tcfg.stream_source == "ram":
                 as_streamed = (
                     ""
