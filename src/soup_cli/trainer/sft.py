@@ -1518,6 +1518,28 @@ class SFTTrainerWrapper(StreamingSetupMixin):
                         "[yellow]LongLoRA override could not be installed "
                         f"({exc}); training with plain attention.[/]"
                     )
+            # Pre-Ampere fp16 (T4, P100, V100): peft initialises the LoRA adapters
+            # in the base checkpoint's dtype (bf16 for Llama-3.1). On these cards
+            # the stream + mixed precision are fp16, so the fp16 GradScaler would
+            # hit bf16 gradients and raise `_amp_foreach_non_finite_check_and_
+            # unscale_cuda not implemented for 'BFloat16'` (see #425). The
+            # adapters are also re-cast back to bf16 during trainer construction,
+            # so cast here — after the trainer exists, before the lazily-created
+            # optimizer — to fp32, matching materialize_meta_adapters.
+            if getattr(self.trainer.args, "fp16", False) and not getattr(
+                self.trainer.args, "bf16", False
+            ):
+                import torch
+
+                casted = 0
+                for _p in self.trainer.model.parameters():
+                    if _p.requires_grad and _p.dtype == torch.bfloat16:
+                        _p.data = _p.data.to(torch.float32)
+                        casted += 1
+                if casted:
+                    console.print(
+                        f"[dim]fp16: cast {casted} bf16 adapter params to fp32[/]"
+                    )
             self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         duration = time.time() - start
 
