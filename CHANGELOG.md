@@ -43,6 +43,15 @@ reproducing 70+ versions of notes.
   `mlx-lm` import, the PyTorch/TRL training stack is absent, and a one-step real
   CLI SFT run completes. This hardens the runtime boundary; it does not claim to
   resolve the still-unpinned torch-present hang reported in #394.
+- **`soup card` now links the ML-BOM and the in-toto/SLSA attestation — they are
+  first-class registry artifact kinds (#309).** `bom` and `attestation` were the
+  two compliance documents `soup card` could not surface: `RegistryStore` had no
+  such kinds, so there was no way to attach them. Added both to the valid-kind
+  set and a `--attach-to-registry <id>` flag to `soup bom emit` and
+  `soup attest emit` (mirroring the existing `--attach-to-registry` pattern);
+  once attached they appear in the card's artifact table for free. The flag
+  needs `--output` — with none, the document is emitted to stdout and a warning
+  notes nothing was attached.
 
 ### Fixed
 

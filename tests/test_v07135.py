@@ -1016,3 +1016,132 @@ class TestLlamaCppHomeAnchor:
         assert Path(found).resolve() == llama.resolve()
         # and no stray .soup litter in the working directory
         assert not (workdir / ".soup").exists()
+
+
+# --------------------------------------------------------------------------- #
+# #309 — BOM / attestation as registry artifact kinds, surfaced by `soup card`
+# --------------------------------------------------------------------------- #
+_SHA64_A = "a" * 64
+_SHA64_B = "b" * 64
+_SHA64_C = "c" * 64
+
+
+class TestBomAttestRegistryKinds:
+    """`soup bom emit` / `soup attest emit` can attach their output to a
+    registry entry as first-class artifact kinds, and `soup card` lists them —
+    closing the one gap in the otherwise self-contained provenance story."""
+
+    def test_add_artifact_accepts_bom_and_attestation(self, tmp_path, monkeypatch):
+        from soup_cli.registry.store import _VALID_KINDS, RegistryStore
+
+        assert "bom" in _VALID_KINDS
+        assert "attestation" in _VALID_KINDS
+
+        monkeypatch.chdir(tmp_path)
+        db = tmp_path / "reg.db"
+        bom = tmp_path / "m.cdx.json"
+        bom.write_text("{}", encoding="utf-8")
+        att = tmp_path / "m.attest.json"
+        att.write_text("{}", encoding="utf-8")
+        with RegistryStore(db_path=db) as store:
+            eid = store.push(name="m", tag="v1", base_model="b", task="sft",
+                             run_id=None, config={"base": "b"}, notes=None)
+            store.add_artifact(entry_id=eid, kind="bom", path=str(bom))
+            store.add_artifact(entry_id=eid, kind="attestation", path=str(att))
+            kinds = {a["kind"] for a in store.get_artifacts(eid)}
+        assert {"bom", "attestation"} <= kinds
+
+    def test_bom_emit_attaches_to_registry(self, tmp_path, monkeypatch):
+        from soup_cli.cli import app
+        from soup_cli.registry.store import RegistryStore
+
+        db = tmp_path / "reg.db"
+        eid = _make_entry(db)
+        monkeypatch.setenv("SOUP_REGISTRY_DB_PATH", str(db))
+        monkeypatch.chdir(tmp_path)
+        result = runner.invoke(app, [
+            "bom", "emit", "--name", "m", "--base-model", "b",
+            "--base-sha", _SHA64_A, "--config-sha", _SHA64_B,
+            "-o", "bom.cdx.json", "--attach-to-registry", eid,
+        ])
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        with RegistryStore(db_path=db) as store:
+            arts = store.get_artifacts(eid)
+        assert [a["kind"] for a in arts] == ["bom"]
+        assert arts[0]["path"].endswith("bom.cdx.json")
+
+    def test_bom_emit_both_attaches_each_file(self, tmp_path, monkeypatch):
+        from soup_cli.cli import app
+        from soup_cli.registry.store import RegistryStore
+
+        db = tmp_path / "reg.db"
+        eid = _make_entry(db)
+        monkeypatch.setenv("SOUP_REGISTRY_DB_PATH", str(db))
+        monkeypatch.chdir(tmp_path)
+        result = runner.invoke(app, [
+            "bom", "emit", "--name", "m", "--base-model", "b",
+            "--base-sha", _SHA64_A, "--config-sha", _SHA64_B,
+            "--format", "both", "-o", "bom", "--attach-to-registry", eid,
+        ])
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        with RegistryStore(db_path=db) as store:
+            names = sorted(os.path.basename(a["path"]) for a in store.get_artifacts(eid))
+        assert names == ["bom.cdx.json", "bom.spdx.json"]
+
+    def test_bom_emit_attach_without_output_warns_and_skips(self, tmp_path, monkeypatch):
+        from soup_cli.cli import app
+        from soup_cli.registry.store import RegistryStore
+
+        db = tmp_path / "reg.db"
+        eid = _make_entry(db)
+        monkeypatch.setenv("SOUP_REGISTRY_DB_PATH", str(db))
+        monkeypatch.chdir(tmp_path)
+        result = runner.invoke(app, [
+            "bom", "emit", "--name", "m", "--base-model", "b",
+            "--base-sha", _SHA64_A, "--config-sha", _SHA64_B,
+            "--attach-to-registry", eid,  # no --output -> nothing to attach
+        ])
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        assert "attach-to-registry needs --output" in _clean(result.output)
+        with RegistryStore(db_path=db) as store:
+            assert store.get_artifacts(eid) == []
+
+    def test_attest_emit_attaches_to_registry(self, tmp_path, monkeypatch):
+        from soup_cli.cli import app
+        from soup_cli.registry.store import RegistryStore
+
+        db = tmp_path / "reg.db"
+        eid = _make_entry(db)
+        monkeypatch.setenv("SOUP_REGISTRY_DB_PATH", str(db))
+        monkeypatch.chdir(tmp_path)
+        result = runner.invoke(app, [
+            "attest", "emit", "--stage", "train", "--subject", "m",
+            "--sha", _SHA64_C, "-o", "att.json", "--attach-to-registry", eid,
+        ])
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        with RegistryStore(db_path=db) as store:
+            arts = store.get_artifacts(eid)
+        assert [a["kind"] for a in arts] == ["attestation"]
+        assert arts[0]["path"].endswith("att.json")
+
+    def test_card_lists_attached_bom_and_attestation(self, tmp_path, monkeypatch):
+        from soup_cli.cli import app
+
+        db = tmp_path / "reg.db"
+        monkeypatch.chdir(tmp_path)
+        bom = tmp_path / "m.cdx.json"
+        bom.write_text("{}", encoding="utf-8")
+        att = tmp_path / "m.attest.json"
+        att.write_text("{}", encoding="utf-8")
+        eid = _make_entry(db, with_artifact=("bom", str(bom)))
+        from soup_cli.registry.store import RegistryStore
+        with RegistryStore(db_path=db) as store:
+            store.add_artifact(entry_id=eid, kind="attestation", path=str(att))
+        monkeypatch.setenv("SOUP_REGISTRY_DB_PATH", str(db))
+        result = runner.invoke(app, ["card", eid, "-o", "CARD.md"])
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        card = (tmp_path / "CARD.md").read_text(encoding="utf-8")
+        assert "m.cdx.json" in card
+        assert "m.attest.json" in card
+        assert "bom" in card
+        assert "attestation" in card

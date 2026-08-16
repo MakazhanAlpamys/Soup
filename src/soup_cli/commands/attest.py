@@ -55,6 +55,10 @@ def emit_cmd(
     output: Optional[str] = typer.Option(
         None, "--output", "-o", help="Output file path (cwd-contained).",
     ),
+    attach_to_registry: Optional[str] = typer.Option(
+        None, "--attach-to-registry",
+        help="Attach the emitted attestation statement to a registry entry id (needs --output).",
+    ),
 ) -> None:
     """Emit a per-stage in-toto/SLSA-3 attestation.
 
@@ -89,6 +93,11 @@ def emit_cmd(
         raise typer.Exit(2)
 
     if output is None:
+        if attach_to_registry is not None:
+            console.print(
+                "[yellow]Warning:[/] --attach-to-registry needs --output "
+                "(nothing written to attach); skipping attach."
+            )
         console.print(text)
         console.print(f"[dim]signature backend: {escape(sig['backend'])}[/]")
         if sig.get("signature"):
@@ -105,6 +114,31 @@ def emit_cmd(
     console.print(
         f"[green]Wrote attestation[/] -> {escape(written)} "
         f"[dim](signature: {escape(sig['backend'])})[/]"
+    )
+    if attach_to_registry is not None:
+        _attach_attestation(attach_to_registry, written)
+
+
+def _attach_attestation(registry_id: str, path: str) -> None:
+    """Attach an emitted attestation statement to a registry entry.
+
+    Mirrors ``soup shrink --attach-to-registry``: a registry lookup / attach
+    failure is a warning, never fatal to the emit (the statement is on disk).
+    """
+    try:
+        from soup_cli.registry.attach import attach_artifact
+    except ImportError as exc:
+        console.print(
+            f"[yellow]Warning:[/] could not import registry attach helper: {escape(str(exc))}"
+        )
+        return
+    try:
+        attach_artifact(registry_id, path=path, kind="attestation")
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"[yellow]Warning:[/] could not attach to registry: {escape(str(exc))}")
+        return
+    console.print(
+        f"[green]Attached[/] attestation to registry entry [bold]{escape(registry_id)}[/]"
     )
 
 

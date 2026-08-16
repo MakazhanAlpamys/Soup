@@ -64,10 +64,17 @@ soup audit-log rotate        # force a rotation pass
 soup registry push --run-id <run-id> --name my-model --tag v1
 
 soup bom emit --name my-model --base-sha <hex> --config-sha <hex> \
-    --energy energy.json --format both       # CycloneDX + SPDX
+    --energy energy.json --format both -o my-model.bom \
+    --attach-to-registry my-model:v1         # CycloneDX + SPDX, linked to the entry
 soup attest emit --stage train --subject my-model --sha <hex> \
-    --sign ed25519 --key key.pem             # in-toto + SLSA-3
+    --sign ed25519 --key key.pem -o my-model.attest.json \
+    --attach-to-registry my-model:v1         # in-toto + SLSA-3, linked to the entry
 ```
+
+`--attach-to-registry` registers the emitted BOM / attestation as `bom` /
+`attestation` artifacts on the entry, so the model card (step 7) links them
+alongside the other artifacts. It needs `--output`; without it the documents
+are emitted to stdout and nothing is attached.
 
 ## 5. Sign, scan, and verify the artifact
 
@@ -87,7 +94,7 @@ soup airgap-bundle --model ./output --output my-model.tar --repro-receipt receip
 
 Turn the registry entry into a provenance-rich `MODELCARD.md` — base model,
 training config, eval scorecard, config/data hashes, lineage, and every
-registered artifact:
+registered artifact — including the BOM and attestation attached in step 4:
 
 ```bash
 soup card my-model:v1 -o MODELCARD.md

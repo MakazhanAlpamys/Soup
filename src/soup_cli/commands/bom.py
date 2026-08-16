@@ -55,6 +55,10 @@ def emit_cmd(
         None, "--energy", "-e",
         help="Path to energy measurement JSON.",
     ),
+    attach_to_registry: Optional[str] = typer.Option(
+        None, "--attach-to-registry",
+        help="Attach the emitted BOM file(s) to a registry entry id (needs --output).",
+    ),
 ) -> None:
     """Emit a CycloneDX + SPDX BOM from CLI-supplied SHAs."""
     fmt_lc = fmt.lower()
@@ -129,10 +133,17 @@ def emit_cmd(
             f"[green]Wrote CycloneDX BOM[/] -> {escape(cdx_path)}\n"
             f"[green]Wrote SPDX BOM[/] -> {escape(spdx_path)}"
         )
+        if attach_to_registry is not None:
+            _attach_bom(attach_to_registry, [cdx_path, spdx_path])
         return
 
     if output is None:
-        # Print to stdout.
+        # Print to stdout — nothing on disk to attach.
+        if attach_to_registry is not None:
+            console.print(
+                "[yellow]Warning:[/] --attach-to-registry needs --output "
+                "(nothing written to attach); skipping attach."
+            )
         console.print(render_bom(entry, fmt_lc))
         return
 
@@ -144,3 +155,31 @@ def emit_cmd(
     console.print(
         f"[green]Wrote BOM ({fmt_lc})[/] -> {escape(written)}"
     )
+    if attach_to_registry is not None:
+        _attach_bom(attach_to_registry, [written])
+
+
+def _attach_bom(registry_id: str, paths: list[str]) -> None:
+    """Attach emitted BOM file(s) to a registry entry as kind ``bom``.
+
+    Mirrors the post-hoc attach pattern of ``soup shrink --attach-to-registry``:
+    a registry lookup / attach failure is surfaced as a warning and never fatal
+    to the emit itself (the BOM is already on disk).
+    """
+    try:
+        from soup_cli.registry.attach import attach_artifact
+    except ImportError as exc:
+        console.print(
+            f"[yellow]Warning:[/] could not import registry attach helper: {escape(str(exc))}"
+        )
+        return
+    for path in paths:
+        try:
+            attach_artifact(registry_id, path=path, kind="bom")
+        except Exception as exc:  # noqa: BLE001
+            console.print(f"[yellow]Warning:[/] could not attach to registry: {escape(str(exc))}")
+            continue
+        console.print(
+            f"[green]Attached[/] bom to registry entry [bold]{escape(registry_id)}[/] "
+            f"[dim]({escape(path)})[/]"
+        )
