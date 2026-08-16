@@ -122,6 +122,21 @@ class StreamingSetupMixin:
     #: Set by :meth:`_setup_streaming_transformers`; absent on a resident run.
     _stream_runtime = None
 
+    def _stream_shape_config(self, model_config):
+        """Text sub-config for multimodal wrappers; plain config otherwise."""
+        text_config = getattr(model_config, "text_config", None)
+        return text_config if text_config is not None else model_config
+
+    def _stream_intermediate_size(self, model_config) -> int:
+        """Activation width estimate, including Qwen3.5 MoE text configs."""
+        direct = int(getattr(model_config, "intermediate_size", 0) or 0)
+        if direct:
+            return direct
+        moe = int(getattr(model_config, "moe_intermediate_size", 0) or 0)
+        per_tok = int(getattr(model_config, "num_experts_per_tok", 0) or 0)
+        shared = int(getattr(model_config, "shared_expert_intermediate_size", 0) or 0)
+        return moe * max(per_tok, 1) + shared
+
     @contextlib.contextmanager
     def _training_context(self, *contexts):
         """The `with` block every trainer runs `trainer.train()` inside.
@@ -188,6 +203,7 @@ class StreamingSetupMixin:
             extras_resident_bytes,
             quantised_layer_suffixes,
         )
+        from soup_cli.utils.moe import detect_moe_model, get_moe_target_modules
         from soup_cli.utils.spectrum_scan import resolve_model_weights
 
         console.print(f"[dim]Loading tokenizer: {cfg.base}[/]")
@@ -261,6 +277,8 @@ class StreamingSetupMixin:
         # model into build_streamed_model would couple suffix discovery to model
         # construction for no memory saving.
         quant_suffixes = ()
+        moe_targets = None
+        is_moe = False
         if quant == QUANT_NF4:
             probe = build_meta_skeleton(
                 cfg.base,
@@ -268,7 +286,21 @@ class StreamingSetupMixin:
                 quant=quant,
                 trust_remote_code=self._trust_remote_code,
             )
+            is_moe = detect_moe_model(probe)
+            if tcfg.moe_lora and is_moe:
+                moe_targets = get_moe_target_modules(probe)
             quant_suffixes = quantised_layer_suffixes(probe)
+            del probe
+        elif tcfg.moe_lora:
+            probe = build_meta_skeleton(
+                cfg.base,
+                dtype=dtype,
+                quant=quant,
+                trust_remote_code=self._trust_remote_code,
+            )
+            is_moe = detect_moe_model(probe)
+            if is_moe:
+                moe_targets = get_moe_target_modules(probe)
             del probe
 
         console.print(f"[dim]Preparing layer shards -> {shard_dir}[/]")
@@ -285,11 +317,16 @@ class StreamingSetupMixin:
             quant_device=str(self.device),
         )
 
-        spec = RamSource.spec_from_shard(shard_dir)
+        layer_specs = RamSource.layer_specs_from_shards(shard_dir, index.n_layers)
         # Measured from the shard headers, not derived from `total_params`:
         # under NF4 a layer holds packed uint8 alongside float32 statistics, so
         # element counts no longer convert to bytes at a single rate.
-        layer_bytes = sum(math.prod(shape) * dtype_bytes(stored) for shape, stored in spec.values())
+        layer_byte_sizes = [
+            sum(math.prod(shape) * dtype_bytes(stored) for shape, stored in per_layer.values())
+            for per_layer in layer_specs
+        ]
+        layer_bytes = max(layer_byte_sizes, default=0)
+        layer_store_bytes = sum(layer_byte_sizes)
         embed_bytes = extras_resident_bytes(shard_dir)
 
         free_ram = free_ram_bytes()
@@ -300,7 +337,7 @@ class StreamingSetupMixin:
             )
             free_ram = (layer_bytes * index.n_layers + embed_bytes) * 10
 
-        store_total = layer_bytes * index.n_layers + embed_bytes
+        store_total = layer_store_bytes + embed_bytes
         # Checked BEFORE build_stream_plan so a `ram`-only run is refused with
         # the message about stream_source rather than choose_tier's generic
         # "needs NVMe or more RAM" — and without paying the ~9 s disk probe for
@@ -317,6 +354,7 @@ class StreamingSetupMixin:
             n_layers=index.n_layers,
             layer_bytes=layer_bytes,
             embed_bytes=embed_bytes,
+            store_bytes=layer_store_bytes,
             available_ram_bytes=free_ram,
             # The page-locked ceiling is a property of the box, not of free RAM;
             # rather than probe it destructively we attempt the pinned store and
@@ -389,6 +427,11 @@ class StreamingSetupMixin:
         target_modules = tcfg.lora.target_modules
         if target_modules == "auto":
             target_modules = None
+        if tcfg.moe_lora and is_moe and moe_targets:
+            target_modules = moe_targets
+            console.print(
+                f"[green]ScatterMoE LoRA:[/] targeting {len(moe_targets)} module patterns"
+            )
         lora_config = LoraConfig(
             r=tcfg.lora.r,
             lora_alpha=tcfg.lora.alpha,
@@ -470,8 +513,9 @@ class StreamingSetupMixin:
         adapter term is ~0.5% of a streaming step's peak, so precision here buys
         nothing while under-counting would eat into the safety margin.
         """
-        hidden = int(getattr(model_config, "hidden_size", 0) or 0)
-        layers = int(getattr(model_config, "num_hidden_layers", 0) or 0)
+        shape_cfg = self._stream_shape_config(model_config)
+        hidden = int(getattr(shape_cfg, "hidden_size", 0) or 0)
+        layers = int(getattr(shape_cfg, "num_hidden_layers", 0) or 0)
         targets = tcfg.lora.target_modules
         n_targets = len(targets) if isinstance(targets, (list, tuple)) else 4
         return layers * n_targets * 2 * tcfg.lora.r * hidden
@@ -503,9 +547,10 @@ class StreamingSetupMixin:
         )
         from soup_cli.utils.layer_stream_runtime import measure_gemm_tflops
 
-        vocab = int(getattr(model_config, "vocab_size", 0) or 0)
-        hidden = int(getattr(model_config, "hidden_size", 0) or 0)
-        inter = int(getattr(model_config, "intermediate_size", 0) or 0)
+        shape_cfg = self._stream_shape_config(model_config)
+        vocab = int(getattr(shape_cfg, "vocab_size", 0) or 0)
+        hidden = int(getattr(shape_cfg, "hidden_size", 0) or 0)
+        inter = self._stream_intermediate_size(shape_cfg)
         seq_len = int(cfg.data.max_length)
         batch = tcfg.batch_size if isinstance(tcfg.batch_size, int) else 1
         # v0.72.4 — a paired loss concatenates chosen and rejected into ONE

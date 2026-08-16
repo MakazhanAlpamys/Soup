@@ -37,6 +37,7 @@ logger = logging.getLogger(__name__)
 #: A decoder-layer parameter key: ``model.layers.<idx>.<rest>``.
 _LAYER_RE = re.compile(r"^model\.layers\.(\d+)\.(.+)$")
 _SLUG_RE = re.compile(r"[^A-Za-z0-9._-]")
+_QWEN35_VLM_PREFIX = "model.language_model."
 
 _SUPPORTED_DTYPES = ("bfloat16", "float16", "float32")
 
@@ -72,6 +73,13 @@ _MAX_TOTAL_TENSORS = 200_000
 
 _INDEX_NAME = "index.json"
 _EXTRAS_NAME = "extras.safetensors"
+
+
+def _canonical_stream_key(key: str) -> str:
+    """Normalise wrapper prefixes that do not exist on the text decoder."""
+    if key.startswith(_QWEN35_VLM_PREFIX):
+        return "model." + key[len(_QWEN35_VLM_PREFIX) :]
+    return key
 
 
 # ==========================================================================
@@ -569,12 +577,13 @@ def shard_checkpoint(
     from safetensors import safe_open
 
     # pass 1 — build key -> shard without materialising a single tensor
-    where: Dict[str, str] = {}
+    where: Dict[str, Tuple[str, str]] = {}
     layer_ids = set()
     for path in shards:
         with safe_open(path, framework="pt") as handle:
-            for key in handle.keys():
-                where[key] = path
+            for source_key in handle.keys():
+                key = _canonical_stream_key(source_key)
+                where[key] = (path, source_key)
                 if len(where) > _MAX_TOTAL_TENSORS:
                     raise ValueError(
                         f"checkpoint declares more than {_MAX_TOTAL_TENSORS} tensors"
@@ -597,10 +606,11 @@ def shard_checkpoint(
 
     tables = _CodeTables()
     quant_specs: Dict[str, NF4WeightSpec] = {}
+    matched_quant_suffixes = set()
 
     total_params = 0
-    layer_keys: Tuple[str, ...] = ()
-    layer_shapes: Dict[str, Tuple[int, ...]] = {}
+    layer_keys = set()
+    shared_specs: Dict[str, Tuple[Tuple[int, ...], str]] = {}
     # ExitStack, not a dict comprehension of __enter__(): if shard N fails to
     # open, everything opened before it must still be closed.
     with contextlib.ExitStack() as stack:
@@ -610,56 +620,58 @@ def shard_checkpoint(
         for idx in range(n_layers):
             prefix = f"model.layers.{idx}."
             blob = {}
-            for key, path in where.items():
+            for key, location in where.items():
                 if not key.startswith(prefix):
                     continue
+                path, source_key = location
                 short = key[len(prefix):]
-                tensor = _read_tensor(handles[path], key, dtype)
+                tensor = _read_tensor(handles[path], source_key, dtype)
                 total_params += tensor.numel()
                 if quantise and short in suffixes:
                     sidecars, spec, code, nested_code = _quantize_nf4(
                         tensor, double_quant=double_quant, device=device
                     )
                     tables.observe(key, code, nested_code)
+                    prior_spec = quant_specs.get(short)
+                    if prior_spec is not None and prior_spec != spec:
+                        raise ValueError(
+                            f"decoder weight {short!r} has inconsistent NF4 metadata "
+                            f"across layers ({prior_spec.shape} vs {spec.shape}) — "
+                            f"layer streaming can pool a shared key only when its "
+                            f"stored layout stays the same"
+                        )
                     quant_specs.setdefault(short, spec)
+                    matched_quant_suffixes.add(short)
                     for sidecar, value in sidecars.items():
                         blob[short + sidecar] = value
                     del sidecars
                 else:
                     blob[short] = tensor
                 del tensor
-            # Shapes, not just names: the buffer pool is sized from layer 0 AND
-            # (under NF4) layer 0's quant_state is reused for every layer, so a
-            # differently-shaped layer 5 would be reconstructed against the
-            # wrong absmax blocking.
-            shapes = {name: tuple(tensor.shape) for name, tensor in blob.items()}
-            keys = tuple(sorted(blob))
-            if idx == 0:
-                layer_keys = keys
-                layer_shapes = shapes
-                _require_all_quantised(suffixes, quant_specs)
-            elif keys != layer_keys:
-                raise ValueError(
-                    f"decoder layer {idx} has a different parameter set than layer 0 "
-                    f"— layer streaming needs a uniform layer shape"
-                )
-            elif shapes != layer_shapes:
-                differing = sorted(
-                    name for name, shape in shapes.items() if layer_shapes[name] != shape
-                )
-                raise ValueError(
-                    f"decoder layer {idx} has different tensor shapes than layer 0 "
-                    f"({', '.join(differing[:3])}) — layer streaming needs a "
-                    f"uniform layer shape"
-                )
+            layer_keys.update(blob)
+            layer_specs = {
+                name: (tuple(tensor.shape), str(tensor.dtype).replace("torch.", ""))
+                for name, tensor in blob.items()
+            }
+            for name, spec in layer_specs.items():
+                prior = shared_specs.get(name)
+                if prior is not None and prior != spec:
+                    raise ValueError(
+                        f"decoder weight {name!r} has different stored shapes or dtypes "
+                        f"across layers ({prior} vs {spec}) — layer streaming can vary "
+                        f"which weights exist per layer, but a shared key must keep the "
+                        f"same storage layout"
+                    )
+                shared_specs.setdefault(name, spec)
             _atomic_save(blob, layer_shard_path(resolved_out, idx))
             del blob
 
         extras = {}
-        for key, path in where.items():
+        for key, location in where.items():
             if _LAYER_RE.match(key):
                 continue
-            tensor = _read_tensor(handles[path], key, dtype)
+            path, source_key = location
+            tensor = _read_tensor(handles[path], source_key, dtype)
             extras[key] = tensor
             total_params += tensor.numel()
         extras.update(tables.as_extras())
@@ -667,9 +679,11 @@ def shard_checkpoint(
         _atomic_save(extras, extras_shard_path(resolved_out))
         del extras
 
+    _require_all_quantised(suffixes, matched_quant_suffixes)
+
     index = ShardIndex(
         n_layers=n_layers,
-        layer_keys=layer_keys,
+        layer_keys=tuple(sorted(layer_keys)),
         extra_keys=extra_keys,
         dtype=dtype,
         total_params=total_params,
@@ -685,19 +699,17 @@ def shard_checkpoint(
     return index
 
 
-def _require_all_quantised(
-    suffixes: Tuple[str, ...], quant_specs: Dict[str, NF4WeightSpec]
-) -> None:
-    """Every requested suffix must have matched a real layer-0 weight.
+def _require_all_quantised(suffixes: Tuple[str, ...], matched: Iterable[str]) -> None:
+    """Every requested suffix must have matched at least one real decoder weight.
 
     A typo'd or stale suffix would otherwise ship that weight unquantised while
     the model expects packed nibbles — a shape error at best, silently wrong
     numbers at worst.
     """
-    missing = sorted(set(suffixes) - set(quant_specs))
+    missing = sorted(set(suffixes) - set(matched))
     if missing:
         raise ValueError(
-            f"quant_suffixes name weights that layer 0 does not have: "
+            f"quant_suffixes name decoder weights that the checkpoint does not have: "
             f"{', '.join(missing[:4])}"
         )
 

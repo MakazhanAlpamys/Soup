@@ -22,7 +22,7 @@ import os
 import sys
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, FrozenSet, Iterator, Mapping, Optional, Tuple, Union
+from typing import Any, Dict, FrozenSet, Iterator, Mapping, Optional, Sequence, Tuple, Union
 
 logger = logging.getLogger(__name__)
 
@@ -303,7 +303,10 @@ class RamSource:
         self,
         shard_dir: str,
         n_layers: int,
-        spec: Mapping[str, Tuple[Tuple[int, ...], str]],
+        spec: Union[
+            Mapping[str, Tuple[Tuple[int, ...], str]],
+            Sequence[Mapping[str, Tuple[Tuple[int, ...], str]]],
+        ],
         *,
         pin: bool = True,
     ):
@@ -312,13 +315,14 @@ class RamSource:
 
         from soup_cli.utils.layer_shard import layer_shard_path
 
+        layer_specs = self._normalize_layer_specs(spec, n_layers)
         self.store: list = []
         self.nbytes = 0
         self.pinned = bool(pin)
         for idx in range(n_layers):
             held: Dict[str, Any] = {}
             with safe_open(layer_shard_path(shard_dir, idx), framework="pt") as handle:
-                for name, (shape, dtype) in spec.items():
+                for name, (shape, dtype) in layer_specs[idx].items():
                     dst = torch.empty(
                         tuple(shape), dtype=_torch_dtype(dtype), pin_memory=self.pinned
                     )
@@ -330,7 +334,9 @@ class RamSource:
             self.store.append(held)
 
     @staticmethod
-    def spec_from_shard(shard_dir: str) -> Dict[str, Tuple[Tuple[int, ...], str]]:
+    def spec_from_shard(
+        shard_dir: str, idx: int = 0
+    ) -> Dict[str, Tuple[Tuple[int, ...], str]]:
         """Shape AND dtype for ONE decoder layer, read from the shard header.
 
         The dtype is read per tensor rather than taken from ``index.dtype``: an
@@ -344,7 +350,7 @@ class RamSource:
         from soup_cli.utils.layer_shard import layer_shard_path
 
         spec: Dict[str, Tuple[Tuple[int, ...], str]] = {}
-        with safe_open(layer_shard_path(shard_dir, 0), framework="pt") as handle:
+        with safe_open(layer_shard_path(shard_dir, idx), framework="pt") as handle:
             for name in handle.keys():
                 sliced = handle.get_slice(name)
                 shape = tuple(int(d) for d in sliced.get_shape())
@@ -356,6 +362,47 @@ class RamSource:
                     )
                 spec[name] = (shape, _SAFETENSORS_DTYPES[raw])
         return spec
+
+    @classmethod
+    def layer_specs_from_shards(
+        cls, shard_dir: str, n_layers: int
+    ) -> list[Dict[str, Tuple[Tuple[int, ...], str]]]:
+        return [cls.spec_from_shard(shard_dir, idx) for idx in range(n_layers)]
+
+    @staticmethod
+    def merge_layer_specs(
+        layer_specs: Sequence[Mapping[str, Tuple[Tuple[int, ...], str]]]
+    ) -> Dict[str, Tuple[Tuple[int, ...], str]]:
+        merged: Dict[str, Tuple[Tuple[int, ...], str]] = {}
+        for idx, spec in enumerate(layer_specs):
+            for name, value in spec.items():
+                prior = merged.get(name)
+                if prior is not None and prior != value:
+                    raise ValueError(
+                        f"decoder weight {name!r} has different stored shapes or dtypes "
+                        f"across layers ({prior} vs {value}, first seen before layer "
+                        f"{idx}) — layer streaming can vary which weights exist per "
+                        f"layer, but a shared key must keep one storage layout"
+                    )
+                merged.setdefault(name, value)
+        return merged
+
+    @staticmethod
+    def _normalize_layer_specs(
+        spec: Union[
+            Mapping[str, Tuple[Tuple[int, ...], str]],
+            Sequence[Mapping[str, Tuple[Tuple[int, ...], str]]],
+        ],
+        n_layers: int,
+    ) -> list[Mapping[str, Tuple[Tuple[int, ...], str]]]:
+        if isinstance(spec, Mapping):
+            return [spec] * n_layers
+        layer_specs = list(spec)
+        if len(layer_specs) != n_layers:
+            raise ValueError(
+                f"expected {n_layers} layer specs, but got {len(layer_specs)}"
+            )
+        return layer_specs
 
     def get(self, idx: int, name: str):
         return self.store[idx][name]
@@ -391,7 +438,10 @@ class DiskSource:
         self,
         shard_dir: str,
         n_layers: int,
-        spec: Mapping[str, Tuple[Tuple[int, ...], str]],
+        spec: Union[
+            Mapping[str, Tuple[Tuple[int, ...], str]],
+            Sequence[Mapping[str, Tuple[Tuple[int, ...], str]]],
+        ],
     ):
         import contextlib
 
@@ -399,6 +449,7 @@ class DiskSource:
 
         from soup_cli.utils.layer_shard import layer_shard_path
 
+        layer_specs = RamSource._normalize_layer_specs(spec, n_layers)
         self._stack = contextlib.ExitStack()
         # ExitStack, not a comprehension of __enter__(): if shard N fails to
         # open, everything opened before it must still be closed.
@@ -414,8 +465,10 @@ class DiskSource:
             raise
         self.nbytes = 0  # nothing is held resident by design
         self.disk_bytes = sum(
-            math.prod(shape) * _dtype_size(dtype) for shape, dtype in spec.values()
-        ) * n_layers
+            math.prod(shape) * _dtype_size(dtype)
+            for per_layer in layer_specs
+            for shape, dtype in per_layer.values()
+        )
         self.pinned = False
 
     def get(self, idx: int, name: str):
@@ -493,6 +546,7 @@ class LayerBufferPool:
         layer_spec: Mapping[str, Tuple[Tuple[int, ...], str]],
         n_buffers: int = 2,
         device: str = "cuda",
+        active_keys_by_layer: Optional[Sequence[Sequence[str]]] = None,
     ):
         import torch
 
@@ -508,6 +562,11 @@ class LayerBufferPool:
         ]
         self.events = [torch.cuda.Event() for _ in range(self.n)] if self.is_cuda else []
         self.owner: list = [None] * self.n
+        if active_keys_by_layer is None:
+            shared = tuple(layer_spec)
+            self.active_keys_by_layer = [shared]
+        else:
+            self.active_keys_by_layer = [tuple(keys) for keys in active_keys_by_layer]
         self.loads = 0
         self.nbytes = sum(
             buf.numel() * buf.element_size() for buf in self.buffers[0].values()
@@ -520,16 +579,23 @@ class LayerBufferPool:
         import torch
 
         slot = self.slot_for(idx)
+        keys = (
+            self.active_keys_by_layer[0]
+            if len(self.active_keys_by_layer) == 1
+            else self.active_keys_by_layer[idx]
+        )
         if self.is_cuda and stream is not None:
             # The slot's previous owner may still be in flight on the compute
             # stream; the prefetch must not clobber it (plan P1).
             stream.wait_stream(torch.cuda.current_stream())
             with torch.cuda.stream(stream):
-                for name, dst in self.buffers[slot].items():
+                for name in keys:
+                    dst = self.buffers[slot][name]
                     dst.copy_(source.get(idx, name), non_blocking=True)
                 self.events[slot].record(stream)
         else:
-            for name, dst in self.buffers[slot].items():
+            for name in keys:
+                dst = self.buffers[slot][name]
                 dst.copy_(source.get(idx, name))
         self.owner[slot] = idx
         self.loads += 1
@@ -1294,11 +1360,14 @@ def quantised_layer_suffixes(model: Any) -> FrozenSet[str]:
         return frozenset()
     if not len(layers):
         return frozenset()
-    return frozenset(
-        name.replace(".base_layer.", ".")
-        for name, param in layers[0].named_parameters()
-        if isinstance(param, bnb.nn.Params4bit)
-    )
+    found = set()
+    for layer in layers:
+        found.update(
+            name.replace(".base_layer.", ".")
+            for name, param in layer.named_parameters()
+            if isinstance(param, bnb.nn.Params4bit)
+        )
+    return frozenset(found)
 
 
 @dataclass(frozen=True)
@@ -1539,38 +1608,60 @@ def install_streaming(
             f"{index.n_layers} — reshard the checkpoint"
         )
 
-    name_map = _layer_name_map(layers[0])
-    if not name_map:
+    layer_name_maps = [_layer_name_map(layer) for layer in layers]
+    if not any(layer_name_maps):
         raise RuntimeError(
             "no meta decoder weights found — the base was materialised, which "
             "defeats layer streaming entirely"
         )
-    shard_spec = RamSource.spec_from_shard(shard_dir)
-    missing = sorted(set(name_map.values()) - set(shard_spec))
-    if missing:
-        raise ValueError(f"shard is missing decoder weights: {missing[:4]}")
+    layer_specs = RamSource.layer_specs_from_shards(shard_dir, n_layers)
 
     # NF4 streams the packed nibbles AND the statistics needed to rebuild the
     # QuantState; the two code tables are shared and stay resident.
-    needed: Dict[str, Tuple[Tuple[int, ...], str]] = {}
-    for ckpt in name_map.values():
-        spec_q = quant_specs.get(ckpt)
-        wanted = quant_sidecar_keys(ckpt, spec_q) if spec_q is not None else (ckpt,)
-        for key in wanted:
-            if key not in shard_spec:
-                raise ValueError(
-                    f"shard is missing the NF4 sidecar {key!r} — reshard the "
-                    f"checkpoint"
-                )
-            needed[key] = shard_spec[key]
-        if spec_q is not None:
-            validate_quant_shape(ckpt, spec_q, shard_spec)
-    spec = needed
+    needed_specs_by_layer = []
+    active_keys_by_layer = []
+    for idx, name_map in enumerate(layer_name_maps):
+        if not name_map:
+            raise RuntimeError(
+                f"decoder layer {idx} exposes no meta weights — the base was "
+                f"materialised, which defeats layer streaming entirely"
+            )
+        shard_spec = layer_specs[idx]
+        missing = sorted(set(name_map.values()) - set(shard_spec))
+        if missing:
+            raise ValueError(f"shard is missing decoder weights: {missing[:4]}")
+        needed: Dict[str, Tuple[Tuple[int, ...], str]] = {}
+        for ckpt in name_map.values():
+            spec_q = quant_specs.get(ckpt)
+            wanted = quant_sidecar_keys(ckpt, spec_q) if spec_q is not None else (ckpt,)
+            for key in wanted:
+                if key not in shard_spec:
+                    raise ValueError(
+                        f"shard is missing the NF4 sidecar {key!r} — reshard the "
+                        f"checkpoint"
+                    )
+                needed[key] = shard_spec[key]
+            if spec_q is not None:
+                validate_quant_shape(ckpt, spec_q, shard_spec)
+        needed_specs_by_layer.append(needed)
+        active_keys_by_layer.append(tuple(sorted(needed)))
+    spec = RamSource.merge_layer_specs(needed_specs_by_layer)
 
     source, pinned = _build_source(
-        shard_dir, n_layers, spec, pin, console, tier, require_pin=require_pin
+        shard_dir,
+        n_layers,
+        needed_specs_by_layer,
+        pin,
+        console,
+        tier,
+        require_pin=require_pin,
     )
-    pool = LayerBufferPool(spec, n_buffers=buffers, device=device)
+    pool = LayerBufferPool(
+        spec,
+        n_buffers=buffers,
+        device=device,
+        active_keys_by_layer=active_keys_by_layer,
+    )
     stream = torch.cuda.Stream() if str(device).startswith("cuda") else None
     prefetcher = StreamPrefetcher(pool, source, n_layers, stream)
 
@@ -1581,7 +1672,7 @@ def install_streaming(
             idx,
             pool,
             prefetcher,
-            name_map,
+            layer_name_maps[idx],
             quant_specs=quant_specs,
             codes=codes,
         )
