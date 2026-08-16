@@ -26,6 +26,10 @@ reproducing 70+ versions of notes.
   the flag is; it follows `forgetting_threshold` in being excluded from the
   recipe `config_sha`, so setting a floor never invalidates evidence.
 
+- **A ready-made `qwen3.5-4b-pretrain` recipe for continued pre-training of
+  `Qwen/Qwen3.5-4B-Base` (#278).** The recipe uses plaintext data, one epoch,
+  QLoRA 4-bit quantization, and the established continued-pretraining defaults.
+
 ### Fixed
 
 - **A run whose watcher died was reported `running` forever (#401).**
