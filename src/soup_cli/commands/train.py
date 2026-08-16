@@ -99,6 +99,10 @@ def _hardware_fit_preflight(cfg, gpu_info, *, allow_oom_attempt: bool) -> None:
     # + the plan panel in _setup_streaming_transformers).
     if getattr(cfg.training, "stream_layers", False):
         return
+    # MLX uses Apple unified memory and its own runtime allocator, so the
+    # CUDA-shaped analytical VRAM predictor is skipped.
+    if getattr(cfg, "backend", None) == "mlx":
+        return
 
     total_bytes = 0
     try:
