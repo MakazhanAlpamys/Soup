@@ -163,17 +163,32 @@ class TestWandbVersionPin:
 
 
 class TestCPUQuantWarning:
-    """Test that CPU + quantization produces a warning."""
+    """Test that CPU + quantization produces a warning and downgrades."""
 
     def test_train_auto_disables_quant_on_cpu(self):
-        """train.py should auto-disable quantization on CPU."""
+        """gpu.py resolve_quantization should auto-disable quantization on CPU."""
         import inspect
 
-        from soup_cli.commands import train
+        from soup_cli.utils import gpu
+        from soup_cli.utils.gpu import resolve_quantization
 
-        source = inspect.getsource(train)
+        # Retargeted from commands/train.py to utils/gpu.py after extraction (#423)
+        source = inspect.getsource(gpu)
         assert "quantization is not" in source
-        assert 'cfg.training.quantization = "none"' in source
+        assert '"none"' in source
+
+        # Behavioral assertions on pure resolve_quantization function
+        resolved, warning = resolve_quantization(
+            device="cpu", backend=None, quantization="4bit"
+        )
+        assert resolved == "none"
+        assert warning is not None
+        assert "quantization is not supported on CPU" in warning
+
+        # MLX preserves 4bit without downgrade
+        assert resolve_quantization(
+            device="cpu", backend="mlx", quantization="4bit"
+        )[0] == "4bit"
 
 
 # --- v0.10.2: Display progress bar uses ASCII ---
