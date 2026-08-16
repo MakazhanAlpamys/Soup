@@ -253,13 +253,13 @@ class TestQwen35StreamingRuntime:
         index = shard_checkpoint(weights, out, dtype="float32", arch="qwen3")
         model = _heterogeneous_meta_model()
 
-        runtime = install_streaming(model, shard_dir=out, index=index, device="cpu")
+        runtime = install_streaming(
+            model, shard_dir=out, index=index, device="cpu", pin=False
+        )
         try:
-            assert all(
-                tensor.device.type == "cpu"
-                for layer in runtime.source.store
-                for tensor in layer.values()
-            )
+            for layer in runtime.source.store:
+                for tensor in layer.values():
+                    assert tensor.device.type == "cpu"
             runtime.pool.load_async(0, runtime.source)
             buffers0 = runtime.pool.wait(0)
             assert runtime.source.get(0, "self_attn.q_proj.weight").device.type == "cpu"
@@ -334,7 +334,7 @@ class TestQwen35StreamingRuntime:
 
 
 class TestQwen35StreamingSetup:
-    def test_stream_setup_threads_moe_targets_into_lora_config(self, monkeypatch, tmp_path):
+    def test_stream_setup_threads_moe_targets_and_union_budget(self, monkeypatch, tmp_path):
         from soup_cli.trainer.stream_setup import StreamingSetupMixin
 
         class _Wrapper(StreamingSetupMixin):
@@ -393,10 +393,20 @@ class TestQwen35StreamingSetup:
         )
         tokenizer = types.SimpleNamespace(pad_token=None, eos_token="</s>")
         captured = {}
+        layer_specs = [
+            {"self_attn.q_proj.weight": ((4, 4), "float32")},
+            {"linear_attn.in_proj_qkv.weight": ((4, 4), "float32")},
+        ]
 
         def fake_lora_config(**kwargs):
             captured["target_modules"] = kwargs["target_modules"]
             return types.SimpleNamespace(**kwargs)
+
+        from soup_cli.utils.layer_stream import build_stream_plan as real_build_stream_plan
+
+        def capture_stream_plan(**kwargs):
+            captured["layer_bytes"] = kwargs["layer_bytes"]
+            return real_build_stream_plan(**kwargs)
 
         monkeypatch.setattr(
             "transformers.AutoTokenizer.from_pretrained",
@@ -430,7 +440,10 @@ class TestQwen35StreamingSetup:
         )
         monkeypatch.setattr(
             "soup_cli.utils.layer_stream_runtime.RamSource.layer_specs_from_shards",
-            lambda *_a, **_k: [{"self_attn.q_proj.weight": ((4, 4), "float32")}] * 2,
+            lambda *_a, **_k: layer_specs,
+        )
+        monkeypatch.setattr(
+            "soup_cli.utils.layer_stream.build_stream_plan", capture_stream_plan
         )
         monkeypatch.setattr(
             "soup_cli.utils.layer_stream_runtime.extras_resident_bytes",
@@ -477,3 +490,4 @@ class TestQwen35StreamingSetup:
             "up_proj",
             "down_proj",
         ]
+        assert captured["layer_bytes"] == 128

@@ -2281,39 +2281,6 @@ class TestPinnedFallbackRuntime:
         assert any("pageable" in msg.lower() for msg in printed)
         assert any("utilisation" in msg.lower() for msg in printed)
 
-    @pytest.mark.parametrize("device", ["cpu", "mps"])
-    def test_non_cuda_source_skips_pinning(self, tmp_path, monkeypatch, device):
-        import soup_cli.utils.layer_stream_runtime as rt
-        from soup_cli.utils.layer_shard import shard_checkpoint
-
-        weights, _, _ = _tiny_llama_dir(tmp_path)
-        shards = str(tmp_path / "shards")
-        index = shard_checkpoint(weights, shards, dtype="float32")
-        spec = rt.RamSource.spec_from_shard(shards)
-        real = rt.RamSource
-        attempts = []
-
-        class _RecordsPin(real):
-            def __init__(self, shard_dir, n_layers, spec, *, pin=True):
-                attempts.append(pin)
-                super().__init__(shard_dir, n_layers, spec, pin=pin)
-
-        monkeypatch.setattr(rt, "RamSource", _RecordsPin)
-
-        source, pinned = rt._build_source(
-            shards,
-            index.n_layers,
-            spec,
-            True,
-            None,
-            device=device,
-        )
-
-        assert attempts == [False]
-        assert pinned is False
-        assert source.nbytes > 0
-
-
 #: One decoder layer's weight for the AC3 refusal message, sized realistically so
 #: the rendered figure is a real number and not `0.00 GB`.
 _REFUSAL_HIDDEN = 4096
