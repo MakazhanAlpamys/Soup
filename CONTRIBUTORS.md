@@ -75,6 +75,8 @@ Listed by first contribution. PR numbers link the work.
   - A dead MCP watcher left its run at `running` in the tracker forever — reconciled on read, with a Windows liveness branch because `os.kill(pid, 0)` there sends a console Ctrl+C rather than checking existence ([#407](https://github.com/MakazhanAlpamys/Soup/pull/407))
   - The one-active-execution cap lived in process memory, so a restarted MCP server could double-book it ([#408](https://github.com/MakazhanAlpamys/Soup/pull/408))
   - The `soup ship` leg-1 noise floor was measured in `--task-mode metric` only, so in the judge modes a win smaller than the instrument's resolution still counted; it is now measured everywhere and **labelled**, so a decode-only floor is distinguishable from one carrying judge variance ([#419](https://github.com/MakazhanAlpamys/Soup/pull/419))
+- **Faisal Fayaz** ([@Faisal01011](https://github.com/Faisal01011))
+  - Added the `qwen3.5-4b-pretrain` recipe — and shipped it with a test pinning the literal repo id, which is the only thing that catches a *consistently* wrong id (wrong in both `RecipeMeta.model` and the inline `base:`, so the two still agree). Every catalog-wide invariant passes that mutation; this is the defect class that shipped `glm-5` pointing at `THUDM` instead of `zai-org` ([#422](https://github.com/MakazhanAlpamys/Soup/pull/422))
 
 ---
 

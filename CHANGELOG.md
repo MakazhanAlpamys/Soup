@@ -31,6 +31,9 @@ reproducing 70+ versions of notes.
   - `soup draft measure` supports cross-tokenizer acceptance measurement using decoded character-span alignment (`count_accepted_spans`) across different vocabularies and token boundaries. Target generation neutralizes `repetition_penalty` with `repetition_penalty=1.0` (Refs #345) so target greedy argmax and draft raw-logit scoring are evaluated consistently.
   - `soup serve --speculative-decoding` supports cross-tokenizer draft serving via Transformers Universal Assisted Decoding (UAD) when supported by the installed `transformers` version, raising a clear error if unsupported.
   - Compatible same-tokenizer pairs strictly preserve the existing native fast path.
+- **A ready-made `qwen3.5-4b-pretrain` recipe for continued pre-training of
+  `Qwen/Qwen3.5-4B-Base` (#278).** The recipe uses plaintext data, one epoch,
+  QLoRA 4-bit quantization, and the established continued-pretraining defaults.
 
 ### Fixed
 

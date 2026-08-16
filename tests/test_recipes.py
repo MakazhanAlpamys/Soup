@@ -1,5 +1,6 @@
 """Tests for soup recipes — ready-made configs for popular models."""
 
+from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
@@ -213,6 +214,44 @@ class TestRecipesCLI:
         assert "recipes" in result.output.lower()
 
 
+class TestIssue278Qwen35PretrainRecipe:
+    """Regression coverage for the qwen3.5-4b-pretrain recipe."""
+
+    def test_recipe_loads_with_expected_pretrain_shape(self) -> None:
+        from soup_cli.config.loader import load_config_from_string
+        from soup_cli.recipes.catalog import get_recipe
+
+        recipe = get_recipe("qwen3.5-4b-pretrain")
+        assert recipe is not None
+        assert recipe.model == "Qwen/Qwen3.5-4B-Base"
+        assert recipe.task == "pretrain"
+
+        config = load_config_from_string(recipe.yaml_str)
+        assert config.base == recipe.model
+        assert config.task == "pretrain"
+        assert config.data.format == "plaintext"
+        assert config.training.epochs == 1
+
+    def test_show_and_use_recipe(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        show_result = runner.invoke(app, ["recipes", "show", "qwen3.5-4b-pretrain"])
+        assert show_result.exit_code == 0
+        assert "Qwen/Qwen3.5-4B-Base" in show_result.output
+
+        monkeypatch.chdir(tmp_path)
+        use_result = runner.invoke(
+            app,
+            ["recipes", "use", "qwen3.5-4b-pretrain", "--yes"],
+        )
+        assert use_result.exit_code == 0
+        assert "Qwen/Qwen3.5-4B-Base" in (tmp_path / "soup.yaml").read_text(
+            encoding="utf-8"
+        )
+
+
 # ---------------------------------------------------------------------------
 # Part A: v0.25.0 new model recipes (Llama 4, Qwen 3, Gemma 3, DeepSeek V3)
 # ---------------------------------------------------------------------------
@@ -260,7 +299,7 @@ class TestV025NewRecipes:
             assert cfg.base == recipe.model
             assert cfg.task == recipe.task
 
-    def test_catalog_size_is_142(self):
+    def test_catalog_size_is_143(self):
         """Total catalog size — grew with each release.
 
         v0.25.0 shipped 43 recipes (29 + 9 Part A + 2 Part B tools + 3 Part E MLX).
@@ -275,10 +314,11 @@ class TestV025NewRecipes:
         v0.71.30 added 3 (grpo-env-calculator/retrieval-qa/guess-number) -> 137.
         v0.71.31 added 1 (online-dpo-smollm2-135m) -> 138.
         v0.71.32 added 3 (whisper-tiny/base/large-v3-asr) + 1 (smolvlm-256m-sft) -> 142.
+        Issue #278 added 1 (qwen3.5-4b-pretrain) -> 143.
         """
         from soup_cli.recipes.catalog import RECIPES
 
-        assert len(RECIPES) == 142
+        assert len(RECIPES) == 143
 
     def test_new_recipes_searchable(self):
         """Search returns the new recipes via keyword/task filter."""
