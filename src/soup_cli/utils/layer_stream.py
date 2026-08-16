@@ -248,6 +248,12 @@ DISK_KINDS = (_NVME, "ssd", "hdd", "unknown")
 DiskKind = Union[str, Callable[[], str]]
 
 _DISK_KIND_CACHE: Dict[str, str] = {}
+#: Throughput (bytes/s) of the most recent O_DIRECT probe, or ``None`` when the
+#: last classification did not measure (NVMe by name, ``rotational=0``, or a
+#: non-Linux platform). ``choose_tier`` reads it so a refusal can cite the rate
+#: that earned it. Reset at the start of every probe, so it is never a stale
+#: figure from a different volume.
+_LAST_MEASURED_READ_BYTES_PER_S: Optional[float] = None
 
 # --- measured-throughput fallback (#365) ----------------------------------
 #: Bytes read by the O_DIRECT probe when the rotational flag is untrustworthy.
@@ -255,6 +261,12 @@ _DISK_KIND_CACHE: Dict[str, str] = {}
 #: second on anything at or above the tier floor (~0.06 s at 1 GB/s), keeping
 #: the fallback bounded (criterion 4).
 _MEASURE_READ_BYTES = 64 * 1024 * 1024
+#: How many times the O_DIRECT read is repeated; the best (fastest) sample wins.
+#: A single read can be slowed by a cold device queue or first-access latency and
+#: under-measure a genuinely fast disk, wrongly refusing it — the single-sample
+#: threshold weakness the #365 review called out. Three bounded reads of a 64 MiB
+#: file stay well under a second total on any tier-eligible device.
+_MEASURE_READ_SAMPLES = 3
 #: A device must sustain at least this sequential read rate to earn the NVMe
 #: disk-overflow tier. The tier is NVMe-class by policy — ``choose_tier``
 #: already refuses a SATA SSD (~550 MB/s) — so the floor sits above SATA at
@@ -366,12 +378,14 @@ def _measure_seq_read_bytes_per_s(path: str) -> Optional[float]:
     """Sequential ``O_DIRECT`` read throughput of the volume holding ``path``.
 
     Writes a small scratch file beside ``path``, reopens it with ``O_DIRECT`` to
-    bypass the page cache, and times one page-aligned sequential read. Best
-    effort: any failure (no ``O_DIRECT`` on this filesystem, no write
-    permission, no monotonic clock) returns ``None`` so the caller stays
-    conservative, and the scratch file is always removed. Bounded by
-    ``_MEASURE_READ_BYTES`` so it cannot become the ~9 s cost the Windows probe
-    already carries (criterion 4).
+    bypass the page cache, and times ``_MEASURE_READ_SAMPLES`` page-aligned
+    sequential reads, returning the **best** (fastest) one. Repeating the read
+    and keeping the best rejects a single cold/slow sample that would otherwise
+    under-measure a fast device and wrongly refuse it. Best effort: any failure
+    (no ``O_DIRECT`` on this filesystem, no write permission, no monotonic clock)
+    returns ``None`` so the caller stays conservative, and the scratch file is
+    always removed. Each read is bounded by ``_MEASURE_READ_BYTES`` so the probe
+    cannot become the ~9 s cost the Windows probe already carries (criterion 4).
     """
     import mmap
     import os
@@ -403,12 +417,18 @@ def _measure_seq_read_bytes_per_s(path: str) -> Optional[float]:
 
         buf = mmap.mmap(-1, _MEASURE_READ_BYTES)  # page-aligned for O_DIRECT
         fd_r = os.open(scratch, os.O_RDONLY | o_direct)
-        start = time.monotonic()
-        read_total = os.readv(fd_r, [buf])
-        elapsed = time.monotonic() - start
-        if elapsed <= 0 or read_total <= 0:
-            return None
-        return read_total / elapsed
+        best_bps: Optional[float] = None
+        for _ in range(_MEASURE_READ_SAMPLES):
+            os.lseek(fd_r, 0, os.SEEK_SET)  # offset 0 stays O_DIRECT-aligned
+            start = time.monotonic()
+            read_total = os.readv(fd_r, [buf])
+            elapsed = time.monotonic() - start
+            if elapsed <= 0 or read_total <= 0:
+                continue
+            bps = read_total / elapsed
+            if best_bps is None or bps > best_bps:
+                best_bps = bps
+        return best_bps
     except (OSError, ValueError):
         return None
     finally:
@@ -437,6 +457,8 @@ def _probe_disk_kind(path: str) -> str:
     import platform
     import subprocess
 
+    global _LAST_MEASURED_READ_BYTES_PER_S
+    _LAST_MEASURED_READ_BYTES_PER_S = None
     system = platform.system()
     try:
         if system == "Linux":
@@ -458,7 +480,8 @@ def _probe_disk_kind(path: str) -> str:
                         value = handle.read().strip()
                     if value == "0":
                         return "ssd"
-                    return _classify_measured_read(_measure_seq_read_bytes_per_s(path))
+                    _LAST_MEASURED_READ_BYTES_PER_S = _measure_seq_read_bytes_per_s(path)
+                    return _classify_measured_read(_LAST_MEASURED_READ_BYTES_PER_S)
             return "unknown"
         if system == "Windows":
             shell = _resolve_tool("powershell", _POWERSHELL_FALLBACK)
@@ -544,10 +567,20 @@ def choose_tier(
     kind = disk_kind() if callable(disk_kind) else disk_kind
     if kind == _NVME:
         return TIER_DISK
+    # When the classification came from a measured read (the virtio/#365 path),
+    # cite the rate that earned the refusal so "not NVMe" is not an opaque
+    # verdict — the operator can see how far under the floor the disk landed.
+    measured = _LAST_MEASURED_READ_BYTES_PER_S
+    measured_note = (
+        f" (measured {measured / 1e9:.2f} GB/s, under the "
+        f"{NVME_TIER_MIN_BYTES_PER_S / 1e9:.1f} GB/s NVMe floor)"
+        if measured is not None
+        else ""
+    )
     raise ValueError(
         f"layer streaming needs NVMe or more RAM: the base needs "
         f"{model_bytes / 1e9:.1f} GB, only {free_ram_bytes / 1e9:.1f} GB of RAM "
-        f"is free, and the detected disk is {kind!r} (not NVMe). "
+        f"is free, and the detected disk is {kind!r} (not NVMe){measured_note}. "
         f"Free RAM, pick a smaller base, or move the model to an NVMe drive."
     )
 

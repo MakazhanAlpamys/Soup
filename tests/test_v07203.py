@@ -736,6 +736,51 @@ class TestDiskKindMeasuredFallback:
         monkeypatch.delattr(os, "O_DIRECT", raising=False)
         assert ls._measure_seq_read_bytes_per_s(".") is None
 
+    def test_refusal_cites_the_measured_rate(self, monkeypatch):
+        """#411 review: a measurement-driven refusal names the rate that earned
+        it, not just the opaque ``'hdd'`` verdict."""
+        import soup_cli.utils.layer_stream as ls
+
+        self._fake_linux(monkeypatch, devices=["vda"], rotational=1, measured_bps=150e6)
+        with pytest.raises(ValueError) as excinfo:
+            ls.choose_tier(1000, 10, ls.detect_disk_kind("/data"))
+        message = str(excinfo.value)
+        assert "measured 0.15 GB/s" in message
+        assert "1.0 GB/s NVMe floor" in message
+
+    def test_the_read_is_repeated_and_the_best_sample_wins(self, monkeypatch, tmp_path):
+        """#411 review: the single-sample threshold is the weakness — repeat the
+        read and keep the fastest so a lone cold sample cannot refuse a fast disk.
+
+        The filesystem I/O is mocked so the timing is deterministic regardless of
+        whether the test host's temp dir actually supports O_DIRECT."""
+        import os
+        import tempfile
+        import time
+
+        import soup_cli.utils.layer_stream as ls
+
+        if getattr(os, "O_DIRECT", None) is None:
+            pytest.skip("O_DIRECT is Linux-only; the probe returns None elsewhere")
+
+        scratch = str(tmp_path / "scratch")
+        monkeypatch.setattr(tempfile, "mkstemp", lambda **_k: (123, scratch))
+        monkeypatch.setattr(os, "write", lambda _fd, b: len(b))
+        monkeypatch.setattr(os, "fsync", lambda _fd: None)
+        monkeypatch.setattr(os, "close", lambda _fd: None)
+        monkeypatch.setattr(os, "open", lambda _p, _flags: 456)
+        monkeypatch.setattr(os, "lseek", lambda _fd, _off, _whence: 0)
+        monkeypatch.setattr(os, "unlink", lambda _p: None)
+        readv_calls = []
+        monkeypatch.setattr(os, "readv", lambda _fd, _bufs: readv_calls.append(1) or ls._MEASURE_READ_BYTES)
+        # Three reads with elapsed 2s, 1s, 4s -> the 1s sample is the fastest.
+        clock = iter([0.0, 2.0, 0.0, 1.0, 0.0, 4.0])
+        monkeypatch.setattr(time, "monotonic", lambda: next(clock))
+
+        best = ls._measure_seq_read_bytes_per_s(str(tmp_path))
+        assert len(readv_calls) == ls._MEASURE_READ_SAMPLES
+        assert best == ls._MEASURE_READ_BYTES / 1.0  # bytes / fastest elapsed (1s)
+
     def test_probe_writes_into_the_target_volume_not_its_parent(
         self, monkeypatch, tmp_path
     ):
