@@ -58,7 +58,7 @@ def _params_from_local_safetensors(path: str) -> float | None:
                         return None
                     numel *= dim
                 total += numel
-            return (total / 1e9) if total else None
+        return (total / 1e9) if total else None
     except (OSError, ValueError, TypeError, json.JSONDecodeError):
         return None  # unreadable/crafted -> fall back to the name guess
 
@@ -147,6 +147,41 @@ def detect_device(backend: Optional[str] = None) -> tuple[str, str]:
         pass
 
     return "cpu", "CPU (no GPU detected)"
+
+
+def resolve_quantization(
+    device: str,
+    backend: Optional[str],
+    quantization: str,
+) -> tuple[str, str | None]:
+    """Decide whether ``quantization`` should be kept, downgraded, or refused.
+
+    This is the explicit decision the maintainer requested in #423: MLX 4-bit
+    is a genuinely different mechanism from bitsandbytes NF4.  An
+    ``mlx-community`` checkpoint is *already* quantized, so ``quantization``
+    is forwarded to ``load_mlx_model`` as-is.  8-bit on MLX is rejected
+    separately by ``MLXTrainer._check_unsupported()``.
+
+    On CPU, bitsandbytes 4-bit / 8-bit cannot run — the guard downgrades to
+    ``"none"`` with a warning.  On CUDA / MPS the value is passed through
+    unchanged (bitsandbytes handles it).
+
+    Returns:
+        (resolved_quantization, warning_message | None)
+    """
+    # Explicit MLX 4-bit preservation: pre-quantized weights, not NF4.
+    if backend == "mlx" and quantization == "4bit":
+        return quantization, None
+
+    # CPU cannot run bitsandbytes quantisation.
+    if device == "cpu" and quantization in ("4bit", "8bit"):
+        msg = (
+            f"Warning: {quantization} quantization is not supported on CPU. "
+            "Switching to quantization: none."
+        )
+        return "none", msg
+
+    return quantization, None
 
 
 def get_gpu_info(backend: Optional[str] = None) -> dict:

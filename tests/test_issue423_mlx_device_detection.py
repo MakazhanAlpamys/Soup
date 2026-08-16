@@ -3,6 +3,11 @@
 Covers MLX detection, MPS/MLX precedence disambiguation, MPS zero-byte memory
 invariant for hardware-fit preflight, host-agnostic CPU fallbacks, and explicit
 quantization preservation for MLX vs CPU downgrade guards.
+
+The quantization tests call ``resolve_quantization()`` -- the real guard
+function extracted from ``train.py`` -- so a mutation that disables the
+guard causes a test failure.  The maintainer's mutation audit disabled the
+guard and the previous test suite survived; these tests do not.
 """
 
 from __future__ import annotations
@@ -10,8 +15,8 @@ from __future__ import annotations
 import sys
 from unittest.mock import MagicMock, patch
 
-from soup_cli.config.schema import SoupConfig
 from soup_cli.utils import gpu as gpu_utils
+from soup_cli.utils.gpu import resolve_quantization
 
 
 class TestMLXDeviceDetection:
@@ -74,7 +79,13 @@ class TestMLXDeviceDetection:
         assert info["gpu_count"] == 1
 
     def test_get_gpu_info_mps_memory_zero_bytes_invariant(self):
-        """PyTorch MPS returns memory_total_bytes=0 so hardware-fit preflight skips."""
+        """PyTorch MPS returns memory_total_bytes=0 so hardware-fit preflight skips.
+
+        This invariant is load-bearing: ``_hardware_fit_preflight`` (train.py)
+        early-returns when ``total_bytes <= 0``, so every Mac MPS run skips the
+        CUDA-shaped VRAM predictor.  If this test fails, previously-working Mac
+        MPS runs may start being refused by the hardware-fit gate.
+        """
         mock_torch = MagicMock()
         mock_torch.cuda.is_available.return_value = False
         mock_torch.backends.mps.is_available.return_value = True
@@ -89,7 +100,9 @@ class TestMLXDeviceDetection:
     def test_detect_device_cpu_fallback_on_non_apple(self, mock_apple):
         """Gracefully falls back to CPU on non-Apple machines without GPUs.
 
-        Mocks torch so test passes deterministically on hosts with or without CUDA GPUs.
+        Mocks torch so test passes deterministically on hosts with or without
+        CUDA GPUs -- the maintainer caught that the original test asserted the
+        *host* rather than the code.
         """
         mock_torch = MagicMock()
         mock_torch.cuda.is_available.return_value = False
@@ -105,51 +118,76 @@ class TestMLXDeviceDetection:
 
 
 class TestIssue423QuantizationDecision:
-    """Pins quantization behavior on CPU vs MLX backend per Issue #423."""
+    """Pin quantization guard behavior via the real ``resolve_quantization()``.
 
-    def test_cpu_downgrades_4bit_and_8bit_to_none_with_warning(self):
-        """On CPU, bitsandbytes 4bit/8bit is unsupported and downgraded to 'none'."""
-        for quant in ("4bit", "8bit"):
-            cfg = SoupConfig(base="Qwen/Qwen2.5-0.5B", data={"train": "./data.jsonl"})
-            cfg.training.quantization = quant
+    The maintainer's mutation audit disabled the CPU downgrade guard and the
+    previous inline-simulation tests survived.  These tests call the extracted
+    function directly, so removing or neutering ``resolve_quantization`` causes
+    deterministic failures.
+    """
 
-            # Simulate CPU device path in train.py
-            device = "cpu"
-            captured_warnings = []
+    def test_cpu_downgrades_4bit_to_none_with_warning(self):
+        """CPU + 4bit -> 'none' with a warning message."""
+        resolved, warning = resolve_quantization(
+            device="cpu", backend="transformers", quantization="4bit"
+        )
+        assert resolved == "none"
+        assert warning is not None
+        assert "not supported on CPU" in warning
 
-            if device == "cpu" and cfg.training.quantization in ("4bit", "8bit"):
-                captured_warnings.append(
-                    f"Warning: {cfg.training.quantization} quantization is not supported on CPU."
-                )
-                cfg.training.quantization = "none"
+    def test_cpu_downgrades_8bit_to_none_with_warning(self):
+        """CPU + 8bit -> 'none' with a warning message."""
+        resolved, warning = resolve_quantization(
+            device="cpu", backend="transformers", quantization="8bit"
+        )
+        assert resolved == "none"
+        assert warning is not None
+        assert "not supported on CPU" in warning
 
-            assert cfg.training.quantization == "none"
-            assert len(captured_warnings) == 1
-            assert "not supported on CPU" in captured_warnings[0]
+    def test_cpu_none_quantization_passes_through(self):
+        """CPU + none -> 'none' with no warning (nothing to downgrade)."""
+        resolved, warning = resolve_quantization(
+            device="cpu", backend="transformers", quantization="none"
+        )
+        assert resolved == "none"
+        assert warning is None
 
-    @patch("soup_cli.utils.mlx.is_apple_silicon", return_value=True)
-    @patch("soup_cli.utils.mlx.detect_mlx", return_value=True)
-    @patch("soup_cli.utils.mlx.get_chip_info", return_value={"chip": "Apple M2"})
-    def test_mlx_preserves_4bit_quantization_without_downgrade(
-        self, mock_chip, mock_detect, mock_apple
-    ):
-        """On Apple Silicon MLX, 4bit quantization uses pre-quantized mlx-lm models.
+    def test_mlx_preserves_4bit_without_downgrade(self):
+        """MLX + 4bit -> '4bit' with no warning (pre-quantized mlx-community models).
 
-        Passing backend='mlx' resolves device='mlx' and leaves cfg.training.quantization='4bit'
-        intact without triggering the CPU bitsandbytes downgrade warning.
+        This is the core #423 fix: the explicit decision that MLX 4-bit is a
+        different mechanism from bitsandbytes NF4 and must not be downgraded.
         """
-        cfg = SoupConfig(base="Qwen/Qwen2.5-0.5B", data={"train": "./data.jsonl"})
-        cfg.backend = "mlx"
-        cfg.training.quantization = "4bit"
+        resolved, warning = resolve_quantization(
+            device="mlx", backend="mlx", quantization="4bit"
+        )
+        assert resolved == "4bit"
+        assert warning is None
 
-        device, _ = gpu_utils.detect_device(backend=cfg.backend)
-        assert device == "mlx"
+    def test_mlx_4bit_preserved_even_on_cpu_device_label(self):
+        """Even if device resolves oddly, backend='mlx' + 4bit is preserved.
 
-        captured_warnings = []
-        if device == "cpu" and cfg.training.quantization in ("4bit", "8bit"):
-            captured_warnings.append("Warning: CPU downgrade triggered")
-            cfg.training.quantization = "none"
+        The guard checks backend first, so a hypothetical edge case where the
+        device string doesn't match still preserves the MLX decision.
+        """
+        resolved, warning = resolve_quantization(
+            device="cpu", backend="mlx", quantization="4bit"
+        )
+        assert resolved == "4bit"
+        assert warning is None
 
-        # Must remain 4bit and emit zero CPU warnings
-        assert cfg.training.quantization == "4bit"
-        assert len(captured_warnings) == 0
+    def test_cuda_4bit_passes_through(self):
+        """CUDA + 4bit -> '4bit' with no warning (bitsandbytes handles it)."""
+        resolved, warning = resolve_quantization(
+            device="cuda", backend="transformers", quantization="4bit"
+        )
+        assert resolved == "4bit"
+        assert warning is None
+
+    def test_cuda_8bit_passes_through(self):
+        """CUDA + 8bit -> '8bit' with no warning (bitsandbytes handles it)."""
+        resolved, warning = resolve_quantization(
+            device="cuda", backend="transformers", quantization="8bit"
+        )
+        assert resolved == "8bit"
+        assert warning is None

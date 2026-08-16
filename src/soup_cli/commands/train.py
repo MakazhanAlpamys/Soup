@@ -15,7 +15,7 @@ from rich.panel import Panel
 from soup_cli.config.loader import load_config
 from soup_cli.data.loader import load_dataset
 from soup_cli.monitoring.display import TrainingDisplay
-from soup_cli.utils.gpu import detect_device, get_gpu_info
+from soup_cli.utils.gpu import detect_device, get_gpu_info, resolve_quantization
 
 if TYPE_CHECKING:  # pragma: no cover - type hints only, no runtime import
     from soup_cli.utils.energy import EnergyMeasurement
@@ -970,18 +970,17 @@ def train(
     device, device_name = detect_device(backend=cfg.backend)
     gpu_info = get_gpu_info(backend=cfg.backend)
 
-    # Auto-disable quantization on CPU (bitsandbytes does not support CPU).
-    # On MLX (device == "mlx"), 4-bit quantization does not use bitsandbytes; it loads
-    # pre-quantized weights directly via mlx-lm (mlx-community 4bit checkpoints in
-    # MLXTrainer.setup -> load_mlx_model). Thus cfg.training.quantization is left intact
-    # for MLX execution without downgrading. (Note: MLX backend explicitly rejects 8bit
-    # in MLXTrainer._check_unsupported()).
-    if device == "cpu" and cfg.training.quantization in ("4bit", "8bit"):
-        console.print(
-            f"[yellow]Warning: {cfg.training.quantization} quantization is not "
-            "supported on CPU. Switching to quantization: none.[/]"
-        )
-        cfg.training.quantization = "none"
+    # Quantization guard: explicit decision per #423.  See resolve_quantization()
+    # docstring for the full rationale — MLX 4-bit uses pre-quantized mlx-community
+    # weights (not bitsandbytes NF4), CPU cannot run bitsandbytes at all.
+    resolved_quant, quant_warning = resolve_quantization(
+        device=device,
+        backend=cfg.backend,
+        quantization=cfg.training.quantization,
+    )
+    if quant_warning:
+        console.print(f"[yellow]{quant_warning}[/]")
+    cfg.training.quantization = resolved_quant
 
     # Hardware-fit preflight: refuse (unless --allow-oom-attempt) when the
     # analytical VRAM predictor says the run won't fit. Skips silently on CPU
