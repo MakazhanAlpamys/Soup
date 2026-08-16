@@ -28,7 +28,7 @@ reproducing 70+ versions of notes.
 
 - **Cross-tokenizer draft support for `soup draft` and `soup serve` (#417).**
   - `soup draft distill` now accepts target/draft pairs with mismatched tokenizers or vocabularies, automatically routing through `uld_strategy: wasserstein_aligned` (Universal Logit Distillation) instead of refusing the pair.
-  - `soup draft measure` supports cross-tokenizer acceptance measurement using decoded character-span alignment (`count_accepted_spans`) across different vocabularies and token boundaries. Target generation additionally enforces unpenalized greedy generation (`repetition_penalty=1.0`) so target greedy argmax and draft raw-logit scoring are evaluated consistently.
+  - `soup draft measure` supports cross-tokenizer acceptance measurement using decoded character-span alignment (`count_accepted_spans`) across different vocabularies and token boundaries. Target generation neutralizes `repetition_penalty` with `repetition_penalty=1.0` (Refs #345) so target greedy argmax and draft raw-logit scoring are evaluated consistently.
   - `soup serve --speculative-decoding` supports cross-tokenizer draft serving via Transformers Universal Assisted Decoding (UAD) when supported by the installed `transformers` version, raising a clear error if unsupported.
   - Compatible same-tokenizer pairs strictly preserve the existing native fast path.
 

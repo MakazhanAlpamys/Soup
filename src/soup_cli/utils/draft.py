@@ -108,7 +108,7 @@ def count_accepted_spans(
     """
     import difflib
 
-    from soup_cli.utils.uld import _char_spans
+    from soup_cli.utils.uld import _MAX_ALIGN_CHARS, _char_spans
 
     if not target_pieces:
         return 0
@@ -120,6 +120,9 @@ def count_accepted_spans(
 
     if d_text == t_text:
         return len(target_pieces)
+
+    d_text = d_text[:_MAX_ALIGN_CHARS]
+    t_text = t_text[:_MAX_ALIGN_CHARS]
 
     matcher = difflib.SequenceMatcher(None, d_text, t_text, autojunk=False)
     matching_blocks = [b for b in matcher.get_matching_blocks() if b[2] > 0]
@@ -574,7 +577,6 @@ def measure_acceptance(
             target_pieces = [
                 tokenizer.decode([tid], skip_special_tokens=False) for tid in actual
             ]
-            total += len(target_pieces)
 
             prompt_draft_enc = draft_tokenizer(prompt, return_tensors="pt")
             draft_prompt_len = int(prompt_draft_enc["input_ids"].shape[1])
@@ -586,6 +588,8 @@ def measure_acceptance(
 
             if draft_full_ids.shape[1] <= draft_prompt_len:
                 continue
+
+            total += len(target_pieces)
 
             with torch.no_grad():
                 draft_logits = draft_model(input_ids=draft_full_ids).logits

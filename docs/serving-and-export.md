@@ -349,7 +349,7 @@ A `soup shrink` output makes a good draft base: same tokenizer by construction.
 **Cross-tokenizer measurement.** When tokenizers differ, raw token IDs cannot be compared directly.
 `soup draft measure` automatically detects mismatched tokenizers and evaluates acceptance by aligning
 decoded character spans (`count_accepted_spans`). For both same-tokenizer and cross-tokenizer pairs,
-target generation runs with unpenalized greedy decoding (`repetition_penalty=1.0`) so that draft proposals
+target generation neutralizes `repetition_penalty` with `repetition_penalty=1.0` (Refs #345) so that draft proposals
 and target continuations are evaluated under consistent argmax rules. Cross-tokenizer support expands the
 choice of draft models, but cross-tokenizer speculative decoding adds tokenization alignment overhead and
 does not guarantee a speedup — use `soup draft measure` to verify real throughput on your specific pair.

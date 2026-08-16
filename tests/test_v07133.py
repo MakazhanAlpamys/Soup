@@ -846,11 +846,17 @@ class _TensorTok:
 
 
 class _FakeTarget:
-    """Greedy-generates a fixed continuation."""
+    """Greedy-generates a continuation, applying repetition penalty when != 1.0."""
 
-    def __init__(self, full_ids: list[int], n_prompt: int):
-        self._full_ids = full_ids
+    def __init__(
+        self,
+        full_ids: list[int],
+        n_prompt: int,
+        default_repetition_penalty: float = 1.2,
+    ):
+        self._full_ids = list(full_ids)
         self._n_prompt = n_prompt
+        self._default_repetition_penalty = default_repetition_penalty
         self.calls: list[dict] = []
 
     def parameters(self):
@@ -862,7 +868,33 @@ class _FakeTarget:
         import torch
 
         self.calls.append(kwargs)
-        return torch.tensor([self._full_ids])
+        rep_penalty = kwargs.get("repetition_penalty", self._default_repetition_penalty)
+        if rep_penalty is None:
+            rep_penalty = self._default_repetition_penalty
+
+        input_ids = kwargs.get("input_ids")
+        if input_ids is not None:
+            curr_ids = input_ids[0].cpu().tolist()
+        else:
+            curr_ids = list(self._full_ids[: self._n_prompt])
+
+        target_gen = self._full_ids[self._n_prompt :]
+        if not target_gen:
+            return torch.tensor([curr_ids])
+
+        generated = list(curr_ids)
+        for expected_tok in target_gen:
+            alt_tok = 99 if expected_tok != 99 else 98
+            logits = {expected_tok: 10.0, alt_tok: 9.0}
+            if rep_penalty != 1.0:
+                seen = set(generated)
+                for tok_id in list(logits.keys()):
+                    if tok_id in seen:
+                        logits[tok_id] = logits[tok_id] / rep_penalty
+            best_tok = max(logits.keys(), key=lambda t: logits[t])
+            generated.append(best_tok)
+
+        return torch.tensor([generated])
 
 
 class _FakeDraft:
@@ -969,17 +1001,17 @@ class TestMeasureAcceptance:
         assert target.calls[0]["max_new_tokens"] == 8
 
     def test_repetition_penalty_neutralized_for_self_acceptance(self):
-        """When target and draft are identical, repetition_penalty is neutralized."""
+        """When target and draft are identical, repetition_penalty is neutralized (Refs #345)."""
         from soup_cli.utils.draft import measure_acceptance
 
-        # Target generates [10, 11, 12] from prompt [5, 6].
+        # Target generates [10, 11, 12] from prompt [10, 6].
         # An identical draft produces predictions [10, 11, 12] for those positions.
         identical_draft_argmax = [99, 10, 11, 12, 99]
-        target = _FakeTarget([5, 6, 10, 11, 12], 2)
+        target = _FakeTarget([10, 6, 10, 11, 12], 2)
         draft = _FakeDraft(identical_draft_argmax)
 
         accepted, total = measure_acceptance(
-            target, draft, _TensorTok([5, 6]), ["hello"], max_new_tokens=8
+            target, draft, _TensorTok([10, 6]), ["hello"], max_new_tokens=8
         )
         assert target.calls[0]["repetition_penalty"] == 1.0
         assert total == 3
