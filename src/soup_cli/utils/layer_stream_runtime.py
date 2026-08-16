@@ -323,8 +323,12 @@ class RamSource:
             held: Dict[str, Any] = {}
             with safe_open(layer_shard_path(shard_dir, idx), framework="pt") as handle:
                 for name, (shape, dtype) in layer_specs[idx].items():
+                    # This is the host store; never inherit a process-wide MPS/CUDA default.
                     dst = torch.empty(
-                        tuple(shape), dtype=_torch_dtype(dtype), pin_memory=self.pinned
+                        tuple(shape),
+                        dtype=_torch_dtype(dtype),
+                        device="cpu",
+                        pin_memory=self.pinned,
                     )
                     src = handle.get_tensor(name)
                     dst.copy_(src)

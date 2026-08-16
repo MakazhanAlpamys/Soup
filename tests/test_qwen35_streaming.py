@@ -219,10 +219,14 @@ class TestQwen35StreamingRuntime:
         index = shard_checkpoint(weights, out, dtype="float32", arch="qwen3")
         model = _heterogeneous_meta_model()
 
-        runtime = install_streaming(model, shard_dir=out, index=index, device="cpu")
+        # A process-wide accelerator default must not move the host store off CPU.
+        with torch.device("meta"):
+            runtime = install_streaming(model, shard_dir=out, index=index, device="cpu")
         try:
             runtime.pool.load_async(0, runtime.source)
             buffers0 = runtime.pool.wait(0)
+            assert runtime.source.get(0, "self_attn.q_proj.weight").device.type == "cpu"
+            assert buffers0["self_attn.q_proj.weight"].device.type == "cpu"
             assert torch.equal(
                 buffers0["self_attn.q_proj.weight"],
                 runtime.source.get(0, "self_attn.q_proj.weight"),
@@ -230,6 +234,8 @@ class TestQwen35StreamingRuntime:
 
             runtime.pool.load_async(1, runtime.source)
             buffers1 = runtime.pool.wait(1)
+            assert runtime.source.get(1, "linear_attn.in_proj_qkv.weight").device.type == "cpu"
+            assert buffers1["linear_attn.in_proj_qkv.weight"].device.type == "cpu"
             assert torch.equal(
                 buffers1["linear_attn.in_proj_qkv.weight"],
                 runtime.source.get(1, "linear_attn.in_proj_qkv.weight"),
