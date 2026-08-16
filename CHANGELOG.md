@@ -14,6 +14,16 @@ reproducing 70+ versions of notes.
 
 ### Added
 
+- **Layer streaming now accepts Qwen3.5 MoE text checkpoints whose decoder
+  layers do not expose exactly the same weight keys in every block (#426 by
+  @Shutaru).** The sharder now records per-layer shard headers instead of
+  deriving the pool from layer 0 alone, while still refusing divergent storage
+  layouts for any shared key and rebuilding NF4 `Params4bit` views from
+  validated per-weight metadata. `qwen3_5_moe` / `qwen3_5_moe_text` route
+  through the existing qwen3 streamer, and live validation was run on
+  `Qwen/Qwen3.5-35B-A3B` with layer streaming, NF4, MoE LoRA target resolution
+  and a 3072-token SFT dataset.
+
 - **`training.stream_pin` makes layer-streaming pinning configurable (#366 by @ousamabenyounes in #416).**
   Page-locking the RAM store is chosen automatically by `decide_pinning`, and
   until now nothing could override it — so while #331 was live, `pin=False` was
