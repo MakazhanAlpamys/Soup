@@ -78,10 +78,13 @@ reproducing 70+ versions of notes.
   with "different tokenizers" deep inside `generate()`, after the expensive load,
   and because the report was written only after that arm every completed
   acceptance/plain-throughput number was thrown away. `measure` now uses the same
-  `config.vocab_size` precondition as `distill` (refusing before any model loads),
-  keeps `same_tokenizer()` as an additional check, and writes the report
-  incrementally so a failing assisted arm leaves the acceptance rate and plain
-  throughput on disk.
+  `config.vocab_size` precondition as `distill` (refusing before any model loads;
+  the shared `_vocab_size_of` also reads a composite model's `get_text_config()`,
+  so a multimodal target like Llava is no longer refused), keeps `same_tokenizer()`
+  as an additional check, and writes the report incrementally so a failing assisted
+  arm leaves the acceptance rate and plain throughput on disk. The report records
+  an `assisted_status` (`complete` / `untimed` / `crash` / `interrupted`) so a
+  failed arm is distinguishable on disk from a completed or un-run one.
 
 ## [0.73.3] - 2026-08-18
 

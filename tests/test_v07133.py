@@ -1856,6 +1856,87 @@ class TestDraftMeasureVocabGate:
         assert data["tok_s_plain"] == 20.0
         assert data["tok_s_assisted"] is None
         assert data["speedup"] is None
+        # #344 review: a crashed arm is recorded on disk (else it is byte-identical
+        # to an untimed or interrupted one), and the loud warning is actually shown
+        # (deleting the message fails this).
+        assert data["assisted_status"] == "crash"
+        assert "could not be measured" in result.output
+
+    def _run_measure(self, runner, in_tmp_cwd, monkeypatch, throughput):
+        """Drive `measure` to the assisted arm with everything before it mocked;
+        `throughput` decides the assisted arm's outcome."""
+        from soup_cli.commands import draft as draft_cmd
+        from soup_cli.commands.draft import app
+
+        monkeypatch.setattr(draft_cmd, "_vocab_size_of", lambda mid, trc=False: 49152)
+        monkeypatch.setattr(
+            draft_cmd,
+            "_load_pair_member",
+            lambda model_id, **kw: (object(), _FakeTok(49152), "cpu"),
+        )
+        monkeypatch.setattr(draft_cmd, "measure_acceptance", lambda *a, **k: (75, 100))
+        monkeypatch.setattr(draft_cmd, "measure_throughput", throughput)
+        prompts = self._prompts(in_tmp_cwd)
+        return runner.invoke(
+            app,
+            ["measure", "--target", "org/target", "--draft", "org/tiny",
+             "--prompts", prompts, "-o", "report.json"],
+        )
+
+    def test_assisted_arm_outcomes_are_distinguishable_on_disk(
+        self, runner, in_tmp_cwd, monkeypatch
+    ):
+        """#344 review: crash / untimed / interrupt / complete wrote byte-identical
+        JSON. Each now records a distinct ``assisted_status``."""
+        import json as _json
+
+        def _complete(model, tok, prompts, *, assistant_model=None, **kw):
+            return 30.0 if assistant_model is not None else 20.0
+
+        result = self._run_measure(runner, in_tmp_cwd, monkeypatch, _complete)
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        data = _json.loads((in_tmp_cwd / "report.json").read_text(encoding="utf-8"))
+        assert data["assisted_status"] == "complete"
+        assert data["tok_s_assisted"] == 30.0
+        assert data["speedup"] == 1.5
+
+    def test_assisted_arm_untimed_is_recorded_and_silent(
+        self, runner, in_tmp_cwd, monkeypatch
+    ):
+        """A non-positive assisted number is 'untimed', not 'crash', and prints no
+        warning — the two must not collapse to the same on-disk state."""
+        import json as _json
+
+        def _untimed(model, tok, prompts, *, assistant_model=None, **kw):
+            return 0.0 if assistant_model is not None else 20.0
+
+        result = self._run_measure(runner, in_tmp_cwd, monkeypatch, _untimed)
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        data = _json.loads((in_tmp_cwd / "report.json").read_text(encoding="utf-8"))
+        assert data["assisted_status"] == "untimed"
+        assert data["tok_s_assisted"] is None
+        assert "could not be measured" not in result.output
+
+    def test_assisted_arm_interrupt_is_recorded_and_reraised(
+        self, runner, in_tmp_cwd, monkeypatch
+    ):
+        """Ctrl-C during the arm is recorded as 'interrupted' and re-raised (so the
+        exit is not 0). Widening the ``except`` to swallow BaseException — or
+        dropping the KeyboardInterrupt handler — fails this."""
+        import json as _json
+
+        def _interrupt(model, tok, prompts, *, assistant_model=None, **kw):
+            if assistant_model is not None:
+                raise KeyboardInterrupt
+            return 20.0
+
+        result = self._run_measure(runner, in_tmp_cwd, monkeypatch, _interrupt)
+        # click converts the re-raised KeyboardInterrupt to exit 130 — the point
+        # is that it is NOT swallowed into a 0 like crash/untimed are.
+        assert result.exit_code == 130, (result.output, repr(result.exception))
+        data = _json.loads((in_tmp_cwd / "report.json").read_text(encoding="utf-8"))
+        assert data["assisted_status"] == "interrupted"
+        assert data["tok_s_assisted"] is None
 
 
 class TestDraftListCli:

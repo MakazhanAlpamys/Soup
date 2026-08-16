@@ -135,6 +135,11 @@ def _vocab_size_of(model_id: str, trc: bool = False) -> int:
 
     config = AutoConfig.from_pretrained(model_id, trust_remote_code=trc)
     vocab = getattr(config, "vocab_size", None)
+    if vocab is None and hasattr(config, "get_text_config"):
+        # Composite / multimodal configs (e.g. LlavaConfig) keep vocab_size on
+        # the text sub-config, not the top level; get_text_config() returns it
+        # (#344 review). Shared by measure and distill, so this fixes both.
+        vocab = getattr(config.get_text_config(), "vocab_size", None)
     if vocab is None:
         raise ValueError(f"{model_id} config has no vocab_size")
     return int(vocab)
@@ -738,7 +743,19 @@ def measure(
             num_assistant_tokens=num_assistant_tokens,
             max_new_tokens=max_new_tokens,
         )
+    except KeyboardInterrupt:
+        # A Ctrl-C during the arm must be distinguishable on disk from a crash or
+        # an untimed run — otherwise all three write byte-identical reports
+        # (#344 review). Record the outcome, then re-raise so the exit code and
+        # the "arm is best-effort" contract are unchanged.
+        report = replace(report, assisted_status="interrupted")
+        if output is not None:
+            _write_draft_report(report, output)
+        raise
     except Exception as exc:  # noqa: BLE001 — assisted arm is best-effort
+        report = replace(report, assisted_status="crash")
+        if output is not None:
+            _write_draft_report(report, output)
         console.print(
             f"[yellow]Warning:[/] assisted-generation throughput could not be "
             f"measured ({escape(str(exc))}); the acceptance rate and plain "
@@ -752,9 +769,12 @@ def measure(
                 report,
                 tok_s_assisted=assisted,
                 speedup=assisted / plain if plain else None,
+                assisted_status="complete",
             )
-            if output is not None:
-                _write_draft_report(report, output)
+        else:
+            report = replace(report, assisted_status="untimed")
+        if output is not None:
+            _write_draft_report(report, output)
 
     console.print(render_draft_panel(report))
     if output is not None:
