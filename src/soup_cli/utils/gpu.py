@@ -1,9 +1,13 @@
 """GPU detection, memory calculation, and auto batch size."""
 
+from __future__ import annotations
+
 import json
 import math
 import os
 import re
+import sys
+from typing import Any, Optional
 
 # A safetensors file starts with a u64 little-endian header length, then a
 # JSON header carrying each tensor's dtype + shape. Reading it costs a few
@@ -94,8 +98,32 @@ def resolve_device_map(device: str):
         return "auto"
 
 
-def detect_device() -> tuple[str, str]:
-    """Detect available device. Returns (device_string, human_name)."""
+def detect_device(backend: Optional[str] = None) -> tuple[str, str]:
+    """Detect available accelerator device with full Apple Silicon runtime disambiguation.
+
+    Args:
+        backend: Optional configured backend ('mlx', 'unsloth', 'transformers').
+                 When 'mlx' is specified or active, prioritizes Apple Silicon MLX
+                 runtime over PyTorch MPS.
+
+    Returns:
+        tuple[str, str]: (device_string, human_name)
+            device_string is one of: 'cuda', 'mps', 'mlx', 'cpu'
+            human_name is a descriptive string (e.g. 'NVIDIA A100-SXM4-80GB', 'Apple Silicon (Apple M2 Max)', 'CPU (no GPU detected)')
+    """
+    # 1. If MLX backend is explicitly requested or active in process, prioritize MLX
+    if backend == "mlx" or (backend is None and "mlx" in sys.modules):
+        try:
+            from soup_cli.utils.mlx import detect_mlx, is_apple_silicon, get_chip_info
+
+            if is_apple_silicon() and detect_mlx():
+                chip_name = get_chip_info().get("chip")
+                name = f"Apple Silicon ({chip_name})" if chip_name else "Apple Silicon (MLX)"
+                return "mlx", name
+        except (ImportError, OSError, ValueError):
+            pass
+
+    # 2. Probe PyTorch accelerators (CUDA -> MPS)
     try:
         import torch
 
@@ -104,24 +132,57 @@ def detect_device() -> tuple[str, str]:
             return "cuda", name
         if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
             return "mps", "Apple Silicon (MPS)"
-    except ImportError:
+    except (ImportError, OSError):
         pass
 
-    # Check for Apple Silicon MLX backend
+    # 3. Fallback: Opportunistic Apple Silicon MLX probe if torch is absent or non-accelerated
     try:
         from soup_cli.utils.mlx import detect_mlx, is_apple_silicon, get_chip_info
+
         if is_apple_silicon() and detect_mlx():
-            chip = get_chip_info().get("chip")
-            name = f"Apple Silicon ({chip})" if chip else "Apple Silicon (MLX)"
+            chip_name = get_chip_info().get("chip")
+            name = f"Apple Silicon ({chip_name})" if chip_name else "Apple Silicon (MLX)"
             return "mlx", name
-    except Exception:
+    except (ImportError, OSError, ValueError):
         pass
 
     return "cpu", "CPU (no GPU detected)"
 
 
-def get_gpu_info() -> dict:
-    """Get GPU memory info."""
+def get_gpu_info(backend: Optional[str] = None) -> dict:
+    """Get GPU memory and telemetry info.
+
+    Args:
+        backend: Optional configured backend ('mlx', 'unsloth', 'transformers').
+
+    Returns a dictionary containing:
+        - memory_total: Human-readable total memory string
+        - memory_total_bytes: Exact bytes (int)
+        - gpu_count: Number of accelerator devices (int)
+    """
+    # 1. If MLX backend is explicitly requested or active, query Apple Silicon unified memory
+    if backend == "mlx" or (backend is None and "mlx" in sys.modules):
+        try:
+            from soup_cli.utils.mlx import detect_mlx, is_apple_silicon, get_unified_memory_bytes
+
+            if is_apple_silicon() and detect_mlx():
+                mem = get_unified_memory_bytes()
+                if mem and mem > 0:
+                    mem_gb = mem / (1024**3)
+                    return {
+                        "memory_total": f"{mem_gb:.1f} GB (unified)",
+                        "memory_total_bytes": mem,
+                        "gpu_count": 1,
+                    }
+                return {
+                    "memory_total": "shared (Apple Silicon MLX)",
+                    "memory_total_bytes": 0,
+                    "gpu_count": 1,
+                }
+        except (ImportError, OSError, ValueError):
+            pass
+
+    # 2. Probe PyTorch GPU info
     try:
         import torch
 
@@ -134,21 +195,34 @@ def get_gpu_info() -> dict:
                 "gpu_count": torch.cuda.device_count(),
             }
         if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-            # MPS doesn't expose memory easily, estimate from system
+            try:
+                from soup_cli.utils.mlx import get_unified_memory_bytes
+
+                mem = get_unified_memory_bytes()
+                if mem and mem > 0:
+                    mem_gb = mem / (1024**3)
+                    return {
+                        "memory_total": f"{mem_gb:.1f} GB (unified)",
+                        "memory_total_bytes": mem,
+                        "gpu_count": 1,
+                    }
+            except Exception:
+                pass
             return {
                 "memory_total": "shared (Apple Silicon)",
                 "memory_total_bytes": 0,
                 "gpu_count": 1,
             }
-    except ImportError:
+    except (ImportError, OSError):
         pass
 
-    # Check for Apple Silicon MLX unified memory
+    # 3. Fallback: MLX unified memory check
     try:
         from soup_cli.utils.mlx import detect_mlx, is_apple_silicon, get_unified_memory_bytes
+
         if is_apple_silicon() and detect_mlx():
             mem = get_unified_memory_bytes()
-            if mem:
+            if mem and mem > 0:
                 mem_gb = mem / (1024**3)
                 return {
                     "memory_total": f"{mem_gb:.1f} GB (unified)",
@@ -160,7 +234,7 @@ def get_gpu_info() -> dict:
                 "memory_total_bytes": 0,
                 "gpu_count": 1,
             }
-    except Exception:
+    except (ImportError, OSError, ValueError):
         pass
 
     return {

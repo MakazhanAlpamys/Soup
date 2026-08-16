@@ -966,9 +966,9 @@ def train(
                 ).items():
                     os.environ.setdefault(key, val)
 
-    # Detect hardware
-    device, device_name = detect_device()
-    gpu_info = get_gpu_info()
+    # Detect hardware with backend awareness
+    device, device_name = detect_device(backend=cfg.backend)
+    gpu_info = get_gpu_info(backend=cfg.backend)
 
     # Auto-disable quantization on CPU (bitsandbytes doesn't support CPU)
     if device == "cpu" and cfg.training.quantization in ("4bit", "8bit"):
