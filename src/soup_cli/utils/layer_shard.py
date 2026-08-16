@@ -583,6 +583,14 @@ def shard_checkpoint(
         with safe_open(path, framework="pt") as handle:
             for source_key in handle.keys():
                 key = _canonical_stream_key(source_key)
+                prior = where.get(key)
+                if prior is not None and prior != (path, source_key):
+                    raise ValueError(
+                        f"checkpoint spells one streamed tensor twice: "
+                        f"{prior[1]!r} and {source_key!r} both canonicalise to "
+                        f"{key!r}. Refusing rather than silently keeping one by "
+                        f"safetensors key order."
+                    )
                 where[key] = (path, source_key)
                 if len(where) > _MAX_TOTAL_TENSORS:
                     raise ValueError(

@@ -90,10 +90,14 @@ SUPPORTED_STREAM_ARCHS = (
     "phi3",
 )
 
-_STREAM_ARCH_ALIASES = {
+# Aliases that reuse a validated decoder family but do not yet have their own
+# resident bit-exact control. Kept separate so the caveat is visible beside the
+# allowlist itself, not only in prose.
+_UNVALIDATED_STREAM_ARCH_ALIASES = {
     "qwen3_5_moe": "qwen3",
     "qwen3_5_moe_text": "qwen3",
 }
+_STREAM_ARCH_ALIASES = dict(_UNVALIDATED_STREAM_ARCH_ALIASES)
 
 #: The loss path's own arithmetic, in VRAM bytes per logit element. **Measured
 #: stage by stage (issue #327), not derived.** ``ForCausalLMLoss`` upcasts to
@@ -236,7 +240,13 @@ def stream_arch_of(config: Any) -> str:
     model_type = getattr(config, "model_type", None)
     text_config = getattr(config, "text_config", None)
     text_model_type = getattr(text_config, "model_type", None)
-    raw_family = text_model_type or model_type
+    raw_family = model_type
+    if isinstance(text_model_type, str):
+        alias = text_model_type.strip().lower()
+        if alias in _STREAM_ARCH_ALIASES:
+            raw_family = text_model_type
+        elif raw_family is None:
+            raw_family = text_model_type
     if not raw_family or not isinstance(raw_family, str):
         raise ValueError(
             "layer streaming needs config.model_type or "

@@ -122,12 +122,14 @@ class StreamingSetupMixin:
     #: Set by :meth:`_setup_streaming_transformers`; absent on a resident run.
     _stream_runtime = None
 
-    def _stream_shape_config(self, model_config):
+    @staticmethod
+    def _stream_shape_config(model_config):
         """Text sub-config for multimodal wrappers; plain config otherwise."""
         text_config = getattr(model_config, "text_config", None)
         return text_config if text_config is not None else model_config
 
-    def _stream_intermediate_size(self, model_config) -> int:
+    @staticmethod
+    def _stream_intermediate_size(model_config) -> int:
         """Activation width estimate, including Qwen3.5 MoE text configs."""
         direct = int(getattr(model_config, "intermediate_size", 0) or 0)
         if direct:
@@ -136,6 +138,33 @@ class StreamingSetupMixin:
         per_tok = int(getattr(model_config, "num_experts_per_tok", 0) or 0)
         shared = int(getattr(model_config, "shared_expert_intermediate_size", 0) or 0)
         return moe * max(per_tok, 1) + shared
+
+    @staticmethod
+    def _stream_total_experts(model_config) -> int:
+        """Expert instances per layer when the config describes an MoE model."""
+        shape_cfg = StreamingSetupMixin._stream_shape_config(model_config)
+        for cfg in (shape_cfg, model_config):
+            for key in (
+                "num_local_experts",
+                "num_experts",
+                "n_routed_experts",
+                "moe_num_experts",
+            ):
+                value = getattr(cfg, key, None)
+                if isinstance(value, (int, float)) and value > 1:
+                    return int(value)
+        return 0
+
+    @staticmethod
+    def _stream_layer_budget_bytes(layer_specs) -> int:
+        """Per-buffer bytes from the same union spec the runtime pool uses."""
+        from soup_cli.utils.layer_stream import dtype_bytes
+        from soup_cli.utils.layer_stream_runtime import RamSource
+
+        merged = RamSource.merge_layer_specs(layer_specs)
+        return sum(
+            math.prod(shape) * dtype_bytes(stored) for shape, stored in merged.values()
+        )
 
     @contextlib.contextmanager
     def _training_context(self, *contexts):
@@ -325,7 +354,7 @@ class StreamingSetupMixin:
             sum(math.prod(shape) * dtype_bytes(stored) for shape, stored in per_layer.values())
             for per_layer in layer_specs
         ]
-        layer_bytes = max(layer_byte_sizes, default=0)
+        layer_bytes = self._stream_layer_budget_bytes(layer_specs)
         layer_store_bytes = sum(layer_byte_sizes)
         embed_bytes = extras_resident_bytes(shard_dir)
 
@@ -513,11 +542,22 @@ class StreamingSetupMixin:
         adapter term is ~0.5% of a streaming step's peak, so precision here buys
         nothing while under-counting would eat into the safety margin.
         """
-        shape_cfg = self._stream_shape_config(model_config)
+        shape_cfg = StreamingSetupMixin._stream_shape_config(model_config)
         hidden = int(getattr(shape_cfg, "hidden_size", 0) or 0)
         layers = int(getattr(shape_cfg, "num_hidden_layers", 0) or 0)
         targets = tcfg.lora.target_modules
-        n_targets = len(targets) if isinstance(targets, (list, tuple)) else 4
+        experts = StreamingSetupMixin._stream_total_experts(model_config)
+        if isinstance(targets, (list, tuple)):
+            target_names = [str(name) for name in targets]
+            n_targets = len(target_names)
+            if getattr(tcfg, "moe_lora", False) and experts > 1:
+                expert_suffixes = {"gate_proj", "up_proj", "down_proj", "w1", "w2", "w3"}
+                expert_patterns = {name for name in target_names if name in expert_suffixes}
+                n_targets += (experts - 1) * len(expert_patterns)
+        elif getattr(tcfg, "moe_lora", False) and experts > 1:
+            n_targets = 4 + 3 * experts
+        else:
+            n_targets = 4
         return layers * n_targets * 2 * tcfg.lora.r * hidden
 
     def _stream_budget_lines(
