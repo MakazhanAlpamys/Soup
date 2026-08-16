@@ -127,14 +127,21 @@ reproducing 70+ versions of notes.
   trips it.
 - **`soup env check` now flags an installed package that violates Soup's own
   declared version bound (#368).** `pip install "soup-cli[serve-fast]"` (vllm)
-  into a training venv silently downgrades `torch` and pushes `transformers`
-  past the `<5.0.0` cap declared in `[train]`, producing an environment Soup's
-  own metadata says is unsupported with no warning at any point. `env check`
-  now audits the installed versions against the bounds read from package
-  metadata — not a hardcoded copy, since a second copy of the cap is exactly the
-  drift this catches — and exits 3 when one is violated, independent of any lock
-  file. `docs/serving-and-export.md` states the separate-environment guidance
-  for `[serve-fast]`.
+  into a training venv silently pushes `transformers` past the `<5.0.0` cap Soup
+  declares, producing an environment Soup's own metadata says is unsupported with
+  no warning at any point. `env check` audits installed versions against the
+  bounds read from package metadata — not a hardcoded copy, since a second copy
+  of the cap is exactly the drift this catches — and exits 3 when one is violated,
+  independent of any lock file. Only the CORE bounds (those that apply to every
+  install) are enforced: an `extra == "X"` requirement is Soup's bound only when
+  `[X]` was opted into, which the running environment cannot confirm, so its
+  marker is evaluated and it is skipped rather than raised as a false positive,
+  and a package is counted once even when its bound is restated under several
+  extras. The bounds audit no longer short-circuits the lock diagnostic (both
+  print). `packaging` is a declared dependency now — the audit degraded to a
+  silent "clean" without it, the wrong direction for a checker.
+  `docs/serving-and-export.md` states the separate-environment guidance for
+  `[serve-fast]`.
 
 - **`kl_control` rewrote the trainer's β/kl_coef on every step, including a `hold`, so a
   non-acting run was numerically identical to `log_only` (#371).** `_run_bang_bang` called

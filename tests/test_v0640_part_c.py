@@ -731,29 +731,27 @@ def test_cli_env_lock_null_byte_output_rejected(tmp_path, monkeypatch):
 
 # The exact strings importlib.metadata.requires("soup-cli") returns for the
 # [train] extra — the transformers cap is the one #368 was reported against.
-_TRAIN_REQS = (
-    'torch>=2.0.0; extra == "train"',
-    'transformers>=4.36.0,<5.0.0; extra == "train"',
-    'peft>=0.7.0; extra == "train"',
-)
+# A CORE requirement (no extra marker): the bound that applies to EVERY install
+# and the one a later `pip install` actually violates. #368 review finding 2:
+# only these are enforced — an extra-gated bound is Soup's declared bound only
+# when the user opted into that extra, which the running environment cannot
+# confirm, so it must not raise a false positive.
+_CORE_TRANSFORMERS = ("transformers>=4.36.0,<5.0.0",)
 
 
-def test_check_declared_bounds_flags_package_over_cap():
+def test_check_declared_bounds_flags_core_bound_over_cap():
     from soup_cli.utils.env_lock import check_declared_bounds
 
-    # `pip install vllm` moved transformers to 5.14.1, past the <5.0.0 cap.
-    report = check_declared_bounds(
-        _TRAIN_REQS, {"transformers": "5.14.1", "torch": "2.11.0"}
-    )
+    # `pip install vllm` moved transformers to 5.14.1, past the core <5.0.0 cap.
+    report = check_declared_bounds(_CORE_TRANSFORMERS, {"transformers": "5.14.1"})
     assert not report.ok
     assert report.violation_count == 1
     (v,) = report.violations
     assert v.name == "transformers"
     assert v.installed == "5.14.1"
-    # The bound is quoted from the requirement string, not a second hardcoded
-    # copy of `<5.0.0` — that second copy is exactly the drift this catches.
+    # The bound is quoted from the requirement string, not a hardcoded copy of
+    # `<5.0.0` — that second copy is exactly the drift this catches.
     assert "<5.0.0" in v.specifier
-    assert v.extra == "train"
 
 
 def test_check_declared_bounds_control_compliant_passes():
@@ -761,20 +759,17 @@ def test_check_declared_bounds_control_compliant_passes():
 
     # Control: an in-bounds environment passes, so the check cannot be
     # satisfied by always failing.
-    report = check_declared_bounds(
-        _TRAIN_REQS, {"transformers": "4.57.6", "torch": "2.13.0", "peft": "0.7.0"}
-    )
+    report = check_declared_bounds(_CORE_TRANSFORMERS, {"transformers": "4.57.6"})
     assert report.ok
-    assert report.violation_count == 0
     assert report.violations == ()
 
 
-def test_check_declared_bounds_skips_uninstalled_extra():
+def test_check_declared_bounds_skips_uninstalled_package():
     from soup_cli.utils.env_lock import check_declared_bounds
 
-    # A [train] package you never installed is not drift — only installed
-    # packages that violate a bound are reported.
-    report = check_declared_bounds(_TRAIN_REQS, {"typer": "0.19.0"})
+    # A package you never installed is not drift — only installed packages that
+    # violate a bound are reported.
+    report = check_declared_bounds(_CORE_TRANSFORMERS, {"typer": "0.19.0"})
     assert report.ok
 
 
@@ -784,8 +779,8 @@ def test_check_declared_bounds_reads_bound_from_given_requirements():
     # Proof the bound is data-driven: change ONLY the requirement string and
     # the same installed version flips from compliant to violating.
     installed = {"widget": "2.0.0"}
-    assert check_declared_bounds(('widget<3.0.0; extra == "x"',), installed).ok
-    bad = check_declared_bounds(('widget<2.0.0; extra == "x"',), installed)
+    assert check_declared_bounds(("widget<3.0.0",), installed).ok
+    bad = check_declared_bounds(("widget<2.0.0",), installed)
     assert not bad.ok
     assert bad.violations[0].name == "widget"
 
@@ -798,14 +793,61 @@ def test_check_declared_bounds_ignores_unparseable_requirement():
     assert report.ok
 
 
-def test_current_declared_bounds_check_returns_bounds_check():
+def test_extra_gated_bound_not_opted_into_is_not_flagged():
+    # #368 review finding 2: a package required only under `extra == "wandb"`
+    # that the running environment never opted into is NOT a violation, even when
+    # it is installed and out of range — the marker is EVALUATED, not just named.
+    from soup_cli.utils.env_lock import check_declared_bounds
+
+    reqs = ('wandb>=0.15.0,<0.18.0; extra == "wandb"',)
+    report = check_declared_bounds(reqs, {"wandb": "0.19.1"})
+    assert report.ok, report.violations
+
+
+def test_core_bound_counted_once_despite_extra_duplicates():
+    # #368 review finding 4: metadata lists a core package under the base deps
+    # AND under several extras. The violation is counted ONCE (the core bound);
+    # the extra-gated copies are evaluated away, not summed into the count.
+    from soup_cli.utils.env_lock import check_declared_bounds
+
+    reqs = (
+        "transformers>=4.36.0,<5.0.0",
+        'transformers>=4.36.0,<5.0.0; extra == "all"',
+        'transformers>=4.36.0,<5.0.0; extra == "dev"',
+        'transformers>=4.36.0,<5.0.0; extra == "train"',
+    )
+    report = check_declared_bounds(reqs, {"transformers": "5.14.1"})
+    assert report.violation_count == 1
+    assert report.violations[0].name == "transformers"
+
+
+def test_current_declared_bounds_check_returns_bounds_check_for_absent_dist():
     from soup_cli.utils.env_lock import BoundsCheck, current_declared_bounds_check
 
-    # Reading the real distribution metadata never raises; an uninstalled or
-    # packaging-less environment degrades to a clean report.
+    # An uninstalled or packaging-less environment degrades to a clean report.
     report = current_declared_bounds_check("this-distribution-does-not-exist")
     assert isinstance(report, BoundsCheck)
     assert report.ok
+
+
+def test_current_declared_bounds_check_real_path_detects_violation(monkeypatch):
+    # #368 review finding 1: exercise the REAL detection path end to end —
+    # requires() → installed versions → check. Making the function a no-op, or
+    # dropping the version lookup, fails this.
+    import importlib.metadata as md
+
+    from soup_cli.utils import env_lock
+
+    monkeypatch.setattr(md, "requires", lambda dist: ["transformers>=4.36.0,<5.0.0"])
+    monkeypatch.setattr(
+        env_lock,
+        "_detect_package_version",
+        lambda name: "5.14.1" if name == "transformers" else None,
+    )
+    report = env_lock.current_declared_bounds_check("soup-cli")
+    assert not report.ok
+    assert report.violation_count == 1
+    assert report.violations[0].name == "transformers"
 
 
 def test_cli_env_check_declared_bound_violation_exits_3(tmp_path, monkeypatch):
@@ -818,15 +860,17 @@ def test_cli_env_check_declared_bound_violation_exits_3(tmp_path, monkeypatch):
         name="transformers",
         installed="5.14.1",
         specifier=">=4.36.0,<5.0.0",
-        extra="train",
+        extra=None,
     )
     monkeypatch.setattr(
         env_cmd,
         "current_declared_bounds_check",
         lambda: BoundsCheck(ok=False, violation_count=1, violations=(violation,)),
     )
-    # No lock file present, yet the declared-bound violation is still caught
-    # (the vllm-downgrade scenario: the user never ran `soup env lock`).
+    # No lock file present: the bound violation is caught AND the "no lock file"
+    # diagnostic still prints — neither short-circuits the other (finding 5).
     result = runner.invoke(app, ["env", "check"])
     assert result.exit_code == 3, result.output
+    assert "declared bounds" in result.output
+    assert "lock" in result.output.lower()
     assert "transformers" in result.output

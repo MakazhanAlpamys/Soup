@@ -34,7 +34,6 @@ import hashlib
 import json
 import os
 import platform as _platform
-import re
 import sys
 from dataclasses import dataclass
 from typing import Iterable, Mapping, Optional, Tuple
@@ -161,9 +160,6 @@ class AbiCheck:
 
 # Distribution whose declared bounds `check_declared_bounds` audits — Soup's own.
 _SELF_DIST = "soup-cli"
-# Matches the `extra == "name"` marker importlib.metadata attaches to an
-# optional-dependency requirement, so a violation can name the extra it came from.
-_EXTRA_MARKER_RE = re.compile(r'extra\s*==\s*["\']([A-Za-z0-9._-]+)["\']')
 
 
 @dataclass(frozen=True)
@@ -227,6 +223,7 @@ def check_declared_bounds(
     # (a core dependency), so it is present wherever Soup runs. If it somehow is
     # not, the audit degrades to "clean" rather than breaking `env check`.
     try:
+        from packaging.markers import UndefinedEnvironmentName
         from packaging.requirements import InvalidRequirement, Requirement
         from packaging.utils import canonicalize_name
         from packaging.version import InvalidVersion
@@ -236,6 +233,7 @@ def check_declared_bounds(
     installed_by_key = {canonicalize_name(k): v for k, v in installed.items()}
 
     violations: list[BoundViolation] = []
+    seen: set[str] = set()
     for raw in requirements:
         try:
             req = Requirement(raw)
@@ -243,7 +241,20 @@ def check_declared_bounds(
             continue
         if not req.specifier:
             continue
-        have = installed_by_key.get(canonicalize_name(req.name))
+        # #368 review — EVALUATE the marker, don't just name it. A requirement
+        # gated behind `extra == "X"` is only Soup's declared bound when the user
+        # opted into `soup-cli[X]`; evaluating in the base environment (no extra
+        # active) deselects it, so a package installed for other reasons (e.g.
+        # wandb) is not a false-positive violation, and the same core package
+        # re-listed under several extras collapses to its one un-gated bound.
+        if req.marker is not None:
+            try:
+                if not req.marker.evaluate({"extra": ""}):
+                    continue
+            except UndefinedEnvironmentName:
+                continue
+        key = canonicalize_name(req.name)
+        have = installed_by_key.get(key)
         if have is None:
             continue
         try:
@@ -252,13 +263,17 @@ def check_declared_bounds(
             continue
         if satisfied:
             continue
-        extra_match = _EXTRA_MARKER_RE.search(str(req.marker)) if req.marker else None
+        # Canonical-name dedup: count each violating package once even if its
+        # (un-gated) bound is stated more than once in metadata (#368 review).
+        if key in seen:
+            continue
+        seen.add(key)
         violations.append(
             BoundViolation(
                 name=req.name,
                 installed=have,
                 specifier=str(req.specifier),
-                extra=extra_match.group(1) if extra_match else None,
+                extra=None,
             )
         )
 
@@ -276,6 +291,11 @@ def current_declared_bounds_check(dist_name: str = _SELF_DIST) -> BoundsCheck:
     versions via ``importlib.metadata``. An absent distribution (e.g. running
     from source without an install) yields a clean report — there is no
     declared metadata to audit against.
+
+    The bounds come from the *installed* metadata, which on an editable checkout
+    can lag the working tree (a `pip install -e .` snapshot). A cap you just
+    tightened in ``pyproject.toml`` is only enforced here after a reinstall —
+    #368 review.
     """
     try:
         from importlib.metadata import PackageNotFoundError, requires

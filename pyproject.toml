@@ -38,6 +38,11 @@ dependencies = [
     "pyyaml>=6.0",
     "huggingface-hub>=0.16.0",
     "plotext>=5.2.0",
+    # `env check` reads declared bounds via packaging (Requirement/marker/version).
+    # It ships with pip and is pulled in transitively, but `env check` degrades to
+    # a silent "clean" without it — the wrong direction for a checker — so it is
+    # declared explicitly (#368 review).
+    "packaging>=21.0",
 ]
 
 [project.optional-dependencies]
