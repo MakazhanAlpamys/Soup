@@ -107,6 +107,16 @@ def detect_device() -> tuple[str, str]:
     except ImportError:
         pass
 
+    # Check for Apple Silicon MLX backend
+    try:
+        from soup_cli.utils.mlx import detect_mlx, is_apple_silicon, get_chip_info
+        if is_apple_silicon() and detect_mlx():
+            chip = get_chip_info().get("chip")
+            name = f"Apple Silicon ({chip})" if chip else "Apple Silicon (MLX)"
+            return "mlx", name
+    except Exception:
+        pass
+
     return "cpu", "CPU (no GPU detected)"
 
 
@@ -131,6 +141,26 @@ def get_gpu_info() -> dict:
                 "gpu_count": 1,
             }
     except ImportError:
+        pass
+
+    # Check for Apple Silicon MLX unified memory
+    try:
+        from soup_cli.utils.mlx import detect_mlx, is_apple_silicon, get_unified_memory_bytes
+        if is_apple_silicon() and detect_mlx():
+            mem = get_unified_memory_bytes()
+            if mem:
+                mem_gb = mem / (1024**3)
+                return {
+                    "memory_total": f"{mem_gb:.1f} GB (unified)",
+                    "memory_total_bytes": mem,
+                    "gpu_count": 1,
+                }
+            return {
+                "memory_total": "shared (Apple Silicon MLX)",
+                "memory_total_bytes": 0,
+                "gpu_count": 1,
+            }
+    except Exception:
         pass
 
     return {
