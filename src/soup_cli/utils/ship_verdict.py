@@ -160,10 +160,19 @@ class NoiseFloor:
     ``max - min`` of that axis's score across the repeats. A tuple of pairs
     rather than a dict so the dataclass stays genuinely immutable, mirroring
     ``ShipVerdict.benchmark_deltas``.
+
+    ``judge_inclusive`` marks the leg-1 task axis (``TASK_AXIS``) floor as
+    combined decode + judge noise rather than decode-only. It is set for
+    ``--task-mode judge_score`` / ``pairwise``, where the repeats fold the
+    judge's own sampling noise into the spread (#403). The leg-2 axes are always
+    decode-only, so this flag scopes to the one axis that can carry judge noise;
+    a reader must not mistake a judge-inclusive floor for a decode-only one.
+    Defaults ``False`` so the metric-mode path stays byte-identical.
     """
 
     runs: int
     floors: Tuple[Tuple[str, float], ...]
+    judge_inclusive: bool = False
 
     def of(self, axis: str) -> float:
         """This axis's measured floor, or ``0.0`` if it was never measured.
@@ -234,13 +243,18 @@ def _is_regressed(base: float, tuned: float, threshold: float) -> bool:
 # Builders (pure)
 # ---------------------------------------------------------------------------
 
-def compute_noise_floor(runs: Sequence[Mapping[str, object]]) -> NoiseFloor:
+def compute_noise_floor(
+    runs: Sequence[Mapping[str, object]], *, judge_inclusive: bool = False
+) -> NoiseFloor:
     """Measure the instrument's resolution from repeated BASE-model runs.
 
     Each element of ``runs`` is one ``{axis: score}`` map from an independent
     repeat of the same unchanged model. The floor of an axis is the spread
     (``max - min``) across those repeats — anything smaller than that is
     something this instrument cannot distinguish from itself.
+
+    ``judge_inclusive`` stamps the result as combined decode + judge noise (the
+    leg-1 task axis was measured through a judge); see ``NoiseFloor``.
 
     Refuses fewer than two runs (one sample has no spread, and reporting 0.0
     would present an unmeasured floor as a measured one) and refuses a ragged
@@ -272,7 +286,11 @@ def compute_noise_floor(runs: Sequence[Mapping[str, object]]) -> NoiseFloor:
             for run in runs_list
         ]
         floors.append((str(axis), round(max(values) - min(values), _DELTA_ROUND)))
-    return NoiseFloor(runs=len(runs_list), floors=tuple(floors))
+    return NoiseFloor(
+        runs=len(runs_list),
+        floors=tuple(floors),
+        judge_inclusive=judge_inclusive,
+    )
 
 
 def _floor_of(noise_floor: Optional[NoiseFloor], axis: str) -> float:
@@ -612,7 +630,17 @@ def _render_noise_floor(floor: NoiseFloor) -> Table:
     table.add_column("Floor", justify="right")
     if floor.floors:
         for name, value in floor.floors:
-            label = "leg 1 task" if name == TASK_AXIS else name
+            if name == TASK_AXIS:
+                # A judge-inclusive floor mixes decode noise with the judge's
+                # own sampling noise; say so, so it is never read as the
+                # decode-only number the leg-2 axes report (#403).
+                label = (
+                    "leg 1 task (decode + judge)"
+                    if floor.judge_inclusive
+                    else "leg 1 task"
+                )
+            else:
+                label = name
             table.add_row(escape(for_terminal(label)), f"{value:.4f}")
     else:
         table.add_row("[dim](none measured)[/]", "-")
@@ -694,10 +722,16 @@ def verdict_to_evidence(
     # could return the opposite decision. #312's property is that the output is
     # replayable as input, so the floor is part of the evidence, not decoration.
     if verdict.noise_floor is not None:
-        evidence["noise_floor"] = {
+        floor_block: Dict[str, object] = {
             "runs": verdict.noise_floor.runs,
             "floors": verdict.noise_floor.as_dict(),
         }
+        # Emitted only when True so a decode-only floor round-trips byte-for-byte
+        # (every pre-#403 evidence file). A judge-inclusive floor must carry the
+        # marker or the reader would replay it as decode-only.
+        if verdict.noise_floor.judge_inclusive:
+            floor_block["judge_inclusive"] = True
+        evidence["noise_floor"] = floor_block
     if provenance is not None:
         if not isinstance(provenance, Mapping):
             raise TypeError("provenance must be a mapping")
@@ -753,7 +787,12 @@ def noise_floor_from_evidence(payload: object) -> Optional[NoiseFloor]:
         if not (0.0 <= value <= 1.0):
             raise ValueError("a noise floor must be in [0.0, 1.0]")
         floors.append((name, value))
-    return NoiseFloor(runs=runs, floors=tuple(floors))
+    judge_inclusive = payload.get("judge_inclusive", False)
+    if not isinstance(judge_inclusive, bool):
+        raise ValueError("evidence.noise_floor.judge_inclusive must be a boolean")
+    return NoiseFloor(
+        runs=runs, floors=tuple(floors), judge_inclusive=judge_inclusive
+    )
 
 
 def floor_exceeds_threshold(
@@ -806,6 +845,9 @@ def verdict_to_dict(verdict: ShipVerdict) -> Dict[str, object]:
             else {
                 "runs": verdict.noise_floor.runs,
                 "floors": verdict.noise_floor.as_dict(),
+                # Always present so a programmatic reader can tell a judge-
+                # inclusive floor from a decode-only one without inference (#403).
+                "judge_inclusive": verdict.noise_floor.judge_inclusive,
             }
         ),
     }

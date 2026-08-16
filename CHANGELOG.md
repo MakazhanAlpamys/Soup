@@ -14,6 +14,18 @@ reproducing 70+ versions of notes.
 
 ### Fixed
 
+- **`soup ship --noise-floor` now measures the leg-1 task axis in the judge modes,
+  so a judge-scored win smaller than the judge's own noise no longer counts (#403).**
+  The floor was measured in `--task-mode metric` only; `judge_score` / `pairwise`
+  printed a warning and left leg 1 at a 0.0 floor, i.e. the exact blindness the flag
+  exists to remove. It is now measured: `judge_score` scores the base side N times
+  through the judge, and `pairwise` judges the base model against itself (expected
+  win-rate 0.5, so the spread is directly measured, not inferred). Because those
+  repeats fold in the judge's own sampling noise, the floor is labelled
+  `decode + judge` on the panel and stamped `judge_inclusive` in the evidence/JSON
+  block so it is never read as a decode-only number. `--help` states the extra
+  judge-API cost.
+
 - **`kl_control` rewrote the trainer's β/kl_coef on every step, including a `hold`, so a
   non-acting run was numerically identical to `log_only` (#371).** `_run_bang_bang` called
   `_apply_coefficient` unconditionally; on a `hold` the controller writes back the value

@@ -428,11 +428,15 @@ actually measurable; a floor *below* it must never tighten the gate behind your 
 exceeds `--forgetting-threshold`, the run says so by name — that axis is now gated looser than you
 asked.
 
-**Scope and cost.** The leg-1 floor is measured in `--task-mode metric` **only**: in the judge modes
-a repeat would fold the judge's own sampling noise into a number presented as decode noise, so the
-run warns and leaves leg 1 at a 0.0 floor instead. Costs N extra base passes. Rejected with
-`--evidence` (there is nothing to re-run) — though a floor *recorded in* an evidence file is still
-applied.
+**Scope and cost.** The leg-1 floor is measured in **every** `--task-mode`. In `metric` it re-runs
+the offline scorer (decode-only noise). In `judge_score` the base side is scored N times through the
+judge; in `pairwise` the base model is judged against **itself** (expected win-rate 0.5 by
+construction, so the observed spread is a directly measured quantity rather than an inference). The
+two judge modes fold the judge's own sampling noise into the number, so that floor is labelled
+**decode + judge** on the panel and stamped `judge_inclusive` in the evidence/JSON — a reader must
+not mistake it for the leg-2 axes' decode-only floors. Cost: N extra base passes, and in the judge
+modes N × the judge API calls. Rejected with `--evidence` (there is nothing to re-run) — though a
+floor *recorded in* an evidence file is still applied.
 
 **Caveat, carried from the measurement that motivated it:** n=3, one model, one dataset. The floor
 **sizes** the effect; it does **not** calibrate a threshold, and nothing establishes what N is

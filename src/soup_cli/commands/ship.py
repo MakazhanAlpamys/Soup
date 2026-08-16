@@ -482,12 +482,16 @@ def _leg1_metric(
     return build_task_win("metric", base_acc, tuned_acc)
 
 
-def _leg1_judge(
-    base_gen: Callable[[str], str],
-    tuned_gen: Callable[[str], str],
-    task_eval: str,
-    judge_model: str,
-) -> TaskWin:
+def _build_judge_scorer(
+    task_eval: str, judge_model: str
+) -> Callable[[Callable[[str], str]], float]:
+    """A ``score(gen) -> [0, 1]`` scorer for one side of a judge_score leg.
+
+    Lifted out of ``_leg1_judge`` (was an inner closure) so the base side can be
+    scored on its own N times for the noise floor without also scoring the tuned
+    side (#403). The tasks are loaded and the evaluator built once, then reused
+    across every call.
+    """
     from soup_cli.eval.custom import load_eval_tasks
     from soup_cli.eval.gate import _parse_judge_url
     from soup_cli.eval.judge import JudgeEvaluator
@@ -524,7 +528,47 @@ def _leg1_judge(
         )
         return max(0.0, min(1.0, (overall - scale_min) / span))
 
-    return build_task_win("judge_score", _score(base_gen), _score(tuned_gen))
+    return _score
+
+
+def _leg1_judge(
+    base_gen: Callable[[str], str],
+    tuned_gen: Callable[[str], str],
+    task_eval: str,
+    judge_model: str,
+) -> TaskWin:
+    score = _build_judge_scorer(task_eval, judge_model)
+    return build_task_win("judge_score", score(base_gen), score(tuned_gen))
+
+
+def _build_pairwise_scorer(
+    task_eval: str, judge_model: str
+) -> Callable[[Callable[[str], str], Callable[[str], str]], float]:
+    """A ``winrate(gen_a, gen_b) -> [0, 1]`` scorer for a pairwise leg (#284).
+
+    Factored out of ``_leg1_pairwise`` so the noise floor can measure the base
+    model judged against ITSELF (``winrate(base_gen, base_gen)``), whose expected
+    value is 0.5 by construction — its spread over repeats is the combined
+    decode + judge noise, directly measured rather than inferred (#403). Tasks
+    and evaluator are built once and reused.
+    """
+    from soup_cli.eval.custom import load_eval_tasks
+    from soup_cli.eval.gate import _parse_judge_url
+    from soup_cli.eval.judge import JudgeEvaluator, pairwise_winrate
+
+    tasks = load_eval_tasks(task_eval)
+    if not tasks:
+        raise ValueError(f"task-eval file {task_eval!r} has no tasks")
+    provider, model, api_base = _parse_judge_url(judge_model)
+    evaluator = JudgeEvaluator(provider=provider, model=model, api_base=api_base)
+
+    def _winrate(
+        gen_a: Callable[[str], str], gen_b: Callable[[str], str]
+    ) -> float:
+        pairs = [(t.prompt, gen_a(t.prompt), gen_b(t.prompt)) for t in tasks]
+        return pairwise_winrate(pairs, evaluator)
+
+    return _winrate
 
 
 def _leg1_pairwise(
@@ -539,18 +583,8 @@ def _leg1_pairwise(
     which is better (swap-debiased). The tuned win-rate becomes leg 1, framed as
     ``TaskWin(base=0.5 coin-flip, tuned=win-rate)`` so ``won <=> win-rate > 0.5``.
     """
-    from soup_cli.eval.custom import load_eval_tasks
-    from soup_cli.eval.gate import _parse_judge_url
-    from soup_cli.eval.judge import JudgeEvaluator, pairwise_winrate
-
-    tasks = load_eval_tasks(task_eval)
-    if not tasks:
-        raise ValueError(f"task-eval file {task_eval!r} has no tasks")
-    provider, model, api_base = _parse_judge_url(judge_model)
-    evaluator = JudgeEvaluator(provider=provider, model=model, api_base=api_base)
-    pairs = [(t.prompt, base_gen(t.prompt), tuned_gen(t.prompt)) for t in tasks]
-    winrate = pairwise_winrate(pairs, evaluator)
-    return build_task_win("pairwise", 0.5, winrate)
+    winrate = _build_pairwise_scorer(task_eval, judge_model)
+    return build_task_win("pairwise", 0.5, winrate(base_gen, tuned_gen))
 
 
 def _extract_lm_score(bench_data: Mapping[str, object]) -> Optional[float]:
@@ -698,6 +732,57 @@ def _leg2_scores(
     return base_map, tuned_map
 
 
+def _build_task_floor_scorer(
+    task_mode: str,
+    base_gen: Callable[[str], str],
+    *,
+    base_id: str,
+    task_eval: str,
+    judge_model: Optional[str],
+) -> Callable[[], float]:
+    """A ``() -> float`` closure scoring the BASE side's leg-1 task axis once.
+
+    Built once (tasks / evaluator resolved a single time) and called per
+    noise-floor repeat so the spread reflects run-to-run variance, not setup.
+    The judge modes require a judge model; its presence is validated upstream in
+    ``_verdict_live``, so a missing one here is a programming error.
+    """
+    if task_mode == "metric":
+        from soup_cli.eval.custom import load_eval_tasks, run_eval
+
+        tasks = load_eval_tasks(task_eval)
+        if not tasks:
+            raise ValueError(f"task-eval file {task_eval!r} has no tasks")
+
+        def _metric_score() -> float:
+            return run_eval(base_id, tasks, generate_fn=base_gen).accuracy
+
+        return _metric_score
+
+    if not judge_model:
+        raise ValueError(f"--task-mode {task_mode} needs a judge model")
+
+    if task_mode == "judge_score":
+        judge_scorer = _build_judge_scorer(task_eval, judge_model)
+
+        def _judge_score() -> float:
+            return judge_scorer(base_gen)
+
+        return _judge_score
+
+    if task_mode == "pairwise":
+        pairwise_scorer = _build_pairwise_scorer(task_eval, judge_model)
+
+        def _pairwise_score() -> float:
+            # The base judged against itself: expected 0.5 by construction, so
+            # the spread over repeats is the combined decode + judge noise (#403).
+            return pairwise_scorer(base_gen, base_gen)
+
+        return _pairwise_score
+
+    raise ValueError(f"unknown task mode {task_mode!r}")
+
+
 def _measure_noise_floor(
     runs: int,
     suite_names: List[str],
@@ -706,6 +791,7 @@ def _measure_noise_floor(
     base_id: str,
     task_mode: str,
     task_eval: str,
+    judge_model: Optional[str],
     forgetting_threshold: float,
 ) -> NoiseFloor:
     """Re-run the BASE model ``runs`` times and return the measured spread.
@@ -716,12 +802,19 @@ def _measure_noise_floor(
     in that session sat inside the floor, so the gate was calling differences
     it could not resolve.
 
-    Coverage is deliberately partial and says so. Leg-2 axes are always
-    measured. The leg-1 task axis is measured **only in ``metric`` mode** — the
-    one leg-1 path that is offline and judge-free. In ``judge_score`` /
-    ``pairwise`` the repeats would fold the judge's own sampling noise into a
-    number presented as decode noise, which is publishing an inference as a
-    mechanism; the caller is warned instead and leg 1 keeps a 0.0 floor.
+    Leg-2 axes are always measured (decode-only). The leg-1 task axis is now
+    measured in every mode (#403):
+
+    - ``metric``: the offline scorer, re-run — decode-only noise.
+    - ``judge_score``: the base side scored N times through the judge.
+    - ``pairwise``: the base model judged against ITSELF, whose expected
+      win-rate is 0.5 by construction, so the spread is a directly measured
+      quantity, not an inference.
+
+    In the two judge modes the spread folds the judge's own sampling noise into
+    the number, so the returned floor is stamped ``judge_inclusive`` and never
+    presented as decode-only. That is why a judge-scored win smaller than the
+    judge's own noise no longer counts.
 
     A ``--baseline`` file is deliberately NOT consulted here even though the
     verdict path uses one: a stored number is not a repeat of this instrument,
@@ -736,14 +829,15 @@ def _measure_noise_floor(
             "[yellow]Warning:[/] --noise-floor measures bundled suites only; "
             f"no floor for {escape(', '.join(sorted(skipped)))}"
         )
-    measure_task = task_mode == "metric"
-    if not measure_task:
-        console.print(
-            f"[yellow]Warning:[/] --noise-floor does not measure the leg-1 task "
-            f"axis in --task-mode {escape(task_mode)} (a judge-backed repeat "
-            "would report the judge's sampling noise as decode noise); leg 1 "
-            "keeps a 0.0 floor."
-        )
+
+    judge_inclusive = task_mode in ("judge_score", "pairwise")
+    task_score = _build_task_floor_scorer(
+        task_mode,
+        base_gen,
+        base_id=base_id,
+        task_eval=task_eval,
+        judge_model=judge_model,
+    )
 
     samples: List[Dict[str, float]] = []
     for index in range(runs):
@@ -751,18 +845,10 @@ def _measure_noise_floor(
         run: Dict[str, float] = {}
         for name in bundled:
             run[name] = score_bundled_suite(name, base_gen)
-        if measure_task:
-            from soup_cli.eval.custom import load_eval_tasks, run_eval
-
-            tasks = load_eval_tasks(task_eval)
-            if not tasks:
-                raise ValueError(f"task-eval file {task_eval!r} has no tasks")
-            run[TASK_AXIS] = run_eval(
-                base_id, tasks, generate_fn=base_gen
-            ).accuracy
+        run[TASK_AXIS] = task_score()
         samples.append(run)
 
-    floor = compute_noise_floor(samples)
+    floor = compute_noise_floor(samples, judge_inclusive=judge_inclusive)
     if floor.floors and all(value == 0.0 for _name, value in floor.floors):
         console.print(
             "[dim]noise floor: every axis repeated exactly — this instrument "
@@ -866,6 +952,19 @@ def _verdict_live(
     tuned_id = tuned if tuned else base
     try:
         base_gen, tuned_gen = _resolve_generators(base, tuned, adapter, device)
+        # Judge modes need a judge model. Validate it BEFORE measuring the
+        # noise floor, which now scores the leg-1 task axis through the judge as
+        # well (#403) — a missing / malformed judge is a usage error (exit 2),
+        # not a runtime one discovered mid-measurement.
+        if task_mode == "judge_score":
+            if not judge_model:
+                _fail("--task-mode judge_score needs --judge-model <url>", _EXIT_USAGE)
+            _validate_judge_model_url(judge_model)
+        elif task_mode == "pairwise":
+            if not judge_model:
+                _fail("--task-mode pairwise needs --judge-model <url>", _EXIT_USAGE)
+            _validate_judge_model_url(judge_model)
+
         measured_floor: Optional[NoiseFloor] = None
         if noise_floor_runs is not None:
             measured_floor = _measure_noise_floor(
@@ -875,17 +974,12 @@ def _verdict_live(
                 base_id=base,
                 task_mode=task_mode,
                 task_eval=task_eval,
+                judge_model=judge_model,
                 forgetting_threshold=forgetting_threshold,
             )
         if task_mode == "judge_score":
-            if not judge_model:
-                _fail("--task-mode judge_score needs --judge-model <url>", _EXIT_USAGE)
-            _validate_judge_model_url(judge_model)
             task_win = _leg1_judge(base_gen, tuned_gen, task_eval, judge_model)
         elif task_mode == "pairwise":
-            if not judge_model:
-                _fail("--task-mode pairwise needs --judge-model <url>", _EXIT_USAGE)
-            _validate_judge_model_url(judge_model)
             task_win = _leg1_pairwise(base_gen, tuned_gen, task_eval, judge_model)
         else:
             task_win = _leg1_metric(base_gen, tuned_gen, base, tuned_id, task_eval)
@@ -1019,7 +1113,9 @@ def ship(
             f"{MAX_NOISE_FLOOR_RUNS}) to measure what this instrument can "
             "resolve, print it beside the verdict, and refuse to call any "
             "delta smaller than the measured floor significant. Costs N extra "
-            "base passes. Leg-1 floor is measured in --task-mode metric only."
+            "base passes. The leg-1 task floor is measured in every --task-mode; "
+            "in judge_score / pairwise each repeat is N extra JUDGE passes "
+            "(N x the judge API calls), and the floor is labelled decode + judge."
         ),
     ),
     judge_model: Optional[str] = typer.Option(
