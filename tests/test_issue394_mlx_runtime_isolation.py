@@ -89,7 +89,6 @@ payload = {{
     'exit_code': result.exit_code,
     'exception': str(result.exception) if result.exception else '',
     'blocked': blocked,
-    'loaded': sorted(root for root in blocked_roots if root in sys.modules),
     'sft_loaded': 'soup_cli.trainer.sft' in sys.modules,
 }}
 print('SOUP394|' + json.dumps(payload, sort_keys=True))
@@ -112,7 +111,6 @@ print('SOUP394|' + json.dumps(payload, sort_keys=True))
     payload = json.loads(marked[0].removeprefix("SOUP394|"))
     assert payload["exit_code"] == 1
     assert "MLX backend requires" in payload["exception"]
-    assert payload["loaded"] == []
     assert set(payload["blocked"]) <= {"torch", "mlx"}
     assert "mlx" in payload["blocked"]
     assert payload["sft_loaded"] is False

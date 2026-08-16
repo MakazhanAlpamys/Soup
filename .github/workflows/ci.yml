@@ -60,12 +60,10 @@ jobs:
           python-version: "3.12"
       - name: Install only the MLX runtime and smoke-test dependency
         run: pip install -e ".[mlx]" pytest
-      - name: Verify the PyTorch training stack is absent
-        run: >-
-          python -c "import importlib.util;
-          names=('torch','trl','datasets','peft','accelerate','bitsandbytes');
-          present=[name for name in names if importlib.util.find_spec(name)];
-          assert not present, f'unexpected training dependencies: {present}'"
+      - name: Verify MLX imports and the PyTorch training stack is absent
+        run: |
+          python -c "import mlx.core, mlx_lm; print(mlx.core.__version__, mlx_lm.__version__)"
+          python -c "import importlib.util; names=('torch','trl','datasets','peft','accelerate','bitsandbytes'); present=[name for name in names if importlib.util.find_spec(name)]; assert not present, f'unexpected training dependencies: {present}'"
       - name: Run one-step MLX SFT through the real CLI
         run: pytest -o addopts= -m smoke -k mlx_sft_smoke -q tests/test_smoke_train.py
 

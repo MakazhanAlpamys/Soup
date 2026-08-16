@@ -34,6 +34,16 @@ reproducing 70+ versions of notes.
   with `deepseek-ai/DeepSeek-V4-Flash` (#279).** The recipe combines the
   established GRPO defaults with MoE LoRA and gradient checkpointing.
 
+### Changed
+
+- **The MLX SFT dispatch route no longer imports the Transformers SFT wrapper
+  before choosing a backend (#431 by @Shutaru).** The wrapper is import-light
+  today, but the standalone `soup-cli[mlx]` runtime no longer depends on it
+  remaining so. An additive Apple Silicon CI job verifies that `mlx` and
+  `mlx-lm` import, the PyTorch/TRL training stack is absent, and a one-step real
+  CLI SFT run completes. This hardens the runtime boundary; it does not claim to
+  resolve the still-unpinned torch-present hang reported in #394.
+
 ### Fixed
 
 - **A run whose watcher died was reported `running` forever (#401).**
