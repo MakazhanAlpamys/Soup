@@ -400,6 +400,16 @@ class StreamingSetupMixin:
             use_rslora=tcfg.lora.use_rslora,
         )
 
+        # #366 review — on CPU there is no CUDA device, so page-locking (a
+        # host->device transfer optimization) is inapplicable. An explicit
+        # stream_pin=true is honoured by saying so, not by dropping it silently.
+        if tcfg.stream_pin is True and not on_cuda:
+            console.print(
+                "[yellow]training.stream_pin=true, but no CUDA device is present: "
+                "page-locking is a host-to-device transfer optimization and does "
+                "not apply on CPU. Proceeding without it.[/]"
+            )
+
         model, runtime = build_streamed_model(
             model_id=cfg.base,
             shard_dir=shard_dir,
@@ -409,8 +419,11 @@ class StreamingSetupMixin:
             dtype=dtype,
             buffers=tcfg.stream_buffers,
             pin=plan.pinned and on_cuda,
-            # #366: stream_pin=true must refuse rather than silently fall back to
-            # a pageable store when the box cannot page-lock it.
+            # #366: on the RAM tier stream_pin=true refuses rather than silently
+            # falling back to a pageable store; on the disk tier the runtime
+            # announces that pinning is inapplicable (no RAM store to lock); on
+            # CPU the notice above covers it. require_pin only carries the RAM
+            # refusal, so it is gated on a real CUDA device.
             require_pin=(tcfg.stream_pin is True) and on_cuda,
             seed=tcfg.seed if getattr(tcfg, "seed", None) is not None else 0,
             trust_remote_code=self._trust_remote_code,

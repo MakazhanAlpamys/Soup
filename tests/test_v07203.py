@@ -1189,6 +1189,63 @@ class TestAutoTierFallback:
         wrapper._setup_streaming_transformers(cfg, cfg.training)
         return wrapper
 
+    @staticmethod
+    def _stub_build_streamed_model(monkeypatch, captured, *, tier="ram"):
+        """Intercept build_streamed_model so a CPU-only test can assert what the
+        pre-flight threaded into the runtime, without building a real model.
+
+        Patched on the SOURCE module because stream_setup imports it locally."""
+        from unittest.mock import MagicMock
+
+        import soup_cli.utils.layer_stream_runtime as rt
+
+        def fake_build(**kwargs):
+            captured.update(kwargs)
+            runtime = MagicMock()
+            runtime.tier = tier
+            runtime.stats.return_value = {
+                "tier": tier,
+                "store_bytes": 1_000_000_000,
+                "disk_bytes": 1_000_000_000,
+                "pinned": bool(kwargs.get("require_pin") or kwargs.get("pin")),
+                "buffers": 2,
+                "buffer_bytes": 4_000_000,
+                "n_layers": 2,
+            }
+            return MagicMock(), runtime
+
+        monkeypatch.setattr(rt, "build_streamed_model", fake_build)
+
+    def test_stream_pin_threads_require_pin_into_the_runtime_and_announces_cpu(
+        self, tmp_path, monkeypatch
+    ):
+        """#366 re-review blocker 2: prove the key REACHES the runtime call —
+        `captured` fails with KeyError if the require_pin= argument at
+        stream_setup.py is deleted, which is the mutation that previously left
+        the suite green. And blocker 1: on CPU pinning is inapplicable (no CUDA
+        device), so an explicit stream_pin=true is ANNOUNCED, not silently
+        dropped. CPU-only — build_streamed_model is stubbed."""
+        import soup_cli.trainer.stream_setup as ss
+
+        messages = []
+
+        class _RecordingConsole:
+            def print(self, *args, **_kwargs):
+                messages.append(" ".join(str(a) for a in args))
+
+        monkeypatch.setattr(ss, "console", _RecordingConsole())
+        captured = {}
+        self._stub_build_streamed_model(monkeypatch, captured)
+        self._run(
+            tmp_path, monkeypatch, free_ram=10_000_000_000, stream_source="auto",
+            device="cpu", extra_training_yaml="  stream_pin: true\n",
+        )
+        # The runtime call received require_pin (blocker 2) — False here because
+        # it is gated on a real CUDA device, which is the correct value on CPU.
+        assert captured["require_pin"] is False
+        # The explicit request was announced, not dropped (blocker 1).
+        assert any("no CUDA device" in m for m in messages), messages
+
     def test_auto_uses_ram_when_the_base_fits(self, tmp_path, monkeypatch):
         wrapper = self._run(
             tmp_path, monkeypatch, free_ram=10_000_000_000, stream_source="auto"

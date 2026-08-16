@@ -146,12 +146,29 @@ class TestDecidePinning:
     def test_stream_pin_false_forces_pageable_and_states_the_cost(self):
         """#366: pinning could not be turned off from config. stream_pin=false
         forces the pageable store even where the box could page-lock it, and the
-        reason states the throughput it costs rather than absorbing it."""
-        from soup_cli.utils.layer_stream import decide_pinning
+        reason states the throughput it costs rather than absorbing it.
+
+        #366 re-review: pin the ACTUAL figures, not just the word 'throughput' —
+        a bare-word assertion let the measured gain be changed to 1.01 with the
+        suite green. The forced-off reason must carry the same GPU-utilisation
+        sentence the automatic-fallback branch does, and both benchmark figures.
+        """
+        from soup_cli.utils.layer_stream import (
+            PIN_THROUGHPUT_GAIN_REAL,
+            PIN_THROUGHPUT_GAIN_SYNTHETIC,
+            decide_pinning,
+        )
 
         decision = decide_pinning(2 * 10**9, 7 * 10**9, stream_pin=False)
         assert decision.pinned is False
-        assert "throughput" in decision.reason.lower()
+        reason = decision.reason
+        # The exact measured figures (benchmarks/gate-h100-validation.md), so a
+        # silent change to either constant fails here.
+        assert f"{PIN_THROUGHPUT_GAIN_REAL:.2f}x" in reason
+        assert f"{PIN_THROUGHPUT_GAIN_SYNTHETIC:.2f}x" in reason
+        assert "6.56x" in reason and "7.41x" in reason
+        # The same GPU-utilisation sentence the automatic fallback carries.
+        assert "~97% to ~79%" in reason
 
     def test_stream_pin_true_forces_pinned_even_above_ceiling(self):
         """The override pins where the automatic path would have fallen back."""
@@ -972,10 +989,15 @@ class TestStreamFootgunRejection:
         with pytest.raises(ValueError, match="stream_layers"):
             _load(_stream_yaml(training={"stream_layers": False, "stream_source": "ram"}))
 
-    def test_stream_pin_without_stream_layers_rejected(self):
-        """#366 criterion 4: stream_pin set while streaming is off is a footgun."""
+    @pytest.mark.parametrize("stream_pin", [True, False])
+    def test_stream_pin_without_stream_layers_rejected(self, stream_pin):
+        """#366 criterion 4: stream_pin set while streaming is off is a footgun.
+
+        #366 re-review: cover BOTH values. The guard is ``stream_pin is not
+        None``; testing only ``False`` let it be narrowed to ``is False`` with the
+        suite green, leaving ``true`` + ``stream_layers: false`` unguarded."""
         with pytest.raises(ValueError, match="stream_layers"):
-            _load(_stream_yaml(training={"stream_layers": False, "stream_pin": False}))
+            _load(_stream_yaml(training={"stream_layers": False, "stream_pin": stream_pin}))
 
 
 class TestStreamBufferBounds:

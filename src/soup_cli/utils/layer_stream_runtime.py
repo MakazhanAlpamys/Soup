@@ -1608,11 +1608,29 @@ def _build_source(shard_dir, n_layers, spec, pin, console, tier="ram", require_p
     not, so the fallback says so out loud.
 
     ``require_pin`` (from ``training.stream_pin=true``) turns that fallback into
-    a hard refusal: the user asked for the pinned store explicitly, so silently
-    degrading to a pageable one — spending the whole throughput margin pinning
-    exists to provide — is exactly the outcome the flag exists to prevent.
+    a hard refusal on the RAM tier: the user asked for the pinned store
+    explicitly, so silently degrading to a pageable one — spending the whole
+    throughput margin pinning exists to provide — is exactly the outcome the flag
+    exists to prevent.
+
+    On the DISK tier pinning is not *unsatisfiable*, it is *inapplicable*: the
+    base does not fit in RAM, so weights stream directly from NVMe and there is
+    no RAM store to page-lock. Refusing here would brick the very runs the disk
+    tier exists for, so ``require_pin`` proceeds — but it is announced, never
+    dropped in silence (#366 review).
     """
     if tier == "disk":
+        if require_pin:
+            message = (
+                "training.stream_pin=true, but this run is on the disk tier: the "
+                "base does not fit in RAM, so weights stream directly from NVMe "
+                "and there is no RAM store to page-lock. Pinning does not apply "
+                "here; proceeding without it."
+            )
+            if console is not None:
+                console.print(f"[yellow]{message}[/]")
+            else:
+                logger.warning(message)
         return DiskSource(shard_dir, n_layers, spec), False
     if not pin:
         return RamSource(shard_dir, n_layers, spec, pin=False), False

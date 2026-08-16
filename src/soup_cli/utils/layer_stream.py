@@ -661,6 +661,7 @@ def decide_pinning(
             reason=(
                 "training.stream_pin=false forces a pageable RAM store. "
                 "Host-to-device copies become synchronous, which costs overlap: "
+                "measured GPU utilisation drops from ~97% to ~79%, and "
                 f"page-locking is worth up to {PIN_THROUGHPUT_GAIN_REAL:.2f}x "
                 "measured throughput (Qwen2.5-32B NF4), "
                 f"{PIN_THROUGHPUT_GAIN_SYNTHETIC:.2f}x on a synthetic. Unset "
