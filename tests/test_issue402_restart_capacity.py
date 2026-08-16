@@ -79,6 +79,48 @@ def test_stale_dead_pid_record_does_not_block(tmp_path, monkeypatch):
     assert res["status"] == _RUNNING
 
 
+def test_capacity_check_rejects_a_dead_pid_without_help_from_reconcile(
+    tmp_path, monkeypatch
+):
+    """The cap's own liveness check must hold when reconcile-on-read does not.
+
+    #407 rewrites a stale 'running' row on read, so by the time
+    `_live_persisted_run` inspects `status` the dead row is already terminal —
+    which means its `_pid_is_alive` guard is never the thing under test.
+    Measured: deleting that guard passes all 41 MCP tests. Here reconcile is
+    neutralised so the row stays 'running' with a dead pid, leaving the cap's
+    own check as the only thing that can reject it. The two are each other's
+    fallback; neither may be the only one guarded.
+    """
+    _use_temp_db(tmp_path, monkeypatch)
+    dead = subprocess.Popen([sys.executable, "-c", "pass"])
+    dead.wait()
+    _seed_running_run(dead.pid)
+
+    with patch.object(
+        ExperimentTracker, "_reconcile_orphaned_run", side_effect=lambda run: run
+    ):
+        assert ExperimentTracker().list_runs()[0]["status"] == _RUNNING  # precondition
+        assert ExecutionManager()._live_persisted_run() is None
+
+
+def test_control_the_capacity_check_still_sees_a_live_pid_without_reconcile(
+    tmp_path, monkeypatch
+):
+    # CONTROL: neutralising reconcile must not make the check reject everything.
+    _use_temp_db(tmp_path, monkeypatch)
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    try:
+        _seed_running_run(child.pid)
+        with patch.object(
+            ExperimentTracker, "_reconcile_orphaned_run", side_effect=lambda run: run
+        ):
+            assert ExecutionManager()._live_persisted_run() == _PRIOR_RUN
+    finally:
+        child.terminate()
+        child.wait()
+
+
 def test_live_persisted_run_detects_only_live_pids(tmp_path, monkeypatch):
     _use_temp_db(tmp_path, monkeypatch)
     manager = ExecutionManager()
@@ -93,7 +135,16 @@ def test_live_persisted_run_detects_only_live_pids(tmp_path, monkeypatch):
     child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
     try:
         conn = ExperimentTracker()._get_conn()
-        conn.execute("UPDATE runs SET pid = ? WHERE run_id = ?", (child.pid, _PRIOR_RUN))
+        # `status` is restored alongside `pid`, and that is not defensive
+        # tidiness: the assertion above reads the row through the tracker, and
+        # #401's reconcile-on-read has by then rewritten it from 'running' to
+        # 'terminated' precisely because the pid was dead. Updating only `pid`
+        # would leave a terminated row that `_live_persisted_run` correctly
+        # ignores, and the test would assert against the wrong state.
+        conn.execute(
+            "UPDATE runs SET pid = ?, status = 'running' WHERE run_id = ?",
+            (child.pid, _PRIOR_RUN),
+        )
         conn.commit()
         assert manager._live_persisted_run() == _PRIOR_RUN
     finally:

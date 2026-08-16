@@ -89,6 +89,35 @@ def test_running_run_without_a_pid_is_left_untouched():
     assert t.get_run(_RUN_NO_PID)["status"] == _STATUS_RUNNING
 
 
+def test_list_runs_reconciles_when_it_is_the_first_read():
+    """`list_runs` must reconcile on its own, not inherit `get_run`'s work.
+
+    The assertion at the end of the first test reads `list_runs` only AFTER
+    `get_run` has already reconciled and persisted the flip, so it agrees for
+    free: deleting the reconcile call from `list_runs` passes that test — and,
+    measured, 191 others. This one makes `list_runs` the only read path, so it
+    fails if that call site is removed.
+    """
+    t = _tracker()
+    _launch(t, _RUN_DEAD)
+    t.mark_running(_RUN_DEAD, pid=_dead_pid())
+
+    runs = t.list_runs()
+    assert runs[0]["status"] == _STATUS_TERMINATED
+    assert runs[0]["exit_code"] is None
+
+
+def test_control_list_runs_leaves_a_live_process_running():
+    # CONTROL: the test above must not pass by flipping every row to terminal.
+    import os
+
+    t = _tracker()
+    _launch(t, _RUN_ALIVE)
+    t.mark_running(_RUN_ALIVE, pid=os.getpid())
+
+    assert t.list_runs()[0]["status"] == _STATUS_RUNNING
+
+
 def test_terminal_status_is_never_overwritten_by_reconcile():
     # A finished run keeps its terminal status even though its pid is long gone.
     t = _tracker()
