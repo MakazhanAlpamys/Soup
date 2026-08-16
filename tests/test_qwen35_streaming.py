@@ -210,7 +210,41 @@ class TestQwen35StreamingRuntime:
             {"self_attn.q_proj.weight", "linear_attn.in_proj_qkv.weight"}
         )
 
-    def test_install_streaming_accepts_heterogeneous_layer_sets(self, tmp_path, monkeypatch):
+    def test_ram_source_explicitly_requests_cpu_allocations(self, tmp_path, monkeypatch):
+        from soup_cli.utils.layer_shard import shard_checkpoint
+        from soup_cli.utils.layer_stream_runtime import RamSource
+
+        weights = _heterogeneous_weights_dir(tmp_path)
+        out = str(tmp_path / "shards")
+        index = shard_checkpoint(weights, out, dtype="float32", arch="qwen3")
+        layer_specs = RamSource.layer_specs_from_shards(out, index.n_layers)
+
+        requested_devices = []
+        real_empty = torch.empty
+
+        def _cpu_empty(*args, **kwargs):
+            if "pin_memory" not in kwargs:
+                return real_empty(*args, **kwargs)
+            requested_devices.append(kwargs.get("device"))
+            return torch.zeros(
+                *args,
+                dtype=kwargs.get("dtype"),
+                device="cpu",
+                pin_memory=kwargs.get("pin_memory", False),
+            )
+
+        monkeypatch.setattr(torch, "empty", _cpu_empty)
+        source = RamSource(out, index.n_layers, layer_specs, pin=False)
+
+        assert requested_devices
+        assert all(str(device) == "cpu" for device in requested_devices)
+        assert all(
+            tensor.device.type == "cpu"
+            for layer in source.store
+            for tensor in layer.values()
+        )
+
+    def test_install_streaming_accepts_heterogeneous_layer_sets(self, tmp_path):
         from soup_cli.utils.layer_shard import shard_checkpoint
         from soup_cli.utils.layer_stream_runtime import install_streaming
 
@@ -219,19 +253,13 @@ class TestQwen35StreamingRuntime:
         index = shard_checkpoint(weights, out, dtype="float32", arch="qwen3")
         model = _heterogeneous_meta_model()
 
-        host_alloc_devices = []
-        real_empty = torch.empty
-
-        def _track_host_alloc(*args, **kwargs):
-            if "pin_memory" in kwargs:
-                host_alloc_devices.append(kwargs.get("device"))
-            return real_empty(*args, **kwargs)
-
-        monkeypatch.setattr(torch, "empty", _track_host_alloc)
         runtime = install_streaming(model, shard_dir=out, index=index, device="cpu")
         try:
-            assert host_alloc_devices
-            assert all(str(device) == "cpu" for device in host_alloc_devices)
+            assert all(
+                tensor.device.type == "cpu"
+                for layer in runtime.source.store
+                for tensor in layer.values()
+            )
             runtime.pool.load_async(0, runtime.source)
             buffers0 = runtime.pool.wait(0)
             assert runtime.source.get(0, "self_attn.q_proj.weight").device.type == "cpu"
