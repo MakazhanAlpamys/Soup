@@ -48,7 +48,7 @@ def search_recipes(
 
 
 # ---------------------------------------------------------------------------
-# Recipe catalog (143 recipes)
+# Recipe catalog (144 recipes)
 # ---------------------------------------------------------------------------
 
 RECIPES: Dict[str, RecipeMeta] = {
@@ -4100,6 +4100,40 @@ training:
   quantization: 4bit
   moe_lora: true
   moe_aux_loss_coeff: 0.01
+
+output: ./output
+""",
+    ),
+    "deepseek-v4-flash-grpo": RecipeMeta(
+        model="deepseek-ai/DeepSeek-V4-Flash",
+        task="grpo",
+        size="N/A",
+        tags=("deepseek", "deepseek-v4", "grpo", "reasoning", "moe"),
+        description="DeepSeek V4 Flash MoE GRPO reasoning training (MIT, efficiency-tier)",
+        yaml_str="""\
+base: deepseek-ai/DeepSeek-V4-Flash
+task: grpo
+
+data:
+  train: ./data/reasoning_train.jsonl
+  format: auto
+  max_length: 8192
+
+training:
+  epochs: 3
+  lr: 1e-5
+  batch_size: 1
+  gradient_accumulation_steps: 16
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  quantization: 4bit
+  grpo_beta: 0.1
+  num_generations: 4
+  reward_fn: accuracy
+  moe_lora: true
+  gradient_checkpointing: true
 
 output: ./output
 """,

@@ -30,6 +30,10 @@ reproducing 70+ versions of notes.
   `Qwen/Qwen3.5-4B-Base` (#278).** The recipe uses plaintext data, one epoch,
   QLoRA 4-bit quantization, and the established continued-pretraining defaults.
 
+- **A ready-made `deepseek-v4-flash-grpo` recipe for GRPO reasoning training
+  with `deepseek-ai/DeepSeek-V4-Flash` (#279).** The recipe combines the
+  established GRPO defaults with MoE LoRA and gradient checkpointing.
+
 ### Fixed
 
 - **A run whose watcher died was reported `running` forever (#401).**
