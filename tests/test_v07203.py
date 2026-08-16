@@ -581,7 +581,9 @@ class TestDiskKindDetection:
 
         calls = []
         monkeypatch.setattr(ls, "_DISK_KIND_CACHE", {})
-        monkeypatch.setattr(ls, "_probe_disk_kind", lambda p: calls.append(p) or "nvme")
+        monkeypatch.setattr(
+            ls, "_probe_disk_kind", lambda p: calls.append(p) or ls.DiskClassification("nvme")
+        )
 
         assert ls.detect_disk_kind(".") == "nvme"
         assert ls.detect_disk_kind(".") == "nvme"
@@ -736,17 +738,48 @@ class TestDiskKindMeasuredFallback:
         monkeypatch.delattr(os, "O_DIRECT", raising=False)
         assert ls._measure_seq_read_bytes_per_s(".") is None
 
-    def test_refusal_cites_the_measured_rate(self, monkeypatch):
+    def test_refusal_cites_the_measured_rate(self):
         """#411 review: a measurement-driven refusal names the rate that earned
-        it, not just the opaque ``'hdd'`` verdict."""
+        it, not just the opaque ``'hdd'`` verdict. CPU-only — the rate travels
+        with the verdict in a ``DiskClassification``, so no /sys simulation is
+        needed to exercise the note (it runs on all CI cells, not just Linux)."""
         import soup_cli.utils.layer_stream as ls
 
-        self._fake_linux(monkeypatch, devices=["vda"], rotational=1, measured_bps=150e6)
+        # A verdict DERIVED from a measurement carries the rate that produced it.
+        slow = ls.DiskClassification("hdd", measured_bps=150e6)
         with pytest.raises(ValueError) as excinfo:
-            ls.choose_tier(1000, 10, ls.detect_disk_kind("/data"))
+            ls.choose_tier(1000, 10, slow)
         message = str(excinfo.value)
         assert "measured 0.15 GB/s" in message
         assert "1.0 GB/s NVMe floor" in message
+
+    def test_override_verdict_does_not_cite_a_probe_rate(self):
+        """#411 re-review (blocker 2): the bug was a module global that let a
+        refusal cite a rate ABOVE the floor as the reason a disk fell UNDER it —
+        e.g. stream_disk_kind=hdd on a fast virtio disk. The rate now travels
+        with the verdict, and an override verdict carries none, so the refusal
+        structurally cannot cite a reading it did not produce. CPU-only."""
+        import soup_cli.utils.layer_stream as ls
+
+        # kind='hdd' from an override; measured_bps=None because the verdict is
+        # the user's, not the probe's (see resolve_disk_kind).
+        overridden = ls.DiskClassification("hdd", measured_bps=None)
+        with pytest.raises(ValueError) as excinfo:
+            ls.choose_tier(1000, 10, overridden)
+        assert "measured" not in str(excinfo.value)
+
+    def test_override_returns_a_measureless_classification(self, monkeypatch):
+        """resolve_disk_kind with an override must strip any probe rate, even
+        when detection measured a fast disk underneath (the #411 re-review repro:
+        detect 2.0 GB/s, override to hdd — the 2.0 must not survive)."""
+        import soup_cli.utils.layer_stream as ls
+
+        monkeypatch.setattr(
+            ls, "classify_disk_kind", lambda *_a, **_k: ls.DiskClassification("nvme", 2.0e9)
+        )
+        result = ls.resolve_disk_kind("/data", "hdd", notify=lambda _m: None)
+        assert result.kind == "hdd"
+        assert result.measured_bps is None
 
     def test_the_read_is_repeated_and_the_best_sample_wins(self, monkeypatch, tmp_path):
         """#411 review: the single-sample threshold is the weakness — repeat the
@@ -772,7 +805,12 @@ class TestDiskKindMeasuredFallback:
         monkeypatch.setattr(os, "lseek", lambda _fd, _off, _whence: 0)
         monkeypatch.setattr(os, "unlink", lambda _p: None)
         readv_calls = []
-        monkeypatch.setattr(os, "readv", lambda _fd, _bufs: readv_calls.append(1) or ls._MEASURE_READ_BYTES)
+
+        def fake_readv(_fd, _bufs):
+            readv_calls.append(1)
+            return ls._MEASURE_READ_BYTES
+
+        monkeypatch.setattr(os, "readv", fake_readv)
         # Three reads with elapsed 2s, 1s, 4s -> the 1s sample is the fastest.
         clock = iter([0.0, 2.0, 0.0, 1.0, 0.0, 4.0])
         monkeypatch.setattr(time, "monotonic", lambda: next(clock))
@@ -814,15 +852,17 @@ class TestDiskKindMeasuredFallback:
 
         monkeypatch.setattr(ls, "detect_disk_kind", lambda *_a, **_k: "hdd")
         notes = []
-        assert ls.resolve_disk_kind("/data", "nvme", notify=notes.append) == "nvme"
+        assert ls.resolve_disk_kind("/data", "nvme", notify=notes.append).kind == "nvme"
         assert notes and "nvme" in notes[0] and "hdd" in notes[0]
 
     def test_no_override_returns_the_detected_kind_silently(self, monkeypatch):
         import soup_cli.utils.layer_stream as ls
 
-        monkeypatch.setattr(ls, "detect_disk_kind", lambda *_a, **_k: "ssd")
+        monkeypatch.setattr(
+            ls, "classify_disk_kind", lambda *_a, **_k: ls.DiskClassification("ssd")
+        )
         notes = []
-        assert ls.resolve_disk_kind("/data", None, notify=notes.append) == "ssd"
+        assert ls.resolve_disk_kind("/data", None, notify=notes.append).kind == "ssd"
         assert notes == []
 
     def test_stream_disk_kind_is_a_footgun_without_stream_layers(self):
@@ -1129,8 +1169,12 @@ class TestAutoTierFallback:
         # Pinned rather than probed: the real media type differs between this
         # box (NVMe) and a CI runner (often "unknown"), and an
         # environment-dependent tier would make these flaky rather than wrong.
+        # Patch classify_disk_kind (what resolve_disk_kind and detect_disk_kind
+        # both route through) so the pin reaches the streaming setup's lambda.
+        import soup_cli.utils.layer_stream as _ls
+
         monkeypatch.setattr(
-            "soup_cli.utils.layer_stream.detect_disk_kind", lambda *_a, **_k: disk_kind
+            _ls, "classify_disk_kind", lambda *_a, **_k: _ls.DiskClassification(disk_kind)
         )
         cfg = load_config_from_string(
             f"base: {weights}\ntask: sft\nbackend: transformers\nmodality: text\n"

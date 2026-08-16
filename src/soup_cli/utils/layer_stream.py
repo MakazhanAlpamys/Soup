@@ -247,13 +247,25 @@ DISK_KINDS = (_NVME, "ssd", "hdd", "unknown")
 #: actually depends on the answer.
 DiskKind = Union[str, Callable[[], str]]
 
-_DISK_KIND_CACHE: Dict[str, str] = {}
-#: Throughput (bytes/s) of the most recent O_DIRECT probe, or ``None`` when the
-#: last classification did not measure (NVMe by name, ``rotational=0``, or a
-#: non-Linux platform). ``choose_tier`` reads it so a refusal can cite the rate
-#: that earned it. Reset at the start of every probe, so it is never a stale
-#: figure from a different volume.
-_LAST_MEASURED_READ_BYTES_PER_S: Optional[float] = None
+@dataclass(frozen=True)
+class DiskClassification:
+    """A disk verdict and, when the verdict was DERIVED from an O_DIRECT read,
+    the rate that produced it.
+
+    ``measured_bps`` is set ONLY when ``kind`` came from the measured-throughput
+    fallback (the virtio/#365 path). It is ``None`` for NVMe-by-name,
+    ``rotational=0``, a non-Linux probe, and — crucially — an explicit
+    ``training.stream_disk_kind`` override, whose verdict is the user's, not the
+    probe's. Carrying the rate ALONGSIDE the kind (not in module state) means a
+    refusal can only ever cite the rate that produced its OWN verdict: the two
+    cannot desync across a cache hit or an override.
+    """
+
+    kind: str
+    measured_bps: Optional[float] = None
+
+
+_DISK_KIND_CACHE: Dict[str, DiskClassification] = {}
 
 # --- measured-throughput fallback (#365) ----------------------------------
 #: Bytes read by the O_DIRECT probe when the rotational flag is untrustworthy.
@@ -276,19 +288,11 @@ _MEASURE_READ_SAMPLES = 3
 NVME_TIER_MIN_BYTES_PER_S = 1_000_000_000
 
 
-def detect_disk_kind(path: str = ".") -> str:
-    """Media type of the volume holding ``path``: nvme / ssd / hdd / unknown.
-
-    **Costs about 9 s on Windows** (measured), because the only reliable source
-    is a PowerShell ``Get-PhysicalDisk`` CIM query. That is why ``choose_tier``
-    takes a *callable* and only invokes it when the base does not fit in RAM —
-    the answer is irrelevant on the RAM tier, which is the common case. The
-    result is cached per process.
-
-    ``unknown`` is returned rather than guessed whenever the platform cannot be
-    probed, and ``choose_tier`` refuses it. Refusing is the safe direction: the
-    cost of wrongly believing a spinning disk is NVMe is a run that thrashes for
-    hours (plan P11 — 80 shards x 2 reads = 160 seeks per step).
+def classify_disk_kind(path: str = ".") -> DiskClassification:
+    """Full disk verdict for ``path``: the ``kind`` plus, when the verdict was
+    measured, the rate that produced it. Cached per volume. The callable
+    ``choose_tier`` holds returns THIS, so a refusal cites the coupled rate and
+    never a stale/unrelated figure from module state.
     """
     import os
 
@@ -298,9 +302,27 @@ def detect_disk_kind(path: str = ".") -> str:
     key = os.path.splitdrive(resolved)[0] or resolved
     if key in _DISK_KIND_CACHE:
         return _DISK_KIND_CACHE[key]
-    kind = _probe_disk_kind(path)
-    _DISK_KIND_CACHE[key] = kind
-    return kind
+    result = _probe_disk_kind(path)
+    _DISK_KIND_CACHE[key] = result
+    return result
+
+
+def detect_disk_kind(path: str = ".") -> str:
+    """Media type of the volume holding ``path``: nvme / ssd / hdd / unknown.
+
+    **Costs about 9 s on Windows** (measured), because the only reliable source
+    is a PowerShell ``Get-PhysicalDisk`` CIM query. That is why ``choose_tier``
+    takes a *callable* and only invokes it when the base does not fit in RAM —
+    the answer is irrelevant on the RAM tier, which is the common case. The
+    result is cached per process. On Linux this WRITES a small scratch file to
+    probe throughput (see ``_measure_seq_read_bytes_per_s``).
+
+    ``unknown`` is returned rather than guessed whenever the platform cannot be
+    probed, and ``choose_tier`` refuses it. Refusing is the safe direction: the
+    cost of wrongly believing a spinning disk is NVMe is a run that thrashes for
+    hours (plan P11 — 80 shards x 2 reads = 160 seeks per step).
+    """
+    return classify_disk_kind(path).kind
 
 
 def resolve_disk_kind(
@@ -308,8 +330,8 @@ def resolve_disk_kind(
     override: Optional[str] = None,
     *,
     notify: Optional[Callable[[str], None]] = None,
-) -> str:
-    """Detected media type, or an explicit override with a loud notice (#365).
+) -> DiskClassification:
+    """Detected classification, or an explicit override with a loud notice (#365).
 
     ``training.stream_disk_kind`` is the escape hatch for the case where even
     the measured fallback is wrong. When set it wins, but detection still runs
@@ -319,7 +341,7 @@ def resolve_disk_kind(
     classify.
     """
     if override is None:
-        return detect_disk_kind(path)
+        return classify_disk_kind(path)
     try:
         detected = detect_disk_kind(path)
     except Exception:  # noqa: BLE001 — never let the probe break an overridden run
@@ -329,7 +351,9 @@ def resolve_disk_kind(
             f"[yellow]disk kind overridden:[/] using "
             f"training.stream_disk_kind={override!r} (detected {detected!r})"
         )
-    return override
+    # The verdict is the user's override, NOT the probe's — carry no measured
+    # rate, so a refusal can never cite a reading the user deliberately overrode.
+    return DiskClassification(override)
 
 
 def _resolve_tool(name: str, *fallbacks: str) -> Optional[str]:
@@ -452,13 +476,14 @@ def _measure_seq_read_bytes_per_s(path: str) -> Optional[float]:
                 pass
 
 
-def _probe_disk_kind(path: str) -> str:
+def _probe_disk_kind(path: str) -> DiskClassification:
+    """Classify the volume holding ``path``, carrying the measured rate only when
+    the verdict was DERIVED from a read (so a refusal can never cite a rate that
+    did not produce its own verdict — see ``DiskClassification``)."""
     import os
     import platform
     import subprocess
 
-    global _LAST_MEASURED_READ_BYTES_PER_S
-    _LAST_MEASURED_READ_BYTES_PER_S = None
     system = platform.system()
     try:
         if system == "Linux":
@@ -472,21 +497,21 @@ def _probe_disk_kind(path: str) -> str:
             for dev in names:
                 if not dev.startswith("nvme"):
                     continue
-                return _NVME
+                return DiskClassification(_NVME)
             for dev in names:
                 rot = os.path.join("/sys/block", dev, "queue", "rotational")
                 if os.path.exists(rot):
                     with open(rot, encoding="utf-8") as handle:
                         value = handle.read().strip()
                     if value == "0":
-                        return "ssd"
-                    _LAST_MEASURED_READ_BYTES_PER_S = _measure_seq_read_bytes_per_s(path)
-                    return _classify_measured_read(_LAST_MEASURED_READ_BYTES_PER_S)
-            return "unknown"
+                        return DiskClassification("ssd")
+                    measured = _measure_seq_read_bytes_per_s(path)
+                    return DiskClassification(_classify_measured_read(measured), measured)
+            return DiskClassification("unknown")
         if system == "Windows":
             shell = _resolve_tool("powershell", _POWERSHELL_FALLBACK)
             if shell is None:
-                return "unknown"
+                return DiskClassification("unknown")
             out = subprocess.run(
                 [
                     shell, "-NoProfile", "-NonInteractive", "-Command",
@@ -496,7 +521,7 @@ def _probe_disk_kind(path: str) -> str:
                 capture_output=True, text=True, timeout=60, check=False,
             )
             if out.returncode != 0 or not out.stdout.strip():
-                return "unknown"
+                return DiskClassification("unknown")
             import json
 
             payload = json.loads(out.stdout)
@@ -507,25 +532,25 @@ def _probe_disk_kind(path: str) -> str:
             # has NVMe.
             for candidate in ("hdd", "unknown", "ssd", _NVME):
                 if candidate in kinds:
-                    return candidate
-            return "unknown"
+                    return DiskClassification(candidate)
+            return DiskClassification("unknown")
         if system == "Darwin":
             tool = _resolve_tool("diskutil", "/usr/sbin/diskutil")
             if tool is None:
-                return "unknown"
+                return DiskClassification("unknown")
             out = subprocess.run(
                 [tool, "info", "-plist", "/"],
                 capture_output=True, text=True, timeout=60, check=False,
             )
             text = out.stdout.lower()
             if "nvme" in text:
-                return _NVME
+                return DiskClassification(_NVME)
             if "solid state" in text or ("<true/>" in text and "solidstate" in text):
-                return "ssd"
-            return "unknown"
+                return DiskClassification("ssd")
+            return DiskClassification("unknown")
     except (OSError, ValueError, subprocess.SubprocessError):
-        return "unknown"
-    return "unknown"
+        return DiskClassification("unknown")
+    return DiskClassification("unknown")
 
 
 def _windows_kind(disk: dict) -> str:
@@ -564,13 +589,20 @@ def choose_tier(
     """
     if model_bytes < free_ram_bytes * headroom:
         return TIER_RAM
-    kind = disk_kind() if callable(disk_kind) else disk_kind
+    result = disk_kind() if callable(disk_kind) else disk_kind
+    # The callable may return a DiskClassification (kind + the rate that produced
+    # it) or a bare kind string (tests, explicit callers). Either way the rate is
+    # taken FROM the same result, so it can only ever describe THIS verdict.
+    if isinstance(result, DiskClassification):
+        kind, measured = result.kind, result.measured_bps
+    else:
+        kind, measured = result, None
     if kind == _NVME:
         return TIER_DISK
-    # When the classification came from a measured read (the virtio/#365 path),
-    # cite the rate that earned the refusal so "not NVMe" is not an opaque
-    # verdict — the operator can see how far under the floor the disk landed.
-    measured = _LAST_MEASURED_READ_BYTES_PER_S
+    # When the verdict came from a measured read (the virtio/#365 path), cite the
+    # rate that earned the refusal so "not NVMe" is not an opaque verdict — the
+    # operator can see how far under the floor the disk landed. measured is None
+    # for a name/flag/override verdict, so the note only appears when it is true.
     measured_note = (
         f" (measured {measured / 1e9:.2f} GB/s, under the "
         f"{NVME_TIER_MIN_BYTES_PER_S / 1e9:.1f} GB/s NVMe floor)"
