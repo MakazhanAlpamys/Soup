@@ -402,6 +402,12 @@ output: ./output
 > If that prints anything, the adapter is affected. From v0.72.1 a streamed adapter is byte-for-byte in the same layout as an ordinary LoRA run.
 
 **Troubleshooting:**
+- **"trainable LoRA parameters remain on the meta device"** — PEFT attached an
+  adapter without real storage and Soup refused the run before installing the
+  streaming runtime. This guard is deliberately based on the final parameter
+  state rather than on how many tensors Soup materialised: some PEFT versions
+  create real adapters themselves. Include the PEFT version and the named
+  parameter from the error when reporting this.
 - **"layer streaming needs the base to fit in RAM"** — the base is larger than free RAM. Set `stream_source: auto` to fall back to the NVMe disk tier, free RAM, or pick a smaller base.
 - **"layer streaming needs NVMe or more RAM … the detected disk is 'hdd'"** on a fast cloud disk — a virtio device reports `rotational=1` with no media hint. Detection now measures the disk when the flag is unreliable; if it still misreads yours, set `training.stream_disk_kind: nvme` to force the tier on (`ssd`/`hdd` force it off).
 - **"could not page-lock the base … falling back to a PAGEABLE RAM store"** — expected on a busy machine. Training continues, more slowly. Close other applications to keep the pinned store.

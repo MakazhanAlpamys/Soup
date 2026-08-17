@@ -46,6 +46,15 @@ reproducing 70+ versions of notes.
 
 ### Fixed
 
+- **Layer streaming now verifies that every trainable LoRA parameter has real
+  storage after PEFT attaches the adapter (#433).** PEFT 0.18 creates streamed
+  adapters on `meta` for Soup to materialise, while PEFT 0.19 may create them as
+  real tensors immediately, so `materialize_meta_adapters()` returning `0`
+  cannot distinguish a healthy no-op from a missed adapter. The streamed build
+  now enforces the actual postcondition and refuses to install the runtime if a
+  trainable `lora_*` parameter remains on `meta`, naming the stranded parameter
+  instead of allowing a silent no-training run.
+
 - **`soup train --no-reexec` now prints the flags you actually typed (#372).**
   The advisory `accelerate launch` command is derived from the same argv the
   auto-reexec would have used, so `--fsdp` / `--deepspeed` / `--config` (and the

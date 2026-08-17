@@ -1361,6 +1361,11 @@ def materialize_meta_adapters(model: Any, *, seed: int = 0, device: str = "cuda"
     build that device is ``meta``, so the adapters have no storage: the
     optimizer happily accepts them and the run trains nothing. Re-initialise
     with PEFT's own scheme (A ~ kaiming_uniform, B = 0).
+
+    The return value is the number of parameters materialised, not a success
+    signal.  In particular, zero is healthy when PEFT created real adapter
+    tensors itself.  Call :func:`assert_trainable_adapters_materialized` after
+    this function to enforce the actual postcondition.
     """
     import torch
     import torch.nn as nn
@@ -1380,6 +1385,33 @@ def materialize_meta_adapters(model: Any, *, seed: int = 0, device: str = "cuda"
             module._parameters[pname] = nn.Parameter(data.to(device), requires_grad=True)
             count += 1
     return count
+
+
+def assert_trainable_adapters_materialized(model: Any) -> None:
+    """Refuse a streamed build whose trainable LoRA tensors have no storage.
+
+    Decoder weights deliberately remain on ``meta`` under layer streaming, so
+    the invariant is restricted to trainable ``lora_*`` parameters.  It is a
+    postcondition rather than an interpretation of
+    :func:`materialize_meta_adapters`' return count: PEFT versions differ on
+    whether adapters need materialising, but both must leave real tensors.
+    """
+    stranded = [
+        name
+        for name, param in model.named_parameters()
+        if param.requires_grad and "lora_" in name and param.is_meta
+    ]
+    if not stranded:
+        return
+
+    preview = ", ".join(stranded[:4])
+    remainder = len(stranded) - 4
+    if remainder > 0:
+        preview += f", ... (+{remainder} more)"
+    raise RuntimeError(
+        "trainable LoRA parameters remain on the meta device after adapter "
+        f"materialization: {preview}. Refusing to train adapters without storage."
+    )
 
 
 # ==========================================================================
@@ -1625,6 +1657,7 @@ def build_streamed_model(
         param.requires_grad = False
     model = get_peft_model(model, lora_config)
     materialize_meta_adapters(model, seed=seed, device=device)
+    assert_trainable_adapters_materialized(model)
     runtime = install_streaming(
         model,
         shard_dir=shard_dir,
