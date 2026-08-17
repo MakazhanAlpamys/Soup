@@ -88,10 +88,12 @@ Transformers backend. A Hugging Face `datasets` source or streaming dataset
 still needs `datasets` because that data source owns the dependency; the local
 file path below does not.
 
-Known limitation: until [#423](https://github.com/MakazhanAlpamys/Soup/issues/423)
-lands, this standalone path can misidentify Apple Silicon as CPU and silently
-rewrite `training.quantization: 4bit` to `none`; verify the printed pre-flight
-configuration before relying on a 4-bit run.
+`detect_device()` and `get_gpu_info()` recognise Apple Silicon when
+`backend: mlx` is set, preserving `training.quantization: 4bit` for
+`mlx-community` pre-quantized checkpoints instead of silently downgrading to
+`none` ([#423](https://github.com/MakazhanAlpamys/Soup/issues/423)). The
+CUDA-shaped analytical VRAM preflight is skipped on the MLX path because Apple
+unified memory is managed by Metal, not a fixed CUDA VRAM pool.
 
 ```yaml
 base: mlx-community/Llama-3.2-3B-Instruct-4bit

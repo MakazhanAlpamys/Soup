@@ -69,6 +69,9 @@ reproducing 70+ versions of notes.
   resolves to `'mlx'` with the chip name (e.g. `Apple Silicon (Apple M2 Max)`), preserves
   4-bit quantization intact for `mlx-lm` pre-quantized models, reports Apple unified
   memory in telemetry, and skips the CUDA-shaped analytical VRAM preflight on MLX runs.
+  The preflight skip is pinned by `TestHardwareFitGateIsMlxAware` (mirrors the
+  streaming-aware gate test). The known-limitation warning in
+  `docs/backends-and-ops.md` is replaced with the resolved behaviour.
 
 - **A run whose watcher died was reported `running` forever (#401).**
   `ExecutionManager._watch` runs as a `daemon=True` thread, so when the MCP
