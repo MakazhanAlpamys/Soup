@@ -598,6 +598,16 @@ def render_mix_recipe_yaml(report: MixOptimizationReport) -> str:
     ``data:``. Defends against YAML key injection by rejecting newlines and
     null bytes in dataset paths (mirrors v0.46.0 Part A
     ``render_recipe_yaml``).
+
+    ``data.train`` renders as a single string — the highest-weighted dataset
+    from the search — because ``DataConfig.train`` is typed ``str`` and
+    ``soup train`` has no reader for a weighted multi-dataset mixture
+    (``data.interleave`` is validated at config-load time but never consumed
+    by ``load_dataset()``). Emitting the full dataset list there produced a
+    recipe ``soup train`` itself could not load (#330). The full ranked
+    weight/path breakdown is kept in a comment so the human-review value
+    isn't lost by collapsing to one path. ``data.interleave`` is left as-is
+    below — it already round-trips through the schema fine.
     """
     if not isinstance(report, MixOptimizationReport):
         raise TypeError(
@@ -623,15 +633,38 @@ def render_mix_recipe_yaml(report: MixOptimizationReport) -> str:
     )
     if report.partial:
         lines.append("# Budget exceeded — partial results.")
+    best_idx = max(
+        range(len(report.best_weights)), key=lambda i: report.best_weights[i]
+    )
+    best_path = report.datasets[best_idx]
+    lines.append("#")
+    lines.append(
+        "# soup train does not yet consume a weighted multi-dataset mixture"
+    )
+    lines.append(
+        "# (data.interleave has no training-time reader) — data.train below"
+    )
+    lines.append(
+        "# is the single best-performing dataset from this search. To train"
+    )
+    lines.append(
+        "# on a real combination of all N datasets, merge them first with"
+    )
+    lines.append("# `soup data merge`, then point data.train at the merged file.")
+    lines.append("#")
+    lines.append("# Full ranked result:")
+    ranked = sorted(
+        zip(report.datasets, report.best_weights), key=lambda dw: -dw[1]
+    )
+    for path, w in ranked:
+        lines.append(f"#   {w:.6f}  {path}")
     lines.append("data:")
     lines.append("  interleave:")
     lines.append("    strategy: probs")
     lines.append("    probs:")
     for w in report.best_weights:
         lines.append(f"      - {w:.6f}")
-    lines.append("  train:")
-    for path in report.datasets:
-        lines.append(f"    - {json.dumps(path)}")
+    lines.append(f"  train: {json.dumps(best_path)}")
     return "\n".join(lines) + "\n"
 
 

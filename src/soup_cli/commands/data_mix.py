@@ -124,9 +124,7 @@ def mix(
             )
         )
         # Round-trip via the renderer so the user sees the canonical shape.
-        train_paths = data_block.get("train", []) if hasattr(
-            data_block, "get"
-        ) else []
+        train_value = data_block.get("train") if hasattr(data_block, "get") else None
         interleave = (
             data_block.get("interleave", {}) if hasattr(data_block, "get") else {}
         )
@@ -137,9 +135,14 @@ def mix(
         console.print("    probs:")
         for p in probs:
             console.print(f"      - {float(p):.6f}")
-        console.print("  train:")
-        for path in train_paths:
-            console.print(f"    - {escape(str(path))}")
+        if isinstance(train_value, str):
+            # #330 — current recipes: data.train is a single string.
+            console.print(f"  train: {escape(train_value)}")
+        else:
+            # Pre-#330 recipes on disk: data.train was a YAML list.
+            console.print("  train:")
+            for path in train_value or []:
+                console.print(f"    - {escape(str(path))}")
         return
 
     if not datasets:
