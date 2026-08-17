@@ -86,7 +86,7 @@ def test_capacity_check_rejects_a_dead_pid_without_help_from_reconcile(
 
     #407 rewrites a stale 'running' row on read, so by the time
     `_live_persisted_run` inspects `status` the dead row is already terminal —
-    which means its `_pid_is_alive` guard is never the thing under test.
+    which means its `process_is_alive` guard is never the thing under test.
     Measured: deleting that guard passes all 41 MCP tests. Here reconcile is
     neutralised so the row stays 'running' with a dead pid, leaving the cap's
     own check as the only thing that can reject it. The two are each other's

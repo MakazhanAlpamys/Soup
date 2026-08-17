@@ -8,7 +8,6 @@ import os
 import secrets
 import stat
 import subprocess
-import sys
 import threading
 import time
 from dataclasses import dataclass
@@ -16,6 +15,7 @@ from pathlib import Path
 
 from soup_cli.experiment.tracker import ExperimentTracker, generate_run_id
 from soup_cli.utils.paths import atomic_write_text, enforce_under_cwd_and_no_symlink
+from soup_cli.utils.process_liveness import process_is_alive as _pid_is_alive
 
 TOKEN_TTL_SECONDS = 5 * 60
 DEFAULT_MAX_TREE_FILES = 10_000
@@ -27,77 +27,6 @@ DEFAULT_MAX_TREE_BYTES = 10 * 1024 * 1024 * 1024  # 10 GiB
 # as _STATUS_RUNNING. A recorded run only counts as active while its pid is
 # alive, so a stale record whose process is gone never blocks execution forever.
 _STATUS_RUNNING = "running"
-
-# Windows liveness constants (see _windows_pid_is_alive). GetExitCodeProcess
-# returns STILL_ACTIVE for a running process; a failed OpenProcess with only
-# ERROR_ACCESS_DENIED means the pid exists but we lack rights to open it.
-_WIN_STILL_ACTIVE = 259
-_WIN_PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-_WIN_ERROR_ACCESS_DENIED = 5
-
-
-def _windows_pid_is_alive(pid: int) -> bool:
-    """Liveness check for Windows, where ``os.kill(pid, 0)`` cannot be used.
-
-    On Windows ``CTRL_C_EVENT`` is ``0``, so ``os.kill(pid, 0)`` routes signal 0
-    to ``GenerateConsoleCtrlEvent`` — it sends a console Ctrl+C to the process
-    group and never checks existence. Query the process instead: open a
-    limited-information handle and read its exit code — a live process reads
-    ``STILL_ACTIVE`` (259). A failed open means the pid is gone unless it is only
-    ERROR_ACCESS_DENIED, which means the process exists but we lack rights.
-    """
-    import ctypes
-    from ctypes import wintypes
-
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
-    kernel32.OpenProcess.restype = wintypes.HANDLE
-    kernel32.GetExitCodeProcess.argtypes = [
-        wintypes.HANDLE,
-        ctypes.POINTER(wintypes.DWORD),
-    ]
-    kernel32.GetExitCodeProcess.restype = wintypes.BOOL
-    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
-
-    handle = kernel32.OpenProcess(
-        _WIN_PROCESS_QUERY_LIMITED_INFORMATION, False, pid
-    )
-    if not handle:
-        return ctypes.get_last_error() == _WIN_ERROR_ACCESS_DENIED
-    try:
-        exit_code = wintypes.DWORD()
-        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
-            return True  # opened but could not query — assume alive (conservative)
-        return exit_code.value == _WIN_STILL_ACTIVE
-    finally:
-        kernel32.CloseHandle(handle)
-
-
-def _pid_is_alive(pid: int) -> bool:
-    """Return True if a process with this PID currently exists.
-
-    POSIX uses signal 0 — a genuine existence/permission check delivering no
-    signal: a PID owned by another user raises PermissionError and counts as
-    alive; only a missing process (ProcessLookupError / ESRCH) is dead. Any
-    other OSError is treated as not-alive so a corrupt record does not wedge the
-    capacity gate shut.
-
-    Windows needs a different primitive: ``os.kill(pid, 0)`` there sends a
-    console Ctrl+C (``CTRL_C_EVENT == 0``) rather than checking existence, so
-    liveness goes through OpenProcess + GetExitCodeProcess (see
-    ``_windows_pid_is_alive``).
-    """
-    if sys.platform == "win32":
-        return _windows_pid_is_alive(pid)
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    except OSError:
-        return False
-    return True
 
 
 class ExecutionError(ValueError):
