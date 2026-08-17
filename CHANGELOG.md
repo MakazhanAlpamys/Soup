@@ -46,6 +46,15 @@ reproducing 70+ versions of notes.
 
 ### Fixed
 
+- **Assistant-only masking no longer mistakes `BatchEncoding` keys for token
+  ids (#430).** Tokenizer mapping outputs are read through `input_ids`, and
+  tensor-like ids are normalised to Python integers before they reach the
+  collator; missing or non-integer ids now fail loudly instead of building a
+  garbage label mask. A template that returns an all-zero assistant mask while
+  assistant messages exist now falls back to incremental rendering, avoiding a
+  silent all-`-100` no-op training run. The same mapping assumption was removed
+  from the data doctor.
+
 - **Layer streaming now verifies that every trainable LoRA parameter has real
   storage after PEFT attaches the adapter (#433).** PEFT 0.18 creates streamed
   adapters on `meta` for Soup to materialise, while PEFT 0.19 may create them as

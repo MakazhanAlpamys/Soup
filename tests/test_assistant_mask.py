@@ -69,6 +69,34 @@ class _FakeTokenizer:
         return ids
 
 
+class _StaticTokenizer:
+    def __init__(self, output):
+        self.output = output
+
+    def apply_chat_template(self, *_args, **_kwargs):
+        return self.output
+
+
+class _BatchEncodingTokenizer(_FakeTokenizer):
+    def __init__(self, *, zero_mask: bool = False):
+        super().__init__()
+        self.zero_mask = zero_mask
+        self.fallback_calls = 0
+
+    def apply_chat_template(self, messages, **kwargs):
+        from transformers import BatchEncoding
+
+        _text, ids, mask = self._render(messages)
+        if kwargs.get("return_assistant_tokens_mask"):
+            if self.zero_mask:
+                mask = [0] * len(ids)
+            return BatchEncoding(
+                {"input_ids": ids, "assistant_masks": mask}
+            )
+        self.fallback_calls += 1
+        return BatchEncoding({"input_ids": ids})
+
+
 # ---------------------------------------------------------------------------
 # Schema field
 # ---------------------------------------------------------------------------
@@ -161,6 +189,48 @@ class TestPreferredPath:
         assert len(out["labels"]) == 128
         assert len(out["attention_mask"]) == 128
 
+    def test_real_batch_encoding_is_accepted(self):
+        from soup_cli.data.loss_mask import IGNORE_INDEX, build_assistant_only_labels
+
+        tok = _BatchEncodingTokenizer()
+        out = build_assistant_only_labels(
+            [
+                {"role": "user", "content": "Q"},
+                {"role": "assistant", "content": "A"},
+            ],
+            tok,
+        )
+
+        assert tok.fallback_calls == 0
+        assert any(label != IGNORE_INDEX for label in out["labels"])
+        assert all(type(token_id) is int for token_id in out["input_ids"])
+
+    def test_all_zero_mask_with_assistant_falls_back(self):
+        from soup_cli.data.loss_mask import IGNORE_INDEX, build_assistant_only_labels
+
+        tok = _BatchEncodingTokenizer(zero_mask=True)
+        out = build_assistant_only_labels(
+            [
+                {"role": "user", "content": "Q"},
+                {"role": "assistant", "content": "A"},
+            ],
+            tok,
+        )
+
+        assert tok.fallback_calls > 0
+        assert any(label != IGNORE_INDEX for label in out["labels"])
+
+    def test_all_zero_mask_without_assistant_is_valid(self):
+        from soup_cli.data.loss_mask import IGNORE_INDEX, build_assistant_only_labels
+
+        tok = _BatchEncodingTokenizer(zero_mask=True)
+        out = build_assistant_only_labels(
+            [{"role": "user", "content": "Q"}], tok
+        )
+
+        assert tok.fallback_calls == 0
+        assert all(label == IGNORE_INDEX for label in out["labels"])
+
 
 class TestFallbackPath:
     """When tokenizer does NOT support ``return_assistant_tokens_mask``."""
@@ -215,6 +285,100 @@ class TestFallbackPath:
         assert labels[-1] == IGNORE_INDEX  # newline
         assert labels[-2] == IGNORE_INDEX  # '2'
         assert labels[-3] == IGNORE_INDEX  # 'Q'
+
+
+class TestTokenIdNormalisation:
+    def test_real_batch_encoding_returns_values_not_mapping_keys(self):
+        from transformers import BatchEncoding
+
+        from soup_cli.data.loss_mask import _tokenize_only
+
+        encoded = BatchEncoding({"input_ids": [1, 2, 3]})
+        assert not isinstance(encoded, dict)
+
+        ids = _tokenize_only(
+            _StaticTokenizer(encoded), [{"role": "user", "content": "Q"}]
+        )
+        assert ids == [1, 2, 3]
+        assert all(type(token_id) is int for token_id in ids)
+
+    def test_tensor_ids_are_normalised_to_python_ints(self):
+        import torch
+
+        from soup_cli.data.loss_mask import _tokenize_only
+
+        ids = _tokenize_only(
+            _StaticTokenizer(torch.tensor([4, 5, 6])),
+            [{"role": "user", "content": "Q"}],
+        )
+        assert ids == [4, 5, 6]
+        assert all(type(token_id) is int for token_id in ids)
+
+    def test_missing_input_ids_raises(self):
+        from transformers import BatchEncoding
+
+        from soup_cli.data.loss_mask import _tokenize_only
+
+        with pytest.raises(ValueError, match="input_ids"):
+            _tokenize_only(
+                _StaticTokenizer(BatchEncoding({"attention_mask": [1, 1]})),
+                [{"role": "user", "content": "Q"}],
+            )
+
+    def test_non_integer_token_ids_raise(self):
+        from transformers import BatchEncoding
+
+        from soup_cli.data.loss_mask import _tokenize_only
+
+        with pytest.raises(ValueError, match="non-integer input_ids"):
+            _tokenize_only(
+                _StaticTokenizer(
+                    BatchEncoding({"input_ids": ["input_ids"]})
+                ),
+                [{"role": "user", "content": "Q"}],
+            )
+
+
+class TestTokenizerMappingAudit:
+    @staticmethod
+    def _messages():
+        return [
+            {"role": "user", "content": "Q"},
+            {"role": "assistant", "content": "A"},
+        ]
+
+    def test_show_mask_path_accepts_real_batch_encoding(self):
+        from soup_cli.utils.data_doctor import _build_row_labels
+
+        messages = self._messages()
+        built = _build_row_labels(
+            _BatchEncodingTokenizer(),
+            messages,
+            max_length=16,
+            train_on_responses_only=False,
+            train_on_messages_with_train_field=False,
+            include_eot=False,
+        )
+
+        assert built["input_ids"]
+        assert all(type(token_id) is int for token_id in built["input_ids"])
+
+    def test_generation_marker_check_accepts_real_batch_encoding(self):
+        from soup_cli.utils.data_doctor import check_generation_markers
+
+        assert check_generation_markers(_BatchEncodingTokenizer()).verdict == "OK"
+
+    def test_truncation_check_measures_batch_encoding_values(self):
+        from soup_cli.utils.data_doctor import check_truncation_risk
+
+        result = check_truncation_risk(
+            _BatchEncodingTokenizer(),
+            [{"messages": self._messages()}],
+            max_length=1,
+        )
+
+        assert result.verdict == "MAJOR"
+        assert "p95 length = 1 tokens" not in result.message
 
 
 class TestPerMessageTrainField:
