@@ -409,25 +409,18 @@ class TestBuildFormatRow:
 class TestBatchEncodingAndMappingSupport:
     """Regression tests for Issue #430: BatchEncoding subclasses UserDict, not dict."""
 
-    class _MockBatchEncoding(dict):
-        pass
-
     def test_batchencoding_fallback_returns_integer_ids_not_keys(self):
-        from collections import UserDict
+        from transformers.tokenization_utils_base import BatchEncoding
 
         from soup_cli.data.loss_mask import build_assistant_only_labels
-
-        class _BatchEncoding(UserDict):
-            """Simulates HuggingFace's BatchEncoding which subclasses UserDict."""
-            pass
 
         class _BatchEncodingTokenizer:
             chat_template = "template"
             eos_token_id = 0
 
             def apply_chat_template(self, messages, tokenize=True, **kwargs):
-                # Returns BatchEncoding object
-                return _BatchEncoding({"input_ids": [101, 2054, 102]})
+                # Returns real HuggingFace BatchEncoding object
+                return BatchEncoding({"input_ids": [101, 2054, 102]})
 
         tok = _BatchEncodingTokenizer()
         messages = [
@@ -441,12 +434,9 @@ class TestBatchEncodingAndMappingSupport:
         assert all(isinstance(x, int) for x in out["labels"])
 
     def test_batchencoding_preferred_path_with_mask(self):
-        from collections import UserDict
+        from transformers.tokenization_utils_base import BatchEncoding
 
         from soup_cli.data.loss_mask import IGNORE_INDEX, build_assistant_only_labels
-
-        class _BatchEncoding(UserDict):
-            pass
 
         class _BatchEncodingMaskTokenizer:
             chat_template = "template"
@@ -461,7 +451,7 @@ class TestBatchEncodingAndMappingSupport:
                 **kwargs,
             ):
                 if return_assistant_tokens_mask and return_dict:
-                    return _BatchEncoding(
+                    return BatchEncoding(
                         {"input_ids": [101, 2054, 102], "assistant_masks": [0, 1, 0]}
                     )
                 return [101, 2054, 102]
@@ -474,6 +464,33 @@ class TestBatchEncodingAndMappingSupport:
         out = build_assistant_only_labels(messages, tok)
         assert out["input_ids"] == [101, 2054, 102]
         assert out["labels"] == [IGNORE_INDEX, 2054, IGNORE_INDEX]
+
+    def test_check_generation_markers_with_batchencoding(self):
+        from transformers.tokenization_utils_base import BatchEncoding
+
+        from soup_cli.utils.data_doctor import check_generation_markers
+
+        class _DoctorTokenizer:
+            chat_template = "{{ messages }}"
+
+            def apply_chat_template(
+                self,
+                messages,
+                tokenize=True,
+                return_assistant_tokens_mask=False,
+                return_dict=False,
+                **kwargs,
+            ):
+                if return_assistant_tokens_mask and return_dict:
+                    return BatchEncoding(
+                        {"input_ids": [1, 2, 3], "assistant_masks": [0, 1, 0]}
+                    )
+                return [1, 2, 3]
+
+        tok = _DoctorTokenizer()
+        check = check_generation_markers(tok)
+        assert check.verdict == "OK"
+        assert "exact assistant-only masking" in check.message
 
     def test_tensor_like_input_ids_converted_to_ints(self):
         from soup_cli.data.loss_mask import build_assistant_only_labels

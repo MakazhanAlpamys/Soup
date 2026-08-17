@@ -46,6 +46,14 @@ reproducing 70+ versions of notes.
 
 ### Fixed
 
+- **`loss_mask` and `data_doctor` now accept `BatchEncoding` and non-dict `Mapping` outputs (#430).**
+  `tokenizer.apply_chat_template` returns a `BatchEncoding` (a `UserDict` subclass) when `return_dict=True`
+  or when configured. Strict `isinstance(..., dict)` checks caused fallback tokenization to iterate over mapping
+  keys (`['input_ids']`) as token strings, silently corrupting assistant loss masks, `--show-mask` labeling,
+  `check_generation_markers` detection, and truncation risk estimation. All tokenization paths now accept general
+  `Mapping` objects, extract `"input_ids"`, coerce tensor/sequence token IDs to integers, and raise `TypeError`
+  on invalid token outputs.
+
 - **Layer streaming now verifies that every trainable LoRA parameter has real
   storage after PEFT attaches the adapter (#433).** PEFT 0.18 creates streamed
   adapters on `meta` for Soup to materialise, while PEFT 0.19 may create them as

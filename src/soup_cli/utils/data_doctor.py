@@ -267,7 +267,7 @@ def _build_row_labels(
             messages, tokenizer, max_length=max_length, include_eot=include_eot
         )
     ids = tokenizer.apply_chat_template(messages, tokenize=True, add_generation_prompt=False)
-    if isinstance(ids, dict):
+    if isinstance(ids, Mapping) or hasattr(ids, "get"):
         ids = ids.get("input_ids", [])
     # Truncate to max_length like the other two strategies (both delegate
     # to data.loss_mask._truncate) — otherwise legacy_text is the only path
@@ -624,7 +624,7 @@ def check_truncation_risk(
             )
         except Exception:  # noqa: BLE001 — render failures are reported by template_render
             continue
-        if isinstance(ids, dict):
+        if isinstance(ids, Mapping) or hasattr(ids, "get"):
             ids = ids.get("input_ids", [])
         lengths.append(float(len(ids)))
     if not lengths:

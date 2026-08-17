@@ -12,7 +12,9 @@ Two strategies:
 
 1. **Preferred**: ``tokenizer.apply_chat_template(..., return_assistant_tokens_mask=True,
    return_dict=True)``. Available on HF templates that declare ``{% generation %}``
-   markers. Honest, exact, no heuristic.
+   markers. Honest, exact, no heuristic. An all-zero assistant mask (e.g. prompt-only
+   dialogue) is honoured directly: all label positions become ``IGNORE_INDEX`` (-100),
+   contributing zero loss.
 
 2. **Fallback**: Render ``messages[:i]`` vs ``messages[:i+1]`` for each turn and
    take the token delta. The delta is the new turn's tokens (prefix + content +
@@ -23,6 +25,9 @@ Two strategies:
    path is necessarily looser than the preferred path — the role-prefix tokens
    (e.g. ``<|assistant|>``) end up in the loss too. Users wanting strict
    assistant-content-only must pass a tokenizer with ``{% generation %}`` markers.
+
+Tokenizer outputs returning `BatchEncoding`, `Mapping`, or tensor containers
+(supporting `.tolist()`) are unpacked and coerced to integer token IDs.
 """
 
 from __future__ import annotations
