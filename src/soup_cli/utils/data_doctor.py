@@ -361,8 +361,10 @@ def check_generation_markers(tokenizer: Any) -> DoctorCheck:
             probe, tokenize=True, add_generation_prompt=False,
             return_assistant_tokens_mask=True, return_dict=True,
         )
-        has_markers = isinstance(out, dict) and bool(out.get("assistant_masks")) and any(
-            out["assistant_masks"]
+        has_markers = (
+            (isinstance(out, Mapping) or hasattr(out, "get"))
+            and bool(out.get("assistant_masks"))
+            and any(out.get("assistant_masks", []))
         )
     except Exception:  # noqa: BLE001 — any failure means no usable markers
         has_markers = False

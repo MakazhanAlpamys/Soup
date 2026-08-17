@@ -27,6 +27,7 @@ Two strategies:
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any, Optional, Sequence
 
 IGNORE_INDEX = -100
@@ -61,15 +62,24 @@ def _apply_template_with_mask(
     except TypeError:
         # Old HF that doesn't recognise return_assistant_tokens_mask.
         return None
-    if not isinstance(out, dict):
+    if not isinstance(out, Mapping) and not hasattr(out, "get"):
         return None
     masks = out.get("assistant_masks")
     ids = out.get("input_ids")
     if masks is None or ids is None:
         return None
+    if hasattr(ids, "tolist"):
+        ids = ids.tolist()
+    if hasattr(masks, "tolist"):
+        masks = masks.tolist()
     if len(masks) != len(ids):
         return None
-    return list(ids), list(masks)
+    try:
+        int_ids = [int(x) for x in ids]
+        int_masks = [int(x) for x in masks]
+    except (TypeError, ValueError):
+        return None
+    return int_ids, int_masks
 
 
 def _tokenize_only(tokenizer: Any, messages: Sequence[dict]) -> list[int]:
@@ -88,9 +98,25 @@ def _tokenize_only(tokenizer: Any, messages: Sequence[dict]) -> list[int]:
             tokenize=True,
             add_generation_prompt=False,
         )
-    if isinstance(out, dict):
-        return list(out.get("input_ids", []))
-    return list(out)
+    if isinstance(out, Mapping) or hasattr(out, "get"):
+        ids = out.get("input_ids")
+        if ids is None:
+            raise TypeError(
+                f"Tokenizer output mapping has no 'input_ids' field: {type(out).__name__}"
+            )
+        out = ids
+
+    if hasattr(out, "tolist"):
+        out = out.tolist()
+
+    try:
+        token_ids = [int(x) for x in out]
+    except (TypeError, ValueError) as exc:
+        raise TypeError(
+            f"Tokenizer returned non-integer token ids ({type(out).__name__}): {out!r}"
+        ) from exc
+
+    return token_ids
 
 
 def _truncate(

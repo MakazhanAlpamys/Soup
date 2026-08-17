@@ -399,3 +399,130 @@ class TestBuildFormatRow:
         }
         out = fn(long_row)
         assert len(out["input_ids"]) == 64
+
+
+# ---------------------------------------------------------------------------
+# Issue #430: BatchEncoding and UserDict / Mapping support
+# ---------------------------------------------------------------------------
+
+
+class TestBatchEncodingAndMappingSupport:
+    """Regression tests for Issue #430: BatchEncoding subclasses UserDict, not dict."""
+
+    class _MockBatchEncoding(dict):
+        pass
+
+    def test_batchencoding_fallback_returns_integer_ids_not_keys(self):
+        from collections import UserDict
+
+        from soup_cli.data.loss_mask import build_assistant_only_labels
+
+        class _BatchEncoding(UserDict):
+            """Simulates HuggingFace's BatchEncoding which subclasses UserDict."""
+            pass
+
+        class _BatchEncodingTokenizer:
+            chat_template = "template"
+            eos_token_id = 0
+
+            def apply_chat_template(self, messages, tokenize=True, **kwargs):
+                # Returns BatchEncoding object
+                return _BatchEncoding({"input_ids": [101, 2054, 102]})
+
+        tok = _BatchEncodingTokenizer()
+        messages = [
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": "hi"},
+        ]
+        out = build_assistant_only_labels(messages, tok)
+        # Must return integer token ids, NOT the mapping key strings ['input_ids']
+        assert out["input_ids"] == [101, 2054, 102]
+        assert all(isinstance(x, int) for x in out["input_ids"])
+        assert all(isinstance(x, int) for x in out["labels"])
+
+    def test_batchencoding_preferred_path_with_mask(self):
+        from collections import UserDict
+
+        from soup_cli.data.loss_mask import IGNORE_INDEX, build_assistant_only_labels
+
+        class _BatchEncoding(UserDict):
+            pass
+
+        class _BatchEncodingMaskTokenizer:
+            chat_template = "template"
+            eos_token_id = 0
+
+            def apply_chat_template(
+                self,
+                messages,
+                tokenize=True,
+                return_assistant_tokens_mask=False,
+                return_dict=False,
+                **kwargs,
+            ):
+                if return_assistant_tokens_mask and return_dict:
+                    return _BatchEncoding(
+                        {"input_ids": [101, 2054, 102], "assistant_masks": [0, 1, 0]}
+                    )
+                return [101, 2054, 102]
+
+        tok = _BatchEncodingMaskTokenizer()
+        messages = [
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": "hi"},
+        ]
+        out = build_assistant_only_labels(messages, tok)
+        assert out["input_ids"] == [101, 2054, 102]
+        assert out["labels"] == [IGNORE_INDEX, 2054, IGNORE_INDEX]
+
+    def test_tensor_like_input_ids_converted_to_ints(self):
+        from soup_cli.data.loss_mask import build_assistant_only_labels
+
+        class _TensorLike:
+            def __init__(self, data):
+                self._data = data
+
+            def tolist(self):
+                return self._data
+
+        class _TensorTokenizer:
+            chat_template = "template"
+
+            def apply_chat_template(self, messages, tokenize=True, **kwargs):
+                return {"input_ids": _TensorLike([42, 43, 44])}
+
+        tok = _TensorTokenizer()
+        messages = [{"role": "user", "content": "hello"}]
+        out = build_assistant_only_labels(messages, tok)
+        assert out["input_ids"] == [42, 43, 44]
+        assert all(isinstance(x, int) for x in out["input_ids"])
+
+    def test_invalid_string_tokens_raises_type_error(self):
+        from soup_cli.data.loss_mask import build_assistant_only_labels
+
+        class _BadTokenizer:
+            chat_template = "template"
+
+            def apply_chat_template(self, messages, tokenize=True, **kwargs):
+                # Returns strings instead of int ids
+                return ["not", "integer", "ids"]
+
+        tok = _BadTokenizer()
+        messages = [{"role": "user", "content": "hello"}]
+        with pytest.raises(TypeError, match="non-integer"):
+            build_assistant_only_labels(messages, tok)
+
+    def test_mapping_missing_input_ids_raises_type_error(self):
+        from soup_cli.data.loss_mask import build_assistant_only_labels
+
+        class _NoInputIdsTokenizer:
+            chat_template = "template"
+
+            def apply_chat_template(self, messages, tokenize=True, **kwargs):
+                return {"other_key": [1, 2, 3]}
+
+        tok = _NoInputIdsTokenizer()
+        messages = [{"role": "user", "content": "hello"}]
+        with pytest.raises(TypeError, match="no 'input_ids' field"):
+            build_assistant_only_labels(messages, tok)
+
