@@ -72,6 +72,23 @@ class TestAdapterMaterializationPostcondition:
         model = _adapter_model(adapter_device="meta", adapter_trainable=False)
         assert_trainable_adapters_materialized(model)
 
+    def test_trainable_meta_non_lora_parameter_is_out_of_scope(self):
+        import torch
+        import torch.nn as nn
+
+        from soup_cli.utils.layer_stream_runtime import (
+            assert_trainable_adapters_materialized,
+        )
+
+        class _Model(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.classifier_weight = nn.Parameter(
+                    torch.empty(2, 2, device="meta"), requires_grad=True
+                )
+
+        assert_trainable_adapters_materialized(_Model())
+
 
 def test_streamed_build_refuses_a_materializer_that_skips_a_meta_adapter(monkeypatch):
     """Negative control: stub the capability and force the failure state.
