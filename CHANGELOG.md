@@ -132,12 +132,17 @@ reproducing 70+ versions of notes.
   no warning at any point. `env check` audits installed versions against the
   bounds read from package metadata — not a hardcoded copy, since a second copy
   of the cap is exactly the drift this catches — and exits 3 when one is violated,
-  independent of any lock file. Only the CORE bounds (those that apply to every
-  install) are enforced: an `extra == "X"` requirement is Soup's bound only when
-  `[X]` was opted into, which the running environment cannot confirm, so its
-  marker is evaluated and it is skipped rather than raised as a false positive,
-  and a package is counted once even when its bound is restated under several
-  extras. The bounds audit no longer short-circuits the lock diagnostic (both
+  independent of any lock file. An `extra == "X"` requirement is Soup's bound
+  only when `[X]` was opted into, which the running environment cannot confirm,
+  so its marker is evaluated and it is skipped rather than raised as a false
+  positive — except for the ABI-relevant `TRACKED_PACKAGES` set, which since the
+  v0.71.0 deps-split lives in metadata *only* under `extra == "train"/"all"/
+  "dev"` and therefore includes the `transformers <5.0.0` case #368 was reported
+  about. A package is counted once even when its bound is restated under several
+  extras. If `packaging` is somehow unimportable the audit still degrades to a
+  clean report so `env check` keeps working, but now says so rather than
+  reporting a silent clean it never verified. The bounds audit no longer
+  short-circuits the lock diagnostic (both
   print). `packaging` is a declared dependency now — the audit degraded to a
   silent "clean" without it, the wrong direction for a checker.
   `docs/serving-and-export.md` states the separate-environment guidance for
