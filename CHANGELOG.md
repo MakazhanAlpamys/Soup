@@ -55,6 +55,19 @@ reproducing 70+ versions of notes.
   trainable `lora_*` parameter remains on `meta`, naming the stranded parameter
   instead of allowing a silent no-training run.
 
+- **Windows process liveness misread a process that exited with code 259 as
+  still running, forever (#424).** `GetExitCodeProcess` returns `STILL_ACTIVE`
+  (259) for a genuinely running process, but 259 is also a legal exit code, so
+  a child that exited *with* 259 was indistinguishable from one still running.
+  That silently defeated `ExperimentTracker`'s reconcile-on-read (#401) and
+  could wedge the MCP server's one-active-execution cap (#402) shut, refusing
+  every subsequent execution with no error an operator could act on. The check
+  now waits on the process handle with `WaitForSingleObject(handle, 0)`, which
+  is signalled the instant the process exits regardless of its exit code,
+  falling back to the exit-code read only if the wait itself fails. The two
+  byte-identical copies of this primitive in `experiment/tracker.py` and
+  `mcp_server/execution.py` are now one shared `utils/process_liveness.py`.
+
 - **`soup train --no-reexec` now prints the flags you actually typed (#372).**
   The advisory `accelerate launch` command is derived from the same argv the
   auto-reexec would have used, so `--fsdp` / `--deepspeed` / `--config` (and the
