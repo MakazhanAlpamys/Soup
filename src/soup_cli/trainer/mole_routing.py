@@ -24,9 +24,11 @@ from typing import Any, Optional
 from rich.console import Console
 
 from soup_cli.config.schema import SoupConfig
+from soup_cli.utils.mixed_precision import align_trainable_dtype_for_fp16
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 
 logger = logging.getLogger(__name__)
+
 console = Console()
 
 
@@ -383,6 +385,11 @@ class MoleRoutingTrainerWrapper:
             data_collator=collator,
         )
         console.print("[green]Starting MoLE gate training...[/]")
+        align_trainable_dtype_for_fp16(
+            self.trainer.model,
+            fp16=getattr(self.trainer.args, "fp16", False),
+            bf16=getattr(self.trainer.args, "bf16", False),
+        )
         result = self.trainer.train()
         # Persist the trained gate (the base + adapters are unchanged on disk).
         import torch

@@ -86,6 +86,16 @@ reproducing 70+ versions of notes.
   is wrong; it prints what it overrode beside what was detected. Disk detection
   may write a small scratch file next to the streamed shards to run the probe.
 
+- **`stream_layers` / fp16 training crashed on pre-Ampere GPUs — a bf16 LoRA
+  adapter was handed to the fp16 GradScaler (#425).** peft creates LoRA adapters
+  in the base checkpoint's dtype (bf16 for Llama-3.1); on a T4 / P100 / V100 /
+  GTX 16xx / RTX 20xx the stream and mixed precision are fp16, so
+  `clip_grad_norm` raised `_amp_foreach_non_finite_check_and_unscale_cuda not
+  implemented for 'BFloat16'`. `utils.mixed_precision.align_trainable_dtype_for_fp16`
+  casts trainable `*lora_*` params to fp32 (matching `materialize_meta_adapters`)
+  before the optimizer is created, and every trainer wrapper now calls it before
+  `train()` — enforced by a scanner test rather than a hand-written list.
+
 ### Fixed
 
 ### Fixed

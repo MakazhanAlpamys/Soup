@@ -17,6 +17,7 @@ from soup_cli.utils.gpu import (
     model_size_from_name,
     resolve_device_map,
 )
+from soup_cli.utils.mixed_precision import align_trainable_dtype_for_fp16
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 
 console = Console()
@@ -625,6 +626,11 @@ class GRPOTrainerWrapper:
             self.config.training,
             self._output_dir,
         ):
+            align_trainable_dtype_for_fp16(
+                self.trainer.model,
+                fp16=getattr(self.trainer.args, "fp16", False),
+                bf16=getattr(self.trainer.args, "bf16", False),
+            )
             self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         duration = time.time() - start
 
