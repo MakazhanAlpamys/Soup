@@ -14,6 +14,12 @@ reproducing 70+ versions of notes.
 
 ### Fixed
 
+- **`tests/test_no_foreign_license_headers.py` no longer flags its own docstring
+  example (#449 by @harshitthek in #450).** The module docstring's explanatory AGPL header
+  example started with `#` inside the 40-line scan window, causing `_scan_repo`
+  to match its own docstring once committed and tracked. `_scan_repo` now excludes
+  the test module itself from scanning, and the docstring example omits leading `#`.
+
 - **`soup data mix --live` handed every candidate proxy run a config it could
   not load (#442 by @blackcoderx in #445).** `_render_overlay_yaml` emitted `data.train` as a YAML
   list, the same shape #330 fixed in the recipe writer, but every `--live`

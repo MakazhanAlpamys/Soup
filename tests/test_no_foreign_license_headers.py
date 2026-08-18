@@ -2,8 +2,8 @@
 
 This project is Apache-2.0. Three times now a file has landed carrying
 
-    # SPDX-License-Identifier: AGPL-3.0-only
-    # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
+    SPDX-License-Identifier: AGPL-3.0-only
+    Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
 at the top -- twice in ``8e4f012`` (removed by hand) and a third time in
 ``3426f2c``, which **I merged without noticing**, having already been burned by
@@ -101,8 +101,11 @@ def _offending_lines(text: str) -> list[tuple[int, str, str]]:
 
 
 def _scan_repo() -> list[str]:
+    self_path = Path(__file__).resolve()
     problems: list[str] = []
     for path in _tracked_files():
+        if path.resolve() == self_path:
+            continue
         if path.suffix.lower() not in SCANNED_SUFFIXES:
             continue
         try:
@@ -197,4 +200,10 @@ class TestTheScannerCanActuallyFail:
         text = "\n".join(["# filler"] * HEADER_LINES) + (
             "\n# SPDX-License-Identifier: AGPL-3.0-only\n"
         )
+        assert _offending_lines(text) == []
+
+    def test_the_scanner_module_itself_passes(self):
+        """The scanner module must not flag its own docstring or header."""
+        target = Path(__file__).resolve()
+        text = io.open(target, encoding="utf-8", errors="replace").read()
         assert _offending_lines(text) == []
