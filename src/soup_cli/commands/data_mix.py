@@ -14,6 +14,7 @@ optimiser surface, and the recipe writer end-to-end without GPUs.
 
 from __future__ import annotations
 
+import json
 import math
 from typing import Optional, Tuple
 
@@ -136,8 +137,10 @@ def mix(
         for p in probs:
             console.print(f"      - {float(p):.6f}")
         if isinstance(train_value, str):
-            # #330 — current recipes: data.train is a single string.
-            console.print(f"  train: {escape(train_value)}")
+            # #330 — current recipes: data.train is a single string. Quote it
+            # the same way render_mix_recipe_yaml does — an unquoted path
+            # like "odd: name.jsonl" is not valid YAML when pasted back.
+            console.print(f"  train: {escape(json.dumps(train_value))}")
         else:
             # Pre-#330 recipes on disk: data.train was a YAML list.
             console.print("  train:")

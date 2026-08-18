@@ -99,6 +99,53 @@ def test_apply_cli_prints_new_string_shape_recipe(tmp_path, monkeypatch):
     assert "a.jsonl" in after[:200], result.output
 
 
+def test_render_recipe_rejects_empty_weights(tmp_path):
+    report = _report([], [], tmp_path)
+    try:
+        render_mix_recipe_yaml(report)
+    except ValueError as exc:
+        assert "best_weights" in str(exc)
+    else:
+        raise AssertionError("expected ValueError for empty best_weights")
+
+
+def test_render_recipe_rejects_mismatched_weights_length(tmp_path):
+    report = _report(["a.jsonl", "b.jsonl"], [0.5, 0.3, 0.2], tmp_path)
+    try:
+        render_mix_recipe_yaml(report)
+    except ValueError as exc:
+        assert "best_weights" in str(exc)
+    else:
+        raise AssertionError("expected ValueError for mismatched lengths")
+
+
+def test_apply_cli_quotes_path_needing_quoting(tmp_path, monkeypatch):
+    # Maintainer's repro: an unquoted `train: odd: name.jsonl` line is not
+    # valid YAML when pasted back — the --apply echo must quote it the same
+    # way the renderer does.
+    import yaml
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "odd.yaml").write_text(
+        'data:\n'
+        '  interleave:\n'
+        '    strategy: probs\n'
+        '    probs:\n'
+        '      - 1.000000\n'
+        '  train: "odd: name.jsonl"\n'
+    )
+    from typer.testing import CliRunner
+
+    from soup_cli.cli import app
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["data", "mix", "--apply", "odd.yaml"])
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    data_block = result.output[result.output.index("data:"):]
+    loaded = yaml.safe_load(data_block)
+    assert loaded["data"]["train"] == "odd: name.jsonl"
+
+
 def test_apply_handles_pre_fix_list_shaped_recipe(tmp_path, monkeypatch):
     # A recipe written by the pre-fix code (data.train as a YAML list) must
     # still print via --apply rather than crash — old files on disk survive

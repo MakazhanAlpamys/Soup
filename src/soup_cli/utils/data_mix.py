@@ -633,6 +633,14 @@ def render_mix_recipe_yaml(report: MixOptimizationReport) -> str:
     )
     if report.partial:
         lines.append("# Budget exceeded — partial results.")
+    if not report.best_weights:
+        raise ValueError("report.best_weights is empty — nothing to render.")
+    if len(report.best_weights) != len(report.datasets):
+        raise ValueError(
+            "report.best_weights length "
+            f"({len(report.best_weights)}) must match report.datasets length "
+            f"({len(report.datasets)})."
+        )
     best_idx = max(
         range(len(report.best_weights)), key=lambda i: report.best_weights[i]
     )

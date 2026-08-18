@@ -65,6 +65,15 @@ reproducing 70+ versions of notes.
   silent all-`-100` no-op training run. The same mapping assumption was removed
   from the data doctor.
 
+- **`soup data mix --optimize` wrote a recipe `soup train` could not load
+  (#330).** `render_mix_recipe_yaml` emitted `data.train` as a YAML list of
+  every searched dataset, but `DataConfig.train` is typed `str`, so the recipe
+  failed to load with `data -> train: Input should be a valid string`.
+  `data.train` now renders as the single highest-weighted dataset from the
+  search; the full ranked weight/path breakdown is kept as a comment above it
+  so no information is lost, and the comment explains that `data.interleave`
+  is not yet consumed by training.
+
 - **Layer streaming now verifies that every trainable LoRA parameter has real
   storage after PEFT attaches the adapter (#433).** PEFT 0.18 creates streamed
   adapters on `meta` for Soup to materialise, while PEFT 0.19 may create them as
