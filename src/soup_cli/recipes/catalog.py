@@ -4239,6 +4239,41 @@ training:
 output: ./output
 """,
     ),
+    "glm-5.1-dpo": RecipeMeta(
+        model="zai-org/GLM-5.1",
+        task="dpo",
+        size="754B",
+        tags=("glm", "zai-org", "dpo", "alignment", "preference", "moe", "large", "multi-gpu"),
+        description=(
+            "GLM 5.1 MoE DPO alignment (MIT, 754B). Multi-GPU / multi-node recommended."
+        ),
+        yaml_str="""\
+base: zai-org/GLM-5.1
+task: dpo
+
+data:
+  train: ./data/preference_train.jsonl
+  format: dpo
+  max_length: 8192
+
+training:
+  epochs: 1
+  lr: 5e-6
+  batch_size: 1
+  gradient_accumulation_steps: 16
+  lora:
+    r: 32
+    alpha: 64
+    target_modules: auto
+  quantization: 4bit
+  dpo_beta: 0.1
+  moe_lora: true
+  moe_aux_loss_coeff: 0.01
+  gradient_checkpointing: true
+
+output: ./output
+""",
+    ),
     "kimi-k2.5-sft": RecipeMeta(
         model="moonshotai/Kimi-K2.5",
         task="sft",
