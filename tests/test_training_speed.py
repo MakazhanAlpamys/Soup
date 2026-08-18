@@ -11,12 +11,18 @@ Covers:
 
 from __future__ import annotations
 
+import os
+import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
 from pydantic import ValidationError
 
 from soup_cli.config.schema import SoupConfig, TrainingConfig
+
+# _tiny_llama_dir lives in test_v07202 and is deliberately not duplicated here,
+# same convention as test_v07300.py.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # ─── Part A: Cut Cross-Entropy (CCE) ───────────────────────────────────────
 
@@ -112,7 +118,12 @@ class TestCutCEApplication:
             fake_cce.assert_called_once_with("llama")
 
     def test_apply_cut_ce_deepseek_phi_does_not_use_phi(self):
-        """Regression: org-prefix like 'deepseek-ai/...' must not trigger phi."""
+        """Regression: org-prefix like 'deepseek-ai/...' must not trigger phi
+        via the substring-fallback path. ``_detect_model_type`` is forced to ""
+        here (offline) so this exercises the fallback deterministically:
+        with real config resolution deepseek-coder is genuinely Llama-arch and
+        the model_type path would (correctly) patch it, see
+        TestCutCEDetectsArchitectureFromTheConfig below."""
         from soup_cli.utils.cut_ce import apply_cut_ce
 
         fake_cce = MagicMock()
@@ -120,6 +131,8 @@ class TestCutCEApplication:
         fake_module = MagicMock(transformers=fake_transformers)
         with patch(
             "soup_cli.utils.cut_ce.check_cut_ce_available", return_value=True
+        ), patch(
+            "soup_cli.utils.cut_ce._detect_model_type", return_value=""
         ), patch.dict(
             "sys.modules",
             {
@@ -131,6 +144,120 @@ class TestCutCEApplication:
             # anymore thanks to the last-path-component detector.
             assert apply_cut_ce("deepseek-ai/deepseek-coder-7b-instruct") is False
             fake_cce.assert_not_called()
+
+
+class TestCutCEDetectsArchitectureFromTheConfig:
+    """apply_cut_ce() matched on a SUBSTRING OF THE MODEL PATH and silently
+    no-opped on every local checkpoint directory Soup itself produces
+    (checkpoint-2000, my-finetune, ...): none of those names carry an
+    architecture keyword. It also conflated Phi-2 with Phi-3 (both contain
+    "phi", cut_cross_entropy has a patcher for neither's real model_type
+    distinctly, "phi3" only). The architecture is in the config, exactly
+    the fix liger.py already shipped for #78: ``AutoConfig.model_type`` is
+    the same string ``cce_patch`` itself dispatches on."""
+
+    def _fake_cce(
+        self, monkeypatch, calls, supported=("llama", "phi3", "gemma2", "mistral", "qwen2")
+    ):
+        """Mirrors upstream's own dispatch (apple/ml-cross-entropy
+        cut_cross_entropy/transformers/patch.py::PATCH_FNS): raises
+        RuntimeError for a model_type it has no patcher for."""
+        import sys
+        import types
+
+        def _patch(model_type_or_model, *args, **kwargs):
+            calls.append(model_type_or_model)
+            if model_type_or_model not in supported:
+                raise RuntimeError(f"Unknown model type {model_type_or_model}")
+
+        mod = types.ModuleType("cut_cross_entropy.transformers")
+        mod.cce_patch = _patch
+        parent = types.ModuleType("cut_cross_entropy")
+        parent.transformers = mod
+        monkeypatch.setitem(sys.modules, "cut_cross_entropy", parent)
+        monkeypatch.setitem(sys.modules, "cut_cross_entropy.transformers", mod)
+        return calls
+
+    def test_a_local_checkpoint_dir_with_no_architecture_in_its_name_is_still_detected(
+        self, tmp_path, monkeypatch
+    ):
+        from test_v07202 import _tiny_llama_dir
+
+        from soup_cli.utils import cut_ce as cut_ce_mod
+
+        weights, _, _ = _tiny_llama_dir(tmp_path)
+        assert "llama" not in weights.lower(), (
+            "the fixture path must NOT contain the architecture name, or this "
+            "test passes for the substring matcher too and proves nothing"
+        )
+        calls = self._fake_cce(monkeypatch, [])
+        monkeypatch.setattr(cut_ce_mod, "check_cut_ce_available", lambda: True)
+
+        assert cut_ce_mod.apply_cut_ce(weights) is True
+        assert calls == ["llama"], calls
+
+    def test_phi2_is_not_dispatched_to_the_phi3_patcher(self, tmp_path, monkeypatch):
+        """CONTROL for the conflation half of the bug. Phi-2's real
+        ``config.model_type`` is "phi", not "phi3": cut_cross_entropy has no
+        Phi-2 patcher, so this must report False, not silently reuse phi3's."""
+        import json
+
+        from soup_cli.utils import cut_ce as cut_ce_mod
+
+        directory = tmp_path / "step-2000"
+        directory.mkdir()
+        (directory / "config.json").write_text(json.dumps({"model_type": "phi"}))
+        calls = self._fake_cce(monkeypatch, [])
+        monkeypatch.setattr(cut_ce_mod, "check_cut_ce_available", lambda: True)
+
+        assert cut_ce_mod.apply_cut_ce(str(directory)) is False
+        assert calls == ["phi"], calls
+
+    def test_an_unsupported_architecture_still_reports_false(self, tmp_path, monkeypatch):
+        """CONTROL: detection by config must not turn into "always True": an
+        architecture cce_patch does not support (gpt2 has no CCE patcher) has
+        to keep reporting False so the caller keeps printing its advisory."""
+        import json
+
+        from soup_cli.utils import cut_ce as cut_ce_mod
+
+        directory = tmp_path / "gpt2-run"
+        directory.mkdir()
+        (directory / "config.json").write_text(json.dumps({"model_type": "gpt2"}))
+        self._fake_cce(monkeypatch, [])
+        monkeypatch.setattr(cut_ce_mod, "check_cut_ce_available", lambda: True)
+
+        assert cut_ce_mod.apply_cut_ce(str(directory)) is False
+
+    def test_config_unavailable_falls_back_to_the_name_based_match(self, monkeypatch):
+        """No local config.json and no network: model_type resolution fails
+        quietly, and the last-path-component fallback still applies."""
+        from soup_cli.utils import cut_ce as cut_ce_mod
+
+        calls = self._fake_cce(monkeypatch, [])
+        monkeypatch.setattr(cut_ce_mod, "check_cut_ce_available", lambda: True)
+        monkeypatch.setattr(cut_ce_mod, "_detect_model_type", lambda model_name: "")
+
+        assert cut_ce_mod.apply_cut_ce("meta-llama/Llama-3.1-8B") is True
+        assert calls == ["llama"], calls
+
+
+class TestCutCEUnifiedMessage:
+    """The two call sites (trainer/sft.py, utils/v028_features.py) used to
+    hand-write diverging copies of the "no matching architecture" advisory."""
+
+    def test_sft_and_v028_features_reference_the_shared_constant(self):
+        """Both call sites import ``NO_MATCHING_ARCHITECTURE_MESSAGE`` rather
+        than hand-writing their own copy of the string, so it is checked by
+        name here: a literal-text check would pass even if one side kept a
+        hardcoded string that happened to match today and drifted tomorrow."""
+        import inspect
+
+        import soup_cli.trainer.sft as sft_mod
+        import soup_cli.utils.v028_features as v028_mod
+
+        assert "NO_MATCHING_ARCHITECTURE_MESSAGE" in inspect.getsource(sft_mod)
+        assert "NO_MATCHING_ARCHITECTURE_MESSAGE" in inspect.getsource(v028_mod)
 
 
 class TestCutCEValidation:

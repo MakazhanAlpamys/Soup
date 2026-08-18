@@ -17,6 +17,10 @@ Incompatibilities:
 
 from __future__ import annotations
 
+# Single source of truth for the advisory both trainer/sft.py and
+# utils/v028_features.py print when apply_cut_ce() returns False.
+NO_MATCHING_ARCHITECTURE_MESSAGE = "no matching architecture or cut_cross_entropy not installed"
+
 
 def check_cut_ce_available() -> bool:
     """Return True if the ``cut_cross_entropy`` package is importable."""
@@ -38,6 +42,22 @@ def get_cut_ce_version() -> str | None:
         return None
 
 
+def _detect_model_type(model_name: str) -> str:
+    """``config.model_type`` for a local path or hub id, or "" when unavailable.
+
+    Mirrors ``liger.py::_detect_model_type``. Deliberately quiet: a missing
+    config (offline, gated repo, no config.json) is not an error here, it
+    just means the caller falls back to the name-based match.
+    """
+    try:
+        from transformers import AutoConfig
+
+        config = AutoConfig.from_pretrained(model_name, trust_remote_code=False)
+    except Exception:  # noqa: BLE001 (detection is best-effort by design)
+        return ""
+    return str(getattr(config, "model_type", "") or "")
+
+
 def apply_cut_ce(model_name: str) -> bool:
     """Patch HuggingFace transformers to use Cut Cross-Entropy.
 
@@ -46,8 +66,11 @@ def apply_cut_ce(model_name: str) -> bool:
     ``from_pretrained()`` instances see the patched class.
 
     Args:
-        model_name: Base model name/path — used only to pick the
-            architecture-specific patcher (Llama, Mistral, Qwen, …).
+        model_name: Base model name/path, used to resolve the
+            architecture-specific patcher (Llama, Mistral, Qwen, …), first via
+            ``config.model_type`` (works for a local checkpoint directory as
+            well as a hub id) and, only if that is unavailable, via a
+            substring match on the name itself.
 
     Returns:
         True if the patch was applied successfully, False otherwise
@@ -56,32 +79,42 @@ def apply_cut_ce(model_name: str) -> bool:
     if not check_cut_ce_available():
         return False
 
-    # Match on the last path component to avoid substrings from
-    # upstream-org / parent-dir names leaking into architecture selection
-    # (e.g. "deepseek-ai/DeepSeek-R1-Distill-Phi-7B" should not be patched
-    # with the Phi recipe when the model is actually DeepSeek-distilled).
-    last_component = model_name.rsplit("/", 1)[-1].lower()
+    try:
+        from cut_cross_entropy.transformers import cce_patch
+    except (ImportError, AttributeError, NotImplementedError):
+        return False
 
-    # Detection rules are ordered from most-specific to least-specific to
-    # avoid "codellama" matching "llama" first, etc.
+    # Primary path, mirrors liger.py's identical fix for #78: resolve the real
+    # architecture from the model's own config. cce_patch raises RuntimeError
+    # for a model_type it has no patcher for (e.g. Phi-2) rather than us guessing.
+    model_type = _detect_model_type(model_name)
+    if model_type:
+        try:
+            cce_patch(model_type)
+            return True
+        except (AttributeError, NotImplementedError, RuntimeError, ValueError):
+            pass
+
+    # Fallback for when config resolution has nothing to read from. Match on
+    # the last path component only, to keep an upstream-org / parent-dir
+    # name from leaking into architecture selection.
+    last_component = model_name.rsplit("/", 1)[-1].lower()
     detectors = (
         (("codellama",), "llama"),
         (("llama",), "llama"),
         (("mixtral",), "mistral"),
         (("mistral",), "mistral"),
         (("qwen",), "qwen2"),
-        (("gemma",), "gemma"),
-        (("phi-3", "phi3", "phi4", "phi-4", "phi2", "phi-2"), "phi3"),
+        (("gemma2", "gemma-2"), "gemma2"),
+        (("phi-3", "phi3", "phi4", "phi-4"), "phi3"),
     )
 
     try:
-        from cut_cross_entropy.transformers import cce_patch
-
         for keywords, arch in detectors:
             if any(keyword in last_component for keyword in keywords):
                 cce_patch(arch)
                 return True
-    except (ImportError, AttributeError, NotImplementedError):
+    except (AttributeError, NotImplementedError, RuntimeError, ValueError):
         return False
 
     return False

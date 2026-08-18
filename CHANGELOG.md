@@ -46,6 +46,22 @@ reproducing 70+ versions of notes.
 
 ### Fixed
 
+- **`use_cut_ce` silently did nothing for any model loaded from a local
+  checkpoint directory, and conflated Phi-2 with Phi-3 (#383).**
+  `apply_cut_ce()` picked the CCE patcher by matching an architecture keyword
+  against the model path's last component, so `checkpoint-2000` / `my-finetune`
+  / any other directory `soup merge`/`soup shrink`/`soup train` writes out
+  matched nothing and CCE stayed off with no error, on a flag the user
+  explicitly set. Separately, every Phi variant (`phi-2`, `phi-3`, `phi-4`)
+  mapped to the same `"phi3"` patcher, even though `cut_cross_entropy` has no
+  Phi-2 patcher at all (its `config.model_type` is `"phi"`, not `"phi3"`).
+  Detection now resolves `AutoConfig.from_pretrained(model_name).model_type` first, mirroring
+  the identical fix already shipped for Liger Kernel (#78), and falls back to
+  the name-based match only when that is unavailable; Phi-2 correctly reports
+  unsupported instead of running under the wrong kernel. The two call sites
+  that separately hand-wrote the "no matching architecture" advisory now
+  share one message.
+
 - **Layer streaming now verifies that every trainable LoRA parameter has real
   storage after PEFT attaches the adapter (#433).** PEFT 0.18 creates streamed
   adapters on `meta` for Soup to materialise, while PEFT 0.19 may create them as
