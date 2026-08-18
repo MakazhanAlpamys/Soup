@@ -12,6 +12,12 @@ reproducing 70+ versions of notes.
 
 ## [Unreleased]
 
+### Added
+
+- **A ready-made `qwen3.5-9b-grpo` recipe for GRPO reasoning training with `Qwen/Qwen3.5-9B` (#277 by @harshitthek in #448).**
+  The recipe combines the established GRPO defaults (accuracy reward, beta=0.1, 4 generations)
+  with LoRA r=16 and 4-bit quantization.
+
 ### Fixed
 
 - **`soup data mix --live` handed every candidate proxy run a config it could

@@ -48,7 +48,7 @@ def search_recipes(
 
 
 # ---------------------------------------------------------------------------
-# Recipe catalog (144 recipes)
+# Recipe catalog (145 recipes)
 # ---------------------------------------------------------------------------
 
 RECIPES: Dict[str, RecipeMeta] = {
@@ -3879,6 +3879,38 @@ training:
     alpha: 32
     target_modules: auto
   quantization: 4bit
+
+output: ./output
+""",
+    ),
+    "qwen3.5-9b-grpo": RecipeMeta(
+        model="Qwen/Qwen3.5-9B",
+        task="grpo",
+        size="9B",
+        tags=("qwen", "qwen3.5", "grpo", "reasoning", "thinking"),
+        description="Qwen 3.5 9B GRPO reasoning training (Apache-2.0, 262K context)",
+        yaml_str="""\
+base: Qwen/Qwen3.5-9B
+task: grpo
+
+data:
+  train: ./data/reasoning_train.jsonl
+  format: auto
+  max_length: 4096
+
+training:
+  epochs: 3
+  lr: 1e-5
+  batch_size: auto
+  gradient_accumulation_steps: 8
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  quantization: 4bit
+  grpo_beta: 0.1
+  num_generations: 4
+  reward_fn: accuracy
 
 output: ./output
 """,
