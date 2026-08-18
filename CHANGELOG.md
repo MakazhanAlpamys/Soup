@@ -14,6 +14,14 @@ reproducing 70+ versions of notes.
 
 ### Fixed
 
+- **Duck-typed tokenizer mappings no longer raise a misleading error, and
+  `data_doctor` shares the public `coerce_token_ids` helper (#441).** A dict-like
+  output that is not registered as `collections.abc.Mapping` used to be iterated
+  as keys (`input_ids[0]='input_ids'`), sending the operator looking at their
+  data; the mask path skipped the same objects and silently dropped
+  `assistant_masks`. Both gates now use one mapping-like predicate, and the
+  helper is public so the two modules cannot drift.
+
 - **`soup data mix --live` handed every candidate proxy run a config it could
   not load (#442 by @blackcoderx in #445).** `_render_overlay_yaml` emitted `data.train` as a YAML
   list, the same shape #330 fixed in the recipe writer, but every `--live`

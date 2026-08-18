@@ -65,10 +65,28 @@ def _coerce_int_list(
     return result
 
 
-def _coerce_token_ids(out: Any) -> list[int]:
-    """Extract and normalise token ids from a sequence or mapping output."""
+def _is_mapping_like(out: Any) -> bool:
+    """True for ``Mapping`` *or* a duck-typed mapping with ``.get``.
+
+    ``collections.abc.Mapping`` covers ``dict`` and HF ``BatchEncoding``
+    (a ``UserDict``). A tokenizer that returns a dict-like object which is
+    not registered as a Mapping used to miss this gate: ``coerce_token_ids``
+    then iterated the object's *keys* and raised
+    ``input_ids[0]='input_ids'``, and ``_apply_template_with_mask`` silently
+    skipped the mask path. One predicate, two call sites (#441).
+    """
+    return isinstance(out, Mapping) or hasattr(out, "get")
+
+
+def coerce_token_ids(out: Any) -> list[int]:
+    """Extract and normalise token ids from a sequence or mapping output.
+
+    Mapping-like outputs are read through ``input_ids``. This is the shared
+    contract with ``utils.data_doctor`` — public so a private name cannot
+    hide a second copy of the logic (#441 / #430).
+    """
     values = out
-    if isinstance(out, Mapping):
+    if _is_mapping_like(out):
         values = out.get("input_ids", _MISSING)
         if values is _MISSING:
             raise ValueError("tokenizer output mapping has no 'input_ids'")
@@ -104,13 +122,13 @@ def _apply_template_with_mask(
     except TypeError:
         # Old HF that doesn't recognise return_assistant_tokens_mask.
         return None
-    if not isinstance(out, Mapping):
+    if not _is_mapping_like(out):
         return None
     masks = out.get("assistant_masks")
     if masks is None:
         return None
     try:
-        ids = _coerce_token_ids(out)
+        ids = coerce_token_ids(out)
         mask = _coerce_int_list(
             masks, field="assistant_masks", allow_bool=True
         )
@@ -146,7 +164,7 @@ def _tokenize_only(tokenizer: Any, messages: Sequence[dict]) -> list[int]:
             tokenize=True,
             add_generation_prompt=False,
         )
-    return _coerce_token_ids(out)
+    return coerce_token_ids(out)
 
 
 def _truncate(
