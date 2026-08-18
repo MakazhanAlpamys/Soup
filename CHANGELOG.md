@@ -15,7 +15,7 @@ reproducing 70+ versions of notes.
 ### Fixed
 
 - **Duck-typed tokenizer mappings no longer raise a misleading error, and
-  `data_doctor` shares the public `coerce_token_ids` helper (#441).** A dict-like
+  `data_doctor` shares the public `coerce_token_ids` helper (#441 by @AchuthReddy-16 in #447, part 2 found by @emre155).** A dict-like
   output that is not registered as `collections.abc.Mapping` used to be iterated
   as keys (`input_ids[0]='input_ids'`), sending the operator looking at their
   data; the mask path skipped the same objects and silently dropped
