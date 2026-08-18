@@ -20,6 +20,14 @@ reproducing 70+ versions of notes.
 
 ### Fixed
 
+- **`measure_gemm_tflops` now records per-repeat samples and
+  `test_takes_the_best_repeat_not_the_first` verifies best-of-N selection within
+  a single measurement (#444 by @harshitthek in #451).** Comparing two separate
+  probe calls taken at different moments caused intermittent test failures on
+  developer GPU machines under background contention. `GemmCeiling` now preserves
+  `samples: tuple[float, ...]` and the test asserts `max(samples)` selection
+  deterministically.
+
 - **Duck-typed tokenizer mappings no longer raise a misleading error, and
   `data_doctor` shares the public `coerce_token_ids` helper (#441 by @AchuthReddy-16 in #447, part 2 found by @emre155).** A dict-like
   output that is not registered as `collections.abc.Mapping` used to be iterated

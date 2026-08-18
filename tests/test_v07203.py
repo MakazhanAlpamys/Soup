@@ -490,17 +490,196 @@ class TestMeasuredGemmCeiling:
 
     def test_takes_the_best_repeat_not_the_first(self):
         """A ceiling's noise is ONE-SIDED — contention, a cold clock and thermal
-        throttling only ever make an achievable rate look slower. Measured: at
-        2048 the probe spread 38% across five repeats and ramped monotonically
-        upward, which is how a first-repeat probe reported 3.54 TFLOPS in one
-        session and 6.75 in another at the same reported clock."""
+        throttling only ever make an achievable rate look slower. Taking the best
+        repeat must return max(samples) and include all repeat measurements."""
         from soup_cli.utils.layer_stream_runtime import measure_gemm_tflops
 
-        one = measure_gemm_tflops(device="cuda", reps=1)
-        many = measure_gemm_tflops(device="cuda", reps=4)
-        assert one is not None and many is not None
-        # best-of-4 can only be >= a single sample, up to run-to-run noise
-        assert many.tflops >= one.tflops * 0.9
+        got = measure_gemm_tflops(device="cuda", reps=4)
+        assert got is not None
+        assert len(got.samples) == 4
+        assert got.tflops == max(got.samples)
+        assert got.tflops >= got.samples[0]
+        assert got.tflops >= max(got.samples[1:])
+
+
+class TestIssue444BestRepeatSelection:
+    """Regression tests for #444: deterministic repeat selection in measure_gemm_tflops."""
+
+    def test_gemm_ceiling_defaults_samples_to_empty_tuple(self) -> None:
+        from soup_cli.utils.layer_stream_runtime import GemmCeiling
+
+        ceiling = GemmCeiling(tflops=10.5, sm_clock_mhz=1200, size=4096)
+        assert ceiling.tflops == 10.5
+        assert ceiling.sm_clock_mhz == 1200
+        assert ceiling.size == 4096
+        assert ceiling.samples == ()
+
+    def test_selection_picks_maximum_repeat_not_first_or_last(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Synthetic benchmark proving best-of-N selects max(samples) deterministically."""
+        import sys
+
+        from soup_cli.utils import layer_stream_runtime
+
+        elapsed_sequence = [100.0, 20.0, 50.0, 40.0]
+        call_idx = 0
+
+        class _MockEvent:
+            def __init__(self, *args, **kwargs) -> None:
+                pass
+
+            def record(self) -> None:
+                pass
+
+            def elapsed_time(self, other: object) -> float:
+                nonlocal call_idx
+                val = elapsed_sequence[call_idx % len(elapsed_sequence)]
+                call_idx += 1
+                return val
+
+        class _MockCuda:
+            @staticmethod
+            def is_available() -> bool:
+                return True
+
+            @staticmethod
+            def synchronize() -> None:
+                pass
+
+            @staticmethod
+            def empty_cache() -> None:
+                pass
+
+            Event = _MockEvent
+            OutOfMemoryError = RuntimeError
+
+        class _MockTensor:
+            def __matmul__(self, other: object) -> "_MockTensor":
+                return self
+
+        class _MockTorch:
+            bfloat16 = "bfloat16"
+            cuda = _MockCuda
+
+            @staticmethod
+            def randn(*args: object, **kwargs: object) -> _MockTensor:
+                return _MockTensor()
+
+        monkeypatch.setitem(sys.modules, "torch", _MockTorch)
+        monkeypatch.setattr(layer_stream_runtime, "sm_clock_mhz", lambda: 1500)
+
+        res = layer_stream_runtime.measure_gemm_tflops(
+            device="cuda", iters=8, reps=4, size=4096
+        )
+        assert res is not None
+        assert len(res.samples) == 4
+        # Repeat index 1 (20ms) is 5x faster than repeat index 0 (100ms)
+        assert res.samples[1] > res.samples[0]
+        assert res.tflops == max(res.samples)
+        assert res.tflops == res.samples[1]
+        assert res.tflops != res.samples[0]
+        assert res.tflops != res.samples[-1]
+
+    def test_zero_elapsed_timing_returns_none(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Degenerate timing (seconds <= 0) must return None without raising."""
+        import sys
+
+        from soup_cli.utils import layer_stream_runtime
+
+        class _MockEvent:
+            def __init__(self, *args, **kwargs) -> None:
+                pass
+
+            def record(self) -> None:
+                pass
+
+            def elapsed_time(self, other: object) -> float:
+                return 0.0
+
+        class _MockCuda:
+            @staticmethod
+            def is_available() -> bool:
+                return True
+
+            @staticmethod
+            def synchronize() -> None:
+                pass
+
+            @staticmethod
+            def empty_cache() -> None:
+                pass
+
+            Event = _MockEvent
+            OutOfMemoryError = RuntimeError
+
+        class _MockTensor:
+            def __matmul__(self, other: object) -> "_MockTensor":
+                return self
+
+        class _MockTorch:
+            bfloat16 = "bfloat16"
+            cuda = _MockCuda
+
+            @staticmethod
+            def randn(*args: object, **kwargs: object) -> _MockTensor:
+                return _MockTensor()
+
+        monkeypatch.setitem(sys.modules, "torch", _MockTorch)
+        got = layer_stream_runtime.measure_gemm_tflops(device="cuda", reps=4)
+        assert got is None
+
+    def test_zero_iters_returns_none(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Degenerate iters=0 must yield non-positive rates and return None."""
+        import sys
+
+        from soup_cli.utils import layer_stream_runtime
+
+        class _MockEvent:
+            def __init__(self, *args, **kwargs) -> None:
+                pass
+
+            def record(self) -> None:
+                pass
+
+            def elapsed_time(self, other: object) -> float:
+                return 10.0
+
+        class _MockCuda:
+            @staticmethod
+            def is_available() -> bool:
+                return True
+
+            @staticmethod
+            def synchronize() -> None:
+                pass
+
+            @staticmethod
+            def empty_cache() -> None:
+                pass
+
+            Event = _MockEvent
+            OutOfMemoryError = RuntimeError
+
+        class _MockTensor:
+            def __matmul__(self, other: object) -> "_MockTensor":
+                return self
+
+        class _MockTorch:
+            bfloat16 = "bfloat16"
+            cuda = _MockCuda
+
+            @staticmethod
+            def randn(*args: object, **kwargs: object) -> _MockTensor:
+                return _MockTensor()
+
+        monkeypatch.setitem(sys.modules, "torch", _MockTorch)
+        got = layer_stream_runtime.measure_gemm_tflops(device="cuda", iters=0, reps=4)
+        assert got is None
 
 
 class TestBatchSizeIsSupported:

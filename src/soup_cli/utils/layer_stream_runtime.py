@@ -865,6 +865,7 @@ class GemmCeiling:
     tflops: float
     sm_clock_mhz: Optional[int]
     size: int
+    samples: tuple[float, ...] = ()
 
 
 def sm_clock_mhz() -> Optional[int]:
@@ -935,7 +936,7 @@ def measure_gemm_tflops(
         return None
     if not torch.cuda.is_available():
         return None
-    best = 0.0
+    samples: list[float] = []
     try:
         left = torch.randn(size, size, device=device, dtype=torch.bfloat16)
         right = torch.randn(size, size, device=device, dtype=torch.bfloat16)
@@ -952,14 +953,22 @@ def measure_gemm_tflops(
             torch.cuda.synchronize()
             seconds = start.elapsed_time(end) / 1000.0
             if seconds > 0:
-                best = max(best, 2.0 * (size**3) * iters / seconds / 1e12)
+                samples.append(2.0 * (size**3) * iters / seconds / 1e12)
         del left, right
         torch.cuda.empty_cache()
     except (RuntimeError, torch.cuda.OutOfMemoryError):
         return None
+    if not samples:
+        return None
+    best = max(samples)
     if best <= 0:
         return None
-    return GemmCeiling(tflops=best, sm_clock_mhz=sm_clock_mhz(), size=size)
+    return GemmCeiling(
+        tflops=best,
+        sm_clock_mhz=sm_clock_mhz(),
+        size=size,
+        samples=tuple(samples),
+    )
 
 
 @dataclass(frozen=True)
