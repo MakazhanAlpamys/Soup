@@ -101,17 +101,12 @@ class TestCutCEApplication:
     def test_apply_cut_ce_calls_llama_patch_for_llama_model(self):
         """Verify the llama detector routes to cce_patch('llama').
 
-        ``_detect_model_type`` is forced to "" here (offline, deterministic)
-        so this exercises the name-based fallback path specifically, same as
-        its sibling ``test_apply_cut_ce_deepseek_phi_does_not_use_phi`` below.
-        Leaving it unmocked lets the real detector attempt a live hub fetch
-        for the gated ``meta-llama/Llama-3.1-8B`` id from inside
-        ``patch.dict("sys.modules", ...)``: on exit, patch.dict evicts every
-        module imported during the block, including ``tokenizers``, whose
-        PyO3 extension cannot be re-initialized in the same interpreter
-        process -- a hard crash, not a flaky failure, and one that a
-        full-suite run hides only because some other file happens to import
-        ``tokenizers`` first."""
+        ``_detect_model_type`` is forced to "" so this exercises the
+        name-based fallback deterministically. Left unmocked, the real
+        detector's live hub fetch runs inside ``patch.dict("sys.modules")``,
+        which evicts ``tokenizers`` on exit; re-importing it crashes (PyO3
+        extensions can't reinit), hidden in a full-suite run only because
+        some other file imports it first."""
         from soup_cli.utils.cut_ce import apply_cut_ce
 
         fake_cce = MagicMock()
