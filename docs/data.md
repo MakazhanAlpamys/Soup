@@ -734,7 +734,7 @@ soup data mix --optimize --budget 1h \
     --num-probes 8 --output mix_recipe.yaml
 ```
 
-Writes a YAML recipe with a `data.interleave` block you can splice into your `soup.yaml`. `--budget` accepts `60s` / `5m` / `1h` / `24h`. Per-candidate proxy failures are isolated (DEBUG-logged, sentinel high loss recorded) so a single OOM combo does not abort the whole search; `partial=True` is surfaced in the report when the budget cap trips mid-loop.
+Writes a YAML recipe you can splice into your `soup.yaml`: `data.train` is the single highest-weighted dataset from the search (the full ranked weight/path breakdown is kept as a comment), and `data.interleave` carries the searched mixture weights but is not yet consumed by training — see the in-file comment, and #330/#443. `--budget` accepts `60s` / `5m` / `1h` / `24h`. Per-candidate proxy failures are isolated (DEBUG-logged, sentinel high loss recorded) so a single OOM combo does not abort the whole search; `partial=True` is surfaced in the report when the budget cap trips mid-loop.
 
 Re-apply a previously written recipe:
 

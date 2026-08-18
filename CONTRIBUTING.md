@@ -72,6 +72,7 @@ ruff check --fix src/soup_cli/ tests/
 - **Imports:** Sorted and organized (ruff I rule)
 - **Naming:** No single-letter variable names (ruff E741) — use `entry`, `part`, `length` instead of `l`, `p`, etc.
 - **Lazy imports:** Heavy dependencies (torch, transformers, peft, trl, etc.) should be imported inside functions, not at module level, to keep the CLI responsive
+- **No third-party licence headers.** This project is Apache-2.0 and ships to PyPI, so an `SPDX-License-Identifier` or copyright line naming anyone else is a licensing claim we cannot make. If you generate files from a template — including with automated tooling, which is how this has happened three times — strip its header before you push. `tests/test_no_foreign_license_headers.py` fails the build on this rather than relying on you or me to spot it in a diff.
 - **Config validation:** Always use Pydantic v2 with `BaseModel` and `Field`
 - **Output:** Use `rich.console.Console` for all output — never bare `print()`
 - **Type hints:** Always include type hints for function parameters and return values
@@ -122,7 +123,7 @@ src/soup_cli/
   templates/          - 21 built-in soup.yaml templates (YAML + manifest.json) with load_template loader (v0.39.0, +bco v0.40.0, +4 compliance v0.71.35)
   ui/                 - Web UI (FastAPI + HTML/JS SPA)
 
-tests/                - Test suite (360 files, 17907 tests)
+tests/                - Test suite (369 files, 18141 tests)
 examples/             - Real-world config examples and datasets
 ```
 
@@ -152,7 +153,7 @@ pytest tests/test_data.py::test_detect_alpaca_format -v
 pytest tests/ --cov=soup_cli --cov-report=html
 ```
 
-### Test Files (360 files)
+### Test Files (369 files)
 
 > A representative sample of the suite below. Run `pytest tests/ -v` for the complete list.
 

@@ -99,7 +99,19 @@ class TestCutCEApplication:
             assert isinstance(result, bool)
 
     def test_apply_cut_ce_calls_llama_patch_for_llama_model(self):
-        """Verify the llama detector routes to cce_patch('llama')."""
+        """Verify the llama detector routes to cce_patch('llama').
+
+        ``_detect_model_type`` is forced to "" here (offline, deterministic)
+        so this exercises the name-based fallback path specifically, same as
+        its sibling ``test_apply_cut_ce_deepseek_phi_does_not_use_phi`` below.
+        Leaving it unmocked lets the real detector attempt a live hub fetch
+        for the gated ``meta-llama/Llama-3.1-8B`` id from inside
+        ``patch.dict("sys.modules", ...)``: on exit, patch.dict evicts every
+        module imported during the block, including ``tokenizers``, whose
+        PyO3 extension cannot be re-initialized in the same interpreter
+        process -- a hard crash, not a flaky failure, and one that a
+        full-suite run hides only because some other file happens to import
+        ``tokenizers`` first."""
         from soup_cli.utils.cut_ce import apply_cut_ce
 
         fake_cce = MagicMock()
@@ -107,6 +119,8 @@ class TestCutCEApplication:
         fake_module = MagicMock(transformers=fake_transformers)
         with patch(
             "soup_cli.utils.cut_ce.check_cut_ce_available", return_value=True
+        ), patch(
+            "soup_cli.utils.cut_ce._detect_model_type", return_value=""
         ), patch.dict(
             "sys.modules",
             {
@@ -143,6 +157,37 @@ class TestCutCEApplication:
             # Llama-distilled model name contains no "phi" substring
             # anymore thanks to the last-path-component detector.
             assert apply_cut_ce("deepseek-ai/deepseek-coder-7b-instruct") is False
+            fake_cce.assert_not_called()
+
+    def test_apply_cut_ce_plain_gemma_reports_false_instead_of_crashing(self):
+        """Regression: cut_cross_entropy has no patcher for plain Gemma-1
+        (model_type "gemma", only "gemma2" is supported). Pre-fix, a bare
+        "gemma" fallback-detector entry dispatched cce_patch("gemma") and
+        crashed with RuntimeError("Unknown model type gemma") for any
+        Gemma-1 name that reached the name-based fallback. It must instead
+        report False, the same advisory every other unsupported
+        architecture gets."""
+        from soup_cli.utils.cut_ce import apply_cut_ce
+
+        def _patch(model_type, *a, **kw):
+            if model_type not in ("llama", "phi3", "gemma2", "mistral", "qwen2"):
+                raise RuntimeError(f"Unknown model type {model_type}")
+
+        fake_cce = MagicMock(side_effect=_patch)
+        fake_transformers = MagicMock(cce_patch=fake_cce)
+        fake_module = MagicMock(transformers=fake_transformers)
+        with patch(
+            "soup_cli.utils.cut_ce.check_cut_ce_available", return_value=True
+        ), patch(
+            "soup_cli.utils.cut_ce._detect_model_type", return_value=""
+        ), patch.dict(
+            "sys.modules",
+            {
+                "cut_cross_entropy": fake_module,
+                "cut_cross_entropy.transformers": fake_transformers,
+            },
+        ):
+            assert apply_cut_ce("google/gemma-7b-it") is False
             fake_cce.assert_not_called()
 
 
@@ -212,6 +257,29 @@ class TestCutCEDetectsArchitectureFromTheConfig:
 
         assert cut_ce_mod.apply_cut_ce(str(directory)) is False
         assert calls == ["phi"], calls
+
+    def test_config_model_type_wins_over_a_conflicting_directory_name(
+        self, tmp_path, monkeypatch
+    ):
+        """CONTROL pinning the config-over-name priority itself, not just its
+        outcome on names that happen to agree. A ``soup merge``/``soup
+        shrink`` output directory is commonly named after its *source*
+        model, so a directory whose name says one architecture and whose
+        config says another is a real shape, not a contrived one. Fails
+        (routes to "phi3") if the config check is ever moved below the
+        name-match fallback."""
+        import json
+
+        from soup_cli.utils import cut_ce as cut_ce_mod
+
+        directory = tmp_path / "phi-3-mini-finetune"
+        directory.mkdir()
+        (directory / "config.json").write_text(json.dumps({"model_type": "llama"}))
+        calls = self._fake_cce(monkeypatch, [])
+        monkeypatch.setattr(cut_ce_mod, "check_cut_ce_available", lambda: True)
+
+        assert cut_ce_mod.apply_cut_ce(str(directory)) is True
+        assert calls == ["llama"], calls
 
     def test_an_unsupported_architecture_still_reports_false(self, tmp_path, monkeypatch):
         """CONTROL: detection by config must not turn into "always True": an

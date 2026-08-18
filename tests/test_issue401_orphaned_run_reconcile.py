@@ -1,5 +1,3 @@
-# SPDX-License-Identifier: AGPL-3.0-only
-# Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 """Reconcile-on-read for runs whose watcher never unwound (issue #401).
 
 `ExecutionManager._watch` runs as a daemon thread; when the MCP server exits it

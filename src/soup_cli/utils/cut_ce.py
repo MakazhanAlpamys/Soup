@@ -92,7 +92,7 @@ def apply_cut_ce(model_name: str) -> bool:
         try:
             cce_patch(model_type)
             return True
-        except (AttributeError, NotImplementedError, RuntimeError, ValueError):
+        except (ImportError, AttributeError, NotImplementedError, RuntimeError, ValueError):
             pass
 
     # Fallback for when config resolution has nothing to read from. Match on
@@ -105,6 +105,15 @@ def apply_cut_ce(model_name: str) -> bool:
         (("mixtral",), "mistral"),
         (("mistral",), "mistral"),
         (("qwen",), "qwen2"),
+        # Only "gemma2"/"gemma-2" route here, deliberately -- a bare "gemma"
+        # no longer matches at all. cut_cross_entropy has no patcher for
+        # plain Gemma (model_type "gemma"), so the old bare-"gemma" entry
+        # dispatched cce_patch("gemma") and crashed with
+        # RuntimeError("Unknown model type gemma") on every Gemma-1 name
+        # that reached the fallback. Dropping it means such a name now
+        # correctly falls through to False (the same "no matching
+        # architecture" advisory every other unsupported architecture gets)
+        # instead of crashing the run.
         (("gemma2", "gemma-2"), "gemma2"),
         (("phi-3", "phi3", "phi4", "phi-4"), "phi3"),
     )
@@ -114,7 +123,7 @@ def apply_cut_ce(model_name: str) -> bool:
             if any(keyword in last_component for keyword in keywords):
                 cce_patch(arch)
                 return True
-    except (AttributeError, NotImplementedError, RuntimeError, ValueError):
+    except (ImportError, AttributeError, NotImplementedError, RuntimeError, ValueError):
         return False
 
     return False

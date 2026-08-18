@@ -1,5 +1,3 @@
-# SPDX-License-Identifier: AGPL-3.0-only
-# Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 """One-active-execution cap survives a server restart (issue #402).
 
 `ExecutionManager._active_run_id` is in-memory: a restarted server starts with
