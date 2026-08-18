@@ -17,6 +17,9 @@ from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
 
 console = Console()
 
+_EXIT_ATTACH_FAILED = 1
+_EXIT_USAGE = 2
+
 app = typer.Typer(
     no_args_is_help=True,
     help="Emit CycloneDX ML-BOM + SPDX AI BOMs from registry entries (v0.59.0).",
@@ -141,9 +144,10 @@ def emit_cmd(
         # Print to stdout — nothing on disk to attach.
         if attach_to_registry is not None:
             console.print(
-                "[yellow]Warning:[/] --attach-to-registry needs --output "
-                "(nothing written to attach); skipping attach."
+                "[red]--attach-to-registry needs --output "
+                "(nothing written to attach).[/]"
             )
+            raise typer.Exit(_EXIT_USAGE)
         console.print(render_bom(entry, fmt_lc))
         return
 
@@ -162,23 +166,22 @@ def emit_cmd(
 def _attach_bom(registry_id: str, paths: list[str]) -> None:
     """Attach emitted BOM file(s) to a registry entry as kind ``bom``.
 
-    Mirrors the post-hoc attach pattern of ``soup shrink --attach-to-registry``:
-    a registry lookup / attach failure is surfaced as a warning and never fatal
-    to the emit itself (the BOM is already on disk).
+    A requested registry attachment is part of command success: lookup or
+    attachment failures exit non-zero after leaving the BOM on disk.
     """
     try:
         from soup_cli.registry.attach import attach_artifact
     except ImportError as exc:
         console.print(
-            f"[yellow]Warning:[/] could not import registry attach helper: {escape(str(exc))}"
+            f"[red]Error:[/] could not import registry attach helper: {escape(str(exc))}"
         )
-        return
+        raise typer.Exit(_EXIT_ATTACH_FAILED) from exc
     for path in paths:
         try:
             attach_artifact(registry_id, path=path, kind="bom")
         except Exception as exc:  # noqa: BLE001
-            console.print(f"[yellow]Warning:[/] could not attach to registry: {escape(str(exc))}")
-            continue
+            console.print(f"[red]Error:[/] could not attach to registry: {escape(str(exc))}")
+            raise typer.Exit(_EXIT_ATTACH_FAILED) from exc
         console.print(
             f"[green]Attached[/] bom to registry entry [bold]{escape(registry_id)}[/] "
             f"[dim]({escape(path)})[/]"

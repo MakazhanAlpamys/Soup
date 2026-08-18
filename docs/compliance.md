@@ -63,7 +63,8 @@ soup audit-log rotate        # force a rotation pass
 ```bash
 soup registry push --run-id <run-id> --name my-model --tag v1
 
-soup bom emit --name my-model --base-sha <hex> --config-sha <hex> \
+soup bom emit --name my-model --base-model <model-id> \
+    --base-sha <hex> --config-sha <hex> \
     --energy energy.json --format both -o my-model.bom \
     --attach-to-registry my-model:v1         # CycloneDX + SPDX, linked to the entry
 soup attest emit --stage train --subject my-model --sha <hex> \
@@ -72,9 +73,10 @@ soup attest emit --stage train --subject my-model --sha <hex> \
 ```
 
 `--attach-to-registry` registers the emitted BOM / attestation as `bom` /
-`attestation` artifacts on the entry, so the model card (step 7) links them
-alongside the other artifacts. It needs `--output`; without it the documents
-are emitted to stdout and nothing is attached.
+`attestation` artifacts on the entry. Signed attestations include their `.sig`
+sidecar, so the model card (step 7) links every file needed for verification.
+The option needs `--output`; omitting it is a usage error. A registry lookup or
+attachment failure exits non-zero while leaving the emitted files on disk.
 
 ## 5. Sign, scan, and verify the artifact
 

@@ -49,9 +49,10 @@ reproducing 70+ versions of notes.
   such kinds, so there was no way to attach them. Added both to the valid-kind
   set and a `--attach-to-registry <id>` flag to `soup bom emit` and
   `soup attest emit` (mirroring the existing `--attach-to-registry` pattern);
-  once attached they appear in the card's artifact table for free. The flag
-  needs `--output` — with none, the document is emitted to stdout and a warning
-  notes nothing was attached.
+  once attached they appear in the card's artifact table for free. Signed
+  attestations also attach the detached `.sig` sidecar. The flag needs
+  `--output` (omitting it exits 2), and a requested registry attachment failure
+  exits 1 after preserving files already emitted.
 
 ### Fixed
 

@@ -21,6 +21,10 @@ from soup_cli.utils.attest import (
 
 console = Console()
 
+_SIGNATURE_SUFFIX = ".sig"
+_EXIT_ATTACH_FAILED = 1
+_EXIT_USAGE = 2
+
 app = typer.Typer(
     no_args_is_help=True,
     help="In-toto + SLSA-3 attestations per Soup Can stage (v0.59.0).",
@@ -95,9 +99,10 @@ def emit_cmd(
     if output is None:
         if attach_to_registry is not None:
             console.print(
-                "[yellow]Warning:[/] --attach-to-registry needs --output "
-                "(nothing written to attach); skipping attach."
+                "[red]--attach-to-registry needs --output "
+                "(nothing written to attach).[/]"
             )
+            raise typer.Exit(_EXIT_USAGE)
         console.print(text)
         console.print(f"[dim]signature backend: {escape(sig['backend'])}[/]")
         if sig.get("signature"):
@@ -106,8 +111,9 @@ def emit_cmd(
 
     try:
         written = write_attestation(st, output)
+        written_paths = [written]
         if sig.get("backend") == "ed25519" and sig.get("signature"):
-            _write_sig_sidecar(output, sig)
+            written_paths.append(_write_sig_sidecar(output, sig))
     except (TypeError, ValueError) as exc:
         console.print(f"[red]Write failed: {escape(str(exc))}[/]")
         raise typer.Exit(2)
@@ -116,33 +122,36 @@ def emit_cmd(
         f"[dim](signature: {escape(sig['backend'])})[/]"
     )
     if attach_to_registry is not None:
-        _attach_attestation(attach_to_registry, written)
+        _attach_attestation(attach_to_registry, written_paths)
 
 
-def _attach_attestation(registry_id: str, path: str) -> None:
-    """Attach an emitted attestation statement to a registry entry.
+def _attach_attestation(registry_id: str, paths: list[str]) -> None:
+    """Attach an emitted attestation statement and signature to a registry entry.
 
-    Mirrors ``soup shrink --attach-to-registry``: a registry lookup / attach
-    failure is a warning, never fatal to the emit (the statement is on disk).
+    A requested registry attachment is part of command success: lookup or
+    attachment failures exit non-zero after leaving the statement on disk.
     """
     try:
         from soup_cli.registry.attach import attach_artifact
     except ImportError as exc:
         console.print(
-            f"[yellow]Warning:[/] could not import registry attach helper: {escape(str(exc))}"
+            f"[red]Error:[/] could not import registry attach helper: {escape(str(exc))}"
         )
-        return
-    try:
-        attach_artifact(registry_id, path=path, kind="attestation")
-    except Exception as exc:  # noqa: BLE001
-        console.print(f"[yellow]Warning:[/] could not attach to registry: {escape(str(exc))}")
-        return
-    console.print(
-        f"[green]Attached[/] attestation to registry entry [bold]{escape(registry_id)}[/]"
-    )
+        raise typer.Exit(_EXIT_ATTACH_FAILED) from exc
+    for path in paths:
+        try:
+            attach_artifact(registry_id, path=path, kind="attestation")
+        except Exception as exc:  # noqa: BLE001
+            console.print(f"[red]Error:[/] could not attach to registry: {escape(str(exc))}")
+            raise typer.Exit(_EXIT_ATTACH_FAILED) from exc
+        else:
+            console.print(
+                f"[green]Attached[/] attestation to registry entry "
+                f"[bold]{escape(registry_id)}[/]"
+            )
 
 
-def _write_sig_sidecar(output: str, sig: dict) -> None:
+def _write_sig_sidecar(output: str, sig: dict) -> str:
     """Atomic write of the ``<output>.sig`` JSON sidecar (cwd-contained)."""
     from soup_cli.utils.paths import atomic_write_text
 
@@ -155,7 +164,12 @@ def _write_sig_sidecar(output: str, sig: dict) -> None:
         indent=2,
         sort_keys=True,
     )
-    atomic_write_text(body, output + ".sig", prefix=".attest-sig.", suffix=".json.tmp")
+    return atomic_write_text(
+        body,
+        output + _SIGNATURE_SUFFIX,
+        prefix=".attest-sig.",
+        suffix=".json.tmp",
+    )
 
 
 @app.command("verify")
