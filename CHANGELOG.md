@@ -92,6 +92,15 @@ reproducing 70+ versions of notes.
   so no information is lost, and the comment explains that `data.interleave`
   is not yet consumed by training.
 
+- **`soup data mix --live` handed every candidate proxy run a config it could
+  not load (#442).** `_render_overlay_yaml` emitted `data.train` as a YAML
+  list, the same shape #330 fixed in the recipe writer, but every `--live`
+  test mocked `subprocess.run` so nothing ever loaded the overlay through the
+  schema — a config the tool could not itself load read as a passing feature.
+  `data.train` now renders as the single highest-weighted dataset in each
+  candidate, mirroring #330's fix, with a comment noting which dataset was
+  picked and why.
+
 - **Layer streaming now verifies that every trainable LoRA parameter has real
   storage after PEFT attaches the adapter (#433 reported by @lesterppo, fixed by @Faisal01011 in #435 and #437).** PEFT 0.18 creates streamed
   adapters on `meta` for Soup to materialise, while PEFT 0.19 may create them as
