@@ -516,6 +516,28 @@ def test_overlay_yaml_loads_through_config_schema(tmp_path):
     assert cfg.data.train == "b.jsonl"
 
 
+def test_overlay_comment_does_not_drift_from_train_value(tmp_path):
+    # Maintainer's review of #442: the comment spliced above `train:` names
+    # which dataset was picked, but nothing tied that claim to the actual
+    # value — it could vanish (mutation: delete the insertion block) or lie
+    # (mutation: comment names datasets[0] while train: keeps best_idx) and
+    # every other test still passes. Tying the assertion to the *parsed
+    # config's* value rather than the renderer's own variable is what makes
+    # the second mutation fail here.
+    from soup_cli.utils.mix_proxy import _render_overlay_yaml
+
+    base_text = _make_base_yaml(tmp_path).read_text(encoding="utf-8")
+    overlay = _render_overlay_yaml(
+        base_text, ("a.jsonl", "b.jsonl"), (0.3, 0.7)
+    )
+    cfg = load_config_from_string(overlay)
+    lines = overlay.split("\n")
+    idx = next(i for i, ln in enumerate(lines) if ln.startswith("  train:"))
+    comment = lines[idx - 1]
+    assert comment.lstrip().startswith("#")  # fails if the block is deleted
+    assert repr(cfg.data.train) in comment  # fails if the comment lies
+
+
 def test_proxy_happy_path_reads_tracker(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     base = _make_base_yaml(tmp_path)
