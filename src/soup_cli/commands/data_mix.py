@@ -137,12 +137,16 @@ def mix(
         for p in probs:
             console.print(f"      - {float(p):.6f}")
         if isinstance(train_value, str):
-            # #330 — current recipes: data.train is a single string. Quote it
+            # Legacy single-string recipes (#330/#442-era, or a search over
+            # exactly one dataset): data.train is a single string. Quote it
             # the same way render_mix_recipe_yaml does — an unquoted path
             # like "odd: name.jsonl" is not valid YAML when pasted back.
             console.print(f"  train: {escape(json.dumps(train_value))}")
         else:
-            # Pre-#330 recipes on disk: data.train was a YAML list.
+            # #443 — current recipes: data.train is the full dataset list,
+            # index-aligned with data.interleave.probs, now that soup train
+            # actually consumes the mixture. (Also matches pre-#330 recipes
+            # on disk, which happened to be list-shaped by accident.)
             console.print("  train:")
             for path in train_value or []:
                 console.print(f"    - {escape(str(path))}")

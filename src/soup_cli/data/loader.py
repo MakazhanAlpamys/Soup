@@ -213,8 +213,15 @@ def load_dataset(data_config: DataConfig) -> dict:
     - Local files (.jsonl, .json, .csv, .parquet, .txt)
     - HuggingFace dataset names (auto-detected if no file extension)
     - Remote fsspec URIs (s3://, gs://, gcs://, az://, abfs://, abfss://, oci://) — v0.53.8 #85
+    - A list of >= 2 local files combined via data.interleave — #443. Schema
+      validation (SoupConfig._validate_interleave_compat) already guarantees
+      data.interleave is set and every entry is a local file path whenever
+      data.train is a list, so this branch never has to re-check that.
     """
     train_path = data_config.train
+
+    if isinstance(train_path, list):
+        return _load_interleaved_local_datasets(train_path, data_config)
 
     # v0.53.8 #85 — fsspec live remote loader. Schema accepts these URIs
     # since v0.42.0; live loader lands here. Lazy-imports fsspec + the
@@ -254,6 +261,128 @@ def load_dataset(data_config: DataConfig) -> dict:
 
     # Split into train/val, then mix replay into train (v0.71.36).
     return _finalize(formatted, data_config)
+
+
+def _load_one_local_dataset(train_path: str, data_config: DataConfig) -> list[dict]:
+    """Load + format one local file — the same per-file pipeline the
+    single-path branch of load_dataset() runs above, factored out so
+    #443's interleave path (below) reuses it rather than re-deriving it.
+    The single-path branch itself is left inline and untouched, so its
+    output stays byte-identical by construction rather than by
+    refactor-equivalence.
+    """
+    path = Path(train_path)
+    raw_data = load_raw_data(path)
+
+    fmt = data_config.format
+    if fmt == "auto":
+        fmt = detect_format(raw_data)
+        console.print(f"[dim]Auto-detected format ({train_path}): {fmt}[/]")
+
+    formatted = [format_to_messages(row, fmt) for row in raw_data]
+    formatted = [r for r in formatted if r is not None]
+
+    if is_vision_format(fmt):
+        image_dir = Path(data_config.image_dir) if data_config.image_dir else path.parent
+        formatted = _validate_vision_images(formatted, image_dir)
+    if is_audio_format(fmt):
+        audio_dir = Path(data_config.audio_dir) if data_config.audio_dir else path.parent
+        formatted = _validate_audio_files(formatted, audio_dir)
+    return formatted
+
+
+def _cycle_to(rows: list[dict], target: int) -> list[dict]:
+    """Deterministically repeat/truncate ``rows`` to exactly ``target`` rows
+    via round-robin cycling. No RNG, no new seed knob — #443's scope does
+    not authorize one, and the downstream HF Trainer's default sampler
+    already shuffles every epoch, so row ORDER out of this function is not
+    load-bearing; only per-source row COUNT is.
+    """
+    if target <= len(rows):
+        return rows[:target]
+    out = list(rows)
+    i = 0
+    while len(out) < target:
+        out.append(rows[i % len(rows)])
+        i += 1
+    return out
+
+
+def _apportion(probs: tuple[float, ...], total: int) -> list[int]:
+    """Largest-remainder apportionment: integer per-dataset quotas summing
+    to exactly ``total``, as close as possible to ``probs[i] * total``.
+    Deterministic; ties break by dataset index.
+    """
+    raw = [p * total for p in probs]
+    base = [int(x) for x in raw]
+    remainder = total - sum(base)
+    order = sorted(range(len(probs)), key=lambda i: (raw[i] - base[i]), reverse=True)
+    for i in order[:remainder]:
+        base[i] += 1
+    return base
+
+
+def _combine_interleaved(per_dataset_rows: list[list[dict]], spec) -> list[dict]:
+    """Combine per-dataset row lists per an InterleaveSpec (#443).
+
+    ``concat`` / ``under`` / ``over`` / ``probs`` control per-source row
+    COUNT, not order — see _cycle_to's docstring for why order doesn't
+    matter here.
+    """
+    sizes = [len(rows) for rows in per_dataset_rows]
+    if any(n == 0 for n in sizes):
+        raise ValueError(
+            "data.interleave: every dataset in data.train must have "
+            ">= 1 row after formatting"
+        )
+    if spec.strategy == "concat":
+        combined: list[dict] = []
+        for rows in per_dataset_rows:
+            combined.extend(rows)
+        return combined
+    if spec.strategy == "under":
+        target = min(sizes)
+        combined = []
+        for rows in per_dataset_rows:
+            combined.extend(rows[:target])
+        return combined
+    if spec.strategy == "over":
+        target = max(sizes)
+        combined = []
+        for rows in per_dataset_rows:
+            combined.extend(_cycle_to(rows, target))
+        return combined
+    if spec.strategy == "probs":
+        quotas = _apportion(spec.probs, sum(sizes))
+        combined = []
+        for rows, quota in zip(per_dataset_rows, quotas):
+            combined.extend(_cycle_to(rows, quota))
+        return combined
+    raise AssertionError(f"unreachable interleave strategy {spec.strategy!r}")
+
+
+def _load_interleaved_local_datasets(train_paths: list[str], data_config: DataConfig) -> dict:
+    """#443 — load + combine every local dataset in a list-shaped
+    data.train per data.interleave, then hand the combined rows to the
+    existing, unmodified _finalize() — same seam every other loader uses.
+    """
+    from soup_cli.utils.data_pipeline import parse_interleave
+
+    spec = parse_interleave(data_config.interleave, num_datasets=len(train_paths))
+    if spec is None:
+        # Defence-in-depth only: SoupConfig._validate_interleave_compat
+        # already requires data.interleave whenever data.train is a list,
+        # so a caller only reaches here via a hand-built DataConfig that
+        # skipped SoupConfig validation.
+        raise ValueError("data.train is a list but data.interleave is not set")
+
+    per_dataset_rows = [_load_one_local_dataset(p, data_config) for p in train_paths]
+    combined = _combine_interleaved(per_dataset_rows, spec)
+    console.print(
+        f"[dim]Interleaved {len(train_paths)} datasets "
+        f"(strategy={spec.strategy}) -> {len(combined)} rows[/]"
+    )
+    return _finalize(combined, data_config)
 
 
 def _validate_vision_images(data: list[dict], image_dir: Path) -> list[dict]:

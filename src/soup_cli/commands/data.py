@@ -2354,14 +2354,26 @@ def preprocess_dataset(
         )
         raise typer.Exit(1)
 
+    if isinstance(cfg.data.train, list):
+        # #443 — fold data.interleave into the cache key: the same file
+        # set with a different strategy/probs must not collide on a
+        # stale, mis-mixed cache entry.
+        dataset_path = json.dumps(
+            {"train": cfg.data.train, "interleave": cfg.data.interleave},
+            sort_keys=True,
+        )
+        train_display = ", ".join(cfg.data.train)
+    else:
+        dataset_path = cfg.data.train
+        train_display = cfg.data.train
     cache_key = make_preprocess_cache_key(
-        dataset_path=cfg.data.train,
+        dataset_path=dataset_path,
         tokenizer_name=cfg.base,
         max_length=cfg.data.max_length,
         format_name=cfg.data.format,
     )
     target = Path(out_real) / cache_key
-    console.print(f"[cyan]Dataset:[/] {cfg.data.train}")
+    console.print(f"[cyan]Dataset:[/] {train_display}")
     console.print(f"[cyan]Tokenizer:[/] {cfg.base}")
     console.print(f"[cyan]max_length:[/] {cfg.data.max_length}")
     console.print(f"[cyan]Cache key:[/] {cache_key}")

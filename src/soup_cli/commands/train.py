@@ -2016,7 +2016,14 @@ def _live_lr_sweep_from_config(cfg, schedule: list[float]) -> list[float]:
     ).to(device)
     model.train()
 
-    dataset = load_raw_data(_Path(cfg.data.train))
+    # #443 — LR-finder samples one representative dataset; it already
+    # bypasses load_dataset()/_finalize() for a lightweight sweep, so full
+    # interleave fidelity is out of this issue's scope. Fall back to the
+    # first dataset rather than crashing on a list.
+    lr_finder_train_path = (
+        cfg.data.train[0] if isinstance(cfg.data.train, list) else cfg.data.train
+    )
+    dataset = load_raw_data(_Path(lr_finder_train_path))
     rows = list(dataset)[: max(2, len(schedule))]
     if not rows:
         raise RuntimeError("training dataset is empty")

@@ -39,6 +39,27 @@ def _get_dataset_size(cfg) -> tuple[int, bool]:
     the default because the dataset could not be read; callers should warn.
     """
     train_path = cfg.data.train
+
+    # #443 — data.interleave: sum row counts across every local dataset
+    # rather than treating cfg.data.train as one path.
+    if isinstance(train_path, list):
+        from soup_cli.data.loader import load_raw_data
+
+        total = 0
+        any_estimated = False
+        for p in train_path:
+            entry_path = Path(p)
+            if entry_path.exists():
+                try:
+                    total += len(load_raw_data(entry_path))
+                    continue
+                except (OSError, ValueError, KeyError):
+                    pass
+            any_estimated = True
+            total += _DEFAULT_DATASET_SIZE
+        split = 1.0 - cfg.data.val_split
+        return int(total * split), any_estimated
+
     path = Path(train_path)
 
     # Local file

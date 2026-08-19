@@ -698,7 +698,6 @@ data:
   streaming: true
   buffer_size: 1024
   shards: 4
-  interleave: concat
   mask_history: true
   train_on_prompt: false
   train_on_responses_only: true
@@ -726,7 +725,12 @@ output: ./out
         assert cfg.data.streaming is True
         assert cfg.data.buffer_size == 1024
         assert cfg.data.shards == 4
-        assert cfg.data.interleave == "concat"
+        # interleave is intentionally not in this kitchen-sink fixture: #443
+        # made data.interleave + data.streaming mutually exclusive at parse
+        # time (interleave now has a real training-time consumer, and it's
+        # local-files-only), so it can no longer sit alongside streaming:
+        # true here. interleave's own round-trip is covered by
+        # TestPartDInterleave below and by tests/test_issue443_interleave_wiring.py.
         assert cfg.data.mask_history is True
         assert cfg.data.image_resize_algorithm == "bicubic"
         assert cfg.data.video_fps == 24.0

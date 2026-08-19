@@ -303,7 +303,24 @@ def _compute_provenance(cfg: "SoupConfig") -> Dict[str, str]:
         prov["base_model"] = base
     data = cfg.data.train
     if data:
-        data_sha = _safe_hash_file(data, _MAX_DATA_SHA_BYTES)
+        if isinstance(data, list):
+            # #443 — data.interleave: combine per-file hashes into one
+            # data_sha. Order preserved (not sorted) since reordering the
+            # list is a real semantic change — it realigns data.interleave
+            # .probs to different files.
+            import hashlib
+
+            shas = [
+                sha for p in data
+                if (sha := _safe_hash_file(p, _MAX_DATA_SHA_BYTES)) is not None
+            ]
+            data_sha = (
+                hashlib.sha256("\x1e".join(shas).encode()).hexdigest()
+                if shas
+                else None
+            )
+        else:
+            data_sha = _safe_hash_file(data, _MAX_DATA_SHA_BYTES)
         if data_sha is not None:
             prov["data_sha"] = data_sha
     return prov

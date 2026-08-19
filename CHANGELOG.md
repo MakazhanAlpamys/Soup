@@ -24,6 +24,21 @@ reproducing 70+ versions of notes.
   quantization). `epochs: 1` and `max_length: 8192` are taken from the SFT
   sibling rather than the smaller qwen defaults, which suit a 754B MoE better.
 
+- **`data.interleave` is now wired into training-time dataset loading (#443 by @blackcoderx in #TODO-PR).**
+  `parse_interleave`/`InterleaveSpec` have been schema-validated and unit-tested since
+  v0.42.0, but `load_dataset()` never called them — every multi-dataset mixture request
+  silently trained on nothing but `data.train`'s single path, the same gap #330 and #442
+  papered over in their respective renderers. `DataConfig.train` now accepts `str |
+  list[str]`; a list of `>= 2` local file paths combines via `data.interleave`
+  (`concat` / `under` / `over` / `{strategy: probs, probs: [...]}`) into one row set
+  before the existing `val_split` line in `_finalize` runs, so a single path stays
+  byte-identical. `interleave` is local-files-only: `training.packing` /
+  `training.multipack` and `data.streaming` / an HF-hub dataset name are all rejected
+  at config-parse time with a message naming the reason (streaming/hub-dataset
+  interleaving is follow-up #459). Both the `soup data mix --optimize` recipe writer
+  and the `--live` overlay renderer emit the real N-dataset mixture again instead of
+  collapsing to one path.
+
 ### Fixed
 
 - **`cut_ce.py` and `liger.py` now normalize path separators and match architecture

@@ -498,14 +498,17 @@ def test_proxy_timeout_raises_runtimeerror(tmp_path, monkeypatch):
 def test_overlay_yaml_loads_through_config_schema(tmp_path):
     # #442 — same defect #330 fixed in the recipe writer, in the second
     # renderer: `_render_overlay_yaml` emitted `data.train` as a YAML list,
-    # but `DataConfig.train` is typed `str`, so every `--live` candidate got
-    # handed a config it could not load. Every other test in this section
-    # mocks `subprocess.run`, so this is the one that actually loads the
-    # *returned string* through the real schema — it fails if the renderer
-    # regresses to a list. (A fully unmocked `--live` run needs a real
-    # training subprocess/GPU and isn't practical in this suite; the
-    # remaining `--live` coverage below intentionally mocks `subprocess.run`
-    # and asserts orchestration instead.)
+    # but `DataConfig.train` was typed `str`, so every `--live` candidate
+    # got handed a config it could not load. #442's fix collapsed to a
+    # single dataset as a stopgap; #443 wired `data.interleave` into the
+    # loader and widened `data.train` back to a list, so the renderer now
+    # emits the full mixture again — this test pins that it still loads
+    # through the real schema. Every other test in this section mocks
+    # `subprocess.run`, so this is the one that actually loads the
+    # *returned string* through the real schema. (A fully unmocked `--live`
+    # run needs a real training subprocess/GPU and isn't practical in this
+    # suite; the remaining `--live` coverage below intentionally mocks
+    # `subprocess.run` and asserts orchestration instead.)
     from soup_cli.utils.mix_proxy import _render_overlay_yaml
 
     base_text = _make_base_yaml(tmp_path).read_text(encoding="utf-8")
@@ -513,17 +516,19 @@ def test_overlay_yaml_loads_through_config_schema(tmp_path):
         base_text, ("a.jsonl", "b.jsonl"), (0.3, 0.7)
     )
     cfg = load_config_from_string(overlay)
-    assert cfg.data.train == "b.jsonl"
+    assert cfg.data.train == ["a.jsonl", "b.jsonl"]
+    assert cfg.data.interleave == {"strategy": "probs", "probs": [0.3, 0.7]}
 
 
 def test_overlay_comment_does_not_drift_from_train_value(tmp_path):
     # Maintainer's review of #442: the comment spliced above `train:` names
     # which dataset was picked, but nothing tied that claim to the actual
     # value — it could vanish (mutation: delete the insertion block) or lie
-    # (mutation: comment names datasets[0] while train: keeps best_idx) and
-    # every other test still passes. Tying the assertion to the *parsed
-    # config's* value rather than the renderer's own variable is what makes
-    # the second mutation fail here.
+    # and every other test still passes. Tying the assertion to the
+    # *parsed config's* value rather than the renderer's own variable is
+    # what makes a lying comment fail here. #443 changed the renderer to
+    # emit the full dataset list rather than a single picked one, but the
+    # same anti-drift pattern applies against the list's repr.
     from soup_cli.utils.mix_proxy import _render_overlay_yaml
 
     base_text = _make_base_yaml(tmp_path).read_text(encoding="utf-8")
@@ -536,6 +541,46 @@ def test_overlay_comment_does_not_drift_from_train_value(tmp_path):
     comment = lines[idx - 1]
     assert comment.lstrip().startswith("#")  # fails if the block is deleted
     assert repr(cfg.data.train) in comment  # fails if the comment lies
+
+
+def test_overlay_yaml_rendered_config_actually_loads_via_load_dataset(tmp_path):
+    # #443 acceptance criterion: at least one test loads the rendered YAML
+    # through the real schema AND through load_dataset() — the #442 lesson
+    # (a config the tool could not load reading as a passing feature)
+    # extended one level deeper, to the loader that now actually consumes
+    # data.interleave rather than ignoring it.
+    from soup_cli.data.loader import load_dataset
+    from soup_cli.utils.mix_proxy import _render_overlay_yaml
+
+    (tmp_path / "a.jsonl").write_text(
+        "\n".join(f'{{"text": "A-{i}"}}' for i in range(5)) + "\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "b.jsonl").write_text(
+        "\n".join(f'{{"text": "B-{i}"}}' for i in range(5)) + "\n",
+        encoding="utf-8",
+    )
+    base_text = (
+        "base: test-base\n"
+        "task: sft\n"
+        "data:\n"
+        "  train: ./a.jsonl\n"
+        "  format: plaintext\n"
+        "  val_split: 0.0\n"
+        "training:\n"
+        "  epochs: 1\n"
+        "output: ./out\n"
+    )
+    overlay = _render_overlay_yaml(
+        base_text,
+        (str(tmp_path / "a.jsonl"), str(tmp_path / "b.jsonl")),
+        (0.5, 0.5),
+    )
+    cfg = load_config_from_string(overlay)
+    result = load_dataset(cfg.data)
+    texts = {row["text"] for row in result["train"]}
+    assert any(t.startswith("A-") for t in texts)
+    assert any(t.startswith("B-") for t in texts)
 
 
 def test_proxy_happy_path_reads_tracker(tmp_path, monkeypatch):
