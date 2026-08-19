@@ -3068,10 +3068,16 @@ class TrainingConfig(BaseModel):
             "page-lock it. 'false' forces the pageable store, the only known "
             "escape hatch when a pinning path is suspect (it was the sole "
             "mitigation while #331 was live). 'true' forces the pinned store and "
-            "REFUSES the run, naming the store size, if the box cannot page-lock "
-            "it, rather than silently degrading — page-locking is worth up to "
-            "6.56x measured throughput, so a silent fallback spends the whole "
-            "margin the feature exists to provide."
+            "REFUSES the run on the RAM tier, naming the store size, if the box "
+            "cannot page-lock it, rather than silently degrading — page-locking "
+            "is worth up to 6.56x measured throughput, so a silent fallback "
+            "spends the whole margin the feature exists to provide. On the disk "
+            "tier (the base does not fit in RAM, so there is no RAM store to "
+            "page-lock) and on CPU (page-locking is a host-to-device transfer "
+            "optimization and there is no device) pinning is INAPPLICABLE rather "
+            "than unsatisfiable: 'true' is announced and the run proceeds "
+            "without it, so the key stays committable to a config shared between "
+            "a GPU box and a CPU box."
         ),
     )
 

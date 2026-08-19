@@ -672,9 +672,13 @@ def decide_pinning(
         return PinDecision(
             pinned=True,
             reason=(
-                "training.stream_pin=true forces a page-locked store; the run "
-                "refuses rather than falling back to a pageable store if the box "
-                "cannot page-lock it."
+                # Scoped to the RAM tier on purpose: this note is now surfaced
+                # for a forced-on pin, and the disk tier / CPU announce that
+                # pinning is inapplicable and PROCEED. An unconditional "the run
+                # refuses" here would print a promise those paths do not keep.
+                "training.stream_pin=true forces a page-locked store; on the RAM "
+                "tier the run refuses rather than falling back to a pageable "
+                "store if the box cannot page-lock it."
             ),
         )
     if pinned_limit_bytes is None:
@@ -1302,7 +1306,18 @@ def build_stream_plan(
             "refuse rather than fall back."
         )
     decision = decide_pinning(store_bytes, pinned_limit_bytes, stream_pin=stream_pin)
-    if not decision.pinned:
+    # #366 review round 3 — "record, never silence". An automatic pinned store is
+    # the unremarkable default and stays quiet, but an EXPLICIT stream_pin=true is
+    # a user decision, so the pre-flight states it too. Without this the forced-on
+    # branch was the one path that decided something and said nothing, which is
+    # also what decide_pinning's docstring already promised it did not do.
+    #
+    # Restricted to the RAM tier deliberately: the reason says the store IS
+    # page-locked, which is only true where a RAM store exists. On the disk tier
+    # there is none, and printing it there would state a promise that tier does
+    # not keep — the runtime announces the inapplicability instead
+    # (layer_stream_runtime._build_source), so the decision is still recorded.
+    if not decision.pinned or (stream_pin is True and tier == TIER_RAM):
         notes.append(decision.reason)
     return StreamPlan(
         arch=arch,

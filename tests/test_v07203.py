@@ -1141,6 +1141,25 @@ class TestDiskTier:
         runtime.close()
 
 
+#: Free RAM to report so the tiny base comfortably takes the RAM tier.
+_RAM_TIER_FREE_BYTES = 10_000_000_000
+#: Render width for the captured pre-flight. The plan notes arrive inside a
+#: `rich.panel.Panel`; too narrow a console wraps the measured figures across a
+#: line break and the assertions below miss text that IS on screen.
+_PANEL_CAPTURE_WIDTH = 200
+#: The measured page-locking gain (`PIN_THROUGHPUT_GAIN_REAL`, Qwen2.5-32B NF4)
+#: as it appears on screen. Written as the literal the user reads rather than
+#: imported, so that changing the production constant fails these tests too.
+_PIN_GAIN_REAL_TEXT = "6.56"
+#: The forced-pageable note must be identifiable as such, not merely contain the
+#: number: some unrelated line carrying "6.56" would otherwise satisfy the check.
+_FORCED_PAGEABLE_TEXT = "training.stream_pin=false"
+#: Free/total VRAM to report from a stubbed `torch.cuda.mem_get_info()` so the
+#: pre-flight fit check passes on a box with no GPU. Generous on purpose: the
+#: point of these cases is the require_pin wiring, not the VRAM budget.
+_SIMULATED_FREE_VRAM_BYTES = 16_000_000_000
+
+
 class TestAutoTierFallback:
     """`stream_source: auto` (the default) takes RAM when the base fits and
     falls back to the NVMe disk tier when it does not. Driven through the real
@@ -1245,6 +1264,108 @@ class TestAutoTierFallback:
         assert captured["require_pin"] is False
         # The explicit request was announced, not dropped (blocker 1).
         assert any("no CUDA device" in m for m in messages), messages
+
+    def _run_capture(self, tmp_path, monkeypatch, extra_training_yaml):
+        """Drive the real pre-flight and return what a user would SEE.
+
+        The plan notes reach the user inside a ``rich.panel.Panel``, so a
+        recording console that merely stringifies its arguments captures the
+        Panel's object repr and sees none of the note text — a false negative.
+        It has to render through a real ``Console`` writing to a buffer, wide
+        enough that the measured figures are not broken across a wrap."""
+        import io
+
+        from rich.console import Console
+
+        import soup_cli.trainer.stream_setup as ss
+
+        buffer = io.StringIO()
+        monkeypatch.setattr(
+            ss, "console", Console(file=buffer, width=_PANEL_CAPTURE_WIDTH)
+        )
+        self._stub_build_streamed_model(monkeypatch, {})
+        self._run(
+            tmp_path, monkeypatch, free_ram=_RAM_TIER_FREE_BYTES,
+            stream_source="auto", device="cpu",
+            extra_training_yaml=extra_training_yaml,
+        )
+        return buffer.getvalue()
+
+    def test_stream_pin_false_makes_the_preflight_state_the_cost(
+        self, tmp_path, monkeypatch
+    ):
+        """#366 round-3 C1: the VALUE of training.stream_pin must reach the plan,
+        not merely the keyword. Hardcoding `stream_pin=None` (or True/False) at
+        the build_stream_plan call left the whole suite green, because every
+        existing test called build_stream_plan directly and nothing crossed the
+        wiring. Driven end-to-end through the real pre-flight."""
+        out = self._run_capture(tmp_path, monkeypatch, "  stream_pin: false\n")
+        assert _FORCED_PAGEABLE_TEXT in out, out
+        assert _PIN_GAIN_REAL_TEXT in out, out
+
+    def test_unset_stream_pin_does_not_state_a_forced_pageable_cost(
+        self, tmp_path, monkeypatch
+    ):
+        """The control that makes the test above discriminating: without it a
+        mutant that ALWAYS emitted the forced-pageable note would pass."""
+        out = self._run_capture(tmp_path, monkeypatch, "")
+        assert _FORCED_PAGEABLE_TEXT not in out, out
+        assert _PIN_GAIN_REAL_TEXT not in out, out
+
+    def _run_on_simulated_cuda(self, tmp_path, monkeypatch, extra_training_yaml):
+        """Drive the pre-flight down its `on_cuda` branch WITHOUT a GPU.
+
+        `on_cuda` is `str(self.device).startswith("cuda")` — a plain string
+        check — so the branch itself needs no device. Only two things behind it
+        do: the free-VRAM measurement and the allocator hint, both stubbed here.
+        `build_streamed_model` is stubbed too, so nothing ever reaches a kernel.
+
+        Written this way on purpose: gated behind @requires_cuda these two cases
+        would skip on CI, which is exactly where the mutation they exist to kill
+        needs to die."""
+        import torch
+
+        import soup_cli.utils.layer_stream_runtime as rt
+
+        monkeypatch.setattr(
+            torch.cuda, "mem_get_info",
+            lambda *_a, **_k: (_SIMULATED_FREE_VRAM_BYTES, _SIMULATED_FREE_VRAM_BYTES),
+        )
+        # Patched on the SOURCE module, like build_streamed_model above:
+        # stream_setup imports it inside the function.
+        monkeypatch.setattr(
+            rt, "expandable_segments_status", lambda *_a, **_k: (True, "")
+        )
+        captured = {}
+        self._stub_build_streamed_model(monkeypatch, captured)
+        self._run(
+            tmp_path, monkeypatch, free_ram=_RAM_TIER_FREE_BYTES,
+            stream_source="auto", device="cuda",
+            extra_training_yaml=extra_training_yaml,
+        )
+        return captured
+
+    def test_stream_pin_true_reaches_the_runtime_as_true_on_cuda(
+        self, tmp_path, monkeypatch
+    ):
+        """#366 round-3 C3: on CPU `(stream_pin is True) and on_cuda` is False
+        whatever stream_pin holds, so a CPU assertion of `is False` is satisfied
+        identically by the real expression and by a hardcoded constant — it
+        cannot discriminate. This is the case that pins the other half of that
+        conjunction, and therefore the only one that fails when `require_pin` is
+        hardcoded to False."""
+        captured = self._run_on_simulated_cuda(
+            tmp_path, monkeypatch, "  stream_pin: true\n"
+        )
+        assert captured["require_pin"] is True
+
+    def test_unset_stream_pin_reaches_the_runtime_as_false_on_cuda(
+        self, tmp_path, monkeypatch
+    ):
+        """Control for the case above — otherwise a hardcoded `True` would pass
+        and the pair would prove nothing about the value."""
+        captured = self._run_on_simulated_cuda(tmp_path, monkeypatch, "")
+        assert captured["require_pin"] is False
 
     def test_auto_uses_ram_when_the_base_fits(self, tmp_path, monkeypatch):
         wrapper = self._run(
@@ -1453,6 +1574,50 @@ def _write_tiny_tokenizer(weights_dir):
         )
 
 
+class TestRequirePinSurvivesEveryHop:
+    """#366 round-3 C2: `require_pin` crosses two hops between the pre-flight and
+    the source constructor — `build_streamed_model -> install_streaming` and
+    `install_streaming -> _build_source`. Hardcoding `require_pin=False` at
+    EITHER left the whole suite green, because the only refusal test called
+    `_build_source` directly and so jumped over both. These drive the real chain
+    over the existing tiny-checkpoint harness. CPU-only."""
+
+    @staticmethod
+    def _fail_pinning(monkeypatch):
+        """Make page-locking fail the way a box out of pinnable RAM does.
+
+        Subclasses the REAL RamSource rather than replacing it with a stub: the
+        pageable construction has to actually work (the control below streams
+        through it), and `install_streaming` calls `RamSource.spec_from_shard`
+        before ever building a source."""
+        import soup_cli.utils.layer_stream_runtime as rt
+
+        class _FailsWhenPinned(rt.RamSource):
+            def __init__(self, shard_dir, n_layers, spec, *, pin=True):
+                if pin:
+                    raise RuntimeError("CUDA error: cannot allocate pinned memory")
+                super().__init__(shard_dir, n_layers, spec, pin=False)
+
+        monkeypatch.setattr(rt, "RamSource", _FailsWhenPinned)
+
+    def test_forced_pin_refuses_through_the_whole_real_chain(
+        self, tmp_path, monkeypatch
+    ):
+        self._fail_pinning(monkeypatch)
+        with pytest.raises(RuntimeError, match="stream_pin"):
+            _tiny_stream(tmp_path, pin=True, require_pin=True)
+
+    def test_the_same_failure_falls_back_silently_without_the_request(
+        self, tmp_path, monkeypatch
+    ):
+        """The control that makes the case above discriminating: the identical
+        page-lock failure must still fall back when nobody asked for the pin, so
+        the refusal is attributable to the flag and not to the failure."""
+        self._fail_pinning(monkeypatch)
+        _model, runtime, _weights = _tiny_stream(tmp_path, pin=True)
+        assert runtime.stats()["pinned"] is False
+
+
 class TestDiskTierConfig:
     def test_stream_source_disk_is_accepted(self):
         from soup_cli.config.loader import load_config_from_string
@@ -1584,7 +1749,7 @@ def _advice(**kw):
 # ==========================================================================
 def _tiny_stream(
     tmp_path, name="shards", seed=3, n_layers=3, device="cpu", tier="ram",
-    quant="none",
+    quant="none", pin=False, require_pin=False,
 ):
     """A streamed model over a real (tiny) on-disk Llama checkpoint."""
     import torch
@@ -1638,8 +1803,8 @@ def _tiny_stream(
     )
     model, runtime = build_streamed_model(
         model_id=str(weights), shard_dir=shards, index=index, lora_config=lora,
-        device=device, dtype="float32", buffers=2, pin=False, seed=seed,
-        tier=tier, quant=quant,
+        device=device, dtype="float32", buffers=2, pin=pin, seed=seed,
+        tier=tier, quant=quant, require_pin=require_pin,
     )
     return model, runtime, str(weights)
 

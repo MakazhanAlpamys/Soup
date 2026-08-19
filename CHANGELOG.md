@@ -120,12 +120,17 @@ reproducing 70+ versions of notes.
   the only known mitigation for silently wrong NF4 gradients yet was unreachable
   from `soup.yaml`. `stream_pin: false` now forces the pageable store (and the
   pre-flight states the throughput it costs, up to 6.56x measured, rather than
-  absorbing it silently); `stream_pin: true` forces the pinned store and refuses
-  the run — naming the store size, not the ceiling (#366 AC3): `pinned_limit_bytes`
-  is passed as `None`, so the page-lock ceiling is deliberately left unprobed and
-  the store size is the only figure the refusal can honestly cite — if the box
-  cannot page-lock it, instead of degrading silently; unset keeps today's
-  automatic behaviour. Set while `stream_layers: false` it is rejected as a
+  absorbing it silently); `stream_pin: true` forces the pinned store and, **on
+  the RAM tier**, refuses the run — naming the store size, not the ceiling
+  (#366 AC3): `pinned_limit_bytes` is passed as `None`, so the page-lock ceiling
+  is deliberately left unprobed and the store size is the only figure the
+  refusal can honestly cite — if the box cannot page-lock it, instead of
+  degrading silently; unset keeps today's automatic behaviour. On the disk tier
+  (no RAM store to page-lock) and on CPU (no device to copy to) pinning is
+  *inapplicable* rather than unsatisfiable, so `true` is **announced and the run
+  proceeds** — refusing there would brick the large-model runs the disk tier
+  exists for, and would make the key uncommittable to a config shared between a
+  GPU box and a CPU box. Set while `stream_layers: false` it is rejected as a
   footgun, like the other stream keys.
 
 ### Fixed

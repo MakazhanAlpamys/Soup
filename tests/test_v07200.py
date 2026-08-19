@@ -325,6 +325,13 @@ class TestLayerSpec:
             LayerSpec(name="w", shape=(2, 2), dtype="int4").nbytes
 
 
+#: Distinguishing fragment of the forced-ON pin note, so the assertions below
+#: select that note rather than any line that happens to mention the key.
+_FORCED_PIN_TEXT = "training.stream_pin=true"
+#: Free RAM too small for the fixture base, so the plan lands on the disk tier.
+_NO_RAM_BYTES = 1000
+
+
 class TestStreamPlan:
     def test_build_plan_reports_tier_and_pinning(self):
         from soup_cli.utils.layer_stream import build_stream_plan
@@ -380,6 +387,58 @@ class TestStreamPlan:
         )
         assert plan.pinned is False
         assert any("throughput" in note.lower() for note in plan.notes)
+
+    def _plan_with_stream_pin(self, stream_pin, *, available_ram_bytes=12 * 10**9):
+        from soup_cli.utils.layer_stream import build_stream_plan
+
+        return build_stream_plan(
+            arch="qwen2",
+            n_layers=36,
+            layer_bytes=154 * 10**6,
+            embed_bytes=622 * 10**6,
+            available_ram_bytes=available_ram_bytes,
+            pinned_limit_bytes=7 * 10**9,
+            buffers=2,
+            disk_kind="nvme",
+            stream_pin=stream_pin,
+        )
+
+    @staticmethod
+    def _forced_on_notes(plan):
+        return [note for note in plan.notes if _FORCED_PIN_TEXT in note]
+
+    def test_stream_pin_true_is_recorded_in_the_plan_notes(self):
+        """#366 round-3 nit: `decide_pinning`'s docstring says True "only records
+        the intent so the pre-flight reflects it", but the plan appended the
+        reason only when the decision came back UNpinned — so a forced-on pin was
+        the one branch that decided something and said nothing. This PR's whole
+        framing is record, never silence."""
+        plan = self._plan_with_stream_pin(True)
+        assert plan.pinned is True
+        notes = self._forced_on_notes(plan)
+        assert notes, plan.notes
+        # The SEMANTICS, not just the key name: a note that merely mentioned
+        # stream_pin would otherwise pass.
+        assert any("page-locked store" in note for note in notes), notes
+        assert any("RAM tier the run refuses" in note for note in notes), notes
+
+    def test_automatic_pinning_stays_quiet(self):
+        """Control: only an EXPLICIT request is worth a note. Without this a
+        mutant that always appended the reason would satisfy the case above, and
+        every automatic run would grow a line of noise."""
+        plan = self._plan_with_stream_pin(None)
+        assert plan.pinned is True
+        assert self._forced_on_notes(plan) == [], plan.notes
+
+    def test_the_disk_tier_does_not_claim_a_page_locked_store(self):
+        """The forced-on note says the store IS page-locked, which is only true
+        where a RAM store exists. On the disk tier there is none, so printing it
+        there would state a promise that tier does not keep — the same
+        text-contradicts-behaviour defect this review round is about. The runtime
+        announces the inapplicability instead."""
+        plan = self._plan_with_stream_pin(True, available_ram_bytes=_NO_RAM_BYTES)
+        assert plan.tier == "disk"
+        assert self._forced_on_notes(plan) == [], plan.notes
 
     def test_plan_is_frozen(self):
         import dataclasses
@@ -2203,6 +2262,22 @@ class TestPinnedFallbackRuntime:
         assert any("utilisation" in msg.lower() for msg in printed)
 
 
+#: One decoder layer's weight for the AC3 refusal message, sized realistically so
+#: the rendered figure is a real number and not `0.00 GB`.
+_REFUSAL_HIDDEN = 4096
+_REFUSAL_SPEC = {"weight": ((_REFUSAL_HIDDEN, _REFUSAL_HIDDEN), "bfloat16")}
+#: (n_layers, rendered GB) pairs. TWO of them on purpose: a single fixed
+#: expectation would be satisfied by a message that hardcoded that string, which
+#: is the presence-not-value defect this PR's review round is about. Each case
+#: also asserts the OTHER size is absent, so only a figure computed from the
+#: actual store can satisfy both. 4096^2 bf16 = 32 MiB per layer, so 32 layers is
+#: 1.073 GB and 64 layers is 2.147 GB.
+_REFUSAL_STORE_SIZES = ((32, "1.07 GB"), (64, "2.15 GB"))
+#: The distinguishing phrase of the disk-tier "pinning is inapplicable here"
+#: announcement, which must fire on an explicit request and stay silent without.
+_DISK_TIER_INAPPLICABLE_TEXT = "Pinning does not apply"
+
+
 class TestStreamPinRuntimeRefusal:
     """#366 criterion 3: training.stream_pin=true (require_pin) must refuse
     loudly when the box cannot page-lock the store, instead of silently
@@ -2233,6 +2308,89 @@ class TestStreamPinRuntimeRefusal:
         rt = self._patch_ramsource_to_fail_pinning(monkeypatch)
         with pytest.raises(RuntimeError, match="stream_pin"):
             rt._build_source("d", 1, self._SPEC, True, None, require_pin=True)
+
+    @pytest.mark.parametrize(("n_layers", "expected"), _REFUSAL_STORE_SIZES)
+    def test_the_refusal_names_the_store_size(self, monkeypatch, n_layers, expected):
+        """#366 AC3: the refusal must cite the STORE SIZE — not the page-locked
+        ceiling, which is deliberately left unprobed (`pinned_limit_bytes=None`)
+        and so cannot be quoted honestly. Dropping the figure from the message
+        left the suite green, which made AC3 unenforced.
+
+        Two sizes, each asserting the other is ABSENT: a message that hardcoded
+        one figure would satisfy a single-case test identically, which is exactly
+        the presence-not-value failure this review round is about."""
+        rt = self._patch_ramsource_to_fail_pinning(monkeypatch)
+        others = [gb for layers, gb in _REFUSAL_STORE_SIZES if layers != n_layers]
+        with pytest.raises(RuntimeError) as excinfo:
+            rt._build_source("d", n_layers, _REFUSAL_SPEC, True, None, require_pin=True)
+        message = str(excinfo.value)
+        assert expected in message, message
+        for other in others:
+            assert other not in message, message
+
+
+class TestDiskTierAnnouncesInapplicablePinning:
+    """#366 round-3: on the disk tier the base does not fit in RAM, so there is
+    no RAM store to page-lock — pinning is INAPPLICABLE rather than
+    unsatisfiable, and the run proceeds. That is a decision, not a silence, so
+    the announcement has to exist; deleting the whole block previously left the
+    suite green. `require_pin` is gated on a real CUDA device upstream, so this
+    drives `_build_source` directly to reach the branch without a GPU."""
+
+    _SPEC = {"weight": ((2, 2), "float32")}
+
+    class _RecordingConsole:
+        def __init__(self):
+            self.messages = []
+
+        def print(self, *args, **_kwargs):
+            self.messages.append(" ".join(str(a) for a in args))
+
+    def _build_on_disk(self, monkeypatch, *, require_pin):
+        import soup_cli.utils.layer_stream_runtime as rt
+
+        class _StubDisk:
+            def __init__(self, shard_dir, n_layers, spec):
+                self.nbytes = 0
+
+        monkeypatch.setattr(rt, "DiskSource", _StubDisk)
+        console = self._RecordingConsole()
+        _source, pinned = rt._build_source(
+            "d", 1, self._SPEC, True, console, "disk", require_pin=require_pin
+        )
+        assert pinned is False
+        return console.messages
+
+    def test_an_explicit_request_is_announced_not_dropped(self, monkeypatch):
+        messages = self._build_on_disk(monkeypatch, require_pin=True)
+        assert any(_DISK_TIER_INAPPLICABLE_TEXT in m for m in messages), messages
+
+    def test_nothing_is_announced_without_a_request(self, monkeypatch):
+        """Control: the announcement answers a request, so an ordinary disk-tier
+        run must not grow a line about a flag nobody set. Without this half, a
+        mutant that always printed it would pass."""
+        messages = self._build_on_disk(monkeypatch, require_pin=False)
+        assert messages == []
+
+    def test_it_still_reaches_the_log_without_a_console(self, monkeypatch, caplog):
+        """`_build_source` is also called with `console=None` (the runtime does
+        not always have one). The decision must still be recorded there, or the
+        carve-out is silent on exactly the path with no screen to print to."""
+        import logging
+
+        import soup_cli.utils.layer_stream_runtime as rt
+
+        class _StubDisk:
+            def __init__(self, shard_dir, n_layers, spec):
+                self.nbytes = 0
+
+        monkeypatch.setattr(rt, "DiskSource", _StubDisk)
+        with caplog.at_level(logging.WARNING):
+            _source, pinned = rt._build_source(
+                "d", 1, self._SPEC, True, None, "disk", require_pin=True
+            )
+        assert pinned is False
+        assert _DISK_TIER_INAPPLICABLE_TEXT in caplog.text, caplog.text
 
 
 class TestCachedIndexInvalidation:
