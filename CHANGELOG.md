@@ -70,7 +70,8 @@ reproducing 70+ versions of notes.
   the "no matching architecture" advisory now share one message.
 
 - **`soup draft measure` now refuses a mismatched pair up front and no longer
-  discards a completed measurement when the assisted arm fails (#344).** `measure`
+  discards a completed measurement when the assisted arm fails
+  (#344 by @ousamabenyounes in #409).** `measure`
   gated on `same_tokenizer()` (tokenizer vocab + probe ids), which accepts a pair
   whose tokenizers are identical but whose `config.vocab_size` differs by padded
   embedding rows (e.g. Qwen2.5 large←small) — exactly the pair `distill` refuses.
