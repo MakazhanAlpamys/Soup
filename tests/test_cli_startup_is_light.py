@@ -195,6 +195,46 @@ def test_light_command_invocation_stays_light(argv: list[str]):
     assert not leaked, f"`soup {' '.join(argv)}` pulled in {leaked}"
 
 
+@pytest.mark.parametrize(
+    "module",
+    [
+        "soup_cli.utils.reward_hack_control",
+        "soup_cli.utils.reward_hacking",
+        "soup_cli.utils.echo_trap",
+        "soup_cli.utils.minillm",
+        "soup_cli.utils.rl_checkpoint",
+        "soup_cli.utils.relora",
+        "soup_cli.utils.lisa",
+        "soup_cli.monitoring.hf_push",
+        "soup_cli.monitoring.curriculum_callback",
+        "soup_cli.monitoring.grpo_stability_callback",
+        "soup_cli.monitoring.callback",
+    ],
+)
+def test_callback_module_imports_without_transformers(module: str):
+    """Each TrainerCallback module must be importable without pulling transformers.
+
+    These modules used to resolve the TrainerCallback base at class-definition
+    time, eagerly importing transformers (and therefore torch) at module scope.
+    Issue #320 deferred class construction via PEP 562 ``__getattr__``.
+    """
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            f"import sys, {module}; "
+            "print(','.join(sorted(m for m in "
+            f"{HEAVY!r} if m in sys.modules)))",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    assert proc.returncode == 0, (proc.stdout, proc.stderr)
+    leaked = [m for m in proc.stdout.strip().split(",") if m]
+    assert not leaked, f"{module} pulled in {leaked} at import time"
+
+
 def test_stress_sentinel_matches_the_controller():
     """``reward_stress`` copies the sentinel rather than importing it.
 

@@ -61,6 +61,16 @@ reproducing 70+ versions of notes.
 - **A repo-wide documentation ratchet to guarantee declared recipe counts stay synchronized with the catalog (#453 by @harshitthek in #457).**
   Derives the expected count dynamically from `len(RECIPES)` and scans all declared documentation sites, preventing silent Git auto-merge drift across sequential recipe additions.
 
+### Changed
+
+- **Lazy callback builders now self-import their callback class names so runtime
+  lookup never raises `NameError` while preserving lazy heavy-dependency loading
+  (#320 by @AchuthReddy-16 in #455).** `build_echo_trap_callback`,
+  `build_reward_hack_callback`, `build_minillm_callback`,
+  `build_rl_checkpoint_callback`, and `build_push_callback` now resolve their
+  callback types through local module imports in the builder body, and the
+  regression suite adds subprocess coverage for all five builder calls.
+
 ### Fixed
 
 - **`cut_ce.py` and `liger.py` now normalize path separators and match architecture

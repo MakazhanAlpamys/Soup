@@ -3,15 +3,12 @@
 from __future__ import annotations
 
 import logging
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from rich.console import Console
-from transformers import (
-    TrainerCallback,
-    TrainerControl,
-    TrainerState,
-    TrainingArguments,
-)
+
+if TYPE_CHECKING:
+    from transformers import TrainerControl, TrainerState, TrainingArguments
 
 from soup_cli.monitoring.display import TrainingDisplay
 
@@ -19,7 +16,17 @@ logger = logging.getLogger(__name__)
 console = Console()
 
 
-class SoupTrainerCallback(TrainerCallback):
+def _get_trainer_callback_base():
+    """Lazy-resolve ``transformers.TrainerCallback``."""
+    try:
+        from transformers import TrainerCallback
+
+        return TrainerCallback
+    except ImportError:
+        return object
+
+
+class _SoupTrainerCallback_body:  # noqa: N801
     """Bridges HF Trainer events to Soup's Rich live display and experiment tracker."""
 
     def __init__(
@@ -565,3 +572,22 @@ class SoupTrainerCallback(TrainerCallback):
             f"({new_batch}, {new_accum}). "
             f"Restart training with the new pair to take effect."
         )
+
+
+_LAZY_CALLBACKS = {
+    "SoupTrainerCallback": _SoupTrainerCallback_body,
+}
+_BODY_SKIP = frozenset(("__dict__", "__weakref__"))
+
+
+def __getattr__(name: str):  # PEP 562
+    body = _LAZY_CALLBACKS.get(name)
+    if body is not None:
+        base = _get_trainer_callback_base()
+        ns = {k: v for k, v in vars(body).items() if k not in _BODY_SKIP}
+        cls = type(name, (base,), ns)
+        cls.__module__ = __name__
+        cls.__qualname__ = name
+        globals()[name] = cls
+        return cls
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
