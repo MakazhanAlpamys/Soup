@@ -24,7 +24,7 @@ reproducing 70+ versions of notes.
   quantization). `epochs: 1` and `max_length: 8192` are taken from the SFT
   sibling rather than the smaller qwen defaults, which suit a 754B MoE better.
 
-- **`data.interleave` is now wired into training-time dataset loading (#443 by @blackcoderx in #TODO-PR).**
+- **`data.interleave` is now wired into training-time dataset loading (#443 by @blackcoderx in #460).**
   `parse_interleave`/`InterleaveSpec` have been schema-validated and unit-tested since
   v0.42.0, but `load_dataset()` never called them — every multi-dataset mixture request
   silently trained on nothing but `data.train`'s single path, the same gap #330 and #442
