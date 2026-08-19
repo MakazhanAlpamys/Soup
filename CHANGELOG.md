@@ -26,6 +26,17 @@ reproducing 70+ versions of notes.
 
 ### Fixed
 
+- **`cut_ce.py` and `liger.py` now normalize path separators and match architecture
+  keywords on the last path component only (#456 by @harshitthek in #458).**
+  On Windows, `rsplit("/")` never split on backslashes, causing parent directory
+  names (e.g. `C:\experiments\phi-3-runs\step-2000`) to over-match architecture
+  keywords during fallback detection when config resolution was unavailable. In
+  `liger.py`, switching from whole-path to last-component matching also drops
+  org-prefix false positives (e.g. `mistralai/*`, `Qwen/*` when the model name
+  does not contain the keyword) and prevents parent directories from applying the
+  wrong fused kernel across POSIX and Windows. Both modules now normalize dual
+  separators and strip trailing slashes deterministically.
+
 - **`measure_gemm_tflops` now records per-repeat samples and
   `test_takes_the_best_repeat_not_the_first` verifies best-of-N selection within
   a single measurement (#444 by @harshitthek in #451).** Comparing two separate

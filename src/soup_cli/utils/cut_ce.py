@@ -97,8 +97,9 @@ def apply_cut_ce(model_name: str) -> bool:
 
     # Fallback for when config resolution has nothing to read from. Match on
     # the last path component only, to keep an upstream-org / parent-dir
-    # name from leaking into architecture selection.
-    last_component = model_name.rsplit("/", 1)[-1].lower()
+    # name from leaking into architecture selection (#456).
+    clean_name = str(model_name or "").strip().replace("\\", "/").rstrip("/")
+    last_component = clean_name.rsplit("/", 1)[-1].lower() if clean_name else ""
     detectors = (
         (("codellama",), "llama"),
         (("llama",), "llama"),
