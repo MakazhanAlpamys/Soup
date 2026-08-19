@@ -18,6 +18,12 @@ reproducing 70+ versions of notes.
   The recipe combines the established GRPO defaults (accuracy reward, beta=0.1, 4 generations)
   with LoRA r=16 and 4-bit quantization.
 
+- **A ready-made `glm-5.1-dpo` recipe for DPO preference training with `zai-org/GLM-5.1` (#280 by @Osheun in #452).**
+  The first recipe pairing DPO with a MoE base, so it carries `moe_lora: true`
+  alongside the established DPO defaults (beta=0.1, LoRA r=32 / alpha=64, 4-bit
+  quantization). `epochs: 1` and `max_length: 8192` are taken from the SFT
+  sibling rather than the smaller qwen defaults, which suit a 754B MoE better.
+
 ### Fixed
 
 - **Duck-typed tokenizer mappings no longer raise a misleading error, and

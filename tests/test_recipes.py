@@ -427,7 +427,7 @@ class TestV025NewRecipes:
             assert cfg.base == recipe.model
             assert cfg.task == recipe.task
 
-    def test_catalog_size_is_145(self):
+    def test_catalog_size_is_146(self):
         """Total catalog size — grew with each release.
 
         v0.25.0 shipped 43 recipes (29 + 9 Part A + 2 Part B tools + 3 Part E MLX).
@@ -445,10 +445,11 @@ class TestV025NewRecipes:
         Issue #278 added 1 (qwen3.5-4b-pretrain) -> 143.
         Issue #279 added 1 (deepseek-v4-flash-grpo) -> 144.
         Issue #277 added 1 (qwen3.5-9b-grpo) -> 145.
+        Issue #280 added 1 (glm-5.1-dpo) -> 146.
         """
         from soup_cli.recipes.catalog import RECIPES
 
-        assert len(RECIPES) == 145
+        assert len(RECIPES) == 146
 
     def test_new_recipes_searchable(self):
         """Search returns the new recipes via keyword/task filter."""
