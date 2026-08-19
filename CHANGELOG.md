@@ -58,6 +58,9 @@ reproducing 70+ versions of notes.
   and the `--live` overlay renderer emit the real N-dataset mixture again instead of
   collapsing to one path.
 
+- **A repo-wide documentation ratchet to guarantee declared recipe counts stay synchronized with the catalog (#453 by @harshitthek in #457).**
+  Derives the expected count dynamically from `len(RECIPES)` and scans all declared documentation sites, preventing silent Git auto-merge drift across sequential recipe additions.
+
 ### Fixed
 
 - **`cut_ce.py` and `liger.py` now normalize path separators and match architecture
