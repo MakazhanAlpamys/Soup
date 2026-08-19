@@ -84,7 +84,22 @@ def _tracked_files() -> list[Path]:
 
 
 def _is_comment(line: str) -> bool:
-    return line.lstrip().startswith("#")
+    """A file-level licence header sits at column 0, unindented.
+
+    The distinction is load-bearing rather than stylistic, and I learned it the
+    hard way: the first version of this file used ``line.lstrip()``, so the
+    scanner flagged the two *indented* lines in its own module docstring -- the
+    verbatim quotation of the header it exists to catch -- and turned all nine
+    CI cells red. Locally it had passed, because an uncommitted file is absent
+    from ``git ls-files`` and the scanner therefore never read itself.
+
+    Requiring column 0 costs nothing real: every occurrence of the header this
+    guard was written for sat at column 0, which is where tooling emits a file
+    header. An indented ``#`` inside the header region is a quotation, a nested
+    code block, or a comment inside a class body -- never a licence declaration
+    about the file.
+    """
+    return line.startswith("#")
 
 
 def _offending_lines(text: str) -> list[tuple[int, str, str]]:
@@ -190,6 +205,30 @@ class TestTheScannerCanActuallyFail:
             pytest.skip("license_advisor.py not present")
         text = io.open(target, encoding="utf-8", errors="replace").read()
         assert "AGPL" in text, "fixture assumption broken: expected AGPL in body"
+        assert _offending_lines(text) == []
+
+    def test_an_indented_quotation_of_the_header_is_not_flagged(self):
+        """This file's own docstring quotes the header; that must be safe.
+
+        Regression: the first version used ``lstrip()``, flagged its own
+        documentation, and failed all nine CI cells. It passed locally only
+        because an uncommitted file is not in ``git ls-files``.
+        """
+        text = chr(10).join(
+            [
+                '"""Why this guard exists.',
+                "",
+                "    # SPDX-License-Identifier: AGPL-3.0-only",
+                "    # Copyright 2026-present the Unsloth AI Inc. team."
+                " All rights reserved.",
+                '"""',
+            ]
+        )
+        assert _offending_lines(text) == []
+
+    def test_this_very_file_passes_its_own_scan(self):
+        """The end-to-end version: the guard must not flag itself."""
+        text = io.open(__file__, encoding="utf-8", errors="replace").read()
         assert _offending_lines(text) == []
 
     def test_a_deep_header_beyond_the_window_is_out_of_scope(self):

@@ -259,9 +259,9 @@ def _build_row_labels(
     template can't render — callers decide whether to skip or propagate.
     """
     from soup_cli.data.loss_mask import (
-        _coerce_token_ids,
         build_assistant_only_labels,
         build_per_message_train_labels,
+        coerce_token_ids,
     )
 
     if train_on_messages_with_train_field:
@@ -270,7 +270,7 @@ def _build_row_labels(
         return build_assistant_only_labels(
             messages, tokenizer, max_length=max_length, include_eot=include_eot
         )
-    ids = _coerce_token_ids(
+    ids = coerce_token_ids(
         tokenizer.apply_chat_template(
             messages, tokenize=True, add_generation_prompt=False
         )
@@ -615,7 +615,7 @@ def check_truncation_risk(
             name="truncation_risk", verdict="OK", message="skipped (no chat_template)"
         )
 
-    from soup_cli.data.loss_mask import _coerce_token_ids
+    from soup_cli.data.loss_mask import coerce_token_ids
     from soup_cli.utils.tail_latency import percentile
 
     lengths: List[float] = []
@@ -624,7 +624,7 @@ def check_truncation_risk(
         if not messages:
             continue
         try:
-            ids = _coerce_token_ids(
+            ids = coerce_token_ids(
                 tokenizer.apply_chat_template(
                     messages, tokenize=True, add_generation_prompt=False
                 )
