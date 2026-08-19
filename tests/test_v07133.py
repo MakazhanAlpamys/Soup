@@ -14,9 +14,20 @@ from __future__ import annotations
 import ast
 import math
 import os
+import re
 from pathlib import Path
 
 import pytest
+
+# Rich styles console output, so a phrase assertion must never read raw
+# `result.output`: an escape sequence can land inside the phrase and a wrap can
+# split it across a line. Strip ANSI, then collapse whitespace — the repo-wide
+# rule enforced by `test_cli_help_assertions_are_ansi_safe.py`.
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _plain(text: str) -> str:
+    return re.sub(r"\s+", " ", _ANSI_RE.sub("", text or ""))
 
 
 # ---------------------------------------------------------------------------
@@ -1763,6 +1774,15 @@ class TestDraftMeasureCli:
         assert "no tokens" in result.output.lower()
 
 
+#: Qwen2.5's config.vocab_size with the padded embedding rows, and without them.
+#: The tokenizers are identical; only these two numbers differ (issue #344).
+_QWEN_PADDED_VOCAB = 152064
+_QWEN_BASE_VOCAB = 151936
+#: `LlavaConfig().get_text_config().vocab_size` on transformers 4.57.6 — the
+#: composite shape whose top-level `vocab_size` is absent (#344 review).
+_LLAVA_TEXT_VOCAB = 32000
+
+
 class TestDraftMeasureVocabGate:
     """issue #344 — measure must refuse the SAME pairs distill refuses (on
     config.vocab_size, before loading), and must not discard a completed
@@ -1773,8 +1793,18 @@ class TestDraftMeasureVocabGate:
             tmp_path / "p.jsonl", [{"prompt": "What is 2+2?"}, {"prompt": "Hi"}]
         )
 
+    @pytest.mark.parametrize(
+        ("target_vocab", "draft_vocab"),
+        [
+            (_QWEN_PADDED_VOCAB, _QWEN_BASE_VOCAB),
+            # The mirror image. The gate is `!=`, not `>`: a draft with the LARGER
+            # config vocab is refused too. Without this direction, mutating the
+            # comparison to `>` survives (#344 review, finding 3).
+            (_QWEN_BASE_VOCAB, _QWEN_PADDED_VOCAB),
+        ],
+    )
     def test_config_vocab_mismatch_refused_before_any_model_loads(
-        self, runner, in_tmp_cwd, monkeypatch
+        self, runner, in_tmp_cwd, monkeypatch, target_vocab, draft_vocab
     ):
         # Qwen2.5 large<-small: identical tokenizers, but config.vocab_size differs
         # by padded embedding rows (152064 vs 151936). same_tokenizer() accepts it;
@@ -1786,7 +1816,7 @@ class TestDraftMeasureVocabGate:
         monkeypatch.setattr(
             draft_cmd,
             "_vocab_size_of",
-            lambda mid, trc=False: 152064 if "target" in mid else 151936,
+            lambda mid, trc=False: target_vocab if "target" in mid else draft_vocab,
         )
         loaded: list[str] = []
 
@@ -1860,7 +1890,7 @@ class TestDraftMeasureVocabGate:
         # to an untimed or interrupted one), and the loud warning is actually shown
         # (deleting the message fails this).
         assert data["assisted_status"] == "crash"
-        assert "could not be measured" in result.output
+        assert "could not be measured" in _plain(result.output)
 
     def _run_measure(self, runner, in_tmp_cwd, monkeypatch, throughput):
         """Drive `measure` to the assisted arm with everything before it mocked;
@@ -1915,7 +1945,7 @@ class TestDraftMeasureVocabGate:
         data = _json.loads((in_tmp_cwd / "report.json").read_text(encoding="utf-8"))
         assert data["assisted_status"] == "untimed"
         assert data["tok_s_assisted"] is None
-        assert "could not be measured" not in result.output
+        assert "could not be measured" not in _plain(result.output)
 
     def test_assisted_arm_interrupt_is_recorded_and_reraised(
         self, runner, in_tmp_cwd, monkeypatch
@@ -1937,6 +1967,175 @@ class TestDraftMeasureVocabGate:
         data = _json.loads((in_tmp_cwd / "report.json").read_text(encoding="utf-8"))
         assert data["assisted_status"] == "interrupted"
         assert data["tok_s_assisted"] is None
+
+    def test_hard_death_in_the_assisted_arm_keeps_the_incremental_report(
+        self, runner, in_tmp_cwd, monkeypatch
+    ):
+        """The incremental write earns its keep on a death NO handler catches.
+
+        `SystemExit` derives from `BaseException`, so neither `except Exception`
+        nor `except KeyboardInterrupt` catches it and nothing in `measure` runs
+        after the arm dies here — the only reason acceptance + plain throughput
+        are on disk is the write that already happened BEFORE the arm. A hard
+        kill is the same shape with no Python frame at all. Delete just that
+        write and every other test in this class stays green; this one goes red
+        (#344 review, blocker 1). It is also the only assertion on `pending`,
+        which is reachable on disk exactly in this case.
+        """
+        import json as _json
+
+        def _hard_death(model, tok, prompts, *, assistant_model=None, **kw):
+            if assistant_model is not None:
+                raise SystemExit(137)
+            return 20.0
+
+        result = self._run_measure(runner, in_tmp_cwd, monkeypatch, _hard_death)
+        assert result.exit_code == 137, (result.output, repr(result.exception))
+        report = in_tmp_cwd / "report.json"
+        assert report.exists(), "acceptance + plain throughput were discarded"
+        data = _json.loads(report.read_text(encoding="utf-8"))
+        assert data["acceptance_rate"] == 0.75
+        assert data["tok_s_plain"] == 20.0
+        assert data["assisted_status"] == "pending"
+
+    @pytest.mark.parametrize(
+        ("outcome", "expected_exit"),
+        [("crash", 0), ("interrupt", 130)],
+    )
+    def test_a_failed_status_write_does_not_mask_the_arm_outcome(
+        self, runner, in_tmp_cwd, monkeypatch, outcome, expected_exit
+    ):
+        """#344 review nit: the status write inside the two handlers was unguarded,
+        so an `OSError` there replaced the exception being handled — the crashed
+        arm's warning became an unrelated traceback, and Ctrl-C lost its exit 130.
+        Drop the guard in `_record_assisted_status` and both cases fail.
+        """
+        import json as _json
+
+        from soup_cli.commands import draft as draft_cmd
+
+        real_write = draft_cmd._write_draft_report
+        writes = {"n": 0}
+
+        def _fail_after_the_pre_arm_write(report, output):
+            writes["n"] += 1
+            if writes["n"] == 1:
+                real_write(report, output)
+                return
+            raise OSError("no space left on device")
+
+        monkeypatch.setattr(
+            draft_cmd, "_write_draft_report", _fail_after_the_pre_arm_write
+        )
+
+        def _throughput(model, tok, prompts, *, assistant_model=None, **kw):
+            if assistant_model is None:
+                return 20.0
+            if outcome == "interrupt":
+                raise KeyboardInterrupt
+            raise ValueError("boom")
+
+        result = self._run_measure(runner, in_tmp_cwd, monkeypatch, _throughput)
+        assert result.exit_code == expected_exit, (
+            result.output,
+            repr(result.exception),
+        )
+        # The failed update is reported, not swallowed silently...
+        assert "could not record the assisted-arm outcome" in _plain(result.output)
+        # ...and the results the pre-arm write persisted are untouched on disk.
+        data = _json.loads((in_tmp_cwd / "report.json").read_text(encoding="utf-8"))
+        assert data["acceptance_rate"] == 0.75
+        assert data["tok_s_plain"] == 20.0
+
+    def test_a_crashed_arm_without_an_output_path_still_warns(
+        self, runner, in_tmp_cwd, monkeypatch
+    ):
+        """`measure` without `-o` has no report to update, so recording the outcome
+        must be a no-op rather than a write against `None` — the arm still warns
+        and the run still exits 0."""
+        from soup_cli.commands import draft as draft_cmd
+        from soup_cli.commands.draft import app
+
+        monkeypatch.setattr(draft_cmd, "_vocab_size_of", lambda mid, trc=False: 49152)
+        monkeypatch.setattr(
+            draft_cmd,
+            "_load_pair_member",
+            lambda model_id, **kw: (object(), _FakeTok(49152), "cpu"),
+        )
+        monkeypatch.setattr(draft_cmd, "measure_acceptance", lambda *a, **k: (75, 100))
+
+        def _crash(model, tok, prompts, *, assistant_model=None, **kw):
+            if assistant_model is not None:
+                raise ValueError("boom")
+            return 20.0
+
+        monkeypatch.setattr(draft_cmd, "measure_throughput", _crash)
+        result = runner.invoke(
+            app,
+            ["measure", "--target", "org/target", "--draft", "org/tiny",
+             "--prompts", self._prompts(in_tmp_cwd)],
+        )
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        assert "could not be measured" in _plain(result.output)
+        assert not list(in_tmp_cwd.glob("*.json"))
+
+
+class TestVocabSizeOfCompositeConfig:
+    """#344 review, blocker 2 — `_vocab_size_of` reads a composite/multimodal
+    config's `get_text_config()` when the top-level `vocab_size` is absent, so a
+    VLM target is no longer refused with "could not read model config". It is the
+    shared helper, so this covers `measure` and `distill` at once.
+
+    Stubbed configs rather than a real `LlavaConfig`: the repo allows
+    `transformers>=4.36,<5`, and the top-level `vocab_size` this fallback exists
+    for was only dropped from `LlavaConfig` partway through that range — on the
+    older cells a real config would satisfy the assertion without ever reaching
+    the fallback. The shapes below are the ones measured on 4.57.6
+    (`LlavaConfig().vocab_size` missing, `get_text_config().vocab_size == 32000`).
+    """
+
+    def _vocab_size_for(self, config):
+        from unittest.mock import patch
+
+        from soup_cli.commands.draft import _vocab_size_of
+
+        with patch("transformers.AutoConfig.from_pretrained", return_value=config):
+            return _vocab_size_of("org/model")
+
+    @pytest.mark.parametrize(
+        "text_vocab", [_LLAVA_TEXT_VOCAB, _QWEN_PADDED_VOCAB]
+    )
+    def test_composite_config_resolves_through_get_text_config(self, text_vocab):
+        """Two sizes, because one would be satisfied by a fallback that returns a
+        hardcoded 32000 rather than reading the sub-config."""
+        import types
+
+        config = types.SimpleNamespace(
+            get_text_config=lambda: types.SimpleNamespace(vocab_size=text_vocab)
+        )
+        assert self._vocab_size_for(config) == text_vocab
+
+    def test_top_level_vocab_size_still_wins(self):
+        """The control. Without it a fallback that took PRIORITY would also pass
+        the test above — here `get_text_config()` raises, so calling it at all is
+        a failure, and the plain (Qwen-shaped) path must be untouched."""
+        import types
+
+        def _must_not_be_called():
+            raise AssertionError("get_text_config() shadowed the top-level vocab_size")
+
+        config = types.SimpleNamespace(
+            vocab_size=_QWEN_BASE_VOCAB, get_text_config=_must_not_be_called
+        )
+        assert self._vocab_size_for(config) == _QWEN_BASE_VOCAB
+
+    def test_neither_source_still_raises(self):
+        """A config with no vocab size anywhere keeps the pre-existing error —
+        the fallback must not turn an unreadable config into a silent default."""
+        import types
+
+        with pytest.raises(ValueError, match="vocab_size"):
+            self._vocab_size_for(types.SimpleNamespace())
 
 
 class TestDraftListCli:

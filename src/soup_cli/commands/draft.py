@@ -174,6 +174,34 @@ def _write_draft_report(report: AcceptanceReport, output: str) -> None:
     )
 
 
+def _record_assisted_status(
+    report: AcceptanceReport, output: Optional[str], status: str
+) -> AcceptanceReport:
+    """Stamp ``status`` on ``report`` and persist it best-effort.
+
+    Only for the assisted-arm handlers: a write that raises there would replace
+    the exception being handled — swapping the "assisted arm crashed" warning,
+    or Ctrl-C's exit code, for an unrelated ``OSError`` — and so lose exactly the
+    outcome the handler exists to record (#344 review). The pre-arm write has
+    already put acceptance + plain throughput on disk, so a failed status update
+    is a warning, not a failure. The success path deliberately does NOT use this:
+    there is no exception to mask, and failing to write the completed report is a
+    real error.
+    """
+    report = replace(report, assisted_status=status)
+    if output is None:
+        return report
+    try:
+        _write_draft_report(report, output)
+    except OSError as exc:
+        console.print(
+            f"[yellow]Warning:[/] could not record the assisted-arm outcome in "
+            f"{escape(output)} ({escape(str(exc))}); the acceptance rate and "
+            f"plain throughput written before the arm are still on disk."
+        )
+    return report
+
+
 def _resolve_trust(model_id: str, requested: bool = False) -> bool:
     from soup_cli.utils.trust_remote import (
         model_requires_trust_remote_code,
@@ -748,14 +776,10 @@ def measure(
         # an untimed run — otherwise all three write byte-identical reports
         # (#344 review). Record the outcome, then re-raise so the exit code and
         # the "arm is best-effort" contract are unchanged.
-        report = replace(report, assisted_status="interrupted")
-        if output is not None:
-            _write_draft_report(report, output)
+        _record_assisted_status(report, output, "interrupted")
         raise
     except Exception as exc:  # noqa: BLE001 — assisted arm is best-effort
-        report = replace(report, assisted_status="crash")
-        if output is not None:
-            _write_draft_report(report, output)
+        report = _record_assisted_status(report, output, "crash")
         console.print(
             f"[yellow]Warning:[/] assisted-generation throughput could not be "
             f"measured ({escape(str(exc))}); the acceptance rate and plain "

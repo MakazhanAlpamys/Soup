@@ -83,8 +83,10 @@ reproducing 70+ versions of notes.
   so a multimodal target like Llava is no longer refused), keeps `same_tokenizer()`
   as an additional check, and writes the report incrementally so a failing assisted
   arm leaves the acceptance rate and plain throughput on disk. The report records
-  an `assisted_status` (`complete` / `untimed` / `crash` / `interrupted`) so a
-  failed arm is distinguishable on disk from a completed or un-run one.
+  an `assisted_status` (`pending` / `complete` / `untimed` / `crash` /
+  `interrupted`) so a failed arm is distinguishable on disk from a completed or
+  un-run one — `pending` is what a report keeps when the process dies mid-arm
+  and no handler runs, which is the case the incremental write exists for.
 
 ## [0.73.3] - 2026-08-18
 
