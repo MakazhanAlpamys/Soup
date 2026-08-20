@@ -45,7 +45,82 @@ class TestQuantizationReachesFromPretrained:
         quant_config = kwargs["quantization_config"]
         assert quant_config.load_in_4bit is True
         assert quant_config.bnb_4bit_quant_type == "nf4"
+        assert quant_config.bnb_4bit_use_double_quant is True
         assert kwargs["device_map"] == "cpu"
+
+    @patch("soup_cli.utils.gpu.get_compute_dtype")
+    @patch("transformers.AutoTokenizer.from_pretrained")
+    @patch("transformers.AutoModelForCausalLM.from_pretrained")
+    def test_4bit_compute_dtype_comes_from_get_compute_dtype(
+        self, mock_model, mock_tok, mock_get_dtype
+    ):
+        """The one wire connecting this fix to the #385/#387 T4 emulation-detect
+        fix: bnb_4bit_compute_dtype must actually come from get_compute_dtype(),
+        not a hardcoded value that happens to match on most hardware."""
+        import torch
+
+        from soup_cli.utils.live_eval import load_model_and_tokenizer
+
+        mock_tok.return_value = _fake_tokenizer()
+        mock_model.return_value = MagicMock()
+        # BitsAndBytesConfig validates this field is a torch.dtype (or a string
+        # naming one), so the sentinel has to be a real, distinctive dtype
+        # rather than an opaque object -- float16 is never get_compute_dtype's
+        # actual return value on any real hardware path, only bfloat16/float32.
+        mock_get_dtype.return_value = torch.float16
+
+        load_model_and_tokenizer("some/model", device="cpu", quantization="4bit")
+
+        mock_get_dtype.assert_called_once_with()
+        _, kwargs = mock_model.call_args
+        assert kwargs["quantization_config"].bnb_4bit_compute_dtype is torch.float16
+
+    @patch("transformers.AutoTokenizer.from_pretrained")
+    @patch("transformers.AutoModelForCausalLM.from_pretrained")
+    def test_4bit_on_a_bare_cuda_device_gets_an_indexed_device_map(
+        self, mock_model, mock_tok
+    ):
+        """A bare "cuda" has no index; accelerate's device_map resolution
+        does torch.device(value).index next and raises a TypeError naming
+        nothing the user could act on (the landmine layer_stream_runtime's
+        _device_map_value already exists to avoid, reused here)."""
+        from soup_cli.utils.live_eval import load_model_and_tokenizer
+
+        mock_tok.return_value = _fake_tokenizer()
+        mock_model.return_value = MagicMock()
+
+        with patch("torch.cuda.current_device", return_value=0):
+            load_model_and_tokenizer("some/model", device="cuda", quantization="4bit")
+
+        _, kwargs = mock_model.call_args
+        assert kwargs["device_map"] == 0
+
+    @patch("transformers.AutoTokenizer.from_pretrained")
+    @patch("transformers.AutoModelForCausalLM.from_pretrained")
+    @patch("peft.PeftModel.from_pretrained")
+    def test_4bit_with_an_adapter_attaches_to_the_quantized_base(
+        self, mock_peft, mock_model, mock_tok
+    ):
+        """Acceptance criterion 1: the base loads at the requested quantization
+        AND the adapter attaches to it, in the same call."""
+        from soup_cli.utils.live_eval import load_model_and_tokenizer
+
+        mock_tok.return_value = _fake_tokenizer()
+        base_model = MagicMock()
+        mock_model.return_value = base_model
+        adapted_model = MagicMock()
+        mock_peft.return_value = adapted_model
+
+        model, _, _ = load_model_and_tokenizer(
+            "some/model", adapter="some/adapter", device="cpu", quantization="4bit"
+        )
+
+        _, kwargs = mock_model.call_args
+        assert kwargs["quantization_config"].load_in_4bit is True
+        mock_peft.assert_called_once_with(base_model, "some/adapter")
+        assert model is adapted_model
+        adapted_model.to.assert_not_called()
+        base_model.to.assert_not_called()
 
     @patch("transformers.AutoTokenizer.from_pretrained")
     @patch("transformers.AutoModelForCausalLM.from_pretrained")

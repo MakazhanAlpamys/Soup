@@ -177,9 +177,13 @@ def load_model_and_tokenizer(
     if quant_config is not None:
         # A quantized load is pinned to a device at from_pretrained time
         # (BNB rejects a later .to() on an already-dispatched model), so
-        # device_map takes the place of the .to(dev) call below.
+        # device_map takes the place of the .to(dev) call below. A bare
+        # "cuda" has no index and later trips accelerate's device_map
+        # resolution (see _device_map_value's own docstring).
+        from soup_cli.utils.layer_stream_runtime import _device_map_value
+
         model_kwargs["quantization_config"] = quant_config
-        model_kwargs["device_map"] = dev
+        model_kwargs["device_map"] = _device_map_value(dev)
     model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)
     if adapter is not None:
         if not isinstance(adapter, str) or not adapter.strip():
