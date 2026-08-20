@@ -1761,6 +1761,8 @@ class TestDraftMeasureCli:
 
         tok_a = _FakeTok(49152)
         tok_b = _FakeTok(49152) if compatible else _FakeTok(151936)
+        model_a = object()
+        model_b = object()
 
         # measure now gates on config.vocab_size before loading (issue #344). Make
         # that gate pass (equal config vocab) so these tests keep exercising the
@@ -1770,9 +1772,11 @@ class TestDraftMeasureCli:
 
         def _fake_load(model_id, **kwargs):
             tok = tok_a if "target" in model_id else tok_b
-            return object(), tok, "cpu"
+            model = model_a if "target" in model_id else model_b
+            return model, tok, "cpu"
 
         monkeypatch.setattr(draft_cmd, "_load_pair_member", _fake_load)
+        return (model_a, tok_a), (model_b, tok_b)
 
     def test_happy_path_writes_report_and_exits_zero(
         self, runner, in_tmp_cwd, monkeypatch
@@ -1823,9 +1827,18 @@ class TestDraftMeasureCli:
         from soup_cli.commands import draft as draft_cmd
         from soup_cli.commands.draft import app
 
-        self._patch_load(monkeypatch, compatible=False)
+        (_, _), (draft_model, draft_tok) = self._patch_load(
+            monkeypatch, compatible=False
+        )
         monkeypatch.setattr(draft_cmd, "measure_acceptance", lambda *a, **k: (60, 100))
-        monkeypatch.setattr(draft_cmd, "measure_throughput", lambda *a, **k: 15.0)
+
+        captured_kwargs: list[dict] = []
+
+        def _spy_measure_throughput(*args, **kwargs):
+            captured_kwargs.append(kwargs)
+            return 15.0
+
+        monkeypatch.setattr(draft_cmd, "measure_throughput", _spy_measure_throughput)
 
         prompts = self._prompts(in_tmp_cwd)
         result = runner.invoke(
@@ -1836,6 +1849,14 @@ class TestDraftMeasureCli:
         assert result.exit_code == 0
         assert "Cross-tokenizer draft detected" in result.output
         assert "60.0%" in result.output
+
+        assisted_calls = [kw for kw in captured_kwargs if "assistant_model" in kw]
+        assert len(assisted_calls) == 1
+        assisted = assisted_calls[0]
+        assert assisted["assistant_model"] is draft_model
+        assert assisted["assistant_tokenizer"] is draft_tok
+        assert "max_new_tokens" in assisted
+        assert "num_assistant_tokens" in assisted
 
     def test_mismatched_tokenizer_unsupported_uad_warns(
         self, runner, in_tmp_cwd, monkeypatch
