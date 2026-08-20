@@ -528,6 +528,11 @@ def measure_acceptance(
     allowing speculative evaluation across different vocabularies and tokenization
     boundaries.
 
+    Note: Cross-tokenizer acceptance is a **lower bound**. A boundary merge (where
+    the draft tokenizer merges the last prompt character with the first generated
+    character) drops the straddling token, shortening the score by up to ``1/n_gen``.
+    The bias is always downward.
+
     Returns ``(accepted, total)`` summed over prompts.
     """
     import torch

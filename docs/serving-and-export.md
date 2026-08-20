@@ -347,6 +347,8 @@ Higher is better; roughly, ≥70% is where speculative decoding starts paying fo
 forward pass on realistic hardware. `--min-acceptance 0.6` exits **2** below the floor, so CI can
 gate on it (exit 0 = ok, 2 = below floor, 1 = error).
 
+*Note: For cross-tokenizer drafts, the measured acceptance rate is a strict lower bound. A token boundary merge between the prompt and the first generated token can cause the score to read up to `1/n_gen` lower than its true value, but it will never over-report.*
+
 `distill` runs logit KD through the existing `task: distill` trainer and emits a **dense** model
 (a PEFT adapter directory cannot be loaded as an `assistant_model`). When draft and target share a
 tokenizer, standard distillation is used. When tokenizers or vocabularies differ, `soup draft distill`
