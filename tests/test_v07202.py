@@ -556,7 +556,7 @@ class TestShardQuantGuards:
         _write_safetensors(str(src / "model.safetensors"), blob)
         src = str(src)
 
-        with pytest.raises(ValueError, match="different tensor shapes"):
+        with pytest.raises(ValueError, match="inconsistent NF4 metadata"):
             shard_checkpoint(
                 src,
                 str(tmp_path / "o"),

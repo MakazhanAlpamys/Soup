@@ -242,7 +242,38 @@ class LoraConfig(BaseModel):
 
 
 class DataConfig(BaseModel):
-    train: str = Field(..., description="Path to training data or HF dataset name")
+    train: Union[str, List[str]] = Field(
+        ...,
+        description=(
+            "Path to training data or HF dataset name, or a list of >= 2 "
+            "local file paths to combine via data.interleave. (#443)"
+        ),
+    )
+
+    @field_validator("train", mode="before")
+    @classmethod
+    def _validate_train_shape(cls, v):
+        if isinstance(v, str):
+            return v
+        if isinstance(v, list):
+            if len(v) == 0:
+                raise ValueError("data.train list must not be empty")
+            if len(v) == 1:
+                raise ValueError(
+                    "data.train list must have >= 2 entries for "
+                    "data.interleave — use a single string path for one "
+                    "dataset"
+                )
+            for i, entry in enumerate(v):
+                if not isinstance(entry, str) or not entry.strip():
+                    raise ValueError(
+                        f"data.train[{i}] must be a non-empty string"
+                    )
+            return v
+        raise ValueError(
+            "data.train must be a string or a list of strings "
+            f"(got {type(v).__name__})"
+        )
     format: Literal[
         "alpaca", "sharegpt", "chatml", "dpo", "kto", "llava", "sharegpt4v",
         "plaintext", "embedding", "audio", "tool-calling", "auto",
@@ -669,10 +700,13 @@ class DataConfig(BaseModel):
     @field_validator("interleave")
     @classmethod
     def _validate_interleave_v042(cls, value):
-        # Shape validation only — full ``parse_interleave`` requires
-        # ``num_datasets`` which the trainer supplies at runtime. We accept
-        # None / str / dict here and reject obvious type errors so a YAML
-        # like ``data.interleave: 99`` fails loudly at config load.
+        # Shape validation only, independent of `train`. We accept None /
+        # str / dict here and reject obvious type errors so a YAML like
+        # ``data.interleave: 99`` fails loudly at config load. The full
+        # parse (which needs num_datasets = len(data.train)) now happens
+        # in SoupConfig._validate_interleave_compat below — num_datasets is
+        # a parse-time constant since #443 widened data.train to accept a
+        # list.
         if value is None:
             return None
         if isinstance(value, str):
@@ -5089,6 +5123,14 @@ class SoupConfig(BaseModel):
                 "VeRA's shared projections are built from the materialised "
                 "base weights, which streaming keeps on the meta device."
             )
+        if tcfg.moe_expert_quant is not None:
+            raise ValueError(
+                "training.stream_layers is incompatible with "
+                f"training.moe_expert_quant={tcfg.moe_expert_quant!r}: expert "
+                "quantization is applied only by the resident model-construction "
+                "path and would otherwise be silently ignored. Leave "
+                "moe_expert_quant unset when streaming."
+            )
         if getattr(tcfg.lora, "init_strategy", "random") != "random":
             raise ValueError(
                 f"training.stream_layers requires lora.init_strategy='random' "
@@ -5323,6 +5365,74 @@ class SoupConfig(BaseModel):
         elif replay_knobs_set:
             raise ValueError(
                 "data.replay_ratio / data.replay_seed require data.replay"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_interleave_compat(self) -> "SoupConfig":
+        """#443 — data.interleave requires data.train to be a list of local
+        file paths, and is fully parsed here rather than in the field
+        validator: num_datasets = len(data.train) is a parse-time constant
+        now that train can be list-shaped.
+
+        packing / multipack concatenate rows into fixed-length blocks, so a
+        per-source mixture ratio stops being meaningful at block
+        boundaries — reject rather than silently mis-mix. Mirrors
+        _validate_replay_compat's identical reasoning for the same
+        packing/multipack conflict, one validator up.
+
+        streaming and HF-hub dataset names are follow-up work (#459,
+        blocked on #443) — v1 refuses them at parse time with a message
+        naming the limitation, rather than silently only mixing the
+        local-file subset.
+        """
+        from pathlib import Path
+
+        from soup_cli.utils.data_pipeline import is_remote_uri, parse_interleave
+
+        data = self.data
+        train_is_list = isinstance(data.train, list)
+
+        if data.interleave is not None:
+            if not train_is_list:
+                raise ValueError(
+                    "data.interleave requires data.train to be a list of "
+                    ">= 2 local file paths"
+                )
+            # Full parse now that num_datasets is a parse-time constant —
+            # validates strategy/probs shape against the actual dataset
+            # count (parse_interleave is otherwise unmodified by #443).
+            parse_interleave(data.interleave, num_datasets=len(data.train))
+
+            if self.training.packing:
+                raise ValueError(
+                    "data.interleave is incompatible with training.packing "
+                    "(packing concatenates rows into fixed blocks, so a "
+                    "per-source mixture ratio stops being meaningful)"
+                )
+            if self.training.multipack:
+                raise ValueError(
+                    "data.interleave is incompatible with "
+                    "training.multipack (bin-packing breaks the "
+                    "per-source mixture ratio)"
+                )
+            if data.streaming:
+                raise ValueError(
+                    "data.interleave does not support data.streaming=true "
+                    "(follow-up: #459) — disable streaming or drop "
+                    "interleave"
+                )
+            for entry in data.train:
+                if is_remote_uri(entry) or not Path(entry).suffix:
+                    raise ValueError(
+                        f"data.interleave only supports local file paths; "
+                        f"{entry!r} looks like a remote URI or an HF-hub "
+                        "dataset name (follow-up: #459)"
+                    )
+        elif train_is_list:
+            raise ValueError(
+                "data.train as a list requires data.interleave to be set "
+                "— otherwise the mixture strategy is undefined"
             )
         return self
 

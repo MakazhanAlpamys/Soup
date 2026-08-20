@@ -276,6 +276,34 @@ class TestTopDomains:
         assert load_top_domains_from_jsonl(None) == ()
         assert load_top_domains_from_jsonl("") == ()
 
+    def test_load_from_jsonl_list_of_invalid_entries_returns_empty(self):
+        # #443 — data.interleave lets data.train be list-shaped; a list is
+        # now a legitimate input (see test_load_from_jsonl_list_aggregates
+        # below), but a list containing no valid string entries must still
+        # degrade to () same as the non-string single-path case above —
+        # not repurposing that test, since a list itself is no longer
+        # rejected.
+        from soup_cli.utils.annex_xi import load_top_domains_from_jsonl
+
+        assert load_top_domains_from_jsonl([None, 123, ""]) == ()
+        assert load_top_domains_from_jsonl([]) == ()
+
+    def test_load_from_jsonl_list_aggregates_across_files(self, tmp_path, monkeypatch):
+        # #443 — data.interleave: top-domain extraction must aggregate
+        # across every constituent file of a list-shaped data.train,
+        # globally (not per-file top-N), matching what the equivalent
+        # single merged file would report.
+        from soup_cli.utils.annex_xi import load_top_domains_from_jsonl
+
+        monkeypatch.chdir(tmp_path)
+        a = tmp_path / "a.jsonl"
+        a.write_text('{"text": "https://example.com/a"}\n', encoding="utf-8")
+        b = tmp_path / "b.jsonl"
+        b.write_text('{"text": "https://other.org/b"}\n', encoding="utf-8")
+        out = load_top_domains_from_jsonl(["a.jsonl", "b.jsonl"])
+        domains = {d for d, _ in out}
+        assert domains == {"example.com", "other.org"}
+
     @pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlink semantics")
     def test_load_from_jsonl_symlink_returns_empty(self, tmp_path, monkeypatch):
         from soup_cli.utils.annex_xi import load_top_domains_from_jsonl

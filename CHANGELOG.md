@@ -14,6 +14,19 @@ reproducing 70+ versions of notes.
 
 ### Added
 
+- **Layer streaming now accepts Qwen3.5 MoE text checkpoints whose decoder
+  layers do not expose exactly the same weight keys in every block (by
+  @Shutaru in #426).** The sharder now records per-layer shard headers instead of
+  deriving the pool from layer 0 alone, while still refusing divergent storage
+  layouts for any shared key and rebuilding NF4 `Params4bit` views from
+  validated per-weight metadata. `qwen3_5_moe` / `qwen3_5_moe_text` route
+  through the existing qwen3 streamer. A heterogeneous toy MoE is bit-exact
+  streamed versus resident on CPU; live validation was also run on
+  `Qwen/Qwen3.5-35B-A3B` with layer streaming, NF4, MoE LoRA target resolution
+  and a 3072-token SFT dataset. `stream_layers` now refuses
+  `moe_expert_quant`, which is applied only by the resident setup path and was
+  otherwise silently ignored.
+
 - **`training.stream_pin` makes layer-streaming pinning configurable (#366 by @ousamabenyounes in #416).**
   Page-locking the RAM store is chosen automatically by `decide_pinning`, and
   until now nothing could override it — so while #331 was live, `pin=False` was
@@ -48,6 +61,23 @@ reproducing 70+ versions of notes.
   - `soup draft measure` supports cross-tokenizer acceptance measurement using decoded character-span alignment (`count_accepted_spans`) across different vocabularies and token boundaries. Target generation neutralizes only `repetition_penalty` with `repetition_penalty=1.0` (Refs #345) so target greedy argmax and draft raw-logit scoring are evaluated consistently; remaining generation processors (`no_repeat_ngram_size`, `encoder_repetition_penalty`, `min_new_tokens`, `bad_words_ids`, `suppress_tokens`, and `sequence_bias`) are not altered.
   - `soup serve --speculative-decoding` supports cross-tokenizer draft serving via Transformers Universal Assisted Decoding (UAD) when supported by the installed `transformers` version, raising a clear error if unsupported.
   - Compatible same-tokenizer pairs strictly preserve the existing native fast path.
+- **`data.interleave` is now wired into training-time dataset loading (#443 by @blackcoderx in #460).**
+  `parse_interleave`/`InterleaveSpec` have been schema-validated and unit-tested since
+  v0.42.0, but `load_dataset()` never called them — every multi-dataset mixture request
+  silently trained on nothing but `data.train`'s single path, the same gap #330 and #442
+  papered over in their respective renderers. `DataConfig.train` now accepts `str |
+  list[str]`; a list of `>= 2` local file paths combines via `data.interleave`
+  (`concat` / `under` / `over` / `{strategy: probs, probs: [...]}`) into one row set
+  before the existing `val_split` line in `_finalize` runs, so a single path stays
+  byte-identical. `interleave` is local-files-only: `training.packing` /
+  `training.multipack` and `data.streaming` / an HF-hub dataset name are all rejected
+  at config-parse time with a message naming the reason (streaming/hub-dataset
+  interleaving is follow-up #459). Both the `soup data mix --optimize` recipe writer
+  and the `--live` overlay renderer emit the real N-dataset mixture again instead of
+  collapsing to one path.
+
+- **A repo-wide documentation ratchet to guarantee declared recipe counts stay synchronized with the catalog (#453 by @harshitthek in #457).**
+  Derives the expected count dynamically from `len(RECIPES)` and scans all declared documentation sites, preventing silent Git auto-merge drift across sequential recipe additions.
 
 ### Fixed
 

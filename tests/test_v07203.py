@@ -216,6 +216,44 @@ class TestEstimateAdapterParams:
             2 * 4 * 2 * 8 * 64
         )
 
+    def test_moe_lora_auto_counts_expert_instances_not_pattern_names(self):
+        from soup_cli.trainer.sft import SFTTrainerWrapper
+
+        class _T:
+            moe_lora = True
+
+            class lora:  # noqa: N801
+                r = 8
+                target_modules = "auto"
+
+        class _C:
+            hidden_size = 64
+            num_hidden_layers = 2
+            num_experts = 16
+
+        assert SFTTrainerWrapper._estimate_adapter_params(None, _T(), _C()) == (
+            2 * (4 + 3 * 16) * 2 * 8 * 64
+        )
+
+    def test_moe_lora_expands_explicit_expert_patterns_per_expert(self):
+        from soup_cli.trainer.sft import SFTTrainerWrapper
+
+        class _T:
+            moe_lora = True
+
+            class lora:  # noqa: N801
+                r = 4
+                target_modules = ["q_proj", "gate_proj", "up_proj", "down_proj"]
+
+        class _C:
+            hidden_size = 32
+            num_hidden_layers = 3
+            num_experts = 8
+
+        assert SFTTrainerWrapper._estimate_adapter_params(None, _T(), _C()) == (
+            3 * (1 + 3 * 8) * 2 * 4 * 32
+        )
+
 
 class TestUntiedEmbeddingsAreBudgeted:
     """8B has untied embed + lm_head, so two large matrices go resident. The

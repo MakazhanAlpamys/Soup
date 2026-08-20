@@ -174,15 +174,12 @@ def _render_overlay_yaml(
     accidental key collisions; weights + datasets are sanitised above so the
     output cannot inject keys (the renderer emits scalars only).
 
-    ``data.train`` renders as a single string — the highest-weighted dataset
-    in *this* candidate — because ``DataConfig.train`` is typed ``str`` and
-    ``soup train`` has no reader for a weighted multi-dataset mixture
-    (``data.interleave`` is validated at config-load time but never consumed
-    by ``load_dataset()``). Emitting the full dataset list here produced a
-    proxy-run config ``soup train`` itself could not load (#330's defect in
-    this module's own renderer — #442). ``data.interleave`` is still written
-    below so the searched mixture isn't lost, with a comment noting which
-    dataset was picked and why.
+    ``data.train`` renders as the full dataset list, index-aligned with
+    ``data.interleave.probs`` — #443 wired ``data.interleave`` into
+    ``load_dataset()``, so ``soup train`` can now consume the real
+    N-dataset mixture this candidate searched, rather than the
+    single-highest-weighted-dataset collapse #330/#442 used as a stopgap
+    while there was no training-time reader.
     """
     import yaml  # noqa: PLC0415
 
@@ -193,8 +190,7 @@ def _render_overlay_yaml(
     if not isinstance(data_block, dict):
         data_block = {}
         raw["data"] = data_block
-    best_idx = max(range(len(weights)), key=lambda i: weights[i])
-    data_block["train"] = datasets[best_idx]
+    data_block["train"] = list(datasets)
     data_block["interleave"] = {
         "strategy": "probs",
         "probs": [float(w) for w in weights],
@@ -203,7 +199,10 @@ def _render_overlay_yaml(
 
     # Insert an explanatory comment directly above the `train:` line inside
     # the `data:` block — a targeted line insert, not a value edit, so it
-    # can't touch anything the schema will parse.
+    # can't touch anything the schema will parse. The comment names the
+    # exact list `data.train` renders as, so an anti-drift test can tie the
+    # comment's claim to the actual emitted value rather than to a
+    # separately-tracked variable (the #442 lesson).
     lines = dumped.split("\n")
     data_idx = next((i for i, ln in enumerate(lines) if ln == "data:"), -1)
     if data_idx >= 0:
@@ -212,12 +211,11 @@ def _render_overlay_yaml(
             if ln and not ln.startswith(" "):
                 break  # left the data: block
             if ln.startswith("  train:"):
+                rounded_probs = [round(float(w), 6) for w in weights]
                 lines.insert(
                     i,
-                    f"  # picked {datasets[best_idx]!r} (weight "
-                    f"{weights[best_idx]:.6f}, highest in this candidate) — "
-                    "soup train has no reader for a weighted multi-dataset "
-                    "mixture, see #330/#442/#443",
+                    f"  # data.interleave=probs {rounded_probs} over "
+                    f"{list(datasets)!r} — see #443",
                 )
                 break
         dumped = "\n".join(lines)

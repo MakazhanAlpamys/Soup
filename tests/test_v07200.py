@@ -801,13 +801,13 @@ class TestShardNoTopLevelTorch:
 
 
 class TestShardUniformity:
-    """The runtime builds its buffer-pool spec from layer 0. A checkpoint whose
-    layers disagree would size the pool wrong and stream garbage into it."""
+    """Heterogeneous layers are allowed, but a shared key must keep one layout."""
 
-    def test_non_uniform_layer_parameter_set_refused(self, tmp_path):
+    def test_non_uniform_layer_parameter_set_is_allowed(self, tmp_path):
         import torch
+        from safetensors.torch import load_file
 
-        from soup_cli.utils.layer_shard import shard_checkpoint
+        from soup_cli.utils.layer_shard import layer_shard_path, shard_checkpoint
 
         src = tmp_path / "weights"
         src.mkdir()
@@ -820,7 +820,27 @@ class TestShardUniformity:
                 "model.embed_tokens.weight": torch.randn(4, 4),
             },
         )
-        with pytest.raises(ValueError, match="uniform"):
+        index = shard_checkpoint(str(src), str(tmp_path / "out"), dtype="float32")
+        assert index.n_layers == 2
+        assert "mlp.extra.weight" not in load_file(layer_shard_path(str(tmp_path / "out"), 0))
+        assert "mlp.extra.weight" in load_file(layer_shard_path(str(tmp_path / "out"), 1))
+
+    def test_shared_key_with_conflicting_shape_is_still_refused(self, tmp_path):
+        import torch
+
+        from soup_cli.utils.layer_shard import shard_checkpoint
+
+        src = tmp_path / "weights"
+        src.mkdir()
+        _write_safetensors(
+            str(src / "model.safetensors"),
+            {
+                "model.layers.0.mlp.extra.weight": torch.randn(4, 4),
+                "model.layers.1.mlp.extra.weight": torch.randn(4, 8),
+                "model.embed_tokens.weight": torch.randn(4, 4),
+            },
+        )
+        with pytest.raises(ValueError, match="stored shapes or dtypes"):
             shard_checkpoint(str(src), str(tmp_path / "out"), dtype="float32")
 
     def test_non_contiguous_layer_indices_refused(self, tmp_path):
@@ -1028,6 +1048,23 @@ class TestStreamMutualExclusions:
         must say so (otherwise the test passes for the wrong reason)."""
         with pytest.raises(ValueError, match="stream_layers"):
             _load(_stream_yaml(training={"train_router_only": True, "moe_lora": True}))
+
+    def test_moe_expert_quant_conflict_names_the_silent_noop(self):
+        """Expert quantization is wired only into the resident setup path.
+
+        ``moe_lora`` satisfies the older feature validator, so this assertion
+        can pass only if the streaming cross-validator refuses the reachable
+        silent no-op explicitly.
+        """
+        with pytest.raises(
+            ValueError,
+            match=r"stream_layers.*moe_expert_quant.*silently ignored",
+        ):
+            _load(
+                _stream_yaml(
+                    training={"moe_lora": True, "moe_expert_quant": "nf4"}
+                )
+            )
 
     def test_expand_layers_conflict(self):
         """Likewise: freeze_trainable_layers satisfies the LLaMA-Pro validator."""
@@ -2261,7 +2298,6 @@ class TestPinnedFallbackRuntime:
         assert any("pageable" in msg.lower() for msg in printed)
         assert any("utilisation" in msg.lower() for msg in printed)
 
-
 #: One decoder layer's weight for the AC3 refusal message, sized realistically so
 #: the rendered figure is a real number and not `0.00 GB`.
 _REFUSAL_HIDDEN = 4096
@@ -2327,6 +2363,29 @@ class TestStreamPinRuntimeRefusal:
         assert expected in message, message
         for other in others:
             assert other not in message, message
+
+    def test_the_refusal_sums_heterogeneous_layer_specs(self, monkeypatch):
+        """The #426 per-layer spec must survive #416's refusal path.
+
+        The two layers deliberately have different, disjoint keys and sizes.
+        Summing them gives 0.05 GB; multiplying the largest layer by two gives
+        0.07 GB, while multiplying the merged union by two gives 0.10 GB.
+        """
+        rt = self._patch_ramsource_to_fail_pinning(monkeypatch)
+        layer_specs = [
+            {"self_attn.q_proj.weight": ((4096, 4096), "bfloat16")},
+            {"linear_attn.in_proj_qkv.weight": ((2048, 4096), "bfloat16")},
+        ]
+
+        with pytest.raises(RuntimeError) as excinfo:
+            rt._build_source(
+                "d", 2, layer_specs, True, None, require_pin=True
+            )
+
+        message = str(excinfo.value)
+        assert "0.05 GB" in message, message
+        assert "0.07 GB" not in message, message
+        assert "0.10 GB" not in message, message
 
 
 class TestDiskTierAnnouncesInapplicablePinning:

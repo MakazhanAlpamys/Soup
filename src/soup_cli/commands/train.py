@@ -1639,15 +1639,22 @@ def _write_annex_xi(out_path: str, run_id: str, cfg, *, energy=None) -> None:
     modality = getattr(cfg, "modality", "text") or "text"
     energy_kwh = float(getattr(energy, "energy_kwh", 0.0)) if energy is not None else 0.0
     co2_kg = float(getattr(energy, "co2_kg", 0.0)) if energy is not None else 0.0
-    train_path = str(getattr(cfg.data, "train", "") or "")
+    raw_train = getattr(cfg.data, "train", "") or ""
+    # #443 — pass the raw str|list through so top-domain extraction
+    # aggregates across every interleaved dataset, instead of stringifying
+    # a list into a nonexistent path (pre-fix: `str(getattr(...) or "")`
+    # applied `or ""` to the getattr result BEFORE str(), so a non-empty
+    # list became its own Python repr string, e.g. "['a.jsonl', 'b.jsonl']"
+    # — neither a valid path nor useful doc text).
+    train_display = ", ".join(raw_train) if isinstance(raw_train, list) else str(raw_train)
     # #184 — best-effort extract the top crawled domains from the training data.
-    top_domains = load_top_domains_from_jsonl(train_path)
+    top_domains = load_top_domains_from_jsonl(raw_train)
     fmt = "pdf" if out_path.lower().endswith(".pdf") else "markdown"
     data = AnnexXIData(
         model_name=str(getattr(cfg, "output", run_id) or run_id),
         base_model=str(cfg.base),
         task=str(cfg.task),
-        dataset_summary=train_path,
+        dataset_summary=train_display,
         modalities=(modality,),
         train_compute_flops=0.0,
         train_energy_kwh=energy_kwh,
@@ -1991,6 +1998,17 @@ def _synth_lr_curve(n: int) -> list[float]:
     return out
 
 
+def _lr_finder_dataset_path(train) -> str:
+    """#443 — LR-finder samples one representative dataset; it already
+    bypasses load_dataset()/_finalize() for a lightweight sweep, so full
+    interleave fidelity is out of this issue's scope. Falls back to the
+    first dataset rather than crashing on a list. Extracted as its own
+    function so it can be exercised directly by
+    tests/test_issue443_interleave_wiring.py's enumerating test.
+    """
+    return train[0] if isinstance(train, list) else train
+
+
 def _live_lr_sweep_from_config(cfg, schedule: list[float]) -> list[float]:
     """Build a tiny in-process loop: load model + tokenizer + a slice of
     the train dataset, then call :func:`run_lr_sweep`."""
@@ -2016,7 +2034,8 @@ def _live_lr_sweep_from_config(cfg, schedule: list[float]) -> list[float]:
     ).to(device)
     model.train()
 
-    dataset = load_raw_data(_Path(cfg.data.train))
+    lr_finder_train_path = _lr_finder_dataset_path(cfg.data.train)
+    dataset = load_raw_data(_Path(lr_finder_train_path))
     rows = list(dataset)[: max(2, len(schedule))]
     if not rows:
         raise RuntimeError("training dataset is empty")

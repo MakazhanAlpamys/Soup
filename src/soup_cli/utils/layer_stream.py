@@ -90,6 +90,14 @@ SUPPORTED_STREAM_ARCHS = (
     "phi3",
 )
 
+# Model types whose text decoders reuse an admitted streaming family.  Each
+# alias needs its own resident-vs-streamed parity control; mapping a model type
+# by name alone is not enough to establish that its decoder graph is safe.
+_STREAM_ARCH_ALIASES = {
+    "qwen3_5_moe": "qwen3",
+    "qwen3_5_moe_text": "qwen3",
+}
+
 #: The loss path's own arithmetic, in VRAM bytes per logit element. **Measured
 #: stage by stage (issue #327), not derived.** ``ForCausalLMLoss`` upcasts to
 #: fp32, hands the view to ``cross_entropy`` and returns; the residency at each
@@ -229,15 +237,25 @@ def stream_arch_of(config: Any) -> str:
     wrong module and produces silently wrong numbers rather than a crash.
     """
     model_type = getattr(config, "model_type", None)
-    if not model_type or not isinstance(model_type, str):
+    text_config = getattr(config, "text_config", None)
+    text_model_type = getattr(text_config, "model_type", None)
+    raw_family = model_type
+    if isinstance(text_model_type, str):
+        alias = text_model_type.strip().lower()
+        if alias in _STREAM_ARCH_ALIASES:
+            raw_family = text_model_type
+        elif raw_family is None:
+            raw_family = text_model_type
+    if not raw_family or not isinstance(raw_family, str):
         raise ValueError(
-            "layer streaming needs config.model_type to pick an architecture; "
-            "none was found on the model config"
+            "layer streaming needs config.model_type or "
+            "config.text_config.model_type to pick an architecture; none was "
+            "found on the model config"
         )
-    family = model_type.strip().lower()
+    family = _STREAM_ARCH_ALIASES.get(raw_family.strip().lower(), raw_family.strip().lower())
     if family not in SUPPORTED_STREAM_ARCHS:
         raise ValueError(
-            f"layer streaming does not support model_type={family!r}. "
+            f"layer streaming does not support model_type={raw_family!r}. "
             f"Supported: {', '.join(SUPPORTED_STREAM_ARCHS)}. "
             f"More architectures land in v0.72.3."
         )
@@ -1284,12 +1302,13 @@ def build_stream_plan(
     buffers: int = DEFAULT_STREAM_BUFFERS,
     disk_kind: DiskKind = _NVME,
     stream_pin: Optional[bool] = None,
+    store_bytes: Optional[int] = None,
 ) -> StreamPlan:
     """Decide tier + pinning and record every caveat as a visible note."""
     buffers = validate_stream_buffers(buffers)
     if n_layers <= 0:
         raise ValueError(f"n_layers must be positive; got {n_layers}")
-    store_bytes = n_layers * layer_bytes
+    store_bytes = n_layers * layer_bytes if store_bytes is None else int(store_bytes)
     tier = choose_tier(store_bytes + embed_bytes, available_ram_bytes, disk_kind)
     notes = []
     if tier == TIER_DISK:

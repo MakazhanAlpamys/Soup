@@ -262,11 +262,30 @@ def build_plan(config: Mapping[str, Any]) -> TrainingPlan:
 
     data_cfg = config.get("data", {}) if isinstance(config.get("data"), Mapping) else {}
     train_path = data_cfg.get("train", "") if isinstance(data_cfg, Mapping) else ""
-    if not isinstance(train_path, str):
-        train_path = ""
 
     config_sha = compute_config_sha(config)
-    dataset_sha = compute_dataset_sha(train_path)
+
+    if isinstance(train_path, list):
+        # #443 — data.interleave: combine a per-entry SHA-256 per list
+        # entry into one dataset_sha, order-preserved (NOT sorted) —
+        # reordering the list is a real semantic change, it realigns
+        # data.interleave.probs to a different file. Mirrors ship.py's
+        # _compute_provenance combination pattern.
+        zero = "0" * _SHA_REGEX_LEN
+        entry_shas = [compute_dataset_sha(p) for p in train_path if isinstance(p, str)]
+        if entry_shas and any(sha != zero for sha in entry_shas):
+            dataset_sha = hashlib.sha256("\x1e".join(entry_shas).encode()).hexdigest()
+        else:
+            # Every entry missing/out-of-cwd (or no valid string entries)
+            # — keep the single all-zero "no dataset yet" sentinel rather
+            # than hashing together N zero-sentinels, which would be a
+            # non-zero SHA that falsely reads as "dataset present".
+            dataset_sha = zero
+    else:
+        if not isinstance(train_path, str):
+            train_path = ""
+        dataset_sha = compute_dataset_sha(train_path)
+
     minutes = _estimate_runtime_minutes(config)
     cost = _estimate_cost(minutes, _DEFAULT_SPOT_PRICE)
     return TrainingPlan(

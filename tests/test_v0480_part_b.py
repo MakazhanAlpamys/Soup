@@ -498,9 +498,14 @@ def test_render_recipe_shape(tmp_path):
     assert "0.600000" in text
     assert "0.400000" in text
     assert "a.jsonl" in text
-    # #330 — data.train is a single string (the highest-weighted dataset),
-    # not a list soup train's schema rejects.
-    assert f"train: {json.dumps(str(tmp_path / 'a.jsonl'))}" in text
+    # #330 introduced data.train as a single string (the highest-weighted
+    # dataset) because there was no training-time reader for a real
+    # mixture. #443 wired data.interleave into load_dataset() and restored
+    # the full-list shape for >= 2 datasets — train: is now a YAML list,
+    # index-aligned with interleave.probs.
+    assert "  train:" in text
+    assert f'- {json.dumps(str(tmp_path / "a.jsonl"))}' in text
+    assert f'- {json.dumps(str(tmp_path / "b.jsonl"))}' in text
 
 
 def test_render_recipe_rejects_non_report():

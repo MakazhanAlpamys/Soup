@@ -35,29 +35,48 @@ STANDARD_TARGET_MODULES = [
     "o_proj",
 ]
 
+_MOE_MODEL_TYPES = {
+    "mixtral",
+    "qwen3_moe",
+    "qwen3_5_moe",
+    "qwen3_5_moe_text",
+    "qwen2_moe",
+    "dbrx",
+    "deepseek_v2",
+    "deepseek_v3",
+    "olmoe",
+    "jetmoe",
+    "arctic",
+    "grok",
+}
+
+
+def _candidate_configs(model):
+    if not hasattr(model, "config"):
+        return ()
+    config = model.config
+    text_config = None
+    if hasattr(config, "__dict__"):
+        text_config = config.__dict__.get("text_config")
+    return tuple(cfg for cfg in (text_config, config) if cfg is not None)
+
 
 def detect_moe_model(model) -> bool:
     """Detect whether a model uses Mixture of Experts architecture.
 
     Checks model config for known MoE indicators.
     """
-    if not hasattr(model, "config"):
-        return False
+    for config in _candidate_configs(model):
+        # Check for known MoE config keys
+        for key in MOE_CONFIG_KEYS:
+            value = getattr(config, key, None)
+            if value is not None and isinstance(value, (int, float)) and value > 1:
+                return True
 
-    config = model.config
-
-    # Check for known MoE config keys
-    for key in MOE_CONFIG_KEYS:
-        value = getattr(config, key, None)
-        if value is not None and isinstance(value, (int, float)) and value > 1:
+        # Check model_type for known MoE architectures
+        model_type = getattr(config, "model_type", "")
+        if isinstance(model_type, str) and model_type.lower() in _MOE_MODEL_TYPES:
             return True
-
-    # Check model_type for known MoE architectures
-    model_type = getattr(config, "model_type", "")
-    moe_types = {"mixtral", "qwen3_moe", "qwen2_moe", "dbrx", "deepseek_v2",
-                 "deepseek_v3", "olmoe", "jetmoe", "arctic", "grok"}
-    if model_type.lower() in moe_types:
-        return True
 
     return False
 
@@ -103,24 +122,24 @@ def get_moe_info(model) -> dict:
     if not hasattr(model, "config"):
         return {}
 
-    config = model.config
     info = {}
+    for config in _candidate_configs(model):
+        # Number of total experts
+        for key in ("num_local_experts", "num_experts", "n_routed_experts", "moe_num_experts"):
+            value = getattr(config, key, None)
+            if value is not None:
+                info["num_experts"] = value
+                break
 
-    # Number of total experts
-    for key in ("num_local_experts", "num_experts", "n_routed_experts", "moe_num_experts"):
-        value = getattr(config, key, None)
-        if value is not None:
-            info["num_experts"] = value
+        # Number of active experts per token
+        for key in ("num_experts_per_tok", "num_experts_per_token", "num_selected_experts"):
+            value = getattr(config, key, None)
+            if value is not None:
+                info["num_active_experts"] = value
+                break
+
+        if info:
+            info["model_type"] = getattr(config, "model_type", "unknown")
             break
-
-    # Number of active experts per token
-    for key in ("num_experts_per_tok", "num_experts_per_token", "num_selected_experts"):
-        value = getattr(config, key, None)
-        if value is not None:
-            info["num_active_experts"] = value
-            break
-
-    if info:
-        info["model_type"] = getattr(config, "model_type", "unknown")
 
     return info
