@@ -763,21 +763,9 @@ def measure(
     verdict = classify_acceptance(rate)
 
 
-    try:
-        tok_s_plain = measure_throughput(
-            target_model, target_tok, prompt_texts, max_new_tokens=max_new_tokens
-        )
-        tok_s_assisted = measure_throughput(
-            target_model,
-            target_tok,
-            prompt_texts,
-            assistant_model=draft_model,
-            assistant_tokenizer=draft_tok,
-            num_assistant_tokens=num_assistant_tokens,
-            max_new_tokens=max_new_tokens,
-        )
-    except RuntimeError as exc:
-        _fail(str(exc))
+    tok_s_plain = measure_throughput(
+        target_model, target_tok, prompt_texts, max_new_tokens=max_new_tokens
+    )
     # A measured 0.0 tok/s means "we could not time it", not "zero throughput";
     # normalise explicitly rather than leaning on 0.0 being falsy.
     plain = None if tok_s_plain <= 0 else tok_s_plain
@@ -809,6 +797,7 @@ def measure(
             target_tok,
             prompt_texts,
             assistant_model=draft_model,
+            assistant_tokenizer=draft_tok,
             num_assistant_tokens=num_assistant_tokens,
             max_new_tokens=max_new_tokens,
         )

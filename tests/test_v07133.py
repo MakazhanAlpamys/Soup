@@ -1837,7 +1837,7 @@ class TestDraftMeasureCli:
         assert "Cross-tokenizer draft detected" in result.output
         assert "60.0%" in result.output
 
-    def test_mismatched_tokenizer_unsupported_uad_exits_one(
+    def test_mismatched_tokenizer_unsupported_uad_warns(
         self, runner, in_tmp_cwd, monkeypatch
     ):
         from soup_cli.commands import draft as draft_cmd
@@ -1846,8 +1846,10 @@ class TestDraftMeasureCli:
         self._patch_load(monkeypatch, compatible=False)
         monkeypatch.setattr(draft_cmd, "measure_acceptance", lambda *a, **k: (60, 100))
 
-        def _boom(*a, **k):
-            raise RuntimeError("Universal Assisted Decoding requires transformers>=4.45.0")
+        def _boom(model, tok, prompts, *, assistant_model=None, **kw):
+            if assistant_model is not None:
+                raise RuntimeError("Universal Assisted Decoding requires transformers>=4.45.0")
+            return 20.0
 
         monkeypatch.setattr(draft_cmd, "measure_throughput", _boom)
 
@@ -1857,8 +1859,9 @@ class TestDraftMeasureCli:
             ["measure", "--target", "org/target", "--draft", "org/tiny",
              "--prompts", prompts],
         )
-        assert result.exit_code == 1
-        assert "Universal Assisted Decoding" in result.output
+        assert result.exit_code == 0
+        assert "Universal Assisted Decoding requires transformers>=4.45.0" in _plain(result.output)
+        assert "could not be measured" in _plain(result.output)
 
     def test_prompts_outside_cwd_rejected(
         self, runner, in_tmp_cwd, tmp_path_factory, monkeypatch
