@@ -15,6 +15,7 @@ import ast
 import math
 import os
 from pathlib import Path
+from typing import Sequence
 
 import pytest
 
@@ -477,6 +478,37 @@ class TestCountAcceptedAndRate:
         with pytest.raises(ValueError, match="non-negative"):
             acceptance_rate(-1, 3)
 
+    def test_count_accepted_spans_uses_max_align_chars_cap(self, monkeypatch):
+        """regression: count_accepted_spans respects the _MAX_ALIGN_CHARS cap."""
+        import difflib
+
+        from soup_cli.utils import uld
+        from soup_cli.utils.draft import count_accepted_spans
+
+        monkeypatch.setattr(uld, "_MAX_ALIGN_CHARS", 10)
+
+        captured: list[tuple[str, str]] = []
+        real_matcher = difflib.SequenceMatcher
+
+        def _spy_matcher(isjunk, a, b, autojunk=False):
+            captured.append((a, b))
+            return real_matcher(isjunk, a, b, autojunk=autojunk)
+
+        monkeypatch.setattr(difflib, "SequenceMatcher", _spy_matcher)
+
+        # 16-character non-matching strings: d_text != t_text triggers SequenceMatcher.
+        draft_pieces = ["abcdef", "ghijkl", "mnop"]
+        target_pieces = ["_bcdef", "ghijkl", "mnop"]
+
+        count_accepted_spans(draft_pieces, target_pieces)
+
+        assert len(captured) == 1
+        a_str, b_str = captured[0]
+        assert a_str == "abcdefghij"
+        assert b_str == "_bcdefghij"
+        assert len(a_str) == 10
+        assert len(b_str) == 10
+
 
 class TestClassify:
     def test_boundary_exact(self):
@@ -845,6 +877,35 @@ class _TensorTok:
         return {"input_ids": ids, "attention_mask": torch.ones_like(ids)}
 
 
+class _CrossTokenizerMock:
+    """Mock tokenizer for cross-tokenizer measurement tests."""
+
+    pad_token_id = 0
+    eos_token_id = 0
+
+    def __init__(
+        self,
+        vocab_size: int,
+        encode_map: dict[str, list[int]],
+        decode_map: dict[int, str],
+    ):
+        self.vocab_size = vocab_size
+        self._encode_map = encode_map
+        self._decode_map = decode_map
+
+    def encode(self, text: str, add_special_tokens: bool = False) -> list[int]:
+        return list(self._encode_map.get(text, [0]))
+
+    def decode(self, token_ids: Sequence[int], skip_special_tokens: bool = False) -> str:
+        return "".join(self._decode_map.get(int(tid), "") for tid in token_ids)
+
+    def __call__(self, text: str, return_tensors: str | None = None, **kwargs):
+        import torch
+
+        ids = torch.tensor([self.encode(text)])
+        return {"input_ids": ids, "attention_mask": torch.ones_like(ids)}
+
+
 class _FakeTarget:
     """Greedy-generates a continuation, applying repetition penalty when != 1.0."""
 
@@ -1016,6 +1077,63 @@ class TestMeasureAcceptance:
         assert target.calls[0]["repetition_penalty"] == 1.0
         assert total == 3
         assert accepted == 3
+
+    def test_cross_tokenizer_unextendable_prompt_scores_zero_zero(self):
+        """When draft tokenizer produces no continuation beyond draft_prompt_len,
+        measure_acceptance skips counting and returns exactly (0, 0)."""
+        from soup_cli.utils.draft import measure_acceptance
+
+        target_tok = _CrossTokenizerMock(
+            vocab_size=32000,
+            encode_map={"hello": [5, 6], "hello world": [5, 6, 10, 11, 12]},
+            decode_map={5: "hel", 6: "lo", 10: " ", 11: "wor", 12: "ld"},
+        )
+        # Draft tokenizer produces no new tokens beyond draft_prompt_len (both 3 tokens).
+        draft_tok = _CrossTokenizerMock(
+            vocab_size=49152,
+            encode_map={"hello": [1, 2, 3], "hello world": [1, 2, 3]},
+            decode_map={1: "hel", 2: "lo", 3: ""},
+        )
+        target = _FakeTarget([5, 6, 10, 11, 12], 2)
+        draft = _FakeDraft([99, 99, 99, 99, 99])
+
+        accepted, total = measure_acceptance(
+            target,
+            draft,
+            target_tok,
+            ["hello"],
+            max_new_tokens=8,
+            draft_tokenizer=draft_tok,
+        )
+        assert (accepted, total) == (0, 0)
+
+    def test_cross_tokenizer_extendable_prompt_measures_acceptance(self):
+        """When draft tokenizer produces tokens beyond draft_prompt_len,
+        measure_acceptance computes span-aligned acceptance."""
+        from soup_cli.utils.draft import measure_acceptance
+
+        target_tok = _CrossTokenizerMock(
+            vocab_size=32000,
+            encode_map={"hello": [5, 6], "hello world": [5, 6, 10, 11, 12]},
+            decode_map={5: "hel", 6: "lo", 10: " ", 11: "wor", 12: "ld"},
+        )
+        draft_tok = _CrossTokenizerMock(
+            vocab_size=49152,
+            encode_map={"hello": [1, 2], "hello world": [1, 2, 20, 21, 22]},
+            decode_map={1: "hel", 2: "lo", 20: " ", 21: "wor", 22: "ld"},
+        )
+        target = _FakeTarget([5, 6, 10, 11, 12], 2)
+        draft = _FakeDraft([99, 20, 21, 22, 99])
+
+        accepted, total = measure_acceptance(
+            target,
+            draft,
+            target_tok,
+            ["hello"],
+            max_new_tokens=8,
+            draft_tokenizer=draft_tok,
+        )
+        assert (accepted, total) == (3, 3)
 
 
 
