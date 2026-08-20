@@ -95,6 +95,34 @@ def resolve_device(device: Optional[str] = None) -> str:
         return "cpu"
 
 
+def _build_quantization_config(quantization: Optional[str]):
+    """``BitsAndBytesConfig`` for the two quant-menu formats live_eval needs,
+    or ``None`` to load the base at full precision (unchanged behavior).
+
+    Only ``"4bit"``/``"8bit"``/``None`` are supported here: the other
+    quant_menu formats (gptq/awq/hqq/aqlm/...) key off a full
+    ``TrainingConfig``, which live_eval callers don't have.
+    """
+    if quantization is None or quantization == "none":
+        return None
+    from transformers import BitsAndBytesConfig
+
+    if quantization == "8bit":
+        return BitsAndBytesConfig(load_in_8bit=True)
+    if quantization == "4bit":
+        from soup_cli.utils.gpu import get_compute_dtype
+
+        return BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=get_compute_dtype(),
+            bnb_4bit_use_double_quant=True,
+        )
+    raise ValueError(
+        f"live_eval quantization={quantization!r} not supported; use '4bit', '8bit', or None"
+    )
+
+
 def _apply_prompt_template(tokenizer: object, prompt: str) -> str:
     """Render a single user turn through the tokenizer's chat template.
 
@@ -120,6 +148,7 @@ def load_model_and_tokenizer(
     device: Optional[str] = None,
     trust_remote_code: bool = False,
     dtype: Optional[str] = None,
+    quantization: Optional[str] = None,
 ):
     """Load an ``AutoModelForCausalLM`` + tokenizer, optionally with a LoRA adapter.
 
@@ -128,6 +157,9 @@ def load_model_and_tokenizer(
     ``"auto"``) is forwarded as ``torch_dtype`` so a caller can preserve the
     checkpoint's native precision instead of upcasting to fp32 (``soup shrink``
     needs this so the shipped smaller model is not silently re-widened).
+    ``quantization`` (``"4bit"`` / ``"8bit"`` / ``None``) judges the base the
+    way it was trained instead of always upcasting to full precision; see
+    :func:`_build_quantization_config`.
     """
     if not isinstance(model_id, str) or not model_id.strip():
         raise ValueError("model_id must be a non-empty string")
@@ -141,6 +173,13 @@ def load_model_and_tokenizer(
     model_kwargs = {"trust_remote_code": trust_remote_code}
     if dtype is not None:
         model_kwargs["torch_dtype"] = dtype
+    quant_config = _build_quantization_config(quantization)
+    if quant_config is not None:
+        # A quantized load is pinned to a device at from_pretrained time
+        # (BNB rejects a later .to() on an already-dispatched model), so
+        # device_map takes the place of the .to(dev) call below.
+        model_kwargs["quantization_config"] = quant_config
+        model_kwargs["device_map"] = dev
     model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)
     if adapter is not None:
         if not isinstance(adapter, str) or not adapter.strip():
@@ -148,7 +187,8 @@ def load_model_and_tokenizer(
         from peft import PeftModel
 
         model = PeftModel.from_pretrained(model, adapter)
-    model = model.to(dev)
+    if quant_config is None:
+        model = model.to(dev)
     model.eval()
     return model, tokenizer, dev
 

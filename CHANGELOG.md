@@ -27,6 +27,16 @@ reproducing 70+ versions of notes.
   `moe_expert_quant`, which is applied only by the resident setup path and was
   otherwise silently ignored.
 
+- **`live_eval.load_model_and_tokenizer` accepts a `quantization` argument (#367 by @AmirF194).**
+  Every live evaluation path built on this helper (`soup ship` leg 1/2, `soup diagnose
+  --base-model`, `soup advise --probe-model`, `soup eval behavior`, `tunability --live`)
+  always loaded the base at full precision regardless of how the adapter was trained, so
+  an NF4-trained adapter was judged against a bf16 base it never saw. `quantization="4bit"`
+  now builds the same nf4 `BitsAndBytesConfig` every other 4-bit load path in this codebase
+  uses; `"8bit"` and the unset default are also supported. `soup ship` reporting the
+  numerics it judged with, and a staleness gate on evidence recorded under mismatched
+  numerics, are left open (issue acceptance criteria 2 and 4).
+
 - **`training.stream_pin` makes layer-streaming pinning configurable (#366 by @ousamabenyounes in #416).**
   Page-locking the RAM store is chosen automatically by `decide_pinning`, and
   until now nothing could override it — so while #331 was live, `pin=False` was
