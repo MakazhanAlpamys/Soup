@@ -1049,6 +1049,23 @@ class TestStreamMutualExclusions:
         with pytest.raises(ValueError, match="stream_layers"):
             _load(_stream_yaml(training={"train_router_only": True, "moe_lora": True}))
 
+    def test_moe_expert_quant_conflict_names_the_silent_noop(self):
+        """Expert quantization is wired only into the resident setup path.
+
+        ``moe_lora`` satisfies the older feature validator, so this assertion
+        can pass only if the streaming cross-validator refuses the reachable
+        silent no-op explicitly.
+        """
+        with pytest.raises(
+            ValueError,
+            match=r"stream_layers.*moe_expert_quant.*silently ignored",
+        ):
+            _load(
+                _stream_yaml(
+                    training={"moe_lora": True, "moe_expert_quant": "nf4"}
+                )
+            )
+
     def test_expand_layers_conflict(self):
         """Likewise: freeze_trainable_layers satisfies the LLaMA-Pro validator."""
         with pytest.raises(ValueError, match="stream_layers"):

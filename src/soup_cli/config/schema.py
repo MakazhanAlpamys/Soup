@@ -5089,6 +5089,14 @@ class SoupConfig(BaseModel):
                 "VeRA's shared projections are built from the materialised "
                 "base weights, which streaming keeps on the meta device."
             )
+        if tcfg.moe_expert_quant is not None:
+            raise ValueError(
+                "training.stream_layers is incompatible with "
+                f"training.moe_expert_quant={tcfg.moe_expert_quant!r}: expert "
+                "quantization is applied only by the resident model-construction "
+                "path and would otherwise be silently ignored. Leave "
+                "moe_expert_quant unset when streaming."
+            )
         if getattr(tcfg.lora, "init_strategy", "random") != "random":
             raise ValueError(
                 f"training.stream_layers requires lora.init_strategy='random' "

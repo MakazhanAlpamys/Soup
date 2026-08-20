@@ -9,6 +9,185 @@ import torch
 from safetensors.torch import load_file, save_file
 
 
+def _toy_qwen35_classes():
+    """Register a tiny heterogeneous MoE under the real Qwen3.5 model type.
+
+    The alternating attention modules are the property that matters here: a
+    layer-0-derived stream spec cannot execute layer 1.  The small MoE is real
+    computation rather than naming decoration, so resident-vs-streamed logits
+    exercise the complete decoder graph on CPU.
+    """
+    from torch import nn
+    from transformers import AutoModelForCausalLM, PretrainedConfig, PreTrainedModel
+    from transformers.modeling_outputs import CausalLMOutput
+
+    cached = getattr(_toy_qwen35_classes, "_cached", None)
+    if cached is not None:
+        return cached
+
+    class ToyQwen35Config(PretrainedConfig):
+        model_type = "qwen3_5_moe"
+
+        def __init__(
+            self,
+            vocab_size=32,
+            hidden_size=8,
+            num_hidden_layers=2,
+            num_experts=2,
+            layer_types=None,
+            **kwargs,
+        ):
+            tie_word_embeddings = kwargs.pop("tie_word_embeddings", False)
+            super().__init__(tie_word_embeddings=tie_word_embeddings, **kwargs)
+            self.vocab_size = vocab_size
+            self.hidden_size = hidden_size
+            self.num_hidden_layers = num_hidden_layers
+            self.num_experts = num_experts
+            self.layer_types = layer_types or ["full_attention", "linear_attention"]
+
+    class ToyMoe(nn.Module):
+        def __init__(self, config):
+            super().__init__()
+            self.gate = nn.Linear(config.hidden_size, config.num_experts, bias=False)
+            self.experts = nn.ModuleList(
+                nn.Linear(config.hidden_size, config.hidden_size, bias=False)
+                for _ in range(config.num_experts)
+            )
+
+        def forward(self, hidden_states):
+            routing = self.gate(hidden_states).softmax(dim=-1)
+            expert_outputs = torch.stack(
+                [expert(hidden_states) for expert in self.experts], dim=-2
+            )
+            return (expert_outputs * routing.unsqueeze(-1)).sum(dim=-2)
+
+    class ToyFullAttentionLayer(nn.Module):
+        def __init__(self, config):
+            super().__init__()
+            self.self_attn = nn.Module()
+            self.self_attn.q_proj = nn.Linear(
+                config.hidden_size, config.hidden_size, bias=False
+            )
+            self.mlp = ToyMoe(config)
+
+        def forward(self, hidden_states, *args, **kwargs):
+            del args, kwargs
+            return hidden_states + torch.tanh(
+                self.self_attn.q_proj(hidden_states)
+            ) + self.mlp(hidden_states)
+
+    class ToyLinearAttentionLayer(nn.Module):
+        def __init__(self, config):
+            super().__init__()
+            self.linear_attn = nn.Module()
+            self.linear_attn.in_proj_qkv = nn.Linear(
+                config.hidden_size, config.hidden_size, bias=False
+            )
+            self.mlp = ToyMoe(config)
+
+        def forward(self, hidden_states, *args, **kwargs):
+            del args, kwargs
+            return hidden_states + torch.sigmoid(
+                self.linear_attn.in_proj_qkv(hidden_states)
+            ) + self.mlp(hidden_states)
+
+    class ToyDecoder(nn.Module):
+        def __init__(self, config):
+            super().__init__()
+            self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size)
+            self.layers = nn.ModuleList(
+                ToyFullAttentionLayer(config)
+                if layer_type == "full_attention"
+                else ToyLinearAttentionLayer(config)
+                for layer_type in config.layer_types
+            )
+            self.norm = nn.LayerNorm(config.hidden_size)
+
+        def forward(self, input_ids):
+            hidden_states = self.embed_tokens(input_ids)
+            for layer in self.layers:
+                hidden_states = layer(hidden_states)
+            return self.norm(hidden_states)
+
+    class ToyQwen35ForCausalLM(PreTrainedModel):
+        config_class = ToyQwen35Config
+        base_model_prefix = "model"
+
+        def __init__(self, config):
+            super().__init__(config)
+            self.model = ToyDecoder(config)
+            self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
+            self.post_init()
+
+        def _init_weights(self, module):
+            if isinstance(module, (nn.Linear, nn.Embedding)):
+                nn.init.normal_(module.weight, mean=0.0, std=0.02)
+            elif isinstance(module, nn.LayerNorm):
+                nn.init.ones_(module.weight)
+                nn.init.zeros_(module.bias)
+
+        def get_input_embeddings(self):
+            return self.model.embed_tokens
+
+        def set_input_embeddings(self, value):
+            self.model.embed_tokens = value
+
+        def get_output_embeddings(self):
+            return self.lm_head
+
+        def set_output_embeddings(self, value):
+            self.lm_head = value
+
+        def prepare_inputs_for_generation(self, input_ids, **kwargs):
+            del kwargs
+            return {"input_ids": input_ids}
+
+        def forward(self, input_ids=None, inputs_embeds=None, **kwargs):
+            del kwargs
+            if input_ids is None:
+                if inputs_embeds is None:
+                    raise ValueError("input_ids or inputs_embeds is required")
+                hidden_states = inputs_embeds
+                for layer in self.model.layers:
+                    hidden_states = layer(hidden_states)
+                hidden_states = self.model.norm(hidden_states)
+            else:
+                hidden_states = self.model(input_ids)
+            return CausalLMOutput(logits=self.lm_head(hidden_states))
+
+    AutoModelForCausalLM.register(
+        ToyQwen35Config, ToyQwen35ForCausalLM, exist_ok=True
+    )
+    result = ToyQwen35Config, ToyQwen35ForCausalLM
+    _toy_qwen35_classes._cached = result
+    return result
+
+
+def _tiny_qwen35_lora():
+    from peft import LoraConfig, TaskType
+
+    return LoraConfig(
+        r=2,
+        lora_alpha=4,
+        lora_dropout=0.0,
+        bias="none",
+        target_modules=["q_proj", "in_proj_qkv"],
+        task_type=TaskType.CAUSAL_LM,
+    )
+
+
+def _copy_toy_lora(src, dst):
+    def canonical(key):
+        return key.replace(".inner.", ".")
+
+    src_lora = {canonical(k): v for k, v in src.state_dict().items() if "lora_" in k}
+    dst_lora = {canonical(k): v for k, v in dst.state_dict().items() if "lora_" in k}
+    assert src_lora and set(src_lora) == set(dst_lora)
+    with torch.no_grad():
+        for key, value in src_lora.items():
+            dst_lora[key].copy_(value)
+
+
 def _heterogeneous_weights_dir(tmp_path: Path, *, vlm_prefix: bool = False) -> str:
     weights = tmp_path / "weights"
     weights.mkdir()
@@ -105,6 +284,80 @@ class TestQwen35StreamingAliases:
         )
         assert wrapper._stream_shape_config(cfg) is cfg.text_config
         assert wrapper._stream_intermediate_size(cfg.text_config) == 1536 * 8 + 2048
+
+
+class TestQwen35StreamingParity:
+    def test_heterogeneous_moe_logits_match_resident_bit_exactly(
+        self, tmp_path, monkeypatch
+    ):
+        """Admission gate: exercise the alias through the complete CPU runtime.
+
+        Layer 0 owns ``self_attn.q_proj`` while layer 1 owns
+        ``linear_attn.in_proj_qkv``.  Reusing layer 0's stream spec therefore
+        cannot pass this test, and equal logits prove more than buffer-copy
+        fidelity: the substituted weights execute in the same decoder kernels
+        as the resident reference.
+        """
+        from peft import get_peft_model
+        from transformers import AutoConfig
+
+        from soup_cli.utils.layer_shard import layer_shard_path, shard_checkpoint
+        from soup_cli.utils.layer_stream import stream_arch_of
+        from soup_cli.utils.layer_stream_runtime import build_streamed_model
+
+        config_cls, model_cls = _toy_qwen35_classes()
+        torch.manual_seed(23)
+        config = config_cls()
+        resident = model_cls(config).to(torch.float32).eval()
+        weights = tmp_path / "weights"
+        resident.save_pretrained(weights, safe_serialization=True)
+
+        # Avoid registering the official Qwen3.5 model type globally.  That
+        # would replace Transformers' native config in newer environments and
+        # make this test order-dependent.  The runtime still receives a config
+        # whose real model_type exercises the production alias.
+        monkeypatch.setattr(
+            AutoConfig,
+            "from_pretrained",
+            staticmethod(
+                lambda model_id, **kwargs: config_cls.from_pretrained(model_id)
+            ),
+        )
+
+        arch = stream_arch_of(config)
+        assert arch == "qwen3"
+        shards = str(tmp_path / "shards")
+        index = shard_checkpoint(str(weights), shards, dtype="float32", arch=arch)
+        layer0 = load_file(layer_shard_path(shards, 0))
+        layer1 = load_file(layer_shard_path(shards, 1))
+        assert "self_attn.q_proj.weight" in layer0
+        assert "self_attn.q_proj.weight" not in layer1
+        assert "linear_attn.in_proj_qkv.weight" in layer1
+        assert "linear_attn.in_proj_qkv.weight" not in layer0
+
+        streamed, runtime = build_streamed_model(
+            model_id=str(weights),
+            shard_dir=shards,
+            index=index,
+            lora_config=_tiny_qwen35_lora(),
+            device="cpu",
+            dtype="float32",
+            buffers=2,
+            pin=False,
+            seed=29,
+        )
+        try:
+            reference = get_peft_model(resident, _tiny_qwen35_lora())
+            _copy_toy_lora(streamed, reference)
+            streamed.eval()
+            reference.eval()
+            input_ids = torch.tensor([[1, 7, 3, 11, 5, 2]])
+            with torch.no_grad():
+                got = streamed(input_ids=input_ids).logits
+                want = reference(input_ids=input_ids).logits
+            assert torch.equal(got, want), (got - want).abs().max().item()
+        finally:
+            runtime.close()
 
 
 class TestQwen35StreamingSharder:

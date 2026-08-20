@@ -90,14 +90,13 @@ SUPPORTED_STREAM_ARCHS = (
     "phi3",
 )
 
-# Aliases that reuse a validated decoder family but do not yet have their own
-# resident bit-exact control. Kept separate so the caveat is visible beside the
-# allowlist itself, not only in prose.
-_UNVALIDATED_STREAM_ARCH_ALIASES = {
+# Model types whose text decoders reuse an admitted streaming family.  Each
+# alias needs its own resident-vs-streamed parity control; mapping a model type
+# by name alone is not enough to establish that its decoder graph is safe.
+_STREAM_ARCH_ALIASES = {
     "qwen3_5_moe": "qwen3",
     "qwen3_5_moe_text": "qwen3",
 }
-_STREAM_ARCH_ALIASES = dict(_UNVALIDATED_STREAM_ARCH_ALIASES)
 
 #: The loss path's own arithmetic, in VRAM bytes per logit element. **Measured
 #: stage by stage (issue #327), not derived.** ``ForCausalLMLoss`` upcasts to
