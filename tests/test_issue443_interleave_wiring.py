@@ -237,7 +237,14 @@ def test_interleave_with_multipack_rejected_with_reason(tmp_path):
 
 
 def test_interleave_with_streaming_rejected_with_reason(tmp_path):
-    with pytest.raises(ValidationError, match="#459"):
+    # Maintainer's review: match="#459" alone survived a mutation swapping
+    # in a completely wrong reason while keeping the issue number — match
+    # on text unique to THIS reason instead. NOT match="streaming" alone:
+    # pydantic's ValidationError str embeds input_value={...}, which
+    # already contains the literal input dict's 'streaming': True — a bare
+    # "streaming" match would pass even against a wrong-reason mutation,
+    # for the same false-positive reason #459 did.
+    with pytest.raises(ValidationError, match="disable streaming or drop"):
         _cfg(
             tmp_path,
             train=[str(tmp_path / "a.jsonl"), str(tmp_path / "b.jsonl")],
@@ -247,7 +254,7 @@ def test_interleave_with_streaming_rejected_with_reason(tmp_path):
 
 
 def test_interleave_with_hub_dataset_name_rejected_with_reason(tmp_path):
-    with pytest.raises(ValidationError, match="#459"):
+    with pytest.raises(ValidationError, match="local file paths"):
         _cfg(
             tmp_path,
             train=[str(tmp_path / "a.jsonl"), "org/some-dataset"],
@@ -275,3 +282,138 @@ def test_interleave_rendered_overlay_yaml_round_trips_through_loader(tmp_path):
     cfg = load_config_from_string(yaml_text)
     result = load_dataset(cfg.data)
     assert len(result["train"]) == 4
+
+
+# ---------------------------------------------------------------------------
+# Enumerating test — every known consumer of cfg.data.train, one row each.
+#
+# Maintainer's review of PR #460: widening data.train to a list made three
+# OTHER consumers (mcp_server/registry.py, utils/terraform_plan.py,
+# utils/annex_xi.py) silently go blind — each filtered on
+# isinstance(path, str), so a list contributed nothing / coerced to the
+# same sentinel as "no dataset" / stringified into a bogus path. He asked
+# for one durable, enumerating test covering every known consumer (the 4
+# already fixed earlier in this PR + these 3), not a bespoke test per
+# site — so a future Nth consumer gets added to THIS table, not a new
+# test file.
+# ---------------------------------------------------------------------------
+
+
+def _write_url_jsonl(path: Path, count: int, domain: str) -> None:
+    lines = [f'{{"text": "row {i} https://{domain}/p{i}"}}' for i in range(count)]
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _matched_fixture(tmp_path: Path):
+    """Two data shapes carrying the SAME effective dataset.
+
+    ``single``: one file, 8 example.com rows + 4 other.org rows (12 total).
+    ``as_list``: the identical 12 rows split into two files (8 + 4),
+    combined via interleave 'concat' — same total rows, same domain set.
+    """
+    single_path = tmp_path / "single.jsonl"
+    lines = [f'{{"text": "row {i} https://example.com/p{i}"}}' for i in range(8)]
+    lines += [f'{{"text": "row {i} https://other.org/p{i}"}}' for i in range(4)]
+    single_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    a_path = tmp_path / "a.jsonl"
+    b_path = tmp_path / "b.jsonl"
+    _write_url_jsonl(a_path, 8, "example.com")
+    _write_url_jsonl(b_path, 4, "other.org")
+
+    single_cfg = _cfg(tmp_path, train=str(single_path))
+    list_cfg = _cfg(
+        tmp_path, train=[str(a_path), str(b_path)], interleave="concat"
+    )
+    return single_cfg, list_cfg, single_path, a_path, b_path
+
+
+def test_every_data_train_consumer_handles_list_non_degenerately(tmp_path, monkeypatch):
+    """Enumerates ALL known consumers of cfg.data.train / data.train-derived
+    paths. Each row asserts the list-shaped result is non-degenerate (not
+    silently empty/zero/blind) compared to the equivalent single-path
+    result. A future consumer is added as a new row here, not a new test.
+    """
+    # registry._collect_external_protected_inputs and terraform_plan's
+    # compute_dataset_sha both gate on is_under_cwd(path), checked against
+    # the real process cwd — must actually chdir, not just pass tmp_path.
+    monkeypatch.chdir(tmp_path)
+
+    from soup_cli.commands.cost import _get_dataset_size
+    from soup_cli.commands.data import _cache_key_dataset_path
+    from soup_cli.commands.ship import _MAX_DATA_SHA_BYTES, _compute_provenance, _safe_hash_file
+    from soup_cli.commands.train import _lr_finder_dataset_path
+    from soup_cli.mcp_server.registry import _collect_external_protected_inputs
+    from soup_cli.utils.annex_xi import load_top_domains_from_jsonl
+    from soup_cli.utils.terraform_plan import build_plan, compute_dataset_sha
+
+    single_cfg, list_cfg, single_path, a_path, b_path = _matched_fixture(tmp_path)
+
+    # 1. cost._get_dataset_size(cfg) -> (row_count, is_estimated)
+    single_size, single_est = _get_dataset_size(single_cfg)
+    list_size, list_est = _get_dataset_size(list_cfg)
+    assert single_size == list_size == 12, "row counts must match — same total data"
+    assert single_est is False and list_est is False, (
+        "must actually read the files, not fall back to the default estimate"
+    )
+
+    # 2. data._cache_key_dataset_path(cfg) -> str fed to make_preprocess_cache_key
+    import json as _json
+
+    list_key_input = _cache_key_dataset_path(list_cfg)
+    assert list_key_input, "must not collapse to an empty/blind cache key input"
+    # JSON-parse rather than substring-search: json.dumps escapes backslashes
+    # in Windows paths, so a raw `str(a_path) in list_key_input` check would
+    # false-negative there.
+    parsed_key_input = _json.loads(list_key_input)
+    assert parsed_key_input["train"] == [str(a_path), str(b_path)], (
+        "list cache key input must name BOTH files, not just the first"
+    )
+
+    # 3. ship._compute_provenance(cfg) -> {"data_sha": <64-hex>, ...}
+    single_prov = _compute_provenance(single_cfg)
+    list_prov = _compute_provenance(list_cfg)
+    assert len(single_prov.get("data_sha", "")) == 64
+    assert len(list_prov.get("data_sha", "")) == 64
+    # must not silently equal a hash of only the first file — the pre-fix
+    # blind-to-a-single-file failure mode.
+    assert list_prov["data_sha"] != _safe_hash_file(str(a_path), _MAX_DATA_SHA_BYTES)
+
+    # 4. train._lr_finder_dataset_path(train) -> a real, existing file path
+    single_lr_path = _lr_finder_dataset_path(single_cfg.data.train)
+    list_lr_path = _lr_finder_dataset_path(list_cfg.data.train)
+    assert Path(single_lr_path).is_file() and Path(single_lr_path).stat().st_size > 0
+    assert Path(list_lr_path).is_file() and Path(list_lr_path).stat().st_size > 0
+
+    # 5. registry._collect_external_protected_inputs(cfg) -> list[ProtectedFile]
+    single_protected = _collect_external_protected_inputs(single_cfg)
+    list_protected = _collect_external_protected_inputs(list_cfg)
+    single_hits = [p for p in single_protected if p.path == str(single_path.resolve())]
+    list_hits = [
+        p for p in list_protected
+        if p.path in (str(a_path.resolve()), str(b_path.resolve()))
+    ]
+    assert len(single_hits) == 1, "single path contributes exactly one protected entry"
+    assert len(list_hits) == 2, "list must contribute one protected entry PER file, not zero"
+
+    # 6. terraform_plan.build_plan({...}) -> TrainingPlan.dataset_sha
+    zero = "0" * 64
+    single_plan = build_plan({"base": "b", "task": "sft", "data": {"train": str(single_path)}})
+    list_plan = build_plan(
+        {"base": "b", "task": "sft", "data": {"train": [str(a_path), str(b_path)]}}
+    )
+    assert single_plan.dataset_sha != zero
+    assert list_plan.dataset_sha != zero, (
+        "list must not silently produce the all-zero 'missing dataset' sentinel"
+    )
+    assert list_plan.dataset_sha != compute_dataset_sha(str(a_path)), (
+        "must not silently hash only the first file"
+    )
+
+    # 7. annex_xi.load_top_domains_from_jsonl(path) -> top domains, aggregated
+    single_domains = {d for d, _ in load_top_domains_from_jsonl(str(single_path))}
+    list_domains = {d for d, _ in load_top_domains_from_jsonl([str(a_path), str(b_path)])}
+    assert single_domains == list_domains == {"example.com", "other.org"}, (
+        "list must aggregate domains across every file, matching the "
+        "equivalent single-path corpus — not go blank or report only one file"
+    )

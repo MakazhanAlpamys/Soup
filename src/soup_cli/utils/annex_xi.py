@@ -416,40 +416,63 @@ def extract_top_domains(
 def load_top_domains_from_jsonl(
     path: object, *, top_n: int = 10
 ) -> Tuple[Tuple[str, float], ...]:
-    """Best-effort domain extraction from a cwd-contained JSONL file.
+    """Best-effort domain extraction from cwd-contained JSONL file(s).
 
-    Returns ``()`` on any failure (missing file, outside cwd, symlink,
+    ``path`` may be a single path or a list of paths (#443 — data.interleave
+    lets data.train be list-shaped; Annex XI/XII's "top domains" section
+    must aggregate across every constituent file, not just go blank or
+    report only the first). ``extract_top_domains`` runs ONCE on the
+    concatenated row stream so top-N selection is global across the whole
+    interleaved corpus, not biased per-file.
+
+    Returns ``()`` on total failure (missing file(s), outside cwd, symlink,
     unreadable, oversize) — an Annex doc must never fail because the corpus
-    is unavailable. cwd-contained + symlink-rejected via the shared helper.
+    is unavailable. Each entry is cwd-contained + symlink-rejected via the
+    shared helper independently; an invalid entry is skipped (best-effort),
+    matching this function's existing single-path contract.
     """
-    if not isinstance(path, str) or not path:
+    if isinstance(path, str):
+        candidates = [path] if path else []
+    elif isinstance(path, list):
+        candidates = [p for p in path if isinstance(p, str) and p]
+    else:
         return ()
-    try:
-        realpath = enforce_under_cwd_and_no_symlink(path, "data.train")
-    except (ValueError, OSError) as exc:
-        _LOG.debug("load_top_domains_from_jsonl: rejected %r: %s", path, exc)
+    if not candidates:
         return ()
-    try:
-        if not os.path.isfile(realpath):
-            return ()
-        if os.path.getsize(realpath) > _MAX_JSONL_BYTES:
-            return ()
-    except OSError:
+
+    realpaths: list[str] = []
+    for p in candidates:
+        try:
+            real = enforce_under_cwd_and_no_symlink(p, "data.train")
+        except (ValueError, OSError) as exc:
+            _LOG.debug("load_top_domains_from_jsonl: rejected %r: %s", p, exc)
+            continue
+        try:
+            if not os.path.isfile(real):
+                continue
+            if os.path.getsize(real) > _MAX_JSONL_BYTES:
+                continue
+        except OSError:
+            continue
+        realpaths.append(real)
+    if not realpaths:
         return ()
 
     def _row_iter():
-        try:
-            with open(realpath, encoding="utf-8") as fh:
-                for line in fh:
-                    raw = line.strip()
-                    if not raw:
-                        continue
-                    try:
-                        yield json.loads(raw)
-                    except (ValueError, TypeError):
-                        continue
-        except OSError as exc:
-            _LOG.debug("load_top_domains_from_jsonl: read failed: %s", exc)
+        for real in realpaths:
+            try:
+                with open(real, encoding="utf-8") as fh:
+                    for line in fh:
+                        raw = line.strip()
+                        if not raw:
+                            continue
+                        try:
+                            yield json.loads(raw)
+                        except (ValueError, TypeError):
+                            continue
+            except OSError as exc:
+                _LOG.debug("load_top_domains_from_jsonl: read failed: %s", exc)
+                continue
 
     try:
         return extract_top_domains(_row_iter(), top_n=top_n)

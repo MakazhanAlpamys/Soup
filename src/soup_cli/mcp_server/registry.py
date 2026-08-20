@@ -606,7 +606,7 @@ _MUTATING_NOTE = (
 def _collect_external_protected_inputs(cfg: SoupConfig) -> list[ProtectedFile]:
     """Collect and digest external paths (datasets, models) referenced by cfg."""
     protected: list[ProtectedFile] = []
-    candidate_paths: list[tuple[str, str | None]] = [
+    candidate_paths: list[tuple[str, str | list[str] | None]] = [
         ("data.train", getattr(cfg.data, "train", None)),
         ("data.eval", getattr(cfg.data, "eval", None)),
         ("data.replay", getattr(cfg.data, "replay", None)),
@@ -619,8 +619,16 @@ def _collect_external_protected_inputs(cfg: SoupConfig) -> list[ProtectedFile]:
         candidate_paths.append(("training.eval_gate.suite", cfg.training.eval_gate.suite))
 
     for field, path in candidate_paths:
-        if isinstance(path, str) and path and is_under_cwd(path) and os.path.exists(path):
-            protected.append(digest_file(path, field))
+        # #443 — data.interleave lets data.train be a list of local paths.
+        # Digest each entry independently (one ProtectedFile per file) so
+        # every interleaved file is re-validated before execution, instead
+        # of the list silently contributing zero entries (isinstance(path,
+        # str) used to fail before os.path.exists even ran).
+        entries = path if isinstance(path, list) else [path]
+        for i, entry in enumerate(entries):
+            entry_field = f"{field}[{i}]" if isinstance(path, list) else field
+            if isinstance(entry, str) and entry and is_under_cwd(entry) and os.path.exists(entry):
+                protected.append(digest_file(entry, entry_field))
     return protected
 
 

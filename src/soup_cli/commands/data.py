@@ -2308,6 +2308,24 @@ def _push_dataset_non_hf(
 
 # --- v0.42.0 Part C / F: AOT preprocess + document ingestion ---------------
 
+
+def _cache_key_dataset_path(cfg) -> str:
+    """Dataset-path input fed to make_preprocess_cache_key (#443 list-aware).
+
+    A list data.train folds data.interleave's strategy/probs into the key
+    too, since the same file set under a different mixture must not
+    collide on a stale, mis-mixed cache entry. Extracted as its own
+    function so it can be exercised directly by
+    tests/test_issue443_interleave_wiring.py's enumerating test.
+    """
+    if isinstance(cfg.data.train, list):
+        return json.dumps(
+            {"train": cfg.data.train, "interleave": cfg.data.interleave},
+            sort_keys=True,
+        )
+    return cfg.data.train
+
+
 @app.command(name="preprocess")
 def preprocess_dataset(
     config_path: str = typer.Argument(
@@ -2354,18 +2372,10 @@ def preprocess_dataset(
         )
         raise typer.Exit(1)
 
-    if isinstance(cfg.data.train, list):
-        # #443 — fold data.interleave into the cache key: the same file
-        # set with a different strategy/probs must not collide on a
-        # stale, mis-mixed cache entry.
-        dataset_path = json.dumps(
-            {"train": cfg.data.train, "interleave": cfg.data.interleave},
-            sort_keys=True,
-        )
-        train_display = ", ".join(cfg.data.train)
-    else:
-        dataset_path = cfg.data.train
-        train_display = cfg.data.train
+    dataset_path = _cache_key_dataset_path(cfg)
+    train_display = (
+        ", ".join(cfg.data.train) if isinstance(cfg.data.train, list) else cfg.data.train
+    )
     cache_key = make_preprocess_cache_key(
         dataset_path=dataset_path,
         tokenizer_name=cfg.base,

@@ -522,13 +522,22 @@ data:
   shards: 4
 ```
 
-**Multi-dataset interleave:**
+**Multi-dataset interleave** (v0.42.0 schema, wired into training-time loading in #443):
 
 ```yaml
 data:
+  train:
+    - dolma.jsonl
+    - wikipedia.jsonl
   interleave: { strategy: probs, probs: [0.7, 0.3] }   # also: concat / under / over
   eval_on_each_dataset: true
 ```
+
+`data.train` as a list requires `data.interleave` (and vice versa); entries must be local
+file paths only — no remote URIs / HF-hub dataset names (that combination is
+[#459](https://github.com/MakazhanAlpamys/Soup/issues/459)). `training.packing` /
+`training.multipack` and `data.streaming` must all be off. With the `probs` strategy,
+`len(data.train)` must equal `len(probs)`.
 
 **Vocab expansion + advanced masking:**
 
@@ -734,7 +743,7 @@ soup data mix --optimize --budget 1h \
     --num-probes 8 --output mix_recipe.yaml
 ```
 
-Writes a YAML recipe you can splice into your `soup.yaml`: `data.train` is the single highest-weighted dataset from the search (the full ranked weight/path breakdown is kept as a comment), and `data.interleave` carries the searched mixture weights but is not yet consumed by training — see the in-file comment, and #330/#443. `--budget` accepts `60s` / `5m` / `1h` / `24h`. Per-candidate proxy failures are isolated (DEBUG-logged, sentinel high loss recorded) so a single OOM combo does not abort the whole search; `partial=True` is surfaced in the report when the budget cap trips mid-loop.
+Writes a YAML recipe you can splice into your `soup.yaml`: `data.train` renders as the full ranked dataset list (index-aligned with `data.interleave.probs`), and `data.interleave` carries the searched mixture weights — as of #443, `data.interleave` is fully wired into training-time dataset loading, so `soup train` consumes the real N-dataset mixture this search found rather than collapsing to one path. `--budget` accepts `60s` / `5m` / `1h` / `24h`. Per-candidate proxy failures are isolated (DEBUG-logged, sentinel high loss recorded) so a single OOM combo does not abort the whole search; `partial=True` is surfaced in the report when the budget cap trips mid-loop.
 
 Re-apply a previously written recipe:
 
