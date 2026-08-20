@@ -2347,6 +2347,29 @@ class TestStreamPinRuntimeRefusal:
         for other in others:
             assert other not in message, message
 
+    def test_the_refusal_sums_heterogeneous_layer_specs(self, monkeypatch):
+        """The #426 per-layer spec must survive #416's refusal path.
+
+        The two layers deliberately have different, disjoint keys and sizes.
+        Summing them gives 0.05 GB; multiplying the largest layer by two gives
+        0.07 GB, while multiplying the merged union by two gives 0.10 GB.
+        """
+        rt = self._patch_ramsource_to_fail_pinning(monkeypatch)
+        layer_specs = [
+            {"self_attn.q_proj.weight": ((4096, 4096), "bfloat16")},
+            {"linear_attn.in_proj_qkv.weight": ((2048, 4096), "bfloat16")},
+        ]
+
+        with pytest.raises(RuntimeError) as excinfo:
+            rt._build_source(
+                "d", 2, layer_specs, True, None, require_pin=True
+            )
+
+        message = str(excinfo.value)
+        assert "0.05 GB" in message, message
+        assert "0.07 GB" not in message, message
+        assert "0.10 GB" not in message, message
+
 
 class TestDiskTierAnnouncesInapplicablePinning:
     """#366 round-3: on the disk tier the base does not fit in RAM, so there is

@@ -351,8 +351,11 @@ class TestQwen35StreamingSetup:
         )
         tcfg = types.SimpleNamespace(
             quantization="none",
+            double_quant_on=True,
             stream_source="auto",
             stream_buffers=2,
+            stream_disk_kind=None,
+            stream_pin=None,
             seed=7,
             moe_lora=True,
             batch_size=1,

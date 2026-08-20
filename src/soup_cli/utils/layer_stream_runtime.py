@@ -1749,7 +1749,7 @@ def _build_source(
     try:
         return RamSource(shard_dir, n_layers, spec, pin=True), True
     except (RuntimeError, MemoryError) as exc:
-        store_gb = n_layers * _spec_bytes(spec) / 1e9
+        store_gb = _spec_bytes(spec, n_layers=n_layers) / 1e9
         if require_pin:
             raise RuntimeError(
                 "training.stream_pin=true but this box could not page-lock the "
@@ -1774,9 +1774,28 @@ def _build_source(
         return RamSource(shard_dir, n_layers, spec, pin=False), False
 
 
-def _spec_bytes(spec: Mapping[str, Tuple[Tuple[int, ...], str]]) -> int:
-    """Bytes held by ONE decoder layer, from the shard spec — for messages only."""
-    return sum(math.prod(shape) * _dtype_size(dtype) for shape, dtype in spec.values())
+def _spec_bytes(
+    spec: Union[
+        Mapping[str, Tuple[Tuple[int, ...], str]],
+        Sequence[Mapping[str, Tuple[Tuple[int, ...], str]]],
+    ],
+    *,
+    n_layers: int = 1,
+) -> int:
+    """Exact RAM-store bytes represented by one shared or per-layer spec."""
+    if isinstance(spec, Mapping):
+        layer_specs = [spec] * n_layers
+    else:
+        layer_specs = list(spec)
+        if len(layer_specs) != n_layers:
+            raise ValueError(
+                f"expected {n_layers} layer specs, but got {len(layer_specs)}"
+            )
+    return sum(
+        math.prod(shape) * _dtype_size(dtype)
+        for layer_spec in layer_specs
+        for shape, dtype in layer_spec.values()
+    )
 
 
 def build_streamed_model(
