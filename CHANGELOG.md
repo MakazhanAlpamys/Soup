@@ -76,6 +76,9 @@ reproducing 70+ versions of notes.
 
 ### Changed
 
+- **Remove hand-maintained test suite statistics from `CONTRIBUTING.md` in favor of a permanent digit-free shape invariant (#465 by @harshitthek in #467).**
+  Eliminates drift across routine test additions by making test-count divergence impossible at the documentation source.
+
 - **Lazy callback builders now self-import their callback class names so runtime
   lookup never raises `NameError` while preserving lazy heavy-dependency loading
   (#320 by @AchuthReddy-16 in #455).** `build_echo_trap_callback`,
