@@ -14,7 +14,116 @@ reproducing 70+ versions of notes.
 
 ### Added
 
-- **`eval.ship.noise_floor` is now committable to `soup.yaml` (#406).** Every
+- **`training.stream_pin` makes layer-streaming pinning configurable (#366 by @ousamabenyounes in #416).**
+  Page-locking the RAM store is chosen automatically by `decide_pinning`, and
+  until now nothing could override it — so while #331 was live, `pin=False` was
+  the only known mitigation for silently wrong NF4 gradients yet was unreachable
+  from `soup.yaml`. `stream_pin: false` now forces the pageable store (and the
+  pre-flight states the throughput it costs, up to 6.56x measured, rather than
+  absorbing it silently); `stream_pin: true` forces the pinned store and, **on
+  the RAM tier**, refuses the run — naming the store size, not the ceiling
+  (#366 AC3): `pinned_limit_bytes` is passed as `None`, so the page-lock ceiling
+  is deliberately left unprobed and the store size is the only figure the
+  refusal can honestly cite — if the box cannot page-lock it, instead of
+  degrading silently; unset keeps today's automatic behaviour. On the disk tier
+  (no RAM store to page-lock) and on CPU (no device to copy to) pinning is
+  *inapplicable* rather than unsatisfiable, so `true` is **announced and the run
+  proceeds** — refusing there would brick the large-model runs the disk tier
+  exists for, and would make the key uncommittable to a config shared between a
+  GPU box and a CPU box. Set while `stream_layers: false` it is rejected as a
+  footgun, like the other stream keys.
+
+- **A ready-made `qwen3.5-9b-grpo` recipe for GRPO reasoning training with `Qwen/Qwen3.5-9B` (#277 by @harshitthek in #448).**
+  The recipe combines the established GRPO defaults (accuracy reward, beta=0.1, 4 generations)
+  with LoRA r=16 and 4-bit quantization.
+
+- **A ready-made `glm-5.1-dpo` recipe for DPO preference training with `zai-org/GLM-5.1` (#280 by @Osheun in #452).**
+  The first recipe pairing DPO with a MoE base, so it carries `moe_lora: true`
+  alongside the established DPO defaults (beta=0.1, LoRA r=32 / alpha=64, 4-bit
+  quantization). `epochs: 1` and `max_length: 8192` are taken from the SFT
+  sibling rather than the smaller qwen defaults, which suit a 754B MoE better.
+
+### Fixed
+
+- **`cut_ce.py` and `liger.py` now normalize path separators and match architecture
+  keywords on the last path component only (#456 by @harshitthek in #458).**
+  On Windows, `rsplit("/")` never split on backslashes, causing parent directory
+  names (e.g. `C:\experiments\phi-3-runs\step-2000`) to over-match architecture
+  keywords during fallback detection when config resolution was unavailable. In
+  `liger.py`, switching from whole-path to last-component matching also drops
+  org-prefix false positives (e.g. `mistralai/*`, `Qwen/*` when the model name
+  does not contain the keyword) and prevents parent directories from applying the
+  wrong fused kernel across POSIX and Windows. Both modules now normalize dual
+  separators and strip trailing slashes deterministically.
+
+- **`measure_gemm_tflops` now records per-repeat samples and
+  `test_takes_the_best_repeat_not_the_first` verifies best-of-N selection within
+  a single measurement (#444 by @harshitthek in #451).** Comparing two separate
+  probe calls taken at different moments caused intermittent test failures on
+  developer GPU machines under background contention. `GemmCeiling` now preserves
+  `samples: tuple[float, ...]` and the test asserts `max(samples)` selection
+  deterministically.
+
+- **Duck-typed tokenizer mappings no longer raise a misleading error, and
+  `data_doctor` shares the public `coerce_token_ids` helper (#441 by @AchuthReddy-16 in #447, part 2 found by @emre155).** A dict-like
+  output that is not registered as `collections.abc.Mapping` used to be iterated
+  as keys (`input_ids[0]='input_ids'`), sending the operator looking at their
+  data; the mask path skipped the same objects and silently dropped
+  `assistant_masks`. Both gates now use one mapping-like predicate, and the
+  helper is public so the two modules cannot drift.
+
+- **`soup data mix --live` handed every candidate proxy run a config it could
+  not load (#442 by @blackcoderx in #445).** `_render_overlay_yaml` emitted `data.train` as a YAML
+  list, the same shape #330 fixed in the recipe writer, but every `--live`
+  test mocked `subprocess.run` so nothing ever loaded the overlay through the
+  schema — a config the tool could not itself load read as a passing feature.
+  `data.train` now renders as the single highest-weighted dataset in each
+  candidate, mirroring #330's fix, with a comment noting which dataset was
+  picked and why.
+
+- **`use_cut_ce` silently did nothing for any model loaded from a local
+  checkpoint directory, and conflated Phi-2 with Phi-3 (#383 by @AmirF194 in #446).**
+  `apply_cut_ce()` picked the CCE patcher by matching an architecture keyword
+  against the model path's last component, so `checkpoint-2000` / `my-finetune`
+  / any other directory `soup merge`/`soup shrink`/`soup train` writes out
+  matched nothing and CCE stayed off with no error, on a flag the user
+  explicitly set. Separately, every Phi variant (`phi-2`, `phi-3`, `phi-4`)
+  mapped to the same `"phi3"` patcher, even though `cut_cross_entropy` has no
+  Phi-2 patcher at all (its `config.model_type` is `"phi"`, not `"phi3"`), and
+  a bare `"gemma"` fallback entry dispatched to a patcher `cut_cross_entropy`
+  does not have at all, crashing instead of reporting unsupported. Detection
+  now resolves `AutoConfig.from_pretrained(model_name).model_type` first,
+  mirroring the identical fix already shipped for Liger Kernel (#78), and
+  falls back to the name-based match only when that is unavailable; Phi-2 and
+  plain Gemma-1 both correctly report unsupported instead of running under
+  the wrong kernel or crashing. The two call sites that separately hand-wrote
+  the "no matching architecture" advisory now share one message.
+
+- **`soup draft measure` now refuses a mismatched pair up front and no longer
+  discards a completed measurement when the assisted arm fails
+  (#344 by @ousamabenyounes in #409).** `measure`
+  gated on `same_tokenizer()` (tokenizer vocab + probe ids), which accepts a pair
+  whose tokenizers are identical but whose `config.vocab_size` differs by padded
+  embedding rows (e.g. Qwen2.5 large←small) — exactly the pair `distill` refuses.
+  Transformers' assisted generation gates on `config.vocab_size`, so the run died
+  with "different tokenizers" deep inside `generate()`, after the expensive load,
+  and because the report was written only after that arm every completed
+  acceptance/plain-throughput number was thrown away. `measure` now uses the same
+  `config.vocab_size` precondition as `distill` (refusing before any model loads;
+  the shared `_vocab_size_of` also reads a composite model's `get_text_config()`,
+  so a multimodal target like Llava is no longer refused), keeps `same_tokenizer()`
+  as an additional check, and writes the report incrementally so a failing assisted
+  arm leaves the acceptance rate and plain throughput on disk. The report records
+  an `assisted_status` (`pending` / `complete` / `untimed` / `crash` /
+  `interrupted`) so a failed arm is distinguishable on disk from a completed or
+  un-run one — `pending` is what a report keeps when the process dies mid-arm
+  and no handler runs, which is the case the incremental write exists for.
+
+## [0.73.3] - 2026-08-18
+
+### Added
+
+- **`eval.ship.noise_floor` is now committable to `soup.yaml` (#406 by @ousamabenyounes in #410).** Every
   `soup ship` gate-policy flag was settable in a committed config and read back by
   `--config` — except `--noise-floor` (added in v0.73.2), which had no field and
   could only be passed on the command line, so a team enforcing a floor in CI had
@@ -32,12 +141,110 @@ reproducing 70+ versions of notes.
   - `soup serve --speculative-decoding` supports cross-tokenizer draft serving via Transformers Universal Assisted Decoding (UAD) when supported by the installed `transformers` version, raising a clear error if unsupported.
   - Compatible same-tokenizer pairs strictly preserve the existing native fast path.
 - **A ready-made `qwen3.5-4b-pretrain` recipe for continued pre-training of
-  `Qwen/Qwen3.5-4B-Base` (#278).** The recipe uses plaintext data, one epoch,
+  `Qwen/Qwen3.5-4B-Base` (#278 by @Faisal01011 in #422).** The recipe uses plaintext data, one epoch,
   QLoRA 4-bit quantization, and the established continued-pretraining defaults.
+
+- **A ready-made `deepseek-v4-flash-grpo` recipe for GRPO reasoning training
+  with `deepseek-ai/DeepSeek-V4-Flash` (#279 by @Faisal01011 in #432).** The recipe combines the
+  established GRPO defaults with MoE LoRA and gradient checkpointing.
+
+- **`soup mcp serve --allow-execute` can now actually execute, behind a single-use
+  confirmation token (#297 by @CODING-DARSH in #393).** `train_start` and `export` issue a
+  short-lived, server-generated token bound to the plan and to the execution kind;
+  `train_execute` / `export_execute` accept **only** that token — no command, no argv, no
+  shell string, no client-supplied environment — and the server launches the planned Soup
+  CLI command with `shell=False`, `stdin=DEVNULL`, output to `.soup/mcp-runs/<run_id>.log`.
+  Two integrity properties close the gap between planning and running: the config is
+  **snapshotted** at plan time and executed from the copy, so the file cannot be edited
+  underneath the run, and `digest_file` now walks a directory tree by content (sorted
+  relative paths + per-file hash, symlink refusal, bounded) rather than by mtime+size,
+  which did not change when a file *inside* a protected directory was rewritten — so a
+  model could be swapped between plan and execution and revalidation still passed. Token
+  consumption and capacity acquisition happen before `Popen`, so a failed spawn requires a
+  fresh plan rather than enabling replay. Runs go through the existing `ExperimentTracker`,
+  so `soup runs` sees what MCP started.
+
+### Changed
+
+- **The MLX SFT dispatch route no longer imports the Transformers SFT wrapper
+  before choosing a backend (#394 by @Shutaru in #431).** The wrapper is import-light
+  today, but the standalone `soup-cli[mlx]` runtime no longer depends on it
+  remaining so. An additive Apple Silicon CI job verifies that `mlx` and
+  `mlx-lm` import, the PyTorch/TRL training stack is absent, and a one-step real
+  CLI SFT run completes. This hardens the runtime boundary; it does not claim to
+  resolve the still-unpinned torch-present hang reported in #394.
+- **`soup card` now links the ML-BOM and the in-toto/SLSA attestation — they are
+  first-class registry artifact kinds (#309 by @ousamabenyounes in #420).** `bom` and `attestation` were the
+  two compliance documents `soup card` could not surface: `RegistryStore` had no
+  such kinds, so there was no way to attach them. Added both to the valid-kind
+  set and a `--attach-to-registry <id>` flag to `soup bom emit` and
+  `soup attest emit` (mirroring the existing `--attach-to-registry` pattern);
+  once attached they appear in the card's artifact table for free. Signed
+  attestations also attach the detached `.sig` sidecar. The flag needs
+  `--output` (omitting it exits 2), and a requested registry attachment failure
+  exits 1 after preserving files already emitted.
 
 ### Fixed
 
-- **A run whose watcher died was reported `running` forever (#401).**
+- **Assistant-only masking no longer mistakes `BatchEncoding` keys for token
+  ids (#430 by @Shutaru in #439).** Tokenizer mapping outputs are read through `input_ids`, and
+  tensor-like ids are normalised to Python integers before they reach the
+  collator; missing or non-integer ids now fail loudly instead of building a
+  garbage label mask. A template that returns an all-zero assistant mask while
+  assistant messages exist now falls back to incremental rendering, avoiding a
+  silent all-`-100` no-op training run. The same mapping assumption was removed
+  from the data doctor.
+
+- **`soup data mix --optimize` wrote a recipe `soup train` could not load
+  (#330 by @blackcoderx in #440).** `render_mix_recipe_yaml` emitted `data.train` as a YAML list of
+  every searched dataset, but `DataConfig.train` is typed `str`, so the recipe
+  failed to load with `data -> train: Input should be a valid string`.
+  `data.train` now renders as the single highest-weighted dataset from the
+  search; the full ranked weight/path breakdown is kept as a comment above it
+  so no information is lost, and the comment explains that `data.interleave`
+  is not yet consumed by training.
+
+- **Layer streaming now verifies that every trainable LoRA parameter has real
+  storage after PEFT attaches the adapter (#433 reported by @lesterppo, fixed by @Faisal01011 in #435 and #437).** PEFT 0.18 creates streamed
+  adapters on `meta` for Soup to materialise, while PEFT 0.19 may create them as
+  real tensors immediately, so `materialize_meta_adapters()` returning `0`
+  cannot distinguish a healthy no-op from a missed adapter. The streamed build
+  now enforces the actual postcondition and refuses to install the runtime if a
+  trainable `lora_*` parameter remains on `meta`, naming the stranded parameter
+  instead of allowing a silent no-training run.
+
+- **Windows process liveness misread a process that exited with code 259 as
+  still running, forever (#424 by @blackcoderx in #436).** `GetExitCodeProcess` returns `STILL_ACTIVE`
+  (259) for a genuinely running process, but 259 is also a legal exit code, so
+  a child that exited *with* 259 was indistinguishable from one still running.
+  That silently defeated `ExperimentTracker`'s reconcile-on-read (#401) and
+  could wedge the MCP server's one-active-execution cap (#402) shut, refusing
+  every subsequent execution with no error an operator could act on. The check
+  now waits on the process handle with `WaitForSingleObject(handle, 0)`, which
+  is signalled the instant the process exits regardless of its exit code,
+  falling back to the exit-code read only if the wait itself fails. The two
+  byte-identical copies of this primitive in `experiment/tracker.py` and
+  `mcp_server/execution.py` are now one shared `utils/process_liveness.py`.
+
+- **`soup train --no-reexec` now prints the flags you actually typed (#372 by @AchuthReddy-16 in #415).**
+  The advisory `accelerate launch` command is derived from the same argv the
+  auto-reexec would have used, so `--fsdp` / `--deepspeed` / `--config` (and the
+  rest of the run-shaping tail, including `--name` and `--replay`) cannot silently
+  fall off the printed hint. Following that line used to train without FSDP.
+
+- **`detect_device()` and `get_gpu_info()` now recognise Apple Silicon MLX (#423 by @harshitthek in #428).**
+  Previously on Apple Silicon, `detect_device()` only probed PyTorch MPS and fell back
+  to `'cpu'`, triggering a false `Warning: 4bit quantization is not supported on CPU`
+  alert and silently downgrading `quantization` from `4bit` to `none`. Device and GPU
+  info detection now accept an optional `backend=` parameter: passing `backend="mlx"`
+  resolves to `'mlx'` with the chip name (e.g. `Apple Silicon (Apple M2 Max)`), preserves
+  4-bit quantization intact for `mlx-lm` pre-quantized models, reports Apple unified
+  memory in telemetry, and skips the CUDA-shaped analytical VRAM preflight on MLX runs.
+  The preflight skip is pinned by `TestHardwareFitGateIsMlxAware` (mirrors the
+  streaming-aware gate test). The known-limitation warning in
+  `docs/backends-and-ops.md` is replaced with the resolved behaviour.
+
+- **A run whose watcher died was reported `running` forever (#401 by @ousamabenyounes in #407).**
   `ExecutionManager._watch` runs as a `daemon=True` thread, so when the MCP
   server process exits it is killed without unwinding and `finish_execution`
   never runs — `ExperimentTracker` kept the run at `running` with no watcher
@@ -48,12 +255,21 @@ reproducing 70+ versions of notes.
   unknown outcome is never recorded as success, and the richer
   `completed`/`failed` terminal statuses are left untouched. `soup runs` no
   longer hardcodes `running` for a non-running row.
+- **Layer streaming now accepts a fast virtio/cloud disk instead of refusing it
+  as an HDD (#365 by @ousamabenyounes in #411).** `detect_disk_kind` trusted `/sys/block/<dev>/queue/rotational`,
+  which a paravirtual (virtio) block device defaults to `1` with no media hint —
+  so a genuinely NVMe-backed cloud disk (measured 1.5 GB/s read) was classified
+  `hdd` and denied the disk-overflow tier, the very audience the tier targets.
+  `rotational=0` stays authoritative (solid state); when the flag is unreliable
+  (`rotational=1`), the media type is now decided by a bounded, O_DIRECT
+  sequential-read measurement rather than the flag — NVMe-class throughput
+  (>= 1 GB/s) earns the tier, a genuinely slow disk still classifies `hdd` and is
+  still refused (160 seeks/step, plan P11). A new `training.stream_disk_kind`
+  override (`nvme`/`ssd`/`hdd`) is the escape hatch for the case where even that
+  is wrong; it prints what it overrode beside what was detected. Disk detection
+  may write a small scratch file next to the streamed shards to run the probe.
 
-### Fixed
-
-### Fixed
-
-- **The one-active-execution cap could double-book after a server restart (#402).**
+- **The one-active-execution cap could double-book after a server restart (#402 by @ousamabenyounes in #408).**
   `ExecutionManager._active_run_id` is in-memory, so a restarted MCP server
   started with an empty slot, saw free capacity, and would launch a second
   training while a child from the previous server (which survives a client
@@ -63,10 +279,8 @@ reproducing 70+ versions of notes.
   frees the slot rather than wedging it shut. `docs/commands.md` now states the
   actual scope of the cap.
 
-### Fixed
-
 - **`soup ship --noise-floor` now measures the leg-1 task axis in the judge modes,
-  so a judge-scored win smaller than the judge's own noise no longer counts (#403).**
+  so a judge-scored win smaller than the judge's own noise no longer counts (#403 by @ousamabenyounes in #419).**
   The floor was measured in `--task-mode metric` only; `judge_score` / `pairwise`
   printed a warning and left leg 1 at a 0.0 floor, i.e. the exact blindness the flag
   exists to remove. It is now measured: `judge_score` scores the base side N times
@@ -77,8 +291,48 @@ reproducing 70+ versions of notes.
   block so it is never read as a decode-only number. `--help` states the extra
   judge-API cost.
 
+- **`training.bnb_4bit_use_double_quant` was validated but never read — every 4-bit
+  path Soup builds the `BitsAndBytesConfig` for hardcoded double-quantization to `True`,
+  so `bnb_4bit_use_double_quant: false` passed validation and was silently ignored (#321 by @ousamabenyounes in #418).**
+  The flag is now threaded through the three call sites Soup owns — the resident loader
+  (`build_quantization_config_for_loader`), the layer-streaming path (`stream_setup` reads it
+  once and passes the SAME value to the sharder and the meta skeleton, so streamed-vs-resident
+  bit-exactness cannot drift), and the 4bit save path (`soup merge --no-double-quant` for the
+  `4bit` / `4bit_forced` save formats). The Unsloth loader is out of scope: `FastLanguageModel`
+  builds its own `BitsAndBytesConfig` internally with double-quant hardcoded on and exposes no
+  override, so that path cannot honour the flag. The schema field is now tri-state
+  (`Optional[bool]`, unset = `None`): unset resolves to the shipped default (double-quant on),
+  so a run that never set the flag trains identically, but because the resolved config now
+  carries the field, `soup ship --evidence` provenance and `soup lock check` will report a
+  one-time fingerprint drift on a previously-unset config even though the model numerics are
+  unchanged. The config-load footgun (`=true` requires `quantization: 4bit`) fires only on an
+  explicit `true`, and unset serializes as `None`, so a dumped-and-reloaded config no longer
+  trips it.
+- **`soup env check` now flags an installed package that violates Soup's own
+  declared version bound (#368 by @ousamabenyounes in #421).** `pip install "soup-cli[serve-fast]"` (vllm)
+  into a training venv silently pushes `transformers` past the `<5.0.0` cap Soup
+  declares, producing an environment Soup's own metadata says is unsupported with
+  no warning at any point. `env check` audits installed versions against the
+  bounds read from package metadata — not a hardcoded copy, since a second copy
+  of the cap is exactly the drift this catches — and exits 3 when one is violated,
+  independent of any lock file. An `extra == "X"` requirement is Soup's bound
+  only when `[X]` was opted into, which the running environment cannot confirm,
+  so its marker is evaluated and it is skipped rather than raised as a false
+  positive — except for the ABI-relevant `TRACKED_PACKAGES` set, which since the
+  v0.71.0 deps-split lives in metadata *only* under `extra == "train"/"all"/
+  "dev"` and therefore includes the `transformers <5.0.0` case #368 was reported
+  about. A package is counted once even when its bound is restated under several
+  extras. If `packaging` is somehow unimportable the audit still degrades to a
+  clean report so `env check` keeps working, but now says so rather than
+  reporting a silent clean it never verified. The bounds audit no longer
+  short-circuits the lock diagnostic (both
+  print). `packaging` is a declared dependency now — the audit degraded to a
+  silent "clean" without it, the wrong direction for a checker.
+  `docs/serving-and-export.md` states the separate-environment guidance for
+  `[serve-fast]`.
+
 - **`kl_control` rewrote the trainer's β/kl_coef on every step, including a `hold`, so a
-  non-acting run was numerically identical to `log_only` (#371).** `_run_bang_bang` called
+  non-acting run was numerically identical to `log_only` (#371 by @AmirF194 in #414).** `_run_bang_bang` called
   `_apply_coefficient` unconditionally; on a `hold` the controller writes back the value
   already there, which is a no-op value but not a no-op write. The write is now skipped when
   the bang-bang step holds, and the mitigation log records `mitigation_status` (`held` /
@@ -86,13 +340,13 @@ reproducing 70+ versions of notes.
   parsing the free-text `action` reason.
 
 - **`extract_mcq_letter` scored zero for `\boxed {A}` — whitespace between the
-  command and the brace (#357).** The shipped `\boxed\{` regex tolerates spaces
+  command and the brace (follow-up to #357, by @ousamabenyounes in #396).** The shipped `\boxed\{` regex tolerates spaces
   *inside* the braces but not between `\boxed` and `{`; LaTeX permits it there and
   models emit it, so `\boxed { C }` still read as no answer and was not rescued by
   the cue tier either. The boxed-letter regex now allows `\s*` after the command.
 
 - **`soup draft distill --steps N` now delivers ~N optimiser steps instead of
-  N/4.44 (#364).** The epoch count that realised `--steps` divided the request
+  N/4.44 (#364 by @ousamabenyounes in #399).** The epoch count that realised `--steps` divided the request
   by `rows // batch_size`, ignoring that `val_split` (0.1) removes rows from
   training and `gradient_accumulation_steps` (4) micro-batches make one
   optimiser step — both divide the budget, so every distill run trained for
@@ -101,10 +355,9 @@ reproducing 70+ versions of notes.
   (`val_split`, `gradient_accumulation_steps`) so the arithmetic and the trainer
   cannot drift, and the pre-flight prints the resolved step count.
 
-### Fixed
 
 - **`MitigationLogWriter` silently dropped every record once its parent directory
-  vanished mid-run (#343).** `record()` reopens the log per call and swallowed the
+  vanished mid-run (#343 by @ousamabenyounes in #398).** `record()` reopens the log per call and swallowed the
   `OSError` from `open("ab")` with a bare `return`, so when a shared temp root was
   cleaned by another process the controller kept acting while its log quietly stopped
   growing — the run completes while its evidence goes missing, the failure shape this

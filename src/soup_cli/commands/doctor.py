@@ -62,7 +62,9 @@ def doctor(
         help=(
             "Detect the disk media type (NVMe / SSD / HDD). Layer streaming's "
             "disk overflow tier needs NVMe. Off by default: the probe costs ~9 s "
-            "on Windows."
+            "on Windows, and on Linux it WRITES a ~64 MiB scratch file "
+            "(.soup-diskprobe-*, git-ignored) into the current directory to "
+            "measure sequential read throughput."
         ),
     ),
 ):

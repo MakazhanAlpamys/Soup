@@ -251,8 +251,15 @@ soup serve --model ./output --kv-cache-type q8_0   # 8-bit quantized cache (need
 
 Use [vLLM](https://github.com/vllm-project/vllm) for significantly better throughput in production:
 
+> **Install `[serve-fast]` in a separate environment from `[train]`.** Their
+> resolutions are genuinely incompatible today — `pip install vllm` into a
+> training venv silently downgrades `torch` and pushes `transformers` past
+> Soup's own `<5.0.0` cap. `soup env check` now flags an installed package that
+> violates this distribution's declared bounds (exit code 3), so you can catch a
+> contaminated venv before a run relies on it.
+
 ```bash
-# Install vLLM support
+# Install vLLM support (in its own environment, not the training one)
 pip install "soup-cli[serve-fast]"
 
 # Start with vLLM backend
@@ -517,7 +524,7 @@ soup ui
 
 **Pages:**
 - **Dashboard** — view all experiment runs, loss charts, system info, multi-run comparison
-- **New Training** — create configs from templates or 143 ready-made recipes, validate, start training with live SSE log streaming and progress bar
+- **New Training** — create configs from templates or 146 ready-made recipes, validate, start training with live SSE log streaming and progress bar
 - **Data Explorer** — browse and inspect datasets (JSONL, JSON, CSV, Parquet)
 - **Model Chat** — chat with streaming responses, configurable temperature/top_p/max_tokens, system prompt, adapter selection, markdown rendering, chat export
 
@@ -526,7 +533,7 @@ soup ui
 - **Enhanced Metrics** — 2x2 chart grid (loss, LR, grad_norm, throughput) + GPU memory chart, eval results table
 - **Multi-Run Compare** — overlay loss curves from up to 5 runs side-by-side
 - **Chat Upgrade** — SSE streaming via proxy, typing indicator, cancel button, markdown renderer (bold, italic, code blocks), chat export as JSON
-- **Config Builder** — recipe dropdown (143 recipes), config schema API for dynamic form generation
+- **Config Builder** — recipe dropdown (146 recipes), config schema API for dynamic form generation
 
 **Security:** The Web UI generates a random auth token at startup (printed to console). All mutating endpoints (start/stop training, delete runs, inspect data, validate config) require `Authorization: Bearer <token>` header. CORS is restricted to the served origin. Data inspection is sandboxed to the working directory.
 

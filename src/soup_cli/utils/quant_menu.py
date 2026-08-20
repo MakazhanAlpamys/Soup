@@ -348,7 +348,12 @@ def build_quantization_config_for_loader(
             "load_in_4bit": True,
             "bnb_4bit_quant_type": "nf4",
             "bnb_4bit_compute_dtype": get_compute_dtype(),
-            "bnb_4bit_use_double_quant": True,
+            # #321 — honour the configured flag instead of hardcoding True. The
+            # schema field is tri-state (unset resolves to on), so existing 4-bit
+            # users are unaffected; setting it False now actually reaches BNB. The
+            # streamed and save paths thread the same resolved bool so all three
+            # stay in agreement.
+            "bnb_4bit_use_double_quant": tcfg.double_quant_on,
         }
         storage = getattr(tcfg, "bnb_4bit_quant_storage", None)
         if storage:

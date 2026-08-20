@@ -1,5 +1,3 @@
-# SPDX-License-Identifier: AGPL-3.0-only
-# Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 """One-active-execution cap survives a server restart (issue #402).
 
 `ExecutionManager._active_run_id` is in-memory: a restarted server starts with
@@ -86,7 +84,7 @@ def test_capacity_check_rejects_a_dead_pid_without_help_from_reconcile(
 
     #407 rewrites a stale 'running' row on read, so by the time
     `_live_persisted_run` inspects `status` the dead row is already terminal —
-    which means its `_pid_is_alive` guard is never the thing under test.
+    which means its `process_is_alive` guard is never the thing under test.
     Measured: deleting that guard passes all 41 MCP tests. Here reconcile is
     neutralised so the row stays 'running' with a dead pid, leaving the cap's
     own check as the only thing that can reject it. The two are each other's

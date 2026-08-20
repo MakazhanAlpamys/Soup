@@ -38,6 +38,9 @@
       <img src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1217869&amp;theme=light" alt="Soup CLI - Fine-tune an 8B LLM on a 4 GB laptop GPU | Product Hunt" width="250" height="54">
     </picture>
   </a>
+  <a href="https://trendshift.io/repositories/98395?utm_source=repository-badge&amp;utm_medium=badge&amp;utm_campaign=badge-repository-98395" target="_blank" rel="noopener noreferrer">
+    <img src="https://trendshift.io/api/badge/repositories/98395" alt="MakazhanAlpamys/Soup | Trendshift" width="250" height="55">
+  </a>
 </p>
 
 ---
@@ -79,33 +82,39 @@ infrastructure instead of improving models. Soup fixes that.
 
 ## What's New
 
-**v0.73.2 — the release gate stops lying in both directions.** `soup ship` answers one
-question: did this model get better, or did I break it? Two of its suites were ranking by
-the wrong thing, and one whole failure direction had no detector at all.
+**v0.73.3 — every pull request in this release came from someone other than the
+maintainer.** All 24 of them, from eight people, five of whom appear here for the first
+time. What they found is the interesting part: four separate flags that were validated,
+documented, and then read by nothing.
 
-- **A suite scored 0.225 for a model that got it right 40/40.** `mini_tool_call` was
-  ranking *brace hygiene*: the model emitted one closing brace short, so the parse fell
-  back to the inner object and the scorer rejected it for lacking the outer key. And
-  `mini_mmlu` scored Llama-3.1-8B at **0.423 — below a 0.5B** — because the extractor did
-  not know `\boxed{C}` and the prompt never asked for a letter. Both fixed; 0.423 → 0.731.
-- **New: a benign-prompt axis.** Leg 2 flagged a *drop* in refusal rate and had no reverse,
-  so a tune that refuses everything read as a monotone safety improvement. Two models with
-  byte-identical scores on all seven shipped suites, one of which refuses every benign
-  request, were indistinguishable to the gate. `mini_over_refusal` is its mirror; paired
-  with the safety suite, neither can be gamed alone.
-- **New: `soup ship --noise-floor N`** re-runs the base model N times and refuses to call
-  any delta smaller than the measured spread significant. Greedy decoding is not
-  deterministic on GPU — same model, no adapter, five runs spread **0.015–0.020** against a
-  0.05 threshold, and four of six paired deltas in that session sat inside the floor. It
-  **sizes** the effect; it does not calibrate a threshold, and the release says so.
-- **A caller error was indistinguishable from a regression.** A non-callable generator
-  scored `0.0` on three suites and raised on the others — and in leg 2 a 0.0 reads as
-  "failed every item", i.e. it failed in the direction that looks like a finding.
-- Also: `soup data split --stratify-semantic` (#388) and `soup mcp serve --allow-execute`
-  (#391), both from outside contributors.
+- **Assistant-only masking trained on zero tokens, with a normal loss curve.** A
+  tokenizer returning `BatchEncoding` — which is not a `dict` — slipped past the guard,
+  so the label mask was built from the mapping's **key strings**. No exception, no
+  warning, a loss curve that looks like training. Found by reading the type, not by
+  hitting the bug.
+- **On Apple Silicon, `quantization: 4bit` was silently rewritten to `none`.**
+  `detect_device()` did not know MLX, so every run reported "CPU (no GPU detected)" and
+  quietly downgraded. The label was never the harm; the quantization decision is now
+  explicit and testable instead of hidden inside a 900-line function.
+- **`soup train --no-reexec` printed a launch command with your own flags missing** —
+  follow it literally and you trained without `--fsdp`, and **the run succeeded**, so
+  nothing pointed back at the hint. Two hand-maintained copies of "what the user typed";
+  the printed one is deleted, and the hint now derives from the argv that actually
+  launches the run.
+- **`training.bnb_4bit_use_double_quant` was read by nothing.** Every 4-bit path
+  hardcoded `True`, so setting it to `false` changed your config fingerprint and nothing
+  else. Fixing it correctly also meant *not* defaulting the field: a plain `True` breaks
+  round-tripping for 21 of 173 shipped configs.
+- **On Windows, a process that genuinely exits with code 259 read as alive forever**,
+  because that is also `STILL_ACTIVE`. It defeated run reconciliation and could wedge the
+  MCP execution cap shut with no error an operator could act on.
+- **New: `soup mcp serve --allow-execute`** runs a planned training or export behind a
+  single-use, server-generated confirmation token — no command, no argv, no
+  client-supplied environment — with the config snapshotted at plan time and protected
+  paths digested by content, so a model cannot be swapped between planning and running.
 
-The measurement record for the previous release's VRAM work, published as written —
-including the **three readings withdrawn during it** — is
+The measurement record for the earlier VRAM work, published as written — including the
+**three readings withdrawn during it** — is
 [`benchmarks/gate-v0.73.1-measured-vram-fit.md`](benchmarks/gate-v0.73.1-measured-vram-fit.md).
 
 ```yaml

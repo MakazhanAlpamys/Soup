@@ -889,7 +889,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
 
         # Cut Cross-Entropy (v0.28.0) — patch BEFORE model loading
         if tcfg.use_cut_ce:
-            from soup_cli.utils.cut_ce import apply_cut_ce
+            from soup_cli.utils.cut_ce import NO_MATCHING_ARCHITECTURE_MESSAGE, apply_cut_ce
 
             if apply_cut_ce(cfg.base):
                 console.print(
@@ -897,10 +897,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
                     "large-vocab CE replaced with chunked CCE kernel"
                 )
             else:
-                console.print(
-                    "[yellow]Cut Cross-Entropy: no matching architecture found "
-                    "or cut_cross_entropy not installed[/]"
-                )
+                console.print(f"[yellow]Cut Cross-Entropy: {NO_MATCHING_ARCHITECTURE_MESSAGE}[/]")
 
         console.print(f"[dim]Loading tokenizer: {cfg.base}[/]")
         self.tokenizer = AutoTokenizer.from_pretrained(

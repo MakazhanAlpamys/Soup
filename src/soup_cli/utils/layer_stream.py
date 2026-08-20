@@ -36,6 +36,13 @@ STREAM_SOURCES = ("auto", "ram", "disk")
 #: model_bytes must be under this fraction of free RAM to claim the RAM tier.
 RAM_TIER_HEADROOM = 0.7
 
+# Measured throughput a page-locked RAM store buys over a pageable one
+# (benchmarks/gate-h100-validation.md): 6.56x on real Qwen2.5-32B NF4, 7.41x on
+# a 32-layer synthetic. Stated out loud whenever pinning is disabled so the cost
+# is not absorbed silently — a silent fallback spends the entire margin.
+PIN_THROUGHPUT_GAIN_REAL = 6.56
+PIN_THROUGHPUT_GAIN_SYNTHETIC = 7.41
+
 # --- buffers --------------------------------------------------------------
 MIN_STREAM_BUFFERS = 2
 MAX_STREAM_BUFFERS = 8
@@ -247,22 +254,52 @@ DISK_KINDS = (_NVME, "ssd", "hdd", "unknown")
 #: actually depends on the answer.
 DiskKind = Union[str, Callable[[], str]]
 
-_DISK_KIND_CACHE: Dict[str, str] = {}
+@dataclass(frozen=True)
+class DiskClassification:
+    """A disk verdict and, when the verdict was DERIVED from an O_DIRECT read,
+    the rate that produced it.
+
+    ``measured_bps`` is set ONLY when ``kind`` came from the measured-throughput
+    fallback (the virtio/#365 path). It is ``None`` for NVMe-by-name,
+    ``rotational=0``, a non-Linux probe, and — crucially — an explicit
+    ``training.stream_disk_kind`` override, whose verdict is the user's, not the
+    probe's. Carrying the rate ALONGSIDE the kind (not in module state) means a
+    refusal can only ever cite the rate that produced its OWN verdict: the two
+    cannot desync across a cache hit or an override.
+    """
+
+    kind: str
+    measured_bps: Optional[float] = None
 
 
-def detect_disk_kind(path: str = ".") -> str:
-    """Media type of the volume holding ``path``: nvme / ssd / hdd / unknown.
+_DISK_KIND_CACHE: Dict[str, DiskClassification] = {}
 
-    **Costs about 9 s on Windows** (measured), because the only reliable source
-    is a PowerShell ``Get-PhysicalDisk`` CIM query. That is why ``choose_tier``
-    takes a *callable* and only invokes it when the base does not fit in RAM —
-    the answer is irrelevant on the RAM tier, which is the common case. The
-    result is cached per process.
+# --- measured-throughput fallback (#365) ----------------------------------
+#: Bytes read by the O_DIRECT probe when the rotational flag is untrustworthy.
+#: 64 MiB clears a device's small write-back window yet reads in well under a
+#: second on anything at or above the tier floor (~0.06 s at 1 GB/s), keeping
+#: the fallback bounded (criterion 4).
+_MEASURE_READ_BYTES = 64 * 1024 * 1024
+#: How many times the O_DIRECT read is repeated; the best (fastest) sample wins.
+#: A single read can be slowed by a cold device queue or first-access latency and
+#: under-measure a genuinely fast disk, wrongly refusing it — the single-sample
+#: threshold weakness the #365 review called out. Three bounded reads of a 64 MiB
+#: file stay well under a second total on any tier-eligible device.
+_MEASURE_READ_SAMPLES = 3
+#: A device must sustain at least this sequential read rate to earn the NVMe
+#: disk-overflow tier. The tier is NVMe-class by policy — ``choose_tier``
+#: already refuses a SATA SSD (~550 MB/s) — so the floor sits above SATA at
+#: 1.0 GB/s: the reported virtio disk (1.5 GB/s read) clears it, a spinning
+#: disk (~0.1-0.25 GB/s) does not. Consulted ONLY when the rotational flag is
+#: unreliable; where a real media type is readable that route still wins.
+NVME_TIER_MIN_BYTES_PER_S = 1_000_000_000
 
-    ``unknown`` is returned rather than guessed whenever the platform cannot be
-    probed, and ``choose_tier`` refuses it. Refusing is the safe direction: the
-    cost of wrongly believing a spinning disk is NVMe is a run that thrashes for
-    hours (plan P11 — 80 shards x 2 reads = 160 seeks per step).
+
+def classify_disk_kind(path: str = ".") -> DiskClassification:
+    """Full disk verdict for ``path``: the ``kind`` plus, when the verdict was
+    measured, the rate that produced it. Cached per volume. The callable
+    ``choose_tier`` holds returns THIS, so a refusal cites the coupled rate and
+    never a stale/unrelated figure from module state.
     """
     import os
 
@@ -272,9 +309,58 @@ def detect_disk_kind(path: str = ".") -> str:
     key = os.path.splitdrive(resolved)[0] or resolved
     if key in _DISK_KIND_CACHE:
         return _DISK_KIND_CACHE[key]
-    kind = _probe_disk_kind(path)
-    _DISK_KIND_CACHE[key] = kind
-    return kind
+    result = _probe_disk_kind(path)
+    _DISK_KIND_CACHE[key] = result
+    return result
+
+
+def detect_disk_kind(path: str = ".") -> str:
+    """Media type of the volume holding ``path``: nvme / ssd / hdd / unknown.
+
+    **Costs about 9 s on Windows** (measured), because the only reliable source
+    is a PowerShell ``Get-PhysicalDisk`` CIM query. That is why ``choose_tier``
+    takes a *callable* and only invokes it when the base does not fit in RAM —
+    the answer is irrelevant on the RAM tier, which is the common case. The
+    result is cached per process. On Linux this WRITES a small scratch file to
+    probe throughput (see ``_measure_seq_read_bytes_per_s``).
+
+    ``unknown`` is returned rather than guessed whenever the platform cannot be
+    probed, and ``choose_tier`` refuses it. Refusing is the safe direction: the
+    cost of wrongly believing a spinning disk is NVMe is a run that thrashes for
+    hours (plan P11 — 80 shards x 2 reads = 160 seeks per step).
+    """
+    return classify_disk_kind(path).kind
+
+
+def resolve_disk_kind(
+    path: str,
+    override: Optional[str] = None,
+    *,
+    notify: Optional[Callable[[str], None]] = None,
+) -> DiskClassification:
+    """Detected classification, or an explicit override with a loud notice (#365).
+
+    ``training.stream_disk_kind`` is the escape hatch for the case where even
+    the measured fallback is wrong. When set it wins, but detection still runs
+    so the notice can report what was overridden and what was detected;
+    ``choose_tier`` then sees the override. Detection is wrapped because a
+    diagnostic read must not break a run the user has already told us how to
+    classify.
+    """
+    if override is None:
+        return classify_disk_kind(path)
+    try:
+        detected = detect_disk_kind(path)
+    except Exception:  # noqa: BLE001 — never let the probe break an overridden run
+        detected = "unknown"
+    if notify is not None:
+        notify(
+            f"[yellow]disk kind overridden:[/] using "
+            f"training.stream_disk_kind={override!r} (detected {detected!r})"
+        )
+    # The verdict is the user's override, NOT the probe's — carry no measured
+    # rate, so a refusal can never cite a reading the user deliberately overrode.
+    return DiskClassification(override)
 
 
 def _resolve_tool(name: str, *fallbacks: str) -> Optional[str]:
@@ -302,7 +388,105 @@ def _resolve_tool(name: str, *fallbacks: str) -> Optional[str]:
 _POWERSHELL_FALLBACK = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
 
 
-def _probe_disk_kind(path: str) -> str:
+def _classify_measured_read(measured_bps: Optional[float]) -> str:
+    """Classify by a measured read a device the rotational flag calls spinning.
+
+    virtio and other paravirtual block devices expose no media hint, so the
+    guest kernel defaults ``rotational`` to 1 and a genuinely NVMe-backed cloud
+    disk is otherwise refused the overflow tier (#365). An actual HDD refusal is
+    correct (80 shards x 2 reads = 160 seeks per step, plan P11), so the
+    discriminator is throughput, not the flag: at or above
+    ``NVME_TIER_MIN_BYTES_PER_S`` the device is NVMe-class and usable; below it —
+    or unmeasurable (``None``) — it is treated as ``hdd`` and refused, the safe
+    direction.
+    """
+    if measured_bps is not None and measured_bps >= NVME_TIER_MIN_BYTES_PER_S:
+        return _NVME
+    return "hdd"
+
+
+def _measure_seq_read_bytes_per_s(path: str) -> Optional[float]:
+    """Sequential ``O_DIRECT`` read throughput of the volume holding ``path``.
+
+    Writes a small scratch file beside ``path``, reopens it with ``O_DIRECT`` to
+    bypass the page cache, and times ``_MEASURE_READ_SAMPLES`` page-aligned
+    sequential reads, returning the **best** (fastest) one. Repeating the read
+    and keeping the best rejects a single cold/slow sample that would otherwise
+    under-measure a fast device and wrongly refuse it. Best effort: any failure
+    (no ``O_DIRECT`` on this filesystem, no write permission, no monotonic clock)
+    returns ``None`` so the caller stays conservative, and the scratch file is
+    always removed. Each read is bounded by ``_MEASURE_READ_BYTES`` so the probe
+    cannot become the ~9 s cost the Windows probe already carries (criterion 4).
+    """
+    import mmap
+    import os
+    import tempfile
+    import time
+
+    o_direct = getattr(os, "O_DIRECT", None)
+    if o_direct is None:  # non-Linux — the caller only reaches here on Linux
+        return None
+    # Probe the volume that actually holds the shards. The caller passes a
+    # DIRECTORY (shard_dir), so write the scratch file inside it; only fall back
+    # to the parent for a file path. Taking dirname of a directory would measure
+    # the PARENT filesystem — wrong when the target is its own mount point.
+    resolved = os.path.realpath(os.path.expanduser(path))
+    directory = resolved if os.path.isdir(resolved) else (os.path.dirname(resolved) or ".")
+    fd_w = None
+    fd_r = None
+    scratch = None
+    buf = None
+    try:
+        fd_w, scratch = tempfile.mkstemp(dir=directory, prefix=".soup-diskprobe-")
+        block = b"\0" * (1024 * 1024)
+        written = 0
+        while written < _MEASURE_READ_BYTES:
+            written += os.write(fd_w, block[: _MEASURE_READ_BYTES - written])
+        os.fsync(fd_w)
+        os.close(fd_w)
+        fd_w = None
+
+        buf = mmap.mmap(-1, _MEASURE_READ_BYTES)  # page-aligned for O_DIRECT
+        fd_r = os.open(scratch, os.O_RDONLY | o_direct)
+        best_bps: Optional[float] = None
+        for _ in range(_MEASURE_READ_SAMPLES):
+            os.lseek(fd_r, 0, os.SEEK_SET)  # offset 0 stays O_DIRECT-aligned
+            start = time.monotonic()
+            read_total = os.readv(fd_r, [buf])
+            elapsed = time.monotonic() - start
+            if elapsed <= 0 or read_total <= 0:
+                continue
+            bps = read_total / elapsed
+            if best_bps is None or bps > best_bps:
+                best_bps = bps
+        return best_bps
+    except (OSError, ValueError):
+        return None
+    finally:
+        for fd in (fd_w, fd_r):
+            if fd is not None:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+        if buf is not None:
+            try:
+                buf.close()
+            except (BufferError, ValueError):
+                # Isolated from the unlink below so a mmap-close failure can
+                # never leak the 64 MiB scratch file.
+                pass
+        if scratch is not None:
+            try:
+                os.unlink(scratch)
+            except OSError:
+                pass
+
+
+def _probe_disk_kind(path: str) -> DiskClassification:
+    """Classify the volume holding ``path``, carrying the measured rate only when
+    the verdict was DERIVED from a read (so a refusal can never cite a rate that
+    did not produce its own verdict — see ``DiskClassification``)."""
     import os
     import platform
     import subprocess
@@ -311,22 +495,30 @@ def _probe_disk_kind(path: str) -> str:
     try:
         if system == "Linux":
             # /sys/block/<dev>/queue/rotational: 1 spinning, 0 solid state.
-            # Instant and authoritative; the device name distinguishes NVMe.
+            # The device name distinguishes NVMe, and rotational=0 is
+            # authoritative — a device that declares itself solid state is one.
+            # rotational=1 is NOT authoritative: virtio defaults it to 1 with no
+            # media hint, so a fast cloud disk lies as spinning (#365). Fall back
+            # to a measured read there rather than trust the flag.
             names = sorted(os.listdir("/sys/block"))
             for dev in names:
                 if not dev.startswith("nvme"):
                     continue
-                return _NVME
+                return DiskClassification(_NVME)
             for dev in names:
                 rot = os.path.join("/sys/block", dev, "queue", "rotational")
                 if os.path.exists(rot):
                     with open(rot, encoding="utf-8") as handle:
-                        return "hdd" if handle.read().strip() == "1" else "ssd"
-            return "unknown"
+                        value = handle.read().strip()
+                    if value == "0":
+                        return DiskClassification("ssd")
+                    measured = _measure_seq_read_bytes_per_s(path)
+                    return DiskClassification(_classify_measured_read(measured), measured)
+            return DiskClassification("unknown")
         if system == "Windows":
             shell = _resolve_tool("powershell", _POWERSHELL_FALLBACK)
             if shell is None:
-                return "unknown"
+                return DiskClassification("unknown")
             out = subprocess.run(
                 [
                     shell, "-NoProfile", "-NonInteractive", "-Command",
@@ -336,7 +528,7 @@ def _probe_disk_kind(path: str) -> str:
                 capture_output=True, text=True, timeout=60, check=False,
             )
             if out.returncode != 0 or not out.stdout.strip():
-                return "unknown"
+                return DiskClassification("unknown")
             import json
 
             payload = json.loads(out.stdout)
@@ -347,25 +539,25 @@ def _probe_disk_kind(path: str) -> str:
             # has NVMe.
             for candidate in ("hdd", "unknown", "ssd", _NVME):
                 if candidate in kinds:
-                    return candidate
-            return "unknown"
+                    return DiskClassification(candidate)
+            return DiskClassification("unknown")
         if system == "Darwin":
             tool = _resolve_tool("diskutil", "/usr/sbin/diskutil")
             if tool is None:
-                return "unknown"
+                return DiskClassification("unknown")
             out = subprocess.run(
                 [tool, "info", "-plist", "/"],
                 capture_output=True, text=True, timeout=60, check=False,
             )
             text = out.stdout.lower()
             if "nvme" in text:
-                return _NVME
+                return DiskClassification(_NVME)
             if "solid state" in text or ("<true/>" in text and "solidstate" in text):
-                return "ssd"
-            return "unknown"
+                return DiskClassification("ssd")
+            return DiskClassification("unknown")
     except (OSError, ValueError, subprocess.SubprocessError):
-        return "unknown"
-    return "unknown"
+        return DiskClassification("unknown")
+    return DiskClassification("unknown")
 
 
 def _windows_kind(disk: dict) -> str:
@@ -404,13 +596,30 @@ def choose_tier(
     """
     if model_bytes < free_ram_bytes * headroom:
         return TIER_RAM
-    kind = disk_kind() if callable(disk_kind) else disk_kind
+    result = disk_kind() if callable(disk_kind) else disk_kind
+    # The callable may return a DiskClassification (kind + the rate that produced
+    # it) or a bare kind string (tests, explicit callers). Either way the rate is
+    # taken FROM the same result, so it can only ever describe THIS verdict.
+    if isinstance(result, DiskClassification):
+        kind, measured = result.kind, result.measured_bps
+    else:
+        kind, measured = result, None
     if kind == _NVME:
         return TIER_DISK
+    # When the verdict came from a measured read (the virtio/#365 path), cite the
+    # rate that earned the refusal so "not NVMe" is not an opaque verdict — the
+    # operator can see how far under the floor the disk landed. measured is None
+    # for a name/flag/override verdict, so the note only appears when it is true.
+    measured_note = (
+        f" (measured {measured / 1e9:.2f} GB/s, under the "
+        f"{NVME_TIER_MIN_BYTES_PER_S / 1e9:.1f} GB/s NVMe floor)"
+        if measured is not None
+        else ""
+    )
     raise ValueError(
         f"layer streaming needs NVMe or more RAM: the base needs "
         f"{model_bytes / 1e9:.1f} GB, only {free_ram_bytes / 1e9:.1f} GB of RAM "
-        f"is free, and the detected disk is {kind!r} (not NVMe). "
+        f"is free, and the detected disk is {kind!r} (not NVMe){measured_note}. "
         f"Free RAM, pick a smaller base, or move the model to an NVMe drive."
     )
 
@@ -423,7 +632,12 @@ class PinDecision:
     reason: str
 
 
-def decide_pinning(store_bytes: int, pinned_limit_bytes: Optional[int]) -> PinDecision:
+def decide_pinning(
+    store_bytes: int,
+    pinned_limit_bytes: Optional[int],
+    *,
+    stream_pin: Optional[bool] = None,
+) -> PinDecision:
     """Pin the RAM store when the box can actually page-lock it.
 
     Measured on the dev box (RTX 3050 4 GB / 16.9 GB RAM): the maximum
@@ -433,7 +647,40 @@ def decide_pinning(store_bytes: int, pinned_limit_bytes: Optional[int]) -> PinDe
     ``copy_(non_blocking=True)`` synchronous and therefore costs overlap:
     measured GPU utilisation dropped from 96.8% (pinned) to 79.3% (pageable).
     That cost is stated out loud rather than absorbed silently.
+
+    ``stream_pin`` (``training.stream_pin``) overrides the automatic choice:
+    ``None`` keeps the behaviour above; ``False`` forces the pageable store and
+    states its throughput cost; ``True`` forces the pinned store — the run then
+    refuses (in the runtime) rather than falling back if the box cannot
+    page-lock it. The refusal itself lives where the pin is actually attempted;
+    here ``True`` only records the intent so the pre-flight reflects it.
     """
+    if stream_pin is False:
+        return PinDecision(
+            pinned=False,
+            reason=(
+                "training.stream_pin=false forces a pageable RAM store. "
+                "Host-to-device copies become synchronous, which costs overlap: "
+                "measured GPU utilisation drops from ~97% to ~79%, and "
+                f"page-locking is worth up to {PIN_THROUGHPUT_GAIN_REAL:.2f}x "
+                "measured throughput (Qwen2.5-32B NF4), "
+                f"{PIN_THROUGHPUT_GAIN_SYNTHETIC:.2f}x on a synthetic. Unset "
+                "stream_pin to let the box page-lock when it can."
+            ),
+        )
+    if stream_pin is True:
+        return PinDecision(
+            pinned=True,
+            reason=(
+                # Scoped to the RAM tier on purpose: this note is now surfaced
+                # for a forced-on pin, and the disk tier / CPU announce that
+                # pinning is inapplicable and PROCEED. An unconditional "the run
+                # refuses" here would print a promise those paths do not keep.
+                "training.stream_pin=true forces a page-locked store; on the RAM "
+                "tier the run refuses rather than falling back to a pageable "
+                "store if the box cannot page-lock it."
+            ),
+        )
     if pinned_limit_bytes is None:
         return PinDecision(
             pinned=True,
@@ -1036,6 +1283,7 @@ def build_stream_plan(
     pinned_limit_bytes: Optional[int],
     buffers: int = DEFAULT_STREAM_BUFFERS,
     disk_kind: DiskKind = _NVME,
+    stream_pin: Optional[bool] = None,
 ) -> StreamPlan:
     """Decide tier + pinning and record every caveat as a visible note."""
     buffers = validate_stream_buffers(buffers)
@@ -1057,8 +1305,19 @@ def build_stream_plan(
             "tier is unmeasured on this hardware. Set stream_source='ram' to "
             "refuse rather than fall back."
         )
-    decision = decide_pinning(store_bytes, pinned_limit_bytes)
-    if not decision.pinned:
+    decision = decide_pinning(store_bytes, pinned_limit_bytes, stream_pin=stream_pin)
+    # #366 review round 3 — "record, never silence". An automatic pinned store is
+    # the unremarkable default and stays quiet, but an EXPLICIT stream_pin=true is
+    # a user decision, so the pre-flight states it too. Without this the forced-on
+    # branch was the one path that decided something and said nothing, which is
+    # also what decide_pinning's docstring already promised it did not do.
+    #
+    # Restricted to the RAM tier deliberately: the reason says the store IS
+    # page-locked, which is only true where a RAM store exists. On the disk tier
+    # there is none, and printing it there would state a promise that tier does
+    # not keep — the runtime announces the inapplicability instead
+    # (layer_stream_runtime._build_source), so the decision is still recorded.
+    if not decision.pinned or (stream_pin is True and tier == TIER_RAM):
         notes.append(decision.reason)
     return StreamPlan(
         arch=arch,

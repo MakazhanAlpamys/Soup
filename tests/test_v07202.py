@@ -909,6 +909,82 @@ class TestPeftDispatchesTheBnbLoraPath:
         )
         assert streamed.load_in_4bit is resident.load_in_4bit
 
+    @pytest.mark.parametrize(
+        "dq_line,expected",
+        [
+            ("  bnb_4bit_use_double_quant: false\n", False),  # explicit off reaches BOTH
+            ("", True),  # unset resolves to the shipped default (on) on BOTH
+        ],
+    )
+    def test_stream_setup_threads_double_quant_into_sharder_and_runtime(
+        self, tmp_path, monkeypatch, dq_line, expected
+    ):
+        """#321 re-review finding 2: the earlier tests were vacuous — one passed
+        against main's untouched builder, the other only grepped the source and
+        fired on spelling. This drives ``_setup_streaming_transformers`` and
+        asserts the SAME resolved flag reaches BOTH the sharder and the runtime
+        builder, so streamed-vs-resident cannot drift. CPU-only: shard_checkpoint
+        is spied (its real CPU NF4 packing runs) and build_streamed_model stubbed.
+
+        Mutation control: hardcoding either call site back to ``True`` fails the
+        ``expected is False`` case; dropping the read fails both cases.
+        """
+        from unittest.mock import MagicMock
+
+        from soup_cli.config.loader import load_config_from_string
+        from soup_cli.trainer.sft import SFTTrainerWrapper
+
+        weights, _, _ = _tiny_llama_dir(tmp_path, n_layers=2)
+        _write_tiny_tokenizer(weights)
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("SOUP_LAYER_STREAM_CACHE_DIR", str(tmp_path / "cache"))
+        monkeypatch.setattr(
+            "soup_cli.utils.spectrum_scan.resolve_model_weights", lambda *_a, **_k: weights
+        )
+        monkeypatch.setattr(
+            "soup_cli.utils.layer_stream.free_ram_bytes", lambda: 10_000_000_000
+        )
+        monkeypatch.setattr(
+            "soup_cli.utils.layer_stream.detect_disk_kind", lambda *_a, **_k: "nvme"
+        )
+
+        captured = {}
+        import soup_cli.utils.layer_shard as shard_mod
+        import soup_cli.utils.layer_stream_runtime as rt_mod
+
+        real_shard = shard_mod.shard_checkpoint
+
+        def spy_shard(*args, **kwargs):
+            captured["shard"] = kwargs.get("double_quant")
+            return real_shard(*args, **kwargs)
+
+        def fake_build(**kwargs):
+            captured["build"] = kwargs.get("double_quant")
+            runtime = MagicMock()
+            runtime.tier = "ram"
+            runtime.stats.return_value = {
+                "tier": "ram", "store_bytes": 1, "pinned": False,
+                "buffers": 2, "buffer_bytes": 4, "n_layers": 2,
+            }
+            return MagicMock(), runtime
+
+        monkeypatch.setattr(shard_mod, "shard_checkpoint", spy_shard)
+        monkeypatch.setattr(rt_mod, "build_streamed_model", fake_build)
+
+        cfg = load_config_from_string(
+            f"base: {weights}\ntask: sft\nbackend: transformers\nmodality: text\n"
+            "data:\n  train: data.jsonl\n  format: alpaca\n"
+            "training:\n  batch_size: 1\n  gradient_accumulation_steps: 1\n"
+            f"  quantization: 4bit\n  stream_layers: true\n{dq_line}"
+            "  lora:\n    r: 4\n    target_modules: [q_proj, v_proj]\n"
+        )
+        wrapper = SFTTrainerWrapper(cfg)
+        wrapper.device = "cpu"
+        wrapper._setup_streaming_transformers(cfg, cfg.training)
+
+        assert captured["shard"] is expected, f"sharder got {captured['shard']!r}"
+        assert captured["build"] is expected, f"runtime got {captured['build']!r}"
+
     def test_unquantised_skeleton_is_untouched(self, tmp_path):
         """v0.72.0's bit-exact bf16 gates only stay valid if that path is
         byte-identical to what it was."""

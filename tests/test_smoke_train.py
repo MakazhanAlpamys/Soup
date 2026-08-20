@@ -102,6 +102,40 @@ output: {output_dir}
 
 
 @pytest.fixture
+def mlx_sft_config_yaml(tmp_path: Path, tiny_train_data: Path) -> Path:
+    """Create a one-step MLX SFT config with a public tiny Llama fixture."""
+    config_path = tmp_path / "soup_mlx.yaml"
+    output_dir = tmp_path / "output_mlx"
+    config_path.write_text(
+        f"""base: hf-internal-testing/tiny-random-LlamaForCausalLM
+task: sft
+backend: mlx
+
+data:
+  train: {tiny_train_data}
+  format: chatml
+  val_split: 0.0
+  max_length: 64
+
+training:
+  epochs: 1
+  lr: 5e-4
+  batch_size: 4
+  lora:
+    r: 4
+    alpha: 8
+  quantization: none
+  save_steps: 999
+  logging_steps: 1
+
+output: {output_dir}
+""",
+        encoding="utf-8",
+    )
+    return config_path
+
+
+@pytest.fixture
 def dpo_config_yaml(tmp_path: Path, tiny_dpo_data: Path) -> Path:
     """Create a minimal DPO config for smoke testing with tiny-gpt2."""
     config_path = tmp_path / "soup_dpo.yaml"
@@ -171,6 +205,27 @@ def test_sft_smoke(sft_config_yaml: Path):
     # 6. Check output
     output_dir = Path(result["output_dir"])
     assert output_dir.exists()
+    assert (output_dir / "adapter_config.json").exists()
+
+
+def test_mlx_sft_smoke(mlx_sft_config_yaml: Path):
+    """Run ``soup train`` through real MLX/MLX-LM without the PyTorch stack."""
+    pytest.importorskip("mlx.core")
+    pytest.importorskip("mlx_lm")
+
+    from typer.testing import CliRunner
+
+    from soup_cli.cli import app
+
+    result = CliRunner().invoke(
+        app,
+        ["train", "--config", str(mlx_sft_config_yaml), "--yes"],
+    )
+
+    assert result.exit_code == 0, (result.output, result.exception)
+    assert "MLX training complete" in result.output
+    output_dir = mlx_sft_config_yaml.parent / "output_mlx"
+    assert (output_dir / "adapters.safetensors").exists()
     assert (output_dir / "adapter_config.json").exists()
 
 

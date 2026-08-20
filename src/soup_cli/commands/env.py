@@ -20,6 +20,7 @@ from rich.table import Table
 from soup_cli.utils.env_lock import (
     DEFAULT_LOCK_FILE,
     check_abi_compat,
+    current_declared_bounds_check,
     read_lock,
     render_install_plan,
     snapshot_env,
@@ -29,6 +30,10 @@ from soup_cli.utils.env_lock import (
 from soup_cli.utils.paths import is_under_cwd
 
 console = Console()
+
+# Both an ABI drift against the lock and an installed package violating Soup's
+# own declared dependency bound exit with this code (#368).
+DRIFT_EXIT_CODE = 3
 
 env_app = typer.Typer(
     name="env",
@@ -125,6 +130,17 @@ def env_check_cmd(
     ),
 ) -> None:
     """Compare the current env against the lock and report drift."""
+    # Audit installed packages against Soup's OWN declared bounds first — this
+    # is independent of any lock file, so it catches the `pip install vllm`
+    # transformers/torch downgrade even for a user who never ran `soup env lock`
+    # (#368). The bound is read from package metadata, not a hardcoded copy.
+    bounds = current_declared_bounds_check()
+
+    # #368 review finding 5 — run the lock diagnostic REGARDLESS of the bounds
+    # outcome, so a bounds violation no longer hides "no lock file" / ABI drift.
+    # `lock_exit` records the lock half's exit code (None = clean); the bounds
+    # violation takes precedence at the end but is printed after the lock line.
+    lock_exit = None
     try:
         locked = read_lock(lock_path)
     except FileNotFoundError:
@@ -132,32 +148,53 @@ def env_check_cmd(
             f"[red]No lock file at {escape(lock_path)}; "
             "run `soup env lock` first.[/]"
         )
-        raise typer.Exit(1) from None
+        lock_exit = 1
     except (TypeError, ValueError) as exc:
         console.print(f"[red]{escape(str(exc))}[/]")
-        raise typer.Exit(2) from exc
+        lock_exit = 2
+    else:
+        current = snapshot_env()
+        report = check_abi_compat(locked, current)
+        if report.ok:
+            console.print(
+                Panel(
+                    "[green]ABI-clean.[/] No drift detected.",
+                    title="env check",
+                    border_style="green",
+                )
+            )
+        else:
+            body = "\n".join(f"- {escape(c)}" for c in report.changes)
+            console.print(
+                Panel(
+                    f"[red]{report.drift_count} ABI-sensitive drift(s):[/]\n{body}",
+                    title="env check",
+                    border_style="red",
+                )
+            )
+            lock_exit = DRIFT_EXIT_CODE
 
-    current = snapshot_env()
-    report = check_abi_compat(locked, current)
-    if report.ok:
+    if not bounds.ok:
+        rows = "\n".join(
+            f"- {escape(v.name)} {escape(v.installed)} violates declared bound "
+            f"{escape(v.specifier)}"
+            for v in bounds.violations
+        )
         console.print(
             Panel(
-                "[green]ABI-clean.[/] No drift detected.",
+                f"[red]{bounds.violation_count} package(s) violate this "
+                f"distribution's own declared bounds:[/]\n{rows}\n\n"
+                "[yellow]A later install (e.g. `pip install vllm`) likely moved "
+                "these packages outside the range soup-cli declares. Reinstall "
+                "soup-cli, or pin the listed package(s) back into range.[/]",
                 title="env check",
-                border_style="green",
+                border_style="red",
             )
         )
-        return
+        raise typer.Exit(DRIFT_EXIT_CODE)
 
-    body = "\n".join(f"- {escape(c)}" for c in report.changes)
-    console.print(
-        Panel(
-            f"[red]{report.drift_count} ABI-sensitive drift(s):[/]\n{body}",
-            title="env check",
-            border_style="red",
-        )
-    )
-    raise typer.Exit(3)
+    if lock_exit is not None:
+        raise typer.Exit(lock_exit)
 
 
 @env_app.command("fix")

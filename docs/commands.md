@@ -29,6 +29,7 @@ soup chat --model ./output                    Interactive chat
 soup push --model ./output --repo user/name   Upload to HuggingFace
 soup push --model ./output --repo user/name --collection user/coll-abc123  Add to HF Collection
 soup merge --adapter ./output                 Merge LoRA with base model
+soup merge --adapter ./output --save-format 4bit --no-double-quant  Save a BNB-4bit merge with double-quantization disabled (default on; #321)
 soup merge-sharded-fsdp-weights ./shards -o merged.safetensors  Consolidate FSDP shards into one safetensors (v0.71.14; --plan-only previews)
 soup delinearize-llama4 ./src --target ./out [--num-experts N] [--plan-only]  Live Llama-4 fused-expert reshape [E*din,dout] -> [E,din,dout] + sidecar copy (v0.71.21)
 soup spectrum scan --model <id|path> --top-percent 50 [--modules mlp,attn] [-o patch.yaml]  Spectrum SNR scan (no model load) -> training.unfrozen_parameters YAML patch (v0.71.23)
@@ -150,7 +151,7 @@ soup migrate --from llamafactory config.yaml  Import config from LLaMA-Factory
 soup migrate --from axolotl config.yml        Import config from Axolotl
 soup migrate --from unsloth notebook.ipynb    Import config from Unsloth notebook
 soup migrate --from llamafactory c.yaml --dry-run  Preview without writing
-soup recipes list                             List all 143 ready-made recipes
+soup recipes list                             List all 146 ready-made recipes
 soup recipes show llama3.1-8b-sft            Print recipe YAML
 soup recipes use llama3.1-8b-sft             Copy recipe to soup.yaml
 soup recipes search "reasoning"              Search by keyword/task/size
@@ -188,8 +189,8 @@ soup mcp serve --allow-execute                Implies --allow-mutating; enables 
 soup shrink --model <id|path> --drop-ratio 0.25 --calib c.jsonl -o shrunk  Depth-prune least-important layer block + SHIP/DON'T-SHIP ppl verdict (exit 0/2/1) (v0.71.29)
 soup shrink ... --drop-layers N --heal h.jsonl --heal-steps 200 --device cpu  Drop N layers + distill-heal (fuse LoRA back to one dense model)
 soup shrink ... --tolerance 0.10 --plan-only [--attach-to-registry <id>]  Ppl-regression tolerance / print importance table only / registry attach
-soup draft measure --target <m> --draft <d> --prompts p.jsonl  Draft acceptance rate + real plain-vs-assisted tok/s (exit 0/2/1) (v0.71.33)
-soup draft measure ... --min-acceptance 0.6 -o report.json  Exit 2 below the floor (CI gate) / write the JSON report
+soup draft measure --target <m> --draft <d> --prompts p.jsonl  Draft acceptance rate + real plain-vs-assisted tok/s (exit 0 measured — a best-effort assisted-arm failure stays 0 and is recorded as `assisted_status`; 2 below `--min-acceptance`; 1 error before results) (v0.71.33)
+soup draft measure ... --min-acceptance 0.6 -o report.json  Exit 2 below the floor (CI gate) / write the JSON report (fields incl. `assisted_status`: pending/complete/untimed/crash/interrupted)
 soup draft distill --target <tuned> --draft-base <tiny> --data d.jsonl -o draft/  Distil a DENSE speculative-decoding draft + register it (v0.71.33)
 soup draft distill ... --steps N --device cpu --force --plan-only  Training budget / device / overwrite -o / render the config only
 soup draft list                               List local drafts that `soup serve --auto-spec` will pick up (v0.71.33)
@@ -258,7 +259,7 @@ soup tunability --dataset <jsonl> [--candidates a,b,c]   Probe candidate bases +
 soup tunability --dataset <jsonl> --live [--device cpu]  LIVE per-candidate LoRA probe (loads each repo)
 soup plan --config soup.yaml                             Pre-flight summary + write soup.tfstate
 soup apply --config soup.yaml [--dry-run]                Lock-and-execute; refuses on drift (exit 3)
-soup env lock | status | check                           Hermetic env lockfile + ABI drift detection (exit 3)
+soup env lock | status | check                           Hermetic env lockfile + ABI drift + declared-bound violation detection (exit 3)
 soup env fix [--format uv-pip|requirements] [--output req.txt]  Render a reproducible install plan from soup-env.lock (print-only)
 soup completions bash | zsh | fish                       Shell completion script (sourceable via eval)
 soup license-advisor --target b2c|defense|embedded       Recommend license-clean base for deploy target

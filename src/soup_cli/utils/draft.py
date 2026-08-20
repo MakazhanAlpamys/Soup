@@ -257,6 +257,13 @@ class AcceptanceReport:
     speedup: Optional[float]
     num_assistant_tokens: int
     soup_version: str
+    #: Outcome of the best-effort assisted-throughput arm (#344 review): one of
+    #: "pending" (arm not reached), "complete" (a positive tok/s was measured),
+    #: "untimed" (arm returned no usable number), "crash" (arm raised), or
+    #: "interrupted" (Ctrl-C). Without it the crash / untimed / interrupt reports
+    #: are byte-identical on disk, so a failed arm is indistinguishable from an
+    #: un-run one.
+    assisted_status: str = "pending"
 
 
 def draft_report_to_dict(report: AcceptanceReport) -> dict:

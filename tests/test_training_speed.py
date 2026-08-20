@@ -11,12 +11,18 @@ Covers:
 
 from __future__ import annotations
 
+import os
+import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
 from pydantic import ValidationError
 
 from soup_cli.config.schema import SoupConfig, TrainingConfig
+
+# _tiny_llama_dir lives in test_v07202 and is deliberately not duplicated here,
+# same convention as test_v07300.py.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # ─── Part A: Cut Cross-Entropy (CCE) ───────────────────────────────────────
 
@@ -93,7 +99,14 @@ class TestCutCEApplication:
             assert isinstance(result, bool)
 
     def test_apply_cut_ce_calls_llama_patch_for_llama_model(self):
-        """Verify the llama detector routes to cce_patch('llama')."""
+        """Verify the llama detector routes to cce_patch('llama').
+
+        ``_detect_model_type`` is forced to "" so this exercises the
+        name-based fallback deterministically. Left unmocked, the real
+        detector's live hub fetch runs inside ``patch.dict("sys.modules")``,
+        which evicts ``tokenizers`` on exit; re-importing it crashes (PyO3
+        extensions can't reinit), hidden in a full-suite run only because
+        some other file imports it first."""
         from soup_cli.utils.cut_ce import apply_cut_ce
 
         fake_cce = MagicMock()
@@ -101,6 +114,8 @@ class TestCutCEApplication:
         fake_module = MagicMock(transformers=fake_transformers)
         with patch(
             "soup_cli.utils.cut_ce.check_cut_ce_available", return_value=True
+        ), patch(
+            "soup_cli.utils.cut_ce._detect_model_type", return_value=""
         ), patch.dict(
             "sys.modules",
             {
@@ -112,7 +127,12 @@ class TestCutCEApplication:
             fake_cce.assert_called_once_with("llama")
 
     def test_apply_cut_ce_deepseek_phi_does_not_use_phi(self):
-        """Regression: org-prefix like 'deepseek-ai/...' must not trigger phi."""
+        """Regression: org-prefix like 'deepseek-ai/...' must not trigger phi
+        via the substring-fallback path. ``_detect_model_type`` is forced to ""
+        here (offline) so this exercises the fallback deterministically:
+        with real config resolution deepseek-coder is genuinely Llama-arch and
+        the model_type path would (correctly) patch it, see
+        TestCutCEDetectsArchitectureFromTheConfig below."""
         from soup_cli.utils.cut_ce import apply_cut_ce
 
         fake_cce = MagicMock()
@@ -120,6 +140,8 @@ class TestCutCEApplication:
         fake_module = MagicMock(transformers=fake_transformers)
         with patch(
             "soup_cli.utils.cut_ce.check_cut_ce_available", return_value=True
+        ), patch(
+            "soup_cli.utils.cut_ce._detect_model_type", return_value=""
         ), patch.dict(
             "sys.modules",
             {
@@ -131,6 +153,376 @@ class TestCutCEApplication:
             # anymore thanks to the last-path-component detector.
             assert apply_cut_ce("deepseek-ai/deepseek-coder-7b-instruct") is False
             fake_cce.assert_not_called()
+
+    def test_apply_cut_ce_plain_gemma_reports_false_instead_of_crashing(self):
+        """Regression: cut_cross_entropy has no patcher for plain Gemma-1
+        (model_type "gemma", only "gemma2" is supported). Pre-fix, a bare
+        "gemma" fallback-detector entry dispatched cce_patch("gemma") and
+        crashed with RuntimeError("Unknown model type gemma") for any
+        Gemma-1 name that reached the name-based fallback. It must instead
+        report False, the same advisory every other unsupported
+        architecture gets."""
+        from soup_cli.utils.cut_ce import apply_cut_ce
+
+        def _patch(model_type, *a, **kw):
+            if model_type not in ("llama", "phi3", "gemma2", "mistral", "qwen2"):
+                raise RuntimeError(f"Unknown model type {model_type}")
+
+        fake_cce = MagicMock(side_effect=_patch)
+        fake_transformers = MagicMock(cce_patch=fake_cce)
+        fake_module = MagicMock(transformers=fake_transformers)
+        with patch(
+            "soup_cli.utils.cut_ce.check_cut_ce_available", return_value=True
+        ), patch(
+            "soup_cli.utils.cut_ce._detect_model_type", return_value=""
+        ), patch.dict(
+            "sys.modules",
+            {
+                "cut_cross_entropy": fake_module,
+                "cut_cross_entropy.transformers": fake_transformers,
+            },
+        ):
+            assert apply_cut_ce("google/gemma-7b-it") is False
+            fake_cce.assert_not_called()
+
+
+class TestCutCEDetectsArchitectureFromTheConfig:
+    """apply_cut_ce() matched on a SUBSTRING OF THE MODEL PATH and silently
+    no-opped on every local checkpoint directory Soup itself produces
+    (checkpoint-2000, my-finetune, ...): none of those names carry an
+    architecture keyword. It also conflated Phi-2 with Phi-3 (both contain
+    "phi", cut_cross_entropy has a patcher for neither's real model_type
+    distinctly, "phi3" only). The architecture is in the config, exactly
+    the fix liger.py already shipped for #78: ``AutoConfig.model_type`` is
+    the same string ``cce_patch`` itself dispatches on."""
+
+    def _fake_cce(
+        self, monkeypatch, calls, supported=("llama", "phi3", "gemma2", "mistral", "qwen2")
+    ):
+        """Mirrors upstream's own dispatch (apple/ml-cross-entropy
+        cut_cross_entropy/transformers/patch.py::PATCH_FNS): raises
+        RuntimeError for a model_type it has no patcher for."""
+        import sys
+        import types
+
+        def _patch(model_type_or_model, *args, **kwargs):
+            calls.append(model_type_or_model)
+            if model_type_or_model not in supported:
+                raise RuntimeError(f"Unknown model type {model_type_or_model}")
+
+        mod = types.ModuleType("cut_cross_entropy.transformers")
+        mod.cce_patch = _patch
+        parent = types.ModuleType("cut_cross_entropy")
+        parent.transformers = mod
+        monkeypatch.setitem(sys.modules, "cut_cross_entropy", parent)
+        monkeypatch.setitem(sys.modules, "cut_cross_entropy.transformers", mod)
+        return calls
+
+    def test_a_local_checkpoint_dir_with_no_architecture_in_its_name_is_still_detected(
+        self, tmp_path, monkeypatch
+    ):
+        from test_v07202 import _tiny_llama_dir
+
+        from soup_cli.utils import cut_ce as cut_ce_mod
+
+        weights, _, _ = _tiny_llama_dir(tmp_path)
+        assert "llama" not in weights.lower(), (
+            "the fixture path must NOT contain the architecture name, or this "
+            "test passes for the substring matcher too and proves nothing"
+        )
+        calls = self._fake_cce(monkeypatch, [])
+        monkeypatch.setattr(cut_ce_mod, "check_cut_ce_available", lambda: True)
+
+        assert cut_ce_mod.apply_cut_ce(weights) is True
+        assert calls == ["llama"], calls
+
+    def test_phi2_is_not_dispatched_to_the_phi3_patcher(self, tmp_path, monkeypatch):
+        """CONTROL for the conflation half of the bug. Phi-2's real
+        ``config.model_type`` is "phi", not "phi3": cut_cross_entropy has no
+        Phi-2 patcher, so this must report False, not silently reuse phi3's."""
+        import json
+
+        from soup_cli.utils import cut_ce as cut_ce_mod
+
+        directory = tmp_path / "step-2000"
+        directory.mkdir()
+        (directory / "config.json").write_text(json.dumps({"model_type": "phi"}))
+        calls = self._fake_cce(monkeypatch, [])
+        monkeypatch.setattr(cut_ce_mod, "check_cut_ce_available", lambda: True)
+
+        assert cut_ce_mod.apply_cut_ce(str(directory)) is False
+        assert calls == ["phi"], calls
+
+    def test_config_model_type_wins_over_a_conflicting_directory_name(
+        self, tmp_path, monkeypatch
+    ):
+        """CONTROL pinning the config-over-name priority itself, not just its
+        outcome on names that happen to agree. A ``soup merge``/``soup
+        shrink`` output directory is commonly named after its *source*
+        model, so a directory whose name says one architecture and whose
+        config says another is a real shape, not a contrived one. Fails
+        (routes to "phi3") if the config check is ever moved below the
+        name-match fallback."""
+        import json
+
+        from soup_cli.utils import cut_ce as cut_ce_mod
+
+        directory = tmp_path / "phi-3-mini-finetune"
+        directory.mkdir()
+        (directory / "config.json").write_text(json.dumps({"model_type": "llama"}))
+        calls = self._fake_cce(monkeypatch, [])
+        monkeypatch.setattr(cut_ce_mod, "check_cut_ce_available", lambda: True)
+
+        assert cut_ce_mod.apply_cut_ce(str(directory)) is True
+        assert calls == ["llama"], calls
+
+    def test_an_unsupported_architecture_still_reports_false(self, tmp_path, monkeypatch):
+        """CONTROL: detection by config must not turn into "always True": an
+        architecture cce_patch does not support (gpt2 has no CCE patcher) has
+        to keep reporting False so the caller keeps printing its advisory."""
+        import json
+
+        from soup_cli.utils import cut_ce as cut_ce_mod
+
+        directory = tmp_path / "gpt2-run"
+        directory.mkdir()
+        (directory / "config.json").write_text(json.dumps({"model_type": "gpt2"}))
+        self._fake_cce(monkeypatch, [])
+        monkeypatch.setattr(cut_ce_mod, "check_cut_ce_available", lambda: True)
+
+        assert cut_ce_mod.apply_cut_ce(str(directory)) is False
+
+    def test_config_unavailable_falls_back_to_the_name_based_match(self, monkeypatch):
+        """No local config.json and no network: model_type resolution fails
+        quietly, and the last-path-component fallback still applies."""
+        from soup_cli.utils import cut_ce as cut_ce_mod
+
+        calls = self._fake_cce(monkeypatch, [])
+        monkeypatch.setattr(cut_ce_mod, "check_cut_ce_available", lambda: True)
+        monkeypatch.setattr(cut_ce_mod, "_detect_model_type", lambda model_name: "")
+
+        assert cut_ce_mod.apply_cut_ce("meta-llama/Llama-3.1-8B") is True
+        assert calls == ["llama"], calls
+
+
+class TestIssue456CrossPlatformPathComponentExtraction:
+    r"""#456: cut_ce and liger must match architecture on the last component only.
+
+    On Windows, naive rsplit("/") never splits on backslashes, so parent directory
+    names (e.g. C:\experiments\phi-3-runs\step-2000) over-matched architecture
+    keywords when config resolution was unavailable. Tests use explicit synthetic
+    paths rather than tmp_path to prevent runner directory names from leaking.
+    """
+
+    def _fake_cce(
+        self,
+        monkeypatch,
+        calls,
+        supported=("llama", "phi3", "gemma2", "mistral", "qwen2"),
+    ):
+        import sys
+        import types
+
+        def _patch(model_type_or_model, *args, **kwargs):
+            calls.append(model_type_or_model)
+            if model_type_or_model not in supported:
+                raise RuntimeError(f"Unknown model type {model_type_or_model}")
+
+        mod = types.ModuleType("cut_cross_entropy.transformers")
+        mod.cce_patch = _patch
+        parent = types.ModuleType("cut_cross_entropy")
+        parent.transformers = mod
+        monkeypatch.setitem(sys.modules, "cut_cross_entropy", parent)
+        monkeypatch.setitem(sys.modules, "cut_cross_entropy.transformers", mod)
+        return calls
+
+    def _fake_liger(self, monkeypatch, calls):
+        import sys
+        import types
+
+        mod = types.ModuleType("liger_kernel.transformers")
+        mod.apply_liger_kernel_to_llama = lambda: calls.append("llama")
+        mod.apply_liger_kernel_to_mistral = lambda: calls.append("mistral")
+        mod.apply_liger_kernel_to_gemma2 = lambda: calls.append("gemma2")
+        mod.apply_liger_kernel_to_qwen2 = lambda: calls.append("qwen2")
+        mod.apply_liger_kernel_to_phi3 = lambda: calls.append("phi3")
+        parent = types.ModuleType("liger_kernel")
+        parent.transformers = mod
+        monkeypatch.setitem(sys.modules, "liger_kernel", parent)
+        monkeypatch.setitem(sys.modules, "liger_kernel.transformers", mod)
+        return calls
+
+    def test_windows_parent_dir_with_architecture_keyword_does_not_overmatch_cut_ce(
+        self, monkeypatch
+    ):
+        """CONTROL: A Windows path whose parent contains an architecture keyword
+        must not match that keyword in cut_ce when config is unavailable (#456)."""
+        from soup_cli.utils import cut_ce as cut_ce_mod
+
+        calls = self._fake_cce(monkeypatch, [])
+        monkeypatch.setattr(cut_ce_mod, "check_cut_ce_available", lambda: True)
+        monkeypatch.setattr(cut_ce_mod, "_detect_model_type", lambda _: "")
+
+        assert (
+            cut_ce_mod.apply_cut_ce(r"C:\experiments\phi-3-runs\step-2000") is False
+        )
+        assert (
+            cut_ce_mod.apply_cut_ce(r"C:\models\llama-sweeps\checkpoint-100")
+            is False
+        )
+        assert calls == []
+
+    def test_posix_parent_dir_with_architecture_keyword_does_not_overmatch_cut_ce(
+        self, monkeypatch
+    ):
+        """CONTROL: A POSIX path whose parent contains an architecture keyword
+        must not match that keyword in cut_ce when config is unavailable (#456)."""
+        from soup_cli.utils import cut_ce as cut_ce_mod
+
+        calls = self._fake_cce(monkeypatch, [])
+        monkeypatch.setattr(cut_ce_mod, "check_cut_ce_available", lambda: True)
+        monkeypatch.setattr(cut_ce_mod, "_detect_model_type", lambda _: "")
+
+        assert (
+            cut_ce_mod.apply_cut_ce("/tmp/phi-3-experiments/step-2000") is False
+        )
+        assert (
+            cut_ce_mod.apply_cut_ce(
+                "/var/checkpoints/llama-runs/checkpoint-100"
+            )
+            is False
+        )
+        assert calls == []
+
+    def test_trailing_separators_preserve_last_component_in_cut_ce(
+        self, monkeypatch
+    ):
+        """Trailing slashes and backslashes must not cause the last component to become empty."""
+        from soup_cli.utils import cut_ce as cut_ce_mod
+
+        calls = self._fake_cce(monkeypatch, [])
+        monkeypatch.setattr(cut_ce_mod, "check_cut_ce_available", lambda: True)
+        monkeypatch.setattr(cut_ce_mod, "_detect_model_type", lambda _: "")
+
+        assert (
+            cut_ce_mod.apply_cut_ce("C:\\experiments\\runs\\llama-3.1-8b\\")
+            is True
+        )
+        assert cut_ce_mod.apply_cut_ce("/tmp/models/phi-3-mini/") is True
+        assert calls == ["llama", "phi3"]
+
+    def test_windows_parent_dir_with_architecture_keyword_does_not_overmatch_liger(
+        self, monkeypatch
+    ):
+        """CONTROL: A Windows path whose parent contains an architecture keyword
+        must not match that keyword in liger when config is unavailable (#456)."""
+        from soup_cli.utils import liger as liger_mod
+
+        calls = self._fake_liger(monkeypatch, [])
+        monkeypatch.setattr(liger_mod, "check_liger_available", lambda: True)
+        monkeypatch.setattr(liger_mod, "_detect_model_type", lambda _: "")
+
+        assert (
+            liger_mod.apply_liger_kernel(
+                r"C:\experiments\llama_experiments\step-2000"
+            )
+            is False
+        )
+        assert (
+            liger_mod.apply_liger_kernel(r"C:\models\phi_runs\checkpoint-50")
+            is False
+        )
+        assert calls == []
+
+    def test_posix_parent_dir_does_not_overmatch_liger(self, monkeypatch):
+        """CONTROL: A POSIX path whose parent contains an architecture keyword
+        must not match that keyword in liger when config is unavailable (#456)."""
+        from soup_cli.utils import liger as liger_mod
+
+        calls = self._fake_liger(monkeypatch, [])
+        monkeypatch.setattr(liger_mod, "check_liger_available", lambda: True)
+        monkeypatch.setattr(liger_mod, "_detect_model_type", lambda _: "")
+
+        assert (
+            liger_mod.apply_liger_kernel("/home/llama_experiments/step-2000")
+            is False
+        )
+        assert (
+            liger_mod.apply_liger_kernel("/srv/qwen-sweeps/checkpoint-9")
+            is False
+        )
+        assert calls == []
+
+    def test_trailing_separators_and_last_component_match_liger(
+        self, monkeypatch
+    ):
+        """Liger correctly patches when the last component itself matches."""
+        from soup_cli.utils import liger as liger_mod
+
+        calls = self._fake_liger(monkeypatch, [])
+        monkeypatch.setattr(liger_mod, "check_liger_available", lambda: True)
+        monkeypatch.setattr(liger_mod, "_detect_model_type", lambda _: "")
+
+        assert (
+            liger_mod.apply_liger_kernel("C:\\models\\llama-3.1-8b\\") is True
+        )
+        assert liger_mod.apply_liger_kernel("/tmp/runs/phi-3-mini/") is True
+        assert calls == ["llama", "phi3"]
+
+    def test_empty_and_root_paths_return_false(self, monkeypatch):
+        """Degenerate boundary check: empty strings, None, and root slashes return False."""
+        from soup_cli.utils import cut_ce as cut_ce_mod
+        from soup_cli.utils import liger as liger_mod
+
+        monkeypatch.setattr(cut_ce_mod, "check_cut_ce_available", lambda: True)
+        monkeypatch.setattr(cut_ce_mod, "_detect_model_type", lambda _: "")
+        monkeypatch.setattr(liger_mod, "check_liger_available", lambda: True)
+        monkeypatch.setattr(liger_mod, "_detect_model_type", lambda _: "")
+
+        for bad_path in ("", "   ", None, "/", "\\", "///", "\\\\\\"):
+            assert cut_ce_mod.apply_cut_ce(bad_path) is False
+            assert liger_mod.apply_liger_kernel(bad_path) is False
+
+    def test_repeated_separators_resolve_last_component(self, monkeypatch):
+        """Repeated slashes or backslashes must resolve cleanly to the last component."""
+        from soup_cli.utils import cut_ce as cut_ce_mod
+        from soup_cli.utils import liger as liger_mod
+
+        calls_cce = self._fake_cce(monkeypatch, [])
+        calls_liger = self._fake_liger(monkeypatch, [])
+        monkeypatch.setattr(cut_ce_mod, "check_cut_ce_available", lambda: True)
+        monkeypatch.setattr(cut_ce_mod, "_detect_model_type", lambda _: "")
+        monkeypatch.setattr(liger_mod, "check_liger_available", lambda: True)
+        monkeypatch.setattr(liger_mod, "_detect_model_type", lambda _: "")
+
+        assert (
+            cut_ce_mod.apply_cut_ce("C:\\\\experiments\\\\runs\\\\llama-3.1-8b\\\\")
+            is True
+        )
+        assert (
+            liger_mod.apply_liger_kernel("///tmp///models///phi-3-mini///")
+            is True
+        )
+        assert calls_cce == ["llama"]
+        assert calls_liger == ["phi3"]
+
+
+class TestCutCEUnifiedMessage:
+    """The two call sites (trainer/sft.py, utils/v028_features.py) used to
+    hand-write diverging copies of the "no matching architecture" advisory."""
+
+    def test_sft_and_v028_features_reference_the_shared_constant(self):
+        """Both call sites import ``NO_MATCHING_ARCHITECTURE_MESSAGE`` rather
+        than hand-writing their own copy of the string, so it is checked by
+        name here: a literal-text check would pass even if one side kept a
+        hardcoded string that happened to match today and drifted tomorrow."""
+        import inspect
+
+        import soup_cli.trainer.sft as sft_mod
+        import soup_cli.utils.v028_features as v028_mod
+
+        assert "NO_MATCHING_ARCHITECTURE_MESSAGE" in inspect.getsource(sft_mod)
+        assert "NO_MATCHING_ARCHITECTURE_MESSAGE" in inspect.getsource(v028_mod)
 
 
 class TestCutCEValidation:

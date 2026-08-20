@@ -32,13 +32,25 @@ from __future__ import annotations
 import datetime as _dt
 import hashlib
 import json
+import logging
 import os
 import platform as _platform
 import sys
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import Iterable, Mapping, Optional, Tuple
 
 from soup_cli.utils.paths import atomic_write_text, is_under_cwd
+
+_LOG = logging.getLogger(__name__)
+
+# Emitted when the declared-bounds audit cannot run at all. It still degrades to
+# a clean report so `env check` keeps working, but a checker that reports clean
+# without having checked must say so (#368 review).
+_PACKAGING_MISSING_WARNING = (
+    "packaging is not importable, so the declared-bounds audit was skipped; "
+    "`soup env check` cannot confirm installed versions against Soup's own "
+    "declared bounds. Reinstall soup-cli to restore it."
+)
 
 DEFAULT_LOCK_FILE = "soup-env.lock"
 _MAX_NAME_LEN = 256
@@ -50,6 +62,14 @@ _MAX_ENTRIES = 4096
 
 # Source allowlist — defends against schema drift on read.
 _VALID_SOURCES = frozenset({"pip", "conda", "system", "wheel", "unknown"})
+
+# Extras that make up a Soup TRAINING install — the environment #368 is about
+# (a training venv later contaminated by `pip install "soup-cli[serve-fast]"`).
+# `[all]` and `[dev]` both re-declare `soup-cli[train,...]`, which pip flattens,
+# so metadata restates the training bounds under each of these three. `[mlx]` is
+# deliberately NOT here: it declares `transformers>=5.0.0` against `[train]`'s
+# `<5.0.0`, an incompatibility by design that no single environment satisfies.
+_TRAINING_INSTALL_EXTRAS: Tuple[str, ...] = ("train", "all", "dev")
 
 # ABI-sensitive packages — drift here is most likely to break training.
 TRACKED_PACKAGES: Tuple[str, ...] = (
@@ -156,6 +176,203 @@ class AbiCheck:
         for entry in self.changes:
             if not isinstance(entry, str):
                 raise TypeError("changes entries must be str")
+
+
+# Distribution whose declared bounds `check_declared_bounds` audits — Soup's own.
+_SELF_DIST = "soup-cli"
+
+
+@dataclass(frozen=True)
+class BoundViolation:
+    """One installed package that violates Soup's own declared version bound."""
+
+    name: str
+    installed: str
+    specifier: str
+    extra: Optional[str]
+
+    def __post_init__(self) -> None:
+        _check_non_empty_str(self.name, "name", max_len=_MAX_NAME_LEN)
+        _check_non_empty_str(self.installed, "installed", max_len=_MAX_VERSION_LEN)
+        _check_non_empty_str(self.specifier, "specifier", max_len=_MAX_VERSION_LEN)
+        if self.extra is not None:
+            _check_non_empty_str(self.extra, "extra", max_len=_MAX_NAME_LEN)
+
+
+@dataclass(frozen=True)
+class BoundsCheck:
+    """Outcome of auditing installed packages against Soup's declared bounds."""
+
+    ok: bool
+    violation_count: int
+    violations: Tuple[BoundViolation, ...]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.ok, bool):
+            raise TypeError("ok must be bool")
+        if isinstance(self.violation_count, bool) or not isinstance(
+            self.violation_count, int
+        ):
+            raise TypeError("violation_count must be int")
+        if self.violation_count < 0:
+            raise ValueError("violation_count must be >= 0")
+        if not isinstance(self.violations, tuple):
+            raise TypeError("violations must be a tuple of BoundViolation")
+        for entry in self.violations:
+            if not isinstance(entry, BoundViolation):
+                raise TypeError("every violation must be BoundViolation")
+
+
+def check_declared_bounds(
+    requirements: Iterable[str],
+    installed: Mapping[str, str],
+) -> BoundsCheck:
+    """Flag any *installed* package whose version violates Soup's declared bound.
+
+    ``requirements`` are raw PEP 508 strings exactly as
+    ``importlib.metadata.requires`` returns them, so the bound is read from
+    package metadata and never a hardcoded second copy — that second copy is
+    the drift this is meant to catch (#368). ``installed`` maps package name to
+    the installed version.
+
+    A requirement whose package is *not* installed is skipped: an optional
+    ``[train]`` dependency you never installed is not drift. An unparseable
+    requirement or version is skipped rather than crashing the diagnostic.
+    """
+    # ``packaging`` is a declared core dependency (#368 review), so it is present
+    # wherever Soup runs. If it somehow is not, the audit still degrades to
+    # "clean" rather than breaking `env check` — but it says so first: a checker
+    # that silently reports clean when it could not run is the wrong failure
+    # direction (#368 review).
+    try:
+        from packaging.markers import UndefinedEnvironmentName
+        from packaging.requirements import InvalidRequirement, Requirement
+        from packaging.utils import canonicalize_name
+        from packaging.version import InvalidVersion
+    except ImportError:  # pragma: no cover — packaging is a declared dependency
+        _LOG.warning(_PACKAGING_MISSING_WARNING)
+        return BoundsCheck(ok=True, violation_count=0, violations=())
+
+    installed_by_key = {canonicalize_name(k): v for k, v in installed.items()}
+    tracked_keys = {canonicalize_name(name) for name in TRACKED_PACKAGES}
+
+    violations: list[BoundViolation] = []
+    seen: set[str] = set()
+    for raw in requirements:
+        try:
+            req = Requirement(raw)
+        except InvalidRequirement:
+            continue
+        if not req.specifier:
+            continue
+        # #368 review — EVALUATE the marker, don't just name it. A requirement
+        # gated behind `extra == "X"` is only Soup's declared bound when the user
+        # opted into `soup-cli[X]`; evaluating in the base environment (no extra
+        # active) deselects it, so a package installed for other reasons (e.g.
+        # wandb) is not a false-positive violation.
+        #
+        # ...except for the ABI-relevant set under a TRAINING extra. Since the
+        # v0.71.0 deps-split, `transformers`, `torch` and `trl` live in metadata
+        # ONLY under `extra == "train"/"all"/"dev"`, so deselecting every gated
+        # requirement also deselected the `transformers <5.0.0` case #368 was
+        # filed about — leaving `typer` as the single bound this could ever fire
+        # on.
+        #
+        # The extra scope is load-bearing, not decoration: a tracked NAME alone
+        # is not enough, because `[mlx]` declares `transformers>=5.0.0` against
+        # `[train]`'s `<5.0.0`. Those two are deliberately incompatible, so
+        # enforcing both would make EVERY installed transformers violate exactly
+        # one of them — a false positive on every machine.
+        def selects(marker, extra: str) -> bool:
+            try:
+                return bool(marker.evaluate({"extra": extra}))
+            except UndefinedEnvironmentName:
+                return False
+
+        key = canonicalize_name(req.name)
+        if req.marker is not None:
+            selected = selects(req.marker, "")
+            if not selected and key in tracked_keys:
+                selected = any(
+                    selects(req.marker, extra) for extra in _TRAINING_INSTALL_EXTRAS
+                )
+            if not selected:
+                continue
+        have = installed_by_key.get(key)
+        if have is None:
+            continue
+        try:
+            satisfied = req.specifier.contains(have, prereleases=True)
+        except InvalidVersion:
+            continue
+        if satisfied:
+            continue
+        # Canonical-name dedup: count each violating package once even though a
+        # tracked bound is restated under every extra that pulls it in — metadata
+        # lists `transformers` under `train`, `all` AND `dev` (#368 review).
+        if key in seen:
+            continue
+        seen.add(key)
+        violations.append(
+            BoundViolation(
+                name=req.name,
+                installed=have,
+                specifier=str(req.specifier),
+                extra=None,
+            )
+        )
+
+    return BoundsCheck(
+        ok=not violations,
+        violation_count=len(violations),
+        violations=tuple(violations),
+    )
+
+
+def current_declared_bounds_check(dist_name: str = _SELF_DIST) -> BoundsCheck:
+    """Audit the *running* environment against ``dist_name``'s declared bounds.
+
+    Reads the requirement strings from installed metadata and the installed
+    versions via ``importlib.metadata``. An absent distribution (e.g. running
+    from source without an install) yields a clean report — there is no
+    declared metadata to audit against.
+
+    The bounds come from the *installed* metadata, which on an editable checkout
+    can lag the working tree (a `pip install -e .` snapshot). A cap you just
+    tightened in ``pyproject.toml`` is only enforced here after a reinstall —
+    #368 review.
+    """
+    # `requires-python = ">=3.10"`, so `importlib.metadata` is always importable
+    # here; guarding it would be an unreachable branch that silently reports
+    # clean (#368 review).
+    from importlib.metadata import PackageNotFoundError, requires
+
+    try:
+        reqs = requires(dist_name)
+    except PackageNotFoundError:
+        return BoundsCheck(ok=True, violation_count=0, violations=())
+    if not reqs:
+        return BoundsCheck(ok=True, violation_count=0, violations=())
+
+    try:
+        from packaging.requirements import InvalidRequirement, Requirement
+    except ImportError:  # pragma: no cover — packaging is a declared dependency
+        _LOG.warning(_PACKAGING_MISSING_WARNING)
+        return BoundsCheck(ok=True, violation_count=0, violations=())
+
+    installed: dict[str, str] = {}
+    for raw in reqs:
+        try:
+            name = Requirement(raw).name
+        except InvalidRequirement:
+            continue
+        if name in installed:
+            continue
+        ver = _detect_package_version(name)
+        if ver is not None:
+            installed[name] = ver
+
+    return check_declared_bounds(reqs, installed)
 
 
 def _detect_cuda_version() -> Optional[str]:
@@ -448,12 +665,16 @@ def check_abi_compat(a: EnvLock, b: EnvLock) -> AbiCheck:
 
 __all__ = [
     "AbiCheck",
+    "BoundViolation",
+    "BoundsCheck",
     "DEFAULT_LOCK_FILE",
     "EnvEntry",
     "EnvLock",
     "TRACKED_PACKAGES",
     "check_abi_compat",
+    "check_declared_bounds",
     "compute_env_hash",
+    "current_declared_bounds_check",
     "read_lock",
     "render_install_plan",
     "snapshot_env",

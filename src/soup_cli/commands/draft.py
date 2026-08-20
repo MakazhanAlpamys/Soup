@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 import math
 import os
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, NoReturn, Optional
 
@@ -134,9 +135,71 @@ def _vocab_size_of(model_id: str, trc: bool = False) -> int:
 
     config = AutoConfig.from_pretrained(model_id, trust_remote_code=trc)
     vocab = getattr(config, "vocab_size", None)
+    if vocab is None and hasattr(config, "get_text_config"):
+        # Composite / multimodal configs (e.g. LlavaConfig) keep vocab_size on
+        # the text sub-config, not the top level; get_text_config() returns it
+        # (#344 review). Shared by measure and distill, so this fixes both.
+        vocab = getattr(config.get_text_config(), "vocab_size", None)
     if vocab is None:
         raise ValueError(f"{model_id} config has no vocab_size")
     return int(vocab)
+
+
+def _pair_vocab_sizes_or_fail(
+    target: str, draft_id: str, target_trc: bool, draft_trc: bool
+) -> "tuple[int, int]":
+    """(target, draft) ``config.vocab_size`` — the signal transformers' assisted
+    generation actually gates on, read from config only (no weight download).
+
+    Shared by ``distill`` and ``measure`` so the two never disagree on the
+    same-tokenizer precondition and both refuse a mismatched pair before any
+    model loads (issue #344).
+    """
+    try:
+        return (
+            _vocab_size_of(target, target_trc),
+            _vocab_size_of(draft_id, draft_trc),
+        )
+    except Exception as exc:  # noqa: BLE001 — surface as a friendly CLI error
+        _fail(f"could not read model config: {exc}")
+
+
+def _write_draft_report(report: AcceptanceReport, output: str) -> None:
+    """Serialise a ``measure`` report to ``output`` (shared by the incremental
+    writes so a later failure cannot discard an earlier result — issue #344)."""
+    atomic_write_text(
+        json.dumps(draft_report_to_dict(report), indent=2),
+        output,
+        field="report path",
+    )
+
+
+def _record_assisted_status(
+    report: AcceptanceReport, output: Optional[str], status: str
+) -> AcceptanceReport:
+    """Stamp ``status`` on ``report`` and persist it best-effort.
+
+    Only for the assisted-arm handlers: a write that raises there would replace
+    the exception being handled — swapping the "assisted arm crashed" warning,
+    or Ctrl-C's exit code, for an unrelated ``OSError`` — and so lose exactly the
+    outcome the handler exists to record (#344 review). The pre-arm write has
+    already put acceptance + plain throughput on disk, so a failed status update
+    is a warning, not a failure. The success path deliberately does NOT use this:
+    there is no exception to mask, and failing to write the completed report is a
+    real error.
+    """
+    report = replace(report, assisted_status=status)
+    if output is None:
+        return report
+    try:
+        _write_draft_report(report, output)
+    except OSError as exc:
+        console.print(
+            f"[yellow]Warning:[/] could not record the assisted-arm outcome in "
+            f"{escape(output)} ({escape(str(exc))}); the acceptance rate and "
+            f"plain throughput written before the arm are still on disk."
+        )
+    return report
 
 
 def _resolve_trust(model_id: str, requested: bool = False) -> bool:
@@ -640,6 +703,25 @@ def measure(
     target_trc = _resolve_trust(target, trust_remote_code)
     draft_trc = _resolve_trust(draft, trust_remote_code)
 
+    # Refuse a pair transformers cannot run BEFORE loading either model. Assisted
+    # generation gates on config.vocab_size (not the tokenizer's vocab) and raises
+    # "different tokenizers" deep inside generate() — after the expensive load —
+    # for a pair whose tokenizers ARE identical but whose padded embedding rows
+    # differ (e.g. Qwen2.5 large<-small). `soup draft distill` already refuses
+    # such a pair up front; measure uses the SAME definition here so the two agree
+    # (issue #344). same_tokenizer() below stays as an additional check.
+    target_vocab, draft_vocab = _pair_vocab_sizes_or_fail(
+        target, draft, target_trc, draft_trc
+    )
+    if target_vocab != draft_vocab:
+        _fail(
+            f"Draft and target must share a tokenizer, but their vocab sizes "
+            f"differ (target={target_vocab}, draft={draft_vocab}). Speculative "
+            f"decoding proposes draft token ids into the target's vocabulary, so "
+            f"transformers refuses a mismatched pair. Distil a draft from this "
+            f"target with `soup draft distill`."
+        )
+
     console.print(f"[dim]Loading target: {escape(target)}[/]")
     try:
         target_model, target_tok, resolved_device = _load_pair_member(
@@ -680,6 +762,7 @@ def measure(
     rate = acceptance_rate(accepted, total)
     verdict = classify_acceptance(rate)
 
+
     try:
         tok_s_plain = measure_throughput(
             target_model, target_tok, prompt_texts, max_new_tokens=max_new_tokens
@@ -698,9 +781,12 @@ def measure(
     # A measured 0.0 tok/s means "we could not time it", not "zero throughput";
     # normalise explicitly rather than leaning on 0.0 being falsy.
     plain = None if tok_s_plain <= 0 else tok_s_plain
-    assisted = None if tok_s_assisted <= 0 else tok_s_assisted
-    speedup = assisted / plain if (plain and assisted) else None
 
+    # Persist acceptance + plain throughput BEFORE the assisted arm. That arm runs
+    # after the two expensive measurements and can still fail inside transformers
+    # (issue #344); the report used to be written only after it, so a failure
+    # there discarded results that had already succeeded. Write incrementally,
+    # then upgrade the report in place if the assisted arm returns a number.
     report = AcceptanceReport(
         target=target,
         draft=draft,
@@ -709,19 +795,54 @@ def measure(
         acceptance_rate=rate,
         verdict=verdict,
         tok_s_plain=plain,
-        tok_s_assisted=assisted,
-        speedup=speedup,
+        tok_s_assisted=None,
+        speedup=None,
         num_assistant_tokens=num_assistant_tokens,
         soup_version=__version__,
     )
-    console.print(render_draft_panel(report))
-
     if output is not None:
-        atomic_write_text(
-            json.dumps(draft_report_to_dict(report), indent=2),
-            output,
-            field="report path",
+        _write_draft_report(report, output)
+
+    try:
+        tok_s_assisted = measure_throughput(
+            target_model,
+            target_tok,
+            prompt_texts,
+            assistant_model=draft_model,
+            num_assistant_tokens=num_assistant_tokens,
+            max_new_tokens=max_new_tokens,
         )
+    except KeyboardInterrupt:
+        # A Ctrl-C during the arm must be distinguishable on disk from a crash or
+        # an untimed run — otherwise all three write byte-identical reports
+        # (#344 review). Record the outcome, then re-raise so the exit code and
+        # the "arm is best-effort" contract are unchanged.
+        _record_assisted_status(report, output, "interrupted")
+        raise
+    except Exception as exc:  # noqa: BLE001 — assisted arm is best-effort
+        report = _record_assisted_status(report, output, "crash")
+        console.print(
+            f"[yellow]Warning:[/] assisted-generation throughput could not be "
+            f"measured ({escape(str(exc))}); the acceptance rate and plain "
+            f"throughput are still valid"
+            + (" and are on disk." if output is not None else ".")
+        )
+    else:
+        assisted = None if tok_s_assisted <= 0 else tok_s_assisted
+        if assisted is not None:
+            report = replace(
+                report,
+                tok_s_assisted=assisted,
+                speedup=assisted / plain if plain else None,
+                assisted_status="complete",
+            )
+        else:
+            report = replace(report, assisted_status="untimed")
+        if output is not None:
+            _write_draft_report(report, output)
+
+    console.print(render_draft_panel(report))
+    if output is not None:
         console.print(f"[dim]Report written to {escape(output)}[/]")
 
     if min_acceptance is not None and rate < min_acceptance:

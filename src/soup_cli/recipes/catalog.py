@@ -48,7 +48,7 @@ def search_recipes(
 
 
 # ---------------------------------------------------------------------------
-# Recipe catalog (143 recipes)
+# Recipe catalog (146 recipes)
 # ---------------------------------------------------------------------------
 
 RECIPES: Dict[str, RecipeMeta] = {
@@ -3883,6 +3883,38 @@ training:
 output: ./output
 """,
     ),
+    "qwen3.5-9b-grpo": RecipeMeta(
+        model="Qwen/Qwen3.5-9B",
+        task="grpo",
+        size="9B",
+        tags=("qwen", "qwen3.5", "grpo", "reasoning", "thinking"),
+        description="Qwen 3.5 9B GRPO reasoning training (Apache-2.0, 262K context)",
+        yaml_str="""\
+base: Qwen/Qwen3.5-9B
+task: grpo
+
+data:
+  train: ./data/reasoning_train.jsonl
+  format: auto
+  max_length: 4096
+
+training:
+  epochs: 3
+  lr: 1e-5
+  batch_size: auto
+  gradient_accumulation_steps: 8
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  quantization: 4bit
+  grpo_beta: 0.1
+  num_generations: 4
+  reward_fn: accuracy
+
+output: ./output
+""",
+    ),
     "qwen3.5-27b-sft": RecipeMeta(
         model="Qwen/Qwen3.5-27B",
         task="sft",
@@ -4104,6 +4136,40 @@ training:
 output: ./output
 """,
     ),
+    "deepseek-v4-flash-grpo": RecipeMeta(
+        model="deepseek-ai/DeepSeek-V4-Flash",
+        task="grpo",
+        size="N/A",
+        tags=("deepseek", "deepseek-v4", "grpo", "reasoning", "moe"),
+        description="DeepSeek V4 Flash MoE GRPO reasoning training (MIT, efficiency-tier)",
+        yaml_str="""\
+base: deepseek-ai/DeepSeek-V4-Flash
+task: grpo
+
+data:
+  train: ./data/reasoning_train.jsonl
+  format: auto
+  max_length: 8192
+
+training:
+  epochs: 3
+  lr: 1e-5
+  batch_size: 1
+  gradient_accumulation_steps: 16
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  quantization: 4bit
+  grpo_beta: 0.1
+  num_generations: 4
+  reward_fn: accuracy
+  moe_lora: true
+  gradient_checkpointing: true
+
+output: ./output
+""",
+    ),
     "deepseek-v4-pro-sft": RecipeMeta(
         model="deepseek-ai/DeepSeek-V4-Pro",
         task="sft",
@@ -4166,6 +4232,41 @@ training:
     alpha: 64
     target_modules: auto
   quantization: 4bit
+  moe_lora: true
+  moe_aux_loss_coeff: 0.01
+  gradient_checkpointing: true
+
+output: ./output
+""",
+    ),
+    "glm-5.1-dpo": RecipeMeta(
+        model="zai-org/GLM-5.1",
+        task="dpo",
+        size="754B",
+        tags=("glm", "zai-org", "dpo", "alignment", "preference", "moe", "large", "multi-gpu"),
+        description=(
+            "GLM 5.1 MoE DPO alignment (MIT, 754B). Multi-GPU / multi-node recommended."
+        ),
+        yaml_str="""\
+base: zai-org/GLM-5.1
+task: dpo
+
+data:
+  train: ./data/preference_train.jsonl
+  format: dpo
+  max_length: 8192
+
+training:
+  epochs: 1
+  lr: 5e-6
+  batch_size: 1
+  gradient_accumulation_steps: 16
+  lora:
+    r: 32
+    alpha: 64
+    target_modules: auto
+  quantization: 4bit
+  dpo_beta: 0.1
   moe_lora: true
   moe_aux_loss_coeff: 0.01
   gradient_checkpointing: true

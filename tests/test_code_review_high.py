@@ -217,10 +217,10 @@ def test_longlora_wired_into_sft_train():
 
 
 def test_gpus_reexec_passes_run_shaping_flags():
-    src = _src("commands/train.py")
+    src = _src("utils/launcher.py")
     for flag in ('"--gate"', '"--push-as"', '"--trust-remote-code"', '"--tracker"',
                  '"--diagnose-gate"', '"--annex-xi"', '"--repro-receipt"'):
-        assert "script_args" in src and flag in src, f"re-exec drops {flag}"
+        assert "collect_reexec_passthrough" in src and flag in src, f"re-exec drops {flag}"
 
 
 def test_pre_push_hook_enforces_gate_suite():

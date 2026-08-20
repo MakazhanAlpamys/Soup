@@ -12,7 +12,10 @@ Two strategies:
 
 1. **Preferred**: ``tokenizer.apply_chat_template(..., return_assistant_tokens_mask=True,
    return_dict=True)``. Available on HF templates that declare ``{% generation %}``
-   markers. Honest, exact, no heuristic.
+   markers. Mapping outputs such as ``BatchEncoding`` are read through
+   ``input_ids`` and tensor-like ids/masks are normalised to Python integers.
+   If assistant messages are present but the returned mask is all zero, this
+   path is rejected so the fallback can avoid a silent all-``-100`` training row.
 
 2. **Fallback**: Render ``messages[:i]`` vs ``messages[:i+1]`` for each turn and
    take the token delta. The delta is the new turn's tokens (prefix + content +
@@ -27,9 +30,67 @@ Two strategies:
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from operator import index
 from typing import Any, Optional, Sequence
 
 IGNORE_INDEX = -100
+_MISSING = object()
+
+
+def _coerce_int_list(
+    values: Any, *, field: str, allow_bool: bool = False
+) -> list[int]:
+    """Return a one-dimensional tokenizer sequence as Python ``int`` values."""
+    try:
+        items = list(values)
+    except TypeError as exc:
+        raise ValueError(
+            f"tokenizer returned invalid {field}; expected a sequence of integers"
+        ) from exc
+
+    result: list[int] = []
+    for position, item in enumerate(items):
+        if isinstance(item, bool) and not allow_bool:
+            raise ValueError(
+                f"tokenizer returned non-integer {field}[{position}]={item!r}"
+            )
+        try:
+            item = index(item)
+        except TypeError as exc:
+            raise ValueError(
+                f"tokenizer returned non-integer {field}[{position}]={item!r}"
+            ) from exc
+        result.append(int(item))
+    return result
+
+
+def _is_mapping_like(out: Any) -> bool:
+    """True for ``Mapping`` *or* a duck-typed mapping with ``.get``.
+
+    ``collections.abc.Mapping`` covers ``dict`` and HF ``BatchEncoding``
+    (a ``UserDict``). A tokenizer that returns a dict-like object which is
+    not registered as a Mapping used to miss this gate: ``coerce_token_ids``
+    then iterated the object's *keys* and raised
+    ``input_ids[0]='input_ids'``, and ``_apply_template_with_mask`` silently
+    skipped the mask path. One predicate, two call sites (#441).
+    """
+    return isinstance(out, Mapping) or hasattr(out, "get")
+
+
+def coerce_token_ids(out: Any) -> list[int]:
+    """Extract and normalise token ids from a sequence or mapping output.
+
+    Mapping-like outputs are read through ``input_ids``. This is the shared
+    contract with ``utils.data_doctor`` — public so a private name cannot
+    hide a second copy of the logic (#441 / #430).
+    """
+    values = out
+    if _is_mapping_like(out):
+        values = out.get("input_ids", _MISSING)
+        if values is _MISSING:
+            raise ValueError("tokenizer output mapping has no 'input_ids'")
+    return _coerce_int_list(values, field="input_ids")
 
 
 def _validate_max_length(max_length: int) -> None:
@@ -61,19 +122,34 @@ def _apply_template_with_mask(
     except TypeError:
         # Old HF that doesn't recognise return_assistant_tokens_mask.
         return None
-    if not isinstance(out, dict):
+    if not _is_mapping_like(out):
         return None
     masks = out.get("assistant_masks")
-    ids = out.get("input_ids")
-    if masks is None or ids is None:
+    if masks is None:
         return None
-    if len(masks) != len(ids):
+    try:
+        ids = coerce_token_ids(out)
+        mask = _coerce_int_list(
+            masks, field="assistant_masks", allow_bool=True
+        )
+    except ValueError:
         return None
-    return list(ids), list(masks)
+    if len(mask) != len(ids):
+        return None
+    if any(msg.get("role") == "assistant" for msg in messages) and not any(mask):
+        # Some templates accept the mask kwargs but have no {% generation %}
+        # markers. Trusting their all-zero mask would silently train no tokens.
+        return None
+    return ids, mask
 
 
 def _tokenize_only(tokenizer: Any, messages: Sequence[dict]) -> list[int]:
-    """Render and tokenize ``messages``; never let HF auto-prepend BOS again."""
+    """Render ``messages`` into Python int ids without auto-prepending BOS.
+
+    Mapping outputs (including ``BatchEncoding``) are read through
+    ``input_ids``. Tensor-like sequences are normalised element by element;
+    missing or non-integer ids raise instead of flowing into a collator.
+    """
     try:
         out = tokenizer.apply_chat_template(
             messages,
@@ -88,9 +164,7 @@ def _tokenize_only(tokenizer: Any, messages: Sequence[dict]) -> list[int]:
             tokenize=True,
             add_generation_prompt=False,
         )
-    if isinstance(out, dict):
-        return list(out.get("input_ids", []))
-    return list(out)
+    return coerce_token_ids(out)
 
 
 def _truncate(
@@ -131,7 +205,9 @@ def build_assistant_only_labels(
 
     Raises:
         ValueError: empty messages, non-positive max_length, or tokenizer
-            lacking a chat_template.
+            lacking a chat_template or returning invalid token ids. When a
+            template reports an all-zero assistant mask despite assistant
+            messages, Soup falls back to incremental rendering instead.
         TypeError: ``include_eot`` not bool.
     """
     if not isinstance(include_eot, bool):

@@ -865,6 +865,7 @@ class GemmCeiling:
     tflops: float
     sm_clock_mhz: Optional[int]
     size: int
+    samples: tuple[float, ...] = ()
 
 
 def sm_clock_mhz() -> Optional[int]:
@@ -935,7 +936,7 @@ def measure_gemm_tflops(
         return None
     if not torch.cuda.is_available():
         return None
-    best = 0.0
+    samples: list[float] = []
     try:
         left = torch.randn(size, size, device=device, dtype=torch.bfloat16)
         right = torch.randn(size, size, device=device, dtype=torch.bfloat16)
@@ -952,14 +953,22 @@ def measure_gemm_tflops(
             torch.cuda.synchronize()
             seconds = start.elapsed_time(end) / 1000.0
             if seconds > 0:
-                best = max(best, 2.0 * (size**3) * iters / seconds / 1e12)
+                samples.append(2.0 * (size**3) * iters / seconds / 1e12)
         del left, right
         torch.cuda.empty_cache()
     except (RuntimeError, torch.cuda.OutOfMemoryError):
         return None
+    if not samples:
+        return None
+    best = max(samples)
     if best <= 0:
         return None
-    return GemmCeiling(tflops=best, sm_clock_mhz=sm_clock_mhz(), size=size)
+    return GemmCeiling(
+        tflops=best,
+        sm_clock_mhz=sm_clock_mhz(),
+        size=size,
+        samples=tuple(samples),
+    )
 
 
 @dataclass(frozen=True)
@@ -1162,14 +1171,15 @@ def build_nf4_config(dtype: str, *, double_quant: bool = True):
     """The BitsAndBytesConfig the streamed skeleton and the sharder share.
 
     ``double_quant`` defaults to True to match
-    ``quant_menu.build_quantization_config_for_loader``, which hardcodes it for
-    every resident 4-bit load in this repo. That agreement is load-bearing, not
-    cosmetic: the release's central claim is that a streamed NF4 run is
-    bit-exact against a resident one, and it holds only while both sides
-    quantise with the same settings. ``training.bnb_4bit_use_double_quant`` is
-    therefore deliberately NOT threaded in here — honouring it on the streamed
-    side alone would silently break that parity. (That the flag is ignored
-    repo-wide is a pre-existing gap, tracked separately.)
+    ``quant_menu.build_quantization_config_for_loader``, whose own default is
+    True for every resident 4-bit load in this repo. That agreement is
+    load-bearing, not cosmetic: the release's central claim is that a streamed
+    NF4 run is bit-exact against a resident one, and it holds only while both
+    sides quantise with the same settings. Since #321,
+    ``training.bnb_4bit_use_double_quant`` IS threaded through both paths from
+    the SAME config field (``stream_setup`` reads it once and passes it to the
+    sharder and this skeleton together), so honouring it can no longer make the
+    two sides drift apart.
     """
     from transformers import BitsAndBytesConfig
 
@@ -1360,6 +1370,11 @@ def materialize_meta_adapters(model: Any, *, seed: int = 0, device: str = "cuda"
     build that device is ``meta``, so the adapters have no storage: the
     optimizer happily accepts them and the run trains nothing. Re-initialise
     with PEFT's own scheme (A ~ kaiming_uniform, B = 0).
+
+    The return value is the number of parameters materialised, not a success
+    signal.  In particular, zero is healthy when PEFT created real adapter
+    tensors itself.  Call :func:`assert_trainable_adapters_materialized` after
+    this function to enforce the actual postcondition.
     """
     import torch
     import torch.nn as nn
@@ -1379,6 +1394,33 @@ def materialize_meta_adapters(model: Any, *, seed: int = 0, device: str = "cuda"
             module._parameters[pname] = nn.Parameter(data.to(device), requires_grad=True)
             count += 1
     return count
+
+
+def assert_trainable_adapters_materialized(model: Any) -> None:
+    """Refuse a streamed build whose trainable LoRA tensors have no storage.
+
+    Decoder weights deliberately remain on ``meta`` under layer streaming, so
+    the invariant is restricted to trainable ``lora_*`` parameters.  It is a
+    postcondition rather than an interpretation of
+    :func:`materialize_meta_adapters`' return count: PEFT versions differ on
+    whether adapters need materialising, but both must leave real tensors.
+    """
+    stranded = [
+        name
+        for name, param in model.named_parameters()
+        if param.requires_grad and "lora_" in name and param.is_meta
+    ]
+    if not stranded:
+        return
+
+    preview = ", ".join(stranded[:4])
+    remainder = len(stranded) - 4
+    if remainder > 0:
+        preview += f", ... (+{remainder} more)"
+    raise RuntimeError(
+        "trainable LoRA parameters remain on the meta device after adapter "
+        f"materialization: {preview}. Refusing to train adapters without storage."
+    )
 
 
 # ==========================================================================
@@ -1466,6 +1508,7 @@ def install_streaming(
     index: Any,
     buffers: int = 2,
     pin: bool = True,
+    require_pin: bool = False,
     device: str = "cuda",
     console: Any = None,
     codes: Optional[Mapping[str, Any]] = None,
@@ -1524,7 +1567,9 @@ def install_streaming(
             validate_quant_shape(ckpt, spec_q, shard_spec)
     spec = needed
 
-    source, pinned = _build_source(shard_dir, n_layers, spec, pin, console, tier)
+    source, pinned = _build_source(
+        shard_dir, n_layers, spec, pin, console, tier, require_pin=require_pin
+    )
     pool = LayerBufferPool(spec, n_buffers=buffers, device=device)
     stream = torch.cuda.Stream() if str(device).startswith("cuda") else None
     prefetcher = StreamPrefetcher(pool, source, n_layers, stream)
@@ -1563,21 +1608,55 @@ def install_streaming(
     )
 
 
-def _build_source(shard_dir, n_layers, spec, pin, console, tier="ram"):
+def _build_source(shard_dir, n_layers, spec, pin, console, tier="ram", require_pin=False):
     """Build the weight source for the chosen tier.
 
     On the RAM tier, page-locking is bounded by the box rather than by free RAM
     (the dev box topped out at 7.12 GB with 9.1 GB "available"). Falling back to
     a pageable store is correct; hiding the ~97% -> ~79% GPU-utilisation cost is
     not, so the fallback says so out loud.
+
+    ``require_pin`` (from ``training.stream_pin=true``) turns that fallback into
+    a hard refusal on the RAM tier: the user asked for the pinned store
+    explicitly, so silently degrading to a pageable one — spending the whole
+    throughput margin pinning exists to provide — is exactly the outcome the flag
+    exists to prevent.
+
+    On the DISK tier pinning is not *unsatisfiable*, it is *inapplicable*: the
+    base does not fit in RAM, so weights stream directly from NVMe and there is
+    no RAM store to page-lock. Refusing here would brick the very runs the disk
+    tier exists for, so ``require_pin`` proceeds — but it is announced, never
+    dropped in silence (#366 review).
     """
     if tier == "disk":
+        if require_pin:
+            message = (
+                "training.stream_pin=true, but this run is on the disk tier: the "
+                "base does not fit in RAM, so weights stream directly from NVMe "
+                "and there is no RAM store to page-lock. Pinning does not apply "
+                "here; proceeding without it."
+            )
+            if console is not None:
+                console.print(f"[yellow]{message}[/]")
+            else:
+                logger.warning(message)
         return DiskSource(shard_dir, n_layers, spec), False
     if not pin:
         return RamSource(shard_dir, n_layers, spec, pin=False), False
     try:
         return RamSource(shard_dir, n_layers, spec, pin=True), True
     except (RuntimeError, MemoryError) as exc:
+        store_gb = n_layers * _spec_bytes(spec) / 1e9
+        if require_pin:
+            raise RuntimeError(
+                "training.stream_pin=true but this box could not page-lock the "
+                f"{store_gb:.2f} GB RAM store ({type(exc).__name__}). Refusing "
+                "rather than silently degrading to a pageable store, which makes "
+                "host-to-device copies synchronous and costs the ~97% -> ~79% "
+                "GPU-utilisation overlap pinning buys. Free RAM, use a smaller "
+                "base, or unset training.stream_pin to allow the pageable "
+                "fallback."
+            ) from exc
         message = (
             "layer streaming could not page-lock the base "
             f"({type(exc).__name__}); falling back to a PAGEABLE RAM store. "
@@ -1592,6 +1671,11 @@ def _build_source(shard_dir, n_layers, spec, pin, console, tier="ram"):
         return RamSource(shard_dir, n_layers, spec, pin=False), False
 
 
+def _spec_bytes(spec: Mapping[str, Tuple[Tuple[int, ...], str]]) -> int:
+    """Bytes held by ONE decoder layer, from the shard spec — for messages only."""
+    return sum(math.prod(shape) * _dtype_size(dtype) for shape, dtype in spec.values())
+
+
 def build_streamed_model(
     *,
     model_id: str,
@@ -1602,6 +1686,7 @@ def build_streamed_model(
     dtype: str = "bfloat16",
     buffers: int = 2,
     pin: bool = True,
+    require_pin: bool = False,
     seed: int = 0,
     trust_remote_code: bool = False,
     console: Any = None,
@@ -1624,12 +1709,14 @@ def build_streamed_model(
         param.requires_grad = False
     model = get_peft_model(model, lora_config)
     materialize_meta_adapters(model, seed=seed, device=device)
+    assert_trainable_adapters_materialized(model)
     runtime = install_streaming(
         model,
         shard_dir=shard_dir,
         index=index,
         buffers=buffers,
         pin=pin,
+        require_pin=require_pin,
         device=device,
         console=console,
         codes=extras.codes,

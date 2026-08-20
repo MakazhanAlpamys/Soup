@@ -49,3 +49,6 @@ docs/superpowers/
 
 # Local scratch / temp scripts at repo root (e.g. _smoke.py, _scratch.py) — never committed
 /_*.py
+
+# Layer-streaming disk-throughput probe scratch file (soup doctor --disk / training pre-flight)
+.soup-diskprobe-*

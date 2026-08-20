@@ -13,6 +13,7 @@ import os
 import re
 
 import pytest
+import typer
 import yaml
 from typer.testing import CliRunner
 
@@ -1016,3 +1017,256 @@ class TestLlamaCppHomeAnchor:
         assert Path(found).resolve() == llama.resolve()
         # and no stray .soup litter in the working directory
         assert not (workdir / ".soup").exists()
+
+
+# --------------------------------------------------------------------------- #
+# #309 — BOM / attestation as registry artifact kinds, surfaced by `soup card`
+# --------------------------------------------------------------------------- #
+_SHA64_A = "a" * 64
+_SHA64_B = "b" * 64
+_SHA64_C = "c" * 64
+
+
+class TestBomAttestRegistryKinds:
+    """`soup bom emit` / `soup attest emit` can attach their output to a
+    registry entry as first-class artifact kinds, and `soup card` lists them —
+    closing the one gap in the otherwise self-contained provenance story."""
+
+    def test_add_artifact_accepts_bom_and_attestation(self, tmp_path, monkeypatch):
+        from soup_cli.registry.store import _VALID_KINDS, RegistryStore
+
+        assert "bom" in _VALID_KINDS
+        assert "attestation" in _VALID_KINDS
+
+        monkeypatch.chdir(tmp_path)
+        db = tmp_path / "reg.db"
+        bom = tmp_path / "m.cdx.json"
+        bom.write_text("{}", encoding="utf-8")
+        att = tmp_path / "m.attest.json"
+        att.write_text("{}", encoding="utf-8")
+        with RegistryStore(db_path=db) as store:
+            eid = store.push(name="m", tag="v1", base_model="b", task="sft",
+                             run_id=None, config={"base": "b"}, notes=None)
+            store.add_artifact(entry_id=eid, kind="bom", path=str(bom))
+            store.add_artifact(entry_id=eid, kind="attestation", path=str(att))
+            kinds = {a["kind"] for a in store.get_artifacts(eid)}
+        assert {"bom", "attestation"} <= kinds
+
+    def test_bom_emit_attaches_to_registry(self, tmp_path, monkeypatch):
+        from soup_cli.cli import app
+        from soup_cli.registry.store import RegistryStore
+
+        db = tmp_path / "reg.db"
+        eid = _make_entry(db)
+        monkeypatch.setenv("SOUP_REGISTRY_DB_PATH", str(db))
+        monkeypatch.chdir(tmp_path)
+        result = runner.invoke(app, [
+            "bom", "emit", "--name", "m", "--base-model", "b",
+            "--base-sha", _SHA64_A, "--config-sha", _SHA64_B,
+            "-o", "bom.cdx.json", "--attach-to-registry", eid,
+        ])
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        with RegistryStore(db_path=db) as store:
+            arts = store.get_artifacts(eid)
+        assert [a["kind"] for a in arts] == ["bom"]
+        assert arts[0]["path"].endswith("bom.cdx.json")
+
+    def test_bom_emit_both_attaches_each_file(self, tmp_path, monkeypatch):
+        from soup_cli.cli import app
+        from soup_cli.registry.store import RegistryStore
+
+        db = tmp_path / "reg.db"
+        eid = _make_entry(db)
+        monkeypatch.setenv("SOUP_REGISTRY_DB_PATH", str(db))
+        monkeypatch.chdir(tmp_path)
+        result = runner.invoke(app, [
+            "bom", "emit", "--name", "m", "--base-model", "b",
+            "--base-sha", _SHA64_A, "--config-sha", _SHA64_B,
+            "--format", "both", "-o", "bom", "--attach-to-registry", eid,
+        ])
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        with RegistryStore(db_path=db) as store:
+            names = sorted(os.path.basename(a["path"]) for a in store.get_artifacts(eid))
+        assert names == ["bom.cdx.json", "bom.spdx.json"]
+
+    def test_bom_emit_attach_without_output_is_usage_error(self, tmp_path, monkeypatch):
+        from soup_cli.cli import app
+        from soup_cli.registry.store import RegistryStore
+
+        db = tmp_path / "reg.db"
+        eid = _make_entry(db)
+        monkeypatch.setenv("SOUP_REGISTRY_DB_PATH", str(db))
+        monkeypatch.chdir(tmp_path)
+        result = runner.invoke(app, [
+            "bom", "emit", "--name", "m", "--base-model", "b",
+            "--base-sha", _SHA64_A, "--config-sha", _SHA64_B,
+            "--attach-to-registry", eid,  # no --output -> nothing to attach
+        ])
+        assert result.exit_code == 2, (result.output, repr(result.exception))
+        assert "attach-to-registry needs --output" in _clean(result.output)
+        with RegistryStore(db_path=db) as store:
+            assert store.get_artifacts(eid) == []
+
+    def test_attest_emit_attaches_to_registry(self, tmp_path, monkeypatch):
+        from soup_cli.cli import app
+        from soup_cli.registry.store import RegistryStore
+
+        db = tmp_path / "reg.db"
+        eid = _make_entry(db)
+        monkeypatch.setenv("SOUP_REGISTRY_DB_PATH", str(db))
+        monkeypatch.chdir(tmp_path)
+        result = runner.invoke(app, [
+            "attest", "emit", "--stage", "train", "--subject", "m",
+            "--sha", _SHA64_C, "-o", "att.json", "--attach-to-registry", eid,
+        ])
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        with RegistryStore(db_path=db) as store:
+            arts = store.get_artifacts(eid)
+        assert [a["kind"] for a in arts] == ["attestation"]
+        assert arts[0]["path"].endswith("att.json")
+
+    def test_signed_attest_emit_attaches_signature_sidecar(self, tmp_path, monkeypatch):
+        from soup_cli.cli import app
+        from soup_cli.commands import attest as attest_cmd
+        from soup_cli.registry.store import RegistryStore
+
+        db = tmp_path / "reg.db"
+        eid = _make_entry(db)
+        monkeypatch.setenv("SOUP_REGISTRY_DB_PATH", str(db))
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(
+            attest_cmd,
+            "sign_attestation",
+            lambda *_args, **_kwargs: {
+                "backend": "ed25519",
+                "signature": "signed",
+                "public_key": "public",
+            },
+        )
+        result = runner.invoke(app, [
+            "attest", "emit", "--stage", "train", "--subject", "m",
+            "--sha", _SHA64_C, "--sign", "ed25519", "--key", "key.pem",
+            "-o", "signed.attest.json", "--attach-to-registry", eid,
+        ])
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        with RegistryStore(db_path=db) as store:
+            paths = sorted(os.path.basename(artifact["path"])
+                           for artifact in store.get_artifacts(eid))
+        assert paths == ["signed.attest.json", "signed.attest.json.sig"]
+
+    def test_attest_emit_attach_without_output_is_usage_error(self, tmp_path, monkeypatch):
+        from soup_cli.cli import app
+        from soup_cli.registry.store import RegistryStore
+
+        db = tmp_path / "reg.db"
+        eid = _make_entry(db)
+        monkeypatch.setenv("SOUP_REGISTRY_DB_PATH", str(db))
+        monkeypatch.chdir(tmp_path)
+        result = runner.invoke(app, [
+            "attest", "emit", "--stage", "train", "--subject", "m",
+            "--sha", _SHA64_C, "--attach-to-registry", eid,
+        ])
+        assert result.exit_code == 2, (result.output, repr(result.exception))
+        assert "attach-to-registry needs --output" in _clean(result.output)
+        with RegistryStore(db_path=db) as store:
+            assert store.get_artifacts(eid) == []
+
+    @pytest.mark.parametrize("command_args,output_name", [
+        ([
+            "bom", "emit", "--name", "m", "--base-model", "b",
+            "--base-sha", _SHA64_A, "--config-sha", _SHA64_B,
+        ], "failed.bom.json"),
+        ([
+            "attest", "emit", "--stage", "train", "--subject", "m",
+            "--sha", _SHA64_C,
+        ], "failed.attest.json"),
+    ])
+    def test_emit_registry_failure_exits_one_and_preserves_output(
+        self, tmp_path, monkeypatch, command_args, output_name,
+    ):
+        from soup_cli.cli import app
+
+        monkeypatch.setenv("SOUP_REGISTRY_DB_PATH", str(tmp_path / "reg.db"))
+        monkeypatch.chdir(tmp_path)
+        result = runner.invoke(app, [
+            *command_args, "--output", output_name,
+            "--attach-to-registry", "missing-entry",
+        ])
+        assert result.exit_code == 1, (result.output, repr(result.exception))
+        assert "could not attach to registry" in _clean(result.output)
+        assert (tmp_path / output_name).is_file()
+
+    @pytest.mark.parametrize("command_module,helper_name", [
+        ("soup_cli.commands.attest", "_attach_attestation"),
+        ("soup_cli.commands.bom", "_attach_bom"),
+    ])
+    def test_attach_helpers_fail_when_registry_helper_is_unavailable(
+        self, monkeypatch, capsys, command_module, helper_name,
+    ):
+        import builtins
+        import importlib
+
+        module = importlib.import_module(command_module)
+        real_import = builtins.__import__
+
+        def unavailable_registry_helper(name, *args, **kwargs):
+            if name == "soup_cli.registry.attach":
+                raise ImportError("registry unavailable")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", unavailable_registry_helper)
+        with pytest.raises(typer.Exit) as exc_info:
+            getattr(module, helper_name)("entry-id", ["artifact.json"])
+        assert exc_info.value.exit_code == 1
+        assert "could not import registry attach helper" in _clean(capsys.readouterr().out)
+
+    @pytest.mark.parametrize("command_module,helper_name", [
+        ("soup_cli.commands.attest", "_attach_attestation"),
+        ("soup_cli.commands.bom", "_attach_bom"),
+    ])
+    def test_attach_helpers_fail_after_attach_failure(
+        self, monkeypatch, capsys, command_module, helper_name,
+    ):
+        import importlib
+
+        from soup_cli.registry import attach as registry_attach
+
+        module = importlib.import_module(command_module)
+        attached = []
+
+        def attach_or_fail(_registry_id, *, path, kind):
+            if not attached:
+                attached.append((path, kind))
+                raise ValueError("registry unavailable")
+            attached.append((path, kind))
+
+        monkeypatch.setattr(registry_attach, "attach_artifact", attach_or_fail)
+        with pytest.raises(typer.Exit) as exc_info:
+            getattr(module, helper_name)("entry-id", ["first.json", "second.json"])
+        assert exc_info.value.exit_code == 1
+        assert attached == [
+            ("first.json", "attestation" if "attest" in command_module else "bom"),
+        ]
+        assert "could not attach to registry" in _clean(capsys.readouterr().out)
+
+    def test_card_lists_attached_bom_and_attestation(self, tmp_path, monkeypatch):
+        from soup_cli.cli import app
+
+        db = tmp_path / "reg.db"
+        monkeypatch.chdir(tmp_path)
+        bom = tmp_path / "m.cdx.json"
+        bom.write_text("{}", encoding="utf-8")
+        att = tmp_path / "m.attest.json"
+        att.write_text("{}", encoding="utf-8")
+        eid = _make_entry(db, with_artifact=("bom", str(bom)))
+        from soup_cli.registry.store import RegistryStore
+        with RegistryStore(db_path=db) as store:
+            store.add_artifact(entry_id=eid, kind="attestation", path=str(att))
+        monkeypatch.setenv("SOUP_REGISTRY_DB_PATH", str(db))
+        result = runner.invoke(app, ["card", eid, "-o", "CARD.md"])
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        card = (tmp_path / "CARD.md").read_text(encoding="utf-8")
+        assert "m.cdx.json" in card
+        assert "m.attest.json" in card
+        assert "bom" in card
+        assert "attestation" in card

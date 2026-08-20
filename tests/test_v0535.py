@@ -495,6 +495,49 @@ def test_proxy_timeout_raises_runtimeerror(tmp_path, monkeypatch):
             )
 
 
+def test_overlay_yaml_loads_through_config_schema(tmp_path):
+    # #442 — same defect #330 fixed in the recipe writer, in the second
+    # renderer: `_render_overlay_yaml` emitted `data.train` as a YAML list,
+    # but `DataConfig.train` is typed `str`, so every `--live` candidate got
+    # handed a config it could not load. Every other test in this section
+    # mocks `subprocess.run`, so this is the one that actually loads the
+    # *returned string* through the real schema — it fails if the renderer
+    # regresses to a list. (A fully unmocked `--live` run needs a real
+    # training subprocess/GPU and isn't practical in this suite; the
+    # remaining `--live` coverage below intentionally mocks `subprocess.run`
+    # and asserts orchestration instead.)
+    from soup_cli.utils.mix_proxy import _render_overlay_yaml
+
+    base_text = _make_base_yaml(tmp_path).read_text(encoding="utf-8")
+    overlay = _render_overlay_yaml(
+        base_text, ("a.jsonl", "b.jsonl"), (0.3, 0.7)
+    )
+    cfg = load_config_from_string(overlay)
+    assert cfg.data.train == "b.jsonl"
+
+
+def test_overlay_comment_does_not_drift_from_train_value(tmp_path):
+    # Maintainer's review of #442: the comment spliced above `train:` names
+    # which dataset was picked, but nothing tied that claim to the actual
+    # value — it could vanish (mutation: delete the insertion block) or lie
+    # (mutation: comment names datasets[0] while train: keeps best_idx) and
+    # every other test still passes. Tying the assertion to the *parsed
+    # config's* value rather than the renderer's own variable is what makes
+    # the second mutation fail here.
+    from soup_cli.utils.mix_proxy import _render_overlay_yaml
+
+    base_text = _make_base_yaml(tmp_path).read_text(encoding="utf-8")
+    overlay = _render_overlay_yaml(
+        base_text, ("a.jsonl", "b.jsonl"), (0.3, 0.7)
+    )
+    cfg = load_config_from_string(overlay)
+    lines = overlay.split("\n")
+    idx = next(i for i, ln in enumerate(lines) if ln.startswith("  train:"))
+    comment = lines[idx - 1]
+    assert comment.lstrip().startswith("#")  # fails if the block is deleted
+    assert repr(cfg.data.train) in comment  # fails if the comment lies
+
+
 def test_proxy_happy_path_reads_tracker(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     base = _make_base_yaml(tmp_path)

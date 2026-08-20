@@ -1745,13 +1745,32 @@ class TrainingConfig(BaseModel):
         ),
     )
     # Part E — LF / Axolotl parity.
-    bnb_4bit_use_double_quant: bool = Field(
-        default=False,
+    bnb_4bit_use_double_quant: Optional[bool] = Field(
+        # #321 — tri-state so an unset flag round-trips cleanly. Every 4-bit load
+        # path has always double-quantized, so `None` (unset) means "use the
+        # shipped default", which each 4-bit consumer resolves to True. A literal
+        # `default=True` here would make `model_dump()` emit the key on EVERY
+        # config, so re-validating a dumped non-4bit config (train.py replay,
+        # sweep round-trips, the 21 bundled recipes) would trip the footgun below.
+        # With `None` the footgun fires only on an explicit `true`. Only
+        # meaningful when quantization='4bit'.
+        default=None,
         description=(
             "Apply BNB 4-bit double-quantization (LF / Axolotl parity). "
-            "Only meaningful when quantization='4bit'. (v0.53.0)"
+            "Unset means the shipped default (on, to match every 4-bit load "
+            "path); set false to disable it. Only meaningful when "
+            "quantization='4bit'. (v0.53.0)"
         ),
     )
+
+    @property
+    def double_quant_on(self) -> bool:
+        """Resolve the tri-state ``bnb_4bit_use_double_quant`` for the 4-bit load
+        paths: unset (``None``) uses the shipped default (double-quantize), so
+        every consumer that builds a ``BitsAndBytesConfig`` reads a real bool and
+        stays in agreement (#321)."""
+        return self.bnb_4bit_use_double_quant is not False
+
     llm_int8: bool = Field(
         default=False,
         description=(
@@ -3040,6 +3059,28 @@ class TrainingConfig(BaseModel):
             raise ValueError("training.stream_buffers must be an int, not bool")
         return v
 
+    stream_pin: Optional[bool] = Field(
+        default=None,
+        description=(
+            "Force the page-locked (pinned) RAM store on or off. None (the "
+            "default) lets the box decide: it attempts a pinned store and falls "
+            "back to a pageable one — announcing the cost — when the host cannot "
+            "page-lock it. 'false' forces the pageable store, the only known "
+            "escape hatch when a pinning path is suspect (it was the sole "
+            "mitigation while #331 was live). 'true' forces the pinned store and "
+            "REFUSES the run on the RAM tier, naming the store size, if the box "
+            "cannot page-lock it, rather than silently degrading — page-locking "
+            "is worth up to 6.56x measured throughput, so a silent fallback "
+            "spends the whole margin the feature exists to provide. On the disk "
+            "tier (the base does not fit in RAM, so there is no RAM store to "
+            "page-lock) and on CPU (page-locking is a host-to-device transfer "
+            "optimization and there is no device) pinning is INAPPLICABLE rather "
+            "than unsatisfiable: 'true' is announced and the run proceeds "
+            "without it, so the key stays committable to a config shared between "
+            "a GPU box and a CPU box."
+        ),
+    )
+
     stream_vram_override: Optional[int] = Field(
         default=None,
         ge=0,
@@ -3081,6 +3122,19 @@ class TrainingConfig(BaseModel):
             "forward+backward, which IS the SFT step but is not a preference "
             "loss, and it under-measures those badly enough to make the gate "
             "unsafe."
+        ),
+    )
+    stream_disk_kind: Optional[Literal["nvme", "ssd", "hdd"]] = Field(
+        default=None,
+        description=(
+            "Override the auto-detected disk media type for the streaming disk "
+            "overflow tier. Detection classifies a device by a measured "
+            "sequential read when the kernel's rotational flag is unreliable — "
+            "virtio and other paravirtual disks report spinning with no media "
+            "hint, so a fast cloud disk is otherwise refused (#365). Set this "
+            "for the case where even that is wrong: 'nvme' forces the disk tier "
+            "on, 'ssd'/'hdd' force it off. The resolved value is printed beside "
+            "what was detected."
         ),
     )
 
@@ -4902,12 +4956,15 @@ class SoupConfig(BaseModel):
                 or tcfg.stream_buffers != 2
                 or tcfg.stream_vram_override is not None
                 or tcfg.stream_vram_probe
+                or tcfg.stream_disk_kind is not None
+                or tcfg.stream_pin is not None
             ):
                 raise ValueError(
                     "training.stream_source / training.stream_buffers / "
                     "training.stream_vram_override / training.stream_vram_probe "
-                    "set but stream_layers is false; set stream_layers=true to "
-                    "stream the base layer-by-layer."
+                    "/ training.stream_disk_kind / training.stream_pin set but "
+                    "stream_layers is false; set stream_layers=true to stream the "
+                    "base layer-by-layer."
                 )
             return self
         # v0.72.4 — the four preference losses join SFT. DPO and KTO take their
@@ -5362,9 +5419,15 @@ class SoupConfig(BaseModel):
     def _validate_bnb_4bit_double_quant(self) -> "SoupConfig":
         """v0.53.0 Part E — ``bnb_4bit_use_double_quant=True`` requires
         ``quantization='4bit'`` (silent-no-op footgun otherwise).
+
+        #321 — the field is tri-state (`None` = unset = shipped default). The
+        footgun fires only on an explicit ``True``: ``None`` and ``False`` carry
+        no intent to double-quantize, so a non-4bit config is not rejected — and
+        because unset serializes as ``None`` (not ``True``), a dumped-and-reloaded
+        config no longer trips this, unlike the old ``model_fields_set`` gate.
         """
         tcfg = self.training
-        if not tcfg.bnb_4bit_use_double_quant:
+        if tcfg.bnb_4bit_use_double_quant is not True:
             return self
         if tcfg.quantization != "4bit":
             raise ValueError(

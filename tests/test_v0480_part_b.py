@@ -15,6 +15,7 @@ BETA feature. Covers:
 
 from __future__ import annotations
 
+import json
 import os
 
 import pytest
@@ -497,6 +498,9 @@ def test_render_recipe_shape(tmp_path):
     assert "0.600000" in text
     assert "0.400000" in text
     assert "a.jsonl" in text
+    # #330 — data.train is a single string (the highest-weighted dataset),
+    # not a list soup train's schema rejects.
+    assert f"train: {json.dumps(str(tmp_path / 'a.jsonl'))}" in text
 
 
 def test_render_recipe_rejects_non_report():

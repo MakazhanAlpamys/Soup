@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "soup-cli"
-version = "0.73.2"
+version = "0.73.3"
 description = "Fine-tune and post-train LLMs in one command. No SSH, no config hell."
 readme = "README.md"
 license = "Apache-2.0"
@@ -38,6 +38,11 @@ dependencies = [
     "pyyaml>=6.0",
     "huggingface-hub>=0.16.0",
     "plotext>=5.2.0",
+    # `env check` reads declared bounds via packaging (Requirement/marker/version).
+    # It ships with pip and is pulled in transitively, but `env check` degrades to
+    # a silent "clean" without it — the wrong direction for a checker — so it is
+    # declared explicitly (#368 review).
+    "packaging>=21.0",
 ]
 
 [project.optional-dependencies]
@@ -130,7 +135,13 @@ audio = ["librosa>=0.10.0", "soundfile>=0.12.0"]
 awq = ["autoawq>=0.2.0"]
 gptq = ["auto-gptq>=0.7.0"]
 sglang = ["sglang>=0.2.0", "fastapi>=0.104.0", "uvicorn>=0.24.0"]
-mlx = ["mlx>=0.20.0", "mlx-lm>=0.31.3"]
+mlx = [
+    "mlx>=0.20.0",
+    "mlx-lm>=0.31.3",
+    # mlx-lm imports transformers at runtime; keep the standalone contract from
+    # depending on that transitive requirement remaining undeclared here.
+    "transformers>=5.0.0",
+]
 cce = ["cut-cross-entropy>=24.10.0"]
 tui = ["textual>=0.50.0"]
 # v0.53.8 #89 — bundle MLflow / SwanLab / Trackio for `--tracker` users.

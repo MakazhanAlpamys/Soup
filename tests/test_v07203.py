@@ -490,17 +490,196 @@ class TestMeasuredGemmCeiling:
 
     def test_takes_the_best_repeat_not_the_first(self):
         """A ceiling's noise is ONE-SIDED — contention, a cold clock and thermal
-        throttling only ever make an achievable rate look slower. Measured: at
-        2048 the probe spread 38% across five repeats and ramped monotonically
-        upward, which is how a first-repeat probe reported 3.54 TFLOPS in one
-        session and 6.75 in another at the same reported clock."""
+        throttling only ever make an achievable rate look slower. Taking the best
+        repeat must return max(samples) and include all repeat measurements."""
         from soup_cli.utils.layer_stream_runtime import measure_gemm_tflops
 
-        one = measure_gemm_tflops(device="cuda", reps=1)
-        many = measure_gemm_tflops(device="cuda", reps=4)
-        assert one is not None and many is not None
-        # best-of-4 can only be >= a single sample, up to run-to-run noise
-        assert many.tflops >= one.tflops * 0.9
+        got = measure_gemm_tflops(device="cuda", reps=4)
+        assert got is not None
+        assert len(got.samples) == 4
+        assert got.tflops == max(got.samples)
+        assert got.tflops >= got.samples[0]
+        assert got.tflops >= max(got.samples[1:])
+
+
+class TestIssue444BestRepeatSelection:
+    """Regression tests for #444: deterministic repeat selection in measure_gemm_tflops."""
+
+    def test_gemm_ceiling_defaults_samples_to_empty_tuple(self) -> None:
+        from soup_cli.utils.layer_stream_runtime import GemmCeiling
+
+        ceiling = GemmCeiling(tflops=10.5, sm_clock_mhz=1200, size=4096)
+        assert ceiling.tflops == 10.5
+        assert ceiling.sm_clock_mhz == 1200
+        assert ceiling.size == 4096
+        assert ceiling.samples == ()
+
+    def test_selection_picks_maximum_repeat_not_first_or_last(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Synthetic benchmark proving best-of-N selects max(samples) deterministically."""
+        import sys
+
+        from soup_cli.utils import layer_stream_runtime
+
+        elapsed_sequence = [100.0, 20.0, 50.0, 40.0]
+        call_idx = 0
+
+        class _MockEvent:
+            def __init__(self, *args, **kwargs) -> None:
+                pass
+
+            def record(self) -> None:
+                pass
+
+            def elapsed_time(self, other: object) -> float:
+                nonlocal call_idx
+                val = elapsed_sequence[call_idx % len(elapsed_sequence)]
+                call_idx += 1
+                return val
+
+        class _MockCuda:
+            @staticmethod
+            def is_available() -> bool:
+                return True
+
+            @staticmethod
+            def synchronize() -> None:
+                pass
+
+            @staticmethod
+            def empty_cache() -> None:
+                pass
+
+            Event = _MockEvent
+            OutOfMemoryError = RuntimeError
+
+        class _MockTensor:
+            def __matmul__(self, other: object) -> "_MockTensor":
+                return self
+
+        class _MockTorch:
+            bfloat16 = "bfloat16"
+            cuda = _MockCuda
+
+            @staticmethod
+            def randn(*args: object, **kwargs: object) -> _MockTensor:
+                return _MockTensor()
+
+        monkeypatch.setitem(sys.modules, "torch", _MockTorch)
+        monkeypatch.setattr(layer_stream_runtime, "sm_clock_mhz", lambda: 1500)
+
+        res = layer_stream_runtime.measure_gemm_tflops(
+            device="cuda", iters=8, reps=4, size=4096
+        )
+        assert res is not None
+        assert len(res.samples) == 4
+        # Repeat index 1 (20ms) is 5x faster than repeat index 0 (100ms)
+        assert res.samples[1] > res.samples[0]
+        assert res.tflops == max(res.samples)
+        assert res.tflops == res.samples[1]
+        assert res.tflops != res.samples[0]
+        assert res.tflops != res.samples[-1]
+
+    def test_zero_elapsed_timing_returns_none(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Degenerate timing (seconds <= 0) must return None without raising."""
+        import sys
+
+        from soup_cli.utils import layer_stream_runtime
+
+        class _MockEvent:
+            def __init__(self, *args, **kwargs) -> None:
+                pass
+
+            def record(self) -> None:
+                pass
+
+            def elapsed_time(self, other: object) -> float:
+                return 0.0
+
+        class _MockCuda:
+            @staticmethod
+            def is_available() -> bool:
+                return True
+
+            @staticmethod
+            def synchronize() -> None:
+                pass
+
+            @staticmethod
+            def empty_cache() -> None:
+                pass
+
+            Event = _MockEvent
+            OutOfMemoryError = RuntimeError
+
+        class _MockTensor:
+            def __matmul__(self, other: object) -> "_MockTensor":
+                return self
+
+        class _MockTorch:
+            bfloat16 = "bfloat16"
+            cuda = _MockCuda
+
+            @staticmethod
+            def randn(*args: object, **kwargs: object) -> _MockTensor:
+                return _MockTensor()
+
+        monkeypatch.setitem(sys.modules, "torch", _MockTorch)
+        got = layer_stream_runtime.measure_gemm_tflops(device="cuda", reps=4)
+        assert got is None
+
+    def test_zero_iters_returns_none(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Degenerate iters=0 must yield non-positive rates and return None."""
+        import sys
+
+        from soup_cli.utils import layer_stream_runtime
+
+        class _MockEvent:
+            def __init__(self, *args, **kwargs) -> None:
+                pass
+
+            def record(self) -> None:
+                pass
+
+            def elapsed_time(self, other: object) -> float:
+                return 10.0
+
+        class _MockCuda:
+            @staticmethod
+            def is_available() -> bool:
+                return True
+
+            @staticmethod
+            def synchronize() -> None:
+                pass
+
+            @staticmethod
+            def empty_cache() -> None:
+                pass
+
+            Event = _MockEvent
+            OutOfMemoryError = RuntimeError
+
+        class _MockTensor:
+            def __matmul__(self, other: object) -> "_MockTensor":
+                return self
+
+        class _MockTorch:
+            bfloat16 = "bfloat16"
+            cuda = _MockCuda
+
+            @staticmethod
+            def randn(*args: object, **kwargs: object) -> _MockTensor:
+                return _MockTensor()
+
+        monkeypatch.setitem(sys.modules, "torch", _MockTorch)
+        got = layer_stream_runtime.measure_gemm_tflops(device="cuda", iters=0, reps=4)
+        assert got is None
 
 
 class TestBatchSizeIsSupported:
@@ -581,7 +760,9 @@ class TestDiskKindDetection:
 
         calls = []
         monkeypatch.setattr(ls, "_DISK_KIND_CACHE", {})
-        monkeypatch.setattr(ls, "_probe_disk_kind", lambda p: calls.append(p) or "nvme")
+        monkeypatch.setattr(
+            ls, "_probe_disk_kind", lambda p: calls.append(p) or ls.DiskClassification("nvme")
+        )
 
         assert ls.detect_disk_kind(".") == "nvme"
         assert ls.detect_disk_kind(".") == "nvme"
@@ -624,6 +805,282 @@ class TestDiskKindDetection:
         assert _windows_kind({"MediaType": "4", "BusType": "SATA"}) == "ssd"
         assert _windows_kind({"MediaType": "0", "BusType": "SATA"}) == "unknown"
         assert _windows_kind({"MediaType": "5", "BusType": "SATA"}) == "unknown"
+
+
+class TestDiskKindMeasuredFallback:
+    """#365 — a virtio disk reports ``rotational=1`` with no media hint, so the
+    flag alone refused a genuinely NVMe-backed cloud disk the overflow tier. When
+    the flag is unreliable, classify on a measured sequential read instead; the
+    HDD refusal (160 seeks/step, plan P11) must survive as a control."""
+
+    def test_throughput_at_or_above_the_floor_is_nvme_class(self):
+        from soup_cli.utils.layer_stream import (
+            NVME_TIER_MIN_BYTES_PER_S,
+            _classify_measured_read,
+        )
+
+        assert _classify_measured_read(NVME_TIER_MIN_BYTES_PER_S) == "nvme"
+        assert _classify_measured_read(1.5e9) == "nvme"  # the reported virtio disk
+
+    def test_slow_or_unmeasurable_stays_hdd(self):
+        from soup_cli.utils.layer_stream import (
+            NVME_TIER_MIN_BYTES_PER_S,
+            _classify_measured_read,
+        )
+
+        assert _classify_measured_read(NVME_TIER_MIN_BYTES_PER_S - 1) == "hdd"
+        assert _classify_measured_read(150e6) == "hdd"  # a real spinning disk
+        assert _classify_measured_read(None) == "hdd"  # can't tell -> refuse
+
+    @staticmethod
+    def _fake_linux(monkeypatch, *, devices, rotational, measured_bps):
+        """Simulate a Linux ``/sys/block`` layout so the real probe branch runs."""
+        import builtins
+        import io
+        import os
+        import platform
+        import sys
+
+        import pytest
+
+        # detect_disk_kind is a Linux /sys/block feature (it returns "unknown"
+        # elsewhere by design). This helper hardcodes forward-slash /sys paths,
+        # which os.path.join mangles on Windows, so the simulation is meaningful
+        # only on Linux — where the real CI cells and local runs exercise it.
+        if sys.platform != "linux":
+            pytest.skip("simulates a Linux /sys/block layout; disk-tier detection is Linux-only")
+
+        import soup_cli.utils.layer_stream as ls
+
+        real_listdir = os.listdir
+        real_open = builtins.open
+        real_exists = os.path.exists
+
+        monkeypatch.setattr(platform, "system", lambda: "Linux")
+        monkeypatch.setattr(
+            os,
+            "listdir",
+            lambda p: list(devices) if str(p) == "/sys/block" else real_listdir(p),
+        )
+        monkeypatch.setattr(
+            os.path,
+            "exists",
+            lambda p: True if "/queue/rotational" in str(p) else real_exists(p),
+        )
+
+        def fake_open(p, *a, **k):
+            if "/queue/rotational" in str(p):
+                return io.StringIO(f"{rotational}\n")
+            return real_open(p, *a, **k)
+
+        monkeypatch.setattr(builtins, "open", fake_open)
+        monkeypatch.setattr(ls, "_measure_seq_read_bytes_per_s", lambda _p: measured_bps)
+        monkeypatch.setattr(ls, "_DISK_KIND_CACHE", {})
+
+    def test_virtio_fast_disk_now_earns_the_disk_tier(self, monkeypatch):
+        """Criterion 1: no NVMe device, ``rotational=1``, fast measured read."""
+        import soup_cli.utils.layer_stream as ls
+
+        self._fake_linux(monkeypatch, devices=["vda"], rotational=1, measured_bps=1.5e9)
+        assert ls.detect_disk_kind("/data") == "nvme"
+        # ...and choose_tier accepts it where the pre-fix "hdd" would have raised.
+        assert ls.choose_tier(1000, 10, ls.detect_disk_kind("/data")) == ls.TIER_DISK
+
+    def test_a_genuinely_slow_device_is_still_refused(self, monkeypatch):
+        """Criterion 2 (the control): the fix cannot be satisfied by 'always allow'."""
+        import soup_cli.utils.layer_stream as ls
+
+        self._fake_linux(monkeypatch, devices=["vda"], rotational=1, measured_bps=150e6)
+        assert ls.detect_disk_kind("/data") == "hdd"
+        with pytest.raises(ValueError, match="NVMe"):
+            ls.choose_tier(1000, 10, ls.detect_disk_kind("/data"))
+
+    def test_rotational_zero_is_authoritative_and_never_measures(self, monkeypatch):
+        """A device that declares itself solid state is trusted — no probe cost."""
+        import soup_cli.utils.layer_stream as ls
+
+        self._fake_linux(monkeypatch, devices=["sda"], rotational=0, measured_bps=None)
+        calls = []
+        monkeypatch.setattr(
+            ls, "_measure_seq_read_bytes_per_s", lambda _p: calls.append(1) or 9e9
+        )
+        assert ls.detect_disk_kind("/data") == "ssd"
+        assert calls == [], "measured probe ran on an authoritative rotational=0"
+
+    def test_measurement_is_bounded_and_best_effort(self, monkeypatch):
+        """Criterion 4: no O_DIRECT (or any failure) degrades to None -> refused,
+        never an unbounded or crashing probe."""
+        import os
+
+        import soup_cli.utils.layer_stream as ls
+
+        monkeypatch.delattr(os, "O_DIRECT", raising=False)
+        assert ls._measure_seq_read_bytes_per_s(".") is None
+
+    def test_refusal_cites_the_measured_rate(self):
+        """#411 review: a measurement-driven refusal names the rate that earned
+        it, not just the opaque ``'hdd'`` verdict. CPU-only — the rate travels
+        with the verdict in a ``DiskClassification``, so no /sys simulation is
+        needed to exercise the note (it runs on all CI cells, not just Linux)."""
+        import soup_cli.utils.layer_stream as ls
+
+        # A verdict DERIVED from a measurement carries the rate that produced it.
+        slow = ls.DiskClassification("hdd", measured_bps=150e6)
+        with pytest.raises(ValueError) as excinfo:
+            ls.choose_tier(1000, 10, slow)
+        message = str(excinfo.value)
+        assert "measured 0.15 GB/s" in message
+        assert "1.0 GB/s NVMe floor" in message
+
+    def test_override_verdict_does_not_cite_a_probe_rate(self):
+        """#411 re-review (blocker 2): the bug was a module global that let a
+        refusal cite a rate ABOVE the floor as the reason a disk fell UNDER it —
+        e.g. stream_disk_kind=hdd on a fast virtio disk. The rate now travels
+        with the verdict, and an override verdict carries none, so the refusal
+        structurally cannot cite a reading it did not produce. CPU-only."""
+        import soup_cli.utils.layer_stream as ls
+
+        # kind='hdd' from an override; measured_bps=None because the verdict is
+        # the user's, not the probe's (see resolve_disk_kind).
+        overridden = ls.DiskClassification("hdd", measured_bps=None)
+        with pytest.raises(ValueError) as excinfo:
+            ls.choose_tier(1000, 10, overridden)
+        assert "measured" not in str(excinfo.value)
+
+    def test_override_returns_a_measureless_classification(self, monkeypatch):
+        """resolve_disk_kind with an override must strip any probe rate, even
+        when detection measured a fast disk underneath (the #411 re-review repro:
+        detect 2.0 GB/s, override to hdd — the 2.0 must not survive)."""
+        import soup_cli.utils.layer_stream as ls
+
+        monkeypatch.setattr(
+            ls, "classify_disk_kind", lambda *_a, **_k: ls.DiskClassification("nvme", 2.0e9)
+        )
+        result = ls.resolve_disk_kind("/data", "hdd", notify=lambda _m: None)
+        assert result.kind == "hdd"
+        assert result.measured_bps is None
+
+    def test_the_read_is_repeated_and_the_best_sample_wins(self, monkeypatch, tmp_path):
+        """#411 review: the single-sample threshold is the weakness — repeat the
+        read and keep the fastest so a lone cold sample cannot refuse a fast disk.
+
+        The filesystem I/O is mocked so the timing is deterministic regardless of
+        whether the test host's temp dir actually supports O_DIRECT."""
+        import os
+        import tempfile
+        import time
+
+        import soup_cli.utils.layer_stream as ls
+
+        if getattr(os, "O_DIRECT", None) is None:
+            pytest.skip("O_DIRECT is Linux-only; the probe returns None elsewhere")
+
+        scratch = str(tmp_path / "scratch")
+        monkeypatch.setattr(tempfile, "mkstemp", lambda **_k: (123, scratch))
+        monkeypatch.setattr(os, "write", lambda _fd, b: len(b))
+        monkeypatch.setattr(os, "fsync", lambda _fd: None)
+        monkeypatch.setattr(os, "close", lambda _fd: None)
+        monkeypatch.setattr(os, "open", lambda _p, _flags: 456)
+        monkeypatch.setattr(os, "lseek", lambda _fd, _off, _whence: 0)
+        monkeypatch.setattr(os, "unlink", lambda _p: None)
+        readv_calls = []
+
+        def fake_readv(_fd, _bufs):
+            readv_calls.append(1)
+            return ls._MEASURE_READ_BYTES
+
+        monkeypatch.setattr(os, "readv", fake_readv)
+        # Three reads with elapsed 2s, 1s, 4s -> the 1s sample is the fastest.
+        clock = iter([0.0, 2.0, 0.0, 1.0, 0.0, 4.0])
+        monkeypatch.setattr(time, "monotonic", lambda: next(clock))
+
+        best = ls._measure_seq_read_bytes_per_s(str(tmp_path))
+        assert len(readv_calls) == ls._MEASURE_READ_SAMPLES
+        assert best == ls._MEASURE_READ_BYTES / 1.0  # bytes / fastest elapsed (1s)
+
+    def test_probe_writes_into_the_target_volume_not_its_parent(
+        self, monkeypatch, tmp_path
+    ):
+        """The caller passes shard_dir (a directory); the scratch probe must land
+        INSIDE it, not its parent — else a mount point's throughput is measured
+        on the wrong filesystem."""
+        import os
+        import tempfile
+
+        import soup_cli.utils.layer_stream as ls
+
+        if not hasattr(os, "O_DIRECT"):
+            pytest.skip("O_DIRECT is Linux-only")
+
+        target = tmp_path / "shards"
+        target.mkdir()
+        seen = {}
+        real_mkstemp = tempfile.mkstemp
+
+        def spy_mkstemp(*a, **k):
+            seen["dir"] = k.get("dir")
+            return real_mkstemp(*a, **k)
+
+        monkeypatch.setattr(tempfile, "mkstemp", spy_mkstemp)
+        ls._measure_seq_read_bytes_per_s(str(target))  # O_DIRECT may fail on tmpfs; fine
+        assert seen.get("dir") == str(target)
+
+    def test_override_wins_and_reports_what_it_overrode(self, monkeypatch):
+        """Criterion 3: the override is used AND the notice names both values."""
+        import soup_cli.utils.layer_stream as ls
+
+        monkeypatch.setattr(ls, "detect_disk_kind", lambda *_a, **_k: "hdd")
+        notes = []
+        assert ls.resolve_disk_kind("/data", "nvme", notify=notes.append).kind == "nvme"
+        assert notes and "nvme" in notes[0] and "hdd" in notes[0]
+
+    def test_no_override_returns_the_detected_kind_silently(self, monkeypatch):
+        import soup_cli.utils.layer_stream as ls
+
+        monkeypatch.setattr(
+            ls, "classify_disk_kind", lambda *_a, **_k: ls.DiskClassification("ssd")
+        )
+        notes = []
+        assert ls.resolve_disk_kind("/data", None, notify=notes.append).kind == "ssd"
+        assert notes == []
+
+    def test_stream_disk_kind_is_a_footgun_without_stream_layers(self):
+        import yaml
+
+        from soup_cli.config.loader import load_config_from_string
+
+        with pytest.raises(ValueError, match="stream_disk_kind"):
+            load_config_from_string(
+                yaml.safe_dump(_stream_disk_kind_config(stream_layers=False))
+            )
+
+    def test_stream_disk_kind_is_accepted_while_streaming(self):
+        import yaml
+
+        from soup_cli.config.loader import load_config_from_string
+
+        cfg = load_config_from_string(
+            yaml.safe_dump(_stream_disk_kind_config(stream_layers=True))
+        )
+        assert cfg.training.stream_disk_kind == "nvme"
+
+
+def _stream_disk_kind_config(*, stream_layers):
+    return {
+        "base": "hf-internal-testing/tiny-random-LlamaForCausalLM",
+        "task": "sft",
+        "backend": "transformers",
+        "modality": "text",
+        "data": {"train": "train.jsonl", "max_length": 64, "chat_template": "chatml"},
+        "training": {
+            "stream_layers": stream_layers,
+            "stream_disk_kind": "nvme",
+            "quantization": "none",
+            "batch_size": 1,
+            "epochs": 1,
+            "lora": {"r": 4, "alpha": 8, "target_modules": ["q_proj", "v_proj"]},
+        },
+    }
 
 
 class TestDoctorReportsTheDiskKind:
@@ -863,6 +1320,25 @@ class TestDiskTier:
         runtime.close()
 
 
+#: Free RAM to report so the tiny base comfortably takes the RAM tier.
+_RAM_TIER_FREE_BYTES = 10_000_000_000
+#: Render width for the captured pre-flight. The plan notes arrive inside a
+#: `rich.panel.Panel`; too narrow a console wraps the measured figures across a
+#: line break and the assertions below miss text that IS on screen.
+_PANEL_CAPTURE_WIDTH = 200
+#: The measured page-locking gain (`PIN_THROUGHPUT_GAIN_REAL`, Qwen2.5-32B NF4)
+#: as it appears on screen. Written as the literal the user reads rather than
+#: imported, so that changing the production constant fails these tests too.
+_PIN_GAIN_REAL_TEXT = "6.56"
+#: The forced-pageable note must be identifiable as such, not merely contain the
+#: number: some unrelated line carrying "6.56" would otherwise satisfy the check.
+_FORCED_PAGEABLE_TEXT = "training.stream_pin=false"
+#: Free/total VRAM to report from a stubbed `torch.cuda.mem_get_info()` so the
+#: pre-flight fit check passes on a box with no GPU. Generous on purpose: the
+#: point of these cases is the require_pin wiring, not the VRAM budget.
+_SIMULATED_FREE_VRAM_BYTES = 16_000_000_000
+
+
 class TestAutoTierFallback:
     """`stream_source: auto` (the default) takes RAM when the base fits and
     falls back to the NVMe disk tier when it does not. Driven through the real
@@ -891,8 +1367,12 @@ class TestAutoTierFallback:
         # Pinned rather than probed: the real media type differs between this
         # box (NVMe) and a CI runner (often "unknown"), and an
         # environment-dependent tier would make these flaky rather than wrong.
+        # Patch classify_disk_kind (what resolve_disk_kind and detect_disk_kind
+        # both route through) so the pin reaches the streaming setup's lambda.
+        import soup_cli.utils.layer_stream as _ls
+
         monkeypatch.setattr(
-            "soup_cli.utils.layer_stream.detect_disk_kind", lambda *_a, **_k: disk_kind
+            _ls, "classify_disk_kind", lambda *_a, **_k: _ls.DiskClassification(disk_kind)
         )
         cfg = load_config_from_string(
             f"base: {weights}\ntask: sft\nbackend: transformers\nmodality: text\n"
@@ -906,6 +1386,165 @@ class TestAutoTierFallback:
         wrapper.device = device
         wrapper._setup_streaming_transformers(cfg, cfg.training)
         return wrapper
+
+    @staticmethod
+    def _stub_build_streamed_model(monkeypatch, captured, *, tier="ram"):
+        """Intercept build_streamed_model so a CPU-only test can assert what the
+        pre-flight threaded into the runtime, without building a real model.
+
+        Patched on the SOURCE module because stream_setup imports it locally."""
+        from unittest.mock import MagicMock
+
+        import soup_cli.utils.layer_stream_runtime as rt
+
+        def fake_build(**kwargs):
+            captured.update(kwargs)
+            runtime = MagicMock()
+            runtime.tier = tier
+            runtime.stats.return_value = {
+                "tier": tier,
+                "store_bytes": 1_000_000_000,
+                "disk_bytes": 1_000_000_000,
+                "pinned": bool(kwargs.get("require_pin") or kwargs.get("pin")),
+                "buffers": 2,
+                "buffer_bytes": 4_000_000,
+                "n_layers": 2,
+            }
+            return MagicMock(), runtime
+
+        monkeypatch.setattr(rt, "build_streamed_model", fake_build)
+
+    def test_stream_pin_threads_require_pin_into_the_runtime_and_announces_cpu(
+        self, tmp_path, monkeypatch
+    ):
+        """#366 re-review blocker 2: prove the key REACHES the runtime call —
+        `captured` fails with KeyError if the require_pin= argument at
+        stream_setup.py is deleted, which is the mutation that previously left
+        the suite green. And blocker 1: on CPU pinning is inapplicable (no CUDA
+        device), so an explicit stream_pin=true is ANNOUNCED, not silently
+        dropped. CPU-only — build_streamed_model is stubbed."""
+        import soup_cli.trainer.stream_setup as ss
+
+        messages = []
+
+        class _RecordingConsole:
+            def print(self, *args, **_kwargs):
+                messages.append(" ".join(str(a) for a in args))
+
+        monkeypatch.setattr(ss, "console", _RecordingConsole())
+        captured = {}
+        self._stub_build_streamed_model(monkeypatch, captured)
+        self._run(
+            tmp_path, monkeypatch, free_ram=10_000_000_000, stream_source="auto",
+            device="cpu", extra_training_yaml="  stream_pin: true\n",
+        )
+        # The runtime call received require_pin (blocker 2) — False here because
+        # it is gated on a real CUDA device, which is the correct value on CPU.
+        assert captured["require_pin"] is False
+        # The explicit request was announced, not dropped (blocker 1).
+        assert any("no CUDA device" in m for m in messages), messages
+
+    def _run_capture(self, tmp_path, monkeypatch, extra_training_yaml):
+        """Drive the real pre-flight and return what a user would SEE.
+
+        The plan notes reach the user inside a ``rich.panel.Panel``, so a
+        recording console that merely stringifies its arguments captures the
+        Panel's object repr and sees none of the note text — a false negative.
+        It has to render through a real ``Console`` writing to a buffer, wide
+        enough that the measured figures are not broken across a wrap."""
+        import io
+
+        from rich.console import Console
+
+        import soup_cli.trainer.stream_setup as ss
+
+        buffer = io.StringIO()
+        monkeypatch.setattr(
+            ss, "console", Console(file=buffer, width=_PANEL_CAPTURE_WIDTH)
+        )
+        self._stub_build_streamed_model(monkeypatch, {})
+        self._run(
+            tmp_path, monkeypatch, free_ram=_RAM_TIER_FREE_BYTES,
+            stream_source="auto", device="cpu",
+            extra_training_yaml=extra_training_yaml,
+        )
+        return buffer.getvalue()
+
+    def test_stream_pin_false_makes_the_preflight_state_the_cost(
+        self, tmp_path, monkeypatch
+    ):
+        """#366 round-3 C1: the VALUE of training.stream_pin must reach the plan,
+        not merely the keyword. Hardcoding `stream_pin=None` (or True/False) at
+        the build_stream_plan call left the whole suite green, because every
+        existing test called build_stream_plan directly and nothing crossed the
+        wiring. Driven end-to-end through the real pre-flight."""
+        out = self._run_capture(tmp_path, monkeypatch, "  stream_pin: false\n")
+        assert _FORCED_PAGEABLE_TEXT in out, out
+        assert _PIN_GAIN_REAL_TEXT in out, out
+
+    def test_unset_stream_pin_does_not_state_a_forced_pageable_cost(
+        self, tmp_path, monkeypatch
+    ):
+        """The control that makes the test above discriminating: without it a
+        mutant that ALWAYS emitted the forced-pageable note would pass."""
+        out = self._run_capture(tmp_path, monkeypatch, "")
+        assert _FORCED_PAGEABLE_TEXT not in out, out
+        assert _PIN_GAIN_REAL_TEXT not in out, out
+
+    def _run_on_simulated_cuda(self, tmp_path, monkeypatch, extra_training_yaml):
+        """Drive the pre-flight down its `on_cuda` branch WITHOUT a GPU.
+
+        `on_cuda` is `str(self.device).startswith("cuda")` — a plain string
+        check — so the branch itself needs no device. Only two things behind it
+        do: the free-VRAM measurement and the allocator hint, both stubbed here.
+        `build_streamed_model` is stubbed too, so nothing ever reaches a kernel.
+
+        Written this way on purpose: gated behind @requires_cuda these two cases
+        would skip on CI, which is exactly where the mutation they exist to kill
+        needs to die."""
+        import torch
+
+        import soup_cli.utils.layer_stream_runtime as rt
+
+        monkeypatch.setattr(
+            torch.cuda, "mem_get_info",
+            lambda *_a, **_k: (_SIMULATED_FREE_VRAM_BYTES, _SIMULATED_FREE_VRAM_BYTES),
+        )
+        # Patched on the SOURCE module, like build_streamed_model above:
+        # stream_setup imports it inside the function.
+        monkeypatch.setattr(
+            rt, "expandable_segments_status", lambda *_a, **_k: (True, "")
+        )
+        captured = {}
+        self._stub_build_streamed_model(monkeypatch, captured)
+        self._run(
+            tmp_path, monkeypatch, free_ram=_RAM_TIER_FREE_BYTES,
+            stream_source="auto", device="cuda",
+            extra_training_yaml=extra_training_yaml,
+        )
+        return captured
+
+    def test_stream_pin_true_reaches_the_runtime_as_true_on_cuda(
+        self, tmp_path, monkeypatch
+    ):
+        """#366 round-3 C3: on CPU `(stream_pin is True) and on_cuda` is False
+        whatever stream_pin holds, so a CPU assertion of `is False` is satisfied
+        identically by the real expression and by a hardcoded constant — it
+        cannot discriminate. This is the case that pins the other half of that
+        conjunction, and therefore the only one that fails when `require_pin` is
+        hardcoded to False."""
+        captured = self._run_on_simulated_cuda(
+            tmp_path, monkeypatch, "  stream_pin: true\n"
+        )
+        assert captured["require_pin"] is True
+
+    def test_unset_stream_pin_reaches_the_runtime_as_false_on_cuda(
+        self, tmp_path, monkeypatch
+    ):
+        """Control for the case above — otherwise a hardcoded `True` would pass
+        and the pair would prove nothing about the value."""
+        captured = self._run_on_simulated_cuda(tmp_path, monkeypatch, "")
+        assert captured["require_pin"] is False
 
     def test_auto_uses_ram_when_the_base_fits(self, tmp_path, monkeypatch):
         wrapper = self._run(
@@ -1114,6 +1753,50 @@ def _write_tiny_tokenizer(weights_dir):
         )
 
 
+class TestRequirePinSurvivesEveryHop:
+    """#366 round-3 C2: `require_pin` crosses two hops between the pre-flight and
+    the source constructor — `build_streamed_model -> install_streaming` and
+    `install_streaming -> _build_source`. Hardcoding `require_pin=False` at
+    EITHER left the whole suite green, because the only refusal test called
+    `_build_source` directly and so jumped over both. These drive the real chain
+    over the existing tiny-checkpoint harness. CPU-only."""
+
+    @staticmethod
+    def _fail_pinning(monkeypatch):
+        """Make page-locking fail the way a box out of pinnable RAM does.
+
+        Subclasses the REAL RamSource rather than replacing it with a stub: the
+        pageable construction has to actually work (the control below streams
+        through it), and `install_streaming` calls `RamSource.spec_from_shard`
+        before ever building a source."""
+        import soup_cli.utils.layer_stream_runtime as rt
+
+        class _FailsWhenPinned(rt.RamSource):
+            def __init__(self, shard_dir, n_layers, spec, *, pin=True):
+                if pin:
+                    raise RuntimeError("CUDA error: cannot allocate pinned memory")
+                super().__init__(shard_dir, n_layers, spec, pin=False)
+
+        monkeypatch.setattr(rt, "RamSource", _FailsWhenPinned)
+
+    def test_forced_pin_refuses_through_the_whole_real_chain(
+        self, tmp_path, monkeypatch
+    ):
+        self._fail_pinning(monkeypatch)
+        with pytest.raises(RuntimeError, match="stream_pin"):
+            _tiny_stream(tmp_path, pin=True, require_pin=True)
+
+    def test_the_same_failure_falls_back_silently_without_the_request(
+        self, tmp_path, monkeypatch
+    ):
+        """The control that makes the case above discriminating: the identical
+        page-lock failure must still fall back when nobody asked for the pin, so
+        the refusal is attributable to the flag and not to the failure."""
+        self._fail_pinning(monkeypatch)
+        _model, runtime, _weights = _tiny_stream(tmp_path, pin=True)
+        assert runtime.stats()["pinned"] is False
+
+
 class TestDiskTierConfig:
     def test_stream_source_disk_is_accepted(self):
         from soup_cli.config.loader import load_config_from_string
@@ -1245,7 +1928,7 @@ def _advice(**kw):
 # ==========================================================================
 def _tiny_stream(
     tmp_path, name="shards", seed=3, n_layers=3, device="cpu", tier="ram",
-    quant="none",
+    quant="none", pin=False, require_pin=False,
 ):
     """A streamed model over a real (tiny) on-disk Llama checkpoint."""
     import torch
@@ -1299,8 +1982,8 @@ def _tiny_stream(
     )
     model, runtime = build_streamed_model(
         model_id=str(weights), shard_dir=shards, index=index, lora_config=lora,
-        device=device, dtype="float32", buffers=2, pin=False, seed=seed,
-        tier=tier, quant=quant,
+        device=device, dtype="float32", buffers=2, pin=pin, seed=seed,
+        tier=tier, quant=quant, require_pin=require_pin,
     )
     return model, runtime, str(weights)
 

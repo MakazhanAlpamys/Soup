@@ -53,6 +53,8 @@ def apply_v028_speed_memory(
 
     # --- Cut Cross-Entropy ---------------------------------------------------
     if getattr(tcfg, "use_cut_ce", False):
+        from soup_cli.utils.cut_ce import NO_MATCHING_ARCHITECTURE_MESSAGE
+
         try:
             from soup_cli.utils.cut_ce import apply_cut_ce
             ok = bool(apply_cut_ce(base_model))
@@ -62,10 +64,7 @@ def apply_v028_speed_memory(
         if ok:
             _say("Cut Cross-Entropy enabled (chunked CCE kernel)")
         else:
-            _say(
-                "Cut Cross-Entropy: no matching architecture or "
-                "cut_cross_entropy not installed", style="yellow",
-            )
+            _say(f"Cut Cross-Entropy: {NO_MATCHING_ARCHITECTURE_MESSAGE}", style="yellow")
 
     # --- FP8 training --------------------------------------------------------
     if getattr(tcfg, "quantization_aware", None) == "fp8":

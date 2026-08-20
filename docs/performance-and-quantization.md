@@ -115,7 +115,7 @@ training:
   use_cut_ce: true   # Patches the CE kernel before model load
 ```
 
-Architecture detection matches on the model name's last path component (`meta-llama/Llama-3.1-8B` → llama patcher) so org prefixes don't trigger the wrong recipe. Saves 8-24 GB VRAM at common batch × seq shapes. Not compatible with unsloth (own CE kernel) or mlx. Wired across every transformer-backend trainer (SFT, DPO, GRPO, KTO, ORPO, SimPO, IPO, PPO, Reward-Model, Embedding, Pretrain) — note that PPO has its own forward loop so cut_ce no-ops gracefully there.
+Architecture detection reads `config.model_type` first, so a local checkpoint directory (`soup merge`/`soup shrink`/`soup draft distill` output) is patched the same as a hub id; a name-based match on the last path component (`meta-llama/Llama-3.1-8B` → llama patcher) is the fallback when config resolution is unavailable. Saves 8-24 GB VRAM at common batch × seq shapes. Not compatible with unsloth (own CE kernel) or mlx. Wired across every transformer-backend trainer (SFT, DPO, GRPO, KTO, ORPO, SimPO, IPO, PPO, Reward-Model, Embedding, Pretrain) — note that PPO has its own forward loop so cut_ce no-ops gracefully there.
 
 
 ## Gradient Checkpointing Tiers
@@ -235,8 +235,10 @@ training:
   stream_layers: true          # Enable layer streaming
   stream_source: auto          # 'auto' (same-host RAM), 'ram', 'disk' (v0.72.3)
   stream_buffers: 2            # Double-buffering; range [2, 8]
+  # stream_pin: false          # Force the pinned RAM store off (escape hatch) or on; unset = automatic. See below
   # stream_vram_override: 4_000_000_000   # Bytes to assume free (v0.73.x); see below
   # stream_vram_probe: true    # Decide the fit by MEASURING one step (sft only); see below
+  # stream_disk_kind: nvme     # Override auto disk-kind detection: nvme/ssd/hdd; see below
 ```
 
 ```bash
@@ -277,7 +279,7 @@ The 3B NF4-vs-bf16 rows differ by 1.85×, but attribute that to **pinning, not a
 Untied `embed_tokens` + `lm_head` stay resident and unquantised (2.10 GB of the 8B row's 3.32 GB), which is why 8B sits close to this card's ceiling; treating them as streamed large layers is deferred beyond v0.72.3.
 
 **Honest scope:**
-- **RAM tier + disk overflow (v0.72.3).** `stream_source: auto` picks RAM when it fits, falls back to NVMe disk when not; SATA/HDD rejected. Correctness verified; disk performance unmeasured on the reference box.
+- **RAM tier + disk overflow (v0.72.3).** `stream_source: auto` picks RAM when it fits, falls back to NVMe disk when not; SATA/HDD rejected. Correctness verified; disk performance unmeasured on the reference box. A paravirtual (virtio) disk reports `rotational=1` with no media hint, so a genuinely NVMe-backed cloud disk was misread as an HDD and refused (#365); detection now measures a bounded O_DIRECT sequential read when the rotational flag is unreliable and admits NVMe-class throughput (>= 1 GB/s), while a genuinely slow disk stays rejected. Set `training.stream_disk_kind: nvme` (or `ssd`/`hdd`) to override when detection is still wrong — the resolved value is printed beside what was detected.
 - **Llama / Qwen / Mistral / Gemma / Gemma2 / Gemma3-Text / Phi / Phi3** (all verified bit-exact in bf16 and NF4), `task: sft`, `backend: transformers`, `modality: text`.
 - **Batch sizes, gradient accumulation, `--resume` / `--hf-resume`** all now work (v0.72.3).
 - **Pre-Ampere cards (T4, P100, V100, GTX 16xx, RTX 20xx) now stream in fp16 instead of bf16.** Until this fix the store dtype was hardcoded to bf16 on every CUDA device, so the entire free notebook tier was streaming a dtype its GPU has no units for, and nothing said so — it could not fail on the Ampere card every number above was measured on. fp16 is bit-exact against a resident reference of matching numerics, `0.000000e+00` in both quantisations, exactly as bf16 is.
@@ -286,6 +288,39 @@ Untied `embed_tokens` + `lm_head` stay resident and unquantised (2.10 GB of the 
 - **A streamed 8B run now completes on a Turing card — free-tier Colab, Tesla T4 (sm_75) — and that is all it shows.** `NousResearch/Meta-Llama-3.1-8B-Instruct`, NF4, `stream_buffers: 2`, batch 1, `max_length: 256`, LoRA r=8, fp16: 7 steps, exit 0, adapter written with 128 of 128 tensors non-zero, **measured peak 2.91 GB** against a predicted ~3.02 GB (the pre-flight over-predicts by 3.8%, the safe direction it was fitted for). The T4 has 15.6 GB, so the process was capped to **4.00 GB** with `torch.cuda.set_per_process_memory_fraction`, and the cap was shown to bite — a 4.29 GiB allocation was refused. **No throughput is quoted from this run**: a card under an artificial cap is not a benchmark, and the [notebook](../notebooks/proof-4gb.ipynb) deliberately quotes none either. **What it does not establish**: backward/gradient exactness at 8B on Turing (a non-zero adapter shows gradients flowed, not that they were correct), and the notebook's streamed-vs-resident comparison produced no captured output, so it is recorded as unrun rather than as a pass. Note also that the pre-flight read **free VRAM 15.10 GB** — the device, not the per-process cap — so on capped hardware it is `training.stream_vram_override` and not the fit decision that enforces the real budget. Record: [`benchmarks/run-t4-colab-free-tier.md`](../benchmarks/run-t4-colab-free-tier.md).
 - **The bf16 3B throughput above is a LOWER BOUND.** The reference box could not page-lock the 5.55 GB base (its measured page-locked ceiling is 7.65 GB, and a CUDA context plus the model skeleton did not leave room), so that run fell back to a pageable store. Pageable memory makes the host-to-device copy synchronous, which costs overlap — visible as the GPU-utilisation drop from 96.8% (1.5B, pinned) to 79.3% (3B, pageable). Soup does this fallback automatically **and prints the cost** rather than absorbing it silently. NF4 lifts this at 3B: the store drops under the ceiling and pins.
 - Numbers are Windows/WDDM and therefore systematically pessimistic versus Linux. `expandable_segments:True` is silently ignored on Windows; Soup detects that and does not claim it is active.
+
+### Forcing the pin (`training.stream_pin`)
+
+Pinning is chosen automatically; `stream_pin` is how a config overrides that choice.
+
+- **`stream_pin: false`** forces the pageable RAM store. The pre-flight states the
+  throughput this costs — up to **6.56×** measured (Qwen2.5-32B NF4), **7.41×** on a
+  synthetic — rather than absorbing it silently. This is the escape hatch: it was the
+  only known mitigation while #331 was live.
+- **`stream_pin: true`** forces the page-locked store. **On the RAM tier it REFUSES the
+  run**, naming the store size, if the box cannot page-lock it — instead of degrading to
+  a pageable store and spending the whole margin pinning exists to provide.
+- **Unset (the default)** keeps today's behaviour: on the CUDA RAM tier, attempt a pinned store and fall back to
+  pageable and announce the cost when the host cannot page-lock it.
+
+**Where `true` announces instead of refusing.** Pinning page-locks the RAM store so that
+host→device copies can overlap compute — so it needs both a RAM store *and* a device to
+copy to. In the two cases below one of those is missing, the request is **inapplicable
+rather than unsatisfiable**, and the run *proceeds with an announcement* rather than
+refusing:
+
+| Tier / device | `stream_pin: true` does |
+|---|---|
+| RAM tier on CUDA | pins, or **refuses** naming the store size |
+| Disk tier (base does not fit in RAM, weights stream from NVMe) | announces that pinning does not apply, proceeds |
+| CPU (no CUDA device) | announces that page-locking is a host-to-device optimization, proceeds |
+
+Refusing on those two would brick the large-model runs the disk tier exists for, and
+would make `stream_pin: true` uncommittable to a `soup.yaml` shared between a GPU box and
+a CPU box. The RAM tier is where the flag has real semantics, and there it still refuses.
+
+Set while `stream_layers: false` the key is rejected as a footgun, like the other
+`stream_*` keys.
 
 ### Sizing a streaming run (v0.72.3)
 
@@ -352,7 +387,7 @@ prints this advice when it sees you accumulating.
 - `task: kto` with `batch_size: 1` → TRL's KL term is degenerate at batch 1; refused when the config is read rather than minutes later after sharding
 - `lora.use_dora` / `lora.use_vera` / `lora.init_strategy` other than `random` → these initialise from the real base weight, which is on the meta device under streaming
 - `unfrozen_parameters`, `lisa_enabled`, `packing`, `multipack`, `use_fsdp2_compile`, `train_router_only`, `expand_layers` → each independently rewrites or re-freezes the same layers
-- `stream_source` / `stream_buffers` / `stream_vram_override` / `stream_vram_probe` set while `stream_layers: false` → a footgun, refused
+- `stream_source` / `stream_buffers` / `stream_vram_override` / `stream_vram_probe` / `stream_disk_kind` / `stream_pin` set while `stream_layers: false` → a footgun, refused
 - `stream_vram_probe` on any task other than `sft` → the probe runs a plain causal-LM step, which *is* the SFT step but is not a preference loss. Measured at one matching shape it is conservative there too (6.02 GB against a real DPO step's 5.30 GB, +13.5%), but one shape is not a validation, so it is not offered for `dpo`/`orpo`/`simpo`/`kto` yet
 - an architecture outside the supported list (llama / qwen2 / qwen3 / mistral / gemma / gemma2 / gemma3_text / phi / phi3) → named explicitly
 
@@ -401,7 +436,14 @@ output: ./output
 > If that prints anything, the adapter is affected. From v0.72.1 a streamed adapter is byte-for-byte in the same layout as an ordinary LoRA run.
 
 **Troubleshooting:**
+- **"trainable LoRA parameters remain on the meta device"** — PEFT attached an
+  adapter without real storage and Soup refused the run before installing the
+  streaming runtime. This guard is deliberately based on the final parameter
+  state rather than on how many tensors Soup materialised: some PEFT versions
+  create real adapters themselves. Include the PEFT version and the named
+  parameter from the error when reporting this.
 - **"layer streaming needs the base to fit in RAM"** — the base is larger than free RAM. Set `stream_source: auto` to fall back to the NVMe disk tier, free RAM, or pick a smaller base.
+- **"layer streaming needs NVMe or more RAM … the detected disk is 'hdd'"** on a fast cloud disk — a virtio device reports `rotational=1` with no media hint. Detection now measures the disk when the flag is unreliable; if it still misreads yours, set `training.stream_disk_kind: nvme` to force the tier on (`ssd`/`hdd` force it off).
 - **"could not page-lock the base … falling back to a PAGEABLE RAM store"** — expected on a busy machine. Training continues, more slowly. Close other applications to keep the pinned store.
 - **"layer streaming does not support model_type=…"** — the supported list is llama / qwen2 / qwen3 / mistral / gemma / gemma2 / gemma3_text / phi / phi3. Multimodal `gemma3` is excluded on purpose; use `gemma3_text`.
 - **"predicted peak … exceeds free VRAM" and you believe it is wrong** — lower `batch_size` or `data.max_length` first. Otherwise there are two escape hatches and they are not interchangeable. `training.stream_vram_probe: true` (`sft` only) **measures** one real forward+backward at your configured shape and decides on that, printing the prediction beside it; it costs one step (1–5 s measured) and it can also refuse a run the formula accepted. `training.stream_vram_override: <bytes>` instead **replaces** the free-VRAM figure the check runs against — that is an assertion you are making, not a measurement, so raising it past a real limit is an OOM on Linux and a silent spill on Windows. Prefer the probe when you want to be told the truth; use the override when you know something the driver cannot report.
@@ -725,7 +767,7 @@ Cross-validator ordering picks the most actionable error: `quantization_aware='f
 
 ## LF / Axolotl Quant Parity (v0.53.0)
 
-- `bnb_4bit_use_double_quant: true` — requires `quantization: 4bit`. Activates BNB's double-quantization. Combinations with the Quant Menu formats (gptq / awq / hqq:Nbit / aqlm / eetq / mxfp4 / fp8) are rejected at config load.
+- `bnb_4bit_use_double_quant` — controls BNB's double-quantization. **Defaults to `true`** (matching every 4-bit load path — resident, layer-streaming, and the `soup merge` 4bit save formats), and is now honoured everywhere (#321): set `false` to disable it and it actually reaches BNB. Explicitly setting it requires `quantization: 4bit`; combinations with the Quant Menu formats (gptq / awq / hqq:Nbit / aqlm / eetq / mxfp4 / fp8) are rejected at config load.
 - `llm_int8: true` — an explicit 8-bit assertion. Unlike v0.41.0 `load_in_8bit` (which **rewrites** `quantization` to `8bit`), `llm_int8` enforces that the user has ALSO set `quantization: 8bit`. Mismatch raises with an actionable message.
 - `quantize_ref_model: true` / `quantize_reward_model: true` — extend the v0.40.5 Quant Menu wiring to the reference / reward models inside preference and RLHF training. `quantize_ref_model` accepts any task with a reference policy (`dpo / ipo / simpo / orpo / bco / kto / preference / grpo / ppo`); `quantize_reward_model` accepts `ppo / reward_model`.
 

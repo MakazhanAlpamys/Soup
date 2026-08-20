@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import contextlib
 import os
-import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -16,8 +15,7 @@ from rich.panel import Panel
 from soup_cli.config.loader import load_config
 from soup_cli.data.loader import load_dataset
 from soup_cli.monitoring.display import TrainingDisplay
-from soup_cli.trainer.sft import SFTTrainerWrapper
-from soup_cli.utils.gpu import detect_device, get_gpu_info
+from soup_cli.utils.gpu import detect_device, get_gpu_info, resolve_quantization
 
 if TYPE_CHECKING:  # pragma: no cover - type hints only, no runtime import
     from soup_cli.utils.energy import EnergyMeasurement
@@ -100,6 +98,13 @@ def _hardware_fit_preflight(cfg, gpu_info, *, allow_oom_attempt: bool) -> None:
     # enable. The streaming path runs its own pre-flight instead (RAM-tier fit
     # + the plan panel in _setup_streaming_transformers).
     if getattr(cfg.training, "stream_layers", False):
+        return
+    # MLX uses Apple unified memory and its own runtime allocator, so the
+    # CUDA-shaped analytical VRAM predictor is skipped.  On a non-Apple host,
+    # ``backend: mlx`` still skips harmlessly: ``resolve_trainer`` fails on
+    # the ``mlx_lm`` import before training starts, so there is no silent
+    # hazard from bypassing the gate.
+    if getattr(cfg, "backend", None) == "mlx":
         return
 
     total_bytes = 0
@@ -854,7 +859,10 @@ def train(
         elif num_gpus is not None and num_gpus > 1:
             from soup_cli.utils.launcher import (
                 build_accelerate_argv,
+                build_train_reexec_argv,
+                collect_reexec_passthrough,
                 format_advice,
+                hint_argv_from_reexec,
                 is_in_distributed,
             )
 
@@ -872,89 +880,46 @@ def train(
                 # --no-reexec was passed. Reexec uses os.execvp so the new
                 # accelerate process replaces this process; no leftover PID
                 # tree, stdio passes through unchanged.
-                # Reconstruct argv. Pass through critical flags so the
-                # reexec'd run sees what the user typed.
-                script_args: list[str] = [
-                    sys.executable, "-m", "soup_cli.cli", "train",
-                    "--config", config, "--no-reexec",
-                ]
-                if fsdp:
-                    script_args.extend(["--fsdp", fsdp])
-                if deepspeed:
-                    script_args.extend(["--deepspeed", deepspeed])
-                if resume:
-                    script_args.extend(["--resume", resume])
-                if wandb:
-                    script_args.append("--wandb")
-                if tensorboard:
-                    script_args.append("--tensorboard")
-                if echo_trap_tokenizer_aware:
-                    script_args.append("--echo-trap-tokenizer-aware")
-                if reward_hack_detector is not None:
-                    script_args.extend(
-                        ["--reward-hack-detector", reward_hack_detector]
-                    )
-                if reward_hack_halt:
-                    script_args.append("--reward-hack-halt")
-                if reward_hack_mitigation is not None:
-                    script_args.extend(
-                        ["--reward-hack-mitigation", reward_hack_mitigation]
-                    )
-                # Pass through the remaining run-shaping flags — these were
-                # silently dropped on re-exec, so a multi-GPU run ignored the
-                # eval gate, HF push, trust-remote-code, tracker, diagnose gate,
-                # and the governance/energy artifacts the user asked for.
-                if gate:
-                    script_args.extend(["--gate", gate])
-                if push_as:
-                    script_args.extend(["--push-as", push_as])
-                if hf_resume:
-                    script_args.append("--hf-resume")
-                if trust_remote_code:
-                    script_args.append("--trust-remote-code")
-                if tracker:
-                    script_args.extend(["--tracker", tracker])
-                if diagnose_gate:
-                    script_args.extend(["--diagnose-gate", diagnose_gate])
-                if annex_xi:
-                    script_args.extend(["--annex-xi", annex_xi])
-                if repro_receipt:
-                    script_args.extend(["--repro-receipt", repro_receipt])
-                if profile_run:
-                    script_args.append("--profile")
-                if allow_oom_attempt:
-                    script_args.append("--allow-oom-attempt")
-                if track_energy:
-                    script_args.append("--track-energy")
-                    if energy_country:
-                        script_args.extend(["--energy-country", energy_country])
-                    if energy_out:
-                        script_args.extend(["--energy-out", energy_out])
-                if yes:
-                    script_args.append("--yes")
-                # Distillation / activation-capture flags — same drop-on-reexec
-                # bug class as the block above: a multi-GPU run silently ignored
-                # them (MiniLLM stayed offline, no activation snapshot written).
-                if minillm_on_policy:
-                    script_args.append("--minillm-on-policy")
-                if capture_activations:
-                    script_args.extend(["--capture-activations", capture_activations])
-                if capture_prompts:
-                    script_args.extend(["--capture-prompts", capture_prompts])
+                # #372 — one argv builder for both the re-exec and the printed
+                # hint, so they cannot drift. collect_reexec_passthrough is the
+                # only list of "flags the user typed" that survive a launch.
+                script_args = build_train_reexec_argv(
+                    config,
+                    collect_reexec_passthrough(
+                        name=name,
+                        fsdp=fsdp,
+                        deepspeed=deepspeed,
+                        resume=resume,
+                        wandb=wandb,
+                        tensorboard=tensorboard,
+                        echo_trap_tokenizer_aware=echo_trap_tokenizer_aware,
+                        reward_hack_detector=reward_hack_detector,
+                        reward_hack_halt=reward_hack_halt,
+                        reward_hack_mitigation=reward_hack_mitigation,
+                        gate=gate,
+                        push_as=push_as,
+                        hf_resume=hf_resume,
+                        trust_remote_code=trust_remote_code,
+                        tracker=tracker,
+                        diagnose_gate=diagnose_gate,
+                        annex_xi=annex_xi,
+                        repro_receipt=repro_receipt,
+                        profile_run=profile_run,
+                        allow_oom_attempt=allow_oom_attempt,
+                        track_energy=track_energy,
+                        energy_country=energy_country,
+                        energy_out=energy_out,
+                        yes=yes,
+                        minillm_on_policy=minillm_on_policy,
+                        capture_activations=capture_activations,
+                        capture_prompts=capture_prompts,
+                        replay=replay,
+                        replay_ratio=replay_ratio,
+                        replay_seed=replay_seed,
+                    ),
+                )
                 if no_reexec:
-                    # #77 — this hint used to be hand-built as
-                    # ["soup", "train", "-c", config] and silently dropped every
-                    # other flag the user typed, so following it literally ran
-                    # WITHOUT --fsdp, --deepspeed, --gate and the rest. It is now
-                    # derived from the same script_args the auto-reexec uses, so
-                    # the two cannot drift: one source for "what the user typed".
-                    # --no-reexec itself is dropped because under `accelerate
-                    # launch` the run is already distributed and never re-execs.
-                    hint_args = [
-                        "soup",
-                        "train",
-                        *(a for a in script_args[4:] if a != "--no-reexec"),
-                    ]
+                    hint_args = hint_argv_from_reexec(script_args)
                     console.print(
                         Panel(
                             markup_escape(format_advice(num_gpus, hint_args)),
@@ -1008,17 +973,21 @@ def train(
                 ).items():
                     os.environ.setdefault(key, val)
 
-    # Detect hardware
-    device, device_name = detect_device()
-    gpu_info = get_gpu_info()
+    # Detect hardware with backend awareness
+    device, device_name = detect_device(backend=cfg.backend)
+    gpu_info = get_gpu_info(backend=cfg.backend)
 
-    # Auto-disable quantization on CPU (bitsandbytes doesn't support CPU)
-    if device == "cpu" and cfg.training.quantization in ("4bit", "8bit"):
-        console.print(
-            f"[yellow]Warning: {cfg.training.quantization} quantization is not "
-            "supported on CPU. Switching to quantization: none.[/]"
-        )
-        cfg.training.quantization = "none"
+    # Quantization guard: explicit decision per #423.  See resolve_quantization()
+    # docstring for the full rationale — MLX 4-bit uses pre-quantized mlx-community
+    # weights (not bitsandbytes NF4), CPU cannot run bitsandbytes at all.
+    resolved_quant, quant_warning = resolve_quantization(
+        device=device,
+        backend=cfg.backend,
+        quantization=cfg.training.quantization,
+    )
+    if quant_warning:
+        console.print(f"[yellow]{quant_warning}[/]")
+    cfg.training.quantization = resolved_quant
 
     # Hardware-fit preflight: refuse (unless --allow-oom-attempt) when the
     # analytical VRAM predictor says the run won't fit. Skips silently on CPU
@@ -1436,6 +1405,11 @@ def train(
 
         trainer_wrapper = AsrTrainerWrapper(cfg, **trainer_kwargs)
     else:
+        # Keep the transformers/TRL SFT surface outside the backend-first MLX
+        # route. The wrapper is import-light today, but importing it eagerly
+        # makes an MLX-only install depend on that remaining true forever.
+        from soup_cli.trainer.sft import SFTTrainerWrapper
+
         trainer_wrapper = SFTTrainerWrapper(cfg, **trainer_kwargs)
     trainer_wrapper.setup(dataset)
 
