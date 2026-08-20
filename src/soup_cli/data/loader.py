@@ -21,6 +21,14 @@ console = Console()
 # File extensions we support
 SUPPORTED_EXTENSIONS = {".jsonl", ".json", ".csv", ".parquet", ".txt"}
 
+# Cap on rows materialised from a remote/streaming source — matches v0.24.0
+# ``soup data download --samples`` ceiling. Defends against OOM when a
+# crafted / oversized bucket object or hub dataset is pointed at via
+# streaming + eager-materialise. Shared by _load_remote_dataset (v0.53.8
+# #85) and _load_interleaved_streaming_datasets (#459) so the ceiling can't
+# drift between the two streaming call sites.
+MAX_REMOTE_ROWS = 1_000_000
+
 
 def load_raw_data(path: Path) -> list[dict]:
     """Load raw data from a file into list of dicts."""
@@ -206,6 +214,25 @@ def _finalize(
     return result
 
 
+def _classify_train_entry(value: str) -> str:
+    """Classify one data.train list entry for interleave dispatch (#459).
+
+    Returns ``'remote'`` / ``'hub'`` / ``'local'``. Mirrors the identical
+    classification inline in SoupConfig._validate_interleave_compat — kept
+    as two copies of the same three-line rule (suffix check +
+    is_remote_uri) rather than one shared function, since schema.py must
+    stay import-light (no torch-adjacent deps) and loader.py already owns
+    _looks_like_remote_uri; the rule itself, not the function, is the
+    single source of truth, and both sites are covered by
+    tests/test_issue459_interleave_streaming_hub.py's schema+loader pairs.
+    """
+    if _looks_like_remote_uri(value):
+        return "remote"
+    if not Path(value).suffix:
+        return "hub"
+    return "local"
+
+
 def load_dataset(data_config: DataConfig) -> dict:
     """Load dataset for training. Returns dict with 'train' and optionally 'val' keys.
 
@@ -213,14 +240,20 @@ def load_dataset(data_config: DataConfig) -> dict:
     - Local files (.jsonl, .json, .csv, .parquet, .txt)
     - HuggingFace dataset names (auto-detected if no file extension)
     - Remote fsspec URIs (s3://, gs://, gcs://, az://, abfs://, abfss://, oci://) — v0.53.8 #85
-    - A list of >= 2 local files combined via data.interleave — #443. Schema
-      validation (SoupConfig._validate_interleave_compat) already guarantees
-      data.interleave is set and every entry is a local file path whenever
-      data.train is a list, so this branch never has to re-check that.
+    - A list of >= 2 local files / remote URIs combined via data.interleave
+      (#443 local files; #459 widened to remote URIs when data.streaming is
+      set, and to a separate all-HF-hub-dataset-name list shape). Schema
+      validation (SoupConfig._validate_interleave_compat) already
+      guarantees data.interleave is set and every entry classifies
+      consistently whenever data.train is a list, so this branch only has
+      to pick which loader — not re-validate the shape.
     """
     train_path = data_config.train
 
     if isinstance(train_path, list):
+        kinds = {_classify_train_entry(p) for p in train_path}
+        if kinds == {"hub"}:
+            return _load_interleaved_hub_datasets(train_path, data_config)
         return _load_interleaved_local_datasets(train_path, data_config)
 
     # v0.53.8 #85 — fsspec live remote loader. Schema accepts these URIs
@@ -365,6 +398,16 @@ def _load_interleaved_local_datasets(train_paths: list[str], data_config: DataCo
     """#443 — load + combine every local dataset in a list-shaped
     data.train per data.interleave, then hand the combined rows to the
     existing, unmodified _finalize() — same seam every other loader uses.
+
+    #459 — data_config.streaming=true (list may then also contain remote
+    URIs; schema already enforced that) delegates to
+    _load_interleaved_streaming_datasets instead: HF's own
+    interleave_datasets/concatenate_datasets replace this function's
+    eager per-file combining. The eager body below is untouched and only
+    ever reached when streaming is false, so its output stays
+    byte-identical to pre-#459 (pinned by
+    test_single_path_train_output_is_byte_identical_to_baseline's sibling
+    interleave goldens in tests/test_issue443_interleave_wiring.py).
     """
     from soup_cli.utils.data_pipeline import parse_interleave
 
@@ -376,6 +419,9 @@ def _load_interleaved_local_datasets(train_paths: list[str], data_config: DataCo
         # skipped SoupConfig validation.
         raise ValueError("data.train is a list but data.interleave is not set")
 
+    if data_config.streaming:
+        return _load_interleaved_streaming_datasets(train_paths, data_config, spec)
+
     per_dataset_rows = [_load_one_local_dataset(p, data_config) for p in train_paths]
     combined = _combine_interleaved(per_dataset_rows, spec)
     console.print(
@@ -383,6 +429,111 @@ def _load_interleaved_local_datasets(train_paths: list[str], data_config: DataCo
         f"(strategy={spec.strategy}) -> {len(combined)} rows[/]"
     )
     return _finalize(combined, data_config)
+
+
+def _load_interleaved_streaming_datasets(
+    train_paths: list[str], data_config: DataConfig, spec
+) -> dict:
+    """#459 — data.interleave + data.streaming=true: delegate combining to
+    HF ``datasets.interleave_datasets`` / ``concatenate_datasets`` instead
+    of reimplementing mixing over an unbounded/remote source we can't
+    count ahead of time.
+
+    Every entry (local file path or remote URI — schema guarantees no hub
+    names reach here) becomes one streaming dataset the same way
+    _load_remote_dataset already builds one for a single URI:
+    ``datasets.load_dataset("json", data_files=entry, split="train",
+    streaming=True)``. This is why local and remote entries can share one
+    streaming list: the "json" builder accepts both identically.
+
+    Strategy -> HF call mapping (the "mean the same thing as the local
+    path" decision #459 asks for; also documented in docs/data.md):
+
+    - ``concat`` -> ``concatenate_datasets(streams)``: same as the local
+      path's "extend every source's rows in order", exactly.
+    - ``under``  -> ``interleave_datasets(streams,
+      stopping_strategy="first_exhausted")``: local ``under`` truncates
+      every source to ``min(sizes)``; streaming can't know sizes ahead of
+      time, so stopping at the first exhausted stream gives the same
+      *shape* of outcome (bounded by the smallest source) without an exact
+      row-count guarantee.
+    - ``over``   -> ``interleave_datasets(streams,
+      stopping_strategy="all_exhausted")``: local ``over`` upsamples every
+      source to ``max(sizes)`` by cycling; "all exhausted" recycles
+      shorter streams until the longest is consumed once — same shape,
+      not exact count.
+    - ``probs``  -> ``interleave_datasets(streams,
+      probabilities=list(spec.probs), stopping_strategy="first_exhausted")``:
+      local ``probs`` apportions an EXACT ratio via largest-remainder;
+      streaming samples per ``probabilities`` instead, which converges to
+      the same ratio asymptotically rather than exactly. Tested by running
+      one probs config through both paths and comparing proportions
+      (not two tests that each pass alone) — see
+      test_issue459_interleave_streaming_hub.py.
+
+    Combined output is eagerly materialised up to MAX_REMOTE_ROWS (shared
+    with _load_remote_dataset — one OOM ceiling, not two). Format
+    detection runs ONCE on the combined raw rows when format="auto",
+    mirroring _load_remote_dataset's existing single-detect behaviour —
+    unlike the local-file interleave path's per-source auto-detect,
+    streaming sources are assumed schema-homogeneous; mixing differently
+    -formatted streams via streaming interleave is out of scope (use the
+    non-streaming local path for that).
+    """
+    try:
+        from datasets import concatenate_datasets, interleave_datasets
+        from datasets import load_dataset as hf_load
+    except ImportError as exc:
+        raise ImportError(
+            "data.streaming=true requires the 'datasets' package: "
+            "pip install datasets"
+        ) from exc
+
+    streams = []
+    for entry in train_paths:
+        ds = hf_load("json", data_files=entry, split="train", streaming=True)
+        buf = data_config.buffer_size
+        if buf:
+            ds = ds.shuffle(buffer_size=buf)
+        streams.append(ds)
+
+    if spec.strategy == "concat":
+        combined_stream = concatenate_datasets(streams)
+    elif spec.strategy == "under":
+        combined_stream = interleave_datasets(streams, stopping_strategy="first_exhausted")
+    elif spec.strategy == "over":
+        combined_stream = interleave_datasets(streams, stopping_strategy="all_exhausted")
+    elif spec.strategy == "probs":
+        combined_stream = interleave_datasets(
+            streams, probabilities=list(spec.probs), stopping_strategy="first_exhausted"
+        )
+    else:
+        raise AssertionError(f"unreachable interleave strategy {spec.strategy!r}")
+
+    raw_data: list[dict] = []
+    for i, row in enumerate(combined_stream):
+        if i >= MAX_REMOTE_ROWS:
+            console.print(
+                f"[yellow]Interleaved streaming dataset truncated at "
+                f"{MAX_REMOTE_ROWS:,} rows (use non-streaming local files "
+                "for larger jobs).[/]"
+            )
+            break
+        raw_data.append(dict(row))
+
+    fmt = data_config.format
+    if fmt == "auto":
+        fmt = detect_format(raw_data)
+        console.print(f"[dim]Auto-detected format: {fmt}[/]")
+
+    formatted = [format_to_messages(row, fmt) for row in raw_data]
+    formatted = [r for r in formatted if r is not None]
+
+    console.print(
+        f"[dim]Streaming-interleaved {len(train_paths)} datasets "
+        f"(strategy={spec.strategy}) -> {len(formatted)} rows[/]"
+    )
+    return _finalize(formatted, data_config)
 
 
 def _validate_vision_images(data: list[dict], image_dir: Path) -> list[dict]:
@@ -505,12 +656,6 @@ def _load_remote_dataset(train_path: str, data_config: DataConfig) -> dict:
         )
         raise
 
-    # Cap on rows materialised from a remote URI — matches v0.24.0
-    # ``soup data download --samples`` ceiling. Defends against OOM when a
-    # crafted / oversized bucket object is pointed at via streaming +
-    # eager-materialise.
-    max_remote_rows = 1_000_000
-
     # Try the HF datasets streaming path first when the user opted in via
     # ``data.streaming=true`` — gives us free interleaving, shuffling, and
     # caching. Falls back to direct fsspec.open when datasets is missing or
@@ -532,13 +677,13 @@ def _load_remote_dataset(train_path: str, data_config: DataConfig) -> dict:
         buf = data_config.buffer_size
         if buf:
             ds = ds.shuffle(buffer_size=buf)
-        # Eager materialise capped at max_remote_rows — emit a clear advisory
+        # Eager materialise capped at MAX_REMOTE_ROWS — emit a clear advisory
         # if the cap trips.
         raw_data: list[dict] = []
         for i, row in enumerate(ds):
-            if i >= max_remote_rows:
+            if i >= MAX_REMOTE_ROWS:
                 console.print(
-                    f"[yellow]Remote dataset truncated at {max_remote_rows:,} "
+                    f"[yellow]Remote dataset truncated at {MAX_REMOTE_ROWS:,} "
                     f"rows (use a local split for larger jobs).[/]"
                 )
                 break
@@ -548,10 +693,10 @@ def _load_remote_dataset(train_path: str, data_config: DataConfig) -> dict:
         raw_data = []
         with fsspec.open(canonical, mode="rt", encoding="utf-8-sig") as fh:
             for i, raw_line in enumerate(fh):
-                if i >= max_remote_rows:
+                if i >= MAX_REMOTE_ROWS:
                     console.print(
                         f"[yellow]Remote dataset truncated at "
-                        f"{max_remote_rows:,} rows.[/]"
+                        f"{MAX_REMOTE_ROWS:,} rows.[/]"
                     )
                     break
                 stripped = raw_line.strip()
@@ -576,8 +721,16 @@ def _load_remote_dataset(train_path: str, data_config: DataConfig) -> dict:
     return _finalize(formatted, data_config)
 
 
-def _load_hf_dataset(name: str, data_config: DataConfig) -> dict:
-    """Load a dataset from HuggingFace Hub."""
+def _load_one_hub_dataset(
+    name: str, data_config: DataConfig
+) -> tuple[list[dict], list[dict] | None]:
+    """Load + format one HF-hub dataset name's 'train' (+ optional
+    'validation') split. Factored out of _load_hf_dataset (#459) — same
+    pattern #443 used for _load_one_local_dataset — so the hub interleave
+    path below reuses this rather than re-deriving it. _load_hf_dataset's
+    own single-name behaviour is left byte-identical by construction: it
+    now just calls this and forwards straight to _finalize, same as before.
+    """
     try:
         from datasets import load_dataset as hf_load
     except ImportError:
@@ -598,14 +751,81 @@ def _load_hf_dataset(name: str, data_config: DataConfig) -> dict:
     formatted = [r for r in formatted if r is not None]
 
     if "validation" in ds:
-        # The hub split wins over val_split; pass it through so _finalize
-        # does not re-derive one from the train rows.
         val_data = [dict(row) for row in ds["validation"]]
         val_formatted = [format_to_messages(row, fmt) for row in val_data]
-        return _finalize(
-            formatted,
-            data_config,
-            val=[r for r in val_formatted if r is not None],
-        )
+        return formatted, [r for r in val_formatted if r is not None]
 
+    return formatted, None
+
+
+def _load_hf_dataset(name: str, data_config: DataConfig) -> dict:
+    """Load a dataset from HuggingFace Hub.
+
+    The hub split wins over val_split; passing it through as _finalize's
+    ``val=`` means _finalize does not re-derive one from the train rows.
+    """
+    formatted, val_formatted = _load_one_hub_dataset(name, data_config)
+    if val_formatted is not None:
+        return _finalize(formatted, data_config, val=val_formatted)
     return _finalize(formatted, data_config)
+
+
+def _load_interleaved_hub_datasets(train_names: list[str], data_config: DataConfig) -> dict:
+    """#459 — data.train is a list of HF-hub dataset names combined via
+    data.interleave. Reuses the SAME _combine_interleaved the local-file
+    path (#443) uses — this is what makes the strategy names mean the same
+    thing across both paths, by construction rather than by parallel
+    reimplementation.
+
+    Decided validation-split precedence (documented here + docs/data.md,
+    per the issue's demand that this not be emergent): a hub entry's own
+    'validation' split is honoured for the COMBINED result only when EVERY
+    entry provides one — those are combined with the same spec and passed
+    through as _finalize's val=. If only some entries provide one, it is
+    ignored (warned, naming which entries had it) and data_config.val_split
+    is applied to the combined train rows instead, exactly as if no entry
+    had a hub split — a partial-hub-split mixture would otherwise silently
+    be a smaller/differently-composed val set than a reader expects. If no
+    entry provides one, behaviour is unchanged from today.
+    """
+    from soup_cli.utils.data_pipeline import parse_interleave
+
+    spec = parse_interleave(data_config.interleave, num_datasets=len(train_names))
+    if spec is None:
+        # Defence-in-depth only — see _load_interleaved_local_datasets's
+        # identical comment.
+        raise ValueError("data.train is a list but data.interleave is not set")
+
+    per_dataset_train: list[list[dict]] = []
+    per_dataset_val: list[list[dict] | None] = []
+    for name in train_names:
+        train_rows, val_rows = _load_one_hub_dataset(name, data_config)
+        per_dataset_train.append(train_rows)
+        per_dataset_val.append(val_rows)
+
+    combined_train = _combine_interleaved(per_dataset_train, spec)
+
+    has_val = [v is not None for v in per_dataset_val]
+    if all(has_val):
+        combined_val = _combine_interleaved(
+            [v for v in per_dataset_val if v is not None], spec
+        )
+        result = _finalize(combined_train, data_config, val=combined_val)
+    else:
+        if any(has_val):
+            missing = [
+                name for name, v in zip(train_names, per_dataset_val) if v is None
+            ]
+            console.print(
+                "[yellow]data.interleave: only some HF-hub datasets provide "
+                f"a 'validation' split (missing from {missing}) — ignoring "
+                "every hub validation split and applying data.val_split to "
+                "the combined train rows instead.[/]"
+            )
+        result = _finalize(combined_train, data_config)
+
+    console.print(
+        f"[dim]Interleaved {len(train_names)} HF-hub datasets "
+        f"(strategy={spec.strategy}) -> {len(combined_train)} rows[/]"
+    )
+    return result
