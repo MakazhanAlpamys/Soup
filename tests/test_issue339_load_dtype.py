@@ -13,18 +13,42 @@ fine-tuning — Spectrum `unfrozen_parameters`, LISA `lisa_enabled`, or the
 #340 `lora.r=0` spelling) explicitly loads `torch.float32` master weights,
 deliberately rather than by accident.
 
-Four layers, matching the issue's four acceptance criteria:
+**#471 review round added two things**, tested below alongside the original four:
 
-- `TestResolveLoadDtype` — unit tests of `SFTTrainerWrapper._resolve_load_dtype`
-  in isolation, no model load.
+- `_resolve_load_dtype` is now card-aware: an unconditional `"auto"` for a
+  frozen base would give bf16 STORAGE on a pre-Ampere CUDA card (T4/P100/V100/
+  GTX 16xx/RTX 20xx) while training compute correctly stays fp16 (asked via
+  `bf16_fp16_flags`, the same helper `_resolve_mixed_precision` already uses)
+  — the exact bf16-storage/fp16-compute split v0.73.1 (#385/#387) removed
+  from fourteen other places. Pre-Ampere now gets an explicit `torch.float16`
+  override instead of `"auto"`.
+- The full-FT discriminator (`unfrozen_parameters` / `lisa_enabled` /
+  `lora.r==0`) is now a single shared `is_full_finetune()`, used by both
+  `_resolve_load_dtype` and `commands/train.py::_build_hardware_fit_input`'s
+  VRAM pre-flight `peft` classifier — previously independent copies that had
+  drifted apart in BOTH directions (missing `lisa_enabled`/`lora.r==0`
+  under-predicted VRAM; treating bare `freeze_layers`/`freeze_ratio` as
+  sufficient on its own, even with LoRA still on, over-predicted it and could
+  falsely refuse a launch that would fit).
+
+Layers, matching the issue's four acceptance criteria plus the two additions:
+
+- `TestResolveLoadDtype` — unit tests of `_resolve_load_dtype` in isolation,
+  no model load (now an instance method — needs `self.device`).
+- `TestResolveLoadDtypeCardAware` — the #471 pre-Ampere/Ampere/CPU card check,
+  using the same fake-`torch.cuda` pattern as `test_issue385_stream_dtype.py`.
 - `TestModelKwargsCaptureAcrossModalities` — mock `from_pretrained` at all
-  three call sites (text/vision/audio) and assert on the captured `dtype` kwarg.
+  three call sites (text/vision/audio) and assert on the captured `dtype` kwarg,
+  including the QLoRA case (`dtype` + `quantization_config` coexisting).
 - `TestLoadDtypeMatchesCheckpoint` — the literal AC1 claim, with real tiny
   on-disk checkpoints: a LoRA run on a bf16 checkpoint really does load bf16,
   and — the control that makes that mean something — a LoRA run on an fp32
   checkpoint stays fp32 rather than "auto" secretly meaning "always bf16".
 - `TestHardwareFitFullFTWeightsBytes` — AC4, the VRAM pre-flight's
   bytes-per-param assumption re-checked against the choice made above.
+- `TestIsFullFinetuneSharedDiscriminator` — the #471 unification: direct unit
+  tests of `is_full_finetune`, plus `_build_hardware_fit_input`'s corrected
+  classification for both the previously under- and over-counted cases.
 """
 
 from __future__ import annotations
@@ -38,6 +62,47 @@ import yaml
 
 from soup_cli.config.loader import load_config_from_string
 from soup_cli.config.schema import SoupConfig
+
+
+class _FakeCuda:
+    """Stands in for ``torch.cuda`` (mirrors tests/test_issue385_stream_dtype.py's
+    fixture of the same name/shape — copied rather than imported cross-file,
+    matching this project's convention for small test doubles).
+
+    ``is_bf16_supported`` mirrors the real signature: the default
+    ``including_emulation=True`` returns True on a T4 (software emulation),
+    while ``including_emulation=False`` correctly returns False — the trap
+    `cuda_supports_bf16()` is written to avoid.
+    """
+
+    def __init__(self, available: bool, bf16: bool, emulated: bool = True):
+        self._available = available
+        self._bf16 = bf16
+        self._emulated = emulated
+
+    def is_available(self) -> bool:
+        return self._available
+
+    def is_bf16_supported(self, including_emulation: bool = True) -> bool:
+        if not including_emulation:
+            return self._bf16
+        return self._bf16 or self._emulated
+
+    def get_device_capability(self, device=None):
+        return (8, 0) if self._bf16 else (7, 5)
+
+
+@pytest.fixture()
+def fake_torch_cuda(monkeypatch):
+    """Patch ``torch.cuda`` in place; bf16_fp16_flags imports torch lazily."""
+    import torch
+
+    def apply(available: bool, bf16: bool, emulated: bool = True) -> _FakeCuda:
+        fake = _FakeCuda(available, bf16, emulated)
+        monkeypatch.setattr(torch, "cuda", fake)
+        return fake
+
+    return apply
 
 
 def _make_config(**overrides):
@@ -67,31 +132,80 @@ class _StubTcfg:
         self.lisa_enabled = lisa_enabled
 
 
-class TestResolveLoadDtype:
-    def test_lora_frozen_base_resolves_to_auto(self):
-        from soup_cli.trainer.sft import SFTTrainerWrapper
+def _wrapper_stub(device="cpu"):
+    """A bare SFTTrainerWrapper with only `.device` set — `_resolve_load_dtype`
+    is an instance method (needs `self.device` for the #471 card check), so it
+    can no longer be called unbound on the class."""
+    from soup_cli.trainer.sft import SFTTrainerWrapper
 
-        assert SFTTrainerWrapper._resolve_load_dtype(_StubTcfg()) == "auto"
+    wrapper = object.__new__(SFTTrainerWrapper)
+    wrapper.device = device
+    return wrapper
+
+
+class TestResolveLoadDtype:
+    def test_lora_frozen_base_on_cpu_resolves_to_auto(self):
+        wrapper = _wrapper_stub(device="cpu")
+        assert wrapper._resolve_load_dtype(_StubTcfg()) == "auto"
 
     def test_lora_r_zero_resolves_to_float32(self):
         torch = pytest.importorskip("torch", reason="torch is only in the [train] extra")
-        from soup_cli.trainer.sft import SFTTrainerWrapper
-
-        assert SFTTrainerWrapper._resolve_load_dtype(_StubTcfg(r=0)) is torch.float32
+        wrapper = _wrapper_stub(device="cpu")
+        assert wrapper._resolve_load_dtype(_StubTcfg(r=0)) is torch.float32
 
     def test_unfrozen_parameters_resolves_to_float32(self):
         torch = pytest.importorskip("torch", reason="torch is only in the [train] extra")
-        from soup_cli.trainer.sft import SFTTrainerWrapper
-
+        wrapper = _wrapper_stub(device="cpu")
         tcfg = _StubTcfg(unfrozen_parameters=[".*"])
-        assert SFTTrainerWrapper._resolve_load_dtype(tcfg) is torch.float32
+        assert wrapper._resolve_load_dtype(tcfg) is torch.float32
 
     def test_lisa_enabled_resolves_to_float32(self):
         torch = pytest.importorskip("torch", reason="torch is only in the [train] extra")
-        from soup_cli.trainer.sft import SFTTrainerWrapper
-
+        wrapper = _wrapper_stub(device="cpu")
         tcfg = _StubTcfg(lisa_enabled=True)
-        assert SFTTrainerWrapper._resolve_load_dtype(tcfg) is torch.float32
+        assert wrapper._resolve_load_dtype(tcfg) is torch.float32
+
+
+class TestResolveLoadDtypeCardAware:
+    """#471 — the frozen-base case must ask the card, not just the checkpoint."""
+
+    def test_ampere_cuda_frozen_base_still_resolves_to_auto(self, fake_torch_cuda):
+        """CONTROL — the card check must not regress the common case."""
+        fake_torch_cuda(available=True, bf16=True)
+        wrapper = _wrapper_stub(device="cuda")
+        assert wrapper._resolve_load_dtype(_StubTcfg()) == "auto"
+
+    def test_pre_ampere_cuda_frozen_base_resolves_to_float16(self, fake_torch_cuda):
+        """THE fix — a T4 (bf16=False) must not get 'auto' on a bf16 checkpoint."""
+        torch = pytest.importorskip("torch", reason="torch is only in the [train] extra")
+        fake_torch_cuda(available=True, bf16=False)
+        wrapper = _wrapper_stub(device="cuda")
+        assert wrapper._resolve_load_dtype(_StubTcfg()) is torch.float16
+
+    def test_emulated_bf16_does_not_count_as_bf16(self, fake_torch_cuda):
+        """The exact trap #385 named: the bare is_bf16_supported() call
+        returns True on a T4 through software emulation; the real answer must
+        come from including_emulation=False (cuda_supports_bf16's job)."""
+        torch = pytest.importorskip("torch", reason="torch is only in the [train] extra")
+        fake = fake_torch_cuda(available=True, bf16=False, emulated=True)
+        assert fake.is_bf16_supported() is True, "the stub must model the trap"
+        wrapper = _wrapper_stub(device="cuda")
+        assert wrapper._resolve_load_dtype(_StubTcfg()) is torch.float16
+
+    def test_cpu_frozen_base_stays_auto_regardless_of_cuda_state(self, fake_torch_cuda):
+        """A device='cpu' run must not consult CUDA capability at all — even
+        on a box that also has a (possibly pre-Ampere) GPU."""
+        fake_torch_cuda(available=True, bf16=False)
+        wrapper = _wrapper_stub(device="cpu")
+        assert wrapper._resolve_load_dtype(_StubTcfg()) == "auto"
+
+    def test_card_check_does_not_apply_to_full_finetune(self, fake_torch_cuda):
+        """CONTROL — full-FT's explicit fp32 must win regardless of card;
+        the card check only ever applies to the frozen-base branch."""
+        torch = pytest.importorskip("torch", reason="torch is only in the [train] extra")
+        fake_torch_cuda(available=True, bf16=False)
+        wrapper = _wrapper_stub(device="cuda")
+        assert wrapper._resolve_load_dtype(_StubTcfg(r=0)) is torch.float32
 
 
 # ---------------------------------------------------------------------------
@@ -134,16 +248,20 @@ class _FakeProcessor:
         self.tokenizer = _FakeTokenizer()
 
 
-def _install_common_trainer_mocks(monkeypatch):
+def _install_common_trainer_mocks(monkeypatch, quant_config_obj=None):
     """The non-transformers/-peft helper mocks shared by every _setup_*
     mock test in tests/test_trainer_init.py — copied verbatim so
     _setup_transformers/_setup_vision_transformers/_setup_audio_transformers
     can run to completion against fake models without touching real MoE
     detection, block expansion, etc.
+
+    ``quant_config_obj`` defaults to ``None`` (no quantization) but a caller
+    can pass a sentinel to simulate an active `quantization_config` — used by
+    the QLoRA test below to prove `dtype` and `quantization_config` coexist.
     """
     monkeypatch.setattr(
         "soup_cli.utils.quant_menu.build_quantization_config_for_loader",
-        lambda **kwargs: None,
+        lambda **kwargs: quant_config_obj,
     )
     monkeypatch.setattr("soup_cli.utils.moe.detect_moe_model", lambda _m: False)
     monkeypatch.setattr("soup_cli.utils.moe.get_moe_target_modules", lambda _m: [])
@@ -208,6 +326,86 @@ class TestModelKwargsCaptureAcrossModalities:
         wrapper._setup_transformers(cfg, cfg.training)
 
         assert captured["dtype"] == "auto"
+
+    def test_text_lora_dtype_is_float16_on_pre_ampere_cuda(self, monkeypatch, fake_torch_cuda):
+        """#471 — the card check reaches all the way into model_kwargs, not
+        just _resolve_load_dtype in isolation."""
+        from soup_cli.trainer.sft import SFTTrainerWrapper
+
+        torch = pytest.importorskip("torch", reason="torch is only in the [train] extra")
+        fake_torch_cuda(available=True, bf16=False)  # a T4
+
+        cfg = _make_config(training={"quantization": "none"})
+        model = _FakeModel()
+        tokenizer = _FakeTokenizer()
+        captured = {}
+
+        fake_transformers = types.SimpleNamespace(
+            AutoTokenizer=types.SimpleNamespace(from_pretrained=lambda *a, **k: tokenizer),
+            AutoModelForCausalLM=types.SimpleNamespace(
+                from_pretrained=_capturing_from_pretrained(model, captured)
+            ),
+        )
+        fake_peft = types.SimpleNamespace(
+            LoraConfig=lambda **kwargs: SimpleNamespace(**kwargs),
+            TaskType=SimpleNamespace(CAUSAL_LM="CAUSAL_LM"),
+            get_peft_model=lambda model_obj, _cfg: model_obj,
+            prepare_model_for_kbit_training=lambda model_obj: model_obj,
+        )
+        monkeypatch.setitem(sys.modules, "transformers", fake_transformers)
+        monkeypatch.setitem(sys.modules, "peft", fake_peft)
+        _install_common_trainer_mocks(monkeypatch)
+
+        wrapper = object.__new__(SFTTrainerWrapper)
+        wrapper.config = cfg
+        wrapper.device = "cuda"
+        wrapper._trust_remote_code = False
+        wrapper.model = None
+        wrapper.tokenizer = None
+
+        wrapper._setup_transformers(cfg, cfg.training)
+
+        assert captured["dtype"] is torch.float16
+
+    def test_text_qlora_dtype_and_quantization_config_coexist(self, monkeypatch):
+        """#471 review — QLoRA now also gets model_kwargs["dtype"] (since a
+        quantized run is never is_full_finetune); confirm it lands alongside
+        quantization_config rather than one clobbering the other."""
+        from soup_cli.trainer.sft import SFTTrainerWrapper
+
+        sentinel_quant_config = SimpleNamespace(marker="FAKE_4BIT_CONFIG")
+        cfg = _make_config(training={"quantization": "4bit"})
+        model = _FakeModel()
+        tokenizer = _FakeTokenizer()
+        captured = {}
+
+        fake_transformers = types.SimpleNamespace(
+            AutoTokenizer=types.SimpleNamespace(from_pretrained=lambda *a, **k: tokenizer),
+            AutoModelForCausalLM=types.SimpleNamespace(
+                from_pretrained=_capturing_from_pretrained(model, captured)
+            ),
+        )
+        fake_peft = types.SimpleNamespace(
+            LoraConfig=lambda **kwargs: SimpleNamespace(**kwargs),
+            TaskType=SimpleNamespace(CAUSAL_LM="CAUSAL_LM"),
+            get_peft_model=lambda model_obj, _cfg: model_obj,
+            prepare_model_for_kbit_training=lambda model_obj: model_obj,
+        )
+        monkeypatch.setitem(sys.modules, "transformers", fake_transformers)
+        monkeypatch.setitem(sys.modules, "peft", fake_peft)
+        _install_common_trainer_mocks(monkeypatch, quant_config_obj=sentinel_quant_config)
+
+        wrapper = object.__new__(SFTTrainerWrapper)
+        wrapper.config = cfg
+        wrapper.device = "cpu"
+        wrapper._trust_remote_code = False
+        wrapper.model = None
+        wrapper.tokenizer = None
+
+        wrapper._setup_transformers(cfg, cfg.training)
+
+        assert captured["dtype"] == "auto"  # frozen base (QLoRA is never full-FT)
+        assert captured["quantization_config"] is sentinel_quant_config
 
     def test_text_full_finetune_dtype_is_float32(self, monkeypatch):
         torch = pytest.importorskip("torch", reason="torch is only in the [train] extra")
@@ -547,3 +745,135 @@ class TestHardwareFitFullFTWeightsBytes:
         )
         breakdown = estimate_peak_vram_gb(inp)
         assert breakdown.weights_gb == pytest.approx(0.5, rel=1e-6)
+
+
+# ---------------------------------------------------------------------------
+# #471 — the shared is_full_finetune() discriminator, and the two
+# _build_hardware_fit_input classification bugs it fixes (one in each
+# direction — see the module docstring).
+# ---------------------------------------------------------------------------
+
+
+class TestIsFullFinetuneSharedDiscriminator:
+    def test_no_flags_is_not_full_finetune(self):
+        from soup_cli.trainer.sft import is_full_finetune
+
+        assert is_full_finetune(_StubTcfg()) is False
+
+    def test_lora_r_zero_is_full_finetune(self):
+        from soup_cli.trainer.sft import is_full_finetune
+
+        assert is_full_finetune(_StubTcfg(r=0)) is True
+
+    def test_unfrozen_parameters_is_full_finetune(self):
+        from soup_cli.trainer.sft import is_full_finetune
+
+        assert is_full_finetune(_StubTcfg(unfrozen_parameters=[".*"])) is True
+
+    def test_lisa_enabled_is_full_finetune(self):
+        from soup_cli.trainer.sft import is_full_finetune
+
+        assert is_full_finetune(_StubTcfg(lisa_enabled=True)) is True
+
+
+_HW_FIT_BASE_YAML = """
+base: meta-llama/Llama-2-7b-hf
+task: sft
+data:
+  train: train.jsonl
+  max_length: 2048
+training:
+  batch_size: 8
+  quantization: none
+"""
+
+
+class TestBuildHardwareFitInputPeftClassification:
+    """Both directions the #471 review found `_build_hardware_fit_input`
+    disagreeing with `is_full_finetune` on, now unified through it."""
+
+    def test_control_plain_lora_is_lora(self):
+        from soup_cli.commands.train import _build_hardware_fit_input
+
+        inp = _build_hardware_fit_input(load_config_from_string(_HW_FIT_BASE_YAML))
+        assert inp is not None
+        assert inp.peft == "lora"
+
+    def test_control_unfrozen_parameters_is_still_full(self):
+        from soup_cli.commands.train import _build_hardware_fit_input
+
+        cfg = load_config_from_string(
+            _HW_FIT_BASE_YAML + "  unfrozen_parameters: ['.*']\n"
+        )
+        inp = _build_hardware_fit_input(cfg)
+        assert inp is not None
+        assert inp.peft == "full"
+
+    def test_control_4bit_is_qlora_regardless(self):
+        """The quant=='4bit' branch is checked FIRST and is unaffected by
+        this fix — confirm that precedence still holds."""
+        from soup_cli.commands.train import _build_hardware_fit_input
+
+        cfg = load_config_from_string(
+            _HW_FIT_BASE_YAML.replace("quantization: none", "quantization: 4bit")
+        )
+        inp = _build_hardware_fit_input(cfg)
+        assert inp is not None
+        assert inp.peft == "qlora"
+
+    def test_lisa_enabled_was_undercounted_now_full(self):
+        """The under-count bug: lisa_enabled used to be missed entirely and
+        classified as "lora" — never reaching hardware_fit's fp32 correction."""
+        from soup_cli.commands.train import _build_hardware_fit_input
+
+        cfg = load_config_from_string(_HW_FIT_BASE_YAML + "  lisa_enabled: true\n")
+        inp = _build_hardware_fit_input(cfg)
+        assert inp is not None
+        assert inp.peft == "full"
+
+    def test_lora_r_zero_was_undercounted_now_full(self):
+        from soup_cli.commands.train import _build_hardware_fit_input
+
+        cfg = load_config_from_string(
+            _HW_FIT_BASE_YAML + "  lora:\n    r: 0\n"
+        )
+        inp = _build_hardware_fit_input(cfg)
+        assert inp is not None
+        assert inp.peft == "full"
+
+    def test_freeze_ratio_with_lora_still_on_was_overcounted_now_lora(self):
+        """AmirF194's exact repro: freeze_ratio + lora.r>0 is a LoRA run
+        (frozen base, "auto"/2-bytes) that used to be misclassified "full"
+        (fp32/4-bytes) purely because freeze_ratio was set — a measured
+        16 GB phantom at 8B that could falsely refuse a launch that fits."""
+        from soup_cli.commands.train import _build_hardware_fit_input
+
+        cfg = load_config_from_string(
+            _HW_FIT_BASE_YAML + "  freeze_ratio: 0.5\n  lora:\n    r: 8\n"
+        )
+        inp = _build_hardware_fit_input(cfg)
+        assert inp is not None
+        assert inp.peft == "lora"
+
+    def test_freeze_layers_with_lora_still_on_was_overcounted_now_lora(self):
+        from soup_cli.commands.train import _build_hardware_fit_input
+
+        cfg = load_config_from_string(
+            _HW_FIT_BASE_YAML + "  freeze_layers: 4\n  lora:\n    r: 8\n"
+        )
+        inp = _build_hardware_fit_input(cfg)
+        assert inp is not None
+        assert inp.peft == "lora"
+
+    def test_freeze_ratio_with_lora_r_zero_is_still_full(self):
+        """CONTROL — freeze_ratio/freeze_layers legitimately combine with
+        r=0 full-FT too (schema allows it: "train everything above layer N"),
+        and that combination must still classify as full."""
+        from soup_cli.commands.train import _build_hardware_fit_input
+
+        cfg = load_config_from_string(
+            _HW_FIT_BASE_YAML + "  freeze_ratio: 0.5\n  lora:\n    r: 0\n"
+        )
+        inp = _build_hardware_fit_input(cfg)
+        assert inp is not None
+        assert inp.peft == "full"
