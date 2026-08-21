@@ -25,6 +25,21 @@ reproducing 70+ versions of notes.
 
 ### Added
 
+- **LISA now accepts `task: pretrain`, not `sft` alone (#307 by @ousamabenyounes in #476).**
+  Continued pre-training is the same full-fine-tune-of-a-rotating-set-of-decoder-layers
+  mechanism LISA was built for, so the sft-only gate (inherited from Spectrum's
+  `unfrozen_parameters`) was arbitrary. The schema task gate now reads a
+  `_LISA_SUPPORTED_TASKS` allow-list (`sft`, `pretrain`) and its refusal names every
+  accepted task instead of only rejecting yours; `trainer/pretrain.py` replaces its LoRA
+  path with LISA and attaches `LisaCallback`, and reports its parameter summary as `LISA`
+  counted off the raw parameters, since a LISA run has no `PeftModel` wrapper to ask
+  `get_nb_trainable_parameters`. Both trainers route through one
+  `peft_wiring.apply_lisa_setup`, so they cannot drift on what "LISA is on" means. The
+  rest of the gate is unchanged: `transformers` + `text` + `quantization: none`, mutually
+  exclusive with the LoRA feature flags, `freeze_layers`/`freeze_ratio` and
+  `unfrozen_parameters`. The released `[0.71.34]` block below still says `task: sft`,
+  which is what 0.71.34 shipped.
+
 - **`soup eval aider` runs Aider's Polyglot code-editing benchmark through its
   official Docker harness (#91 by @Amix29 in #482).** The command preflights
   Docker, the daemon, and the locally built benchmark image; mounts a prepared
@@ -105,7 +120,6 @@ reproducing 70+ versions of notes.
   `BUNDLED_SCORER_REVISION` + a locked fingerprint fail the suite if a bundled
   scorer's output moves without a revision bump. Registry `save_eval_result`
   stamps `details_json`; `soup ship --emit-evidence` includes the same stamp.
-
 - **Layer streaming now accepts Qwen3.5 MoE text checkpoints whose decoder
   layers do not expose exactly the same weight keys in every block (by
   @Shutaru in #426).** The sharder now records per-layer shard headers instead of

@@ -1340,19 +1340,12 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             )
         elif tcfg.lisa_enabled:
             # v0.71.34 #267 — LISA layerwise importance sampling. Full-FT of a
-            # rotating set of decoder layers (LoRA off). The model stays FULLY
-            # trainable here so HF's create_optimizer (built before
-            # on_train_begin) includes every decoder param in its param groups;
-            # LisaCallback then flips requires_grad each interval — frozen
-            # params get grad=None and AdamW skips them. enable_input_require_grads
-            # keeps grad-checkpointing safe.
-            if hasattr(self.model, "enable_input_require_grads"):
-                self.model.enable_input_require_grads()
-            console.print(
-                f"[green]LISA:[/] layerwise importance sampling "
-                f"({tcfg.lisa_num_layers} layer(s) every "
-                f"{tcfg.lisa_interval_steps} steps, LoRA off)"
-            )
+            # rotating set of decoder layers (LoRA off). Centralised in
+            # ``peft_wiring.apply_lisa_setup`` so this trainer and the pretrain
+            # one (#307) cannot drift — same policy as block_expansion.
+            from soup_cli.utils.peft_wiring import apply_lisa_setup
+
+            apply_lisa_setup(self.model, tcfg, console)
         elif tcfg.lora.r == 0:
             # #340 — plain full fine-tuning. Until now the `else` below applied
             # LoRA unconditionally and the only way to train without an adapter

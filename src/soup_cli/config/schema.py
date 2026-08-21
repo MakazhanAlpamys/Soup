@@ -40,6 +40,13 @@ _MAX_UNFROZEN_PATTERN_LEN = 512
 # pattern *class* is rejected at parse time, not just compile failures.
 _UNFROZEN_REDOS_RE = re.compile(r"\([^)]*[+*][^)]*\)\s*[+*]")
 
+# v0.71.34 #267 / #307 — tasks whose transformers trainer wires LisaCallback.
+# LISA is full-FT of a rotating set of decoder layers, so a task only belongs
+# here once its trainer skips PEFT, keeps the model trainable, and calls
+# ``attach_lisa_callback``. Adding a task to this tuple without that wiring
+# would accept a config the trainer silently ignores.
+_LISA_SUPPORTED_TASKS = ("sft", "pretrain")
+
 
 class LoraConfig(BaseModel):
     # #340 — `r: 0` is the first-class full-fine-tuning switch: no
@@ -3017,9 +3024,9 @@ class TrainingConfig(BaseModel):
             "Enable LISA layerwise importance sampling (#267): every "
             "lisa_interval_steps, freeze all decoder layers except a random "
             "lisa_num_layers set (embeddings + head always trainable). Full "
-            "fine-tuning, LoRA off. sft + transformers + text + "
+            "fine-tuning, LoRA off. sft or pretrain + transformers + text + "
             "quantization=none only; mutually exclusive with LoRA features / "
-            "freeze_layers / unfrozen_parameters."
+            "freeze_layers / freeze_ratio / unfrozen_parameters."
         ),
     )
     lisa_num_layers: int = Field(
@@ -4799,9 +4806,13 @@ class SoupConfig(BaseModel):
         """v0.71.34 #267 — LISA compatibility gates.
 
         LISA is full-FT of a rotating set of decoder layers (LoRA off), so it
-        shares Spectrum's ``unfrozen_parameters`` gate: sft + transformers +
-        text + quantization=none, mutually exclusive with the LoRA feature
-        flags, the other freeze mechanisms, and ``unfrozen_parameters`` itself.
+        shares Spectrum's ``unfrozen_parameters`` gate: transformers + text +
+        quantization=none, mutually exclusive with the LoRA feature flags, the
+        other freeze mechanisms, and ``unfrozen_parameters`` itself.
+
+        #307 — the task gate is ``_LISA_SUPPORTED_TASKS`` rather than ``sft``
+        alone: continued pre-training is the same full-FT-of-active-layers
+        mechanism, and ``trainer/pretrain.py`` wires the callback the same way.
         """
         tcfg = self.training
         if not tcfg.lisa_enabled:
@@ -4817,10 +4828,12 @@ class SoupConfig(BaseModel):
                     "lisa_enabled=true to use LISA layer sampling."
                 )
             return self
-        if self.task != "sft":
+        if self.task not in _LISA_SUPPORTED_TASKS:
             raise ValueError(
                 f"training.lisa_enabled (LISA layerwise sampling) requires "
-                f"task='sft'; got task={self.task!r}"
+                f"task in "
+                f"{', '.join(repr(t) for t in _LISA_SUPPORTED_TASKS)}; "
+                f"got task={self.task!r}"
             )
         if self.backend != "transformers":
             raise ValueError(
@@ -4830,7 +4843,7 @@ class SoupConfig(BaseModel):
         if self.modality != "text":
             raise ValueError(
                 f"training.lisa_enabled requires modality='text' (the LISA "
-                f"callback is wired in the text SFT trainer); "
+                f"callback is wired in the text SFT and pretrain trainers); "
                 f"got modality={self.modality!r}"
             )
         if tcfg.quantization != "none":

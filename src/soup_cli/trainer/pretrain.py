@@ -85,10 +85,24 @@ class PretrainTrainerWrapper:
         else:
             self._setup_transformers(cfg, tcfg)
 
-        trainable, total = self.model.get_nb_trainable_parameters()
+        # #307 — a LISA run has no PEFT wrapper, so `get_nb_trainable_parameters`
+        # (a PeftModel method) is absent and the count comes straight off the
+        # parameters. The label follows the same split: reporting "LoRA applied"
+        # for a run that applied no adapter is the docs-contradict-code defect.
+        if tcfg.lisa_enabled:
+            trainable = sum(
+                param.numel()
+                for param in self.model.parameters()
+                if param.requires_grad
+            )
+            total = sum(param.numel() for param in self.model.parameters())
+            label = "LISA"
+        else:
+            trainable, total = self.model.get_nb_trainable_parameters()
+            label = "LoRA applied"
         pct = 100 * trainable / total
         console.print(
-            f"[green]LoRA applied:[/] {trainable:,} trainable"
+            f"[green]{label}:[/] {trainable:,} trainable"
             f" / {total:,} total ({pct:.2f}%)"
         )
 
@@ -249,10 +263,13 @@ class PretrainTrainerWrapper:
         # v0.40.6 #67 — ReLoRA callback (magnitude-prune LoRA every N steps).
         from soup_cli.utils.peft_wiring import (
             attach_curriculum_callback,
+            attach_lisa_callback,
             attach_plugin_callback,
             attach_relora_callback,
         )
         attach_relora_callback(self.trainer, tcfg)
+        # #307 — LISA layerwise importance sampling (v0.71.34 #267 for sft).
+        attach_lisa_callback(self.trainer, tcfg)
         # v0.53.5 #114/#115 — dynamic curriculum live callback.
         attach_curriculum_callback(self.trainer, tcfg, str(output_dir), console)
         # v0.53.6 #101 — Soup plugin TrainerCallback.
@@ -314,37 +331,42 @@ class PretrainTrainerWrapper:
 
         apply_block_expansion_if_configured(self.model, tcfg, console)
 
-        # LoRA — with MoE-aware target modules if moe_lora is enabled
-        from soup_cli.utils.peft_wiring import resolve_lora_target_modules
+        # #307 — LISA layerwise importance sampling. Full-FT of a rotating set
+        # of decoder layers, so it fully replaces the LoRA path below (the
+        # schema cross-validator guarantees no LoRA-feature / freeze flag is
+        # combined). Shared with the SFT trainer so the two cannot drift.
+        from soup_cli.utils.peft_wiring import apply_lisa_setup, resolve_lora_target_modules
 
-        target_modules = resolve_lora_target_modules(self.model, tcfg.lora.target_modules)
+        if not apply_lisa_setup(self.model, tcfg, console):
+            # LoRA — with MoE-aware target modules if moe_lora is enabled
+            target_modules = resolve_lora_target_modules(self.model, tcfg.lora.target_modules)
 
-        if tcfg.moe_lora and is_moe:
-            moe_targets = get_moe_target_modules(self.model)
-            if moe_targets:
-                target_modules = moe_targets
-                console.print(
-                    f"[green]ScatterMoE LoRA:[/] targeting {len(moe_targets)} module patterns"
-                )
+            if tcfg.moe_lora and is_moe:
+                moe_targets = get_moe_target_modules(self.model)
+                if moe_targets:
+                    target_modules = moe_targets
+                    console.print(
+                        f"[green]ScatterMoE LoRA:[/] targeting {len(moe_targets)} module patterns"
+                    )
 
-        lora_config = LoraConfig(
-            r=tcfg.lora.r,
-            lora_alpha=tcfg.lora.alpha,
-            lora_dropout=tcfg.lora.dropout,
-            target_modules=target_modules,
-            task_type=TaskType.CAUSAL_LM,
-            bias="none",
-            use_dora=tcfg.lora.use_dora,
-            use_rslora=tcfg.lora.use_rslora,
-        )
-        # v0.40.6 #67 — surgical PEFT patches.
-        from soup_cli.utils.peft_wiring import (
-            apply_post_lora_patches,
-            apply_pre_lora_patches,
-        )
-        apply_pre_lora_patches(self.model, cfg.base)
-        self.model = get_peft_model(self.model, lora_config)
-        apply_post_lora_patches(self.model)
+            lora_config = LoraConfig(
+                r=tcfg.lora.r,
+                lora_alpha=tcfg.lora.alpha,
+                lora_dropout=tcfg.lora.dropout,
+                target_modules=target_modules,
+                task_type=TaskType.CAUSAL_LM,
+                bias="none",
+                use_dora=tcfg.lora.use_dora,
+                use_rslora=tcfg.lora.use_rslora,
+            )
+            # v0.40.6 #67 — surgical PEFT patches.
+            from soup_cli.utils.peft_wiring import (
+                apply_post_lora_patches,
+                apply_pre_lora_patches,
+            )
+            apply_pre_lora_patches(self.model, cfg.base)
+            self.model = get_peft_model(self.model, lora_config)
+            apply_post_lora_patches(self.model)
 
         # v0.71.12 #84 — Mixture-of-Depths selective-token routing (applied
         # after get_peft_model so the routers are trainable).

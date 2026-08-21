@@ -6,7 +6,8 @@ Covers:
 * ``commands/adapters.py::arithmetic`` — ``soup adapters arithmetic``.
 * ``config/schema.py`` — LISA fields + ``_validate_lisa_compat``.
 * ``utils/lisa.py`` — ``LisaPolicy`` + ``LisaCallback`` (duck-typed).
-* ``utils/peft_wiring.py::attach_lisa_callback`` + SFT trainer wiring.
+* ``utils/peft_wiring.py::attach_lisa_callback`` / ``apply_lisa_setup``
+  + the SFT and (#307) pretrain trainer wiring.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ from __future__ import annotations
 import ast
 import json
 import os
+import re
 from pathlib import Path
 
 import numpy as np
@@ -1039,3 +1041,455 @@ class TestSftRouting:
         src = Path(sft.__file__).read_text(encoding="utf-8")
         assert "tcfg.lisa_enabled" in src
         assert "attach_lisa_callback(" in src
+
+
+# ---------------------------------------------------------------------------
+# Task B4 — #307: LISA for continued pre-training (``task: pretrain``)
+#
+# LISA is full-FT of a rotating set of decoder layers, which is exactly what
+# continued pre-training does, so #307 widens the schema gate and wires the
+# callback into ``trainer/pretrain.py``. The tests below are behavioural on
+# purpose: a source-grep would pass on a branch that never runs.
+# ---------------------------------------------------------------------------
+_LISA_PRETRAIN = _LISA_BASE.replace("task: sft", "task: pretrain")
+
+# Text rows for the continued-pre-training path (plain documents, no chat
+# structure). Vocabulary restricted to the offline tiny tokenizer's words.
+_PRETRAIN_ROWS = [
+    {"text": "the cat sat on the mat"},
+    {"text": "the dog ran fast"},
+    {"text": "hello world one two"},
+    {"text": "red blue green"},
+]
+
+
+def _plain(text: str) -> str:
+    """Rich output as comparable text: ANSI stripped, runs of space collapsed.
+
+    Raw ``result.output`` phrase assertions have reddened this suite before;
+    route every rendered-output assertion through here even when it is green
+    today.
+    """
+    return re.sub(r"\s+", " ", re.sub(r"\x1b\[[0-9;]*m", "", text))
+
+
+def _requires_train_extra():
+    for mod in ("torch", "transformers", "peft", "trl", "datasets"):
+        pytest.importorskip(mod, reason=f"{mod} is only in the [train] extra")
+
+
+def _pretrain_wrapper(tmp_path, monkeypatch, *, n_layers=4, **training_over):
+    """A real ``PretrainTrainerWrapper`` over a real tiny offline checkpoint."""
+    import yaml
+
+    from soup_cli.config.loader import load_config_from_string
+    from soup_cli.trainer.pretrain import PretrainTrainerWrapper
+
+    # Reuse #341's fixture rather than a second copy of it: a real (tiny) Llama
+    # checkpoint plus an offline tokenizer, so nothing is downloaded and nothing
+    # is randomly initialised at load time.
+    from tests.test_issue341_seed_and_fullft import _tiny_llama_dir
+
+    base = _tiny_llama_dir(tmp_path, n_layers=n_layers)
+    monkeypatch.chdir(tmp_path)
+    training = {
+        "batch_size": 1,
+        "gradient_accumulation_steps": 1,
+        "quantization": "none",
+        "epochs": 1,
+        "lr": 1e-3,
+        "logging_steps": 100,
+        "save_steps": 10_000,
+        "lora": {"r": 4, "alpha": 8, "dropout": 0.0, "target_modules": ["q_proj"]},
+    }
+    training.update(training_over)
+    cfg = load_config_from_string(
+        yaml.safe_dump(
+            {
+                "base": base,
+                "task": "pretrain",
+                "backend": "transformers",
+                "modality": "text",
+                "data": {"train": "train.jsonl", "max_length": 64},
+                "training": training,
+                "output": str(tmp_path / "out"),
+            }
+        )
+    )
+    return PretrainTrainerWrapper(cfg, device="cpu"), {"train": list(_PRETRAIN_ROWS)}
+
+
+def _captured_console(monkeypatch):
+    """Patch the pretrain trainer's console with a REAL wide Rich console.
+
+    Real (not a recording double) because the summary line is Rich markup, and
+    wide because a narrow console wraps the parameter counts across a newline.
+    """
+    from io import StringIO
+
+    from rich.console import Console
+
+    import soup_cli.trainer.pretrain as pretrain_mod
+
+    buf = StringIO()
+    monkeypatch.setattr(pretrain_mod, "console", Console(file=buf, width=200))
+    return buf
+
+
+def _lisa_callbacks(trainer):
+    from soup_cli.utils.lisa import LisaCallback
+
+    return [
+        cb
+        for cb in trainer.callback_handler.callbacks
+        if isinstance(cb, LisaCallback)
+    ]
+
+
+class TestLisaPretrainSchema:
+    def test_pretrain_task_accepted(self):
+        cfg = _load(_LISA_PRETRAIN)
+        assert cfg.task == "pretrain"
+        assert cfg.training.lisa_enabled is True
+
+    @pytest.mark.parametrize("task", ["dpo", "grpo", "embedding"])
+    def test_other_tasks_refused_and_both_supported_tasks_named(self, task):
+        """The widened gate must still refuse everything else — and say what it
+        does accept. Asserting on the refused task alone would also pass for a
+        gate that had been widened to accept every task but this one."""
+        with pytest.raises(Exception) as excinfo:
+            _load(_LISA_BASE.replace("task: sft", f"task: {task}"))
+        message = str(excinfo.value)
+        assert "'sft'" in message
+        assert "'pretrain'" in message
+        assert task in message
+
+    def test_the_allow_list_is_exactly_sft_and_pretrain(self):
+        """Pins the membership of ``_LISA_SUPPORTED_TASKS`` itself.
+
+        The tests above prove the gate READS the tuple (emptying it, or
+        dropping either entry, reddens them), but not what is IN it: a tuple
+        widened to a task whose trainer never wires the callback — say
+        ``orpo`` — would accept the config and then silently ignore LISA, and
+        every other test here would still pass. This is the other half.
+        """
+        from soup_cli.config.schema import _LISA_SUPPORTED_TASKS
+
+        assert set(_LISA_SUPPORTED_TASKS) == {"sft", "pretrain"}
+
+
+class TestPretrainLisaWiring:
+    @pytest.mark.parametrize(
+        "num_layers,interval_steps", [(3, 15), (2, 7)]
+    )
+    def test_callback_carries_the_configured_policy(
+        self, tmp_path, monkeypatch, num_layers, interval_steps
+    ):
+        """Two distinct configurations: a callback built from hardcoded
+        constants would satisfy one of them and fail the other."""
+        _requires_train_extra()
+        _captured_console(monkeypatch)
+        wrapper, dataset = _pretrain_wrapper(
+            tmp_path,
+            monkeypatch,
+            lisa_enabled=True,
+            lisa_num_layers=num_layers,
+            lisa_interval_steps=interval_steps,
+        )
+        wrapper.setup(dataset)
+
+        callbacks = _lisa_callbacks(wrapper.trainer)
+        assert len(callbacks) == 1
+        assert callbacks[0].policy.num_layers == num_layers
+        assert callbacks[0].policy.interval_steps == interval_steps
+
+    def test_lisa_run_is_unwrapped_and_fully_trainable(self, tmp_path, monkeypatch):
+        _requires_train_extra()
+        from peft import PeftModel
+
+        _captured_console(monkeypatch)
+        wrapper, dataset = _pretrain_wrapper(
+            tmp_path, monkeypatch, lisa_enabled=True, lisa_num_layers=2
+        )
+        wrapper.setup(dataset)
+
+        assert not isinstance(wrapper.model, PeftModel)
+        # Fully trainable at setup time is the correctness invariant: HF builds
+        # the optimizer before on_train_begin, so a decoder parameter left out
+        # of the param groups can never be re-activated by the callback.
+        frozen = [
+            name
+            for name, param in wrapper.model.named_parameters()
+            if not param.requires_grad
+        ]
+        assert frozen == []
+
+    def test_lora_control_still_wraps_and_attaches_no_lisa_callback(
+        self, tmp_path, monkeypatch
+    ):
+        """The control: a plain pretrain config must be untouched by #307."""
+        _requires_train_extra()
+        from peft import PeftModel
+
+        _captured_console(monkeypatch)
+        wrapper, dataset = _pretrain_wrapper(tmp_path, monkeypatch)
+        wrapper.setup(dataset)
+
+        assert isinstance(wrapper.model, PeftModel)
+        assert _lisa_callbacks(wrapper.trainer) == []
+
+    @pytest.mark.parametrize("n_layers", [2, 4])
+    def test_summary_counts_every_parameter_and_says_lisa(
+        self, tmp_path, monkeypatch, n_layers
+    ):
+        """``get_nb_trainable_parameters`` is a PeftModel method and a LISA run
+        has no PeftModel, so the count comes off the parameters directly. Two
+        model depths, so a summary printing a constant fails one of them."""
+        _requires_train_extra()
+        buf = _captured_console(monkeypatch)
+        wrapper, dataset = _pretrain_wrapper(
+            tmp_path, monkeypatch, n_layers=n_layers, lisa_enabled=True
+        )
+        wrapper.setup(dataset)
+
+        expected = sum(param.numel() for param in wrapper.model.parameters())
+        out = _plain(buf.getvalue())
+        assert f"LISA: {expected:,} trainable / {expected:,} total (100.00%)" in out
+        assert "LoRA applied" not in out
+
+    def test_lora_control_summary_reports_the_adapter_count(
+        self, tmp_path, monkeypatch
+    ):
+        """Negative control for the label AND the number: without LISA the
+        summary must still name LoRA and report only the adapter as trainable,
+        which is strictly fewer parameters than the whole model."""
+        _requires_train_extra()
+        buf = _captured_console(monkeypatch)
+        wrapper, dataset = _pretrain_wrapper(tmp_path, monkeypatch)
+        wrapper.setup(dataset)
+
+        trainable, total = wrapper.model.get_nb_trainable_parameters()
+        out = _plain(buf.getvalue())
+        assert trainable < total
+        assert f"LoRA applied: {trainable:,} trainable / {total:,} total" in out
+        assert "LISA:" not in out
+
+
+class TestSharedLisaSetup:
+    """#307 — the SFT and pretrain trainers must not drift on what "LISA is on"
+    means, so both route through ``peft_wiring.apply_lisa_setup``.
+
+    Everything else about a LISA run (unwrapped model, every parameter
+    trainable) is produced by the surrounding ``elif`` skipping the LoRA path,
+    so it survives that call being deleted. The two behaviours the call itself
+    owns are pinned here: the ``enable_input_require_grads`` hand-off and the
+    fact that each trainer actually goes through the shared helper.
+    """
+
+    @staticmethod
+    def _tcfg(lisa_enabled):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            lisa_enabled=lisa_enabled, lisa_num_layers=2, lisa_interval_steps=20
+        )
+
+    @pytest.mark.parametrize("lisa_enabled,calls", [(True, 1), (False, 0)])
+    def test_input_require_grads_is_enabled_only_when_lisa_is_on(
+        self, lisa_enabled, calls
+    ):
+        """Without a LoRA adapter nothing else makes the embedding output
+        require grad, so gradient checkpointing dies with "None of the inputs
+        have requires_grad". Both directions, so a helper that unconditionally
+        enables it (or unconditionally returns a fixed verdict) fails one."""
+
+        class _Model:
+            def __init__(self):
+                self.enabled = 0
+
+            def enable_input_require_grads(self):
+                self.enabled += 1
+
+        from soup_cli.utils.peft_wiring import apply_lisa_setup
+
+        model = _Model()
+        assert apply_lisa_setup(model, self._tcfg(lisa_enabled)) is lisa_enabled
+        assert model.enabled == calls
+
+    def test_a_model_without_the_hook_is_still_accepted(self):
+        """The ``hasattr`` guard's own control: not every backend exposes
+        ``enable_input_require_grads``, and LISA must still turn on there."""
+        from soup_cli.utils.peft_wiring import apply_lisa_setup
+
+        assert apply_lisa_setup(object(), self._tcfg(True)) is True
+
+    @staticmethod
+    def _announce(tcfg):
+        """Drive the helper through a REAL wide Rich console.
+
+        Real because the banner is Rich markup and a recording double would
+        capture the object repr; wide because a narrow console wraps the
+        figures across a newline and the assertion then silently misses them.
+        """
+        from io import StringIO
+
+        from rich.console import Console
+
+        from soup_cli.utils.peft_wiring import apply_lisa_setup
+
+        buf = StringIO()
+        apply_lisa_setup(object(), tcfg, Console(file=buf, width=200))
+        return _plain(buf.getvalue())
+
+    @pytest.mark.parametrize("num_layers,interval_steps", [(3, 15), (2, 7)])
+    def test_the_announcement_carries_the_configured_policy(
+        self, num_layers, interval_steps
+    ):
+        """LISA replaces the LoRA path silently otherwise: the banner is the
+        only thing telling the user which policy is live. Two policies, with
+        the other one's figures asserted ABSENT, so a hardcoded banner passes
+        neither."""
+        tcfg = self._tcfg(True)
+        tcfg.lisa_num_layers = num_layers
+        tcfg.lisa_interval_steps = interval_steps
+
+        out = self._announce(tcfg)
+
+        assert (
+            f"LISA: layerwise importance sampling ({num_layers} layer(s) "
+            f"every {interval_steps} steps, LoRA off)"
+        ) in out
+        assert f"{5 - num_layers} layer(s)" not in out
+        assert f"every {22 - interval_steps} steps" not in out
+
+    def test_nothing_is_announced_when_lisa_is_off(self):
+        """The silent-case control: without it a helper that announces
+        unconditionally would print "LoRA off" on every plain LoRA run."""
+        assert self._announce(self._tcfg(False)) == ""
+
+    @pytest.mark.parametrize("lisa_enabled,expected_calls", [(True, 1), (False, 0)])
+    def test_the_sft_trainer_routes_lisa_through_the_shared_helper(
+        self, tmp_path, monkeypatch, lisa_enabled, expected_calls
+    ):
+        """Pins the #307 refactor: the SFT trainer's LISA branch must keep
+        delegating. Re-inlining it there (the drift this change exists to
+        prevent) leaves no call to observe."""
+        _requires_train_extra()
+        import soup_cli.utils.peft_wiring as peft_wiring
+        from tests.test_issue341_seed_and_fullft import _wrapper
+
+        seen = []
+        real = peft_wiring.apply_lisa_setup
+
+        def _spy(model, tcfg, console=None):
+            seen.append(model)
+            return real(model, tcfg, console)
+
+        monkeypatch.setattr(peft_wiring, "apply_lisa_setup", _spy)
+        over = (
+            {"lisa_enabled": True, "lisa_num_layers": 2} if lisa_enabled else {}
+        )
+        wrapper, dataset = _wrapper(tmp_path, monkeypatch, **over)
+        wrapper.setup(dataset)
+
+        assert len(seen) == expected_calls
+        if expected_calls:
+            assert seen[0] is wrapper.model
+
+    @pytest.mark.parametrize("lisa_enabled", [True, False])
+    def test_the_pretrain_trainer_routes_lisa_through_the_shared_helper(
+        self, tmp_path, monkeypatch, lisa_enabled
+    ):
+        """The pretrain half of the same pin, and the one the mutation needs:
+        this trainer asks the helper on EVERY run and lets its return value
+        decide whether the LoRA path runs, so the call is expected with LISA
+        both on and off. Rewriting the call site as ``if not
+        tcfg.lisa_enabled`` keeps every other test in this module green while
+        silently dropping ``enable_input_require_grads`` and the LISA
+        announcement here — that mutant dies on this test alone.
+        """
+        _requires_train_extra()
+        import soup_cli.utils.peft_wiring as peft_wiring
+
+        _captured_console(monkeypatch)
+        seen = []
+        real = peft_wiring.apply_lisa_setup
+
+        def _spy(model, tcfg, console=None):
+            seen.append(model)
+            return real(model, tcfg, console)
+
+        monkeypatch.setattr(peft_wiring, "apply_lisa_setup", _spy)
+        over = (
+            {"lisa_enabled": True, "lisa_num_layers": 2} if lisa_enabled else {}
+        )
+        wrapper, dataset = _pretrain_wrapper(tmp_path, monkeypatch, **over)
+        wrapper.setup(dataset)
+
+        assert len(seen) == 1
+        # ...and it is handed the trainer's own model, not some other object.
+        # With LISA on the model is left unwrapped, so it is still
+        # ``wrapper.model``; with LISA off ``get_peft_model`` wraps it right
+        # after, so it is that wrapper's base.
+        if lisa_enabled:
+            assert seen[0] is wrapper.model
+        else:
+            assert wrapper.model.get_base_model() is seen[0]
+
+
+class TestPretrainLisaEndToEnd:
+    def test_a_pretrain_lisa_run_moves_only_the_sampled_decoder_layers(
+        self, tmp_path, monkeypatch
+    ):
+        """The acceptance criterion, end to end: a real continued-pre-training
+        run with LISA moves the sampled decoder layer and no OTHER decoder
+        layer. Scoped to the decoder on purpose — the embeddings, the LM head
+        and the final norm stay trainable throughout by design (#267), so they
+        are expected to move and are not part of this claim.
+
+        A wiring test alone would pass on a callback that is attached and never
+        fires; this fails unless the sampling actually reaches the optimizer.
+        """
+        _requires_train_extra()
+        import torch
+
+        _captured_console(monkeypatch)
+        wrapper, dataset = _pretrain_wrapper(
+            tmp_path,
+            monkeypatch,
+            n_layers=4,
+            lisa_enabled=True,
+            lisa_num_layers=1,
+            # One sample at on_train_begin, none afterwards, so the active set
+            # is constant for the whole run and "what changed" is unambiguous.
+            lisa_interval_steps=1_000,
+        )
+        wrapper.setup(dataset)
+        before = {
+            name: param.detach().clone()
+            for name, param in wrapper.model.named_parameters()
+        }
+
+        wrapper.train()
+
+        from soup_cli.utils.lisa import _LAYER_RE
+
+        def _layers(names):
+            return {
+                int(_LAYER_RE.search(name).group(1))
+                for name in names
+                if _LAYER_RE.search(name)
+            }
+
+        active = _layers(
+            name
+            for name, param in wrapper.model.named_parameters()
+            if param.requires_grad
+        )
+        moved = _layers(
+            name
+            for name, param in wrapper.model.named_parameters()
+            if not torch.equal(param.detach(), before[name])
+        )
+        assert len(active) == 1, "one layer configured, one layer sampled"
+        assert moved == active
