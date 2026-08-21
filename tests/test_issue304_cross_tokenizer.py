@@ -155,16 +155,17 @@ class TestCrossTokenizerAcceptanceKernel:
         costs exactly 1/n_gen, always downward."""
         from soup_cli.utils.draft import compute_acceptance_spans, count_accepted_spans
 
-        target = ["b", "c"]
+        target = ["c", "d", "e", "f"]
         # control: clean boundary
-        draft_clean = ["b", "c"]
-        assert count_accepted_spans(draft_clean, target) == 2
+        draft_clean = ["c", "d", "e", "f"]
+        assert count_accepted_spans(draft_clean, target) == 4
         assert compute_acceptance_spans(draft_clean, target) == 1.0
 
-        # merged boundary (b + c -> 'bc')
-        draft_merged = ["bc"]
-        assert count_accepted_spans(draft_merged, target) == 1
-        assert compute_acceptance_spans(draft_merged, target) == 0.5
+        # merged boundary: the first generated character merges with the prompt tail
+        # and is excluded from the draft's proposal list.
+        draft_merged = ["d", "e", "f"]
+        assert count_accepted_spans(draft_merged, target) == 3
+        assert compute_acceptance_spans(draft_merged, target) == 0.75
 
     def test_repeated_substrings_and_interrupted_spans(self):
         """Verify repeated words and interrupted spans do not produce false positives."""
