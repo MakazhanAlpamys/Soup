@@ -79,6 +79,10 @@ reproducing 70+ versions of notes.
 - **A repo-wide documentation ratchet to guarantee declared recipe counts stay synchronized with the catalog (#453 by @harshitthek in #457).**
   Derives the expected count dynamically from `len(RECIPES)` and scans all declared documentation sites, preventing silent Git auto-merge drift across sequential recipe additions.
 
+- Branch coverage for `lr_groups.py`'s `build_optimizer_param_groups`: the case
+  where every parameter matches a configured group, so no `base` optimizer
+  group is appended (#273).
+
 ### Changed
 
 - **Lazy callback builders now self-import their callback class names so runtime
