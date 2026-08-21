@@ -46,6 +46,7 @@ reproducing 70+ versions of notes.
   --config`, the registry entry, or the adapter's `adapter_config.json`), per the issue's own
   Fix path; that plus `soup ship` reporting the numerics it judged with and a staleness gate
   on mismatched-numerics evidence are left open (issue acceptance criteria 2 and 4).
+
 - **`training.stream_pin` makes layer-streaming pinning configurable (#366 by @ousamabenyounes in #416).**
   Page-locking the RAM store is chosen automatically by `decide_pinning`, and
   until now nothing could override it — so while #331 was live, `pin=False` was

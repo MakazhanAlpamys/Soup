@@ -850,6 +850,29 @@ class TestBestOfN:
 
 
 class TestBestOfNCli:
+    @staticmethod
+    def _invoke_guard(monkeypatch, tmp_path, *sampler_args):
+        from typer.testing import CliRunner
+
+        from soup_cli.commands.data import app
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("soup_cli.eval.judge.JudgeEvaluator", lambda **kw: _ScoreJudge())
+        prompts = tmp_path / "prompts.jsonl"
+        prompts.write_text('{"prompt": "question"}\n', encoding="utf-8")
+        return CliRunner().invoke(
+            app,
+            [
+                "best-of-n",
+                "--prompts",
+                str(prompts),
+                "--judge",
+                "ollama://judge",
+                "--plan-only",
+                *sampler_args,
+            ],
+        )
+
     def test_help(self):
         from typer.testing import CliRunner
 
@@ -862,6 +885,41 @@ class TestBestOfNCli:
         assert "--provider" in output
         assert "--model" in output
         assert "--base-url" in output
+
+    def test_rejects_local_base_with_provider(self, monkeypatch, tmp_path):
+        result = self._invoke_guard(
+            monkeypatch, tmp_path, "--base", "local-model", "--provider", "ollama"
+        )
+        assert result.exit_code == 2, (result.output, repr(result.exception))
+        assert "mutually exclusive" in _plain(result.output).lower()
+
+    def test_rejects_local_only_flags_with_provider(self, monkeypatch, tmp_path):
+        result = self._invoke_guard(
+            monkeypatch,
+            tmp_path,
+            "--provider",
+            "ollama",
+            "--model",
+            "sampler-model",
+            "--seed",
+            "42",
+        )
+        assert result.exit_code == 2, (result.output, repr(result.exception))
+        output = _plain(result.output).lower()
+        assert "--seed" in output
+        assert "only to local --base" in output
+
+    def test_rejects_provider_options_without_provider(self, monkeypatch, tmp_path):
+        result = self._invoke_guard(
+            monkeypatch, tmp_path, "--base", "local-model", "--model", "sampler-model"
+        )
+        assert result.exit_code == 2, (result.output, repr(result.exception))
+        assert "require --provider" in _plain(result.output).lower()
+
+    def test_requires_local_base_or_provider(self, monkeypatch, tmp_path):
+        result = self._invoke_guard(monkeypatch, tmp_path)
+        assert result.exit_code == 2, (result.output, repr(result.exception))
+        assert "either local --base or --provider" in _plain(result.output).lower()
 
     def test_provider_path_calls_sampler_and_records_provenance(self, monkeypatch):
         import json
