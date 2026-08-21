@@ -836,6 +836,44 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         return (mode == "bf16", mode == "fp16")
 
     @staticmethod
+    def _resolve_load_dtype(tcfg):
+        """Decide the ``dtype`` kwarg for ``from_pretrained`` (#339).
+
+        Two cases, and #339's payoff is real only because they are told apart:
+
+        - Frozen base (LoRA / QLoRA — the base never receives an optimizer
+          step): ``"auto"``, so ``from_pretrained`` preserves the checkpoint's
+          OWN dtype (typically bf16/fp16) instead of the HF default of
+          upcasting every load to fp32. Measured on an H100, Llama-3.1-8B,
+          LoRA, frozen base: 48,241 MiB -> 18,658 MiB peak (2.59x / 28.9 GB),
+          byte-identical across 3 repeats.
+        - Trainable base — full fine-tuning (Spectrum ``unfrozen_parameters``,
+          LISA ``lisa_enabled``, or the #340 ``lora.r=0`` spelling; all three
+          are schema-gated to modality='text' + backend='transformers', see
+          config/schema.py's ``_validate_unfrozen_parameters`` /
+          ``_validate_lisa*`` / ``_validate_full_finetune``): explicit
+          ``torch.float32``. This is a DELIBERATE numerics decision (#339
+          AC2), not the accidental default this issue exists to remove — the
+          parameters an optimizer actually steps stay fp32 master weights
+          rather than silently inheriting whatever the checkpoint happened to
+          be stored in.
+
+        Mirrors the exact three-flag discriminator already used for the
+        "LoRA applied" vs "Full fine-tuning" summary label above (see the
+        block around ``tcfg.unfrozen_parameters`` / ``tcfg.lora.r == 0``);
+        duplicated rather than shared because that block runs AFTER the model
+        is loaded and this one must run BEFORE.
+        """
+        is_full_finetune = bool(
+            tcfg.unfrozen_parameters or tcfg.lisa_enabled or tcfg.lora.r == 0
+        )
+        if not is_full_finetune:
+            return "auto"
+        import torch  # lazy — sft.py has no top-level torch import (house style)
+
+        return torch.float32
+
+    @staticmethod
     def _as_sft_config(training_args, max_length):
         """Convert `TrainingArguments` -> `SFTConfig`, carrying `max_length` over.
 
@@ -921,6 +959,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         model_kwargs = {
             "trust_remote_code": self._trust_remote_code,
             "device_map": dev_map,
+            "dtype": self._resolve_load_dtype(tcfg),
         }
         if quant_config_obj is not None:
             model_kwargs["quantization_config"] = quant_config_obj
@@ -1199,6 +1238,14 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         model_kwargs = {
             "trust_remote_code": self._trust_remote_code,
             "device_map": dev_map,
+            # #339 — always "auto": get_peft_model below runs unconditionally
+            # on this path (vision has no full-FT branch), and the schema
+            # gates unfrozen_parameters / lisa_enabled / lora.r==0 to
+            # modality='text', so _resolve_load_dtype can never return
+            # torch.float32 here. Routed through the shared helper anyway
+            # rather than hardcoding the string, so this stays correct by
+            # construction if a vision full-FT branch is ever added.
+            "dtype": self._resolve_load_dtype(tcfg),
         }
         if quant_config_obj is not None:
             model_kwargs["quantization_config"] = quant_config_obj
@@ -1308,6 +1355,11 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         model_kwargs = {
             "trust_remote_code": self._trust_remote_code,
             "device_map": dev_map,
+            # #339 — always "auto", same reasoning as the vision path above:
+            # get_peft_model runs unconditionally below (no full-FT branch on
+            # this path), and the schema gates unfrozen_parameters /
+            # lisa_enabled / lora.r==0 to modality='text'.
+            "dtype": self._resolve_load_dtype(tcfg),
         }
         if quant_config_obj is not None:
             model_kwargs["quantization_config"] = quant_config_obj

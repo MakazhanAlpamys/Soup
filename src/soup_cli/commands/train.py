@@ -64,6 +64,13 @@ def _build_hardware_fit_input(cfg):
         or getattr(tcfg, "freeze_layers", None)
         or getattr(tcfg, "freeze_ratio", None)
     ):
+        # NOTE (#339): this classifier does not check lisa_enabled /
+        # lora.r==0 — only unfrozen_parameters / freeze_layers /
+        # freeze_ratio — so a lisa_enabled or lora.r=0 config with none of
+        # those three set is misclassified as peft="lora" here and never
+        # reaches hardware_fit's full-FT (fp32 weights) byte correction.
+        # Pre-existing, independent of #339's dtype fix; left alone here
+        # rather than silently expanding scope.
         peft = "full"  # Spectrum / freeze-based full fine-tuning
     else:
         peft = "lora"

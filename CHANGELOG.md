@@ -14,6 +14,17 @@ reproducing 70+ versions of notes.
 
 ### Added
 
+- **`SFTTrainerWrapper` no longer silently upcasts every load to fp32 (#339 by @blackcoderx in #TODO-PR).**
+  All three `from_pretrained` call sites (text/vision/audio) now pass an explicit `dtype`: `"auto"` for a
+  frozen base (LoRA/QLoRA — the base never receives an optimizer step), which preserves the checkpoint's
+  own dtype instead of defaulting to fp32; `torch.float32` for a trainable base (`lora.r: 0`,
+  `unfrozen_parameters`, `lisa_enabled` — schema-gated to modality='text') as a deliberate, documented
+  numerics choice. Measured on an H100 with Llama-3.1-8B, LoRA, frozen base: 48,241 MiB -> 18,658 MiB peak
+  (2.59x / 28.9 GB), byte-identical across 3 repeats. `hardware_fit.py`'s weights-byte assumption is
+  updated to match (fp32 for `peft="full"` + `quant="none"`); the pre-existing gap where
+  `commands/train.py`'s pre-flight classifier does not recognize `lisa_enabled`/`lora.r==0` as full-FT is
+  flagged in-code but left unaddressed here as out of scope.
+
 - **Layer streaming now accepts Qwen3.5 MoE text checkpoints whose decoder
   layers do not expose exactly the same weight keys in every block (by
   @Shutaru in #426).** The sharder now records per-layer shard headers instead of

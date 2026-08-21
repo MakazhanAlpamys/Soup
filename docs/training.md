@@ -186,6 +186,15 @@ Pick between the three "LoRA off" modes by how much you want to train:
 > `batch_size` explicitly, or start low and raise it. (This is not new to
 > `r: 0`; the same is true of the Spectrum and LISA full-FT paths.)
 
+**Load dtype** (#339): a frozen base — LoRA, or QLoRA — loads at the
+checkpoint's own dtype (`dtype="auto"`) instead of always upcasting to fp32,
+since the base never receives an optimizer step. Measured on an H100,
+Llama-3.1-8B, LoRA: 48,241 MiB peak -> 18,658 MiB, a 28.9 GB / 2.59x saving.
+All three "LoRA off" modes above (`lora.r: 0`, `unfrozen_parameters`,
+`lisa_enabled`) are the trainable-base case and explicitly load `torch.float32`
+master weights instead — a deliberate precision choice for the parameters an
+optimizer actually steps, not an accidental upcast.
+
 ---
 
 ## Continual-learning rehearsal (`--replay`)
