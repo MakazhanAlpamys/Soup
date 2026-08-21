@@ -77,13 +77,45 @@ def attach_relora_callback(trainer: Any, tcfg: Any) -> bool:
     return True
 
 
+def apply_lisa_setup(model: Any, tcfg: Any, console: Any = None) -> bool:
+    """Prepare ``model`` for LISA full fine-tuning (v0.71.34 #267, #307).
+
+    Returns ``True`` when LISA is enabled (the caller must then SKIP its LoRA
+    path entirely), ``False`` otherwise.
+
+    The model is deliberately left FULLY trainable here: HF builds the
+    optimizer before the first callback fires, so every decoder parameter has
+    to be in a param group for :class:`~soup_cli.utils.lisa.LisaCallback` to be
+    able to re-activate it later. The callback then flips ``requires_grad``
+    each interval — frozen parameters produce no gradient and AdamW skips
+    them. ``enable_input_require_grads`` keeps gradient checkpointing working
+    without a LoRA adapter, exactly as the Spectrum branch does.
+
+    Centralised (rather than inlined per trainer) for the same reason
+    ``block_expansion.apply_block_expansion_if_configured`` is: the SFT and
+    pretrain trainers must not drift on what "LISA is on" means.
+    """
+    if not getattr(tcfg, "lisa_enabled", False):
+        return False
+    if hasattr(model, "enable_input_require_grads"):
+        model.enable_input_require_grads()
+    if console is not None:
+        console.print(
+            f"[green]LISA:[/] layerwise importance sampling "
+            f"({tcfg.lisa_num_layers} layer(s) every "
+            f"{tcfg.lisa_interval_steps} steps, LoRA off)"
+        )
+    return True
+
+
 def attach_lisa_callback(trainer: Any, tcfg: Any) -> bool:
     """Attach :class:`LisaCallback` when ``training.lisa_enabled`` is set.
 
     Returns ``True`` when a callback was attached, ``False`` otherwise. The
     schema-level cross-validator (``_validate_lisa_compat``) already enforces
-    the sft / transformers / text / quantization=none gate and mutual
-    exclusion, so this helper trusts the caller's task/backend (v0.71.34 #267).
+    the ``_LISA_SUPPORTED_TASKS`` / transformers / text / quantization=none
+    gate and mutual exclusion, so this helper trusts the caller's task/backend
+    (v0.71.34 #267; ``pretrain`` added in #307).
     """
     if not getattr(tcfg, "lisa_enabled", False):
         return False
