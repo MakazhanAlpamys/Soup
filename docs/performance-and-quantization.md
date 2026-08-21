@@ -211,6 +211,14 @@ message; vision and audio modality now thread the same unified Quant Menu loader
 multi-modal SFT too (a given vision/audio checkpoint still needs a class + kernel
 that supports the chosen format, e.g. `autoawq` for awq).
 
+**Non-quantized module dtype (#339/#471).** `from_pretrained`'s own `dtype` kwarg — set to
+`"auto"` (or, on a pre-Ampere CUDA card, an explicit `torch.float16` override; see the "Load
+dtype" note in `docs/training.md`'s Full fine-tuning section) — now also applies to a
+`4bit`/`8bit` QLoRA load, governing the modules `quantization_config` doesn't quantize
+(`embed_tokens`, norms, `lm_head`). This matches `bnb_4bit_compute_dtype`, which already
+resolves the same card-aware `get_compute_dtype()`, rather than leaving those modules at
+whatever `from_pretrained`'s bare default happened to pick.
+
 
 ## Activation Offloading (Small-VRAM Large-Batch)
 

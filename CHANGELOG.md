@@ -113,6 +113,22 @@ reproducing 70+ versions of notes.
 
 ### Fixed
 
+- **`SFTTrainerWrapper` no longer silently upcasts every load to fp32 (#339 by @blackcoderx in #471).**
+  All three `from_pretrained` call sites (text/vision/audio) now pass an explicit `dtype`: a frozen base
+  (LoRA/QLoRA — the base never receives an optimizer step) preserves the checkpoint's own dtype
+  (`"auto"`) instead of defaulting to fp32, except on a pre-Ampere CUDA card (T4/P100/V100/GTX 16xx/RTX
+  20xx), where it explicitly loads `torch.float16` instead — `"auto"` there would give bf16 storage
+  while training compute correctly stays fp16 (asked via the same `bf16_fp16_flags` helper
+  `_resolve_mixed_precision` already uses), the exact bf16-storage/fp16-compute split v0.73.1 (#385/#387)
+  removed from fourteen other places. A trainable base (`lora.r: 0`, `unfrozen_parameters`,
+  `lisa_enabled` — schema-gated to modality='text') loads `torch.float32` as a deliberate, documented
+  numerics choice. Measured on an H100 with Llama-3.1-8B, LoRA, frozen base: 48,241 MiB -> 18,658 MiB peak
+  (2.59x / 28.9 GB), byte-identical across 3 repeats. The full-FT discriminator is now a single shared
+  `is_full_finetune()`, used by both `SFTTrainerWrapper` and `commands/train.py`'s VRAM pre-flight
+  classifier — previously independent copies that disagreed in both directions (missing
+  `lisa_enabled`/`lora.r==0` under-predicted VRAM; treating bare `freeze_layers`/`freeze_ratio` as
+  full-FT even with LoRA still on over-predicted it, able to falsely refuse a launch that would fit).
+
 - **`cut_ce.py` and `liger.py` now normalize path separators and match architecture
   keywords on the last path component only (#456 by @harshitthek in #458).**
   On Windows, `rsplit("/")` never split on backslashes, causing parent directory
