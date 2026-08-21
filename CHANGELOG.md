@@ -94,6 +94,9 @@ reproducing 70+ versions of notes.
 - Branch coverage for `lr_groups.py`'s `build_optimizer_param_groups`: the case
   where every parameter matches a configured group, so no `base` optimizer
   group is appended (#273 by @AmirF194 in #469).
+- Branch coverage for `replay.py`'s `downsample`: the case where the stride
+  already lands on the last row, so the endpoint pin is not appended a second
+  time (#273 by @AmirF194 in #470).
 
 ### Changed
 

@@ -78,6 +78,15 @@ class TestDownsample:
         out = downsample(rows)
         assert len(out) <= MAX_PLOT_POINTS + 5
 
+    def test_stride_lands_on_last_row_no_duplicate_pin(self):
+        # 5 rows, max_points=2 -> stride = 5 // 2 = 2, so rows[::2] already
+        # ends on index 4 (the last row); the endpoint pin must not append a
+        # second copy (branch 80->82 in replay.py).
+        rows = [_row(i, 2.0) for i in range(5)]
+        out = downsample(rows, max_points=2)
+        assert out == [rows[0], rows[2], rows[4]]
+        assert out[-1] is rows[-1]
+
     def test_zero_max_rejected(self):
         with pytest.raises(ValueError):
             downsample([_row(0, 2.0)], max_points=0)
