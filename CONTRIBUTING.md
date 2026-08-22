@@ -381,8 +381,33 @@ When you open a PR, the GitHub template will show this checklist:
 - [ ] `ruff check src/soup_cli/ tests/` passes
 - [ ] `pytest tests/ -v` passes
 - [ ] Updated relevant docs (`README.md` and the matching page under `docs/`) if needed
+- [ ] Added a changelog fragment in `changelog.d/` if needed (see below)
 - [ ] New tests added for new functionality
 - [ ] No breaking changes (or documented in PR description)
+
+### Changelog Fragments
+
+To avoid merge conflicts in `CHANGELOG.md`, we use `towncrier` fragments. **Please do not edit `CHANGELOG.md` directly in your Pull Request.** `CHANGELOG.md` acts as the source of truth for the project's history, and `towncrier` will automatically compile fragments into release notes upon the next release.
+
+Instead, create a markdown file in the `changelog.d/` directory named `<PR_NUMBER>.<TYPE>.md` (e.g., `487.added.md`). 
+- **PR Number**: If you don't know the PR number yet, use your branch name or a descriptive word (e.g., `my-feature.added.md`).
+- **Multiple fragments**: If your PR includes multiple unrelated changes, you can create multiple fragments (e.g., `487.added.1.md`, `487.added.2.md`).
+- **Empty categories**: If a category has no fragments, it will simply be omitted from the final release notes.
+- **Sorting**: Towncrier automatically groups fragments by category and sorts them by PR number (or filename).
+- **Author attribution**: Towncrier does not automatically append your username. If you'd like to be credited for a specific note, you may optionally include `(by @yourusername)` in the fragment text.
+
+Supported categories (`<TYPE>`) are:
+- `added` (New features)
+- `changed` (Changes to existing functionality)
+- `deprecated` (Soon-to-be removed features)
+- `removed` (Now removed features)
+- `fixed` (Bug fixes)
+- `security` (Vulnerability fixes)
+
+Example content of `changelog.d/487.added.md`:
+```markdown
+**Added support for dark mode.** This makes the CLI look much better on dark terminals.
+```
 
 ## Architecture & Design Decisions
 
@@ -469,7 +494,7 @@ The project follows semantic versioning: `MAJOR.MINOR.PATCH`
 
 1. Update version in `pyproject.toml` and `src/soup_cli/__init__.py`
 2. Run full test suite and linting
-3. Update `README.md`, the relevant page under `docs/`, `CHANGELOG.md`, and `SECURITY.md` (if security-related)
+3. Update `README.md`, the relevant page under `docs/`, and `SECURITY.md` (if security-related). Run `towncrier build --draft` to collect the fragments into release notes, then `rm changelog.d/*.md`.
 4. Commit with message: `Release v0.X.0`
 5. Tag: `git tag v0.X.0 && git push --tags`
 6. GitHub Actions auto-publishes to PyPI on the `v*` tag (Trusted Publisher / OIDC)
@@ -479,7 +504,7 @@ The project follows semantic versioning: `MAJOR.MINOR.PATCH`
 We credit every contributor — recognition is free and you earned it.
 
 - **[CONTRIBUTORS.md](CONTRIBUTORS.md):** every merged (or in-tree-adopted) PR adds you here, with your work and PR number.
-- **CHANGELOG.md:** from the release that ships your change, the entry is tagged `(#NNN by @you)`.
+- **CHANGELOG.md:** from the release that ships your change, the fragment is tagged `(#NNN by @you)` inside the release notes.
 - **Commit trailers:** PRs land with a `Co-Authored-By:` line for you, so the GitHub
   contributors graph reflects your work even after a squash merge.
 

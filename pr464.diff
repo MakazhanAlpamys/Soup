@@ -1,0 +1,56 @@
+diff --git a/docs/serving-and-export.md b/docs/serving-and-export.md
+index 53cd56f..b38a400 100644
+--- a/docs/serving-and-export.md
++++ b/docs/serving-and-export.md
+@@ -347,6 +347,8 @@ Higher is better; roughly, ≥70% is where speculative decoding starts paying fo
+ forward pass on realistic hardware. `--min-acceptance 0.6` exits **2** below the floor, so CI can
+ gate on it (exit 0 = ok, 2 = below floor, 1 = error).
+ 
++*Note: For cross-tokenizer drafts, the measured acceptance rate is a strict lower bound. A token boundary merge between the prompt and the first generated token can cause the score to read up to `1/n_gen` lower than its true value, but it will never over-report.*
++
+ `distill` runs logit KD through the existing `task: distill` trainer and emits a **dense** model
+ (a PEFT adapter directory cannot be loaded as an `assistant_model`). When draft and target share a
+ tokenizer, standard distillation is used. When tokenizers or vocabularies differ, `soup draft distill`
+diff --git a/src/soup_cli/utils/draft.py b/src/soup_cli/utils/draft.py
+index 6e9d17e..ea3ee22 100644
+--- a/src/soup_cli/utils/draft.py
++++ b/src/soup_cli/utils/draft.py
+@@ -528,6 +528,11 @@ def measure_acceptance(
+     allowing speculative evaluation across different vocabularies and tokenization
+     boundaries.
+ 
++    Note: Cross-tokenizer acceptance is a **lower bound**. A boundary merge (where
++    the draft tokenizer merges the last prompt character with the first generated
++    character) drops the straddling token, shortening the score by up to ``1/n_gen``.
++    The bias is always downward.
++
+     Returns ``(accepted, total)`` summed over prompts.
+     """
+     import torch
+diff --git a/tests/test_issue304_cross_tokenizer.py b/tests/test_issue304_cross_tokenizer.py
+index 277c64f..3687f09 100644
+--- a/tests/test_issue304_cross_tokenizer.py
++++ b/tests/test_issue304_cross_tokenizer.py
+@@ -150,6 +150,22 @@ def test_zero_length_and_unicode_tokens(self):
+         assert count_accepted_spans(draft, target) == 4
+         assert compute_acceptance_spans(draft, target) == 1.0
+ 
++    def test_boundary_merge_bias_is_pinned(self):
++        """Regression test for #462: a merged prompt/generation boundary token
++        costs exactly 1/n_gen, always downward."""
++        from soup_cli.utils.draft import compute_acceptance_spans, count_accepted_spans
++
++        target = ["b", "c"]
++        # control: clean boundary
++        draft_clean = ["b", "c"]
++        assert count_accepted_spans(draft_clean, target) == 2
++        assert compute_acceptance_spans(draft_clean, target) == 1.0
++
++        # merged boundary (b + c -> 'bc')
++        draft_merged = ["bc"]
++        assert count_accepted_spans(draft_merged, target) == 1
++        assert compute_acceptance_spans(draft_merged, target) == 0.5
++
+     def test_repeated_substrings_and_interrupted_spans(self):
+         """Verify repeated words and interrupted spans do not produce false positives."""
+         from soup_cli.utils.draft import compute_acceptance_spans, count_accepted_spans

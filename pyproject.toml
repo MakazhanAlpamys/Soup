@@ -233,3 +233,42 @@ markers = [
     "integration: tests that touch real subprocess, SQLite, filesystem, or HTTP",
 ]
 addopts = "-m 'not smoke' --cov=soup_cli --cov-fail-under=77 --cov-report=term-missing:skip-covered"
+
+[tool.towncrier]
+directory = "changelog.d"
+package = "soup_cli"
+package_dir = "src"
+filename = "CHANGELOG.md"
+issue_format = "[#{issue}](https://github.com/MakazhanAlpamys/Soup/issues/{issue})"
+template = "changelog.d/_template.md.jinja"
+title_format = ""
+
+[[tool.towncrier.type]]
+directory = "added"
+name = "Added"
+showcontent = true
+
+[[tool.towncrier.type]]
+directory = "changed"
+name = "Changed"
+showcontent = true
+
+[[tool.towncrier.type]]
+directory = "deprecated"
+name = "Deprecated"
+showcontent = true
+
+[[tool.towncrier.type]]
+directory = "removed"
+name = "Removed"
+showcontent = true
+
+[[tool.towncrier.type]]
+directory = "fixed"
+name = "Fixed"
+showcontent = true
+
+[[tool.towncrier.type]]
+directory = "security"
+name = "Security"
+showcontent = true

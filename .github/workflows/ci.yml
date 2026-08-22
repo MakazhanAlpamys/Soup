@@ -30,6 +30,19 @@ jobs:
           go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
           "$(go env GOPATH)/bin/actionlint" -color
 
+      - name: Check towncrier fragment filenames
+        run: |
+          for file in changelog.d/*; do
+            filename=$(basename "$file")
+            if [[ "$filename" == ".*" || "$filename" == "_*" ]]; then
+              continue
+            fi
+            if [[ ! "$filename" =~ \.(added|changed|deprecated|removed|fixed|security)(\.[0-9]+)?\.md$ ]]; then
+              echo "::error file=$file::Invalid changelog fragment name: $filename. Expected format: <pr_number>.<type>.md where type is added, changed, deprecated, removed, fixed, or security."
+              exit 1
+            fi
+          done
+
   type-check:
     runs-on: ubuntu-latest
     # Non-blocking type-check baseline. The codebase adopts annotations
