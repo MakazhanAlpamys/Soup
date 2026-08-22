@@ -467,6 +467,15 @@ The project follows semantic versioning: `MAJOR.MINOR.PATCH`
 
 ### Version Bump Process
 
+0. **Refresh the dev stack, or read the last `dependency drift` run** (#323).
+   A green local suite on a stale environment is a weaker signal than it looks:
+   during v0.72.x the dev box ran torch 2.5.1 / trl 0.19.1 while CI resolved
+   torch 2.13.0 / trl 0.29.1, and six trainers could not build their config at
+   all on what a fresh `pip install` actually gives a user. Either
+   `pip install -U -e ".[dev]"` before testing, or check the latest
+   [`dependency drift`](.github/workflows/dependency-drift.yml) run — it
+   installs the current stack weekly, runs the suite against it, and writes the
+   resolved-vs-declared table into its run summary.
 1. Update version in `pyproject.toml` and `src/soup_cli/__init__.py`
 2. Run full test suite and linting
 3. Update `README.md`, the relevant page under `docs/`, `CHANGELOG.md`, and `SECURITY.md` (if security-related)
