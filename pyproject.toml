@@ -113,6 +113,10 @@ train = [
 # v0.71.0 — convenience meta-extra pulling the main optional stacks.
 all = ["soup-cli[train,serve,ui,data,mcp]"]
 eval = ["lm-eval>=0.4.0"]
+# Aider's normal CLI. Its Polyglot harness is source-only, so `soup eval aider`
+# additionally requires the upstream benchmark Docker image documented in
+# docs/evaluation.md; the wheel alone cannot supply benchmark/benchmark.py.
+aider = ["aider-chat>=0.86.2,<0.87"]
 data = ["datasketch>=1.6.0", "scikit-learn>=1.0.0"]
 wandb = ["wandb>=0.15.0,<0.18.0"]
 # Self-references `[train]` so CI / contributors get the full training stack

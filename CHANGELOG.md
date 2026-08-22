@@ -23,6 +23,14 @@ reproducing 70+ versions of notes.
 
 ### Added
 
+- **`soup eval aider` runs Aider's Polyglot code-editing benchmark through its
+  official Docker harness (#91 by @Amix29 in #482).** The command preflights
+  Docker, the daemon, and the locally built benchmark image; mounts a prepared
+  Polyglot corpus read-only; keeps output under cwd; and aggregates bounded per-exercise JSON
+  into a Soup result row. `--run-id` records the score in `eval_results` for the
+  existing run comparison workflow. The optional `[aider]` extra installs the
+  normal Aider CLI while the docs make the source-only benchmark-image setup
+  explicit.
 - **Native Apple Silicon telemetry for `soup monitor` (#99 by @Amix29 in #481).**
   The monitor now reads bounded plist output from macOS `powermetrics` and
   renders GPU utilization and power in the existing Rich table. It reuses an
@@ -184,6 +192,19 @@ reproducing 70+ versions of notes.
   regression suite adds subprocess coverage for all five builder calls.
 
 ### Fixed
+
+- **Layer streaming now keeps its host store on CPU on Apple Silicon
+  (#434 by @Amix29 in #480).**
+  PyTorch 2.7+ can return an MPS tensor for
+  `torch.empty(device="cpu", pin_memory=True)`, while `is_pinned()` remains
+  false. Direct runtime callers could therefore place the whole frozen base in
+  the MPS allocator and still report a pinned RAM store, even though the normal
+  `soup train` setup already disabled pinning outside CUDA. The runtime now
+  disables both optional and required pinning when the target is MPS, and
+  `RamSource` independently refuses any allocation that is not genuinely CPU
+  memory (or claims pinning without being pinned). MPS proceeds experimentally
+  with a pageable CPU source and MPS layer buffers; CUDA pinning behaviour is
+  unchanged.
 
 - **`downsample` now returns at most `max_points` rows, which is what its
   docstring has always promised (#473 in #474).** The stride was
