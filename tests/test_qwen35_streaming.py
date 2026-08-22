@@ -497,7 +497,30 @@ class TestQwen35StreamingRuntime:
             for tensor in layer.values()
         )
 
-    def test_ram_source_refuses_a_non_cpu_allocation(self, tmp_path, monkeypatch):
+    @pytest.mark.parametrize("device_type", ["meta", "mps"])
+    def test_ram_source_refuses_a_non_cpu_allocation(
+        self, tmp_path, monkeypatch, device_type
+    ):
+        from soup_cli.utils.layer_shard import shard_checkpoint
+        from soup_cli.utils.layer_stream_runtime import RamSource
+
+        weights = _heterogeneous_weights_dir(tmp_path)
+        out = str(tmp_path / "shards")
+        index = shard_checkpoint(weights, out, dtype="float32", arch="qwen3")
+        layer_specs = RamSource.layer_specs_from_shards(out, index.n_layers)
+        def _misplaced_empty(*args, **kwargs):
+            del args
+            if kwargs.get("pin_memory"):
+                return types.SimpleNamespace(device=torch.device(device_type))
+            raise AssertionError("RamSource allocations should request pin_memory")
+
+        monkeypatch.setattr(torch, "empty", _misplaced_empty)
+        with pytest.raises(RuntimeError, match=rf"requested a CPU tensor.*{device_type}"):
+            RamSource(out, index.n_layers, layer_specs, pin=True)
+
+    def test_ram_source_refuses_pageable_memory_when_pinning_was_requested(
+        self, tmp_path, monkeypatch
+    ):
         from soup_cli.utils.layer_shard import shard_checkpoint
         from soup_cli.utils.layer_stream_runtime import RamSource
 
@@ -507,14 +530,55 @@ class TestQwen35StreamingRuntime:
         layer_specs = RamSource.layer_specs_from_shards(out, index.n_layers)
         real_empty = torch.empty
 
-        def _misplaced_empty(*args, **kwargs):
-            if kwargs.get("pin_memory"):
-                return real_empty(*args, dtype=kwargs.get("dtype"), device="meta")
-            return real_empty(*args, **kwargs)
+        def _pageable_empty(*args, **kwargs):
+            allocation = dict(kwargs)
+            allocation["pin_memory"] = False
+            return real_empty(*args, **allocation)
 
-        monkeypatch.setattr(torch, "empty", _misplaced_empty)
-        with pytest.raises(RuntimeError, match="requested a CPU tensor.*meta"):
+        monkeypatch.setattr(torch, "empty", _pageable_empty)
+        with pytest.raises(RuntimeError, match="returned pageable memory"):
             RamSource(out, index.n_layers, layer_specs, pin=True)
+
+    def test_mps_gate_disables_pinning_for_direct_callers(
+        self, tmp_path, monkeypatch
+    ):
+        import soup_cli.utils.layer_stream_runtime as runtime_module
+        from soup_cli.utils.layer_shard import shard_checkpoint
+
+        class _SourceCapturedError(Exception):
+            pass
+
+        captured = {}
+        messages = []
+
+        class _RecordingConsole:
+            def print(self, *args, **_kwargs):
+                messages.append(" ".join(str(arg) for arg in args))
+
+        def _capture_source(*args, **kwargs):
+            captured["pin"] = args[3]
+            captured["require_pin"] = kwargs["require_pin"]
+            raise _SourceCapturedError
+
+        weights = _heterogeneous_weights_dir(tmp_path)
+        out = str(tmp_path / "shards")
+        index = shard_checkpoint(weights, out, dtype="float32", arch="qwen3")
+        monkeypatch.setattr(runtime_module, "_build_source", _capture_source)
+
+        with pytest.raises(_SourceCapturedError):
+            runtime_module.install_streaming(
+                _heterogeneous_meta_model(),
+                shard_dir=out,
+                index=index,
+                device="mps",
+                pin=True,
+                require_pin=True,
+                console=_RecordingConsole(),
+            )
+
+        assert captured == {"pin": False, "require_pin": False}
+        assert any("require_pin=True" in message for message in messages)
+        assert any("pageable CPU source" in message for message in messages)
 
     @pytest.mark.skipif(
         not (hasattr(torch.backends, "mps") and torch.backends.mps.is_available()),

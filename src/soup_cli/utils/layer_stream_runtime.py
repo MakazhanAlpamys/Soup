@@ -1614,6 +1614,16 @@ def install_streaming(
     # well as in stream_setup so direct callers are safe. CPU retains its
     # existing try/fallback semantics, including the require_pin wiring tests.
     if str(device).startswith("mps"):
+        if require_pin:
+            message = (
+                "layer streaming was called with require_pin=True, but the target "
+                "is MPS. Pinned CPU host memory is CUDA-only here; proceeding "
+                "with a pageable CPU source."
+            )
+            if console is not None:
+                console.print(f"[yellow]{message}[/]")
+            else:
+                logger.warning(message)
         pin = False
         require_pin = False
 

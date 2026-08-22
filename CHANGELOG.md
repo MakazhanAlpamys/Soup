@@ -121,7 +121,8 @@ reproducing 70+ versions of notes.
 
 ### Fixed
 
-- **Layer streaming now keeps its host store on CPU on Apple Silicon (#434).**
+- **Layer streaming now keeps its host store on CPU on Apple Silicon
+  (#434 by @Amix29 in #480).**
   PyTorch 2.7+ can return an MPS tensor for
   `torch.empty(device="cpu", pin_memory=True)`, while `is_pinned()` remains
   false. Direct runtime callers could therefore place the whole frozen base in
