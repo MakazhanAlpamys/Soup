@@ -14,6 +14,15 @@ reproducing 70+ versions of notes.
 
 ### Added
 
+- **`soup eval aider` runs Aider's Polyglot code-editing benchmark through its
+  official Docker harness (#91).** The command preflights Docker, the daemon,
+  and the locally built benchmark image; mounts a prepared Polyglot corpus
+  read-only; keeps output under cwd; and aggregates bounded per-exercise JSON
+  into a Soup result row. `--run-id` records the score in `eval_results` for the
+  existing run comparison workflow. The optional `[aider]` extra installs the
+  normal Aider CLI while the docs make the source-only benchmark-image setup
+  explicit.
+
 - **`soup data best-of-n` can sample candidates from Ollama or vLLM providers
   (#299 by @Faisal01011 in #466).** The existing local Transformers `--base` path stays
   the default, while `--provider ollama|vllm --model <m> [--base-url <url>]`

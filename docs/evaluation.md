@@ -580,6 +580,10 @@ pip install "soup-cli[eval]"
 # Standard benchmarks (wraps lm-evaluation-harness)
 soup eval benchmark --model ./output --benchmarks mmlu,gsm8k,hellaswag
 
+# Aider Polyglot code-editing benchmark (after the setup below)
+soup eval aider --model openai/gpt-4.1 --output ./aider-results \
+  --exercises-dir ./polyglot-benchmark --run-id run_20260301_143052_a1b2
+
 # Custom eval tasks from JSONL
 soup eval custom --tasks eval_tasks.jsonl --model ./output
 
@@ -601,6 +605,51 @@ soup eval leaderboard --format csv
 # Human A/B evaluation with Elo ratings
 soup eval human --input prompts.jsonl --model-a ./model_a --model-b ./model_b
 ```
+
+### Aider Polyglot
+
+The `aider-chat` wheel does not include Aider's benchmark harness. Build the
+official image from an Aider source checkout and clone the exercises once:
+
+```bash
+pip install "soup-cli[aider]"
+git clone https://github.com/Aider-AI/aider.git
+cd aider
+./benchmark/docker_build.sh
+cd ..
+git clone https://github.com/Aider-AI/polyglot-benchmark.git
+```
+
+Start Docker, then run Soup from the project whose contained output directory
+should receive the results:
+
+```bash
+soup eval aider \
+  --model openai/gpt-4.1 \
+  --output ./aider-results \
+  --exercises-dir ./polyglot-benchmark \
+  --run-id run_20260301_143052_a1b2
+```
+
+`--model` is an Aider/LiteLLM model identifier, not a local Hugging Face model
+path. Soup checks the Docker CLI, daemon, and local `aider-benchmark` image
+before starting. It mounts the exercise corpus read-only, forwards supported
+provider credentials by environment-variable name (never by value in command
+arguments), and executes the upstream harness without a shell. The output
+directory must resolve under the current working directory.
+
+Aider writes one `.aider.results.json` per exercise. Soup bounds and validates
+those files, then writes `soup_result.json` with `model`, `task`, `score`,
+`errors`, and aggregate details. Passing an existing `--run-id` also stores the
+`aider_polyglot` score in Soup's experiment tracker, so it participates in the
+normal comparison command:
+
+```bash
+soup eval compare run_before run_after
+```
+
+The benchmark executes model-generated code. Keep Docker's isolation enabled;
+Soup deliberately does not offer a host-execution fallback.
 
 ### Quant-Lobotomy Checker
 
