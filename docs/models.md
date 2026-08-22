@@ -108,6 +108,7 @@ no PyTorch. Add `[train]` to fine-tune, or install other extras only when you ne
 | `ui` | `pip install "soup-cli[ui]"` | Web UI + inference server |
 | `tui` | `pip install "soup-cli[tui]"` | Full-screen Textual dashboard (`soup tui`) |
 | `eval` | `pip install "soup-cli[eval]"` | Benchmark evaluation (lm-evaluation-harness) |
+| `aider` | `pip install "soup-cli[aider]"` | Aider CLI; Polyglot evaluation also needs Aider's source-built Docker image |
 | `data` | `pip install "soup-cli[data]"` | Deduplication (MinHash via datasketch) |
 | `data-pro` | `pip install "soup-cli[data-pro]"` | Language detection + PII (langdetect, presidio) |
 | `deepspeed` | `pip install "soup-cli[deepspeed]"` | Multi-GPU training (DeepSpeed ZeRO) |

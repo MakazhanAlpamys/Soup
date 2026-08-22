@@ -52,6 +52,7 @@ soup agent train --spec api.yaml --base model  One-shot synth + planned soup tra
 soup agent eval --spec api.yaml --predictions p.jsonl  Score predicted tool-calls vs spec catalog
 soup agent eval --spec api.yaml --predictions p.jsonl --sandbox  Execute each tool-call in the RLVR sandbox: ok/tool_error/timeout/arg_error
 soup eval benchmark --model ./output          Evaluate on standard benchmarks
+soup eval aider --model openai/gpt-4.1 --output ./aider-results --exercises-dir ./polyglot-benchmark  Run Aider Polyglot in Docker
 soup eval custom --tasks eval.jsonl           Custom eval tasks from JSONL
 soup eval judge --target resp.jsonl           LLM-as-a-judge evaluation
 soup eval auto --config soup.yaml             Auto-eval from config
