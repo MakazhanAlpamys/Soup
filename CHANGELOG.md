@@ -187,6 +187,21 @@ reproducing 70+ versions of notes.
   un-run one — `pending` is what a report keeps when the process dies mid-arm
   and no handler runs, which is the case the incremental write exists for.
 
+- **`soup export --format gptq` crashed with no calibration data and, when it
+  did run, wrote a shard name the standard loader can't find
+  (#338 by @MakazhanAlpamys in #PLACEHOLDER).** With no `--calibration-data`,
+  `_export_gptq` called `model.quantize(tokenizer)`; auto-gptq's `quantize()`
+  expects tokenized examples, not a bare tokenizer, so this failed with
+  "object is not iterable". GPTQ export now requires `--calibration-data`
+  up front and rejects a file with zero usable samples, since auto-gptq has
+  no built-in fallback dataset (unlike AWQ). Separately, `save_quantized`
+  writes its own `gptq_model-<bits>bit-<group>g.safetensors` shard, which
+  `AutoModelForCausalLM.from_pretrained` does not look for; the exported
+  directory now also carries a standard `model.safetensors`. The shared
+  `except ImportError` blocks on both the AWQ and GPTQ paths also stopped
+  reporting a fixed "not installed" string when the package itself imports
+  fine but a transitive import inside it fails for an unrelated reason.
+
 ## [0.73.3] - 2026-08-18
 
 ### Added
