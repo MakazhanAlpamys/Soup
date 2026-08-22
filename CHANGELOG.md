@@ -15,7 +15,7 @@ reproducing 70+ versions of notes.
 ### Added
 
 - **A weekly `dependency drift` job, and a test that asks trl what it still
-  accepts (#323).** Two failure classes were structurally invisible until a PR
+  accepts (#323 in #486).** Two failure classes were structurally invisible until a PR
   happened to be open: a bug that only manifests on a CPU-only runner (a CUDA
   build never calls `_convert_weight_packed_for_cpu`, so no GPU dev box can
   reach it), and an upstream removal behind a floor-only pin. The second one
