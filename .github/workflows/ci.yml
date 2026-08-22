@@ -15,7 +15,7 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install ruff
-      - run: ruff check src/soup_cli/ tests/
+      - run: ruff check src/soup_cli/ scripts/ tests/
       - name: Lint the workflows themselves
         # `check-yaml` and a YAML parser both accept a workflow GitHub will
         # reject: 195d60b used the `runner` context in a job-level `env:` block,

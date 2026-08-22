@@ -49,7 +49,7 @@ pytest tests/ -v --tb=short
 Run the linter:
 
 ```bash
-ruff check src/soup_cli/ tests/
+ruff check src/soup_cli/ scripts/ tests/
 ```
 
 If both pass — you're ready to contribute!
@@ -60,10 +60,10 @@ We use **ruff** for all code style and linting. Before committing, run:
 
 ```bash
 # Check for issues
-ruff check src/soup_cli/ tests/
+ruff check src/soup_cli/ scripts/ tests/
 
 # Auto-fix issues
-ruff check --fix src/soup_cli/ tests/
+ruff check --fix src/soup_cli/ scripts/ tests/
 ```
 
 ### Style Guidelines
@@ -337,13 +337,19 @@ git checkout -b fix/your-bug-fix
 - **Write tests first** (TDD) — then implement to pass them
 - Keep commits focused and logical
 
+For each user-visible pull request, add its entry to
+`changelog.d/<latest-release>/<number>.<category>.md` instead of editing `CHANGELOG.md`;
+use the newest released version in `CHANGELOG.md`, prefer the PR number rather than the
+issue it closes, and choose `added`, `changed`, `deprecated`, `removed`, `fixed`, or
+`security`.
+
 ### 3. Run Tests & Lint
 
 Before pushing, ensure everything passes:
 
 ```bash
 # Lint first
-ruff check --fix src/soup_cli/ tests/
+ruff check --fix src/soup_cli/ scripts/ tests/
 
 # Then run tests
 pytest tests/ -v --tb=short
@@ -378,7 +384,7 @@ Then open a pull request on GitHub with:
 
 When you open a PR, the GitHub template will show this checklist:
 
-- [ ] `ruff check src/soup_cli/ tests/` passes
+- [ ] `ruff check src/soup_cli/ scripts/ tests/` passes
 - [ ] `pytest tests/ -v` passes
 - [ ] Updated relevant docs (`README.md` and the matching page under `docs/`) if needed
 - [ ] New tests added for new functionality
@@ -467,12 +473,14 @@ The project follows semantic versioning: `MAJOR.MINOR.PATCH`
 
 ### Version Bump Process
 
-1. Update version in `pyproject.toml` and `src/soup_cli/__init__.py`
-2. Run full test suite and linting
-3. Update `README.md`, the relevant page under `docs/`, `CHANGELOG.md`, and `SECURITY.md` (if security-related)
-4. Commit with message: `Release v0.X.0`
-5. Tag: `git tag v0.X.0 && git push --tags`
-6. GitHub Actions auto-publishes to PyPI on the `v*` tag (Trusted Publisher / OIDC)
+1. Run `python scripts/assemble_changelog.py` and review the assembled `CHANGELOG.md`
+2. Update version in `pyproject.toml` and `src/soup_cli/__init__.py`
+3. Run full test suite and linting
+4. Update `README.md`, the relevant page under `docs/`, and `SECURITY.md` (if security-related)
+5. Commit with message: `Release v0.X.0`
+6. Tag: `git tag v0.X.0 && git push --tags`
+7. GitHub Actions verifies that no fragment was left behind, then publishes to PyPI
+   on the `v*` tag (Trusted Publisher / OIDC)
 
 ## Recognition
 
