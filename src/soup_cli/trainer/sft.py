@@ -160,6 +160,78 @@ def _vision_messages_with_image_parts(
     return converted
 
 
+def _single_token_id(value: Any) -> Optional[int]:
+    """Return a usable token id without accepting bool or tokenizer sentinels."""
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
+def _vision_image_token_ids(processor: object) -> frozenset[int]:
+    """Resolve image-placeholder ids across current and floor processor APIs."""
+    tokenizer = getattr(processor, "tokenizer", None)
+    token_ids: set[int] = set()
+
+    for owner in (processor, tokenizer):
+        if owner is None:
+            continue
+        plural = getattr(owner, "image_token_ids", None)
+        if isinstance(plural, (list, tuple, set, frozenset)):
+            for value in plural:
+                token_id = _single_token_id(value)
+                if token_id is not None:
+                    token_ids.add(token_id)
+        singular = _single_token_id(getattr(owner, "image_token_id", None))
+        if singular is not None:
+            token_ids.add(singular)
+
+    convert = getattr(tokenizer, "convert_tokens_to_ids", None)
+    if callable(convert):
+        for owner in (processor, tokenizer):
+            image_token = getattr(owner, "image_token", None)
+            if not isinstance(image_token, str) or not image_token:
+                continue
+            token_id = _single_token_id(convert(image_token))
+            if token_id is not None:
+                token_ids.add(token_id)
+    return frozenset(token_ids)
+
+
+def _first_token_id(encoded: object) -> Optional[int]:
+    """Read the leading id from tokenizer output without importing tensors."""
+    if hasattr(encoded, "get"):
+        encoded = encoded.get("input_ids")
+    if hasattr(encoded, "tolist"):
+        encoded = encoded.tolist()
+    if not isinstance(encoded, (list, tuple)) or not encoded:
+        return None
+    first = encoded[0]
+    if isinstance(first, (list, tuple)):
+        if not first:
+            return None
+        first = first[0]
+    return _single_token_id(first)
+
+
+def _processor_adds_leading_bos(processor: object, text: str) -> bool:
+    """Detect whether ``add_special_tokens=True`` supplies a missing BOS.
+
+    Some VLM chat templates (SmolVLM, Qwen2-VL) already render their leading
+    special token, while LLaVA-1.5 relies on tokenizer defaults. Comparing the
+    two tokenizer paths on the first real rendered prompt preserves both.
+    """
+    tokenizer = getattr(processor, "tokenizer", None)
+    bos_token_id = _single_token_id(getattr(tokenizer, "bos_token_id", None))
+    if not callable(tokenizer) or bos_token_id is None:
+        return False
+    try:
+        plain_first = _first_token_id(tokenizer(text, add_special_tokens=False))
+        special_first = _first_token_id(tokenizer(text, add_special_tokens=True))
+    except (TypeError, ValueError):
+        return False
+    return plain_first != bos_token_id and special_first == bos_token_id
+
+
 class VisionLanguageDataCollator:
     """Build a real multimodal batch at data-loader time.
 
@@ -173,6 +245,8 @@ class VisionLanguageDataCollator:
     def __init__(self, processor: object, max_length: Optional[int]) -> None:
         self.processor = processor
         self.max_length = max_length
+        self.image_token_ids = _vision_image_token_ids(processor)
+        self._add_special_tokens: Optional[bool] = None
 
     def __call__(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
         images: list[list[Any]] = []
@@ -193,14 +267,17 @@ class VisionLanguageDataCollator:
             images.append(image_list)
             texts.append(text)
 
+        if self._add_special_tokens is None:
+            self._add_special_tokens = bool(
+                texts and _processor_adds_leading_bos(self.processor, texts[0])
+            )
+
         processor_kwargs: dict[str, Any] = {
             "images": images,
             "text": texts,
             "padding": True,
             "return_tensors": "pt",
-            # Chat templates already supplied BOS/EOS where the architecture
-            # needs them. Adding them again corrupts token/image alignment.
-            "add_special_tokens": False,
+            "add_special_tokens": self._add_special_tokens,
         }
         if self.max_length is not None:
             processor_kwargs.update(
@@ -210,6 +287,8 @@ class VisionLanguageDataCollator:
         output = self.processor(**processor_kwargs)
         labels = output["input_ids"].clone()
         labels[output["attention_mask"] == 0] = -100
+        for image_token_id in self.image_token_ids:
+            labels[output["input_ids"] == image_token_id] = -100
         output["labels"] = labels
         return output
 

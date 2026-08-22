@@ -239,6 +239,50 @@ class _FakeVisionProcessor:
         }
 
 
+class _FakeBosTokenizer:
+    bos_token_id = 1
+
+    def __init__(self, *, template_has_bos: bool):
+        self.template_has_bos = template_has_bos
+
+    def __call__(self, text, *, add_special_tokens):
+        del text
+        plain = [1, 41, 42] if self.template_has_bos else [41, 42]
+        if add_special_tokens and not self.template_has_bos:
+            plain = [self.bos_token_id, *plain]
+        return {"input_ids": plain}
+
+    def convert_tokens_to_ids(self, token):
+        return {"<image>": 99}.get(token, -1)
+
+
+class _MeasuredVisionProcessor(_FakeVisionProcessor):
+    image_token = "<image>"
+
+    def __init__(self, *, template_has_bos: bool, rows: list[list[int]]):
+        super().__init__()
+        self.tokenizer = _FakeBosTokenizer(template_has_bos=template_has_bos)
+        self.rows = rows
+
+    def __call__(self, **kwargs):
+        import torch
+
+        self.call_kwargs = kwargs
+        rows = []
+        for row in self.rows:
+            if kwargs["add_special_tokens"] and row[0] != self.tokenizer.bos_token_id:
+                row = [self.tokenizer.bos_token_id, *row]
+            rows.append(row)
+        width = max(len(row) for row in rows)
+        padded = [row + [0] * (width - len(row)) for row in rows]
+        masks = [[1] * len(row) + [0] * (width - len(row)) for row in rows]
+        return {
+            "input_ids": torch.tensor(padded),
+            "attention_mask": torch.tensor(masks),
+            "pixel_values": torch.ones((len(rows), 1, 3, 2, 2)),
+        }
+
+
 class TestVisionLanguageCollation:
     def test_legacy_marker_becomes_structured_image_part(self):
         from soup_cli.trainer.sft import VisionLanguageDataCollator
@@ -269,6 +313,76 @@ class TestVisionLanguageCollation:
         assert processor.call_kwargs["max_length"] == 128
         assert batch["pixel_values"].shape == (1, 1, 3, 2, 2)
         assert batch["labels"].tolist() == [[11, -100, 13]]
+
+    def test_masks_every_image_token_and_pins_the_trained_label_count(self):
+        from soup_cli.trainer.sft import VisionLanguageDataCollator
+
+        processor = _MeasuredVisionProcessor(
+            template_has_bos=True,
+            rows=[[1, 99, 99, 71, 72]],
+        )
+        collator = VisionLanguageDataCollator(processor, max_length=128)
+
+        batch = collator(
+            [{"messages": [{"role": "user", "content": "<image>"}], "images": [object()]}]
+        )
+
+        assert batch["labels"].tolist() == [[1, -100, -100, 71, 72]]
+        assert int((batch["labels"] != -100).sum()) == 3
+
+    def test_adds_bos_when_the_chat_template_does_not_supply_it(self):
+        from soup_cli.trainer.sft import VisionLanguageDataCollator
+
+        processor = _MeasuredVisionProcessor(
+            template_has_bos=False,
+            rows=[[41, 42, 43]],
+        )
+        collator = VisionLanguageDataCollator(processor, max_length=128)
+
+        batch = collator(
+            [{"messages": [{"role": "user", "content": "<image>"}], "images": [object()]}]
+        )
+
+        assert processor.call_kwargs["add_special_tokens"] is True
+        assert batch["input_ids"][0, 0].item() == processor.tokenizer.bos_token_id
+
+    def test_does_not_duplicate_bos_when_the_chat_template_supplies_it(self):
+        from soup_cli.trainer.sft import VisionLanguageDataCollator
+
+        processor = _MeasuredVisionProcessor(
+            template_has_bos=True,
+            rows=[[1, 41, 42]],
+        )
+        collator = VisionLanguageDataCollator(processor, max_length=128)
+
+        batch = collator(
+            [{"messages": [{"role": "user", "content": "<image>"}], "images": [object()]}]
+        )
+
+        assert processor.call_kwargs["add_special_tokens"] is False
+        assert batch["input_ids"][0].tolist().count(processor.tokenizer.bos_token_id) == 1
+
+    def test_two_different_examples_remain_two_rows_and_mask_independently(self):
+        from soup_cli.trainer.sft import VisionLanguageDataCollator
+
+        processor = _MeasuredVisionProcessor(
+            template_has_bos=True,
+            rows=[[1, 99, 71], [1, 99, 81, 82, 83]],
+        )
+        collator = VisionLanguageDataCollator(processor, max_length=128)
+
+        batch = collator(
+            [
+                {"messages": [{"role": "user", "content": "<image>A"}], "images": [object()]},
+                {"messages": [{"role": "user", "content": "<image>B"}], "images": [object()]},
+            ]
+        )
+
+        assert batch["input_ids"].shape[0] == 2
+        assert batch["labels"].tolist() == [
+            [1, -100, 71, -100, -100],
+            [1, -100, 81, 82, 83],
+        ]
 
     def test_missing_marker_injects_image_into_first_user_turn(self):
         from soup_cli.trainer.sft import _vision_messages_with_image_parts
