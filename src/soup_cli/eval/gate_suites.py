@@ -80,24 +80,25 @@ EXTENDED_SUITE_NAMES: Tuple[str, ...] = tuple(_EXTENDED_SUITES)
 #: The full offline default general suite = MCQ/arithmetic + behavioural.
 DEFAULT_GENERAL_SUITE: Tuple[str, ...] = tuple(MINI_BENCHMARKS) + EXTENDED_SUITE_NAMES
 
-#: Suites whose SCORER changed in v0.73.2, so a score stored before this
-#: release is on a different scale (#357 / #346).
+#: Monotonic revision of bundled-suite SCORER semantics (#404).
 #:
-#: This matters because ``--baseline`` / ``registry://`` supply a base score
-#: from a FILE and skip the live base run, so a stale entry is diffed against a
-#: freshly-scored tuned model. The measured jumps on an UNCHANGED model are
-#: large: ``mini_mmlu`` 0.423 -> 0.731 and ``mini_tool_call`` 0.225 -> 1.000.
-#: A drift that size can mask a real regression or manufacture an improvement,
-#: so the caller warns rather than silently comparing across scales.
+#: ``--baseline`` / ``registry://`` supply a base score from disk and skip the
+#: live base run. A score produced under an older scorer is on a different
+#: scale (v0.73.2 measured ``mini_mmlu`` 0.423 -> 0.731 and ``mini_tool_call``
+#: 0.225 -> 1.000 on an unchanged model). Baselines therefore carry this
+#: revision in their provenance stamp; ``resolve_baseline`` warns only when
+#: the stamp disagrees with the running Soup.
 #:
-#: ``mini_instruction`` and ``mini_arithmetic`` are NOT here: neither carries a
-#: single-letter answer, so ``build_mcq_prompt`` leaves their prompts alone and
-#: ``score_answer`` never reaches the option-letter extractor for them
-#: (verified: 0 of 24 and 0 of 36 items respectively).
-SCORER_CHANGED_IN_V0_73_2: Tuple[str, ...] = (
-    "mini_mmlu",
-    "mini_common_sense",
-    MINI_TOOL_CALL,
+#: Bump this integer in the **same change** that alters a bundled scorer's
+#: behaviour, and update ``BUNDLED_SCORER_FINGERPRINT`` with it. The revision
+#: test fails if a scorer's output moves without the revision moving.
+BUNDLED_SCORER_REVISION: int = 1
+
+#: SHA-256 of deterministic ``score_bundled_suite`` outputs under the fixed
+#: generator in ``bundled_scorer_fingerprint``. Locked to revision 1; update
+#: together with ``BUNDLED_SCORER_REVISION``.
+BUNDLED_SCORER_FINGERPRINT: str = (
+    "5dc4c315ed2c6d4ddb49847657f56c30242af3c1b9e3963e8061f2d84addc5dd"
 )
 
 # 4 MiB cap on a bundled fixture (mirrors behaviour_battery — defends against
@@ -453,15 +454,43 @@ def score_bundled_suite(name: str, gen: GeneratorFn) -> float:
     )
 
 
+def _fingerprint_generator(prompt: str) -> str:
+    """Fixed generator used only by :func:`bundled_scorer_fingerprint`."""
+    lower = prompt.lower()
+    if "function" in lower or "tool" in lower:
+        return '{"function": {"name": "search"}}'
+    if "{" in prompt or "json" in lower:
+        return '{"ok": true}'
+    return "B"
+
+
+def bundled_scorer_fingerprint() -> str:
+    """SHA-256 of every bundled suite score under a fixed generator (#404).
+
+    Locked against ``BUNDLED_SCORER_FINGERPRINT``. A scorer change that moves
+    any suite's score under this generator must bump
+    ``BUNDLED_SCORER_REVISION`` and refresh the fingerprint in the same commit.
+    """
+    import hashlib
+
+    parts: list[str] = []
+    for name in sorted(DEFAULT_GENERAL_SUITE):
+        score = score_bundled_suite(name, _fingerprint_generator)
+        parts.append(f"{name}:{score:.6f}")
+    return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()
+
+
 __all__ = [
     "BEHAVIOURAL_MAX_NEW_TOKENS",
+    "BUNDLED_SCORER_FINGERPRINT",
+    "BUNDLED_SCORER_REVISION",
     "DEFAULT_GENERAL_SUITE",
     "EXTENDED_SUITE_NAMES",
     "MINI_FORMAT_JSON",
     "MINI_OVER_REFUSAL",
     "MINI_SAFETY",
     "MINI_TOOL_CALL",
-    "SCORER_CHANGED_IN_V0_73_2",
+    "bundled_scorer_fingerprint",
     "is_bundled_suite",
     "load_suite_items",
     "score_bundled_suite",

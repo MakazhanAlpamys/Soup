@@ -70,6 +70,15 @@ reproducing 70+ versions of notes.
   Anthropic is refused by name because its Messages API has no raw-completion
   endpoint, and local-only flags cannot be silently ignored in provider mode.
 
+- **Baseline artifacts carry a scorer/version provenance stamp (#404 by @AchuthReddy-16).**
+  Shared helpers `stamp_baseline_scores` / `write_baseline_file` write
+  `{"scores": {...}, "provenance": {"soup_version", "scorer_revision"}}`.
+  `resolve_baseline` warns once on unknown provenance (unstamped files) or a
+  `scorer_revision` mismatch, and stays silent when the stamp matches.
+  `BUNDLED_SCORER_REVISION` + a locked fingerprint fail the suite if a bundled
+  scorer's output moves without a revision bump. Registry `save_eval_result`
+  stamps `details_json`; `soup ship --emit-evidence` includes the same stamp.
+
 - **Layer streaming now accepts Qwen3.5 MoE text checkpoints whose decoder
   layers do not expose exactly the same weight keys in every block (by
   @Shutaru in #426).** The sharder now records per-layer shard headers instead of
@@ -134,6 +143,7 @@ reproducing 70+ versions of notes.
   v0.42.0, but `load_dataset()` never called them — every multi-dataset mixture request
   silently trained on nothing but `data.train`'s single path, the same gap #330 and #442
   papered over in their respective renderers. `DataConfig.train` now accepts `str |
+
   list[str]`; a list of `>= 2` local file paths combines via `data.interleave`
   (`concat` / `under` / `over` / `{strategy: probs, probs: [...]}`) into one row set
   before the existing `val_split` line in `_finalize` runs, so a single path stays
@@ -155,6 +165,10 @@ reproducing 70+ versions of notes.
   time (#273 by @AmirF194 in #470).
 
 ### Changed
+
+- **Remove the name-based `SCORER_CHANGED_IN_V0_73_2` baseline warning in favour
+  of the #404 scorer_revision stamp (by @AchuthReddy-16).**
+  Stale baselines are detected by provenance, not by a hard-coded suite list.
 
 - **Remove hand-maintained test suite statistics from `CONTRIBUTING.md` in favor of a permanent digit-free shape invariant (#465 by @harshitthek in #467).**
   Eliminates drift across routine test additions by making test-count divergence impossible at the documentation source.

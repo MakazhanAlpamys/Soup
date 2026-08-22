@@ -477,7 +477,13 @@ class ExperimentTracker:
     ) -> None:
         """Save an evaluation result."""
         now = datetime.now().isoformat()
-        details_json = json.dumps(details, default=str)
+        # #404 — stamp scorer provenance so registry:// baselines can be checked.
+        stamped_details = dict(details) if isinstance(details, dict) else {}
+        if "provenance" not in stamped_details:
+            from soup_cli.eval.gate import current_baseline_stamp
+
+            stamped_details["provenance"] = current_baseline_stamp()
+        details_json = json.dumps(stamped_details, default=str)
         conn = self._get_conn()
         conn.execute(
             """INSERT INTO eval_results

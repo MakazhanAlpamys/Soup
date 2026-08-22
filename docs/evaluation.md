@@ -490,19 +490,18 @@ soup ship --evidence ship_evidence.json --config soup.yaml --push owner/repo#42
 `soup ci init --config soup.yaml` binds the generated workflow's ship step to the committed
 config, so the whole loop runs in CI (see [commands.md](commands.md)).
 
-**Baseline scale change (v0.73.2).** Three suites' scorers changed. The MCQ extractor now reads a
-`\boxed{C}` option letter (a boxed *value* like `\boxed{4}` is still not an option letter), and MCQ
-prompts now ask for the letter — both halves are needed, and they affect `mini_mmlu` and
-`mini_common_sense`. `mini_tool_call` now tolerates a call missing its outer `{"function": ...}`
-envelope. Measured on an **unchanged** model the shifts are large: `mini_mmlu` 0.423 → 0.731 and
-`mini_tool_call` 0.225 → 1.000, far bigger than the 0.05 gate.
+**Baseline provenance (#404).** Bundled-suite baselines now carry a
+`scorer_revision` + `soup_version` stamp (written via the shared
+`stamp_baseline_scores` / `write_baseline_file` helper). `resolve_baseline`
+compares the stamp to the running Soup and warns only on a real mismatch;
+an unstamped pre-existing file warns once naming unknown provenance. The
+name-based `SCORER_CHANGED_IN_V0_73_2` warning is gone — the stamp covers
+that case and every future scorer change. Recompute an old baseline, or
+drop names from it to force a live base run.
 
-A `--baseline` supplies the base score from a *file* and skips the live base run, so a snapshot
-taken before v0.73.2 would be diffed against a freshly-scored tuned model on a different scale —
-big enough to mask a real regression or manufacture an improvement. `soup ship` now warns by name
-when this happens. Recompute the baseline, or drop those names from it to force a live base run.
-`mini_instruction` and `mini_arithmetic` are unaffected: neither carries a single-letter answer, so
-the prompt cue and the option-letter extractor never touch them.
+Historical note: v0.73.2 changed three suite scorers (`mini_mmlu`,
+`mini_common_sense`, `mini_tool_call`) with measured jumps on an unchanged
+model far larger than the 0.05 gate. That is why unstamped files still warn.
 
 
 ## NLG Evaluation Metrics (BLEU + ROUGE)
