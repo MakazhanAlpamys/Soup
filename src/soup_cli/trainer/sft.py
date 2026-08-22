@@ -5,7 +5,7 @@ import logging
 import os
 import time
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Any, Optional, Tuple
 
 from rich.console import Console
 
@@ -90,6 +90,146 @@ def _ensure_vision_processor_pad_token(processor: object) -> None:
                 processor.convert_tokens_to_ids = inner
             except (AttributeError, TypeError):
                 pass
+
+
+def _vision_messages_with_image_parts(
+    messages: list[dict[str, Any]], image_count: int
+) -> list[dict[str, Any]]:
+    """Convert Soup's legacy ``<image>`` messages to HF multimodal content.
+
+    LLaVA JSON rows reach the trainer with string ``content`` fields. Modern
+    processors such as Idefics3 only preserve an image placeholder when the
+    chat message contains a structured ``{"type": "image"}`` part. Passing
+    the legacy string directly makes ``apply_chat_template`` silently drop the
+    prompt text and image marker, then the processor rejects the accompanying
+    image because the rendered text contains zero image tokens (#302).
+
+    Existing structured messages are preserved. When an otherwise valid
+    vision row omits the literal marker, place its image(s) at the start of the
+    first user turn. Refuse excess markers rather than handing the processor a
+    misleading image/token-count mismatch.
+    """
+    if image_count < 0:
+        raise ValueError("image_count must be non-negative")
+    if not messages:
+        raise ValueError("Vision sample has no messages")
+
+    converted: list[dict[str, Any]] = []
+    represented_images = 0
+    for message in messages:
+        converted_message = dict(message)
+        content = converted_message.get("content", "")
+        parts: list[dict[str, Any]] = []
+        if isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict):
+                    copied = dict(part)
+                else:
+                    copied = {"type": "text", "text": str(part)}
+                parts.append(copied)
+                if copied.get("type") == "image":
+                    represented_images += 1
+        elif isinstance(content, str):
+            for index, chunk in enumerate(content.split("<image>")):
+                if index:
+                    parts.append({"type": "image"})
+                    represented_images += 1
+                text = chunk.strip()
+                if text:
+                    parts.append({"type": "text", "text": text})
+        else:
+            parts.append({"type": "text", "text": str(content)})
+        converted_message["content"] = parts
+        converted.append(converted_message)
+
+    if represented_images > image_count:
+        raise ValueError(
+            "Vision sample contains "
+            f"{represented_images} image placeholder(s) but only {image_count} image(s)"
+        )
+    missing_images = image_count - represented_images
+    if missing_images:
+        target = next(
+            (message for message in converted if message.get("role") == "user"),
+            converted[0],
+        )
+        target["content"] = [
+            *({"type": "image"} for _ in range(missing_images)),
+            *target["content"],
+        ]
+    return converted
+
+
+class VisionLanguageDataCollator:
+    """Build a real multimodal batch at data-loader time.
+
+    Keeping PIL images and raw messages until collation lets each processor
+    perform its own image-token expansion and emit architecture-specific
+    tensors (``pixel_values``, ``pixel_attention_mask``, ``image_grid_thw``,
+    and so on). This deliberately mirrors TRL's newer VLM collator without
+    requiring a newer TRL than Soup's declared floor.
+    """
+
+    def __init__(self, processor: object, max_length: Optional[int]) -> None:
+        self.processor = processor
+        self.max_length = max_length
+
+    def __call__(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
+        images: list[list[Any]] = []
+        texts: list[str] = []
+        for example in examples:
+            example_images = example.get("images") or []
+            if not isinstance(example_images, (list, tuple)):
+                example_images = [example_images]
+            image_list = list(example_images)
+            messages = _vision_messages_with_image_parts(
+                example.get("messages") or [], len(image_list)
+            )
+            text = self.processor.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=False,
+            )
+            images.append(image_list)
+            texts.append(text)
+
+        processor_kwargs: dict[str, Any] = {
+            "images": images,
+            "text": texts,
+            "padding": True,
+            "return_tensors": "pt",
+            # Chat templates already supplied BOS/EOS where the architecture
+            # needs them. Adding them again corrupts token/image alignment.
+            "add_special_tokens": False,
+        }
+        if self.max_length is not None:
+            processor_kwargs.update(
+                truncation=True,
+                max_length=self.max_length,
+            )
+        output = self.processor(**processor_kwargs)
+        labels = output["input_ids"].clone()
+        labels[output["attention_mask"] == 0] = -100
+        output["labels"] = labels
+        return output
+
+
+def _make_vision_trainer(
+    trainer_kwargs: dict[str, Any], processor: object, max_length: Optional[int]
+) -> Any:
+    """Build the plain HF Trainer used for already-collated vision batches."""
+    import inspect
+
+    from transformers import Trainer
+
+    kwargs = dict(trainer_kwargs)
+    kwargs["data_collator"] = VisionLanguageDataCollator(processor, max_length)
+    # Transformers renamed Trainer(tokenizer=...) to processing_class. Soup's
+    # declared floor predates the rename, so keep this narrow compatibility
+    # shim at the construction boundary.
+    if "processing_class" not in inspect.signature(Trainer.__init__).parameters:
+        kwargs["tokenizer"] = kwargs.pop("processing_class")
+    return Trainer(**kwargs)
 
 
 def _maybe_load_pretokenized(
@@ -641,6 +781,16 @@ class SFTTrainerWrapper(StreamingSetupMixin):
                 ),
             )
             console.print("[green]Multipack FFD bin-packing sampler enabled[/]")
+        elif use_vision and not tcfg.packing:
+            # Vision rows still contain PIL images and structured messages.
+            # Plain Trainer must receive the custom collator directly; letting
+            # SFTTrainer pre-tokenize them takes the text-only path on older TRL
+            # and drops Idefics3's image-token expansion (#302).
+            self.trainer = _make_vision_trainer(
+                trainer_kwargs,
+                processor=self.processor,
+                max_length=cfg.data.max_length,
+            )
         else:
             self.trainer = SFTTrainer(**trainer_kwargs)
 
@@ -1233,7 +1383,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         self._apply_quantization_aware(tcfg)
 
     def _prepare_vision_dataset(self, dataset: dict):
-        """Prepare dataset for vision fine-tuning with image loading."""
+        """Keep messages + PIL images raw for processor-aware collation."""
         from datasets import Dataset
 
         def load_and_format_vision(example):
@@ -1247,16 +1397,15 @@ class SFTTrainerWrapper(StreamingSetupMixin):
                 except (FileNotFoundError, OSError):
                     console.print(f"[yellow]Warning: cannot open image: {image_path}[/]")
 
-            messages = example["messages"]
-            text = self.processor.apply_chat_template(
-                messages, tokenize=False, add_generation_prompt=False
-            )
-            result = {"text": text}
+            result = {"images": []}
             if image is not None:
                 result["images"] = [image]
             return result
 
-        remove_cols = ["messages", "image"]
+        # Preserve ``messages``. Idefics3 and other modern processors need the
+        # structured image part before they render the chat template; rendering
+        # Soup's legacy string content here loses the image marker (#302).
+        remove_cols = ["image"]
         train_ds = Dataset.from_list(dataset["train"]).map(
             load_and_format_vision,
             remove_columns=[c for c in remove_cols if c in dataset["train"][0]],

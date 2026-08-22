@@ -12,6 +12,15 @@ reproducing 70+ versions of notes.
 
 ## [Unreleased]
 
+### Fixed
+
+- **SmolVLM/Idefics3 vision SFT now reaches real training batches (#302 by
+  @Amix29 in #488).** Soup keeps LLaVA messages and PIL images together until
+  collation, converts legacy `<image>` markers to structured multimodal content,
+  and lets the processor produce image-token expansion plus architecture-specific
+  pixel tensors. The vision path uses the Transformers trainer with this collator so
+  older supported TRL releases cannot pre-tokenize the dataset as text-only.
+
 ### Added
 
 - **Native Apple Silicon telemetry for `soup monitor` (#99 by @Amix29 in #481).**
