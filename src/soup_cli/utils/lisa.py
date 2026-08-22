@@ -5,8 +5,9 @@ steps it freezes all decoder layers except a small randomly-sampled set
 (embeddings + language-model head always trainable). The dynamic cousin of
 Spectrum's static ``unfrozen_parameters`` selection.
 
-Correctness invariant (see also ``trainer/sft.py``): the SFT trainer leaves the
-model **fully trainable at prep time** so HF's ``create_optimizer`` (called
+Correctness invariant (see ``utils/peft_wiring.apply_lisa_setup``, shared by the
+SFT and pretrain trainers since #307): the trainer leaves the model **fully
+trainable at prep time** so HF's ``create_optimizer`` (called
 *before* ``on_train_begin``) includes every decoder parameter in its param
 groups. This callback then toggles ``requires_grad`` — frozen parameters produce
 ``grad=None`` and AdamW skips them, and their optimizer state is cleared on
