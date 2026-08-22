@@ -22,6 +22,53 @@ reproducing 70+ versions of notes.
   existing run comparison workflow. The optional `[aider]` extra installs the
   normal Aider CLI while the docs make the source-only benchmark-image setup
   explicit.
+- **`soup mcp serve` gains network transports: `--transport sse` and
+  `--transport http` (#296 in #479).** v1 was stdio-only, which suits a client that
+  spawns Soup as a subprocess but leaves remote and multi-client setups with
+  nothing. Both new transports serve the *same* registry — the end-to-end test
+  compares the advertised tool names against `build_registry` rather than a
+  hardcoded count, so a subset cannot creep in. stdio remains the default and
+  is untouched.
+
+  Adding a listener is the risky part, so it is gated three ways. Every HTTP
+  request needs `Authorization: Bearer <token>`, compared with
+  `secrets.compare_digest`, with no opt-out — a loopback port is reachable by
+  every process on the box. The token is validated by the existing
+  `utils/qr_url.py::validate_token`, so `soup ui` and `soup mcp serve` agree on
+  what a token is instead of growing a second format, and it travels in the
+  header only: no query-string fallback that could land in an access log. The
+  SDK's DNS-rebinding protection is switched on (`421` on a foreign `Host`,
+  `403` on a foreign `Origin`), which is the gate the token cannot be — a page
+  the operator merely visits sends no `Authorization` header but its request
+  still reaches the port. Binding off loopback warns, and a wildcard bind warns
+  again that the Host check has nothing left to pin.
+
+  `--allow-execute` is refused with either network transport, and that refusal
+  is the one behavioural change to an existing flag. Gated execution (#297)
+  spawns real training / export processes; behind a listener a leaked Bearer
+  token would mean process execution rather than plan disclosure, and stdio is
+  a pipe to a client the operator already started, which is a different trust
+  boundary. The refusal is made twice on purpose: once in the CLI so the
+  operator gets a readable message, and once in `build_asgi_app()` so a direct
+  caller cannot put an executing registry behind a listener either. The stdio
+  banner also stopped claiming "execution disabled" -- that string predated
+  #297 and was false from the moment execution shipped.
+
+  `--host` / `--port` / `--auth-token` are refused under `--transport stdio`
+  rather than silently ignored, and the ASGI app is built by a
+  `build_asgi_app()` factory so the auth and rebinding behaviour is tested
+  through an in-process transport without binding a socket; one further test
+  binds a real ephemeral port and drives initialize -> list_tools -> call_tool
+  through the SDK's own SSE client.
+
+  The `[mcp]` extra floor moves `1.2.0` -> `1.10.0`, measured against the
+  published wheels rather than a changelog: `server/streamable_http_manager.py`
+  first appears in 1.8.0 (absent in 1.7.0) and `server/transport_security.py`
+  in 1.10.0 (absent in 1.9.4). `--transport sse` alone would have run on the
+  old floor; rebinding protection would not, and a listener whose origin
+  checking silently disappears on an older SDK is worse than a resolver error.
+  The `<2` cap is unchanged — #322 is the 2.x migration. No new package: `mcp`
+  already requires starlette, uvicorn, sse-starlette and httpx-sse.
 
 - **`soup data best-of-n` can sample candidates from Ollama or vLLM providers
   (#299 by @Faisal01011 in #466).** The existing local Transformers `--base` path stays
