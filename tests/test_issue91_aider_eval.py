@@ -82,6 +82,56 @@ class TestAiderResultParser:
         with pytest.raises(aider_eval.AiderEvalError, match="too large"):
             aider_eval.parse_aider_results(tmp_path, model="openai/example")
 
+    @pytest.mark.parametrize(
+        "value",
+        [float("nan"), float("inf"), float("-inf")],
+        ids=["nan", "positive-infinity", "negative-infinity"],
+    )
+    def test_rejects_non_finite_counts(self, tmp_path, value):
+        from soup_cli.eval.aider_polyglot import AiderEvalError, parse_aider_results
+
+        result = tmp_path / "python/exercises/practice/clock/.aider.results.json"
+        _result(result, passed=True, num_error_outputs=value)
+
+        with pytest.raises(AiderEvalError, match="Invalid 'num_error_outputs' count"):
+            parse_aider_results(tmp_path, model="openai/example")
+
+    def test_rejects_too_many_result_files(self, tmp_path, monkeypatch):
+        import soup_cli.eval.aider_polyglot as aider_eval
+
+        _result(
+            tmp_path / "python/exercises/practice/clock/.aider.results.json",
+            passed=True,
+        )
+        _result(
+            tmp_path / "rust/exercises/practice/clock/.aider.results.json",
+            passed=True,
+        )
+        monkeypatch.setattr(aider_eval, "MAX_RESULT_FILES", 1)
+
+        with pytest.raises(aider_eval.AiderEvalError, match="Too many Aider result files"):
+            aider_eval.parse_aider_results(tmp_path, model="openai/example")
+
+    def test_rejects_result_set_over_total_size_cap(self, tmp_path, monkeypatch):
+        import soup_cli.eval.aider_polyglot as aider_eval
+
+        result = tmp_path / "python/exercises/practice/clock/.aider.results.json"
+        _result(result, passed=True)
+        monkeypatch.setattr(aider_eval, "MAX_RESULT_TOTAL_BYTES", 1)
+
+        with pytest.raises(aider_eval.AiderEvalError, match="result set is too large"):
+            aider_eval.parse_aider_results(tmp_path, model="openai/example")
+
+    def test_parse_loop_rejects_result_outside_root(self, tmp_path, monkeypatch):
+        import soup_cli.eval.aider_polyglot as aider_eval
+
+        outside = tmp_path.parent / "outside-aider-result.json"
+        outside.write_text('{"tests_outcomes": [true]}', encoding="utf-8")
+        monkeypatch.setattr(Path, "glob", lambda _path, _pattern: [outside])
+
+        with pytest.raises(aider_eval.AiderEvalError, match="escaped --output"):
+            aider_eval.parse_aider_results(tmp_path, model="openai/example")
+
     def test_rejects_symlinked_result(self, tmp_path):
         from soup_cli.eval.aider_polyglot import AiderEvalError, parse_aider_results
 
@@ -94,11 +144,38 @@ class TestAiderResultParser:
         except OSError:
             pytest.skip("symlinks are unavailable on this platform")
 
-        with pytest.raises(AiderEvalError, match="symlink"):
+        with pytest.raises(AiderEvalError, match="Refusing symlinked"):
+            parse_aider_results(tmp_path, model="openai/example")
+
+    def test_rejects_symlink_even_when_target_stays_inside_root(self, tmp_path):
+        from soup_cli.eval.aider_polyglot import AiderEvalError, parse_aider_results
+
+        target = tmp_path / "inside-aider-result.json"
+        target.write_text('{"tests_outcomes": [true]}', encoding="utf-8")
+        result = tmp_path / "python/exercises/practice/clock/.aider.results.json"
+        result.parent.mkdir(parents=True)
+        try:
+            result.symlink_to(target)
+        except OSError:
+            pytest.skip("symlinks are unavailable on this platform")
+
+        with pytest.raises(AiderEvalError, match="Refusing symlinked"):
             parse_aider_results(tmp_path, model="openai/example")
 
 
 class TestAiderDockerRunner:
+    def test_image_cannot_be_parsed_as_a_docker_option(self, monkeypatch):
+        import soup_cli.eval.aider_polyglot as aider_eval
+
+        monkeypatch.setattr(
+            aider_eval.shutil,
+            "which",
+            lambda _name: pytest.fail("invalid image must fail before Docker lookup"),
+        )
+
+        with pytest.raises(aider_eval.AiderEvalError, match="valid Docker image reference"):
+            aider_eval.preflight_docker("--privileged")
+
     def test_missing_docker_has_friendly_error(self, monkeypatch):
         import soup_cli.eval.aider_polyglot as aider_eval
 
@@ -170,9 +247,32 @@ class TestAiderDockerRunner:
         assert command[-1] == "3"
         assert "openai/example; touch /tmp/pwned" in command
         assert not any("secret-never-in-argv" in arg for arg in command)
+        assert "--add-host=host.docker.internal:host-gateway" not in command
         mount = command[command.index("--mount") + 1]
         assert "readonly" in mount
         assert "type=bind" in mount
+
+    def test_host_gateway_is_opt_in(self, tmp_path):
+        from soup_cli.eval.aider_polyglot import build_docker_command
+
+        command = build_docker_command(
+            docker="/usr/bin/docker",
+            image="registry.example:5000/aider-benchmark:test",
+            model="openai/example",
+            exercises_dir=tmp_path,
+            output_dir=tmp_path,
+            threads=1,
+            num_tests=1,
+            allow_host_services=True,
+        )
+
+        assert "--add-host=host.docker.internal:host-gateway" in command
+
+    def test_mount_rejects_comma_in_source_path(self):
+        import soup_cli.eval.aider_polyglot as aider_eval
+
+        with pytest.raises(aider_eval.AiderEvalError, match="must not contain commas"):
+            aider_eval._mount(Path("corpus,with-comma"), "/benchmarks", readonly=True)
 
 
 class TestAiderCLI:
@@ -191,6 +291,7 @@ class TestAiderCLI:
         assert "--output" in output
         assert "--exercises-dir" in output
         assert "--run-id" in output
+        assert "--allow-host-servic" in output
 
     def test_output_escape_is_rejected_before_docker(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
@@ -213,9 +314,43 @@ class TestAiderCLI:
             )
 
         assert result.exit_code == 1
-        assert "must stay under the current working" in result.output
-        assert "directory" in result.output
+        output = _plain(result.output)
+        assert "must stay under the current working" in output
+        assert "directory" in output
         preflight.assert_not_called()
+
+    def test_exercises_outside_cwd_warns_and_stays_read_only(self, tmp_path, monkeypatch):
+        import soup_cli.eval.aider_polyglot as aider_eval
+
+        project = tmp_path / "project"
+        project.mkdir()
+        corpus = tmp_path / "polyglot"
+        corpus.mkdir()
+        monkeypatch.chdir(project)
+        monkeypatch.setattr(aider_eval, "preflight_docker", lambda _image: "/usr/bin/docker")
+
+        def fake_run(command, **_kwargs):
+            corpus_mount = command[command.index("--mount") + 1]
+            assert "readonly" in corpus_mount
+            return SimpleNamespace(returncode=17)
+
+        monkeypatch.setattr(aider_eval.subprocess, "run", fake_run)
+        result = runner.invoke(
+            app,
+            [
+                "eval",
+                "aider",
+                "--model",
+                "openai/example",
+                "--output",
+                "results",
+                "--exercises-dir",
+                str(corpus),
+            ],
+        )
+
+        assert result.exit_code == 1
+        assert "resolves outside the current working directory" in _plain(result.output)
 
     def test_success_writes_soup_json_and_tracks_run(self, tmp_path, monkeypatch):
         import soup_cli.eval.aider_polyglot as aider_eval
@@ -304,7 +439,7 @@ class TestAiderCLI:
         )
 
         assert result.exit_code == 1
-        assert "exited with status 17" in result.output
+        assert "exited with status 17" in _plain(result.output)
         assert not (tmp_path / "results/soup_result.json").exists()
 
     def test_subprocess_timeout_is_friendly(self, tmp_path, monkeypatch):
@@ -336,4 +471,4 @@ class TestAiderCLI:
         )
 
         assert result.exit_code == 1
-        assert "timed out after 60 seconds" in result.output
+        assert "timed out after 60 seconds" in _plain(result.output)

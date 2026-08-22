@@ -10,7 +10,9 @@ single Soup evaluation row.
 from __future__ import annotations
 
 import json
+import math
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -53,10 +55,23 @@ _COUNT_FIELDS = (
     "indentation_errors",
     "num_exhausted_context_windows",
 )
+_DOCKER_IMAGE_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/@:+-]*")
 
 
 class AiderEvalError(ValueError):
     """An actionable, user-facing Aider evaluation failure."""
+
+
+def _validate_image_name(image: str) -> None:
+    """Reject values Docker could parse as options instead of an image."""
+    if (
+        not isinstance(image, str)
+        or not image
+        or _DOCKER_IMAGE_RE.fullmatch(image) is None
+    ):
+        raise AiderEvalError(
+            "--image must be a valid Docker image reference and cannot begin with '-'"
+        )
 
 
 def _process_message(process: object) -> str:
@@ -71,8 +86,7 @@ def _process_message(process: object) -> str:
 
 def preflight_docker(image: str) -> str:
     """Verify the Docker client, daemon, and official benchmark image."""
-    if not isinstance(image, str) or not image.strip() or "\x00" in image:
-        raise AiderEvalError("--image must be a non-empty Docker image name")
+    _validate_image_name(image)
 
     docker = shutil.which("docker")
     if docker is None:
@@ -183,8 +197,10 @@ def build_docker_command(
     output_dir: Path,
     threads: int,
     num_tests: int,
+    allow_host_services: bool = False,
 ) -> list[str]:
     """Build the fixed-argv invocation of Aider's upstream benchmark harness."""
+    _validate_image_name(image)
     if not model or "\x00" in model:
         raise AiderEvalError("--model must be a non-empty Aider model identifier")
     if not 1 <= threads <= 64:
@@ -198,16 +214,21 @@ def build_docker_command(
         "--rm",
         "--memory=12g",
         "--memory-swap=12g",
-        "--add-host=host.docker.internal:host-gateway",
-        "--env",
-        "AIDER_DOCKER=1",
-        "--env",
-        "AIDER_BENCHMARK_DIR=/benchmarks",
-        "--mount",
-        _mount(exercises_dir, "/benchmarks/polyglot-benchmark", readonly=True),
-        "--mount",
-        _mount(output_dir, "/results"),
     ]
+    if allow_host_services:
+        command.append("--add-host=host.docker.internal:host-gateway")
+    command.extend(
+        [
+            "--env",
+            "AIDER_DOCKER=1",
+            "--env",
+            "AIDER_BENCHMARK_DIR=/benchmarks",
+            "--mount",
+            _mount(exercises_dir, "/benchmarks/polyglot-benchmark", readonly=True),
+            "--mount",
+            _mount(output_dir, "/results"),
+        ]
+    )
     for name in _FORWARDED_ENV_NAMES:
         if os.environ.get(name):
             command.extend(["--env", name])
@@ -273,6 +294,7 @@ def _count(payload: dict[str, Any], key: str) -> int:
     if (
         isinstance(value, bool)
         or not isinstance(value, (int, float))
+        or (isinstance(value, float) and not math.isfinite(value))
         or value < 0
         or int(value) != value
     ):

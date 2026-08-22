@@ -168,6 +168,10 @@ def aider(
         None, "--run-id",
         help="Save the aggregate score under an existing Soup run ID",
     ),
+    allow_host_services: bool = typer.Option(
+        False, "--allow-host-services",
+        help="Let the benchmark container reach services on the host",
+    ),
 ):
     """Run Aider's Polyglot coding benchmark in its official Docker image."""
     from rich.markup import escape
@@ -181,6 +185,7 @@ def aider(
         validate_exercises_dir,
         write_soup_result,
     )
+    from soup_cli.utils.paths import is_under_cwd
 
     tracker = None
     if run_id:
@@ -195,6 +200,7 @@ def aider(
     try:
         output_dir = prepare_output_dir(output)
         corpus_dir = validate_exercises_dir(exercises_dir)
+        corpus_outside_cwd = not is_under_cwd(corpus_dir)
         docker = preflight_docker(image)
         command = build_docker_command(
             docker=docker,
@@ -204,12 +210,19 @@ def aider(
             output_dir=output_dir,
             threads=threads,
             num_tests=num_tests,
+            allow_host_services=allow_host_services,
         )
     except AiderEvalError as exc:
         if tracker is not None:
             tracker.close()
         console.print(f"[red]Aider Polyglot preflight failed:[/] {escape(str(exc))}")
         raise typer.Exit(1) from exc
+
+    if corpus_outside_cwd:
+        console.print(
+            "[yellow]Warning:[/] --exercises-dir resolves outside the current "
+            "working directory; Docker will still mount it read-only."
+        )
 
     console.print(
         Panel(

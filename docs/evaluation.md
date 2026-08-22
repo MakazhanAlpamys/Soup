@@ -608,8 +608,10 @@ soup eval human --input prompts.jsonl --model-a ./model_a --model-b ./model_b
 
 ### Aider Polyglot
 
-The `aider-chat` wheel does not include Aider's benchmark harness. Build the
-official image from an Aider source checkout and clone the exercises once:
+The `aider-chat` wheel does not include Aider's benchmark harness. The
+`[aider]` extra installs the normal Aider CLI, but it does not make
+`soup eval aider` runnable by itself. Build the official image from an Aider
+source checkout and clone the exercises once:
 
 ```bash
 pip install "soup-cli[aider]"
@@ -637,6 +639,14 @@ before starting. It mounts the exercise corpus read-only, forwards supported
 provider credentials by environment-variable name (never by value in command
 arguments), and executes the upstream harness without a shell. The output
 directory must resolve under the current working directory.
+An exercises directory outside the current working directory is allowed but
+produces a warning and remains read-only in the container.
+
+Host-loopback access is disabled by default. For an explicitly trusted local
+OpenAI-compatible endpoint, `--allow-host-services` adds Docker's
+`host.docker.internal:host-gateway` mapping. Enabling it also lets untrusted
+model-generated code reach other services listening on the host, so leave it
+off for remote providers.
 
 Aider writes one `.aider.results.json` per exercise. Soup bounds and validates
 those files, then writes `soup_result.json` with `model`, `task`, `score`,
