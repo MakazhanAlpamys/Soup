@@ -189,7 +189,7 @@ reproducing 70+ versions of notes.
 
 - **`soup export --format gptq` crashed with no calibration data and, when it
   did run, wrote a shard name the standard loader can't find
-  (#338 by @MakazhanAlpamys in #PLACEHOLDER).** With no `--calibration-data`,
+  (#338 by @MakazhanAlpamys in #475).** With no `--calibration-data`,
   `_export_gptq` called `model.quantize(tokenizer)`; auto-gptq's `quantize()`
   expects tokenized examples, not a bare tokenizer, so this failed with
   "object is not iterable". GPTQ export now requires `--calibration-data`
