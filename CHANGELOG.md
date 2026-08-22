@@ -14,7 +14,7 @@ reproducing 70+ versions of notes.
 
 ### Added
 
-- **Native Apple Silicon telemetry for `soup monitor` (#99 by @Amix29).**
+- **Native Apple Silicon telemetry for `soup monitor` (#99 by @Amix29 in #481).**
   The monitor now reads bounded plist output from macOS `powermetrics` and
   renders GPU utilization and power in the existing Rich table. It reuses an
   explicitly cached sudo credential through non-interactive `sudo -n`, never

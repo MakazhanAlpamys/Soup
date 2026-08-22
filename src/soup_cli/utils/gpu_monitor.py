@@ -280,6 +280,7 @@ def query_powermetrics(interval_seconds: float) -> PowermetricsResult:
     try:
         result = subprocess.run(  # noqa: S603 — fixed absolute tools, list args, no shell
             argv,
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             text=False,
             timeout=interval + 5.0,

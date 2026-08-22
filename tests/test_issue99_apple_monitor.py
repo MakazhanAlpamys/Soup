@@ -30,6 +30,7 @@ def _plist_sample(
     gpu_energy_mj: object | None = 25_000,
     hw_model: object = "Mac16,5",
     gpu_sampler_energy_location: bool = False,
+    padding: str | None = None,
 ) -> bytes:
     gpu: dict[str, object] = {"idle_ratio": idle_ratio, "freq_hz": 1_500}
     processor: dict[str, object] = {}
@@ -38,15 +39,16 @@ def _plist_sample(
     if gpu_energy_mj is not None:
         destination = gpu if gpu_sampler_energy_location else processor
         destination["gpu_energy"] = gpu_energy_mj
-    return plistlib.dumps(
-        {
-            "is_delta": True,
-            "elapsed_ns": elapsed_ns,
-            "hw_model": hw_model,
-            "gpu": gpu,
-            "processor": processor,
-        }
-    )
+    payload: dict[str, object] = {
+        "is_delta": True,
+        "elapsed_ns": elapsed_ns,
+        "hw_model": hw_model,
+        "gpu": gpu,
+        "processor": processor,
+    }
+    if padding is not None:
+        payload["padding"] = padding
+    return plistlib.dumps(payload)
 
 
 def test_parse_powermetrics_uses_direct_power_and_active_ratio():
@@ -110,7 +112,12 @@ def test_parse_powermetrics_rejects_invalid_model_name():
 
 def test_parse_powermetrics_skips_malformed_and_oversize_payloads():
     assert parse_powermetrics_plist(b"not a plist") == []
-    assert parse_powermetrics_plist(b"x" * (gpu_monitor._MAX_POWERMETRICS_OUTPUT_BYTES + 1)) == []
+    oversized_plist = _plist_sample(
+        padding="x" * gpu_monitor._MAX_POWERMETRICS_OUTPUT_BYTES,
+    )
+    assert len(oversized_plist) > gpu_monitor._MAX_POWERMETRICS_OUTPUT_BYTES
+    assert plistlib.loads(oversized_plist)["gpu"]["idle_ratio"] == 0.25
+    assert parse_powermetrics_plist(oversized_plist) == []
 
 
 def test_parse_powermetrics_requires_bytes():
@@ -138,30 +145,35 @@ def test_query_powermetrics_root_uses_fixed_binary_without_shell(monkeypatch):
     assert len(result.samples) == 1
     argv, kwargs = calls[0]
     assert argv[0] == "/usr/bin/powermetrics"
-    assert "--samplers" in argv and "gpu_power" in argv
-    assert "--sample-rate" in argv and "250" in argv
-    assert "--sample-count" in argv and "1" in argv
-    assert "--format" in argv and "plist" in argv
+    assert argv[argv.index("--samplers") + 1] == "gpu_power"
+    assert argv[argv.index("--sample-rate") + 1] == "250"
+    assert argv[argv.index("--sample-count") + 1] == "1"
+    assert argv[argv.index("--format") + 1] == "plist"
     assert "--handle-invalid-values" in argv
+    assert kwargs["stdin"] is subprocess.DEVNULL
+    assert kwargs["timeout"] == pytest.approx(5.25)
     assert kwargs["shell"] is False
     assert kwargs["text"] is False
     assert kwargs["check"] is False
 
 
 def test_query_powermetrics_non_root_uses_non_interactive_sudo(monkeypatch):
-    calls: list[list[str]] = []
+    calls: list[tuple[list[str], dict[str, object]]] = []
     monkeypatch.setattr(gpu_monitor.os.path, "isfile", lambda _path: True)
     monkeypatch.setattr(gpu_monitor, "_effective_uid", lambda: 501)
 
-    def _run(argv, **_kwargs):
-        calls.append(argv)
+    def _run(argv, **kwargs):
+        calls.append((argv, kwargs))
         return _completed(stdout=_plist_sample())
 
     monkeypatch.setattr(gpu_monitor.subprocess, "run", _run)
     result = query_powermetrics(2.0)
 
     assert result.status is PowermetricsStatus.OK
-    assert calls[0][:3] == ["/usr/bin/sudo", "-n", "/usr/bin/powermetrics"]
+    argv, kwargs = calls[0]
+    assert argv[:3] == ["/usr/bin/sudo", "-n", "/usr/bin/powermetrics"]
+    assert kwargs["stdin"] is subprocess.DEVNULL
+    assert kwargs["timeout"] == pytest.approx(7.0)
 
 
 def test_query_powermetrics_names_missing_sudo_ticket(monkeypatch):
@@ -233,6 +245,28 @@ def test_monitor_routes_apple_silicon_before_nvidia(monkeypatch):
     assert "Apple M4 Max" in rendered
     assert "87.0%" in rendered
     assert "31.5 W" in rendered
+
+
+def test_monitor_non_apple_routes_to_nvidia(monkeypatch):
+    output = io.StringIO()
+    sample = GpuSample(0, "NVIDIA Test GPU", 42.0, 7.0, 512.0, 8192.0, 55.0, 75.0)
+    monkeypatch.setattr(
+        monitor_command,
+        "console",
+        Console(file=output, color_system=None, width=160),
+    )
+    monkeypatch.setattr(monitor_command, "detect_apple_silicon", lambda: False)
+    monkeypatch.setattr(
+        monitor_command,
+        "query_powermetrics",
+        lambda _refresh: pytest.fail("Non-Apple path must not query powermetrics"),
+    )
+    monkeypatch.setattr(monitor_command, "query_nvidia_smi", lambda: (True, [sample]))
+
+    monitor_command.monitor(refresh=0.25, once=True)
+    rendered = output.getvalue()
+    assert "NVIDIA Test GPU" in rendered
+    assert "42.0%" in rendered
 
 
 def test_monitor_apple_permission_error_is_actionable(monkeypatch):
