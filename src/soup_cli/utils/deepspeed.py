@@ -297,6 +297,56 @@ def write_deepspeed_config(stage: str = "zero2", gpu_count: int | None = None) -
     return tmp.name
 
 
+def resolve_user_deepspeed_file(path: str, *, gpu_count: int | None = None) -> str:
+    """Resolve a user-supplied ``--deepspeed my.json`` the way a preset is (#359).
+
+    Returns the ORIGINAL path when nothing needed changing, so a hand-written
+    config that uses no run-dependent keys reaches DeepSpeed byte-identical and
+    the escape hatch stays an escape hatch. When something did change, the
+    repaired config is written to a temp copy and that path is returned; the
+    user's file on disk is never modified.
+
+    The decision this encodes: the two keys :func:`resolve_deepspeed_config`
+    rewrites are not preferences, they are errors. DeepSpeed refuses a
+    ``zero_hpz_partition_size`` the world size is not divisible by, and its fp16
+    quantiser against a ``bf16`` run raises ``expected mat1 and mat2 to have the
+    same dtype`` inside ``deepspeed/runtime/zero/linear.py``. The documented way
+    to customise ZeRO++ is to copy the preset JSON — which copies both defects —
+    so leaving a user file unresolved would hand the escape hatch a crash the
+    presets are already protected from. Every rewrite is printed.
+
+    An unreadable or non-object JSON is passed straight through. DeepSpeed
+    reports a malformed config better than a Soup traceback would, and refusing
+    here would reject files DeepSpeed might well accept.
+    """
+    try:
+        with open(path, encoding="utf-8") as handle:
+            config = json.load(handle)
+    except (OSError, ValueError):
+        return path
+    if not isinstance(config, dict):
+        return path
+
+    resolved, notes = resolve_deepspeed_config(config, gpu_count=gpu_count)
+    if not notes:
+        return path
+
+    from rich.console import Console
+    from rich.markup import escape
+
+    console = Console()
+    label = os.path.basename(path) or path
+    for note in notes:
+        console.print(f"[yellow]DeepSpeed {escape(label)}:[/] {escape(note)}")
+
+    tmp = tempfile.NamedTemporaryFile(
+        mode="w", suffix=".json", prefix="ds_user_", delete=False
+    )
+    json.dump(resolved, tmp, indent=2)
+    tmp.close()
+    return tmp.name
+
+
 def prune_empty_param_groups(optimizer) -> int:
     """Drop parameter groups that hold no parameters. Returns how many went.
 
@@ -336,19 +386,29 @@ def attach_empty_param_group_guard(trainer) -> bool:
     Returns ``True`` when the guard was installed, ``False`` when this trainer
     already carries one (idempotent — ``setup()`` may run more than once).
 
+    Returns ``False`` too when ``trainer`` exposes no callable
+    ``create_optimizer``. Not every TRL trainer does, and once this is attached
+    from every wrapper rather than from ``sft.py`` alone (#359), raising here
+    would convert a DeepSpeed-only defect into an AttributeError on the
+    ordinary path. Declining leaves such a trainer exactly as it was: it never
+    had the empty-group problem, because it never built the two groups.
+
     See :func:`prune_empty_param_groups` for why this is needed and why it must
     happen at optimizer-construction time. Full fine-tuning populates both
     groups, so nothing is pruned there and the path that already worked is
     untouched (#336).
 
-    Scope: currently wired in ``trainer/sft.py`` only, which is where #336 was
-    measured. Every other wrapper that accepts a ``deepspeed_config`` has the
-    same exposure and needs the same two-line call after its trainer is built.
+    Scope: every wrapper under ``soup_cli/trainer/`` that builds its own trainer
+    and accepts a ``deepspeed_config`` (#359). Coverage is enforced by a scan in
+    ``tests/test_issue359_deepspeed_guard_coverage.py`` rather than by a list of
+    names, so a new wrapper cannot quietly omit it.
     """
     if getattr(trainer, "_soup_empty_group_guard", False):
         return False
 
-    original = trainer.create_optimizer
+    original = getattr(trainer, "create_optimizer", None)
+    if not callable(original):
+        return False
 
     def create_optimizer():
         optimizer = original()

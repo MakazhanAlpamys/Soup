@@ -121,6 +121,44 @@ reproducing 70+ versions of notes.
 
 ### Fixed
 
+- **Every DeepSpeed-capable trainer now prunes the empty LoRA optimizer group,
+  not just `sft.py` (#359 in #484).** #336 fixed the failure where LoRA leaves HF's
+  no-decay parameter group empty, DeepSpeed drops it, and the LR scheduler
+  keeps two `base_lrs` until torch's strict `zip` raises at the first
+  `lr_scheduler.step()` — but it fixed it in one wrapper. Measured before
+  changing anything: 19 modules under `soup_cli/trainer/` accept a
+  `deepspeed_config` and exactly one called the guard, so 18 tasks still died
+  the same way under `--deepspeed` with LoRA.
+
+  Coverage is enforced by a scan over `soup_cli/trainer/*.py` rather than a
+  list of names, following `test_device_map_distributed.py` — whose own
+  history is the argument, since its first version parametrized over the six
+  trainers that fix had touched and passed while nine more sites still carried
+  the defect. The scanner requires the guard only where a module both accepts
+  a `deepspeed_config` and constructs a trainer itself, so the delegating
+  `preference.py` wrapper is correctly exempt, and it carries a control
+  proving the pattern can fail.
+
+  `attach_empty_param_group_guard` now declines a trainer with no callable
+  `create_optimizer` instead of raising. That is load-bearing once the guard
+  is attached from eighteen wrappers rather than one: not every TRL trainer
+  exposes the method, and an AttributeError there would convert a
+  DeepSpeed-only defect into a crash on the ordinary path.
+
+- **`--deepspeed my.json` is now resolved the way a preset is (#359 in #484).** A
+  user-supplied config reached DeepSpeed unresolved, so none of the preset
+  rewrites applied to it. The decision recorded: resolve, but only keys that
+  are provably invalid for the run. `zero_hpz_partition_size` is refused by
+  DeepSpeed when the world size is not divisible by it, and the fp16 quantiser
+  against a `bf16` run raises `expected mat1 and mat2 to have the same dtype`
+  inside `deepspeed/runtime/zero/linear.py` — neither is a preference. Since
+  the documented way to customise ZeRO++ is to copy the preset JSON, which
+  copies both defects, an unresolved user file inherited a crash the presets
+  are already protected from. A config using none of those keys is returned by
+  its own path, byte-identical; a repair is printed and written to a temp copy,
+  and the user's file on disk is never modified. Malformed JSON passes through
+  untouched, because DeepSpeed reports a bad config better than a traceback.
+
 - **`downsample` now returns at most `max_points` rows, which is what its
   docstring has always promised (#473 in #474).** The stride was
   `len(rows) // max_points` — a divisor, not a cap — so five rows with
