@@ -3749,6 +3749,7 @@ output: ./output
         yaml_str="""\
 base: Qwen/Qwen3.5-0.8B
 task: sft
+modality: text
 
 data:
   train: ./data/train.jsonl
@@ -3777,6 +3778,7 @@ output: ./output
         yaml_str="""\
 base: Qwen/Qwen3.5-2B
 task: sft
+modality: text
 
 data:
   train: ./data/train.jsonl
@@ -3805,6 +3807,7 @@ output: ./output
         yaml_str="""\
 base: Qwen/Qwen3.5-4B
 task: sft
+modality: text
 
 data:
   train: ./data/train.jsonl
@@ -3833,6 +3836,7 @@ output: ./output
         yaml_str="""\
 base: Qwen/Qwen3.5-4B-Base
 task: pretrain
+modality: text
 
 data:
   train: ./data/corpus.jsonl
@@ -3862,6 +3866,7 @@ output: ./output
         yaml_str="""\
 base: Qwen/Qwen3.5-9B
 task: sft
+modality: text
 
 data:
   train: ./data/train.jsonl
@@ -3890,6 +3895,7 @@ output: ./output
         yaml_str="""\
 base: Qwen/Qwen3.5-9B
 task: grpo
+modality: text
 
 data:
   train: ./data/reasoning_train.jsonl
@@ -3922,6 +3928,7 @@ output: ./output
         yaml_str="""\
 base: Qwen/Qwen3.5-27B
 task: sft
+modality: text
 
 data:
   train: ./data/train.jsonl
@@ -3951,6 +3958,7 @@ output: ./output
         yaml_str="""\
 base: Qwen/Qwen3.5-35B-A3B
 task: sft
+modality: text
 
 data:
   train: ./data/train.jsonl
@@ -3985,6 +3993,7 @@ output: ./output
         yaml_str="""\
 base: Qwen/Qwen3.5-122B-A10B
 task: sft
+modality: text
 
 data:
   train: ./data/train.jsonl
@@ -4020,6 +4029,7 @@ output: ./output
         yaml_str="""\
 base: Qwen/Qwen3.5-397B-A17B
 task: sft
+modality: text
 
 data:
   train: ./data/train.jsonl
@@ -4052,6 +4062,7 @@ output: ./output
         yaml_str="""\
 base: Qwen/Qwen3.6-27B
 task: sft
+modality: text
 
 data:
   train: ./data/train.jsonl
@@ -4081,6 +4092,7 @@ output: ./output
         yaml_str="""\
 base: Qwen/Qwen3.6-35B-A3B
 task: sft
+modality: text
 
 data:
   train: ./data/train.jsonl
