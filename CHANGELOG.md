@@ -122,7 +122,7 @@ reproducing 70+ versions of notes.
 ### Fixed
 
 - **Every DeepSpeed-capable trainer now prunes the empty LoRA optimizer group,
-  not just `sft.py` (#359).** #336 fixed the failure where LoRA leaves HF's
+  not just `sft.py` (#359 in #484).** #336 fixed the failure where LoRA leaves HF's
   no-decay parameter group empty, DeepSpeed drops it, and the LR scheduler
   keeps two `base_lrs` until torch's strict `zip` raises at the first
   `lr_scheduler.step()` — but it fixed it in one wrapper. Measured before
@@ -145,7 +145,7 @@ reproducing 70+ versions of notes.
   exposes the method, and an AttributeError there would convert a
   DeepSpeed-only defect into a crash on the ordinary path.
 
-- **`--deepspeed my.json` is now resolved the way a preset is (#359).** A
+- **`--deepspeed my.json` is now resolved the way a preset is (#359 in #484).** A
   user-supplied config reached DeepSpeed unresolved, so none of the preset
   rewrites applied to it. The decision recorded: resolve, but only keys that
   are provably invalid for the run. `zero_hpz_partition_size` is refused by
