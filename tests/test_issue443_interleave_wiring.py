@@ -11,9 +11,12 @@ The maintainer's decision on #443 (Option A, scope fixed by him): `DataConfig.tr
 now accepts `str | list[str]`; a list requires `data.interleave`, applies to local file
 paths only, and is combined into one row set BEFORE the existing `val_split` line in
 `_finalize` runs (so a single path stays byte-identical). `packing` / `multipack` +
-`interleave`, and `data.streaming` / an HF-hub dataset name + `interleave`, are all
-rejected at parse time with a message naming the reason — streaming/hub-dataset
-interleaving is out of scope here, filed as follow-up #459.
+`interleave` are rejected at parse time with a message naming the reason.
+`data.streaming` / an HF-hub dataset name + `interleave` were ALSO rejected here in
+#443's v1 — that refusal was lifted in #459 for a data.streaming=true local/remote-URI
+list and for an all-HF-hub-dataset-name list respectively (each a new, separately
+implemented path — see tests/test_issue459_interleave_streaming_hub.py); a list mixing
+hub names with local/remote entries, and a streaming hub-name list, still refuse.
 """
 
 from __future__ import annotations
@@ -236,25 +239,41 @@ def test_interleave_with_multipack_rejected_with_reason(tmp_path):
         )
 
 
-def test_interleave_with_streaming_rejected_with_reason(tmp_path):
-    # Maintainer's review: match="#459" alone survived a mutation swapping
-    # in a completely wrong reason while keeping the issue number — match
-    # on text unique to THIS reason instead. NOT match="streaming" alone:
-    # pydantic's ValidationError str embeds input_value={...}, which
-    # already contains the literal input dict's 'streaming': True — a bare
-    # "streaming" match would pass even against a wrong-reason mutation,
-    # for the same false-positive reason #459 did.
-    with pytest.raises(ValidationError, match="disable streaming or drop"):
+def test_interleave_with_streaming_local_files_now_accepted(tmp_path):
+    # #459 lifted this refusal for local-file (and remote-URI) lists —
+    # data.streaming=true + data.interleave now validates. The full
+    # streaming-interleave loader behaviour is covered by
+    # tests/test_issue459_interleave_streaming_hub.py; this just pins that
+    # schema no longer refuses the combination it used to.
+    cfg = _cfg(
+        tmp_path,
+        train=[str(tmp_path / "a.jsonl"), str(tmp_path / "b.jsonl")],
+        interleave="concat",
+        streaming=True,
+    )
+    assert cfg.data.streaming is True
+    assert cfg.data.interleave == "concat"
+
+
+def test_interleave_with_streaming_hub_list_still_rejected_with_reason(tmp_path):
+    # #459 implements streaming for local/remote lists and eager loading
+    # for all-hub-name lists, but NOT the combination of the two — see
+    # test_issue459_interleave_streaming_hub.py for the full matrix.
+    with pytest.raises(ValidationError, match="does not support data.streaming=true"):
         _cfg(
             tmp_path,
-            train=[str(tmp_path / "a.jsonl"), str(tmp_path / "b.jsonl")],
+            train=["org/dataset-a", "org/dataset-b"],
             interleave="concat",
             streaming=True,
         )
 
 
-def test_interleave_with_hub_dataset_name_rejected_with_reason(tmp_path):
-    with pytest.raises(ValidationError, match="local file paths"):
+def test_interleave_with_mixed_local_and_hub_entries_rejected_with_reason(tmp_path):
+    # A list mixing a local file path with an HF-hub dataset name is still
+    # rejected — #459 added dedicated paths for an all-local/remote list
+    # and a separate all-hub list, not a mix of the two (see
+    # test_issue459_interleave_streaming_hub.py for the full matrix).
+    with pytest.raises(ValidationError, match="not a mix"):
         _cfg(
             tmp_path,
             train=[str(tmp_path / "a.jsonl"), "org/some-dataset"],

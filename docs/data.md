@@ -527,7 +527,8 @@ data:
   shards: 4
 ```
 
-**Multi-dataset interleave** (v0.42.0 schema, wired into training-time loading in #443):
+**Multi-dataset interleave** (v0.42.0 schema, wired into training-time loading in #443;
+extended to streaming and HF-hub dataset names in #459):
 
 ```yaml
 data:
@@ -538,11 +539,39 @@ data:
   eval_on_each_dataset: true
 ```
 
-`data.train` as a list requires `data.interleave` (and vice versa); entries must be local
-file paths only — no remote URIs / HF-hub dataset names (that combination is
-[#459](https://github.com/MakazhanAlpamys/Soup/issues/459)). `training.packing` /
-`training.multipack` and `data.streaming` must all be off. With the `probs` strategy,
-`len(data.train)` must equal `len(probs)`.
+`data.train` as a list requires `data.interleave` (and vice versa). `training.packing` /
+`training.multipack` must be off. With the `probs` strategy, `len(data.train)` must equal
+`len(probs)`.
+
+Every list entry is classified once — **local** file path, **remote** URI, or **HF-hub**
+dataset name (no file suffix) — and the classes may not mix within one list:
+
+- **All entries local files and/or remote URIs:** with `data.streaming: false` (default),
+  entries must be local files only (the original #443 path, eager-loaded and combined
+  in-process). With `data.streaming: true`, entries may also be remote URIs, and combining
+  delegates to HF `datasets.interleave_datasets` / `concatenate_datasets` instead — a
+  remote URI entry always requires `data.streaming: true` (there is no non-streaming
+  multi-remote-file loader).
+- **All entries HF-hub dataset names** (e.g. `teknium/OpenHermes-2.5`): each name's own
+  `train` split is loaded and combined the same way as the local-file path. Always eager —
+  `data.streaming: true` is not yet supported for an all-hub-name list (streaming several
+  differently-shaped hub datasets through their own split negotiation is unimplemented and
+  refuses at parse time, by name). A hub entry's own `validation` split is used for the
+  combined val set **only when every entry provides one** (combined the same way); if only
+  some entries provide one it is ignored (warned) and `data.val_split` applies to the
+  combined train rows instead — a partial hub split is not a decided mixture.
+- **A mix of hub names with local/remote entries in the same list** always refuses — there
+  is no decided answer for how a hub split and a local file's row count should reconcile.
+
+The strategy names mean the same thing on the streaming path as on the local path, though
+not byte-identically (a streaming source's size generally can't be known ahead of time):
+
+| strategy | local (eager)                                   | streaming (delegated)                                                        |
+|----------|--------------------------------------------------|-------------------------------------------------------------------------------|
+| `concat` | every source's rows, in order                     | `concatenate_datasets(streams)`                                              |
+| `under`  | truncate every source to the smallest source's size | `interleave_datasets(streams, stopping_strategy="first_exhausted")`       |
+| `over`   | upsample every source to the largest source's size (cycled) | `interleave_datasets(streams, stopping_strategy="all_exhausted")` |
+| `probs`  | exact apportionment to the requested ratio        | `interleave_datasets(streams, probabilities=probs, stopping_strategy="first_exhausted")` — converges to the same ratio, sampled rather than exact |
 
 **Vocab expansion + advanced masking:**
 

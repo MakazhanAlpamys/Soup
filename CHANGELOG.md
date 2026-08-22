@@ -96,6 +96,27 @@ reproducing 70+ versions of notes.
   and the `--live` overlay renderer emit the real N-dataset mixture again instead of
   collapsing to one path.
 
+- **`data.interleave` now supports `data.streaming: true` and lists of HF-hub dataset
+  names (#459 by @blackcoderx in #TODO-PR).**
+  #443 left `data.interleave` local-files-only, refusing `data.streaming` and any
+  remote-URI / hub-name list entry at parse time with a message naming this issue as
+  the follow-up. Every `data.train` list entry is now classified once (local file /
+  remote URI / HF-hub name) and dispatched: an all-local/remote list with
+  `data.streaming: true` delegates combining to HF `datasets.interleave_datasets` /
+  `concatenate_datasets` rather than reimplementing mixing over a source whose size
+  can't be known ahead of time — `concat` maps to `concatenate_datasets`, `under`/`over`
+  map to `stopping_strategy="first_exhausted"`/`"all_exhausted"`, and `probs` maps to
+  `probabilities=probs`, each chosen so the strategy names mean the same thing as the
+  local path (verified by running one `probs` config through both paths and comparing
+  the resulting proportions, not by two tests that each pass alone). An all-HF-hub-name
+  list is loaded eagerly per entry and combined with the same `_combine_interleaved` the
+  local path already uses; a hub entry's own `validation` split is honoured for the
+  combined result only when *every* entry provides one, otherwise it's ignored (warned)
+  and `data.val_split` applies to the combined train rows — a decided precedence rather
+  than an emergent one. Still refused, by name: an all-hub list with `data.streaming:
+  true` (streaming N differently-shaped hub datasets and reconciling their splits is a
+  separate, larger effort), and any list mixing hub names with local/remote entries.
+
 - **A repo-wide documentation ratchet to guarantee declared recipe counts stay synchronized with the catalog (#453 by @harshitthek in #457).**
   Derives the expected count dynamically from `len(RECIPES)` and scans all declared documentation sites, preventing silent Git auto-merge drift across sequential recipe additions.
 
