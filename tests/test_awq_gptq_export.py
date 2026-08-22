@@ -282,6 +282,15 @@ class TestGptqExportFunction:
         cal_file = tmp_path / "cal.jsonl"
         cal_file.write_text('{"text": "sample"}\n', encoding="utf-8")
 
+        real_import = builtins.__import__
+
+        def custom_import(name, *args, **kwargs):
+            if name == "auto_gptq":
+                raise ModuleNotFoundError("No module named 'auto_gptq'", name="auto_gptq")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", custom_import)
+
         runner = CliRunner()
         result = runner.invoke(
             app,
@@ -293,7 +302,7 @@ class TestGptqExportFunction:
         assert result.exit_code != 0
         assert "auto-gptq" in result.output.lower() or "not installed" in result.output.lower()
 
-    def test_export_gptq_no_calibration_data_raises(self, tmp_path):
+    def test_export_gptq_no_calibration_data_raises(self, tmp_path, capsys):
         """GPTQ has no built-in fallback dataset: no --calibration-data must raise,
         never fall through to model.quantize(tokenizer) (auto-gptq expects examples,
         not a tokenizer, and rejects one with 'object is not iterable')."""
@@ -316,6 +325,7 @@ class TestGptqExportFunction:
                     calibration_data=None,
                 )
         mock_gptq_class.from_pretrained.assert_not_called()
+        assert "--calibration-data" in capsys.readouterr().out
 
     def test_export_gptq_empty_calibration_file_raises(self, tmp_path):
         """A --calibration-data file that yields zero usable samples (empty,
@@ -612,17 +622,25 @@ class TestAwqGptqImportErrorSurfacesRealCause:
         cal_file = tmp_path / "cal.jsonl"
         cal_file.write_text('{"text": "sample"}\n', encoding="utf-8")
 
+        real_import = builtins.__import__
+
+        def custom_import(name, *args, **kwargs):
+            if name == "auto_gptq":
+                raise ModuleNotFoundError("No module named 'auto_gptq'", name="auto_gptq")
+            return real_import(name, *args, **kwargs)
+
         import soup_cli.commands.export as export_mod
 
-        with mock_patch(
-            "soup_cli.commands.export._validate_calibration_path",
-            return_value=cal_file,
-        ):
-            with pytest.raises(ClickExit):
-                export_mod._export_gptq(
-                    model_dir, None, None, bits=4, group_size=128,
-                    calibration_data=str(cal_file),
-                )
+        with mock_patch.object(builtins, "__import__", side_effect=custom_import):
+            with mock_patch(
+                "soup_cli.commands.export._validate_calibration_path",
+                return_value=cal_file,
+            ):
+                with pytest.raises(ClickExit):
+                    export_mod._export_gptq(
+                        model_dir, None, None, bits=4, group_size=128,
+                        calibration_data=str(cal_file),
+                    )
         output = capsys.readouterr().out
         assert "not installed" in output.lower()
 
