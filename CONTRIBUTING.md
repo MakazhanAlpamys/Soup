@@ -458,6 +458,13 @@ Great areas for first contributions:
 GitHub Actions runs on every push and PR:
 - **ruff** linting on Python 3.11 (must pass)
 - **pytest** on Python 3.10, 3.11, 3.12 across Ubuntu, Windows, macOS (must pass)
+- **transformers-floor** on Ubuntu / Python 3.11 (#478): installs
+  `.[dev]` under `.github/constraints/transformers-floor.txt`, asserts the
+  pinned `transformers` version, and runs the static `dtype=` / `torch_dtype=`
+  load-site guard. The declared `[train]` floor remains
+  `transformers>=4.36.0,<5.0.0` in `pyproject.toml`; `transformers==4.36.0`
+  cannot resolve against the declared `trl` range, so this job does not rewrite
+  that pin.
 
 See `.github/workflows/ci.yml`.
 

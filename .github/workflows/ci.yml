@@ -67,6 +67,47 @@ jobs:
       - name: Run one-step MLX SFT through the real CLI
         run: pytest -o addopts= -m smoke -k mlx_sft_smoke -q tests/test_smoke_train.py
 
+  # #478: declared transformers floor (4.36.0) cannot resolve against declared
+  # trl>=0.14,<0.29 — see .github/constraints/transformers-floor.txt. Do not
+  # raise Soup's pin without a dependency-policy decision. This job installs
+  # under an explicit transformers(+trl) constraint so pip cannot silently
+  # upgrade the cell, asserts the pinned versions, and runs the static dtype=
+  # guard (the accepted fallback when a true floor runtime cell is impractical).
+  transformers-floor:
+    runs-on: ubuntu-latest
+    env:
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: "utf-8"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install with Transformers floor constraints
+        run: pip install -e ".[dev]" -c .github/constraints/transformers-floor.txt
+      - name: Verify constrained dependency graph
+        run: python -m pip check
+      - name: Assert constrained Transformers and TRL versions
+        run: |
+          python - <<'PY'
+          import importlib.metadata as md
+
+          expected = {"transformers": "4.46.1", "trl": "0.14.0"}
+          for name, want in expected.items():
+              got = md.version(name)
+              assert got == want, (
+                  f"floor job expected {name}=={want} from "
+                  f".github/constraints/transformers-floor.txt, got {got} — "
+                  f"pip silently upgraded, ignored -c, or constraints drifted"
+              )
+              print(f"{name}={got} (matches constraints)")
+          PY
+      - name: Run Transformers floor compatibility guard
+        run: >
+          pytest -o addopts= --no-cov -q
+          tests/test_transformers_floor_compat.py
+          tests/test_bugfixes.py::TestDiffModelLoading
+
   test:
     strategy:
       fail-fast: false

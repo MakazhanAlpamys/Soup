@@ -175,7 +175,7 @@ def merge(
         console.print(f"[dim]Loading base model: {base}...[/]")
         model = AutoModelForCausalLM.from_pretrained(
             base,
-            dtype=model_dtype,
+            torch_dtype=model_dtype,
             trust_remote_code=trc,
             device_map="cpu",
         )

@@ -1340,14 +1340,12 @@ def build_meta_skeleton(
     if quant == QUANT_NF4:
         quant_config = build_nf4_config(dtype, double_quant=double_quant)
     with init_empty_weights():
-        try:
-            model = AutoModelForCausalLM.from_config(
-                config, dtype=torch_dtype, trust_remote_code=trust_remote_code
-            )
-        except TypeError:
-            model = AutoModelForCausalLM.from_config(
-                config, torch_dtype=torch_dtype, trust_remote_code=trust_remote_code
-            )
+        # torch_dtype= is the spelling that works across Soup's declared
+        # transformers range (>=4.36,<5). dtype= is the >=4.56 rename only
+        # (#478 / #471); using it here would TypeError on older installs.
+        model = AutoModelForCausalLM.from_config(
+            config, torch_dtype=torch_dtype, trust_remote_code=trust_remote_code
+        )
         if quant_config is not None:
             from transformers.integrations.bitsandbytes import replace_with_bnb_linear
 

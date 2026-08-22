@@ -211,6 +211,22 @@ reproducing 70+ versions of notes.
   with a pageable CPU source and MPS layer buffers; CUDA pinning behaviour is
   unchanged.
 
+- **CI and production load sites no longer assume Transformers ``dtype=``
+  (#478).** ``dtype=`` on ``AutoModel*.from_pretrained`` / ``from_config`` is the
+  >=4.56 rename of ``torch_dtype=``. Soup still declares
+  ``transformers>=4.36.0,<5.0.0``, but the 12-cell matrix only ever installed the
+  newest 4.x, so a >=4.56-only kwarg stayed green. Call sites in chat / diff /
+  infer / export / merge / serve / mole routing / layer-stream runtime now pass
+  ``torch_dtype=`` (still accepted on current 4.57.x). A static AST guard fails
+  if a production ``AutoModel*`` load/config site reintroduces ``dtype=``. A new
+  Ubuntu/3.11 ``transformers-floor`` job installs under
+  ``.github/constraints/transformers-floor.txt`` using the lowest non-yanked
+  resolvable Transformers version ``4.46.1`` with the lowest version in the
+  declared TRL range ``0.14.0`` (``transformers==4.36.0`` is ResolutionImpossible
+  against declared ``trl`` — the declared Transformers floor in
+  ``pyproject.toml`` remains unchanged), runs ``pip check``, asserts both pins,
+  and runs the guard. The existing 12-cell matrix is untouched.
+
 - **`downsample` now returns at most `max_points` rows, which is what its
   docstring has always promised (#473 in #474).** The stride was
   `len(rows) // max_points` — a divisor, not a cap — so five rows with
