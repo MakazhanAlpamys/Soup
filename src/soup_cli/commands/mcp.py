@@ -138,6 +138,23 @@ def serve(
         )
         raise typer.Exit(2)
 
+    # Execution over a network transport is refused outright rather than
+    # warned about. --allow-execute spawns real training / export processes
+    # (#297); behind a listener that is one Bearer token away from the
+    # network, a leaked token would mean process execution, not just plan
+    # disclosure. stdio is a pipe to a client the operator already started,
+    # which is a different trust boundary. This combination has never
+    # shipped, so refusing it takes nothing away.
+    if transport != _STDIO and allow_execute:
+        console.print(
+            "[red]--allow-execute is refused with --transport "
+            f"{escape(str(transport))}[/] - execution is available over stdio "
+            "only. A network listener is one Bearer token away from spawning "
+            "real training / export processes; run the executing server over "
+            "stdio, or drop --allow-execute to serve plan-only tools here."
+        )
+        raise typer.Exit(2)
+
     # Only what stdio needs. Pulling the network symbols in here as well would
     # make the default path depend on names it never uses, and any stand-in
     # module that provides `run_stdio_server` alone would fail to import.
@@ -152,12 +169,11 @@ def serve(
         )
         raise typer.Exit(1) from None
 
-    # Execution is intentionally not implemented yet. Keep the raw
-    # ``allow_execute`` value for the server/registry, while its stronger
-    # opt-in also enables the existing plan-only mutating tools.
+    # --allow-execute is the stronger opt-in and implies --allow-mutating.
+    # It reaches here only under stdio: the network branch refused above.
     allow_mutating = allow_mutating or allow_execute
     if allow_execute:
-        mode = "mutating tools ENABLED (plan-only; execution disabled)"
+        mode = "mutating tools ENABLED (execution ENABLED)"
     elif allow_mutating:
         mode = "mutating tools ENABLED (plan-only)"
     else:

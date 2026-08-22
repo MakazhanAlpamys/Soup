@@ -267,12 +267,24 @@ def build_asgi_app(
         ValueError: for a transport that is not ``sse`` / ``http`` (``stdio``
             included — it is not an ASGI transport), or a token that is not
             urlsafe-base64 shaped.
+            Also for ``allow_execute=True``: gated execution (#297) spawns
+            real processes and is stdio-only, so no network transport may
+            construct a registry that can execute.
     """
     from soup_cli.utils.qr_url import validate_token
 
     if transport not in NETWORK_TRANSPORTS:
         raise ValueError(
             f"transport must be one of {NETWORK_TRANSPORTS}, got {transport!r}"
+        )
+    # Refused here, not only in the CLI: a direct caller of build_asgi_app /
+    # run_network_server must not be able to put an executing registry behind
+    # a listener either. The CLI guard gives the operator a readable message;
+    # this one makes the property structural.
+    if allow_execute:
+        raise ValueError(
+            "allow_execute is not available over a network transport - gated "
+            "execution spawns real training / export processes and is stdio-only"
         )
     token = validate_token(auth_token)
 

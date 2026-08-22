@@ -35,6 +35,17 @@ reproducing 70+ versions of notes.
   still reaches the port. Binding off loopback warns, and a wildcard bind warns
   again that the Host check has nothing left to pin.
 
+  `--allow-execute` is refused with either network transport, and that refusal
+  is the one behavioural change to an existing flag. Gated execution (#297)
+  spawns real training / export processes; behind a listener a leaked Bearer
+  token would mean process execution rather than plan disclosure, and stdio is
+  a pipe to a client the operator already started, which is a different trust
+  boundary. The refusal is made twice on purpose: once in the CLI so the
+  operator gets a readable message, and once in `build_asgi_app()` so a direct
+  caller cannot put an executing registry behind a listener either. The stdio
+  banner also stopped claiming "execution disabled" -- that string predated
+  #297 and was false from the moment execution shipped.
+
   `--host` / `--port` / `--auth-token` are refused under `--transport stdio`
   rather than silently ignored, and the ASGI app is built by a
   `build_asgi_app()` factory so the auth and rebinding behaviour is tested

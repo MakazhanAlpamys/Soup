@@ -445,3 +445,181 @@ class TestTransportEntryPoints:
                 port=1234,
             )
         assert "app" not in seen  # never reached uvicorn
+class TestExecutionIsStdioOnly:
+    """--allow-execute must not reach a network listener (#296 review).
+
+    The pre-fix code passed ``allow_execute`` straight through to
+    ``run_network_server``, and the banner still said "execution disabled"
+    because the comment predated #297 -- so a listener one Bearer token from
+    the network could spawn real training / export processes while announcing
+    that it could not.
+
+    These tests assert BEHAVIOUR, not the tool table. ``build_registry``
+    always LISTS train_execute / export_execute and swaps only the handler,
+    so a test comparing tool names passes with the gate hardwired open --
+    which is exactly how this went uncovered.
+    """
+
+    @pytest.mark.parametrize("transport", ["sse", "http"])
+    def test_cli_refuses_execute_on_a_network_transport(self, transport):
+        result = CliRunner().invoke(
+            cli_app, ["mcp", "serve", "--transport", transport, "--allow-execute"]
+        )
+        assert result.exit_code == 2, (result.output, repr(result.exception))
+        plain = _plain(result.output)
+        # Name the flag and the transport: an assertion on the exit code alone
+        # passes when a DIFFERENT guard fires (e.g. the unknown-transport one).
+        assert "--allow-execute" in plain, plain
+        assert "stdio" in plain, plain
+
+    def test_cli_still_allows_execute_over_stdio(self, monkeypatch):
+        """Control: the refusal is targeted, not a blanket kill of the flag."""
+        seen = {}
+
+        def _fake(**kwargs):
+            seen.update(kwargs)
+
+        monkeypatch.setattr("soup_cli.mcp_server.server.run_stdio_server", _fake)
+        result = CliRunner().invoke(cli_app, ["mcp", "serve", "--allow-execute"])
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        assert seen == {"allow_mutating": True, "allow_execute": True}, seen
+
+    def test_stdio_banner_does_not_claim_execution_is_disabled(self, monkeypatch):
+        """The stale banner was the half that made the hole quiet."""
+        monkeypatch.setattr(
+            "soup_cli.mcp_server.server.run_stdio_server", lambda **kw: None
+        )
+        result = CliRunner().invoke(cli_app, ["mcp", "serve", "--allow-execute"])
+        plain = _plain(result.output)
+        assert "execution disabled" not in plain.lower(), plain
+        assert "execution ENABLED" in plain, plain
+
+    def test_build_asgi_app_refuses_execute_structurally(self):
+        """A direct caller must not be able to bypass the CLI guard."""
+        from soup_cli.mcp_server.server import build_asgi_app
+
+        with pytest.raises(ValueError, match="allow_execute"):
+            build_asgi_app(
+                transport="sse",
+                allow_mutating=True,
+                allow_execute=True,
+                auth_token=TOKEN,
+            )
+
+    @pytest.mark.parametrize("entry", ["run_sse_server", "run_http_server"])
+    def test_entry_points_refuse_execute_before_binding(self, entry, monkeypatch):
+        import soup_cli.mcp_server.server as srv
+
+        def _boom(*a, **kw):  # pragma: no cover - must never be reached
+            raise AssertionError("uvicorn.run reached with allow_execute=True")
+
+        import uvicorn
+
+        monkeypatch.setattr(uvicorn, "run", _boom)
+        with pytest.raises(ValueError, match="allow_execute"):
+            getattr(srv, entry)(
+                allow_mutating=True,
+                allow_execute=True,
+                auth_token=TOKEN,
+            )
+
+
+class TestExecuteGateIsCoveredByBehaviour:
+    """Pins the gate the name-comparing tests cannot see.
+
+    Hardwiring ``allow_execute=True`` inside build_registry leaves the tool
+    NAMES identical, so only calling a handler distinguishes the two states.
+    """
+
+    @staticmethod
+    def _handler(name, *, allow_execute):
+        from soup_cli.mcp_server.registry import build_registry
+
+        specs = {
+            spec.name: spec
+            for spec in build_registry(
+                allow_mutating=True, allow_execute=allow_execute
+            )
+        }
+        return specs[name]
+
+    @pytest.mark.parametrize("name", ["train_execute", "export_execute"])
+    def test_tool_names_alone_cannot_tell_the_states_apart(self, name):
+        """The control that explains why the behavioural tests below exist."""
+        from soup_cli.mcp_server.registry import build_registry
+
+        off = {s.name for s in build_registry(allow_mutating=True, allow_execute=False)}
+        on = {s.name for s in build_registry(allow_mutating=True, allow_execute=True)}
+        assert name in off and name in on
+        assert off == on
+
+    @pytest.mark.parametrize("name", ["train_execute", "export_execute"])
+    def test_execute_handler_refuses_when_the_gate_is_off(self, name):
+        from soup_cli.mcp_server.registry import McpToolError
+
+        spec = self._handler(name, allow_execute=False)
+        with pytest.raises(McpToolError, match="--allow-execute"):
+            spec.handler({"confirmation_token": "x" * 43})
+
+    @pytest.mark.parametrize("name", ["train_execute", "export_execute"])
+    def test_execute_handler_is_live_when_the_gate_is_on(self, name):
+        """Must NOT be the disabled-flag refusal.
+
+        A bogus token still fails -- but on the token, which is the enabled
+        path. Asserting "raises" alone would pass in both states.
+        """
+        from soup_cli.mcp_server.registry import McpToolError
+
+        spec = self._handler(name, allow_execute=True)
+        with pytest.raises(McpToolError) as exc:
+            spec.handler({"confirmation_token": "x" * 43})
+        assert "--allow-execute" not in str(exc.value), str(exc.value)
+
+    @pytest.mark.parametrize("name", ["train_execute", "export_execute"])
+    def test_gate_is_off_even_when_an_execution_manager_is_supplied(self, name):
+        """The combination the production path actually uses.
+
+        ``run_stdio_server`` builds an ``ExecutionManager()`` unconditionally
+        and passes it whether or not --allow-execute was given, so the handler
+        choice must turn on ``allow_execute`` -- not merely on an execution
+        manager being present. Dropping ``allow_execute and`` from that
+        condition passed every other test in this file while making a plain
+        ``soup mcp serve`` serve live execution handlers.
+        """
+        from soup_cli.mcp_server.execution import ExecutionManager
+        from soup_cli.mcp_server.registry import McpToolError, build_registry
+
+        specs = {
+            spec.name: spec
+            for spec in build_registry(
+                allow_mutating=True,
+                allow_execute=False,
+                execution=ExecutionManager(),
+            )
+        }
+        with pytest.raises(McpToolError, match="--allow-execute"):
+            specs[name].handler({"confirmation_token": "x" * 43})
+
+    def test_stdio_entry_point_passes_an_execution_manager_unconditionally(
+        self, monkeypatch
+    ):
+        """Control: pins WHY the test above is the one that matters.
+
+        If run_stdio_server ever stops handing an ExecutionManager to a
+        gate-off registry, the test above becomes vacuous and should be
+        re-justified rather than silently kept.
+        """
+        import soup_cli.mcp_server.server as srv
+
+        seen = {}
+
+        def _capture(**kwargs):
+            seen.update(kwargs)
+            return []
+
+        monkeypatch.setattr(srv, "build_registry", _capture)
+        monkeypatch.setattr(srv, "build_server", lambda specs: None)
+        monkeypatch.setattr(srv.anyio, "run", lambda *a, **kw: None)
+        srv.run_stdio_server(allow_mutating=False, allow_execute=False)
+        assert seen["allow_execute"] is False, seen
+        assert seen["execution"] is not None, seen

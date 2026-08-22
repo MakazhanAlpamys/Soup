@@ -188,6 +188,7 @@ soup mcp serve --allow-mutating               Also expose plan-only train_start 
 soup mcp serve --allow-execute                Implies --allow-mutating; enables train_execute / export_execute via server confirmation tokens
 soup mcp serve --transport sse [--host H --port N]  Serve the same registry over HTTP+SSE instead of stdio; binds 127.0.0.1 and requires a Bearer token (#296)
 soup mcp serve --transport http [--auth-token T]    Same over the streamable-HTTP transport (/mcp); --auth-token pins the token instead of generating one (#296)
+soup mcp serve --transport sse|http --allow-execute   REFUSED - gated execution spawns real processes and is stdio-only (#296)
 soup shrink --model <id|path> --drop-ratio 0.25 --calib c.jsonl -o shrunk  Depth-prune least-important layer block + SHIP/DON'T-SHIP ppl verdict (exit 0/2/1) (v0.71.29)
 soup shrink ... --drop-layers N --heal h.jsonl --heal-steps 200 --device cpu  Drop N layers + distill-heal (fuse LoRA back to one dense model)
 soup shrink ... --tolerance 0.10 --plan-only [--attach-to-registry <id>]  Ppl-regression tolerance / print importance table only / registry attach
