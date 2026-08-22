@@ -382,6 +382,17 @@ class MoleRoutingTrainerWrapper:
             eval_dataset=eval_ds,
             data_collator=collator,
         )
+
+        # #359 - the same exposure #336 fixed in sft.py: with LoRA the
+        # no-decay optimizer group is empty, DeepSpeed drops it, and the LR
+        # scheduler keeps two base_lrs until torch's strict zip raises at the
+        # first step. The guard prunes inside create_optimizer, i.e. before
+        # the scheduler is built. No-op for full fine-tuning, and only under
+        # DeepSpeed so the ordinary path keeps its own optimizer.
+        if self.deepspeed_config:
+            from soup_cli.utils.deepspeed import attach_empty_param_group_guard
+
+            attach_empty_param_group_guard(self.trainer)
         console.print("[green]Starting MoLE gate training...[/]")
         result = self.trainer.train()
         # Persist the trained gate (the base + adapters are unchanged on disk).

@@ -1907,20 +1907,23 @@ def _run_diagnose_gate(
 
 def _resolve_deepspeed(deepspeed: str) -> str:
     """Resolve DeepSpeed config: named preset or path to JSON file."""
-    from soup_cli.utils.deepspeed import CONFIGS, write_deepspeed_config
+    import soup_cli.utils.deepspeed as ds
 
     # Named preset
-    if deepspeed in CONFIGS:
-        return write_deepspeed_config(deepspeed)
+    if deepspeed in ds.CONFIGS:
+        return ds.write_deepspeed_config(deepspeed)
 
-    # Path to config file
+    # Path to config file. Resolved the same way a preset is (#359): a config
+    # that needs no run-dependent rewrite comes back by this very path, and one
+    # that copied the ZeRO++ placeholders is repaired into a temp copy with the
+    # change printed. The user's file is never modified.
     ds_path = Path(deepspeed)
     if ds_path.exists() and ds_path.suffix == ".json":
-        return str(ds_path)
+        return ds.resolve_user_deepspeed_file(str(ds_path))
 
     console.print(
         f"[red]Invalid DeepSpeed config: {deepspeed}[/]\n"
-        f"Options: {', '.join(CONFIGS.keys())} or path to JSON file."
+        f"Options: {', '.join(ds.CONFIGS.keys())} or path to JSON file."
     )
     raise typer.Exit(1)
 
