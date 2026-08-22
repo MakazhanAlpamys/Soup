@@ -182,7 +182,16 @@ modal = ["modal>=0.60.0"]
 # nine CI jobs the day it was published. 1.29.0 (the newest 1.x) still exposes
 # both, verified directly. Migrating to the 2.x API is its own piece of work,
 # and shipping against a major nobody has validated is not a substitute for it.
-mcp = ["mcp>=1.2.0,<2"]
+# v0.73.4 (#296): floor raised from 1.2.0 for the sse / streamable-http
+# transports. Measured against the published wheels rather than the
+# changelog: `mcp/server/streamable_http_manager.py` first appears in
+# 1.8.0 (absent in 1.7.0) and `mcp/server/transport_security.py` in
+# 1.10.0 (absent in 1.9.4). `--transport sse` alone would have run on
+# the old floor; DNS-rebinding protection would not, and a listener
+# whose origin checking silently vanishes on an older SDK is worse than
+# a resolver error. No new package: `mcp` already requires starlette,
+# uvicorn, sse-starlette and httpx-sse.
+mcp = ["mcp>=1.10.0,<2"]
 
 [project.scripts]
 soup = "soup_cli.cli:run"
