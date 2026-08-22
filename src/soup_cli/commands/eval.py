@@ -1159,7 +1159,7 @@ def gate_cmd(
     ),
     baseline: Optional[str] = typer.Option(
         None, "--baseline", "-b",
-        help="Baseline: registry://<id> or path to {name: score} JSON file",
+        help="Baseline: registry://<id> or path to stamped/flat score JSON",
     ),
     regression_threshold: float = typer.Option(
         0.05, "--regression-threshold",
@@ -1169,6 +1169,14 @@ def gate_cmd(
         None, "--model", "-m",
         help="Model path or HF id to evaluate (required for live scoring)",
     ),
+    write_baseline: Optional[str] = typer.Option(
+        None,
+        "--write-baseline",
+        help=(
+            "Write this run's task scores as a stamped baseline JSON "
+            "({'scores', 'provenance'}) consumable by --baseline (#404)."
+        ),
+    ),
 ) -> None:
     """Run an eval-gate suite standalone (post-hoc verdict)."""
     if not 0.0 <= regression_threshold <= 1.0:
@@ -1177,7 +1185,16 @@ def gate_cmd(
         )
         raise typer.Exit(1)
 
-    from soup_cli.eval.gate import load_suite, resolve_baseline, run_gate
+    if write_baseline and not model:
+        console.print("[red]--write-baseline requires --model[/]")
+        raise typer.Exit(1)
+
+    from soup_cli.eval.gate import (
+        load_suite,
+        resolve_baseline,
+        run_gate,
+        write_baseline_file,
+    )
 
     try:
         eval_suite = load_suite(suite)
@@ -1186,13 +1203,17 @@ def gate_cmd(
         raise typer.Exit(1) from exc
 
     try:
-        baseline_scores = resolve_baseline(baseline)
+        baseline_scores = resolve_baseline(
+            baseline,
+            warn=lambda msg: console.print(f"[yellow]Warning:[/] {msg}"),
+        )
     except (FileNotFoundError, ValueError) as exc:
         console.print(f"[red]Cannot resolve baseline:[/] {exc}")
         raise typer.Exit(1) from exc
 
     # When --model is provided, build a transformers-backed generator.
     # Otherwise fall back to an empty-string stub for smoke runs.
+    # (--write-baseline already refused the stub path above.)
     if model is None:
         console.print(
             "[yellow]No --model given; using stub generator "
@@ -1220,6 +1241,22 @@ def gate_cmd(
     )
 
     _print_gate_result(result)
+
+    if write_baseline:
+        scores = {
+            row.name: float(row.score)
+            for row in result.task_results
+            if row.score is not None
+        }
+        try:
+            written = write_baseline_file(write_baseline, scores)
+        except (OSError, ValueError, TypeError) as exc:
+            console.print(
+                f"[red]Cannot write --write-baseline:[/] {exc}"
+            )
+            raise typer.Exit(1) from exc
+        console.print(f"[green]Wrote stamped baseline[/] {written}")
+
     raise typer.Exit(0 if result.passed else 1)
 
 
