@@ -3845,7 +3845,10 @@ class ShipConfig(BaseModel):
     )
     baseline: Optional[str] = Field(
         default=None,
-        description="registry://<id> | file JSON of base leg-2 scores",
+        description=(
+            "registry://<id> | stamped baseline JSON "
+            "({scores, provenance.scorer_revision}) of base leg-2 scores"
+        ),
     )
     # v0.73.2 shipped `--noise-floor` (#376) without its config surface, so it
     # was the one gate-policy flag that could not be committed to soup.yaml
