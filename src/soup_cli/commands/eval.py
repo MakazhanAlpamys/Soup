@@ -1018,7 +1018,10 @@ def gate_cmd(
         raise typer.Exit(1) from exc
 
     try:
-        baseline_scores = resolve_baseline(baseline)
+        baseline_scores = resolve_baseline(
+            baseline,
+            warn=lambda msg: console.print(f"[yellow]Warning:[/] {msg}"),
+        )
     except (FileNotFoundError, ValueError) as exc:
         console.print(f"[red]Cannot resolve baseline:[/] {exc}")
         raise typer.Exit(1) from exc

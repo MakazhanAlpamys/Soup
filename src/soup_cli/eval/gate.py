@@ -8,15 +8,25 @@ runs them at epoch boundaries during training (or post-hoc via
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Literal, Optional
+from typing import Callable, Literal, Mapping, Optional
 from urllib.parse import urlparse
 
 import yaml
 from pydantic import BaseModel, Field, field_validator
 
-from soup_cli.utils.paths import is_under_cwd
+from soup_cli import __version__
+from soup_cli.utils.paths import atomic_write_text, is_under_cwd
+
+logger = logging.getLogger(__name__)
+
+# Envelope keys for stamped baseline files (#404).
+_BASELINE_SCORES_KEY = "scores"
+_BASELINE_PROVENANCE_KEY = "provenance"
+_STAMP_SOUP_VERSION = "soup_version"
+_STAMP_SCORER_REVISION = "scorer_revision"
 
 
 @dataclass(frozen=True)
@@ -116,13 +126,155 @@ def load_suite(path: str) -> EvalSuite:
     return EvalSuite(**data)
 
 
-def resolve_baseline(spec: Optional[str]) -> dict[str, float]:
+def current_baseline_stamp() -> dict[str, object]:
+    """Soup version + bundled-scorer revision for a baseline provenance stamp."""
+    from soup_cli.eval.gate_suites import BUNDLED_SCORER_REVISION
+
+    return {
+        _STAMP_SOUP_VERSION: str(__version__),
+        _STAMP_SCORER_REVISION: int(BUNDLED_SCORER_REVISION),
+    }
+
+
+def stamp_baseline_scores(scores: Mapping[str, float]) -> dict[str, object]:
+    """Build the stamped baseline envelope (shared writer helper, #404).
+
+    Every Soup producer of a ``--baseline`` JSON file must go through this
+    helper (or :func:`write_baseline_file`) so the stamp cannot drift between
+    commands.
+    """
+    if not isinstance(scores, Mapping):
+        raise TypeError(f"scores must be a mapping, got {type(scores).__name__}")
+    clean: dict[str, float] = {}
+    for key, value in scores.items():
+        name = str(key)
+        if not name or "\x00" in name:
+            raise ValueError("baseline score names must be non-empty and null-free")
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise TypeError(
+                f"baseline score for {name!r} must be a number, "
+                f"got {type(value).__name__}"
+            )
+        clean[name] = float(value)
+    return {
+        _BASELINE_SCORES_KEY: clean,
+        _BASELINE_PROVENANCE_KEY: current_baseline_stamp(),
+    }
+
+
+def write_baseline_file(path: str, scores: Mapping[str, float]) -> str:
+    """Atomically write a stamped baseline JSON file. Returns the path."""
+    payload = stamp_baseline_scores(scores)
+    return atomic_write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        path,
+        field="baseline",
+    )
+
+
+def _coerce_score_map(raw: Mapping[object, object], *, context: str) -> dict[str, float]:
+    out: dict[str, float] = {}
+    for key, value in raw.items():
+        name = str(key)
+        if not name:
+            continue
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(
+                f"{context}: score for {name!r} must be a number, "
+                f"got {type(value).__name__}"
+            )
+        out[name] = float(value)
+    return out
+
+
+def _is_stamped_envelope(data: Mapping[object, object]) -> bool:
+    if _BASELINE_SCORES_KEY not in data:
+        return False
+    if not isinstance(data.get(_BASELINE_SCORES_KEY), Mapping):
+        return False
+    # Envelope keys only — a flat map that happens to include a "scores"
+    # numeric entry stays legacy.
+    return set(data.keys()) <= {_BASELINE_SCORES_KEY, _BASELINE_PROVENANCE_KEY}
+
+
+def _provenance_warning(provenance: object) -> Optional[str]:
+    """Return a single warning message, or None when the stamp matches."""
+    from soup_cli.eval.gate_suites import BUNDLED_SCORER_REVISION
+
+    if not isinstance(provenance, Mapping):
+        return (
+            "--baseline has unknown provenance (no scorer/version stamp). "
+            "Re-measure the baseline with the current Soup so both sides share "
+            "one scorer scale."
+        )
+    raw_rev = provenance.get(_STAMP_SCORER_REVISION)
+    if raw_rev is None:
+        return (
+            "--baseline has unknown provenance (no scorer_revision). "
+            "Re-measure the baseline with the current Soup so both sides share "
+            "one scorer scale."
+        )
+    if isinstance(raw_rev, bool) or not isinstance(raw_rev, int):
+        return (
+            "--baseline provenance scorer_revision is malformed; treating it as "
+            "unknown provenance. Re-measure the baseline."
+        )
+    if int(raw_rev) != int(BUNDLED_SCORER_REVISION):
+        return (
+            f"--baseline scorer_revision={int(raw_rev)} does not match the "
+            f"running Soup (scorer_revision={int(BUNDLED_SCORER_REVISION)}). "
+            "The stored scores may be on a different scale — re-measure the "
+            "baseline, or drop mismatched names from it to force a live base run."
+        )
+    return None
+
+
+def _emit_baseline_warning(
+    message: str,
+    *,
+    warn: Optional[Callable[[str], None]],
+) -> None:
+    if warn is not None:
+        warn(message)
+        return
+    logger.warning("%s", message)
+
+
+def _registry_provenance(rows: list[dict]) -> Optional[dict[str, object]]:
+    """Best-effort stamp from eval_results ``details_json`` rows."""
+    for row in rows:
+        raw = row.get("details_json")
+        if not raw:
+            continue
+        try:
+            details = json.loads(raw) if isinstance(raw, str) else raw
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+        if not isinstance(details, Mapping):
+            continue
+        prov = details.get(_BASELINE_PROVENANCE_KEY)
+        if isinstance(prov, Mapping):
+            return dict(prov)
+    return None
+
+
+def resolve_baseline(
+    spec: Optional[str],
+    *,
+    warn: Optional[Callable[[str], None]] = None,
+) -> dict[str, float]:
     """Resolve a baseline specifier to a ``{task_name: score}`` map.
 
     - ``None`` / ``""``: return empty map
     - ``registry://<id>``: look up eval_results for that entry via the
       experiment tracker, keyed by benchmark
-    - filesystem path: JSON mapping of ``{name: score}``
+    - filesystem path: JSON mapping of ``{name: score}`` **or** a stamped
+      envelope ``{"scores": {...}, "provenance": {...}}`` (#404)
+
+    Provenance is checked on read. A correctly stamped baseline matching the
+    running scorer revision is silent. An unstamped (pre-existing) baseline
+    warns exactly once naming unknown provenance. A stamp whose
+    ``scorer_revision`` disagrees warns about the mismatch.
     """
     if not spec:
         return {}
@@ -140,11 +292,17 @@ def resolve_baseline(spec: Optional[str]) -> dict[str, float]:
                     f"registry baseline not found: {ref} (use `soup registry list`)"
                 )
             rows = store.get_eval_results(entry_id)
-        return {
+        scores = {
             row.get("benchmark", ""): float(row.get("score", 0.0))
             for row in rows
             if row.get("benchmark") and row.get("score") is not None
         }
+        # Registry rows predate the stamp (or carry it inside details_json).
+        provenance = _registry_provenance(rows)
+        message = _provenance_warning(provenance)
+        if message is not None and scores:
+            _emit_baseline_warning(message, warn=warn)
+        return scores
 
     # Filesystem path
     baseline_path = Path(spec)
@@ -163,7 +321,26 @@ def resolve_baseline(spec: Optional[str]) -> dict[str, float]:
             f"baseline file must be a JSON object mapping name -> score; "
             f"got {type(data).__name__}"
         )
-    return {str(k): float(v) for k, v in data.items()}
+
+    if _is_stamped_envelope(data):
+        scores = _coerce_score_map(
+            data[_BASELINE_SCORES_KEY], context="baseline scores"
+        )
+        message = _provenance_warning(data.get(_BASELINE_PROVENANCE_KEY))
+        if message is not None and scores:
+            _emit_baseline_warning(message, warn=warn)
+        return scores
+
+    # Legacy flat ``{name: score}`` — unknown provenance (#404).
+    scores = _coerce_score_map(data, context="baseline file")
+    if scores:
+        _emit_baseline_warning(
+            "--baseline has unknown provenance (unstamped pre-existing file). "
+            "Re-measure the baseline with the current Soup so both sides share "
+            "one scorer scale.",
+            warn=warn,
+        )
+    return scores
 
 
 def _parse_judge_url(judge_model: str) -> tuple[str, str, Optional[str]]:
