@@ -330,6 +330,21 @@ class RamSource:
                         device="cpu",
                         pin_memory=self.pinned,
                     )
+                    # PyTorch 2.7+ on Apple Silicon may return an MPS tensor for
+                    # ``device="cpu", pin_memory=True``.  Accepting that would put
+                    # the entire supposed host store in the accelerator allocator
+                    # while reporting it as pinned CPU RAM (#434).
+                    if dst.device.type != "cpu":
+                        raise RuntimeError(
+                            "layer streaming's RAM source requested a CPU tensor, "
+                            f"but torch returned {dst.device}. Pinned host memory is "
+                            "CUDA-only here; retry with pin=False."
+                        )
+                    if self.pinned and not dst.is_pinned():
+                        raise RuntimeError(
+                            "layer streaming requested pinned CPU RAM, but torch "
+                            "returned pageable memory; retry with pin=False."
+                        )
                     src = handle.get_tensor(name)
                     dst.copy_(src)
                     del src
@@ -1591,6 +1606,16 @@ def install_streaming(
     import torch
 
     from soup_cli.utils.layer_shard import QUANT_NF4
+
+    # PyTorch 2.7+ on Apple Silicon can turn
+    # ``device="cpu", pin_memory=True`` into an MPS allocation, placing the
+    # whole base in the accelerator allocator and defeating the host-store
+    # invariant (#434). Keep this MPS-specific guard at the runtime boundary as
+    # well as in stream_setup so direct callers are safe. CPU retains its
+    # existing try/fallback semantics, including the require_pin wiring tests.
+    if str(device).startswith("mps"):
+        pin = False
+        require_pin = False
 
     # Validate the index BEFORE touching the model: an index whose `quant` and
     # `quant_specs` disagree passes the cache key (which reads `quant`) and

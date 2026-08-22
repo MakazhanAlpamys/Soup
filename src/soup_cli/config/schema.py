@@ -3107,11 +3107,10 @@ class TrainingConfig(BaseModel):
             "is worth up to 6.56x measured throughput, so a silent fallback "
             "spends the whole margin the feature exists to provide. On the disk "
             "tier (the base does not fit in RAM, so there is no RAM store to "
-            "page-lock) and on CPU (page-locking is a host-to-device transfer "
-            "optimization and there is no device) pinning is INAPPLICABLE rather "
-            "than unsatisfiable: 'true' is announced and the run proceeds "
-            "without it, so the key stays committable to a config shared between "
-            "a GPU box and a CPU box."
+            "page-lock) and on non-CUDA targets (CPU or MPS) pinning is "
+            "INAPPLICABLE rather than unsatisfiable: 'true' is announced and the "
+            "run proceeds with a pageable CPU source, so the key stays committable "
+            "to a config shared between CUDA and non-CUDA boxes."
         ),
     )
 

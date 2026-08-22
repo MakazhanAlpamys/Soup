@@ -497,6 +497,63 @@ class TestQwen35StreamingRuntime:
             for tensor in layer.values()
         )
 
+    def test_ram_source_refuses_a_non_cpu_allocation(self, tmp_path, monkeypatch):
+        from soup_cli.utils.layer_shard import shard_checkpoint
+        from soup_cli.utils.layer_stream_runtime import RamSource
+
+        weights = _heterogeneous_weights_dir(tmp_path)
+        out = str(tmp_path / "shards")
+        index = shard_checkpoint(weights, out, dtype="float32", arch="qwen3")
+        layer_specs = RamSource.layer_specs_from_shards(out, index.n_layers)
+        real_empty = torch.empty
+
+        def _misplaced_empty(*args, **kwargs):
+            if kwargs.get("pin_memory"):
+                return real_empty(*args, dtype=kwargs.get("dtype"), device="meta")
+            return real_empty(*args, **kwargs)
+
+        monkeypatch.setattr(torch, "empty", _misplaced_empty)
+        with pytest.raises(RuntimeError, match="requested a CPU tensor.*meta"):
+            RamSource(out, index.n_layers, layer_specs, pin=True)
+
+    @pytest.mark.skipif(
+        not (hasattr(torch.backends, "mps") and torch.backends.mps.is_available()),
+        reason="needs Apple Silicon MPS",
+    )
+    def test_mps_target_keeps_the_host_store_on_cpu(self, tmp_path):
+        from soup_cli.utils.layer_shard import shard_checkpoint
+        from soup_cli.utils.layer_stream_runtime import install_streaming
+
+        weights = _heterogeneous_weights_dir(tmp_path)
+        out = str(tmp_path / "shards")
+        index = shard_checkpoint(weights, out, dtype="float32", arch="qwen3")
+        runtime = install_streaming(
+            _heterogeneous_meta_model(),
+            shard_dir=out,
+            index=index,
+            device="mps",
+            pin=True,
+            require_pin=True,
+        )
+        try:
+            assert runtime.pinned is False
+            assert all(
+                tensor.device.type == "cpu"
+                for layer in runtime.source.store
+                for tensor in layer.values()
+            )
+            assert all(
+                tensor.device.type == "mps"
+                for slot in runtime.pool.buffers
+                for tensor in slot.values()
+            )
+            runtime.pool.load_async(0, runtime.source)
+            copied = runtime.pool.wait(0)["self_attn.q_proj.weight"].cpu()
+            source = runtime.source.get(0, "self_attn.q_proj.weight")
+            assert torch.equal(copied, source)
+        finally:
+            runtime.close()
+
     def test_install_streaming_accepts_heterogeneous_layer_sets(self, tmp_path):
         from soup_cli.utils.layer_shard import shard_checkpoint
         from soup_cli.utils.layer_stream_runtime import install_streaming
