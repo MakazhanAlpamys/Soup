@@ -87,13 +87,26 @@ jobs:
         run: pip install -e ".[dev]" -c .github/constraints/transformers-floor.txt
       - name: Verify constrained dependency graph
         run: python -m pip check
-      - name: Assert constrained Transformers and TRL versions
+      - name: Assert installed versions match floor constraints
         run: |
           python - <<'PY'
           import importlib.metadata as md
+          import re
+          from pathlib import Path
 
-          expected = {"transformers": "4.46.1", "trl": "0.14.0"}
-          for name, want in expected.items():
+          constraints = Path(".github/constraints/transformers-floor.txt").read_text(
+              encoding="utf-8"
+          )
+          pairs = re.findall(
+              r"^([A-Za-z0-9_-]+)==([^\s#]+)\s*$",
+              constraints,
+              re.MULTILINE,
+          )
+          expected = dict(pairs)
+          assert len(expected) == len(pairs), "duplicate package pin in floor constraints"
+          for name in ("transformers", "trl"):
+              assert name in expected, f"floor constraints missing exact {name} pin"
+              want = expected[name]
               got = md.version(name)
               assert got == want, (
                   f"floor job expected {name}=={want} from "

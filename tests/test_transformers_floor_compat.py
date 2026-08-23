@@ -21,14 +21,18 @@ kwargs that are not Transformers load APIs are out of scope.
 from __future__ import annotations
 
 import ast
+import re
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
+import yaml
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SRC_ROOT = REPO_ROOT / "src" / "soup_cli"
 CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 CONSTRAINTS = REPO_ROOT / ".github" / "constraints" / "transformers-floor.txt"
+PYPROJECT = REPO_ROOT / "pyproject.toml"
 
 _LOAD_METHODS = frozenset({"from_pretrained", "from_config"})
 _MODEL_LOAD_CLASS_SUFFIXES = (
@@ -36,6 +40,63 @@ _MODEL_LOAD_CLASS_SUFFIXES = (
     "ForConditionalGeneration",
     "ForSequenceClassification",
 )
+_VERSION = re.compile(r"\d+(?:\.\d+){1,2}")
+
+
+def _declared_transformers_floor(pyproject: str) -> str:
+    """Return the Transformers lower bound from the ``train`` extra."""
+    train = re.search(r"^train\s*=\s*\[(.*?)^\]", pyproject, re.MULTILINE | re.DOTALL)
+    assert train, "pyproject.toml has no train dependency list"
+    requirement = re.search(
+        r'"transformers\s*>=\s*(?P<floor>\d+(?:\.\d+){1,2})[^\"]*"',
+        train.group(1),
+    )
+    assert requirement, "train dependencies have no transformers >= lower bound"
+    return requirement.group("floor")
+
+
+def _constraint_pin(constraints: str, package: str) -> str:
+    """Return one exact package pin from the floor constraints file."""
+    pins = re.findall(rf"^{re.escape(package)}==([^\s#]+)\s*$", constraints, re.MULTILINE)
+    assert len(pins) == 1, f"expected exactly one {package} constraint pin, found {pins}"
+    return pins[0]
+
+
+def _version_key(version: str) -> tuple[int, int, int]:
+    assert _VERSION.fullmatch(version), f"floor version must be numeric, got {version!r}"
+    parts = [int(part) for part in version.split(".")]
+    parts.extend([0] * (3 - len(parts)))
+    return parts[0], parts[1], parts[2]
+
+
+def _validate_transformers_floor_policy(
+    pyproject: str,
+    constraints: str,
+) -> tuple[str, str]:
+    """Require the tested floor to follow, or explain its offset from, metadata."""
+    declared = _declared_transformers_floor(pyproject)
+    pinned = _constraint_pin(constraints, "transformers")
+    assert _version_key(pinned) >= _version_key(declared), (
+        f"transformers constraint {pinned} is below declared floor {declared}"
+    )
+
+    if _version_key(pinned) > _version_key(declared):
+        comments = "\n".join(
+            line.lstrip()[1:].strip()
+            for line in constraints.splitlines()
+            if line.lstrip().startswith("#")
+        )
+        explains_offset = re.search(
+            rf"\b{re.escape(declared)}\b[^\n]*"
+            r"\b(?:not resolvable|unresolvable|yanked)\b",
+            comments,
+            re.IGNORECASE,
+        )
+        assert pinned in comments and explains_offset, (
+            f"transformers constraint {pinned} exceeds declared floor {declared} without "
+            "a documented reason naming both versions and the resolver/yank exception"
+        )
+    return declared, pinned
 
 
 def _attr_parts(node: ast.AST) -> list[str]:
@@ -102,6 +163,36 @@ def _transformers_floor_job_block(text: str) -> str:
     return rest[:end_rel]
 
 
+def _transformers_floor_version_check(text: str) -> str:
+    """Return the Python body that asserts the floor job's installed versions."""
+    workflow = yaml.safe_load(text)
+    steps = workflow["jobs"]["transformers-floor"]["steps"]
+    run = next(
+        step["run"]
+        for step in steps
+        if step.get("name") == "Assert installed versions match floor constraints"
+    )
+    start_marker = "python - <<'PY'\n"
+    start = run.find(start_marker)
+    assert start != -1, "floor-version step is missing its Python heredoc"
+    start += len(start_marker)
+    end = run.find("\nPY", start)
+    assert end != -1, "floor-version step has an unterminated Python heredoc"
+    return run[start:end]
+
+
+def _run_transformers_floor_version_check(
+    installed: dict[str, str],
+    constraints: str,
+) -> None:
+    script = _transformers_floor_version_check(CI_WORKFLOW.read_text(encoding="utf-8"))
+    with (
+        patch("pathlib.Path.read_text", return_value=constraints),
+        patch("importlib.metadata.version", side_effect=installed.__getitem__),
+    ):
+        exec(compile(script, str(CI_WORKFLOW), "exec"), {"__name__": "__main__"})
+
+
 class TestTransformersFloorDtypeGuard:
     def test_no_production_transformers_model_load_uses_dtype_kwarg(self):
         hits = iter_production_hits()
@@ -156,24 +247,34 @@ class TestTransformersFloorDtypeGuard:
 
 
 class TestFloorConstraintAndWorkflowPins:
-    def test_constraints_pin_lowest_resolvable_pair(self):
-        """4.36.0 is documented as unresolvable; pins are 4.46.1 + trl 0.14.0."""
+    def test_constraints_pin_a_documented_resolvable_floor(self):
         text = CONSTRAINTS.read_text(encoding="utf-8")
-        assert "4.36.0" in text and "not resolvable" in text.lower()
-        assert "transformers==4.46.1" in text
-        assert "trl==0.14.0" in text
-        assert "trl==0.17.0" not in text
+        declared, pinned = _validate_transformers_floor_policy(
+            PYPROJECT.read_text(encoding="utf-8"),
+            text,
+        )
+        assert _version_key(pinned) >= _version_key(declared)
+        _constraint_pin(text, "trl")
         # Never claim 4.55.4 (or any pre-dtype probe) is the declared floor.
         assert "declared" in text.lower() and "floor" in text.lower()
 
     def test_workflow_runs_pip_check_and_asserts_both_exact_versions(self):
         job = _transformers_floor_job_block(CI_WORKFLOW.read_text(encoding="utf-8"))
         assert "python -m pip check" in job
-        assert 'transformers": "4.46.1"' in job or "transformers': '4.46.1'" in job
-        # Hard-coded exact pins in the assertion step (not a soft parse-only check).
-        assert '"4.46.1"' in job and '"0.14.0"' in job
-        assert "trl" in job
         assert "-c .github/constraints/transformers-floor.txt" in job
+
+    @pytest.mark.parametrize("package", ["transformers", "trl"])
+    def test_workflow_version_check_accepts_pins_and_rejects_mismatch(self, package: str):
+        constraints = "transformers==8.8.8\ntrl==9.9.9\n"
+        installed = {
+            name: _constraint_pin(constraints, name)
+            for name in ("transformers", "trl")
+        }
+        _run_transformers_floor_version_check(installed, constraints)
+
+        installed[package] = "0.0.0"
+        with pytest.raises(AssertionError, match=f"expected {package}=="):
+            _run_transformers_floor_version_check(installed, constraints)
 
 
 @pytest.mark.parametrize(
@@ -188,3 +289,76 @@ class TestFloorConstraintAndWorkflowPins:
 def test_scanner_parametrized_shapes(snippet: str, expect_hit: bool):
     hits = find_post_floor_dtype_kwargs(snippet + "\n", filename="p.py")
     assert bool(hits) is expect_hit
+
+
+class TestTransformersFloorTracksDeclaredBound:
+    def test_current_higher_floor_keeps_its_unresolvable_exception_documented(self):
+        _validate_transformers_floor_policy(
+            PYPROJECT.read_text(encoding="utf-8"),
+            CONSTRAINTS.read_text(encoding="utf-8"),
+        )
+
+    def test_raising_declared_floor_without_updating_constraint_fails(self):
+        pyproject = PYPROJECT.read_text(encoding="utf-8")
+        constraints = CONSTRAINTS.read_text(encoding="utf-8")
+        declared = _declared_transformers_floor(pyproject)
+        mutated = pyproject.replace(
+            f'transformers>={declared}',
+            "transformers>=99.0.0",
+            1,
+        )
+
+        with pytest.raises(AssertionError, match="below declared floor"):
+            _validate_transformers_floor_policy(mutated, constraints)
+
+    def test_declared_floor_may_catch_up_to_the_tested_constraint(self):
+        pyproject = PYPROJECT.read_text(encoding="utf-8")
+        constraints = CONSTRAINTS.read_text(encoding="utf-8")
+        declared = _declared_transformers_floor(pyproject)
+        pinned = _constraint_pin(constraints, "transformers")
+        aligned = pyproject.replace(
+            f"transformers>={declared}",
+            f"transformers>={pinned}",
+            1,
+        )
+
+        assert _validate_transformers_floor_policy(aligned, constraints) == (
+            pinned,
+            pinned,
+        )
+
+    def test_lowering_constraint_below_declared_floor_fails(self):
+        pyproject = PYPROJECT.read_text(encoding="utf-8")
+        constraints = CONSTRAINTS.read_text(encoding="utf-8")
+        pinned = _constraint_pin(constraints, "transformers")
+        mutated = constraints.replace(
+            f"\ntransformers=={pinned}\n",
+            "\ntransformers==0.0.1\n",
+            1,
+        )
+
+        with pytest.raises(AssertionError, match="below declared floor"):
+            _validate_transformers_floor_policy(pyproject, mutated)
+
+    def test_offset_requires_declared_floor_exception_explanation(self):
+        pyproject = PYPROJECT.read_text(encoding="utf-8")
+        constraints = CONSTRAINTS.read_text(encoding="utf-8")
+        declared = _declared_transformers_floor(pyproject)
+        pinned = _constraint_pin(constraints, "transformers")
+        if _version_key(pinned) == _version_key(declared):
+            _validate_transformers_floor_policy(pyproject, constraints)
+            return
+
+        without_reason = re.sub(
+            rf"^#.*{re.escape(declared)}.*"
+            r"(?:not resolvable|unresolvable|yanked).*\n?",
+            "",
+            constraints,
+            flags=re.MULTILINE | re.IGNORECASE,
+        )
+        assert without_reason != constraints, (
+            "current floor offset fixture does not contain its documented reason"
+        )
+
+        with pytest.raises(AssertionError, match="documented reason"):
+            _validate_transformers_floor_policy(pyproject, without_reason)
