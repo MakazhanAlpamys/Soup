@@ -788,7 +788,7 @@ def load_mole_for_serve(
         resolved_base,
         trust_remote_code=trust_remote_code,
         device_map="auto" if device == "cuda" else None,
-        dtype=load_dtype,
+        torch_dtype=load_dtype,
     )
     # The gate is a Linear(hidden_dim, N); a base whose hidden size differs from
     # the manifest would shape-mismatch deep in decode. Fail loud at load

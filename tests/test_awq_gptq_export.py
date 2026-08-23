@@ -270,26 +270,99 @@ class TestAwqExportFunction:
 class TestGptqExportFunction:
     """Test _export_gptq logic."""
 
-    def test_export_gptq_import_error(self, tmp_path):
+    def test_export_gptq_import_error(self, tmp_path, monkeypatch):
         """GPTQ export should print friendly error when auto-gptq not installed."""
         from typer.testing import CliRunner
 
         from soup_cli.cli import app
 
+        monkeypatch.chdir(tmp_path)
         model_dir = tmp_path / "model"
         model_dir.mkdir()
+        cal_file = tmp_path / "cal.jsonl"
+        cal_file.write_text('{"text": "sample"}\n', encoding="utf-8")
+
+        real_import = builtins.__import__
+
+        def custom_import(name, *args, **kwargs):
+            if name == "auto_gptq":
+                raise ModuleNotFoundError("No module named 'auto_gptq'", name="auto_gptq")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", custom_import)
 
         runner = CliRunner()
         result = runner.invoke(
-            app, ["export", "--model", str(model_dir), "--format", "gptq"]
+            app,
+            [
+                "export", "--model", str(model_dir), "--format", "gptq",
+                "--calibration-data", str(cal_file),
+            ],
         )
         assert result.exit_code != 0
         assert "auto-gptq" in result.output.lower() or "not installed" in result.output.lower()
+
+    def test_export_gptq_no_calibration_data_raises(self, tmp_path, capsys):
+        """GPTQ has no built-in fallback dataset: no --calibration-data must raise,
+        never fall through to model.quantize(tokenizer) (auto-gptq expects examples,
+        not a tokenizer, and rejects one with 'object is not iterable')."""
+        model_dir = tmp_path / "model"
+        model_dir.mkdir()
+
+        mock_gptq_class = MagicMock()
+        gptq_mod = MagicMock()
+        gptq_mod.AutoGPTQForCausalLM = mock_gptq_class
+        gptq_mod.BaseQuantizeConfig = MagicMock
+
+        import soup_cli.commands.export as export_mod
+
+        with mock_patch.object(
+            builtins, "__import__", side_effect=_mock_import(gptq_mock=gptq_mod)
+        ):
+            with pytest.raises(ClickExit):
+                export_mod._export_gptq(
+                    model_dir, None, None, bits=4, group_size=128,
+                    calibration_data=None,
+                )
+        mock_gptq_class.from_pretrained.assert_not_called()
+        assert "--calibration-data" in capsys.readouterr().out
+
+    def test_export_gptq_empty_calibration_file_raises(self, tmp_path):
+        """A --calibration-data file that yields zero usable samples (empty,
+        or only malformed JSON lines) must raise the same way as no file at
+        all, before the model is ever loaded."""
+        model_dir = tmp_path / "model"
+        model_dir.mkdir()
+        cal_file = tmp_path / "cal.jsonl"
+        cal_file.write_text("\n\nnot json\n", encoding="utf-8")
+
+        mock_gptq_class = MagicMock()
+        gptq_mod = MagicMock()
+        gptq_mod.AutoGPTQForCausalLM = mock_gptq_class
+        gptq_mod.BaseQuantizeConfig = MagicMock
+
+        import soup_cli.commands.export as export_mod
+
+        with mock_patch.object(
+            builtins, "__import__", side_effect=_mock_import(gptq_mock=gptq_mod)
+        ):
+            with mock_patch(
+                "soup_cli.commands.export._validate_calibration_path",
+                return_value=cal_file,
+            ):
+                with pytest.raises(ClickExit):
+                    export_mod._export_gptq(
+                        model_dir, None, None, bits=4, group_size=128,
+                        calibration_data=str(cal_file),
+                    )
+        mock_gptq_class.from_pretrained.assert_not_called()
 
     def test_export_gptq_calls_quantize(self, tmp_path):
         """GPTQ export should call AutoGPTQForCausalLM methods."""
         model_dir = tmp_path / "model"
         model_dir.mkdir()
+        cal_file = tmp_path / "cal.jsonl"
+        cal_file.write_text('{"text": "sample"}\n', encoding="utf-8")
 
         mock_model = MagicMock()
         mock_gptq_class = MagicMock()
@@ -303,6 +376,7 @@ class TestGptqExportFunction:
         import soup_cli.commands.export as export_mod
 
         out_path = tmp_path / "out"
+        out_path.mkdir()
         with mock_patch.object(
             builtins, "__import__", side_effect=_mock_import(gptq_mock=gptq_mod)
         ):
@@ -314,18 +388,24 @@ class TestGptqExportFunction:
                     "soup_cli.commands.export._validate_output_path",
                     return_value=out_path,
                 ):
-                    export_mod._export_gptq(
-                        model_dir, str(out_path), None,
-                        bits=4, group_size=128, calibration_data=None,
-                    )
-                    mock_gptq_class.from_pretrained.assert_called_once()
-                    mock_model.quantize.assert_called_once()
-                    mock_model.save_quantized.assert_called_once()
+                    with mock_patch(
+                        "soup_cli.commands.export._validate_calibration_path",
+                        return_value=cal_file,
+                    ):
+                        export_mod._export_gptq(
+                            model_dir, str(out_path), None,
+                            bits=4, group_size=128, calibration_data=str(cal_file),
+                        )
+                        mock_gptq_class.from_pretrained.assert_called_once()
+                        mock_model.quantize.assert_called_once()
+                        mock_model.save_quantized.assert_called_once()
 
     def test_export_gptq_default_output_path(self, tmp_path):
         """Default GPTQ output path should be model_name + _gptq suffix."""
         model_dir = tmp_path / "my_model"
         model_dir.mkdir()
+        cal_file = tmp_path / "cal.jsonl"
+        cal_file.write_text('{"text": "sample"}\n', encoding="utf-8")
 
         mock_model = MagicMock()
         mock_gptq_class = MagicMock()
@@ -345,13 +425,17 @@ class TestGptqExportFunction:
                 "transformers.AutoTokenizer.from_pretrained",
                 return_value=mock_tokenizer,
             ):
-                export_mod._export_gptq(
-                    model_dir, None, None, bits=4, group_size=128,
-                    calibration_data=None,
-                )
-                save_call = mock_model.save_quantized.call_args
-                output_path = save_call[0][0]
-                assert "my_model_gptq" in output_path
+                with mock_patch(
+                    "soup_cli.commands.export._validate_calibration_path",
+                    return_value=cal_file,
+                ):
+                    export_mod._export_gptq(
+                        model_dir, None, None, bits=4, group_size=128,
+                        calibration_data=str(cal_file),
+                    )
+                    save_call = mock_model.save_quantized.call_args
+                    output_path = save_call[0][0]
+                    assert "my_model_gptq" in output_path
 
     def test_export_gptq_invalid_bits(self, tmp_path):
         """Invalid bits value should raise ClickExit."""
@@ -378,6 +462,187 @@ class TestGptqExportFunction:
                 model_dir, None, None, bits=4, group_size=128,
                 calibration_data=str(Path("C:/Windows/System32/drivers/etc/hosts")),
             )
+
+
+# ─── GPTQ Shard Name Regression (issue #338, P2) ─────────────────────────
+
+
+class TestGptqStandardShardName:
+    """auto_gptq's save_quantized names its shard gptq_model-<bits>bit-<group>g.safetensors,
+    which AutoModelForCausalLM.from_pretrained does not look for."""
+
+    def test_standardize_renames_shard_to_model_safetensors(self, tmp_path):
+        from soup_cli.commands.export import _standardize_gptq_shard_name
+
+        out = tmp_path / "out"
+        out.mkdir()
+        (out / "gptq_model-4bit-128g.safetensors").write_bytes(b"weights")
+
+        _standardize_gptq_shard_name(out, bits=4, group_size=128)
+
+        assert (out / "model.safetensors").exists()
+        assert not (out / "gptq_model-4bit-128g.safetensors").exists()
+
+    def test_standardize_does_not_overwrite_existing_standard_name(self, tmp_path):
+        from soup_cli.commands.export import _standardize_gptq_shard_name
+
+        out = tmp_path / "out"
+        out.mkdir()
+        (out / "model.safetensors").write_bytes(b"already-standard")
+        (out / "gptq_model-4bit-128g.safetensors").write_bytes(b"weights")
+
+        _standardize_gptq_shard_name(out, bits=4, group_size=128)
+
+        assert (out / "model.safetensors").read_bytes() == b"already-standard"
+
+    def test_standardize_no_op_when_shard_absent(self, tmp_path):
+        from soup_cli.commands.export import _standardize_gptq_shard_name
+
+        out = tmp_path / "out"
+        out.mkdir()
+
+        _standardize_gptq_shard_name(out, bits=4, group_size=128)
+
+        assert not (out / "model.safetensors").exists()
+
+    def test_export_gptq_end_to_end_leaves_standard_name(self, tmp_path):
+        """Full _export_gptq run: save_quantized's mock writes the real auto_gptq
+        shard name, and the standard model.safetensors must exist afterward."""
+        model_dir = tmp_path / "model"
+        model_dir.mkdir()
+        cal_file = tmp_path / "cal.jsonl"
+        cal_file.write_text('{"text": "sample"}\n', encoding="utf-8")
+        out_path = tmp_path / "out"
+        out_path.mkdir()
+
+        def fake_save_quantized(path):
+            Path(path, "gptq_model-4bit-128g.safetensors").write_bytes(b"weights")
+
+        mock_model = MagicMock()
+        mock_model.save_quantized.side_effect = fake_save_quantized
+        mock_gptq_class = MagicMock()
+        mock_gptq_class.from_pretrained = MagicMock(return_value=mock_model)
+        mock_tokenizer = MagicMock()
+
+        gptq_mod = MagicMock()
+        gptq_mod.AutoGPTQForCausalLM = mock_gptq_class
+        gptq_mod.BaseQuantizeConfig = MagicMock
+
+        import soup_cli.commands.export as export_mod
+
+        with mock_patch.object(
+            builtins, "__import__", side_effect=_mock_import(gptq_mock=gptq_mod)
+        ):
+            with mock_patch(
+                "transformers.AutoTokenizer.from_pretrained",
+                return_value=mock_tokenizer,
+            ):
+                with mock_patch(
+                    "soup_cli.commands.export._validate_output_path",
+                    return_value=out_path,
+                ):
+                    with mock_patch(
+                        "soup_cli.commands.export._validate_calibration_path",
+                        return_value=cal_file,
+                    ):
+                        export_mod._export_gptq(
+                            model_dir, str(out_path), None,
+                            bits=4, group_size=128, calibration_data=str(cal_file),
+                        )
+
+        assert (out_path / "model.safetensors").exists()
+        assert not (out_path / "gptq_model-4bit-128g.safetensors").exists()
+
+
+# ─── Import-Error Masking Regression (issue #338, ImportError swallowing) ──
+
+
+class TestAwqGptqImportErrorSurfacesRealCause:
+    """except ImportError must not print a fixed 'not installed' string when the
+    package itself imports but a transitive import inside it fails for an
+    unrelated reason, which used to discard the real exception."""
+
+    def test_gptq_transitive_import_failure_message(self, tmp_path, capsys):
+        model_dir = tmp_path / "model"
+        model_dir.mkdir()
+        cal_file = tmp_path / "cal.jsonl"
+        cal_file.write_text('{"text": "sample"}\n', encoding="utf-8")
+
+        real_import = builtins.__import__
+
+        def custom_import(name, *args, **kwargs):
+            if name == "auto_gptq":
+                raise ImportError("libfoo.so: cannot open shared object file", name="libfoo")
+            return real_import(name, *args, **kwargs)
+
+        import soup_cli.commands.export as export_mod
+
+        with mock_patch.object(builtins, "__import__", side_effect=custom_import):
+            with mock_patch(
+                "soup_cli.commands.export._validate_calibration_path",
+                return_value=cal_file,
+            ):
+                with pytest.raises(ClickExit):
+                    export_mod._export_gptq(
+                        model_dir, None, None, bits=4, group_size=128,
+                        calibration_data=str(cal_file),
+                    )
+        output = capsys.readouterr().out
+        assert "libfoo.so" in output
+        assert "not installed" not in output.lower()
+
+    def test_awq_transitive_import_failure_message(self, tmp_path, capsys):
+        model_dir = tmp_path / "model"
+        model_dir.mkdir()
+
+        real_import = builtins.__import__
+
+        def custom_import(name, *args, **kwargs):
+            if name == "awq":
+                raise ImportError("libbar.so: cannot open shared object file", name="libbar")
+            return real_import(name, *args, **kwargs)
+
+        import soup_cli.commands.export as export_mod
+
+        with mock_patch.object(builtins, "__import__", side_effect=custom_import):
+            with pytest.raises(ClickExit):
+                export_mod._export_awq(
+                    model_dir, None, None, bits=4, group_size=128,
+                    calibration_data=None,
+                )
+        output = capsys.readouterr().out
+        assert "libbar.so" in output
+        assert "not installed" not in output.lower()
+
+    def test_gptq_real_missing_package_still_shows_install_hint(self, tmp_path, capsys):
+        """When auto-gptq is genuinely absent (exc.name == 'auto_gptq'), the
+        friendly install hint must still show; this must not regress."""
+        model_dir = tmp_path / "model"
+        model_dir.mkdir()
+        cal_file = tmp_path / "cal.jsonl"
+        cal_file.write_text('{"text": "sample"}\n', encoding="utf-8")
+
+        real_import = builtins.__import__
+
+        def custom_import(name, *args, **kwargs):
+            if name == "auto_gptq":
+                raise ModuleNotFoundError("No module named 'auto_gptq'", name="auto_gptq")
+            return real_import(name, *args, **kwargs)
+
+        import soup_cli.commands.export as export_mod
+
+        with mock_patch.object(builtins, "__import__", side_effect=custom_import):
+            with mock_patch(
+                "soup_cli.commands.export._validate_calibration_path",
+                return_value=cal_file,
+            ):
+                with pytest.raises(ClickExit):
+                    export_mod._export_gptq(
+                        model_dir, None, None, bits=4, group_size=128,
+                        calibration_data=str(cal_file),
+                    )
+        output = capsys.readouterr().out
+        assert "not installed" in output.lower()
 
 
 # ─── CLI Integration Tests ───────────────────────────────────────────────

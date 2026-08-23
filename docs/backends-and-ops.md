@@ -636,7 +636,17 @@ soup monitor --refresh 0.5  # faster polling
 soup monitor --once         # single snapshot, no Live panel
 ```
 
-Calls `nvidia-smi` via list-args subprocess (no shell), 5s timeout, list of `GpuSample` rows rendered into a Rich table. Apple Silicon prints a yellow advisory pointing at Activity Monitor / `powermetrics`; native Apple Silicon support lands in v0.44.1.
+On NVIDIA systems, Soup calls `nvidia-smi` via a list-args subprocess (no shell)
+with a 5-second timeout. On Apple Silicon, it reads GPU utilization and power
+from `/usr/bin/powermetrics --samplers gpu_power --format plist`. Run `sudo -v`
+in a terminal before starting the monitor: Soup uses `sudo -n`, so it can reuse
+the cached credential without ever prompting for or reading a password. If the
+credential or utility is unavailable, the command exits with an Activity
+Monitor fallback rather than reporting an NVIDIA error.
+
+macOS does not expose NVIDIA-style dedicated VRAM, memory-utilization, or GPU
+temperature fields through this sampler. Those columns therefore remain `—`
+instead of guessing values from unified memory or unrelated thermal sensors.
 
 
 ## Soup Fetch — Bundled Examples

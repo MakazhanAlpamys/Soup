@@ -23,6 +23,7 @@ from soup_cli.utils.gpu import (
     estimate_batch_size,
     model_size_from_name,
     resolve_device_map,
+    resolve_frozen_base_load_dtype,
 )
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 
@@ -263,6 +264,7 @@ class BCOTrainerWrapper:
         dev_map = resolve_device_map(self.device)
         model_kwargs = {
             "trust_remote_code": self._trust_remote_code, "device_map": dev_map,
+            "torch_dtype": resolve_frozen_base_load_dtype(self.device),
         }
         if quant_config_obj is not None:
             model_kwargs["quantization_config"] = quant_config_obj

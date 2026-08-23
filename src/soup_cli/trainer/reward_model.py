@@ -19,6 +19,7 @@ from soup_cli.utils.gpu import (
     estimate_batch_size,
     model_size_from_name,
     resolve_device_map,
+    resolve_frozen_base_load_dtype,
 )
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 
@@ -210,6 +211,7 @@ class RewardModelTrainerWrapper:
             "trust_remote_code": self._trust_remote_code,
             "device_map": dev_map,
             "num_labels": 1,
+            "torch_dtype": resolve_frozen_base_load_dtype(self.device),
         }
         if quant_config_obj is not None:
             model_kwargs["quantization_config"] = quant_config_obj
@@ -243,6 +245,16 @@ class RewardModelTrainerWrapper:
         apply_pre_lora_patches(self.model, cfg.base)
         self.model = get_peft_model(self.model, lora_config)
         apply_post_lora_patches(self.model)
+
+        # #491 review: get_peft_model's adapter autocast (default
+        # autocast_adapter_dtype=True) upcasts lora_A/lora_B to fp32 but not the
+        # SEQ_CLS head's auto-added modules_to_save wrapper, so the reward head
+        # would otherwise train in the frozen base's load dtype (e.g. bf16, no
+        # fp32 master weights). Already-fp32 adapter params are a no-op here.
+        import torch
+        for param in self.model.parameters():
+            if param.requires_grad and param.dtype != torch.float32:
+                param.data = param.data.to(torch.float32)
 
         # v0.35.0 #60 — multi-trainer wiring of v0.28.0 speed/memory features.
         # Reward model is a regression head; cut_ce no-ops gracefully.

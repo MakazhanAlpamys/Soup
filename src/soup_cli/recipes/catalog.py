@@ -2283,12 +2283,10 @@ output: ./output
         task="sft",
         size="256M",
         tags=("smolvlm", "vision", "multimodal", "vlm", "sft", "tiny", "edge"),
-        description="SmolVLM 256M vision SFT (llava format) — a tiny VLM. NOTE: "
-        "SmolVLM uses an Idefics3 processor. The processor pad_token blocker is "
-        "fixed (#302 — the nested tokenizer's token surface is mirrored onto the "
-        "processor), so setup + tokenization now run; a full training STEP still "
-        "needs Idefics3-aware vision collation (pixel_values + image-token "
-        "expansion) — parse-tested for now, tracked in #302. target_modules "
+        description="SmolVLM 256M vision SFT (llava format) — a tiny VLM. "
+        "SmolVLM uses an Idefics3 processor; Soup mirrors its nested tokenizer "
+        "surface and performs processor-aware vision collation so image-token "
+        "expansion and pixel_values reach the model (#302). target_modules are "
         "pinned to q_proj/v_proj (auto cannot infer them for Idefics3).",
         yaml_str="""\
 base: HuggingFaceTB/SmolVLM-256M-Instruct

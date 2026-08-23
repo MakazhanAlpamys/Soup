@@ -150,6 +150,23 @@ class TestCrossTokenizerAcceptanceKernel:
         assert count_accepted_spans(draft, target) == 4
         assert compute_acceptance_spans(draft, target) == 1.0
 
+    def test_boundary_merge_bias_is_pinned(self):
+        """Regression test for #462: a merged prompt/generation boundary token
+        costs exactly 1/n_gen, always downward."""
+        from soup_cli.utils.draft import compute_acceptance_spans, count_accepted_spans
+
+        target = ["c", "d", "e", "f"]
+        # control: clean boundary
+        draft_clean = ["c", "d", "e", "f"]
+        assert count_accepted_spans(draft_clean, target) == 4
+        assert compute_acceptance_spans(draft_clean, target) == 1.0
+
+        # merged boundary: the first generated character merges with the prompt tail
+        # and is excluded from the draft's proposal list.
+        draft_merged = ["d", "e", "f"]
+        assert count_accepted_spans(draft_merged, target) == 3
+        assert compute_acceptance_spans(draft_merged, target) == 0.75
+
     def test_repeated_substrings_and_interrupted_spans(self):
         """Verify repeated words and interrupted spans do not produce false positives."""
         from soup_cli.utils.draft import compute_acceptance_spans, count_accepted_spans
