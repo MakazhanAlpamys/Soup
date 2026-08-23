@@ -11,8 +11,8 @@ installs inside the declared range — exactly what #471 nearly shipped.
 comments and ``.github/constraints/transformers-floor.txt``). Raising Soup's
 declared floor is a dependency-policy call, not something this suite does.
 Until that decision lands, the accepted #478 fallback is a static guard: no
-production ``AutoModel*.from_pretrained`` / ``from_config`` call site may pass
-``dtype=``.
+production model ``from_pretrained`` / ``from_config`` call site governed by
+the Transformers dtype contract may pass ``dtype=``.
 
 Unsloth's ``FastLanguageModel.from_pretrained(..., dtype=)`` and Soup wrapper
 kwargs that are not Transformers load APIs are out of scope.
@@ -34,7 +34,11 @@ _LOAD_METHODS = frozenset({"from_pretrained", "from_config"})
 _MODEL_LOAD_CLASS_SUFFIXES = (
     "ForCausalLM",
     "ForConditionalGeneration",
+    "ForImageTextToText",
+    "ForMaskedLM",
     "ForSequenceClassification",
+    "ForSpeechSeq2Seq",
+    "ForTokenClassification",
 )
 
 
@@ -49,8 +53,8 @@ def _attr_parts(node: ast.AST) -> list[str]:
     return list(reversed(parts))
 
 
-def _is_transformers_model_load(call: ast.Call) -> bool:
-    """True for supported Transformers model factory and concrete-class loads."""
+def _is_dtype_guarded_model_load(call: ast.Call) -> bool:
+    """True for model loads governed by the Transformers dtype contract."""
     parts = _attr_parts(call.func)
     if len(parts) < 2:
         return False
@@ -65,11 +69,11 @@ def _is_transformers_model_load(call: ast.Call) -> bool:
 
 
 def find_post_floor_dtype_kwargs(source: str, *, filename: str = "<string>") -> list[str]:
-    """Return ``file:line`` hits for ``dtype=`` on AutoModel load/config calls."""
+    """Return ``file:line`` hits for ``dtype=`` on guarded model load/config calls."""
     tree = ast.parse(source, filename=filename)
     hits: list[str] = []
     for node in ast.walk(tree):
-        if not isinstance(node, ast.Call) or not _is_transformers_model_load(node):
+        if not isinstance(node, ast.Call) or not _is_dtype_guarded_model_load(node):
             continue
         for kw in node.keywords:
             if kw.arg == "dtype":
@@ -128,6 +132,38 @@ class TestTransformersFloorDtypeGuard:
         )
         hits = find_post_floor_dtype_kwargs(bad, filename="whisper.py")
         assert hits == ["whisper.py:2"]
+
+    def test_scanner_flags_concrete_speech_seq2seq_class(self):
+        bad = (
+            "from transformers import WhisperForSpeechSeq2Seq\n"
+            "WhisperForSpeechSeq2Seq.from_pretrained('x', dtype='auto')\n"
+        )
+        hits = find_post_floor_dtype_kwargs(bad, filename="whisper.py")
+        assert hits == ["whisper.py:2"]
+
+    def test_scanner_flags_concrete_image_text_to_text_class(self):
+        bad = (
+            "from transformers import Qwen2VLForImageTextToText\n"
+            "Qwen2VLForImageTextToText.from_config(cfg, dtype='auto')\n"
+        )
+        hits = find_post_floor_dtype_kwargs(bad, filename="vision.py")
+        assert hits == ["vision.py:2"]
+
+    def test_scanner_flags_concrete_token_classification_class(self):
+        bad = (
+            "from transformers import BertForTokenClassification\n"
+            "BertForTokenClassification.from_pretrained('x', dtype='auto')\n"
+        )
+        hits = find_post_floor_dtype_kwargs(bad, filename="tokens.py")
+        assert hits == ["tokens.py:2"]
+
+    def test_scanner_flags_concrete_masked_lm_class(self):
+        bad = (
+            "from transformers import BertForMaskedLM\n"
+            "BertForMaskedLM.from_config(cfg, dtype='auto')\n"
+        )
+        hits = find_post_floor_dtype_kwargs(bad, filename="masked_lm.py")
+        assert hits == ["masked_lm.py:2"]
 
     def test_scanner_allows_torch_dtype(self):
         good = (
