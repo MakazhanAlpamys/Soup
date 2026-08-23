@@ -950,7 +950,7 @@ class TestAsrRecipes:
         assert cfg.task == "sft"
         assert cfg.modality == "vision"
 
-    def test_catalog_size_is_146(self):
+    def test_catalog_size_is_147(self):
         from soup_cli.recipes.catalog import RECIPES
 
-        assert len(RECIPES) == 146
+        assert len(RECIPES) == 147

@@ -48,7 +48,7 @@ def search_recipes(
 
 
 # ---------------------------------------------------------------------------
-# Recipe catalog (146 recipes)
+# Recipe catalog (147 recipes)
 # ---------------------------------------------------------------------------
 
 RECIPES: Dict[str, RecipeMeta] = {
@@ -4111,6 +4111,36 @@ training:
   quantization: 4bit
   moe_lora: true
   moe_aux_loss_coeff: 0.01
+
+output: ./output
+""",
+    ),
+    "qwen3.8-27b-sft": RecipeMeta(
+        model="Qwen/Qwen3.8-27B",
+        task="sft",
+        size="27B",
+        tags=("qwen", "qwen3.8", "sft", "text", "large", "deepspeed"),
+        description="Qwen 3.8 27B text-only SFT (Apache-2.0) with DeepSpeed ZeRO-2",
+        yaml_str="""\
+base: Qwen/Qwen3.8-27B
+task: sft
+modality: text
+
+data:
+  train: ./data/train.jsonl
+  format: auto
+  max_length: 4096
+
+training:
+  epochs: 3
+  lr: 1e-5
+  batch_size: auto
+  gradient_accumulation_steps: 8
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  quantization: 4bit
 
 output: ./output
 """,

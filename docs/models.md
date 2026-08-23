@@ -16,7 +16,7 @@ Soup works with **any** of the **340,000+** text-generation models on [HuggingFa
 | **Llama 3.x** | Llama-3.1-8B-Instruct, Llama-3.3-70B-Instruct | 1B–70B | Chat, instruction following |
 | **Llama 3.2 Vision** | Llama-3.2-11B-Vision-Instruct, Llama-3.2-90B-Vision | 11B–90B | Image understanding |
 | **Gemma 3** | Gemma-3-4B-IT, Gemma-3-9B-IT, Gemma-3-27B-IT | 4B–27B | Efficient, multilingual |
-| **Qwen 3.5 / 3.6** | Qwen3.5-0.8B…397B-A17B, Qwen3.6-27B, Qwen3.6-35B-A3B | 0.8B–397B | 262K context, native vision, MoE |
+| **Qwen 3.5 / 3.6 / 3.8** | Qwen3.5-0.8B…397B-A17B, Qwen3.6-27B/35B-A3B, Qwen3.8-27B | 0.8B–397B | 262K context, native vision, MoE |
 | **Qwen 3** | Qwen3-8B, Qwen3-14B, Qwen3-32B, Qwen3-235B-A22B | 0.6B–235B | Reasoning, code, MoE |
 | **Qwen 2.5** | Qwen2.5-7B-Instruct, Qwen2.5-Coder-32B-Instruct | 0.5B–72B | Code, math |
 | **DeepSeek** | DeepSeek-R1-Distill-Llama-8B, DeepSeek-V3-0324, DeepSeek-V4-Flash/Pro | 1.5B–1.6T | Reasoning (GRPO), code, MoE |
@@ -32,13 +32,12 @@ Soup works with **any** of the **340,000+** text-generation models on [HuggingFa
 | **InternLM 3** | InternLM3-8B-Instruct | 8B | Chinese + English |
 | **Falcon** | Falcon-11B, Falcon-40B-Instruct | 7B–180B | Open-weight |
 
-Qwen3.5 and Qwen3.6 checkpoints advertise a multimodal conditional-generation
+Qwen3.5, Qwen3.6, and Qwen3.8 checkpoints advertise a multimodal conditional-generation
 architecture on the Hub, but Soup's catalog recipes are deliberately text-only.
 Their explicit `modality: text` selects `AutoModelForCausalLM`, which instantiates the
 language decoder without the visual tower. This is appropriate for text-only SFT,
 pre-training, and GRPO data; it is not a full multimodal fine-tune. The Transformers
-backend cannot load `qwen3_5` under Soup's current `<5.0.0` dependency cap; enabling
-that backend requires a separately validated Transformers 5 migration.
+backend requires Transformers 5.12.1 or newer for the `qwen3_5` architecture.
 
 ### Vision Models (with `modality: vision`)
 

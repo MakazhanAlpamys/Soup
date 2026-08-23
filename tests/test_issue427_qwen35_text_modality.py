@@ -22,12 +22,14 @@ EXPECTED_QWEN35_TEXT_RECIPES = {
     # Qwen3.6 exposes the same qwen3_5 / qwen3_5_moe architecture on the Hub.
     "qwen3.6-27b-sft",
     "qwen3.6-35b-a3b-sft",
+    # Qwen3.8-27B exposes the same qwen3_5 text tower.
+    "qwen3.8-27b-sft",
 }
 
 
 def _qwen35_family_recipe_names() -> tuple[str, ...]:
     """Select every catalog recipe covered by the measured architecture decision."""
-    prefixes = ("Qwen/Qwen3.5-", "Qwen/Qwen3.6-")
+    prefixes = ("Qwen/Qwen3.5-", "Qwen/Qwen3.6-", "Qwen/Qwen3.8-")
     return tuple(name for name, recipe in RECIPES.items() if recipe.model.startswith(prefixes))
 
 
