@@ -304,9 +304,9 @@ def _make_vision_trainer(
 
     kwargs = dict(trainer_kwargs)
     kwargs["data_collator"] = VisionLanguageDataCollator(processor, max_length)
-    # Transformers renamed Trainer(tokenizer=...) to processing_class. Soup's
-    # declared floor predates the rename, so keep this narrow compatibility
-    # shim at the construction boundary.
+    # Transformers renamed Trainer(tokenizer=...) to processing_class. Keep a
+    # narrow capability shim for downstream Trainer subclasses that still
+    # expose the legacy constructor name.
     if "processing_class" not in inspect.signature(Trainer.__init__).parameters:
         kwargs["tokenizer"] = kwargs.pop("processing_class")
     return Trainer(**kwargs)
@@ -1387,9 +1387,11 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             )
         else:
             # LoRA — with MoE-aware target modules if moe_lora is enabled
-            target_modules = tcfg.lora.target_modules
-            if target_modules == "auto":
-                target_modules = None
+            from soup_cli.utils.peft_wiring import resolve_lora_target_modules
+
+            target_modules = resolve_lora_target_modules(
+                self.model, tcfg.lora.target_modules
+            )
 
             if tcfg.moe_lora and is_moe:
                 moe_targets = get_moe_target_modules(self.model)
@@ -1481,7 +1483,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
     def _setup_vision_transformers(self, cfg, tcfg):
         """Load vision-language model via transformers (LLaMA-Vision, Qwen2-VL, etc.)."""
         from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
-        from transformers import AutoModelForVision2Seq, AutoProcessor
+        from transformers import AutoModelForImageTextToText, AutoProcessor
 
         console.print(f"[dim]Loading vision processor: {cfg.base}[/]")
         self.processor = AutoProcessor.from_pretrained(
@@ -1524,7 +1526,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         if quant_config_obj is not None:
             model_kwargs["quantization_config"] = quant_config_obj
 
-        self.model = AutoModelForVision2Seq.from_pretrained(cfg.base, **model_kwargs)
+        self.model = AutoModelForImageTextToText.from_pretrained(cfg.base, **model_kwargs)
         from soup_cli.utils.data_pipeline import apply_vocab_expansion
 
         apply_vocab_expansion(
@@ -1536,9 +1538,9 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             self.model = prepare_model_for_kbit_training(self.model)
 
         # LoRA — target language model layers only
-        target_modules = tcfg.lora.target_modules
-        if target_modules == "auto":
-            target_modules = None
+        from soup_cli.utils.peft_wiring import resolve_lora_target_modules
+
+        target_modules = resolve_lora_target_modules(self.model, tcfg.lora.target_modules)
 
         lora_config = LoraConfig(
             r=tcfg.lora.r,
@@ -1652,9 +1654,9 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             self.model = prepare_model_for_kbit_training(self.model)
 
         # LoRA — target language model layers only
-        target_modules = tcfg.lora.target_modules
-        if target_modules == "auto":
-            target_modules = None
+        from soup_cli.utils.peft_wiring import resolve_lora_target_modules
+
+        target_modules = resolve_lora_target_modules(self.model, tcfg.lora.target_modules)
 
         lora_config = LoraConfig(
             r=tcfg.lora.r,

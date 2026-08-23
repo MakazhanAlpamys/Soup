@@ -239,9 +239,9 @@ class DistillTrainerWrapper:
         )
 
         # LoRA on the student — bracket with v0.40.6 #67 surgical PEFT patches.
-        target_modules = tcfg.lora.target_modules
-        if target_modules == "auto":
-            target_modules = None
+        from soup_cli.utils.peft_wiring import resolve_lora_target_modules
+
+        target_modules = resolve_lora_target_modules(self.model, tcfg.lora.target_modules)
         lora_config = LoraConfig(
             r=tcfg.lora.r,
             lora_alpha=tcfg.lora.alpha,
@@ -669,7 +669,7 @@ class DistillTrainerWrapper:
             args=args,
             train_dataset=train_ds,
             eval_dataset=eval_ds,
-            tokenizer=self.tokenizer,
+            processing_class=self.tokenizer,
             data_collator=DataCollatorForSeq2Seq(
                 tokenizer=self.tokenizer,
                 label_pad_token_id=-100,

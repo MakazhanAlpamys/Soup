@@ -314,9 +314,9 @@ class PretrainTrainerWrapper:
         apply_block_expansion_if_configured(self.model, tcfg, console)
 
         # LoRA — with MoE-aware target modules if moe_lora is enabled
-        target_modules = tcfg.lora.target_modules
-        if target_modules == "auto":
-            target_modules = None
+        from soup_cli.utils.peft_wiring import resolve_lora_target_modules
+
+        target_modules = resolve_lora_target_modules(self.model, tcfg.lora.target_modules)
 
         if tcfg.moe_lora and is_moe:
             moe_targets = get_moe_target_modules(self.model)

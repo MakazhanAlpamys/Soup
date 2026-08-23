@@ -266,11 +266,12 @@ class ClassifierTrainerWrapper:
             from soup_cli.utils.peft_wiring import (
                 apply_post_lora_patches,
                 apply_pre_lora_patches,
+                resolve_lora_target_modules,
             )
 
-            target_modules = tcfg.lora.target_modules
-            if target_modules == "auto":
-                target_modules = None
+            target_modules = resolve_lora_target_modules(
+                self.model, tcfg.lora.target_modules
+            )
             lora_config = LoraConfig(
                 r=tcfg.lora.r,
                 lora_alpha=tcfg.lora.alpha,
@@ -364,7 +365,7 @@ class ClassifierTrainerWrapper:
             args=args,
             train_dataset=train_ds,
             eval_dataset=eval_ds,
-            tokenizer=self.tokenizer,
+            processing_class=self.tokenizer,
             data_collator=DataCollatorWithPadding(tokenizer=self.tokenizer),
         )
 

@@ -2,7 +2,7 @@
 
 ``task='online_dpo'`` (v0.71.31) adapts to the installed TRL:
 
-* **trl 0.19.x** — pairwise ``judge=`` (a ``BasePairwiseJudge``),
+* **trl <1** — pairwise ``judge=`` (a ``BasePairwiseJudge``),
 * **trl 1.x** — pointwise ``reward_funcs=[...]`` (pairwise judges were removed;
   ``OnlineDPOTrainer`` moved to ``trl.experimental.online_dpo``).
 
@@ -15,7 +15,7 @@ the reward signal is actually applied.
 Version-agnostic by design: the wrapper adapts the synthetic length-preferring
 evaluator to whichever API the installed trl exposes, so ``pytest -m smoke``
 exercises the ``reward_funcs`` path under trl 1.x and the ``judge`` path under
-trl 0.19.x. Marked ``smoke`` (it runs a real training loop), so it is excluded
+trl <1. Marked ``smoke`` (it runs a real training loop), so it is excluded
 from the default fast suite and run explicitly via ``pytest -m smoke``.
 
 Executed live on trl 0.19.1 + torch 2.5.1 (SmolLM2-scale tiny-random-gpt2, CPU):
@@ -38,7 +38,7 @@ class _LengthJudge:
     """Synthetic length-preferring Soup evaluator (prefers the LONGER response).
 
     Exposes BOTH shapes so the wrapper can adapt it to either trl API:
-    ``compare_pair`` (pairwise, trl 0.19.x) and ``evaluate`` (pointwise, trl 1.x
+    ``compare_pair`` (pairwise, trl <1) and ``evaluate`` (pointwise, trl 1.x
     reward-func path).
     """
 
@@ -65,7 +65,7 @@ class TestOnlineDpoTrainLogsReward:
         """A few real online-DPO steps must log a rewards/* metric.
 
         On trl 1.x this drives the reward_funcs path (the issue's gap); on trl
-        0.19.x it drives the judge path. Either way the reward signal is applied
+        <1 it drives the judge path. Either way the reward signal is applied
         and TRL logs rewards/*.
         """
         import soup_cli.trainer.online_dpo as od
@@ -117,12 +117,12 @@ class TestOnlineDpoTrainLogsReward:
     def test_reward_funcs_path_on_trl_1x(self, tmp_path, monkeypatch):
         """On trl 1.x the build must use the reward_funcs= API (not judge=).
 
-        Skips on trl 0.19.x (pairwise judges present). Complements the train
+        Skips on trl <1 (pairwise judges present). Complements the train
         smoke: it pins that the version the reward_funcs path targets actually
         routes through reward_funcs, so the smoke above is exercising that path.
         """
         if _TRL_HAS_JUDGES:
-            pytest.skip("trl 0.19.x (pairwise judge API) — reward_funcs path is trl 1.x")
+            pytest.skip("trl <1 (pairwise judge API) — reward_funcs path is trl 1.x")
 
         import soup_cli.trainer.online_dpo as od
         from soup_cli.config.loader import load_config_from_string

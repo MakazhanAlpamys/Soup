@@ -90,6 +90,49 @@ class TestAdapterMaterializationPostcondition:
         assert_trainable_adapters_materialized(_Model())
 
 
+class TestFrozenAdapterCopyMaterialization:
+    def test_meta_reference_is_copied_from_the_real_policy_adapter(self):
+        import torch
+        import torch.nn as nn
+
+        from soup_cli.utils.layer_stream_runtime import materialize_meta_adapter_copy
+
+        class _Model(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.lora_A = nn.ModuleDict(
+                    {
+                        "default": nn.Linear(2, 2, bias=False),
+                        "ref": nn.Linear(2, 2, bias=False, device="meta"),
+                    }
+                )
+
+        model = _Model()
+        expected = model.lora_A["default"].weight.detach().clone()
+        assert materialize_meta_adapter_copy(model) == 1
+        assert not model.lora_A["ref"].weight.is_meta
+        assert model.lora_A["ref"].weight.requires_grad is False
+        assert torch.equal(model.lora_A["ref"].weight, expected)
+
+    def test_meta_source_is_refused_instead_of_fabricating_a_reference(self):
+        import torch.nn as nn
+
+        from soup_cli.utils.layer_stream_runtime import materialize_meta_adapter_copy
+
+        class _Model(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.lora_A = nn.ModuleDict(
+                    {
+                        "default": nn.Linear(2, 2, bias=False, device="meta"),
+                        "ref": nn.Linear(2, 2, bias=False, device="meta"),
+                    }
+                )
+
+        with pytest.raises(RuntimeError, match="source parameter.*still on meta"):
+            materialize_meta_adapter_copy(_Model())
+
+
 def test_streamed_build_refuses_a_materializer_that_skips_a_meta_adapter(monkeypatch):
     """Negative control: stub the capability and force the failure state.
 

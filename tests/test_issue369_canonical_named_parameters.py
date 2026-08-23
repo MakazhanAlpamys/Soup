@@ -191,7 +191,15 @@ class TestCanonicalNamedParameters:
 
         streamed_names = {name for name, _ in canonical_named_parameters(wrapper.model)}
         resident_names = {name for name, _ in resident_peft.named_parameters()}
-        assert streamed_names == resident_names
+        # TRL 0.29 snapshots a pre-existing adapter as ``ref`` so DPO can use
+        # its initial policy as the reference without constructing a second
+        # model. Compare the policy adapter directly, then prove every extra
+        # reference tensor maps back to that same resident adapter.
+        policy_names = {name for name in streamed_names if ".ref." not in name}
+        reference_names = streamed_names - policy_names
+        assert policy_names == resident_names
+        assert reference_names
+        assert {name.replace(".ref.", ".default.") for name in reference_names} <= resident_names
 
 
 class TestAssertCanonicalParametersIntersect:

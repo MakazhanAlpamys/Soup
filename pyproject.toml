@@ -54,15 +54,20 @@ dependencies = [
 
 [project.optional-dependencies]
 # v0.71.0 — heavy training stack. `pip install 'soup-cli[train]'` to fine-tune.
-# These were core dependencies through v0.70.0; pins are unchanged.
+# These were core dependencies through v0.70.0.
 train = [
     "torch>=2.0.0",
-    "transformers>=4.36.0,<5.0.0",
-    "peft>=0.7.0",
-    # Capped below 0.29. #326 raised this from `<0.27` after migrating the six
-    # preference trainers (bco, dpo, ipo, kto, orpo, simpo) off the two trl APIs
-    # that moved. The cap is no longer set by those trainers at all — see the
-    # 0.29 note at the bottom, which is about `online_dpo`.
+    # Qwen3.5 classes first ship in Transformers 5.2, but 5.12.1 is the first
+    # validated floor where an outer `qwen3_5` config selects the text-only
+    # Qwen3_5ForCausalLM correctly. The v5 range also makes `[train,mlx]`
+    # resolvable because mlx-lm requires Transformers 5.
+    "transformers>=5.12.1,<6.0.0",
+    # 0.20 is the validated Transformers 5 adapter floor. It still needs Soup's
+    # explicit qwen3_5_text target policy below the automatic PEFT mapping layer.
+    "peft>=0.20.0,<1.0.0",
+    # #326 migrated the six preference trainers (bco, dpo, ipo, kto, orpo,
+    # simpo) across TRL's staged API moves using capability probes instead of
+    # version checks. That lets the supported floor move to 0.29 here.
     #
     # trl removed `max_prompt_length` from the preference configs in STAGES
     # rather than in one release — which is why a single spot-check gives the
@@ -89,30 +94,20 @@ train = [
     # they live on under `trl.experimental.<algo>` — so those three trainers now
     # fall back to that path when the public import is gone.
     #
-    # WHY THE CAP IS 0.29 AND NOT HIGHER: `soup train --task online_dpo` is
-    # broken on 0.29.x, and the cause is not in these trainers. trl 0.29 moved
-    # `BasePairwiseJudge` to `trl.experimental.judges` while still accepting
-    # `judge=`, so the wrapper correctly selects the judge path and then
-    # `eval/judge.py::_base_pairwise_judge_cls` cannot import the base class.
-    # trl 1.x drops `judge=` entirely, so the wrapper falls back to
-    # `reward_funcs=` and online_dpo works again — measured: all nine tasks build
-    # on 1.9.2, and the six preference tasks train there. Raising the cap past
-    # 0.29 therefore needs (a) a `trl.experimental.judges` fallback in
-    # eval/judge.py and (b) validation of the trl surfaces this bump did not
-    # exercise (serve, GRPO variants, PPO with a real reward model). Shipping
-    # against a release nobody has validated is not a substitute for that.
+    # Transformers 5 changed a private availability helper that trl<=0.28
+    # imported, which makes absent optional packages look present and prevents
+    # DPO/GRPO modules from importing (#503). trl 0.29 vendors its own probe and
+    # is the first compatible release. It also moves BasePairwiseJudge to
+    # `trl.experimental.judges`; Soup resolves that capability from either home.
+    # Keep the upper bound below trl 1 because 1.x removes the pairwise `judge=`
+    # API and is a separate online-DPO migration.
     #
     # The underlying bug was latent, not new: the trl imports live inside
     # `setup()`, which no test had ever called on those wrappers, so CI stayed
     # green while anyone pip-installing got a broken install. v0.72.4's
     # end-to-end preference tests are what surfaced it.
     #
-    # The floor is 0.14.0, not 0.7.0: `setup()` imports GRPOTrainer
-    # unconditionally and trl first exports it at 0.14.0 (OnlineDPO / KTO / BCO /
-    # BasePairwiseJudge arrive at 0.11.0; trl 0.7.0 has none of them). Resolvers
-    # normally pick the newest allowed version, so the impossible floor only bit
-    # under a constraints file or anyone reading the metadata as a support claim.
-    "trl>=0.14.0,<0.29",
+    "trl>=0.29.0,<1.0.0",
     "datasets>=2.14.0",
     "bitsandbytes>=0.41.0",
     "accelerate>=0.25.0",
@@ -151,7 +146,7 @@ mlx = [
     "mlx-lm>=0.31.3",
     # mlx-lm imports transformers at runtime; keep the standalone contract from
     # depending on that transitive requirement remaining undeclared here.
-    "transformers>=5.0.0",
+    "transformers>=5.12.1,<6.0.0",
 ]
 cce = ["cut-cross-entropy>=24.10.0"]
 tui = ["textual>=0.50.0"]

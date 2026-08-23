@@ -136,13 +136,7 @@ class TestDiffModelLoading:
     """Test diff command uses Transformers kwargs compatible with the floor."""
 
     def test_load_model_uses_torch_dtype(self):
-        """_load_model must pass torch_dtype= (not the >=4.56-only dtype=).
-
-        dtype= is the rename of torch_dtype= at transformers>=4.56. Soup declares
-        transformers>=4.36.0,<5.0.0; using dtype= TypeErrors on older installs
-        inside that range (#478 / #471). torch_dtype= remains accepted (with a
-        deprecation warning) on current 4.57.x.
-        """
+        """_load_model keeps the guarded Transformers load-kwarg policy (#478)."""
         import inspect
 
         from soup_cli.commands.diff import _load_model

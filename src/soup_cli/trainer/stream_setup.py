@@ -453,9 +453,9 @@ class StreamingSetupMixin:
                     f"[dim]expandable_segments allocator hint not enabled: {why_not}[/]"
                 )
 
-        target_modules = tcfg.lora.target_modules
-        if target_modules == "auto":
-            target_modules = None
+        from soup_cli.utils.peft_wiring import resolve_lora_target_modules
+
+        target_modules = resolve_lora_target_modules(model_config, tcfg.lora.target_modules)
         if tcfg.moe_lora and is_moe and moe_targets:
             target_modules = moe_targets
             console.print(

@@ -82,11 +82,12 @@ Fine-tune on M1-M4 Macs via Apple's [MLX](https://github.com/ml-explore/mlx) fra
 pip install "soup-cli[mlx]"
 ```
 
-For SFT with local JSONL, JSON, or CSV data, `[mlx]` is a standalone install:
-do not add `[train]`. The latter is the PyTorch/TRL stack used by the
-Transformers backend. A Hugging Face `datasets` source or streaming dataset
-still needs `datasets` because that data source owns the dependency; the local
-file path below does not.
+For SFT with local JSONL, JSON, or CSV data, `[mlx]` is sufficient on its own.
+It can also be installed with `[train]` when the same environment needs the
+PyTorch/TRL Transformers backend: both extras now share the supported
+`transformers>=5.12.1,<6` range (#502/#503). A Hugging Face `datasets` source or
+streaming dataset still needs `datasets` because that data source owns the
+dependency; the local file path below does not.
 
 `detect_device()` and `get_gpu_info()` recognise Apple Silicon when
 `backend: mlx` is set, preserving `training.quantization: 4bit` for

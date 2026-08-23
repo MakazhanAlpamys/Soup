@@ -2319,11 +2319,9 @@ class TestVocabSizeOfCompositeConfig:
     VLM target is no longer refused with "could not read model config". It is the
     shared helper, so this covers `measure` and `distill` at once.
 
-    Stubbed configs rather than a real `LlavaConfig`: the repo allows
-    `transformers>=4.36,<5`, and the top-level `vocab_size` this fallback exists
-    for was only dropped from `LlavaConfig` partway through that range — on the
-    older cells a real config would satisfy the assertion without ever reaching
-    the fallback. The shapes below are the ones measured on 4.57.6
+    Stubbed configs rather than a real `LlavaConfig` so changes in the supported
+    Transformers range cannot satisfy the assertion without reaching the
+    fallback. The shapes below are the ones originally measured on 4.57.6
     (`LlavaConfig().vocab_size` missing, `get_text_config().vocab_size == 32000`).
     """
 

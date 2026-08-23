@@ -182,6 +182,32 @@ def _batch_on(model, batch):
     }
 
 
+def _policy_logps(trainer, model, batch):
+    """Return chosen/rejected policy logps across TRL's DPO implementations.
+
+    TRL 0.29 folded ``concatenated_forward`` into ``_compute_loss``. Keeping
+    this small test adapter lets the gate continue to assert the policy/reference
+    property without requiring a production shim for a removed private method.
+    """
+    if hasattr(trainer, "concatenated_forward"):
+        return trainer.concatenated_forward(model, batch)
+
+    from trl.trainer.utils import selective_log_softmax
+
+    input_ids, attention_mask, completion_mask = trainer._truncate_inputs(
+        batch["input_ids"], batch["attention_mask"], batch["completion_mask"]
+    )
+    outputs = model(input_ids=input_ids, attention_mask=attention_mask, use_cache=False)
+    shift_logits = outputs.logits[..., :-1, :].contiguous()
+    shift_labels = input_ids[..., 1:].contiguous()
+    shift_completion_mask = completion_mask[..., 1:].contiguous()
+    per_token_logps = selective_log_softmax(shift_logits, shift_labels)
+    per_token_logps[shift_completion_mask == 0] = 0.0
+    assert trainer.ld_alpha is None, "the v0.72.4 gate assumes standard sequence logps"
+    chosen_logps, rejected_logps = per_token_logps.sum(dim=1).chunk(2, dim=0)
+    return {"chosen_logps": chosen_logps, "rejected_logps": rejected_logps}
+
+
 def _loss_of(trainer, model, batch):
     """Call the trainer's loss for `model`, across TRL's signature differences.
 
@@ -396,7 +422,19 @@ class TestNoSecondModelInstance:
             f"{task} built a SECOND model instance for the reference — that "
             f"doubles memory and defeats layer streaming entirely"
         )
-        assert getattr(trainer, "is_peft_model", False) is True
+        from accelerate.utils import is_peft_model
+
+        assert is_peft_model(trainer.model)
+        # TRL 0.29 represents the immutable initial policy as a second adapter,
+        # not a second model. It is the correct reference when LoRA starts from
+        # non-zero weights (for example PiSSA or a resumed adapter).
+        if task == "dpo":
+            assert "ref" in trainer.model.peft_config
+            assert not any(
+                param.is_meta
+                for name, param in trainer.model.named_parameters()
+                if ".ref." in name
+            )
 
     @pytest.mark.parametrize("task", _ALL_PREFERENCE)
     def test_exactly_one_weight_store_is_constructed(self, tmp_path, monkeypatch, task):
@@ -434,7 +472,7 @@ class TestNoSecondModelInstance:
         batch = _batch_on(wrapper.model, next(iter(trainer.get_train_dataloader())))
         wrapper.model.eval()
         with torch.no_grad():
-            policy = trainer.concatenated_forward(wrapper.model, batch)
+            policy = _policy_logps(trainer, wrapper.model, batch)
             ref_chosen, ref_rejected = trainer.compute_ref_log_probs(batch)
         assert (policy["chosen_logps"] - ref_chosen).abs().max().item() > 1e-4
         assert (policy["rejected_logps"] - ref_rejected).abs().max().item() > 1e-4
@@ -455,7 +493,7 @@ class TestNoSecondModelInstance:
         batch = _batch_on(wrapper.model, next(iter(trainer.get_train_dataloader())))
         wrapper.model.eval()
         with torch.no_grad():
-            policy = trainer.concatenated_forward(wrapper.model, batch)
+            policy = _policy_logps(trainer, wrapper.model, batch)
             ref_chosen, _ = trainer.compute_ref_log_probs(batch)
         diff = (policy["chosen_logps"] - ref_chosen).abs().max().item()
         assert diff == 0.0, diff

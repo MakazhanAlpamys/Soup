@@ -364,7 +364,7 @@ class AsrTrainerWrapper:
             train_dataset=train_ds,
             eval_dataset=eval_ds,
             data_collator=collator,
-            tokenizer=self.processor.feature_extractor,
+            processing_class=self.processor.feature_extractor,
         )
 
         # #359 - the same exposure #336 fixed in sft.py: with LoRA the

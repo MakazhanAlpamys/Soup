@@ -233,41 +233,34 @@ class TestTheCanaryCoversWhatItClaims:
 
 
 class TestTheTrlBoundsAreConsistentWithTheCode:
-    """The floor shipped as `>=0.7.0` while `setup()` imported `GRPOTrainer`,
-    which trl first exports at 0.14.0 — a declared floor the code could never
-    have run on. Cheap to state as a property: whatever is installed must
-    satisfy the declared bound AND provide the symbols the trainers import."""
+    """The installed TRL must provide every symbol through Soup's real resolver."""
 
     def test_the_installed_trl_provides_every_symbol_the_trainers_import(self):
-        """`getattr`, not `hasattr`: trl exposes these through a lazy module, so
-        a submodule that fails to import raises something other than
-        AttributeError, and `hasattr` would report a clean False without saying
-        why. From 0.29 `ORPOConfig` / `CPOConfig` / `BCOConfig` leave the `trl`
-        namespace altogether — that is the shape of the next break, so it is
-        worth naming the symbol rather than only the version."""
-        import trl
+        """Exercise the same public-first, experimental-second imports as setup()."""
+        from soup_cli.trainer._trl_compat import resolve_trl_symbol
 
         broken = {}
-        for name in (
-            "DPOConfig",
-            "DPOTrainer",
-            "KTOConfig",
-            "KTOTrainer",
-            "ORPOConfig",
-            "ORPOTrainer",
-            "CPOConfig",
-            "CPOTrainer",
-            "BCOConfig",
-            "BCOTrainer",
-            "GRPOTrainer",
-            "GRPOConfig",
-        ):
+        symbols = {
+            "DPOConfig": None,
+            "DPOTrainer": None,
+            "KTOConfig": None,
+            "KTOTrainer": None,
+            "ORPOConfig": "trl.experimental.orpo",
+            "ORPOTrainer": "trl.experimental.orpo",
+            "CPOConfig": "trl.experimental.cpo",
+            "CPOTrainer": "trl.experimental.cpo",
+            "BCOConfig": "trl.experimental.bco",
+            "BCOTrainer": "trl.experimental.bco",
+            "GRPOTrainer": None,
+            "GRPOConfig": None,
+        }
+        for name, experimental_module in symbols.items():
             try:
-                getattr(trl, name)
+                resolve_trl_symbol(name, experimental_module)
             except Exception as exc:  # noqa: BLE001 - reported, not swallowed
                 broken[name] = f"{type(exc).__name__}: {exc}"
         assert not broken, (
-            f"installed trl {trl.__version__} cannot supply "
-            f"{sorted(broken)} — the [train] extra's bounds and the code "
+            f"installed trl cannot supply {sorted(broken)} through Soup's "
+            f"public/experimental resolver — the [train] bounds and the code "
             f"disagree: {broken}"
         )

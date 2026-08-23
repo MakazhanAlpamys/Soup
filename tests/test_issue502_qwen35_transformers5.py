@@ -1,0 +1,142 @@
+"""#502/#503 — Transformers 5 Qwen3.5 text training compatibility."""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+from packaging.requirements import Requirement
+from packaging.version import Version
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _extra_requirement(extra: str, package: str) -> Requirement:
+    text = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    block = re.search(rf"^{re.escape(extra)}\s*=\s*\[(.*?)^\]", text, re.MULTILINE | re.DOTALL)
+    assert block is not None
+    requirements = [
+        Requirement(raw)
+        for raw in re.findall(r'"([^"\n]+)"', block.group(1))
+        if Requirement(raw).name == package
+    ]
+    assert len(requirements) == 1
+    return requirements[0]
+
+
+def _tiny_qwen35_config():
+    from transformers import Qwen3_5Config, Qwen3_5TextConfig
+
+    text = Qwen3_5TextConfig(
+        vocab_size=64,
+        hidden_size=16,
+        intermediate_size=32,
+        num_hidden_layers=2,
+        num_attention_heads=2,
+        num_key_value_heads=1,
+        head_dim=8,
+        linear_conv_kernel_dim=2,
+        linear_key_head_dim=4,
+        linear_value_head_dim=4,
+        linear_num_key_heads=2,
+        linear_num_value_heads=2,
+        layer_types=["linear_attention", "full_attention"],
+        max_position_embeddings=64,
+    )
+    return Qwen3_5Config(text_config=text.to_dict())
+
+
+def test_training_and_mlx_extras_share_the_transformers5_range():
+    train = _extra_requirement("train", "transformers")
+    mlx = _extra_requirement("mlx", "transformers")
+
+    assert train.specifier == mlx.specifier
+    assert Version("5.12.1") in train.specifier
+    assert Version("5.12.0") not in train.specifier
+    assert Version("5.15.1") in train.specifier
+    assert Version("6.0.0") not in train.specifier
+
+
+def test_trl_floor_crosses_the_transformers5_import_fix():
+    trl = _extra_requirement("train", "trl")
+
+    assert Version("0.28.0") not in trl.specifier
+    assert Version("0.29.0") in trl.specifier
+    assert Version("1.0.0") not in trl.specifier
+
+
+def test_peft_floor_is_the_validated_transformers5_adapter_stack():
+    peft = _extra_requirement("train", "peft")
+
+    assert Version("0.19.0") not in peft.specifier
+    assert Version("0.20.0") in peft.specifier
+    assert Version("1.0.0") not in peft.specifier
+
+
+def test_trl029_trainers_and_experimental_pairwise_judge_import():
+    import trl.trainer.dpo_trainer  # noqa: F401
+    import trl.trainer.grpo_trainer  # noqa: F401
+
+    from soup_cli.eval.judge import _base_pairwise_judge_cls
+
+    base_cls = _base_pairwise_judge_cls()
+    assert base_cls.__name__ == "BasePairwiseJudge"
+    assert base_cls.__module__.startswith("trl.experimental.judges")
+
+
+def test_qwen35_outer_config_selects_text_causal_model_without_vision():
+    import torch
+    from transformers import AutoModelForCausalLM
+
+    model = AutoModelForCausalLM.from_config(_tiny_qwen35_config(), dtype=torch.float32)
+
+    assert type(model).__name__ == "Qwen3_5ForCausalLM"
+    assert model.config.model_type == "qwen3_5_text"
+    assert not [
+        name
+        for name, _ in model.named_parameters()
+        if "vision" in name or "visual" in name
+    ]
+
+
+def test_qwen35_auto_targets_attach_and_reload_a_nonempty_adapter(tmp_path):
+    import torch
+    from peft import LoraConfig, PeftModel, TaskType, get_peft_model
+    from transformers import AutoModelForCausalLM
+
+    from soup_cli.utils.peft_wiring import resolve_lora_target_modules
+
+    config = _tiny_qwen35_config()
+    base = AutoModelForCausalLM.from_config(config, dtype=torch.float32)
+    targets = resolve_lora_target_modules(base, "auto")
+    assert targets == ["q_proj", "v_proj", "in_proj_qkv", "out_proj"]
+
+    model = get_peft_model(
+        base,
+        LoraConfig(
+            r=2,
+            lora_alpha=4,
+            target_modules=targets,
+            task_type=TaskType.CAUSAL_LM,
+        ),
+    )
+    trainable = [parameter for parameter in model.parameters() if parameter.requires_grad]
+    assert trainable
+    assert sum(parameter.numel() for parameter in trainable) > 0
+
+    adapter = tmp_path / "adapter"
+    model.save_pretrained(adapter)
+    reloaded_base = AutoModelForCausalLM.from_config(config, dtype=torch.float32)
+    reloaded = PeftModel.from_pretrained(reloaded_base, adapter)
+    reloaded_lora = [name for name, _ in reloaded.named_parameters() if "lora_" in name]
+    assert len(reloaded_lora) == 8
+
+
+def test_explicit_peft_targets_and_mlx_defaults_are_unchanged():
+    from soup_cli.trainer.mlx_sft import MLX_DEFAULT_TARGET_KEYS
+    from soup_cli.utils.peft_wiring import resolve_lora_target_modules
+
+    explicit = ["custom_proj"]
+    assert resolve_lora_target_modules(object(), explicit) is explicit
+    assert resolve_lora_target_modules(object(), None) is None
+    assert MLX_DEFAULT_TARGET_KEYS == ["self_attn.q_proj", "self_attn.v_proj"]

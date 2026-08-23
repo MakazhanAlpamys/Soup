@@ -66,10 +66,10 @@ _VALID_SOURCES = frozenset({"pip", "conda", "system", "wheel", "unknown"})
 # Extras that make up a Soup TRAINING install — the environment #368 is about
 # (a training venv later contaminated by `pip install "soup-cli[serve-fast]"`).
 # `[all]` and `[dev]` both re-declare `soup-cli[train,...]`, which pip flattens,
-# so metadata restates the training bounds under each of these three. `[mlx]` is
-# deliberately NOT here: it declares `transformers>=5.0.0` against `[train]`'s
-# `<5.0.0`, an incompatibility by design that no single environment satisfies.
-_TRAINING_INSTALL_EXTRAS: Tuple[str, ...] = ("train", "all", "dev")
+# so metadata restates the training bounds under each of these three. `[mlx]`
+# shares the same Transformers 5 range after #502, so its ABI bound is safe to
+# enforce too (including for a standalone MLX install).
+_TRAINING_INSTALL_EXTRAS: Tuple[str, ...] = ("train", "all", "dev", "mlx")
 
 # ABI-sensitive packages — drift here is most likely to break training.
 TRACKED_PACKAGES: Tuple[str, ...] = (
@@ -274,15 +274,13 @@ def check_declared_bounds(
         # ...except for the ABI-relevant set under a TRAINING extra. Since the
         # v0.71.0 deps-split, `transformers`, `torch` and `trl` live in metadata
         # ONLY under `extra == "train"/"all"/"dev"`, so deselecting every gated
-        # requirement also deselected the `transformers <5.0.0` case #368 was
+        # requirement also deselected the bounded `transformers` case #368 was
         # filed about — leaving `typer` as the single bound this could ever fire
         # on.
         #
         # The extra scope is load-bearing, not decoration: a tracked NAME alone
-        # is not enough, because `[mlx]` declares `transformers>=5.0.0` against
-        # `[train]`'s `<5.0.0`. Those two are deliberately incompatible, so
-        # enforcing both would make EVERY installed transformers violate exactly
-        # one of them — a false positive on every machine.
+        # is not enough because unrelated extras may legitimately carry their
+        # own bounds. Only the supported training/MLX environments are selected.
         def selects(marker, extra: str) -> bool:
             try:
                 return bool(marker.evaluate({"extra": extra}))

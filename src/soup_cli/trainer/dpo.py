@@ -211,6 +211,14 @@ class DPOTrainerWrapper(StreamingSetupMixin):
             eval_dataset=eval_ds,
             processing_class=self.tokenizer,
         )
+        if tcfg.stream_layers:
+            # TRL 0.29 snapshots the initial policy as a frozen ``ref`` LoRA
+            # adapter. PEFT creates that late adapter on the streamed decoder's
+            # meta skeleton, where TRL's copy_ is a no-op, so give the snapshot
+            # real adapter-sized storage before its first reference forward.
+            from soup_cli.utils.layer_stream_runtime import materialize_meta_adapter_copy
+
+            materialize_meta_adapter_copy(self.model)
 
         # #359 - the same exposure #336 fixed in sft.py: with LoRA the
         # no-decay optimizer group is empty, DeepSpeed drops it, and the LR
@@ -281,9 +289,9 @@ class DPOTrainerWrapper(StreamingSetupMixin):
         if tcfg.quantization in ("4bit", "8bit", "mxfp4"):
             self.model = prepare_model_for_kbit_training(self.model)
 
-        target_modules = tcfg.lora.target_modules
-        if target_modules == "auto":
-            target_modules = None
+        from soup_cli.utils.peft_wiring import resolve_lora_target_modules
+
+        target_modules = resolve_lora_target_modules(self.model, tcfg.lora.target_modules)
 
         lora_config = LoraConfig(
             r=tcfg.lora.r,

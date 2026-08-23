@@ -19,6 +19,44 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
+# PEFT 0.20 has no automatic LoRA mapping for the Qwen3.5 text architectures.
+# Qwen3.5 mixes fused linear-attention blocks with ordinary attention blocks,
+# so the policy covers the input/output projections of both block kinds.
+QWEN35_TEXT_LORA_TARGETS = (
+    "q_proj",
+    "v_proj",
+    "in_proj_qkv",
+    "out_proj",
+)
+
+
+def resolve_lora_target_modules(model: Any, configured: Any) -> Any:
+    """Resolve ``target_modules: auto`` for models PEFT does not know yet.
+
+    Existing architectures remain delegated to PEFT by returning ``None``.
+    Explicit user targets are returned unchanged. Qwen3.5 uses a wrapper
+    config (``qwen3_5``) around ``qwen3_5_text`` and its MoE counterpart, so
+    inspect both configs without importing Transformers or PEFT at module load.
+    """
+    if configured != "auto" and configured != ["auto"]:
+        return configured
+
+    config = getattr(model, "config", model)
+    text_config = getattr(config, "text_config", None)
+    model_types = {
+        getattr(config, "model_type", None),
+        getattr(text_config, "model_type", None),
+    }
+    if model_types & {
+        "qwen3_5",
+        "qwen3_5_text",
+        "qwen3_5_moe",
+        "qwen3_5_moe_text",
+    }:
+        return list(QWEN35_TEXT_LORA_TARGETS)
+    return None
+
+
 def apply_pre_lora_patches(model: Any, base: str) -> None:
     """Run pre-LoRA surgical patches (v0.39.0 Part D, multi-trainer in v0.40.6).
 

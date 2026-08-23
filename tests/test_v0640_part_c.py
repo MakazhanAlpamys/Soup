@@ -735,30 +735,29 @@ def test_cli_env_lock_null_byte_output_rejected(tmp_path, monkeypatch):
 # lists `transformers` only under `extra == "train"/"all"/"dev"`, so no un-gated
 # transformers row exists — see `_TRAIN_TRANSFORMERS` for the real shape and the
 # tests that cover #368 end to end.
-_UNGATED_TRANSFORMERS = ("transformers>=4.36.0,<5.0.0",)
+_UNGATED_TRANSFORMERS = ("transformers>=5.12.1,<6.0.0",)
 
 # The real shape: the `transformers` cap #368 was reported against, exactly as
 # metadata states it — gated behind the extras that pull it in.
 _TRAIN_TRANSFORMERS = (
-    'transformers>=4.36.0,<5.0.0; extra == "train"',
-    'transformers>=4.36.0,<5.0.0; extra == "all"',
-    'transformers>=4.36.0,<5.0.0; extra == "dev"',
+    'transformers>=5.12.1,<6.0.0; extra == "train"',
+    'transformers>=5.12.1,<6.0.0; extra == "all"',
+    'transformers>=5.12.1,<6.0.0; extra == "dev"',
 )
 
 
 def test_check_declared_bounds_flags_core_bound_over_cap():
     from soup_cli.utils.env_lock import check_declared_bounds
 
-    # `pip install vllm` moved transformers to 5.14.1, past the core <5.0.0 cap.
-    report = check_declared_bounds(_UNGATED_TRANSFORMERS, {"transformers": "5.14.1"})
+    report = check_declared_bounds(_UNGATED_TRANSFORMERS, {"transformers": "6.0.0"})
     assert not report.ok
     assert report.violation_count == 1
     (v,) = report.violations
     assert v.name == "transformers"
-    assert v.installed == "5.14.1"
+    assert v.installed == "6.0.0"
     # The bound is quoted from the requirement string, not a hardcoded copy of
-    # `<5.0.0` — that second copy is exactly the drift this catches.
-    assert "<5.0.0" in v.specifier
+    # `<6.0.0` — that second copy is exactly the drift this catches.
+    assert "<6.0.0" in v.specifier
 
 
 def test_check_declared_bounds_control_compliant_passes():
@@ -766,7 +765,7 @@ def test_check_declared_bounds_control_compliant_passes():
 
     # Control: an in-bounds environment passes, so the check cannot be
     # satisfied by always failing.
-    report = check_declared_bounds(_UNGATED_TRANSFORMERS, {"transformers": "4.57.6"})
+    report = check_declared_bounds(_UNGATED_TRANSFORMERS, {"transformers": "5.15.1"})
     assert report.ok
     assert report.violations == ()
 
@@ -817,31 +816,31 @@ def test_core_bound_counted_once_despite_extra_duplicates():
     from soup_cli.utils.env_lock import check_declared_bounds
 
     reqs = (
-        "transformers>=4.36.0,<5.0.0",
-        'transformers>=4.36.0,<5.0.0; extra == "all"',
-        'transformers>=4.36.0,<5.0.0; extra == "dev"',
-        'transformers>=4.36.0,<5.0.0; extra == "train"',
+        "transformers>=5.12.1,<6.0.0",
+        'transformers>=5.12.1,<6.0.0; extra == "all"',
+        'transformers>=5.12.1,<6.0.0; extra == "dev"',
+        'transformers>=5.12.1,<6.0.0; extra == "train"',
     )
-    report = check_declared_bounds(reqs, {"transformers": "5.14.1"})
+    report = check_declared_bounds(reqs, {"transformers": "6.0.0"})
     assert report.violation_count == 1
     assert report.violations[0].name == "transformers"
 
 
 def test_extra_gated_tracked_bound_is_enforced():
     # #368 review blocker: since the v0.71.0 deps-split, the `transformers`
-    # <5.0.0 cap exists in metadata ONLY under `extra == "train"/"all"/"dev"`.
+    # The bound exists in metadata ONLY under `extra == "train"/"all"/"dev"`.
     # Deselecting every gated requirement made the case #368 was FILED ABOUT
     # unreachable — measured as `ok=True, violation_count=0` against real
     # installed metadata. A TRACKED_PACKAGES name keeps its bound enforced.
     from soup_cli.utils.env_lock import check_declared_bounds
 
-    report = check_declared_bounds(_TRAIN_TRANSFORMERS, {"transformers": "5.14.1"})
+    report = check_declared_bounds(_TRAIN_TRANSFORMERS, {"transformers": "6.0.0"})
     assert not report.ok, report
     assert report.violation_count == 1
     (v,) = report.violations
     assert v.name == "transformers"
-    assert v.installed == "5.14.1"
-    assert "<5.0.0" in v.specifier
+    assert v.installed == "6.0.0"
+    assert "<6.0.0" in v.specifier
 
 
 def test_extra_gated_untracked_bound_stays_deselected():
@@ -856,25 +855,20 @@ def test_extra_gated_untracked_bound_stays_deselected():
     assert report.ok, report.violations
 
 
-def test_mlx_only_bound_on_tracked_package_is_not_enforced():
-    # A tracked NAME is not sufficient to enforce a gated bound. `[mlx]` declares
-    # `transformers>=5.0.0` against `[train]`'s `<5.0.0` — deliberately
-    # incompatible extras. Enforcing both by name would make EVERY installed
-    # transformers violate exactly one of them, a false positive on every
-    # machine. Only the training-install extras lift the marker.
+def test_mlx_only_bound_on_tracked_package_is_enforced():
+    # #502 aligns the MLX and training ranges, so the standalone MLX environment
+    # is now part of the ABI-sensitive bounds audit too.
     from soup_cli.utils.env_lock import check_declared_bounds
 
-    mlx_only = ('transformers>=5.0.0; extra == "mlx"',)
-    # A version the [train] cap is happy with, that the [mlx] floor is not.
-    assert check_declared_bounds(mlx_only, {"transformers": "4.57.6"}).ok
+    mlx_only = ('transformers>=5.12.1,<6.0.0; extra == "mlx"',)
+    assert check_declared_bounds(mlx_only, {"transformers": "5.15.1"}).ok
+    assert not check_declared_bounds(mlx_only, {"transformers": "6.0.0"}).ok
 
-    # And the two together resolve to the training bound alone, not to "both
-    # bounds violated".
+    # The identical training/MLX bounds deduplicate to one violation.
     both = _TRAIN_TRANSFORMERS + mlx_only
-    assert check_declared_bounds(both, {"transformers": "4.57.6"}).ok
-    breached = check_declared_bounds(both, {"transformers": "5.14.1"})
+    breached = check_declared_bounds(both, {"transformers": "6.0.0"})
     assert breached.violation_count == 1
-    assert "<5.0.0" in breached.violations[0].specifier
+    assert "<6.0.0" in breached.violations[0].specifier
 
 
 def test_extra_gated_tracked_bound_counted_once_across_extras():
@@ -885,7 +879,7 @@ def test_extra_gated_tracked_bound_counted_once_across_extras():
     from soup_cli.utils.env_lock import check_declared_bounds
 
     assert len(_TRAIN_TRANSFORMERS) == 3
-    report = check_declared_bounds(_TRAIN_TRANSFORMERS, {"transformers": "5.14.1"})
+    report = check_declared_bounds(_TRAIN_TRANSFORMERS, {"transformers": "6.0.0"})
     assert report.violation_count == 1
 
 
@@ -923,11 +917,11 @@ def test_current_declared_bounds_check_real_path_detects_violation(monkeypatch):
 
     from soup_cli.utils import env_lock
 
-    monkeypatch.setattr(md, "requires", lambda dist: ["transformers>=4.36.0,<5.0.0"])
+    monkeypatch.setattr(md, "requires", lambda dist: ["transformers>=5.12.1,<6.0.0"])
     monkeypatch.setattr(
         env_lock,
         "_detect_package_version",
-        lambda name: "5.14.1" if name == "transformers" else None,
+        lambda name: "6.0.0" if name == "transformers" else None,
     )
     report = env_lock.current_declared_bounds_check("soup-cli")
     assert not report.ok
@@ -943,8 +937,8 @@ def test_cli_env_check_declared_bound_violation_exits_3(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     violation = BoundViolation(
         name="transformers",
-        installed="5.14.1",
-        specifier=">=4.36.0,<5.0.0",
+        installed="6.0.0",
+        specifier=">=5.12.1,<6.0.0",
         extra=None,
     )
     monkeypatch.setattr(
@@ -972,8 +966,8 @@ def test_cli_env_check_bound_violation_escapes_rich_markup(tmp_path, monkeypatch
     monkeypatch.chdir(tmp_path)
     violation = BoundViolation(
         name="[bold]evil[/bold]",
-        installed="5.14.1",
-        specifier=">=4.36.0,<5.0.0",
+        installed="6.0.0",
+        specifier=">=5.12.1,<6.0.0",
         extra=None,
     )
     monkeypatch.setattr(
