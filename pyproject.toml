@@ -195,7 +195,18 @@ modal = ["modal>=0.60.0"]
 # whose origin checking silently vanishes on an older SDK is worse than
 # a resolver error. No new package: `mcp` already requires starlette,
 # uvicorn, sse-starlette and httpx-sse.
-mcp = ["mcp>=1.10.0,<2"]
+#
+# v0.73.4 (#322): cap lifted to `<3`. The two removals that forced it are
+# bridged rather than pinned around. `build_server` probes the `Server`
+# constructor for `on_list_tools` — 2.x registers handlers there, 1.x through
+# decorators — and the round-trip tests were rebuilt on
+# `create_client_server_memory_streams`, which both majors still ship, instead
+# of the 2.x-removed `create_connected_server_and_client_session`. Verified by
+# running the MCP suite twice, once per major, not by reading release notes.
+# The three modules the sse / streamable-http transports depend on
+# (`sse`, `streamable_http_manager`, `transport_security`) all survive in 2.0.0,
+# so those needed no change at all. The floor stays 1.10.0 for the reason above.
+mcp = ["mcp>=1.10.0,<3"]
 
 [project.scripts]
 soup = "soup_cli.cli:run"
