@@ -615,6 +615,37 @@ soup train --config soup.yaml --fsdp full_offload
 
 `zero3_offload` keeps `offload_optimizer: none`: offloading the optimizer makes DeepSpeed JIT-build its `cpu_adam` op, which requires a matching CUDA toolkit (`nvcc`) on the box. Copy the emitted JSON and flip it if you have one — or start from the bundled `soup fetch deepspeed_configs zero3-cpu-offload`, which is the optimizer-offloading variant and therefore needs that toolkit. Measured on one H100 with Llama-3.1-8B (bf16, LoRA r=8, 256 steps): 21.65 tok/s at a 38,135 MiB peak — see [benchmarks/gate-h100-validation.md](../benchmarks/gate-h100-validation.md), STEP 3, which also compares it against layer streaming on the same box, data and model.
 
+### `--deepspeed <file>` — your own JSON
+
+`--deepspeed` also takes a path to a JSON config instead of a preset name. That
+file is yours: it reaches DeepSpeed **byte-identical, by the same path**, unless
+it carries a key that is invalid for the run it is about to start.
+
+Two keys are rewritten, and both are errors rather than preferences (#359):
+
+| key | why it is repaired |
+|---|---|
+| `zero_hpz_partition_size` | DeepSpeed refuses a value the world size is not divisible by, so the ZeRO++ preset's placeholder `8` is invalid on any box that is not a multiple of 8 |
+| `zero_quantized_weights` / `zero_quantized_gradients` | the fp16 CUDA quantiser against the `bf16` the same file enables makes the dequantised all-gather come back `c10::Half` and meet a `c10::BFloat16` activation, raising `expected mat1 and mat2 to have the same dtype` |
+
+The documented way to customise ZeRO++ is to copy the preset JSON — which copies
+both defects — so an unresolved user file would inherit a crash the presets are
+already protected from. When a rewrite happens it is **printed**, the repaired
+config goes to a temp copy, and **your file on disk is never modified**. A
+config that uses none of those keys is not touched at all.
+
+A malformed JSON is passed straight through: DeepSpeed reports a bad config
+better than Soup can, and refusing here would reject files DeepSpeed accepts.
+
+### DeepSpeed + LoRA
+
+Every trainer that can be launched with `--deepspeed` prunes HF's empty no-decay
+optimizer group before the LR scheduler is built (#336, extended to all wrappers
+in #359). Without it, LoRA runs die at the first `lr_scheduler.step()`: every
+trainable LoRA tensor is 2-D, so the no-decay group comes out empty, DeepSpeed
+drops it while the scheduler keeps two `base_lrs`, and torch's strict `zip`
+raises. Full fine-tuning populates both groups, so nothing is pruned there.
+
 ### `--gpus` flag — topology-aware launch
 
 ```bash
