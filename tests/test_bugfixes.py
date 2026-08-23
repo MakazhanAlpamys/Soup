@@ -129,21 +129,29 @@ class TestComputeDtype:
             assert dtype == torch.float16
 
 
-# --- BUG-005: diff dtype -> torch_dtype ---
+# --- BUG-005: diff load dtype spelling (#478) ---
 
 
 class TestDiffModelLoading:
-    """Test diff command uses correct parameter names."""
+    """Test diff command uses Transformers kwargs compatible with the floor."""
 
-    def test_load_model_uses_dtype(self):
-        """_load_model should pass dtype= (not the old torch_dtype=)."""
+    def test_load_model_uses_torch_dtype(self):
+        """_load_model must pass torch_dtype= (not the >=4.56-only dtype=).
+
+        dtype= is the rename of torch_dtype= at transformers>=4.56. Soup declares
+        transformers>=4.36.0,<5.0.0; using dtype= TypeErrors on older installs
+        inside that range (#478 / #471). torch_dtype= remains accepted (with a
+        deprecation warning) on current 4.57.x.
+        """
         import inspect
 
         from soup_cli.commands.diff import _load_model
 
         source = inspect.getsource(_load_model)
-        assert "dtype=torch.float16" in source
-        assert "torch_dtype=" not in source
+        assert "torch_dtype=torch.float16" in source
+        # Substring-safe: torch_dtype=... contains the letters dtype=
+        bare = source.replace("torch_dtype=", "")
+        assert "dtype=" not in bare
 
 
 # --- BUG-006: wandb version pin ---

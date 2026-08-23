@@ -1,13 +1,19 @@
-"""MCP stdio server wiring for ``soup mcp serve`` (v0.71.28).
+"""MCP server wiring for ``soup mcp serve`` (v0.71.28; network transports #296).
 
 This is the ONLY module that imports the ``mcp`` SDK — importing it therefore
 requires the ``[mcp]`` extra. The pure tool table lives in
 :mod:`soup_cli.mcp_server.registry` (no SDK dependency, fully unit-testable).
+
+:func:`build_server` is transport-agnostic; ``stdio`` (v1) and the two
+network transports added for #296 (``sse`` / streamable ``http``) all wrap
+the same server object. Everything the network transports need beyond the
+SDK -- starlette, uvicorn -- is already a hard dependency of ``mcp``.
 """
 
 from __future__ import annotations
 
 import json
+import secrets
 import sys
 from contextlib import redirect_stdout
 from typing import List
@@ -87,3 +93,239 @@ def run_stdio_server(*, allow_mutating: bool, allow_execute: bool) -> None:
             await server.run(read_stream, write_stream, server.create_initialization_options())
 
     anyio.run(_main)
+
+
+# --- Network transports (#296) ---------------------------------------------
+
+DEFAULT_NETWORK_PORT = 8765
+DEFAULT_NETWORK_HOST = "127.0.0.1"
+SSE_PATH = "/sse"
+MESSAGE_PATH = "/messages/"
+HTTP_PATH = "/mcp"
+NETWORK_TRANSPORTS = ("sse", "http")
+# Binds that accept from every interface. The Host a client will send is not
+# knowable for these, so rebinding protection cannot be pinned to one name.
+_WILDCARD_HOSTS = frozenset({"", "0.0.0.0", "::", "[::]", "*"})
+
+
+def is_wildcard_host(host: str) -> bool:
+    """True when ``host`` binds every interface rather than one address."""
+    return str(host).strip().lower() in _WILDCARD_HOSTS
+
+
+def allowed_hosts_for(host: str, port: int) -> List[str]:
+    """Host header values accepted by the DNS-rebinding check.
+
+    A wildcard bind degrades to ``["*"]`` — with no single advertised name
+    there is nothing to pin, and pinning the wrong one would reject every real
+    client. ``soup mcp serve`` warns loudly in that case rather than pretending
+    the check is still doing work.
+    """
+    if is_wildcard_host(host):
+        return ["*"]
+    names = [host]
+    if host in ("127.0.0.1", "::1", "localhost"):
+        names = ["127.0.0.1", "localhost", "::1"]
+    # An IPv6 literal is bracketed in a Host header (`[::1]:8765`); joining it
+    # with a bare colon would produce `::1:8765`, which matches nothing and
+    # would 421 every IPv6 loopback client.
+    authorities = [
+        f"[{name}]:{port}" if ":" in name else f"{name}:{port}" for name in names
+    ]
+    return authorities + names
+
+
+def _security_settings(host: str, port: int):
+    """SDK transport-security settings (mcp >= 1.10) for this bind.
+
+    DNS-rebinding protection is what stops a page the operator merely *visits*
+    from driving a loopback MCP server through their browser; the Bearer gate
+    alone would not, since a browser attaches no Authorization header but the
+    request still reaches the port.
+    """
+    from mcp.server.transport_security import TransportSecuritySettings
+
+    hosts = allowed_hosts_for(host, port)
+    origins = ["*"] if hosts == ["*"] else [
+        f"{scheme}://{name}" for name in hosts for scheme in ("http", "https")
+    ]
+    return TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=hosts,
+        allowed_origins=origins,
+    )
+
+
+class _BearerAuthMiddleware:
+    """Refuse any HTTP request without ``Authorization: Bearer <token>``.
+
+    Pure ASGI rather than a starlette ``BaseHTTPMiddleware`` subclass: the SSE
+    transport streams for the lifetime of a session, and ``BaseHTTPMiddleware``
+    buffers through a response body it does not own. Non-HTTP scopes
+    (``lifespan``, ``websocket``) pass straight through — gating ``lifespan``
+    would stop the streamable-HTTP session manager from ever starting.
+    """
+
+    def __init__(self, app, token: str) -> None:
+        self._app = app
+        self._expected = f"Bearer {token}".encode()
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope.get("type") != "http":
+            await self._app(scope, receive, send)
+            return
+        supplied = b""
+        for key, value in scope.get("headers", ()):
+            if key.lower() == b"authorization":
+                supplied = value
+                break
+        # compare_digest over the whole header, so the scheme is checked in
+        # constant time along with the token.
+        if not secrets.compare_digest(supplied, self._expected):
+            from starlette.responses import PlainTextResponse
+
+            response = PlainTextResponse(
+                "Unauthorized",
+                status_code=401,
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+            await response(scope, receive, send)
+            return
+        await self._app(scope, receive, send)
+
+
+def _sse_app(server: Server, security):
+    from mcp.server.sse import SseServerTransport
+    from starlette.applications import Starlette
+    from starlette.responses import Response
+    from starlette.routing import Mount, Route
+
+    sse = SseServerTransport(MESSAGE_PATH, security_settings=security)
+
+    async def _handle_sse(request):
+        # ``request._send`` is how the SDK's own examples drive this transport:
+        # connect_sse needs the raw ASGI send, which Request does not expose.
+        async with sse.connect_sse(
+            request.scope, request.receive, request._send
+        ) as (read_stream, write_stream):
+            await server.run(
+                read_stream, write_stream, server.create_initialization_options()
+            )
+        return Response(status_code=200)
+
+    return Starlette(
+        routes=[
+            Route(SSE_PATH, endpoint=_handle_sse, methods=["GET"]),
+            Mount(MESSAGE_PATH, app=sse.handle_post_message),
+        ]
+    )
+
+
+def _http_app(server: Server, security):
+    from contextlib import asynccontextmanager
+
+    from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
+    from starlette.applications import Starlette
+    from starlette.routing import Mount
+
+    manager = StreamableHTTPSessionManager(
+        app=server,
+        json_response=False,
+        stateless=False,
+        security_settings=security,
+    )
+
+    async def _handle(scope, receive, send) -> None:
+        await manager.handle_request(scope, receive, send)
+
+    @asynccontextmanager
+    async def _lifespan(app):
+        # The manager refuses requests until its task group is running, so it
+        # is owned by the app lifespan rather than by the first request.
+        async with manager.run():
+            yield
+
+    return Starlette(routes=[Mount(HTTP_PATH, app=_handle)], lifespan=_lifespan)
+
+
+def build_asgi_app(
+    *,
+    transport: str,
+    allow_mutating: bool,
+    allow_execute: bool,
+    auth_token: str,
+    host: str = DEFAULT_NETWORK_HOST,
+    port: int = DEFAULT_NETWORK_PORT,
+):
+    """Build the authenticated ASGI app for a network transport.
+
+    Split out from :func:`run_sse_server` / :func:`run_http_server` so the auth
+    and rebinding behaviour is testable through an in-process ASGI transport
+    without binding a socket.
+
+    Raises:
+        ValueError: for a transport that is not ``sse`` / ``http`` (``stdio``
+            included — it is not an ASGI transport), or a token that is not
+            urlsafe-base64 shaped.
+            Also for ``allow_execute=True``: gated execution (#297) spawns
+            real processes and is stdio-only, so no network transport may
+            construct a registry that can execute.
+    """
+    from soup_cli.utils.qr_url import validate_token
+
+    if transport not in NETWORK_TRANSPORTS:
+        raise ValueError(
+            f"transport must be one of {NETWORK_TRANSPORTS}, got {transport!r}"
+        )
+    # Refused here, not only in the CLI: a direct caller of build_asgi_app /
+    # run_network_server must not be able to put an executing registry behind
+    # a listener either. The CLI guard gives the operator a readable message;
+    # this one makes the property structural.
+    if allow_execute:
+        raise ValueError(
+            "allow_execute is not available over a network transport - gated "
+            "execution spawns real training / export processes and is stdio-only"
+        )
+    token = validate_token(auth_token)
+
+    server = build_server(build_registry(
+        allow_mutating=allow_mutating,
+        allow_execute=allow_execute,
+        execution=ExecutionManager(),
+    ))
+    security = _security_settings(host, port)
+    inner = _sse_app(server, security) if transport == "sse" else _http_app(server, security)
+    return _BearerAuthMiddleware(inner, token)
+
+
+def run_network_server(
+    *,
+    transport: str,
+    allow_mutating: bool,
+    allow_execute: bool,
+    auth_token: str,
+    host: str = DEFAULT_NETWORK_HOST,
+    port: int = DEFAULT_NETWORK_PORT,
+) -> None:
+    """Serve MCP over ``sse`` or ``http`` until interrupted."""
+    import uvicorn
+
+    app = build_asgi_app(
+        transport=transport,
+        allow_mutating=allow_mutating,
+        allow_execute=allow_execute,
+        auth_token=auth_token,
+        host=host,
+        port=port,
+    )
+    uvicorn.run(app, host=host, port=port, log_level="warning")
+
+
+def run_sse_server(**kwargs) -> None:
+    """Serve MCP over HTTP+SSE (GET ``/sse``, POST ``/messages/``)."""
+    run_network_server(transport="sse", **kwargs)
+
+
+def run_http_server(**kwargs) -> None:
+    """Serve MCP over the streamable-HTTP transport (``/mcp``)."""
+    run_network_server(transport="http", **kwargs)

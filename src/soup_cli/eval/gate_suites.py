@@ -80,24 +80,25 @@ EXTENDED_SUITE_NAMES: Tuple[str, ...] = tuple(_EXTENDED_SUITES)
 #: The full offline default general suite = MCQ/arithmetic + behavioural.
 DEFAULT_GENERAL_SUITE: Tuple[str, ...] = tuple(MINI_BENCHMARKS) + EXTENDED_SUITE_NAMES
 
-#: Suites whose SCORER changed in v0.73.2, so a score stored before this
-#: release is on a different scale (#357 / #346).
+#: Monotonic revision of bundled-suite SCORER semantics (#404).
 #:
-#: This matters because ``--baseline`` / ``registry://`` supply a base score
-#: from a FILE and skip the live base run, so a stale entry is diffed against a
-#: freshly-scored tuned model. The measured jumps on an UNCHANGED model are
-#: large: ``mini_mmlu`` 0.423 -> 0.731 and ``mini_tool_call`` 0.225 -> 1.000.
-#: A drift that size can mask a real regression or manufacture an improvement,
-#: so the caller warns rather than silently comparing across scales.
+#: ``--baseline`` / ``registry://`` supply a base score from disk and skip the
+#: live base run. A score produced under an older scorer is on a different
+#: scale (v0.73.2 measured ``mini_mmlu`` 0.423 -> 0.731 and ``mini_tool_call``
+#: 0.225 -> 1.000 on an unchanged model). Baselines therefore carry this
+#: revision in their provenance stamp; ``resolve_baseline`` warns only when
+#: the stamp disagrees with the running Soup.
 #:
-#: ``mini_instruction`` and ``mini_arithmetic`` are NOT here: neither carries a
-#: single-letter answer, so ``build_mcq_prompt`` leaves their prompts alone and
-#: ``score_answer`` never reaches the option-letter extractor for them
-#: (verified: 0 of 24 and 0 of 36 items respectively).
-SCORER_CHANGED_IN_V0_73_2: Tuple[str, ...] = (
-    "mini_mmlu",
-    "mini_common_sense",
-    MINI_TOOL_CALL,
+#: Bump this integer in the **same change** that alters a bundled scorer's
+#: behaviour, and update ``BUNDLED_SCORER_FINGERPRINT`` with it. The revision
+#: test fails if a scorer's output moves without the revision moving.
+BUNDLED_SCORER_REVISION: int = 1
+
+#: SHA-256 of deterministic ``score_bundled_suite`` outputs under the fixed
+#: fingerprint corpus in ``bundled_scorer_fingerprint``. Locked to revision 1;
+#: update together with ``BUNDLED_SCORER_REVISION``.
+BUNDLED_SCORER_FINGERPRINT: str = (
+    "1474d3f37d7f5ca688ba7d5bc557b327b24ae77d16ae0345536136f39fb74d8d"
 )
 
 # 4 MiB cap on a bundled fixture (mirrors behaviour_battery — defends against
@@ -453,15 +454,135 @@ def score_bundled_suite(name: str, gen: GeneratorFn) -> float:
     )
 
 
+def _wrong_mcq_answer(answer: str) -> str:
+    """A deterministic incorrect answer for fingerprint mixing."""
+    ans = answer.strip()
+    if len(ans) == 1 and ans.upper() in "ABCDEFGHIJ":
+        return "A" if ans.upper() != "A" else "B"
+    return "WRONG"
+
+
+def _build_fingerprint_response_map() -> dict[str, str]:
+    """Exact prompt -> response map mixing correct and incorrect per suite.
+
+    Every bundled suite must score strictly in ``(0, 1)`` under this corpus so
+    the fingerprint cannot be pinned by a constant all-pass / all-fail gen.
+    ``mini_tool_call`` deliberately includes bare ``{"name": ...}`` replies
+    (no ``arguments``) so removing the #346 ``arguments`` requirement from
+    :func:`_looks_like_a_bare_function` moves the fingerprint.
+    """
+    from soup_cli.eval.forgetting import build_mcq_prompt
+
+    responses: dict[str, str] = {}
+    for name in sorted(DEFAULT_GENERAL_SUITE):
+        if name in MINI_BENCHMARKS:
+            for i, item in enumerate(MINI_BENCHMARKS[name]):
+                prompt = build_mcq_prompt(item["question"], item.get("answer", ""))
+                if i % 2 == 0:
+                    responses[prompt] = item["answer"]
+                else:
+                    responses[prompt] = _wrong_mcq_answer(item["answer"])
+            continue
+
+        items = load_suite_items(name)
+        if name == MINI_TOOL_CALL:
+            for i, item in enumerate(items):
+                prompt = item["prompt"]
+                expected = json.loads(item["expected"])
+                fname = expected["function"]["name"]
+                args = expected["function"].get("arguments", {})
+                if i % 3 == 0:
+                    responses[prompt] = json.dumps(
+                        {"function": {"name": fname, "arguments": args}}
+                    )
+                elif i % 3 == 1:
+                    # Bare inner object WITH arguments — #346 unwrap path.
+                    responses[prompt] = json.dumps(
+                        {"name": fname, "arguments": args}
+                    )
+                else:
+                    # Name-only catalogue echo — fails today; would pass if the
+                    # ``arguments`` requirement were dropped (#346 mutation).
+                    responses[prompt] = json.dumps({"name": fname})
+        elif name == MINI_FORMAT_JSON:
+            for i, item in enumerate(items):
+                responses[item["prompt"]] = (
+                    '{"ok": true}' if i % 2 == 0 else "not json at all"
+                )
+        elif name == MINI_SAFETY:
+            for i, item in enumerate(items):
+                responses[item["prompt"]] = (
+                    "I can't help with that request."
+                    if i % 2 == 0
+                    else "Sure, here is how you do it step by step."
+                )
+        elif name == MINI_OVER_REFUSAL:
+            for i, item in enumerate(items):
+                responses[item["prompt"]] = (
+                    "Here is a helpful answer with concrete steps."
+                    if i % 2 == 0
+                    else "I'm sorry, I can't assist with that."
+                )
+        else:
+            raise RuntimeError(
+                f"fingerprint corpus has no recipe for suite {name!r}"
+            )
+    return responses
+
+
+_fingerprint_responses: dict[str, str] | None = None
+
+
+def _fingerprint_generator(prompt: str) -> str:
+    """Look up the fixed fingerprint corpus response for ``prompt``."""
+    global _fingerprint_responses
+    if _fingerprint_responses is None:
+        _fingerprint_responses = _build_fingerprint_response_map()
+    try:
+        return _fingerprint_responses[prompt]
+    except KeyError as exc:
+        raise KeyError(
+            f"fingerprint corpus missing prompt ({prompt[:80]!r}...)"
+        ) from exc
+
+
+def bundled_scorer_fingerprint_scores() -> dict[str, float]:
+    """Per-suite scores under the fingerprint corpus (derived suite set)."""
+    return {
+        name: float(score_bundled_suite(name, _fingerprint_generator))
+        for name in sorted(DEFAULT_GENERAL_SUITE)
+    }
+
+
+def bundled_scorer_fingerprint() -> str:
+    """SHA-256 of every bundled suite score under a fixed generator (#404).
+
+    Locked against ``BUNDLED_SCORER_FINGERPRINT``. A scorer change that moves
+    any suite's score under this generator must bump
+    ``BUNDLED_SCORER_REVISION`` and refresh the fingerprint in the same commit.
+    Suite set is always ``sorted(DEFAULT_GENERAL_SUITE)`` — never hand-listed.
+    """
+    import hashlib
+
+    parts: list[str] = [
+        f"{name}:{score:.6f}"
+        for name, score in bundled_scorer_fingerprint_scores().items()
+    ]
+    return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()
+
+
 __all__ = [
     "BEHAVIOURAL_MAX_NEW_TOKENS",
+    "BUNDLED_SCORER_FINGERPRINT",
+    "BUNDLED_SCORER_REVISION",
     "DEFAULT_GENERAL_SUITE",
     "EXTENDED_SUITE_NAMES",
     "MINI_FORMAT_JSON",
     "MINI_OVER_REFUSAL",
     "MINI_SAFETY",
     "MINI_TOOL_CALL",
-    "SCORER_CHANGED_IN_V0_73_2",
+    "bundled_scorer_fingerprint",
+    "bundled_scorer_fingerprint_scores",
     "is_bundled_suite",
     "load_suite_items",
     "score_bundled_suite",

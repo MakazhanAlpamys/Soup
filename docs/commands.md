@@ -52,6 +52,7 @@ soup agent train --spec api.yaml --base model  One-shot synth + planned soup tra
 soup agent eval --spec api.yaml --predictions p.jsonl  Score predicted tool-calls vs spec catalog
 soup agent eval --spec api.yaml --predictions p.jsonl --sandbox  Execute each tool-call in the RLVR sandbox: ok/tool_error/timeout/arg_error
 soup eval benchmark --model ./output          Evaluate on standard benchmarks
+soup eval aider --model openai/gpt-4.1 --output ./aider-results --exercises-dir ./polyglot-benchmark  Run Aider Polyglot in Docker
 soup eval custom --tasks eval.jsonl           Custom eval tasks from JSONL
 soup eval judge --target resp.jsonl           LLM-as-a-judge evaluation
 soup eval auto --config soup.yaml             Auto-eval from config
@@ -186,6 +187,9 @@ soup ci init [--data d.jsonl --suite s.yaml --evidence ev.json] [--config soup.y
 soup mcp serve                                MCP server over stdio (drive Soup from Claude Code / Cursor / Cline; requires [mcp] extra) (v0.71.28)
 soup mcp serve --allow-mutating               Also expose plan-only train_start / export tools (never execute) (v0.71.28)
 soup mcp serve --allow-execute                Implies --allow-mutating; enables train_execute / export_execute via server confirmation tokens
+soup mcp serve --transport sse [--host H --port N]  Serve the same registry over HTTP+SSE instead of stdio; binds 127.0.0.1 and requires a Bearer token (#296)
+soup mcp serve --transport http [--auth-token T]    Same over the streamable-HTTP transport (/mcp); --auth-token pins the token instead of generating one (#296)
+soup mcp serve --transport sse|http --allow-execute   REFUSED - gated execution spawns real processes and is stdio-only (#296)
 soup shrink --model <id|path> --drop-ratio 0.25 --calib c.jsonl -o shrunk  Depth-prune least-important layer block + SHIP/DON'T-SHIP ppl verdict (exit 0/2/1) (v0.71.29)
 soup shrink ... --drop-layers N --heal h.jsonl --heal-steps 200 --device cpu  Drop N layers + distill-heal (fuse LoRA back to one dense model)
 soup shrink ... --tolerance 0.10 --plan-only [--attach-to-registry <id>]  Ppl-regression tolerance / print importance table only / registry attach
@@ -212,7 +216,7 @@ soup bench <model> --p50 --p95                Bench with tail-latency percentile
 soup bench <model> --backend auto             Auto-detect transformers/mlx backend (v0.53.9)
 soup serve --reasoning-parser deepseek-r1     Strip <think> blocks from responses (v0.53.9)
 soup doctor [--nccl] [--disk]                 Check environment (optionally check NCCL bandwidth, media type; --disk ~9s cold / ~2.4s warm)
-soup monitor                                  Live GPU monitor: util / temp / VRAM / power per GPU
+soup monitor                                  NVIDIA / Apple Silicon GPU monitor: util / temp / VRAM / power
 soup quickstart [--dry-run]                   Full demo
 soup plugins list|install|enable|disable      Manage Soup plugins
 soup llama cli|mtmd-cli|gguf-split|server ... Proxy to the llama.cpp binaries
@@ -324,7 +328,7 @@ soup --verbose <command>                      Full traceback on errors
 ## Fine-tune from your coding agent (MCP)
 
 `soup mcp serve` runs a [Model Context Protocol](https://modelcontextprotocol.io)
-server over **stdio**, so any MCP client — Claude Code, Cursor, Cline, Continue —
+server over **stdio** (default) or a local **SSE / HTTP** listener, so any MCP client — Claude Code, Cursor, Cline, Continue —
 can drive Soup conversationally. Install the extra first:
 
 ```bash
@@ -341,6 +345,55 @@ the **Claude Desktop** config (`claude_desktop_config.json`):
   }
 }
 ```
+
+### Remote or multi-client: the SSE and HTTP transports
+
+stdio suits a client that spawns Soup as a subprocess. For a client on another
+machine, or several clients sharing one server, run a listener instead:
+
+```bash
+soup mcp serve --transport sse                 # GET /sse + POST /messages/
+soup mcp serve --transport http                # streamable HTTP on /mcp
+soup mcp serve --transport sse --host 127.0.0.1 --port 8765 --auth-token "$TOKEN"
+```
+
+Both bind `127.0.0.1:8765` by default and **require a Bearer token on every
+request**. With `--auth-token` omitted, a fresh one is generated at startup and
+printed to stderr; it is 16-128 urlsafe-base64 characters, the same shape
+`soup ui` uses. Point a client at it with a header:
+
+```json
+{
+  "mcpServers": {
+    "soup": {
+      "url": "http://127.0.0.1:8765/sse",
+      "headers": { "Authorization": "Bearer <token>" }
+    }
+  }
+}
+```
+
+The registry is identical across transports — same tools, same schemas, same
+`--allow-mutating` / `--allow-execute` gating. Only the wire changes.
+
+**Security:**
+- **The token is required and there is no opt-out.** A loopback listener is
+  reachable by every process on the machine, not just by you.
+- **The token travels in the header, never the URL.** There is deliberately no
+  query-string fallback, so it cannot be captured in proxy or access logs.
+- **DNS-rebinding protection is on.** A request whose `Host` is not the address
+  the server bound to is refused with `421`, a foreign `Origin` with `403`.
+  This is the gate the Bearer token cannot be: a web page the operator merely
+  visits attaches no `Authorization` header, but its request still arrives at
+  the port.
+- **A non-loopback `--host` prints a warning**, and a wildcard bind (`0.0.0.0`)
+  prints a second one — with no single advertised name there is nothing to pin,
+  so the Host check degrades to accepting any `Host`.
+- **`--host` / `--port` / `--auth-token` are refused under `--transport stdio`**
+  rather than silently ignored: stdio has no listener and nothing to authorize.
+
+The network transports need `mcp >= 1.10.0` — streamable HTTP landed in 1.8.0
+and rebinding protection in 1.10.0 — which is the floor `soup-cli[mcp]` pins.
 
 The server exposes 14 read-only tools — `advise`, `data_inspect`,
 `data_validate`, `data_score`, `data_doctor`, `recipes_search`, `recipes_show`,
