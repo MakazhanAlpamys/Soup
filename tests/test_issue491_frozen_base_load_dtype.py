@@ -159,10 +159,62 @@ class TestWrapperModelKwargsCarryDtype:
         fake_tokenizer = MagicMock()
         load_mock = MagicMock(side_effect=_StopAtLoadError())
 
+        # A sentinel, not the literal "auto" the resolver happens to return on
+        # cpu: proves the wrapper wires the resolver's *return value* through
+        # to from_pretrained, not merely that it passes cpu's own default.
+        # Patched in the wrapper module's own namespace (each trainer imports
+        # the name directly), mirroring the real dtype-resolution call site.
+        sentinel = object()
         with patch("transformers.AutoTokenizer.from_pretrained", return_value=fake_tokenizer), \
-             patch(f"transformers.{model_class_name}.from_pretrained", load_mock):
+             patch(f"transformers.{model_class_name}.from_pretrained", load_mock), \
+             patch(f"{module_path}.resolve_frozen_base_load_dtype", return_value=sentinel):
             with pytest.raises(_StopAtLoadError):
                 wrapper._setup_transformers(cfg, cfg.training)
 
         assert load_mock.call_args is not None, "from_pretrained was never called"
-        assert load_mock.call_args.kwargs.get("torch_dtype") == "auto"
+        assert load_mock.call_args.kwargs.get("torch_dtype") is sentinel
+
+
+class TestRewardModelHeadUpcastToFp32:
+    """PR #492 review: a SEQ_CLS LoRA base auto-adds a ``modules_to_save``
+    wrapper around ``score`` that ``get_peft_model``'s adapter autocast does
+    not reach, so a bf16-resolved frozen base left the reward head training
+    in pure bf16 with no fp32 master weights. Uses a real tiny model (not a
+    mock) since the bug is in peft's own autocast scope, not in this
+    codebase's kwargs wiring.
+    """
+
+    def test_score_head_is_fp32_even_when_base_resolves_to_bf16(self):
+        import torch
+
+        from soup_cli.trainer.reward_model import RewardModelTrainerWrapper
+
+        cfg = SoupConfig(
+            base="hf-internal-testing/tiny-random-gpt2",
+            task="reward_model",
+            data={"train": "./data.jsonl"},
+            training={"quantization": "none"},
+        )
+        wrapper = RewardModelTrainerWrapper(cfg, device="cpu")
+
+        with patch(
+            "soup_cli.trainer.reward_model.resolve_frozen_base_load_dtype",
+            return_value=torch.bfloat16,
+        ):
+            wrapper._setup_transformers(cfg, cfg.training)
+
+        head_params = [
+            p for n, p in wrapper.model.named_parameters()
+            if p.requires_grad and "score" in n
+        ]
+        assert head_params, "no trainable score-head parameter found on the PEFT model"
+        assert all(p.dtype == torch.float32 for p in head_params), (
+            "reward head stayed in the frozen base's bf16 load dtype"
+        )
+        # The base itself really did load bf16 (proves the fixture reproduces
+        # the bug's precondition, not just that everything is fp32 already).
+        base_dtype = next(
+            p.dtype for n, p in wrapper.model.named_parameters()
+            if not p.requires_grad and "lora_" not in n and "score" not in n
+        )
+        assert base_dtype == torch.bfloat16

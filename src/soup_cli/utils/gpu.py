@@ -457,7 +457,10 @@ def resolve_frozen_base_load_dtype(device: str):
     resident weights in bf16 storage while every other tensor on the card is
     float16, the same storage/compute split v0.73.1 (#385/#387) removed from
     the other bf16-hardcoded call sites. Returning ``torch.float16`` there
-    keeps storage and compute in the same dtype.
+    keeps storage and compute in the same dtype. On CPU this still returns
+    ``"auto"``: the VRAM-saving reason for keeping the checkpoint's own dtype
+    does not apply there, but CPU use in this codebase is smoke tests only,
+    so a bf16-saved checkpoint loading bf16 on CPU is harmless in practice.
     """
     _, fp16_only = bf16_fp16_flags(device)
     if fp16_only:
