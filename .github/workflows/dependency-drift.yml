@@ -45,6 +45,8 @@ jobs:
           from importlib.metadata import PackageNotFoundError, requires, version
 
           from packaging.requirements import Requirement
+          from packaging.specifiers import SpecifierSet
+          from packaging.version import Version
 
           # The stack whose drift has actually cost releases (#323).
           WATCHED = {
@@ -72,8 +74,66 @@ jobs:
           # Two extras declaring incompatible ranges for one package is a
           # resolver failure waiting for the first person to combine them, and
           # nothing else in CI installs every extra together to find out.
+          #
+          # `len(specs) > 1` was NOT that test. Two declarations can differ and
+          # still overlap -- `>=4.36.0,<5.0.0` alongside `>=4.40.0` installs
+          # perfectly well -- so it failed the job on correct declarations, and
+          # a guard that fires on correct code is one people delete. Ask the
+          # real question instead: is there any single version that satisfies
+          # every declaration at once?
+          def _unsatisfiable(specs):
+              sets = [SpecifierSet(spec) for spec in specs if spec != "(unpinned)"]
+              if len(sets) < 2:
+                  return False
+              probes = [
+                  Version(f"{major}.{minor}.0")
+                  for major in range(0, 12)
+                  for minor in range(0, 60)
+              ]
+              # Each declared bound verbatim: an off-by-one lives exactly there.
+              for spec_set in sets:
+                  for clause in spec_set:
+                      try:
+                          probes.append(Version(clause.version))
+                      except Exception:
+                          continue
+              return not any(
+                  all(spec_set.contains(v, prereleases=True) for spec_set in sets)
+                  for v in probes
+              )
+
+          # A conflict upstream blocks is not actionable, and this report's own
+          # test already says a weekly alarm that is always red gets muted
+          # within a month. Acknowledged conflicts are PRINTED with their issue
+          # and do not fail the job. The key is the EXACT declared pair, so
+          # changing either side re-arms the alarm instead of inheriting the
+          # acknowledgement.
+          # Written as authored; compared as PARSED. `str(req.specifier)`
+          # reorders clauses -- `>=4.36.0,<5.0.0` reads back as
+          # `<5.0.0,>=4.36.0` -- so matching written strings would never fire
+          # and the acknowledgement would be inert while the job stayed red.
+          ACKNOWLEDGED = {
+              "transformers": ({">=4.36.0,<5.0.0", ">=5.0.0"}, 503),
+          }
+
+          def _same_declarations(declared, remembered):
+              return {SpecifierSet(x) for x in declared} == {
+                  SpecifierSet(x) for x in remembered
+              }
+
+          conflicting = {
+              name: specs for name, specs in by_package.items() if _unsatisfiable(specs)
+          }
+          acknowledged = {
+              name: (specs, ACKNOWLEDGED[name][1])
+              for name, specs in conflicting.items()
+              if name in ACKNOWLEDGED
+              and _same_declarations(specs, ACKNOWLEDGED[name][0])
+          }
           contradictory = {
-              name: specs for name, specs in by_package.items() if len(specs) > 1
+              name: specs
+              for name, specs in conflicting.items()
+              if name not in acknowledged
           }
 
           print("## Resolved stack vs declared bounds\n")
@@ -90,6 +150,17 @@ jobs:
                   "\nA package declared with incompatible ranges in two "
                   "extras cannot be installed by anyone who asks for both."
               )
+
+          if acknowledged:
+              print("\n### Acknowledged conflicts\n")
+              for name, (specs, issue) in sorted(acknowledged.items()):
+                  print(
+                      f"- **{name}**: "
+                      + " vs ".join(sorted(specs))
+                      + f" -- tracked in #{issue}, blocked upstream. Still"
+                      " unsatisfiable; listed rather than failed so that a NEW"
+                      " conflict is not hidden behind a permanently red run."
+                  )
 
           if floor_only:
               print(

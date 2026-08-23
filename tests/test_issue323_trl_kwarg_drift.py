@@ -297,3 +297,144 @@ class TestTheDriftWorkflowCanActuallyFail:
             "the report exits at module level, so a clean weekly run would go "
             "red too"
         )
+
+
+class TestTheDriftAlarmDoesNotCryWolf:
+    """The alarm must go red on a NEW conflict and stay quiet otherwise.
+
+    ``TestTheDriftWorkflowCanActuallyFail`` above already writes down the rule
+    -- *a weekly alarm that is always red gets muted within a month* -- and
+    then checks only that the report has no module-level ``sys.exit``. On its
+    first real run the job went red, correctly, on the ``transformers``
+    conflict between ``[train]`` and ``[mlx]`` (#503). That conflict is blocked
+    upstream, so it would have reddened every Monday indefinitely, and a NEW
+    conflict arriving later would have been invisible inside an already-red
+    job -- which is the alarm's only job.
+
+    Two defects were behind that, and only the second was the one this class
+    was opened for:
+
+    1. ``len(specs) > 1`` detected *differing* declarations, not incompatible
+       ones. ``>=4.36.0,<5.0.0`` alongside ``>=4.40.0`` installs perfectly
+       well and would have failed the job -- a guard firing on correct code.
+    2. There was no way to acknowledge a tracked conflict.
+
+    These execute the report under synthetic metadata rather than inspecting
+    it. The distinction is load-bearing here: the acknowledgement was first
+    keyed on the written string ``">=4.36.0,<5.0.0"``, but
+    ``str(req.specifier)`` reads it back as ``"<5.0.0,>=4.36.0"``, so it never
+    matched and was inert while the job stayed red. Every spelling-level
+    assertion passed on that version.
+    """
+
+    ACK_TRAIN = 'transformers>=4.36.0,<5.0.0; extra == "train"'
+    ACK_MLX = 'transformers>=5.0.0; extra == "mlx"'
+
+    @staticmethod
+    def _run(requirements: list[str]) -> tuple[int, str]:
+        """Execute the report with these declared requirements."""
+        import contextlib
+        import importlib.metadata
+        import io
+        from unittest.mock import patch
+
+        source = TestTheDriftWorkflowCanActuallyFail._report_source()
+
+        def fake_requires(_name):
+            return list(requirements)
+
+        def fake_version(name):
+            raise importlib.metadata.PackageNotFoundError(name)
+
+        out = io.StringIO()
+        code = 0
+        with patch.object(
+            importlib.metadata, "requires", fake_requires
+        ), patch.object(importlib.metadata, "version", fake_version):
+            try:
+                with contextlib.redirect_stdout(out), contextlib.redirect_stderr(
+                    io.StringIO()
+                ):
+                    exec(  # noqa: S102 - the workflow's own script, by design
+                        compile(source, "<drift-report>", "exec"),
+                        {"__name__": "__drift__"},
+                    )
+            except SystemExit as exc:
+                code = exc.code if isinstance(exc.code, int) else 1
+        return code, out.getvalue()
+
+    def test_a_compatible_pair_declared_two_ways_does_not_fail(self):
+        """The false positive: differing is not the same as incompatible."""
+        code, _ = self._run(
+            [
+                self.ACK_TRAIN,
+                'transformers>=4.40.0; extra == "somethingelse"',
+            ]
+        )
+        assert code == 0, (
+            "`>=4.36.0,<5.0.0` and `>=4.40.0` overlap and install together, so "
+            "failing on them is an alarm firing on correct declarations"
+        )
+
+    def test_an_unsatisfiable_pair_still_fails(self):
+        """The alarm's whole purpose: it must still go red on a real one."""
+        code, _ = self._run(
+            [
+                'torch>=1.0,<2.0; extra == "a"',
+                'torch>=3.0; extra == "b"',
+            ]
+        )
+        assert code == 1, (
+            "no version satisfies both, so nobody asking for both extras can "
+            "install; that must fail the job"
+        )
+
+    def test_the_tracked_conflict_is_acknowledged_rather_than_red(self):
+        code, _ = self._run([self.ACK_TRAIN, self.ACK_MLX])
+        assert code == 0, (
+            "the transformers conflict is tracked in #503 and blocked "
+            "upstream; leaving it red every Monday buries the next real one"
+        )
+
+    def test_the_acknowledged_conflict_is_still_printed_with_its_issue(self):
+        """Acknowledged must mean visible, not silenced."""
+        _, out = self._run([self.ACK_TRAIN, self.ACK_MLX])
+        assert "Acknowledged conflicts" in out, (
+            "an acknowledged conflict that prints nothing is indistinguishable "
+            "from one nobody noticed"
+        )
+        assert "#503" in out, "the acknowledgement must name where it is tracked"
+
+    def test_changing_either_side_re_arms_the_alarm(self):
+        """An acknowledgement covers ONE pair, not the package forever."""
+        code, _ = self._run(
+            [self.ACK_TRAIN, 'transformers>=6.0.0; extra == "mlx"']
+        )
+        assert code == 1, (
+            "the acknowledgement is keyed on the exact declared pair; moving "
+            "either bound is a different conflict and must go red again"
+        )
+
+    def test_the_acknowledgement_is_keyed_on_parsed_specifiers(self):
+        """Regression: a written-string key is inert, and looks identical.
+
+        `str(req.specifier)` reorders clauses, so an acknowledgement written as
+        `>=4.36.0,<5.0.0` is compared against `<5.0.0,>=4.36.0` and never
+        matches. This asserts the acknowledgement fires when the SAME bounds
+        arrive spelled in the other order.
+        """
+        code, out = self._run(
+            [
+                'transformers<5.0.0,>=4.36.0; extra == "train"',
+                self.ACK_MLX,
+            ]
+        )
+        assert code == 0 and "Acknowledged conflicts" in out, (
+            "the same bounds written in a different order must still be "
+            "recognised; comparing written strings makes the entry inert"
+        )
+
+    def test_a_single_declaration_is_never_a_conflict(self):
+        """Control: one declaration has nothing to be incompatible with."""
+        code, _ = self._run([self.ACK_TRAIN])
+        assert code == 0
