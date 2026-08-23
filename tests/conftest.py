@@ -34,7 +34,7 @@ def sample_alpaca_data(tmp_data_dir: Path) -> Path:
     samples = [
         {
             "instruction": "What is Python?",
-            "input": "",
+            "input": "input",
             "output": "Python is a programming language.",
         },
         {
