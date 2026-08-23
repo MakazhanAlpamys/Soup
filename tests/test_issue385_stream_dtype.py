@@ -55,6 +55,14 @@ class _FakeCuda:
         return (8, 0) if self._bf16 else (7, 5)
 
 
+class _FakeMps:
+    def __init__(self, available: bool):
+        self._available = available
+
+    def is_available(self) -> bool:
+        return self._available
+
+
 @pytest.fixture()
 def fake_torch(monkeypatch):
     """Patch ``torch.cuda`` in place; the resolver imports torch lazily."""
@@ -64,6 +72,31 @@ def fake_torch(monkeypatch):
         fake = _FakeCuda(available, bf16, emulated)
         monkeypatch.setattr(torch, "cuda", fake)
         return fake
+
+    return apply
+
+
+@pytest.fixture()
+def fake_mps(monkeypatch):
+    """Patch the tiny MPS capability allocation without requiring a Mac."""
+    import torch
+
+    real_empty = torch.empty
+    probes = []
+
+    def apply(*, available: bool, bf16: bool):
+        monkeypatch.setattr(torch.backends, "mps", _FakeMps(available))
+
+        def _empty(*args, **kwargs):
+            if str(kwargs.get("device", "")) == "mps":
+                probes.append(kwargs.get("dtype"))
+                if not bf16:
+                    raise TypeError("MPS bfloat16 requires macOS 14 or newer")
+                return real_empty(*args, **{**kwargs, "device": "cpu"})
+            return real_empty(*args, **kwargs)
+
+        monkeypatch.setattr(torch, "empty", _empty)
+        return probes
 
     return apply
 
@@ -117,6 +150,28 @@ class TestResolveStreamDtype:
         fake_torch(available=True, bf16=True)
         assert resolve_stream_dtype("cpu") == "float32"
 
+    def test_available_mps_with_bfloat16_support_gets_bfloat16(self, fake_mps):
+        import torch
+
+        from soup_cli.utils.layer_stream import resolve_stream_dtype
+
+        probes = fake_mps(available=True, bf16=True)
+        assert resolve_stream_dtype("mps") == "bfloat16"
+        assert probes == [torch.bfloat16]
+
+    def test_mps_without_bfloat16_support_falls_back_to_float32(self, fake_mps):
+        from soup_cli.utils.layer_stream import resolve_stream_dtype
+
+        fake_mps(available=True, bf16=False)
+        assert resolve_stream_dtype("mps") == "float32"
+
+    def test_unavailable_mps_does_not_claim_bfloat16(self, fake_mps):
+        from soup_cli.utils.layer_stream import resolve_stream_dtype
+
+        probes = fake_mps(available=False, bf16=True)
+        assert resolve_stream_dtype("mps") == "float32"
+        assert probes == []
+
     def test_cuda_index_is_still_cuda(self, fake_torch):
         from soup_cli.utils.layer_stream import resolve_stream_dtype
 
@@ -156,6 +211,24 @@ class TestResolveStreamDtype:
                 "torch."
             )
         assert torch is not None  # the import is the point of the comparison
+
+    @pytest.mark.skipif(
+        not __import__("torch").backends.mps.is_available(),
+        reason="requires an available Apple Silicon MPS backend",
+    )
+    def test_real_mps_bfloat16_forward_and_backward(self):
+        import torch
+
+        from soup_cli.utils.layer_stream import resolve_stream_dtype
+
+        assert resolve_stream_dtype("mps") == "bfloat16"
+        value = torch.randn(16, 16, device="mps", dtype=torch.bfloat16)
+        value.requires_grad_(True)
+        loss = (value @ value).float().square().mean()
+        loss.backward()
+        torch.mps.synchronize()
+        assert value.grad is not None
+        assert value.grad.dtype == torch.bfloat16
 
 
 class TestStreamSetupUsesTheResolver:

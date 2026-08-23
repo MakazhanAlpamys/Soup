@@ -263,9 +263,11 @@ to the MPS allocator while `is_pinned()` is still false (#434). Soup refuses tha
 the source boundary and also disables pinning before allocation. Apple Silicon has unified
 physical memory, so the CUDA capacity and throughput numbers below do not transfer: only
 the MPS allocator's streamed weights are bounded by the buffer pool, while the CPU source
-still consumes unified memory. No claim is made yet that streaming fits a larger model or
-runs faster than resident MPS training. `backend: mlx` remains a separate, incompatible
-model-loading path and is rejected with `stream_layers`.
+still consumes unified memory. On macOS 14+ the store and compute dtype are bfloat16 after
+a live one-element MPS capability probe; an older runtime falls back to float32 explicitly.
+No claim is made yet that streaming fits a larger model or runs faster than resident MPS
+training. `backend: mlx` remains a separate, incompatible model-loading path and is rejected
+with `stream_layers`.
 
 The tradeoff: **1.43× slower than resident training**, measured at 0.5B — the only apples-to-apples comparison available on the reference box, because 1.5B and above cannot run resident there at all.
 
