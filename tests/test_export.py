@@ -66,6 +66,17 @@ def test_find_quantize_binary_in_build(tmp_path: Path):
     assert _find_quantize_binary(tmp_path) == quantize
 
 
+def test_find_quantize_binary_on_path(tmp_path: Path, monkeypatch):
+    """Should retain production discovery of a globally installed binary."""
+    global_binary = tmp_path.parent / "global-bin" / "llama-quantize"
+    monkeypatch.setattr(
+        "soup_cli.commands.export.shutil.which",
+        lambda name: str(global_binary) if name == "llama-quantize" else None,
+    )
+
+    assert _find_quantize_binary(tmp_path) == global_binary
+
+
 # --- Constants ---
 
 def test_supported_formats():
