@@ -50,6 +50,30 @@ dependencies = [
 # These were core dependencies through v0.70.0; pins are unchanged.
 train = [
     "torch>=2.0.0",
+    # THE <5.0.0 CEILING IS LOAD-BEARING. Do not lift it as a precaution: it was set
+    # 2026-05-08, before transformers 5 existed, which is exactly why it reads like one.
+    # Measured against transformers 5.15.1 -- 45 tests fail, not one of them in Soup.
+    #
+    # transformers 5 changed the return type of a PRIVATE helper that trl imports:
+    #     4.57.6:  _is_package_available("weave") -> False         (bool, falsey)
+    #     5.15.1:  _is_package_available("weave") -> (False, None) (tuple, TRUTHY)
+    # The tuple comes back for present packages too, so the inversion fires on ABSENT
+    # ones: "not installed" reads as true. trl/import_utils.py derives its optional
+    # dependency flags from that helper, so the guarded `import weave` runs anyway and
+    # dpo_trainer / grpo_trainer never import behind the ModuleNotFoundError. 13
+    # module-level flags in trl 0.19.1 are built this way; weave merely fires first.
+    #
+    # The trl boundary is exact, and it is why this bound cannot be lifted alone:
+    # trl 0.28.0 still imports the private helper; trl 0.29.0 vendors its own
+    # _is_package_available (importlib.util.find_spec) and is immune. That is ONE
+    # version above Soup's own `trl<0.29` cap. So the chain is
+    # transformers<5 <- trl<0.29 <- the BasePairwiseJudge import documented below,
+    # and lifting any single link achieves nothing.
+    #
+    # Consequence: [mlx] needs transformers>=5.0.0 -- mlx-lm's own requirement, only
+    # restated in that extra -- so [train] and [mlx] cannot co-install, and there is no
+    # side to concede. Full measurement and the acceptance criteria for lifting this
+    # bound live in issue #503. Guarded by tests/test_transformers_ceiling_compat.py.
     "transformers>=4.36.0,<5.0.0",
     "peft>=0.7.0",
     # Capped below 0.29. #326 raised this from `<0.27` after migrating the six

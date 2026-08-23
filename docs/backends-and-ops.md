@@ -88,6 +88,30 @@ Transformers backend. A Hugging Face `datasets` source or streaming dataset
 still needs `datasets` because that data source owns the dependency; the local
 file path below does not.
 
+> **`[mlx]` and `[train]` cannot be installed together, and that is not a style
+> preference.** `pip install "soup-cli[train,mlx]"` fails with pip's
+> `ResolutionImpossible`, whose output says nothing about the actual cause:
+>
+> - `mlx-lm` requires `transformers>=5.0.0`. The `[mlx]` extra only restates that
+>   upstream requirement, so deleting the line does not help -- the transitive
+>   requirement remains.
+> - `[train]` caps `transformers<5.0.0`, and the cap is load-bearing. On
+>   transformers 5 a private helper that `trl` imports returns a truthy tuple where
+>   it used to return `False`, so `trl`'s optional-import guards invert and
+>   `dpo_trainer` / `grpo_trainer` stop importing. Measured on transformers 5.15.1:
+>   45 test failures, none of them in Soup's own code.
+> - `trl` itself is fixed from **0.29.0**, which vendors its own copy of the helper --
+>   but that is one version above Soup's `trl<0.29` cap, and that cap is held by an
+>   unrelated break (`BasePairwiseJudge` moved to `trl.experimental.judges`). The
+>   chain is `transformers<5` <- `trl<0.29` <- the judge import, so lifting any one
+>   link on its own changes nothing.
+>
+> There is no side to concede -- `mlx-lm` needs transformers 5, transformers 5 breaks
+> `trl`, and `trl` is what trains. Install one extra or the other; use separate
+> virtualenvs if you need both on one machine. The full measurement and the criteria
+> for lifting the cap are in
+> [#503](https://github.com/MakazhanAlpamys/Soup/issues/503).
+
 `detect_device()` and `get_gpu_info()` recognise Apple Silicon when
 `backend: mlx` is set, preserving `training.quantization: 4bit` for
 `mlx-community` pre-quantized checkpoints instead of silently downgrading to
