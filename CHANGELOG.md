@@ -198,6 +198,17 @@ reproducing 70+ versions of notes.
 
 ### Fixed
 
+- **The twelve non-SFT trainers (`dpo`, `kto`, `orpo`, `simpo`, `ipo`, `bco`,
+  `online_dpo`, `grpo`, `ppo`, `pretrain`, `reward_model`, `embedding`) loaded
+  a frozen LoRA base as float32 regardless of the checkpoint's own dtype
+  (#491 by @AmirF194).** #471 fixed this for the SFT trainer; the
+  same `model_kwargs` shape, missing the same key, was unchanged in the
+  other twelve. None of them has a full fine-tuning branch, so every load
+  there is a frozen base: the new shared `resolve_frozen_base_load_dtype()`
+  keeps the checkpoint's own dtype (`torch_dtype="auto"`), except on a
+  pre-Ampere CUDA card, where it now matches the float16 compute dtype
+  those cards already use instead of leaving the base in bf16 storage.
+
 - **Layer streaming now keeps its host store on CPU on Apple Silicon
   (#434 by @Amix29 in #480).**
   PyTorch 2.7+ can return an MPS tensor for

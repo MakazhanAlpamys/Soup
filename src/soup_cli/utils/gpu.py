@@ -445,6 +445,28 @@ def bf16_fp16_flags(device: str) -> tuple[bool, bool]:
     return (supported, not supported)
 
 
+def resolve_frozen_base_load_dtype(device: str):
+    """``torch_dtype`` for ``from_pretrained`` when loading a frozen (LoRA) base.
+
+    A frozen base never receives an optimizer step, so there is no reason to
+    upcast it to the HF default of float32 on load: keep the checkpoint's own
+    dtype (``"auto"``). The one exception is a pre-Ampere CUDA card (T4, P100,
+    V100, GTX 16xx, RTX 20xx): ``bf16_fp16_flags`` already routes mixed
+    precision compute to float16 there, since those cards have no bf16 units.
+    An ``"auto"`` load of a bf16-saved checkpoint would then leave the
+    resident weights in bf16 storage while every other tensor on the card is
+    float16, the same storage/compute split v0.73.1 (#385/#387) removed from
+    the other bf16-hardcoded call sites. Returning ``torch.float16`` there
+    keeps storage and compute in the same dtype.
+    """
+    _, fp16_only = bf16_fp16_flags(device)
+    if fp16_only:
+        import torch
+
+        return torch.float16
+    return "auto"
+
+
 def get_compute_dtype():
     """Return the best compute dtype for the current device.
 
