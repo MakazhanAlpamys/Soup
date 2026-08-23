@@ -1515,6 +1515,11 @@ class SFTTrainerWrapper(StreamingSetupMixin):
                         "[yellow]LongLoRA override could not be installed "
                         f"({exc}); training with plain attention.[/]"
                     )
+            if getattr(self.trainer.args, "fp16", False) and not getattr(self.trainer.args, "bf16", False):
+                import torch
+                for p in self.trainer.model.parameters():
+                    if p.requires_grad and p.dtype == torch.bfloat16:
+                        p.data = p.data.to(torch.float32)
             self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         duration = time.time() - start
 
