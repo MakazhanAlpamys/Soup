@@ -199,3 +199,101 @@ class TestTheScannerCanActuallyFail:
         )
         for name in _SOUP_OWNED:
             assert re.search(rf"^class {name}\b", source, re.M), name
+
+class TestTheDriftWorkflowCanActuallyFail:
+    """The workflow shipped with no test of its own, and its most actionable
+    output could not fail.
+
+    A package declared with incompatible ranges in two extras cannot be
+    installed by anyone who asks for both -- that is unambiguous and
+    actionable. It was being printed into the step summary of a job that then
+    exited 0, i.e. into somewhere nobody looks. A drift alarm that cannot go
+    red is write-only (review of #486).
+
+    The report is inspected as a parsed tree rather than pattern-matched,
+    following what #496 did for the floor job: assertions on code SPELLING
+    pass with the behaviour killed and the strings kept (#321).
+    """
+
+    @staticmethod
+    def _report_source() -> str:
+        import yaml
+
+        root = pathlib.Path(__file__).resolve().parents[1]
+        raw = (root / ".github" / "workflows" / "dependency-drift.yml").read_text(
+            encoding="utf-8"
+        )
+        workflow = yaml.safe_load(raw)
+        job = next(iter(workflow["jobs"].values()))
+        step = next(
+            s for s in job["steps"] if "Report resolved versions" in s.get("name", "")
+        )
+        # `<<'PY'` is followed by a shell redirection on the SAME line
+        # (`>> "$GITHUB_STEP_SUMMARY"`); the script starts on the next one.
+        # The heredoc marker is followed by a shell redirection on the SAME
+        # line, so the script begins on the next one; and it ends at the
+        # closing marker.
+        after = step["run"].split("<<" + chr(39) + "PY" + chr(39), 1)[1]
+        raw_lines = after.splitlines()[1:]
+        body_lines = []
+        for line in raw_lines:
+            if line.strip() == "PY":
+                break
+            body_lines.append(line)
+        body = "".join(line + chr(10) for line in body_lines)
+        lines = body.splitlines()
+        indent = min(
+            (len(line) - len(line.lstrip()) for line in lines if line.strip()),
+            default=0,
+        )
+        return "\n".join(line[indent:] if line.strip() else "" for line in lines)
+
+    def test_the_workflow_still_parses_and_has_the_report_step(self):
+        """Without this, every assertion below silently stops covering."""
+        source = self._report_source()
+        assert "contradictory" in source, (
+            "the report step no longer computes contradictions; the assertions "
+            "below would pass vacuously"
+        )
+        compile(source, "<drift-report>", "exec")
+
+    def test_contradictory_declarations_fail_the_job(self):
+        """The finding the author surfaced by hand must go red, not into the
+        summary of a green run."""
+        tree = ast.parse(self._report_source())
+        guarded = []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.If):
+                continue
+            test = node.test
+            if not (isinstance(test, ast.Name) and test.id == "contradictory"):
+                continue
+            guarded.extend(
+                call
+                for call in ast.walk(node)
+                if isinstance(call, ast.Call)
+                and isinstance(call.func, ast.Attribute)
+                and call.func.attr == "exit"
+            )
+        assert guarded, (
+            "the report never calls sys.exit under `if contradictory:` -- an "
+            "incompatible declaration would print into a green job's summary, "
+            "which is write-only"
+        )
+
+    def test_a_clean_resolve_does_not_fail_the_job(self):
+        """A guard that fires on correct code is one people delete, and a
+        weekly alarm that is always red gets muted within a month."""
+        tree = ast.parse(self._report_source())
+        unconditional = [
+            node
+            for node in tree.body
+            if isinstance(node, ast.Expr)
+            and isinstance(node.value, ast.Call)
+            and isinstance(node.value.func, ast.Attribute)
+            and node.value.func.attr == "exit"
+        ]
+        assert not unconditional, (
+            "the report exits at module level, so a clean weekly run would go "
+            "red too"
+        )

@@ -41,6 +41,7 @@ jobs:
       - name: Report resolved versions against the declared bounds
         run: |
           python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import sys
           from importlib.metadata import PackageNotFoundError, requires, version
 
           from packaging.requirements import Requirement
@@ -98,6 +99,15 @@ jobs:
                   "recently, so this job is the only thing standing between a "
                   "removal upstream and a user's first `soup train`."
               )
+          if contradictory:
+              # A drift alarm that cannot fail is write-only: the summary of a
+              # green job is not somewhere anyone looks. This is the ONE finding
+              # here that is actionable and unambiguous -- a package declared
+              # with incompatible ranges in two extras cannot be installed by
+              # anyone who asks for both -- so it fails the job (review of #486).
+              names = ", ".join(sorted(contradictory))
+              print(f"::error::contradictory dependency declarations: {names}", file=sys.stderr)
+              sys.exit(1)
           PY
 
       - name: Run the suite against it
