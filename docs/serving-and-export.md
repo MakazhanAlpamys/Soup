@@ -112,6 +112,10 @@ soup export --model ./output --format tensorrt
 soup export --model ./output --format tensorrt --output ./model_trt
 ```
 
+`pip install tensorrt_llm` pins its own `torch`/`transformers`/`numpy`/`datasets`
+versions, which can downgrade a training environment's stack. Install it in a
+separate environment from the one you trained in, and export there.
+
 ### BitNet 1.58 TQ1_0 GGUF Export (live in v0.71.20)
 
 Export a BitNet 1.58-bit model as a `TQ1_0` (1.58-bit ternary) GGUF via
