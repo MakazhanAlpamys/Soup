@@ -72,6 +72,23 @@ _SLUG_RE = re.compile(r"[^A-Za-z0-9._-]+")
 ModulesArg = Union[str, Sequence[str], None]
 
 
+@dataclass(frozen=True)
+class ModelWeightsPlan:
+    """A weight source located before Soup creates a second on-disk copy."""
+
+    model: str
+    source_dir: str
+    weights_dir: str
+    source_bytes: int
+    materialized_copy_bytes: int
+    materialize_bytes: int
+    source_files: Tuple[Tuple[str, int, int], ...]
+
+    @property
+    def needs_materialization(self) -> bool:
+        return self.materialize_bytes > 0
+
+
 def _np():
     import numpy as np  # lazy — keep the CLI import light
 
@@ -541,30 +558,153 @@ def read_cached_scan(
 # ---------------------------------------------------------------------------
 # Resolve + scan orchestration
 # ---------------------------------------------------------------------------
-def resolve_model_weights(model: str) -> str:
-    """Return a local dir of ``.safetensors`` for ``model``.
+def _weight_file_manifest(
+    directory: str,
+    *,
+    permit_symlinks: bool,
+) -> Tuple[Tuple[str, int, int], ...]:
+    """Return ``(basename, size, mtime_ns)`` for top-level safetensors files."""
+    root = os.path.realpath(os.path.expanduser(directory))
+    if not os.path.isdir(root):
+        raise FileNotFoundError(f"weights directory not found: {directory}")
+    files = []
+    for name in sorted(os.listdir(root)):
+        if not name.endswith(".safetensors"):
+            continue
+        path = os.path.join(root, name)
+        if os.path.islink(path) and not permit_symlinks:
+            raise FileNotFoundError(
+                f"weight cache still contains symlinked shard {name!r}"
+            )
+        if not os.path.isfile(path):
+            continue
+        stat = os.stat(path)
+        files.append((name, int(stat.st_size), int(stat.st_mtime_ns)))
+    if not files:
+        raise FileNotFoundError(
+            f"no .safetensors weight files found in {directory}"
+        )
+    return tuple(files)
 
-    A local directory is used as-is; otherwise ``model`` is treated as an HF
-    Hub id and only its weights + config are downloaded (no model load). The
-    download routes through the SSRF-hardened, namespace-pinned
-    :func:`soup_cli.utils.hubs.snapshot_download` (repo-id shape validation +
-    the #186 anti-AI-Jacking TOFU gate), into a contained cache dir — same
-    policy as ``sae_diff.download_sae``.
-    """
+
+def _materialized_matches_hf_snapshot(
+    source_dir: str,
+    materialized_dir: str,
+    source_files: Tuple[Tuple[str, int, int], ...],
+) -> Optional[Tuple[Tuple[str, int, int], ...]]:
+    """Return the real-file manifest when HF metadata proves blob identity."""
+    try:
+        existing = _weight_file_manifest(materialized_dir, permit_symlinks=False)
+    except FileNotFoundError:
+        return None
+    expected_sizes = {name: size for name, size, _mtime in source_files}
+    existing_sizes = {name: size for name, size, _mtime in existing}
+    if existing_sizes != expected_sizes:
+        return None
+    for name, _size, _mtime in source_files:
+        source_path = os.path.join(source_dir, name)
+        if not os.path.islink(source_path):
+            return None
+        blob_id = os.path.basename(os.path.realpath(source_path))
+        metadata_path = os.path.join(
+            materialized_dir,
+            ".cache",
+            "huggingface",
+            "download",
+            name + ".metadata",
+        )
+        try:
+            if os.path.getsize(metadata_path) > 4096:
+                return None
+            with open(metadata_path, encoding="utf-8") as handle:
+                lines = handle.read(4097).splitlines()
+        except OSError:
+            return None
+        # local_dir metadata is: commit hash, blob etag, materialisation time.
+        if len(lines) < 2 or lines[1].strip() != blob_id:
+            return None
+    return existing
+
+
+def plan_model_weights(model: str) -> ModelWeightsPlan:
+    """Locate weights and quantify any copy Soup would need, without making it."""
     if not isinstance(model, str) or not model.strip():
         raise ValueError("model must be a non-empty string")
     if os.path.isdir(model):
-        return os.path.realpath(model)
+        source = os.path.realpath(model)
+        manifest = _weight_file_manifest(source, permit_symlinks=True)
+        return ModelWeightsPlan(
+            model=model,
+            source_dir=source,
+            weights_dir=source,
+            source_bytes=sum(size for _name, size, _mtime in manifest),
+            materialized_copy_bytes=0,
+            materialize_bytes=0,
+            source_files=manifest,
+        )
     from soup_cli.utils.hubs import snapshot_download
 
-    cache_dir = os.path.join(
-        default_spectrum_cache_dir(), "weights", model_slug(model)
-    )
-    return snapshot_download(
+    source = snapshot_download(
         model,
-        cache_dir=cache_dir,
+        cache_dir=None,
         allow_patterns=["*.safetensors", "*.json"],
     )
+    manifest = _weight_file_manifest(source, permit_symlinks=True)
+    source_paths = [os.path.join(source, name) for name, _size, _mtime in manifest]
+    if all(not os.path.islink(path) for path in source_paths):
+        return ModelWeightsPlan(
+            model=model,
+            source_dir=source,
+            weights_dir=source,
+            source_bytes=sum(size for _name, size, _mtime in manifest),
+            materialized_copy_bytes=0,
+            materialize_bytes=0,
+            source_files=manifest,
+        )
+
+    materialized = os.path.join(
+        resolve_cache_dir(), "weights", model_slug(model)
+    )
+    existing = _materialized_matches_hf_snapshot(source, materialized, manifest)
+    needs_copy = existing is None
+    return ModelWeightsPlan(
+        model=model,
+        source_dir=source,
+        weights_dir=materialized,
+        source_bytes=sum(size for _name, size, _mtime in manifest),
+        materialized_copy_bytes=sum(size for _name, size, _mtime in manifest),
+        materialize_bytes=(
+            sum(size for _name, size, _mtime in manifest) if needs_copy else 0
+        ),
+        source_files=manifest if existing is None else existing,
+    )
+
+
+def materialize_model_weights(plan: ModelWeightsPlan) -> str:
+    """Create the planned regular-file copy only when the source requires it."""
+    if not plan.needs_materialization:
+        return plan.weights_dir
+    from soup_cli.utils.hubs import snapshot_download
+
+    resolved = snapshot_download(
+        plan.model,
+        cache_dir=plan.weights_dir,
+        allow_patterns=["*.safetensors", "*.json"],
+    )
+    _weight_file_manifest(resolved, permit_symlinks=False)
+    return resolved
+
+
+def resolve_model_weights(
+    model: str,
+    *,
+    before_materialize: Optional[Callable[[ModelWeightsPlan], None]] = None,
+) -> str:
+    """Return a regular-file weight directory, with an optional pre-copy gate."""
+    plan = plan_model_weights(model)
+    if before_materialize is not None:
+        before_materialize(plan)
+    return materialize_model_weights(plan)
 
 
 def scan_model(

@@ -400,27 +400,29 @@ def _validate_cache_dir(cache_dir: str, *, field: str = "cache_dir") -> str:
 def snapshot_download(
     repo_id: str,
     *,
-    cache_dir: str,
+    cache_dir: str | None,
     revision: str | None = None,
     allow_patterns: list[str] | None = None,
     namespace_check: bool = True,
     allow_namespace_shift: str | None = None,
     _metadata_fn: Optional[Callable[[str], Optional[Tuple[str, str]]]] = None,
 ) -> str:
-    """HF Hub snapshot download into a ``$HOME/.soup``-style cache (v0.71.8 #216).
+    """HF Hub snapshot download, optionally into a contained local directory.
 
     Thin SSRF-hardened wrapper over :func:`huggingface_hub.snapshot_download`
-    used by the SAE / probe weight fetchers. Differs from :func:`download_repo`
-    in that the cache dir may live under ``$HOME`` (not just cwd) so a reusable
-    artifact cache survives a ``cd``; the namespace-pin gate (#186) still runs
-    so a TOFU author-mismatch refuses the download.
+    used by the SAE / probe weight fetchers. A string ``cache_dir`` preserves
+    the historical behaviour and materialises a regular-file snapshot there.
+    ``None`` asks Hugging Face for its canonical cached snapshot instead; this
+    is used by layer streaming to inspect and reuse an existing non-symlinked
+    cache entry before deciding whether a second materialised copy is needed.
+    The namespace-pin gate (#186) runs in both cases.
 
     Returns the absolute path to the downloaded snapshot directory. Raises
     ``ImportError`` (with a pip-install hint) when ``huggingface_hub`` is
     missing, ``ValueError`` for invalid args / a refused namespace.
     """
     _validate_repo_id_shape(repo_id)
-    canonical_cache = _validate_cache_dir(cache_dir)
+    canonical_cache = None if cache_dir is None else _validate_cache_dir(cache_dir)
     if revision is not None:
         if not isinstance(revision, str):
             raise TypeError("revision must be str or None")
@@ -446,13 +448,15 @@ def snapshot_download(
             "huggingface_hub required for snapshot_download; "
             "pip install huggingface-hub"
         ) from exc
+    kwargs = {
+        "repo_id": repo_id,
+        "revision": revision,
+        "allow_patterns": allow_patterns,
+    }
+    if canonical_cache is None:
+        return hf_snapshot_download(**kwargs)
     os.makedirs(canonical_cache, exist_ok=True)
-    return hf_snapshot_download(
-        repo_id=repo_id,
-        local_dir=canonical_cache,
-        revision=revision,
-        allow_patterns=allow_patterns,
-    )
+    return hf_snapshot_download(local_dir=canonical_cache, **kwargs)
 
 
 def download_repo(

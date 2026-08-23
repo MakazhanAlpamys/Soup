@@ -28,7 +28,7 @@ import os
 import re
 import tempfile
 from dataclasses import asdict, dataclass, field
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Tuple
 
 from soup_cli import __version__
 
@@ -178,6 +178,9 @@ class ShardIndex:
     arch: str
     soup_version: str
     source_fingerprint: str = ""
+    #: ``(basename, size, mtime_ns)`` for each source shard. The digest above
+    #: remains the cache key; these components explain a mismatch to the user.
+    source_files: Tuple[Tuple[str, int, int], ...] = ()
     quant: str = QUANT_NONE
     double_quant: bool = False
     #: "cuda" / "cpu" — the device the offline quantisation ran on. CPU and CUDA
@@ -216,6 +219,10 @@ def read_shard_index(out_dir: str) -> ShardIndex:
         arch=str(payload.get("arch", "")),
         soup_version=str(payload.get("soup_version", "")),
         source_fingerprint=str(payload.get("source_fingerprint", "")),
+        source_files=tuple(
+            (str(item[0]), int(item[1]), int(item[2]))
+            for item in (payload.get("source_files") or ())
+        ),
         quant=str(payload.get("quant", QUANT_NONE)),
         double_quant=bool(payload.get("double_quant", False)),
         quant_device=str(payload.get("quant_device", "")),
@@ -310,6 +317,33 @@ def source_weight_bytes(weights_dir: str) -> int:
     return sum(os.path.getsize(path) for path in _discover_safetensors(weights_dir))
 
 
+def _source_file_components(shards: List[str]) -> Tuple[Tuple[str, int, int], ...]:
+    """Components retained beside the digest so a stale cache is explainable."""
+    components = []
+    for path in sorted(shards):
+        stat = os.stat(path)
+        components.append(
+            (os.path.basename(path), int(stat.st_size), int(stat.st_mtime_ns))
+        )
+    return tuple(components)
+
+
+def _fingerprint_components(components: Tuple[Tuple[str, int, int], ...]) -> str:
+    """Hash the exact components that are persisted in ``index.json``."""
+    import hashlib
+
+    digest = hashlib.sha256()
+    for name, size, mtime_ns in components:
+        digest.update(name.encode("utf-8", "replace"))
+        digest.update(f"|{size}|{mtime_ns}|".encode())
+    return digest.hexdigest()
+
+
+def fingerprint_source_files(components: Tuple[Tuple[str, int, int], ...]) -> str:
+    """Public digest helper for the pre-sharding disk planner."""
+    return _fingerprint_components(components)
+
+
 def _source_fingerprint(shards: List[str]) -> str:
     """Identity of the SOURCE checkpoint: basename + size + mtime per shard.
 
@@ -318,14 +352,7 @@ def _source_fingerprint(shards: List[str]) -> str:
     silently reuse stale shards and stream the WRONG WEIGHTS into training —
     no error, just a loss curve describing a different model.
     """
-    import hashlib
-
-    digest = hashlib.sha256()
-    for path in sorted(shards):
-        stat = os.stat(path)
-        digest.update(os.path.basename(path).encode("utf-8", "replace"))
-        digest.update(f"|{stat.st_size}|{int(stat.st_mtime_ns)}|".encode())
-    return digest.hexdigest()
+    return _fingerprint_components(_source_file_components(shards))
 
 
 def _validate_out_dir(out_dir: str) -> str:
@@ -394,15 +421,53 @@ def _atomic_write_index(index: ShardIndex, out_dir: str) -> None:
         raise
 
 
-def _cached_index(
+def _describe_source_change(
+    previous: Tuple[Tuple[str, int, int], ...],
+    current: Tuple[Tuple[str, int, int], ...],
+) -> str:
+    """Name the first fingerprint component that invalidated the cache."""
+    if not previous:
+        return (
+            "source_fingerprint changed; the cached index predates per-file "
+            "component records"
+        )
+    old = {name: (size, mtime) for name, size, mtime in previous}
+    new = {name: (size, mtime) for name, size, mtime in current}
+    if old.keys() != new.keys():
+        added = sorted(new.keys() - old.keys())
+        removed = sorted(old.keys() - new.keys())
+        details = []
+        if added:
+            details.append(f"added {added[0]!r}")
+        if removed:
+            details.append(f"removed {removed[0]!r}")
+        return "source filename set changed (" + ", ".join(details) + ")"
+    for name in sorted(new):
+        old_size, old_mtime = old[name]
+        new_size, new_mtime = new[name]
+        if old_size != new_size:
+            return (
+                f"source size changed for {name!r} "
+                f"({old_size} -> {new_size} bytes)"
+            )
+        if old_mtime != new_mtime:
+            return (
+                f"source mtime_ns changed for {name!r} "
+                f"({old_mtime} -> {new_mtime})"
+            )
+    return "source_fingerprint changed although its recorded components match"
+
+
+def inspect_shard_cache(
     out_dir: str,
     dtype: str,
     fingerprint: str,
+    source_files: Tuple[Tuple[str, int, int], ...],
     quant: str,
     double_quant: bool,
     quant_device: str,
-) -> Optional[ShardIndex]:
-    """Return a reusable index, or None when absent / corrupt / stale.
+) -> Tuple[Optional[ShardIndex], str]:
+    """Return a reusable index or the precise reason it must be rewritten.
 
     A dtype mismatch MUST invalidate: streaming float32 shards into a bfloat16
     pool would quietly train the wrong precision rather than fail. The same
@@ -414,23 +479,29 @@ def _cached_index(
     try:
         index = read_shard_index(out_dir)
     except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
-        return None
+        return None, "cache index is missing or unreadable"
     if index.dtype != dtype:
-        return None
+        return None, f"dtype changed ({index.dtype!r} -> {dtype!r})"
     if index.quant != quant:
-        return None
+        return None, f"quantization changed ({index.quant!r} -> {quant!r})"
     if index.quant != QUANT_NONE and index.double_quant != double_quant:
-        return None
+        return None, (
+            f"double_quant changed ({index.double_quant!r} -> {double_quant!r})"
+        )
     if index.quant != QUANT_NONE and index.quant_device != quant_device:
-        return None
+        return None, (
+            f"quantization device changed "
+            f"({index.quant_device!r} -> {quant_device!r})"
+        )
     if index.source_fingerprint != fingerprint:
-        return None  # source checkpoint changed under us
+        return None, _describe_source_change(index.source_files, source_files)
     if not os.path.exists(extras_shard_path(out_dir)):
-        return None
+        return None, f"cached shard {_EXTRAS_NAME!r} is missing"
     for idx in range(index.n_layers):
         if not os.path.exists(layer_shard_path(out_dir, idx)):
-            return None
-    return index
+            name = os.path.basename(layer_shard_path(out_dir, idx))
+            return None, f"cached shard {name!r} is missing"
+    return index, "cache is reusable"
 
 
 # ==========================================================================
@@ -544,6 +615,7 @@ def shard_checkpoint(
     quant_suffixes: Iterable[str] = (),
     double_quant: bool = True,
     quant_device: Optional[str] = None,
+    notify: Optional[Callable[[str], None]] = None,
 ) -> ShardIndex:
     """Rewrite an HF checkpoint into per-layer safetensors shards.
 
@@ -566,13 +638,22 @@ def shard_checkpoint(
     device_kind = str(device).split(":", 1)[0] if quantise else ""
     shards = _discover_safetensors(weights_dir)
     resolved_out = _validate_out_dir(out_dir)
-    fingerprint = _source_fingerprint(shards)
+    source_files = _source_file_components(shards)
+    fingerprint = _fingerprint_components(source_files)
     if not force:
-        cached = _cached_index(
-            resolved_out, dtype, fingerprint, quant, double_quant, device_kind
+        cached, miss_reason = inspect_shard_cache(
+            resolved_out,
+            dtype,
+            fingerprint,
+            source_files,
+            quant,
+            double_quant,
+            device_kind,
         )
         if cached is not None:
             return cached
+        if notify is not None:
+            notify(f"[yellow]Re-sharding layer cache:[/] {miss_reason}.")
 
     from safetensors import safe_open
 
@@ -698,6 +779,7 @@ def shard_checkpoint(
         arch=arch,
         soup_version=__version__,
         source_fingerprint=fingerprint,
+        source_files=source_files,
         quant=quant,
         double_quant=bool(double_quant) if quantise else False,
         quant_device=device_kind,

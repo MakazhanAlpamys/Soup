@@ -22,9 +22,11 @@ NO top-level torch: this module is imported by five trainer modules.
 import contextlib
 import math
 import os
+import shutil
 from dataclasses import dataclass
 
 from rich.console import Console
+from rich.panel import Panel
 
 console = Console()
 
@@ -52,6 +54,85 @@ class _ProbePlan:
     vocab_size: int
     predicted_bytes: int
     available_bytes: int
+
+
+def _existing_disk_anchor(path: str) -> str:
+    """Nearest existing ancestor, for paths whose final cache dir is not made yet."""
+    anchor = os.path.realpath(os.path.expanduser(path))
+    while not os.path.exists(anchor):
+        parent = os.path.dirname(anchor)
+        if parent == anchor:
+            raise OSError(f"cannot locate an existing filesystem ancestor for {path!r}")
+        anchor = parent
+    return anchor
+
+
+def _disk_volume(path: str) -> tuple[int, int]:
+    """Filesystem identity and currently free bytes for a prospective write."""
+    anchor = _existing_disk_anchor(path)
+    return int(os.stat(anchor).st_dev), int(shutil.disk_usage(anchor).free)
+
+
+def _render_stream_disk_preflight(
+    *,
+    source_bytes: int,
+    materialized_copy_bytes: int,
+    materialize_bytes: int,
+    materialized_path: str,
+    shard_bytes: int,
+    shard_write_bytes: int,
+    shard_path: str,
+) -> None:
+    """Print and enforce the complete on-disk cost before either cache writes."""
+    writes = (
+        ("materialized weight copy", materialized_path, materialize_bytes),
+        ("layer-shard cache", shard_path, shard_write_bytes),
+    )
+    required_by_device: dict[int, int] = {}
+    free_by_device: dict[int, int] = {}
+    labels_by_device: dict[int, list[str]] = {}
+    for label, path, required in writes:
+        if required <= 0:
+            continue
+        device, free = _disk_volume(path)
+        required_by_device[device] = required_by_device.get(device, 0) + required
+        free_by_device[device] = min(free_by_device.get(device, free), free)
+        labels_by_device.setdefault(device, []).append(label)
+
+    projected_total = source_bytes + materialized_copy_bytes + shard_bytes
+    additional = materialize_bytes + shard_write_bytes
+    lines = [
+        f"HF/local source: {source_bytes / 1e9:.2f} GB",
+        (
+            f"Soup materialized copy: {materialized_copy_bytes / 1e9:.2f} GB "
+            f"({'write required' if materialize_bytes else 'no write required'})"
+        ),
+        (
+            f"Layer-shard cache: {shard_bytes / 1e9:.2f} GB "
+            f"({'write required' if shard_write_bytes else 'reusable'})"
+        ),
+        f"Projected total on disk: {projected_total / 1e9:.2f} GB",
+        f"Additional writes before training: {additional / 1e9:.2f} GB",
+    ]
+    for device in sorted(required_by_device):
+        required = required_by_device[device]
+        free = free_by_device[device]
+        labels = " + ".join(labels_by_device[device])
+        lines.append(
+            f"Free on target volume ({labels}): {free / 1e9:.2f} GB"
+        )
+        if required > free:
+            console.print(
+                Panel("\n".join(lines), title="Layer streaming disk pre-flight")
+            )
+            raise ValueError(
+                f"layer streaming needs {required / 1e9:.2f} GB of additional "
+                f"disk space for {labels}, but only {free / 1e9:.2f} GB is free. "
+                f"Refusing before copying or sharding. Free disk space, point "
+                f"SOUP_SPECTRUM_CACHE_DIR / SOUP_LAYER_STREAM_CACHE_DIR at a "
+                f"larger contained volume, or choose a smaller base."
+            )
+    console.print(Panel("\n".join(lines), title="Layer streaming disk pre-flight"))
 
 
 def _distributed_launch() -> bool:
@@ -207,6 +288,8 @@ class StreamingSetupMixin:
         from soup_cli.utils.layer_shard import (
             QUANT_NF4,
             QUANT_NONE,
+            fingerprint_source_files,
+            inspect_shard_cache,
             resolve_shard_dir,
             shard_checkpoint,
             source_weight_bytes,
@@ -268,8 +351,41 @@ class StreamingSetupMixin:
         # already keys on double_quant) and the skeleton.
         double_quant = tcfg.double_quant_on
 
-        weights_dir = resolve_model_weights(cfg.base)
         shard_dir = resolve_shard_dir(cfg.base)
+        quant_device_kind = str(self.device).split(":", 1)[0] if quant == QUANT_NF4 else ""
+
+        def _disk_preflight(weights_plan) -> None:
+            shard_estimate = estimate_stream_store_bytes(
+                weights_plan.source_bytes,
+                dtype=dtype,
+                quant=quant,
+                double_quant=double_quant,
+            )
+            cached = None
+            if not weights_plan.needs_materialization:
+                cached, _reason = inspect_shard_cache(
+                    shard_dir,
+                    dtype,
+                    fingerprint_source_files(weights_plan.source_files),
+                    weights_plan.source_files,
+                    quant,
+                    double_quant,
+                    quant_device_kind,
+                )
+            _render_stream_disk_preflight(
+                source_bytes=weights_plan.source_bytes,
+                materialized_copy_bytes=weights_plan.materialized_copy_bytes,
+                materialize_bytes=weights_plan.materialize_bytes,
+                materialized_path=weights_plan.weights_dir,
+                shard_bytes=shard_estimate,
+                shard_write_bytes=0 if cached is not None else shard_estimate,
+                shard_path=shard_dir,
+            )
+
+        weights_dir = resolve_model_weights(
+            cfg.base,
+            before_materialize=_disk_preflight,
+        )
 
         # Cheap size probe BEFORE sharding: re-writing a checkpoint we are
         # about to refuse for not fitting in RAM costs minutes of disk I/O.
@@ -344,6 +460,7 @@ class StreamingSetupMixin:
             # Quantise on the device that will run the model: CPU and CUDA agree
             # on the packed nibbles but not on every float32 nested statistic.
             quant_device=str(self.device),
+            notify=console.print,
         )
 
         layer_specs = RamSource.layer_specs_from_shards(shard_dir, index.n_layers)

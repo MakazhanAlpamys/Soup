@@ -525,7 +525,19 @@ does not make it free.
 - A published 14B-on-8 GB reference benchmark — hardware-blocked; it needs an 8 GB card and 32 GB of RAM, which the development box does not have
 - GRPO and PPO are explicitly **not** planned: rollouts need generation, which re-reads the model per token
 
-**Shard cache.** The first streaming run rewrites the checkpoint into one safetensors shard per decoder layer under `~/.soup/layer-stream/` (override with `SOUP_LAYER_STREAM_CACHE_DIR`). That costs disk space roughly equal to the base. The cache is keyed to a fingerprint of the source checkpoint, so a base retrained in place re-shards instead of silently training against stale weights.
+**Disk pre-flight and shard cache.** Before Soup materialises or shards a checkpoint, it
+reports the complete projected footprint: the HF/local source, any regular-file copy Soup
+still needs, and the per-layer shard cache. Required writes are grouped by target volume and
+the run refuses before either write when that volume lacks free space. Override the two cache
+roots with `SOUP_SPECTRUM_CACHE_DIR` and `SOUP_LAYER_STREAM_CACHE_DIR`; both retain Soup's
+home/cwd/tmp containment policy.
+
+Hugging Face snapshots normally expose symlinks into their blob cache, which the sharder
+deliberately does not follow. Soup materialises those weights under its Spectrum cache. If the
+HF cache already exposes real files, Soup now reads them in place instead of creating a second
+copy. The layer shards remain under `~/.soup/layer-stream/`. Their index records each source
+filename, size, and `mtime_ns`, so a necessary re-shard says which component changed instead
+of silently spending minutes rebuilding the cache.
 
 
 ## Correctness First (v0.36.0)
