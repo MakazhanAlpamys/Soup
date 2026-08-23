@@ -12,7 +12,81 @@ reproducing 70+ versions of notes.
 
 ## [Unreleased]
 
+### Fixed
+
+- **SmolVLM/Idefics3 vision SFT now reaches real training batches (#302 by
+  @Amix29 in #488).** Soup keeps LLaVA messages and PIL images together until
+  collation, converts legacy `<image>` markers to structured multimodal content,
+  and lets the processor produce image-token expansion plus architecture-specific
+  pixel tensors. The vision path uses the Transformers trainer with this collator so
+  older supported TRL releases cannot pre-tokenize the dataset as text-only. Image
+  placeholder ids are excluded from causal-LM labels, and the collator preserves a
+  leading BOS whether it comes from the chat template or the tokenizer default.
+
 ### Added
+
+- **`soup eval aider` runs Aider's Polyglot code-editing benchmark through its
+  official Docker harness (#91 by @Amix29 in #482).** The command preflights
+  Docker, the daemon, and the locally built benchmark image; mounts a prepared
+  Polyglot corpus read-only; keeps output under cwd; and aggregates bounded per-exercise JSON
+  into a Soup result row. `--run-id` records the score in `eval_results` for the
+  existing run comparison workflow. The optional `[aider]` extra installs the
+  normal Aider CLI while the docs make the source-only benchmark-image setup
+  explicit.
+- **Native Apple Silicon telemetry for `soup monitor` (#99 by @Amix29 in #481).**
+  The monitor now reads bounded plist output from macOS `powermetrics` and
+  renders GPU utilization and power in the existing Rich table. It reuses an
+  explicitly cached sudo credential through non-interactive `sudo -n`, never
+  reads a password, and gives an actionable Activity Monitor fallback when
+  permission or telemetry is unavailable. NVIDIA-only VRAM, memory-utilization,
+  and temperature fields remain unavailable rather than being guessed.
+- **`soup mcp serve` gains network transports: `--transport sse` and
+  `--transport http` (#296 in #479).** v1 was stdio-only, which suits a client that
+  spawns Soup as a subprocess but leaves remote and multi-client setups with
+  nothing. Both new transports serve the *same* registry — the end-to-end test
+  compares the advertised tool names against `build_registry` rather than a
+  hardcoded count, so a subset cannot creep in. stdio remains the default and
+  is untouched.
+
+  Adding a listener is the risky part, so it is gated three ways. Every HTTP
+  request needs `Authorization: Bearer <token>`, compared with
+  `secrets.compare_digest`, with no opt-out — a loopback port is reachable by
+  every process on the box. The token is validated by the existing
+  `utils/qr_url.py::validate_token`, so `soup ui` and `soup mcp serve` agree on
+  what a token is instead of growing a second format, and it travels in the
+  header only: no query-string fallback that could land in an access log. The
+  SDK's DNS-rebinding protection is switched on (`421` on a foreign `Host`,
+  `403` on a foreign `Origin`), which is the gate the token cannot be — a page
+  the operator merely visits sends no `Authorization` header but its request
+  still reaches the port. Binding off loopback warns, and a wildcard bind warns
+  again that the Host check has nothing left to pin.
+
+  `--allow-execute` is refused with either network transport, and that refusal
+  is the one behavioural change to an existing flag. Gated execution (#297)
+  spawns real training / export processes; behind a listener a leaked Bearer
+  token would mean process execution rather than plan disclosure, and stdio is
+  a pipe to a client the operator already started, which is a different trust
+  boundary. The refusal is made twice on purpose: once in the CLI so the
+  operator gets a readable message, and once in `build_asgi_app()` so a direct
+  caller cannot put an executing registry behind a listener either. The stdio
+  banner also stopped claiming "execution disabled" -- that string predated
+  #297 and was false from the moment execution shipped.
+
+  `--host` / `--port` / `--auth-token` are refused under `--transport stdio`
+  rather than silently ignored, and the ASGI app is built by a
+  `build_asgi_app()` factory so the auth and rebinding behaviour is tested
+  through an in-process transport without binding a socket; one further test
+  binds a real ephemeral port and drives initialize -> list_tools -> call_tool
+  through the SDK's own SSE client.
+
+  The `[mcp]` extra floor moves `1.2.0` -> `1.10.0`, measured against the
+  published wheels rather than a changelog: `server/streamable_http_manager.py`
+  first appears in 1.8.0 (absent in 1.7.0) and `server/transport_security.py`
+  in 1.10.0 (absent in 1.9.4). `--transport sse` alone would have run on the
+  old floor; rebinding protection would not, and a listener whose origin
+  checking silently disappears on an older SDK is worse than a resolver error.
+  The `<2` cap is unchanged — #322 is the 2.x migration. No new package: `mcp`
+  already requires starlette, uvicorn, sse-starlette and httpx-sse.
 
 - **`soup data best-of-n` can sample candidates from Ollama or vLLM providers
   (#299 by @Faisal01011 in #466).** The existing local Transformers `--base` path stays
@@ -21,6 +95,16 @@ reproducing 70+ versions of notes.
   completion seam. Provider and model are recorded in `_best_of_n` provenance;
   Anthropic is refused by name because its Messages API has no raw-completion
   endpoint, and local-only flags cannot be silently ignored in provider mode.
+
+- **Baseline artifacts carry a scorer/version provenance stamp (#404 by @AchuthReddy-16 in #485).**
+  Shared helpers `stamp_baseline_scores` / `write_baseline_file` write
+  `{"scores": {...}, "provenance": {"soup_version", "scorer_revision"}}`.
+  `soup eval gate --write-baseline <path>` is the user-facing producer.
+  `resolve_baseline` warns once on unknown provenance (unstamped files) or a
+  `scorer_revision` mismatch, and stays silent when the stamp matches.
+  `BUNDLED_SCORER_REVISION` + a locked fingerprint fail the suite if a bundled
+  scorer's output moves without a revision bump. Registry `save_eval_result`
+  stamps `details_json`; `soup ship --emit-evidence` includes the same stamp.
 
 - **Layer streaming now accepts Qwen3.5 MoE text checkpoints whose decoder
   layers do not expose exactly the same weight keys in every block (by
@@ -108,6 +192,10 @@ reproducing 70+ versions of notes.
 
 ### Changed
 
+- **Remove the name-based `SCORER_CHANGED_IN_V0_73_2` baseline warning in favour
+  of the #404 scorer_revision stamp (#404 by @AchuthReddy-16 in #485).**
+  Stale baselines are detected by provenance, not by a hard-coded suite list.
+
 - **Remove hand-maintained test suite statistics from `CONTRIBUTING.md` in favor of a permanent digit-free shape invariant (#465 by @harshitthek in #467).**
   Eliminates drift across routine test additions by making test-count divergence impossible at the documentation source.
 
@@ -121,43 +209,34 @@ reproducing 70+ versions of notes.
 
 ### Fixed
 
-- **Every DeepSpeed-capable trainer now prunes the empty LoRA optimizer group,
-  not just `sft.py` (#359 in #484).** #336 fixed the failure where LoRA leaves HF's
-  no-decay parameter group empty, DeepSpeed drops it, and the LR scheduler
-  keeps two `base_lrs` until torch's strict `zip` raises at the first
-  `lr_scheduler.step()` — but it fixed it in one wrapper. Measured before
-  changing anything: 19 modules under `soup_cli/trainer/` accept a
-  `deepspeed_config` and exactly one called the guard, so 18 tasks still died
-  the same way under `--deepspeed` with LoRA.
+- **Layer streaming now keeps its host store on CPU on Apple Silicon
+  (#434 by @Amix29 in #480).**
+  PyTorch 2.7+ can return an MPS tensor for
+  `torch.empty(device="cpu", pin_memory=True)`, while `is_pinned()` remains
+  false. Direct runtime callers could therefore place the whole frozen base in
+  the MPS allocator and still report a pinned RAM store, even though the normal
+  `soup train` setup already disabled pinning outside CUDA. The runtime now
+  disables both optional and required pinning when the target is MPS, and
+  `RamSource` independently refuses any allocation that is not genuinely CPU
+  memory (or claims pinning without being pinned). MPS proceeds experimentally
+  with a pageable CPU source and MPS layer buffers; CUDA pinning behaviour is
+  unchanged.
 
-  Coverage is enforced by a scan over `soup_cli/trainer/*.py` rather than a
-  list of names, following `test_device_map_distributed.py` — whose own
-  history is the argument, since its first version parametrized over the six
-  trainers that fix had touched and passed while nine more sites still carried
-  the defect. The scanner requires the guard only where a module both accepts
-  a `deepspeed_config` and constructs a trainer itself, so the delegating
-  `preference.py` wrapper is correctly exempt, and it carries a control
-  proving the pattern can fail.
-
-  `attach_empty_param_group_guard` now declines a trainer with no callable
-  `create_optimizer` instead of raising. That is load-bearing once the guard
-  is attached from eighteen wrappers rather than one: not every TRL trainer
-  exposes the method, and an AttributeError there would convert a
-  DeepSpeed-only defect into a crash on the ordinary path.
-
-- **`--deepspeed my.json` is now resolved the way a preset is (#359 in #484).** A
-  user-supplied config reached DeepSpeed unresolved, so none of the preset
-  rewrites applied to it. The decision recorded: resolve, but only keys that
-  are provably invalid for the run. `zero_hpz_partition_size` is refused by
-  DeepSpeed when the world size is not divisible by it, and the fp16 quantiser
-  against a `bf16` run raises `expected mat1 and mat2 to have the same dtype`
-  inside `deepspeed/runtime/zero/linear.py` — neither is a preference. Since
-  the documented way to customise ZeRO++ is to copy the preset JSON, which
-  copies both defects, an unresolved user file inherited a crash the presets
-  are already protected from. A config using none of those keys is returned by
-  its own path, byte-identical; a repair is printed and written to a temp copy,
-  and the user's file on disk is never modified. Malformed JSON passes through
-  untouched, because DeepSpeed reports a bad config better than a traceback.
+- **CI and production load sites no longer assume Transformers ``dtype=``
+  (#478).** ``dtype=`` on ``AutoModel*.from_pretrained`` / ``from_config`` is the
+  >=4.56 rename of ``torch_dtype=``. Soup still declares
+  ``transformers>=4.36.0,<5.0.0``, but the 12-cell matrix only ever installed the
+  newest 4.x, so a >=4.56-only kwarg stayed green. Call sites in chat / diff /
+  infer / export / merge / serve / mole routing / layer-stream runtime now pass
+  ``torch_dtype=`` (still accepted on current 4.57.x). A static AST guard fails
+  if a production ``AutoModel*`` load/config site reintroduces ``dtype=``. A new
+  Ubuntu/3.11 ``transformers-floor`` job installs under
+  ``.github/constraints/transformers-floor.txt`` using the lowest non-yanked
+  resolvable Transformers version ``4.46.1`` with the lowest version in the
+  declared TRL range ``0.14.0`` (``transformers==4.36.0`` is ResolutionImpossible
+  against declared ``trl`` — the declared Transformers floor in
+  ``pyproject.toml`` remains unchanged), runs ``pip check``, asserts both pins,
+  and runs the guard. The existing 12-cell matrix is untouched.
 
 - **`downsample` now returns at most `max_points` rows, which is what its
   docstring has always promised (#473 in #474).** The stride was

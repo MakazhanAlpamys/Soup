@@ -1058,55 +1058,65 @@ class TestTheMcpEvidenceReaderHonoursTheFloor:
             tool_ship_evidence({"evidence": "ev.json"})
 
 
-class TestStaleBaselineIsAnnounced:
-    """#357 / #346 moved the SCORER, so a ``--baseline`` snapshot taken before
-    v0.73.2 is on a different scale for the affected suites — measured on an
-    unchanged model, mini_mmlu 0.423 -> 0.731 and mini_tool_call 0.225 -> 1.000,
-    both far larger than the 0.05 gate. Silently diffing across that is how a
-    real regression gets masked."""
+class TestBaselineProvenanceStamp:
+    """#404 — baseline scale drift is detected by scorer_revision stamp, not
+    by a hard-coded suite-name list. The old ``SCORER_CHANGED_IN_V0_73_2``
+    warning is gone; ``resolve_baseline`` owns the warn path now."""
 
-    def test_the_affected_suites_are_named(self):
-        from soup_cli.eval.gate_suites import (
-            DEFAULT_GENERAL_SUITE,
-            SCORER_CHANGED_IN_V0_73_2,
+    def test_scorer_revision_is_exported(self):
+        from soup_cli.eval.gate_suites import BUNDLED_SCORER_REVISION
+
+        assert isinstance(BUNDLED_SCORER_REVISION, int)
+        assert BUNDLED_SCORER_REVISION >= 1
+
+    def test_matching_stamp_is_silent(self, tmp_path, monkeypatch, caplog):
+        import logging
+
+        from soup_cli.eval.gate import resolve_baseline, write_baseline_file
+
+        monkeypatch.chdir(tmp_path)
+        write_baseline_file("baseline.json", {"mini_mmlu": 0.42})
+        with caplog.at_level(logging.WARNING):
+            scores = resolve_baseline("baseline.json")
+        assert scores == {"mini_mmlu": 0.42}
+        assert not any("provenance" in r.message.lower() for r in caplog.records)
+        assert not any("scorer_revision" in r.message.lower() for r in caplog.records)
+
+    def test_unstamped_baseline_warns_unknown_provenance(self, tmp_path, monkeypatch):
+        from soup_cli.eval.gate import resolve_baseline
+
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "baseline.json").write_text(
+            '{"mini_mmlu": 0.42}', encoding="utf-8"
         )
+        seen: list[str] = []
+        scores = resolve_baseline(
+            "baseline.json", warn=lambda msg: seen.append(msg)
+        )
+        assert scores == {"mini_mmlu": 0.42}
+        assert len(seen) == 1
+        assert "unknown provenance" in seen[0]
 
-        assert set(SCORER_CHANGED_IN_V0_73_2) <= set(DEFAULT_GENERAL_SUITE)
-        assert "mini_mmlu" in SCORER_CHANGED_IN_V0_73_2
-        assert "mini_tool_call" in SCORER_CHANGED_IN_V0_73_2
+    def test_mismatched_revision_warns(self, tmp_path, monkeypatch):
+        import json
 
-    def test_every_unlisted_mcq_suite_really_is_unaffected(self):
-        """CONTROL, DERIVED not hand-written: whatever MCQ suites are NOT on the
-        list must be provably untouched by the prompt cue. A hand-written pair
-        of names would silently stop covering a suite added later — the failure
-        mode the project's scan-don't-list rule exists to prevent."""
-        from soup_cli.eval.forgetting import MINI_BENCHMARKS, build_mcq_prompt
-        from soup_cli.eval.gate_suites import SCORER_CHANGED_IN_V0_73_2
+        from soup_cli.eval.gate import resolve_baseline, stamp_baseline_scores
+        from soup_cli.eval.gate_suites import BUNDLED_SCORER_REVISION
 
-        unlisted = set(MINI_BENCHMARKS) - set(SCORER_CHANGED_IN_V0_73_2)
-        assert unlisted, "the scan found nothing to check"
-        for name in sorted(unlisted):
-            for item in MINI_BENCHMARKS[name]:
-                assert build_mcq_prompt(item["question"], item["answer"]) == (
-                    item["question"]
-                ), f"{name} IS affected by the prompt cue but is not listed"
+        monkeypatch.chdir(tmp_path)
+        payload = stamp_baseline_scores({"mini_mmlu": 0.42})
+        payload["provenance"]["scorer_revision"] = BUNDLED_SCORER_REVISION - 1
+        (tmp_path / "baseline.json").write_text(
+            json.dumps(payload), encoding="utf-8"
+        )
+        seen: list[str] = []
+        resolve_baseline("baseline.json", warn=lambda msg: seen.append(msg))
+        assert len(seen) == 1
+        assert "scorer_revision" in seen[0]
+        assert str(BUNDLED_SCORER_REVISION) in seen[0]
 
-    def test_every_listed_mcq_suite_really_is_affected(self):
-        """CONTROL in the other direction: a name on the list that nothing
-        actually changed would warn operators for no reason, which is how a
-        warning stops being read."""
-        from soup_cli.eval.forgetting import MINI_BENCHMARKS, build_mcq_prompt
-        from soup_cli.eval.gate_suites import MINI_TOOL_CALL, SCORER_CHANGED_IN_V0_73_2
-
-        for name in SCORER_CHANGED_IN_V0_73_2:
-            if name == MINI_TOOL_CALL:  # behavioural, not MCQ — see #346
-                continue
-            assert any(
-                build_mcq_prompt(item["question"], item["answer"]) != item["question"]
-                for item in MINI_BENCHMARKS[name]
-            ), f"{name} is listed but nothing changed for it"
-
-    def test_a_stale_baseline_warns(self, capsys):
+    def test_leg2_no_longer_name_warns_on_stale_suite(self, capsys):
+        """CONTROL. The suite-name warning moved out of ``_leg2_scores``."""
         from soup_cli.commands.ship import _leg2_scores
 
         def gen(prompt):
@@ -1123,30 +1133,10 @@ class TestStaleBaselineIsAnnounced:
             device=None,
         )
         out = _plain(capsys.readouterr().out)
-        assert "mini_mmlu" in out and "v0.73.2" in out
-
-    def test_a_baseline_for_an_unaffected_suite_is_quiet(self, capsys):
-        """CONTROL. A warning on every baseline would train the operator to
-        ignore it."""
-        from soup_cli.commands.ship import _leg2_scores
-
-        def gen(prompt):
-            return "hello 5 world"
-
-        _leg2_scores(
-            ["mini_arithmetic"],
-            gen,
-            gen,
-            base_id="base",
-            tuned_id="tuned",
-            adapter=None,
-            baseline_scores={"mini_arithmetic": 0.42},
-            device=None,
-        )
-        assert "Warning" not in _plain(capsys.readouterr().out)
+        assert "Warning" not in out
+        assert "v0.73.2" not in out
 
     def test_no_baseline_is_quiet(self, capsys):
-        """CONTROL. The warning is about a STORED score, not about the suite."""
         from soup_cli.commands.ship import _leg2_scores
 
         def gen(prompt):

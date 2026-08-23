@@ -131,6 +131,174 @@ def benchmark(
     console.print("\n[green]Results saved to experiment tracker.[/]")
 
 
+# ─── soup eval aider ───
+
+
+@app.command()
+def aider(
+    model: str = typer.Option(
+        ..., "--model", "-m",
+        help="Aider model identifier (for example, openai/gpt-4.1)",
+    ),
+    output: str = typer.Option(
+        ..., "--output", "-o",
+        help="Contained directory for upstream and Soup result files",
+    ),
+    exercises_dir: str = typer.Option(
+        "tmp.benchmarks/polyglot-benchmark", "--exercises-dir",
+        help="Prepared Aider-AI/polyglot-benchmark checkout",
+    ),
+    image: str = typer.Option(
+        "aider-benchmark", "--image",
+        help="Locally built upstream Aider benchmark image",
+    ),
+    threads: int = typer.Option(
+        1, "--threads", "-t", min=1, max=64,
+        help="Number of benchmark exercises to run concurrently",
+    ),
+    num_tests: int = typer.Option(
+        -1, "--num-tests", "-n",
+        help="Number of exercises to run (-1 runs all exercises)",
+    ),
+    timeout: int = typer.Option(
+        86_400, "--timeout", min=60, max=86_400,
+        help="Maximum benchmark runtime in seconds",
+    ),
+    run_id: Optional[str] = typer.Option(
+        None, "--run-id",
+        help="Save the aggregate score under an existing Soup run ID",
+    ),
+    allow_host_services: bool = typer.Option(
+        False, "--allow-host-services",
+        help="Let the benchmark container reach services on the host",
+    ),
+):
+    """Run Aider's Polyglot coding benchmark in its official Docker image."""
+    from rich.markup import escape
+
+    from soup_cli.eval.aider_polyglot import (
+        AiderEvalError,
+        build_docker_command,
+        parse_aider_results,
+        preflight_docker,
+        prepare_output_dir,
+        validate_exercises_dir,
+        write_soup_result,
+    )
+    from soup_cli.utils.paths import is_under_cwd
+
+    tracker = None
+    if run_id:
+        from soup_cli.experiment.tracker import ExperimentTracker
+
+        tracker = ExperimentTracker()
+        if tracker.get_run(run_id) is None:
+            console.print(f"[red]Run not found: {escape(run_id)}[/]")
+            tracker.close()
+            raise typer.Exit(1)
+
+    try:
+        output_dir = prepare_output_dir(output)
+        corpus_dir = validate_exercises_dir(exercises_dir)
+        corpus_outside_cwd = not is_under_cwd(corpus_dir)
+        docker = preflight_docker(image)
+        command = build_docker_command(
+            docker=docker,
+            image=image,
+            model=model,
+            exercises_dir=corpus_dir,
+            output_dir=output_dir,
+            threads=threads,
+            num_tests=num_tests,
+            allow_host_services=allow_host_services,
+        )
+    except AiderEvalError as exc:
+        if tracker is not None:
+            tracker.close()
+        console.print(f"[red]Aider Polyglot preflight failed:[/] {escape(str(exc))}")
+        raise typer.Exit(1) from exc
+
+    if corpus_outside_cwd:
+        console.print(
+            "[yellow]Warning:[/] --exercises-dir resolves outside the current "
+            "working directory; Docker will still mount it read-only."
+        )
+
+    console.print(
+        Panel(
+            f"[bold]Aider Polyglot[/]\n"
+            f"Model: {escape(model)}\n"
+            f"Output: {escape(str(output_dir))}\n"
+            f"Image: {escape(image)}\n"
+            f"Exercises: {escape(str(corpus_dir))}",
+            title="Evaluation",
+            border_style="blue",
+        )
+    )
+    console.print(
+        "[yellow]The benchmark executes untrusted model-generated code inside Docker.[/]"
+    )
+
+    import subprocess
+
+    try:
+        process = subprocess.run(  # noqa: S603 -- fixed argv, no shell
+            command,
+            check=False,
+            shell=False,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        if tracker is not None:
+            tracker.close()
+        console.print(f"[red]Aider benchmark timed out after {timeout} seconds.[/]")
+        raise typer.Exit(1) from exc
+    except OSError as exc:
+        if tracker is not None:
+            tracker.close()
+        console.print(
+            f"[red]Could not start the Aider benchmark:[/] {type(exc).__name__}"
+        )
+        raise typer.Exit(1) from exc
+
+    if process.returncode != 0:
+        if tracker is not None:
+            tracker.close()
+        console.print(
+            f"[red]Aider benchmark exited with status {process.returncode}.[/] "
+            f"Partial files remain in {escape(str(output_dir))}."
+        )
+        raise typer.Exit(1)
+
+    try:
+        row = parse_aider_results(output_dir, model=model)
+        result_path = write_soup_result(output_dir, row)
+    except AiderEvalError as exc:
+        if tracker is not None:
+            tracker.close()
+        console.print(f"[red]Could not aggregate Aider results:[/] {escape(str(exc))}")
+        raise typer.Exit(1) from exc
+
+    if tracker is not None:
+        tracker.save_eval_result(
+            model_path=model,
+            benchmark=row["task"],
+            score=row["score"],
+            details={"errors": row["errors"], **row["details"]},
+            run_id=run_id,
+        )
+        tracker.close()
+        console.print(f"[green]Saved result under run {escape(run_id)}.[/]")
+
+    completed = row["details"]["completed_tests"]
+    passed = row["details"]["passed_tests"]
+    console.print(
+        f"[green]Aider Polyglot complete:[/] {passed}/{completed} passed "
+        f"(score {row['score']:.4f})"
+    )
+    console.print(f"[green]Soup result written to:[/] {escape(str(result_path))}")
+
+
 # ─── soup eval custom ───
 
 
@@ -991,7 +1159,7 @@ def gate_cmd(
     ),
     baseline: Optional[str] = typer.Option(
         None, "--baseline", "-b",
-        help="Baseline: registry://<id> or path to {name: score} JSON file",
+        help="Baseline: registry://<id> or path to stamped/flat score JSON",
     ),
     regression_threshold: float = typer.Option(
         0.05, "--regression-threshold",
@@ -1001,6 +1169,14 @@ def gate_cmd(
         None, "--model", "-m",
         help="Model path or HF id to evaluate (required for live scoring)",
     ),
+    write_baseline: Optional[str] = typer.Option(
+        None,
+        "--write-baseline",
+        help=(
+            "Write this run's task scores as a stamped baseline JSON "
+            "({'scores', 'provenance'}) consumable by --baseline (#404)."
+        ),
+    ),
 ) -> None:
     """Run an eval-gate suite standalone (post-hoc verdict)."""
     if not 0.0 <= regression_threshold <= 1.0:
@@ -1009,7 +1185,16 @@ def gate_cmd(
         )
         raise typer.Exit(1)
 
-    from soup_cli.eval.gate import load_suite, resolve_baseline, run_gate
+    if write_baseline and not model:
+        console.print("[red]--write-baseline requires --model[/]")
+        raise typer.Exit(1)
+
+    from soup_cli.eval.gate import (
+        load_suite,
+        resolve_baseline,
+        run_gate,
+        write_baseline_file,
+    )
 
     try:
         eval_suite = load_suite(suite)
@@ -1018,13 +1203,17 @@ def gate_cmd(
         raise typer.Exit(1) from exc
 
     try:
-        baseline_scores = resolve_baseline(baseline)
+        baseline_scores = resolve_baseline(
+            baseline,
+            warn=lambda msg: console.print(f"[yellow]Warning:[/] {msg}"),
+        )
     except (FileNotFoundError, ValueError) as exc:
         console.print(f"[red]Cannot resolve baseline:[/] {exc}")
         raise typer.Exit(1) from exc
 
     # When --model is provided, build a transformers-backed generator.
     # Otherwise fall back to an empty-string stub for smoke runs.
+    # (--write-baseline already refused the stub path above.)
     if model is None:
         console.print(
             "[yellow]No --model given; using stub generator "
@@ -1052,6 +1241,22 @@ def gate_cmd(
     )
 
     _print_gate_result(result)
+
+    if write_baseline:
+        scores = {
+            row.name: float(row.score)
+            for row in result.task_results
+            if row.score is not None
+        }
+        try:
+            written = write_baseline_file(write_baseline, scores)
+        except (OSError, ValueError, TypeError) as exc:
+            console.print(
+                f"[red]Cannot write --write-baseline:[/] {exc}"
+            )
+            raise typer.Exit(1) from exc
+        console.print(f"[green]Wrote stamped baseline[/] {written}")
+
     raise typer.Exit(0 if result.passed else 1)
 
 

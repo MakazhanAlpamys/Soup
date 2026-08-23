@@ -15,6 +15,10 @@ when unset), reproducing TRL's exact ``args.pad_token or processing_class.pad_to
 or processing_class.eos_token`` access. Both Idefics3 and LLaVA processors share
 identical structure (``attributes = ['image_processor', 'tokenizer']``), so the
 fix repairs both without regressing a processor that already exposes pad_token.
+
+It also pins the end-to-end half of #302: legacy LLaVA ``<image>`` strings are
+converted to structured multimodal content at collation time, where the real
+processor can expand image tokens and emit pixel tensors for the model.
 """
 
 from __future__ import annotations
@@ -212,3 +216,356 @@ class TestVisionSetupWiring:
         wrapper._setup_vision_transformers(cfg, cfg.training)
         # The helper ran: the Idefics3-style processor now exposes pad_token.
         assert wrapper.processor.pad_token == "</s>"
+
+
+class _FakeVisionProcessor:
+    def __init__(self):
+        self.templated_messages = []
+        self.call_kwargs = None
+
+    def apply_chat_template(self, messages, **kwargs):
+        self.templated_messages.append(messages)
+        assert kwargs == {"tokenize": False, "add_generation_prompt": False}
+        return "rendered-with-<image>"
+
+    def __call__(self, **kwargs):
+        import torch
+
+        self.call_kwargs = kwargs
+        return {
+            "input_ids": torch.tensor([[11, 12, 13]]),
+            "attention_mask": torch.tensor([[1, 0, 1]]),
+            "pixel_values": torch.ones((1, 1, 3, 2, 2)),
+        }
+
+
+class _FakeBosTokenizer:
+    bos_token_id = 1
+
+    def __init__(self, *, template_has_bos: bool):
+        self.template_has_bos = template_has_bos
+
+    def __call__(self, text, *, add_special_tokens):
+        del text
+        plain = [1, 41, 42] if self.template_has_bos else [41, 42]
+        if add_special_tokens and not self.template_has_bos:
+            plain = [self.bos_token_id, *plain]
+        return {"input_ids": plain}
+
+    def convert_tokens_to_ids(self, token):
+        return {"<image>": 99}.get(token, -1)
+
+
+class _MeasuredVisionProcessor(_FakeVisionProcessor):
+    image_token = "<image>"
+
+    def __init__(self, *, template_has_bos: bool, rows: list[list[int]]):
+        super().__init__()
+        self.tokenizer = _FakeBosTokenizer(template_has_bos=template_has_bos)
+        self.rows = rows
+
+    def __call__(self, **kwargs):
+        import torch
+
+        self.call_kwargs = kwargs
+        rows = []
+        for row in self.rows:
+            if kwargs["add_special_tokens"] and row[0] != self.tokenizer.bos_token_id:
+                row = [self.tokenizer.bos_token_id, *row]
+            rows.append(row)
+        width = max(len(row) for row in rows)
+        padded = [row + [0] * (width - len(row)) for row in rows]
+        masks = [[1] * len(row) + [0] * (width - len(row)) for row in rows]
+        return {
+            "input_ids": torch.tensor(padded),
+            "attention_mask": torch.tensor(masks),
+            "pixel_values": torch.ones((len(rows), 1, 3, 2, 2)),
+        }
+
+
+class TestVisionLanguageCollation:
+    def test_legacy_marker_becomes_structured_image_part(self):
+        from soup_cli.trainer.sft import VisionLanguageDataCollator
+
+        processor = _FakeVisionProcessor()
+        collator = VisionLanguageDataCollator(processor, max_length=128)
+        image = object()
+        batch = collator(
+            [
+                {
+                    "messages": [
+                        {"role": "user", "content": "<image>\nDescribe it."},
+                        {"role": "assistant", "content": "A square."},
+                    ],
+                    "images": [image],
+                }
+            ]
+        )
+
+        user_parts = processor.templated_messages[0][0]["content"]
+        assert user_parts == [
+            {"type": "image"},
+            {"type": "text", "text": "Describe it."},
+        ]
+        assert processor.call_kwargs["images"] == [[image]]
+        assert processor.call_kwargs["text"] == ["rendered-with-<image>"]
+        assert processor.call_kwargs["truncation"] is True
+        assert processor.call_kwargs["max_length"] == 128
+        assert batch["pixel_values"].shape == (1, 1, 3, 2, 2)
+        assert batch["labels"].tolist() == [[11, -100, 13]]
+
+    def test_masks_every_image_token_and_pins_the_trained_label_count(self):
+        from soup_cli.trainer.sft import VisionLanguageDataCollator
+
+        processor = _MeasuredVisionProcessor(
+            template_has_bos=True,
+            rows=[[1, 99, 99, 71, 72]],
+        )
+        collator = VisionLanguageDataCollator(processor, max_length=128)
+
+        batch = collator(
+            [{"messages": [{"role": "user", "content": "<image>"}], "images": [object()]}]
+        )
+
+        assert batch["labels"].tolist() == [[1, -100, -100, 71, 72]]
+        assert int((batch["labels"] != -100).sum()) == 3
+
+    def test_adds_bos_when_the_chat_template_does_not_supply_it(self):
+        from soup_cli.trainer.sft import VisionLanguageDataCollator
+
+        processor = _MeasuredVisionProcessor(
+            template_has_bos=False,
+            rows=[[41, 42, 43]],
+        )
+        collator = VisionLanguageDataCollator(processor, max_length=128)
+
+        batch = collator(
+            [{"messages": [{"role": "user", "content": "<image>"}], "images": [object()]}]
+        )
+
+        assert processor.call_kwargs["add_special_tokens"] is True
+        assert batch["input_ids"][0, 0].item() == processor.tokenizer.bos_token_id
+
+    def test_does_not_duplicate_bos_when_the_chat_template_supplies_it(self):
+        from soup_cli.trainer.sft import VisionLanguageDataCollator
+
+        processor = _MeasuredVisionProcessor(
+            template_has_bos=True,
+            rows=[[1, 41, 42]],
+        )
+        collator = VisionLanguageDataCollator(processor, max_length=128)
+
+        batch = collator(
+            [{"messages": [{"role": "user", "content": "<image>"}], "images": [object()]}]
+        )
+
+        assert processor.call_kwargs["add_special_tokens"] is False
+        assert batch["input_ids"][0].tolist().count(processor.tokenizer.bos_token_id) == 1
+
+    def test_two_different_examples_remain_two_rows_and_mask_independently(self):
+        from soup_cli.trainer.sft import VisionLanguageDataCollator
+
+        processor = _MeasuredVisionProcessor(
+            template_has_bos=True,
+            rows=[[1, 99, 71], [1, 99, 81, 82, 83]],
+        )
+        collator = VisionLanguageDataCollator(processor, max_length=128)
+
+        batch = collator(
+            [
+                {"messages": [{"role": "user", "content": "<image>A"}], "images": [object()]},
+                {"messages": [{"role": "user", "content": "<image>B"}], "images": [object()]},
+            ]
+        )
+
+        assert batch["input_ids"].shape[0] == 2
+        assert batch["labels"].tolist() == [
+            [1, -100, 71, -100, -100],
+            [1, -100, 81, 82, 83],
+        ]
+
+    def test_missing_marker_injects_image_into_first_user_turn(self):
+        from soup_cli.trainer.sft import _vision_messages_with_image_parts
+
+        messages = _vision_messages_with_image_parts(
+            [
+                {"role": "system", "content": "Be concise."},
+                {"role": "user", "content": "Describe it."},
+            ],
+            image_count=1,
+        )
+
+        assert messages[0]["content"] == [{"type": "text", "text": "Be concise."}]
+        assert messages[1]["content"] == [
+            {"type": "image"},
+            {"type": "text", "text": "Describe it."},
+        ]
+
+    def test_excess_image_markers_are_rejected_before_processor(self):
+        from soup_cli.trainer.sft import _vision_messages_with_image_parts
+
+        with pytest.raises(ValueError, match="2 image placeholder.*1 image"):
+            _vision_messages_with_image_parts(
+                [{"role": "user", "content": "<image><image>Compare."}],
+                image_count=1,
+            )
+
+    def test_dataset_keeps_messages_until_collation(self, tmp_path):
+        from PIL import Image
+
+        from soup_cli.trainer.sft import SFTTrainerWrapper
+
+        image_path = tmp_path / "sample.png"
+        Image.new("RGB", (8, 8), "red").save(image_path)
+        row = {
+            "messages": [{"role": "user", "content": "<image>\nDescribe."}],
+            "image": str(image_path),
+        }
+        wrapper = object.__new__(SFTTrainerWrapper)
+        train_ds, eval_ds = wrapper._prepare_vision_dataset({"train": [row]})
+
+        assert eval_ds is None
+        assert train_ds.column_names == ["messages", "images"]
+        assert train_ds[0]["messages"] == row["messages"]
+        assert len(train_ds[0]["images"]) == 1
+
+    def test_plain_trainer_receives_processor_aware_collator(self, monkeypatch):
+        import transformers
+
+        from soup_cli.trainer.sft import (
+            VisionLanguageDataCollator,
+            _make_vision_trainer,
+        )
+
+        captured = {}
+
+        class _FakeTrainer:
+            def __init__(
+                self,
+                model=None,
+                args=None,
+                data_collator=None,
+                train_dataset=None,
+                eval_dataset=None,
+                processing_class=None,
+            ):
+                captured.update(
+                    model=model,
+                    args=args,
+                    data_collator=data_collator,
+                    train_dataset=train_dataset,
+                    eval_dataset=eval_dataset,
+                    processing_class=processing_class,
+                )
+
+        monkeypatch.setattr(transformers, "Trainer", _FakeTrainer)
+        processor = _FakeVisionProcessor()
+        trainer = _make_vision_trainer(
+            {
+                "model": "model",
+                "args": "args",
+                "train_dataset": "train",
+                "eval_dataset": None,
+                "processing_class": processor,
+            },
+            processor,
+            max_length=256,
+        )
+
+        assert isinstance(trainer, _FakeTrainer)
+        assert isinstance(captured["data_collator"], VisionLanguageDataCollator)
+        assert captured["data_collator"].max_length == 256
+        assert captured["processing_class"] is processor
+
+    def test_plain_trainer_uses_legacy_tokenizer_keyword_when_required(self, monkeypatch):
+        import transformers
+
+        from soup_cli.trainer.sft import _make_vision_trainer
+
+        captured = {}
+
+        class _LegacyTrainer:
+            def __init__(
+                self,
+                model=None,
+                args=None,
+                data_collator=None,
+                train_dataset=None,
+                eval_dataset=None,
+                tokenizer=None,
+            ):
+                captured["tokenizer"] = tokenizer
+
+        monkeypatch.setattr(transformers, "Trainer", _LegacyTrainer)
+        processor = _FakeVisionProcessor()
+        _make_vision_trainer(
+            {
+                "model": "model",
+                "args": "args",
+                "train_dataset": "train",
+                "eval_dataset": None,
+                "processing_class": processor,
+            },
+            processor,
+            max_length=256,
+        )
+
+        assert captured["tokenizer"] is processor
+
+    def test_setup_routes_normal_vision_run_to_plain_trainer(self, monkeypatch, tmp_path):
+        from datasets import Dataset
+
+        import soup_cli.trainer.sft as sft_module
+        from soup_cli.config.loader import load_config_from_string
+        from soup_cli.trainer.sft import SFTTrainerWrapper
+
+        processor = _FakeVisionProcessor()
+
+        class _FakeModel:
+            def get_nb_trainable_parameters(self):
+                return 1, 2
+
+        def _fake_vision_setup(self, cfg, tcfg):
+            self.model = _FakeModel()
+            self.processor = processor
+            self.tokenizer = processor
+
+        def _fake_prepare(self, dataset):
+            train = Dataset.from_list([{"messages": [], "images": []}])
+            return train, None
+
+        sentinel = object()
+        captured = {}
+
+        def _fake_make(trainer_kwargs, processor, max_length):
+            captured.update(
+                trainer_kwargs=trainer_kwargs,
+                processor=processor,
+                max_length=max_length,
+            )
+            return sentinel
+
+        monkeypatch.setattr(
+            SFTTrainerWrapper, "_setup_vision_transformers", _fake_vision_setup
+        )
+        monkeypatch.setattr(SFTTrainerWrapper, "_prepare_vision_dataset", _fake_prepare)
+        monkeypatch.setattr(sft_module, "_make_vision_trainer", _fake_make)
+
+        cfg = load_config_from_string(
+            "base: fake/vlm\ntask: sft\nmodality: vision\n"
+            "data:\n  train: x.jsonl\n  format: llava\n  max_length: 321\n"
+            "training:\n  epochs: 1\n  batch_size: 1\n"
+            "  gradient_accumulation_steps: 1\n  quantization: none\n"
+            "  lora:\n    target_modules: [q_proj, v_proj]\n"
+            f"output: {tmp_path.as_posix()}/output\n"
+        )
+        wrapper = SFTTrainerWrapper(cfg, device="cpu")
+        wrapper.setup({"train": [{"messages": [], "image": "unused"}]})
+
+        assert wrapper.trainer is sentinel
+        assert captured["processor"] is processor
+        assert captured["max_length"] == 321
+        assert captured["trainer_kwargs"]["train_dataset"].column_names == [
+            "messages",
+            "images",
+        ]

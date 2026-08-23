@@ -248,6 +248,17 @@ soup train --config soup.yaml
 
 **How it works.** LoRA adapters + their gradients + optimizer state stay resident in VRAM (they are small). The frozen base lives in CPU RAM, page-locked when the machine allows it, and is streamed: each decoder layer is copied into one of two pre-allocated VRAM buffers on a dedicated CUDA stream while the previous layer is still computing, so the load overlaps the compute. Each layer is read **twice** per step — once in the forward pass and once when the backward pass recomputes it — because `dL/dx = Wᵀ · dL/dy` needs the weights to reach the layers below. That is physics, not an implementation detail, and it is why streaming costs time.
 
+**Apple Silicon is experimental.** With `backend: transformers`, MPS uses a pageable CPU
+source and MPS layer buffers; host pinning is disabled. PyTorch 2.7+ may otherwise turn
+`torch.empty(device="cpu", pin_memory=True)` into an MPS tensor, charging the entire base
+to the MPS allocator while `is_pinned()` is still false (#434). Soup refuses that state at
+the source boundary and also disables pinning before allocation. Apple Silicon has unified
+physical memory, so the CUDA capacity and throughput numbers below do not transfer: only
+the MPS allocator's streamed weights are bounded by the buffer pool, while the CPU source
+still consumes unified memory. No claim is made yet that streaming fits a larger model or
+runs faster than resident MPS training. `backend: mlx` remains a separate, incompatible
+model-loading path and is rejected with `stream_layers`.
+
 The tradeoff: **1.43× slower than resident training**, measured at 0.5B — the only apples-to-apples comparison available on the reference box, because 1.5B and above cannot run resident there at all.
 
 ### NF4 streaming (`quantization: 4bit`)
@@ -314,11 +325,12 @@ refusing:
 |---|---|
 | RAM tier on CUDA | pins, or **refuses** naming the store size |
 | Disk tier (base does not fit in RAM, weights stream from NVMe) | announces that pinning does not apply, proceeds |
-| CPU (no CUDA device) | announces that page-locking is a host-to-device optimization, proceeds |
+| Non-CUDA target (CPU or MPS) | announces that CUDA host pinning does not apply, proceeds with a pageable CPU source |
 
 Refusing on those two would brick the large-model runs the disk tier exists for, and
 would make `stream_pin: true` uncommittable to a `soup.yaml` shared between a GPU box and
-a CPU box. The RAM tier is where the flag has real semantics, and there it still refuses.
+a non-CUDA box. The CUDA RAM tier is where the flag has real semantics, and there it still
+refuses.
 
 Set while `stream_layers: false` the key is rejected as a footgun, like the other
 `stream_*` keys.

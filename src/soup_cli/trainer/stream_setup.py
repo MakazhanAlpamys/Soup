@@ -472,14 +472,15 @@ class StreamingSetupMixin:
             use_rslora=tcfg.lora.use_rslora,
         )
 
-        # #366 review — on CPU there is no CUDA device, so page-locking (a
-        # host->device transfer optimization) is inapplicable. An explicit
-        # stream_pin=true is honoured by saying so, not by dropping it silently.
+        # #366 / #434 — CUDA host pinning is inapplicable on every non-CUDA
+        # target. An explicit stream_pin=true is honoured by saying so, not by
+        # dropping it silently. On MPS the pageable CPU source is also what keeps
+        # the frozen base out of the accelerator allocator.
         if tcfg.stream_pin is True and not on_cuda:
             console.print(
                 "[yellow]training.stream_pin=true, but no CUDA device is present: "
-                "page-locking is a host-to-device transfer optimization and does "
-                "not apply on CPU. Proceeding without it.[/]"
+                "CUDA host pinning does not apply to this target. Proceeding with "
+                "a pageable CPU source.[/]"
             )
 
         model, runtime = build_streamed_model(
@@ -494,8 +495,8 @@ class StreamingSetupMixin:
             # #366: on the RAM tier stream_pin=true refuses rather than silently
             # falling back to a pageable store; on the disk tier the runtime
             # announces that pinning is inapplicable (no RAM store to lock); on
-            # CPU the notice above covers it. require_pin only carries the RAM
-            # refusal, so it is gated on a real CUDA device.
+            # non-CUDA targets the notice above covers it. require_pin only carries
+            # the CUDA RAM-tier refusal, so it is gated on a real CUDA device.
             require_pin=(tcfg.stream_pin is True) and on_cuda,
             seed=tcfg.seed if getattr(tcfg, "seed", None) is not None else 0,
             trust_remote_code=self._trust_remote_code,

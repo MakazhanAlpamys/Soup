@@ -1335,7 +1335,7 @@ def _load_model(
             base_model,
             trust_remote_code=trust_remote_code,
             device_map="auto",
-            dtype=load_dtype,
+            torch_dtype=load_dtype,
         )
         console.print(f"[dim]Loading LoRA adapter: {model_path}...[/]")
         model_obj = PeftModel.from_pretrained(base, model_path)
@@ -1345,7 +1345,7 @@ def _load_model(
             model_path,
             trust_remote_code=trust_remote_code,
             device_map="auto",
-            dtype=load_dtype,
+            torch_dtype=load_dtype,
         )
 
     model_obj.eval()
@@ -1443,7 +1443,7 @@ def _load_draft_model(speculative_model: str, device: str):
     draft = AutoModelForCausalLM.from_pretrained(
         speculative_model,
         device_map="auto" if device != "cpu" else "cpu",
-        dtype=torch.float16 if device != "cpu" else torch.float32,
+        torch_dtype=torch.float16 if device != "cpu" else torch.float32,
     )
     draft.eval()
     return draft
