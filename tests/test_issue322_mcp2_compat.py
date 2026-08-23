@@ -172,6 +172,14 @@ class TestTheConstraintNoLongerExcludes2x:
         assert "1.10.0" in spec
         # The floor #296 measured must not come back down.
         assert "1.9.4" not in spec
+        # ...and the CEILING must stay pinned too. The thesis of this PR is
+        # that a bound nobody has verified should not ship: mcp 2.x was
+        # exercised before lifting the cap to <3, and 3.x has been exercised
+        # by nobody. Without these, deleting the upper bound entirely -- or
+        # widening it to <4 -- leaves the suite green, which is the exact
+        # failure class the cap exists to prevent (review of #498).
+        assert "3.0.0" not in spec
+        assert "4.0.0" not in spec
 
     def test_the_roundtrip_helper_is_not_collected_as_a_test_module(self):
         """`tests/mcp_roundtrip.py` is imported by test modules; if it were ever
