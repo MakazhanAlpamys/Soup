@@ -1,27 +1,26 @@
-"""`SFTTrainerWrapper` never passed `dtype` to `from_pretrained` (issue #339).
+"""`SFTTrainerWrapper` never passed a dtype kwarg to `from_pretrained` (issue #339).
 
 All three modality paths (text/vision/audio) built `model_kwargs` with
-`trust_remote_code`/`device_map`/optional `quantization_config` but no
-`dtype`, so `from_pretrained` defaulted to float32 regardless of the
+`trust_remote_code`/`device_map`/optional `quantization_config` but no dtype
+kwarg, so `from_pretrained` defaulted to float32 regardless of the
 checkpoint's own dtype — a bf16 checkpoint cost 2x the VRAM it needed.
 Measured on an H100, LoRA, Llama-3.1-8B: 48,241 MiB (fp32) -> 18,658 MiB
-(`dtype="auto"`), a 28.9 GB / 2.59x saving, byte-identical across 3 repeats.
+(`torch_dtype="auto"`), a 28.9 GB / 2.59x saving, byte-identical across 3 repeats.
 
 The fix is a numerics DECISION, not a one-liner: a frozen base (LoRA/QLoRA)
-loads at the checkpoint's own dtype (`dtype="auto"`); a trainable base (full
-fine-tuning — Spectrum `unfrozen_parameters`, LISA `lisa_enabled`, or the
-#340 `lora.r=0` spelling) explicitly loads `torch.float32` master weights,
-deliberately rather than by accident.
+loads at the checkpoint's own dtype (`torch_dtype="auto"`); a trainable base
+(full fine-tuning — Spectrum `unfrozen_parameters`, LISA `lisa_enabled`, or
+the #340 `lora.r=0` spelling) explicitly loads `torch.float32` master
+weights, deliberately rather than by accident.
 
-**#471 review round added two things**, tested below alongside the original four:
+**#471 review round 2 added two things**, tested below alongside the original four:
 
 - `_resolve_load_dtype` is now card-aware: an unconditional `"auto"` for a
   frozen base would give bf16 STORAGE on a pre-Ampere CUDA card (T4/P100/V100/
-  GTX 16xx/RTX 20xx) while training compute correctly stays fp16 (asked via
-  `bf16_fp16_flags`, the same helper `_resolve_mixed_precision` already uses)
-  — the exact bf16-storage/fp16-compute split v0.73.1 (#385/#387) removed
-  from fourteen other places. Pre-Ampere now gets an explicit `torch.float16`
-  override instead of `"auto"`.
+  GTX 16xx/RTX 20xx) while training compute correctly stays fp16 — the exact
+  bf16-storage/fp16-compute split v0.73.1 (#385/#387) removed from fourteen
+  other places. Pre-Ampere now gets an explicit `torch.float16` override
+  instead of `"auto"`.
 - The full-FT discriminator (`unfrozen_parameters` / `lisa_enabled` /
   `lora.r==0`) is now a single shared `is_full_finetune()`, used by both
   `_resolve_load_dtype` and `commands/train.py::_build_hardware_fit_input`'s
@@ -31,15 +30,28 @@ deliberately rather than by accident.
   sufficient on its own, even with LoRA still on, over-predicted it and could
   falsely refuse a launch that would fit).
 
-Layers, matching the issue's four acceptance criteria plus the two additions:
+**#471 review round 3 added a third thing**: the frozen-base half of
+`_resolve_load_dtype` now delegates to `resolve_frozen_base_load_dtype`
+(`utils/gpu.py`, #492) rather than re-deriving the same `bf16_fp16_flags`
+check inline — one resolver shared with the other twelve trainers instead of
+two independent implementations. And the kwarg itself is renamed `dtype` ->
+`torch_dtype`: `dtype=` only exists in transformers>=4.56, while this project
+declares `>=4.36.0`, so it was a hard `TypeError` at model load on every
+floor-adjacent version (measured on 4.46.1) — not a silent no-op, and
+something no mock using `def _fake(*args, **kwargs)` could ever catch, since
+that signature swallows any kwarg name.
+
+Layers, matching the issue's four acceptance criteria plus the review additions:
 
 - `TestResolveLoadDtype` — unit tests of `_resolve_load_dtype` in isolation,
   no model load (now an instance method — needs `self.device`).
 - `TestResolveLoadDtypeCardAware` — the #471 pre-Ampere/Ampere/CPU card check,
   using the same fake-`torch.cuda` pattern as `test_issue385_stream_dtype.py`.
 - `TestModelKwargsCaptureAcrossModalities` — mock `from_pretrained` at all
-  three call sites (text/vision/audio) and assert on the captured `dtype` kwarg,
-  including the QLoRA case (`dtype` + `quantization_config` coexisting).
+  three call sites (text/vision/audio) and assert on the captured
+  `torch_dtype` kwarg, including the QLoRA case (`torch_dtype` +
+  `quantization_config` coexisting) and the literal kwarg *name*, not just
+  its value.
 - `TestLoadDtypeMatchesCheckpoint` — the literal AC1 claim, with real tiny
   on-disk checkpoints: a LoRA run on a bf16 checkpoint really does load bf16,
   and — the control that makes that mean something — a LoRA run on an fp32
@@ -49,6 +61,10 @@ Layers, matching the issue's four acceptance criteria plus the two additions:
 - `TestIsFullFinetuneSharedDiscriminator` — the #471 unification: direct unit
   tests of `is_full_finetune`, plus `_build_hardware_fit_input`'s corrected
   classification for both the previously under- and over-counted cases.
+
+The LISA-vs-`setup()`-summary-label fix (also #471 round 3) is tested in
+`tests/test_issue341_seed_and_fullft.py`, alongside the sibling
+`lora.r=0`-vs-label test it matches — not here.
 """
 
 from __future__ import annotations
@@ -209,7 +225,7 @@ class TestResolveLoadDtypeCardAware:
 
 
 # ---------------------------------------------------------------------------
-# Mock-based: model_kwargs["dtype"] capture at all three call sites.
+# Mock-based: model_kwargs["torch_dtype"] capture at all three call sites.
 # Fake transformers/peft modules, same shape as tests/test_trainer_init.py.
 # ---------------------------------------------------------------------------
 
@@ -325,7 +341,7 @@ class TestModelKwargsCaptureAcrossModalities:
 
         wrapper._setup_transformers(cfg, cfg.training)
 
-        assert captured["dtype"] == "auto"
+        assert captured["torch_dtype"] == "auto"
 
     def test_text_lora_dtype_is_float16_on_pre_ampere_cuda(self, monkeypatch, fake_torch_cuda):
         """#471 — the card check reaches all the way into model_kwargs, not
@@ -365,10 +381,10 @@ class TestModelKwargsCaptureAcrossModalities:
 
         wrapper._setup_transformers(cfg, cfg.training)
 
-        assert captured["dtype"] is torch.float16
+        assert captured["torch_dtype"] is torch.float16
 
     def test_text_qlora_dtype_and_quantization_config_coexist(self, monkeypatch):
-        """#471 review — QLoRA now also gets model_kwargs["dtype"] (since a
+        """#471 review — QLoRA now also gets model_kwargs["torch_dtype"] (since a
         quantized run is never is_full_finetune); confirm it lands alongside
         quantization_config rather than one clobbering the other."""
         from soup_cli.trainer.sft import SFTTrainerWrapper
@@ -404,7 +420,7 @@ class TestModelKwargsCaptureAcrossModalities:
 
         wrapper._setup_transformers(cfg, cfg.training)
 
-        assert captured["dtype"] == "auto"  # frozen base (QLoRA is never full-FT)
+        assert captured["torch_dtype"] == "auto"  # frozen base (QLoRA is never full-FT)
         assert captured["quantization_config"] is sentinel_quant_config
 
     def test_text_full_finetune_dtype_is_float32(self, monkeypatch):
@@ -441,7 +457,7 @@ class TestModelKwargsCaptureAcrossModalities:
 
         wrapper._setup_transformers(cfg, cfg.training)
 
-        assert captured["dtype"] is torch.float32
+        assert captured["torch_dtype"] is torch.float32
 
     def test_vision_dtype_is_always_auto(self, monkeypatch):
         from soup_cli.trainer.sft import SFTTrainerWrapper
@@ -480,7 +496,7 @@ class TestModelKwargsCaptureAcrossModalities:
 
         wrapper._setup_vision_transformers(cfg, cfg.training)
 
-        assert captured["dtype"] == "auto"
+        assert captured["torch_dtype"] == "auto"
 
     def test_audio_dtype_is_always_auto(self, monkeypatch):
         from soup_cli.trainer.sft import SFTTrainerWrapper
@@ -519,7 +535,100 @@ class TestModelKwargsCaptureAcrossModalities:
 
         wrapper._setup_audio_transformers(cfg, cfg.training)
 
-        assert captured["dtype"] == "auto"
+        assert captured["torch_dtype"] == "auto"
+
+    def test_the_kwarg_key_is_torch_dtype_not_dtype_at_all_three_sites(self, monkeypatch):
+        """#492 review — the >=4.56-only spelling was a hard TypeError at
+        model load on this project's declared transformers floor (measured
+        on 4.46.1), and neither CI (always installs the newest transformers)
+        nor a mock built as `def _fake(*args, **kwargs)` (which swallows any
+        kwarg NAME, only exposing a wrong VALUE) can see a reverted spelling.
+        This is the only thing that can: assert the key itself, at all three
+        call sites, and that "dtype" is not ALSO present (no accidental dual
+        emission)."""
+        from soup_cli.trainer.sft import SFTTrainerWrapper
+
+        fake_peft = types.SimpleNamespace(
+            LoraConfig=lambda **kwargs: SimpleNamespace(**kwargs),
+            TaskType=SimpleNamespace(CAUSAL_LM="CAUSAL_LM"),
+            get_peft_model=lambda model_obj, _cfg: model_obj,
+            prepare_model_for_kbit_training=lambda model_obj: model_obj,
+        )
+        monkeypatch.setitem(sys.modules, "peft", fake_peft)
+        monkeypatch.setattr(
+            "soup_cli.utils.quant_menu.build_quantization_config_for_loader",
+            lambda **kwargs: None,
+        )
+        _install_common_trainer_mocks(monkeypatch)
+
+        # Text.
+        cfg = _make_config(training={"quantization": "none"})
+        model, tokenizer, captured = _FakeModel(), _FakeTokenizer(), {}
+        monkeypatch.setitem(
+            sys.modules,
+            "transformers",
+            types.SimpleNamespace(
+                AutoTokenizer=types.SimpleNamespace(from_pretrained=lambda *a, **k: tokenizer),
+                AutoModelForCausalLM=types.SimpleNamespace(
+                    from_pretrained=_capturing_from_pretrained(model, captured)
+                ),
+            ),
+        )
+        wrapper = object.__new__(SFTTrainerWrapper)
+        wrapper.config, wrapper.device = cfg, "cpu"
+        wrapper._trust_remote_code = False
+        wrapper.model = wrapper.tokenizer = None
+        wrapper._setup_transformers(cfg, cfg.training)
+        assert "torch_dtype" in captured
+        assert "dtype" not in captured
+
+        # Vision.
+        cfg = _make_config(
+            modality="vision",
+            data={"train": "./data.jsonl", "format": "llava"},
+            training={"quantization": "none"},
+        )
+        model, processor, captured = _FakeModel(), _FakeProcessor(), {}
+        monkeypatch.setitem(
+            sys.modules,
+            "transformers",
+            types.SimpleNamespace(
+                AutoProcessor=types.SimpleNamespace(from_pretrained=lambda *a, **k: processor),
+                AutoModelForVision2Seq=types.SimpleNamespace(
+                    from_pretrained=_capturing_from_pretrained(model, captured)
+                ),
+            ),
+        )
+        wrapper = object.__new__(SFTTrainerWrapper)
+        wrapper.config, wrapper.device = cfg, "cpu"
+        wrapper._trust_remote_code = False
+        wrapper._setup_vision_transformers(cfg, cfg.training)
+        assert "torch_dtype" in captured
+        assert "dtype" not in captured
+
+        # Audio.
+        cfg = _make_config(
+            modality="audio",
+            data={"train": "./data.jsonl", "format": "audio"},
+            training={"quantization": "none"},
+        )
+        model, processor, captured = _FakeModel(), _FakeProcessor(), {}
+        monkeypatch.setitem(
+            sys.modules,
+            "transformers",
+            types.SimpleNamespace(
+                AutoProcessor=types.SimpleNamespace(from_pretrained=lambda *a, **k: processor),
+                AutoModel=types.SimpleNamespace(
+                    from_pretrained=_capturing_from_pretrained(model, captured)
+                ),
+            ),
+        )
+        wrapper = object.__new__(SFTTrainerWrapper)
+        wrapper.config, wrapper.device = cfg, "cpu"
+        wrapper._trust_remote_code = False
+        wrapper._setup_audio_transformers(cfg, cfg.training)
+        assert "torch_dtype" in captured
+        assert "dtype" not in captured
 
 
 # ---------------------------------------------------------------------------

@@ -585,6 +585,25 @@ class TestFullFinetuneTrainer:
         assert "LoRA applied" not in out
         assert "Full fine-tuning" in out
 
+    def test_the_summary_line_says_lisa_not_lora_applied(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """#471 review round 3 — the same false-statement bug as the
+        `lora.r=0` case above, for `lisa_enabled` instead: `setup()`'s
+        summary label was missing this flag entirely (only checked
+        `unfrozen_parameters` / `lora.r==0`), so a LISA run printed "LoRA
+        applied" though it never attaches an adapter. `lora.r` is left at
+        `_wrapper`'s LoRA-shaped default on purpose: the real mode-selection
+        chain in `_setup_transformers` takes the LISA branch whenever
+        `lisa_enabled` is set, regardless of `lora.r`, so this is the actual
+        precondition the bug fires under, not a hand-picked one."""
+        _requires_train_extra()
+        wrapper, dataset = _wrapper(tmp_path, monkeypatch, lisa_enabled=True)
+        wrapper.setup(dataset)
+        out = capsys.readouterr().out
+        assert "LoRA applied" not in out
+        assert "LISA" in out
+
     def test_full_ft_trains_under_gradient_checkpointing(self, tmp_path, monkeypatch):
         """Gradient checkpointing is how full-FT fits at all, so the two are
         the common pairing, not an exotic one. A frozen input embedding breaks

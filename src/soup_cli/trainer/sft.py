@@ -16,6 +16,7 @@ from soup_cli.utils.gpu import (
     estimate_batch_size,
     model_size_from_name,
     resolve_device_map,
+    resolve_frozen_base_load_dtype,
 )
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 
@@ -516,6 +517,8 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         # is the line an operator screenshots to show what trained.
         if tcfg.unfrozen_parameters:
             label = "Spectrum targeted FT"
+        elif tcfg.lisa_enabled:
+            label = "LISA full fine-tuning"
         elif tcfg.lora.r == 0 and cfg.modality == "text" and cfg.backend == "transformers":
             label = "Full fine-tuning"
         else:
@@ -1098,48 +1101,48 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         return (mode == "bf16", mode == "fp16")
 
     def _resolve_load_dtype(self, tcfg):
-        """Decide the ``dtype`` kwarg for ``from_pretrained`` (#339, #471).
+        """Decide the ``torch_dtype`` kwarg for ``from_pretrained`` (#339, #471, #492).
 
-        Two cases, and #339's payoff is real only because they are told apart
-        — see the module-level ``is_full_finetune`` for the shared
-        discriminator (also used by ``commands/train.py``'s VRAM pre-flight,
-        so the two cannot drift apart the way they did before #471):
+        Two cases, told apart by the module-level ``is_full_finetune`` (also
+        used by ``commands/train.py``'s VRAM pre-flight, so the two cannot
+        drift apart the way they did before #471):
 
         - Trainable base — full fine-tuning: explicit ``torch.float32``. This
           is a DELIBERATE numerics decision (#339 AC2), not the accidental
           default this issue exists to remove — the parameters an optimizer
           actually steps stay fp32 master weights rather than silently
-          inheriting whatever the checkpoint happened to be stored in.
+          inheriting whatever the checkpoint happened to be stored in. This
+          half is genuinely SFT's own — the shared helper below has no
+          full-fine-tuning branch.
         - Frozen base (LoRA / QLoRA — the base never receives an optimizer
-          step): preserve the checkpoint's OWN dtype instead of the HF
-          default of upcasting every load to fp32. Measured on an H100,
-          Llama-3.1-8B, LoRA, frozen base: 48,241 MiB -> 18,658 MiB peak
-          (2.59x / 28.9 GB), byte-identical across 3 repeats.
+          step): delegate to ``resolve_frozen_base_load_dtype`` (#492, added
+          for the other twelve trainers) rather than re-deriving the same
+          card-aware decision inline. It preserves the checkpoint's OWN
+          dtype (``"auto"``) instead of the HF default of upcasting every
+          load to fp32 — measured on an H100, Llama-3.1-8B, LoRA, frozen
+          base: 48,241 MiB -> 18,658 MiB peak (2.59x / 28.9 GB),
+          byte-identical across 3 repeats — except on a pre-Ampere CUDA card
+          (T4 / P100 / V100 / GTX 16xx / RTX 20xx), where ``"auto"`` on a
+          bf16 checkpoint would give bf16 STORAGE while training compute
+          correctly stays fp16 (``bf16_fp16_flags`` — the same helper
+          ``_resolve_mixed_precision`` above calls for the SAME card
+          question), the exact class of bug v0.73.1 (#385/#387) removed from
+          fourteen other places. One resolver instead of two duplicated
+          implementations (#492 review) — this was itself the finding that
+          produced #492's helper.
 
-          #471 review — "preserve the checkpoint's dtype" cannot just mean
-          an unconditional ``"auto"``: on a pre-Ampere CUDA card (T4 / P100 /
-          V100 / GTX 16xx / RTX 20xx), ``"auto"`` on a bf16 checkpoint gives
-          bf16 STORAGE while training compute correctly stays fp16 (asked via
-          ``bf16_fp16_flags`` — same helper ``_resolve_mixed_precision``
-          above already calls for the SAME card question) — a bf16-storage /
-          fp16-compute split that exists nowhere else in this codebase, and
-          is the exact class of bug v0.73.1 (#385/#387) removed from
-          fourteen other places (bf16 assumed everywhere, breaking the whole
-          free-tier Colab/Kaggle T4 fleet). So the frozen-base case asks the
-          card first: pre-Ampere gets an explicit ``torch.float16``
-          override; everything else (Ampere+, CPU) keeps ``"auto"``.
+        #492 review — the kwarg name is ``torch_dtype``, not ``dtype``: the
+        latter only exists in transformers>=4.56, and this project's declared
+        floor is >=4.36.0, so ``dtype=`` was a hard ``TypeError`` at model
+        load on every version from the floor to 4.55 (measured live on
+        4.46.1) — not a silent no-op, since transformers only forwards a
+        kwarg into the config if the config already ``hasattr`` it.
         """
         if is_full_finetune(tcfg):
             import torch  # lazy — sft.py has no top-level torch import (house style)
 
             return torch.float32
-
-        _, fp16_only = bf16_fp16_flags(self.device)
-        if fp16_only:
-            import torch
-
-            return torch.float16
-        return "auto"
+        return resolve_frozen_base_load_dtype(self.device)
 
     @staticmethod
     def _as_sft_config(training_args, max_length):
@@ -1227,7 +1230,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         model_kwargs = {
             "trust_remote_code": self._trust_remote_code,
             "device_map": dev_map,
-            "dtype": self._resolve_load_dtype(tcfg),
+            "torch_dtype": self._resolve_load_dtype(tcfg),
         }
         if quant_config_obj is not None:
             model_kwargs["quantization_config"] = quant_config_obj
@@ -1516,7 +1519,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             # mismatch risk as the text path). Routed through the shared
             # method anyway rather than hardcoding a string, so this stays
             # correct by construction if a vision full-FT branch is ever added.
-            "dtype": self._resolve_load_dtype(tcfg),
+            "torch_dtype": self._resolve_load_dtype(tcfg),
         }
         if quant_config_obj is not None:
             model_kwargs["quantization_config"] = quant_config_obj
@@ -1630,7 +1633,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             # schema gates unfrozen_parameters / lisa_enabled / lora.r==0 to
             # modality='text'); still routed through the shared method since
             # #471's pre-Ampere torch.float16 override can still apply here.
-            "dtype": self._resolve_load_dtype(tcfg),
+            "torch_dtype": self._resolve_load_dtype(tcfg),
         }
         if quant_config_obj is not None:
             model_kwargs["quantization_config"] = quant_config_obj
