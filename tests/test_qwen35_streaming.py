@@ -243,6 +243,18 @@ def _heterogeneous_meta_model():
 
 
 class TestQwen35StreamingAliases:
+    def test_stream_arch_of_accepts_qwen35_dense_text_aliases(self):
+        from soup_cli.utils.layer_stream import stream_arch_of
+
+        text = types.SimpleNamespace(model_type="qwen3_5_text")
+        assert stream_arch_of(text) == "qwen3"
+
+        wrapped = types.SimpleNamespace(
+            model_type="qwen3_5",
+            text_config=text,
+        )
+        assert stream_arch_of(wrapped) == "qwen3"
+
     def test_stream_arch_of_accepts_qwen35_moe_aliases(self):
         from soup_cli.utils.layer_stream import stream_arch_of
 
@@ -287,6 +299,69 @@ class TestQwen35StreamingAliases:
 
 
 class TestQwen35StreamingParity:
+    def test_dense_text_decoder_logits_match_resident_bit_exactly(self, tmp_path):
+        """Admit the real dense Qwen3.5 decoder graph, not just its model-type name.
+
+        Qwen3.8-27B alternates linear-attention and full-attention blocks. This
+        native Transformers fixture preserves both layer kinds while shrinking
+        every dimension enough for a CPU parity control.
+        """
+        from peft import get_peft_model
+        from transformers import Qwen3_5ForCausalLM, Qwen3_5TextConfig
+
+        from soup_cli.utils.layer_shard import shard_checkpoint
+        from soup_cli.utils.layer_stream import stream_arch_of
+        from soup_cli.utils.layer_stream_runtime import build_streamed_model
+
+        config = Qwen3_5TextConfig(
+            vocab_size=64,
+            hidden_size=16,
+            intermediate_size=32,
+            num_hidden_layers=2,
+            num_attention_heads=2,
+            num_key_value_heads=1,
+            head_dim=8,
+            linear_key_head_dim=4,
+            linear_value_head_dim=4,
+            linear_num_key_heads=2,
+            linear_num_value_heads=2,
+            layer_types=["linear_attention", "full_attention"],
+            max_position_embeddings=128,
+        )
+        torch.manual_seed(31)
+        resident = Qwen3_5ForCausalLM(config).to(torch.float32).eval()
+        weights = tmp_path / "weights"
+        resident.save_pretrained(weights, safe_serialization=True)
+
+        arch = stream_arch_of(config)
+        assert arch == "qwen3"
+        shards = str(tmp_path / "shards")
+        index = shard_checkpoint(str(weights), shards, dtype="float32", arch=arch)
+
+        streamed, runtime = build_streamed_model(
+            model_id=str(weights),
+            shard_dir=shards,
+            index=index,
+            lora_config=_tiny_qwen35_lora(),
+            device="cpu",
+            dtype="float32",
+            buffers=2,
+            pin=False,
+            seed=37,
+        )
+        try:
+            reference = get_peft_model(resident, _tiny_qwen35_lora())
+            _copy_toy_lora(streamed, reference)
+            streamed.eval()
+            reference.eval()
+            input_ids = torch.tensor([[1, 7, 3, 11, 5, 2]])
+            with torch.no_grad():
+                got = streamed(input_ids=input_ids).logits
+                want = reference(input_ids=input_ids).logits
+            assert torch.equal(got, want), (got - want).abs().max().item()
+        finally:
+            runtime.close()
+
     def test_heterogeneous_moe_logits_match_resident_bit_exactly(
         self, tmp_path, monkeypatch
     ):

@@ -94,6 +94,8 @@ SUPPORTED_STREAM_ARCHS = (
 # alias needs its own resident-vs-streamed parity control; mapping a model type
 # by name alone is not enough to establish that its decoder graph is safe.
 _STREAM_ARCH_ALIASES = {
+    "qwen3_5": "qwen3",
+    "qwen3_5_text": "qwen3",
     "qwen3_5_moe": "qwen3",
     "qwen3_5_moe_text": "qwen3",
 }
