@@ -209,20 +209,6 @@ reproducing 70+ versions of notes.
 
 ### Fixed
 
-- **`SFTTrainerWrapper` no longer silently upcasts every load to fp32 (#339 by @blackcoderx in #471).**
-  All three `from_pretrained` call sites (text/vision/audio) now pass an explicit `torch_dtype`: a
-  frozen base (LoRA/QLoRA — the base never receives an optimizer step) preserves the checkpoint's
-  own dtype via the shared `resolve_frozen_base_load_dtype()` (#491/#492) instead of defaulting to
-  fp32 — pre-Ampere CUDA cards (T4/P100/V100/GTX 16xx/RTX 20xx) get an explicit `torch.float16`
-  override there instead of bf16-storage/fp16-compute. A trainable base (`lora.r: 0`,
-  `unfrozen_parameters`, `lisa_enabled` — schema-gated to modality='text') loads `torch.float32` as a
-  deliberate, documented numerics choice. Measured on an H100 with Llama-3.1-8B, LoRA, frozen base:
-  48,241 MiB -> 18,658 MiB peak (2.59x / 28.9 GB), byte-identical across 3 repeats. The full-FT
-  discriminator is a single shared `is_full_finetune()`, used by both `SFTTrainerWrapper` and
-  `commands/train.py`'s VRAM pre-flight classifier — previously independent copies that disagreed in
-  both directions. `setup()`'s console summary label also now names LISA runs correctly instead of
-  mislabeling them "LoRA applied".
-
 - **The twelve non-SFT trainers (`dpo`, `kto`, `orpo`, `simpo`, `ipo`, `bco`,
   `online_dpo`, `grpo`, `ppo`, `pretrain`, `reward_model`, `embedding`) loaded
   a frozen LoRA base as float32 regardless of the checkpoint's own dtype
