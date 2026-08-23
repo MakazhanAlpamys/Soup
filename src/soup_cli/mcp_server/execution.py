@@ -27,6 +27,10 @@ DEFAULT_MAX_TREE_BYTES = 10 * 1024 * 1024 * 1024  # 10 GiB
 # as _STATUS_RUNNING. A recorded run only counts as active while its pid is
 # alive, so a stale record whose process is gone never blocks execution forever.
 _STATUS_RUNNING = "running"
+# launch_run() inserts this status with pid=NULL before Popen(); mark_running()
+# only upgrades to _STATUS_RUNNING (with a pid) once Popen() returns. A crash
+# in between leaves a row stuck here with no pid to check liveness against.
+_STATUS_LAUNCHING = "launching"
 
 
 class ExecutionError(ValueError):
@@ -177,13 +181,17 @@ class ExecutionManager:
         return token
 
     def _live_persisted_run(self) -> str | None:
-        """Return the run_id of a persisted 'running' run whose process is alive.
+        """Return the run_id of a persisted run that may still be active.
 
         This is what makes the one-active-execution cap survive a server
         restart (issue #402): the tracker records every MCP-launched child, so a
         freshly-started server (empty in-memory slot) still sees a prior child
-        that is genuinely training. Only a live pid counts — a stale 'running'
-        record whose process is gone must not permanently block execution.
+        that is genuinely training. A _STATUS_RUNNING record only counts while
+        its pid is alive, since a stale one whose process is gone must not
+        permanently block execution. A _STATUS_LAUNCHING record carries no pid
+        to check, so it blocks unconditionally rather than being read as free
+        capacity (issue #505): the crash window it represents can leave
+        a real child running with nothing to verify it against.
         Returns None (never raises) if the tracker is unreadable, so a tracker
         problem degrades to the in-memory-only behaviour rather than wedging.
         """
@@ -192,7 +200,10 @@ class ExecutionManager:
         except Exception:
             return None
         for run in runs:
-            if run.get("status") != _STATUS_RUNNING:
+            status = run.get("status")
+            if status == _STATUS_LAUNCHING:
+                return run.get("run_id")
+            if status != _STATUS_RUNNING:
                 continue
             pid = run.get("pid")
             if pid is not None and _pid_is_alive(pid):
