@@ -79,6 +79,11 @@ def _pref_rows(n=8):
     return [{"prompt": "hi", "chosen": " good answer", "rejected": " bad"} for _ in range(n)]
 
 
+def _long_pref_rows(n=8):
+    prompt = " ".join(["hello"] * 161)
+    return [{"prompt": prompt, "chosen": " good answer", "rejected": " bad"} for _ in range(n)]
+
+
 def _kto_rows(n=8):
     return [{"prompt": "hi", "completion": " good answer", "label": i % 2 == 0} for i in range(n)]
 
@@ -194,6 +199,39 @@ class TestEveryPreferenceTrainerReachesALiveTrlTrainer:
                 f"probe and the object disagree"
             )
         assert args.max_length == 64, (task, args.max_length)
+
+    @pytest.mark.parametrize("task", ("dpo", "orpo"))
+    def test_removed_prompt_cap_is_enforced_on_the_effective_batch(
+        self, tmp_path, monkeypatch, task
+    ):
+        """TRL 0.29 must not turn ``data.max_length`` into a cosmetic field.
+
+        The assertion is on the tensors the model receives, not the config or
+        an intermediate column: 0.29 accepted ``max_length=64`` while emitting
+        164/165-token DPO/ORPO batches from this exact 161-token prompt.
+        """
+        from soup_cli.trainer._trl_compat import config_accepts
+
+        module, cls_name, _ = _WRAPPERS[task]
+        import importlib
+
+        weights = _tiny_llama_dir(tmp_path)
+        _write_tiny_tokenizer(weights)
+        monkeypatch.chdir(tmp_path)
+        cfg = _cfg(weights, tmp_path / "out", task)
+        wrapper = getattr(importlib.import_module(module), cls_name)(cfg, device="cpu")
+        wrapper.setup({"train": _long_pref_rows(8)})
+
+        if config_accepts(type(wrapper.trainer.args), "max_prompt_length"):
+            pytest.skip("installed TRL still enforces its own prompt cap")
+
+        assert len(wrapper.trainer.train_dataset) == 8
+        batch = next(iter(wrapper.trainer.get_train_dataloader()))
+        sequence_keys = [key for key in batch if key.endswith("input_ids")]
+        assert sequence_keys, batch.keys()
+        assert all(batch[key].shape[-1] <= 64 for key in sequence_keys), {
+            key: tuple(batch[key].shape) for key in sequence_keys
+        }
 
 
 class TestTheCanaryCoversWhatItClaims:

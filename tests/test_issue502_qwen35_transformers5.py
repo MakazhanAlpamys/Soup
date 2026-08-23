@@ -9,6 +9,11 @@ from packaging.requirements import Requirement
 from packaging.version import Version
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+BACKENDS_DOC = REPO_ROOT / "docs" / "backends-and-ops.md"
+_DOCS_WARNING = "cannot be installed together"
+_PROBE_VERSIONS = tuple(
+    Version(f"{major}.{minor}.0") for major in range(3, 10) for minor in range(60)
+)
 
 
 def _extra_requirement(extra: str, package: str) -> Requirement:
@@ -22,6 +27,21 @@ def _extra_requirement(extra: str, package: str) -> Requirement:
     ]
     assert len(requirements) == 1
     return requirements[0]
+
+
+def _transformers_extras_are_disjoint() -> bool:
+    """Return whether the declared train/mlx ranges have no shared version."""
+    train = _extra_requirement("train", "transformers").specifier
+    mlx = _extra_requirement("mlx", "transformers").specifier
+    probes = list(_PROBE_VERSIONS)
+    for specifier in (train, mlx):
+        for clause in specifier:
+            probes.append(Version(clause.version))
+    return not any(
+        train.contains(version, prereleases=True)
+        and mlx.contains(version, prereleases=True)
+        for version in probes
+    )
 
 
 def _tiny_qwen35_config():
@@ -55,6 +75,16 @@ def test_training_and_mlx_extras_share_the_transformers5_range():
     assert Version("5.12.0") not in train.specifier
     assert Version("5.15.1") in train.specifier
     assert Version("6.0.0") not in train.specifier
+
+
+def test_docs_warn_exactly_when_training_and_mlx_extras_are_disjoint():
+    disjoint = _transformers_extras_are_disjoint()
+    warned = _DOCS_WARNING in BACKENDS_DOC.read_text(encoding="utf-8")
+
+    assert warned is disjoint, (
+        "docs/backends-and-ops.md must say the train/mlx extras cannot be installed "
+        "together exactly when their declared transformers ranges are disjoint"
+    )
 
 
 def test_trl_floor_crosses_the_transformers5_import_fix():

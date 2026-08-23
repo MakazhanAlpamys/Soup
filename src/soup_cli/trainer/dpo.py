@@ -74,7 +74,11 @@ class DPOTrainerWrapper(StreamingSetupMixin):
         from datasets import Dataset
         from trl import DPOConfig, DPOTrainer
 
-        from soup_cli.trainer._trl_compat import prompt_length_kwargs
+        from soup_cli.trainer._trl_compat import (
+            config_accepts,
+            enforce_preference_sequence_limit,
+            prompt_length_kwargs,
+        )
 
         # Enable Rich progress bar for HuggingFace downloads
         from soup_cli.trainer.sft import _enable_hf_transfer_progress
@@ -211,6 +215,22 @@ class DPOTrainerWrapper(StreamingSetupMixin):
             eval_dataset=eval_ds,
             processing_class=self.tokenizer,
         )
+        if not config_accepts(DPOConfig, "max_prompt_length"):
+            # TRL 0.29 removed the prompt cap and its new DPO tokenizer leaves
+            # max_length enforcement to callers. Cap the prepared token ids so
+            # text and conversational rows keep TRL's own rendering semantics.
+            cap_kwargs = {
+                "max_length": cfg.data.max_length,
+                "max_prompt_length": cfg.data.max_length // 2,
+                "truncation_mode": dpo_config.truncation_mode,
+            }
+            self.trainer.train_dataset = enforce_preference_sequence_limit(
+                self.trainer.train_dataset, **cap_kwargs
+            )
+            if self.trainer.eval_dataset is not None:
+                self.trainer.eval_dataset = enforce_preference_sequence_limit(
+                    self.trainer.eval_dataset, **cap_kwargs
+                )
         if tcfg.stream_layers:
             # TRL 0.29 snapshots the initial policy as a frozen ``ref`` LoRA
             # adapter. PEFT creates that late adapter on the streamed decoder's

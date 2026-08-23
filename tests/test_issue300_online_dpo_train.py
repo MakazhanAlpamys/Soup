@@ -8,7 +8,7 @@
 
 The pre-existing suite only validated ``setup()`` (trainer *build*) on trl 1.x —
 never a real ``train()`` step on the ``reward_funcs`` path. This smoke test runs
-``OnlineDPOTrainerWrapper.train()`` for a couple of steps on a tiny model and
+``OnlineDPOTrainerWrapper.train()`` on a tiny model and
 asserts a ``rewards/*`` entry appears in ``trainer.state.log_history``, proving
 the reward signal is actually applied.
 
@@ -18,8 +18,9 @@ exercises the ``reward_funcs`` path under trl 1.x and the ``judge`` path under
 trl <1. Marked ``smoke`` (it runs a real training loop), so it is excluded
 from the default fast suite and run explicitly via ``pytest -m smoke``.
 
-Executed live on trl 0.19.1 + torch 2.5.1 (SmolLM2-scale tiny-random-gpt2, CPU):
-logs rewards/chosen, rewards/rejected, rewards/accuracies, rewards/margins. The
+Executed live on the new dependency floor, trl 0.29.0 + transformers 5.12.1,
+on Apple Silicon CPU: the real training loop completed and logged
+rewards/chosen, rewards/rejected, rewards/accuracies, and rewards/margins. The
 trl 1.x reward_funcs execution requires a trl>=1.7 + torch>=2.6 env (e.g. CI's
 torch-2.6 job) — the same test body exercises it there without modification.
 """
@@ -42,12 +43,18 @@ class _LengthJudge:
     reward-func path).
     """
 
+    def __init__(self):
+        self.compare_calls = 0
+        self.evaluate_calls = 0
+
     def compare_pair(self, prompt, resp_a, resp_b):
+        self.compare_calls += 1
         if len(resp_a) == len(resp_b):
             return -1
         return 0 if len(resp_a) > len(resp_b) else 1
 
     def evaluate(self, prompt, response, category="default"):
+        self.evaluate_calls += 1
         return JudgeScore(
             prompt=prompt, response=response, weighted_score=float(len(response))
         )
@@ -86,7 +93,7 @@ class TestOnlineDpoTrainLogsReward:
             "  lr: 1e-4\n"
             "output: ./out\n"
         )
-        # 4 prompts / batch 2 / 1 epoch -> 2 steps (no reaching into internals).
+        # Enough prompts to exercise generation, judging, and an optimizer step.
         dataset = {
             "train": [
                 {"messages": [{"role": "user", "content": "hi there friend"}]},
@@ -96,7 +103,8 @@ class TestOnlineDpoTrainLogsReward:
             ]
         }
 
-        od._ONLINE_DPO_JUDGE_OVERRIDE = _LengthJudge()
+        judge = _LengthJudge()
+        od._ONLINE_DPO_JUDGE_OVERRIDE = judge
         try:
             wrapper = OnlineDPOTrainerWrapper(cfg, device="cpu")
             wrapper.setup(dataset)
@@ -113,6 +121,10 @@ class TestOnlineDpoTrainLogsReward:
         # The core online-DPO reward metrics TRL emits once a reward is applied.
         assert "rewards/chosen" in keys
         assert "rewards/rejected" in keys
+        if _TRL_HAS_JUDGES:
+            assert judge.compare_calls > 0, "TRL never called the pairwise judge"
+        else:
+            assert judge.evaluate_calls > 0, "TRL never called the reward function"
 
     def test_reward_funcs_path_on_trl_1x(self, tmp_path, monkeypatch):
         """On trl 1.x the build must use the reward_funcs= API (not judge=).
