@@ -76,6 +76,95 @@ class TestGuardCoverage:
             "with LoRA it dies at the first lr_scheduler.step() (#359)."
         )
 
+    #: preference.py forwards ``deepspeed_config`` into five wrappers that each
+    #: carry the guard, and builds no trainer of its own. It is the ONLY module
+    #: allowed to hold a deepspeed_config without calling the guard, and it is
+    #: named here so that the next such module has to be argued for rather than
+    #: slipping through a regex that stopped matching.
+    _GUARD_EXEMPT = {"preference.py"}
+
+    def test_no_deepspeed_capable_module_quietly_loses_the_guard(self):
+        """Closes the rebind evasion: ``_BUILDS_TRAINER`` requires the
+        constructor CALL on the ``self.trainer =`` line, so an ordinary
+        refactor to ``built = KTOTrainer(...); self.trainer = built`` makes a
+        module invisible to the per-wrapper check above and the guard can be
+        deleted with nothing failing. Keying on ``deepspeed_config`` instead of
+        on construction cannot be evaded that way."""
+        offenders = []
+        for path in _TRAINER_SOURCES:
+            code = _code_without_comments(path.read_text(encoding="utf-8"))
+            if not _DEEPSPEED_CAPABLE.search(code):
+                continue
+            if path.name in self._GUARD_EXEMPT:
+                continue
+            if not _GUARD_CALL.search(code):
+                offenders.append(path.name)
+        assert not offenders, (
+            f"{', '.join(offenders)} accept a deepspeed_config but never call "
+            "attach_empty_param_group_guard(). If a module genuinely forwards "
+            "rather than builds, add it to _GUARD_EXEMPT with the reason."
+        )
+
+    def test_the_exemption_list_stays_earned(self):
+        """An exemption that stops being true is worse than none: it silences
+        the check above for a module that has since grown its own trainer."""
+        for name in self._GUARD_EXEMPT:
+            path = _TRAINER_DIR / name
+            assert path.is_file(), f"_GUARD_EXEMPT names {name}, which no longer exists"
+            code = _code_without_comments(path.read_text(encoding="utf-8"))
+            assert not _BUILDS_TRAINER.search(code), (
+                f"{name} is exempt from the guard check but now builds its own "
+                "trainer; remove it from _GUARD_EXEMPT and attach the guard."
+            )
+
+    @pytest.mark.parametrize("path", _TRAINER_SOURCES, ids=[p.stem for p in _TRAINER_SOURCES])
+    def test_the_guard_is_attached_only_under_deepspeed(self, path):
+        """Every one of these blocks carries the comment "only under DeepSpeed
+        so the ordinary path keeps its own optimizer" -- and until now only
+        sft.py had a test enforcing it (test_issue336...:test_the_call_is_
+        conditional_on_deepspeed reads that one module). An unconditional
+        attach rewrites the optimizer of EVERY LoRA run, not just DeepSpeed
+        ones, and no test noticed."""
+        import ast as _ast
+
+        source = path.read_text(encoding="utf-8")
+        if not _GUARD_CALL.search(_code_without_comments(source)):
+            return
+
+        tree = _ast.parse(source)
+        guarded = []
+
+        def _is_deepspeed_test(node: _ast.AST) -> bool:
+            return any(
+                isinstance(sub, _ast.Attribute) and sub.attr == "deepspeed_config"
+                for sub in _ast.walk(node)
+            )
+
+        def _walk(node: _ast.AST, under_deepspeed: bool) -> None:
+            for child in _ast.iter_child_nodes(node):
+                if isinstance(child, _ast.If):
+                    inner = under_deepspeed or _is_deepspeed_test(child.test)
+                    for stmt in child.body:
+                        _walk(stmt, inner)
+                    for stmt in child.orelse:
+                        _walk(stmt, under_deepspeed)
+                    continue
+                if (
+                    isinstance(child, _ast.Call)
+                    and isinstance(child.func, _ast.Name)
+                    and child.func.id == "attach_empty_param_group_guard"
+                ):
+                    guarded.append(under_deepspeed)
+                _walk(child, under_deepspeed)
+
+        _walk(tree, False)
+        assert guarded, f"{path.name} matches the guard regex but has no parsed call"
+        assert all(guarded), (
+            f"{path.name} attaches the empty-param-group guard unconditionally. "
+            "It must sit under `if self.deepspeed_config:` -- outside DeepSpeed "
+            "the ordinary path keeps its own optimizer."
+        )
+
     def test_the_patterns_would_catch_the_unguarded_shape(self):
         """A scanner nobody has watched fail is indistinguishable from a broken
         one. Both halves of the detector are exercised here."""
