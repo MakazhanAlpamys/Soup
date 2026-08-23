@@ -1251,11 +1251,17 @@ class TestStatsHistogramWindows:
         )
 
         try:
-            plt.clear_figure()
-            plt.hist([10, 20, 30, 40, 50], bins=3)
-            plt.title("Test")
-            plt.theme("dark")
-            plt.show()
+            from soup_cli.utils.plotext_compat import render_histogram
+
+            render_histogram(
+                plt,
+                [10, 20, 30, 40, 50],
+                bins=3,
+                title="Test",
+                xlabel="Value",
+                ylabel="Count",
+                theme="dark",
+            )
             # If we got here, no UnicodeEncodeError — success
         finally:
             sys.stdout = original_stdout

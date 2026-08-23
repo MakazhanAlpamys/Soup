@@ -211,17 +211,43 @@ def _policy_logps(trainer, model, batch):
 def _loss_of(trainer, model, batch):
     """Call the trainer's loss for `model`, across TRL's signature differences.
 
-    `KTOTrainer.get_batch_loss_metrics` takes (model, batch); DPO / ORPO / CPO
-    take (model, batch, train_eval).
+    TRL <=0.28 exposes ``get_batch_loss_metrics``. DPO 0.29 folds that method
+    into a private helper while KTO / the experimental preference trainers
+    retain the older surface. Prefer the old method where it exists. For the
+    new DPO implementation, reconstruct its standard sigmoid loss from the
+    policy and reference log-probability helpers so this test can compare a
+    separate resident control model without changing the trainer under test.
     """
     import inspect
 
-    fn = trainer.get_batch_loss_metrics
-    if "train_eval" in inspect.signature(fn).parameters:
-        loss, _ = fn(model, batch, "train")
-    else:
-        loss, _ = fn(model, batch)
-    return loss
+    fn = getattr(trainer, "get_batch_loss_metrics", None)
+    if fn is not None:
+        if "train_eval" in inspect.signature(fn).parameters:
+            loss, _ = fn(model, batch, "train")
+        else:
+            loss, _ = fn(model, batch)
+        return loss
+    # DPO 0.29 folds the whole standard sigmoid loss into a private
+    # ``_compute_loss``. Rebuild only that public mathematical contract from
+    # the policy and reference log-probability helpers: this gate deliberately
+    # reuses one trainer with a resident control model, while 0.29's private
+    # method reads ``self.model`` even when a different model argument is
+    # supplied. Calling it would therefore compare two different references.
+    import torch.nn.functional as functional
+
+    assert list(trainer.loss_types) == ["sigmoid"]
+    policy = _policy_logps(trainer, model, batch)
+    original_model = trainer.model
+    trainer.model = model
+    try:
+        ref_chosen, ref_rejected = trainer.compute_ref_log_probs(batch)
+    finally:
+        trainer.model = original_model
+    chosen_logratios = policy["chosen_logps"] - ref_chosen
+    rejected_logratios = policy["rejected_logps"] - ref_rejected
+    return -functional.logsigmoid(
+        trainer.beta * (chosen_logratios - rejected_logratios)
+    ).mean()
 
 
 def _match_streamed_dtype(resident, streamed):
@@ -581,17 +607,22 @@ class TestBitExactVsResident:
         wrapper, resident, _ = _build_streamed_wrapper(tmp_path, monkeypatch, task=task)
         _randomise_lora_b(wrapper.model)
 
-        resident_peft = get_peft_model(
-            resident,
-            LoraConfig(
-                r=4,
-                lora_alpha=8,
-                lora_dropout=0.0,
-                bias="none",
-                target_modules=["q_proj", "v_proj"],
-                task_type=TaskType.CAUSAL_LM,
-            ),
+        lora_config = LoraConfig(
+            r=4,
+            lora_alpha=8,
+            lora_dropout=0.0,
+            bias="none",
+            target_modules=["q_proj", "v_proj"],
+            task_type=TaskType.CAUSAL_LM,
         )
+        resident_peft = get_peft_model(resident, lora_config)
+        # TRL 0.29 snapshots a non-zero initial policy as a frozen ``ref``
+        # adapter. Give the resident control the same adapter topology before
+        # copying weights; otherwise its reference is the bare base while the
+        # streamed arm compares against the snapshot, so this is no longer a
+        # streamed-vs-resident comparison.
+        if "ref" in wrapper.model.peft_config:
+            resident_peft.add_adapter("ref", lora_config)
         copied = _sync_adapters(resident_peft, wrapper.model)
         assert copied > 0, "vacuous: no adapter tensors copied"
 
