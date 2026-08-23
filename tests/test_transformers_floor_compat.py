@@ -31,6 +31,11 @@ CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 CONSTRAINTS = REPO_ROOT / ".github" / "constraints" / "transformers-floor.txt"
 
 _LOAD_METHODS = frozenset({"from_pretrained", "from_config"})
+_MODEL_LOAD_CLASS_SUFFIXES = (
+    "ForCausalLM",
+    "ForConditionalGeneration",
+    "ForSequenceClassification",
+)
 
 
 def _attr_parts(node: ast.AST) -> list[str]:
@@ -44,14 +49,19 @@ def _attr_parts(node: ast.AST) -> list[str]:
     return list(reversed(parts))
 
 
-def _is_auto_model_load(call: ast.Call) -> bool:
-    """True for ``AutoModel*.from_pretrained`` / ``from_config`` (any prefix)."""
+def _is_transformers_model_load(call: ast.Call) -> bool:
+    """True for supported Transformers model factory and concrete-class loads."""
     parts = _attr_parts(call.func)
     if len(parts) < 2:
         return False
     if parts[-1] not in _LOAD_METHODS:
         return False
-    return any(part.startswith("AutoModel") for part in parts[:-1])
+    model_class = parts[-2]
+    return (
+        model_class.startswith("AutoModel")
+        or model_class == "AutoProcessor"
+        or model_class.endswith(_MODEL_LOAD_CLASS_SUFFIXES)
+    )
 
 
 def find_post_floor_dtype_kwargs(source: str, *, filename: str = "<string>") -> list[str]:
@@ -59,7 +69,7 @@ def find_post_floor_dtype_kwargs(source: str, *, filename: str = "<string>") -> 
     tree = ast.parse(source, filename=filename)
     hits: list[str] = []
     for node in ast.walk(tree):
-        if not isinstance(node, ast.Call) or not _is_auto_model_load(node):
+        if not isinstance(node, ast.Call) or not _is_transformers_model_load(node):
             continue
         for kw in node.keywords:
             if kw.arg == "dtype":
@@ -93,10 +103,10 @@ def _transformers_floor_job_block(text: str) -> str:
 
 
 class TestTransformersFloorDtypeGuard:
-    def test_no_production_auto_model_load_uses_dtype_kwarg(self):
+    def test_no_production_transformers_model_load_uses_dtype_kwarg(self):
         hits = iter_production_hits()
         assert hits == [], (
-            "AutoModel*.from_pretrained / from_config must use torch_dtype= "
+            "Transformers model from_pretrained / from_config calls must use torch_dtype= "
             "(works across transformers>=4.36,<5). dtype= is the >=4.56-only "
             "rename and TypeErrors on older installs inside our declared range "
             f"(#478). Offending sites: {hits}"
@@ -110,6 +120,14 @@ class TestTransformersFloorDtypeGuard:
         )
         hits = find_post_floor_dtype_kwargs(bad, filename="mutation.py")
         assert hits == ["mutation.py:2"]
+
+    def test_scanner_flags_concrete_conditional_generation_class(self):
+        bad = (
+            "from transformers import WhisperForConditionalGeneration\n"
+            "WhisperForConditionalGeneration.from_pretrained('x', dtype='auto')\n"
+        )
+        hits = find_post_floor_dtype_kwargs(bad, filename="whisper.py")
+        assert hits == ["whisper.py:2"]
 
     def test_scanner_allows_torch_dtype(self):
         good = (
