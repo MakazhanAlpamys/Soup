@@ -551,7 +551,9 @@ dataset name (no file suffix) — and the classes may not mix within one list:
   in-process). With `data.streaming: true`, entries may also be remote URIs, and combining
   delegates to HF `datasets.interleave_datasets` / `concatenate_datasets` instead — a
   remote URI entry always requires `data.streaming: true` (there is no non-streaming
-  multi-remote-file loader).
+  multi-remote-file loader). Each remote entry is canonicalised through the same
+  SSRF-hardened `validate_remote_uri` allowlist used everywhere else in Soup (bucket
+  regex, no userinfo / query / fragment) before it reaches the streaming loader.
 - **All entries HF-hub dataset names** (e.g. `teknium/OpenHermes-2.5`): each name's own
   `train` split is loaded and combined the same way as the local-file path. Always eager —
   `data.streaming: true` is not yet supported for an all-hub-name list (streaming several

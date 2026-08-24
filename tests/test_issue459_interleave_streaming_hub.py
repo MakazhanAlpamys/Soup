@@ -352,6 +352,70 @@ def test_streaming_local_and_remote_uris_can_mix_one_list(tmp_path, monkeypatch)
     assert any(t.startswith("B-") for t in texts)
 
 
+def test_streaming_remote_uri_is_canonicalized_before_hf_load(tmp_path, monkeypatch):
+    # Security regression: _load_interleaved_streaming_datasets must run each
+    # remote entry through validate_remote_uri (same allowlist
+    # _load_remote_dataset already applies to a single URI) before it
+    # reaches hf_load — not the raw, unvalidated entry. Scheme case-folding
+    # is the cheapest observable proof the canonical string (not the input)
+    # is what's dispatched.
+    calls: list = []
+    _install_fake_streaming_datasets(monkeypatch, calls)
+    _write_jsonl(tmp_path / "a.jsonl", [f"A-{i}" for i in range(4)])
+
+    received: list = []
+
+    def fake_load_dataset(builder, data_files=None, split=None, streaming=False):
+        received.append(data_files)
+        if str(data_files).lower().startswith("s3://"):
+            return _FakeIterableDataset([{"text": f"B-{i}"} for i in range(3)])
+        return _FakeIterableDataset(_rows_from_jsonl(data_files))
+
+    monkeypatch.setattr(sys.modules["datasets"], "load_dataset", fake_load_dataset)
+
+    cfg = _cfg(
+        tmp_path,
+        train=[str(tmp_path / "a.jsonl"), "S3://bucket/b.jsonl"],
+        interleave="concat",
+        streaming=True,
+    )
+    load_dataset(cfg.data)
+    assert "s3://bucket/b.jsonl" in received
+    assert "S3://bucket/b.jsonl" not in received
+
+
+def test_streaming_malicious_query_uri_rejected_before_reaching_hf_load(tmp_path, monkeypatch):
+    # HIGH — SSRF allowlist bypass: the schema-time classifier
+    # (_classify_train_entry / _kind) only checks the URI scheme via
+    # is_remote_uri, so a query string — SSRF-adjacent, since fsspec
+    # backends treat query params as config overrides — sails through the
+    # parse-time gate. validate_remote_uri must still catch it inside the
+    # streaming loader, before any entry ever reaches hf_load.
+    _install_fake_streaming_datasets(monkeypatch, [])
+    _write_jsonl(tmp_path / "a.jsonl", [f"A-{i}" for i in range(4)])
+
+    reached: list = []
+
+    def fake_load_dataset(builder, data_files=None, split=None, streaming=False):
+        reached.append(data_files)
+        return _FakeIterableDataset([{"text": "unused"}])
+
+    monkeypatch.setattr(sys.modules["datasets"], "load_dataset", fake_load_dataset)
+
+    cfg = _cfg(
+        tmp_path,
+        train=[
+            "s3://bucket/key.jsonl?endpoint=http://169.254.169.254",
+            str(tmp_path / "a.jsonl"),
+        ],
+        interleave="concat",
+        streaming=True,
+    )
+    with pytest.raises(ValueError, match="query string"):
+        load_dataset(cfg.data)
+    assert reached == []
+
+
 # ---------------------------------------------------------------------------
 # THE core acceptance test: one config, run both ways, proportions compared.
 # ---------------------------------------------------------------------------

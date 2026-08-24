@@ -479,6 +479,17 @@ def _load_interleaved_streaming_datasets(
     streaming sources are assumed schema-homogeneous; mixing differently
     -formatted streams via streaming interleave is out of scope (use the
     non-streaming local path for that).
+
+    Security: every entry classified as a remote URI is canonicalised
+    through ``validate_remote_uri`` before it reaches ``hf_load`` — the
+    same allowlist validator _load_remote_dataset already runs for a
+    single URI (bucket regex, no userinfo / query / fragment; a query
+    string is SSRF-adjacent since fsspec backends treat it as a config
+    override). The schema-time classifier only checks the URI scheme, so
+    this call is the one place that actually validates the URI shape —
+    without it, a crafted entry like
+    ``s3://bucket/key.jsonl?endpoint=http://169.254.169.254`` would reach
+    hf_load unvalidated.
     """
     try:
         from datasets import concatenate_datasets, interleave_datasets
@@ -489,9 +500,12 @@ def _load_interleaved_streaming_datasets(
             "pip install datasets"
         ) from exc
 
+    from soup_cli.utils.data_pipeline import validate_remote_uri
+
     streams = []
     for entry in train_paths:
-        ds = hf_load("json", data_files=entry, split="train", streaming=True)
+        load_entry = validate_remote_uri(entry) if _looks_like_remote_uri(entry) else entry
+        ds = hf_load("json", data_files=load_entry, split="train", streaming=True)
         buf = data_config.buffer_size
         if buf:
             ds = ds.shuffle(buffer_size=buf)
