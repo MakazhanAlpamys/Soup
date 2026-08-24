@@ -5439,15 +5439,28 @@ class SoupConfig(BaseModel):
             # #459 — classify every entry, then dispatch. Kept local to this
             # validator (rather than exported) since loader.py has its own
             # copy for the actual load-time dispatch; the two must agree,
-            # so keep the classification RULE (suffix / is_remote_uri) the
-            # only thing either site encodes, not the classify function
-            # itself — see loader._classify_train_entry's docstring.
+            # so keep the classification RULE (suffix-in-allowlist /
+            # is_remote_uri) the only thing either site encodes, not the
+            # classify function itself — see loader._classify_train_entry's
+            # docstring.
+            #
+            # _local_file_extensions duplicates loader.SUPPORTED_EXTENSIONS
+            # literally (not imported — that would import loader.py, which
+            # imports DataConfig from this module, an import cycle; also
+            # loader.py intentionally carries the torch-adjacent deps this
+            # module stays light of). A suffix must be one of these to
+            # count as 'local' (#468 review fix) — "any non-empty
+            # Path.suffix" previously misclassified any hub name with a
+            # version number (``teknium/OpenHermes-2.5``,
+            # ``mlfoundations/dclm-baseline-1.0``) as a local file.
+            _local_file_extensions = {".jsonl", ".json", ".csv", ".parquet", ".txt"}
+
             def _kind(entry: str) -> str:
                 if is_remote_uri(entry):
                     return "remote"
-                if not Path(entry).suffix:
-                    return "hub"
-                return "local"
+                if Path(entry).suffix.lower() in _local_file_extensions:
+                    return "local"
+                return "hub"
 
             kinds = {_kind(entry) for entry in data.train}
 

@@ -544,7 +544,9 @@ data:
 `len(probs)`.
 
 Every list entry is classified once — **local** file path, **remote** URI, or **HF-hub**
-dataset name (no file suffix) — and the classes may not mix within one list:
+dataset name (no *recognised* file suffix — `.jsonl` / `.json` / `.csv` / `.parquet` /
+`.txt` only count as local; a hub name with a version number like `teknium/OpenHermes-2.5`
+still classifies as hub) — and the classes may not mix within one list:
 
 - **All entries local files and/or remote URIs:** with `data.streaming: false` (default),
   entries must be local files only (the original #443 path, eager-loaded and combined

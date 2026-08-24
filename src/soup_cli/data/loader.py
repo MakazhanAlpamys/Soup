@@ -253,18 +253,25 @@ def _classify_train_entry(value: str) -> str:
 
     Returns ``'remote'`` / ``'hub'`` / ``'local'``. Mirrors the identical
     classification inline in SoupConfig._validate_interleave_compat — kept
-    as two copies of the same three-line rule (suffix check +
-    is_remote_uri) rather than one shared function, since schema.py must
-    stay import-light (no torch-adjacent deps) and loader.py already owns
-    _looks_like_remote_uri; the rule itself, not the function, is the
+    as two copies of the same three-line rule (suffix-in-SUPPORTED_EXTENSIONS
+    check + is_remote_uri) rather than one shared function, since schema.py
+    must stay import-light (no torch-adjacent deps) and loader.py already
+    owns _looks_like_remote_uri; the rule itself, not the function, is the
     single source of truth, and both sites are covered by
     tests/test_issue459_interleave_streaming_hub.py's schema+loader pairs.
+
+    A suffix must be one of SUPPORTED_EXTENSIONS to count as 'local' (#468
+    review fix) — "any non-empty Path.suffix" previously misclassified any
+    hub name with a version number (``teknium/OpenHermes-2.5``,
+    ``mlfoundations/dclm-baseline-1.0``: Path.suffix is ``.5`` / ``.0``) as
+    a local file, even though the hub-loading path itself handles these
+    names correctly once actually dispatched there.
     """
     if _looks_like_remote_uri(value):
         return "remote"
-    if not Path(value).suffix:
-        return "hub"
-    return "local"
+    if Path(value).suffix.lower() in SUPPORTED_EXTENSIONS:
+        return "local"
+    return "hub"
 
 
 def load_dataset(data_config: DataConfig) -> dict:

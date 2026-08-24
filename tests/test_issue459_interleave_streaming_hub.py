@@ -216,6 +216,29 @@ def test_all_hub_list_without_streaming_validates(tmp_path):
     assert cfg.data.streaming is False
 
 
+def test_dotted_hub_names_classified_as_hub_not_local(tmp_path):
+    # #468 review finding: a hub name with a version number was
+    # misclassified as 'local' because Path(...).suffix is non-empty for
+    # e.g. "OpenHermes-2.5" (.5) / "dclm-baseline-1.0" (.0). These are the
+    # owner's own repro names, and docs/data.md's own example.
+    #
+    # Discriminating on validates-vs-doesn't (rather than just checking
+    # cfg.data.train round-trips) matters here: a plain concat/no-streaming
+    # config validates either way kinds get classified (an all-'local' list
+    # and an all-'hub' list are both valid, non-mixed shapes), so it
+    # wouldn't catch a misclassification. Pairing with streaming=True does
+    # discriminate: 'hub' + streaming=True refuses (mirrors
+    # test_all_hub_list_streaming_still_rejected); 'local' + streaming=True
+    # would validate instead, silently missing the bug.
+    with pytest.raises(ValidationError, match="does not support data.streaming=true"):
+        _cfg(
+            tmp_path,
+            train=["teknium/OpenHermes-2.5", "mlfoundations/dclm-baseline-1.0"],
+            interleave="concat",
+            streaming=True,
+        )
+
+
 def test_all_hub_list_streaming_still_rejected(tmp_path):
     with pytest.raises(ValidationError, match="does not support data.streaming=true"):
         _cfg(
@@ -460,8 +483,15 @@ def test_streaming_unsupported_extension_rejected_by_name(tmp_path, monkeypatch)
     # An extension outside SUPPORTED_EXTENSIONS must refuse by name (mirrors
     # load_raw_data's "Unsupported file format" refusal for the non-streaming
     # path) rather than reach hf_load and fail with an opaque Arrow error.
+    #
+    # Uses a REMOTE entry for the bad extension, not a local one: after the
+    # #468-review classifier fix (local requires suffix in
+    # SUPPORTED_EXTENSIONS), a local ".xyz" entry classifies as 'hub', so
+    # pairing it with a local ".jsonl" entry would hit the schema-level
+    # "not a mix" refusal before ever reaching the loader — a 'remote' +
+    # 'local' pair is not a mix, so this still exercises
+    # _streaming_builder_for's refusal as intended.
     _write_jsonl(tmp_path / "b.jsonl", [f"B-{i}" for i in range(2)])
-    (tmp_path / "a.xyz").write_text("placeholder", encoding="utf-8")
 
     reached: list = []
 
@@ -481,7 +511,7 @@ def test_streaming_unsupported_extension_rejected_by_name(tmp_path, monkeypatch)
 
     cfg = _cfg(
         tmp_path,
-        train=[str(tmp_path / "a.xyz"), str(tmp_path / "b.jsonl")],
+        train=["s3://bucket/a.xyz", str(tmp_path / "b.jsonl")],
         interleave="concat",
         streaming=True,
     )
@@ -556,6 +586,28 @@ def test_hub_list_concat_combines_all_entries(tmp_path, monkeypatch):
     }
     _install_fake_hub_datasets(monkeypatch, registry)
     cfg = _cfg(tmp_path, train=["org/a", "org/b"], interleave="concat")
+    result = load_dataset(cfg.data)
+    texts = [row["text"] for row in result["train"]]
+    assert len(texts) == 7
+    assert sum(t.startswith("A-") for t in texts) == 4
+    assert sum(t.startswith("B-") for t in texts) == 3
+
+
+def test_hub_list_with_dotted_names_loads_via_hub_path(tmp_path, monkeypatch):
+    # #468 review finding, at the loader level: if teknium/OpenHermes-2.5
+    # were misclassified 'local' (pre-fix: Path.suffix == ".5" is
+    # non-empty), load_dataset would try to open it as a local file and
+    # raise FileNotFoundError instead of reaching the hub loader below.
+    registry = {
+        "teknium/OpenHermes-2.5": {"train": [{"text": f"A-{i}"} for i in range(4)]},
+        "mlfoundations/dclm-baseline-1.0": {"train": [{"text": f"B-{i}"} for i in range(3)]},
+    }
+    _install_fake_hub_datasets(monkeypatch, registry)
+    cfg = _cfg(
+        tmp_path,
+        train=["teknium/OpenHermes-2.5", "mlfoundations/dclm-baseline-1.0"],
+        interleave="concat",
+    )
     result = load_dataset(cfg.data)
     texts = [row["text"] for row in result["train"]]
     assert len(texts) == 7
