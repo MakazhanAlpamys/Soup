@@ -12,8 +12,8 @@ from soup_cli.utils.gpu import (
     bf16_fp16_flags,
     estimate_batch_size,
     model_size_from_name,
+    resolve_base_load_dtype,
     resolve_device_map,
-    resolve_frozen_base_load_dtype,
 )
 from soup_cli.utils.mixed_precision import align_trainable_dtype_for_fp16
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
@@ -303,7 +303,9 @@ class PretrainTrainerWrapper:
         dev_map = resolve_device_map(self.device)
         model_kwargs = {
             "trust_remote_code": self._trust_remote_code, "device_map": dev_map,
-            "torch_dtype": resolve_frozen_base_load_dtype(self.device),
+            "torch_dtype": resolve_base_load_dtype(
+                self.device, full_finetune=tcfg.lisa_enabled
+            ),
         }
         if quant_config_obj is not None:
             model_kwargs["quantization_config"] = quant_config_obj

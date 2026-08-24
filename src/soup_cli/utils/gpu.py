@@ -470,6 +470,19 @@ def resolve_frozen_base_load_dtype(device: str):
     return "auto"
 
 
+def resolve_base_load_dtype(device: str, *, full_finetune: bool):
+    """Resolve model-load dtype without drifting between trainer wrappers.
+
+    An optimizer that steps the base needs explicit fp32 master weights. A
+    frozen LoRA base instead keeps the checkpoint/card-aware policy above.
+    """
+    if full_finetune:
+        import torch
+
+        return torch.float32
+    return resolve_frozen_base_load_dtype(device)
+
+
 def get_compute_dtype():
     """Return the best compute dtype for the current device.
 

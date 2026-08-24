@@ -3,13 +3,11 @@
 
 PR #471 fixes ``SFTTrainerWrapper``: a frozen (LoRA) base keeps the
 checkpoint's own dtype instead of the HF default of upcasting every load to
-float32. The other twelve trainer wrappers build the identical
+float32. The other trainer wrappers build the identical
 ``model_kwargs`` shape (``trust_remote_code`` + ``device_map`` + optional
-``quantization_config``) with the same gap. None of them has a full
-fine-tuning branch: ``unfrozen_parameters``/``lisa_enabled`` are schema-gated
-to ``task='sft'`` and ``lora.r=0`` has no wired effect outside ``sft``, so
-``get_peft_model``/``peft_config`` runs unconditionally in every one of
-them and every load is a frozen LoRA base.
+``quantization_config``) with the same gap. Pretraining now has a LISA
+full-fine-tuning branch and therefore uses the full-FT-aware resolver; the
+remaining wrappers always load a frozen LoRA base.
 
 ``TestResolveFrozenBaseLoadDtype`` pins the shared helper in isolation.
 ``TestWrapperModelKwargsCarryDtype`` proves the wiring for real: each
@@ -165,9 +163,14 @@ class TestWrapperModelKwargsCarryDtype:
         # Patched in the wrapper module's own namespace (each trainer imports
         # the name directly), mirroring the real dtype-resolution call site.
         sentinel = object()
+        resolver_name = (
+            "resolve_base_load_dtype"
+            if class_name == "PretrainTrainerWrapper"
+            else "resolve_frozen_base_load_dtype"
+        )
         with patch("transformers.AutoTokenizer.from_pretrained", return_value=fake_tokenizer), \
              patch(f"transformers.{model_class_name}.from_pretrained", load_mock), \
-             patch(f"{module_path}.resolve_frozen_base_load_dtype", return_value=sentinel):
+             patch(f"{module_path}.{resolver_name}", return_value=sentinel):
             with pytest.raises(_StopAtLoadError):
                 wrapper._setup_transformers(cfg, cfg.training)
 

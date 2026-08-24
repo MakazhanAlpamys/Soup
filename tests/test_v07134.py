@@ -1179,6 +1179,37 @@ class TestLisaPretrainSchema:
 
 
 class TestPretrainLisaWiring:
+    @pytest.mark.parametrize("lisa_enabled", [True, False])
+    def test_model_load_dtype_matches_whether_the_base_is_trainable(
+        self, tmp_path, monkeypatch, lisa_enabled
+    ):
+        """LISA steps the base weights, so it needs fp32 master weights.
+
+        The plain-LoRA control must keep the checkpoint-native dtype; otherwise
+        a repair that simply hardcodes fp32 for every pretrain run survives.
+        """
+        _requires_train_extra()
+        import torch
+        from transformers import AutoModelForCausalLM
+
+        _captured_console(monkeypatch)
+        captured_dtypes = []
+        real_from_pretrained = AutoModelForCausalLM.from_pretrained
+
+        def _capture_load_dtype(*args, **kwargs):
+            captured_dtypes.append(kwargs["torch_dtype"])
+            return real_from_pretrained(*args, **kwargs)
+
+        monkeypatch.setattr(
+            AutoModelForCausalLM, "from_pretrained", _capture_load_dtype
+        )
+        overrides = {"lisa_enabled": True} if lisa_enabled else {}
+        wrapper, dataset = _pretrain_wrapper(tmp_path, monkeypatch, **overrides)
+        wrapper.setup(dataset)
+
+        expected_dtype = torch.float32 if lisa_enabled else "auto"
+        assert captured_dtypes == [expected_dtype]
+
     @pytest.mark.parametrize(
         "num_layers,interval_steps", [(3, 15), (2, 7)]
     )
@@ -1489,7 +1520,7 @@ class TestPretrainLisaEndToEnd:
         moved = _layers(
             name
             for name, param in wrapper.model.named_parameters()
-            if not torch.equal(param.detach(), before[name])
+            if not torch.equal(param.detach().cpu(), before[name].cpu())
         )
         assert len(active) == 1, "one layer configured, one layer sampled"
         assert moved == active
