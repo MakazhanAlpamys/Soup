@@ -278,7 +278,14 @@ class TestEveryTrainerAsksTheCard:
         assert 'bf16=self.device == "cuda"' in planted
 
     def test_the_wrappers_that_set_precision_use_the_shared_helper(self):
-        """Sites that set bf16 must take it from one place, or they drift."""
+        """Sites that set bf16 must take it from one place, or they drift.
+
+        Narrowed in #429: prm / mole_routing / ppo take the precision decision
+        through ``self.trainer.args`` (set upstream from ``bf16_fp16_flags``)
+        and call ``align_trainable_dtype_for_fp16``, so requiring the literal
+        helper name in every flagged file false-flagged them. A module counts
+        as covered if it names EITHER shared entry point.
+        """
         sources = self._trainer_sources()
         setters = {
             name
@@ -286,7 +293,12 @@ class TestEveryTrainerAsksTheCard:
             if ("bf16=" in src or '"bf16":' in src) and name not in {"grpo.py", "__init__.py"}
         }
         assert setters, "no wrapper sets a precision flag — the scan is broken"
-        missing = {n for n in setters if "bf16_fp16_flags" not in sources[n]}
+        missing = {
+            n
+            for n in setters
+            if "bf16_fp16_flags" not in sources[n]
+            and "align_trainable_dtype_for_fp16" not in sources[n]
+        }
         assert not missing, f"these set bf16 without the shared helper: {missing}"
 
 

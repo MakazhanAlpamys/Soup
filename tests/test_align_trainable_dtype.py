@@ -98,3 +98,12 @@ def test_every_trainer_that_trains_also_aligns():
         and "align_trainable_dtype_for_fp16" not in s
     ]
     assert not missing, f"trainers call train() without fp16 dtype alignment: {missing}"
+
+
+def test_a_trainer_without_a_model_attribute_casts_nothing():
+    """TestAsrTrainSidecar builds its trainer as a bare SimpleNamespace, so a
+    trainer object without .model is a shape this codebase produces. The
+    helper must answer 0, not AttributeError (#429 review item 2)."""
+    from soup_cli.utils.mixed_precision import align_trainable_dtype_for_fp16
+
+    assert align_trainable_dtype_for_fp16(None, fp16=True, bf16=False) == 0

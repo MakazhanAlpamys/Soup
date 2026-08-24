@@ -424,10 +424,11 @@ class AsrTrainerWrapper:
                     eval_gate_config=self.config.training.eval_gate,
                 )
             )
+        _asr_args = getattr(self.trainer, "args", None)
         align_trainable_dtype_for_fp16(
-            self.trainer.model,
-            fp16=getattr(self.trainer.args, "fp16", False),
-            bf16=getattr(self.trainer.args, "bf16", False),
+            getattr(self.trainer, "model", None),
+            fp16=getattr(_asr_args, "fp16", False),
+            bf16=getattr(_asr_args, "bf16", False),
         )
         self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         duration = time.time() - start

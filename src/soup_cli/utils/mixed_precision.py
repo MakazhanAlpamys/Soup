@@ -98,7 +98,9 @@ def align_trainable_dtype_for_fp16(model, *, fp16: bool, bf16: bool) -> int:
 
     Returns the number of params cast.
     """
-    if not fp16 or bf16:
+    if model is None or not fp16 or bf16:
+        # model=None: a trainer object without .model is a shape this codebase
+        # produces (TestAsrTrainSidecar builds one) — cast nothing, loudly 0.
         return 0
     import torch
 
