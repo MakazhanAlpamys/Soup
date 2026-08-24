@@ -938,6 +938,7 @@ class TestToolEndpointsLive:
     def test_bash_tool_executes_in_sandbox_or_501_on_windows(self):
         """v0.53.8: bash executes in sandbox on Linux/macOS, 501 on Windows."""
         import sys
+
         from fastapi.testclient import TestClient
         app = _create_test_app()
         client = TestClient(app)
