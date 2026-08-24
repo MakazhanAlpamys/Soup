@@ -1,5 +1,9 @@
 """Plotext 5.x / 6.x compatibility coverage."""
 
+from importlib.metadata import version as distribution_version
+
+from packaging.version import Version
+
 from soup_cli.utils.plotext_compat import render_histogram, render_line
 
 
@@ -161,3 +165,35 @@ def test_plotext6_figure_api_is_used() -> None:
         "theme",
         "show",
     ]
+
+
+def test_installed_plotext_runtime_renders_histogram_and_line(monkeypatch) -> None:
+    """Exercise the installed package, not only the two contract doubles."""
+    import plotext
+
+    major = Version(distribution_version("plotext")).major
+    assert major in {5, 6}
+    runtime = plotext.figure if major == 6 else plotext
+    assert callable(runtime.show)
+    monkeypatch.setattr(runtime, "show", lambda: None)
+    render_histogram(
+        plotext,
+        [1, 2, 3],
+        bins=2,
+        title="Histogram",
+        xlabel="X",
+        ylabel="Y",
+        theme="dark",
+    )
+    render_line(
+        plotext,
+        [1, 2, 3],
+        [0.5, 0.25, 0.125],
+        label="loss",
+        title="Loss",
+        xlabel="Step",
+        ylabel="Loss",
+        theme="dark",
+    )
+    built = runtime.build()
+    assert "Loss" in str(built)

@@ -17,9 +17,9 @@ console = Console()
 # Dependencies to check: (import_name, package_name, min_version, required)
 DEPS = [
     ("torch", "torch", "2.0.0", True),
-    ("transformers", "transformers", "4.36.0", True),
-    ("peft", "peft", "0.7.0", True),
-    ("trl", "trl", "0.7.0", True),
+    ("transformers", "transformers", "5.12.1", True),
+    ("peft", "peft", "0.20.0", True),
+    ("trl", "trl", "0.29.0", True),
     ("datasets", "datasets", "2.14.0", True),
     ("bitsandbytes", "bitsandbytes", "0.41.0", True),
     ("accelerate", "accelerate", "0.25.0", True),
@@ -43,12 +43,12 @@ DEPS = [
     ("librosa", "librosa", "0.10.0", False),
 ]
 
-# v0.40.1 Part C / C5 — packages whose major version we explicitly cap.
-# Empty by default; entries gate the dependency table to flag a
-# breaking-major upgrade (e.g. transformers 5.x) as INCOMPATIBLE rather
-# than silently allowing it.
+# Packages whose declared breaking-major ceiling must be reported as
+# incompatible instead of silently green-lighted by ``soup doctor``.
 _MAX_EXCLUSIVE: dict[str, str] = {
-    "transformers": "5.0.0",
+    "transformers": "6.0.0",
+    "peft": "1.0.0",
+    "trl": "1.0.0",
 }
 
 
@@ -119,8 +119,7 @@ def doctor(
                     version = "?"
             version_str = str(version)
 
-            # v0.40.1 Part C / C5 — flag transformers 5.x as INCOMPATIBLE
-            # until the TRL/transformers 5.x migration lands.
+            # Flag versions beyond Soup's validated compatibility band.
             max_excl = _MAX_EXCLUSIVE.get(pkg_name)
             if max_excl and _version_ge(version_str, max_excl):
                 status = f"[red]INCOMPATIBLE (need <{max_excl})[/]"

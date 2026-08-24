@@ -1,7 +1,10 @@
-# #502/#503 — exact pins for the dedicated dependency-floor CI job.
+# #502/#503/#522 — exact pins for the dedicated dependency-floor CI job.
 # Qwen3.5/Qwen3.8 text loading establishes Transformers 5.12.1 as Soup's
 # declared training floor. trl 0.29 is the first release that does not import the
 # Transformers private availability helper whose v5 return type broke trl 0.28.
+# Plotext 6.0.0 is pinned here so one CI cell exercises the real Figure API rather
+# than relying only on the fake 5.x/6.x contract doubles in the unit suite.
 transformers==5.12.1
 trl==0.29.0
 peft==0.20.0
+plotext==6.0.0

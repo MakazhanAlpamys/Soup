@@ -1,4 +1,4 @@
-"""v0.40.1 Part C tests — autopilot fallback / transformers cap / quickstart
+"""v0.40.1 Part C tests — autopilot fallback / dependency cap / quickstart
 GPU-aware model pick / lr_finder import regression.
 """
 
@@ -39,7 +39,7 @@ def test_probe_cache_returns_none_for_missing_repo():
     assert _probe_cache_param_count("nonexistent-org/never-cached-XYZ") is None
 
 
-# --- C5: doctor flags transformers 5.x ------------------------------------
+# --- C5: doctor flags unsupported breaking majors -------------------------
 
 
 def test_version_ge_handles_dev_suffix():
@@ -56,10 +56,10 @@ def test_version_ge_short_version_string():
     assert _version_ge("4.99", "5.0.0") is False
 
 
-def test_max_exclusive_table_caps_transformers():
+def test_max_exclusive_table_allows_transformers5_and_caps_transformers6():
     from soup_cli.commands.doctor import _MAX_EXCLUSIVE
 
-    assert _MAX_EXCLUSIVE.get("transformers") == "5.0.0"
+    assert _MAX_EXCLUSIVE.get("transformers") == "6.0.0"
 
 
 # --- G12: lr_finder real loop uses load_raw_data ---------------------------

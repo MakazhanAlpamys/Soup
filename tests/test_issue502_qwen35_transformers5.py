@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import re
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as distribution_version
 from pathlib import Path
 
+import pytest
 from packaging.requirements import Requirement
-from packaging.version import Version
+from packaging.version import InvalidVersion, Version
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 BACKENDS_DOC = REPO_ROOT / "docs" / "backends-and-ops.md"
@@ -27,6 +30,45 @@ def _extra_requirement(extra: str, package: str) -> Requirement:
     ]
     assert len(requirements) == 1
     return requirements[0]
+
+
+def _single_bound(requirement: Requirement, operator: str) -> str:
+    versions = [clause.version for clause in requirement.specifier if clause.operator == operator]
+    assert len(versions) == 1, (
+        f"expected one {operator} bound for {requirement.name}, found {versions}"
+    )
+    return versions[0]
+
+
+_RUNTIME_FLOORS = {
+    "transformers": "5.12.1",
+    "trl": "0.29.0",
+    "peft": "0.20.0",
+}
+
+
+def _missing_runtime_floors() -> list[str]:
+    missing: list[str] = []
+    for package, floor in _RUNTIME_FLOORS.items():
+        try:
+            installed = distribution_version(package)
+            if Version(installed) < Version(floor):
+                missing.append(f"{package}=={installed} (need >={floor})")
+        except (PackageNotFoundError, InvalidVersion):
+            missing.append(f"{package} (need >={floor})")
+    return missing
+
+
+_MISSING_RUNTIME_FLOORS = _missing_runtime_floors()
+_RUNTIME_FLOOR_REASON = (
+    "requires the new #502 training floor; install soup-cli[train] with "
+    "transformers>=5.12.1, trl>=0.29.0, peft>=0.20.0; missing/outdated: "
+    + ", ".join(_MISSING_RUNTIME_FLOORS)
+)
+_REQUIRES_TRAINING_FLOOR = pytest.mark.skipif(
+    bool(_MISSING_RUNTIME_FLOORS),
+    reason=_RUNTIME_FLOOR_REASON,
+)
 
 
 def _transformers_extras_are_disjoint() -> bool:
@@ -103,6 +145,22 @@ def test_peft_floor_is_the_validated_transformers5_adapter_stack():
     assert Version("1.0.0") not in peft.specifier
 
 
+def test_doctor_training_bounds_match_declared_extra():
+    from soup_cli.commands.doctor import _MAX_EXCLUSIVE, DEPS
+
+    doctor_floors = {package: floor for _, package, floor, _ in DEPS}
+    for package in _RUNTIME_FLOORS:
+        requirement = _extra_requirement("train", package)
+        assert doctor_floors[package] == _single_bound(requirement, ">=")
+        assert _MAX_EXCLUSIVE[package] == _single_bound(requirement, "<")
+
+
+def test_runtime_floor_skip_explains_the_required_upgrade():
+    for package, floor in _RUNTIME_FLOORS.items():
+        assert f"{package}>={floor}" in _RUNTIME_FLOOR_REASON
+
+
+@_REQUIRES_TRAINING_FLOOR
 def test_trl029_trainers_and_experimental_pairwise_judge_import():
     import trl.trainer.dpo_trainer  # noqa: F401
     import trl.trainer.grpo_trainer  # noqa: F401
@@ -114,6 +172,7 @@ def test_trl029_trainers_and_experimental_pairwise_judge_import():
     assert base_cls.__module__.startswith("trl.experimental.judges")
 
 
+@_REQUIRES_TRAINING_FLOOR
 def test_qwen35_outer_config_selects_text_causal_model_without_vision():
     import torch
     from transformers import AutoModelForCausalLM
@@ -129,6 +188,7 @@ def test_qwen35_outer_config_selects_text_causal_model_without_vision():
     ]
 
 
+@_REQUIRES_TRAINING_FLOOR
 def test_qwen35_auto_targets_attach_and_reload_a_nonempty_adapter(tmp_path):
     import torch
     from peft import LoraConfig, PeftModel, TaskType, get_peft_model

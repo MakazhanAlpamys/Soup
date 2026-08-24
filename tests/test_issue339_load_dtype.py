@@ -473,7 +473,7 @@ class TestModelKwargsCaptureAcrossModalities:
 
         fake_transformers = types.SimpleNamespace(
             AutoProcessor=types.SimpleNamespace(from_pretrained=lambda *a, **k: processor),
-            AutoModelForVision2Seq=types.SimpleNamespace(
+            AutoModelForImageTextToText=types.SimpleNamespace(
                 from_pretrained=_capturing_from_pretrained(model, captured)
             ),
         )
@@ -538,14 +538,12 @@ class TestModelKwargsCaptureAcrossModalities:
         assert captured["torch_dtype"] == "auto"
 
     def test_the_kwarg_key_is_torch_dtype_not_dtype_at_all_three_sites(self, monkeypatch):
-        """#492 review — the >=4.56-only spelling was a hard TypeError at
-        model load on this project's declared transformers floor (measured
-        on 4.46.1), and neither CI (always installs the newest transformers)
-        nor a mock built as `def _fake(*args, **kwargs)` (which swallows any
-        kwarg NAME, only exposing a wrong VALUE) can see a reverted spelling.
-        This is the only thing that can: assert the key itself, at all three
-        call sites, and that "dtype" is not ALSO present (no accidental dual
-        emission)."""
+        """#492 review — assert the load kwarg name itself at all three sites.
+
+        A mock built as ``def _fake(*args, **kwargs)`` swallows any kwarg name
+        and exposes only a wrong value, so it cannot catch an accidental dual
+        emission or an uncoordinated spelling change across loaders.
+        """
         from soup_cli.trainer.sft import SFTTrainerWrapper
 
         fake_peft = types.SimpleNamespace(
@@ -594,7 +592,7 @@ class TestModelKwargsCaptureAcrossModalities:
             "transformers",
             types.SimpleNamespace(
                 AutoProcessor=types.SimpleNamespace(from_pretrained=lambda *a, **k: processor),
-                AutoModelForVision2Seq=types.SimpleNamespace(
+                AutoModelForImageTextToText=types.SimpleNamespace(
                     from_pretrained=_capturing_from_pretrained(model, captured)
                 ),
             ),
