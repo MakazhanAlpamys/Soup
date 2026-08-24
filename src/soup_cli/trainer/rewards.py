@@ -59,7 +59,7 @@ MACOS_SANDBOX_PROFILE = (
     # bypasses ``(deny network*)``. The names below are required for the
     # interpreter to boot (entitlement / system-services lookup) but do
     # NOT include ``com.apple.SystemConfiguration`` or ``com.apple.dnssd``.
-    '(allow mach-lookup'
+    "(allow mach-lookup"
     ' (global-name "com.apple.SecurityServer")'
     ' (global-name "com.apple.system.notification_center")'
     ' (global-name "com.apple.system.opendirectoryd.libinfo"))'
@@ -117,7 +117,7 @@ _CLONE_NEWNET = 0x40000000
 _CLONE_NEWPID = 0x20000000
 
 
-def _try_unshare_namespaces() -> None:
+def _try_unshare_namespaces(strict: bool = False) -> None:
     """Best-effort: unshare into new user/net/pid namespaces. Silent on failure.
 
     Called from the POSIX preexec_fn after RLIMITs are set. If the kernel
@@ -126,11 +126,15 @@ def _try_unshare_namespaces() -> None:
     """
     unshare = getattr(os, "unshare", None)
     if unshare is None:
+        if strict:
+            raise PermissionError("os.unshare not available")
         return
     try:
         unshare(_CLONE_NEWUSER | _CLONE_NEWNET | _CLONE_NEWPID)
     except (OSError, ValueError):
         # EPERM / ENOSYS / EINVAL — unprivileged unshare not allowed.
+        if strict:
+            raise
         # Continue with weaker isolation rather than failing the run.
         pass
 
@@ -304,7 +308,7 @@ def _extract_code_block(content: str) -> str:
     return content.strip()
 
 
-def _apply_rlimit() -> None:
+def _apply_rlimit(strict_namespaces: bool = False) -> None:
     """POSIX only: set resource limits for sandboxed subprocess.
 
     Called via ``preexec_fn`` before the child runs user code. On Windows this
@@ -326,7 +330,7 @@ def _apply_rlimit() -> None:
         pass
     # Linux defence-in-depth: best-effort unshare into private namespaces.
     if _get_isolation_strategy() == "namespaces":
-        _try_unshare_namespaces()
+        _try_unshare_namespaces(strict=strict_namespaces)
 
 
 def _run_code_sandbox(code: str) -> "str | None":
@@ -395,7 +399,8 @@ def _run_bash_sandbox(command: str) -> "str | None":
 
     _show_code_exec_warning_once()
 
-    preexec = _apply_rlimit
+    def preexec() -> None:
+        _apply_rlimit(strict_namespaces=True)
 
     argv: list[str] = ["bash", "-c", command]
     if _get_isolation_strategy() == "sandbox-exec":
@@ -604,7 +609,8 @@ def validate_reward_funcs(reward_funcs: Any) -> Any:
 
 
 def load_reward_fn(
-    reward_fn_spec: str, verifiable_domain: "str | None" = None,
+    reward_fn_spec: str,
+    verifiable_domain: "str | None" = None,
 ) -> Callable:
     """Load a reward function by name or from a custom Python file.
 
@@ -630,9 +636,7 @@ def load_reward_fn(
                 f"Unknown verifiable_domain: '{verifiable_domain}'. "
                 f"Options: {', '.join(VERIFIABLE_DOMAINS.keys())}"
             )
-        console.print(
-            f"[dim]Using verifiable reward: domain={verifiable_domain}[/]"
-        )
+        console.print(f"[dim]Using verifiable reward: domain={verifiable_domain}[/]")
         return VERIFIABLE_DOMAINS[verifiable_domain]
 
     # Built-in reward function
@@ -670,7 +674,8 @@ def load_reward_fn(
 
 
 def load_reward_fns(
-    reward_fn_spec: str, verifiable_domain: "str | None" = None,
+    reward_fn_spec: str,
+    verifiable_domain: "str | None" = None,
 ) -> list[Callable]:
     """Load one OR MORE reward functions from a comma-separated spec (v0.71.40 #311).
 
@@ -696,8 +701,7 @@ def load_reward_fns(
     segments = [seg.strip() for seg in reward_fn_spec.split(",")]
     if any(not seg for seg in segments):
         raise ValueError(
-            f"reward_fn {reward_fn_spec!r} has an empty comma segment — "
-            "remove the stray comma"
+            f"reward_fn {reward_fn_spec!r} has an empty comma segment — remove the stray comma"
         )
     seen: set[str] = set()
     for seg in segments:

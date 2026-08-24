@@ -28,10 +28,12 @@ import pytest
 class TestMarkdownHeadingSplit:
     def test_empty_string_returns_empty_list(self):
         from soup_cli.utils.data_pipeline import split_markdown_by_headings
+
         assert split_markdown_by_headings("") == []
 
     def test_preamble_only_returns_single_row_with_none_section(self):
         from soup_cli.utils.data_pipeline import split_markdown_by_headings
+
         rows = split_markdown_by_headings("first paragraph\nsecond line")
         assert len(rows) == 1
         assert rows[0]["section"] is None
@@ -40,9 +42,8 @@ class TestMarkdownHeadingSplit:
 
     def test_three_headings_yield_three_sections(self):
         from soup_cli.utils.data_pipeline import split_markdown_by_headings
-        md = (
-            "# Intro\nIntro body\n## Sub\nSub body\n### Deep\nDeep body\n"
-        )
+
+        md = "# Intro\nIntro body\n## Sub\nSub body\n### Deep\nDeep body\n"
         rows = split_markdown_by_headings(md)
         assert len(rows) == 3
         assert rows[0]["section"] == "Intro"
@@ -54,6 +55,7 @@ class TestMarkdownHeadingSplit:
 
     def test_preamble_plus_headings_yield_preamble_row(self):
         from soup_cli.utils.data_pipeline import split_markdown_by_headings
+
         md = "preamble text\n# Heading\nbody"
         rows = split_markdown_by_headings(md)
         assert len(rows) == 2
@@ -65,24 +67,28 @@ class TestMarkdownHeadingSplit:
 
     def test_atx_levels_1_through_6_accepted(self):
         from soup_cli.utils.data_pipeline import split_markdown_by_headings
+
         md = "\n".join(f"{'#' * n} L{n}\nbody{n}" for n in range(1, 7))
         rows = split_markdown_by_headings(md)
         assert [r["level"] for r in rows] == [1, 2, 3, 4, 5, 6]
 
     def test_seven_hashes_not_a_heading(self):
         from soup_cli.utils.data_pipeline import split_markdown_by_headings
+
         rows = split_markdown_by_headings("####### not a heading\nbody")
         assert len(rows) == 1
         assert rows[0]["section"] is None
 
     def test_hash_without_space_not_a_heading(self):
         from soup_cli.utils.data_pipeline import split_markdown_by_headings
+
         rows = split_markdown_by_headings("#NoSpace\nbody")
         assert len(rows) == 1
         assert rows[0]["section"] is None
 
     def test_non_string_input_raises_typeerror(self):
         from soup_cli.utils.data_pipeline import split_markdown_by_headings
+
         with pytest.raises(TypeError):
             split_markdown_by_headings(123)
         with pytest.raises(TypeError):
@@ -130,9 +136,7 @@ class TestMarkdownHeadingSplit:
             ["data", "ingest", str(md_path), "-o", str(out)],
         )
         assert result.exit_code == 0, result.output
-        rows = [json.loads(line) for line in out.read_text(
-            encoding="utf-8"
-        ).strip().splitlines()]
+        rows = [json.loads(line) for line in out.read_text(encoding="utf-8").strip().splitlines()]
         assert len(rows) == 2
         assert rows[0]["section"] is None
         assert rows[1]["section"] == "Heading"
@@ -151,19 +155,30 @@ class TestDecontaminateBenchmarkFile:
         # The decontaminate row text overlaps the benchmark text by n-grams.
         bench_path = tmp_path / "bench.jsonl"
         bench_path.write_text(
-            json.dumps({"text": (
-                "the quick brown fox jumps over the lazy dog "
-                "many times in the morning sun every day"
-            )}) + "\n",
+            json.dumps(
+                {
+                    "text": (
+                        "the quick brown fox jumps over the lazy dog "
+                        "many times in the morning sun every day"
+                    )
+                }
+            )
+            + "\n",
             encoding="utf-8",
         )
         rows_path = tmp_path / "input.jsonl"
         rows_path.write_text(
-            json.dumps({"text": (
-                "the quick brown fox jumps over the lazy dog "
-                "many times in the morning sun every day"
-            )}) + "\n"
-            + json.dumps({"text": "completely unrelated content here"}) + "\n",
+            json.dumps(
+                {
+                    "text": (
+                        "the quick brown fox jumps over the lazy dog "
+                        "many times in the morning sun every day"
+                    )
+                }
+            )
+            + "\n"
+            + json.dumps({"text": "completely unrelated content here"})
+            + "\n",
             encoding="utf-8",
         )
         out_path = tmp_path / "clean.jsonl"
@@ -171,18 +186,23 @@ class TestDecontaminateBenchmarkFile:
         result = runner.invoke(
             app,
             [
-                "data", "decontaminate",
-                "-i", str(rows_path),
-                "--benchmark-file", str(bench_path),
-                "-o", str(out_path),
-                "--n", "4",
-                "--threshold", "0.3",
+                "data",
+                "decontaminate",
+                "-i",
+                str(rows_path),
+                "--benchmark-file",
+                str(bench_path),
+                "-o",
+                str(out_path),
+                "--n",
+                "4",
+                "--threshold",
+                "0.3",
             ],
         )
         assert result.exit_code == 0, result.output
         kept = [
-            json.loads(line)
-            for line in out_path.read_text(encoding="utf-8").strip().splitlines()
+            json.loads(line) for line in out_path.read_text(encoding="utf-8").strip().splitlines()
         ]
         # Overlapping row removed, unrelated kept.
         assert len(kept) == 1
@@ -215,10 +235,14 @@ class TestDecontaminateBenchmarkFile:
         result = runner.invoke(
             app,
             [
-                "data", "decontaminate",
-                "-i", str(rows_path),
-                "--benchmark-file", "/etc/does-not-exist.jsonl",
-                "-o", "out.jsonl",
+                "data",
+                "decontaminate",
+                "-i",
+                str(rows_path),
+                "--benchmark-file",
+                "/etc/does-not-exist.jsonl",
+                "-o",
+                "out.jsonl",
             ],
         )
         assert result.exit_code != 0
@@ -236,10 +260,14 @@ class TestDecontaminateBenchmarkFile:
         result = runner.invoke(
             app,
             [
-                "data", "decontaminate",
-                "-i", str(rows_path),
-                "-b", "mmlu",
-                "-o", str(out_path),
+                "data",
+                "decontaminate",
+                "-i",
+                str(rows_path),
+                "-b",
+                "mmlu",
+                "-o",
+                str(out_path),
             ],
         )
         assert result.exit_code == 0, result.output
@@ -251,6 +279,7 @@ class TestDecontaminateBenchmarkFile:
 class TestPromptStrategyRuntime:
     def test_resolve_finds_callable(self):
         from soup_cli.utils.data_pipeline import resolve_prompt_strategy
+
         # json.dumps takes a positional arg
         spec = "json:dumps"
         fn = resolve_prompt_strategy(spec)
@@ -258,22 +287,26 @@ class TestPromptStrategyRuntime:
 
     def test_resolve_missing_module_raises(self):
         from soup_cli.utils.data_pipeline import resolve_prompt_strategy
+
         with pytest.raises(ValueError, match="could not be imported"):
             resolve_prompt_strategy("definitely_not_a_module_xyz:fn")
 
     def test_resolve_missing_attribute_raises(self):
         from soup_cli.utils.data_pipeline import resolve_prompt_strategy
+
         with pytest.raises(ValueError, match="no attribute"):
             resolve_prompt_strategy("json:not_a_real_attr_zzz")
 
     def test_resolve_non_callable_raises(self):
         from soup_cli.utils.data_pipeline import resolve_prompt_strategy
+
         # sys.maxsize is an int, not callable
         with pytest.raises(ValueError, match="not callable"):
             resolve_prompt_strategy("sys:maxsize")
 
     def test_resolve_bad_shape_raises(self):
         from soup_cli.utils.data_pipeline import resolve_prompt_strategy
+
         with pytest.raises(ValueError):
             resolve_prompt_strategy("no_colon")
         with pytest.raises(ValueError):
@@ -281,11 +314,13 @@ class TestPromptStrategyRuntime:
 
     def test_resolve_non_string_raises(self):
         from soup_cli.utils.data_pipeline import resolve_prompt_strategy
+
         with pytest.raises(ValueError):
             resolve_prompt_strategy(123)  # type: ignore[arg-type]
 
     def test_apply_with_none_returns_row(self):
         from soup_cli.utils.data_pipeline import apply_prompt_strategy
+
         row = {"a": 1}
         assert apply_prompt_strategy(None, row) is row
 
@@ -305,6 +340,7 @@ class TestPromptStrategyRuntime:
             apply_prompt_strategy,
             resolve_prompt_strategy,
         )
+
         resolve_prompt_strategy.cache_clear()
         spec = "tfm_mod.t:upper"
         out = apply_prompt_strategy(spec, {"text": "hi"})
@@ -323,6 +359,7 @@ class TestPromptStrategyRuntime:
             apply_prompt_strategy,
             resolve_prompt_strategy,
         )
+
         resolve_prompt_strategy.cache_clear()
         spec = "tfm_mod2.t:boom"
         row = {"text": "x"}
@@ -342,6 +379,7 @@ class TestPromptStrategyRuntime:
             apply_prompt_strategy,
             resolve_prompt_strategy,
         )
+
         resolve_prompt_strategy.cache_clear()
         row = {"text": "x"}
         out = apply_prompt_strategy("tfm_mod3.t:to_str", row)
@@ -353,12 +391,12 @@ class TestPromptStrategyRuntime:
         mod_dir.mkdir()
         (mod_dir / "__init__.py").write_text("", encoding="utf-8")
         (mod_dir / "t.py").write_text(
-            "def attach(row):\n"
-            "    return {**row, '_attached': True}\n",
+            "def attach(row):\n    return {**row, '_attached': True}\n",
             encoding="utf-8",
         )
         monkeypatch.syspath_prepend(str(tmp_path))
         from soup_cli.utils.data_pipeline import resolve_prompt_strategy
+
         resolve_prompt_strategy.cache_clear()
 
         from soup_cli.config.schema import DataConfig
@@ -411,11 +449,13 @@ class TestPreprocessTokenize:
 
     def test_load_pretokenized_dataset_rejects_empty(self):
         from soup_cli.utils.data_pipeline import load_pretokenized_dataset
+
         with pytest.raises(ValueError, match="non-empty"):
             load_pretokenized_dataset("")
 
     def test_load_pretokenized_dataset_rejects_non_string(self):
         from soup_cli.utils.data_pipeline import load_pretokenized_dataset
+
         with pytest.raises(TypeError, match="string"):
             load_pretokenized_dataset(123)  # type: ignore[arg-type]
 
@@ -438,9 +478,7 @@ class TestPreprocessTokenize:
         with pytest.raises(ValueError, match="symlink"):
             load_pretokenized_dataset(str(link))
 
-    def test_load_pretokenized_dataset_rejects_cache_key_mismatch(
-        self, tmp_path, monkeypatch
-    ):
+    def test_load_pretokenized_dataset_rejects_cache_key_mismatch(self, tmp_path, monkeypatch):
         from soup_cli.utils.data_pipeline import load_pretokenized_dataset
 
         pytest.importorskip("datasets")
@@ -451,9 +489,7 @@ class TestPreprocessTokenize:
             json.dumps({"cache_key": "DIFFERENT"}), encoding="utf-8"
         )
         with pytest.raises(ValueError, match="cache_key mismatch"):
-            load_pretokenized_dataset(
-                str(target), expected_cache_key="EXPECTED"
-            )
+            load_pretokenized_dataset(str(target), expected_cache_key="EXPECTED")
 
 
 # ----- #111 forge --judge-provider ---------------------------------------
@@ -462,16 +498,19 @@ class TestPreprocessTokenize:
 class TestForgeJudgeProvider:
     def test_make_judge_provider_fn_unknown_rejected(self):
         from soup_cli.utils.data_forge import make_judge_provider_fn
+
         with pytest.raises(ValueError, match="unknown judge provider"):
             make_judge_provider_fn("openai")
 
     def test_make_judge_provider_fn_non_string_rejected(self):
         from soup_cli.utils.data_forge import make_judge_provider_fn
+
         with pytest.raises(TypeError):
             make_judge_provider_fn(123)  # type: ignore[arg-type]
 
     def test_make_judge_provider_fn_bad_model_rejected(self):
         from soup_cli.utils.data_forge import make_judge_provider_fn
+
         with pytest.raises(ValueError, match="model"):
             make_judge_provider_fn("ollama", model="")
         with pytest.raises(ValueError, match="NUL-free"):
@@ -479,11 +518,13 @@ class TestForgeJudgeProvider:
 
     def test_make_judge_provider_fn_bool_timeout_rejected(self):
         from soup_cli.utils.data_forge import make_judge_provider_fn
+
         with pytest.raises(TypeError):
             make_judge_provider_fn("ollama", timeout_seconds=True)
 
     def test_make_judge_provider_fn_bad_timeout_rejected(self):
         from soup_cli.utils.data_forge import make_judge_provider_fn
+
         with pytest.raises(ValueError):
             make_judge_provider_fn("ollama", timeout_seconds=0)
         with pytest.raises(ValueError):
@@ -491,16 +532,16 @@ class TestForgeJudgeProvider:
 
     def test_anthropic_requires_env_var(self, monkeypatch):
         from soup_cli.utils.data_forge import make_judge_provider_fn
+
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
         with pytest.raises(ValueError, match="ANTHROPIC_API_KEY"):
             make_judge_provider_fn("anthropic")
 
     def test_ollama_rejects_remote_url(self):
         from soup_cli.utils.data_forge import make_judge_provider_fn
+
         with pytest.raises(ValueError):
-            make_judge_provider_fn(
-                "ollama", base_url="http://10.0.0.1:11434"
-            )
+            make_judge_provider_fn("ollama", base_url="http://10.0.0.1:11434")
 
     def test_ollama_judge_returns_text_on_success(self, monkeypatch):
         # Monkeypatch httpx.post in the module
@@ -510,9 +551,7 @@ class TestForgeJudgeProvider:
 
         mock_response = MagicMock()
         mock_response.status_code = 200
-        mock_response.json.return_value = {
-            "choices": [{"message": {"content": "hello world"}}]
-        }
+        mock_response.json.return_value = {"choices": [{"message": {"content": "hello world"}}]}
         monkeypatch.setattr(httpx, "post", lambda *a, **k: mock_response)
         judge = make_judge_provider_fn("ollama")
         reply = judge("prompt")
@@ -533,13 +572,13 @@ class TestForgeJudgeProvider:
 
     def test_vllm_judge_validates_url(self):
         from soup_cli.utils.data_forge import make_judge_provider_fn
+
         with pytest.raises(ValueError):
-            make_judge_provider_fn(
-                "vllm", base_url="ftp://localhost:8000"
-            )
+            make_judge_provider_fn("vllm", base_url="ftp://localhost:8000")
 
     def test_forge_provider_constants(self):
         from soup_cli.utils.data_forge import JUDGE_PROVIDERS
+
         assert JUDGE_PROVIDERS == frozenset({"ollama", "anthropic", "vllm"})
 
     def test_forge_cli_rejects_unknown_provider(self, tmp_path, monkeypatch):
@@ -555,13 +594,20 @@ class TestForgeJudgeProvider:
         result = runner.invoke(
             app,
             [
-                "data", "forge",
-                "--docs", str(docs),
-                "--task", "sft",
-                "--target-rows", "1",
-                "--judge-provider", "openai",
-                "-o", "out.jsonl",
-                "-p", "prov.json",
+                "data",
+                "forge",
+                "--docs",
+                str(docs),
+                "--task",
+                "sft",
+                "--target-rows",
+                "1",
+                "--judge-provider",
+                "openai",
+                "-o",
+                "out.jsonl",
+                "-p",
+                "prov.json",
             ],
         )
         assert result.exit_code == 2
@@ -572,9 +618,7 @@ class TestForgeJudgeProvider:
 
 class TestQALogEntry:
     def test_qa_log_mentions_v0537(self):
-        qa_log = (
-            Path(__file__).parent / "qa" / "v053_qa.md"
-        )
+        qa_log = Path(__file__).parent / "qa" / "v053_qa.md"
         assert qa_log.is_file()
         text = qa_log.read_text(encoding="utf-8")
         assert "v0.53.7" in text
@@ -640,8 +684,7 @@ class TestRunRecipeLive:
         monkeypatch.chdir(tmp_path)
         seed_path = tmp_path / "seed.jsonl"
         seed_path.write_text(
-            json.dumps({"text": "hello world"}) + "\n"
-            + json.dumps({"text": "skip me"}) + "\n",
+            json.dumps({"text": "hello world"}) + "\n" + json.dumps({"text": "skip me"}) + "\n",
             encoding="utf-8",
         )
         out_dir = tmp_path / "out"
@@ -737,6 +780,7 @@ class TestRunRecipeLive:
 
     def test_rejects_non_recipedag(self, tmp_path, monkeypatch):
         from soup_cli.utils.recipe_run import run_recipe
+
         monkeypatch.chdir(tmp_path)
         with pytest.raises(TypeError):
             run_recipe("not a dag", output_dir="x")  # type: ignore[arg-type]
@@ -746,10 +790,12 @@ class TestRunRecipeLive:
         from soup_cli.utils.recipe_run import run_recipe
 
         monkeypatch.chdir(tmp_path)
-        dag = parse_recipe({
-            "nodes": [{"name": "n1", "kind": "sampler", "config": {}}],
-            "edges": [],
-        })
+        dag = parse_recipe(
+            {
+                "nodes": [{"name": "n1", "kind": "sampler", "config": {}}],
+                "edges": [],
+            }
+        )
         with pytest.raises(ValueError, match="under cwd"):
             run_recipe(dag, output_dir="/etc/foo")
 
@@ -761,13 +807,15 @@ class TestRunRecipeLive:
         seed_path = tmp_path / "seed.jsonl"
         seed_path.write_text(json.dumps({"text": "x"}) + "\n", encoding="utf-8")
         out_dir = tmp_path / "out"
-        dag = parse_recipe({
-            "nodes": [
-                {"name": "seed1", "kind": "seed", "config": {"path": str(seed_path)}},
-                {"name": "v", "kind": "validator", "config": {}},
-            ],
-            "edges": [["seed1", "v"]],
-        })
+        dag = parse_recipe(
+            {
+                "nodes": [
+                    {"name": "seed1", "kind": "seed", "config": {"path": str(seed_path)}},
+                    {"name": "v", "kind": "validator", "config": {}},
+                ],
+                "edges": [["seed1", "v"]],
+            }
+        )
         with pytest.raises(ValueError, match="regex.*schema"):
             run_recipe(dag, output_dir=str(out_dir))
 
@@ -779,13 +827,15 @@ class TestRunRecipeLive:
         seed_path = tmp_path / "seed.jsonl"
         seed_path.write_text(json.dumps({"text": "x"}) + "\n", encoding="utf-8")
         out_dir = tmp_path / "out"
-        dag = parse_recipe({
-            "nodes": [
-                {"name": "seed1", "kind": "seed", "config": {"path": str(seed_path)}},
-                {"name": "c", "kind": "code", "config": {}},
-            ],
-            "edges": [["seed1", "c"]],
-        })
+        dag = parse_recipe(
+            {
+                "nodes": [
+                    {"name": "seed1", "kind": "seed", "config": {"path": str(seed_path)}},
+                    {"name": "c", "kind": "code", "config": {}},
+                ],
+                "edges": [["seed1", "c"]],
+            }
+        )
         with pytest.raises(ValueError, match="code"):
             run_recipe(dag, output_dir=str(out_dir))
 
@@ -810,10 +860,12 @@ class TestRunRecipeLive:
         result = runner.invoke(
             app,
             [
-                "data", "recipe",
+                "data",
+                "recipe",
                 str(recipe_path),
                 "--execute",
-                "--output", "out",
+                "--output",
+                "out",
             ],
         )
         assert result.exit_code == 0, result.output
@@ -836,21 +888,25 @@ class TestInstantiateTrainerPlugins:
 
     def test_unknown_name_rejected_before_instantiation(self):
         from soup_cli.utils.trainer_plugins import instantiate_trainer_plugins
+
         with pytest.raises(ValueError):
             instantiate_trainer_plugins(["definitely_unknown_plugin"])
 
     def test_non_sequence_rejected(self):
         from soup_cli.utils.trainer_plugins import instantiate_trainer_plugins
+
         with pytest.raises(TypeError):
             instantiate_trainer_plugins("grokfast")  # bare string
 
     def test_empty_list_returns_empty_tuple(self):
         from soup_cli.utils.trainer_plugins import instantiate_trainer_plugins
+
         out = instantiate_trainer_plugins([])
         assert out == ()
 
     def test_no_longer_raises_notimplementederror_for_cce(self):
         from soup_cli.utils.trainer_plugins import instantiate_trainer_plugins
+
         # cce_plugin has no required upstream dep; should NOT raise.
         out = instantiate_trainer_plugins(["cce_plugin"])
         assert out  # non-empty
@@ -858,6 +914,7 @@ class TestInstantiateTrainerPlugins:
     def test_missing_upstream_pkg_raises_importerror(self):
         """grokfast / spectrum etc. may not be installed in CI."""
         from soup_cli.utils.trainer_plugins import instantiate_trainer_plugins
+
         # If the package is installed, this test asserts no ImportError.
         # If absent (the common case), ImportError fires with friendly hint.
         try:
@@ -898,6 +955,7 @@ class TestToolEndpointsLive:
 
     def test_python_tool_runs_simple_code(self):
         from fastapi.testclient import TestClient
+
         app = _create_test_app()
         client = TestClient(app)
         resp = client.post(
@@ -913,6 +971,7 @@ class TestToolEndpointsLive:
 
     def test_python_tool_rejects_missing_code(self):
         from fastapi.testclient import TestClient
+
         app = _create_test_app()
         client = TestClient(app)
         resp = client.post("/v1/tools/python", json={})
@@ -920,6 +979,7 @@ class TestToolEndpointsLive:
 
     def test_python_tool_rejects_oversize_code(self):
         from fastapi.testclient import TestClient
+
         app = _create_test_app()
         client = TestClient(app)
         oversize = "x" * (64 * 1024 + 1)
@@ -928,6 +988,7 @@ class TestToolEndpointsLive:
 
     def test_python_tool_non_dict_rejected(self):
         from fastapi.testclient import TestClient
+
         app = _create_test_app()
         client = TestClient(app)
         # FastAPI body parsing accepts list as dict-typed param? It coerces.
@@ -940,6 +1001,7 @@ class TestToolEndpointsLive:
         import sys
 
         from fastapi.testclient import TestClient
+
         app = _create_test_app()
         client = TestClient(app)
         resp = client.post(
@@ -959,6 +1021,7 @@ class TestToolEndpointsLive:
     def test_bash_tool_returns_400_with_empty_body(self):
         """Empty command is rejected with 400."""
         from fastapi.testclient import TestClient
+
         app = _create_test_app()
         client = TestClient(app)
         resp = client.post("/v1/tools/bash", json={})
@@ -967,26 +1030,51 @@ class TestToolEndpointsLive:
     def test_bash_tool_network_isolation(self):
         """Verify bash network access is blocked by unshare/sandbox-exec."""
         import sys
+
         if sys.platform == "win32":
             return
-        from fastapi.testclient import TestClient
-        app = _create_test_app()
-        client = TestClient(app)
-        # Attempt to reach the metadata IP
-        resp = client.post(
-            "/v1/tools/bash",
-            json={"command": "curl --connect-timeout 1 http://169.254.169.254/"},
-        )
-        assert resp.status_code == 200
-        data = resp.json()
-        # curl should fail to connect and exit with non-zero code.
-        # It shouldn't hang or succeed.
-        assert data["exit_code"] == 1
-        assert data["timed_out"] is False
-        assert data["stdout"] == ""
+
+        import threading
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+
+        class DummyHandler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"OK")
+
+            def log_message(self, format, *args):
+                pass
+
+        server = HTTPServer(("127.0.0.1", 0), DummyHandler)
+        port = server.server_address[1]
+        t = threading.Thread(target=server.serve_forever)
+        t.daemon = True
+        t.start()
+
+        try:
+            from fastapi.testclient import TestClient
+
+            app = _create_test_app()
+            client = TestClient(app)
+            # Attempt to reach the local server
+            resp = client.post(
+                "/v1/tools/bash",
+                json={"command": f"curl --connect-timeout 1 http://127.0.0.1:{port}/"},
+            )
+            assert resp.status_code == 200
+            data = resp.json()
+            # curl should fail to connect and exit with non-zero code.
+            assert data["exit_code"] != 0
+            assert "OK" not in data["stdout"]
+        finally:
+            server.shutdown()
+            server.server_close()
+            t.join(timeout=1.0)
 
     def test_web_search_default_deny_all(self):
         from fastapi.testclient import TestClient
+
         app = _create_test_app()
         client = TestClient(app)
         resp = client.post(
@@ -998,6 +1086,7 @@ class TestToolEndpointsLive:
 
     def test_web_search_rejects_oversize_query(self):
         from fastapi.testclient import TestClient
+
         app = _create_test_app()
         client = TestClient(app)
         resp = client.post(
@@ -1008,6 +1097,7 @@ class TestToolEndpointsLive:
 
     def test_web_search_rejects_bool_max_results(self):
         from fastapi.testclient import TestClient
+
         app = _create_test_app()
         client = TestClient(app)
         resp = client.post(
@@ -1058,6 +1148,7 @@ class TestToolEndpointsLive:
     def test_tools_no_longer_return_501(self):
         """v0.53.7 #103 regression: 501-stubs are gone."""
         from fastapi.testclient import TestClient
+
         app = _create_test_app()
         client = TestClient(app)
         # Python: should return 200 with sandbox response.
@@ -1153,10 +1244,9 @@ class TestVllmAnthropicMessages:
         """Source-level guard: vLLM create_vllm_app installs /v1/messages."""
         from pathlib import Path
 
-        src = (
-            Path(__file__).parent.parent
-            / "src" / "soup_cli" / "utils" / "vllm.py"
-        ).read_text(encoding="utf-8")
+        src = (Path(__file__).parent.parent / "src" / "soup_cli" / "utils" / "vllm.py").read_text(
+            encoding="utf-8"
+        )
         # Verify the route + helper landed.
         assert "/v1/messages" in src
         assert "_stream_anthropic_messages_vllm" in src
@@ -1227,6 +1317,7 @@ class TestServeStreamHelper:
 class TestPublicSurface:
     def test_data_pipeline_exports(self):
         from soup_cli.utils import data_pipeline
+
         for name in (
             "split_markdown_by_headings",
             "resolve_prompt_strategy",
@@ -1238,15 +1329,18 @@ class TestPublicSurface:
 
     def test_data_forge_exports(self):
         from soup_cli.utils import data_forge
+
         for name in ("make_judge_provider_fn", "JUDGE_PROVIDERS"):
             assert hasattr(data_forge, name), name
 
     def test_recipe_run_exports(self):
         from soup_cli.utils import recipe_run
+
         assert hasattr(recipe_run, "run_recipe")
 
     def test_trainer_plugins_exports(self):
         from soup_cli.utils import trainer_plugins
+
         assert hasattr(trainer_plugins, "instantiate_trainer_plugins")
 
 
@@ -1262,6 +1356,7 @@ class TestReviewFixesRecipeRun:
     def test_seed_rejects_symlink_via_lstat_on_raw_path(self, tmp_path, monkeypatch):
         """v0.53.7 H-B: lstat the raw path BEFORE realpath."""
         import os as _os
+
         monkeypatch.chdir(tmp_path)
         target = tmp_path / "real.jsonl"
         target.write_text('{"x": 1}\n', encoding="utf-8")
@@ -1269,12 +1364,14 @@ class TestReviewFixesRecipeRun:
         _os.symlink(str(target), str(link))
         from soup_cli.utils.recipe_dag import RecipeNode
         from soup_cli.utils.recipe_run import _node_seed
+
         node = RecipeNode(name="s", kind="seed", config={"path": "link.jsonl"})
         with pytest.raises(ValueError, match="symlink"):
             _node_seed(node, ())
 
     def test_redact_exc_message_strips_posix_paths(self):
         from soup_cli.utils.recipe_run import _redact_exc_message
+
         exc = FileNotFoundError("/etc/passwd: no such file")
         redacted = _redact_exc_message(exc)
         assert "/etc/passwd" not in redacted
@@ -1282,12 +1379,14 @@ class TestReviewFixesRecipeRun:
 
     def test_redact_exc_message_truncates_long(self):
         from soup_cli.utils.recipe_run import _redact_exc_message
+
         exc = ValueError("x" * 1000)
         redacted = _redact_exc_message(exc, limit=64)
         assert len(redacted) <= 64
 
     def test_redact_exc_message_handles_windows_paths(self):
         from soup_cli.utils.recipe_run import _redact_exc_message
+
         exc = OSError(r"C:\Users\alice\secret.txt missing")
         redacted = _redact_exc_message(exc)
         assert "alice" not in redacted
@@ -1296,6 +1395,7 @@ class TestReviewFixesRecipeRun:
         """v0.53.7 M-C: tricky row content cannot escape the Python literal."""
         from soup_cli.utils.recipe_dag import RecipeNode
         from soup_cli.utils.recipe_run import _node_code
+
         monkeypatch.chdir(tmp_path)
         evil = {"text": 'foo"); print("HIJACK"); ("'}
         node = RecipeNode(
@@ -1324,9 +1424,7 @@ class TestReviewFixesRecipeRun:
             RecipeNode(name="s", kind="seed", config={"path": "seed.jsonl"}),
             RecipeNode(name="snk", kind="sampler", config={}),
         )
-        dag = RecipeDAG(
-            nodes=nodes, edges=(("s", "snk"),), topo_order=("s", "snk")
-        )
+        dag = RecipeDAG(nodes=nodes, edges=(("s", "snk"),), topo_order=("s", "snk"))
 
         result1 = run_recipe(dag, output_dir=str(outdir))
         assert result1["status"] == "completed"
@@ -1396,6 +1494,7 @@ class TestReviewFixesRecipeRun:
         """v0.53.7 H-C/M-E: mkstemp + os.replace pattern."""
         monkeypatch.chdir(tmp_path)
         from soup_cli.utils.recipe_run import _save_checkpoint
+
         outdir = tmp_path / "out"
         outdir.mkdir()
         _save_checkpoint(str(outdir), {"status": "running"})
@@ -1409,15 +1508,18 @@ class TestReviewFixesPromptStrategy:
 
     def setup_method(self):
         from soup_cli.utils.data_pipeline import resolve_prompt_strategy
+
         resolve_prompt_strategy.cache_clear()
 
     def test_resolve_null_byte_rejected(self):
         from soup_cli.utils.data_pipeline import resolve_prompt_strategy
+
         with pytest.raises(ValueError):
             resolve_prompt_strategy("mod\x00name:fn")
 
     def test_resolve_oversize_rejected(self):
         from soup_cli.utils.data_pipeline import resolve_prompt_strategy
+
         oversize = "a" * 1000 + ":fn"
         with pytest.raises(ValueError):
             resolve_prompt_strategy(oversize)
@@ -1431,6 +1533,7 @@ class TestReviewFixesPromptStrategy:
             encoding="utf-8",
         )
         from soup_cli.utils.data_pipeline import resolve_prompt_strategy
+
         resolve_prompt_strategy.cache_clear()
         with pytest.raises(ValueError, match="positional"):
             resolve_prompt_strategy("tfm_bad_sig:fn")
@@ -1441,16 +1544,19 @@ class TestReviewFixesForge:
 
     def test_make_judge_provider_fn_bool_temperature_rejected(self):
         from soup_cli.utils.data_forge import make_judge_provider_fn
+
         with pytest.raises(TypeError, match="temperature"):
             make_judge_provider_fn("ollama", temperature=True)
 
     def test_make_judge_provider_fn_temperature_out_of_range(self):
         from soup_cli.utils.data_forge import make_judge_provider_fn
+
         with pytest.raises(ValueError, match=r"\[0, 2\]"):
             make_judge_provider_fn("ollama", temperature=5.0)
 
     def test_judge_providers_typed_frozenset_of_str(self):
         from soup_cli.utils.data_forge import JUDGE_PROVIDERS
+
         assert isinstance(JUDGE_PROVIDERS, frozenset)
         assert all(isinstance(p, str) for p in JUDGE_PROVIDERS)
 
@@ -1490,15 +1596,15 @@ class TestReviewFixesVllmAnthropicLive:
 
     def test_messages_malformed_returns_400(self):
         from fastapi.testclient import TestClient
+
         app = self._build_vllm_app()
         client = TestClient(app)
-        resp = client.post(
-            "/v1/messages", json={"messages": [], "model": "x"}
-        )
+        resp = client.post("/v1/messages", json={"messages": [], "model": "x"})
         assert resp.status_code == 400
 
     def test_messages_max_tokens_over_cap_returns_400(self):
         from fastapi.testclient import TestClient
+
         app = self._build_vllm_app()
         client = TestClient(app)
         resp = client.post(
@@ -1518,6 +1624,7 @@ class TestReviewFixesDataScore:
     @pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlinks")
     def test_load_jsonl_rows_rejects_symlink(self, tmp_path, monkeypatch):
         import os as _os
+
         monkeypatch.chdir(tmp_path)
         target_outside = tmp_path.parent / "outside_bench.jsonl"
         try:
@@ -1525,6 +1632,7 @@ class TestReviewFixesDataScore:
             link = tmp_path / "link.jsonl"
             _os.symlink(str(target_outside), str(link))
             from soup_cli.utils.data_score import load_jsonl_rows
+
             with pytest.raises(ValueError, match="symlink|under cwd"):
                 load_jsonl_rows("link.jsonl")
         finally:
@@ -1537,6 +1645,7 @@ class TestReviewFixesDataScore:
         try:
             outside.write_text('{"x": 1}\n', encoding="utf-8")
             from soup_cli.utils.data_score import load_jsonl_rows
+
             with pytest.raises(ValueError, match="under cwd"):
                 load_jsonl_rows(str(outside))
         finally:
@@ -1547,6 +1656,7 @@ class TestReviewFixesDataScore:
         """v0.53.7 M-J: public alias is the documented import."""
         from soup_cli.utils import data_score
         from soup_cli.utils.data_score import extract_row_text
+
         assert callable(extract_row_text)
         assert "extract_row_text" in data_score.__all__
 
@@ -1557,6 +1667,7 @@ class TestReviewFixesTrainerPlugins:
     def test_validate_trainer_plugin_list_rejects_duplicates(self):
         """L-I: duplicate names are explicitly rejected (not silently deduped)."""
         from soup_cli.utils.trainer_plugins import validate_trainer_plugin_list
+
         with pytest.raises(ValueError, match="duplicate"):
             validate_trainer_plugin_list(["grokfast", "grokfast"])
 
@@ -1579,6 +1690,7 @@ class TestReviewFixesSSEHeaders:
 
     def test_sanitise_sse_field_strips_crlf_nul(self):
         from soup_cli.commands.serve import _sanitise_sse_field
+
         assert _sanitise_sse_field("hello\r\nworld", max_len=200) == "helloworld"
         assert _sanitise_sse_field("a\x00b", max_len=200) == "ab"
         assert _sanitise_sse_field("x" * 500, max_len=10) == "x" * 10
@@ -1592,11 +1704,17 @@ class TestReviewFixesSSEHeaders:
         one event with garbled-but-safe ``id`` content.
         """
         from soup_cli.commands.serve import _stream_anthropic_messages
+
         evil_id = "msg-1\nevent: hijack\ndata: {}\n"
-        frames = list(_stream_anthropic_messages(
-            msg_id=evil_id, model="m", text="hi",
-            input_tokens=1, output_tokens=1,
-        ))
+        frames = list(
+            _stream_anthropic_messages(
+                msg_id=evil_id,
+                model="m",
+                text="hi",
+                input_tokens=1,
+                output_tokens=1,
+            )
+        )
         # Each frame is one SSE event terminated by exactly one "\n\n".
         # The CR/LFs from the evil id must have been stripped — count of
         # "\n\n" must equal the number of frames produced.
@@ -1608,9 +1726,6 @@ class TestReviewFixesSSEHeaders:
         for line in joined.split("\n"):
             assert not line.startswith("event: hijack")
             assert not line.startswith("data: {}")
-
-
-
 
 
 class TestReviewFixesAuthToken:
@@ -1727,6 +1842,7 @@ class TestReviewFixesVllmAnthropicCors:
 # ``format='pre_tokenized'`` + missing-``tokenized_path`` cross-validator)
 # are already covered by existing v0.42.0 tests; this class focuses on the
 # wiring at the trainer setup() boundary.
+
 
 class TestSftPretrainPreTokenizedShortCircuit:
     """v0.53.7 #86 — trainer-side short-circuit + cache-hash gate.
@@ -1849,7 +1965,9 @@ class TestSftPretrainPreTokenizedShortCircuit:
         )
 
         yaml = self._build_cfg_yaml(
-            train_jsonl, "tokenized", task="pretrain",
+            train_jsonl,
+            "tokenized",
+            task="pretrain",
         )
         cfg = load_config_from_string(yaml)
 
@@ -1882,7 +2000,9 @@ class TestSftPretrainPreTokenizedShortCircuit:
             _maybe_load_pretokenized(cfg.data, cfg.base, MagicMock())
 
     def test_missing_metadata_proceeds_with_yellow_advisory(
-        self, tmp_path, monkeypatch,
+        self,
+        tmp_path,
+        monkeypatch,
     ):
         """When metadata.json is absent, the trainer falls back to "trusted"
         mode with a yellow advisory and still loads the Arrow shards."""
