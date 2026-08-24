@@ -4553,4 +4553,202 @@ training:
 output: ./output
 """,
     ),
+    "qwen2.5-coder-1.5b-sft": RecipeMeta(
+        model="Qwen/Qwen2.5-Coder-1.5B-Instruct",
+        task="sft",
+        size="1.5B",
+        tags=("qwen", "qwen2.5", "coder", "code", "sft"),
+        description="Qwen 2.5 Coder 1.5B instruction tuning with LoRA",
+        yaml_str="""\
+base: Qwen/Qwen2.5-Coder-1.5B-Instruct
+task: sft
+
+data:
+  train: ./data/train.jsonl
+  format: auto
+  max_length: 4096
+
+training:
+  epochs: 3
+  lr: 2e-4
+  batch_size: auto
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  quantization: 4bit
+
+output: ./output
+""",
+    ),
+    "qwen2.5-coder-14b-sft": RecipeMeta(
+        model="Qwen/Qwen2.5-Coder-14B-Instruct",
+        task="sft",
+        size="14B",
+        tags=("qwen", "qwen2.5", "coder", "code", "sft"),
+        description="Qwen 2.5 Coder 14B instruction tuning with LoRA",
+        yaml_str="""\
+base: Qwen/Qwen2.5-Coder-14B-Instruct
+task: sft
+
+data:
+  train: ./data/train.jsonl
+  format: auto
+  max_length: 4096
+
+training:
+  epochs: 3
+  lr: 1e-4
+  batch_size: auto
+  lora:
+    r: 32
+    alpha: 64
+    target_modules: auto
+  quantization: 4bit
+  gradient_checkpointing: true
+
+output: ./output
+""",
+    ),
+    "qwen2.5-coder-32b-sft": RecipeMeta(
+        model="Qwen/Qwen2.5-Coder-32B-Instruct",
+        task="sft",
+        size="32B",
+        tags=("qwen", "qwen2.5", "coder", "code", "sft"),
+        description="Qwen 2.5 Coder 32B instruction tuning with LoRA",
+        yaml_str="""\
+base: Qwen/Qwen2.5-Coder-32B-Instruct
+task: sft
+
+data:
+  train: ./data/train.jsonl
+  format: auto
+  max_length: 4096
+
+training:
+  epochs: 3
+  lr: 1e-4
+  batch_size: auto
+  lora:
+    r: 32
+    alpha: 64
+    target_modules: auto
+  quantization: 4bit
+  gradient_checkpointing: true
+
+output: ./output
+""",
+    ),
+    "qwen2.5-math-1.5b-sft": RecipeMeta(
+        model="Qwen/Qwen2.5-Math-1.5B-Instruct",
+        task="sft",
+        size="1.5B",
+        tags=("qwen", "qwen2.5", "math", "reasoning", "sft"),
+        description="Qwen 2.5 Math 1.5B instruction tuning with LoRA",
+        yaml_str="""\
+base: Qwen/Qwen2.5-Math-1.5B-Instruct
+task: sft
+
+data:
+  train: ./data/train.jsonl
+  format: auto
+  max_length: 4096
+
+training:
+  epochs: 3
+  lr: 2e-4
+  batch_size: auto
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  quantization: 4bit
+
+output: ./output
+""",
+    ),
+    "qwen2.5-math-7b-sft": RecipeMeta(
+        model="Qwen/Qwen2.5-Math-7B-Instruct",
+        task="sft",
+        size="7B",
+        tags=("qwen", "qwen2.5", "math", "reasoning", "sft"),
+        description="Qwen 2.5 Math 7B instruction tuning with LoRA",
+        yaml_str="""\
+base: Qwen/Qwen2.5-Math-7B-Instruct
+task: sft
+
+data:
+  train: ./data/train.jsonl
+  format: auto
+  max_length: 4096
+
+training:
+  epochs: 3
+  lr: 2e-4
+  batch_size: auto
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  quantization: 4bit
+
+output: ./output
+""",
+    ),
+    "deepseek-r1-distill-qwen-1.5b-sft": RecipeMeta(
+        model="deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
+        task="sft",
+        size="1.5B",
+        tags=("deepseek", "r1", "distill", "sft", "reasoning"),
+        description="DeepSeek-R1-Distill Qwen 1.5B reasoning SFT",
+        yaml_str="""\
+base: deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B
+task: sft
+
+data:
+  train: ./data/train.jsonl
+  format: auto
+  max_length: 4096
+
+training:
+  epochs: 3
+  lr: 2e-4
+  batch_size: auto
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  quantization: 4bit
+
+output: ./output
+""",
+    ),
+    "deepseek-r1-distill-qwen-7b-sft": RecipeMeta(
+        model="deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
+        task="sft",
+        size="7B",
+        tags=("deepseek", "r1", "distill", "sft", "reasoning"),
+        description="DeepSeek-R1-Distill Qwen 7B reasoning SFT",
+        yaml_str="""\
+base: deepseek-ai/DeepSeek-R1-Distill-Qwen-7B
+task: sft
+
+data:
+  train: ./data/train.jsonl
+  format: auto
+  max_length: 4096
+
+training:
+  epochs: 3
+  lr: 2e-4
+  batch_size: auto
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  quantization: 4bit
+
+output: ./output
+""",
+    ),
 }
