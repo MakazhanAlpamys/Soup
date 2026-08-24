@@ -553,7 +553,11 @@ dataset name (no file suffix) — and the classes may not mix within one list:
   remote URI entry always requires `data.streaming: true` (there is no non-streaming
   multi-remote-file loader). Each remote entry is canonicalised through the same
   SSRF-hardened `validate_remote_uri` allowlist used everywhere else in Soup (bucket
-  regex, no userinfo / query / fragment) before it reaches the streaming loader.
+  regex, no userinfo / query / fragment) before it reaches the streaming loader. The
+  streaming path supports the same file types as local loading — `.jsonl` / `.json` /
+  `.csv` / `.parquet` / `.txt` — chosen per entry by suffix, so flipping only
+  `data.streaming: true` keeps reading the same file format instead of misparsing it as
+  JSON; an unrecognised suffix refuses by name rather than reaching the HF loader.
 - **All entries HF-hub dataset names** (e.g. `teknium/OpenHermes-2.5`): each name's own
   `train` split is loaded and combined the same way as the local-file path. Always eager —
   `data.streaming: true` is not yet supported for an all-hub-name list (streaming several

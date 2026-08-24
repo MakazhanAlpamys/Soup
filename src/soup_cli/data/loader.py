@@ -21,6 +21,40 @@ console = Console()
 # File extensions we support
 SUPPORTED_EXTENSIONS = {".jsonl", ".json", ".csv", ".parquet", ".txt"}
 
+# HF `datasets` builder name per suffix, for _load_interleaved_streaming_
+# datasets (#459/#468 MEDIUM fix) — mirrors SUPPORTED_EXTENSIONS /
+# load_raw_data's per-suffix dispatch so streaming reads the same file
+# type the non-streaming local loader would, instead of always assuming
+# JSON. Keys match SUPPORTED_EXTENSIONS exactly (one entry each).
+_STREAMING_BUILDERS = {
+    ".jsonl": "json",
+    ".json": "json",
+    ".csv": "csv",
+    ".parquet": "parquet",
+    ".txt": "text",
+}
+
+
+def _streaming_builder_for(entry: str) -> str:
+    """Pick the HF ``datasets`` builder for one streaming interleave entry
+    by file suffix, so flipping only ``data.streaming: true`` doesn't
+    silently misparse a csv/txt/parquet file as JSON (#459/#468 MEDIUM).
+
+    Call with the CANONICALIZED entry (post ``validate_remote_uri``), not
+    the raw one — a query string surviving on the raw string could
+    otherwise be mistaken for the suffix.
+    """
+    suffix = Path(entry).suffix.lower()
+    try:
+        return _STREAMING_BUILDERS[suffix]
+    except KeyError:
+        raise ValueError(
+            f"data.streaming=true does not support '{suffix or '(no extension)'}' "
+            f"data.train entries ({entry!r}) -- supported: "
+            f"{sorted(_STREAMING_BUILDERS)}"
+        ) from None
+
+
 # Cap on rows materialised from a remote/streaming source — matches v0.24.0
 # ``soup data download --samples`` ceiling. Defends against OOM when a
 # crafted / oversized bucket object or hub dataset is pointed at via
@@ -440,11 +474,15 @@ def _load_interleaved_streaming_datasets(
     count ahead of time.
 
     Every entry (local file path or remote URI — schema guarantees no hub
-    names reach here) becomes one streaming dataset the same way
-    _load_remote_dataset already builds one for a single URI:
-    ``datasets.load_dataset("json", data_files=entry, split="train",
-    streaming=True)``. This is why local and remote entries can share one
-    streaming list: the "json" builder accepts both identically.
+    names reach here) becomes one streaming dataset via
+    ``datasets.load_dataset(builder, data_files=entry, split="train",
+    streaming=True)``, where ``builder`` is chosen per entry from its file
+    suffix (:func:`_streaming_builder_for`) — the same
+    ``SUPPORTED_EXTENSIONS`` set the non-streaming local path
+    (:func:`load_raw_data`) dispatches on, so flipping only
+    ``data.streaming: true`` doesn't silently reinterpret a csv/txt/parquet
+    file as JSON. Suffix-based selection works identically for local paths
+    and remote URIs, which is why the two can share one streaming list.
 
     Strategy -> HF call mapping (the "mean the same thing as the local
     path" decision #459 asks for; also documented in docs/data.md):
@@ -505,7 +543,8 @@ def _load_interleaved_streaming_datasets(
     streams = []
     for entry in train_paths:
         load_entry = validate_remote_uri(entry) if _looks_like_remote_uri(entry) else entry
-        ds = hf_load("json", data_files=load_entry, split="train", streaming=True)
+        builder = _streaming_builder_for(load_entry)
+        ds = hf_load(builder, data_files=load_entry, split="train", streaming=True)
         buf = data_config.buffer_size
         if buf:
             ds = ds.shuffle(buffer_size=buf)

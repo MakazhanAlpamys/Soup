@@ -416,6 +416,80 @@ def test_streaming_malicious_query_uri_rejected_before_reaching_hf_load(tmp_path
     assert reached == []
 
 
+@pytest.mark.parametrize(
+    "suffix,expected_builder",
+    [(".csv", "csv"), (".parquet", "parquet"), (".txt", "text")],
+)
+def test_streaming_builder_matches_file_suffix(tmp_path, monkeypatch, suffix, expected_builder):
+    # MEDIUM — the streaming path used to hardcode the "json" builder for
+    # every entry regardless of its actual type, breaking csv/txt/parquet
+    # the moment data.streaming: true was set (they work fine non-streaming,
+    # via load_raw_data's SUPPORTED_EXTENSIONS dispatch). The builder must
+    # now be chosen per entry from its suffix (_streaming_builder_for),
+    # matching that same dispatch instead of always assuming JSON.
+    recorded: list = []
+    (tmp_path / f"a{suffix}").write_text("placeholder", encoding="utf-8")
+    (tmp_path / f"b{suffix}").write_text("placeholder", encoding="utf-8")
+
+    def fake_load_dataset(builder, data_files=None, split=None, streaming=False):
+        recorded.append(builder)
+        return _FakeIterableDataset([{"text": "row"}])
+
+    fake_module = type(sys)("datasets")
+    fake_module.load_dataset = fake_load_dataset
+    fake_module.concatenate_datasets = lambda streams: _FakeIterableDataset(
+        [row for s in streams for row in s]
+    )
+    fake_module.interleave_datasets = lambda streams, **kw: _FakeIterableDataset(
+        [row for s in streams for row in s]
+    )
+    monkeypatch.setitem(sys.modules, "datasets", fake_module)
+
+    cfg = _cfg(
+        tmp_path,
+        train=[str(tmp_path / f"a{suffix}"), str(tmp_path / f"b{suffix}")],
+        interleave="concat",
+        streaming=True,
+        format="plaintext",
+    )
+    load_dataset(cfg.data)
+    assert recorded == [expected_builder, expected_builder]
+
+
+def test_streaming_unsupported_extension_rejected_by_name(tmp_path, monkeypatch):
+    # An extension outside SUPPORTED_EXTENSIONS must refuse by name (mirrors
+    # load_raw_data's "Unsupported file format" refusal for the non-streaming
+    # path) rather than reach hf_load and fail with an opaque Arrow error.
+    _write_jsonl(tmp_path / "b.jsonl", [f"B-{i}" for i in range(2)])
+    (tmp_path / "a.xyz").write_text("placeholder", encoding="utf-8")
+
+    reached: list = []
+
+    def fake_load_dataset(builder, data_files=None, split=None, streaming=False):
+        reached.append((builder, data_files))
+        return _FakeIterableDataset([{"text": "unused"}])
+
+    fake_module = type(sys)("datasets")
+    fake_module.load_dataset = fake_load_dataset
+    fake_module.concatenate_datasets = lambda streams: _FakeIterableDataset(
+        [row for s in streams for row in s]
+    )
+    fake_module.interleave_datasets = lambda streams, **kw: _FakeIterableDataset(
+        [row for s in streams for row in s]
+    )
+    monkeypatch.setitem(sys.modules, "datasets", fake_module)
+
+    cfg = _cfg(
+        tmp_path,
+        train=[str(tmp_path / "a.xyz"), str(tmp_path / "b.jsonl")],
+        interleave="concat",
+        streaming=True,
+    )
+    with pytest.raises(ValueError, match=r"\.xyz"):
+        load_dataset(cfg.data)
+    assert reached == []
+
+
 # ---------------------------------------------------------------------------
 # THE core acceptance test: one config, run both ways, proportions compared.
 # ---------------------------------------------------------------------------
