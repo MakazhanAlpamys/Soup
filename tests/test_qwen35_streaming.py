@@ -8,6 +8,8 @@ import pytest
 import torch
 from safetensors.torch import load_file, save_file
 
+from tests.test_issue502_qwen35_transformers5 import _REQUIRES_TRAINING_FLOOR
+
 
 def _toy_qwen35_classes():
     """Register a tiny heterogeneous MoE under the real Qwen3.5 model type.
@@ -299,6 +301,7 @@ class TestQwen35StreamingAliases:
 
 
 class TestQwen35StreamingParity:
+    @_REQUIRES_TRAINING_FLOOR
     def test_dense_text_decoder_logits_match_resident_bit_exactly(self, tmp_path):
         """Admit the real dense Qwen3.5 decoder graph, not just its model-type name.
 
