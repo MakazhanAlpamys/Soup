@@ -3061,13 +3061,13 @@ output: ./output
 """,
     ),
     "mistral-small-3-sft": RecipeMeta(
-        model="mistralai/Mistral-Small-3-24B-Instruct",
+        model="mistralai/Mistral-Small-24B-Instruct-2501",
         task="sft",
         size="24B",
         tags=("mistral", "small", "instruction"),
         description="Mistral Small 3 24B SFT",
         yaml_str="""\
-base: mistralai/Mistral-Small-3-24B-Instruct
+base: mistralai/Mistral-Small-24B-Instruct-2501
 task: sft
 
 data:
