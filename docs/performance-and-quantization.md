@@ -254,7 +254,7 @@ training:
 soup train --config soup.yaml
 ```
 
-**How it works.** LoRA adapters + their gradients + optimizer state stay resident in VRAM (they are small). The frozen base lives in CPU RAM, page-locked when the machine allows it, and is streamed: each decoder layer is copied into one of two pre-allocated VRAM buffers on a dedicated CUDA stream while the previous layer is still computing, so the load overlaps the compute. Each layer is read **twice** per step — once in the forward pass and once when the backward pass recomputes it — because `dL/dx = Wᵀ · dL/dy` needs the weights to reach the layers below. That is physics, not an implementation detail, and it is why streaming costs time.
+**How it works.** LoRA adapters + their gradients + optimizer state stay resident in VRAM (they are small). The frozen base lives in CPU RAM, page-locked when the machine allows it, and is streamed: each decoder layer is copied into one of two pre-allocated VRAM buffers on a dedicated CUDA stream while the previous layer is still computing, so the load overlaps the compute. Vocabulary-sized `embed_tokens` and an untied `lm_head` use one additional shared slot: the embedding is loaded for the model input, then the same allocation is reused for the output head after the last decoder layer. Each decoder layer is read **twice** per step — once in the forward pass and once when the backward pass recomputes it — because `dL/dx = Wᵀ · dL/dy` needs the weights to reach the layers below. That is physics, not an implementation detail, and it is why streaming costs time.
 
 **Apple Silicon is experimental.** With `backend: transformers`, MPS uses a pageable CPU
 source and MPS layer buffers; host pinning is disabled. PyTorch 2.7+ may otherwise turn
@@ -262,12 +262,14 @@ source and MPS layer buffers; host pinning is disabled. PyTorch 2.7+ may otherwi
 to the MPS allocator while `is_pinned()` is still false (#434). Soup refuses that state at
 the source boundary and also disables pinning before allocation. Apple Silicon has unified
 physical memory, so the CUDA capacity and throughput numbers below do not transfer: only
-the MPS allocator's streamed weights are bounded by the buffer pool, while the CPU source
-still consumes unified memory. On macOS 14+ the store and compute dtype are bfloat16 after
-a live one-element MPS capability probe; an older runtime falls back to float32 explicitly.
-No claim is made yet that streaming fits a larger model or runs faster than resident MPS
-training. `backend: mlx` remains a separate, incompatible model-loading path and is rejected
-with `stream_layers`.
+the MPS allocator's streamed decoder and vocabulary weights are bounded by their buffer
+pools, while the CPU source still consumes unified memory. On macOS 14+ the store and compute
+dtype are bfloat16 after a live one-element MPS capability probe; an older runtime falls back
+to float32 explicitly. An untied float32 toy decoder is bit-exact against its resident MPS
+control on Apple Silicon, including two boundary-weight loads through one slot. No claim is
+made yet that streaming fits a larger model or runs faster than resident MPS training.
+`backend: mlx` remains a separate, incompatible model-loading path and is rejected with
+`stream_layers`.
 
 The tradeoff: **1.43× slower than resident training**, measured at 0.5B — the only apples-to-apples comparison available on the reference box, because 1.5B and above cannot run resident there at all.
 
@@ -297,7 +299,7 @@ Correctness is not a tradeoff here either: a streamed NF4 run is **bit-exact** a
 
 The 3B NF4-vs-bf16 rows differ by 1.85×, but attribute that to **pinning, not arithmetic** — see point 2 above. The two rows also come from different sessions, and this card's boost clock varies ~13% between sessions, so treat the factor as indicative and the mechanism as the claim.
 
-Untied `embed_tokens` + `lm_head` stay resident and unquantised (2.10 GB of the 8B row's 3.32 GB), which is why 8B sits close to this card's ceiling; treating them as streamed large layers is deferred beyond v0.72.3.
+The 3.32 GB 8B row above predates large-layer streaming: its untied, unquantised `embed_tokens` + `lm_head` both stayed resident and occupied 2.10 GB. Current code writes them as separate large-layer shards and reuses one device slot sized to the larger matrix, so an equally shaped untied pair should reclaim one matrix while a tied model keeps the same one-matrix requirement. CPU CI pins bit-exact logits for both controls. The updated CUDA peak remains to be measured on the reference RTX 3050; the historical 3.32 GB figure is not relabelled as a new measurement.
 
 **Honest scope:**
 - **RAM tier + disk overflow (v0.72.3).** `stream_source: auto` picks RAM when it fits, falls back to NVMe disk when not; SATA/HDD rejected. Correctness verified; disk performance unmeasured on the reference box. A paravirtual (virtio) disk reports `rotational=1` with no media hint, so a genuinely NVMe-backed cloud disk was misread as an HDD and refused (#365); detection now measures a bounded O_DIRECT sequential read when the rotational flag is unreliable and admits NVMe-class throughput (>= 1 GB/s), while a genuinely slow disk stays rejected. Set `training.stream_disk_kind: nvme` (or `ssd`/`hdd`) to override when detection is still wrong — the resolved value is printed beside what was detected.

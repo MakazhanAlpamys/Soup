@@ -313,6 +313,8 @@ class StreamingSetupMixin:
             build_streamed_model,
             expandable_segments_status,
             extras_resident_bytes,
+            large_layer_buffer_bytes,
+            large_layer_store_bytes,
             quantised_layer_suffixes,
         )
         from soup_cli.utils.moe import detect_moe_model, get_moe_target_modules
@@ -474,6 +476,8 @@ class StreamingSetupMixin:
         layer_bytes = self._stream_layer_budget_bytes(layer_specs)
         layer_store_bytes = sum(layer_byte_sizes)
         embed_bytes = extras_resident_bytes(shard_dir)
+        large_store_bytes = large_layer_store_bytes(shard_dir, index)
+        large_buffer_bytes = large_layer_buffer_bytes(shard_dir, index)
 
         free_ram = free_ram_bytes()
         if free_ram is None:
@@ -481,9 +485,11 @@ class StreamingSetupMixin:
                 "[yellow]psutil unavailable — cannot size the RAM tier; "
                 "proceeding and letting the allocation fail loudly if it must[/]"
             )
-            free_ram = (layer_bytes * index.n_layers + embed_bytes) * 10
+            free_ram = (
+                layer_bytes * index.n_layers + large_store_bytes + embed_bytes
+            ) * 10
 
-        store_total = layer_store_bytes + embed_bytes
+        store_total = layer_store_bytes + large_store_bytes + embed_bytes
         # Checked BEFORE build_stream_plan so a `ram`-only run is refused with
         # the message about stream_source rather than choose_tier's generic
         # "needs NVMe or more RAM" — and without paying the ~9 s disk probe for
@@ -501,6 +507,8 @@ class StreamingSetupMixin:
             layer_bytes=layer_bytes,
             embed_bytes=embed_bytes,
             store_bytes=layer_store_bytes,
+            large_store_bytes=large_store_bytes,
+            large_buffer_bytes=large_buffer_bytes,
             available_ram_bytes=free_ram,
             # The page-locked ceiling is a property of the box, not of free RAM;
             # rather than probe it destructively we attempt the pinned store and
@@ -535,6 +543,7 @@ class StreamingSetupMixin:
                 plan,
                 tier=tier,
                 store_bytes=0,
+                large_store_bytes=0,
                 pinned=False,
                 notes=plan.notes
                 + (
@@ -555,6 +564,7 @@ class StreamingSetupMixin:
             model_config=model_config,
             layer_bytes=layer_bytes,
             embed_bytes=embed_bytes,
+            large_layer_bytes=large_buffer_bytes,
             index=index,
             on_cuda=on_cuda,
         )
@@ -637,9 +647,12 @@ class StreamingSetupMixin:
                 f"streamed from DISK ({stats['disk_bytes'] / 1e9:.2f} GB on an "
                 f"NVMe volume, nothing held resident)"
             )
+        large_runtime_buffer = stats.get("large_buffer_bytes", 0)
+        decoder_buffers = stats["buffer_bytes"] - large_runtime_buffer
         buffer_line = (
             f"{stats['buffers']} x "
-            f"{stats['buffer_bytes'] / stats['buffers'] / 1e6:.0f} MB VRAM buffers"
+            f"{decoder_buffers / stats['buffers'] / 1e6:.0f} MB decoder buffers + "
+            f"1 x {large_runtime_buffer / 1e6:.0f} MB large-layer slot"
         )
         console.print(
             f"[green]Layer streaming ready:[/] {stats['n_layers']} layers, "
@@ -679,7 +692,16 @@ class StreamingSetupMixin:
         return layers * n_targets * 2 * tcfg.lora.r * hidden
 
     def _stream_budget_lines(
-        self, cfg, tcfg, *, model_config, layer_bytes, embed_bytes, index, on_cuda
+        self,
+        cfg,
+        tcfg,
+        *,
+        model_config,
+        layer_bytes,
+        embed_bytes,
+        index,
+        on_cuda,
+        large_layer_bytes=0,
     ):
         """Predict peak VRAM + bracket throughput, and REFUSE a run that cannot fit.
 
@@ -746,6 +768,7 @@ class StreamingSetupMixin:
             seq_len=seq_len,
             batch_size=rows,
             logits_bytes_per_element=calibrated,
+            large_layer_bytes=large_layer_bytes,
         )
         logits = estimate_logits_bytes(
             vocab_size=vocab, seq_len=seq_len, batch_size=rows, bytes_per_element=calibrated

@@ -176,7 +176,9 @@ def _batch_on(model, batch):
     deliberately pins the MODEL to CPU (for exact float32 arithmetic) still gets
     CUDA batch tensors from the dataloader.
     """
-    device = next(model.parameters()).device
+    device = next(
+        parameter.device for parameter in model.parameters() if not parameter.is_meta
+    )
     return {
         key: (value.to(device) if hasattr(value, "to") else value) for key, value in batch.items()
     }

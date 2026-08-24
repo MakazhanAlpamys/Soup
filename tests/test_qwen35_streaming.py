@@ -234,12 +234,21 @@ def _heterogeneous_meta_model():
     class _Decoder(nn.Module):
         def __init__(self):
             super().__init__()
+            self.embed_tokens = nn.Embedding(8, 4, device="meta")
             self.layers = nn.ModuleList([_Layer0(), _Layer1()])
 
     class _Model(nn.Module):
         def __init__(self):
             super().__init__()
             self.model = _Decoder()
+            self.lm_head = nn.Linear(4, 8, bias=False, device="meta")
+            self.lm_head.weight = self.model.embed_tokens.weight
+
+        def get_input_embeddings(self):
+            return self.model.embed_tokens
+
+        def get_output_embeddings(self):
+            return self.lm_head
 
     return _Model()
 
@@ -442,6 +451,7 @@ class TestQwen35StreamingSharder:
     def test_sharder_accepts_heterogeneous_layers_and_canonicalises_vlm_prefix(self, tmp_path):
         from soup_cli.utils.layer_shard import (
             extras_shard_path,
+            large_shard_path,
             layer_shard_path,
             shard_checkpoint,
         )
@@ -456,12 +466,14 @@ class TestQwen35StreamingSharder:
         layer0 = load_file(layer_shard_path(out, 0))
         layer1 = load_file(layer_shard_path(out, 1))
         extras = load_file(extras_shard_path(out))
+        embedding = load_file(large_shard_path(out, "model.embed_tokens.weight"))
 
         assert "self_attn.q_proj.weight" in layer0
         assert "linear_attn.in_proj_qkv.weight" not in layer0
         assert "linear_attn.in_proj_qkv.weight" in layer1
         assert "self_attn.q_proj.weight" not in layer1
-        assert "model.embed_tokens.weight" in extras
+        assert "model.embed_tokens.weight" not in extras
+        assert set(embedding) == {"model.embed_tokens.weight"}
 
     def test_sharder_refuses_canonical_key_collisions(self, tmp_path):
         from soup_cli.utils.layer_shard import shard_checkpoint

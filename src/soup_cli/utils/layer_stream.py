@@ -10,9 +10,11 @@ wrapper) lives in ``layer_stream_runtime.py``; the checkpoint sharder lives in
 ``layer_shard.py``.
 
 Model of the mechanism: the frozen base lives in CPU RAM and is streamed into a
-small pool of pre-allocated VRAM buffers one decoder layer at a time, so peak
-VRAM is bounded by ONE layer rather than the whole model. Only the LoRA
-adapters, their gradients and optimizer state stay resident.
+small pool of pre-allocated VRAM buffers one decoder layer at a time. Vocabulary
+embeddings and an untied output head share a second, single-slot pool. Peak VRAM
+is therefore bounded by one decoder layer plus one vocabulary matrix rather than
+the whole model. Only the LoRA adapters, their gradients and optimizer state
+stay resident.
 """
 
 import math
@@ -1014,6 +1016,7 @@ def estimate_stream_peak_vram(
     batch_size: int = 1,
     dtype: str = "bfloat16",
     logits_bytes_per_element: Optional[float] = None,
+    large_layer_bytes: int = 0,
 ) -> int:
     """Predicted ``torch.cuda.max_memory_allocated()`` for a streaming step.
 
@@ -1024,9 +1027,10 @@ def estimate_stream_peak_vram(
     the published v0.72.2 Llama-3.1-8B NF4 row (untied embeddings, different
     quantisation, different session, nothing fitted to it) brackets it at +7.5%.
 
-    ``extras_bytes`` is what makes an 8B run predictable: its embeddings and
-    ``lm_head`` are UNTIED, so two 1.05 GB matrices sit resident and account for
-    2.10 GB of that run's 3.32 GB peak.
+    ``extras_bytes`` contains only the genuinely resident non-decoder weights.
+    ``large_layer_bytes`` is one reusable slot sized to the larger of
+    ``embed_tokens`` and an untied ``lm_head``; the two matrices no longer add
+    together at peak (#324).
 
     Returns allocator-visible bytes only. The CUDA context and driver reservation
     sit outside the caching allocator (0.85 GB on the dev box, which also drives
@@ -1039,6 +1043,7 @@ def estimate_stream_peak_vram(
     """
     return (
         layer_bytes * buffers
+        + large_layer_bytes
         + extras_bytes
         + estimate_optimizer_bytes(adapter_params)
         + STREAM_FIXED_SLACK_BYTES
@@ -1271,10 +1276,12 @@ def estimate_stream_vram(
     activation_bytes: int = 0,
     logits_bytes: int = 0,
     workspace_bytes: int = DEFAULT_WORKSPACE_BYTES,
+    large_layer_bytes: int = 0,
 ) -> int:
     """Peak VRAM for a streaming step (plan 4.1)."""
     return (
         layer_bytes * buffers
+        + large_layer_bytes
         + embed_bytes
         + adapter_bytes
         + activation_bytes
@@ -1312,6 +1319,8 @@ class StreamPlan:
     layer_bytes: int
     store_bytes: int
     embed_bytes: int
+    large_store_bytes: int
+    large_buffer_bytes: int
     buffers: int
     buffer_bytes: int
     pinned: bool
@@ -1330,13 +1339,16 @@ def build_stream_plan(
     disk_kind: DiskKind = _NVME,
     stream_pin: Optional[bool] = None,
     store_bytes: Optional[int] = None,
+    large_store_bytes: int = 0,
+    large_buffer_bytes: int = 0,
 ) -> StreamPlan:
     """Decide tier + pinning and record every caveat as a visible note."""
     buffers = validate_stream_buffers(buffers)
     if n_layers <= 0:
         raise ValueError(f"n_layers must be positive; got {n_layers}")
     store_bytes = n_layers * layer_bytes if store_bytes is None else int(store_bytes)
-    tier = choose_tier(store_bytes + embed_bytes, available_ram_bytes, disk_kind)
+    host_store_bytes = store_bytes + int(large_store_bytes)
+    tier = choose_tier(host_store_bytes + embed_bytes, available_ram_bytes, disk_kind)
     notes = []
     if tier == TIER_DISK:
         # Falling back is the point of stream_source='auto', but a silent
@@ -1351,7 +1363,7 @@ def build_stream_plan(
             "tier is unmeasured on this hardware. Set stream_source='ram' to "
             "refuse rather than fall back."
         )
-    decision = decide_pinning(store_bytes, pinned_limit_bytes, stream_pin=stream_pin)
+    decision = decide_pinning(host_store_bytes, pinned_limit_bytes, stream_pin=stream_pin)
     # #366 review round 3 — "record, never silence". An automatic pinned store is
     # the unremarkable default and stays quiet, but an EXPLICIT stream_pin=true is
     # a user decision, so the pre-flight states it too. Without this the forced-on
@@ -1370,10 +1382,12 @@ def build_stream_plan(
         tier=tier,
         n_layers=n_layers,
         layer_bytes=layer_bytes,
-        store_bytes=store_bytes,
+        store_bytes=host_store_bytes,
         embed_bytes=embed_bytes,
+        large_store_bytes=int(large_store_bytes),
+        large_buffer_bytes=int(large_buffer_bytes),
         buffers=buffers,
-        buffer_bytes=layer_bytes * buffers,
+        buffer_bytes=layer_bytes * buffers + int(large_buffer_bytes),
         pinned=decision.pinned,
         notes=tuple(notes),
     )
@@ -1400,8 +1414,9 @@ def render_stream_panel(plan: StreamPlan, extra_lines: Sequence[str] = ()) -> Pa
         f"tier [cyan]{plan.tier}[/]",
         store_line,
         f"  VRAM buffers {plan.buffers} x {plan.layer_bytes / 1e6:.0f} MB "
+        f"+ 1 x {plan.large_buffer_bytes / 1e6:.0f} MB large-layer slot "
         f"= {plan.buffer_bytes / 1e6:.0f} MB",
-        f"  resident     {plan.embed_bytes / 1e6:.0f} MB embeddings + adapters",
+        f"  resident     {plan.embed_bytes / 1e6:.0f} MB extras + adapters",
     ]
     lines.extend(extra_lines)
     for note in plan.notes:

@@ -1204,7 +1204,12 @@ class TestNF4StreamedModel:
         model, _, _, _, _ = _nf4_stream(tmp_path)
         meta = [n for n, p in model.named_parameters() if p.is_meta]
         assert meta, "no decoder weights left on meta"
-        assert all(".layers." in name for name in meta)
+        assert all(
+            ".layers." in name
+            or name.endswith("embed_tokens.inner.weight")
+            or name.endswith("lm_head.inner.weight")
+            for name in meta
+        )
 
     def test_adapters_are_real_not_meta(self, tmp_path):
         """PEFT creates adapters on the base layer's device, which here is

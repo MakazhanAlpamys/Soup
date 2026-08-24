@@ -309,19 +309,19 @@ class RamSource:
         ],
         *,
         pin: bool = True,
+        shard_paths: Optional[Sequence[str]] = None,
     ):
         import torch
         from safetensors import safe_open
 
-        from soup_cli.utils.layer_shard import layer_shard_path
-
         layer_specs = self._normalize_layer_specs(spec, n_layers)
+        paths = self._normalize_shard_paths(shard_dir, n_layers, shard_paths)
         self.store: list = []
         self.nbytes = 0
         self.pinned = bool(pin)
         for idx in range(n_layers):
             held: Dict[str, Any] = {}
-            with safe_open(layer_shard_path(shard_dir, idx), framework="pt") as handle:
+            with safe_open(paths[idx], framework="pt") as handle:
                 for name, (shape, dtype) in layer_specs[idx].items():
                     # This is the host store; never inherit a process-wide MPS/CUDA default.
                     dst = torch.empty(
@@ -423,6 +423,19 @@ class RamSource:
             )
         return layer_specs
 
+    @staticmethod
+    def _normalize_shard_paths(
+        shard_dir: str, n_layers: int, shard_paths: Optional[Sequence[str]]
+    ) -> list[str]:
+        from soup_cli.utils.layer_shard import layer_shard_path
+
+        if shard_paths is None:
+            return [layer_shard_path(shard_dir, idx) for idx in range(n_layers)]
+        paths = [str(path) for path in shard_paths]
+        if len(paths) != n_layers:
+            raise ValueError(f"expected {n_layers} shard paths, but got {len(paths)}")
+        return paths
+
     def get(self, idx: int, name: str):
         return self.store[idx][name]
 
@@ -461,21 +474,22 @@ class DiskSource:
             Mapping[str, Tuple[Tuple[int, ...], str]],
             Sequence[Mapping[str, Tuple[Tuple[int, ...], str]]],
         ],
+        *,
+        shard_paths: Optional[Sequence[str]] = None,
     ):
         import contextlib
 
         from safetensors import safe_open
 
-        from soup_cli.utils.layer_shard import layer_shard_path
-
         layer_specs = RamSource._normalize_layer_specs(spec, n_layers)
+        paths = RamSource._normalize_shard_paths(shard_dir, n_layers, shard_paths)
         self._stack = contextlib.ExitStack()
         # ExitStack, not a comprehension of __enter__(): if shard N fails to
         # open, everything opened before it must still be closed.
         try:
             self._handles = [
                 self._stack.enter_context(
-                    safe_open(layer_shard_path(shard_dir, idx), framework="pt")
+                    safe_open(paths[idx], framework="pt")
                 )
                 for idx in range(n_layers)
             ]
@@ -516,8 +530,11 @@ def _dtype_size(name: str) -> int:
 
 
 def extras_resident_bytes(shard_dir: str) -> int:
-    """Bytes the non-layer weights occupy on the GPU (embeddings, final norm,
-    an untied head). Read from the extras header — no tensor is materialised.
+    """Bytes the non-layer weights occupy on the GPU (final norm / buffers).
+
+    Vocabulary-sized embeddings and an untied head live in dedicated large
+    shards as of shard format v2 and are deliberately absent from this number.
+    Read from the extras header — no tensor is materialised.
 
     The shared NF4 code tables live in the same file but are 272 floats of
     machinery, not model weights, so they are excluded.
@@ -551,6 +568,62 @@ def extras_resident_bytes(shard_dir: str) -> int:
                 _SAFETENSORS_DTYPES[raw]
             )
     return total
+
+
+def large_layer_specs(
+    shard_dir: str, index: Any
+) -> Dict[str, Tuple[Tuple[int, ...], str]]:
+    """Shape and dtype for the streamed embedding/head shards."""
+    from safetensors import safe_open
+
+    from soup_cli.utils.layer_shard import large_shard_path, large_weight_role
+
+    specs: Dict[str, Tuple[Tuple[int, ...], str]] = {}
+    roles = set()
+    for key in tuple(getattr(index, "large_keys", ()) or ()):
+        role = large_weight_role(key)
+        if role is None or role in roles:
+            raise ValueError(
+                f"shard index has an invalid or duplicate large-layer key {key!r}; "
+                "reshard the checkpoint"
+            )
+        roles.add(role)
+        with safe_open(large_shard_path(shard_dir, key), framework="pt") as handle:
+            stored = tuple(handle.keys())
+            if stored != (key,):
+                raise ValueError(
+                    f"large-layer shard for {key!r} contains {stored!r}; expected "
+                    "that key alone — reshard the checkpoint"
+                )
+            sliced = handle.get_slice(key)
+            raw = sliced.get_dtype()
+            if raw not in _SAFETENSORS_DTYPES:
+                raise ValueError(
+                    f"large-layer tensor {key} has unsupported dtype {raw!r}; "
+                    f"supported: {', '.join(sorted(_SAFETENSORS_DTYPES))}"
+                )
+            specs[key] = (
+                tuple(int(dim) for dim in sliced.get_shape()),
+                _SAFETENSORS_DTYPES[raw],
+            )
+    return specs
+
+
+def large_layer_store_bytes(shard_dir: str, index: Any) -> int:
+    """Host/disk bytes occupied by every large-layer shard."""
+    return sum(
+        math.prod(shape) * _dtype_size(dtype)
+        for shape, dtype in large_layer_specs(shard_dir, index).values()
+    )
+
+
+def large_layer_buffer_bytes(shard_dir: str, index: Any) -> int:
+    """Bytes in the single reusable large-layer device slot."""
+    sizes = [
+        math.prod(shape) * _dtype_size(dtype)
+        for shape, dtype in large_layer_specs(shard_dir, index).values()
+    ]
+    return max(sizes, default=0)
 
 
 # ==========================================================================
@@ -641,11 +714,90 @@ class LayerBufferPool:
         return self.buffers[slot]
 
 
+class LargeLayerBufferPool:
+    """One reusable device slot for ``embed_tokens`` and an untied ``lm_head``.
+
+    Both weights are stored at the same stream dtype.  A flat allocation sized
+    to the larger matrix can therefore expose a correctly shaped view for
+    either boundary without holding both vocabulary-sized tensors resident.
+    """
+
+    def __init__(
+        self,
+        specs: Mapping[str, Tuple[Tuple[int, ...], str]],
+        source_indices: Mapping[str, int],
+        *,
+        device: str = "cuda",
+    ):
+        import torch
+
+        self.device = str(device)
+        self.is_cuda = self.device.startswith("cuda")
+        self.specs = dict(specs)
+        self.source_indices = dict(source_indices)
+        dtypes = {dtype for _shape, dtype in self.specs.values()}
+        if len(dtypes) > 1:
+            raise ValueError(
+                "streamed large-layer weights must share one dtype; reshard the checkpoint"
+            )
+        self.dtype = next(iter(dtypes), "float32")
+        largest = max((math.prod(shape) for shape, _dtype in self.specs.values()), default=0)
+        self.buffer = torch.empty(largest, dtype=_torch_dtype(self.dtype), device=device)
+        self.event = torch.cuda.Event() if self.is_cuda and largest else None
+        self.owner: Optional[str] = None
+        self.loads = 0
+        self.nbytes = self.buffer.numel() * self.buffer.element_size()
+
+    def _view(self, key: str) -> Any:
+        shape, dtype = self.specs[key]
+        if dtype != self.dtype:
+            raise RuntimeError(f"large-layer dtype changed for {key!r}")
+        return self.buffer[: math.prod(shape)].view(tuple(shape))
+
+    def load_async(self, key: str, source: Any, stream: Any = None) -> None:
+        import torch
+
+        if self.owner == key:
+            return
+        if key not in self.specs or key not in self.source_indices:
+            raise ValueError(f"large-layer source is missing {key!r}")
+        dst = self._view(key)
+        source_idx = self.source_indices[key]
+        if self.is_cuda and stream is not None:
+            stream.wait_stream(torch.cuda.current_stream())
+            with torch.cuda.stream(stream):
+                dst.copy_(source.get(source_idx, key), non_blocking=True)
+                self.event.record(stream)
+        else:
+            dst.copy_(source.get(source_idx, key))
+        self.owner = key
+        self.loads += 1
+
+    def wait(self, key: str) -> Any:
+        import torch
+
+        if self.owner != key:
+            raise RuntimeError(
+                f"large-layer scheduler bug: slot holds {self.owner!r}, but {key!r} "
+                "was requested"
+            )
+        if self.is_cuda and self.event is not None:
+            torch.cuda.current_stream().wait_event(self.event)
+        return self._view(key)
+
+
 class StreamPrefetcher:
     """Drives the prefetch. Forward walks 0..L-1; backward recompute walks
     L-1..0, so the direction is inferred from the call order."""
 
-    def __init__(self, pool: Any, source: Any, n_layers: int, stream: Any = None):
+    def __init__(
+        self,
+        pool: Any,
+        source: Any,
+        n_layers: int,
+        stream: Any = None,
+        tail_prefetch: Any = None,
+    ):
         self.pool = pool
         self.source = source
         self.n_layers = int(n_layers)
@@ -653,12 +805,15 @@ class StreamPrefetcher:
         self.prev: Optional[int] = None
         self.direction = 1
         self.primes = 0
+        self.tail_prefetch = tail_prefetch
+        self.tail_prefetched = False
 
     def prime(self) -> None:
         """Start of a forward pass: layer 0, walking upward."""
         self.prev = None
         self.direction = 1
         self.primes += 1
+        self.tail_prefetched = False
         self.pool.load_async(0, self.source, self.stream)
 
     def advance(self, idx: int) -> None:
@@ -674,6 +829,14 @@ class StreamPrefetcher:
         nxt = idx + self.direction
         if 0 <= nxt < self.n_layers and self.pool.owner[self.pool.slot_for(nxt)] != nxt:
             self.pool.load_async(nxt, self.source, self.stream)
+        if (
+            self.direction == 1
+            and idx == self.n_layers - 1
+            and not self.tail_prefetched
+            and self.tail_prefetch is not None
+        ):
+            self.tail_prefetch()
+            self.tail_prefetched = True
 
 
 # ==========================================================================
@@ -905,6 +1068,106 @@ class _StreamedDecoderLayerProxy:
 
 
 StreamedDecoderLayer = _StreamedDecoderLayerProxy()
+
+
+def _build_streamed_large_layer_class():
+    import torch.nn as nn
+    from torch.func import functional_call
+
+    class StreamedLargeLayer(nn.Module):
+        """Embedding or output projection backed by the shared large slot."""
+
+        def __init__(self, inner: Any, key: str, pool: Any):
+            super().__init__()
+            self.inner = inner
+            self.key = str(key)
+            self.pool = pool
+            self._register_load_state_dict_pre_hook(self._redirect_canonical_weight)
+
+        def _redirect_canonical_weight(
+            self, state_dict: Any, prefix: str, *_args: Any, **_kwargs: Any
+        ) -> None:
+            canonical = prefix + "weight"
+            redirected = prefix + "inner.weight"
+            if canonical not in state_dict:
+                return
+            if redirected in state_dict:
+                raise ValueError(
+                    f"checkpoint contains both {canonical!r} and {redirected!r} "
+                    "for the same streamed large-layer weight"
+                )
+            state_dict[redirected] = state_dict.pop(canonical)
+
+        def _apply(self, fn: Any, recurse: bool = True) -> Any:
+            def _skip_meta(tensor: Any) -> Any:
+                return tensor if getattr(tensor, "is_meta", False) else fn(tensor)
+
+            return super()._apply(_skip_meta, recurse=recurse)
+
+        def state_dict(
+            self,
+            *args: Any,
+            destination: Any = None,
+            prefix: str = "",
+            keep_vars: bool = False,
+        ) -> Any:
+            if args:
+                if destination is None:
+                    destination = args[0]
+                if len(args) > 1 and prefix == "":
+                    prefix = args[1]
+                if len(args) > 2 and keep_vars is False:
+                    keep_vars = args[2]
+            return self.inner.state_dict(
+                destination=destination, prefix=prefix, keep_vars=keep_vars
+            )
+
+        def __getattr__(self, name: str) -> Any:
+            try:
+                return super().__getattr__(name)
+            except AttributeError:
+                if name == "inner":
+                    raise
+                inner = self._modules.get("inner")
+                if inner is None:
+                    raise
+                return getattr(inner, name)
+
+        def forward(self, *args: Any, **kwargs: Any) -> Any:
+            return functional_call(
+                self.inner,
+                {"weight": self.pool.wait(self.key)},
+                args,
+                kwargs,
+            )
+
+    return StreamedLargeLayer
+
+
+_STREAMED_LARGE_LAYER_CLASS = None
+
+
+def _streamed_large_layer_class():
+    global _STREAMED_LARGE_LAYER_CLASS
+    if _STREAMED_LARGE_LAYER_CLASS is None:
+        _STREAMED_LARGE_LAYER_CLASS = _build_streamed_large_layer_class()
+    return _STREAMED_LARGE_LAYER_CLASS
+
+
+def _replace_module_references(root: Any, target: Any, replacement: Any) -> int:
+    """Replace every child reference to ``target`` without relying on its path."""
+    replaced = 0
+    # Snapshot the original module graph before mutating it.  Iterating the live
+    # graph would visit ``replacement`` after the first assignment and replace
+    # its own ``inner`` reference, making the wrapper its own child.
+    for module in tuple(root.modules()):
+        # ``named_children()`` removes duplicate modules, but tied architectures
+        # may expose the same boundary module through more than one attribute.
+        for name, child in tuple(module._modules.items()):
+            if child is target:
+                setattr(module, name, replacement)
+                replaced += 1
+    return replaced
 
 
 def canonical_named_parameters(model: Any) -> Iterator[Tuple[str, Any]]:
@@ -1405,11 +1668,13 @@ class ExtrasLoad:
 def materialize_extras(
     model: Any, shard_dir: str, index: Any, *, device: str, dtype: str
 ) -> ExtrasLoad:
-    """Give real storage to everything that is NOT a decoder layer.
+    """Give real storage to resident weights that are not streamed.
 
     Also lifts out the two shared NF4 code tables: they are constant across
     every weight (the sharder asserts it), so one resident copy serves the whole
-    model instead of streaming 16 + 256 floats per layer.
+    model instead of streaming 16 + 256 floats per layer.  The embedding and an
+    untied output head intentionally remain on ``meta`` until the large-layer
+    wrappers are installed.
     """
     from safetensors.torch import load_file
 
@@ -1426,6 +1691,7 @@ def materialize_extras(
         if key in extras
     }
     torch_dtype = _torch_dtype(dtype)
+    large_keys = set(tuple(getattr(index, "large_keys", ()) or ()))
     placed = 0
     pending_tied = []
     for name, param in list(model.named_parameters()):
@@ -1434,13 +1700,27 @@ def materialize_extras(
         if name in extras:
             _set_module_param(model, name, extras[name].to(device=device, dtype=torch_dtype))
             placed += 1
+        elif name in large_keys:
+            continue
         else:
             pending_tied.append(name)
     if pending_tied:
         # tie_word_embeddings=True -> lm_head.weight is absent from the
         # checkpoint by design and is restored from the input embeddings.
         model.tie_weights()
-        still_meta = [n for n, p in model.named_parameters() if p.is_meta and ".layers." not in n]
+        allowed_large = {
+            id(module.weight)
+            for module in (model.get_input_embeddings(), model.get_output_embeddings())
+            if module is not None and hasattr(module, "weight")
+        }
+        still_meta = [
+            name
+            for name, param in model.named_parameters()
+            if param.is_meta
+            and ".layers." not in name
+            and name not in large_keys
+            and id(param) not in allowed_large
+        ]
         if still_meta:
             raise RuntimeError(
                 f"non-layer weights left unmaterialised after tying: {still_meta[:4]}"
@@ -1575,6 +1855,7 @@ class StreamRuntime:
     n_layers: int
     pinned: bool
     device: str
+    large_pool: Any = None
     hook: Any = None
     #: "ram" or "disk" — which weight source is feeding the buffer pool.
     tier: str = "ram"
@@ -1600,12 +1881,14 @@ class StreamRuntime:
         return {
             "n_layers": self.n_layers,
             "buffers": self.pool.n,
-            "buffer_bytes": self.pool.nbytes,
+            "buffer_bytes": self.pool.nbytes + getattr(self.large_pool, "nbytes", 0),
+            "large_buffer_bytes": getattr(self.large_pool, "nbytes", 0),
             "store_bytes": self.source.nbytes,
             "pinned": self.pinned,
             "tier": self.tier,
             "disk_bytes": getattr(self.source, "disk_bytes", 0),
             "layer_loads": self.pool.loads,
+            "large_loads": getattr(self.large_pool, "loads", 0),
             "device": self.device,
             "total_params": self.total_params,
         }
@@ -1656,7 +1939,12 @@ def install_streaming(
     """Wrap every decoder layer and wire the buffer pool + prefetch scheduler."""
     import torch
 
-    from soup_cli.utils.layer_shard import QUANT_NF4
+    from soup_cli.utils.layer_shard import (
+        QUANT_NF4,
+        large_shard_path,
+        large_weight_role,
+        layer_shard_path,
+    )
 
     # PyTorch 2.7+ on Apple Silicon can turn
     # ``device="cpu", pin_memory=True`` into an MPS allocation, placing the
@@ -1705,6 +1993,16 @@ def install_streaming(
             "defeats layer streaming entirely"
         )
     layer_specs = RamSource.layer_specs_from_shards(shard_dir, n_layers)
+    large_specs = large_layer_specs(shard_dir, index)
+    large_keys = tuple(large_specs)
+    role_keys = {large_weight_role(key): key for key in large_keys}
+    embed_key = role_keys.get("embed_tokens")
+    explicit_head_key = role_keys.get("lm_head")
+    if large_keys and embed_key is None:
+        raise ValueError(
+            "shard index has large-layer weights but no model.embed_tokens.weight; "
+            "reshard the checkpoint"
+        )
 
     # NF4 streams the packed nibbles AND the statistics needed to rebuild the
     # QuantState; the two code tables are shared and stay resident.
@@ -1737,14 +2035,22 @@ def install_streaming(
         active_keys_by_layer.append(tuple(sorted(needed)))
     spec = RamSource.merge_layer_specs(needed_specs_by_layer)
 
+    large_source_indices = {
+        key: n_layers + offset for offset, key in enumerate(large_keys)
+    }
+    source_specs = needed_specs_by_layer + [{key: large_specs[key]} for key in large_keys]
+    source_paths = [layer_shard_path(shard_dir, idx) for idx in range(n_layers)] + [
+        large_shard_path(shard_dir, key) for key in large_keys
+    ]
     source, pinned = _build_source(
         shard_dir,
-        n_layers,
-        needed_specs_by_layer,
+        len(source_specs),
+        source_specs,
         pin,
         console,
         tier,
         require_pin=require_pin,
+        shard_paths=source_paths,
     )
     pool = LayerBufferPool(
         spec,
@@ -1753,7 +2059,24 @@ def install_streaming(
         active_keys_by_layer=active_keys_by_layer,
     )
     stream = torch.cuda.Stream() if str(device).startswith("cuda") else None
-    prefetcher = StreamPrefetcher(pool, source, n_layers, stream)
+    large_pool = (
+        LargeLayerBufferPool(large_specs, large_source_indices, device=device)
+        if large_specs
+        else None
+    )
+    output_key = explicit_head_key or embed_key
+
+    def _prefetch_output() -> None:
+        if large_pool is not None and output_key is not None:
+            large_pool.load_async(output_key, source, stream)
+
+    prefetcher = StreamPrefetcher(
+        pool,
+        source,
+        n_layers,
+        stream,
+        tail_prefetch=_prefetch_output if large_pool is not None else None,
+    )
 
     layer_cls = _streamed_layer_class()
     for idx in range(n_layers):
@@ -1767,7 +2090,50 @@ def install_streaming(
             codes=codes,
         )
 
-    handle = owner.register_forward_pre_hook(lambda *_a, **_k: prefetcher.prime())
+    if large_pool is not None:
+        input_module = model.get_input_embeddings()
+        output_module = model.get_output_embeddings()
+        if input_module is None or output_module is None:
+            raise RuntimeError(
+                "layer streaming needs both input and output embedding modules"
+            )
+        for role, module, key in (
+            ("input embedding", input_module, embed_key),
+            ("output head", output_module, output_key),
+        ):
+            weight = getattr(module, "weight", None)
+            if key is None or weight is None or not getattr(weight, "is_meta", False):
+                raise RuntimeError(
+                    f"streamed {role} is not an unmaterialised meta weight"
+                )
+            expected_shape = tuple(large_specs[key][0])
+            if tuple(weight.shape) != expected_shape:
+                raise ValueError(
+                    f"streamed {role} shape {tuple(weight.shape)} does not match "
+                    f"the shard {expected_shape} — reshard the checkpoint"
+                )
+
+        large_cls = _streamed_large_layer_class()
+        if input_module is output_module:
+            if embed_key != output_key:
+                raise ValueError("one module cannot represent two untied large-layer weights")
+            shared = large_cls(input_module, embed_key, large_pool)
+            if not _replace_module_references(model, input_module, shared):
+                raise RuntimeError("could not install the streamed tied embedding module")
+        else:
+            streamed_input = large_cls(input_module, embed_key, large_pool)
+            streamed_output = large_cls(output_module, output_key, large_pool)
+            if not _replace_module_references(model, input_module, streamed_input):
+                raise RuntimeError("could not install the streamed input embedding")
+            if not _replace_module_references(model, output_module, streamed_output):
+                raise RuntimeError("could not install the streamed output head")
+
+    def _prime(*_args: Any, **_kwargs: Any) -> None:
+        if large_pool is not None and embed_key is not None:
+            large_pool.load_async(embed_key, source, stream)
+        prefetcher.prime()
+
+    handle = owner.register_forward_pre_hook(_prime)
 
     # transformers' Trainer.__init__ calls _move_model_to_device -> model.to(),
     # and .to() on a module holding meta parameters raises NotImplementedError.
@@ -1783,6 +2149,7 @@ def install_streaming(
         n_layers=n_layers,
         pinned=pinned,
         device=str(device),
+        large_pool=large_pool,
         hook=handle,
         total_params=int(getattr(index, "total_params", 0) or 0),
         tier=tier,
@@ -1797,6 +2164,7 @@ def _build_source(
     console,
     tier="ram",
     require_pin=False,
+    shard_paths=None,
 ):
     """Build the weight source for the chosen tier.
 
@@ -1817,6 +2185,7 @@ def _build_source(
     tier exists for, so ``require_pin`` proceeds — but it is announced, never
     dropped in silence (#366 review).
     """
+    source_kwargs = {} if shard_paths is None else {"shard_paths": shard_paths}
     if tier == "disk":
         if require_pin:
             message = (
@@ -1829,11 +2198,11 @@ def _build_source(
                 console.print(f"[yellow]{message}[/]")
             else:
                 logger.warning(message)
-        return DiskSource(shard_dir, n_layers, spec), False
+        return DiskSource(shard_dir, n_layers, spec, **source_kwargs), False
     if not pin:
-        return RamSource(shard_dir, n_layers, spec, pin=False), False
+        return RamSource(shard_dir, n_layers, spec, pin=False, **source_kwargs), False
     try:
-        return RamSource(shard_dir, n_layers, spec, pin=True), True
+        return RamSource(shard_dir, n_layers, spec, pin=True, **source_kwargs), True
     except (RuntimeError, MemoryError) as exc:
         store_gb = _spec_bytes(spec, n_layers=n_layers) / 1e9
         if require_pin:
@@ -1857,7 +2226,7 @@ def _build_source(
             console.print(f"[yellow]{message}[/]")
         else:
             logger.warning(message)
-        return RamSource(shard_dir, n_layers, spec, pin=False), False
+        return RamSource(shard_dir, n_layers, spec, pin=False, **source_kwargs), False
 
 
 def _spec_bytes(

@@ -1,8 +1,10 @@
 """training.stream_layers — checkpoint sharder (v0.72.0 BETA).
 
-Rewrites an HF checkpoint into one ``layer_NNN.safetensors`` per decoder layer
-plus a single ``extras.safetensors`` (embeddings / final norm / untied head),
-so the runtime can stream exactly one layer at a time.
+Rewrites an HF checkpoint into one ``layer_NNN.safetensors`` per decoder layer,
+one shard for the input embeddings, one for an untied output head, and a small
+``extras.safetensors`` (final norm / buffers / shared quantisation tables).  The
+runtime can therefore stream the two vocabulary-sized matrices through one
+large-layer slot instead of keeping both resident.
 
 Built on the ``utils/spectrum_scan.iter_weight_matrices`` pattern: ``safe_open``
 per source shard, one tensor materialised at a time, symlinked shards skipped,
@@ -73,6 +75,9 @@ _MAX_TOTAL_TENSORS = 200_000
 
 _INDEX_NAME = "index.json"
 _EXTRAS_NAME = "extras.safetensors"
+_SHARD_FORMAT_VERSION = 2
+_LARGE_EMBED_ROLE = "embed_tokens"
+_LARGE_HEAD_ROLE = "lm_head"
 
 
 def _canonical_stream_key(key: str) -> str:
@@ -177,6 +182,13 @@ class ShardIndex:
     total_params: int
     arch: str
     soup_version: str
+    #: Full checkpoint keys stored outside ``extras.safetensors`` and streamed
+    #: through the single large-layer buffer.  A tied checkpoint contains only
+    #: the embedding key; its output head reuses that same source tensor.
+    large_keys: Tuple[str, ...] = ()
+    #: v2 splits vocabulary-sized weights out of the resident extras shard.
+    #: Old caches must be rebuilt or they silently keep #324's 2.10 GB resident.
+    format_version: int = _SHARD_FORMAT_VERSION
     source_fingerprint: str = ""
     #: ``(basename, size, mtime_ns)`` for each source shard. The digest above
     #: remains the cache key; these components explain a mismatch to the user.
@@ -202,6 +214,24 @@ def extras_shard_path(out_dir: str) -> str:
     return os.path.join(out_dir, _EXTRAS_NAME)
 
 
+def large_weight_role(key: str) -> Optional[str]:
+    """Return the supported large-layer role for a canonical checkpoint key."""
+    canonical = _canonical_stream_key(key)
+    if canonical == "model.embed_tokens.weight":
+        return _LARGE_EMBED_ROLE
+    if canonical == "lm_head.weight":
+        return _LARGE_HEAD_ROLE
+    return None
+
+
+def large_shard_path(out_dir: str, key: str) -> str:
+    """Path for one vocabulary-sized streamed weight."""
+    role = large_weight_role(key)
+    if role is None:
+        raise ValueError(f"{key!r} is not a supported streamed large-layer key")
+    return os.path.join(out_dir, f"large_{role}.safetensors")
+
+
 def read_shard_index(out_dir: str) -> ShardIndex:
     """Read ``index.json``. Raises on a missing or malformed index."""
     path = os.path.join(out_dir, _INDEX_NAME)
@@ -218,6 +248,8 @@ def read_shard_index(out_dir: str) -> ShardIndex:
         total_params=int(payload["total_params"]),
         arch=str(payload.get("arch", "")),
         soup_version=str(payload.get("soup_version", "")),
+        large_keys=tuple(payload.get("large_keys") or ()),
+        format_version=int(payload.get("format_version", 1)),
         source_fingerprint=str(payload.get("source_fingerprint", "")),
         source_files=tuple(
             (str(item[0]), int(item[1]), int(item[2]))
@@ -406,6 +438,7 @@ def _atomic_write_index(index: ShardIndex, out_dir: str) -> None:
     payload = asdict(index)
     payload["layer_keys"] = list(index.layer_keys)
     payload["extra_keys"] = list(index.extra_keys)
+    payload["large_keys"] = list(index.large_keys)
     payload["quant_specs"] = {
         key: spec.to_json() for key, spec in index.quant_specs.items()
     }
@@ -495,8 +528,17 @@ def inspect_shard_cache(
         )
     if index.source_fingerprint != fingerprint:
         return None, _describe_source_change(index.source_files, source_files)
+    if index.format_version != _SHARD_FORMAT_VERSION:
+        return None, (
+            f"shard format changed "
+            f"({index.format_version!r} -> {_SHARD_FORMAT_VERSION!r})"
+        )
     if not os.path.exists(extras_shard_path(out_dir)):
         return None, f"cached shard {_EXTRAS_NAME!r} is missing"
+    for key in index.large_keys:
+        path = large_shard_path(out_dir, key)
+        if not os.path.exists(path):
+            return None, f"cached shard {os.path.basename(path)!r} is missing"
     for idx in range(index.n_layers):
         if not os.path.exists(layer_shard_path(out_dir, idx)):
             name = os.path.basename(layer_shard_path(out_dir, idx))
@@ -622,8 +664,10 @@ def shard_checkpoint(
     ``quant='nf4'`` quantises every per-layer key named in ``quant_suffixes``
     (short names, i.e. without the ``model.layers.N.`` prefix) and stores the
     packed nibbles plus the statistics needed to rebuild its ``QuantState``.
-    Everything else — layernorms, embeddings, an untied head — is stored at
-    ``dtype``, exactly as ``replace_with_bnb_linear`` leaves it.
+    Everything else is stored at ``dtype``, exactly as
+    ``replace_with_bnb_linear`` leaves it.  ``embed_tokens`` and an explicit
+    (untied) ``lm_head`` are each written to their own shard and remain
+    unquantised; they are streamed by the runtime through one large slot.
     """
     if dtype not in _SUPPORTED_DTYPES:
         raise ValueError(
@@ -756,13 +800,28 @@ def shard_checkpoint(
             del blob
 
         extras = {}
+        large_keys = []
+        large_roles: Dict[str, str] = {}
         for key, location in where.items():
             if _LAYER_RE.match(key):
                 continue
             path, source_key = location
             tensor = _read_tensor(handles[path], source_key, dtype)
-            extras[key] = tensor
             total_params += tensor.numel()
+            role = large_weight_role(key)
+            if role is None:
+                extras[key] = tensor
+                continue
+            prior = large_roles.get(role)
+            if prior is not None:
+                raise ValueError(
+                    f"checkpoint has multiple {role} weights ({prior!r}, {key!r}); "
+                    f"the large-layer scheduler needs one unambiguous boundary"
+                )
+            large_roles[role] = key
+            _atomic_save({key: tensor}, large_shard_path(resolved_out, key))
+            large_keys.append(key)
+            del tensor
         extras.update(tables.as_extras())
         extra_keys = tuple(sorted(extras))
         _atomic_save(extras, extras_shard_path(resolved_out))
@@ -778,6 +837,8 @@ def shard_checkpoint(
         total_params=total_params,
         arch=arch,
         soup_version=__version__,
+        large_keys=tuple(sorted(large_keys)),
+        format_version=_SHARD_FORMAT_VERSION,
         source_fingerprint=fingerprint,
         source_files=source_files,
         quant=quant,
