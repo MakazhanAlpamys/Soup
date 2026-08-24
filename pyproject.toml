@@ -37,14 +37,9 @@ dependencies = [
     "pydantic>=2.0.0",
     "pyyaml>=6.0",
     "huggingface-hub>=0.16.0",
-    # Capped below 6 (#522). plotext 6.0 removed the entire imperative plotting
-    # API (`clear_figure`, `hist`, `plot`, `theme` — all verified absent in a
-    # clean venv), which is what `soup data stats` and `soup runs replay` use.
-    # CI resolved 6.0 on 2026-08-23 and failed the same 3 tests in all 9 matrix
-    # cells while local boxes stayed green only because they had no plotext at
-    # all (ImportError -> the histogram silently skips). #507 carries a compat
-    # layer supporting both majors; lifting this cap belongs to that merge.
-    "plotext>=5.2.0,<6.0.0",
+    # Plotext 6 replaced the module-level plotting API with Figure methods.
+    # Soup supports both the 5.x and 6.x surfaces through plotext_compat (#522).
+    "plotext>=5.2.0",
     # `env check` reads declared bounds via packaging (Requirement/marker/version).
     # It ships with pip and is pulled in transitively, but `env check` degrades to
     # a silent "clean" without it — the wrong direction for a checker — so it is
