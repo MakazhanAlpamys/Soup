@@ -935,15 +935,9 @@ class TestToolEndpointsLive:
         resp = client.post("/v1/tools/python", json={"code": ""})
         assert resp.status_code == 400
 
-    def test_bash_tool_returns_501_review_fix_c1(self):
-        """v0.53.7 C1 review fix: bash reverted to 501.
-
-        ``/bin/sh -c`` spawns a child outside the RLVR sandbox's OS-level
-        isolation (``unshare(CLONE_NEWNET)`` / macOS ``sandbox-exec`` /
-        socket patch); a caller could reach the cloud-metadata service
-        from the child shell. Reverted until container/namespace work
-        lands in v0.53.8.
-        """
+    def test_bash_tool_executes_in_sandbox_or_501_on_windows(self):
+        """v0.53.8: bash executes in sandbox on Linux/macOS, 501 on Windows."""
+        import sys
         from fastapi.testclient import TestClient
         app = _create_test_app()
         client = TestClient(app)
@@ -951,16 +945,44 @@ class TestToolEndpointsLive:
             "/v1/tools/bash",
             json={"command": "echo hello"},
         )
-        assert resp.status_code == 501
-        assert "v0.53.9" in resp.text
+        if sys.platform == "win32":
+            assert resp.status_code == 501
+            assert "not supported on Windows" in resp.text
+        else:
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["stdout"] == "hello"
+            assert data["exit_code"] == 0
+            assert data["timed_out"] is False
 
-    def test_bash_tool_returns_501_with_empty_body(self):
-        """The 501 stub does not parse the body — it always returns 501."""
+    def test_bash_tool_returns_400_with_empty_body(self):
+        """Empty command is rejected with 400."""
         from fastapi.testclient import TestClient
         app = _create_test_app()
         client = TestClient(app)
         resp = client.post("/v1/tools/bash", json={})
-        assert resp.status_code == 501
+        assert resp.status_code == 400
+
+    def test_bash_tool_network_isolation(self):
+        """Verify bash network access is blocked by unshare/sandbox-exec."""
+        import sys
+        if sys.platform == "win32":
+            return
+        from fastapi.testclient import TestClient
+        app = _create_test_app()
+        client = TestClient(app)
+        # Attempt to reach the metadata IP
+        resp = client.post(
+            "/v1/tools/bash",
+            json={"command": "curl --connect-timeout 1 http://169.254.169.254/"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        # curl should fail to connect and exit with non-zero code.
+        # It shouldn't hang or succeed.
+        assert data["exit_code"] == 1
+        assert data["timed_out"] is False
+        assert data["stdout"] == ""
 
     def test_web_search_default_deny_all(self):
         from fastapi.testclient import TestClient
@@ -1587,29 +1609,7 @@ class TestReviewFixesSSEHeaders:
             assert not line.startswith("data: {}")
 
 
-class TestReviewFixesC1BashStub:
-    """v0.53.7 C1: bash endpoint reverted to 501."""
 
-    def test_bash_returns_501_with_v0538_marker(self):
-        try:
-            import fastapi  # noqa: F401
-        except ImportError:
-            pytest.skip("FastAPI not installed")
-        from fastapi.testclient import TestClient
-
-        from soup_cli.commands.serve import _create_app
-
-        app = _create_app(
-            model_obj=MagicMock(),
-            tokenizer=MagicMock(),
-            device="cpu",
-            model_name="test-model",
-            max_tokens_default=128,
-        )
-        client = TestClient(app)
-        resp = client.post("/v1/tools/bash", json={"command": "ls"})
-        assert resp.status_code == 501
-        assert "v0.53.9" in resp.text
 
 
 class TestReviewFixesAuthToken:

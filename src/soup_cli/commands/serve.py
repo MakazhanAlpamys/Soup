@@ -2042,20 +2042,36 @@ def _create_app(
         }
 
     @app.post("/v1/tools/bash")
-    def tool_bash(payload: dict) -> dict:  # noqa: ARG001 — payload unused on stub
-        # v0.53.7 review-fix C1: bash spawns ``/bin/sh -c`` which escapes
-        # the RLVR sandbox's OS-level isolation (``unshare(CLONE_NEWNET)``
-        # / macOS ``sandbox-exec``); a caller can reach
-        # ``http://169.254.169.254/...`` from the child shell. Reverted to
-        # 501 until container/namespace work lands in v0.53.9.
-        raise HTTPException(
-            status_code=501,
-            detail=(
-                "Server-side tool 'bash' live execution deferred to "
-                "v0.53.9 — sandbox isolation requires container/namespace "
-                "work."
-            ),
-        )
+    def tool_bash(
+        payload: dict,
+        authorization: Optional[str] = Header(default=None),
+    ) -> dict:
+        _check_tool_auth(authorization)
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=400, detail="Invalid request")
+        command = payload.get("command")
+        if not isinstance(command, str) or not command:
+            raise HTTPException(status_code=400, detail="Invalid request")
+        if len(command) > tool_max_code_len:
+            raise HTTPException(status_code=400, detail="Invalid request")
+        try:
+            from soup_cli.trainer.rewards import _run_bash_sandbox
+
+            stdout = _run_bash_sandbox(command)
+        except NotImplementedError:
+            raise HTTPException(
+                status_code=501,
+                detail="bash sandbox not supported on Windows",
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("/v1/tools/bash sandbox error: %s", exc)
+            raise HTTPException(status_code=500, detail="Internal server error")
+        return {
+            "stdout": stdout if stdout is not None else "",
+            "stderr": "",
+            "exit_code": 0 if stdout is not None else 1,
+            "timed_out": stdout is None,
+        }
 
     @app.post("/v1/tools/web_search")
     def tool_web_search(

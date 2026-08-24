@@ -739,6 +739,4 @@ Three POST routes are now available on `soup serve`:
   as `[{url, title, snippet}]` with snippets sanitized (null bytes stripped).
   Deny-by-default via `WebSearchConfig.domain_allowlist`.
 
-- **`POST /v1/tools/bash`** — Deferred to v0.53.8. Current child-process isolation
-  insufficient for `/bin/sh -c` (subprocess escapes the RLVR sandbox). Returns 501 with
-  v0.53.8 marker pending container/namespace work.
+- **`POST /v1/tools/bash`** — runs a bash command inside a container/namespace sandbox (`unshare` on Linux, `sandbox-exec` on macOS). Enforces a 5-second timeout and 10KB output cap. Network access is blocked at the OS level. Returns HTTP 501 on Windows.

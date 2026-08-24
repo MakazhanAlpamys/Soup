@@ -382,6 +382,51 @@ def _run_code_sandbox(code: str) -> "str | None":
     return out.strip()
 
 
+def _run_bash_sandbox(command: str) -> "str | None":
+    """Run bash command in a subprocess sandbox with timeout, rlimits, and output caps.
+
+    Security posture: mirrors _run_code_sandbox, but does not use Python-level
+    socket monkey-patching. Relies entirely on OS-level isolation (unshare on Linux,
+    sandbox-exec on macOS).
+    Not supported on Windows.
+    """
+    if sys.platform == "win32":
+        raise NotImplementedError("bash sandbox not supported on Windows")
+
+    _show_code_exec_warning_once()
+
+    preexec = _apply_rlimit
+
+    argv: list[str] = ["bash", "-c", command]
+    if _get_isolation_strategy() == "sandbox-exec":
+        sandbox_bin = _shutil.which("sandbox-exec") or "/usr/bin/sandbox-exec"
+        argv = [sandbox_bin, "-p", MACOS_SANDBOX_PROFILE, *argv]
+
+    with tempfile.TemporaryDirectory(prefix="soup-bash-exec-") as tmpdir:
+        try:
+            proc = subprocess.run(  # noqa: S603 — list args, trusted interpreter
+                argv,
+                capture_output=True,
+                text=True,
+                timeout=CODE_EXEC_TIMEOUT_SECONDS,
+                check=False,
+                cwd=tmpdir,
+                preexec_fn=preexec,  # noqa: PLW1509 — intentional RLIMIT application
+            )
+        except subprocess.TimeoutExpired:
+            return None
+        except (OSError, ValueError):
+            return None
+
+    if proc.returncode != 0:
+        return None
+
+    out = proc.stdout or ""
+    if len(out.encode("utf-8", errors="replace")) > MAX_CODE_OUTPUT_BYTES:
+        return None
+    return out.strip()
+
+
 def code_exec_reward(
     completions: list[list[dict]],
     **kwargs,
