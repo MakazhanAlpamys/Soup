@@ -33,6 +33,7 @@ from rich.console import Console
 
 from soup_cli.config.schema import SoupConfig
 from soup_cli.utils.gpu import bf16_fp16_flags
+from soup_cli.utils.mixed_precision import align_trainable_dtype_for_fp16
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 
 console = Console()
@@ -266,11 +267,12 @@ class ClassifierTrainerWrapper:
             from soup_cli.utils.peft_wiring import (
                 apply_post_lora_patches,
                 apply_pre_lora_patches,
+                resolve_lora_target_modules,
             )
 
-            target_modules = tcfg.lora.target_modules
-            if target_modules == "auto":
-                target_modules = None
+            target_modules = resolve_lora_target_modules(
+                self.model, tcfg.lora.target_modules
+            )
             lora_config = LoraConfig(
                 r=tcfg.lora.r,
                 lora_alpha=tcfg.lora.alpha,
@@ -364,9 +366,20 @@ class ClassifierTrainerWrapper:
             args=args,
             train_dataset=train_ds,
             eval_dataset=eval_ds,
-            tokenizer=self.tokenizer,
+            processing_class=self.tokenizer,
             data_collator=DataCollatorWithPadding(tokenizer=self.tokenizer),
         )
+
+        # #359 - the same exposure #336 fixed in sft.py: with LoRA the
+        # no-decay optimizer group is empty, DeepSpeed drops it, and the LR
+        # scheduler keeps two base_lrs until torch's strict zip raises at the
+        # first step. The guard prunes inside create_optimizer, i.e. before
+        # the scheduler is built. No-op for full fine-tuning, and only under
+        # DeepSpeed so the ordinary path keeps its own optimizer.
+        if self.deepspeed_config:
+            from soup_cli.utils.deepspeed import attach_empty_param_group_guard
+
+            attach_empty_param_group_guard(self.trainer)
         self._output_dir = str(output_dir)
 
     def train(
@@ -394,6 +407,11 @@ class ClassifierTrainerWrapper:
                     eval_gate_config=self.config.training.eval_gate,
                 )
             )
+        align_trainable_dtype_for_fp16(
+            self.trainer.model,
+            fp16=getattr(self.trainer.args, "fp16", False),
+            bf16=getattr(self.trainer.args, "bf16", False),
+        )
         self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         duration = time.time() - start
 

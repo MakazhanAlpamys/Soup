@@ -1340,9 +1340,8 @@ def build_meta_skeleton(
     if quant == QUANT_NF4:
         quant_config = build_nf4_config(dtype, double_quant=double_quant)
     with init_empty_weights():
-        # torch_dtype= is the spelling that works across Soup's declared
-        # transformers range (>=4.36,<5). dtype= is the >=4.56 rename only
-        # (#478 / #471); using it here would TypeError on older installs.
+        # Keep the model-construction spelling aligned with the load-site
+        # compatibility guard in tests/test_transformers_floor_compat.py.
         model = AutoModelForCausalLM.from_config(
             config, torch_dtype=torch_dtype, trust_remote_code=trust_remote_code
         )
@@ -1507,6 +1506,53 @@ def assert_trainable_adapters_materialized(model: Any) -> None:
         "trainable LoRA parameters remain on the meta device after adapter "
         f"materialization: {preview}. Refusing to train adapters without storage."
     )
+
+
+def materialize_meta_adapter_copy(
+    model: Any, *, source_adapter: str = "default", target_adapter: str = "ref"
+) -> int:
+    """Materialize a frozen adapter copy that PEFT created on ``meta``.
+
+    TRL 0.29 creates a ``ref`` adapter when DPO receives an existing PEFT
+    model. On a layer-streamed model the decoder skeleton lives on ``meta``, so
+    PEFT also creates the new adapter there and TRL's subsequent ``copy_`` is a
+    no-op. Copy each matching source parameter into real storage explicitly;
+    the reference remains frozen and still costs only adapter-sized memory.
+    """
+    source_marker = f".{source_adapter}."
+    target_marker = f".{target_adapter}."
+    parameters = dict(model.named_parameters())
+    copied = 0
+
+    for target_name, target_param in list(parameters.items()):
+        if target_marker not in target_name or not target_param.is_meta:
+            continue
+        source_name = target_name.replace(target_marker, source_marker, 1)
+        source_param = parameters.get(source_name)
+        if source_param is None:
+            raise RuntimeError(
+                f"cannot materialize adapter {target_adapter!r}: "
+                f"no source parameter {source_name!r}"
+            )
+        if source_param.is_meta:
+            raise RuntimeError(
+                f"cannot materialize adapter {target_adapter!r}: "
+                f"source parameter {source_name!r} is still on meta"
+            )
+        _set_module_param(model, target_name, source_param.detach().clone())
+        copied += 1
+
+    stranded = [
+        name
+        for name, param in model.named_parameters()
+        if target_marker in name and param.is_meta
+    ]
+    if stranded:
+        raise RuntimeError(
+            f"adapter {target_adapter!r} remains on meta after materialization: "
+            + ", ".join(stranded[:4])
+        )
+    return copied
 
 
 # ==========================================================================

@@ -1,0 +1,187 @@
+# Dependency drift (#323).
+#
+# The main CI matrix resolves the latest stack on every run, which is what
+# finally caught the degenerate NF4 fixture — but only once a PR happened to be
+# open. Two classes of failure are structurally invisible until then:
+#
+#   * a bug that only manifests on a CPU-only runner (a CUDA build never calls
+#     `_convert_weight_packed_for_cpu`, so no GPU dev box can reach it);
+#   * an upstream removal behind a floor-only pin (`trl>=0.7.0` let CI resolve
+#     0.29.1 while the dev box ran 0.19.1, and six trainers could not build
+#     their config at all).
+#
+# Running the same resolve on a schedule turns "we find out when someone opens a
+# PR" into "we find out on Monday", and writes the resolved-vs-declared table
+# into the run summary so the gap is visible without reading logs.
+name: dependency drift
+
+on:
+  schedule:
+    # Mondays, 06:00 UTC. Early enough in the week that a break found here can
+    # be dealt with before it lands on somebody's PR.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  latest-stack:
+    name: latest resolvable stack
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install the latest resolvable stack
+        run: pip install -e ".[dev]"
+
+      - name: Report resolved versions against the declared bounds
+        run: |
+          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import sys
+          from importlib.metadata import PackageNotFoundError, requires, version
+
+          from packaging.requirements import Requirement
+          from packaging.specifiers import SpecifierSet
+          from packaging.version import Version
+
+          # The stack whose drift has actually cost releases (#323).
+          WATCHED = {
+              "torch", "transformers", "peft", "trl", "datasets",
+              "bitsandbytes", "accelerate",
+          }
+
+          rows, floor_only = [], []
+          by_package = {}
+          for raw in requires("soup-cli") or []:
+              req = Requirement(raw)
+              if req.name not in WATCHED:
+                  continue
+              try:
+                  installed = version(req.name)
+              except PackageNotFoundError:
+                  installed = "(absent)"
+              declared = str(req.specifier) or "(unpinned)"
+              capped = any(s.operator in ("<", "<=", "==") for s in req.specifier)
+              if not capped:
+                  floor_only.append(req.name)
+              by_package.setdefault(req.name, set()).add(declared)
+              rows.append((req.name, declared, installed, "yes" if capped else "NO"))
+
+          # Two extras declaring incompatible ranges for one package is a
+          # resolver failure waiting for the first person to combine them, and
+          # nothing else in CI installs every extra together to find out.
+          #
+          # `len(specs) > 1` was NOT that test. Two declarations can differ and
+          # still overlap -- `>=4.36.0,<5.0.0` alongside `>=4.40.0` installs
+          # perfectly well -- so it failed the job on correct declarations, and
+          # a guard that fires on correct code is one people delete. Ask the
+          # real question instead: is there any single version that satisfies
+          # every declaration at once?
+          def _unsatisfiable(specs):
+              sets = [SpecifierSet(spec) for spec in specs if spec != "(unpinned)"]
+              if len(sets) < 2:
+                  return False
+              probes = [
+                  Version(f"{major}.{minor}.0")
+                  for major in range(0, 12)
+                  for minor in range(0, 60)
+              ]
+              # Each declared bound verbatim: an off-by-one lives exactly there.
+              for spec_set in sets:
+                  for clause in spec_set:
+                      try:
+                          probes.append(Version(clause.version))
+                      except Exception:
+                          continue
+              return not any(
+                  all(spec_set.contains(v, prereleases=True) for spec_set in sets)
+                  for v in probes
+              )
+
+          # A conflict upstream blocks is not actionable, and this report's own
+          # test already says a weekly alarm that is always red gets muted
+          # within a month. Acknowledged conflicts are PRINTED with their issue
+          # and do not fail the job. The key is the EXACT declared pair, so
+          # changing either side re-arms the alarm instead of inheriting the
+          # acknowledgement.
+          # Written as authored; compared as PARSED. `str(req.specifier)`
+          # reorders clauses -- `>=4.36.0,<5.0.0` reads back as
+          # `<5.0.0,>=4.36.0` -- so matching written strings would never fire
+          # and the acknowledgement would be inert while the job stayed red.
+          ACKNOWLEDGED = {
+              "transformers": ({">=4.36.0,<5.0.0", ">=5.0.0"}, 503),
+          }
+
+          def _same_declarations(declared, remembered):
+              return {SpecifierSet(x) for x in declared} == {
+                  SpecifierSet(x) for x in remembered
+              }
+
+          conflicting = {
+              name: specs for name, specs in by_package.items() if _unsatisfiable(specs)
+          }
+          acknowledged = {
+              name: (specs, ACKNOWLEDGED[name][1])
+              for name, specs in conflicting.items()
+              if name in ACKNOWLEDGED
+              and _same_declarations(specs, ACKNOWLEDGED[name][0])
+          }
+          contradictory = {
+              name: specs
+              for name, specs in conflicting.items()
+              if name not in acknowledged
+          }
+
+          print("## Resolved stack vs declared bounds\n")
+          print("| package | declared | resolved here | upper bound |")
+          print("|---|---|---|---|")
+          for row in sorted(set(rows)):
+              print("| " + " | ".join(row) + " |")
+
+          if contradictory:
+              print("\n### Conflicting declarations\n")
+              for name, specs in sorted(contradictory.items()):
+                  print(f"- **{name}**: " + " vs ".join(sorted(specs)))
+              print(
+                  "\nA package declared with incompatible ranges in two "
+                  "extras cannot be installed by anyone who asks for both."
+              )
+
+          if acknowledged:
+              print("\n### Acknowledged conflicts\n")
+              for name, (specs, issue) in sorted(acknowledged.items()):
+                  print(
+                      f"- **{name}**: "
+                      + " vs ".join(sorted(specs))
+                      + f" -- tracked in #{issue}, blocked upstream. Still"
+                      " unsatisfiable; listed rather than failed so that a NEW"
+                      " conflict is not hidden behind a permanently red run."
+                  )
+
+          if floor_only:
+              print(
+                  "\n> Floor-only pins: **"
+                  + ", ".join(sorted(set(floor_only)))
+                  + "**. These resolve to whatever upstream published most "
+                  "recently, so this job is the only thing standing between a "
+                  "removal upstream and a user's first `soup train`."
+              )
+          if contradictory:
+              # A drift alarm that cannot fail is write-only: the summary of a
+              # green job is not somewhere anyone looks. This is the ONE finding
+              # here that is actionable and unambiguous -- a package declared
+              # with incompatible ranges in two extras cannot be installed by
+              # anyone who asks for both -- so it fails the job (review of #486).
+              names = ", ".join(sorted(contradictory))
+              print(f"::error::contradictory dependency declarations: {names}", file=sys.stderr)
+              sys.exit(1)
+          PY
+
+      - name: Run the suite against it
+        # A red run here is the point: it means the newest stack broke something
+        # the pinned dev environment cannot see.
+        run: pytest tests/ -q

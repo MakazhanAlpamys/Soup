@@ -555,13 +555,18 @@ def _plot_loss_curve(metrics: list[dict]) -> None:
         console.print("[dim]No loss data to plot.[/]")
         return
 
-    plt.clear_figure()
-    plt.plot(steps, losses, label="loss")
-    plt.title("Training Loss")
-    plt.xlabel("Step")
-    plt.ylabel("Loss")
-    plt.theme("dark")
-    plt.show()
+    from soup_cli.utils.plotext_compat import render_line
+
+    render_line(
+        plt,
+        steps,
+        losses,
+        label="loss",
+        title="Training Loss",
+        xlabel="Step",
+        ylabel="Loss",
+        theme="dark",
+    )
 
 
 @app.command(name="curriculum-curve")

@@ -189,7 +189,7 @@ class TestVisionSetupWiring:
             lambda *a, **k: fake_proc,
         )
         monkeypatch.setattr(
-            transformers.AutoModelForVision2Seq, "from_pretrained",
+            transformers.AutoModelForImageTextToText, "from_pretrained",
             lambda *a, **k: MagicMock(),
         )
         import peft

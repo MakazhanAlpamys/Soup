@@ -25,13 +25,10 @@ def _plain(text: str) -> str:
 
 
 def _trl_has_judges():
-    """True on trl 0.19.x (pairwise BasePairwiseJudge API), False on trl 1.x."""
-    try:
-        from trl import BasePairwiseJudge  # noqa: F401
+    """True when the installed OnlineDPOTrainer accepts pairwise ``judge=``."""
+    from soup_cli.trainer.online_dpo import _trl_has_judges as has_judges
 
-        return True
-    except ImportError:
-        return False
+    return has_judges()
 
 
 _TRL_HAS_JUDGES = _trl_has_judges()
@@ -187,7 +184,7 @@ class TestCompareePairMethod:
 
 
 # ---------------------------------------------------------------------------
-# Task 2 — make_soup_pairwise_judge (trl 0.19.x pairwise BasePairwiseJudge
+# Task 2 — make_soup_pairwise_judge (trl <1 pairwise BasePairwiseJudge
 # adapter). trl 1.x removed judges -> the 1.x-equivalent coverage is
 # TestJudgeRewardFunc below (the pointwise reward-func adapter). Together they
 # cover whichever adapter the installed trl actually exposes.
@@ -225,11 +222,14 @@ class TestSoupPairwiseJudge:
         assert j.judge(["p"], [["only-one"]]) == [-1]
 
     def test_is_trl_base_pairwise_judge(self):
-        from trl import BasePairwiseJudge
+        from soup_cli.eval.judge import (
+            _base_pairwise_judge_cls,
+            make_soup_pairwise_judge,
+        )
 
-        from soup_cli.eval.judge import make_soup_pairwise_judge
-
-        assert isinstance(make_soup_pairwise_judge(_FakeJudge()), BasePairwiseJudge)
+        assert isinstance(
+            make_soup_pairwise_judge(_FakeJudge()), _base_pairwise_judge_cls()
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -643,10 +643,10 @@ class TestBuildJudgeOrReward:
 
         od._ONLINE_DPO_JUDGE_OVERRIDE = None
         result = _online_dpo_wrapper()._build_judge_or_reward(_Tcfg(judge="ollama://m"))
-        if _TRL_HAS_JUDGES:  # trl 0.19.x -> pairwise judge=
-            from trl import BasePairwiseJudge
+        if _TRL_HAS_JUDGES:  # trl <1 -> pairwise judge=
+            from soup_cli.eval.judge import _base_pairwise_judge_cls
 
-            assert isinstance(result["judge"], BasePairwiseJudge)
+            assert isinstance(result["judge"], _base_pairwise_judge_cls())
             assert "reward_funcs" not in result
         else:  # trl 1.x -> pointwise reward_funcs=
             assert callable(result["reward_funcs"][0])

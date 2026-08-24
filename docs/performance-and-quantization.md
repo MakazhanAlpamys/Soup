@@ -211,6 +211,14 @@ message; vision and audio modality now thread the same unified Quant Menu loader
 multi-modal SFT too (a given vision/audio checkpoint still needs a class + kernel
 that supports the chosen format, e.g. `autoawq` for awq).
 
+**Non-quantized module dtype (#339/#471/#492).** `from_pretrained`'s own `torch_dtype` kwarg
+— set to `"auto"` (or, on a pre-Ampere CUDA card, an explicit `torch.float16` override; see
+the "Load dtype" note in `docs/training.md`'s Full fine-tuning section) — now also applies to a
+`4bit`/`8bit` QLoRA load, governing the modules `quantization_config` doesn't quantize
+(`embed_tokens`, norms, `lm_head`). This matches `bnb_4bit_compute_dtype`, which already
+resolves the same card-aware `get_compute_dtype()`, rather than leaving those modules at
+whatever `from_pretrained`'s bare default happened to pick.
+
 
 ## Activation Offloading (Small-VRAM Large-Batch)
 
@@ -297,6 +305,7 @@ Untied `embed_tokens` + `lm_head` stay resident and unquantised (2.10 GB of the 
 - **Pre-Ampere cards (T4, P100, V100, GTX 16xx, RTX 20xx) now stream in fp16 instead of bf16.** Until this fix the store dtype was hardcoded to bf16 on every CUDA device, so the entire free notebook tier was streaming a dtype its GPU has no units for, and nothing said so — it could not fail on the Ampere card every number above was measured on. fp16 is bit-exact against a resident reference of matching numerics, `0.000000e+00` in both quantisations, exactly as bf16 is.
   **The capability question is asked as `torch.cuda.is_bf16_supported(including_emulation=False)`, and the keyword is load-bearing.** The bare call defaults to including emulation: when its compute-capability fast path fails it falls through to constructing a bf16 tensor, which software emulation satisfies, so **a T4 answers True**. The first version of this fix asked the bare question and was therefore a no-op on exactly the hardware it targeted — found by running the [proof notebook](../notebooks/proof-4gb.ipynb) on a real T4, not by reasoning. `get_compute_dtype` was a second copy of the same question and now delegates to the same helper.
   **Still not measured on a pre-Ampere card**: the fp16 exactness above was measured *using* fp16 on Ampere, so it establishes the plumbing, not the Turing/Pascal kernels — bitsandbytes NF4 on sm_75 in particular.
+- **LoRA adapters are cast to fp32 when training streams in fp16.** peft creates the adapter weights in the base checkpoint's dtype (bf16 for Llama-3.1); on a pre-Ampere card that dtype has no bf16 units and the fp16 GradScaler raises `_amp_foreach_non_finite_check_and_unscale_cuda not implemented for 'BFloat16'` (#425). `align_trainable_dtype_for_fp16` casts the trainable `*lora_*` params to fp32 before the optimizer is created, and every trainer wrapper calls it — enforced by a scanner test rather than a hand-written list.
 - **A streamed 8B run now completes on a Turing card — free-tier Colab, Tesla T4 (sm_75) — and that is all it shows.** `NousResearch/Meta-Llama-3.1-8B-Instruct`, NF4, `stream_buffers: 2`, batch 1, `max_length: 256`, LoRA r=8, fp16: 7 steps, exit 0, adapter written with 128 of 128 tensors non-zero, **measured peak 2.91 GB** against a predicted ~3.02 GB (the pre-flight over-predicts by 3.8%, the safe direction it was fitted for). The T4 has 15.6 GB, so the process was capped to **4.00 GB** with `torch.cuda.set_per_process_memory_fraction`, and the cap was shown to bite — a 4.29 GiB allocation was refused. **No throughput is quoted from this run**: a card under an artificial cap is not a benchmark, and the [notebook](../notebooks/proof-4gb.ipynb) deliberately quotes none either. **What it does not establish**: backward/gradient exactness at 8B on Turing (a non-zero adapter shows gradients flowed, not that they were correct), and the notebook's streamed-vs-resident comparison produced no captured output, so it is recorded as unrun rather than as a pass. Note also that the pre-flight read **free VRAM 15.10 GB** — the device, not the per-process cap — so on capped hardware it is `training.stream_vram_override` and not the fit decision that enforces the real budget. Record: [`benchmarks/run-t4-colab-free-tier.md`](../benchmarks/run-t4-colab-free-tier.md).
 - **The bf16 3B throughput above is a LOWER BOUND.** The reference box could not page-lock the 5.55 GB base (its measured page-locked ceiling is 7.65 GB, and a CUDA context plus the model skeleton did not leave room), so that run fell back to a pageable store. Pageable memory makes the host-to-device copy synchronous, which costs overlap — visible as the GPU-utilisation drop from 96.8% (1.5B, pinned) to 79.3% (3B, pageable). Soup does this fallback automatically **and prints the cost** rather than absorbing it silently. NF4 lifts this at 3B: the store drops under the ceiling and pins.
 - Numbers are Windows/WDDM and therefore systematically pessimistic versus Linux. `expandable_segments:True` is silently ignored on Windows; Soup detects that and does not claim it is active.
@@ -606,6 +615,37 @@ soup train --config soup.yaml --fsdp full_offload
 ```
 
 `zero3_offload` keeps `offload_optimizer: none`: offloading the optimizer makes DeepSpeed JIT-build its `cpu_adam` op, which requires a matching CUDA toolkit (`nvcc`) on the box. Copy the emitted JSON and flip it if you have one — or start from the bundled `soup fetch deepspeed_configs zero3-cpu-offload`, which is the optimizer-offloading variant and therefore needs that toolkit. Measured on one H100 with Llama-3.1-8B (bf16, LoRA r=8, 256 steps): 21.65 tok/s at a 38,135 MiB peak — see [benchmarks/gate-h100-validation.md](../benchmarks/gate-h100-validation.md), STEP 3, which also compares it against layer streaming on the same box, data and model.
+
+### `--deepspeed <file>` — your own JSON
+
+`--deepspeed` also takes a path to a JSON config instead of a preset name. That
+file is yours: it reaches DeepSpeed **byte-identical, by the same path**, unless
+it carries a key that is invalid for the run it is about to start.
+
+Two keys are rewritten, and both are errors rather than preferences (#359):
+
+| key | why it is repaired |
+|---|---|
+| `zero_hpz_partition_size` | DeepSpeed refuses a value the world size is not divisible by, so the ZeRO++ preset's placeholder `8` is invalid on any box that is not a multiple of 8 |
+| `zero_quantized_weights` / `zero_quantized_gradients` | the fp16 CUDA quantiser against the `bf16` the same file enables makes the dequantised all-gather come back `c10::Half` and meet a `c10::BFloat16` activation, raising `expected mat1 and mat2 to have the same dtype` |
+
+The documented way to customise ZeRO++ is to copy the preset JSON — which copies
+both defects — so an unresolved user file would inherit a crash the presets are
+already protected from. When a rewrite happens it is **printed**, the repaired
+config goes to a temp copy, and **your file on disk is never modified**. A
+config that uses none of those keys is not touched at all.
+
+A malformed JSON is passed straight through: DeepSpeed reports a bad config
+better than Soup can, and refusing here would reject files DeepSpeed accepts.
+
+### DeepSpeed + LoRA
+
+Every trainer that can be launched with `--deepspeed` prunes HF's empty no-decay
+optimizer group before the LR scheduler is built (#336, extended to all wrappers
+in #359). Without it, LoRA runs die at the first `lr_scheduler.step()`: every
+trainable LoRA tensor is 2-D, so the no-decay group comes out empty, DeepSpeed
+drops it while the scheduler keeps two `base_lrs`, and torch's strict `zip`
+raises. Full fine-tuning populates both groups, so nothing is pruned there.
 
 ### `--gpus` flag — topology-aware launch
 

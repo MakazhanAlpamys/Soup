@@ -20,6 +20,7 @@ from soup_cli.utils.gpu import (
     resolve_device_map,
     resolve_frozen_base_load_dtype,
 )
+from soup_cli.utils.mixed_precision import align_trainable_dtype_for_fp16
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 
 console = Console()
@@ -295,6 +296,17 @@ class PPOTrainerWrapper:
             self._dataset_in_constructor = True
             self.trainer = ppo_trainer_cls(**trainer_kwargs)
 
+        # #359 - the same exposure #336 fixed in sft.py: with LoRA the
+        # no-decay optimizer group is empty, DeepSpeed drops it, and the LR
+        # scheduler keeps two base_lrs until torch's strict zip raises at the
+        # first step. The guard prunes inside create_optimizer, i.e. before
+        # the scheduler is built. No-op for full fine-tuning, and only under
+        # DeepSpeed so the ordinary path keeps its own optimizer.
+        if self.deepspeed_config:
+            from soup_cli.utils.deepspeed import attach_empty_param_group_guard
+
+            attach_empty_param_group_guard(self.trainer)
+
         # v0.71.26 — reward-hack mitigation / echo-trap / RL-checkpoint callbacks
         # (PPO parity with GRPO; kl_coef mutation for the controller).
         from soup_cli.utils.peft_wiring import attach_rl_callbacks
@@ -453,9 +465,9 @@ class PPOTrainerWrapper:
         if tcfg.quantization in ("4bit", "8bit", "mxfp4"):
             self.model = prepare_model_for_kbit_training(self.model)
 
-        target_modules = tcfg.lora.target_modules
-        if target_modules == "auto":
-            target_modules = None
+        from soup_cli.utils.peft_wiring import resolve_lora_target_modules
+
+        target_modules = resolve_lora_target_modules(self.model, tcfg.lora.target_modules)
 
         lora_config = LoraConfig(
             r=tcfg.lora.r,
@@ -564,6 +576,11 @@ class PPOTrainerWrapper:
             self.config.training, self._output_dir,
         ):
             if resume_from_checkpoint and "resume_from_checkpoint" in train_params:
+                align_trainable_dtype_for_fp16(
+                    self.trainer.model,
+                    fp16=getattr(self.trainer.args, "fp16", False),
+                    bf16=getattr(self.trainer.args, "bf16", False),
+                )
                 self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
             else:
                 if resume_from_checkpoint:
@@ -571,6 +588,11 @@ class PPOTrainerWrapper:
                         "[yellow]Warning: This PPOTrainer does not support "
                         "resume_from_checkpoint -- starting from scratch.[/]"
                     )
+                align_trainable_dtype_for_fp16(
+                    self.trainer.model,
+                    fp16=getattr(self.trainer.args, "fp16", False),
+                    bf16=getattr(self.trainer.args, "bf16", False),
+                )
                 self.trainer.train()
         duration = time.time() - start
 

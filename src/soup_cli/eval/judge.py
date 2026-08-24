@@ -514,13 +514,15 @@ def make_judge_reward_func(evaluator: object, *, name: str = "soup_judge"):
 
 def _base_pairwise_judge_cls() -> type:
     """Lazily import TRL's ``BasePairwiseJudge`` with a friendly error."""
+    from soup_cli.trainer._trl_compat import resolve_trl_symbol
+
     try:
-        from trl import BasePairwiseJudge
+        return resolve_trl_symbol("BasePairwiseJudge", "trl.experimental.judges")
     except ImportError as exc:  # pragma: no cover — trl ships in [train]/[dev]
         raise ImportError(
-            "SoupPairwiseJudge needs trl>=0.19 (pip install \"soup-cli[train]\")"
+            "SoupPairwiseJudge needs trl with BasePairwiseJudge support "
+            '(pip install "soup-cli[train]")'
         ) from exc
-    return BasePairwiseJudge
 
 
 def make_soup_pairwise_judge(evaluator: "PairwiseJudge") -> "BasePairwiseJudge":

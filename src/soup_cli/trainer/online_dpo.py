@@ -8,9 +8,9 @@ DPO generates two completions per prompt ON-POLICY at each step and asks a
 Data is prompt-only (like GRPO): Soup's ``{"messages": [...]}`` rows are
 normalized to the OnlineDPO ``prompt`` column (chat, minus the assistant turn).
 
-**Cross-version adapter.** TRL changed the OnlineDPO API between 0.19.x and 1.x:
+**Cross-version adapter.** TRL changed the OnlineDPO API before 1.0 and in 1.x:
 
-- **trl 0.19.x** — ``from trl import OnlineDPOTrainer``; the judge is a
+- **trl <1** — the trainer and judge may live under ``trl.experimental``; the judge is a
   ``BasePairwiseJudge`` (swap-debiased *pairwise* comparison, via
   :func:`soup_cli.eval.judge.make_soup_pairwise_judge`); a reward model is
   passed as ``reward_model=`` / ``reward_processing_class=``.
@@ -40,6 +40,7 @@ from soup_cli.utils.gpu import (
     resolve_device_map,
     resolve_frozen_base_load_dtype,
 )
+from soup_cli.utils.mixed_precision import align_trainable_dtype_for_fp16
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 
 console = Console()
@@ -47,29 +48,6 @@ console = Console()
 # Test seam: when set, replaces the URL-built judge (used by the offline
 # synthetic-judge smoke). A Soup evaluator (``.compare_pair`` + ``.evaluate``).
 _ONLINE_DPO_JUDGE_OVERRIDE = None
-
-
-def _import_online_dpo():
-    """Import ``OnlineDPOConfig``/``OnlineDPOTrainer`` across trl versions.
-
-    trl 0.19.x exposes them at the top level; trl 1.x moved them to
-    ``trl.experimental.online_dpo``.
-    """
-    try:
-        from trl import OnlineDPOConfig, OnlineDPOTrainer
-
-        return OnlineDPOConfig, OnlineDPOTrainer
-    except ImportError:
-        pass
-    try:
-        from trl.experimental.online_dpo import OnlineDPOConfig, OnlineDPOTrainer
-
-        return OnlineDPOConfig, OnlineDPOTrainer
-    except ImportError as exc:  # pragma: no cover — trl ships in [train]
-        raise ImportError(
-            "task='online_dpo' requires trl with OnlineDPO support "
-            "(pip install \"soup-cli[train]\")"
-        ) from exc
 
 
 def _trl_accepts(param: str) -> bool:
@@ -104,15 +82,16 @@ def _trl_accepts(param: str) -> bool:
     """
     import inspect
 
-    try:
-        from trl import OnlineDPOTrainer
-    except ImportError:
-        try:
-            from trl.experimental.online_dpo import OnlineDPOTrainer
-        except ImportError:
-            return False
+    from soup_cli.trainer._trl_compat import resolve_trl_symbol
 
-    for base in OnlineDPOTrainer.__mro__:
+    try:
+        online_dpo_trainer_cls = resolve_trl_symbol(
+            "OnlineDPOTrainer", "trl.experimental.online_dpo"
+        )
+    except ImportError:
+        return False
+
+    for base in online_dpo_trainer_cls.__mro__:
         init = base.__dict__.get("__init__")
         if init is None:
             continue
@@ -231,7 +210,14 @@ class OnlineDPOTrainerWrapper:
         """Load model, tokenizer, build the OnlineDPO trainer (judge in loop)."""
         from datasets import Dataset
 
-        OnlineDPOConfig, OnlineDPOTrainer = _import_online_dpo()  # noqa: N806 (classes)
+        from soup_cli.trainer._trl_compat import resolve_trl_symbol
+
+        online_dpo_config_cls = resolve_trl_symbol(
+            "OnlineDPOConfig", "trl.experimental.online_dpo"
+        )
+        online_dpo_trainer_cls = resolve_trl_symbol(
+            "OnlineDPOTrainer", "trl.experimental.online_dpo"
+        )
 
         from soup_cli.trainer.sft import _enable_hf_transfer_progress
 
@@ -287,7 +273,7 @@ class OnlineDPOTrainerWrapper:
         warmup_steps = int(total_steps * tcfg.warmup_ratio)
 
         _bf16, _fp16 = bf16_fp16_flags(self.device)
-        odpo_config = OnlineDPOConfig(
+        odpo_config = online_dpo_config_cls(
             output_dir=str(output_dir),
             num_train_epochs=tcfg.epochs,
             per_device_train_batch_size=batch_size,
@@ -314,7 +300,7 @@ class OnlineDPOTrainerWrapper:
 
         judge_or_reward = self._build_judge_or_reward(tcfg)
 
-        self.trainer = OnlineDPOTrainer(
+        self.trainer = online_dpo_trainer_cls(
             model=self.model,
             args=odpo_config,
             train_dataset=train_ds,
@@ -322,6 +308,17 @@ class OnlineDPOTrainerWrapper:
             peft_config=self.peft_config,
             **judge_or_reward,
         )
+
+        # #359 - the same exposure #336 fixed in sft.py: with LoRA the
+        # no-decay optimizer group is empty, DeepSpeed drops it, and the LR
+        # scheduler keeps two base_lrs until torch's strict zip raises at the
+        # first step. The guard prunes inside create_optimizer, i.e. before
+        # the scheduler is built. No-op for full fine-tuning, and only under
+        # DeepSpeed so the ordinary path keeps its own optimizer.
+        if self.deepspeed_config:
+            from soup_cli.utils.deepspeed import attach_empty_param_group_guard
+
+            attach_empty_param_group_guard(self.trainer)
 
         # Curriculum + plugin callbacks (relora is a no-op unless relora_steps).
         from soup_cli.utils.peft_wiring import (
@@ -385,9 +382,9 @@ class OnlineDPOTrainerWrapper:
 
             self.model = prepare_model_for_kbit_training(self.model)
 
-        target_modules = tcfg.lora.target_modules
-        if target_modules == "auto":
-            target_modules = None
+        from soup_cli.utils.peft_wiring import resolve_lora_target_modules
+
+        target_modules = resolve_lora_target_modules(self.model, tcfg.lora.target_modules)
 
         self.peft_config = LoraConfig(
             r=tcfg.lora.r,
@@ -408,7 +405,7 @@ class OnlineDPOTrainerWrapper:
     @staticmethod
     def _judge_kwargs(evaluator, has_judges: bool) -> dict:
         """Adapt a Soup evaluator to the installed trl's judge/reward API."""
-        if has_judges:  # trl 0.19.x — swap-debiased pairwise judge
+        if has_judges:  # trl <1 — swap-debiased pairwise judge
             from soup_cli.eval.judge import make_soup_pairwise_judge
 
             return {"judge": make_soup_pairwise_judge(evaluator)}
@@ -423,7 +420,7 @@ class OnlineDPOTrainerWrapper:
         Precedence: the test seam, then the judge URL, then a reward model. The
         schema cross-validator guarantees exactly one of judge/reward is set for
         a real config. The returned kwargs adapt to the installed trl version
-        (``judge=`` on 0.19.x, ``reward_funcs=`` on 1.x).
+        (``judge=`` before trl 1, ``reward_funcs=`` on trl 1.x).
         """
         has_judges = _trl_has_judges()
         if _ONLINE_DPO_JUDGE_OVERRIDE is not None:
@@ -491,6 +488,11 @@ class OnlineDPOTrainerWrapper:
         from soup_cli.utils.v028_features import activation_offloading_context
 
         with activation_offloading_context(self.config.training, self._output_dir):
+            align_trainable_dtype_for_fp16(
+                self.trainer.model,
+                fp16=getattr(self.trainer.args, "fp16", False),
+                bf16=getattr(self.trainer.args, "bf16", False),
+            )
             self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         duration = time.time() - start
 

@@ -1,18 +1,10 @@
-"""#478 — Transformers load kwargs must stay compatible with the declared floor.
+"""Transformers floor policy and model-load keyword compatibility.
 
-``pyproject.toml`` declares ``transformers>=4.36.0,<5.0.0``, but CI's normal
-``pip install -e ".[dev]"`` resolves to the newest 4.x. A kwarg that only exists
-on >=4.56 (``dtype=`` on ``from_pretrained`` / ``from_config``, the rename of
-``torch_dtype=``) therefore passes the 12-cell matrix and TypeErrors on older
-installs inside the declared range — exactly what #471 nearly shipped.
-
-``transformers==4.36.0`` cannot resolve against Soup's declared ``trl`` range
-(even ``trl==0.14.0`` requires ``transformers>=4.46.0``; see the floor CI job
-comments and ``.github/constraints/transformers-floor.txt``). Raising Soup's
-declared floor is a dependency-policy call, not something this suite does.
-Until that decision lands, the accepted #478 fallback is a static guard: no
-production ``AutoModel*.from_pretrained`` / ``from_config`` call site may pass
-``dtype=``.
+#502 moves the declared floor to Transformers 5.12.1 and #503 moves TRL to 0.29.
+The dedicated CI cell installs those exact versions so the normal newest-version
+matrix cannot hide a floor regression. The historical #478 static guard remains:
+Soup continues using the backward-compatible ``torch_dtype=`` spelling at model
+load sites throughout the supported Transformers 5.x range.
 
 Unsloth's ``FastLanguageModel.from_pretrained(..., dtype=)`` and Soup wrapper
 kwargs that are not Transformers load APIs are out of scope.
@@ -38,7 +30,11 @@ _LOAD_METHODS = frozenset({"from_pretrained", "from_config"})
 _MODEL_LOAD_CLASS_SUFFIXES = (
     "ForCausalLM",
     "ForConditionalGeneration",
+    "ForImageTextToText",
+    "ForMaskedLM",
     "ForSequenceClassification",
+    "ForSpeechSeq2Seq",
+    "ForTokenClassification",
 )
 _VERSION = re.compile(r"\d+(?:\.\d+){1,2}")
 
@@ -110,8 +106,8 @@ def _attr_parts(node: ast.AST) -> list[str]:
     return list(reversed(parts))
 
 
-def _is_transformers_model_load(call: ast.Call) -> bool:
-    """True for supported Transformers model factory and concrete-class loads."""
+def _is_dtype_guarded_model_load(call: ast.Call) -> bool:
+    """True for model loads governed by the Transformers dtype contract."""
     parts = _attr_parts(call.func)
     if len(parts) < 2:
         return False
@@ -126,11 +122,11 @@ def _is_transformers_model_load(call: ast.Call) -> bool:
 
 
 def find_post_floor_dtype_kwargs(source: str, *, filename: str = "<string>") -> list[str]:
-    """Return ``file:line`` hits for ``dtype=`` on AutoModel load/config calls."""
+    """Return ``file:line`` hits for ``dtype=`` on guarded model load/config calls."""
     tree = ast.parse(source, filename=filename)
     hits: list[str] = []
     for node in ast.walk(tree):
-        if not isinstance(node, ast.Call) or not _is_transformers_model_load(node):
+        if not isinstance(node, ast.Call) or not _is_dtype_guarded_model_load(node):
             continue
         for kw in node.keywords:
             if kw.arg == "dtype":
@@ -198,8 +194,8 @@ class TestTransformersFloorDtypeGuard:
         hits = iter_production_hits()
         assert hits == [], (
             "Transformers model from_pretrained / from_config calls must use torch_dtype= "
-            "(works across transformers>=4.36,<5). dtype= is the >=4.56-only "
-            "rename and TypeErrors on older installs inside our declared range "
+            "(kept across Soup's Transformers 5.x range). Use of dtype= at these "
+            "sites must be an explicit whole-policy migration "
             f"(#478). Offending sites: {hits}"
         )
 
@@ -219,6 +215,38 @@ class TestTransformersFloorDtypeGuard:
         )
         hits = find_post_floor_dtype_kwargs(bad, filename="whisper.py")
         assert hits == ["whisper.py:2"]
+
+    def test_scanner_flags_concrete_speech_seq2seq_class(self):
+        bad = (
+            "from transformers import WhisperForSpeechSeq2Seq\n"
+            "WhisperForSpeechSeq2Seq.from_pretrained('x', dtype='auto')\n"
+        )
+        hits = find_post_floor_dtype_kwargs(bad, filename="whisper.py")
+        assert hits == ["whisper.py:2"]
+
+    def test_scanner_flags_concrete_image_text_to_text_class(self):
+        bad = (
+            "from transformers import Qwen2VLForImageTextToText\n"
+            "Qwen2VLForImageTextToText.from_config(cfg, dtype='auto')\n"
+        )
+        hits = find_post_floor_dtype_kwargs(bad, filename="vision.py")
+        assert hits == ["vision.py:2"]
+
+    def test_scanner_flags_concrete_token_classification_class(self):
+        bad = (
+            "from transformers import BertForTokenClassification\n"
+            "BertForTokenClassification.from_pretrained('x', dtype='auto')\n"
+        )
+        hits = find_post_floor_dtype_kwargs(bad, filename="tokens.py")
+        assert hits == ["tokens.py:2"]
+
+    def test_scanner_flags_concrete_masked_lm_class(self):
+        bad = (
+            "from transformers import BertForMaskedLM\n"
+            "BertForMaskedLM.from_config(cfg, dtype='auto')\n"
+        )
+        hits = find_post_floor_dtype_kwargs(bad, filename="masked_lm.py")
+        assert hits == ["masked_lm.py:2"]
 
     def test_scanner_allows_torch_dtype(self):
         good = (
@@ -255,20 +283,24 @@ class TestFloorConstraintAndWorkflowPins:
         )
         assert _version_key(pinned) >= _version_key(declared)
         _constraint_pin(text, "trl")
-        # Never claim 4.55.4 (or any pre-dtype probe) is the declared floor.
+        _constraint_pin(text, "peft")
+        _constraint_pin(text, "plotext")
         assert "declared" in text.lower() and "floor" in text.lower()
 
-    def test_workflow_runs_pip_check_and_asserts_both_exact_versions(self):
+    def test_workflow_runs_pip_check_and_asserts_floor_versions(self):
         job = _transformers_floor_job_block(CI_WORKFLOW.read_text(encoding="utf-8"))
         assert "python -m pip check" in job
         assert "-c .github/constraints/transformers-floor.txt" in job
+        assert "tests/test_plotext_compat.py" in job
 
-    @pytest.mark.parametrize("package", ["transformers", "trl"])
+    @pytest.mark.parametrize("package", ["transformers", "trl", "peft", "plotext"])
     def test_workflow_version_check_accepts_pins_and_rejects_mismatch(self, package: str):
-        constraints = "transformers==8.8.8\ntrl==9.9.9\n"
+        constraints = (
+            "transformers==8.8.8\ntrl==9.9.9\npeft==7.7.7\nplotext==6.6.6\n"
+        )
         installed = {
             name: _constraint_pin(constraints, name)
-            for name in ("transformers", "trl")
+            for name in ("transformers", "trl", "peft", "plotext")
         }
         _run_transformers_floor_version_check(installed, constraints)
 

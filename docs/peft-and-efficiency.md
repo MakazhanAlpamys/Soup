@@ -209,6 +209,12 @@ training:
 
 Catch-all friendly errors: typos in `optimizer:` are rejected at config-load with the v0.41.0 additions listed in the message; `lr_groups` patterns are validated as compilable regexes (length-capped + benign-string ReDoS probe); `load_in_8bit` mixed with `load_in_16bit` raises rather than picking one silently.
 
+On the Transformers backend, `target_modules: auto` has an explicit Qwen3.5-family
+fallback because PEFT does not yet map `qwen3_5_text`. Soup targets `q_proj` and
+`v_proj` in full-attention layers plus `in_proj_qkv` and `out_proj` in the fused
+linear-attention layers. Explicit target lists still win unchanged. The MLX backend
+keeps its separate full-key default (`self_attn.q_proj`, `self_attn.v_proj`).
+
 See `soup_cli.utils.optimizer_zoo.SUPPORTED_OPTIMIZERS` for the complete optimizer allowlist.
 
 

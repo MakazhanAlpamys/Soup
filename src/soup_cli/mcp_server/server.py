@@ -12,6 +12,7 @@ SDK -- starlette, uvicorn -- is already a hard dependency of ``mcp``.
 
 from __future__ import annotations
 
+import inspect
 import json
 import secrets
 import sys
@@ -29,6 +30,63 @@ from soup_cli.mcp_server.registry import McpToolError, ToolSpec, _sanitize, buil
 SERVER_NAME = "soup"
 
 
+class _DispatchError(Exception):
+    """A tool call that failed, carrying an already-sanitized message."""
+
+
+def _tool_descriptors(specs: List[ToolSpec]) -> List[types.Tool]:
+    """The advertised tool table. Identical on both mcp majors."""
+    return [
+        types.Tool(
+            name=spec.name,
+            title=spec.title,
+            description=spec.description,
+            inputSchema=spec.input_schema,
+            annotations=spec.annotations,
+        )
+        for spec in specs
+    ]
+
+
+def _dispatch_tool(by_name, name: str, arguments: dict) -> str:
+    """Run one tool and return its pretty-printed JSON text.
+
+    Raises :class:`_DispatchError` with a path-free, C0/ESC-free message for
+    every failure mode, so the two SDK adapters below only have to decide how
+    to *shape* an error, never what it says.
+    """
+    spec = by_name.get(name)
+    if spec is None:
+        raise _DispatchError("unknown tool")
+    try:
+        # Any core that prints (e.g. a Rich warning) must not corrupt the
+        # JSON-RPC stdout channel - send stray stdout to stderr for the
+        # duration of the (synchronous) handler call. Serialization stays
+        # INSIDE the try so a non-JSON-serializable result also becomes a
+        # sanitized error (never a raw TypeError the SDK would echo).
+        with redirect_stdout(sys.stderr):
+            result = spec.handler(arguments or {})
+        return json.dumps(_sanitize(result), indent=2, ensure_ascii=False)
+    except McpToolError as exc:
+        # _sanitize the message too so the C0/ESC guarantee is structural,
+        # not just a convention every handler must remember (security-review).
+        raise _DispatchError(_sanitize(str(exc))) from None
+    except Exception as exc:  # never leak a stack trace / path to the client
+        raise _DispatchError(f"internal error ({type(exc).__name__})") from None
+
+
+def _uses_callback_handlers() -> bool:
+    """True on mcp 2.x, which registers handlers through ``Server(...)``.
+
+    #322 — 2.0.0 removed the ``@server.list_tools()`` / ``@server.call_tool()``
+    decorators in favour of ``on_list_tools=`` / ``on_call_tool=`` constructor
+    arguments. Asked of the constructor rather than of ``mcp.__version__``: a
+    version table is the thing that goes stale, and this repo has been bitten
+    by exactly that twice (see ``trainer/_trl_compat.py``).
+    """
+    return "on_list_tools" in inspect.signature(Server.__init__).parameters
+
+
 def build_server(specs: List[ToolSpec]) -> Server:
     """Build a low-level MCP :class:`Server` that dispatches to ``specs``.
 
@@ -36,44 +94,52 @@ def build_server(specs: List[ToolSpec]) -> Server:
     (C0/ESC-stripped) and returned as a single pretty-printed JSON
     ``TextContent`` block. Handler failures become an ``isError`` result with a
     path-free message so the server survives bad calls.
+
+    Supports both mcp majors (#322). The dispatch logic is shared; only the two
+    adapters below differ, because 2.x hands its handlers a request context and
+    wants a ``*Result`` object where 1.x wanted a bare list.
     """
     by_name = {spec.name: spec for spec in specs}
-    server: Server = Server(SERVER_NAME)
+
+    if _uses_callback_handlers():  # mcp 2.x
+        async def _on_list_tools(ctx, params) -> types.ListToolsResult:
+            return types.ListToolsResult(tools=_tool_descriptors(specs))
+
+        async def _on_call_tool(ctx, params) -> types.CallToolResult:
+            try:
+                text = _dispatch_tool(by_name, params.name, params.arguments or {})
+            except _DispatchError as exc:
+                # Shaped explicitly rather than raised: on 2.x an exception out
+                # of a handler becomes a JSON-RPC error, which is a different
+                # thing on the wire from a tool that ran and reported failure.
+                # 1.x produced the latter, and the tests assert it.
+                return types.CallToolResult(
+                    content=[types.TextContent(type="text", text=str(exc))],
+                    isError=True,
+                )
+            return types.CallToolResult(
+                content=[types.TextContent(type="text", text=text)]
+            )
+
+        return Server(
+            SERVER_NAME,
+            on_list_tools=_on_list_tools,
+            on_call_tool=_on_call_tool,
+        )
+
+    server: Server = Server(SERVER_NAME)  # mcp 1.x
 
     @server.list_tools()
     async def _list_tools() -> List[types.Tool]:
-        return [
-            types.Tool(
-                name=spec.name,
-                title=spec.title,
-                description=spec.description,
-                inputSchema=spec.input_schema,
-                annotations=spec.annotations,
-            )
-            for spec in specs
-        ]
+        return _tool_descriptors(specs)
 
     @server.call_tool()
     async def _call_tool(name: str, arguments: dict) -> List[types.TextContent]:
-        spec = by_name.get(name)
-        if spec is None:
-            # The SDK stringifies this into an isError result; keep it generic.
-            raise ValueError("unknown tool")
         try:
-            # Any core that prints (e.g. a Rich warning) must not corrupt the
-            # JSON-RPC stdout channel - send stray stdout to stderr for the
-            # duration of the (synchronous) handler call. Serialization stays
-            # INSIDE the try so a non-JSON-serializable result also becomes a
-            # sanitized isError (never a raw TypeError the SDK would echo).
-            with redirect_stdout(sys.stderr):
-                result = spec.handler(arguments or {})
-            text = json.dumps(_sanitize(result), indent=2, ensure_ascii=False)
-        except McpToolError as exc:
-            # _sanitize the message too so the C0/ESC guarantee is structural,
-            # not just a convention every handler must remember (security-review).
-            raise ValueError(_sanitize(str(exc))) from None
-        except Exception as exc:  # never leak a stack trace / path to the client
-            raise ValueError(f"internal error ({type(exc).__name__})") from None
+            text = _dispatch_tool(by_name, name, arguments or {})
+        except _DispatchError as exc:
+            # 1.x turns a raised ValueError into the isError result itself.
+            raise ValueError(str(exc)) from None
         return [types.TextContent(type="text", text=text)]
 
     return server

@@ -79,3 +79,34 @@ def pick_mixed_precision(
     if quirk is None:
         return "bf16"
     return "bf16" if quirk == "bf16" else "fp16"
+
+
+def align_trainable_dtype_for_fp16(model, *, fp16: bool, bf16: bool) -> int:
+    """Cast bf16 LoRA adapters to fp32 when training in fp16.
+
+    peft creates LoRA adapter weights in the base checkpoint's dtype (bf16 for
+    many models). On pre-Ampere cards (no bf16 hardware) training runs in fp16,
+    and the fp16 GradScaler raises ``_amp_foreach_non_finite_check_and_unscale_cuda
+    not implemented for 'BFloat16'`` on bf16 gradients. Cast the trainable LoRA
+    params to fp32 — matching ``materialize_meta_adapters`` and peft's
+    ``autocast_adapter_dtype`` — before the optimizer is created.
+
+    Only ``*lora_*`` params are touched: under full fine-tuning (``lora.r: 0``),
+    Spectrum ``unfrozen_parameters`` or LISA the trainable set is a large fraction
+    of the model, and casting it would double trainable-weight memory after the
+    VRAM pre-flight has already passed.
+
+    Returns the number of params cast.
+    """
+    if model is None or not fp16 or bf16:
+        # model=None: a trainer object without .model is a shape this codebase
+        # produces (TestAsrTrainSidecar builds one) — cast nothing, loudly 0.
+        return 0
+    import torch
+
+    casted = 0
+    for name, param in model.named_parameters():
+        if param.requires_grad and "lora_" in name and param.dtype == torch.bfloat16:
+            param.data = param.data.to(torch.float32)
+            casted += 1
+    return casted

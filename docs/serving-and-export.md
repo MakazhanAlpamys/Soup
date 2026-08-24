@@ -112,6 +112,10 @@ soup export --model ./output --format tensorrt
 soup export --model ./output --format tensorrt --output ./model_trt
 ```
 
+`pip install tensorrt_llm` pins its own `torch`/`transformers`/`numpy`/`datasets`
+versions, which can downgrade a training environment's stack. Install it in a
+separate environment from the one you trained in, and export there.
+
 ### BitNet 1.58 TQ1_0 GGUF Export (live in v0.71.20)
 
 Export a BitNet 1.58-bit model as a `TQ1_0` (1.58-bit ternary) GGUF via
@@ -252,11 +256,10 @@ soup serve --model ./output --kv-cache-type q8_0   # 8-bit quantized cache (need
 Use [vLLM](https://github.com/vllm-project/vllm) for significantly better throughput in production:
 
 > **Install `[serve-fast]` in a separate environment from `[train]`.** Their
-> resolutions are genuinely incompatible today — `pip install vllm` into a
-> training venv silently downgrades `torch` and pushes `transformers` past
-> Soup's own `<5.0.0` cap. `soup env check` now flags an installed package that
-> violates this distribution's declared bounds (exit code 3), so you can catch a
-> contaminated venv before a run relies on it.
+> accelerator stacks can still resolve different `torch` builds. `soup env
+> check` flags an installed package that violates this distribution's declared
+> bounds (exit code 3), so you can catch a contaminated venv before a run relies
+> on it.
 
 ```bash
 # Install vLLM support (in its own environment, not the training one)

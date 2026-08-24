@@ -619,13 +619,17 @@ def stats(
                     pass  # no .buffer (e.g. in tests), keep original
 
             try:
-                plt.clear_figure()
-                plt.hist(lengths, bins=30)
-                plt.title("Text Length Distribution (chars)")
-                plt.xlabel("Length")
-                plt.ylabel("Count")
-                plt.theme("dark")
-                plt.show()
+                from soup_cli.utils.plotext_compat import render_histogram
+
+                render_histogram(
+                    plt,
+                    lengths,
+                    bins=30,
+                    title="Text Length Distribution (chars)",
+                    xlabel="Length",
+                    ylabel="Count",
+                    theme="dark",
+                )
             finally:
                 sys.stdout = original_stdout
     except UnicodeEncodeError:

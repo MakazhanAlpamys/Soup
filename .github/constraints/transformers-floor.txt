@@ -1,23 +1,10 @@
-# #478 — Transformers pin for the dedicated floor-compat CI job.
-#
-# Declared train floor in pyproject.toml remains:
-#   transformers>=4.36.0,<5.0.0
-#
-# transformers==4.36.0 is not resolvable with the declared trl range
-# (trl>=0.14.0,<0.29): even trl 0.14.0 requires transformers>=4.46.0, and
-# newer trl releases require >=4.56.1 / >=4.56.2. Raising Soup's declared
-# transformers floor in pyproject.toml needs an explicit maintainer
-# dependency-policy decision. Do NOT treat 4.55.4 (the last pre-dtype=
-# release) as the declared floor.
-#
-# This file pins:
-#   transformers==4.46.1 — lowest non-yanked resolvable Transformers version
-#     tested with the lowest declared TRL version
-#   trl==0.14.0 — lowest version in Soup's declared trl range
-#
-# These pins are for the floor CI cell only so pip cannot silently upgrade
-# that job. Do not describe pip's preferred/latest compatible TRL as the
-# floor. Runtime dtype= regressions are caught by the static guard in
-# tests/test_transformers_floor_compat.py (dtype= is >=4.56-only).
-transformers==4.46.1
-trl==0.14.0
+# #502/#503/#522 — exact pins for the dedicated dependency-floor CI job.
+# Qwen3.5/Qwen3.8 text loading establishes Transformers 5.12.1 as Soup's
+# declared training floor. trl 0.29 is the first release that does not import the
+# Transformers private availability helper whose v5 return type broke trl 0.28.
+# Plotext 6.0.0 is pinned here so one CI cell exercises the real Figure API rather
+# than relying only on the fake 5.x/6.x contract doubles in the unit suite.
+transformers==5.12.1
+trl==0.29.0
+peft==0.20.0
+plotext==6.0.0

@@ -67,12 +67,9 @@ jobs:
       - name: Run one-step MLX SFT through the real CLI
         run: pytest -o addopts= -m smoke -k mlx_sft_smoke -q tests/test_smoke_train.py
 
-  # #478: declared transformers floor (4.36.0) cannot resolve against declared
-  # trl>=0.14,<0.29 — see .github/constraints/transformers-floor.txt. Do not
-  # raise Soup's pin without a dependency-policy decision. This job installs
-  # under an explicit transformers(+trl) constraint so pip cannot silently
-  # upgrade the cell, asserts the pinned versions, and runs the static dtype=
-  # guard (the accepted fallback when a true floor runtime cell is impractical).
+  # #502/#503/#522: install the exact Transformers 5.12.1 / trl 0.29 /
+  # PEFT 0.20 support floor and Plotext 6.0.0 so pip cannot silently upgrade
+  # the cell, then assert every pinned compatibility boundary.
   transformers-floor:
     runs-on: ubuntu-latest
     env:
@@ -104,7 +101,7 @@ jobs:
           )
           expected = dict(pairs)
           assert len(expected) == len(pairs), "duplicate package pin in floor constraints"
-          for name in ("transformers", "trl"):
+          for name in ("transformers", "trl", "peft", "plotext"):
               assert name in expected, f"floor constraints missing exact {name} pin"
               want = expected[name]
               got = md.version(name)
@@ -119,6 +116,7 @@ jobs:
         run: >
           pytest -o addopts= --no-cov -q
           tests/test_transformers_floor_compat.py
+          tests/test_plotext_compat.py
           tests/test_bugfixes.py::TestDiffModelLoading
 
   test:

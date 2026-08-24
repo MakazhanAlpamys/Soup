@@ -82,11 +82,12 @@ Fine-tune on M1-M4 Macs via Apple's [MLX](https://github.com/ml-explore/mlx) fra
 pip install "soup-cli[mlx]"
 ```
 
-For SFT with local JSONL, JSON, or CSV data, `[mlx]` is a standalone install:
-do not add `[train]`. The latter is the PyTorch/TRL stack used by the
-Transformers backend. A Hugging Face `datasets` source or streaming dataset
-still needs `datasets` because that data source owns the dependency; the local
-file path below does not.
+For SFT with local JSONL, JSON, or CSV data, `[mlx]` is sufficient on its own.
+It can also be installed with `[train]` when the same environment needs the
+PyTorch/TRL Transformers backend: both extras now share the supported
+`transformers>=5.12.1,<6` range (#502/#503). A Hugging Face `datasets` source or
+streaming dataset still needs `datasets` because that data source owns the
+dependency; the local file path below does not.
 
 `detect_device()` and `get_gpu_info()` recognise Apple Silicon when
 `backend: mlx` is set, preserving `training.quantization: 4bit` for
@@ -906,6 +907,8 @@ print(report.ok, report.reason)
 ```
 
 When it doesn't fit, the report names actionable knobs: `--batch-size halve`, `--quantization 4bit`, `--gradient-checkpointing auto`. Composes with v0.40.3 live CUDA OOM probe (`make_cuda_probe_fn`) which still runs when `auto_batch_size_strategy: probe`.
+
+The weights bucket assumes 2 bytes/param under `quant="none"` (a frozen base now really does load at the checkpoint's own dtype, typically bf16/fp16 — #339), except `peft="full"` (full fine-tuning), which explicitly loads fp32 master weights and so assumes 4 bytes/param instead.
 
 
 ## Shell Completions (`soup completions`)

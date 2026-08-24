@@ -231,7 +231,9 @@ class TestSFTTrainerInit:
 
         fake_transformers = types.SimpleNamespace(
             AutoProcessor=types.SimpleNamespace(from_pretrained=lambda *a, **k: processor),
-            AutoModelForVision2Seq=types.SimpleNamespace(from_pretrained=lambda *a, **k: model),
+            AutoModelForImageTextToText=types.SimpleNamespace(
+                from_pretrained=lambda *a, **k: model
+            ),
         )
 
         fake_peft = types.SimpleNamespace(

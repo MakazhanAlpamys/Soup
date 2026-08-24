@@ -709,6 +709,20 @@ def _export_tensorrt(
         )
         raise typer.Exit(1)
 
+    try:
+        import tensorrt_llm.commands.convert_checkpoint  # noqa: F401
+    except ImportError:
+        console.print(
+            "[red]tensorrt_llm.commands.convert_checkpoint not found in the "
+            "installed tensorrt_llm package.[/]\n"
+            "This entry point does not exist in current TensorRT-LLM releases; "
+            "checkpoint conversion now ships as a per-architecture "
+            "examples/<arch>/convert_checkpoint.py script in the NVIDIA/TensorRT-LLM "
+            "source tree instead.\n"
+            "See: https://github.com/NVIDIA/TensorRT-LLM#installation"
+        )
+        raise typer.Exit(1)
+
     # Check if LoRA adapter
     adapter_config_path = model_path / "adapter_config.json"
     is_adapter = adapter_config_path.exists()

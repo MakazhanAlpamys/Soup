@@ -258,6 +258,12 @@ def estimate_peak_vram_gb(inp: HardwareFitInput) -> VRAMBreakdown:
 
     params = float(inp.params_b) * 1e9  # absolute count
     bytes_per = _BYTES_PER_PARAM_BY_QUANT.get(inp.quant, 2.0)
+    if inp.peft == "full" and inp.quant == "none":
+        # #339 — SFTTrainerWrapper._resolve_load_dtype now explicitly loads
+        # full fine-tuning's trainable base at fp32 (deliberate master-weight
+        # precision), so the "none" bucket's bf16-shaped 2.0 bytes/param no
+        # longer holds for this specific combination.
+        bytes_per = 4.0
     weights_b = params * bytes_per
 
     trainable_frac = _trainable_param_fraction(inp.peft)

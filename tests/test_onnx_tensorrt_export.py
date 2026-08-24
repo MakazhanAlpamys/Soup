@@ -3,6 +3,9 @@
 from unittest.mock import MagicMock
 from unittest.mock import patch as mock_patch
 
+import pytest
+import typer
+
 from soup_cli.commands.export import SUPPORTED_FORMATS
 
 # ─── Format Support Tests ────────────────────────────────────────────────
@@ -145,6 +148,8 @@ class TestTensorrtExportFunction:
             "optimum.exporters": MagicMock(),
             "optimum.exporters.onnx": MagicMock(),
             "tensorrt_llm": MagicMock(),
+            "tensorrt_llm.commands": MagicMock(),
+            "tensorrt_llm.commands.convert_checkpoint": MagicMock(),
         }), mock_patch("subprocess.run", return_value=mock_result) as mock_run:
             import soup_cli.commands.export as export_mod
 
@@ -153,6 +158,28 @@ class TestTensorrtExportFunction:
             )
             # Should call subprocess at least twice (checkpoint + build)
             assert mock_run.call_count >= 2
+
+    def test_tensorrt_export_missing_convert_checkpoint_fails_fast(self, tmp_path):
+        """#337: current TensorRT-LLM releases ship no `commands.convert_checkpoint`
+        submodule, so a plain `tensorrt_llm` install (present but without that entry
+        point registered) must abort before any subprocess call, not fail deep inside
+        checkpoint conversion."""
+        model_dir = tmp_path / "model"
+        model_dir.mkdir()
+
+        with mock_patch.dict("sys.modules", {
+            "optimum": MagicMock(),
+            "optimum.exporters": MagicMock(),
+            "optimum.exporters.onnx": MagicMock(),
+            "tensorrt_llm": MagicMock(),
+        }), mock_patch("subprocess.run") as mock_run:
+            import soup_cli.commands.export as export_mod
+
+            with pytest.raises(typer.Exit):
+                export_mod._export_tensorrt(
+                    model_dir, str(tmp_path / "trt_out"), None
+                )
+            mock_run.assert_not_called()
 
 
 # ─── Unsupported Format Test ─────────────────────────────────────────────
