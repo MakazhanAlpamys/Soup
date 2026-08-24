@@ -204,6 +204,21 @@ def test_remote_uri_without_streaming_rejected(tmp_path):
         )
 
 
+def test_https_entry_classified_remote_not_local_or_hub(tmp_path):
+    # #468 review finding: a non-allowlisted scheme (https/http/ftp) with a
+    # familiar suffix must still classify 'remote', not 'local' — a plain
+    # non-streaming config with a familiar-suffix https:// entry doesn't
+    # discriminate (a 'local'-classified entry validates fine too), so this
+    # asserts the SAME refusal 'remote' + no-streaming already gets above,
+    # proving https classifies remote rather than silently local/hub.
+    with pytest.raises(ValidationError, match="require data.streaming=true"):
+        _cfg(
+            tmp_path,
+            train=[str(tmp_path / "a.jsonl"), "https://example.com/b.jsonl"],
+            interleave="concat",
+        )
+
+
 def test_all_hub_list_without_streaming_validates(tmp_path):
     cfg = _cfg(
         tmp_path,
@@ -409,11 +424,11 @@ def test_streaming_remote_uri_is_canonicalized_before_hf_load(tmp_path, monkeypa
 
 def test_streaming_malicious_query_uri_rejected_before_reaching_hf_load(tmp_path, monkeypatch):
     # HIGH — SSRF allowlist bypass: the schema-time classifier
-    # (_classify_train_entry / _kind) only checks the URI scheme via
-    # is_remote_uri, so a query string — SSRF-adjacent, since fsspec
-    # backends treat query params as config overrides — sails through the
-    # parse-time gate. validate_remote_uri must still catch it inside the
-    # streaming loader, before any entry ever reaches hf_load.
+    # (_classify_train_entry / _kind) only checks for "://" (scheme-
+    # agnostic), so a query string — SSRF-adjacent, since fsspec backends
+    # treat query params as config overrides — sails through the parse-time
+    # gate. validate_remote_uri must still catch it inside the streaming
+    # loader, before any entry ever reaches hf_load.
     _install_fake_streaming_datasets(monkeypatch, [])
     _write_jsonl(tmp_path / "a.jsonl", [f"A-{i}" for i in range(4)])
 
@@ -437,6 +452,77 @@ def test_streaming_malicious_query_uri_rejected_before_reaching_hf_load(tmp_path
     with pytest.raises(ValueError, match="query string"):
         load_dataset(cfg.data)
     assert reached == []
+
+
+def test_streaming_https_entry_rejected_by_name(tmp_path, monkeypatch):
+    # MEDIUM — non-allowlisted schemes bypassed validation entirely: https
+    # isn't in _REMOTE_SCHEMES, so the OLD scheme-allowlist sniff classified
+    # "https://.../b.jsonl" as 'local' (familiar suffix) instead of
+    # 'remote', skipping validate_remote_uri and reaching hf_load raw. The
+    # scheme-agnostic "://" classifier now routes it through
+    # validate_remote_uri, which refuses the scheme by name.
+    _install_fake_streaming_datasets(monkeypatch, [])
+    _write_jsonl(tmp_path / "a.jsonl", [f"A-{i}" for i in range(4)])
+
+    reached: list = []
+
+    def fake_load_dataset(builder, data_files=None, split=None, streaming=False):
+        reached.append(data_files)
+        return _FakeIterableDataset([{"text": "unused"}])
+
+    monkeypatch.setattr(sys.modules["datasets"], "load_dataset", fake_load_dataset)
+
+    cfg = _cfg(
+        tmp_path,
+        train=["https://example.com/b.jsonl", str(tmp_path / "a.jsonl")],
+        interleave="concat",
+        streaming=True,
+    )
+    with pytest.raises(ValueError, match="not in allowlist"):
+        load_dataset(cfg.data)
+    assert reached == []
+
+
+def test_streaming_legit_gcs_entry_still_passes(tmp_path, monkeypatch):
+    # Regression the owner explicitly asked for alongside the https
+    # refusal: an allowlisted scheme must still classify remote and
+    # dispatch normally, unaffected by the scheme-agnostic classifier
+    # change (gs/gcs weren't touched by the fix — only the sniff that
+    # decides "does this need validate_remote_uri at all" changed).
+    calls: list = []
+    _install_fake_streaming_datasets(monkeypatch, calls)
+    _write_jsonl(tmp_path / "a.jsonl", [f"A-{i}" for i in range(4)])
+
+    def fake_load_dataset(builder, data_files=None, split=None, streaming=False):
+        assert builder == "json"
+        if str(data_files).startswith("gs://"):
+            return _FakeIterableDataset([{"text": f"B-{i}"} for i in range(3)])
+        return _FakeIterableDataset(_rows_from_jsonl(data_files))
+
+    monkeypatch.setattr(sys.modules["datasets"], "load_dataset", fake_load_dataset)
+
+    cfg = _cfg(
+        tmp_path,
+        train=[str(tmp_path / "a.jsonl"), "gs://bucket/b.jsonl"],
+        interleave="concat",
+        streaming=True,
+    )
+    result = load_dataset(cfg.data)
+    texts = [row["text"] for row in result["train"]]
+    assert len(texts) == 7
+    assert any(t.startswith("A-") for t in texts)
+    assert any(t.startswith("B-") for t in texts)
+
+
+def test_single_https_train_rejected_by_name(tmp_path):
+    # Consistency fix, same root cause: a single (non-list) data.train
+    # https:// string used to fall through load_dataset()'s dispatch to
+    # the plain local-file branch (FileNotFoundError on the mangled path)
+    # instead of reaching _load_remote_dataset's validate_remote_uri check.
+    # It must now be refused by name, the same as the list-path case.
+    cfg = _cfg(tmp_path, train="https://example.com/data.jsonl", format="plaintext")
+    with pytest.raises(ValueError, match="not in allowlist"):
+        load_dataset(cfg.data)
 
 
 @pytest.mark.parametrize(

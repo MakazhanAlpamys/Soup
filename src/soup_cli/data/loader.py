@@ -254,10 +254,10 @@ def _classify_train_entry(value: str) -> str:
     Returns ``'remote'`` / ``'hub'`` / ``'local'``. Mirrors the identical
     classification inline in SoupConfig._validate_interleave_compat — kept
     as two copies of the same three-line rule (suffix-in-SUPPORTED_EXTENSIONS
-    check + is_remote_uri) rather than one shared function, since schema.py
-    must stay import-light (no torch-adjacent deps) and loader.py already
-    owns _looks_like_remote_uri; the rule itself, not the function, is the
-    single source of truth, and both sites are covered by
+    check + "://"-in-entry check) rather than one shared function, since
+    schema.py must stay import-light (no torch-adjacent deps) and loader.py
+    already owns _looks_like_remote_uri; the rule itself, not the function,
+    is the single source of truth, and both sites are covered by
     tests/test_issue459_interleave_streaming_hub.py's schema+loader pairs.
 
     A suffix must be one of SUPPORTED_EXTENSIONS to count as 'local' (#468
@@ -266,6 +266,13 @@ def _classify_train_entry(value: str) -> str:
     ``mlfoundations/dclm-baseline-1.0``: Path.suffix is ``.5`` / ``.0``) as
     a local file, even though the hub-loading path itself handles these
     names correctly once actually dispatched there.
+
+    Any ``"://"``-bearing entry classifies 'remote' regardless of scheme
+    (#468 review fix) — the scheme allowlist is enforced downstream by
+    validate_remote_uri, which refuses a non-allowlisted scheme BY NAME;
+    classifying only allowlisted schemes as 'remote' let e.g. an
+    ``https://...`` entry with a familiar suffix fall through to 'local'
+    and reach hf_load unvalidated instead.
     """
     if _looks_like_remote_uri(value):
         return "remote"
@@ -530,11 +537,13 @@ def _load_interleaved_streaming_datasets(
     same allowlist validator _load_remote_dataset already runs for a
     single URI (bucket regex, no userinfo / query / fragment; a query
     string is SSRF-adjacent since fsspec backends treat it as a config
-    override). The schema-time classifier only checks the URI scheme, so
-    this call is the one place that actually validates the URI shape —
-    without it, a crafted entry like
+    override). The schema-time classifier only checks for a ``"://"``
+    (scheme-agnostic — #468 review fix), so this call is the one place
+    that actually validates the URI shape AND enforces the scheme
+    allowlist — without it, a crafted entry like
     ``s3://bucket/key.jsonl?endpoint=http://169.254.169.254`` would reach
-    hf_load unvalidated.
+    hf_load unvalidated, and a non-allowlisted-scheme entry like
+    ``https://example.com/data.jsonl`` would reach it unvalidated too.
     """
     try:
         from datasets import concatenate_datasets, interleave_datasets
@@ -672,12 +681,19 @@ def _validate_audio_files(data: list[dict], audio_dir: Path) -> list[dict]:
 
 
 def _looks_like_remote_uri(value: str) -> bool:
-    """Quick sniff for the fsspec scheme allowlist (v0.42.0 Part B)."""
-    if not isinstance(value, str) or "://" not in value:
-        return False
-    from soup_cli.utils.data_pipeline import is_remote_uri
+    """Quick sniff for a URI-shaped data.train entry (contains '://').
 
-    return is_remote_uri(value)
+    Deliberately scheme-agnostic (#468 review fix) — classification and
+    dispatch only need to know "does this want to be treated as a remote
+    source", not "is the scheme one we allow". Scheme-allowlist
+    enforcement happens once, downstream, in validate_remote_uri, which
+    refuses a non-allowlisted scheme BY NAME — narrowing this sniff to
+    allowlisted schemes only (as it did before this fix, via is_remote_uri)
+    let https/http/ftp (with a familiar file suffix) slip into 'local'
+    classification and reach hf_load completely unvalidated, bypassing
+    validate_remote_uri rather than being refused by it.
+    """
+    return isinstance(value, str) and "://" in value
 
 
 def _load_remote_dataset(train_path: str, data_config: DataConfig) -> dict:

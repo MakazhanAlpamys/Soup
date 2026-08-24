@@ -5406,7 +5406,7 @@ class SoupConfig(BaseModel):
         """
         from pathlib import Path
 
-        from soup_cli.utils.data_pipeline import is_remote_uri, parse_interleave
+        from soup_cli.utils.data_pipeline import parse_interleave
 
         data = self.data
         train_is_list = isinstance(data.train, list)
@@ -5440,7 +5440,7 @@ class SoupConfig(BaseModel):
             # validator (rather than exported) since loader.py has its own
             # copy for the actual load-time dispatch; the two must agree,
             # so keep the classification RULE (suffix-in-allowlist /
-            # is_remote_uri) the only thing either site encodes, not the
+            # "://"-in-entry) the only thing either site encodes, not the
             # classify function itself — see loader._classify_train_entry's
             # docstring.
             #
@@ -5456,7 +5456,15 @@ class SoupConfig(BaseModel):
             _local_file_extensions = {".jsonl", ".json", ".csv", ".parquet", ".txt"}
 
             def _kind(entry: str) -> str:
-                if is_remote_uri(entry):
+                # Scheme-agnostic "://" sniff (#468 review fix), not an
+                # is_remote_uri allowlist check — mirrors loader.py's
+                # _looks_like_remote_uri. The scheme allowlist is enforced
+                # downstream, at load time, by validate_remote_uri (refuses
+                # a non-allowlisted scheme BY NAME); classifying only
+                # allowlisted schemes as 'remote' here let e.g. an
+                # https://... entry with a familiar suffix fall through to
+                # 'local' and reach hf_load unvalidated instead.
+                if "://" in entry:
                     return "remote"
                 if Path(entry).suffix.lower() in _local_file_extensions:
                     return "local"
