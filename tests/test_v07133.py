@@ -16,6 +16,7 @@ import math
 import os
 import re
 from pathlib import Path
+from typing import Sequence
 
 import pytest
 
@@ -488,6 +489,37 @@ class TestCountAcceptedAndRate:
         with pytest.raises(ValueError, match="non-negative"):
             acceptance_rate(-1, 3)
 
+    def test_count_accepted_spans_uses_max_align_chars_cap(self, monkeypatch):
+        """regression: count_accepted_spans respects the _MAX_ALIGN_CHARS cap."""
+        import difflib
+
+        from soup_cli.utils import uld
+        from soup_cli.utils.draft import count_accepted_spans
+
+        monkeypatch.setattr(uld, "_MAX_ALIGN_CHARS", 10)
+
+        captured: list[tuple[str, str]] = []
+        real_matcher = difflib.SequenceMatcher
+
+        def _spy_matcher(isjunk, a, b, autojunk=False):
+            captured.append((a, b))
+            return real_matcher(isjunk, a, b, autojunk=autojunk)
+
+        monkeypatch.setattr(difflib, "SequenceMatcher", _spy_matcher)
+
+        # 16-character non-matching strings: d_text != t_text triggers SequenceMatcher.
+        draft_pieces = ["abcdef", "ghijkl", "mnop"]
+        target_pieces = ["_bcdef", "ghijkl", "mnop"]
+
+        count_accepted_spans(draft_pieces, target_pieces)
+
+        assert len(captured) == 1
+        a_str, b_str = captured[0]
+        assert a_str == "abcdefghij"
+        assert b_str == "_bcdefghij"
+        assert len(a_str) == 10
+        assert len(b_str) == 10
+
 
 class TestClassify:
     def test_boundary_exact(self):
@@ -856,12 +888,47 @@ class _TensorTok:
         return {"input_ids": ids, "attention_mask": torch.ones_like(ids)}
 
 
-class _FakeTarget:
-    """Greedy-generates a fixed continuation."""
+class _CrossTokenizerMock:
+    """Mock tokenizer for cross-tokenizer measurement tests."""
 
-    def __init__(self, full_ids: list[int], n_prompt: int):
-        self._full_ids = full_ids
+    pad_token_id = 0
+    eos_token_id = 0
+
+    def __init__(
+        self,
+        vocab_size: int,
+        encode_map: dict[str, list[int]],
+        decode_map: dict[int, str],
+    ):
+        self.vocab_size = vocab_size
+        self._encode_map = encode_map
+        self._decode_map = decode_map
+
+    def encode(self, text: str, add_special_tokens: bool = False) -> list[int]:
+        return list(self._encode_map.get(text, [0]))
+
+    def decode(self, token_ids: Sequence[int], skip_special_tokens: bool = False) -> str:
+        return "".join(self._decode_map.get(int(tid), "") for tid in token_ids)
+
+    def __call__(self, text: str, return_tensors: str | None = None, **kwargs):
+        import torch
+
+        ids = torch.tensor([self.encode(text)])
+        return {"input_ids": ids, "attention_mask": torch.ones_like(ids)}
+
+
+class _FakeTarget:
+    """Greedy-generates a continuation, applying repetition penalty when != 1.0."""
+
+    def __init__(
+        self,
+        full_ids: list[int],
+        n_prompt: int,
+        default_repetition_penalty: float = 1.2,
+    ):
+        self._full_ids = list(full_ids)
         self._n_prompt = n_prompt
+        self._default_repetition_penalty = default_repetition_penalty
         self.calls: list[dict] = []
 
     def parameters(self):
@@ -873,7 +940,33 @@ class _FakeTarget:
         import torch
 
         self.calls.append(kwargs)
-        return torch.tensor([self._full_ids])
+        rep_penalty = kwargs.get("repetition_penalty", self._default_repetition_penalty)
+        if rep_penalty is None:
+            rep_penalty = self._default_repetition_penalty
+
+        input_ids = kwargs.get("input_ids")
+        if input_ids is not None:
+            curr_ids = input_ids[0].cpu().tolist()
+        else:
+            curr_ids = list(self._full_ids[: self._n_prompt])
+
+        target_gen = self._full_ids[self._n_prompt :]
+        if not target_gen:
+            return torch.tensor([curr_ids])
+
+        generated = list(curr_ids)
+        for expected_tok in target_gen:
+            alt_tok = 99 if expected_tok != 99 else 98
+            logits = {expected_tok: 10.0, alt_tok: 9.0}
+            if rep_penalty != 1.0:
+                seen = set(generated)
+                for tok_id in list(logits.keys()):
+                    if tok_id in seen:
+                        logits[tok_id] = logits[tok_id] / rep_penalty
+            best_tok = max(logits.keys(), key=lambda t: logits[t])
+            generated.append(best_tok)
+
+        return torch.tensor([generated])
 
 
 class _FakeDraft:
@@ -976,7 +1069,83 @@ class TestMeasureAcceptance:
             max_new_tokens=8,
         )
         assert target.calls[0]["do_sample"] is False
+        assert target.calls[0]["repetition_penalty"] == 1.0
         assert target.calls[0]["max_new_tokens"] == 8
+
+    def test_repetition_penalty_neutralized_for_self_acceptance(self):
+        """When target and draft are identical, repetition_penalty is neutralized (Refs #345)."""
+        from soup_cli.utils.draft import measure_acceptance
+
+        # Target generates [10, 11, 12] from prompt [10, 6].
+        # An identical draft produces predictions [10, 11, 12] for those positions.
+        identical_draft_argmax = [99, 10, 11, 12, 99]
+        target = _FakeTarget([10, 6, 10, 11, 12], 2)
+        draft = _FakeDraft(identical_draft_argmax)
+
+        accepted, total = measure_acceptance(
+            target, draft, _TensorTok([10, 6]), ["hello"], max_new_tokens=8
+        )
+        assert target.calls[0]["repetition_penalty"] == 1.0
+        assert total == 3
+        assert accepted == 3
+
+    def test_cross_tokenizer_unextendable_prompt_scores_zero_zero(self):
+        """When draft tokenizer produces no continuation beyond draft_prompt_len,
+        measure_acceptance skips counting and returns exactly (0, 0)."""
+        from soup_cli.utils.draft import measure_acceptance
+
+        target_tok = _CrossTokenizerMock(
+            vocab_size=32000,
+            encode_map={"hello": [5, 6], "hello world": [5, 6, 10, 11, 12]},
+            decode_map={5: "hel", 6: "lo", 10: " ", 11: "wor", 12: "ld"},
+        )
+        # Draft tokenizer produces no new tokens beyond draft_prompt_len (both 3 tokens).
+        draft_tok = _CrossTokenizerMock(
+            vocab_size=49152,
+            encode_map={"hello": [1, 2, 3], "hello world": [1, 2, 3]},
+            decode_map={1: "hel", 2: "lo", 3: ""},
+        )
+        target = _FakeTarget([5, 6, 10, 11, 12], 2)
+        draft = _FakeDraft([99, 99, 99, 99, 99])
+
+        accepted, total = measure_acceptance(
+            target,
+            draft,
+            target_tok,
+            ["hello"],
+            max_new_tokens=8,
+            draft_tokenizer=draft_tok,
+        )
+        assert (accepted, total) == (0, 0)
+
+    def test_cross_tokenizer_extendable_prompt_measures_acceptance(self):
+        """When draft tokenizer produces tokens beyond draft_prompt_len,
+        measure_acceptance computes span-aligned acceptance."""
+        from soup_cli.utils.draft import measure_acceptance
+
+        target_tok = _CrossTokenizerMock(
+            vocab_size=32000,
+            encode_map={"hello": [5, 6], "hello world": [5, 6, 10, 11, 12]},
+            decode_map={5: "hel", 6: "lo", 10: " ", 11: "wor", 12: "ld"},
+        )
+        draft_tok = _CrossTokenizerMock(
+            vocab_size=49152,
+            encode_map={"hello": [1, 2], "hello world": [1, 2, 20, 21, 22]},
+            decode_map={1: "hel", 2: "lo", 20: " ", 21: "wor", 22: "ld"},
+        )
+        target = _FakeTarget([5, 6, 10, 11, 12], 2)
+        draft = _FakeDraft([99, 20, 21, 22, 99])
+
+        accepted, total = measure_acceptance(
+            target,
+            draft,
+            target_tok,
+            ["hello"],
+            max_new_tokens=8,
+            draft_tokenizer=draft_tok,
+        )
+        assert (accepted, total) == (3, 3)
+
 
 
 class TestMeasureThroughput:
@@ -1138,6 +1307,14 @@ class TestDraftDistillCli:
 
         monkeypatch.setattr(draft_cmd, "_vocab_size_of", _fake_vocab)
 
+        tok_target = _FakeTok(target_vocab)
+        tok_draft = _FakeTok(draft_vocab)
+
+        def _fake_tok(model_id: str, **kwargs):
+            return tok_target if "target" in model_id else tok_draft
+
+        monkeypatch.setattr("transformers.AutoTokenizer.from_pretrained", _fake_tok)
+
     def test_plan_only_writes_nothing(self, runner, in_tmp_cwd, monkeypatch):
         from soup_cli.commands.draft import app
 
@@ -1152,7 +1329,9 @@ class TestDraftDistillCli:
         assert "task: distill" in result.output
         assert not (in_tmp_cwd / "draftout").exists()
 
-    def test_vocab_mismatch_rejected(self, runner, in_tmp_cwd, monkeypatch):
+    def test_vocab_mismatch_routes_to_cross_tokenizer_uld(
+        self, runner, in_tmp_cwd, monkeypatch
+    ):
         from soup_cli.commands.draft import app
 
         self._patch_configs(monkeypatch, 49152, 151936)
@@ -1160,11 +1339,11 @@ class TestDraftDistillCli:
         result = runner.invoke(
             app,
             ["distill", "--target", "org/target", "--draft-base", "org/tiny",
-             "--data", data, "-o", "draftout"],
+             "--data", data, "-o", "draftout", "--plan-only"],
         )
-        assert result.exit_code == 1
-        assert "tokenizer" in result.output.lower()
-        assert "uld_strategy" in result.output
+        assert result.exit_code == 0
+        assert "uld_strategy: wasserstein_aligned" in result.output
+        assert "cross-tokenizer" in result.output.lower()
 
     def test_data_outside_cwd_rejected(self, runner, in_tmp_cwd, tmp_path_factory,
                                        monkeypatch):
@@ -1582,6 +1761,8 @@ class TestDraftMeasureCli:
 
         tok_a = _FakeTok(49152)
         tok_b = _FakeTok(49152) if compatible else _FakeTok(151936)
+        model_a = object()
+        model_b = object()
 
         # measure now gates on config.vocab_size before loading (issue #344). Make
         # that gate pass (equal config vocab) so these tests keep exercising the
@@ -1591,9 +1772,11 @@ class TestDraftMeasureCli:
 
         def _fake_load(model_id, **kwargs):
             tok = tok_a if "target" in model_id else tok_b
-            return object(), tok, "cpu"
+            model = model_a if "target" in model_id else model_b
+            return model, tok, "cpu"
 
         monkeypatch.setattr(draft_cmd, "_load_pair_member", _fake_load)
+        return (model_a, tok_a), (model_b, tok_b)
 
     def test_happy_path_writes_report_and_exits_zero(
         self, runner, in_tmp_cwd, monkeypatch
@@ -1638,18 +1821,68 @@ class TestDraftMeasureCli:
         assert "60.0%" in result.output
         assert "below" in result.output.lower()
 
-    def test_mismatched_tokenizer_exits_one(self, runner, in_tmp_cwd, monkeypatch):
+    def test_mismatched_tokenizer_measures_cross_tokenizer(
+        self, runner, in_tmp_cwd, monkeypatch
+    ):
+        from soup_cli.commands import draft as draft_cmd
         from soup_cli.commands.draft import app
 
-        self._patch_load(monkeypatch, compatible=False)
+        (_, _), (draft_model, draft_tok) = self._patch_load(
+            monkeypatch, compatible=False
+        )
+        monkeypatch.setattr(draft_cmd, "measure_acceptance", lambda *a, **k: (60, 100))
+
+        captured_kwargs: list[dict] = []
+
+        def _spy_measure_throughput(*args, **kwargs):
+            captured_kwargs.append(kwargs)
+            return 15.0
+
+        monkeypatch.setattr(draft_cmd, "measure_throughput", _spy_measure_throughput)
+
         prompts = self._prompts(in_tmp_cwd)
         result = runner.invoke(
             app,
             ["measure", "--target", "org/target", "--draft", "org/tiny",
              "--prompts", prompts],
         )
-        assert result.exit_code == 1
-        assert "tokenizer" in result.output.lower()
+        assert result.exit_code == 0
+        assert "Cross-tokenizer draft detected" in result.output
+        assert "60.0%" in result.output
+
+        assisted_calls = [kw for kw in captured_kwargs if "assistant_model" in kw]
+        assert len(assisted_calls) == 1
+        assisted = assisted_calls[0]
+        assert assisted["assistant_model"] is draft_model
+        assert assisted["assistant_tokenizer"] is draft_tok
+        assert "max_new_tokens" in assisted
+        assert "num_assistant_tokens" in assisted
+
+    def test_mismatched_tokenizer_unsupported_uad_warns(
+        self, runner, in_tmp_cwd, monkeypatch
+    ):
+        from soup_cli.commands import draft as draft_cmd
+        from soup_cli.commands.draft import app
+
+        self._patch_load(monkeypatch, compatible=False)
+        monkeypatch.setattr(draft_cmd, "measure_acceptance", lambda *a, **k: (60, 100))
+
+        def _boom(model, tok, prompts, *, assistant_model=None, **kw):
+            if assistant_model is not None:
+                raise RuntimeError("Universal Assisted Decoding requires transformers>=4.45.0")
+            return 20.0
+
+        monkeypatch.setattr(draft_cmd, "measure_throughput", _boom)
+
+        prompts = self._prompts(in_tmp_cwd)
+        result = runner.invoke(
+            app,
+            ["measure", "--target", "org/target", "--draft", "org/tiny",
+             "--prompts", prompts],
+        )
+        assert result.exit_code == 0
+        assert "Universal Assisted Decoding requires transformers>=4.45.0" in _plain(result.output)
+        assert "could not be measured" in _plain(result.output)
 
     def test_prompts_outside_cwd_rejected(
         self, runner, in_tmp_cwd, tmp_path_factory, monkeypatch

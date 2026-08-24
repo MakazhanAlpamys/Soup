@@ -290,14 +290,19 @@ def _safe_hash_file(path: str, max_bytes: int) -> Optional[str]:
     return digest.hexdigest()
 
 
-def _compute_provenance(cfg: "SoupConfig") -> Dict[str, str]:
+def _compute_provenance(cfg: "SoupConfig") -> Dict[str, object]:
     """Bind emitted evidence to the exact config that produced it (v0.71.39).
 
     ``config_sha`` (semantic recipe hash) + ``base_model`` + a best-effort
     ``data_sha`` over a cwd-local training file. Built only when we actually
     ``--emit-evidence`` (the ``data_sha`` streams the whole training file).
+    Also carries the #404 scorer/version stamp so a later ``--baseline``
+    consumer can detect scale drift.
     """
-    prov: Dict[str, str] = {"config_sha": _config_sha_of(cfg)}
+    from soup_cli.eval.gate import current_baseline_stamp
+
+    prov: Dict[str, object] = dict(current_baseline_stamp())
+    prov["config_sha"] = _config_sha_of(cfg)
     base = cfg.base
     if base:
         prov["base_model"] = base
@@ -692,32 +697,12 @@ def _leg2_scores(
     (skipping the base run) for any name it covers.
     """
     from soup_cli.eval.gate_suites import (
-        SCORER_CHANGED_IN_V0_73_2,
         is_bundled_suite,
         score_bundled_suite,
     )
 
     bundled_names = [n for n in suite_names if is_bundled_suite(n)]
     other_names = [n for n in suite_names if not is_bundled_suite(n)]
-
-    # A --baseline / registry:// entry supplies the BASE score from a file and
-    # skips the live base run, so a snapshot taken before v0.73.2 is compared
-    # against a freshly-scored tuned model on a DIFFERENT scale. Measured on an
-    # unchanged model: mini_mmlu 0.423 -> 0.731, mini_tool_call 0.225 -> 1.000.
-    # That is far larger than the 0.05 gate, so it must be said out loud.
-    stale = sorted(
-        name
-        for name in bundled_names
-        if name in baseline_scores and name in SCORER_CHANGED_IN_V0_73_2
-    )
-    if stale:
-        console.print(
-            "[yellow]Warning:[/] --baseline supplies stored scores for "
-            f"{escape(', '.join(stale))}, whose scorer CHANGED in v0.73.2 "
-            "(#357 / #346). If that baseline was captured on an earlier "
-            "release the two sides are on different scales — re-measure the "
-            "baseline, or drop these names from it to force a live base run."
-        )
 
     base_map: Dict[str, object] = {}
     tuned_map: Dict[str, object] = {}
@@ -957,7 +942,12 @@ def _verdict_live(
         from soup_cli.eval.gate import resolve_baseline
 
         try:
-            baseline_scores = resolve_baseline(baseline_spec)
+            baseline_scores = resolve_baseline(
+                baseline_spec,
+                warn=lambda msg: console.print(
+                    f"[yellow]Warning:[/] {escape(msg)}"
+                ),
+            )
         except (ValueError, FileNotFoundError, OSError) as exc:
             _fail(f"--baseline: {exc}", _EXIT_USAGE)
 
@@ -1150,9 +1140,9 @@ def ship(
     baseline: Optional[str] = typer.Option(
         None,
         "--baseline",
-        help="registry://<id> or JSON file of base leg-2 scores (skips base run). "
-        "Recompute baselines captured before v0.71.38 — the leg-2 scorer changed, "
-        "so an old baseline is not comparable to a freshly-scored tuned model.",
+        help="registry://<id> or stamped JSON of base leg-2 scores (skips base run). "
+        "Unstamped or scorer_revision-mismatched baselines warn once — re-measure "
+        "so both sides share one scorer scale (#404).",
     ),
     forgetting_threshold: float = typer.Option(
         DEFAULT_FORGETTING_THRESHOLD,
@@ -1282,11 +1272,14 @@ def ship(
         )
 
     # Full provenance (incl. data_sha) is only needed when writing evidence.
-    provenance = (
-        _compute_provenance(soup_config)
-        if emit_evidence and soup_config is not None
-        else None
-    )
+    # Always stamp scorer revision on emit (#404), even without --config.
+    provenance: Optional[Dict[str, object]] = None
+    if emit_evidence:
+        from soup_cli.eval.gate import current_baseline_stamp
+
+        provenance = dict(current_baseline_stamp())
+        if soup_config is not None:
+            provenance.update(_compute_provenance(soup_config))
     _emit_and_exit(
         verdict, output, emit_evidence=emit_evidence, push=push, provenance=provenance
     )

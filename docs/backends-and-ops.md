@@ -636,7 +636,17 @@ soup monitor --refresh 0.5  # faster polling
 soup monitor --once         # single snapshot, no Live panel
 ```
 
-Calls `nvidia-smi` via list-args subprocess (no shell), 5s timeout, list of `GpuSample` rows rendered into a Rich table. Apple Silicon prints a yellow advisory pointing at Activity Monitor / `powermetrics`; native Apple Silicon support lands in v0.44.1.
+On NVIDIA systems, Soup calls `nvidia-smi` via a list-args subprocess (no shell)
+with a 5-second timeout. On Apple Silicon, it reads GPU utilization and power
+from `/usr/bin/powermetrics --samplers gpu_power --format plist`. Run `sudo -v`
+in a terminal before starting the monitor: Soup uses `sudo -n`, so it can reuse
+the cached credential without ever prompting for or reading a password. If the
+credential or utility is unavailable, the command exits with an Activity
+Monitor fallback rather than reporting an NVIDIA error.
+
+macOS does not expose NVIDIA-style dedicated VRAM, memory-utilization, or GPU
+temperature fields through this sampler. Those columns therefore remain `—`
+instead of guessing values from unified memory or unrelated thermal sensors.
 
 
 ## Soup Fetch — Bundled Examples
@@ -896,6 +906,8 @@ print(report.ok, report.reason)
 ```
 
 When it doesn't fit, the report names actionable knobs: `--batch-size halve`, `--quantization 4bit`, `--gradient-checkpointing auto`. Composes with v0.40.3 live CUDA OOM probe (`make_cuda_probe_fn`) which still runs when `auto_batch_size_strategy: probe`.
+
+The weights bucket assumes 2 bytes/param under `quant="none"` (a frozen base now really does load at the checkpoint's own dtype, typically bf16/fp16 — #339), except `peft="full"` (full fine-tuning), which explicitly loads fp32 master weights and so assumes 4 bytes/param instead.
 
 
 ## Shell Completions (`soup completions`)

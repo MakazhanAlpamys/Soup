@@ -32,6 +32,14 @@ Soup works with **any** of the **340,000+** text-generation models on [HuggingFa
 | **InternLM 3** | InternLM3-8B-Instruct | 8B | Chinese + English |
 | **Falcon** | Falcon-11B, Falcon-40B-Instruct | 7B–180B | Open-weight |
 
+Qwen3.5 and Qwen3.6 checkpoints advertise a multimodal conditional-generation
+architecture on the Hub, but Soup's catalog recipes are deliberately text-only.
+Their explicit `modality: text` selects `AutoModelForCausalLM`, which instantiates the
+language decoder without the visual tower. This is appropriate for text-only SFT,
+pre-training, and GRPO data; it is not a full multimodal fine-tune. The Transformers
+backend cannot load `qwen3_5` under Soup's current `<5.0.0` dependency cap; enabling
+that backend requires a separately validated Transformers 5 migration.
+
 ### Vision Models (with `modality: vision`)
 
 | Model | Size | Supported Formats |
@@ -108,6 +116,7 @@ no PyTorch. Add `[train]` to fine-tune, or install other extras only when you ne
 | `ui` | `pip install "soup-cli[ui]"` | Web UI + inference server |
 | `tui` | `pip install "soup-cli[tui]"` | Full-screen Textual dashboard (`soup tui`) |
 | `eval` | `pip install "soup-cli[eval]"` | Benchmark evaluation (lm-evaluation-harness) |
+| `aider` | `pip install "soup-cli[aider]"` | Aider CLI; Polyglot evaluation also needs Aider's source-built Docker image |
 | `data` | `pip install "soup-cli[data]"` | Deduplication (MinHash via datasketch) |
 | `data-pro` | `pip install "soup-cli[data-pro]"` | Language detection + PII (langdetect, presidio) |
 | `deepspeed` | `pip install "soup-cli[deepspeed]"` | Multi-GPU training (DeepSpeed ZeRO) |

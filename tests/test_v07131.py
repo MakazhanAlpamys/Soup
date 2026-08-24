@@ -8,7 +8,16 @@ pairwise`` (#284), ``task='online_dpo'`` (schema + trainer + routing),
 
 from __future__ import annotations
 
+import re
+
 import pytest
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _plain(text: str) -> str:
+    """Return ANSI-stripped, whitespace-collapsed CLI output."""
+    return " ".join(_ANSI_RE.sub("", text).split())
 
 # ---------------------------------------------------------------------------
 # Shared test doubles
@@ -731,6 +740,28 @@ class _ScoreJudge:
 
 
 class TestBestOfN:
+    def test_provider_generate_fn_is_called_n_times(self):
+        from soup_cli.utils.best_of_n import sample_candidates
+
+        calls = []
+
+        def generate(prompt):
+            calls.append(prompt)
+            return f"  answer {len(calls)}  "
+
+        candidates = sample_candidates(
+            None,
+            None,
+            "question",
+            n=3,
+            temperature=0.7,
+            max_new_tokens=64,
+            generate_fn=generate,
+        )
+
+        assert calls == ["question", "question", "question"]
+        assert candidates == ["answer 1", "answer 2", "answer 3"]
+
     def test_pick_best_argmax(self):
         from soup_cli.utils.best_of_n import judge_pick_best
 
@@ -819,6 +850,29 @@ class TestBestOfN:
 
 
 class TestBestOfNCli:
+    @staticmethod
+    def _invoke_guard(monkeypatch, tmp_path, *sampler_args):
+        from typer.testing import CliRunner
+
+        from soup_cli.commands.data import app
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("soup_cli.eval.judge.JudgeEvaluator", lambda **kw: _ScoreJudge())
+        prompts = tmp_path / "prompts.jsonl"
+        prompts.write_text('{"prompt": "question"}\n', encoding="utf-8")
+        return CliRunner().invoke(
+            app,
+            [
+                "best-of-n",
+                "--prompts",
+                str(prompts),
+                "--judge",
+                "ollama://judge",
+                "--plan-only",
+                *sampler_args,
+            ],
+        )
+
     def test_help(self):
         from typer.testing import CliRunner
 
@@ -826,7 +880,195 @@ class TestBestOfNCli:
 
         result = CliRunner().invoke(app, ["best-of-n", "--help"])
         assert result.exit_code == 0, (result.output, repr(result.exception))
-        assert "best-of-n" in result.output.lower() or "best of n" in result.output.lower()
+        output = _plain(result.output)
+        assert "best-of-n" in output.lower() or "best of n" in output.lower()
+        assert "--provider" in output
+        assert "--model" in output
+        assert "--base-url" in output
+
+    def test_rejects_local_base_with_provider(self, monkeypatch, tmp_path):
+        result = self._invoke_guard(
+            monkeypatch, tmp_path, "--base", "local-model", "--provider", "ollama"
+        )
+        assert result.exit_code == 2, (result.output, repr(result.exception))
+        assert "mutually exclusive" in _plain(result.output).lower()
+
+    def test_rejects_local_only_flags_with_provider(self, monkeypatch, tmp_path):
+        result = self._invoke_guard(
+            monkeypatch,
+            tmp_path,
+            "--provider",
+            "ollama",
+            "--model",
+            "sampler-model",
+            "--seed",
+            "42",
+        )
+        assert result.exit_code == 2, (result.output, repr(result.exception))
+        output = _plain(result.output).lower()
+        assert "--seed" in output
+        assert "only to local --base" in output
+
+    def test_rejects_provider_options_without_provider(self, monkeypatch, tmp_path):
+        result = self._invoke_guard(
+            monkeypatch, tmp_path, "--base", "local-model", "--model", "sampler-model"
+        )
+        assert result.exit_code == 2, (result.output, repr(result.exception))
+        assert "require --provider" in _plain(result.output).lower()
+
+    def test_requires_local_base_or_provider(self, monkeypatch, tmp_path):
+        result = self._invoke_guard(monkeypatch, tmp_path)
+        assert result.exit_code == 2, (result.output, repr(result.exception))
+        assert "either local --base or --provider" in _plain(result.output).lower()
+
+    def test_provider_path_calls_sampler_and_records_provenance(self, monkeypatch):
+        import json
+        import os
+
+        from typer.testing import CliRunner
+
+        import soup_cli.commands.data as data_cmd
+        from soup_cli.commands.data import app
+
+        factory_calls = []
+        sample_calls = []
+
+        def fake_make(provider, **kwargs):
+            factory_calls.append((provider, kwargs))
+
+            def generate(prompt):
+                sample_calls.append(prompt)
+                return ("a", "longest", "mid")[len(sample_calls) - 1]
+
+            return generate
+
+        def fail_local_load(*_args, **_kwargs):
+            raise AssertionError("provider mode must not load the local model")
+
+        monkeypatch.setattr("soup_cli.utils.magpie.make_magpie_generate_fn", fake_make)
+        monkeypatch.setattr(data_cmd, "_load_bon_model", fail_local_load)
+        monkeypatch.setattr("soup_cli.eval.judge.JudgeEvaluator", lambda **kw: _ScoreJudge())
+
+        prompt_path = os.path.join(os.getcwd(), "_bon_provider_prompts.jsonl")
+        output_path = os.path.join(os.getcwd(), "_bon_provider_out.jsonl")
+        with open(prompt_path, "w", encoding="utf-8") as handle:
+            handle.write('{"prompt": "question"}\n')
+        try:
+            result = CliRunner().invoke(
+                app,
+                [
+                    "best-of-n",
+                    "--provider",
+                    "ollama",
+                    "--model",
+                    "sampler-model",
+                    "--base-url",
+                    "http://localhost:11434",
+                    "--prompts",
+                    prompt_path,
+                    "--n",
+                    "3",
+                    "--temperature",
+                    "0.7",
+                    "--max-new-tokens",
+                    "64",
+                    "--judge",
+                    "ollama://judge",
+                    "-o",
+                    output_path,
+                ],
+            )
+
+            assert result.exit_code == 0, (result.output, repr(result.exception))
+            assert factory_calls == [
+                (
+                    "ollama",
+                    {
+                        "model": "sampler-model",
+                        "base_url": "http://localhost:11434",
+                        "temperature": 0.7,
+                        "max_tokens": 64,
+                    },
+                )
+            ]
+            assert sample_calls == ["question", "question", "question"]
+            row = json.loads(open(output_path, encoding="utf-8").read())
+            assert row["messages"][1]["content"] == "longest"
+            assert row["_best_of_n"]["sampler"] == {
+                "provider": "ollama",
+                "model": "sampler-model",
+            }
+        finally:
+            for path in (prompt_path, output_path):
+                if os.path.exists(path):
+                    os.remove(path)
+
+    def test_provider_rejects_anthropic_by_name(self, monkeypatch):
+        import os
+
+        from typer.testing import CliRunner
+
+        from soup_cli.commands.data import app
+
+        monkeypatch.setattr("soup_cli.eval.judge.JudgeEvaluator", lambda **kw: _ScoreJudge())
+        path = os.path.join(os.getcwd(), "_bon_provider_anthropic.jsonl")
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write('{"prompt": "question"}\n')
+        try:
+            result = CliRunner().invoke(
+                app,
+                [
+                    "best-of-n",
+                    "--provider",
+                    "anthropic",
+                    "--model",
+                    "claude",
+                    "--prompts",
+                    path,
+                    "--judge",
+                    "ollama://judge",
+                    "--plan-only",
+                ],
+            )
+            assert result.exit_code == 2, (result.output, repr(result.exception))
+            assert "anthropic" in result.output.lower()
+            assert "ollama or vllm" in result.output.lower()
+        finally:
+            os.remove(path)
+
+    def test_provider_base_url_is_ssrf_validated(self, monkeypatch):
+        import os
+
+        from typer.testing import CliRunner
+
+        from soup_cli.commands.data import app
+
+        monkeypatch.setattr("soup_cli.eval.judge.JudgeEvaluator", lambda **kw: _ScoreJudge())
+        path = os.path.join(os.getcwd(), "_bon_provider_ssrf.jsonl")
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write('{"prompt": "question"}\n')
+        try:
+            result = CliRunner().invoke(
+                app,
+                [
+                    "best-of-n",
+                    "--provider",
+                    "ollama",
+                    "--model",
+                    "sampler-model",
+                    "--base-url",
+                    "http://evil.example.com:11434",
+                    "--prompts",
+                    path,
+                    "--judge",
+                    "ollama://judge",
+                    "--plan-only",
+                ],
+            )
+            assert result.exit_code == 2, (result.output, repr(result.exception))
+            assert "localhost" in result.output.lower()
+        finally:
+            os.remove(path)
 
     def test_reject_bad_n(self):
         import os
@@ -904,6 +1146,12 @@ class TestBestOfNCli:
             bon, "sample_candidates",
             lambda model, tok, prompt, **kw: ["a", "abcd", "xy"],
         )
+        monkeypatch.setattr(
+            "soup_cli.utils.magpie.make_magpie_generate_fn",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                AssertionError("local mode must not construct a provider sampler")
+            ),
+        )
         monkeypatch.setattr("soup_cli.eval.judge.JudgeEvaluator", lambda **kw: _ScoreJudge())
 
         ppath = os.path.join(os.getcwd(), "_bon_prompts_ok.jsonl")
@@ -922,6 +1170,12 @@ class TestBestOfNCli:
             assert len(rows) == 2
             assert rows[0]["messages"][1]["content"] == "abcd"  # longest wins
             assert rows[0]["_best_of_n"]["n"] == 3
+            assert set(rows[0]["_best_of_n"]) == {
+                "n",
+                "winner_idx",
+                "judge_model",
+                "scores",
+            }
             pairs = [json.loads(x) for x in open(dpath, encoding="utf-8") if x.strip()]
             assert pairs[0] == {"prompt": "q1", "chosen": "abcd", "rejected": "a"}
         finally:

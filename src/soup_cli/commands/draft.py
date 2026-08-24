@@ -296,6 +296,7 @@ def _build_distill_config_yaml(
     out_dir: str,
     steps: int,
     data_rows: int,
+    uld_strategy: Optional[str] = None,
 ) -> str:
     """Render the ``task: distill`` config: student = draft base, teacher = target.
 
@@ -316,6 +317,7 @@ def _build_distill_config_yaml(
             f"--steps {steps} over {data_rows} rows expands to {epochs} "
             f"epochs (> {_MAX_DISTILL_EPOCHS}); reduce --steps or grow --data."
         )
+    uld_line = f"  uld_strategy: {uld_strategy}\n" if uld_strategy else ""
     return (
         "base: {draft_base}\n"
         "task: distill\n"
@@ -329,6 +331,7 @@ def _build_distill_config_yaml(
         "  teacher_model: {target}\n"
         "  distill_divergence: forward_kl\n"
         "  distill_temperature: 2.0\n"
+        "{uld_line}"
         "  epochs: {epochs}\n"
         "  batch_size: {batch}\n"
         "  gradient_accumulation_steps: {grad_accum}\n"
@@ -342,6 +345,7 @@ def _build_distill_config_yaml(
         out=json.dumps(out_dir),
         data=json.dumps(data),
         target=json.dumps(target),
+        uld_line=uld_line,
         max_length=_DISTILL_MAX_LENGTH,
         val_split=_DISTILL_VAL_SPLIT,
         epochs=epochs,
@@ -360,6 +364,7 @@ def _run_distill(
     data_rows: int,
     device: Optional[str] = None,
     trc: bool = False,
+    uld_strategy: Optional[str] = None,
 ) -> None:
     """Distil the target into the draft base, then merge the adapter to dense.
 
@@ -389,6 +394,7 @@ def _run_distill(
         out_dir=adapter_dir,
         steps=steps,
         data_rows=data_rows,
+        uld_strategy=uld_strategy,
     )
     load_config_from_string(yaml_text)  # validate before spending a subprocess
 
@@ -528,22 +534,28 @@ def distill(
     target_trc = _resolve_trust(target, trust_remote_code)
     draft_trc = _resolve_trust(draft_base, trust_remote_code)
 
-    # Same-tokenizer gate. Speculative decoding proposes DRAFT token ids into
-    # the TARGET's vocabulary — a mismatch silently produces garbage rather
-    # than failing, so refuse up front.
-    target_vocab, draft_vocab = _pair_vocab_sizes_or_fail(
-        target, draft_base, target_trc, draft_trc
-    )
-    if target_vocab != draft_vocab:
-        _fail(
-            f"Draft and target must share a tokenizer, but vocab sizes differ "
-            f"(target={target_vocab}, draft={draft_vocab}). Speculative decoding "
-            f"proposes draft token ids into the target's vocabulary, so a "
-            f"mismatched pair produces garbage rather than a speedup.\n"
-            f"Pick a draft base from the target's own family (a `soup shrink` "
-            f"output always qualifies), or run cross-tokenizer distillation "
-            f"manually with task=distill + training.uld_strategy."
-        )
+    # Tokenizer compatibility check. When draft and target share a tokenizer,
+    # standard distillation is used. When vocab sizes or tokenizers differ,
+    # route through cross-tokenizer ULD (wasserstein_aligned).
+    try:
+        target_vocab = _vocab_size_of(target, target_trc)
+        draft_vocab = _vocab_size_of(draft_base, draft_trc)
+    except Exception as exc:  # noqa: BLE001 — surface as a friendly CLI error
+        _fail(f"could not read model config: {exc}")
+
+    cross_tokenizer = target_vocab != draft_vocab
+    if not cross_tokenizer:
+        try:
+            from transformers import AutoTokenizer
+
+            t_tok = AutoTokenizer.from_pretrained(target, trust_remote_code=target_trc)
+            d_tok = AutoTokenizer.from_pretrained(draft_base, trust_remote_code=draft_trc)
+            if not same_tokenizer(t_tok, d_tok):
+                cross_tokenizer = True
+        except Exception as exc:  # noqa: BLE001 — surface as a friendly CLI error
+            _fail(f"could not verify tokenizer compatibility: {exc}")
+
+    uld_strategy = "wasserstein_aligned" if cross_tokenizer else None
 
     try:
         yaml_text = _build_distill_config_yaml(
@@ -553,22 +565,34 @@ def distill(
             out_dir=output,
             steps=steps,
             data_rows=len(rows),
+            uld_strategy=uld_strategy,
         )
     except ValueError as exc:
         _fail(str(exc))
 
     if plan_only:
+        vocab_desc = (
+            f"shared vocab {target_vocab}"
+            if not cross_tokenizer
+            else f"cross-tokenizer: target={target_vocab}, draft={draft_vocab} "
+            f"-> uld_strategy=wasserstein_aligned"
+        )
         console.print(
             f"[bold]Plan[/] — distil [cyan]{escape(target)}[/] into "
             f"[cyan]{escape(draft_base)}[/] over {len(rows)} rows "
-            f"(shared vocab {target_vocab})\n"
+            f"({vocab_desc})\n"
         )
         console.print(escape(yaml_text))
         console.print("[dim]--plan-only: nothing written.[/]")
         return
 
+    mode_note = (
+        " [cyan](cross-tokenizer ULD: wasserstein_aligned)[/]"
+        if cross_tokenizer
+        else ""
+    )
     console.print(
-        f"[bold]Distilling[/] {escape(target)} -> {escape(draft_base)} "
+        f"[bold]Distilling[/] {escape(target)} -> {escape(draft_base)}{mode_note} "
         f"({len(rows)} rows, ~{steps} steps)"
     )
     try:
@@ -581,6 +605,7 @@ def distill(
             data_rows=len(rows),
             device=device,
             trc=draft_trc,
+            uld_strategy=uld_strategy,
         )
     except (RuntimeError, ValueError, OSError) as exc:
         _fail(f"distill failed: {exc}")
@@ -709,22 +734,25 @@ def measure(
     except Exception as exc:  # noqa: BLE001 — friendly CLI error
         _fail(f"could not load the model pair: {exc}")
 
-    if not same_tokenizer(target_tok, draft_tok):
-        _fail(
-            "Draft and target do not share a tokenizer. Speculative decoding "
-            "proposes draft token ids into the target's vocabulary, so this "
-            "pair cannot be used together — the draft's proposals would be "
-            "meaningless. Distil a draft from this target with "
-            "`soup draft distill`."
+    is_cross_tok = not same_tokenizer(target_tok, draft_tok)
+    if is_cross_tok:
+        console.print(
+            "[cyan]Cross-tokenizer draft detected — using decoded-span alignment "
+            "& Universal Assisted Decoding.[/]"
         )
 
-    accepted, total = measure_acceptance(
-        target_model,
-        draft_model,
-        target_tok,
-        prompt_texts,
-        max_new_tokens=max_new_tokens,
-    )
+    try:
+        accepted, total = measure_acceptance(
+            target_model,
+            draft_model,
+            target_tok,
+            prompt_texts,
+            max_new_tokens=max_new_tokens,
+            draft_tokenizer=draft_tok,
+        )
+    except Exception as exc:  # noqa: BLE001 — friendly error
+        _fail(f"acceptance measurement failed: {exc}")
+
     if total == 0:
         _fail(
             "the target generated no tokens for any prompt — nothing to measure "
@@ -733,6 +761,7 @@ def measure(
 
     rate = acceptance_rate(accepted, total)
     verdict = classify_acceptance(rate)
+
 
     tok_s_plain = measure_throughput(
         target_model, target_tok, prompt_texts, max_new_tokens=max_new_tokens
@@ -768,6 +797,7 @@ def measure(
             target_tok,
             prompt_texts,
             assistant_model=draft_model,
+            assistant_tokenizer=draft_tok,
             num_assistant_tokens=num_assistant_tokens,
             max_new_tokens=max_new_tokens,
         )

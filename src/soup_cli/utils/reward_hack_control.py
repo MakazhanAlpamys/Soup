@@ -775,8 +775,8 @@ class MitigationLogWriter:
 def _get_trainer_callback_base():
     """Lazy-resolve ``transformers.TrainerCallback`` (mirror reward_hacking.py).
 
-    Resolved once at class-definition time so this module imports on a
-    torch-less interpreter (falls back to ``object``).
+    Called on first access to the callback class (via PEP 562 ``__getattr__``),
+    NOT at module scope — so importing this module no longer pulls transformers.
     """
     try:
         from transformers import TrainerCallback
@@ -786,10 +786,7 @@ def _get_trainer_callback_base():
         return object
 
 
-_TrainerCallbackBase = _get_trainer_callback_base()
-
-
-class RewardHackMitigationCallback(_TrainerCallbackBase):  # type: ignore[misc, valid-type]
+class _RewardHackMitigationCallback_body:  # type: ignore[misc, valid-type]  # noqa: N801
     """Closed-loop reward-hacking mitigation HF TrainerCallback (v0.71.26).
 
     Reads the shared :class:`~soup_cli.utils.rl_signal_buffer.RLSignalBuffer`
@@ -1178,3 +1175,22 @@ class RewardHackMitigationCallback(_TrainerCallbackBase):  # type: ignore[misc, 
                     exc,
                 )
             return control
+
+
+_LAZY_CALLBACKS = {
+    "RewardHackMitigationCallback": _RewardHackMitigationCallback_body,
+}
+_BODY_SKIP = frozenset(("__dict__", "__weakref__"))
+
+
+def __getattr__(name: str):  # PEP 562
+    body = _LAZY_CALLBACKS.get(name)
+    if body is not None:
+        base = _get_trainer_callback_base()
+        ns = {k: v for k, v in vars(body).items() if k not in _BODY_SKIP}
+        cls = type(name, (base,), ns)
+        cls.__module__ = __name__
+        cls.__qualname__ = name
+        globals()[name] = cls
+        return cls
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

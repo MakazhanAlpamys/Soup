@@ -320,6 +320,8 @@ soup serve --model meta-llama/Llama-3.1-70B-Instruct --backend vllm --auto-spec
 
 `--auto-spec` handles Llama 3.1/3.3/4, Qwen 2.5/3, Mistral Large, Mixtral, DeepSeek V3/R1, and Gemma 2/3. Models without a known draft pairing (e.g. 8B-or-smaller targets where draft+target overhead outweighs the gain) print a yellow "no draft" note and fall back to standard decoding. A draft you trained yourself with `soup draft distill` is picked up **before** this built-in table.
 
+Cross-tokenizer speculative decoding is supported on the Transformers backend via Universal Assisted Decoding (UAD). When target and draft models use different tokenizers, Soup loads the draft tokenizer and routes through Transformers' cross-tokenizer candidate generator. This requires a `transformers` version supporting cross-tokenizer assisted decoding (Soup raises a clear error if the installed version lacks this capability). Same-tokenizer pairs continue using the native single-tokenizer assisted generation path.
+
 ### Train + measure your own draft (`soup draft`)
 
 The question nobody answers before enabling speculative decoding: *would the draft actually
@@ -345,11 +347,23 @@ Higher is better; roughly, ≥70% is where speculative decoding starts paying fo
 forward pass on realistic hardware. `--min-acceptance 0.6` exits **2** below the floor, so CI can
 gate on it (exit 0 = ok, 2 = below floor, 1 = error).
 
+*Note: For cross-tokenizer drafts, the measured acceptance rate is a strict lower bound. A token boundary merge between the prompt and the first generated token can cause the score to read up to `1/n_gen` lower than its true value, but it will never over-report.*
+
 `distill` runs logit KD through the existing `task: distill` trainer and emits a **dense** model
-(a PEFT adapter directory cannot be loaded as an `assistant_model`). Draft and target must share a
-tokenizer — a mismatch is refused up front, because speculative decoding proposes *draft* token ids
-into the *target's* vocabulary and a mismatched pair silently produces garbage instead of failing.
+(a PEFT adapter directory cannot be loaded as an `assistant_model`). When draft and target share a
+tokenizer, standard distillation is used. When tokenizers or vocabularies differ, `soup draft distill`
+automatically routes through cross-tokenizer Universal Logit Distillation (`uld_strategy: wasserstein_aligned`).
 A `soup shrink` output makes a good draft base: same tokenizer by construction.
+
+**Cross-tokenizer measurement.** When tokenizers differ, raw token IDs cannot be compared directly.
+`soup draft measure` automatically detects mismatched tokenizers and evaluates acceptance by aligning
+decoded character spans (`count_accepted_spans`). For both same-tokenizer and cross-tokenizer pairs,
+target generation neutralizes only `repetition_penalty` with `repetition_penalty=1.0` (Refs #345) so that draft proposals
+and target continuations are evaluated under consistent argmax rules; other generation processors
+(`no_repeat_ngram_size`, `encoder_repetition_penalty`, `min_new_tokens`, `bad_words_ids`, `suppress_tokens`,
+and `sequence_bias`) are left untouched. Cross-tokenizer support expands the choice of draft models,
+but cross-tokenizer speculative decoding adds tokenization alignment overhead and does not guarantee
+a speedup — use `soup draft measure` to verify real throughput on your specific pair.
 
 **Measured reality check (be sceptical of speedup claims, including ours).** On
 `SmolLM2-360M-Instruct` with a `SmolLM2-135M-Instruct` draft, the *stock* draft already scored

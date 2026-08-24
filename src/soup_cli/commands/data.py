@@ -2896,9 +2896,10 @@ def gen_magpie(
         )
 
 
-# v0.71.31 — Best-of-N rejection sampling (local sampling + judge).
+# v0.71.31 — Best-of-N rejection sampling (local/provider sampling + judge).
 _BON_MAX_PROMPTS = 100_000
 _BON_MAX_JSONL_BYTES = 100 * 1024 * 1024  # 100 MiB
+_BON_PROVIDER_SAMPLERS = ("ollama", "vllm")
 
 
 def _load_bon_model(base: str, device: str, trust: bool):
@@ -2959,11 +2960,14 @@ def _bon_load_prompts(path: str) -> list:
 
 @app.command(name="best-of-n")
 def best_of_n(
-    base: str = typer.Option(..., "--base", help="Base model id/path to sample from"),
+    base: str = typer.Option("", "--base", help="Local base model id/path to sample from"),
     prompts: str = typer.Option(..., "--prompts", help="JSONL of {prompt|messages} rows"),
     judge: str = typer.Option(
         ..., "--judge", help="Judge URL (ollama://|https://|http://localhost)"
     ),
+    provider: str = typer.Option("", "--provider", help="Provider sampler: ollama | vllm"),
+    model: str = typer.Option("", "--model", help="Provider sampler model id"),
+    base_url: str = typer.Option("", "--base-url", help="Provider sampler base URL"),
     n: int = typer.Option(8, "--n", help="Candidates per prompt [2, 64]"),
     output: str = typer.Option(
         "", "--output", "-o", help="Output SFT JSONL (required unless --plan-only)"
@@ -2975,19 +2979,20 @@ def best_of_n(
     max_new_tokens: int = typer.Option(
         256, "--max-new-tokens", help="Max new tokens per candidate [1, 4096]"
     ),
-    device: str = typer.Option("", "--device", help="cuda | cpu"),
-    seed: int = typer.Option(0, "--seed", help="Sampling seed"),
+    device: str = typer.Option("", "--device", help="Local sampler device: cuda | cpu"),
+    seed: int = typer.Option(0, "--seed", help="Local sampling seed"),
     trust_remote_code: bool = typer.Option(
-        False, "--trust-remote-code", help="Allow custom model code on --base"
+        False, "--trust-remote-code", help="Allow custom model code on local --base"
     ),
     plan_only: bool = typer.Option(False, "--plan-only", help="Validate + print plan"),
 ) -> None:
     """Best-of-N rejection sampling: sample N per prompt, a judge picks the winner.
 
-    Samples ``--n`` candidates from ``--base`` locally (transformers), scores each
-    with ``--judge`` pointwise, and writes the winner as an SFT chat row (with
-    ``_best_of_n`` provenance). ``--emit-pairs`` additionally writes winner-vs-
-    loser DPO pairs. BOND-lite (Best-of-N distillation, v0.71.31).
+    Samples ``--n`` candidates from local ``--base`` (the default) or an Ollama /
+    vLLM raw-completion ``--provider``, scores each with ``--judge`` pointwise,
+    and writes the winner as an SFT chat row (with ``_best_of_n`` provenance).
+    ``--emit-pairs`` additionally writes winner-vs-loser DPO pairs. BOND-lite
+    (Best-of-N distillation, v0.71.31; provider sampling #299).
     """
     from rich.markup import escape as _escape
     from rich.panel import Panel
@@ -2995,6 +3000,7 @@ def best_of_n(
     from soup_cli.eval.gate import _parse_judge_url
     from soup_cli.eval.judge import JudgeEvaluator
     from soup_cli.utils import best_of_n as bon
+    from soup_cli.utils.magpie import make_magpie_generate_fn
     from soup_cli.utils.paths import atomic_write_text, enforce_under_cwd_and_no_symlink
     from soup_cli.utils.trust_remote import (
         model_requires_trust_remote_code,
@@ -3014,9 +3020,9 @@ def best_of_n(
 
     # --- Judge URL (SSRF via JudgeEvaluator construction) ---
     try:
-        provider, judge_model_id, api_base = _parse_judge_url(judge)
+        judge_provider, judge_model_id, api_base = _parse_judge_url(judge)
         evaluator = JudgeEvaluator(
-            provider=provider, model=judge_model_id, api_base=api_base
+            provider=judge_provider, model=judge_model_id, api_base=api_base
         )
     except (ValueError, TypeError) as exc:
         console.print(f"[red]Invalid --judge: {_escape(str(exc))}[/]")
@@ -3036,16 +3042,59 @@ def best_of_n(
         console.print("[red]--prompts produced no usable rows[/]")
         raise typer.Exit(2)
 
-    trust = resolve_trust_remote_code(
-        base,
-        requested=trust_remote_code,
-        console=console,
-        requires_remote_code=model_requires_trust_remote_code(base) or False,
-    )
+    # --- Sampler selection ---
+    generate_fn = None
+    sampling_provider = ""
+    trust = False
+    if provider:
+        if base:
+            console.print("[red]--base and --provider are mutually exclusive[/]")
+            raise typer.Exit(2)
+        if device or trust_remote_code or seed != 0:
+            console.print(
+                "[red]--device, --seed and --trust-remote-code apply only to local --base[/]"
+            )
+            raise typer.Exit(2)
+        sampling_provider = provider.strip().lower()
+        if sampling_provider == "anthropic":
+            console.print(
+                "[red]anthropic has no raw-completion endpoint; "
+                "--provider must be ollama or vllm[/]"
+            )
+            raise typer.Exit(2)
+        if sampling_provider not in _BON_PROVIDER_SAMPLERS:
+            console.print("[red]--provider must be ollama or vllm[/]")
+            raise typer.Exit(2)
+        try:
+            generate_fn = make_magpie_generate_fn(
+                sampling_provider,
+                model=model,
+                base_url=base_url or None,
+                temperature=temperature,
+                max_tokens=max_new_tokens,
+            )
+        except (TypeError, ValueError, ImportError) as exc:
+            console.print(f"[red]{_escape(str(exc))}[/]")
+            raise typer.Exit(2) from exc
+    else:
+        if not base:
+            console.print("[red]either local --base or --provider is required[/]")
+            raise typer.Exit(2)
+        if model or base_url:
+            console.print("[red]--model and --base-url require --provider[/]")
+            raise typer.Exit(2)
+        trust = resolve_trust_remote_code(
+            base,
+            requested=trust_remote_code,
+            console=console,
+            requires_remote_code=model_requires_trust_remote_code(base) or False,
+        )
+
+    sampler_label = f"{sampling_provider}:{model}" if generate_fn is not None else base
 
     console.print(
         Panel(
-            f"Base model:   [bold]{_escape(base)}[/]\n"
+            f"Sampler:      [bold]{_escape(sampler_label)}[/]\n"
             f"Prompts:      [bold]{len(prompt_list)}[/]\n"
             f"N candidates: [bold]{n}[/]\n"
             f"Judge:        [bold]{_escape(judge)}[/]",
@@ -3058,28 +3107,36 @@ def best_of_n(
         console.print("[red]--output is required unless --plan-only is set.[/]")
         raise typer.Exit(2)
 
-    import torch
+    local_model = None
+    tokenizer = None
+    if generate_fn is None:
+        import torch
 
-    torch.manual_seed(seed)
-    model, tokenizer = _load_bon_model(base, device, trust)
+        torch.manual_seed(seed)
+        local_model, tokenizer = _load_bon_model(base, device, trust)
 
     dev = device or None
     sft_lines: list = []
     pair_lines: list = []
     for prompt in prompt_list:
         candidates = bon.sample_candidates(
-            model,
+            local_model,
             tokenizer,
             prompt,
             n=n,
             temperature=temperature,
             max_new_tokens=max_new_tokens,
             device=dev,
+            generate_fn=generate_fn,
         )
         pick = bon.judge_pick_best(prompt, candidates, evaluator)
-        sft_lines.append(
-            json.dumps(bon.build_sft_row(prompt, pick, judge_model=judge), ensure_ascii=False)
-        )
+        row = bon.build_sft_row(prompt, pick, judge_model=judge)
+        if generate_fn is not None:
+            row["_best_of_n"]["sampler"] = {
+                "provider": sampling_provider,
+                "model": model,
+            }
+        sft_lines.append(json.dumps(row, ensure_ascii=False))
         if emit_pairs:
             pair = bon.build_dpo_pair(prompt, pick, candidates)
             if pair is not None:

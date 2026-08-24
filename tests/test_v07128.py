@@ -568,12 +568,16 @@ def _run(coro):
     return asyncio.run(coro)
 
 
+from tests.mcp_roundtrip import input_schema, is_error  # noqa: E402 - #322 dual-major flag reader
+
+
 def _roundtrip(server, tool_name, args):
-    from mcp.shared.memory import create_connected_server_and_client_session
+    # #322 — the SDK helper this used was removed in mcp 2.0.0. `connected_session`
+    # rebuilds it from the memory-stream primitive that survives on both majors.
+    from tests.mcp_roundtrip import connected_session
 
     async def _go():
-        async with create_connected_server_and_client_session(server) as client:
-            await client.initialize()
+        async with connected_session(server) as client:
             return await client.call_tool(tool_name, args)
 
     return _run(_go())
@@ -588,16 +592,14 @@ class TestServerRoundTrip:
         pytest.importorskip("mcp")
 
     def test_list_tools_returns_all_18(self):
-        from mcp.shared.memory import create_connected_server_and_client_session
-
         from soup_cli.mcp_server.registry import build_registry
         from soup_cli.mcp_server.server import build_server
+        from tests.mcp_roundtrip import connected_session
 
         server = build_server(build_registry(allow_mutating=True, allow_execute=False))
 
         async def _go():
-            async with create_connected_server_and_client_session(server) as client:
-                await client.initialize()
+            async with connected_session(server) as client:
                 return await client.list_tools()
 
         result = _run(_go())
@@ -605,7 +607,7 @@ class TestServerRoundTrip:
         assert len(names) == 18
         assert "recipes_search" in names and "train_start" in names
         # every advertised tool carries an inputSchema object
-        assert all(t.inputSchema.get("type") == "object" for t in result.tools)
+        assert all(input_schema(t).get("type") == "object" for t in result.tools)
 
     def test_call_recipes_search_returns_json(self):
         from soup_cli.mcp_server.registry import build_registry
@@ -613,7 +615,7 @@ class TestServerRoundTrip:
 
         server = build_server(build_registry(allow_mutating=False, allow_execute=False))
         res = _roundtrip(server, "recipes_search", {"query": "qwen"})
-        assert res.isError is False
+        assert is_error(res) is False
         payload = json.loads(res.content[0].text)
         assert payload["count"] >= 1
 
@@ -623,7 +625,7 @@ class TestServerRoundTrip:
 
         server = build_server(build_registry(allow_mutating=False, allow_execute=False))
         res = _roundtrip(server, "no_such_tool", {})
-        assert res.isError is True
+        assert is_error(res) is True
 
     def test_mutating_refused_without_allow(self, tmp_path, monkeypatch):
         from soup_cli.mcp_server.registry import build_registry
@@ -633,7 +635,7 @@ class TestServerRoundTrip:
         (tmp_path / "soup.yaml").write_text(_MIN_CONFIG, encoding="utf-8")
         server = build_server(build_registry(allow_mutating=False, allow_execute=False))
         res = _roundtrip(server, "train_start", {"config": "soup.yaml"})
-        assert res.isError is True
+        assert is_error(res) is True
 
     def test_bad_arg_is_error_not_crash(self, tmp_path, monkeypatch):
         from soup_cli.mcp_server.registry import build_registry
@@ -642,7 +644,7 @@ class TestServerRoundTrip:
         monkeypatch.chdir(tmp_path)
         server = build_server(build_registry(allow_mutating=False, allow_execute=False))
         res = _roundtrip(server, "data_inspect", {"data": "does-not-exist.jsonl"})
-        assert res.isError is True
+        assert is_error(res) is True
 
     def test_output_is_sanitized(self):
         from soup_cli.mcp_server.registry import ToolSpec
@@ -678,7 +680,7 @@ class TestServerRoundTrip:
         )
         server = build_server([spec])
         res = _roundtrip(server, "boom", {})
-        assert res.isError is True
+        assert is_error(res) is True
         text = res.content[0].text
         assert "\x1b" not in text and "\x07" not in text
 
@@ -700,7 +702,7 @@ class TestServerRoundTrip:
         )
         server = build_server([spec])
         res = _roundtrip(server, "noisy", {})
-        assert res.isError is False
+        assert is_error(res) is False
         # the handler's stdout print must NOT reach the process stdout channel
         assert "LEAK-TO-STDOUT" not in capsys.readouterr().out
 
@@ -718,7 +720,7 @@ class TestServerRoundTrip:
         )
         server = build_server([spec])
         res = _roundtrip(server, "bad", {})
-        assert res.isError is True
+        assert is_error(res) is True
         assert "internal error" in res.content[0].text
 
 

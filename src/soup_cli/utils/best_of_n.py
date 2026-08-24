@@ -1,9 +1,10 @@
 """Best-of-N rejection sampling: sample N, a judge picks the winner (v0.71.31).
 
-Sampling loads a local ``transformers`` model (torch-lazy, inside
-``sample_candidates``); judging reuses the project's ``JudgeEvaluator``
-*pointwise* (score each candidate, argmax). The judge / build half is PURE (NO
-top-level torch) so it is CPU-unit-testable.
+Sampling either loads a local ``transformers`` model or calls an injected raw-
+completion provider (torch-lazy, inside ``sample_candidates``); judging reuses
+the project's ``JudgeEvaluator`` *pointwise* (score each candidate, argmax).
+The provider / judge / build path is PURE (NO top-level torch) so it is CPU-
+unit-testable.
 
 Output rows are SFT chat rows ``{"messages": [...], "_best_of_n": {...}}`` with
 provenance under the reserved ``_best_of_n`` key; ``build_dpo_pair`` optionally
@@ -11,7 +12,7 @@ emits a winner-vs-loser preference pair.
 """
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Optional, Protocol
+from typing import TYPE_CHECKING, Callable, Optional, Protocol
 
 if TYPE_CHECKING:
     from transformers import PreTrainedModel, PreTrainedTokenizerBase
@@ -35,16 +36,23 @@ class BestOfNPick:
 
 
 def sample_candidates(
-    model: "PreTrainedModel",
-    tokenizer: "PreTrainedTokenizerBase",
+    model: "Optional[PreTrainedModel]",
+    tokenizer: "Optional[PreTrainedTokenizerBase]",
     prompt: str,
     *,
     n: int,
     temperature: float,
     max_new_tokens: int,
     device: Optional[str] = None,
+    generate_fn: Optional[Callable[[str], str]] = None,
 ) -> "list[str]":
-    """Sample ``n`` diverse continuations for ``prompt`` (do_sample)."""
+    """Sample ``n`` continuations locally or through a raw-completion provider."""
+    if generate_fn is not None:
+        return [generate_fn(prompt).strip() for _ in range(n)]
+
+    if model is None or tokenizer is None:
+        raise ValueError("local best-of-N sampling requires a model and tokenizer")
+
     import torch
 
     messages = [{"role": "user", "content": prompt}]

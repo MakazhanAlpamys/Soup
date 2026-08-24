@@ -12,7 +12,99 @@ reproducing 70+ versions of notes.
 
 ## [Unreleased]
 
+### Fixed
+
+- **SmolVLM/Idefics3 vision SFT now reaches real training batches (#302 by
+  @Amix29 in #488).** Soup keeps LLaVA messages and PIL images together until
+  collation, converts legacy `<image>` markers to structured multimodal content,
+  and lets the processor produce image-token expansion plus architecture-specific
+  pixel tensors. The vision path uses the Transformers trainer with this collator so
+  older supported TRL releases cannot pre-tokenize the dataset as text-only. Image
+  placeholder ids are excluded from causal-LM labels, and the collator preserves a
+  leading BOS whether it comes from the chat template or the tokenizer default.
+
 ### Added
+
+- **`soup eval aider` runs Aider's Polyglot code-editing benchmark through its
+  official Docker harness (#91 by @Amix29 in #482).** The command preflights
+  Docker, the daemon, and the locally built benchmark image; mounts a prepared
+  Polyglot corpus read-only; keeps output under cwd; and aggregates bounded per-exercise JSON
+  into a Soup result row. `--run-id` records the score in `eval_results` for the
+  existing run comparison workflow. The optional `[aider]` extra installs the
+  normal Aider CLI while the docs make the source-only benchmark-image setup
+  explicit.
+- **Native Apple Silicon telemetry for `soup monitor` (#99 by @Amix29 in #481).**
+  The monitor now reads bounded plist output from macOS `powermetrics` and
+  renders GPU utilization and power in the existing Rich table. It reuses an
+  explicitly cached sudo credential through non-interactive `sudo -n`, never
+  reads a password, and gives an actionable Activity Monitor fallback when
+  permission or telemetry is unavailable. NVIDIA-only VRAM, memory-utilization,
+  and temperature fields remain unavailable rather than being guessed.
+- **`soup mcp serve` gains network transports: `--transport sse` and
+  `--transport http` (#296 in #479).** v1 was stdio-only, which suits a client that
+  spawns Soup as a subprocess but leaves remote and multi-client setups with
+  nothing. Both new transports serve the *same* registry — the end-to-end test
+  compares the advertised tool names against `build_registry` rather than a
+  hardcoded count, so a subset cannot creep in. stdio remains the default and
+  is untouched.
+
+  Adding a listener is the risky part, so it is gated three ways. Every HTTP
+  request needs `Authorization: Bearer <token>`, compared with
+  `secrets.compare_digest`, with no opt-out — a loopback port is reachable by
+  every process on the box. The token is validated by the existing
+  `utils/qr_url.py::validate_token`, so `soup ui` and `soup mcp serve` agree on
+  what a token is instead of growing a second format, and it travels in the
+  header only: no query-string fallback that could land in an access log. The
+  SDK's DNS-rebinding protection is switched on (`421` on a foreign `Host`,
+  `403` on a foreign `Origin`), which is the gate the token cannot be — a page
+  the operator merely visits sends no `Authorization` header but its request
+  still reaches the port. Binding off loopback warns, and a wildcard bind warns
+  again that the Host check has nothing left to pin.
+
+  `--allow-execute` is refused with either network transport, and that refusal
+  is the one behavioural change to an existing flag. Gated execution (#297)
+  spawns real training / export processes; behind a listener a leaked Bearer
+  token would mean process execution rather than plan disclosure, and stdio is
+  a pipe to a client the operator already started, which is a different trust
+  boundary. The refusal is made twice on purpose: once in the CLI so the
+  operator gets a readable message, and once in `build_asgi_app()` so a direct
+  caller cannot put an executing registry behind a listener either. The stdio
+  banner also stopped claiming "execution disabled" -- that string predated
+  #297 and was false from the moment execution shipped.
+
+  `--host` / `--port` / `--auth-token` are refused under `--transport stdio`
+  rather than silently ignored, and the ASGI app is built by a
+  `build_asgi_app()` factory so the auth and rebinding behaviour is tested
+  through an in-process transport without binding a socket; one further test
+  binds a real ephemeral port and drives initialize -> list_tools -> call_tool
+  through the SDK's own SSE client.
+
+  The `[mcp]` extra floor moves `1.2.0` -> `1.10.0`, measured against the
+  published wheels rather than a changelog: `server/streamable_http_manager.py`
+  first appears in 1.8.0 (absent in 1.7.0) and `server/transport_security.py`
+  in 1.10.0 (absent in 1.9.4). `--transport sse` alone would have run on the
+  old floor; rebinding protection would not, and a listener whose origin
+  checking silently disappears on an older SDK is worse than a resolver error.
+  The `<2` cap is unchanged — #322 is the 2.x migration. No new package: `mcp`
+  already requires starlette, uvicorn, sse-starlette and httpx-sse.
+
+- **`soup data best-of-n` can sample candidates from Ollama or vLLM providers
+  (#299 by @Faisal01011 in #466).** The existing local Transformers `--base` path stays
+  the default, while `--provider ollama|vllm --model <m> [--base-url <url>]`
+  draws each prompt's N candidates through the existing SSRF-validated raw-
+  completion seam. Provider and model are recorded in `_best_of_n` provenance;
+  Anthropic is refused by name because its Messages API has no raw-completion
+  endpoint, and local-only flags cannot be silently ignored in provider mode.
+
+- **Baseline artifacts carry a scorer/version provenance stamp (#404 by @AchuthReddy-16 in #485).**
+  Shared helpers `stamp_baseline_scores` / `write_baseline_file` write
+  `{"scores": {...}, "provenance": {"soup_version", "scorer_revision"}}`.
+  `soup eval gate --write-baseline <path>` is the user-facing producer.
+  `resolve_baseline` warns once on unknown provenance (unstamped files) or a
+  `scorer_revision` mismatch, and stays silent when the stamp matches.
+  `BUNDLED_SCORER_REVISION` + a locked fingerprint fail the suite if a bundled
+  scorer's output moves without a revision bump. Registry `save_eval_result`
+  stamps `details_json`; `soup ship --emit-evidence` includes the same stamp.
 
 - **Layer streaming now accepts Qwen3.5 MoE text checkpoints whose decoder
   layers do not expose exactly the same weight keys in every block (by
@@ -26,6 +118,18 @@ reproducing 70+ versions of notes.
   and a 3072-token SFT dataset. `stream_layers` now refuses
   `moe_expert_quant`, which is applied only by the resident setup path and was
   otherwise silently ignored.
+
+- **`live_eval.load_model_and_tokenizer` gains a `quantization` parameter; no live evaluation
+  path sets it yet (#367 by @AmirF194 in #461).**
+  `quantization="4bit"` builds the same nf4 `BitsAndBytesConfig` every other 4-bit load path
+  in this codebase uses (`"8bit"` and the unset default are also supported), and the four
+  internal callers this helper has (`make_generator`, `make_multi_generator`, `lora_probe`,
+  `measure_logit_agreement`) still call it with no `quantization`, so today an NF4-trained
+  adapter is still judged against a bf16 base it never saw during training. The follow-up is
+  wiring those four callers to a default derived from the run's own configuration (`soup ship
+  --config`, the registry entry, or the adapter's `adapter_config.json`), per the issue's own
+  Fix path; that plus `soup ship` reporting the numerics it judged with and a staleness gate
+  on mismatched-numerics evidence are left open (issue acceptance criteria 2 and 4).
 
 - **`training.stream_pin` makes layer-streaming pinning configurable (#366 by @ousamabenyounes in #416).**
   Page-locking the RAM store is chosen automatically by `decide_pinning`, and
@@ -56,6 +160,11 @@ reproducing 70+ versions of notes.
   quantization). `epochs: 1` and `max_length: 8192` are taken from the SFT
   sibling rather than the smaller qwen defaults, which suit a 754B MoE better.
 
+- **Cross-tokenizer draft support for `soup draft` and `soup serve` (#304 by @CODING-DARSH in #417).**
+  - `soup draft distill` now accepts target/draft pairs with mismatched tokenizers or vocabularies, automatically routing through `uld_strategy: wasserstein_aligned` (Universal Logit Distillation) instead of refusing the pair.
+  - `soup draft measure` supports cross-tokenizer acceptance measurement using decoded character-span alignment (`count_accepted_spans`) across different vocabularies and token boundaries. Target generation neutralizes only `repetition_penalty` with `repetition_penalty=1.0` (Refs #345) so target greedy argmax and draft raw-logit scoring are evaluated consistently; remaining generation processors (`no_repeat_ngram_size`, `encoder_repetition_penalty`, `min_new_tokens`, `bad_words_ids`, `suppress_tokens`, and `sequence_bias`) are not altered.
+  - `soup serve --speculative-decoding` supports cross-tokenizer draft serving via Transformers Universal Assisted Decoding (UAD) when supported by the installed `transformers` version, raising a clear error if unsupported.
+  - Compatible same-tokenizer pairs strictly preserve the existing native fast path.
 - **`data.interleave` is now wired into training-time dataset loading (#443 by @blackcoderx in #460).**
   `parse_interleave`/`InterleaveSpec` have been schema-validated and unit-tested since
   v0.42.0, but `load_dataset()` never called them — every multi-dataset mixture request
@@ -95,7 +204,86 @@ reproducing 70+ versions of notes.
 - **A repo-wide documentation ratchet to guarantee declared recipe counts stay synchronized with the catalog (#453 by @harshitthek in #457).**
   Derives the expected count dynamically from `len(RECIPES)` and scans all declared documentation sites, preventing silent Git auto-merge drift across sequential recipe additions.
 
+- Branch coverage for `lr_groups.py`'s `build_optimizer_param_groups`: the case
+  where every parameter matches a configured group, so no `base` optimizer
+  group is appended (#273 by @AmirF194 in #469).
+- Branch coverage for `replay.py`'s `downsample`: the case where the stride
+  already lands on the last row, so the endpoint pin is not appended a second
+  time (#273 by @AmirF194 in #470).
+
+### Changed
+
+- **Remove the name-based `SCORER_CHANGED_IN_V0_73_2` baseline warning in favour
+  of the #404 scorer_revision stamp (#404 by @AchuthReddy-16 in #485).**
+  Stale baselines are detected by provenance, not by a hard-coded suite list.
+
+- **Remove hand-maintained test suite statistics from `CONTRIBUTING.md` in favor of a permanent digit-free shape invariant (#465 by @harshitthek in #467).**
+  Eliminates drift across routine test additions by making test-count divergence impossible at the documentation source.
+
+- **Lazy callback builders now self-import their callback class names so runtime
+  lookup never raises `NameError` while preserving lazy heavy-dependency loading
+  (#320 by @AchuthReddy-16 in #455).** `build_echo_trap_callback`,
+  `build_reward_hack_callback`, `build_minillm_callback`,
+  `build_rl_checkpoint_callback`, and `build_push_callback` now resolve their
+  callback types through local module imports in the builder body, and the
+  regression suite adds subprocess coverage for all five builder calls.
+
 ### Fixed
+
+- **The twelve non-SFT trainers (`dpo`, `kto`, `orpo`, `simpo`, `ipo`, `bco`,
+  `online_dpo`, `grpo`, `ppo`, `pretrain`, `reward_model`, `embedding`) loaded
+  a frozen LoRA base as float32 regardless of the checkpoint's own dtype
+  (#491 by @AmirF194 in #492).** #471 fixed this for the SFT trainer; the
+  same `model_kwargs` shape, missing the same key, was unchanged in the
+  other twelve. None of them has a full fine-tuning branch, so every load
+  there is a frozen base: the new shared `resolve_frozen_base_load_dtype()`
+  keeps the checkpoint's own dtype (`torch_dtype="auto"`), except on a
+  pre-Ampere CUDA card, where it now matches the float16 compute dtype
+  those cards already use instead of leaving the base in bf16 storage.
+
+- **Layer streaming now keeps its host store on CPU on Apple Silicon
+  (#434 by @Amix29 in #480).**
+  PyTorch 2.7+ can return an MPS tensor for
+  `torch.empty(device="cpu", pin_memory=True)`, while `is_pinned()` remains
+  false. Direct runtime callers could therefore place the whole frozen base in
+  the MPS allocator and still report a pinned RAM store, even though the normal
+  `soup train` setup already disabled pinning outside CUDA. The runtime now
+  disables both optional and required pinning when the target is MPS, and
+  `RamSource` independently refuses any allocation that is not genuinely CPU
+  memory (or claims pinning without being pinned). MPS proceeds experimentally
+  with a pageable CPU source and MPS layer buffers; CUDA pinning behaviour is
+  unchanged.
+
+- **CI and production load sites no longer assume Transformers ``dtype=``
+  (#478).** ``dtype=`` on ``AutoModel*.from_pretrained`` / ``from_config`` is the
+  >=4.56 rename of ``torch_dtype=``. Soup still declares
+  ``transformers>=4.36.0,<5.0.0``, but the 12-cell matrix only ever installed the
+  newest 4.x, so a >=4.56-only kwarg stayed green. Call sites in chat / diff /
+  infer / export / merge / serve / mole routing / layer-stream runtime now pass
+  ``torch_dtype=`` (still accepted on current 4.57.x). A static AST guard fails
+  if a production ``AutoModel*`` load/config site reintroduces ``dtype=``. A new
+  Ubuntu/3.11 ``transformers-floor`` job installs under
+  ``.github/constraints/transformers-floor.txt`` using the lowest non-yanked
+  resolvable Transformers version ``4.46.1`` with the lowest version in the
+  declared TRL range ``0.14.0`` (``transformers==4.36.0`` is ResolutionImpossible
+  against declared ``trl`` — the declared Transformers floor in
+  ``pyproject.toml`` remains unchanged), runs ``pip check``, asserts both pins,
+  and runs the guard. The existing 12-cell matrix is untouched.
+
+- **`downsample` now returns at most `max_points` rows, which is what its
+  docstring has always promised (#473 in #474).** The stride was
+  `len(rows) // max_points` — a divisor, not a cap — so five rows with
+  `max_points=2` came back with three, and the endpoint pin could add a
+  fourth. Sample indices are now spread evenly across the series with both
+  endpoints included, so `soup runs replay` renders exactly
+  `min(len(rows), max_points)` points. Even spacing also avoids the cliff a
+  ceil-based stride would introduce: a series one row over the cap keeps
+  `max_points` points rather than roughly half of them. `max_points=1` is the
+  one shape where both endpoints cannot fit and returns the final row, which
+  is what the endpoint pin existed to guarantee. The off-by-one guard added
+  in #470 is kept, renamed to `test_last_index_lands_on_last_row_no_duplicate`
+  and re-pinned to the new arithmetic. Consequence of the old behaviour was a
+  chart with a few more points than intended, never a wrong number.
 
 - **`cut_ce.py` and `liger.py` now normalize path separators and match architecture
   keywords on the last path component only (#456 by @harshitthek in #458).**
@@ -170,6 +358,21 @@ reproducing 70+ versions of notes.
   `interrupted`) so a failed arm is distinguishable on disk from a completed or
   un-run one — `pending` is what a report keeps when the process dies mid-arm
   and no handler runs, which is the case the incremental write exists for.
+
+- **`soup export --format gptq` crashed with no calibration data and, when it
+  did run, wrote a shard name the standard loader can't find
+  (#338 by @AmirF194 in #475).** With no `--calibration-data`,
+  `_export_gptq` called `model.quantize(tokenizer)`; auto-gptq's `quantize()`
+  expects tokenized examples, not a bare tokenizer, so this failed with
+  "object is not iterable". GPTQ export now requires `--calibration-data`
+  up front and rejects a file with zero usable samples, since auto-gptq has
+  no built-in fallback dataset (unlike AWQ). Separately, `save_quantized`
+  writes its own `gptq_model-<bits>bit-<group>g.safetensors` shard, which
+  `AutoModelForCausalLM.from_pretrained` does not look for; the exported
+  directory now also carries a standard `model.safetensors`. The shared
+  `except ImportError` blocks on both the AWQ and GPTQ paths also stopped
+  reporting a fixed "not installed" string when the package itself imports
+  fine but a transitive import inside it fails for an unrelated reason.
 
 ## [0.73.3] - 2026-08-18
 

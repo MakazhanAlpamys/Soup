@@ -96,7 +96,7 @@ def export(
     calibration_data: Optional[str] = typer.Option(
         None,
         "--calibration-data",
-        help="Path to calibration JSONL for AWQ/GPTQ (default: use built-in sample)",
+        help="Path to calibration JSONL. Required for GPTQ; optional for AWQ.",
     ),
     calibration_samples: int = typer.Option(
         128,
@@ -401,7 +401,7 @@ def _merge_adapter(
     console.print(f"[dim]Loading base model: {base_model}...[/]")
     model = AutoModelForCausalLM.from_pretrained(
         base_model,
-        dtype=torch.float16,
+        torch_dtype=torch.float16,
         trust_remote_code=trc,
         device_map="cpu",
     )
@@ -867,6 +867,16 @@ def _load_calibration_texts(cal_path: Optional[Path], max_samples: int = 128) ->
     return texts
 
 
+def _standardize_gptq_shard_name(output_path: Path, bits: int, group_size: int) -> None:
+    """auto_gptq's save_quantized names its shard gptq_model-<bits>bit-<group>g.safetensors,
+    a name AutoModelForCausalLM.from_pretrained does not look for; rename it to the
+    standard model.safetensors so the exported directory reloads."""
+    shard = output_path / f"gptq_model-{bits}bit-{group_size}g.safetensors"
+    standard = output_path / "model.safetensors"
+    if shard.exists() and not standard.exists():
+        shard.rename(standard)
+
+
 def _export_awq(
     model_path: Path,
     output: Optional[str],
@@ -894,7 +904,10 @@ def _export_awq(
 
     try:
         from awq import AutoAWQForCausalLM
-    except ImportError:
+    except ImportError as exc:
+        if exc.name != "awq":
+            console.print(f"[red]autoawq import failed:[/] {exc}")
+            raise typer.Exit(1)
         console.print(
             "[red]autoawq not installed.[/]\n"
             "Install with: [bold]pip install \"soup-cli\\[awq]\"[/]\n"
@@ -1023,10 +1036,24 @@ def _export_gptq(
 
     # Validate calibration path (security: path traversal protection)
     cal_path = _validate_calibration_path(calibration_data)
+    if cal_path is None:
+        console.print(
+            "[red]GPTQ export requires --calibration-data.[/]\n"
+            "Unlike --format awq, auto-gptq has no built-in fallback dataset: "
+            "pass a calibration JSONL, e.g. [bold]--calibration-data path/to/data.jsonl[/]."
+        )
+        raise typer.Exit(1)
+    calib_texts = _load_calibration_texts(cal_path, max_samples=calibration_samples)
+    if not calib_texts:
+        console.print(f"[red]No usable calibration samples found in {cal_path}.[/]")
+        raise typer.Exit(1)
 
     try:
         from auto_gptq import AutoGPTQForCausalLM, BaseQuantizeConfig
-    except ImportError:
+    except ImportError as exc:
+        if exc.name != "auto_gptq":
+            console.print(f"[red]auto-gptq import failed:[/] {exc}")
+            raise typer.Exit(1)
         console.print(
             "[red]auto-gptq not installed.[/]\n"
             "Install with: [bold]pip install \"soup-cli\\[gptq]\"[/]\n"
@@ -1100,23 +1127,15 @@ def _export_gptq(
         )
         tokenizer = AutoTokenizer.from_pretrained(str(source_path), trust_remote_code=trc_tok)
 
-        # Load calibration data if provided
-        calib_data = None
-        if cal_path:
-            texts = _load_calibration_texts(
-                cal_path, max_samples=calibration_samples,
-            )
-            calib_data = [tokenizer(t, return_tensors="pt") for t in texts]
+        calib_data = [tokenizer(t, return_tensors="pt") for t in calib_texts]
 
         console.print(f"[dim]Quantizing to GPTQ {bits}-bit (group_size={group_size})...[/]")
-        if calib_data:
-            model.quantize(calib_data)
-        else:
-            model.quantize(tokenizer)
+        model.quantize(calib_data)
 
         console.print("[dim]Saving quantized model...[/]")
         model.save_quantized(str(output_path))
         tokenizer.save_pretrained(str(output_path))
+        _standardize_gptq_shard_name(output_path, bits, group_size)
 
     except Exception as exc:
         console.print(f"[red]GPTQ export failed:[/] {exc}")

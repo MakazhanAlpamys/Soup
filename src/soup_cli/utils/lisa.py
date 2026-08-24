@@ -101,7 +101,7 @@ def locate_decoder_layer_indices(model: Any) -> list[int]:
     return sorted(seen)
 
 
-class LisaCallback(_try_import_callback_base()):  # type: ignore[misc]
+class _LisaCallback_body:  # type: ignore[misc]  # noqa: N801
     """HF ``TrainerCallback`` implementing LISA layer sampling.
 
     Subclasses the lazily-resolved ``TrainerCallback`` so it inherits the no-op
@@ -211,3 +211,22 @@ class LisaCallback(_try_import_callback_base()):  # type: ignore[misc]
                     state[param] = {}
         except Exception:  # noqa: BLE001 — optimizer state shape varies (DS/FSDP)
             return
+
+
+_LAZY_CALLBACKS = {
+    "LisaCallback": _LisaCallback_body,
+}
+_BODY_SKIP = frozenset(("__dict__", "__weakref__"))
+
+
+def __getattr__(name: str):  # PEP 562
+    body = _LAZY_CALLBACKS.get(name)
+    if body is not None:
+        base = _try_import_callback_base()
+        ns = {k: v for k, v in vars(body).items() if k not in _BODY_SKIP}
+        cls = type(name, (base,), ns)
+        cls.__module__ = __name__
+        cls.__qualname__ = name
+        globals()[name] = cls
+        return cls
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

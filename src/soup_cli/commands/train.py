@@ -39,6 +39,7 @@ def _build_hardware_fit_input(cfg):
     ``"auto"``, unknown model size, unsupported quant, out-of-range dims), in
     which case the caller skips the gate rather than guess.
     """
+    from soup_cli.trainer.sft import is_full_finetune
     from soup_cli.utils.gpu import model_size_from_name
     from soup_cli.utils.hardware_fit import HardwareFitInput
 
@@ -59,12 +60,19 @@ def _build_hardware_fit_input(cfg):
         return None
     if quant == "4bit":
         peft = "qlora"
-    elif (
-        getattr(tcfg, "unfrozen_parameters", None)
-        or getattr(tcfg, "freeze_layers", None)
-        or getattr(tcfg, "freeze_ratio", None)
-    ):
-        peft = "full"  # Spectrum / freeze-based full fine-tuning
+    elif is_full_finetune(tcfg):
+        # #471 — was an independent, hand-maintained check
+        # (unfrozen_parameters / freeze_layers / freeze_ratio) that had
+        # drifted from sft.py's real full-FT decision in BOTH directions:
+        # it missed lisa_enabled/lora.r==0 (under-predicting VRAM for those
+        # runs) and treated bare freeze_layers/freeze_ratio as sufficient on
+        # its own even with lora.r>0 still on (over-predicting — and able to
+        # falsely refuse a launch that would fit, since freeze_layers/
+        # freeze_ratio only reduce what's trainable WITHIN LoRA or full-FT,
+        # they don't select the mode). Now shares is_full_finetune with
+        # sft.py's SFTTrainerWrapper._resolve_load_dtype so the two cannot
+        # disagree again.
+        peft = "full"
     else:
         peft = "lora"
     optimizer = str(getattr(tcfg, "optimizer", "adamw_torch") or "adamw_torch")
@@ -1907,20 +1915,23 @@ def _run_diagnose_gate(
 
 def _resolve_deepspeed(deepspeed: str) -> str:
     """Resolve DeepSpeed config: named preset or path to JSON file."""
-    from soup_cli.utils.deepspeed import CONFIGS, write_deepspeed_config
+    import soup_cli.utils.deepspeed as ds
 
     # Named preset
-    if deepspeed in CONFIGS:
-        return write_deepspeed_config(deepspeed)
+    if deepspeed in ds.CONFIGS:
+        return ds.write_deepspeed_config(deepspeed)
 
-    # Path to config file
+    # Path to config file. Resolved the same way a preset is (#359): a config
+    # that needs no run-dependent rewrite comes back by this very path, and one
+    # that copied the ZeRO++ placeholders is repaired into a temp copy with the
+    # change printed. The user's file is never modified.
     ds_path = Path(deepspeed)
     if ds_path.exists() and ds_path.suffix == ".json":
-        return str(ds_path)
+        return ds.resolve_user_deepspeed_file(str(ds_path))
 
     console.print(
         f"[red]Invalid DeepSpeed config: {deepspeed}[/]\n"
-        f"Options: {', '.join(CONFIGS.keys())} or path to JSON file."
+        f"Options: {', '.join(ds.CONFIGS.keys())} or path to JSON file."
     )
     raise typer.Exit(1)
 

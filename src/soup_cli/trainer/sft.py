@@ -5,7 +5,7 @@ import logging
 import os
 import time
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Any, Optional, Tuple
 
 from rich.console import Console
 
@@ -16,6 +16,7 @@ from soup_cli.utils.gpu import (
     estimate_batch_size,
     model_size_from_name,
     resolve_device_map,
+    resolve_frozen_base_load_dtype,
 )
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 
@@ -92,6 +93,225 @@ def _ensure_vision_processor_pad_token(processor: object) -> None:
                 pass
 
 
+def _vision_messages_with_image_parts(
+    messages: list[dict[str, Any]], image_count: int
+) -> list[dict[str, Any]]:
+    """Convert Soup's legacy ``<image>`` messages to HF multimodal content.
+
+    LLaVA JSON rows reach the trainer with string ``content`` fields. Modern
+    processors such as Idefics3 only preserve an image placeholder when the
+    chat message contains a structured ``{"type": "image"}`` part. Passing
+    the legacy string directly makes ``apply_chat_template`` silently drop the
+    prompt text and image marker, then the processor rejects the accompanying
+    image because the rendered text contains zero image tokens (#302).
+
+    Existing structured messages are preserved. When an otherwise valid
+    vision row omits the literal marker, place its image(s) at the start of the
+    first user turn. Refuse excess markers rather than handing the processor a
+    misleading image/token-count mismatch.
+    """
+    if image_count < 0:
+        raise ValueError("image_count must be non-negative")
+    if not messages:
+        raise ValueError("Vision sample has no messages")
+
+    converted: list[dict[str, Any]] = []
+    represented_images = 0
+    for message in messages:
+        converted_message = dict(message)
+        content = converted_message.get("content", "")
+        parts: list[dict[str, Any]] = []
+        if isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict):
+                    copied = dict(part)
+                else:
+                    copied = {"type": "text", "text": str(part)}
+                parts.append(copied)
+                if copied.get("type") == "image":
+                    represented_images += 1
+        elif isinstance(content, str):
+            for index, chunk in enumerate(content.split("<image>")):
+                if index:
+                    parts.append({"type": "image"})
+                    represented_images += 1
+                text = chunk.strip()
+                if text:
+                    parts.append({"type": "text", "text": text})
+        else:
+            parts.append({"type": "text", "text": str(content)})
+        converted_message["content"] = parts
+        converted.append(converted_message)
+
+    if represented_images > image_count:
+        raise ValueError(
+            "Vision sample contains "
+            f"{represented_images} image placeholder(s) but only {image_count} image(s)"
+        )
+    missing_images = image_count - represented_images
+    if missing_images:
+        target = next(
+            (message for message in converted if message.get("role") == "user"),
+            converted[0],
+        )
+        target["content"] = [
+            *({"type": "image"} for _ in range(missing_images)),
+            *target["content"],
+        ]
+    return converted
+
+
+def _single_token_id(value: Any) -> Optional[int]:
+    """Return a usable token id without accepting bool or tokenizer sentinels."""
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
+def _vision_image_token_ids(processor: object) -> frozenset[int]:
+    """Resolve image-placeholder ids across current and floor processor APIs."""
+    tokenizer = getattr(processor, "tokenizer", None)
+    token_ids: set[int] = set()
+
+    for owner in (processor, tokenizer):
+        if owner is None:
+            continue
+        plural = getattr(owner, "image_token_ids", None)
+        if isinstance(plural, (list, tuple, set, frozenset)):
+            for value in plural:
+                token_id = _single_token_id(value)
+                if token_id is not None:
+                    token_ids.add(token_id)
+        singular = _single_token_id(getattr(owner, "image_token_id", None))
+        if singular is not None:
+            token_ids.add(singular)
+
+    convert = getattr(tokenizer, "convert_tokens_to_ids", None)
+    if callable(convert):
+        for owner in (processor, tokenizer):
+            image_token = getattr(owner, "image_token", None)
+            if not isinstance(image_token, str) or not image_token:
+                continue
+            token_id = _single_token_id(convert(image_token))
+            if token_id is not None:
+                token_ids.add(token_id)
+    return frozenset(token_ids)
+
+
+def _first_token_id(encoded: object) -> Optional[int]:
+    """Read the leading id from tokenizer output without importing tensors."""
+    if hasattr(encoded, "get"):
+        encoded = encoded.get("input_ids")
+    if hasattr(encoded, "tolist"):
+        encoded = encoded.tolist()
+    if not isinstance(encoded, (list, tuple)) or not encoded:
+        return None
+    first = encoded[0]
+    if isinstance(first, (list, tuple)):
+        if not first:
+            return None
+        first = first[0]
+    return _single_token_id(first)
+
+
+def _processor_adds_leading_bos(processor: object, text: str) -> bool:
+    """Detect whether ``add_special_tokens=True`` supplies a missing BOS.
+
+    Some VLM chat templates (SmolVLM, Qwen2-VL) already render their leading
+    special token, while LLaVA-1.5 relies on tokenizer defaults. Comparing the
+    two tokenizer paths on the first real rendered prompt preserves both.
+    """
+    tokenizer = getattr(processor, "tokenizer", None)
+    bos_token_id = _single_token_id(getattr(tokenizer, "bos_token_id", None))
+    if not callable(tokenizer) or bos_token_id is None:
+        return False
+    try:
+        plain_first = _first_token_id(tokenizer(text, add_special_tokens=False))
+        special_first = _first_token_id(tokenizer(text, add_special_tokens=True))
+    except (TypeError, ValueError):
+        return False
+    return plain_first != bos_token_id and special_first == bos_token_id
+
+
+class VisionLanguageDataCollator:
+    """Build a real multimodal batch at data-loader time.
+
+    Keeping PIL images and raw messages until collation lets each processor
+    perform its own image-token expansion and emit architecture-specific
+    tensors (``pixel_values``, ``pixel_attention_mask``, ``image_grid_thw``,
+    and so on). This deliberately mirrors TRL's newer VLM collator without
+    requiring a newer TRL than Soup's declared floor.
+    """
+
+    def __init__(self, processor: object, max_length: Optional[int]) -> None:
+        self.processor = processor
+        self.max_length = max_length
+        self.image_token_ids = _vision_image_token_ids(processor)
+        self._add_special_tokens: Optional[bool] = None
+
+    def __call__(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
+        images: list[list[Any]] = []
+        texts: list[str] = []
+        for example in examples:
+            example_images = example.get("images") or []
+            if not isinstance(example_images, (list, tuple)):
+                example_images = [example_images]
+            image_list = list(example_images)
+            messages = _vision_messages_with_image_parts(
+                example.get("messages") or [], len(image_list)
+            )
+            text = self.processor.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=False,
+            )
+            images.append(image_list)
+            texts.append(text)
+
+        if self._add_special_tokens is None:
+            self._add_special_tokens = bool(
+                texts and _processor_adds_leading_bos(self.processor, texts[0])
+            )
+
+        processor_kwargs: dict[str, Any] = {
+            "images": images,
+            "text": texts,
+            "padding": True,
+            "return_tensors": "pt",
+            "add_special_tokens": self._add_special_tokens,
+        }
+        if self.max_length is not None:
+            processor_kwargs.update(
+                truncation=True,
+                max_length=self.max_length,
+            )
+        output = self.processor(**processor_kwargs)
+        labels = output["input_ids"].clone()
+        labels[output["attention_mask"] == 0] = -100
+        for image_token_id in self.image_token_ids:
+            labels[output["input_ids"] == image_token_id] = -100
+        output["labels"] = labels
+        return output
+
+
+def _make_vision_trainer(
+    trainer_kwargs: dict[str, Any], processor: object, max_length: Optional[int]
+) -> Any:
+    """Build the plain HF Trainer used for already-collated vision batches."""
+    import inspect
+
+    from transformers import Trainer
+
+    kwargs = dict(trainer_kwargs)
+    kwargs["data_collator"] = VisionLanguageDataCollator(processor, max_length)
+    # Transformers renamed Trainer(tokenizer=...) to processing_class. Soup's
+    # declared floor predates the rename, so keep this narrow compatibility
+    # shim at the construction boundary.
+    if "processing_class" not in inspect.signature(Trainer.__init__).parameters:
+        kwargs["tokenizer"] = kwargs.pop("processing_class")
+    return Trainer(**kwargs)
+
+
 def _maybe_load_pretokenized(
     dcfg, base: str, console_obj: Console,
 ) -> Optional[Tuple[object, object]]:
@@ -161,6 +381,39 @@ def _maybe_load_pretokenized(
         train_ds = arrow_ds
         eval_ds = None
     return train_ds, eval_ds
+
+
+def is_full_finetune(tcfg) -> bool:
+    """Single source of truth: does this run train the base itself (no adapter)?
+
+    Three schema-gated spellings (see config/schema.py's
+    ``_validate_unfrozen_parameters`` / ``_validate_lisa*`` /
+    ``_validate_full_finetune`` — all three mutually exclusive with each
+    other, so at most one is ever true): Spectrum ``unfrozen_parameters``,
+    LISA ``lisa_enabled``, or the #340 ``lora.r=0`` spelling.
+
+    ``freeze_layers`` / ``freeze_ratio`` are deliberately NOT part of this.
+    They reduce what's trainable WITHIN whichever mode is already chosen —
+    a LoRA run with frozen bottom layers is still LoRA (frozen base,
+    checkpoint dtype), not full fine-tuning — they do not select the mode.
+    See ``_setup_transformers``'s "Freeze training" block (runs before the
+    mode-selection chain, unconditionally) and ``_validate_full_finetune``'s
+    ``mode_conflicts`` (schema.py), which lets ``freeze_layers``/
+    ``freeze_ratio`` combine with EITHER ``lora.r=0`` or plain ``lora.r>0``.
+
+    #471 review — this used to be re-derived independently in three places
+    (this function's own predecessor in ``_resolve_load_dtype``,
+    ``commands/train.py::_build_hardware_fit_input``'s VRAM pre-flight
+    ``peft`` classifier, and this module's ``setup()`` summary-label block),
+    and two of the three had drifted apart in OPPOSITE directions:
+    ``_build_hardware_fit_input`` didn't check ``lisa_enabled``/``lora.r==0``
+    (under-predicting VRAM for those runs) and treated bare
+    ``freeze_layers``/``freeze_ratio`` as sufficient on its own (over-
+    predicting — and falsely refusing launches — for a LoRA run that merely
+    freezes some layers). Unified here so the two call sites cannot drift
+    again.
+    """
+    return bool(tcfg.unfrozen_parameters or tcfg.lisa_enabled or tcfg.lora.r == 0)
 
 
 class SFTTrainerWrapper(StreamingSetupMixin):
@@ -264,6 +517,8 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         # is the line an operator screenshots to show what trained.
         if tcfg.unfrozen_parameters:
             label = "Spectrum targeted FT"
+        elif tcfg.lisa_enabled:
+            label = "LISA full fine-tuning"
         elif tcfg.lora.r == 0 and cfg.modality == "text" and cfg.backend == "transformers":
             label = "Full fine-tuning"
         else:
@@ -641,6 +896,16 @@ class SFTTrainerWrapper(StreamingSetupMixin):
                 ),
             )
             console.print("[green]Multipack FFD bin-packing sampler enabled[/]")
+        elif use_vision and not tcfg.packing:
+            # Vision rows still contain PIL images and structured messages.
+            # Plain Trainer must receive the custom collator directly; letting
+            # SFTTrainer pre-tokenize them takes the text-only path on older TRL
+            # and drops Idefics3's image-token expansion (#302).
+            self.trainer = _make_vision_trainer(
+                trainer_kwargs,
+                processor=self.processor,
+                max_length=cfg.data.max_length,
+            )
         else:
             self.trainer = SFTTrainer(**trainer_kwargs)
 
@@ -835,6 +1100,50 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         )
         return (mode == "bf16", mode == "fp16")
 
+    def _resolve_load_dtype(self, tcfg):
+        """Decide the ``torch_dtype`` kwarg for ``from_pretrained`` (#339, #471, #492).
+
+        Two cases, told apart by the module-level ``is_full_finetune`` (also
+        used by ``commands/train.py``'s VRAM pre-flight, so the two cannot
+        drift apart the way they did before #471):
+
+        - Trainable base — full fine-tuning: explicit ``torch.float32``. This
+          is a DELIBERATE numerics decision (#339 AC2), not the accidental
+          default this issue exists to remove — the parameters an optimizer
+          actually steps stay fp32 master weights rather than silently
+          inheriting whatever the checkpoint happened to be stored in. This
+          half is genuinely SFT's own — the shared helper below has no
+          full-fine-tuning branch.
+        - Frozen base (LoRA / QLoRA — the base never receives an optimizer
+          step): delegate to ``resolve_frozen_base_load_dtype`` (#492, added
+          for the other twelve trainers) rather than re-deriving the same
+          card-aware decision inline. It preserves the checkpoint's OWN
+          dtype (``"auto"``) instead of the HF default of upcasting every
+          load to fp32 — measured on an H100, Llama-3.1-8B, LoRA, frozen
+          base: 48,241 MiB -> 18,658 MiB peak (2.59x / 28.9 GB),
+          byte-identical across 3 repeats — except on a pre-Ampere CUDA card
+          (T4 / P100 / V100 / GTX 16xx / RTX 20xx), where ``"auto"`` on a
+          bf16 checkpoint would give bf16 STORAGE while training compute
+          correctly stays fp16 (``bf16_fp16_flags`` — the same helper
+          ``_resolve_mixed_precision`` above calls for the SAME card
+          question), the exact class of bug v0.73.1 (#385/#387) removed from
+          fourteen other places. One resolver instead of two duplicated
+          implementations (#492 review) — this was itself the finding that
+          produced #492's helper.
+
+        #492 review — the kwarg name is ``torch_dtype``, not ``dtype``: the
+        latter only exists in transformers>=4.56, and this project's declared
+        floor is >=4.36.0, so ``dtype=`` was a hard ``TypeError`` at model
+        load on every version from the floor to 4.55 (measured live on
+        4.46.1) — not a silent no-op, since transformers only forwards a
+        kwarg into the config if the config already ``hasattr`` it.
+        """
+        if is_full_finetune(tcfg):
+            import torch  # lazy — sft.py has no top-level torch import (house style)
+
+            return torch.float32
+        return resolve_frozen_base_load_dtype(self.device)
+
     @staticmethod
     def _as_sft_config(training_args, max_length):
         """Convert `TrainingArguments` -> `SFTConfig`, carrying `max_length` over.
@@ -921,6 +1230,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         model_kwargs = {
             "trust_remote_code": self._trust_remote_code,
             "device_map": dev_map,
+            "torch_dtype": self._resolve_load_dtype(tcfg),
         }
         if quant_config_obj is not None:
             model_kwargs["quantization_config"] = quant_config_obj
@@ -1199,6 +1509,17 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         model_kwargs = {
             "trust_remote_code": self._trust_remote_code,
             "device_map": dev_map,
+            # #339 — always frozen-base here: get_peft_model below runs
+            # unconditionally on this path (vision has no full-FT branch),
+            # and the schema gates unfrozen_parameters / lisa_enabled /
+            # lora.r==0 to modality='text', so _resolve_load_dtype can never
+            # return torch.float32 here — but it CAN still return the #471
+            # pre-Ampere torch.float16 override rather than "auto" (a T4
+            # running vision LoRA has the identical storage/compute
+            # mismatch risk as the text path). Routed through the shared
+            # method anyway rather than hardcoding a string, so this stays
+            # correct by construction if a vision full-FT branch is ever added.
+            "torch_dtype": self._resolve_load_dtype(tcfg),
         }
         if quant_config_obj is not None:
             model_kwargs["quantization_config"] = quant_config_obj
@@ -1233,7 +1554,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         self._apply_quantization_aware(tcfg)
 
     def _prepare_vision_dataset(self, dataset: dict):
-        """Prepare dataset for vision fine-tuning with image loading."""
+        """Keep messages + PIL images raw for processor-aware collation."""
         from datasets import Dataset
 
         def load_and_format_vision(example):
@@ -1247,16 +1568,15 @@ class SFTTrainerWrapper(StreamingSetupMixin):
                 except (FileNotFoundError, OSError):
                     console.print(f"[yellow]Warning: cannot open image: {image_path}[/]")
 
-            messages = example["messages"]
-            text = self.processor.apply_chat_template(
-                messages, tokenize=False, add_generation_prompt=False
-            )
-            result = {"text": text}
+            result = {"images": []}
             if image is not None:
                 result["images"] = [image]
             return result
 
-        remove_cols = ["messages", "image"]
+        # Preserve ``messages``. Idefics3 and other modern processors need the
+        # structured image part before they render the chat template; rendering
+        # Soup's legacy string content here loses the image marker (#302).
+        remove_cols = ["image"]
         train_ds = Dataset.from_list(dataset["train"]).map(
             load_and_format_vision,
             remove_columns=[c for c in remove_cols if c in dataset["train"][0]],
@@ -1308,6 +1628,12 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         model_kwargs = {
             "trust_remote_code": self._trust_remote_code,
             "device_map": dev_map,
+            # #339 — always frozen-base, same reasoning as the vision path
+            # above (get_peft_model runs unconditionally below, and the
+            # schema gates unfrozen_parameters / lisa_enabled / lora.r==0 to
+            # modality='text'); still routed through the shared method since
+            # #471's pre-Ampere torch.float16 override can still apply here.
+            "torch_dtype": self._resolve_load_dtype(tcfg),
         }
         if quant_config_obj is not None:
             model_kwargs["quantization_config"] = quant_config_obj
