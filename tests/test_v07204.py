@@ -260,7 +260,7 @@ def _match_streamed_dtype(resident, streamed):
     streaming path — that mistake produced a 9.96e-04 "failure" that was
     entirely the test's own.
     """
-    param = next(streamed.parameters())
+    param = next(parameter for parameter in streamed.parameters() if not parameter.is_meta)
     return resident.to(device=param.device, dtype=param.dtype)
 
 
@@ -596,6 +596,28 @@ class TestBitExactVsResident:
     """The rule every slot in the series inherits: a streamed run is bit-exact
     against the RESIDENT run of the same numerics. What changes per slot is the
     reference, not the standard — here it is a resident run of the same loss."""
+
+    def test_reference_dtype_match_ignores_meta_stream_weights(self):
+        """Large-layer streaming puts a meta embedding before the real LoRA
+        parameters.  The resident oracle must follow the first materialised
+        parameter, never move itself onto meta and turn the comparison red
+        before either model executes.
+        """
+        import torch
+        from torch import nn
+
+        class MixedPlacement(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.meta_weight = nn.Parameter(torch.empty(2, device="meta"))
+                self.real_weight = nn.Parameter(torch.ones(2, dtype=torch.float64))
+
+        resident = nn.Linear(2, 2, bias=False)
+        matched = _match_streamed_dtype(resident, MixedPlacement())
+
+        assert all(not parameter.is_meta for parameter in matched.parameters())
+        assert next(matched.parameters()).device.type == "cpu"
+        assert next(matched.parameters()).dtype is torch.float64
 
     @pytest.mark.skipif(
         _mps_is_the_accelerator(),
