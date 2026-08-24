@@ -907,6 +907,8 @@ print(report.ok, report.reason)
 
 When it doesn't fit, the report names actionable knobs: `--batch-size halve`, `--quantization 4bit`, `--gradient-checkpointing auto`. Composes with v0.40.3 live CUDA OOM probe (`make_cuda_probe_fn`) which still runs when `auto_batch_size_strategy: probe`.
 
+The weights bucket assumes 2 bytes/param under `quant="none"` (a frozen base now really does load at the checkpoint's own dtype, typically bf16/fp16 — #339), except `peft="full"` (full fine-tuning), which explicitly loads fp32 master weights and so assumes 4 bytes/param instead.
+
 
 ## Shell Completions (`soup completions`)
 

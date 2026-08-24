@@ -16,6 +16,7 @@ from soup_cli.utils.gpu import (
     estimate_batch_size,
     model_size_from_name,
     resolve_device_map,
+    resolve_frozen_base_load_dtype,
 )
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 
@@ -382,6 +383,39 @@ def _maybe_load_pretokenized(
     return train_ds, eval_ds
 
 
+def is_full_finetune(tcfg) -> bool:
+    """Single source of truth: does this run train the base itself (no adapter)?
+
+    Three schema-gated spellings (see config/schema.py's
+    ``_validate_unfrozen_parameters`` / ``_validate_lisa*`` /
+    ``_validate_full_finetune`` — all three mutually exclusive with each
+    other, so at most one is ever true): Spectrum ``unfrozen_parameters``,
+    LISA ``lisa_enabled``, or the #340 ``lora.r=0`` spelling.
+
+    ``freeze_layers`` / ``freeze_ratio`` are deliberately NOT part of this.
+    They reduce what's trainable WITHIN whichever mode is already chosen —
+    a LoRA run with frozen bottom layers is still LoRA (frozen base,
+    checkpoint dtype), not full fine-tuning — they do not select the mode.
+    See ``_setup_transformers``'s "Freeze training" block (runs before the
+    mode-selection chain, unconditionally) and ``_validate_full_finetune``'s
+    ``mode_conflicts`` (schema.py), which lets ``freeze_layers``/
+    ``freeze_ratio`` combine with EITHER ``lora.r=0`` or plain ``lora.r>0``.
+
+    #471 review — this used to be re-derived independently in three places
+    (this function's own predecessor in ``_resolve_load_dtype``,
+    ``commands/train.py::_build_hardware_fit_input``'s VRAM pre-flight
+    ``peft`` classifier, and this module's ``setup()`` summary-label block),
+    and two of the three had drifted apart in OPPOSITE directions:
+    ``_build_hardware_fit_input`` didn't check ``lisa_enabled``/``lora.r==0``
+    (under-predicting VRAM for those runs) and treated bare
+    ``freeze_layers``/``freeze_ratio`` as sufficient on its own (over-
+    predicting — and falsely refusing launches — for a LoRA run that merely
+    freezes some layers). Unified here so the two call sites cannot drift
+    again.
+    """
+    return bool(tcfg.unfrozen_parameters or tcfg.lisa_enabled or tcfg.lora.r == 0)
+
+
 class SFTTrainerWrapper(StreamingSetupMixin):
     """High-level wrapper that sets up model + tokenizer + trainer from SoupConfig."""
 
@@ -483,6 +517,8 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         # is the line an operator screenshots to show what trained.
         if tcfg.unfrozen_parameters:
             label = "Spectrum targeted FT"
+        elif tcfg.lisa_enabled:
+            label = "LISA full fine-tuning"
         elif tcfg.lora.r == 0 and cfg.modality == "text" and cfg.backend == "transformers":
             label = "Full fine-tuning"
         else:
@@ -1064,6 +1100,50 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         )
         return (mode == "bf16", mode == "fp16")
 
+    def _resolve_load_dtype(self, tcfg):
+        """Decide the ``torch_dtype`` kwarg for ``from_pretrained`` (#339, #471, #492).
+
+        Two cases, told apart by the module-level ``is_full_finetune`` (also
+        used by ``commands/train.py``'s VRAM pre-flight, so the two cannot
+        drift apart the way they did before #471):
+
+        - Trainable base — full fine-tuning: explicit ``torch.float32``. This
+          is a DELIBERATE numerics decision (#339 AC2), not the accidental
+          default this issue exists to remove — the parameters an optimizer
+          actually steps stay fp32 master weights rather than silently
+          inheriting whatever the checkpoint happened to be stored in. This
+          half is genuinely SFT's own — the shared helper below has no
+          full-fine-tuning branch.
+        - Frozen base (LoRA / QLoRA — the base never receives an optimizer
+          step): delegate to ``resolve_frozen_base_load_dtype`` (#492, added
+          for the other twelve trainers) rather than re-deriving the same
+          card-aware decision inline. It preserves the checkpoint's OWN
+          dtype (``"auto"``) instead of the HF default of upcasting every
+          load to fp32 — measured on an H100, Llama-3.1-8B, LoRA, frozen
+          base: 48,241 MiB -> 18,658 MiB peak (2.59x / 28.9 GB),
+          byte-identical across 3 repeats — except on a pre-Ampere CUDA card
+          (T4 / P100 / V100 / GTX 16xx / RTX 20xx), where ``"auto"`` on a
+          bf16 checkpoint would give bf16 STORAGE while training compute
+          correctly stays fp16 (``bf16_fp16_flags`` — the same helper
+          ``_resolve_mixed_precision`` above calls for the SAME card
+          question), the exact class of bug v0.73.1 (#385/#387) removed from
+          fourteen other places. One resolver instead of two duplicated
+          implementations (#492 review) — this was itself the finding that
+          produced #492's helper.
+
+        #492 review — the kwarg name is ``torch_dtype``, not ``dtype``: the
+        latter only exists in transformers>=4.56, and this project's declared
+        floor is >=4.36.0, so ``dtype=`` was a hard ``TypeError`` at model
+        load on every version from the floor to 4.55 (measured live on
+        4.46.1) — not a silent no-op, since transformers only forwards a
+        kwarg into the config if the config already ``hasattr`` it.
+        """
+        if is_full_finetune(tcfg):
+            import torch  # lazy — sft.py has no top-level torch import (house style)
+
+            return torch.float32
+        return resolve_frozen_base_load_dtype(self.device)
+
     @staticmethod
     def _as_sft_config(training_args, max_length):
         """Convert `TrainingArguments` -> `SFTConfig`, carrying `max_length` over.
@@ -1150,6 +1230,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         model_kwargs = {
             "trust_remote_code": self._trust_remote_code,
             "device_map": dev_map,
+            "torch_dtype": self._resolve_load_dtype(tcfg),
         }
         if quant_config_obj is not None:
             model_kwargs["quantization_config"] = quant_config_obj
@@ -1428,6 +1509,17 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         model_kwargs = {
             "trust_remote_code": self._trust_remote_code,
             "device_map": dev_map,
+            # #339 — always frozen-base here: get_peft_model below runs
+            # unconditionally on this path (vision has no full-FT branch),
+            # and the schema gates unfrozen_parameters / lisa_enabled /
+            # lora.r==0 to modality='text', so _resolve_load_dtype can never
+            # return torch.float32 here — but it CAN still return the #471
+            # pre-Ampere torch.float16 override rather than "auto" (a T4
+            # running vision LoRA has the identical storage/compute
+            # mismatch risk as the text path). Routed through the shared
+            # method anyway rather than hardcoding a string, so this stays
+            # correct by construction if a vision full-FT branch is ever added.
+            "torch_dtype": self._resolve_load_dtype(tcfg),
         }
         if quant_config_obj is not None:
             model_kwargs["quantization_config"] = quant_config_obj
@@ -1536,6 +1628,12 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         model_kwargs = {
             "trust_remote_code": self._trust_remote_code,
             "device_map": dev_map,
+            # #339 — always frozen-base, same reasoning as the vision path
+            # above (get_peft_model runs unconditionally below, and the
+            # schema gates unfrozen_parameters / lisa_enabled / lora.r==0 to
+            # modality='text'); still routed through the shared method since
+            # #471's pre-Ampere torch.float16 override can still apply here.
+            "torch_dtype": self._resolve_load_dtype(tcfg),
         }
         if quant_config_obj is not None:
             model_kwargs["quantization_config"] = quant_config_obj
