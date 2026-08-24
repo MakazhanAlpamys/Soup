@@ -13,7 +13,7 @@ import json
 import os
 import secrets
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -27,6 +27,17 @@ from soup_cli.utils.process_liveness import process_is_alive as _process_is_aliv
 # mistaken for success. See issue #401.
 _STATUS_RUNNING = "running"
 _STATUS_TERMINATED = "terminated"
+_STATUS_LAUNCHING = "launching"
+
+
+class ActiveLaunchingRunError(RuntimeError):
+    """A stale launching row still identifies a live child process."""
+
+    def __init__(self, run_id: str, pid: int):
+        self.run_id = run_id
+        self.pid = pid
+        super().__init__(f"launching run {run_id} still has live PID {pid}")
+
 
 _SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS runs (
@@ -261,6 +272,49 @@ class ExperimentTracker:
             (status, exit_code, run_id),
         )
         conn.commit()
+
+    def expunge_stale_launching_runs(self, *, older_than_seconds: int) -> list[str]:
+        """Delete stale MCP launching rows unless one still has a live PID.
+
+        The write transaction keeps ``mark_running`` from racing the liveness
+        check and deletion. If any candidate has a live PID, nothing is
+        removed: the operator must resolve that process before retrying.
+        """
+        if (
+            not isinstance(older_than_seconds, int)
+            or isinstance(older_than_seconds, bool)
+            or older_than_seconds < 1
+        ):
+            raise ValueError("older_than_seconds must be a positive integer")
+
+        cutoff = (datetime.now() - timedelta(seconds=older_than_seconds)).isoformat()
+        conn = self._get_conn()
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            rows = conn.execute(
+                """SELECT run_id, pid FROM runs
+                   WHERE status = ? AND created_at <= ?
+                   ORDER BY created_at, rowid""",
+                (_STATUS_LAUNCHING, cutoff),
+            ).fetchall()
+            for row in rows:
+                pid = row["pid"]
+                if pid is not None and _process_is_alive(pid):
+                    raise ActiveLaunchingRunError(row["run_id"], pid)
+
+            removed = [str(row["run_id"]) for row in rows]
+            for run_id in removed:
+                conn.execute("DELETE FROM metrics WHERE run_id = ?", (run_id,))
+                conn.execute("DELETE FROM eval_results WHERE run_id = ?", (run_id,))
+                conn.execute(
+                    "DELETE FROM runs WHERE run_id = ? AND status = ?",
+                    (run_id, _STATUS_LAUNCHING),
+                )
+            conn.commit()
+            return removed
+        except Exception:
+            conn.rollback()
+            raise
 
     def log_metrics(
         self,

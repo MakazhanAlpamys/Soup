@@ -22,10 +22,63 @@ app = typer.Typer(
     no_args_is_help=True,
     help="Model Context Protocol server - drive Soup from any MCP client.",
 )
+runs_app = typer.Typer(
+    no_args_is_help=True,
+    help="Recover persisted MCP execution runs.",
+)
+app.add_typer(runs_app, name="runs")
 
 _STDIO = "stdio"
 _TRANSPORTS = ("stdio", "sse", "http")
 _LOOPBACK = ("127.0.0.1", "::1", "localhost")
+
+
+@runs_app.command()
+def reconcile(
+    expunge_launching: bool = typer.Option(
+        False,
+        "--expunge-launching",
+        help="Delete stale launching rows after checking that no recorded PID is alive.",
+    ),
+    older_than_seconds: int = typer.Option(
+        300,
+        "--older-than-seconds",
+        min=1,
+        help="Only consider launching rows at least this many seconds old.",
+    ),
+) -> None:
+    """Recover execution capacity left blocked by a crashed MCP server."""
+    from rich.console import Console
+    from rich.markup import escape
+
+    from soup_cli.experiment.tracker import ActiveLaunchingRunError, ExperimentTracker
+
+    console = Console()
+    if not expunge_launching:
+        console.print(
+            "[red]--expunge-launching is required[/] - no run records were changed."
+        )
+        raise typer.Exit(2)
+
+    try:
+        removed = ExperimentTracker().expunge_stale_launching_runs(
+            older_than_seconds=older_than_seconds
+        )
+    except ActiveLaunchingRunError as exc:
+        console.print(
+            "[red]Refusing to expunge launching run[/] "
+            f"[bold]{escape(exc.run_id)}[/]: PID {exc.pid} is still alive."
+        )
+        raise typer.Exit(1) from exc
+
+    if not removed:
+        console.print(
+            "[dim]No stale launching MCP runs found "
+            f"(older than {older_than_seconds} seconds).[/]"
+        )
+        return
+    for run_id in removed:
+        console.print(f"[green]Expunged launching run:[/] {escape(run_id)}")
 
 
 def _resolve_auth_token(auth_token: Optional[str]) -> str:
