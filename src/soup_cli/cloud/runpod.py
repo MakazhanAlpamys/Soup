@@ -1,0 +1,237 @@
+"""RunPod cloud-training backend for ``soup train --cloud runpod`` (#264).
+
+Renders a RunPod API submission script from the user's ``soup.yaml`` (the config YAML is
+base64-embedded — no code interpolation, no secrets) that:
+
+1. creates a pod with a standard PyTorch image,
+2. uses docker_args to install ``soup-cli[train]`` pinned to the running version,
+3. writes the embedded config to ``/root/soup.yaml`` inside the container,
+4. runs ``soup train --config /root/soup.yaml --yes`` on the chosen GPU,
+5. auto-terminates the pod upon completion.
+
+Default behaviour is **plan-only**: write the stub + print the planned
+``python soup_runpod_app.py`` command. ``--cloud-submit`` attempts a live submit,
+gated on a RunPod API key (``RUNPOD_API_KEY``). A mockable seam (``_RUNPOD_SUBMIT_OVERRIDE``) keeps
+the submit path testable without an account.
+"""
+
+from __future__ import annotations
+
+import base64
+import os
+import types
+from collections.abc import Callable, Mapping
+from typing import Optional
+
+from soup_cli.cloud.modal import (
+    _MAX_CONFIG_BYTES,
+    _MAX_NAME_LEN,
+    _MAX_VERSION_LEN,
+    _VERSION_RE,
+    CloudPlan,
+    _validate_path_shape,
+)
+
+SUPPORTED_CLOUDS: frozenset[str] = frozenset({"runpod"})
+
+# RunPod GPU types (https://www.runpod.io/console/gpus)
+_GPU_RUNPOD_NAME: Mapping[str, str] = types.MappingProxyType({
+    "t4": "NVIDIA T4",
+    "l4": "NVIDIA L4",
+    "a10g": "NVIDIA A10G",
+    "a100": "NVIDIA A100 80GB PCIe",
+    "a100-80gb": "NVIDIA A100 80GB PCIe",
+    "l40s": "NVIDIA L40S",
+    "h100": "NVIDIA H100 80GB HBM3",
+    "rtx-4090": "NVIDIA GeForce RTX 4090",
+    "a6000": "NVIDIA RTX A6000",
+})
+SUPPORTED_GPUS: frozenset[str] = frozenset(_GPU_RUNPOD_NAME)
+
+_RUNPOD_SUBMIT_OVERRIDE: Optional[Callable[["CloudPlan"], int]] = None
+
+
+def validate_cloud(name: object) -> str:
+    """Validate + normalise a ``--cloud`` provider name (closed allowlist)."""
+    if isinstance(name, bool):
+        raise ValueError("cloud must be a string, got bool")
+    if not isinstance(name, str):
+        raise ValueError(f"cloud must be a string, got {type(name).__name__}")
+    if not name:
+        raise ValueError("cloud must be a non-empty string")
+    if "\x00" in name:
+        raise ValueError("cloud must not contain null bytes")
+    if len(name) > _MAX_NAME_LEN:
+        raise ValueError(f"cloud exceeds {_MAX_NAME_LEN} chars")
+    normalised = name.lower()
+    if normalised not in SUPPORTED_CLOUDS:
+        raise ValueError(
+            f"cloud={name!r} is not supported. "
+            f"Valid: {sorted(SUPPORTED_CLOUDS)}"
+        )
+    return normalised
+
+
+def validate_gpu(gpu: object) -> str:
+    """Validate + normalise a ``--gpu`` type against the RunPod allowlist."""
+    if isinstance(gpu, bool):
+        raise ValueError("gpu must be a string, got bool")
+    if not isinstance(gpu, str):
+        raise ValueError(f"gpu must be a string, got {type(gpu).__name__}")
+    if not gpu:
+        raise ValueError("gpu must be a non-empty string")
+    if "\x00" in gpu:
+        raise ValueError("gpu must not contain null bytes")
+    if len(gpu) > _MAX_NAME_LEN:
+        raise ValueError(f"gpu exceeds {_MAX_NAME_LEN} chars")
+    normalised = gpu.lower()
+    if normalised not in SUPPORTED_GPUS:
+        raise ValueError(
+            f"gpu={gpu!r} is not supported. Valid: {sorted(SUPPORTED_GPUS)}"
+        )
+    return normalised
+
+
+def render_runpod_stub(
+    config_yaml: str,
+    *,
+    gpu: str,
+    output_dir: str,
+    soup_version: str,
+) -> str:
+    """Render the RunPod submission stub for ``config_yaml``."""
+    if not isinstance(config_yaml, str):
+        raise TypeError("config_yaml must be a string")
+    encoded = config_yaml.encode("utf-8")
+    if len(encoded) > _MAX_CONFIG_BYTES:
+        raise ValueError(
+            f"config exceeds {_MAX_CONFIG_BYTES} bytes "
+            "(too large to embed in the RunPod stub)"
+        )
+    gpu_key = validate_gpu(gpu)
+    runpod_gpu = _GPU_RUNPOD_NAME[gpu_key]
+    _validate_path_shape(output_dir, "output_dir")
+    if not isinstance(soup_version, str) or "\x00" in soup_version:
+        raise ValueError("soup_version must be a NUL-free string")
+    if len(soup_version) > _MAX_VERSION_LEN or not _VERSION_RE.match(soup_version):
+        raise ValueError(
+            f"soup_version must match {_VERSION_RE.pattern} "
+            f"and be <= {_MAX_VERSION_LEN} chars"
+        )
+    cfg_b64 = base64.b64encode(encoded).decode("ascii")
+    pip_spec = f"soup-cli[train]=={soup_version}"
+
+    # Bash command that runs inside the RunPod container
+    # It decodes the config, installs soup, trains, and then tells RunPod API to terminate the pod.
+    # We pass the RUNPOD_API_KEY from the environment into the pod so it can self-terminate.
+    docker_args = (
+        "bash -c '"
+        f"pip install {pip_spec} && "
+        f"echo {cfg_b64} | base64 -d > /root/soup.yaml && "
+        "soup train --config /root/soup.yaml --yes ; "
+        "curl -X POST https://api.runpod.io/graphql -H \"Authorization: Bearer $RUNPOD_API_KEY\" "
+        "-H \"Content-Type: application/json\" "
+        "-d \"{\\\"query\\\": \\\"mutation { podTerminate(input: {podId: "
+        "\\\\\\\"$RUNPOD_POD_ID\\\\\\\"}) }\\\"}\" "
+        "'"
+    )
+
+    return (
+        '"""Auto-generated by `soup train --cloud runpod`.\n'
+        "Run with: python soup_runpod_app.py\n"
+        '(requires RUNPOD_API_KEY environment variable).\n"""\n'
+        "import os\n"
+        "import sys\n"
+        "import runpod\n"
+        "\n"
+        f'_LOCAL_OUTPUT = {output_dir!r}\n'
+        "\n"
+        "def main() -> None:\n"
+        '    api_key = os.environ.get("RUNPOD_API_KEY")\n'
+        "    if not api_key:\n"
+        '        print("Error: RUNPOD_API_KEY is not set.")\n'
+        "        sys.exit(1)\n"
+        "    runpod.api_key = api_key\n"
+        "\n"
+        "    print('Creating Pod on RunPod...')\n"
+        "    pod = runpod.create_pod(\n"
+        '        name="soup-train",\n'
+        '        image_name="runpod/pytorch:2.2.0-py3.10-cuda12.1.1-devel-ubuntu22.04",\n'
+        f'        gpu_type_id="{runpod_gpu}",\n'
+        '        env={"RUNPOD_API_KEY": api_key},\n'
+        f'        docker_args={docker_args!r},\n'
+        "    )\n"
+        '    print(f"Pod created: {pod.get(\'id\')}")\n'
+        '    print(f"Training submitted; download checkpoints to {_LOCAL_OUTPUT}")\n'
+        "\n"
+        "if __name__ == '__main__':\n"
+        "    main()\n"
+    )
+
+
+def plan_runpod_run(
+    config_path: str,
+    *,
+    gpu: str,
+    output_dir: str,
+    soup_version: str,
+    stub_path: str = "soup_runpod_app.py",
+) -> CloudPlan:
+    from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
+
+    enforce_under_cwd_and_no_symlink(config_path, "--config")
+    with open(config_path, encoding="utf-8") as fh:
+        config_yaml = fh.read(_MAX_CONFIG_BYTES + 1)
+    if len(config_yaml.encode("utf-8")) > _MAX_CONFIG_BYTES:
+        raise ValueError(f"config exceeds {_MAX_CONFIG_BYTES} bytes")
+    gpu_key = validate_gpu(gpu)
+    _validate_path_shape(output_dir, "output_dir")
+    _validate_path_shape(stub_path, "stub_path")
+    stub_text = render_runpod_stub(
+        config_yaml,
+        gpu=gpu_key,
+        output_dir=output_dir,
+        soup_version=soup_version,
+    )
+    run_command = f"python {stub_path}"
+    return CloudPlan(
+        cloud="runpod",
+        gpu=gpu_key,
+        output_dir=output_dir,
+        stub_path=stub_path,
+        stub_text=stub_text,
+        run_command=run_command,
+    )
+
+
+def write_stub(plan: CloudPlan) -> str:
+    from soup_cli.utils.paths import atomic_write_text
+
+    return atomic_write_text(plan.stub_text, plan.stub_path, field="stub_path")
+
+
+def submit_runpod_run(plan: CloudPlan, *, env: Optional[Mapping] = None) -> int:
+    if not isinstance(plan, CloudPlan):
+        raise TypeError(f"plan must be a CloudPlan, got {type(plan).__name__}")
+    if _RUNPOD_SUBMIT_OVERRIDE is not None:
+        return _RUNPOD_SUBMIT_OVERRIDE(plan)
+    environ = env if env is not None else os.environ
+    if not environ.get("RUNPOD_API_KEY"):
+        raise RuntimeError(
+            "RunPod not authenticated. Set RUNPOD_API_KEY environment variable, "
+            "then re-run with --cloud-submit."
+        )
+    try:
+        import runpod  # noqa: F401 — presence check only
+    except ImportError as exc:
+        raise RuntimeError(
+            "RunPod SDK not installed. Run `pip install \"soup-cli[runpod]\"`."
+        ) from exc
+    import subprocess
+    import sys
+
+    proc = subprocess.run(  # noqa: S603 — argv list, no shell
+        [sys.executable, plan.stub_path],
+        check=False,
+    )
+    return proc.returncode

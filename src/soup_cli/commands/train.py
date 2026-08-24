@@ -479,9 +479,9 @@ def train(
         None,
         "--cloud",
         help=(
-            "Train on a serverless cloud GPU instead of locally (v0.71.18 "
-            "#16). Supported: modal. Renders a Modal app stub from the "
-            "config (plan-only); use --cloud-submit to submit live."
+            "Train on a cloud GPU instead of locally (v0.71.18 #16). Supported: "
+            "modal, runpod, lambda. Renders a cloud app stub from the config "
+            "(plan-only); use --cloud-submit to submit live."
         ),
     ),
     gpu: str = typer.Option(
@@ -489,16 +489,16 @@ def train(
         "--gpu",
         help=(
             "Cloud GPU type for --cloud (t4 / l4 / a10g / a100 / a100-80gb / "
-            "l40s / h100). Default a100. v0.71.18 #16."
+            "l40s / h100 / rtx-4090 / a6000). Default a100. Provider-specific allowlists apply."
         ),
     ),
     cloud_submit: bool = typer.Option(
         False,
         "--cloud-submit",
         help=(
-            "With --cloud modal, submit the rendered run live via the Modal "
-            "SDK (gated on a Modal token: run `modal setup` first). Default "
-            "is plan-only (render + print the `modal run` command)."
+            "With --cloud, submit the rendered run live via the cloud's SDK or API "
+            "(gated on respective provider token/API key). Default is plan-only "
+            "(render + print the command)."
         ),
     ),
 ):
@@ -639,53 +639,68 @@ def train(
         cfg.training.minillm_on_policy = True
         console.print("[green]MiniLLM on-policy rollout enabled[/]")
 
-    # --- Cloud GPU training (v0.71.18 #16) ---
+    # --- Cloud GPU training (v0.71.18 #16, v0.71.22 #264) ---
     if cloud:
         from soup_cli import __version__ as _soup_version
-        from soup_cli.cloud import modal as _modal_cloud
+
+        if cloud == "modal":
+            from soup_cli.cloud import modal as cloud_mod
+        elif cloud == "runpod":
+            from soup_cli.cloud import runpod as cloud_mod
+        elif cloud == "lambda":
+            from soup_cli.cloud import lambda_labs as cloud_mod
+        else:
+            console.print(
+                f"[red]Invalid --cloud:[/] {markup_escape(cloud)}. "
+                "Supported: modal, runpod, lambda."
+            )
+            raise typer.Exit(2)
 
         try:
-            _modal_cloud.validate_cloud(cloud)
-            _modal_cloud.validate_gpu(gpu)
+            cloud_mod.validate_cloud(cloud)
+            cloud_mod.validate_gpu(gpu)
         except ValueError as exc:
             console.print(
                 f"[red]Invalid --cloud / --gpu:[/] {markup_escape(str(exc))}"
             )
             raise typer.Exit(2) from exc
         try:
-            plan = _modal_cloud.plan_modal_run(
+            # We call the generic-shaped plan function dynamically
+            plan_func = getattr(cloud_mod, f"plan_{cloud}_run")
+            plan = plan_func(
                 str(config_path),
                 gpu=gpu,
                 output_dir=cfg.output,
                 soup_version=_soup_version,
             )
-            stub_realpath = _modal_cloud.write_stub(plan)
+            stub_realpath = cloud_mod.write_stub(plan)
         except (ValueError, TypeError) as exc:
             console.print(f"[red]Cloud plan failed:[/] {markup_escape(str(exc))}")
             raise typer.Exit(2) from exc
 
         console.print(
             Panel(
-                f"Cloud:    [bold]modal[/]\n"
+                f"Cloud:    [bold]{markup_escape(cloud)}[/]\n"
                 f"GPU:      [bold]{markup_escape(plan.gpu)}[/]\n"
                 f"Stub:     [bold]{markup_escape(os.path.relpath(stub_realpath))}[/]\n"
                 f"Output:   [bold]{markup_escape(plan.output_dir)}[/]\n\n"
                 f"[bold]Run:[/] {markup_escape(plan.run_command)}",
-                title="[bold green]soup train --cloud modal[/]",
+                title=f"[bold green]soup train --cloud {markup_escape(cloud)}[/]",
             )
         )
         if cloud_submit:
             try:
-                rc = _modal_cloud.submit_modal_run(plan)
+                submit_func = getattr(cloud_mod, f"submit_{cloud}_run")
+                rc = submit_func(plan)
             except RuntimeError as exc:
                 console.print(
-                    f"[yellow]Modal submit unavailable:[/] "
+                    f"[yellow]{cloud.title()} submit unavailable:[/] "
                     f"{markup_escape(str(exc))}"
                 )
                 raise typer.Exit(1) from exc
             raise typer.Exit(rc)
         console.print(
-            "[yellow]Note:[/] plan-only. Run `modal setup` once, then the "
+            f"[yellow]Note:[/] plan-only. Authenticate with {cloud}, then run the "
             "command above (or re-run with --cloud-submit)."
         )
         raise typer.Exit(0)
