@@ -11,8 +11,10 @@ _SOUP_YAML = (
 
 REPO_ROOT = Path(__file__).parent.parent.resolve()
 
+
 def _strip_ansi(s: str) -> str:
     import re
+
     return re.sub(r"\x1B\[[0-?]*[ -/]*[@-~]", "", s)
 
 
@@ -24,6 +26,16 @@ class TestValidateRunpod:
         assert validate_cloud("RUNPOD") == "runpod"
         with pytest.raises(ValueError):
             validate_cloud("modal")
+        with pytest.raises(ValueError, match="got bool"):
+            validate_cloud(True)
+        with pytest.raises(ValueError, match="got int"):
+            validate_cloud(123)
+        with pytest.raises(ValueError, match="non-empty string"):
+            validate_cloud("")
+        with pytest.raises(ValueError, match="null bytes"):
+            validate_cloud("run\x00pod")
+        with pytest.raises(ValueError, match="exceeds"):
+            validate_cloud("a" * 100)
 
     def test_runpod_validate_gpu(self):
         from soup_cli.cloud.runpod import validate_gpu
@@ -31,6 +43,16 @@ class TestValidateRunpod:
         assert validate_gpu("rtx-4090") == "rtx-4090"
         with pytest.raises(ValueError):
             validate_gpu("tpu")
+        with pytest.raises(ValueError, match="got bool"):
+            validate_gpu(True)
+        with pytest.raises(ValueError, match="got int"):
+            validate_gpu(123)
+        with pytest.raises(ValueError, match="non-empty string"):
+            validate_gpu("")
+        with pytest.raises(ValueError, match="null bytes"):
+            validate_gpu("rtx\x004090")
+        with pytest.raises(ValueError, match="exceeds"):
+            validate_gpu("a" * 100)
 
 
 class TestRenderRunpodStub:
@@ -52,6 +74,26 @@ class TestRenderRunpodStub:
                 _SOUP_YAML, gpu="a100", output_dir="out\nINJECT", soup_version="0.71.22"
             )
 
+    def test_render_config_yaml_validation(self):
+        from soup_cli.cloud.runpod import render_runpod_stub
+
+        with pytest.raises(TypeError, match="must be a string"):
+            render_runpod_stub(123, gpu="a100", output_dir="./out", soup_version="1.0.0")
+        with pytest.raises(ValueError, match="exceeds"):
+            render_runpod_stub(
+                "a" * 2_000_000, gpu="a100", output_dir="./out", soup_version="1.0.0"
+            )
+
+    def test_render_soup_version_validation(self):
+        from soup_cli.cloud.runpod import render_runpod_stub
+
+        with pytest.raises(ValueError, match="NUL-free string"):
+            render_runpod_stub(_SOUP_YAML, gpu="a100", output_dir="./out", soup_version="1.0\x00")
+        with pytest.raises(ValueError, match="must match"):
+            render_runpod_stub(_SOUP_YAML, gpu="a100", output_dir="./out", soup_version="invalid!")
+        with pytest.raises(ValueError, match="must match"):
+            render_runpod_stub(_SOUP_YAML, gpu="a100", output_dir="./out", soup_version="a" * 100)
+
 
 class TestPlanRunpodRun:
     def test_plan(self, tmp_path, monkeypatch):
@@ -60,13 +102,19 @@ class TestPlanRunpodRun:
         from soup_cli.cloud.modal import CloudPlan
         from soup_cli.cloud.runpod import plan_runpod_run
 
-        plan = plan_runpod_run(
-            "soup.yaml", gpu="a100", output_dir="./out", soup_version="0.71.22"
-        )
+        plan = plan_runpod_run("soup.yaml", gpu="a100", output_dir="./out", soup_version="0.71.22")
         assert isinstance(plan, CloudPlan)
         assert plan.cloud == "runpod"
         assert plan.gpu == "a100"
         assert plan.run_command == "python soup_runpod_app.py"
+
+    def test_plan_config_too_large(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "soup.yaml").write_text("a" * 2_000_000, encoding="utf-8")
+        from soup_cli.cloud.runpod import plan_runpod_run
+
+        with pytest.raises(ValueError, match="exceeds"):
+            plan_runpod_run("soup.yaml", gpu="a100", output_dir="./out", soup_version="0.71.22")
 
 
 class TestSubmitRunpodRun:
@@ -75,8 +123,12 @@ class TestSubmitRunpodRun:
         from soup_cli.cloud.modal import CloudPlan
 
         plan = CloudPlan(
-            cloud="runpod", gpu="a100", output_dir="./out",
-            stub_path="x.py", stub_text="", run_command="python x.py",
+            cloud="runpod",
+            gpu="a100",
+            output_dir="./out",
+            stub_path="x.py",
+            stub_text="",
+            run_command="python x.py",
         )
         monkeypatch.setattr(m, "_RUNPOD_SUBMIT_OVERRIDE", lambda p: 7)
         assert m.submit_runpod_run(plan) == 7
@@ -86,8 +138,12 @@ class TestSubmitRunpodRun:
         from soup_cli.cloud.modal import CloudPlan
 
         plan = CloudPlan(
-            cloud="runpod", gpu="a100", output_dir="./out",
-            stub_path="x.py", stub_text="", run_command="python x.py",
+            cloud="runpod",
+            gpu="a100",
+            output_dir="./out",
+            stub_path="x.py",
+            stub_text="",
+            run_command="python x.py",
         )
         with pytest.raises(RuntimeError, match="not authenticated"):
             m.submit_runpod_run(plan, env={})
@@ -99,8 +155,12 @@ class TestSubmitRunpodRun:
         from soup_cli.cloud.modal import CloudPlan
 
         plan = CloudPlan(
-            cloud="runpod", gpu="a100", output_dir="./out",
-            stub_path="x.py", stub_text="", run_command="python x.py",
+            cloud="runpod",
+            gpu="a100",
+            output_dir="./out",
+            stub_path="x.py",
+            stub_text="",
+            run_command="python x.py",
         )
         monkeypatch.setitem(sys.modules, "runpod", None)
         with pytest.raises(RuntimeError, match="not installed"):
@@ -114,6 +174,16 @@ class TestValidateLambdaLabs:
         assert validate_cloud("lambda") == "lambda"
         with pytest.raises(ValueError):
             validate_cloud("runpod")
+        with pytest.raises(ValueError, match="got bool"):
+            validate_cloud(True)
+        with pytest.raises(ValueError, match="got int"):
+            validate_cloud(123)
+        with pytest.raises(ValueError, match="non-empty string"):
+            validate_cloud("")
+        with pytest.raises(ValueError, match="null bytes"):
+            validate_cloud("lamb\x00da")
+        with pytest.raises(ValueError, match="exceeds"):
+            validate_cloud("a" * 100)
 
     def test_lambda_validate_gpu(self):
         from soup_cli.cloud.lambda_labs import validate_gpu
@@ -121,6 +191,16 @@ class TestValidateLambdaLabs:
         assert validate_gpu("a100") == "a100"
         with pytest.raises(ValueError):
             validate_gpu("tpu")
+        with pytest.raises(ValueError, match="got bool"):
+            validate_gpu(True)
+        with pytest.raises(ValueError, match="got int"):
+            validate_gpu(123)
+        with pytest.raises(ValueError, match="non-empty string"):
+            validate_gpu("")
+        with pytest.raises(ValueError, match="null bytes"):
+            validate_gpu("a10\x000")
+        with pytest.raises(ValueError, match="exceeds"):
+            validate_gpu("a" * 100)
 
 
 class TestRenderLambdaLabsStub:
@@ -135,10 +215,31 @@ class TestRenderLambdaLabsStub:
 
         import base64
         import re
+
         match = re.search(r'user_data_b64 = "([^"]+)"', stub)
         assert match is not None
         user_data = base64.b64decode(match.group(1)).decode("utf-8")
         assert "soup-cli[train]==0.71.22" in user_data
+
+    def test_render_config_yaml_validation(self):
+        from soup_cli.cloud.lambda_labs import render_lambda_stub
+
+        with pytest.raises(TypeError, match="must be a string"):
+            render_lambda_stub(123, gpu="a100", output_dir="./out", soup_version="1.0.0")
+        with pytest.raises(ValueError, match="exceeds"):
+            render_lambda_stub(
+                "a" * 2_000_000, gpu="a100", output_dir="./out", soup_version="1.0.0"
+            )
+
+    def test_render_soup_version_validation(self):
+        from soup_cli.cloud.lambda_labs import render_lambda_stub
+
+        with pytest.raises(ValueError, match="NUL-free string"):
+            render_lambda_stub(_SOUP_YAML, gpu="a100", output_dir="./out", soup_version="1.0\x00")
+        with pytest.raises(ValueError, match="must match"):
+            render_lambda_stub(_SOUP_YAML, gpu="a100", output_dir="./out", soup_version="invalid!")
+        with pytest.raises(ValueError, match="must match"):
+            render_lambda_stub(_SOUP_YAML, gpu="a100", output_dir="./out", soup_version="a" * 100)
 
 
 class TestPlanLambdaLabsRun:
@@ -148,12 +249,18 @@ class TestPlanLambdaLabsRun:
         from soup_cli.cloud.lambda_labs import plan_lambda_run
         from soup_cli.cloud.modal import CloudPlan
 
-        plan = plan_lambda_run(
-            "soup.yaml", gpu="a100", output_dir="./out", soup_version="0.71.22"
-        )
+        plan = plan_lambda_run("soup.yaml", gpu="a100", output_dir="./out", soup_version="0.71.22")
         assert isinstance(plan, CloudPlan)
         assert plan.cloud == "lambda"
         assert plan.run_command == "python soup_lambda_app.py"
+
+    def test_plan_config_too_large(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "soup.yaml").write_text("a" * 2_000_000, encoding="utf-8")
+        from soup_cli.cloud.lambda_labs import plan_lambda_run
+
+        with pytest.raises(ValueError, match="exceeds"):
+            plan_lambda_run("soup.yaml", gpu="a100", output_dir="./out", soup_version="0.71.22")
 
 
 class TestSubmitLambdaLabsRun:
@@ -162,8 +269,12 @@ class TestSubmitLambdaLabsRun:
         from soup_cli.cloud.modal import CloudPlan
 
         plan = CloudPlan(
-            cloud="lambda", gpu="a100", output_dir="./out",
-            stub_path="x.py", stub_text="", run_command="python x.py",
+            cloud="lambda",
+            gpu="a100",
+            output_dir="./out",
+            stub_path="x.py",
+            stub_text="",
+            run_command="python x.py",
         )
         monkeypatch.setattr(m, "_LAMBDA_SUBMIT_OVERRIDE", lambda p: 7)
         assert m.submit_lambda_run(plan) == 7
@@ -173,8 +284,12 @@ class TestSubmitLambdaLabsRun:
         from soup_cli.cloud.modal import CloudPlan
 
         plan = CloudPlan(
-            cloud="lambda", gpu="a100", output_dir="./out",
-            stub_path="x.py", stub_text="", run_command="python x.py",
+            cloud="lambda",
+            gpu="a100",
+            output_dir="./out",
+            stub_path="x.py",
+            stub_text="",
+            run_command="python x.py",
         )
         with pytest.raises(RuntimeError, match="not authenticated"):
             m.submit_lambda_run(plan, env={})
