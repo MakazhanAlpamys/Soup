@@ -97,6 +97,21 @@ class _BatchEncodingTokenizer(_FakeTokenizer):
         return BatchEncoding({"input_ids": ids})
 
 
+class _RequiresUserTokenizer(_FakeTokenizer):
+    """Qwen3.8-like fallback tokenizer that rejects system-only prefixes."""
+
+    def __init__(self):
+        super().__init__(supports_assistant_mask=False)
+        self.rendered_roles: list[tuple[str, ...]] = []
+
+    def apply_chat_template(self, messages, **kwargs):
+        roles = tuple(message.get("role", "") for message in messages)
+        self.rendered_roles.append(roles)
+        if "user" not in roles:
+            raise AssertionError("No user query found in messages.")
+        return super().apply_chat_template(messages, **kwargs)
+
+
 # ---------------------------------------------------------------------------
 # Schema field
 # ---------------------------------------------------------------------------
@@ -286,6 +301,24 @@ class TestFallbackPath:
         assert labels[-2] == IGNORE_INDEX  # '2'
         assert labels[-3] == IGNORE_INDEX  # 'Q'
 
+    def test_system_prefix_is_deferred_for_template_requiring_user(self):
+        from soup_cli.data.loss_mask import IGNORE_INDEX, build_assistant_only_labels
+
+        tok = _RequiresUserTokenizer()
+        messages = [
+            {"role": "system", "content": "Follow the format."},
+            {"role": "user", "content": "Q"},
+            {"role": "assistant", "content": "A"},
+        ]
+
+        out = build_assistant_only_labels(messages, tok)
+
+        assert ("system",) not in tok.rendered_roles
+        assert ("system", "user") in tok.rendered_roles
+        assert any(label != IGNORE_INDEX for label in out["labels"])
+        system_end = len("<system>:Follow the format.\n")
+        assert all(label == IGNORE_INDEX for label in out["labels"][:system_end])
+
 
 class TestTokenIdNormalisation:
     def test_real_batch_encoding_returns_values_not_mapping_keys(self):
@@ -417,6 +450,25 @@ class TestPerMessageTrainField:
         # Default-include assistant when no flag.
         non_masked = [lab for lab in out["labels"] if lab != IGNORE_INDEX]
         assert len(non_masked) >= 1
+
+    def test_ignored_system_prefix_is_deferred_for_template_requiring_user(self):
+        from soup_cli.data.loss_mask import (
+            IGNORE_INDEX,
+            build_per_message_train_labels,
+        )
+
+        tok = _RequiresUserTokenizer()
+        out = build_per_message_train_labels(
+            [
+                {"role": "system", "content": "Follow the format.", "train": False},
+                {"role": "user", "content": "Q", "train": False},
+                {"role": "assistant", "content": "A", "train": True},
+            ],
+            tok,
+        )
+
+        assert ("system",) not in tok.rendered_roles
+        assert any(label != IGNORE_INDEX for label in out["labels"])
 
 
 class TestEdgeCases:

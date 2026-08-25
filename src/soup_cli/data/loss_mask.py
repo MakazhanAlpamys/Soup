@@ -19,12 +19,14 @@ Two strategies:
 
 2. **Fallback**: Render ``messages[:i]`` vs ``messages[:i+1]`` for each turn and
    take the token delta. The delta is the new turn's tokens (prefix + content +
-   suffix). Special tokens like BOS are added by the Jinja template itself
-   (not by the tokenizer ``__call__``), so monotone-prefix templates produce
-   stable deltas. We pass ``add_special_tokens=False`` to incremental tokenize
-   calls so HF does not double-prepend BOS at the front of each render. This
-   path is necessarily looser than the preferred path — the role-prefix tokens
-   (e.g. ``<|assistant|>``) end up in the loss too. Users wanting strict
+   suffix). Leading non-trainable context is deferred until the first user turn,
+   because some native templates reject an otherwise-transient system-only
+   prefix. Special tokens like BOS are added by the Jinja template itself (not
+   by the tokenizer ``__call__``), so monotone-prefix templates produce stable
+   deltas. We pass ``add_special_tokens=False`` to incremental tokenize calls so
+   HF does not double-prepend BOS at the front of each render. This path is
+   necessarily looser than the preferred path — the role-prefix tokens (e.g.
+   ``<|assistant|>``) end up in the loss too. Users wanting strict
    assistant-content-only must pass a tokenizer with ``{% generation %}`` markers.
 """
 
@@ -171,6 +173,17 @@ def _tokenize_only(tokenizer: Any, messages: Sequence[dict]) -> list[int]:
     return coerce_token_ids(out)
 
 
+def _has_user_turn(messages: Sequence[dict]) -> bool:
+    """Whether a cumulative conversation contains a user query.
+
+    Qwen3.8's native template refuses a system-only prefix. The incremental
+    fallback does not need to render leading ignored context by itself: the
+    first user render includes that context and establishes the same boundary
+    before an assistant turn is unmasked.
+    """
+    return any(message.get("role") == "user" for message in messages)
+
+
 def _truncate(
     input_ids: list[int], labels: list[int], max_length: int
 ) -> dict[str, list[int]]:
@@ -258,6 +271,11 @@ def build_assistant_only_labels(
     cumulative: list[dict] = []
     for msg in messages:
         cumulative.append(msg)
+        if msg.get("role") != "assistant" and not _has_user_turn(cumulative):
+            # Do not feed a transient system/developer-only prefix to native
+            # templates that require a user query (#540). Those tokens remain
+            # ignored and are included in the first renderable user prefix.
+            continue
         rendered = _tokenize_only(tokenizer, cumulative)
         new_len = len(rendered)
         if msg.get("role") == "assistant":
@@ -343,11 +361,15 @@ def build_per_message_train_labels(
     cumulative: list[dict] = []
     for msg in messages:
         cumulative.append(msg)
-        rendered = _tokenize_only(tokenizer, cumulative)
-        new_len = len(rendered)
         train_flag = msg.get("train")
         if train_flag is None:
             train_flag = msg.get("role") == "assistant"
+        if not train_flag and not _has_user_turn(cumulative):
+            # Match the response-only fallback: ignored leading context need
+            # not be rendered until a valid user-bearing prefix exists (#540).
+            continue
+        rendered = _tokenize_only(tokenizer, cumulative)
+        new_len = len(rendered)
         if train_flag:
             end = min(new_len, len(full_ids))
             labels[prev_len:end] = full_ids[prev_len:end]
