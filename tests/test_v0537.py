@@ -997,10 +997,12 @@ class TestToolEndpointsLive:
         assert resp.status_code == 400
 
     def test_bash_tool_executes_in_sandbox_or_501_on_windows(self):
-        """v0.53.8: bash executes in sandbox on Linux/macOS, 501 on Windows."""
+        """v0.53.8: bash executes in sandbox on Linux/macOS, 501 on Windows or if best-effort."""
         import sys
 
         from fastapi.testclient import TestClient
+
+        from soup_cli.trainer.rewards import _get_isolation_strategy
 
         app = _create_test_app()
         client = TestClient(app)
@@ -1008,9 +1010,12 @@ class TestToolEndpointsLive:
             "/v1/tools/bash",
             json={"command": "echo hello"},
         )
-        if sys.platform == "win32":
+        if sys.platform == "win32" or _get_isolation_strategy() == "best-effort":
             assert resp.status_code == 501
-            assert "not supported on Windows" in resp.text
+            assert (
+                "sandbox requires OS-level isolation" in resp.text
+                or "not supported on Windows" in resp.text
+            )
         else:
             assert resp.status_code == 200
             data = resp.json()
@@ -1031,8 +1036,12 @@ class TestToolEndpointsLive:
         """Verify bash network access is blocked by unshare/sandbox-exec."""
         import sys
 
+        from soup_cli.trainer.rewards import _get_isolation_strategy
+
         if sys.platform == "win32":
-            return
+            pytest.skip("Bash sandbox not supported on Windows")
+        if _get_isolation_strategy() == "best-effort":
+            pytest.skip("Bash sandbox requires strict OS isolation (Python 3.12+ on Linux)")
 
         import threading
         from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -1067,6 +1076,14 @@ class TestToolEndpointsLive:
             # curl should fail to connect and exit with non-zero code.
             assert data["exit_code"] != 0
             assert "OK" not in data["stdout"]
+
+            # Also verify metadata endpoint is unreachable (matches PR description)
+            resp_metadata = client.post(
+                "/v1/tools/bash",
+                json={"command": "curl --connect-timeout 1 http://169.254.169.254/"},
+            )
+            assert resp_metadata.status_code == 200
+            assert resp_metadata.json()["exit_code"] != 0
         finally:
             server.shutdown()
             server.server_close()
@@ -1730,6 +1747,50 @@ class TestReviewFixesSSEHeaders:
 
 class TestReviewFixesAuthToken:
     """v0.53.7 H-A: optional Bearer-token gate on tool endpoints."""
+
+    def test_bash_tool_with_auth_token_requires_bearer(self):
+        import sys
+        try:
+            import fastapi  # noqa: F401
+        except ImportError:
+            pytest.skip("FastAPI not installed")
+        from fastapi.testclient import TestClient
+
+        from soup_cli.commands.serve import _create_app
+        from soup_cli.trainer.rewards import _get_isolation_strategy
+
+        if sys.platform == "win32" or _get_isolation_strategy() == "best-effort":
+            pytest.skip("Bash sandbox requires strict OS isolation")
+
+        app = _create_app(
+            model_obj=MagicMock(),
+            tokenizer=MagicMock(),
+            device="cpu",
+            model_name="test-model",
+            max_tokens_default=128,
+            auth_token="s3cret",
+        )
+        client = TestClient(app)
+
+        # Missing header -> 401
+        resp1 = client.post("/v1/tools/bash", json={"command": "echo 1"})
+        assert resp1.status_code == 401
+
+        # Wrong header -> 401
+        resp2 = client.post(
+            "/v1/tools/bash",
+            json={"command": "echo 1"},
+            headers={"Authorization": "Bearer wrong"},
+        )
+        assert resp2.status_code == 401
+
+        # Correct header -> 200
+        resp3 = client.post(
+            "/v1/tools/bash",
+            json={"command": "echo 1"},
+            headers={"Authorization": "Bearer s3cret"},
+        )
+        assert resp3.status_code == 200
 
     def test_python_tool_with_auth_token_requires_bearer(self):
         try:

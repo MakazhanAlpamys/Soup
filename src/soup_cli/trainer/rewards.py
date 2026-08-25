@@ -333,6 +333,51 @@ def _apply_rlimit(strict_namespaces: bool = False) -> None:
         _try_unshare_namespaces(strict=strict_namespaces)
 
 
+def _run_sandboxed_subprocess(
+    argv: list[str],
+    preexec_fn: "Callable | None",
+    timeout: int = CODE_EXEC_TIMEOUT_SECONDS,
+    max_output_bytes: int = MAX_CODE_OUTPUT_BYTES,
+) -> "tuple[int | None, str | None, bool]":
+    """Run a command in a subprocess sandbox with timeout, rlimits, and output caps.
+
+    Security posture:
+    - Hard wall-clock timeout via subprocess.run(timeout=...).
+    - POSIX ``RLIMIT_AS`` (address space) and ``RLIMIT_CPU`` via preexec_fn.
+    - Output truncated to ``max_output_bytes``.
+    - Subprocess cwd is a freshly created temporary directory per run.
+
+    Returns:
+        (returncode, stdout, timed_out).
+        If the process fails to start, returncode is None.
+        If the output exceeds max_output_bytes, stdout is None.
+    """
+    if _get_isolation_strategy() == "sandbox-exec":
+        sandbox_bin = _shutil.which("sandbox-exec") or "/usr/bin/sandbox-exec"
+        argv = [sandbox_bin, "-p", MACOS_SANDBOX_PROFILE, *argv]
+
+    with tempfile.TemporaryDirectory(prefix="soup-sandbox-") as tmpdir:
+        try:
+            proc = subprocess.run(  # noqa: S603 — list args, trusted interpreter
+                argv,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
+                cwd=tmpdir,
+                preexec_fn=preexec_fn,  # noqa: PLW1509 — intentional RLIMIT application
+            )
+        except subprocess.TimeoutExpired:
+            return None, "", True
+        except (OSError, ValueError):
+            return None, "", False
+
+    out = proc.stdout or ""
+    if len(out.encode("utf-8", errors="replace")) > max_output_bytes:
+        return proc.returncode, None, False
+    return proc.returncode, out.strip(), False
+
+
 def _run_code_sandbox(code: str) -> "str | None":
     """Run code in a subprocess sandbox with timeout, rlimits, and output caps.
 
@@ -354,36 +399,11 @@ def _run_code_sandbox(code: str) -> "str | None":
     preexec = _apply_rlimit if sys.platform != "win32" else None
 
     argv: list[str] = [sys.executable, "-I", "-S", "-c", wrapped]
-    if _get_isolation_strategy() == "sandbox-exec":
-        # macOS: prefix with sandbox-exec + inline profile. The profile denies
-        # all by default and only re-allows what an interpreter must do to
-        # boot; network is explicitly denied.
-        sandbox_bin = _shutil.which("sandbox-exec") or "/usr/bin/sandbox-exec"
-        argv = [sandbox_bin, "-p", MACOS_SANDBOX_PROFILE, *argv]
 
-    with tempfile.TemporaryDirectory(prefix="soup-code-exec-") as tmpdir:
-        try:
-            proc = subprocess.run(  # noqa: S603 — list args, trusted interpreter
-                argv,
-                capture_output=True,
-                text=True,
-                timeout=CODE_EXEC_TIMEOUT_SECONDS,
-                check=False,
-                cwd=tmpdir,
-                preexec_fn=preexec,  # noqa: PLW1509 — intentional RLIMIT application
-            )
-        except subprocess.TimeoutExpired:
-            return None
-        except (OSError, ValueError):
-            return None
-
-    if proc.returncode != 0:
+    rc, stdout, _ = _run_sandboxed_subprocess(argv, preexec)
+    if rc != 0 or stdout is None:
         return None
-
-    out = proc.stdout or ""
-    if len(out.encode("utf-8", errors="replace")) > MAX_CODE_OUTPUT_BYTES:
-        return None
-    return out.strip()
+    return stdout
 
 
 def _run_bash_sandbox(command: str) -> "str | None":
@@ -403,33 +423,11 @@ def _run_bash_sandbox(command: str) -> "str | None":
         _apply_rlimit(strict_namespaces=True)
 
     argv: list[str] = ["bash", "-c", command]
-    if _get_isolation_strategy() == "sandbox-exec":
-        sandbox_bin = _shutil.which("sandbox-exec") or "/usr/bin/sandbox-exec"
-        argv = [sandbox_bin, "-p", MACOS_SANDBOX_PROFILE, *argv]
 
-    with tempfile.TemporaryDirectory(prefix="soup-bash-exec-") as tmpdir:
-        try:
-            proc = subprocess.run(  # noqa: S603 — list args, trusted interpreter
-                argv,
-                capture_output=True,
-                text=True,
-                timeout=CODE_EXEC_TIMEOUT_SECONDS,
-                check=False,
-                cwd=tmpdir,
-                preexec_fn=preexec,  # noqa: PLW1509 — intentional RLIMIT application
-            )
-        except subprocess.TimeoutExpired:
-            return None
-        except (OSError, ValueError):
-            return None
-
-    if proc.returncode != 0:
+    rc, stdout, _ = _run_sandboxed_subprocess(argv, preexec)
+    if rc != 0 or stdout is None:
         return None
-
-    out = proc.stdout or ""
-    if len(out.encode("utf-8", errors="replace")) > MAX_CODE_OUTPUT_BYTES:
-        return None
-    return out.strip()
+    return stdout
 
 
 def code_exec_reward(

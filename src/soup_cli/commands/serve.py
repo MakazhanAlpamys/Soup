@@ -2055,14 +2055,22 @@ def _create_app(
         if len(command) > tool_max_code_len:
             raise HTTPException(status_code=400, detail="Invalid request")
         try:
-            from soup_cli.trainer.rewards import _run_bash_sandbox
+            from soup_cli.trainer.rewards import _get_isolation_strategy, _run_bash_sandbox
+
+            if _get_isolation_strategy() == "best-effort":
+                raise HTTPException(
+                    status_code=501,
+                    detail="bash sandbox requires OS-level isolation",
+                )
 
             stdout = _run_bash_sandbox(command)
-        except NotImplementedError:
+        except NotImplementedError as exc:
             raise HTTPException(
                 status_code=501,
-                detail="bash sandbox not supported on Windows",
+                detail=str(exc),
             )
+        except HTTPException:
+            raise
         except Exception as exc:  # noqa: BLE001
             logger.debug("/v1/tools/bash sandbox error: %s", exc)
             raise HTTPException(status_code=500, detail="Internal server error")

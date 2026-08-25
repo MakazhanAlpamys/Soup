@@ -37,9 +37,7 @@ from __future__ import annotations
 import base64
 import json
 import re
-import subprocess
 import sys
-import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Callable, Optional
@@ -150,44 +148,21 @@ def run_eval_in_sandbox(code: str) -> "tuple[Optional[int], str, bool]":
     Windows). Returns ``(returncode, stdout, timed_out)``.
     """
     from soup_cli.trainer.rewards import (
-        CODE_EXEC_TIMEOUT_SECONDS,
-        MACOS_SANDBOX_PROFILE,
-        MAX_CODE_OUTPUT_BYTES,
         SANDBOX_NETWORK_GUARD,
         _apply_rlimit,
-        _get_isolation_strategy,
+        _run_sandboxed_subprocess,
     )
 
     wrapped = SANDBOX_NETWORK_GUARD + "\n" + code
     preexec = _apply_rlimit if sys.platform != "win32" else None
     argv: list[str] = [sys.executable, "-I", "-S", "-c", wrapped]
-    if _get_isolation_strategy() == "sandbox-exec":
-        import shutil
 
-        sandbox_bin = shutil.which("sandbox-exec") or "/usr/bin/sandbox-exec"
-        argv = [sandbox_bin, "-p", MACOS_SANDBOX_PROFILE, *argv]
+    rc, stdout, timed_out = _run_sandboxed_subprocess(argv, preexec)
 
-    with tempfile.TemporaryDirectory(prefix="soup-agent-eval-") as tmpdir:
-        try:
-            proc = subprocess.run(  # noqa: S603 — list args, trusted interpreter
-                argv,
-                capture_output=True,
-                text=True,
-                timeout=CODE_EXEC_TIMEOUT_SECONDS,
-                check=False,
-                cwd=tmpdir,
-                preexec_fn=preexec,  # noqa: PLW1509 — intentional RLIMIT application
-            )
-        except subprocess.TimeoutExpired:
-            return None, "", True
-        except (OSError, ValueError):
-            return None, "", False
-
-    out = proc.stdout or ""
-    # Oversize output is treated as a failure (matches v0.25.0 cap policy).
-    if len(out.encode("utf-8", errors="replace")) > MAX_CODE_OUTPUT_BYTES:
-        return proc.returncode, "", False
-    return proc.returncode, out.strip(), False
+    if stdout is None:
+        # Oversize output is treated as a failure (matches v0.25.0 cap policy).
+        return rc, "", False
+    return rc, stdout, timed_out
 
 
 def classify_sandbox_outcome(
