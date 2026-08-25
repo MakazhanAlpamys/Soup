@@ -1175,7 +1175,9 @@ class TestBestOfNCli:
                 "winner_idx",
                 "judge_model",
                 "scores",
+                "source_line",
             }
+            assert [row["_best_of_n"]["source_line"] for row in rows] == [1, 2]
             pairs = [json.loads(x) for x in open(dpath, encoding="utf-8") if x.strip()]
             assert pairs[0] == {"prompt": "q1", "chosen": "abcd", "rejected": "a"}
         finally:
@@ -1202,6 +1204,61 @@ class TestBestOfNCli:
             assert result.exit_code == 0, (result.output, repr(result.exception))
         finally:
             os.remove(path)
+
+    def test_prompt_loader_fails_closed_with_line_number(self, monkeypatch, tmp_path):
+        from typer.testing import CliRunner
+
+        from soup_cli.commands.data import app
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("soup_cli.eval.judge.JudgeEvaluator", lambda **kw: _ScoreJudge())
+        invalid_rows = (
+            "{not json}",
+            "[]",
+            '{"messages":[{"role":"assistant","content":"private answer"}]}',
+            '{"prompt":""}',
+            '{"prompt":"   "}',
+        )
+
+        for index, invalid_row in enumerate(invalid_rows):
+            prompts = tmp_path / f"invalid-{index}.jsonl"
+            prompts.write_text(
+                '{"prompt":"valid private prompt"}\n' + invalid_row + "\n",
+                encoding="utf-8",
+            )
+            result = CliRunner().invoke(
+                app,
+                [
+                    "best-of-n",
+                    "--base",
+                    "model",
+                    "--prompts",
+                    str(prompts),
+                    "--n",
+                    "2",
+                    "--judge",
+                    "ollama://judge",
+                    "--plan-only",
+                ],
+            )
+
+            assert result.exit_code == 2
+            assert "line 2" in result.output
+            assert "private" not in result.output
+
+    def test_blank_lines_are_ignored_but_source_lines_remain_physical(
+        self, monkeypatch, tmp_path
+    ):
+        from soup_cli.commands.data import _bon_load_prompt_records
+
+        monkeypatch.chdir(tmp_path)
+        prompts = tmp_path / "blank-lines.jsonl"
+        prompts.write_text(
+            '\n{"prompt":"first"}\n\n{"instruction":"second"}\n',
+            encoding="utf-8",
+        )
+
+        assert _bon_load_prompt_records(str(prompts)) == [("first", 2), ("second", 4)]
 
 
 # ---------------------------------------------------------------------------

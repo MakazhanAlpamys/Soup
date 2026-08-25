@@ -195,6 +195,9 @@ soup data best-of-n --provider ollama --model qwen2.5:7b \
     --base-url http://localhost:11434 --prompts prompts.jsonl --n 8 \
     --judge ollama://llama3.1 -o best_of_n.jsonl
 
+# Every non-blank prompt row is validated; accepted SFT rows record source_line
+# in their _best_of_n provenance so input/output completeness can be checked.
+
 # Evol-Instruct (WizardLM depth/breadth, v0.71.31) — grow instruction diversity
 soup data evolve --input seeds.jsonl --provider ollama --model llama3.1 \
     --strategy depth --rounds 2 -o evolved.jsonl

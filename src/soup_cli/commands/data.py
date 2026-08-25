@@ -2920,8 +2920,31 @@ def _load_bon_model(base: str, device: str, trust: bool):
     return model, tok
 
 
-def _bon_load_prompts(path: str) -> list:
-    """Read a JSONL of {prompt|messages|instruction} rows -> list[str]."""
+def _bon_prompt_text(row: dict, line_number: int) -> str:
+    """Extract one prompt without echoing private row contents in errors."""
+    text = None
+    if isinstance(row.get("prompt"), str):
+        text = row["prompt"]
+    elif isinstance(row.get("instruction"), str):
+        text = row["instruction"]
+    elif isinstance(row.get("messages"), list):
+        users = [
+            message.get("content")
+            for message in row["messages"]
+            if isinstance(message, dict) and message.get("role") == "user"
+        ]
+        if users and isinstance(users[-1], str):
+            text = users[-1]
+    if text is None or not text.strip():
+        raise ValueError(
+            f"prompt JSONL line {line_number} has no non-empty prompt, "
+            "instruction, or user message"
+        )
+    return text
+
+
+def _bon_load_prompt_records(path: str) -> list[tuple[str, int]]:
+    """Read prompt JSONL strictly as ``(text, source_line)`` records."""
     from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
 
     enforce_under_cwd_and_no_symlink(path, "--prompts path")
@@ -2930,9 +2953,9 @@ def _bon_load_prompts(path: str) -> list:
         raise FileNotFoundError(path)
     if os.path.getsize(real) > _BON_MAX_JSONL_BYTES:
         raise ValueError(f"--prompts file exceeds {_BON_MAX_JSONL_BYTES} bytes")
-    prompts: list = []
+    prompts: list[tuple[str, int]] = []
     with open(real, "r", encoding="utf-8") as handle:
-        for raw_line in handle:
+        for line_number, raw_line in enumerate(handle, start=1):
             stripped = raw_line.strip()
             if not stripped:
                 continue
@@ -2940,26 +2963,19 @@ def _bon_load_prompts(path: str) -> list:
                 raise ValueError(f"--prompts file exceeds {_BON_MAX_PROMPTS} rows")
             try:
                 row = json.loads(stripped)
-            except json.JSONDecodeError:
-                continue
+            except json.JSONDecodeError as exc:
+                raise ValueError(
+                    f"prompt JSONL line {line_number} is not valid JSON"
+                ) from exc
             if not isinstance(row, dict):
-                continue
-            text = None
-            if isinstance(row.get("prompt"), str):
-                text = row["prompt"]
-            elif isinstance(row.get("instruction"), str):
-                text = row["instruction"]
-            elif isinstance(row.get("messages"), list):
-                users = [
-                    m.get("content")
-                    for m in row["messages"]
-                    if isinstance(m, dict) and m.get("role") == "user"
-                ]
-                if users and isinstance(users[-1], str):
-                    text = users[-1]
-            if text:
-                prompts.append(text)
+                raise ValueError(f"prompt JSONL line {line_number} must be a JSON object")
+            prompts.append((_bon_prompt_text(row, line_number), line_number))
     return prompts
+
+
+def _bon_load_prompts(path: str) -> list[str]:
+    """Compatibility helper returning strict prompt texts without provenance."""
+    return [text for text, _line_number in _bon_load_prompt_records(path)]
 
 
 @app.command(name="best-of-n")
@@ -3034,7 +3050,7 @@ def best_of_n(
 
     # --- Paths ---
     try:
-        prompt_list = _bon_load_prompts(prompts)
+        prompt_records = _bon_load_prompt_records(prompts)
         if output:
             enforce_under_cwd_and_no_symlink(output, "--output path")
         if emit_pairs:
@@ -3042,7 +3058,7 @@ def best_of_n(
     except (FileNotFoundError, TypeError, ValueError) as exc:
         console.print(f"[red]{_escape(str(exc))}[/]")
         raise typer.Exit(2) from exc
-    if not prompt_list:
+    if not prompt_records:
         console.print("[red]--prompts produced no usable rows[/]")
         raise typer.Exit(2)
 
@@ -3099,7 +3115,7 @@ def best_of_n(
     console.print(
         Panel(
             f"Sampler:      [bold]{_escape(sampler_label)}[/]\n"
-            f"Prompts:      [bold]{len(prompt_list)}[/]\n"
+            f"Prompts:      [bold]{len(prompt_records)}[/]\n"
             f"N candidates: [bold]{n}[/]\n"
             f"Judge:        [bold]{_escape(judge)}[/]",
             title="soup data best-of-n — plan",
@@ -3122,7 +3138,7 @@ def best_of_n(
     dev = device or None
     sft_lines: list = []
     pair_lines: list = []
-    for prompt in prompt_list:
+    for prompt, source_line in prompt_records:
         candidates = bon.sample_candidates(
             local_model,
             tokenizer,
@@ -3135,6 +3151,7 @@ def best_of_n(
         )
         pick = bon.judge_pick_best(prompt, candidates, evaluator)
         row = bon.build_sft_row(prompt, pick, judge_model=judge)
+        row["_best_of_n"]["source_line"] = source_line
         if generate_fn is not None:
             row["_best_of_n"]["sampler"] = {
                 "provider": sampling_provider,
