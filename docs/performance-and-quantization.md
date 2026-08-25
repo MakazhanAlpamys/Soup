@@ -301,6 +301,12 @@ Untied `embed_tokens` + `lm_head` stay resident and unquantised (2.10 GB of the 
 
 **Honest scope:**
 - **RAM tier + disk overflow (v0.72.3).** `stream_source: auto` picks RAM when it fits, falls back to NVMe disk when not; SATA/HDD rejected. Correctness verified; disk performance unmeasured on the reference box. A paravirtual (virtio) disk reports `rotational=1` with no media hint, so a genuinely NVMe-backed cloud disk was misread as an HDD and refused (#365); detection now measures a bounded O_DIRECT sequential read when the rotational flag is unreliable and admits NVMe-class throughput (>= 1 GB/s), while a genuinely slow disk stays rejected. Set `training.stream_disk_kind: nvme` (or `ssd`/`hdd`) to override when detection is still wrong — the resolved value is printed beside what was detected.
+- **Apple APFS disk detection.** On macOS, an APFS volume may report `Apple Fabric`
+  even when its physical store is Apple's internal NVMe. Soup resolves the target
+  volume to its APFS physical store and admits it only when that exact device is
+  listed by `SPNVMeDataType`; an unmatched solid-state device remains `ssd`, and
+  unknown hardware remains refused. `training.stream_disk_kind` still has final
+  authority when explicitly set.
 - **Llama / Qwen / Qwen3.5 dense and MoE text / Mistral / Gemma / Gemma2 / Gemma3-Text / Phi / Phi3** (`qwen3_5`, `qwen3_5_text`, `qwen3_5_moe`, and `qwen3_5_moe_text` route through the qwen3 streamer), `task: sft`, `backend: transformers`, `modality: text`. The original list is verified bit-exact in bf16 and NF4. Qwen3.5's heterogeneous dense and MoE decoder paths are verified bit-exact against resident controls on CPU; the MoE path also has live streamed-training validation on `Qwen/Qwen3.5-35B-A3B`, whose real 35B run has no resident control because the available hardware could not load it resident.
 - **Heterogeneous layer keys are allowed only at the presence/absence level.** The sharder reads every layer's safetensors header and the runtime builds the RAM/disk source from those per-layer specs, then merges them into one VRAM buffer pool. A key that appears in multiple layers must keep the same stored shape and dtype everywhere; NF4 weights also keep one `NF4WeightSpec` per short key, validate every packed sidecar against the shard header, and share only the small code tables after proving they are equal.
 - **Batch sizes, gradient accumulation, `--resume` / `--hf-resume`** all now work (v0.72.3).

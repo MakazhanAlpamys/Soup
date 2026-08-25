@@ -433,6 +433,140 @@ def _resolve_tool(name: str, *fallbacks: str) -> Optional[str]:
 _POWERSHELL_FALLBACK = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
 
 
+def _darwin_bsd_whole_disk(identifier: Any) -> Optional[str]:
+    """Return the whole-disk BSD name for a validated ``diskNsM`` identifier."""
+    import re
+
+    match = re.fullmatch(r"/?(?:dev/)?(disk\d+)(?:s\d+)*", str(identifier).strip())
+    return match.group(1) if match is not None else None
+
+
+def _darwin_apfs_physical_stores(disk_info: dict) -> set[str]:
+    """Whole disks backing the APFS volume described by ``diskutil info``."""
+    stores = disk_info.get("APFSPhysicalStores")
+    if not isinstance(stores, list):
+        return set()
+    result = set()
+    for entry in stores:
+        if not isinstance(entry, dict):
+            continue
+        identifier = entry.get("APFSPhysicalStore") or entry.get("DeviceIdentifier")
+        whole_disk = _darwin_bsd_whole_disk(identifier)
+        if whole_disk is not None:
+            result.add(whole_disk)
+    return result
+
+
+def _darwin_nvme_whole_disks(profile: dict) -> set[str]:
+    """Whole disks explicitly listed by ``system_profiler SPNVMeDataType``."""
+    sections = profile.get("SPNVMeDataType")
+    if not isinstance(sections, list):
+        return set()
+    result = set()
+    pending: list[Any] = list(sections)
+    while pending:
+        value = pending.pop()
+        if isinstance(value, dict):
+            whole_disk = _darwin_bsd_whole_disk(value.get("bsd_name"))
+            if whole_disk is not None:
+                result.add(whole_disk)
+            pending.extend(value.values())
+        elif isinstance(value, list):
+            pending.extend(value)
+    return result
+
+
+def _darwin_disk_kind(path: str, diskutil: str) -> DiskClassification:
+    """Classify the exact macOS volume, resolving APFS through its physical store."""
+    import json
+    import os
+    import plistlib
+    import subprocess
+
+    resolved = os.path.realpath(os.path.expanduser(path))
+
+    def diskutil_info(target: str) -> Any:
+        return subprocess.run(
+            [diskutil, "info", "-plist", target],
+            capture_output=True,
+            timeout=60,
+            check=False,
+            shell=False,
+        )
+
+    info_result = diskutil_info(resolved)
+    if info_result.returncode != 0:
+        # ``diskutil info`` accepts a device or an exact mount point, not an
+        # arbitrary directory within that volume. Resolve the latter with the
+        # POSIX ``df -P`` format, validate its device token, then retry.
+        df_tool = _resolve_tool("df", "/bin/df")
+        if df_tool is None:
+            return DiskClassification("unknown")
+        df_result = subprocess.run(
+            [df_tool, "-P", resolved],
+            capture_output=True,
+            timeout=60,
+            check=False,
+            shell=False,
+        )
+        if df_result.returncode != 0 or not df_result.stdout:
+            return DiskClassification("unknown")
+        lines = [line for line in df_result.stdout.splitlines() if line.strip()]
+        fields = lines[-1].split() if len(lines) >= 2 else []
+        device = fields[0].decode("ascii", errors="strict") if fields else ""
+        if _darwin_bsd_whole_disk(device) is None:
+            return DiskClassification("unknown")
+        info_result = diskutil_info(device)
+    if info_result.returncode != 0 or not info_result.stdout:
+        return DiskClassification("unknown")
+    try:
+        disk_info = plistlib.loads(info_result.stdout)
+    except (plistlib.InvalidFileException, TypeError, ValueError):
+        return DiskClassification("unknown")
+    if not isinstance(disk_info, dict):
+        return DiskClassification("unknown")
+
+    protocol = str(disk_info.get("BusProtocol", "")).strip().lower()
+    if "nvme" in protocol or "nvmexpress" in protocol:
+        return DiskClassification(_NVME)
+
+    physical_stores = _darwin_apfs_physical_stores(disk_info)
+    if physical_stores:
+        profiler = _resolve_tool("system_profiler", "/usr/sbin/system_profiler")
+        if profiler is not None:
+            profile_result = subprocess.run(
+                [
+                    profiler,
+                    "-json",
+                    "-detailLevel",
+                    "mini",
+                    "SPNVMeDataType",
+                ],
+                capture_output=True,
+                timeout=60,
+                check=False,
+                shell=False,
+            )
+            if profile_result.returncode == 0 and profile_result.stdout:
+                try:
+                    profile = json.loads(profile_result.stdout)
+                except (UnicodeDecodeError, json.JSONDecodeError, TypeError):
+                    profile = None
+                if isinstance(profile, dict):
+                    nvme_disks = _darwin_nvme_whole_disks(profile)
+                    if physical_stores and physical_stores.issubset(nvme_disks):
+                        return DiskClassification(_NVME)
+
+    # ``SolidState`` establishes SSD, not NVMe. A failed or unmatched physical
+    # lookup must never promote an ordinary SATA SSD into the NVMe-only tier.
+    if disk_info.get("SolidState") is True:
+        return DiskClassification("ssd")
+    media_type = str(disk_info.get("MediaType", "")).strip().lower()
+    if "solid state" in media_type or media_type == "ssd":
+        return DiskClassification("ssd")
+    return DiskClassification("unknown")
+
+
 def _classify_measured_read(measured_bps: Optional[float]) -> str:
     """Classify by a measured read a device the rotational flag calls spinning.
 
@@ -590,16 +724,7 @@ def _probe_disk_kind(path: str) -> DiskClassification:
             tool = _resolve_tool("diskutil", "/usr/sbin/diskutil")
             if tool is None:
                 return DiskClassification("unknown")
-            out = subprocess.run(
-                [tool, "info", "-plist", "/"],
-                capture_output=True, text=True, timeout=60, check=False,
-            )
-            text = out.stdout.lower()
-            if "nvme" in text:
-                return DiskClassification(_NVME)
-            if "solid state" in text or ("<true/>" in text and "solidstate" in text):
-                return DiskClassification("ssd")
-            return DiskClassification("unknown")
+            return _darwin_disk_kind(path, tool)
     except (OSError, ValueError, subprocess.SubprocessError):
         return DiskClassification("unknown")
     return DiskClassification("unknown")
