@@ -1356,6 +1356,13 @@ def build_meta_skeleton(
                 modules_to_not_convert=["lm_head"],
                 quantization_config=quant_config,
             )
+    # ``from_config`` does not reliably preserve the source reference that
+    # ``from_pretrained`` stamps on both the model and its config.  PEFT reads
+    # ``model.__dict__["name_or_path"]`` while wrapping LoRA and copies it to
+    # ``base_model_name_or_path`` in adapter_config.json.  Without this stamp a
+    # healthy streamed adapter cannot be auto-loaded by chat/merge/serve (#531).
+    model.name_or_path = model_id
+    model.config.name_or_path = model_id
     if quant_config is not None:
         _stamp_4bit_markers(model, quant_config)
     return model
