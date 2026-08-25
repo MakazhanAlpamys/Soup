@@ -481,7 +481,9 @@ best-effort — a broken audit log never crashes the CLI.
 ## Reproducibility Receipt (`soup train --repro-receipt`)
 
 SR 11-7-style reproducibility receipt captures seeds (torch + numpy + python), kernel
-versions (CUDA + cuDNN + NCCL), GPU model + driver, OS + arch:
+versions (CUDA + cuDNN + NCCL), accelerator backend, GPU model + driver, OS + arch.
+On Apple Silicon it records the privacy-safe chip name and unified-memory capacity, but
+never a serial number, hardware UUID, or user-specific path:
 
 ```bash
 soup train --config soup.yaml --repro-receipt repro.json
