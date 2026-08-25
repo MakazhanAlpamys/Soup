@@ -51,12 +51,13 @@ def test_apple_fabric_apfs_store_is_matched_to_nvme_inventory(monkeypatch):
     result = layer_stream._probe_disk_kind("/private/var/model-shards")
 
     assert result.kind == "nvme"
-    assert calls[0][0] == [
+    diskutil_args = calls[0][0]
+    assert diskutil_args[:-1] == [
         "/usr/sbin/diskutil",
         "info",
         "-plist",
-        "/private/var/model-shards",
     ]
+    assert diskutil_args[-1].replace("\\", "/").endswith("/private/var/model-shards")
     assert calls[1][0] == [
         "/usr/sbin/system_profiler",
         "-json",
