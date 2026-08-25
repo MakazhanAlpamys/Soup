@@ -560,6 +560,11 @@ data:
 
 When the tokenizer ships a chat template with `{% generation %}` markers, the mask is exact. Without those markers, Soup falls back to an incremental tokenize-delta walk and documents the looseness.
 
+After tokenization and truncation, every response-only row must retain at least one shifted
+causal-loss target. Soup rejects the row by split and row number when
+`data.max_length` truncates the complete assistant response, rather than training on an
+all-masked sequence or saving a non-finite adapter.
+
 ### `--trust-remote-code` opt-in (every command, every trainer)
 
 Every command that loads a model now requires `--trust-remote-code` to execute custom Python from a model repo (`auto_map` in `config.json`). First-party orgs (Meta, Mistral, Qwen, Google, etc.) suppress the warning panel; everything else prints a `REMOTE CODE WARNING` panel before loading. Unknown-org local checkpoints with `auto_map` raise a friendly `ValueError` at construction time instead of silently exec'ing inside `from_pretrained`.

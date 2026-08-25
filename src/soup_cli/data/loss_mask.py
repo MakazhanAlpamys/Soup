@@ -38,6 +38,10 @@ IGNORE_INDEX = -100
 _MISSING = object()
 
 
+class NoCausalLossTargetError(ValueError):
+    """Raised when truncation leaves a row with no shifted causal-LM target."""
+
+
 def _coerce_int_list(
     values: Any, *, field: str, allow_bool: bool = False
 ) -> list[int]:
@@ -178,6 +182,23 @@ def _truncate(
         "labels": labels,
         "attention_mask": attention_mask,
     }
+
+
+def ensure_causal_loss_target(labels: Sequence[int], *, max_length: int) -> None:
+    """Reject a row that contributes no token to shifted causal-LM loss.
+
+    Causal language-model losses compare ``logits[:-1]`` with ``labels[1:]``.
+    A non-ignored label in position zero therefore does not make a trainable
+    row. Check the shifted label surface, not merely ``labels`` itself.
+    """
+    _validate_max_length(max_length)
+    if any(label != IGNORE_INDEX for label in labels[1:]):
+        return
+    raise NoCausalLossTargetError(
+        "no causal-loss target remains after tokenization/truncation at "
+        f"data.max_length={max_length}; the assistant response is absent or "
+        "fully truncated. Increase data.max_length or shorten the prompt."
+    )
 
 
 def build_assistant_only_labels(

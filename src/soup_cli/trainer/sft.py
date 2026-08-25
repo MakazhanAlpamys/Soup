@@ -2,6 +2,7 @@
 
 import json
 import logging
+import math
 import os
 import time
 from pathlib import Path
@@ -46,6 +47,104 @@ _PROCESSOR_TOKEN_ATTRS = (
     "bos_token",
     "bos_token_id",
 )
+
+_FINITE_TRAINING_METRICS = (
+    "loss",
+    "grad_norm",
+    "entropy",
+    "train_loss",
+    "eval_loss",
+)
+
+
+def _assert_finite_training_state(
+    log_history: list[dict[str, Any]], model: Any | None = None
+) -> None:
+    """Refuse the final save when metrics or trainable weights are non-finite."""
+    for entry in log_history:
+        if not isinstance(entry, dict):
+            continue
+        for metric in _FINITE_TRAINING_METRICS:
+            if metric not in entry:
+                continue
+            value = entry[metric]
+            try:
+                finite = math.isfinite(float(value))
+            except (TypeError, ValueError):
+                continue
+            if finite:
+                continue
+            step = entry.get("step", "unknown")
+            raise RuntimeError(
+                f"non-finite training metric {metric}={value} at step {step}; "
+                "refusing to save the final model because its weights may be corrupted"
+            )
+    if model is None:
+        return
+
+    import torch
+
+    for name, parameter in model.named_parameters():
+        if not parameter.requires_grad or getattr(parameter, "is_meta", False):
+            continue
+        if not parameter.is_floating_point():
+            continue
+        if torch.isfinite(parameter.detach()).all().item():
+            continue
+        raise RuntimeError(
+            f"non-finite trainable parameter {name!r}; refusing to save the final "
+            "model because its weights are corrupted"
+        )
+
+
+def _map_text_sft_rows(
+    rows: list[dict],
+    *,
+    format_row: Any,
+    split: str,
+    max_length: int,
+) -> Any:
+    """Tokenize text SFT rows and attach their human-facing row number to failures."""
+    from datasets import Dataset
+
+    from soup_cli.data.loss_mask import (
+        NoCausalLossTargetError,
+        ensure_causal_loss_target,
+    )
+
+    def checked_format_row(example: dict, row_index: int) -> dict:
+        try:
+            formatted = format_row(example)
+            labels = formatted.get("labels")
+            if labels is not None:
+                ensure_causal_loss_target(labels, max_length=max_length)
+            return formatted
+        except NoCausalLossTargetError as exc:
+            raise ValueError(f"{split} row {row_index + 1}: {exc}") from exc
+
+    return Dataset.from_list(rows).map(
+        checked_format_row,
+        with_indices=True,
+        remove_columns=["messages"],
+    )
+
+
+def _validate_pretokenized_targets(dataset: Any, *, split: str, max_length: int) -> None:
+    """Apply the same target invariant to trusted pre-tokenized datasets."""
+    from soup_cli.data.loss_mask import (
+        NoCausalLossTargetError,
+        ensure_causal_loss_target,
+    )
+
+    if "labels" not in getattr(dataset, "column_names", ()):
+        return
+    for row_index in range(len(dataset)):
+        try:
+            ensure_causal_loss_target(
+                dataset[row_index]["labels"], max_length=max_length
+            )
+        except NoCausalLossTargetError as exc:
+            raise ValueError(f"{split} row {row_index + 1}: {exc}") from exc
 
 
 def _ensure_vision_processor_pad_token(processor: object) -> None:
@@ -457,7 +556,6 @@ class SFTTrainerWrapper(StreamingSetupMixin):
 
     def setup(self, dataset: dict):
         """Load model, tokenizer, apply LoRA, create trainer."""
-        from datasets import Dataset
         from transformers import TrainingArguments
         from trl import SFTTrainer
 
@@ -605,6 +703,13 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         pretok = _maybe_load_pretokenized(cfg.data, cfg.base, console)
         if pretok is not None:
             train_ds, eval_ds = pretok
+            _validate_pretokenized_targets(
+                train_ds, split="train", max_length=cfg.data.max_length
+            )
+            if eval_ds is not None:
+                _validate_pretokenized_targets(
+                    eval_ds, split="validation", max_length=cfg.data.max_length
+                )
         elif self._raft_epoch_shuffle:
             train_ds, eval_ds = self._prepare_raft_raw_dataset(dataset, cfg, tcfg)
         elif self._is_raft:
@@ -622,13 +727,19 @@ class SFTTrainerWrapper(StreamingSetupMixin):
                 console=console,
                 training_cfg=tcfg,
             )
-            train_ds = Dataset.from_list(dataset["train"]).map(
-                format_row, remove_columns=["messages"]
+            train_ds = _map_text_sft_rows(
+                dataset["train"],
+                format_row=format_row,
+                split="train",
+                max_length=cfg.data.max_length,
             )
             eval_ds = None
             if "val" in dataset and dataset["val"]:
-                eval_ds = Dataset.from_list(dataset["val"]).map(
-                    format_row, remove_columns=["messages"]
+                eval_ds = _map_text_sft_rows(
+                    dataset["val"],
+                    format_row=format_row,
+                    split="validation",
+                    max_length=cfg.data.max_length,
                 )
 
         # --- Output dir ---
@@ -1851,6 +1962,10 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             )
             self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         duration = time.time() - start
+
+        _assert_finite_training_state(
+            self.trainer.state.log_history, model=self.trainer.model
+        )
 
         # Save final model (LoRA adapter)
         self.trainer.save_model(self._output_dir)
