@@ -3028,6 +3028,13 @@ def best_of_n(
     emit_pairs: str = typer.Option(
         "", "--emit-pairs", help="Also write winner/loser DPO pairs to this JSONL"
     ),
+    checkpoint: str = typer.Option(
+        "", "--checkpoint", help="Recovery journal (default: <output>.checkpoint.jsonl)"
+    ),
+    manifest: str = typer.Option(
+        "", "--manifest", help="Final consistency manifest (default: <output>.manifest.json)"
+    ),
+    resume: bool = typer.Option(False, "--resume", help="Resume a matching checkpoint"),
     temperature: float = typer.Option(1.0, "--temperature", help="Sampling temp [0, 2]"),
     max_new_tokens: int = typer.Option(
         256, "--max-new-tokens", help="Max new tokens per candidate [1, 4096]"
@@ -3053,6 +3060,7 @@ def best_of_n(
     from soup_cli.eval.gate import _parse_judge_url
     from soup_cli.eval.judge import JudgeEvaluator
     from soup_cli.utils import best_of_n as bon
+    from soup_cli.utils import best_of_n_checkpoint as bon_checkpoint
     from soup_cli.utils.magpie import make_magpie_generate_fn
     from soup_cli.utils.paths import atomic_write_text, enforce_under_cwd_and_no_symlink
     from soup_cli.utils.trust_remote import (
@@ -3082,17 +3090,27 @@ def best_of_n(
         raise typer.Exit(2) from exc
 
     # --- Paths ---
+    checkpoint_path = checkpoint or (f"{output}.checkpoint.jsonl" if output else "")
+    manifest_path = manifest or (f"{output}.manifest.json" if output else "")
     try:
         prompt_records = _bon_load_prompt_records(prompts)
         if output:
             enforce_under_cwd_and_no_symlink(output, "--output path")
         if emit_pairs:
             enforce_under_cwd_and_no_symlink(emit_pairs, "--emit-pairs path")
+        if checkpoint_path:
+            enforce_under_cwd_and_no_symlink(checkpoint_path, "--checkpoint path")
+        if manifest_path:
+            enforce_under_cwd_and_no_symlink(manifest_path, "--manifest path")
     except (FileNotFoundError, TypeError, ValueError) as exc:
         console.print(f"[red]{_escape(str(exc))}[/]")
         raise typer.Exit(2) from exc
     if not prompt_records:
         console.print("[red]--prompts produced no usable rows[/]")
+        raise typer.Exit(2)
+    prompt_list = [prompt for prompt, _source_line in prompt_records]
+    if resume and not output:
+        console.print("[red]--resume requires --output[/]")
         raise typer.Exit(2)
 
     # --- Sampler selection ---
@@ -3144,13 +3162,32 @@ def best_of_n(
         )
 
     sampler_label = f"{sampling_provider}:{model}" if generate_fn is not None else base
+    digest = bon_checkpoint.run_digest(
+        prompt_list,
+        {
+            "base": base,
+            "provider": sampling_provider,
+            "model": model,
+            "base_url": base_url,
+            "n": n,
+            "temperature": temperature,
+            "max_new_tokens": max_new_tokens,
+            "device": device,
+            "seed": seed,
+            "trust_remote_code": trust,
+            "judge": judge,
+            "emit_pairs": bool(emit_pairs),
+        },
+    )
 
     console.print(
         Panel(
             f"Sampler:      [bold]{_escape(sampler_label)}[/]\n"
             f"Prompts:      [bold]{len(prompt_records)}[/]\n"
             f"N candidates: [bold]{n}[/]\n"
-            f"Judge:        [bold]{_escape(judge)}[/]",
+            f"Judge:        [bold]{_escape(judge)}[/]\n"
+            f"Checkpoint:   [bold]"
+            f"{_escape(os.path.relpath(checkpoint_path)) if checkpoint_path else '-'}[/]",
             title="soup data best-of-n — plan",
         )
     )
@@ -3160,57 +3197,99 @@ def best_of_n(
         console.print("[red]--output is required unless --plan-only is set.[/]")
         raise typer.Exit(2)
 
+    try:
+        targets = [output, checkpoint_path, manifest_path]
+        if emit_pairs:
+            targets.append(emit_pairs)
+        if len({os.path.normcase(os.path.realpath(path)) for path in targets}) != len(targets):
+            raise ValueError("output, pairs, checkpoint, and manifest paths must be distinct")
+        if resume:
+            completed_entries = bon_checkpoint.load_checkpoint(
+                checkpoint_path, digest=digest, total=len(prompt_list)
+            )
+        else:
+            bon_checkpoint.initialise_checkpoint(
+                checkpoint_path, digest=digest, total=len(prompt_list)
+            )
+            completed_entries = []
+    except (FileNotFoundError, OSError, TypeError, ValueError) as exc:
+        console.print(f"[red]Invalid checkpoint: {_escape(str(exc))}[/]")
+        raise typer.Exit(2) from exc
+
     local_model = None
     tokenizer = None
-    if generate_fn is None:
+    if generate_fn is None and len(completed_entries) < len(prompt_list):
         import torch
 
         torch.manual_seed(seed)
         local_model, tokenizer = _load_bon_model(base, device, trust)
 
     dev = device or None
-    sft_lines: list = []
-    pair_lines: list = []
-    for prompt, source_line in prompt_records:
-        candidates = bon.sample_candidates(
-            local_model,
-            tokenizer,
-            prompt,
-            n=n,
-            temperature=temperature,
-            max_new_tokens=max_new_tokens,
-            device=dev,
-            generate_fn=generate_fn,
-        )
-        pick = bon.judge_pick_best(prompt, candidates, evaluator)
-        row = bon.build_sft_row(prompt, pick, judge_model=judge)
-        row["_best_of_n"]["source_line"] = source_line
-        if generate_fn is not None:
-            row["_best_of_n"]["sampler"] = {
-                "provider": sampling_provider,
-                "model": model,
-            }
-        sft_lines.append(json.dumps(row, ensure_ascii=False))
-        if emit_pairs:
-            pair = bon.build_dpo_pair(prompt, pick, candidates)
-            if pair is not None:
-                pair_lines.append(json.dumps(pair, ensure_ascii=False))
+    sft_rows = [entry[0] for entry in completed_entries]
+    pair_rows = [entry[1] for entry in completed_entries if entry[1] is not None]
+    for index in range(len(completed_entries), len(prompt_records)):
+        prompt, source_line = prompt_records[index]
+        try:
+            candidates = bon.sample_candidates(
+                local_model,
+                tokenizer,
+                prompt,
+                n=n,
+                temperature=temperature,
+                max_new_tokens=max_new_tokens,
+                device=dev,
+                generate_fn=generate_fn,
+            )
+            pick = bon.judge_pick_best(prompt, candidates, evaluator)
+            row = bon.build_sft_row(prompt, pick, judge_model=judge)
+            row["_best_of_n"]["source_line"] = source_line
+            if generate_fn is not None:
+                row["_best_of_n"]["sampler"] = {
+                    "provider": sampling_provider,
+                    "model": model,
+                }
+            pair = bon.build_dpo_pair(prompt, pick, candidates) if emit_pairs else None
+            bon_checkpoint.append_checkpoint(
+                checkpoint_path, index=index, sft=row, dpo=pair
+            )
+        except Exception as exc:
+            console.print(
+                f"[red]Best-of-N stopped after {index}/{len(prompt_list)} prompts.[/]\n"
+                f"Resume with [bold]--resume[/]; checkpoint: "
+                f"[bold]{_escape(os.path.relpath(checkpoint_path))}[/]"
+            )
+            raise typer.Exit(1) from exc
+        sft_rows.append(row)
+        if pair is not None:
+            pair_rows.append(pair)
 
     # Atomic writes (mkstemp + os.replace + re-validated containment) so a
     # symlink swapped in after the fast-fail check cannot redirect the write.
+    # The manifest is committed last and binds an optional SFT/DPO pair by hash.
+    sft_text = bon_checkpoint.dataset_text(sft_rows)
+    pair_text = bon_checkpoint.dataset_text(pair_rows)
     try:
-        atomic_write_text("\n".join(sft_lines) + "\n", output, field="output")
+        atomic_write_text(sft_text, output, field="output")
         if emit_pairs:
-            atomic_write_text(
-                ("\n".join(pair_lines) + "\n") if pair_lines else "",
-                emit_pairs,
-                field="emit-pairs",
-            )
+            atomic_write_text(pair_text, emit_pairs, field="emit-pairs")
+        atomic_write_text(
+            bon_checkpoint.manifest_text(
+                digest=digest,
+                sft_path=output,
+                sft_text=sft_text,
+                sft_count=len(sft_rows),
+                pair_path=emit_pairs,
+                pair_text=pair_text,
+                pair_count=len(pair_rows),
+            ),
+            manifest_path,
+            field="manifest",
+        )
     except (OSError, ValueError, TypeError) as exc:
         console.print(f"[red]Failed to write output: {_escape(str(exc))}[/]")
         raise typer.Exit(1) from exc
-    sft_count = len(sft_lines)
-    pair_count = len(pair_lines)
+    sft_count = len(sft_rows)
+    pair_count = len(pair_rows)
 
     body = (
         f"SFT rows:   [bold]{sft_count}[/]\n"
@@ -3221,6 +3300,7 @@ def best_of_n(
             f"\nDPO pairs:  [bold]{pair_count}[/]\n"
             f"Pairs out:  [bold]{_escape(os.path.relpath(emit_pairs))}[/]"
         )
+    body += f"\nManifest:   [bold]{_escape(os.path.relpath(manifest_path))}[/]"
     console.print(Panel(body, title="soup data best-of-n — done"))
 
 

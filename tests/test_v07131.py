@@ -1042,7 +1042,12 @@ class TestBestOfNCli:
                 "model": "sampler-model",
             }
         finally:
-            for path in (prompt_path, output_path):
+            for path in (
+                prompt_path,
+                output_path,
+                output_path + ".checkpoint.jsonl",
+                output_path + ".manifest.json",
+            ):
                 if os.path.exists(path):
                     os.remove(path)
 
@@ -1224,7 +1229,13 @@ class TestBestOfNCli:
             pairs = [json.loads(x) for x in open(dpath, encoding="utf-8") if x.strip()]
             assert pairs[0] == {"prompt": "q1", "chosen": "abcd", "rejected": "a"}
         finally:
-            for p in (ppath, opath, dpath):
+            for p in (
+                ppath,
+                opath,
+                dpath,
+                opath + ".checkpoint.jsonl",
+                opath + ".manifest.json",
+            ):
                 if os.path.exists(p):
                     os.remove(p)
 

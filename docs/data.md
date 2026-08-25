@@ -198,12 +198,26 @@ soup data best-of-n --provider ollama --model qwen2.5:7b \
 # Every non-blank prompt row is validated; accepted SFT rows record source_line
 # in their _best_of_n provenance so input/output completeness can be checked.
 
+# If sampling or judging stops, continue from the last fsynced prompt group.
+soup data best-of-n --provider ollama --model qwen2.5:7b \
+    --prompts prompts.jsonl --n 8 --judge ollama://llama3.1 \
+    -o best_of_n.jsonl --resume
+
 # Evol-Instruct (WizardLM depth/breadth, v0.71.31) — grow instruction diversity
 soup data evolve --input seeds.jsonl --provider ollama --model llama3.1 \
     --strategy depth --rounds 2 -o evolved.jsonl
 ```
 
 Every command applies the project-wide TOCTOU policy (`os.lstat + S_ISLNK` symlink rejection before any open) and cwd containment via the shared `paths.enforce_under_cwd_and_no_symlink` helper. All five are LIVE: `soup build` materialises with five built-in transforms (`identity` / `drop_empty` / `lowercase` / `strip` / `dedup_exact`) and SQLite-tracked incremental re-transform (v0.71.6); `soup data gen-magpie` and provider-backed `best-of-n` harvest via raw completion against `--provider ollama|vllm` (SSRF-validated; `anthropic` rejected because the Messages API has no raw-completion endpoint). Provider-backed `best-of-n` records the sampler provider and model in each row's `_best_of_n` provenance; omit `--provider` to retain the local Transformers `--base` path.
+
+`best-of-n` fsyncs each completed prompt group to a private recovery journal
+(`<output>.checkpoint.jsonl` by default). `--resume` reuses only a sequential
+prefix whose prompt and run-configuration digest matches exactly, so completed
+prompts are not sampled or judged twice. Final SFT and optional DPO files remain
+atomic outputs; `<output>.manifest.json` is written last and binds their exact
+SHA-256 hashes and row counts as one generation. Keep or archive the checkpoint
+after success if reproducible rematerialization is useful; it contains dataset
+content and should be protected like the generated dataset.
 
 ### Custom Transforms
 
