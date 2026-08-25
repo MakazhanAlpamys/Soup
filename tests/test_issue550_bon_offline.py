@@ -270,6 +270,59 @@ def test_online_workflow_still_requires_judge(tmp_path, monkeypatch):
     assert "--judge is required" in result.output
 
 
+def test_offline_mode_rejects_irrelevant_sampling_overrides(tmp_path, monkeypatch):
+    from soup_cli.commands.data import app
+
+    monkeypatch.chdir(tmp_path)
+    result = CliRunner().invoke(
+        app,
+        [
+            "best-of-n",
+            "--candidate-artifact",
+            str(tmp_path / "candidates.jsonl"),
+            "--judgments",
+            str(tmp_path / "judgments.jsonl"),
+            "--output",
+            str(tmp_path / "sft.jsonl"),
+            "--n",
+            "9",
+        ],
+    )
+    assert result.exit_code == 2
+    assert "does not accept sampling" in result.output
+    assert "Invalid offline artifact" not in result.output
+
+
+def test_two_phase_artifacts_use_exact_utf8_byte_writes(tmp_path, monkeypatch):
+    from soup_cli.commands.data import app
+
+    monkeypatch.setattr(
+        "soup_cli.utils.paths.atomic_write_text",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("Best-of-N JSONL must use exact UTF-8 byte writes")
+        ),
+    )
+    artifact, _calls = _export_candidates(tmp_path, monkeypatch)
+    groups = _artifact_groups(artifact)
+    judgments = tmp_path / "judgments.jsonl"
+    _write_judgments(judgments, groups)
+    result = CliRunner().invoke(
+        app,
+        [
+            "best-of-n",
+            "--candidate-artifact",
+            str(artifact),
+            "--judgments",
+            str(judgments),
+            "--output",
+            str(tmp_path / "sft.jsonl"),
+            "--emit-pairs",
+            str(tmp_path / "dpo.jsonl"),
+        ],
+    )
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+
+
 def test_candidate_text_tampering_is_detected_before_publication(tmp_path, monkeypatch):
     from soup_cli.commands.data import app
 

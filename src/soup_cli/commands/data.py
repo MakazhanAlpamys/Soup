@@ -3077,7 +3077,7 @@ def best_of_n(
     from soup_cli.utils import best_of_n_checkpoint as bon_checkpoint
     from soup_cli.utils import best_of_n_artifact as bon_artifact
     from soup_cli.utils.magpie import make_magpie_generate_fn
-    from soup_cli.utils.paths import atomic_write_text, enforce_under_cwd_and_no_symlink
+    from soup_cli.utils.paths import atomic_write_bytes, enforce_under_cwd_and_no_symlink
     from soup_cli.utils.trust_remote import (
         model_requires_trust_remote_code,
         resolve_trust_remote_code,
@@ -3115,10 +3115,13 @@ def best_of_n(
                 revision,
                 trust_remote_code,
                 seed != 0,
+                n != 8,
+                temperature != 1.0,
+                max_new_tokens != 256,
             )
         ):
             console.print(
-                "[red]offline materialization does not accept sampler or judge options[/]"
+                "[red]offline materialization does not accept sampling or judge options[/]"
             )
             raise typer.Exit(2)
         if not output and not plan_only:
@@ -3159,12 +3162,14 @@ def best_of_n(
         if plan_only:
             return
         try:
-            atomic_write_text(
-                bon_artifact.stable_jsonl(sft_rows), output, field="output"
+            atomic_write_bytes(
+                bon_artifact.stable_jsonl(sft_rows).encode("utf-8"),
+                output,
+                field="output",
             )
             if emit_pairs:
-                atomic_write_text(
-                    bon_artifact.stable_jsonl(dpo_rows),
+                atomic_write_bytes(
+                    bon_artifact.stable_jsonl(dpo_rows).encode("utf-8"),
                     emit_pairs,
                     field="emit-pairs",
                 )
@@ -3417,8 +3422,10 @@ def best_of_n(
                         prompt, index, candidates, sampler_spec
                     )
                 )
-            atomic_write_text(
-                bon_artifact.candidate_artifact_text(groups, sampler_spec),
+            atomic_write_bytes(
+                bon_artifact.candidate_artifact_text(groups, sampler_spec).encode(
+                    "utf-8"
+                ),
                 export_candidates,
                 field="export-candidates",
             )
