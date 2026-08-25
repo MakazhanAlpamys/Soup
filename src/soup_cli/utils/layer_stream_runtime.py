@@ -1672,9 +1672,9 @@ def materialize_extras(
 
     Also lifts out the two shared NF4 code tables: they are constant across
     every weight (the sharder asserts it), so one resident copy serves the whole
-    model instead of streaming 16 + 256 floats per layer.  The embedding and an
-    untied output head intentionally remain on ``meta`` until the large-layer
-    wrappers are installed.
+    model instead of streaming 16 + 256 floats per layer. For an untied pair,
+    the embedding and output head intentionally remain on ``meta`` until the
+    large-layer wrappers are installed. A tied embedding stays resident.
     """
     from safetensors.torch import load_file
 

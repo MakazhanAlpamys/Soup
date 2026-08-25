@@ -548,7 +548,7 @@ def _write_safetensors(path, tensors):
     return path
 
 
-def _fake_weights_dir(tmp_path, n_layers=3, split=False):
+def _fake_weights_dir(tmp_path, n_layers=3, split=False, untied=False):
     import torch
 
     torch.manual_seed(0)
@@ -562,6 +562,8 @@ def _fake_weights_dir(tmp_path, n_layers=3, split=False):
         "model.embed_tokens.weight": torch.randn(32, 8, dtype=torch.float32),
         "model.norm.weight": torch.randn(8, dtype=torch.float32),
     }
+    if untied:
+        extras["lm_head.weight"] = torch.randn(32, 8, dtype=torch.float32)
     src = tmp_path / "weights"
     src.mkdir()
     if split:
@@ -599,7 +601,24 @@ class TestShardRoundTrip:
                 short = key[len("model.layers.1.") :]
                 assert torch.equal(blob[short], tensor), short
 
-    def test_extras_are_separated_from_layers(self, tmp_path):
+    def test_tied_embedding_stays_resident_and_unaffected(self, tmp_path):
+        import torch
+        from safetensors.torch import load_file
+
+        from soup_cli.utils.layer_shard import extras_shard_path, shard_checkpoint
+
+        src, _, extras = _fake_weights_dir(tmp_path)
+        out = str(tmp_path / "shards")
+        index = shard_checkpoint(src, out, dtype="float32")
+        resident = load_file(extras_shard_path(out))
+
+        assert set(resident) == {"model.embed_tokens.weight", "model.norm.weight"}
+        assert torch.equal(
+            resident["model.embed_tokens.weight"], extras["model.embed_tokens.weight"]
+        )
+        assert index.large_keys == ()
+
+    def test_untied_vocabulary_pair_is_split_from_resident_extras(self, tmp_path):
         import torch
         from safetensors.torch import load_file
 
@@ -609,18 +628,20 @@ class TestShardRoundTrip:
             shard_checkpoint,
         )
 
-        src, _, extras = _fake_weights_dir(tmp_path)
+        src, _, weights = _fake_weights_dir(tmp_path, untied=True)
         out = str(tmp_path / "shards")
         index = shard_checkpoint(src, out, dtype="float32")
+
         resident = load_file(extras_shard_path(out))
         embedding = load_file(large_shard_path(out, "model.embed_tokens.weight"))
+        head = load_file(large_shard_path(out, "lm_head.weight"))
 
         assert set(resident) == {"model.norm.weight"}
-        assert set(embedding) == {"model.embed_tokens.weight"}
         assert torch.equal(
-            embedding["model.embed_tokens.weight"], extras["model.embed_tokens.weight"]
+            embedding["model.embed_tokens.weight"], weights["model.embed_tokens.weight"]
         )
-        assert index.large_keys == ("model.embed_tokens.weight",)
+        assert torch.equal(head["lm_head.weight"], weights["lm_head.weight"])
+        assert index.large_keys == ("lm_head.weight", "model.embed_tokens.weight")
 
     def test_layers_split_across_source_files_are_gathered(self, tmp_path):
         """Real checkpoints shard by size, not by layer boundary."""
@@ -1585,15 +1606,63 @@ class TestStreamedForwardParityCpu:
         assert runtime.large_pool.loads == 2
         assert runtime.large_pool.owner == "lm_head.weight"
 
-    def test_tied_embedding_control_keeps_one_weight_and_one_load(self, tmp_path):
+    def test_untied_large_layers_match_resident_backward_gradients(self, tmp_path):
+        """The untied slot must preserve training numerics, not only logits."""
+        import torch
+        from peft import get_peft_model
+
+        from soup_cli.utils.layer_stream_runtime import canonical_named_parameters
+
+        model, _runtime, resident, _ = _build_streamed_cpu(tmp_path, tie=False)
+        ref = get_peft_model(resident, _tiny_lora())
+
+        generator = torch.Generator().manual_seed(17)
+        with torch.no_grad():
+            for name, parameter in model.named_parameters():
+                if "lora_B" in name:
+                    parameter.copy_(
+                        torch.randn(parameter.shape, generator=generator) * 0.02
+                    )
+        _copy_lora(model, ref)
+        model.eval()
+        ref.eval()
+        model.zero_grad(set_to_none=True)
+        ref.zero_grad(set_to_none=True)
+
+        ids = torch.randint(0, 64, (2, 12), generator=generator)
+        streamed_loss = model(input_ids=ids, labels=ids).loss
+        resident_loss = ref(input_ids=ids, labels=ids).loss
+        assert torch.equal(streamed_loss, resident_loss), (
+            streamed_loss - resident_loss
+        ).abs().item()
+
+        streamed_loss.backward()
+        resident_loss.backward()
+        streamed_grads = {
+            name: parameter.grad
+            for name, parameter in canonical_named_parameters(model)
+            if "lora_" in name and parameter.grad is not None
+        }
+        resident_grads = {
+            name: parameter.grad
+            for name, parameter in canonical_named_parameters(ref)
+            if "lora_" in name and parameter.grad is not None
+        }
+
+        assert streamed_grads and set(streamed_grads) == set(resident_grads)
+        assert any(float(gradient.abs().sum()) > 0.0 for gradient in streamed_grads.values())
+        for name, gradient in streamed_grads.items():
+            assert torch.equal(gradient, resident_grads[name]), name
+
+    def test_tied_embedding_control_uses_the_unchanged_resident_path(self, tmp_path):
         import torch
 
         model, runtime, _resident, _ = _build_streamed_cpu(tmp_path, tie=True)
         model(input_ids=torch.randint(0, 64, (1, 8)))
 
-        assert tuple(runtime.large_pool.specs) == ("model.embed_tokens.weight",)
-        assert runtime.large_pool.loads == 1
-        assert runtime.large_pool.owner == "model.embed_tokens.weight"
+        assert runtime.large_pool is None
+        assert not model.get_input_embeddings().weight.is_meta
+        assert model.get_input_embeddings().weight is model.get_output_embeddings().weight
 
     def test_all_aliases_of_a_tied_boundary_module_are_replaced(self):
         import torch.nn as nn
@@ -2601,7 +2670,7 @@ class TestCachedIndexInvalidation:
     def _prepare(self, tmp_path):
         from soup_cli.utils.layer_shard import shard_checkpoint
 
-        src, _, _ = _fake_weights_dir(tmp_path)
+        src, _, _ = _fake_weights_dir(tmp_path, untied=True)
         out = str(tmp_path / "shards")
         shard_checkpoint(src, out, dtype="float32")
         return src, out

@@ -52,6 +52,17 @@ MEASURED_VRAM_GRID = [
     dict(label="Qwen2.5-0.5B B8 S512", batch=8, seq=512, peak=9266992640, **_QWEN),
 ]
 
+# Accounting control for #324. This is deliberately separate from the measured
+# accuracy grid above: its peak is the first real row plus one additive
+# vocabulary slot, so it guards composition without pretending to be another
+# hardware measurement.
+_LARGE_SLOT_ACCOUNTING_ROW = {
+    **MEASURED_VRAM_GRID[0],
+    "label": "SmolLM2-135M B1 S256 + 16 MiB vocabulary-slot control",
+    "large_layer_bytes": 16 * 1024 * 1024,
+    "peak": MEASURED_VRAM_GRID[0]["peak"] + 16 * 1024 * 1024,
+}
+
 
 def _predict(row):
     from soup_cli.utils.layer_stream import estimate_stream_peak_vram
@@ -67,6 +78,7 @@ def _predict(row):
         n_layers=row["n_layers"],
         seq_len=row["seq"],
         batch_size=row["batch"],
+        large_layer_bytes=row.get("large_layer_bytes", 0),
     )
 
 
@@ -147,7 +159,9 @@ class TestPeakVramReproducesTheMeasuredGrid:
         err = abs(predicted - measured) / measured
         assert err < 0.01, f"predicted {predicted} vs measured {measured} ({err:.2%})"
 
-    @pytest.mark.parametrize("row", MEASURED_VRAM_GRID, ids=lambda r: r["label"])
+    @pytest.mark.parametrize(
+        "row", MEASURED_VRAM_GRID + [_LARGE_SLOT_ACCOUNTING_ROW], ids=lambda r: r["label"]
+    )
     def test_never_under_predicts(self, row):
         """The only safe direction for a gate that refuses configs. An estimator
         that is accurate on average but sometimes low still OOMs users.

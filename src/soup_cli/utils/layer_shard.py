@@ -75,7 +75,7 @@ _MAX_TOTAL_TENSORS = 200_000
 
 _INDEX_NAME = "index.json"
 _EXTRAS_NAME = "extras.safetensors"
-_SHARD_FORMAT_VERSION = 2
+_SHARD_FORMAT_VERSION = 3
 _LARGE_EMBED_ROLE = "embed_tokens"
 _LARGE_HEAD_ROLE = "lm_head"
 
@@ -183,11 +183,12 @@ class ShardIndex:
     arch: str
     soup_version: str
     #: Full checkpoint keys stored outside ``extras.safetensors`` and streamed
-    #: through the single large-layer buffer.  A tied checkpoint contains only
-    #: the embedding key; its output head reuses that same source tensor.
+    #: through the single large-layer buffer. Only an explicit untied
+    #: embedding/head pair is split; tied checkpoints stay on the unchanged
+    #: resident one-matrix path.
     large_keys: Tuple[str, ...] = ()
-    #: v2 splits vocabulary-sized weights out of the resident extras shard.
-    #: Old caches must be rebuilt or they silently keep #324's 2.10 GB resident.
+    #: v3 splits only an untied vocabulary pair out of the resident extras shard.
+    #: v2 also split tied embeddings, changing their established numerics.
     format_version: int = _SHARD_FORMAT_VERSION
     source_fingerprint: str = ""
     #: ``(basename, size, mtime_ns)`` for each source shard. The digest above
@@ -665,9 +666,10 @@ def shard_checkpoint(
     (short names, i.e. without the ``model.layers.N.`` prefix) and stores the
     packed nibbles plus the statistics needed to rebuild its ``QuantState``.
     Everything else is stored at ``dtype``, exactly as
-    ``replace_with_bnb_linear`` leaves it.  ``embed_tokens`` and an explicit
-    (untied) ``lm_head`` are each written to their own shard and remain
-    unquantised; they are streamed by the runtime through one large slot.
+    ``replace_with_bnb_linear`` leaves it.  When BOTH ``embed_tokens`` and an
+    explicit (untied) ``lm_head`` exist, each is written to its own shard and
+    remains unquantised; the runtime streams them through one large slot. A tied
+    checkpoint keeps its single embedding matrix resident and unchanged.
     """
     if dtype not in _SUPPORTED_DTYPES:
         raise ValueError(
@@ -736,6 +738,18 @@ def shard_checkpoint(
     if len(layer_ids) != n_layers:
         missing = sorted(set(range(n_layers)) - layer_ids)
         raise ValueError(f"decoder layer indices are not contiguous; missing {missing[:8]}")
+
+    # #324 relieves the TWO-matrix untied footprint. A tied checkpoint already
+    # needs only one matrix, and its acceptance control is explicitly
+    # "unaffected". Splitting its lone embedding would change the CUDA kernel
+    # path for no memory win and regressed preference-loss bit-exactness.
+    large_roles_present = {
+        role for key in where if (role := large_weight_role(key)) is not None
+    }
+    stream_untied_pair = {
+        _LARGE_EMBED_ROLE,
+        _LARGE_HEAD_ROLE,
+    }.issubset(large_roles_present)
 
     tables = _CodeTables()
     quant_specs: Dict[str, NF4WeightSpec] = {}
@@ -808,7 +822,7 @@ def shard_checkpoint(
             path, source_key = location
             tensor = _read_tensor(handles[path], source_key, dtype)
             total_params += tensor.numel()
-            role = large_weight_role(key)
+            role = large_weight_role(key) if stream_untied_pair else None
             if role is None:
                 extras[key] = tensor
                 continue
