@@ -60,20 +60,25 @@ _FINITE_TRAINING_METRICS = (
 def _assert_finite_training_state(
     log_history: list[dict[str, Any]], model: Any | None = None
 ) -> None:
-    """Refuse the final save when metrics or trainable weights are non-finite."""
-    for entry in log_history:
-        if not isinstance(entry, dict):
-            continue
-        for metric in _FINITE_TRAINING_METRICS:
-            if metric not in entry:
+    """Refuse the final save when metrics or trainable weights are non-finite.
+
+    Only the most recently logged value of each metric is checked. ``log_history``
+    accumulates one entry per log call over the whole run, and a metric that was
+    transiently non-finite earlier (e.g. a GradScaler warm-up nan) but recovered
+    says nothing about the final state; checking every past entry made a
+    self-corrected run indistinguishable from a genuinely corrupted one.
+    """
+    for metric in _FINITE_TRAINING_METRICS:
+        for entry in reversed(log_history):
+            if not isinstance(entry, dict) or metric not in entry:
                 continue
             value = entry[metric]
             try:
                 finite = math.isfinite(float(value))
             except (TypeError, ValueError):
-                continue
+                break
             if finite:
-                continue
+                break
             step = entry.get("step", "unknown")
             raise RuntimeError(
                 f"non-finite training metric {metric}={value} at step {step}; "
