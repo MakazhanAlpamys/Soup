@@ -14,6 +14,11 @@ reproducing 70+ versions of notes.
 
 ### Fixed
 
+- **`_assert_finite_training_state` no longer refuses a run over a self-corrected
+  transient metric (#546 by @AmirF194 in #560).** The log_history scan now checks only
+  the most recently logged value of each metric instead of raising on the first
+  non-finite value found at any step, so a GradScaler warm-up nan that recovers no
+  longer blocks the final save.
 - **SmolVLM/Idefics3 vision SFT now reaches real training batches (#302 by
   @Amix29 in #488).** Soup keeps LLaVA messages and PIL images together until
   collation, converts legacy `<image>` markers to structured multimodal content,
