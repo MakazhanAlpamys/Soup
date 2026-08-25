@@ -71,6 +71,60 @@ def test_on_log_none_logs():
     display.update.assert_not_called()
 
 
+def test_summary_log_preserves_last_training_metrics():
+    """HF's final runtime summary must not reset the live panel to zero."""
+    display = MagicMock()
+    callback = SoupTrainerCallback(display=display)
+    state = _make_state(global_step=128, max_steps=128, epoch=1.0)
+
+    callback.on_log(
+        _make_args(),
+        state,
+        MagicMock(),
+        logs={
+            "loss": 1.3589,
+            "learning_rate": 1.2e-8,
+            "grad_norm": 6.55,
+        },
+    )
+    callback.on_log(
+        _make_args(),
+        state,
+        MagicMock(),
+        logs={"train_runtime": 1016.0, "train_steps_per_second": 0.126},
+    )
+
+    final_update = display.update.call_args_list[-1].kwargs
+    assert final_update["loss"] == 1.3589
+    assert final_update["lr"] == 1.2e-8
+    assert final_update["grad_norm"] == 6.55
+
+
+def test_real_zero_metrics_replace_previous_values():
+    """Preservation must not hide a genuine logged zero."""
+    display = MagicMock()
+    callback = SoupTrainerCallback(display=display)
+    state = _make_state()
+
+    callback.on_log(
+        _make_args(),
+        state,
+        MagicMock(),
+        logs={"loss": 1.0, "learning_rate": 1e-4, "grad_norm": 2.0},
+    )
+    callback.on_log(
+        _make_args(),
+        state,
+        MagicMock(),
+        logs={"loss": 0.0, "learning_rate": 0.0, "grad_norm": 0.0},
+    )
+
+    final_update = display.update.call_args_list[-1].kwargs
+    assert final_update["loss"] == 0.0
+    assert final_update["lr"] == 0.0
+    assert final_update["grad_norm"] == 0.0
+
+
 def test_on_log_with_tracker():
     """on_log should forward metrics to tracker if provided."""
     display = MagicMock()

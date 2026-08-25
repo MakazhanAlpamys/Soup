@@ -54,6 +54,13 @@ class _SoupTrainerCallback_body:  # noqa: N801
         self.run_id = run_id
         self.eval_config = eval_config
         self.output_dir = output_dir
+        # HF emits a summary-only ``on_log`` event after the final optimizer
+        # step. It has runtime/throughput fields but no loss/LR/grad norm. Keep
+        # the last real values so that event cannot reset the dashboards and
+        # tracker to synthetic zeroes (#541).
+        self._last_loss = 0.0
+        self._last_lr = 0.0
+        self._last_grad_norm = 0.0
         # Loss watchdog state
         self._watchdog_enabled = loss_watchdog
         self._watchdog_threshold = loss_watchdog_threshold
@@ -175,9 +182,15 @@ class _SoupTrainerCallback_body:  # noqa: N801
 
         step = state.global_step
         epoch = state.epoch or 0
-        loss = logs.get("loss", 0.0)
-        lr = logs.get("learning_rate", 0.0)
-        grad_norm = logs.get("grad_norm", 0.0)
+        if logs.get("loss") is not None:
+            self._last_loss = logs["loss"]
+        if logs.get("learning_rate") is not None:
+            self._last_lr = logs["learning_rate"]
+        if logs.get("grad_norm") is not None:
+            self._last_grad_norm = logs["grad_norm"]
+        loss = self._last_loss
+        lr = self._last_lr
+        grad_norm = self._last_grad_norm
         speed = logs.get("train_steps_per_second", 0.0)
 
         self.display.update(
