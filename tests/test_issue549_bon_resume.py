@@ -146,6 +146,46 @@ def test_resume_rejects_changed_run_before_sampling(tmp_path, monkeypatch):
     assert generate_calls == []
 
 
+def test_final_datasets_use_exact_utf8_bytes_for_manifest_hashes(tmp_path, monkeypatch):
+    from soup_cli.commands.data import app
+    from soup_cli.utils.paths import atomic_write_text as real_text_write
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts.jsonl").write_text(
+        '{"prompt":"one"}\n', encoding="utf-8"
+    )
+    monkeypatch.setattr(
+        "soup_cli.utils.magpie.make_magpie_generate_fn",
+        lambda *_args, **_kwargs: lambda _prompt: "candidate",
+    )
+    monkeypatch.setattr(
+        "soup_cli.eval.judge.JudgeEvaluator",
+        lambda **_kwargs: SimpleNamespace(
+            evaluate=lambda _prompt, response: SimpleNamespace(
+                weighted_score=float(len(response))
+            )
+        ),
+    )
+
+    def reject_dataset_text_writes(text, path, *, field):
+        if field in {"output", "emit-pairs"}:
+            raise AssertionError("dataset JSONL must use exact UTF-8 byte writes")
+        return real_text_write(text, path, field=field)
+
+    monkeypatch.setattr(
+        "soup_cli.utils.paths.atomic_write_text", reject_dataset_text_writes
+    )
+    result = CliRunner().invoke(app, _args(tmp_path))
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    manifest = json.loads((tmp_path / "sft.jsonl.manifest.json").read_text())
+    assert manifest["sft"]["sha256"] == hashlib.sha256(
+        (tmp_path / "sft.jsonl").read_bytes()
+    ).hexdigest()
+    assert manifest["dpo"]["sha256"] == hashlib.sha256(
+        (tmp_path / "dpo.jsonl").read_bytes()
+    ).hexdigest()
+
+
 def test_checkpoint_rejects_duplicate_or_reordered_indexes(tmp_path, monkeypatch):
     from soup_cli.utils.best_of_n_checkpoint import load_checkpoint
 
