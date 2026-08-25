@@ -203,6 +203,17 @@ soup data best-of-n --provider ollama --model qwen2.5:7b \
     --prompts prompts.jsonl --n 8 --judge ollama://llama3.1 \
     -o best_of_n.jsonl --resume
 
+# Two-phase / air-gapped workflow: sample first, without constructing a judge.
+soup data best-of-n --base Qwen/Qwen3.8-27B --revision <commit> \
+    --prompts prompts.jsonl --n 8 --export-candidates candidates.jsonl
+
+# An offline human, deterministic program, CI job, or Codex writes one judgment
+# per candidate group, copying prompt_id and group_digest from candidates.jsonl:
+# {"prompt_id":"...","group_digest":"...","winner_idx":2,
+#  "scores":[0.1,0.4,0.9,...],"verifier":{"name":"Codex","version":"offline-v1"}}
+soup data best-of-n --candidate-artifact candidates.jsonl \
+    --judgments judgments.jsonl -o best_of_n.jsonl --emit-pairs pairs.jsonl
+
 # Evol-Instruct (WizardLM depth/breadth, v0.71.31) — grow instruction diversity
 soup data evolve --input seeds.jsonl --provider ollama --model llama3.1 \
     --strategy depth --rounds 2 -o evolved.jsonl
@@ -220,6 +231,17 @@ generation or removes the newly created set. The manifest binds the exact SHA-25
 hashes and row counts as one generation. Keep or archive the checkpoint after
 success if reproducible rematerialization is useful; it contains dataset content
 and should be protected like the generated dataset.
+
+The candidate artifact preserves every ordered candidate with prompt, candidate,
+group, and whole-artifact SHA-256 bindings plus a public sampler specification.
+The offline phase validates complete one-to-one coverage before writing anything:
+missing or duplicate prompt ids, changed group digests, invalid winner indexes,
+score-count drift, non-finite scores, and winner/score disagreement all fail
+closed. It does not construct a sampler or judge. SFT and DPO rows retain the
+candidate-artifact and judgment-file digests, group id, public sampler settings,
+and bounded verifier identity. Endpoint URLs and local model paths are never
+copied into those artifacts. Reusing the same two input files produces identical
+training-row bytes.
 
 ### Custom Transforms
 
