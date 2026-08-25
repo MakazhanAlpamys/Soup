@@ -470,6 +470,26 @@ class TestPerMessageTrainField:
         assert ("system",) not in tok.rendered_roles
         assert any(label != IGNORE_INDEX for label in out["labels"])
 
+    def test_explicitly_trained_system_prefix_is_deferred_until_user(self):
+        from soup_cli.data.loss_mask import (
+            IGNORE_INDEX,
+            build_per_message_train_labels,
+        )
+
+        tok = _RequiresUserTokenizer()
+        out = build_per_message_train_labels(
+            [
+                {"role": "system", "content": "Follow the format.", "train": True},
+                {"role": "user", "content": "Q", "train": False},
+                {"role": "assistant", "content": "A", "train": True},
+            ],
+            tok,
+        )
+
+        assert ("system",) not in tok.rendered_roles
+        assert ("system", "user") in tok.rendered_roles
+        assert any(label != IGNORE_INDEX for label in out["labels"])
+
 
 class TestEdgeCases:
     def test_empty_messages_raises(self):

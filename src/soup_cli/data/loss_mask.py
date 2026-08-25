@@ -364,9 +364,9 @@ def build_per_message_train_labels(
         train_flag = msg.get("train")
         if train_flag is None:
             train_flag = msg.get("role") == "assistant"
-        if not train_flag and not _has_user_turn(cumulative):
-            # Match the response-only fallback: ignored leading context need
-            # not be rendered until a valid user-bearing prefix exists (#540).
+        if not _has_user_turn(cumulative):
+            # Template validity is independent of the per-message train flag:
+            # defer every user-less prefix until it can be rendered (#540).
             continue
         rendered = _tokenize_only(tokenizer, cumulative)
         new_len = len(rendered)
