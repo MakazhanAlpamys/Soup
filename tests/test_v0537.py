@@ -1759,9 +1759,6 @@ class TestReviewFixesAuthToken:
         from soup_cli.commands.serve import _create_app
         from soup_cli.trainer.rewards import _get_isolation_strategy
 
-        if sys.platform == "win32" or _get_isolation_strategy() == "best-effort":
-            pytest.skip("Bash sandbox requires strict OS isolation")
-
         app = _create_app(
             model_obj=MagicMock(),
             tokenizer=MagicMock(),
@@ -1784,13 +1781,16 @@ class TestReviewFixesAuthToken:
         )
         assert resp2.status_code == 401
 
-        # Correct header -> 200
+        # Correct header -> 200 (or 501 if no strict isolation)
         resp3 = client.post(
             "/v1/tools/bash",
             json={"command": "echo 1"},
             headers={"Authorization": "Bearer s3cret"},
         )
-        assert resp3.status_code == 200
+        if sys.platform == "win32" or _get_isolation_strategy() == "best-effort":
+            assert resp3.status_code == 501
+        else:
+            assert resp3.status_code == 200
 
     def test_python_tool_with_auth_token_requires_bearer(self):
         try:
