@@ -427,7 +427,7 @@ class TestV025NewRecipes:
             assert cfg.base == recipe.model
             assert cfg.task == recipe.task
 
-    def test_catalog_size_is_147(self):
+    def test_catalog_size_is_154(self):
         """Total catalog size — grew with each release.
 
         v0.25.0 shipped 43 recipes (29 + 9 Part A + 2 Part B tools + 3 Part E MLX).
@@ -447,10 +447,11 @@ class TestV025NewRecipes:
         Issue #277 added 1 (qwen3.5-9b-grpo) -> 145.
         Issue #280 added 1 (glm-5.1-dpo) -> 146.
         Issue #477 added 1 (qwen3.8-27b-sft) -> 147.
+        Catalog expansion added 7 SFT recipes (Qwen2.5-Coder/Math, R1-Distill-Qwen) -> 154.
         """
         from soup_cli.recipes.catalog import RECIPES
 
-        assert len(RECIPES) == 147
+        assert len(RECIPES) == 154
 
     def test_new_recipes_searchable(self):
         """Search returns the new recipes via keyword/task filter."""
@@ -472,3 +473,88 @@ class TestV025NewRecipes:
         recipe = get_recipe("deepseek-v3-7b-sft")
         cfg = load_config_from_string(recipe.yaml_str)
         assert cfg.training.moe_lora is True
+
+
+class TestNewModelRecipes:
+    """Catalog-expansion SFT recipes + Mistral Small repo-id fix (#523)."""
+
+    EXPECTED = [
+        ("qwen2.5-coder-1.5b-sft", "sft",
+         "Qwen/Qwen2.5-Coder-1.5B-Instruct", 16, 32, 2e-4),
+        ("qwen2.5-coder-14b-sft", "sft",
+         "Qwen/Qwen2.5-Coder-14B-Instruct", 32, 64, 1e-4),
+        ("qwen2.5-coder-32b-sft", "sft",
+         "Qwen/Qwen2.5-Coder-32B-Instruct", 32, 64, 1e-4),
+        ("qwen2.5-math-1.5b-sft", "sft",
+         "Qwen/Qwen2.5-Math-1.5B-Instruct", 16, 32, 2e-4),
+        ("qwen2.5-math-7b-sft", "sft",
+         "Qwen/Qwen2.5-Math-7B-Instruct", 16, 32, 2e-4),
+        ("deepseek-r1-distill-qwen-1.5b-sft", "sft",
+         "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B", 16, 32, 2e-4),
+        ("deepseek-r1-distill-qwen-7b-sft", "sft",
+         "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B", 16, 32, 2e-4),
+    ]
+
+    def test_all_new_recipes_registered(self):
+        from soup_cli.recipes.catalog import RECIPES
+
+        for name, _task, _model, _r, _alpha, _lr in self.EXPECTED:
+            assert name in RECIPES, f"Missing recipe: {name}"
+
+    def test_new_recipes_load_with_expected_shape(self):
+        from soup_cli.config.loader import load_config_from_string
+        from soup_cli.recipes.catalog import get_recipe
+
+        for name, task, model, r, alpha, lr in self.EXPECTED:
+            recipe = get_recipe(name)
+            assert recipe is not None
+            assert recipe.task == task
+            assert recipe.model == model
+            cfg = load_config_from_string(recipe.yaml_str)
+            assert cfg.base == model
+            assert cfg.task == task
+            assert cfg.training.quantization == "4bit"
+            assert cfg.training.lora.r == r
+            assert cfg.training.lora.alpha == alpha
+            assert cfg.training.lr == lr
+            assert cfg.data.max_length == 4096
+
+    def test_large_coder_recipes_use_gradient_checkpointing(self):
+        from soup_cli.config.loader import load_config_from_string
+        from soup_cli.recipes.catalog import get_recipe
+
+        for name in ("qwen2.5-coder-14b-sft", "qwen2.5-coder-32b-sft"):
+            cfg = load_config_from_string(get_recipe(name).yaml_str)
+            assert cfg.training.gradient_checkpointing is True
+
+    def test_new_recipes_searchable(self):
+        from soup_cli.recipes.catalog import search_recipes
+
+        coder_models = {r.model for r in search_recipes(query="coder", task="sft")}
+        assert "Qwen/Qwen2.5-Coder-1.5B-Instruct" in coder_models
+        assert "Qwen/Qwen2.5-Coder-32B-Instruct" in coder_models
+        distill = {r.model for r in search_recipes(query="r1-distill")}
+        assert "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B" in distill
+
+    def test_mistral_small_repo_id_fixed(self):
+        from soup_cli.config.loader import load_config_from_string
+        from soup_cli.recipes.catalog import get_recipe
+
+        recipe = get_recipe("mistral-small-3-sft")
+        assert recipe is not None
+        assert recipe.model == "mistralai/Mistral-Small-24B-Instruct-2501"
+        cfg = load_config_from_string(recipe.yaml_str)
+        assert cfg.base == "mistralai/Mistral-Small-24B-Instruct-2501"
+
+    def test_show_and_use_new_recipe(self, tmp_path, monkeypatch):
+        show_result = runner.invoke(app, ["recipes", "show", "qwen2.5-math-7b-sft"])
+        assert show_result.exit_code == 0
+        assert "Qwen/Qwen2.5-Math-7B-Instruct" in show_result.output
+
+        monkeypatch.chdir(tmp_path)
+        use_result = runner.invoke(
+            app, ["recipes", "use", "qwen2.5-math-7b-sft", "--yes"]
+        )
+        assert use_result.exit_code == 0
+        content = (tmp_path / "soup.yaml").read_text(encoding="utf-8")
+        assert "Qwen/Qwen2.5-Math-7B-Instruct" in content
