@@ -3050,6 +3050,9 @@ def best_of_n(
     judgments: str = typer.Option(
         "", "--judgments", help="Offline verified judgments JSONL"
     ),
+    manifest: str = typer.Option(
+        "", "--manifest", help="Offline commit manifest (default: <output>.manifest.json)"
+    ),
     temperature: float = typer.Option(1.0, "--temperature", help="Sampling temp [0, 2]"),
     max_new_tokens: int = typer.Option(
         256, "--max-new-tokens", help="Max new tokens per candidate [1, 4096]"
@@ -3131,6 +3134,7 @@ def best_of_n(
         if not output and not plan_only:
             console.print("[red]--output is required unless --plan-only is set.[/]")
             raise typer.Exit(2)
+        manifest_path = manifest or (f"{output}.manifest.json" if output else "")
         try:
             paths = [candidate_artifact, judgments]
             if output:
@@ -3139,6 +3143,9 @@ def best_of_n(
             if emit_pairs:
                 enforce_under_cwd_and_no_symlink(emit_pairs, "--emit-pairs path")
                 paths.append(emit_pairs)
+            if manifest_path:
+                enforce_under_cwd_and_no_symlink(manifest_path, "--manifest path")
+                paths.append(manifest_path)
             if len({os.path.normcase(os.path.realpath(path)) for path in paths}) != len(paths):
                 raise ValueError("offline input and output paths must be distinct")
             groups, sampler_spec, candidate_sha = bon_artifact.load_candidate_artifact(
@@ -3165,23 +3172,27 @@ def best_of_n(
         )
         if plan_only:
             return
+        sft_bytes = bon_artifact.stable_jsonl(sft_rows).encode("utf-8")
+        dpo_bytes = (
+            bon_artifact.stable_jsonl(dpo_rows).encode("utf-8") if emit_pairs else b""
+        )
         try:
-            publication = [
-                (
-                    bon_artifact.stable_jsonl(sft_rows).encode("utf-8"),
-                    output,
-                    "output",
-                )
-            ]
+            manifest_bytes = bon_artifact.offline_manifest_text(
+                candidate_artifact_sha256=candidate_sha,
+                judgments_sha256=judgments_sha,
+                sft_path=output,
+                sft_bytes=sft_bytes,
+                sft_count=len(sft_rows),
+                dpo_path=emit_pairs,
+                dpo_bytes=dpo_bytes,
+                dpo_count=len(dpo_rows) if emit_pairs else 0,
+            ).encode("utf-8")
+            bon_artifact.invalidate_offline_manifest(manifest_path)
+            publication = [(sft_bytes, output, "output")]
             if emit_pairs:
-                publication.append(
-                    (
-                        bon_artifact.stable_jsonl(dpo_rows).encode("utf-8"),
-                        emit_pairs,
-                        "emit-pairs",
-                    )
-                )
+                publication.append((dpo_bytes, emit_pairs, "emit-pairs"))
             atomic_write_bytes_group(publication)
+            atomic_write_bytes(manifest_bytes, manifest_path, field="manifest")
         except (OSError, TypeError, ValueError) as exc:
             console.print(f"[red]Failed to write output: {_escape(str(exc))}[/]")
             raise typer.Exit(1) from exc
@@ -3194,9 +3205,13 @@ def best_of_n(
                 f"\nDPO pairs:  [bold]{len(dpo_rows)}[/]\n"
                 f"Pairs out:  [bold]{_escape(os.path.relpath(emit_pairs))}[/]"
             )
+        body += f"\nManifest:   [bold]{_escape(os.path.relpath(manifest_path))}[/]"
         console.print(Panel(body, title="soup data best-of-n — offline done"))
         return
 
+    if manifest:
+        console.print("[red]--manifest applies only to offline materialization[/]")
+        raise typer.Exit(2)
     if export_mode:
         if judge or output or emit_pairs or checkpoint or manifest or resume:
             console.print(

@@ -174,6 +174,164 @@ def test_offline_materialization_never_constructs_sampler_or_judge_and_is_stable
     assert str(tmp_path) not in outputs[0][0].decode()
 
 
+def test_offline_manifest_commits_and_verifies_exact_output_set(tmp_path, monkeypatch):
+    from soup_cli.commands.data import app
+    from soup_cli.utils.best_of_n_artifact import verify_offline_manifest
+
+    artifact, _calls = _export_candidates(tmp_path, monkeypatch)
+    groups = _artifact_groups(artifact)
+    judgments = tmp_path / "judgments.jsonl"
+    _write_judgments(judgments, groups)
+    sft = tmp_path / "sft.jsonl"
+    dpo = tmp_path / "dpo.jsonl"
+    result = CliRunner().invoke(
+        app,
+        [
+            "best-of-n",
+            "--candidate-artifact",
+            str(artifact),
+            "--judgments",
+            str(judgments),
+            "--output",
+            str(sft),
+            "--emit-pairs",
+            str(dpo),
+        ],
+    )
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    manifest_path = tmp_path / "sft.jsonl.manifest.json"
+    manifest = verify_offline_manifest(
+        str(manifest_path), sft_path=str(sft), dpo_path=str(dpo)
+    )
+    assert manifest["schema"] == "soup.best_of_n.offline_manifest.v1"
+    assert manifest["dpo_requested"] is True
+    assert manifest["sft"]["rows"] == 2
+    assert manifest["dpo"]["rows"] == 2
+    assert len(manifest["candidate_artifact_sha256"]) == 64
+    assert len(manifest["judgments_sha256"]) == 64
+
+
+def test_sft_only_manifest_records_that_dpo_was_not_requested(tmp_path, monkeypatch):
+    from soup_cli.commands.data import app
+    from soup_cli.utils.best_of_n_artifact import verify_offline_manifest
+
+    artifact, _calls = _export_candidates(tmp_path, monkeypatch, prompts=("question",))
+    judgments = tmp_path / "judgments.jsonl"
+    _write_judgments(judgments, _artifact_groups(artifact))
+    sft = tmp_path / "sft.jsonl"
+    manifest_path = tmp_path / "commit.json"
+    result = CliRunner().invoke(
+        app,
+        [
+            "best-of-n",
+            "--candidate-artifact",
+            str(artifact),
+            "--judgments",
+            str(judgments),
+            "--output",
+            str(sft),
+            "--manifest",
+            str(manifest_path),
+        ],
+    )
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    manifest = verify_offline_manifest(str(manifest_path), sft_path=str(sft))
+    assert manifest["dpo_requested"] is False
+    assert manifest["dpo"] is None
+
+
+def test_failed_dpo_replacement_invalidates_old_manifest(tmp_path, monkeypatch):
+    from soup_cli.commands.data import app
+    from soup_cli.utils.paths import atomic_write_bytes as real_byte_write
+
+    artifact, _calls = _export_candidates(tmp_path, monkeypatch)
+    judgments = tmp_path / "judgments.jsonl"
+    _write_judgments(judgments, _artifact_groups(artifact))
+    sft = tmp_path / "sft.jsonl"
+    dpo = tmp_path / "dpo.jsonl"
+    args = [
+        "best-of-n",
+        "--candidate-artifact",
+        str(artifact),
+        "--judgments",
+        str(judgments),
+        "--output",
+        str(sft),
+        "--emit-pairs",
+        str(dpo),
+    ]
+    first = CliRunner().invoke(app, args)
+    assert first.exit_code == 0, (first.output, repr(first.exception))
+    manifest_path = tmp_path / "sft.jsonl.manifest.json"
+    assert manifest_path.exists()
+
+    def fail_dpo(data, path, *, field):
+        if field == "emit-pairs":
+            raise OSError("simulated DPO publication failure")
+        return real_byte_write(data, path, field=field)
+
+    monkeypatch.setattr("soup_cli.utils.paths.atomic_write_bytes", fail_dpo)
+    failed = CliRunner().invoke(app, args)
+    assert failed.exit_code == 1
+    assert sft.exists()
+    assert dpo.exists()
+    assert not manifest_path.exists()
+
+
+def test_manifest_verifier_rejects_replaced_output(tmp_path, monkeypatch):
+    from soup_cli.commands.data import app
+    from soup_cli.utils.best_of_n_artifact import verify_offline_manifest
+
+    artifact, _calls = _export_candidates(tmp_path, monkeypatch, prompts=("question",))
+    judgments = tmp_path / "judgments.jsonl"
+    _write_judgments(judgments, _artifact_groups(artifact))
+    sft = tmp_path / "sft.jsonl"
+    result = CliRunner().invoke(
+        app,
+        [
+            "best-of-n",
+            "--candidate-artifact",
+            str(artifact),
+            "--judgments",
+            str(judgments),
+            "--output",
+            str(sft),
+        ],
+    )
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    sft.write_bytes(sft.read_bytes() + b"{}\n")
+    with pytest.raises(ValueError, match="SFT content does not match"):
+        verify_offline_manifest(
+            str(tmp_path / "sft.jsonl.manifest.json"), sft_path=str(sft)
+        )
+
+
+def test_offline_manifest_path_must_be_distinct(tmp_path, monkeypatch):
+    from soup_cli.commands.data import app
+
+    artifact, _calls = _export_candidates(tmp_path, monkeypatch, prompts=("question",))
+    judgments = tmp_path / "judgments.jsonl"
+    _write_judgments(judgments, _artifact_groups(artifact))
+    sft = tmp_path / "sft.jsonl"
+    result = CliRunner().invoke(
+        app,
+        [
+            "best-of-n",
+            "--candidate-artifact",
+            str(artifact),
+            "--judgments",
+            str(judgments),
+            "--output",
+            str(sft),
+            "--manifest",
+            str(sft),
+        ],
+    )
+    assert result.exit_code == 2
+    assert "must be distinct" in result.output
+    assert not sft.exists()
+
+
 @pytest.mark.parametrize(
     "mutation,match",
     [

@@ -241,7 +241,11 @@ closed. It does not construct a sampler or judge. SFT and DPO rows retain the
 candidate-artifact and judgment-file digests, group id, public sampler settings,
 and bounded verifier identity. Endpoint URLs and local model paths are never
 copied into those artifacts. Reusing the same two input files produces identical
-training-row bytes.
+training-row bytes. The offline command writes `<output>.manifest.json` last (or
+the explicit `--manifest` path) and binds the exact SFT/DPO hashes, row counts,
+candidate artifact, judgment file, and whether DPO output was requested. Treat
+the manifest as the commit marker: missing or mismatched manifests identify an
+interrupted or replaced generation.
 
 ### Custom Transforms
 

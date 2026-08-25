@@ -14,7 +14,9 @@ from typing import Any
 from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
 
 _CANDIDATE_SCHEMA = "soup.best_of_n.candidates.v1"
+_OFFLINE_MANIFEST_SCHEMA = "soup.best_of_n.offline_manifest.v1"
 _VERIFIER_VALUE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._-]{0,127}$")
+_SHA256_VALUE = re.compile(r"^[0-9a-f]{64}$")
 
 
 def _canonical(value: Any) -> bytes:
@@ -356,3 +358,147 @@ def stable_jsonl(rows: list[dict]) -> str:
         json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n"
         for row in rows
     )
+
+
+def offline_manifest_text(
+    *,
+    candidate_artifact_sha256: str,
+    judgments_sha256: str,
+    sft_path: str,
+    sft_bytes: bytes,
+    sft_count: int,
+    dpo_path: str,
+    dpo_bytes: bytes,
+    dpo_count: int,
+) -> str:
+    """Build the final commit marker for one offline materialization."""
+    if not _SHA256_VALUE.fullmatch(candidate_artifact_sha256):
+        raise ValueError("candidate artifact SHA-256 is invalid")
+    if not _SHA256_VALUE.fullmatch(judgments_sha256):
+        raise ValueError("judgments SHA-256 is invalid")
+    if isinstance(sft_count, bool) or not isinstance(sft_count, int) or sft_count < 0:
+        raise ValueError("SFT row count is invalid")
+    if isinstance(dpo_count, bool) or not isinstance(dpo_count, int) or dpo_count < 0:
+        raise ValueError("DPO row count is invalid")
+    if not isinstance(sft_bytes, bytes) or not isinstance(dpo_bytes, bytes):
+        raise TypeError("offline dataset payloads must be bytes")
+    dpo_requested = bool(dpo_path)
+    manifest = {
+        "schema": _OFFLINE_MANIFEST_SCHEMA,
+        "candidate_artifact_sha256": candidate_artifact_sha256,
+        "judgments_sha256": judgments_sha256,
+        "dpo_requested": dpo_requested,
+        "sft": {
+            "file": os.path.basename(sft_path),
+            "rows": sft_count,
+            "sha256": _sha(sft_bytes),
+        },
+        "dpo": (
+            {
+                "file": os.path.basename(dpo_path),
+                "rows": dpo_count,
+                "sha256": _sha(dpo_bytes),
+            }
+            if dpo_requested
+            else None
+        ),
+    }
+    return json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+
+
+def _validate_manifest_dataset(
+    record: Any, *, label: str, path: str, required: bool
+) -> None:
+    if not required:
+        if record is not None or path:
+            raise ValueError(f"offline manifest unexpectedly records {label}")
+        return
+    if not path:
+        raise ValueError(f"offline manifest requires the {label} path")
+    if not isinstance(record, dict) or set(record) != {"file", "rows", "sha256"}:
+        raise ValueError(f"offline manifest {label} record is invalid")
+    if record["file"] != os.path.basename(path):
+        raise ValueError(f"offline manifest {label} filename does not match")
+    rows = record["rows"]
+    if isinstance(rows, bool) or not isinstance(rows, int) or rows < 0:
+        raise ValueError(f"offline manifest {label} row count is invalid")
+    if not isinstance(record["sha256"], str) or not _SHA256_VALUE.fullmatch(
+        record["sha256"]
+    ):
+        raise ValueError(f"offline manifest {label} SHA-256 is invalid")
+    actual_sha, actual_rows = _regular_sha_and_rows(path, f"{label} path")
+    if record["sha256"] != actual_sha or rows != actual_rows:
+        raise ValueError(f"offline manifest {label} content does not match")
+
+
+def _regular_sha_and_rows(path: str, field: str) -> tuple[str, int]:
+    """Hash and count non-empty JSONL records without buffering the dataset."""
+    enforce_under_cwd_and_no_symlink(path, field)
+    try:
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except OSError as exc:
+        raise ValueError(f"{field} could not be opened safely: {exc}") from exc
+    digest = hashlib.sha256()
+    rows = 0
+    try:
+        mode = os.fstat(fd).st_mode
+        if not stat.S_ISREG(mode):
+            raise ValueError(f"{field} must be a regular file")
+        with os.fdopen(fd, "rb") as handle:
+            fd = -1
+            for line in handle:
+                digest.update(line)
+                if line.strip():
+                    rows += 1
+    finally:
+        if fd >= 0:
+            os.close(fd)
+    return digest.hexdigest(), rows
+
+
+def verify_offline_manifest(
+    path: str, *, sft_path: str, dpo_path: str = ""
+) -> dict:
+    """Verify the final marker against exact SFT/DPO file bytes and counts."""
+    data = _read_regular(path, "--manifest path")
+    try:
+        manifest = json.loads(data)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("offline manifest is not valid UTF-8 JSON") from exc
+    expected = {
+        "schema",
+        "candidate_artifact_sha256",
+        "judgments_sha256",
+        "dpo_requested",
+        "sft",
+        "dpo",
+    }
+    if not isinstance(manifest, dict) or set(manifest) != expected:
+        raise ValueError("offline manifest fields are invalid")
+    if manifest["schema"] != _OFFLINE_MANIFEST_SCHEMA:
+        raise ValueError("offline manifest schema is unsupported")
+    for field in ("candidate_artifact_sha256", "judgments_sha256"):
+        value = manifest[field]
+        if not isinstance(value, str) or not _SHA256_VALUE.fullmatch(value):
+            raise ValueError(f"offline manifest {field} is invalid")
+    if not isinstance(manifest["dpo_requested"], bool):
+        raise ValueError("offline manifest dpo_requested must be a bool")
+    _validate_manifest_dataset(manifest["sft"], label="SFT", path=sft_path, required=True)
+    _validate_manifest_dataset(
+        manifest["dpo"],
+        label="DPO",
+        path=dpo_path,
+        required=manifest["dpo_requested"],
+    )
+    return manifest
+
+
+def invalidate_offline_manifest(path: str) -> None:
+    """Remove an old commit marker before replacing any bound output."""
+    enforce_under_cwd_and_no_symlink(path, "--manifest path")
+    if not os.path.lexists(path):
+        return
+    mode = os.lstat(path).st_mode
+    if not stat.S_ISREG(mode):
+        raise ValueError("--manifest path must be a regular file")
+    os.unlink(path)
