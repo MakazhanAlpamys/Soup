@@ -784,6 +784,49 @@ class TestBestOfN:
         with pytest.raises(ValueError, match="candidate"):
             judge_pick_best("p", [], _ScoreJudge())
 
+    def test_pick_best_rejects_non_finite_scores_in_every_position(self):
+        import math
+
+        import pytest
+
+        from soup_cli.utils.best_of_n import judge_pick_best
+
+        class _Judge:
+            def __init__(self, scores):
+                self.scores = iter(scores)
+
+            def evaluate(self, prompt, response):
+                from soup_cli.eval.judge import JudgeScore
+
+                return JudgeScore(
+                    prompt=prompt,
+                    response=response,
+                    weighted_score=next(self.scores),
+                )
+
+        candidates = ["first", "middle", "last"]
+        for bad_score in (float("nan"), float("inf"), float("-inf")):
+            for bad_index in range(len(candidates)):
+                scores = [1.0, 2.0, 3.0]
+                scores[bad_index] = bad_score
+                with pytest.raises(ValueError, match=rf"candidate {bad_index}.*finite"):
+                    judge_pick_best("private prompt", candidates, _Judge(scores))
+                assert not math.isfinite(bad_score)
+
+    def test_pick_best_rejects_boolean_score(self):
+        import pytest
+
+        from soup_cli.utils.best_of_n import judge_pick_best
+
+        class _BoolJudge:
+            def evaluate(self, prompt, response):
+                from soup_cli.eval.judge import JudgeScore
+
+                return JudgeScore(prompt=prompt, response=response, weighted_score=True)
+
+        with pytest.raises(ValueError, match=r"candidate 0.*finite number"):
+            judge_pick_best("private prompt", ["candidate"], _BoolJudge())
+
     def test_build_sft_row(self):
         from soup_cli.utils.best_of_n import BestOfNPick, build_sft_row
 
@@ -1182,6 +1225,61 @@ class TestBestOfNCli:
             for p in (ppath, opath, dpath):
                 if os.path.exists(p):
                     os.remove(p)
+
+    def test_non_finite_judge_score_does_not_publish_outputs(self, monkeypatch, tmp_path):
+        from types import SimpleNamespace
+
+        from typer.testing import CliRunner
+
+        import soup_cli.commands.data as data_cmd
+        import soup_cli.utils.best_of_n as bon
+        from soup_cli.commands.data import app
+
+        class _NonFiniteJudge:
+            def evaluate(self, _prompt, response):
+                score = float("nan") if response == "bad" else 1.0
+                return SimpleNamespace(weighted_score=score)
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(
+            data_cmd, "_load_bon_model", lambda base, device, trust: (None, None)
+        )
+        monkeypatch.setattr(
+            bon,
+            "sample_candidates",
+            lambda model, tok, prompt, **kwargs: ["bad", "good"],
+        )
+        monkeypatch.setattr(
+            "soup_cli.eval.judge.JudgeEvaluator", lambda **kwargs: _NonFiniteJudge()
+        )
+        prompts = tmp_path / "prompts.jsonl"
+        prompts.write_text('{"prompt":"private"}\n', encoding="utf-8")
+
+        result = CliRunner().invoke(
+            app,
+            [
+                "best-of-n",
+                "--base",
+                "model",
+                "--prompts",
+                str(prompts),
+                "--n",
+                "2",
+                "--judge",
+                "ollama://judge",
+                "--output",
+                "sft.jsonl",
+                "--emit-pairs",
+                "dpo.jsonl",
+            ],
+        )
+
+        assert result.exit_code == 1
+        assert isinstance(result.exception, ValueError)
+        assert "candidate 0" in str(result.exception)
+        assert "private" not in str(result.exception)
+        assert not (tmp_path / "sft.jsonl").exists()
+        assert not (tmp_path / "dpo.jsonl").exists()
 
     def test_plan_only(self):
         import os

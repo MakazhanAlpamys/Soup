@@ -11,6 +11,7 @@ provenance under the reserved ``_best_of_n`` key; ``build_dpo_pair`` optionally
 emits a winner-vs-loser preference pair.
 """
 
+import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable, Optional, Protocol
 
@@ -88,7 +89,20 @@ def judge_pick_best(
     """Score each candidate pointwise; argmax wins (ties -> lowest index)."""
     if not candidates:
         raise ValueError("no candidates to judge")
-    scores = [float(evaluator.evaluate(prompt, c).weighted_score) for c in candidates]
+    scores = []
+    for index, candidate in enumerate(candidates):
+        raw_score = evaluator.evaluate(prompt, candidate).weighted_score
+        if isinstance(raw_score, bool):
+            raise ValueError(f"candidate {index} judge score must be a finite number")
+        try:
+            score = float(raw_score)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"candidate {index} judge score must be a finite number"
+            ) from exc
+        if not math.isfinite(score):
+            raise ValueError(f"candidate {index} judge score must be finite")
+        scores.append(score)
     winner_idx = max(range(len(scores)), key=lambda i: scores[i])
     return BestOfNPick(
         winner_idx=winner_idx, winner=candidates[winner_idx], scores=tuple(scores)
