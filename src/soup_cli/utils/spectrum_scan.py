@@ -31,7 +31,10 @@ import logging
 import math
 import os
 import re
+import shutil
+import stat
 import tempfile
+import time
 from dataclasses import dataclass
 from typing import (
     TYPE_CHECKING,
@@ -68,6 +71,7 @@ _VALID_MODULE_TYPES = ("mlp", "attn", "other")
 
 _LAYER_IDX_RE = re.compile(r"(?:^|\.)(?:layers|h)\.\d+\.")
 _SLUG_RE = re.compile(r"[^A-Za-z0-9._-]+")
+_HF_COMMIT_RE = re.compile(r"^[A-Fa-f0-9]{40}$")
 
 ModulesArg = Union[str, Sequence[str], None]
 
@@ -83,6 +87,7 @@ class ModelWeightsPlan:
     materialized_copy_bytes: int
     materialize_bytes: int
     source_files: Tuple[Tuple[str, int, int], ...]
+    source_revision: Optional[str] = None
 
     @property
     def needs_materialization(self) -> bool:
@@ -591,6 +596,8 @@ def _materialized_matches_hf_snapshot(
     source_dir: str,
     materialized_dir: str,
     source_files: Tuple[Tuple[str, int, int], ...],
+    *,
+    source_revision: Optional[str] = None,
 ) -> Optional[Tuple[Tuple[str, int, int], ...]]:
     """Return the real-file manifest when HF metadata proves blob identity."""
     try:
@@ -623,7 +630,182 @@ def _materialized_matches_hf_snapshot(
         # local_dir metadata is: commit hash, blob etag, materialisation time.
         if len(lines) < 2 or lines[1].strip() != blob_id:
             return None
+        if source_revision is not None and lines[0].strip() != source_revision:
+            return None
     return existing
+
+
+def _hf_snapshot_revision(source_dir: str) -> Optional[str]:
+    """Commit carried by a canonical ``snapshots/<sha>`` cache directory."""
+    source = os.path.realpath(os.path.expanduser(source_dir))
+    if os.path.basename(os.path.dirname(source)) != "snapshots":
+        return None
+    revision = os.path.basename(source)
+    return revision if _HF_COMMIT_RE.fullmatch(revision) else None
+
+
+def _snapshot_materialization_entries(
+    source_dir: str,
+    *,
+    source_revision: Optional[str],
+) -> list[Tuple[str, str, Optional[str]]]:
+    """Validate and list cached files before any destination is created.
+
+    Canonical Hugging Face snapshots contain symlinks into their sibling
+    ``blobs`` directory.  Only those links are followed: a crafted snapshot
+    cannot turn Soup's regular-file copy into an arbitrary-file disclosure.
+    """
+    from soup_cli.utils.paths import is_under
+
+    source = os.path.realpath(os.path.expanduser(source_dir))
+    if not os.path.isdir(source):
+        raise FileNotFoundError(f"cached snapshot directory not found: {source_dir}")
+
+    blob_root = None
+    if source_revision is not None:
+        repo_root = os.path.dirname(os.path.dirname(source))
+        expected = os.path.realpath(
+            os.path.join(repo_root, "snapshots", source_revision)
+        )
+        if source != expected:
+            raise ValueError("cached snapshot path does not match its resolved revision")
+        blob_root = os.path.realpath(os.path.join(repo_root, "blobs"))
+        if not os.path.isdir(blob_root):
+            raise FileNotFoundError("cached Hugging Face blob store is missing")
+
+    entries: list[Tuple[str, str, Optional[str]]] = []
+    for root, dirnames, filenames in os.walk(source, followlinks=False):
+        for dirname in dirnames:
+            directory = os.path.join(root, dirname)
+            if os.path.islink(directory):
+                raise ValueError(
+                    f"cached snapshot directory symlink is not allowed: {dirname!r}"
+                )
+        for filename in filenames:
+            if not filename.endswith((".safetensors", ".json")):
+                continue
+            snapshot_path = os.path.join(root, filename)
+            relative = os.path.relpath(snapshot_path, source)
+            blob_id = None
+            if os.path.islink(snapshot_path):
+                resolved = os.path.realpath(snapshot_path)
+                if blob_root is not None and not is_under(resolved, blob_root):
+                    raise ValueError(
+                        f"cached snapshot file {relative!r} points outside the "
+                        "Hugging Face blob store"
+                    )
+                blob_id = os.path.basename(resolved)
+            else:
+                resolved = snapshot_path
+            if not os.path.isfile(resolved):
+                raise FileNotFoundError(
+                    f"cached snapshot file {relative!r} is missing its blob"
+                )
+            entries.append((relative, resolved, blob_id))
+    return entries
+
+
+def _copy_regular_file(source: str, destination: str) -> None:
+    """Copy through a no-follow descriptor so validation cannot be race-swapped."""
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(source, flags)
+    try:
+        source_stat = os.fstat(descriptor)
+        if not stat.S_ISREG(source_stat.st_mode):
+            raise ValueError(f"cached snapshot source is not a regular file: {source!r}")
+        with os.fdopen(descriptor, "rb") as source_handle:
+            descriptor = -1
+            with open(destination, "xb") as destination_handle:
+                shutil.copyfileobj(source_handle, destination_handle)
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
+def _reject_materialized_target_link(target: str) -> None:
+    """Keep cache replacement from following a symlink, junction, or mount."""
+    if not os.path.lexists(target):
+        return
+    target_stat = os.lstat(target)
+    if stat.S_ISLNK(target_stat.st_mode):
+        raise ValueError("materialized weights path must not be a symlink")
+    if os.path.ismount(target):
+        raise ValueError("materialized weights path must not be a mount point")
+    if os.name == "nt":
+        reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+        if getattr(target_stat, "st_file_attributes", 0) & reparse:
+            raise ValueError(
+                "materialized weights path must not be a reparse point / junction"
+            )
+
+
+def _materialize_cached_snapshot(plan: ModelWeightsPlan) -> str:
+    """Copy one already-resolved snapshot without asking the Hub again."""
+    from soup_cli.utils.paths import is_under
+
+    if plan.source_revision is None:
+        raise ValueError(
+            "cannot materialize a symlinked Hub snapshot without its resolved commit"
+        )
+    requested_target = os.path.abspath(os.path.expanduser(plan.weights_dir))
+    _reject_materialized_target_link(requested_target)
+    target = os.path.realpath(requested_target)
+    weights_root = os.path.realpath(os.path.join(resolve_cache_dir(), "weights"))
+    if target == weights_root or not is_under(target, weights_root):
+        raise ValueError("materialized weights path must stay inside Soup's cache")
+
+    entries = _snapshot_materialization_entries(
+        plan.source_dir,
+        source_revision=plan.source_revision,
+    )
+    os.makedirs(weights_root, exist_ok=True)
+    staging = tempfile.mkdtemp(
+        prefix=f".{os.path.basename(target)}.",
+        dir=os.path.dirname(target),
+    )
+    try:
+        metadata_root = os.path.join(
+            staging, ".cache", "huggingface", "download"
+        )
+        for relative, source_path, blob_id in entries:
+            destination = os.path.join(staging, relative)
+            os.makedirs(os.path.dirname(destination), exist_ok=True)
+            _copy_regular_file(source_path, destination)
+            if relative.endswith(".safetensors") and blob_id is not None:
+                metadata_path = os.path.join(metadata_root, relative + ".metadata")
+                os.makedirs(os.path.dirname(metadata_path), exist_ok=True)
+                with open(metadata_path, "w", encoding="utf-8") as handle:
+                    handle.write(
+                        f"{plan.source_revision or ''}\n{blob_id}\n{time.time()}\n"
+                    )
+
+        staged_manifest = _weight_file_manifest(staging, permit_symlinks=False)
+        expected_sizes = {name: size for name, size, _mtime in plan.source_files}
+        staged_sizes = {name: size for name, size, _mtime in staged_manifest}
+        if staged_sizes != expected_sizes:
+            raise FileNotFoundError(
+                "cached snapshot changed while Soup materialized its weight files"
+            )
+
+        if os.path.isdir(target):
+            existing = _materialized_matches_hf_snapshot(
+                plan.source_dir,
+                target,
+                plan.source_files,
+                source_revision=plan.source_revision,
+            )
+            if existing is not None:
+                return target
+            _reject_materialized_target_link(requested_target)
+            shutil.rmtree(target)
+        elif os.path.lexists(target):
+            raise ValueError("materialized weights path must be a directory")
+        os.replace(staging, target)
+        staging = ""
+        return target
+    finally:
+        if staging and os.path.isdir(staging):
+            shutil.rmtree(staging)
 
 
 def plan_model_weights(model: str) -> ModelWeightsPlan:
@@ -649,6 +831,8 @@ def plan_model_weights(model: str) -> ModelWeightsPlan:
         cache_dir=None,
         allow_patterns=["*.safetensors", "*.json"],
     )
+    source = os.path.realpath(source)
+    source_revision = _hf_snapshot_revision(source)
     manifest = _weight_file_manifest(source, permit_symlinks=True)
     source_paths = [os.path.join(source, name) for name, _size, _mtime in manifest]
     if all(not os.path.islink(path) for path in source_paths):
@@ -660,12 +844,18 @@ def plan_model_weights(model: str) -> ModelWeightsPlan:
             materialized_copy_bytes=0,
             materialize_bytes=0,
             source_files=manifest,
+            source_revision=source_revision,
         )
 
     materialized = os.path.join(
         resolve_cache_dir(), "weights", model_slug(model)
     )
-    existing = _materialized_matches_hf_snapshot(source, materialized, manifest)
+    existing = _materialized_matches_hf_snapshot(
+        source,
+        materialized,
+        manifest,
+        source_revision=source_revision,
+    )
     needs_copy = existing is None
     return ModelWeightsPlan(
         model=model,
@@ -677,6 +867,7 @@ def plan_model_weights(model: str) -> ModelWeightsPlan:
             sum(size for _name, size, _mtime in manifest) if needs_copy else 0
         ),
         source_files=manifest if existing is None else existing,
+        source_revision=source_revision,
     )
 
 
@@ -684,15 +875,7 @@ def materialize_model_weights(plan: ModelWeightsPlan) -> str:
     """Create the planned regular-file copy only when the source requires it."""
     if not plan.needs_materialization:
         return plan.weights_dir
-    from soup_cli.utils.hubs import snapshot_download
-
-    resolved = snapshot_download(
-        plan.model,
-        cache_dir=plan.weights_dir,
-        allow_patterns=["*.safetensors", "*.json"],
-    )
-    _weight_file_manifest(resolved, permit_symlinks=False)
-    return resolved
+    return _materialize_cached_snapshot(plan)
 
 
 def resolve_model_weights(

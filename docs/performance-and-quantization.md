@@ -541,6 +541,13 @@ copy. The layer shards remain under `~/.soup/layer-stream/`. Their index records
 filename, size, and `mtime_ns`, so a necessary re-shard says which component changed instead
 of silently spending minutes rebuilding the cache.
 
+This materialisation also works with `HF_HUB_OFFLINE=1` when the standard Hugging Face
+snapshot is complete. Soup pins the commit resolved by the initial cache lookup and copies
+only verified snapshot files from that commit's blob store; it does not perform a second Hub
+metadata request for the regular-file directory. A missing blob or an escaping symlink aborts
+before the destination is published, rather than leaving a partial checkpoint that the sharder
+could consume.
+
 
 ## Correctness First (v0.36.0)
 
