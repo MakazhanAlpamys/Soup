@@ -696,16 +696,18 @@ def _prepare_grpo_dataset(data: list[dict]) -> list[dict]:
             _copy_grpo_metadata(row, entry)
             prepared.append(entry)
         elif "messages" in row:
-            # Messages format — use the user message(s) as prompt
+            # Messages format — the final assistant turn may be a reference
+            # answer. Earlier assistant turns are part of the conversation and
+            # must remain in the prompt for multi-turn GRPO (#565).
             messages = row["messages"]
-            prompt_msgs = [msg for msg in messages if msg["role"] != "assistant"]
+            has_reference_turn = bool(
+                messages and messages[-1].get("role") == "assistant"
+            )
+            prompt_msgs = messages[:-1] if has_reference_turn else messages
             entry = {"prompt": prompt_msgs}
             _copy_grpo_metadata(row, entry)
-            assistant_messages = [
-                msg for msg in messages if msg.get("role") == "assistant"
-            ]
-            if assistant_messages:
-                entry.setdefault("answer", assistant_messages[-1].get("content"))
+            if has_reference_turn:
+                entry.setdefault("answer", messages[-1].get("content"))
             prepared.append(entry)
         elif "prompt" in row and isinstance(row["prompt"], list):
             # Already in message list format

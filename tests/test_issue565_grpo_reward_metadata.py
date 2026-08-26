@@ -101,6 +101,20 @@ def test_explicit_answer_wins_over_assistant_reference():
     assert prepared[0]["source_id"] == "row-1"
 
 
+def test_multi_turn_history_reaches_grpo_with_only_final_reference_removed():
+    messages = [
+        {"role": "user", "content": "Question one"},
+        {"role": "assistant", "content": "Answer one"},
+        {"role": "user", "content": "Question two"},
+        {"role": "assistant", "content": "Answer two"},
+    ]
+
+    prepared = _prepare_grpo_dataset([{"messages": messages}])
+
+    assert prepared[0]["prompt"] == messages[:-1]
+    assert prepared[0]["answer"] == "Answer two"
+
+
 @pytest.mark.parametrize(
     ("reward_fn", "domain", "row"),
     [

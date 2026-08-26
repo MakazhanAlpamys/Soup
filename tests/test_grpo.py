@@ -305,10 +305,39 @@ class TestPrepareGRPODataset:
         ]
         result = _prepare_grpo_dataset(data)
         assert len(result) == 1
-        # Should only include non-assistant messages as prompt
+        # The final assistant reference is removed from the prompt.
         assert len(result[0]["prompt"]) == 2
         assert result[0]["prompt"][0]["role"] == "system"
         assert result[0]["prompt"][1]["role"] == "user"
+
+    def test_multi_turn_prompt_preserves_earlier_assistant_turns(self):
+        from soup_cli.trainer.grpo import _prepare_grpo_dataset
+
+        messages = [
+            {"role": "user", "content": "First question"},
+            {"role": "assistant", "content": "First answer"},
+            {"role": "user", "content": "Follow-up"},
+            {"role": "assistant", "content": "Reference answer"},
+        ]
+
+        result = _prepare_grpo_dataset([{"messages": messages}])
+
+        assert result[0]["prompt"] == messages[:-1]
+        assert result[0]["answer"] == "Reference answer"
+
+    def test_trailing_user_is_not_misread_as_an_answer_pair(self):
+        from soup_cli.trainer.grpo import _prepare_grpo_dataset
+
+        messages = [
+            {"role": "user", "content": "First question"},
+            {"role": "assistant", "content": "First answer"},
+            {"role": "user", "content": "Still waiting"},
+        ]
+
+        result = _prepare_grpo_dataset([{"messages": messages}])
+
+        assert result[0]["prompt"] == messages
+        assert "answer" not in result[0]
 
     def test_from_prompt_message_list(self):
         from soup_cli.trainer.grpo import _prepare_grpo_dataset
