@@ -14,6 +14,17 @@ reproducing 70+ versions of notes.
 
 ### Fixed
 
+- **`live_eval`'s four callers now forward `quantization`; `soup ship --config` reuses the
+  training run's own (#367 by @AmirF194 in #570).** #461 added `quantization` to
+  `load_model_and_tokenizer` but nothing set it, so an NF4-trained adapter was still judged
+  against a bf16 base. `make_generator`, `make_multi_generator`, `lora_probe` and
+  `measure_logit_agreement` now accept and forward it. `soup ship --config soup.yaml` derives
+  a default from `training.quantization` (`4bit`/`8bit`; other quant_menu formats still fall
+  back to bf16) and prints which precision it loaded. `advise --probe-model`, `diagnose
+  --base-model` and `tunability --live` take no `--config`/`--quantization` flag yet, so they
+  keep the existing bf16 default. Stamping the numerics into the verdict/evidence JSON and a
+  staleness gate on mismatched-numerics evidence (issue criteria 2 and 4) stay open.
+
 - **SmolVLM/Idefics3 vision SFT now reaches real training batches (#302 by
   @Amix29 in #488).** Soup keeps LLaVA messages and PIL images together until
   collation, converts legacy `<image>` markers to structured multimodal content,
