@@ -1498,10 +1498,17 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             )
         else:
             # LoRA — with MoE-aware target modules if moe_lora is enabled
-            from soup_cli.utils.peft_wiring import resolve_lora_target_modules
+            from soup_cli.utils.peft_wiring import (
+                build_lora_config_kwargs,
+                resolve_lora_target_modules,
+                resolve_lora_target_parameters,
+            )
 
             target_modules = resolve_lora_target_modules(
                 self.model, tcfg.lora.target_modules
+            )
+            target_parameters = resolve_lora_target_parameters(
+                self.model, tcfg.lora.target_parameters
             )
 
             if tcfg.moe_lora and is_moe:
@@ -1514,14 +1521,12 @@ class SFTTrainerWrapper(StreamingSetupMixin):
                     )
 
             lora_config = LoraConfig(
-                r=tcfg.lora.r,
-                lora_alpha=tcfg.lora.alpha,
-                lora_dropout=tcfg.lora.dropout,
-                target_modules=target_modules,
-                task_type=TaskType.CAUSAL_LM,
-                bias="none",
-                use_dora=tcfg.lora.use_dora,
-                use_rslora=tcfg.lora.use_rslora,
+                **build_lora_config_kwargs(
+                    tcfg.lora,
+                    target_modules=target_modules,
+                    target_parameters=target_parameters,
+                    task_type=TaskType.CAUSAL_LM,
+                )
             )
             # v0.39.0 Part D / v0.40.6 #67 — surgical PEFT patches via shared helpers.
             from soup_cli.utils.peft_wiring import (

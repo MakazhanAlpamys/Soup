@@ -337,11 +337,19 @@ class PretrainTrainerWrapper:
         # of decoder layers, so it fully replaces the LoRA path below (the
         # schema cross-validator guarantees no LoRA-feature / freeze flag is
         # combined). Shared with the SFT trainer so the two cannot drift.
-        from soup_cli.utils.peft_wiring import apply_lisa_setup, resolve_lora_target_modules
+        from soup_cli.utils.peft_wiring import (
+            apply_lisa_setup,
+            build_lora_config_kwargs,
+            resolve_lora_target_modules,
+            resolve_lora_target_parameters,
+        )
 
         if not apply_lisa_setup(self.model, tcfg, console):
             # LoRA — with MoE-aware target modules if moe_lora is enabled
             target_modules = resolve_lora_target_modules(self.model, tcfg.lora.target_modules)
+            target_parameters = resolve_lora_target_parameters(
+                self.model, tcfg.lora.target_parameters
+            )
 
             if tcfg.moe_lora and is_moe:
                 moe_targets = get_moe_target_modules(self.model)
@@ -352,14 +360,12 @@ class PretrainTrainerWrapper:
                     )
 
             lora_config = LoraConfig(
-                r=tcfg.lora.r,
-                lora_alpha=tcfg.lora.alpha,
-                lora_dropout=tcfg.lora.dropout,
-                target_modules=target_modules,
-                task_type=TaskType.CAUSAL_LM,
-                bias="none",
-                use_dora=tcfg.lora.use_dora,
-                use_rslora=tcfg.lora.use_rslora,
+                **build_lora_config_kwargs(
+                    tcfg.lora,
+                    target_modules=target_modules,
+                    target_parameters=target_parameters,
+                    task_type=TaskType.CAUSAL_LM,
+                )
             )
             # v0.40.6 #67 — surgical PEFT patches.
             from soup_cli.utils.peft_wiring import (

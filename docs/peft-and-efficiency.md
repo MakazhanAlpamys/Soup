@@ -215,6 +215,32 @@ fallback because PEFT does not yet map `qwen3_5_text`. Soup targets `q_proj` and
 linear-attention layers. Explicit target lists still win unchanged. The MLX backend
 keeps its separate full-key default (`self_attn.q_proj`, `self_attn.v_proj`).
 
+Qwen4-Exp routed experts are raw 3-D parameters rather than `nn.Linear` modules, so
+`target_modules: auto` / `all-linear` deliberately does not include them. Opt into
+PEFT's parameter-targeting path for a higher-capacity resident SFT or continued-pretrain
+adapter:
+
+```yaml
+training:
+  lora:
+    r: 16
+    alpha: 32
+    dropout: 0                 # required by PEFT ParamWrapper
+    target_modules: auto       # every Qwen4-Exp linear family
+    target_parameters: auto    # routed gate_up_proj + down_proj tensors
+    rank_pattern:
+      experts.gate_up_proj: 2
+      experts.down_proj: 2
+```
+
+`target_parameters: auto` fails closed when an architecture has no registered mapping;
+an explicit list of parameter-name suffixes is also accepted. It is currently limited to
+resident text `sft` / `pretrain` on the Transformers backend and plain LoRA/rsLoRA with
+random initialization. PEFT requires zero dropout for raw parameters and warns that
+`torch.compile` may recompile or graph-break around parameter wrappers. Parameter-targeted
+MoE adapters also materialize a contribution for every expert during inference; merge the
+adapter into the base for deployment when hot-swapping is not required.
+
 See `soup_cli.utils.optimizer_zoo.SUPPORTED_OPTIMIZERS` for the complete optimizer allowlist.
 
 

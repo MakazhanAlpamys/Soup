@@ -38,6 +38,25 @@ QWEN35_TEXT_LORA_TARGETS = (
 # tracked separately from this safe linear-module baseline.
 QWEN4_EXP_TEXT_LORA_TARGETS = "all-linear"
 
+# Qwen4-Exp's routed experts keep their projections as two raw 3-D
+# ``nn.Parameter`` tensors per decoder layer. ``all-linear`` cannot see them;
+# PEFT 0.20's ``target_parameters`` path can adapt both, with the expert axis at
+# dimension zero.
+QWEN4_EXP_TEXT_LORA_TARGET_PARAMETERS = (
+    "mlp.experts.gate_up_proj",
+    "mlp.experts.down_proj",
+)
+
+
+def _model_types(model: Any) -> set[Any]:
+    """Return outer/text model types without importing Transformers."""
+    config = getattr(model, "config", model)
+    text_config = getattr(config, "text_config", None)
+    return {
+        getattr(config, "model_type", None),
+        getattr(text_config, "model_type", None),
+    }
+
 
 def resolve_lora_target_modules(model: Any, configured: Any) -> Any:
     """Resolve ``target_modules: auto`` for models PEFT does not know yet.
@@ -51,12 +70,7 @@ def resolve_lora_target_modules(model: Any, configured: Any) -> Any:
     if configured != "auto" and configured != ["auto"]:
         return configured
 
-    config = getattr(model, "config", model)
-    text_config = getattr(config, "text_config", None)
-    model_types = {
-        getattr(config, "model_type", None),
-        getattr(text_config, "model_type", None),
-    }
+    model_types = _model_types(model)
     if model_types & {
         "qwen3_5",
         "qwen3_5_text",
@@ -67,6 +81,52 @@ def resolve_lora_target_modules(model: Any, configured: Any) -> Any:
     if "qwen4_exp_text" in model_types:
         return QWEN4_EXP_TEXT_LORA_TARGETS
     return None
+
+
+def resolve_lora_target_parameters(model: Any, configured: Any) -> Any:
+    """Resolve opt-in raw-parameter LoRA targets for supported architectures.
+
+    ``None`` and an empty list disable raw-parameter targeting. Explicit lists
+    always win unchanged. ``auto`` fails closed on unknown architectures so a
+    user cannot request expert adaptation and silently train only modules.
+    """
+    if configured is None or configured == []:
+        return configured
+    if configured != "auto":
+        return configured
+    if "qwen4_exp_text" in _model_types(model):
+        return list(QWEN4_EXP_TEXT_LORA_TARGET_PARAMETERS)
+    raise ValueError(
+        "training.lora.target_parameters='auto' has no mapping for model_type="
+        f"{sorted(str(value) for value in _model_types(model) if value is not None)!r}; "
+        "provide an explicit parameter-name list or omit target_parameters"
+    )
+
+
+def build_lora_config_kwargs(
+    lora_cfg: Any,
+    *,
+    target_modules: Any,
+    target_parameters: Any,
+    task_type: Any,
+) -> dict[str, Any]:
+    """Build the shared PEFT LoRA kwargs used by resident SFT/pretrain."""
+    kwargs = {
+        "r": lora_cfg.r,
+        "lora_alpha": lora_cfg.alpha,
+        "lora_dropout": lora_cfg.dropout,
+        "target_modules": target_modules,
+        "target_parameters": target_parameters,
+        "task_type": task_type,
+        "bias": "none",
+        "use_dora": lora_cfg.use_dora,
+        "use_rslora": lora_cfg.use_rslora,
+    }
+    if lora_cfg.rank_pattern:
+        kwargs["rank_pattern"] = dict(lora_cfg.rank_pattern)
+    if lora_cfg.alpha_pattern:
+        kwargs["alpha_pattern"] = dict(lora_cfg.alpha_pattern)
+    return kwargs
 
 
 def apply_pre_lora_patches(model: Any, base: str) -> None:

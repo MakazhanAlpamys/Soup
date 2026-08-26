@@ -30,6 +30,8 @@ from soup_cli.utils.ship_verdict import (
 # v0.39.0 Part C — per-pattern LoRA rank/alpha bounds
 _MAX_LORA_RANK_PATTERN_KEYS = 256
 _MAX_LORA_RANK_PATTERN_VALUE = 1024
+_MAX_LORA_TARGET_PARAMETERS = 256
+_MAX_LORA_TARGET_PARAMETER_LEN = 512
 
 # v0.71.23 #266 — Spectrum targeted-training unfrozen-parameter caps
 _MAX_UNFROZEN_PARAMETERS = 50_000
@@ -71,6 +73,16 @@ class LoraConfig(BaseModel):
     target_modules: Union[str, List[str]] = Field(
         default="auto",
         description="Target modules for LoRA. 'auto' = let peft decide.",
+    )
+    target_parameters: Optional[Union[Literal["auto"], List[str]]] = Field(
+        default=None,
+        description=(
+            "Raw 2-D/3-D nn.Parameter tensors to adapt with PEFT LoRA. "
+            "Use 'auto' to select architecture-specific parameter targets "
+            "(currently Qwen4-Exp routed experts), a list of parameter-name "
+            "suffixes for explicit control, or omit to disable. Requires "
+            "dropout=0 and is wired for transformers SFT/pretrain."
+        ),
     )
     use_dora: bool = Field(
         default=False,
@@ -231,6 +243,67 @@ class LoraConfig(BaseModel):
                 )
             cleaned[key] = val
         return cleaned
+
+    @field_validator("target_parameters", mode="before")
+    @classmethod
+    def _validate_target_parameters(cls, value):
+        if value is None or value == "auto":
+            return value
+        if not isinstance(value, list):
+            raise ValueError("target_parameters must be 'auto', a list[str], or null")
+        if len(value) > _MAX_LORA_TARGET_PARAMETERS:
+            raise ValueError(
+                f"target_parameters caps at {_MAX_LORA_TARGET_PARAMETERS} entries, "
+                f"got {len(value)}"
+            )
+        cleaned: List[str] = []
+        seen = set()
+        for index, entry in enumerate(value):
+            if not isinstance(entry, str) or not entry.strip():
+                raise ValueError(
+                    f"target_parameters[{index}] must be a non-empty string"
+                )
+            target = entry.strip()
+            if target == "auto":
+                raise ValueError(
+                    "target_parameters: use scalar 'auto', not ['auto']"
+                )
+            if "\x00" in target:
+                raise ValueError("target_parameters entries cannot contain null bytes")
+            if len(target) > _MAX_LORA_TARGET_PARAMETER_LEN:
+                raise ValueError(
+                    "target_parameters entries cap at "
+                    f"{_MAX_LORA_TARGET_PARAMETER_LEN} characters"
+                )
+            if target not in seen:
+                cleaned.append(target)
+                seen.add(target)
+        return cleaned
+
+    @model_validator(mode="after")
+    def _validate_target_parameter_compat(self) -> "LoraConfig":
+        if not self.target_parameters:
+            return self
+        if self.dropout != 0:
+            raise ValueError(
+                "target_parameters requires lora.dropout=0 because PEFT cannot "
+                "apply dropout correctly to raw nn.Parameter tensors"
+            )
+        if self.use_dora:
+            raise ValueError(
+                "target_parameters is incompatible with use_dora=True in PEFT"
+            )
+        if self.use_vera:
+            raise ValueError(
+                "target_parameters is a LoRA-only PEFT feature and is incompatible "
+                "with use_vera=True"
+            )
+        if self.init_strategy != "random":
+            raise ValueError(
+                "target_parameters currently requires init_strategy='random'; "
+                "PiSSA, OLoRA, and LoftQ are not validated for raw 3-D parameters"
+            )
+        return self
 
     @model_validator(mode="after")
     def _validate_pattern_vera_exclusivity(self) -> "LoraConfig":
@@ -4785,6 +4858,8 @@ class SoupConfig(BaseModel):
             lora_conflicts.append("lora.use_olora")
         if lcfg.use_rslora:
             lora_conflicts.append("lora.use_rslora")
+        if lcfg.target_parameters:
+            lora_conflicts.append("lora.target_parameters")
         if tcfg.moe_lora:
             lora_conflicts.append("moe_lora")
         if tcfg.use_longlora:
@@ -4881,6 +4956,8 @@ class SoupConfig(BaseModel):
             lora_conflicts.append("lora.use_olora")
         if lcfg.use_rslora:
             lora_conflicts.append("lora.use_rslora")
+        if lcfg.target_parameters:
+            lora_conflicts.append("lora.target_parameters")
         if tcfg.moe_lora:
             lora_conflicts.append("moe_lora")
         if tcfg.use_longlora:
@@ -4969,6 +5046,8 @@ class SoupConfig(BaseModel):
             lora_conflicts.append("lora.rank_pattern")
         if lcfg.alpha_pattern is not None:
             lora_conflicts.append("lora.alpha_pattern")
+        if lcfg.target_parameters:
+            lora_conflicts.append("lora.target_parameters")
         if getattr(lcfg, "init_strategy", "random") != "random":
             lora_conflicts.append("lora.init_strategy")
         if tcfg.moe_lora:
@@ -4984,6 +5063,34 @@ class SoupConfig(BaseModel):
                 f"training.lora.r=0 means full fine-tuning (no adapter), so it "
                 f"is mutually exclusive with LoRA features: "
                 f"{', '.join(lora_conflicts)}. Set lora.r >= 1 to use them."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_lora_target_parameters_scope(self) -> "SoupConfig":
+        """#573 — raw-parameter LoRA is live in resident SFT/pretrain only."""
+        targets = self.training.lora.target_parameters
+        if not targets:
+            return self
+        if self.task not in ("sft", "pretrain"):
+            raise ValueError(
+                "training.lora.target_parameters requires task='sft' or "
+                f"task='pretrain'; got task={self.task!r}"
+            )
+        if self.backend != "transformers":
+            raise ValueError(
+                "training.lora.target_parameters requires backend='transformers'; "
+                f"got backend={self.backend!r}"
+            )
+        if self.modality != "text":
+            raise ValueError(
+                "training.lora.target_parameters requires modality='text'; "
+                f"got modality={self.modality!r}"
+            )
+        if self.training.stream_layers:
+            raise ValueError(
+                "training.lora.target_parameters is not yet supported with "
+                "training.stream_layers=true; use resident SFT/pretrain"
             )
         return self
 
