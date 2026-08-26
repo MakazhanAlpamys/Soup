@@ -31,19 +31,21 @@ from __future__ import annotations
 
 import base64
 import os
-import re
 import types
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
 from typing import Optional
 
-_MAX_NAME_LEN = 32
-_MAX_PATH_LEN = 4096
-_MAX_VERSION_LEN = 64
-_MAX_CONFIG_BYTES = 1_000_000  # 1 MiB cap on the embedded soup.yaml
-# PEP 440-ish version shape — defence-in-depth so a crafted soup_version can't
-# break out of the embedded ``pip_install("soup-cli[train]==<ver>")`` string.
-_VERSION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.+_-]*$")
+from soup_cli.cloud._common import (
+    _MAX_CONFIG_BYTES,
+    _MAX_VERSION_LEN,
+    _VERSION_RE,
+    CloudPlan,
+    validate_choice,
+    write_cloud_stub,
+)
+from soup_cli.cloud._common import (
+    validate_path_shape as _validate_path_shape,
+)
 
 SUPPORTED_CLOUDS: frozenset[str] = frozenset({"modal"})
 
@@ -67,65 +69,12 @@ _MODAL_SUBMIT_OVERRIDE: Optional[Callable[["CloudPlan"], int]] = None
 
 def validate_cloud(name: object) -> str:
     """Validate + normalise a ``--cloud`` provider name (closed allowlist)."""
-    if isinstance(name, bool):
-        raise ValueError("cloud must be a string, got bool")
-    if not isinstance(name, str):
-        raise ValueError(f"cloud must be a string, got {type(name).__name__}")
-    if not name:
-        raise ValueError("cloud must be a non-empty string")
-    if "\x00" in name:
-        raise ValueError("cloud must not contain null bytes")
-    if len(name) > _MAX_NAME_LEN:
-        raise ValueError(f"cloud exceeds {_MAX_NAME_LEN} chars")
-    normalised = name.lower()
-    if normalised not in SUPPORTED_CLOUDS:
-        raise ValueError(
-            f"cloud={name!r} is not supported. "
-            f"Valid: {sorted(SUPPORTED_CLOUDS)}"
-        )
-    return normalised
+    return validate_choice(name, "cloud", SUPPORTED_CLOUDS)
 
 
 def validate_gpu(gpu: object) -> str:
     """Validate + normalise a ``--gpu`` type against the Modal allowlist."""
-    if isinstance(gpu, bool):
-        raise ValueError("gpu must be a string, got bool")
-    if not isinstance(gpu, str):
-        raise ValueError(f"gpu must be a string, got {type(gpu).__name__}")
-    if not gpu:
-        raise ValueError("gpu must be a non-empty string")
-    if "\x00" in gpu:
-        raise ValueError("gpu must not contain null bytes")
-    if len(gpu) > _MAX_NAME_LEN:
-        raise ValueError(f"gpu exceeds {_MAX_NAME_LEN} chars")
-    normalised = gpu.lower()
-    if normalised not in SUPPORTED_GPUS:
-        raise ValueError(
-            f"gpu={gpu!r} is not supported. Valid: {sorted(SUPPORTED_GPUS)}"
-        )
-    return normalised
-
-
-def _validate_path_shape(value: object, field: str) -> str:
-    if not isinstance(value, str) or not value:
-        raise ValueError(f"{field} must be a non-empty string")
-    if "\x00" in value or "\n" in value or "\r" in value:
-        raise ValueError(f"{field} must not contain NUL / newline")
-    if len(value) > _MAX_PATH_LEN:
-        raise ValueError(f"{field} exceeds {_MAX_PATH_LEN} chars")
-    return value
-
-
-@dataclass(frozen=True)
-class CloudPlan:
-    """A rendered cloud-training plan (plan-only by default)."""
-
-    cloud: str
-    gpu: str
-    output_dir: str
-    stub_path: str
-    stub_text: str
-    run_command: str
+    return validate_choice(gpu, "gpu", SUPPORTED_GPUS)
 
 
 def render_modal_stub(
@@ -248,9 +197,7 @@ def plan_modal_run(
 
 def write_stub(plan: CloudPlan) -> str:
     """Write the plan's stub atomically under cwd; return the realpath."""
-    from soup_cli.utils.paths import atomic_write_text
-
-    return atomic_write_text(plan.stub_text, plan.stub_path, field="stub_path")
+    return write_cloud_stub(plan)
 
 
 def submit_modal_run(plan: CloudPlan, *, env: Optional[Mapping] = None) -> int:

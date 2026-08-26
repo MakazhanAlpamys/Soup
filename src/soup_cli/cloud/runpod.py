@@ -19,17 +19,22 @@ from __future__ import annotations
 
 import base64
 import os
+import re
 import types
 from collections.abc import Callable, Mapping
+from pathlib import PurePosixPath
 from typing import Optional
 
-from soup_cli.cloud.modal import (
+from soup_cli.cloud._common import (
     _MAX_CONFIG_BYTES,
-    _MAX_NAME_LEN,
     _MAX_VERSION_LEN,
     _VERSION_RE,
     CloudPlan,
-    _validate_path_shape,
+    validate_choice,
+    write_cloud_stub,
+)
+from soup_cli.cloud._common import (
+    validate_path_shape as _validate_path_shape,
 )
 
 SUPPORTED_CLOUDS: frozenset[str] = frozenset({"runpod"})
@@ -49,47 +54,29 @@ _GPU_RUNPOD_NAME: Mapping[str, str] = types.MappingProxyType({
 SUPPORTED_GPUS: frozenset[str] = frozenset(_GPU_RUNPOD_NAME)
 
 _RUNPOD_SUBMIT_OVERRIDE: Optional[Callable[["CloudPlan"], int]] = None
+_REMOTE_OUTPUT_RE = re.compile(r"^[A-Za-z0-9._/-]+$")
 
 
 def validate_cloud(name: object) -> str:
     """Validate + normalise a ``--cloud`` provider name (closed allowlist)."""
-    if isinstance(name, bool):
-        raise ValueError("cloud must be a string, got bool")
-    if not isinstance(name, str):
-        raise ValueError(f"cloud must be a string, got {type(name).__name__}")
-    if not name:
-        raise ValueError("cloud must be a non-empty string")
-    if "\x00" in name:
-        raise ValueError("cloud must not contain null bytes")
-    if len(name) > _MAX_NAME_LEN:
-        raise ValueError(f"cloud exceeds {_MAX_NAME_LEN} chars")
-    normalised = name.lower()
-    if normalised not in SUPPORTED_CLOUDS:
-        raise ValueError(
-            f"cloud={name!r} is not supported. "
-            f"Valid: {sorted(SUPPORTED_CLOUDS)}"
-        )
-    return normalised
+    return validate_choice(name, "cloud", SUPPORTED_CLOUDS)
 
 
 def validate_gpu(gpu: object) -> str:
     """Validate + normalise a ``--gpu`` type against the RunPod allowlist."""
-    if isinstance(gpu, bool):
-        raise ValueError("gpu must be a string, got bool")
-    if not isinstance(gpu, str):
-        raise ValueError(f"gpu must be a string, got {type(gpu).__name__}")
-    if not gpu:
-        raise ValueError("gpu must be a non-empty string")
-    if "\x00" in gpu:
-        raise ValueError("gpu must not contain null bytes")
-    if len(gpu) > _MAX_NAME_LEN:
-        raise ValueError(f"gpu exceeds {_MAX_NAME_LEN} chars")
-    normalised = gpu.lower()
-    if normalised not in SUPPORTED_GPUS:
+    return validate_choice(gpu, "gpu", SUPPORTED_GPUS)
+
+
+def _validate_remote_output(value: object) -> str:
+    output = _validate_path_shape(value, "output_dir")
+    path = PurePosixPath(output)
+    if path.is_absolute() or ".." in path.parts:
+        raise ValueError("RunPod output_dir must be a relative path without '..'")
+    if not _REMOTE_OUTPUT_RE.fullmatch(output):
         raise ValueError(
-            f"gpu={gpu!r} is not supported. Valid: {sorted(SUPPORTED_GPUS)}"
+            "RunPod output_dir may contain only letters, digits, '.', '_', '-', and '/'"
         )
-    return normalised
+    return str(path)
 
 
 def render_runpod_stub(
@@ -110,7 +97,7 @@ def render_runpod_stub(
         )
     gpu_key = validate_gpu(gpu)
     runpod_gpu = _GPU_RUNPOD_NAME[gpu_key]
-    _validate_path_shape(output_dir, "output_dir")
+    remote_output = _validate_remote_output(output_dir)
     if not isinstance(soup_version, str) or "\x00" in soup_version:
         raise ValueError("soup_version must be a NUL-free string")
     if len(soup_version) > _MAX_VERSION_LEN or not _VERSION_RE.match(soup_version):
@@ -125,7 +112,7 @@ def render_runpod_stub(
     # It decodes the config, installs soup, trains, and then tells RunPod API to terminate the pod.
     # We pass the RUNPOD_API_KEY from the environment into the pod so it can self-terminate.
     docker_args = (
-        "bash -c '"
+        "bash -c 'cd /workspace && "
         f"pip install {pip_spec} && "
         f"echo {cfg_b64} | base64 -d > /root/soup.yaml && "
         "soup train --config /root/soup.yaml --yes ; "
@@ -148,8 +135,13 @@ def render_runpod_stub(
         "\n"
         "def main() -> None:\n"
         '    api_key = os.environ.get("RUNPOD_API_KEY")\n'
+        '    network_volume_id = os.environ.get("RUNPOD_NETWORK_VOLUME_ID")\n'
         "    if not api_key:\n"
         '        print("Error: RUNPOD_API_KEY is not set.")\n'
+        "        sys.exit(1)\n"
+        "    if not network_volume_id:\n"
+        '        print("Error: RUNPOD_NETWORK_VOLUME_ID is not set; "\n'
+        '              "a persistent volume is required.")\n'
         "        sys.exit(1)\n"
         "    runpod.api_key = api_key\n"
         "\n"
@@ -159,10 +151,12 @@ def render_runpod_stub(
         '        image_name="runpod/pytorch:2.2.0-py3.10-cuda12.1.1-devel-ubuntu22.04",\n'
         f'        gpu_type_id="{runpod_gpu}",\n'
         '        env={"RUNPOD_API_KEY": api_key},\n'
+        "        network_volume_id=network_volume_id,\n"
+        '        volume_mount_path="/workspace",\n'
         f'        docker_args={docker_args!r},\n'
         "    )\n"
         '    print(f"Pod created: {pod.get(\'id\')}")\n'
-        '    print(f"Training submitted; download checkpoints to {_LOCAL_OUTPUT}")\n'
+        f'    print("Training submitted; checkpoints persist at /workspace/{remote_output}")\n'
         "\n"
         "if __name__ == '__main__':\n"
         "    main()\n"
@@ -185,7 +179,7 @@ def plan_runpod_run(
     if len(config_yaml.encode("utf-8")) > _MAX_CONFIG_BYTES:
         raise ValueError(f"config exceeds {_MAX_CONFIG_BYTES} bytes")
     gpu_key = validate_gpu(gpu)
-    _validate_path_shape(output_dir, "output_dir")
+    _validate_remote_output(output_dir)
     _validate_path_shape(stub_path, "stub_path")
     stub_text = render_runpod_stub(
         config_yaml,
@@ -205,9 +199,7 @@ def plan_runpod_run(
 
 
 def write_stub(plan: CloudPlan) -> str:
-    from soup_cli.utils.paths import atomic_write_text
-
-    return atomic_write_text(plan.stub_text, plan.stub_path, field="stub_path")
+    return write_cloud_stub(plan)
 
 
 def submit_runpod_run(plan: CloudPlan, *, env: Optional[Mapping] = None) -> int:

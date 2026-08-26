@@ -65,6 +65,9 @@ class TestRenderRunpodStub:
         assert "runpod.create_pod" in stub
         assert "NVIDIA A100 80GB PCIe" in stub
         assert "soup-cli[train]==0.71.22" in stub
+        assert "RUNPOD_NETWORK_VOLUME_ID" in stub
+        assert 'volume_mount_path="/workspace"' in stub
+        assert "cd /workspace" in stub
 
     def test_bad_output_dir_rejected(self):
         from soup_cli.cloud.runpod import render_runpod_stub
@@ -72,6 +75,15 @@ class TestRenderRunpodStub:
         with pytest.raises(ValueError):
             render_runpod_stub(
                 _SOUP_YAML, gpu="a100", output_dir="out\nINJECT", soup_version="0.71.22"
+            )
+
+    @pytest.mark.parametrize("output_dir", ["/tmp/out", "../out", "out with spaces"])
+    def test_non_persistent_or_unsafe_output_rejected(self, output_dir):
+        from soup_cli.cloud.runpod import render_runpod_stub
+
+        with pytest.raises(ValueError, match="output_dir"):
+            render_runpod_stub(
+                _SOUP_YAML, gpu="a100", output_dir=output_dir, soup_version="0.71.22"
             )
 
     def test_render_config_yaml_validation(self):
@@ -99,7 +111,7 @@ class TestPlanRunpodRun:
     def test_plan(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         (tmp_path / "soup.yaml").write_text(_SOUP_YAML, encoding="utf-8")
-        from soup_cli.cloud.modal import CloudPlan
+        from soup_cli.cloud._common import CloudPlan
         from soup_cli.cloud.runpod import plan_runpod_run
 
         plan = plan_runpod_run("soup.yaml", gpu="a100", output_dir="./out", soup_version="0.71.22")
@@ -120,7 +132,7 @@ class TestPlanRunpodRun:
 class TestSubmitRunpodRun:
     def test_override_seam(self, monkeypatch):
         import soup_cli.cloud.runpod as m
-        from soup_cli.cloud.modal import CloudPlan
+        from soup_cli.cloud._common import CloudPlan
 
         plan = CloudPlan(
             cloud="runpod",
@@ -135,7 +147,7 @@ class TestSubmitRunpodRun:
 
     def test_no_token_raises(self):
         import soup_cli.cloud.runpod as m
-        from soup_cli.cloud.modal import CloudPlan
+        from soup_cli.cloud._common import CloudPlan
 
         plan = CloudPlan(
             cloud="runpod",
@@ -152,7 +164,7 @@ class TestSubmitRunpodRun:
         import sys
 
         import soup_cli.cloud.runpod as m
-        from soup_cli.cloud.modal import CloudPlan
+        from soup_cli.cloud._common import CloudPlan
 
         plan = CloudPlan(
             cloud="runpod",
@@ -212,14 +224,61 @@ class TestRenderLambdaLabsStub:
         )
         assert "urllib.request" in stub
         assert "gpu_1x_a100_sxm4" in stub
+        compile(stub, "soup_lambda_app.py", "exec")
+        namespace = {"__name__": "test"}
+        exec(stub, namespace)
+        payload = namespace["_launch_payload"]("us-tx-1", "registered-key")
+        assert payload["user_data"] == namespace["_USER_DATA"]
+        assert "soup-cli[train]==0.71.22" in payload["user_data"]
+        assert "LAMBDA_API_KEY" not in payload["user_data"]
+        assert payload["ssh_key_names"] == ["registered-key"]
+        assert "quantity" not in payload
 
-        import base64
-        import re
+    @pytest.mark.parametrize("output_dir", ["/tmp/out", "../out", "out with spaces"])
+    def test_non_retrievable_or_unsafe_output_rejected(self, output_dir):
+        from soup_cli.cloud.lambda_labs import render_lambda_stub
 
-        match = re.search(r'user_data_b64 = "([^"]+)"', stub)
-        assert match is not None
-        user_data = base64.b64decode(match.group(1)).decode("utf-8")
-        assert "soup-cli[train]==0.71.22" in user_data
+        with pytest.raises(ValueError, match="output_dir"):
+            render_lambda_stub(
+                _SOUP_YAML, gpu="a100", output_dir=output_dir, soup_version="0.71.22"
+            )
+
+    def test_generated_controller_always_terminates(self, tmp_path, monkeypatch):
+        from soup_cli.cloud.lambda_labs import render_lambda_stub
+
+        key = tmp_path / "lambda-key"
+        key.write_text("test-only", encoding="utf-8")
+        stub = render_lambda_stub(
+            _SOUP_YAML, gpu="a100", output_dir="./out", soup_version="0.71.22"
+        )
+        namespace = {"__name__": "test"}
+        exec(stub, namespace)
+        requests = []
+
+        def fake_request(api_key, path, *, method="GET", payload=None):
+            requests.append((api_key, path, method, payload))
+            if path.endswith("/launch"):
+                return {"data": {"instance_ids": ["instance-1"]}}
+            return {"data": {}}
+
+        monkeypatch.setenv("LAMBDA_API_KEY", "secret")
+        monkeypatch.setenv("LAMBDA_SSH_KEY_NAME", "registered-key")
+        monkeypatch.setenv("LAMBDA_SSH_PRIVATE_KEY", str(key))
+        namespace["_request_json"] = fake_request
+        namespace["_wait_for_ip"] = lambda *_: "192.0.2.1"
+        termination_checks = []
+        namespace["_wait_for_termination"] = lambda *args: termination_checks.append(args)
+        namespace["_train_and_copy"] = lambda *_: (_ for _ in ()).throw(
+            RuntimeError("training failed")
+        )
+
+        assert namespace["main"]() == 1
+        assert termination_checks == [("secret", "instance-1")]
+        assert requests[-1][1:] == (
+            "/instance-operations/terminate",
+            "POST",
+            {"instance_ids": ["instance-1"]},
+        )
 
     def test_render_config_yaml_validation(self):
         from soup_cli.cloud.lambda_labs import render_lambda_stub
@@ -246,8 +305,8 @@ class TestPlanLambdaLabsRun:
     def test_plan(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         (tmp_path / "soup.yaml").write_text(_SOUP_YAML, encoding="utf-8")
+        from soup_cli.cloud._common import CloudPlan
         from soup_cli.cloud.lambda_labs import plan_lambda_run
-        from soup_cli.cloud.modal import CloudPlan
 
         plan = plan_lambda_run("soup.yaml", gpu="a100", output_dir="./out", soup_version="0.71.22")
         assert isinstance(plan, CloudPlan)
@@ -266,7 +325,7 @@ class TestPlanLambdaLabsRun:
 class TestSubmitLambdaLabsRun:
     def test_override_seam(self, monkeypatch):
         import soup_cli.cloud.lambda_labs as m
-        from soup_cli.cloud.modal import CloudPlan
+        from soup_cli.cloud._common import CloudPlan
 
         plan = CloudPlan(
             cloud="lambda",
@@ -281,7 +340,7 @@ class TestSubmitLambdaLabsRun:
 
     def test_no_token_raises(self):
         import soup_cli.cloud.lambda_labs as m
-        from soup_cli.cloud.modal import CloudPlan
+        from soup_cli.cloud._common import CloudPlan
 
         plan = CloudPlan(
             cloud="lambda",
@@ -291,7 +350,7 @@ class TestSubmitLambdaLabsRun:
             stub_text="",
             run_command="python x.py",
         )
-        with pytest.raises(RuntimeError, match="not authenticated"):
+        with pytest.raises(RuntimeError, match="not authenticated/configured"):
             m.submit_lambda_run(plan, env={})
 
 
@@ -326,6 +385,19 @@ class TestTrainCloudCliNew:
         assert (tmp_path / "soup_lambda_app.py").exists()
         txt = _strip_ansi(result.output)
         assert "python soup_lambda_app.py" in txt
+
+    def test_cloud_name_is_case_insensitive(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "soup.yaml").write_text(_SOUP_YAML, encoding="utf-8")
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        result = CliRunner().invoke(
+            app, ["train", "--config", "soup.yaml", "--cloud", "RUNPOD", "--gpu", "a100"]
+        )
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        assert (tmp_path / "soup_runpod_app.py").exists()
 
 
 class TestCloudNoTopLevelSDK:

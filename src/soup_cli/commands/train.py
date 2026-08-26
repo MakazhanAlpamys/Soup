@@ -498,7 +498,8 @@ def train(
         help=(
             "With --cloud, submit the rendered run live via the cloud's SDK or API "
             "(gated on respective provider token/API key). Default is plan-only "
-            "(render + print the command)."
+            "(render + print the command). RunPod also requires a persistent network "
+            "volume; Lambda requires a registered SSH key."
         ),
     ),
 ):
@@ -643,6 +644,7 @@ def train(
     if cloud:
         from soup_cli import __version__ as _soup_version
 
+        cloud = cloud.lower()
         if cloud == "modal":
             from soup_cli.cloud import modal as cloud_mod
         elif cloud == "runpod":
@@ -666,7 +668,9 @@ def train(
             raise typer.Exit(2) from exc
         try:
             # We call the generic-shaped plan function dynamically
-            plan_func = getattr(cloud_mod, f"plan_{cloud}_run")
+            plan_func = getattr(cloud_mod, f"plan_{cloud}_run", None)
+            if plan_func is None:
+                raise ValueError(f"cloud backend {cloud!r} has no plan function")
             plan = plan_func(
                 str(config_path),
                 gpu=gpu,
@@ -690,7 +694,9 @@ def train(
         )
         if cloud_submit:
             try:
-                submit_func = getattr(cloud_mod, f"submit_{cloud}_run")
+                submit_func = getattr(cloud_mod, f"submit_{cloud}_run", None)
+                if submit_func is None:
+                    raise RuntimeError(f"cloud backend {cloud!r} has no submit function")
                 rc = submit_func(plan)
             except RuntimeError as exc:
                 console.print(

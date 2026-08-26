@@ -172,11 +172,11 @@ Works with all training tasks: SFT, DPO, GRPO, PPO, KTO, ORPO, SimPO, IPO, and P
 > **Tip:** Soup auto-detects unsloth. When installed, you'll see a hint during `soup train` if you haven't enabled it yet.
 
 
-## Cloud GPU Training (Modal)
+## Cloud GPU Training
 
-No local GPU? `soup train --cloud modal` renders a self-contained [Modal.com](https://modal.com)
-app from your `soup.yaml` for serverless, per-second-billed GPU training. The config YAML is
-base64-embedded as **data** — no code interpolation, no secrets in the generated stub.
+No local GPU? `soup train --cloud modal|runpod|lambda` renders a provider-specific controller
+from your `soup.yaml`. The config YAML is base64-embedded as **data**; credentials are read from
+the environment only when a live submission starts.
 
 ```bash
 pip install "soup-cli[modal]"   # only needed for live submit
@@ -192,6 +192,47 @@ soup train --config soup.yaml --cloud modal --gpu a100 --cloud-submit
 `--gpu` accepts: `t4` / `l4` / `a10g` / `a100` / `a100-80gb` / `l40s` / `h100`. The rendered
 `soup_modal_app.py` builds an image with `soup-cli[train]` pinned to your running version, writes
 the embedded config inside the container, and runs `soup train` on the chosen GPU.
+
+### RunPod
+
+RunPod live submission requires the SDK, an API key, and an existing network volume. Soup mounts
+the volume at `/workspace`, runs training there, and requires a relative `output` path so the
+adapter remains available after the pod terminates.
+
+```bash
+pip install "soup-cli[runpod]"
+export RUNPOD_API_KEY=...
+export RUNPOD_NETWORK_VOLUME_ID=...
+soup train --config soup.yaml --cloud runpod --gpu rtx-4090 --cloud-submit
+```
+
+`--gpu` accepts: `t4` / `l4` / `a10g` / `a100` / `a100-80gb` / `l40s` / `h100` /
+`rtx-4090` / `a6000`. Plan-only rendering does not require the RunPod SDK.
+
+### Lambda Cloud
+
+Lambda uses an instance rather than a serverless function. The generated local controller sends a
+secret-free cloud-init script as API `user_data`, waits for it over SSH, copies the configured
+output back, and requests instance termination in a `finally` block. Keep the controller running
+until it reports that termination succeeded; shutting down the guest does not terminate billing.
+
+Register the public half of an SSH key with Lambda first, then set:
+
+```bash
+export LAMBDA_API_KEY=...
+export LAMBDA_SSH_KEY_NAME=my-lambda-key
+export LAMBDA_SSH_PRIVATE_KEY=/path/to/private-key
+export LAMBDA_REGION=us-tx-1  # optional; defaults to us-tx-1
+soup train --config soup.yaml --cloud lambda --gpu a100 --cloud-submit
+```
+
+`--gpu` accepts: `a10` / `a100` / `a6000` / `h100`. Lambda output paths must be relative so the
+controller can copy the artifact back safely. The API key stays on the caller and is never embedded
+in cloud-init or instance logs.
+
+RunPod and Lambda submission paths still require the paid live-validation checklist in #264 before
+they can be described as provider-validated. Plan-only rendering and the lifecycle boundaries are
+covered by offline tests.
 
 
 ## Chat with your model
