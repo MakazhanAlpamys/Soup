@@ -488,7 +488,31 @@ class TestPerMessageTrainField:
 
         assert ("system",) not in tok.rendered_roles
         assert ("system", "user") in tok.rendered_roles
-        assert any(label != IGNORE_INDEX for label in out["labels"])
+        system_end = len("<system>:Follow the format.\n")
+        user_end = system_end + len("<user>:Q\n")
+        assert all(label != IGNORE_INDEX for label in out["labels"][:system_end])
+        assert all(
+            label == IGNORE_INDEX for label in out["labels"][system_end:user_end]
+        )
+
+    def test_trainable_first_user_does_not_absorb_ignored_system_prefix(self):
+        from soup_cli.data.loss_mask import (
+            IGNORE_INDEX,
+            build_per_message_train_labels,
+        )
+
+        tok = _RequiresUserTokenizer()
+        out = build_per_message_train_labels(
+            [
+                {"role": "system", "content": "Follow the format.", "train": False},
+                {"role": "user", "content": "Q", "train": True},
+            ],
+            tok,
+        )
+
+        system_end = len("<system>:Follow the format.\n")
+        assert all(label == IGNORE_INDEX for label in out["labels"][:system_end])
+        assert any(label != IGNORE_INDEX for label in out["labels"][system_end:])
 
 
 class TestEdgeCases:
