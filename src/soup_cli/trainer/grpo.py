@@ -207,11 +207,10 @@ class GRPOTrainerWrapper:
         """Resolve fp16/bf16 kwargs for GRPOConfig (v0.53.3 #128).
 
         Priority:
-        - Non-CUDA device (CPU / MPS / XPU) → no mixed precision (both
-          False). HF Trainer's fp16/bf16 kwargs are CUDA-specific; non-CUDA
-          backends must use their own mixed-precision path (MPS Metal,
-          XPU IPEX). Documented explicitly so future MPS work doesn't
-          regress this branch silently.
+        - MPS → BF16 only when the live runtime accepts a BF16 allocation;
+          otherwise FP32. This is the same hardware-probed policy used by
+          Soup's other validated text trainers.
+        - Other non-CUDA devices (CPU / XPU) → no mixed precision.
         - ``grpo_fp16=True`` (CUDA) → ``fp16=True, bf16=False`` (unsloth
           parity).
         - Default CUDA → bf16 when the card supports it, fp16 when it does
@@ -225,7 +224,14 @@ class GRPOTrainerWrapper:
         when only ``auto_mixed_precision`` is set, the v0.32.0 picker runs
         elsewhere in the training loop and overrides this default.
         """
-        if self.device != "cuda":
+        device_name = str(self.device).lower()
+        if device_name.startswith("mps"):
+            bf16, fp16 = bf16_fp16_flags(
+                self.device,
+                allow_mps_bf16=True,
+            )
+            return {"fp16": fp16, "bf16": bf16}
+        if not device_name.startswith("cuda"):
             return {"fp16": False, "bf16": False}
         # grpo_fp16 is a Pydantic field with default=False; direct attribute
         # access (no getattr fallback) so a typo would fail loudly.

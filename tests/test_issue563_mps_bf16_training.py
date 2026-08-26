@@ -113,7 +113,7 @@ class TestPrecisionPolicy:
         import soup_cli.trainer as trainer_package
 
         root = Path(trainer_package.__file__).parent
-        expected = {"sft.py", "dpo.py", "reward_model.py", "prm.py"}
+        expected = {"sft.py", "dpo.py", "grpo.py", "reward_model.py", "prm.py"}
         opted_in = {
             path.name
             for path in root.glob("*.py")

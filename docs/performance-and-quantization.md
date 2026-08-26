@@ -272,9 +272,10 @@ made yet that streaming fits a larger model or runs faster than resident MPS tra
 `stream_layers`.
 
 Resident Transformers training shares the same live MPS BF16 capability probe.
-SFT, DPO, reward modelling, and PRM use BF16 autocast on a capable runtime; the
-remaining trainers retain the conservative FP32 policy until they have
-task-specific Apple Silicon validation. PRM keeps FP32 master weights even when
+SFT, DPO, GRPO/RLVR, reward modelling, and PRM use BF16 autocast on a capable
+runtime; the remaining trainers retain the conservative FP32 policy until they
+have task-specific Apple Silicon validation. GRPO uses local Transformers
+generation rather than vLLM on MPS. PRM keeps FP32 master weights even when
 autocast is BF16 because a BF16 trainable base currently triggers a fatal Metal
 optimizer dtype mismatch.
 

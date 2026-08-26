@@ -119,18 +119,21 @@ MLX backend supports SFT. `backend: mlx` with `task: dpo` or `task: grpo` is ref
 
 The regular `backend: transformers` path can run more than MLX's SFT-only
 surface. On a live MPS runtime that accepts bfloat16, Soup enables BF16 autocast
-for the hardware-validated text trainers: SFT, DPO, reward modelling, and PRM.
+for the hardware-validated text trainers: SFT, DPO, GRPO/RLVR, reward modelling,
+and PRM.
 The decision comes from a live MPS allocation probe rather than a macOS version
 guess. CPU and an unavailable or older MPS runtime remain in FP32; FP16 is not
 selected on MPS.
 
-For BF16 checkpoints, resident SFT, DPO, and reward-model runs preserve the
-frozen base weights in BF16 while keeping LoRA parameters in FP32. PRM uses BF16
-autocast but deliberately retains FP32 master weights: loading its trainable
-base in BF16 makes the Metal optimizer abort because its accumulator and
-destination matrix dtypes differ. This policy was validated with one-step runs
-on Apple Silicon for all four tasks. Other Transformers trainers remain FP32 on
-MPS until their task-specific kernels receive equivalent hardware coverage.
+For BF16 checkpoints, resident SFT, DPO, GRPO, and reward-model runs preserve
+the frozen base weights in BF16 while keeping LoRA parameters in FP32. PRM uses
+BF16 autocast but deliberately retains FP32 master weights: loading its
+trainable base in BF16 makes the Metal optimizer abort because its accumulator
+and destination matrix dtypes differ. This policy was validated with one-step
+runs on Apple Silicon for all five tasks. GRPO validation uses local
+Transformers generation (`use_vllm: false`) and deterministic RLVR; vLLM remains
+a CUDA-oriented optional path. Other Transformers trainers remain FP32 on MPS
+until their task-specific kernels receive equivalent hardware coverage.
 
 
 ## Unsloth Backend (2-5x Faster Training)
