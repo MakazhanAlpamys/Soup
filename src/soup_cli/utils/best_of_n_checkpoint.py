@@ -23,6 +23,12 @@ def run_digest(prompts: list[str], config: dict[str, Any]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def prompt_seed(seed: int, index: int) -> int:
+    """Derive a stable torch seed for one prompt, independent of resume position."""
+    encoded = f"{seed}:{index}".encode("ascii")
+    return int.from_bytes(hashlib.sha256(encoded).digest()[:8], "big") & ((1 << 63) - 1)
+
+
 def _record_digest(record: dict[str, Any]) -> str:
     encoded = json.dumps(
         record, ensure_ascii=False, sort_keys=True, separators=(",", ":")
@@ -60,10 +66,48 @@ def _open_checkpoint(path: str):
         raise
 
 
+def _discard_incomplete_tail(path: str) -> None:
+    """Drop an uncommitted final JSONL fragment left by an interrupted append.
+
+    ``append_checkpoint`` commits records with a trailing newline followed by
+    ``fsync``. A final fragment without that newline is therefore never a
+    committed record and can be discarded safely before validation.
+    """
+    enforce_under_cwd_and_no_symlink(path, "--checkpoint path")
+    flags = os.O_RDWR | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+    fd = os.open(path, flags)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise ValueError("checkpoint must be a regular file")
+        size = os.lseek(fd, 0, os.SEEK_END)
+        if size == 0:
+            return
+        os.lseek(fd, size - 1, os.SEEK_SET)
+        if os.read(fd, 1) == b"\n":
+            return
+
+        cursor = size
+        truncate_at = 0
+        while cursor:
+            chunk_start = max(0, cursor - 8192)
+            os.lseek(fd, chunk_start, os.SEEK_SET)
+            chunk = os.read(fd, cursor - chunk_start)
+            newline = chunk.rfind(b"\n")
+            if newline >= 0:
+                truncate_at = chunk_start + newline + 1
+                break
+            cursor = chunk_start
+        os.ftruncate(fd, truncate_at)
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
 def load_checkpoint(
     path: str, *, digest: str, total: int
 ) -> list[tuple[dict, dict | None]]:
     """Validate a journal and return its exactly-once completed prompt prefix."""
+    _discard_incomplete_tail(path)
     entries: list[tuple[dict, dict | None]] = []
     with _open_checkpoint(path) as handle:
         for line_number, raw in enumerate(handle, 1):

@@ -31,6 +31,25 @@ def _args(tmp_path, *extra: str) -> list[str]:
     ]
 
 
+def _local_args(tmp_path, *extra: str) -> list[str]:
+    return [
+        "best-of-n",
+        "--base",
+        "local-model",
+        "--prompts",
+        str(tmp_path / "prompts.jsonl"),
+        "--n",
+        "2",
+        "--judge",
+        "ollama://judge",
+        "--output",
+        str(tmp_path / "sft.jsonl"),
+        "--seed",
+        "17",
+        *extra,
+    ]
+
+
 def test_late_failure_resumes_without_replaying_completed_prefix(tmp_path, monkeypatch):
     from soup_cli.commands.data import app
 
@@ -245,3 +264,78 @@ def test_checkpoint_entry_digest_detects_parseable_corruption(tmp_path, monkeypa
         assert "digest mismatch" in str(exc)
     else:
         raise AssertionError("parseable checkpoint corruption must fail closed")
+
+
+def test_resume_discards_only_an_uncommitted_final_fragment(tmp_path, monkeypatch):
+    from soup_cli.utils.best_of_n_checkpoint import (
+        append_checkpoint,
+        initialise_checkpoint,
+        load_checkpoint,
+    )
+
+    monkeypatch.chdir(tmp_path)
+    checkpoint = tmp_path / "checkpoint.jsonl"
+    initialise_checkpoint(str(checkpoint), digest="d", total=2)
+    append_checkpoint(
+        str(checkpoint), index=0, sft={"messages": []}, dpo=None
+    )
+    with checkpoint.open("ab") as handle:
+        handle.write(b'{"index":1,"sft":')
+
+    entries = load_checkpoint(str(checkpoint), digest="d", total=2)
+
+    assert entries == [({"messages": []}, None)]
+    assert checkpoint.read_bytes().endswith(b"\n")
+    assert b'"index":1' not in checkpoint.read_bytes()
+
+
+def test_local_sampling_is_identical_after_resume(tmp_path, monkeypatch):
+    import torch
+
+    from soup_cli.commands.data import app
+
+    monkeypatch.chdir(tmp_path)
+    prompts = ["first", "second"]
+    (tmp_path / "prompts.jsonl").write_text(
+        "".join(json.dumps({"prompt": prompt}) + "\n" for prompt in prompts),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "soup_cli.commands.data._load_bon_model", lambda *_args: (object(), object())
+    )
+    monkeypatch.setattr(
+        "soup_cli.utils.trust_remote.model_requires_trust_remote_code",
+        lambda _model: False,
+    )
+
+    sampled: list[tuple[str, list[str]]] = []
+
+    def sample_candidates(_model, _tokenizer, prompt, *, n, **_kwargs):
+        candidates = [f"{torch.rand(1).item():.12f}" for _ in range(n)]
+        sampled.append((prompt, candidates))
+        return candidates
+
+    fail_second = {"value": True}
+
+    class Judge:
+        def evaluate(self, prompt: str, response: str):
+            if prompt == "second" and fail_second["value"]:
+                raise RuntimeError("simulated interruption")
+            return SimpleNamespace(weighted_score=float(response))
+
+    monkeypatch.setattr(
+        "soup_cli.utils.best_of_n.sample_candidates", sample_candidates
+    )
+    monkeypatch.setattr(
+        "soup_cli.eval.judge.JudgeEvaluator", lambda **_kwargs: Judge()
+    )
+
+    first = CliRunner().invoke(app, _local_args(tmp_path))
+    assert first.exit_code == 1, (first.output, repr(first.exception))
+    interrupted_candidates = sampled[-1][1]
+
+    fail_second["value"] = False
+    resumed = CliRunner().invoke(app, _local_args(tmp_path, "--resume"))
+
+    assert resumed.exit_code == 0, (resumed.output, repr(resumed.exception))
+    assert sampled[-1] == ("second", interrupted_candidates)

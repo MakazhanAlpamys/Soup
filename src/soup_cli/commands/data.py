@@ -3222,10 +3222,11 @@ def best_of_n(
 
     local_model = None
     tokenizer = None
+    local_torch = None
     if generate_fn is None and len(completed_entries) < len(prompt_list):
         import torch
 
-        torch.manual_seed(seed)
+        local_torch = torch
         local_model, tokenizer = _load_bon_model(base, device, trust)
 
     dev = device or None
@@ -3234,6 +3235,11 @@ def best_of_n(
     for index in range(len(completed_entries), len(prompt_records)):
         prompt, source_line = prompt_records[index]
         try:
+            if local_torch is not None:
+                # Bind stochastic sampling to the prompt index rather than the
+                # process RNG position so an interrupted/resumed run produces
+                # the same candidates as an uninterrupted run (#549).
+                local_torch.manual_seed(bon_checkpoint.prompt_seed(seed, index))
             candidates = bon.sample_candidates(
                 local_model,
                 tokenizer,
