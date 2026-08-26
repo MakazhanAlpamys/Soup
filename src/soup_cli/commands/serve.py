@@ -2063,7 +2063,7 @@ def _create_app(
                     detail="bash sandbox requires OS-level isolation",
                 )
 
-            stdout = _run_bash_sandbox(command)
+            result = _run_bash_sandbox(command)
         except NotImplementedError as exc:
             raise HTTPException(
                 status_code=501,
@@ -2074,11 +2074,16 @@ def _create_app(
         except Exception as exc:  # noqa: BLE001
             logger.debug("/v1/tools/bash sandbox error: %s", exc)
             raise HTTPException(status_code=500, detail="Internal server error")
+        exit_code = result.returncode if result.returncode is not None else 1
+        if result.timed_out:
+            exit_code = 124
+        elif result.output_exceeded:
+            exit_code = 1
         return {
-            "stdout": stdout if stdout is not None else "",
-            "stderr": "",
-            "exit_code": 0 if stdout is not None else 1,
-            "timed_out": stdout is None,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+            "exit_code": exit_code,
+            "timed_out": result.timed_out,
         }
 
     @app.post("/v1/tools/web_search")

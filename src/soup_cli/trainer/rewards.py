@@ -21,6 +21,7 @@ import subprocess
 import sys
 import tempfile
 from collections.abc import Callable
+from dataclasses import dataclass
 from functools import wraps
 from pathlib import Path
 from typing import Any
@@ -145,19 +146,26 @@ def _show_code_exec_warning_once() -> None:
     if _CODE_EXEC_WARNING_SHOWN:
         return
     _CODE_EXEC_WARNING_SHOWN = True
+    strategy = _get_isolation_strategy()
+    if strategy == "best-effort":
+        network_status = (
+            "[bold]OS-level network isolation is unavailable.[/] The Python "
+            "socket patch can be bypassed by os.system / subprocess / ctypes."
+        )
+    else:
+        network_status = f"OS-level network isolation: [bold]{strategy}[/]."
     console.print(
         Panel(
             "[bold yellow]RLVR code_exec_reward is a BEST-EFFORT sandbox.[/]\n\n"
             "Model-generated code runs in a subprocess with:\n"
             "  - 5s wall-clock timeout\n"
             "  - 512MB RLIMIT_AS on POSIX (Linux/macOS)\n"
-            "  - Restricted temporary working directory\n"
+            "  - Ephemeral working directory (not filesystem read isolation)\n"
             "  - A Python-level socket monkey-patch\n\n"
-            "[bold]The socket patch can be bypassed[/] by generated code "
-            "invoking os.system / subprocess / ctypes. Network isolation is "
-            "NOT enforced. Do not enable code_exec_reward on hosts that "
-            "hold secrets or run alongside trusted services. Prefer running "
-            "training inside a container/VM with no network interface.",
+            f"{network_status}\n"
+            "Sandboxed code can still read files available to the Soup process. "
+            "Do not enable code execution on hosts that hold secrets; prefer a "
+            "dedicated container/VM.",
             title="code_exec_reward — security notice",
             border_style="yellow",
         )
@@ -333,12 +341,23 @@ def _apply_rlimit(strict_namespaces: bool = False) -> None:
         _try_unshare_namespaces(strict=strict_namespaces)
 
 
+@dataclass(frozen=True)
+class SandboxProcessResult:
+    """Bounded subprocess outcome shared by reward and server sandboxes."""
+
+    returncode: int | None
+    stdout: str
+    stderr: str
+    timed_out: bool = False
+    output_exceeded: bool = False
+
+
 def _run_sandboxed_subprocess(
     argv: list[str],
     preexec_fn: "Callable | None",
     timeout: int = CODE_EXEC_TIMEOUT_SECONDS,
     max_output_bytes: int = MAX_CODE_OUTPUT_BYTES,
-) -> "tuple[int | None, str | None, bool]":
+) -> SandboxProcessResult:
     """Run a command in a subprocess sandbox with timeout, rlimits, and output caps.
 
     Security posture:
@@ -347,10 +366,8 @@ def _run_sandboxed_subprocess(
     - Output truncated to ``max_output_bytes``.
     - Subprocess cwd is a freshly created temporary directory per run.
 
-    Returns:
-        (returncode, stdout, timed_out).
-        If the process fails to start, returncode is None.
-        If the output exceeds max_output_bytes, stdout is None.
+    Returns a structured result that keeps stderr and distinguishes timeout,
+    ordinary non-zero exit, launch failure, and output-limit failure.
     """
     if _get_isolation_strategy() == "sandbox-exec":
         sandbox_bin = _shutil.which("sandbox-exec") or "/usr/bin/sandbox-exec"
@@ -368,14 +385,23 @@ def _run_sandboxed_subprocess(
                 preexec_fn=preexec_fn,  # noqa: PLW1509 — intentional RLIMIT application
             )
         except subprocess.TimeoutExpired:
-            return None, "", True
+            return SandboxProcessResult(None, "", "", timed_out=True)
         except (OSError, ValueError):
-            return None, "", False
+            return SandboxProcessResult(None, "", "sandbox process failed to start")
 
-    out = proc.stdout or ""
-    if len(out.encode("utf-8", errors="replace")) > max_output_bytes:
-        return proc.returncode, None, False
-    return proc.returncode, out.strip(), False
+    stdout = (proc.stdout or "").strip()
+    stderr = (proc.stderr or "").strip()
+    output_size = len(stdout.encode("utf-8", errors="replace")) + len(
+        stderr.encode("utf-8", errors="replace")
+    )
+    if output_size > max_output_bytes:
+        return SandboxProcessResult(
+            proc.returncode,
+            "",
+            "sandbox output exceeded limit",
+            output_exceeded=True,
+        )
+    return SandboxProcessResult(proc.returncode, stdout, stderr)
 
 
 def _run_code_sandbox(code: str) -> "str | None":
@@ -400,13 +426,13 @@ def _run_code_sandbox(code: str) -> "str | None":
 
     argv: list[str] = [sys.executable, "-I", "-S", "-c", wrapped]
 
-    rc, stdout, _ = _run_sandboxed_subprocess(argv, preexec)
-    if rc != 0 or stdout is None:
+    result = _run_sandboxed_subprocess(argv, preexec)
+    if result.returncode != 0 or result.timed_out or result.output_exceeded:
         return None
-    return stdout
+    return result.stdout
 
 
-def _run_bash_sandbox(command: str) -> "str | None":
+def _run_bash_sandbox(command: str) -> SandboxProcessResult:
     """Run bash command in a subprocess sandbox with timeout, rlimits, and output caps.
 
     Security posture: mirrors _run_code_sandbox, but does not use Python-level
@@ -424,10 +450,7 @@ def _run_bash_sandbox(command: str) -> "str | None":
 
     argv: list[str] = ["bash", "-c", command]
 
-    rc, stdout, _ = _run_sandboxed_subprocess(argv, preexec)
-    if rc != 0 or stdout is None:
-        return None
-    return stdout
+    return _run_sandboxed_subprocess(argv, preexec)
 
 
 def code_exec_reward(

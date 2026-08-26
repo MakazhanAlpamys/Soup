@@ -157,12 +157,12 @@ def run_eval_in_sandbox(code: str) -> "tuple[Optional[int], str, bool]":
     preexec = _apply_rlimit if sys.platform != "win32" else None
     argv: list[str] = [sys.executable, "-I", "-S", "-c", wrapped]
 
-    rc, stdout, timed_out = _run_sandboxed_subprocess(argv, preexec)
+    result = _run_sandboxed_subprocess(argv, preexec)
 
-    if stdout is None:
+    if result.output_exceeded:
         # Oversize output is treated as a failure (matches v0.25.0 cap policy).
-        return rc, "", False
-    return rc, stdout, timed_out
+        return result.returncode, "", False
+    return result.returncode, result.stdout, result.timed_out
 
 
 def classify_sandbox_outcome(

@@ -1032,6 +1032,56 @@ class TestToolEndpointsLive:
         resp = client.post("/v1/tools/bash", json={})
         assert resp.status_code == 400
 
+    def test_bash_tool_preserves_nonzero_exit_and_stderr(self, monkeypatch):
+        from fastapi.testclient import TestClient
+
+        from soup_cli.trainer.rewards import SandboxProcessResult
+
+        monkeypatch.setattr(
+            "soup_cli.trainer.rewards._get_isolation_strategy",
+            lambda: "sandbox-exec",
+        )
+        monkeypatch.setattr(
+            "soup_cli.trainer.rewards._run_bash_sandbox",
+            lambda _command: SandboxProcessResult(7, "partial", "warning"),
+        )
+        client = TestClient(_create_test_app())
+
+        response = client.post("/v1/tools/bash", json={"command": "false"})
+
+        assert response.status_code == 200
+        assert response.json() == {
+            "stdout": "partial",
+            "stderr": "warning",
+            "exit_code": 7,
+            "timed_out": False,
+        }
+
+    def test_bash_tool_reports_only_real_timeouts(self, monkeypatch):
+        from fastapi.testclient import TestClient
+
+        from soup_cli.trainer.rewards import SandboxProcessResult
+
+        monkeypatch.setattr(
+            "soup_cli.trainer.rewards._get_isolation_strategy",
+            lambda: "sandbox-exec",
+        )
+        monkeypatch.setattr(
+            "soup_cli.trainer.rewards._run_bash_sandbox",
+            lambda _command: SandboxProcessResult(None, "", "", timed_out=True),
+        )
+        client = TestClient(_create_test_app())
+
+        response = client.post("/v1/tools/bash", json={"command": "sleep 10"})
+
+        assert response.status_code == 200
+        assert response.json() == {
+            "stdout": "",
+            "stderr": "",
+            "exit_code": 124,
+            "timed_out": True,
+        }
+
     def test_bash_tool_network_isolation(self):
         """Verify bash network access is blocked by unshare/sandbox-exec."""
         import sys

@@ -739,4 +739,10 @@ Three POST routes are now available on `soup serve`:
   as `[{url, title, snippet}]` with snippets sanitized (null bytes stripped).
   Deny-by-default via `WebSearchConfig.domain_allowlist`.
 
-- **`POST /v1/tools/bash`** — runs a bash command inside a container/namespace sandbox (`unshare` on Linux, `sandbox-exec` on macOS). Enforces a 5-second timeout and 10KB output cap. Network access is blocked at the OS level. Returns HTTP 501 on Windows.
+- **`POST /v1/tools/bash`** — runs a bash command with strict OS-level network
+  isolation (`unshare` on supported Linux runtimes, `sandbox-exec` on macOS).
+  Enforces a 5-second timeout and a combined 10KB stdout/stderr cap, and returns
+  the real stdout, stderr, exit code, and timeout state. This is not a filesystem
+  sandbox: the child retains the server process's read access. The endpoint
+  fails closed with HTTP 501 when strict isolation is unavailable, including on
+  Windows.
