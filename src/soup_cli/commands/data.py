@@ -2920,8 +2920,8 @@ def _load_bon_model(base: str, device: str, trust: bool):
     return model, tok
 
 
-def _bon_prompt_text(row: dict, line_number: int) -> str:
-    """Extract one prompt without echoing private row contents in errors."""
+def _prompt_text_or_none(row: dict) -> str | None:
+    """Extract one usable prompt without exposing row contents."""
     text = None
     if isinstance(row.get("prompt"), str):
         text = row["prompt"]
@@ -2936,6 +2936,14 @@ def _bon_prompt_text(row: dict, line_number: int) -> str:
         if users and isinstance(users[-1], str):
             text = users[-1]
     if text is None or not text.strip():
+        return None
+    return text
+
+
+def _bon_prompt_text(row: dict, line_number: int) -> str:
+    """Extract one strict Best-of-N prompt with a private, line-numbered error."""
+    text = _prompt_text_or_none(row)
+    if text is None:
         raise ValueError(
             f"prompt JSONL line {line_number} has no non-empty prompt, "
             "instruction, or user message"
@@ -2973,9 +2981,34 @@ def _bon_load_prompt_records(path: str) -> list[tuple[str, int]]:
     return prompts
 
 
-def _bon_load_prompts(path: str) -> list[str]:
-    """Compatibility helper returning strict prompt texts without provenance."""
-    return [text for text, _line_number in _bon_load_prompt_records(path)]
+def _evolve_load_prompts(path: str) -> list[str]:
+    """Read evolve seeds while preserving its historical skip-invalid policy."""
+    from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
+
+    enforce_under_cwd_and_no_symlink(path, "--input path")
+    real = os.path.realpath(path)
+    if not os.path.isfile(real):
+        raise FileNotFoundError(path)
+    if os.path.getsize(real) > _BON_MAX_JSONL_BYTES:
+        raise ValueError(f"--input file exceeds {_BON_MAX_JSONL_BYTES} bytes")
+    prompts: list[str] = []
+    with open(real, "r", encoding="utf-8") as handle:
+        for raw_line in handle:
+            stripped = raw_line.strip()
+            if not stripped:
+                continue
+            if len(prompts) >= _BON_MAX_PROMPTS:
+                raise ValueError(f"--input file exceeds {_BON_MAX_PROMPTS} rows")
+            try:
+                row = json.loads(stripped)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(row, dict):
+                continue
+            text = _prompt_text_or_none(row)
+            if text is not None:
+                prompts.append(text)
+    return prompts
 
 
 @app.command(name="best-of-n")
@@ -3233,7 +3266,7 @@ def evolve(
         raise typer.Exit(2)
 
     try:
-        seeds = _bon_load_prompts(input_path)
+        seeds = _evolve_load_prompts(input_path)
         if output:
             enforce_under_cwd_and_no_symlink(output, "--output path")
         generate_fn = make_magpie_generate_fn(

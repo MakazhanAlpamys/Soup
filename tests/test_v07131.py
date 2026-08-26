@@ -1529,3 +1529,57 @@ class TestEvolveCli:
             for p in (ipath, opath):
                 if os.path.exists(p):
                     os.remove(p)
+
+    def test_malformed_seed_rows_remain_skipped(self, monkeypatch, tmp_path):
+        import json
+
+        from typer.testing import CliRunner
+
+        from soup_cli.commands.data import app
+
+        counter = {"i": 0}
+
+        def _fake_make(*args, **kwargs):
+            def _gen(prompt):
+                counter["i"] += 1
+                return f"evolved {counter['i']}"
+
+            return _gen
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("soup_cli.utils.magpie.make_magpie_generate_fn", _fake_make)
+        seeds = tmp_path / "mixed-seeds.jsonl"
+        seeds.write_text(
+            '{"prompt":"good seed one"}\n'
+            "{not valid json}\n"
+            "[]\n"
+            '{"messages":[{"role":"assistant","content":"no user seed"}]}\n'
+            '{"prompt":"   "}\n'
+            '{"instruction":"good seed two"}\n',
+            encoding="utf-8",
+        )
+        output = tmp_path / "evolved.jsonl"
+
+        result = CliRunner().invoke(
+            app,
+            [
+                "evolve",
+                "--input",
+                str(seeds),
+                "--provider",
+                "ollama",
+                "--model",
+                "m",
+                "--rounds",
+                "1",
+                "--output",
+                str(output),
+            ],
+        )
+
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        rows = [json.loads(line) for line in output.read_text(encoding="utf-8").splitlines()]
+        assert [row["_evolve"]["seed"] for row in rows] == [
+            "good seed one",
+            "good seed two",
+        ]
