@@ -153,7 +153,37 @@ def _load_txt(path: Path) -> list[dict]:
     return [{"text": line} for line in lines]
 
 
-def _load_replay_rows(data_config: DataConfig) -> list[dict]:
+def _format_rows(
+    raw_data: list[dict],
+    fmt: str,
+    *,
+    preserve_source_columns: bool = False,
+) -> list[dict]:
+    """Normalize rows, optionally retaining columns used by GRPO rewards.
+
+    TRL forwards every non-prompt dataset column to custom reward functions.
+    Soup's normalizers intentionally return only task-specific columns, which
+    is correct for supervised and preference trainers but would discard GRPO
+    references such as ``answer``, ``expected``, ``schema``, or custom
+    metadata.  The opt-in keeps the default loader contract byte-for-byte
+    unchanged for every other task.
+    """
+    formatted: list[dict] = []
+    for raw_row in raw_data:
+        normalized = format_to_messages(raw_row, fmt)
+        if normalized is None:
+            continue
+        if preserve_source_columns:
+            normalized = {**raw_row, **normalized}
+        formatted.append(normalized)
+    return formatted
+
+
+def _load_replay_rows(
+    data_config: DataConfig,
+    *,
+    preserve_source_columns: bool = False,
+) -> list[dict]:
     """Load + normalize the replay file with its OWN format detection.
 
     The old dataset may be alpaca while the new one is sharegpt, so the
@@ -179,8 +209,11 @@ def _load_replay_rows(data_config: DataConfig) -> list[dict]:
         )
     raw = load_raw_data(replay_path)
     fmt = detect_format(raw)
-    rows = [format_to_messages(row, fmt) for row in raw]
-    rows = [row for row in rows if row is not None]
+    rows = _format_rows(
+        raw,
+        fmt,
+        preserve_source_columns=preserve_source_columns,
+    )
 
     if is_vision_format(fmt):
         image_dir = (
@@ -204,6 +237,7 @@ def _finalize(
     data_config: DataConfig,
     *,
     val: list[dict] | None = None,
+    preserve_source_columns: bool = False,
 ) -> dict:
     """Split train/val, then mix replay into train ONLY.
 
@@ -227,7 +261,10 @@ def _finalize(
     if getattr(data_config, "replay", None):
         from soup_cli.utils.rehearsal import mix_replay
 
-        replay_rows = _load_replay_rows(data_config)
+        replay_rows = _load_replay_rows(
+            data_config,
+            preserve_source_columns=preserve_source_columns,
+        )
         mixed, report = mix_replay(
             result["train"],
             replay_rows,
@@ -281,7 +318,11 @@ def _classify_train_entry(value: str) -> str:
     return "hub"
 
 
-def load_dataset(data_config: DataConfig) -> dict:
+def load_dataset(
+    data_config: DataConfig,
+    *,
+    preserve_source_columns: bool = False,
+) -> dict:
     """Load dataset for training. Returns dict with 'train' and optionally 'val' keys.
 
     Supports:
@@ -301,8 +342,16 @@ def load_dataset(data_config: DataConfig) -> dict:
     if isinstance(train_path, list):
         kinds = {_classify_train_entry(p) for p in train_path}
         if kinds == {"hub"}:
-            return _load_interleaved_hub_datasets(train_path, data_config)
-        return _load_interleaved_local_datasets(train_path, data_config)
+            return _load_interleaved_hub_datasets(
+                train_path,
+                data_config,
+                preserve_source_columns=preserve_source_columns,
+            )
+        return _load_interleaved_local_datasets(
+            train_path,
+            data_config,
+            preserve_source_columns=preserve_source_columns,
+        )
 
     # v0.53.8 #85 — fsspec live remote loader. Schema accepts these URIs
     # since v0.42.0; live loader lands here. Lazy-imports fsspec + the
@@ -310,11 +359,19 @@ def load_dataset(data_config: DataConfig) -> dict:
     # friendly Rich panel naming the pip install when the driver is
     # missing.
     if _looks_like_remote_uri(train_path):
-        return _load_remote_dataset(train_path, data_config)
+        return _load_remote_dataset(
+            train_path,
+            data_config,
+            preserve_source_columns=preserve_source_columns,
+        )
 
     # Check if it's a HuggingFace dataset
     if not Path(train_path).suffix:
-        return _load_hf_dataset(train_path, data_config)
+        return _load_hf_dataset(
+            train_path,
+            data_config,
+            preserve_source_columns=preserve_source_columns,
+        )
 
     # Local file
     path = Path(train_path)
@@ -327,8 +384,11 @@ def load_dataset(data_config: DataConfig) -> dict:
         console.print(f"[dim]Auto-detected format: {fmt}[/]")
 
     # Convert to standard message format
-    formatted = [format_to_messages(row, fmt) for row in raw_data]
-    formatted = [r for r in formatted if r is not None]  # filter failed rows
+    formatted = _format_rows(
+        raw_data,
+        fmt,
+        preserve_source_columns=preserve_source_columns,
+    )
 
     # Validate image paths for vision formats
     if is_vision_format(fmt):
@@ -341,10 +401,19 @@ def load_dataset(data_config: DataConfig) -> dict:
         formatted = _validate_audio_files(formatted, audio_dir)
 
     # Split into train/val, then mix replay into train (v0.71.36).
-    return _finalize(formatted, data_config)
+    return _finalize(
+        formatted,
+        data_config,
+        preserve_source_columns=preserve_source_columns,
+    )
 
 
-def _load_one_local_dataset(train_path: str, data_config: DataConfig) -> list[dict]:
+def _load_one_local_dataset(
+    train_path: str,
+    data_config: DataConfig,
+    *,
+    preserve_source_columns: bool = False,
+) -> list[dict]:
     """Load + format one local file — the same per-file pipeline the
     single-path branch of load_dataset() runs above, factored out so
     #443's interleave path (below) reuses it rather than re-deriving it.
@@ -360,8 +429,11 @@ def _load_one_local_dataset(train_path: str, data_config: DataConfig) -> list[di
         fmt = detect_format(raw_data)
         console.print(f"[dim]Auto-detected format ({train_path}): {fmt}[/]")
 
-    formatted = [format_to_messages(row, fmt) for row in raw_data]
-    formatted = [r for r in formatted if r is not None]
+    formatted = _format_rows(
+        raw_data,
+        fmt,
+        preserve_source_columns=preserve_source_columns,
+    )
 
     if is_vision_format(fmt):
         image_dir = Path(data_config.image_dir) if data_config.image_dir else path.parent
@@ -442,7 +514,12 @@ def _combine_interleaved(per_dataset_rows: list[list[dict]], spec) -> list[dict]
     raise AssertionError(f"unreachable interleave strategy {spec.strategy!r}")
 
 
-def _load_interleaved_local_datasets(train_paths: list[str], data_config: DataConfig) -> dict:
+def _load_interleaved_local_datasets(
+    train_paths: list[str],
+    data_config: DataConfig,
+    *,
+    preserve_source_columns: bool = False,
+) -> dict:
     """#443 — load + combine every local dataset in a list-shaped
     data.train per data.interleave, then hand the combined rows to the
     existing, unmodified _finalize() — same seam every other loader uses.
@@ -468,19 +545,39 @@ def _load_interleaved_local_datasets(train_paths: list[str], data_config: DataCo
         raise ValueError("data.train is a list but data.interleave is not set")
 
     if data_config.streaming:
-        return _load_interleaved_streaming_datasets(train_paths, data_config, spec)
+        return _load_interleaved_streaming_datasets(
+            train_paths,
+            data_config,
+            spec,
+            preserve_source_columns=preserve_source_columns,
+        )
 
-    per_dataset_rows = [_load_one_local_dataset(p, data_config) for p in train_paths]
+    per_dataset_rows = [
+        _load_one_local_dataset(
+            p,
+            data_config,
+            preserve_source_columns=preserve_source_columns,
+        )
+        for p in train_paths
+    ]
     combined = _combine_interleaved(per_dataset_rows, spec)
     console.print(
         f"[dim]Interleaved {len(train_paths)} datasets "
         f"(strategy={spec.strategy}) -> {len(combined)} rows[/]"
     )
-    return _finalize(combined, data_config)
+    return _finalize(
+        combined,
+        data_config,
+        preserve_source_columns=preserve_source_columns,
+    )
 
 
 def _load_interleaved_streaming_datasets(
-    train_paths: list[str], data_config: DataConfig, spec
+    train_paths: list[str],
+    data_config: DataConfig,
+    spec,
+    *,
+    preserve_source_columns: bool = False,
 ) -> dict:
     """#459 — data.interleave + data.streaming=true: delegate combining to
     HF ``datasets.interleave_datasets`` / ``concatenate_datasets`` instead
@@ -595,14 +692,21 @@ def _load_interleaved_streaming_datasets(
         fmt = detect_format(raw_data)
         console.print(f"[dim]Auto-detected format: {fmt}[/]")
 
-    formatted = [format_to_messages(row, fmt) for row in raw_data]
-    formatted = [r for r in formatted if r is not None]
+    formatted = _format_rows(
+        raw_data,
+        fmt,
+        preserve_source_columns=preserve_source_columns,
+    )
 
     console.print(
         f"[dim]Streaming-interleaved {len(train_paths)} datasets "
         f"(strategy={spec.strategy}) -> {len(formatted)} rows[/]"
     )
-    return _finalize(formatted, data_config)
+    return _finalize(
+        formatted,
+        data_config,
+        preserve_source_columns=preserve_source_columns,
+    )
 
 
 def _validate_vision_images(data: list[dict], image_dir: Path) -> list[dict]:
@@ -696,7 +800,12 @@ def _looks_like_remote_uri(value: str) -> bool:
     return isinstance(value, str) and "://" in value
 
 
-def _load_remote_dataset(train_path: str, data_config: DataConfig) -> dict:
+def _load_remote_dataset(
+    train_path: str,
+    data_config: DataConfig,
+    *,
+    preserve_source_columns: bool = False,
+) -> dict:
     """Load JSONL from a remote fsspec URI (s3 / gs / az / oci / etc.).
 
     Validates the URI via the v0.42.0 ``validate_remote_uri`` allowlist
@@ -791,14 +900,24 @@ def _load_remote_dataset(train_path: str, data_config: DataConfig) -> dict:
         fmt = detect_format(raw_data)
         console.print(f"[dim]Auto-detected format: {fmt}[/]")
 
-    formatted = [format_to_messages(row, fmt) for row in raw_data]
-    formatted = [r for r in formatted if r is not None]
+    formatted = _format_rows(
+        raw_data,
+        fmt,
+        preserve_source_columns=preserve_source_columns,
+    )
 
-    return _finalize(formatted, data_config)
+    return _finalize(
+        formatted,
+        data_config,
+        preserve_source_columns=preserve_source_columns,
+    )
 
 
 def _load_one_hub_dataset(
-    name: str, data_config: DataConfig
+    name: str,
+    data_config: DataConfig,
+    *,
+    preserve_source_columns: bool = False,
 ) -> tuple[list[dict], list[dict] | None]:
     """Load + format one HF-hub dataset name's 'train' (+ optional
     'validation') split. Factored out of _load_hf_dataset (#459) — same
@@ -823,30 +942,60 @@ def _load_one_hub_dataset(
     if fmt == "auto":
         fmt = detect_format(raw_data)
 
-    formatted = [format_to_messages(row, fmt) for row in raw_data]
-    formatted = [r for r in formatted if r is not None]
+    formatted = _format_rows(
+        raw_data,
+        fmt,
+        preserve_source_columns=preserve_source_columns,
+    )
 
     if "validation" in ds:
         val_data = [dict(row) for row in ds["validation"]]
-        val_formatted = [format_to_messages(row, fmt) for row in val_data]
-        return formatted, [r for r in val_formatted if r is not None]
+        val_formatted = _format_rows(
+            val_data,
+            fmt,
+            preserve_source_columns=preserve_source_columns,
+        )
+        return formatted, val_formatted
 
     return formatted, None
 
 
-def _load_hf_dataset(name: str, data_config: DataConfig) -> dict:
+def _load_hf_dataset(
+    name: str,
+    data_config: DataConfig,
+    *,
+    preserve_source_columns: bool = False,
+) -> dict:
     """Load a dataset from HuggingFace Hub.
 
     The hub split wins over val_split; passing it through as _finalize's
     ``val=`` means _finalize does not re-derive one from the train rows.
     """
-    formatted, val_formatted = _load_one_hub_dataset(name, data_config)
+    formatted, val_formatted = _load_one_hub_dataset(
+        name,
+        data_config,
+        preserve_source_columns=preserve_source_columns,
+    )
     if val_formatted is not None:
-        return _finalize(formatted, data_config, val=val_formatted)
-    return _finalize(formatted, data_config)
+        return _finalize(
+            formatted,
+            data_config,
+            val=val_formatted,
+            preserve_source_columns=preserve_source_columns,
+        )
+    return _finalize(
+        formatted,
+        data_config,
+        preserve_source_columns=preserve_source_columns,
+    )
 
 
-def _load_interleaved_hub_datasets(train_names: list[str], data_config: DataConfig) -> dict:
+def _load_interleaved_hub_datasets(
+    train_names: list[str],
+    data_config: DataConfig,
+    *,
+    preserve_source_columns: bool = False,
+) -> dict:
     """#459 — data.train is a list of HF-hub dataset names combined via
     data.interleave. Reuses the SAME _combine_interleaved the local-file
     path (#443) uses — this is what makes the strategy names mean the same
@@ -875,7 +1024,11 @@ def _load_interleaved_hub_datasets(train_names: list[str], data_config: DataConf
     per_dataset_train: list[list[dict]] = []
     per_dataset_val: list[list[dict] | None] = []
     for name in train_names:
-        train_rows, val_rows = _load_one_hub_dataset(name, data_config)
+        train_rows, val_rows = _load_one_hub_dataset(
+            name,
+            data_config,
+            preserve_source_columns=preserve_source_columns,
+        )
         per_dataset_train.append(train_rows)
         per_dataset_val.append(val_rows)
 
@@ -886,7 +1039,12 @@ def _load_interleaved_hub_datasets(train_names: list[str], data_config: DataConf
         combined_val = _combine_interleaved(
             [v for v in per_dataset_val if v is not None], spec
         )
-        result = _finalize(combined_train, data_config, val=combined_val)
+        result = _finalize(
+            combined_train,
+            data_config,
+            val=combined_val,
+            preserve_source_columns=preserve_source_columns,
+        )
     else:
         if any(has_val):
             missing = [
@@ -898,7 +1056,11 @@ def _load_interleaved_hub_datasets(train_names: list[str], data_config: DataConf
                 "every hub validation split and applying data.val_split to "
                 "the combined train rows instead.[/]"
             )
-        result = _finalize(combined_train, data_config)
+        result = _finalize(
+            combined_train,
+            data_config,
+            preserve_source_columns=preserve_source_columns,
+        )
 
     console.print(
         f"[dim]Interleaved {len(train_names)} HF-hub datasets "

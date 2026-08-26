@@ -351,7 +351,10 @@ def _run_single(base_cfg, params: dict, run_name: str, config_path: Path) -> dic
     gpu_info = get_gpu_info()
 
     # Load data
-    dataset = load_dataset(cfg.data)
+    dataset = load_dataset(
+        cfg.data,
+        preserve_source_columns=cfg.task == "grpo",
+    )
     console.print(f"[dim]Loaded {len(dataset['train'])} train samples[/]")
 
     # Start tracking

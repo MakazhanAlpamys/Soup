@@ -282,6 +282,11 @@ class GRPOTrainerWrapper:
 
             reward_fn = apply_reward_shaping(reward_fn, tcfg)
             self._rl_buffer = RLSignalBuffer()
+
+        from soup_cli.trainer.rewards import validate_reward_funcs
+
+        reward_fn = validate_reward_funcs(reward_fn)
+        if self._rl_buffer is not None:
             reward_fn = wrap_reward_funcs(reward_fn, self._rl_buffer)
 
         if use_unsloth:
@@ -330,6 +335,7 @@ class GRPOTrainerWrapper:
         # --- Dataset ---
         # GRPO expects prompts — extract from messages or use prompt field
         train_data = _prepare_grpo_dataset(dataset["train"])
+        _validate_grpo_reward_metadata(train_data, tcfg, split="train")
 
         # v0.71.21 #125 — multi-turn agent rollout backend. The backend
         # receives the dataset prompts as seeds; its rows REPLACE the
@@ -346,6 +352,7 @@ class GRPOTrainerWrapper:
                 reward_fn=reward_fn,
             )
             train_data = _prepare_grpo_dataset([dict(row) for row in rollout_result.rows])
+            _validate_grpo_reward_metadata(train_data, tcfg, split="rollout")
             console.print(
                 f"[green]Rollout backend '{tcfg.rollout_backend}':[/] "
                 f"{len(train_data)} prompts collected "
@@ -356,6 +363,7 @@ class GRPOTrainerWrapper:
         eval_ds = None
         if "val" in dataset and dataset["val"]:
             eval_data = _prepare_grpo_dataset(dataset["val"])
+            _validate_grpo_reward_metadata(eval_data, tcfg, split="validation")
             eval_ds = Dataset.from_list(eval_data)
 
         # --- Output dir ---
@@ -685,27 +693,74 @@ def _prepare_grpo_dataset(data: list[dict]) -> list[dict]:
         if "prompt" in row and isinstance(row["prompt"], str):
             # DPO or plain prompt format — convert to message list
             entry = {"prompt": [{"role": "user", "content": row["prompt"]}]}
-            # Preserve 'answer' field if present (for accuracy reward)
-            if "answer" in row:
-                entry["answer"] = row["answer"]
+            _copy_grpo_metadata(row, entry)
             prepared.append(entry)
         elif "messages" in row:
             # Messages format — use the user message(s) as prompt
             messages = row["messages"]
             prompt_msgs = [msg for msg in messages if msg["role"] != "assistant"]
             entry = {"prompt": prompt_msgs}
+            _copy_grpo_metadata(row, entry)
+            assistant_messages = [
+                msg for msg in messages if msg.get("role") == "assistant"
+            ]
+            if assistant_messages:
+                entry.setdefault("answer", assistant_messages[-1].get("content"))
             prepared.append(entry)
         elif "prompt" in row and isinstance(row["prompt"], list):
             # Already in message list format
             entry = {"prompt": row["prompt"]}
-            if "answer" in row:
-                entry["answer"] = row["answer"]
+            _copy_grpo_metadata(row, entry)
             prepared.append(entry)
         else:
             # Fallback: treat any 'instruction' field as prompt
             instruction = row.get("instruction", row.get("input", ""))
             entry = {"prompt": [{"role": "user", "content": str(instruction)}]}
+            _copy_grpo_metadata(row, entry)
             if "output" in row:
-                entry["answer"] = row["output"]
+                entry.setdefault("answer", row["output"])
             prepared.append(entry)
     return prepared
+
+
+def _copy_grpo_metadata(row: dict, entry: dict) -> None:
+    """Copy non-prompt columns that TRL forwards to reward functions."""
+    for key, value in row.items():
+        if key not in {"messages", "prompt"}:
+            entry[key] = value
+
+
+def _validate_grpo_reward_metadata(
+    data: list[dict],
+    tcfg: TrainingConfig,
+    *,
+    split: str,
+) -> None:
+    """Fail before generation when a built-in reward lacks required data."""
+    if tcfg.prm_reward is not None:
+        return
+
+    requirements: list[tuple[str, tuple[str, ...]]] = []
+    for reward_spec in (part.strip() for part in (tcfg.reward_fn or "").split(",")):
+        if reward_spec == "accuracy":
+            requirements.append(("accuracy", ("answer",)))
+        elif reward_spec == "verifiable":
+            domain = tcfg.verifiable_domain
+            if domain == "math":
+                requirements.append(("verifiable/math", ("answer",)))
+            elif domain == "code":
+                requirements.append(("verifiable/code", ("expected", "answer")))
+            elif domain == "json_schema":
+                requirements.append(("verifiable/json_schema", ("schema",)))
+
+    for row_index, row in enumerate(data):
+        for reward_name, alternatives in requirements:
+            if any(row.get(field) is not None for field in alternatives):
+                continue
+            fields = " or ".join(repr(field) for field in alternatives)
+            raise ValueError(
+                f"GRPO {split} row {row_index} is missing {fields}, required "
+                f"by reward {reward_name!r}. Preserve that column in the source "
+                "dataset or include an assistant response that Soup can use as "
+                "'answer'."
+            )

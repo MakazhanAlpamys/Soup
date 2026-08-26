@@ -1014,6 +1014,17 @@ soup train --config soup.yaml
 - `accuracy` — checks if the final answer matches expected (supports `####` and `\boxed{}` formats)
 - `format` — checks for structured `<think>...</think>` reasoning blocks
 
+For GRPO, Soup preserves source dataset columns and TRL passes them to reward functions as
+keyword arguments. An Alpaca `output` or the final assistant turn in ShareGPT/ChatML is also
+exposed as `answer`; an explicit `answer` column takes precedence. Gold-dependent built-ins
+validate their inputs before generation:
+
+| Reward | Required source metadata |
+|---|---|
+| `accuracy` or verifiable `math` | `answer`, or an assistant reference response |
+| verifiable `code` | `expected` or `answer` |
+| verifiable `json_schema` | `schema` |
+
 **Custom reward functions** — point to a Python file:
 ```python
 # my_reward.py
@@ -1025,6 +1036,10 @@ def reward_fn(completions, **kwargs):
 training:
   reward_fn: ./my_reward.py
 ```
+
+Custom rewards can read any preserved source column through `kwargs`. They must return exactly
+one finite numeric score per completion; Soup checks this contract and reports the reward name
+and count before TRL attempts to build a reward tensor.
 
 **Reward ensembles** — list several rewards, comma-separated, and they combine (GRPO only).
 This also unlocks the `rm_ensemble` reward-hack detector, which needs ≥ 2 rewards:

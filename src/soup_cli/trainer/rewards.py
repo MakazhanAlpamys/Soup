@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import math
 import os
 import re
 import shutil as _shutil
@@ -20,7 +21,9 @@ import subprocess
 import sys
 import tempfile
 from collections.abc import Callable
+from functools import wraps
 from pathlib import Path
+from typing import Any
 
 from rich.console import Console
 from rich.panel import Panel
@@ -491,6 +494,64 @@ VERIFIABLE_DOMAINS: dict[str, Callable] = {
     "code": code_exec_reward,
     "json_schema": json_schema_reward,
 }
+
+
+def _validated_reward_fn(reward_fn: Callable) -> Callable:
+    """Wrap one reward function with TRL's one-score-per-completion contract."""
+    reward_name = getattr(reward_fn, "__name__", "reward_fn")
+
+    @wraps(reward_fn)
+    def checked(*args: Any, **kwargs: Any) -> Any:
+        rewards = reward_fn(*args, **kwargs)
+        completions = kwargs.get("completions")
+        if completions is None:
+            if len(args) >= 2:
+                completions = args[1]
+            elif args:
+                completions = args[0]
+        if completions is None:
+            raise ValueError(
+                f"Reward function {reward_name!r} was called without completions"
+            )
+        try:
+            reward_count = len(rewards)
+        except TypeError as exc:
+            raise ValueError(
+                f"Reward function {reward_name!r} must return one finite score "
+                "per completion"
+            ) from exc
+        completion_count = len(completions)
+        if reward_count != completion_count:
+            raise ValueError(
+                f"Reward function {reward_name!r} returned {reward_count} scores "
+                f"for {completion_count} completions; return exactly one finite "
+                "score per completion and verify the required dataset columns"
+            )
+        for index, reward in enumerate(rewards):
+            if isinstance(reward, bool):
+                raise ValueError(
+                    f"Reward function {reward_name!r} returned boolean score at "
+                    f"index {index}; scores must be finite numbers"
+                )
+            try:
+                finite = math.isfinite(float(reward))
+            except (TypeError, ValueError, OverflowError):
+                finite = False
+            if not finite:
+                raise ValueError(
+                    f"Reward function {reward_name!r} returned non-finite or "
+                    f"non-numeric score {reward!r} at index {index}"
+                )
+        return rewards
+
+    return checked
+
+
+def validate_reward_funcs(reward_funcs: Any) -> Any:
+    """Validate one reward callable or an ensemble without changing its shape."""
+    if isinstance(reward_funcs, (list, tuple)):
+        return [_validated_reward_fn(reward_fn) for reward_fn in reward_funcs]
+    return _validated_reward_fn(reward_funcs)
 
 
 def load_reward_fn(

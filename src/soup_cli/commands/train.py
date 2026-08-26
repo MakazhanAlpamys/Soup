@@ -1207,7 +1207,10 @@ def train(
 
     if dry_run:
         console.print("[yellow]Dry run - validating data...[/]")
-        dataset = load_dataset(cfg.data)
+        dataset = load_dataset(
+            cfg.data,
+            preserve_source_columns=cfg.task == "grpo",
+        )
         console.print(f"[green]Data OK:[/] {len(dataset['train'])} train samples")
         if "val" in dataset:
             console.print(f"[green]Val:[/] {len(dataset['val'])} samples")
@@ -1216,7 +1219,10 @@ def train(
 
     # Load data
     console.print("[dim]Loading dataset...[/]")
-    dataset = load_dataset(cfg.data)
+    dataset = load_dataset(
+        cfg.data,
+        preserve_source_columns=cfg.task == "grpo",
+    )
     console.print(f"[green]Loaded:[/] {len(dataset['train'])} train samples")
 
     # Capture the --tracker CLI value BEFORE the local ExperimentTracker
