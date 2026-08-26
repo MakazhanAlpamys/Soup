@@ -289,17 +289,23 @@ def test_resume_discards_only_an_uncommitted_final_fragment(tmp_path, monkeypatc
     assert b'"index":1' not in checkpoint.read_bytes()
 
 
-def test_local_sampling_is_identical_after_resume(tmp_path, monkeypatch):
+def test_local_sampling_matches_uninterrupted_run_across_prompt_indices(
+    tmp_path, monkeypatch
+):
     import torch
 
     from soup_cli.commands.data import app
 
     monkeypatch.chdir(tmp_path)
-    prompts = ["first", "second"]
-    (tmp_path / "prompts.jsonl").write_text(
-        "".join(json.dumps({"prompt": prompt}) + "\n" for prompt in prompts),
-        encoding="utf-8",
-    )
+    prompts = ["first", "second", "third"]
+    uninterrupted_dir = tmp_path / "uninterrupted"
+    resumed_dir = tmp_path / "resumed"
+    for run_dir in (uninterrupted_dir, resumed_dir):
+        run_dir.mkdir()
+        (run_dir / "prompts.jsonl").write_text(
+            "".join(json.dumps({"prompt": prompt}) + "\n" for prompt in prompts),
+            encoding="utf-8",
+        )
     monkeypatch.setattr(
         "soup_cli.commands.data._load_bon_model", lambda *_args: (object(), object())
     )
@@ -308,18 +314,23 @@ def test_local_sampling_is_identical_after_resume(tmp_path, monkeypatch):
         lambda _model: False,
     )
 
-    sampled: list[tuple[str, list[str]]] = []
+    phase = {"name": "uninterrupted"}
+    sampled: dict[str, dict[str, list[list[str]]]] = {
+        "uninterrupted": {prompt: [] for prompt in prompts},
+        "resumed": {prompt: [] for prompt in prompts},
+    }
 
     def sample_candidates(_model, _tokenizer, prompt, *, n, **_kwargs):
         candidates = [f"{torch.rand(1).item():.12f}" for _ in range(n)]
-        sampled.append((prompt, candidates))
+        sampled[phase["name"]][prompt].append(candidates)
         return candidates
 
-    fail_second = {"value": True}
+    fail_second = {"value": False}
 
     class Judge:
         def evaluate(self, prompt: str, response: str):
             if prompt == "second" and fail_second["value"]:
+                fail_second["value"] = False
                 raise RuntimeError("simulated interruption")
             return SimpleNamespace(weighted_score=float(response))
 
@@ -330,12 +341,41 @@ def test_local_sampling_is_identical_after_resume(tmp_path, monkeypatch):
         "soup_cli.eval.judge.JudgeEvaluator", lambda **_kwargs: Judge()
     )
 
-    first = CliRunner().invoke(app, _local_args(tmp_path))
-    assert first.exit_code == 1, (first.output, repr(first.exception))
-    interrupted_candidates = sampled[-1][1]
+    uninterrupted_args = _local_args(
+        uninterrupted_dir,
+        "--emit-pairs",
+        str(uninterrupted_dir / "dpo.jsonl"),
+    )
+    uninterrupted = CliRunner().invoke(app, uninterrupted_args)
+    assert uninterrupted.exit_code == 0, (
+        uninterrupted.output,
+        repr(uninterrupted.exception),
+    )
 
-    fail_second["value"] = False
-    resumed = CliRunner().invoke(app, _local_args(tmp_path, "--resume"))
+    phase["name"] = "resumed"
+    fail_second["value"] = True
+    resumed_args = _local_args(
+        resumed_dir,
+        "--emit-pairs",
+        str(resumed_dir / "dpo.jsonl"),
+    )
+    first = CliRunner().invoke(app, resumed_args)
+    assert first.exit_code == 1, (first.output, repr(first.exception))
+
+    resumed = CliRunner().invoke(app, [*resumed_args, "--resume"])
 
     assert resumed.exit_code == 0, (resumed.output, repr(resumed.exception))
-    assert sampled[-1] == ("second", interrupted_candidates)
+    uninterrupted_final = {
+        prompt: calls[-1] for prompt, calls in sampled["uninterrupted"].items()
+    }
+    resumed_final = {
+        prompt: calls[-1] for prompt, calls in sampled["resumed"].items()
+    }
+    assert resumed_final == uninterrupted_final
+    assert len({tuple(candidates) for candidates in uninterrupted_final.values()}) == 3
+    assert [len(sampled["resumed"][prompt]) for prompt in prompts] == [1, 2, 1]
+
+    for artifact in ("sft.jsonl", "dpo.jsonl", "sft.jsonl.manifest.json"):
+        assert (resumed_dir / artifact).read_bytes() == (
+            uninterrupted_dir / artifact
+        ).read_bytes()

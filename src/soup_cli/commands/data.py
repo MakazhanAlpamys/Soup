@@ -3262,6 +3262,12 @@ def best_of_n(
             bon_checkpoint.append_checkpoint(
                 checkpoint_path, index=index, sft=row, dpo=pair
             )
+        except ValueError:
+            # Deterministic validation failures (for example a non-finite
+            # judge score) cannot be repaired by resuming. Preserve the
+            # established fail-closed ValueError contract instead of
+            # presenting a misleading recovery instruction.
+            raise
         except Exception as exc:
             console.print(
                 f"[red]Best-of-N stopped after {index}/{len(prompt_list)} prompts.[/]\n"
