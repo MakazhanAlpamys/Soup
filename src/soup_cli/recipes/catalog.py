@@ -4751,4 +4751,119 @@ training:
 output: ./output
 """,
     ),
+    "deepseek-r1-distill-llama-8b-sft": RecipeMeta(
+        model="deepseek-ai/DeepSeek-R1-Distill-Llama-8B",
+        task="sft",
+        size="8B",
+        tags=("deepseek", "r1", "distill", "sft", "reasoning"),
+        description="DeepSeek-R1-Distill Llama 8B reasoning SFT",
+        yaml_str="""\
+base: deepseek-ai/DeepSeek-R1-Distill-Llama-8B
+task: sft
+
+data:
+  train: ./data/train.jsonl
+  format: auto
+  max_length: 4096
+
+training:
+  epochs: 3
+  lr: 2e-4
+  batch_size: auto
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  quantization: 4bit
+
+output: ./output
+""",
+    ),
+    "deepseek-r1-distill-qwen-1.5b-dpo": RecipeMeta(
+        model="deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
+        task="dpo",
+        size="1.5B",
+        tags=("deepseek", "r1", "distill", "dpo", "reasoning"),
+        description="DeepSeek-R1-Distill Qwen 1.5B DPO alignment",
+        yaml_str="""\
+base: deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B
+task: dpo
+
+data:
+  train: ./data/preference_train.jsonl
+  format: dpo
+  max_length: 4096
+
+training:
+  epochs: 3
+  lr: 5e-6
+  batch_size: auto
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  quantization: 4bit
+  dpo_beta: 0.1
+
+output: ./output
+""",
+    ),
+    "deepseek-r1-distill-qwen-7b-dpo": RecipeMeta(
+        model="deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
+        task="dpo",
+        size="7B",
+        tags=("deepseek", "r1", "distill", "dpo", "reasoning"),
+        description="DeepSeek-R1-Distill Qwen 7B DPO alignment",
+        yaml_str="""\
+base: deepseek-ai/DeepSeek-R1-Distill-Qwen-7B
+task: dpo
+
+data:
+  train: ./data/preference_train.jsonl
+  format: dpo
+  max_length: 4096
+
+training:
+  epochs: 3
+  lr: 5e-6
+  batch_size: auto
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  quantization: 4bit
+  dpo_beta: 0.1
+
+output: ./output
+""",
+    ),
+    "deepseek-r1-distill-llama-8b-dpo": RecipeMeta(
+        model="deepseek-ai/DeepSeek-R1-Distill-Llama-8B",
+        task="dpo",
+        size="8B",
+        tags=("deepseek", "r1", "distill", "dpo", "reasoning"),
+        description="DeepSeek-R1-Distill Llama 8B DPO alignment",
+        yaml_str="""\
+base: deepseek-ai/DeepSeek-R1-Distill-Llama-8B
+task: dpo
+
+data:
+  train: ./data/preference_train.jsonl
+  format: dpo
+  max_length: 4096
+
+training:
+  epochs: 3
+  lr: 5e-6
+  batch_size: auto
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  quantization: 4bit
+  dpo_beta: 0.1
+
+output: ./output
+""",
+    ),
 }
