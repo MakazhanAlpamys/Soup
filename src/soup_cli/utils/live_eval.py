@@ -204,12 +204,14 @@ def make_generator(
     device: Optional[str] = None,
     max_new_tokens: int = 64,
     trust_remote_code: bool = False,
+    quantization: Optional[str] = None,
     loaded: Optional[tuple] = None,
 ) -> GeneratorFn:
     """Build a deterministic ``GeneratorFn`` closure (greedy decode).
 
     ``loaded`` lets a caller share an already-loaded ``(model, tokenizer,
     device)`` triple across several closures (base + multi off one load).
+    ``quantization`` is ignored when ``loaded`` is given, same as ``device``.
     """
     _check_positive_int(max_new_tokens, "max_new_tokens")
     if loaded is not None and (not isinstance(loaded, tuple) or len(loaded) != 3):
@@ -217,7 +219,11 @@ def make_generator(
     import torch
 
     model, tokenizer, dev = loaded or load_model_and_tokenizer(
-        model_id, adapter=adapter, device=device, trust_remote_code=trust_remote_code
+        model_id,
+        adapter=adapter,
+        device=device,
+        trust_remote_code=trust_remote_code,
+        quantization=quantization,
     )
     pad_id = (
         tokenizer.pad_token_id
@@ -254,9 +260,13 @@ def make_multi_generator(
     max_new_tokens: int = 64,
     temperature: float = 0.8,
     trust_remote_code: bool = False,
+    quantization: Optional[str] = None,
     loaded: Optional[tuple] = None,
 ) -> MultiGen:
-    """Build a sampling ``MultiGen`` closure: ``multi(prompt, k) -> [str, ...]``."""
+    """Build a sampling ``MultiGen`` closure: ``multi(prompt, k) -> [str, ...]``.
+
+    ``quantization`` is ignored when ``loaded`` is given, same as ``device``.
+    """
     _check_positive_int(max_new_tokens, "max_new_tokens")
     if (
         isinstance(temperature, bool)
@@ -269,7 +279,11 @@ def make_multi_generator(
     import torch
 
     model, tokenizer, dev = loaded or load_model_and_tokenizer(
-        model_id, adapter=adapter, device=device, trust_remote_code=trust_remote_code
+        model_id,
+        adapter=adapter,
+        device=device,
+        trust_remote_code=trust_remote_code,
+        quantization=quantization,
     )
     pad_id = (
         tokenizer.pad_token_id
@@ -413,6 +427,7 @@ def lora_probe(
     lr: float = _DEFAULT_LR,
     max_length: int = 256,
     trust_remote_code: bool = False,
+    quantization: Optional[str] = None,
 ) -> Tuple[float, float, float]:
     """Measure held-out loss before/after a short LoRA train. Returns
     ``(base_loss, probe_loss, wall_clock_seconds)``.
@@ -432,7 +447,7 @@ def lora_probe(
 
     started = time.monotonic()
     model, tokenizer, dev = load_model_and_tokenizer(
-        base, device=device, trust_remote_code=trust_remote_code
+        base, device=device, trust_remote_code=trust_remote_code, quantization=quantization
     )
     pairs = _build_pairs(
         rows, input_extractor=input_extractor, output_extractor=output_extractor
@@ -503,6 +518,7 @@ def measure_logit_agreement(
     max_pairs: int = _MAX_AGREEMENT_PAIRS,
     max_length: int = 256,
     trust_remote_code: bool = False,
+    quantization: Optional[str] = None,
 ) -> float:
     """Fraction of held-out target tokens the base model already predicts top-1.
 
@@ -516,7 +532,7 @@ def measure_logit_agreement(
     import torch
 
     model, tokenizer, dev = load_model_and_tokenizer(
-        base, device=device, trust_remote_code=trust_remote_code
+        base, device=device, trust_remote_code=trust_remote_code, quantization=quantization
     )
     pairs = _build_pairs(
         rows, input_extractor=input_extractor, output_extractor=output_extractor

@@ -457,8 +457,30 @@ def _verdict_from_evidence(payload: dict, *, forgetting_threshold: float) -> Shi
 # Live path — load base + tuned, evaluate both legs
 # ---------------------------------------------------------------------------
 
+# live_eval only builds a BitsAndBytesConfig for these two (#367); the other
+# quant_menu formats (gptq/awq/hqq/...) need a full TrainingConfig, so those
+# still fall back to bf16 here, same as no --config at all.
+_LIVE_EVAL_QUANTIZATION_FORMATS = frozenset({"4bit", "8bit"})
+
+
+def _live_eval_quantization_from_config(soup_config: Optional["SoupConfig"]) -> Optional[str]:
+    """Reuse the training run's own quantization for the live eval load.
+
+    Returns ``None`` (unchanged bf16 default) when no ``--config`` was given,
+    or the run used a format live_eval cannot build directly.
+    """
+    if soup_config is None:
+        return None
+    quant = soup_config.training.quantization
+    return quant if quant in _LIVE_EVAL_QUANTIZATION_FORMATS else None
+
+
 def _resolve_generators(
-    base: str, tuned: Optional[str], adapter: Optional[str], device: Optional[str]
+    base: str,
+    tuned: Optional[str],
+    adapter: Optional[str],
+    device: Optional[str],
+    quantization: Optional[str] = None,
 ) -> Tuple[Callable[[str], str], Callable[[str], str]]:
     """Build ``(base_gen, tuned_gen)`` from live_eval (greedy decode)."""
     # #316 — the behavioural suites need a budget that fits a real tool call.
@@ -470,17 +492,31 @@ def _resolve_generators(
     from soup_cli.eval.gate_suites import BEHAVIOURAL_MAX_NEW_TOKENS
     from soup_cli.utils import live_eval
 
+    if quantization:
+        console.print(
+            f"[dim]Live eval: loading base/tuned at {quantization} "
+            "(reused from --config training.quantization).[/]"
+        )
+    else:
+        console.print(
+            "[dim]Live eval: loading base/tuned at full precision (bf16); "
+            "pass --config to reuse the training run's own quantization.[/]"
+        )
+
     base_gen = live_eval.make_generator(
-        base, device=device, max_new_tokens=BEHAVIOURAL_MAX_NEW_TOKENS
+        base, device=device, max_new_tokens=BEHAVIOURAL_MAX_NEW_TOKENS,
+        quantization=quantization,
     )
     if adapter:
         tuned_gen = live_eval.make_generator(
             base, adapter=adapter, device=device,
             max_new_tokens=BEHAVIOURAL_MAX_NEW_TOKENS,
+            quantization=quantization,
         )
     elif tuned:
         tuned_gen = live_eval.make_generator(
-            tuned, device=device, max_new_tokens=BEHAVIOURAL_MAX_NEW_TOKENS
+            tuned, device=device, max_new_tokens=BEHAVIOURAL_MAX_NEW_TOKENS,
+            quantization=quantization,
         )
     else:  # pragma: no cover — _verdict_live guarantees one of tuned/adapter
         raise ValueError("need --tuned or --adapter")
@@ -904,6 +940,7 @@ def _verdict_live(
     device: Optional[str],
     forgetting_threshold: float,
     noise_floor_runs: Optional[int] = None,
+    quantization: Optional[str] = None,
 ) -> ShipVerdict:
     """Run a live verdict — validate flags (exit 2), then evaluate (exit 1)."""
     if not base:
@@ -958,7 +995,7 @@ def _verdict_live(
 
     tuned_id = tuned if tuned else base
     try:
-        base_gen, tuned_gen = _resolve_generators(base, tuned, adapter, device)
+        base_gen, tuned_gen = _resolve_generators(base, tuned, adapter, device, quantization)
         # Judge modes need a judge model. Validate it BEFORE measuring the
         # noise floor, which now scores the leg-1 task axis through the judge as
         # well (#403) — a missing / malformed judge is a usage error (exit 2),
@@ -1263,6 +1300,7 @@ def ship(
             device=device,
             forgetting_threshold=threshold,
             noise_floor_runs=noise_floor,
+            quantization=_live_eval_quantization_from_config(soup_config),
         )
     else:
         _fail(
