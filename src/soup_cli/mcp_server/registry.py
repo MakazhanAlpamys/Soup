@@ -1024,8 +1024,7 @@ def _refuse_execute(name: str) -> Callable[[dict], dict]:
     def _handler(args: dict) -> dict:
         raise McpToolError(
             f"'{name}' can execute commands and is disabled; restart with "
-            "'soup mcp serve --allow-execute' to enable. Execution tools are "
-            "not implemented in this version."
+            "'soup mcp serve --allow-execute' to enable."
         )
 
     return _handler
@@ -1120,8 +1119,8 @@ def build_registry(
 
     The read-only tools are always present and executable. The mutating tools
     are always listed but refuse unless ``allow_mutating`` is set (and are
-    plan-only even then). ``allow_execute`` is retained separately for future
-    execution tools, and implies ``allow_mutating`` for the existing tools.
+    plan-only even then). ``allow_execute`` gates the execution tools
+    (``train_execute`` / ``export_execute``) and implies ``allow_mutating``.
     """
     allow_mutating = allow_mutating or allow_execute
     if allow_execute and execution is None:
