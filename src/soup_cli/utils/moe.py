@@ -40,6 +40,7 @@ _MOE_MODEL_TYPES = {
     "qwen3_moe",
     "qwen3_5_moe",
     "qwen3_5_moe_text",
+    "qwen4_exp_text",
     "qwen2_moe",
     "dbrx",
     "deepseek_v2",

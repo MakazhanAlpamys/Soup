@@ -52,11 +52,11 @@ dependencies = [
 # These were core dependencies through v0.70.0.
 train = [
     "torch>=2.0.0",
-    # Qwen3.5 classes first ship in Transformers 5.2, but 5.12.1 is the first
-    # validated floor where an outer `qwen3_5` config selects the text-only
-    # Qwen3_5ForCausalLM correctly. The v5 range also makes `[train,mlx]`
-    # resolvable because mlx-lm requires Transformers 5.
-    "transformers>=5.12.1,<6.0.0",
+    # 5.16.1 is the validated Qwen4-Exp floor: an outer `qwen4_exp` config
+    # selects the text-only Qwen4ExpForCausalLM, and the patch release restores
+    # tensor-parallel compatibility needed by large-model training. The v5
+    # range also keeps `[train,mlx]` resolvable because mlx-lm requires v5.
+    "transformers>=5.16.1,<6.0.0",
     # 0.20 is the validated Transformers 5 adapter floor. It still needs Soup's
     # explicit qwen3_5_text target policy below the automatic PEFT mapping layer.
     "peft>=0.20.0,<1.0.0",
@@ -141,7 +141,7 @@ mlx = [
     "mlx-lm>=0.31.3",
     # mlx-lm imports transformers at runtime; keep the standalone contract from
     # depending on that transitive requirement remaining undeclared here.
-    "transformers>=5.12.1,<6.0.0",
+    "transformers>=5.16.1,<6.0.0",
 ]
 cce = ["cut-cross-entropy>=24.10.0"]
 tui = ["textual>=0.50.0"]

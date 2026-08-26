@@ -85,7 +85,7 @@ pip install "soup-cli[mlx]"
 For SFT with local JSONL, JSON, or CSV data, `[mlx]` is sufficient on its own.
 It can also be installed with `[train]` when the same environment needs the
 PyTorch/TRL Transformers backend: both extras now share the supported
-`transformers>=5.12.1,<6` range (#502/#503). A Hugging Face `datasets` source or
+`transformers>=5.16.1,<6` range. A Hugging Face `datasets` source or
 streaming dataset still needs `datasets` because that data source owns the
 dependency; the local file path below does not.
 

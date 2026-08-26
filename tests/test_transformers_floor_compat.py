@@ -1,6 +1,6 @@
 """Transformers floor policy and model-load keyword compatibility.
 
-#502 moves the declared floor to Transformers 5.12.1 and #503 moves TRL to 0.29.
+The declared floor is Transformers 5.16.1 for Qwen4-Exp; TRL remains at 0.29.
 The dedicated CI cell installs those exact versions so the normal newest-version
 matrix cannot hide a floor regression. The historical #478 static guard remains:
 Soup continues using the backward-compatible ``torch_dtype=`` spelling at model

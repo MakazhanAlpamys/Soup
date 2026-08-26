@@ -45,6 +45,32 @@ _LLAMA_SHAPE: Tuple[str, ...] = (
     "down_proj",
 )
 
+# Every nn.Linear suffix exposed by the Qwen4-Exp text decoder. This includes
+# QSA, Gated DeltaNet, shared-expert, PLE, and gated-residual projections. The
+# routed experts use raw 3-D parameters and therefore do not belong in a
+# target-*module* completer.
+_QWEN4_EXP_TEXT_SHAPE: Tuple[str, ...] = (
+    "q_proj",
+    "k_proj",
+    "v_proj",
+    "o_proj",
+    "index_qk_proj",
+    "in_proj_qkv",
+    "in_proj_z",
+    "in_proj_b",
+    "in_proj_a",
+    "out_proj",
+    "gate_proj",
+    "up_proj",
+    "down_proj",
+    "shared_expert_gate",
+    "input_mix_weight_down",
+    "input_mix_weight_up",
+    "block_inject_weight",
+    "key_proj",
+    "value_proj",
+)
+
 # Per-``model_type`` LoRA target-module names (v0.71.1 #210). Keyed on the
 # HF config ``model_type`` so a ``base`` model's *actual* linear layers are
 # offered rather than the generic Llama default. Config-only (no torch /
@@ -58,6 +84,7 @@ _ARCH_TARGET_MODULES: Mapping[str, Tuple[str, ...]] = MappingProxyType({
     "qwen2_moe": _LLAMA_SHAPE,
     "qwen3": _LLAMA_SHAPE,
     "qwen3_moe": _LLAMA_SHAPE,
+    "qwen4_exp_text": _QWEN4_EXP_TEXT_SHAPE,
     "gemma": _LLAMA_SHAPE,
     "gemma2": _LLAMA_SHAPE,
     "gemma3": _LLAMA_SHAPE,
@@ -98,10 +125,15 @@ def _introspect_target_modules(base: str) -> Optional[Tuple[str, ...]]:
         cfg = AutoConfig.from_pretrained(base, local_files_only=True)
     except Exception:  # noqa: BLE001 — completer must never raise / hang
         return None
-    model_type = getattr(cfg, "model_type", None)
-    if not isinstance(model_type, str) or not model_type:
-        return None
-    return _ARCH_TARGET_MODULES.get(model_type.lower())
+    text_config = getattr(cfg, "text_config", None)
+    for candidate in (text_config, cfg):
+        model_type = getattr(candidate, "model_type", None)
+        if not isinstance(model_type, str) or not model_type:
+            continue
+        targets = _ARCH_TARGET_MODULES.get(model_type.lower())
+        if targets is not None:
+            return targets
+    return None
 
 
 def validate_shell(value: object) -> str:

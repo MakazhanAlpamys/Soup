@@ -735,14 +735,14 @@ def test_cli_env_lock_null_byte_output_rejected(tmp_path, monkeypatch):
 # lists `transformers` only under `extra == "train"/"all"/"dev"`, so no un-gated
 # transformers row exists — see `_TRAIN_TRANSFORMERS` for the real shape and the
 # tests that cover #368 end to end.
-_UNGATED_TRANSFORMERS = ("transformers>=5.12.1,<6.0.0",)
+_UNGATED_TRANSFORMERS = ("transformers>=5.16.1,<6.0.0",)
 
 # The real shape: the `transformers` cap #368 was reported against, exactly as
 # metadata states it — gated behind the extras that pull it in.
 _TRAIN_TRANSFORMERS = (
-    'transformers>=5.12.1,<6.0.0; extra == "train"',
-    'transformers>=5.12.1,<6.0.0; extra == "all"',
-    'transformers>=5.12.1,<6.0.0; extra == "dev"',
+    'transformers>=5.16.1,<6.0.0; extra == "train"',
+    'transformers>=5.16.1,<6.0.0; extra == "all"',
+    'transformers>=5.16.1,<6.0.0; extra == "dev"',
 )
 
 
@@ -765,7 +765,7 @@ def test_check_declared_bounds_control_compliant_passes():
 
     # Control: an in-bounds environment passes, so the check cannot be
     # satisfied by always failing.
-    report = check_declared_bounds(_UNGATED_TRANSFORMERS, {"transformers": "5.15.1"})
+    report = check_declared_bounds(_UNGATED_TRANSFORMERS, {"transformers": "5.16.1"})
     assert report.ok
     assert report.violations == ()
 
@@ -816,10 +816,10 @@ def test_core_bound_counted_once_despite_extra_duplicates():
     from soup_cli.utils.env_lock import check_declared_bounds
 
     reqs = (
-        "transformers>=5.12.1,<6.0.0",
-        'transformers>=5.12.1,<6.0.0; extra == "all"',
-        'transformers>=5.12.1,<6.0.0; extra == "dev"',
-        'transformers>=5.12.1,<6.0.0; extra == "train"',
+        "transformers>=5.16.1,<6.0.0",
+        'transformers>=5.16.1,<6.0.0; extra == "all"',
+        'transformers>=5.16.1,<6.0.0; extra == "dev"',
+        'transformers>=5.16.1,<6.0.0; extra == "train"',
     )
     report = check_declared_bounds(reqs, {"transformers": "6.0.0"})
     assert report.violation_count == 1
@@ -860,8 +860,8 @@ def test_mlx_only_bound_on_tracked_package_is_enforced():
     # is now part of the ABI-sensitive bounds audit too.
     from soup_cli.utils.env_lock import check_declared_bounds
 
-    mlx_only = ('transformers>=5.12.1,<6.0.0; extra == "mlx"',)
-    assert check_declared_bounds(mlx_only, {"transformers": "5.15.1"}).ok
+    mlx_only = ('transformers>=5.16.1,<6.0.0; extra == "mlx"',)
+    assert check_declared_bounds(mlx_only, {"transformers": "5.16.1"}).ok
     assert not check_declared_bounds(mlx_only, {"transformers": "6.0.0"}).ok
 
     # The identical training/MLX bounds deduplicate to one violation.
@@ -917,7 +917,7 @@ def test_current_declared_bounds_check_real_path_detects_violation(monkeypatch):
 
     from soup_cli.utils import env_lock
 
-    monkeypatch.setattr(md, "requires", lambda dist: ["transformers>=5.12.1,<6.0.0"])
+    monkeypatch.setattr(md, "requires", lambda dist: ["transformers>=5.16.1,<6.0.0"])
     monkeypatch.setattr(
         env_lock,
         "_detect_package_version",
@@ -938,7 +938,7 @@ def test_cli_env_check_declared_bound_violation_exits_3(tmp_path, monkeypatch):
     violation = BoundViolation(
         name="transformers",
         installed="6.0.0",
-        specifier=">=5.12.1,<6.0.0",
+        specifier=">=5.16.1,<6.0.0",
         extra=None,
     )
     monkeypatch.setattr(
@@ -967,7 +967,7 @@ def test_cli_env_check_bound_violation_escapes_rich_markup(tmp_path, monkeypatch
     violation = BoundViolation(
         name="[bold]evil[/bold]",
         installed="6.0.0",
-        specifier=">=5.12.1,<6.0.0",
+        specifier=">=5.16.1,<6.0.0",
         extra=None,
     )
     monkeypatch.setattr(

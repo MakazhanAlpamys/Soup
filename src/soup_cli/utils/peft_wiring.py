@@ -29,6 +29,15 @@ QWEN35_TEXT_LORA_TARGETS = (
     "out_proj",
 )
 
+# Qwen4-Exp combines ordinary QSA projections, fused Gated DeltaNet
+# projections, shared experts, PLE projections, and gated-residual mixers.
+# PEFT has no qwen4_exp_text default mapping yet. A short suffix list would
+# silently omit one of those new paths, so ``all-linear`` is the deliberate
+# text-decoder policy. The routed experts themselves are 3-D nn.Parameters,
+# not nn.Linear modules; adapting those needs PEFT ``target_parameters`` and is
+# tracked separately from this safe linear-module baseline.
+QWEN4_EXP_TEXT_LORA_TARGETS = "all-linear"
+
 
 def resolve_lora_target_modules(model: Any, configured: Any) -> Any:
     """Resolve ``target_modules: auto`` for models PEFT does not know yet.
@@ -37,6 +46,7 @@ def resolve_lora_target_modules(model: Any, configured: Any) -> Any:
     Explicit user targets are returned unchanged. Qwen3.5 uses a wrapper
     config (``qwen3_5``) around ``qwen3_5_text`` and its MoE counterpart, so
     inspect both configs without importing Transformers or PEFT at module load.
+    Qwen4-Exp's causal-LM loader exposes ``qwen4_exp_text`` directly.
     """
     if configured != "auto" and configured != ["auto"]:
         return configured
@@ -54,6 +64,8 @@ def resolve_lora_target_modules(model: Any, configured: Any) -> Any:
         "qwen3_5_moe_text",
     }:
         return list(QWEN35_TEXT_LORA_TARGETS)
+    if "qwen4_exp_text" in model_types:
+        return QWEN4_EXP_TEXT_LORA_TARGETS
     return None
 
 

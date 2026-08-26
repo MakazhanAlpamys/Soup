@@ -37,7 +37,8 @@ architecture on the Hub, but Soup's catalog recipes are deliberately text-only.
 Their explicit `modality: text` selects `AutoModelForCausalLM`, which instantiates the
 language decoder without the visual tower. This is appropriate for text-only SFT,
 pre-training, and GRPO data; it is not a full multimodal fine-tune. The Transformers
-backend requires Transformers 5.12.1 or newer for the `qwen3_5` architecture.
+backend requires Transformers 5.16.1 or newer, which also supplies the
+`qwen4_exp` text decoder used by Qwen3.8-Flash-Next (#571).
 
 ### Vision Models (with `modality: vision`)
 

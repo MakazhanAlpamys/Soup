@@ -41,7 +41,7 @@ def _single_bound(requirement: Requirement, operator: str) -> str:
 
 
 _RUNTIME_FLOORS = {
-    "transformers": "5.12.1",
+    "transformers": "5.16.1",
     "trl": "0.29.0",
     "peft": "0.20.0",
 }
@@ -61,8 +61,8 @@ def _missing_runtime_floors() -> list[str]:
 
 _MISSING_RUNTIME_FLOORS = _missing_runtime_floors()
 _RUNTIME_FLOOR_REASON = (
-    "requires the new #502 training floor; install soup-cli[train] with "
-    "transformers>=5.12.1, trl>=0.29.0, peft>=0.20.0; missing/outdated: "
+    "requires the validated training floor; install soup-cli[train] with "
+    "transformers>=5.16.1, trl>=0.29.0, peft>=0.20.0; missing/outdated: "
     + ", ".join(_MISSING_RUNTIME_FLOORS)
 )
 _REQUIRES_TRAINING_FLOOR = pytest.mark.skipif(
@@ -113,9 +113,9 @@ def test_training_and_mlx_extras_share_the_transformers5_range():
     mlx = _extra_requirement("mlx", "transformers")
 
     assert train.specifier == mlx.specifier
-    assert Version("5.12.1") in train.specifier
-    assert Version("5.12.0") not in train.specifier
-    assert Version("5.15.1") in train.specifier
+    assert Version("5.16.1") in train.specifier
+    assert Version("5.16.0") not in train.specifier
+    assert Version("5.15.1") not in train.specifier
     assert Version("6.0.0") not in train.specifier
 
 
