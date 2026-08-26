@@ -1186,10 +1186,13 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         unchanged, and where it is not the previous behaviour was a crash.
         """
         if not getattr(tcfg, "auto_mixed_precision", False):
-            return bf16_fp16_flags(self.device)
+            return bf16_fp16_flags(self.device, allow_mps_bf16=True)
 
         if self.device != "cuda":
-            return (False, False)
+            # ``auto_mixed_precision`` predates MPS support and its model/CC
+            # heuristic is CUDA-specific.  Keep CPU disabled, but do not let
+            # enabling the option undo the validated MPS policy above.
+            return bf16_fp16_flags(self.device, allow_mps_bf16=True)
 
         try:
             import torch

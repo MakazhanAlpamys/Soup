@@ -271,6 +271,13 @@ made yet that streaming fits a larger model or runs faster than resident MPS tra
 `backend: mlx` remains a separate, incompatible model-loading path and is rejected with
 `stream_layers`.
 
+Resident Transformers training shares the same live MPS BF16 capability probe.
+SFT, DPO, reward modelling, and PRM use BF16 autocast on a capable runtime; the
+remaining trainers retain the conservative FP32 policy until they have
+task-specific Apple Silicon validation. PRM keeps FP32 master weights even when
+autocast is BF16 because a BF16 trainable base currently triggers a fatal Metal
+optimizer dtype mismatch.
+
 The tradeoff: **1.43× slower than resident training**, measured at 0.5B — the only apples-to-apples comparison available on the reference box, because 1.5B and above cannot run resident there at all.
 
 ### NF4 streaming (`quantization: 4bit`)

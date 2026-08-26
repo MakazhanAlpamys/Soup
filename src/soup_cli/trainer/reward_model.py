@@ -136,7 +136,7 @@ class RewardModelTrainerWrapper:
         warmup_steps = int(total_steps * tcfg.warmup_ratio)
 
         # --- Reward config ---
-        _bf16, _fp16 = bf16_fp16_flags(self.device)
+        _bf16, _fp16 = bf16_fp16_flags(self.device, allow_mps_bf16=True)
         reward_config = RewardConfig(
             output_dir=str(output_dir),
             num_train_epochs=tcfg.epochs,

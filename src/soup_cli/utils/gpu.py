@@ -421,18 +421,51 @@ def cuda_supports_bf16() -> bool:
         return False
 
 
-def bf16_fp16_flags(device: str) -> tuple[bool, bool]:
+def mps_supports_bf16() -> bool:
+    """Return whether the live MPS runtime accepts native bfloat16 tensors.
+
+    PyTorch exposes no public ``is_bf16_supported`` equivalent for MPS.  Probe
+    the exact runtime instead of inferring support from a macOS or torch version:
+    this also covers builds compiled without MPS and older Metal runtimes.
+    """
+    try:
+        import torch
+
+        mps = getattr(torch.backends, "mps", None)
+        if mps is None or not mps.is_available():
+            return False
+        probe = torch.empty(1, dtype=torch.bfloat16, device="mps")
+        del probe
+        return True
+    except (
+        ImportError,
+        RuntimeError,
+        TypeError,
+        NotImplementedError,
+        AssertionError,
+        OSError,
+    ):
+        return False
+
+
+def bf16_fp16_flags(
+    device: str, *, allow_mps_bf16: bool = False
+) -> tuple[bool, bool]:
     """``(bf16, fp16)`` for ``TrainingArguments`` on ``device``.
 
-    bf16 where the card has it, fp16 where it does not, neither on CPU. Cannot
-    regress a working setup: on a bf16-capable card the answer is what every
-    wrapper hardcoded, and on the rest the previous answer was a crash.
+    bf16 where the card has it, fp16 where CUDA requires it, neither on CPU.
+    MPS is opt-in per trainer until that trainer has a real Apple Silicon smoke:
+    several audio/vision kernels have a different support surface from causal-LM
+    text training, so a successful scalar allocation cannot certify every task.
 
     A ``"cuda"`` string with no CUDA runtime behind it gets neither, rather than
     fp16 on a card that is not there — the run cannot proceed either way, and
     asking for mixed precision on a phantom device only obscures the real error.
     """
-    if not str(device).lower().startswith("cuda"):
+    device_name = str(device).lower()
+    if device_name.startswith("mps"):
+        return (allow_mps_bf16 and mps_supports_bf16(), False)
+    if not device_name.startswith("cuda"):
         return (False, False)
     try:
         import torch

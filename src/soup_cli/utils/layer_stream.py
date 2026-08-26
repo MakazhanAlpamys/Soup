@@ -224,26 +224,9 @@ def resolve_stream_dtype(device: str = "cuda") -> str:
     """
     device_name = str(device).lower()
     if device_name.startswith("mps"):
-        try:
-            import torch
+        from soup_cli.utils.gpu import mps_supports_bf16
 
-            mps = getattr(torch.backends, "mps", None)
-            if mps is None or not mps.is_available():
-                return "float32"
-            # PyTorch rejects this before model state exists on macOS versions
-            # that predate MPS bfloat16 support.
-            probe = torch.empty(1, dtype=torch.bfloat16, device="mps")
-            del probe
-            return "bfloat16"
-        except (
-            ImportError,
-            RuntimeError,
-            TypeError,
-            NotImplementedError,
-            AssertionError,
-            OSError,
-        ):
-            return "float32"
+        return "bfloat16" if mps_supports_bf16() else "float32"
     if not device_name.startswith("cuda"):
         return "float32"
 

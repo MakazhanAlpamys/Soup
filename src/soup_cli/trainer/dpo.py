@@ -163,7 +163,7 @@ class DPOTrainerWrapper(StreamingSetupMixin):
         # --- DPO config ---
         from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
 
-        _bf16, _fp16 = bf16_fp16_flags(self.device)
+        _bf16, _fp16 = bf16_fp16_flags(self.device, allow_mps_bf16=True)
         dpo_config = DPOConfig(
             output_dir=str(output_dir),
             num_train_epochs=tcfg.epochs,

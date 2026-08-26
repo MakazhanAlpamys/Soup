@@ -24,6 +24,7 @@ from typing import Any, Optional
 from rich.console import Console
 
 from soup_cli.config.schema import SoupConfig
+from soup_cli.utils.gpu import bf16_fp16_flags
 from soup_cli.utils.mixed_precision import align_trainable_dtype_for_fp16
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 
@@ -264,6 +265,11 @@ class PRMTrainerWrapper:
         base_model = AutoModelForCausalLM.from_pretrained(
             cfg.base,
             trust_remote_code=self._trust_remote_code,
+            # MPS PRM keeps fp32 master weights while TrainingArguments below
+            # autocasts the forward to bf16. Loading the trainable base itself
+            # as bf16 makes the Metal optimizer abort: its accumulator and
+            # destination matrix dtypes differ. CUDA retains its established
+            # bf16-parameter policy; CPU remains fp32.
             torch_dtype=torch.bfloat16 if self.device == "cuda" else torch.float32,
         )
         hidden_size = base_model.config.hidden_size
@@ -313,6 +319,7 @@ class PRMTrainerWrapper:
             bs = 1
         else:
             bs = tcfg.batch_size
+        use_bf16, use_fp16 = bf16_fp16_flags(self.device, allow_mps_bf16=True)
         args = TrainingArguments(
             output_dir=str(output_dir),
             num_train_epochs=tcfg.epochs,
@@ -322,6 +329,8 @@ class PRMTrainerWrapper:
             logging_steps=tcfg.logging_steps,
             save_steps=tcfg.save_steps,
             save_total_limit=3,
+            bf16=use_bf16,
+            fp16=use_fp16,
             report_to=self.report_to,
             remove_unused_columns=False,
             deepspeed=self.deepspeed_config,
