@@ -208,7 +208,10 @@ def make_multipack_trainer_class(base_cls: type) -> type:
 
             sampler = MultipackBatchSampler(
                 lengths=list(lengths),
-                batch_max_len=int(max_seq),
+                # real_batches=False packs each bin to batch_size * max_seq_length
+                # (multipack.py's own flat-mode branch), not bare max_seq_length, or
+                # training.batch_size has no effect on the packing density here.
+                batch_max_len=int(max_seq) * int(batch_size),
                 batch_size=int(batch_size),
                 real_batches=False,  # yield list[int] per pack — DataLoader-compatible
                 seed=int(seed),
