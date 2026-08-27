@@ -2,7 +2,8 @@
 
 LISA (arXiv:2403.17919) gives full-FT quality at LoRA-like memory: every N
 steps it freezes all decoder layers except a small randomly-sampled set
-(embeddings + language-model head always trainable). The dynamic cousin of
+(embeddings + language-model head + final norm trainable throughout by default;
+``train_embeddings=False`` freezes that group too, #377). The dynamic cousin of
 Spectrum's static ``unfrozen_parameters`` selection.
 
 Correctness invariant (see ``utils/peft_wiring.apply_lisa_setup``, shared by the

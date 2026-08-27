@@ -72,6 +72,14 @@ def _build_hardware_fit_input(cfg):
         # they don't select the mode). Now shares is_full_finetune with
         # sft.py's SFTTrainerWrapper._resolve_load_dtype so the two cannot
         # disagree again.
+        #
+        # #377 — lisa_train_embeddings=false freezes the always-on group and
+        # lowers real VRAM, but LISA stays "full" here on purpose: the analytical
+        # predictor has no measured constant for the frozen-embeddings trainable
+        # set, and over-predicting is the safe failure (under-predicting is a
+        # silent WDDM spill on Windows). A frozen-embeddings run that would fit
+        # can therefore still be refused by pre-flight; --allow-oom-attempt is
+        # the documented bypass, and crediting the saving is a hardware follow-up.
         peft = "full"
     else:
         peft = "lora"

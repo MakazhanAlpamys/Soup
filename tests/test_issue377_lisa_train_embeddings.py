@@ -214,6 +214,66 @@ class TestSchema:
 
 
 # ---------------------------------------------------------------------------
+# VRAM pre-flight estimator: the documented, deliberately-conservative contract
+# ---------------------------------------------------------------------------
+_FIT_LISA_BASE = """
+base: meta-llama/Llama-2-7b-hf
+task: sft
+backend: transformers
+modality: text
+data:
+  train: train.jsonl
+  max_length: 2048
+training:
+  batch_size: 1
+  quantization: none
+  lisa_enabled: true
+  lisa_num_layers: 2
+  lisa_interval_steps: 20
+"""
+
+
+class TestPreflightEstimatorContract:
+    """``_build_hardware_fit_input`` classifies LISA as ``peft='full'``
+    regardless of ``lisa_train_embeddings`` (#471 routes ``lisa_enabled`` to
+    full-FT so the estimator never *under*-predicts). Freezing the always-on
+    group lowers real VRAM, but the analytical estimator is not yet credited
+    with that saving — crediting it needs a measured constant on GPU hardware
+    (the same methodology #327 uses), so the conservative bound stands and a
+    frozen-embeddings run that would fit may still be refused by pre-flight
+    (bypass with ``--allow-oom-attempt``). This test pins that contract so the
+    limitation is a conscious decision, not a silent regression (#377).
+    """
+
+    def test_lisa_is_classified_full_regardless_of_train_embeddings(self):
+        from soup_cli.commands.train import _build_hardware_fit_input
+
+        on = _build_hardware_fit_input(_load(_FIT_LISA_BASE))
+        off = _build_hardware_fit_input(
+            _load(_FIT_LISA_BASE.rstrip("\n") + "\n  lisa_train_embeddings: false\n")
+        )
+        assert on is not None and off is not None
+        # Same conservative classification both ways — never under-predicts.
+        assert on.peft == "full"
+        assert off.peft == "full"
+
+    def test_frozen_embeddings_is_not_under_predicted(self):
+        # Belt-and-braces on the invariant that matters: the frozen-embeddings
+        # estimate is >= the trainable-everything estimate (it is in fact equal
+        # today), so pre-flight can only ever be conservative, never optimistic.
+        from soup_cli.commands.train import _build_hardware_fit_input
+        from soup_cli.utils.hardware_fit import estimate_peak_vram_gb
+
+        on = estimate_peak_vram_gb(_build_hardware_fit_input(_load(_FIT_LISA_BASE)))
+        off = estimate_peak_vram_gb(
+            _build_hardware_fit_input(
+                _load(_FIT_LISA_BASE.rstrip("\n") + "\n  lisa_train_embeddings: false\n")
+            )
+        )
+        assert off.total_gb >= on.total_gb
+
+
+# ---------------------------------------------------------------------------
 # Wiring: attach_lisa_callback threads the flag into the policy
 # ---------------------------------------------------------------------------
 class TestWiring:

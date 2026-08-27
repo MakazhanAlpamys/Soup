@@ -388,7 +388,7 @@ Works with and without LoRA. When used with LoRA, LoRA is applied only to unfroz
 
 ## LISA — Layerwise Importance Sampling (v0.71.34)
 
-LISA (Layerwise Importance Sampled AdamW, [arXiv:2403.17919](https://arxiv.org/abs/2403.17919)) targets full-fine-tuning quality at LoRA-like memory. **Measured at 7B+, it delivers the first half and not the second** — see [what it actually costs](#what-lisa-actually-costs-measured-at-3b-and-8b) below before choosing it over LoRA. Instead of picking layers once (that's Spectrum's static `unfrozen_parameters`), LISA re-samples a small random set of decoder layers **every N steps** and freezes the rest; the input embeddings, the LM head, and the final norm stay trainable throughout.
+LISA (Layerwise Importance Sampled AdamW, [arXiv:2403.17919](https://arxiv.org/abs/2403.17919)) targets full-fine-tuning quality at LoRA-like memory. **Measured at 7B+, it delivers the first half and not the second** — see [what it actually costs](#what-lisa-actually-costs-measured-at-3b-and-8b) below before choosing it over LoRA. Instead of picking layers once (that's Spectrum's static `unfrozen_parameters`), LISA re-samples a small random set of decoder layers **every N steps** and freezes the rest; the input embeddings, the LM head, and the final norm stay trainable throughout by default (set `lisa_train_embeddings: false` to freeze that group too — see [the memory trade-off](#reclaiming-the-always-on-overhead-lisa_train_embeddings) below).
 
 ```yaml
 task: sft                 # or `pretrain` — continued pre-training is the same
@@ -400,6 +400,7 @@ training:
   lisa_enabled: true
   lisa_num_layers: 2       # decoder layers active per interval (clamped to model depth)
   lisa_interval_steps: 20  # re-sample cadence, in global steps
+  lisa_train_embeddings: true  # default; false freezes embeddings + head + final norm
 ```
 
 Because only a handful of layers train at any moment (and their optimizer state is cleared when they're re-frozen), peak optimizer memory is roughly `embeddings + head + lisa_num_layers` — far below a full fine-tune, while every layer still gets updated over the course of training. LISA is `sft` or `pretrain` + `transformers` + `text` + `quantization: none` only, and is mutually exclusive with LoRA features, `freeze_layers`/`freeze_ratio`, and Spectrum's `unfrozen_parameters` (each independently decides what trains).
@@ -437,6 +438,29 @@ and final norm stay trainable **every** interval, and at 8B those are **70.7%** 
 everything LISA trains (66.9% at 3B). So `lisa_num_layers` only controls about
 30% of the cost, and the other 70% grows with vocabulary x hidden size — an
 overhead LoRA never pays at all.
+
+### Reclaiming the always-on overhead: `lisa_train_embeddings`
+
+Set `lisa_train_embeddings: false` to freeze the always-on group (input
+embeddings, LM head, final norm) so only the sampled `lisa_num_layers` decoder
+layers train. Because that group is the majority of what LISA trains, this is
+the knob that actually moves LISA's memory toward the LoRA-like target the paper
+promises.
+
+It is a **real trade, not a free win**: the always-on set is presumably
+load-bearing for LISA's quality result, so freezing it may move held-out loss.
+The default stays `true` (LISA exactly as published) precisely because this
+should be a measured choice, not a silent change — measure both ways on your
+model before committing to it.
+
+> **Pre-flight caveat.** The analytical VRAM pre-flight still classifies LISA as
+> full fine-tuning regardless of `lisa_train_embeddings`, so it does **not** yet
+> credit the saving from freezing the always-on group — a frozen-embeddings run
+> that would fit can still be refused before launch. This is deliberate:
+> over-predicting is the safe failure (under-predicting is a silent spill on
+> Windows), and crediting the saving needs a measured constant on GPU hardware.
+> Use `--allow-oom-attempt` to launch a run the pre-flight conservatively
+> refuses.
 
 **Choose LISA when you need full-rank updates on a model too large to
 full-fine-tune** — its real win is that 8B trains on a single 80 GB card where
