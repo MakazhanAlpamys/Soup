@@ -45,7 +45,7 @@ _SANDBOX_SEMAPHORE = threading.Semaphore(CODE_EXEC_MAX_PARALLEL)
 _CODE_EXEC_WARNING_SHOWN = False
 
 # Cached isolation strategy — recomputed on demand when tests reset to None
-_ISOLATION_STRATEGY_CACHE: str | None = None
+_ISOLATION_STRATEGY_CACHE: "str | None" = None
 
 # macOS sandbox-exec profile: default-deny, allow narrow process needs, block
 # network and writes outside /tmp. Defence-in-depth on top of RLIMIT + socket
@@ -64,7 +64,7 @@ MACOS_SANDBOX_PROFILE = (
     # bypasses ``(deny network*)``. The names below are required for the
     # interpreter to boot (entitlement / system-services lookup) but do
     # NOT include ``com.apple.SystemConfiguration`` or ``com.apple.dnssd``.
-    "(allow mach-lookup"
+    '(allow mach-lookup'
     ' (global-name "com.apple.SecurityServer")'
     ' (global-name "com.apple.system.notification_center")'
     ' (global-name "com.apple.system.opendirectoryd.libinfo"))'
@@ -140,6 +140,7 @@ def _try_unshare_namespaces(strict: bool = False) -> None:
     Called from the POSIX preexec_fn after RLIMITs are set. If the kernel
     rejects the unshare (unprivileged user namespaces disabled, common on
     hardened distros), we silently fall back to RLIMIT + socket patch alone.
+    When ``strict=True``, failures raise PermissionError / OSError instead of falling back.
     """
     unshare = getattr(os, "unshare", None)
     if unshare is None:
@@ -153,6 +154,7 @@ def _try_unshare_namespaces(strict: bool = False) -> None:
         if strict:
             raise
         # Continue with weaker isolation rather than failing the run.
+        pass
 
 
 def _show_code_exec_warning_once() -> None:
@@ -161,26 +163,19 @@ def _show_code_exec_warning_once() -> None:
     if _CODE_EXEC_WARNING_SHOWN:
         return
     _CODE_EXEC_WARNING_SHOWN = True
-    strategy = _get_isolation_strategy()
-    if strategy == "best-effort":
-        network_status = (
-            "[bold]OS-level network isolation is unavailable.[/] The Python "
-            "socket patch can be bypassed by os.system / subprocess / ctypes."
-        )
-    else:
-        network_status = f"OS-level network isolation: [bold]{strategy}[/]."
     console.print(
         Panel(
             "[bold yellow]RLVR code_exec_reward is a BEST-EFFORT sandbox.[/]\n\n"
             "Model-generated code runs in a subprocess with:\n"
             "  - 5s wall-clock timeout\n"
             "  - 512MB RLIMIT_AS on POSIX (Linux/macOS)\n"
-            "  - Ephemeral working directory (not filesystem read isolation)\n"
+            "  - Restricted temporary working directory\n"
             "  - A Python-level socket monkey-patch\n\n"
-            f"{network_status}\n"
-            "Sandboxed code can still read files available to the Soup process. "
-            "Do not enable code execution on hosts that hold secrets; prefer a "
-            "dedicated container/VM.",
+            "[bold]The socket patch can be bypassed[/] by generated code "
+            "invoking os.system / subprocess / ctypes. Network isolation is "
+            "NOT enforced. Do not enable code_exec_reward on hosts that "
+            "hold secrets or run alongside trusted services. Prefer running "
+            "training inside a container/VM with no network interface.",
             title="code_exec_reward — security notice",
             border_style="yellow",
         )
@@ -270,7 +265,7 @@ def _extract_answer(text: str) -> str | None:
 _MATH_NUM_RE = re.compile(r"-?\d+(?:\.\d+)?")
 
 
-def _extract_numeric_answer(text: str) -> float | None:
+def _extract_numeric_answer(text: str) -> "float | None":
     """Extract a numeric answer using safe regex (never calls eval())."""
     answer_str = _extract_answer(text)
     if answer_str is None:
@@ -349,24 +344,20 @@ def _apply_rlimit(strict_namespaces: bool = False) -> None:
             resource.RLIMIT_CPU,
             (CODE_EXEC_TIMEOUT_SECONDS, CODE_EXEC_TIMEOUT_SECONDS),
         )
-        # Bounded file size creation (10MB) to prevent disk fill attacks
         if hasattr(resource, "RLIMIT_FSIZE"):
+            # Limit file size created by subprocess (10 MB max)
             resource.setrlimit(
-                resource.RLIMIT_FSIZE,
-                (10 * 1024 * 1024, 10 * 1024 * 1024),
+                resource.RLIMIT_FSIZE, (10 * 1024 * 1024, 10 * 1024 * 1024)
             )
-        # Prevent core dumps
         if hasattr(resource, "RLIMIT_CORE"):
+            # Disable core dumps
             resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
-        # Cap open file descriptors
         if hasattr(resource, "RLIMIT_NOFILE"):
+            # Cap open file descriptors
             resource.setrlimit(resource.RLIMIT_NOFILE, (256, 256))
-        # Cap child process/thread creation if supported
         if hasattr(resource, "RLIMIT_NPROC"):
-            try:
-                resource.setrlimit(resource.RLIMIT_NPROC, (64, 64))
-            except (ValueError, OSError):
-                pass
+            # Cap child processes / threads
+            resource.setrlimit(resource.RLIMIT_NPROC, (64, 64))
     except (ImportError, ValueError, OSError):
         pass
     # Linux defence-in-depth: best-effort unshare into private namespaces.
@@ -374,10 +365,8 @@ def _apply_rlimit(strict_namespaces: bool = False) -> None:
         _try_unshare_namespaces(strict=strict_namespaces)
 
 
-@dataclass(frozen=True)
+@dataclass
 class SandboxProcessResult:
-    """Bounded subprocess outcome shared by reward and server sandboxes."""
-
     returncode: int | None
     stdout: str
     stderr: str
@@ -388,25 +377,13 @@ class SandboxProcessResult:
 
 def _run_sandboxed_subprocess(
     argv: list[str],
-    preexec_fn: Callable | None,
-    timeout: int = CODE_EXEC_TIMEOUT_SECONDS,
+    preexec_fn: Callable[[], None] | None = None,
     max_output_bytes: int = MAX_CODE_OUTPUT_BYTES,
+    timeout_seconds: int = CODE_EXEC_TIMEOUT_SECONDS,
     env: dict[str, str] | None = None,
 ) -> SandboxProcessResult:
-    """Run a command in a subprocess sandbox with timeout, rlimits, bounded streaming, and output caps.
-
-    Security posture:
-    - Concurrency cap via _SANDBOX_SEMAPHORE.
-    - Hard wall-clock timeout via subprocess.Popen + wait(timeout=...).
-    - POSIX ``RLIMIT_AS`` (address space), ``RLIMIT_CPU``, and ``RLIMIT_FSIZE`` via preexec_fn.
-    - Bounded streaming output: reading is bounded and processes exceeding max_output_bytes are killed immediately.
-    - Minimal sanitized environment (no server secrets).
-    - Subprocess cwd is a freshly created temporary directory per run.
-
-    Returns a structured result that keeps stderr and distinguishes timeout,
-    ordinary non-zero exit, launch failure, and output-limit failure.
-    """
-    if _get_isolation_strategy() == "sandbox-exec":
+    """Execute a sandboxed subprocess under concurrency limit with streaming kill-on-overflow."""
+    if _get_isolation_strategy() == "sandbox-exec" and sys.platform == "darwin":
         sandbox_bin = _shutil.which("sandbox-exec") or "/usr/bin/sandbox-exec"
         argv = [sandbox_bin, "-p", MACOS_SANDBOX_PROFILE, *argv]
 
@@ -423,65 +400,58 @@ def _run_sandboxed_subprocess(
                 preexec_fn=preexec_fn,
                 env=env,
             )
-        except (PermissionError, OSError, ValueError) as exc:
+        except (PermissionError, OSError) as exc:
             return SandboxProcessResult(
-                None, "", f"sandbox process failed to start: {exc}", launch_failed=True
+                returncode=None,
+                stdout="",
+                stderr=str(exc),
+                launch_failed=True,
             )
 
         stdout_chunks: list[bytes] = []
         stderr_chunks: list[bytes] = []
-        stdout_len = 0
-        stderr_len = 0
         output_exceeded = False
         lock = threading.Lock()
 
-        def _reader(pipe, is_stdout: bool) -> None:
-            nonlocal output_exceeded, stdout_len, stderr_len
-            if pipe is None:
-                return
+        def _reader(stream, chunks: list[bytes]) -> None:
+            nonlocal output_exceeded
             try:
                 while True:
-                    chunk = pipe.read(4096)
+                    chunk = stream.read(4096)
                     if not chunk:
                         break
                     with lock:
-                        if is_stdout:
-                            stdout_chunks.append(chunk)
-                            stdout_len += len(chunk)
-                        else:
-                            stderr_chunks.append(chunk)
-                            stderr_len += len(chunk)
-                        if stdout_len + stderr_len > max_output_bytes:
+                        chunks.append(chunk)
+                        total = sum(len(c) for c in stdout_chunks) + sum(len(c) for c in stderr_chunks)
+                        if total > max_output_bytes:
                             output_exceeded = True
-                            try:
+                            with contextlib.suppress(Exception):
                                 proc.kill()
-                            except (ProcessLookupError, OSError):
-                                pass
                             break
-            except (OSError, ValueError):
-                pass
             finally:
-                with contextlib.suppress(Exception):
-                    pipe.close()
+                stream.close()
 
-        t_out = threading.Thread(target=_reader, args=(proc.stdout, True), daemon=True)
-        t_err = threading.Thread(target=_reader, args=(proc.stderr, False), daemon=True)
+        t_out = threading.Thread(target=_reader, args=(proc.stdout, stdout_chunks))
+        t_err = threading.Thread(target=_reader, args=(proc.stderr, stderr_chunks))
+        t_out.daemon = True
+        t_err.daemon = True
         t_out.start()
         t_err.start()
 
         try:
-            proc.wait(timeout=timeout)
-            t_out.join(timeout=1.0)
-            t_err.join(timeout=1.0)
+            proc.wait(timeout=timeout_seconds)
+            timed_out = False
         except subprocess.TimeoutExpired:
-            try:
+            timed_out = True
+            with contextlib.suppress(Exception):
                 proc.kill()
-            except (ProcessLookupError, OSError):
-                pass
             with contextlib.suppress(Exception):
                 proc.wait(timeout=1.0)
-            t_out.join(timeout=0.5)
-            t_err.join(timeout=0.5)
+
+        t_out.join(timeout=1.0)
+        t_err.join(timeout=1.0)
+
+        if timed_out:
             return SandboxProcessResult(None, "", "", timed_out=True)
 
         if output_exceeded:
@@ -507,7 +477,7 @@ def _run_sandboxed_subprocess(
         return SandboxProcessResult(proc.returncode, stdout, stderr)
 
 
-def _run_code_sandbox(code: str) -> str | None:
+def _run_code_sandbox(code: str) -> "str | None":
     """Run code in a subprocess sandbox with timeout, rlimits, and output caps.
 
     Security posture (best-effort, NOT a strong sandbox):
@@ -622,7 +592,7 @@ def _score_against_schema(data: object, schema: dict) -> float:
     return 1.0 if _type_matches(data, schema.get("type")) else 0.0
 
 
-def _type_matches(value: object, type_name: str | None) -> bool:
+def _type_matches(value: object, type_name: "str | None") -> bool:
     if type_name is None:
         return True
     mapping = {
@@ -736,8 +706,7 @@ def validate_reward_funcs(reward_funcs: Any) -> Any:
 
 
 def load_reward_fn(
-    reward_fn_spec: str,
-    verifiable_domain: str | None = None,
+    reward_fn_spec: str, verifiable_domain: "str | None" = None,
 ) -> Callable:
     """Load a reward function by name or from a custom Python file.
 
@@ -763,7 +732,9 @@ def load_reward_fn(
                 f"Unknown verifiable_domain: '{verifiable_domain}'. "
                 f"Options: {', '.join(VERIFIABLE_DOMAINS.keys())}"
             )
-        console.print(f"[dim]Using verifiable reward: domain={verifiable_domain}[/]")
+        console.print(
+            f"[dim]Using verifiable reward: domain={verifiable_domain}[/]"
+        )
         return VERIFIABLE_DOMAINS[verifiable_domain]
 
     # Built-in reward function
@@ -801,8 +772,7 @@ def load_reward_fn(
 
 
 def load_reward_fns(
-    reward_fn_spec: str,
-    verifiable_domain: str | None = None,
+    reward_fn_spec: str, verifiable_domain: "str | None" = None,
 ) -> list[Callable]:
     """Load one OR MORE reward functions from a comma-separated spec (v0.71.40 #311).
 
@@ -828,7 +798,8 @@ def load_reward_fns(
     segments = [seg.strip() for seg in reward_fn_spec.split(",")]
     if any(not seg for seg in segments):
         raise ValueError(
-            f"reward_fn {reward_fn_spec!r} has an empty comma segment — remove the stray comma"
+            f"reward_fn {reward_fn_spec!r} has an empty comma segment — "
+            "remove the stray comma"
         )
     seen: set[str] = set()
     for seg in segments:
