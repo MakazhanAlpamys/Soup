@@ -757,12 +757,21 @@ def _validate_grpo_reward_metadata(
 
     for row_index, row in enumerate(data):
         for reward_name, alternatives in requirements:
-            if any(row.get(field) is not None for field in alternatives):
+            if any(_has_grpo_reward_metadata(row.get(field)) for field in alternatives):
                 continue
             fields = " or ".join(repr(field) for field in alternatives)
             raise ValueError(
-                f"GRPO {split} row {row_index} is missing {fields}, required "
+                f"GRPO {split} row {row_index} is missing or empty {fields}, required "
                 f"by reward {reward_name!r}. Preserve that column in the source "
                 "dataset or include an assistant response that Soup can use as "
                 "'answer'."
             )
+
+
+def _has_grpo_reward_metadata(value: object) -> bool:
+    """Return whether a reward metadata value is usable as a gold target."""
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    return True

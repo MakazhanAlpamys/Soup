@@ -177,10 +177,14 @@ def accuracy_reward(completions: list[list[dict]], **kwargs) -> list[float]:
     rewards = []
     for completion, expected in zip(completions, answers):
         content = completion[-1]["content"] if completion else ""
+        expected_text = "" if expected is None else str(expected).strip()
+        if not expected_text:
+            rewards.append(0.0)
+            continue
         predicted = _extract_answer(content)
-        if predicted is not None and predicted.strip() == str(expected).strip():
+        if predicted is not None and predicted.strip() == expected_text:
             rewards.append(1.0)
-        elif str(expected).strip().lower() in content.lower():
+        elif expected_text.lower() in content.lower():
             rewards.append(0.5)
         else:
             rewards.append(0.0)

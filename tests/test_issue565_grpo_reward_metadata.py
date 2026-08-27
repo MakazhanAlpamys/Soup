@@ -12,7 +12,7 @@ from soup_cli.trainer.grpo import (
     _prepare_grpo_dataset,
     _validate_grpo_reward_metadata,
 )
-from soup_cli.trainer.rewards import validate_reward_funcs
+from soup_cli.trainer.rewards import accuracy_reward, validate_reward_funcs
 
 
 def _write_jsonl(tmp_path, rows: list[dict]):
@@ -139,6 +139,30 @@ def test_code_reward_accepts_expected_without_answer():
         config,
         split="train",
     )
+
+
+def test_empty_gold_fails_normal_loader_to_grpo_setup_path(tmp_path):
+    path = _write_jsonl(
+        tmp_path,
+        [{"instruction": "Return 2.", "input": "", "output": "   "}],
+    )
+    cfg = DataConfig(train=str(path), format="alpaca", val_split=0)
+    loaded = load_dataset(cfg, preserve_source_columns=True)
+    prepared = _prepare_grpo_dataset(loaded["train"])
+
+    with pytest.raises(ValueError, match=r"GRPO train row 0 is missing or empty 'answer'"):
+        _validate_grpo_reward_metadata(
+            prepared,
+            TrainingConfig(reward_fn="accuracy"),
+            split="train",
+        )
+
+
+@pytest.mark.parametrize("answer", ["", "   ", "\n\t"])
+def test_accuracy_reward_never_awards_empty_gold(answer):
+    completions = [[{"role": "assistant", "content": "unrelated completion"}]]
+
+    assert accuracy_reward(completions, answer=[answer]) == [0.0]
 
 
 def test_reward_contract_rejects_wrong_score_count():
