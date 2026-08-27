@@ -3048,6 +3048,18 @@ class TrainingConfig(BaseModel):
             "relora_reset_optimizer."
         ),
     )
+    lisa_train_embeddings: bool = Field(
+        default=True,
+        description=(
+            "Keep the always-on group (input embeddings + LM head + final "
+            "norm) trainable every LISA interval. Default true is LISA as "
+            "published (#267). Set false to freeze that group so only the "
+            "sampled lisa_num_layers decoder layers train — the always-on set "
+            "is the majority of LISA's memory, so this is the knob that buys "
+            "the memory saving (#377). It is a real trade: the always-on set "
+            "may be load-bearing for quality, so measure both ways."
+        ),
+    )
 
     @field_validator("lisa_num_layers", "lisa_interval_steps", mode="before")
     @classmethod
@@ -4822,6 +4834,7 @@ class SoupConfig(BaseModel):
                 tcfg.lisa_num_layers != 2
                 or tcfg.lisa_interval_steps != 20
                 or tcfg.lisa_reset_optimizer is not True
+                or tcfg.lisa_train_embeddings is not True
             ):
                 raise ValueError(
                     "training.lisa_* set but lisa_enabled is false — set "

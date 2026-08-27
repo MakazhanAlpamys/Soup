@@ -57,6 +57,10 @@ class LisaPolicy:
     interval_steps: int
     reset_optimizer: bool = True
     seed: int = 0
+    # False freezes the always-on group (embeddings + LM head + final norm) so
+    # only the sampled decoder layers are trainable — the always-on set is 70.7%
+    # of what LISA trains at 8B, so this is where the memory actually is (#377).
+    train_embeddings: bool = True
 
     def __post_init__(self) -> None:
         for name in ("num_layers", "interval_steps", "seed"):
@@ -71,6 +75,8 @@ class LisaPolicy:
             raise ValueError("LisaPolicy.seed must be >= 0")
         if not isinstance(self.reset_optimizer, bool):
             raise TypeError("LisaPolicy.reset_optimizer must be bool")
+        if not isinstance(self.train_embeddings, bool):
+            raise TypeError("LisaPolicy.train_embeddings must be bool")
 
 
 def _try_import_callback_base():
@@ -167,7 +173,10 @@ class _LisaCallback_body:  # type: ignore[misc]  # noqa: N801
 
         for name, param in model.named_parameters():
             if _is_always_on(name):
-                param.requires_grad = True
+                # Always trainable under the default; frozen when the caller
+                # opts out via train_embeddings=False so the sampled decoder
+                # layers are the only trainable parameters (#377).
+                param.requires_grad = self.policy.train_embeddings
                 continue
             m = _LAYER_RE.search(name)
             if m is None:

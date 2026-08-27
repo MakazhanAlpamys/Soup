@@ -1007,6 +1007,7 @@ class _TCfg:
     lisa_num_layers = 3
     lisa_interval_steps = 15
     lisa_reset_optimizer = True
+    lisa_train_embeddings = True
     seed = 0
 
 

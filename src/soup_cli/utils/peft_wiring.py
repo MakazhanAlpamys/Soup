@@ -168,6 +168,7 @@ def attach_lisa_callback(trainer: Any, tcfg: Any) -> bool:
         interval_steps=int(tcfg.lisa_interval_steps),
         reset_optimizer=bool(tcfg.lisa_reset_optimizer),
         seed=0,
+        train_embeddings=bool(tcfg.lisa_train_embeddings),
     )
     trainer.add_callback(LisaCallback(policy=policy))
     return True
