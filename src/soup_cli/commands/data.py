@@ -3361,6 +3361,7 @@ def best_of_n(
                 "temperature": temperature,
                 "max_new_tokens": max_new_tokens,
                 "device": device,
+                "revision": revision,
                 "seed": seed,
                 "trust_remote_code": trust,
                 "judge": judge,

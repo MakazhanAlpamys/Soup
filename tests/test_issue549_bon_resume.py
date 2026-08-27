@@ -207,6 +207,52 @@ def test_resume_rejects_changed_run_before_sampling(tmp_path, monkeypatch):
     assert generate_calls == []
 
 
+def test_resume_rejects_changed_local_model_revision_before_loading(
+    tmp_path, monkeypatch
+):
+    from soup_cli.commands.data import app
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts.jsonl").write_text('{"prompt":"one"}\n', encoding="utf-8")
+    load_calls = []
+    monkeypatch.setattr(
+        "soup_cli.commands.data._load_bon_model",
+        lambda *args, **kwargs: (
+            load_calls.append((args, kwargs)) or (object(), object())
+        ),
+    )
+    monkeypatch.setattr(
+        "soup_cli.utils.trust_remote.model_requires_trust_remote_code",
+        lambda _model: False,
+    )
+    monkeypatch.setattr(
+        "soup_cli.utils.best_of_n.sample_candidates",
+        lambda *_args, **_kwargs: ["candidate-a", "candidate-b"],
+    )
+    monkeypatch.setattr(
+        "soup_cli.eval.judge.JudgeEvaluator",
+        lambda **_kwargs: SimpleNamespace(
+            evaluate=lambda _prompt, response: SimpleNamespace(
+                weighted_score=float(len(response))
+            )
+        ),
+    )
+
+    first = CliRunner().invoke(app, _local_args(tmp_path, "--revision", "revision-a"))
+    assert first.exit_code == 0, (first.output, repr(first.exception))
+    assert load_calls[0][1] == {"revision": "revision-a"}
+    load_calls.clear()
+
+    resumed = CliRunner().invoke(
+        app,
+        _local_args(tmp_path, "--revision", "revision-b", "--resume"),
+    )
+
+    assert resumed.exit_code == 2, (resumed.output, repr(resumed.exception))
+    assert "does not match prompts or run configuration" in resumed.output
+    assert load_calls == []
+
+
 def test_final_datasets_use_exact_utf8_bytes_for_manifest_hashes(tmp_path, monkeypatch):
     from soup_cli.commands.data import app
     from soup_cli.utils.paths import atomic_write_text as real_text_write
