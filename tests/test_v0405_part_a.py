@@ -245,9 +245,11 @@ training: {{quantization: hqq:4bit}}
 
 
 class TestPPORewardModelQuantMenu:
-    """v0.40.5 review fix — `_load_reward_model` accepts `tcfg` and routes the
-    reward model through `build_quantization_config_for_loader` so it doesn't
-    silently OOM in full precision when the policy is GPTQ/AWQ/HQQ/etc.
+    """v0.40.5 review fix: `_load_reward_model` accepts `tcfg` and, when
+    `training.quantize_reward_model` is set (v0.53.0, opt-in, default False),
+    routes the reward model through `build_quantization_config_for_loader` so
+    it doesn't silently OOM in full precision when the policy is
+    GPTQ/AWQ/HQQ/etc.
     """
 
     def test_load_reward_model_signature_accepts_tcfg(self):
@@ -280,7 +282,7 @@ class TestPPORewardModelQuantMenu:
         # Live dispatch — mock the heavy dependencies (transformers,
         # trust_remote_code helpers, Quant Menu loader) and assert that
         # build_quantization_config_for_loader is called with the right
-        # tcfg + base when tcfg is supplied.
+        # tcfg + base when tcfg is supplied and quantize_reward_model=True.
         from soup_cli.config.schema import TrainingConfig
         from soup_cli.trainer import ppo as ppo_mod
 
@@ -326,7 +328,7 @@ class TestPPORewardModelQuantMenu:
             quant_menu, "build_quantization_config_for_loader", fake_loader
         )
 
-        tcfg = TrainingConfig(quantization="gptq")
+        tcfg = TrainingConfig(quantization="gptq", quantize_reward_model=True)
         ppo_mod._load_reward_model(
             "some-org/some-rm", device="cpu", trust_remote_code=False, tcfg=tcfg,
         )
@@ -385,6 +387,62 @@ class TestPPORewardModelQuantMenu:
 
         ppo_mod._load_reward_model("rm-path", device="cpu", trust_remote_code=False)
         assert called == [], "Quant Menu loader must not be called when tcfg is None"
+
+    def test_load_reward_model_quantize_reward_model_false_skips_quant_menu(
+        self, monkeypatch
+    ):
+        # v0.53.0 gate: tcfg is provided and quantization != "none", but
+        # training.quantize_reward_model is False (the default), so the
+        # reward model must NOT inherit the policy's quantization config.
+        from soup_cli.config.schema import TrainingConfig
+        from soup_cli.trainer import ppo as ppo_mod
+
+        called: list = []
+
+        def fake_loader(*args, **kwargs):
+            called.append(True)
+            return "FAKE_QUANT_OBJ"
+
+        from soup_cli.utils import quant_menu
+        monkeypatch.setattr(
+            quant_menu, "build_quantization_config_for_loader", fake_loader
+        )
+
+        import sys
+        import types as _types
+
+        class _FakeRM:
+            @classmethod
+            def from_pretrained(cls, path, **kwargs):
+                inst = cls()
+                inst.kwargs = kwargs
+                return inst
+
+            def eval(self):
+                pass
+
+        fake_tf = _types.ModuleType("transformers")
+        fake_tf.AutoModelForSequenceClassification = _FakeRM
+        monkeypatch.setitem(sys.modules, "transformers", fake_tf)
+
+        from soup_cli.utils import trust_remote
+        monkeypatch.setattr(
+            trust_remote, "model_requires_trust_remote_code", lambda _p: False
+        )
+        monkeypatch.setattr(
+            trust_remote, "resolve_trust_remote_code",
+            lambda *a, **kw: kw.get("requested", False),
+        )
+
+        tcfg = TrainingConfig(quantization="gptq")
+        assert tcfg.quantize_reward_model is False
+        ppo_mod._load_reward_model(
+            "some-org/some-rm", device="cpu", trust_remote_code=False, tcfg=tcfg,
+        )
+        assert called == [], (
+            "Quant Menu loader must not be called when quantize_reward_model "
+            "is False, even though tcfg is provided and quantization is set"
+        )
 
 
 class TestLoaderEntryPointNonSft:

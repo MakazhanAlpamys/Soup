@@ -783,10 +783,14 @@ def _load_reward_model(
     Reward models are typically AutoModelForSequenceClassification that output
     a scalar reward score for a given input sequence.
 
-    v0.40.5 #66: when ``tcfg`` is provided, the reward model is loaded with
-    the same quantization config as the policy model (Quant Menu). This keeps
-    the reward model from silently consuming full-precision VRAM and OOM-ing
-    when the policy is GPTQ/AWQ/HQQ/etc. Pass ``tcfg=None`` for unquantized.
+    v0.40.5 #66: when ``tcfg`` is provided and ``training.quantize_reward_model``
+    is set, the reward model is loaded with the same quantization config as
+    the policy model (Quant Menu), so it doesn't silently consume
+    full-precision VRAM and OOM when the policy is GPTQ/AWQ/HQQ/etc. v0.53.0
+    made this opt-in via that flag (default False) rather than unconditional,
+    matching ``double_quant_on``'s #321 precedent of honouring a configured
+    flag over a hardcoded default. Pass ``tcfg=None`` for unquantized
+    regardless of the flag.
     """
     from transformers import AutoModelForSequenceClassification
 
@@ -809,7 +813,7 @@ def _load_reward_model(
         "device_map": dev_map,
         "num_labels": 1,
     }
-    if tcfg is not None:
+    if tcfg is not None and tcfg.quantize_reward_model:
         from soup_cli.utils.quant_menu import build_quantization_config_for_loader
 
         quant_config_obj = build_quantization_config_for_loader(
