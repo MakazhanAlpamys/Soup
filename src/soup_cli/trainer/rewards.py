@@ -11,6 +11,7 @@ Custom reward functions can be loaded from a Python file with a
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
 import json
 import math
@@ -20,6 +21,7 @@ import shutil as _shutil
 import subprocess
 import sys
 import tempfile
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from functools import wraps
@@ -38,10 +40,12 @@ CODE_EXEC_TIMEOUT_SECONDS = 5
 CODE_EXEC_MAX_PARALLEL = 4
 CODE_EXEC_MAX_MEMORY_BYTES = 512 * 1024 * 1024  # 512 MB per run
 
+_SANDBOX_SEMAPHORE = threading.Semaphore(CODE_EXEC_MAX_PARALLEL)
+
 _CODE_EXEC_WARNING_SHOWN = False
 
 # Cached isolation strategy — recomputed on demand when tests reset to None
-_ISOLATION_STRATEGY_CACHE: "str | None" = None
+_ISOLATION_STRATEGY_CACHE: str | None = None
 
 # macOS sandbox-exec profile: default-deny, allow narrow process needs, block
 # network and writes outside /tmp. Defence-in-depth on top of RLIMIT + socket
@@ -78,6 +82,18 @@ SANDBOX_NETWORK_GUARD = (
     "socket.socket = _blocked\n"
     "socket.create_connection = _blocked\n"
 )
+
+
+def _get_safe_sandbox_env() -> dict[str, str]:
+    """Construct a minimal, secret-free environment for sandboxed processes."""
+    safe_keys = {"PATH", "LANG", "LC_ALL", "TMPDIR", "TERM", "TZ"}
+    env = {k: os.environ[k] for k in safe_keys if k in os.environ}
+    if "PATH" not in env:
+        env["PATH"] = "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+    env["LANG"] = env.get("LANG", "C.UTF-8")
+    env["LC_ALL"] = env.get("LC_ALL", "C.UTF-8")
+    env["HOME"] = "/tmp"
+    return env
 
 
 def _compute_isolation_strategy() -> str:
@@ -137,7 +153,6 @@ def _try_unshare_namespaces(strict: bool = False) -> None:
         if strict:
             raise
         # Continue with weaker isolation rather than failing the run.
-        pass
 
 
 def _show_code_exec_warning_once() -> None:
@@ -255,7 +270,7 @@ def _extract_answer(text: str) -> str | None:
 _MATH_NUM_RE = re.compile(r"-?\d+(?:\.\d+)?")
 
 
-def _extract_numeric_answer(text: str) -> "float | None":
+def _extract_numeric_answer(text: str) -> float | None:
     """Extract a numeric answer using safe regex (never calls eval())."""
     answer_str = _extract_answer(text)
     if answer_str is None:
@@ -334,6 +349,24 @@ def _apply_rlimit(strict_namespaces: bool = False) -> None:
             resource.RLIMIT_CPU,
             (CODE_EXEC_TIMEOUT_SECONDS, CODE_EXEC_TIMEOUT_SECONDS),
         )
+        # Bounded file size creation (10MB) to prevent disk fill attacks
+        if hasattr(resource, "RLIMIT_FSIZE"):
+            resource.setrlimit(
+                resource.RLIMIT_FSIZE,
+                (10 * 1024 * 1024, 10 * 1024 * 1024),
+            )
+        # Prevent core dumps
+        if hasattr(resource, "RLIMIT_CORE"):
+            resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+        # Cap open file descriptors
+        if hasattr(resource, "RLIMIT_NOFILE"):
+            resource.setrlimit(resource.RLIMIT_NOFILE, (256, 256))
+        # Cap child process/thread creation if supported
+        if hasattr(resource, "RLIMIT_NPROC"):
+            try:
+                resource.setrlimit(resource.RLIMIT_NPROC, (64, 64))
+            except (ValueError, OSError):
+                pass
     except (ImportError, ValueError, OSError):
         pass
     # Linux defence-in-depth: best-effort unshare into private namespaces.
@@ -350,20 +383,24 @@ class SandboxProcessResult:
     stderr: str
     timed_out: bool = False
     output_exceeded: bool = False
+    launch_failed: bool = False
 
 
 def _run_sandboxed_subprocess(
     argv: list[str],
-    preexec_fn: "Callable | None",
+    preexec_fn: Callable | None,
     timeout: int = CODE_EXEC_TIMEOUT_SECONDS,
     max_output_bytes: int = MAX_CODE_OUTPUT_BYTES,
+    env: dict[str, str] | None = None,
 ) -> SandboxProcessResult:
-    """Run a command in a subprocess sandbox with timeout, rlimits, and output caps.
+    """Run a command in a subprocess sandbox with timeout, rlimits, bounded streaming, and output caps.
 
     Security posture:
-    - Hard wall-clock timeout via subprocess.run(timeout=...).
-    - POSIX ``RLIMIT_AS`` (address space) and ``RLIMIT_CPU`` via preexec_fn.
-    - Output truncated to ``max_output_bytes``.
+    - Concurrency cap via _SANDBOX_SEMAPHORE.
+    - Hard wall-clock timeout via subprocess.Popen + wait(timeout=...).
+    - POSIX ``RLIMIT_AS`` (address space), ``RLIMIT_CPU``, and ``RLIMIT_FSIZE`` via preexec_fn.
+    - Bounded streaming output: reading is bounded and processes exceeding max_output_bytes are killed immediately.
+    - Minimal sanitized environment (no server secrets).
     - Subprocess cwd is a freshly created temporary directory per run.
 
     Returns a structured result that keeps stderr and distinguishes timeout,
@@ -373,42 +410,108 @@ def _run_sandboxed_subprocess(
         sandbox_bin = _shutil.which("sandbox-exec") or "/usr/bin/sandbox-exec"
         argv = [sandbox_bin, "-p", MACOS_SANDBOX_PROFILE, *argv]
 
-    with tempfile.TemporaryDirectory(prefix="soup-sandbox-") as tmpdir:
+    if env is None:
+        env = _get_safe_sandbox_env()
+
+    with _SANDBOX_SEMAPHORE, tempfile.TemporaryDirectory(prefix="soup-sandbox-") as tmpdir:
         try:
-            proc = subprocess.run(  # noqa: S603 — list args, trusted interpreter
+            proc = subprocess.Popen(
                 argv,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 cwd=tmpdir,
-                preexec_fn=preexec_fn,  # noqa: PLW1509 — intentional RLIMIT application
+                preexec_fn=preexec_fn,
+                env=env,
             )
+        except (PermissionError, OSError, ValueError) as exc:
+            return SandboxProcessResult(
+                None, "", f"sandbox process failed to start: {exc}", launch_failed=True
+            )
+
+        stdout_chunks: list[bytes] = []
+        stderr_chunks: list[bytes] = []
+        stdout_len = 0
+        stderr_len = 0
+        output_exceeded = False
+        lock = threading.Lock()
+
+        def _reader(pipe, is_stdout: bool) -> None:
+            nonlocal output_exceeded, stdout_len, stderr_len
+            if pipe is None:
+                return
+            try:
+                while True:
+                    chunk = pipe.read(4096)
+                    if not chunk:
+                        break
+                    with lock:
+                        if is_stdout:
+                            stdout_chunks.append(chunk)
+                            stdout_len += len(chunk)
+                        else:
+                            stderr_chunks.append(chunk)
+                            stderr_len += len(chunk)
+                        if stdout_len + stderr_len > max_output_bytes:
+                            output_exceeded = True
+                            try:
+                                proc.kill()
+                            except (ProcessLookupError, OSError):
+                                pass
+                            break
+            except (OSError, ValueError):
+                pass
+            finally:
+                with contextlib.suppress(Exception):
+                    pipe.close()
+
+        t_out = threading.Thread(target=_reader, args=(proc.stdout, True), daemon=True)
+        t_err = threading.Thread(target=_reader, args=(proc.stderr, False), daemon=True)
+        t_out.start()
+        t_err.start()
+
+        try:
+            proc.wait(timeout=timeout)
+            t_out.join(timeout=1.0)
+            t_err.join(timeout=1.0)
         except subprocess.TimeoutExpired:
+            try:
+                proc.kill()
+            except (ProcessLookupError, OSError):
+                pass
+            with contextlib.suppress(Exception):
+                proc.wait(timeout=1.0)
+            t_out.join(timeout=0.5)
+            t_err.join(timeout=0.5)
             return SandboxProcessResult(None, "", "", timed_out=True)
-        except (OSError, ValueError):
-            return SandboxProcessResult(None, "", "sandbox process failed to start")
 
-    stdout = (proc.stdout or "").strip()
-    stderr = (proc.stderr or "").strip()
-    output_size = len(stdout.encode("utf-8", errors="replace")) + len(
-        stderr.encode("utf-8", errors="replace")
-    )
-    if output_size > max_output_bytes:
-        return SandboxProcessResult(
-            proc.returncode,
-            "",
-            "sandbox output exceeded limit",
-            output_exceeded=True,
-        )
-    return SandboxProcessResult(proc.returncode, stdout, stderr)
+        if output_exceeded:
+            return SandboxProcessResult(
+                proc.returncode if proc.returncode is not None else 1,
+                "",
+                "sandbox output exceeded limit",
+                output_exceeded=True,
+            )
+
+        raw_out = b"".join(stdout_chunks)
+        raw_err = b"".join(stderr_chunks)
+        if len(raw_out) + len(raw_err) > max_output_bytes:
+            return SandboxProcessResult(
+                proc.returncode if proc.returncode is not None else 1,
+                "",
+                "sandbox output exceeded limit",
+                output_exceeded=True,
+            )
+
+        stdout = raw_out.decode("utf-8", errors="replace").strip()
+        stderr = raw_err.decode("utf-8", errors="replace").strip()
+        return SandboxProcessResult(proc.returncode, stdout, stderr)
 
 
-def _run_code_sandbox(code: str) -> "str | None":
+def _run_code_sandbox(code: str) -> str | None:
     """Run code in a subprocess sandbox with timeout, rlimits, and output caps.
 
     Security posture (best-effort, NOT a strong sandbox):
-    - Hard wall-clock timeout via subprocess.run(timeout=...).
+    - Hard wall-clock timeout via subprocess.
     - POSIX ``RLIMIT_AS`` (address space) and ``RLIMIT_CPU`` via preexec_fn.
     - Output truncated to ``MAX_CODE_OUTPUT_BYTES``.
     - Python-level socket monkey-patch (bypassable via os.system / ctypes).
@@ -427,7 +530,7 @@ def _run_code_sandbox(code: str) -> "str | None":
     argv: list[str] = [sys.executable, "-I", "-S", "-c", wrapped]
 
     result = _run_sandboxed_subprocess(argv, preexec)
-    if result.returncode != 0 or result.timed_out or result.output_exceeded:
+    if result.returncode != 0 or result.timed_out or result.output_exceeded or result.launch_failed:
         return None
     return result.stdout
 
@@ -450,7 +553,10 @@ def _run_bash_sandbox(command: str) -> SandboxProcessResult:
 
     argv: list[str] = ["bash", "-c", command]
 
-    return _run_sandboxed_subprocess(argv, preexec)
+    result = _run_sandboxed_subprocess(argv, preexec)
+    if result.launch_failed:
+        raise PermissionError(result.stderr)
+    return result
 
 
 def code_exec_reward(
@@ -516,7 +622,7 @@ def _score_against_schema(data: object, schema: dict) -> float:
     return 1.0 if _type_matches(data, schema.get("type")) else 0.0
 
 
-def _type_matches(value: object, type_name: "str | None") -> bool:
+def _type_matches(value: object, type_name: str | None) -> bool:
     if type_name is None:
         return True
     mapping = {
@@ -631,7 +737,7 @@ def validate_reward_funcs(reward_funcs: Any) -> Any:
 
 def load_reward_fn(
     reward_fn_spec: str,
-    verifiable_domain: "str | None" = None,
+    verifiable_domain: str | None = None,
 ) -> Callable:
     """Load a reward function by name or from a custom Python file.
 
@@ -696,7 +802,7 @@ def load_reward_fn(
 
 def load_reward_fns(
     reward_fn_spec: str,
-    verifiable_domain: "str | None" = None,
+    verifiable_domain: str | None = None,
 ) -> list[Callable]:
     """Load one OR MORE reward functions from a comma-separated spec (v0.71.40 #311).
 
