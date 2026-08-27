@@ -929,7 +929,7 @@ class TestInstantiateTrainerPlugins:
 # ----- #103 /v1/tools/{python,bash,web_search} live ---------------------
 
 
-def _create_test_app():
+def _create_test_app(host: str = "127.0.0.1", auth_token: str | None = None):
     """Build a test FastAPI app via _create_app (lazy fastapi import)."""
     try:
         import fastapi  # noqa: F401
@@ -944,6 +944,8 @@ def _create_test_app():
         device="cpu",
         model_name="test-model",
         max_tokens_default=128,
+        host=host,
+        auth_token=auth_token,
     )
 
 
@@ -1221,6 +1223,113 @@ class TestToolEndpointsLive:
         # Python: should return 200 with sandbox response.
         resp = client.post("/v1/tools/python", json={"code": "print(1)"})
         assert resp.status_code != 501
+
+    def test_bash_tool_auth_required_on_non_loopback_host(self):
+        """Exposed host requires auth_token; requests without valid token get 401."""
+        from fastapi.testclient import TestClient
+
+        app = _create_test_app(host="0.0.0.0", auth_token=None)
+        client = TestClient(app)
+        resp = client.post("/v1/tools/bash", json={"command": "echo 1"})
+        assert resp.status_code == 401
+        assert "Authentication required on non-loopback host" in resp.text
+
+        resp_py = client.post("/v1/tools/python", json={"code": "print(1)"})
+        assert resp_py.status_code == 401
+
+    def test_bash_tool_bearer_auth_validation(self):
+        """Bearer auth is enforced when auth_token is set."""
+        import sys
+
+        from fastapi.testclient import TestClient
+
+        from soup_cli.trainer.rewards import _get_isolation_strategy
+
+        app = _create_test_app(host="127.0.0.1", auth_token="test-secret-token")
+        client = TestClient(app)
+
+        # Missing auth header -> 401
+        resp = client.post("/v1/tools/bash", json={"command": "echo hello"})
+        assert resp.status_code == 401
+        assert "Invalid or missing bearer token" in resp.text
+
+        # Wrong bearer token -> 401
+        resp = client.post(
+            "/v1/tools/bash",
+            json={"command": "echo hello"},
+            headers={"Authorization": "Bearer wrong-token"},
+        )
+        assert resp.status_code == 401
+
+        # Correct bearer token -> 200 (or 501 on Windows/best-effort)
+        resp = client.post(
+            "/v1/tools/bash",
+            json={"command": "echo hello"},
+            headers={"Authorization": "Bearer test-secret-token"},
+        )
+        if sys.platform == "win32" or _get_isolation_strategy() == "best-effort":
+            assert resp.status_code == 501
+        else:
+            assert resp.status_code == 200
+            assert resp.json()["stdout"] == "hello"
+
+    def test_bash_tool_bounded_streaming_kills_massive_output(self):
+        """Bounded streaming kills process when stdout exceeds limit without OOM."""
+        import sys
+
+        from soup_cli.trainer.rewards import _run_sandboxed_subprocess
+
+        code = "print('X' * 50000)"
+        result = _run_sandboxed_subprocess(
+            [sys.executable, "-c", code],
+            preexec_fn=None,
+            max_output_bytes=1000,
+        )
+        assert result.output_exceeded is True
+        assert result.stderr == "sandbox output exceeded limit"
+        assert result.stdout == ""
+
+    def test_bash_tool_environment_secret_isolation(self, monkeypatch):
+        """Server secrets in os.environ are not inherited by sandboxed child."""
+        import sys
+
+        from soup_cli.trainer.rewards import _get_safe_sandbox_env, _run_sandboxed_subprocess
+
+        monkeypatch.setenv("INJECTED_SERVER_SECRET", "super_secret_value_12345")
+
+        env = _get_safe_sandbox_env()
+        assert "INJECTED_SERVER_SECRET" not in env
+
+        res = _run_sandboxed_subprocess(
+            [
+                sys.executable,
+                "-c",
+                "import os; print(os.environ.get('INJECTED_SERVER_SECRET', 'NOT_FOUND'))",
+            ],
+            preexec_fn=None,
+            env=env,
+        )
+        assert res.stdout == "NOT_FOUND"
+
+    def test_bash_tool_restricted_linux_fails_closed_501(self, monkeypatch):
+        """Restricted Linux (e.g. Docker seccomp blocking unshare) surfaces 501, not 500."""
+        from fastapi.testclient import TestClient
+
+        monkeypatch.setattr(
+            "soup_cli.trainer.rewards._get_isolation_strategy", lambda: "namespaces"
+        )
+
+        def mock_unshare_failure(_cmd):
+            raise PermissionError("unshare(CLONE_NEWUSER) not permitted in restricted container")
+
+        monkeypatch.setattr("soup_cli.trainer.rewards._run_bash_sandbox", mock_unshare_failure)
+
+        app = _create_test_app()
+        client = TestClient(app)
+        resp = client.post("/v1/tools/bash", json={"command": "echo hello"})
+        assert resp.status_code == 501
+        assert "not permitted in restricted container" in resp.text
+
 
 
 # ----- #102 vLLM /v1/messages + streaming SSE -----------------------------
