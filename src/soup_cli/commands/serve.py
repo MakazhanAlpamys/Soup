@@ -1278,11 +1278,16 @@ def _serve_sglang(
     )
     console.print("[bold green]SGLang runtime ready![/]")
 
+    # Load the tokenizer whose chat template the shared prompt builder applies
+    # (#360). None degrades to the legacy role-prefixed prompt, same as vLLM.
+    tokenizer = _load_serve_tokenizer(model_path, base_model)
+
     app = create_sglang_app(
         runtime=runtime,
         runtime_model_name=runtime_model_name,
         model_name=str(model_path.name),
         max_tokens_default=max_tokens_default,
+        tokenizer=tokenizer,
     )
 
     return app

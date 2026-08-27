@@ -302,6 +302,13 @@ soup serve --model ./output --backend sglang
 soup serve --model ./output --backend sglang --tensor-parallel 2
 ```
 
+Like the transformers and vLLM backends, the SGLang backend applies the
+**model's own chat template** via the same shared prompt builder (falling back
+to a generic `User:` / `Assistant:` prompt for template-less models), and
+`finish_reason` reports `"length"` when a response hits `max_tokens` and
+`"stop"` otherwise — so a client doing continue-on-length can tell a truncated
+answer from a completed one (#360).
+
 ### Speculative Decoding
 
 Use a smaller draft model to speed up generation. **Measure before you trust it** — see
