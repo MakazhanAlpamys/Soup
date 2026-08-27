@@ -305,19 +305,17 @@ def serve(
     ),
 ):
     """Start a local inference server with OpenAI-compatible API."""
-    # Security: the transformers backend exposes a best-effort code-exec tool
-    # endpoint (/v1/tools/python). Binding a non-loopback host without a tool
-    # auth token puts that endpoint on the network unauthenticated.
+    # Security: the server exposes code-exec tool endpoints (/v1/tools/python, /v1/tools/bash).
+    # Binding a non-loopback host without a tool auth token exposes unauthenticated code execution.
     if host not in {"127.0.0.1", "localhost", "::1"} and not tool_auth_token:
         from rich.markup import escape as _rich_escape
 
         console.print(
-            f"[bold yellow]Security warning:[/] binding non-loopback host "
-            f"'{_rich_escape(str(host))}' exposes the unauthenticated code-exec "
-            "tool endpoint (/v1/tools/python) to the network. Pass "
-            "[bold]--tool-auth-token <secret>[/] to require a bearer token, or "
-            "use [bold]--host 127.0.0.1[/] (the default)."
+            f"[red]Error:[/] binding non-loopback host '{_rich_escape(str(host))}' "
+            "requires [bold]--tool-auth-token <secret>[/] to protect code-execution "
+            "tool endpoints (/v1/tools/bash, /v1/tools/python)."
         )
+        raise typer.Exit(code=2)
     # v0.71.12 #221 — validate `--bank` up front (path containment + backend)
     # so a typo / bad path surfaces before backend init.
     if bank is not None:
@@ -1100,6 +1098,7 @@ def serve(
             reasoning_parser=resolved_reasoning_parser,
             record_thumbs_db=record_thumbs_db,
             auth_token=tool_auth_token,
+            host=host,
             loaded_bank=loaded_bank,
             mole_runtime=mole_runtime,
             kv_cache_generate_kwargs=(
@@ -1594,6 +1593,7 @@ def _create_app(
     web_search_config: Any = None,
     web_search_backend: Any = None,
     auth_token: Optional[str] = None,
+    host: str = "127.0.0.1",
     reasoning_parser: Optional[str] = None,
     record_thumbs_db: Optional[str] = None,
     loaded_bank: Any = None,
@@ -1619,7 +1619,12 @@ def _create_app(
     from pydantic import Field
 
     def _check_tool_auth(authorization: Optional[str]) -> None:
-        """v0.53.7 H-A: gate tool endpoints when ``auth_token`` is set."""
+        """v0.53.7 H-A: gate tool endpoints when host is exposed or auth_token is set."""
+        if host not in {"127.0.0.1", "localhost", "::1"} and not auth_token:
+            raise HTTPException(
+                status_code=401,
+                detail="Authentication required on non-loopback host",
+            )
         if not auth_token:
             return
         expected = f"Bearer {auth_token}"
@@ -2064,7 +2069,7 @@ def _create_app(
                 )
 
             result = _run_bash_sandbox(command)
-        except NotImplementedError as exc:
+        except (NotImplementedError, PermissionError) as exc:
             raise HTTPException(
                 status_code=501,
                 detail=str(exc),
@@ -2074,6 +2079,11 @@ def _create_app(
         except Exception as exc:  # noqa: BLE001
             logger.debug("/v1/tools/bash sandbox error: %s", exc)
             raise HTTPException(status_code=500, detail="Internal server error")
+        if result.launch_failed:
+            raise HTTPException(
+                status_code=501,
+                detail="bash sandbox failed to initialize OS-level isolation",
+            )
         exit_code = result.returncode if result.returncode is not None else 1
         if result.timed_out:
             exit_code = 124
