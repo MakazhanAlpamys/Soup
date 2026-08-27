@@ -247,6 +247,67 @@ def test_final_datasets_use_exact_utf8_bytes_for_manifest_hashes(tmp_path, monke
     ).hexdigest()
 
 
+@pytest.mark.parametrize("pre_existing", [False, True])
+@pytest.mark.parametrize("failure_after_replace", [False, True])
+@pytest.mark.parametrize("failure_field", ["emit-pairs", "manifest"])
+def test_final_publication_rolls_back_as_a_group_on_member_failure(
+    tmp_path, monkeypatch, pre_existing, failure_after_replace, failure_field
+):
+    from soup_cli.commands.data import app
+    from soup_cli.utils.paths import atomic_write_bytes as real_bytes_write
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts.jsonl").write_text(
+        '{"prompt":"one"}\n', encoding="utf-8"
+    )
+    monkeypatch.setattr(
+        "soup_cli.utils.magpie.make_magpie_generate_fn",
+        lambda *_args, **_kwargs: lambda _prompt: "candidate",
+    )
+    monkeypatch.setattr(
+        "soup_cli.eval.judge.JudgeEvaluator",
+        lambda **_kwargs: SimpleNamespace(
+            evaluate=lambda _prompt, response: SimpleNamespace(
+                weighted_score=float(len(response))
+            )
+        ),
+    )
+
+    artifacts = {
+        tmp_path / "sft.jsonl": b"previous sft\n",
+        tmp_path / "dpo.jsonl": b"previous dpo\n",
+        tmp_path / "sft.jsonl.manifest.json": b"previous manifest\n",
+    }
+    if pre_existing:
+        for path, content in artifacts.items():
+            path.write_bytes(content)
+
+    def fail_group_write(data, path, *, prefix=".soup.", suffix=".tmp", field):
+        if field == failure_field:
+            if failure_after_replace:
+                real_bytes_write(
+                    data, path, prefix=prefix, suffix=suffix, field=field
+                )
+            raise OSError("simulated grouped publication failure")
+        return real_bytes_write(
+            data, path, prefix=prefix, suffix=suffix, field=field
+        )
+
+    monkeypatch.setattr(
+        "soup_cli.utils.paths.atomic_write_bytes", fail_group_write
+    )
+    result = CliRunner().invoke(app, _args(tmp_path))
+
+    assert result.exit_code == 1, (result.output, repr(result.exception))
+    assert "Failed to write output" in result.output
+    for path, old_content in artifacts.items():
+        if pre_existing:
+            assert path.read_bytes() == old_content
+        else:
+            assert not path.exists()
+    assert not list(tmp_path.glob(".soup.rollback.*"))
+
+
 def test_checkpoint_rejects_duplicate_or_reordered_indexes(tmp_path, monkeypatch):
     from soup_cli.utils.best_of_n_checkpoint import load_checkpoint
 

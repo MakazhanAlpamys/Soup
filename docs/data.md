@@ -213,11 +213,13 @@ Every command applies the project-wide TOCTOU policy (`os.lstat + S_ISLNK` symli
 `best-of-n` fsyncs each completed prompt group to a private recovery journal
 (`<output>.checkpoint.jsonl` by default). `--resume` reuses only a sequential
 prefix whose prompt and run-configuration digest matches exactly, so completed
-prompts are not sampled or judged twice. Final SFT and optional DPO files remain
-atomic outputs; `<output>.manifest.json` is written last and binds their exact
-SHA-256 hashes and row counts as one generation. Keep or archive the checkpoint
-after success if reproducible rematerialization is useful; it contains dataset
-content and should be protected like the generated dataset.
+prompts are not sampled or judged twice. Before final publication, Soup snapshots
+any prior SFT, DPO, and manifest targets. Each file remains an atomic replacement,
+the manifest is written last, and any failed replacement restores the complete old
+generation or removes the newly created set. The manifest binds the exact SHA-256
+hashes and row counts as one generation. Keep or archive the checkpoint after
+success if reproducible rematerialization is useful; it contains dataset content
+and should be protected like the generated dataset.
 
 ### Custom Transforms
 

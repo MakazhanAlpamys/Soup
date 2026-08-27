@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import stat
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -179,6 +180,128 @@ def dataset_text(rows: list[dict]) -> str:
         json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n"
         for row in rows
     )
+
+
+def _snapshot_for_rollback(path: str, *, field: str) -> str | None:
+    """Copy an existing regular file to a private sibling for rollback."""
+    enforce_under_cwd_and_no_symlink(path, field)
+    if not os.path.lexists(path):
+        return None
+
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+    source_fd = os.open(path, flags)
+    backup_path = ""
+    backup_fd = -1
+    copied = False
+    try:
+        source_stat = os.fstat(source_fd)
+        if not stat.S_ISREG(source_stat.st_mode):
+            raise ValueError(f"{field} must be a regular file")
+        parent = os.path.dirname(os.path.abspath(path)) or "."
+        backup_fd, backup_path = tempfile.mkstemp(
+            prefix=".soup.rollback.", suffix=".tmp", dir=parent
+        )
+        if hasattr(os, "fchmod"):
+            os.fchmod(backup_fd, stat.S_IMODE(source_stat.st_mode))
+        while True:
+            chunk = os.read(source_fd, 1024 * 1024)
+            if not chunk:
+                break
+            view = memoryview(chunk)
+            while view:
+                written = os.write(backup_fd, view)
+                if written <= 0:
+                    raise OSError("rollback snapshot made no progress")
+                view = view[written:]
+        os.fsync(backup_fd)
+        copied = True
+    finally:
+        os.close(source_fd)
+        if backup_fd >= 0:
+            os.close(backup_fd)
+        if not copied and backup_path:
+            try:
+                os.unlink(backup_path)
+            except OSError:
+                pass
+    return backup_path
+
+
+def _cleanup_snapshot(path: str | None) -> None:
+    if path and os.path.exists(path):
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
+
+def publish_generation(
+    *,
+    sft_path: str,
+    sft_text: str,
+    pair_path: str,
+    pair_text: str,
+    manifest_path: str,
+    manifest_text_value: str,
+) -> None:
+    """Publish one SFT/DPO/manifest generation with all-or-old rollback.
+
+    Filesystems cannot atomically replace several independent paths in one
+    operation. Snapshot every pre-existing target before the first replacement,
+    publish the manifest last, and restore the complete old generation (or
+    remove newly created targets) if any replacement fails.
+    """
+    from soup_cli.utils import paths as path_utils
+
+    artifacts = [(sft_text.encode("utf-8"), sft_path, "output")]
+    if pair_path:
+        artifacts.append((pair_text.encode("utf-8"), pair_path, "emit-pairs"))
+    artifacts.append(
+        (manifest_text_value.encode("utf-8"), manifest_path, "manifest")
+    )
+
+    snapshots: dict[str, str | None] = {}
+    try:
+        for _data, path, field in artifacts:
+            snapshots[path] = _snapshot_for_rollback(path, field=field)
+    except Exception:
+        for backup_path in snapshots.values():
+            _cleanup_snapshot(backup_path)
+        raise
+
+    attempted: list[tuple[str, str]] = []
+    cleanup_snapshots = True
+    try:
+        for data, path, field in artifacts:
+            attempted.append((path, field))
+            path_utils.atomic_write_bytes(data, path, field=field)
+    except BaseException as publish_error:
+        rollback_errors: list[str] = []
+        for path, field in reversed(attempted):
+            backup_path = snapshots[path]
+            try:
+                if backup_path is not None:
+                    os.replace(backup_path, path)
+                    snapshots[path] = None
+                elif os.path.lexists(path):
+                    enforce_under_cwd_and_no_symlink(path, field)
+                    os.unlink(path)
+            except (OSError, TypeError, ValueError) as rollback_error:
+                rollback_errors.append(
+                    f"{field}: {type(rollback_error).__name__}"
+                )
+        if rollback_errors:
+            cleanup_snapshots = False
+            joined = ", ".join(rollback_errors)
+            raise OSError(
+                "Best-of-N publication failed and rollback was incomplete "
+                f"({joined}); private .soup.rollback.* snapshots were retained"
+            ) from publish_error
+        raise
+    finally:
+        if cleanup_snapshots:
+            for backup_path in snapshots.values():
+                _cleanup_snapshot(backup_path)
 
 
 def manifest_text(

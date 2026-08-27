@@ -3062,11 +3062,7 @@ def best_of_n(
     from soup_cli.utils import best_of_n as bon
     from soup_cli.utils import best_of_n_checkpoint as bon_checkpoint
     from soup_cli.utils.magpie import make_magpie_generate_fn
-    from soup_cli.utils.paths import (
-        atomic_write_bytes,
-        atomic_write_text,
-        enforce_under_cwd_and_no_symlink,
-    )
+    from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
     from soup_cli.utils.trust_remote import (
         model_requires_trust_remote_code,
         resolve_trust_remote_code,
@@ -3286,19 +3282,18 @@ def best_of_n(
         if pair is not None:
             pair_rows.append(pair)
 
-    # Atomic writes (mkstemp + os.replace + re-validated containment) so a
-    # symlink swapped in after the fast-fail check cannot redirect the write.
-    # The manifest is committed last and binds an optional SFT/DPO pair by hash.
+    # Snapshot every prior target before replacement, commit the manifest last,
+    # and restore the complete old generation if any publication step fails.
     sft_text = bon_checkpoint.dataset_text(sft_rows)
     pair_text = bon_checkpoint.dataset_text(pair_rows)
     try:
-        atomic_write_bytes(sft_text.encode("utf-8"), output, field="output")
-        if emit_pairs:
-            atomic_write_bytes(
-                pair_text.encode("utf-8"), emit_pairs, field="emit-pairs"
-            )
-        atomic_write_text(
-            bon_checkpoint.manifest_text(
+        bon_checkpoint.publish_generation(
+            sft_path=output,
+            sft_text=sft_text,
+            pair_path=emit_pairs,
+            pair_text=pair_text,
+            manifest_path=manifest_path,
+            manifest_text_value=bon_checkpoint.manifest_text(
                 digest=digest,
                 sft_path=output,
                 sft_text=sft_text,
@@ -3307,8 +3302,6 @@ def best_of_n(
                 pair_text=pair_text,
                 pair_count=len(pair_rows),
             ),
-            manifest_path,
-            field="manifest",
         )
     except (OSError, ValueError, TypeError) as exc:
         console.print(f"[red]Failed to write output: {_escape(str(exc))}[/]")
