@@ -76,34 +76,64 @@ def _make_grpo_trainer_variant_cached(base_cls: type, variant: str) -> type:
                 reason,
             )
 
-        def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
-            # v0.53.11 review fix (code-review HIGH) — read kernel inputs
-            # FIRST and only call super() as a fallback. The previous
-            # ordering ran an extra forward pass on every step that was
-            # discarded when the kernel produced a loss, doubling VRAM
-            # peak. The TRL trainer stores per-batch tensors on ``inputs``
-            # by the time compute_loss is called, so we can probe them
-            # without burning a forward pass.
-            #
-            # Probe TRL ≥0.9 attribute name ``per_token_logps`` — drop the
-            # earlier ``logits_to_keep`` probe (code-review HIGH fix:
-            # ``logits_to_keep`` is a position mask, not log-probs).
+        def _compute_variant_loss(self, model, inputs):
+            """Evaluate the requested GRPO variant loss on the batch.
+
+            Reuses TRL's ``_get_per_token_logps_and_entropies`` to obtain
+            per-token log probabilities in a single forward pass without
+            duplicating forward computation or allocating extra VRAM.
+            """
             logp_new = _read_attr(inputs, "per_token_logps")
-            logp_old = _read_attr(inputs, "old_per_token_logps")
-            if logp_old is None:
-                logp_old = _read_attr(inputs, "ref_per_token_logps")
-            advantages = _read_attr(inputs, "advantages")
+            prompt_ids = _read_attr(inputs, "prompt_ids")
+            completion_ids = _read_attr(inputs, "completion_ids")
+            prompt_mask = _read_attr(inputs, "prompt_mask")
             completion_mask = _read_attr(inputs, "completion_mask")
+            advantages = _read_attr(inputs, "advantages")
+
+            if logp_new is None and prompt_ids is not None and completion_ids is not None:
+                import torch
+
+                if prompt_mask is None:
+                    prompt_mask = torch.ones_like(prompt_ids)
+                if completion_mask is None:
+                    completion_mask = torch.ones_like(completion_ids)
+                input_ids = torch.cat([prompt_ids, completion_ids], dim=1)
+                attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
+                logits_to_keep = completion_ids.size(1)
+
+                if hasattr(self, "_get_per_token_logps_and_entropies"):
+                    logp_new, _ = self._get_per_token_logps_and_entropies(
+                        model,
+                        input_ids,
+                        attention_mask,
+                        logits_to_keep,
+                        compute_entropy=False,
+                        pixel_values=_read_attr(inputs, "pixel_values"),
+                        image_grid_thw=_read_attr(inputs, "image_grid_thw"),
+                        num_images=_read_attr(inputs, "num_images"),
+                        pixel_attention_mask=_read_attr(inputs, "pixel_attention_mask"),
+                        image_sizes=_read_attr(inputs, "image_sizes"),
+                        token_type_ids=_read_attr(inputs, "token_type_ids"),
+                        mm_token_type_ids=_read_attr(inputs, "mm_token_type_ids"),
+                    )
+
+            logp_old = _read_attr(inputs, "old_per_token_logps")
+            if logp_old is None and logp_new is not None:
+                logp_old = logp_new.detach()
 
             if logp_new is None or logp_old is None or advantages is None:
-                # Fall back to the original loss — defence-in-depth so a
-                # TRL internal rename does not crash the training loop.
                 self._warn_fallback("missing per-token log-prob inputs")
-                return super().compute_loss(model, inputs, return_outputs=return_outputs, **kwargs)
+                return None
 
-            beta_attr = getattr(self.args, "beta", None)
+            beta_attr = getattr(getattr(self, "args", None), "beta", None)
             beta = float(beta_attr) if beta_attr is not None else 0.0
             delta = getattr(self, "_soup_grpo_delta", None)
+            ref_logp = _read_attr(inputs, "ref_per_token_logps")
+            mask = completion_mask
+            tool_mask = _read_attr(inputs, "tool_mask")
+            if mask is not None and tool_mask is not None:
+                mask = mask * tool_mask
+
             try:
                 variant_loss = apply_variant_loss(
                     self._soup_grpo_variant,
@@ -112,17 +142,41 @@ def _make_grpo_trainer_variant_cached(base_cls: type, variant: str) -> type:
                     advantages=advantages,
                     beta=beta,
                     delta=delta,
-                    completion_mask=completion_mask,
+                    completion_mask=mask,
+                    reference_logp=ref_logp,
                 )
             except (TypeError, ValueError) as exc:
                 self._warn_fallback(f"kernel error: {exc}")
-                return super().compute_loss(model, inputs, return_outputs=return_outputs, **kwargs)
+                return None
+
             if variant_loss is None:
-                self._warn_fallback("kernel returned None")
+                return None
+
+            mode = "train" if getattr(getattr(self, "model", model), "training", True) else "eval"
+            normalizer = (
+                getattr(self, "current_gradient_accumulation_steps", 1.0)
+                if mode == "train"
+                else 1.0
+            )
+            return variant_loss / normalizer
+
+        def _compute_loss(self, model, inputs):
+            loss = self._compute_variant_loss(model, inputs)
+            if loss is not None:
+                return loss
+            if hasattr(super(), "_compute_loss"):
+                return super()._compute_loss(model, inputs)
+            return super().compute_loss(model, inputs)
+
+        def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
+            if hasattr(super(), "_compute_loss"):
                 return super().compute_loss(model, inputs, return_outputs=return_outputs, **kwargs)
-            if return_outputs:
-                return variant_loss, None
-            return variant_loss
+            loss = self._compute_variant_loss(model, inputs)
+            if loss is not None:
+                if return_outputs:
+                    return loss, None
+                return loss
+            return super().compute_loss(model, inputs, return_outputs=return_outputs, **kwargs)
 
     _GRPOTrainerVariant.__name__ = f"_GRPOTrainerVariant_{variant}"
     return _GRPOTrainerVariant
