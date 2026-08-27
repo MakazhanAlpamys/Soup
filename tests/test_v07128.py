@@ -527,8 +527,13 @@ class TestMutatingTools:
     def test_execute_refusal_names_flag_and_preserves_no_execution(self):
         with pytest.raises(reg.McpToolError) as exc:
             reg._refuse_execute("train_execute")({})
-        assert "allow-execute" in str(exc.value)
-        assert "not implemented" in str(exc.value)
+        message = str(exc.value)
+        # The refusal names the disabled tool and the flag that enables it ...
+        assert "train_execute" in message
+        assert "allow-execute" in message
+        # ... and must NOT claim execution is unimplemented: it shipped in
+        # v0.73.3 (#297), so that sentence was false and was removed (#483).
+        assert "not implemented" not in message
 
     def test_train_start_invalid_config_raises(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
