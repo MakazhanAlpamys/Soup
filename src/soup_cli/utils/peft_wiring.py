@@ -72,9 +72,14 @@ def resolve_lora_target_modules(model: Any, configured: Any) -> Any:
 def apply_pre_lora_patches(model: Any, base: str) -> None:
     """Run pre-LoRA surgical patches (v0.39.0 Part D, multi-trainer in v0.40.6).
 
-    Currently: Gemma4 ``ClippableLinear`` -> ``nn.Linear`` swap. Gated by
-    ``is_gemma4_model(base)`` so the swap never runs on non-Gemma4 models.
+    Qwen4-Exp's compatibility patch is fail-closed because an unpatched legacy
+    Torch forward cannot train. Gemma4's best-effort ``ClippableLinear`` ->
+    ``nn.Linear`` swap remains gated by ``is_gemma4_model(base)``.
     """
+    from soup_cli.utils.qwen4_compat import apply_qwen4_exp_scatter_compat
+
+    apply_qwen4_exp_scatter_compat(model)
+
     from soup_cli.utils.peft_patches import apply_gemma4_clippable_patch, is_gemma4_model
 
     if not is_gemma4_model(base):

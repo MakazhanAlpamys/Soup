@@ -2,8 +2,10 @@
 # Qwen3.8-Flash-Next text loading establishes Transformers 5.16.1 as Soup's
 # declared training floor. trl 0.29 is the first release that does not import the
 # Transformers private availability helper whose v5 return type broke trl 0.28.
+# Torch 2.5.1 deliberately exercises Qwen4-Exp's legacy int64-only scatter path.
 # Plotext 6.0.0 is pinned here so one CI cell exercises the real Figure API rather
 # than relying only on the fake 5.x/6.x contract doubles in the unit suite.
+torch==2.5.1
 transformers==5.16.1
 trl==0.29.0
 peft==0.20.0

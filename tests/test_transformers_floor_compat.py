@@ -1,8 +1,8 @@
 """Transformers floor policy and model-load keyword compatibility.
 
-The declared floor is Transformers 5.16.1 for Qwen4-Exp; TRL remains at 0.29.
-The dedicated CI cell installs those exact versions so the normal newest-version
-matrix cannot hide a floor regression. The historical #478 static guard remains:
+The declared floor is Transformers 5.16.1 for Qwen4-Exp; the dedicated CI cell
+also pins Torch 2.5.1 and TRL 0.29 so the normal newest-version matrix cannot
+hide a floor regression. The historical #478 static guard remains:
 Soup continues using the backward-compatible ``torch_dtype=`` spelling at model
 load sites throughout the supported Transformers 5.x range.
 
@@ -282,6 +282,7 @@ class TestFloorConstraintAndWorkflowPins:
             text,
         )
         assert _version_key(pinned) >= _version_key(declared)
+        _constraint_pin(text, "torch")
         _constraint_pin(text, "trl")
         _constraint_pin(text, "peft")
         _constraint_pin(text, "plotext")
@@ -291,16 +292,20 @@ class TestFloorConstraintAndWorkflowPins:
         job = _transformers_floor_job_block(CI_WORKFLOW.read_text(encoding="utf-8"))
         assert "python -m pip check" in job
         assert "-c .github/constraints/transformers-floor.txt" in job
+        assert "tests/test_issue571_qwen4_exp.py" in job
         assert "tests/test_plotext_compat.py" in job
 
-    @pytest.mark.parametrize("package", ["transformers", "trl", "peft", "plotext"])
+    @pytest.mark.parametrize(
+        "package", ["torch", "transformers", "trl", "peft", "plotext"]
+    )
     def test_workflow_version_check_accepts_pins_and_rejects_mismatch(self, package: str):
         constraints = (
-            "transformers==8.8.8\ntrl==9.9.9\npeft==7.7.7\nplotext==6.6.6\n"
+            "torch==2.5.1\ntransformers==8.8.8\ntrl==9.9.9\n"
+            "peft==7.7.7\nplotext==6.6.6\n"
         )
         installed = {
             name: _constraint_pin(constraints, name)
-            for name in ("transformers", "trl", "peft", "plotext")
+            for name in ("torch", "transformers", "trl", "peft", "plotext")
         }
         _run_transformers_floor_version_check(installed, constraints)
 

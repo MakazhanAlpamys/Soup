@@ -106,7 +106,10 @@ def test_qwen4_exp_outer_config_builds_text_only_causal_lm_and_lora():
     from peft import LoraConfig, TaskType, get_peft_model
     from transformers import AutoModelForCausalLM
 
-    from soup_cli.utils.peft_wiring import resolve_lora_target_modules
+    from soup_cli.utils.peft_wiring import (
+        apply_pre_lora_patches,
+        resolve_lora_target_modules,
+    )
 
     model = AutoModelForCausalLM.from_config(_tiny_qwen4_exp_config(), dtype=torch.float32)
 
@@ -119,6 +122,35 @@ def test_qwen4_exp_outer_config_builds_text_only_causal_lm_and_lora():
     ]
 
     targets = resolve_lora_target_modules(model, "auto")
+    torch_int32 = torch.int32
+    indexers = [
+        module
+        for module in model.modules()
+        if type(module).__name__ == "Qwen4ExpTextQSAIndexer"
+    ]
+    class_forward = type(indexers[0]).forward
+    apply_pre_lora_patches(model, "Qwen/Qwen3.8-Flash-Next")
+
+    # The compatibility shim must remain instance-local: neither Torch's dtype
+    # singleton nor the upstream Transformers class may be changed globally.
+    assert torch.int32 is torch_int32
+    assert type(indexers[0]).forward is class_forward
+    int32_scatter_supported = True
+    try:
+        torch.zeros((1, 1), dtype=torch.bool).scatter(
+            -1, torch.zeros((1, 1), dtype=torch.int32), True
+        )
+    except RuntimeError as exc:
+        assert "Expected dtype int64 for index" in str(exc)
+        int32_scatter_supported = False
+    if int32_scatter_supported:
+        assert indexers[0].forward.__func__ is class_forward
+    else:
+        assert indexers[0].forward.__func__ is not class_forward
+    patched_forward = indexers[0].forward.__func__
+    apply_pre_lora_patches(model, "Qwen/Qwen3.8-Flash-Next")
+    assert indexers[0].forward.__func__ is patched_forward
+
     model = get_peft_model(
         model,
         LoraConfig(
