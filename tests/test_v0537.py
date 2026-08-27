@@ -872,7 +872,7 @@ class TestInstantiateTrainerPlugins:
 # ----- #103 /v1/tools/{python,bash,web_search} live ---------------------
 
 
-def _create_test_app():
+def _create_test_app(host: str = "127.0.0.1", auth_token: str | None = None, **kwargs):
     """Build a test FastAPI app via _create_app (lazy fastapi import)."""
     try:
         import fastapi  # noqa: F401
@@ -887,6 +887,9 @@ def _create_test_app():
         device="cpu",
         model_name="test-model",
         max_tokens_default=128,
+        host=host,
+        auth_token=auth_token,
+        **kwargs,
     )
 
 

@@ -86,13 +86,32 @@ SANDBOX_NETWORK_GUARD = (
 
 def _get_safe_sandbox_env() -> dict[str, str]:
     """Construct a minimal, secret-free environment for sandboxed processes."""
-    safe_keys = {"PATH", "LANG", "LC_ALL", "TMPDIR", "TERM", "TZ"}
-    env = {k: os.environ[k] for k in safe_keys if k in os.environ}
-    if "PATH" not in env:
+    safe_keys = {
+        "PATH",
+        "LANG",
+        "LC_ALL",
+        "TMPDIR",
+        "TERM",
+        "TZ",
+        # Windows OS runtime essentials
+        "SYSTEMROOT",
+        "SYSTEMDRIVE",
+        "WINDIR",
+        "PATHEXT",
+        "COMSPEC",
+        "TEMP",
+        "TMP",
+        "USERPROFILE",
+    }
+    env = {k: v for k, v in os.environ.items() if k.upper() in safe_keys}
+    if "PATH" not in env and sys.platform != "win32":
         env["PATH"] = "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-    env["LANG"] = env.get("LANG", "C.UTF-8")
-    env["LC_ALL"] = env.get("LC_ALL", "C.UTF-8")
-    env["HOME"] = "/tmp"
+    if "LANG" not in env and sys.platform != "win32":
+        env["LANG"] = "C.UTF-8"
+    if "LC_ALL" not in env and sys.platform != "win32":
+        env["LC_ALL"] = "C.UTF-8"
+    if "HOME" not in env and sys.platform != "win32":
+        env["HOME"] = "/tmp"
     return env
 
 
