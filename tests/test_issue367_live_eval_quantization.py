@@ -337,12 +337,63 @@ class TestResolveGeneratorsThreadsQuantization:
         )
         assert "4bit" in capsys.readouterr().out
 
-    def test_console_reports_the_bf16_fallback(self, monkeypatch, capsys):
+    def test_console_reports_the_resolved_dtype_on_cpu(self, monkeypatch, capsys):
+        """Regression for the mismatch nestor-deeptempo flagged on #570: the
+        fallback message used to hardcode "bf16" regardless of device and
+        ""quantization""-only wiring never passed a matching ""torch_dtype"", so
+        a CPU load got whatever from_pretrained defaults to while the message
+        claimed bf16. The message and the value passed to make_generator must
+        now agree."""
         from soup_cli.commands.ship import _resolve_generators
 
-        self._capture(monkeypatch)
+        calls_dtype = []
+        from soup_cli.utils import live_eval as _live_eval_mod
+
+        def _fake(model_id, adapter=None, device=None, max_new_tokens=64, **kwargs):
+            calls_dtype.append(kwargs.get("dtype"))
+            return lambda prompt: ""
+
+        monkeypatch.setattr(_live_eval_mod, "make_generator", _fake)
         _resolve_generators(base="b", tuned=None, adapter="a", device="cpu")
-        assert "bf16" in capsys.readouterr().out
+        out = capsys.readouterr().out
+        assert "float32" in out
+        assert "bf16" not in out
+        assert calls_dtype == ["float32", "float32"]
+
+    def test_console_reports_the_resolved_dtype_on_cuda(self, monkeypatch, capsys):
+        from soup_cli.commands.ship import _resolve_generators
+        from soup_cli.utils import live_eval as _live_eval_mod
+
+        calls_dtype = []
+
+        def _fake(model_id, adapter=None, device=None, max_new_tokens=64, **kwargs):
+            calls_dtype.append(kwargs.get("dtype"))
+            return lambda prompt: ""
+
+        monkeypatch.setattr(_live_eval_mod, "make_generator", _fake)
+        monkeypatch.setattr(_live_eval_mod, "resolve_device", lambda device=None: "cuda")
+        _resolve_generators(base="b", tuned=None, adapter="a", device=None)
+        out = capsys.readouterr().out
+        assert "bfloat16" in out
+        assert calls_dtype == ["bfloat16", "bfloat16"]
+
+    def test_quantized_load_does_not_also_pin_a_dtype(self, monkeypatch):
+        """When --config supplies 4bit/8bit, the BitsAndBytesConfig governs
+        precision; dtype must stay None rather than fighting it."""
+        from soup_cli.commands.ship import _resolve_generators
+        from soup_cli.utils import live_eval as _live_eval_mod
+
+        calls_dtype = []
+
+        def _fake(model_id, adapter=None, device=None, max_new_tokens=64, **kwargs):
+            calls_dtype.append(kwargs.get("dtype"))
+            return lambda prompt: ""
+
+        monkeypatch.setattr(_live_eval_mod, "make_generator", _fake)
+        _resolve_generators(
+            base="b", tuned=None, adapter="a", device="cpu", quantization="4bit"
+        )
+        assert calls_dtype == [None, None]
 
 
 class TestShipDerivesQuantizationFromConfig:

@@ -497,26 +497,33 @@ def _resolve_generators(
             f"[dim]Live eval: loading base/tuned at {quantization} "
             "(reused from --config training.quantization).[/]"
         )
+        dtype = None
     else:
+        # Match the fallback message: bf16 on CUDA (this codebase's other live
+        # loaders use the same cuda-else-fp32 split, e.g. mole_routing.py/prm.py),
+        # fp32 elsewhere. Previously left unset, so from_pretrained fell through
+        # to its own default instead of the precision this message promised.
+        resolved_device = live_eval.resolve_device(device)
+        dtype = "bfloat16" if resolved_device == "cuda" else "float32"
         console.print(
-            "[dim]Live eval: loading base/tuned at full precision (bf16); "
+            f"[dim]Live eval: loading base/tuned at full precision ({dtype}); "
             "pass --config to reuse the training run's own quantization.[/]"
         )
 
     base_gen = live_eval.make_generator(
         base, device=device, max_new_tokens=BEHAVIOURAL_MAX_NEW_TOKENS,
-        quantization=quantization,
+        dtype=dtype, quantization=quantization,
     )
     if adapter:
         tuned_gen = live_eval.make_generator(
             base, adapter=adapter, device=device,
             max_new_tokens=BEHAVIOURAL_MAX_NEW_TOKENS,
-            quantization=quantization,
+            dtype=dtype, quantization=quantization,
         )
     elif tuned:
         tuned_gen = live_eval.make_generator(
             tuned, device=device, max_new_tokens=BEHAVIOURAL_MAX_NEW_TOKENS,
-            quantization=quantization,
+            dtype=dtype, quantization=quantization,
         )
     else:  # pragma: no cover — _verdict_live guarantees one of tuned/adapter
         raise ValueError("need --tuned or --adapter")

@@ -178,7 +178,7 @@ soup ship ... --task-mode pairwise --judge-model ollama://llama3.1  Leg-1 via sw
 soup ship ...  # leg-2 default = 8 bundled offline suites (MCQ/arithmetic/over_refusal + tool_call/format_json/safety, extraction scorer, ~40 items each) (v0.71.38; +mini_over_refusal v0.73.2)
 soup ship ... --general-suite mmlu,gsm8k --baseline base.json  lm-eval leg-2 override + recorded base scores
 soup ship ... --emit-evidence ev.json  Re-serialise the scores as replayable --evidence input (output-is-input, #312) (v0.71.39)
-soup ship ... --config soup.yaml  Read eval.ship gate defaults; --evidence GATES on provenance, --emit-evidence STAMPS it (v0.71.39)
+soup ship ... --config soup.yaml  Read eval.ship gate defaults; --evidence GATES on provenance, --emit-evidence STAMPS it (v0.71.39); live-loads base/tuned at training.quantization when it is 4bit/8bit, else full precision (#367)
 soup ship ... --push owner/repo#N  Post the verdict as a GitHub PR comment (best-effort; never flips the exit code) (v0.71.39)
 soup ship ... --noise-floor N  Re-run base model N times; per-axis floor = max-min spread; gate at max(threshold, floor); leg-1 measured in every --task-mode (judge modes cost N judge passes, floor labelled decode+judge) (v0.73.2)
 soup card <registry-id> -o MODELCARD.md       HF model card from a registry entry: training config, evals, hashes, lineage, artifacts (v0.71.35)

@@ -204,6 +204,7 @@ def make_generator(
     device: Optional[str] = None,
     max_new_tokens: int = 64,
     trust_remote_code: bool = False,
+    dtype: Optional[str] = None,
     quantization: Optional[str] = None,
     loaded: Optional[tuple] = None,
 ) -> GeneratorFn:
@@ -211,7 +212,8 @@ def make_generator(
 
     ``loaded`` lets a caller share an already-loaded ``(model, tokenizer,
     device)`` triple across several closures (base + multi off one load).
-    ``quantization`` is ignored when ``loaded`` is given, same as ``device``.
+    ``dtype``/``quantization`` are ignored when ``loaded`` is given, same as
+    ``device``.
     """
     _check_positive_int(max_new_tokens, "max_new_tokens")
     if loaded is not None and (not isinstance(loaded, tuple) or len(loaded) != 3):
@@ -223,6 +225,7 @@ def make_generator(
         adapter=adapter,
         device=device,
         trust_remote_code=trust_remote_code,
+        dtype=dtype,
         quantization=quantization,
     )
     pad_id = (
