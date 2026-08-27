@@ -1,31 +1,22 @@
-# Serving, Inference & Export
+# Serving & Model Export
 
-[← Back to the Soup README](../README.md)
+This guide covers serving fine-tuned models with high-throughput inference
+engines and exporting LoRA adapters into standard formats (GGUF, AWQ, GPTQ, ONNX).
 
-> The OpenAI-compatible inference server, batch inference, benchmarking, merge/export (GGUF/ONNX/TensorRT/AWQ/GPTQ), the Anthropic Messages endpoint, speculative decoding, deploy autopilot, the Web UI, and Agent Forge.
+---
 
-**Contents:**
+## Quick Reference
 
-- [Merge LoRA Adapter](#merge-lora-adapter)
-- [Export to GGUF](#export-to-gguf)
-- [Batch Inference](#batch-inference)
-- [Inference Benchmarking](#inference-benchmarking)
-- [Inference Server](#inference-server)
-- [Web UI](#web-ui)
-- [Inference Server Trace Log](#inference-server-trace-log)
-- [Soup Quantize — Ergonomic Export Alias](#soup-quantize--ergonomic-export-alias)
-- [Llama.cpp Proxy](#llamacpp-proxy)
-- [Tail-Latency Stats + Tool-Call Timer](#tail-latency-stats--tool-call-timer)
-- [Web UI Plugin Registry + Env Knobs](#web-ui-plugin-registry--env-knobs)
-- [Deploy Autopilot](#deploy-autopilot)
-- [Agent Forge](#agent-forge)
-- [HF Space SDK Auto-Pick](#hf-space-sdk-auto-pick)
-- [Anthropic Messages API Converter](#anthropic-messages-api-converter)
-- [Server-Side Tools](#server-side-tools)
-- [Anthropic Messages Endpoint](#anthropic-messages-endpoint)
-- [Train + measure your own draft (`soup draft`)](#train--measure-your-own-draft-soup-draft)
-- [N-gram Speculative Decoding](#n-gram-speculative-decoding)
-- [Server-Side Tool Endpoints](#server-side-tool-endpoints)
+| Task | Command | Backend |
+|---|---|---|
+| Fast OpenAI-compatible server | `soup serve --model ./lora-out` | vLLM / SGLang / HF |
+| Web UI playground | `soup ui --model ./lora-out` | FastAPI + HTML |
+| Merge LoRA into base weights | `soup export merge -m ./lora-out -o ./merged` | PEFT |
+| Quantise to GGUF (llama.cpp / Ollama) | `soup export gguf -m ./merged -q q4_k_m` | llama.cpp |
+| Quantise to AWQ (4-bit GPU) | `soup export awq -m ./merged -o ./awq-out` | AutoAWQ |
+| Quantise to GPTQ (4-bit GPU/CPU) | `soup export gptq -m ./merged -o ./gptq-out` | AutoGPTQ |
+| Quantise to EXL2 (exllamav2) | `soup export exl2 -m ./merged -b 4.0` | exllamav2 |
+| Export to ONNX / TensorRT-LLM | `soup export onnx -m ./merged -o ./onnx-out` | Optimum |
 
 ---
 
@@ -741,8 +732,10 @@ Three POST routes are now available on `soup serve`:
 
 - **`POST /v1/tools/bash`** — runs a bash command with strict OS-level network
   isolation (`unshare` on supported Linux runtimes, `sandbox-exec` on macOS).
-  Enforces a 5-second timeout and a combined 10KB stdout/stderr cap, and returns
-  the real stdout, stderr, exit code, and timeout state. This is not a filesystem
-  sandbox: the child retains the server process's read access. The endpoint
-  fails closed with HTTP 501 when strict isolation is unavailable, including on
-  Windows.
+  Enforces mandatory Bearer token authentication when bound to a non-loopback host,
+  a 5-second wall-clock timeout, a minimal secret-scrubbed environment, and a combined
+  10KB stdout/stderr streaming kill limit. Returns the real stdout, stderr, exit code,
+  and timeout state. This is not a filesystem sandbox: the child retains the server
+  process's read access to world-readable system files. The endpoint fails closed with
+  HTTP 501 when strict OS isolation is unavailable (including on Windows or restricted
+  Linux containers).
