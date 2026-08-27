@@ -939,6 +939,7 @@ class TestToolEndpointsLive:
         if sys.platform == "win32":
             pytest.skip("bash sandbox not supported on Windows")
         from fastapi.testclient import TestClient
+
         from soup_cli.trainer.rewards import SandboxProcessResult
 
         app = _create_test_app()
@@ -979,6 +980,7 @@ class TestToolEndpointsLive:
         if sys.platform == "win32":
             pytest.skip("bash sandbox not supported on Windows")
         from fastapi.testclient import TestClient
+
         from soup_cli.trainer.rewards import SandboxProcessResult
 
         app = _create_test_app()
@@ -1006,7 +1008,8 @@ class TestToolEndpointsLive:
         if _get_isolation_strategy() != "namespaces":
             pytest.skip("namespaces not available")
 
-        result = _run_bash_sandbox("curl -s --connect-timeout 1 http://169.254.169.254/ || echo 'BLOCKED'")
+        cmd = "curl -s --connect-timeout 1 http://169.254.169.254/ || echo 'BLOCKED'"
+        result = _run_bash_sandbox(cmd)
         assert "BLOCKED" in result.stdout or result.returncode != 0
 
     def test_bash_tool_windows_returns_501(self, monkeypatch):
@@ -1036,6 +1039,7 @@ class TestToolEndpointsLive:
 
     def test_bash_tool_bearer_auth_validation(self, monkeypatch):
         from fastapi.testclient import TestClient
+
         from soup_cli.trainer.rewards import SandboxProcessResult
 
         app = _create_test_app(host="0.0.0.0", auth_token="secret123")

@@ -422,7 +422,9 @@ def _run_sandboxed_subprocess(
                         break
                     with lock:
                         chunks.append(chunk)
-                        total = sum(len(c) for c in stdout_chunks) + sum(len(c) for c in stderr_chunks)
+                        total = sum(len(c) for c in stdout_chunks) + sum(
+                            len(c) for c in stderr_chunks
+                        )
                         if total > max_output_bytes:
                             output_exceeded = True
                             with contextlib.suppress(Exception):
