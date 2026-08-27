@@ -425,8 +425,8 @@ def _run_judge_task(
     task: GateTask, generate_fn: Callable[[str], str],
 ) -> float:
     """Run a type=judge task. Generates a completion per prompt, then asks
-    the judge model to score the (prompt, response) pair on a 1-10 scale.
-    Aggregate score is normalised to [0, 1] (mean / 10).
+    the judge model to score the (prompt, response) pair according to the
+    evaluator's rubric. Aggregate score is normalised to [0, 1] via min-max.
     """
     if not task.prompts:
         raise ValueError(f"task '{task.name}' is type=judge but 'prompts' is missing")
@@ -470,9 +470,27 @@ def _run_judge_task(
         return 0.0
 
     results = evaluator.evaluate_batch(items)
-    # results.overall_score is on a 1-10 scale; normalise to [0, 1].
-    overall = float(getattr(results, "overall_score", 0.0))
-    return max(0.0, min(1.0, overall / 10.0))
+    # Normalise to [0, 1] using the judge's ACTUAL rubric scale (DEFAULT_RUBRIC
+    # is 1-5, not 1-10), via min-max so the rubric floor maps to 0.0.
+    scale = evaluator.rubric.get("scale", {}) if isinstance(evaluator.rubric, dict) else {}
+    if not isinstance(scale, dict):
+        scale = {}
+
+    def _num(value: object, default: float) -> float:
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return float(value)
+        return default
+
+    scale_min = _num(scale.get("min", 1), 1.0)
+    scale_max = _num(scale.get("max", 5), 5.0)
+    span = scale_max - scale_min
+
+    overall = float(getattr(results, "overall_score", scale_min))
+    if span > 0:
+        normalized = (overall - scale_min) / span
+    else:
+        normalized = overall
+    return max(0.0, min(1.0, normalized))
 
 
 def _run_benchmark_task(
