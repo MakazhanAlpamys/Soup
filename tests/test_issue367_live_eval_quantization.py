@@ -377,6 +377,28 @@ class TestResolveGeneratorsThreadsQuantization:
         assert "bfloat16" in out
         assert calls_dtype == ["bfloat16", "bfloat16"]
 
+    def test_console_reports_the_resolved_dtype_on_indexed_cuda_device(
+        self, monkeypatch, capsys
+    ):
+        """Regression for the OWNER review on #570: an explicit --device
+        cuda:0 resolves verbatim (resolve_device returns it unchanged), so a
+        bare `== "cuda"` check missed it and fell back to float32 on a real
+        GPU. Must resolve the same as a bare "cuda"."""
+        from soup_cli.commands.ship import _resolve_generators
+        from soup_cli.utils import live_eval as _live_eval_mod
+
+        calls_dtype = []
+
+        def _fake(model_id, adapter=None, device=None, max_new_tokens=64, **kwargs):
+            calls_dtype.append(kwargs.get("dtype"))
+            return lambda prompt: ""
+
+        monkeypatch.setattr(_live_eval_mod, "make_generator", _fake)
+        _resolve_generators(base="b", tuned=None, adapter="a", device="cuda:0")
+        out = capsys.readouterr().out
+        assert "bfloat16" in out
+        assert calls_dtype == ["bfloat16", "bfloat16"]
+
     def test_quantized_load_does_not_also_pin_a_dtype(self, monkeypatch):
         """When --config supplies 4bit/8bit, the BitsAndBytesConfig governs
         precision; dtype must stay None rather than fighting it."""

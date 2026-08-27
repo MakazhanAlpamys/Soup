@@ -504,7 +504,11 @@ def _resolve_generators(
         # fp32 elsewhere. Previously left unset, so from_pretrained fell through
         # to its own default instead of the precision this message promised.
         resolved_device = live_eval.resolve_device(device)
-        dtype = "bfloat16" if resolved_device == "cuda" else "float32"
+        # startswith, not ==: an explicit --device cuda:0 (or any indexed
+        # CUDA device) resolves verbatim (live_eval.resolve_device returns
+        # it unchanged), and a bare "cuda" equality check would miss it and
+        # silently fall back to float32.
+        dtype = "bfloat16" if resolved_device.startswith("cuda") else "float32"
         console.print(
             f"[dim]Live eval: loading base/tuned at full precision ({dtype}); "
             "pass --config to reuse the training run's own quantization.[/]"
