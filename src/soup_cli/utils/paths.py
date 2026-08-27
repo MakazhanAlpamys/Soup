@@ -149,3 +149,105 @@ def atomic_write_bytes(
             except OSError:
                 pass
     return os.path.realpath(output_path)
+
+
+def atomic_write_bytes_group(outputs: list[tuple[bytes, str, str]]) -> list[str]:
+    """Publish a group of byte outputs atomically as one logical generation.
+
+    Every payload is staged before an existing target is moved aside. If any
+    replacement fails, newly published targets are removed and every previous
+    target is restored. This gives multi-file commands an all-new-or-all-old
+    result instead of exposing a partial generation.
+    """
+    if not isinstance(outputs, list) or not outputs:
+        raise ValueError("outputs must be a non-empty list")
+
+    prepared: list[tuple[bytes, str, str]] = []
+    identities: set[str] = set()
+    for item in outputs:
+        if not isinstance(item, tuple) or len(item) != 3:
+            raise TypeError("each output must be a (data, path, field) tuple")
+        data, output_path, field = item
+        if not isinstance(data, (bytes, bytearray)):
+            raise TypeError("output data must be bytes")
+        enforce_under_cwd_and_no_symlink(output_path, field)
+        identity = os.path.normcase(os.path.realpath(output_path))
+        if identity in identities:
+            raise ValueError("output paths must be distinct")
+        identities.add(identity)
+        prepared.append((bytes(data), output_path, field))
+
+    staged: dict[str, str] = {}
+    backups: dict[str, str] = {}
+    committed: set[str] = set()
+    try:
+        for data, output_path, _field in prepared:
+            parent = os.path.dirname(os.path.abspath(output_path)) or "."
+            os.makedirs(parent, exist_ok=True)
+            fd, tmp_path = tempfile.mkstemp(
+                prefix=".soup.group.", suffix=".tmp", dir=parent
+            )
+            try:
+                with os.fdopen(fd, "wb") as fh:
+                    fh.write(data)
+            except Exception:
+                if os.path.exists(tmp_path):
+                    os.unlink(tmp_path)
+                raise
+            staged[output_path] = tmp_path
+
+        for _data, output_path, field in prepared:
+            if not os.path.lexists(output_path):
+                continue
+            st = os.lstat(output_path)
+            if not stat.S_ISREG(st.st_mode):
+                raise ValueError(f"{field} must be a regular file")
+            parent = os.path.dirname(os.path.abspath(output_path)) or "."
+            fd, backup_path = tempfile.mkstemp(
+                prefix=".soup.backup.", suffix=".tmp", dir=parent
+            )
+            os.close(fd)
+            try:
+                os.replace(output_path, backup_path)
+            except Exception:
+                os.unlink(backup_path)
+                raise
+            backups[output_path] = backup_path
+
+        for _data, output_path, _field in prepared:
+            os.replace(staged[output_path], output_path)
+            committed.add(output_path)
+            del staged[output_path]
+    except Exception as exc:
+        rollback_failed = False
+        for output_path in committed:
+            if output_path in backups:
+                continue
+            try:
+                os.unlink(output_path)
+            except FileNotFoundError:
+                pass
+            except OSError:
+                rollback_failed = True
+        for output_path, backup_path in backups.items():
+            try:
+                os.replace(backup_path, output_path)
+            except OSError:
+                rollback_failed = True
+        if rollback_failed:
+            raise OSError("failed to restore a previous output generation") from exc
+        raise
+    finally:
+        for tmp_path in staged.values():
+            try:
+                os.unlink(tmp_path)
+            except FileNotFoundError:
+                pass
+
+    for backup_path in backups.values():
+        try:
+            os.unlink(backup_path)
+        except FileNotFoundError:
+            pass
+
+    return [os.path.realpath(output_path) for _data, output_path, _field in prepared]

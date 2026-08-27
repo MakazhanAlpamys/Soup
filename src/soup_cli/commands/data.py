@@ -3077,7 +3077,11 @@ def best_of_n(
     from soup_cli.utils import best_of_n_checkpoint as bon_checkpoint
     from soup_cli.utils import best_of_n_artifact as bon_artifact
     from soup_cli.utils.magpie import make_magpie_generate_fn
-    from soup_cli.utils.paths import atomic_write_bytes, enforce_under_cwd_and_no_symlink
+    from soup_cli.utils.paths import (
+        atomic_write_bytes,
+        atomic_write_bytes_group,
+        enforce_under_cwd_and_no_symlink,
+    )
     from soup_cli.utils.trust_remote import (
         model_requires_trust_remote_code,
         resolve_trust_remote_code,
@@ -3162,17 +3166,22 @@ def best_of_n(
         if plan_only:
             return
         try:
-            atomic_write_bytes(
-                bon_artifact.stable_jsonl(sft_rows).encode("utf-8"),
-                output,
-                field="output",
-            )
-            if emit_pairs:
-                atomic_write_bytes(
-                    bon_artifact.stable_jsonl(dpo_rows).encode("utf-8"),
-                    emit_pairs,
-                    field="emit-pairs",
+            publication = [
+                (
+                    bon_artifact.stable_jsonl(sft_rows).encode("utf-8"),
+                    output,
+                    "output",
                 )
+            ]
+            if emit_pairs:
+                publication.append(
+                    (
+                        bon_artifact.stable_jsonl(dpo_rows).encode("utf-8"),
+                        emit_pairs,
+                        "emit-pairs",
+                    )
+                )
+            atomic_write_bytes_group(publication)
         except (OSError, TypeError, ValueError) as exc:
             console.print(f"[red]Failed to write output: {_escape(str(exc))}[/]")
             raise typer.Exit(1) from exc

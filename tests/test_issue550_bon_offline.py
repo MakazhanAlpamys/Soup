@@ -162,6 +162,7 @@ def test_offline_materialization_never_constructs_sampler_or_judge_and_is_stable
         ("duplicate", "missing or duplicate"),
         ("out-of-range", "out of range"),
         ("non-finite", "finite"),
+        ("integer-overflow", "finite"),
         ("digest", "candidate digest mismatch"),
     ],
 )
@@ -182,6 +183,8 @@ def test_invalid_offline_judgments_fail_before_publication(
         rows[0]["winner_idx"] = 2
     elif mutation == "non-finite":
         rows[0]["scores"][0] = float("nan")
+    elif mutation == "integer-overflow":
+        rows[0]["scores"][0] = 10**4000
     elif mutation == "digest":
         rows[0]["group_digest"] = "0" * 64
     judgment_path.write_text(
@@ -205,6 +208,58 @@ def test_invalid_offline_judgments_fail_before_publication(
     assert result.exit_code == 2, (result.output, repr(result.exception))
     assert match in result.output
     assert not output.exists()
+
+
+@pytest.mark.parametrize("preexisting", [False, True])
+def test_dpo_write_failure_rolls_back_the_complete_publication(
+    tmp_path, monkeypatch, preexisting
+):
+    from soup_cli.commands.data import app
+
+    artifact, _calls = _export_candidates(tmp_path, monkeypatch)
+    groups = _artifact_groups(artifact)
+    judgments = tmp_path / "judgments.jsonl"
+    _write_judgments(judgments, groups)
+    sft = tmp_path / "sft.jsonl"
+    dpo = tmp_path / "dpo.jsonl"
+    if preexisting:
+        sft.write_bytes(b"previous-sft\n")
+        dpo.write_bytes(b"previous-dpo\n")
+
+    real_replace = __import__("os").replace
+    failed = False
+
+    def fail_first_dpo_commit(source, destination):
+        nonlocal failed
+        if not failed and destination == str(dpo):
+            failed = True
+            raise OSError("injected DPO publication failure")
+        return real_replace(source, destination)
+
+    monkeypatch.setattr("os.replace", fail_first_dpo_commit)
+    result = CliRunner().invoke(
+        app,
+        [
+            "best-of-n",
+            "--candidate-artifact",
+            str(artifact),
+            "--judgments",
+            str(judgments),
+            "--output",
+            str(sft),
+            "--emit-pairs",
+            str(dpo),
+        ],
+    )
+
+    assert result.exit_code == 1, (result.output, repr(result.exception))
+    assert "Failed to write output" in result.output
+    if preexisting:
+        assert sft.read_bytes() == b"previous-sft\n"
+        assert dpo.read_bytes() == b"previous-dpo\n"
+    else:
+        assert not sft.exists()
+        assert not dpo.exists()
 
 
 def test_local_export_records_revision_and_seed_without_exposing_local_path(

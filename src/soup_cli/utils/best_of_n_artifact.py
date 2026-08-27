@@ -258,7 +258,10 @@ def load_judgments(path: str, groups: list[dict]) -> tuple[list[dict], str]:
         for score in scores:
             if isinstance(score, bool) or not isinstance(score, (int, float)):
                 raise ValueError(f"judgment {index} scores must be numeric")
-            number = float(score)
+            try:
+                number = float(score)
+            except (OverflowError, ValueError) as exc:
+                raise ValueError(f"judgment {index} scores must be finite") from exc
             if not math.isfinite(number):
                 raise ValueError(f"judgment {index} scores must be finite")
             clean_scores.append(number)
