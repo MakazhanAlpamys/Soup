@@ -247,6 +247,19 @@ candidate artifact, judgment file, and whether DPO output was requested. Treat
 the manifest as the commit marker: missing or mismatched manifests identify an
 interrupted or replaced generation.
 
+The candidate artifact and verified judgment file are the durable recovery
+boundary for offline materialization. This phase performs no sampling, so it has
+no progress checkpoint and `--resume` does not apply: after any late write
+failure, keep those two inputs and rerun the exact offline command. Soup removes
+the previous manifest before replacing outputs and publishes the new manifest
+last. A prior, manifest-authenticated DPO beside the manifest is removed when the
+replacement run requests SFT only.
+
+Consumers must verify the final manifest and open exactly the SFT/DPO files it
+lists. They must never discover training inputs by globbing neighboring JSONL
+files: an unlisted sidecar, including an older DPO stored elsewhere, is not part
+of the committed generation.
+
 ### Custom Transforms
 
 Use a dotted-path string (`module.path:function_name`) as the ``transform``

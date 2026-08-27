@@ -240,9 +240,44 @@ def test_sft_only_manifest_records_that_dpo_was_not_requested(tmp_path, monkeypa
     assert manifest["dpo"] is None
 
 
+def test_later_sft_only_generation_removes_prior_manifest_bound_dpo(
+    tmp_path, monkeypatch
+):
+    from soup_cli.commands.data import app
+    from soup_cli.utils.best_of_n_artifact import verify_offline_manifest
+
+    artifact, _calls = _export_candidates(tmp_path, monkeypatch, prompts=("question",))
+    judgments = tmp_path / "judgments.jsonl"
+    _write_judgments(judgments, _artifact_groups(artifact))
+    sft = tmp_path / "sft.jsonl"
+    dpo = tmp_path / "dpo.jsonl"
+    manifest_path = tmp_path / "commit.json"
+    common = [
+        "best-of-n",
+        "--candidate-artifact",
+        str(artifact),
+        "--judgments",
+        str(judgments),
+        "--output",
+        str(sft),
+        "--manifest",
+        str(manifest_path),
+    ]
+    first = CliRunner().invoke(app, [*common, "--emit-pairs", str(dpo)])
+    assert first.exit_code == 0, (first.output, repr(first.exception))
+    assert dpo.exists()
+
+    second = CliRunner().invoke(app, common)
+
+    assert second.exit_code == 0, (second.output, repr(second.exception))
+    assert not dpo.exists()
+    manifest = verify_offline_manifest(str(manifest_path), sft_path=str(sft))
+    assert manifest["dpo_requested"] is False
+    assert manifest["dpo"] is None
+
+
 def test_failed_dpo_replacement_invalidates_old_manifest(tmp_path, monkeypatch):
     from soup_cli.commands.data import app
-    from soup_cli.utils.paths import atomic_write_bytes as real_byte_write
 
     artifact, _calls = _export_candidates(tmp_path, monkeypatch)
     judgments = tmp_path / "judgments.jsonl"
@@ -265,12 +300,17 @@ def test_failed_dpo_replacement_invalidates_old_manifest(tmp_path, monkeypatch):
     manifest_path = tmp_path / "sft.jsonl.manifest.json"
     assert manifest_path.exists()
 
-    def fail_dpo(data, path, *, field):
-        if field == "emit-pairs":
-            raise OSError("simulated DPO publication failure")
-        return real_byte_write(data, path, field=field)
+    real_replace = __import__("os").replace
+    failed_once = False
 
-    monkeypatch.setattr("soup_cli.utils.paths.atomic_write_bytes", fail_dpo)
+    def fail_dpo(source, destination):
+        nonlocal failed_once
+        if not failed_once and destination == str(dpo):
+            failed_once = True
+            raise OSError("simulated DPO publication failure")
+        return real_replace(source, destination)
+
+    monkeypatch.setattr("os.replace", fail_dpo)
     failed = CliRunner().invoke(app, args)
     assert failed.exit_code == 1
     assert sft.exists()

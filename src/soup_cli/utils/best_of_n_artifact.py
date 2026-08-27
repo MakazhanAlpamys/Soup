@@ -456,11 +456,8 @@ def _regular_sha_and_rows(path: str, field: str) -> tuple[str, int]:
     return digest.hexdigest(), rows
 
 
-def verify_offline_manifest(
-    path: str, *, sft_path: str, dpo_path: str = ""
-) -> dict:
-    """Verify the final marker against exact SFT/DPO file bytes and counts."""
-    data = _read_regular(path, "--manifest path")
+def _parse_offline_manifest(data: bytes) -> dict:
+    """Parse and validate the bounded manifest envelope."""
     try:
         manifest = json.loads(data)
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -483,6 +480,14 @@ def verify_offline_manifest(
             raise ValueError(f"offline manifest {field} is invalid")
     if not isinstance(manifest["dpo_requested"], bool):
         raise ValueError("offline manifest dpo_requested must be a bool")
+    return manifest
+
+
+def verify_offline_manifest(
+    path: str, *, sft_path: str, dpo_path: str = ""
+) -> dict:
+    """Verify the final marker against exact SFT/DPO file bytes and counts."""
+    manifest = _parse_offline_manifest(_read_regular(path, "--manifest path"))
     _validate_manifest_dataset(manifest["sft"], label="SFT", path=sft_path, required=True)
     _validate_manifest_dataset(
         manifest["dpo"],
@@ -491,6 +496,35 @@ def verify_offline_manifest(
         required=manifest["dpo_requested"],
     )
     return manifest
+
+
+def find_committed_sibling_dpo(path: str, *, sft_path: str) -> str:
+    """Return an authenticated prior DPO that sits beside ``path``.
+
+    Offline manifests intentionally record public basenames rather than local
+    absolute paths. A later SFT-only generation can therefore retire a prior
+    DPO only when that exact, hash-bound file is beside the manifest. Outputs
+    elsewhere remain unlisted and must not be inferred by consumers.
+    """
+    manifest = _parse_offline_manifest(_read_regular(path, "--manifest path"))
+    if manifest.get("dpo_requested") is False:
+        verify_offline_manifest(path, sft_path=sft_path)
+        return ""
+    record = manifest.get("dpo")
+    if not isinstance(record, dict) or set(record) != {"file", "rows", "sha256"}:
+        raise ValueError("offline manifest DPO record is invalid")
+    filename = record.get("file")
+    if (
+        not isinstance(filename, str)
+        or not filename
+        or os.path.basename(filename) != filename
+    ):
+        raise ValueError("offline manifest DPO filename is invalid")
+    sibling = os.path.join(os.path.dirname(os.path.abspath(path)), filename)
+    if not os.path.lexists(sibling):
+        return ""
+    verify_offline_manifest(path, sft_path=sft_path, dpo_path=sibling)
+    return sibling
 
 
 def invalidate_offline_manifest(path: str) -> None:

@@ -3038,7 +3038,7 @@ def best_of_n(
         "", "--checkpoint", help="Recovery journal (default: <output>.checkpoint.jsonl)"
     ),
     manifest: str = typer.Option(
-        "", "--manifest", help="Final consistency manifest (default: <output>.manifest.json)"
+        "", "--manifest", help="Commit manifest (default: <output>.manifest.json)"
     ),
     resume: bool = typer.Option(False, "--resume", help="Resume a matching checkpoint"),
     export_candidates: str = typer.Option(
@@ -3049,9 +3049,6 @@ def best_of_n(
     ),
     judgments: str = typer.Option(
         "", "--judgments", help="Offline verified judgments JSONL"
-    ),
-    manifest: str = typer.Option(
-        "", "--manifest", help="Offline commit manifest (default: <output>.manifest.json)"
     ),
     temperature: float = typer.Option(1.0, "--temperature", help="Sampling temp [0, 2]"),
     max_new_tokens: int = typer.Option(
@@ -3177,6 +3174,11 @@ def best_of_n(
             bon_artifact.stable_jsonl(dpo_rows).encode("utf-8") if emit_pairs else b""
         )
         try:
+            stale_dpo = ""
+            if not emit_pairs and os.path.lexists(manifest_path):
+                stale_dpo = bon_artifact.find_committed_sibling_dpo(
+                    manifest_path, sft_path=output
+                )
             manifest_bytes = bon_artifact.offline_manifest_text(
                 candidate_artifact_sha256=candidate_sha,
                 judgments_sha256=judgments_sha,
@@ -3188,6 +3190,8 @@ def best_of_n(
                 dpo_count=len(dpo_rows) if emit_pairs else 0,
             ).encode("utf-8")
             bon_artifact.invalidate_offline_manifest(manifest_path)
+            if stale_dpo:
+                os.unlink(stale_dpo)
             publication = [(sft_bytes, output, "output")]
             if emit_pairs:
                 publication.append((dpo_bytes, emit_pairs, "emit-pairs"))
@@ -3209,9 +3213,6 @@ def best_of_n(
         console.print(Panel(body, title="soup data best-of-n — offline done"))
         return
 
-    if manifest:
-        console.print("[red]--manifest applies only to offline materialization[/]")
-        raise typer.Exit(2)
     if export_mode:
         if judge or output or emit_pairs or checkpoint or manifest or resume:
             console.print(
