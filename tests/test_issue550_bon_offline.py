@@ -99,6 +99,7 @@ def test_candidate_export_needs_no_judge_and_preserves_order_and_digests(
         "candidate-1",
         "candidate-2",
     ]
+    assert [group["source_line"] for group in records[1:]] == [1, 2]
     text = artifact.read_text()
     assert "base_url" not in text
     assert str(tmp_path) not in text
@@ -147,6 +148,7 @@ def test_offline_materialization_never_constructs_sampler_or_judge_and_is_stable
     dpo_row = json.loads(outputs[0][1].splitlines()[0])
     provenance = sft_row["_best_of_n"]
     assert provenance["mode"] == "offline"
+    assert provenance["source_line"] == 1
     assert provenance["sampler"]["model"] == "sampler-model"
     assert provenance["verifier"] == {"name": "Codex", "version": "offline-v1"}
     assert len(provenance["candidate_artifact_sha256"]) == 64

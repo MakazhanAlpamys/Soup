@@ -98,10 +98,21 @@ def _validate_sampler(sampler: Any) -> dict:
 
 
 def build_candidate_group(
-    prompt: str, prompt_index: int, candidates: list[str], sampler: dict
+    prompt: str,
+    prompt_index: int,
+    candidates: list[str],
+    sampler: dict,
+    *,
+    source_line: int,
 ) -> dict:
     """Build one self-validating, ordered candidate group."""
     sampler = _validate_sampler(sampler)
+    if (
+        isinstance(source_line, bool)
+        or not isinstance(source_line, int)
+        or source_line < 1
+    ):
+        raise ValueError("candidate source line must be a positive integer")
     if len(candidates) != sampler["n"] or not all(
         isinstance(candidate, str) for candidate in candidates
     ):
@@ -113,6 +124,7 @@ def build_candidate_group(
     ]
     core = {
         "prompt_index": prompt_index,
+        "source_line": source_line,
         "prompt_id": prompt_id,
         "prompt_sha256": _sha(prompt.encode("utf-8")),
         "prompt": prompt,
@@ -192,6 +204,13 @@ def load_candidate_artifact(path: str) -> tuple[list[dict], dict, str]:
     for index, group in enumerate(groups):
         if group.get("prompt_index") != index or not isinstance(group.get("prompt"), str):
             raise ValueError("candidate groups must be sequential")
+        source_line = group.get("source_line")
+        if (
+            isinstance(source_line, bool)
+            or not isinstance(source_line, int)
+            or source_line < 1
+        ):
+            raise ValueError(f"candidate group {index} has an invalid source line")
         prompt = group["prompt"]
         expected_id = _sha({"prompt_index": index, "prompt": prompt})
         if group.get("prompt_id") != expected_id or expected_id in seen_ids:
@@ -298,6 +317,7 @@ def materialize_rows(
         provenance = {
             "mode": "offline",
             "n": len(candidates),
+            "source_line": group["source_line"],
             "winner_idx": winner_idx,
             "scores": judgment["scores"],
             "prompt_id": group["prompt_id"],

@@ -3074,8 +3074,8 @@ def best_of_n(
     from rich.panel import Panel
 
     from soup_cli.utils import best_of_n as bon
-    from soup_cli.utils import best_of_n_checkpoint as bon_checkpoint
     from soup_cli.utils import best_of_n_artifact as bon_artifact
+    from soup_cli.utils import best_of_n_checkpoint as bon_checkpoint
     from soup_cli.utils.magpie import make_magpie_generate_fn
     from soup_cli.utils.paths import (
         atomic_write_bytes,
@@ -3415,7 +3415,7 @@ def best_of_n(
     if export_mode:
         groups = []
         try:
-            for index, prompt in enumerate(prompt_list):
+            for index, (prompt, source_line) in enumerate(prompt_records):
                 candidates = bon.sample_candidates(
                     local_model,
                     tokenizer,
@@ -3428,7 +3428,11 @@ def best_of_n(
                 )
                 groups.append(
                     bon_artifact.build_candidate_group(
-                        prompt, index, candidates, sampler_spec
+                        prompt,
+                        index,
+                        candidates,
+                        sampler_spec,
+                        source_line=source_line,
                     )
                 )
             atomic_write_bytes(
