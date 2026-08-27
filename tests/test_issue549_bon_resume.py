@@ -7,6 +7,7 @@ import json
 import os
 from types import SimpleNamespace
 
+import pytest
 from typer.testing import CliRunner
 
 
@@ -128,6 +129,47 @@ def test_late_failure_resumes_without_replaying_completed_prefix(tmp_path, monke
     assert judge_calls[judge_split:] == []
     assert (tmp_path / "sft.jsonl").read_bytes() == stable_sft
     assert (tmp_path / "dpo.jsonl").read_bytes() == stable_dpo
+
+
+@pytest.mark.parametrize("failure_stage", ["sampler", "judge"])
+def test_late_value_error_reports_checkpoint_recovery(
+    tmp_path, monkeypatch, failure_stage
+):
+    from soup_cli.commands.data import app
+
+    monkeypatch.chdir(tmp_path)
+    prompts = ["completed prompt", "failing prompt"]
+    (tmp_path / "prompts.jsonl").write_text(
+        "".join(json.dumps({"prompt": prompt}) + "\n" for prompt in prompts),
+        encoding="utf-8",
+    )
+
+    def make_generate(*_args, **_kwargs):
+        def generate(prompt: str) -> str:
+            if failure_stage == "sampler" and prompt == prompts[1]:
+                raise ValueError("private sampler failure")
+            return "candidate"
+
+        return generate
+
+    class Judge:
+        def evaluate(self, prompt: str, _response: str):
+            if failure_stage == "judge" and prompt == prompts[1]:
+                raise ValueError("private judge failure")
+            return SimpleNamespace(weighted_score=1.0)
+
+    monkeypatch.setattr("soup_cli.utils.magpie.make_magpie_generate_fn", make_generate)
+    monkeypatch.setattr("soup_cli.eval.judge.JudgeEvaluator", lambda **_kwargs: Judge())
+
+    result = CliRunner().invoke(app, _args(tmp_path))
+
+    assert result.exit_code == 1, (result.output, repr(result.exception))
+    assert "1/2 prompts" in result.output
+    assert "--resume" in result.output
+    assert "sft.jsonl.checkpoint.jsonl" in result.output
+    assert "private" not in result.output
+    checkpoint_lines = (tmp_path / "sft.jsonl.checkpoint.jsonl").read_text().splitlines()
+    assert len(checkpoint_lines) == 2
 
 
 def test_resume_rejects_changed_run_before_sampling(tmp_path, monkeypatch):

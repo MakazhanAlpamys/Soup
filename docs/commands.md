@@ -301,7 +301,7 @@ soup local-rl train --db <path> --model <id> [--scheduler-dir <dir>] [--hour H] 
 soup build <manifest.yaml> [--dry-run] [--output-dir <dir>]  dbt-for-SFT DAG: validate + plan + live materialise (v0.69.0; live v0.71.6)
 soup expect <data.jsonl> <suite.yaml>         Expectations suite: PII / token-length / refusal / judge (v0.69.0)
 soup data gen-magpie --base <m> --provider ollama|vllm --target N --output <jsonl> [--base-url <url>] [--quality-filter]  Magpie synthetic generator — live (v0.69.0; live v0.71.6)
-soup data best-of-n (--base <m> | --provider ollama|vllm --model <m> [--base-url <url>]) --prompts <jsonl> --n 8 --judge <url> -o <sft.jsonl> [--emit-pairs <dpo.jsonl>]  Best-of-N rejection sampling: sample N locally (default) or through a raw-completion provider, then emit SFT (+ DPO) rows
+soup data best-of-n (--base <m> | --provider ollama|vllm --model <m> [--base-url <url>]) --prompts <jsonl> --n 8 --judge <url> -o <sft.jsonl> [--emit-pairs <dpo.jsonl>] [--resume] [--checkpoint <journal.jsonl>] [--manifest <manifest.json>]  Best-of-N rejection sampling with durable per-prompt recovery and manifest-last publication
 soup data evolve --input <seeds.jsonl> --provider ollama|vllm --model <m> --strategy depth|breadth --rounds N -o <jsonl>  Evol-Instruct (WizardLM) instruction evolution (v0.71.31)
 soup data persona-mix --prompts <jsonl> --n N --output <jsonl>  Persona-Hub diversity sampler (v0.69.0)
 soup data brain-rot <data.jsonl> [--strict]   Brain-rot detector — arXiv 2510.13928 (v0.69.0)
@@ -324,6 +324,23 @@ soup export --model ./output --format bitnet|tq1_0  BitNet 1.58 TQ1_0 ternary GG
 soup version [--full] [--json]                Show version (--full: system info, --json: JSON output)
 soup --verbose <command>                      Full traceback on errors
 ```
+
+### Best-of-N recovery and publication
+
+`soup data best-of-n` appends and synchronizes one checkpoint record after each
+fully sampled and judged prompt. The default journal is
+`<output>.checkpoint.jsonl`; override it with `--checkpoint`. If a sampler or
+judge backend fails, Soup reports the completed prompt count and journal path.
+Rerun the same command with `--resume` to reuse that exact prefix without
+sampling it again. The prompt sequence and generation options are bound into the
+journal, so changing them makes resume fail closed.
+
+Final SFT and optional DPO JSONL files are published only after every prompt is
+complete. The manifest (default `<output>.manifest.json`, or `--manifest`) is
+written last and records their row counts and SHA-256 digests. Consumers should
+treat only files listed by that final manifest as committed output. Invalid
+local data such as a non-finite judge score remains a validation failure rather
+than being presented as a recoverable backend outage.
 
 ## Fine-tune from your coding agent (MCP)
 

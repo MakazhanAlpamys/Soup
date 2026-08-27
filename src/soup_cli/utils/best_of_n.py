@@ -27,6 +27,10 @@ class PointwiseJudge(Protocol):
     def evaluate(self, prompt: str, response: str) -> "JudgeScore": ...
 
 
+class BestOfNRuntimeError(RuntimeError):
+    """A sampler or judge backend failed and the checkpoint can be resumed."""
+
+
 @dataclass(frozen=True)
 class BestOfNPick:
     """The judged winner among N candidates + the per-candidate scores."""
@@ -49,38 +53,44 @@ def sample_candidates(
 ) -> "list[str]":
     """Sample ``n`` continuations locally or through a raw-completion provider."""
     if generate_fn is not None:
-        return [generate_fn(prompt).strip() for _ in range(n)]
+        try:
+            return [generate_fn(prompt).strip() for _ in range(n)]
+        except Exception as exc:
+            raise BestOfNRuntimeError("provider sampler failed") from exc
 
     if model is None or tokenizer is None:
         raise ValueError("local best-of-N sampling requires a model and tokenizer")
 
     import torch
 
-    messages = [{"role": "user", "content": prompt}]
-    # return_dict=True so an attention_mask is passed to generate() — without it
-    # transformers warns of unreliable output when pad_token == eos_token.
-    enc = tokenizer.apply_chat_template(
-        messages, add_generation_prompt=True, return_tensors="pt", return_dict=True
-    )
-    if device:
-        enc = enc.to(device)
-    pad_id = tokenizer.pad_token_id
-    if pad_id is None:
-        pad_id = tokenizer.eos_token_id
-    with torch.no_grad():
-        out = model.generate(
-            **enc,
-            do_sample=True,
-            temperature=temperature,
-            max_new_tokens=max_new_tokens,
-            num_return_sequences=n,
-            pad_token_id=pad_id,
+    try:
+        messages = [{"role": "user", "content": prompt}]
+        # return_dict=True so an attention_mask is passed to generate() — without it
+        # transformers warns of unreliable output when pad_token == eos_token.
+        enc = tokenizer.apply_chat_template(
+            messages, add_generation_prompt=True, return_tensors="pt", return_dict=True
         )
-    prompt_len = enc["input_ids"].shape[1]
-    return [
-        tokenizer.decode(seq[prompt_len:], skip_special_tokens=True).strip()
-        for seq in out
-    ]
+        if device:
+            enc = enc.to(device)
+        pad_id = tokenizer.pad_token_id
+        if pad_id is None:
+            pad_id = tokenizer.eos_token_id
+        with torch.no_grad():
+            out = model.generate(
+                **enc,
+                do_sample=True,
+                temperature=temperature,
+                max_new_tokens=max_new_tokens,
+                num_return_sequences=n,
+                pad_token_id=pad_id,
+            )
+        prompt_len = enc["input_ids"].shape[1]
+        return [
+            tokenizer.decode(seq[prompt_len:], skip_special_tokens=True).strip()
+            for seq in out
+        ]
+    except Exception as exc:
+        raise BestOfNRuntimeError("local sampler failed") from exc
 
 
 def judge_pick_best(
@@ -91,7 +101,10 @@ def judge_pick_best(
         raise ValueError("no candidates to judge")
     scores = []
     for index, candidate in enumerate(candidates):
-        raw_score = evaluator.evaluate(prompt, candidate).weighted_score
+        try:
+            raw_score = evaluator.evaluate(prompt, candidate).weighted_score
+        except Exception as exc:
+            raise BestOfNRuntimeError("judge backend failed") from exc
         if isinstance(raw_score, bool):
             raise ValueError(f"candidate {index} judge score must be a finite number")
         try:

@@ -3262,6 +3262,13 @@ def best_of_n(
             bon_checkpoint.append_checkpoint(
                 checkpoint_path, index=index, sft=row, dpo=pair
             )
+        except bon.BestOfNRuntimeError as exc:
+            console.print(
+                f"[red]Best-of-N stopped after {index}/{len(prompt_list)} prompts.[/]\n"
+                f"Resume with [bold]--resume[/]; checkpoint: "
+                f"[bold]{_escape(os.path.relpath(checkpoint_path))}[/]"
+            )
+            raise typer.Exit(1) from exc
         except ValueError:
             # Deterministic validation failures (for example a non-finite
             # judge score) cannot be repaired by resuming. Preserve the
