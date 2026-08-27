@@ -380,6 +380,42 @@ class TestIssue280Glm51DpoRecipe:
         )
 
 
+class TestIssue271SmolLM3Recipe:
+    """Regression coverage for the smollm3-3b-sft recipe (#271)."""
+
+    def test_recipe_loads_with_exact_model_id(self) -> None:
+        from soup_cli.config.loader import load_config_from_string
+        from soup_cli.recipes.catalog import get_recipe
+
+        recipe = get_recipe("smollm3-3b-sft")
+        assert recipe is not None
+        # The exact model identity is load-bearing — a wrong id must fail here.
+        assert recipe.model == "HuggingFaceTB/SmolLM3-3B"
+        assert recipe.task == "sft"
+
+        config = load_config_from_string(recipe.yaml_str)
+        assert config.base == "HuggingFaceTB/SmolLM3-3B"
+        assert config.task == "sft"
+        assert config.training.lora.r == 8
+        assert config.training.quantization == "8bit"
+
+    def test_show_and_use_recipe(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        show_result = runner.invoke(app, ["recipes", "show", "smollm3-3b-sft"])
+        assert show_result.exit_code == 0
+        assert "HuggingFaceTB/SmolLM3-3B" in show_result.output
+
+        monkeypatch.chdir(tmp_path)
+        use_result = runner.invoke(app, ["recipes", "use", "smollm3-3b-sft", "--yes"])
+        assert use_result.exit_code == 0
+        assert "HuggingFaceTB/SmolLM3-3B" in (tmp_path / "soup.yaml").read_text(
+            encoding="utf-8"
+        )
+
+
 # ---------------------------------------------------------------------------
 # Part A: v0.25.0 new model recipes (Llama 4, Qwen 3, Gemma 3, DeepSeek V3)
 # ---------------------------------------------------------------------------
@@ -427,7 +463,7 @@ class TestV025NewRecipes:
             assert cfg.base == recipe.model
             assert cfg.task == recipe.task
 
-    def test_catalog_size_is_158(self):
+    def test_catalog_size_is_159(self):
         """Total catalog size — grew with each release.
 
         v0.25.0 shipped 43 recipes (29 + 9 Part A + 2 Part B tools + 3 Part E MLX).
@@ -449,10 +485,11 @@ class TestV025NewRecipes:
         Issue #477 added 1 (qwen3.8-27b-sft) -> 147.
         Catalog expansion added 7 SFT recipes (Qwen2.5-Coder/Math, R1-Distill-Qwen) -> 154.
         R1-Distill Llama SFT + DPO variants added 4 -> 158.
+        Issue #271 added 1 (smollm3-3b-sft) -> 159.
         """
         from soup_cli.recipes.catalog import RECIPES
 
-        assert len(RECIPES) == 158
+        assert len(RECIPES) == 159
 
     def test_new_recipes_searchable(self):
         """Search returns the new recipes via keyword/task filter."""

@@ -48,7 +48,7 @@ def search_recipes(
 
 
 # ---------------------------------------------------------------------------
-# Recipe catalog (158 recipes)
+# Recipe catalog (159 recipes)
 # ---------------------------------------------------------------------------
 
 RECIPES: Dict[str, RecipeMeta] = {
@@ -2348,6 +2348,34 @@ output: ./output
         description="SmolLM2 1.7B SFT (small / edge)",
         yaml_str="""\
 base: HuggingFaceTB/SmolLM2-1.7B-Instruct
+task: sft
+
+data:
+  train: ./data/train.jsonl
+  format: auto
+  max_length: 2048
+
+training:
+  epochs: 3
+  lr: 3e-4
+  batch_size: auto
+  lora:
+    r: 8
+    alpha: 16
+    target_modules: auto
+  quantization: 8bit
+
+output: ./output
+""",
+    ),
+    "smollm3-3b-sft": RecipeMeta(
+        model="HuggingFaceTB/SmolLM3-3B",
+        task="sft",
+        size="3B",
+        tags=("smollm", "smollm3", "huggingface", "sft", "small", "edge"),
+        description="SmolLM3 3B SFT (small / edge)",
+        yaml_str="""\
+base: HuggingFaceTB/SmolLM3-3B
 task: sft
 
 data:
