@@ -105,6 +105,23 @@ def test_candidate_export_needs_no_judge_and_preserves_order_and_digests(
     assert str(tmp_path) not in text
 
 
+def test_sampler_temperature_integer_overflow_is_a_controlled_validation_error(
+    tmp_path, monkeypatch
+):
+    from soup_cli.utils.best_of_n_artifact import load_candidate_artifact
+
+    artifact, _calls = _export_candidates(tmp_path, monkeypatch)
+    records = [json.loads(line) for line in artifact.read_text().splitlines()]
+    records[0]["_best_of_n_candidates"]["sampler"]["temperature"] = 10**4000
+    artifact.write_text(
+        "".join(json.dumps(record) + "\n" for record in records),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="candidate sampler temperature is invalid"):
+        load_candidate_artifact(str(artifact))
+
+
 def test_offline_materialization_never_constructs_sampler_or_judge_and_is_stable(
     tmp_path, monkeypatch
 ):

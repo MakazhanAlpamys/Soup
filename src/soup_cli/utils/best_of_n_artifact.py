@@ -56,12 +56,13 @@ def _validate_sampler(sampler: Any) -> dict:
     max_new_tokens = sampler.get("max_new_tokens")
     if isinstance(n, bool) or not isinstance(n, int) or not 2 <= n <= 64:
         raise ValueError("candidate sampler n is invalid")
-    if (
-        isinstance(temperature, bool)
-        or not isinstance(temperature, (int, float))
-        or not math.isfinite(float(temperature))
-        or not 0 <= float(temperature) <= 2
-    ):
+    if isinstance(temperature, bool) or not isinstance(temperature, (int, float)):
+        raise ValueError("candidate sampler temperature is invalid")
+    try:
+        temperature_value = float(temperature)
+    except (OverflowError, ValueError) as exc:
+        raise ValueError("candidate sampler temperature is invalid") from exc
+    if not math.isfinite(temperature_value) or not 0 <= temperature_value <= 2:
         raise ValueError("candidate sampler temperature is invalid")
     if (
         isinstance(max_new_tokens, bool)
