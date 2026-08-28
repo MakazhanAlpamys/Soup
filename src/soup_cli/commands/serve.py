@@ -4,6 +4,7 @@ import contextlib
 import json
 import logging
 import re
+import subprocess
 import threading
 import time
 import uuid
@@ -2069,7 +2070,7 @@ def _create_app(
                 )
 
             result = _run_bash_sandbox(command)
-        except (NotImplementedError, PermissionError) as exc:
+        except (NotImplementedError, PermissionError, subprocess.SubprocessError) as exc:
             raise HTTPException(
                 status_code=501,
                 detail=str(exc),

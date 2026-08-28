@@ -1109,6 +1109,30 @@ class TestToolEndpointsLive:
         assert resp.status_code == 501
         assert "Operation not permitted" in resp.json()["detail"]
 
+    def test_bash_tool_subprocess_error_maps_to_501(self, monkeypatch):
+        import subprocess
+
+        from fastapi.testclient import TestClient
+        app = _create_test_app()
+        client = TestClient(app)
+        monkeypatch.setattr(
+            "soup_cli.trainer.rewards._get_isolation_strategy", lambda: "namespaces"
+        )
+        def _failing_bash(cmd):
+            raise subprocess.SubprocessError(
+                "Exception occurred in preexec_fn: unshare namespace failed"
+            )
+        monkeypatch.setattr(
+            "soup_cli.trainer.rewards._run_bash_sandbox",
+            _failing_bash,
+        )
+        resp = client.post(
+            "/v1/tools/bash",
+            json={"command": "echo hello"},
+        )
+        assert resp.status_code == 501
+        assert "preexec_fn" in resp.json()["detail"]
+
     def test_web_search_default_deny_all(self):
         from fastapi.testclient import TestClient
         app = _create_test_app()
