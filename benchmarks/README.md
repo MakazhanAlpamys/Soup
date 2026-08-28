@@ -34,9 +34,10 @@ on trust. It starts small on purpose — most of this session's ~20 harnesses li
 only in a scratchpad on a machine that is gone, which is
 [#379](https://github.com/MakazhanAlpamys/Soup/issues/379).
 
-| Script | Question it answers | Cost |
-|---|---|---|
-| [`issue331_qlora_scope.py`](harness/issue331_qlora_scope.py) | Does the #331 wrong-gradient defect reach **ordinary QLoRA**? Three arms in one process, with the positive control that makes an exact result mean something. Answer: no — 0.0 against a control that diverges by 3.77e-01 | ~15 s, 4 GB card, no downloads |
+| Script | STEP / record | Question or claim | Cost / requirements |
+|---|---|---|---|
+| [`issue331_qlora_scope.py`](harness/issue331_qlora_scope.py) | #331 | Does the wrong-gradient defect reach **ordinary QLoRA**? Three arms in one process, with a positive control. Answer: no — 0.0 against a control that diverges by 3.77e-01 | ~15 s, 4 GB card, no downloads |
+| [`bnb_repro.py`](harness/bnb_repro.py) | Upstream bitsandbytes #2034 / NF4 defect | Minimal standalone reproducer for the NF4 stale-gradient mechanism: recycled buffers expose `MatMul4Bit`'s `ctx` lifetime issue; private buffers are the reference and bf16 is the control | CUDA GPU required; no downloads; historical environment: torch 2.13.0+cu130, bitsandbytes 0.50.0; ~1 min |
 
 ## Hardware
 
