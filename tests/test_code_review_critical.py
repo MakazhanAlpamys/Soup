@@ -178,6 +178,43 @@ def test_eval_benchmark_rejects_trust_remote_code_injection(tmp_path, monkeypatc
     assert "trust_remote_code" in result.output or "delimiters" in result.output
 
 
+def test_train_warns_for_unwired_convergence_detection(tmp_path, monkeypatch):
+    """The accepted convergence flag must be covered by the honesty guard."""
+    from typer.testing import CliRunner
+
+    import soup_cli.commands.train as train_mod
+    from soup_cli.cli import app
+
+    data_path = tmp_path / "train.jsonl"
+    data_path.write_text('{"text": "hello"}\n', encoding="utf-8")
+    config_path = tmp_path / "soup.yaml"
+    config_path.write_text(
+        "base: sshleifer/tiny-gpt2\n"
+        "task: sft\n"
+        f"output: {tmp_path / 'out'}\n"
+        "data:\n"
+        f"  train: {data_path}\n"
+        "training:\n"
+        "  convergence_detection: true\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(train_mod, "detect_device", lambda backend=None: ("cpu", "CPU"))
+    monkeypatch.setattr(
+        train_mod, "get_gpu_info", lambda backend=None: {"memory_total": "N/A"}
+    )
+    monkeypatch.setattr(
+        train_mod,
+        "load_dataset",
+        lambda *args, **kwargs: {"train": [{"text": "hello"}]},
+    )
+
+    result = CliRunner().invoke(
+        app, ["train", "--config", str(config_path), "--dry-run", "--yes"]
+    )
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert "convergence_detection are set but not enforced" in result.output
+
+
 # ─────────────────────────── CRITICAL 4: webhook SSRF ──────────────────────────
 
 

@@ -724,6 +724,7 @@ def train(
             ("forgetting_detection", cfg.training.forgetting_detection),
             ("checkpoint_intelligence", cfg.training.checkpoint_intelligence),
             ("early_stop_on_regression", cfg.training.early_stop_on_regression),
+            ("convergence_detection", cfg.training.convergence_detection),
         )
         if on
     ]

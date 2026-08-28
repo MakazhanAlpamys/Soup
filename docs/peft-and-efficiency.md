@@ -578,7 +578,9 @@ training:
   convergence_rel_tol: 0.005  # Relative range below this == plateau
 ```
 
-Surfaces `continue` / `early_stop` / `lower_lr` advice based on the loss curve.
+Computes `continue` / `early_stop` / `lower_lr` advice from the loss curve for
+callers that invoke the detector. `soup train` currently reports this option as
+not enforced; a live training callback remains a follow-up.
 
 ### VRAM Pressure Advisory
 
