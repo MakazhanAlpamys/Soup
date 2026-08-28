@@ -3107,6 +3107,12 @@ def best_of_n(
         if not candidate_artifact or not judgments:
             console.print("[red]provide both --candidate-artifact and --judgments[/]")
             raise typer.Exit(2)
+        if resume or checkpoint:
+            console.print(
+                "[red]offline materialization does not support --resume or --checkpoint; "
+                "rerun with the same candidate and judgment artifacts[/]"
+            )
+            raise typer.Exit(2)
         if any(
             (
                 base,

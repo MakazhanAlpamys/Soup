@@ -345,9 +345,10 @@ local data such as a non-finite judge score remains a validation failure rather
 than being presented as a recoverable backend outage.
 
 For offline Best-of-N, the candidate and judgment artifacts are the recovery
-checkpoint. There is no offline `--resume`: rerun the exact materialization
-command after a late failure. The final manifest is written last and is the only
-commit marker; consumers must verify it and use only the SFT/DPO files it lists.
+checkpoint. Offline materialization rejects `--resume` and `--checkpoint`; rerun
+the exact materialization command after a late failure. The final manifest is
+written last and is the only commit marker; consumers must verify it and use only
+the SFT/DPO files it lists.
 
 ## Fine-tune from your coding agent (MCP)
 

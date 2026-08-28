@@ -565,6 +565,41 @@ def test_offline_mode_rejects_irrelevant_sampling_overrides(tmp_path, monkeypatc
     assert "Invalid offline artifact" not in result.output
 
 
+@pytest.mark.parametrize("recovery_option", ["resume", "checkpoint"])
+def test_offline_mode_rejects_online_recovery_options_before_publication(
+    tmp_path, monkeypatch, recovery_option
+):
+    from soup_cli.commands.data import app
+
+    artifact, _calls = _export_candidates(tmp_path, monkeypatch, prompts=("question",))
+    judgments = tmp_path / "judgments.jsonl"
+    _write_judgments(judgments, _artifact_groups(artifact))
+    output = tmp_path / "sft.jsonl"
+    manifest = tmp_path / "manifest.json"
+    args = [
+        "best-of-n",
+        "--candidate-artifact",
+        str(artifact),
+        "--judgments",
+        str(judgments),
+        "--output",
+        str(output),
+        "--manifest",
+        str(manifest),
+    ]
+    if recovery_option == "resume":
+        args.append("--resume")
+    else:
+        args.extend(("--checkpoint", str(tmp_path / "checkpoint.jsonl")))
+
+    result = CliRunner().invoke(app, args)
+
+    assert result.exit_code == 2
+    assert "does not support --resume or --checkpoint" in result.output
+    assert not output.exists()
+    assert not manifest.exists()
+
+
 def test_two_phase_artifacts_use_exact_utf8_byte_writes(tmp_path, monkeypatch):
     from soup_cli.commands.data import app
 

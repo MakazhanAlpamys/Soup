@@ -249,11 +249,11 @@ interrupted or replaced generation.
 
 The candidate artifact and verified judgment file are the durable recovery
 boundary for offline materialization. This phase performs no sampling, so it has
-no progress checkpoint and `--resume` does not apply: after any late write
-failure, keep those two inputs and rerun the exact offline command. Soup removes
-the previous manifest before replacing outputs and publishes the new manifest
-last. A prior, manifest-authenticated DPO beside the manifest is removed when the
-replacement run requests SFT only.
+no progress checkpoint: `--resume` and `--checkpoint` are rejected. After any
+late write failure, keep those two inputs and rerun the exact offline command.
+Soup removes the previous manifest before replacing outputs and publishes the
+new manifest last. A prior, manifest-authenticated DPO beside the manifest is
+removed when the replacement run requests SFT only.
 
 Consumers must verify the final manifest and open exactly the SFT/DPO files it
 lists. They must never discover training inputs by globbing neighboring JSONL
