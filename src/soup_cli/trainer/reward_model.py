@@ -210,12 +210,19 @@ class RewardModelTrainerWrapper:
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
-        # Quantization (v0.38.0 Quant Menu — see soup_cli.utils.quant_menu)
-        from soup_cli.utils.quant_menu import build_quantization_config_for_loader
+        # Quantization (v0.38.0 Quant Menu, see soup_cli.utils.quant_menu).
+        # v0.53.0 gated this behind training.quantize_reward_model (#586,
+        # matching _load_reward_model's PPO-path gate): this task's own
+        # trained model IS "the reward model" the flag names, so the same
+        # opt-in applies here instead of following tcfg.quantization
+        # unconditionally.
+        quant_config_obj = None
+        if tcfg.quantize_reward_model:
+            from soup_cli.utils.quant_menu import build_quantization_config_for_loader
 
-        quant_config_obj = build_quantization_config_for_loader(
-            tcfg=tcfg, base=cfg.base, console=console,
-        )
+            quant_config_obj = build_quantization_config_for_loader(
+                tcfg=tcfg, base=cfg.base, console=console,
+            )
 
         console.print(f"[dim]Loading reward model: {cfg.base}[/]")
         dev_map = resolve_device_map(self.device)
@@ -232,7 +239,7 @@ class RewardModelTrainerWrapper:
             cfg.base, **model_kwargs,
         )
 
-        if tcfg.quantization in ("4bit", "8bit", "mxfp4"):
+        if tcfg.quantize_reward_model and tcfg.quantization in ("4bit", "8bit", "mxfp4"):
             self.model = prepare_model_for_kbit_training(self.model)
 
         from soup_cli.utils.peft_wiring import resolve_lora_target_modules

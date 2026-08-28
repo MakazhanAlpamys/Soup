@@ -445,6 +445,122 @@ class TestPPORewardModelQuantMenu:
         )
 
 
+class TestRewardModelTaskQuantMenu:
+    """#586 review fix: ``task: reward_model``'s own trained model is "the
+    reward model" that ``training.quantize_reward_model`` names, so
+    ``RewardModelTrainerWrapper._setup_transformers`` must gate on the same
+    flag as ``ppo.py::_load_reward_model`` (TestPPORewardModelQuantMenu
+    above) instead of following ``tcfg.quantization`` unconditionally.
+
+    Same fake-``transformers``/fake-``peft`` sys.modules style as
+    TestPPORewardModelQuantMenu above (no real torch/transformers/peft
+    install needed): ``_setup_transformers`` only reaches ``device="cpu"``
+    branches, which stay import-free per ``bf16_fp16_flags``/
+    ``resolve_frozen_base_load_dtype`` in ``soup_cli.utils.gpu``.
+    """
+
+    def _run(self, monkeypatch, *, quantize_reward_model: bool, quantization: str = "4bit"):
+        import sys
+        import types as _types
+
+        from soup_cli.config.schema import SoupConfig
+        from soup_cli.trainer.reward_model import RewardModelTrainerWrapper
+
+        cfg = SoupConfig(
+            base="some-model",
+            task="reward_model",
+            data={"train": "./data.jsonl"},
+            training={
+                "quantization": quantization,
+                "quantize_reward_model": quantize_reward_model,
+            },
+        )
+
+        captured: dict = {}
+
+        class _FakeRM:
+            @classmethod
+            def from_pretrained(cls, path, **kwargs):
+                captured.update(kwargs)
+                return cls()
+
+            def parameters(self):
+                return []
+
+        class _FakeTok:
+            pad_token = "<pad>"
+
+        fake_torch = _types.ModuleType("torch")
+        fake_torch.float32 = "float32"
+        monkeypatch.setitem(sys.modules, "torch", fake_torch)
+
+        fake_tf = _types.ModuleType("transformers")
+        fake_tf.AutoModelForSequenceClassification = _FakeRM
+        fake_tf.AutoTokenizer = _types.SimpleNamespace(
+            from_pretrained=lambda *a, **k: _FakeTok()
+        )
+        monkeypatch.setitem(sys.modules, "transformers", fake_tf)
+
+        kbit_called = []
+        fake_peft = _types.ModuleType("peft")
+        fake_peft.LoraConfig = lambda **kwargs: _types.SimpleNamespace(**kwargs)
+        fake_peft.TaskType = _types.SimpleNamespace(SEQ_CLS="SEQ_CLS")
+        fake_peft.get_peft_model = lambda model, _cfg: model
+
+        def _fake_kbit_prep(model):
+            kbit_called.append(True)
+            return model
+
+        fake_peft.prepare_model_for_kbit_training = _fake_kbit_prep
+        monkeypatch.setitem(sys.modules, "peft", fake_peft)
+
+        loader_calls = []
+        sentinel = object()
+
+        def fake_loader(**kwargs):
+            loader_calls.append(kwargs)
+            return sentinel
+
+        from soup_cli.utils import quant_menu
+        monkeypatch.setattr(quant_menu, "build_quantization_config_for_loader", fake_loader)
+
+        from soup_cli.utils import trust_remote
+        monkeypatch.setattr(
+            trust_remote, "model_requires_trust_remote_code", lambda _p: False
+        )
+        monkeypatch.setattr(
+            trust_remote, "resolve_trust_remote_code",
+            lambda *a, **kw: kw.get("requested", False),
+        )
+
+        wrapper = RewardModelTrainerWrapper(cfg, device="cpu")
+        wrapper._setup_transformers(cfg, cfg.training)
+
+        return captured, loader_calls, kbit_called, sentinel
+
+    def test_quantize_reward_model_true_applies_quant_config(self, monkeypatch):
+        captured, loader_calls, kbit_called, sentinel = self._run(
+            monkeypatch, quantize_reward_model=True
+        )
+        assert len(loader_calls) == 1
+        assert captured["quantization_config"] is sentinel
+        assert kbit_called == [True]
+
+    def test_quantize_reward_model_false_skips_quant_config(self, monkeypatch):
+        captured, loader_calls, kbit_called, _sentinel = self._run(
+            monkeypatch, quantize_reward_model=False
+        )
+        assert loader_calls == [], (
+            "Quant Menu loader must not be called for task=reward_model when "
+            "quantize_reward_model is False, even though quantization is set"
+        )
+        assert "quantization_config" not in captured
+        assert kbit_called == [], (
+            "prepare_model_for_kbit_training must not run when the model was "
+            "never loaded with a quantization_config"
+        )
+
+
 class TestLoaderEntryPointNonSft:
     """Smoke: build_quantization_config_for_loader returns a non-None
     quant config for the seven Quant Menu formats. Heavy transformers
