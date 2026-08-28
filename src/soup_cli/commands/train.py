@@ -836,6 +836,25 @@ def train(
         fsdp_kwargs = get_fsdp_training_args(fsdp)
         console.print(f"[green]FSDP2 enabled:[/] {fsdp}")
 
+    # #350 — BNB's default uint8 quant storage is not merely slow under FSDP:
+    # FSDP cannot flatten it. Resolve storage to the exact BNB compute dtype
+    # before any trainer builds its BitsAndBytesConfig. This updates the
+    # effective config shared by every wrapper and the reproducibility receipt.
+    from soup_cli.utils.quant_menu import resolve_fsdp_qlora_quant_storage
+
+    original_quant_storage = cfg.training.bnb_4bit_quant_storage
+    resolved_training = resolve_fsdp_qlora_quant_storage(
+        cfg.training,
+        fsdp=bool(fsdp),
+    )
+    if resolved_training is not cfg.training:
+        cfg = cfg.model_copy(update={"training": resolved_training})
+        action = "selected" if original_quant_storage is None else "overrode"
+        console.print(
+            f"[green]FSDP QLoRA:[/] {action} bnb_4bit_quant_storage="
+            f"{resolved_training.bnb_4bit_quant_storage} to match compute dtype"
+        )
+
     # --- v0.38.0 Quant Menu × multi-GPU compatibility check ---
     from soup_cli.utils.quant_menu import check_quant_distributed_compat
 
@@ -1434,6 +1453,26 @@ def train(
 
         trainer_wrapper = SFTTrainerWrapper(cfg, **trainer_kwargs)
     trainer_wrapper.setup(dataset)
+
+    # #350 — PEFT promotes newly-created adapters to fp32. FSDP cannot flatten
+    # those beside bf16/float16 BNB storage, so align every trainable floating
+    # tensor after setup creates PEFT modules and before train() wraps the model.
+    aligned_fsdp_params = 0
+    if fsdp and cfg.training.quantization == "4bit":
+        from soup_cli.utils.gpu import get_compute_dtype
+        from soup_cli.utils.mixed_precision import align_trainable_dtype_for_fsdp_qlora
+
+        aligned_fsdp_params = align_trainable_dtype_for_fsdp_qlora(
+            getattr(trainer_wrapper, "model", None),
+            fsdp=True,
+            quantization=cfg.training.quantization,
+            compute_dtype=get_compute_dtype(),
+        )
+    if aligned_fsdp_params:
+        console.print(
+            f"[green]FSDP QLoRA:[/] aligned {aligned_fsdp_params} trainable "
+            "parameter tensor(s) to the compute dtype"
+        )
 
     # --- HF auto-push callback (Part B of v0.29.0) ---
     if push_as:

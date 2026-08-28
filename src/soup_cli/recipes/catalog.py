@@ -1414,6 +1414,7 @@ training:
     alpha: 32
     target_modules: auto
   quantization: 4bit
+  bnb_4bit_quant_storage: bfloat16
   use_fsdp2_compile: true
   gradient_checkpointing: true
 

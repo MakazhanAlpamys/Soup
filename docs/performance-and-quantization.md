@@ -172,7 +172,8 @@ base: TheBloke/Llama-2-7B-Chat-GPTQ
 training:
   quantization: gptq        # or: awq, hqq:4bit, aqlm, eetq, mxfp4, fp8
 
-# FSDP + QLoRA — set quant_storage:
+# FSDP + QLoRA — Soup resolves this to the compute dtype automatically;
+# pin it explicitly when the recipe targets known bf16 hardware:
 training:
   quantization: 4bit
   bnb_4bit_quant_storage: bfloat16
@@ -193,8 +194,11 @@ training:
 
 **Compatibility matrix.** `soup train` runs `check_quant_distributed_compat()` at
 startup. HQQ / EETQ / AQLM hard-fail with FSDP and ZeRO-3 (sourced from
-LlamaFactory's matrix at `quantization.py:199/211`); BNB 4-bit + FSDP without
-`bnb_4bit_quant_storage` emits a yellow warning.
+LlamaFactory's matrix at `quantization.py:199/211`). BNB 4-bit + FSDP resolves
+`bnb_4bit_quant_storage` to the effective floating compute dtype before model
+load, then aligns trainable adapter parameters to that dtype before FSDP wraps
+the model. This avoids both FSDP failure modes: integer storage and mixed
+adapter/storage dtypes.
 
 **Pre-quantized + QAT.** `gptq` / `awq` / `hqq:*` / `aqlm` / `eetq` / `mxfp4` /
 `fp8` all carry their own scale; combining with `quantization_aware` (int8 QAT or

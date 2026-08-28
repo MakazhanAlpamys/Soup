@@ -1141,9 +1141,9 @@ class TrainingConfig(BaseModel):
     ] = Field(
         default=None,
         description=(
-            "v0.38.0 Part G — BNB 4-bit storage dtype. Required for FSDP+QLoRA "
-            "(set to 'bfloat16' or 'float16' to match compute dtype). "
-            "When None, BNB picks 'uint8' (legacy default)."
+            "v0.38.0 Part G — BNB 4-bit storage dtype. FSDP+QLoRA resolves "
+            "this automatically to the effective floating compute dtype; "
+            "outside FSDP, None keeps BNB's legacy uint8 default."
         ),
     )
     quantization_aware: Union[bool, Literal["fp8"]] = Field(

@@ -324,6 +324,51 @@ def _distributed_strategy(deepspeed: object, fsdp: bool) -> str:
     return "ddp"
 
 
+def _floating_dtype_name(dtype: object) -> str:
+    """Return a schema-compatible name for a floating compute dtype.
+
+    Accepting the string form keeps the policy unit-testable without importing
+    torch. Runtime callers pass a real ``torch.dtype`` from
+    :func:`soup_cli.utils.gpu.get_compute_dtype`.
+    """
+    name = str(dtype).removeprefix("torch.")
+    if name not in {"float16", "bfloat16", "float32"}:
+        raise ValueError(
+            "FSDP + BNB 4-bit requires a floating compute dtype for "
+            f"quant storage; got {name!r}"
+        )
+    return name
+
+
+def resolve_fsdp_qlora_quant_storage(
+    tcfg: TrainingConfig,
+    *,
+    fsdp: bool,
+    compute_dtype: object | None = None,
+) -> TrainingConfig:
+    """Resolve FSDP QLoRA storage to the effective BNB compute dtype.
+
+    BNB's legacy uint8 storage cannot be flattened by FSDP. A floating storage
+    dtype gets past that boundary, but it must also match the trainable adapter
+    dtype or FSDP fails one step later on a mixed-dtype flat-parameter unit.
+    Resolve both sides from the same compute dtype rather than leaving users to
+    coordinate two independent settings (#350).
+
+    A copy is returned only for the exact FSDP + BNB-4bit combination. This
+    leaves ordinary QLoRA and non-BNB quantization byte-for-byte unchanged.
+    """
+    if not fsdp or tcfg.quantization != "4bit":
+        return tcfg
+    if compute_dtype is None:
+        from soup_cli.utils.gpu import get_compute_dtype
+
+        compute_dtype = get_compute_dtype()
+    storage = _floating_dtype_name(compute_dtype)
+    if tcfg.bnb_4bit_quant_storage == storage:
+        return tcfg
+    return tcfg.model_copy(update={"bnb_4bit_quant_storage": storage})
+
+
 def build_quantization_config_for_loader(
     *,
     tcfg: TrainingConfig,
@@ -477,12 +522,7 @@ def check_quant_distributed_compat(
     msg = _INCOMPATIBLE.get((family, strategy))
     if msg:
         problems.append(msg)
-    # BNB 4-bit + FSDP without quant_storage = silent perf foot-gun.
-    if family == "bnb4" and strategy == "fsdp" and not bnb_4bit_quant_storage:
-        problems.append(
-            "warning: BNB 4-bit + FSDP without bnb_4bit_quant_storage causes "
-            "all-gather to upcast to fp32. Set bnb_4bit_quant_storage to your "
-            "compute dtype (bfloat16 or float16) for a 2-3x speed-up. "
-            "(LlamaFactory quantization.py:178 'crucial for fsdp+qlora')"
-        )
+    # #350 resolves BNB 4-bit storage to the compute dtype before this check.
+    # Missing storage is therefore no longer a user warning: the shipped uint8
+    # default is a hard FSDP stop, so execution fixes it rather than advising.
     return problems

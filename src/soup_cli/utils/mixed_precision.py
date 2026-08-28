@@ -110,3 +110,37 @@ def align_trainable_dtype_for_fp16(model, *, fp16: bool, bf16: bool) -> int:
             param.data = param.data.to(torch.float32)
             casted += 1
     return casted
+
+
+def align_trainable_dtype_for_fsdp_qlora(
+    model,
+    *,
+    fsdp: bool,
+    quantization: str,
+    compute_dtype,
+) -> int:
+    """Cast every trainable floating QLoRA parameter to FSDP's storage dtype.
+
+    ``get_peft_model`` normally promotes LoRA weights to fp32. Under FSDP +
+    BNB 4-bit, the frozen quantized parameters use a floating ``quant_storage``
+    matching BNB's compute dtype, and FSDP requires every floating parameter in
+    a flat unit to share that dtype. Cast only the trainable floating set: the
+    packed 4-bit base stays untouched, as do frozen non-quantized parameters.
+
+    The command calls this after every wrapper's ``setup()`` (and therefore
+    after PEFT creates adapters) but before ``train()`` lets HF wrap the model.
+    Returns the number of parameter tensors cast.
+    """
+    if model is None or not fsdp or quantization != "4bit":
+        return 0
+
+    casted = 0
+    for _name, param in model.named_parameters():
+        if (
+            param.requires_grad
+            and param.is_floating_point()
+            and param.dtype != compute_dtype
+        ):
+            param.data = param.data.to(compute_dtype)
+            casted += 1
+    return casted
