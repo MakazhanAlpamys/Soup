@@ -228,21 +228,55 @@ def _resolve_posthog_target(
 
 
 def _telemetry_endpoint_is_safe(endpoint: str) -> bool:
-    """Re-validate the telemetry endpoint via the v0.51.0 SSRF policy.
+    """Layered SSRF guard for telemetry endpoints (#593).
 
-    Even though :func:`send_telemetry_payload` only POSTs to a static
-    PostHog URL by default, callers can override ``endpoint``. Re-run the
-    same private-IP / link-local rejection used for hub endpoints so a
-    crafted ``endpoint='https://10.0.0.1/'`` cannot reach an internal
-    network from a misconfigured caller.
+    Two-layer validation:
+
+    1. :func:`~soup_cli.utils.hubs.validate_hub_endpoint` — baseline
+       sanitization (CRLF rejection, null-byte rejection, type guards,
+       ``0.0.0.0`` handling, scheme allowlist).  This layer is shared
+       with model-hub endpoints and intentionally permits private HTTPS
+       hosts for self-hosted hubs.
+    2. **Telemetry-strict rejection** — rejects loopback hosts
+       (``localhost``, ``127.0.0.1``, ``::1``), private IPs (RFC 1918),
+       and link-local addresses (``169.254.x.x``) on *any* scheme.
+       Telemetry has no legitimate self-hosted-private-endpoint case,
+       so this layer is stricter than hub validation.
+
+    The HTTPS-only requirement (``startswith("https://")``) is applied
+    first and is independent of both layers.
     """
     if not isinstance(endpoint, str) or not endpoint.startswith("https://"):
         return False
+
+    # Layer 1: baseline sanitization (CRLF, null bytes, types, 0.0.0.0).
     try:
         from soup_cli.utils.hubs import validate_hub_endpoint
 
         validate_hub_endpoint(endpoint, hub="telemetry")
     except (TypeError, ValueError):
+        return False
+
+    # Layer 2: telemetry-strict private/loopback/link-local rejection.
+    # Imports are lazy per AGENTS.md convention (heavy deps inside fns).
+    from urllib.parse import urlparse  # noqa: PLC0415
+
+    from soup_cli.utils.hubs import (  # noqa: PLC0415
+        _LOOPBACK_HOSTS,
+        _is_private_or_link_local,
+    )
+
+    # Normalise: lowercase + strip FQDN trailing dot so "LOCALHOST."
+    # matches the _LOOPBACK_HOSTS frozenset entry "localhost".
+    host = (urlparse(endpoint).hostname or "").lower().rstrip(".")
+    if not host:
+        return False
+    # _is_private_or_link_local uses ipaddress.ip_address which raises
+    # ValueError on domain strings ("localhost"), so it returns False.
+    # The explicit _LOOPBACK_HOSTS check covers named loopbacks.
+    if host in _LOOPBACK_HOSTS:
+        return False
+    if _is_private_or_link_local(host):
         return False
     return True
 
