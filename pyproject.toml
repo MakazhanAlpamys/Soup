@@ -105,7 +105,10 @@ train = [
     "trl>=0.29.0,<1.0.0",
     "datasets>=2.14.0",
     "bitsandbytes>=0.41.0",
-    "accelerate>=0.25.0",
+    # #352: 0.27.0 added `adapter_only` to `save_fsdp_model`/`load_fsdp_model`, which
+    # transformers 5.16.1 feature-detects to keep a PEFT run's FSDP resume checkpoint
+    # to the adapter instead of the full frozen base.
+    "accelerate>=0.27.0",
 ]
 # v0.71.0 — convenience meta-extra pulling the main optional stacks.
 all = ["soup-cli[train,serve,ui,data,mcp]"]
