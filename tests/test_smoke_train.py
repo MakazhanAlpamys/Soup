@@ -69,7 +69,13 @@ def tiny_dpo_data(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def sft_config_yaml(tmp_path: Path, tiny_train_data: Path) -> Path:
-    """Create a minimal SFT config for smoke testing with tiny-gpt2."""
+    """Create a minimal SFT config for smoke testing with tiny-gpt2.
+
+    ``chat_template`` is set even though ``format`` already says chatml: the
+    two are separate fields, and tiny-gpt2 ships no template of its own. Since
+    v0.36.0 the missing-template case is a hard error rather than the silent
+    ``f"{role}: {content}"`` fallback that produced wrong loss labels.
+    """
     config_path = tmp_path / "soup.yaml"
     output_dir = tmp_path / "output"
     config_path.write_text(
@@ -79,6 +85,7 @@ task: sft
 data:
   train: {tiny_train_data}
   format: chatml
+  chat_template: chatml
   val_split: 0.0
   max_length: 128
 
