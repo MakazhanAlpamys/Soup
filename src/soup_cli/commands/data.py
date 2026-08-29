@@ -3195,14 +3195,12 @@ def best_of_n(
                 dpo_bytes=dpo_bytes,
                 dpo_count=len(dpo_rows) if emit_pairs else 0,
             ).encode("utf-8")
-            bon_artifact.invalidate_offline_manifest(manifest_path)
-            if stale_dpo:
-                os.unlink(stale_dpo)
             publication = [(sft_bytes, output, "output")]
             if emit_pairs:
                 publication.append((dpo_bytes, emit_pairs, "emit-pairs"))
-            atomic_write_bytes_group(publication)
-            atomic_write_bytes(manifest_bytes, manifest_path, field="manifest")
+            publication.append((manifest_bytes, manifest_path, "manifest"))
+            removals = [(stale_dpo, "prior DPO output")] if stale_dpo else None
+            atomic_write_bytes_group(publication, removals=removals)
         except (OSError, TypeError, ValueError) as exc:
             console.print(f"[red]Failed to write output: {_escape(str(exc))}[/]")
             raise typer.Exit(1) from exc

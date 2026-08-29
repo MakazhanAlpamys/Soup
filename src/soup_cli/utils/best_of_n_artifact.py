@@ -525,14 +525,3 @@ def find_committed_sibling_dpo(path: str, *, sft_path: str) -> str:
         return ""
     verify_offline_manifest(path, sft_path=sft_path, dpo_path=sibling)
     return sibling
-
-
-def invalidate_offline_manifest(path: str) -> None:
-    """Remove an old commit marker before replacing any bound output."""
-    enforce_under_cwd_and_no_symlink(path, "--manifest path")
-    if not os.path.lexists(path):
-        return
-    mode = os.lstat(path).st_mode
-    if not stat.S_ISREG(mode):
-        raise ValueError("--manifest path must be a regular file")
-    os.unlink(path)

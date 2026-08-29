@@ -276,8 +276,9 @@ def test_later_sft_only_generation_removes_prior_manifest_bound_dpo(
     assert manifest["dpo"] is None
 
 
-def test_failed_dpo_replacement_invalidates_old_manifest(tmp_path, monkeypatch):
+def test_failed_dpo_replacement_restores_previous_generation(tmp_path, monkeypatch):
     from soup_cli.commands.data import app
+    from soup_cli.utils.best_of_n_artifact import verify_offline_manifest
 
     artifact, _calls = _export_candidates(tmp_path, monkeypatch)
     judgments = tmp_path / "judgments.jsonl"
@@ -299,6 +300,7 @@ def test_failed_dpo_replacement_invalidates_old_manifest(tmp_path, monkeypatch):
     assert first.exit_code == 0, (first.output, repr(first.exception))
     manifest_path = tmp_path / "sft.jsonl.manifest.json"
     assert manifest_path.exists()
+    previous = (sft.read_bytes(), dpo.read_bytes(), manifest_path.read_bytes())
 
     real_replace = __import__("os").replace
     failed_once = False
@@ -313,9 +315,67 @@ def test_failed_dpo_replacement_invalidates_old_manifest(tmp_path, monkeypatch):
     monkeypatch.setattr("os.replace", fail_dpo)
     failed = CliRunner().invoke(app, args)
     assert failed.exit_code == 1
-    assert sft.exists()
-    assert dpo.exists()
-    assert not manifest_path.exists()
+    assert (sft.read_bytes(), dpo.read_bytes(), manifest_path.read_bytes()) == previous
+    verify_offline_manifest(
+        str(manifest_path), sft_path=str(sft), dpo_path=str(dpo)
+    )
+
+
+def test_failed_sft_only_replacement_restores_manifest_bound_dpo(
+    tmp_path, monkeypatch
+):
+    from soup_cli.commands.data import app
+    from soup_cli.utils.best_of_n_artifact import verify_offline_manifest
+
+    artifact, _calls = _export_candidates(tmp_path, monkeypatch, prompts=("question",))
+    judgments = tmp_path / "judgments.jsonl"
+    _write_judgments(judgments, _artifact_groups(artifact))
+    sft = tmp_path / "sft.jsonl"
+    dpo = tmp_path / "dpo.jsonl"
+    manifest_path = tmp_path / "commit.json"
+    common = [
+        "best-of-n",
+        "--candidate-artifact",
+        str(artifact),
+        "--judgments",
+        str(judgments),
+        "--output",
+        str(sft),
+        "--manifest",
+        str(manifest_path),
+    ]
+    first = CliRunner().invoke(app, [*common, "--emit-pairs", str(dpo)])
+    assert first.exit_code == 0, (first.output, repr(first.exception))
+    previous = (sft.read_bytes(), dpo.read_bytes(), manifest_path.read_bytes())
+    changed = _write_judgments(judgments, _artifact_groups(artifact))
+    changed[0]["winner_idx"] = 0
+    changed[0]["scores"] = [0.9, 0.1]
+    judgments.write_text(
+        "".join(json.dumps(row) + "\n" for row in changed), encoding="utf-8"
+    )
+
+    real_replace = __import__("os").replace
+    failed_once = False
+
+    def fail_sft(source, destination):
+        nonlocal failed_once
+        if (
+            not failed_once
+            and destination == str(sft)
+            and ".soup.group." in str(source)
+        ):
+            failed_once = True
+            raise OSError("simulated SFT publication failure")
+        return real_replace(source, destination)
+
+    monkeypatch.setattr("os.replace", fail_sft)
+    failed = CliRunner().invoke(app, common)
+
+    assert failed.exit_code == 1
+    assert (sft.read_bytes(), dpo.read_bytes(), manifest_path.read_bytes()) == previous
+    verify_offline_manifest(
+        str(manifest_path), sft_path=str(sft), dpo_path=str(dpo)
+    )
 
 
 def test_manifest_verifier_rejects_replaced_output(tmp_path, monkeypatch):

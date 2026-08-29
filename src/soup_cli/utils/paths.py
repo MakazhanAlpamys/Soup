@@ -151,13 +151,19 @@ def atomic_write_bytes(
     return os.path.realpath(output_path)
 
 
-def atomic_write_bytes_group(outputs: list[tuple[bytes, str, str]]) -> list[str]:
+def atomic_write_bytes_group(
+    outputs: list[tuple[bytes, str, str]],
+    *,
+    removals: list[tuple[str, str]] | None = None,
+) -> list[str]:
     """Publish a group of byte outputs atomically as one logical generation.
 
     Every payload is staged before an existing target is moved aside. If any
     replacement fails, newly published targets are removed and every previous
-    target is restored. This gives multi-file commands an all-new-or-all-old
-    result instead of exposing a partial generation.
+    target is restored. ``removals`` participate in the same transaction: they
+    disappear only after every replacement succeeds and are restored on
+    failure. This gives multi-file commands an all-new-or-all-old result
+    instead of exposing a partial generation.
     """
     if not isinstance(outputs, list) or not outputs:
         raise ValueError("outputs must be a non-empty list")
@@ -176,6 +182,20 @@ def atomic_write_bytes_group(outputs: list[tuple[bytes, str, str]]) -> list[str]
             raise ValueError("output paths must be distinct")
         identities.add(identity)
         prepared.append((bytes(data), output_path, field))
+
+    prepared_removals: list[tuple[str, str]] = []
+    if removals is not None and not isinstance(removals, list):
+        raise TypeError("removals must be a list")
+    for item in removals or []:
+        if not isinstance(item, tuple) or len(item) != 2:
+            raise TypeError("each removal must be a (path, field) tuple")
+        removal_path, field = item
+        enforce_under_cwd_and_no_symlink(removal_path, field)
+        identity = os.path.normcase(os.path.realpath(removal_path))
+        if identity in identities:
+            raise ValueError("output and removal paths must be distinct")
+        identities.add(identity)
+        prepared_removals.append((removal_path, field))
 
     staged: dict[str, str] = {}
     backups: dict[str, str] = {}
@@ -196,7 +216,10 @@ def atomic_write_bytes_group(outputs: list[tuple[bytes, str, str]]) -> list[str]
                 raise
             staged[output_path] = tmp_path
 
-        for _data, output_path, field in prepared:
+        existing = [
+            (output_path, field) for _data, output_path, field in prepared
+        ] + prepared_removals
+        for output_path, field in existing:
             if not os.path.lexists(output_path):
                 continue
             st = os.lstat(output_path)
