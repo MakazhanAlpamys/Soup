@@ -303,7 +303,7 @@ soup expect <data.jsonl> <suite.yaml>         Expectations suite: PII / token-le
 soup data gen-magpie --base <m> --provider ollama|vllm --target N --output <jsonl> [--base-url <url>] [--quality-filter]  Magpie synthetic generator — live (v0.69.0; live v0.71.6)
 soup data best-of-n (--base <m> | --provider ollama|vllm --model <m> [--base-url <url>]) --prompts <jsonl> --n 8 --judge <url> -o <sft.jsonl> [--emit-pairs <dpo.jsonl>] [--resume] [--checkpoint <journal.jsonl>] [--manifest <manifest.json>]  Best-of-N rejection sampling with durable per-prompt recovery and manifest-last publication
 soup data best-of-n (--base <m> [--revision <rev>] | --provider ollama|vllm --model <m>) --prompts <jsonl> --n 8 --export-candidates <jsonl>  Sampling-only phase; no judge is constructed
-soup data best-of-n --candidate-artifact <jsonl> --judgments <jsonl> -o <sft.jsonl> [--emit-pairs <dpo.jsonl>] [--manifest <json>]  Validate offline judgments and materialize byte-stable training rows; a final manifest binds the requested output set
+soup data best-of-n --candidate-artifact <jsonl> --judgments <jsonl> -o <sft.jsonl> [--emit-pairs <dpo.jsonl>]  Validate offline judgments and materialize byte-stable training rows without a model or network
 soup data evolve --input <seeds.jsonl> --provider ollama|vllm --model <m> --strategy depth|breadth --rounds N -o <jsonl>  Evol-Instruct (WizardLM) instruction evolution (v0.71.31)
 soup data persona-mix --prompts <jsonl> --n N --output <jsonl>  Persona-Hub diversity sampler (v0.69.0)
 soup data brain-rot <data.jsonl> [--strict]   Brain-rot detector — arXiv 2510.13928 (v0.69.0)
@@ -343,12 +343,6 @@ written last and records their row counts and SHA-256 digests. Consumers should
 treat only files listed by that final manifest as committed output. Invalid
 local data such as a non-finite judge score remains a validation failure rather
 than being presented as a recoverable backend outage.
-
-For offline Best-of-N, the candidate and judgment artifacts are the recovery
-checkpoint. Offline materialization rejects `--resume` and `--checkpoint`; rerun
-the exact materialization command after a late failure. The final manifest is
-written last and is the only commit marker; consumers must verify it and use only
-the SFT/DPO files it lists.
 
 ## Fine-tune from your coding agent (MCP)
 
