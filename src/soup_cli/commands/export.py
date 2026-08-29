@@ -96,7 +96,7 @@ def export(
     calibration_data: Optional[str] = typer.Option(
         None,
         "--calibration-data",
-        help="Path to calibration JSONL. Required for GPTQ; optional for AWQ.",
+        help="Path to calibration JSONL. Required for AWQ and GPTQ.",
     ),
     calibration_samples: int = typer.Option(
         128,
@@ -915,6 +915,17 @@ def _export_awq(
 
     # Validate calibration path (security: path traversal protection)
     cal_path = _validate_calibration_path(calibration_data)
+    if cal_path is None:
+        console.print(
+            "[red]AWQ export requires --calibration-data.[/]\n"
+            "AutoAWQ otherwise downloads its large default calibration dataset: "
+            "pass a calibration JSONL, e.g. [bold]--calibration-data path/to/data.jsonl[/]."
+        )
+        raise typer.Exit(1)
+    calib_data = _load_calibration_texts(cal_path, max_samples=calibration_samples)
+    if not calib_data:
+        console.print(f"[red]No usable calibration samples found in {cal_path}.[/]")
+        raise typer.Exit(1)
 
     try:
         from awq import AutoAWQForCausalLM
@@ -990,17 +1001,8 @@ def _export_awq(
 
         quant_config = {"zero_point": True, "q_group_size": group_size, "w_bit": bits}
 
-        # Load calibration data if provided
-        calib_data = (
-            _load_calibration_texts(cal_path, max_samples=calibration_samples)
-            if cal_path else None
-        )
-
         console.print(f"[dim]Quantizing to AWQ {bits}-bit (group_size={group_size})...[/]")
-        if calib_data:
-            model.quantize(tokenizer, quant_config=quant_config, calib_data=calib_data)
-        else:
-            model.quantize(tokenizer, quant_config=quant_config)
+        model.quantize(tokenizer, quant_config=quant_config, calib_data=calib_data)
 
         console.print("[dim]Saving quantized model...[/]")
         model.save_quantized(str(output_path))
