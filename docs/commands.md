@@ -33,14 +33,14 @@ soup merge --adapter ./output --save-format 4bit --no-double-quant  Save a BNB-4
 soup merge-sharded-fsdp-weights ./shards -o merged.safetensors  Consolidate FSDP shards into one safetensors (v0.71.14; --plan-only previews)
 soup delinearize-llama4 ./src --target ./out [--num-experts N] [--plan-only]  Live Llama-4 fused-expert reshape [E*din,dout] -> [E,din,dout] + sidecar copy (v0.71.21)
 soup spectrum scan --model <id|path> --top-percent 50 [--modules mlp,attn] [-o patch.yaml]  Spectrum SNR scan (no model load) -> training.unfrozen_parameters YAML patch (v0.71.23)
-soup train --config sft.yaml  # training.lisa_enabled: true [lisa_num_layers lisa_interval_steps lisa_train_embeddings]  LISA layerwise importance sampling — full-FT quality at LoRA-like memory; lisa_train_embeddings: false freezes embeddings+head+norm for the memory saving (sft or pretrain/transformers/text/quantization=none) (v0.71.34, pretrain #307, #377)
-soup train --config sft.yaml  # training.stream_layers: true [stream_source stream_buffers]  BETA layer streaming — the frozen base streams from CPU RAM/NVMe one decoder layer at a time; embed_tokens + untied lm_head reuse one large-layer device slot; quantization: 4bit streams decoder layers as NF4, ~4x smaller (sft/dpo/orpo/simpo/kto on transformers+text, 9 archs; grpo/ppo permanently excluded) (v0.72.0; NF4 v0.72.2; disk+batch+accum v0.72.3; preference losses v0.72.4; large-layer slot #324)
+soup train --config sft.yaml  # training.lisa_enabled: true [lisa_num_layers lisa_interval_steps]  LISA layerwise importance sampling — full-FT quality at LoRA-like memory (sft/transformers/text/quantization=none) (v0.71.34)
+soup train --config sft.yaml  # training.stream_layers: true [stream_source stream_buffers]  BETA layer streaming — the frozen base streams from CPU RAM/NVMe one decoder layer at a time, so peak VRAM is bounded by ONE layer; quantization: 4bit streams it as NF4, ~4x smaller (sft/dpo/orpo/simpo/kto on transformers+text, 9 archs; grpo/ppo permanently excluded) (v0.72.0; NF4 v0.72.2; disk+batch+accum v0.72.3; preference losses v0.72.4)
 soup export --model ./output --format gguf    Export to GGUF (Ollama)
 soup export --model ./output --deploy ollama  Export GGUF + auto-deploy to Ollama
 soup export --model ./output --format onnx    Export to ONNX
 soup export --model ./output --format tensorrt Export to TensorRT-LLM
 soup export --model ./output --format awq     Export to AWQ (4-bit)
-soup export --model ./output --format gptq --calibration-data cal.jsonl  Export to GPTQ (4-bit)
+soup export --model ./output --format gptq    Export to GPTQ (4-bit)
 soup deploy ollama --model m.gguf --name x    Deploy GGUF to Ollama
 soup deploy ollama --list                     List Soup-deployed models
 soup deploy ollama --remove <name>            Remove model from Ollama
@@ -52,7 +52,6 @@ soup agent train --spec api.yaml --base model  One-shot synth + planned soup tra
 soup agent eval --spec api.yaml --predictions p.jsonl  Score predicted tool-calls vs spec catalog
 soup agent eval --spec api.yaml --predictions p.jsonl --sandbox  Execute each tool-call in the RLVR sandbox: ok/tool_error/timeout/arg_error
 soup eval benchmark --model ./output          Evaluate on standard benchmarks
-soup eval aider --model openai/gpt-4.1 --output ./aider-results --exercises-dir ./polyglot-benchmark  Run Aider Polyglot in Docker
 soup eval custom --tasks eval.jsonl           Custom eval tasks from JSONL
 soup eval judge --target resp.jsonl           LLM-as-a-judge evaluation
 soup eval auto --config soup.yaml             Auto-eval from config
@@ -152,7 +151,7 @@ soup migrate --from llamafactory config.yaml  Import config from LLaMA-Factory
 soup migrate --from axolotl config.yml        Import config from Axolotl
 soup migrate --from unsloth notebook.ipynb    Import config from Unsloth notebook
 soup migrate --from llamafactory c.yaml --dry-run  Preview without writing
-soup recipes list                             List all 159 ready-made recipes
+soup recipes list                             List all 146 ready-made recipes
 soup recipes show llama3.1-8b-sft            Print recipe YAML
 soup recipes use llama3.1-8b-sft             Copy recipe to soup.yaml
 soup recipes search "reasoning"              Search by keyword/task/size
@@ -178,7 +177,7 @@ soup ship ... --task-mode pairwise --judge-model ollama://llama3.1  Leg-1 via sw
 soup ship ...  # leg-2 default = 8 bundled offline suites (MCQ/arithmetic/over_refusal + tool_call/format_json/safety, extraction scorer, ~40 items each) (v0.71.38; +mini_over_refusal v0.73.2)
 soup ship ... --general-suite mmlu,gsm8k --baseline base.json  lm-eval leg-2 override + recorded base scores
 soup ship ... --emit-evidence ev.json  Re-serialise the scores as replayable --evidence input (output-is-input, #312) (v0.71.39)
-soup ship ... --config soup.yaml  Read eval.ship gate defaults; --evidence GATES on provenance, --emit-evidence STAMPS it (v0.71.39); live-loads base/tuned at training.quantization when it is 4bit/8bit, else full precision (#367)
+soup ship ... --config soup.yaml  Read eval.ship gate defaults; --evidence GATES on provenance, --emit-evidence STAMPS it (v0.71.39)
 soup ship ... --push owner/repo#N  Post the verdict as a GitHub PR comment (best-effort; never flips the exit code) (v0.71.39)
 soup ship ... --noise-floor N  Re-run base model N times; per-axis floor = max-min spread; gate at max(threshold, floor); leg-1 measured in every --task-mode (judge modes cost N judge passes, floor labelled decode+judge) (v0.73.2)
 soup card <registry-id> -o MODELCARD.md       HF model card from a registry entry: training config, evals, hashes, lineage, artifacts (v0.71.35)
@@ -187,9 +186,6 @@ soup ci init [--data d.jsonl --suite s.yaml --evidence ev.json] [--config soup.y
 soup mcp serve                                MCP server over stdio (drive Soup from Claude Code / Cursor / Cline; requires [mcp] extra) (v0.71.28)
 soup mcp serve --allow-mutating               Also expose plan-only train_start / export tools (never execute) (v0.71.28)
 soup mcp serve --allow-execute                Implies --allow-mutating; enables train_execute / export_execute via server confirmation tokens
-soup mcp serve --transport sse [--host H --port N]  Serve the same registry over HTTP+SSE instead of stdio; binds 127.0.0.1 and requires a Bearer token (#296)
-soup mcp serve --transport http [--auth-token T]    Same over the streamable-HTTP transport (/mcp); --auth-token pins the token instead of generating one (#296)
-soup mcp serve --transport sse|http --allow-execute   REFUSED - gated execution spawns real processes and is stdio-only (#296)
 soup shrink --model <id|path> --drop-ratio 0.25 --calib c.jsonl -o shrunk  Depth-prune least-important layer block + SHIP/DON'T-SHIP ppl verdict (exit 0/2/1) (v0.71.29)
 soup shrink ... --drop-layers N --heal h.jsonl --heal-steps 200 --device cpu  Drop N layers + distill-heal (fuse LoRA back to one dense model)
 soup shrink ... --tolerance 0.10 --plan-only [--attach-to-registry <id>]  Ppl-regression tolerance / print importance table only / registry attach
@@ -216,7 +212,7 @@ soup bench <model> --p50 --p95                Bench with tail-latency percentile
 soup bench <model> --backend auto             Auto-detect transformers/mlx backend (v0.53.9)
 soup serve --reasoning-parser deepseek-r1     Strip <think> blocks from responses (v0.53.9)
 soup doctor [--nccl] [--disk]                 Check environment (optionally check NCCL bandwidth, media type; --disk ~9s cold / ~2.4s warm)
-soup monitor                                  NVIDIA / Apple Silicon GPU monitor: util / temp / VRAM / power
+soup monitor                                  Live GPU monitor: util / temp / VRAM / power per GPU
 soup quickstart [--dry-run]                   Full demo
 soup plugins list|install|enable|disable      Manage Soup plugins
 soup llama cli|mtmd-cli|gguf-split|server ... Proxy to the llama.cpp binaries
@@ -301,9 +297,7 @@ soup local-rl train --db <path> --model <id> [--scheduler-dir <dir>] [--hour H] 
 soup build <manifest.yaml> [--dry-run] [--output-dir <dir>]  dbt-for-SFT DAG: validate + plan + live materialise (v0.69.0; live v0.71.6)
 soup expect <data.jsonl> <suite.yaml>         Expectations suite: PII / token-length / refusal / judge (v0.69.0)
 soup data gen-magpie --base <m> --provider ollama|vllm --target N --output <jsonl> [--base-url <url>] [--quality-filter]  Magpie synthetic generator — live (v0.69.0; live v0.71.6)
-soup data best-of-n (--base <m> | --provider ollama|vllm --model <m> [--base-url <url>]) --prompts <jsonl> --n 8 --judge <url> -o <sft.jsonl> [--emit-pairs <dpo.jsonl>] [--resume] [--checkpoint <journal.jsonl>] [--manifest <manifest.json>]  Best-of-N rejection sampling with durable per-prompt recovery and manifest-last publication
-soup data best-of-n (--base <m> [--revision <rev>] | --provider ollama|vllm --model <m>) --prompts <jsonl> --n 8 --export-candidates <jsonl>  Sampling-only phase; no judge is constructed
-soup data best-of-n --candidate-artifact <jsonl> --judgments <jsonl> -o <sft.jsonl> [--emit-pairs <dpo.jsonl>]  Validate offline judgments and materialize byte-stable training rows without a model or network
+soup data best-of-n --base <m> --prompts <jsonl> --n 8 --judge <url> -o <sft.jsonl> [--emit-pairs <dpo.jsonl>]  Best-of-N rejection sampling: sample N locally, judge picks winner -> SFT (+ DPO) rows (v0.71.31)
 soup data evolve --input <seeds.jsonl> --provider ollama|vllm --model <m> --strategy depth|breadth --rounds N -o <jsonl>  Evol-Instruct (WizardLM) instruction evolution (v0.71.31)
 soup data persona-mix --prompts <jsonl> --n N --output <jsonl>  Persona-Hub diversity sampler (v0.69.0)
 soup data brain-rot <data.jsonl> [--strict]   Brain-rot detector — arXiv 2510.13928 (v0.69.0)
@@ -327,27 +321,10 @@ soup version [--full] [--json]                Show version (--full: system info,
 soup --verbose <command>                      Full traceback on errors
 ```
 
-### Best-of-N recovery and publication
-
-`soup data best-of-n` appends and synchronizes one checkpoint record after each
-fully sampled and judged prompt. The default journal is
-`<output>.checkpoint.jsonl`; override it with `--checkpoint`. If a sampler or
-judge backend fails, Soup reports the completed prompt count and journal path.
-Rerun the same command with `--resume` to reuse that exact prefix without
-sampling it again. The prompt sequence and generation options are bound into the
-journal, so changing them makes resume fail closed.
-
-Final SFT and optional DPO JSONL files are published only after every prompt is
-complete. The manifest (default `<output>.manifest.json`, or `--manifest`) is
-written last and records their row counts and SHA-256 digests. Consumers should
-treat only files listed by that final manifest as committed output. Invalid
-local data such as a non-finite judge score remains a validation failure rather
-than being presented as a recoverable backend outage.
-
 ## Fine-tune from your coding agent (MCP)
 
 `soup mcp serve` runs a [Model Context Protocol](https://modelcontextprotocol.io)
-server over **stdio** (default) or a local **SSE / HTTP** listener, so any MCP client — Claude Code, Cursor, Cline, Continue —
+server over **stdio**, so any MCP client — Claude Code, Cursor, Cline, Continue —
 can drive Soup conversationally. Install the extra first:
 
 ```bash
@@ -365,55 +342,6 @@ the **Claude Desktop** config (`claude_desktop_config.json`):
 }
 ```
 
-### Remote or multi-client: the SSE and HTTP transports
-
-stdio suits a client that spawns Soup as a subprocess. For a client on another
-machine, or several clients sharing one server, run a listener instead:
-
-```bash
-soup mcp serve --transport sse                 # GET /sse + POST /messages/
-soup mcp serve --transport http                # streamable HTTP on /mcp
-soup mcp serve --transport sse --host 127.0.0.1 --port 8765 --auth-token "$TOKEN"
-```
-
-Both bind `127.0.0.1:8765` by default and **require a Bearer token on every
-request**. With `--auth-token` omitted, a fresh one is generated at startup and
-printed to stderr; it is 16-128 urlsafe-base64 characters, the same shape
-`soup ui` uses. Point a client at it with a header:
-
-```json
-{
-  "mcpServers": {
-    "soup": {
-      "url": "http://127.0.0.1:8765/sse",
-      "headers": { "Authorization": "Bearer <token>" }
-    }
-  }
-}
-```
-
-The registry is identical across transports — same tools, same schemas, same
-`--allow-mutating` / `--allow-execute` gating. Only the wire changes.
-
-**Security:**
-- **The token is required and there is no opt-out.** A loopback listener is
-  reachable by every process on the machine, not just by you.
-- **The token travels in the header, never the URL.** There is deliberately no
-  query-string fallback, so it cannot be captured in proxy or access logs.
-- **DNS-rebinding protection is on.** A request whose `Host` is not the address
-  the server bound to is refused with `421`, a foreign `Origin` with `403`.
-  This is the gate the Bearer token cannot be: a web page the operator merely
-  visits attaches no `Authorization` header, but its request still arrives at
-  the port.
-- **A non-loopback `--host` prints a warning**, and a wildcard bind (`0.0.0.0`)
-  prints a second one — with no single advertised name there is nothing to pin,
-  so the Host check degrades to accepting any `Host`.
-- **`--host` / `--port` / `--auth-token` are refused under `--transport stdio`**
-  rather than silently ignored: stdio has no listener and nothing to authorize.
-
-The network transports need `mcp >= 1.10.0` — streamable HTTP landed in 1.8.0
-and rebinding protection in 1.10.0 — which is the floor `soup-cli[mcp]` pins.
-
 The server exposes 14 read-only tools — `advise`, `data_inspect`,
 `data_validate`, `data_score`, `data_doctor`, `recipes_search`, `recipes_show`,
 `runs_list`, `runs_show`, `registry_list`, `registry_show`, `profile`,
@@ -427,5 +355,5 @@ mutating tools (`train_start`, `export`) are gated behind `--allow-mutating`
 - **Flag Safety:** `--allow-execute` is default-off and dangerous. `--allow-mutating` alone can NEVER trigger subprocess execution.
 - **One-Time Confirmation Tokens:** Authorization requires a server-issued random token. Client confirmation is UX-only; security relies entirely on the server-side token state.
 - **Subprocess Isolation:** Execution runs the Soup CLI as an isolated subprocess (`shell=False`, `stdin=DEVNULL`, `cwd` pinned to server startup directory). Child stdout/stderr is redirected to `.soup/mcp-runs/<run_id>.log` to avoid corrupting the MCP JSON-RPC stdio stream.
-- **Concurrency & Disconnects:** Enforces 1 active execution at a time, gated on a persisted run whose process is still alive — so a **restarted** server does not launch a second training while a child from a previous server is still running, and a stale record whose process is gone never blocks execution. A `launching` record (committed before the child process exists, pid not yet written) blocks restart capacity too: it is indistinguishable from "about to spawn", so treating it as live is the safe direction after a crash in that window. If a server crash leaves that row behind, `soup mcp runs reconcile --expunge-launching` removes rows older than five minutes and prints every removed `run_id`; use `--older-than-seconds N` to choose another positive threshold. The command refuses the whole operation if any candidate records a PID that is still alive. Launches run in background (fire-and-forget). Disconnecting the MCP client does not terminate an already-running subprocess.
+- **Concurrency & Disconnects:** Enforces 1 active execution at a time, gated on a persisted run whose process is still alive — so a **restarted** server does not launch a second training while a child from a previous server is still running, and a stale record whose process is gone never blocks execution. Launches run in background (fire-and-forget). Disconnecting the MCP client does not terminate an already-running subprocess.
 - **Config Snapshotting & Input Revalidation:** At plan time (`train_start`), the validated config is snapshotted to `.soup/mcp-runs/<run_id>/config.yaml`, and execution uses this snapshot rather than the original mutable config path. External protected inputs (such as datasets and model/checkpoint directories or files) are not frozen in the snapshot; instead, their content digests (computed via SHA-256 for regular files, or deterministic recursive content hashing over sorted relative file paths for directory trees, bounded by file-count and total-byte safety limits) are recorded at plan time and revalidated immediately before spawn. Modifying an external protected input between plan and execute invalidates the token. Modifying the original config path after planning has no effect because execution strictly uses the snapshotted config. Snapshotting freezes only the configuration itself, not external filesystem assets.

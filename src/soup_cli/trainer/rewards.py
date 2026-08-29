@@ -542,7 +542,8 @@ def _run_bash_sandbox(command: str) -> SandboxProcessResult:
     def preexec() -> None:
         _apply_rlimit(strict_namespaces=True)
 
-    argv: list[str] = ["bash", "-c", command]
+    bash_bin = _shutil.which("bash") or "/bin/bash"
+    argv: list[str] = [bash_bin, "-c", command]
 
     result = _run_sandboxed_subprocess(argv, preexec)
     if result.launch_failed:
