@@ -857,27 +857,45 @@ def _validate_calibration_path(calibration_data: Optional[str]) -> Optional[Path
     return cal_path
 
 
+class _CalibrationDataReadError(ValueError):
+    """A calibration JSONL could not be decoded or read safely."""
+
+
 def _load_calibration_texts(cal_path: Optional[Path], max_samples: int = 128) -> list:
     """Load calibration texts from JSONL file."""
     if cal_path is None:
         return []
     texts = []
-    with open(cal_path, encoding="utf-8") as fh:
-        for line in fh:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                row = json.loads(line)
-                # Support "text" field or concatenate all string values
+    try:
+        with open(cal_path, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(row, dict):
+                    continue
+                # Support "text" field or concatenate all non-empty values.
                 if "text" in row:
-                    texts.append(str(row["text"]))
+                    value = row["text"]
+                    text = "" if value is None else str(value)
                 else:
-                    texts.append(" ".join(str(v) for v in row.values() if v))
-            except json.JSONDecodeError:
-                continue
-            if len(texts) >= max_samples:
-                break
+                    text = " ".join(str(v) for v in row.values() if v)
+                if text.strip():
+                    texts.append(text)
+                if len(texts) >= max_samples:
+                    break
+    except UnicodeError as exc:
+        raise _CalibrationDataReadError(
+            f"Calibration data is not valid UTF-8: {cal_path}"
+        ) from exc
+    except OSError as exc:
+        raise _CalibrationDataReadError(
+            f"Could not read calibration data {cal_path}: {exc}"
+        ) from exc
     return texts
 
 
@@ -922,7 +940,11 @@ def _export_awq(
             "pass a calibration JSONL, e.g. [bold]--calibration-data path/to/data.jsonl[/]."
         )
         raise typer.Exit(1)
-    calib_data = _load_calibration_texts(cal_path, max_samples=calibration_samples)
+    try:
+        calib_data = _load_calibration_texts(cal_path, max_samples=calibration_samples)
+    except _CalibrationDataReadError as exc:
+        console.print(f"[red]{exc}[/]")
+        raise typer.Exit(1) from exc
     if not calib_data:
         console.print(f"[red]No usable calibration samples found in {cal_path}.[/]")
         raise typer.Exit(1)
@@ -1059,7 +1081,11 @@ def _export_gptq(
             "pass a calibration JSONL, e.g. [bold]--calibration-data path/to/data.jsonl[/]."
         )
         raise typer.Exit(1)
-    calib_texts = _load_calibration_texts(cal_path, max_samples=calibration_samples)
+    try:
+        calib_texts = _load_calibration_texts(cal_path, max_samples=calibration_samples)
+    except _CalibrationDataReadError as exc:
+        console.print(f"[red]{exc}[/]")
+        raise typer.Exit(1) from exc
     if not calib_texts:
         console.print(f"[red]No usable calibration samples found in {cal_path}.[/]")
         raise typer.Exit(1)

@@ -201,6 +201,96 @@ class TestAwqExportFunction:
                         calibration_data=str(cal_file),
                     )
 
+    @pytest.mark.parametrize(
+        "payload",
+        ["[]", "null", '"plain JSON string"', "42"],
+        ids=["array", "null", "string", "number"],
+    )
+    def test_export_awq_rejects_non_object_json_rows(self, tmp_path, capsys, payload):
+        """Valid JSON scalars and arrays are not valid JSONL calibration rows."""
+        model_dir = tmp_path / "model"
+        model_dir.mkdir()
+        cal_file = tmp_path / "cal.jsonl"
+        cal_file.write_text(f"{payload}\n", encoding="utf-8")
+
+        real_import = builtins.__import__
+
+        def reject_awq_import(name, *args, **kwargs):
+            if name == "awq":
+                pytest.fail("AWQ was imported before calibration validation")
+            return real_import(name, *args, **kwargs)
+
+        import soup_cli.commands.export as export_mod
+
+        with mock_patch.object(builtins, "__import__", side_effect=reject_awq_import):
+            with mock_patch(
+                "soup_cli.commands.export._validate_calibration_path",
+                return_value=cal_file,
+            ):
+                with pytest.raises(ClickExit):
+                    export_mod._export_awq(
+                        model_dir, None, None, bits=4, group_size=128,
+                        calibration_data=str(cal_file),
+                    )
+
+        assert "No usable calibration samples" in capsys.readouterr().out
+
+    def test_export_awq_rejects_non_utf8_calibration_before_import(self, tmp_path, capsys):
+        model_dir = tmp_path / "model"
+        model_dir.mkdir()
+        cal_file = tmp_path / "cal.jsonl"
+        cal_file.write_bytes(b'\xff{"text": "sample"}\n')
+
+        real_import = builtins.__import__
+
+        def reject_awq_import(name, *args, **kwargs):
+            if name == "awq":
+                pytest.fail("AWQ was imported before calibration validation")
+            return real_import(name, *args, **kwargs)
+
+        import soup_cli.commands.export as export_mod
+
+        with mock_patch.object(builtins, "__import__", side_effect=reject_awq_import):
+            with mock_patch(
+                "soup_cli.commands.export._validate_calibration_path",
+                return_value=cal_file,
+            ):
+                with pytest.raises(ClickExit):
+                    export_mod._export_awq(
+                        model_dir, None, None, bits=4, group_size=128,
+                        calibration_data=str(cal_file),
+                    )
+
+        assert "not valid UTF-8" in capsys.readouterr().out
+
+    def test_export_awq_rejects_unreadable_calibration_before_import(self, tmp_path, capsys):
+        model_dir = tmp_path / "model"
+        model_dir.mkdir()
+        cal_dir = tmp_path / "calibration-directory"
+        cal_dir.mkdir()
+
+        real_import = builtins.__import__
+
+        def reject_awq_import(name, *args, **kwargs):
+            if name == "awq":
+                pytest.fail("AWQ was imported before calibration validation")
+            return real_import(name, *args, **kwargs)
+
+        import soup_cli.commands.export as export_mod
+
+        with mock_patch.object(builtins, "__import__", side_effect=reject_awq_import):
+            with mock_patch(
+                "soup_cli.commands.export._validate_calibration_path",
+                return_value=cal_dir,
+            ):
+                with pytest.raises(ClickExit):
+                    export_mod._export_awq(
+                        model_dir, None, None, bits=4, group_size=128,
+                        calibration_data=str(cal_dir),
+                    )
+
+        assert "Could not read calibration data" in capsys.readouterr().out
+
     def test_export_awq_calls_quantize(self, tmp_path):
         """AWQ export should pass the explicit calibration rows to AutoAWQ."""
         model_dir = tmp_path / "model"
