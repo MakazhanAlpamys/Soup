@@ -419,7 +419,7 @@ def _run_sandboxed_subprocess(
                 preexec_fn=preexec_fn,
                 env=env,
             )
-        except (PermissionError, OSError) as exc:
+        except (PermissionError, OSError, subprocess.SubprocessError) as exc:
             return SandboxProcessResult(
                 returncode=None,
                 stdout="",

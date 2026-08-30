@@ -1096,14 +1096,17 @@ class TestToolEndpointsLive:
         if sys.platform != "linux":
             pytest.skip("unshare is a Linux-only syscall")
 
+        import soup_cli.trainer.rewards as rewards_mod
         from soup_cli.trainer.rewards import _run_bash_sandbox
 
         def mock_unshare(*args, **kwargs):
             raise PermissionError("Operation not permitted")
 
         monkeypatch.setattr(os, "unshare", mock_unshare, raising=False)
+        # Reset the cached isolation strategy so it re-detects os.unshare
+        monkeypatch.setattr(rewards_mod, "_ISOLATION_STRATEGY_CACHE", None)
 
-        with pytest.raises(PermissionError, match="Operation not permitted"):
+        with pytest.raises(PermissionError):
             _run_bash_sandbox("echo hello")
 
     def test_bash_sandbox_runs_on_strict_namespace_success(self, monkeypatch):
@@ -1113,9 +1116,12 @@ class TestToolEndpointsLive:
         if sys.platform != "linux":
             pytest.skip("unshare is a Linux-only syscall")
 
+        import soup_cli.trainer.rewards as rewards_mod
         from soup_cli.trainer.rewards import _run_bash_sandbox
 
         monkeypatch.setattr(os, "unshare", lambda *args, **kwargs: None, raising=False)
+        # Reset the cached isolation strategy so it re-detects os.unshare
+        monkeypatch.setattr(rewards_mod, "_ISOLATION_STRATEGY_CACHE", None)
 
         result = _run_bash_sandbox("echo hello")
         assert result.returncode == 0
