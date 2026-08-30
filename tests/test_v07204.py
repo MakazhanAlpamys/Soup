@@ -388,6 +388,17 @@ def _build_streamed_wrapper(
 # ==========================================================================
 # item 1 -- schema: which tasks may stream
 # ==========================================================================
+# These two tuples are the LOCALISATION, not a convenience. #370: while
+# diagnosing #328 on the H100 box only [dpo] and [kto] failed, which read as a
+# sharp localisation to the reference forward — and was wrong. They were the
+# only two the CUDA class was parametrised over. ORPO and SimPO are genuinely
+# reference-free (v0.72.4: no `ref_model` attribute at all) and failed too.
+# So: narrowing either tuple silently narrows what the suite can localise, and
+# is a scope change that must be argued for, not an edit.
+#
+# _REFERENCE_USING is for properties that only exist when there IS a reference
+# (the disabled-adapter identity, the reference forward). Everything that
+# exercises the streamed train() step belongs to _ALL_PREFERENCE.
 _REFERENCE_USING = ("dpo", "kto")
 _ALL_PREFERENCE = ("dpo", "orpo", "simpo", "kto")
 
@@ -566,7 +577,7 @@ class TestPeakVramIsNotDoubled:
         torch.cuda.empty_cache()
         return peak, stats
 
-    @pytest.mark.parametrize("task", _REFERENCE_USING)
+    @pytest.mark.parametrize("task", _ALL_PREFERENCE)
     def test_weight_bearing_terms_are_identical_to_sft(self, tmp_path, monkeypatch, task):
         """One store, one pool. The gate measured 729.91 MB / 60.83 MB for both
         arms on a 730 MB model; here the sizes are tiny but the EQUALITY is the
@@ -590,6 +601,62 @@ class TestPeakVramIsNotDoubled:
         implicit, stats = self._peak(tmp_path / "c", monkeypatch, task)
         forced, _ = self._peak(tmp_path / "d", monkeypatch, task, second_reference=True)
         assert forced > implicit, (implicit, forced)
+
+
+@pytest.mark.skipif(not _cuda_available(), reason="the #328 meta failure is CUDA-only")
+class TestEveryPreferenceLossTakesAStreamedStep:
+    """#370 — a real ``setup()`` + ``train()`` step for ALL FOUR preference
+    losses on the device the failure actually needs.
+
+    This exists as its own slot, rather than riding on the VRAM assertions
+    above, because the property is different: those measure how much memory a
+    step costs, this asserts a step happens at all. Reverting #328's
+    ``should_enable_hf_gradient_checkpointing`` guard turns every arm here red
+    with ``RuntimeError: Tensor on device cuda:0 is not on the expected device
+    meta!`` — HF check-points the inner decoder layer on top of
+    ``StreamedDecoderLayer``'s own ``checkpoint(use_reentrant=False)``, and the
+    recompute lands after ``functional_call``'s reparametrisation has exited and
+    restored the meta placeholders.
+
+    The orpo/simpo arms are the point. #328 was reported as dpo/kto-only purely
+    because those were the only two the CUDA class was parametrised over; all
+    four fail, and ORPO/SimPO reach it with no reference model at all.
+    """
+
+    @pytest.mark.parametrize("task", _ALL_PREFERENCE)
+    def test_a_streamed_train_step_completes(self, tmp_path, monkeypatch, task):
+        """``gradient_checkpointing=True`` is load-bearing, not decoration.
+
+        It is the configuration #328 dies in: the user asks for checkpointing,
+        streaming is on, and the guard has to refuse HF's copy of it. Measured
+        on an A10G — with the guard dropped this raises for all four tasks,
+        while the same test at the config default (False) still passes, because
+        there the reverted expression returns False anyway. A default-config
+        step would look like cover and assert nothing.
+        """
+        wrapper, _, _ = _build_streamed_wrapper(
+            tmp_path, monkeypatch, task=task, gradient_checkpointing=True
+        )
+        wrapper.trainer.args.max_steps = 1
+        try:
+            wrapper.trainer.train()
+        finally:
+            wrapper._close_stream_runtime()
+
+    @pytest.mark.parametrize("task", _ALL_PREFERENCE)
+    def test_hf_checkpointing_is_off_while_streaming(self, tmp_path, monkeypatch, task):
+        """The mechanism, asserted directly so a green run above cannot be a
+        coincidence of some other layer swallowing the double-recompute."""
+        wrapper, _, _ = _build_streamed_wrapper(
+            tmp_path, monkeypatch, task=task, gradient_checkpointing=True
+        )
+        try:
+            assert wrapper.trainer.args.gradient_checkpointing is False, (
+                f"{task} let HF check-point the inner decoder layer while "
+                f"streaming — this is exactly the #328 double-recompute"
+            )
+        finally:
+            wrapper._close_stream_runtime()
 
 
 class TestBitExactVsResident:
