@@ -52,6 +52,30 @@ MEASURED_VRAM_GRID = [
     dict(label="Qwen2.5-0.5B B8 S512", batch=8, seq=512, peak=9266992640, **_QWEN),
 ]
 
+# ---------------------------------------------------------------------------
+# #395 — the SECOND stack. Deliberately NOT part of MEASURED_VRAM_GRID above:
+# that grid carries a <1% accuracy claim fitted on the RTX 3050 / Windows /
+# torch 2.5.1 / transformers 4.57.6 box, and these rows are ~16% off it. Merging
+# them would destroy a real claim rather than widen it.
+#
+# What they DO carry is the direction property at sequence lengths the first
+# grid never reached, which is the hole #395 names. Measured on an A10G 23 GB /
+# Ubuntu 22.04 / torch 2.13.0+cu130 / transformers 5.16.1 / trl 0.29.1, real
+# `soup train` setup + one step, bf16, batch 1, quantization none, LoRA r=8.
+# Full record: benchmarks/gate-395-second-stack-vram.md
+SECOND_STACK_VRAM_GRID = [
+    dict(label="A10G SmolLM2-135M B1 S2048", batch=1, seq=2048, peak=1365200000, **_SMOL),
+    dict(label="A10G SmolLM2-135M B1 S3072", batch=1, seq=3072, peak=2016700000, **_SMOL),
+    dict(label="A10G SmolLM2-135M B1 S4096", batch=1, seq=4096, peak=2657800000, **_SMOL),
+    dict(label="A10G SmolLM2-135M B1 S4352", batch=1, seq=4352, peak=2818400000, **_SMOL),
+    dict(label="A10G SmolLM2-135M B1 S5120", batch=1, seq=5120, peak=3303000000, **_SMOL),
+    dict(label="A10G SmolLM2-135M B1 S6144", batch=1, seq=6144, peak=3943000000, **_SMOL),
+    dict(label="A10G Qwen2.5-0.5B B1 S2048", batch=1, seq=2048, peak=4177000000, **_QWEN),
+    dict(label="A10G Qwen2.5-0.5B B1 S4096", batch=1, seq=4096, peak=8012300000, **_QWEN),
+    dict(label="A10G Qwen2.5-0.5B B1 S5120", batch=1, seq=5120, peak=9929400000, **_QWEN),
+    dict(label="A10G Qwen2.5-0.5B B1 S6144", batch=1, seq=6144, peak=11848100000, **_QWEN),
+]
+
 # Accounting control for #324. This is deliberately separate from the measured
 # accuracy grid above: its peak is the first real row plus one additive
 # vocabulary slot, so it guards composition without pretending to be another
@@ -80,6 +104,68 @@ def _predict(row):
         batch_size=row["batch"],
         large_layer_bytes=row.get("large_layer_bytes", 0),
     )
+
+
+class TestSecondStackDirectionProperty:
+    """#395 — the direction property at seq 2048..6144, on a second GPU/stack.
+
+    The first grid's evidence stops at seq 512, which is the hole #395 names.
+    These rows extend the sequence axis by a factor of 12 on two models whose
+    vocabularies differ 3.1x, and they are the only evidence in this file taken
+    on hardware other than the RTX 3050.
+
+    They assert DIRECTION, not accuracy. The formula over-predicts by ~16% here
+    (see test_second_stack_gap_is_the_logits_term_alone for why that is one
+    named term rather than drift), so folding them into the <1% accuracy grid
+    would break a claim that is true on the stack it was fitted to.
+    """
+
+    @pytest.mark.parametrize(
+        "row", SECOND_STACK_VRAM_GRID, ids=lambda r: r["label"]
+    )
+    def test_never_under_predicts_on_the_second_stack(self, row):
+        assert _predict(row) >= row["peak"], row["label"]
+
+    @pytest.mark.parametrize(
+        "row", SECOND_STACK_VRAM_GRID, ids=lambda r: r["label"]
+    )
+    def test_sequence_axis_is_actually_exercised(self, row):
+        """The rows are only worth anything if they are past the first grid's
+        ceiling — a regression that quietly shortened them would leave this file
+        asserting the same seq<=512 regime twice."""
+        assert row["seq"] >= 2048
+
+    def test_second_stack_gap_is_the_logits_term_alone(self):
+        """The 16% is the logits multiplier, not an unmodelled seq-dependent
+        term. Solving each row for the bytes-per-element that would make the
+        prediction match the measurement gives 11.83 +/- 0.05 across both
+        models, both vocabularies and a 3x sequence range — against a shipped
+        LOGITS_BYTES_PER_ELEMENT of 14.
+
+        If a term grew with sequence length on this stack, this spread would
+        widen with seq. It does not, and that is what rules the seq^2 attention
+        hypothesis out here (benchmarks/gate-395-second-stack-vram.md).
+        """
+        from soup_cli.utils.layer_stream import (
+            LOGITS_BYTES_PER_ELEMENT,
+            estimate_logits_bytes,
+        )
+
+        implied = []
+        for row in SECOND_STACK_VRAM_GRID:
+            logits = estimate_logits_bytes(
+                vocab_size=row["vocab"], seq_len=row["seq"], batch_size=row["batch"]
+            )
+            non_logits = _predict(row) - logits
+            per_element = logits / LOGITS_BYTES_PER_ELEMENT
+            implied.append((row["peak"] - non_logits) / per_element)
+
+        spread = max(implied) - min(implied)
+        assert spread < 0.5, f"implied B/element is not constant: {implied}"
+        assert 11.0 < sum(implied) / len(implied) < 12.5, implied
+        # And it is genuinely below the shipped floor, which is why the
+        # estimator over-predicts here instead of under-predicting.
+        assert max(implied) < LOGITS_BYTES_PER_ELEMENT
 
 
 class TestLogitsBytesIsMeasuredNotDerived:
@@ -178,6 +264,20 @@ class TestPeakVramReproducesTheMeasuredGrid:
         not as the global guarantee the phrase suggests;
         `training.stream_vram_probe` exists because no fitted formula can carry
         that guarantee everywhere.
+
+        #395 KEPT this assertion rather than removing it, and that is forced
+        rather than preferred. Criteria 2 and 3 of #395 are jointly
+        unsatisfiable on this grid: criterion 3 asks to drop the seq<=512 scope,
+        but `test_never_under_predicts` is parametrized over a grid fitted on
+        the RTX 3050, and that stack demonstrably under-predicts at seq >= 5120
+        (the real-peak series above). Separating the grids is the only
+        construction that satisfies both. On the second stack — A10G / Linux /
+        torch 2.13 / transformers 5.16.1 — the property HOLDS to seq 6144
+        against real peaks, a flat 1.16x over-prediction
+        (SECOND_STACK_VRAM_GRID), same denominator as the 0.934x/0.787x series.
+        Two stacks disagreeing about one shape is the argument FOR pinning
+        scope per-grid: dropping the assertion because one stack is safe would
+        assert globally what neither stack can carry alone.
         """
         assert row["seq"] <= 512, (
             "this grid's evidence is seq<=512; a longer row added here would "
