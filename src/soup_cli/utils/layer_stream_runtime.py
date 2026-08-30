@@ -1354,13 +1354,14 @@ def measure_step_peak_bytes(
     """Run one forward+backward at the configured shape and read the real peak.
 
     This is the #349 instrument. The pre-flight's formula is fitted and, measured
-    here, under-predicts past seq 4096 (0.830x at seq 5120) — a formula cannot
-    model a term nobody has identified, so past that point only a measurement is
-    honest. Synthetic ``input_ids`` are used rather than a real batch because the
-    quantity being bounded is the CONFIGURED shape, which is the worst case any
-    real batch can pad up to; a real batch would measure whatever length it
-    happened to have. Validated against a full ``soup train`` run of the same
-    config: probe 4.3117 GB reserved vs the real run's 4.3159 GB, 0.1% apart.
+    against the real training run, under-predicts past seq 4352 (0.934x the real
+    peak at seq 5120, 0.787x at 6144) — a formula cannot model a term nobody has
+    identified, so past that point only a measurement is honest. Synthetic
+    ``input_ids`` are used rather than a real batch because the quantity being
+    bounded is the CONFIGURED shape, which is the worst case any real batch can
+    pad up to; a real batch would measure whatever length it happened to have.
+    Validated against a full ``soup train`` run of the same config: probe
+    4.3117 GB reserved vs the real run's 4.3159 GB, 0.1% apart.
 
     Costs one step. Measured on an RTX 3050 Laptop: 1.02-1.15 s for
     SmolLM2-135M at 1x1024, 5.09 s at 2x2048, and 5.33 s for Llama-3.1-8B NF4 at

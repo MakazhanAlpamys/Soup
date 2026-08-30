@@ -170,7 +170,7 @@ class TestPeakVramReproducesTheMeasuredGrid:
         or 512. The grid varies BATCH (1..8), so this pins "never under-predicts
         as batch grows" and nothing about sequence length — a control only covers
         the variable it varies. Measured later on the same box, the property
-        fails as seq grows: 0.992x the real peak at seq 4096 and 0.830x at 5120,
+        fails as seq grows: 0.934x the real peak at seq 5120 and 0.787x at 6144,
         deterministically. Read this as a bound on the regime below, not as the
         global guarantee the phrase suggests; `training.stream_vram_probe`
         exists because no fitted formula can carry that guarantee everywhere.
