@@ -91,6 +91,7 @@ def _ensure_mii_request_models():
 
 def build_mii_app(
     pipeline: Any, model_name: str, max_tokens_default: int = 512,
+    tokenizer: Any = None,
 ) -> Any:
     """Wrap a DeepSpeed-MII pipeline as a minimal OpenAI-compatible FastAPI
     app exposing ``/v1/chat/completions`` and ``/v1/models`` (#38, v0.33.0).
@@ -104,9 +105,14 @@ def build_mii_app(
             with ``.generated_text`` attributes.
         model_name: stable id surfaced in /v1/models and the response.
         max_tokens_default: default for requests that don't specify max_tokens.
+        tokenizer: the served model's own tokenizer, or None. Passed straight
+            through to ``build_chat_prompt`` (#332) so a chat-tuned model gets
+            its own template instead of the generic role-prefixed fallback.
     """
     from fastapi import FastAPI, HTTPException
     from fastapi.middleware.cors import CORSMiddleware
+
+    from soup_cli.utils.vllm import build_chat_prompt, resolve_finish_reason
 
     # Models are module-level (not closure) so FastAPI's introspection can
     # resolve forward refs.
@@ -147,16 +153,7 @@ def build_mii_app(
             raise HTTPException(
                 status_code=400, detail="max_tokens must be in [1, 16384]",
             )
-        prompt_parts = []
-        for msg in request.messages:
-            if msg.role == "system":
-                prompt_parts.append(f"System: {msg.content}")
-            elif msg.role == "user":
-                prompt_parts.append(f"User: {msg.content}")
-            elif msg.role == "assistant":
-                prompt_parts.append(f"Assistant: {msg.content}")
-        prompt_parts.append("Assistant:")
-        prompt = "\n".join(prompt_parts)
+        prompt = build_chat_prompt(request.messages, tokenizer)
 
         max_tokens = request.max_tokens or max_tokens_default
         try:
@@ -182,7 +179,7 @@ def build_mii_app(
             "choices": [{
                 "index": 0,
                 "message": {"role": "assistant", "content": text},
-                "finish_reason": "stop",
+                "finish_reason": resolve_finish_reason(first, max_tokens),
             }],
             "usage": {
                 "prompt_tokens": -1,

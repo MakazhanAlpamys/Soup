@@ -134,6 +134,66 @@ class TestBuildMiiApp:
         })
         assert resp.status_code == 500
 
+    def test_chat_completions_applies_the_served_models_chat_template(self):
+        """A chat-tuned model must get its own template (#332), not the
+        generic 'System: .../User: .../Assistant:' prompt build_mii_app used
+        to hand-roll."""
+        pytest.importorskip("fastapi")
+        from fastapi.testclient import TestClient
+
+        from soup_cli.utils.mii import build_mii_app
+
+        captured = {}
+
+        def _pipeline(prompts, **_kwargs):
+            captured["prompt"] = prompts[0]
+            fake_response = MagicMock()
+            fake_response.generated_text = "4"
+            return [fake_response]
+
+        tokenizer = MagicMock()
+        tokenizer.chat_template = "<|template|>"
+        tokenizer.apply_chat_template.return_value = "<|from-the-model's-own-template|>"
+
+        app = build_mii_app(
+            _pipeline, model_name="test-mii-model", tokenizer=tokenizer,
+        )
+        client = TestClient(app)
+
+        resp = client.post("/v1/chat/completions", json={
+            "model": "test-mii-model",
+            "messages": [{"role": "user", "content": "2+2?"}],
+        })
+        assert resp.status_code == 200, resp.text
+        assert captured["prompt"] == "<|from-the-model's-own-template|>"
+        assert "User:" not in captured["prompt"]
+
+    def test_chat_completions_reports_length_when_engine_reports_length(self):
+        """The engine's own finish_reason must reach the client (#333),
+        not the hardcoded 'stop' build_mii_app used to always return."""
+        pytest.importorskip("fastapi")
+        from fastapi.testclient import TestClient
+
+        from soup_cli.utils.mii import build_mii_app
+
+        fake_response = MagicMock()
+        fake_response.generated_text = "truncated output"
+        fake_response.finish_reason = "length"
+
+        def _pipeline(prompts, **_kwargs):
+            return [fake_response]
+
+        app = build_mii_app(_pipeline, model_name="test-mii-model")
+        client = TestClient(app)
+
+        resp = client.post("/v1/chat/completions", json={
+            "model": "test-mii-model",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "max_tokens": 8,
+        })
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["choices"][0]["finish_reason"] == "length"
+
 
 # ---------------------------------------------------------------------------
 # #37 — auto-reexec wiring smoke (without actually exec'ing)
