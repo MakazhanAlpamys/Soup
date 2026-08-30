@@ -535,7 +535,32 @@ def serve(
             raise typer.Exit(1) from exc
 
         mii_model_name = Path(model).name
-        mii_app = build_mii_app(mii_pipeline, model_name=mii_model_name)
+
+        # #332 — the served model's own chat template, same as the vLLM path.
+        # Without this the MII backend feeds a chat-tuned model a prompt format
+        # it never trained on, which is what made Llama-3.1-8B run on.
+        mii_tokenizer = _load_serve_tokenizer(
+            model_path=Path(model),
+            base_model=None,
+            trust_remote_code=trust_remote_code,
+        )
+        if mii_tokenizer is None:
+            console.print(
+                "[yellow]Warning:[/] no tokenizer could be loaded for this model — "
+                "falling back to a generic 'User:/Assistant:' prompt. Chat-tuned "
+                "models can run on past their stop token with this format."
+            )
+        elif not getattr(mii_tokenizer, "chat_template", None):
+            console.print(
+                "[yellow]Warning:[/] this model ships no chat template — using the "
+                "generic 'User:/Assistant:' prompt format."
+            )
+        else:
+            console.print("[green]Chat template:[/] applying the model's own template.")
+
+        mii_app = build_mii_app(
+            mii_pipeline, model_name=mii_model_name, tokenizer=mii_tokenizer,
+        )
 
         import uvicorn
         console.print(
