@@ -22,7 +22,7 @@ DEPS = [
     ("trl", "trl", "0.29.0", True),
     ("datasets", "datasets", "2.14.0", True),
     ("bitsandbytes", "bitsandbytes", "0.41.0", True),
-    ("accelerate", "accelerate", "0.25.0", True),
+    ("accelerate", "accelerate", "0.27.0", True),
     ("pydantic", "pydantic", "2.0.0", True),
     ("typer", "typer", "0.9.0", True),
     ("rich", "rich", "13.0.0", True),
