@@ -31,20 +31,39 @@ _LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 def _is_private_or_link_local(host: str) -> bool:
     """Return True iff ``host`` resolves to a non-loopback private/reserved IP.
 
+    Handles canonical IPv4/IPv6 via :func:`ipaddress.ip_address` **and**
+    abbreviated / decimal / hex / octal IPv4 forms (e.g. ``127.1``,
+    ``2130706433``, ``0x7f000001``, ``0177.0.0.1``) via the platform C
+    library :func:`socket.inet_aton`.  The latter is a pure in-process
+    string parser — no DNS lookup is performed.
+
     Explicit parentheses on the final clause (mirrors v0.63.0 drift-alarm
     code-review MEDIUM fix): Python binds ``and`` tighter than ``or``, but
     the SSRF gate is safety-critical and a future edit should not need to
     re-derive the precedence rules to verify the logic.
     """
+    import socket  # noqa: PLC0415 — lazy import (stdlib, negligible cost)
+
+    clean_host = host.rstrip(".")
+
+    def _check(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+        return (
+            ip.is_private
+            or ip.is_link_local
+            or (ip.is_loopback is False and (ip.is_reserved or ip.is_multicast))
+        )
+
     try:
-        ip = ipaddress.ip_address(host)
+        return _check(ipaddress.ip_address(clean_host))
     except ValueError:
+        pass
+    # Fallback: C-level inet_aton accepts abbreviated/integer/hex/octal
+    # IPv4 representations that Python's ipaddress module rejects.
+    try:
+        canonical = socket.inet_ntoa(socket.inet_aton(clean_host))
+        return _check(ipaddress.ip_address(canonical))
+    except (OSError, ValueError):
         return False
-    return (
-        ip.is_private
-        or ip.is_link_local
-        or (ip.is_loopback is False and (ip.is_reserved or ip.is_multicast))
-    )
 
 
 def validate_webhook_url(url: object, *, allow_private_hosts: bool = False) -> str:
@@ -89,7 +108,8 @@ def validate_webhook_url(url: object, *, allow_private_hosts: bool = False) -> s
     # any ``https://10.x`` / ``192.168.x`` sail straight through to the return.
     # Loopback hosts stay allowed (they are handled by the ``_LOOPBACK_HOSTS``
     # guard below), so an explicit ``http://localhost`` webhook still works.
-    if host not in _LOOPBACK_HOSTS:
+    host_clean = host.lower().rstrip(".")
+    if host_clean not in _LOOPBACK_HOSTS:
         if _is_private_or_link_local(host) and not allow_private_hosts:
             raise ValueError(
                 "webhook URL private/link-local/reserved hosts are not "

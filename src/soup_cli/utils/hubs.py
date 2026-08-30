@@ -113,13 +113,28 @@ def endpoint_env_var(hub: str) -> str:
 def _is_private_or_link_local(host: str) -> bool:
     """Whether ``host`` is a private / link-local / loopback IP.
 
-    DNS resolution intentionally not performed (matches v0.29.0 hf.py policy).
+    Handles canonical IPv4/IPv6 via :func:`ipaddress.ip_address` **and**
+    abbreviated / decimal / hex / octal IPv4 forms (e.g. ``127.1``,
+    ``2130706433``, ``0x7f000001``, ``0177.0.0.1``) via the platform C
+    library :func:`socket.inet_aton`.  The latter is a pure in-process
+    string parser — no DNS lookup is performed.
     """
+    import socket  # noqa: PLC0415 — lazy import (stdlib, negligible cost)
+
+    clean_host = host.rstrip(".")
     try:
-        addr = ipaddress.ip_address(host)
+        addr = ipaddress.ip_address(clean_host)
+        return addr.is_private or addr.is_link_local or addr.is_loopback
     except ValueError:
+        pass
+    # Fallback: C-level inet_aton accepts abbreviated/integer/hex/octal
+    # IPv4 representations that Python's ipaddress module rejects.
+    try:
+        canonical = socket.inet_ntoa(socket.inet_aton(clean_host))
+        addr = ipaddress.ip_address(canonical)
+        return addr.is_private or addr.is_link_local or addr.is_loopback
+    except (OSError, ValueError):
         return False
-    return addr.is_private or addr.is_link_local or addr.is_loopback
 
 
 def validate_hub_endpoint(endpoint: str, *, hub: str | None = None) -> str:
@@ -164,7 +179,8 @@ def validate_hub_endpoint(endpoint: str, *, hub: str | None = None) -> str:
         raise ValueError(
             f"{label} 0.0.0.0 is ambiguous; use 127.0.0.1 or localhost"
         )
-    if parsed.scheme == "http" and host not in _LOOPBACK_HOSTS:
+    host_clean = host.lower().rstrip(".")
+    if parsed.scheme == "http" and host_clean not in _LOOPBACK_HOSTS:
         if _is_private_or_link_local(host):
             raise ValueError(
                 f"{label} plain HTTP is only allowed for loopback "
