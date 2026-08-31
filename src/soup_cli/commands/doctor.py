@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import platform
+import re
 import sys
 
 import typer
@@ -246,6 +247,62 @@ def _check_gpu():
         )
 
 
+# Newest-first PyTorch CUDA wheel tags. A driver that advertises CUDA N.M can
+# load any wheel whose CUDA is <= N.M (driver backward compatibility).
+_TORCH_CUDA_WHEELS: tuple[tuple[int, int, str], ...] = (
+    (13, 2, "cu132"),
+    (13, 0, "cu130"),
+    (12, 8, "cu128"),
+    (12, 6, "cu126"),
+    (12, 4, "cu124"),
+    (12, 1, "cu121"),
+)
+
+
+def _parse_cuda_version(text: str) -> tuple[int, int] | None:
+    """Extract ``(major, minor)`` from nvidia-smi ``CUDA Version: X.Y`` text."""
+    match = re.search(r"CUDA Version:\s*(\d+)\.(\d+)", text or "")
+    if match is None:
+        return None
+    return int(match.group(1)), int(match.group(2))
+
+
+def _torch_cuda_wheel_tag(driver: tuple[int, int] | None) -> str:
+    """Pick the newest PyTorch CUDA wheel the driver can run.
+
+    Falls back to ``cu130`` (current PyTorch default CUDA build) rather than
+    the frozen ``cu121`` string from v0.40.1, which is wrong on CUDA 12.6+
+    cards — including Blackwell / RTX 50-series.
+    """
+    if driver is None:
+        return "cu130"
+    for major, minor, tag in _TORCH_CUDA_WHEELS:
+        if driver >= (major, minor):
+            return tag
+    return "cu121"
+
+
+def _nvidia_smi_cuda_version() -> tuple[int, int] | None:
+    """Read the driver's max CUDA version from ``nvidia-smi`` header output."""
+    import shutil
+    import subprocess
+
+    if shutil.which("nvidia-smi") is None:
+        return None
+    try:
+        completed = subprocess.run(  # noqa: S603 — argv list, no shell
+            ["nvidia-smi"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if completed.returncode != 0:
+        return None
+    return _parse_cuda_version((completed.stdout or "") + (completed.stderr or ""))
+
+
 def _detect_gpu_hw_without_torch_cuda() -> str:
     """v0.40.1 Part C / N3 — return advisory string if nvidia-smi succeeds
     but torch lacks CUDA (i.e. user installed the CPU-only wheel).
@@ -280,10 +337,16 @@ def _detect_gpu_hw_without_torch_cuda() -> str:
         torch_version = _pkgver("torch")
     except Exception:  # noqa: BLE001
         torch_version = "?"
+    wheel = _torch_cuda_wheel_tag(_nvidia_smi_cuda_version())
+    index_url = f"https://download.pytorch.org/whl/{wheel}"
+    windows_note = ""
+    if platform.system() == "Windows":
+        windows_note = " On Windows, PyPI's torch wheel is CPU-only."
     return (
         f"GPU hardware present ({gpu_label}) but torch is the CPU build "
         f"(torch {torch_version}). To enable your GPU: "
-        f"`pip install torch --index-url https://download.pytorch.org/whl/cu121`"
+        f"`pip install torch --index-url {index_url}`"
+        f"{windows_note}"
     )
 
 

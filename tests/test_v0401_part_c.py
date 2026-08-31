@@ -151,10 +151,64 @@ def test_detect_gpu_hw_returns_advisory_when_smi_succeeds():
     with (
         patch("shutil.which", return_value="/usr/bin/nvidia-smi"),
         patch("subprocess.run", return_value=completed),
+        patch(
+            "soup_cli.commands.doctor._nvidia_smi_cuda_version",
+            return_value=None,
+        ),
     ):
         advisory = _detect_gpu_hw_without_torch_cuda()
     assert "RTX 3050" in advisory
-    assert "cu121" in advisory
+    assert "download.pytorch.org/whl/" in advisory
+    # Unknown driver → current PyTorch default CUDA build, not frozen cu121.
+    assert "cu130" in advisory
+    assert "cu121" not in advisory
+
+
+def test_detect_gpu_hw_uses_driver_cuda_wheel():
+    import subprocess
+
+    from soup_cli.commands.doctor import _detect_gpu_hw_without_torch_cuda
+
+    completed = subprocess.CompletedProcess(
+        args=[], returncode=0, stdout="NVIDIA GeForce RTX 5060 Ti\n", stderr=""
+    )
+    with (
+        patch("shutil.which", return_value="/usr/bin/nvidia-smi"),
+        patch("subprocess.run", return_value=completed),
+        patch(
+            "soup_cli.commands.doctor._nvidia_smi_cuda_version",
+            return_value=(13, 2),
+        ),
+    ):
+        advisory = _detect_gpu_hw_without_torch_cuda()
+    assert "RTX 5060 Ti" in advisory
+    assert "cu132" in advisory
+    assert "cu121" not in advisory
+
+
+def test_parse_cuda_version_from_nvidia_smi_header():
+    from soup_cli.commands.doctor import _parse_cuda_version
+
+    header = (
+        "NVIDIA-SMI 596.49                 Driver Version: 596.49"
+        "         CUDA Version: 13.2"
+    )
+    assert _parse_cuda_version(header) == (13, 2)
+    assert _parse_cuda_version("no cuda here") is None
+    assert _parse_cuda_version("") is None
+
+
+def test_torch_cuda_wheel_tag_picks_newest_supported():
+    from soup_cli.commands.doctor import _torch_cuda_wheel_tag
+
+    assert _torch_cuda_wheel_tag((13, 2)) == "cu132"
+    assert _torch_cuda_wheel_tag((13, 0)) == "cu130"
+    assert _torch_cuda_wheel_tag((12, 8)) == "cu128"
+    assert _torch_cuda_wheel_tag((12, 7)) == "cu126"
+    assert _torch_cuda_wheel_tag((12, 6)) == "cu126"
+    assert _torch_cuda_wheel_tag((12, 1)) == "cu121"
+    assert _torch_cuda_wheel_tag((11, 8)) == "cu121"
+    assert _torch_cuda_wheel_tag(None) == "cu130"
 
 
 # --- N4: dual-Python interpreter detector ---------------------------------
