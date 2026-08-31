@@ -4,6 +4,7 @@ GPU-aware model pick / lr_finder import regression.
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -159,9 +160,8 @@ def test_detect_gpu_hw_returns_advisory_when_smi_succeeds():
         advisory = _detect_gpu_hw_without_torch_cuda()
     assert "RTX 3050" in advisory
     assert "download.pytorch.org/whl/" in advisory
-    # Unknown driver → current PyTorch default CUDA build, not frozen cu121.
-    assert "cu130" in advisory
-    assert "cu121" not in advisory
+    # Unknown driver: conservative cu121 (parse failure is an old driver).
+    assert "whl/cu121" in advisory
 
 
 def test_detect_gpu_hw_uses_driver_cuda_wheel():
@@ -179,11 +179,45 @@ def test_detect_gpu_hw_uses_driver_cuda_wheel():
             "soup_cli.commands.doctor._nvidia_smi_cuda_version",
             return_value=(13, 2),
         ),
+        # Installed CUDA torch version string, as on a real GPU box.
+        # A naive `assert "cu121" not in advisory` matches this and goes
+        # red locally / green on CPU-only CI.
+        patch("importlib.metadata.version", return_value="2.5.1+cu121"),
     ):
         advisory = _detect_gpu_hw_without_torch_cuda()
     assert "RTX 5060 Ti" in advisory
-    assert "cu132" in advisory
-    assert "cu121" not in advisory
+    assert "2.5.1+cu121" in advisory
+    assert "whl/cu132" in advisory
+    assert "whl/cu121" not in advisory
+
+
+def test_nvidia_smi_invoked_by_absolute_path():
+    import subprocess
+
+    from soup_cli.commands.doctor import (
+        _detect_gpu_hw_without_torch_cuda,
+        _nvidia_smi_cuda_version,
+    )
+
+    smi = "/usr/bin/nvidia-smi"
+    failed = subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="")
+    with (
+        patch("shutil.which", return_value=smi),
+        patch("subprocess.run", return_value=failed) as run,
+    ):
+        _nvidia_smi_cuda_version()
+    argv = run.call_args.args[0]
+    assert argv[0] == smi
+    assert argv[0] != "nvidia-smi"
+
+    with (
+        patch("shutil.which", return_value=smi),
+        patch("subprocess.run", return_value=failed) as run,
+    ):
+        _detect_gpu_hw_without_torch_cuda()
+    argv = run.call_args.args[0]
+    assert argv[0] == smi
+    assert "--query-gpu=name" in argv
 
 
 def test_parse_cuda_version_from_nvidia_smi_header():
@@ -194,21 +228,34 @@ def test_parse_cuda_version_from_nvidia_smi_header():
         "         CUDA Version: 13.2"
     )
     assert _parse_cuda_version(header) == (13, 2)
+    assert _parse_cuda_version("CUDA Version:13.2") == (13, 2)
+    assert _parse_cuda_version("CUDA Version: 12.10") == (12, 10)
+    assert _parse_cuda_version("CUDA Version: N/A") is None
     assert _parse_cuda_version("no cuda here") is None
     assert _parse_cuda_version("") is None
 
 
 def test_torch_cuda_wheel_tag_picks_newest_supported():
-    from soup_cli.commands.doctor import _torch_cuda_wheel_tag
+    from soup_cli.commands.doctor import _TORCH_CUDA_WHEELS, _torch_cuda_wheel_tag
 
+    assert (11, 8, "cu118") in _TORCH_CUDA_WHEELS
     assert _torch_cuda_wheel_tag((13, 2)) == "cu132"
+    assert _torch_cuda_wheel_tag((13, 1)) == "cu130"
     assert _torch_cuda_wheel_tag((13, 0)) == "cu130"
     assert _torch_cuda_wheel_tag((12, 8)) == "cu128"
     assert _torch_cuda_wheel_tag((12, 7)) == "cu126"
     assert _torch_cuda_wheel_tag((12, 6)) == "cu126"
+    assert _torch_cuda_wheel_tag((12, 4)) == "cu124"
     assert _torch_cuda_wheel_tag((12, 1)) == "cu121"
-    assert _torch_cuda_wheel_tag((11, 8)) == "cu121"
-    assert _torch_cuda_wheel_tag(None) == "cu130"
+    assert _torch_cuda_wheel_tag((11, 8)) == "cu118"
+    assert _torch_cuda_wheel_tag((11, 0)) == "cu118"
+    assert _torch_cuda_wheel_tag(None) == "cu121"
+
+
+def test_readme_does_not_hardcode_a_cuda_wheel_index():
+    readme = Path(__file__).resolve().parents[1] / "README.md"
+    text = readme.read_text(encoding="utf-8")
+    assert "download.pytorch.org/whl/cu" not in text
 
 
 # --- N4: dual-Python interpreter detector ---------------------------------

@@ -256,6 +256,7 @@ _TORCH_CUDA_WHEELS: tuple[tuple[int, int, str], ...] = (
     (12, 6, "cu126"),
     (12, 4, "cu124"),
     (12, 1, "cu121"),
+    (11, 8, "cu118"),
 )
 
 
@@ -270,28 +271,41 @@ def _parse_cuda_version(text: str) -> tuple[int, int] | None:
 def _torch_cuda_wheel_tag(driver: tuple[int, int] | None) -> str:
     """Pick the newest PyTorch CUDA wheel the driver can run.
 
-    Falls back to ``cu130`` (current PyTorch default CUDA build) rather than
-    the frozen ``cu121`` string from v0.40.1, which is wrong on CUDA 12.6+
-    cards — including Blackwell / RTX 50-series.
+    ``None`` (unreadable nvidia-smi header) falls back to ``cu121``, not
+    ``cu130``: a parse failure is treated as an old driver. A too-new wheel
+    is the failure mode that looks like success (pip ok, CUDA init dies).
+    A known 13.2 header still maps to ``cu132``. Drivers older than every
+    table row get ``cu118``, the oldest published tag.
     """
     if driver is None:
-        return "cu130"
+        return "cu121"
     for major, minor, tag in _TORCH_CUDA_WHEELS:
         if driver >= (major, minor):
             return tag
-    return "cu121"
+    return "cu118"
+
+
+def _nvidia_smi_executable() -> str | None:
+    """Absolute path to nvidia-smi, or None.
+
+    Bare ``nvidia-smi`` is never handed to ``subprocess`` (CWE-427):
+    Windows ``CreateProcess`` searches the current directory before PATH.
+    """
+    import shutil
+
+    return shutil.which("nvidia-smi")
 
 
 def _nvidia_smi_cuda_version() -> tuple[int, int] | None:
     """Read the driver's max CUDA version from ``nvidia-smi`` header output."""
-    import shutil
     import subprocess
 
-    if shutil.which("nvidia-smi") is None:
+    nvidia_smi = _nvidia_smi_executable()
+    if nvidia_smi is None:
         return None
     try:
         completed = subprocess.run(  # noqa: S603 — argv list, no shell
-            ["nvidia-smi"],
+            [nvidia_smi],
             capture_output=True,
             text=True,
             timeout=5,
@@ -307,14 +321,14 @@ def _detect_gpu_hw_without_torch_cuda() -> str:
     """v0.40.1 Part C / N3 — return advisory string if nvidia-smi succeeds
     but torch lacks CUDA (i.e. user installed the CPU-only wheel).
     """
-    import shutil
     import subprocess
 
-    if shutil.which("nvidia-smi") is None:
+    nvidia_smi = _nvidia_smi_executable()
+    if nvidia_smi is None:
         return ""
     try:
         completed = subprocess.run(  # noqa: S603 — argv list, no shell
-            ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+            [nvidia_smi, "--query-gpu=name", "--format=csv,noheader"],
             capture_output=True,
             text=True,
             timeout=5,
