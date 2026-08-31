@@ -1,0 +1,4 @@
+- Consolidated the SSRF loopback/private-host predicate (`_is_private_or_link_local`,
+  `_LOOPBACK_HOSTS`) into a single `utils/net_guard.py`, replacing four copies across
+  `hf.py`, `hubs.py`, `loop_stages.py`, and `qr_url.py` that had already drifted apart
+  once in the past (#372, #392, #424) (#616).

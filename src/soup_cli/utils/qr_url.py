@@ -12,8 +12,7 @@ import re
 from typing import Optional
 from urllib.parse import urlparse
 
-# Loopback hosts on which plain HTTP is allowed.
-_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+from soup_cli.utils.net_guard import LOOPBACK_HOSTS as _LOOPBACK_HOSTS
 
 # Token regex — 16-128 chars of urlsafe base64.
 _TOKEN_RE = re.compile(r"^[A-Za-z0-9_\-]{16,128}$")

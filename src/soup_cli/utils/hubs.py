@@ -18,13 +18,15 @@ that the live wiring will call.
 """
 from __future__ import annotations
 
-import ipaddress
 import logging
 import os
 import tempfile
 from types import MappingProxyType
 from typing import Callable, Mapping, Optional, Tuple
 from urllib.parse import urlparse
+
+from soup_cli.utils.net_guard import LOOPBACK_HOSTS as _LOOPBACK_HOSTS
+from soup_cli.utils.net_guard import is_private_or_link_local as _is_private_or_link_local
 
 _LOG = logging.getLogger(__name__)
 
@@ -51,8 +53,6 @@ _HUB_PACKAGE: Mapping[str, str] = MappingProxyType({
     "modelscope": "modelscope",
     "modelers": "openmind-hub",
 })
-
-_LOOPBACK_HOSTS: frozenset[str] = frozenset({"localhost", "127.0.0.1", "::1"})
 
 _MAX_HUB_NAME_LEN: int = 32
 
@@ -108,33 +108,6 @@ def endpoint_env_var(hub: str) -> str:
     """Return the env-var name that overrides the default endpoint."""
     canonical = validate_hub_name(hub)
     return _HUB_ENDPOINT_ENV[canonical]
-
-
-def _is_private_or_link_local(host: str) -> bool:
-    """Whether ``host`` is a private / link-local / loopback IP.
-
-    Handles canonical IPv4/IPv6 via :func:`ipaddress.ip_address` **and**
-    abbreviated / decimal / hex / octal IPv4 forms (e.g. ``127.1``,
-    ``2130706433``, ``0x7f000001``, ``0177.0.0.1``) via the platform C
-    library :func:`socket.inet_aton`.  The latter is a pure in-process
-    string parser — no DNS lookup is performed.
-    """
-    import socket  # noqa: PLC0415 — lazy import (stdlib, negligible cost)
-
-    clean_host = host.rstrip(".")
-    try:
-        addr = ipaddress.ip_address(clean_host)
-        return addr.is_private or addr.is_link_local or addr.is_loopback
-    except ValueError:
-        pass
-    # Fallback: C-level inet_aton accepts abbreviated/integer/hex/octal
-    # IPv4 representations that Python's ipaddress module rejects.
-    try:
-        canonical = socket.inet_ntoa(socket.inet_aton(clean_host))
-        addr = ipaddress.ip_address(canonical)
-        return addr.is_private or addr.is_link_local or addr.is_loopback
-    except (OSError, ValueError):
-        return False
 
 
 def validate_hub_endpoint(endpoint: str, *, hub: str | None = None) -> str:

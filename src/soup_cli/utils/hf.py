@@ -16,17 +16,16 @@ Design goals:
 
 from __future__ import annotations
 
-import ipaddress
 import os
 import re
 from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import urlparse
 
-DEFAULT_ENDPOINT = "https://huggingface.co"
+from soup_cli.utils.net_guard import LOOPBACK_HOSTS as _LOOPBACK_HOSTS
+from soup_cli.utils.net_guard import is_private_or_link_local as _is_private_or_link_local
 
-# Loopback hosts that may legitimately use plain HTTP (dev / self-hosted).
-_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+DEFAULT_ENDPOINT = "https://huggingface.co"
 
 # repo IDs are either "name" or "owner/name"; both parts must be safe.
 _REPO_PART_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$")
@@ -119,36 +118,6 @@ def resolve_endpoint() -> str:
             "HF_ENDPOINT for remote hosts must use HTTPS (localhost HTTP allowed)"
         )
     return stripped
-
-
-def _is_private_or_link_local(host: str) -> bool:
-    """Whether ``host`` resolves to a private / link-local / loopback IP.
-
-    Handles canonical IPv4/IPv6 via :func:`ipaddress.ip_address` **and**
-    abbreviated / decimal / hex / octal IPv4 forms (e.g. ``127.1``,
-    ``2130706433``, ``0x7f000001``, ``0177.0.0.1``) via the platform C
-    library :func:`socket.inet_aton`.  The latter is a pure in-process
-    string parser — no DNS lookup is performed.
-    """
-    import socket  # noqa: PLC0415 — lazy import (stdlib, negligible cost)
-
-    clean_host = host.rstrip(".")
-    try:
-        addr = ipaddress.ip_address(clean_host)
-        return addr.is_private or addr.is_link_local or addr.is_loopback
-    except ValueError:
-        pass
-    # Fallback: C-level inet_aton accepts abbreviated/integer/hex/octal
-    # IPv4 representations that Python's ipaddress module rejects.
-    try:
-        canonical = socket.inet_ntoa(socket.inet_aton(clean_host))
-        addr = ipaddress.ip_address(canonical)
-        return addr.is_private or addr.is_link_local or addr.is_loopback
-    except (OSError, ValueError):
-        # Hostname — we don't resolve DNS here (the SDK does), so fall
-        # back to "treat as public". A malicious DNS record pointing to
-        # a private IP is out of scope for this local-tool threat model.
-        return False
 
 
 def validate_repo_id(repo_id: str) -> None:

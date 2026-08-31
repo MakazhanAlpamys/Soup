@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Mapping, Optional
 
 from soup_cli.utils.loop_state import LoopState
+from soup_cli.utils.net_guard import LOOPBACK_HOSTS as _LOOPBACK_HOSTS
 from soup_cli.utils.paths import atomic_write_text
 
 if TYPE_CHECKING:
@@ -258,8 +259,6 @@ def gate_against_baseline(
 
 # Adapter-name shape accepted by the v0.30.0 /v1/adapters/activate route.
 _ADAPTER_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\-]*$")
-
-_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 
 
 def _endpoint_is_local(endpoint: str) -> bool:
