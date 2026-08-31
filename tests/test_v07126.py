@@ -2446,3 +2446,116 @@ class TestReviewFixesTdd:
                 assert not stripped.startswith(
                     ("import transformers", "from transformers")
                 ), line
+
+
+# =====================================================================
+# Part E — #371 item 2: the ladder thresholds, pinned at their documented
+# values with an N-1 control, and the beta == floor degenerate case
+# =====================================================================
+
+
+class TestLadderThresholds:
+    """N consecutive HACK votes fire each ladder at its documented threshold,
+    with a control at N-1 (#371 acceptance criteria).
+
+    The ladders live in DIFFERENT modes — the β ladder in kl_control, the
+    rollback rung in pid_lagrangian (reward_hack_control module docstring) —
+    so each is pinned here in its own mode.
+    """
+
+    def test_beta_ladder_trips_on_nth_hack_vote_with_nm1_control(self):
+        # trip_band=0.30 is exactly classify_hack_signal's HACK boundary, so a
+        # vote of 0.30 is a HACK verdict AND a trip vote — one threshold, one
+        # signal, for the verdict the rollback ladder counts in pid_lagrangian.
+        policy = _bang_policy(dwell_steps=3)
+        state, actions = _run_bang(policy, [0.3, 0.3])  # N-1 = 2: must NOT trip
+        assert not state.tripped and state.beta == pytest.approx(0.02)
+        assert all(a.reason == "hold" for a in actions)
+        assert all(a.verdict == "HACK" for a in actions)
+        state, actions = _run_bang(policy, [0.3, 0.3, 0.3])  # N = 3
+        assert state.tripped and state.beta == pytest.approx(0.02 * 1.5)
+        assert actions[0].reason == "hold" and actions[1].reason == "hold"
+        assert actions[2].reason.startswith("trip")  # fires on step N exactly
+        assert all(a.verdict == "HACK" for a in actions)
+
+    def test_rollback_ladder_fires_on_nth_hack_vote_with_nm1_control(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.chdir(tmp_path)
+
+        def _run(n_hacks):
+            # rollback_patience=3 is the documented shipped default.
+            ckpt = _FakeCkptCb(saved=[10])
+            cb = _pid_callback(
+                tmp_path,
+                _SeqBuffer([_HEALTHY] + [_HACK] * n_hacks),
+                rollback=True,
+                rollback_patience=3,
+                ckpt_cb=ckpt,
+            )
+            cb.attach(_fake_grpo_trainer(beta=0.02))
+            control = types.SimpleNamespace(should_training_stop=False)
+            fired_at = None
+            for step in range(1, 2 + n_hacks):
+                control = cb.on_step_end(
+                    None,
+                    types.SimpleNamespace(global_step=step),
+                    control,
+                    model=object(),
+                    optimizer=object(),
+                )
+                if ckpt.restore_calls and fired_at is None:
+                    fired_at = step
+            return ckpt.restore_calls, fired_at, control
+
+        calls, fired_at, control = _run(2)  # N-1 = 2: must NOT roll back
+        assert calls == [] and fired_at is None
+        assert control.should_training_stop is False
+
+        calls, fired_at, control = _run(3)  # N = 3 consecutive HACK votes
+        assert calls == [10]
+        assert fired_at == 4  # step 1 healthy, then HACK on steps 2, 3, 4
+        assert control.should_training_stop is False  # budget NOT yet spent
+
+
+class TestBetaFloorDegenerate:
+    """β == floor is the configuration the DEFAULTS produce (``grpo_beta`` ==
+    ``reward_hack_beta_floor`` == 0.02), which #371 asks a test for. The
+    ladder must run from that origin: seed to it, never cross below it, relax
+    back to EXACTLY it, and re-trip from it."""
+
+    def test_unseeded_sentinel_resolves_to_floor(self):
+        from soup_cli.utils.reward_hack_control import ControllerState, bang_bang_step
+
+        policy = _bang_policy()
+        state, action = bang_bang_step(policy, ControllerState(), vote=0.02)
+        # the 0.0 sentinel resolves to beta_floor — never emitted as β itself
+        assert action.new_beta == pytest.approx(policy.beta_floor)
+        assert state.beta == pytest.approx(policy.beta_floor)
+
+    def test_release_pressure_from_floor_never_crosses_below_floor(self):
+        policy = _bang_policy()
+        state, actions = _run_bang(policy, [0.02] * 6)  # deep in the release band
+        assert not state.tripped
+        assert state.beta == pytest.approx(policy.beta_floor)
+        assert all(a.new_beta >= policy.beta_floor for a in actions)
+
+    def test_defaults_seed_at_floor_and_the_ladder_runs_from_there(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.chdir(tmp_path)
+        cb = _kl_callback(
+            tmp_path, _SeqBuffer([_HEALTHY, _HACK, _HEALTHY, _HACK, _HACK])
+        )
+        trainer = _fake_grpo_trainer(beta=0.02)  # the default coefficient
+        cb.attach(trainer)
+        betas = []
+        for step in range(1, 6):  # hold, trip, relax, re-trip, raise
+            cb.on_step_end(None, types.SimpleNamespace(global_step=step), None)
+            betas.append(trainer.beta)
+        assert betas[0] == pytest.approx(0.02)  # seeded AT the floor, hold wrote nothing
+        assert betas[1] == pytest.approx(0.04)
+        assert betas[2] == pytest.approx(0.02)  # relaxed to EXACTLY the floor
+        assert betas[3] == pytest.approx(0.04)  # re-tripped from the floor
+        assert betas[4] == pytest.approx(0.08)
+        assert all(b >= 0.02 for b in betas)  # the hard invariant: never below

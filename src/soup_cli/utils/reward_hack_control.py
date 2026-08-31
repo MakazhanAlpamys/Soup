@@ -9,6 +9,15 @@ only halting:
 - ``pid_lagrangian`` (Stage 2): PID-Lagrangian controller + rollback ladder.
 
 Design:
+- The two mitigation ladders live in DIFFERENT modes by design: kl_control
+  owns the bang-bang β ladder (its terminal rung is β pinned at ``beta_ceil``),
+  and the rollback-to-last-good rung exists ONLY in pid_lagrangian (the config
+  schema rejects ``reward_hack_rollback`` under any other mode). A kl_control
+  run therefore has NO rollback counter. This is the reconciliation the H100
+  gate record (``benchmarks/gate-h100-validation.md``) recorded as an open
+  inconsistency (#371) when the β ladder fired in a kl_control arm but the
+  rollback ladder "never fired in any arm": its only home was the
+  pid_lagrangian arms, which all crashed (#342) before the rung could run.
 - Pure controller pieces (``ControllerState``, ``BangBangPolicy``,
   ``PIDLagrangianPolicy``, ``combine_signals``, ``smooth_signal``, the step
   functions) are frozen dataclasses / free functions with NO torch import at
@@ -1026,7 +1035,12 @@ class _RewardHackMitigationCallback_body:  # type: ignore[misc, valid-type]  # n
     def _run_bang_bang(
         self, telemetry: dict[str, Any], signals: Mapping[str, float]
     ) -> None:
-        """kl_control: vote → bang-bang step → mutate the trainer coefficient."""
+        """kl_control: vote → bang-bang step → mutate the trainer coefficient.
+
+        No rollback rung here — by design the kl_control ladder ends with β
+        pinned at ``beta_ceil``; the rollback rung lives only in pid_lagrangian
+        (module docstring, #371).
+        """
         policy = self.bang_bang
         if policy is None:
             return
@@ -1110,7 +1124,13 @@ class _RewardHackMitigationCallback_body:  # type: ignore[misc, valid-type]  # n
         optimizer: Any,
         control: Any,
     ) -> Any:
-        """pid_lagrangian: PID β update + rollback escalation ladder."""
+        """pid_lagrangian: PID β update + rollback escalation ladder.
+
+        The ONLY mode with a rollback rung (#371). Its HACK streak counts the
+        same combined vote that drives the PID (``classify_hack_signal``'s HACK
+        band), so within this mode the β control and the ladder agree on the
+        signal and its reset rule.
+        """
         policy = self.pid
         if policy is None:
             return control
