@@ -23,6 +23,7 @@ They are the evidence behind the preprint:
 | [`probe-v0.73.0-what-bounds-streaming.md`](probe-v0.73.0-what-bounds-streaming.md) | What the streamed step is actually bound by, and Cut Cross-Entropy on top of it | **Not** transfer-bound: 71.3% of the card's same-session GEMM ceiling, and deleting every host-to-device byte buys 1.4%. CCE triples the usable microbatch for +9.6% |
 | [`run-t4-colab-free-tier.md`](run-t4-colab-free-tier.md) | Not a gate — one completed run on hardware the maintainer does not own | An 8B NF4 streamed run finishes on a free-tier Colab **T4 (sm_75, Turing)** inside a 4.00 GB process cap, peak **2.91 GB** against a predicted 3.02 (the estimator over-predicts by 3.8%, the safe direction). **No throughput is quoted** — a capped card is not a benchmark — and gradient exactness on Turing is *not* shown |
 | [`gate-v0.73.1-measured-vram-fit.md`](gate-v0.73.1-measured-vram-fit.md) | Measuring the streaming VRAM fit instead of predicting it | The peak-VRAM formula **under-predicts at long sequence** — 0.934x the real peak at seq 5120 and 0.787x at 6144, measured through the real `soup train`, a direction the v0.72.3 grid could not see because all ten of its rows sit at seq 256 or 512. Carries **three readings that were withdrawn** during the work, including two that looked like the headline result |
+| [`gate-395-second-stack-vram.md`](gate-395-second-stack-vram.md) | The VRAM fit on a second GPU/stack — the verification `gate-v0.73.1` could not do on one card | The under-prediction **does not reproduce**: flat 1.16x over-prediction across seq 2048-6144 on two models, against 0.934x / 0.787x on the RTX 3050. The gap is a single stack-specific term, not drift with sequence. The SDPA math-path hypothesis is published as a **negative result** with a positive control, and explicitly *not* extended to the 3050. Carries a **discarded first sweep** whose numbers were an artifact of `max_length` truncating rather than padding |
 | [`gate-v0.73.2-leg2-scoring.md`](gate-v0.73.2-leg2-scoring.md) | `soup ship`'s leg-2 scorers — the release gate itself, not streaming | A suite scored **0.000** for a stub answering every item *correctly*, twice over: `\boxed{C}` was unknown to the MCQ extractor, and a tool call one closing brace short fell through to the inner object. Two models with **byte-identical** scores on all seven suites, one refusing every benign request, were indistinguishable to the gate. The measured noise floor on this box is **0.0000** — CPU greedy decode is deterministic, and the H100's 0.015/0.020 is explicitly *not* re-claimed here. Carries a **withdrawn** order-dependence scare, a control that varied nothing, and a review finding that was checked against three implementations and **partly rejected** |
 | [`gate-h100-validation.md`](gate-h100-validation.md) |  The method on someone else's hardware: bit-exactness at real sizes, convergence quality, DeepSpeed, variance | **Forward** bit-exact to 72B; **backward** bit-exact to 14B NF4 pre-repair, re-gated after the STEP 14 fix at 32B (256/256) **and at 72B (320/320, the size where the defect was worst)**; 2.93x DeepSpeed ZeRO-3 offload in 9.7x less VRAM; and the silent wrong-gradient defect that fix repairs. **Carries three dated 2026-08-13 corrections**: it explains the H100 replication as host-to-device transfer, which the probe record above later measured and refuted. The original lines are left standing with the correction beside them |
 
@@ -52,6 +53,15 @@ Every number in the four `gate-v0.72.*` records was measured on one machine:
 stack. It is the first record from hardware other than the laptop, and the first
 able to hold a *resident* reference for an 8B–72B model — which is what turns
 "bit-exact on a 3-layer toy" into "bit-exact on real models".
+
+`gate-395-second-stack-vram.md` is the third box: an **NVIDIA A10G 23 GB**
+(AWS `g5.xlarge`), Ubuntu 22.04, torch 2.13.0+cu130 / transformers 5.16.1 /
+trl 0.29.1 / peft 0.20.0. It exists to answer a question one card cannot —
+whether the long-sequence under-prediction is a property of the formula or of
+the stack it was fitted on. Note the direction of the dependency floor:
+`pyproject.toml [train]` now requires `transformers>=5.16.1`, `trl>=0.29.0`,
+`peft>=0.20.0`, so this stack **is** that floor while the RTX 3050 stack below
+is beneath it.
 
 `run-t4-colab-free-tier.md` is the second exception and a much weaker one: a free
 Colab **Tesla T4 (sm_75, Turing)**, one run, no repeats, no captured

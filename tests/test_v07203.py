@@ -135,37 +135,69 @@ class TestSecondStackDirectionProperty:
         asserting the same seq<=512 regime twice."""
         assert row["seq"] >= 2048
 
-    def test_second_stack_gap_is_the_logits_term_alone(self):
-        """The 16% is the logits multiplier, not an unmodelled seq-dependent
-        term. Solving each row for the bytes-per-element that would make the
-        prediction match the measurement gives 11.83 +/- 0.05 across both
-        models, both vocabularies and a 3x sequence range — against a shipped
-        LOGITS_BYTES_PER_ELEMENT of 14.
+    def test_second_stack_has_no_retained_logits_copy(self):
+        """The #395 finding, stated as the arithmetic that forces it.
 
-        If a term grew with sequence length on this stack, this spread would
-        widen with seq. It does not, and that is what rules the seq^2 attention
-        hypothesis out here (benchmarks/gate-395-second-stack-vram.md).
+        The shipped 14 is ``LOGITS_LOSS_BYTES_PER_ELEMENT`` (12, measured at
+        12.000000 with zero spread on this stack too) plus 2 for one further
+        bf16 logits-shaped tensor whose retention #327 has not explained.
+
+        If that copy were retained on the A10G, the whole real peak would have
+        to exceed the logits term at 14 alone. On every row it does not, which
+        leaves no room for the non-logits terms let alone the copy. That is a
+        constraint on any explanation of #327's retention, and it is why this
+        grid over-predicts rather than under-predicting.
+
+        An earlier revision asserted a back-solved 11.83 B/element here. That
+        was withdrawn: it attributed the whole discrepancy to the logits
+        multiplier, when the multiplier is pinned at 12 on both stacks and the
+        gap is the absent copy plus a ~15% over-estimate of the non-logits
+        terms (benchmarks/gate-395-second-stack-vram.md).
         """
         from soup_cli.utils.layer_stream import (
             LOGITS_BYTES_PER_ELEMENT,
             estimate_logits_bytes,
         )
 
-        implied = []
         for row in SECOND_STACK_VRAM_GRID:
-            logits = estimate_logits_bytes(
+            logits_at_shipped = estimate_logits_bytes(
                 vocab_size=row["vocab"], seq_len=row["seq"], batch_size=row["batch"]
             )
-            non_logits = _predict(row) - logits
-            per_element = logits / LOGITS_BYTES_PER_ELEMENT
-            implied.append((row["peak"] - non_logits) / per_element)
+            assert logits_at_shipped > row["peak"], (
+                f"{row['label']}: the logits term at "
+                f"{LOGITS_BYTES_PER_ELEMENT} B/element is "
+                f"{logits_at_shipped} but the whole measured peak is "
+                f"{row['peak']} - the retained bf16 copy would fit, so this "
+                f"row no longer supports the finding"
+            )
 
-        spread = max(implied) - min(implied)
-        assert spread < 0.5, f"implied B/element is not constant: {implied}"
-        assert 11.0 < sum(implied) / len(implied) < 12.5, implied
-        # And it is genuinely below the shipped floor, which is why the
-        # estimator over-predicts here instead of under-predicting.
-        assert max(implied) < LOGITS_BYTES_PER_ELEMENT
+    def test_the_non_logits_over_estimate_is_flat(self):
+        """Holding the MEASURED 12 fixed, the residual is a fixed fraction.
+
+        Flat across a 3.1x vocabulary contrast and a 3x sequence range argues
+        for a fixed-fraction over-estimate rather than a term that grows with
+        either. If this spread widened, the decomposition in the record would
+        no longer hold.
+        """
+        from soup_cli.utils.layer_stream import (
+            LOGITS_LOSS_BYTES_PER_ELEMENT,
+            estimate_logits_bytes,
+        )
+
+        ratios = []
+        for row in SECOND_STACK_VRAM_GRID:
+            elements = row["seq"] * row["vocab"] * row["batch"]
+            logits_at_shipped = estimate_logits_bytes(
+                vocab_size=row["vocab"], seq_len=row["seq"], batch_size=row["batch"]
+            )
+            non_logits_modelled = _predict(row) - logits_at_shipped
+            non_logits_true = row["peak"] - LOGITS_LOSS_BYTES_PER_ELEMENT * elements
+            assert non_logits_true > 0, row["label"]
+            ratios.append(non_logits_modelled / non_logits_true)
+
+        mean = sum(ratios) / len(ratios)
+        assert 1.10 < mean < 1.20, f"non-logits over-estimate moved: {mean}"
+        assert max(ratios) - min(ratios) < 0.10, f"no longer flat: {ratios}"
 
 
 class TestLogitsBytesIsMeasuredNotDerived:

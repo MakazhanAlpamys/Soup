@@ -45,43 +45,77 @@ crossover on this stack, and the direction property holds everywhere measured.
 
 ---
 
-## The gap is one term, and it can be named
+## What the gap actually is — measured, not back-solved
 
-The ratio's flatness is the finding. Decomposing each row into the logits term
-(`estimate_logits_bytes`, linear in `seq x vocab`) and everything else, then
-solving for the bytes-per-element the hardware actually used:
+An earlier revision of this record led with **11.83 B/element**, back-solved by
+subtracting the formula's own modelled non-logits terms from the real peak. That
+number is withdrawn. It was one of two readings the data could not distinguish,
+and the instrument to settle it (`measure_logits_loss_bytes_per_element`) was
+already in the tree and was not run. It has now been run, on the box that could.
 
-| model | seq | logits @ 14 B | non-logits | implied B/element |
+### 1. The loss term is the documented 12, on this stack too
+
+```
+stack: torch 2.13.0+cu130 | NVIDIA A10G | trl 0.29.1 | transformers 5.16.1
+
+measure_logits_loss_bytes_per_element(), 3 repeats at the default shape:
+  12.0
+  12.0
+  12.0
+  spread: 0.00e+00
+
+across vocabularies:
+  vocab   8192: 12.0
+  vocab  32768: 12.0
+  vocab  49152: 12.0
+  vocab 151936: 12.01010951979781   (allocator rounding)
+```
+
+`LOGITS_LOSS_BYTES_PER_ELEMENT`'s invariance claim — *"byte-identical under torch
+2.5.1 and 2.13.0"* — **holds here**. This is a third stack agreeing, not a
+counter-example. The 11.83 was never a measurement of this term.
+
+### 2. The `+2` retained bf16 copy is ABSENT on this stack
+
+This is the finding. The shipped 14 is `12` (loss) + `2` (one further bf16
+logits-shaped tensor, charged unconditionally, retained by something #327 has
+not identified). If that copy were retained here, the whole real peak would have
+to exceed the logits term at 14 alone. It does not — on any row:
+
+| model | seq | 14 x E | real peak |
+|---|---|---|---|
+| SmolLM2-135M | 2048 | 1.409 GB | **1.365 GB** |
+| SmolLM2-135M | 4096 | 2.819 GB | **2.658 GB** |
+| SmolLM2-135M | 5120 | 3.523 GB | **3.303 GB** |
+| SmolLM2-135M | 6144 | 4.228 GB | **3.943 GB** |
+| Qwen2.5-0.5B | 2048 | 4.356 GB | **4.177 GB** |
+| Qwen2.5-0.5B | 4096 | 8.713 GB | **8.012 GB** |
+| Qwen2.5-0.5B | 5120 | 10.891 GB | **9.929 GB** |
+| Qwen2.5-0.5B | 6144 | 13.069 GB | **11.848 GB** |
+
+`14 x E` alone exceeds the entire measured peak, leaving no room for the
+non-logits terms let alone the retained copy. Ten of ten rows, two models, a
+3.1x vocabulary contrast. The retention #327 cannot explain **does not happen on
+this stack**, which is a constraint on any explanation of it.
+
+### 3. The non-logits terms are over-estimated by ~15%
+
+Holding the measured 12 fixed and asking what the rest of the model does:
+
+| model | seq | non-logits modelled | implied true | over-estimate |
 |---|---|---|---|---|
-| SmolLM2-135M | 2048 | 1.409 GB | 0.187 GB | 11.70 |
-| SmolLM2-135M | 3072 | 2.114 GB | 0.231 GB | 11.83 |
-| SmolLM2-135M | 4096 | 2.819 GB | 0.275 GB | 11.83 |
-| SmolLM2-135M | 4352 | 2.995 GB | 0.286 GB | 11.84 |
-| SmolLM2-135M | 5120 | 3.523 GB | 0.319 GB | 11.86 |
-| SmolLM2-135M | 6144 | 4.228 GB | 0.363 GB | 11.85 |
-| Qwen2.5-0.5B | 2048 | 4.356 GB | 0.498 GB | 11.82 |
-| Qwen2.5-0.5B | 4096 | 8.713 GB | 0.633 GB | 11.86 |
-| Qwen2.5-0.5B | 5120 | 10.891 GB | 0.701 GB | 11.86 |
-| Qwen2.5-0.5B | 6144 | 13.069 GB | 0.769 GB | 11.87 |
+| SmolLM2-135M | 2048 | 0.187 GB | 0.157 GB | 1.190x |
+| SmolLM2-135M | 4096 | 0.275 GB | 0.242 GB | 1.138x |
+| SmolLM2-135M | 6144 | 0.363 GB | 0.319 GB | 1.138x |
+| Qwen2.5-0.5B | 2048 | 0.498 GB | 0.443 GB | 1.124x |
+| Qwen2.5-0.5B | 6144 | 0.769 GB | 0.646 GB | 1.189x |
 
-**mean 11.832, population stdev 0.046**, against a shipped
-`LOGITS_BYTES_PER_ELEMENT` of 14.
+**mean 1.152x, population stdev 0.0249** over all ten rows.
 
-Ten measurements, two models, a 3.1x vocabulary contrast and a 3x sequence
-range, and the implied constant moves by less than half a percent. The
-non-logits terms are 0.19-0.77 GB and cannot account for a 0.65-2.0 GB gap. So
-the 16% is not drift across the range and not an unmodelled term that grows with
-sequence: it is the logits multiplier alone, and it is **stack-specific**.
-
-The v0.72.0 estimate charged 6 B/element; GATE 2 measured 14 on transformers
-4.57.x, attributed to `ForCausalLMLoss` holding the bf16 logits, the fp32
-upcast, `log_softmax`'s fp32 output and the fp32 gradient at once. On
-transformers 5.16.1 the same protocol measures 11.83. That is consistent with
-one of those four buffers no longer being live simultaneously, though this
-record does not establish which — that would need an allocator snapshot inside
-the loss, and is not claimed here.
-
----
+So the 1.16x over-prediction decomposes as: the absent `+2` copy (the larger
+share, and vocab-scaled) plus a ~15% over-estimate of the non-logits terms. Not
+"the logits multiplier is different here", which is what the withdrawn 11.83
+implied.
 
 ## What this says about the mechanism #395 could not identify
 
@@ -149,11 +183,32 @@ Immaterial against a 16% gap, but recorded rather than rounded away.
   arithmetic, not observed in an allocator snapshot.
 - Anything about the RTX 3050. The 15.0 / 17.8 B/element figures above are
   arithmetic on that record's published ratios, not new measurements.
-- That 11.83 is stable across transformers versions. It is one point on one
-  stack; that is the whole reason the grid is per-stack.
+- **Why** the `+2` copy is retained on the RTX 3050 and not here. This record
+  narrows #327 by one stack; it does not explain the retention. torch, trl and
+  transformers were each already swapped on the H100 box without reproducing it,
+  so the cause is none of those three.
+- Whether the ~15% non-logits over-estimate is one term or several. It is flat
+  across a 3.1x vocabulary contrast and a 3x sequence range, which argues for a
+  fixed-fraction effect rather than drift, but this record does not decompose it.
 - Batch scaling at long sequence. Every row here is batch 1.
 
 ---
+
+## Reproducing this
+
+`benchmarks/harness/issue395_second_stack_vram.py`, against a released Soup:
+
+```
+python benchmarks/harness/issue395_second_stack_vram.py            # the sweep
+python benchmarks/harness/issue395_second_stack_vram.py --measure  # section 1
+python benchmarks/harness/issue395_second_stack_vram.py --sdpa     # section 4
+```
+
+Soup 0.73.3, A10G 23 GB (AWS `g5.xlarge`), Ubuntu 22.04, torch 2.13.0+cu130,
+transformers 5.16.1, trl 0.29.1, peft 0.20.0, Python 3.10. Needs
+`jinja2>=3.1.0` — the `[dev]` extra may resolve lower and the chat-template
+path raises without it. A 24 GB card suffices; the largest arm peaks at
+11.85 GB.
 
 ## Method note
 
