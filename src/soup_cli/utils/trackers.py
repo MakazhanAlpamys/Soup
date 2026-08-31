@@ -227,24 +227,86 @@ def _resolve_posthog_target(
     return key, resolved_endpoint
 
 
+# Internal / non-routable TLD suffixes rejected without DNS resolution (#599).
+_INTERNAL_TLD_SUFFIXES: tuple[str, ...] = (
+    ".local",
+    ".internal",
+    ".localhost",
+    ".lan",
+    ".home",
+    ".corp",
+    ".intranet",
+)
+
+_INTERNAL_TLD_EXACT: frozenset[str] = frozenset({
+    "local",
+    "internal",
+    "localhost",
+    "lan",
+    "home",
+    "corp",
+    "intranet",
+})
+
+
+def _is_trusted_posthog_domain(host: str) -> bool:
+    """Return True if ``host`` belongs to the trusted PostHog domain hierarchy."""
+    return host == "posthog.com" or host.endswith(".posthog.com")
+
+
+def _resolve_host_ips(host: str, *, timeout: float = 1.0) -> list[str] | None:
+    """Resolve ``host`` to IP addresses within ``timeout`` seconds.
+
+    Returns a list of IP strings, or ``None`` on resolution failure,
+    resolver error, or timeout (fail-closed).
+    """
+    import socket  # noqa: PLC0415
+    import threading  # noqa: PLC0415
+
+    result: list[str] = []
+    error: list[Exception] = []
+
+    def _worker() -> None:
+        try:
+            info = socket.getaddrinfo(host, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+            for item in info:
+                sockaddr = item[4]
+                ip = sockaddr[0]
+                if ip:
+                    result.append(ip)
+        except Exception as exc:
+            error.append(exc)
+
+    thread = threading.Thread(target=_worker, daemon=True)
+    thread.start()
+    thread.join(timeout=timeout)
+    if thread.is_alive() or error or not result:
+        return None
+    return result
+
+
 def _telemetry_endpoint_is_safe(endpoint: str) -> bool:
-    """Layered SSRF guard for telemetry endpoints (#593).
+    """Tiered endpoint guard for telemetry destinations (#593, #599).
 
-    Two-layer validation:
+    Three-tier validation architecture:
 
-    1. :func:`~soup_cli.utils.hubs.validate_hub_endpoint` — baseline
-       sanitization (CRLF rejection, null-byte rejection, type guards,
-       ``0.0.0.0`` handling, scheme allowlist).  This layer is shared
-       with model-hub endpoints and intentionally permits private HTTPS
-       hosts for self-hosted hubs.
-    2. **Telemetry-strict rejection** — rejects loopback hosts
-       (``localhost``, ``127.0.0.1``, ``::1``), private IPs (RFC 1918),
-       and link-local addresses (``169.254.x.x``) on *any* scheme.
-       Telemetry has no legitimate self-hosted-private-endpoint case,
-       so this layer is stricter than hub validation.
+    1. **Primary Control (Trusted Allowlist):** Canonical PostHog domains
+       (``us.i.posthog.com``, ``eu.i.posthog.com``, ``*.posthog.com``) are
+       accepted immediately. This guarantees sub-millisecond validation with
+       zero network requests and zero risk of resolver timeout on default paths.
+    2. **Static Syntactic & Suffix Guards:** For custom endpoint URLs, reject
+       loopback names (``localhost``), literal private/link-local/loopback IPs
+       (including abbreviated/hex/octal IPv4 forms), and internal TLD suffixes
+       (``.local``, ``.internal``, ``.lan``, ``.home``, ``.corp``, etc.) without
+       performing network lookups.
+    3. **Defence-in-Depth DNS Resolution:** For custom non-default FQDNs, resolve
+       the host to IP addresses with a bounded timeout and fail closed. Rejects if
+       any resolved address is a loopback, private, or link-local IP. This raises
+       the bar against hostname indirection (e.g. ``10.0.0.1.nip.io``,
+       ``localtest.me``). Note: this does not prevent DNS rebinding across separate
+       lookups, but provides defence in depth for custom endpoint configurations.
 
-    The HTTPS-only requirement (``startswith("https://")``) is applied
-    first and is independent of both layers.
+    The HTTPS-only requirement (``startswith("https://")``) is applied first.
     """
     if not isinstance(endpoint, str) or not endpoint.startswith("https://"):
         return False
@@ -257,8 +319,6 @@ def _telemetry_endpoint_is_safe(endpoint: str) -> bool:
     except (TypeError, ValueError):
         return False
 
-    # Layer 2: telemetry-strict private/loopback/link-local rejection.
-    # Imports are lazy per AGENTS.md convention (heavy deps inside fns).
     from urllib.parse import urlparse  # noqa: PLC0415
 
     from soup_cli.utils.hubs import (  # noqa: PLC0415
@@ -266,18 +326,34 @@ def _telemetry_endpoint_is_safe(endpoint: str) -> bool:
         _is_private_or_link_local,
     )
 
-    # Normalise: lowercase + strip FQDN trailing dot so "LOCALHOST."
-    # matches the _LOOPBACK_HOSTS frozenset entry "localhost".
     host = (urlparse(endpoint).hostname or "").lower().rstrip(".")
     if not host:
         return False
-    # _is_private_or_link_local uses ipaddress.ip_address which raises
-    # ValueError on domain strings ("localhost"), so it returns False.
-    # The explicit _LOOPBACK_HOSTS check covers named loopbacks.
+
+    # Tier 1: Primary Control — Trusted PostHog domain allowlist.
+    # Eliminates DNS lookups for default configurations (99%+ of runs).
+    if _is_trusted_posthog_domain(host):
+        return True
+
+    # Tier 2: Static rejection (literal IPs, loopback hosts, internal TLDs).
     if host in _LOOPBACK_HOSTS:
         return False
     if _is_private_or_link_local(host):
         return False
+    if host in _INTERNAL_TLD_EXACT or host.endswith(_INTERNAL_TLD_SUFFIXES):
+        return False
+
+    # Tier 3: Defence-in-depth DNS resolution for custom non-default FQDNs.
+    # Raises the bar against hostname indirection; fails closed on error/timeout.
+    resolved_ips = _resolve_host_ips(host)
+    if not resolved_ips:
+        return False
+
+    for ip in resolved_ips:
+        clean_ip = ip.rstrip(".")
+        if clean_ip in _LOOPBACK_HOSTS or _is_private_or_link_local(clean_ip):
+            return False
+
     return True
 
 
