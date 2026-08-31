@@ -1231,14 +1231,16 @@ def decide_measured_fit(
     :func:`decide_stream_fit` compares a formula against free VRAM, and the
     formula's documented contract is that it never under-predicts. Measured on an
     RTX 3050 Laptop against SmolLM2-135M streamed in bf16, that holds to seq 4352
-    (prediction 1.081x the real peak) and then fails: at seq 5120 the prediction
-    is 0.934x the real peak and at seq 6144 it is 0.787x, i.e. it under-predicts
-    by 21% on a shape a user can reach by editing one line of YAML. Three repeats
-    at the same shape returned a bit-identical peak, so it is deterministic. The
-    mechanism is NOT established — an attention ``seq**2`` term is the obvious
-    candidate and does not fit the numbers — which is exactly why this takes a
-    measurement rather than another coefficient: a formula cannot model a term
-    nobody has identified.
+    (1.081x the real peak) and then fails: at seq 5120 the prediction is 0.934x
+    the real peak and at seq 6144 it is 0.787x, i.e. it under-predicts by 21% on
+    a shape a user can reach by editing one line of YAML. Against the probe the
+    same formula reads 0.992x at seq 4096 and 0.830x at 5120, because the probe
+    itself runs 12.5-14.3% above the real training step — the direction that
+    makes it safe as a gate. The measurement is deterministic (repeats at a fixed
+    shape return bit-identical peaks, #395). The mechanism is NOT established —
+    an attention ``seq**2`` term is the obvious candidate and does not fit the
+    numbers — which is exactly why this takes a measurement rather than another
+    coefficient: a formula cannot model a term nobody has identified.
 
     ``measured_bytes`` is ``torch.cuda.max_memory_allocated``, deliberately not
     ``max_memory_reserved``. Reserved runs 1.08x-1.41x allocated here and

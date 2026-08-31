@@ -1355,8 +1355,11 @@ def measure_step_peak_bytes(
 
     This is the #349 instrument. The pre-flight's formula is fitted and, measured
     against the real training run, under-predicts past seq 4352 (0.934x the real
-    peak at seq 5120, 0.787x at 6144) — a formula cannot model a term nobody has
-    identified, so past that point only a measurement is honest. Synthetic
+    peak at seq 5120, 0.787x at 6144); against this probe the same formula reads
+    0.992x at seq 4096 and 0.830x at 5120, because the probe runs 12.5-14.3%
+    above the real training step — conservatively high, the direction that makes
+    it safe as a gate. A formula cannot model a term nobody has identified, so
+    past that point only a measurement is honest. Synthetic
     ``input_ids`` are used rather than a real batch because the quantity being
     bounded is the CONFIGURED shape, which is the worst case any real batch can
     pad up to; a real batch would measure whatever length it happened to have.
