@@ -301,13 +301,22 @@ class TestServeSglangWiring:
             max_tokens_default=256,
             tensor_parallel=1,
             gpu_memory_utilization=0.9,
+            # The runtime's trust setting is now resolved by serve.py's gate
+            # instead of being an unconditional True. These tests are about the
+            # tokenizer *matching* the runtime, so drive both from one opted-in
+            # value rather than pinning the literal.
+            trust_remote_code=True,
         )
 
     def test_tokenizer_load_uses_the_trust_setting_the_runtime_uses(self, monkeypatch):
-        """The runtime loads this model with trust_remote_code=True and the
-        panel says so. Loading the tokenizer with the default False meant a
-        custom-code model produced tokenizer=None and the fix silently did
-        nothing -- for exactly the models whose chat template matters most."""
+        """The tokenizer must load with the same trust setting as the runtime.
+
+        Loading the tokenizer with the default False, while the runtime used
+        True, meant a custom-code model produced tokenizer=None and the #360
+        fix silently did nothing -- for exactly the models whose chat template
+        matters most. The pairing is what matters, not the literal: since the
+        trust contract fix both sides follow serve.py's resolved gate, and
+        ``_serve`` opts in above so this still asserts they agree."""
         capture = {}
         self._serve(monkeypatch, _FakeTokenizer(), capture)
 
