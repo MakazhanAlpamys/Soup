@@ -25,6 +25,32 @@ def _parse(path: Path) -> ast.Module:
     return ast.parse(path.read_text(encoding="utf-8"))
 
 
+def _assigns_name(node: ast.AST, name: str) -> bool:
+    """True if ``node`` is a plain or annotated assignment to ``name``.
+
+    Covers both ``NAME = ...`` (``ast.Assign``) and ``NAME: T = ...``
+    (``ast.AnnAssign``) — a duplicate definition doesn't care which form it
+    takes.
+    """
+    if isinstance(node, ast.Assign):
+        return any(isinstance(t, ast.Name) and t.id == name for t in node.targets)
+    if isinstance(node, ast.AnnAssign):
+        return isinstance(node.target, ast.Name) and node.target.id == name
+    return False
+
+
+def _imports_net_guard(path: Path) -> bool:
+    """True if ``path`` has a real ``from soup_cli.utils.net_guard import ...``.
+
+    Parses the AST rather than substring-matching the source, so a comment
+    or string literal mentioning the module name can't fake a pass.
+    """
+    for node in ast.walk(_parse(path)):
+        if isinstance(node, ast.ImportFrom) and node.module == "soup_cli.utils.net_guard":
+            return True
+    return False
+
+
 class TestThereIsExactlyOneDefinition:
     def test_the_predicate_is_defined_only_in_the_shared_module(self):
         """A second ``def is_private_or_link_local`` anywhere is the drift."""
@@ -41,9 +67,7 @@ class TestThereIsExactlyOneDefinition:
         builders = []
         for path in sorted(_SRC_DIR.rglob("*.py")):
             for node in ast.walk(_parse(path)):
-                if isinstance(node, ast.Assign) and any(
-                    isinstance(t, ast.Name) and t.id == "LOOPBACK_HOSTS" for t in node.targets
-                ):
+                if _assigns_name(node, "LOOPBACK_HOSTS"):
                     builders.append(path.name)
         assert builders == [_HOME.name], (
             f"LOOPBACK_HOSTS must be built only in {_HOME.name}; found in {builders}"
@@ -51,10 +75,7 @@ class TestThereIsExactlyOneDefinition:
 
     def test_all_known_call_sites_import_rather_than_redeclare(self):
         for name in _CONSUMERS:
-            src = (_SRC_DIR / name).read_text(encoding="utf-8")
-            assert "from soup_cli.utils.net_guard import" in src, (
-                f"{name} must import the shared guard"
-            )
+            assert _imports_net_guard(_SRC_DIR / name), f"{name} must import the shared guard"
 
 
 class TestNoCallerRedeclaresTheOldPrivateNames:
@@ -65,9 +86,7 @@ class TestNoCallerRedeclaresTheOldPrivateNames:
     def test_no_consumer_assigns_its_own_loopback_frozenset(self):
         for name in _CONSUMERS:
             for node in ast.walk(_parse(_SRC_DIR / name)):
-                if isinstance(node, ast.Assign) and any(
-                    isinstance(t, ast.Name) and t.id == "_LOOPBACK_HOSTS" for t in node.targets
-                ):
+                if _assigns_name(node, "_LOOPBACK_HOSTS"):
                     raise AssertionError(
                         f"{name} must import _LOOPBACK_HOSTS from net_guard, not assign it"
                     )
