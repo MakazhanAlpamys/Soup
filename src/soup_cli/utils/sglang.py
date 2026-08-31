@@ -4,6 +4,12 @@ import json
 import logging
 from typing import Any, Optional
 
+# The OpenAI finish_reason vocabulary Soup emits, imported rather than
+# redefined: a second copy of this set is exactly the kind of duplicated source
+# of truth that #372, #392 and #424 were each caused by. utils.vllm is
+# torch-free at import time, so this does not weigh down CLI startup.
+from soup_cli.utils.vllm import _FINISH_REASONS
+
 logger = logging.getLogger(__name__)
 
 
@@ -37,10 +43,6 @@ def decode_sglang_response(response: Any) -> dict:
     raise ValueError(
         f"SGLang returned an unsupported response type {type(response).__name__}"
     )
-
-
-# OpenAI's finish_reason vocabulary Soup emits (mirrors vllm._FINISH_REASONS).
-_FINISH_REASONS = frozenset({"stop", "length"})
 
 
 def resolve_sglang_finish_reason(meta_info: Any, max_tokens: Optional[int]) -> str:

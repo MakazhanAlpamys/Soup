@@ -177,3 +177,166 @@ class TestSglangReportsFinishReason:
                 if "choices" in payload:
                     reasons.append(payload["choices"][0].get("finish_reason"))
         assert reasons[-1] == "length"
+
+    def test_control_stream_final_chunk_still_reports_stop(self):
+        """Control for the length case above (#360 review item 3).
+
+        Without this, hardcoding the streaming final chunk to ``"length"`` --
+        the exact mirror image of the bug being fixed, and one that makes a
+        continue-on-length client loop forever -- passes the whole suite.
+        Ported from ``test_issue332_vllm_prompt.py``, where vLLM already has it.
+        """
+        import json
+
+        from soup_cli.utils.sglang import create_sglang_app
+
+        runtime = _mock_runtime(
+            text="a b c", meta_info={"prompt_tokens": 3, "completion_tokens": 3}
+        )
+        app = create_sglang_app(runtime=runtime, runtime_model_name="m", model_name="m")
+        resp = self._post(
+            app,
+            {"messages": [{"role": "user", "content": "hi"}], "max_tokens": 128, "stream": True},
+        )
+        reasons = []
+        for line in resp.text.splitlines():
+            if line.startswith("data: ") and line != "data: [DONE]":
+                payload = json.loads(line[len("data: ") :])
+                if "choices" in payload:
+                    reasons.append(payload["choices"][0].get("finish_reason"))
+        assert reasons[-1] == "stop"
+
+
+class _TemplatelessTokenizer:
+    """A tokenizer that loads fine but ships no chat template.
+
+    Distinct from ``tokenizer=None``: the object exists, so any code that
+    branches on truthiness of the tokenizer rather than of its template takes
+    the wrong path. #360 asks for the legacy fallback to be pinned for
+    template-less models, which is this case, not the missing-tokenizer one.
+    """
+
+    chat_template = None
+
+    def apply_chat_template(self, *args, **kwargs):  # pragma: no cover — must not be called
+        raise AssertionError(
+            "apply_chat_template must not be called on a template-less tokenizer"
+        )
+
+
+@pytest.mark.skipif(not _has_fastapi(), reason="fastapi not installed")
+class TestSglangTemplatelessTokenizer:
+    """#360 review item 3: pin the fallback for a tokenizer with no template."""
+
+    def _post(self, app, body):
+        from fastapi.testclient import TestClient
+
+        return TestClient(app).post("/v1/chat/completions", json=body)
+
+    def test_templateless_tokenizer_uses_the_shared_legacy_fallback(self):
+        from soup_cli.utils.sglang import create_sglang_app
+        from soup_cli.utils.vllm import build_chat_prompt
+
+        runtime = _mock_runtime()
+        app = create_sglang_app(
+            runtime=runtime,
+            runtime_model_name="m",
+            model_name="m",
+            tokenizer=_TemplatelessTokenizer(),
+        )
+        messages = [{"role": "user", "content": "hello"}]
+        self._post(app, {"messages": messages})
+        sent_prompt = runtime.generate.call_args.args[0]
+
+        # Identical to what the shared builder produces with no tokenizer at
+        # all -- the fallback is the shared one, not a third code path.
+        assert sent_prompt == build_chat_prompt(messages, None)
+        assert not sent_prompt.startswith("<TPL>")
+
+
+# ---------------------------------------------------------------------------
+# Production wiring: what `soup serve --backend sglang` actually executes
+# ---------------------------------------------------------------------------
+class TestServeSglangWiring:
+    """#360 review items 1 and 2.
+
+    Every prompt test above constructs ``create_sglang_app`` directly with a
+    hand-supplied tokenizer, so deleting the tokenizer load in ``_serve_sglang``
+    -- the one line every real ``soup serve --backend sglang`` runs, and the
+    line that makes the whole fix reach users -- passed 112 tests.
+    """
+
+    def _serve(self, monkeypatch, tokenizer, capture):
+        from pathlib import Path
+
+        import soup_cli.commands.serve as serve_mod
+        import soup_cli.utils.sglang as sglang_mod
+
+        monkeypatch.setattr(
+            sglang_mod,
+            "create_sglang_runtime",
+            lambda **kwargs: (MagicMock(), "runtime-model"),
+            raising=False,
+        )
+        monkeypatch.setattr(
+            sglang_mod, "create_sglang_app", lambda **kwargs: kwargs, raising=False
+        )
+
+        def _fake_loader(**kwargs):
+            capture["kwargs"] = kwargs
+            return tokenizer
+
+        monkeypatch.setattr(serve_mod, "_load_serve_tokenizer", _fake_loader)
+
+        printed = []
+        monkeypatch.setattr(
+            serve_mod.console, "print", lambda *args, **kwargs: printed.append(str(args[0]))
+        )
+        capture["printed"] = printed
+
+        return serve_mod._serve_sglang(
+            model_path=Path("/models/custom-code-model"),
+            base_model=None,
+            is_adapter=False,
+            max_tokens_default=256,
+            tensor_parallel=1,
+            gpu_memory_utilization=0.9,
+        )
+
+    def test_tokenizer_load_uses_the_trust_setting_the_runtime_uses(self, monkeypatch):
+        """The runtime loads this model with trust_remote_code=True and the
+        panel says so. Loading the tokenizer with the default False meant a
+        custom-code model produced tokenizer=None and the fix silently did
+        nothing -- for exactly the models whose chat template matters most."""
+        capture = {}
+        self._serve(monkeypatch, _FakeTokenizer(), capture)
+
+        assert capture["kwargs"]["trust_remote_code"] is True
+
+    def test_the_loaded_tokenizer_is_passed_into_the_app(self, monkeypatch):
+        """Kills the mutation that deletes the wiring outright."""
+        capture = {}
+        tokenizer = _FakeTokenizer()
+        app_kwargs = self._serve(monkeypatch, tokenizer, capture)
+
+        assert app_kwargs["tokenizer"] is tokenizer
+
+    def test_missing_tokenizer_is_announced(self, monkeypatch):
+        """#360 item 2: on vLLM the operator is told; on SGLang the silent
+        fallback was invisible."""
+        capture = {}
+        self._serve(monkeypatch, None, capture)
+
+        assert any("no tokenizer could be loaded" in line for line in capture["printed"])
+
+    def test_templateless_model_is_announced(self, monkeypatch):
+        capture = {}
+        self._serve(monkeypatch, _TemplatelessTokenizer(), capture)
+
+        assert any("ships no chat template" in line for line in capture["printed"])
+
+    def test_applying_the_models_template_is_announced(self, monkeypatch):
+        capture = {}
+        self._serve(monkeypatch, _FakeTokenizer(), capture)
+
+        assert any("applying the model's own template" in line for line in capture["printed"])

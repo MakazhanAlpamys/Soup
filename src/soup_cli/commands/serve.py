@@ -1279,8 +1279,35 @@ def _serve_sglang(
     console.print("[bold green]SGLang runtime ready![/]")
 
     # Load the tokenizer whose chat template the shared prompt builder applies
-    # (#360). None degrades to the legacy role-prefixed prompt, same as vLLM.
-    tokenizer = _load_serve_tokenizer(model_path, base_model)
+    # (#360). trust_remote_code matches what create_sglang_runtime already used
+    # to load this very model a few lines above, and what the panel printed
+    # here promises. Loading it with the default False instead meant a
+    # custom-code model failed to load a tokenizer, tokenizer became None, and
+    # the fix silently degraded to the legacy prompt -- for exactly the models
+    # whose chat template matters most.
+    tokenizer = _load_serve_tokenizer(
+        model_path=model_path,
+        base_model=base_model,
+        trust_remote_code=True,
+    )
+
+    # A failure here is announced, never silent -- the same three-branch
+    # contract vLLM has at _serve_vllm. Falling back to the legacy
+    # role-prefixed prompt is what made Llama-3.1-8B loop, and on SGLang that
+    # fallback used to happen with nothing printed at all.
+    if tokenizer is None:
+        console.print(
+            "[yellow]Warning:[/] no tokenizer could be loaded for this model — "
+            "falling back to a generic 'User:/Assistant:' prompt. Chat-tuned "
+            "models can run on past their stop token with this format."
+        )
+    elif not getattr(tokenizer, "chat_template", None):
+        console.print(
+            "[yellow]Warning:[/] this model ships no chat template — using the "
+            "generic 'User:/Assistant:' prompt format."
+        )
+    else:
+        console.print("[green]Chat template:[/] applying the model's own template.")
 
     app = create_sglang_app(
         runtime=runtime,
