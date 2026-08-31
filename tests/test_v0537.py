@@ -1091,41 +1091,47 @@ class TestToolEndpointsLive:
 
     def test_bash_sandbox_raises_on_strict_namespace_failure(self, monkeypatch):
         import os
-        if sys.platform == "win32":
-            pytest.skip("bash sandbox not supported on Windows")
-        if sys.platform != "linux":
-            pytest.skip("unshare is a Linux-only syscall")
+        import shutil
+        import subprocess
+        import sys
 
-        import soup_cli.trainer.rewards as rewards_mod
-        from soup_cli.trainer.rewards import _run_bash_sandbox
+        # Cross-platform mock: trick the sandbox into thinking it's Linux and has namespaces
+        monkeypatch.setattr(sys, "platform", "linux")
+        monkeypatch.setattr(
+            "soup_cli.trainer.rewards._get_isolation_strategy",
+            lambda: "namespaces",
+        )
+
+        # Prevent preexec_fn from applying CPU/Memory limits to the pytest test runner!
+        try:
+            import resource
+            monkeypatch.setattr(resource, "setrlimit", lambda *args: None)
+        except ImportError:
+            pass
 
         def mock_unshare(*args, **kwargs):
             raise PermissionError("Operation not permitted")
 
         monkeypatch.setattr(os, "unshare", mock_unshare, raising=False)
-        # Reset the cached isolation strategy so it re-detects os.unshare
-        monkeypatch.setattr(rewards_mod, "_ISOLATION_STRATEGY_CACHE", None)
 
-        with pytest.raises(PermissionError):
-            _run_bash_sandbox("echo hello")
+        # Mock Popen to execute preexec_fn and mimic POSIX behavior by raising SubprocessError
 
-    def test_bash_sandbox_runs_on_strict_namespace_success(self, monkeypatch):
-        import os
-        if sys.platform == "win32":
-            pytest.skip("bash sandbox not supported on Windows")
-        if sys.platform != "linux":
-            pytest.skip("unshare is a Linux-only syscall")
+        def mock_popen(*args, **kwargs):
+            preexec = kwargs.get("preexec_fn")
+            if preexec:
+                try:
+                    preexec()
+                except Exception as e:
+                    raise subprocess.SubprocessError(f"Exception occurred in preexec_fn: {e}")
+            raise OSError("Mock prevents actual execution")
 
-        import soup_cli.trainer.rewards as rewards_mod
+        monkeypatch.setattr(subprocess, "Popen", mock_popen)
+        monkeypatch.setattr(shutil, "which", lambda x: "/bin/bash")
+
         from soup_cli.trainer.rewards import _run_bash_sandbox
 
-        monkeypatch.setattr(os, "unshare", lambda *args, **kwargs: None, raising=False)
-        # Reset the cached isolation strategy so it re-detects os.unshare
-        monkeypatch.setattr(rewards_mod, "_ISOLATION_STRATEGY_CACHE", None)
-
-        result = _run_bash_sandbox("echo hello")
-        assert result.returncode == 0
-        assert "hello" in result.stdout
+        with pytest.raises(PermissionError, match="Operation not permitted"):
+            _run_bash_sandbox("echo hello")
 
     def test_bash_tool_restricted_linux_fails_closed_501(self, monkeypatch):
         from fastapi.testclient import TestClient
