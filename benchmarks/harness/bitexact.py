@@ -112,6 +112,14 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="use pageable host storage instead of pinned host storage",
     )
+    parser.add_argument(
+        "--skip-lora-sync",
+        action="store_true",
+        help=(
+            "negative control: do not copy LoRA tensors into the resident "
+            "reference; the parity check must then fail."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -140,8 +148,10 @@ def copy_lora(source, target) -> int:
     """Copy exact adapter tensors from one model into the other."""
     import torch
 
-    source_params = dict(source.named_parameters())
-    target_params = dict(target.named_parameters())
+    from soup_cli.utils.layer_stream_runtime import canonical_named_parameters
+
+    source_params = dict(canonical_named_parameters(source))
+    target_params = dict(canonical_named_parameters(target))
 
     copied = 0
 
@@ -151,18 +161,10 @@ def copy_lora(source, target) -> int:
                 continue
 
             source_param = source_params.get(name)
-
             if source_param is None:
-                matches = [
-                    parameter
-                    for other_name, parameter in source_params.items()
-                    if "lora_" in other_name and other_name.endswith(name)
-                ]
-                if len(matches) != 1:
-                    raise RuntimeError(
-                        f"could not uniquely match LoRA parameter {name!r}"
-                    )
-                source_param = matches[0]
+                raise RuntimeError(
+                    f"could not match LoRA parameter {name!r}"
+                )
 
             target_param.copy_(source_param)
             copied += 1
@@ -177,10 +179,12 @@ def make_non_vacuous_lora(model) -> None:
     """Give LoRA-B non-zero values so parity cannot pass vacuously."""
     import torch
 
+    from soup_cli.utils.layer_stream_runtime import canonical_named_parameters
+
     generator = torch.Generator(device="cuda").manual_seed(23)
 
     with torch.no_grad():
-        for name, parameter in model.named_parameters():
+        for name, parameter in canonical_named_parameters(model):
             if "lora_B" in name:
                 parameter.copy_(
                     torch.randn(
@@ -395,6 +399,9 @@ def main() -> int:
     print(f"buffers       {args.buffers}")
     print(f"pin           {not args.no_pin}")
 
+    if args.skip_lora_sync:
+        print("mode          NEGATIVE CONTROL: LoRA sync skipped")
+
     try:
         weights_dir = resolve_model_weights(args.weights)
         shard_dir = Path(args.shards)
@@ -454,7 +461,11 @@ def main() -> int:
         )
 
         make_non_vacuous_lora(streamed)
-        copied = copy_lora(streamed, reference)
+
+        if args.skip_lora_sync:
+            copied = 0
+        else:
+            copied = copy_lora(streamed, reference)
 
         print(f"adapter_tensors_copied {copied}")
 

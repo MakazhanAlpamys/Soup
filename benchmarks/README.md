@@ -38,7 +38,7 @@ only in a scratchpad on a machine that is gone, which is
 |---|---|---|---|
 | [`issue331_qlora_scope.py`](harness/issue331_qlora_scope.py) | #331 | Does the wrong-gradient defect reach **ordinary QLoRA**? Three arms in one process, with a positive control. Answer: no — 0.0 against a control that diverges by 3.77e-01 | ~15 s, 4 GB card, no downloads |
 | [`bnb_repro.py`](harness/bnb_repro.py) | Upstream bitsandbytes #2034 / NF4 defect | Minimal standalone reproducer for the NF4 stale-gradient mechanism: recycled buffers expose `MatMul4Bit`'s `ctx` lifetime issue; private buffers are the reference and bf16 is the control | CUDA GPU required; no downloads; historical environment: torch 2.13.0+cu130, bitsandbytes 0.50.0; ~1 min |
-| [`bitexact.py`](harness/bitexact.py) | v0.72.0 / STEP 1; gate-h100-validation.md Reproducing | Shard -> stream -> compare logits, LoRA gradients, and loss curve against a resident reference using matching numerics; NF4 uses a resident NF4 reference | CUDA GPU required; model/checkpoint weights required; historical run: Qwen2.5-0.5B-Instruct NF4, seq 64 |
+| [`bitexact.py`](harness/bitexact.py) | v0.72.0 / STEP 1; gate-h100-validation.md Reproducing | Shard -> stream -> compare logits, LoRA gradients, and loss curve against a resident reference using matching numerics; NF4 uses a resident NF4 reference | CUDA GPU required; model/checkpoint weights required; historical run: Qwen2.5-0.5B-Instruct NF4, seq 64; CUDA validation: torch 2.5.1+cu121, transformers 4.57.6, trl 0.19.1, peft 0.18.1 |
 
 ## Hardware
 
