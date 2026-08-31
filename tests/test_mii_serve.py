@@ -248,3 +248,80 @@ class TestMiiAppUnchangedBehaviour:
 
         assert captured["temperature"] == 0.1
         assert captured["top_p"] == 0.5
+
+
+# ============================================================
+# The call site (#608 review) — mutation (d)
+# ============================================================
+class TestServeMiiCallSite:
+    """`soup serve --backend mii` must LOAD a tokenizer and PASS it.
+
+    Every other test in this file constructs the app directly with a
+    hand-supplied tokenizer, which leaves the one line a user actually
+    executes uncovered: deleting `tokenizer=mii_tokenizer` from the
+    `build_mii_app(...)` call in `serve.py` makes every real
+    `soup serve --backend mii` fall back to the legacy prompt while the
+    whole suite stays green.
+
+    These drive the real command through its CLI and assert on the call
+    kwargs, so that deletion fails by name.
+    """
+
+    def _invoke(self, tmp_path, *, tokenizer):
+        from unittest.mock import MagicMock, patch
+
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        model_dir = tmp_path / "model"
+        model_dir.mkdir(parents=True, exist_ok=True)
+        (model_dir / "config.json").write_text("{}", encoding="utf-8")
+
+        captured: dict[str, object] = {}
+
+        def _fake_build_mii_app(pipeline, **kwargs):
+            captured.update(kwargs)
+            captured["called"] = True
+            return MagicMock()
+
+        with (
+            patch("soup_cli.utils.mii.is_mii_available", return_value=True),
+            patch("soup_cli.utils.mii.create_mii_pipeline", return_value=MagicMock()),
+            patch("soup_cli.utils.mii.build_mii_app", side_effect=_fake_build_mii_app),
+            patch(
+                "soup_cli.commands.serve._load_serve_tokenizer", return_value=tokenizer
+            ) as loader,
+            patch("uvicorn.run"),
+        ):
+            runner = CliRunner()
+            result = runner.invoke(
+                app, ["serve", "--model", str(model_dir), "--backend", "mii"]
+            )
+        return result, captured, loader
+
+    def test_serve_mii_passes_the_loaded_tokenizer_to_build_mii_app(self, tmp_path):
+        """Mutation (d): dropping `tokenizer=` from the call must fail here."""
+        sentinel = object()
+        result, captured, loader = self._invoke(tmp_path, tokenizer=sentinel)
+
+        assert captured.get("called"), f"build_mii_app was never reached: {result.output}"
+        assert "tokenizer" in captured, (
+            "serve() called build_mii_app without a tokenizer kwarg - every real "
+            "`soup serve --backend mii` would fall back to the legacy prompt"
+        )
+        assert captured["tokenizer"] is sentinel, (
+            "serve() passed something other than the tokenizer it loaded"
+        )
+        loader.assert_called_once()
+
+    def test_serve_mii_still_starts_when_no_tokenizer_can_be_loaded(self, tmp_path):
+        """The documented degrade: None is passed through, not an exception.
+
+        `build_chat_prompt` falls back to the legacy format for a None
+        tokenizer, so the server must still come up.
+        """
+        result, captured, _ = self._invoke(tmp_path, tokenizer=None)
+
+        assert captured.get("called"), f"build_mii_app was never reached: {result.output}"
+        assert captured["tokenizer"] is None
