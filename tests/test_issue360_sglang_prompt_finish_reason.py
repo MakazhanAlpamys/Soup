@@ -16,6 +16,7 @@ These are CPU-verifiable (prompt string + finish_reason mapping); a live SGLang
 runtime on Linux is a separate follow-up per the issue.
 """
 
+import json
 from unittest.mock import MagicMock
 
 import pytest
@@ -80,11 +81,24 @@ class _FakeTokenizer:
         return f"<TPL>{rendered}<GEN>"
 
 
-def _mock_runtime(text="hi there", meta_info=None):
+# sglang 0.5.16's ``Runtime.generate`` ends with ``json.dumps(response.json())``
+# -- a string, not a dict (#76: every request 500'd with "string indices must be
+# integers"). ``decode_sglang_response`` normalises both, and its own unit tests
+# cover both, but every app-level test here used to construct the dict shape
+# only. So the FastAPI layer -- the thing a real request actually traverses --
+# was exercised against just one of the two contracts sglang is known to ship.
+RUNTIME_RESPONSE_SHAPES = ("dict", "json_string")
+
+
+def _mock_runtime(text="hi there", meta_info=None, shape="dict"):
+    """Build a Runtime double returning one of sglang's two response shapes."""
+    if shape not in RUNTIME_RESPONSE_SHAPES:
+        raise ValueError(f"unknown shape {shape!r}")
     runtime = MagicMock()
     payload = {"text": text}
     payload["meta_info"] = meta_info if meta_info is not None else {}
-    runtime.generate = MagicMock(return_value=payload)
+    returned = payload if shape == "dict" else json.dumps(payload)
+    runtime.generate = MagicMock(return_value=returned)
     return runtime
 
 
@@ -131,39 +145,44 @@ class TestSglangUsesSharedPromptBuilder:
 # finish_reason is reported truthfully on both the sync and streaming paths
 # ---------------------------------------------------------------------------
 @pytest.mark.skipif(not _has_fastapi(), reason="fastapi not installed")
+@pytest.mark.parametrize("shape", RUNTIME_RESPONSE_SHAPES)
 class TestSglangReportsFinishReason:
+    """Parameterised over both shapes: the #76 string form is what real
+    sglang 0.5.16 returns, and the finish_reason contract has to hold through
+    the decode step, not only after it."""
+
     def _post(self, app, body):
         from fastapi.testclient import TestClient
 
         return TestClient(app).post("/v1/chat/completions", json=body)
 
-    def test_sync_reports_length_when_budget_hit(self):
+    def test_sync_reports_length_when_budget_hit(self, shape):
         from soup_cli.utils.sglang import create_sglang_app
 
         runtime = _mock_runtime(
-            text="a b c", meta_info={"prompt_tokens": 3, "completion_tokens": 8}
+            text="a b c", meta_info={"prompt_tokens": 3, "completion_tokens": 8}, shape=shape
         )
         app = create_sglang_app(runtime=runtime, runtime_model_name="m", model_name="m")
         resp = self._post(app, {"messages": [{"role": "user", "content": "hi"}], "max_tokens": 8})
         assert resp.json()["choices"][0]["finish_reason"] == "length"
 
-    def test_sync_reports_stop_when_under_budget(self):
+    def test_sync_reports_stop_when_under_budget(self, shape):
         from soup_cli.utils.sglang import create_sglang_app
 
         runtime = _mock_runtime(
-            text="a b c", meta_info={"prompt_tokens": 3, "completion_tokens": 3}
+            text="a b c", meta_info={"prompt_tokens": 3, "completion_tokens": 3}, shape=shape
         )
         app = create_sglang_app(runtime=runtime, runtime_model_name="m", model_name="m")
         resp = self._post(app, {"messages": [{"role": "user", "content": "hi"}], "max_tokens": 128})
         assert resp.json()["choices"][0]["finish_reason"] == "stop"
 
-    def test_stream_final_chunk_reports_length(self):
+    def test_stream_final_chunk_reports_length(self, shape):
         import json
 
         from soup_cli.utils.sglang import create_sglang_app
 
         runtime = _mock_runtime(
-            text="a b c", meta_info={"prompt_tokens": 3, "completion_tokens": 8}
+            text="a b c", meta_info={"prompt_tokens": 3, "completion_tokens": 8}, shape=shape
         )
         app = create_sglang_app(runtime=runtime, runtime_model_name="m", model_name="m")
         resp = self._post(
@@ -178,7 +197,7 @@ class TestSglangReportsFinishReason:
                     reasons.append(payload["choices"][0].get("finish_reason"))
         assert reasons[-1] == "length"
 
-    def test_control_stream_final_chunk_still_reports_stop(self):
+    def test_control_stream_final_chunk_still_reports_stop(self, shape):
         """Control for the length case above (#360 review item 3).
 
         Without this, hardcoding the streaming final chunk to ``"length"`` --
@@ -191,7 +210,7 @@ class TestSglangReportsFinishReason:
         from soup_cli.utils.sglang import create_sglang_app
 
         runtime = _mock_runtime(
-            text="a b c", meta_info={"prompt_tokens": 3, "completion_tokens": 3}
+            text="a b c", meta_info={"prompt_tokens": 3, "completion_tokens": 3}, shape=shape
         )
         app = create_sglang_app(runtime=runtime, runtime_model_name="m", model_name="m")
         resp = self._post(
