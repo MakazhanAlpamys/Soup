@@ -167,6 +167,69 @@ class TestWebhooksPrivateOrLinkLocalAbbreviated:
 
 
 # =====================================================================
+# Unit: tracing.py — _is_private_ip (#616 fold-in)
+# =====================================================================
+#
+# tracing.py's predicate predates the #600 fix and was never covered by it:
+# it had no socket.inet_aton fallback, so validate_otlp_endpoint accepted
+# https://127.1:4317 and https://2130706433:4317 — a live bypass, not just
+# a duplicate. #616 folded it into the shared soup_cli.utils.net_guard
+# predicate, closing the gap as a side effect of deduplication.
+
+
+class TestTracingPrivateOrLinkLocalAbbreviated:
+    """socket.inet_aton fallback in tracing._is_private_ip, via #616."""
+
+    @pytest.mark.parametrize(
+        "host",
+        [
+            "10.0.0.1",
+            "192.168.1.1",
+            "169.254.169.254",
+            "127.1",
+            "2130706433",
+            "0x7f000001",
+            "0177.0.0.1",
+            "10.1",
+            "167772161",
+            "2852039166",
+            "169.254.169.254.",
+            "2852039166.",
+        ],
+    )
+    def test_rejects_private_ip(self, host: str) -> None:
+        from soup_cli.utils.tracing import _is_private_ip
+
+        assert _is_private_ip(host) is True, f"tracing._is_private_ip({host!r}) must return True"
+
+    @pytest.mark.parametrize("host", ["8.8.8.8", "1.1.1.1", "us.i.posthog.com", "example.com"])
+    def test_allows_public_host(self, host: str) -> None:
+        from soup_cli.utils.tracing import _is_private_ip
+
+        assert _is_private_ip(host) is False, f"tracing._is_private_ip({host!r}) must return False"
+
+
+class TestTracingOtlpEndpointAbbreviatedIPv4:
+    """Pins #616's tracing.py fix at the validate_otlp_endpoint caller layer."""
+
+    @pytest.mark.parametrize(
+        "endpoint",
+        [
+            "https://127.1:4317",
+            "https://2130706433:4317",
+            "https://0x7f000001:4317",
+            "https://0177.0.0.1:4317",
+            "https://2852039166:4317",
+        ],
+    )
+    def test_rejects_abbreviated_forms(self, endpoint: str) -> None:
+        from soup_cli.utils.tracing import validate_otlp_endpoint
+
+        with pytest.raises(ValueError, match="private|link"):
+            validate_otlp_endpoint(endpoint)
+
+
+# =====================================================================
 # End-to-End: Telemetry SSRF Guard Pinning (#600)
 # =====================================================================
 

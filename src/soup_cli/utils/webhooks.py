@@ -20,50 +20,13 @@ when an alarm actually fires.
 
 from __future__ import annotations
 
-import ipaddress
 from typing import List, Mapping, Optional, Tuple
 from urllib.parse import urlparse
 
+from soup_cli.utils.net_guard import LOOPBACK_HOSTS as _LOOPBACK_HOSTS
+from soup_cli.utils.net_guard import is_private_or_link_local as _is_private_or_link_local
+
 _MAX_WEBHOOK_URL_LEN = 4096
-_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
-
-
-def _is_private_or_link_local(host: str) -> bool:
-    """Return True iff ``host`` resolves to a non-loopback private/reserved IP.
-
-    Handles canonical IPv4/IPv6 via :func:`ipaddress.ip_address` **and**
-    abbreviated / decimal / hex / octal IPv4 forms (e.g. ``127.1``,
-    ``2130706433``, ``0x7f000001``, ``0177.0.0.1``) via the platform C
-    library :func:`socket.inet_aton`.  The latter is a pure in-process
-    string parser — no DNS lookup is performed.
-
-    Explicit parentheses on the final clause (mirrors v0.63.0 drift-alarm
-    code-review MEDIUM fix): Python binds ``and`` tighter than ``or``, but
-    the SSRF gate is safety-critical and a future edit should not need to
-    re-derive the precedence rules to verify the logic.
-    """
-    import socket  # noqa: PLC0415 — lazy import (stdlib, negligible cost)
-
-    clean_host = host.rstrip(".")
-
-    def _check(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
-        return (
-            ip.is_private
-            or ip.is_link_local
-            or (ip.is_loopback is False and (ip.is_reserved or ip.is_multicast))
-        )
-
-    try:
-        return _check(ipaddress.ip_address(clean_host))
-    except ValueError:
-        pass
-    # Fallback: C-level inet_aton accepts abbreviated/integer/hex/octal
-    # IPv4 representations that Python's ipaddress module rejects.
-    try:
-        canonical = socket.inet_ntoa(socket.inet_aton(clean_host))
-        return _check(ipaddress.ip_address(canonical))
-    except (OSError, ValueError):
-        return False
 
 
 def validate_webhook_url(url: object, *, allow_private_hosts: bool = False) -> str:
