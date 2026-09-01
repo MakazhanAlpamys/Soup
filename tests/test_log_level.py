@@ -70,11 +70,18 @@ class TestSetupLogging:
         assert logger.isEnabledFor(logging.DEBUG)
 
     def test_idempotent(self):
-        # Calling twice should not duplicate handlers
+        # Calling twice must neither duplicate handlers nor replace the
+        # existing one: same tier keeps the same handler object.
+        logger = setup_logging(LogLevel.NORMAL)
+        tagged = [
+            handler for handler in logger.handlers
+            if getattr(handler, "_soup_log_tier", None) == LogLevel.NORMAL
+        ]
+        assert len(tagged) == 1
+        n_handlers = len(logger.handlers)
         setup_logging(LogLevel.NORMAL)
-        n_handlers = len(logging.getLogger("soup").handlers)
-        setup_logging(LogLevel.NORMAL)
-        assert len(logging.getLogger("soup").handlers) == n_handlers
+        assert len(logger.handlers) == n_handlers
+        assert tagged[0] in logger.handlers
 
     def test_tier_change_replaces_handler(self):
         setup_logging(LogLevel.NORMAL)
@@ -109,6 +116,8 @@ class TestIssue273ForeignHandlerContract:
         saved_handlers = list(logger.handlers)
         saved_level = logger.level
         saved_propagate = logger.propagate
+        for handler in saved_handlers:
+            logger.removeHandler(handler)
         yield
         for handler in list(logger.handlers):
             logger.removeHandler(handler)
