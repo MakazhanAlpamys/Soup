@@ -19,6 +19,8 @@ from __future__ import annotations
 from soup_cli.config.loader import load_config_from_string
 from soup_cli.utils.data_mix import MixOptimizationReport, render_mix_recipe_yaml
 
+from .conftest import strip_ansi
+
 
 def _make_files(tmp_path, names):
     for n in names:
@@ -112,7 +114,10 @@ def test_apply_cli_prints_dataset_list_shape_recipe(tmp_path, monkeypatch):
     # Rich wraps long lines to the console width, so compare with whitespace
     # collapsed rather than by exact line — "train:" must be followed by a
     # "-" list marker (the new shape), not directly by a path.
-    compact = "".join(result.output.split())
+    # #633: collapse whitespace AND strip ANSI. Rich splits "train:" across
+    # Pygments tokens when colour is enabled, so whitespace collapse alone --
+    # the fix that shipped here originally -- leaves escapes mid-token.
+    compact = "".join(strip_ansi(result.output).split())
     assert "train:" in compact, result.output
     after = compact[compact.index("train:") + len("train:"):]
     assert after.startswith("-"), result.output
@@ -165,7 +170,8 @@ def test_apply_cli_quotes_path_needing_quoting(tmp_path, monkeypatch):
     runner = CliRunner()
     result = runner.invoke(app, ["data", "mix", "--apply", "odd.yaml"])
     assert result.exit_code == 0, (result.output, repr(result.exception))
-    data_block = result.output[result.output.index("data:"):]
+    plain = strip_ansi(result.output)  # #633 -- \x1b is not valid YAML
+    data_block = plain[plain.index("data:"):]
     loaded = yaml.safe_load(data_block)
     assert loaded["data"]["train"] == "odd: name.jsonl"
 
@@ -230,7 +236,8 @@ def test_apply_handles_new_multi_dataset_recipe(tmp_path, monkeypatch):
     assert result.exit_code == 0, (result.output, repr(result.exception))
     result = runner.invoke(app, ["data", "mix", "--apply", "rec3.yaml"])
     assert result.exit_code == 0, (result.output, repr(result.exception))
-    data_block = result.output[result.output.index("data:"):]
+    plain = strip_ansi(result.output)  # #633 -- \x1b is not valid YAML
+    data_block = plain[plain.index("data:"):]
     from pathlib import Path
 
     import yaml

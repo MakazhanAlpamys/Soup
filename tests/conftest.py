@@ -1,9 +1,21 @@
-"""Shared test fixtures."""
+"""Shared pytest fixtures and helpers."""
 
 import json
+import re
 from pathlib import Path
 
 import pytest
+
+#: Rich/Pygments emit SGR escapes *between* the tokens of one logical line, so a
+#: multi-token substring like "modality: text" is absent from raw output and
+#: yaml.safe_load rejects \x1b outright (#633). 38 test files had grown their
+#: own copy of this regex; new code should import this one.
+_ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def strip_ansi(text: "str | None") -> str:
+    """Return ``text`` with SGR escape sequences removed."""
+    return _ANSI_ESCAPE.sub("", text or "")
 
 
 @pytest.fixture(autouse=True)

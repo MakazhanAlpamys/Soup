@@ -9,6 +9,8 @@ from soup_cli.cli import app
 from soup_cli.config.loader import load_config_from_string
 from soup_cli.recipes.catalog import get_recipe, search_recipes
 
+from .conftest import strip_ansi
+
 runner = CliRunner()
 
 
@@ -44,7 +46,10 @@ def test_qwen38_27b_recipe_show_and_use(
     show_result = runner.invoke(app, ["recipes", "show", "qwen3.8-27b-sft"])
     assert show_result.exit_code == 0
     assert "Qwen/Qwen3.8-27B" in show_result.output
-    assert "modality: text" in show_result.output
+    # #633: "modality: text" spans three Pygments tokens, so escapes land
+    # inside it whenever colour is enabled. The model id above is one token and
+    # survives raw, which is why only this line broke.
+    assert "modality: text" in strip_ansi(show_result.output)
 
     monkeypatch.chdir(tmp_path)
     use_result = runner.invoke(

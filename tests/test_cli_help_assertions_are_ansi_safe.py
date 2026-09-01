@@ -252,3 +252,149 @@ def test_help_renders():
 
     def test_unparseable_source_does_not_explode(self):
         assert find_raw_help_assertions("def broken(:\n") == []
+
+
+# ---------------------------------------------------------------------------
+# #633 — the same hazard, on subcommands the `--help` scan never reaches.
+# ---------------------------------------------------------------------------
+
+#: Commands whose output is **syntax highlighted**. Rich renders these through
+#: Pygments, which emits SGR escapes *between* the tokens of one logical line:
+#: ``modality``, ``:`` and ``text`` are three tokens, so ``"modality: text"`` is
+#: not a substring of the rendered output and ``yaml.safe_load`` rejects
+#: ``\x1b``. Plain ``console.print`` output is not affected the same way -- an
+#: unstyled message is wrapped in escapes rather than split by them -- which is
+#: why only these commands are scanned and the suite's ~200 other raw-output
+#: assertions are correctly left alone.
+_HIGHLIGHTED_INVOCATIONS = (
+    re.compile(r'"recipes"\s*,\s*"show"'),
+    re.compile(r"'recipes'\s*,\s*'show'"),
+    re.compile(r'"mix"\s*,\s*"--(apply|optimize)"'),
+    re.compile(r"'mix'\s*,\s*'--(apply|optimize)'"),
+)
+
+_PARSES_OUTPUT = re.compile(r"(yaml\.safe_load|json\.loads)\s*\(")
+
+#: Broader than ``_RAW_OUTPUT_RE``, which anchors on the exact name
+#: ``result.output`` and therefore cannot match ``show_result.output`` -- ``_``
+#: is a word character, so ``\b`` never fires before ``result`` there. Real
+#: tests name their results ``show_result`` / ``use_result`` all the time.
+_ANY_RAW_OUTPUT_RE = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\.(output|stdout)\b|readouterr\(\)")
+_STRING_LITERAL = re.compile(r'"([^"]{2,})"' + r"|'([^']{2,})'")
+
+
+def _is_multi_token(literal: str) -> bool:
+    """A literal that Pygments would split across tokens.
+
+    The hazard is YAML *structure*. ``modality: text`` is three tokens -- key,
+    punctuation, value -- with escapes between them, and ``train:`` is two. A
+    bare model id (``Qwen/Qwen3.8-27B``) is one token and survives raw, which is
+    why neighbouring assertions in the same file kept passing.
+
+    A plain message such as ``"validation failed"`` is also safe: Rich wraps an
+    unstyled string in escapes rather than splitting it, so requiring a colon
+    keeps the guard on the assertions that actually break rather than every
+    substring containing a space.
+    """
+    return ":" in literal
+
+
+def _assert_expression(line: str) -> str:
+    """Return the tested expression of an ``assert``, dropping its message.
+
+    ``assert "train:" in compact, result.output`` reads raw output only in the
+    *failure message*, which is harmless and in fact good practice. Scanning the
+    whole line would flag it, so the top-level comma is found (ignoring commas
+    inside brackets or strings) and everything after it discarded.
+    """
+    depth = 0
+    quote = ""
+    for index, char in enumerate(line):
+        if quote:
+            if char == quote and line[index - 1 : index] != "\\":
+                quote = ""
+            continue
+        if char in "\"'":
+            quote = char
+        elif char in "([{":
+            depth += 1
+        elif char in ")]}":
+            depth -= 1
+        elif char == "," and depth == 0:
+            return line[:index]
+    return line
+
+
+def find_unsafe_highlighted_assertions(source: str) -> list[tuple[int, str]]:
+    """Return ``(lineno, text)`` for unnormalised reads of highlighted output.
+
+    Scoped per test FUNCTION, like ``find_raw_help_assertions``: a function that
+    invokes a syntax-highlighted command and then either feeds raw output to a
+    parser or asserts a multi-token substring against it.
+    """
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:  # pragma: no cover — a broken file fails its own tests
+        return []
+    lines = source.splitlines()
+    offenders: list[tuple[int, str]] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if not node.name.startswith("test"):
+            continue
+        end = node.end_lineno or node.lineno
+        body = lines[node.lineno - 1 : end]
+        joined = "\n".join(body)
+        if not any(pattern.search(joined) for pattern in _HIGHLIGHTED_INVOCATIONS):
+            continue
+
+        tainted: set[str] = set()
+        for offset, line in enumerate(body):
+            stripped = line.strip()
+            if stripped[:1] in {'"', "'"}:
+                # A source line that *is* a string literal -- the synthetic
+                # fixtures this guard's own tests are built from. Scanning them
+                # would flag the examples written to prove the guard works.
+                continue
+            if _looks_normalised(stripped):
+                # Record that this variable is safe, then move on.
+                match = _ASSIGN_RE.match(line)
+                if match:
+                    tainted.discard(match.group(1))
+                continue
+
+            match = _ASSIGN_RE.match(line)
+            if match and not stripped.startswith("assert"):
+                name, rhs = match.group(1), match.group(2)
+                derived = _ANY_RAW_OUTPUT_RE.search(rhs) or any(
+                    re.search(rf"\b{re.escape(var)}\b", rhs) for var in tainted
+                )
+                if derived:
+                    tainted.add(name)
+                    if _PARSES_OUTPUT.search(rhs):
+                        offenders.append((node.lineno + offset, stripped[:100]))
+                continue
+
+            reads_raw = _ANY_RAW_OUTPUT_RE.search(stripped)
+            reads_tainted = any(
+                re.search(rf"\b{re.escape(var)}\b", stripped) for var in tainted
+            )
+            if not (reads_raw or reads_tainted):
+                continue
+            if _PARSES_OUTPUT.search(stripped):
+                offenders.append((node.lineno + offset, stripped[:100]))
+                continue
+            if not stripped.startswith("assert"):
+                continue
+            expression = _assert_expression(stripped)
+            if not (
+                _ANY_RAW_OUTPUT_RE.search(expression)
+                or any(re.search(rf"\b{re.escape(var)}\b", expression) for var in tainted)
+            ):
+                continue
+            found = _STRING_LITERAL.search(expression)
+            literal = (found.group(1) or found.group(2)) if found else ""
+            if literal and _is_multi_token(literal):
+                offenders.append((node.lineno + offset, stripped[:100]))
+    return offenders
