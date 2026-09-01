@@ -35,6 +35,7 @@ _FIXTURE_PATH = (
 _REGENERATE_HINT = "regenerate with scripts/generate_recipe_snapshot.py"
 
 
+@functools.lru_cache(maxsize=1)
 def _load_fixture() -> dict[str, dict]:
     return json.loads(_FIXTURE_PATH.read_text(encoding="utf-8"))
 

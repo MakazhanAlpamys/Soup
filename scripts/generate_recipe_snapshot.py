@@ -31,6 +31,7 @@ def main() -> int:
     _FIXTURE_PATH.write_text(
         json.dumps(snapshot, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
+        newline="\n",
     )
     print(f"Wrote {len(snapshot)} recipe snapshots to {_FIXTURE_PATH}")
     return 0
