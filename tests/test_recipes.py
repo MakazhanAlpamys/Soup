@@ -518,6 +518,64 @@ class TestIssue281KimiK26GrpoRecipe:
         )
 
 
+class TestQwen35NineBDpoRecipe:
+    """Coverage for the qwen3.5-9b-dpo recipe (#275 task-variant)."""
+
+    def test_recipe_loads_with_expected_dpo_shape(self) -> None:
+        from soup_cli.config.loader import load_config_from_string
+        from soup_cli.recipes.catalog import get_recipe
+
+        recipe = get_recipe("qwen3.5-9b-dpo")
+        assert recipe is not None
+        # Surface 1: the metadata. Pinned separately from the YAML below so an
+        # edit to one that forgets the other cannot pass -- the guard the
+        # maintainer named as deciding #512.
+        assert recipe.model == "Qwen/Qwen3.5-9B"
+        assert recipe.task == "dpo"
+
+        config = load_config_from_string(recipe.yaml_str)
+        # Surface 2: the YAML `base:`.
+        assert config.base == "Qwen/Qwen3.5-9B"
+        assert config.task == "dpo"
+        assert config.data.format == "dpo"
+        assert config.training.dpo_beta == 0.1
+        # Every DPO recipe in the catalog uses 5e-6; this one is not an outlier.
+        assert config.training.lr == 5e-6
+        assert config.training.lora.r == 16
+        assert config.training.lora.alpha == 32
+        assert config.training.quantization == "4bit"
+
+    def test_completes_the_task_trio_for_this_base(self) -> None:
+        """#275 is about DPO/GRPO/pretrain variants of the shipped SFT recipes."""
+        from soup_cli.recipes.catalog import RECIPES
+
+        tasks = {r.task for r in RECIPES.values() if r.model == "Qwen/Qwen3.5-9B"}
+        assert {"sft", "grpo", "dpo"} <= tasks
+
+    def test_shares_base_and_size_with_its_sft_sibling(self) -> None:
+        from soup_cli.recipes.catalog import get_recipe
+
+        dpo, sft = get_recipe("qwen3.5-9b-dpo"), get_recipe("qwen3.5-9b-sft")
+        assert dpo is not None and sft is not None
+        assert dpo.model == sft.model
+        assert dpo.size == sft.size
+        assert dpo.task != sft.task
+
+    def test_show_and_use_recipe(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        show_result = runner.invoke(app, ["recipes", "show", "qwen3.5-9b-dpo"])
+        assert show_result.exit_code == 0
+        assert "Qwen/Qwen3.5-9B" in show_result.output
+
+        monkeypatch.chdir(tmp_path)
+        use_result = runner.invoke(app, ["recipes", "use", "qwen3.5-9b-dpo", "--yes"])
+        assert use_result.exit_code == 0
+        assert "Qwen/Qwen3.5-9B" in (tmp_path / "soup.yaml").read_text(encoding="utf-8")
+
+
 # ---------------------------------------------------------------------------
 # Part A: v0.25.0 new model recipes (Llama 4, Qwen 3, Gemma 3, DeepSeek V3)
 # ---------------------------------------------------------------------------
@@ -565,7 +623,7 @@ class TestV025NewRecipes:
             assert cfg.base == recipe.model
             assert cfg.task == recipe.task
 
-    def test_catalog_size_is_161(self):
+    def test_catalog_size_is_162(self):
         """Total catalog size — grew with each release.
 
         v0.25.0 shipped 43 recipes (29 + 9 Part A + 2 Part B tools + 3 Part E MLX).
@@ -590,10 +648,11 @@ class TestV025NewRecipes:
         Issue #271 added 1 (smollm3-3b-sft) -> 159.
         Issue #276 added 1 (qwen3.5-35b-a3b-dpo) -> 160.
         Issue #281 added 1 (kimi-k2.6-grpo) -> 161.
+        Task-variant for #275 added 1 (qwen3.5-9b-dpo) -> 162.
         """
         from soup_cli.recipes.catalog import RECIPES
 
-        assert len(RECIPES) == 161
+        assert len(RECIPES) == 162
 
     def test_new_recipes_searchable(self):
         """Search returns the new recipes via keyword/task filter."""
