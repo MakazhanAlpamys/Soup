@@ -612,6 +612,13 @@ soup infer --model my-org/custom-arch-model --input prompts.jsonl --trust-remote
 soup export --model ./adapter --format gguf --trust-remote-code
 ```
 
+`soup serve` resolves this gate **once** and hands the result to whichever backend
+runs. That was true of the transformers and vLLM backends from the start, and is
+true of the SGLang backend as of #619 — before that its runtime and tokenizer
+loaded with `trust_remote_code` hardcoded on, so the sentence above did not hold
+for `--backend sglang`. A custom-code model on that backend now fails to load
+without the flag where it previously loaded and ran silently.
+
 ### Chat-template hardening
 
 Tokenizers without a chat template now raise a `ValueError` with a fix suggestion instead of silently building garbage `f"{role}: {content}"` strings.

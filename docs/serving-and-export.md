@@ -309,6 +309,16 @@ to a generic `User:` / `Assistant:` prompt for template-less models), and
 `"stop"` otherwise — so a client doing continue-on-length can tell a truncated
 answer from a completed one (#360).
 
+It also honours `--trust-remote-code` like every other backend. **This changed:**
+the SGLang runtime and its tokenizer previously loaded with `trust_remote_code`
+hardcoded on, so a model's custom repo code executed whether or not you opted in
+— the pre-flight panel announced it but offered no way to decline. A model that
+needs custom code now **fails to load** on this backend unless you pass the flag:
+
+```bash
+soup serve --model ./output --backend sglang --trust-remote-code
+```
+
 ### Speculative Decoding
 
 Use a smaller draft model to speed up generation. **Measure before you trust it** — see
