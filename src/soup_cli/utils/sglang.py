@@ -101,6 +101,7 @@ def create_sglang_runtime(
     tensor_parallel_size: int = 1,
     mem_fraction_static: float = 0.88,
     dtype: str = "auto",
+    trust_remote_code: bool = False,
 ):
     """Create an SGLang Runtime for serving.
 
@@ -111,6 +112,12 @@ def create_sglang_runtime(
         tensor_parallel_size: Number of GPUs for tensor parallelism.
         mem_fraction_static: Fraction of GPU memory for static allocation.
         dtype: Data type for model weights.
+        trust_remote_code: Execute the model repo's custom code on load.
+            Default ``False`` -- the same default-deny the vLLM path takes.
+            ``serve.py`` resolves the v0.36.0 gate once per invocation and
+            passes the result here. This was previously an unconditional
+            ``True`` at both call sites, so the SGLang backend ran a model's
+            custom code whether or not the user opted in.
 
     Returns:
         (runtime, runtime_model_name) tuple.
@@ -134,7 +141,7 @@ def create_sglang_runtime(
             tp_size=tensor_parallel_size,
             mem_fraction_static=mem_fraction_static,
             dtype=dtype,
-            trust_remote_code=True,
+            trust_remote_code=trust_remote_code,
             lora_paths=[model_path],
         )
         runtime_model_name = base_model
@@ -144,7 +151,7 @@ def create_sglang_runtime(
             tp_size=tensor_parallel_size,
             mem_fraction_static=mem_fraction_static,
             dtype=dtype,
-            trust_remote_code=True,
+            trust_remote_code=trust_remote_code,
         )
         runtime_model_name = model_path
 

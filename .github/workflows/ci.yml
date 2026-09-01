@@ -23,12 +23,30 @@ jobs:
         # before any job produced a log. actionlint checks context availability,
         # expression syntax, action inputs, and shellchecks `run:` blocks.
         #
-        # Pinned and installed from source rather than `curl | bash` of the
-        # upstream install script, matching how the rest of this repo pulls
-        # third-party tooling. Go is preinstalled on ubuntu-latest.
+        # Installed as the pinned upstream release binary with its published
+        # SHA-256 checked, NOT via `go install`. That is a stronger supply-chain
+        # position than building from source -- the bytes that run are verified
+        # against a hash committed here -- and it removes the failure that took
+        # this job down on 2026-08-31: actionlint v1.7.12 declares
+        # `go >= 1.25.0`, ubuntu-latest ships go 1.24.13, so `go install`
+        # silently switched toolchains and died fetching one:
+        #
+        #   go: switching to go >= 1.25.0: module golang.org/toolchain:
+        #   read ".../@v/list": stream error: INTERNAL_ERROR; received from peer
+        #
+        # A transient network fault in a job that is now a REQUIRED check blocks
+        # every merge in the repository, so this step must not depend on an
+        # implicit toolchain download. `--retry-all-errors` covers the rest.
+        env:
+          ACTIONLINT_VERSION: 1.7.12
+          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
         run: |
-          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
-          "$(go env GOPATH)/bin/actionlint" -color
+          set -euo pipefail
+          url="https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl --fail --silent --show-error --location --retry 3 --retry-all-errors             --output "${RUNNER_TEMP}/actionlint.tar.gz" "$url"
+          echo "${ACTIONLINT_SHA256}  ${RUNNER_TEMP}/actionlint.tar.gz"             | sha256sum --check --strict -
+          tar -xzf "${RUNNER_TEMP}/actionlint.tar.gz" -C "${RUNNER_TEMP}" actionlint
+          "${RUNNER_TEMP}/actionlint" -color
 
   type-check:
     runs-on: ubuntu-latest

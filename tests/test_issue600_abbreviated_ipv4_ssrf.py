@@ -201,7 +201,7 @@ class TestTelemetrySSRFEndToEndPinning:
         [
             "https://us.i.posthog.com/",
             "https://eu.i.posthog.com/i/v0/e/",
-            "https://telemetry.example.com/capture",
+            "https://app.posthog.com/capture/",
         ],
     )
     def test_telemetry_endpoint_is_safe_allows_public(

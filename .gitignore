@@ -43,6 +43,14 @@ report.xml
 # Internal plan + local dev instructions (not for repo)
 .claude/
 .coverage
+.agents
+.codex
+
+# Throwaway git worktrees used to review PRs in isolation (see CONTRIBUTING
+# "Verify by mutation"). They live inside the repo so a review never touches
+# the working tree, which means an untracked one is one `git add -A` away from
+# being committed.
+.review-worktrees/
 
 # Internal brainstorming plans + design specs (local-only, not for repo)
 docs/superpowers/

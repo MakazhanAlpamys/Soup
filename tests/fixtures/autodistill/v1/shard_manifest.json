@@ -1,0 +1,19 @@
+{
+  "schema": "soup.autodistill.shard-manifest.v1",
+  "shard_id": "shard-00000",
+  "transaction_id": "fixture-transaction-0001",
+  "state": "available",
+  "plan_sha256": "b53dbabce3ebafe777fb7b295d2cebd48d87ca3da910ac758ec096349d008adf",
+  "previous_manifest_sha256": "0202020202020202020202020202020202020202020202020202020202020202",
+  "row_count": 1,
+  "token_count": 1,
+  "payloads": [
+    {
+      "path": "capture.jsonl",
+      "bytes": 423,
+      "rows": 1,
+      "tokens": 1,
+      "sha256": "04212c6e92a2c008d4a6e832a1ca700d994c69f0725a4e6df744b3c022fdbe9a"
+    }
+  ]
+}

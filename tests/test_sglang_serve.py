@@ -78,7 +78,13 @@ class TestSGLangRuntimeCreation:
         mock_sgl.Runtime.assert_called_once()
         call_kwargs = mock_sgl.Runtime.call_args[1]
         assert call_kwargs["model_path"] == "/path/to/model"
-        assert call_kwargs["trust_remote_code"] is True
+        # Default-deny, matching the vLLM path. This asserted True until the
+        # SGLang trust-contract fix: the runtime hardcoded trust_remote_code=True
+        # at both call sites, so `soup serve --backend sglang` executed a
+        # model's custom code whether or not the user passed
+        # --trust-remote-code. See tests/test_sglang_trust_contract.py for the
+        # opt-in path and the serve.py wiring.
+        assert call_kwargs["trust_remote_code"] is False
         assert model_name == "/path/to/model"
 
     def test_create_sglang_runtime_with_adapter(self):

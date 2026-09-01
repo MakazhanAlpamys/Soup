@@ -362,8 +362,9 @@ All training tasks run on CPU for testing (quantization auto-disabled). Optional
 soup doctor    # GPU, system resources, dependencies, and version in one place
 ```
 
-- **`ImportError: DLL load failed while importing _C` (Windows)** — reinstall PyTorch for your
-  CUDA version: `pip install torch --index-url https://download.pytorch.org/whl/cu121`.
+- **`ImportError: DLL load failed while importing _C` (Windows).** PyPI's torch
+  wheel is CPU-only. Reinstall a CUDA build; `soup doctor` prints the
+  `pip install` command for the wheel your driver can run.
 - **`soup version` ≠ `pip show soup-cli`** — multiple Python installs; use a virtualenv.
 
 ## Development
