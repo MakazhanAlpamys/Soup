@@ -39,6 +39,7 @@ only in a scratchpad on a machine that is gone, which is
 |---|---|---|---|
 | [`issue331_qlora_scope.py`](harness/issue331_qlora_scope.py) | #331 | Does the wrong-gradient defect reach **ordinary QLoRA**? Three arms in one process, with a positive control. Answer: no — 0.0 against a control that diverges by 3.77e-01 | ~15 s, 4 GB card, no downloads |
 | [`bnb_repro.py`](harness/bnb_repro.py) | Upstream bitsandbytes #2034 / NF4 defect | Minimal standalone reproducer for the NF4 stale-gradient mechanism: recycled buffers expose `MatMul4Bit`'s `ctx` lifetime issue; private buffers are the reference and bf16 is the control | CUDA GPU required; no downloads; historical environment: torch 2.13.0+cu130, bitsandbytes 0.50.0; ~1 min |
+| [`issue395_second_stack_vram.py`](harness/issue395_second_stack_vram.py) | #395 / [`gate-395-second-stack-vram.md`](gate-395-second-stack-vram.md) | Does the long-sequence under-prediction reproduce on a second stack, and is the gap the logits multiplier? Answer: no and no — the loss term measures 12.000000 (spread 0), and `14 x E` alone exceeds the whole real peak on every row, so the `+2` retained copy is absent. Three modes: sweep, `--measure`, `--sdpa` | 24 GB card (largest arm peaks 11.85 GB); downloads SmolLM2-135M and Qwen2.5-0.5B; needs `jinja2>=3.1.0`; a few minutes |
 
 ## Hardware
 
