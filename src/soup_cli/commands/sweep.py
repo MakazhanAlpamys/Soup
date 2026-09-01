@@ -344,6 +344,18 @@ def _run_single(base_cfg, params: dict, run_name: str, config_path: Path) -> dic
 
     # Override experiment name
     config_dict["experiment_name"] = run_name
+
+    # #627 — the dict starts from a validated model_dump(), so anything unknown
+    # here came from a sweep parameter name. Silently dropping it would run the
+    # whole sweep with the swept knob never applied and every arm identical.
+    from soup_cli.config.unknown_keys import find_unknown_config_keys, format_unknown_keys
+
+    unknown = find_unknown_config_keys(config_dict)
+    if unknown:
+        raise ValueError(
+            f"sweep parameter does not match any config field: {format_unknown_keys(unknown)}"
+        )
+
     cfg = SoupConfig(**config_dict)
 
     # Detect hardware

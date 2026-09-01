@@ -7,8 +7,42 @@ from pydantic import ValidationError
 from rich.console import Console
 
 from soup_cli.config.schema import SoupConfig
+from soup_cli.config.unknown_keys import find_unknown_config_keys, format_unknown_keys
 
 console = Console()
+
+#: What to do about a key no model declares (#627).
+#:
+#: ``"warn"``  -- report and continue. Non-breaking: a config written for a
+#:               newer Soup still runs on an older one.
+#: ``"error"`` -- refuse to load.
+#:
+#: Detection is identical either way; this is the only difference between the
+#: options argued on #627, kept as one switch so the decision is a one-line
+#: change rather than a rewrite.
+UNKNOWN_KEY_SEVERITY = "warn"
+
+
+def _report_unknown_keys(raw: dict) -> "str | None":
+    """Return an error string when unknown keys must stop the load.
+
+    Silence is the thing being fixed, so a finding is always surfaced: under
+    ``"warn"`` it is printed and ``None`` is returned; under ``"error"`` the
+    message is handed back for the caller to raise in its own contract
+    (``SystemExit`` for the CLI, ``ValueError`` for the API/UI).
+    """
+    unknown = find_unknown_config_keys(raw)
+    if not unknown:
+        return None
+    message = format_unknown_keys(unknown)
+    if UNKNOWN_KEY_SEVERITY == "error":
+        return message
+    console.print(f"[yellow]Warning:[/] {message}")
+    console.print(
+        "[dim]This key is not applied. It is ignored, not defaulted -- the run "
+        "proceeds as if you had not written it.[/]"
+    )
+    return None
 
 
 def load_config(path: "Path | str") -> SoupConfig:
@@ -18,6 +52,12 @@ def load_config(path: "Path | str") -> SoupConfig:
 
     if raw is None:
         console.print("[red]Config file is empty[/]")
+        raise SystemExit(1)
+
+    unknown_error = _report_unknown_keys(raw)
+    if unknown_error is not None:
+        console.print("[red bold]Config validation error:[/]\n")
+        console.print(f"  [red]{unknown_error}[/]")
         raise SystemExit(1)
 
     try:
@@ -48,6 +88,10 @@ def load_config_from_string(yaml_str: str) -> SoupConfig:
         raise ValueError(
             f"Config must be a YAML mapping, got {type(raw).__name__}"
         )
+
+    unknown_error = _report_unknown_keys(raw)
+    if unknown_error is not None:
+        raise ValueError(unknown_error)
 
     try:
         return SoupConfig(**raw)
