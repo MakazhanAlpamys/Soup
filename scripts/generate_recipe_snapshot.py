@@ -15,7 +15,7 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 _FIXTURE_PATH = _REPO_ROOT / "tests" / "fixtures" / "recipe_config_snapshots.json"
 
 
-def build_snapshot() -> dict[str, object]:
+def build_snapshot() -> dict[str, dict]:
     sys.path.insert(0, str(_REPO_ROOT / "src"))
     from soup_cli.config.loader import load_config_from_string
     from soup_cli.recipes.catalog import RECIPES

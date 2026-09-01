@@ -448,6 +448,10 @@ If adding a new training algorithm:
 1. Add a `RecipeMeta` entry in `recipes/catalog.py`
 2. Add tests in `tests/test_recipes.py`
 3. Update `README.md` recipes section
+4. Regenerate `tests/fixtures/recipe_config_snapshots.json` with
+   `python scripts/generate_recipe_snapshot.py` and review the diff — the new
+   recipe's resolved config must be in the committed snapshot, or
+   `test_fixture_and_catalog_have_the_same_recipe_names` fails (#621)
 
 ## Good First Issues
 
@@ -491,7 +495,13 @@ The project follows semantic versioning: `MAJOR.MINOR.PATCH`
    resolved-vs-declared table into its run summary.
 1. Run `python scripts/assemble_changelog.py` and review the assembled `CHANGELOG.md`
 2. Update version in `pyproject.toml` and `src/soup_cli/__init__.py`
-3. Run full test suite and linting
+3. Run full test suite and linting — this includes
+   `tests/test_issue621_recipe_snapshot.py`, which fails loudly if a schema
+   default changed since the last release without regenerating
+   `tests/fixtures/recipe_config_snapshots.json`
+   (`python scripts/generate_recipe_snapshot.py`); a red run here means the
+   fixture is stale, not that the release is unsafe to cut once regenerated
+   and reviewed
 4. Update `README.md`, the relevant page under `docs/`, and `SECURITY.md` (if security-related)
 5. Commit with message: `Release v0.X.0`
 6. Tag: `git tag v0.X.0 && git push --tags`

@@ -21,18 +21,40 @@ would be on a Windows checkout (the failure mode #580's review hit).
 
 from __future__ import annotations
 
+import functools
 import json
 from pathlib import Path
 
 import pytest
 
+from soup_cli.recipes.catalog import RECIPES
+
 _FIXTURE_PATH = (
     Path(__file__).resolve().parent / "fixtures" / "recipe_config_snapshots.json"
 )
+_REGENERATE_HINT = "regenerate with scripts/generate_recipe_snapshot.py"
 
 
 def _load_fixture() -> dict[str, dict]:
     return json.loads(_FIXTURE_PATH.read_text(encoding="utf-8"))
+
+
+@functools.lru_cache(maxsize=1)
+def _live_snapshots() -> dict[str, dict]:
+    """The same resolution `scripts/generate_recipe_snapshot.py` uses to
+    build the committed fixture, called here instead of reimplemented.
+
+    Two independent copies of `model_dump(mode="json")` over
+    `load_config_from_string(...)` — one in this file, one in the script —
+    is exactly the shape this repo has been bitten by before (#372, #392):
+    a fix or a behavior change lands in one and the other silently drifts,
+    at which point the fixture becomes unregenerable and nobody learns
+    until a release. Cached so the whole catalog resolves once per test
+    session rather than once per parametrized recipe.
+    """
+    from scripts.generate_recipe_snapshot import build_snapshot
+
+    return build_snapshot()
 
 
 def _flatten(d: dict, prefix: str = "") -> dict[str, object]:
@@ -60,10 +82,7 @@ def _diff(expected: dict, actual: dict) -> dict[str, tuple[object, object]]:
 
 
 def _resolve(name: str) -> dict:
-    from soup_cli.config.loader import load_config_from_string
-    from soup_cli.recipes.catalog import RECIPES
-
-    return load_config_from_string(RECIPES[name].yaml_str).model_dump(mode="json")
+    return _live_snapshots()[name]
 
 
 class TestFixtureCoversExactlyTheCurrentCatalog:
@@ -71,49 +90,48 @@ class TestFixtureCoversExactlyTheCurrentCatalog:
         """A recipe added or removed without regenerating fails here first,
         with a clear "which names" message, rather than as a KeyError deep
         in a parametrized test."""
-        from soup_cli.recipes.catalog import RECIPES
-
         fixture_names = set(_load_fixture())
         catalog_names = set(RECIPES)
         assert fixture_names == catalog_names, (
             f"missing from fixture: {sorted(catalog_names - fixture_names)}; "
-            f"stale in fixture: {sorted(fixture_names - catalog_names)}"
+            f"stale in fixture: {sorted(fixture_names - catalog_names)}; "
+            f"{_REGENERATE_HINT}"
         )
 
 
 class TestEveryRecipeMatchesItsCommittedSnapshot:
-    @pytest.mark.parametrize("name", sorted(_load_fixture()))
+    @pytest.mark.parametrize("name", sorted(RECIPES))
     def test_recipe_resolves_to_its_snapshot(self, name: str):
-        expected = _load_fixture()[name]
-        actual = _resolve(name)
-        diff = _diff(expected, actual)
+        fixture = _load_fixture()
+        assert name in fixture, (
+            f"{name!r} is in the catalog but missing from the snapshot fixture; "
+            f"{_REGENERATE_HINT}"
+        )
+        diff = _diff(fixture[name], _resolve(name))
         assert not diff, (
             f"recipe {name!r} no longer resolves to its committed snapshot. "
-            f"If this is a deliberate change, review the diff and regenerate "
-            f"with scripts/generate_recipe_snapshot.py. Differing fields "
-            f"(field: (snapshot, resolved)): {diff}"
+            f"If this is a deliberate change, review the diff and {_REGENERATE_HINT}. "
+            f"Differing fields (field: (snapshot, resolved)): {diff}"
         )
 
 
 class TestTheSnapshotIsNotVacuous:
     """Demonstrates the comparison actually discriminates, rather than
-    merely asserting it does. Mutates a resolved value in-memory (no schema
-    edit needed) and confirms the same diff logic the real test uses catches
-    it — the failure mode this issue exists to prevent."""
+    merely asserting it does. Exercises `_diff` directly on synthetic
+    dicts, not a live recipe — an unrelated schema addition reddens every
+    real per-recipe test already, and coupling these controls to the same
+    live data would redden them too, making "did the guard break, or did
+    the data move?" unanswerable from the log."""
 
     def test_a_changed_field_value_is_detected(self):
-        name = "llama3.1-8b-dpo"
-        fixture = _load_fixture()[name]
-        mutated = _resolve(name)
-        mutated["training"]["dpo_beta"] = mutated["training"]["dpo_beta"] + 1.0
+        expected = {"training": {"dpo_beta": 0.1, "epochs": 3}}
+        actual = {"training": {"dpo_beta": 0.2, "epochs": 3}}
 
-        diff = _diff(fixture, mutated)
-        assert diff == {"training.dpo_beta": (0.1, 1.1)}
+        assert _diff(expected, actual) == {"training.dpo_beta": (0.1, 0.2)}
 
-    def test_an_unmutated_resolve_has_no_diff(self):
-        """Negative control: same recipe, no mutation, must be silent."""
-        name = "llama3.1-8b-dpo"
-        fixture = _load_fixture()[name]
-        actual = _resolve(name)
+    def test_identical_dicts_have_no_diff(self):
+        """Negative control: same values, must be silent."""
+        expected = {"training": {"dpo_beta": 0.1, "epochs": 3}}
+        actual = {"training": {"dpo_beta": 0.1, "epochs": 3}}
 
-        assert _diff(fixture, actual) == {}
+        assert _diff(expected, actual) == {}
