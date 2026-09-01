@@ -1,0 +1,16 @@
+- **The recipe-config snapshot fixture (#621/#637) is now delta-encoded** —
+  a schema-default change produces one failure naming the shared baseline,
+  not 149 identical failures across every recipe that relies on it, and
+  an added field is now structurally distinguishable from a changed value
+  rather than only distinguishable by reading the diff text. Measured:
+  `tests/fixtures/recipe_config_snapshots.json` goes from 1,571,967 bytes /
+  49,586 lines to 68,600 bytes / 2,040 lines — 22.9x smaller by byte count,
+  24.3x fewer lines. Verified by mutation against the real catalog: a
+  schema-default change (`dpo_beta` 0.1 -> 0.2) now produces 14 failures
+  (the shared baseline, plus 13 recipes that explicitly pin the value the
+  default used to be, correctly — their pin just started doing something),
+  down from 149; a new schema field produces exactly 1 failure, down from
+  164; a recipe's own value changing, a recipe added without regenerating,
+  an empty or deleted fixture, and a redundant default-duplicating line
+  being deleted (exposure 1, still deliberately unpinned per #621) all
+  behave exactly as before (#638).
