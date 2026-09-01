@@ -1,0 +1,7 @@
+- Pinned every recipe's *resolved* `SoupConfig` against a committed snapshot
+  (`tests/fixtures/recipe_config_snapshots.json`, regenerated via
+  `scripts/generate_recipe_snapshot.py`), so a schema-default change no longer
+  silently retunes recipes that rely on that default. Confirmed by mutation:
+  changing `dpo_beta`'s schema default failed 149 of the 162 recipes — every
+  one that doesn't explicitly pin the field — which is the exposure this
+  closes (#621).
