@@ -40,7 +40,7 @@ soup train --config examples/configs/sft_basic.yaml
 Validate a config without training:
 
 ```bash
-soup train --config examples/configs/sft_basic.yaml --dry-run
+soup train --config examples/configs/sft_basic.yaml ld
 ```
 
 Gated models (Llama-2, Llama-3.1) need Hugging Face access and a login first:
