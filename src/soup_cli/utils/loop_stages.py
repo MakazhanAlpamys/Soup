@@ -33,6 +33,7 @@ from typing import TYPE_CHECKING, Callable, Mapping, Optional
 
 from soup_cli.utils.loop_state import LoopState
 from soup_cli.utils.net_guard import LOOPBACK_HOSTS as _LOOPBACK_HOSTS
+from soup_cli.utils.net_guard import parse_ip_literal
 from soup_cli.utils.paths import atomic_write_text
 
 if TYPE_CHECKING:
@@ -269,8 +270,14 @@ def _endpoint_is_local(endpoint: str) -> bool:
     Loopback hostnames are accepted by name; any other host must parse as a
     private / loopback / link-local IP literal. A non-IP public hostname is
     rejected (we do not resolve DNS — project policy).
+
+    Deliberately narrower than ``net_guard.is_private_or_link_local``: this
+    gates what counts as "the operator's own box / LAN" for an outbound
+    POST, so reserved/multicast ranges stay rejected rather than being
+    treated as trustworthy deploy targets (#616 review). Shares
+    ``parse_ip_literal`` with the wider predicate for the abbreviated /
+    decimal / hex / octal IPv4 parsing only.
     """
-    import ipaddress
     from urllib.parse import urlparse
 
     host = (urlparse(endpoint).hostname or "").strip("[]").lower()
@@ -278,9 +285,8 @@ def _endpoint_is_local(endpoint: str) -> bool:
         return False
     if host in _LOOPBACK_HOSTS:
         return True
-    try:
-        ip = ipaddress.ip_address(host)
-    except ValueError:
+    ip = parse_ip_literal(host)
+    if ip is None:
         return False
     return ip.is_loopback or ip.is_private or ip.is_link_local
 

@@ -1632,6 +1632,29 @@ class TestDeploySsrfGuard:
         )
         assert out["deployed"] is True
 
+    @pytest.mark.parametrize(
+        "host",
+        ["127.1", "2130706433", "0x7f000001", "0177.0.0.1"],
+    )
+    def test_endpoint_is_local_accepts_abbreviated_loopback(self, host):
+        """#616 review: _endpoint_is_local had its own inline ipaddress parse
+        with no abbreviated-IPv4 fallback, so it failed closed (treated as
+        NOT local) on these forms. Now shares net_guard.parse_ip_literal."""
+        from soup_cli.utils.loop_stages import _endpoint_is_local
+
+        assert _endpoint_is_local(f"https://{host}:8000") is True
+
+    def test_deploy_to_canary_allows_abbreviated_loopback_endpoint(self, loop_env, monkeypatch):
+        import soup_cli.utils.loop_stages as ls
+
+        monkeypatch.setenv("SOUP_LOOP_SERVE_ENDPOINT", "https://127.1:8000")
+        monkeypatch.setattr(ls, "_DEPLOY_POSTER", lambda ep, name: True)
+        out = ls.deploy_to_canary(
+            loop_env(),
+            {"gate_verdict": "OK", "adapter_path": ".soup-loops/adapters/win"},
+        )
+        assert out["deployed"] is True
+
 
 class TestNoHeavyTopLevelImports:
     """Heavy deps must be lazy-imported inside functions (cold-start policy)."""
