@@ -1,0 +1,10 @@
+- `--resume auto` (and a direct `--resume <path>`) now finds MLX checkpoints.
+  `_resolve_checkpoint` only recognized `checkpoint-N` directories (the
+  transformers/unsloth shape); mlx-lm's tuner saves step-numbered
+  `NNNNNNN_adapters.safetensors` files instead, so an MLX run's own output
+  never matched and training silently restarted from scratch every time.
+  `MLXSFTTrainerWrapper.train()` now loads the located checkpoint's adapter
+  weights before training starts. This is a weights-only warm start, not a
+  full resume — mlx-lm's LoRA trainer exposes no optimizer state or step
+  count, so the step count and data position both restart from zero
+  regardless of how far the checkpoint got, and the run says so (#634).

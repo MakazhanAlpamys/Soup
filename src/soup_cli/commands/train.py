@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -740,7 +741,9 @@ def train(
     # --- Resolve resume checkpoint (fail fast before heavy operations) ---
     resume_from = None
     if resume:
-        resume_from = _resolve_checkpoint(resume, cfg.output, cfg.experiment_name)
+        resume_from = _resolve_checkpoint(
+            resume, cfg.output, cfg.experiment_name, backend=cfg.backend
+        )
         if resume_from:
             console.print(f"[green]Resuming from:[/] {resume_from}")
         else:
@@ -1990,12 +1993,81 @@ def _resolve_deepspeed(deepspeed: str) -> str:
     raise typer.Exit(1)
 
 
-def _resolve_checkpoint(resume: str, output_dir: str, experiment_name: str = None) -> str:
+_MLX_CHECKPOINT_RE = re.compile(r"^(\d+)_adapters\.safetensors$")
+
+
+def _highest_numbered_mlx_checkpoint(paths) -> Path | None:
+    """Pick the highest step-numbered ``NNNNNNN_adapters.safetensors`` file.
+
+    ``max()`` over the parsed step number, not a sort over whatever order
+    the filesystem's ``iterdir()`` happened to enumerate — the enumeration
+    order isn't guaranteed, so picking the last element of a sort keyed
+    wrong could still coincidentally return the right answer on a given
+    filesystem. Order-independent by construction instead.
+    """
+    numbered: list[tuple[int, Path]] = []
+    for path in paths:
+        if not path.is_file():
+            continue
+        match = _MLX_CHECKPOINT_RE.match(path.name)
+        if match:
+            numbered.append((int(match.group(1)), path))
+    if not numbered:
+        return None
+    return max(numbered, key=lambda pair: pair[0])[1]
+
+
+def _resolve_mlx_checkpoint(
+    resume: str, output_dir: str, experiment_name: str | None = None
+) -> str | None:
+    """MLX-style checkpoint resolution (#634).
+
+    mlx-lm's tuner saves step-numbered adapter snapshots
+    (``NNNNNNN_adapters.safetensors``) plus a final ``adapters.safetensors``
+    with no step prefix — files, not the ``checkpoint-N`` directories the
+    transformers/unsloth backends write. "auto" picks the highest-numbered
+    snapshot if one exists, else the final file. A direct ``resume`` value
+    must point at one of these files directly.
+    """
+    if resume.lower() == "auto":
+        base = Path(output_dir)
+        if experiment_name:
+            base = base / experiment_name
+
+        if not base.exists():
+            return None
+
+        highest = _highest_numbered_mlx_checkpoint(base.iterdir())
+        if highest is not None:
+            return str(highest)
+
+        final = base / "adapters.safetensors"
+        if final.is_file():
+            return str(final)
+        return None
+
+    # Direct path to a specific adapter file
+    checkpoint_path = Path(resume)
+    if checkpoint_path.exists() and checkpoint_path.is_file():
+        return str(checkpoint_path)
+    return None
+
+
+def _resolve_checkpoint(
+    resume: str, output_dir: str, experiment_name: str = None, *, backend: str = "transformers"
+) -> str | None:
     """Resolve the checkpoint path from --resume argument.
 
     If resume == "auto", find the latest checkpoint in the output directory.
     Otherwise, treat it as a direct path to a checkpoint directory.
+
+    ``backend="mlx"`` dispatches to :func:`_resolve_mlx_checkpoint`, since MLX
+    writes step-numbered adapter files rather than ``checkpoint-N``
+    directories (#634) — the shape below never matches an MLX run's output.
     """
+    if backend == "mlx":
+        return _resolve_mlx_checkpoint(resume, output_dir, experiment_name)
+
     if resume.lower() == "auto":
         base = Path(output_dir)
         if experiment_name:

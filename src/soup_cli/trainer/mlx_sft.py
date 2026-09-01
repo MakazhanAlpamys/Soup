@@ -174,15 +174,28 @@ class MLXSFTTrainerWrapper:
             },
         )
 
+    def _load_checkpoint_weights(self, checkpoint_path: str) -> None:
+        """Warm-start LoRA weights from a saved MLX checkpoint (#634).
+
+        Must run after ``_apply_lora`` — the saved file holds only the
+        LoRA-shaped tensors, which don't exist on the model until the linear
+        layers have been converted.
+
+        This restores adapter WEIGHTS only. mlx-lm's LoRA trainer exposes no
+        optimizer state and no step/iteration count, so it is a warm start,
+        not a resume of training state: the step count and data position
+        both restart from zero regardless of how far the checkpoint got.
+        Say so rather than implying a full resume. Replaying the dataset
+        from the saved iteration is a separate, harder claim — it needs a
+        reproducible iteration order tied to training.seed/data_seed, which
+        the MLX path does not thread yet (#353) — and is out of scope here.
+        """
+        console.print(f"[green]MLX: loading checkpoint weights from[/] {checkpoint_path}")
+        self.model.load_weights(checkpoint_path, strict=False)
+
     def train(self, display=None, tracker=None, run_id=None, resume_from_checkpoint=None) -> dict:
         """Run MLX training loop via mlx-lm (mlx-lm >= 0.31 API)."""
         del display, tracker, run_id  # accepted for CLI-contract parity
-
-        if resume_from_checkpoint is not None:
-            console.print(
-                "[yellow]MLX backend does not support --resume yet; "
-                "starting training from scratch.[/]"
-            )
 
         self._require_mlx()
 
@@ -201,6 +214,9 @@ class MLXSFTTrainerWrapper:
             )
 
         self._apply_lora(self.model)
+
+        if resume_from_checkpoint is not None:
+            self._load_checkpoint_weights(resume_from_checkpoint)
 
         batch_size = (
             int(cfg.training.batch_size)
