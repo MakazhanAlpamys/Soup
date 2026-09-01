@@ -1133,6 +1133,26 @@ class TestToolEndpointsLive:
         with pytest.raises(PermissionError, match="Operation not permitted"):
             _run_bash_sandbox("echo hello")
 
+    def test_bash_sandbox_runs_on_strict_namespace_success(self, monkeypatch):
+        import os
+        import sys
+        if sys.platform == "win32":
+            pytest.skip("bash sandbox not supported on Windows")
+        if sys.platform != "linux":
+            pytest.skip("unshare is a Linux-only syscall")
+
+        monkeypatch.setattr(
+            "soup_cli.trainer.rewards._get_isolation_strategy",
+            lambda: "namespaces",
+        )
+        monkeypatch.setattr(os, "unshare", lambda *args, **kwargs: None, raising=False)
+
+        from soup_cli.trainer.rewards import _run_bash_sandbox
+
+        result = _run_bash_sandbox("echo hello")
+        assert result.returncode == 0
+        assert "hello" in result.stdout
+
     def test_bash_tool_restricted_linux_fails_closed_501(self, monkeypatch):
         from fastapi.testclient import TestClient
         app = _create_test_app()
