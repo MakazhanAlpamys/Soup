@@ -35,6 +35,17 @@ _BASELINE_YAML = (
 _MISSING = object()
 
 
+def _ensure_src_on_path() -> None:
+    """Make ``soup_cli`` importable, without piling up duplicate entries.
+
+    Called from every function that needs the import — each is usable on
+    its own — so membership is checked rather than inserting unconditionally.
+    """
+    src = str(_REPO_ROOT / "src")
+    if src not in sys.path:
+        sys.path.insert(0, src)
+
+
 def flatten(d: dict, prefix: str = "") -> dict[str, object]:
     """Flatten a nested dict to ``{"training.lora.r": 16, ...}``."""
     out: dict[str, object] = {}
@@ -47,8 +58,11 @@ def flatten(d: dict, prefix: str = "") -> dict[str, object]:
     return out
 
 
-def _delta(resolved: dict[str, object], baseline: dict[str, object]) -> dict[str, object]:
+def delta(resolved: dict[str, object], baseline: dict[str, object]) -> dict[str, object]:
     """Fields in ``resolved`` whose value differs from ``baseline``.
+
+    Public: this is part of the contract between the generator and the test
+    that verifies the fixture, not an internal of either.
 
     A field present in ``resolved`` but absent from ``baseline`` (a nested
     object a recipe fills in that the baseline leaves ``None``) counts as
@@ -64,20 +78,20 @@ def _delta(resolved: dict[str, object], baseline: dict[str, object]) -> dict[str
 
 def build_baseline() -> dict[str, object]:
     """The shared schema-default baseline every recipe's delta is relative to."""
-    sys.path.insert(0, str(_REPO_ROOT / "src"))
+    _ensure_src_on_path()
     from soup_cli.config.loader import load_config_from_string
 
     return flatten(load_config_from_string(_BASELINE_YAML).model_dump(mode="json"))
 
 
 def build_snapshot() -> dict[str, dict]:
-    sys.path.insert(0, str(_REPO_ROOT / "src"))
+    _ensure_src_on_path()
     from soup_cli.config.loader import load_config_from_string
     from soup_cli.recipes.catalog import RECIPES
 
     baseline = build_baseline()
     recipes = {
-        name: _delta(
+        name: delta(
             flatten(load_config_from_string(recipe.yaml_str).model_dump(mode="json")),
             baseline,
         )

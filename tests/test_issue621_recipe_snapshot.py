@@ -47,7 +47,7 @@ from pathlib import Path
 
 import pytest
 
-from scripts.generate_recipe_snapshot import _delta, build_baseline, flatten
+from scripts.generate_recipe_snapshot import build_baseline, delta, flatten
 from soup_cli.recipes.catalog import RECIPES
 
 _FIXTURE_PATH = (
@@ -60,9 +60,13 @@ _MISSING = object()
 @functools.lru_cache(maxsize=1)
 def _load_fixture() -> dict:
     data = json.loads(_FIXTURE_PATH.read_text(encoding="utf-8"))
-    assert isinstance(data, dict) and "baseline" in data and "recipes" in data, (
-        f"fixture must be a dict with 'baseline' and 'recipes' keys; {_REGENERATE_HINT}"
-    )
+    if not (isinstance(data, dict) and "baseline" in data and "recipes" in data):
+        # A raised exception rather than an assert: assertions are stripped
+        # under `python -O`, which would let a malformed fixture slip past
+        # this guard and fail later with a far less clear error.
+        raise ValueError(
+            f"fixture must be a dict with 'baseline' and 'recipes' keys; {_REGENERATE_HINT}"
+        )
     return data
 
 
@@ -91,7 +95,7 @@ def _diff(expected: dict, actual: dict) -> dict[str, tuple[object, object]]:
     spuriously equal to an absent one. The sentinel only ever appears in
     the returned tuples as a stand-in for display.
     """
-    paths = set(expected) | set(actual)
+    paths = sorted(set(expected) | set(actual))
     out: dict[str, tuple[object, object]] = {}
     for path in paths:
         e = expected.get(path, _MISSING)
@@ -151,7 +155,7 @@ class TestEveryRecipeMatchesItsCommittedDelta:
             f"{name!r} is in the catalog but missing from the snapshot fixture; "
             f"{_REGENERATE_HINT}"
         )
-        live_delta = _delta(_resolve_flat(name), _live_baseline())
+        live_delta = delta(_resolve_flat(name), _live_baseline())
         diff = _diff(fixture["recipes"][name], live_delta)
         assert not diff, (
             f"recipe {name!r} no longer resolves to its committed delta. "
