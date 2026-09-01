@@ -92,6 +92,63 @@ class TestSetupLogging:
             parse_log_level(42)  # type: ignore[arg-type]
 
 
+class TestIssue273ForeignHandlerContract:
+    """Deterministically pin the ``74->73`` branch of ``setup_logging`` (#273).
+
+    The branch is the loop-back edge taken when a handler on the ``soup``
+    logger carries **no** ``_soup_log_tier`` tag — a handler Soup did not
+    install. Whether ambient logger state happens to exercise it varies by
+    platform and test ordering, so these tests force the state explicitly:
+    an embedding application's handlers must survive reconfiguration, while
+    a Soup handler with a stale tier is still removed.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _isolate_soup_logger(self):
+        logger = logging.getLogger("soup")
+        saved_handlers = list(logger.handlers)
+        saved_level = logger.level
+        saved_propagate = logger.propagate
+        yield
+        for handler in list(logger.handlers):
+            logger.removeHandler(handler)
+        for handler in saved_handlers:
+            logger.addHandler(handler)
+        logger.setLevel(saved_level)
+        logger.propagate = saved_propagate
+
+    def test_foreign_handler_survives_reconfigure(self):
+        # Killing check: dropping the ``is not None`` guard in setup_logging
+        # removes this handler and fails this test by name.
+        foreign = logging.NullHandler()
+        assert not hasattr(foreign, "_soup_log_tier")
+
+        logger = logging.getLogger("soup")
+        logger.addHandler(foreign)
+        setup_logging(LogLevel.NORMAL)
+
+        assert foreign in logger.handlers
+
+    def test_stale_soup_handler_removed_with_foreign_present(self):
+        foreign = logging.NullHandler()
+        stale = logging.NullHandler()
+        stale._soup_log_tier = LogLevel.DEBUG  # type: ignore[attr-defined]
+
+        logger = logging.getLogger("soup")
+        logger.addHandler(foreign)
+        logger.addHandler(stale)
+        setup_logging(LogLevel.NORMAL)
+
+        assert stale not in logger.handlers
+        assert foreign in logger.handlers
+        tagged = [
+            handler for handler in logger.handlers
+            if getattr(handler, "_soup_log_tier", None) is not None
+        ]
+        assert len(tagged) == 1
+        assert tagged[0]._soup_log_tier == LogLevel.NORMAL  # type: ignore[attr-defined]
+
+
 class TestCliFlag:
     def test_log_level_help_visible(self):
         runner = CliRunner()
