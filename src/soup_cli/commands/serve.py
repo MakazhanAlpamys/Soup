@@ -844,6 +844,7 @@ def serve(
             max_tokens_default=max_tokens_default,
             tensor_parallel=tensor_parallel,
             gpu_memory_utilization=gpu_memory_utilization,
+            trust_remote_code=resolved_trust,
         )
     else:
         # Transformers backend (original). ``resolved_trust`` was computed
@@ -1278,21 +1279,34 @@ def _serve_sglang(
     max_tokens_default: int,
     tensor_parallel: int,
     gpu_memory_utilization: float,
+    trust_remote_code: bool = False,
 ):
     """Set up SGLang runtime and create FastAPI app."""
     from soup_cli.utils.sglang import create_sglang_app, create_sglang_runtime
 
-    console.print(
-        Panel(
-            f"[bold yellow]WARNING:[/] Loading model via SGLang: "
-            f"[bold]{model_path}[/]\n"
-            "SGLang loads models with trust_remote_code enabled.\n"
-            "If this model contains custom code, it will execute "
-            "on this machine.\nOnly use models you trust.",
-            title="SGLang Runtime",
-            border_style="yellow",
+    if trust_remote_code:
+        console.print(
+            Panel(
+                f"[bold yellow]WARNING:[/] Loading model via SGLang: "
+                f"[bold]{model_path}[/]\n"
+                "trust_remote_code is ENABLED for this run.\n"
+                "If this model contains custom code, it will execute "
+                "on this machine.\nOnly use models you trust.",
+                title="SGLang Runtime",
+                border_style="yellow",
+            )
         )
-    )
+    else:
+        console.print(
+            Panel(
+                f"Loading model via SGLang: [bold]{model_path}[/]\n"
+                "trust_remote_code is disabled (default). A model that needs "
+                "custom code\nwill fail to load -- re-run with "
+                "--trust-remote-code if you trust the source.",
+                title="SGLang Runtime",
+                border_style="cyan",
+            )
+        )
     console.print("[dim]Initializing SGLang runtime...[/]")
     runtime, runtime_model_name = create_sglang_runtime(
         model_path=str(model_path),
@@ -1300,20 +1314,21 @@ def _serve_sglang(
         is_adapter=is_adapter,
         tensor_parallel_size=tensor_parallel,
         mem_fraction_static=gpu_memory_utilization,
+        trust_remote_code=trust_remote_code,
     )
     console.print("[bold green]SGLang runtime ready![/]")
 
     # Load the tokenizer whose chat template the shared prompt builder applies
-    # (#360). trust_remote_code matches what create_sglang_runtime already used
-    # to load this very model a few lines above, and what the panel printed
-    # here promises. Loading it with the default False instead meant a
-    # custom-code model failed to load a tokenizer, tokenizer became None, and
-    # the fix silently degraded to the legacy prompt -- for exactly the models
-    # whose chat template matters most.
+    # (#360). It must match what create_sglang_runtime used to load this very
+    # model a few lines above: a mismatch means a custom-code model loads no
+    # tokenizer, tokenizer becomes None, and the #360 prompt fix silently
+    # degrades to the legacy format for exactly the models whose chat template
+    # matters most. That pairing used to be a literal True on both sides; both
+    # now follow serve.py's single resolved gate instead.
     tokenizer = _load_serve_tokenizer(
         model_path=model_path,
         base_model=base_model,
-        trust_remote_code=True,
+        trust_remote_code=trust_remote_code,
     )
 
     # A failure here is announced, never silent -- the same three-branch

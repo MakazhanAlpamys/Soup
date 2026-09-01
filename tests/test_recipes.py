@@ -416,6 +416,108 @@ class TestIssue271SmolLM3Recipe:
         )
 
 
+class TestIssue276Qwen35A3bDpoRecipe:
+    """Regression coverage for the qwen3.5-35b-a3b-dpo recipe (#276)."""
+
+    def test_recipe_loads_with_expected_dpo_moe_shape(self) -> None:
+        from soup_cli.config.loader import load_config_from_string
+        from soup_cli.recipes.catalog import get_recipe
+
+        recipe = get_recipe("qwen3.5-35b-a3b-dpo")
+        assert recipe is not None
+        # The exact model identity is load-bearing - a wrong id must fail here.
+        assert recipe.model == "Qwen/Qwen3.5-35B-A3B"
+        assert recipe.task == "dpo"
+
+        config = load_config_from_string(recipe.yaml_str)
+        assert config.base == "Qwen/Qwen3.5-35B-A3B"
+        assert config.task == "dpo"
+        # The DPO half, taken from the qwen2.5-7b-dpo shape.
+        assert config.data.format == "dpo"
+        assert config.training.dpo_beta == 0.1
+        assert config.training.lr == 5e-6
+        # The MoE half, taken from the qwen3.5-35b-a3b-sft sibling.
+        assert config.training.moe_lora is True
+        assert config.training.moe_aux_loss_coeff == 0.01
+        assert config.training.lora.r == 16
+        assert config.training.lora.alpha == 32
+        assert config.training.quantization == "4bit"
+        assert config.training.gradient_accumulation_steps == 8
+
+    def test_shares_the_base_model_with_its_sft_sibling(self) -> None:
+        """#276 is the DPO variant of an existing recipe, not a new model."""
+        from soup_cli.recipes.catalog import get_recipe
+
+        dpo = get_recipe("qwen3.5-35b-a3b-dpo")
+        sft = get_recipe("qwen3.5-35b-a3b-sft")
+        assert dpo is not None and sft is not None
+        assert dpo.model == sft.model
+        assert dpo.size == sft.size
+        assert dpo.task != sft.task
+
+    def test_show_and_use_recipe(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        show_result = runner.invoke(app, ["recipes", "show", "qwen3.5-35b-a3b-dpo"])
+        assert show_result.exit_code == 0
+        assert "Qwen/Qwen3.5-35B-A3B" in show_result.output
+
+        monkeypatch.chdir(tmp_path)
+        use_result = runner.invoke(
+            app,
+            ["recipes", "use", "qwen3.5-35b-a3b-dpo", "--yes"],
+        )
+        assert use_result.exit_code == 0
+        assert "Qwen/Qwen3.5-35B-A3B" in (tmp_path / "soup.yaml").read_text(
+            encoding="utf-8"
+        )
+
+
+class TestIssue281KimiK26GrpoRecipe:
+    """Regression coverage for the kimi-k2.6-grpo recipe (#281)."""
+
+    def test_recipe_loads_with_exact_model_id(self) -> None:
+        from soup_cli.config.loader import load_config_from_string
+        from soup_cli.recipes.catalog import get_recipe
+
+        recipe = get_recipe("kimi-k2.6-grpo")
+        assert recipe is not None
+        # The exact model identity is load-bearing — a wrong id must fail here.
+        assert recipe.model == "moonshotai/Kimi-K2.6"
+        assert recipe.task == "grpo"
+        assert "Modified MIT" in recipe.description
+
+        config = load_config_from_string(recipe.yaml_str)
+        assert config.base == "moonshotai/Kimi-K2.6"
+        assert config.task == "grpo"
+        # The GRPO + MoE giant shape the issue pins (#281).
+        assert config.training.grpo_beta == 0.1
+        assert config.training.num_generations == 4
+        assert config.training.reward_fn == "accuracy"
+        assert config.training.moe_lora is True
+        assert config.training.gradient_checkpointing is True
+        assert config.training.batch_size == 1
+        assert config.training.quantization == "4bit"
+
+    def test_show_and_use_recipe(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        show_result = runner.invoke(app, ["recipes", "show", "kimi-k2.6-grpo"])
+        assert show_result.exit_code == 0
+        assert "moonshotai/Kimi-K2.6" in show_result.output
+
+        monkeypatch.chdir(tmp_path)
+        use_result = runner.invoke(app, ["recipes", "use", "kimi-k2.6-grpo", "--yes"])
+        assert use_result.exit_code == 0
+        assert "moonshotai/Kimi-K2.6" in (tmp_path / "soup.yaml").read_text(
+            encoding="utf-8"
+        )
+
+
 # ---------------------------------------------------------------------------
 # Part A: v0.25.0 new model recipes (Llama 4, Qwen 3, Gemma 3, DeepSeek V3)
 # ---------------------------------------------------------------------------
@@ -463,7 +565,7 @@ class TestV025NewRecipes:
             assert cfg.base == recipe.model
             assert cfg.task == recipe.task
 
-    def test_catalog_size_is_159(self):
+    def test_catalog_size_is_161(self):
         """Total catalog size — grew with each release.
 
         v0.25.0 shipped 43 recipes (29 + 9 Part A + 2 Part B tools + 3 Part E MLX).
@@ -486,10 +588,12 @@ class TestV025NewRecipes:
         Catalog expansion added 7 SFT recipes (Qwen2.5-Coder/Math, R1-Distill-Qwen) -> 154.
         R1-Distill Llama SFT + DPO variants added 4 -> 158.
         Issue #271 added 1 (smollm3-3b-sft) -> 159.
+        Issue #276 added 1 (qwen3.5-35b-a3b-dpo) -> 160.
+        Issue #281 added 1 (kimi-k2.6-grpo) -> 161.
         """
         from soup_cli.recipes.catalog import RECIPES
 
-        assert len(RECIPES) == 159
+        assert len(RECIPES) == 161
 
     def test_new_recipes_searchable(self):
         """Search returns the new recipes via keyword/task filter."""

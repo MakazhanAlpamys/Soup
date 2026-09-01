@@ -144,13 +144,20 @@ class TestTelemetrySSRFAcceptance:
         )
 
     def test_accepts_custom_posthog_host(self) -> None:
-        """A company's self-hosted public PostHog must pass."""
-        assert (
-            _telemetry_endpoint_is_safe(
-                "https://posthog.mycompany.com/capture/"
+        """A company's self-hosted public PostHog must pass when resolving to public IP."""
+        import socket
+        from unittest.mock import patch
+
+        fake_addrinfo = [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))
+        ]
+        with patch("socket.getaddrinfo", return_value=fake_addrinfo):
+            assert (
+                _telemetry_endpoint_is_safe(
+                    "https://posthog.mycompany.com/capture/"
+                )
+                is True
             )
-            is True
-        )
 
     def test_accepts_default_posthog_endpoint(self) -> None:
         """The hardcoded default must always be accepted."""
