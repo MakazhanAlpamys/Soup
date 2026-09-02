@@ -352,9 +352,10 @@ def _run_single(base_cfg, params: dict, run_name: str, config_path: Path) -> dic
 
     unknown = find_unknown_config_keys(config_dict)
     if unknown:
-        raise ValueError(
-            f"sweep parameter does not match any config field: {format_unknown_keys(unknown)}"
-        )
+        # No deadline sentence: this raises today regardless of the loader's
+        # severity switch, so promising a future rejection would be wrong.
+        detail = format_unknown_keys(unknown, include_deadline=False)
+        raise ValueError(f"sweep parameter does not match any config field: {detail}")
 
     cfg = SoupConfig(**config_dict)
 

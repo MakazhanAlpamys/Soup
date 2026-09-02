@@ -20,6 +20,14 @@ console = Console()
 #: Detection is identical either way; this is the only difference between the
 #: options argued on #627, kept as one switch so the decision is a one-line
 #: change rather than a rewrite.
+#:
+#: The decision was warn-then-forbid, and the release that flips this to
+#: ``"error"`` is named by
+#: :data:`~soup_cli.config.unknown_keys.UNKNOWN_KEY_REJECTION_VERSION` -- by
+#: reference, not by number, because the warning must state that version in
+#: exactly one place. ``TestTheDeadline`` fails the moment the declared
+#: ``__version__`` reaches it while this still reads ``"warn"``, so the flip
+#: cannot be forgotten and the message cannot outlive its own promise.
 UNKNOWN_KEY_SEVERITY = "warn"
 
 
@@ -34,13 +42,16 @@ def _report_unknown_keys(raw: dict) -> "str | None":
     unknown = find_unknown_config_keys(raw)
     if not unknown:
         return None
-    message = format_unknown_keys(unknown)
-    if UNKNOWN_KEY_SEVERITY == "error":
+    # One report per load with every finding in it, whatever the severity --
+    # a config carrying four typos should produce one panel, not four.
+    warning = UNKNOWN_KEY_SEVERITY != "error"
+    message = format_unknown_keys(unknown, include_deadline=warning)
+    if not warning:
         return message
     console.print(f"[yellow]Warning:[/] {message}")
     console.print(
-        "[dim]This key is not applied. It is ignored, not defaulted -- the run "
-        "proceeds as if you had not written it.[/]"
+        "[dim]An unapplied key is ignored, not defaulted -- the run proceeds as "
+        "if you had not written it.[/]"
     )
     return None
 

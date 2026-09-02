@@ -272,6 +272,14 @@ output: ./output
 `config/schema.py` is the single source of truth for every field. Advanced data, training,
 and PEFT options are documented under [Documentation](#documentation).
 
+> **Unknown config keys warn today and will be rejected in v0.75.** A key no model
+> declares — a typo like `quantizaton`, or a field that only exists on a newer Soup —
+> used to validate clean and be discarded, so the run proceeded with the setting simply
+> not applied. It is now reported at load with the field you probably meant. From
+> **v0.75** the same config will fail to load instead of warning, so fix or remove the
+> key rather than relying on it being ignored. See
+> [Unknown config keys](docs/backends-and-ops.md#unknown-config-keys).
+
 ## Documentation
 
 The full feature reference lives in [`docs/`](docs/). Start here:

@@ -490,6 +490,48 @@ soup --verbose eval --model ./output --benchmarks mmlu
 > **Note:** `--verbose` is a global flag — it must go **before** the command name, not after.
 
 
+## Unknown config keys
+
+Every config model used to run with Pydantic's default `extra="ignore"`, so a key the
+schema did not declare was dropped without a word. `soup train --dry-run` printed
+"Config valid. Ready to train!", the run exited 0, and the requested setting was simply
+never applied — `quantizaton: none` trained 4-bit quantized when full precision was
+what you asked for, `gradient_checkpoint: true` did no checkpointing, `max_len: 512`
+truncated at 2048.
+
+Loading a config now reports every key it cannot place, in **one** report per load, with
+the field you probably meant:
+
+```
+Warning: unknown config key 'data.max_len' - did you mean 'max_length' or 'video_maxlen'? Not applied.
+unknown config key 'training.quantizaton' - did you mean 'quantization' or 'quantization_aware'? Not applied.
+Soup v0.75 will reject unknown config keys instead of warning.
+```
+
+**The deadline is real: v0.75 refuses to load a config with an unknown key.** The
+warning ships in v0.74 and the refusal one minor later, so there is exactly one release
+of notice — deliberately, because a config written against a newer Soup has to keep
+running on an older wheel for at least one release. Until v0.75 the key is ignored, not
+defaulted, and the run proceeds as if you had not written it. Treat the warning as work
+to do, not as a note.
+
+A config that names a key your installed Soup does not have usually means one of two
+things: a typo (take the suggestion), or a field added after your version shipped
+(`soup version` against the [changelog](../CHANGELOG.md) will say which).
+
+**`soup sweep` is stricter, and has no deadline.** A `--param` that matches no config
+field is a hard error from this release, not in v0.75:
+
+```bash
+soup sweep --config soup.yaml --param lora_rank=8,16   # the field is training.lora.r
+# ValueError: sweep parameter does not match any config field:
+#   unknown config key 'lora_rank' - not applied.
+```
+
+A sweep whose swept knob is never applied produces arms that are all identical, so there
+is no partially-useful result to preserve by continuing.
+
+
 ## Experiment Tracking
 
 Every `soup train` run is automatically tracked in a local SQLite database (`~/.soup/experiments.db`).

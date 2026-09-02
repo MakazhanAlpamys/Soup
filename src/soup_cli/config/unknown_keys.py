@@ -33,7 +33,30 @@ import pydantic
 
 from soup_cli.config.schema import SoupConfig
 
-__all__ = ["UnknownKey", "find_unknown_config_keys", "format_unknown_keys"]
+__all__ = [
+    "UNKNOWN_KEY_REJECTION_VERSION",
+    "UnknownKey",
+    "deadline_notice",
+    "find_unknown_config_keys",
+    "format_unknown_keys",
+]
+
+#: The release that stops warning about unknown keys and starts refusing them.
+#:
+#: Written out **once**, here. The loader message, the docs line and the
+#: deadline test all read this constant rather than repeating the string,
+#: because the failure mode of a duplicate is a message that keeps promising a
+#: rejection after the rejection has shipped. ``TestTheDeadline`` asserts it
+#: against the declared ``soup_cli.__version__`` instead of a literal, so the
+#: release that crosses the deadline turns a test red rather than turning the
+#: warning into a lie.
+#:
+#: 0.75 rather than 0.74 because the release carrying *this* warning is v0.74.0
+#: itself -- 71 fragments have accumulated since v0.73.3, 18 of them ``added``,
+#: which is a minor and not a patch. Naming 0.74 would have given the warning
+#: zero releases of notice, which is the outcome the warn-then-forbid decision
+#: exists to avoid. One minor of notice: warn in 0.74, refuse in 0.75.
+UNKNOWN_KEY_REJECTION_VERSION = "0.75"
 
 #: difflib cutoff. 0.6 resolves every case reported in #627 on the first
 #: suggestion while leaving an unrelated key (``zzzzzzzz``) with none.
@@ -106,13 +129,41 @@ def find_unknown_config_keys(raw: dict) -> list[UnknownKey]:
     return found
 
 
-def format_unknown_keys(unknown: list[UnknownKey]) -> str:
-    """Render findings for an operator, naming the field they likely meant."""
+def deadline_notice() -> str:
+    """The one sentence that turns the warning into a deadline.
+
+    Derived from :data:`UNKNOWN_KEY_REJECTION_VERSION` so the version is never
+    typed twice.
+    """
+    return (
+        f"Soup v{UNKNOWN_KEY_REJECTION_VERSION} will reject unknown config keys "
+        "instead of warning."
+    )
+
+
+def format_unknown_keys(
+    unknown: list[UnknownKey], *, include_deadline: bool = True
+) -> str:
+    """Render findings for an operator, naming the field they likely meant.
+
+    One report per call with every finding listed together -- a config copied
+    from a newer Soup trips several keys at once, and a panel per key buries
+    the list it exists to present.
+
+    ``include_deadline`` is off for callers that already refuse. ``sweep.py``
+    raises today whatever the loader's switch says, so appending a *future*
+    rejection there would describe a future that has already arrived for that
+    caller.
+    """
     lines = []
     for item in unknown:
         if item.suggestions:
             hint = " or ".join(f"'{s}'" for s in item.suggestions)
-            lines.append(f"unknown config key '{item.path}' - did you mean {hint}?")
+            lines.append(
+                f"unknown config key '{item.path}' - did you mean {hint}? Not applied."
+            )
         else:
-            lines.append(f"unknown config key '{item.path}'")
+            lines.append(f"unknown config key '{item.path}' - not applied.")
+    if include_deadline and lines:
+        lines.append(deadline_notice())
     return "\n".join(lines)
