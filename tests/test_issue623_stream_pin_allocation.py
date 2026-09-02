@@ -259,9 +259,9 @@ class TestTheAllocationItself:
     silently never happens."""
 
     def test_false_allocates_pageable_and_default_pins(self, tmp_path, monkeypatch) -> None:
-        from soup_cli.utils.layer_stream_runtime import RamSource
-
         import torch
+
+        from soup_cli.utils.layer_stream_runtime import RamSource
 
         # The discriminator itself, before trusting it with the chain.
         assert torch.empty(1024, pin_memory=True).is_pinned()
