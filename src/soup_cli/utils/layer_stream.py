@@ -38,6 +38,17 @@ STREAM_SOURCES = ("auto", "ram", "disk")
 #: model_bytes must be under this fraction of free RAM to claim the RAM tier.
 RAM_TIER_HEADROOM = 0.7
 
+#: ...AND under this fraction of TOTAL physical RAM (#622). The RAM tier is
+#: unevictable-class memory: a page-locked store cannot be swapped or
+#: reclaimed, and the kernel OOM-kills once it plus the resident extras, the
+#: CUDA context and the shard-read page cache exhaust the host. MemAvailable
+#: cannot see that — the #622 reproduction had 27 GB of 30 GB "available",
+#: sized a 16.10 GB store + 3.11 GB resident into the RAM tier, and the run
+#: was SIGKILLed (exit 137) before the first step, twice, cold and warm
+#: cache. 0.55 leaves 45% of physical RAM for everything the kernel can NOT
+#: be asked to evict around: OS, CUDA runtime, I/O buffers.
+RAM_TIER_PHYSICAL_BUDGET = 0.55
+
 # Measured throughput a page-locked RAM store buys over a pageable one
 # (benchmarks/gate-h100-validation.md): 6.56x on real Qwen2.5-32B NF4, 7.41x on
 # a 32-layer synthetic. Stated out loud whenever pinning is disabled so the cost
@@ -733,12 +744,32 @@ def _windows_kind(disk: dict) -> str:
     return "unknown"
 
 
+def ram_tier_over_physical_budget(
+    model_bytes: int,
+    total_ram_bytes: Optional[int],
+    *,
+    budget: float = RAM_TIER_PHYSICAL_BUDGET,
+) -> bool:
+    """Whether *model_bytes* of unevictable-class RAM exceeds the host budget.
+
+    The RAM tier bills page-locked store plus resident extras, and neither can
+    be swapped or reclaimed (#622). ``total_ram_bytes is None`` (psutil absent)
+    means the ceiling cannot be enforced here — same posture as the existing
+    free-RAM probe: proceed and let the allocation fail loudly if it must.
+    """
+    if total_ram_bytes is None:
+        return False
+    return model_bytes >= total_ram_bytes * budget
+
+
 def choose_tier(
     model_bytes: int,
     free_ram_bytes: int,
     disk_kind: DiskKind,
     *,
     headroom: float = RAM_TIER_HEADROOM,
+    total_ram_bytes: Optional[int] = None,
+    physical_budget: float = RAM_TIER_PHYSICAL_BUDGET,
 ) -> str:
     """RAM is Tier 1; disk is overflow only; spinning rust is refused.
 
@@ -746,12 +777,21 @@ def choose_tier(
     that from CPU RAM, so RAM is the primary source and disk is a fallback.
     plan P11: on an HDD, 80 shards x 2 reads = 160 seeks per step.
 
+    Two ceilings gate the RAM tier (#622): the dynamic one (a fit against
+    ``MemAvailable``) and the absolute one (a fit against total physical RAM,
+    because the store is unevictable-class memory the kernel cannot reclaim
+    around). Passing only the first is what SIGKILLed the #622 reproduction
+    with 27 GB of 30 GB "available".
+
     ``disk_kind`` may be a **callable**, and normally should be: detecting the
     media type costs ~9 s on Windows and is irrelevant whenever the base fits in
     RAM. Passing ``detect_disk_kind`` here means that cost is paid only by runs
     that are actually about to use the disk tier.
     """
-    if model_bytes < free_ram_bytes * headroom:
+    over_budget = ram_tier_over_physical_budget(
+        model_bytes, total_ram_bytes, budget=physical_budget
+    )
+    if model_bytes < free_ram_bytes * headroom and not over_budget:
         return TIER_RAM
     result = disk_kind() if callable(disk_kind) else disk_kind
     # The callable may return a DiskClassification (kind + the rate that produced
@@ -773,10 +813,21 @@ def choose_tier(
         if measured is not None
         else ""
     )
+    # Name the binding ceiling (#622): "more RAM" is not actionable advice when
+    # the free-RAM check passed and the physical budget is what refused.
+    budget_note = (
+        f"Holding {model_bytes / 1e9:.1f} GB page-locked and resident also "
+        f"exceeds the {total_ram_bytes * physical_budget / 1e9:.1f} GB physical "
+        f"ceiling ({physical_budget:.0%} of {total_ram_bytes / 1e9:.1f} GB total "
+        f"RAM) the unevictable RAM tier gets. "
+        if over_budget and total_ram_bytes is not None
+        else ""
+    )
     raise ValueError(
         f"layer streaming needs NVMe or more RAM: the base needs "
         f"{model_bytes / 1e9:.1f} GB, only {free_ram_bytes / 1e9:.1f} GB of RAM "
         f"is free, and the detected disk is {kind!r} (not NVMe){measured_note}. "
+        f"{budget_note}"
         f"Free RAM, pick a smaller base, or move the model to an NVMe drive."
     )
 
@@ -900,6 +951,23 @@ def free_ram_bytes() -> Optional[int]:
         return None
     try:
         return int(psutil.virtual_memory().available)
+    except (AttributeError, OSError, ValueError):
+        return None
+
+
+def total_ram_bytes() -> Optional[int]:
+    """TOTAL physical host RAM, or None when psutil is not installed.
+
+    Distinct from :func:`free_ram_bytes` because the #622 ceiling is absolute:
+    unevictable-class allocations are judged against what the box HAS, not
+    against what happens to be free when the pre-flight runs.
+    """
+    try:
+        import psutil
+    except ImportError:
+        return None
+    try:
+        return int(psutil.virtual_memory().total)
     except (AttributeError, OSError, ValueError):
         return None
 
@@ -1453,6 +1521,7 @@ def build_stream_plan(
     store_bytes: Optional[int] = None,
     large_store_bytes: int = 0,
     large_buffer_bytes: int = 0,
+    total_ram_bytes: Optional[int] = None,
 ) -> StreamPlan:
     """Decide tier + pinning and record every caveat as a visible note."""
     buffers = validate_stream_buffers(buffers)
@@ -1460,7 +1529,10 @@ def build_stream_plan(
         raise ValueError(f"n_layers must be positive; got {n_layers}")
     store_bytes = n_layers * layer_bytes if store_bytes is None else int(store_bytes)
     host_store_bytes = store_bytes + int(large_store_bytes)
-    tier = choose_tier(host_store_bytes + embed_bytes, available_ram_bytes, disk_kind)
+    billed_to_ram = host_store_bytes + embed_bytes
+    tier = choose_tier(
+        billed_to_ram, available_ram_bytes, disk_kind, total_ram_bytes=total_ram_bytes
+    )
     notes = []
     if tier == TIER_DISK:
         # Falling back is the point of stream_source='auto', but a silent
@@ -1469,12 +1541,29 @@ def build_stream_plan(
         # slowdown is NOT quantified: safetensors memory-maps the shards, so the
         # OS page cache blurs the RAM-vs-disk boundary, and the dev box could not
         # produce a trustworthy gap measurement.
-        notes.append(
-            "base does not fit in RAM — streaming from the NVMe disk tier "
-            "instead. Nothing is held resident, and the slowdown versus the RAM "
-            "tier is unmeasured on this hardware. Set stream_source='ram' to "
-            "refuse rather than fall back."
-        )
+        if ram_tier_over_physical_budget(billed_to_ram, total_ram_bytes):
+            # #622: this fallback can happen with plenty of RAM "available" —
+            # the ceiling is absolute, so the note must say so or the operator
+            # reads "does not fit in RAM" against a box that shows 27 GB free
+            # and concludes the pre-flight is broken.
+            notes.append(
+                f"base plus resident extras ({billed_to_ram / 1e9:.2f} GB) exceeds "
+                f"the {total_ram_bytes * RAM_TIER_PHYSICAL_BUDGET / 1e9:.2f} GB "
+                f"physical ceiling ({RAM_TIER_PHYSICAL_BUDGET:.0%} of "
+                f"{total_ram_bytes / 1e9:.1f} GB total RAM) for the unevictable "
+                "RAM tier — a page-locked store cannot be swapped or reclaimed, "
+                "so free RAM alone does not make it safe (#622). Streaming from "
+                "the NVMe disk tier instead; nothing is held resident, and the "
+                "slowdown versus the RAM tier is unmeasured on this hardware. "
+                "Set stream_source='ram' to refuse rather than fall back."
+            )
+        else:
+            notes.append(
+                "base does not fit in RAM — streaming from the NVMe disk tier "
+                "instead. Nothing is held resident, and the slowdown versus the RAM "
+                "tier is unmeasured on this hardware. Set stream_source='ram' to "
+                "refuse rather than fall back."
+            )
     decision = decide_pinning(host_store_bytes, pinned_limit_bytes, stream_pin=stream_pin)
     # #366 review round 3 — "record, never silence". An automatic pinned store is
     # the unremarkable default and stays quiet, but an EXPLICIT stream_pin=true is

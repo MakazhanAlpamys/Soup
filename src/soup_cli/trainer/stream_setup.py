@@ -103,12 +103,20 @@ def _validate_qwen4_ngram_ram_fit(
     ngram_source: str,
     required_ram: int,
     free_ram: int,
+    total_ram: "int | None" = None,
 ) -> None:
     """Refuse a RAM base or PLE before either source allocates its store."""
-    from soup_cli.utils.layer_stream import RAM_TIER_HEADROOM
+    from soup_cli.utils.layer_stream import (
+        RAM_TIER_HEADROOM,
+        RAM_TIER_PHYSICAL_BUDGET,
+        ram_tier_over_physical_budget,
+    )
 
     ram_required = stream_source == "ram" or ngram_source == "ram"
-    if ram_required and required_ram >= free_ram * RAM_TIER_HEADROOM:
+    if not ram_required:
+        return
+    over_budget = ram_tier_over_physical_budget(required_ram, total_ram)
+    if required_ram >= free_ram * RAM_TIER_HEADROOM or over_budget:
         policy = (
             "training.stream_ngram_source='ram'"
             if ngram_source == "ram"
@@ -119,6 +127,19 @@ def _validate_qwen4_ngram_ram_fit(
             if ngram_source == "ram"
             else "stream_source='auto' to allow the disk tier"
         )
+        if over_budget:
+            # #622: the absolute ceiling, not short free RAM — "free RAM" is
+            # not actionable advice against a limit no amount of freeing moves.
+            raise ValueError(
+                f"{policy} but the base plus selected PLE storage needs "
+                f"{required_ram / 1e9:.1f} GB of unevictable-class RAM, over the "
+                f"{total_ram * RAM_TIER_PHYSICAL_BUDGET / 1e9:.1f} GB physical "
+                f"ceiling ({RAM_TIER_PHYSICAL_BUDGET:.0%} of "
+                f"{total_ram / 1e9:.1f} GB total RAM): a page-locked store "
+                f"cannot be swapped or reclaimed, and the kernel OOM-kills the "
+                f"run instead of refusing it (#622). Set {fallback} or pick a "
+                f"smaller base."
+            )
         raise ValueError(
             f"{policy} but the base plus selected PLE "
             f"storage needs {required_ram / 1e9:.1f} GB and only "
@@ -398,16 +419,19 @@ class StreamingSetupMixin:
         )
         from soup_cli.utils.layer_stream import (
             RAM_TIER_HEADROOM,
+            RAM_TIER_PHYSICAL_BUDGET,
             TIER_DISK,
             TIER_RAM,
             build_stream_plan,
             dtype_bytes,
             estimate_stream_store_bytes,
             free_ram_bytes,
+            ram_tier_over_physical_budget,
             render_stream_panel,
             resolve_disk_kind,
             resolve_stream_dtype,
             stream_arch_of,
+            total_ram_bytes,
         )
         from soup_cli.utils.layer_stream_runtime import (
             RamSource,
@@ -523,16 +547,37 @@ class StreamingSetupMixin:
             # leaves external. Its exact RAM/disk decision is made from the
             # safetensors header below; counting it here would reject the very
             # `stream_ngram_source: disk` run this path enables.
+            early_total_ram = total_ram_bytes()
+            early_over_budget = ram_tier_over_physical_budget(
+                store_estimate, early_total_ram
+            )
             if (
                 arch != "qwen4_exp"
-                and store_estimate >= early_free_ram * RAM_TIER_HEADROOM
                 and tcfg.stream_source == "ram"
+                and (
+                    store_estimate >= early_free_ram * RAM_TIER_HEADROOM
+                    or early_over_budget
+                )
             ):
                 as_streamed = (
                     ""
                     if quant == QUANT_NONE
                     else f" ({store_estimate / 1e9:.1f} GB once quantised to NF4)"
                 )
+                if early_over_budget:
+                    # #622: refused by the absolute ceiling — the run would be
+                    # kernel-OOM-killed mid-store even with RAM "available".
+                    raise ValueError(
+                        f"training.stream_source='ram' but {cfg.base} is "
+                        f"{source_bytes / 1e9:.1f} GB on disk{as_streamed}, and "
+                        f"holding that page-locked exceeds the "
+                        f"{early_total_ram * RAM_TIER_PHYSICAL_BUDGET / 1e9:.1f} GB "
+                        f"physical ceiling ({RAM_TIER_PHYSICAL_BUDGET:.0%} of "
+                        f"{early_total_ram / 1e9:.1f} GB total RAM) for the "
+                        f"unevictable RAM tier (#622). Set stream_source='auto' "
+                        f"to fall back to the NVMe disk tier, or pick a smaller "
+                        f"base."
+                    )
                 raise ValueError(
                     f"training.stream_source='ram' but {cfg.base} is "
                     f"{source_bytes / 1e9:.1f} GB on disk{as_streamed} and only "
@@ -610,6 +655,10 @@ class StreamingSetupMixin:
         )
 
         free_ram = free_ram_bytes()
+        # #622: the absolute ceiling is a property of the box, resolved once
+        # beside the dynamic probe. None (psutil absent) leaves the budget
+        # unenforced, matching the free-RAM posture directly below.
+        total_ram = total_ram_bytes()
         if free_ram is None:
             console.print(
                 "[yellow]psutil unavailable — cannot size the RAM tier; "
@@ -664,6 +713,7 @@ class StreamingSetupMixin:
             ngram_source=ngram_source,
             required_ram=required_ram,
             free_ram=free_ram,
+            total_ram=total_ram,
         )
         plan_free_ram = free_ram
         if ngram_source == "ram":
@@ -680,6 +730,9 @@ class StreamingSetupMixin:
             large_store_bytes=large_store_bytes,
             large_buffer_bytes=large_buffer_bytes,
             available_ram_bytes=plan_free_ram,
+            # #622: the RAM tier is unevictable-class memory — the plan judges
+            # it against total physical RAM as well as what is free.
+            total_ram_bytes=total_ram,
             # The page-locked ceiling is a property of the box, not of free RAM;
             # rather than probe it destructively we attempt the pinned store and
             # fall back loudly (see layer_stream_runtime._build_source).
