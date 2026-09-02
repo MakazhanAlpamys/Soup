@@ -89,7 +89,15 @@ def _nested_models(model: type[pydantic.BaseModel], field: str) -> list[type]:
     return [
         c
         for c in candidates
-        if isinstance(c, type) and issubclass(c, pydantic.BaseModel)
+        # get_origin is not None exactly for parameterized generics, which
+        # must be filtered before issubclass: on Python 3.10 a GenericAlias
+        # like list[str] passes isinstance(c, type) and then raises
+        # TypeError from issubclass (3.11 made isinstance return False).
+        # The repo supports 3.10, and any walk of a full model_dump() — what
+        # sweep's pre-flight feeds this — visits list[...]/dict[...] fields.
+        if isinstance(c, type)
+        and typing.get_origin(c) is None
+        and issubclass(c, pydantic.BaseModel)
     ]
 
 

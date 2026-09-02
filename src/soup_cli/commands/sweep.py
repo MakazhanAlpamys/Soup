@@ -81,6 +81,32 @@ def sweep(
     # Generate parameter combinations
     combinations = _generate_combinations(sweep_params, strategy, max_runs)
 
+    # Validate before anything is printed (#642). --dry-run used to return
+    # below without ever loading the config, so neither the loader's
+    # unknown-key warning (#627) nor the sweep-parameter pre-flight (#628)
+    # was reachable under it — a dry run whose job is catching mistakes
+    # before a long run caught neither. Loading a config file executes
+    # nothing, so both paths now validate at the same point and share the
+    # single load.
+    base_cfg = load_config(config_path)
+
+    # Refuse the whole sweep before any arm starts — and before printing a
+    # grid that can never run (#627, #642). The arm loop below wraps each run
+    # in `except Exception`, so the guard inside `_run_single` would be
+    # caught, recorded as a per-arm failure, and the command would still
+    # exit 0 — an entirely invalid sweep that nothing downstream can detect.
+    # Every combination carries the same parameter names, so one probe built
+    # the way `_run_single` builds its config settles it for the grid.
+    if combinations:
+        probe = base_cfg.model_dump()
+        for key, val in combinations[0].items():
+            _set_nested_param(probe, key, val)
+        try:
+            _reject_unknown_sweep_params(probe)
+        except ValueError as exc:
+            console.print(f"[red]{exc}[/]")
+            raise typer.Exit(1) from exc
+
     console.print(
         Panel(
             f"Config:   [bold]{config_path}[/]\n"
@@ -111,25 +137,6 @@ def sweep(
         if not typer.confirm(f"Start {len(combinations)} training run(s)?", default=True):
             console.print("[yellow]Cancelled.[/]")
             raise typer.Exit()
-
-    # Execute sweep
-    base_cfg = load_config(config_path)
-
-    # Refuse the whole sweep before any arm starts (#627). The arm loop below
-    # wraps each run in `except Exception`, so the guard inside `_run_single`
-    # would be caught, recorded as a per-arm failure, and the command would
-    # still exit 0 -- an entirely invalid sweep that nothing downstream can
-    # detect. Every combination carries the same parameter names, so one probe
-    # built the way `_run_single` builds its config settles it for the grid.
-    if combinations:
-        probe = base_cfg.model_dump()
-        for key, val in combinations[0].items():
-            _set_nested_param(probe, key, val)
-        try:
-            _reject_unknown_sweep_params(probe)
-        except ValueError as exc:
-            console.print(f"[red]{exc}[/]")
-            raise typer.Exit(1) from exc
 
     results = []
     best_loss = float("inf")
