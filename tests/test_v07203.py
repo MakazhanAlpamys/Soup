@@ -822,8 +822,7 @@ class TestIssue444BestRepeatSelection:
         """The GEMM probe must use the card-resolved stream dtype."""
         import sys
 
-        from soup_cli.utils import layer_stream
-        from soup_cli.utils import layer_stream_runtime
+        from soup_cli.utils import layer_stream, layer_stream_runtime
 
         allocated_dtypes: list[object] = []
 
