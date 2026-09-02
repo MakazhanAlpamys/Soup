@@ -28,6 +28,21 @@ from soup_cli.config.schema import SoupConfig
 console = Console()
 
 
+def _count_safetensors_tensors(path: str) -> int:
+    """Number of tensors declared in a ``.safetensors`` file's own header.
+
+    Parsed directly from the format (an 8-byte little-endian length prefix
+    followed by that many bytes of JSON metadata) rather than via mlx or
+    the ``safetensors`` package, so this runs on any machine regardless of
+    whether either is installed. ``__metadata__`` is the one header key
+    that isn't a tensor.
+    """
+    with open(path, "rb") as f:
+        header_len = int.from_bytes(f.read(8), "little")
+        header = json.loads(f.read(header_len))
+    return sum(1 for key in header if key != "__metadata__")
+
+
 #: What `target_modules: auto` means on MLX. peft resolves `auto` per
 #: architecture; mlx-lm has no equivalent, so the streamed-down default is
 #: attention Q/V — the modules `_apply_lora` has always actually trained.
@@ -189,8 +204,29 @@ class MLXSFTTrainerWrapper:
         from the saved iteration is a separate, harder claim — it needs a
         reproducible iteration order tied to training.seed/data_seed, which
         the MLX path does not thread yet (#353) — and is out of scope here.
+
+        ``strict=False`` means a checkpoint saved under a different
+        ``lora.r`` or ``target_modules`` drops every tensor in silence —
+        exactly the #392 failure mode this file's own
+        ``resolve_mlx_target_keys`` docstring records. What's checked here
+        is the narrower, MLX-independent half of that: the checkpoint FILE
+        itself declares at least one tensor before ``load_weights`` ever
+        runs, so an empty or corrupt checkpoint fails loudly instead of
+        producing a warm start from nothing that still prints two green
+        messages. Confirming that the declared tensors actually match this
+        model's LoRA-shaped parameter names — the other half — needs mlx
+        itself to introspect, which isn't available to verify here.
         """
-        console.print(f"[green]MLX: loading checkpoint weights from[/] {checkpoint_path}")
+        tensor_count = _count_safetensors_tensors(checkpoint_path)
+        if tensor_count == 0:
+            raise ValueError(
+                f"MLX checkpoint {checkpoint_path} declares no tensors; refusing "
+                "to warm-start from an empty or corrupt checkpoint file"
+            )
+        console.print(
+            f"[green]MLX: loading checkpoint weights from[/] {checkpoint_path} "
+            f"({tensor_count} tensors)"
+        )
         self.model.load_weights(checkpoint_path, strict=False)
 
     def train(self, display=None, tracker=None, run_id=None, resume_from_checkpoint=None) -> dict:

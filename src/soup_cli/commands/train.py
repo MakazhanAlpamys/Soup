@@ -19,6 +19,7 @@ from soup_cli.monitoring.display import TrainingDisplay
 from soup_cli.utils.gpu import detect_device, get_gpu_info, resolve_quantization
 
 if TYPE_CHECKING:  # pragma: no cover - type hints only, no runtime import
+    from soup_cli.config.schema import SoupConfig
     from soup_cli.utils.energy import EnergyMeasurement
 
 console = Console()
@@ -739,16 +740,7 @@ def train(
         )
 
     # --- Resolve resume checkpoint (fail fast before heavy operations) ---
-    resume_from = None
-    if resume:
-        resume_from = _resolve_checkpoint(
-            resume, cfg.output, cfg.experiment_name, backend=cfg.backend
-        )
-        if resume_from:
-            console.print(f"[green]Resuming from:[/] {resume_from}")
-        else:
-            console.print("[red]No checkpoint found to resume from.[/]")
-            raise typer.Exit(1)
+    resume_from = _resolve_resume_or_exit(resume, cfg)
 
     # --- HF auto-resume: pull latest checkpoint branch into output dir ---
     if hf_resume and push_as and resume_from is None:
@@ -2017,9 +2009,7 @@ def _highest_numbered_mlx_checkpoint(paths) -> Path | None:
     return max(numbered, key=lambda pair: pair[0])[1]
 
 
-def _resolve_mlx_checkpoint(
-    resume: str, output_dir: str, experiment_name: str | None = None
-) -> str | None:
+def _resolve_mlx_checkpoint(resume: str, output_dir: str) -> str | None:
     """MLX-style checkpoint resolution (#634).
 
     mlx-lm's tuner saves step-numbered adapter snapshots
@@ -2028,11 +2018,17 @@ def _resolve_mlx_checkpoint(
     transformers/unsloth backends write. "auto" picks the highest-numbered
     snapshot if one exists, else the final file. A direct ``resume`` value
     must point at one of these files directly.
+
+    Takes no ``experiment_name``, unlike the transformers/unsloth resolver
+    below: ``mlx_sft.py``'s ``output_dir`` is always ``Path(cfg.output)``,
+    flat, never nested under it the way ``trainer/sft.py`` nests under
+    ``output_dir / cfg.experiment_name``. Nesting here would look inside a
+    directory MLX never writes to, and "auto" would report no checkpoint
+    found on every run that sets ``experiment_name`` — the exact symptom
+    #634 reported, reintroduced for a config the original fix didn't cover.
     """
     if resume.lower() == "auto":
         base = Path(output_dir)
-        if experiment_name:
-            base = base / experiment_name
 
         if not base.exists():
             return None
@@ -2054,7 +2050,11 @@ def _resolve_mlx_checkpoint(
 
 
 def _resolve_checkpoint(
-    resume: str, output_dir: str, experiment_name: str = None, *, backend: str = "transformers"
+    resume: str,
+    output_dir: str,
+    experiment_name: str | None = None,
+    *,
+    backend: str = "transformers",
 ) -> str | None:
     """Resolve the checkpoint path from --resume argument.
 
@@ -2066,7 +2066,7 @@ def _resolve_checkpoint(
     directories (#634) — the shape below never matches an MLX run's output.
     """
     if backend == "mlx":
-        return _resolve_mlx_checkpoint(resume, output_dir, experiment_name)
+        return _resolve_mlx_checkpoint(resume, output_dir)
 
     if resume.lower() == "auto":
         base = Path(output_dir)
@@ -2089,6 +2089,26 @@ def _resolve_checkpoint(
     if checkpoint_path.exists() and checkpoint_path.is_dir():
         return str(checkpoint_path)
     return None
+
+
+def _resolve_resume_or_exit(resume: str, cfg: "SoupConfig") -> str | None:
+    """Resolve ``--resume`` against ``cfg``, printing status and exiting on
+    failure. Extracted out of ``train()`` (#634 review) so the
+    ``backend=cfg.backend`` wiring — the entire seam the MLX checkpoint fix
+    depends on — is directly testable without invoking the rest of the
+    command, which needs real hardware/model loading this can be exercised
+    without. Returns ``None`` only when ``resume`` itself is falsy; a
+    ``resume`` value that fails to resolve exits rather than returning.
+    """
+    if not resume:
+        return None
+    resume_from = _resolve_checkpoint(resume, cfg.output, cfg.experiment_name, backend=cfg.backend)
+    if resume_from:
+        console.print(f"[green]Resuming from:[/] {resume_from}")
+    else:
+        console.print("[red]No checkpoint found to resume from.[/]")
+        raise typer.Exit(1)
+    return resume_from
 
 
 def _run_live_lr_sweep_or_synth(

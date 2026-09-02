@@ -15,19 +15,41 @@ the exact saved step. mlx-lm's LoRA trainer exposes no optimizer state and
 no step count, so this is a weights-only warm start, not a full resume —
 the docstring on ``_load_checkpoint_weights`` says so, on purpose.
 
-Caveat that matters more here than usual: MLX only runs on Apple Silicon,
-so the parts of this fix that call into mlx-lm's real training loop
-(``mlx_sft.MLXSFTTrainerWrapper.train()`` end to end) cannot be executed in
-this environment and are NOT covered by a running test below — only
-inspected at the source level. What IS executed and asserted: the
-checkpoint-path resolution (pure filesystem logic, no MLX import needed),
-and ``_load_checkpoint_weights`` in isolation against a fake model object
-duck-typing ``load_weights``.
+Caveat that still matters, even though most of this now runs: MLX only
+runs on Apple Silicon. ``TestTrainWiresCheckpointLoadingAfterLoraIsApplied``
+executes the real ``train()`` method body against minimal fake ``mlx`` /
+``mlx_lm`` modules registered in ``sys.modules`` — real control flow, real
+call ordering, not source-text inspection — but the fakes are stand-ins
+for real mlx-lm behaviour (LoRA conversion, the actual training loop,
+what ``load_weights(strict=False)`` does on a real tensor-shape mismatch),
+not a substitute for it. What genuinely cannot be verified here and is
+flagged as such rather than implied: an end-to-end train -> interrupt ->
+``--resume auto`` run against real mlx-lm.
 """
 
 from __future__ import annotations
 
-import inspect
+import json
+import sys
+import types
+
+import pytest
+
+
+def _write_fake_safetensors(path, tensor_names):
+    """A minimal but structurally real .safetensors file: the real 8-byte
+    length-prefixed JSON header format, with dummy F32 tensor data behind
+    it. Real enough for _count_safetensors_tensors to parse without mlx."""
+    header = {}
+    offset = 0
+    for name in tensor_names:
+        header[name] = {"dtype": "F32", "shape": [1], "data_offsets": [offset, offset + 4]}
+        offset += 4
+    header_bytes = json.dumps(header).encode("utf-8")
+    with open(path, "wb") as f:
+        f.write(len(header_bytes).to_bytes(8, "little"))
+        f.write(header_bytes)
+        f.write(b"\x00" * offset)
 
 
 def _mlx_wrapper(tmp_path, **training):
@@ -82,6 +104,41 @@ class TestHighestNumberedCheckpointIsOrderIndependent:
         from soup_cli.commands.train import _highest_numbered_mlx_checkpoint
 
         assert _highest_numbered_mlx_checkpoint([]) is None
+
+
+class TestMlxCheckpointResolutionIgnoresExperimentName:
+    """The review's second blocking finding: mlx_sft.py's output_dir is
+    always Path(cfg.output), flat — unlike trainer/sft.py, which nests
+    under output_dir / cfg.experiment_name. An MLX resolver that copies
+    that nesting looks in a directory MLX never writes to, and "auto"
+    reports no checkpoint found on every config that sets experiment_name
+    — the exact #634 symptom, for a config the original fix didn't cover."""
+
+    def test_auto_finds_the_checkpoint_when_experiment_name_is_set(self, tmp_path):
+        """MLX writes directly into output_dir regardless of
+        experiment_name, so the checkpoint sits at the top level even
+        though the config names an experiment."""
+        from soup_cli.commands.train import _resolve_checkpoint
+
+        (tmp_path / "0000300_adapters.safetensors").write_bytes(b"")
+
+        result = _resolve_checkpoint(
+            "auto", str(tmp_path), experiment_name="my-experiment", backend="mlx"
+        )
+        assert result == str(tmp_path / "0000300_adapters.safetensors")
+
+    def test_experiment_name_does_not_change_the_result(self, tmp_path):
+        """Same output dir, with and without experiment_name set — MLX's
+        resolution must not depend on it either way."""
+        from soup_cli.commands.train import _resolve_checkpoint
+
+        (tmp_path / "0000300_adapters.safetensors").write_bytes(b"")
+
+        with_name = _resolve_checkpoint(
+            "auto", str(tmp_path), experiment_name="my-experiment", backend="mlx"
+        )
+        without_name = _resolve_checkpoint("auto", str(tmp_path), backend="mlx")
+        assert with_name == without_name == str(tmp_path / "0000300_adapters.safetensors")
 
 
 class TestMlxCheckpointResolutionFindsStepNumberedFiles:
@@ -171,9 +228,41 @@ class TestNonMlxBackendsAreUnaffected:
         assert _resolve_checkpoint("auto", str(tmp_path), backend="mlx") is not None
 
 
+class TestCountSafetensorsTensors:
+    """The MLX-independent half of the #392-shaped post-load check: the
+    checkpoint FILE declares at least one tensor, parsed from the format's
+    own header — no mlx or safetensors package needed to check it."""
+
+    def test_counts_declared_tensors(self, tmp_path):
+        from soup_cli.trainer.mlx_sft import _count_safetensors_tensors
+
+        path = tmp_path / "adapters.safetensors"
+        _write_fake_safetensors(path, ["lora_a", "lora_b", "lora_c"])
+
+        assert _count_safetensors_tensors(str(path)) == 3
+
+    def test_empty_header_counts_zero(self, tmp_path):
+        from soup_cli.trainer.mlx_sft import _count_safetensors_tensors
+
+        path = tmp_path / "empty.safetensors"
+        _write_fake_safetensors(path, [])
+
+        assert _count_safetensors_tensors(str(path)) == 0
+
+    def test_metadata_key_is_not_counted_as_a_tensor(self, tmp_path):
+        from soup_cli.trainer.mlx_sft import _count_safetensors_tensors
+
+        path = tmp_path / "metadata_only.safetensors"
+        header_bytes = json.dumps({"__metadata__": {"format": "pt"}}).encode("utf-8")
+        path.write_bytes(len(header_bytes).to_bytes(8, "little") + header_bytes)
+
+        assert _count_safetensors_tensors(str(path)) == 0
+
+
 class TestLoadCheckpointWeights:
     """MLXSFTTrainerWrapper._load_checkpoint_weights, tested against a fake
-    model object — no real mlx/mlx-lm import is reachable here."""
+    model object and a real (minimal) .safetensors file — no real mlx/mlx-lm
+    import is reachable here."""
 
     def test_it_calls_load_weights_non_strict(self, tmp_path):
         calls = []
@@ -182,42 +271,227 @@ class TestLoadCheckpointWeights:
             def load_weights(self, path, strict=True):
                 calls.append((path, strict))
 
+        checkpoint = tmp_path / "0000100_adapters.safetensors"
+        _write_fake_safetensors(checkpoint, ["lora_a"])
+
         wrapper = _mlx_wrapper(tmp_path)
         wrapper.model = _FakeModel()
 
-        wrapper._load_checkpoint_weights("/some/0000100_adapters.safetensors")
+        wrapper._load_checkpoint_weights(str(checkpoint))
 
-        assert calls == [("/some/0000100_adapters.safetensors", False)]
+        assert calls == [(str(checkpoint), False)]
+
+    def test_empty_checkpoint_is_rejected_before_load_weights_runs(self, tmp_path):
+        calls = []
+
+        class _FakeModel:
+            def load_weights(self, path, strict=True):
+                calls.append((path, strict))
+
+        checkpoint = tmp_path / "0000100_adapters.safetensors"
+        _write_fake_safetensors(checkpoint, [])
+
+        wrapper = _mlx_wrapper(tmp_path)
+        wrapper.model = _FakeModel()
+
+        with pytest.raises(ValueError, match="no tensors"):
+            wrapper._load_checkpoint_weights(str(checkpoint))
+
+        assert calls == [], "load_weights must not run against an empty checkpoint"
+
+
+def _install_fake_mlx(monkeypatch):
+    """Register minimal fake ``mlx`` / ``mlx_lm`` modules in ``sys.modules``
+    so ``MLXSFTTrainerWrapper.train()`` runs for real, without Apple
+    Silicon or the real packages installed.
+
+    Covers exactly the surface ``train()`` touches: ``mlx.core`` (the
+    ``_require_mlx`` import probe), ``mlx.optimizers.AdamW``, and
+    ``mlx_lm.tuner``'s ``callbacks`` / ``datasets`` / ``trainer`` / ``utils``
+    submodules. This exercises the real method body — real control flow,
+    real call ordering — rather than asserting on its source text.
+    """
+    mlx = types.ModuleType("mlx")
+    mlx_core = types.ModuleType("mlx.core")
+    mlx_optimizers = types.ModuleType("mlx.optimizers")
+    mlx_optimizers.AdamW = lambda **kwargs: object()
+
+    mlx_lm = types.ModuleType("mlx_lm")
+    mlx_lm_tuner = types.ModuleType("mlx_lm.tuner")
+
+    mlx_lm_tuner_callbacks = types.ModuleType("mlx_lm.tuner.callbacks")
+
+    class _FakeTrainingCallback:
+        pass
+
+    mlx_lm_tuner_callbacks.TrainingCallback = _FakeTrainingCallback
+
+    mlx_lm_tuner_datasets = types.ModuleType("mlx_lm.tuner.datasets")
+    mlx_lm_tuner_datasets.CacheDataset = lambda rows: rows
+    mlx_lm_tuner_datasets.create_dataset = lambda rows, tokenizer, args: rows
+
+    mlx_lm_tuner_trainer = types.ModuleType("mlx_lm.tuner.trainer")
+
+    class _FakeTrainingArgs:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    mlx_lm_tuner_trainer.TrainingArgs = _FakeTrainingArgs
+
+    def _fake_train(**kwargs):
+        callback = kwargs.get("training_callback")
+        if callback is not None:
+            callback.on_train_loss_report({"train_loss": 0.5})
+
+    mlx_lm_tuner_trainer.train = _fake_train
+
+    mlx_lm_tuner_utils = types.ModuleType("mlx_lm.tuner.utils")
+    mlx_lm_tuner_utils.linear_to_lora_layers = lambda model, num_layers, config: None
+
+    fake_modules = {
+        "mlx": mlx,
+        "mlx.core": mlx_core,
+        "mlx.optimizers": mlx_optimizers,
+        "mlx_lm": mlx_lm,
+        "mlx_lm.tuner": mlx_lm_tuner,
+        "mlx_lm.tuner.callbacks": mlx_lm_tuner_callbacks,
+        "mlx_lm.tuner.datasets": mlx_lm_tuner_datasets,
+        "mlx_lm.tuner.trainer": mlx_lm_tuner_trainer,
+        "mlx_lm.tuner.utils": mlx_lm_tuner_utils,
+    }
+    for name, module in fake_modules.items():
+        monkeypatch.setitem(sys.modules, name, module)
+
+
+class _FakeMlxModel:
+    """Duck-types just what train() touches on the model: freeze(),
+    layers, and load_weights(). Records whether freeze() (part of
+    _apply_lora) ran before load_weights() — the real ordering
+    constraint, checked behaviourally instead of by source position."""
+
+    def __init__(self):
+        self.frozen = False
+        self.layers = []
+        self.load_weights_calls = []
+
+    def freeze(self):
+        self.frozen = True
+
+    def load_weights(self, path, strict=True):
+        self.load_weights_calls.append((path, strict, self.frozen))
 
 
 class TestTrainWiresCheckpointLoadingAfterLoraIsApplied:
-    """train() itself calls into real mlx-lm and cannot run without Apple
-    Silicon; inspected at the source level instead of executed. This is a
-    real limitation, not a substitute for running it — flagged as such in
-    the PR."""
+    """train() itself, executed for real against fake mlx/mlx_lm modules —
+    not inspected at the source level. Exercises the actual method body:
+    real branching on resume_from_checkpoint, real call ordering."""
 
-    def test_the_old_no_op_warning_is_gone(self):
-        from soup_cli.trainer.mlx_sft import MLXSFTTrainerWrapper
+    def _ready_wrapper(self, tmp_path):
+        wrapper = _mlx_wrapper(tmp_path, epochs=1, lr=1e-4, batch_size=1)
+        wrapper.model = _FakeMlxModel()
+        wrapper.tokenizer = object()
+        wrapper._dataset = {"train": [{"text": "hi"}], "val": []}
+        return wrapper
 
-        source = inspect.getsource(MLXSFTTrainerWrapper.train)
-        assert "does not support --resume yet" not in source
+    def test_checkpoint_weights_load_after_lora_is_applied(self, tmp_path, monkeypatch):
+        _install_fake_mlx(monkeypatch)
+        wrapper = self._ready_wrapper(tmp_path)
+        checkpoint = tmp_path / "0000100_adapters.safetensors"
+        _write_fake_safetensors(checkpoint, ["lora_a"])
 
-    def test_checkpoint_loading_is_called_after_lora_is_applied(self):
-        from soup_cli.trainer.mlx_sft import MLXSFTTrainerWrapper
+        wrapper.train(resume_from_checkpoint=str(checkpoint))
 
-        source = inspect.getsource(MLXSFTTrainerWrapper.train)
-        lora_pos = source.index("self._apply_lora(")
-        load_pos = source.index("self._load_checkpoint_weights(")
-        assert lora_pos < load_pos, (
-            "_load_checkpoint_weights must run after _apply_lora — the saved "
-            "file holds only LoRA-shaped tensors, which don't exist on the "
-            "model until the linear layers are converted"
+        assert wrapper.model.load_weights_calls == [(str(checkpoint), False, True)], (
+            "load_weights must run after freeze() (part of _apply_lora) — "
+            "the saved file holds only LoRA-shaped tensors, which don't "
+            "exist on the model until the linear layers are converted"
         )
 
-    def test_checkpoint_loading_is_skipped_when_none_is_given(self):
-        """No resume requested -> no _load_checkpoint_weights call, no
-        change in behaviour from before this fix."""
-        from soup_cli.trainer.mlx_sft import MLXSFTTrainerWrapper
+    def test_no_load_when_no_checkpoint_given(self, tmp_path, monkeypatch):
+        """#634's original bug: resume_from_checkpoint was accepted and
+        never read again. Proven behaviourally in both directions — this
+        test pins that omitting it does nothing, the one above pins that
+        supplying it does something."""
+        _install_fake_mlx(monkeypatch)
+        wrapper = self._ready_wrapper(tmp_path)
 
-        source = inspect.getsource(MLXSFTTrainerWrapper.train)
-        assert "if resume_from_checkpoint is not None:" in source
+        wrapper.train(resume_from_checkpoint=None)
+
+        assert wrapper.model.load_weights_calls == []
+
+
+class TestResumeWiringReachesTheBackendAwareResolver:
+    """The blocking gap from review: every other test above calls
+    _resolve_checkpoint directly with backend="mlx" already supplied, so
+    none of them exercise the actual seam between the CLI and the
+    resolver — the single keyword the whole fix hangs on. This does, via
+    _resolve_resume_or_exit, the function train() itself calls, with
+    _resolve_checkpoint replaced by a spy that records what it was called
+    with."""
+
+    def _cfg(self, tmp_path, backend):
+        from soup_cli.config.schema import DataConfig, SoupConfig, TrainingConfig
+
+        return SoupConfig(
+            base="meta-llama/Llama-3.1-8B-Instruct",
+            task="sft",
+            backend=backend,
+            data=DataConfig(train="./data/train.jsonl", format="chatml"),
+            training=TrainingConfig(),
+            output=str(tmp_path),
+        )
+
+    def test_mlx_backend_reaches_the_resolver_as_mlx(self, tmp_path, monkeypatch):
+        import soup_cli.commands.train as train_module
+
+        calls = []
+
+        def _spy(resume, output_dir, experiment_name=None, *, backend="transformers"):
+            calls.append(backend)
+            return str(tmp_path / "0000100_adapters.safetensors")
+
+        monkeypatch.setattr(train_module, "_resolve_checkpoint", _spy)
+
+        result = train_module._resolve_resume_or_exit("auto", self._cfg(tmp_path, "mlx"))
+
+        assert calls == ["mlx"], (
+            "the CLI must pass backend=cfg.backend through to _resolve_checkpoint - "
+            "dropping that keyword is the exact #634 regression this pins"
+        )
+        assert result == str(tmp_path / "0000100_adapters.safetensors")
+
+    def test_transformers_backend_reaches_the_resolver_as_transformers(
+        self, tmp_path, monkeypatch
+    ):
+        """Negative control: the default backend must still say so, not
+        "mlx" leaking in from a hardcoded value."""
+        import soup_cli.commands.train as train_module
+
+        calls = []
+
+        def _spy(resume, output_dir, experiment_name=None, *, backend="transformers"):
+            calls.append(backend)
+            return str(tmp_path / "checkpoint-100")
+
+        monkeypatch.setattr(train_module, "_resolve_checkpoint", _spy)
+
+        train_module._resolve_resume_or_exit("auto", self._cfg(tmp_path, "transformers"))
+
+        assert calls == ["transformers"]
+
+    def test_no_resume_requested_skips_the_resolver_entirely(self, tmp_path):
+        import soup_cli.commands.train as train_module
+
+        result = train_module._resolve_resume_or_exit(None, self._cfg(tmp_path, "mlx"))
+
+        assert result is None
+
+    def test_unresolvable_checkpoint_exits_rather_than_returning(self, tmp_path, monkeypatch):
+        import typer
+
+        import soup_cli.commands.train as train_module
+
+        monkeypatch.setattr(train_module, "_resolve_checkpoint", lambda *a, **k: None)
+
+        with pytest.raises(typer.Exit):
+            train_module._resolve_resume_or_exit("auto", self._cfg(tmp_path, "mlx"))

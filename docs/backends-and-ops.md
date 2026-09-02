@@ -115,6 +115,8 @@ training:
 
 MLX backend supports SFT. `backend: mlx` with `task: dpo` or `task: grpo` is refused when the config is loaded, with an error naming the task — upstream `mlx-lm` ships no DPO/GRPO training helper, so those wrappers exist only as a backstop for callers that bypass config validation. Requires `mlx-lm >= 0.31.3`. Use `soup recipes search --tag mlx` for ready-made Apple Silicon configs.
 
+`--resume auto` finds mlx-lm's step-numbered `NNNNNNN_adapters.safetensors` checkpoints and warm-starts the LoRA weights from them ([#634](https://github.com/MakazhanAlpamys/Soup/issues/634)). This restores adapter weights only, not training state: mlx-lm's LoRA trainer exposes no optimizer state or step count, so training restarts from step 0 regardless of how far the checkpoint got. See [Resume Training](#resume-training) below for the MLX-specific checkpoint shape.
+
 ### Transformers on MPS
 
 The regular `backend: transformers` path can run more than MLX's SFT-only
@@ -282,6 +284,15 @@ soup train --config soup.yaml --resume auto
 # Resume from a specific checkpoint
 soup train --config soup.yaml --resume ./output/checkpoint-500
 ```
+
+`backend: mlx` writes and resumes a different checkpoint shape: a
+step-numbered `NNNNNNN_adapters.safetensors` file (or the final
+`adapters.safetensors`) directly under `output`, not a `checkpoint-N`
+directory. `--resume auto` and `--resume ./output/0011800_adapters.safetensors`
+both work; `--resume ./output/checkpoint-500` does not, because MLX never
+writes that shape. This is a weights-only warm start — mlx-lm's LoRA trainer
+exposes no optimizer state or step count, so the resumed run starts counting
+from step 0 regardless of how far the checkpoint got.
 
 
 ## Run Management & Cleanup
