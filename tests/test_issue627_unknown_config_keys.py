@@ -648,6 +648,31 @@ class TestATypodSweepFailsTheCommandAndNotJustTheArm:
             "a per-arm failure table means the loop swallowed the guard"
         )
 
+    def test_an_empty_grid_does_not_crash_the_probe(self, tmp_path) -> None:
+        """The probe reads ``combinations[0]``, which an empty grid does not have.
+
+        ``--max-runs -1`` empties the grid. Before the guard this raised an
+        unhandled ``IndexError`` from inside the new precheck -- a regression
+        this PR introduced, found in the #628 review. Nonsense input either
+        way, but main printed an empty table and exited 0, and an unhandled
+        traceback is a worse answer than that. Bounding ``--max-runs`` at
+        ``ge=1`` would be the better fix and is pre-existing behaviour, so it
+        is left alone here.
+        """
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        result = CliRunner().invoke(app, [
+            "sweep",
+            "--config", self._config(tmp_path),
+            "--param", "training.lr=1e-5",
+            "--max-runs", "-1",
+            "--yes",
+        ])
+        assert "IndexError" not in result.output, result.output
+        assert result.exit_code == 0, result.output
+
     def test_a_valid_sweep_reaches_the_first_arm(self, tmp_path) -> None:
         """Control: a precheck that refused every sweep would pass the above.
 
@@ -673,3 +698,119 @@ class TestATypodSweepFailsTheCommandAndNotJustTheArm:
         assert "--- Run 1/1" in result.output, (
             "the sweep never reached its first arm, so the precheck blocked it"
         )
+
+
+class TestTheLoaderIsActuallyWiredUp:
+    """The half every ``soup train`` user hits, tested through its callers.
+
+    The #628 review reverted both call sites in ``config/loader.py`` -- leaving
+    ``unknown_keys.py``, ``_report_unknown_keys`` and the import in place --
+    and the whole suite stayed green: 43 passed while a config carrying
+    ``quantizaton: none`` loaded silently, which is #627 restored exactly.
+
+    Nothing saw it because ``TestOneReportPerLoad`` calls ``_report_unknown_keys``
+    directly, and the construction-site scanner is a regex the surviving
+    top-level import satisfies on its own. The scanner is still worth having --
+    it catches a *fourth* call site appearing -- but it is not a test of these
+    two. Same shape as the ``inspect.getsource`` gap on the sweep side; this is
+    the third instance and the only user-visible one.
+
+    Each call site is exercised separately: they are separate branches with
+    separate contracts (``SystemExit`` for the CLI, ``ValueError`` for the
+    API/UI), and a test of one does not cover the other.
+    """
+
+    TYPOD = (
+        "base: test-model\n"
+        "data:\n"
+        "  train: ./data.jsonl\n"
+        "training:\n"
+        "  epochs: 1\n"
+        "  quantizaton: none\n"
+    )
+    CLEAN = (
+        "base: test-model\n"
+        "data:\n"
+        "  train: ./data.jsonl\n"
+        "training:\n"
+        "  epochs: 1\n"
+    )
+
+    @staticmethod
+    def _recording_console(monkeypatch) -> list:
+        """Record what the loader prints without matching against wrapped ANSI."""
+        from soup_cli.config import loader
+
+        printed: list[str] = []
+
+        def record(*args, **kwargs) -> None:
+            printed.append(str(args[0]) if args else "")
+
+        monkeypatch.setattr(loader.console, "print", record)
+        return printed
+
+    def test_load_config_from_string_reports_an_unknown_key(self, monkeypatch) -> None:
+        from soup_cli.config.loader import load_config_from_string
+
+        printed = self._recording_console(monkeypatch)
+        load_config_from_string(self.TYPOD)
+        joined = "\n".join(printed)
+        assert "quantizaton" in joined, "the API/UI call site never reported the typo"
+        assert "unknown config key" in joined
+        assert UNKNOWN_KEY_REJECTION_VERSION in joined, "the warning lost its deadline"
+
+    def test_load_config_from_string_is_silent_on_a_clean_config(self, monkeypatch) -> None:
+        """The control: wiring that warned on everything would pass the above."""
+        from soup_cli.config.loader import load_config_from_string
+
+        printed = self._recording_console(monkeypatch)
+        load_config_from_string(self.CLEAN)
+        assert printed == [], f"a clean config produced output: {printed}"
+
+    def test_load_config_reports_an_unknown_key(self, monkeypatch, tmp_path) -> None:
+        """The file call site is a separate branch from the string one."""
+        from soup_cli.config.loader import load_config
+
+        path = tmp_path / "soup.yaml"
+        path.write_text(self.TYPOD, encoding="utf-8")
+        printed = self._recording_console(monkeypatch)
+        load_config(path)
+        joined = "\n".join(printed)
+        assert "quantizaton" in joined, "the CLI call site never reported the typo"
+        assert "unknown config key" in joined
+
+    def test_load_config_is_silent_on_a_clean_config(self, monkeypatch, tmp_path) -> None:
+        from soup_cli.config.loader import load_config
+
+        path = tmp_path / "soup.yaml"
+        path.write_text(self.CLEAN, encoding="utf-8")
+        printed = self._recording_console(monkeypatch)
+        load_config(path)
+        assert printed == [], f"a clean config produced output: {printed}"
+
+    def test_the_string_call_site_refuses_under_error_severity(self, monkeypatch) -> None:
+        """Nothing else proves the v0.75 flip works, and a test will force it."""
+        from soup_cli.config import loader
+
+        monkeypatch.setattr(loader, "UNKNOWN_KEY_SEVERITY", "error")
+        with pytest.raises(ValueError, match="quantizaton"):
+            loader.load_config_from_string(self.TYPOD)
+
+    def test_the_file_call_site_refuses_under_error_severity(
+        self, monkeypatch, tmp_path
+    ) -> None:
+        from soup_cli.config import loader
+
+        path = tmp_path / "soup.yaml"
+        path.write_text(self.TYPOD, encoding="utf-8")
+        self._recording_console(monkeypatch)
+        monkeypatch.setattr(loader, "UNKNOWN_KEY_SEVERITY", "error")
+        with pytest.raises(SystemExit):
+            loader.load_config(path)
+
+    def test_a_clean_config_still_loads_under_error_severity(self, monkeypatch) -> None:
+        """The control for the flip: refusing everything would pass the two above."""
+        from soup_cli.config import loader
+
+        monkeypatch.setattr(loader, "UNKNOWN_KEY_SEVERITY", "error")
+        assert loader.load_config_from_string(self.CLEAN).base == "test-model"

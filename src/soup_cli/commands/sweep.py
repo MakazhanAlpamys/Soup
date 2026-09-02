@@ -121,14 +121,15 @@ def sweep(
     # still exit 0 -- an entirely invalid sweep that nothing downstream can
     # detect. Every combination carries the same parameter names, so one probe
     # built the way `_run_single` builds its config settles it for the grid.
-    probe = base_cfg.model_dump()
-    for key, val in combinations[0].items():
-        _set_nested_param(probe, key, val)
-    try:
-        _reject_unknown_sweep_params(probe)
-    except ValueError as exc:
-        console.print(f"[red]{exc}[/]")
-        raise typer.Exit(1) from exc
+    if combinations:
+        probe = base_cfg.model_dump()
+        for key, val in combinations[0].items():
+            _set_nested_param(probe, key, val)
+        try:
+            _reject_unknown_sweep_params(probe)
+        except ValueError as exc:
+            console.print(f"[red]{exc}[/]")
+            raise typer.Exit(1) from exc
 
     results = []
     best_loss = float("inf")
