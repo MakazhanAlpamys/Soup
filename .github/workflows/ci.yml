@@ -108,8 +108,7 @@ jobs:
           )
 
       - name: Run PyTorch smoke tests
-        run: python -m pytest -o addopts= -m smoke -q tests/test_smoke_train.py
-
+        run: python -m pytest -o addopts= -m smoke -q tests/
       - name: Save PyTorch smoke HF cache
         if: success() && steps.hf-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
