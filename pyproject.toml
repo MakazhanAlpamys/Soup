@@ -51,8 +51,13 @@ dependencies = [
 # v0.71.0 — heavy training stack. `pip install 'soup-cli[train]'` to fine-tune.
 # These were core dependencies through v0.70.0.
 train = [
-    # oQ/Qwen4 uses safetensors U32 plus torch.uint32, both supported from 2.3.
-    "torch>=2.3.0",
+    # The binding floor is transformers', not Soup's: the torch extra of
+    # 5.16.1 (the floor declared just below) requires torch>=2.5, so no
+    # installable [train] env can carry torch below 2.5 regardless of what
+    # is declared here (#636). oQ/Qwen4's uint32 need (2.3) is subsumed.
+    # tests/test_issue636_torch_floor.py pins this floor against the
+    # installed transformers' requirement so the two cannot drift silently.
+    "torch>=2.5.0",
     # 5.16.1 is the validated Qwen4-Exp floor: an outer `qwen4_exp` config
     # selects the text-only Qwen4ExpForCausalLM, and the patch release restores
     # tensor-parallel compatibility needed by large-model training. The v5
