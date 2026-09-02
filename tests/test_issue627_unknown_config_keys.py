@@ -7,9 +7,9 @@ validated clean, printed "Config valid. Ready to train!" under
 
 The keys that reach users are not exotic. ``quantizaton``,
 ``gradient_checkpoint``, ``lr_scheduler`` and ``max_len`` are each one edit from
-a real field, so the run trains in full precision / without checkpointing / on
-the default schedule while the operator believes otherwise. Exit 0, plausible
-logs, and the requested thing silently not done.
+a real field, so the run keeps the default quantization / does no checkpointing
+/ uses the default schedule while the operator believes otherwise. Exit 0,
+plausible logs, and the requested thing silently not done.
 
 #623 is the live example: ``training.stream_pin`` landed on main two days after
 0.73.3 shipped, a user on the released wheel wrote the documented escape hatch,
@@ -389,14 +389,25 @@ class TestTheDocumentedExamplesAreOnesThatActuallyBreak:
         assert paths == ["training.quantizaton"]
 
     def test_the_docs_do_not_still_carry_the_corrected_claim(self) -> None:
-        """The wrong version was a specific sentence; pin it out of the tree."""
+        """The wrong version was a specific sentence; pin it out of the tree.
+
+        Prose repeats. The first correction fixed the docs and the changelog
+        fragment and left the same false sentence in the module docstring that
+        explains the fix, so the scan covers ``src/`` too -- a claim is no less
+        wrong for being in a docstring. This file is excluded because the class
+        above quotes the wrong example deliberately, as the thing being pinned.
+        """
         from pathlib import Path
 
         root = Path(__file__).parents[1]
         named = [root / rel for rel in ("README.md", "docs/backends-and-ops.md", "CHANGELOG.md")]
         # The fragment too: it becomes CHANGELOG.md at release, so a claim
         # corrected only in the docs would come back at assembly time.
-        candidates = named + sorted((root / "changelog.d").rglob("*.md"))
+        candidates = (
+            named
+            + sorted((root / "changelog.d").rglob("*.md"))
+            + sorted((root / "src" / "soup_cli").rglob("*.py"))
+        )
         for path in candidates:
             if not path.is_file():
                 continue
@@ -405,6 +416,10 @@ class TestTheDocumentedExamplesAreOnesThatActuallyBreak:
                 f"{path.relative_to(root)} still shows `quantizaton: 4bit` as a "
                 "harmful typo; quantization defaults to 4bit, so that example "
                 "changes nothing"
+            )
+            assert "trains in full precision" not in text, (
+                f"{path.relative_to(root)} still claims a dropped quantization "
+                "key means full precision; the default is 4bit, so it does not"
             )
 
 

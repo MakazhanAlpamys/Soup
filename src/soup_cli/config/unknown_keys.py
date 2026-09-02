@@ -3,10 +3,19 @@
 Pydantic's default is ``extra="ignore"``, and none of the config models
 override it, so a key the schema does not know is dropped in silence. The run
 then proceeds with the setting the user asked for simply not applied:
-``quantizaton: 4bit`` trains in full precision, ``gradient_checkpoint: true``
-does no checkpointing, ``data.max_len: 512`` truncates at the default. Each is
-one edit away from a real field, which is what makes them likely rather than
+``quantizaton: none`` trains 4-bit quantized, ``gradient_checkpoint: true``
+does no checkpointing, ``data.max_len: 512`` truncates at 2048. Each is one
+edit away from a real field, which is what makes them likely rather than
 exotic.
+
+Each example above is one where the dropped value *differs* from the schema
+default, which is the only kind worth printing. ``quantization`` already
+defaults to ``"4bit"``, so misspelling that key while asking for the default
+is the harmless member of this population -- it reads like a disaster and
+changes nothing, which teaches the wrong lesson about what was fixed here.
+``TestTheDocumentedExamplesAreOnesThatActuallyBreak`` pins the property
+against the live schema, so a later default change cannot quietly make an
+example vacuous again.
 
 #623 is the live case: ``training.stream_pin`` reached main two days after
 0.73.3 shipped, so a user on the released wheel wrote the documented escape
