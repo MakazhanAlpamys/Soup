@@ -130,7 +130,7 @@ class TestPlanRunpodRun:
 
 
 class TestSubmitRunpodRun:
-    def test_override_seam(self, monkeypatch):
+    def test_submit_not_implemented(self):
         import soup_cli.cloud.runpod as m
         from soup_cli.cloud._common import CloudPlan
 
@@ -142,41 +142,9 @@ class TestSubmitRunpodRun:
             stub_text="",
             run_command="python x.py",
         )
-        monkeypatch.setattr(m, "_RUNPOD_SUBMIT_OVERRIDE", lambda p: 7)
-        assert m.submit_runpod_run(plan) == 7
+        with pytest.raises(NotImplementedError, match="not yet available for RunPod"):
+            m.submit_runpod_run(plan)
 
-    def test_no_token_raises(self):
-        import soup_cli.cloud.runpod as m
-        from soup_cli.cloud._common import CloudPlan
-
-        plan = CloudPlan(
-            cloud="runpod",
-            gpu="a100",
-            output_dir="./out",
-            stub_path="x.py",
-            stub_text="",
-            run_command="python x.py",
-        )
-        with pytest.raises(RuntimeError, match="not authenticated"):
-            m.submit_runpod_run(plan, env={})
-
-    def test_runpod_sdk_missing_raises(self, monkeypatch):
-        import sys
-
-        import soup_cli.cloud.runpod as m
-        from soup_cli.cloud._common import CloudPlan
-
-        plan = CloudPlan(
-            cloud="runpod",
-            gpu="a100",
-            output_dir="./out",
-            stub_path="x.py",
-            stub_text="",
-            run_command="python x.py",
-        )
-        monkeypatch.setitem(sys.modules, "runpod", None)
-        with pytest.raises(RuntimeError, match="not installed"):
-            m.submit_runpod_run(plan, env={"RUNPOD_API_KEY": "a"})
 
 
 class TestValidateLambdaLabs:
@@ -230,7 +198,6 @@ class TestRenderLambdaLabsStub:
         payload = namespace["_launch_payload"]("us-tx-1", "registered-key")
         assert payload["user_data"] == namespace["_USER_DATA"]
         assert "soup-cli[train]==0.71.22" in payload["user_data"]
-        assert "LAMBDA_API_KEY" not in payload["user_data"]
         assert payload["ssh_key_names"] == ["registered-key"]
         assert "quantity" not in payload
 
@@ -408,3 +375,42 @@ class TestCloudNoTopLevelSDK:
     def test_runpod_extra_in_pyproject(self):
         pp = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
         assert "runpod = [" in pp
+
+
+class TestCloudNoSecrets:
+    def test_no_secrets_in_stub_or_payload(self, monkeypatch):
+        from soup_cli.cloud.lambda_labs import render_lambda_stub
+        from soup_cli.cloud.modal import render_modal_stub
+        from soup_cli.cloud.runpod import render_runpod_stub
+
+        secret = "LIVE_SECRET_ABCDEF123456"
+        monkeypatch.setenv("LAMBDA_API_KEY", secret)
+        monkeypatch.setenv("RUNPOD_API_KEY", secret)
+        monkeypatch.setenv("MODAL_TOKEN_ID", secret)
+        monkeypatch.setenv("MODAL_TOKEN_SECRET", secret)
+        monkeypatch.setenv("LAMBDA_SSH_KEY_NAME", "registered-key")
+        monkeypatch.setenv("LAMBDA_SSH_PRIVATE_KEY", "/tmp/key")
+
+        # 1. RunPod
+        stub_runpod = render_runpod_stub(
+            _SOUP_YAML, gpu="a100", output_dir="./out", soup_version="0.71.22"
+        )
+        assert secret not in stub_runpod
+
+        # 2. Lambda Labs
+        stub_lambda = render_lambda_stub(
+            _SOUP_YAML, gpu="a100", output_dir="./out", soup_version="0.71.22"
+        )
+        assert secret not in stub_lambda
+
+        namespace = {"__name__": "test"}
+        exec(stub_lambda, namespace)
+        payload = namespace["_launch_payload"]("us-tx-1", "registered-key")
+        assert secret not in str(payload)
+
+        # 3. Modal
+        stub_modal = render_modal_stub(
+            _SOUP_YAML, gpu="a100", output_dir="./out", soup_version="0.71.22"
+        )
+        assert secret not in stub_modal
+

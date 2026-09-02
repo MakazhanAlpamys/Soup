@@ -18,7 +18,6 @@ the submit path testable without an account.
 from __future__ import annotations
 
 import base64
-import os
 import re
 import types
 from collections.abc import Callable, Mapping
@@ -115,12 +114,7 @@ def render_runpod_stub(
         "bash -c 'cd /workspace && "
         f"pip install {pip_spec} && "
         f"echo {cfg_b64} | base64 -d > /root/soup.yaml && "
-        "soup train --config /root/soup.yaml --yes ; "
-        "curl -X POST https://api.runpod.io/graphql -H \"Authorization: Bearer $RUNPOD_API_KEY\" "
-        "-H \"Content-Type: application/json\" "
-        "-d \"{\\\"query\\\": \\\"mutation { podTerminate(input: {podId: "
-        "\\\\\\\"$RUNPOD_POD_ID\\\\\\\"}) }\\\"}\" "
-        "'"
+        "soup train --config /root/soup.yaml --yes'"
     )
 
     return (
@@ -130,8 +124,6 @@ def render_runpod_stub(
         "import os\n"
         "import sys\n"
         "import runpod\n"
-        "\n"
-        f'_LOCAL_OUTPUT = {output_dir!r}\n'
         "\n"
         "def main() -> None:\n"
         '    api_key = os.environ.get("RUNPOD_API_KEY")\n'
@@ -150,7 +142,6 @@ def render_runpod_stub(
         '        name="soup-train",\n'
         '        image_name="runpod/pytorch:2.2.0-py3.10-cuda12.1.1-devel-ubuntu22.04",\n'
         f'        gpu_type_id="{runpod_gpu}",\n'
-        '        env={"RUNPOD_API_KEY": api_key},\n'
         "        network_volume_id=network_volume_id,\n"
         '        volume_mount_path="/workspace",\n'
         f'        docker_args={docker_args!r},\n'
@@ -203,27 +194,7 @@ def write_stub(plan: CloudPlan) -> str:
 
 
 def submit_runpod_run(plan: CloudPlan, *, env: Optional[Mapping] = None) -> int:
-    if not isinstance(plan, CloudPlan):
-        raise TypeError(f"plan must be a CloudPlan, got {type(plan).__name__}")
-    if _RUNPOD_SUBMIT_OVERRIDE is not None:
-        return _RUNPOD_SUBMIT_OVERRIDE(plan)
-    environ = env if env is not None else os.environ
-    if not environ.get("RUNPOD_API_KEY"):
-        raise RuntimeError(
-            "RunPod not authenticated. Set RUNPOD_API_KEY environment variable, "
-            "then re-run with --cloud-submit."
-        )
-    try:
-        import runpod  # noqa: F401 — presence check only
-    except ImportError as exc:
-        raise RuntimeError(
-            "RunPod SDK not installed. Run `pip install \"soup-cli[runpod]\"`."
-        ) from exc
-    import subprocess
-    import sys
-
-    proc = subprocess.run(  # noqa: S603 — argv list, no shell
-        [sys.executable, plan.stub_path],
-        check=False,
+    raise NotImplementedError(
+        "live submit not yet available for RunPod; use --cloud modal or lambda"
     )
-    return proc.returncode
+
