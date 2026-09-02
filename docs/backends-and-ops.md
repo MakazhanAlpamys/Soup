@@ -404,7 +404,9 @@ soup sweep --config soup.yaml --param lr=1e-5,2e-5,5e-5 --param lora_r=8,16,32
 # Random search with max runs
 soup sweep --config soup.yaml --param lr=1e-5,2e-5,5e-5 --strategy random --max-runs 5
 
-# Preview without running
+# Preview without running — validates first (#642): unknown config keys emit
+# the same warning block `train --dry-run` does, and a --param naming no config
+# field exits non-zero before any grid is printed
 soup sweep --config soup.yaml --param lr=1e-5,2e-5 --param epochs=2,3 --dry-run
 
 # Early stopping: skip remaining runs if loss exceeds 1.5x best

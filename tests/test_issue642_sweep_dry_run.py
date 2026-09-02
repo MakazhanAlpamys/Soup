@@ -87,12 +87,17 @@ class TestTheWarningBranch:
     def test_the_warning_carries_the_loaders_deadline(self, runner, tmp_path) -> None:
         # Same loader path means the deadline sentence and the follow-up
         # explanation come along; a hand-rolled second warning would not.
+        # Stripped for colour: under FORCE_COLOR rich's number highlighter
+        # puts escapes INSIDE "v0.75", splitting the token (#633's class).
+        from .conftest import strip_ansi
+
         result = _invoke(runner, _TYPO, tmp_path)
-        assert f"v{UNKNOWN_KEY_REJECTION_VERSION}" in result.output
-        assert "An unapplied key is ignored, not defaulted" in result.output
+        out = strip_ansi(result.output)
+        assert f"v{UNKNOWN_KEY_REJECTION_VERSION}" in out
+        assert "An unapplied key is ignored, not defaulted" in out
         # One load, one report — a second load_config on the way out would
         # print the block twice.
-        assert result.output.count("Warning:") == 1
+        assert out.count("Warning:") == 1
 
     def test_the_grid_still_prints_for_a_warn_only_config(self, runner, tmp_path) -> None:
         result = _invoke(runner, _TYPO, tmp_path)
@@ -202,18 +207,27 @@ class TestTheExecutionPathStillMatches:
         assert "does not match any config field" in result.output
 
 
-class TestTheFullDumpWalkSurvivesPython310:
-    """Regression: the pre-flight crashed on 3.10 before it ever guarded.
+class TestTheGenericAliasFilter:
+    """Regression: the pre-flight walk crashed on a full dump — scoped exactly.
 
-    ``soup sweep``'s pre-flight walks a full ``model_dump()``, which visits
-    every declared field — including ``list[...]``/``dict[...]`` annotations.
-    On Python 3.10 a parameterized builtin generic passes ``isinstance(c,
-    type)`` and then raises ``TypeError`` from ``issubclass`` (3.11 made
-    isinstance return False), so on the oldest supported Python the walk died
-    with ``issubclass() arg 1 must be a class``. #628's unit tests fed the
-    walker hand-built YAML dicts that never reached such a field, which is how
-    that shipped green. On 3.11+ these tests pass with or without the
-    ``get_origin`` filter; on 3.10 the first one is the crash itself.
+    The probe walks a full ``model_dump()``, which visits every declared
+    field — including ``training.preference_loss_weights``, annotated
+    ``Optional[dict[str, float]]``. Two conditions made that fatal, and BOTH
+    had to hold:
+
+    * Python 3.10, where a PEP-585 alias passes ``isinstance(c, type)``
+      (3.11 made isinstance return False), and
+    * a pydantic whose ``ModelMetaclass`` inherits ``__subclasscheck__`` from
+      ``ABCMeta``, which raises ``TypeError`` on a non-class — verified
+      raising on 2.10.6 and verified tolerant on 2.13.4 (which defines its
+      own ``__subclasscheck__``) under the SAME 3.10.11 interpreter, so
+      pydantic is the discriminating variable, not the Python patch level.
+
+    The repo floor is ``pydantic>=2.0.0``, so on 3.10 the crash was live
+    across the unmasked part of the supported range; a current pydantic
+    masks it, which is how the review's box — and every CI cell — saw the
+    filter-removal mutation survive. #628's unit tests fed the walker
+    hand-built YAML dicts that never reached such a field.
     """
 
     def _full_dump(self) -> dict:
@@ -237,3 +251,52 @@ class TestTheFullDumpWalkSurvivesPython310:
         dumped["training"]["quantizaton"] = "none"
         found = find_unknown_config_keys(dumped)
         assert [u.path for u in found] == ["training.quantizaton"]
+
+    def test_the_hazard_is_pinned_stdlib_only(self) -> None:
+        """The two facts the filter rests on, with no pydantic involved."""
+        import abc
+        import sys
+
+        class _AbcChecked(metaclass=abc.ABCMeta):
+            pass
+
+        alias = dict[str, float]
+        if sys.version_info[:2] == (3, 10):
+            assert isinstance(alias, type), (
+                "the 3.10 GenericAlias isinstance quirk is gone — the filter's "
+                "raison d'être needs re-examining"
+            )
+            with pytest.raises(TypeError):
+                issubclass(alias, _AbcChecked)
+        else:
+            # 3.11+ filters the alias at isinstance already; there the
+            # get_origin guard is belt-and-braces, and this documents the
+            # scoping rather than pretending otherwise.
+            assert not isinstance(alias, type)
+
+    def test_the_filter_kills_the_crash_whatever_pydantic_does(self, monkeypatch) -> None:
+        """The deterministic mutation killer.
+
+        Removing the ``get_origin`` filter survives every other test on a box
+        whose pydantic tolerates the alias (2.13.4+) — the review reproduced
+        exactly that. This recreates the pre-override metaclass behaviour with
+        an ABCMeta stand-in for ``pydantic.BaseModel``, so on any Python 3.10
+        box the unfiltered ``issubclass`` raises ``TypeError`` HERE regardless
+        of the installed pydantic — and it pins the real schema field the
+        crash came through, so renaming or retyping it fails too.
+        """
+        import abc
+
+        import pydantic
+
+        from soup_cli.config import unknown_keys as uk
+        from soup_cli.config.schema import TrainingConfig
+
+        class _RaisingCheckBase(metaclass=abc.ABCMeta):
+            pass
+
+        assert "preference_loss_weights" in TrainingConfig.model_fields
+        monkeypatch.setattr(pydantic, "BaseModel", _RaisingCheckBase)
+        # Without the filter this is issubclass(dict[str, float], ABCMeta-class)
+        # — TypeError on 3.10; with it, the alias never reaches issubclass.
+        assert uk._nested_models(TrainingConfig, "preference_loss_weights") == []
