@@ -524,12 +524,14 @@ field is a hard error from this release, not in v0.75:
 
 ```bash
 soup sweep --config soup.yaml --param lora_rank=8,16   # the field is training.lora.r
-# ValueError: sweep parameter does not match any config field:
-#   unknown config key 'lora_rank' - not applied.
+# sweep parameter does not match any config field: unknown config key 'lora_rank' - not applied.
+echo $?   # 1
 ```
 
-A sweep whose swept knob is never applied produces arms that are all identical, so there
-is no partially-useful result to preserve by continuing.
+The whole sweep is refused before the first arm starts, and the command exits non-zero, so
+a scripted or CI-driven sweep fails rather than reporting a grid of arms that each failed
+for the same reason. A sweep whose swept knob is never applied produces arms that are all
+identical, so there is no partially-useful result to preserve by continuing.
 
 
 ## Experiment Tracking

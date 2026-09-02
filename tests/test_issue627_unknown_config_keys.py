@@ -21,6 +21,8 @@ Every test here is CPU-only: no GPU, no downloads, no model load.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from soup_cli.config.unknown_keys import (
@@ -533,14 +535,141 @@ class TestTheSweepGuardIsIndependentOfTheDeadline:
         ):
             _reject_unknown_sweep_params(self._swept(param, value))  # must not raise
 
-    def test_run_single_still_calls_the_guard(self) -> None:
-        """The seam is only worth having while the caller uses it."""
-        import inspect
+    def test_run_single_refuses_before_it_imports_the_training_stack(self) -> None:
+        """The seam is only worth having while the caller uses it.
 
-        from soup_cli.commands import sweep
+        This asserted on ``inspect.getsource`` until the #628 review: it
+        checked that a string appeared in the function, which is not the same
+        as the function refusing anything. It calls ``_run_single`` now.
 
-        source = inspect.getsource(sweep._run_single)
-        assert "_reject_unknown_sweep_params(config_dict)" in source
-        assert source.index("_reject_unknown_sweep_params") < source.index("SoupConfig(**"), (
-            "the guard must run before the config is built, not after"
+        The heavy modules are poisoned rather than counted in ``sys.modules``.
+        A first version asserted ``"torch" not in sys.modules`` after the call,
+        which silently passed whenever an earlier test had already imported
+        torch -- it let the "guard moved back below the imports" mutation live.
+        Blocking the imports makes the ordering the *only* thing that decides
+        the outcome: guard first gives ``ValueError``, guard second gives
+        ``ImportError``, in any test order and on a machine with no GPU stack.
+        """
+        import sys
+
+        from soup_cli.commands.sweep import _run_single
+        from soup_cli.config.schema import SoupConfig
+
+        base_cfg = SoupConfig(**_raw())
+        heavy = (
+            "soup_cli.data.loader",
+            "soup_cli.experiment.tracker",
+            "soup_cli.monitoring.display",
+            "soup_cli.trainer.sft",
+            "soup_cli.utils.gpu",
+        )
+        saved = {name: sys.modules.get(name) for name in heavy}
+        for name in heavy:
+            sys.modules[name] = None  # a None entry makes `import name` raise
+        try:
+            with pytest.raises(ValueError, match="does not match any config field"):
+                _run_single(base_cfg, {"lora_rank": 8}, "sweep_1", Path("soup.yaml"))
+        finally:
+            for name, module in saved.items():
+                if module is None:
+                    sys.modules.pop(name, None)
+                else:
+                    sys.modules[name] = module
+
+
+class TestATypodSweepFailsTheCommandAndNotJustTheArm:
+    """The guard raising is not the same as the sweep failing (#628 review).
+
+    ``_reject_unknown_sweep_params`` was called from inside ``_run_single``,
+    and the arm loop wraps every call in ``except Exception``. So the guard
+    fired, the loop caught it, each arm was recorded ``failed``, the results
+    table printed, and the command exited **0** -- the exact #627 shape (exit
+    0, plausible output, the requested thing not done) reproduced one layer
+    above the fix for it. No CI job or script could detect an entirely invalid
+    sweep.
+
+    Every test in the class above calls the guard directly, so all of them
+    passed while this was broken. That is the gap: they tested the guard and
+    never the caller around it.
+    """
+
+    def _config(self, tmp_path) -> str:
+        cfg = tmp_path / "soup.yaml"
+        cfg.write_text(
+            "base: test-model\n"
+            "data:\n"
+            "  train: ./data.jsonl\n"
+        )
+        return str(cfg)
+
+    def test_a_typod_sweep_exits_non_zero(self, tmp_path) -> None:
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        result = CliRunner().invoke(app, [
+            "sweep",
+            "--config", self._config(tmp_path),
+            "--param", "learnig_rate=1e-5,2e-5",
+            "--yes",
+        ])
+        assert result.exit_code != 0, (
+            "a sweep whose only swept parameter names no config field exited "
+            f"{result.exit_code}; nothing downstream can detect that"
+        )
+
+    def test_it_names_the_parameter_it_refused(self, tmp_path) -> None:
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        result = CliRunner().invoke(app, [
+            "sweep",
+            "--config", self._config(tmp_path),
+            "--param", "learnig_rate=1e-5,2e-5",
+            "--yes",
+        ])
+        assert "learnig_rate" in result.output
+
+    def test_no_arm_is_started_and_no_results_table_is_printed(self, tmp_path) -> None:
+        """The fragment claims it raises 'before the first arm starts'."""
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        result = CliRunner().invoke(app, [
+            "sweep",
+            "--config", self._config(tmp_path),
+            "--param", "learnig_rate=1e-5,2e-5",
+            "--yes",
+        ])
+        assert "--- Run 1/2" not in result.output, "an arm started despite the guard"
+        assert "failed" not in result.output.lower(), (
+            "a per-arm failure table means the loop swallowed the guard"
+        )
+
+    def test_a_valid_sweep_reaches_the_first_arm(self, tmp_path) -> None:
+        """Control: a precheck that refused every sweep would pass the above.
+
+        It must not use ``--dry-run``: that branch returns *before* the
+        precheck, so a dry run exercises none of it and would pass against a
+        reject-everything precheck. The arm banner is the evidence the grid
+        was let through -- the run itself then fails on the absent dataset,
+        which is downstream of what this pins.
+        """
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        result = CliRunner().invoke(app, [
+            "sweep",
+            "--config", self._config(tmp_path),
+            "--param", "training.lr=1e-5",
+            "--yes",
+        ])
+        assert "does not match any config field" not in result.output, (
+            "the precheck refused a real config field"
+        )
+        assert "--- Run 1/1" in result.output, (
+            "the sweep never reached its first arm, so the precheck blocked it"
         )

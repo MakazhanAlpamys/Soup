@@ -114,6 +114,22 @@ def sweep(
 
     # Execute sweep
     base_cfg = load_config(config_path)
+
+    # Refuse the whole sweep before any arm starts (#627). The arm loop below
+    # wraps each run in `except Exception`, so the guard inside `_run_single`
+    # would be caught, recorded as a per-arm failure, and the command would
+    # still exit 0 -- an entirely invalid sweep that nothing downstream can
+    # detect. Every combination carries the same parameter names, so one probe
+    # built the way `_run_single` builds its config settles it for the grid.
+    probe = base_cfg.model_dump()
+    for key, val in combinations[0].items():
+        _set_nested_param(probe, key, val)
+    try:
+        _reject_unknown_sweep_params(probe)
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/]")
+        raise typer.Exit(1) from exc
+
     results = []
     best_loss = float("inf")
     skipped = 0
@@ -351,13 +367,6 @@ def _reject_unknown_sweep_params(config_dict: dict) -> None:
 
 def _run_single(base_cfg, params: dict, run_name: str, config_path: Path) -> dict:
     """Run a single training with modified parameters."""
-    from soup_cli.config.schema import SoupConfig
-    from soup_cli.data.loader import load_dataset
-    from soup_cli.experiment.tracker import ExperimentTracker
-    from soup_cli.monitoring.display import TrainingDisplay
-    from soup_cli.trainer.sft import SFTTrainerWrapper
-    from soup_cli.utils.gpu import detect_device, get_gpu_info
-
     # Deep copy and modify config
     config_dict = base_cfg.model_dump()
     for key, val in params.items():
@@ -366,7 +375,17 @@ def _run_single(base_cfg, params: dict, run_name: str, config_path: Path) -> dic
     # Override experiment name
     config_dict["experiment_name"] = run_name
 
+    # Before the heavy imports, so this refusal is reachable -- and testable --
+    # without the training stack. `sweep()` pre-checks the grid too; this stays
+    # so a direct caller cannot bypass it.
     _reject_unknown_sweep_params(config_dict)
+
+    from soup_cli.config.schema import SoupConfig
+    from soup_cli.data.loader import load_dataset
+    from soup_cli.experiment.tracker import ExperimentTracker
+    from soup_cli.monitoring.display import TrainingDisplay
+    from soup_cli.trainer.sft import SFTTrainerWrapper
+    from soup_cli.utils.gpu import detect_device, get_gpu_info
 
     cfg = SoupConfig(**config_dict)
 
