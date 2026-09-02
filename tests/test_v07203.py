@@ -654,6 +654,7 @@ class TestMeasuredGemmCeiling:
         assert got.sm_clock_mhz is None or 100 <= got.sm_clock_mhz <= 4000
         # the shape is reported so a fraction-of-ceiling can be shape-matched
         assert got.size == 4096
+        assert got.dtype in {"float16", "bfloat16"}
 
     def test_the_reported_rate_matches_an_independently_timed_matmul(self):
         """The plausibility band above cannot be tight without pinning a
@@ -666,14 +667,17 @@ class TestMeasuredGemmCeiling:
         sessions at the same reported clock)."""
         import torch
 
+        from soup_cli.utils.layer_stream import resolve_stream_dtype
         from soup_cli.utils.layer_stream_runtime import _GEMM_SIZE, measure_gemm_tflops
 
         got = measure_gemm_tflops(device="cuda")
         assert got is not None
 
         size, iters = _GEMM_SIZE, 8
-        left = torch.randn(size, size, device="cuda", dtype=torch.bfloat16)
-        right = torch.randn(size, size, device="cuda", dtype=torch.bfloat16)
+        dtype_name = resolve_stream_dtype("cuda")
+        dtype = getattr(torch, dtype_name)
+        left = torch.randn(size, size, device="cuda", dtype=dtype)
+        right = torch.randn(size, size, device="cuda", dtype=dtype)
         try:
             for _ in range(3):  # warm up: the first matmul pays kernel selection
                 left @ right
@@ -694,7 +698,7 @@ class TestMeasuredGemmCeiling:
         independent = 2.0 * (size**3) * iters / seconds / 1e12
         assert 0.1 * independent <= got.tflops <= 10.0 * independent, (
             f"probe reported {got.tflops} TFLOPS where an independent timing of "
-            f"the same {size}^3 bf16 matmul gives {independent}"
+            f"the same {size}^3 {dtype_name} matmul gives {independent}"
         )
 
     def test_returns_none_on_cpu_rather_than_inventing_a_number(self):
@@ -722,10 +726,16 @@ class TestIssue444BestRepeatSelection:
     def test_gemm_ceiling_defaults_samples_to_empty_tuple(self) -> None:
         from soup_cli.utils.layer_stream_runtime import GemmCeiling
 
-        ceiling = GemmCeiling(tflops=10.5, sm_clock_mhz=1200, size=4096)
+        ceiling = GemmCeiling(
+            tflops=10.5,
+            sm_clock_mhz=1200,
+            size=4096,
+            dtype="bfloat16",
+        )
         assert ceiling.tflops == 10.5
         assert ceiling.sm_clock_mhz == 1200
         assert ceiling.size == 4096
+        assert ceiling.dtype == "bfloat16"
         assert ceiling.samples == ()
 
     def test_selection_picks_maximum_repeat_not_first_or_last(
@@ -774,6 +784,7 @@ class TestIssue444BestRepeatSelection:
 
         class _MockTorch:
             bfloat16 = "bfloat16"
+            float16 = "float16"
             cuda = _MockCuda
 
             @staticmethod
@@ -782,6 +793,13 @@ class TestIssue444BestRepeatSelection:
 
         monkeypatch.setitem(sys.modules, "torch", _MockTorch)
         monkeypatch.setattr(layer_stream_runtime, "sm_clock_mhz", lambda: 1500)
+        from soup_cli.utils import layer_stream
+
+        monkeypatch.setattr(
+            layer_stream,
+            "resolve_stream_dtype",
+            lambda device: "bfloat16",
+        )
 
         res = layer_stream_runtime.measure_gemm_tflops(
             device="cuda", iters=8, reps=4, size=4096
@@ -794,6 +812,79 @@ class TestIssue444BestRepeatSelection:
         assert res.tflops == res.samples[1]
         assert res.tflops != res.samples[0]
         assert res.tflops != res.samples[-1]
+
+    @pytest.mark.parametrize("resolved_dtype", ["float16", "bfloat16"])
+    def test_gemm_uses_resolved_stream_dtype(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        resolved_dtype: str,
+    ) -> None:
+        """The GEMM probe must use the card-resolved stream dtype."""
+        import sys
+
+        from soup_cli.utils import layer_stream
+        from soup_cli.utils import layer_stream_runtime
+
+        allocated_dtypes: list[object] = []
+
+        class _MockEvent:
+            def __init__(self, *args, **kwargs) -> None:
+                pass
+
+            def record(self) -> None:
+                pass
+
+            def elapsed_time(self, other: object) -> float:
+                return 100.0
+
+        class _MockCuda:
+            @staticmethod
+            def is_available() -> bool:
+                return True
+
+            @staticmethod
+            def synchronize() -> None:
+                pass
+
+            @staticmethod
+            def empty_cache() -> None:
+                pass
+
+            Event = _MockEvent
+            OutOfMemoryError = RuntimeError
+
+        class _MockTensor:
+            def __matmul__(self, other: object) -> "_MockTensor":
+                return self
+
+        class _MockTorch:
+            bfloat16 = "bfloat16"
+            float16 = "float16"
+            cuda = _MockCuda
+
+            @staticmethod
+            def randn(*args: object, **kwargs: object) -> _MockTensor:
+                allocated_dtypes.append(kwargs["dtype"])
+                return _MockTensor()
+
+        monkeypatch.setitem(sys.modules, "torch", _MockTorch)
+        monkeypatch.setattr(
+            layer_stream,
+            "resolve_stream_dtype",
+            lambda device: resolved_dtype,
+        )
+        monkeypatch.setattr(layer_stream_runtime, "sm_clock_mhz", lambda: 1500)
+
+        res = layer_stream_runtime.measure_gemm_tflops(
+            device="cuda",
+            iters=1,
+            reps=1,
+            size=4,
+        )
+
+        assert res is not None
+        assert res.dtype == resolved_dtype
+        assert allocated_dtypes == [resolved_dtype, resolved_dtype]
 
     def test_zero_elapsed_timing_returns_none(
         self, monkeypatch: pytest.MonkeyPatch
@@ -842,6 +933,13 @@ class TestIssue444BestRepeatSelection:
                 return _MockTensor()
 
         monkeypatch.setitem(sys.modules, "torch", _MockTorch)
+        from soup_cli.utils import layer_stream
+
+        monkeypatch.setattr(
+            layer_stream,
+            "resolve_stream_dtype",
+            lambda device: "bfloat16",
+        )
         got = layer_stream_runtime.measure_gemm_tflops(device="cuda", reps=4)
         assert got is None
 
@@ -892,6 +990,13 @@ class TestIssue444BestRepeatSelection:
                 return _MockTensor()
 
         monkeypatch.setitem(sys.modules, "torch", _MockTorch)
+        from soup_cli.utils import layer_stream
+
+        monkeypatch.setattr(
+            layer_stream,
+            "resolve_stream_dtype",
+            lambda device: "bfloat16",
+        )
         got = layer_stream_runtime.measure_gemm_tflops(device="cuda", iters=0, reps=4)
         assert got is None
 

@@ -1085,7 +1085,7 @@ class StreamingSetupMixin:
             )
             lines.append(
                 f"               (from {ceiling.tflops:.2f} TFLOPS measured on "
-                f"this card now{clock})"
+                f"this card now using {ceiling.dtype}{clock})"
             )
         advice = accumulation_advice(batch_size=batch, accum=tcfg.gradient_accumulation_steps)
         if advice is not None:
