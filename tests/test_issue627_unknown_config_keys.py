@@ -252,6 +252,11 @@ class TestTheDeadline:
         string -- the moment the deadline release ships. Found by mutation:
         bumping ``__version__`` to the deadline reddened this test as well as
         the one that should fire, burying the real signal under a false one.
+
+        ``as_posix()`` rather than ``str()``: the first version compared
+        ``str(path)`` against a ``/`` literal and passed on macOS and Ubuntu
+        while failing all three Windows jobs on ``config\\unknown_keys.py``.
+        The separator is the platform's; the expectation should not be.
         """
         import re
         from pathlib import Path
@@ -261,7 +266,7 @@ class TestTheDeadline:
         pattern = re.compile(rf"""v{version}\b|["']{version}["']""")
         src = Path(__file__).parents[1] / "src" / "soup_cli"
         holders = sorted(
-            str(p.relative_to(src))
+            p.relative_to(src).as_posix()
             for p in src.rglob("*.py")
             if p.name != "__init__.py" and pattern.search(p.read_text(encoding="utf-8"))
         )
@@ -461,20 +466,66 @@ class TestTheSweepGuardIsIndependentOfTheDeadline:
     which is a different failure class from a dropped training key.
     """
 
-    def test_the_sweep_error_does_not_mention_the_deadline(self) -> None:
+    def _swept(self, param: str, value: object) -> dict:
+        """A config dict as ``_run_single`` builds it: dump plus one --param."""
+        from soup_cli.commands.sweep import _set_nested_param
+
+        config_dict = _raw()
+        config_dict["experiment_name"] = "sweep-run-1"
+        _set_nested_param(config_dict, param, value)
+        return config_dict
+
+    def test_a_parameter_naming_no_field_raises_before_the_first_arm(self) -> None:
+        from soup_cli.commands.sweep import _reject_unknown_sweep_params
+
+        with pytest.raises(ValueError) as excinfo:
+            _reject_unknown_sweep_params(self._swept("lora_rank", 8))
+        assert "lora_rank" in str(excinfo.value)
+        assert "does not match any config field" in str(excinfo.value)
+
+    def test_a_nested_parameter_naming_no_field_raises_too(self) -> None:
+        """``--param training.lr_rate=...`` must not slip past a top-level check."""
+        from soup_cli.commands.sweep import _reject_unknown_sweep_params
+
+        with pytest.raises(ValueError, match="training.lr_rate"):
+            _reject_unknown_sweep_params(self._swept("training.lr_rate", 1e-5))
+
+    def test_the_error_does_not_promise_a_future_rejection(self) -> None:
+        """It raises today, so a v-next deadline sentence would be false."""
+        from soup_cli.commands.sweep import _reject_unknown_sweep_params
+
+        with pytest.raises(ValueError) as excinfo:
+            _reject_unknown_sweep_params(self._swept("lora_rank", 8))
+        assert UNKNOWN_KEY_REJECTION_VERSION not in str(excinfo.value)
+
+    def test_it_raises_even_though_the_loader_only_warns(self) -> None:
+        """The switch governs the loader, not the sweep -- pinned, not assumed."""
+        from soup_cli.commands.sweep import _reject_unknown_sweep_params
+        from soup_cli.config import loader
+
+        assert loader.UNKNOWN_KEY_SEVERITY == "warn"
+        with pytest.raises(ValueError):
+            _reject_unknown_sweep_params(self._swept("lora_rank", 8))
+
+    def test_a_real_swept_parameter_is_not_rejected(self) -> None:
+        """The control: a guard that rejects every sweep would pass the above."""
+        from soup_cli.commands.sweep import _reject_unknown_sweep_params
+
+        for param, value in (
+            ("training.lr", 1e-5),
+            ("training.lora.r", 16),
+            ("training.epochs", 3),
+        ):
+            _reject_unknown_sweep_params(self._swept(param, value))  # must not raise
+
+    def test_run_single_still_calls_the_guard(self) -> None:
+        """The seam is only worth having while the caller uses it."""
         import inspect
 
         from soup_cli.commands import sweep
 
         source = inspect.getsource(sweep._run_single)
-        assert "format_unknown_keys" in source
-        assert "include_deadline=False" in source, (
-            "the sweep error already raises, so it must not promise a future rejection"
+        assert "_reject_unknown_sweep_params(config_dict)" in source
+        assert source.index("_reject_unknown_sweep_params") < source.index("SoupConfig(**"), (
+            "the guard must run before the config is built, not after"
         )
-
-    def test_a_sweep_parameter_naming_no_field_raises_under_warn(self) -> None:
-        from soup_cli.config import loader
-
-        assert loader.UNKNOWN_KEY_SEVERITY == "warn"
-        unknown = find_unknown_config_keys(_raw(extra_training="{epochs: 1, lora_rank: 8}"))
-        assert unknown, "precondition: lora_rank is not a real field"
