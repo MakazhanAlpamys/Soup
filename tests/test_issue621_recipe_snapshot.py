@@ -22,15 +22,23 @@ schema default) — and per recipe only the fields that differ from it
 
 - A schema-default change (or an added field) moves the ONE committed
   baseline value. ``TestBaselineMatchesTheLiveSchema`` is the only place
-  that shows up — not once per recipe.
+  that shows up — not once per recipe that stays silent on the field.
 - Per-recipe tests compare each recipe's delta *against the live baseline*,
   not the committed one, so they stay silent for every recipe that doesn't
-  touch the changed field. The one case this doesn't erase: a recipe that
-  redundantly pins a value equal to the OLD default starts appearing in its
-  delta once the default moves out from under it — because what used to be
-  a no-op pin just started doing something. That is a real, if small, class
-  of failure, called out here rather than rounded down to "one failure,
-  full stop" — see ``TestEveryRecipeMatchesItsCommittedDelta``.
+  touch the changed field. What they do NOT erase: a recipe that redundantly
+  pins a value equal to the OLD default starts appearing in its own delta
+  once the default moves out from under it, because what used to be a no-op
+  pin just started doing something — the recipe's resolved config hasn't
+  changed, only its relationship to the (now different) baseline has. This
+  is not a small edge case in general: for a rarely-pinned field
+  (``dpo_beta``) it's ~13 recipes; for a near-universally-pinned one
+  (``epochs``, which 158 of 162 recipes declare explicitly) changing that
+  default reddens 158 named recipe tests plus the baseline — a wall of red
+  on a change that alters no recipe's actual behavior. Measured, not
+  estimated; see ``TestEveryRecipeMatchesItsCommittedDelta``. Traded
+  deliberately for the property that matters more (a recipe that does NOT
+  touch the field stays silent), but the size of the trade is real and
+  belongs in the record rather than in the flattering example.
 
 Regenerate the fixture with ``python scripts/generate_recipe_snapshot.py``
 after a deliberate change — never automatically. The comparison is between
@@ -146,7 +154,9 @@ class TestEveryRecipeMatchesItsCommittedDelta:
     reaches here: a recipe whose own declared value happens to equal the OLD
     default stops being a no-op once the default moves, and starts
     appearing in its delta — correctly, since it is now load-bearing where
-    it previously was not."""
+    it previously was not. Measured, not assumed to be rare: moving
+    ``dpo_beta``'s default touches ~13 recipes here; moving ``epochs``'s
+    (158 of 162 recipes declare it explicitly) touches 158."""
 
     @pytest.mark.parametrize("name", sorted(RECIPES))
     def test_recipe_delta_matches_its_snapshot(self, name: str):
