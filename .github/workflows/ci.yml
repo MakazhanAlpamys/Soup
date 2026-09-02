@@ -137,6 +137,7 @@ jobs:
           tests/test_issue571_qwen4_exp.py
           tests/test_plotext_compat.py
           tests/test_bugfixes.py::TestDiffModelLoading
+          tests/test_issue636_torch_floor.py
 
   test:
     strategy:

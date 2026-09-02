@@ -1058,9 +1058,9 @@ def test_qwen4_oq_torch_floor_matches_project_and_doctor():
         f"{torch_entries}"
     )
     assert next(item for item in DEPS if item[0] == "torch")[2] == "2.5.0", (
-        "`soup doctor` must report the same floor pyproject.toml declares, read "
-        "from the installed [train] metadata rather than a second hardcoded "
-        "copy (#636)"
+        "`soup doctor` keeps a literal copy of the torch floor; it must equal "
+        "the one pyproject.toml declares, pinned by "
+        "tests/test_issue636_torch_floor.py (#636)"
     )
 
 
