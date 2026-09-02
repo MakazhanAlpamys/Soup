@@ -73,10 +73,15 @@ def _resolve_qwen4_ngram_source(
     store_total: int,
     ngram_bytes: int,
     free_ram: int,
+    resident_ram: int = 0,
+    total_ram: int | None = None,
     stream_source: str,
 ) -> str:
     """Resolve Qwen4 PLE storage and refuse unsupported oQ materialisation."""
-    from soup_cli.utils.layer_stream import RAM_TIER_HEADROOM
+    from soup_cli.utils.layer_stream import (
+        PHYSICAL_RAM_TIER_HEADROOM,
+        RAM_TIER_HEADROOM,
+    )
 
     if oq_ngram:
         if requested == "ram":
@@ -94,7 +99,17 @@ def _resolve_qwen4_ngram_source(
         if stream_source != "disk" and store_total < ram_budget
         else 0
     )
-    return "ram" if base_in_ram + ngram_bytes < ram_budget else "disk"
+    ram_bytes = base_in_ram + ngram_bytes
+    physical_limit = (
+        None
+        if total_ram is None
+        else total_ram * PHYSICAL_RAM_TIER_HEADROOM
+    )
+    fits_physical_ram = (
+        physical_limit is None
+        or ram_bytes + resident_ram < physical_limit
+    )
+    return "ram" if ram_bytes < ram_budget and fits_physical_ram else "disk"
 
 
 def _validate_qwen4_ngram_ram_fit(
@@ -103,9 +118,15 @@ def _validate_qwen4_ngram_ram_fit(
     ngram_source: str,
     required_ram: int,
     free_ram: int,
+    resident_ram: int = 0,
+    total_ram: int | None = None,
 ) -> None:
     """Refuse a RAM base or PLE before either source allocates its store."""
-    from soup_cli.utils.layer_stream import RAM_TIER_HEADROOM
+    from soup_cli.utils.layer_stream import (
+        PHYSICAL_RAM_TIER_HEADROOM,
+        PHYSICAL_RAM_TIER_HEADROOM_PERCENT,
+        RAM_TIER_HEADROOM,
+    )
 
     ram_required = stream_source == "ram" or ngram_source == "ram"
     if ram_required and required_ram >= free_ram * RAM_TIER_HEADROOM:
@@ -123,6 +144,29 @@ def _validate_qwen4_ngram_ram_fit(
             f"{policy} but the base plus selected PLE "
             f"storage needs {required_ram / 1e9:.1f} GB and only "
             f"{free_ram / 1e9:.1f} GB of RAM is free. Set {fallback}, free RAM, "
+            "or pick a smaller base."
+        )
+    if (
+        ram_required
+        and total_ram is not None
+        and required_ram + resident_ram >= total_ram * PHYSICAL_RAM_TIER_HEADROOM
+    ):
+        policy = (
+            "training.stream_ngram_source='ram'"
+            if ngram_source == "ram"
+            else "training.stream_source='ram'"
+        )
+        fallback = (
+            "stream_ngram_source='auto' to use read-only SSD streaming"
+            if ngram_source == "ram"
+            else "stream_source='auto' to allow the disk tier"
+        )
+        raise ValueError(
+            f"{policy} but the base plus resident extras and selected PLE "
+            f"storage needs {(required_ram + resident_ram) / 1e9:.1f} GB, "
+            "which exceeds "
+            f"{PHYSICAL_RAM_TIER_HEADROOM_PERCENT}% of physical RAM "
+            f"({total_ram / 1e9:.1f} GB). Set {fallback}, free RAM, "
             "or pick a smaller base."
         )
 
@@ -408,6 +452,7 @@ class StreamingSetupMixin:
             resolve_disk_kind,
             resolve_stream_dtype,
             stream_arch_of,
+            total_ram_bytes,
         )
         from soup_cli.utils.layer_stream_runtime import (
             RamSource,
@@ -610,6 +655,7 @@ class StreamingSetupMixin:
         )
 
         free_ram = free_ram_bytes()
+        total_ram = total_ram_bytes()
         if free_ram is None:
             console.print(
                 "[yellow]psutil unavailable — cannot size the RAM tier; "
@@ -619,7 +665,7 @@ class StreamingSetupMixin:
                 layer_bytes * index.n_layers + large_store_bytes + embed_bytes
             ) * 10
 
-        store_total = layer_store_bytes + large_store_bytes + embed_bytes
+        store_total = layer_store_bytes + large_store_bytes
         ngram_source = "disk"
         if ngram_bytes:
             requested_ngram = tcfg.stream_ngram_source
@@ -632,6 +678,8 @@ class StreamingSetupMixin:
                 store_total=store_total,
                 ngram_bytes=ngram_bytes,
                 free_ram=free_ram,
+                resident_ram=embed_bytes,
+                total_ram=total_ram,
                 stream_source=tcfg.stream_source,
             )
             storage = "CPU RAM"
@@ -664,6 +712,8 @@ class StreamingSetupMixin:
             ngram_source=ngram_source,
             required_ram=required_ram,
             free_ram=free_ram,
+            resident_ram=embed_bytes,
+            total_ram=total_ram,
         )
         plan_free_ram = free_ram
         if ngram_source == "ram":
@@ -680,6 +730,7 @@ class StreamingSetupMixin:
             large_store_bytes=large_store_bytes,
             large_buffer_bytes=large_buffer_bytes,
             available_ram_bytes=plan_free_ram,
+            total_ram_bytes=total_ram,
             # The page-locked ceiling is a property of the box, not of free RAM;
             # rather than probe it destructively we attempt the pinned store and
             # fall back loudly (see layer_stream_runtime._build_source).

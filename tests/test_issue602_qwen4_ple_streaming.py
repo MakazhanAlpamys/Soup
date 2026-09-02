@@ -591,6 +591,8 @@ def test_qwen4_ngram_policy_covers_oq_ram_and_auto_defaults():
         "store_total": 20,
         "ngram_bytes": 30,
         "free_ram": 100,
+        "resident_ram": 0,
+        "total_ram": None,
         "stream_source": "auto",
     }
     with pytest.raises(ValueError, match="oQ PLE embeddings require"):
@@ -615,6 +617,29 @@ def test_qwen4_ngram_policy_covers_oq_ram_and_auto_defaults():
         )
         == "disk"
     )
+    assert (
+        _resolve_qwen4_ngram_source(
+            oq_ngram=False,
+            requested="auto",
+            **_qwen4_ple_physical_limit_case(common),
+        )
+        == "disk"
+    )
+
+
+def _qwen4_ple_physical_limit_case(common):
+    physical_ram = 30_000
+    base_store = 10_000
+    ngram_store = 5_000
+    resident_store = 3_000
+    return {
+        **common,
+        "store_total": base_store,
+        "ngram_bytes": ngram_store,
+        "free_ram": physical_ram,
+        "resident_ram": resident_store,
+        "total_ram": physical_ram,
+    }
 
 
 def test_qwen4_ram_ple_refusal_is_independent_of_base_stream_source():
@@ -655,9 +680,13 @@ def _drive_qwen4_streaming_setup(tmp_path, monkeypatch, resolve_weights=None):
     cache fingerprint is computed -- so a test about that callback has to supply
     its own and actually call it.
     """
+    import sys
     import types
 
     import soup_cli.trainer.stream_setup as stream_setup
+
+    harness_total_ram = 2_000_000
+    harness_resident_ram = 4_096
 
     class _Wrapper(stream_setup.StreamingSetupMixin):
         def __init__(self):
@@ -727,6 +756,22 @@ def _drive_qwen4_streaming_setup(tmp_path, monkeypatch, resolve_weights=None):
     )
     tokenizer = types.SimpleNamespace(pad_token=None, eos_token="</s>")
 
+    monkeypatch.setitem(
+        sys.modules,
+        "transformers",
+        types.SimpleNamespace(
+            AutoConfig=types.SimpleNamespace(from_pretrained=None),
+            AutoTokenizer=types.SimpleNamespace(from_pretrained=None),
+        ),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "peft",
+        types.SimpleNamespace(
+            LoraConfig=object(),
+            TaskType=types.SimpleNamespace(CAUSAL_LM="CAUSAL_LM"),
+        ),
+    )
     monkeypatch.setattr(
         "transformers.AutoTokenizer.from_pretrained", lambda *_a, **_k: tokenizer
     )
@@ -756,12 +801,15 @@ def _drive_qwen4_streaming_setup(tmp_path, monkeypatch, resolve_weights=None):
         "soup_cli.utils.layer_stream.free_ram_bytes", lambda: 1_000_000
     )
     monkeypatch.setattr(
+        "soup_cli.utils.layer_stream.total_ram_bytes", lambda: harness_total_ram
+    )
+    monkeypatch.setattr(
         "soup_cli.utils.layer_stream_runtime.RamSource.layer_specs_from_shards",
         lambda *_a, **_k: layer_specs,
     )
     monkeypatch.setattr(
         "soup_cli.utils.layer_stream_runtime.extras_resident_bytes",
-        lambda *_a, **_k: 0,
+        lambda *_a, **_k: harness_resident_ram,
     )
     monkeypatch.setattr(
         "soup_cli.utils.layer_stream_runtime.large_layer_store_bytes",
@@ -770,9 +818,6 @@ def _drive_qwen4_streaming_setup(tmp_path, monkeypatch, resolve_weights=None):
     monkeypatch.setattr(
         "soup_cli.utils.layer_stream_runtime.large_layer_buffer_bytes",
         lambda *_a, **_k: 0,
-    )
-    monkeypatch.setattr(
-        "soup_cli.utils.layer_stream.build_stream_plan", lambda **_kwargs: plan
     )
     monkeypatch.setattr(
         "soup_cli.utils.layer_stream.resolve_disk_kind",
@@ -791,33 +836,57 @@ def _drive_qwen4_streaming_setup(tmp_path, monkeypatch, resolve_weights=None):
     )
 
     reached = []
+    captured = {}
 
     def _mode(**_kwargs):
         reached.append("mode")
 
-    def _source(**_kwargs):
+    def _source(**kwargs):
         reached.append("source")
+        captured["source"] = kwargs
         return "disk"
 
     def _disk(**_kwargs):
         reached.append("disk")
 
-    def _ram(**_kwargs):
+    def _ram(**kwargs):
         reached.append("ram")
+        captured["ram"] = kwargs
 
     monkeypatch.setattr(stream_setup, "_validate_qwen4_streaming_mode", _mode)
     monkeypatch.setattr(stream_setup, "_resolve_qwen4_ngram_source", _source)
     monkeypatch.setattr(stream_setup, "_validate_qwen4_ngram_disk", _disk)
+
+    def _plan(**kwargs):
+        captured["plan"] = kwargs
+        return plan
+
     monkeypatch.setattr(stream_setup, "_validate_qwen4_ngram_ram_fit", _ram)
+    monkeypatch.setattr("soup_cli.utils.layer_stream.build_stream_plan", _plan)
 
     _Wrapper()._setup_streaming_transformers(cfg, tcfg)
-    return reached
+    return reached, captured, harness_total_ram, harness_resident_ram
 
 
 def test_setup_reaches_every_qwen4_fail_closed_policy(tmp_path, monkeypatch):
-    reached = _drive_qwen4_streaming_setup(tmp_path, monkeypatch)
+    reached, _captured, _total_ram, _resident_ram = _drive_qwen4_streaming_setup(
+        tmp_path, monkeypatch
+    )
 
     assert reached == ["mode", "source", "disk", "ram"]
+
+
+def test_setup_passes_total_ram_to_qwen4_planner_and_refusal(tmp_path, monkeypatch):
+    _reached, captured, total_ram, resident_ram = _drive_qwen4_streaming_setup(
+        tmp_path, monkeypatch
+    )
+
+    assert captured["source"]["total_ram"] == total_ram
+    assert captured["source"]["resident_ram"] == resident_ram
+    assert captured["ram"]["total_ram"] == total_ram
+    assert captured["ram"]["resident_ram"] == resident_ram
+    assert captured["plan"]["total_ram_bytes"] == total_ram
+    assert captured["plan"]["embed_bytes"] == resident_ram
 
 
 def test_planner_fingerprints_config_json_for_qwen4_but_not_for_llama(
