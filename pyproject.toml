@@ -55,8 +55,10 @@ train = [
     # 5.16.1 (the floor declared just below) requires torch>=2.5, so no
     # installable [train] env can carry torch below 2.5 regardless of what
     # is declared here (#636). oQ/Qwen4's uint32 need (2.3) is subsumed.
-    # tests/test_issue636_torch_floor.py pins this floor against the
-    # installed transformers' requirement so the two cannot drift silently.
+    # tests/test_issue636_torch_floor.py pins this floor against the declared
+    # transformers floor's own requirement (real metadata, on the
+    # transformers-floor CI job that installs exactly 5.16.1) and pins
+    # doctor's literal copy against this file, so neither can drift silently.
     "torch>=2.5.0",
     # 5.16.1 is the validated Qwen4-Exp floor: an outer `qwen4_exp` config
     # selects the text-only Qwen4ExpForCausalLM, and the patch release restores
