@@ -1,8 +1,6 @@
-"""Cloud GPU backends for ``soup train --cloud`` (v0.71.18 #16).
+"""Cloud GPU backends for ``soup train --cloud`` (v0.71.18 #16, v0.71.22 #264).
 
-Ships Modal, RunPod, and Lambda Cloud backends. Each backend renders a plan
-from ``soup.yaml`` by default and gates live submission on provider-specific
-credentials.
+Ships Modal and Lambda Cloud backends, with RunPod planned.
 """
 
 from __future__ import annotations

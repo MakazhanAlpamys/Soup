@@ -6,13 +6,11 @@ base64-embedded — no code interpolation, no secrets) that:
 1. creates a pod with a standard PyTorch image,
 2. uses docker_args to install ``soup-cli[train]`` pinned to the running version,
 3. writes the embedded config to ``/root/soup.yaml`` inside the container,
-4. runs ``soup train --config /root/soup.yaml --yes`` on the chosen GPU,
-5. auto-terminates the pod upon completion.
+4. runs ``soup train --config /root/soup.yaml --yes`` on the chosen GPU.
 
-Default behaviour is **plan-only**: write the stub + print the planned
-``python soup_runpod_app.py`` command. ``--cloud-submit`` attempts a live submit,
-gated on a RunPod API key (``RUNPOD_API_KEY``). A mockable seam (``_RUNPOD_SUBMIT_OVERRIDE``) keeps
-the submit path testable without an account.
+Note: RunPod support is currently planned / not yet live pending lifecycle
+automation (auto-termination safeguards). CLI dispatch refuses ``--cloud runpod``,
+and ``submit_runpod_run`` raises ``NotImplementedError``.
 """
 
 from __future__ import annotations
@@ -20,7 +18,7 @@ from __future__ import annotations
 import base64
 import re
 import types
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from pathlib import PurePosixPath
 from typing import Optional
 
@@ -52,7 +50,6 @@ _GPU_RUNPOD_NAME: Mapping[str, str] = types.MappingProxyType({
 })
 SUPPORTED_GPUS: frozenset[str] = frozenset(_GPU_RUNPOD_NAME)
 
-_RUNPOD_SUBMIT_OVERRIDE: Optional[Callable[["CloudPlan"], int]] = None
 _REMOTE_OUTPUT_RE = re.compile(r"^[A-Za-z0-9._/-]+$")
 
 
@@ -107,9 +104,8 @@ def render_runpod_stub(
     cfg_b64 = base64.b64encode(encoded).decode("ascii")
     pip_spec = f"soup-cli[train]=={soup_version}"
 
-    # Bash command that runs inside the RunPod container
-    # It decodes the config, installs soup, trains, and then tells RunPod API to terminate the pod.
-    # We pass the RUNPOD_API_KEY from the environment into the pod so it can self-terminate.
+    # Bash command that runs inside the RunPod container:
+    # decodes config, installs soup-cli, and runs soup train.
     docker_args = (
         "bash -c 'cd /workspace && "
         f"pip install {pip_spec} && "

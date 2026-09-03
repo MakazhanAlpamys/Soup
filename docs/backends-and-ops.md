@@ -193,21 +193,11 @@ soup train --config soup.yaml --cloud modal --gpu a100 --cloud-submit
 `soup_modal_app.py` builds an image with `soup-cli[train]` pinned to your running version, writes
 the embedded config inside the container, and runs `soup train` on the chosen GPU.
 
-### RunPod
+### RunPod (Planned)
 
-RunPod live submission requires the SDK, an API key, and an existing network volume. Soup mounts
-the volume at `/workspace`, runs training there, and requires a relative `output` path so the
-adapter remains available after the pod terminates.
-
-```bash
-pip install "soup-cli[runpod]"
-export RUNPOD_API_KEY=...
-export RUNPOD_NETWORK_VOLUME_ID=...
-soup train --config soup.yaml --cloud runpod --gpu rtx-4090 --cloud-submit
-```
-
-`--gpu` accepts: `t4` / `l4` / `a10g` / `a100` / `a100-80gb` / `l40s` / `h100` /
-`rtx-4090` / `a6000`. Plan-only rendering does not require the RunPod SDK.
+RunPod support is currently in development and descoped from live CLI dispatch pending automated
+lifecycle and termination safeguards. Running `soup train --cloud runpod` informs the operator that
+RunPod is not yet live and points to active cloud backends (`--cloud modal` and `--cloud lambda`).
 
 ### Lambda Cloud
 

@@ -322,7 +322,7 @@ class TestSubmitLambdaLabsRun:
 
 
 class TestTrainCloudCliNew:
-    def test_cloud_runpod_plan_only(self, tmp_path, monkeypatch):
+    def test_cloud_runpod_refuses_not_yet_live(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         (tmp_path / "soup.yaml").write_text(_SOUP_YAML, encoding="utf-8")
         from typer.testing import CliRunner
@@ -332,11 +332,11 @@ class TestTrainCloudCliNew:
         result = CliRunner().invoke(
             app, ["train", "--config", "soup.yaml", "--cloud", "runpod", "--gpu", "rtx-4090"]
         )
-        assert result.exit_code == 0, (result.output, repr(result.exception))
-        assert (tmp_path / "soup_runpod_app.py").exists()
+        assert result.exit_code == 2, (result.output, repr(result.exception))
+        assert not (tmp_path / "soup_runpod_app.py").exists()
         txt = _strip_ansi(result.output)
-        assert "python soup_runpod_app.py" in txt
-        assert "plan-only" in txt.lower()
+        assert "not yet live" in txt
+        assert "--cloud modal or lambda" in txt
 
     def test_cloud_lambda_plan_only(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
@@ -360,11 +360,20 @@ class TestTrainCloudCliNew:
 
         from soup_cli.cli import app
 
+        # Test case-insensitivity on active provider Lambda
         result = CliRunner().invoke(
-            app, ["train", "--config", "soup.yaml", "--cloud", "RUNPOD", "--gpu", "a100"]
+            app, ["train", "--config", "soup.yaml", "--cloud", "LAMBDA", "--gpu", "a100"]
         )
         assert result.exit_code == 0, (result.output, repr(result.exception))
-        assert (tmp_path / "soup_runpod_app.py").exists()
+        assert (tmp_path / "soup_lambda_app.py").exists()
+
+        # And verify uppercase RUNPOD is also refused
+        res_runpod = CliRunner().invoke(
+            app, ["train", "--config", "soup.yaml", "--cloud", "RUNPOD", "--gpu", "a100"]
+        )
+        assert res_runpod.exit_code == 2
+        assert not (tmp_path / "soup_runpod_app.py").exists()
+        assert "not yet live" in _strip_ansi(res_runpod.output)
 
 
 class TestCloudNoTopLevelSDK:
@@ -384,33 +393,47 @@ class TestCloudNoSecrets:
         from soup_cli.cloud.runpod import render_runpod_stub
 
         secret = "LIVE_SECRET_ABCDEF123456"
+        hf_token = "hf_LIVE_TOKEN_ABCDEF123456"
+        wandb_key = "wandb_LIVE_KEY_ABCDEF123456"
+
         monkeypatch.setenv("LAMBDA_API_KEY", secret)
         monkeypatch.setenv("RUNPOD_API_KEY", secret)
         monkeypatch.setenv("MODAL_TOKEN_ID", secret)
         monkeypatch.setenv("MODAL_TOKEN_SECRET", secret)
         monkeypatch.setenv("LAMBDA_SSH_KEY_NAME", "registered-key")
         monkeypatch.setenv("LAMBDA_SSH_PRIVATE_KEY", "/tmp/key")
+        monkeypatch.setenv("HF_TOKEN", hf_token)
+        monkeypatch.setenv("WANDB_API_KEY", wandb_key)
 
         # 1. RunPod
         stub_runpod = render_runpod_stub(
             _SOUP_YAML, gpu="a100", output_dir="./out", soup_version="0.71.22"
         )
         assert secret not in stub_runpod
+        assert hf_token not in stub_runpod
+        assert wandb_key not in stub_runpod
 
         # 2. Lambda Labs
         stub_lambda = render_lambda_stub(
             _SOUP_YAML, gpu="a100", output_dir="./out", soup_version="0.71.22"
         )
         assert secret not in stub_lambda
+        assert hf_token not in stub_lambda
+        assert wandb_key not in stub_lambda
 
         namespace = {"__name__": "test"}
         exec(stub_lambda, namespace)
         payload = namespace["_launch_payload"]("us-tx-1", "registered-key")
-        assert secret not in str(payload)
+        payload_str = str(payload)
+        assert secret not in payload_str
+        assert hf_token not in payload_str
+        assert wandb_key not in payload_str
 
         # 3. Modal
         stub_modal = render_modal_stub(
             _SOUP_YAML, gpu="a100", output_dir="./out", soup_version="0.71.22"
         )
         assert secret not in stub_modal
+        assert hf_token not in stub_modal
+        assert wandb_key not in stub_modal
 
