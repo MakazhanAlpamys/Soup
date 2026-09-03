@@ -31,10 +31,14 @@ schema default) — and per recipe only the fields that differ from it
   pin just started doing something — the recipe's resolved config hasn't
   changed, only its relationship to the (now different) baseline has. This
   is not a small edge case in general: for a rarely-pinned field
-  (``dpo_beta``) it's ~13 recipes; for a near-universally-pinned one
-  (``epochs``, which 158 of 162 recipes declare explicitly) changing that
-  default reddens 158 named recipe tests plus the baseline — a wall of red
-  on a change that alters no recipe's actual behavior. Measured, not
+  (``dpo_beta``) it's ~13 recipes. For ``epochs`` — all 162 recipes declare
+  it explicitly, distributed ``{1: 32, 2: 4, 3: 126}`` — moving the default
+  3 -> 1 reddens 158: the 126 that pinned the old default plus the 32 that
+  already pinned the new one, both now differing from a baseline that used
+  to match one of them. The 4 pinning ``2`` stay green correctly, since
+  neither the old nor the new default was ever their value. 158 named
+  recipe tests plus the baseline — a wall of red on a change that alters
+  no recipe's actual behavior. Measured, not
   estimated; see ``TestEveryRecipeMatchesItsCommittedDelta``. Traded
   deliberately for the property that matters more (a recipe that does NOT
   touch the field stays silent), but the size of the trade is real and
@@ -156,7 +160,9 @@ class TestEveryRecipeMatchesItsCommittedDelta:
     appearing in its delta — correctly, since it is now load-bearing where
     it previously was not. Measured, not assumed to be rare: moving
     ``dpo_beta``'s default touches ~13 recipes here; moving ``epochs``'s
-    (158 of 162 recipes declare it explicitly) touches 158."""
+    (all 162 recipes declare it, `{1: 32, 2: 4, 3: 126}`) touches 158 — the
+    126 pinning the old default plus the 32 already pinning the new one,
+    not "158 declare it" (all of them do)."""
 
     @pytest.mark.parametrize("name", sorted(RECIPES))
     def test_recipe_delta_matches_its_snapshot(self, name: str):
