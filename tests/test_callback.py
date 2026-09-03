@@ -174,4 +174,3 @@ def test_on_log_gpu_memory_uses_max_allocated():
     mock_torch.cuda.max_memory_allocated.assert_called_once()
     display.update.assert_called_once()
     assert display.update.call_args.kwargs["gpu_mem"] == "8.0/16.0 GB"
-

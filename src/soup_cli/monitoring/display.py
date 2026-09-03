@@ -115,7 +115,7 @@ class TrainingDisplay:
         if self.speed > 0:
             lines.append(f"Speed: {self.speed:.2f} it/s")
         if self.gpu_mem:
-            lines.append(f"GPU:   {self.gpu_mem}")
+            lines.append(f"GPU peak: {self.gpu_mem}")
         if self.grad_norm > 0:
             lines.append(f"Grad:  {self.grad_norm:.4f}")
 

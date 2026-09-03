@@ -168,7 +168,11 @@ class _SoupTrainerCallback_body:  # noqa: N801
         if logs is None:
             return
 
-        # Try to get GPU memory
+        # Try to get GPU memory.
+        # Uses max_memory_allocated() to report peak allocated VRAM rather than the
+        # inter-step trough (#650). We deliberately do not call reset_peak_memory_stats()
+        # here because that reset is process-global and would clobber the grad-accum
+        # advisor's own peak reading at line 566 (#650 criterion 3).
         gpu_mem = ""
         try:
             import torch
