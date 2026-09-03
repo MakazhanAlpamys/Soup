@@ -481,6 +481,18 @@
       "training.reward_fn": "accuracy,format",
       "training.verifiable_domain": "math"
     },
+    "deepseek-v4-flash-dpo": {
+      "base": "deepseek-ai/DeepSeek-V4-Flash",
+      "data.format": "dpo",
+      "data.max_length": 4096,
+      "data.train": "./data/preference_train.jsonl",
+      "task": "dpo",
+      "training.gradient_accumulation_steps": 8,
+      "training.lora.alpha": 32,
+      "training.lora.r": 16,
+      "training.lr": 5e-06,
+      "training.moe_lora": true
+    },
     "deepseek-v4-flash-grpo": {
       "base": "deepseek-ai/DeepSeek-V4-Flash",
       "data.format": "auto",

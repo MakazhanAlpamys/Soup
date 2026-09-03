@@ -500,6 +500,101 @@ class TestGlm51GrpoRecipe:
         assert grpo.model == sft.model == dpo.model == self.MODEL
 
 
+class TestDeepSeekV4FlashDpoRecipe:
+    """Regression coverage for the deepseek-v4-flash-dpo recipe (#275).
+
+    DeepSeek-V4-Flash shipped SFT (v0.71.24) and GRPO (#279) but no preference
+    variant. Same two-surface discipline as the GLM-5.1 GRPO recipe above: the
+    model id is pinned on ``RecipeMeta.model`` and on the YAML ``base:`` in two
+    separate tests, so a mutation to either alone names the surface it broke.
+    """
+
+    RECIPE = "deepseek-v4-flash-dpo"
+    MODEL = "deepseek-ai/DeepSeek-V4-Flash"
+
+    def test_recipe_meta_pins_the_model_id(self) -> None:
+        """Surface 1: the catalog metadata, read without touching the YAML."""
+        from soup_cli.recipes.catalog import get_recipe
+
+        recipe = get_recipe(self.RECIPE)
+        assert recipe is not None, f"{self.RECIPE} is missing from the catalog"
+        assert recipe.model == self.MODEL
+        assert recipe.task == "dpo"
+
+    def test_yaml_base_pins_the_model_id(self) -> None:
+        """Surface 2: the YAML body, parsed directly rather than via ``.model``."""
+        import yaml
+
+        from soup_cli.recipes.catalog import get_recipe
+
+        recipe = get_recipe(self.RECIPE)
+        assert recipe is not None
+        parsed = yaml.safe_load(recipe.yaml_str)
+        assert parsed["base"] == self.MODEL
+        assert parsed["task"] == "dpo"
+
+    def test_recipe_loads_with_expected_dpo_moe_shape(self) -> None:
+        """The loaded config, not the source text."""
+        from soup_cli.config.loader import load_config_from_string
+        from soup_cli.recipes.catalog import get_recipe
+
+        recipe = get_recipe(self.RECIPE)
+        assert recipe is not None
+        config = load_config_from_string(recipe.yaml_str)
+
+        assert config.base == self.MODEL
+        assert config.task == "dpo"
+        # Fields whose recipe value differs from its schema default.
+        assert config.data.format == "dpo"
+        assert config.data.max_length == 4096
+        # Every DPO recipe in the catalog uses 5e-6; this one is not an outlier.
+        assert config.training.lr == 5e-6
+        assert config.training.gradient_accumulation_steps == 8
+        assert config.training.lora.r == 16
+        assert config.training.lora.alpha == 32
+        assert config.training.moe_lora is True
+        # Fields equal to their schema default: recipe intent, reported as
+        # equivalent mutations in the PR body rather than counted as kills.
+        assert config.training.dpo_beta == 0.1
+        assert config.training.epochs == 3
+        assert config.training.batch_size == "auto"
+        assert config.training.moe_aux_loss_coeff == 0.01
+
+    def test_show_and_use_recipe(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The CLI path a user actually takes, run rather than asserted about."""
+        show_result = runner.invoke(app, ["recipes", "show", self.RECIPE])
+        assert show_result.exit_code == 0
+        assert self.MODEL in strip_ansi(show_result.output)
+
+        monkeypatch.chdir(tmp_path)
+        use_result = runner.invoke(app, ["recipes", "use", self.RECIPE, "--yes"])
+        assert use_result.exit_code == 0
+        written = (tmp_path / "soup.yaml").read_text(encoding="utf-8")
+        assert self.MODEL in written
+        assert "task: dpo" in written
+
+    def test_v4_flash_task_variants_are_three_distinct_entries(self) -> None:
+        """The unregister direction, and the shared ``size`` the family declares."""
+        from soup_cli.recipes.catalog import RECIPES
+
+        variants = {
+            "deepseek-v4-flash-sft": "sft",
+            "deepseek-v4-flash-grpo": "grpo",
+            self.RECIPE: "dpo",
+        }
+        for name, task in variants.items():
+            assert name in RECIPES, f"{name} is missing from the catalog"
+            assert RECIPES[name].model == self.MODEL
+            assert RECIPES[name].task == task
+        assert len({RECIPES[n].task for n in variants}) == 3
+        # ``RecipeMeta.size`` is otherwise uncovered -- see the GLM-5.1 note.
+        assert len({RECIPES[n].size for n in variants}) == 1
+
+
 class TestIssue271SmolLM3Recipe:
     """Regression coverage for the smollm3-3b-sft recipe (#271)."""
 
@@ -748,7 +843,7 @@ class TestV025NewRecipes:
             assert cfg.base == recipe.model
             assert cfg.task == recipe.task
 
-    def test_catalog_size_is_163(self):
+    def test_catalog_size_is_164(self):
         """Total catalog size — grew with each release.
 
         v0.25.0 shipped 43 recipes (29 + 9 Part A + 2 Part B tools + 3 Part E MLX).
@@ -775,10 +870,11 @@ class TestV025NewRecipes:
         Issue #281 added 1 (kimi-k2.6-grpo) -> 161.
         Task-variant for #275 added 1 (qwen3.5-9b-dpo) -> 162.
         Task-variant for #275 added 1 (glm-5.1-grpo) -> 163.
+        Task-variant for #275 added 1 (deepseek-v4-flash-dpo) -> 164.
         """
         from soup_cli.recipes.catalog import RECIPES
 
-        assert len(RECIPES) == 163
+        assert len(RECIPES) == 164
 
     def test_new_recipes_searchable(self):
         """Search returns the new recipes via keyword/task filter."""
