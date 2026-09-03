@@ -25,6 +25,9 @@ from typing import Any, Callable, Optional
 # Stay safe — never go below 1; never run forever.
 _MIN_BATCH = 1
 _DEFAULT_MAX_DOUBLINGS = 8
+# Folded into every cache key. "v2" = probe gates on the measured peak (#649);
+# keys without it were written by the exception-only probe and are ignored.
+_CACHE_KEY_VERSION = "v2"
 
 ProbeFn = Callable[[int], bool]
 
@@ -149,7 +152,13 @@ def make_cache_key(
     gpu_name: str,
     gpu_memory_gb: int,
 ) -> str:
-    """Stable string key for the cache. Hashed for filesystem safety."""
+    """Stable string key for the cache. Hashed for filesystem safety.
+
+    ``_CACHE_KEY_VERSION`` is folded into the hash so an entry written by an
+    older probe is simply never found. Bumped in #649: the exception-only probe
+    approved batches that spilled to host memory under WDDM and cached them, and
+    a cached wrong answer is recomputed by nobody.
+    """
     for name, value in (
         ("max_length", max_length),
         ("lora_r", lora_r),
@@ -159,6 +168,7 @@ def make_cache_key(
             raise ValueError(f"{name} must be an int (got {type(value).__name__})")
     raw = "|".join(
         [
+            _CACHE_KEY_VERSION,
             str(base),
             str(max_length),
             str(quantization),
@@ -293,6 +303,42 @@ def pick_batch_size(
 # ---------------------------------------------------------------------------
 
 
+def _is_cuda_oom(exc: BaseException, torch: Any) -> bool:
+    """Is ``exc`` the device running out of memory, in any of torch's spellings?
+
+    The allocator raises ``torch.cuda.OutOfMemoryError``. An OOM that surfaces
+    later at a synchronize point does not: torch >= 2.8 raises
+    ``torch.AcceleratorError("CUDA error: out of memory")`` and older releases a
+    plain ``RuntimeError`` with the same text. #649 observed the second form
+    under WDDM, where the allocator had already spilled instead of raising.
+    Anything else (an illegal access, a device assert) is not a fit answer and
+    must propagate.
+    """
+    oom_cls = getattr(torch.cuda, "OutOfMemoryError", None)
+    if oom_cls is not None and isinstance(exc, oom_cls):
+        return True
+    return isinstance(exc, RuntimeError) and "out of memory" in str(exc).lower()
+
+
+def _probe_budget_bytes(torch: Any, device: str) -> Optional[int]:
+    """Bytes this process can reach on ``device``: what it holds plus what is free.
+
+    ``mem_get_info()`` is a device-level driver query, so it excludes VRAM held
+    by other processes (the streaming pre-flight relies on the same reading,
+    see :func:`~soup_cli.utils.layer_stream.resolve_available_vram_bytes`).
+    Under WDDM it reports physical VRAM: the allocator's own warning in #649
+    read ``free: 0`` while the step kept going in host memory. Returns ``None``
+    when the driver cannot answer, in which case the caller keeps the
+    exception-only criterion rather than inventing a budget.
+    """
+    try:
+        free, _total = torch.cuda.mem_get_info(device)
+        held = torch.cuda.memory_allocated(device)
+        return int(free) + int(held)
+    except Exception:  # noqa: BLE001 — a driver that cannot answer is not a fit answer
+        return None
+
+
 def make_cuda_probe_fn(
     model: Any,
     tokenizer: Any,
@@ -304,9 +350,23 @@ def make_cuda_probe_fn(
 
     Returns a closure that, given a candidate batch size ``B``, runs ONE
     forward + backward step on a synthetic batch of ``B`` sequences of
-    length ``max_length``. Returns ``True`` on success, ``False`` on
-    :class:`torch.cuda.OutOfMemoryError`. Other exceptions propagate so
-    misconfiguration surfaces.
+    length ``max_length``. Returns ``False`` when the step raises an OOM in
+    any of torch's spellings (:func:`_is_cuda_oom`) OR when it completes with
+    a measured peak above what this process can reach on the device. Other
+    exceptions propagate so misconfiguration surfaces.
+
+    The second criterion is the #649 fix. Under WDDM (native Windows, WSL2)
+    the allocator does not raise when dedicated VRAM runs out; it spills to
+    host memory and the step completes an order of magnitude slower, so "did
+    not throw" is not "fits". The gate reads ``max_memory_allocated`` after
+    the step, deliberately not ``max_memory_reserved``: reserved runs
+    1.08-1.41x allocated and gating on it refuses configurations that run
+    (measured for :func:`~soup_cli.utils.layer_stream.decide_measured_fit`,
+    which this mirrors). The threshold is the budget from
+    :func:`_probe_budget_bytes`, not a fraction of it: the probe's peak
+    already runs above the real step (12.5-14.3% in the streaming
+    measurements), which is the direction that makes an exact comparison
+    safe.
 
     Returns ``None`` on non-CUDA devices, when torch is unavailable, when
     ``cuda.is_available()`` is False, or when any of the inputs is missing
@@ -361,6 +421,11 @@ def make_cuda_probe_fn(
         except (AttributeError, RuntimeError):
             pass
         try:
+            # Budget and peak reset BEFORE the step: `synchronize()` here can
+            # surface an earlier async OOM, which the handler below classifies.
+            torch.cuda.synchronize()
+            budget = _probe_budget_bytes(torch, device)
+            torch.cuda.reset_peak_memory_stats(device)
             ids = torch.full(
                 (batch_size, max_length), pad_id, dtype=torch.long, device=device,
             )
@@ -368,19 +433,24 @@ def make_cuda_probe_fn(
             labels = ids.clone()
             outputs = model(input_ids=ids, attention_mask=attn, labels=labels)
             loss = getattr(outputs, "loss", None)
-            if loss is None:
+            if loss is not None:
+                # Drop intermediate tensor refs BEFORE backward so peak VRAM
+                # reflects the realistic training step (matches v0.35.0 policy).
+                del ids, attn, labels, outputs
+                loss.backward()
+            else:
                 # Last resort — generic signal we got past forward.
                 del ids, attn, labels, outputs
-                torch.cuda.synchronize()
-                return True
-            # Drop intermediate tensor refs BEFORE backward so peak VRAM
-            # reflects the realistic training step (matches v0.35.0 policy).
-            del ids, attn, labels, outputs
-            loss.backward()
             torch.cuda.synchronize()
-            return True
-        except torch.cuda.OutOfMemoryError:
-            return False
+            if budget is None:
+                return True
+            peak = int(torch.cuda.max_memory_allocated(device))
+            # Completed is not fitted (WDDM spill, #649): refuse on the peak.
+            return peak <= budget
+        except Exception as exc:  # noqa: BLE001 — classified, not swallowed
+            if _is_cuda_oom(exc, torch):
+                return False
+            raise
         finally:
             try:
                 model.zero_grad(set_to_none=True)

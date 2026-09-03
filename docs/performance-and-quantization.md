@@ -675,6 +675,8 @@ training:
 
 Replaces the static memory formula with a real try-halve-then-double-to-ceiling loop. Picked size is cached at `~/.soup/batch_cache.json` keyed on `(model, max_length, quantization, lora_r, gpu_name, gpu_memory_gb)` so repeat runs short-circuit.
 
+A candidate is refused when the step raises an out-of-memory error **or** when it completes with a measured peak (`max_memory_allocated`) above the VRAM this process can reach. The second check exists for the WDDM driver (native Windows and WSL2), where the allocator spills to host memory instead of raising: the step finishes, an order of magnitude slower, and without the measurement the probe would approve a batch that does not fit and cache it (#649). Cache entries written before that check carry a different key and are ignored.
+
 
 ## Multi-GPU / DeepSpeed / FSDP
 
@@ -815,7 +817,7 @@ training:
   auto_batch_size_strategy: probe
 ```
 
-For each candidate size `B`, the probe runs ONE forward + backward + step on a synthetic batch of `B` sequences of length `max_length`. On `torch.cuda.OutOfMemoryError` it halves; otherwise it doubles up to `4 × static_estimate`. The picked size is cached per `(model, max_length, quantization, lora_r, gpu)` tuple in `~/.soup/batch_cache.json` so subsequent runs skip the probe.
+For each candidate size `B`, the probe runs ONE forward + backward + step on a synthetic batch of `B` sequences of length `max_length`. On an out-of-memory error, or on a measured peak above what this process can reach on the device (the WDDM spill case, #649), it halves; otherwise it doubles up to `4 × static_estimate`. The picked size is cached per `(model, max_length, quantization, lora_r, gpu)` tuple in `~/.soup/batch_cache.json` so subsequent runs skip the probe.
 
 CPU sessions and `auto_batch_size_strategy: static` skip the probe. Synthetic batch tensors are freed before the backward pass so peak VRAM reflects the realistic training step. SFT-only this release — non-SFT trainers fall back to the static estimate.
 
