@@ -40,6 +40,12 @@ RAM_TIER_HEADROOM = 0.7
 #: store_bytes plus resident extras must also stay under this fraction of total
 #: physical RAM. Pinned host memory is unevictable while shard reads pressure the
 #: page cache, so a run can OOM even when the dynamic MemAvailable check passes (#622).
+#: **A chosen safety margin, not a measured bound** — unlike the measured constants
+#: below, no benchmark derives 0.55. It is also not a tmpfs limit: Linux defaults
+#: /dev/shm to 50% of RAM and a container's is far smaller, so a store that clears
+#: this ceiling can still overflow the shared-memory mount it is allocated from.
+#: Reading that real limit (``os.statvfs("/dev/shm")``, ``RLIMIT_MEMLOCK``) is the
+#: follow-up this ceiling stands in for, not something it measures (#644 review).
 PHYSICAL_RAM_TIER_HEADROOM = 0.55
 PHYSICAL_RAM_TIER_HEADROOM_PERCENT = round(PHYSICAL_RAM_TIER_HEADROOM * 100)
 
