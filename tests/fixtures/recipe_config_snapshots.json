@@ -631,6 +631,20 @@
       "training.lr": 5e-06,
       "training.moe_lora": true
     },
+    "glm-5.1-grpo": {
+      "base": "zai-org/GLM-5.1",
+      "data.format": "auto",
+      "data.max_length": 8192,
+      "data.train": "./data/reasoning_train.jsonl",
+      "task": "grpo",
+      "training.batch_size": 1,
+      "training.gradient_accumulation_steps": 16,
+      "training.gradient_checkpointing": true,
+      "training.lora.alpha": 64,
+      "training.lora.r": 32,
+      "training.lr": 1e-05,
+      "training.moe_lora": true
+    },
     "glm-5.1-sft": {
       "base": "zai-org/GLM-5.1",
       "data.format": "auto",
