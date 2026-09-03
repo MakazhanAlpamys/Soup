@@ -211,7 +211,8 @@ def train(
         None,
         "--resume",
         "-r",
-        help="Resume from checkpoint: path to checkpoint dir, or 'auto' for latest",
+        help="Resume from checkpoint: path to checkpoint dir ('auto' for latest); "
+        "on the MLX backend, a path to a .safetensors adapter file instead",
     ),
     wandb: bool = typer.Option(
         False,
@@ -2032,7 +2033,7 @@ def _resolve_mlx_checkpoint(resume: str, output_dir: str) -> str | None:
     if resume.lower() == "auto":
         base = Path(output_dir)
 
-        if not base.exists():
+        if not base.is_dir():
             return None
 
         highest = _highest_numbered_mlx_checkpoint(base.iterdir())

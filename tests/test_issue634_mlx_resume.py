@@ -207,6 +207,18 @@ class TestMlxCheckpointResolutionFindsStepNumberedFiles:
         missing = tmp_path / "does-not-exist"
         assert _resolve_checkpoint("auto", str(missing), backend="mlx") is None
 
+    def test_auto_returns_none_when_output_dir_is_a_file(self, tmp_path):
+        """A misconfigured output path (a file, not a directory) must fail
+        the same way a missing one does. Before this guard, base.exists()
+        was true and base.iterdir() raised NotADirectoryError instead of
+        the graceful None every other missing/empty case returns."""
+        from soup_cli.commands.train import _resolve_checkpoint
+
+        not_a_dir = tmp_path / "output_is_actually_a_file"
+        not_a_dir.write_bytes(b"")
+
+        assert _resolve_checkpoint("auto", str(not_a_dir), backend="mlx") is None
+
     def test_direct_path_to_an_adapter_file_is_accepted(self, tmp_path):
         from soup_cli.commands.train import _resolve_checkpoint
 
