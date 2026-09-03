@@ -84,6 +84,61 @@ jobs:
           python -c "import importlib.util; names=('torch','trl','datasets','peft','accelerate','bitsandbytes'); present=[name for name in names if importlib.util.find_spec(name)]; assert not present, f'unexpected training dependencies: {present}'"
       - name: Run one-step MLX SFT through the real CLI
         run: pytest -o addopts= -m smoke -k mlx_sft_smoke -q tests/test_smoke_train.py
+  pytorch-smoke:
+    # #596: exercise the real PyTorch SFT + DPO training pipeline on every PR.
+    # Keep this separate from the 3x3 matrix so the expensive model-backed
+    # smoke tests run once, not nine times.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: "utf-8"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set HF cache location
+        run: echo "HF_HOME=$RUNNER_TEMP/hf-cache" >> "$GITHUB_ENV"
+
+      - name: Restore PyTorch smoke HF cache
+        id: hf-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/hf-cache
+          key: hf-pytorch-smoke-${{ runner.os }}-${{ hashFiles('tests/test_smoke_train.py', 'pyproject.toml') }}
+          restore-keys: |
+            hf-pytorch-smoke-${{ runner.os }}-
+
+      - name: Install training dependencies
+        # torch>=2.6 is load-bearing, not belt-and-braces: sshleifer/tiny-gpt2
+        # ships only pytorch_model.bin, and transformers refuses torch.load
+        # below 2.6 under CVE-2025-32434. Removing this pin because "[dev]
+        # already pulls torch" breaks the job with a message naming the CVE
+        # rather than the cause.
+        run: pip install -e ".[dev]" "torch>=2.6"
+
+      - name: Warm tiny GPT-2 cache
+        shell: python
+        run: |
+          from huggingface_hub import snapshot_download
+
+          snapshot_download(
+              "sshleifer/tiny-gpt2",
+              allow_patterns=["*.json", "*.txt", "*.bin"],
+          )
+
+      - name: Run PyTorch smoke tests
+        run: python -m pytest -o addopts= -m smoke -q tests/
+      - name: Save PyTorch smoke HF cache
+        if: success() && steps.hf-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/hf-cache
+          key: hf-pytorch-smoke-${{ runner.os }}-${{ hashFiles('tests/test_smoke_train.py', 'pyproject.toml') }}
 
   # #502/#503/#522/#571: install the exact Torch 2.5.1 / Transformers 5.16.1 /
   # trl 0.29 / PEFT 0.20 support stack and Plotext 6.0.0 so pip cannot silently
