@@ -30,6 +30,7 @@ flagged as such rather than implied: an end-to-end train -> interrupt ->
 from __future__ import annotations
 
 import json
+import re
 import sys
 import types
 
@@ -69,11 +70,18 @@ def _mlx_wrapper(tmp_path, **training):
 
 class TestHighestNumberedCheckpointIsOrderIndependent:
     """_highest_numbered_mlx_checkpoint picks by parsed step number via
-    max(), not by sorting whatever order the filesystem enumerated files in.
-    The list passed in here is explicit and adversarial — the highest step
-    is neither first nor last — so a key/sort mistake can't coincidentally
-    still return the right file the way it could if this only iterated a
-    real directory in on-disk order."""
+    max(), not by sorting whatever order the filesystem enumerated files in,
+    and not by comparing filenames as strings. The first test's list is
+    explicit and adversarial on ORDER — the highest step is neither first
+    nor last — so a key/sort mistake can't coincidentally still return the
+    right file the way it could if this only iterated a real directory in
+    on-disk order. That alone doesn't rule out a key/TYPE mistake though:
+    equal-width zero-padded numbers sort identically whether compared as
+    strings or as ints, so a regression that keyed by ``path.name`` instead
+    of the parsed int would pass an order-independence check built only from
+    padded names. The second test uses unpadded, different-width numbers
+    (99 vs 100) specifically because string order and numeric order disagree
+    there, which is what actually pins the key down to the parsed int."""
 
     def test_the_highest_step_wins_regardless_of_input_order(self, tmp_path):
         from soup_cli.commands.train import _highest_numbered_mlx_checkpoint
@@ -88,6 +96,22 @@ class TestHighestNumberedCheckpointIsOrderIndependent:
 
         result = _highest_numbered_mlx_checkpoint(paths)
         assert result == tmp_path / "0000300_adapters.safetensors"
+
+    def test_the_highest_step_wins_by_numeric_value_not_string_order(self, tmp_path):
+        """"100_adapters.safetensors" < "99_adapters.safetensors" as strings
+        (```"1" < "9"```) but 100 > 99 as integers. Only a key that parses
+        the digits to an int before comparing picks the right file here."""
+        from soup_cli.commands.train import _highest_numbered_mlx_checkpoint
+
+        names = ["99_adapters.safetensors", "100_adapters.safetensors"]
+        paths = []
+        for name in names:
+            path = tmp_path / name
+            path.write_bytes(b"")
+            paths.append(path)
+
+        result = _highest_numbered_mlx_checkpoint(paths)
+        assert result == tmp_path / "100_adapters.safetensors"
 
     def test_non_matching_files_are_ignored(self, tmp_path):
         from soup_cli.commands.train import _highest_numbered_mlx_checkpoint
@@ -258,6 +282,48 @@ class TestCountSafetensorsTensors:
 
         assert _count_safetensors_tensors(str(path)) == 0
 
+    def test_garbage_header_length_raises_value_error_not_memory_error(self, tmp_path):
+        """A non-safetensors file's first 8 bytes decode to an arbitrary
+        integer. Unbounded, that integer sizes a ``f.read()`` call and can
+        demand gigabytes from an 8-byte file. Bounded against the file's own
+        size, it must fail fast with a ``ValueError`` naming the path."""
+        from soup_cli.trainer.mlx_sft import _count_safetensors_tensors
+
+        path = tmp_path / "not_a_checkpoint.bin"
+        path.write_bytes((2**40).to_bytes(8, "little") + b"short")
+
+        with pytest.raises(ValueError, match=re.escape(str(path))):
+            _count_safetensors_tensors(str(path))
+
+    def test_truncated_json_raises_value_error(self, tmp_path):
+        from soup_cli.trainer.mlx_sft import _count_safetensors_tensors
+
+        path = tmp_path / "truncated.safetensors"
+        header_bytes = json.dumps({"lora_a": {"shape": [1]}}).encode("utf-8")
+        # Declare the full header length but only write half of it.
+        truncated = header_bytes[: len(header_bytes) // 2]
+        path.write_bytes(len(header_bytes).to_bytes(8, "little") + truncated)
+
+        with pytest.raises(ValueError, match=re.escape(str(path))):
+            _count_safetensors_tensors(str(path))
+
+    def test_directory_path_raises_value_error_not_is_a_directory_error(self, tmp_path):
+        from soup_cli.trainer.mlx_sft import _count_safetensors_tensors
+
+        directory = tmp_path / "adapters.safetensors"
+        directory.mkdir()
+
+        with pytest.raises(ValueError, match=re.escape(str(directory))):
+            _count_safetensors_tensors(str(directory))
+
+    def test_missing_file_raises_value_error_not_file_not_found_error(self, tmp_path):
+        from soup_cli.trainer.mlx_sft import _count_safetensors_tensors
+
+        missing = tmp_path / "does_not_exist.safetensors"
+
+        with pytest.raises(ValueError, match=re.escape(str(missing))):
+            _count_safetensors_tensors(str(missing))
+
 
 class TestLoadCheckpointWeights:
     """MLXSFTTrainerWrapper._load_checkpoint_weights, tested against a fake
@@ -418,6 +484,52 @@ class TestTrainWiresCheckpointLoadingAfterLoraIsApplied:
         wrapper.train(resume_from_checkpoint=None)
 
         assert wrapper.model.load_weights_calls == []
+
+
+class TestWriterAndResolverAgreeOnOutputDirWithExperimentName:
+    """The maintainer's own reproduction for the last blocking gap: nothing
+    ties _resolve_mlx_checkpoint's flat-output-dir assumption to what
+    mlx_sft.py's train() actually writes to disk — they were verified
+    separately, never against each other. This runs train() for real
+    against the fake mlx/mlx_lm harness, with the fake trainer.train()
+    writing an adapter file the way the real one does (to args.adapter_file,
+    which train() builds from output_dir alone), on a config that sets
+    experiment_name the way a real run would. It then resolves "auto"
+    against that same config through _resolve_checkpoint — the actual CLI
+    entry point, backend and experiment_name included — and asserts it
+    finds the file train() just wrote. If mlx_sft.py ever starts nesting
+    output under experiment_name the way the transformers/unsloth trainer
+    does, the write and the resolve would point at different directories
+    and this fails, instead of both sides silently drifting apart again."""
+
+    def test_resolver_finds_the_file_train_just_wrote(self, tmp_path, monkeypatch):
+        _install_fake_mlx(monkeypatch)
+
+        def _fake_train_that_saves_an_adapter(**kwargs):
+            args = kwargs["args"]
+            _write_fake_safetensors(args.adapter_file, ["lora_a"])
+
+        sys.modules["mlx_lm.tuner.trainer"].train = _fake_train_that_saves_an_adapter
+
+        wrapper = _mlx_wrapper(tmp_path, epochs=1, lr=1e-4, batch_size=1)
+        wrapper.config.experiment_name = "exp1"
+        wrapper.model = _FakeMlxModel()
+        wrapper.tokenizer = object()
+        wrapper._dataset = {"train": [{"text": "hi"}], "val": []}
+
+        wrapper.train()
+
+        from soup_cli.commands.train import _resolve_checkpoint
+
+        resolved = _resolve_checkpoint(
+            "auto", wrapper.config.output, wrapper.config.experiment_name, backend="mlx"
+        )
+
+        assert resolved == str(tmp_path / "adapters.safetensors"), (
+            "train() writes to output_dir flat and _resolve_mlx_checkpoint "
+            "reads output_dir flat - if either side starts nesting under "
+            "experiment_name without the other, resolution silently breaks"
+        )
 
 
 class TestResumeWiringReachesTheBackendAwareResolver:

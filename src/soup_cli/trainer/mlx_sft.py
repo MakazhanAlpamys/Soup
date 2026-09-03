@@ -36,10 +36,29 @@ def _count_safetensors_tensors(path: str) -> int:
     the ``safetensors`` package, so this runs on any machine regardless of
     whether either is installed. ``__metadata__`` is the one header key
     that isn't a tensor.
+
+    ``path`` is untrusted here: the ``--resume`` direct-path branch accepts
+    any existing file, and ``--hf-resume`` can point at a directory. The
+    length prefix is bounded against the file's own size before it's used
+    to size a read, and every failure mode (garbage length, truncated or
+    non-JSON content, a directory instead of a file) collapses to one
+    ``ValueError`` naming the path, instead of a raw ``MemoryError``,
+    ``JSONDecodeError``, or ``IsADirectoryError`` reaching the caller.
     """
-    with open(path, "rb") as f:
-        header_len = int.from_bytes(f.read(8), "little")
-        header = json.loads(f.read(header_len))
+    try:
+        file_size = Path(path).stat().st_size
+        with open(path, "rb") as f:
+            header_len = int.from_bytes(f.read(8), "little")
+            if not 0 < header_len <= file_size:
+                raise ValueError(
+                    f"declared header length {header_len} is invalid for a "
+                    f"{file_size}-byte file"
+                )
+            header = json.loads(f.read(header_len))
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        raise ValueError(
+            f"MLX checkpoint {path} is not a readable safetensors file: {exc}"
+        ) from exc
     return sum(1 for key in header if key != "__metadata__")
 
 

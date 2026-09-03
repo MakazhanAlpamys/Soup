@@ -1991,11 +1991,13 @@ _MLX_CHECKPOINT_RE = re.compile(r"^(\d+)_adapters\.safetensors$")
 def _highest_numbered_mlx_checkpoint(paths) -> Path | None:
     """Pick the highest step-numbered ``NNNNNNN_adapters.safetensors`` file.
 
-    ``max()`` over the parsed step number, not a sort over whatever order
-    the filesystem's ``iterdir()`` happened to enumerate — the enumeration
-    order isn't guaranteed, so picking the last element of a sort keyed
-    wrong could still coincidentally return the right answer on a given
-    filesystem. Order-independent by construction instead.
+    ``max()`` over the parsed step number: not a sort over whatever order
+    the filesystem's ``iterdir()`` happened to enumerate (that order isn't
+    guaranteed), and not a comparison of the filenames as strings (that
+    would only agree with numeric order if every step number in a run
+    happened to be zero-padded to the same width, which nothing here
+    enforces). Keying on the parsed int makes both mistakes fail instead
+    of coincidentally still returning the right file.
     """
     numbered: list[tuple[int, Path]] = []
     for path in paths:
