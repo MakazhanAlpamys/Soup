@@ -156,6 +156,72 @@ class TestTheControl:
         find_unknown_config_keys(raw)  # must not raise
 
 
+class TestNonStringKeysAreSkippedNotCrashedOn:
+    """The ``isinstance(key, str)`` guard in ``_walk`` (#628), which had no test.
+
+    YAML permits non-string mapping keys. Without the guard the key reaches
+    ``difflib.get_close_matches``, which iterates it:
+
+        get_close_matches(1,    [...])  -> TypeError: 'int' object is not iterable
+        get_close_matches(True, [...])  -> TypeError: 'bool' object is not iterable
+
+    So a config carrying ``1:`` or ``true:`` would kill ``soup train --config``
+    with a bare TypeError raised from inside the unknown-key reporter — the
+    code whose whole purpose is to turn a confusing failure into an actionable
+    one. Measured as the single uncovered statement in ``unknown_keys.py``.
+    """
+
+    def test_python_collapses_true_and_one_into_one_key(self) -> None:
+        """Pin the fixture's own premise before relying on it.
+
+        ``True == 1`` in Python, so a mapping with both ``1:`` and ``true:``
+        holds ONE entry, not two. A test written without noticing this would
+        claim to cover two non-string key types while covering one.
+        """
+        import yaml
+
+        collapsed = yaml.safe_load("1: numeric\ntrue: boolean\n")
+        assert list(collapsed) == [1]
+        assert type(next(iter(collapsed))) is int
+
+    def test_a_numeric_key_does_not_raise(self) -> None:
+        doc = _raw(extra_training="1: numeric-key\nepochs: 3\n")
+        assert find_unknown_config_keys(doc) == []
+
+    def test_a_boolean_key_does_not_raise(self) -> None:
+        """Constructed directly: YAML would collapse ``true:`` onto ``1:``."""
+        doc = _raw(extra_training="epochs: 3\n")
+        doc["training"][True] = "boolean-key"
+        assert find_unknown_config_keys(doc) == []
+
+    def test_a_non_string_key_does_not_mask_a_real_unknown_key(self) -> None:
+        """The guard must ``continue``, not abort the loop.
+
+        This is the assertion that would survive a guard rewritten as an early
+        ``return``: the typo sits AFTER the non-string key in insertion order,
+        so it is only reported if the walk kept going.
+        """
+        doc = _raw(extra_training="1: numeric-key\nepocs: 3\n")
+        found = find_unknown_config_keys(doc)
+
+        assert [u.path for u in found] == ["training.epocs"]
+        assert "epochs" in found[0].suggestions
+
+    def test_a_non_string_key_nested_in_a_subsection_does_not_raise(self) -> None:
+        """``_walk`` recurses; the guard has to hold on the way down too."""
+        doc = _raw(extra_training="epochs: 3\n")
+        doc["training"]["lora"] = {2: "numeric-key", "r": 16, "alpah": 32}
+        found = find_unknown_config_keys(doc)
+
+        assert [u.path for u in found] == ["training.lora.alpah"]
+        assert "alpha" in found[0].suggestions
+
+    def test_control_string_keys_are_still_reported(self) -> None:
+        """Reject-everything control: the walk has not simply stopped working."""
+        doc = _raw(extra_training="epocs: 3\n")
+        assert [u.path for u in find_unknown_config_keys(doc)] == ["training.epocs"]
+
+
 class TestTheMessage:
     def test_message_names_the_path_and_the_suggestion(self) -> None:
         unknown = find_unknown_config_keys(
