@@ -31,12 +31,37 @@ def is_apple_silicon() -> bool:
 
 
 def get_mlx_version() -> Optional[str]:
-    """Return the MLX version string, or None if not installed."""
+    """Return the MLX version string, or None if not installed.
+
+    The top-level ``mlx`` package does not export ``__version__`` — the
+    attribute lives on the ``mlx.core`` extension module, so reading it off
+    ``mlx`` returned ``"unknown"`` on every correctly installed machine (#659).
+    Ask ``mlx.core`` first, then the package surface (some builds and every
+    mocked import in the test suite carry it there), then the installed
+    distribution metadata. ``"unknown"`` is the last resort, not the default.
+    """
     try:
         import mlx
     except ImportError:
         return None
-    return getattr(mlx, "__version__", "unknown")
+
+    try:
+        import mlx.core  # noqa: F401
+    except ImportError:
+        pass
+
+    for module in (getattr(mlx, "core", None), mlx):
+        version = getattr(module, "__version__", None)
+        if version:
+            return str(version)
+
+    try:
+        from importlib.metadata import PackageNotFoundError
+        from importlib.metadata import version as _pkgver
+
+        return _pkgver("mlx")
+    except (PackageNotFoundError, ImportError):
+        return "unknown"
 
 
 def get_chip_info() -> dict[str, str]:

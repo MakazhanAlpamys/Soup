@@ -91,6 +91,9 @@ def doctor(
     # GPU check
     _check_gpu()
 
+    # MLX check — Apple Silicon only; silent on every other machine
+    _check_mlx()
+
     # Resources check
     _check_resources(probe_disk=disk)
 
@@ -196,6 +199,44 @@ def _get_mlx_info() -> dict:
         return get_mlx_info()
     except Exception:  # noqa: BLE001
         return {"available": False}
+
+
+def _check_mlx():
+    """Render the MLX panel when MLX is relevant to this machine (#659).
+
+    Shown when MLX is importable, and — the case a user most needs told —
+    when this is an Apple Silicon Mac with MLX *absent*. A machine that is
+    neither gets no panel, so nothing changes for CUDA and CPU-only boxes.
+    Absent MLX is not an environment issue: it is an optional extra, so it
+    never lands in the issues list.
+    """
+    info = _get_mlx_info()
+    available = bool(info.get("available"))
+    apple_silicon = bool(info.get("apple_silicon"))
+    if not available and not apple_silicon:
+        return
+
+    if available:
+        version = info.get("version") or "unknown"
+        lines = [f"MLX:      [bold green]available[/] (v{version})"]
+    else:
+        lines = ["MLX:      [bold yellow]not installed[/]"]
+
+    chip = (info.get("chip") or {}).get("chip")
+    if chip:
+        lines.append(f"Chip:     [bold]{chip}[/]")
+
+    memory_bytes = info.get("unified_memory_bytes")
+    if memory_bytes:
+        lines.append(f"Memory:   [bold]{memory_bytes / (1024**3):.1f} GB[/] unified")
+
+    if not available:
+        lines.append(
+            "[dim]Apple Silicon detected — install the MLX backend with: "
+            'pip install "soup-cli\\[mlx]"[/]'
+        )
+
+    console.print(Panel("\n".join(lines), title="MLX"))
 
 
 def _check_gpu():

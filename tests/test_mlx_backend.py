@@ -61,6 +61,80 @@ class TestMLXDetection:
         info = mlx_utils.get_mlx_info()
         assert info["available"] is False
 
+    def test_get_mlx_version_none_when_not_installed(self, monkeypatch):
+        """No mlx package at all -> None, never a string (#659)."""
+        import builtins
+
+        real_import = builtins.__import__
+
+        def fake_import(name, *args, **kwargs):
+            if name.startswith("mlx"):
+                raise ImportError("no mlx")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", fake_import)
+        from soup_cli.utils import mlx as mlx_utils
+
+        assert mlx_utils.get_mlx_version() is None
+
+    def test_get_mlx_version_reads_mlx_core(self, monkeypatch):
+        """The version lives on ``mlx.core``, not on ``mlx`` (#659)."""
+        import sys
+        import types
+
+        fake_mlx = types.ModuleType("mlx")  # no __version__ — like the real package
+        fake_core = types.ModuleType("mlx.core")
+        fake_core.__version__ = "0.32.2"
+        fake_mlx.core = fake_core
+        monkeypatch.setitem(sys.modules, "mlx", fake_mlx)
+        monkeypatch.setitem(sys.modules, "mlx.core", fake_core)
+
+        from soup_cli.utils import mlx as mlx_utils
+
+        assert mlx_utils.get_mlx_version() == "0.32.2"
+
+    def test_get_mlx_version_falls_back_to_distribution_metadata(self, monkeypatch):
+        """Neither module exports __version__ -> installed metadata, not "unknown"."""
+        import importlib.metadata
+        import sys
+        import types
+
+        fake_mlx = types.ModuleType("mlx")
+        fake_core = types.ModuleType("mlx.core")
+        fake_mlx.core = fake_core
+        monkeypatch.setitem(sys.modules, "mlx", fake_mlx)
+        monkeypatch.setitem(sys.modules, "mlx.core", fake_core)
+        monkeypatch.setattr(
+            importlib.metadata,
+            "version",
+            lambda dist: "0.32.2" if dist == "mlx" else "0.0.0",
+        )
+
+        from soup_cli.utils import mlx as mlx_utils
+
+        assert mlx_utils.get_mlx_version() == "0.32.2"
+
+    def test_get_mlx_version_unknown_is_the_last_resort(self, monkeypatch):
+        """With no version anywhere, "unknown" — but only then (#659)."""
+        import importlib.metadata
+        import sys
+        import types
+
+        fake_mlx = types.ModuleType("mlx")
+        fake_core = types.ModuleType("mlx.core")
+        fake_mlx.core = fake_core
+        monkeypatch.setitem(sys.modules, "mlx", fake_mlx)
+        monkeypatch.setitem(sys.modules, "mlx.core", fake_core)
+
+        def _missing(dist):
+            raise importlib.metadata.PackageNotFoundError(dist)
+
+        monkeypatch.setattr(importlib.metadata, "version", _missing)
+
+        from soup_cli.utils import mlx as mlx_utils
+
+        assert mlx_utils.get_mlx_version() == "unknown"
+
     def test_estimate_mlx_batch_size_small_model(self):
         from soup_cli.utils.mlx import estimate_mlx_batch_size
 
@@ -275,8 +349,93 @@ output: ./output
 # ---------------------------------------------------------------------------
 
 class TestMLXDoctor:
-    def test_doctor_has_mlx_info(self):
-        """`soup doctor` helpers surface MLX info (no crash on non-Apple)."""
+    """`soup doctor` renders MLX — driven through the command, not the helper.
+
+    The pre-#659 version of ``test_doctor_has_mlx_info`` called
+    ``_get_mlx_info()`` directly, so it passed whether or not ``doctor``
+    invoked the helper — which it never did. These tests invoke the command
+    and read its output; ``test_doctor_omits_mlx_panel_off_apple_silicon`` is
+    the control that fails if the panel is rendered unconditionally.
+    """
+
+    @staticmethod
+    def _run_doctor(monkeypatch, info):
+        """Invoke ``soup doctor`` with a fixed MLX detection report."""
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        monkeypatch.setattr(
+            "soup_cli.commands.doctor._get_mlx_info", lambda: info, raising=True
+        )
+        result = CliRunner().invoke(app, ["doctor"])
+        assert result.exit_code == 0, result.output
+        return result.output
+
+    def test_doctor_reports_mlx_when_available(self, monkeypatch):
+        """The command prints an MLX section carrying the real version."""
+        output = self._run_doctor(
+            monkeypatch,
+            {
+                "available": True,
+                "version": "0.32.2",
+                "apple_silicon": True,
+                "chip": {"platform": "Darwin", "machine": "arm64", "chip": "Apple M1"},
+                "unified_memory_bytes": 8 * 1024**3,
+            },
+        )
+        assert "MLX" in output
+        assert "0.32.2" in output
+        assert "Apple M1" in output
+
+    def test_doctor_reports_missing_mlx_on_apple_silicon(self, monkeypatch):
+        """Apple Silicon without MLX is told so, and the command still exits 0."""
+        output = self._run_doctor(
+            monkeypatch,
+            {
+                "available": False,
+                "version": None,
+                "apple_silicon": True,
+                "chip": {"platform": "Darwin", "machine": "arm64", "chip": "Apple M1"},
+                "unified_memory_bytes": 8 * 1024**3,
+            },
+        )
+        assert "MLX" in output
+        assert "not installed" in output
+
+    def test_doctor_omits_mlx_panel_off_apple_silicon(self, monkeypatch):
+        """Control: no MLX panel on a machine that is neither Apple nor MLX-capable."""
+        output = self._run_doctor(
+            monkeypatch,
+            {
+                "available": False,
+                "version": None,
+                "apple_silicon": False,
+                "chip": {"platform": "Linux", "machine": "x86_64"},
+                "unified_memory_bytes": None,
+            },
+        )
+        assert "MLX" not in output
+
+    def test_doctor_calls_the_mlx_helper(self, monkeypatch):
+        """The wiring itself: running the command must invoke ``_get_mlx_info``."""
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        calls = []
+
+        def _spy():
+            calls.append(True)
+            return {"available": False, "apple_silicon": False}
+
+        monkeypatch.setattr("soup_cli.commands.doctor._get_mlx_info", _spy)
+        result = CliRunner().invoke(app, ["doctor"])
+        assert result.exit_code == 0, result.output
+        assert calls, "soup doctor never called _get_mlx_info()"
+
+    def test_get_mlx_info_helper_never_crashes(self):
+        """The helper stays crash-free on a non-Apple box (unchanged contract)."""
         from soup_cli.commands.doctor import _get_mlx_info
 
         info = _get_mlx_info()

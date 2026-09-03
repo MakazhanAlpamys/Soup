@@ -89,6 +89,12 @@ PyTorch/TRL Transformers backend: both extras now share the supported
 streaming dataset still needs `datasets` because that data source owns the
 dependency; the local file path below does not.
 
+`soup doctor` reports what it can see of this stack: an MLX panel with the
+installed version (read from `mlx.core.__version__`, falling back to the
+installed distribution metadata), the chip, and total unified memory — and, on
+an Apple Silicon Mac without MLX, an explicit `not installed`
+([#659](https://github.com/MakazhanAlpamys/Soup/issues/659)).
+
 `detect_device()` and `get_gpu_info()` recognise Apple Silicon when
 `backend: mlx` is set, preserving `training.quantization: 4bit` for
 `mlx-community` pre-quantized checkpoints instead of silently downgrading to
@@ -465,7 +471,7 @@ Check your environment for compatibility issues:
 soup doctor [--nccl]
 ```
 
-Shows: Python version, GPU availability, system resources (RAM/Disk), all dependency versions, and fix suggestions. Use `--nccl` to measure and check multi-GPU communication bandwidth against expected hardware ceilings.
+Shows: Python version, GPU availability, system resources (RAM/Disk), all dependency versions, and fix suggestions. On Apple Silicon it also shows an MLX panel — the installed MLX version, chip, and unified memory when MLX is importable, or `not installed` with the install command when it is not ([#659](https://github.com/MakazhanAlpamys/Soup/issues/659)); machines that are neither Apple nor MLX-capable get no MLX panel. Use `--nccl` to measure and check multi-GPU communication bandwidth against expected hardware ceilings.
 
 
 ## Version Info
