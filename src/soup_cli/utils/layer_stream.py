@@ -763,9 +763,10 @@ def choose_tier(
         if total_ram_bytes is None
         else total_ram_bytes * PHYSICAL_RAM_TIER_HEADROOM
     )
-    physical_bytes = store_bytes + int(resident_bytes)
-    fits_physical_ram = physical_limit is None or physical_bytes < physical_limit
-    if store_bytes < free_ram_bytes * headroom and fits_physical_ram:
+    resident_store_bytes = store_bytes + int(resident_bytes)
+    fits_available_ram = resident_store_bytes < free_ram_bytes * headroom
+    fits_physical_ram = physical_limit is None or resident_store_bytes < physical_limit
+    if fits_available_ram and fits_physical_ram:
         return TIER_RAM
     result = disk_kind() if callable(disk_kind) else disk_kind
     # The callable may return a DiskClassification (kind + the rate that produced
@@ -791,13 +792,19 @@ def choose_tier(
         ""
         if physical_limit is None or fits_physical_ram
         else (
-            f"; the store plus resident extras need {physical_bytes / 1e9:.1f} GB, "
+            f"; the store plus resident extras need {resident_store_bytes / 1e9:.1f} GB, "
             f"which exceeds {PHYSICAL_RAM_TIER_HEADROOM_PERCENT}% of physical RAM"
         )
     )
+    resident_note = (
+        ""
+        if resident_bytes == 0
+        else f" plus {resident_bytes / 1e9:.1f} GB of resident extras"
+    )
     raise ValueError(
         f"layer streaming needs NVMe or more RAM: the base needs "
-        f"{store_bytes / 1e9:.1f} GB, only {free_ram_bytes / 1e9:.1f} GB of RAM "
+        f"{store_bytes / 1e9:.1f} GB{resident_note}, only "
+        f"{free_ram_bytes / 1e9:.1f} GB of RAM "
         f"is free{physical_note}, and the detected disk is {kind!r} "
         f"(not NVMe){measured_note}. "
         f"Free RAM, pick a smaller base, or move the model to an NVMe drive."
@@ -1503,6 +1510,10 @@ def build_stream_plan(
         if total_ram_bytes is None
         else total_ram_bytes * PHYSICAL_RAM_TIER_HEADROOM
     )
+    available_budget_exceeded = (
+        model_bytes >= available_ram_bytes * RAM_TIER_HEADROOM
+        and host_store_bytes < available_ram_bytes * RAM_TIER_HEADROOM
+    )
     physical_budget_exceeded = (
         physical_limit is not None
         and model_bytes >= physical_limit
@@ -1530,6 +1541,12 @@ def build_stream_plan(
                 "resident while shard reads pressure the page cache, so Soup "
                 f"requires the store plus resident extras to stay under "
                 f"{PHYSICAL_RAM_TIER_HEADROOM_PERCENT}% of physical RAM. Set "
+                "stream_source='ram' to refuse rather than fall back."
+            )
+        elif available_budget_exceeded:
+            notes.append(
+                "base plus resident extras do not fit the free-RAM safety "
+                "headroom — streaming from the NVMe disk tier instead. Set "
                 "stream_source='ram' to refuse rather than fall back."
             )
         else:

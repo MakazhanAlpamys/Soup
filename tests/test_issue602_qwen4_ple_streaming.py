@@ -627,6 +627,24 @@ def test_qwen4_ngram_policy_covers_oq_ram_and_auto_defaults():
     )
 
 
+def test_qwen4_ngram_auto_counts_resident_ram_against_free_budget():
+    from soup_cli.trainer.stream_setup import _resolve_qwen4_ngram_source
+
+    assert (
+        _resolve_qwen4_ngram_source(
+            oq_ngram=False,
+            requested="auto",
+            store_total=3_000,
+            ngram_bytes=1_000,
+            free_ram=10_000,
+            resident_ram=3_000,
+            total_ram=100_000,
+            stream_source="auto",
+        )
+        == "disk"
+    )
+
+
 def _qwen4_ple_physical_limit_case(common):
     physical_ram = 30_000
     base_store = 10_000

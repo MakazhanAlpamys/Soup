@@ -1374,6 +1374,10 @@ _ISSUE622_RESIDENT_BYTES = 3_114_000_000
 _ISSUE622_SMALL_STORE_BYTES = 8_000_000_000
 _ISSUE622_FREE_RAM_BYTES = 27_000_000_000
 _ISSUE622_TOTAL_RAM_BYTES = 30_000_000_000
+_ISSUE622_REVIEW_TIGHT_FREE_RAM_BYTES = 10_000_000_000
+_ISSUE622_REVIEW_TOTAL_RAM_BYTES = 100_000_000_000
+_ISSUE622_REVIEW_STORE_BYTES = 5_000_000_000
+_ISSUE622_REVIEW_RESIDENT_BYTES = 3_000_000_000
 _ISSUE622_LAYERS = 64
 _ISSUE622_PSUTIL_TOTAL_BYTES = 123_456_789
 _ISSUE622_SCHEMA_PHYSICAL_TEXT = "physical RAM ceiling"
@@ -1462,6 +1466,40 @@ class TestPhysicalRamBudget:
         )
         assert probes == []
 
+    def test_free_ram_budget_counts_resident_extras(self):
+        from soup_cli.utils.layer_stream import TIER_DISK, choose_tier
+
+        assert (
+            choose_tier(
+                _ISSUE622_REVIEW_STORE_BYTES,
+                _ISSUE622_REVIEW_TIGHT_FREE_RAM_BYTES,
+                "nvme",
+                resident_bytes=_ISSUE622_REVIEW_RESIDENT_BYTES,
+                total_ram_bytes=_ISSUE622_REVIEW_TOTAL_RAM_BYTES,
+            )
+            == TIER_DISK
+        )
+
+    def test_free_ram_fallback_note_names_resident_extras(self):
+        from soup_cli.utils.layer_stream import TIER_DISK, build_stream_plan
+
+        plan = build_stream_plan(
+            arch="qwen2",
+            n_layers=_ISSUE622_LAYERS,
+            layer_bytes=_ISSUE622_REVIEW_STORE_BYTES // _ISSUE622_LAYERS,
+            embed_bytes=_ISSUE622_REVIEW_RESIDENT_BYTES,
+            store_bytes=_ISSUE622_REVIEW_STORE_BYTES,
+            available_ram_bytes=_ISSUE622_REVIEW_TIGHT_FREE_RAM_BYTES,
+            total_ram_bytes=_ISSUE622_REVIEW_TOTAL_RAM_BYTES,
+            pinned_limit_bytes=None,
+            disk_kind="nvme",
+        )
+
+        assert plan.tier == TIER_DISK
+        joined = " ".join(plan.notes)
+        assert "resident extras" in joined
+        assert "free-RAM" in joined
+
     def test_auto_disk_fallback_names_the_physical_ram_ceiling(self):
         from soup_cli.utils.layer_stream import TIER_DISK, build_stream_plan
 
@@ -1494,6 +1532,19 @@ class TestPhysicalRamBudget:
                 free_ram=_ISSUE622_FREE_RAM_BYTES,
                 resident_ram=_ISSUE622_RESIDENT_BYTES,
                 total_ram=_ISSUE622_TOTAL_RAM_BYTES,
+            )
+
+    def test_forced_ram_free_budget_counts_resident_extras(self):
+        from soup_cli.trainer.stream_setup import _validate_qwen4_ngram_ram_fit
+
+        with pytest.raises(ValueError, match="resident extras"):
+            _validate_qwen4_ngram_ram_fit(
+                stream_source="ram",
+                ngram_source="disk",
+                required_ram=_ISSUE622_REVIEW_STORE_BYTES,
+                free_ram=_ISSUE622_REVIEW_TIGHT_FREE_RAM_BYTES,
+                resident_ram=_ISSUE622_REVIEW_RESIDENT_BYTES,
+                total_ram=_ISSUE622_REVIEW_TOTAL_RAM_BYTES,
             )
 
     def test_total_ram_bytes_reports_psutil_total(self, monkeypatch):

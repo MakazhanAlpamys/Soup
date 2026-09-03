@@ -96,10 +96,11 @@ def _resolve_qwen4_ngram_source(
     ram_budget = free_ram * RAM_TIER_HEADROOM
     base_in_ram = (
         store_total
-        if stream_source != "disk" and store_total < ram_budget
+        if stream_source != "disk" and store_total + resident_ram < ram_budget
         else 0
     )
     ram_bytes = base_in_ram + ngram_bytes
+    fits_available_ram = ram_bytes + resident_ram < ram_budget
     physical_limit = (
         None
         if total_ram is None
@@ -109,7 +110,7 @@ def _resolve_qwen4_ngram_source(
         physical_limit is None
         or ram_bytes + resident_ram < physical_limit
     )
-    return "ram" if ram_bytes < ram_budget and fits_physical_ram else "disk"
+    return "ram" if fits_available_ram and fits_physical_ram else "disk"
 
 
 def _validate_qwen4_ngram_ram_fit(
@@ -129,27 +130,11 @@ def _validate_qwen4_ngram_ram_fit(
     )
 
     ram_required = stream_source == "ram" or ngram_source == "ram"
-    if ram_required and required_ram >= free_ram * RAM_TIER_HEADROOM:
-        policy = (
-            "training.stream_ngram_source='ram'"
-            if ngram_source == "ram"
-            else "training.stream_source='ram'"
-        )
-        fallback = (
-            "stream_ngram_source='auto' to use read-only SSD streaming"
-            if ngram_source == "ram"
-            else "stream_source='auto' to allow the disk tier"
-        )
-        raise ValueError(
-            f"{policy} but the base plus selected PLE "
-            f"storage needs {required_ram / 1e9:.1f} GB and only "
-            f"{free_ram / 1e9:.1f} GB of RAM is free. Set {fallback}, free RAM, "
-            "or pick a smaller base."
-        )
+    total_required_ram = required_ram + int(resident_ram)
     if (
         ram_required
         and total_ram is not None
-        and required_ram + resident_ram >= total_ram * PHYSICAL_RAM_TIER_HEADROOM
+        and total_required_ram >= total_ram * PHYSICAL_RAM_TIER_HEADROOM
     ):
         policy = (
             "training.stream_ngram_source='ram'"
@@ -163,10 +148,27 @@ def _validate_qwen4_ngram_ram_fit(
         )
         raise ValueError(
             f"{policy} but the base plus resident extras and selected PLE "
-            f"storage needs {(required_ram + resident_ram) / 1e9:.1f} GB, "
+            f"storage needs {total_required_ram / 1e9:.1f} GB, "
             "which exceeds "
             f"{PHYSICAL_RAM_TIER_HEADROOM_PERCENT}% of physical RAM "
             f"({total_ram / 1e9:.1f} GB). Set {fallback}, free RAM, "
+            "or pick a smaller base."
+        )
+    if ram_required and total_required_ram >= free_ram * RAM_TIER_HEADROOM:
+        policy = (
+            "training.stream_ngram_source='ram'"
+            if ngram_source == "ram"
+            else "training.stream_source='ram'"
+        )
+        fallback = (
+            "stream_ngram_source='auto' to use read-only SSD streaming"
+            if ngram_source == "ram"
+            else "stream_source='auto' to allow the disk tier"
+        )
+        raise ValueError(
+            f"{policy} but the base plus resident extras and selected PLE "
+            f"storage needs {total_required_ram / 1e9:.1f} GB and only "
+            f"{free_ram / 1e9:.1f} GB of RAM is free. Set {fallback}, free RAM, "
             "or pick a smaller base."
         )
 
