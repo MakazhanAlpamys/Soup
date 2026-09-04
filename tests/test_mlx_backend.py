@@ -62,7 +62,7 @@ class TestMLXDetection:
         assert info["available"] is False
 
     def test_get_mlx_version_reads_core_version(self, monkeypatch):
-        """get_mlx_version reads mlx.core.__version__, not mlx.__version__ (#659)."""
+        """get_mlx_version prefers mlx.core over stale distribution metadata (#659)."""
         import sys
         import types
 
@@ -75,6 +75,11 @@ class TestMLXDetection:
 
         from soup_cli.utils import mlx as mlx_utils
 
+        # The module version is authoritative after an in-place upgrade, while
+        # distribution metadata can still report the prior installed release.
+        monkeypatch.setattr(
+            "importlib.metadata.version", lambda name: "0.31.0" if name == "mlx" else None
+        )
         assert mlx_utils.get_mlx_version() == "0.32.2"
 
     def test_get_mlx_version_metadata_fallback(self, monkeypatch):
@@ -311,14 +316,6 @@ output: ./output
 
 
 class TestMLXDoctor:
-    def test_doctor_has_mlx_info(self):
-        """`soup doctor` helpers surface MLX info (no crash on non-Apple)."""
-        from soup_cli.commands.doctor import _get_mlx_info
-
-        info = _get_mlx_info()
-        assert isinstance(info, dict)
-        assert "available" in info
-
     def test_doctor_command_renders_mlx_panel(self, monkeypatch):
         """`soup doctor` renders the MLX panel when MLX is available."""
         import sys
@@ -346,7 +343,7 @@ class TestMLXDoctor:
         assert "0.32.2" in result.output
 
     def test_doctor_command_mlx_absent_control(self, monkeypatch):
-        """`soup doctor` says MLX is not installed when it cannot be imported."""
+        """`soup doctor` renders the Apple-only MLX install guidance when absent."""
         import builtins
 
         from typer.testing import CliRunner
@@ -361,11 +358,30 @@ class TestMLXDoctor:
             return real_import(name, *args, **kwargs)
 
         monkeypatch.setattr(builtins, "__import__", fake_import)
+        # Force the Apple-specific branch; otherwise optional dependencies also
+        # render "not installed" and the assertion would be vacuous off-Mac.
+        monkeypatch.setattr("soup_cli.utils.mlx.is_apple_silicon", lambda: True)
         result = CliRunner().invoke(app, ["doctor"])
 
         assert result.exit_code == 0
         assert "MLX" in result.output
-        assert "not installed" in result.output
+        assert 'pip install "soup-cli[mlx]"' in result.output
+
+    def test_doctor_command_omits_mlx_panel_off_apple_silicon(self, monkeypatch):
+        """`soup doctor` stays quiet about MLX on non-Apple platforms."""
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        # The doctor report should not dedicate a panel to an unsupported backend.
+        monkeypatch.setattr(
+            "soup_cli.commands.doctor._get_mlx_info",
+            lambda: {"available": False, "apple_silicon": False},
+        )
+        result = CliRunner().invoke(app, ["doctor"])
+
+        assert result.exit_code == 0, result.output
+        assert "Apple Silicon only" not in result.output
 
 
 if __name__ == "__main__":

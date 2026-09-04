@@ -216,7 +216,7 @@ def _check_mlx():
         chip = (info.get("chip") or {}).get("chip")
         console.print(
             Panel(
-                f"Version:  [bold green]{info.get('version', 'unknown')}[/]\n"
+                f"Version:  [bold green]{info.get('version') or 'unknown'}[/]\n"
                 f"Chip:     [bold]{chip or 'Apple Silicon'}[/]\n"
                 f"Memory:   [bold]{mem_str}[/] unified",
                 title="MLX",
@@ -227,13 +227,6 @@ def _check_mlx():
             Panel(
                 "Status:   [yellow]not installed[/]\n"
                 "Install:  [dim]pip install \"soup-cli\\[mlx]\"[/]",
-                title="MLX",
-            )
-        )
-    else:
-        console.print(
-            Panel(
-                "Status:   [dim]N/A (Apple Silicon only)[/]",
                 title="MLX",
             )
         )
