@@ -22,7 +22,7 @@ soup train --config soup.yaml --gate evals/gate.yaml  Eval-gated training
 soup train --config soup.yaml --push-as user/repo  Auto-push each checkpoint to HF as branch
 soup train --config soup.yaml --push-as user/repo --hf-resume  Resume from latest HF checkpoint branch
 soup train --config soup.yaml --find-lr        LR range finder: write recommended LR JSON
-soup train --config soup.yaml --cloud modal --gpu a100  Render a Modal.com app for serverless GPU training (plan-only; --cloud-submit submits live)
+soup train --config soup.yaml --cloud modal|lambda --gpu a100  Render a cloud GPU controller (plan-only; --cloud-submit submits live)
 soup infer --model ./output --input p.jsonl   Batch inference
 soup infer --task asr --model <whisper|adapter> --input a.jsonl --output o.jsonl [--audio-dir d --asr-language en --asr-task transcribe|translate]  Whisper transcription + WER/CER
 soup chat --model ./output                    Interactive chat
@@ -152,7 +152,7 @@ soup migrate --from llamafactory config.yaml  Import config from LLaMA-Factory
 soup migrate --from axolotl config.yml        Import config from Axolotl
 soup migrate --from unsloth notebook.ipynb    Import config from Unsloth notebook
 soup migrate --from llamafactory c.yaml --dry-run  Preview without writing
-soup recipes list                             List all 162 ready-made recipes
+soup recipes list                             List all 163 ready-made recipes
 soup recipes show llama3.1-8b-sft            Print recipe YAML
 soup recipes use llama3.1-8b-sft             Copy recipe to soup.yaml
 soup recipes search "reasoning"              Search by keyword/task/size

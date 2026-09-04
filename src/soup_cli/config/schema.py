@@ -3163,7 +3163,8 @@ class TrainingConfig(BaseModel):
         description=(
             "Where the streamed base lives. 'ram' (the only tier implemented in "
             "v0.72.0) pins the base in CPU RAM; 'disk' is the v0.72.3 overflow "
-            "tier; 'auto' picks per free RAM."
+            "tier; 'auto' picks RAM only when the store fits free-RAM headroom "
+            "and the store plus resident extras fits the physical RAM ceiling."
         ),
     )
     stream_ngram_source: Literal["auto", "ram", "disk"] = Field(
@@ -3173,9 +3174,10 @@ class TrainingConfig(BaseModel):
             "streaming. 'disk' gathers only requested rows from the original "
             "safetensors through a read-only mmap; 'ram' keeps the table in "
             "CPU RAM; 'auto' uses RAM only when the table and selected base "
-            "tier fit within the measured headroom. oMLX/oQ affine PLE tables "
-            "require 'disk' (or 'auto') so only selected rows are dequantized. "
-            "A non-default value warns when the checkpoint has no external PLE table."
+            "tier plus resident extras fit within free-RAM headroom and the "
+            "physical RAM ceiling. oMLX/oQ affine PLE tables require 'disk' "
+            "(or 'auto') so only selected rows are dequantized. A non-default "
+            "value warns when the checkpoint has no external PLE table."
         ),
     )
     stream_buffers: int = Field(

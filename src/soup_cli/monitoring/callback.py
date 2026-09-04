@@ -168,13 +168,17 @@ class _SoupTrainerCallback_body:  # noqa: N801
         if logs is None:
             return
 
-        # Try to get GPU memory
+        # Try to get GPU memory.
+        # Uses max_memory_allocated() to report peak allocated VRAM rather than the
+        # inter-step trough (#650). We deliberately do not call reset_peak_memory_stats()
+        # here because that reset is process-global and would clobber the grad-accum
+        # advisor's own peak reading at line 566 (#650 criterion 3).
         gpu_mem = ""
         try:
             import torch
 
             if torch.cuda.is_available():
-                used = torch.cuda.memory_allocated() / (1024**3)
+                used = torch.cuda.max_memory_allocated() / (1024**3)
                 total = torch.cuda.get_device_properties(0).total_memory / (1024**3)
                 gpu_mem = f"{used:.1f}/{total:.1f} GB"
         except Exception:

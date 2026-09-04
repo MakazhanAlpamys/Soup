@@ -1366,6 +1366,24 @@ def _strip_ansi(text):
     return re.sub(r"\x1b\[[0-9;]*m", "", text).replace("\n", " ")
 
 
+#: #622 repro values: the reported 32B NF4 store fits the dynamic free-RAM
+#: headroom (16.10 GB < 27 GB * 0.70) but exceeds the physical-RAM ceiling
+#: once resident extras are included (16.10 GB + 3.114 GB >= 30 GB * 0.55).
+_ISSUE622_STORE_BYTES = 16_100_000_000
+_ISSUE622_RESIDENT_BYTES = 3_114_000_000
+_ISSUE622_SMALL_STORE_BYTES = 8_000_000_000
+_ISSUE622_FREE_RAM_BYTES = 27_000_000_000
+_ISSUE622_TOTAL_RAM_BYTES = 30_000_000_000
+_ISSUE622_REVIEW_TIGHT_FREE_RAM_BYTES = 10_000_000_000
+_ISSUE622_REVIEW_TOTAL_RAM_BYTES = 100_000_000_000
+_ISSUE622_REVIEW_STORE_BYTES = 5_000_000_000
+_ISSUE622_REVIEW_RESIDENT_BYTES = 3_000_000_000
+_ISSUE622_LAYERS = 64
+_ISSUE622_PSUTIL_TOTAL_BYTES = 123_456_789
+_ISSUE622_SCHEMA_PHYSICAL_TEXT = "physical RAM ceiling"
+_ISSUE622_SCHEMA_RESIDENT_TEXT = "resident extras"
+
+
 class TestTierProbeIsLazy:
     def test_ram_tier_never_pays_for_the_probe(self):
         """The measured reason this matters: the probe is ~9 s on Windows and
@@ -1392,6 +1410,197 @@ class TestTierProbeIsLazy:
 
         assert choose_tier(1000, 10, probe) == TIER_DISK
         assert calls == [1]
+
+
+class TestPhysicalRamBudget:
+    """#622: the RAM tier needs an absolute physical-host budget too.
+
+    The reported 32B NF4 run had plenty of ``MemAvailable`` for the old dynamic
+    check, but the pinned resident store plus extras consumed too much of the
+    physical host while 18 GB of safetensors shards were being read.
+    """
+
+    def test_auto_falls_to_disk_when_physical_ram_budget_is_exceeded(self):
+        from soup_cli.utils.layer_stream import TIER_DISK, choose_tier
+
+        assert (
+            choose_tier(
+                _ISSUE622_STORE_BYTES,
+                _ISSUE622_FREE_RAM_BYTES,
+                "nvme",
+                resident_bytes=_ISSUE622_RESIDENT_BYTES,
+                total_ram_bytes=_ISSUE622_TOTAL_RAM_BYTES,
+            )
+            == TIER_DISK
+        )
+
+    def test_physical_ceiling_refusal_names_why_disk_was_needed(self):
+        from soup_cli.utils.layer_stream import choose_tier
+
+        with pytest.raises(ValueError, match="store plus resident extras"):
+            choose_tier(
+                _ISSUE622_STORE_BYTES,
+                _ISSUE622_FREE_RAM_BYTES,
+                "hdd",
+                resident_bytes=_ISSUE622_RESIDENT_BYTES,
+                total_ram_bytes=_ISSUE622_TOTAL_RAM_BYTES,
+            )
+
+    def test_physical_ram_budget_keeps_ram_when_store_is_small(self):
+        from soup_cli.utils.layer_stream import TIER_RAM, choose_tier
+
+        probes = []
+
+        def probe():
+            probes.append("probed")
+            return "nvme"
+
+        assert (
+            choose_tier(
+                _ISSUE622_SMALL_STORE_BYTES,
+                _ISSUE622_FREE_RAM_BYTES,
+                probe,
+                total_ram_bytes=_ISSUE622_TOTAL_RAM_BYTES,
+            )
+            == TIER_RAM
+        )
+        assert probes == []
+
+    def test_free_ram_budget_counts_resident_extras(self):
+        from soup_cli.utils.layer_stream import TIER_DISK, choose_tier
+
+        assert (
+            choose_tier(
+                _ISSUE622_REVIEW_STORE_BYTES,
+                _ISSUE622_REVIEW_TIGHT_FREE_RAM_BYTES,
+                "nvme",
+                resident_bytes=_ISSUE622_REVIEW_RESIDENT_BYTES,
+                total_ram_bytes=_ISSUE622_REVIEW_TOTAL_RAM_BYTES,
+            )
+            == TIER_DISK
+        )
+
+    def test_free_ram_fallback_note_names_resident_extras(self):
+        from soup_cli.utils.layer_stream import TIER_DISK, build_stream_plan
+
+        plan = build_stream_plan(
+            arch="qwen2",
+            n_layers=_ISSUE622_LAYERS,
+            layer_bytes=_ISSUE622_REVIEW_STORE_BYTES // _ISSUE622_LAYERS,
+            embed_bytes=_ISSUE622_REVIEW_RESIDENT_BYTES,
+            store_bytes=_ISSUE622_REVIEW_STORE_BYTES,
+            available_ram_bytes=_ISSUE622_REVIEW_TIGHT_FREE_RAM_BYTES,
+            total_ram_bytes=_ISSUE622_REVIEW_TOTAL_RAM_BYTES,
+            pinned_limit_bytes=None,
+            disk_kind="nvme",
+        )
+
+        assert plan.tier == TIER_DISK
+        joined = " ".join(plan.notes)
+        assert "resident extras" in joined
+        assert "free-RAM" in joined
+
+    def test_auto_disk_fallback_names_the_physical_ram_ceiling(self):
+        from soup_cli.utils.layer_stream import TIER_DISK, build_stream_plan
+
+        plan = build_stream_plan(
+            arch="qwen2",
+            n_layers=_ISSUE622_LAYERS,
+            layer_bytes=_ISSUE622_STORE_BYTES // _ISSUE622_LAYERS,
+            embed_bytes=_ISSUE622_RESIDENT_BYTES,
+            store_bytes=_ISSUE622_STORE_BYTES,
+            available_ram_bytes=_ISSUE622_FREE_RAM_BYTES,
+            total_ram_bytes=_ISSUE622_TOTAL_RAM_BYTES,
+            pinned_limit_bytes=None,
+            disk_kind="nvme",
+        )
+
+        assert plan.tier == TIER_DISK
+        joined = " ".join(plan.notes)
+        assert "physical RAM" in joined
+        assert "55%" in joined
+        assert "stream_source='ram'" in joined
+
+    def test_forced_ram_refuses_when_physical_ram_budget_is_exceeded(self):
+        from soup_cli.trainer.stream_setup import _validate_qwen4_ngram_ram_fit
+
+        with pytest.raises(ValueError, match="physical RAM"):
+            _validate_qwen4_ngram_ram_fit(
+                stream_source="ram",
+                ngram_source="disk",
+                required_ram=_ISSUE622_STORE_BYTES,
+                free_ram=_ISSUE622_FREE_RAM_BYTES,
+                resident_ram=_ISSUE622_RESIDENT_BYTES,
+                total_ram=_ISSUE622_TOTAL_RAM_BYTES,
+            )
+
+    def test_forced_ram_free_budget_counts_resident_extras(self):
+        from soup_cli.trainer.stream_setup import _validate_qwen4_ngram_ram_fit
+
+        with pytest.raises(ValueError, match="resident extras"):
+            _validate_qwen4_ngram_ram_fit(
+                stream_source="ram",
+                ngram_source="disk",
+                required_ram=_ISSUE622_REVIEW_STORE_BYTES,
+                free_ram=_ISSUE622_REVIEW_TIGHT_FREE_RAM_BYTES,
+                resident_ram=_ISSUE622_REVIEW_RESIDENT_BYTES,
+                total_ram=_ISSUE622_REVIEW_TOTAL_RAM_BYTES,
+            )
+
+    def test_total_ram_bytes_reports_psutil_total(self, monkeypatch):
+        import sys
+        import types
+
+        from soup_cli.utils.layer_stream import total_ram_bytes
+
+        fake_psutil = types.SimpleNamespace(
+            virtual_memory=lambda: types.SimpleNamespace(total=_ISSUE622_PSUTIL_TOTAL_BYTES)
+        )
+        monkeypatch.setitem(sys.modules, "psutil", fake_psutil)
+
+        assert total_ram_bytes() == _ISSUE622_PSUTIL_TOTAL_BYTES
+
+    def test_total_ram_bytes_returns_none_when_psutil_is_missing(self, monkeypatch):
+        import builtins
+        import sys
+
+        from soup_cli.utils.layer_stream import total_ram_bytes
+
+        real_import = builtins.__import__
+
+        def fake_import(name, *args, **kwargs):
+            if name == "psutil":
+                raise ImportError(name)
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.delitem(sys.modules, "psutil", raising=False)
+        monkeypatch.setattr(builtins, "__import__", fake_import)
+
+        assert total_ram_bytes() is None
+
+    def test_total_ram_bytes_returns_none_when_psutil_cannot_report(self, monkeypatch):
+        import sys
+        import types
+
+        from soup_cli.utils.layer_stream import total_ram_bytes
+
+        def no_memory():
+            raise OSError("host probe failed")
+
+        monkeypatch.setitem(sys.modules, "psutil", types.SimpleNamespace(virtual_memory=no_memory))
+
+        assert total_ram_bytes() is None
+
+    def test_schema_descriptions_name_the_physical_ram_ceiling(self):
+        from soup_cli.config.schema import TrainingConfig
+
+        stream_source = TrainingConfig.model_fields["stream_source"].description
+        stream_ngram_source = TrainingConfig.model_fields["stream_ngram_source"].description
+
+        assert _ISSUE622_SCHEMA_PHYSICAL_TEXT in stream_source
+        assert _ISSUE622_SCHEMA_RESIDENT_TEXT in stream_source
+        assert _ISSUE622_SCHEMA_PHYSICAL_TEXT in stream_ngram_source
+        assert _ISSUE622_SCHEMA_RESIDENT_TEXT in stream_ngram_source
 
 
 # ==========================================================================

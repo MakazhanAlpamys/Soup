@@ -381,6 +381,125 @@ class TestIssue280Glm51DpoRecipe:
         )
 
 
+class TestGlm51GrpoRecipe:
+    """Regression coverage for the glm-5.1-grpo recipe (#275).
+
+    GLM-5.1 shipped SFT (v0.71.24) and DPO (#280) but no reasoning variant.
+    The model id is pinned on two independent surfaces — ``RecipeMeta.model``
+    and the YAML ``base:`` — in two separate tests, so a mutation to either
+    one alone names the surface it broke, and an edit that repairs one while
+    forgetting the other cannot go green.
+    """
+
+    RECIPE = "glm-5.1-grpo"
+    MODEL = "zai-org/GLM-5.1"
+
+    def test_recipe_meta_pins_the_model_id(self) -> None:
+        """Surface 1: the catalog metadata, read without touching the YAML."""
+        from soup_cli.recipes.catalog import get_recipe
+
+        recipe = get_recipe(self.RECIPE)
+        assert recipe is not None, f"{self.RECIPE} is missing from the catalog"
+        assert recipe.model == self.MODEL
+        assert recipe.task == "grpo"
+
+    def test_yaml_base_pins_the_model_id(self) -> None:
+        """Surface 2: the YAML body, parsed directly rather than via ``.model``.
+
+        Deliberately does not read ``RecipeMeta.model`` — otherwise the two
+        surfaces would be one assertion wearing two hats.
+        """
+        import yaml
+
+        from soup_cli.recipes.catalog import get_recipe
+
+        recipe = get_recipe(self.RECIPE)
+        assert recipe is not None
+        parsed = yaml.safe_load(recipe.yaml_str)
+        assert parsed["base"] == self.MODEL
+        assert parsed["task"] == "grpo"
+
+    def test_recipe_loads_with_expected_grpo_moe_shape(self) -> None:
+        """The loaded config, not the source text — behaviour is what ships."""
+        from soup_cli.config.loader import load_config_from_string
+        from soup_cli.recipes.catalog import get_recipe
+
+        recipe = get_recipe(self.RECIPE)
+        assert recipe is not None
+        config = load_config_from_string(recipe.yaml_str)
+
+        assert config.base == self.MODEL
+        assert config.task == "grpo"
+        # Fields whose recipe value differs from its schema default: these are
+        # the ones a stripped line actually changes.
+        assert config.data.max_length == 8192
+        assert config.training.lr == 1e-5
+        assert config.training.batch_size == 1
+        assert config.training.gradient_accumulation_steps == 16
+        assert config.training.lora.r == 32
+        assert config.training.lora.alpha == 64
+        assert config.training.moe_lora is True
+        assert config.training.gradient_checkpointing is True
+        # Fields that match their schema default. Pinned as recipe intent, and
+        # reported as equivalent mutations in the PR body rather than counted
+        # as kills they are not.
+        assert config.training.grpo_beta == 0.1
+        assert config.training.num_generations == 4
+        assert config.training.reward_fn == "accuracy"
+        assert config.training.moe_aux_loss_coeff == 0.01
+
+    def test_show_and_use_recipe(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The CLI path a user actually takes, run rather than asserted about."""
+        show_result = runner.invoke(app, ["recipes", "show", self.RECIPE])
+        assert show_result.exit_code == 0
+        assert self.MODEL in strip_ansi(show_result.output)
+
+        monkeypatch.chdir(tmp_path)
+        use_result = runner.invoke(app, ["recipes", "use", self.RECIPE, "--yes"])
+        assert use_result.exit_code == 0
+        written = (tmp_path / "soup.yaml").read_text(encoding="utf-8")
+        assert self.MODEL in written
+        assert "task: grpo" in written
+
+    def test_glm51_task_variants_are_three_distinct_entries(self) -> None:
+        """The unregister direction: deleting a recipe is not the only way to break this.
+
+        All three GLM-5.1 variants must remain present, share one base, and
+        carry three different tasks — so silently repointing this recipe at a
+        sibling's task fails here rather than passing as "a recipe exists".
+        """
+        from soup_cli.recipes.catalog import RECIPES
+
+        variants = {"glm-5.1-sft": "sft", "glm-5.1-dpo": "dpo", self.RECIPE: "grpo"}
+        for name, task in variants.items():
+            assert name in RECIPES, f"{name} is missing from the catalog"
+            assert RECIPES[name].model == self.MODEL
+            assert RECIPES[name].task == task
+        assert len({RECIPES[n].task for n in variants}) == 3
+
+    def test_shares_base_and_size_with_its_glm51_siblings(self) -> None:
+        """``RecipeMeta.size`` was uncovered: mutating 754B -> 30B survived the
+        whole suite until this test existed.
+
+        Tying the three variants together is stronger than a bare literal — a
+        lone edit to one variant's size fails here, while a genuine correction
+        applied consistently to all three does not.
+        """
+        from soup_cli.recipes.catalog import get_recipe
+
+        grpo = get_recipe(self.RECIPE)
+        sft = get_recipe("glm-5.1-sft")
+        dpo = get_recipe("glm-5.1-dpo")
+        assert grpo is not None and sft is not None and dpo is not None
+
+        assert grpo.size == sft.size == dpo.size == "754B"
+        assert grpo.model == sft.model == dpo.model == self.MODEL
+
+
 class TestIssue271SmolLM3Recipe:
     """Regression coverage for the smollm3-3b-sft recipe (#271)."""
 
@@ -629,7 +748,7 @@ class TestV025NewRecipes:
             assert cfg.base == recipe.model
             assert cfg.task == recipe.task
 
-    def test_catalog_size_is_162(self):
+    def test_catalog_size_is_163(self):
         """Total catalog size — grew with each release.
 
         v0.25.0 shipped 43 recipes (29 + 9 Part A + 2 Part B tools + 3 Part E MLX).
@@ -655,10 +774,11 @@ class TestV025NewRecipes:
         Issue #276 added 1 (qwen3.5-35b-a3b-dpo) -> 160.
         Issue #281 added 1 (kimi-k2.6-grpo) -> 161.
         Task-variant for #275 added 1 (qwen3.5-9b-dpo) -> 162.
+        Task-variant for #275 added 1 (glm-5.1-grpo) -> 163.
         """
         from soup_cli.recipes.catalog import RECIPES
 
-        assert len(RECIPES) == 162
+        assert len(RECIPES) == 163
 
     def test_new_recipes_searchable(self):
         """Search returns the new recipes via keyword/task filter."""

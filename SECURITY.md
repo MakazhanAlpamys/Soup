@@ -7,8 +7,8 @@ running the most recent version from PyPI (`pip install -U soup-cli`).
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 0.73.x  | :white_check_mark: |
-| < 0.73  | :x:                |
+| 0.74.x  | :white_check_mark: |
+| < 0.74  | :x:                |
 
 ## Reporting a Vulnerability
 

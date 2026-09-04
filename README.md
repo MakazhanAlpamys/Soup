@@ -82,55 +82,54 @@ infrastructure instead of improving models. Soup fixes that.
 
 ## What's New
 
+**v0.74.0 — the frozen base was being loaded in fp32 the whole time.** Fixing that
+alone cuts peak VRAM 2.59x on an unchanged config. **116 of the 120 merged pull
+requests in this release came from outside the maintainer**, by 25 people.
+
+- **Every SFT load silently upcast the frozen base to fp32.** A base that never
+  receives an optimizer step was materialised at twice its checkpoint precision, on
+  all three load paths. Measured on an H100 with Llama-3.1-8B + LoRA: **48,241 MiB →
+  18,658 MiB peak — 2.59x, 28.9 GB**, byte-identical across three repeats. A trainable
+  base still loads fp32, deliberately.
+- **Transformers 5.x, TRL 0.29, PEFT 0.20.** Qwen3.5-family text decoders train on the
+  Transformers path, and `pip install "soup-cli[train,mlx]"` resolves again — the two
+  extras previously declared ranges that could not be satisfied together.
+- **The free Colab/Kaggle tier could not stream at all.** T4 / P100 / V100 / GTX 16xx
+  crashed layer streaming, because peft creates LoRA adapters in the checkpoint's dtype
+  while the fp16 GradScaler needs fp32 gradients.
+- **Four SSRF bypasses of the same shape.** Abbreviated, decimal, hex and octal IPv4
+  spellings (`127.1`, `2130706433`, `0x7f000001`, `0177.0.0.1`) reached the telemetry
+  and webhook guard — and, through a path the first fix never touched, the OTLP
+  tracing validator.
+- **Breaking: `soup serve` now exits 2** when bound to a non-loopback host without
+  `--tool-auth-token`, instead of printing a warning. `/v1/tools/bash` is re-enabled
+  behind real OS-level isolation, so the endpoint it protects now actually executes.
+- **`soup train --cloud lambda`**, plan-only by default, with termination in a
+  `finally` that also polls to confirm it happened.
+
+> Known limitation: the declared `torch>=2.5.0` floor does not work with `trl>=0.29` —
+> at torch 2.5.1 trl cannot import. A fresh install resolves a newer torch and is
+> unaffected; a pinned 2.5.x environment is not. See
+> [#651](https://github.com/MakazhanAlpamys/Soup/issues/651).
+
+> Python **3.10–3.12** only. On 3.13+, pip used to resolve untested PyTorch wheels that
+> crash in the native extension before Soup runs at all.
+
+<details>
+<summary>Previous release — v0.73.3, every pull request came from outside the maintainer</summary>
+
 **v0.73.3 — every pull request in this release came from someone other than the
 maintainer.** All 24 of them, from eight people, five of whom appear here for the first
 time. What they found is the interesting part: four separate flags that were validated,
 documented, and then read by nothing.
-
 - **Assistant-only masking trained on zero tokens, with a normal loss curve.** A
   tokenizer returning `BatchEncoding` — which is not a `dict` — slipped past the guard,
   so the label mask was built from the mapping's **key strings**. No exception, no
   warning, a loss curve that looks like training. Found by reading the type, not by
   hitting the bug.
 - **On Apple Silicon, `quantization: 4bit` was silently rewritten to `none`.**
-  `detect_device()` did not know MLX, so every run reported "CPU (no GPU detected)" and
-  quietly downgraded. The label was never the harm; the quantization decision is now
-  explicit and testable instead of hidden inside a 900-line function.
-- **`soup train --no-reexec` printed a launch command with your own flags missing** —
-  follow it literally and you trained without `--fsdp`, and **the run succeeded**, so
-  nothing pointed back at the hint. Two hand-maintained copies of "what the user typed";
-  the printed one is deleted, and the hint now derives from the argv that actually
-  launches the run.
-- **`training.bnb_4bit_use_double_quant` was read by nothing.** Every 4-bit path
-  hardcoded `True`, so setting it to `false` changed your config fingerprint and nothing
-  else. Fixing it correctly also meant *not* defaulting the field: a plain `True` breaks
-  round-tripping for 21 of 173 shipped configs.
-- **On Windows, a process that genuinely exits with code 259 read as alive forever**,
-  because that is also `STILL_ACTIVE`. It defeated run reconciliation and could wedge the
-  MCP execution cap shut with no error an operator could act on.
-- **New: `soup mcp serve --allow-execute`** runs a planned training or export behind a
-  single-use, server-generated confirmation token — no command, no argv, no
-  client-supplied environment — with the config snapshotted at plan time and protected
-  paths digested by content, so a model cannot be swapped between planning and running.
 
-The measurement record for the earlier VRAM work, published as written — including the
-**three readings withdrawn during it** — is
-[`benchmarks/gate-v0.73.1-measured-vram-fit.md`](benchmarks/gate-v0.73.1-measured-vram-fit.md).
-
-```yaml
-# soup.yaml — then just `soup train --config soup.yaml`
-training:
-  stream_layers: true      # base streams out of VRAM; only the adapter trains
-  quantization: 4bit       # NF4 — ~4x smaller store, so 8B fits a 4 GB card
-  batch_size: 4            # bigger batches amortise the weight read
-  stream_source: auto      # RAM when it fits, NVMe disk when it does not
-  stream_ngram_source: auto # Qwen4 PLE: RAM if dense/fitting, read-only SSD for oQ
-  seed: 1234               # new in v0.73.0
-```
-
-> Python **3.10–3.12** only. v0.73.0 adds the upper bound that was missing: on 3.13+, pip
-> used to resolve untested PyTorch wheels that crash in the native extension before Soup
-> runs at all.
+</details>
 
 <details>
 <summary>Previous release — v0.72.4, align on a laptop (DPO / ORPO / SimPO / KTO over layer streaming)</summary>
@@ -165,29 +164,6 @@ soup reward synth references.jsonl -o reward.py --output-report calib.json
 
 </details>
 
-<details>
-<summary>Previous release — v0.71.39, CI for weights not prompts (emit + provenance-bind the ship verdict)</summary>
-
-`soup ship`'s verdict became emittable, committable, and provenance-bound: `--emit-evidence` makes a
-run replay into an identical verdict, `eval.ship` in `soup.yaml` + `--config` makes the gate policy
-reviewable, and `--config` binds evidence to the exact recipe that produced it (stale evidence → exit 3).
-`soup ship --push owner/repo#N` posts the SHIP / DON'T-SHIP card on the PR.
-
-</details>
-
-<details>
-<summary>Previous release — v0.71.38, The gate grows teeth (real leg-2 regression gate)</summary>
-
-`soup ship`'s regression leg became real: a fixed, extraction-based scorer over seven bundled,
-offline suites (MCQ · arithmetic · tool-calling · JSON validity · safety/refusal). A tune that
-wins your task but quietly breaks tool-calling now gets a **DON'T SHIP**. Zero new deps.
-
-```bash
-soup ship --base ./base --adapter ./my-lora --task-eval my_task.jsonl
-#   exit 0 = SHIP · 2 = DON'T SHIP · 3 = bad flags · 1 = runtime error
-```
-
-</details>
 
 Full history: [CHANGELOG.md](CHANGELOG.md) &middot; [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 

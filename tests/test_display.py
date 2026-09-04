@@ -59,6 +59,8 @@ def test_display_render_panel():
     rendered = _render_to_str(panel)
     assert "62/100" in rendered
     assert "0.847" in rendered
+    # The panel label must identify the figure as a peak, not just "GPU:" (#650).
+    assert "GPU peak:" in rendered
 
 
 def test_display_render_zero_steps():

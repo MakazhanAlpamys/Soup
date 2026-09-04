@@ -28,6 +28,40 @@ from soup_cli.config.schema import SoupConfig
 console = Console()
 
 
+def _count_safetensors_tensors(path: str) -> int:
+    """Number of tensors declared in a ``.safetensors`` file's own header.
+
+    Parsed directly from the format (an 8-byte little-endian length prefix
+    followed by that many bytes of JSON metadata) rather than via mlx or
+    the ``safetensors`` package, so this runs on any machine regardless of
+    whether either is installed. ``__metadata__`` is the one header key
+    that isn't a tensor.
+
+    ``path`` is untrusted here: the ``--resume`` direct-path branch accepts
+    any existing file, and ``--hf-resume`` can point at a directory. The
+    length prefix is bounded against the file's own size before it's used
+    to size a read, and every failure mode (garbage length, truncated or
+    non-JSON content, a directory instead of a file) collapses to one
+    ``ValueError`` naming the path, instead of a raw ``MemoryError``,
+    ``JSONDecodeError``, or ``IsADirectoryError`` reaching the caller.
+    """
+    try:
+        file_size = Path(path).stat().st_size
+        with open(path, "rb") as f:
+            header_len = int.from_bytes(f.read(8), "little")
+            if not 0 < header_len <= file_size:
+                raise ValueError(
+                    f"declared header length {header_len} is invalid for a "
+                    f"{file_size}-byte file"
+                )
+            header = json.loads(f.read(header_len))
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        raise ValueError(
+            f"MLX checkpoint {path} is not a readable safetensors file: {exc}"
+        ) from exc
+    return sum(1 for key in header if key != "__metadata__")
+
+
 #: What `target_modules: auto` means on MLX. peft resolves `auto` per
 #: architecture; mlx-lm has no equivalent, so the streamed-down default is
 #: attention Q/V — the modules `_apply_lora` has always actually trained.
@@ -174,15 +208,49 @@ class MLXSFTTrainerWrapper:
             },
         )
 
+    def _load_checkpoint_weights(self, checkpoint_path: str) -> None:
+        """Warm-start LoRA weights from a saved MLX checkpoint (#634).
+
+        Must run after ``_apply_lora`` — the saved file holds only the
+        LoRA-shaped tensors, which don't exist on the model until the linear
+        layers have been converted.
+
+        This restores adapter WEIGHTS only. mlx-lm's LoRA trainer exposes no
+        optimizer state and no step/iteration count, so it is a warm start,
+        not a resume of training state: the step count and data position
+        both restart from zero regardless of how far the checkpoint got.
+        Say so rather than implying a full resume. Replaying the dataset
+        from the saved iteration is a separate, harder claim — it needs a
+        reproducible iteration order tied to training.seed/data_seed, which
+        the MLX path does not thread yet (#353) — and is out of scope here.
+
+        ``strict=False`` means a checkpoint saved under a different
+        ``lora.r`` or ``target_modules`` drops every tensor in silence —
+        exactly the #392 failure mode this file's own
+        ``resolve_mlx_target_keys`` docstring records. What's checked here
+        is the narrower, MLX-independent half of that: the checkpoint FILE
+        itself declares at least one tensor before ``load_weights`` ever
+        runs, so an empty or corrupt checkpoint fails loudly instead of
+        producing a warm start from nothing that still prints two green
+        messages. Confirming that the declared tensors actually match this
+        model's LoRA-shaped parameter names — the other half — needs mlx
+        itself to introspect, which isn't available to verify here.
+        """
+        tensor_count = _count_safetensors_tensors(checkpoint_path)
+        if tensor_count == 0:
+            raise ValueError(
+                f"MLX checkpoint {checkpoint_path} declares no tensors; refusing "
+                "to warm-start from an empty or corrupt checkpoint file"
+            )
+        console.print(
+            f"[green]MLX: loading checkpoint weights from[/] {checkpoint_path} "
+            f"({tensor_count} tensors)"
+        )
+        self.model.load_weights(checkpoint_path, strict=False)
+
     def train(self, display=None, tracker=None, run_id=None, resume_from_checkpoint=None) -> dict:
         """Run MLX training loop via mlx-lm (mlx-lm >= 0.31 API)."""
         del display, tracker, run_id  # accepted for CLI-contract parity
-
-        if resume_from_checkpoint is not None:
-            console.print(
-                "[yellow]MLX backend does not support --resume yet; "
-                "starting training from scratch.[/]"
-            )
 
         self._require_mlx()
 
@@ -201,6 +269,9 @@ class MLXSFTTrainerWrapper:
             )
 
         self._apply_lora(self.model)
+
+        if resume_from_checkpoint is not None:
+            self._load_checkpoint_weights(resume_from_checkpoint)
 
         batch_size = (
             int(cfg.training.batch_size)

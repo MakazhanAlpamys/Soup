@@ -152,3 +152,25 @@ def test_on_log_without_tracker():
     callback.on_log(_make_args(), _make_state(), MagicMock(), logs=logs)
 
     display.update.assert_called_once()
+
+
+def test_on_log_gpu_memory_uses_max_allocated():
+    """on_log should report peak VRAM via max_memory_allocated rather than current allocation."""
+    display = MagicMock()
+    callback = SoupTrainerCallback(display=display)
+    state = _make_state()
+
+    mock_torch = MagicMock()
+    mock_torch.cuda.is_available.return_value = True
+    mock_torch.cuda.max_memory_allocated.return_value = 8 * (1024**3)
+    mock_torch.cuda.memory_allocated.return_value = 2 * (1024**3)
+    props = MagicMock()
+    props.total_memory = 16 * (1024**3)
+    mock_torch.cuda.get_device_properties.return_value = props
+
+    with patch.dict("sys.modules", {"torch": mock_torch}):
+        callback.on_log(_make_args(), state, MagicMock(), logs={"loss": 1.0})
+
+    mock_torch.cuda.max_memory_allocated.assert_called_once()
+    display.update.assert_called_once()
+    assert display.update.call_args.kwargs["gpu_mem"] == "8.0/16.0 GB"

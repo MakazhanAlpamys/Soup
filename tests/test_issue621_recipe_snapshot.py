@@ -1,16 +1,48 @@
-"""#621 — pin every recipe's *resolved* config, not its YAML source text.
+"""#621 / #638 — pin every recipe's *resolved* config, not its YAML source
+text, without storing the same ~296 schema defaults 162 times over.
 
 162 recipes across the catalog declare training fields that happen to equal
 the schema default (``dpo_beta: 0.1``, etc.). Deleting one of those lines is
 an equivalent mutation — the resolved ``SoupConfig`` is byte-identical either
-way — so no test should be built to kill it, and none here is.
+way — so no test should be built to kill it, and none here is (#621).
 
 The real exposure is the other direction: nothing pins what a recipe
 *resolves to*, so a schema-default change silently retunes every recipe that
-relies on that default, and the 36-ish recipes (per field) that omit the line
-change behaviour with no red test anywhere. This snapshots the resolved
-``SoupConfig.model_dump()`` for every recipe against a committed fixture, so
-that kind of drift fails with a diff instead of shipping silently.
+relies on that default, with no red test anywhere. #621's original fixture
+pinned this by storing each recipe's full resolved config — but that meant
+162 copies of the same ~296 defaults (49,586 lines, 1.55 MB), and a single
+schema-default change reddened all 149-odd recipes that didn't override it,
+identically to how an *added* field reddened all 162 — the same wall of red
+for two different classes of change (#638).
+
+This fixture now stores the shared defaults ONCE, as ``baseline`` — a
+minimal resolved config (placeholder base/task/data, everything else at
+schema default) — and per recipe only the fields that differ from it
+(``recipes``). Two consequences:
+
+- A schema-default change (or an added field) moves the ONE committed
+  baseline value. ``TestBaselineMatchesTheLiveSchema`` is the only place
+  that shows up — not once per recipe that stays silent on the field.
+- Per-recipe tests compare each recipe's delta *against the live baseline*,
+  not the committed one, so they stay silent for every recipe that doesn't
+  touch the changed field. What they do NOT erase: a recipe that redundantly
+  pins a value equal to the OLD default starts appearing in its own delta
+  once the default moves out from under it, because what used to be a no-op
+  pin just started doing something — the recipe's resolved config hasn't
+  changed, only its relationship to the (now different) baseline has. This
+  is not a small edge case in general: for a rarely-pinned field
+  (``dpo_beta``) it's ~13 recipes. For ``epochs`` — all 162 recipes declare
+  it explicitly, distributed ``{1: 32, 2: 4, 3: 126}`` — moving the default
+  3 -> 1 reddens 158: the 126 that pinned the old default plus the 32 that
+  already pinned the new one, both now differing from a baseline that used
+  to match one of them. The 4 pinning ``2`` stay green correctly, since
+  neither the old nor the new default was ever their value. 158 named
+  recipe tests plus the baseline — a wall of red on a change that alters
+  no recipe's actual behavior. Measured, not
+  estimated; see ``TestEveryRecipeMatchesItsCommittedDelta``. Traded
+  deliberately for the property that matters more (a recipe that does NOT
+  touch the field stays silent), but the size of the trade is real and
+  belongs in the record rather than in the flattering example.
 
 Regenerate the fixture with ``python scripts/generate_recipe_snapshot.py``
 after a deliberate change — never automatically. The comparison is between
@@ -27,63 +59,82 @@ from pathlib import Path
 
 import pytest
 
+from scripts.generate_recipe_snapshot import build_baseline, delta, flatten
 from soup_cli.recipes.catalog import RECIPES
 
 _FIXTURE_PATH = (
     Path(__file__).resolve().parent / "fixtures" / "recipe_config_snapshots.json"
 )
 _REGENERATE_HINT = "regenerate with scripts/generate_recipe_snapshot.py"
+_MISSING = object()
 
 
 @functools.lru_cache(maxsize=1)
-def _load_fixture() -> dict[str, dict]:
-    return json.loads(_FIXTURE_PATH.read_text(encoding="utf-8"))
+def _load_fixture() -> dict:
+    data = json.loads(_FIXTURE_PATH.read_text(encoding="utf-8"))
+    if not (isinstance(data, dict) and "baseline" in data and "recipes" in data):
+        # A raised exception rather than an assert: assertions are stripped
+        # under `python -O`, which would let a malformed fixture slip past
+        # this guard and fail later with a far less clear error.
+        raise ValueError(
+            f"fixture must be a dict with 'baseline' and 'recipes' keys; {_REGENERATE_HINT}"
+        )
+    return data
+
+
+# Forces a collection-time failure (not a per-test runtime error) if the
+# fixture is missing or malformed — matches #621's original property that a
+# deleted fixture is loud immediately, not 162 identical errors.
+_load_fixture()
 
 
 @functools.lru_cache(maxsize=1)
-def _live_snapshots() -> dict[str, dict]:
-    """The same resolution `scripts/generate_recipe_snapshot.py` uses to
-    build the committed fixture, called here instead of reimplemented.
-
-    Two independent copies of `model_dump(mode="json")` over
-    `load_config_from_string(...)` — one in this file, one in the script —
-    is exactly the shape this repo has been bitten by before (#372, #392):
-    a fix or a behavior change lands in one and the other silently drifts,
-    at which point the fixture becomes unregenerable and nobody learns
-    until a release. Cached so the whole catalog resolves once per test
-    session rather than once per parametrized recipe.
-    """
-    from scripts.generate_recipe_snapshot import build_snapshot
-
-    return build_snapshot()
+def _live_baseline() -> dict[str, object]:
+    return build_baseline()
 
 
-def _flatten(d: dict, prefix: str = "") -> dict[str, object]:
-    """Flatten a nested dict to ``{"training.lora.r": 16, ...}`` for readable diffs."""
-    out: dict[str, object] = {}
-    for key, value in d.items():
-        path = f"{prefix}.{key}" if prefix else key
-        if isinstance(value, dict):
-            out.update(_flatten(value, path))
-        else:
-            out[path] = value
-    return out
+def _resolve_flat(name: str) -> dict[str, object]:
+    from soup_cli.config.loader import load_config_from_string
+
+    return flatten(load_config_from_string(RECIPES[name].yaml_str).model_dump(mode="json"))
 
 
 def _diff(expected: dict, actual: dict) -> dict[str, tuple[object, object]]:
-    """Paths present in either side whose values differ."""
-    flat_expected = _flatten(expected)
-    flat_actual = _flatten(actual)
-    paths = set(flat_expected) | set(flat_actual)
-    return {
-        path: (flat_expected.get(path, "<missing>"), flat_actual.get(path, "<missing>"))
-        for path in paths
-        if flat_expected.get(path, "<missing>") != flat_actual.get(path, "<missing>")
-    }
+    """Paths present in either side whose values differ.
+
+    Compares against an internal sentinel, not the string ``"<missing>"`` —
+    a real config value equal to that string must never compare as
+    spuriously equal to an absent one. The sentinel only ever appears in
+    the returned tuples as a stand-in for display.
+    """
+    paths = sorted(set(expected) | set(actual))
+    out: dict[str, tuple[object, object]] = {}
+    for path in paths:
+        e = expected.get(path, _MISSING)
+        a = actual.get(path, _MISSING)
+        if e != a:
+            out[path] = (
+                "<missing>" if e is _MISSING else e,
+                "<missing>" if a is _MISSING else a,
+            )
+    return out
 
 
-def _resolve(name: str) -> dict:
-    return _live_snapshots()[name]
+class TestBaselineMatchesTheLiveSchema:
+    """The one place a schema-default change (or a newly added field) shows
+    up. Everything downstream is checked relative to this baseline, not the
+    live schema directly, so a shift here is exactly the signal that "the
+    shared defaults moved" — not one identical copy of that signal per
+    recipe that happens not to override the changed field."""
+
+    def test_baseline_matches_committed_snapshot(self):
+        fixture = _load_fixture()
+        diff = _diff(fixture["baseline"], _live_baseline())
+        assert not diff, (
+            f"the shared schema-default baseline has changed. If this is "
+            f"deliberate, review the diff and {_REGENERATE_HINT}. Differing "
+            f"fields (field: (snapshot, resolved)): {diff}"
+        )
 
 
 class TestFixtureCoversExactlyTheCurrentCatalog:
@@ -91,7 +142,7 @@ class TestFixtureCoversExactlyTheCurrentCatalog:
         """A recipe added or removed without regenerating fails here first,
         with a clear "which names" message, rather than as a KeyError deep
         in a parametrized test."""
-        fixture_names = set(_load_fixture())
+        fixture_names = set(_load_fixture()["recipes"])
         catalog_names = set(RECIPES)
         assert fixture_names == catalog_names, (
             f"missing from fixture: {sorted(catalog_names - fixture_names)}; "
@@ -100,17 +151,30 @@ class TestFixtureCoversExactlyTheCurrentCatalog:
         )
 
 
-class TestEveryRecipeMatchesItsCommittedSnapshot:
+class TestEveryRecipeMatchesItsCommittedDelta:
+    """Compares each recipe's delta against the LIVE baseline, not the
+    committed one — a schema-default change alone must not move this test,
+    only ``TestBaselineMatchesTheLiveSchema`` above. The one case that still
+    reaches here: a recipe whose own declared value happens to equal the OLD
+    default stops being a no-op once the default moves, and starts
+    appearing in its delta — correctly, since it is now load-bearing where
+    it previously was not. Measured, not assumed to be rare: moving
+    ``dpo_beta``'s default touches ~13 recipes here; moving ``epochs``'s
+    (all 162 recipes declare it, `{1: 32, 2: 4, 3: 126}`) touches 158 — the
+    126 pinning the old default plus the 32 already pinning the new one,
+    not "158 declare it" (all of them do)."""
+
     @pytest.mark.parametrize("name", sorted(RECIPES))
-    def test_recipe_resolves_to_its_snapshot(self, name: str):
+    def test_recipe_delta_matches_its_snapshot(self, name: str):
         fixture = _load_fixture()
-        assert name in fixture, (
+        assert name in fixture["recipes"], (
             f"{name!r} is in the catalog but missing from the snapshot fixture; "
             f"{_REGENERATE_HINT}"
         )
-        diff = _diff(fixture[name], _resolve(name))
+        live_delta = delta(_resolve_flat(name), _live_baseline())
+        diff = _diff(fixture["recipes"][name], live_delta)
         assert not diff, (
-            f"recipe {name!r} no longer resolves to its committed snapshot. "
+            f"recipe {name!r} no longer resolves to its committed delta. "
             f"If this is a deliberate change, review the diff and {_REGENERATE_HINT}. "
             f"Differing fields (field: (snapshot, resolved)): {diff}"
         )
@@ -119,20 +183,20 @@ class TestEveryRecipeMatchesItsCommittedSnapshot:
 class TestTheSnapshotIsNotVacuous:
     """Demonstrates the comparison actually discriminates, rather than
     merely asserting it does. Exercises `_diff` directly on synthetic
-    dicts, not a live recipe — an unrelated schema addition reddens every
-    real per-recipe test already, and coupling these controls to the same
-    live data would redden them too, making "did the guard break, or did
-    the data move?" unanswerable from the log."""
+    dicts, not a live recipe — an unrelated schema addition reddens the
+    baseline test already, and coupling these controls to the same live
+    data would redden them too, making "did the guard break, or did the
+    data move?" unanswerable from the log."""
 
     def test_a_changed_field_value_is_detected(self):
-        expected = {"training": {"dpo_beta": 0.1, "epochs": 3}}
-        actual = {"training": {"dpo_beta": 0.2, "epochs": 3}}
+        expected = {"training.dpo_beta": 0.1, "training.epochs": 3}
+        actual = {"training.dpo_beta": 0.2, "training.epochs": 3}
 
         assert _diff(expected, actual) == {"training.dpo_beta": (0.1, 0.2)}
 
     def test_identical_dicts_have_no_diff(self):
         """Negative control: same values, must be silent."""
-        expected = {"training": {"dpo_beta": 0.1, "epochs": 3}}
-        actual = {"training": {"dpo_beta": 0.1, "epochs": 3}}
+        expected = {"training.dpo_beta": 0.1, "training.epochs": 3}
+        actual = {"training.dpo_beta": 0.1, "training.epochs": 3}
 
         assert _diff(expected, actual) == {}

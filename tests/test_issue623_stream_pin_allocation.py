@@ -35,13 +35,20 @@ allocate GPU buffers:
   with a stated reason elsewhere, never silently) — no stubs, real
   ``RamSource``, ``is_pinned()`` on every store tensor, both directions.
 
-Hops BELOW the runtime boundary are not re-tested here:
+Most hops BELOW the runtime boundary are not re-tested here:
 ``TestRequirePinSurvivesEveryHop`` (test_v07203.py) already drives the real
 CPU chain through ``build_streamed_model -> install_streaming ->
 _build_source -> RamSource`` for the pin-requested direction, and the
 pre-flight note for ``stream_pin: false`` is pinned by
 ``TestAutoTierFallback``. CPU-only throughout; the tiny checkpoint is the
 established harness fixture shape.
+
+One hop below the boundary IS covered here, added once #647 closed the
+allocation gap above and left the unpinned RAM-tier construction as the one
+remaining piece unprotected on a CUDA-less CI cell:
+``TestBuildSourceCpuOnlyPinFalse`` calls ``_build_source(pin=False,
+tier="ram")`` directly, no simulation needed, since its unpinned branch never
+requests page-locked memory.
 """
 
 from __future__ import annotations
@@ -249,6 +256,43 @@ class TestTheWiringReachesTheRuntimeBoundary:
         )
         assert captured["require_pin"] is False
         assert "(pinned)" in panel
+
+
+class TestBuildSourceCpuOnlyPinFalse:
+    """The gap named in the issue thread once #647 landed: the two deepest
+    hops below the runtime boundary (this file's own ``TestTheAllocationItself``,
+    ``TestRequirePinSurvivesEveryHop`` in test_v07203.py) are CUDA-gated, so
+    the RAM tier's unpinned path is unprotected on all nine CI cells. Drives
+    the real, unmocked ``_build_source(pin=False, tier="ram")`` directly: its
+    ``if not pin:`` branch never reaches ``pin_memory=True``, so nothing here
+    needs a CUDA device.
+    """
+
+    def test_build_source_pin_false_ram_tier_yields_unpinned_ramsource(
+        self, tmp_path
+    ) -> None:
+        import torch
+        from safetensors.torch import save_file
+
+        from soup_cli.utils.layer_shard import layer_shard_path
+        from soup_cli.utils.layer_stream_runtime import RamSource, _build_source
+
+        shard_dir = tmp_path / "shards"
+        shard_dir.mkdir()
+        save_file(
+            {"weight": torch.zeros(4, 4, dtype=torch.float32)},
+            layer_shard_path(str(shard_dir), 0),
+        )
+        spec = {"weight": ((4, 4), "float32")}
+
+        source, pinned = _build_source(
+            str(shard_dir), 1, spec, pin=False, console=None, tier="ram"
+        )
+
+        assert isinstance(source, RamSource)
+        assert pinned is False
+        assert source.pinned is False
+        assert source.get(0, "weight").is_pinned() is False
 
 
 @requires_cuda

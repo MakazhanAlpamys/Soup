@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -18,6 +19,7 @@ from soup_cli.monitoring.display import TrainingDisplay
 from soup_cli.utils.gpu import detect_device, get_gpu_info, resolve_quantization
 
 if TYPE_CHECKING:  # pragma: no cover - type hints only, no runtime import
+    from soup_cli.config.schema import SoupConfig
     from soup_cli.utils.energy import EnergyMeasurement
 
 console = Console()
@@ -209,7 +211,8 @@ def train(
         None,
         "--resume",
         "-r",
-        help="Resume from checkpoint: path to checkpoint dir, or 'auto' for latest",
+        help="Resume from checkpoint: path to checkpoint dir ('auto' for latest); "
+        "on the MLX backend, a path to a .safetensors adapter file instead",
     ),
     wandb: bool = typer.Option(
         False,
@@ -476,26 +479,26 @@ def train(
         None,
         "--cloud",
         help=(
-            "Train on a serverless cloud GPU instead of locally (v0.71.18 "
-            "#16). Supported: modal. Renders a Modal app stub from the "
-            "config (plan-only); use --cloud-submit to submit live."
+            "Train on a cloud GPU instead of locally (v0.71.18 #16). Supported: "
+            "modal, lambda (runpod is planned). Renders a cloud app stub from the config "
+            "(plan-only); use --cloud-submit to submit live."
         ),
     ),
     gpu: str = typer.Option(
         "a100",
         "--gpu",
         help=(
-            "Cloud GPU type for --cloud (t4 / l4 / a10g / a100 / a100-80gb / "
-            "l40s / h100). Default a100. v0.71.18 #16."
+            "Cloud GPU type for --cloud (t4 / l4 / a10 / a10g / a100 / a100-80gb / "
+            "l40s / h100 / a6000). Default a100. Provider-specific allowlists apply."
         ),
     ),
     cloud_submit: bool = typer.Option(
         False,
         "--cloud-submit",
         help=(
-            "With --cloud modal, submit the rendered run live via the Modal "
-            "SDK (gated on a Modal token: run `modal setup` first). Default "
-            "is plan-only (render + print the `modal run` command)."
+            "With --cloud, submit the rendered run live via the cloud's SDK or API "
+            "(gated on respective provider token/API key). Default is plan-only "
+            "(render + print the command). Lambda requires a registered SSH key."
         ),
     ),
 ):
@@ -636,53 +639,76 @@ def train(
         cfg.training.minillm_on_policy = True
         console.print("[green]MiniLLM on-policy rollout enabled[/]")
 
-    # --- Cloud GPU training (v0.71.18 #16) ---
+    # --- Cloud GPU training (v0.71.18 #16, v0.71.22 #264) ---
     if cloud:
         from soup_cli import __version__ as _soup_version
-        from soup_cli.cloud import modal as _modal_cloud
+
+        cloud = cloud.lower()
+        if cloud == "runpod":
+            console.print(
+                "[yellow]RunPod cloud training is not yet live; use --cloud modal or lambda.[/]"
+            )
+            raise typer.Exit(2)
+        elif cloud == "modal":
+            from soup_cli.cloud import modal as cloud_mod
+        elif cloud == "lambda":
+            from soup_cli.cloud import lambda_labs as cloud_mod
+        else:
+            console.print(
+                f"[red]Invalid --cloud:[/] {markup_escape(cloud)}. "
+                "Supported: modal, lambda (runpod is planned)."
+            )
+            raise typer.Exit(2)
 
         try:
-            _modal_cloud.validate_cloud(cloud)
-            _modal_cloud.validate_gpu(gpu)
+            cloud_mod.validate_cloud(cloud)
+            cloud_mod.validate_gpu(gpu)
         except ValueError as exc:
             console.print(
                 f"[red]Invalid --cloud / --gpu:[/] {markup_escape(str(exc))}"
             )
             raise typer.Exit(2) from exc
         try:
-            plan = _modal_cloud.plan_modal_run(
+            # We call the generic-shaped plan function dynamically
+            plan_func = getattr(cloud_mod, f"plan_{cloud}_run", None)
+            if plan_func is None:
+                raise ValueError(f"cloud backend {cloud!r} has no plan function")
+            plan = plan_func(
                 str(config_path),
                 gpu=gpu,
                 output_dir=cfg.output,
                 soup_version=_soup_version,
             )
-            stub_realpath = _modal_cloud.write_stub(plan)
+            stub_realpath = cloud_mod.write_stub(plan)
         except (ValueError, TypeError) as exc:
             console.print(f"[red]Cloud plan failed:[/] {markup_escape(str(exc))}")
             raise typer.Exit(2) from exc
 
         console.print(
             Panel(
-                f"Cloud:    [bold]modal[/]\n"
+                f"Cloud:    [bold]{markup_escape(cloud)}[/]\n"
                 f"GPU:      [bold]{markup_escape(plan.gpu)}[/]\n"
                 f"Stub:     [bold]{markup_escape(os.path.relpath(stub_realpath))}[/]\n"
                 f"Output:   [bold]{markup_escape(plan.output_dir)}[/]\n\n"
                 f"[bold]Run:[/] {markup_escape(plan.run_command)}",
-                title="[bold green]soup train --cloud modal[/]",
+                title=f"[bold green]soup train --cloud {markup_escape(cloud)}[/]",
             )
         )
         if cloud_submit:
             try:
-                rc = _modal_cloud.submit_modal_run(plan)
+                submit_func = getattr(cloud_mod, f"submit_{cloud}_run", None)
+                if submit_func is None:
+                    raise RuntimeError(f"cloud backend {cloud!r} has no submit function")
+                rc = submit_func(plan)
             except RuntimeError as exc:
                 console.print(
-                    f"[yellow]Modal submit unavailable:[/] "
+                    f"[yellow]{cloud.title()} submit unavailable:[/] "
                     f"{markup_escape(str(exc))}"
                 )
                 raise typer.Exit(1) from exc
             raise typer.Exit(rc)
         console.print(
-            "[yellow]Note:[/] plan-only. Run `modal setup` once, then the "
+            f"[yellow]Note:[/] plan-only. Authenticate with {cloud}, then run the "
             "command above (or re-run with --cloud-submit)."
         )
         raise typer.Exit(0)
@@ -738,14 +764,7 @@ def train(
         )
 
     # --- Resolve resume checkpoint (fail fast before heavy operations) ---
-    resume_from = None
-    if resume:
-        resume_from = _resolve_checkpoint(resume, cfg.output, cfg.experiment_name)
-        if resume_from:
-            console.print(f"[green]Resuming from:[/] {resume_from}")
-        else:
-            console.print("[red]No checkpoint found to resume from.[/]")
-            raise typer.Exit(1)
+    resume_from = _resolve_resume_or_exit(resume, cfg)
 
     # --- HF auto-resume: pull latest checkpoint branch into output dir ---
     if hf_resume and push_as and resume_from is None:
@@ -1990,12 +2009,91 @@ def _resolve_deepspeed(deepspeed: str) -> str:
     raise typer.Exit(1)
 
 
-def _resolve_checkpoint(resume: str, output_dir: str, experiment_name: str = None) -> str:
+_MLX_CHECKPOINT_RE = re.compile(r"^(\d+)_adapters\.safetensors$")
+
+
+def _highest_numbered_mlx_checkpoint(paths) -> Path | None:
+    """Pick the highest step-numbered ``NNNNNNN_adapters.safetensors`` file.
+
+    ``max()`` over the parsed step number: not a sort over whatever order
+    the filesystem's ``iterdir()`` happened to enumerate (that order isn't
+    guaranteed), and not a comparison of the filenames as strings (that
+    would only agree with numeric order if every step number in a run
+    happened to be zero-padded to the same width, which nothing here
+    enforces). Keying on the parsed int makes both mistakes fail instead
+    of coincidentally still returning the right file.
+    """
+    numbered: list[tuple[int, Path]] = []
+    for path in paths:
+        if not path.is_file():
+            continue
+        match = _MLX_CHECKPOINT_RE.match(path.name)
+        if match:
+            numbered.append((int(match.group(1)), path))
+    if not numbered:
+        return None
+    return max(numbered, key=lambda pair: pair[0])[1]
+
+
+def _resolve_mlx_checkpoint(resume: str, output_dir: str) -> str | None:
+    """MLX-style checkpoint resolution (#634).
+
+    mlx-lm's tuner saves step-numbered adapter snapshots
+    (``NNNNNNN_adapters.safetensors``) plus a final ``adapters.safetensors``
+    with no step prefix — files, not the ``checkpoint-N`` directories the
+    transformers/unsloth backends write. "auto" picks the highest-numbered
+    snapshot if one exists, else the final file. A direct ``resume`` value
+    must point at one of these files directly.
+
+    Takes no ``experiment_name``, unlike the transformers/unsloth resolver
+    below: ``mlx_sft.py``'s ``output_dir`` is always ``Path(cfg.output)``,
+    flat, never nested under it the way ``trainer/sft.py`` nests under
+    ``output_dir / cfg.experiment_name``. Nesting here would look inside a
+    directory MLX never writes to, and "auto" would report no checkpoint
+    found on every run that sets ``experiment_name`` — the exact symptom
+    #634 reported, reintroduced for a config the original fix didn't cover.
+    """
+    if resume.lower() == "auto":
+        base = Path(output_dir)
+
+        if not base.is_dir():
+            return None
+
+        highest = _highest_numbered_mlx_checkpoint(base.iterdir())
+        if highest is not None:
+            return str(highest)
+
+        final = base / "adapters.safetensors"
+        if final.is_file():
+            return str(final)
+        return None
+
+    # Direct path to a specific adapter file
+    checkpoint_path = Path(resume)
+    if checkpoint_path.exists() and checkpoint_path.is_file():
+        return str(checkpoint_path)
+    return None
+
+
+def _resolve_checkpoint(
+    resume: str,
+    output_dir: str,
+    experiment_name: str | None = None,
+    *,
+    backend: str = "transformers",
+) -> str | None:
     """Resolve the checkpoint path from --resume argument.
 
     If resume == "auto", find the latest checkpoint in the output directory.
     Otherwise, treat it as a direct path to a checkpoint directory.
+
+    ``backend="mlx"`` dispatches to :func:`_resolve_mlx_checkpoint`, since MLX
+    writes step-numbered adapter files rather than ``checkpoint-N``
+    directories (#634) — the shape below never matches an MLX run's output.
     """
+    if backend == "mlx":
+        return _resolve_mlx_checkpoint(resume, output_dir)
+
     if resume.lower() == "auto":
         base = Path(output_dir)
         if experiment_name:
@@ -2017,6 +2115,26 @@ def _resolve_checkpoint(resume: str, output_dir: str, experiment_name: str = Non
     if checkpoint_path.exists() and checkpoint_path.is_dir():
         return str(checkpoint_path)
     return None
+
+
+def _resolve_resume_or_exit(resume: str, cfg: "SoupConfig") -> str | None:
+    """Resolve ``--resume`` against ``cfg``, printing status and exiting on
+    failure. Extracted out of ``train()`` (#634 review) so the
+    ``backend=cfg.backend`` wiring — the entire seam the MLX checkpoint fix
+    depends on — is directly testable without invoking the rest of the
+    command, which needs real hardware/model loading this can be exercised
+    without. Returns ``None`` only when ``resume`` itself is falsy; a
+    ``resume`` value that fails to resolve exits rather than returning.
+    """
+    if not resume:
+        return None
+    resume_from = _resolve_checkpoint(resume, cfg.output, cfg.experiment_name, backend=cfg.backend)
+    if resume_from:
+        console.print(f"[green]Resuming from:[/] {resume_from}")
+    else:
+        console.print("[red]No checkpoint found to resume from.[/]")
+        raise typer.Exit(1)
+    return resume_from
 
 
 def _run_live_lr_sweep_or_synth(

@@ -115,6 +115,8 @@ training:
 
 MLX backend supports SFT. `backend: mlx` with `task: dpo` or `task: grpo` is refused when the config is loaded, with an error naming the task — upstream `mlx-lm` ships no DPO/GRPO training helper, so those wrappers exist only as a backstop for callers that bypass config validation. Requires `mlx-lm >= 0.31.3`. Use `soup recipes search --tag mlx` for ready-made Apple Silicon configs.
 
+`--resume auto` finds mlx-lm's step-numbered `NNNNNNN_adapters.safetensors` checkpoints and warm-starts the LoRA weights from them ([#634](https://github.com/MakazhanAlpamys/Soup/issues/634)). This restores adapter weights only, not training state: mlx-lm's LoRA trainer exposes no optimizer state or step count, so training restarts from step 0 regardless of how far the checkpoint got. See [Resume Training](#resume-training) below for the MLX-specific checkpoint shape.
+
 ### Transformers on MPS
 
 The regular `backend: transformers` path can run more than MLX's SFT-only
@@ -170,11 +172,11 @@ Works with all training tasks: SFT, DPO, GRPO, PPO, KTO, ORPO, SimPO, IPO, and P
 > **Tip:** Soup auto-detects unsloth. When installed, you'll see a hint during `soup train` if you haven't enabled it yet.
 
 
-## Cloud GPU Training (Modal)
+## Cloud GPU Training
 
-No local GPU? `soup train --cloud modal` renders a self-contained [Modal.com](https://modal.com)
-app from your `soup.yaml` for serverless, per-second-billed GPU training. The config YAML is
-base64-embedded as **data** — no code interpolation, no secrets in the generated stub.
+No local GPU? `soup train --cloud modal|lambda` renders a provider-specific controller
+from your `soup.yaml`. The config YAML is base64-embedded as **data**; credentials are read from
+the environment only when a live submission starts.
 
 ```bash
 pip install "soup-cli[modal]"   # only needed for live submit
@@ -190,6 +192,37 @@ soup train --config soup.yaml --cloud modal --gpu a100 --cloud-submit
 `--gpu` accepts: `t4` / `l4` / `a10g` / `a100` / `a100-80gb` / `l40s` / `h100`. The rendered
 `soup_modal_app.py` builds an image with `soup-cli[train]` pinned to your running version, writes
 the embedded config inside the container, and runs `soup train` on the chosen GPU.
+
+### RunPod (Planned)
+
+RunPod support is currently in development and descoped from live CLI dispatch pending automated
+lifecycle and termination safeguards. Running `soup train --cloud runpod` informs the operator that
+RunPod is not yet live and points to active cloud backends (`--cloud modal` and `--cloud lambda`).
+
+### Lambda Cloud
+
+Lambda uses an instance rather than a serverless function. The generated local controller sends a
+secret-free cloud-init script as API `user_data`, waits for it over SSH, copies the configured
+output back, and requests instance termination in a `finally` block. Keep the controller running
+until it reports that termination succeeded; shutting down the guest does not terminate billing.
+
+Register the public half of an SSH key with Lambda first, then set:
+
+```bash
+export LAMBDA_API_KEY=...
+export LAMBDA_SSH_KEY_NAME=my-lambda-key
+export LAMBDA_SSH_PRIVATE_KEY=/path/to/private-key
+export LAMBDA_REGION=us-tx-1  # optional; defaults to us-tx-1
+soup train --config soup.yaml --cloud lambda --gpu a100 --cloud-submit
+```
+
+`--gpu` accepts: `a10` / `a100` / `a6000` / `h100`. Lambda output paths must be relative so the
+controller can copy the artifact back safely. The API key stays on the caller and is never embedded
+in cloud-init or instance logs.
+
+RunPod and Lambda submission paths still require the paid live-validation checklist in #264 before
+they can be described as provider-validated. Plan-only rendering and the lifecycle boundaries are
+covered by offline tests.
 
 
 ## Chat with your model
@@ -282,6 +315,15 @@ soup train --config soup.yaml --resume auto
 # Resume from a specific checkpoint
 soup train --config soup.yaml --resume ./output/checkpoint-500
 ```
+
+`backend: mlx` writes and resumes a different checkpoint shape: a
+step-numbered `NNNNNNN_adapters.safetensors` file (or the final
+`adapters.safetensors`) directly under `output`, not a `checkpoint-N`
+directory. `--resume auto` and `--resume ./output/0011800_adapters.safetensors`
+both work; `--resume ./output/checkpoint-500` does not, because MLX never
+writes that shape. This is a weights-only warm start — mlx-lm's LoRA trainer
+exposes no optimizer state or step count, so the resumed run starts counting
+from step 0 regardless of how far the checkpoint got.
 
 
 ## Run Management & Cleanup
