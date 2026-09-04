@@ -1156,9 +1156,21 @@ def test_qwen4_gate_record_and_changelog_are_discoverable_and_credited():
 
     root = Path(__file__).parents[1]
     benchmark_index = (root / "benchmarks" / "README.md").read_text(encoding="utf-8")
-    changelog = (root / "changelog.d" / "0.73.3" / "603.added.md").read_text(
-        encoding="utf-8"
-    )
+
+    # The credit moves at release time: `changelog.d/<baseline>/603.added.md`
+    # is ASSEMBLED into CHANGELOG.md and then deleted. Reading the fragment by
+    # a hard-coded path made this test pass only while 0.73.3 was unreleased,
+    # and it went red on every platform the moment v0.74.0 shipped. Search both
+    # homes so the assertion survives the boundary in either direction.
+    credit = "(#602 by @Amix29 in #603)"
+    haystacks = [(root / "CHANGELOG.md").read_text(encoding="utf-8")]
+    haystacks += [
+        fragment.read_text(encoding="utf-8")
+        for fragment in sorted((root / "changelog.d").rglob("603.*.md"))
+    ]
 
     assert "gate-qwen4-ple-m4-max.md" in benchmark_index
-    assert "(#602 by @Amix29 in #603)" in changelog
+    assert any(credit in text for text in haystacks), (
+        f"{credit!r} found in neither CHANGELOG.md nor any changelog.d/**/603.*.md; "
+        "the #602 credit has been lost, not merely relocated"
+    )
