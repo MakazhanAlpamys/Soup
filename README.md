@@ -171,22 +171,46 @@ Full history: [CHANGELOG.md](CHANGELOG.md) &middot; [GitHub Releases](https://gi
 
 ### 1. Install
 
+Soup is a command-line application, so the cleanest install gives it its own
+environment and puts `soup` on your `PATH`:
+
 ```bash
 # Light core: CLI + config + data tools, no PyTorch
-pip install soup-cli
+pipx install soup-cli
+uv tool install soup-cli          # same idea, if you already use uv
 
 # Add the training stack (torch, transformers, peft, trl, datasets, …)
-pip install "soup-cli[train]"
+pipx install "soup-cli[train]"
 
 # Everything (train + serve + ui + data) in one shot
-pip install "soup-cli[all]"
+pipx install "soup-cli[all]"
 
 # Or from GitHub (latest dev)
+pipx install "git+https://github.com/MakazhanAlpamys/Soup.git"
+```
+
+Already inside a virtualenv, a Colab notebook, or a Docker image? Use `pip`
+directly, with the same names and extras:
+
+```bash
+pip install soup-cli
+pip install "soup-cli[train]"
+pip install "soup-cli[all]"
 pip install git+https://github.com/MakazhanAlpamys/Soup.git
 ```
 
+Use `pip` rather than `pipx` if you also want to `import soup_cli` from your own
+code, since pipx deliberately isolates the application from everything else.
+
 The full extras table (`fast`, `mlx`, `serve`, `eval`, `ui`, `vision`, `audio`, …) lives in
 [`docs/models.md`](docs/models.md#optional-extras).
+
+> **`error: externally-managed-environment`?** That is
+> [PEP 668](https://peps.python.org/pep-0668/), not a Soup problem. Debian 12,
+> Ubuntu 23.04 and later stop `pip` from writing into the system Python, because
+> `apt` manages those files too. `pipx` and `uv tool` sidestep it by giving Soup
+> its own environment, which is why they are listed first above. `python3 -m venv
+> .venv && source .venv/bin/activate` then plain `pip` works just as well.
 
 > **Double quotes, not single.** `"soup-cli[train]"` is the only spelling that works in every
 > shell — `cmd.exe`, PowerShell, bash and zsh. If you copied `'soup-cli[train]'` from an older
