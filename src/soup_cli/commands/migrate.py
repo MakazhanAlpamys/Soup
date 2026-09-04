@@ -142,10 +142,22 @@ def migrate(
 
 
 def _looks_like_jsonl(path: Path) -> bool:
-    """v0.40.1 Part D / N2 — sniff first non-blank line for `{` (JSONL)."""
+    """v0.40.1 Part D / N2 — sniff first non-blank line for `{` (JSONL).
+
+    ``utf-8-sig``, not ``utf-8``: a UTF-8 BOM decodes to U+FEFF, which
+    ``str.strip()`` does not remove because it is not whitespace, so a BOM'd
+    JSONL file would sniff as *not* JSONL and silently lose the friendly
+    error. Windows tooling writes that BOM by default, PowerShell's
+    ``Out-File`` included (#675 review).
+
+    The read is bounded because a file with no newline is one single line, so
+    ``for line in fh`` would pull all of it into memory: a 120 MB one-liner
+    measured 240.9 MB peak. Only the first non-blank chunk is ever inspected,
+    so a truncated long line costs nothing here.
+    """
     try:
-        with open(path, "r", encoding="utf-8", errors="replace") as fh:
-            for line in fh:
+        with open(path, "r", encoding="utf-8-sig", errors="replace") as fh:
+            while line := fh.readline(65536):
                 stripped = line.strip()
                 if not stripped:
                     continue
