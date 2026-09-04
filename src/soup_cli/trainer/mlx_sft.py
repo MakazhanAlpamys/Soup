@@ -249,8 +249,15 @@ class MLXSFTTrainerWrapper:
         self.model.load_weights(checkpoint_path, strict=False)
 
     def train(self, display=None, tracker=None, run_id=None, resume_from_checkpoint=None) -> dict:
-        """Run MLX training loop via mlx-lm (mlx-lm >= 0.31 API)."""
-        del display, tracker, run_id  # accepted for CLI-contract parity
+        """Run MLX training loop via mlx-lm (mlx-lm >= 0.31 API).
+
+        ``display`` / ``tracker`` / ``run_id`` drive Soup's live dashboard the
+        way they do on the transformers path (#23). This is an adapter, not a
+        reuse of ``SoupTrainerCallback``: that is a HuggingFace
+        ``TrainerCallback`` wanting ``args, state, control``, while mlx-lm
+        offers only ``on_train_loss_report`` / ``on_val_loss_report``, so
+        bridging through it would couple this path to HF trainer internals.
+        """
 
         self._require_mlx()
 
@@ -312,22 +319,72 @@ class MLXSFTTrainerWrapper:
         optimizer = optim.AdamW(learning_rate=float(cfg.training.lr))
 
         captured: dict = {}
+        total_epochs = float(cfg.training.epochs)
 
         class _Callback(TrainingCallback):
+            """mlx-lm's two hooks, adapted onto Soup's display and tracker.
+
+            Keys are mlx-lm's own, built at ``mlx_lm/tuner/trainer.py``:
+            ``iteration``, ``train_loss``, ``learning_rate``,
+            ``tokens_per_second``, ``peak_memory``. There is deliberately no
+            ``grad_norm`` — mlx-lm does not compute one for the callback, and a
+            dashboard field reading a plausible 0.0 on this backend while
+            carrying a real value on another is worse than an absent one.
+            """
+
             def on_train_loss_report(self, train_info: dict) -> None:
-                captured.setdefault("losses", []).append(
-                    train_info.get("train_loss", 0.0)
+                loss = train_info.get("train_loss", 0.0)
+                captured.setdefault("losses", []).append(loss)
+                if display is None:
+                    return
+
+                step = int(train_info.get("iteration", 0) or 0)
+                epoch = (step / iters * total_epochs) if iters else 0.0
+                lr_value = train_info.get("learning_rate", cfg.training.lr)
+                # TrainingDisplay hard-labels this "it/s" (display.py:116), and
+                # the transformers path feeds it train_steps_per_second. Feeding
+                # tokens_per_second here renders a ~50x number under an it/s label.
+                speed = train_info.get("iterations_per_second", 0.0)
+                peak = train_info.get("peak_memory")
+                gpu_mem = f"{peak:.3f} GB" if isinstance(peak, (int, float)) else ""
+
+                display.update(
+                    step=step,
+                    epoch=epoch,
+                    loss=loss,
+                    lr=lr_value,
+                    speed=speed,
+                    gpu_mem=gpu_mem,
                 )
+                if tracker is not None and run_id:
+                    tracker.log_metrics(
+                        run_id=run_id,
+                        step=step,
+                        epoch=epoch,
+                        loss=loss,
+                        lr=lr_value,
+                        speed=speed,
+                        gpu_mem=gpu_mem,
+                    )
+
+        if display is not None:
+            display.start(iters)
 
         t0 = time.time()
-        train(
-            model=self.model,
-            optimizer=optimizer,
-            train_dataset=train_dataset,
-            val_dataset=val_dataset,
-            args=args,
-            training_callback=_Callback(),
-        )
+        try:
+            train(
+                model=self.model,
+                optimizer=optimizer,
+                train_dataset=train_dataset,
+                val_dataset=val_dataset,
+                args=args,
+                training_callback=_Callback(),
+            )
+        finally:
+            # A Live display left attached would corrupt the terminal if
+            # mlx-lm raises, so this is a finally rather than a trailing call.
+            if display is not None:
+                display.stop()
         duration = time.time() - t0
 
         # mlx-lm's tuner only saves adapters.safetensors; write the
