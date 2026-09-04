@@ -67,7 +67,7 @@ def migrate(
     # data file (`.jsonl`) instead of a YAML config. The sniff helper is
     # only invoked when the suffix says ``.jsonl`` (notebook .ipynb files
     # legitimately start with ``{`` — we must not falsely flag them).
-    if input_path.suffix.lower() == ".jsonl":
+    if input_path.suffix.lower() == ".jsonl" and _looks_like_jsonl(input_path):
         console.print(
             f"[red]Expected a {source} YAML config; got JSONL "
             f"({input_path.name}) — did you pass the wrong file?[/]"

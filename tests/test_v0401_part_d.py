@@ -63,7 +63,47 @@ def test_init_force_flag_overwrites_without_prompt(tmp_path):
 # --- N2: soup migrate JSONL friendly error ------------------------------
 
 
-def test_migrate_jsonl_input_yields_friendly_error(tmp_path: Path):
+def test_migrate_jsonl_input_yields_friendly_error(tmp_path: Path, monkeypatch):
+    """Drives the *command*, not the helper: real JSONL named `.jsonl` is refused."""
+    from soup_cli.cli import app
+
+    monkeypatch.chdir(tmp_path)
+    jsonl = tmp_path / "data.jsonl"
+    jsonl.write_text('{"prompt": "hi"}\n{"prompt": "world"}\n', encoding="utf-8")
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["migrate", "--from", "llamafactory", "data.jsonl", "--dry-run"]
+    )
+    assert result.exit_code == 2, (result.output, repr(result.exception))
+    assert "got JSONL" in result.output
+
+
+def test_migrate_yaml_config_named_jsonl_still_migrates(tmp_path: Path, monkeypatch):
+    """Control: the suffix alone must not condemn a file whose content is YAML.
+
+    Fails if the `_looks_like_jsonl` call site is removed from the guard.
+    """
+    from soup_cli.cli import app
+
+    monkeypatch.chdir(tmp_path)
+    config = tmp_path / "config.jsonl"
+    config.write_text(
+        "model_name_or_path: meta-llama/Llama-3-8B\n"
+        "stage: sft\n"
+        "finetuning_type: lora\n",
+        encoding="utf-8",
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["migrate", "--from", "llamafactory", "config.jsonl", "--dry-run"]
+    )
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert "got JSONL" not in result.output
+
+
+def test_migrate_helper_detects_jsonl(tmp_path: Path):
     from soup_cli.commands.migrate import _looks_like_jsonl
 
     jsonl = tmp_path / "data.jsonl"
