@@ -61,6 +61,41 @@ class TestMLXDetection:
         info = mlx_utils.get_mlx_info()
         assert info["available"] is False
 
+    def test_get_mlx_version_reads_core_version(self, monkeypatch):
+        """get_mlx_version reads mlx.core.__version__, not mlx.__version__ (#659)."""
+        import sys
+        import types
+
+        fake_mlx = types.ModuleType("mlx")  # no __version__ on the top-level pkg
+        fake_core = types.ModuleType("mlx.core")
+        fake_core.__version__ = "0.32.2"
+        fake_mlx.core = fake_core
+        monkeypatch.setitem(sys.modules, "mlx", fake_mlx)
+        monkeypatch.setitem(sys.modules, "mlx.core", fake_core)
+
+        from soup_cli.utils import mlx as mlx_utils
+
+        assert mlx_utils.get_mlx_version() == "0.32.2"
+
+    def test_get_mlx_version_metadata_fallback(self, monkeypatch):
+        """get_mlx_version falls back to importlib.metadata when core lacks it."""
+        import sys
+        import types
+
+        fake_mlx = types.ModuleType("mlx")
+        fake_core = types.ModuleType("mlx.core")
+        fake_core.metal = types.SimpleNamespace(is_available=lambda: True)
+        fake_mlx.core = fake_core
+        monkeypatch.setitem(sys.modules, "mlx", fake_mlx)
+        monkeypatch.setitem(sys.modules, "mlx.core", fake_core)
+
+        from soup_cli.utils import mlx as mlx_utils
+
+        monkeypatch.setattr(
+            "importlib.metadata.version", lambda name: "0.32.2" if name == "mlx" else None
+        )
+        assert mlx_utils.get_mlx_version() == "0.32.2"
+
     def test_estimate_mlx_batch_size_small_model(self):
         from soup_cli.utils.mlx import estimate_mlx_batch_size
 
@@ -274,6 +309,7 @@ output: ./output
 # doctor command reports MLX
 # ---------------------------------------------------------------------------
 
+
 class TestMLXDoctor:
     def test_doctor_has_mlx_info(self):
         """`soup doctor` helpers surface MLX info (no crash on non-Apple)."""
@@ -282,6 +318,54 @@ class TestMLXDoctor:
         info = _get_mlx_info()
         assert isinstance(info, dict)
         assert "available" in info
+
+    def test_doctor_command_renders_mlx_panel(self, monkeypatch):
+        """`soup doctor` renders the MLX panel when MLX is available."""
+        import sys
+        import types
+        from importlib.machinery import ModuleSpec
+
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        fake_mlx = types.ModuleType("mlx")
+        fake_mlx.__spec__ = ModuleSpec("mlx", loader=None)
+        fake_core = types.ModuleType("mlx.core")
+        fake_core.__spec__ = ModuleSpec("mlx.core", loader=None)
+        fake_core.__version__ = "0.32.2"
+        fake_core.metal = types.SimpleNamespace(is_available=lambda: True)
+        fake_mlx.core = fake_core
+        monkeypatch.setitem(sys.modules, "mlx", fake_mlx)
+        monkeypatch.setitem(sys.modules, "mlx.core", fake_core)
+
+        result = CliRunner().invoke(app, ["doctor"])
+
+        assert result.exit_code == 0, result.output
+        assert "MLX" in result.output
+        assert "0.32.2" in result.output
+
+    def test_doctor_command_mlx_absent_control(self, monkeypatch):
+        """`soup doctor` says MLX is not installed when it cannot be imported."""
+        import builtins
+
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        real_import = builtins.__import__
+
+        def fake_import(name, *args, **kwargs):
+            if name == "mlx" or name == "mlx.core":
+                raise ImportError("no mlx")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", fake_import)
+        result = CliRunner().invoke(app, ["doctor"])
+
+        assert result.exit_code == 0
+        assert "MLX" in result.output
+        assert "not installed" in result.output
 
 
 if __name__ == "__main__":

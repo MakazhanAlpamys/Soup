@@ -91,6 +91,9 @@ def doctor(
     # GPU check
     _check_gpu()
 
+    # MLX (Apple Silicon) check
+    _check_mlx()
+
     # Resources check
     _check_resources(probe_disk=disk)
 
@@ -196,6 +199,43 @@ def _get_mlx_info() -> dict:
         return get_mlx_info()
     except Exception:  # noqa: BLE001
         return {"available": False}
+
+
+def _check_mlx():
+    """Report the MLX (Apple Silicon) backend in ``soup doctor``.
+
+    MLX is an Apple Silicon-only stack, so the panel is informational rather
+    than a pass/fail dependency: it shows the installed version and hardware
+    when present, and says so plainly when MLX is missing. It must never crash
+    the report (the info helper degrades to ``available=False`` on any error).
+    """
+    info = _get_mlx_info()
+    if info.get("available"):
+        mem_bytes = info.get("unified_memory_bytes")
+        mem_str = f"{mem_bytes / (1024**3):.0f} GB" if mem_bytes else "unknown"
+        chip = (info.get("chip") or {}).get("chip")
+        console.print(
+            Panel(
+                f"Version:  [bold green]{info.get('version', 'unknown')}[/]\n"
+                f"Chip:     [bold]{chip or 'Apple Silicon'}[/]\n"
+                f"Memory:   [bold]{mem_str}[/] unified",
+                title="MLX",
+            )
+        )
+    elif info.get("apple_silicon"):
+        console.print(
+            Panel(
+                "Status:   [yellow]not installed[/]\nInstall:  [dim]pip install 'soup-cli[mlx]'[/]",
+                title="MLX",
+            )
+        )
+    else:
+        console.print(
+            Panel(
+                "Status:   [dim]N/A (Apple Silicon only)[/]",
+                title="MLX",
+            )
+        )
 
 
 def _check_gpu():
