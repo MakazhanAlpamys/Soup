@@ -586,6 +586,8 @@ def _convert_multimodal(row: dict) -> dict:
         raise ValueError("multimodal row must have non-empty 'messages' list")
     valid_types = {"text", "image", "audio", "video"}
     for msg in messages:
+        if not isinstance(msg, dict):
+            raise ValueError("multimodal message must be a dict")
         content = msg.get("content")
         if isinstance(content, str):
             continue  # back-compat with plain strings

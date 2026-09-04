@@ -142,6 +142,13 @@ class TestPartANewFormats:
         ]}]}
         assert format_to_messages(row, "multimodal") is None
 
+    @pytest.mark.parametrize("msg", ["plain", 42, None, ["role", "user"]])
+    def test_multimodal_converter_non_dict_message_is_dropped(self, msg):
+        # A non-dict message reached `msg.get(...)` and raised AttributeError,
+        # which format_to_messages does not catch, so one malformed row
+        # aborted the whole dataset load instead of being dropped.
+        assert format_to_messages({"messages": [msg]}, "multimodal") is None
+
     def test_pre_tokenized_format_requires_tokenized_path(self):
         with pytest.raises(Exception, match="tokenized_path"):
             DataConfig(train="data.jsonl", format="pre_tokenized")
