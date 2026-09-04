@@ -17,9 +17,18 @@ Requires Apple Silicon and ``pip install -e ".[mlx]"``.
 Usage:
     python mlx_sft_smoke.py [model-id] [rows] [epochs]
 
-Verified fixtures (8 GB M1, mlx 0.32.2 / mlx-lm 0.31.3):
-    mlx-community/Qwen2.5-0.5B-Instruct-4bit   smallest known-good, 282 MB
-    mlx-community/Llama-3.1-8B-Instruct-4bit   the shipped llama3.1-8b-sft-mlx recipe
+The exact commands behind every row of `benchmarks/run-m1-8gb-mlx-sft.md`,
+so the table reproduces without reading the thread (8 GB M1, mlx 0.32.2 /
+mlx-lm 0.31.3, 48 rows / 1 epoch each):
+
+    python mlx_sft_smoke.py mlx-community/Qwen2.5-0.5B-Instruct-4bit  48 1
+    python mlx_sft_smoke.py mlx-community/Llama-3.2-3B-Instruct-4bit  48 1
+    python mlx_sft_smoke.py mlx-community/Qwen2.5-7B-Instruct-4bit    48 1
+    python mlx_sft_smoke.py mlx-community/Llama-3.1-8B-Instruct-4bit  48 1
+
+The last is the model the shipped `llama3.1-8b-sft-mlx` recipe names; it peaks
+at 5.154 GB and completes. The first is the smallest verified-good fixture
+(282 MB) and is what a CI job should use.
 
 Known-bad: mlx-community/TinyLlama-1.1B-Chat-v1.0-4bit ships the legacy
 ``weights.NN.safetensors`` naming, which mlx-lm's ``model*.safetensors`` glob

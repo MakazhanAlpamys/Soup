@@ -71,12 +71,18 @@ All five completed runs, in the order they ran. `peak` is MLX's own
 `get_peak_memory()`; the per-iteration `Peak mem` mlx-lm prints is given where it
 differs.
 
-| model (4-bit) | load | peak after load | train, 48 it | peak in train | mlx-lm peak | tok/s | loss | adapter | reload |
-|---|---|---|---|---|---|---|---|---|---|
-| `Qwen2.5-0.5B-Instruct` | 31.7 s | 0.262 GB | 19.7 s | 0.497 GB | 0.497 | ~240 | 3.639 -> 0.107 | 2,122 KB | 0.9 s |
-| `Llama-3.2-3B-Instruct` | 123.3 s | 1.683 GB | 29.5 s | 2.083 GB | 2.236 | ~82 | 4.527 -> 0.330 | 8,972 KB | 2.1 s |
-| `Qwen2.5-7B-Instruct` | 268.3 s | 3.993 GB | 67.6 s | 4.584 GB | 4.922 | ~33 | 4.514 -> 0.127 | 9,868 KB | 15.8 s |
-| **`Llama-3.1-8B-Instruct`** | 317.8 s | 4.207 GB | 71.0 s | 4.800 GB | 5.154 | ~36 | 3.454 -> 0.142 | 13,326 KB | 23.8 s |
+| model (4-bit) | load | peak after load | train, 48 it | **peak in train** | mlx-lm peak | **host free before -> after** | swap total -> | tok/s | loss | adapter | reload |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| `Qwen2.5-0.5B-Instruct` | 31.7 s | 0.262 GB | 19.7 s | **0.497 GB** | 0.497 | **54% -> 39%** | 2048 M | ~240 | 3.639 -> 0.107 | 2,122 KB | 0.9 s |
+| `Llama-3.2-3B-Instruct` | 123.3 s | 1.683 GB | 29.5 s | **2.083 GB** | 2.236 | **54% -> 32%** | 2048 -> 3072 M | ~82 | 4.527 -> 0.330 | 8,972 KB | 2.1 s |
+| `Qwen2.5-7B-Instruct` | 268.3 s | 3.993 GB | 67.6 s | **4.584 GB** | 4.922 | **69% -> 14%** | 3072 -> 9216 M | ~33 | 4.514 -> 0.127 | 9,868 KB | 15.8 s |
+| **`Llama-3.1-8B-Instruct`** | 317.8 s | 4.207 GB | 71.0 s | **4.800 GB** | 5.154 | **69% -> 14%** | 3072 -> 9216 M | ~36 | 3.454 -> 0.142 | 13,326 KB | 23.8 s |
+
+**Peak and free unified memory are the load-bearing columns here**, not tok/s: on
+8 GB shared with the OS the ceiling is the interesting variable. Both 7B and 8B
+end at **14% host free**, and the swap file more than triples across those two
+rungs — the machine absorbs them rather than refusing, which is the mechanism
+section below.
 
 `load` includes the first-time Hub download, so it is a network figure, not a
 model-load figure.
