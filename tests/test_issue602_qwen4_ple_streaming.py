@@ -1152,13 +1152,31 @@ def test_qwen4_oq_torch_floor_matches_project_and_doctor():
 
 
 def test_qwen4_gate_record_and_changelog_are_discoverable_and_credited():
+    """The gate record is indexed and the changelog entry keeps its credit.
+
+    The credit lives in a per-PR fragment before a release and in the assembled
+    ``CHANGELOG.md`` after one (#487/#490), so this reads BOTH and requires the
+    string in whichever currently carries it. The first version pinned the
+    fragment path alone and turned red on every cell the moment v0.74.0
+    consumed it -- an assembly that is supposed to happen, failing a test whose
+    subject is the credit rather than where the credit is stored.
+    """
     from pathlib import Path
 
     root = Path(__file__).parents[1]
     benchmark_index = (root / "benchmarks" / "README.md").read_text(encoding="utf-8")
-    changelog = (root / "changelog.d" / "0.73.3" / "603.added.md").read_text(
-        encoding="utf-8"
-    )
 
-    assert "gate-qwen4-ple-m4-max.md" in benchmark_index
-    assert "(#602 by @Amix29 in #603)" in changelog
+    sources = [root / "CHANGELOG.md"] + sorted(
+        (root / "changelog.d").rglob("603.*.md")
+    )
+    texts = [p.read_text(encoding="utf-8") for p in sources if p.is_file()]
+    assert texts, "neither CHANGELOG.md nor a 603 fragment is readable"
+
+    assert "gate-qwen4-ple-m4-max.md" in benchmark_index, (
+        "benchmarks/README.md no longer indexes the Qwen4 PLE gate record, so "
+        "the measurement behind this feature is not discoverable"
+    )
+    assert any("(#602 by @Amix29 in #603)" in t for t in texts), (
+        "the Qwen4 PLE changelog entry lost its `(#602 by @Amix29 in #603)` "
+        f"credit; searched {[str(p.relative_to(root)) for p in sources]}"
+    )
