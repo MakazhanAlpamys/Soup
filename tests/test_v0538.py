@@ -314,38 +314,37 @@ class TestSendTelemetryPayload:
 
         assert send_telemetry_payload({"command": "train"}, timeout=-1) is False
 
-    def test_httpx_missing_returns_false(self, monkeypatch):
-        monkeypatch.setenv("SOUP_TELEMETRY", "1")
-        # Force ImportError on the lazy import
-        monkeypatch.setitem(sys.modules, "httpx", None)
-        from soup_cli.utils.trackers import send_telemetry_payload
-
-        assert send_telemetry_payload({"command": "train"}) is False
-
     def test_happy_path_2xx(self, monkeypatch):
         monkeypatch.setenv("SOUP_TELEMETRY", "1")
-
-        fake_httpx = MagicMock()
-        fake_resp = MagicMock()
-        fake_resp.status_code = 200
-        fake_httpx.post.return_value = fake_resp
-        monkeypatch.setitem(sys.modules, "httpx", fake_httpx)
+        fake_resp = MagicMock(status=200)
+        fake_resp.getcode.return_value = 200
+        fake_resp.__enter__.return_value = fake_resp
+        open_url = MagicMock(return_value=fake_resp)
+        monkeypatch.setattr("urllib.request.urlopen", open_url)
+        monkeypatch.setattr(
+            "soup_cli.utils.trackers._telemetry_endpoint_is_safe", lambda _url: True
+        )
 
         from soup_cli.utils.trackers import send_telemetry_payload
 
         result = send_telemetry_payload({"command": "train", "soup_version": "x"})
         assert result is True
-        # HTTPS-only + 1s timeout
-        call = fake_httpx.post.call_args
-        assert call.args[0].startswith("https://")
+        # HTTPS-only + 1s timeout + POST method
+        call = open_url.call_args
+        req = call.args[0]
+        assert req.full_url.startswith("https://")
+        assert req.get_method() == "POST"
+        assert req.headers.get("Content-type") == "application/json"
         assert call.kwargs["timeout"] == 1.0
 
     def test_network_exception_swallowed(self, monkeypatch):
         monkeypatch.setenv("SOUP_TELEMETRY", "1")
-
-        fake_httpx = MagicMock()
-        fake_httpx.post.side_effect = RuntimeError("network down")
-        monkeypatch.setitem(sys.modules, "httpx", fake_httpx)
+        monkeypatch.setattr(
+            "urllib.request.urlopen", MagicMock(side_effect=RuntimeError("network down"))
+        )
+        monkeypatch.setattr(
+            "soup_cli.utils.trackers._telemetry_endpoint_is_safe", lambda _url: True
+        )
 
         from soup_cli.utils.trackers import send_telemetry_payload
 

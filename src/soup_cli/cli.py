@@ -77,6 +77,8 @@ _verbose = False
 _log_level = "normal"
 # v0.71.3 #183 — audit-log opt-out, set by the --no-audit-log callback flag.
 _audit_disabled = False
+# v0.71.41 #318 — telemetry opt-out.
+_telemetry_disabled = False
 
 # Global options that consume a following value (so the audit command-splitter
 # does not mistake the value for the subcommand name).
@@ -706,11 +708,17 @@ def main(
             "command under ~/.soup/audit.jsonl. v0.71.3."
         ),
     ),
+    no_telemetry: bool = typer.Option(
+        False,
+        "--no-telemetry",
+        help="Opt-out of anonymous hardware-only telemetry for this run.",
+    ),
 ):
     """Soup — fine-tune and post-train LLMs in one command."""
-    global _verbose, _log_level, _audit_disabled
+    global _verbose, _log_level, _audit_disabled, _telemetry_disabled
     _verbose = verbose
     _audit_disabled = no_audit_log
+    _telemetry_disabled = no_telemetry
     from soup_cli.utils.log_level import (
         apply_logging_level,
         parse_log_level,
@@ -801,8 +809,77 @@ def _emit_audit_event(argv: list[str], exit_code: int) -> None:
         pass
 
 
+_REGISTERED_COMMANDS: frozenset[str] | None = None
+
+
+def _get_registered_commands() -> frozenset[str]:
+    """Return the set of known registered top-level CLI command names.
+
+    Used by telemetry to sanitize argv so private arguments (e.g. local paths
+    passed by mistake as subcommands) can NEVER leak into telemetry event names.
+    """
+    global _REGISTERED_COMMANDS
+    if _REGISTERED_COMMANDS is None:
+        cmds: set[str] = set()
+        for cmd in app.registered_commands:
+            name = cmd.name or getattr(cmd.callback, "__name__", None)
+            if name:
+                cmds.add(name)
+        for grp in app.registered_groups:
+            name = grp.name
+            if not name and getattr(grp, "typer_instance", None):
+                name = getattr(grp.typer_instance.info, "name", None)
+            if name:
+                cmds.add(name)
+        _REGISTERED_COMMANDS = frozenset(cmds)
+    return _REGISTERED_COMMANDS
+
+
+def _emit_telemetry(argv: list[str], duration_seconds: float) -> None:
+    """Send an opt-in, hardware-only telemetry ping at command exit. Best-effort.
+
+    Telemetry is strictly opt-IN via ``SOUP_TELEMETRY=1``; it is disabled by default,
+    by ``--no-telemetry``, or when ``SOUP_TELEMETRY`` is unset or falsy.
+    Never raises — telemetry must NEVER crash the CLI.
+    """
+    if _telemetry_disabled or "--no-telemetry" in argv:
+        return
+
+    from soup_cli.utils.trackers import is_telemetry_enabled
+
+    if not is_telemetry_enabled():
+        return
+
+    try:
+        from soup_cli import __version__
+        from soup_cli.utils.trackers import (
+            build_telemetry_payload,
+            send_telemetry_payload,
+        )
+
+        raw_command, _ = _split_command_args(argv)
+        reg = _get_registered_commands()
+        if raw_command in reg or raw_command == "(root)":
+            command = raw_command[:64]
+        else:
+            command = "(unknown)"
+
+        payload = build_telemetry_payload(
+            soup_version=__version__,
+            command=command,
+            duration_seconds=duration_seconds,
+        )
+        send_telemetry_payload(payload)
+    except Exception:  # noqa: BLE001 — telemetry must never crash the CLI
+        pass
+
+
 def run():
     """Entry point with friendly error handling."""
+    import time  # noqa: PLC0415
+
+    start_time = time.monotonic()
+
     # v0.54.0 — rewrite `soup advise <data>` → `soup advise run <data>`.
     sys.argv = _rewrite_advise_argv(sys.argv)
     argv_snapshot = list(sys.argv)
@@ -838,6 +915,11 @@ def run():
         # Defensive/unreachable: app() raises SystemExit(0) on success under
         # click standalone mode, so this normal-return path rarely fires.
         _emit_audit_event(argv_snapshot, 0)
+    finally:
+        try:
+            _emit_telemetry(argv_snapshot, time.monotonic() - start_time)
+        except Exception:
+            pass
 
 
 # When invoked via `soup` entry point, use run() for error handling.

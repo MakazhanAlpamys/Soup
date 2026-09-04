@@ -220,8 +220,8 @@ soup train --config soup.yaml --cloud lambda --gpu a100 --cloud-submit
 controller can copy the artifact back safely. The API key stays on the caller and is never embedded
 in cloud-init or instance logs.
 
-RunPod and Lambda submission paths still require the paid live-validation checklist in #264 before
-they can be described as provider-validated. Plan-only rendering and the lifecycle boundaries are
+The Lambda submission path still requires the paid live-validation checklist in #264 before
+it can be described as provider-validated. Plan-only rendering and the lifecycle boundaries are
 covered by offline tests.
 
 
@@ -633,15 +633,25 @@ pip install mlflow      # or: swanlab / trackio
 ### Telemetry (opt-in)
 
 Soup ships a hardware-info-only telemetry payload (Soup version + command +
-Python major.minor + OS + arch + duration). It is **off by default** and never
-sends model names, dataset paths, or config contents. Enable explicitly:
+Python major.minor + OS + arch + duration + anonymous distinct ID). It is **off by default** and never
+sends model names, dataset paths, or config contents.
+
+To opt in, set the environment variable:
 
 ```bash
 SOUP_TELEMETRY=1 soup train --config soup.yaml
 ```
 
-The PostHog network upload itself is deferred to v0.43.1; v0.43.0 ships the
-payload schema only so you can audit it before opting in.
+When `SOUP_TELEMETRY` is unset, `0`, or any value other than `1`/`true`/`yes`/`on`, Soup performs
+zero telemetry network requests.
+
+You can also explicitly disable telemetry for a specific invocation using the `--no-telemetry` flag:
+
+```bash
+soup train --config soup.yaml --no-telemetry
+```
+
+When enabled, telemetry performs a synchronous fire-and-forget HTTP POST with a strict 1-second timeout on command exit. See [Privacy Policy](#privacy-policy) for details.
 
 
 ## Profiling Extras
@@ -875,9 +885,30 @@ pip install soup-cli[trackers]   # mlflow + swanlab + trackio
 ```
 
 
-## Telemetry (not yet wired)
+## Telemetry & Privacy Policy
 
-Soup contains opt-in, hardware-info-only telemetry primitives in `utils/trackers.py` (`build_telemetry_payload` / `send_telemetry_payload`), but they are **not wired to any command** — no data is ever sent, and no environment variable enables sending today. When wired, the payload will carry only `soup_version` / `command` / `python` major.minor / `os` / `arch` / optional `duration_seconds` — never dataset paths, model names, or config contents — behind a 1-second hard timeout and the hub endpoint sanitisation plus a telemetry-strict private, loopback and link-local rejection on every scheme, swallowing every exception so telemetry can never crash training. Wiring is deferred until a public privacy policy is published.
+Soup contains opt-in, hardware-info-only telemetry in `utils/trackers.py` (`build_telemetry_payload` / `send_telemetry_payload`).
+
+### Privacy Policy
+
+Soup's telemetry is strictly anonymous and hardware-focused. When opted in via `SOUP_TELEMETRY=1`, we collect only the following fields to understand what environments we need to support:
+
+- `soup_version`: the version of Soup being run
+- `command`: the top-level command executed (e.g. `train`, `data`, validated against known commands; unknown commands or paths are masked as `(unknown)`)
+- `python`: Python major.minor version
+- `os`: OS platform name (`platform.system()`)
+- `arch`: System architecture (`platform.machine()`)
+- `duration_seconds`: Command execution duration in seconds
+- `distinct_id`: Anonymous UUID4 generated locally on first run and stored at `~/.soup/telemetry_id` to deduplicate events
+
+We **NEVER** collect:
+- Dataset paths or contents
+- Model names or architectures
+- Config file contents or hyperparameters
+- Usernames, local file paths, or directory names
+- IP addresses, tokens, or credentials
+
+All uploads use HTTPS, a strict 1-second timeout, and defensive SSRF validation. Any network or filesystem exception is silently swallowed so telemetry can never fail or interrupt your work.
 
 
 ## Plugin System

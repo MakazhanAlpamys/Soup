@@ -125,6 +125,10 @@ class TestBuildTelemetryPayload:
         assert "os" in payload
         assert "arch" in payload
         assert payload["duration_seconds"] is None
+        assert "distinct_id" in payload
+        import uuid
+
+        assert uuid.UUID(payload["distinct_id"])
 
     def test_with_duration(self):
         payload = build_telemetry_payload(
@@ -152,6 +156,7 @@ class TestBuildTelemetryPayload:
             "os",
             "arch",
             "duration_seconds",
+            "distinct_id",
         }
 
     def test_invalid_version(self):

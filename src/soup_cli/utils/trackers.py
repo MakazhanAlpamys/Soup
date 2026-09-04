@@ -103,6 +103,38 @@ def is_telemetry_enabled(env: Mapping[str, str] | None = None) -> bool:
     return False
 
 
+def get_or_create_distinct_id() -> str:
+    """Return the anonymous telemetry UUID, generating and persisting it if needed.
+
+    The identifier is stored at ``~/.soup/telemetry_id``. It contains NO
+    user-identifying or hardware-identifying information — it is a random
+    UUID4 generated locally for event deduplication.
+    All filesystem operations fail soft so telemetry can NEVER crash training.
+    """
+    import uuid  # noqa: PLC0415
+    from pathlib import Path  # noqa: PLC0415
+
+    from soup_cli.utils.constants import SOUP_DIR  # noqa: PLC0415
+
+    id_file = Path.home() / SOUP_DIR / "telemetry_id"
+    try:
+        if id_file.exists():
+            saved = id_file.read_text(encoding="utf-8").strip()
+            # Validate format strictly: must be a valid UUID
+            if str(uuid.UUID(saved)) == saved.lower():
+                return saved
+    except Exception:
+        pass
+
+    new_id = str(uuid.uuid4())
+    try:
+        id_file.parent.mkdir(parents=True, exist_ok=True)
+        id_file.write_text(new_id + "\n", encoding="utf-8")
+    except Exception:
+        pass
+    return new_id
+
+
 def build_telemetry_payload(
     *,
     soup_version: str,
@@ -120,6 +152,7 @@ def build_telemetry_payload(
       - `os`: platform.system()
       - `arch`: platform.machine()
       - `duration_seconds`: optional, finite float / int / None
+      - `distinct_id`: anonymous persistent UUID
 
     Raises ValueError for non-string `command` / `soup_version` and for
     non-finite `duration_seconds`.
@@ -154,6 +187,7 @@ def build_telemetry_payload(
         "duration_seconds": (
             float(duration_seconds) if duration_seconds is not None else None
         ),
+        "distinct_id": get_or_create_distinct_id(),
     }
 
 
@@ -391,18 +425,29 @@ def send_telemetry_payload(
     if resolved is None:
         return False
     key, endpoint = resolved
-    try:
-        import httpx  # lazy — optional dep, surfaces no advisory
-    except ImportError:
-        return False
     body = {
         "api_key": key,
         "event": payload.get("command", "soup_event"),
         "properties": {k: v for k, v in payload.items() if k != "command"},
     }
     try:
-        resp = httpx.post(endpoint, json=body, timeout=timeout)
-        return 200 <= resp.status_code < 300
+        import json  # noqa: PLC0415
+        from urllib import request  # noqa: PLC0415
+
+        encoded = json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode(
+            "utf-8"
+        )
+        req = request.Request(
+            endpoint,
+            data=encoded,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with request.urlopen(req, timeout=float(timeout)) as response:
+            status = getattr(response, "status", None)
+            if not isinstance(status, int):
+                status = response.getcode()
+            return isinstance(status, int) and 200 <= status < 300
     except Exception:  # noqa: BLE001 — telemetry must never crash training
         return False
 
