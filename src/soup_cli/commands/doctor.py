@@ -225,7 +225,8 @@ def _check_mlx():
     elif info.get("apple_silicon"):
         console.print(
             Panel(
-                "Status:   [yellow]not installed[/]\nInstall:  [dim]pip install 'soup-cli[mlx]'[/]",
+                "Status:   [yellow]not installed[/]\n"
+                "Install:  [dim]pip install \"soup-cli\\[mlx]\"[/]",
                 title="MLX",
             )
         )
