@@ -593,6 +593,15 @@
       "training.lora.r": 16,
       "training.lr": 1e-05
     },
+    "gemma3-4b-sft-mlx": {
+      "backend": "mlx",
+      "base": "mlx-community/gemma-3-4b-it-4bit",
+      "data.train": "./data/train.jsonl",
+      "training.batch_size": 2,
+      "training.lora.alpha": 32,
+      "training.lora.r": 16,
+      "training.lr": 0.0001
+    },
     "gemma3-9b-sft": {
       "base": "google/gemma-3-9b-it",
       "data.format": "auto",
@@ -600,15 +609,6 @@
       "training.lora.alpha": 32,
       "training.lora.r": 16,
       "training.lr": 0.0002
-    },
-    "gemma3-9b-sft-mlx": {
-      "backend": "mlx",
-      "base": "mlx-community/gemma-3-9b-it-4bit",
-      "data.train": "./data/train.jsonl",
-      "training.batch_size": 2,
-      "training.lora.alpha": 32,
-      "training.lora.r": 16,
-      "training.lr": 0.0001
     },
     "glm-4.6-sft": {
       "base": "THUDM/glm-4.6",
@@ -1628,7 +1628,7 @@
     },
     "qwen3-8b-sft-mlx": {
       "backend": "mlx",
-      "base": "mlx-community/Qwen3-8B-Instruct-4bit",
+      "base": "mlx-community/Qwen3-8B-4bit",
       "data.train": "./data/train.jsonl",
       "training.batch_size": 2,
       "training.lora.alpha": 32,

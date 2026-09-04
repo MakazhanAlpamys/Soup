@@ -1239,13 +1239,13 @@ output: ./output
 """,
     ),
     "qwen3-8b-sft-mlx": RecipeMeta(
-        model="mlx-community/Qwen3-8B-Instruct-4bit",
+        model="mlx-community/Qwen3-8B-4bit",
         task="sft",
         size="8B",
         tags=("qwen", "qwen3", "mlx", "apple-silicon", "sft"),
         description="Qwen 3 8B SFT on Apple Silicon via MLX (M2+ 16GB)",
         yaml_str="""\
-base: mlx-community/Qwen3-8B-Instruct-4bit
+base: mlx-community/Qwen3-8B-4bit
 task: sft
 backend: mlx
 
@@ -1267,14 +1267,14 @@ training:
 output: ./output
 """,
     ),
-    "gemma3-9b-sft-mlx": RecipeMeta(
-        model="mlx-community/gemma-3-9b-it-4bit",
+    "gemma3-4b-sft-mlx": RecipeMeta(
+        model="mlx-community/gemma-3-4b-it-4bit",
         task="sft",
-        size="9B",
+        size="4B",
         tags=("gemma", "gemma3", "mlx", "apple-silicon", "sft"),
-        description="Gemma 3 9B SFT on Apple Silicon via MLX (M2+ 16GB)",
+        description="Gemma 3 4B SFT on Apple Silicon via MLX (M1+ 16GB)",
         yaml_str="""\
-base: mlx-community/gemma-3-9b-it-4bit
+base: mlx-community/gemma-3-4b-it-4bit
 task: sft
 backend: mlx
 
