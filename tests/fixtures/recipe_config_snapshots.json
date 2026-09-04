@@ -813,6 +813,21 @@
       "training.lr": 1e-05,
       "training.moe_lora": true
     },
+    "kimi-k2.6-dpo": {
+      "base": "moonshotai/Kimi-K2.6",
+      "data.format": "dpo",
+      "data.max_length": 8192,
+      "data.train": "./data/preference_train.jsonl",
+      "task": "dpo",
+      "training.batch_size": 1,
+      "training.epochs": 1,
+      "training.gradient_accumulation_steps": 16,
+      "training.gradient_checkpointing": true,
+      "training.lora.alpha": 64,
+      "training.lora.r": 32,
+      "training.lr": 5e-06,
+      "training.moe_lora": true
+    },
     "kimi-k2.6-grpo": {
       "base": "moonshotai/Kimi-K2.6",
       "data.format": "auto",

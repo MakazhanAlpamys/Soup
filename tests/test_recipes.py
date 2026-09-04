@@ -733,6 +733,96 @@ class TestIssue281KimiK26GrpoRecipe:
         )
 
 
+class TestKimiK26DpoRecipe:
+    """Coverage for the kimi-k2.6-dpo recipe (#275 task-variant).
+
+    Kimi-K2.6 shipped SFT (v0.71.24) and GRPO (#281 / #614); this completes the trio
+    with the direct preference optimization (DPO) shape. The model id is pinned
+    on two independent surfaces — ``RecipeMeta.model`` and the YAML ``base:`` —
+    in two separate tests.
+    """
+
+    RECIPE = "kimi-k2.6-dpo"
+    MODEL = "moonshotai/Kimi-K2.6"
+
+    def test_recipe_meta_pins_the_model_id(self) -> None:
+        """Surface 1: the catalog metadata, read without touching the YAML."""
+        from soup_cli.recipes.catalog import get_recipe
+
+        recipe = get_recipe(self.RECIPE)
+        assert recipe is not None, f"{self.RECIPE} is missing from the catalog"
+        assert recipe.model == self.MODEL
+        assert recipe.task == "dpo"
+        assert recipe.size == "1T"
+        assert "Modified MIT" in recipe.description
+
+    def test_yaml_base_pins_the_model_id(self) -> None:
+        """Surface 2: the YAML body, parsed directly rather than via ``.model``."""
+        import yaml
+
+        from soup_cli.recipes.catalog import get_recipe
+
+        recipe = get_recipe(self.RECIPE)
+        assert recipe is not None
+        parsed = yaml.safe_load(recipe.yaml_str)
+        assert parsed["base"] == self.MODEL
+        assert parsed["task"] == "dpo"
+
+    def test_recipe_loads_with_expected_dpo_moe_shape(self) -> None:
+        """The loaded config, verified through schema validation."""
+        from soup_cli.config.loader import load_config_from_string
+        from soup_cli.recipes.catalog import get_recipe
+
+        recipe = get_recipe(self.RECIPE)
+        assert recipe is not None
+        config = load_config_from_string(recipe.yaml_str)
+
+        assert config.base == self.MODEL
+        assert config.task == "dpo"
+        assert config.data.format == "dpo"
+        assert config.data.max_length == 8192
+        assert config.training.dpo_beta == 0.1
+        assert config.training.lr == 5e-6
+        assert config.training.batch_size == 1
+        assert config.training.gradient_accumulation_steps == 16
+        assert config.training.lora.r == 32
+        assert config.training.lora.alpha == 64
+        assert config.training.quantization == "4bit"
+        assert config.training.moe_lora is True
+        assert config.training.moe_aux_loss_coeff == 0.01
+        assert config.training.gradient_checkpointing is True
+
+    def test_completes_the_task_trio_for_this_base(self) -> None:
+        """#275 is about DPO/GRPO/pretrain variants of the shipped SFT recipes."""
+        from soup_cli.recipes.catalog import RECIPES
+
+        tasks = {r.task for r in RECIPES.values() if r.model == self.MODEL}
+        assert {"sft", "grpo", "dpo"} <= tasks
+
+    def test_shares_base_and_size_with_its_sft_sibling(self) -> None:
+        from soup_cli.recipes.catalog import get_recipe
+
+        dpo, sft = get_recipe(self.RECIPE), get_recipe("kimi-k2.6-sft")
+        assert dpo is not None and sft is not None
+        assert dpo.model == sft.model
+        assert dpo.size == sft.size
+        assert dpo.task != sft.task
+
+    def test_show_and_use_recipe(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        show_result = runner.invoke(app, ["recipes", "show", self.RECIPE])
+        assert show_result.exit_code == 0
+        assert self.MODEL in strip_ansi(show_result.output)
+
+        monkeypatch.chdir(tmp_path)
+        use_result = runner.invoke(app, ["recipes", "use", self.RECIPE, "--yes"])
+        assert use_result.exit_code == 0
+        assert self.MODEL in (tmp_path / "soup.yaml").read_text(encoding="utf-8")
+
+
 class TestQwen35NineBDpoRecipe:
     """Coverage for the qwen3.5-9b-dpo recipe (#275 task-variant)."""
 
@@ -843,7 +933,7 @@ class TestV025NewRecipes:
             assert cfg.base == recipe.model
             assert cfg.task == recipe.task
 
-    def test_catalog_size_is_164(self):
+    def test_catalog_size_is_165(self):
         """Total catalog size — grew with each release.
 
         v0.25.0 shipped 43 recipes (29 + 9 Part A + 2 Part B tools + 3 Part E MLX).
@@ -871,10 +961,11 @@ class TestV025NewRecipes:
         Task-variant for #275 added 1 (qwen3.5-9b-dpo) -> 162.
         Task-variant for #275 added 1 (glm-5.1-grpo) -> 163.
         Task-variant for #275 added 1 (deepseek-v4-flash-dpo) -> 164.
+        Task-variant for #275 added 1 (kimi-k2.6-dpo) -> 165.
         """
         from soup_cli.recipes.catalog import RECIPES
 
-        assert len(RECIPES) == 164
+        assert len(RECIPES) == 165
 
     def test_new_recipes_searchable(self):
         """Search returns the new recipes via keyword/task filter."""
