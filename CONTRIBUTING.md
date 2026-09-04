@@ -17,11 +17,21 @@ cd Soup
 exactly those three; `tests/test_requires_python_bound.py` derives the declared bound from
 the CI matrix, so widening one without the other fails the suite.
 
-Install the project in editable mode with dev dependencies:
+Work inside a virtualenv, then install the project in editable mode with dev
+dependencies:
 
 ```bash
+python3 -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -e ".[dev]"
 ```
+
+The `venv` step is not optional on Debian 12, Ubuntu 23.04 or later: without it
+`pip` refuses with `error: externally-managed-environment`, because those distros
+stop pip writing into the system Python that `apt` manages
+([PEP 668](https://peps.python.org/pep-0668/)). `pipx` is the answer for
+*installing* Soup and the wrong tool here, since an editable checkout needs to be
+importable by the test suite rather than isolated from it.
 
 This installs:
 - `pytest` for testing
