@@ -174,7 +174,7 @@ Works with all training tasks: SFT, DPO, GRPO, PPO, KTO, ORPO, SimPO, IPO, and P
 
 ## Cloud GPU Training
 
-No local GPU? `soup train --cloud modal|runpod|lambda` renders a provider-specific controller
+No local GPU? `soup train --cloud modal|lambda` renders a provider-specific controller
 from your `soup.yaml`. The config YAML is base64-embedded as **data**; credentials are read from
 the environment only when a live submission starts.
 

@@ -5,4 +5,4 @@ Ships Modal and Lambda Cloud backends, with RunPod planned.
 
 from __future__ import annotations
 
-__all__ = ["lambda_labs", "modal", "runpod"]
+__all__ = ["lambda_labs", "modal"]

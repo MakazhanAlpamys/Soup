@@ -184,8 +184,6 @@ compile = ["dspy-ai>=2.5.0", "textgrad>=0.1.0", "gepa>=0.0.1"]
 # Lazy-imported; only needed for `--cloud-submit` (plan-only render needs no
 # dependency). Modal auth is via `modal setup`.
 modal = ["modal>=0.60.0"]
-# v0.71.22 #264 — RunPod cloud GPU training (`soup train --cloud runpod`).
-runpod = ["runpod>=1.3.0"]
 # v0.71.28 - `soup mcp serve` MCP server. The official `mcp` python SDK is
 # lazy-imported (only src/soup_cli/mcp_server/server.py touches it), so the CLI
 # stays light without it. Floor pinned to guard against SDK API churn.

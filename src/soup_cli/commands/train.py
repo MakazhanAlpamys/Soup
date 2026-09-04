@@ -488,8 +488,8 @@ def train(
         "a100",
         "--gpu",
         help=(
-            "Cloud GPU type for --cloud (t4 / l4 / a10g / a100 / a100-80gb / "
-            "l40s / h100 / rtx-4090 / a6000). Default a100. Provider-specific allowlists apply."
+            "Cloud GPU type for --cloud (t4 / l4 / a10 / a10g / a100 / a100-80gb / "
+            "l40s / h100 / a6000). Default a100. Provider-specific allowlists apply."
         ),
     ),
     cloud_submit: bool = typer.Option(

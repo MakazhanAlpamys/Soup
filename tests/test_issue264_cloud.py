@@ -18,136 +18,8 @@ def _strip_ansi(s: str) -> str:
     return re.sub(r"\x1B\[[0-?]*[ -/]*[@-~]", "", s)
 
 
-class TestValidateRunpod:
-    def test_runpod_validate_cloud(self):
-        from soup_cli.cloud.runpod import validate_cloud
-
-        assert validate_cloud("runpod") == "runpod"
-        assert validate_cloud("RUNPOD") == "runpod"
-        with pytest.raises(ValueError):
-            validate_cloud("modal")
-        with pytest.raises(ValueError, match="got bool"):
-            validate_cloud(True)
-        with pytest.raises(ValueError, match="got int"):
-            validate_cloud(123)
-        with pytest.raises(ValueError, match="non-empty string"):
-            validate_cloud("")
-        with pytest.raises(ValueError, match="null bytes"):
-            validate_cloud("run\x00pod")
-        with pytest.raises(ValueError, match="exceeds"):
-            validate_cloud("a" * 100)
-
-    def test_runpod_validate_gpu(self):
-        from soup_cli.cloud.runpod import validate_gpu
-
-        assert validate_gpu("rtx-4090") == "rtx-4090"
-        with pytest.raises(ValueError):
-            validate_gpu("tpu")
-        with pytest.raises(ValueError, match="got bool"):
-            validate_gpu(True)
-        with pytest.raises(ValueError, match="got int"):
-            validate_gpu(123)
-        with pytest.raises(ValueError, match="non-empty string"):
-            validate_gpu("")
-        with pytest.raises(ValueError, match="null bytes"):
-            validate_gpu("rtx\x004090")
-        with pytest.raises(ValueError, match="exceeds"):
-            validate_gpu("a" * 100)
-
-
-class TestRenderRunpodStub:
-    def test_render_happy_path(self):
-        from soup_cli.cloud.runpod import render_runpod_stub
-
-        stub = render_runpod_stub(
-            _SOUP_YAML, gpu="a100", output_dir="./out", soup_version="0.71.22"
-        )
-        assert "runpod.create_pod" in stub
-        assert "NVIDIA A100 80GB PCIe" in stub
-        assert "soup-cli[train]==0.71.22" in stub
-        assert "RUNPOD_NETWORK_VOLUME_ID" in stub
-        assert 'volume_mount_path="/workspace"' in stub
-        assert "cd /workspace" in stub
-
-    def test_bad_output_dir_rejected(self):
-        from soup_cli.cloud.runpod import render_runpod_stub
-
-        with pytest.raises(ValueError):
-            render_runpod_stub(
-                _SOUP_YAML, gpu="a100", output_dir="out\nINJECT", soup_version="0.71.22"
-            )
-
-    @pytest.mark.parametrize("output_dir", ["/tmp/out", "../out", "out with spaces"])
-    def test_non_persistent_or_unsafe_output_rejected(self, output_dir):
-        from soup_cli.cloud.runpod import render_runpod_stub
-
-        with pytest.raises(ValueError, match="output_dir"):
-            render_runpod_stub(
-                _SOUP_YAML, gpu="a100", output_dir=output_dir, soup_version="0.71.22"
-            )
-
-    def test_render_config_yaml_validation(self):
-        from soup_cli.cloud.runpod import render_runpod_stub
-
-        with pytest.raises(TypeError, match="must be a string"):
-            render_runpod_stub(123, gpu="a100", output_dir="./out", soup_version="1.0.0")
-        with pytest.raises(ValueError, match="exceeds"):
-            render_runpod_stub(
-                "a" * 2_000_000, gpu="a100", output_dir="./out", soup_version="1.0.0"
-            )
-
-    def test_render_soup_version_validation(self):
-        from soup_cli.cloud.runpod import render_runpod_stub
-
-        with pytest.raises(ValueError, match="NUL-free string"):
-            render_runpod_stub(_SOUP_YAML, gpu="a100", output_dir="./out", soup_version="1.0\x00")
-        with pytest.raises(ValueError, match="must match"):
-            render_runpod_stub(_SOUP_YAML, gpu="a100", output_dir="./out", soup_version="invalid!")
-        with pytest.raises(ValueError, match="must match"):
-            render_runpod_stub(_SOUP_YAML, gpu="a100", output_dir="./out", soup_version="a" * 100)
-
-
-class TestPlanRunpodRun:
-    def test_plan(self, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
-        (tmp_path / "soup.yaml").write_text(_SOUP_YAML, encoding="utf-8")
-        from soup_cli.cloud._common import CloudPlan
-        from soup_cli.cloud.runpod import plan_runpod_run
-
-        plan = plan_runpod_run("soup.yaml", gpu="a100", output_dir="./out", soup_version="0.71.22")
-        assert isinstance(plan, CloudPlan)
-        assert plan.cloud == "runpod"
-        assert plan.gpu == "a100"
-        assert plan.run_command == "python soup_runpod_app.py"
-
-    def test_plan_config_too_large(self, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
-        (tmp_path / "soup.yaml").write_text("a" * 2_000_000, encoding="utf-8")
-        from soup_cli.cloud.runpod import plan_runpod_run
-
-        with pytest.raises(ValueError, match="exceeds"):
-            plan_runpod_run("soup.yaml", gpu="a100", output_dir="./out", soup_version="0.71.22")
-
-
-class TestSubmitRunpodRun:
-    def test_submit_not_implemented(self):
-        import soup_cli.cloud.runpod as m
-        from soup_cli.cloud._common import CloudPlan
-
-        plan = CloudPlan(
-            cloud="runpod",
-            gpu="a100",
-            output_dir="./out",
-            stub_path="x.py",
-            stub_text="",
-            run_command="python x.py",
-        )
-        with pytest.raises(NotImplementedError, match="not yet available for RunPod"):
-            m.submit_runpod_run(plan)
-
-
-
 class TestValidateLambdaLabs:
+
     def test_lambda_validate_cloud(self):
         from soup_cli.cloud.lambda_labs import validate_cloud
 
@@ -376,28 +248,16 @@ class TestTrainCloudCliNew:
         assert "not yet live" in _strip_ansi(res_runpod.output)
 
 
-class TestCloudNoTopLevelSDK:
-    def test_no_top_level_runpod_import(self):
-        src = (REPO_ROOT / "src/soup_cli/cloud/runpod.py").read_text(encoding="utf-8")
-        assert "\nimport runpod\n" not in src
-
-    def test_runpod_extra_in_pyproject(self):
-        pp = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
-        assert "runpod = [" in pp
-
-
 class TestCloudNoSecrets:
     def test_no_secrets_in_stub_or_payload(self, monkeypatch):
         from soup_cli.cloud.lambda_labs import render_lambda_stub
         from soup_cli.cloud.modal import render_modal_stub
-        from soup_cli.cloud.runpod import render_runpod_stub
 
         secret = "LIVE_SECRET_ABCDEF123456"
         hf_token = "hf_LIVE_TOKEN_ABCDEF123456"
         wandb_key = "wandb_LIVE_KEY_ABCDEF123456"
 
         monkeypatch.setenv("LAMBDA_API_KEY", secret)
-        monkeypatch.setenv("RUNPOD_API_KEY", secret)
         monkeypatch.setenv("MODAL_TOKEN_ID", secret)
         monkeypatch.setenv("MODAL_TOKEN_SECRET", secret)
         monkeypatch.setenv("LAMBDA_SSH_KEY_NAME", "registered-key")
@@ -405,15 +265,7 @@ class TestCloudNoSecrets:
         monkeypatch.setenv("HF_TOKEN", hf_token)
         monkeypatch.setenv("WANDB_API_KEY", wandb_key)
 
-        # 1. RunPod
-        stub_runpod = render_runpod_stub(
-            _SOUP_YAML, gpu="a100", output_dir="./out", soup_version="0.71.22"
-        )
-        assert secret not in stub_runpod
-        assert hf_token not in stub_runpod
-        assert wandb_key not in stub_runpod
-
-        # 2. Lambda Labs
+        # 1. Lambda Labs
         stub_lambda = render_lambda_stub(
             _SOUP_YAML, gpu="a100", output_dir="./out", soup_version="0.71.22"
         )
@@ -429,11 +281,12 @@ class TestCloudNoSecrets:
         assert hf_token not in payload_str
         assert wandb_key not in payload_str
 
-        # 3. Modal
+        # 2. Modal
         stub_modal = render_modal_stub(
             _SOUP_YAML, gpu="a100", output_dir="./out", soup_version="0.71.22"
         )
         assert secret not in stub_modal
         assert hf_token not in stub_modal
         assert wandb_key not in stub_modal
+
 
