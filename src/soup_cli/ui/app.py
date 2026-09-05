@@ -41,9 +41,86 @@ class DataInspectRequest(PydanticBaseModel):
     limit: int = Field(default=50, ge=1, le=_MAX_INSPECT_LIMIT)
 
 
+class TrainLogBuffer:
+    """Thread-safe bounded ring buffer for subprocess output lines."""
+
+    def __init__(self, maxlen: int = 10000):
+        self._maxlen = maxlen
+        self._lines: list[tuple[int, str]] = []
+        self._lock = threading.Lock()
+        self._new_line_cond = threading.Condition(self._lock)
+        self._done = False
+        self._total_emitted = 0
+
+    def append(self, text: str) -> None:
+        with self._new_line_cond:
+            idx = self._total_emitted
+            self._total_emitted += 1
+            self._lines.append((idx, text))
+            if len(self._lines) > self._maxlen:
+                self._lines.pop(0)
+            self._new_line_cond.notify_all()
+
+    def mark_done(self) -> None:
+        with self._new_line_cond:
+            self._done = True
+            self._new_line_cond.notify_all()
+
+    def is_done(self) -> bool:
+        with self._lock:
+            return self._done
+
+    def get_lines_from(self, start_idx: int) -> list[tuple[int, str]]:
+        with self._lock:
+            return [item for item in self._lines if item[0] >= start_idx]
+
+    def wait_for_lines_or_done(
+        self, next_idx: int, timeout: float = 0.5
+    ) -> tuple[list[tuple[int, str]], bool]:
+        """Wait until lines >= next_idx are available or process is marked done."""
+        with self._new_line_cond:
+            available = [item for item in self._lines if item[0] >= next_idx]
+            if available or self._done:
+                return available, self._done
+            self._new_line_cond.wait(timeout=timeout)
+            available = [item for item in self._lines if item[0] >= next_idx]
+            return available, self._done
+
+
+def _drain_stdout_worker(proc: subprocess.Popen, log_buffer: TrainLogBuffer) -> None:
+    """Continuously read stdout of proc until EOF and write to log_buffer."""
+    stdout = getattr(proc, "stdout", None)
+    if stdout is None:
+        log_buffer.mark_done()
+        return
+
+    try:
+        while True:
+            raw_line = stdout.readline()
+            if not raw_line or raw_line == b"":
+                break
+            if isinstance(raw_line, bytes):
+                text = raw_line.decode("utf-8", errors="replace").rstrip("\n\r")
+            elif isinstance(raw_line, str):
+                text = raw_line.rstrip("\n\r")
+            else:
+                break
+            log_buffer.append(text)
+    except (ValueError, OSError) as exc:
+        logger.debug("Drain worker exception: %s", exc)
+    finally:
+        try:
+            stdout.close()
+        except Exception:
+            pass
+        log_buffer.mark_done()
+
+
 # Global state for training process
 _train_process: Optional[subprocess.Popen] = None
 _train_config_path: Optional[str] = None
+_train_log_buffer: Optional[TrainLogBuffer] = None
+_train_drain_thread: Optional[threading.Thread] = None
 _train_lock = threading.Lock()
 
 # Auth token generated at startup — printed to console for the user.
@@ -308,6 +385,15 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
             )
+            global _train_log_buffer, _train_drain_thread
+            _train_log_buffer = TrainLogBuffer(maxlen=10000)
+            _train_drain_thread = threading.Thread(
+                target=_drain_stdout_worker,
+                args=(_train_process, _train_log_buffer),
+                daemon=True,
+                name="soup_train_drain",
+            )
+            _train_drain_thread.start()
             return {"started": True, "pid": _train_process.pid}
 
     @app.get("/api/train/status")
@@ -397,26 +483,28 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
             skip_count = int(last_event_id) + 1
 
         def _generate_log_events():
-            line_index = 0
             with _train_lock:
-                proc = _train_process
-            if proc is None:
+                buf = _train_log_buffer
+            if buf is None:
                 yield "event: done\ndata: {}\n\n"
                 return
 
-            try:
-                for raw_line in proc.stdout:
-                    if isinstance(raw_line, bytes):
-                        raw_line = raw_line.decode("utf-8", errors="replace")
-                    text = raw_line.rstrip("\n\r")
-                    if line_index < skip_count:
-                        line_index += 1
-                        continue
-                    data = json_mod.dumps({"line": text, "id": line_index})
-                    yield f"id: {line_index}\ndata: {data}\n\n"
-                    line_index += 1
-            except (ValueError, OSError):
-                pass
+            current_idx = skip_count
+            while True:
+                lines, is_done = buf.wait_for_lines_or_done(current_idx, timeout=0.5)
+                for idx, text in lines:
+                    data = json_mod.dumps({"line": text, "id": idx})
+                    yield f"id: {idx}\ndata: {data}\n\n"
+                    current_idx = idx + 1
+
+                if is_done:
+                    # Drain any remaining lines buffered before completion
+                    remaining = buf.get_lines_from(current_idx)
+                    for idx, text in remaining:
+                        data = json_mod.dumps({"line": text, "id": idx})
+                        yield f"id: {idx}\ndata: {data}\n\n"
+                        current_idx = idx + 1
+                    break
 
             yield "event: done\ndata: {}\n\n"
 
