@@ -99,6 +99,7 @@ class _Tee:
         return getattr(self._streams[0], "isatty", lambda: False)()
 
 
+_ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[a-zA-Z]")
 _TRAINED_TOKENS_RE = re.compile(r"Trained Tokens (\d+)")
 
 
@@ -111,10 +112,14 @@ def _final_trained_tokens(train_stdout: str) -> int | None:
     wrapper's result dict does not carry the count, so stdout is the only
     place it surfaces.
 
-    Returns None if the line is absent — the caller prints nothing rather
-    than inventing a figure.
+    Rich's Live/FileProxy wraps progress lines and inserts ANSI controls.
+    Normalise both before matching, or an intact earlier report can silently
+    win over the wrapped final counter at some terminal widths.
+
+    Returns None if the counter is absent; the caller reports unavailable.
     """
-    matches = _TRAINED_TOKENS_RE.findall(train_stdout)
+    flat = re.sub(r"\s+", " ", _ANSI_RE.sub("", train_stdout))
+    matches = _TRAINED_TOKENS_RE.findall(flat)
     return int(matches[-1]) if matches else None
 
 
@@ -218,10 +223,10 @@ output: {out}
             # Include Ctrl-C; the wrapper stops its display in its own finally.
             tracker.fail_run(run_id)
             raise
-    Console().print(
-        f"bridge        : {len(metrics)} metric reports saved to {tracker.db_path}",
-        markup=False,
-    )
+        Console().print(
+            f"bridge        : {len(metrics)} metric reports saved to {tracker.db_path}",
+            markup=False, highlight=False, soft_wrap=True,
+        )
     train_stdout = buffer.getvalue()
     print(f"train         : {train_s:.1f}s   "
           f"mlx peak during train: {mx.get_peak_memory() / 1024**3:.3f} GB")

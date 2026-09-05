@@ -102,7 +102,7 @@ def harness_run(monkeypatch, tmp_path):
 
 @pytest.mark.parametrize(
     ("terminal_width", "force_terminal"),
-    [(None, False), (80, True), (40, True), (32, True), (80, None)],
+    [(None, False), *((width, True) for width in range(20, 201)), (80, None)],
 )
 def test_harness_drives_rich_and_persists_metrics_without_losing_throughput(
     harness_run, capsys, monkeypatch, terminal_width, force_terminal,
@@ -195,3 +195,39 @@ def test_tee_preserves_rich_terminal_detection(harness_run, is_terminal):
     buffer = io.StringIO()
     tee = harness_run.harness._Tee(output, buffer)
     assert Console(file=tee, force_terminal=None).is_terminal is is_terminal
+
+
+@pytest.mark.parametrize(
+    ("stdout", "expected"),
+    [
+        ("no cumulative counter\nTokens/sec 254.313\n", None),
+        ("Trained Tokens 0\n", 0),
+        ("Trained Tokens 222\nTrained Tokens 454\n", 454),
+        # The final report, not the earlier matching count, must win.
+        ("Trained Tokens 222\nTrained\nTokens\t  454\n", 454),
+        ("Trained Tokens 222\nTrained\x1b[0m Tokens \x1b[32m454\x1b[0m\n", 454),
+        ("Trained Tokens 999\nTrained\x1b[2K\nTokens\r\n\x1b[32m1000\x1b[0m\n", 1000),
+        ("Trained Tokens 222\nTrained \x1b[0m \nTokens \x1b[32m 454\n", 454),
+    ],
+)
+def test_token_parser_recovers_the_last_report(harness_run, stdout, expected):
+    assert harness_run.harness._final_trained_tokens(stdout) == expected
+
+
+def test_summary_prints_a_copyable_path_before_tracker_close(harness_run, monkeypatch, capsys):
+    state = harness_run
+    monkeypatch.setenv("COLUMNS", "20")
+    original_print = Console.print
+    summary_connections = []
+
+    def record_print(console, *args, **kwargs):
+        if args and isinstance(args[0], str) and args[0].startswith("bridge        :"):
+            summary_connections.append(state.trackers[0]._conn is not None)
+        return original_print(console, *args, **kwargs)
+
+    monkeypatch.setattr(Console, "print", record_print)
+    assert state.harness.main() == 0
+    summary = f"bridge        : 2 metric reports saved to {state.artifacts / 'experiments.db'}"
+    assert summary in capsys.readouterr().out.splitlines()
+    assert summary_connections == [True]
+    assert state.trackers[0]._conn is None
