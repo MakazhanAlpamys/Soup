@@ -986,12 +986,12 @@ class TestCrossDocAttnMaskConfig:
         assert cfg.training.packing_cross_doc_attn_mask is False
 
     def test_enabled(self):
-        cfg = SoupConfig(
-            base="test/model",
-            data={"train": "./data.jsonl"},
-            training={"packing_cross_doc_attn_mask": True, "packing": True},
-        )
-        assert cfg.training.packing_cross_doc_attn_mask is True
+        with pytest.raises(ValidationError, match="bfd"):
+            SoupConfig(
+                base="test/model",
+                data={"train": "./data.jsonl"},
+                training={"packing_cross_doc_attn_mask": True, "packing": True},
+            )
 
     def test_requires_packing(self):
         """Enabling cross-doc mask without packing should error."""
@@ -1341,7 +1341,6 @@ class TestV028Integration:
                 "gradient_checkpointing": "auto",
                 "kernel_auto_compose": True,
                 "packing": True,
-                "packing_cross_doc_attn_mask": True,
                 "activation_offloading": "cpu",
             },
         )
@@ -1351,5 +1350,4 @@ class TestV028Integration:
         assert tcfg.gradient_checkpointing == "auto"
         assert tcfg.kernel_auto_compose is True
         assert tcfg.packing is True
-        assert tcfg.packing_cross_doc_attn_mask is True
         assert tcfg.activation_offloading == "cpu"

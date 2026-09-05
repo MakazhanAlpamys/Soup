@@ -2840,8 +2840,8 @@ class TrainingConfig(BaseModel):
     packing_cross_doc_attn_mask: bool = Field(
         default=False,
         description=(
-            "When packing is enabled, prevent attention bleed between packed "
-            "documents. Requires packing=true. (v0.28.0)."
+            "Rejected on TRL 0.29: packing_strategy allowlist is bfd / "
+            "bfd-requeue / wrapped, not attention_free. (v0.28.0 / #691)."
         ),
     )
     # v0.28.0 — Activation offloading (CPU/disk) for small-VRAM large-batch
@@ -3488,11 +3488,12 @@ class TrainingConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_cross_doc_attn_mask(self) -> "TrainingConfig":
-        """Cross-document attention masking requires packing=True."""
-        if self.packing_cross_doc_attn_mask and not self.packing:
+        """#691 — TRL 0.29 packing_strategy is bfd / bfd-requeue / wrapped."""
+        if self.packing_cross_doc_attn_mask:
             raise ValueError(
-                "packing_cross_doc_attn_mask requires packing=true "
-                "(cross-doc attention masking only applies to packed sequences)"
+                "packing_cross_doc_attn_mask is not supported: TRL 0.29 "
+                "packing_strategy must be 'bfd', 'bfd-requeue', or 'wrapped' "
+                "(Soup does not map attention_free)"
             )
         return self
 
