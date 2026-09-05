@@ -163,7 +163,7 @@ class TestSystemEndpoint:
         from soup_cli.ui.app import create_app
 
         client = TestClient(create_app())
-        response = client.get("/api/system")
+        response = client.get("/api/system", headers=_auth_headers())
         assert response.status_code == 200
         data = response.json()
         assert "version" in data
@@ -186,7 +186,7 @@ class TestTemplatesEndpoint:
         from soup_cli.ui.app import create_app
 
         client = TestClient(create_app())
-        response = client.get("/api/templates")
+        response = client.get("/api/templates", headers=_auth_headers())
         assert response.status_code == 200
         data = response.json()
         templates = data["templates"]
@@ -206,7 +206,7 @@ class TestTemplatesEndpoint:
         from soup_cli.ui.app import create_app
 
         client = TestClient(create_app())
-        response = client.get("/api/templates")
+        response = client.get("/api/templates", headers=_auth_headers())
         templates = response.json()["templates"]
         for name, yaml_str in templates.items():
             assert "base:" in yaml_str, f"Template {name} missing 'base:'"
@@ -296,7 +296,7 @@ class TestRunsEndpoint:
             from soup_cli.ui.app import create_app
 
             client = TestClient(create_app())
-            response = client.get("/api/runs")
+            response = client.get("/api/runs", headers=_auth_headers())
             assert response.status_code == 200
             assert response.json()["runs"] == []
 
@@ -323,7 +323,7 @@ class TestRunsEndpoint:
             tracker.close()
 
             client = TestClient(create_app())
-            response = client.get("/api/runs")
+            response = client.get("/api/runs", headers=_auth_headers())
             assert response.status_code == 200
             runs = response.json()["runs"]
             assert len(runs) == 1
@@ -351,7 +351,7 @@ class TestRunsEndpoint:
             tracker.close()
 
             client = TestClient(create_app())
-            response = client.get(f"/api/runs/{run_id}")
+            response = client.get(f"/api/runs/{run_id}", headers=_auth_headers())
             assert response.status_code == 200
             data = response.json()
             assert data["run_id"] == run_id
@@ -369,7 +369,9 @@ class TestRunsEndpoint:
             from soup_cli.ui.app import create_app
 
             client = TestClient(create_app())
-            response = client.get("/api/runs/nonexistent_run_id")
+            response = client.get(
+                "/api/runs/nonexistent_run_id", headers=_auth_headers()
+            )
             assert response.status_code == 404
 
     def test_delete_run(self, tmp_path):
@@ -401,7 +403,7 @@ class TestRunsEndpoint:
             assert response.json()["deleted"] is True
 
             # Verify deleted
-            response = client.get(f"/api/runs/{run_id}")
+            response = client.get(f"/api/runs/{run_id}", headers=_auth_headers())
             assert response.status_code == 404
 
     def test_delete_run_not_found(self, tmp_path):
@@ -450,7 +452,7 @@ class TestRunMetrics:
             tracker.close()
 
             client = TestClient(create_app())
-            response = client.get(f"/api/runs/{run_id}/metrics")
+            response = client.get(f"/api/runs/{run_id}/metrics", headers=_auth_headers())
             assert response.status_code == 200
             data = response.json()
             assert data["run_id"] == run_id
@@ -471,7 +473,9 @@ class TestRunMetrics:
             from soup_cli.ui.app import create_app
 
             client = TestClient(create_app())
-            response = client.get("/api/runs/nonexistent/metrics")
+            response = client.get(
+                "/api/runs/nonexistent/metrics", headers=_auth_headers()
+            )
             assert response.status_code == 404
 
 
@@ -507,7 +511,7 @@ class TestRunEval:
             tracker.close()
 
             client = TestClient(create_app())
-            response = client.get(f"/api/runs/{run_id}/eval")
+            response = client.get(f"/api/runs/{run_id}/eval", headers=_auth_headers())
             assert response.status_code == 200
             data = response.json()
             assert len(data["eval_results"]) == 1
@@ -640,7 +644,7 @@ class TestTrainEndpoints:
         ui_app_module._train_process = None
 
         client = TestClient(create_app())
-        response = client.get("/api/train/status")
+        response = client.get("/api/train/status", headers=_auth_headers())
         assert response.status_code == 200
         assert response.json()["running"] is False
 
@@ -836,7 +840,7 @@ class TestRunsLimitParam:
             from soup_cli.ui.app import create_app
 
             client = TestClient(create_app())
-            response = client.get("/api/runs")
+            response = client.get("/api/runs", headers=_auth_headers())
             assert response.status_code == 200
 
     def test_runs_custom_limit(self, tmp_path):
@@ -851,5 +855,5 @@ class TestRunsLimitParam:
             from soup_cli.ui.app import create_app
 
             client = TestClient(create_app())
-            response = client.get("/api/runs?limit=10")
+            response = client.get("/api/runs?limit=10", headers=_auth_headers())
             assert response.status_code == 200

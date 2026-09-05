@@ -73,8 +73,49 @@ def set_auth_token(token: str) -> None:
         _auth_token = validated
 
 
-def create_app(host: str = "127.0.0.1", port: int = 7860):
+# Ephemeral single-use tickets for SSE endpoints (v0.74.x #687)
+# Valid for 30 seconds, single use only.
+_tickets: dict[str, float] = {}
+_tickets_lock = threading.Lock()
+
+
+def _cleanup_expired_tickets() -> None:
+    now = time.time()
+    expired = [t for t, exp in _tickets.items() if exp < now]
+    for t in expired:
+        _tickets.pop(t, None)
+
+
+def create_auth_ticket() -> str:
+    """Create a short-lived (30s) single-use ticket for SSE connection."""
+    ticket = secrets.token_urlsafe(32)
+    now = time.time()
+    with _tickets_lock:
+        _cleanup_expired_tickets()
+        _tickets[ticket] = now + 30.0
+    return ticket
+
+
+def consume_auth_ticket(ticket: str) -> bool:
+    """Consume a single-use ticket if valid and unexpired."""
+    if not ticket:
+        return False
+    now = time.time()
+    with _tickets_lock:
+        _cleanup_expired_tickets()
+        exp = _tickets.pop(ticket, None)
+        if exp is not None and now <= exp:
+            return True
+    return False
+
+
+def create_app(host: str = "127.0.0.1", port: int = 7860, no_auth: bool = False):
     """Create the Soup Web UI FastAPI application."""
+    if host not in {"127.0.0.1", "localhost", "::1"} and no_auth:
+        raise ValueError(
+            f"Binding non-loopback host '{host}' with authentication disabled is not permitted."
+        )
+
     from fastapi import Depends, FastAPI, HTTPException, Query, Request
     from fastapi.middleware.cors import CORSMiddleware
     from fastapi.responses import HTMLResponse
@@ -110,7 +151,9 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
         )
 
     def _verify_token(request: Request):
-        """Verify Bearer token on mutating endpoints."""
+        """Verify Bearer token on API endpoints."""
+        if no_auth:
+            return
         auth = request.headers.get("Authorization", "")
         with _auth_token_lock:
             expected = f"Bearer {_auth_token}"
@@ -118,6 +161,29 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
         # response timing when `soup ui --public` is exposed on a LAN.
         if not secrets.compare_digest(auth, expected):
             raise HTTPException(status_code=401, detail="Unauthorized")
+
+    def _verify_token_or_ticket(request: Request):
+        """Verify Bearer token or consume a single-use ticket for SSE streaming."""
+        if no_auth:
+            return
+        auth = request.headers.get("Authorization", "")
+        with _auth_token_lock:
+            expected = f"Bearer {_auth_token}"
+        if auth and secrets.compare_digest(auth, expected):
+            return
+
+        ticket = request.query_params.get("ticket", "")
+        if ticket and consume_auth_ticket(ticket):
+            return
+
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    # --- Auth ticket exchange for SSE ---
+
+    @app.post("/api/auth/ticket", dependencies=[Depends(_verify_token)])
+    def issue_auth_ticket():
+        """Exchange Bearer token for a short-lived (30s) single-use SSE ticket."""
+        return {"ticket": create_auth_ticket()}
 
     # --- Static files ---
 
@@ -130,7 +196,7 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
 
     # --- Runs API ---
 
-    @app.get("/api/runs")
+    @app.get("/api/runs", dependencies=[Depends(_verify_token)])
     def list_runs(limit: int = Query(default=50, ge=1, le=500)):
         from soup_cli.experiment.tracker import ExperimentTracker
 
@@ -141,7 +207,7 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
         finally:
             tracker.close()
 
-    @app.get("/api/runs/compare")
+    @app.get("/api/runs/compare", dependencies=[Depends(_verify_token)])
     def compare_runs(ids: str = Query(default="")):
         """Compare metrics for multiple runs."""
         from soup_cli.experiment.tracker import ExperimentTracker
@@ -178,7 +244,7 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
         finally:
             tracker.close()
 
-    @app.get("/api/runs/{run_id}")
+    @app.get("/api/runs/{run_id}", dependencies=[Depends(_verify_token)])
     def get_run(run_id: str):
         from soup_cli.experiment.tracker import ExperimentTracker
 
@@ -191,7 +257,7 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
         finally:
             tracker.close()
 
-    @app.get("/api/runs/{run_id}/metrics")
+    @app.get("/api/runs/{run_id}/metrics", dependencies=[Depends(_verify_token)])
     def get_run_metrics(run_id: str):
         from soup_cli.experiment.tracker import ExperimentTracker
 
@@ -218,7 +284,7 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
         finally:
             tracker.close()
 
-    @app.get("/api/runs/{run_id}/eval")
+    @app.get("/api/runs/{run_id}/eval", dependencies=[Depends(_verify_token)])
     def get_run_eval(run_id: str):
         from soup_cli.experiment.tracker import ExperimentTracker
 
@@ -231,7 +297,7 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
 
     # --- GPU / System Info ---
 
-    @app.get("/api/system")
+    @app.get("/api/system", dependencies=[Depends(_verify_token)])
     def system_info():
         from soup_cli import __version__
         from soup_cli.utils.gpu import detect_device, get_gpu_info
@@ -248,7 +314,7 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
 
     # --- Templates ---
 
-    @app.get("/api/templates")
+    @app.get("/api/templates", dependencies=[Depends(_verify_token)])
     def list_templates():
         from soup_cli.config.schema import TEMPLATES
 
@@ -310,7 +376,7 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
             )
             return {"started": True, "pid": _train_process.pid}
 
-    @app.get("/api/train/status")
+    @app.get("/api/train/status", dependencies=[Depends(_verify_token)])
     def train_status():
         global _train_process
         with _train_lock:
@@ -386,7 +452,7 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
 
     # --- Training Live Monitor (SSE) ---
 
-    @app.get("/api/train/logs")
+    @app.get("/api/train/logs", dependencies=[Depends(_verify_token_or_ticket)])
     def stream_training_logs(request: Request):
         """SSE endpoint streaming training log lines in real time."""
         from fastapi.responses import StreamingResponse
@@ -429,7 +495,7 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
             },
         )
 
-    @app.get("/api/train/metrics/live")
+    @app.get("/api/train/metrics/live", dependencies=[Depends(_verify_token_or_ticket)])
     def stream_live_metrics(
         request: Request,
         run_id: Optional[str] = Query(default=None),
@@ -501,7 +567,7 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
             },
         )
 
-    @app.get("/api/train/progress")
+    @app.get("/api/train/progress", dependencies=[Depends(_verify_token)])
     def train_progress(
         run_id: Optional[str] = Query(default=None),
     ):
@@ -536,7 +602,7 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
 
     # --- Config Builder ---
 
-    @app.get("/api/config/schema")
+    @app.get("/api/config/schema", dependencies=[Depends(_verify_token)])
     def config_schema():
         """Return config schema as JSON for form generation."""
         from soup_cli.config.schema import (
@@ -592,7 +658,7 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
         schema["training"]["lora"] = _extract_field_info(LoraConfig)
         return schema
 
-    @app.get("/api/recipes")
+    @app.get("/api/recipes", dependencies=[Depends(_verify_token)])
     def list_recipes():
         """Return recipe catalog as JSON."""
         from soup_cli.recipes.catalog import RECIPES
@@ -756,7 +822,7 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
 
     # --- v0.53.9 #94: SSE training-event stream ---
 
-    @app.get("/api/train/stream")
+    @app.get("/api/train/stream", dependencies=[Depends(_verify_token_or_ticket)])
     async def stream_train_events():
         """SSE endpoint streaming `TrainEvent` payloads as JSON frames.
 
@@ -811,7 +877,7 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
 
     # --- v0.53.9 #100: Tool-call observation panel ---
 
-    @app.get("/api/tool-outputs")
+    @app.get("/api/tool-outputs", dependencies=[Depends(_verify_token)])
     def list_tool_outputs(
         limit: int = Query(default=100, ge=1, le=1000),
     ):
