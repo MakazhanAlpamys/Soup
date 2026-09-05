@@ -326,7 +326,11 @@ class MLXSFTTrainerWrapper:
 
             Keys are mlx-lm's own, built at ``mlx_lm/tuner/trainer.py``:
             ``iteration``, ``train_loss``, ``learning_rate``,
-            ``tokens_per_second``, ``peak_memory``. There is deliberately no
+            ``iterations_per_second``, ``peak_memory``. ``speed`` reads
+            ``iterations_per_second`` and **not** ``tokens_per_second``: the
+            display hard-labels that field ``it/s``, so the token figure would
+            render as a ~44x overstatement. mlx-lm reports both; only one
+            belongs here. There is deliberately no
             ``grad_norm`` — mlx-lm does not compute one for the callback, and a
             dashboard field reading a plausible 0.0 on this backend while
             carrying a real value on another is worse than an absent one.
@@ -366,6 +370,28 @@ class MLXSFTTrainerWrapper:
                         speed=speed,
                         gpu_mem=gpu_mem,
                     )
+
+                # Feed the SSE buffer so `soup ui` and GET /api/train/stream
+                # show an MLX run, not just the terminal panel. Best-effort in
+                # the same shape as the transformers path: any exception in
+                # here must never take down training. grad_norm stays None --
+                # mlx-lm does not compute one, and the event field is Optional.
+                try:
+                    from soup_cli.utils.sse_train_stream import TrainEvent
+                    from soup_cli.utils.train_event_buffer import push_train_event
+
+                    push_train_event(
+                        TrainEvent(
+                            type="metric",
+                            step=step,
+                            epoch=float(epoch),
+                            loss=float(loss) if loss is not None else None,
+                            lr=float(lr_value) if lr_value is not None else None,
+                            grad_norm=None,
+                        )
+                    )
+                except Exception:  # noqa: BLE001 — telemetry must not kill a run
+                    pass
 
         if display is not None:
             display.start(iters)

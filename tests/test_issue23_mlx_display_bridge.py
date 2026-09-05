@@ -211,6 +211,81 @@ class TestTheTrackerIsDriven:
         assert tracker.metrics == []
 
 
+class TestTheWebUiBufferIsFed:
+    """`soup ui` / GET /api/train/stream must see an MLX run too.
+
+    Review finding on #665: the terminal panel worked while the Web UI stayed
+    blank, because `push_train_event` is called from exactly one place in the
+    tree (`monitoring/callback.py`) and the MLX bridge was not one of them.
+    """
+
+    def _capture(self, monkeypatch):
+        pushed = []
+        import soup_cli.utils.train_event_buffer as buf
+
+        monkeypatch.setattr(buf, "push_train_event", lambda event: pushed.append(event))
+        return pushed
+
+    def test_each_report_pushes_a_metric_event(self, tmp_path, monkeypatch):
+        pushed = self._capture(monkeypatch)
+        display = _RecordingDisplay()
+        wrapper = _train_with(
+            monkeypatch, tmp_path, [_REPORT_1, _REPORT_2], display=display
+        )
+        wrapper.train(display=display)
+
+        assert len(pushed) == 2, "one SSE event per mlx-lm loss report"
+        assert pushed[0].type == "metric"
+        assert pushed[0].step == 5
+        assert pushed[0].loss == pytest.approx(3.639)
+        assert pushed[0].lr == pytest.approx(1e-4)
+        assert pushed[0].grad_norm is None, (
+            "mlx-lm computes no gradient norm; the event must carry None rather "
+            "than a plausible 0.0 — same contract the display holds"
+        )
+
+    def test_a_failing_push_does_not_kill_training(self, tmp_path, monkeypatch):
+        """Best-effort, exactly as the transformers path treats it.
+
+        This is the discriminating case: a bridge that pushes without guarding
+        passes every other test here and then takes down a real run the first
+        time the buffer is unavailable.
+        """
+        import soup_cli.utils.train_event_buffer as buf
+
+        def _boom(event):
+            raise RuntimeError("SSE buffer unavailable")
+
+        monkeypatch.setattr(buf, "push_train_event", _boom)
+        display = _RecordingDisplay()
+        wrapper = _train_with(monkeypatch, tmp_path, [_REPORT_1], display=display)
+
+        result = wrapper.train(display=display)
+
+        assert result["total_steps"] == 48
+        assert display.stops == 1, "the Live must still be stopped"
+
+    def test_no_display_means_no_push__matching_the_transformers_path(
+        self, tmp_path, monkeypatch
+    ):
+        """Deliberately NOT pushing when no display is attached.
+
+        I first wrote this test asserting the opposite — that the Web UI should
+        get events regardless — and it failed, correctly. `trainer/sft.py:1865`
+        attaches `SoupTrainerCallback` only `if display:`, so the transformers
+        path pushes nothing without one either. Matching that is the point: two
+        backends should not disagree about when `/api/train/stream` goes quiet.
+
+        If the project later decides the Web UI should be fed headlessly, that
+        is one change in both paths, and this test is where it gets noticed.
+        """
+        pushed = self._capture(monkeypatch)
+        wrapper = _train_with(monkeypatch, tmp_path, [_REPORT_1])
+        wrapper.train()
+
+        assert pushed == []
+
+
 class TestTheControls:
     def test_training_without_a_display_still_works(self, tmp_path, monkeypatch):
         """The reject-everything control: display=None is the CLI's default."""
@@ -242,7 +317,15 @@ class TestTheControls:
         wrapper.train(display=display)
 
         assert "grad_norm" not in _REPORT_1, "upstream shape assumption"
-        assert display.updates[0].get("grad_norm") in (None, 0.0), (
-            "grad_norm must be absent or an explicit zero, never a derived "
-            "number that looks measured"
+        # ABSENT, not 0.0. An earlier version of this assertion allowed
+        # `in (None, 0.0)` while the docstring above called a plausible 0.0
+        # worse than an absent field -- so the contract this test is most
+        # vocal about was the one thing it did not pin. Caught in review by
+        # @MakazhanAlpamys, who killed it by injecting grad_norm=0.0 and
+        # watching all ten tests still pass.
+        assert "grad_norm" not in display.updates[0], (
+            "grad_norm must be absent, not a plausible 0.0: mlx-lm computes no "
+            "gradient norm, and a field reading 0.0 on this backend while "
+            "carrying a real value on another is indistinguishable from a "
+            "measurement"
         )
