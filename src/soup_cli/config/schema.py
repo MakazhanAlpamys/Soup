@@ -64,7 +64,7 @@ class LoraConfig(BaseModel):
         ge=0,
         description=(
             "LoRA rank. 0 = full fine-tuning: no adapter, every base "
-            "parameter trains (sft + transformers + text + "
+            "parameter trains (sft / embedding + transformers + text + "
             "quantization='none' only)."
         ),
     )
@@ -5017,9 +5017,9 @@ class SoupConfig(BaseModel):
         mutually exclusive with the LoRA feature flags and with the other two
         (each independently decides what trains).
 
-        Scoped to ``task='sft'`` ON PURPOSE. ``classifier`` / ``reranker`` /
-        ``cross_encoder`` (``classifier_lora``, v0.71.12 #146) and ``asr``
-        (``asr_lora``, v0.71.32) have gated LoRA behind their own opt-in flag
+        Scoped to ``task in ('sft', 'embedding')`` (#340, #700). ``classifier`` /
+        ``reranker`` / ``cross_encoder`` (``classifier_lora``, v0.71.12 #146) and
+        ``asr`` (``asr_lora``, v0.71.32) have gated LoRA behind their own opt-in flag
         for releases, so ``lora.r: 0`` already parses and is already harmless
         there; a blanket gate would break configs that work today. Tasks that
         do pass the rank straight to peft keep their existing behaviour
@@ -5027,7 +5027,7 @@ class SoupConfig(BaseModel):
         a new refusal this issue never measured.
         """
         tcfg = self.training
-        if tcfg.lora.r != 0 or self.task != "sft":
+        if tcfg.lora.r != 0 or self.task not in ("sft", "embedding"):
             return self
         if tcfg.stream_layers:
             # Streaming has its own, more specific refusal (the decoder lives
@@ -5038,7 +5038,7 @@ class SoupConfig(BaseModel):
             raise ValueError(
                 f"training.lora.r=0 (full fine-tuning) requires "
                 f"backend='transformers'; got backend={self.backend!r}. The "
-                f"full-FT branch is wired in the transformers SFT trainer."
+                f"full-FT branch is wired in the transformers SFT and embedding trainers."
             )
         if self.modality != "text":
             raise ValueError(
