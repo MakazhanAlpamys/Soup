@@ -71,12 +71,38 @@ All five completed runs, in the order they ran. `peak` is MLX's own
 `get_peak_memory()`; the per-iteration `Peak mem` mlx-lm prints is given where it
 differs.
 
-| model (4-bit) | load | peak after load | train, 48 it | **peak in train** | mlx-lm peak | **host free before -> after** | swap total -> | tok/s | loss | adapter | reload |
-|---|---|---|---|---|---|---|---|---|---|---|---|
-| `Qwen2.5-0.5B-Instruct` | 31.7 s | 0.262 GB | 19.7 s | **0.497 GB** | 0.497 | **54% -> 39%** | 2048 M | ~240 | 3.639 -> 0.107 | 2,122 KB | 0.9 s |
-| `Llama-3.2-3B-Instruct` | 123.3 s | 1.683 GB | 29.5 s | **2.083 GB** | 2.236 | **54% -> 32%** | 2048 -> 3072 M | ~82 | 4.527 -> 0.330 | 8,972 KB | 2.1 s |
-| `Qwen2.5-7B-Instruct` | 268.3 s | 3.993 GB | 67.6 s | **4.584 GB** | 4.922 | **69% -> 14%** | 3072 -> 9216 M | ~33 | 4.514 -> 0.127 | 9,868 KB | 15.8 s |
-| **`Llama-3.1-8B-Instruct`** | 317.8 s | 4.207 GB | 71.0 s | **4.800 GB** | 5.154 | **69% -> 14%** | 3072 -> 9216 M | ~36 | 3.454 -> 0.142 | 13,326 KB | 23.8 s |
+| model (4-bit) | load | peak after load | train, 48 it | **peak in train** | mlx-lm peak | **host free before -> after** | swap total -> | trained tokens | **tok/s** | loss | adapter | reload |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| `Qwen2.5-0.5B-Instruct` | 31.7 s | 0.262 GB | 19.7 s | **0.497 GB** | 0.497 | **54% -> 39%** | 2048 M | 2,130 | **108.1** | 3.639 -> 0.107 | 2,122 KB | 0.9 s |
+| `Llama-3.2-3B-Instruct` | 123.3 s | 1.683 GB | 29.5 s | **2.083 GB** | 2.236 | **54% -> 32%** | 2048 -> 3072 M | 2,316 | **78.5** | 4.527 -> 0.330 | 8,972 KB | 2.1 s |
+| `Qwen2.5-7B-Instruct` | 268.3 s | 3.993 GB | 67.6 s | **4.584 GB** | 4.922 | **69% -> 14%** | 3072 -> 9216 M | 2,130 | **31.5** | 4.514 -> 0.127 | 9,868 KB | 15.8 s |
+| **`Llama-3.1-8B-Instruct`** | 317.8 s | 4.207 GB | 71.0 s | **4.800 GB** | 5.154 | **69% -> 14%** | 3072 -> 9216 M | 2,316 | **32.6** | 3.454 -> 0.142 | 13,326 KB | 23.8 s |
+
+**How tok/s is derived, because an earlier revision of this table got it wrong.**
+Every figure is `trained tokens / train seconds` — a **whole-run average**, computed
+by the harness and printed as its `throughput` line, so the Reproducing section
+below regenerates this column rather than leaving it unaccounted for.
+
+It is **not** mlx-lm's printed `Tokens/sec`. That value is *instantaneous per
+report*: within the single 0.5B run below it ranged **19.192 to 254.313**. The
+first published version of this table quoted a late per-report reading (`~240`)
+for row 1 while every other column in the row was whole-run, which made that row
+internally inconsistent by 2.2x. See *Corrections* below.
+
+The internal check that catches this, and that the corrected table now passes:
+rows 1 and 3 share the **Qwen2** tokenizer over identical inputs, so their
+trained-token totals must be equal — `2,130 == 2,130`. Rows 2 and 4 share
+**Llama3** — `2,316 == 2,316`. That pins ~44-48 tokens per iteration across the
+grid, which the corrected tok/s column is consistent with and the original was
+not.
+
+**Which peak is the headline.** The bolded `peak in train` column is
+`mx.get_peak_memory()`, sampled by the harness after `train()` returns. The
+`mlx-lm peak` column is mlx-lm's own per-iteration high-water mark, which is
+strictly the larger of the two and is what its progress output prints. **Quote
+the mlx-lm figure** — 5.154 GB for the 8B — when citing a ceiling, because it is
+the true maximum the process reached; the harness reading can miss a transient
+in-step spike.
 
 **Peak and free unified memory are the load-bearing columns here**, not tok/s: on
 8 GB shared with the OS the ceiling is the interesting variable. Both 7B and 8B
@@ -97,9 +123,12 @@ fits. The prediction was wrong and the measurement is the reason this row exists
 
 ### Two things I cannot explain and am not going to smooth over
 
-**7B is slower than 8B.** `Qwen2.5-7B` runs at ~33 tok/s against `Llama-3.1-8B`'s
-~36, despite being the smaller model, and its `It/sec` is lower across every
-reported iteration. Candidate explanations I did **not** test: Qwen2.5's larger
+**7B is slower than 8B.** `Qwen2.5-7B` runs at **31.5 tok/s** against
+`Llama-3.1-8B`'s **32.6**, despite being the smaller model, and its `It/sec` is
+lower across every reported iteration. The anomaly **survives the tok/s
+correction** — it was present in the original figures and is present in the
+whole-run averages that replaced them, so it is not an artifact of the
+measurement mix-up. Candidate explanations I did **not** test: Qwen2.5's larger
 vocabulary (151,936 vs 128,256) making the output projection dominate at this
 tiny sequence length; different host memory pressure between the two rungs (the
 7B rung ran with 14% host memory free at its end, the 8B rung also 14%, but swap
@@ -173,13 +202,19 @@ working here (282 MB, 19.7 s for 48 iterations).
   loss curves are Q/V-only LoRA, not all-linear, and are not comparable with
   CUDA-path numbers that resolved `auto` differently.
 - **One box, one run per rung. No repeats, so there is no spread** — and a
-  later re-run shows the spread is large. Re-running `Qwen2.5-0.5B` from a warm
-  cache on a quieter machine gave **355-480 tok/s against the ~240 in the table**,
-  the same model under the same config. Part of that is the 16-row re-run being
-  shorter, part is host pressure, and I did not separate them. Treat every tok/s
-  figure here as an order of magnitude that moves by ~2x with conditions, not as
-  a benchmark. The T4 record set the precedent for not quoting throughput off a
-  single constrained run; this row is bound by the same limit.
+  later re-run shows the spread is large. Re-running `Qwen2.5-0.5B` at the same
+  48 rows from a warm cache on a quieter machine gave
+  **373.1 tok/s (2,130 tokens / 5.7 s) against 108.1 in the table** — the same
+  model, the same config, the same whole-run metric, **3.5x apart**. The
+  difference is host conditions and a warm Hub cache, not method. Treat every
+  tok/s figure here as an order of magnitude, not a benchmark. The T4 record set
+  the precedent for not quoting throughput off a single constrained run; this row
+  is bound by the same limit.
+
+  (An earlier revision of this bullet compared *instantaneous* per-report values
+  against the table and reported "355-480 tok/s". Both halves of that comparison
+  were the wrong metric; it is restated above with whole-run averages on both
+  sides.)
 - **`load` is polluted by download time.** First-time Hub fetches dominate it.
   A warm-cache load was not measured separately.
 - **Host pressure varied between rungs** and was not controlled. Swap grew
@@ -204,6 +239,16 @@ reason the numbers above are worth anything.
    one, then found #392 and the docstring explaining why it is deliberate. It
    belongs in this record as context for reading the loss curves, not as a bug.
 
+3. **The tok/s column mixed two different measurements.** Row 1 quoted `~240`,
+   a late instantaneous `Tokens/sec` reading from mlx-lm's stdout, while its
+   train time and every other row were whole-run. Caught in review by
+   @MakazhanAlpamys, who noticed rows 1 and 3 share a tokenizer and identical
+   inputs yet implied 98.5 against 46.5 tokens per iteration — 2.12x apart, so
+   they could not both be right. He derived the true ~45 tok/iteration from
+   captured mlx-lm dicts in my own sibling PR. The whole-run average for row 1
+   is **108.1 tok/s**, not 240. The harness now computes the figure so the
+   column cannot drift from the method again.
+
 Also lost and re-run: the TinyLlama rung's output was truncated by a `tail -120`
 in my own ladder invocation, so the failure above was re-measured from scratch
 rather than reconstructed.
@@ -213,6 +258,13 @@ rather than reconstructed.
 ```bash
 pip install -e ".[mlx]"
 python benchmarks/harness/mlx_sft_smoke.py mlx-community/Qwen2.5-0.5B-Instruct-4bit 48 1
+```
+
+It prints the throughput line this table's tok/s column is taken from:
+
+```
+train         : 19.7s   mlx peak during train: 0.463 GB
+throughput    : 108.1 tok/s  (2130 trained tokens / 19.7s, whole-run average)
 ```
 
 Requires Apple Silicon. The harness asserts MLX dispatch before measuring and

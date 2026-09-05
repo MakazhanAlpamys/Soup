@@ -37,7 +37,10 @@ does not match. It fails with "No safetensors found".
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
+import re
 import subprocess
 import sys
 import tempfile
@@ -68,6 +71,42 @@ def build_rows(n: int) -> list[dict]:
             {"role": "assistant", "content": a},
         ]})
     return out
+
+
+class _Tee:
+    """Write to both the real stdout and a buffer, so redirecting does not
+    silence mlx-lm's live progress output."""
+
+    def __init__(self, *streams):
+        self._streams = streams
+
+    def write(self, data):
+        for stream in self._streams:
+            stream.write(data)
+        return len(data)
+
+    def flush(self):
+        for stream in self._streams:
+            stream.flush()
+
+
+_TRAINED_TOKENS_RE = re.compile(r"Trained Tokens (\d+)")
+
+
+def _final_trained_tokens(train_stdout: str) -> int | None:
+    """mlx-lm's OWN cumulative trained-token count, taken from its last report.
+
+    Read from mlx-lm's printed output rather than recomputed, because
+    reproducing its tokenisation (chat template, truncation, masking) here
+    would drift silently the first time any of those change upstream. The
+    wrapper's result dict does not carry the count, so stdout is the only
+    place it surfaces.
+
+    Returns None if the line is absent — the caller prints nothing rather
+    than inventing a figure.
+    """
+    matches = _TRAINED_TOKENS_RE.findall(train_stdout)
+    return int(matches[-1]) if matches else None
 
 
 def host_mem() -> tuple[str, str]:
@@ -142,9 +181,27 @@ output: {out}
 
     mx.reset_peak_memory()
     t0 = time.time()
-    result = trainer.train()
-    print(f"train         : {time.time() - t0:.1f}s   "
+    # mlx-lm prints its progress to stdout; tee it so the run stays readable
+    # AND the trained-token counter is recoverable for the throughput line.
+    buffer = io.StringIO()
+    with contextlib.redirect_stdout(_Tee(sys.stdout, buffer)):
+        result = trainer.train()
+    train_s = time.time() - t0
+    train_stdout = buffer.getvalue()
+    print(f"train         : {train_s:.1f}s   "
           f"mlx peak during train: {mx.get_peak_memory() / 1024**3:.3f} GB")
+
+    # Whole-run throughput, computed here rather than eyeballed from mlx-lm's
+    # per-report stdout. Those printed `Tokens/sec` values are INSTANTANEOUS --
+    # in one 48-iteration run they ranged 19.2 to 254.3 -- so quoting a late one
+    # beside a whole-run wall clock silently mixes two different measurements.
+    # trained_tokens is mlx-lm's own cumulative counter for the run.
+    trained = _final_trained_tokens(train_stdout)
+    if trained is not None and train_s > 0:
+        print(f"throughput    : {trained / train_s:.1f} tok/s  "
+              f"({trained} trained tokens / {train_s:.1f}s, whole-run average)")
+    else:
+        print("throughput    : unavailable — no trained-token count in the result")
     print(f"result        : {result}")
     free, swap = host_mem()
     print(f"host after    : {free} | {swap}")
