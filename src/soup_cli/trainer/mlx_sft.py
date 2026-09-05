@@ -300,6 +300,15 @@ class MLXSFTTrainerWrapper:
         # irrelevant (val_dataset stays None and mlx-lm skips evaluation).
         steps_per_eval = max(1, iters // 4) if val_rows else max(1000, iters + 1)
         grad_accumulation_steps = int(cfg.training.gradient_accumulation_steps)
+        # mlx-lm updates the optimizer only when it % accum == 0 (trainer.py) and
+        # never flushes a partial group, so round iters down to a whole number of
+        # groups, keeping at least one group so a small dataset does not train
+        # for zero optimizer steps.
+        if grad_accumulation_steps > 1:
+            iters = max(
+                grad_accumulation_steps,
+                iters - (iters % grad_accumulation_steps),
+            )
         args = TrainingArgs(
             batch_size=batch_size,
             iters=iters,

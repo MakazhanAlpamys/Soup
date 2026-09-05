@@ -97,7 +97,7 @@ class _FakeMlxModel:
         pass
 
 
-def _mlx_wrapper(tmp_path, **training):
+def _mlx_wrapper(tmp_path, train_row_count=1, **training):
     from soup_cli.config.schema import DataConfig, SoupConfig, TrainingConfig
     from soup_cli.trainer.mlx_sft import MLXSFTTrainerWrapper
 
@@ -112,7 +112,7 @@ def _mlx_wrapper(tmp_path, **training):
     wrapper = MLXSFTTrainerWrapper(cfg)
     wrapper.model = _FakeMlxModel()
     wrapper.tokenizer = object()
-    wrapper._dataset = {"train": [{"text": "hi"}], "val": []}
+    wrapper._dataset = {"train": [{"text": "hi"}] * train_row_count, "val": []}
     return wrapper
 
 
@@ -160,3 +160,81 @@ class TestAdapterConfigJsonRecordsTheEffectiveValue:
             "adapter_config.json must record the value training actually used, "
             "not a hardcoded 1 that can never reveal the drift after the fact"
         )
+
+
+def _optimizer_updates(iters: int, accum: int) -> int:
+    """mlx-lm's own rule (mlx_lm/tuner/trainer.py): update only when
+    ``it % accum == 0`` for ``it`` in ``1..iters``, and never flush a
+    partial trailing group."""
+    return iters // accum
+
+
+class TestOptimizerUpdateCountIsNeverZeroOrSilentlyTruncated:
+    def test_a_dataset_smaller_than_the_accumulation_window_still_updates(
+        self, tmp_path, monkeypatch
+    ):
+        # rows=3, batch=1, epochs=1 -> raw iters=3, accum=4: upstream's
+        # it % accum == 0 rule never fires across 1..3, so main trains for
+        # zero optimizer updates on a schema default nobody had to opt into.
+        captured_calls = _install_fake_mlx(monkeypatch)
+        wrapper = _mlx_wrapper(
+            tmp_path,
+            train_row_count=3,
+            epochs=1,
+            lr=1e-4,
+            batch_size=1,
+            gradient_accumulation_steps=4,
+        )
+
+        wrapper.train()
+
+        written_iters = captured_calls[0]["args"].iters
+        assert _optimizer_updates(written_iters, 4) >= 1, (
+            "a dataset smaller than the accumulation window must still reach "
+            "at least one optimizer update, never train silently for zero"
+        )
+        adapter_config = json.loads((tmp_path / "adapter_config.json").read_text())
+        assert adapter_config["iters"] == written_iters
+
+    def test_a_trailing_partial_group_is_rounded_off_not_silently_dropped(
+        self, tmp_path, monkeypatch
+    ):
+        # rows=26, batch=1, epochs=1, accum=4 -> raw iters=26, which upstream
+        # would run as 6 full updates plus 2 accumulated-but-never-applied
+        # micro-batches. iters must come out as a whole multiple of accum so
+        # nothing is silently accumulated and dropped.
+        captured_calls = _install_fake_mlx(monkeypatch)
+        wrapper = _mlx_wrapper(
+            tmp_path,
+            train_row_count=26,
+            epochs=1,
+            lr=1e-4,
+            batch_size=1,
+            gradient_accumulation_steps=4,
+        )
+
+        wrapper.train()
+
+        written_iters = captured_calls[0]["args"].iters
+        assert written_iters % 4 == 0, (
+            "iters must be a whole number of accumulation groups; a trailing "
+            "partial group is accumulated by mlx-lm and never applied"
+        )
+        assert _optimizer_updates(written_iters, 4) == 6
+
+    def test_accumulation_disabled_leaves_iters_untouched(self, tmp_path, monkeypatch):
+        # accum=1 is today's behaviour (every micro-batch updates); the
+        # rounding must be a no-op here, not merely harmless by coincidence.
+        captured_calls = _install_fake_mlx(monkeypatch)
+        wrapper = _mlx_wrapper(
+            tmp_path,
+            train_row_count=26,
+            epochs=1,
+            lr=1e-4,
+            batch_size=1,
+            gradient_accumulation_steps=1,
+        )
+
+        wrapper.train()
+
+        assert captured_calls[0]["args"].iters == 26
