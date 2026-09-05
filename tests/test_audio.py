@@ -367,3 +367,21 @@ output: ./output_audio
         assert cfg.data.format == "audio"
         assert cfg.data.audio_dir == "./data/wav"
         assert cfg.output == "./output_audio"
+
+
+class TestAudioNonDictMessageDropped:
+    """#676 — a non-dict element in `messages` routes to the drop path."""
+
+    def test_audio_non_dict_message_returns_none(self):
+        from soup_cli.data.formats import format_to_messages
+
+        row = {"audio": "clip.wav", "messages": ["hello"]}
+        result = format_to_messages(row, "audio")
+        assert result is None
+
+    def test_audio_message_list_not_a_list_returns_none(self):
+        from soup_cli.data.formats import format_to_messages
+
+        row = {"audio": "clip.wav", "messages": "hello"}
+        result = format_to_messages(row, "audio")
+        assert result is None
