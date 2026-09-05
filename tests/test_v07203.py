@@ -12,6 +12,7 @@ exception the brief names — its gate is a measured I/O cost, not an equality.
 import pathlib
 
 import pytest
+
 from soup_cli.utils import layer_stream, layer_stream_runtime
 
 pytestmark = pytest.mark.filterwarnings("ignore::UserWarning")
