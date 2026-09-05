@@ -269,13 +269,18 @@ soup train --config soup.yaml \
 soup train --config grpo.yaml --reward-hack-mitigation kl_control   # raise KL, recover
 soup train --config grpo.yaml --reward-hack-mitigation log_only     # observe only, no action
 
-# Cross-tokenizer distillation — Llama -> Mistral, no shared vocab needed
+# Wasserstein-distance distillation between two models that SHARE a
+# tokenizer, e.g. two sizes in the same family (#681: wasserstein / topk_align
+# forward the student's token ids to the teacher unchanged, so the pair must
+# tokenize identically; for a genuinely different tokenizer see
+# wasserstein_aligned below).
 # (Universal Logit Distillation, Boizard et al. 2024 arXiv:2402.12030)
 soup train --config soup.yaml --uld-strategy wasserstein
 
-# Cross-tokenizer distillation for FULLY-DISJOINT tokenizers (v0.71.18) —
-# aligns student/teacher token sequences over decoded character spans, so you
-# can distill a GPT-2 BPE student from a Llama SentencePiece teacher.
+# Cross-tokenizer distillation for DIFFERENT tokenizers, e.g. Llama -> Mistral,
+# no shared vocab needed (v0.71.18). Aligns student/teacher token sequences
+# over decoded character spans, so you can distill a GPT-2 BPE student from a
+# Llama SentencePiece teacher.
 #   training:
 #     uld_strategy: wasserstein_aligned
 

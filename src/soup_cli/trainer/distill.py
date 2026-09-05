@@ -139,6 +139,38 @@ def _compute_distill_term(
     raise ValueError(f"Unknown divergence {divergence!r}")
 
 
+def _require_uld_id_compatible_tokenizers(
+    strategy: str, student_tokenizer: Any, teacher_tokenizer: Any
+) -> None:
+    """Refuse ``wasserstein`` / ``topk_align`` on tokenizers that disagree.
+
+    Both strategies forward the student's own ``input_ids`` straight to the
+    teacher (see the caller), which is only correct when a given id decodes
+    to the same text in both tokenizers. ``wasserstein_aligned`` handles the
+    general case by re-tokenizing and aligning; these two do not, so an
+    incompatible pair must fail here rather than train on logits the teacher
+    computed for the wrong text (#681).
+
+    Reuses :func:`soup_cli.utils.draft.same_tokenizer`, the same probe this
+    codebase already trusts to decide whether a draft tokenizer is
+    interchangeable with a target one for speculative decoding (#304).
+    """
+    from soup_cli.utils.draft import same_tokenizer
+
+    if strategy in ("wasserstein", "topk_align") and not same_tokenizer(
+        student_tokenizer, teacher_tokenizer
+    ):
+        raise ValueError(
+            f"training.uld_strategy={strategy!r} forwards the student's "
+            "token ids to the teacher unchanged, which only holds when the "
+            "two tokenizers are interchangeable. This student/teacher pair "
+            "is not, so the teacher would be conditioned on the wrong text "
+            "with no visible failure (a finite loss either way). Use "
+            "training.uld_strategy='wasserstein_aligned', which "
+            "re-tokenizes and aligns text for mismatched tokenizers."
+        )
+
+
 class DistillTrainerWrapper:
     """High-level wrapper for student/teacher distillation.
 
@@ -370,6 +402,15 @@ class DistillTrainerWrapper:
                     uld_teacher_tokenizer.pad_token = uld_teacher_tokenizer.eos_token
             else:
                 uld_teacher_tokenizer = None
+                # #681: wasserstein / topk_align reuse the student's ids as
+                # the teacher's, so fail before training starts if this pair
+                # can't support that.
+                _teacher_tok_for_check = AutoTokenizer.from_pretrained(
+                    tcfg.teacher_model, trust_remote_code=teacher_trc
+                )
+                _require_uld_id_compatible_tokenizers(
+                    tcfg.uld_strategy, self.tokenizer, _teacher_tok_for_check
+                )
             console.print(
                 f"[green]Cross-tokenizer ULD enabled[/] "
                 f"(strategy={tcfg.uld_strategy})"
@@ -479,7 +520,6 @@ class DistillTrainerWrapper:
         )
 
         teacher_ref = self.teacher
-        _teacher_vocab = teacher_vocab
         _uld_projection = uld_projection
         _minillm_cb = minillm_cb
         _sequence_mode = sequence_mode
@@ -617,17 +657,6 @@ class DistillTrainerWrapper:
                     for k, v in inputs.items()
                     if k != "labels"
                 }
-                # v0.71.11 #236 — when ULD bridges different vocabs, clamp the
-                # student token ids to the teacher's range so the (possibly
-                # smaller) teacher embedding never index-errors.
-                if (
-                    _uld_projection is not None
-                    and _teacher_vocab is not None
-                    and "input_ids" in teacher_inputs
-                ):
-                    teacher_inputs["input_ids"] = teacher_inputs[
-                        "input_ids"
-                    ].clamp(max=int(_teacher_vocab) - 1)
                 with torch.no_grad():
                     teacher_out = teacher_ref(**teacher_inputs)
                     teacher_logits = teacher_out.logits.to(student_logits.device)
