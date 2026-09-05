@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from typing import Optional
 
-from soup_cli.data.formats import FORMAT_SIGNATURES
+from soup_cli.data.formats import FORMAT_SIGNATURES, format_to_messages
+
+# Formats whose converters inspect ``messages`` elements. Key-only
+# validation green-lights a non-dict message that ``load_dataset`` then
+# either drops (chatml / audio / video) or aborts on (multimodal).
+_CONVERTER_CHECKED_FORMATS = frozenset({"chatml", "audio", "video", "multimodal"})
 
 
 def validate_and_stats(data: list[dict], expected_format: Optional[str] = None) -> dict:
@@ -40,18 +45,43 @@ def validate_and_stats(data: list[dict], expected_format: Optional[str] = None) 
 
     # Validate format
     issues = []
-    valid_rows = len(data)
-    if expected_format and expected_format in FORMAT_SIGNATURES:
-        required = FORMAT_SIGNATURES[expected_format]
-        invalid = 0
+    invalid = 0
+    required = (
+        FORMAT_SIGNATURES[expected_format]
+        if expected_format and expected_format in FORMAT_SIGNATURES
+        else None
+    )
+    if required is not None:
+        missing = 0
         for row in data:
             if not required.issubset(row.keys()):
-                invalid += 1
-        valid_rows = len(data) - invalid
-        if invalid > 0:
+                missing += 1
+        invalid += missing
+        if missing > 0:
             issues.append(
-                f"{invalid} rows missing required keys for '{expected_format}' format: {required}"
+                f"{missing} rows missing required keys for '{expected_format}' format: {required}"
             )
+
+    if expected_format in _CONVERTER_CHECKED_FORMATS:
+        malformed = 0
+        for row in data:
+            if required is not None and not required.issubset(row.keys()):
+                continue
+            try:
+                converted = format_to_messages(row, expected_format)
+            except AttributeError:
+                # multimodal still raises on a non-dict message (#670).
+                converted = None
+            if converted is None:
+                malformed += 1
+        invalid += malformed
+        if malformed > 0:
+            issues.append(
+                f"{malformed} rows failed '{expected_format}' conversion "
+                "and would be dropped at load"
+            )
+
+    valid_rows = len(data) - invalid
 
     if dup_count > 0:
         issues.append(f"{dup_count} duplicate rows found")
