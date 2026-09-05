@@ -12,6 +12,7 @@ exception the brief names — its gate is a measured I/O cost, not an equality.
 import pathlib
 
 import pytest
+from soup_cli.utils import layer_stream, layer_stream_runtime
 
 pytestmark = pytest.mark.filterwarnings("ignore::UserWarning")
 
@@ -998,6 +999,114 @@ class TestIssue444BestRepeatSelection:
         )
         got = layer_stream_runtime.measure_gemm_tflops(device="cuda", iters=0, reps=4)
         assert got is None
+
+class TestIssue617PanelDtype:
+    """Regression coverage for the user-visible GEMM dtype in the stream panel."""
+
+    @pytest.mark.parametrize("dtype", ["float16", "bfloat16"])
+    def test_stream_budget_panel_reports_measured_gemm_dtype(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        dtype: str,
+    ) -> None:
+        from types import SimpleNamespace
+
+        from soup_cli.trainer import stream_setup
+
+        class _Setup(stream_setup.StreamingSetupMixin):
+            _STREAM_ROWS_PER_EXAMPLE = 1
+
+            @staticmethod
+            def _stream_shape_config(model_config):
+                return model_config
+
+            @staticmethod
+            def _stream_intermediate_size(model_config):
+                return 128
+
+            @staticmethod
+            def _estimate_adapter_params(tcfg, model_config):
+                return 0
+
+        setup = object.__new__(_Setup)
+        setup.device = "cuda"
+
+        cfg = SimpleNamespace(
+            data=SimpleNamespace(max_length=16),
+        )
+        tcfg = SimpleNamespace(
+            batch_size=1,
+            stream_buffers=2,
+            stream_vram_probe=False,
+            stream_vram_override=None,
+            gradient_accumulation_steps=1,
+        )
+        model_config = SimpleNamespace(
+            vocab_size=1000,
+            hidden_size=64,
+        )
+        index = SimpleNamespace(
+            total_params=1_000_000,
+            n_layers=2,
+        )
+
+        monkeypatch.setattr(
+            stream_setup,
+            "console",
+            SimpleNamespace(print=lambda *args, **kwargs: None),
+        )
+
+        monkeypatch.setattr(
+            layer_stream_runtime,
+            "measure_gemm_tflops",
+            lambda device: SimpleNamespace(
+                tflops=6.75,
+                sm_clock_mhz=862,
+                dtype=dtype,
+            ),
+        )
+
+        monkeypatch.setattr(
+            layer_stream,
+            "resolve_available_vram_bytes",
+            lambda measured_bytes, override_bytes=None: 4_000_000_000,
+        )
+
+        monkeypatch.setattr(
+            layer_stream,
+            "decide_stream_fit",
+            lambda predicted_bytes, available_bytes: SimpleNamespace(
+                fits=True,
+                reason="fits",
+            ),
+        )
+
+        import torch
+
+        monkeypatch.setattr(
+            torch.cuda,
+            "mem_get_info",
+            lambda: (4_000_000_000, 8_000_000_000),
+        )
+
+        lines, plan = setup._stream_budget_lines(
+            cfg,
+            tcfg,
+            model_config=model_config,
+            layer_bytes=1_000_000,
+            embed_bytes=1_000_000,
+            index=index,
+            on_cuda=True,
+            large_layer_bytes=0,
+        )
+
+        assert plan is None
+
+        panel_text = "\n".join(lines)
+        assert (
+            f"(from 6.75 TFLOPS measured on this card now "
+            f"using {dtype} @ 862 MHz)"
+        ) in panel_text
 
 
 class TestBatchSizeIsSupported:
