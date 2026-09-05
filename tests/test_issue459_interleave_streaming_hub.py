@@ -766,6 +766,30 @@ def test_hub_validation_split_ignored_when_only_some_entries_have_one(tmp_path, 
     assert len(result["val"]) == int(10 * 0.2)
 
 
+def test_hub_partial_val_split_fallback_over_has_no_duplicate_row_across_train_and_val(
+    tmp_path, monkeypatch
+):
+    # #680, hub path: the val_split fallback (only some entries have a hub
+    # validation split, so it is ignored and val_split derives val instead)
+    # goes through the same "over" cycling as the local path, and had the
+    # same bug: it sliced the already-padded combined rows instead of
+    # carving val out of each source's own unique rows first.
+    registry = {
+        "org/a": {
+            "train": [{"text": f"A-{i}"} for i in range(8)],
+            "validation": [{"text": f"Aval-{i}"} for i in range(2)],
+        },
+        "org/b": {"train": [{"text": f"B-{i}"} for i in range(2)]},
+    }
+    _install_fake_hub_datasets(monkeypatch, registry)
+    cfg = _cfg(tmp_path, train=["org/a", "org/b"], interleave="over", val_split=0.1)
+    result = load_dataset(cfg.data)
+    train_texts = {row["text"] for row in result["train"]}
+    val_texts = {row["text"] for row in result["val"]}
+    assert not (train_texts & val_texts)
+    assert not any(t.startswith("Aval-") for t in val_texts)
+
+
 def test_hub_dataset_missing_train_split_still_raises(tmp_path, monkeypatch):
     registry = {
         "org/a": {"train": [{"text": "A-0"}]},

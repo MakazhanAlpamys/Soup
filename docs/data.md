@@ -656,6 +656,10 @@ not byte-identically (a streaming source's size generally can't be known ahead o
 | `over`   | upsample every source to the largest source's size (cycled) | `interleave_datasets(streams, stopping_strategy="all_exhausted")` |
 | `probs`  | exact apportionment to the requested ratio        | `interleave_datasets(streams, probabilities=probs, stopping_strategy="first_exhausted")` — converges to the same ratio, sampled rather than exact |
 
+On the local (eager) path, `data.val_split` is applied per source before `over`/`probs`
+pad it with copies of its own rows, so a padded row can never land on both sides of the
+split; `concat`/`under` never duplicate rows and still split the combined result as before.
+
 **Vocab expansion + advanced masking:**
 
 ```yaml
