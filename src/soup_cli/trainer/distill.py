@@ -599,6 +599,7 @@ class DistillTrainerWrapper:
                         t_strings,
                         config=_uld_projection.config,
                         attention_mask=s_mask,
+                        labels=labels,
                     )
                     total = _CE_WEIGHT * ce_loss + _DISTILL_WEIGHT * distill_loss
                     return (total, outputs) if return_outputs else total
@@ -635,10 +636,13 @@ class DistillTrainerWrapper:
                 anchor = None
                 if _uld_projection is not None:
                     # v0.71.11 #236 — cross-tokenizer ULD distillation loss.
+                    # #682: pass labels so masking matches the CE term,
+                    # trained tokens only, not every attended position.
                     distill_loss = _uld_projection(
                         student_logits,
                         teacher_logits,
                         attention_mask=inputs.get("attention_mask"),
+                        labels=labels,
                     )
                 elif _minillm_cb is not None:
                     # v0.71.11 #237 — MiniLLM teacher-mixed reverse-KL +
