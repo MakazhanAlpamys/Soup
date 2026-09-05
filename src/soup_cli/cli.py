@@ -842,18 +842,19 @@ def _emit_telemetry(argv: list[str], duration_seconds: float) -> None:
     by ``--no-telemetry``, or when ``SOUP_TELEMETRY`` is unset or falsy.
     Never raises — telemetry must NEVER crash the CLI.
     """
-    if _telemetry_disabled or "--no-telemetry" in argv:
-        return
-
-    from soup_cli.utils.trackers import is_telemetry_enabled
-
-    if not is_telemetry_enabled():
-        return
-
     try:
+        if _telemetry_disabled or "--no-telemetry" in argv:
+            return
+
+        from soup_cli.utils.trackers import is_telemetry_enabled
+
+        if not is_telemetry_enabled():
+            return
+
         from soup_cli import __version__
         from soup_cli.utils.trackers import (
             build_telemetry_payload,
+            get_or_create_distinct_id,
             send_telemetry_payload,
         )
 
@@ -868,6 +869,7 @@ def _emit_telemetry(argv: list[str], duration_seconds: float) -> None:
             soup_version=__version__,
             command=command,
             duration_seconds=duration_seconds,
+            distinct_id=get_or_create_distinct_id(),
         )
         send_telemetry_payload(payload)
     except Exception:  # noqa: BLE001 — telemetry must never crash the CLI

@@ -77,11 +77,12 @@ def test_emit_telemetry_no_telemetry_flag_overrides_env(monkeypatch):
         cli._telemetry_disabled = False
 
 
-def test_emit_telemetry_enabled_builds_and_sends(monkeypatch):
+def test_emit_telemetry_enabled_builds_and_sends(tmp_path, monkeypatch):
     """When SOUP_TELEMETRY=1, telemetry builds and sends exactly one payload."""
     from soup_cli.cli import _emit_telemetry
 
     monkeypatch.setenv("SOUP_TELEMETRY", "1")
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
     sent_payloads = []
     monkeypatch.setattr(
         "soup_cli.utils.trackers.send_telemetry_payload",
@@ -95,6 +96,7 @@ def test_emit_telemetry_enabled_builds_and_sends(monkeypatch):
     assert p["command"] == "train"
     assert p["duration_seconds"] == 2.5
     assert "soup.yaml" not in str(p)
+    assert uuid.UUID(p["distinct_id"])
 
 
 @pytest.mark.parametrize(
@@ -110,11 +112,14 @@ def test_emit_telemetry_enabled_builds_and_sends(monkeypatch):
         (["soup", "trian", "-c", "soup.yaml"], "(unknown)"),
     ],
 )
-def test_command_sanitization_masks_paths_and_unknown_args(argv, expected_command, monkeypatch):
+def test_command_sanitization_masks_paths_and_unknown_args(
+    argv, expected_command, tmp_path, monkeypatch
+):
     """Private paths, file names, and typos must NEVER leak into command event names."""
     from soup_cli.cli import _emit_telemetry
 
     monkeypatch.setenv("SOUP_TELEMETRY", "1")
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
     sent_payloads = []
     monkeypatch.setattr(
         "soup_cli.utils.trackers.send_telemetry_payload",
@@ -251,6 +256,57 @@ def test_distinct_id_swallows_fs_exceptions(tmp_path, monkeypatch):
             generated_id = get_or_create_distinct_id()
 
     assert uuid.UUID(generated_id)
+
+
+def test_build_telemetry_payload_disabled_leaves_no_disk_trace(tmp_path, monkeypatch):
+    """When telemetry is disabled, building a payload creates zero disk side effects."""
+    from soup_cli.utils.trackers import build_telemetry_payload
+
+    monkeypatch.delenv("SOUP_TELEMETRY", raising=False)
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+
+    payload = build_telemetry_payload(soup_version="0.74.0", command="train")
+    assert uuid.UUID(payload["distinct_id"])
+    assert not (tmp_path / ".soup" / "telemetry_id").exists()
+    assert not (tmp_path / ".soup").exists()
+
+
+def test_send_telemetry_refuses_placeholder_key_with_notice(capsys, monkeypatch):
+    """Placeholder PostHog key refuses transmission, warns on stderr, and makes 0 network calls."""
+    from soup_cli.utils.trackers import send_telemetry_payload
+
+    monkeypatch.setenv("SOUP_TELEMETRY", "1")
+    monkeypatch.setattr(
+        "soup_cli.utils.trackers._telemetry_endpoint_is_safe", lambda _url: True
+    )
+    network_mock = MagicMock(side_effect=AssertionError("network opened with placeholder key"))
+    monkeypatch.setattr("urllib.request.urlopen", network_mock)
+
+    payload = {
+        "command": "train",
+        "soup_version": "0.74.0",
+        "distinct_id": str(uuid.uuid4()),
+    }
+    monkeypatch.delenv("SOUP_POSTHOG_KEY", raising=False)
+    result = send_telemetry_payload(payload)
+    assert result is False
+    assert network_mock.call_count == 0
+
+    err = capsys.readouterr().err
+    assert "Notice: telemetry is not yet live." in err
+
+
+def test_emit_telemetry_never_raises_on_broken_env(monkeypatch):
+    """_emit_telemetry must swallow any exception even if consent check raises."""
+    from soup_cli.cli import _emit_telemetry
+
+    monkeypatch.setattr(
+        "soup_cli.utils.trackers.is_telemetry_enabled",
+        MagicMock(side_effect=RuntimeError("unexpected crash")),
+    )
+    # Must not raise
+    _emit_telemetry(["soup", "train"], 1.0)
+    assert True
 
 
 def test_every_test_in_this_file_has_load_bearing_assert():

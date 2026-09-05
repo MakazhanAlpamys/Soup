@@ -367,7 +367,7 @@ pre-commit install                 # optional: ruff lint+format on commit
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow and [SECURITY.md](SECURITY.md) to
-report a vulnerability.
+report a vulnerability. Telemetry is strictly opt-in (`SOUP_TELEMETRY=1`, default off; see [Privacy Policy](docs/backends-and-ops.md#privacy-policy)).
 
 ## Support Soup
 

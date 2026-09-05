@@ -327,7 +327,9 @@ class TestSendTelemetryPayload:
 
         from soup_cli.utils.trackers import send_telemetry_payload
 
-        result = send_telemetry_payload({"command": "train", "soup_version": "x"})
+        result = send_telemetry_payload(
+            {"command": "train", "soup_version": "x"}, api_key="phc_live_test_key"
+        )
         assert result is True
         # HTTPS-only + 1s timeout + POST method
         call = open_url.call_args
@@ -349,7 +351,12 @@ class TestSendTelemetryPayload:
         from soup_cli.utils.trackers import send_telemetry_payload
 
         # Must never raise
-        assert send_telemetry_payload({"command": "train"}) is False
+        assert (
+            send_telemetry_payload(
+                {"command": "train"}, api_key="phc_live_test_key"
+            )
+            is False
+        )
 
 
 # ----------------------------------------------------------------------

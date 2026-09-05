@@ -140,6 +140,7 @@ def build_telemetry_payload(
     soup_version: str,
     command: str,
     duration_seconds: float | int | None = None,
+    distinct_id: str | None = None,
 ) -> dict:
     """Build the hardware-info-only telemetry payload.
 
@@ -152,7 +153,8 @@ def build_telemetry_payload(
       - `os`: platform.system()
       - `arch`: platform.machine()
       - `duration_seconds`: optional, finite float / int / None
-      - `distinct_id`: anonymous persistent UUID
+      - `distinct_id`: anonymous persistent UUID (or ephemeral in-memory
+        UUID when telemetry is disabled, avoiding filesystem side effects)
 
     Raises ValueError for non-string `command` / `soup_version` and for
     non-finite `duration_seconds`.
@@ -176,6 +178,15 @@ def build_telemetry_payload(
         if duration_seconds < 0:
             raise ValueError("duration_seconds must be >= 0")
 
+    if distinct_id is not None:
+        resolved_distinct_id = str(distinct_id)
+    elif is_telemetry_enabled():
+        resolved_distinct_id = get_or_create_distinct_id()
+    else:
+        import uuid  # noqa: PLC0415
+
+        resolved_distinct_id = str(uuid.uuid4())
+
     py = platform.python_version_tuple()
     py_major_minor = f"{py[0]}.{py[1]}"
     return {
@@ -187,7 +198,7 @@ def build_telemetry_payload(
         "duration_seconds": (
             float(duration_seconds) if duration_seconds is not None else None
         ),
-        "distinct_id": get_or_create_distinct_id(),
+        "distinct_id": resolved_distinct_id,
     }
 
 
@@ -205,6 +216,14 @@ _POSTHOG_ENDPOINT = f"{_POSTHOG_HOST}/i/v0/e/"
 # vars are validated by :func:`_resolve_posthog_target`.
 _POSTHOG_DEFAULT_KEY = "phc_soup_public_write_only"
 _TELEMETRY_TIMEOUT_S = 1.0
+
+
+def is_placeholder_posthog_key(key: object) -> bool:
+    """Return True if ``key`` is the unprovisioned placeholder key."""
+    if not isinstance(key, str) or not key:
+        return True
+    clean = key.strip()
+    return clean == _POSTHOG_DEFAULT_KEY or clean.startswith("phc_soup_public_write_only")
 
 
 # Sentinel for "caller did not pass an endpoint, fall back to default + env".
@@ -407,7 +426,8 @@ def send_telemetry_payload(
         payload: dict built by :func:`build_telemetry_payload`. Required keys
             are validated upstream by the builder.
         api_key: PostHog project key. Defaults to the bundled write-only key.
-        timeout: hard wall-clock cap (default 1 s).
+        timeout: socket connect and read timeout in seconds (default 1.0 s;
+            DNS resolution excluded).
         endpoint: full PostHog capture URL (must be HTTPS).
     """
     if not is_telemetry_enabled():
@@ -425,6 +445,15 @@ def send_telemetry_payload(
     if resolved is None:
         return False
     key, endpoint = resolved
+    if is_placeholder_posthog_key(key):
+        import sys  # noqa: PLC0415
+
+        try:
+            sys.stderr.write("Notice: telemetry is not yet live.\n")
+        except Exception:
+            pass
+        return False
+
     body = {
         "api_key": key,
         "event": payload.get("command", "soup_event"),

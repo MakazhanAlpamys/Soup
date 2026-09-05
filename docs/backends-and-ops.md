@@ -651,7 +651,7 @@ You can also explicitly disable telemetry for a specific invocation using the `-
 soup train --config soup.yaml --no-telemetry
 ```
 
-When enabled, telemetry performs a synchronous fire-and-forget HTTP POST with a strict 1-second timeout on command exit. See [Privacy Policy](#privacy-policy) for details.
+When enabled, telemetry performs a synchronous fire-and-forget HTTP POST with a 1-second connect and read timeout (DNS resolution excluded) on command exit. The anonymous identifier is stored at `~/.soup/telemetry_id`; deleting `~/.soup/telemetry_id` regenerates it on the next opt-in. See [Privacy Policy](#privacy-policy) for details.
 
 
 ## Profiling Extras
@@ -899,7 +899,7 @@ Soup's telemetry is strictly anonymous and hardware-focused. When opted in via `
 - `os`: OS platform name (`platform.system()`)
 - `arch`: System architecture (`platform.machine()`)
 - `duration_seconds`: Command execution duration in seconds
-- `distinct_id`: Anonymous UUID4 generated locally on first run and stored at `~/.soup/telemetry_id` to deduplicate events
+- `distinct_id`: Anonymous UUID4 generated locally on first run and stored at `~/.soup/telemetry_id` to deduplicate events. Deleting `~/.soup/telemetry_id` regenerates it on the next opt-in.
 
 We **NEVER** collect:
 - Dataset paths or contents
@@ -908,7 +908,7 @@ We **NEVER** collect:
 - Usernames, local file paths, or directory names
 - IP addresses, tokens, or credentials
 
-All uploads use HTTPS, a strict 1-second timeout, and defensive SSRF validation. Any network or filesystem exception is silently swallowed so telemetry can never fail or interrupt your work.
+All uploads use HTTPS, a 1-second connect and read timeout (DNS resolution excluded), and defensive SSRF validation. Any network or filesystem exception is silently swallowed so telemetry can never fail or interrupt your work.
 
 
 ## Plugin System
