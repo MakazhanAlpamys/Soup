@@ -14,6 +14,11 @@ machine is directly comparable to `benchmarks/run-m1-8gb-mlx-sft.md`.
 
 Requires Apple Silicon and ``pip install -e ".[mlx]"``.
 
+Attaches Soup's Rich display and a local experiment tracker, and refuses a run
+with no bridge metrics. The database stays beside the temporary artifacts;
+the bridge also emits its normal process-local SSE events. Timing includes
+display/tracker overhead, unlike the original published M1 measurements.
+
 Usage:
     python mlx_sft_smoke.py [model-id] [rows] [epochs]
 
@@ -89,7 +94,12 @@ class _Tee:
         for stream in self._streams:
             stream.flush()
 
+    def isatty(self):
+        # Rich must still recognise a terminal through the capture wrapper.
+        return getattr(self._streams[0], "isatty", lambda: False)()
 
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[a-zA-Z]")
 _TRAINED_TOKENS_RE = re.compile(r"Trained Tokens (\d+)")
 
 
@@ -102,10 +112,14 @@ def _final_trained_tokens(train_stdout: str) -> int | None:
     wrapper's result dict does not carry the count, so stdout is the only
     place it surfaces.
 
-    Returns None if the line is absent — the caller prints nothing rather
-    than inventing a figure.
+    Rich's Live/FileProxy wraps progress lines and inserts ANSI controls.
+    Normalise both before matching, or an intact earlier report can silently
+    win over the wrapped final counter at some terminal widths.
+
+    Returns None if the counter is absent; the caller reports unavailable.
     """
-    matches = _TRAINED_TOKENS_RE.findall(train_stdout)
+    flat = re.sub(r"\s+", " ", _ANSI_RE.sub("", train_stdout))
+    matches = _TRAINED_TOKENS_RE.findall(flat)
     return int(matches[-1]) if matches else None
 
 
@@ -128,8 +142,11 @@ def main() -> int:
     epochs = int(sys.argv[3]) if len(sys.argv) > 3 else 1
 
     import mlx.core as mx
+    from rich.console import Console
 
     from soup_cli.config.loader import load_config_from_string
+    from soup_cli.experiment.tracker import ExperimentTracker
+    from soup_cli.monitoring.display import TrainingDisplay
     from soup_cli.trainer.mlx_routing import resolve_trainer
 
     tmp = Path(tempfile.mkdtemp(prefix="mlx_smoke_"))
@@ -179,14 +196,37 @@ output: {out}
           f"mlx peak after load: {mx.get_peak_memory() / 1024**3:.3f} GB   "
           f"(includes first-time Hub download)")
 
-    mx.reset_peak_memory()
-    t0 = time.time()
     # mlx-lm prints its progress to stdout; tee it so the run stays readable
     # AND the trained-token counter is recoverable for the throughput line.
     buffer = io.StringIO()
-    with contextlib.redirect_stdout(_Tee(sys.stdout, buffer)):
-        result = trainer.train()
-    train_s = time.time() - t0
+    display = TrainingDisplay(cfg, device_name="Apple Silicon (MLX)")
+    # A benchmark must not populate the user's normal experiment database.
+    with contextlib.closing(ExperimentTracker(db_path=tmp / "experiments.db")) as tracker:
+        run_id = tracker.start_run(
+            cfg.model_dump(), device="mlx", device_name="Apple Silicon (MLX)", gpu_info={},
+        )
+        try:
+            mx.reset_peak_memory()
+            t0 = time.time()
+            with contextlib.redirect_stdout(_Tee(sys.stdout, buffer)):
+                result = trainer.train(display=display, tracker=tracker, run_id=run_id)
+            train_s = time.time() - t0
+            metrics = tracker.get_metrics(run_id)
+            if not metrics or display.current_step <= 0:
+                raise RuntimeError("MLX bridge received no display/tracker metrics")
+            tracker.finish_run(
+                run_id, initial_loss=result["initial_loss"], final_loss=result["final_loss"],
+                total_steps=result["total_steps"], duration_secs=result["duration_secs"],
+                output_dir=result["output_dir"],
+            )
+        except BaseException:
+            # Include Ctrl-C; the wrapper stops its display in its own finally.
+            tracker.fail_run(run_id)
+            raise
+        Console().print(
+            f"bridge        : {len(metrics)} metric reports saved to {tracker.db_path}",
+            markup=False, highlight=False, soft_wrap=True,
+        )
     train_stdout = buffer.getvalue()
     print(f"train         : {train_s:.1f}s   "
           f"mlx peak during train: {mx.get_peak_memory() / 1024**3:.3f} GB")
