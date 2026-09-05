@@ -38,3 +38,14 @@ def test_video_valid_messages_still_convert():
 def test_video_messages_not_a_list_returns_none():
     result = format_to_messages({"video": "clip.mp4", "messages": 5}, "video")
     assert result is None
+
+
+def test_video_missing_messages_converts_with_empty_list():
+    """Pre-existing contract: video rows need no 'messages' key (#679 review)."""
+    result = format_to_messages({"video": "clip.mp4"}, "video")
+    assert result == {"video": "clip.mp4", "messages": []}
+
+
+def test_video_messages_null_converts_with_empty_list():
+    result = format_to_messages({"video": "clip.mp4", "messages": None}, "video")
+    assert result == {"video": "clip.mp4", "messages": []}

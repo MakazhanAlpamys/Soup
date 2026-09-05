@@ -182,8 +182,8 @@ def _convert_sharegpt(row: dict) -> dict:
     return {"messages": messages}
 
 
-def _require_str_messages(row: dict, fmt: str) -> list[dict]:
-    """Validate ``row["messages"]`` is a list whose elements are all dicts.
+def _require_str_messages(messages: object, fmt: str) -> list[dict]:
+    """Validate a ``messages`` value is a list whose elements are all dicts.
 
     chatml, audio and video pass ``messages`` through verbatim, so a row
     like ``{"messages": ["hello"]}`` would otherwise flow into the training
@@ -191,7 +191,6 @@ def _require_str_messages(row: dict, fmt: str) -> list[dict]:
     Raising ``ValueError`` routes the row to ``format_to_messages``'s drop
     path, matching ``_convert_multimodal``'s element check (#676).
     """
-    messages = row["messages"]
     if not isinstance(messages, list):
         raise ValueError(f"{fmt} row 'messages' must be a list")
     for msg in messages:
@@ -202,7 +201,7 @@ def _require_str_messages(row: dict, fmt: str) -> list[dict]:
 
 def _convert_chatml(row: dict) -> dict:
     # Already in the right format
-    return {"messages": _require_str_messages(row, "chatml")}
+    return {"messages": _require_str_messages(row["messages"], "chatml")}
 
 
 def _convert_dpo(row: dict) -> dict:
@@ -291,7 +290,7 @@ def _convert_audio(row: dict) -> dict:
     audio = row["audio"]
     if not isinstance(audio, str) or not audio.strip():
         raise ValueError("Audio row must have a non-empty 'audio' field")
-    messages = _require_str_messages(row, "audio")
+    messages = _require_str_messages(row["messages"], "audio")
     if len(messages) < 1:
         raise ValueError("Audio row must have a 'messages' list with at least one message")
     return {"messages": messages, "audio": audio}
@@ -587,7 +586,7 @@ def _convert_video(row: dict) -> dict:
         raise ValueError("video row 'video' must not contain null bytes")
     if len(video) > 2048:
         raise ValueError("video row 'video' must be <= 2048 chars")
-    messages = _require_str_messages(row, "video")
+    messages = _require_str_messages(row.get("messages") or [], "video")
     return {"video": video, "messages": messages}
 
 
