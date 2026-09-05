@@ -52,11 +52,16 @@ def ui(
             "When omitted, a fresh token is generated each startup."
         ),
     ),
+    no_auth: bool = typer.Option(
+        False,
+        "--no-auth",
+        help="Disable authentication (loopback only).",
+    ),
 ):
     """Launch the Soup Web UI.
 
     A Bearer auth token is auto-generated at startup and printed to the console.
-    Mutating API endpoints (POST/DELETE) require 'Authorization: Bearer <token>'.
+    API endpoints require 'Authorization: Bearer <token>'.
 
     `--public` exposes the server on 0.0.0.0 for phone-on-LAN access. The
     auth token is embedded in a phone-scannable URL + ASCII QR code so a
@@ -88,20 +93,30 @@ def ui(
     if public and host == "127.0.0.1":
         host = "0.0.0.0"
 
+    # Security: refusing startup on non-loopback when authentication is disabled (#687)
+    if host not in {"127.0.0.1", "localhost", "::1"} and no_auth:
+        from rich.markup import escape as _rich_escape
+
+        console.print(
+            f"[red]Error:[/] binding non-loopback host '{_rich_escape(str(host))}' "
+            "with authentication disabled is not permitted."
+        )
+        raise typer.Exit(code=2)
+
     token = get_auth_token()
 
     if show_token:
         console.print(token)
         raise typer.Exit()
 
-    app = create_app(host=host, port=port)
+    app = create_app(host=host, port=port, no_auth=no_auth)
 
     url = f"http://{host}:{port}"
 
     panel_body = (
         f"URL:    [bold]{url}[/]\n"
         f"Token:  [bold]{token}[/]\n\n"
-        f"Mutating API endpoints require:\n"
+        f"API endpoints require:\n"
         f"  [dim]Authorization: Bearer {token}[/]\n\n"
         f"Pages:\n"
         f"  [bold]Dashboard[/]      - View experiments, loss charts, system info\n"
