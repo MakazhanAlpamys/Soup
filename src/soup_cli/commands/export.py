@@ -96,7 +96,7 @@ def export(
     calibration_data: Optional[str] = typer.Option(
         None,
         "--calibration-data",
-        help="Path to calibration JSONL. Required for GPTQ; optional for AWQ.",
+        help="Path to calibration JSONL. Required for AWQ and GPTQ.",
     ),
     calibration_samples: int = typer.Option(
         128,
@@ -857,27 +857,45 @@ def _validate_calibration_path(calibration_data: Optional[str]) -> Optional[Path
     return cal_path
 
 
+class _CalibrationDataReadError(ValueError):
+    """A calibration JSONL could not be decoded or read safely."""
+
+
 def _load_calibration_texts(cal_path: Optional[Path], max_samples: int = 128) -> list:
     """Load calibration texts from JSONL file."""
     if cal_path is None:
         return []
     texts = []
-    with open(cal_path, encoding="utf-8") as fh:
-        for line in fh:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                row = json.loads(line)
-                # Support "text" field or concatenate all string values
+    try:
+        with open(cal_path, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(row, dict):
+                    continue
+                # Support "text" field or concatenate all non-empty values.
                 if "text" in row:
-                    texts.append(str(row["text"]))
+                    value = row["text"]
+                    text = "" if value is None else str(value)
                 else:
-                    texts.append(" ".join(str(v) for v in row.values() if v))
-            except json.JSONDecodeError:
-                continue
-            if len(texts) >= max_samples:
-                break
+                    text = " ".join(str(v) for v in row.values() if v)
+                if text.strip():
+                    texts.append(text)
+                if len(texts) >= max_samples:
+                    break
+    except UnicodeError as exc:
+        raise _CalibrationDataReadError(
+            f"Calibration data is not valid UTF-8: {cal_path}"
+        ) from exc
+    except OSError as exc:
+        raise _CalibrationDataReadError(
+            f"Could not read calibration data {cal_path}: {exc}"
+        ) from exc
     return texts
 
 
@@ -915,6 +933,21 @@ def _export_awq(
 
     # Validate calibration path (security: path traversal protection)
     cal_path = _validate_calibration_path(calibration_data)
+    if cal_path is None:
+        console.print(
+            "[red]AWQ export requires --calibration-data.[/]\n"
+            "AutoAWQ otherwise downloads its large default calibration dataset: "
+            "pass a calibration JSONL, e.g. [bold]--calibration-data path/to/data.jsonl[/]."
+        )
+        raise typer.Exit(1)
+    try:
+        calib_data = _load_calibration_texts(cal_path, max_samples=calibration_samples)
+    except _CalibrationDataReadError as exc:
+        console.print(f"[red]{exc}[/]")
+        raise typer.Exit(1) from exc
+    if not calib_data:
+        console.print(f"[red]No usable calibration samples found in {cal_path}.[/]")
+        raise typer.Exit(1)
 
     try:
         from awq import AutoAWQForCausalLM
@@ -990,17 +1023,8 @@ def _export_awq(
 
         quant_config = {"zero_point": True, "q_group_size": group_size, "w_bit": bits}
 
-        # Load calibration data if provided
-        calib_data = (
-            _load_calibration_texts(cal_path, max_samples=calibration_samples)
-            if cal_path else None
-        )
-
         console.print(f"[dim]Quantizing to AWQ {bits}-bit (group_size={group_size})...[/]")
-        if calib_data:
-            model.quantize(tokenizer, quant_config=quant_config, calib_data=calib_data)
-        else:
-            model.quantize(tokenizer, quant_config=quant_config)
+        model.quantize(tokenizer, quant_config=quant_config, calib_data=calib_data)
 
         console.print("[dim]Saving quantized model...[/]")
         model.save_quantized(str(output_path))
@@ -1057,7 +1081,11 @@ def _export_gptq(
             "pass a calibration JSONL, e.g. [bold]--calibration-data path/to/data.jsonl[/]."
         )
         raise typer.Exit(1)
-    calib_texts = _load_calibration_texts(cal_path, max_samples=calibration_samples)
+    try:
+        calib_texts = _load_calibration_texts(cal_path, max_samples=calibration_samples)
+    except _CalibrationDataReadError as exc:
+        console.print(f"[red]{exc}[/]")
+        raise typer.Exit(1) from exc
     if not calib_texts:
         console.print(f"[red]No usable calibration samples found in {cal_path}.[/]")
         raise typer.Exit(1)
