@@ -12,6 +12,18 @@ reproducing 70+ versions of notes.
 
 ## [Unreleased]
 
+### Fixed
+
+- **MLX SFT ignored `training.gradient_accumulation_steps` (#684).** The
+  wrapper built mlx-lm's `TrainingArgs` without a `grad_accumulation_steps`
+  kwarg, so mlx-lm's own dataclass default of 1 always applied regardless
+  of the configured value, silently changing the effective batch size and
+  optimizer-update cadence on every MLX run. The written
+  `adapter_config.json` also hardcoded `grad_accumulation_steps: 1`, so the
+  drift could not be detected from the output afterwards either. Both now
+  carry the value `training.gradient_accumulation_steps` actually resolves
+  to.
+
 ## [0.74.0] - 2026-09-04
 
 ### Added
