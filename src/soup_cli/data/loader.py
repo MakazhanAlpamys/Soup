@@ -913,6 +913,30 @@ def _load_remote_dataset(
     )
 
 
+def _rows_from_hub_split(split, data_config: DataConfig, *, shuffle: bool) -> list[dict]:
+    """Materialise one hub split.
+
+    Streaming matches `_load_remote_dataset`: optional shuffle buffer, then
+    eager rows capped at MAX_REMOTE_ROWS. Non-streaming is the pre-#689
+    list comprehension (no cap).
+    """
+    if data_config.streaming:
+        buf = data_config.buffer_size
+        if shuffle and buf:
+            split = split.shuffle(buffer_size=buf)
+        raw_data: list[dict] = []
+        for i, row in enumerate(split):
+            if i >= MAX_REMOTE_ROWS:
+                console.print(
+                    f"[yellow]Hub dataset truncated at {MAX_REMOTE_ROWS:,} "
+                    f"rows (use a local split for larger jobs).[/]"
+                )
+                break
+            raw_data.append(dict(row))
+        return raw_data
+    return [dict(row) for row in split]
+
+
 def _load_one_hub_dataset(
     name: str,
     data_config: DataConfig,
@@ -932,12 +956,15 @@ def _load_one_hub_dataset(
         raise ImportError("Install datasets: pip install datasets")
 
     console.print(f"[dim]Loading from HuggingFace: {name}[/]")
-    ds = hf_load(name)
+    if data_config.streaming:
+        ds = hf_load(name, streaming=True)
+    else:
+        ds = hf_load(name)
 
     if "train" not in ds:
         raise ValueError(f"Dataset {name} has no 'train' split")
 
-    raw_data = [dict(row) for row in ds["train"]]
+    raw_data = _rows_from_hub_split(ds["train"], data_config, shuffle=True)
     fmt = data_config.format
     if fmt == "auto":
         fmt = detect_format(raw_data)
@@ -949,7 +976,9 @@ def _load_one_hub_dataset(
     )
 
     if "validation" in ds:
-        val_data = [dict(row) for row in ds["validation"]]
+        val_data = _rows_from_hub_split(
+            ds["validation"], data_config, shuffle=False,
+        )
         val_formatted = _format_rows(
             val_data,
             fmt,

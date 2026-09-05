@@ -599,6 +599,11 @@ data:
   shards: 4
 ```
 
+**HuggingFace Hub names** (a single `data.train` like `org/dataset`): `data.streaming: true`
+is forwarded to `datasets.load_dataset(..., streaming=True)` and `buffer_size` shuffles
+that stream, then Soup materialises up to 1M rows — the same shape as remote (#689).
+An all-hub *list* with `streaming: true` is still refused (#459).
+
 **Multi-dataset interleave** (v0.42.0 schema, wired into training-time loading in #443;
 extended to streaming and HF-hub dataset names in #459):
 
