@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 from typing import Optional
 
 import typer
@@ -9,6 +10,16 @@ from rich.console import Console
 from rich.panel import Panel
 
 console = Console()
+
+
+def _is_loopback(host: str) -> bool:
+    """Return True if host is a loopback address or localhost."""
+    if host.lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host.strip("[]")).is_loopback
+    except ValueError:
+        return False
 
 
 def ui(
@@ -52,11 +63,6 @@ def ui(
             "When omitted, a fresh token is generated each startup."
         ),
     ),
-    no_auth: bool = typer.Option(
-        False,
-        "--no-auth",
-        help="Disable authentication (loopback only).",
-    ),
 ):
     """Launch the Soup Web UI.
 
@@ -93,23 +99,33 @@ def ui(
     if public and host == "127.0.0.1":
         host = "0.0.0.0"
 
-    # Security: refusing startup on non-loopback when authentication is disabled (#687)
-    if host not in {"127.0.0.1", "localhost", "::1"} and no_auth:
-        from rich.markup import escape as _rich_escape
-
-        console.print(
-            f"[red]Error:[/] binding non-loopback host '{_rich_escape(str(host))}' "
-            "with authentication disabled is not permitted."
-        )
-        raise typer.Exit(code=2)
-
+    # Security: refusing startup on non-loopback when authentication token is
+    # missing or invalid (#687)
     token = get_auth_token()
+    if not _is_loopback(host):
+        valid = False
+        if token:
+            try:
+                from soup_cli.utils.qr_url import validate_token
+
+                validate_token(token)
+                valid = True
+            except (TypeError, ValueError):
+                valid = False
+        if not valid:
+            from rich.markup import escape as _rich_escape
+
+            console.print(
+                f"[red]Error:[/] binding non-loopback host '{_rich_escape(str(host))}' "
+                "requires a valid authentication token."
+            )
+            raise typer.Exit(code=2)
 
     if show_token:
         console.print(token)
         raise typer.Exit()
 
-    app = create_app(host=host, port=port, no_auth=no_auth)
+    app = create_app(host=host, port=port)
 
     url = f"http://{host}:{port}"
 

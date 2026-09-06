@@ -1,5 +1,6 @@
 """FastAPI application for Soup Web UI."""
 
+import ipaddress
 import json as json_mod
 import logging
 import os
@@ -109,12 +110,33 @@ def consume_auth_ticket(ticket: str) -> bool:
     return False
 
 
-def create_app(host: str = "127.0.0.1", port: int = 7860, no_auth: bool = False):
+def _is_loopback(host: str) -> bool:
+    """Return True if host is a loopback address or localhost."""
+    if host.lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host.strip("[]")).is_loopback
+    except ValueError:
+        return False
+
+
+def create_app(host: str = "127.0.0.1", port: int = 7860):
     """Create the Soup Web UI FastAPI application."""
-    if host not in {"127.0.0.1", "localhost", "::1"} and no_auth:
-        raise ValueError(
-            f"Binding non-loopback host '{host}' with authentication disabled is not permitted."
-        )
+    if not _is_loopback(host):
+        token = get_auth_token()
+        valid = False
+        if token:
+            try:
+                from soup_cli.utils.qr_url import validate_token
+
+                validate_token(token)
+                valid = True
+            except (TypeError, ValueError):
+                valid = False
+        if not valid:
+            raise ValueError(
+                f"Binding non-loopback host '{host}' requires a valid authentication token."
+            )
 
     from fastapi import Depends, FastAPI, HTTPException, Query, Request
     from fastapi.middleware.cors import CORSMiddleware
@@ -152,8 +174,6 @@ def create_app(host: str = "127.0.0.1", port: int = 7860, no_auth: bool = False)
 
     def _verify_token(request: Request):
         """Verify Bearer token on API endpoints."""
-        if no_auth:
-            return
         auth = request.headers.get("Authorization", "")
         with _auth_token_lock:
             expected = f"Bearer {_auth_token}"
@@ -164,8 +184,6 @@ def create_app(host: str = "127.0.0.1", port: int = 7860, no_auth: bool = False)
 
     def _verify_token_or_ticket(request: Request):
         """Verify Bearer token or consume a single-use ticket for SSE streaming."""
-        if no_auth:
-            return
         auth = request.headers.get("Authorization", "")
         with _auth_token_lock:
             expected = f"Bearer {_auth_token}"

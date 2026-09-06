@@ -47,7 +47,9 @@ class TestTrainLogsSSE:
 
         client = TestClient(create_app())
         try:
-            with client.stream("GET", "/api/train/logs") as resp:
+            with client.stream(
+                "GET", "/api/train/logs", headers=_auth_headers()
+            ) as resp:
                 assert resp.status_code == 200
                 assert "text/event-stream" in resp.headers["content-type"]
                 # Read at least one event
@@ -72,7 +74,9 @@ class TestTrainLogsSSE:
         ui_mod._train_process = None
 
         client = TestClient(create_app())
-        with client.stream("GET", "/api/train/logs") as resp:
+        with client.stream(
+            "GET", "/api/train/logs", headers=_auth_headers()
+        ) as resp:
             assert resp.status_code == 200
             body = b""
             for chunk in resp.iter_bytes():
@@ -99,8 +103,9 @@ class TestTrainLogsSSE:
         client = TestClient(create_app())
         try:
             with client.stream(
-                "GET", "/api/train/logs",
-                headers={"Last-Event-ID": "1"},
+                "GET",
+                "/api/train/logs",
+                headers={"Last-Event-ID": "1", **_auth_headers()},
             ) as resp:
                 assert resp.status_code == 200
                 body = b""
@@ -113,7 +118,7 @@ class TestTrainLogsSSE:
             ui_mod._train_process = None
 
     def test_logs_no_auth_required(self):
-        """SSE log endpoint is GET (read-only) — no auth needed."""
+        """SSE log endpoint requires auth (401 without token, 200 with one)."""
         try:
             from fastapi.testclient import TestClient
         except ImportError:
@@ -125,8 +130,11 @@ class TestTrainLogsSSE:
         ui_mod._train_process = None
 
         client = TestClient(create_app())
-        # No auth header — should still succeed (not 401)
         with client.stream("GET", "/api/train/logs") as resp:
+            assert resp.status_code == 401
+        with client.stream(
+            "GET", "/api/train/logs", headers=_auth_headers()
+        ) as resp:
             assert resp.status_code == 200
 
 
@@ -164,7 +172,9 @@ class TestLiveMetricsSSE:
         db_path = tmp_path / "test.db"
         with patch.dict(os.environ, {"SOUP_DB_PATH": str(db_path)}):
             client = TestClient(create_app())
-            with client.stream("GET", "/api/train/metrics/live") as resp:
+            with client.stream(
+                "GET", "/api/train/metrics/live", headers=_auth_headers()
+            ) as resp:
                 assert resp.status_code == 200
                 assert "text/event-stream" in resp.headers["content-type"]
 
@@ -203,7 +213,9 @@ class TestLiveMetricsSSE:
         with patch.dict(os.environ, {"SOUP_DB_PATH": str(db_path)}):
             client = TestClient(create_app())
             with client.stream(
-                "GET", f"/api/train/metrics/live?run_id={run_id}"
+                "GET",
+                f"/api/train/metrics/live?run_id={run_id}",
+                headers=_auth_headers(),
             ) as resp:
                 assert resp.status_code == 200
                 body = b""
@@ -216,7 +228,7 @@ class TestLiveMetricsSSE:
         ui_mod._train_process = None
 
     def test_metrics_live_no_auth_required(self, tmp_path):
-        """SSE metrics endpoint is GET (read-only) — no auth needed."""
+        """SSE metrics endpoint requires auth (401 without token, 200 with one)."""
         try:
             from fastapi.testclient import TestClient
         except ImportError:
@@ -233,6 +245,10 @@ class TestLiveMetricsSSE:
         with patch.dict(os.environ, {"SOUP_DB_PATH": str(db_path)}):
             client = TestClient(create_app())
             with client.stream("GET", "/api/train/metrics/live") as resp:
+                assert resp.status_code == 401
+            with client.stream(
+                "GET", "/api/train/metrics/live", headers=_auth_headers()
+            ) as resp:
                 assert resp.status_code == 200
 
         ui_mod._train_process = None
@@ -252,7 +268,9 @@ class TestLiveMetricsSSE:
         db_path = tmp_path / "test.db"
         with patch.dict(os.environ, {"SOUP_DB_PATH": str(db_path)}):
             client = TestClient(create_app())
-            with client.stream("GET", "/api/train/metrics/live") as resp:
+            with client.stream(
+                "GET", "/api/train/metrics/live", headers=_auth_headers()
+            ) as resp:
                 body = b""
                 for chunk in resp.iter_bytes():
                     body += chunk
@@ -291,7 +309,7 @@ class TestTrainProgress:
         ui_mod._train_process = None
 
         client = TestClient(create_app())
-        response = client.get("/api/train/progress")
+        response = client.get("/api/train/progress", headers=_auth_headers())
         assert response.status_code == 200
         data = response.json()
         assert data["running"] is False
@@ -327,7 +345,9 @@ class TestTrainProgress:
 
         with patch.dict(os.environ, {"SOUP_DB_PATH": str(db_path)}):
             client = TestClient(create_app())
-            response = client.get(f"/api/train/progress?run_id={run_id}")
+            response = client.get(
+                f"/api/train/progress?run_id={run_id}", headers=_auth_headers()
+            )
             assert response.status_code == 200
             data = response.json()
             assert data["running"] is True
@@ -366,7 +386,9 @@ class TestTrainProgress:
 
         with patch.dict(os.environ, {"SOUP_DB_PATH": str(db_path)}):
             client = TestClient(create_app())
-            response = client.get(f"/api/train/progress?run_id={run_id}")
+            response = client.get(
+                f"/api/train/progress?run_id={run_id}", headers=_auth_headers()
+            )
             data = response.json()
             expected_keys = {"running", "current_step", "run_id"}
             assert expected_keys.issubset(set(data.keys()))
@@ -374,7 +396,7 @@ class TestTrainProgress:
         ui_mod._train_process = None
 
     def test_progress_no_auth_required(self):
-        """Progress endpoint is GET (read-only) — no auth needed."""
+        """Progress endpoint requires auth (401 without token, 200 with one)."""
         try:
             from fastapi.testclient import TestClient
         except ImportError:
@@ -386,15 +408,18 @@ class TestTrainProgress:
         ui_mod._train_process = None
 
         client = TestClient(create_app())
-        response = client.get("/api/train/progress")
-        assert response.status_code == 200
+        assert client.get("/api/train/progress").status_code == 401
+        assert (
+            client.get("/api/train/progress", headers=_auth_headers()).status_code
+            == 200
+        )
 
 
 class TestSSEGracefulClose:
     """Test that SSE endpoints close gracefully."""
 
     def test_logs_closes_when_training_stops(self):
-        """Log SSE should end when training process finishes."""
+        """Log SSE should require auth and end when training process finishes."""
         try:
             from fastapi.testclient import TestClient
         except ImportError:
@@ -409,8 +434,14 @@ class TestSSEGracefulClose:
         ui_mod._train_process = mock_proc
 
         client = TestClient(create_app())
+        with client.stream("GET", "/api/train/logs") as resp:
+            assert resp.status_code == 401
+
         try:
-            with client.stream("GET", "/api/train/logs") as resp:
+            with client.stream(
+                "GET", "/api/train/logs", headers=_auth_headers()
+            ) as resp:
+                assert resp.status_code == 200
                 body = b""
                 for chunk in resp.iter_bytes():
                     body += chunk
@@ -435,7 +466,10 @@ class TestSSEGracefulClose:
         ui_mod._train_process = None
 
         client = TestClient(create_app())
-        with client.stream("GET", "/api/train/logs") as resp:
+        with client.stream(
+            "GET", "/api/train/logs", headers=_auth_headers()
+        ) as resp:
+            assert resp.status_code == 200
             body = b""
             for chunk in resp.iter_bytes():
                 body += chunk

@@ -163,34 +163,53 @@ class TestSSEAuthenticationAndTickets:
 
 
 class TestNonLoopbackBindingProtection:
-    """Verify that binding to non-loopback with auth disabled refuses startup."""
+    """Verify that binding to non-loopback requires a valid auth token."""
 
-    def test_create_app_refuses_non_loopback_with_no_auth(self):
-        """create_app raises ValueError on non-loopback host if no_auth=True."""
-        with pytest.raises(ValueError, match="Binding non-loopback host"):
-            create_app(host="0.0.0.0", no_auth=True)
+    def test_create_app_refuses_non_loopback_without_valid_token(self, monkeypatch):
+        """create_app raises ValueError on non-loopback host if auth token is missing or invalid."""
+        import soup_cli.ui.app as ui_app
 
-        with pytest.raises(ValueError, match="Binding non-loopback host"):
-            create_app(host="192.168.1.15", no_auth=True)
+        monkeypatch.setattr(ui_app, "_auth_token", "")
+        with pytest.raises(ValueError, match="requires a valid authentication token"):
+            create_app(host="0.0.0.0")
 
-    def test_create_app_allows_loopback_with_no_auth(self):
-        """create_app allows loopback hosts when no_auth=True."""
-        app = create_app(host="127.0.0.1", no_auth=True)
+        with pytest.raises(ValueError, match="requires a valid authentication token"):
+            create_app(host="192.168.1.15")
+
+        monkeypatch.setattr(ui_app, "_auth_token", "short")
+        with pytest.raises(ValueError, match="requires a valid authentication token"):
+            create_app(host="0.0.0.0")
+
+    def test_create_app_allows_loopback_default(self):
+        """create_app allows loopback hosts with normal token."""
+        app = create_app(host="127.0.0.1")
         client = TestClient(app)
-        # Auth not required
-        resp = client.get("/api/system")
+        resp = client.get("/api/system", headers=_auth_headers())
         assert resp.status_code == 200
 
-    def test_cli_ui_refuses_startup_on_non_loopback_with_no_auth(self):
-        """soup ui --host 0.0.0.0 --no-auth exits with code 2."""
+    def test_create_app_allows_loopback_variants(self):
+        """create_app treats 127.0.0.2, ::1, [::1], and localhost as loopback."""
+        for host in ["127.0.0.1", "127.0.0.2", "::1", "[::1]", "localhost"]:
+            app = create_app(host=host)
+            assert app is not None
+
+    def test_cli_ui_refuses_startup_on_non_loopback_with_invalid_token(self, monkeypatch):
+        """soup ui on non-loopback exits with code 2 when token is invalid or missing."""
+        import soup_cli.ui.app as ui_app
+
+        monkeypatch.setattr(ui_app, "_auth_token", "")
         runner = CliRunner()
-        result = runner.invoke(cli_app, ["ui", "--host", "0.0.0.0", "--no-auth"])
+        result = runner.invoke(cli_app, ["ui", "--host", "0.0.0.0"])
         assert result.exit_code == 2
         assert "binding non-loopback host" in result.output.lower()
 
-    def test_cli_ui_refuses_public_with_no_auth(self):
-        """soup ui --public --no-auth exits with code 2."""
+    def test_cli_ui_refuses_public_with_invalid_token(self, monkeypatch):
+        """soup ui --public exits with code 2 when token is invalid or missing."""
+        import soup_cli.ui.app as ui_app
+
+        monkeypatch.setattr(ui_app, "_auth_token", "")
         runner = CliRunner()
-        result = runner.invoke(cli_app, ["ui", "--public", "--no-auth"])
+        result = runner.invoke(cli_app, ["ui", "--public"])
         assert result.exit_code == 2
         assert "binding non-loopback host" in result.output.lower()
+
