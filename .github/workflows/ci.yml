@@ -188,6 +188,26 @@ jobs:
               )
               print(f"{name}={got} (matches constraints)")
           PY
+      - name: Prove the pinned torch actually supports trl's FSDP2 path
+        run: |
+          python - <<'PY'
+          import torch
+          import torch.distributed.fsdp as fsdp
+
+          assert hasattr(fsdp, "FSDPModule"), (
+              "torch.distributed.fsdp.FSDPModule is absent — this is the #651 "
+              "root cause; the declared torch floor does not support trl 0.29"
+          )
+          import trl
+          from trl import DPOTrainer, KTOTrainer
+
+          print(
+              "trl",
+              trl.__version__,
+              "imports on torch",
+              torch.__version__,
+          )
+          PY
       - name: Run Transformers floor compatibility guard
         run: >
           pytest -o addopts= --no-cov -q
