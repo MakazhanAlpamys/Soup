@@ -1,0 +1,43 @@
+# Recipe repo-id resolution (#677).
+#
+# The catalog names a Hugging Face repo in two places per recipe --
+# `RecipeMeta.model` and the YAML `base:` -- and nothing checked that either
+# resolves. #661 found two that did not, both shipped and released:
+# `validate-recipes` parses the YAML through the real schema, and a nonexistent
+# repo id is a perfectly well-formed string.
+#
+# Deliberately NOT a pull-request gate. Resolving 160+ ids on every PR would
+# make an unrelated docs change depend on Hub availability and rate limits, and
+# a job that goes red for reasons unrelated to the diff is one people learn to
+# re-run rather than read. Repos disappear on a timescale of months, so weekly
+# finds it long before a user does.
+name: recipe repo ids
+
+on:
+  schedule:
+    # Mondays, 07:00 UTC -- an hour after dependency-drift so the two do not
+    # contend for the same Hub rate limit.
+    - cron: "0 7 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  resolve:
+    name: resolve every recipe model id anonymously
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install the catalog and the Hub client only
+        # Not `.[dev]`: this needs the recipe catalog and huggingface_hub, not
+        # the PyTorch stack. A lighter install is also a faster scheduled job.
+        run: pip install -e . huggingface-hub pyyaml
+      - name: Resolve
+        # No HF_TOKEN in scope, deliberately and by omission: a token would
+        # resolve gated repos as EXISTS and hide the very case this guards.
+        # The script also refuses to run if one is set.
+        run: python scripts/check_recipe_repo_ids.py
