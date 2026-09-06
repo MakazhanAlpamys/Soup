@@ -357,7 +357,16 @@ class TestMlxOptimizer:
 
         mlx_lm_mod = types.ModuleType("mlx_lm")
         opt_mod = types.ModuleType("mlx.optimizers")
-        opt_mod.AdamW = lambda learning_rate=None: sentinel
+        # #686 builds a real LR schedule and passes weight_decay, so this fake
+        # needs the three schedule builders and an AdamW that tolerates more
+        # than `learning_rate`. Recording stubs only -- the assertion below is
+        # still that a non-None optimizer reaches `train()`, unchanged.
+        opt_mod.AdamW = lambda **kwargs: sentinel
+        opt_mod.linear_schedule = lambda init, end, steps: (lambda step: end)
+        opt_mod.cosine_decay = lambda init, steps: (lambda step: init)
+        opt_mod.join_schedules = lambda scheds, boundaries: (
+            lambda step: scheds[-1](step)
+        )
         mlx_root = types.ModuleType("mlx")
 
         monkeypatch.setitem(sys.modules, "mlx", mlx_root)
