@@ -275,8 +275,16 @@ def apply_variant_loss(
 
     if normalised == "gspo":
         # Group Stabilized: subtract per-group mean log-ratio (acts as
-        # control variate). Mean is taken over the batch dim.
-        log_ratio_centered = log_ratio - log_ratio.mean(dim=0, keepdim=True)
+        # control variate). Mean is taken over the batch dim, excluding
+        # masked (padding) positions so a masked token cannot shift the
+        # statistic other rows in its column are centered against.
+        if completion_mask is not None:
+            col_sum = (log_ratio * completion_mask).sum(dim=0, keepdim=True)
+            col_count = completion_mask.sum(dim=0, keepdim=True).clamp(min=1.0)
+            col_mean = col_sum / col_count
+        else:
+            col_mean = log_ratio.mean(dim=0, keepdim=True)
+        log_ratio_centered = log_ratio - col_mean
         ratio_stab = torch.exp(log_ratio_centered)
         token_loss = -(ratio_stab * advantages_2d)
         return _masked_mean(token_loss, completion_mask)
