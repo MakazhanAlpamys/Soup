@@ -1,9 +1,10 @@
 """The declared torch floor must be the binding one, and doctor's copy pinned (#636).
 
-``pyproject.toml [train]`` declared ``torch>=2.3.0`` while requiring
-``transformers>=5.16.1``, whose own torch extra forces ``torch>=2.5`` — so the
-declared floor could never bind, and ``soup doctor`` carried an unpinned second
-copy of it. These tests pin both halves:
+``pyproject.toml [train]`` declared ``torch>=2.6.0`` while requiring
+``transformers>=5.16.1``. The torch floor is kept explicit because TRL's
+FSDP2-based preference trainers require the public PyTorch 2.6 API, and
+``soup doctor`` carries a second literal copy that must not drift.
+These tests pin both halves:
 
 * the pyproject floor is at least what the *declared* transformers floor's own
   torch extra requires. That requirement is read from real metadata only where

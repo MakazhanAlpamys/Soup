@@ -22,7 +22,7 @@ DEPS = [
     # This literal is a copy, pinned to the declaration by
     # tests/test_issue636_torch_floor.py — reading installed metadata instead
     # would report the install's history, not the declaration (#636).
-    ("torch", "torch", "2.5.0", True),
+    ("torch", "torch", "2.6.0", True),
     ("transformers", "transformers", "5.16.1", True),
     ("peft", "peft", "0.20.0", True),
     ("trl", "trl", "0.29.0", True),
