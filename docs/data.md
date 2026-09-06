@@ -684,8 +684,15 @@ not byte-identically (a streaming source's size generally can't be known ahead o
 On the local (eager) and all-hub-name paths, `data.val_split` is applied per source before
 `over`/`probs` pad it with copies of its own rows, so a padded row can never land on both
 sides of the split; `concat`/`under` never duplicate rows and still split the combined
-result as before. This does not reach the streaming path below, which still splits after
-combining and can still duplicate a row across `train` and `val` under `over`/`probs`.
+result as before.
+
+The streaming path reaches the same guarantee by a different route (#702). A stream is not
+countable ahead of time, so there is nothing to take a fraction of before interleaving
+starts; instead, once `over` has been materialised, the split is taken over the *distinct*
+rows and every copy of a chosen val row is withheld from train. Train therefore keeps the
+oversampling for every row except those that became val, and `train`/`val` are disjoint.
+`concat`/`under`/`probs` never duplicate a row on the streaming path (only `over` uses
+`stopping_strategy="all_exhausted"`) and keep the ordinary split.
 
 Splitting before padding also means the requested `val_split` fraction is no longer exact
 under `over`/`probs`: it is taken from each source's own (smaller, unpadded) row count, so
