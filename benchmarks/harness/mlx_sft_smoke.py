@@ -169,6 +169,10 @@ training:
   epochs: {epochs}
   lr: 1e-4
   batch_size: 1
+  # Pinned: the schema default (4) would round `iters` down to a whole
+  # accumulation window (#696), moving the step count this harness reports
+  # out from under any published benchmark record that assumes 1:1 rows-to-iters.
+  gradient_accumulation_steps: 1
   lora:
     r: 8
     alpha: 16
