@@ -20,7 +20,7 @@ from typer.testing import CliRunner
 
 from soup_cli.cli import app
 from soup_cli.config.schema import DataConfig
-from soup_cli.data.formats import format_to_messages
+from soup_cli.data.formats import detect_format, format_to_messages
 from soup_cli.data.loader import load_dataset
 from soup_cli.data.validator import validate_and_stats
 
@@ -61,6 +61,42 @@ def test_non_dict_message_is_dropped(fmt: str, msg: object) -> None:
     # Must be None, not a kept row. ``continue`` over the bad element would
     # return {"messages": []} (or the original list) and fail this.
     assert format_to_messages(_row_for(fmt, msg), fmt) is None
+
+
+@pytest.mark.parametrize("fmt", ["chatml", "audio", "video"])
+@pytest.mark.parametrize("messages", ["", {}], ids=["empty-string", "empty-dict"])
+def test_empty_non_list_messages_are_dropped(fmt: str, messages: object) -> None:
+    # Empty iterables bypass an element-only guard; the whole row must be dropped.
+    row = _row_for(fmt, None)
+    row["messages"] = messages
+    assert format_to_messages(row, fmt) is None
+
+
+@pytest.mark.parametrize("messages", ["", {}], ids=["empty-string", "empty-dict"])
+def test_empty_non_list_chatml_rows_are_dropped_by_auto_loader(
+    tmp_path: Path, messages: object
+) -> None:
+    bad_row = {"messages": messages}
+    assert detect_format([bad_row]) == "chatml"
+    rows = [bad_row, VALID_CHATML]
+    path = tmp_path / "chatml.jsonl"
+    path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+
+    stats = validate_and_stats(rows, expected_format="chatml")
+    loaded = load_dataset(DataConfig(train=str(path), format="auto", val_split=0.0))
+    assert stats["valid_rows"] == 1
+    assert loaded["train"] == [VALID_CHATML]
+
+
+def test_empty_chatml_list_is_preserved() -> None:
+    assert format_to_messages({"messages": []}, "chatml") == {"messages": []}
+
+
+@pytest.mark.parametrize("fields", [{}, {"messages": None}, {"messages": []}])
+def test_video_without_messages_still_converts(fields: dict) -> None:
+    assert format_to_messages({"video": "clip.mp4", **fields}, "video") == {
+        "video": "clip.mp4", "messages": []
+    }
 
 
 def test_valid_chatml_audio_video_rows_convert_unchanged() -> None:
