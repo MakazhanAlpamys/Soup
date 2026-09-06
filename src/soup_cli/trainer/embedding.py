@@ -180,8 +180,9 @@ class EmbeddingTrainerWrapper:
         if self.fsdp_config:
             training_kwargs.update(self.fsdp_config)
 
-        if tcfg.loraplus_lr_ratio is not None:
-            training_kwargs["loraplus_lr_ratio"] = tcfg.loraplus_lr_ratio
+        # LoRA+ is not a TrainingArguments field; its optimizer is built and
+        # attached after the trainer exists (attach_loraplus_optimizer). Do NOT
+        # forward loraplus_lr_ratio here (#724).
 
         training_args = TrainingArguments(**training_kwargs)
 
@@ -213,9 +214,12 @@ class EmbeddingTrainerWrapper:
         # v0.40.6 #67 — ReLoRA callback.
         from soup_cli.utils.peft_wiring import (
             attach_curriculum_callback,
+            attach_loraplus_optimizer,
             attach_plugin_callback,
             attach_relora_callback,
         )
+        # LoRA+ optimizer (#724) — build and attach now that the trainer exists.
+        attach_loraplus_optimizer(self.trainer, tcfg)
         attach_relora_callback(self.trainer, tcfg)
         # v0.53.5 #114/#115 — dynamic curriculum live callback.
         attach_curriculum_callback(self.trainer, tcfg, str(output_dir), console)

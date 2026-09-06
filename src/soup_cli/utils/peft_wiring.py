@@ -192,6 +192,67 @@ def attach_relora_callback(trainer: Any, tcfg: Any) -> bool:
     return True
 
 
+def attach_loraplus_optimizer(trainer: Any, tcfg: Any) -> bool:
+    """Attach a PEFT LoRA+ optimizer when ``training.loraplus_lr_ratio`` is set.
+
+    LoRA+ is not a ``TrainingArguments`` field — it belongs to PEFT's optimizer
+    construction (``create_loraplus_optimizer``), which gives the LoRA B matrices
+    a learning rate of ``lr * loraplus_lr_ratio`` while A stays at ``lr``.
+    Forwarding it into ``TrainingArguments`` raised ``TypeError`` before the first
+    step, so the advertised option always crashed (#724).
+
+    Assigning ``trainer.optimizer`` here is respected because
+    ``Trainer.create_optimizer`` builds one only when ``self.optimizer is None``,
+    and the scheduler is still built from it with the configured warmup/schedule.
+    The optimizer class and its betas/eps come from the run's configured optimizer
+    via ``Trainer.get_optimizer_cls_and_kwargs``, so LoRA+ uses the same optimizer
+    the user asked for; weight decay is applied through PEFT's own
+    ``loraplus_weight_decay`` (the plain ``weight_decay`` kwarg is ignored by
+    ``create_loraplus_optimizer``).
+
+    Returns ``True`` when an optimizer was attached, ``False`` otherwise.
+    """
+    ratio = getattr(tcfg, "loraplus_lr_ratio", None)
+    if ratio is None:
+        return False
+
+    # GaLore projects full-parameter gradients; LoRA+ tunes LoRA A/B matrices.
+    # They cannot both own the optimizer — fail loudly rather than let this
+    # silently override the GaLore optimizer set on TrainingArguments.
+    if getattr(tcfg, "use_galore", False):
+        raise ValueError(
+            "training.loraplus_lr_ratio is mutually exclusive with "
+            "training.use_galore: LoRA+ tunes LoRA A/B matrices while GaLore "
+            "projects full-parameter gradients. Enable one, not both."
+        )
+
+    from peft import PeftModel
+    from peft.optimizers import create_loraplus_optimizer
+    from transformers import Trainer
+
+    model = trainer.model
+    if not isinstance(model, PeftModel):
+        raise ValueError(
+            "training.loraplus_lr_ratio requires a LoRA (PEFT) model, but the "
+            "active run has no adapter. Add a lora config or remove "
+            "loraplus_lr_ratio."
+        )
+
+    optimizer_cls, optimizer_kwargs = Trainer.get_optimizer_cls_and_kwargs(trainer.args)
+    # create_loraplus_optimizer takes lr explicitly and re-inserts it into the
+    # per-group kwargs itself; drop the duplicate so it is not passed twice.
+    optimizer_kwargs.pop("lr", None)
+    trainer.optimizer = create_loraplus_optimizer(
+        model=model,
+        optimizer_cls=optimizer_cls,
+        lr=trainer.args.learning_rate,
+        loraplus_lr_ratio=float(ratio),
+        loraplus_weight_decay=trainer.args.weight_decay,
+        **optimizer_kwargs,
+    )
+    return True
+
+
 def apply_lisa_setup(model: Any, tcfg: Any, console: Any = None) -> bool:
     """Prepare ``model`` for LISA full fine-tuning (v0.71.34 #267, #307).
 

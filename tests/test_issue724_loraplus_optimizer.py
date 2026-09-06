@@ -1,0 +1,121 @@
+"""Regression tests for issue #724.
+
+`training.loraplus_lr_ratio` was inserted into `training_kwargs` and forwarded to
+`TrainingArguments(**training_kwargs)` by the SFT, pretrain and embedding wrappers.
+`loraplus_lr_ratio` is not a `TrainingArguments` field, so enabling the advertised,
+schema-accepted option raised `TypeError` before the first training step.
+
+The fix routes it through PEFT's optimizer construction instead:
+`attach_loraplus_optimizer` builds a `create_loraplus_optimizer` optimizer (B
+matrices at `lr * ratio`, A at `lr`) and assigns it to `trainer.optimizer` after
+the trainer exists. These tests use a real PEFT model and a real
+`transformers.Trainer` — no mocks — because a mock would auto-create the LoRA
+parameter groups the production path depends on and hide the very defect this fixes.
+"""
+
+import pytest
+
+from soup_cli.utils.peft_wiring import attach_loraplus_optimizer
+
+pytest.importorskip("torch")
+pytest.importorskip("peft")
+pytest.importorskip("transformers")
+
+BASE_LR = 2e-5
+RATIO = 16.0
+
+
+def _tiny_peft_model():
+    from peft import LoraConfig, get_peft_model
+    from transformers import AutoConfig, AutoModelForCausalLM
+
+    cfg = AutoConfig.for_model(
+        "llama", hidden_size=32, intermediate_size=64, num_hidden_layers=2,
+        num_attention_heads=4, vocab_size=128,
+    )
+    model = AutoModelForCausalLM.from_config(cfg)
+    return get_peft_model(
+        model, LoraConfig(r=8, lora_alpha=16, target_modules=["q_proj", "v_proj"])
+    )
+
+
+def _trainer(model, tmp_path, *, weight_decay=0.01, optim="adamw_torch"):
+    from transformers import Trainer, TrainingArguments
+
+    args = TrainingArguments(
+        output_dir=str(tmp_path), learning_rate=BASE_LR,
+        weight_decay=weight_decay, optim=optim, report_to=[],
+    )
+    return Trainer(model=model, args=args)
+
+
+class _TCfg:
+    """A real config-shaped object (not a mock): missing attributes raise."""
+    def __init__(self, loraplus_lr_ratio=None, use_galore=False):
+        self.loraplus_lr_ratio = loraplus_lr_ratio
+        self.use_galore = use_galore
+
+
+def test_loraplus_optimizer_is_attached_with_split_learning_rates(tmp_path):
+    trainer = _trainer(_tiny_peft_model(), tmp_path)
+    attached = attach_loraplus_optimizer(trainer, _TCfg(loraplus_lr_ratio=RATIO))
+
+    assert attached is True
+    assert trainer.optimizer is not None
+    lrs = {round(g["lr"], 12) for g in trainer.optimizer.param_groups}
+    # A/base group at lr, B group at lr * ratio — the whole point of LoRA+.
+    assert BASE_LR in lrs
+    assert round(BASE_LR * RATIO, 12) in lrs
+
+
+def test_uses_the_configured_optimizer_class(tmp_path):
+    trainer = _trainer(_tiny_peft_model(), tmp_path, optim="adamw_torch")
+    attach_loraplus_optimizer(trainer, _TCfg(loraplus_lr_ratio=RATIO))
+    assert type(trainer.optimizer).__name__ == "AdamW"
+
+
+def test_weight_decay_is_applied_through_loraplus(tmp_path):
+    # PEFT applies wd via `loraplus_weight_decay`, not the plain kwarg; the helper
+    # must pass the configured value so decay groups actually receive it.
+    trainer = _trainer(_tiny_peft_model(), tmp_path, weight_decay=0.07)
+    attach_loraplus_optimizer(trainer, _TCfg(loraplus_lr_ratio=RATIO))
+    assert any(g["weight_decay"] == 0.07 for g in trainer.optimizer.param_groups)
+
+
+def test_no_ratio_is_a_noop(tmp_path):
+    trainer = _trainer(_tiny_peft_model(), tmp_path)
+    attached = attach_loraplus_optimizer(trainer, _TCfg(loraplus_lr_ratio=None))
+    assert attached is False
+    # Untouched: Trainer builds its own optimizer lazily at train() time.
+    assert trainer.optimizer is None
+
+
+def test_galore_conflict_raises(tmp_path):
+    trainer = _trainer(_tiny_peft_model(), tmp_path)
+    with pytest.raises(ValueError, match="use_galore"):
+        attach_loraplus_optimizer(trainer, _TCfg(loraplus_lr_ratio=RATIO, use_galore=True))
+
+
+def test_non_peft_model_raises(tmp_path):
+    from peft import PeftModel
+    from transformers import AutoConfig, AutoModelForCausalLM
+
+    cfg = AutoConfig.for_model(
+        "llama", hidden_size=32, intermediate_size=64, num_hidden_layers=2,
+        num_attention_heads=4, vocab_size=128,
+    )
+    plain = AutoModelForCausalLM.from_config(cfg)
+    assert not isinstance(plain, PeftModel)
+    trainer = _trainer(plain, tmp_path)
+    with pytest.raises(ValueError, match="LoRA"):
+        attach_loraplus_optimizer(trainer, _TCfg(loraplus_lr_ratio=RATIO))
+
+
+def test_training_arguments_still_rejects_the_kwarg():
+    # The contract behind the fix: loraplus_lr_ratio is NOT a TrainingArguments
+    # field. If any wrapper re-adds the old forward, the run crashes here — this
+    # is what made the option unusable before #724.
+    from transformers import TrainingArguments
+
+    with pytest.raises(TypeError):
+        TrainingArguments(output_dir="x", loraplus_lr_ratio=RATIO)
