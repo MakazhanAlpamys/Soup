@@ -126,6 +126,11 @@ wrong with the package. (Dropping the quotes entirely works on Windows too, but 
 The core `pip install soup-cli` is a light install — the CLI, config system, and data tools, with
 no PyTorch. Add `[train]` to fine-tune, or install other extras only when you need them:
 
+Every row below is written with `pip`, and works verbatim inside a virtualenv, a Colab notebook
+or a Docker image. Outside one, on Debian 12 / Ubuntu 23.04 or later, `pip` refuses with
+`error: externally-managed-environment`; substitute `pipx` or `uv tool` for `pip` and the extras
+spelling is unchanged. See [the README's install section](../README.md#1-install).
+
 | Extra | Install | What it adds |
 |---|---|---|
 | `train` | `pip install "soup-cli[train]"` | Training stack: torch, transformers, peft, trl, datasets, bitsandbytes, accelerate |

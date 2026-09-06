@@ -100,16 +100,14 @@ def test_validate_does_not_greenlight_multimodal_rows_the_loader_rejects() -> No
     # ``soup data validate --format multimodal`` used to report every row
     # valid because it only checked keys, while load_dataset raised
     # AttributeError on a non-dict message. Validator must not green-light
-    # that file. load_dataset still raises until the neighbouring multimodal
-    # converter guard lands; that mismatch is deliberate.
+    # that file. The neighbouring multimodal guard (#670) now drops the row.
     rows = [{"messages": [msg]} for msg in NON_DICT_MESSAGES]
     rows.append({"messages": [{"role": "user", "content": "ok"}]})
     stats = validate_and_stats(rows, expected_format="multimodal")
     assert stats["valid_rows"] == 1
     assert stats["valid_rows"] < stats["total"]
 
-    with pytest.raises(AttributeError):
-        format_to_messages({"messages": ["hello"]}, "multimodal")
+    assert format_to_messages({"messages": ["hello"]}, "multimodal") is None
 
 
 def test_soup_data_validate_reports_dropped_chatml_rows(tmp_path: Path) -> None:

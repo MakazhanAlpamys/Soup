@@ -48,7 +48,7 @@ def search_recipes(
 
 
 # ---------------------------------------------------------------------------
-# Recipe catalog (163 recipes)
+# Recipe catalog (165 recipes)
 # ---------------------------------------------------------------------------
 
 RECIPES: Dict[str, RecipeMeta] = {
@@ -1239,13 +1239,13 @@ output: ./output
 """,
     ),
     "qwen3-8b-sft-mlx": RecipeMeta(
-        model="mlx-community/Qwen3-8B-Instruct-4bit",
+        model="mlx-community/Qwen3-8B-4bit",
         task="sft",
         size="8B",
         tags=("qwen", "qwen3", "mlx", "apple-silicon", "sft"),
         description="Qwen 3 8B SFT on Apple Silicon via MLX (M2+ 16GB)",
         yaml_str="""\
-base: mlx-community/Qwen3-8B-Instruct-4bit
+base: mlx-community/Qwen3-8B-4bit
 task: sft
 backend: mlx
 
@@ -1267,14 +1267,14 @@ training:
 output: ./output
 """,
     ),
-    "gemma3-9b-sft-mlx": RecipeMeta(
-        model="mlx-community/gemma-3-9b-it-4bit",
+    "gemma3-4b-sft-mlx": RecipeMeta(
+        model="mlx-community/gemma-3-4b-it-4bit",
         task="sft",
-        size="9B",
+        size="4B",
         tags=("gemma", "gemma3", "mlx", "apple-silicon", "sft"),
-        description="Gemma 3 9B SFT on Apple Silicon via MLX (M2+ 16GB)",
+        description="Gemma 3 4B SFT on Apple Silicon via MLX (M1+ 16GB)",
         yaml_str="""\
-base: mlx-community/gemma-3-9b-it-4bit
+base: mlx-community/gemma-3-4b-it-4bit
 task: sft
 backend: mlx
 
@@ -4302,6 +4302,46 @@ training:
 output: ./output
 """,
     ),
+    "deepseek-v4-flash-dpo": RecipeMeta(
+        model="deepseek-ai/DeepSeek-V4-Flash",
+        task="dpo",
+        size="N/A",
+        tags=(
+            "deepseek",
+            "deepseek-v4",
+            "dpo",
+            "alignment",
+            "preference",
+            "moe",
+            "mixture-of-experts",
+        ),
+        description="DeepSeek V4 Flash MoE DPO alignment (MIT, efficiency-tier)",
+        yaml_str="""\
+base: deepseek-ai/DeepSeek-V4-Flash
+task: dpo
+
+data:
+  train: ./data/preference_train.jsonl
+  format: dpo
+  max_length: 4096
+
+training:
+  epochs: 3
+  lr: 5e-6
+  batch_size: auto
+  gradient_accumulation_steps: 8
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  quantization: 4bit
+  dpo_beta: 0.1
+  moe_lora: true
+  moe_aux_loss_coeff: 0.01
+
+output: ./output
+""",
+    ),
     "deepseek-v4-pro-sft": RecipeMeta(
         model="deepseek-ai/DeepSeek-V4-Pro",
         task="sft",
@@ -4546,6 +4586,42 @@ training:
   num_generations: 4
   reward_fn: accuracy
   moe_lora: true
+  gradient_checkpointing: true
+
+output: ./output
+""",
+    ),
+    "kimi-k2.6-dpo": RecipeMeta(
+        model="moonshotai/Kimi-K2.6",
+        task="dpo",
+        size="1T",
+        tags=("kimi", "moonshot", "dpo", "alignment", "preference", "moe", "large", "multi-gpu"),
+        description=(
+            "Kimi K2.6 MoE DPO alignment (Modified MIT, ~1T / 32B active). "
+            "Requires multi-node DeepSpeed."
+        ),
+        yaml_str="""\
+base: moonshotai/Kimi-K2.6
+task: dpo
+
+data:
+  train: ./data/preference_train.jsonl
+  format: dpo
+  max_length: 8192
+
+training:
+  epochs: 1
+  lr: 5e-6
+  batch_size: 1
+  gradient_accumulation_steps: 16
+  lora:
+    r: 32
+    alpha: 64
+    target_modules: auto
+  quantization: 4bit
+  dpo_beta: 0.1
+  moe_lora: true
+  moe_aux_loss_coeff: 0.01
   gradient_checkpointing: true
 
 output: ./output
