@@ -599,6 +599,11 @@ data:
   shards: 4
 ```
 
+**HuggingFace Hub names** (a single `data.train` like `org/dataset`): `data.streaming: true`
+is forwarded to `datasets.load_dataset(..., streaming=True)` and `buffer_size` shuffles
+that stream, then Soup materialises up to 1M rows — the same shape as remote (#689).
+An all-hub *list* with `streaming: true` is still refused (#459). `buffer_size` shuffles the train split only; a capped validation split takes the first N rows unshuffled.
+
 **Multi-dataset interleave** (v0.42.0 schema, wired into training-time loading in #443;
 extended to streaming and HF-hub dataset names in #459):
 
@@ -641,8 +646,9 @@ than silently falling through to local/hub classification:
   differently-shaped hub datasets through their own split negotiation is unimplemented and
   refuses at parse time, by name). A hub entry's own `validation` split is used for the
   combined val set **only when every entry provides one** (combined the same way); if only
-  some entries provide one it is ignored (warned) and `data.val_split` applies to the
-  combined train rows instead — a partial hub split is not a decided mixture.
+  some entries provide one it is ignored (warned) and `data.val_split` is derived instead:
+  per source before `over`/`probs` pad it, same as the local-file path below, or from the
+  combined train rows for `concat`/`under`. A partial hub split is not a decided mixture.
 - **A mix of hub names with local/remote entries in the same list** always refuses — there
   is no decided answer for how a hub split and a local file's row count should reconcile.
 
@@ -655,6 +661,26 @@ not byte-identically (a streaming source's size generally can't be known ahead o
 | `under`  | truncate every source to the smallest source's size | `interleave_datasets(streams, stopping_strategy="first_exhausted")`       |
 | `over`   | upsample every source to the largest source's size (cycled) | `interleave_datasets(streams, stopping_strategy="all_exhausted")` |
 | `probs`  | exact apportionment to the requested ratio        | `interleave_datasets(streams, probabilities=probs, stopping_strategy="first_exhausted")` — converges to the same ratio, sampled rather than exact |
+
+On the local (eager) and all-hub-name paths, `data.val_split` is applied per source before
+`over`/`probs` pad it with copies of its own rows, so a padded row can never land on both
+sides of the split; `concat`/`under` never duplicate rows and still split the combined
+result as before. This does not reach the streaming path below, which still splits after
+combining and can still duplicate a row across `train` and `val` under `over`/`probs`.
+
+Splitting before padding also means the requested `val_split` fraction is no longer exact
+under `over`/`probs`: it is taken from each source's own (smaller, unpadded) row count, so
+the held-out share of the final, padded total comes out lower than requested. For example,
+two sources of 1000 and 100 rows with `over` and `val_split: 0.1` yield 110 val rows out of
+1910 total (5.8%), not the 200/2000 (10%) a single-source split would give. `concat`/`under`
+are unaffected (they never pad). This is the trade-off for closing the duplicate-row leak,
+not a separate bug: holding out an exact 10% of the padded total would mean some val rows
+are copies of val rows already counted, or of train rows.
+
+Train and val also end up with different source mixtures once `over`/`probs` pads: val is
+carved from each source's original, unpadded rows, while train sees the padded, rebalanced
+mix. Anyone who oversampled specifically to correct a source imbalance gets a validation set
+that still reflects the original, un-rebalanced skew, not the mixture train now trains on.
 
 **Vocab expansion + advanced masking:**
 

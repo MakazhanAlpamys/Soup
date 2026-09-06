@@ -223,7 +223,7 @@ soup = "soup_cli.cli:run"
 Homepage = "https://github.com/MakazhanAlpamys/Soup"
 Repository = "https://github.com/MakazhanAlpamys/Soup"
 Issues = "https://github.com/MakazhanAlpamys/Soup/issues"
-Discord = "https://discord.gg/8RgVbFA6Zq"
+Discord = "https://discord.gg/dgd2pJcjwP"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/soup_cli"]

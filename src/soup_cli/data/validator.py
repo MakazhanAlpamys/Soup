@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from typing import Optional
 
-from soup_cli.data.formats import FORMAT_SIGNATURES
+from soup_cli.data.formats import VALID_FORMATS, format_to_messages_with_reason
+
+# How many per-row drop reasons to surface in `issues`. Enough to make
+# `validate` actionable ("which rows and why") without flooding the output on a
+# file where every row is bad.
+_MAX_REASON_SAMPLES = 3
 
 
 def validate_and_stats(data: list[dict], expected_format: Optional[str] = None) -> dict:
@@ -38,20 +43,32 @@ def validate_and_stats(data: list[dict], expected_format: Optional[str] = None) 
     row_strs = [str(sorted(row.items())) for row in data]
     dup_count = len(row_strs) - len(set(row_strs))
 
-    # Validate format
+    # Validate format by running the real conversion path per row, so a row is
+    # counted invalid on exactly the conditions load_dataset would drop it. A
+    # key-presence check drifts from the converters (a row can have every
+    # required key and still be dropped, e.g. a null value or a non-dict
+    # message) and skips the formats absent from FORMAT_SIGNATURES entirely.
     issues = []
     valid_rows = len(data)
-    if expected_format and expected_format in FORMAT_SIGNATURES:
-        required = FORMAT_SIGNATURES[expected_format]
+    if expected_format and expected_format in VALID_FORMATS:
         invalid = 0
-        for row in data:
-            if not required.issubset(row.keys()):
-                invalid += 1
+        sample_reasons: list[str] = []
+        for idx, row in enumerate(data):
+            _, reason = format_to_messages_with_reason(row, expected_format)
+            if reason is None:
+                continue
+            invalid += 1
+            if len(sample_reasons) < _MAX_REASON_SAMPLES:
+                sample_reasons.append(f"row {idx}: {reason}")
         valid_rows = len(data) - invalid
         if invalid > 0:
             issues.append(
-                f"{invalid} rows missing required keys for '{expected_format}' format: {required}"
+                f"{invalid} rows fail to convert for '{expected_format}' format "
+                f"(load_dataset would drop them)"
             )
+            issues.extend(sample_reasons)
+            if invalid > len(sample_reasons):
+                issues.append(f"... and {invalid - len(sample_reasons)} more")
 
     if dup_count > 0:
         issues.append(f"{dup_count} duplicate rows found")

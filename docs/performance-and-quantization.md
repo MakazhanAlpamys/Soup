@@ -150,15 +150,16 @@ Enumerates baseline / Liger / FlashAttention / Cut-Cross-Entropy combos, benchma
 
 ## Cross-Document Attention Masking
 
-When `packing: true` packs multiple short documents into one sequence, the default causal mask allows attention to bleed across doc boundaries. Enable block-diagonal masking to prevent this:
+`training.packing_cross_doc_attn_mask` is rejected at config load. Soup used to set TRL `packing_strategy="attention_free"`, which has never been a valid strategy on any released trl (allowlist is `bfd` / `bfd-requeue` / `wrapped`), so the flag has always been a `TypeError` at setup rather than a working mask.
+
+Packed-document isolation is TRL's default `bfd` strategy when FlashAttention is the `attn_implementation`. Use:
 
 ```yaml
 training:
   packing: true
-  packing_cross_doc_attn_mask: true
 ```
 
-The mask builder is numpy-vectorised (`np.tril` per block) to stay fast at large `max_length`. Misconfiguring it without `packing: true` is rejected at config-load time.
+Do not set `packing_cross_doc_attn_mask`.
 
 
 ## Quant Menu — 9 Quantization Formats
@@ -415,7 +416,7 @@ expects not to fit**:
 peak VRAM    ~0.48 GB at batch 2 x seq 256 (logits 0.35 GB)
 free VRAM    3.46 GB
 forecast     5685-8361 tok/s — a compute-bound bound, not a promise
-             (from 6.75 TFLOPS measured on this card now @ 862 MHz)
+             (from 6.75 TFLOPS measured on this card now using bfloat16 @ 862 MHz)
 ```
 
 The prediction was fitted to ten real runs across two models, a 3.1× vocabulary contrast,
@@ -429,10 +430,11 @@ order of magnitude slower — measured here as a 9.27 GB peak on a 4.29 GB card 
 exception raised at all**. Read as "streaming is slow", that would be exactly the wrong
 conclusion.
 
-The throughput line is a **bound, not a promise**. It comes from a bf16 GEMM benchmarked
-on your card in that session and is printed with the SM clock it was taken at, because
-this card alone produced 3.5 and 7.6 TFLOPS in two sessions at the same reported clock. A
-per-card constant compiled into Soup would be a fabrication. Real streamed runs landed at
+The throughput line is a **bound, not a promise**. It comes from a GEMM benchmarked
+with the card's resolved stream dtype in that session — `bfloat16` on cards with native
+BF16 support and `float16` otherwise — and is printed with the SM clock it was taken at,
+because this card alone produced 3.5 and 7.6 TFLOPS in two sessions at the same reported
+clock. A per-card constant compiled into Soup would be a fabrication. Real streamed runs landed at
 68–100% of their measured ceiling.
 
 ### Batch size vs gradient accumulation

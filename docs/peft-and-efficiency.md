@@ -104,8 +104,7 @@ training:
 
 **How it composes:**
 - **Multipack** picks WHICH samples go together (FFD packing).
-- **`packing_cross_doc_attn_mask`** sets HOW the attention mask is built (block-diagonal causal — see section above).
-- The two layer cleanly: enable both for FA-incompatible backends; FA varlen path is auto-selected when FlashAttention is available.
+- Packed-document isolation is TRL's default `bfd` strategy when FlashAttention is the `attn_implementation`. `packing_cross_doc_attn_mask` is rejected at config load (it never mapped to a valid TRL `packing_strategy`).
 
 **Architecture allowlist** — 18 supported (Llama 3.x, Qwen 2/3, Mistral, Gemma 2/3, Phi 3/4, DeepSeek V2/V3, Mixtral, Falcon, StableLM, SmolLM2). Unknown architectures **fail loudly at config-load** instead of silently no-opping (critical fix vs Axolotl's silent-miss footgun).
 

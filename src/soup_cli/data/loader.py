@@ -253,8 +253,8 @@ def _finalize(
     if val is not None:
         result = {"train": formatted, "val": val}
     elif data_config.val_split > 0:
-        split_idx = int(len(formatted) * (1 - data_config.val_split))
-        result = {"train": formatted[:split_idx], "val": formatted[split_idx:]}
+        train_rows, val_rows = _split_val(formatted, data_config.val_split)
+        result = {"train": train_rows, "val": val_rows}
     else:
         result = {"train": formatted}
 
@@ -444,6 +444,34 @@ def _load_one_local_dataset(
     return formatted
 
 
+def _split_val(rows: list[dict], val_split: float) -> tuple[list[dict], list[dict]]:
+    """Slice ``rows`` into (train, val) at the same fraction _finalize has
+    always used, factored out so callers can carve val out of a row set
+    that has not been through interleave oversampling yet (#680).
+    """
+    split_idx = int(len(rows) * (1 - val_split))
+    return rows[:split_idx], rows[split_idx:]
+
+
+def _split_val_per_source(
+    rows: list[dict], val_split: float, strategy: str
+) -> tuple[list[dict], list[dict]]:
+    """``_split_val`` for a per-source carve-out (#680). An empty train side
+    here would otherwise surface downstream as _combine_interleaved's generic
+    "must have >= 1 row" error, which is misleading: the source did have
+    rows, val_split just consumed all of them.
+    """
+    train_rows, val_rows = _split_val(rows, val_split)
+    if rows and not train_rows:
+        raise ValueError(
+            f"data.interleave: data.val_split={val_split} leaves 0 training "
+            f"rows for a source with {len(rows)} row(s) under strategy "
+            f"'{strategy}', which carves val out per source. Use "
+            "'concat'/'under', lower val_split, or drop the source."
+        )
+    return train_rows, val_rows
+
+
 def _cycle_to(rows: list[dict], target: int) -> list[dict]:
     """Deterministically repeat/truncate ``rows`` to exactly ``target`` rows
     via round-robin cycling. No RNG, no new seed knob — #443's scope does
@@ -520,9 +548,12 @@ def _load_interleaved_local_datasets(
     *,
     preserve_source_columns: bool = False,
 ) -> dict:
-    """#443 — load + combine every local dataset in a list-shaped
-    data.train per data.interleave, then hand the combined rows to the
-    existing, unmodified _finalize() — same seam every other loader uses.
+    """#443: load + combine every local dataset in a list-shaped
+    data.train per data.interleave, then hand the combined rows to
+    _finalize(): the same seam every other loader uses. #680: "over"/
+    "probs" now carve val out per source before cycling (_split_val),
+    since those are the strategies that pad a source with copies of its
+    own rows; "concat"/"under" are unchanged from #443.
 
     #459 — data_config.streaming=true (list may then also contain remote
     URIs; schema already enforced that) delegates to
@@ -560,6 +591,33 @@ def _load_interleaved_local_datasets(
         )
         for p in train_paths
     ]
+
+    if data_config.val_split > 0 and spec.strategy in ("over", "probs"):
+        # #680: these two strategies pad a source with copies of its own
+        # rows, so splitting the padded result can put one copy in train
+        # and another in val. Carve val out of each source first instead.
+        per_dataset_train = []
+        per_dataset_val = []
+        for rows in per_dataset_rows:
+            train_rows, val_rows = _split_val_per_source(
+                rows, data_config.val_split, spec.strategy
+            )
+            per_dataset_train.append(train_rows)
+            per_dataset_val.append(val_rows)
+        combined_train = _combine_interleaved(per_dataset_train, spec)
+        combined_val = [row for val_rows in per_dataset_val for row in val_rows]
+        console.print(
+            f"[dim]Interleaved {len(train_paths)} datasets "
+            f"(strategy={spec.strategy}) -> {len(combined_train)} train, "
+            f"{len(combined_val)} val rows[/]"
+        )
+        return _finalize(
+            combined_train,
+            data_config,
+            val=combined_val,
+            preserve_source_columns=preserve_source_columns,
+        )
+
     combined = _combine_interleaved(per_dataset_rows, spec)
     console.print(
         f"[dim]Interleaved {len(train_paths)} datasets "
@@ -913,6 +971,30 @@ def _load_remote_dataset(
     )
 
 
+def _rows_from_hub_split(split, data_config: DataConfig, *, shuffle: bool) -> list[dict]:
+    """Materialise one hub split.
+
+    Streaming matches `_load_remote_dataset`: optional shuffle buffer, then
+    eager rows capped at MAX_REMOTE_ROWS. Non-streaming is the pre-#689
+    list comprehension (no cap).
+    """
+    if data_config.streaming:
+        buf = data_config.buffer_size
+        if shuffle and buf:
+            split = split.shuffle(buffer_size=buf)
+        raw_data: list[dict] = []
+        for i, row in enumerate(split):
+            if i >= MAX_REMOTE_ROWS:
+                console.print(
+                    f"[yellow]Hub dataset truncated at {MAX_REMOTE_ROWS:,} "
+                    f"rows (use a local split for larger jobs).[/]"
+                )
+                break
+            raw_data.append(dict(row))
+        return raw_data
+    return [dict(row) for row in split]
+
+
 def _load_one_hub_dataset(
     name: str,
     data_config: DataConfig,
@@ -932,12 +1014,15 @@ def _load_one_hub_dataset(
         raise ImportError("Install datasets: pip install datasets")
 
     console.print(f"[dim]Loading from HuggingFace: {name}[/]")
-    ds = hf_load(name)
+    if data_config.streaming:
+        ds = hf_load(name, streaming=True)
+    else:
+        ds = hf_load(name)
 
     if "train" not in ds:
         raise ValueError(f"Dataset {name} has no 'train' split")
 
-    raw_data = [dict(row) for row in ds["train"]]
+    raw_data = _rows_from_hub_split(ds["train"], data_config, shuffle=True)
     fmt = data_config.format
     if fmt == "auto":
         fmt = detect_format(raw_data)
@@ -949,7 +1034,9 @@ def _load_one_hub_dataset(
     )
 
     if "validation" in ds:
-        val_data = [dict(row) for row in ds["validation"]]
+        val_data = _rows_from_hub_split(
+            ds["validation"], data_config, shuffle=False,
+        )
         val_formatted = _format_rows(
             val_data,
             fmt,
@@ -1005,13 +1092,15 @@ def _load_interleaved_hub_datasets(
     Decided validation-split precedence (documented here + docs/data.md,
     per the issue's demand that this not be emergent): a hub entry's own
     'validation' split is honoured for the COMBINED result only when EVERY
-    entry provides one — those are combined with the same spec and passed
+    entry provides one: those are combined with the same spec and passed
     through as _finalize's val=. If only some entries provide one, it is
     ignored (warned, naming which entries had it) and data_config.val_split
-    is applied to the combined train rows instead, exactly as if no entry
-    had a hub split — a partial-hub-split mixture would otherwise silently
-    be a smaller/differently-composed val set than a reader expects. If no
-    entry provides one, behaviour is unchanged from today.
+    is derived instead, exactly as if no entry had a hub split. A
+    partial-hub-split mixture would otherwise silently be a
+    smaller/differently-composed val set than a reader expects. If no
+    entry provides one, behaviour is unchanged from today. #680: that
+    val_split fallback carves val out per source before over/probs pads
+    it, same fix and same reason as _load_interleaved_local_datasets.
     """
     from soup_cli.utils.data_pipeline import parse_interleave
 
@@ -1032,10 +1121,9 @@ def _load_interleaved_hub_datasets(
         per_dataset_train.append(train_rows)
         per_dataset_val.append(val_rows)
 
-    combined_train = _combine_interleaved(per_dataset_train, spec)
-
     has_val = [v is not None for v in per_dataset_val]
     if all(has_val):
+        combined_train = _combine_interleaved(per_dataset_train, spec)
         combined_val = _combine_interleaved(
             [v for v in per_dataset_val if v is not None], spec
         )
@@ -1050,17 +1138,35 @@ def _load_interleaved_hub_datasets(
             missing = [
                 name for name, v in zip(train_names, per_dataset_val) if v is None
             ]
+            if spec.strategy in ("over", "probs"):
+                detail = "carving data.val_split out per source before oversampling"
+            else:
+                detail = "applying data.val_split to the combined train rows instead"
             console.print(
                 "[yellow]data.interleave: only some HF-hub datasets provide "
                 f"a 'validation' split (missing from {missing}) — ignoring "
-                "every hub validation split and applying data.val_split to "
-                "the combined train rows instead.[/]"
+                f"every hub validation split and {detail}.[/]"
             )
-        result = _finalize(
-            combined_train,
-            data_config,
-            preserve_source_columns=preserve_source_columns,
-        )
+        if data_config.val_split > 0 and spec.strategy in ("over", "probs"):
+            per_split = [
+                _split_val_per_source(rows, data_config.val_split, spec.strategy)
+                for rows in per_dataset_train
+            ]
+            combined_train = _combine_interleaved([t for t, _ in per_split], spec)
+            combined_val = [row for _, v in per_split for row in v]
+            result = _finalize(
+                combined_train,
+                data_config,
+                val=combined_val,
+                preserve_source_columns=preserve_source_columns,
+            )
+        else:
+            combined_train = _combine_interleaved(per_dataset_train, spec)
+            result = _finalize(
+                combined_train,
+                data_config,
+                preserve_source_columns=preserve_source_columns,
+            )
 
     console.print(
         f"[dim]Interleaved {len(train_names)} HF-hub datasets "

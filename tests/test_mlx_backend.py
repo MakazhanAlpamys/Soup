@@ -223,14 +223,22 @@ class TestMLXRecipes:
 
         recipe = get_recipe("qwen3-8b-sft-mlx")
         assert recipe is not None
+        assert recipe.model == "mlx-community/Qwen3-8B-4bit"
         cfg = load_config_from_string(recipe.yaml_str)
+        assert cfg.base == "mlx-community/Qwen3-8B-4bit"
         assert cfg.backend == "mlx"
 
-    def test_gemma3_9b_sft_mlx(self):
+    def test_gemma3_4b_sft_mlx(self):
+        from soup_cli.config.loader import load_config_from_string
         from soup_cli.recipes.catalog import get_recipe
 
-        recipe = get_recipe("gemma3-9b-sft-mlx")
+        recipe = get_recipe("gemma3-4b-sft-mlx")
         assert recipe is not None
+        assert recipe.model == "mlx-community/gemma-3-4b-it-4bit"
+        assert recipe.size == "4B"
+        cfg = load_config_from_string(recipe.yaml_str)
+        assert cfg.base == "mlx-community/gemma-3-4b-it-4bit"
+        assert cfg.backend == "mlx"
 
     def test_mlx_dpo_config_rejected_at_load(self):
         """backend=mlx + task=dpo is rejected by the SoupConfig validator."""
@@ -268,6 +276,37 @@ output: ./output
 """
         with pytest.raises(ValueError, match="MLX backend only ships SFT"):
             load_config_from_string(yaml_str)
+
+
+class TestMlxRecipeRepoIds:
+    """Pin the repo id every shipped MLX recipe declares, on RecipeMeta.model
+    and YAML base: independently (#661). This does not check that the repo resolves.
+    """
+
+    MLX_RECIPES = [
+        ("llama3.1-8b-sft-mlx", "mlx-community/Llama-3.1-8B-Instruct-4bit"),
+        ("qwen3-8b-sft-mlx", "mlx-community/Qwen3-8B-4bit"),
+        ("gemma3-4b-sft-mlx", "mlx-community/gemma-3-4b-it-4bit"),
+    ]
+
+    @pytest.mark.parametrize("name,expected_repo", MLX_RECIPES)
+    def test_meta_model_matches_expected_repo(self, name: str, expected_repo: str):
+        from soup_cli.recipes.catalog import get_recipe
+
+        recipe = get_recipe(name)
+        assert recipe is not None, f"Recipe {name} missing from catalog"
+        assert recipe.model == expected_repo
+
+    @pytest.mark.parametrize("name,expected_repo", MLX_RECIPES)
+    def test_yaml_base_matches_expected_repo(self, name: str, expected_repo: str):
+        import yaml
+
+        from soup_cli.recipes.catalog import get_recipe
+
+        recipe = get_recipe(name)
+        assert recipe is not None
+        parsed = yaml.safe_load(recipe.yaml_str)
+        assert parsed["base"] == expected_repo
 
 
 # ---------------------------------------------------------------------------

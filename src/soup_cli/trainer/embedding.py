@@ -536,3 +536,11 @@ class _EmbeddingTrainer:
     @property
     def state(self):
         return self._trainer.state
+
+    @property
+    def model(self):
+        return self._trainer.model
+
+    @property
+    def args(self):
+        return self._trainer.args

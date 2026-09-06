@@ -1208,11 +1208,12 @@ def assert_canonical_parameters_intersect(model_a: Any, model_b: Any) -> FrozenS
 # ==========================================================================
 @dataclass(frozen=True)
 class GemmCeiling:
-    """A dense bf16 GEMM rate measured on THIS card, in THIS session."""
+    """A dense GEMM rate measured on THIS card, in THIS session."""
 
     tflops: float
     sm_clock_mhz: Optional[int]
     size: int
+    dtype: str
     samples: tuple[float, ...] = ()
 
 
@@ -1265,7 +1266,7 @@ def measure_gemm_tflops(
     iters: int = _GEMM_ITERS,
     reps: int = _GEMM_REPS,
 ) -> Optional[GemmCeiling]:
-    """Benchmark a dense bf16 matmul to get this card's achievable rate.
+    """Benchmark a dense matmul using this card's resolved stream dtype.
 
     Returns None off CUDA rather than inventing a number — the forecast rests
     entirely on a measurement, so there is nothing honest to return when no
@@ -1282,12 +1283,16 @@ def measure_gemm_tflops(
         import torch
     except ImportError:  # pragma: no cover - torch is a [train] extra
         return None
+    from soup_cli.utils.layer_stream import resolve_stream_dtype
+
     if not torch.cuda.is_available():
         return None
+    dtype_name = resolve_stream_dtype(device)
+    dtype = getattr(torch, dtype_name)
     samples: list[float] = []
     try:
-        left = torch.randn(size, size, device=device, dtype=torch.bfloat16)
-        right = torch.randn(size, size, device=device, dtype=torch.bfloat16)
+        left = torch.randn(size, size, device=device, dtype=dtype)
+        right = torch.randn(size, size, device=device, dtype=dtype)
         for _ in range(max(1, reps)):
             for _ in range(3):  # warm up: the first matmul pays kernel selection
                 left @ right
@@ -1315,6 +1320,7 @@ def measure_gemm_tflops(
         tflops=best,
         sm_clock_mhz=sm_clock_mhz(),
         size=size,
+        dtype=dtype_name,
         samples=tuple(samples),
     )
 

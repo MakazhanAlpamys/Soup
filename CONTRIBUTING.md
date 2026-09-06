@@ -17,11 +17,21 @@ cd Soup
 exactly those three; `tests/test_requires_python_bound.py` derives the declared bound from
 the CI matrix, so widening one without the other fails the suite.
 
-Install the project in editable mode with dev dependencies:
+Work inside a virtualenv, then install the project in editable mode with dev
+dependencies:
 
 ```bash
+python3 -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -e ".[dev]"
 ```
+
+The `venv` step is not optional on Debian 12, Ubuntu 23.04 or later: without it
+`pip` refuses with `error: externally-managed-environment`, because those distros
+stop pip writing into the system Python that `apt` manages
+([PEP 668](https://peps.python.org/pep-0668/)). `pipx` is the answer for
+*installing* Soup and the wrong tool here, since an editable checkout needs to be
+importable by the test suite rather than isolated from it.
 
 This installs:
 - `pytest` for testing
@@ -49,7 +59,7 @@ pytest tests/ -v --tb=short
 Run the linter:
 
 ```bash
-ruff check src/soup_cli/ scripts/ tests/
+ruff check src/soup_cli/ scripts/ tests/ benchmarks/
 ```
 
 If both pass — you're ready to contribute!
@@ -60,7 +70,7 @@ We use **ruff** for all code style and linting. Before committing, run:
 
 ```bash
 # Check for issues
-ruff check src/soup_cli/ scripts/ tests/
+ruff check src/soup_cli/ scripts/ tests/ benchmarks/
 
 # Auto-fix issues
 ruff check --fix src/soup_cli/ scripts/ tests/
@@ -113,7 +123,7 @@ src/soup_cli/
   experiment/         - SQLite experiment tracking
   eval/               - Eval platform (custom tasks, LLM judge, human eval, leaderboard)
   migrate/            - Config migration (LLaMA-Factory, Axolotl, Unsloth)
-  recipes/            - Ready-made configs for popular models (164 recipes)
+  recipes/            - Ready-made configs for popular models (165 recipes)
   autopilot/          - Zero-config decision engine (v0.25.0)
   registry/           - Model Registry (hashing, store, diff, attach) (v0.26.0 + v0.33.0)
   cans/               - Shareable .can artifact format + run/publish orchestrator (v0.26.0 + v0.33.0)
@@ -384,7 +394,7 @@ Then open a pull request on GitHub with:
 
 When you open a PR, the GitHub template will show this checklist:
 
-- [ ] `ruff check src/soup_cli/ scripts/ tests/` passes
+- [ ] `ruff check src/soup_cli/ scripts/ tests/ benchmarks/` passes
 - [ ] `pytest tests/ -v` passes
 - [ ] Updated relevant docs (`README.md` and the matching page under `docs/`) if needed
 - [ ] New tests added for new functionality
@@ -523,7 +533,7 @@ If you contributed and aren't credited somewhere, that's a bug — open a PR or 
 
 - **Issues:** Report bugs and request features on [GitHub Issues](https://github.com/MakazhanAlpamys/Soup/issues)
 - **Discussions:** Ask questions on [GitHub Discussions](https://github.com/MakazhanAlpamys/Soup/discussions)
-- **Discord:** Chat with maintainers and other users on [Discord](https://discord.gg/8RgVbFA6Zq) — good for
+- **Discord:** Chat with maintainers and other users on [Discord](https://discord.gg/dgd2pJcjwP) — good for
   quick questions and pairing on a PR; anything worth finding later still belongs in Issues or Discussions
 - **Code of Conduct:** Please read [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) — it applies on Discord too
 - **Security:** Report security issues via [SECURITY.md](SECURITY.md) — privately, never in Discord

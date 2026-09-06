@@ -15,7 +15,10 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install ruff
-      - run: ruff check src/soup_cli/ scripts/ tests/
+      # benchmarks/harness/ carries real parsing logic — mlx_sft_smoke.py
+      # derives the published throughput figure from mlx-lm's stdout — but was
+      # outside this line until now, so a lint error there could not turn CI red.
+      - run: ruff check src/soup_cli/ scripts/ tests/ benchmarks/
       - name: Lint the workflows themselves
         # `check-yaml` and a YAML parser both accept a workflow GitHub will
         # reject: 195d60b used the `runner` context in a job-level `env:` block,
