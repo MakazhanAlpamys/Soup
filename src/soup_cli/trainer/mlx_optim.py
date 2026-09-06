@@ -174,10 +174,18 @@ def build_lr_schedule(plan: OptimizerPlan) -> Union[float, Callable[[Any], Any]]
     so the common case constructs exactly what the old code did and the change
     is provably confined to the configurations that asked for something else.
     """
-    import mlx.optimizers as optim
-
     peak, warmup, total = plan.peak_lr, plan.warmup_updates, plan.total_updates
     decay_steps = max(1, total - warmup)
+
+    # A constant rate with no warmup is a plain float and needs nothing from
+    # MLX, so it is answered before the import. That keeps the function
+    # callable -- and testable -- on a machine with no MLX, which is every CI
+    # runner this project has; a module-wide import here made a genuinely
+    # platform-independent behaviour fail on Windows.
+    if warmup <= 0 and plan.scheduler in ("constant", "constant_with_warmup"):
+        return peak
+
+    import mlx.optimizers as optim
 
     if plan.scheduler in ("constant", "constant_with_warmup"):
         body: Union[float, Callable[[Any], Any]] = peak
