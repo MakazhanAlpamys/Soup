@@ -12,21 +12,8 @@ the real wrapper from `setup()`.
 
 from __future__ import annotations
 
-import importlib.machinery
 import json
 import os
-import sys
-import types
-
-try:
-    import torchaudio  # noqa: F401
-except ImportError:
-    pass
-except Exception:
-    _torchaudio = types.ModuleType("torchaudio")
-    _torchaudio.__version__ = "0.0.0"
-    _torchaudio.__spec__ = importlib.machinery.ModuleSpec("torchaudio", loader=None)
-    sys.modules["torchaudio"] = _torchaudio
 
 import pytest
 import yaml
