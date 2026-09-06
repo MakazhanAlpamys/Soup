@@ -71,6 +71,7 @@ CREATE TABLE IF NOT EXISTS metrics (
     step      INTEGER NOT NULL,
     epoch     REAL,
     loss      REAL,
+    val_loss  REAL,
     lr        REAL,
     grad_norm REAL,
     speed     REAL,
@@ -156,23 +157,36 @@ class ExperimentTracker:
     def _ensure_schema(self) -> None:
         """Create tables if they don't exist.
 
-        Lazy migration adds the v0.34.0 cost columns to legacy DBs. The
+        Lazy migration adds the v0.34.0 cost columns and the ``val_loss``
+        metrics column to legacy DBs -- ``~/.soup/experiments.db`` exists on
+        every machine that has ever run ``soup train``, so the schema is
+        upgraded in place rather than assumed. Each column is gated on its own
+        table's ``PRAGMA table_info``, so a second run is a no-op rather than a
+        caught exception. The
         ALTER TABLE calls are guarded against the "duplicate column" race
         that can occur when two processes start simultaneously on the same
         DB (fork-based multi-GPU training, TUI auto-refresh, etc.).
         """
         conn = self._get_conn()
         conn.executescript(_SCHEMA_SQL)
-        for column, ddl in (
-            ("cost_usd", "ALTER TABLE runs ADD COLUMN cost_usd REAL"),
-            ("cost_gpu_label", "ALTER TABLE runs ADD COLUMN cost_gpu_label TEXT"),
-            ("run_kind", "ALTER TABLE runs ADD COLUMN run_kind TEXT NOT NULL DEFAULT 'train'"),
-            ("pid", "ALTER TABLE runs ADD COLUMN pid INTEGER"),
-            ("command_digest", "ALTER TABLE runs ADD COLUMN command_digest TEXT"),
-            ("log_path", "ALTER TABLE runs ADD COLUMN log_path TEXT"),
-            ("exit_code", "ALTER TABLE runs ADD COLUMN exit_code INTEGER"),
+        for table, column, ddl in (
+            ("runs", "cost_usd", "ALTER TABLE runs ADD COLUMN cost_usd REAL"),
+            ("runs", "cost_gpu_label", "ALTER TABLE runs ADD COLUMN cost_gpu_label TEXT"),
+            ("runs", "run_kind",
+             "ALTER TABLE runs ADD COLUMN run_kind TEXT NOT NULL DEFAULT 'train'"),
+            ("runs", "pid", "ALTER TABLE runs ADD COLUMN pid INTEGER"),
+            ("runs", "command_digest", "ALTER TABLE runs ADD COLUMN command_digest TEXT"),
+            ("runs", "log_path", "ALTER TABLE runs ADD COLUMN log_path TEXT"),
+            ("runs", "exit_code", "ALTER TABLE runs ADD COLUMN exit_code INTEGER"),
+            # Deliberately nullable with no default: a row written before this
+            # column existed has no evaluation loss, and NULL says so. A 0.0
+            # would read as a measurement nobody took.
+            ("metrics", "val_loss", "ALTER TABLE metrics ADD COLUMN val_loss REAL"),
         ):
-            existing = {row[1] for row in conn.execute("PRAGMA table_info(runs)").fetchall()}
+            existing = {
+                row[1]
+                for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+            }
             if column in existing:
                 continue
             try:
@@ -326,15 +340,22 @@ class ExperimentTracker:
         grad_norm: float = 0.0,
         speed: float = 0.0,
         gpu_mem: str = "",
+        val_loss: Optional[float] = None,
     ) -> None:
-        """Log a single metrics row for the given run."""
+        """Log a single metrics row for the given run.
+
+        ``val_loss`` defaults to ``None`` rather than ``0.0``: most rows are
+        training steps with no evaluation attached, and a zero there would be
+        indistinguishable from a genuinely measured zero.
+        """
         now = datetime.now().isoformat()
         conn = self._get_conn()
         conn.execute(
             """INSERT INTO metrics
-               (run_id, step, epoch, loss, lr, grad_norm, speed, gpu_mem, timestamp)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (run_id, step, epoch, loss, lr, grad_norm, speed, gpu_mem, now),
+               (run_id, step, epoch, loss, val_loss, lr, grad_norm, speed,
+                gpu_mem, timestamp)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (run_id, step, epoch, loss, val_loss, lr, grad_norm, speed, gpu_mem, now),
         )
         conn.commit()
 

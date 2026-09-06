@@ -68,6 +68,9 @@ class TrainingDisplay:
         self.grad_norm = 0.0
         self.gpu_mem = ""
         self.speed = 0.0
+        #: None until an evaluation actually runs. Its own series --
+        #: never folded into `self.loss`, which is the training curve.
+        self.val_loss = None
         self._live: Optional[Live] = None
 
     def start(self, total_steps: int):
@@ -85,6 +88,11 @@ class TrainingDisplay:
         self.grad_norm = kwargs.get("grad_norm", 0.0)
         self.speed = kwargs.get("speed", 0.0)
         self.gpu_mem = kwargs.get("gpu_mem", "")
+        # Sticky: an evaluation happens every N steps, so the last
+        # measured value stays on screen between evaluations rather
+        # than blinking out on every training step.
+        if kwargs.get("val_loss") is not None:
+            self.val_loss = kwargs["val_loss"]
 
         if self._live:
             self._live.update(self._render())
@@ -112,6 +120,8 @@ class TrainingDisplay:
         lines.append(f"Step:  {self.current_step}/{self.total_steps}")
         lines.append(f"Loss:  {self.loss:.4f}    LR: {self.lr:.2e}")
 
+        if self.val_loss is not None:
+            lines.append(f"Val loss: {self.val_loss:.4f}")
         if self.speed > 0:
             lines.append(f"Speed: {self.speed:.2f} it/s")
         if self.gpu_mem:
