@@ -266,7 +266,6 @@ class MLXSFTTrainerWrapper:
 
         self._require_mlx()
 
-        import mlx.optimizers as optim  # type: ignore
         from mlx_lm.tuner.callbacks import TrainingCallback
         from mlx_lm.tuner.datasets import CacheDataset, create_dataset
         from mlx_lm.tuner.trainer import TrainingArgs, train  # type: ignore
@@ -339,7 +338,30 @@ class MLXSFTTrainerWrapper:
             else None
         )
 
-        optimizer = optim.AdamW(learning_rate=float(cfg.training.lr))
+        # #686: the optimizer was `AdamW(learning_rate=<scalar>)` and nothing
+        # else, so `warmup_ratio`, `scheduler`, `weight_decay` and `optimizer`
+        # were validated, accepted and dropped -- an MLX run silently trained a
+        # different recipe from the configured one.
+        #
+        # The schedule counts OPTIMIZER UPDATES, not iterations: MLX calls a
+        # callable learning_rate with `optimizer.step`, which advances once per
+        # `optimizer.update()`, and mlx-lm calls that only every
+        # `grad_accumulation_steps` iterations. Building against `iters` would
+        # stretch the warmup by that factor and never reach the cosine floor.
+        from soup_cli.trainer.mlx_optim import build_optimizer, plan_optimizer
+
+        total_updates = max(1, iters // max(1, grad_accumulation_steps))
+        optimizer_plan = plan_optimizer(
+            lr=float(cfg.training.lr),
+            optimizer=str(getattr(cfg.training, "optimizer", "adamw_torch")),
+            scheduler=str(getattr(cfg.training, "scheduler", "cosine")),
+            warmup_ratio=float(getattr(cfg.training, "warmup_ratio", 0.0) or 0.0),
+            weight_decay=float(getattr(cfg.training, "weight_decay", 0.0) or 0.0),
+            total_updates=total_updates,
+        )
+        for _warning in optimizer_plan.warnings:
+            console.print(f"[yellow]MLX backend: {_warning}[/]")
+        optimizer = build_optimizer(optimizer_plan)
 
         captured: dict = {}
         total_epochs = float(cfg.training.epochs)
@@ -461,6 +483,9 @@ class MLXSFTTrainerWrapper:
                     "mask_prompt": False,
                     "grad_checkpoint": grad_checkpoint,
                     "grad_accumulation_steps": grad_accumulation_steps,
+                    # #686: the EFFECTIVE optimizer and schedule, so an adapter
+                    # records the recipe that ran rather than the one requested.
+                    **optimizer_plan.as_metadata(),
                 },
                 indent=2,
             )
