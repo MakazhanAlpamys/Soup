@@ -210,7 +210,7 @@ soup tui                                      Full-screen Textual dashboard (req
 soup train --config soup.yaml --profile       Record torch.profiler trace to <output>/profiles/
 soup --log-level quiet|normal|verbose|debug   Global logging tier (Rich-formatted)
 soup ui [--port 7860]                         Web UI (experiments, training, data)
-soup ui --public [--auth-token T]             Phone-scannable Web UI (v0.53.9)
+soup ui --public [--auth-token T]             Phone-scannable Web UI (v0.53.9); /docs + /openapi.json are loopback-only
 soup tokenizer train --input c.jsonl --vocab-size N  Train BPE tokenizer (v0.53.9)
 soup bench <model> --p50 --p95                Bench with tail-latency percentiles (v0.53.9)
 soup bench <model> --backend auto             Auto-detect transformers/mlx backend (v0.53.9)

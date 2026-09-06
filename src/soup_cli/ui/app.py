@@ -143,7 +143,28 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
     from fastapi.responses import HTMLResponse
     from fastapi.staticfiles import StaticFiles
 
-    app = FastAPI(title="Soup Web UI", version="1.0.0")
+    # #731: FastAPI's interactive docs describe every route, parameter and
+    # schema, and served none of it behind a token -- so a `soup ui --public`
+    # bind let anyone on the LAN enumerate the whole API surface. Gating them
+    # behind `_verify_token` does not work: `/docs` is a browser navigation and
+    # Swagger cannot attach a Bearer header to it (the #687 constraint), so
+    # gating would break the page for the developer while `/openapi.json` stayed
+    # readable by curl. Passing `None` removes the routes outright -- there is
+    # no handler left to reach -- and loopback keeps the convenience.
+    _docs_enabled = _is_loopback(host)
+    app = FastAPI(
+        title="Soup Web UI",
+        version="1.0.0",
+        openapi_url="/openapi.json" if _docs_enabled else None,
+        docs_url="/docs" if _docs_enabled else None,
+        redoc_url="/redoc" if _docs_enabled else None,
+        # Derived from `swagger_ui_oauth2_redirect_url`, not from `docs_url`:
+        # leaving it at its default keeps `/docs/oauth2-redirect` serving even
+        # once `/docs` is gone.
+        swagger_ui_oauth2_redirect_url=(
+            "/docs/oauth2-redirect" if _docs_enabled else None
+        ),
+    )
 
     # Restrict CORS to the origin we actually serve. When `host == "0.0.0.0"`
     # the literal `http://0.0.0.0:<port>` is never a browser origin, so we
