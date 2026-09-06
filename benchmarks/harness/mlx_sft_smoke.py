@@ -165,6 +165,14 @@ data:
   train: {data_path}
   format: chatml
   max_length: 512
+  # Pinned false, not left at the schema default of true (#683). Once MLX
+  # honours response-only masking, `Trained Tokens` counts SUPERVISED tokens
+  # rather than all of them, and the published record's `trained tokens` and
+  # `tok/s` columns silently change meaning as well as value: measured on this
+  # box, the Qwen2.5-0.5B row goes 2,130 -> 342 tokens and 108.1 -> 26.1 tok/s.
+  # This harness backs a published throughput record, so it pins the setting
+  # the record was measured under. Re-measure deliberately, not by default.
+  train_on_responses_only: false
 training:
   epochs: {epochs}
   lr: 1e-4
