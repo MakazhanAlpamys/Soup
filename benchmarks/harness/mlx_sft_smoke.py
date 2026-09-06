@@ -174,12 +174,20 @@ data:
   # the record was measured under. Re-measure deliberately, not by default.
   train_on_responses_only: false
 training:
+  # Everything that moves the optimizer-step count is pinned here, with the
+  # reason, because this harness backs a published throughput record. A field
+  # left to the schema default makes the step count behind that record depend
+  # on a value the harness never mentions, which is #716.
   epochs: {epochs}
   lr: 1e-4
+  # One sample per forward pass, so iterations == rows * epochs. Any other
+  # value divides the step count by it.
   batch_size: 1
-  # Pinned: the schema default (4) would round `iters` down to a whole
-  # accumulation window (#696), moving the step count this harness reports
-  # out from under any published benchmark record that assumes 1:1 rows-to-iters.
+  # Pinned to 1, not left at the schema default of 4. Accumulation groups
+  # `gradient_accumulation_steps` micro-batches into one optimizer step, so
+  # the default silently quartered the steps behind every published figure --
+  # and #696 now rounds `iters` down to a whole number of groups, so a row
+  # count not divisible by the default would also drop the remainder.
   gradient_accumulation_steps: 1
   # Pinned, not left at the schema defaults of `cosine` / 0.03 / 0.01 (#686).
   # Once MLX honours the schedule, the published record's constant 1.000e-04
@@ -200,6 +208,29 @@ training:
   logging_steps: 5
 output: {out}
 """)
+
+    # Assert the resolved count against the inputs rather than trusting the
+    # pins above to have been read. A schema default that moved, or a pin
+    # deleted in a later edit, fails here instead of quietly publishing a
+    # figure measured over a different number of steps.
+    expected_iters = rows_n * epochs
+    resolved_iters = (
+        rows_n
+        * epochs
+        // cfg.training.batch_size
+        // cfg.training.gradient_accumulation_steps
+    )
+    if resolved_iters != expected_iters:
+        sys.exit(
+            f"harness step count is not {expected_iters}: batch_size="
+            f"{cfg.training.batch_size}, gradient_accumulation_steps="
+            f"{cfg.training.gradient_accumulation_steps} resolve to "
+            f"{resolved_iters} optimizer steps. Pin them in the YAML above; "
+            "a published figure must not depend on a schema default."
+        )
+    print(f"steps         : {resolved_iters}  "
+          f"(batch_size={cfg.training.batch_size}, "
+          f"grad_accum={cfg.training.gradient_accumulation_steps})")
 
     # Dispatch first (#363): a transformers-path number would be a lie.
     resolved = resolve_trainer(cfg)

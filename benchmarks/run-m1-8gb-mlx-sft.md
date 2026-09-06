@@ -51,8 +51,8 @@ GiB-based. Host figures come from `memory_pressure` and `sysctl vm.swapusage`.
 | Machine | Apple M1, 8 GB unified memory, 8 cores |
 | OS / Python | macOS 26.6.2, arm64, Python 3.12.14 |
 | MLX | `mlx` 0.32.2, `mlx-lm` 0.31.3, Metal available |
-| Config | `backend: mlx`, `task: sft`, LoRA r=8 α=16, `batch_size: 1`, `max_length: 512`, `lr: 1e-4` |
-| Data | 48 synthetic chatml rows, 1 epoch -> 48 iterations |
+| Config | `backend: mlx`, `task: sft`, LoRA r=8 α=16, `batch_size: 1`, `gradient_accumulation_steps: 1`, `max_length: 512`, `lr: 1e-4` |
+| Data | 48 synthetic chatml rows, 1 epoch -> 48 iterations (48 rows / `batch_size` 1 / `gradient_accumulation_steps` 1) |
 | Harness | [`harness/mlx_sft_smoke.py`](harness/mlx_sft_smoke.py) |
 
 **Dispatch was asserted, not assumed.** Every run checks
@@ -270,6 +270,13 @@ inside the stdout tee, not the display's iterations-per-second value.
 pip install -e ".[mlx]"
 python benchmarks/harness/mlx_sft_smoke.py mlx-community/Qwen2.5-0.5B-Instruct-4bit 48 1
 ```
+
+The harness pins `batch_size: 1` and `gradient_accumulation_steps: 1`, so those
+48 rows are **48 optimizer steps**. Both are stated here for the same reason the
+model id and the row count are: the throughput figures below are per-step work,
+and a reader reproducing this needs the step count to be reproducible too rather
+than inherited from whatever the config schema defaults to at the time. The
+harness asserts the resolved count and refuses to measure if it does not match.
 
 It prints the throughput line this table's tok/s column is taken from:
 
