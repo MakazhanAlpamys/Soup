@@ -205,6 +205,11 @@ class PretrainTrainerWrapper:
             )
 
         training_args = TrainingArguments(**training_kwargs)
+        from soup_cli.trainer.sft import SFTTrainerWrapper
+
+        training_args = SFTTrainerWrapper._as_sft_config(
+            training_args, cfg.data.max_length, packing=tcfg.packing,
+        )
 
         # --- Trainer ---
         trainer_kwargs = {
@@ -217,7 +222,6 @@ class PretrainTrainerWrapper:
 
         # Sample packing — pack multiple short samples into one sequence
         if tcfg.packing:
-            trainer_kwargs["packing"] = True
             console.print("[green]Sample packing enabled[/]")
 
         # v0.40.4 #65 — multipack live wiring (mirrors sft.py).

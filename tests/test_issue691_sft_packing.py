@@ -22,6 +22,37 @@ from soup_cli.config.schema import SoupConfig
 
 pytest.importorskip("torch")
 
+@pytest.fixture(scope="module", autouse=True)
+def _torchaudio_native_lib_guard():
+    """Stub torchaudio only if the native extension fails, and only for this module."""
+    import sys
+    import types
+
+    try:
+        import torchaudio  # noqa: F401
+        yield
+        return
+    except ImportError:
+        yield
+        return
+    except Exception:
+        pass
+    import importlib.machinery
+
+    previous = sys.modules.get("torchaudio")
+    stub = types.ModuleType("torchaudio")
+    stub.__version__ = "0.0.0"
+    stub.__spec__ = importlib.machinery.ModuleSpec("torchaudio", loader=None)
+    sys.modules["torchaudio"] = stub
+    try:
+        yield
+    finally:
+        if previous is None:
+            sys.modules.pop("torchaudio", None)
+        else:
+            sys.modules["torchaudio"] = previous
+
+
 
 def _write_tiny_tokenizer(directory: str) -> None:
     from tokenizers import Tokenizer, models, pre_tokenizers
@@ -119,6 +150,49 @@ def _sft_wrapper(tmp_path, monkeypatch, **training):
     return wrapper, n_rows
 
 
+def _pretrain_wrapper(tmp_path, monkeypatch, **training):
+    from soup_cli.config.loader import load_config_from_string
+    from soup_cli.trainer.pretrain import PretrainTrainerWrapper
+
+    pytest.importorskip("trl")
+    pytest.importorskip("transformers")
+    pytest.importorskip("peft")
+
+    max_length = training.pop("max_length", 64)
+    n_rows = training.pop("n_rows", 4)
+    weights = _tiny_causal_model_dir(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    tcfg = {
+        "batch_size": 1,
+        "quantization": "none",
+        "epochs": 1,
+        "logging_steps": 1,
+        "save_steps": 1000,
+        "lora": {"r": 4, "alpha": 8, "target_modules": ["q_proj", "v_proj"]},
+    }
+    tcfg.update(training)
+    cfg = load_config_from_string(
+        yaml.safe_dump(
+            {
+                "base": weights,
+                "task": "pretrain",
+                "backend": "transformers",
+                "modality": "text",
+                "data": {
+                    "train": "train.jsonl",
+                    "max_length": max_length,
+                    "format": "plaintext",
+                },
+                "training": tcfg,
+                "output": str(tmp_path / "out"),
+            }
+        )
+    )
+    wrapper = PretrainTrainerWrapper(cfg, device="cpu")
+    wrapper.setup({"train": [{"text": "hello world hi yo"}] * n_rows})
+    return wrapper, n_rows
+
+
 def test_packing_cross_doc_rejected_names_trl_allowlist():
     with pytest.raises(ValidationError, match="bfd") as exc:
         SoupConfig(
@@ -130,6 +204,7 @@ def test_packing_cross_doc_rejected_names_trl_allowlist():
     msg = str(exc.value)
     assert "bfd-requeue" in msg
     assert "wrapped" in msg
+    assert "FlashAttention" in msg
 
 
 def test_setup_packing_true_lands_on_sft_config(tmp_path, monkeypatch):
@@ -148,7 +223,7 @@ def test_setup_packing_false_unchanged(tmp_path, monkeypatch):
     wrapper, _ = _sft_wrapper(tmp_path, monkeypatch, packing=False)
     args = wrapper.trainer.args
     assert isinstance(args, SFTConfig)
-    assert args.packing is not True
+    assert args.packing is False
 
 
 def test_setup_packing_true_actually_packs(tmp_path, monkeypatch):
@@ -162,3 +237,13 @@ def test_setup_packing_true_actually_packs(tmp_path, monkeypatch):
     batch = next(iter(wrapper.trainer.get_train_dataloader()))
     ids = batch["input_ids"]
     assert ids.shape[-1] == wrapper.trainer.args.max_length
+
+
+def test_setup_pretrain_packing_true_lands_on_sft_config(tmp_path, monkeypatch):
+    from trl import SFTConfig
+
+    wrapper, _ = _pretrain_wrapper(tmp_path, monkeypatch, packing=True)
+    args = wrapper.trainer.args
+    assert isinstance(args, SFTConfig)
+    assert args.packing is True
+    assert args.packing_strategy in {"bfd", "bfd-requeue", "wrapped"}

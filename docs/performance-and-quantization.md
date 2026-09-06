@@ -150,15 +150,16 @@ Enumerates baseline / Liger / FlashAttention / Cut-Cross-Entropy combos, benchma
 
 ## Cross-Document Attention Masking
 
-When `packing: true` packs multiple short documents into one sequence, the default causal mask allows attention to bleed across doc boundaries. Enable block-diagonal masking to prevent this:
+`training.packing_cross_doc_attn_mask` is rejected at config load. Soup used to set TRL `packing_strategy="attention_free"`, which has never been a valid strategy on any released trl (allowlist is `bfd` / `bfd-requeue` / `wrapped`), so the flag has always been a `TypeError` at setup rather than a working mask.
+
+Packed-document isolation is TRL's default `bfd` strategy when FlashAttention is the `attn_implementation`. Use:
 
 ```yaml
 training:
   packing: true
-  packing_cross_doc_attn_mask: true
 ```
 
-The mask builder is numpy-vectorised (`np.tril` per block) to stay fast at large `max_length`. Misconfiguring it without `packing: true` is rejected at config-load time.
+Do not set `packing_cross_doc_attn_mask`.
 
 
 ## Quant Menu — 9 Quantization Formats

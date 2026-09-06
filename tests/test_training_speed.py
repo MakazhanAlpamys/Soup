@@ -993,20 +993,6 @@ class TestCrossDocAttnMaskConfig:
                 training={"packing_cross_doc_attn_mask": True, "packing": True},
             )
 
-    def test_requires_packing(self):
-        """Enabling cross-doc mask without packing should error."""
-        with pytest.raises(ValidationError) as exc:
-            SoupConfig(
-                base="test/model",
-                data={"train": "./data.jsonl"},
-                training={
-                    "packing_cross_doc_attn_mask": True,
-                    "packing": False,
-                },
-            )
-        assert "packing" in str(exc.value).lower()
-
-
 class TestCrossDocAttnMaskBuild:
     """Build cross-doc attention mask from document boundaries."""
 
