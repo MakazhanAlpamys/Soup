@@ -27,6 +27,9 @@ from soup_cli.config.schema import SoupConfig
 
 console = Console()
 
+# Chat key for the masked dataset, matching upstream's `chat_feature` default.
+_CHAT_KEY = "messages"
+
 
 def _count_safetensors_tensors(path: str) -> int:
     """Number of tensors declared in a ``.safetensors`` file's own header.
@@ -332,12 +335,58 @@ class MLXSFTTrainerWrapper:
             grad_accumulation_steps=grad_accumulation_steps,
         )
 
-        train_dataset = CacheDataset(create_dataset(train_rows, self.tokenizer, args))
-        val_dataset = (
-            CacheDataset(create_dataset(val_rows, self.tokenizer, args))
-            if val_rows
-            else None
+        # #683: `data.train_on_responses_only` defaults to True and was reaching
+        # nothing here -- no mask was passed, so every MLX SFT run trained on
+        # system and user turns against the documented default.
+        #
+        # The route in is an attribute set rather than a constructor kwarg:
+        # upstream reads `getattr(config, "mask_prompt", False)`
+        # (`datasets.py:180`) off the args object, and `TrainingArgs` has no
+        # such field, so `TrainingArgs(mask_prompt=...)` raises TypeError.
+        #
+        # But that only gives the right answer for prompt/completion rows.
+        # `ChatDataset` masks a single prefix before `messages[-1]`, so on
+        # multi-turn chat it supervises the last assistant turn and silently
+        # drops the earlier ones -- a different wrong distribution, not a fix.
+        # Chat rows therefore go through Soup's own per-token mask, injected
+        # via `train(loss=..., iterate_batches=...)`.
+        from soup_cli.trainer.mlx_masking import plan_response_masking
+
+        responses_only = bool(getattr(cfg.data, "train_on_responses_only", False))
+        plan = plan_response_masking(
+            responses_only, train_rows[0] if train_rows else {}
         )
+        use_token_mask = plan.token_mask
+        args.mask_prompt = plan.mask_prompt
+        if plan.warning:
+            console.print(f"[yellow]MLX backend ignores: {plan.warning}[/]")
+
+        if use_token_mask:
+            from soup_cli.trainer.mlx_masking import (
+                MaskedChatDataset,
+                masked_iterate_batches,
+                masked_loss,
+            )
+
+            train_dataset = CacheDataset(
+                MaskedChatDataset(train_rows, self.tokenizer, chat_key=_CHAT_KEY)
+            )
+            val_dataset = (
+                CacheDataset(
+                    MaskedChatDataset(val_rows, self.tokenizer, chat_key=_CHAT_KEY)
+                )
+                if val_rows
+                else None
+            )
+            train_hooks = {"loss": masked_loss, "iterate_batches": masked_iterate_batches}
+        else:
+            train_dataset = CacheDataset(create_dataset(train_rows, self.tokenizer, args))
+            val_dataset = (
+                CacheDataset(create_dataset(val_rows, self.tokenizer, args))
+                if val_rows
+                else None
+            )
+            train_hooks = {}
 
         optimizer = optim.AdamW(learning_rate=float(cfg.training.lr))
 
@@ -428,6 +477,7 @@ class MLXSFTTrainerWrapper:
                 val_dataset=val_dataset,
                 args=args,
                 training_callback=_Callback(),
+                **train_hooks,
             )
         finally:
             # A Live display left attached would corrupt the terminal if
@@ -458,7 +508,13 @@ class MLXSFTTrainerWrapper:
                     "lora_parameters": build_mlx_adapter_config(
                         lora_cfg, adapter_path=str(output_dir)
                     )["lora_parameters"],
-                    "mask_prompt": False,
+                    # #683: the EFFECTIVE masking, not a hardcoded False.
+                    # `mask_prompt` stays upstream's meaning (a single masked
+                    # prefix); `response_token_mask` is Soup's per-token mask,
+                    # which is what a multi-turn chat run actually used.
+                    "mask_prompt": bool(args.mask_prompt),
+                    "response_token_mask": use_token_mask,
+                    "train_on_responses_only": responses_only,
                     "grad_checkpoint": grad_checkpoint,
                     "grad_accumulation_steps": grad_accumulation_steps,
                 },
