@@ -10,6 +10,7 @@ Closes:
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from typer.testing import CliRunner
@@ -77,6 +78,86 @@ def test_migrate_jsonl_input_yields_friendly_error(tmp_path: Path, monkeypatch):
     )
     assert result.exit_code == 2, (result.output, repr(result.exception))
     assert "got JSONL" in result.output
+
+
+def test_migrate_jsonl_with_json_suffix_yields_friendly_error(
+    tmp_path: Path, monkeypatch
+):
+    """Multiple JSON objects are data even when the suffix does not say JSONL."""
+    from soup_cli.cli import app
+
+    monkeypatch.chdir(tmp_path)
+    data = tmp_path / "data.json"
+    data.write_text('{"prompt": "hi"}\n{"prompt": "world"}\n', encoding="utf-8")
+
+    result = CliRunner().invoke(
+        app, ["migrate", "--from", "llamafactory", "data.json", "--dry-run"]
+    )
+
+    assert result.exit_code == 2, (result.output, repr(result.exception))
+    assert "got JSONL" in result.output
+
+
+def test_migrate_single_json_object_is_not_reported_as_jsonl(tmp_path: Path, monkeypatch):
+    """A valid single-object config must continue to the selected migrator."""
+    from soup_cli.cli import app
+
+    monkeypatch.chdir(tmp_path)
+    config = tmp_path / "config.json"
+    config.write_text(
+        json.dumps(
+            {
+                "model_name_or_path": "meta-llama/Llama-3-8B",
+                "stage": "sft",
+                "finetuning_type": "lora",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(
+        app, ["migrate", "--from", "llamafactory", "config.json", "--dry-run"]
+    )
+
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert "got JSONL" not in result.output
+
+
+def test_migrate_unsloth_notebook_is_not_reported_as_jsonl(tmp_path: Path, monkeypatch):
+    """A multi-line notebook remains a single JSON document and still migrates."""
+    from soup_cli.cli import app
+
+    monkeypatch.chdir(tmp_path)
+    notebook = tmp_path / "train.ipynb"
+    notebook.write_text(
+        json.dumps(
+            {
+                "cells": [
+                    {
+                        "cell_type": "code",
+                        "source": [
+                            "model, tokenizer = FastLanguageModel.from_pretrained(\n",
+                            "    model_name='unsloth/llama-3',\n",
+                            ")\n",
+                            "trainer = SFTTrainer()\n",
+                        ],
+                    }
+                ],
+                "metadata": {},
+                "nbformat": 4,
+                "nbformat_minor": 5,
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(
+        app, ["migrate", "--from", "unsloth", "train.ipynb", "--dry-run"]
+    )
+
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert "got JSONL" not in result.output
 
 
 def test_migrate_yaml_config_named_jsonl_still_migrates(tmp_path: Path, monkeypatch):

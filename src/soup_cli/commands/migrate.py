@@ -1,5 +1,6 @@
 """soup migrate — import configs from LLaMA-Factory, Axolotl, and Unsloth."""
 
+import json
 from pathlib import Path
 
 import typer
@@ -63,11 +64,17 @@ def migrate(
         console.print(f"[red]{exc}[/]")
         raise typer.Exit(1)
 
-    # v0.40.1 Part D / N2 — friendly error when the user passes a JSONL
-    # data file (`.jsonl`) instead of a YAML config. The sniff helper is
-    # only invoked when the suffix says ``.jsonl`` (notebook .ipynb files
-    # legitimately start with ``{`` — we must not falsely flag them).
-    if input_path.suffix.lower() == ".jsonl" and _looks_like_jsonl(input_path):
+    # Keep the permissive content check for explicit .jsonl files. For every
+    # other suffix, require two complete JSON objects on separate lines so a
+    # single JSON config or notebook is not mistaken for training data.
+    suffix = input_path.suffix.lower()
+    is_jsonl = (
+        suffix == ".jsonl" and _looks_like_jsonl(input_path)
+    ) or (
+        suffix != ".jsonl"
+        and _looks_like_jsonl(input_path, require_multiple_objects=True)
+    )
+    if is_jsonl:
         console.print(
             f"[red]Expected a {source} YAML config; got JSONL "
             f"({input_path.name}) — did you pass the wrong file?[/]"
@@ -141,8 +148,8 @@ def migrate(
     console.print(f"[dim]Next: soup train --config {output}[/]")
 
 
-def _looks_like_jsonl(path: Path) -> bool:
-    """v0.40.1 Part D / N2 — sniff first non-blank line for `{` (JSONL).
+def _looks_like_jsonl(path: Path, *, require_multiple_objects: bool = False) -> bool:
+    """Inspect a bounded prefix for explicit or structurally identifiable JSONL.
 
     ``utf-8-sig``, not ``utf-8``: a UTF-8 BOM decodes to U+FEFF, which
     ``str.strip()`` does not remove because it is not whitespace, so a BOM'd
@@ -150,18 +157,32 @@ def _looks_like_jsonl(path: Path) -> bool:
     error. Windows tooling writes that BOM by default, PowerShell's
     ``Out-File`` included (#675 review).
 
-    The read is bounded because a file with no newline is one single line, so
-    ``for line in fh`` would pull all of it into memory: a 120 MB one-liner
-    measured 240.9 MB peak. Only the first non-blank chunk is ever inspected,
-    so a truncated long line costs nothing here.
+    The read is bounded because a file with no newline is one single line. An
+    unbounded line iteration pulled a measured 240.9 MB peak for a 120 MB
+    one-liner. Unknown suffixes use the stricter mode: two non-blank lines must
+    each be complete JSON objects, which separates JSONL from one JSON document.
     """
     try:
         with open(path, "r", encoding="utf-8-sig", errors="replace") as fh:
-            while line := fh.readline(65536):
-                stripped = line.strip()
-                if not stripped:
-                    continue
-                return stripped.startswith("{")
+            prefix = fh.read(65536)
     except OSError:
         return False
+
+    lines = [line.strip() for line in prefix.splitlines() if line.strip()]
+    if not lines:
+        return False
+    if not require_multiple_objects:
+        return lines[0].startswith("{")
+
+    object_count = 0
+    for line in lines:
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError:
+            return False
+        if not isinstance(value, dict):
+            return False
+        object_count += 1
+        if object_count == 2:
+            return True
     return False
