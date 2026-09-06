@@ -9,7 +9,7 @@ Full RLHF pipeline:  SFT → Reward Model → PPO
 
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Any, Mapping, Optional
 
 from rich.console import Console
 
@@ -24,6 +24,47 @@ from soup_cli.utils.mixed_precision import align_trainable_dtype_for_fp16
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 
 console = Console()
+
+
+def _set_ppo_training_kwargs(
+    ppo_kwargs: dict[str, object],
+    ppo_params: Mapping[str, object],
+    tcfg: Any,
+) -> dict[str, str]:
+    """Forward Soup's three PPO schedules across TRL parameter renames."""
+    applied: dict[str, str] = {}
+
+    if "num_train_epochs" in ppo_params:
+        ppo_kwargs["num_train_epochs"] = tcfg.epochs
+        applied["train_epochs"] = "num_train_epochs"
+
+    if "num_ppo_epochs" in ppo_params:
+        ppo_kwargs["num_ppo_epochs"] = tcfg.ppo_epochs
+        applied["ppo_epochs"] = "num_ppo_epochs"
+    elif "ppo_epochs" in ppo_params:
+        ppo_kwargs["ppo_epochs"] = tcfg.ppo_epochs
+        applied["ppo_epochs"] = "ppo_epochs"
+
+    if "kl_coef" in ppo_params:
+        ppo_kwargs["kl_coef"] = tcfg.ppo_kl_penalty
+        applied["kl_coef"] = "kl_coef"
+    elif "init_kl_coef" in ppo_params:
+        ppo_kwargs["init_kl_coef"] = tcfg.ppo_kl_penalty
+        applied["kl_coef"] = "init_kl_coef"
+
+    return applied
+
+
+def _effective_ppo_setting(
+    config: object,
+    kwargs: Mapping[str, object],
+    field: str | None,
+    fallback: object,
+) -> object:
+    """Read the constructed config value, with compatibility fallbacks."""
+    if field is None:
+        return fallback
+    return getattr(config, field, kwargs[field])
 
 
 class PPOTrainerWrapper:
@@ -168,16 +209,12 @@ class PPOTrainerWrapper:
 
         ppo_params = inspect.signature(ppo_config_cls).parameters
 
-        # trl renamed ppo_epochs -> num_ppo_epochs in newer versions
-        if "num_ppo_epochs" in ppo_params:
-            ppo_kwargs["num_ppo_epochs"] = tcfg.ppo_epochs
-        elif "ppo_epochs" in ppo_params:
-            ppo_kwargs["ppo_epochs"] = tcfg.ppo_epochs
+        applied_ppo_fields = _set_ppo_training_kwargs(
+            ppo_kwargs, ppo_params, tcfg
+        )
 
         if "cliprange" in ppo_params:
             ppo_kwargs["cliprange"] = tcfg.ppo_clip_ratio
-        if "init_kl_coef" in ppo_params:
-            ppo_kwargs["init_kl_coef"] = tcfg.ppo_kl_penalty
 
         # Optional params that may not exist in all trl versions
         if "log_with" in ppo_params:
@@ -195,6 +232,30 @@ class PPOTrainerWrapper:
             ppo_kwargs["use_cpu"] = True
 
         ppo_config = ppo_config_cls(**ppo_kwargs)
+        effective_train_epochs = _effective_ppo_setting(
+            ppo_config,
+            ppo_kwargs,
+            applied_ppo_fields.get("train_epochs"),
+            tcfg.epochs,
+        )
+        effective_ppo_epochs = _effective_ppo_setting(
+            ppo_config,
+            ppo_kwargs,
+            applied_ppo_fields.get("ppo_epochs"),
+            tcfg.ppo_epochs,
+        )
+        effective_kl_coef = _effective_ppo_setting(
+            ppo_config,
+            ppo_kwargs,
+            applied_ppo_fields.get("kl_coef"),
+            tcfg.ppo_kl_penalty,
+        )
+        console.print(
+            "[green]PPO schedule:[/] "
+            f"train epochs={effective_train_epochs}, "
+            f"PPO epochs={effective_ppo_epochs}, "
+            f"KL coefficient={effective_kl_coef}"
+        )
 
         # --- Build reward functions list for PPOTrainer ---
         reward_funcs = []

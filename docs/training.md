@@ -1198,6 +1198,7 @@ data:
   format: chatml
 training:
   reward_model: ./output_rm
+  epochs: 1
   ppo_epochs: 4
   ppo_clip_ratio: 0.2
   ppo_kl_penalty: 0.05
@@ -1207,6 +1208,11 @@ training:
   quantization: 4bit
 output: ./output_ppo
 ```
+
+`epochs` controls complete passes over the training dataset. `ppo_epochs`
+controls optimization passes within each PPO update. Soup forwards both values,
+plus `ppo_kl_penalty`, to the active TRL `PPOConfig` names and prints the
+effective schedule during setup.
 
 PPO supports two reward sources:
 - **Reward model** (`reward_model`): pre-trained reward model (from step 2)
