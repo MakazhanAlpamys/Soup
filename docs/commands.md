@@ -310,7 +310,7 @@ soup data brain-rot <data.jsonl> [--strict]   Brain-rot detector — arXiv 2510.
 soup iterative-dpo --base-model <m> --reward-model <rm> --prompts <p.jsonl> --output-dir <out> --rounds N --pairs-per-round N [--plan-only]  Iterative DPO loop driver — LIVE sample→score→pair→train (v0.70.0; live v0.71.11)
 soup train --reward-hack-detector info_rm|rm_ensemble [--reward-hack-halt]  Reward-hacking detector for GRPO — LIVE callback (v0.70.0; live v0.71.11)
 soup train --reward-hack-mitigation off|log_only|kl_control|pid_lagrangian  Closed-loop reward-hacking auto-mitigation (detect → raise KL/β → rollback → early-stop); GRPO/PPO, requires --reward-hack-detector; PPO BETA (v0.71.26)
-soup train --uld-strategy wasserstein|topk_align [--uld-top-k N]  Cross-tokenizer ULD on task='distill' — LIVE W1/topk loss (v0.70.0; live v0.71.11)
+soup train --uld-strategy wasserstein_aligned  Cross-tokenizer ULD on task='distill' (different tokenizers) — LIVE (v0.71.18)
 soup train --minillm-enabled [--minillm-teacher-mix-ratio 0.3]  MiniLLM reverse-KL distillation — LIVE (v0.70.0; live v0.71.11)
 soup train --rl-checkpoint-save-every-steps N [--rl-checkpoint-keep-last N]  Mid-epoch checkpoint for GRPO/PPO — LIVE (v0.70.0; live v0.71.11)
 soup train --echo-trap-enabled [--echo-trap-threshold 0.6 --echo-trap-halt]  RAGEN echo-trap detector for GRPO — LIVE callback (v0.70.0; live v0.71.11)
