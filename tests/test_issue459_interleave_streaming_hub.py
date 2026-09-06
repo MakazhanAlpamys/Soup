@@ -786,6 +786,7 @@ def test_hub_partial_val_split_fallback_over_has_no_duplicate_row_across_train_a
     result = load_dataset(cfg.data)
     train_texts = {row["text"] for row in result["train"]}
     val_texts = {row["text"] for row in result["val"]}
+    assert val_texts, "val must be non-empty, or the disjointness assertion is vacuous"
     assert not (train_texts & val_texts)
     assert not any(t.startswith("Aval-") for t in val_texts)
 

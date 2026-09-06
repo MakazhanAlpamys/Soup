@@ -212,6 +212,7 @@ def test_interleave_probs_val_split_has_no_duplicate_row_across_train_and_val(tm
     result = load_dataset(cfg.data)
     train_texts = {row["text"] for row in result["train"]}
     val_texts = {row["text"] for row in result["val"]}
+    assert val_texts, "val must be non-empty, or the disjointness assertion is vacuous"
     assert not (train_texts & val_texts)
 
 
@@ -230,7 +231,25 @@ def test_interleave_probs_val_split_no_overlap_regardless_of_source_order(tmp_pa
     result = load_dataset(cfg.data)
     train_texts = {row["text"] for row in result["train"]}
     val_texts = {row["text"] for row in result["val"]}
+    assert val_texts, "val must be non-empty, or the disjointness assertion is vacuous"
     assert not (train_texts & val_texts)
+
+
+def test_interleave_over_val_split_one_row_source_raises_with_real_reason(tmp_path):
+    # A source with exactly 1 row and val_split=0.1 sends that whole row to
+    # val, leaving _combine_interleaved a 0-row train side for it. Before
+    # #680's per-source carve-out this couldn't happen (val_split ran once,
+    # after cycling); the error must name val_split, not blame formatting.
+    _write_jsonl(tmp_path / "a.jsonl", [f"A-{i}" for i in range(10)])
+    _write_jsonl(tmp_path / "b.jsonl", ["B-0"])
+    cfg = _cfg(
+        tmp_path,
+        train=[str(tmp_path / "a.jsonl"), str(tmp_path / "b.jsonl")],
+        interleave="over",
+        val_split=0.1,
+    )
+    with pytest.raises(ValueError, match="data.val_split=0.1 leaves 0 training rows"):
+        load_dataset(cfg.data)
 
 
 # ---------------------------------------------------------------------------
