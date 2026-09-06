@@ -672,6 +672,11 @@ are unaffected (they never pad). This is the trade-off for closing the duplicate
 not a separate bug: holding out an exact 10% of the padded total would mean some val rows
 are copies of val rows already counted, or of train rows.
 
+Train and val also end up with different source mixtures once `over`/`probs` pads: val is
+carved from each source's original, unpadded rows, while train sees the padded, rebalanced
+mix. Anyone who oversampled specifically to correct a source imbalance gets a validation set
+that still reflects the original, un-rebalanced skew, not the mixture train now trains on.
+
 **Vocab expansion + advanced masking:**
 
 ```yaml

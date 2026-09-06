@@ -196,6 +196,7 @@ def test_interleave_over_val_split_has_no_duplicate_row_across_train_and_val(tmp
     result = load_dataset(cfg.data)
     train_texts = {row["text"] for row in result["train"]}
     val_texts = {row["text"] for row in result["val"]}
+    assert val_texts, "val must be non-empty, or the disjointness assertion is vacuous"
     assert not (train_texts & val_texts)
     assert len(result["train"]) + len(result["val"]) == 16
 
@@ -249,6 +250,23 @@ def test_interleave_over_val_split_one_row_source_raises_with_real_reason(tmp_pa
         val_split=0.1,
     )
     with pytest.raises(ValueError, match="data.val_split=0.1 leaves 0 training rows"):
+        load_dataset(cfg.data)
+
+
+def test_interleave_over_genuinely_empty_source_blames_formatting_not_val_split(tmp_path):
+    # A source with 0 rows never reaches _split_val_per_source's own
+    # val-consumed-everything case: val_split consumed nothing here, so
+    # the per-source guard must not claim it did. This must fall through
+    # to _combine_interleaved's generic "must have >= 1 row" error.
+    _write_jsonl(tmp_path / "a.jsonl", [f"A-{i}" for i in range(10)])
+    _write_jsonl(tmp_path / "b.jsonl", [])
+    cfg = _cfg(
+        tmp_path,
+        train=[str(tmp_path / "a.jsonl"), str(tmp_path / "b.jsonl")],
+        interleave="over",
+        val_split=0.1,
+    )
+    with pytest.raises(ValueError, match="must have >= 1 row after formatting"):
         load_dataset(cfg.data)
 
 

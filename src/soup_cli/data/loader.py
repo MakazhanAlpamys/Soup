@@ -462,7 +462,7 @@ def _split_val_per_source(
     rows, val_split just consumed all of them.
     """
     train_rows, val_rows = _split_val(rows, val_split)
-    if not train_rows:
+    if rows and not train_rows:
         raise ValueError(
             f"data.interleave: data.val_split={val_split} leaves 0 training "
             f"rows for a source with {len(rows)} row(s) under strategy "
@@ -1109,11 +1109,14 @@ def _load_interleaved_hub_datasets(
             missing = [
                 name for name, v in zip(train_names, per_dataset_val) if v is None
             ]
+            if spec.strategy in ("over", "probs"):
+                detail = "carving data.val_split out per source before oversampling"
+            else:
+                detail = "applying data.val_split to the combined train rows instead"
             console.print(
                 "[yellow]data.interleave: only some HF-hub datasets provide "
                 f"a 'validation' split (missing from {missing}) — ignoring "
-                "every hub validation split and applying data.val_split to "
-                "the combined train rows instead.[/]"
+                f"every hub validation split and {detail}.[/]"
             )
         if data_config.val_split > 0 and spec.strategy in ("over", "probs"):
             per_split = [
