@@ -80,6 +80,7 @@ def classify_repo(
     repo_id: str,
     *,
     not_found: type[BaseException],
+    gated: type[BaseException] | None = None,
     attempts: int = _DEFAULT_ATTEMPTS,
     backoff: float = _DEFAULT_BACKOFF,
 ) -> RepoCheck:
@@ -91,11 +92,26 @@ def classify_repo(
 
     A ``RepositoryNotFoundError`` is a definite answer and is **not** retried;
     retrying it would burn the attempt budget that transient failures need.
+
+    ``gated`` **must** be caught before ``not_found``, because
+    ``GatedRepoError`` is a *subclass* of ``RepositoryNotFoundError`` in
+    ``huggingface_hub``::
+
+        GatedRepoError MRO: GatedRepoError -> RepositoryNotFoundError -> ...
+
+    Ordered the other way, ``except not_found`` swallows the gated answer and
+    every gated repo classifies MISSING -- the exact failure that gets a guard
+    like this muted. It does not show up in a live sweep today because the Hub
+    currently serves gated *metadata* anonymously, so those ids take the
+    returning path and ``info.gated`` is read instead. One org changing
+    metadata visibility would flip them all to the raising path.
     """
     last_detail = ""
     for attempt in range(1, max(1, attempts) + 1):
         try:
             info = api.model_info(repo_id)
+        except (gated or ()) as exc:  # MUST precede not_found -- see docstring
+            return RepoCheck(repo_id, Status.GATED, str(exc)[:200])
         except not_found as exc:
             return RepoCheck(repo_id, Status.MISSING, str(exc)[:200])
         except Exception as exc:  # noqa: BLE001 -- anything else may be transient
@@ -127,6 +143,7 @@ def check_surfaces(
     *,
     api: Any,
     not_found: type[BaseException],
+    gated: type[BaseException] | None = None,
     attempts: int = _DEFAULT_ATTEMPTS,
     backoff: float = _DEFAULT_BACKOFF,
 ) -> dict[str, RecipeReport]:
@@ -136,7 +153,8 @@ def check_surfaces(
     def _check(repo_id: str) -> RepoCheck:
         if repo_id not in cache:
             cache[repo_id] = classify_repo(
-                api, repo_id, not_found=not_found, attempts=attempts, backoff=backoff
+                api, repo_id, not_found=not_found, gated=gated,
+                attempts=attempts, backoff=backoff,
             )
         return cache[repo_id]
 
@@ -215,11 +233,29 @@ def format_report(report: dict[str, RecipeReport]) -> str:
     return "\n".join(lines)
 
 
-def main() -> int:
-    from huggingface_hub.errors import RepositoryNotFoundError
+def main(
+    *,
+    not_found: type[BaseException] | None = None,
+    gated: type[BaseException] | None = None,
+) -> int:
+    """Resolve the catalog and return a process exit code.
+
+    The exception classes are injectable for the same reason ``classify_repo``
+    takes them: it keeps the exit-code contract testable without the Hub, and
+    without constructing real ``huggingface_hub`` errors (which need a live
+    response object). Defaults are the real classes.
+    """
+    if not_found is None or gated is None:
+        from huggingface_hub.errors import GatedRepoError, RepositoryNotFoundError
+
+        not_found = not_found or RepositoryNotFoundError
+        gated = gated or GatedRepoError
 
     report = check_surfaces(
-        collect_recipe_repo_ids(), api=_anonymous_api(), not_found=RepositoryNotFoundError
+        collect_recipe_repo_ids(),
+        api=_anonymous_api(),
+        not_found=not_found,
+        gated=gated,
     )
     print(format_report(report))
     # Exit non-zero ONLY for genuinely missing repos. An unverified run is not a

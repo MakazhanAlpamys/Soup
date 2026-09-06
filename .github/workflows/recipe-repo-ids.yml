@@ -11,6 +11,12 @@
 # a job that goes red for reasons unrelated to the diff is one people learn to
 # re-run rather than read. Repos disappear on a timescale of months, so weekly
 # finds it long before a user does.
+#
+# Measured cost, 2026-09-06, unauthenticated against the live Hub:
+#   165 recipes / 330 surfaces / 118 unique ids after de-duplication (64% saved)
+#   29.8 s wall clock, 239 ms median, 340 ms p95, 0 rate limits
+# De-duplication matters because gated bases are shared: 18 unique gated ids
+# cover 68 of the 330 surfaces. Without it the sweep is ~83 s.
 name: recipe repo ids
 
 on:
@@ -20,6 +26,7 @@ on:
     - cron: "0 7 * * 1"
   workflow_dispatch:
 
+# Never add a pull_request trigger here.
 permissions:
   contents: read
 
