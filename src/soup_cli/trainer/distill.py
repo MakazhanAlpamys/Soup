@@ -96,9 +96,20 @@ def _compute_distill_term(
         if attention_mask is not None:
             attention_mask = attention_mask[:, 1:]
 
+    if not torch.isfinite(student_logits).all():
+        raise ValueError("student_logits must contain only finite values")
+    if not torch.isfinite(teacher_logits).all():
+        raise ValueError("teacher_logits must contain only finite values")
+
+    # Keep the divergence kernel in FP32. In lower precision, valid logits at
+    # low temperatures readily underflow probabilities to zero; target-side
+    # derivatives in torch.kl_div then become non-finite even when the reduced
+    # loss is finite (#719).
     temp = float(temperature)
-    s = student_logits / temp
-    t = teacher_logits / temp
+    log_s = torch.log_softmax(student_logits.float() / temp, dim=-1)
+    log_t = torch.log_softmax(teacher_logits.float() / temp, dim=-1)
+    p_s = log_s.exp()
+    p_t = log_t.exp()
 
     def _masked_mean(per_token: "_torch_typ.Tensor") -> "_torch_typ.Tensor":
         """Mean of a ``(batch, seq)`` per-token divergence over trained tokens."""
@@ -112,29 +123,16 @@ def _compute_distill_term(
         denom = mask.sum().clamp(min=1.0)
         return (per_token * mask).sum() / denom
 
-    kl_div = torch.nn.functional.kl_div
     if divergence == "forward_kl":
-        # KL(teacher || student): student log-probs, teacher probs. reduction=
-        # "none" keeps per-token so we can mask before averaging.
-        log_s = torch.log_softmax(s, dim=-1)
-        p_t = torch.softmax(t, dim=-1)
-        per_token = kl_div(log_s, p_t, reduction="none").sum(dim=-1)
+        per_token = (p_t * (log_t - log_s)).sum(dim=-1)
         return _masked_mean(per_token) * (temp * temp)
     if divergence == "reverse_kl":
-        log_t = torch.log_softmax(t, dim=-1)
-        p_s = torch.softmax(s, dim=-1)
-        per_token = kl_div(log_t, p_s, reduction="none").sum(dim=-1)
+        per_token = (p_s * (log_s - log_t)).sum(dim=-1)
         return _masked_mean(per_token) * (temp * temp)
     if divergence == "js":
-        # Jensen-Shannon: 0.5 (KL(p||m) + KL(q||m)), m = 0.5 (p + q).
-        log_s = torch.log_softmax(s, dim=-1)
-        log_t = torch.log_softmax(t, dim=-1)
-        p_s = log_s.exp()
-        p_t = log_t.exp()
-        m = 0.5 * (p_s + p_t)
-        log_m = m.clamp(min=1e-12).log()
-        kl_pm = kl_div(log_m, p_s, reduction="none").sum(dim=-1)
-        kl_qm = kl_div(log_m, p_t, reduction="none").sum(dim=-1)
+        log_m = torch.logaddexp(log_s, log_t) - math.log(2.0)
+        kl_pm = (p_s * (log_s - log_m)).sum(dim=-1)
+        kl_qm = (p_t * (log_t - log_m)).sum(dim=-1)
         return 0.5 * (_masked_mean(kl_pm) + _masked_mean(kl_qm)) * (temp * temp)
     raise ValueError(f"Unknown divergence {divergence!r}")
 

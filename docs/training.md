@@ -425,6 +425,10 @@ Loss = student CE + (T**2) × KL(teacher_logits / T  ||  student_logits / T).
 Teacher is loaded once, frozen via `requires_grad_(False)` + `.eval()`, and its
 inputs / logits are auto-bridged across CPU / CUDA devices.
 
+The token-divergence kernel evaluates probability math in FP32, including when
+the model logits use FP16 or BF16, so low temperatures do not create non-finite
+reverse-KL or Jensen-Shannon gradients.
+
 Set `distill_mode: sequence` (default `token`) to train on the teacher's **generated
 continuations** instead of per-token logit matching — a hard-label, cross-tokenizer-friendly
 KD that works when student and teacher do not share a vocabulary. `sequence` mode is mutually

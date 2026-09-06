@@ -12,6 +12,12 @@ reproducing 70+ versions of notes.
 
 ## [Unreleased]
 
+### Fixed
+
+- Reverse-KL and Jensen-Shannon distillation now use stable FP32 log-space
+  formulas, preventing finite losses with non-finite gradients at low
+  temperatures (#719).
+
 ## [0.74.0] - 2026-09-04
 
 ### Added
