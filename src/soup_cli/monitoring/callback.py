@@ -205,14 +205,28 @@ class _SoupTrainerCallback_body:  # noqa: N801
         loss = self._last_loss
         lr = self._last_lr
         grad_norm = self._last_grad_norm
-        val_loss = self._last_val_loss
+        # Two different values on purpose, and the distinction is the whole
+        # point of the column existing.
+        #
+        # The PANEL wants the last measured value carried forward, so the row
+        # does not blink out on every training step between evaluations.
+        #
+        # The RECORD must not. Persisting the carried value would write a
+        # measurement on steps where no evaluation ran -- 9 stored points for 2
+        # real ones at a realistic cadence -- inflating n for anything that
+        # reads the series back, including `soup eval`'s paired bootstrap. That
+        # is the same fabrication this change refuses for legacy rows, and it
+        # would be inconsistent to reject 0.0 there and accept a carried value
+        # here.
+        display_val_loss = self._last_val_loss
+        measured_val_loss = logs.get("eval_loss")
         speed = logs.get("train_steps_per_second", 0.0)
 
         self.display.update(
             step=step,
             epoch=epoch,
             loss=loss,
-            val_loss=val_loss,
+            val_loss=display_val_loss,
             lr=lr,
             grad_norm=grad_norm,
             speed=speed,
@@ -234,7 +248,11 @@ class _SoupTrainerCallback_body:  # noqa: N801
                     # `is not None`, not truthiness — a real 0.0 loss / lr (e.g.
                     # end of an LR schedule) must not be reported as None.
                     loss=float(loss) if loss is not None else None,
-                    val_loss=float(val_loss) if val_loss is not None else None,
+                    val_loss=(
+                        float(measured_val_loss)
+                        if measured_val_loss is not None
+                        else None
+                    ),
                     lr=float(lr) if lr is not None else None,
                     grad_norm=float(grad_norm) if grad_norm is not None else None,
                 )
@@ -317,7 +335,7 @@ class _SoupTrainerCallback_body:  # noqa: N801
                 step=step,
                 epoch=epoch,
                 loss=loss,
-                val_loss=val_loss,
+                val_loss=measured_val_loss,
                 lr=lr,
                 grad_norm=grad_norm,
                 speed=speed,

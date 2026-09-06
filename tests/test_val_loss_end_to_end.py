@@ -49,16 +49,43 @@ CREATE TABLE IF NOT EXISTS metrics (
 """
 
 
-def _legacy_db(path) -> None:
-    """A database in the pre-change schema, carrying one real metrics row."""
+def _legacy_db(path, *, rows: int = 5) -> None:
+    """A database in the pre-change schema, populated the way a real one is.
+
+    Built from the **live** ``_SCHEMA_SQL`` with the new column stripped, rather
+    than a hand-written approximation, so the fixture cannot drift away from the
+    schema it is pretending to be an older version of. The ``runs`` row carries
+    the columns ``list_runs()`` actually reads — an earlier version of this
+    fixture was a two-column stub, which meant the migration was exercised but
+    the read path afterwards was not.
+    """
+    import json
+    import re
+    from pathlib import Path
+
+    from soup_cli.experiment import tracker as _tracker_mod
+
+    live = re.search(r'_SCHEMA_SQL = """(.*?)"""', Path(_tracker_mod.__file__).read_text(
+        encoding="utf-8"), re.S).group(1)
+    pre_change = live.replace("    val_loss  REAL,\n", "")
+    assert "val_loss" not in pre_change, "fixture must genuinely predate the column"
+
     conn = sqlite3.connect(str(path))
-    conn.executescript(_PRE_VAL_LOSS_METRICS_DDL)
-    conn.execute("INSERT INTO runs (run_id, status) VALUES ('old-run', 'completed')")
+    conn.executescript(pre_change)
     conn.execute(
-        "INSERT INTO metrics (run_id, step, epoch, loss, lr, grad_norm, speed,"
-        " gpu_mem, timestamp) VALUES ('old-run', 7, 0.5, 1.25, 1e-4, 0.9, 3.0,"
-        " '2.0 GB', '2026-01-01T00:00:00')"
+        "INSERT INTO runs (run_id, created_at, status, config_json, base_model, task,"
+        " initial_loss, final_loss, total_steps) VALUES"
+        " ('old-run', '2026-01-01T00:00:00', 'completed', ?, 'Qwen/Qwen2.5-0.5B',"
+        " 'sft', 3.0, 1.0, ?)",
+        (json.dumps({"base": "Qwen/Qwen2.5-0.5B", "task": "sft"}), rows),
     )
+    for step in range(1, rows + 1):
+        conn.execute(
+            "INSERT INTO metrics (run_id, step, epoch, loss, lr, grad_norm, speed,"
+            " gpu_mem, timestamp) VALUES ('old-run', ?, ?, ?, 1e-4, 0.9, 3.0,"
+            " '2.0 GB', ?)",
+            (step, step / rows, 3.0 - step * 0.25, f"2026-01-01T00:0{step}:00"),
+        )
     conn.commit()
     conn.close()
 
@@ -100,12 +127,31 @@ class TestTheMigration:
 
         conn = sqlite3.connect(str(db))
         conn.row_factory = sqlite3.Row
-        row = conn.execute("SELECT * FROM metrics WHERE step = 7").fetchone()
+        rows = [dict(r) for r in conn.execute("SELECT * FROM metrics ORDER BY step")]
         conn.close()
 
-        assert row["loss"] == pytest.approx(1.25), "pre-existing data must survive"
-        assert row["gpu_mem"] == "2.0 GB"
-        assert row["val_loss"] is None, "unmeasured must be NULL, never 0.0"
+        assert len(rows) == 5, "every pre-existing row must survive the migration"
+        assert [r["step"] for r in rows] == [1, 2, 3, 4, 5]
+        assert rows[0]["loss"] == pytest.approx(2.75), "pre-existing data must survive"
+        assert all(r["gpu_mem"] == "2.0 GB" for r in rows)
+        assert all(r["val_loss"] is None for r in rows), (
+            "unmeasured must be NULL, never 0.0"
+        )
+
+    def test_the_read_path_still_works_after_migrating(self, tmp_path):
+        """`soup runs show` reads through `list_runs()`; migrating must not
+        break it. Previously nothing committed exercised the read at all."""
+        from soup_cli.experiment.tracker import ExperimentTracker
+
+        db = tmp_path / "experiments.db"
+        _legacy_db(db)
+        tracker = ExperimentTracker(db_path=str(db))
+        tracker.init_db()
+
+        runs = tracker.list_runs()
+        assert [r["run_id"] for r in runs] == ["old-run"]
+        assert runs[0]["base_model"] == "Qwen/Qwen2.5-0.5B"
+        assert runs[0]["status"] == "completed"
 
     def test_migrating_twice_is_a_no_op(self, tmp_path):
         from soup_cli.experiment.tracker import ExperimentTracker
@@ -348,3 +394,215 @@ class TestTheTransformersProducer:
                   logs={"loss": 2.5, "learning_rate": 1e-4})
 
         assert display.calls[0].get("val_loss") is None
+
+
+class TestItReachesTheWireNotJustTheDataclass:
+    """Review finding on #713: `val_loss` was on `TrainEvent` and absent from
+    `_ALLOWED_KEYS`, so `to_payload` filtered it out and the SSE stream never
+    carried it. The PR was written to close a value that is collected and read
+    by nothing, and the sink verification stopped one layer above where the
+    value actually died.
+    """
+
+    def test_val_loss_survives_to_payload(self):
+        from soup_cli.utils.sse_train_stream import TrainEvent, to_payload
+
+        payload = to_payload(TrainEvent(type="metric", step=10, loss=2.5, val_loss=0.75))
+        assert payload.get("val_loss") == pytest.approx(0.75)
+
+    def test_val_loss_is_on_the_serialised_wire_frame(self):
+        """The end of the pipe, not the middle of it."""
+        from soup_cli.utils.sse_train_stream import TrainEvent, format_sse_frame
+
+        frame = format_sse_frame(TrainEvent(type="metric", step=10, loss=2.5, val_loss=0.75))
+        assert '"val_loss":0.75' in frame.replace(" ", "")
+
+    def test_every_dataclass_field_is_serialisable(self):
+        """The guard that stops the next field drifting the same way.
+
+        A field can be added to `TrainEvent` and silently never reach a client,
+        because `to_payload` filters against a separately-maintained set. This
+        ties the two together so the omission is a test failure rather than a
+        quiet drop.
+        """
+        from soup_cli.utils.sse_train_stream import _ALLOWED_KEYS, TrainEvent
+
+        fields = set(TrainEvent.__dataclass_fields__)
+        assert fields <= _ALLOWED_KEYS, (
+            f"TrainEvent fields absent from _ALLOWED_KEYS and therefore dropped "
+            f"before the wire: {sorted(fields - _ALLOWED_KEYS)}"
+        )
+
+
+class TestStickyForThePanelPerCallForTheRecord:
+    """Review finding on #713: the sticky value was persisted as well as shown.
+
+    At a realistic cadence that writes a measurement on every step between
+    evaluations — 9 stored points for 2 real ones — which inflates n for
+    anything reading the series back, including `soup eval`'s paired bootstrap.
+    """
+
+    def _cb(self):
+        from soup_cli.monitoring.callback import SoupTrainerCallback
+
+        display, tracker = _RecordingDisplay(), _RecordingTracker()
+        return SoupTrainerCallback(display, tracker=tracker, run_id="r1"), display, tracker
+
+    def test_a_training_step_after_an_evaluation_persists_null(self):
+        cb, _, tracker = self._cb()
+        cb.on_log(object(), _State(), object(), logs={"loss": 2.5})
+        cb.on_log(object(), _State(), object(), logs={"eval_loss": 0.9})
+        cb.on_log(object(), _State(), object(), logs={"loss": 2.4})   # no eval
+
+        stored = [c.get("val_loss") for c in tracker.calls]
+        assert stored[-1] is None, (
+            "a training step with no evaluation must persist NULL, not the "
+            f"carried-forward value: {stored}"
+        )
+        assert stored.count(0.9) == 1, "exactly one row per actual evaluation"
+
+    def test_the_panel_keeps_showing_the_last_measured_value(self):
+        """Sticky, and the mutation that made it non-sticky passed 311 tests."""
+        cb, display, _ = self._cb()
+        cb.on_log(object(), _State(), object(), logs={"eval_loss": 0.9})
+        cb.on_log(object(), _State(), object(), logs={"loss": 2.4})   # no eval
+
+        assert display.calls[-1].get("val_loss") == pytest.approx(0.9), (
+            "the panel row must not blink out between evaluations"
+        )
+
+    def test_the_two_sinks_genuinely_disagree(self):
+        """The discriminating assertion: one call, two different values.
+
+        If display and tracker ever receive the same thing on a non-eval step,
+        one of the two behaviours has been lost.
+        """
+        cb, display, tracker = self._cb()
+        cb.on_log(object(), _State(), object(), logs={"eval_loss": 0.9})
+        cb.on_log(object(), _State(), object(), logs={"loss": 2.4})
+
+        assert display.calls[-1].get("val_loss") == pytest.approx(0.9)
+        assert tracker.calls[-1].get("val_loss") is None
+
+
+class TestThePanelActuallyRendersIt:
+    def test_the_val_loss_row_appears_in_the_rendered_panel(self):
+        """`if False:` around the render line passed the whole suite."""
+        from soup_cli.config.schema import DataConfig, SoupConfig, TrainingConfig
+        from soup_cli.monitoring.display import TrainingDisplay
+
+        cfg = SoupConfig(
+            base="m", task="sft",
+            data=DataConfig(train="t.jsonl", format="chatml"),
+            training=TrainingConfig(), output="./o",
+        )
+        display = TrainingDisplay(cfg)
+        display.update(step=10, epoch=1.0, loss=2.5, lr=1e-4, val_loss=0.75)
+
+        from rich.console import Console
+        console = Console(file=__import__("io").StringIO(), width=100)
+        console.print(display._render())
+        rendered = console.file.getvalue()
+
+        assert "Val loss" in rendered, f"the row is not rendered: {rendered!r}"
+        assert "0.75" in rendered
+
+    def test_no_val_loss_row_before_any_evaluation(self):
+        """Reject-everything control: the row must not appear from nowhere."""
+        from soup_cli.config.schema import DataConfig, SoupConfig, TrainingConfig
+        from soup_cli.monitoring.display import TrainingDisplay
+
+        cfg = SoupConfig(
+            base="m", task="sft",
+            data=DataConfig(train="t.jsonl", format="chatml"),
+            training=TrainingConfig(), output="./o",
+        )
+        display = TrainingDisplay(cfg)
+        display.update(step=1, epoch=0.1, loss=3.0, lr=1e-4)
+
+        from rich.console import Console
+        console = Console(file=__import__("io").StringIO(), width=100)
+        console.print(display._render())
+
+        assert "Val loss" not in console.file.getvalue()
+
+
+class TestTheDisplayIsStickyOnItsOwn:
+    """Stickiness lives in TWO places and only one was pinned.
+
+    `SoupTrainerCallback` carries `_last_val_loss` and passes it on every call,
+    so a test driven through the callback keeps passing even if
+    `TrainingDisplay` itself stops being sticky. This drives the display
+    directly, which is the only way to tell the two apart.
+    """
+
+    def _display(self):
+        from soup_cli.config.schema import DataConfig, SoupConfig, TrainingConfig
+        from soup_cli.monitoring.display import TrainingDisplay
+
+        cfg = SoupConfig(
+            base="m", task="sft",
+            data=DataConfig(train="t.jsonl", format="chatml"),
+            training=TrainingConfig(), output="./o",
+        )
+        return TrainingDisplay(cfg)
+
+    def test_an_update_without_val_loss_keeps_the_last_one(self):
+        display = self._display()
+        display.update(step=5, epoch=0.5, loss=2.0, lr=1e-4, val_loss=0.9)
+        display.update(step=6, epoch=0.6, loss=1.9, lr=1e-4)      # no val_loss
+
+        assert display.val_loss == pytest.approx(0.9), (
+            "the display must carry the last measured value forward on its own, "
+            "not rely on the callback re-supplying it"
+        )
+
+    def test_an_explicit_none_also_keeps_the_last_one(self):
+        """The callback passes val_loss=None on non-eval steps once the record
+        path stopped fabricating, so None must be 'no news', not 'clear it'."""
+        display = self._display()
+        display.update(step=5, epoch=0.5, loss=2.0, lr=1e-4, val_loss=0.9)
+        display.update(step=6, epoch=0.6, loss=1.9, lr=1e-4, val_loss=None)
+
+        assert display.val_loss == pytest.approx(0.9)
+
+    def test_a_new_measurement_replaces_the_old_one(self):
+        """Control: sticky must not mean frozen."""
+        display = self._display()
+        display.update(step=5, epoch=0.5, loss=2.0, lr=1e-4, val_loss=0.9)
+        display.update(step=10, epoch=1.0, loss=1.8, lr=1e-4, val_loss=0.7)
+
+        assert display.val_loss == pytest.approx(0.7)
+
+
+class TestTheCallbackPushesItToTheStream:
+    """The producer side of the wire, distinct from `to_payload` being correct."""
+
+    def test_the_pushed_event_carries_the_measured_val_loss(self, monkeypatch):
+        import soup_cli.utils.train_event_buffer as buf
+        from soup_cli.monitoring.callback import SoupTrainerCallback
+
+        pushed = []
+        monkeypatch.setattr(buf, "push_train_event", lambda e: pushed.append(e))
+
+        cb = SoupTrainerCallback(_RecordingDisplay())
+        cb.on_log(object(), _State(), object(), logs={"eval_loss": 0.75})
+
+        assert pushed, "no SSE event was pushed at all"
+        assert pushed[-1].val_loss == pytest.approx(0.75), (
+            "the event reached the buffer without the value it exists to carry"
+        )
+
+    def test_a_non_eval_step_pushes_none_not_the_carried_value(self, monkeypatch):
+        """Same rule as the database: the stream records measurements."""
+        import soup_cli.utils.train_event_buffer as buf
+        from soup_cli.monitoring.callback import SoupTrainerCallback
+
+        pushed = []
+        monkeypatch.setattr(buf, "push_train_event", lambda e: pushed.append(e))
+
+        cb = SoupTrainerCallback(_RecordingDisplay())
+        cb.on_log(object(), _State(), object(), logs={"eval_loss": 0.75})
+        cb.on_log(object(), _State(), object(), logs={"loss": 2.0})
+
+        assert pushed[-1].val_loss is None
