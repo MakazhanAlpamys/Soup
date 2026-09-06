@@ -127,3 +127,33 @@ def test_all_hub_list_streaming_still_rejected(tmp_path):
             streaming=True,
         )
 
+
+class _CountingStream:
+    def __init__(self):
+        self.consumed = 0
+
+    def shuffle(self, buffer_size=None):
+        return self
+
+    def __iter__(self):
+        while True:
+            self.consumed += 1
+            yield {"text": f"r{self.consumed}"}
+
+
+def test_hub_streaming_cap_terminates_unbounded_source(tmp_path, monkeypatch):
+    cap = 5
+    monkeypatch.setattr("soup_cli.data.loader.MAX_REMOTE_ROWS", cap)
+    stream = _CountingStream()
+
+    def fake_load_dataset(name, **kwargs):
+        return {"train": stream}
+
+    fake_module = type(sys)("datasets")
+    fake_module.load_dataset = fake_load_dataset
+    monkeypatch.setitem(sys.modules, "datasets", fake_module)
+
+    result = load_dataset(_cfg(tmp_path, streaming=True).data)
+    assert [row["text"] for row in result["train"]] == [f"r{i}" for i in range(1, cap + 1)]
+    assert stream.consumed == cap + 1
+
