@@ -1759,6 +1759,22 @@ class TrainingConfig(BaseModel):
             "teacher)."
         ),
     )
+    distill_chunk_size: Optional[int] = Field(
+        default=None,
+        description=(
+            "Token chunk size for evaluating the distillation divergence kernel. "
+            "Chunks the active supervised tokens to reduce peak memory retention. "
+            "Unset (None) processes all tokens in a single chunk. (v0.74.0 #722)"
+        ),
+    )
+    distill_checkpoint: bool = Field(
+        default=False,
+        description=(
+            "Enable non-reentrant activation checkpointing per token chunk during "
+            "distillation divergence computation to minimize autograd retained "
+            "memory. (v0.74.0 #722)"
+        ),
+    )
     # v0.71.12 #146 — opt-in LoRA / PEFT path for classifier-family tasks.
     classifier_lora: bool = Field(
         default=False,
@@ -2537,6 +2553,36 @@ class TrainingConfig(BaseModel):
         from soup_cli.utils.distill import validate_distill_mode
 
         return validate_distill_mode(v)
+
+    @field_validator("distill_chunk_size", mode="before")
+    @classmethod
+    def _validate_distill_chunk_size(cls, v):
+        """v0.74.0 #722 — positive integer token chunk size, rejecting bool."""
+        if v is None:
+            return None
+        if isinstance(v, bool):
+            raise ValueError("training.distill_chunk_size must not be bool")
+        if not isinstance(v, int):
+            raise ValueError(
+                f"training.distill_chunk_size must be int, got {type(v).__name__}"
+            )
+        if v < 1:
+            raise ValueError(
+                f"training.distill_chunk_size must be >= 1, got {v}"
+            )
+        return v
+
+    @field_validator("distill_checkpoint", mode="before")
+    @classmethod
+    def _validate_distill_checkpoint(cls, v):
+        """v0.74.0 #722 — boolean activation checkpointing flag."""
+        if v is None:
+            return False
+        if not isinstance(v, bool):
+            raise ValueError(
+                f"training.distill_checkpoint must be bool, got {type(v).__name__}"
+            )
+        return v
 
     @field_validator("mod_capacity_factor", mode="before")
     @classmethod
@@ -4720,6 +4766,8 @@ class SoupConfig(BaseModel):
             or tcfg.distill_divergence is not None
             or tcfg.distill_temperature is not None
             or distill_mode_set
+            or tcfg.distill_chunk_size is not None
+            or bool(tcfg.distill_checkpoint)
         )
         if self.task == "distill":
             from soup_cli.utils.distill import validate_distill_compat
@@ -4740,6 +4788,11 @@ class SoupConfig(BaseModel):
                     ("distill_divergence", tcfg.distill_divergence),
                     ("distill_temperature", tcfg.distill_temperature),
                     ("distill_mode", tcfg.distill_mode if distill_mode_set else None),
+                    ("distill_chunk_size", tcfg.distill_chunk_size),
+                    (
+                        "distill_checkpoint",
+                        tcfg.distill_checkpoint if tcfg.distill_checkpoint else None,
+                    ),
                 ) if value is not None
             ]
             raise ValueError(
