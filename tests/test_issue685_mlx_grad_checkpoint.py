@@ -53,6 +53,16 @@ def _install_fake_mlx(monkeypatch):
     mlx_core = types.ModuleType("mlx.core")
     mlx_optimizers = types.ModuleType("mlx.optimizers")
     mlx_optimizers.AdamW = lambda **kwargs: object()
+    # #686 builds a real LR schedule, so the MLX path reaches these three
+    # builders on the default config (scheduler="cosine"). A fake defining only
+    # AdamW raises AttributeError from `mlx_optim.build_lr_schedule`. Recording
+    # stubs; the real curve is asserted against the real library in
+    # tests/test_issue686_mlx_optimizer_schedule.py.
+    mlx_optimizers.linear_schedule = lambda init, end, steps: (lambda step: end)
+    mlx_optimizers.cosine_decay = lambda init, steps: (lambda step: init)
+    mlx_optimizers.join_schedules = lambda scheds, boundaries: (
+        lambda step: scheds[-1](step)
+    )
 
     mlx_lm = types.ModuleType("mlx_lm")
     mlx_lm_tuner = types.ModuleType("mlx_lm.tuner")
