@@ -654,7 +654,7 @@ class TestTheMaskActuallyReachesTraining:
         assert not isinstance(seen.get("train_dataset"), MaskedChatDataset)
 
 
-class TestAnUnsupportedTemplateFailsBeforeTheModelLoads:
+class TestAnUnsupportedTemplateFailsBeforeTheTrainingLoop:
     """#683 review, blocking: `qwen3-8b-sft-mlx` is a shipped recipe, and
     Qwen3's template injects its empty thinking block only for the *last*
     assistant message -- so it is not prefix-stable at any earlier assistant
@@ -664,6 +664,13 @@ class TestAnUnsupportedTemplateFailsBeforeTheModelLoads:
     `MaskedChatDataset.process` is called lazily by `CacheDataset`, so the
     error arrived after an 8B model had loaded, LoRA was applied and
     `Starting training...` had printed.
+
+    The refusal still happens after the model load and after LoRA -- `setup()`
+    loads the model at mlx_sft.py:191 and the probe runs at mlx_sft.py:376.
+    What moved is that it now precedes mlx-lm's `train()` and the training
+    loop. The class was originally named ...FailsBeforeTheModelLoads, which
+    asserted a property no test here can observe: the harness sets
+    `wrapper.model` directly, so load ordering is invisible to it.
     """
 
     def test_the_refusal_happens_before_train_is_called(self, tmp_path, monkeypatch):
