@@ -14,10 +14,13 @@ reason this file exists.
 """
 
 import inspect
+import sys
+from typing import Any, Dict, List, Tuple
 
 import pytest
 
 from soup_cli.trainer.mlx_optim import (
+    _OPTIMIZER_MAP,
     MlxOptimizerError,
     OptimizerPlan,
     build_lr_schedule,
@@ -381,3 +384,145 @@ class TestTheWrapperPassesUpdatesNotIterations:
                 tmp_path, rows=8, epochs=1, batch_size=1, optimizer="adam_mini",
                 gradient_accumulation_steps=1,
             )
+
+
+# --------------------------------------------------------------------------
+# Construction wiring. @MakazhanAlpamys's review of #734 found three mutations
+# that survive everything above, the last of which is #686 verbatim:
+#
+#   kwargs["weight_decay"] = plan.weight_decay  ->  pass          SURVIVED
+#   getattr(optim, plan.optimizer_name)         ->  always AdamW  SURVIVED
+#   build_optimizer(plan)  ->  optim.AdamW(learning_rate=lr)      SURVIVED
+#
+# The cause is structural: everything above asserts the PLAN, and
+# `as_metadata()` is derived from that same plan, so no metadata assertion can
+# ever observe a broken `build_optimizer`. The one test that did reach the
+# constructor was `importorskip`-gated and therefore ran on no CI job.
+#
+# These assert what the constructor is actually called with, through the same
+# fake-MLX harness, so they run on Linux and Windows too.
+# --------------------------------------------------------------------------
+
+
+def _record_optimizer_calls(monkeypatch):
+    """Make every MLX optimizer class record `(name, kwargs)` when constructed.
+
+    Layered on top of `_install_fake_mlx`, which defines only `AdamW` and
+    discards its kwargs. Every class `_OPTIMIZER_MAP` can resolve to is
+    installed, so "the wrong class was constructed" is observable as the wrong
+    name rather than as an AttributeError that any missing class would produce.
+    """
+    optim = sys.modules["mlx.optimizers"]
+    calls: List[Tuple[str, Dict[str, Any]]] = []
+
+    def _make(name):
+        def _ctor(**kwargs):
+            calls.append((name, kwargs))
+            return object()
+
+        return _ctor
+
+    for cls_name in sorted(set(_OPTIMIZER_MAP.values())):
+        monkeypatch.setattr(optim, cls_name, _make(cls_name), raising=False)
+    return calls
+
+
+class TestThePlannedOptimizerIsTheOneConstructed:
+    def test_the_configured_decay_reaches_the_constructor(self, tmp_path, monkeypatch):
+        """Not the metadata -- the constructor. `as_metadata()` reads the same
+        plan the metadata tests assert, so it reports 0.3 whether or not the
+        kwarg is ever passed."""
+        _install_fake_mlx(monkeypatch)
+        calls = _record_optimizer_calls(monkeypatch)
+        _run_wrapper(
+            tmp_path, rows=8, epochs=1, batch_size=1, weight_decay=0.3,
+            gradient_accumulation_steps=1,
+        )
+        assert len(calls) == 1
+        name, kwargs = calls[0]
+        assert name == "AdamW"
+        assert kwargs["weight_decay"] == pytest.approx(0.3), (
+            "the configured weight decay never reached the optimizer; the run "
+            "trained at MLX's default decay while the metadata reported 0.3"
+        )
+
+    def test_an_optimizer_that_takes_no_decay_is_constructed_without_it(
+        self, tmp_path, monkeypatch
+    ):
+        """Control for the test above: `weight_decay` must be passed because
+        the plan says to, not unconditionally. Adam's MLX constructor has no
+        such parameter, so passing it would TypeError on real MLX."""
+        _install_fake_mlx(monkeypatch)
+        calls = _record_optimizer_calls(monkeypatch)
+        _run_wrapper(
+            tmp_path, rows=8, epochs=1, batch_size=1, optimizer="adagrad",
+            weight_decay=0.0, gradient_accumulation_steps=1,
+        )
+        assert calls[0][0] == "Adagrad"
+        assert "weight_decay" not in calls[0][1]
+
+    @pytest.mark.parametrize(
+        "soup_name,mlx_name",
+        # Only names `TrainingConfig` will actually accept: `optimizer` is
+        # validated against `utils.optimizer_zoo`, and five keys in
+        # `_OPTIMIZER_MAP` (adam, adamw, lion, adamax, adadelta) are not in
+        # that allowlist, so no valid config can reach them.
+        [
+            ("sgd", "SGD"),
+            ("adagrad", "Adagrad"),
+            ("rmsprop", "RMSprop"),
+            ("adamw_torch", "AdamW"),
+        ],
+    )
+    def test_the_configured_optimizer_class_is_the_one_constructed(
+        self, tmp_path, monkeypatch, soup_name, mlx_name
+    ):
+        """The defect #686 reports is that every name silently became AdamW.
+        Three of these four cases are indistinguishable from that behaviour in
+        the metadata, which is resolved from the plan."""
+        _install_fake_mlx(monkeypatch)
+        calls = _record_optimizer_calls(monkeypatch)
+        _run_wrapper(
+            tmp_path, rows=8, epochs=1, batch_size=1, optimizer=soup_name,
+            weight_decay=0.0, gradient_accumulation_steps=1,
+        )
+        assert calls[0][0] == mlx_name, (
+            f"training.optimizer={soup_name!r} was planned as {mlx_name} and "
+            f"constructed as {calls[0][0]} -- a silent substitution is exactly "
+            "what this issue is about"
+        )
+
+    def test_the_learning_rate_passed_is_the_schedule_not_a_bare_scalar(
+        self, tmp_path, monkeypatch
+    ):
+        """#686 verbatim: `optim.AdamW(learning_rate=lr)`.
+
+        That mutation keeps the class right and the metadata right, so it is
+        caught only here. A configuration with warmup must hand the optimizer
+        a callable; the old code handed it a float.
+        """
+        _install_fake_mlx(monkeypatch)
+        calls = _record_optimizer_calls(monkeypatch)
+        _run_wrapper(
+            tmp_path, rows=48, epochs=1, batch_size=1, scheduler="cosine",
+            warmup_ratio=0.25, weight_decay=0.1, gradient_accumulation_steps=1,
+        )
+        lr = calls[0][1]["learning_rate"]
+        assert callable(lr), (
+            "the optimizer was given a constant learning rate on a config that "
+            "asked for cosine decay with warmup -- the reverted #686 behaviour"
+        )
+
+    def test_but_a_constant_schedule_still_passes_a_plain_float(
+        self, tmp_path, monkeypatch
+    ):
+        """Control: `callable` above must distinguish configurations, not
+        merely hold for everything. The no-warmup constant path is the one
+        that must construct exactly what the old code did."""
+        _install_fake_mlx(monkeypatch)
+        calls = _record_optimizer_calls(monkeypatch)
+        _run_wrapper(
+            tmp_path, rows=8, epochs=1, batch_size=1, scheduler="constant",
+            warmup_ratio=0.0, lr=3e-4, gradient_accumulation_steps=1,
+        )
+        assert calls[0][1]["learning_rate"] == pytest.approx(3e-4)

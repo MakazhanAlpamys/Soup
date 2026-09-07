@@ -173,13 +173,19 @@ training:
   # accumulation window (#696), moving the step count this harness reports
   # out from under any published benchmark record that assumes 1:1 rows-to-iters.
   gradient_accumulation_steps: 1
-  # Pinned, not left at the schema defaults of `cosine` / 0.03 (#686). Once
-  # MLX honours the schedule, the published record's constant 1.000e-04 becomes
-  # a warmup-then-cosine curve, which moves the `loss` column (3.639 -> 0.107
-  # for Qwen2.5-0.5B) without moving anything the table labels as a schedule.
+  # Pinned, not left at the schema defaults of `cosine` / 0.03 / 0.01 (#686).
+  # Once MLX honours the schedule, the published record's constant 1.000e-04
+  # becomes a warmup-then-cosine curve, so the `loss` column no longer ends at
+  # the 0.107 the record reports for Qwen2.5-0.5B -- it moves to some other
+  # value, under a table that labels no schedule at all.
+  # `weight_decay` is pinned for the same reason and not because it moves
+  # today: the schema default (0.01) happens to equal MLX AdamW's own default,
+  # so the record is reproducible by coincidence. If either moves, the curve
+  # changes silently.
   # A published record must not depend on a schema default it never mentions.
   scheduler: constant
   warmup_ratio: 0.0
+  weight_decay: 0.01
   lora:
     r: 8
     alpha: 16
