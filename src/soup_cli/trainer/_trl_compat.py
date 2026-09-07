@@ -120,6 +120,21 @@ def prompt_length_kwargs(config_cls: type, max_prompt_length: int) -> dict[str, 
     return {}
 
 
+def kl_penalty_kwargs(config_cls: type, kl_penalty: float) -> dict[str, float]:
+    """``{'kl_coef': x}`` or ``{'init_kl_coef': x}``, whichever this trl takes.
+
+    trl renamed ``init_kl_coef`` to ``kl_coef``. Asking for the new name first
+    matters more than the usual rename: an unrecognised keyword here was never
+    an error, it was silently dropped, so a PPO run kept going with trl's own
+    default KL strength rather than the configured one. Empty dict if neither
+    name exists, so a third rename fails the same visible way this one did not.
+    """
+    for name in ("kl_coef", "init_kl_coef"):
+        if config_accepts(config_cls, name):
+            return {name: kl_penalty}
+    return {}
+
+
 def _truncate_tokens(tokens: list[int], limit: int, mode: str) -> list[int]:
     """Truncate one token sequence using TRL's preference-side convention."""
     if limit <= 0:

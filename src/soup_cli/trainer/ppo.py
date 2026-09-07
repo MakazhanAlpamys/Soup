@@ -78,6 +78,8 @@ class PPOTrainerWrapper:
         from datasets import Dataset
 
         # Import PPOTrainer/PPOConfig — trl >=0.28 moved to trl.experimental
+        from soup_cli.trainer._trl_compat import kl_penalty_kwargs
+
         ppo_trainer_cls, ppo_config_cls, is_experimental = _import_ppo_classes()
 
         # Enable Rich progress bar for HuggingFace downloads
@@ -176,8 +178,17 @@ class PPOTrainerWrapper:
 
         if "cliprange" in ppo_params:
             ppo_kwargs["cliprange"] = tcfg.ppo_clip_ratio
-        if "init_kl_coef" in ppo_params:
-            ppo_kwargs["init_kl_coef"] = tcfg.ppo_kl_penalty
+
+        # trl renamed init_kl_coef -> kl_coef. Only init_kl_coef was checked, so
+        # on trl >= 0.29 the configured penalty was dropped and PPO silently ran
+        # at the library default.
+        ppo_kwargs.update(kl_penalty_kwargs(ppo_config_cls, tcfg.ppo_kl_penalty))
+
+        # training.epochs was only reaching the legacy manual loop (self._num_epochs),
+        # so the built-in trainer ran trl's default budget. ppo_epochs above is a
+        # different setting: optimization passes per batch, not dataset epochs.
+        if "num_train_epochs" in ppo_params:
+            ppo_kwargs["num_train_epochs"] = tcfg.epochs
 
         # Optional params that may not exist in all trl versions
         if "log_with" in ppo_params:
