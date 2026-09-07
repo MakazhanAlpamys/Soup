@@ -532,7 +532,7 @@ training:
 Variants:
 
 - **standard** — DeepSeek-R1-style baseline (delegates to TRL's `compute_loss`).
-- **gspo** — group-stabilised importance ratio with per-batch control variate.
+- **gspo** — Group Sequence Policy Optimization (sequence-level length-normalized ratio with clipping).
 - **dapo** — decoupled asymmetric clipping (`eps_lo=0.2, eps_hi=0.28`).
 - **dr_grpo** — token-sum without per-sample length normalisation.
 - **bnpo** — length-normalised PPO surrogate.
