@@ -433,6 +433,32 @@ class TestItReachesTheWireNotJustTheDataclass:
             f"before the wire: {sorted(fields - _ALLOWED_KEYS)}"
         )
 
+    def test_every_dataclass_field_survives_to_payload(self):
+        """The third copy of the field names, which the allowlist guard misses.
+
+        `_ALLOWED_KEYS` is not the only hand-maintained list: `to_payload`
+        iterates its own key tuple, and a field present in both the dataclass
+        and the allowlist is still dropped if it is absent from that tuple.
+        That is the same defect this class exists for — a value declared
+        everywhere the tests look and lost at the one layer they do not.
+        """
+        from soup_cli.utils.sse_train_stream import TrainEvent, to_payload
+
+        # Every field populated with a distinct non-None value, so nothing is
+        # omitted by the None-filter rather than by the tuple.
+        populated = {
+            name: ("metric" if name == "type" else "m" if name == "message" else float(i + 1))
+            for i, name in enumerate(TrainEvent.__dataclass_fields__)
+        }
+        populated["step"] = 7
+        payload = to_payload(TrainEvent(**populated))
+
+        missing = set(TrainEvent.__dataclass_fields__) - set(payload)
+        assert not missing, (
+            f"TrainEvent fields never written by to_payload and therefore "
+            f"dropped before the wire: {sorted(missing)}"
+        )
+
 
 class TestStickyForThePanelPerCallForTheRecord:
     """Review finding on #713: the sticky value was persisted as well as shown.
