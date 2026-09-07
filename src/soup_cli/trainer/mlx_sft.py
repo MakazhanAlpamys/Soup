@@ -135,7 +135,24 @@ class MLXSFTTrainerWrapper:
 
     def _check_unsupported(self) -> None:
         tcfg = self.config.training
+        dcfg = self.config.data
         unsupported = []
+        # #683 review: the per-message `train` field has no MLX equivalent --
+        # `MaskedChatDataset` supervises every assistant turn and reads no
+        # per-message flag. It looked rejected only because the mutual-
+        # exclusion validator fires while `train_on_responses_only` is at its
+        # `true` default; set that to false and the field was dropped in
+        # silence, which is the shape of the defect #683 reports.
+        if getattr(dcfg, "train_on_messages_with_train_field", False):
+            unsupported.append(
+                "data.train_on_messages_with_train_field (MLX supervises "
+                "every assistant turn; the per-message flag is not read)"
+            )
+        if getattr(dcfg, "train_on_prompt", False):
+            unsupported.append(
+                "data.train_on_prompt (MLX masks the prompt or supervises the "
+                "whole sequence; there is no per-field switch)"
+            )
         if tcfg.quantization == "8bit":
             unsupported.append("quantization=8bit (use mlx-community 4bit models)")
         if tcfg.use_galore:
@@ -364,13 +381,32 @@ class MLXSFTTrainerWrapper:
         if use_token_mask:
             from soup_cli.trainer.mlx_masking import (
                 MaskedChatDataset,
+                ResponseMaskError,
                 masked_iterate_batches,
                 masked_loss,
             )
 
-            train_dataset = CacheDataset(
-                MaskedChatDataset(train_rows, self.tokenizer, chat_key=_CHAT_KEY)
+            masked_train = MaskedChatDataset(
+                train_rows, self.tokenizer, chat_key=_CHAT_KEY
             )
+            # Probe row 0 now. `process` is otherwise called lazily by
+            # `CacheDataset` from inside `train()`, so a template this cannot
+            # mask -- Qwen3's, which injects its thinking block only for the
+            # last assistant turn and is therefore not prefix-stable at any
+            # earlier one -- surfaced after the model had loaded, LoRA was
+            # applied and "Starting training..." had printed. The refusal is
+            # correct; its timing was not.
+            if train_rows:
+                try:
+                    masked_train.process(train_rows[0])
+                except ResponseMaskError as exc:
+                    raise ResponseMaskError(
+                        f"{exc}. Set `data.train_on_responses_only: false` to "
+                        "train on the full sequence on this model, or run the "
+                        "recipe on the transformers backend."
+                    ) from exc
+
+            train_dataset = CacheDataset(masked_train)
             val_dataset = (
                 CacheDataset(
                     MaskedChatDataset(val_rows, self.tokenizer, chat_key=_CHAT_KEY)

@@ -377,3 +377,370 @@ class TestTheDispatchPicksTheRightStrategyPerShape:
 
         plan = plan_response_masking(True, {})
         assert plan.token_mask is False and plan.mask_prompt is False
+
+
+# --------------------------------------------------------------------------
+# @MakazhanAlpamys's review of #683 found four mutations that survive
+# everything above, and the reason they do is that everything above tests
+# `mlx_masking.py` -- never `mlx_sft.py`, which is where the feature is
+# CONNECTED. Two of the survivors are the feature reaching nothing at all:
+#
+#   use_token_mask = plan.token_mask       -> = False            SURVIVED
+#   delete the train hooks from train(...)                       SURVIVED
+#   "response_token_mask": use_token_mask  -> False              SURVIVED
+#   masks[:, 1:]                           -> masks[:, :-1]      SURVIVED on CI
+#
+# The last one was covered only by an `importorskip("mlx.core")` test, and the
+# `mlx-smoke` job runs a single smoke test rather than this file -- so it
+# executed on no CI job at all. He demonstrated that the shift is testable
+# without mlx; this is that stand-in.
+# --------------------------------------------------------------------------
+
+import sys  # noqa: E402
+import types  # noqa: E402
+
+import numpy as np  # noqa: E402
+
+
+def _install_numpy_mlx(monkeypatch):
+    """Register numpy-backed `mlx.core` / `mlx.nn` covering what `masked_loss`
+    uses: `array`, `maximum`, `float32` and `nn.losses.cross_entropy`.
+
+    Not a general MLX emulation -- it is only enough to observe *which input
+    positions the loss depends on*, which is the whole content of the
+    alignment claim. The real-MLX versions of these assertions are kept above;
+    this adds the same coverage on runners that have no MLX, which is all of
+    them.
+    """
+    core = types.ModuleType("mlx.core")
+    core.array = np.array
+    core.maximum = np.maximum
+    core.float32 = np.float32
+    core.zeros = np.zeros
+
+    nn = types.ModuleType("mlx.nn")
+    losses = types.ModuleType("mlx.nn.losses")
+
+    def cross_entropy(logits, targets, reduction="none"):
+        logits = np.asarray(logits, dtype=np.float64)
+        shifted = logits - logits.max(axis=-1, keepdims=True)
+        logsumexp = np.log(np.exp(shifted).sum(axis=-1)) + logits.max(axis=-1)
+        picked = np.take_along_axis(
+            logits, np.asarray(targets)[..., None], axis=-1
+        )[..., 0]
+        return logsumexp - picked
+
+    losses.cross_entropy = cross_entropy
+    nn.losses = losses
+
+    # A fresh package object, not the real `mlx` if one is installed:
+    # `import mlx.core as mx` falls back to `getattr(mlx, "core")`, so reusing
+    # the real package would hand back the real submodule and this stand-in
+    # would silently not be under test. (It did, on this machine, until the
+    # real cross_entropy rejected a numpy array.)
+    root = types.ModuleType("mlx")
+    root.core, root.nn = core, nn
+    nn.losses = losses
+    for name, mod in (("mlx", root), ("mlx.core", core), ("mlx.nn", nn),
+                      ("mlx.nn.losses", losses)):
+        monkeypatch.setitem(sys.modules, name, mod)
+
+
+class TestMaskedLossAlignmentOnEveryRunner:
+    """The same alignment claim as `TestMaskedLossAlignment`, without MLX.
+
+    That class is `importorskip`-gated and the `mlx-smoke` job does not run
+    this file, so on CI the off-by-one was pinned by nothing.
+    """
+
+    def test_the_mask_is_shifted_to_match_the_targets(self, monkeypatch):
+        _install_numpy_mlx(monkeypatch)
+        from soup_cli.trainer.mlx_masking import masked_loss
+
+        batch = np.array([[10, 11, 12, 13, 14, 15]])
+        masks = np.array([[0, 0, 0, 0, 1, 1]])
+        seen = {}
+
+        def fake_model(inputs):
+            seen["shape"] = inputs.shape
+            return np.zeros((inputs.shape[0], inputs.shape[1], 20))
+
+        _, ntoks = masked_loss(fake_model, batch, masks)
+        assert seen["shape"] == (1, 5), "the model must see batch[:, :-1]"
+        assert int(ntoks) == 2
+
+    def test_the_supervised_positions_are_the_assistant_tokens_not_the_one_before(
+        self, monkeypatch
+    ):
+        """The count alone can coincide; this pins *which* positions.
+
+        An unshifted mask supervises the last prompt token instead of the
+        first assistant token -- the same defect this issue is about, moved by
+        one. The logits are perturbed one input position at a time and the
+        positions the loss actually responds to are recorded.
+        """
+        _install_numpy_mlx(monkeypatch)
+        from soup_cli.trainer.mlx_masking import masked_loss
+
+        batch = np.array([[10, 11, 12, 13, 14, 15]])
+        masks = np.array([[0, 0, 0, 1, 1, 0]])
+
+        def model_with_bump(pos):
+            def _model(inputs):
+                logits = np.zeros((inputs.shape[0], inputs.shape[1], 20))
+                if pos is not None:
+                    logits[0, pos, :] += 5.0
+                    logits[0, pos, 0] -= 5.0
+                return logits
+
+            return _model
+
+        base = float(masked_loss(model_with_bump(None), batch, masks)[0])
+        responsive = [
+            pos
+            for pos in range(batch.shape[1] - 1)
+            if float(masked_loss(model_with_bump(pos), batch, masks)[0]) != base
+        ]
+        # masks[:, 1:] = [0,0,1,1,0]: input positions 2 and 3 predict targets
+        # at original indices 3 and 4, which are the masked-in tokens.
+        assert responsive == [2, 3], (
+            f"the loss depends on input positions {responsive}; an unshifted "
+            "mask would make it depend on [3, 4] and supervise the token "
+            "before each assistant token"
+        )
+
+    def test_a_fully_truncated_row_yields_zero_rather_than_nan(self, monkeypatch):
+        _install_numpy_mlx(monkeypatch)
+        from soup_cli.trainer.mlx_masking import masked_loss
+
+        batch = np.array([[10, 11, 12, 13]])
+        masks = np.array([[0, 0, 0, 0]])
+        loss, ntoks = masked_loss(
+            lambda inputs: np.zeros((inputs.shape[0], inputs.shape[1], 20)),
+            batch,
+            masks,
+        )
+        assert int(ntoks) == 0
+        assert float(loss) == 0.0 and float(loss) == float(loss)
+
+
+# --------------------------------------------------------------------------
+# Wiring. Everything above this point tests `mlx_masking.py`; the survivors
+# live in `mlx_sft.py`, where the feature is connected. The fake-MLX harness
+# already drives that code -- inserting a `raise` at `use_token_mask =
+# plan.token_mask` fails 23 existing tests -- so only the assertions were
+# missing.
+# --------------------------------------------------------------------------
+
+import json  # noqa: E402
+
+from tests.test_issue634_mlx_resume import (  # noqa: E402
+    _FakeMlxModel,
+    _install_fake_mlx,
+)
+
+
+def _run_wrapper(tmp_path, monkeypatch, rows, *, responses_only=True, tokenizer=None):
+    """Run `MLXSFTTrainerWrapper.train()` against the fake MLX harness and
+    return `(adapter metadata, kwargs the fake train() was called with)`."""
+    from soup_cli.config.schema import DataConfig, SoupConfig, TrainingConfig
+    from soup_cli.trainer.mlx_sft import MLXSFTTrainerWrapper
+
+    seen: dict = {}
+
+    def _recording_train(**kwargs):
+        seen.update(kwargs)
+        callback = kwargs.get("training_callback")
+        if callback is not None:
+            callback.on_train_loss_report({"train_loss": 0.5})
+
+    monkeypatch.setattr(
+        sys.modules["mlx_lm.tuner.trainer"], "train", _recording_train
+    )
+
+    cfg = SoupConfig(
+        base="mlx-community/Llama-3.1-8B-Instruct-4bit",
+        task="sft",
+        backend="mlx",
+        data=DataConfig(
+            train="./data/train.jsonl",
+            format="chatml",
+            train_on_responses_only=responses_only,
+        ),
+        training=TrainingConfig(epochs=1, batch_size=1),
+        output=str(tmp_path),
+    )
+    w = MLXSFTTrainerWrapper(cfg)
+    w.model = _FakeMlxModel()
+    w.tokenizer = tokenizer if tokenizer is not None else FakeChatTokenizer()
+    w._dataset = {"train": list(rows), "val": []}
+    w.train()
+    return json.loads((tmp_path / "adapter_config.json").read_text()), seen
+
+
+CHAT_ROWS = [{"messages": MULTI_TURN}] * 4
+
+
+class TestTheMaskActuallyReachesTraining:
+    def test_train_receives_the_masked_loss_and_batch_iterator(
+        self, tmp_path, monkeypatch
+    ):
+        """The survivor: deleting the train hooks left the suite green while
+        the run trained through upstream's unmasked default loss."""
+        _install_fake_mlx(monkeypatch)
+        from soup_cli.trainer.mlx_masking import masked_iterate_batches, masked_loss
+
+        _, seen = _run_wrapper(tmp_path, monkeypatch, CHAT_ROWS)
+
+        assert seen.get("loss") is masked_loss, (
+            "train() ran with upstream's default loss; the per-token mask was "
+            "computed and then never applied"
+        )
+        assert seen.get("iterate_batches") is masked_iterate_batches
+
+    def test_the_chat_path_builds_a_masked_dataset(self, tmp_path, monkeypatch):
+        """`use_token_mask = plan.token_mask -> False` survived: the plan was
+        asserted exhaustively and nothing checked what it selected."""
+        _install_fake_mlx(monkeypatch)
+        from soup_cli.trainer.mlx_masking import MaskedChatDataset
+
+        _, seen = _run_wrapper(tmp_path, monkeypatch, CHAT_ROWS)
+
+        # `CacheDataset` is identity in the fake harness, so the dataset that
+        # reaches train() is the object the wrapper chose.
+        assert isinstance(seen.get("train_dataset"), MaskedChatDataset)
+
+    def test_with_the_flag_off_nothing_is_masked(self, tmp_path, monkeypatch):
+        """Reject-everything control: the assertions above must distinguish
+        configurations, not hold for every run."""
+        _install_fake_mlx(monkeypatch)
+        from soup_cli.trainer.mlx_masking import MaskedChatDataset
+
+        meta, seen = _run_wrapper(
+            tmp_path, monkeypatch, CHAT_ROWS, responses_only=False
+        )
+
+        assert "loss" not in seen and "iterate_batches" not in seen
+        assert not isinstance(seen.get("train_dataset"), MaskedChatDataset)
+        assert meta["response_token_mask"] is False
+
+    def test_the_adapter_records_that_the_mask_ran(self, tmp_path, monkeypatch):
+        """Acceptance criterion 5. A repo-wide grep for the `mask_prompt` key
+        in tests/ returned nothing before this."""
+        _install_fake_mlx(monkeypatch)
+        meta, _ = _run_wrapper(tmp_path, monkeypatch, CHAT_ROWS)
+
+        assert meta["response_token_mask"] is True
+        assert meta["mask_prompt"] is False, (
+            "upstream's single-prefix flag must stay off on the chat path -- "
+            "the two mask different things and setting both would double-mask"
+        )
+        assert meta["train_on_responses_only"] is True
+
+    def test_prompt_completion_rows_use_upstreams_flag_not_the_token_mask(
+        self, tmp_path, monkeypatch
+    ):
+        """The other half of the dispatch, end to end: upstream's `mask_prompt`
+        is correct for a single prefix, and Soup's mask is not used."""
+        _install_fake_mlx(monkeypatch)
+        from soup_cli.trainer.mlx_masking import MaskedChatDataset
+
+        meta, seen = _run_wrapper(
+            tmp_path, monkeypatch, [{"prompt": "q", "completion": "a"}] * 4
+        )
+
+        assert meta["mask_prompt"] is True
+        assert meta["response_token_mask"] is False
+        assert not isinstance(seen.get("train_dataset"), MaskedChatDataset)
+
+
+class TestAnUnsupportedTemplateFailsBeforeTheModelLoads:
+    """#683 review, blocking: `qwen3-8b-sft-mlx` is a shipped recipe, and
+    Qwen3's template injects its empty thinking block only for the *last*
+    assistant message -- so it is not prefix-stable at any earlier assistant
+    turn and multi-turn rows are refused.
+
+    Refusing is right. Refusing from inside the training loop is not:
+    `MaskedChatDataset.process` is called lazily by `CacheDataset`, so the
+    error arrived after an 8B model had loaded, LoRA was applied and
+    `Starting training...` had printed.
+    """
+
+    def test_the_refusal_happens_before_train_is_called(self, tmp_path, monkeypatch):
+        _install_fake_mlx(monkeypatch)
+        from soup_cli.trainer.mlx_masking import ResponseMaskError
+
+        with pytest.raises(ResponseMaskError):
+            _run_wrapper(
+                tmp_path,
+                monkeypatch,
+                CHAT_ROWS,
+                tokenizer=FakeChatTokenizer(prefix_stable=False),
+            )
+        assert not (tmp_path / "adapter_config.json").exists(), (
+            "the run got as far as writing adapter metadata before the "
+            "template was found to be unsupported"
+        )
+
+    def test_the_refusal_names_the_setting_to_change(self, tmp_path, monkeypatch):
+        """A refusal that does not say what to do is a wall. The remedy is a
+        config key, so it can be named exactly."""
+        _install_fake_mlx(monkeypatch)
+        from soup_cli.trainer.mlx_masking import ResponseMaskError
+
+        with pytest.raises(ResponseMaskError, match="train_on_responses_only"):
+            _run_wrapper(
+                tmp_path,
+                monkeypatch,
+                CHAT_ROWS,
+                tokenizer=FakeChatTokenizer(prefix_stable=False),
+            )
+
+    def test_a_supported_template_is_not_refused(self, tmp_path, monkeypatch):
+        """Control: the probe must reject templates, not all runs."""
+        _install_fake_mlx(monkeypatch)
+        meta, seen = _run_wrapper(tmp_path, monkeypatch, CHAT_ROWS)
+        assert meta["response_token_mask"] is True and "loss" in seen
+
+
+class TestTheUnsupportedPerMessageFlagIsSaidOutLoud:
+    """#683 criterion 4 is "supported equivalently **or** rejected".
+
+    `train_on_messages_with_train_field` was neither: it looked rejected only
+    because the mutual-exclusion validator fires while
+    `train_on_responses_only` is at its `true` default. With that set to
+    false, the field was accepted and dropped without a word.
+    """
+
+    def _warned(self, monkeypatch, **data):
+        from soup_cli.config.schema import DataConfig, SoupConfig, TrainingConfig
+        from soup_cli.trainer.mlx_sft import MLXSFTTrainerWrapper
+
+        printed = []
+        monkeypatch.setattr(
+            "soup_cli.trainer.mlx_sft.console",
+            types.SimpleNamespace(print=lambda msg, *a, **k: printed.append(str(msg))),
+        )
+        cfg = SoupConfig(
+            base="mlx-community/Llama-3.1-8B-Instruct-4bit",
+            task="sft",
+            backend="mlx",
+            data=DataConfig(train="./data/train.jsonl", format="chatml", **data),
+            training=TrainingConfig(epochs=1, batch_size=1),
+            output="./out",
+        )
+        MLXSFTTrainerWrapper(cfg)._check_unsupported()
+        return "\n".join(printed)
+
+    def test_the_per_message_train_field_is_reported_as_ignored(self, monkeypatch):
+        out = self._warned(
+            monkeypatch,
+            train_on_responses_only=False,
+            train_on_messages_with_train_field=True,
+        )
+        assert "train_on_messages_with_train_field" in out
+
+    def test_nothing_is_reported_for_a_plain_config(self, monkeypatch):
+        """Reject-everything control: the warning must depend on the setting."""
+        out = self._warned(monkeypatch, train_on_responses_only=True)
+        assert "train_on_messages_with_train_field" not in out
