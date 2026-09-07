@@ -149,6 +149,17 @@ class MLXSFTTrainerWrapper:
             unsupported.append("training.seed (MLX seeds through mx.random)")
         if tcfg.data_seed is not None:
             unsupported.append("training.data_seed (MLX seeds through mx.random)")
+        if isinstance(tcfg.gradient_checkpointing, str):
+            console.print(
+                "[yellow]MLX backend: gradient_checkpointing tier "
+                f"'{tcfg.gradient_checkpointing}' means every block — mlx-lm "
+                "checkpoints all or nothing.[/]"
+            )
+        if self.config.data.train_on_messages_with_train_field:
+            unsupported.append(
+                "data.train_on_messages_with_train_field "
+                "(mlx-lm masks whole prompts only, not per message)"
+            )
         if unsupported:
             console.print(
                 "[yellow]MLX backend ignores: " + ", ".join(unsupported) + "[/]"
@@ -300,6 +311,7 @@ class MLXSFTTrainerWrapper:
         # irrelevant (val_dataset stays None and mlx-lm skips evaluation).
         steps_per_eval = max(1, iters // 4) if val_rows else max(1000, iters + 1)
         grad_accumulation_steps = int(cfg.training.gradient_accumulation_steps)
+        grad_checkpoint = bool(cfg.training.gradient_checkpointing)
         # mlx-lm updates the optimizer only when it % accum == 0 (trainer.py) and
         # never flushes a partial group, so round iters down to a whole number of
         # groups, keeping at least one group so a small dataset does not train
@@ -319,6 +331,22 @@ class MLXSFTTrainerWrapper:
             adapter_file=str(output_dir / "adapters.safetensors"),
             grad_accumulation_steps=grad_accumulation_steps,
         )
+        # `data.train_on_responses_only` defaults to True and every transformers
+        # trainer honours it, but MLX read it from nothing: mlx-lm's
+        # `create_dataset` pulls `mask_prompt` off the args object with a
+        # getattr default of False, and `TrainingArgs` has no such field. Every
+        # MLX SFT run therefore trained on the prompt too — invisible on a chat
+        # dataset, ruinous on one with a long shared system prompt, where the
+        # prompt tokens are most of the loss. TrainingArgs is a plain dataclass,
+        # so the attribute the loader looks for is set here.
+        mask_prompt = bool(cfg.data.train_on_responses_only)
+        args.mask_prompt = mask_prompt
+        # Same shape of gap for `training.gradient_checkpointing`: mlx-lm's
+        # TrainingArgs has the field, and this trainer passed a hardcoded False,
+        # so the only knob that makes a long-prompt dataset fit in Metal memory
+        # did nothing on this backend. mlx-lm checkpoints every block or none —
+        # the tier strings have no MLX equivalent and all mean "on" here.
+        args.grad_checkpoint = grad_checkpoint
 
         train_dataset = CacheDataset(create_dataset(train_rows, self.tokenizer, args))
         val_dataset = (
@@ -446,8 +474,8 @@ class MLXSFTTrainerWrapper:
                     "lora_parameters": build_mlx_adapter_config(
                         lora_cfg, adapter_path=str(output_dir)
                     )["lora_parameters"],
-                    "mask_prompt": False,
-                    "grad_checkpoint": False,
+                    "mask_prompt": mask_prompt,
+                    "grad_checkpoint": grad_checkpoint,
                     "grad_accumulation_steps": grad_accumulation_steps,
                 },
                 indent=2,
