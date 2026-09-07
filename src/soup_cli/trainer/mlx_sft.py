@@ -359,6 +359,78 @@ class MLXSFTTrainerWrapper:
             carrying a real value on another is worse than an absent one.
             """
 
+            # #23: the last MEASURED validation loss, for the panel only.
+            # An evaluation happens every `steps_per_eval` iterations, so the
+            # panel must keep showing the last one between passes. It must NOT
+            # be written to the tracker or the SSE wire on training steps --
+            # that fabricates measurements that never happened, which is the
+            # defect #713 was blocked on (9 persisted rows for 2 evaluations).
+            _sticky_val_loss = None
+
+            @staticmethod
+            def _as_float(value):
+                """mlx-lm hands back a Python float (`evaluate()` calls
+                `.item()`), but a future build returning an mx scalar must not
+                put an unserialisable object on the SSE wire."""
+                if value is None:
+                    return None
+                try:
+                    return float(value)
+                except (TypeError, ValueError):
+                    return None
+
+            def on_val_loss_report(self, val_info: dict) -> None:
+                """mlx-lm's validation hook — the #23 checklist item.
+
+                Payload is built at ``mlx_lm/tuner/trainer.py:310-315`` as
+                ``{"iteration": it - 1, "val_loss": float, "val_time": float}``.
+                Note ``it - 1``: upstream reports validation one behind the
+                training counter. That is recorded as sent rather than
+                corrected, so a row can be matched to upstream's own log line.
+                """
+                val_loss = self._as_float(val_info.get("val_loss"))
+                if val_loss is None:
+                    # A payload without the key is not an evaluation; recording
+                    # a None row would be indistinguishable from a real one.
+                    return
+                type(self)._sticky_val_loss = val_loss
+
+                step = int(val_info.get("iteration", 0) or 0)
+                epoch = (step / iters * total_epochs) if iters else 0.0
+
+                if display is not None:
+                    display.update(
+                        step=step,
+                        epoch=epoch,
+                        loss=captured.get("losses", [0.0])[-1] if captured.get("losses") else 0.0,
+                        lr=cfg.training.lr,
+                        val_loss=val_loss,
+                    )
+                if tracker is not None and run_id:
+                    try:
+                        tracker.log_metrics(
+                            run_id=run_id,
+                            step=step,
+                            epoch=epoch,
+                            val_loss=val_loss,
+                        )
+                    except Exception:  # noqa: BLE001 — telemetry must not kill a run
+                        pass
+                try:
+                    from soup_cli.utils.sse_train_stream import TrainEvent
+                    from soup_cli.utils.train_event_buffer import push_train_event
+
+                    push_train_event(
+                        TrainEvent(
+                            type="metric",
+                            step=step,
+                            epoch=float(epoch),
+                            val_loss=val_loss,
+                        )
+                    )
+                except Exception:  # noqa: BLE001 — telemetry must not kill a run
+                    pass
+
             def on_train_loss_report(self, train_info: dict) -> None:
                 loss = train_info.get("train_loss", 0.0)
                 captured.setdefault("losses", []).append(loss)
@@ -382,6 +454,11 @@ class MLXSFTTrainerWrapper:
                     lr=lr_value,
                     speed=speed,
                     gpu_mem=gpu_mem,
+                    # Sticky, and deliberately only here: the panel keeps the
+                    # last measured validation loss between evaluations, while
+                    # the tracker and the wire below receive nothing, so no row
+                    # or event claims a measurement that did not happen.
+                    val_loss=type(self)._sticky_val_loss,
                 )
                 if tracker is not None and run_id:
                     tracker.log_metrics(
