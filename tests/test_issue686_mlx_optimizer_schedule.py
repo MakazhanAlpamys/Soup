@@ -404,6 +404,48 @@ class TestTheWrapperPassesUpdatesNotIterations:
 # --------------------------------------------------------------------------
 
 
+def _record_schedule_calls(monkeypatch):
+    """Record which SCHEDULE BUILDER each config reaches, with its arguments.
+
+    @MakazhanAlpamys'"'"'s second review of #734: `callable(learning_rate)` proves
+    a schedule exists, not *which* one. Swapping the bodies of the `cosine` and
+    `linear` branches -- so every user asking for cosine gets a linear decay and
+    every user asking for linear gets a cosine -- survived all 116 tests, while
+    `as_metadata()` kept writing the requested name into `adapter_config.json`.
+    Dropping the warmup ramp survived too.
+
+    The only assertion that distinguished the two curves sampled them through
+    `lr_at()`, behind `importorskip("mlx.core")` -- so on every runner this
+    project has, the schedule'"'"'s identity was unverified.
+
+    `_install_fake_mlx` already defines these three builders; this records them
+    rather than redefining them, for the reason the module docstring gives.
+    """
+    optim = sys.modules["mlx.optimizers"]
+    calls: List[Tuple[str, Tuple[Any, ...]]] = []
+
+    def _make(name, ret):
+        def _builder(*args):
+            calls.append((name, args))
+            return ret(*args)
+
+        return _builder
+
+    monkeypatch.setattr(
+        optim, "cosine_decay",
+        _make("cosine_decay", lambda init, steps: (lambda step: init)),
+    )
+    monkeypatch.setattr(
+        optim, "linear_schedule",
+        _make("linear_schedule", lambda init, end, steps: (lambda step: end)),
+    )
+    monkeypatch.setattr(
+        optim, "join_schedules",
+        _make("join_schedules", lambda scheds, bounds: (lambda step: scheds[-1](step))),
+    )
+    return calls
+
+
 def _record_optimizer_calls(monkeypatch):
     """Make every MLX optimizer class record `(name, kwargs)` when constructed.
 
@@ -526,3 +568,105 @@ class TestThePlannedOptimizerIsTheOneConstructed:
             warmup_ratio=0.0, lr=3e-4, gradient_accumulation_steps=1,
         )
         assert calls[0][1]["learning_rate"] == pytest.approx(3e-4)
+
+
+class TestTheScheduleBuiltIsTheScheduleRequested:
+    """`callable(lr)` proves a schedule exists; it does not say which one.
+
+    Three mutations survived the whole suite before this class existed, and
+    all three keep `as_metadata()` writing the requested name into
+    `adapter_config.json` while the optimizer receives something else:
+
+      * swap the `cosine` and `linear` branch bodies -- every user asking for
+        cosine gets a linear decay, and vice versa;
+      * `if warmup <= 0: return body` -> `if True:` -- the warmup ramp is
+        never built, while `warmup_updates` still lands in the metadata.
+
+    The only test that distinguished the two curves sampled them through
+    `lr_at()`, behind `importorskip("mlx.core")`, so on every runner this
+    project has the schedule's identity was unverified. These assert the
+    recorded builder call instead, which needs no MLX.
+    """
+
+    def _builders(self, tmp_path, monkeypatch, **training):
+        _install_fake_mlx(monkeypatch)
+        calls = _record_schedule_calls(monkeypatch)
+        _run_wrapper(
+            tmp_path, rows=48, epochs=1, batch_size=1,
+            gradient_accumulation_steps=1, **training
+        )
+        return calls, [name for name, _ in calls]
+
+    def test_cosine_builds_a_cosine_decay_and_not_a_linear_one(
+        self, tmp_path, monkeypatch
+    ):
+        _, names = self._builders(
+            tmp_path, monkeypatch, scheduler="cosine", warmup_ratio=0.0
+        )
+        assert names == ["cosine_decay"], (
+            f"scheduler='cosine' built {names}; the plan and the adapter "
+            "metadata would still say 'cosine' either way"
+        )
+
+    def test_linear_builds_a_linear_schedule_and_not_a_cosine_one(
+        self, tmp_path, monkeypatch
+    ):
+        """The other half. Passing only one of these two is what a swapped
+        pair of branch bodies looks like."""
+        _, names = self._builders(
+            tmp_path, monkeypatch, scheduler="linear", warmup_ratio=0.0
+        )
+        assert names == ["linear_schedule"], (
+            f"scheduler='linear' built {names}"
+        )
+
+    def test_a_constant_schedule_builds_no_decay_curve_at_all(
+        self, tmp_path, monkeypatch
+    ):
+        """Reject-everything control: the two assertions above must depend on
+        the configuration, not hold for every run."""
+        _, names = self._builders(
+            tmp_path, monkeypatch, scheduler="constant", warmup_ratio=0.0
+        )
+        assert names == []
+
+    def test_warmup_builds_a_ramp_joined_at_the_warmup_boundary(
+        self, tmp_path, monkeypatch
+    ):
+        """`warmup_updates` reaching the metadata does not mean a ramp was
+        built. 0.25 of 48 updates is 12."""
+        calls, names = self._builders(
+            tmp_path, monkeypatch, scheduler="cosine", warmup_ratio=0.25
+        )
+        assert "join_schedules" in names, (
+            "no ramp was joined; the run starts at the peak learning rate "
+            "while adapter_config.json reports a warmup"
+        )
+        joined = dict((n, a) for n, a in calls)["join_schedules"]
+        assert joined[1] == [12], f"joined at boundary {joined[1]}, expected [12]"
+
+        ramp = [a for n, a in calls if n == "linear_schedule"]
+        assert ramp and ramp[0][0] == 0.0 and ramp[0][2] == 12, (
+            f"the ramp is {ramp}; it must rise from 0.0 over 12 updates"
+        )
+
+    def test_without_warmup_nothing_is_joined(self, tmp_path, monkeypatch):
+        """Control for the test above."""
+        _, names = self._builders(
+            tmp_path, monkeypatch, scheduler="cosine", warmup_ratio=0.0
+        )
+        assert "join_schedules" not in names
+
+    def test_the_decay_is_measured_from_the_warmup_boundary(
+        self, tmp_path, monkeypatch
+    ):
+        """`decay_steps = total - warmup`, asserted at the builder rather than
+        by sampling: 48 updates with 12 of warmup decays over 36."""
+        calls, _ = self._builders(
+            tmp_path, monkeypatch, scheduler="cosine", warmup_ratio=0.25
+        )
+        cosine = [a for n, a in calls if n == "cosine_decay"]
+        assert cosine and cosine[0][1] == 36, (
+            f"cosine_decay got decay_steps={cosine[0][1] if cosine else None}, "
+            "expected 36 (48 total - 12 warmup)"
+        )
