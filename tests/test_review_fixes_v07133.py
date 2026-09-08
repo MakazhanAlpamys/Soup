@@ -414,7 +414,15 @@ class TestMlxOptimizer:
 
         wrapper.train()
         assert "optimizer" in seen
-        assert seen["optimizer"] is sentinel
+        # `is sentinel` until gradient clipping landed: `training.max_grad_norm`
+        # is honoured by wrapping the constructed optimizer in a proxy that
+        # clips before delegating, so what reaches train() is that proxy. The
+        # assertion this test exists for -- train() receives the optimizer that
+        # was built, not None -- is unchanged: the proxy delegates every
+        # attribute, so reaching the sentinel through it is the same claim.
+        optimizer = seen["optimizer"]
+        assert optimizer is not None
+        assert optimizer is sentinel or optimizer.__dict__["_inner"] is sentinel
 
 
 # --------------------------------------------------------------------------

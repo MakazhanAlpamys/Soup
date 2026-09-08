@@ -87,6 +87,54 @@ def resolve_mlx_target_keys(lora_cfg: object) -> list[str]:
     return list(raw) if isinstance(raw, list) else [raw]
 
 
+class _GradientClippingOptimizer:
+    """An MLX optimizer that clips the global gradient norm before applying it.
+
+    ``training.max_grad_norm`` is honoured by every transformers trainer and
+    reached nothing on this backend: no MLX file read it, ``mlx_lm``'s
+    ``TrainingArgs`` has no such field, and its trainer clips nowhere -- so the
+    same config trained clipped on one backend and unclipped on the other,
+    silently.
+
+    Upstream applies gradients through exactly one call,
+    ``optimizer.update(model, grad)`` (``mlx_lm/tuner/trainer.py:259``), so
+    clipping is reachable by handing ``train()`` an optimizer that clips first,
+    without forking the training loop. That call site is inside a function
+    compiled with ``mx.compile(inputs=state, outputs=state)``
+    (``trainer.py:246-248``); this proxy was measured through that same
+    compiled shape rather than assumed to survive tracing.
+
+    Everything other than ``update`` delegates, because upstream reads
+    ``optimizer.state`` (``trainer.py:246``) and ``optimizer.learning_rate``
+    (``trainer.py:337``) off the object it is given -- including the callable
+    schedule, whose ``.step`` counter lives on the wrapped optimizer.
+    """
+
+    def __init__(self, inner: object, max_norm: float) -> None:
+        # Assigned through __dict__ so __getattr__ cannot recurse on them.
+        self.__dict__["_inner"] = inner
+        self.__dict__["_max_norm"] = float(max_norm)
+
+    def update(self, model: object, gradients: object) -> object:
+        import mlx.optimizers as optim  # heavy: imported at call time
+
+        gradients, _total_norm = optim.clip_grad_norm(gradients, self._max_norm)
+        return self._inner.update(model, gradients)
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self.__dict__["_inner"], name)
+
+    def __setattr__(self, name: str, value: object) -> None:
+        setattr(self.__dict__["_inner"], name, value)
+
+
+def _clipping_optimizer(inner: object, max_norm: float) -> object:
+    """Wrap ``inner`` so gradients are clipped at ``max_norm`` before they are
+    applied. ``max_grad_norm`` is schema-validated ``gt=0``, so there is no
+    "clipping off" configuration to represent."""
+    return _GradientClippingOptimizer(inner, max_norm)
+
+
 def build_mlx_adapter_config(lora_cfg: object, *, adapter_path: str, **extra: object) -> dict:
     """The ``lora_parameters`` block, keyed off the RESOLVED module list.
 
@@ -446,7 +494,13 @@ class MLXSFTTrainerWrapper:
         )
         for _warning in optimizer_plan.warnings:
             console.print(f"[yellow]MLX backend: {_warning}[/]")
-        optimizer = build_optimizer(optimizer_plan)
+        # #749: mlx-lm never clips, so the optimizer #686 built is wrapped in
+        # one that clips the global gradient norm before delegating. Applied
+        # here rather than inside build_optimizer so the plan stays a pure
+        # description of the schedule and the two fixes stay separable.
+        optimizer = _clipping_optimizer(
+            build_optimizer(optimizer_plan), float(cfg.training.max_grad_norm)
+        )
 
         captured: dict = {}
         total_epochs = float(cfg.training.epochs)
@@ -693,6 +747,12 @@ class MLXSFTTrainerWrapper:
                     # #686: the EFFECTIVE optimizer and schedule, so an adapter
                     # records the recipe that ran rather than the one requested.
                     **optimizer_plan.as_metadata(),
+                    # #749: the norm gradients were actually clipped at.
+                    # Recorded because MLX honours it through a Soup-side
+                    # wrapper rather than through anything mlx-lm writes, so
+                    # the output dir is the only place a finished run says
+                    # whether it clipped.
+                    "max_grad_norm": float(cfg.training.max_grad_norm),
                 },
                 indent=2,
             )
