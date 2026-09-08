@@ -620,15 +620,48 @@ class TestTheScheduleBuiltIsTheScheduleRequested:
             f"scheduler='linear' built {names}"
         )
 
-    def test_a_constant_schedule_builds_no_decay_curve_at_all(
+    def test_a_constant_schedule_with_no_warmup_builds_nothing_at_all(
         self, tmp_path, monkeypatch
     ):
-        """Reject-everything control: the two assertions above must depend on
-        the configuration, not hold for every run."""
+        """Reject-everything control for the two assertions above.
+
+        Narrowly named on purpose. `warmup_ratio=0.0` returns at the early
+        `return peak` *before* the MLX import, so `names == []` holds for every
+        possible implementation of the branch below it. This controls the
+        cosine/linear assertions; it says nothing about how `constant` is
+        built, and the test below is what covers that.
+        """
         _, names = self._builders(
             tmp_path, monkeypatch, scheduler="constant", warmup_ratio=0.0
         )
         assert names == []
+
+    @pytest.mark.parametrize("sched", ["constant", "constant_with_warmup"])
+    def test_constant_with_warmup_builds_a_ramp_but_no_decay_curve(
+        self, tmp_path, monkeypatch, sched
+    ):
+        """The fourth scheduler, which the other three tests here left open.
+
+        @MakazhanAlpamys found that `if plan.scheduler in ("constant",
+        "constant_with_warmup")` at the post-import branch could be changed to
+        `if False:` and the whole suite stayed green -- both constant modes
+        fell through to the `linear` body, so a user asking for `constant`
+        with warmup got a **linear decay to 0.0** while `as_metadata()` wrote
+        `scheduler: constant` into `adapter_config.json`.
+
+        The assertion that kills it, `test_constant_holds_the_peak_after_
+        warmup`, is behind `importorskip("mlx.core")` and runs on no CI job --
+        the same reason this whole class exists. Both spellings are checked
+        because both reach that one branch.
+        """
+        _, names = self._builders(
+            tmp_path, monkeypatch, scheduler=sched, warmup_ratio=0.25
+        )
+        assert "cosine_decay" not in names
+        assert names.count("linear_schedule") == 1, (
+            f"{sched} built {names}; exactly one linear_schedule is the warmup "
+            "ramp -- a second one is a decay curve nobody asked for"
+        )
 
     def test_warmup_builds_a_ramp_joined_at_the_warmup_boundary(
         self, tmp_path, monkeypatch
