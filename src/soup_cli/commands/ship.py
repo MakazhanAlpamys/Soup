@@ -34,6 +34,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from dataclasses import replace
 from typing import (
     TYPE_CHECKING,
     Callable,
@@ -58,6 +59,7 @@ from soup_cli.utils.ship_verdict import (
     DEFAULT_FORGETTING_THRESHOLD,
     MAX_NOISE_FLOOR_RUNS,
     MIN_NOISE_FLOOR_RUNS,
+    NUMERICS_FAMILY_FULL,
     SUPPORTED_TASK_MODES,
     TASK_AXIS,
     TASK_MODES,
@@ -71,6 +73,9 @@ from soup_cli.utils.ship_verdict import (
     floor_exceeds_threshold,
     for_terminal,
     noise_floor_from_evidence,
+    numerics_family,
+    numerics_from_evidence,
+    parse_numerics,
     render_ship_panel,
     verdict_to_dict,
     verdict_to_evidence,
@@ -416,6 +421,10 @@ def _verdict_from_evidence(payload: dict, *, forgetting_threshold: float) -> Shi
         stored_floor = noise_floor_from_evidence(payload.get("noise_floor"))
     except (TypeError, ValueError) as exc:
         _fail(f"invalid evidence.noise_floor: {exc}", _EXIT_RUNTIME)
+    try:
+        stored_numerics = numerics_from_evidence(payload.get("numerics"))
+    except (TypeError, ValueError) as exc:
+        _fail(f"invalid evidence.numerics: {exc}", _EXIT_RUNTIME)
     _warn_if_floor_widens(stored_floor, forgetting_threshold, source="evidence-supplied")
 
     try:
@@ -443,12 +452,15 @@ def _verdict_from_evidence(payload: dict, *, forgetting_threshold: float) -> Shi
             forgetting_threshold=forgetting_threshold,
             noise_floor=stored_floor,
         )
-        return decide_ship(
+        verdict = decide_ship(
             task_win,
             deltas,
             forgetting_threshold=forgetting_threshold,
             noise_floor=stored_floor,
         )
+        if stored_numerics is not None:
+            return replace(verdict, numerics=stored_numerics)
+        return verdict
     except (TypeError, ValueError) as exc:
         _fail(f"invalid evidence.benchmarks: {exc}", _EXIT_RUNTIME)
 
@@ -475,6 +487,64 @@ def _live_eval_quantization_from_config(soup_config: Optional["SoupConfig"]) -> 
     return quant if quant in _LIVE_EVAL_QUANTIZATION_FORMATS else None
 
 
+def _live_eval_numerics(
+    quantization: Optional[str], device: Optional[str]
+) -> str:
+    """The actual load precision this live run will use.
+
+    Quantized loads stamp the format name; full-precision loads stamp the
+    dtype that ``_resolve_generators`` passes to ``make_generator``. One
+    helper so the console message, the verdict, and ``--emit-evidence``
+    cannot disagree.
+    """
+    if quantization == "4bit" or quantization == "8bit":
+        return quantization
+    from soup_cli.utils import live_eval
+
+    resolved = live_eval.resolve_device(device)
+    return "bfloat16" if resolved.startswith("cuda") else "float32"
+
+
+def _expected_numerics_family(soup_config: "SoupConfig") -> str:
+    """Family ``--config`` implies for the evidence staleness gate.
+
+    Does not import ``live_eval`` / torch — the offline ``--evidence`` path
+    must stay GPU-free. Unsupported quant-menu formats (gptq/awq/...) fall
+    through to ``full``, matching the live load.
+    """
+    quant = _live_eval_quantization_from_config(soup_config)
+    return quant if quant is not None else NUMERICS_FAMILY_FULL
+
+
+def _check_evidence_numerics(payload: dict, expected_family: str) -> None:
+    """Refuse evidence whose numerics *family* does not match ``--config``.
+
+    Missing stamp: warn, do not refuse (pre-#367 artifacts). Malformed stamp:
+    usage error, and the unknown value is never echoed (terminal-escape).
+    """
+    raw = payload.get("numerics")
+    if raw is None:
+        console.print(
+            "[yellow]Warning:[/] evidence has no numerics stamp; "
+            "cannot verify the judge loaded the same precision as --config. "
+            "Re-emit with soup ship ... --emit-evidence."
+        )
+        return
+    try:
+        got = parse_numerics(raw)
+        got_family = numerics_family(got)
+    except ValueError as exc:
+        _fail(f"invalid evidence.numerics: {exc}", _EXIT_USAGE)
+    if got_family != expected_family:
+        _fail(
+            "stale evidence: its numerics "
+            f"{escape(got)} (family {escape(got_family)}) do not match "
+            f"--config (family {escape(expected_family)}). "
+            "Re-run live ship + emit evidence against the current config.",
+            _EXIT_USAGE,
+        )
+
+
 def _resolve_generators(
     base: str,
     tuned: Optional[str],
@@ -492,23 +562,16 @@ def _resolve_generators(
     from soup_cli.eval.gate_suites import BEHAVIOURAL_MAX_NEW_TOKENS
     from soup_cli.utils import live_eval
 
+    numerics = _live_eval_numerics(quantization, device)
     if quantization:
         console.print(
-            f"[dim]Live eval: loading base/tuned at {quantization} "
+            f"[dim]Live eval: loading base/tuned at {numerics} "
             "(reused from --config training.quantization).[/]"
         )
         dtype = None
     else:
-        # Match the fallback message: bf16 on CUDA (this codebase's other live
-        # loaders use the same cuda-else-fp32 split, e.g. mole_routing.py/prm.py),
-        # fp32 elsewhere. Previously left unset, so from_pretrained fell through
-        # to its own default instead of the precision this message promised.
-        resolved_device = live_eval.resolve_device(device)
-        # startswith, not ==: an explicit --device cuda:0 (or any indexed
-        # CUDA device) resolves verbatim (live_eval.resolve_device returns
-        # it unchanged), and a bare "cuda" equality check would miss it and
-        # silently fall back to float32.
-        dtype = "bfloat16" if resolved_device.startswith("cuda") else "float32"
+        # dtype is the stamp: bf16 on CUDA (including cuda:0), fp32 elsewhere.
+        dtype = numerics
         console.print(
             f"[dim]Live eval: loading base/tuned at full precision ({dtype}); "
             "pass --config to reuse the training run's own quantization.[/]"
@@ -1054,11 +1117,14 @@ def _verdict_live(
             forgetting_threshold=forgetting_threshold,
             noise_floor=measured_floor,
         )
-        return decide_ship(
+        verdict = decide_ship(
             task_win,
             deltas,
             forgetting_threshold=forgetting_threshold,
             noise_floor=measured_floor,
+        )
+        return replace(
+            verdict, numerics=_live_eval_numerics(quantization, device)
         )
     except typer.Exit:
         # typer.Exit subclasses RuntimeError — re-raise so in-try _fail() usage
@@ -1215,7 +1281,8 @@ def ship(
         "--config",
         help="soup.yaml whose eval.ship block supplies defaults (CLI flags win). "
         "With --evidence alone it GATES (refuses evidence whose config_sha drifted "
-        "from this config); with --emit-evidence it STAMPS this config's provenance.",
+        "from this config, or whose numerics family does not match); with "
+        "--emit-evidence it STAMPS this config's provenance.",
     ),
     push: Optional[str] = typer.Option(
         None,
@@ -1291,12 +1358,17 @@ def ship(
             _fail(f"cannot read --evidence: {exc}", _EXIT_RUNTIME)
         # --config has two intents here:
         #   * GATE (no --emit-evidence): verify this committed evidence is bound
-        #     to the committed config — refuse if config_sha drifted or is absent.
+        #     to the committed config — refuse if config_sha drifted or is absent,
+        #     or if the numerics family does not match (#367).
         #   * PRODUCER (--emit-evidence): STAMP the config's provenance onto these
         #     scores (raw scores from an external eval tool -> bound evidence), so
         #     the input is NOT required to already carry a matching provenance.
         if config_sha is not None and not emit_evidence:
             _check_evidence_staleness(payload, config_sha)
+            assert soup_config is not None  # config_sha is computed from it
+            _check_evidence_numerics(
+                payload, _expected_numerics_family(soup_config)
+            )
         verdict = _verdict_from_evidence(payload, forgetting_threshold=threshold)
     elif base or tuned or adapter or task_eval:
         verdict = _verdict_live(

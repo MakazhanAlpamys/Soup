@@ -474,8 +474,12 @@ every PR instead of relying on a hand-edited JSON file.
 - **Provenance + staleness.** With `--emit-evidence`, `--config` STAMPS a `provenance` block
   (`config_sha` — a semantic, order-insensitive recipe hash that EXCLUDES the `eval.ship` gate
   policy, so tuning the threshold never invalidates evidence — plus `base_model` and a
-  best-effort `data_sha`). With `--evidence` alone, `--config` GATES: it refuses (exit 3)
-  evidence whose `config_sha` drifted from the committed config.
+  best-effort `data_sha`). A live run also stamps top-level `numerics` (`4bit` / `8bit` /
+  `bfloat16` / `float32`) — the actual load, not the training field — so a GPTQ recipe that
+  the judge loaded as bf16 says so. With `--evidence` alone, `--config` GATES: it refuses
+  (exit 3) evidence whose `config_sha` drifted from the committed config, or whose numerics
+  *family* (`4bit` / `8bit` / `full`) does not match. Pre-#367 evidence without a stamp
+  warns rather than failing closed.
 - **`--push owner/repo#N`** posts the verdict as a GitHub PR comment (best-effort — a missing
   token or `gh` failure warns but never flips the SHIP / DON'T-SHIP exit code).
 
