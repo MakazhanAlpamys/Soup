@@ -54,13 +54,27 @@ class _RecordingTracker:
 
 
 def _run(monkeypatch, tmp_path, *, train_reports=(), val_reports=(),
-         display=None, tracker=None, run_id="run-1"):
-    """Drive the real train() body with a fake mlx-lm emitting both report kinds."""
+         sequence=None, display=None, tracker=None, run_id="run-1"):
+    """Drive the real train() body with a fake mlx-lm emitting both report kinds.
+
+    ``sequence`` takes explicit ``("val"|"train", payload)`` pairs for tests
+    that depend on the ORDER of the two hooks -- anything about a value carried
+    from one to the other. The default val-then-train shape below is mlx-lm's
+    initial evaluation at ``it = 0``, which is a real sequence but the one in
+    which nothing has been measured yet.
+    """
     _install_fake_mlx(monkeypatch)
 
     def _fake_train(**kwargs):
         cb = kwargs.get("training_callback")
         if cb is None:
+            return
+        if sequence is not None:
+            for kind, payload in sequence:
+                if kind == "val":
+                    cb.on_val_loss_report(payload)
+                else:
+                    cb.on_train_loss_report(payload)
             return
         # Interleave the way mlx-lm does: an eval fires, then training steps.
         for v in val_reports:
@@ -162,8 +176,21 @@ class TestOnlyRealMeasurementsAreRecorded:
 
         seen = []
         monkeypatch.setattr(buf, "push_train_event", lambda e: seen.append(e))
+        # A display is REQUIRED here, exactly as it is for the tracker sibling
+        # above. `on_train_loss_report` returns at the `display is None` guard
+        # before the SSE push, so without one a training step pushes nothing at
+        # all and "exactly one event carries val_loss" is true for every
+        # possible implementation -- including one that puts the sticky value
+        # on the wire. Found by @MakazhanAlpamys, who mutated the push to
+        # `val_loss=type(self)._sticky_val_loss` and watched this test pass.
+        # I had already written this reasoning down for the tracker and did not
+        # carry it here.
         _run(monkeypatch, tmp_path, val_reports=[_VAL_1],
-             train_reports=[_TRAIN_1, _TRAIN_2])
+             train_reports=[_TRAIN_1, _TRAIN_2], display=_RecordingDisplay())
+        assert len(seen) > 1, (
+            "sanity: training steps must reach the wire at all, or the "
+            "assertion below is vacuous"
+        )
         with_val = [e for e in seen if getattr(e, "val_loss", None) is not None]
         assert len(with_val) == 1, (
             f"{len(with_val)} events carry val_loss for 1 evaluation"
@@ -258,3 +285,166 @@ class TestTelemetryNeverKillsTheRun:
         d = _RecordingDisplay()
         _run(monkeypatch, tmp_path, val_reports=[_VAL_1], display=d, tracker=_Boom())
         assert any(u.get("val_loss") is not None for u in d.updates)
+
+
+class TestTheValidationRowInventsNoTrainingNumbers:
+    """@MakazhanAlpamys's second blocker on #739.
+
+    `on_val_loss_report` issues its own `tracker.log_metrics(...)`, and
+    `log_metrics` defaults `loss`, `lr` and `speed` to ``0.0`` -- not ``None``.
+    So every evaluation appended a row whose three training columns were
+    invented, and at a realistic cadence over half the `loss` series a consumer
+    reads back was zeros no step ever measured:
+
+        post-PR       [0.0, 0.0, 3.0, 0.0, 2.4, 0.0, 2.0, 0.0, 1.8]
+        training truth      [3.0,      2.4,      2.0,      1.8]
+
+    That is the same defect class #713 was blocked on, one column to the left,
+    and `log_metrics`'s own docstring makes the argument: a zero there is
+    indistinguishable from a genuinely measured zero.
+
+    The fix mirrors the merged transformers producer, which carries
+    `_last_loss` / `_last_lr` into the row an evaluation creates
+    (`callback.py:205-207`). Measured rather than assumed -- driving the real
+    `SoupTrainerCallback` against a real tracker with three training logs and
+    one eval log writes **four** rows, the eval row carrying `loss=2.4`,
+    `lr=1e-4` and its own `val_loss`. So an evaluation there does create a
+    row; what it does not do is fill it with zeros.
+    """
+
+    def test_the_val_row_carries_the_last_measured_training_values(
+        self, tmp_path, monkeypatch
+    ):
+        tracker = _RecordingTracker()
+        # Training first, THEN the evaluation -- the sequence in which there is
+        # a measured value to carry. (The default harness order is mlx-lm's
+        # initial eval at it=0, where 0.0 is the honest answer because nothing
+        # has been measured; that case is pinned below.)
+        _run(monkeypatch, tmp_path,
+             sequence=[("train", _TRAIN_1), ("val", _VAL_1)],
+             display=_RecordingDisplay(), tracker=tracker)
+
+        val_rows = [m for m in tracker.metrics if m.get("val_loss") is not None]
+        assert len(val_rows) == 1, "expected exactly one row per evaluation"
+        row = val_rows[0]
+        assert row["loss"] == pytest.approx(3.0), (
+            f"the validation row reports loss={row['loss']}, which no step "
+            "measured; _TRAIN_1's 3.0 is the last real value"
+        )
+        assert row["lr"] == pytest.approx(1e-4)
+
+    def test_a_training_row_still_reports_its_own_loss_not_a_carried_one(
+        self, tmp_path, monkeypatch
+    ):
+        """Control: carrying must apply to the validation row only. If the
+        carried value leaked onto training rows they would all report the same
+        loss, which is the mirror-image fabrication."""
+        tracker = _RecordingTracker()
+        _run(monkeypatch, tmp_path, train_reports=[_TRAIN_1, _TRAIN_2],
+             val_reports=[], display=_RecordingDisplay(), tracker=tracker)
+
+        losses = [m["loss"] for m in tracker.metrics]
+        assert losses == [pytest.approx(3.0), pytest.approx(2.0)], (
+            f"training rows report {losses}; each must carry its own measurement"
+        )
+
+    def test_an_evaluation_before_any_training_step_carries_nothing(
+        self, tmp_path, monkeypatch
+    ):
+        """The honest edge: mlx-lm evaluates at it=0, before a single training
+        loss exists. 0.0 there is not a fabrication, it is the initial value,
+        and the transformers callback reports the same at the same point
+        (`callback.py:61-63`). Pinned so the carrying above cannot quietly
+        start inventing a number for this row instead."""
+        tracker = _RecordingTracker()
+        _run(monkeypatch, tmp_path,
+             sequence=[("val", _VAL_1), ("train", _TRAIN_1)],
+             display=_RecordingDisplay(), tracker=tracker)
+
+        val_rows = [m for m in tracker.metrics if m.get("val_loss") is not None]
+        assert len(val_rows) == 1
+        assert val_rows[0]["loss"] == pytest.approx(0.0)
+
+    def test_the_carried_values_survive_a_run_with_no_display(
+        self, tmp_path, monkeypatch
+    ):
+        """The third instance of the same trap, caught by mutating rather than
+        by reading.
+
+        `on_train_loss_report` returns at the `display is None` guard, so
+        reading the training numbers after that line leaves them at 0.0 for
+        exactly the configuration with no panel to notice -- a `soup train`
+        without a live display would write a fabricated `loss` on every
+        validation row while every test above stayed green.
+
+        Moving the three assignments below the guard survives all fourteen
+        other tests in this file; it fails here.
+        """
+        tracker = _RecordingTracker()
+        _run(monkeypatch, tmp_path,
+             sequence=[("train", _TRAIN_1), ("val", _VAL_1)],
+             display=None, tracker=tracker)
+
+        val_rows = [m for m in tracker.metrics if m.get("val_loss") is not None]
+        assert len(val_rows) == 1, "the evaluation must still be recorded"
+        assert val_rows[0]["loss"] == pytest.approx(3.0), (
+            f"with no display the validation row reports "
+            f"loss={val_rows[0]['loss']}; the carried value was never set"
+        )
+
+
+class TestTheFloatCoercionIsNotDecorative:
+    """@MakazhanAlpamys's LOW item on #739: removing `_as_float` failed nothing.
+
+    Today's mlx-lm returns a real float via `.item()`, so this is not a live
+    bug -- but the guard's stated job is to keep an unserialisable object off
+    the SSE wire, and nothing checked that it does. A value that is
+    `float()`-able but not JSON-serialisable reaches `to_payload()` intact and
+    `json.dumps` raises inside the training loop.
+    """
+
+    class _MxScalar:
+        """Shaped like an mx scalar: converts to float, serialises to nothing."""
+
+        def __init__(self, v):
+            self._v = v
+
+        def __float__(self):
+            return float(self._v)
+
+    def test_a_float_able_object_reaches_the_wire_as_a_real_float(
+        self, tmp_path, monkeypatch
+    ):
+        import json
+
+        import soup_cli.utils.train_event_buffer as buf
+        from soup_cli.utils.sse_train_stream import format_sse_frame
+
+        seen = []
+        monkeypatch.setattr(buf, "push_train_event", lambda e: seen.append(e))
+        _run(monkeypatch, tmp_path,
+             sequence=[("val", {"iteration": 9, "val_loss": self._MxScalar(2.5),
+                                "val_time": 0.4})],
+             display=_RecordingDisplay())
+
+        with_val = [e for e in seen if getattr(e, "val_loss", None) is not None]
+        assert len(with_val) == 1, "the evaluation reached the wire"
+        assert isinstance(with_val[0].val_loss, float), (
+            f"val_loss is {type(with_val[0].val_loss).__name__}, not float; "
+            "json.dumps will raise inside the training loop"
+        )
+        # The end of the pipe, not the middle: the frame must actually
+        # serialise, which is the failure the guard exists to prevent.
+        assert '"val_loss":2.5' in format_sse_frame(with_val[0]).replace(" ", "")
+        json.dumps({"val_loss": with_val[0].val_loss})
+
+    def test_an_unconvertible_value_is_dropped_rather_than_recorded(
+        self, tmp_path, monkeypatch
+    ):
+        """Control: coercion must not turn junk into a measurement."""
+        tracker = _RecordingTracker()
+        _run(monkeypatch, tmp_path,
+             sequence=[("val", {"iteration": 9, "val_loss": "not a number"})],
+             display=_RecordingDisplay(), tracker=tracker)
+
+        assert [m for m in tracker.metrics if m.get("val_loss") is not None] == []
