@@ -169,6 +169,27 @@ def _audit_warmup(training: Dict[str, Any], record: Dict[str, Any]) -> AuditRow:
     )
 
 
+def _ran_alpha(record: Dict[str, Any]) -> Optional[float]:
+    """The alpha a run used, from whichever shape its writer chose.
+
+    PEFT stores `lora_alpha` directly. MLX stores **`scale`**, which is
+    `alpha / rank` -- there is no `alpha` key at all. Reading one and hoping
+    is how this returned `unknown` for every real MLX adapter: the fixture
+    invented an `alpha` key, the fixture passed, and a live run on Metal
+    showed `lora_parameters = {"rank": 4, "scale": 2.0, ...}`.
+    """
+    direct = record.get("lora_alpha")
+    if direct is not None:
+        return direct
+    params = record.get("lora_parameters") or {}
+    if "alpha" in params:
+        return params["alpha"]
+    scale, rank = params.get("scale"), params.get("rank")
+    if scale is None or rank is None:
+        return None
+    return scale * rank
+
+
 def _lora_asked(training: Dict[str, Any]) -> Dict[str, Any]:
     lora = training.get("lora") or {}
     if not isinstance(lora, dict):
@@ -221,10 +242,7 @@ def audit_adapter(config: Dict[str, Any], record: Dict[str, Any]) -> AuditResult
             ran_r = (record.get("lora_parameters") or {}).get("rank")
         rows.append(_cmp("lora.r", lora["r"], ran_r))
     if "alpha" in lora:
-        ran_a = record.get("lora_alpha")
-        if ran_a is None:
-            ran_a = (record.get("lora_parameters") or {}).get("alpha")
-        rows.append(_cmp("lora.alpha", lora["alpha"], ran_a))
+        rows.append(_cmp("lora.alpha", lora["alpha"], _ran_alpha(record)))
 
     return AuditResult(rows=rows, record_kind=kind)
 
