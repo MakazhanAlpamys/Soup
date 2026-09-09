@@ -521,10 +521,13 @@ class _SoupTrainerCallback_body:  # noqa: N801
         if custom_tasks:
             try:
                 from soup_cli.commands.eval import custom
+                # #752 — pass every typer parameter; see commands/eval.py.
                 custom(
                     tasks=custom_tasks,
                     model=self.output_dir,
                     run_id=self.run_id,
+                    attach_to_registry=None,
+                    output=None,
                 )
             except Exception as exc:
                 logger.exception("Auto-eval custom failed")
