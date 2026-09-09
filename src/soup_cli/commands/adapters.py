@@ -1701,3 +1701,97 @@ def _estimated_probes(n: int) -> int:
     if n <= 2:
         return n
     return max(2, math.ceil(math.log2(n))) + 2
+
+
+@app.command()
+def audit(
+    adapter: str = typer.Argument(..., help="Path to adapter directory"),
+    config: str = typer.Option(..., "--config", "-c", help="soup.yaml the run was started from"),
+    json_out: bool = typer.Option(False, "--json", help="Emit machine-readable JSON"),
+):
+    """Check whether a finished run did what its config asked for (#762).
+
+    The MLX path records its effective settings in ``adapter_config.json`` --
+    optimizer, schedule, warmup, masking, clipping -- because each of those was
+    once accepted and silently dropped (#683, #684, #685, #686, #749). This
+    reads that record back and reports every place it disagrees with the config.
+
+    Exits non-zero on divergence so it composes into CI and ``soup ship``.
+    Settings the record cannot speak to are reported ``unknown``, never as
+    agreeing: a false clean bill is worse than no audit.
+    """
+    import json as _json
+
+    import yaml
+
+    from soup_cli.utils.adapter_audit import audit_adapter, unknown_reason
+
+    adapter_path = Path(adapter).resolve()
+    record_file = adapter_path / "adapter_config.json"
+    if not record_file.exists():
+        console.print(f"[red]No adapter_config.json in: {adapter}[/]")
+        raise typer.Exit(1)
+
+    config_path = Path(config).resolve()
+    if not config_path.exists():
+        console.print(f"[red]Config not found: {config}[/]")
+        raise typer.Exit(1)
+
+    try:
+        record = _json.loads(record_file.read_text())
+    except ValueError as exc:
+        console.print(f"[red]adapter_config.json is not valid JSON: {exc}[/]")
+        raise typer.Exit(1) from exc
+    try:
+        cfg = yaml.safe_load(config_path.read_text()) or {}
+    except yaml.YAMLError as exc:
+        console.print(f"[red]Could not parse {config}: {exc}[/]")
+        raise typer.Exit(1) from exc
+
+    result = audit_adapter(cfg, record)
+
+    if json_out:
+        # Plain stdout, not console.print_json: Rich pretty-prints and
+        # highlights, which makes the output unparseable by the caller this
+        # flag exists for.
+        typer.echo(_json.dumps(result.to_dict(), indent=2))
+        raise typer.Exit(result.exit_code)
+
+    table = Table(title=f"Audit: {adapter_path.name}")
+    table.add_column("setting")
+    table.add_column("asked")
+    table.add_column("ran")
+    table.add_column("")
+    marks = {
+        "ok": "[green]ok[/]",
+        "diverged": "[red]DIVERGED[/]",
+        "unknown": "[yellow]unknown[/]",
+    }
+    for row in result.rows:
+        table.add_row(
+            row.setting,
+            escape(str(row.asked)),
+            escape("—" if row.ran is None else str(row.ran)),
+            marks.get(row.status, row.status),
+        )
+    console.print(table)
+
+    for row in result.rows:
+        if row.status == "diverged" and row.detail:
+            console.print(f"  [red]{escape(row.setting)}[/]: {escape(row.detail)}")
+
+    reason = unknown_reason(result.record_kind)
+    if reason and result.unknown_count:
+        console.print(f"\n[yellow]{escape(reason)}[/]")
+
+    if result.diverged_count:
+        console.print(
+            f"\n[red]{result.diverged_count} divergence(s)[/]"
+            f"{f', {result.unknown_count} unchecked' if result.unknown_count else ''}"
+        )
+    else:
+        console.print(
+            f"\n[green]No divergences[/]"
+            f"{f', {result.unknown_count} unchecked' if result.unknown_count else ''}"
+        )
+    raise typer.Exit(result.exit_code)
