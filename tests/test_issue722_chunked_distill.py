@@ -21,18 +21,20 @@ def _torch_or_skip():
 class TestChunkedDistillKernel:
     @pytest.mark.parametrize("divergence", ["forward_kl", "reverse_kl", "js"])
     @pytest.mark.parametrize("chunk_size", [1, 3, 7, 32, 1000])
+    @pytest.mark.parametrize("dtype_name", ["float32", "bfloat16"])
     def test_chunked_matches_dense_loss_and_gradients(
-        self, divergence: str, chunk_size: int
+        self, divergence: str, chunk_size: int, dtype_name: str
     ) -> None:
         torch = _torch_or_skip()
         from soup_cli.trainer.distill import _compute_distill_term
 
+        dtype = getattr(torch, dtype_name)
         torch.manual_seed(42)
         batch, seq, vocab = 2, 8, 16
         temp = 2.0
 
-        s_dense = torch.randn(batch, seq, vocab, requires_grad=True)
-        t_dense = torch.randn(batch, seq, vocab)
+        s_dense = torch.randn(batch, seq, vocab, dtype=dtype, requires_grad=True)
+        t_dense = torch.randn(batch, seq, vocab, dtype=dtype)
         labels = torch.tensor([
             [-100, 1, 2, -100, 4, -100, 6, -100],
             [-100, -100, 2, 3, -100, 5, 6, -100],
@@ -59,20 +61,25 @@ class TestChunkedDistillKernel:
         loss_chunk.backward()
         grad_chunk = s_chunk.grad.clone()
 
-        assert abs(loss_dense.item() - loss_chunk.item()) < 1e-6
-        assert (grad_dense - grad_chunk).abs().max().item() < 1e-6
+        tol = 5e-3 if dtype_name == "bfloat16" else 1e-6
+        assert abs(loss_dense.item() - loss_chunk.item()) < tol
+        assert (grad_dense - grad_chunk).abs().max().item() < tol
 
     @pytest.mark.parametrize("divergence", ["forward_kl", "reverse_kl", "js"])
-    def test_checkpointed_matches_dense_loss_and_gradients(self, divergence: str) -> None:
+    @pytest.mark.parametrize("dtype_name", ["float32", "bfloat16"])
+    def test_checkpointed_matches_dense_loss_and_gradients(
+        self, divergence: str, dtype_name: str
+    ) -> None:
         torch = _torch_or_skip()
         from soup_cli.trainer.distill import _compute_distill_term
 
+        dtype = getattr(torch, dtype_name)
         torch.manual_seed(101)
         batch, seq, vocab = 2, 10, 16
         temp = 1.5
 
-        s_dense = torch.randn(batch, seq, vocab, requires_grad=True)
-        t_dense = torch.randn(batch, seq, vocab)
+        s_dense = torch.randn(batch, seq, vocab, dtype=dtype, requires_grad=True)
+        t_dense = torch.randn(batch, seq, vocab, dtype=dtype)
         labels = torch.tensor([
             [-100, 0, 1, 2, -100, -100, 3, 4, 5, -100],
             [-100, -100, 1, -100, 2, 3, 4, -100, 5, -100],
@@ -91,8 +98,181 @@ class TestChunkedDistillKernel:
         loss_ckpt.backward()
         grad_ckpt = s_ckpt.grad.clone()
 
-        assert abs(loss_dense.item() - loss_ckpt.item()) < 1e-6
-        assert (grad_dense - grad_ckpt).abs().max().item() < 1e-6
+        tol = 5e-3 if dtype_name == "bfloat16" else 1e-6
+        assert abs(loss_dense.item() - loss_ckpt.item()) < tol
+        assert (grad_dense - grad_ckpt).abs().max().item() < tol
+
+    @pytest.mark.parametrize("divergence", ["forward_kl", "reverse_kl", "js"])
+    @pytest.mark.parametrize("chunk_size", [None, 1, 3, 7, 32])
+    @pytest.mark.parametrize("use_checkpoint", [False, True])
+    def test_matches_pre_pr_reference_kernel(
+        self, divergence: str, chunk_size: int | None, use_checkpoint: bool
+    ) -> None:
+        """BLOCKING 3: pin against the pre-PR origin/main reference formula, not ourselves."""
+        torch = _torch_or_skip()
+        from soup_cli.trainer.distill import _compute_distill_term
+
+        def _reference_pre_pr_distill(s_in, t_in, div, temperature, labels_in=None):
+            kl_div = torch.nn.functional.kl_div
+            if labels_in is not None:
+                s_in = s_in[:, :-1, :]
+                t_in = t_in[:, :-1, :]
+                labels_in = labels_in[:, 1:]
+            temp_val = float(temperature)
+            s_scaled = s_in / temp_val
+            t_scaled = t_in / temp_val
+
+            def _masked_mean(per_token):
+                if labels_in is not None:
+                    mask = (labels_in != -100).to(per_token.dtype)
+                    return (per_token * mask).sum() / mask.sum().clamp(min=1.0)
+                return per_token.mean()
+
+            if div == "forward_kl":
+                log_s = torch.log_softmax(s_scaled, dim=-1)
+                p_t = torch.softmax(t_scaled, dim=-1)
+                per_tok = kl_div(log_s, p_t, reduction="none").sum(dim=-1)
+                return _masked_mean(per_tok) * (temp_val * temp_val)
+            if div == "reverse_kl":
+                log_t = torch.log_softmax(t_scaled, dim=-1)
+                p_s = torch.softmax(s_scaled, dim=-1)
+                per_tok = kl_div(log_t, p_s, reduction="none").sum(dim=-1)
+                return _masked_mean(per_tok) * (temp_val * temp_val)
+            if div == "js":
+                log_s = torch.log_softmax(s_scaled, dim=-1)
+                log_t = torch.log_softmax(t_scaled, dim=-1)
+                p_s = log_s.exp()
+                p_t = log_t.exp()
+                m = 0.5 * (p_s + p_t)
+                log_m = m.clamp(min=1e-12).log()
+                kl_pm = kl_div(log_m, p_s, reduction="none").sum(dim=-1)
+                kl_qm = kl_div(log_m, p_t, reduction="none").sum(dim=-1)
+                return _masked_mean(0.5 * (kl_pm + kl_qm)) * (temp_val * temp_val)
+            raise ValueError(f"Unknown divergence {div}")
+
+        torch.manual_seed(999)
+        batch, seq, vocab = 2, 8, 16
+        temp = 2.0
+        s = torch.randn(batch, seq, vocab, requires_grad=True)
+        t = torch.randn(batch, seq, vocab)
+        labels = torch.tensor([
+            [-100, 1, 2, -100, 4, -100, 6, -100],
+            [-100, -100, 2, 3, -100, 5, 6, -100],
+        ])
+
+        s_ref = s.detach().clone().requires_grad_(True)
+        loss_ref = _reference_pre_pr_distill(s_ref, t, divergence, temp, labels_in=labels)
+        loss_ref.backward()
+        grad_ref = s_ref.grad.clone()
+
+        s_new = s.detach().clone().requires_grad_(True)
+        loss_new = _compute_distill_term(
+            s_new, t, divergence, temp, labels=labels,
+            chunk_size=chunk_size, use_checkpoint=use_checkpoint
+        )
+        loss_new.backward()
+        grad_new = s_new.grad.clone()
+
+        assert abs(loss_ref.item() - loss_new.item()) < 1e-6
+        assert (grad_ref - grad_new).abs().max().item() < 1e-6
+
+    def test_checkpoint_explicitly_uses_non_reentrant(self) -> None:
+        """Verify that checkpointing explicitly passes use_reentrant=False."""
+        torch = _torch_or_skip()
+        from unittest.mock import patch
+
+        from soup_cli.trainer.distill import _compute_distill_term
+
+        calls = []
+        orig_checkpoint = torch.utils.checkpoint.checkpoint
+
+        def intercepted_checkpoint(*args, **kwargs):
+            calls.append(kwargs.get("use_reentrant"))
+            return orig_checkpoint(*args, **kwargs)
+
+        with patch("torch.utils.checkpoint.checkpoint", side_effect=intercepted_checkpoint):
+            s = torch.randn(2, 4, 8, requires_grad=True)
+            t = torch.randn(2, 4, 8)
+            _compute_distill_term(s, t, "forward_kl", 2.0, chunk_size=2, use_checkpoint=True)
+
+        assert len(calls) > 0
+        assert all(reentrant is False for reentrant in calls)
+
+    def test_distill_trainer_compute_loss_threads_chunk_and_checkpoint_flags(
+        self, monkeypatch
+    ) -> None:
+        """BLOCKING 2: Verify training.distill_chunk_size and distill_checkpoint reach kernel."""
+        torch = _torch_or_skip()
+        from unittest.mock import MagicMock, patch
+
+        from soup_cli.config.loader import load_config_from_string
+        from soup_cli.trainer import distill as distill_mod
+        from soup_cli.trainer.distill import DistillTrainerWrapper
+
+        cfg = load_config_from_string("""
+base: dummy-student
+task: distill
+data:
+  train: dummy.jsonl
+  format: chatml
+output: ./out
+training:
+  teacher_model: dummy-teacher
+  distill_chunk_size: 128
+  distill_checkpoint: true
+""")
+
+        mock_tok = MagicMock()
+        mock_tok.pad_token = None
+        mock_tok.eos_token = "<eos>"
+
+        class MockModel(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.config = type("Cfg", (), {"vocab_size": 16})()
+                self.lin = torch.nn.Linear(16, 16)
+
+            def forward(self, **kw):
+                return type("Out", (), {"logits": torch.randn(1, 4, 16, requires_grad=True)})()
+
+        dummy_row = {
+            "input_ids": [1, 2, 3, 4],
+            "labels": [1, 2, 3, 4],
+            "attention_mask": [1, 1, 1, 1],
+        }
+        with (
+            patch("transformers.AutoTokenizer.from_pretrained", return_value=mock_tok),
+            patch("transformers.AutoModelForCausalLM.from_pretrained", return_value=MockModel()),
+            patch("peft.get_peft_model", side_effect=lambda m, c: m),
+            patch(
+                "soup_cli.utils.peft_wiring.resolve_lora_target_modules",
+                return_value=["lin"],
+            ),
+            patch(
+                "soup_cli.data.sft_format.build_format_row",
+                return_value=lambda r: dummy_row,
+            ),
+        ):
+            wrapper = DistillTrainerWrapper(cfg, device="cpu")
+            wrapper.setup({"train": [{"dummy": 1}]})
+
+        captured_kwargs = {}
+
+        def mock_compute(*args, **kwargs):
+            captured_kwargs.update(kwargs)
+            return torch.tensor(1.0)
+
+        monkeypatch.setattr(distill_mod, "_compute_distill_term", mock_compute)
+
+        inputs = {
+            "input_ids": torch.tensor([[1, 2, 3, 4]]),
+            "labels": torch.tensor([[1, 2, 3, 4]]),
+            "attention_mask": torch.tensor([[1, 1, 1, 1]]),
+        }
+        wrapper.trainer.compute_loss(wrapper.model, inputs)
+
+        assert captured_kwargs.get("chunk_size") == 128
+        assert captured_kwargs.get("use_checkpoint") is True
 
     def test_all_masked_labels_returns_zero_and_finite_grad(self) -> None:
         torch = _torch_or_skip()

@@ -165,9 +165,9 @@ def _compute_distill_term(
     c_size = chunk_size if (chunk_size is not None and chunk_size > 0) else n_tokens
 
     if c_size >= n_tokens and not use_checkpoint:
-        total_sum = _chunk_kernel(s_flat, t_flat)
+        total_sum = _chunk_kernel(s_flat, t_flat).float()
     else:
-        total_sum = torch.tensor(0.0, device=s.device, dtype=s.dtype)
+        total_sum = torch.tensor(0.0, device=s.device, dtype=torch.float32)
         if use_checkpoint:
             from torch.utils.checkpoint import checkpoint
 
@@ -183,15 +183,16 @@ def _compute_distill_term(
                         return _chunk_kernel(s_in, _t)
 
                     chunk_sum = checkpoint(_step, s_chunk, use_reentrant=False)
-                total_sum = total_sum + chunk_sum
+                total_sum = total_sum + chunk_sum.float()
         else:
             for i in range(0, n_tokens, c_size):
                 s_chunk = s_flat[i : i + c_size]
                 t_chunk = t_flat[i : i + c_size]
                 chunk_sum = _chunk_kernel(s_chunk, t_chunk)
-                total_sum = total_sum + chunk_sum
+                total_sum = total_sum + chunk_sum.float()
 
-    return (total_sum / denom) * (temp * temp)
+    loss = (total_sum / denom.float()) * (temp * temp)
+    return loss.to(dtype=s.dtype)
 
 
 def _require_uld_id_compatible_tokenizers(
