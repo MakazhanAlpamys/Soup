@@ -7,7 +7,7 @@ v0.37.0 multipack / v0.41.0 LLaMA Pro / v0.45.0 plugins / v0.48.0 curriculum
 stub-then-live pattern).
 
 Variants:
-- gspo         : Group Stabilized Policy Optimization (unsloth)
+- gspo         : Group Sequence Policy Optimization (Qwen)
 - dapo         : Decoupled Advantage Policy Optimization (unsloth, axolotl)
 - dr_grpo      : Doubly Robust GRPO (unsloth, axolotl)
 - bnpo         : Batch Normalized Policy Optimization (unsloth)
@@ -69,7 +69,7 @@ _VARIANT_METADATA = types.MappingProxyType({
     ),
     "gspo": GRPOVariantSpec(
         name="gspo",
-        description="Group Stabilized Policy Optimization",
+        description="Group Sequence Policy Optimization",
         requires_delta=False,
         live_wired=True,
     ),
@@ -206,7 +206,8 @@ def apply_variant_loss(
     - ``advantages``: group-relative advantages, shape ``[B]`` or ``[B, T]``.
     - ``beta``: PPO-style KL coefficient (used by variants that reference
       a frozen ref model).
-    - ``delta``: symmetric clipping radius (only used by ``two_sided``).
+    - ``delta``: symmetric clipping radius (used by ``two_sided`` and, as the
+      sequence-level clipping radius, by ``gspo``).
     - ``completion_mask``: optional ``[B, T]`` 0/1 mask (1 where token is in
       the completion). When supplied, length-normalising variants
       (``bnpo``) divide by ``mask.sum(-1).clamp(min=1)``.
@@ -222,9 +223,10 @@ def apply_variant_loss(
     + gsm8k. Each variant kernel matches the canonical formula from the
     unsloth / axolotl reference implementations:
 
-    - ``gspo``: token-level importance ratio with group stabilisation. The
-      loss is ``-(ratio * adv).mean()`` where the ratio is clipped with
-      group-mean variance reduction.
+    - ``gspo``: Group Sequence Policy Optimization (Qwen, arXiv:2507.18071).
+      Sequence-level importance ratio length-normalized by completion length:
+      ``s_i = exp((1/|y_i|) * sum (log p_new - log p_old))``, optimized with
+      sequence-level surrogate clipping: ``-min(s * A, clip(s, 1-eps, 1+eps) * A)``.
     - ``dapo``: decoupled-clip — uses asymmetric clipping bounds
       ``[1-eps_lo, 1+eps_hi]`` (here ``eps_lo=0.2, eps_hi=0.28`` per the
       paper).
@@ -274,20 +276,42 @@ def apply_variant_loss(
     ratio = torch.exp(log_ratio)
 
     if normalised == "gspo":
-        # Group Stabilized: subtract per-group mean log-ratio (acts as
-        # control variate). Mean is taken over the batch dim, excluding
-        # masked (padding) positions so a masked token cannot shift the
-        # statistic other rows in its column are centered against.
-        if completion_mask is not None:
-            col_sum = (log_ratio * completion_mask).sum(dim=0, keepdim=True)
-            col_count = completion_mask.sum(dim=0, keepdim=True).clamp(min=1.0)
-            col_mean = col_sum / col_count
+        # Group Sequence Policy Optimization (Qwen, arXiv:2507.18071):
+        # Sequence-level importance ratio length-normalized by completion length:
+        #   s_i = exp( 1/|y_i| * sum_{t=1}^{|y_i|} (log p_new - log p_old) )
+        # Optimized with sequence-level surrogate clipping:
+        #   loss = -min(s_i * A_i, clip(s_i, 1-eps, 1+eps) * A_i).mean()
+        if delta is not None:
+            eps = validate_grpo_delta(delta)
         else:
-            col_mean = log_ratio.mean(dim=0, keepdim=True)
-        log_ratio_centered = log_ratio - col_mean
-        ratio_stab = torch.exp(log_ratio_centered)
-        token_loss = -(ratio_stab * advantages_2d)
-        return _masked_mean(token_loss, completion_mask)
+            eps = 0.2
+
+        if advantages.dim() == 1:
+            adv_seq = advantages
+        elif advantages.dim() == 2 and advantages.size(-1) == 1:
+            adv_seq = advantages.squeeze(-1)
+        elif completion_mask is not None:
+            adv_seq = (advantages * completion_mask).sum(dim=-1) / completion_mask.sum(
+                dim=-1
+            ).clamp(min=1.0)
+        else:
+            adv_seq = advantages.mean(dim=-1)
+
+        if completion_mask is not None:
+            mask = completion_mask.to(dtype=log_ratio.dtype)
+            lengths = mask.sum(dim=-1)
+            valid_seq_mask = (lengths > 0).to(dtype=log_ratio.dtype)
+            seq_log_ratio = (log_ratio * mask).sum(dim=-1) / lengths.clamp(min=1.0)
+        else:
+            seq_log_ratio = log_ratio.mean(dim=-1)
+            valid_seq_mask = torch.ones_like(seq_log_ratio)
+
+        seq_ratio = torch.exp(seq_log_ratio)
+        surr1 = seq_ratio * adv_seq
+        surr2 = torch.clamp(seq_ratio, min=1.0 - eps, max=1.0 + eps) * adv_seq
+        seq_loss = -torch.min(surr1, surr2)
+        denom = valid_seq_mask.sum().clamp(min=1.0)
+        return (seq_loss * valid_seq_mask).sum() / denom
 
     if normalised == "dapo":
         # Decoupled clip — asymmetric bounds.

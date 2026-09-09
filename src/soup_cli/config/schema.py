@@ -1500,8 +1500,9 @@ class TrainingConfig(BaseModel):
         gt=0.0,
         le=1.0,
         description=(
-            "Symmetric clipping radius for grpo_variant='two_sided'. "
-            "Required when grpo_variant='two_sided'; rejected otherwise."
+            "Symmetric clipping radius for grpo_variant='two_sided' (required) "
+            "or grpo_variant='gspo' (optional sequence clipping radius, "
+            "defaults to 0.2). Rejected for all other variants."
         ),
     )
     grpo_fp16: bool = Field(
@@ -3470,21 +3471,19 @@ class TrainingConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_grpo_variant_delta(self) -> "TrainingConfig":
-        """v0.50.0 Part A — grpo_variant='two_sided' requires grpo_delta.
+        """v0.50.0 Part A / #744 — grpo_variant='two_sided' requires grpo_delta.
 
-        Conversely, grpo_delta is only meaningful for the two_sided variant;
-        setting it on any other variant (or with no variant) is rejected
-        as a probable footgun (matches v0.40.0 Part D ``preference_loss_weights``
-        + ``preference_loss`` mutually-exclusive policy).
+        grpo_variant='gspo' optionally accepts grpo_delta as sequence clipping radius.
+        Setting grpo_delta on any other variant (or with no variant) is rejected.
         """
         if self.grpo_variant == "two_sided" and self.grpo_delta is None:
             raise ValueError(
                 "grpo_variant='two_sided' requires grpo_delta "
                 "(symmetric clipping radius, (0, 1])"
             )
-        if self.grpo_delta is not None and self.grpo_variant != "two_sided":
+        if self.grpo_delta is not None and self.grpo_variant not in ("two_sided", "gspo"):
             raise ValueError(
-                "grpo_delta is only valid when grpo_variant='two_sided'; "
+                "grpo_delta is only valid when grpo_variant is 'two_sided' or 'gspo'; "
                 f"got grpo_variant={self.grpo_variant!r}"
             )
         return self
