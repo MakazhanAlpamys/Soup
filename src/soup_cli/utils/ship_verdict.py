@@ -23,10 +23,12 @@ CPU-testable. Model loading + live evaluation live in ``commands/ship.py``.
 Public surface
 --------------
 - Frozen dataclasses: ``TaskWin``, ``BenchmarkDelta``, ``ShipVerdict``.
-- Constants: ``TASK_MODES``, ``SUPPORTED_TASK_MODES``, ``DECISION_SHIP`` /
-  ``DECISION_DONT_SHIP``, the ``FAILED_*`` rule codes, ``DEFAULT_FORGETTING_THRESHOLD``.
+- Constants: ``EVIDENCE_SCHEMA_FIELDS``, ``TASK_MODES``,
+  ``SUPPORTED_TASK_MODES``, ``DECISION_SHIP`` / ``DECISION_DONT_SHIP``, the
+  ``FAILED_*`` rule codes, ``DEFAULT_FORGETTING_THRESHOLD``.
 - Pure functions: ``build_task_win``, ``compute_benchmark_deltas``,
   ``decide_ship`` (the moat), ``render_ship_panel``, ``format_ship_rubric``,
+  ``verdict_from_evidence`` (the canonical evidence reader),
   ``verdict_to_dict``, ``verdict_to_evidence`` (the inverse of the ``--evidence``
   reader — makes ``soup ship`` output replayable as input, #312).
 """
@@ -35,7 +37,8 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Dict, List, Mapping, Optional, Sequence, Tuple
+from types import MappingProxyType
+from typing import Dict, FrozenSet, List, Mapping, Optional, Sequence, Tuple
 
 from rich.console import Group
 from rich.markup import escape
@@ -47,6 +50,18 @@ from soup_cli import __version__
 # ---------------------------------------------------------------------------
 # Public constants
 # ---------------------------------------------------------------------------
+
+# One registry for the evidence fields understood by the canonical reader and
+# emitted by ``verdict_to_evidence``. Parity tests must exercise every field so
+# a future optional addition cannot be silently ignored by both public readers.
+# ``provenance`` is intentionally opaque metadata, so its nested keys are not
+# part of the verdict schema.
+EVIDENCE_SCHEMA_FIELDS: Mapping[str, FrozenSet[str]] = MappingProxyType({
+    "root": frozenset({"task", "benchmarks", "noise_floor", "provenance"}),
+    "task": frozenset({"mode", "base", "tuned"}),
+    "benchmark": frozenset({"base", "tuned"}),
+    "noise_floor": frozenset({"runs", "floors", "judge_inclusive"}),
+})
 
 # Leg-1 task-win modes. ``pairwise`` (true judge win-rate) landed in v0.71.31:
 # a ``TaskWin(base=0.5 coin-flip, tuned=win-rate)`` where ``won = tuned > 0.5``.
@@ -228,6 +243,17 @@ def _validate_threshold(value: object) -> float:
     if not (0.0 <= out <= 1.0):
         raise ValueError("forgetting_threshold must be in [0.0, 1.0]")
     return out
+
+
+def _validate_evidence_fields(
+    payload: Mapping[object, object], section: str, path: str
+) -> None:
+    """Refuse unregistered verdict fields instead of silently ignoring them."""
+    allowed = EVIDENCE_SCHEMA_FIELDS[section]
+    unknown = sorted(str(key) for key in payload if key not in allowed)
+    if unknown:
+        joined = ", ".join(repr(key) for key in unknown)
+        raise ValueError(f"{path} has unsupported field(s): {joined}")
 
 
 def _is_regressed(base: float, tuned: float, threshold: float) -> bool:
@@ -760,6 +786,7 @@ def noise_floor_from_evidence(payload: object) -> Optional[NoiseFloor]:
         return None
     if not isinstance(payload, Mapping):
         raise ValueError("evidence.noise_floor must be an object")
+    _validate_evidence_fields(payload, "noise_floor", "evidence.noise_floor")
     runs = payload.get("runs")
     if isinstance(runs, bool) or not isinstance(runs, int):
         raise ValueError("evidence.noise_floor.runs must be an integer")
@@ -793,6 +820,82 @@ def noise_floor_from_evidence(payload: object) -> Optional[NoiseFloor]:
     return NoiseFloor(
         runs=runs, floors=tuple(floors), judge_inclusive=judge_inclusive
     )
+
+
+def verdict_from_evidence(
+    payload: Mapping[str, object],
+    *,
+    forgetting_threshold: float = DEFAULT_FORGETTING_THRESHOLD,
+) -> ShipVerdict:
+    """Decode the complete evidence schema into a verdict.
+
+    This is the single reader shared by the CLI and MCP surfaces. Schema
+    validation belongs here so adding an evidence key cannot update one public
+    surface while leaving the other to silently compute a different verdict.
+    """
+    if not isinstance(payload, Mapping):
+        raise TypeError("evidence must be an object")
+    _validate_evidence_fields(payload, "root", "evidence")
+    threshold = _validate_threshold(forgetting_threshold)
+
+    task = payload.get("task")
+    if not isinstance(task, Mapping):
+        raise ValueError("evidence.task must be an object with 'mode', 'base', 'tuned'")
+    _validate_evidence_fields(task, "task", "evidence.task")
+    mode = task.get("mode", "metric")
+    if mode not in SUPPORTED_TASK_MODES:
+        supported = ", ".join(SUPPORTED_TASK_MODES)
+        raise ValueError(
+            f"evidence.task.mode must be one of {supported}; got {mode!r}"
+        )
+    if "base" not in task or "tuned" not in task:
+        raise ValueError("evidence.task needs both 'base' and 'tuned' scores")
+
+    try:
+        stored_floor = noise_floor_from_evidence(payload.get("noise_floor"))
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(f"invalid evidence.noise_floor: {exc}") from exc
+    try:
+        task_win = build_task_win(
+            str(mode), task["base"], task["tuned"], noise_floor=stored_floor
+        )
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(f"invalid evidence.task: {exc}") from exc
+
+    raw_benchmarks = payload.get("benchmarks", {})
+    if not isinstance(raw_benchmarks, Mapping):
+        raise ValueError(
+            "evidence.benchmarks must be an object of {name: {base, tuned}}"
+        )
+    base_scores: Dict[str, object] = {}
+    tuned_scores: Dict[str, object] = {}
+    for name, entry in raw_benchmarks.items():
+        if not isinstance(entry, Mapping) or "base" not in entry or "tuned" not in entry:
+            raise ValueError(
+                f"evidence.benchmarks[{name!r}] needs 'base' and 'tuned'"
+            )
+        _validate_evidence_fields(
+            entry, "benchmark", f"evidence.benchmarks[{name!r}]"
+        )
+        key = str(name)
+        base_scores[key] = entry["base"]
+        tuned_scores[key] = entry["tuned"]
+
+    try:
+        deltas = compute_benchmark_deltas(
+            base_scores,
+            tuned_scores,
+            forgetting_threshold=threshold,
+            noise_floor=stored_floor,
+        )
+        return decide_ship(
+            task_win,
+            deltas,
+            forgetting_threshold=threshold,
+            noise_floor=stored_floor,
+        )
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(f"invalid evidence.benchmarks: {exc}") from exc
 
 
 def floor_exceeds_threshold(
