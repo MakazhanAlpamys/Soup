@@ -1289,266 +1289,275 @@ def train(
         experiment_name=experiment_name,
         run_id=os.environ.get("SOUP_MCP_RUN_ID") or None,
     )
+    # #764: without a pid, a SIGKILL'd or Ctrl+C'd run has no way for
+    # _reconcile_orphaned_run to ever notice the process is gone — the
+    # rescue path #401 built for MCP-spawned runs was otherwise inert here.
+    tracker.mark_running(run_id, pid=os.getpid())
     console.print(f"[dim]Run ID: {run_id}[/]")
 
-    # Build trainer based on task type
-    from soup_cli.utils.trackers import resolve_report_to
-
     try:
-        report_to = resolve_report_to(
-            wandb=wandb, tensorboard=tensorboard, tracker=tracker_backend
-        )
-    except ValueError as exc:
-        from rich.markup import escape as _esc
+        # Build trainer based on task type
+        from soup_cli.utils.trackers import resolve_report_to
 
-        console.print(f"[red]{_esc(str(exc))}[/]")
-        raise typer.Exit(code=2) from exc
-    console.print("[dim]Setting up model + trainer...[/]")
-    # v0.53.8 #130 — pre-fetch model from non-HF hub into a local cache and
-    # rewrite cfg.base to point at the local snapshot. The trainer wrappers
-    # still use transformers.from_pretrained, which reads HF Hub by default;
-    # by snapshotting first we keep every wrapper unchanged.
-    hub_name = getattr(cfg.training, "hub", "hf") or "hf"
-    if hub_name != "hf":
-        import re as _re
-
-        from rich.markup import escape as _markup_escape
-
-        from soup_cli.utils.hubs import download_repo
-        from soup_cli.utils.paths import is_under_cwd
-
-        # Sanitise cache subdir name — strip every path-separator and
-        # `..` segment so a crafted ``base: ../../etc`` cannot escape the
-        # cache root (Windows ``\\`` and POSIX ``/`` both blocked).
-        safe_slug = _re.sub(r"[^A-Za-z0-9._-]+", "__", cfg.base).strip("._-") or "model"
-        cache_dir = (Path.cwd() / ".soup_hub_cache" / safe_slug).resolve()
-        if not is_under_cwd(str(cache_dir)):
-            console.print(
-                "[red]Resolved hub cache dir escaped the current working "
-                "directory; refusing to download.[/]"
-            )
-            raise typer.Exit(code=1)
         try:
-            # Idempotency: if the cache dir already has a config.json, skip
-            # the re-download (modelscope/openmind-hub also short-circuit on
-            # match but having an explicit probe lets us print a clear hint).
-            existing_cfg = cache_dir / "config.json"
-            if existing_cfg.is_file():
-                local_path = str(cache_dir)
-                console.print(
-                    f"[dim]Using cached snapshot at {local_path}[/]"
-                )
-            else:
-                local_path = download_repo(
-                    hub_name,
-                    cfg.base,
-                    local_dir=str(cache_dir),
-                )
-                console.print(
-                    f"[dim]Fetched {cfg.base} from hub={hub_name} → "
-                    f"{local_path}[/]"
-                )
-            # Use ``model_copy(update=...)`` so the Pydantic field
-            # validators on ``base`` rerun (matches v0.33.0 #47 / v0.40.0
-            # Part B immutability policy).
-            cfg = cfg.model_copy(update={"base": local_path})
-        except ImportError as exc:
-            console.print(f"[red]{_markup_escape(str(exc))}[/]")
-            raise typer.Exit(code=1) from exc
-
-    # v0.53.8 #89 — friendly missing-dep advisory for `--tracker <name>`.
-    if report_to and report_to not in ("none", "wandb", "tensorboard"):
-        from soup_cli.utils.trackers import tracker_missing_dep_message
-
-        msg = tracker_missing_dep_message(report_to)
-        if msg:
-            console.print(f"[yellow]{msg}[/]")
-    trainer_kwargs = {
-        "device": device,
-        "report_to": report_to,
-        "deepspeed_config": ds_config_path,
-        "fsdp_config": fsdp_kwargs,
-    }
-    # v0.40.4 #63 — every transformer-backend trainer now threads
-    # --trust-remote-code through the wrapper (closes the v0.36.0 Part B gap).
-    trainer_kwargs = dict(trainer_kwargs, trust_remote_code=trust_remote_code)
-    from soup_cli.trainer.mlx_routing import resolve_trainer
-
-    mlx_cls, trainer_kwargs = resolve_trainer(cfg, trainer_kwargs)
-    if mlx_cls is not None:
-        trainer_wrapper = mlx_cls(cfg, **trainer_kwargs)
-    elif cfg.task == "dpo":
-        from soup_cli.trainer.dpo import DPOTrainerWrapper
-
-        trainer_wrapper = DPOTrainerWrapper(cfg, **trainer_kwargs)
-    elif cfg.task == "online_dpo":
-        from soup_cli.trainer.online_dpo import OnlineDPOTrainerWrapper
-
-        trainer_wrapper = OnlineDPOTrainerWrapper(cfg, **trainer_kwargs)
-    elif cfg.task == "grpo":
-        from soup_cli.trainer.grpo import GRPOTrainerWrapper
-
-        trainer_wrapper = GRPOTrainerWrapper(cfg, **trainer_kwargs)
-    elif cfg.task == "ppo":
-        from soup_cli.trainer.ppo import PPOTrainerWrapper
-
-        trainer_wrapper = PPOTrainerWrapper(cfg, **trainer_kwargs)
-    elif cfg.task == "kto":
-        from soup_cli.trainer.kto import KTOTrainerWrapper
-
-        trainer_wrapper = KTOTrainerWrapper(cfg, **trainer_kwargs)
-    elif cfg.task == "orpo":
-        from soup_cli.trainer.orpo import ORPOTrainerWrapper
-
-        trainer_wrapper = ORPOTrainerWrapper(cfg, **trainer_kwargs)
-    elif cfg.task == "simpo":
-        from soup_cli.trainer.simpo import SimPOTrainerWrapper
-
-        trainer_wrapper = SimPOTrainerWrapper(cfg, **trainer_kwargs)
-    elif cfg.task == "ipo":
-        from soup_cli.trainer.ipo import IPOTrainerWrapper
-
-        trainer_wrapper = IPOTrainerWrapper(cfg, **trainer_kwargs)
-    elif cfg.task == "bco":
-        from soup_cli.trainer.bco import BCOTrainerWrapper
-
-        trainer_wrapper = BCOTrainerWrapper(cfg, **trainer_kwargs)
-    elif cfg.task == "preference":
-        from soup_cli.trainer.preference import PreferenceTrainerWrapper
-
-        trainer_wrapper = PreferenceTrainerWrapper(cfg, **trainer_kwargs)
-    elif cfg.task == "reward_model":
-        from soup_cli.trainer.reward_model import RewardModelTrainerWrapper
-
-        trainer_wrapper = RewardModelTrainerWrapper(cfg, **trainer_kwargs)
-    elif cfg.task == "pretrain":
-        from soup_cli.trainer.pretrain import PretrainTrainerWrapper
-
-        trainer_wrapper = PretrainTrainerWrapper(cfg, **trainer_kwargs)
-    elif cfg.task == "embedding":
-        from soup_cli.trainer.embedding import EmbeddingTrainerWrapper
-
-        trainer_wrapper = EmbeddingTrainerWrapper(cfg, **trainer_kwargs)
-    elif cfg.task == "distill":
-        # v0.53.2 #133 — knowledge distillation (student + frozen teacher).
-        from soup_cli.trainer.distill import DistillTrainerWrapper
-
-        trainer_wrapper = DistillTrainerWrapper(cfg, **trainer_kwargs)
-    elif cfg.task == "prm":
-        # v0.53.11 #126 — Process Reward Model trainer.
-        from soup_cli.trainer.prm import PRMTrainerWrapper
-
-        trainer_wrapper = PRMTrainerWrapper(cfg, **trainer_kwargs)
-    elif cfg.task in ("classifier", "reranker", "cross_encoder"):
-        # v0.53.2 #132 — sequence-classification head.
-        from soup_cli.trainer.classifier import ClassifierTrainerWrapper
-
-        trainer_wrapper = ClassifierTrainerWrapper(cfg, **trainer_kwargs)
-    elif cfg.task == "unlearn":
-        # v0.71.9 #193 — NPO / SimNPO / RMU unlearning.
-        from soup_cli.trainer.unlearn import UnlearnTrainerWrapper
-
-        trainer_wrapper = UnlearnTrainerWrapper(cfg, **trainer_kwargs)
-    elif cfg.task == "moe_lora_routing":
-        # v0.71.12 #222 — MoLE per-token routing over N frozen task LoRAs.
-        from soup_cli.trainer.mole_routing import MoleRoutingTrainerWrapper
-
-        trainer_wrapper = MoleRoutingTrainerWrapper(cfg, **trainer_kwargs)
-    elif cfg.task == "tts":
-        # v0.71.20 #131 — TTS fine-tuning (SFT-style next-token CE over
-        # text + audio-codec-token sequences; per-family templating).
-        from soup_cli.trainer.tts import TTSTrainerWrapper
-
-        trainer_wrapper = TTSTrainerWrapper(cfg, **trainer_kwargs)
-    elif cfg.task == "asr":
-        # v0.71.32 — ASR (Whisper) fine-tuning via Seq2SeqTrainer.
-        from soup_cli.trainer.asr import AsrTrainerWrapper
-
-        trainer_wrapper = AsrTrainerWrapper(cfg, **trainer_kwargs)
-    else:
-        # Keep the transformers/TRL SFT surface outside the backend-first MLX
-        # route. The wrapper is import-light today, but importing it eagerly
-        # makes an MLX-only install depend on that remaining true forever.
-        from soup_cli.trainer.sft import SFTTrainerWrapper
-
-        trainer_wrapper = SFTTrainerWrapper(cfg, **trainer_kwargs)
-    trainer_wrapper.setup(dataset)
-
-    # #350 — PEFT promotes newly-created adapters to fp32. FSDP cannot flatten
-    # those beside bf16/float16 BNB storage, so align every trainable floating
-    # tensor after setup creates PEFT modules and before train() wraps the model.
-    aligned_fsdp_params = 0
-    if fsdp and cfg.training.quantization == "4bit":
-        from soup_cli.utils.gpu import get_compute_dtype
-        from soup_cli.utils.mixed_precision import align_trainable_dtype_for_fsdp_qlora
-
-        aligned_fsdp_params = align_trainable_dtype_for_fsdp_qlora(
-            getattr(trainer_wrapper, "model", None),
-            fsdp=True,
-            quantization=cfg.training.quantization,
-            compute_dtype=get_compute_dtype(),
-        )
-    if aligned_fsdp_params:
-        console.print(
-            f"[green]FSDP QLoRA:[/] aligned {aligned_fsdp_params} trainable "
-            "parameter tensor(s) to the compute dtype"
-        )
-
-    # --- HF auto-push callback (Part B of v0.29.0) ---
-    if push_as:
-        from soup_cli.monitoring.hf_push import build_push_callback
-
-        push_cb = build_push_callback(
-            repo_id=push_as,
-            output_dir=cfg.output,
-            private=False,
-        )
-        if push_cb is None:
-            console.print(
-                "[yellow]--push-as: no HF token available; skipping auto-push[/]"
+            report_to = resolve_report_to(
+                wandb=wandb, tensorboard=tensorboard, tracker=tracker_backend
             )
-        else:
-            hf_trainer = getattr(trainer_wrapper, "trainer", None)
-            if hf_trainer is not None and hasattr(hf_trainer, "add_callback"):
-                hf_trainer.add_callback(push_cb)
-                console.print(
-                    f"[green]HF auto-push enabled[/] -> {push_as} "
-                    "(one branch per save_steps)"
-                )
-            else:
-                console.print(
-                    "[yellow]--push-as: trainer does not expose add_callback; "
-                    "auto-push disabled for this run[/]"
-                )
-
-    # Train with live display and experiment tracking
-    display = TrainingDisplay(cfg, device_name=device_name)
-    console.print("[bold green]Training started![/]\n")
-
-    profiler_ctx = contextlib.nullcontext()
-    if profile_run:
-        from soup_cli.utils.profiling import profile_training
-
-        profiler_ctx = profile_training(output_dir=Path(cfg.output), run_id=run_id)
-        console.print(
-            "[cyan]--profile:[/] writing torch.profiler trace to "
-            f"{cfg.output}/profiles/{run_id}.trace.json (early-steps window)"
-        )
-
-    # v0.71.3 #180 — optional codecarbon energy/CO2 measurement around the
-    # training window. Lazy-built; a graceful no-op when codecarbon is absent.
-    energy_ctx = contextlib.nullcontext()
-    energy_tracker = None
-    if track_energy:
-        try:
-            from soup_cli.utils.energy import EnergyTracker
-
-            energy_tracker = EnergyTracker(country_iso_code=energy_country)
-            energy_ctx = energy_tracker
         except ValueError as exc:
-            console.print(f"[yellow]--track-energy disabled:[/] {exc}")
-            energy_tracker = None
-            energy_ctx = contextlib.nullcontext()
+            from rich.markup import escape as _esc
+
+            console.print(f"[red]{_esc(str(exc))}[/]")
+            raise typer.Exit(code=2) from exc
+        console.print("[dim]Setting up model + trainer...[/]")
+        # v0.53.8 #130 — pre-fetch model from non-HF hub into a local cache and
+        # rewrite cfg.base to point at the local snapshot. The trainer wrappers
+        # still use transformers.from_pretrained, which reads HF Hub by default;
+        # by snapshotting first we keep every wrapper unchanged.
+        hub_name = getattr(cfg.training, "hub", "hf") or "hf"
+        if hub_name != "hf":
+            import re as _re
+
+            from rich.markup import escape as _markup_escape
+
+            from soup_cli.utils.hubs import download_repo
+            from soup_cli.utils.paths import is_under_cwd
+
+            # Sanitise cache subdir name — strip every path-separator and
+            # `..` segment so a crafted ``base: ../../etc`` cannot escape the
+            # cache root (Windows ``\\`` and POSIX ``/`` both blocked).
+            safe_slug = _re.sub(r"[^A-Za-z0-9._-]+", "__", cfg.base).strip("._-") or "model"
+            cache_dir = (Path.cwd() / ".soup_hub_cache" / safe_slug).resolve()
+            if not is_under_cwd(str(cache_dir)):
+                console.print(
+                    "[red]Resolved hub cache dir escaped the current working "
+                    "directory; refusing to download.[/]"
+                )
+                raise typer.Exit(code=1)
+            try:
+                # Idempotency: if the cache dir already has a config.json, skip
+                # the re-download (modelscope/openmind-hub also short-circuit on
+                # match but having an explicit probe lets us print a clear hint).
+                existing_cfg = cache_dir / "config.json"
+                if existing_cfg.is_file():
+                    local_path = str(cache_dir)
+                    console.print(
+                        f"[dim]Using cached snapshot at {local_path}[/]"
+                    )
+                else:
+                    local_path = download_repo(
+                        hub_name,
+                        cfg.base,
+                        local_dir=str(cache_dir),
+                    )
+                    console.print(
+                        f"[dim]Fetched {cfg.base} from hub={hub_name} → "
+                        f"{local_path}[/]"
+                    )
+                # Use ``model_copy(update=...)`` so the Pydantic field
+                # validators on ``base`` rerun (matches v0.33.0 #47 / v0.40.0
+                # Part B immutability policy).
+                cfg = cfg.model_copy(update={"base": local_path})
+            except ImportError as exc:
+                console.print(f"[red]{_markup_escape(str(exc))}[/]")
+                raise typer.Exit(code=1) from exc
+
+        # v0.53.8 #89 — friendly missing-dep advisory for `--tracker <name>`.
+        if report_to and report_to not in ("none", "wandb", "tensorboard"):
+            from soup_cli.utils.trackers import tracker_missing_dep_message
+
+            msg = tracker_missing_dep_message(report_to)
+            if msg:
+                console.print(f"[yellow]{msg}[/]")
+        trainer_kwargs = {
+            "device": device,
+            "report_to": report_to,
+            "deepspeed_config": ds_config_path,
+            "fsdp_config": fsdp_kwargs,
+        }
+        # v0.40.4 #63 — every transformer-backend trainer now threads
+        # --trust-remote-code through the wrapper (closes the v0.36.0 Part B gap).
+        trainer_kwargs = dict(trainer_kwargs, trust_remote_code=trust_remote_code)
+        from soup_cli.trainer.mlx_routing import resolve_trainer
+
+        mlx_cls, trainer_kwargs = resolve_trainer(cfg, trainer_kwargs)
+        if mlx_cls is not None:
+            trainer_wrapper = mlx_cls(cfg, **trainer_kwargs)
+        elif cfg.task == "dpo":
+            from soup_cli.trainer.dpo import DPOTrainerWrapper
+
+            trainer_wrapper = DPOTrainerWrapper(cfg, **trainer_kwargs)
+        elif cfg.task == "online_dpo":
+            from soup_cli.trainer.online_dpo import OnlineDPOTrainerWrapper
+
+            trainer_wrapper = OnlineDPOTrainerWrapper(cfg, **trainer_kwargs)
+        elif cfg.task == "grpo":
+            from soup_cli.trainer.grpo import GRPOTrainerWrapper
+
+            trainer_wrapper = GRPOTrainerWrapper(cfg, **trainer_kwargs)
+        elif cfg.task == "ppo":
+            from soup_cli.trainer.ppo import PPOTrainerWrapper
+
+            trainer_wrapper = PPOTrainerWrapper(cfg, **trainer_kwargs)
+        elif cfg.task == "kto":
+            from soup_cli.trainer.kto import KTOTrainerWrapper
+
+            trainer_wrapper = KTOTrainerWrapper(cfg, **trainer_kwargs)
+        elif cfg.task == "orpo":
+            from soup_cli.trainer.orpo import ORPOTrainerWrapper
+
+            trainer_wrapper = ORPOTrainerWrapper(cfg, **trainer_kwargs)
+        elif cfg.task == "simpo":
+            from soup_cli.trainer.simpo import SimPOTrainerWrapper
+
+            trainer_wrapper = SimPOTrainerWrapper(cfg, **trainer_kwargs)
+        elif cfg.task == "ipo":
+            from soup_cli.trainer.ipo import IPOTrainerWrapper
+
+            trainer_wrapper = IPOTrainerWrapper(cfg, **trainer_kwargs)
+        elif cfg.task == "bco":
+            from soup_cli.trainer.bco import BCOTrainerWrapper
+
+            trainer_wrapper = BCOTrainerWrapper(cfg, **trainer_kwargs)
+        elif cfg.task == "preference":
+            from soup_cli.trainer.preference import PreferenceTrainerWrapper
+
+            trainer_wrapper = PreferenceTrainerWrapper(cfg, **trainer_kwargs)
+        elif cfg.task == "reward_model":
+            from soup_cli.trainer.reward_model import RewardModelTrainerWrapper
+
+            trainer_wrapper = RewardModelTrainerWrapper(cfg, **trainer_kwargs)
+        elif cfg.task == "pretrain":
+            from soup_cli.trainer.pretrain import PretrainTrainerWrapper
+
+            trainer_wrapper = PretrainTrainerWrapper(cfg, **trainer_kwargs)
+        elif cfg.task == "embedding":
+            from soup_cli.trainer.embedding import EmbeddingTrainerWrapper
+
+            trainer_wrapper = EmbeddingTrainerWrapper(cfg, **trainer_kwargs)
+        elif cfg.task == "distill":
+            # v0.53.2 #133 — knowledge distillation (student + frozen teacher).
+            from soup_cli.trainer.distill import DistillTrainerWrapper
+
+            trainer_wrapper = DistillTrainerWrapper(cfg, **trainer_kwargs)
+        elif cfg.task == "prm":
+            # v0.53.11 #126 — Process Reward Model trainer.
+            from soup_cli.trainer.prm import PRMTrainerWrapper
+
+            trainer_wrapper = PRMTrainerWrapper(cfg, **trainer_kwargs)
+        elif cfg.task in ("classifier", "reranker", "cross_encoder"):
+            # v0.53.2 #132 — sequence-classification head.
+            from soup_cli.trainer.classifier import ClassifierTrainerWrapper
+
+            trainer_wrapper = ClassifierTrainerWrapper(cfg, **trainer_kwargs)
+        elif cfg.task == "unlearn":
+            # v0.71.9 #193 — NPO / SimNPO / RMU unlearning.
+            from soup_cli.trainer.unlearn import UnlearnTrainerWrapper
+
+            trainer_wrapper = UnlearnTrainerWrapper(cfg, **trainer_kwargs)
+        elif cfg.task == "moe_lora_routing":
+            # v0.71.12 #222 — MoLE per-token routing over N frozen task LoRAs.
+            from soup_cli.trainer.mole_routing import MoleRoutingTrainerWrapper
+
+            trainer_wrapper = MoleRoutingTrainerWrapper(cfg, **trainer_kwargs)
+        elif cfg.task == "tts":
+            # v0.71.20 #131 — TTS fine-tuning (SFT-style next-token CE over
+            # text + audio-codec-token sequences; per-family templating).
+            from soup_cli.trainer.tts import TTSTrainerWrapper
+
+            trainer_wrapper = TTSTrainerWrapper(cfg, **trainer_kwargs)
+        elif cfg.task == "asr":
+            # v0.71.32 — ASR (Whisper) fine-tuning via Seq2SeqTrainer.
+            from soup_cli.trainer.asr import AsrTrainerWrapper
+
+            trainer_wrapper = AsrTrainerWrapper(cfg, **trainer_kwargs)
+        else:
+            # Keep the transformers/TRL SFT surface outside the backend-first MLX
+            # route. The wrapper is import-light today, but importing it eagerly
+            # makes an MLX-only install depend on that remaining true forever.
+            from soup_cli.trainer.sft import SFTTrainerWrapper
+
+            trainer_wrapper = SFTTrainerWrapper(cfg, **trainer_kwargs)
+        trainer_wrapper.setup(dataset)
+
+        # #350 — PEFT promotes newly-created adapters to fp32. FSDP cannot flatten
+        # those beside bf16/float16 BNB storage, so align every trainable floating
+        # tensor after setup creates PEFT modules and before train() wraps the model.
+        aligned_fsdp_params = 0
+        if fsdp and cfg.training.quantization == "4bit":
+            from soup_cli.utils.gpu import get_compute_dtype
+            from soup_cli.utils.mixed_precision import align_trainable_dtype_for_fsdp_qlora
+
+            aligned_fsdp_params = align_trainable_dtype_for_fsdp_qlora(
+                getattr(trainer_wrapper, "model", None),
+                fsdp=True,
+                quantization=cfg.training.quantization,
+                compute_dtype=get_compute_dtype(),
+            )
+        if aligned_fsdp_params:
+            console.print(
+                f"[green]FSDP QLoRA:[/] aligned {aligned_fsdp_params} trainable "
+                "parameter tensor(s) to the compute dtype"
+            )
+
+        # --- HF auto-push callback (Part B of v0.29.0) ---
+        if push_as:
+            from soup_cli.monitoring.hf_push import build_push_callback
+
+            push_cb = build_push_callback(
+                repo_id=push_as,
+                output_dir=cfg.output,
+                private=False,
+            )
+            if push_cb is None:
+                console.print(
+                    "[yellow]--push-as: no HF token available; skipping auto-push[/]"
+                )
+            else:
+                hf_trainer = getattr(trainer_wrapper, "trainer", None)
+                if hf_trainer is not None and hasattr(hf_trainer, "add_callback"):
+                    hf_trainer.add_callback(push_cb)
+                    console.print(
+                        f"[green]HF auto-push enabled[/] -> {push_as} "
+                        "(one branch per save_steps)"
+                    )
+                else:
+                    console.print(
+                        "[yellow]--push-as: trainer does not expose add_callback; "
+                        "auto-push disabled for this run[/]"
+                    )
+
+        # Train with live display and experiment tracking
+        display = TrainingDisplay(cfg, device_name=device_name)
+        console.print("[bold green]Training started![/]\n")
+
+        profiler_ctx = contextlib.nullcontext()
+        if profile_run:
+            from soup_cli.utils.profiling import profile_training
+
+            profiler_ctx = profile_training(output_dir=Path(cfg.output), run_id=run_id)
+            console.print(
+                "[cyan]--profile:[/] writing torch.profiler trace to "
+                f"{cfg.output}/profiles/{run_id}.trace.json (early-steps window)"
+            )
+
+        # v0.71.3 #180 — optional codecarbon energy/CO2 measurement around the
+        # training window. Lazy-built; a graceful no-op when codecarbon is absent.
+        energy_ctx = contextlib.nullcontext()
+        energy_tracker = None
+        if track_energy:
+            try:
+                from soup_cli.utils.energy import EnergyTracker
+
+                energy_tracker = EnergyTracker(country_iso_code=energy_country)
+                energy_ctx = energy_tracker
+            except ValueError as exc:
+                console.print(f"[yellow]--track-energy disabled:[/] {exc}")
+                energy_tracker = None
+                energy_ctx = contextlib.nullcontext()
+
+    except Exception as exc:
+        tracker.fail_run(run_id, error=f"{type(exc).__name__}: {exc}")
+        raise
 
     try:
         with profiler_ctx, energy_ctx:
@@ -1567,7 +1576,7 @@ def train(
             output_dir=result["output_dir"],
         )
     except Exception as exc:
-        tracker.fail_run(run_id)
+        tracker.fail_run(run_id, error=f"{type(exc).__name__}: {exc}")
         # v0.34.0 Part D — write a .crash bundle next to the run for triage.
         try:
             from soup_cli.utils.crash import build_crash_bundle, write_crash_bundle

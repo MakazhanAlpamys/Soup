@@ -62,7 +62,8 @@ CREATE TABLE IF NOT EXISTS runs (
     pid             INTEGER,
     command_digest  TEXT,
     log_path        TEXT,
-    exit_code       INTEGER
+    exit_code       INTEGER,
+    error_message   TEXT
 );
 
 CREATE TABLE IF NOT EXISTS metrics (
@@ -178,6 +179,7 @@ class ExperimentTracker:
             ("runs", "command_digest", "ALTER TABLE runs ADD COLUMN command_digest TEXT"),
             ("runs", "log_path", "ALTER TABLE runs ADD COLUMN log_path TEXT"),
             ("runs", "exit_code", "ALTER TABLE runs ADD COLUMN exit_code INTEGER"),
+            ("runs", "error_message", "ALTER TABLE runs ADD COLUMN error_message TEXT"),
             # Deliberately nullable with no default: a row written before this
             # column existed has no evaluation loss, and NULL says so. A 0.0
             # would read as a measurement nobody took.
@@ -409,10 +411,18 @@ class ExperimentTracker:
         )
         conn.commit()
 
-    def fail_run(self, run_id: str) -> None:
-        """Mark run as failed."""
+    def fail_run(self, run_id: str, *, error: Optional[str] = None) -> None:
+        """Mark run as failed, optionally recording why (#764).
+
+        ``error`` distinguishes a run that never got past setup from one that
+        diverged mid-training — both used to read as an identical 'failed'
+        row with nothing else to go on.
+        """
         conn = self._get_conn()
-        conn.execute("UPDATE runs SET status = 'failed' WHERE run_id = ?", (run_id,))
+        conn.execute(
+            "UPDATE runs SET status = 'failed', error_message = ? WHERE run_id = ?",
+            (error, run_id),
+        )
         conn.commit()
 
     def _reconcile_orphaned_run(self, run: dict) -> dict:
