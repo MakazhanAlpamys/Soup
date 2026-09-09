@@ -46,7 +46,11 @@ def _mlx_record(**overrides):
         "mask_prompt": False,
         "response_token_mask": True,
         "train_on_responses_only": True,
-        "lora_parameters": {"rank": 8, "alpha": 16, "dropout": 0.0},
+        # The real shape, taken from a live Metal run: MLX writes `scale`
+        # (= alpha / rank) and no `alpha` key at all. An earlier fixture
+        # invented `alpha` here, so lora.alpha passed in tests and read
+        # `unknown` on every real adapter.
+        "lora_parameters": {"rank": 8, "scale": 2.0, "dropout": 0.0},
     }
     record.update(overrides)
     return record
@@ -282,3 +286,60 @@ class TestTheCommand:
         res = CliRunner().invoke(app, ["audit", str(tmp_path), "--config", str(cfg)])
         assert res.exit_code != 0
         assert "adapter_config.json" in res.output
+
+
+class TestLoraAlphaComesFromWhicheverShapeTheWriterChose:
+    """Found by a live Metal run, not by a fixture.
+
+    MLX writes `lora_parameters: {"rank": 4, "scale": 2.0, ...}` and **no
+    `alpha` key**; `scale` is `alpha / rank`. An earlier version of this file
+    invented an `alpha` key in its fixture, so the test passed while
+    `lora.alpha` read `unknown` on every real MLX adapter. The fixture was
+    asserting my assumption rather than the format.
+    """
+
+    def test_mlx_scale_is_converted_back_to_alpha(self):
+        from soup_cli.utils.adapter_audit import audit_adapter
+
+        cfg = _config()
+        cfg["training"]["lora"] = {"r": 4, "alpha": 8}
+        record = _mlx_record(lora_parameters={"rank": 4, "scale": 2.0, "dropout": 0.05})
+
+        row = next(r for r in audit_adapter(cfg, record).rows if r.setting == "lora.alpha")
+        assert row.status == "ok", (
+            f"scale 2.0 x rank 4 is alpha 8; got {row.ran!r} ({row.status})"
+        )
+
+    def test_a_wrong_alpha_still_diverges_through_the_conversion(self):
+        """Control: the conversion must not launder a real mismatch into `ok`."""
+        from soup_cli.utils.adapter_audit import audit_adapter
+
+        cfg = _config()
+        cfg["training"]["lora"] = {"r": 4, "alpha": 32}
+        record = _mlx_record(lora_parameters={"rank": 4, "scale": 2.0})
+
+        row = next(r for r in audit_adapter(cfg, record).rows if r.setting == "lora.alpha")
+        assert row.status == "diverged"
+        assert "8" in str(row.ran)
+
+    def test_peft_lora_alpha_is_read_directly(self):
+        """The other writer stores alpha itself, with no conversion."""
+        from soup_cli.utils.adapter_audit import audit_adapter
+
+        cfg = _config(backend="transformers")
+        cfg["training"]["lora"] = {"r": 8, "alpha": 16}
+        row = next(
+            r for r in audit_adapter(cfg, {"peft_type": "LORA", "r": 8, "lora_alpha": 16}).rows
+            if r.setting == "lora.alpha"
+        )
+        assert row.status == "ok"
+
+    def test_a_record_with_neither_shape_is_unknown_not_ok(self):
+        from soup_cli.utils.adapter_audit import audit_adapter
+
+        cfg = _config()
+        cfg["training"]["lora"] = {"r": 4, "alpha": 8}
+        record = _mlx_record(lora_parameters={"rank": 4})
+
+        row = next(r for r in audit_adapter(cfg, record).rows if r.setting == "lora.alpha")
+        assert row.status == "unknown"
