@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import ast
 import pathlib
+import re
 
 SRC = pathlib.Path(__file__).resolve().parents[1] / "src" / "soup_cli"
 SCHEMA = "schema.py"
@@ -101,47 +102,48 @@ def _consumer_modules():
 # --------------------------------------------------------------------------
 KNOWN_UNCONSUMED = {
     # -- documented with a worked example, applied nowhere. Verified by hand.
-    "training.lr_groups": "utils/lr_groups.py exports parse_lr_groups() and "
+    "training.lr_groups": "no issue yet -- utils/lr_groups.py exports parse_lr_groups() and "
                           "nothing outside schema.py imports it; documented at "
                           "docs/peft-and-efficiency.md:190",
-    "data.mask_history": "schema promises 'mask all but the last assistant turn "
+    "data.mask_history": "no issue yet -- schema promises 'mask all but the last assistant turn "
                          "during loss computation'; documented at docs/data.md:692",
-    "training.early_stop_patience": "schema promises 'consecutive regressions "
+    "training.early_stop_patience": "no issue yet -- schema promises 'consecutive regressions "
                                     "before early stopping'; documented at "
                                     "docs/peft-and-efficiency.md:622",
-    "training.citation_recall_threshold": "validated by utils/citation_faithful.py "
+    "training.citation_recall_threshold": "no issue yet -- validated by utils/citation_faithful.py "
                                           "and named in its error strings; never applied",
     # -- found by the read/write fix, and the reason that fix exists. Both
     #    are user settings that are OVERRIDDEN rather than merely unread, so
     #    they are the strongest members of this list.
-    "data.remove_unused_columns": "schema default True, documented 'set False "
+    "data.remove_unused_columns": "#759 -- schema default True, documented 'set False "
                                   "when feeding extra cols to a custom collator' "
                                   "-- and sft.py:788 / pretrain.py:174 / "
                                   "embedding.py:175 / grpo.py:468 each hardcode "
                                   "False, so the setting never reaches HF",
-    "training.bnb_4bit_use_double_quant": "quant_menu.py:401 writes the key from "
+    "training.bnb_4bit_use_double_quant": "no issue yet -- quant_menu.py:401 writes the key from "
                                           "tcfg.double_quant_on, a DIFFERENT "
                                           "field; this one is never read. Named "
                                           "by the maintainer on #751 as a v0.74.0 "
                                           "example of the class",
-    "training.yarn_factor": "long_context.py:316 uses a local of the same name "
+    "training.yarn_factor": "no issue yet -- long_context.py:316 uses a local of the same name "
                             "and the string only as an error label; the config "
                             "field reaches nothing",
-    "training.grace_codebook": "the string appears as an artifact-kind name in "
+    "training.grace_codebook": "no issue yet -- the string appears as an artifact-kind name in "
                                "store.py:52 / edit.py:312, unrelated to this field",
     # -- declared and deliberately REFUSED, so having no consumer is correct.
     #    A distinct category from the two below: the user is told, loudly, at
     #    config load. Found by this guard rather than by hand.
-    "training.packing_cross_doc_attn_mask": "rejected at config load "
+    "training.packing_cross_doc_attn_mask": "no issue needed: rejected at config load "
                                             "(schema.py:3495) because it never "
                                             "mapped to a valid TRL packing_strategy; "
                                             "documented at docs/performance-and-"
                                             "quantization.md:153",
     # -- staged for features that have not landed; grouped so they can be
     #    retired together rather than one at a time.
-    "training.long_context_grpo": "documented as wiring Tiled MLP; no Tiled MLP exists",
-    "training.vision_grpo": "no vision GRPO path",
-    "training.load_in_16bit": "schema rewrites quantization at validation time",
+    "training.long_context_grpo": "no issue yet -- documented as wiring "
+                                  "Tiled MLP; no Tiled MLP exists",
+    "training.vision_grpo": "no issue yet -- no vision GRPO path",
+    "training.load_in_16bit": "no issue needed: schema rewrites quantization at validation time",
     "training.unsloth_bnb_4bit": "unsloth quantisation staging",
     "training.llm_int8": "bitsandbytes int8 staging",
     "training.quantize_ref_model": "reference-model quantisation staging",
@@ -338,66 +340,40 @@ class TestEveryDeclaredFieldReachesAConsumer:
         )
 
 
-def test_the_allowlist_is_not_silently_growing():
-    """A ratchet, in the shape of the recipe-count test.
+def test_the_allowlist_size_is_pinned_exactly():
+    """A ratchet that fails in BOTH directions.
 
-    If this number goes up, a field was added without wiring and allowlisted
-    instead. That is sometimes right -- but it should be a deliberate edit to
-    this line, visible in review, rather than a quiet append.
+    `<= N` catches the list growing -- a field allowlisted rather than wired.
+    It does not catch the list going STALE: wire a field, forget to delete its
+    entry, and the bound stays green while the allowlist now describes code
+    that no longer exists. @MakazhanAlpamys flagged that asymmetry on #751,
+    having watched #756's registry go stale five times in a day for exactly
+    that reason.
+
+    `==` makes both directions a deliberate, reviewable edit to this line.
+    `test_the_allowlist_does_not_cover_fields_that_are_consumed` is the other
+    half: it names WHICH entry went stale, where this one only says the count
+    moved.
     """
-    assert len(KNOWN_UNCONSUMED) <= 40, (
-        f"KNOWN_UNCONSUMED has grown to {len(KNOWN_UNCONSUMED)}; a field was "
-        "allowlisted rather than wired. Lower this bound when entries are retired."
+    assert len(KNOWN_UNCONSUMED) == 40, (
+        f"KNOWN_UNCONSUMED is {len(KNOWN_UNCONSUMED)}, pinned at 40. Going UP "
+        "means a field was allowlisted rather than wired; going DOWN means an "
+        "entry was retired, which is the good direction -- lower this number "
+        "in the same commit."
     )
 
 
-class TestTheDetectorAgainstKnownOffenders:
-    """@MakazhanAlpamys on #751: run it against the offenders that actually
-    shipped, because the ANSI scanner's first version passed its own invented
-    example and missed the real commit.
-
-    These pin the read/write distinction that catching them required. Writes
-    are what `mix_proxy.py` and `save_formats.py` do -- they EMIT config -- and
-    counting them as reads is what let `bnb_4bit_use_double_quant` look
-    consumed while nothing read it.
+def test_every_allowlist_entry_states_an_issue_or_says_there_is_none():
+    """An entry with no issue reference is indistinguishable from one someone
+    added to make CI green, and that is how a ratchet rots. Where no issue
+    exists the entry must say so out loud, which makes it a standing prompt to
+    file one -- which is how #759 came to be filed.
     """
-
-    def _consumed(self, tmp_path, source: str) -> set:
-        module = tmp_path / "m.py"
-        module.write_text(source)
-        return consumed_names([module])
-
-    def test_a_dict_literal_key_is_not_a_read(self, tmp_path):
-        """`save_formats.py:267` writes `{"bnb_4bit_use_double_quant": ...}`
-        into an output config. That is production, not consumption."""
-        src = 'def f(v):\n    return {"widget": v}\n'
-        assert "widget" not in self._consumed(tmp_path, src)
-
-    def test_a_subscript_assignment_is_not_a_read(self, tmp_path):
-        """`mix_proxy.py` writes `data_block["interleave"] = {...}`."""
-        src = 'def f(d, v):\n    d["widget"] = v\n'
-        assert "widget" not in self._consumed(tmp_path, src)
-
-    def test_but_a_subscript_load_is_a_read(self, tmp_path):
-        """Control for the two above -- the distinction is direction, not
-        syntax, and a guard that missed real dict reads would cry wolf."""
-        assert "widget" in self._consumed(tmp_path, 'def f(d):\n    return d["widget"]\n')
-
-    def test_a_get_call_is_a_read(self, tmp_path):
-        """`data_mix.py` reads `data_block.get("interleave", {})`."""
-        src = 'def f(d):\n    return d.get("widget", {})\n'
-        assert "widget" in self._consumed(tmp_path, src)
-
-    def test_an_attribute_store_is_not_a_read(self, tmp_path):
-        """Setting a field is not consuming it: `args.mask_prompt = x` writes
-        to the args object rather than reading the user's setting."""
-        assert "widget" not in self._consumed(tmp_path, "def f(o, v):\n    o.widget = v\n")
-
-    def test_bnb_4bit_use_double_quant_is_caught_in_its_shipped_shape(self, tmp_path):
-        """The maintainer's own example, reduced to the shape it ships in:
-        the key is written from a DIFFERENT field. Before the read/write fix
-        this read as consumed."""
-        src = 'def f(tcfg):\n    return {"widget": tcfg.other_field}\n'
-        consumed = self._consumed(tmp_path, src)
-        assert "widget" not in consumed, "the written key must not count as a read"
-        assert "other_field" in consumed, "the field actually read must count"
+    vague = sorted(
+        k for k, v in KNOWN_UNCONSUMED.items()
+        if not re.search(r"#\d+", v) and "no issue" not in v and "staging" not in v
+    )
+    assert not vague, (
+        "these allowlist entries cite no issue and do not say one is missing:\n  "
+        + "\n  ".join(vague)
+    )
