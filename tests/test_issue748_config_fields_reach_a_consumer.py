@@ -27,16 +27,28 @@ exactly the generic names a new HuggingFace/TRL passthrough field would carry.
 Scoping reads to config-typed objects is a much larger piece of work and is
 not attempted here.
 
-*A field read only through a resolver defined in ``schema.py`` reads as an
-orphan*, because ``schema.py`` is excluded from the scan. The worked example
-is ``training.bnb_4bit_use_double_quant``: nothing outside the schema names it,
-because consumers read the ``double_quant_on`` ``@property`` that wraps it
-(``schema.py:1880``, established by #321). An earlier version of this
-allowlist recorded that field as an unread offender on exactly that evidence
--- freezing a repaired field as an open defect, which is the worst thing an
-allowlist can do, because no test can ever retire it. Tri-state resolver
-properties are a documented pattern here, so this recurs; check for one before
-adding an entry.
+*Fields read only through a ``schema.py`` ``@property`` ARE now seen*, but
+only when something calls the property. ``schema.py`` is excluded from the
+main scan, so ``training.bnb_4bit_use_double_quant`` -- resolved by the
+``double_quant_on`` property (``schema.py:1880``, #321) -- read as an orphan,
+and an earlier version of this allowlist recorded it as an unread offender on
+exactly that evidence. Freezing a repaired field as an open defect is the
+worst thing an allowlist can do, because no test can retire it: the list is
+meant to name fields a user can set with no effect, and an entry that
+contradicts itself gives a false answer to the one question the file exists to
+answer. `schema_property_reads` fixes it. The gate matters as much as the
+pass: an UNCALLED resolver launders nothing, or the detector's own failure
+mode returns one level up, with a field "read" by code that never runs.
+Validators are excluded on principle -- a validator checks a value, a property
+resolves one for a consumer.
+
+**Two rules this file learned the hard way, kept because they generalise.**
+A check can only be pinned by testing its REFUSALS: loosening a predicate
+makes a suite pass rather than fail, so `_reason_is_accountable` is asserted
+against what it rejects. And some assertions are unkillable by construction --
+the scan/import tree check in `_declared()` exists to fire in a misconfigured
+environment, so no mutation run inside a correct one can kill it. It is not
+untested, it is untestable from here; do not delete it for lack of a red.
 
 *It cannot see a value that is read and then rewritten.* #423 is the shape:
 ``detect_device()`` did not recognise MLX, so `quantization: 4bit` was read
@@ -65,6 +77,7 @@ pytestmark = pytest.mark.unit
 
 SRC = pathlib.Path(__file__).resolve().parents[1] / "src" / "soup_cli"
 SCHEMA = "schema.py"
+SCHEMA_PATH = SRC / "config" / SCHEMA
 
 
 # --------------------------------------------------------------------------
@@ -135,14 +148,80 @@ def consumed_names(paths) -> set:
     return names
 
 
+def schema_property_reads(schema_path: pathlib.Path) -> dict:
+    """Fields read inside `schema.py` `@property` bodies, keyed by property name.
+
+    `schema.py` is excluded from the main scan, so a field read only through a
+    resolver there looks like an orphan. `double_quant_on` (schema.py:1880,
+    #321) is that case: consumers read the property, nothing names the field.
+
+    Properties only, never validators, and the distinction is principled: a
+    validator CHECKS a value and consumes nothing on the user's behalf; a
+    `@property` RESOLVES one for someone else to consume. Measured on this
+    schema: 1 property, 156 validators, 0 other decorated functions -- so this
+    pass contributes exactly one name today.
+
+    Returned per-property rather than flattened so the caller can gate on
+    whether anything actually calls the property. An uncalled resolver must not
+    launder its fields into "consumed" -- that would reintroduce this
+    detector's own failure mode one level up.
+    """
+    out: dict = {}
+    try:
+        tree = ast.parse(schema_path.read_text(errors="ignore"))
+    except (SyntaxError, UnicodeDecodeError, ValueError):  # pragma: no cover
+        return out
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        names = []
+        for dec in node.decorator_list:
+            if isinstance(dec, ast.Name):
+                names.append(dec.id)
+            elif isinstance(dec, ast.Attribute):
+                names.append(dec.attr)
+        if "property" not in names:
+            continue
+        reads = set()
+        for inner in ast.walk(node):
+            if isinstance(inner, ast.Attribute) and isinstance(inner.ctx, ast.Load):
+                reads.add(inner.attr)
+        out[node.name] = reads
+    return out
+
+
+def fold_property_reads(consumed: set, props: dict) -> set:
+    """Add a resolver's reads to `consumed`, but ONLY if the resolver is called.
+
+    The gate, extracted so it is testable on its own. Without it a property
+    nobody calls would launder its fields into "consumed" -- this detector's
+    own failure mode one level up, where a field is "read" by code that never
+    runs. Tested against a synthetic uncalled resolver rather than the real
+    schema, because the real schema's only property IS called, so a test using
+    it cannot tell the gate from its absence. (An earlier version of that test
+    did exactly that and the mutation survived.)
+    """
+    out = set(consumed)
+    for prop_name, reads in props.items():
+        if prop_name in out:
+            out |= reads
+    return out
+
+
 def _consumer_modules():
     return [p for p in SRC.rglob("*.py") if p.name != SCHEMA]
 
 
 def _consumed_in_src() -> set:
     """Cached: the walk is 499 modules and ~2s, and this file did it four
-    times uncached. Keyed on the file list so a changed tree re-walks."""
-    return set(_consumed_cached(tuple(sorted(str(p) for p in _consumer_modules()))))
+    times uncached. Keyed on the file list so a changed tree re-walks.
+
+    Includes fields resolved by a `schema.py` `@property` -- but only when the
+    property itself is called from somewhere in `src/`. See
+    `schema_property_reads`.
+    """
+    consumed = set(_consumed_cached(tuple(sorted(str(p) for p in _consumer_modules()))))
+    return fold_property_reads(consumed, schema_property_reads(SCHEMA_PATH))
 
 
 # --------------------------------------------------------------------------
@@ -171,17 +250,6 @@ KNOWN_UNCONSUMED = {
                                   "-- and sft.py:788 / pretrain.py:174 / "
                                   "embedding.py:175 / grpo.py:468 each hardcode "
                                   "False, so the setting never reaches HF",
-    # NOT a defect, and the entry that was wrong before: consumers read the
-    # `double_quant_on` @property (schema.py:1880, #321) which wraps this
-    # field, and the scan excludes schema.py, so it reads as an orphan. The
-    # value does reach bitsandbytes -- False -> False through quant_menu.py:401,
-    # stream_setup.py:507 and save_formats.py:267. Deleting this entry turns
-    # the guard red rather than fixing anything; only a detector that
-    # understands schema-side resolvers could retire it.
-    "training.bnb_4bit_use_double_quant": "no issue needed: consumed through the "
-                                          "double_quant_on @property (schema.py:1880, "
-                                          "#321), which the scan cannot see because "
-                                          "schema.py is excluded",
     "training.yarn_factor": "no issue yet -- long_context.py:316 uses a local of the same name "
                             "and the string only as an error label; the config "
                             "field reaches nothing",
@@ -390,7 +458,8 @@ class TestEveryDeclaredFieldReachesAConsumer:
         # ...and green once something reads it.
         wired = tmp_path / "wired.py"
         wired.write_text("def f(cfg):\n    return cfg.totally_unwired_probe\n")
-        consumed_after = consumed_names(_consumer_modules() + [wired])
+        # Same composition as the real check, property pass included.
+        consumed_after = _consumed_in_src() | consumed_names([wired])
         assert "totally_unwired_probe" in consumed_after
         assert not [
             key for key, attr in _declared().items()
@@ -431,8 +500,8 @@ def test_the_allowlist_size_is_pinned_exactly():
     half: it names WHICH entry went stale, where this one only says the count
     moved.
     """
-    assert len(KNOWN_UNCONSUMED) == 40, (
-        f"KNOWN_UNCONSUMED is {len(KNOWN_UNCONSUMED)}, pinned at 40. Going UP "
+    assert len(KNOWN_UNCONSUMED) == 39, (
+        f"KNOWN_UNCONSUMED is {len(KNOWN_UNCONSUMED)}, pinned at 39. Going UP "
         "means a field was allowlisted rather than wired; going DOWN means an "
         "entry was retired, which is the good direction -- lower this number "
         "in the same commit."
@@ -507,3 +576,90 @@ def test_getattr_reads_the_name_not_the_default(tmp_path):
     consumed = consumed_names([module])
     assert "name" in consumed
     assert "widget" not in consumed
+
+
+class TestSchemaSideResolvers:
+    """`schema.py` is excluded from the scan, so a field read only through a
+    resolver defined there looked like an orphan. `double_quant_on`
+    (`schema.py:1880`, #321) is that case, and an earlier version of this file
+    recorded its field as an unread offender on exactly that evidence.
+
+    Properties only, never validators: a validator CHECKS a value and consumes
+    nothing on the user's behalf; a `@property` RESOLVES one for someone else
+    to consume. Measured on this schema -- 1 property, 156 validators, 0 other
+    decorated functions -- so the pass contributes exactly one name today.
+    """
+
+    def _props(self, tmp_path, source: str) -> dict:
+        schema = tmp_path / "schema.py"
+        schema.write_text(source)
+        return schema_property_reads(schema)
+
+    def test_a_property_body_contributes_the_fields_it_reads(self, tmp_path):
+        src = (
+            "class C:\n"
+            "    @property\n"
+            "    def resolved(self):\n"
+            "        return self.raw_field is not False\n"
+        )
+        assert self._props(tmp_path, src) == {"resolved": {"raw_field"}}
+
+    def test_a_validator_body_contributes_nothing(self, tmp_path):
+        """156 of them read fields here. Counting those would mark most of the
+        schema consumed by its own validation, which is the false negative
+        that matters."""
+        src = (
+            "class C:\n"
+            "    @field_validator('raw_field')\n"
+            "    def check(cls, v):\n"
+            "        return cls.raw_field\n"
+        )
+        assert self._props(tmp_path, src) == {}
+
+    def test_the_real_schema_has_exactly_one_property(self):
+        """If a second resolver appears, this pass grows silently -- the pin is
+        cheap and makes that a deliberate edit."""
+        props = schema_property_reads(SCHEMA_PATH)
+        assert list(props) == ["double_quant_on"], (
+            f"schema.py properties are now {sorted(props)}; each one launders "
+            "the fields it reads into 'consumed', so review the addition"
+        )
+        assert "bnb_4bit_use_double_quant" in props["double_quant_on"]
+
+    def test_a_called_resolver_makes_its_field_consumed(self):
+        """`double_quant_on` is called from quant_menu.py and stream_setup.py,
+        so its field retires from the allowlist."""
+        consumed = _consumed_in_src()
+        assert "double_quant_on" in consumed, "the property itself must be called"
+        assert "bnb_4bit_use_double_quant" in consumed
+        assert "training.bnb_4bit_use_double_quant" not in KNOWN_UNCONSUMED
+
+    def test_an_uncalled_resolver_launders_nothing(self):
+        """The gate, exercised directly.
+
+        An earlier version of this test built a temp schema and then asserted
+        against `_consumed_in_src()`, which reads the REAL schema -- so it held
+        whether the gate existed or not, and dropping the gate survived
+        mutation. This drives `fold_property_reads` itself.
+        """
+        props = {"never_called": {"orphan_field"}, "is_called": {"wired_field"}}
+        consumed = fold_property_reads({"is_called", "unrelated"}, props)
+
+        assert "wired_field" in consumed, "a CALLED resolver contributes its reads"
+        assert "orphan_field" not in consumed, (
+            "an uncalled resolver laundered its field into 'consumed'; a field "
+            "read only by code nothing invokes is not consumed"
+        )
+
+    def test_the_gate_is_what_retires_the_double_quant_entry(self):
+        """End to end on the real schema: the property is called, so its field
+        is consumed and needs no allowlist entry."""
+        props = schema_property_reads(SCHEMA_PATH)
+        raw = set(_consumed_cached(tuple(sorted(str(p) for p in _consumer_modules()))))
+
+        assert "bnb_4bit_use_double_quant" not in raw, (
+            "nothing outside schema.py names the field -- that is why the "
+            "property pass exists"
+        )
+        assert "double_quant_on" in raw, "the property itself is called"
+        assert "bnb_4bit_use_double_quant" in fold_property_reads(raw, props)
