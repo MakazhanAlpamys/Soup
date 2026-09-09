@@ -14,6 +14,35 @@ not "does this backend read this". `training.max_grad_norm` is read by sixteen
 transformers trainers and by nothing on MLX; that is a strictly harder problem
 and out of scope here.
 
+**What this cannot see, so nobody trusts it past its limits.**
+
+*The name space is global.* It asks whether an identifier appears as an
+attribute or key anywhere under ``src/``, not whether it appears on a config
+object. The consumed set is roughly 3,400 names -- most of the codebase's
+attribute namespace. A field named after a common attribute therefore reads as
+consumed on the strength of an unrelated one: a `temperature` field is
+"consumed" by `request.temperature` in `commands/serve.py`, and `top_p`,
+`dtype`, `timeout` and `seed` behave the same way. The guard leaks hardest on
+exactly the generic names a new HuggingFace/TRL passthrough field would carry.
+Scoping reads to config-typed objects is a much larger piece of work and is
+not attempted here.
+
+*A field read only through a resolver defined in ``schema.py`` reads as an
+orphan*, because ``schema.py`` is excluded from the scan. The worked example
+is ``training.bnb_4bit_use_double_quant``: nothing outside the schema names it,
+because consumers read the ``double_quant_on`` ``@property`` that wraps it
+(``schema.py:1880``, established by #321). An earlier version of this
+allowlist recorded that field as an unread offender on exactly that evidence
+-- freezing a repaired field as an open defect, which is the worst thing an
+allowlist can do, because no test can ever retire it. Tri-state resolver
+properties are a documented pattern here, so this recurs; check for one before
+adding an entry.
+
+*It cannot see a value that is read and then rewritten.* #423 is the shape:
+``detect_device()`` did not recognise MLX, so `quantization: 4bit` was read
+correctly and then silently rewritten to `none`. That needs device-aware
+expectations, not a reachability walk.
+
 **Why an AST walk and not a grep.** `citation_recall_threshold` appears in a
 validator's error-message strings, so `grep -rl` calls it consumed while
 nothing applies it. Docstrings are stripped before the walk for the same
@@ -26,8 +55,13 @@ that shape. Both directions are pinned below.
 from __future__ import annotations
 
 import ast
+import functools
 import pathlib
 import re
+
+import pytest
+
+pytestmark = pytest.mark.unit
 
 SRC = pathlib.Path(__file__).resolve().parents[1] / "src" / "soup_cli"
 SCHEMA = "schema.py"
@@ -37,6 +71,11 @@ SCHEMA = "schema.py"
 # The detector. Kept here rather than in `src/` because it is test-only
 # tooling; nothing in the shipped CLI should depend on it.
 # --------------------------------------------------------------------------
+@functools.lru_cache(maxsize=None)
+def _consumed_cached(paths_key) -> frozenset:
+    return frozenset(consumed_names([pathlib.Path(p) for p in paths_key]))
+
+
 def consumed_names(paths) -> set:
     """Names some module READS. Reads only -- writes are not consumption.
 
@@ -83,8 +122,14 @@ def consumed_names(paths) -> set:
                 # getattr(obj, "field") / d.get("field") / pop / setdefault
                 fn = node.func
                 fname = fn.attr if isinstance(fn, ast.Attribute) else getattr(fn, "id", "")
+                # Only the NAME argument, never the default. `d.get("k", "widget")`
+                # returns "widget" as a fallback value; counting it as a read of a
+                # field called `widget` is a false positive, and false positives
+                # are what get a guard deleted.
+                idx = 1 if fname in ("getattr", "hasattr") else 0
                 if fname in ("getattr", "get", "pop", "setdefault", "hasattr"):
-                    for arg in node.args:
+                    if len(node.args) > idx:
+                        arg = node.args[idx]
                         if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
                             names.add(arg.value)
     return names
@@ -92,6 +137,12 @@ def consumed_names(paths) -> set:
 
 def _consumer_modules():
     return [p for p in SRC.rglob("*.py") if p.name != SCHEMA]
+
+
+def _consumed_in_src() -> set:
+    """Cached: the walk is 499 modules and ~2s, and this file did it four
+    times uncached. Keyed on the file list so a changed tree re-walks."""
+    return set(_consumed_cached(tuple(sorted(str(p) for p in _consumer_modules()))))
 
 
 # --------------------------------------------------------------------------
@@ -120,11 +171,17 @@ KNOWN_UNCONSUMED = {
                                   "-- and sft.py:788 / pretrain.py:174 / "
                                   "embedding.py:175 / grpo.py:468 each hardcode "
                                   "False, so the setting never reaches HF",
-    "training.bnb_4bit_use_double_quant": "no issue yet -- quant_menu.py:401 writes the key from "
-                                          "tcfg.double_quant_on, a DIFFERENT "
-                                          "field; this one is never read. Named "
-                                          "by the maintainer on #751 as a v0.74.0 "
-                                          "example of the class",
+    # NOT a defect, and the entry that was wrong before: consumers read the
+    # `double_quant_on` @property (schema.py:1880, #321) which wraps this
+    # field, and the scan excludes schema.py, so it reads as an orphan. The
+    # value does reach bitsandbytes -- False -> False through quant_menu.py:401,
+    # stream_setup.py:507 and save_formats.py:267. Deleting this entry turns
+    # the guard red rather than fixing anything; only a detector that
+    # understands schema-side resolvers could retire it.
+    "training.bnb_4bit_use_double_quant": "no issue needed: consumed through the "
+                                          "double_quant_on @property (schema.py:1880, "
+                                          "#321), which the scan cannot see because "
+                                          "schema.py is excluded",
     "training.yarn_factor": "no issue yet -- long_context.py:316 uses a local of the same name "
                             "and the string only as an error label; the config "
                             "field reaches nothing",
@@ -144,39 +201,51 @@ KNOWN_UNCONSUMED = {
                                   "Tiled MLP; no Tiled MLP exists",
     "training.vision_grpo": "no issue yet -- no vision GRPO path",
     "training.load_in_16bit": "no issue needed: schema rewrites quantization at validation time",
-    "training.unsloth_bnb_4bit": "unsloth quantisation staging",
-    "training.llm_int8": "bitsandbytes int8 staging",
-    "training.quantize_ref_model": "reference-model quantisation staging",
-    "training.yarn_attn_factor": "YaRN staging",
-    "training.yarn_beta_fast": "YaRN staging",
-    "training.yarn_beta_slow": "YaRN staging",
-    "training.convergence_window": "convergence-detector staging",
-    "training.convergence_rel_tol": "convergence-detector staging",
-    "training.forgetting_eval_steps": "catastrophic-forgetting probe staging",
-    "training.forgetting_benchmark": "catastrophic-forgetting probe staging",
-    "training.forgetting_stop": "catastrophic-forgetting probe staging",
-    "training.checkpoint_eval_steps": "checkpoint-eval staging",
-    "training.checkpoint_eval_metric": "checkpoint-eval staging",
-    "training.checkpoint_eval_tasks": "checkpoint-eval staging",
-    "training.checkpoint_keep_top": "checkpoint-eval staging",
-    "training.grace_codebook_size": "GRACE codebook staging",
-    "training.grace_codebook_dim": "GRACE codebook staging",
-    "data.video_dir": "video pipeline staging",
-    "data.eval_on_each_dataset": "per-dataset eval staging",
-    "data.split_thinking": "thinking-block masking staging",
-    "data.image_min_pixels": "image preprocessing staging",
-    "data.image_max_pixels": "image preprocessing staging",
-    "data.image_resize_algorithm": "image preprocessing staging",
-    "data.video_fps": "video pipeline staging",
-    "data.video_maxlen": "video pipeline staging",
-    "data.resize_vocab": "vocab-resize staging",
-    "data.extend_conversation": "conversation-extension staging",
-    "data.skip_prepare_dataset": "dataset-prep bypass staging",
+    "training.unsloth_bnb_4bit": "no issue yet -- unsloth quantisation staging",
+    "training.llm_int8": "no issue yet -- bitsandbytes int8 staging",
+    "training.quantize_ref_model": "no issue yet -- reference-model quantisation staging",
+    "training.yarn_attn_factor": "no issue yet -- YaRN staging",
+    "training.yarn_beta_fast": "no issue yet -- YaRN staging",
+    "training.yarn_beta_slow": "no issue yet -- YaRN staging",
+    "training.convergence_window": "no issue yet -- convergence-detector staging",
+    "training.convergence_rel_tol": "no issue yet -- convergence-detector staging",
+    "training.forgetting_eval_steps": "no issue yet -- catastrophic-forgetting probe staging",
+    "training.forgetting_benchmark": "no issue yet -- catastrophic-forgetting probe staging",
+    "training.forgetting_stop": "no issue yet -- catastrophic-forgetting probe staging",
+    "training.checkpoint_eval_steps": "no issue yet -- checkpoint-eval staging",
+    "training.checkpoint_eval_metric": "no issue yet -- checkpoint-eval staging",
+    "training.checkpoint_eval_tasks": "no issue yet -- checkpoint-eval staging",
+    "training.checkpoint_keep_top": "no issue yet -- checkpoint-eval staging",
+    "training.grace_codebook_size": "no issue yet -- GRACE codebook staging",
+    "training.grace_codebook_dim": "no issue yet -- GRACE codebook staging",
+    "data.video_dir": "no issue yet -- video pipeline staging",
+    "data.eval_on_each_dataset": "no issue yet -- per-dataset eval staging",
+    "data.split_thinking": "no issue yet -- thinking-block masking staging",
+    "data.image_min_pixels": "no issue yet -- image preprocessing staging",
+    "data.image_max_pixels": "no issue yet -- image preprocessing staging",
+    "data.image_resize_algorithm": "no issue yet -- image preprocessing staging",
+    "data.video_fps": "no issue yet -- video pipeline staging",
+    "data.video_maxlen": "no issue yet -- video pipeline staging",
+    "data.resize_vocab": "no issue yet -- vocab-resize staging",
+    "data.extend_conversation": "no issue yet -- conversation-extension staging",
+    "data.skip_prepare_dataset": "no issue yet -- dataset-prep bypass staging",
 }
 
 
 def _declared():
+    import soup_cli
     from soup_cli.config.schema import DataConfig, TrainingConfig
+
+    # The scan walks SRC (this checkout); the fields come from the IMPORTED
+    # package. In a worktree with no PYTHONPATH those are different trees and
+    # the mismatch fails GREEN -- the silent-pass failure mode this file
+    # exists to prevent. Measured: 17 passed without PYTHONPATH, 2 failed with
+    # it, on the same tree.
+    imported = pathlib.Path(soup_cli.__file__).resolve().parent
+    assert imported == SRC, (
+        f"scanning {SRC} but importing {imported}; set PYTHONPATH=<checkout>/src "
+        "or reinstall with `pip install -e .`, or this guard silently passes"
+    )
 
     out = {}
     for cls, label in ((TrainingConfig, "training"), (DataConfig, "data")):
@@ -252,7 +321,7 @@ class TestTheDetectorItself:
 
 class TestEveryDeclaredFieldReachesAConsumer:
     def test_no_new_field_is_declared_without_a_consumer(self):
-        consumed = consumed_names(_consumer_modules())
+        consumed = _consumed_in_src()
         orphans = sorted(
             key
             for key, attr in _declared().items()
@@ -279,7 +348,7 @@ class TestEveryDeclaredFieldReachesAConsumer:
     def test_the_allowlist_does_not_cover_fields_that_are_consumed(self):
         """The list may only shrink. When a field gets wired, its entry has to
         go, or the guard stops noticing if the wiring is later removed."""
-        consumed = consumed_names(_consumer_modules())
+        consumed = _consumed_in_src()
         declared = _declared()
         now_wired = sorted(
             k for k in KNOWN_UNCONSUMED
@@ -307,13 +376,15 @@ class TestEveryDeclaredFieldReachesAConsumer:
         fields["totally_unwired_probe"] = fields["max_grad_norm"]
         monkeypatch.setattr(TrainingConfig, "model_fields", fields)
 
-        consumed = consumed_names(_consumer_modules())
+        consumed = _consumed_in_src()
         orphans = [
             key for key, attr in _declared().items()
             if attr not in consumed and key not in KNOWN_UNCONSUMED
         ]
-        assert orphans == ["training.totally_unwired_probe"], (
-            f"the guard did not flag an unwired field; it reported {orphans}"
+        assert "training.totally_unwired_probe" in orphans, (
+            f"the guard did not flag an unwired field; it reported {orphans}. "
+            "Membership, not equality: any other orphan present is a separate "
+            "finding and must not make this read as a failure to detect."
         )
 
         # ...and green once something reads it.
@@ -351,6 +422,11 @@ def test_the_allowlist_size_is_pinned_exactly():
     that reason.
 
     `==` makes both directions a deliberate, reviewable edit to this line.
+
+    **The one case only this test can see** -- and the reason it is not
+    redundant with the test below -- is an entry added for a BRAND-NEW unwired
+    field. Nothing is stale then, no entry describes code that moved, and the
+    count is the only signal that a field was allowlisted instead of wired.
     `test_the_allowlist_does_not_cover_fields_that_are_consumed` is the other
     half: it names WHICH entry went stale, where this one only says the count
     moved.
@@ -363,17 +439,71 @@ def test_the_allowlist_size_is_pinned_exactly():
     )
 
 
+def _reason_is_accountable(reason: str) -> bool:
+    """A reason must cite an issue or say in words that none exists.
+
+    Extracted so the predicate itself is testable. Loosening a check makes the
+    suite pass rather than fail, so the only way to pin it is to assert what it
+    REJECTS -- see `TestTheAccountabilityPredicate`.
+    """
+    return bool(re.search(r"#\d+", reason)) or "no issue" in reason
+
+
+class TestTheAccountabilityPredicate:
+    """`staging` was accepted as a pass and 31 of 40 entries used it. That loose
+    predicate is what let the `bnb_4bit_use_double_quant` entry through with a
+    wrong story attached, so what it REJECTS is the part worth pinning."""
+
+    def test_a_bare_staging_note_is_not_accountable(self):
+        assert not _reason_is_accountable("YaRN staging")
+
+    def test_prose_with_no_issue_and_no_admission_is_not_accountable(self):
+        assert not _reason_is_accountable("documented as wiring Tiled MLP")
+
+    def test_an_issue_reference_is_accountable(self):
+        assert _reason_is_accountable("#759 -- fifteen trainers hardcode it")
+
+    def test_an_explicit_admission_is_accountable(self):
+        assert _reason_is_accountable("no issue yet -- nothing imports it")
+        assert _reason_is_accountable("no issue needed: refused at config load")
+
+
 def test_every_allowlist_entry_states_an_issue_or_says_there_is_none():
     """An entry with no issue reference is indistinguishable from one someone
     added to make CI green, and that is how a ratchet rots. Where no issue
     exists the entry must say so out loud, which makes it a standing prompt to
     file one -- which is how #759 came to be filed.
     """
+    # `staging` is deliberately NOT accepted as a pass. 31 of the entries used
+    # it, and that loose predicate is what let the bnb_4bit_use_double_quant
+    # entry through carrying a wrong story. An entry must cite an issue or say
+    # in words that none exists.
     vague = sorted(
         k for k, v in KNOWN_UNCONSUMED.items()
-        if not re.search(r"#\d+", v) and "no issue" not in v and "staging" not in v
+        if not _reason_is_accountable(v)
     )
     assert not vague, (
         "these allowlist entries cite no issue and do not say one is missing:\n  "
         + "\n  ".join(vague)
     )
+
+
+def test_a_get_default_is_not_counted_as_a_read(tmp_path):
+    """`d.get("k", "widget")` returns "widget" as a fallback VALUE, not as a
+    field name. Counting it would be a false positive, and the false-positive
+    rate is what decides whether a guard survives the next person in a hurry.
+    """
+    module = tmp_path / "m.py"
+    module.write_text('def f(d):\n    return d.get("k", "widget")\n')
+    consumed = consumed_names([module])
+    assert "k" in consumed, "the looked-up key is a read"
+    assert "widget" not in consumed, "the default value is not a read"
+
+
+def test_getattr_reads_the_name_not_the_default(tmp_path):
+    """`getattr(o, "name", "widget")` -- the name is argument 1, the default 2."""
+    module = tmp_path / "m.py"
+    module.write_text('def f(o):\n    return getattr(o, "name", "widget")\n')
+    consumed = consumed_names([module])
+    assert "name" in consumed
+    assert "widget" not in consumed
