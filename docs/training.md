@@ -524,9 +524,9 @@ task: grpo
 training:
   reward_fn: accuracy
   num_generations: 4
-  grpo_variant: gspo         # group-stabilised importance ratio
+  grpo_variant: gspo         # sequence-level length-normalized ratio
   # or: dapo / dr_grpo / bnpo / rft / two_sided
-  # grpo_delta: 0.2          # required when grpo_variant=two_sided
+  # grpo_delta: 0.2          # required when grpo_variant=two_sided; optional for gspo
 ```
 
 Variants:
@@ -839,7 +839,7 @@ training:
   num_generations: 8
   # New: GRPO objective variants
   grpo_variant: dapo                  # one of: gspo / dapo / dr_grpo / bnpo / two_sided / rft / standard
-  # grpo_delta: 0.2                   # required when grpo_variant: two_sided
+  # grpo_delta: 0.2                   # required when grpo_variant: two_sided (optional for gspo)
   grpo_fp16: true                     # FP16 RL (unsloth parity)
   # Long-context + memory-efficient RL
   long_context_grpo: true             # wires Tiled MLP when available

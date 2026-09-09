@@ -428,3 +428,60 @@ class TestSequenceLevelGSPO:
         assert not trainer._soup_fallback_warned
         assert math.isfinite(float(loss.detach()))
         assert float(loss.detach()) != 777.0
+
+    def test_soupconfig_gspo_with_custom_delta_from_yaml(self) -> None:
+        """Release checklist 6c: real soup.yaml parses grpo_variant=gspo w/ grpo_delta (#744)."""
+        from soup_cli.config.loader import load_config_from_string
+
+        yaml_content = """
+base: test-model
+task: grpo
+data:
+  train: ./data.jsonl
+  format: chatml
+output: ./out
+training:
+  reward_fn: accuracy
+  num_generations: 4
+  grpo_variant: gspo
+  grpo_delta: 0.05
+"""
+        cfg = load_config_from_string(yaml_content)
+        assert cfg.training.grpo_variant == "gspo"
+        assert cfg.training.grpo_delta is not None
+        assert math.isclose(cfg.training.grpo_delta, 0.05)
+
+    def test_runtime_grpo_trainer_threads_custom_delta(self) -> None:
+        """Trainer threads _soup_grpo_delta to apply_variant_loss for gspo (#744)."""
+        torch = _torch_or_skip()
+        from soup_cli.trainer.grpo import make_grpo_trainer_variant
+
+        class _MockTrainerWithDelta:
+            def __init__(self):
+                self.args = type("Args", (), {"beta": 0.0})()
+                self.model = type("Model", (), {"training": True})()
+                self.current_gradient_accumulation_steps = 1
+                self._soup_grpo_delta = 0.35
+
+            def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
+                return torch.tensor(0.0)
+
+        variant_cls = make_grpo_trainer_variant(_MockTrainerWithDelta, "gspo")
+        trainer = variant_cls()
+
+        # ratio s = exp(0.25) ~ 1.284
+        # Under default eps=0.2 (max 1.2), clip would take effect.
+        # Under delta=0.35 (max 1.35), it remains unclipped with non-zero grad.
+        inputs = {
+            "prompt_ids": torch.tensor([[1, 2]]),
+            "prompt_mask": torch.tensor([[1, 1]]),
+            "completion_ids": torch.tensor([[5, 6]]),
+            "completion_mask": torch.tensor([[1, 1]]),
+            "per_token_logps": torch.tensor([[0.25, 0.25]], requires_grad=True),
+            "old_per_token_logps": torch.tensor([[0.0, 0.0]]),
+            "advantages": torch.tensor([1.0]),
+        }
+        loss = trainer.compute_loss(model=None, inputs=inputs)
+        loss.backward()
+        assert inputs["per_token_logps"].grad is not None
+        assert (inputs["per_token_logps"].grad.abs() > 0.0).all()

@@ -7,7 +7,7 @@ v0.37.0 multipack / v0.41.0 LLaMA Pro / v0.45.0 plugins / v0.48.0 curriculum
 stub-then-live pattern).
 
 Variants:
-- gspo         : Group Stabilized Policy Optimization (unsloth)
+- gspo         : Group Sequence Policy Optimization (Qwen)
 - dapo         : Decoupled Advantage Policy Optimization (unsloth, axolotl)
 - dr_grpo      : Doubly Robust GRPO (unsloth, axolotl)
 - bnpo         : Batch Normalized Policy Optimization (unsloth)
@@ -69,7 +69,7 @@ _VARIANT_METADATA = types.MappingProxyType({
     ),
     "gspo": GRPOVariantSpec(
         name="gspo",
-        description="Group Sequence Policy Optimization (group-stabilized)",
+        description="Group Sequence Policy Optimization",
         requires_delta=False,
         live_wired=True,
     ),
@@ -305,9 +305,9 @@ def apply_variant_loss(
             seq_log_ratio = log_ratio.mean(dim=-1)
             valid_seq_mask = torch.ones_like(seq_log_ratio)
 
-        s = torch.exp(seq_log_ratio)
-        surr1 = s * adv_seq
-        surr2 = torch.clamp(s, min=1.0 - eps, max=1.0 + eps) * adv_seq
+        seq_ratio = torch.exp(seq_log_ratio)
+        surr1 = seq_ratio * adv_seq
+        surr2 = torch.clamp(seq_ratio, min=1.0 - eps, max=1.0 + eps) * adv_seq
         seq_loss = -torch.min(surr1, surr2)
         denom = valid_seq_mask.sum().clamp(min=1.0)
         return (seq_loss * valid_seq_mask).sum() / denom
