@@ -21,8 +21,16 @@ pytest.importorskip("torch")
 pytest.importorskip("peft")
 pytest.importorskip("transformers")
 
+import torch  # noqa: E402 — after importorskip, for the version guard below
+
 BASE_LR = 2e-5
 RATIO = 16.0
+
+# transformers refuses torch.load for optimizer/scheduler checkpoints below
+# torch 2.6 (CVE-2025-32434) — the same floor gap as #651. This project
+# declares torch>=2.5.0, so an install at that floor must skip the resume
+# test below rather than fail red on a version restriction it can't control.
+_TORCH_VERSION = tuple(int(p) for p in torch.__version__.split("+")[0].split(".")[:2])
 
 
 def _tiny_peft_model(seed: int = 0):
@@ -159,6 +167,15 @@ def test_training_arguments_still_rejects_the_kwarg():
         TrainingArguments(output_dir="x", loraplus_lr_ratio=RATIO)
 
 
+@pytest.mark.skipif(
+    _TORCH_VERSION < (2, 6),
+    reason=(
+        f"torch {torch.__version__} predates 2.6; transformers refuses "
+        "torch.load for optimizer/scheduler checkpoints below that version "
+        "(CVE-2025-32434), so a real resume cycle cannot run here at all. "
+        "Resume is untested at this floor, not proven broken."
+    ),
+)
 class TestResumePreservesOptimizerAndSchedulerState:
     """#724's last acceptance criterion, never previously exercised: does a
     LoRA+ optimizer built by attach_loraplus_optimizer actually survive HF's
