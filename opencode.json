@@ -1,0 +1,13 @@
+{
+  "mcp": {
+    "graft": {
+      "type": "local",
+      "command": [
+        "node",
+        "C:/Users/buzbe/AppData/Roaming/npm/node_modules/@nanonets/graft/dist/cli.js",
+        "mcp"
+      ],
+      "enabled": true
+    }
+  }
+}

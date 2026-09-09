@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "graft": {
+      "command": "node",
+      "args": [
+        "C:/Users/buzbe/AppData/Roaming/npm/node_modules/@nanonets/graft/dist/cli.js",
+        "mcp"
+      ]
+    }
+  }
+}
