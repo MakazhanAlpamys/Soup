@@ -36,42 +36,56 @@ SCHEMA = "schema.py"
 # The detector. Kept here rather than in `src/` because it is test-only
 # tooling; nothing in the shipped CLI should depend on it.
 # --------------------------------------------------------------------------
-def _strip_docstrings(tree: ast.AST) -> ast.AST:
-    """Remove docstrings so prose naming a field cannot count as reading it."""
-    for node in ast.walk(tree):
-        if isinstance(
-            node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
-        ):
-            body = getattr(node, "body", None)
-            if (
-                body
-                and isinstance(body[0], ast.Expr)
-                and isinstance(body[0].value, ast.Constant)
-                and isinstance(body[0].value.value, str)
-            ):
-                node.body = body[1:] or [ast.Pass()]
-    return tree
-
-
 def consumed_names(paths) -> set:
-    """Names some module reads: attribute accesses plus string constants.
+    """Names some module READS. Reads only -- writes are not consumption.
 
-    String constants are included deliberately -- `getattr(cfg, "field")` and
-    `cfg_dict["field"]` are real consumption. Docstrings are excluded, so
-    prose is not.
+    Counted as a read:
+      * `obj.field` in a load context;
+      * `d["field"]` in a load context;
+      * `getattr(obj, "field")` / `cfg.get("field")` and friends.
+
+    Deliberately NOT counted:
+      * `d["field"] = value` and `{"field": value}` -- that is code EMITTING
+        config, not reading the user's setting. This is the hole that let
+        both of the maintainer's named offenders through: `data.interleave`
+        looked consumed because `mix_proxy.py` writes
+        `data_block["interleave"] = {...}`, and
+        `bnb_4bit_use_double_quant` because `save_formats.py` writes it as a
+        key in an output dict. Run against the tree at the commit where each
+        was a live defect, the earlier version reported both as CONSUMED.
+      * docstring prose, and any other bare string constant. Nothing here
+        collects a free-standing `ast.Constant`, so prose is excluded
+        structurally rather than by a stripping pass. An earlier version
+        stripped docstrings explicitly; mutation testing showed that pass was
+        dead once reads were narrowed to Load contexts and call arguments, so
+        it was removed rather than left looking load-bearing.
     """
     names: set = set()
     for path in paths:
         try:
-            tree = _strip_docstrings(ast.parse(path.read_text(errors="ignore")))
-        except (SyntaxError, UnicodeDecodeError):  # pragma: no cover - defensive
+            tree = ast.parse(path.read_text(errors="ignore"))
+        except (SyntaxError, UnicodeDecodeError, ValueError):
             continue
         for node in ast.walk(tree):
             if isinstance(node, ast.Attribute):
-                names.add(node.attr)
-            elif isinstance(node, ast.Constant) and isinstance(node.value, str):
-                if len(node.value) < 80:
-                    names.add(node.value)
+                if isinstance(node.ctx, ast.Load):
+                    names.add(node.attr)
+            elif isinstance(node, ast.Subscript):
+                sl = node.slice
+                if (
+                    isinstance(node.ctx, ast.Load)
+                    and isinstance(sl, ast.Constant)
+                    and isinstance(sl.value, str)
+                ):
+                    names.add(sl.value)
+            elif isinstance(node, ast.Call):
+                # getattr(obj, "field") / d.get("field") / pop / setdefault
+                fn = node.func
+                fname = fn.attr if isinstance(fn, ast.Attribute) else getattr(fn, "id", "")
+                if fname in ("getattr", "get", "pop", "setdefault", "hasattr"):
+                    for arg in node.args:
+                        if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                            names.add(arg.value)
     return names
 
 
@@ -97,6 +111,24 @@ KNOWN_UNCONSUMED = {
                                     "docs/peft-and-efficiency.md:622",
     "training.citation_recall_threshold": "validated by utils/citation_faithful.py "
                                           "and named in its error strings; never applied",
+    # -- found by the read/write fix, and the reason that fix exists. Both
+    #    are user settings that are OVERRIDDEN rather than merely unread, so
+    #    they are the strongest members of this list.
+    "data.remove_unused_columns": "schema default True, documented 'set False "
+                                  "when feeding extra cols to a custom collator' "
+                                  "-- and sft.py:788 / pretrain.py:174 / "
+                                  "embedding.py:175 / grpo.py:468 each hardcode "
+                                  "False, so the setting never reaches HF",
+    "training.bnb_4bit_use_double_quant": "quant_menu.py:401 writes the key from "
+                                          "tcfg.double_quant_on, a DIFFERENT "
+                                          "field; this one is never read. Named "
+                                          "by the maintainer on #751 as a v0.74.0 "
+                                          "example of the class",
+    "training.yarn_factor": "long_context.py:316 uses a local of the same name "
+                            "and the string only as an error label; the config "
+                            "field reaches nothing",
+    "training.grace_codebook": "the string appears as an artifact-kind name in "
+                               "store.py:52 / edit.py:312, unrelated to this field",
     # -- declared and deliberately REFUSED, so having no consumer is correct.
     #    A distinct category from the two below: the user is told, loudly, at
     #    config load. Found by this guard rather than by hand.
@@ -313,7 +345,59 @@ def test_the_allowlist_is_not_silently_growing():
     instead. That is sometimes right -- but it should be a deliberate edit to
     this line, visible in review, rather than a quiet append.
     """
-    assert len(KNOWN_UNCONSUMED) <= 36, (
+    assert len(KNOWN_UNCONSUMED) <= 40, (
         f"KNOWN_UNCONSUMED has grown to {len(KNOWN_UNCONSUMED)}; a field was "
         "allowlisted rather than wired. Lower this bound when entries are retired."
     )
+
+
+class TestTheDetectorAgainstKnownOffenders:
+    """@MakazhanAlpamys on #751: run it against the offenders that actually
+    shipped, because the ANSI scanner's first version passed its own invented
+    example and missed the real commit.
+
+    These pin the read/write distinction that catching them required. Writes
+    are what `mix_proxy.py` and `save_formats.py` do -- they EMIT config -- and
+    counting them as reads is what let `bnb_4bit_use_double_quant` look
+    consumed while nothing read it.
+    """
+
+    def _consumed(self, tmp_path, source: str) -> set:
+        module = tmp_path / "m.py"
+        module.write_text(source)
+        return consumed_names([module])
+
+    def test_a_dict_literal_key_is_not_a_read(self, tmp_path):
+        """`save_formats.py:267` writes `{"bnb_4bit_use_double_quant": ...}`
+        into an output config. That is production, not consumption."""
+        src = 'def f(v):\n    return {"widget": v}\n'
+        assert "widget" not in self._consumed(tmp_path, src)
+
+    def test_a_subscript_assignment_is_not_a_read(self, tmp_path):
+        """`mix_proxy.py` writes `data_block["interleave"] = {...}`."""
+        src = 'def f(d, v):\n    d["widget"] = v\n'
+        assert "widget" not in self._consumed(tmp_path, src)
+
+    def test_but_a_subscript_load_is_a_read(self, tmp_path):
+        """Control for the two above -- the distinction is direction, not
+        syntax, and a guard that missed real dict reads would cry wolf."""
+        assert "widget" in self._consumed(tmp_path, 'def f(d):\n    return d["widget"]\n')
+
+    def test_a_get_call_is_a_read(self, tmp_path):
+        """`data_mix.py` reads `data_block.get("interleave", {})`."""
+        src = 'def f(d):\n    return d.get("widget", {})\n'
+        assert "widget" in self._consumed(tmp_path, src)
+
+    def test_an_attribute_store_is_not_a_read(self, tmp_path):
+        """Setting a field is not consuming it: `args.mask_prompt = x` writes
+        to the args object rather than reading the user's setting."""
+        assert "widget" not in self._consumed(tmp_path, "def f(o, v):\n    o.widget = v\n")
+
+    def test_bnb_4bit_use_double_quant_is_caught_in_its_shipped_shape(self, tmp_path):
+        """The maintainer's own example, reduced to the shape it ships in:
+        the key is written from a DIFFERENT field. Before the read/write fix
+        this read as consumed."""
+        src = 'def f(tcfg):\n    return {"widget": tcfg.other_field}\n'
+        consumed = self._consumed(tmp_path, src)
+        assert "widget" not in consumed, "the written key must not count as a read"
+        assert "other_field" in consumed, "the field actually read must count"
