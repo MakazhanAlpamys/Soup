@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
-from typing import Callable
 
 from soup_cli.data.formats import VALID_FORMATS, format_to_messages_with_reason
 from soup_cli.data.loader import load_raw_data
@@ -123,36 +122,42 @@ def load_benchmark_dataset() -> list[dict]:
     return dataset
 
 
-def benchmark_fn(
-    fn: Callable[[list[dict], str | None], dict],
+def benchmark_interleaved(
     data: list[dict],
     runs: int = 15,
-) -> tuple[float, dict]:
-    """Benchmark a function with warmups and return (median_time, result)."""
+) -> tuple[float, float, dict, dict]:
+    """Benchmark in interleaved A/B order to eliminate sequential ordering artifacts."""
     for _ in range(3):
-        fn(data, "alpaca")
+        previous_validate_and_stats(data, "alpaca")
+        validate_and_stats(data, "alpaca")
 
-    times: list[float] = []
-    result = {}
+    prev_times: list[float] = []
+    curr_times: list[float] = []
+    prev_result = {}
+    curr_result = {}
+
     for _ in range(runs):
-        start = time.perf_counter()
-        result = fn(data, "alpaca")
-        elapsed = time.perf_counter() - start
-        times.append(elapsed)
+        t0 = time.perf_counter()
+        prev_result = previous_validate_and_stats(data, "alpaca")
+        prev_times.append(time.perf_counter() - t0)
 
-    times.sort()
-    median_time = times[len(times) // 2]
-    return median_time, result
+        t0 = time.perf_counter()
+        curr_result = validate_and_stats(data, "alpaca")
+        curr_times.append(time.perf_counter() - t0)
+
+    prev_times.sort()
+    curr_times.sort()
+    prev_median = prev_times[len(prev_times) // 2]
+    curr_median = curr_times[len(curr_times) // 2]
+    return prev_median, curr_median, prev_result, curr_result
 
 
 def run_benchmark() -> None:
     data = load_benchmark_dataset()
     print(f"Loaded benchmark dataset: {len(data)} rows from repository fixtures")
 
-    prev_time, prev_result = benchmark_fn(previous_validate_and_stats, data)
+    prev_time, curr_time, prev_result, curr_result = benchmark_interleaved(data)
     print(f"Previous Implementation (median of 15 runs): {prev_time:.4f}s")
-
-    curr_time, curr_result = benchmark_fn(validate_and_stats, data)
     print(f"Current Implementation  (median of 15 runs): {curr_time:.4f}s")
 
     assert prev_result == curr_result, (

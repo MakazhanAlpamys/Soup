@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from soup_cli.data.formats import VALID_FORMATS, format_to_messages_with_reason
-from soup_cli.data.validator import _to_hashable, validate_and_stats
+from soup_cli.data.validator import _to_hashable, extended_stats, validate_and_stats
 
 
 def _reference_validate_and_stats(data: list[dict], expected_format: str | None = None) -> dict:
@@ -81,13 +81,19 @@ def _reference_validate_and_stats(data: list[dict], expected_format: str | None 
 
 
 def test_text_length_calculation_join_separator():
-    """Verify text length matches joined string (guards against M5 mutation)."""
+    """Verify text length matches joined string for validate_and_stats and extended_stats."""
     row = {"instruction": "hello", "input": "world", "output": "test"}
     expected_text = "hello world test"
     res = validate_and_stats([row])
     assert res["min_length"] == len(expected_text)
     assert res["max_length"] == len(expected_text)
     assert res["avg_length"] == len(expected_text)
+
+    # Multi-field exact length test for extended_stats (guards against line 176 separator bug)
+    multi_row = {"a": "abc", "b": "de"}
+    ext_res = extended_stats([multi_row])
+    assert ext_res["lengths"] == [6]
+    assert ext_res["avg_tokens"] == 1
 
 
 def test_type_tagged_duplicates_no_collisions():
@@ -100,6 +106,14 @@ def test_type_tagged_duplicates_no_collisions():
     res2 = validate_and_stats([{"a": 1}, {"a": 1.0}])
     assert res2["duplicates"] == 0
 
+    # 0 vs False
+    res2b = validate_and_stats([{"a": 0}, {"a": False}])
+    assert res2b["duplicates"] == 0
+
+    # "1" vs 1
+    res2c = validate_and_stats([{"a": "1"}, {"a": 1}])
+    assert res2c["duplicates"] == 0
+
     # list vs tuple
     res3 = validate_and_stats([{"a": [1, 2]}, {"a": (1, 2)}])
     assert res3["duplicates"] == 0
@@ -111,6 +125,20 @@ def test_type_tagged_duplicates_no_collisions():
     # empty list vs empty dict
     res5 = validate_and_stats([{"messages": []}, {"messages": {}}])
     assert res5["duplicates"] == 0
+
+
+def test_nested_dict_key_order_invariance():
+    """Verify nested dicts with identical content in different key order count as duplicates."""
+    data = [{"m": {"b": 1, "a": 2}}, {"m": {"a": 2, "b": 1}}]
+    res = validate_and_stats(data)
+    assert res["duplicates"] == 1
+
+
+def test_mixed_key_types_nested_dict_no_typeerror():
+    """Verify nested dicts with mixed key types (int and str) do not raise TypeError."""
+    data = [{"a": {1: "x", "b": "y"}}]
+    res = validate_and_stats(data)
+    assert res["total"] == 1
 
 
 def test_format_validation_reasons_preserved():

@@ -17,14 +17,20 @@ def _to_hashable(val: Any) -> Any:
     if val is None or isinstance(val, (str, int, float, bool)):
         return (type(val).__name__, val)
     if isinstance(val, dict):
-        return ("dict", tuple((k, _to_hashable(v)) for k, v in sorted(val.items())))
+        return (
+            "dict",
+            tuple(
+                (str(k), _to_hashable(v))
+                for k, v in sorted(val.items(), key=lambda item: str(item[0]))
+            ),
+        )
     if isinstance(val, list):
         return ("list", tuple(_to_hashable(v) for v in val))
     if isinstance(val, tuple):
         return ("tuple", tuple(_to_hashable(v) for v in val))
     if isinstance(val, set):
         try:
-            return ("set", tuple(_to_hashable(v) for v in sorted(val)))
+            return ("set", tuple(_to_hashable(v) for v in sorted(val, key=repr)))
         except TypeError:
             return ("set", tuple(_to_hashable(v) for v in val))
     return (type(val).__name__, str(val))
@@ -32,7 +38,27 @@ def _to_hashable(val: Any) -> Any:
 
 def _row_signature(row: dict) -> tuple:
     """Return a type-tagged hashable canonical representation of a row dict."""
-    return tuple((k, _to_hashable(v)) for k, v in sorted(row.items()))
+    return tuple(
+        (str(k), _to_hashable(v))
+        for k, v in sorted(row.items(), key=lambda item: str(item[0]))
+    )
+
+
+def _compute_row_text_length(row: dict) -> tuple[int, int]:
+    """Compute text length and count empty/None fields without intermediate string joins."""
+    parts_len = 0
+    parts_count = 0
+    empty_count = 0
+    for v in row.values():
+        if v is None:
+            empty_count += 1
+        elif v:
+            v_str = v if isinstance(v, str) else str(v)
+            parts_len += len(v_str)
+            parts_count += 1
+
+    char_len = parts_len + (parts_count - 1 if parts_count > 0 else 0)
+    return char_len, empty_count
 
 
 def validate_and_stats(data: list[dict], expected_format: Optional[str] = None) -> dict:
@@ -81,19 +107,9 @@ def validate_and_stats(data: list[dict], expected_format: Optional[str] = None) 
                 if len(sample_reasons) < _MAX_REASON_SAMPLES:
                     sample_reasons.append(f"row {idx}: {reason}")
 
-        # 3. Compute text length and count empty/None fields without intermediate
-        # list or joined-string allocations.
-        parts_len = 0
-        parts_count = 0
-        for v in row.values():
-            if v is None:
-                empty_count += 1
-            elif v:
-                v_str = v if isinstance(v, str) else str(v)
-                parts_len += len(v_str)
-                parts_count += 1
-
-        char_len = parts_len + (parts_count - 1 if parts_count > 0 else 0)
+        # 3. Shared text length & empty field calculation
+        char_len, empty_fields_in_row = _compute_row_text_length(row)
+        empty_count += empty_fields_in_row
         total_length += char_len
         row_count += 1
         if char_len < min_length:
@@ -166,14 +182,7 @@ def extended_stats(data: list[dict]) -> dict:
     token_counts = []
 
     for row in data:
-        parts_len = 0
-        parts_count = 0
-        for v in row.values():
-            if v:
-                v_str = v if isinstance(v, str) else str(v)
-                parts_len += len(v_str)
-                parts_count += 1
-        char_len = parts_len + (parts_count - 1 if parts_count > 0 else 0)
+        char_len, _ = _compute_row_text_length(row)
         lengths.append(char_len)
         # Approximate token count: ~4 chars per token for English
         token_counts.append(max(1, char_len // 4))
