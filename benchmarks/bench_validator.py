@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
-from typing import Any, Callable
+from typing import Callable
 
 from soup_cli.data.formats import FORMAT_SIGNATURES
 from soup_cli.data.loader import load_raw_data
@@ -113,7 +113,11 @@ def load_benchmark_dataset() -> list[dict]:
     return dataset
 
 
-def benchmark_fn(fn: Callable[[list[dict], str | None], dict], data: list[dict], runs: int = 15) -> tuple[float, dict]:
+def benchmark_fn(
+    fn: Callable[[list[dict], str | None], dict],
+    data: list[dict],
+    runs: int = 15,
+) -> tuple[float, dict]:
     """Benchmark a function with warmups and return (median_time, result)."""
     for _ in range(3):
         fn(data, "alpaca")
@@ -141,7 +145,9 @@ def run_benchmark() -> None:
     curr_time, curr_result = benchmark_fn(validate_and_stats, data)
     print(f"Current Implementation  (median of 15 runs): {curr_time:.4f}s")
 
-    assert prev_result == curr_result, f"Results mismatch!\nPrev: {prev_result}\nCurr: {curr_result}"
+    assert prev_result == curr_result, (
+        f"Results mismatch!\nPrev: {prev_result}\nCurr: {curr_result}"
+    )
     print("Correctness check: PASS (identical outputs)")
 
     if prev_time > 0:
