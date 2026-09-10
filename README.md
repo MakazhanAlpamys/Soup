@@ -17,6 +17,7 @@
   <a href="docs/commands.md">Commands</a> &middot;
   <a href="docs/models.md">Models</a> &middot;
   <a href="https://discord.gg/dgd2pJcjwP">Discord</a> &middot;
+  <a href="https://t.me/souptasters">Telegram</a> &middot;
   <a href="https://www.producthunt.com/products/soup-cli">Product Hunt</a>
 </p>
 
@@ -29,6 +30,7 @@
   <a href="https://github.com/MakazhanAlpamys/Soup/actions"><img src="https://github.com/MakazhanAlpamys/Soup/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://trysoup.dev"><img src="https://img.shields.io/badge/website-trysoup.dev-blue" alt="Website"></a>
   <a href="https://discord.gg/dgd2pJcjwP"><img src="https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white" alt="Discord"></a>
+  <a href="https://t.me/souptasters"><img src="https://img.shields.io/badge/Telegram-join-26A5E4?logo=telegram&logoColor=white" alt="Telegram"></a>
   <a href="https://doi.org/10.5281/zenodo.21771064"><img src="https://img.shields.io/badge/DOI-10.5281%2Fzenodo.21771064-blue?logo=zenodo&logoColor=white" alt="DOI: 10.5281/zenodo.21771064"></a>
 </p>
 
@@ -446,7 +448,8 @@ Bugs and feature requests belong in the
 and help the next person with the same problem.
 
 For live chat, setup help, and everything that reads better as a conversation, join the
-[Discord](https://discord.gg/dgd2pJcjwP). Anything that should still be findable in six months
+[Discord](https://discord.gg/dgd2pJcjwP) or the [Telegram community](https://t.me/souptasters).
+Anything that should still be findable in six months
 belongs in Issues or Discussions — a Discord answer helps one person, an issue helps everyone
 who hits the same thing. The [Code of Conduct](CODE_OF_CONDUCT.md) applies there too.
 
