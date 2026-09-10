@@ -1,4 +1,10 @@
+<<<<<<< Updated upstream
 <p align="center">**🌍 [Türkçe](README.md) | [English](README.en.md) | [العربية](README.ar.md) | [日本語](README.ja.md) | [中文](README.zh.md) | [Русский](README.ru.md) | [Español](README.es.md)**
+=======
+<p align="center"><strong>🌍 <a href="README.md">Türkçe</a> | <a href="README.en.md">English</a> | <a href="README.ar.md">العربية</a> | <a href="README.ja.md">日本語</a> | <a href="README.zh.md">中文</a> | <a href="README.ru.md">Русский</a> | <a href="README.es.md">Español</a></strong></p>
+
+<!-- synced-from: README.md sha256:73b53c056cd7db0f63c60a2e04e194606a6aa34cbae9b69ef29b732d85b336d3 -->
+>>>>>>> Stashed changes
 
 <p align="center">
   <img src="soup.png" alt="Soup" width="280">
@@ -7,6 +13,7 @@
 <h1 align="center">Soup</h1>
 
 <p align="center">
+<<<<<<< Updated upstream
   <strong>一键微调和后训练LLM。无需SSH，无配置地狱。</strong>
 </p>
 
@@ -28,18 +35,29 @@
   <a href="https://github.com/MakazhanAlpamys/Soup/actions"><img src="https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/MakazhanAlpamys/65fdc943f85f3b2c46ecddb415c2b779/raw/soup_tests.json" alt="测试"></a>
   <a href="https://github.com/MakazhanAlpamys/Soup/actions"><img src="https://github.com/MakazhanAlpamys/Soup/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://doi.org/10.5281/zenodo.21771064"><img src="https://img.shields.io/badge/DOI-10.5281%2Fzenodo.21771064-blue?logo=zenodo&logoColor=white" alt="DOI"></a>
+=======
+  <strong>一条命令微调LLM。无需SSH，无配置地狱。</strong>
+>>>>>>> Stashed changes
 </p>
 
 ---
 
+<<<<<<< Updated upstream
 Soup将LLM微调的痛苦转化为简单的工作流程。一个配置，一条命令，完成。
 
 ```bash
 pip install "soup-cli[train]"   # 添加[train]用于微调；单独的soup-cli是轻量级CLI
+=======
+Soup将LLM微调的痛苦转化为简单的工作流程。
+
+```bash
+pip install "soup-cli[train]"
+>>>>>>> Stashed changes
 soup init --template chat
 soup train
 ```
 
+<<<<<<< Updated upstream
 **在4GB笔记本GPU上微调8B模型。** 层流式传输将冻结的基础模型保持在VRAM之外，一次向GPU提供一个解码器层。在RTX 3050 Laptop 4GB上测量：Llama-3.1-8B-Instruct + NF4，**119.6 tok/s，峰值3.32GB** — 与正常驻留运行位精确，在H100上以相同的3.32GB独立重现了113.00 tok/s。可选（`stream_layers: true`）且仍为BETA —
 [工作原理](docs/performance-and-quantization.md#layer-streaming-beta-v0720-nf4-v0722-disk--wider-archs-v0723-preference-losses-v0724) ·
 [所有测量](benchmarks/) ·
@@ -326,4 +344,35 @@ pre-commit install                 # 可选：提交时ruff lint+格式化
   doi       = {10.5281/zenodo.21918325},
   url       = {https://doi.org/10.5281/zenodo.21918325}
 }
+``````
+=======
+## 为什么选择Soup？
+
+- **零SSH**
+- **一个配置**
+- **全部自动化**
+- **本地工作**
+
+## 快速开始
+
+```bash
+pip install "soup-cli[train]"
+soup init --template chat
+soup train
 ```
+
+## Docker
+
+```bash
+docker pull ghcr.io/makazhanalpamys/soup-cli:latest
+```
+
+## 要求
+
+- Python 3.10-3.12
+- NVIDIA GPU或Apple Silicon
+
+## 许可证
+
+Apache-2.0
+>>>>>>> Stashed changes

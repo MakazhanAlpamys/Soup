@@ -1,4 +1,10 @@
+<<<<<<< Updated upstream
 <p align="center">**🌍 [Türkçe](README.md) | [English](README.en.md) | [العربية](README.ar.md) | [日本語](README.ja.md) | [中文](README.zh.md) | [Русский](README.ru.md) | [Español](README.es.md)**
+=======
+<p align="center"><strong>🌍 <a href="README.md">Türkçe</a> | <a href="README.en.md">English</a> | <a href="README.ar.md">العربية</a> | <a href="README.ja.md">日本語</a> | <a href="README.zh.md">中文</a> | <a href="README.ru.md">Русский</a> | <a href="README.es.md">Español</a></strong></p>
+
+<!-- synced-from: README.md sha256:73b53c056cd7db0f63c60a2e04e194606a6aa34cbae9b69ef29b732d85b336d3 -->
+>>>>>>> Stashed changes
 
 <p align="center">
   <img src="soup.png" alt="Soup" width="280">
@@ -7,6 +13,7 @@
 <h1 align="center">Soup</h1>
 
 <p align="center">
+<<<<<<< Updated upstream
   <strong>ضبط نماذج اللغة الكبيرة والتدريب اللاحق بأمر واحد. لا SSH، لا تعقيدات تكوين.</strong>
 </p>
 
@@ -28,18 +35,38 @@
   <a href="https://github.com/MakazhanAlpamys/Soup/actions"><img src="https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/MakazhanAlpamys/65fdc943f85f3b2c46ecddb415c2b779/raw/soup_tests.json" alt="الاختبارات"></a>
   <a href="https://github.com/MakazhanAlpamys/Soup/actions"><img src="https://github.com/MakazhanAlpamys/Soup/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://doi.org/10.5281/zenodo.21771064"><img src="https://img.shields.io/badge/DOI-10.5281%2Fzenodo.21771064-blue?logo=zenodo&logoColor=white" alt="DOI"></a>
+=======
+  <strong>ضبط النماذج اللغوية الكبيرة بأمر واحد. لا SSH، ولا黄河الإعدادات.</strong>
+</p>
+
+<p align="center">
+  <a href="https://trysoup.dev">الموقع</a> &middot;
+  <a href="#quick-start">البدء</a> &middot;
+  <a href="#web-ui">الواجهة</a> &middot;
+  <a href="#configuration">الإعدادات</a> &middot;
+  <a href="https://discord.gg/dgd2pJcjwP">Discord</a> &middot;
+  <a href="https://t.me/souptasters">Telegram</a>
+>>>>>>> Stashed changes
 </p>
 
 ---
 
+<<<<<<< Updated upstream
 يحول Soup عذاب ضبط نماذج اللغة الكبيرة إلى سير عمل بسيط. تكوين واحد، أمر واحد، انتهى.
 
 ```bash
 pip install "soup-cli[train]"   # إضافة [train] للضبط الدقيق؛ soup-cli وحده هو CLI الخفيف
+=======
+Soup يحول صعوبة ضبط النماذج اللغوية إلى سير عمل بسيط.
+
+```bash
+pip install "soup-cli[train]"
+>>>>>>> Stashed changes
 soup init --template chat
 soup train
 ```
 
+<<<<<<< Updated upstream
 **ضبط دقيق لنموذج 8B على GPU محمول 4 GB.** تدفق الطبقات يحافظ على القاعدة المجمدة خارج VRAM ويغذي GPU بطبقة واحدة من فك التشفير في كل مرة. مقاس على RTX 3050 Laptop 4 GB: Llama-3.1-8B-Instruct + NF4 بـ **119.6 tok/s، ذروة 3.32 GB** — متطابق بت مع تشغيل عادي مقيم، وتم إعادة إنتاجه بشكل مستقل على H100 بـ 113.00 tok/s في نفس 3.32 GB. اختياري (`stream_layers: true`) ولا يزال BETA — [كيف يعمل](docs/performance-and-quantization.md#layer-streaming-beta-v0720-nf4-v0722-disk--wider-archs-v0723-preference-losses-v0724) · [جميع القياسات](benchmarks/) · [الورقة البحثية](https://doi.org/10.5281/zenodo.21771064) · **[تحقق بنفسك على Colab T4 المجاني](notebooks/proof-4gb.ipynb)**
 
 ---
@@ -322,4 +349,35 @@ pre-commit install                 # اختياري: ruff lint+تنسيق على
   doi       = {10.5281/zenodo.21918325},
   url       = {https://doi.org/10.5281/zenodo.21918325}
 }
+``````
+=======
+## لماذا Soup؟
+
+- **لا SSH**
+- **إعداد واحد**
+- **كل شيء تلقائي**
+- **يعمل محلياً**
+
+## البدء السريع
+
+```bash
+pip install "soup-cli[train]"
+soup init --template chat
+soup train
 ```
+
+## Docker
+
+```bash
+docker pull ghcr.io/makazhanalpamys/soup-cli:latest
+```
+
+## المتطلبات
+
+- Python 3.10-3.12
+- GPU من NVIDIA أو Apple Silicon
+
+## الرخصة
+
+Apache-2.0
+>>>>>>> Stashed changes

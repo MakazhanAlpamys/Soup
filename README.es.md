@@ -1,4 +1,10 @@
+<<<<<<< Updated upstream
 <p align="center">**🌍 [Türkçe](README.md) | [English](README.en.md) | [العربية](README.ar.md) | [日本語](README.ja.md) | [中文](README.zh.md) | [Русский](README.ru.md) | [Español](README.es.md)**
+=======
+<p align="center"><strong>🌍 <a href="README.md">Türkçe</a> | <a href="README.en.md">English</a> | <a href="README.ar.md">العربية</a> | <a href="README.ja.md">日本語</a> | <a href="README.zh.md">中文</a> | <a href="README.ru.md">Русский</a> | <a href="README.es.md">Español</a></strong></p>
+
+<!-- synced-from: README.md sha256:73b53c056cd7db0f63c60a2e04e194606a6aa34cbae9b69ef29b732d85b336d3 -->
+>>>>>>> Stashed changes
 
 <p align="center">
   <img src="soup.png" alt="Soup" width="280">
@@ -7,6 +13,7 @@
 <h1 align="center">Soup</h1>
 
 <p align="center">
+<<<<<<< Updated upstream
   <strong>Ajusta y posentrena LLMs con un solo comando. Sin SSH, sin infierno de configuración.</strong>
 </p>
 
@@ -28,18 +35,29 @@
   <a href="https://github.com/MakazhanAlpamys/Soup/actions"><img src="https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/MakazhanAlpamys/65fdc943f85f3b2c46ecddb415c2b779/raw/soup_tests.json" alt="Pruebas"></a>
   <a href="https://github.com/MakazhanAlpamys/Soup/actions"><img src="https://github.com/MakazhanAlpamys/Soup/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://doi.org/10.5281/zenodo.21771064"><img src="https://img.shields.io/badge/DOI-10.5281%2Fzenodo.21771064-blue?logo=zenodo&logoColor=white" alt="DOI"></a>
+=======
+  <strong>Ajusta LLMs con un comando. Sin SSH, sin infierno de configuraciones.</strong>
+>>>>>>> Stashed changes
 </p>
 
 ---
 
+<<<<<<< Updated upstream
 Soup convierte el dolor del ajuste fino de LLMs en un flujo de trabajo simple. Un config, un comando, listo.
 
 ```bash
 pip install "soup-cli[train]"   # añade [train] para ajuste fino; solo soup-cli es el CLI ligero
+=======
+Soup convierte el dolor del ajuste fino de LLMs en un flujo de trabajo simple.
+
+```bash
+pip install "soup-cli[train]"
+>>>>>>> Stashed changes
 soup init --template chat
 soup train
 ```
 
+<<<<<<< Updated upstream
 **Ajusta un modelo de 8B en una GPU portátil de 4 GB.** La transmisión de capas mantiene la base congelada fuera de VRAM y la alimenta a la GPU una capa decodificadora a la vez. Medido en RTX 3050 Laptop 4 GB: Llama-3.1-8B-Instruct + NF4 a **119.6 tok/s, pico de 3.32 GB** — bit exacto contra una ejecución normal residente, y reproducido independientemente en una H100 a 113.00 tok/s con los mismos 3.32 GB. Opcional (`stream_layers: true`) y aún BETA —
 [cómo funciona](docs/performance-and-quantization.md#layer-streaming-beta-v0720-nf4-v0722-disk--wider-archs-v0723-preference-losses-v0724) ·
 [todas las mediciones](benchmarks/) ·
@@ -326,4 +344,35 @@ Este fork (`Ercaner1988/Soup`) se basa en el proyecto original: [MakazhanAlpamys
   doi       = {10.5281/zenodo.21918325},
   url       = {https://doi.org/10.5281/zenodo.21918325}
 }
+``````
+=======
+## ¿Por qué Soup?
+
+- **Cero SSH**
+- **Una configuración**
+- **Todo automático**
+- **Funciona localmente**
+
+## Inicio rápido
+
+```bash
+pip install "soup-cli[train]"
+soup init --template chat
+soup train
 ```
+
+## Docker
+
+```bash
+docker pull ghcr.io/makazhanalpamys/soup-cli:latest
+```
+
+## Requisitos
+
+- Python 3.10-3.12
+- NVIDIA GPU o Apple Silicon
+
+## Licencia
+
+Apache-2.0
+>>>>>>> Stashed changes
