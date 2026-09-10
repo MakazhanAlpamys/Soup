@@ -287,9 +287,16 @@ def test_byte_identity_clean_rows_and_arithmetic_closure():
     # Exact arithmetic closure check
     assert report.total_scanned == report.total_clean + report.total_modified + report.total_dropped
 
+    # Output dataset preserves non-dropped rows (clean + modified) in original sequence
+    assert len(cleaned_data) == 3
+
     # Clean rows must be 100% byte-for-byte identical to input
     assert json.dumps(cleaned_data[0]) == json.dumps(clean_row_data)
-    assert json.dumps(cleaned_data[1]) == json.dumps(echo_row)
+    assert json.dumps(cleaned_data[2]) == json.dumps(echo_row)
+
+    # Modified row must have \u200b stripped (not byte-identical to dirty input)
+    assert json.dumps(cleaned_data[1]) != json.dumps(single_zwsp_row)
+    assert cleaned_data[1]["messages"][0]["content"] == "Hello world"
 
     # Modified row must not be clean and must record the exact rule
     assert "Invisible & Control Chars" in report.rule_counts
