@@ -13,6 +13,9 @@ from pathlib import Path
 import pytest
 
 import soup_cli
+from tests.test_issue775_path_containment_ratchet import (
+    find_containment_relative_to,
+)
 
 
 def _src(rel: str) -> str:
@@ -34,8 +37,14 @@ def test_containment_holdouts_migrated_to_commonpath_helper():
     }.items():
         src = _src(rel)
         assert needle in src, f"{rel} not migrated to {needle}"
-        # The buggy cwd-containment idiom must be gone from these sites.
-        assert ".relative_to(cwd)" not in src, f"{rel} still uses relative_to(cwd)"
+        # The buggy containment idiom must be gone from these sites. Checked by
+        # AST rather than by the literal `".relative_to(cwd)"` this line used to
+        # search for: that text match missed `.relative_to(base)`, `(root)`, and
+        # any call the formatter split across lines (#775). The repo-wide
+        # version of this scan lives in
+        # tests/test_issue775_path_containment_ratchet.py.
+        found = find_containment_relative_to(src)
+        assert found == [], f"{rel} still decides containment with relative_to: {found}"
 
     # data.py migrated all three sample/download output-path checks.
     assert _src("commands/data.py").count("is_under_cwd(") >= 3
