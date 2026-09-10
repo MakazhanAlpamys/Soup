@@ -165,6 +165,14 @@ data:
   train: {data_path}
   format: chatml
   max_length: 512
+  # Pinned false, not left at the schema default of true (#683). Once MLX
+  # honours response-only masking, `Trained Tokens` counts SUPERVISED tokens
+  # rather than all of them, and the published record's `trained tokens` and
+  # `tok/s` columns silently change meaning as well as value: measured on this
+  # box, the Qwen2.5-0.5B row goes 2,130 -> 342 tokens and 108.1 -> 26.1 tok/s.
+  # This harness backs a published throughput record, so it pins the setting
+  # the record was measured under. Re-measure deliberately, not by default.
+  train_on_responses_only: false
 training:
   epochs: {epochs}
   lr: 1e-4
@@ -173,6 +181,19 @@ training:
   # accumulation window (#696), moving the step count this harness reports
   # out from under any published benchmark record that assumes 1:1 rows-to-iters.
   gradient_accumulation_steps: 1
+  # Pinned, not left at the schema defaults of `cosine` / 0.03 / 0.01 (#686).
+  # Once MLX honours the schedule, the published record's constant 1.000e-04
+  # becomes a warmup-then-cosine curve, so the `loss` column no longer ends at
+  # the 0.107 the record reports for Qwen2.5-0.5B -- it moves to some other
+  # value, under a table that labels no schedule at all.
+  # `weight_decay` is pinned for the same reason and not because it moves
+  # today: the schema default (0.01) happens to equal MLX AdamW's own default,
+  # so the record is reproducible by coincidence. If either moves, the curve
+  # changes silently.
+  # A published record must not depend on a schema default it never mentions.
+  scheduler: constant
+  warmup_ratio: 0.0
+  weight_decay: 0.01
   lora:
     r: 8
     alpha: 16

@@ -67,9 +67,11 @@ MULTIPACK_ARCHITECTURES: frozenset[str] = frozenset({
 })
 
 
-# Worst-case FFD complexity is O(N^2). Cap N to prevent a crafted dataset
-# from pinning a CPU. 1M samples is ~3 orders of magnitude beyond typical
-# fine-tuning workloads.
+# Cap N to prevent a crafted dataset from pinning a CPU or exhausting memory.
+# 1M samples is ~3 orders of magnitude beyond typical fine-tuning workloads.
+# The cap predates the indexed placement below and is kept: packing is now
+# O(N log N) rather than O(N^2), but a caller that hands over ten million
+# lengths still wants a loud error rather than a multi-gigabyte list.
 _MAX_FFD_ITEMS: int = 1_000_000
 
 
@@ -80,6 +82,78 @@ def _check_int(name: str, value: object) -> int:
     if not isinstance(value, int):
         raise TypeError(f"{name} must be int, got {type(value).__name__}")
     return value
+
+
+class _CapacityTree:
+    """Remaining bin capacities, indexed so first-fit is O(log N).
+
+    A max segment tree over a growing array. Each internal node stores the
+    maximum remaining capacity in its subtree, so a descent can skip any
+    subtree that cannot hold the item, and by always trying the left child
+    first it lands on the *leftmost* bin that fits. That is the bin the
+    original linear scan returned, which is what keeps this first-fit rather
+    than turning it into best-fit.
+
+    Deliberately a flat list of ints and pure Python: the packing has to be
+    identical on every supported interpreter and OS, and no compiled
+    dependency is worth that risk for a setup-time cost.
+    """
+
+    __slots__ = ("_tree", "_capacity", "_size")
+
+    def __init__(self) -> None:
+        self._capacity = 1  # number of leaf slots; a power of two
+        self._tree = [0, 0]  # 1-indexed heap layout; index 0 unused
+        self._size = 0  # number of bins actually in use
+
+    def append(self, remaining: int) -> None:
+        """Add a new bin with ``remaining`` free space."""
+        if self._size == self._capacity:
+            self._grow()
+        self._set(self._size, remaining)
+        self._size += 1
+
+    def take(self, bin_idx: int, length: int) -> None:
+        """Consume ``length`` from bin ``bin_idx``."""
+        self._set(bin_idx, self._tree[self._capacity + bin_idx] - length)
+
+    def leftmost_with_room(self, length: int) -> int | None:
+        """The lowest bin index whose remaining capacity is >= ``length``.
+
+        ``None`` when no open bin fits, which is the caller's signal to start
+        a new one -- the same condition as the old scan falling off the end.
+        """
+        if self._size == 0 or self._tree[1] < length:
+            return None
+        node = 1
+        while node < self._capacity:
+            left = node * 2
+            # Left first: this is what makes the result the *leftmost* fit.
+            node = left if self._tree[left] >= length else left + 1
+        return node - self._capacity
+
+    def _set(self, leaf: int, value: int) -> None:
+        node = self._capacity + leaf
+        self._tree[node] = value
+        node //= 2
+        while node >= 1:
+            self._tree[node] = max(self._tree[node * 2], self._tree[node * 2 + 1])
+            node //= 2
+
+    def _grow(self) -> None:
+        """Double the leaf capacity, rebuilding the tree around the old leaves.
+
+        Amortised O(1) per append: the rebuild costs O(N) and happens after N
+        appends. Unused leaves hold 0, which is below every valid item length
+        (they are validated positive above), so they can never be selected.
+        """
+        old_leaves = self._tree[self._capacity : self._capacity + self._size]
+        self._capacity *= 2
+        self._tree = [0] * (2 * self._capacity)
+        for offset, value in enumerate(old_leaves):
+            self._tree[self._capacity + offset] = value
+        for node in range(self._capacity - 1, 0, -1):
+            self._tree[node] = max(self._tree[node * 2], self._tree[node * 2 + 1])
 
 
 def ffd_bin_pack(lengths: Sequence[int], max_len: int) -> list[list[int]]:
@@ -110,7 +184,7 @@ def ffd_bin_pack(lengths: Sequence[int], max_len: int) -> list[list[int]]:
     if len(lengths) > _MAX_FFD_ITEMS:
         raise ValueError(
             f"too many items for FFD bin-packing: {len(lengths)} > "
-            f"{_MAX_FFD_ITEMS} (algorithm is O(N^2) worst-case)"
+            f"{_MAX_FFD_ITEMS}"
         )
 
     # Validate each length up-front so we fail loudly before packing.
@@ -131,18 +205,22 @@ def ffd_bin_pack(lengths: Sequence[int], max_len: int) -> list[list[int]]:
     )
 
     bins: list[list[int]] = []
-    bin_remaining: list[int] = []  # parallel to bins: free space in each
+    # A max segment tree over the bins' remaining capacity, replacing the
+    # linear scan this loop used to do. `_leftmost_bin_with_room` returns the
+    # same bin the scan would have found, so this is first-fit exactly as
+    # before -- not best-fit, and not any other order. The only thing that
+    # changes is how long it takes to find it: O(log N) per item rather than
+    # O(N), which removes the N(N-1)/2 worst case that appears when every item
+    # is larger than half the budget and no earlier bin can ever fit.
+    tree = _CapacityTree()
     for orig_idx, length in indexed:
-        placed = False
-        for bin_idx, remaining in enumerate(bin_remaining):
-            if length <= remaining:
-                bins[bin_idx].append(orig_idx)
-                bin_remaining[bin_idx] = remaining - length
-                placed = True
-                break
-        if not placed:
+        bin_idx = tree.leftmost_with_room(length)
+        if bin_idx is None:
             bins.append([orig_idx])
-            bin_remaining.append(max_len - length)
+            tree.append(max_len - length)
+        else:
+            bins[bin_idx].append(orig_idx)
+            tree.take(bin_idx, length)
 
     return bins
 
