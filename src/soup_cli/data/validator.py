@@ -4,26 +4,35 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from soup_cli.data.formats import FORMAT_SIGNATURES
+from soup_cli.data.formats import VALID_FORMATS, format_to_messages_with_reason
+
+# How many per-row drop reasons to surface in `issues`. Enough to make
+# `validate` actionable ("which rows and why") without flooding the output on a
+# file where every row is bad.
+_MAX_REASON_SAMPLES = 3
 
 
 def _to_hashable(val: Any) -> Any:
-    """Recursively convert dicts and lists into hashable nested tuples."""
-    if isinstance(val, (str, int, float, bool)) or val is None:
-        return val
+    """Recursively convert values into type-tagged hashable nested tuples."""
+    if val is None or isinstance(val, (str, int, float, bool)):
+        return (type(val).__name__, val)
     if isinstance(val, dict):
-        return tuple((k, _to_hashable(v)) for k, v in sorted(val.items()))
-    if isinstance(val, (list, tuple)):
-        return tuple(_to_hashable(v) for v in val)
-    return str(val)
+        return ("dict", tuple((k, _to_hashable(v)) for k, v in sorted(val.items())))
+    if isinstance(val, list):
+        return ("list", tuple(_to_hashable(v) for v in val))
+    if isinstance(val, tuple):
+        return ("tuple", tuple(_to_hashable(v) for v in val))
+    if isinstance(val, set):
+        try:
+            return ("set", tuple(_to_hashable(v) for v in sorted(val)))
+        except TypeError:
+            return ("set", tuple(_to_hashable(v) for v in val))
+    return (type(val).__name__, str(val))
 
 
 def _row_signature(row: dict) -> tuple:
-    """Return a hashable canonical representation of a row dict."""
-    try:
-        return tuple(sorted(row.items()))
-    except TypeError:
-        return tuple((k, _to_hashable(v)) for k, v in sorted(row.items()))
+    """Return a type-tagged hashable canonical representation of a row dict."""
+    return tuple((k, _to_hashable(v)) for k, v in sorted(row.items()))
 
 
 def validate_and_stats(data: list[dict], expected_format: Optional[str] = None) -> dict:
@@ -45,7 +54,6 @@ def validate_and_stats(data: list[dict], expected_format: Optional[str] = None) 
 
     empty_count = 0
     short_count = 0
-    invalid_rows = 0
     seen_rows: set[tuple] = set()
     dup_count = 0
     total_length = 0
@@ -53,30 +61,27 @@ def validate_and_stats(data: list[dict], expected_format: Optional[str] = None) 
     min_length = float("inf")
     max_length = 0
 
-    check_format = expected_format is not None and expected_format in FORMAT_SIGNATURES
-    required = FORMAT_SIGNATURES[expected_format] if check_format else set()
+    invalid_count = 0
+    sample_reasons: list[str] = []
+    check_format = bool(expected_format and expected_format in VALID_FORMATS)
 
-    for row in data:
-        # Detect duplicates via canonical hashable tuple — fast path for flat rows,
-        # recursive fallback for rows containing nested dicts/lists.
-        try:
-            sig = tuple(sorted(row.items()))
-            if sig in seen_rows:
-                dup_count += 1
-            else:
-                seen_rows.add(sig)
-        except TypeError:
-            sig = tuple((k, _to_hashable(v)) for k, v in sorted(row.items()))
-            if sig in seen_rows:
-                dup_count += 1
-            else:
-                seen_rows.add(sig)
+    for idx, row in enumerate(data):
+        # 1. Duplicate detection via type-tagged canonical hashable tuple
+        sig = _row_signature(row)
+        if sig in seen_rows:
+            dup_count += 1
+        else:
+            seen_rows.add(sig)
 
-        # Validate format
-        if check_format and not required.issubset(row.keys()):
-            invalid_rows += 1
+        # 2. Format validation using real converter path (#712)
+        if check_format:
+            _, reason = format_to_messages_with_reason(row, expected_format)
+            if reason is not None:
+                invalid_count += 1
+                if len(sample_reasons) < _MAX_REASON_SAMPLES:
+                    sample_reasons.append(f"row {idx}: {reason}")
 
-        # Compute text length and count empty/None fields without intermediate
+        # 3. Compute text length and count empty/None fields without intermediate
         # list or joined-string allocations.
         parts_len = 0
         parts_count = 0
@@ -98,13 +103,18 @@ def validate_and_stats(data: list[dict], expected_format: Optional[str] = None) 
         if char_len < 10:
             short_count += 1
 
-    valid_rows = len(data) - invalid_rows
+    valid_rows = len(data) - invalid_count
 
     issues: list[str] = []
-    if check_format and invalid_rows > 0:
+    if check_format and invalid_count > 0:
         issues.append(
-            f"{invalid_rows} rows missing required keys for '{expected_format}' format: {required}"
+            f"{invalid_count} rows fail to convert for '{expected_format}' format "
+            f"(load_dataset would drop them)"
         )
+        issues.extend(sample_reasons)
+        if invalid_count > len(sample_reasons):
+            issues.append(f"... and {invalid_count - len(sample_reasons)} more")
+
     if dup_count > 0:
         issues.append(f"{dup_count} duplicate rows found")
     if empty_count > 0:
@@ -115,7 +125,7 @@ def validate_and_stats(data: list[dict], expected_format: Optional[str] = None) 
     return {
         "total": len(data),
         "columns": columns,
-        "avg_length": round(total_length / row_count),
+        "avg_length": round(total_length / row_count) if row_count > 0 else 0,
         "min_length": int(min_length) if row_count > 0 else 0,
         "max_length": int(max_length) if row_count > 0 else 0,
         "empty_fields": empty_count,

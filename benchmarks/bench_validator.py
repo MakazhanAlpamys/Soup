@@ -10,13 +10,15 @@ import time
 from pathlib import Path
 from typing import Callable
 
-from soup_cli.data.formats import FORMAT_SIGNATURES
+from soup_cli.data.formats import VALID_FORMATS, format_to_messages_with_reason
 from soup_cli.data.loader import load_raw_data
 from soup_cli.data.validator import validate_and_stats
 
+_MAX_REASON_SAMPLES = 3
+
 
 def previous_validate_and_stats(data: list[dict], expected_format: str | None = None) -> dict:
-    """Original implementation of validate_and_stats before optimization."""
+    """Original implementation of validate_and_stats on current main (includes #712)."""
     if not data:
         return {
             "total": 0,
@@ -46,20 +48,28 @@ def previous_validate_and_stats(data: list[dict], expected_format: str | None = 
     row_strs = [str(sorted(row.items())) for row in data]
     dup_count = len(row_strs) - len(set(row_strs))
 
-    # Validate format
+    # Validate format by running the real conversion path per row (#712)
     issues = []
     valid_rows = len(data)
-    if expected_format and expected_format in FORMAT_SIGNATURES:
-        required = FORMAT_SIGNATURES[expected_format]
+    if expected_format and expected_format in VALID_FORMATS:
         invalid = 0
-        for row in data:
-            if not required.issubset(row.keys()):
-                invalid += 1
+        sample_reasons: list[str] = []
+        for idx, row in enumerate(data):
+            _, reason = format_to_messages_with_reason(row, expected_format)
+            if reason is None:
+                continue
+            invalid += 1
+            if len(sample_reasons) < _MAX_REASON_SAMPLES:
+                sample_reasons.append(f"row {idx}: {reason}")
         valid_rows = len(data) - invalid
         if invalid > 0:
             issues.append(
-                f"{invalid} rows missing required keys for '{expected_format}' format: {required}"
+                f"{invalid} rows fail to convert for '{expected_format}' format "
+                f"(load_dataset would drop them)"
             )
+            issues.extend(sample_reasons)
+            if invalid > len(sample_reasons):
+                issues.append(f"... and {invalid - len(sample_reasons)} more")
 
     if dup_count > 0:
         issues.append(f"{dup_count} duplicate rows found")
