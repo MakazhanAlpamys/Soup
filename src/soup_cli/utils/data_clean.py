@@ -174,9 +174,10 @@ def clean_row(
     fmt: str,
     *,
     min_tokens: int = 1,
-    strip_ai_boilerplate: bool = True,
-    repair_code: bool = True,
-    repair_json: bool = True,
+    prune_echo: bool = False,
+    strip_ai_boilerplate: bool = False,
+    repair_code: bool = False,
+    repair_json: bool = False,
     drop_invalid_json: bool = False,
 ) -> Tuple[Optional[Dict[str, Any]], List[str]]:
     """Clean a single row according to its format.
@@ -259,8 +260,8 @@ def clean_row(
                 user_prompt = sanitized_content
                 cleaned_messages.append({"role": role, "content": sanitized_content})
             elif role == "assistant":
-                # Check for echo turn
-                if user_prompt and is_echo_turn(user_prompt, sanitized_content):
+                # Check for echo turn (opt-in)
+                if prune_echo and user_prompt and is_echo_turn(user_prompt, sanitized_content):
                     return None, ["Target Leakage / Echo"]
 
                 # Boilerplate stripping
@@ -303,7 +304,7 @@ def clean_row(
             applied_rules.append("Invisible & Control Chars")
 
         prompt_combined = (san_inst + "\n" + san_in).strip()
-        if is_echo_turn(prompt_combined, san_out):
+        if prune_echo and is_echo_turn(prompt_combined, san_out):
             return None, ["Target Leakage / Echo"]
 
         if strip_ai_boilerplate:
@@ -349,7 +350,7 @@ def clean_row(
                 last_human = san_val
                 cleaned_convs.append({"from": from_role, "value": san_val})
             elif from_role in ("gpt", "assistant", "chatgpt"):
-                if last_human and is_echo_turn(last_human, san_val):
+                if prune_echo and last_human and is_echo_turn(last_human, san_val):
                     return None, ["Target Leakage / Echo"]
 
                 if strip_ai_boilerplate:
@@ -427,9 +428,10 @@ def clean_dataset(
     fmt: str,
     *,
     min_tokens: int = 1,
-    strip_ai_boilerplate: bool = True,
-    repair_code: bool = True,
-    repair_json: bool = True,
+    prune_echo: bool = False,
+    strip_ai_boilerplate: bool = False,
+    repair_code: bool = False,
+    repair_json: bool = False,
     drop_invalid_json: bool = False,
 ) -> Tuple[List[Dict[str, Any]], CleanReport]:
     """Clean a full dataset in memory and return (cleaned_rows, report)."""
@@ -441,6 +443,7 @@ def clean_dataset(
             row,
             fmt,
             min_tokens=min_tokens,
+            prune_echo=prune_echo,
             strip_ai_boilerplate=strip_ai_boilerplate,
             repair_code=repair_code,
             repair_json=repair_json,

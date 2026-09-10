@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -21,6 +22,15 @@ from soup_cli.utils.data_clean import (
 )
 
 runner = CliRunner()
+
+
+def _hash_file(path: Path) -> str:
+    """Compute SHA-256 checksum of a file."""
+    hasher = hashlib.sha256()
+    with open(path, "rb") as f:
+        while chunk := f.read(8192):
+            hasher.update(chunk)
+    return hasher.hexdigest()
 
 
 def _create_sample_dirty_file(directory: Path) -> Path:
@@ -133,8 +143,8 @@ def test_is_echo_turn():
     assert is_echo_turn("What is your return policy?", "Our return policy is 30 days.") is False
 
 
-def test_clean_row_chatml():
-    """Test cleaning a full ChatML row."""
+def test_clean_row_chatml_with_heuristics():
+    """Test cleaning a full ChatML row when opt-in heuristics are enabled."""
     row = {
         "messages": [
             {"role": "user", "content": "How do I add in Python?\u200b"},
@@ -147,7 +157,12 @@ def test_clean_row_chatml():
             },
         ]
     }
-    cleaned, rules = clean_row(row, "chatml")
+    cleaned, rules = clean_row(
+        row,
+        "chatml",
+        strip_ai_boilerplate=True,
+        repair_code=True,
+    )
     assert cleaned is not None
     assert "Invisible & Control Chars" in rules
     assert "Boilerplate Disclaimers" in rules
@@ -159,47 +174,47 @@ def test_clean_row_chatml():
 
 
 def test_clean_row_alpaca():
-    """Test cleaning an Alpaca row."""
+    """Test cleaning an Alpaca row with opt-in boilerplate stripping."""
     row = {
         "instruction": "Explain gravity\u200b",
         "input": "",
         "output": "Certainly! Gravity is a fundamental force. I hope this helps!",
     }
-    cleaned, rules = clean_row(row, "alpaca")
+    cleaned, rules = clean_row(row, "alpaca", strip_ai_boilerplate=True)
     assert cleaned is not None
     assert "Boilerplate Disclaimers" in rules
     assert cleaned["output"] == "Gravity is a fundamental force."
 
 
 def test_clean_row_sharegpt():
-    """Test cleaning a ShareGPT row."""
+    """Test cleaning a ShareGPT row with opt-in boilerplate stripping."""
     row = {
         "conversations": [
             {"from": "human", "value": "Hello"},
             {"from": "gpt", "value": "Sure! How can I help you today?"},
         ]
     }
-    cleaned, rules = clean_row(row, "sharegpt")
+    cleaned, rules = clean_row(row, "sharegpt", strip_ai_boilerplate=True)
     assert cleaned is not None
     assert cleaned["conversations"][1]["value"] == "How can I help you today?"
 
 
 def test_clean_row_tool_calling():
-    """Test repairing JSON in tool_calls arguments."""
+    """Test repairing JSON in tool_calls arguments with opt-in repair_json."""
     row = {
         "messages": [{"role": "user", "content": "Fetch order 123"}],
         "tool_calls": [
             {"name": "get_order", "arguments": '{"order_id": 123,}'}
         ],
     }
-    cleaned, rules = clean_row(row, "tool-calling")
+    cleaned, rules = clean_row(row, "tool-calling", repair_json=True)
     assert cleaned is not None
     assert "Malformed JSON in Tools" in rules
     assert cleaned["tool_calls"][0]["arguments"] == '{"order_id": 123}'
 
 
 def test_clean_row_empty_dropped():
-    """Test that rows with empty assistant turns are dropped."""
+    """Test that rows with empty assistant turns are dropped by default."""
     row = {
         "messages": [
             {"role": "user", "content": "Hello"},
@@ -211,58 +226,152 @@ def test_clean_row_empty_dropped():
     assert "Empty / Whitespace Turns" in rules
 
 
-def test_clean_row_echo_dropped():
-    """Test that echo rows are dropped."""
+def test_echo_preserved_by_default_and_pruned_with_opt_in():
+    """Test that echo rows are preserved by default, and pruned only with prune_echo=True."""
     row = {
         "messages": [
-            {"role": "user", "content": "Explain photosynthesis"},
-            {"role": "assistant", "content": "Explain photosynthesis"},
+            {"role": "user", "content": "Repeat after me"},
+            {"role": "assistant", "content": "Repeat after me"},
         ]
     }
-    cleaned, rules = clean_row(row, "chatml")
-    assert cleaned is None
-    assert "Target Leakage / Echo" in rules
+    # Default behavior: preserved as clean
+    cleaned_default, rules_default = clean_row(row, "chatml", prune_echo=False)
+    assert cleaned_default is not None
+    assert len(rules_default) == 0
+    assert cleaned_default["messages"][1]["content"] == "Repeat after me"
+
+    # Opt-in behavior: dropped
+    cleaned_opt_in, rules_opt_in = clean_row(row, "chatml", prune_echo=True)
+    assert cleaned_opt_in is None
+    assert "Target Leakage / Echo" in rules_opt_in
 
 
-def test_clean_dataset_batch():
-    """Test batch dataset processing with report statistics."""
-    data = [
-        # Clean row
-        {
-            "messages": [
-                {"role": "user", "content": "Hi"},
-                {"role": "assistant", "content": "Hello!"},
-            ]
-        },
-        # Row with unclosed code block
-        {
-            "messages": [
-                {"role": "user", "content": "Code"},
-                {"role": "assistant", "content": "```python\nprint(1)\n"},
-            ]
-        },
-        # Empty row (should be dropped)
-        {
-            "messages": [
-                {"role": "user", "content": "Question"},
-                {"role": "assistant", "content": ""},
-            ]
-        },
-    ]
+def test_byte_identity_clean_rows_and_arithmetic_closure():
+    """Verify byte-identity for clean rows and arithmetic closure of report accounting."""
+    clean_row_data = {
+        "messages": [
+            {"role": "user", "content": "What is 2+2?"},
+            {"role": "assistant", "content": "2+2 is 4."},
+        ]
+    }
+    single_zwsp_row = {
+        "messages": [
+            {"role": "user", "content": "Hello\u200b world"},
+            {"role": "assistant", "content": "Hello there!"},
+        ]
+    }
+    empty_row = {
+        "messages": [
+            {"role": "user", "content": "Silent question"},
+            {"role": "assistant", "content": ""},
+        ]
+    }
+    echo_row = {
+        "messages": [
+            {"role": "user", "content": "Echo test"},
+            {"role": "assistant", "content": "Echo test"},
+        ]
+    }
 
-    cleaned_data, report = clean_dataset(data, "chatml")
+    corpus = [clean_row_data, single_zwsp_row, empty_row, echo_row]
+
+    # Run with default flags (all heuristics off, prune_echo off)
+    cleaned_data, report = clean_dataset(corpus, "chatml")
+
     assert isinstance(report, CleanReport)
-    assert len(cleaned_data) == 2
-    assert report.total_scanned == 3
-    assert report.total_clean == 1
-    assert report.total_modified == 1
-    assert report.total_dropped == 1
-    assert "Markdown Code Fence Repair" in report.rule_counts
-    assert "Empty / Whitespace Turns" in report.rule_counts
+    assert report.total_scanned == 4
+    assert report.total_clean == 2  # clean_row_data and echo_row
+    assert report.total_modified == 1  # single_zwsp_row
+    assert report.total_dropped == 1  # empty_row
+
+    # Exact arithmetic closure check
+    assert report.total_scanned == report.total_clean + report.total_modified + report.total_dropped
+
+    # Clean rows must be 100% byte-for-byte identical to input
+    assert json.dumps(cleaned_data[0]) == json.dumps(clean_row_data)
+    assert json.dumps(cleaned_data[1]) == json.dumps(echo_row)
+
+    # Modified row must not be clean and must record the exact rule
+    assert "Invisible & Control Chars" in report.rule_counts
+    assert report.rule_counts["Invisible & Control Chars"] == 1
+
+
+def test_input_file_never_modified_under_any_flags(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Verify that soup data clean NEVER modifies its input file in place under any flags."""
+    monkeypatch.chdir(tmp_path)
+    dirty_file = _create_sample_dirty_file(tmp_path)
+    initial_hash = _hash_file(dirty_file)
+
+    # 1. Default live run
+    out1 = tmp_path / "out1.jsonl"
+    res1 = runner.invoke(app, ["data", "clean", str(dirty_file), "-o", str(out1)])
+    assert res1.exit_code == 0
+    assert _hash_file(dirty_file) == initial_hash
+
+    # 2. Live run with all heuristic flags active
+    out2 = tmp_path / "out2.jsonl"
+    res2 = runner.invoke(
+        app,
+        [
+            "data",
+            "clean",
+            str(dirty_file),
+            "-o",
+            str(out2),
+            "--strip-boilerplate",
+            "--repair-code",
+            "--repair-json",
+            "--prune-echo",
+        ],
+    )
+    assert res2.exit_code == 0
+    assert _hash_file(dirty_file) == initial_hash
+
+    # 3. Dry-run mode
+    res3 = runner.invoke(app, ["data", "clean", str(dirty_file), "--dry-run"])
+    assert res3.exit_code == 0
+    assert _hash_file(dirty_file) == initial_hash
+
+
+def test_dry_run_provably_write_free(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Verify that --dry-run creates zero files and makes zero modifications to disk."""
+    monkeypatch.chdir(tmp_path)
+    dirty_file = _create_sample_dirty_file(tmp_path)
+
+    # Snapshot directory state
+    dir_snapshot_before = {
+        p.name: (p.stat().st_size, p.stat().st_mtime_ns) for p in tmp_path.iterdir()
+    }
+
+    result = runner.invoke(app, ["data", "clean", str(dirty_file), "--dry-run"])
+    assert result.exit_code == 0
+
+    dir_snapshot_after = {
+        p.name: (p.stat().st_size, p.stat().st_mtime_ns) for p in tmp_path.iterdir()
+    }
+
+    assert dir_snapshot_before == dir_snapshot_after
+
+
+def test_cli_rejects_inplace_output_overwrite(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Verify that setting output path equal to input path is rejected."""
+    monkeypatch.chdir(tmp_path)
+    dirty_file = _create_sample_dirty_file(tmp_path)
+    initial_hash = _hash_file(dirty_file)
+
+    result = runner.invoke(
+        app,
+        ["data", "clean", str(dirty_file), "-o", str(dirty_file)],
+    )
+    assert result.exit_code == 1
+    assert "Output path cannot be the same as input path" in result.output
+    assert _hash_file(dirty_file) == initial_hash
 
 
 def test_cli_clean_command_live(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """Test full soup data clean CLI command."""
+    """Test full soup data clean CLI command with default options."""
     monkeypatch.chdir(tmp_path)
     dirty_file = _create_sample_dirty_file(tmp_path)
     output_file = tmp_path / "cleaned_output.jsonl"
@@ -277,22 +386,12 @@ def test_cli_clean_command_live(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     with open(output_file, encoding="utf-8") as file_handle:
         lines = [json.loads(line) for line in file_handle if line.strip()]
 
-    # Out of 3 rows: 1 clean, 1 repaired, 1 empty dropped -> 2 output rows
+    # Out of 3 rows in sample:
+    # 1: sanitized \u200b (modified)
+    # 2: clean (clean)
+    # 3: empty assistant (dropped)
+    # -> 2 output rows
     assert len(lines) == 2
-
-
-def test_cli_clean_command_dry_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """Test soup data clean with --dry-run flag (no file written)."""
-    monkeypatch.chdir(tmp_path)
-    dirty_file = _create_sample_dirty_file(tmp_path)
-    output_file = tmp_path / "should_not_exist.jsonl"
-
-    result = runner.invoke(
-        app,
-        ["data", "clean", str(dirty_file), "-o", str(output_file), "--dry-run"],
-    )
-    assert result.exit_code == 0
-    assert not output_file.exists()
 
 
 def test_cli_clean_command_json_output(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

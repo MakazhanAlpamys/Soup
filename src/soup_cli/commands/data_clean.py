@@ -65,18 +65,23 @@ def clean(
         "--min-tokens",
         help="Minimum character/token length for assistant turns (shorter turns are dropped)",
     ),
+    prune_echo: bool = typer.Option(
+        False,
+        "--prune-echo/--no-prune-echo",
+        help="Prune assistant turns that merely echo the user prompt (opt-in)",
+    ),
     strip_boilerplate: bool = typer.Option(
-        True,
+        False,
         "--strip-boilerplate/--no-strip-boilerplate",
         help="Strip canned AI disclaimers ('As an AI...', 'Certainly!...')",
     ),
     repair_code: bool = typer.Option(
-        True,
+        False,
         "--repair-code/--no-repair-code",
         help="Auto-close unclosed markdown ``` code fences in assistant completions",
     ),
     repair_json: bool = typer.Option(
-        True,
+        False,
         "--repair-json/--no-repair-json",
         help="Repair trailing commas and markdown fences in tool-call arguments",
     ),
@@ -91,7 +96,7 @@ def clean(
         help="Output machine-readable JSON summary",
     ),
 ) -> None:
-    """Clean and repair a fine-tuning dataset: code fences, control characters, AI disclaimers."""
+    """Clean and repair a fine-tuning dataset: control characters, whitespace, format sanity."""
     file_path = Path(path)
     if not file_path.exists():
         console.print(f"[red]File not found:[/] {file_path}")
@@ -128,6 +133,7 @@ def clean(
         data,
         fmt,
         min_tokens=min_tokens,
+        prune_echo=prune_echo,
         strip_ai_boilerplate=strip_boilerplate,
         repair_code=repair_code,
         repair_json=repair_json,
@@ -144,6 +150,13 @@ def clean(
         if not is_under_cwd(output_path):
             console.print(
                 f"[red]Output path must be under the current working directory:[/] {output_path}"
+            )
+            raise typer.Exit(1)
+
+        if output_path.resolve() == file_path.resolve():
+            console.print(
+                f"[red]Output path cannot be the same as input path:[/] {output_path} "
+                "(soup data clean never modifies its input file in place)"
             )
             raise typer.Exit(1)
 
