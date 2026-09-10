@@ -96,6 +96,10 @@ class TestParseNumerics:
     def test_absent_key_is_none(self):
         assert numerics_from_evidence(None) is None
 
+    def test_malformed_stamp_raises(self):
+        with pytest.raises(ValueError):
+            numerics_from_evidence("nf4")
+
     def test_malformed_does_not_echo_esc(self):
         with pytest.raises(ValueError) as exc:
             parse_numerics("\x1b[2JPWNED")
@@ -348,3 +352,15 @@ class TestNumericsStalenessGate:
             emitted = json.loads(Path("out.json").read_text(encoding="utf-8"))
             assert emitted["numerics"] == "4bit"
             assert emitted["provenance"]["config_sha"] == sha
+
+    def test_malformed_stamp_without_config_exits_1(self):
+        from soup_cli.commands import ship as ship_cmd
+
+        ev = _ship_evidence()
+        ev["numerics"] = "nf4"
+        with runner.isolated_filesystem():
+            _write_json(Path("ev.json"), ev)
+            res = runner.invoke(ship_cmd.app, ["--evidence", "ev.json"])
+            assert res.exit_code == 1, (res.output, repr(res.exception))
+            assert "numerics" in res.output.lower()
+            assert "nf4" not in res.output

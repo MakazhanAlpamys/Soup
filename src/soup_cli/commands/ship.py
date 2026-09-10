@@ -60,7 +60,6 @@ from soup_cli.utils.ship_verdict import (
     MAX_NOISE_FLOOR_RUNS,
     MIN_NOISE_FLOOR_RUNS,
     NUMERICS_FAMILY_FULL,
-    SUPPORTED_TASK_MODES,
     TASK_AXIS,
     TASK_MODES,
     NoiseFloor,
@@ -72,11 +71,10 @@ from soup_cli.utils.ship_verdict import (
     decide_ship,
     floor_exceeds_threshold,
     for_terminal,
-    noise_floor_from_evidence,
     numerics_family,
-    numerics_from_evidence,
     parse_numerics,
     render_ship_panel,
+    verdict_from_evidence,
     verdict_to_dict,
     verdict_to_evidence,
 )
@@ -403,66 +401,18 @@ def _load_evidence(path: str) -> dict:
 
 def _verdict_from_evidence(payload: dict, *, forgetting_threshold: float) -> ShipVerdict:
     """Build a verdict from an already-loaded evidence payload (no model load)."""
-    task = payload.get("task")
-    if not isinstance(task, dict):
-        _fail("evidence.task must be an object with 'mode', 'base', 'tuned'", _EXIT_RUNTIME)
-    mode = task.get("mode", "metric")
-    if mode not in SUPPORTED_TASK_MODES:
-        _fail(
-            f"evidence.task.mode must be one of {', '.join(SUPPORTED_TASK_MODES)}; "
-            f"got {mode!r}",
-            _EXIT_RUNTIME,
-        )
-    if "base" not in task or "tuned" not in task:
-        _fail("evidence.task needs both 'base' and 'tuned' scores", _EXIT_RUNTIME)
-    # A floor recorded by --emit-evidence must be honoured on read, or the same
-    # scores replay to a DIFFERENT decision than the run that produced them.
     try:
-        stored_floor = noise_floor_from_evidence(payload.get("noise_floor"))
-    except (TypeError, ValueError) as exc:
-        _fail(f"invalid evidence.noise_floor: {exc}", _EXIT_RUNTIME)
-    try:
-        stored_numerics = numerics_from_evidence(payload.get("numerics"))
-    except (TypeError, ValueError) as exc:
-        _fail(f"invalid evidence.numerics: {exc}", _EXIT_RUNTIME)
-    _warn_if_floor_widens(stored_floor, forgetting_threshold, source="evidence-supplied")
-
-    try:
-        task_win = build_task_win(
-            mode, task["base"], task["tuned"], noise_floor=stored_floor
+        verdict = verdict_from_evidence(
+            payload, forgetting_threshold=forgetting_threshold
         )
-    except (TypeError, ValueError) as exc:
-        _fail(f"invalid evidence.task: {exc}", _EXIT_RUNTIME)
-
-    raw_benchmarks = payload.get("benchmarks", {})
-    if not isinstance(raw_benchmarks, dict):
-        _fail("evidence.benchmarks must be an object of {name: {base, tuned}}", _EXIT_RUNTIME)
-    base_scores: Dict[str, object] = {}
-    tuned_scores: Dict[str, object] = {}
-    for name, entry in raw_benchmarks.items():
-        if not isinstance(entry, dict) or "base" not in entry or "tuned" not in entry:
-            _fail(f"evidence.benchmarks[{name!r}] needs 'base' and 'tuned'", _EXIT_RUNTIME)
-        base_scores[str(name)] = entry["base"]
-        tuned_scores[str(name)] = entry["tuned"]
-
-    try:
-        deltas = compute_benchmark_deltas(
-            base_scores,
-            tuned_scores,
-            forgetting_threshold=forgetting_threshold,
-            noise_floor=stored_floor,
-        )
-        verdict = decide_ship(
-            task_win,
-            deltas,
-            forgetting_threshold=forgetting_threshold,
-            noise_floor=stored_floor,
-        )
-        if stored_numerics is not None:
-            return replace(verdict, numerics=stored_numerics)
-        return verdict
-    except (TypeError, ValueError) as exc:
-        _fail(f"invalid evidence.benchmarks: {exc}", _EXIT_RUNTIME)
+    except (TypeError, ValueError, OverflowError) as exc:
+        _fail(str(exc), _EXIT_RUNTIME)
+    _warn_if_floor_widens(
+        verdict.noise_floor,
+        verdict.forgetting_threshold,
+        source="evidence-supplied",
+    )
+    return verdict
 
 
 # ---------------------------------------------------------------------------
