@@ -60,38 +60,11 @@ class SupportEntry:
 
 
 _MLX_SFT: tuple[SupportEntry, ...] = (
-    # Never read at all by trainer/mlx_sft.py.
-    SupportEntry(
-        "training.max_grad_norm",
-        IGNORED,
-        "MLX clips nowhere; sixteen transformers trainers clip at this value",
-        issue=749,
-    ),
-    SupportEntry(
-        "training.warmup_ratio",
-        IGNORED,
-        "MLX uses mlx-lm's own schedule",
-        issue=686,
-    ),
-    SupportEntry(
-        "training.weight_decay",
-        IGNORED,
-        "not forwarded to the MLX optimizer",
-        issue=686,
-    ),
-    SupportEntry(
-        "training.optimizer",
-        IGNORED,
-        "MLX always builds mlx.optimizers.Adam",
-        issue=686,
-    ),
-    SupportEntry(
-        "training.scheduler",
-        IGNORED,
-        "MLX uses mlx-lm's own schedule",
-        issue=686,
-    ),
-    # Read by trainer/mlx_sft.py solely to warn about them.
+    # Every entry here is read by trainer/mlx_sft.py solely to build its
+    # "MLX backend ignores:" line. The five fields this table used to carry --
+    # max_grad_norm, warmup_ratio, weight_decay, optimizer, scheduler -- were
+    # wired by #734 and #750 and are now honoured, so they are gone rather than
+    # reclassified. The guard is what noticed; see the PR body.
     SupportEntry(
         "training.seed",
         IGNORED,

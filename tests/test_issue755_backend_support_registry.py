@@ -162,14 +162,20 @@ def test_an_unregistered_task_backend_pair_reports_nothing():
 # check_config — only what the user set
 # --------------------------------------------------------------------------
 
-def test_max_grad_norm_is_reported_ignored_on_mlx_sft(config_at):
-    """Acceptance criterion 1, in the direction that is true on this branch."""
+def test_a_setting_the_backend_ignores_is_reported(config_at):
+    """Acceptance criterion 1.
+
+    This used to assert on ``training.max_grad_norm``. #750 wired it, so it is
+    honoured and no longer in the registry -- the guard below is what caught
+    that. ``training.seed`` is the live example now: MLX seeds through
+    ``mx.random`` and reads the field only to say so.
+    """
     from soup_cli.config.backend_support import check_config
     from soup_cli.config.loader import load_config
 
-    cfg = load_config(config_at("sft", "mlx", "  max_grad_norm: 0.5"))
+    cfg = load_config(config_at("sft", "mlx", "  seed: 42"))
     reported = {e.field for e in check_config(cfg)}
-    assert "training.max_grad_norm" in reported
+    assert "training.seed" in reported
 
 
 def test_only_fields_the_user_actually_set_are_reported(config_at):
@@ -177,9 +183,9 @@ def test_only_fields_the_user_actually_set_are_reported(config_at):
     from soup_cli.config.backend_support import check_config
     from soup_cli.config.loader import load_config
 
-    cfg = load_config(config_at("sft", "mlx", "  max_grad_norm: 0.5"))
+    cfg = load_config(config_at("sft", "mlx", "  seed: 42"))
     reported = {e.field for e in check_config(cfg)}
-    assert reported == {"training.max_grad_norm"}, (
+    assert reported == {"training.seed"}, (
         f"reported fields the user never set: {sorted(reported)}"
     )
 
@@ -188,7 +194,7 @@ def test_the_transformers_path_reports_nothing_for_the_same_config(config_at):
     from soup_cli.config.backend_support import check_config
     from soup_cli.config.loader import load_config
 
-    cfg = load_config(config_at("sft", "transformers", "  max_grad_norm: 0.5"))
+    cfg = load_config(config_at("sft", "transformers", "  seed: 42"))
     assert check_config(cfg) == []
 
 
@@ -218,16 +224,16 @@ def test_transformers_is_not_flagged_for_helper_owned_fields(config_at):
 # the doctor leg
 # --------------------------------------------------------------------------
 
-def test_doctor_config_names_the_ignored_field_and_its_issue(config_at, capsys):
+def test_doctor_config_names_the_ignored_field_and_its_reason(config_at, capsys):
     from soup_cli.commands.doctor import doctor
 
-    path = config_at("sft", "mlx", "  max_grad_norm: 0.5")
+    path = config_at("sft", "mlx", "  seed: 42")
     # Every typer parameter passed explicitly — see #752.
     doctor(nccl=False, disk=False, config=path)
 
     out = capsys.readouterr().out
-    assert "max_grad_norm" in out
-    assert "749" in out, "the reason should point at the issue that recorded it"
+    assert "seed" in out
+    assert "mx.random" in out, "the row must carry the reason, not just the name"
 
 
 def test_doctor_without_config_does_not_read_one(config_at, capsys):
@@ -299,11 +305,14 @@ def test_the_registry_matches_what_the_backend_trainer_actually_reads():
 
 
 def test_wiring_a_field_makes_its_stale_entry_fail(tmp_path, monkeypatch):
-    """Acceptance criterion 1, the other direction — what #750 will do.
+    """Acceptance criterion 1, the other direction — and this one really happened.
 
-    ``max_grad_norm`` is declared unread on ``(sft, mlx)``. When #750 lands,
-    ``mlx_sft.py`` reads it, and this guard must go red so the entry cannot
-    quietly keep telling users their setting is ignored when it no longer is.
+    The registry used to carry ``training.max_grad_norm`` as unread on
+    ``(sft, mlx)``. #750 wired it, this check went red naming it, and the entry
+    was removed. Every surviving entry is now ``trainer_reads=True``, so there
+    is no live entry left to prove the direction with — it is pinned against a
+    synthetic registry rather than quietly dropped, because a direction nothing
+    exercises is a direction that rots.
     """
     import soup_cli.config.backend_support as bs
 
@@ -313,11 +322,22 @@ def test_wiring_a_field_makes_its_stale_entry_fail(tmp_path, monkeypatch):
         textwrap.dedent(
             """\
             def build(tcfg):
-                # the shape of the #750 fix
+                # the shape #750 introduced
                 return clip(tcfg.max_grad_norm)
             """
         ),
         encoding="utf-8",
+    )
+    monkeypatch.setitem(
+        bs.REGISTRY,
+        ("sft", "mlx"),
+        (
+            bs.SupportEntry(
+                "training.max_grad_norm",
+                bs.IGNORED,
+                "stale on purpose: the field is wired now",
+            ),
+        ),
     )
     monkeypatch.setitem(
         bs.TRAINER_MODULES, ("sft", "mlx"), "soup_cli/trainer/mlx_sft.py"
