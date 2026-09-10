@@ -2,14 +2,28 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Optional
 
-from soup_cli.data.formats import VALID_FORMATS, format_to_messages_with_reason
+from soup_cli.data.formats import FORMAT_SIGNATURES
 
-# How many per-row drop reasons to surface in `issues`. Enough to make
-# `validate` actionable ("which rows and why") without flooding the output on a
-# file where every row is bad.
-_MAX_REASON_SAMPLES = 3
+
+def _to_hashable(val: Any) -> Any:
+    """Recursively convert dicts and lists into hashable nested tuples."""
+    if isinstance(val, (str, int, float, bool)) or val is None:
+        return val
+    if isinstance(val, dict):
+        return tuple((k, _to_hashable(v)) for k, v in sorted(val.items()))
+    if isinstance(val, (list, tuple)):
+        return tuple(_to_hashable(v) for v in val)
+    return str(val)
+
+
+def _row_signature(row: dict) -> tuple:
+    """Return a hashable canonical representation of a row dict."""
+    try:
+        return tuple(sorted(row.items()))
+    except TypeError:
+        return tuple((k, _to_hashable(v)) for k, v in sorted(row.items()))
 
 
 def validate_and_stats(data: list[dict], expected_format: Optional[str] = None) -> dict:
@@ -29,63 +43,81 @@ def validate_and_stats(data: list[dict], expected_format: Optional[str] = None) 
 
     columns = list(data[0].keys())
 
-    # Compute text lengths (join all string values)
-    lengths = []
     empty_count = 0
+    short_count = 0
+    invalid_rows = 0
+    seen_rows: set[tuple] = set()
+    dup_count = 0
+    total_length = 0
+    row_count = 0
+    min_length = float("inf")
+    max_length = 0
+
+    check_format = expected_format is not None and expected_format in FORMAT_SIGNATURES
+    required = FORMAT_SIGNATURES[expected_format] if check_format else set()
+
     for row in data:
-        text = " ".join(str(v) for v in row.values() if v)
-        lengths.append(len(text))
+        # Detect duplicates via canonical hashable tuple — fast path for flat rows,
+        # recursive fallback for rows containing nested dicts/lists.
+        try:
+            sig = tuple(sorted(row.items()))
+            if sig in seen_rows:
+                dup_count += 1
+            else:
+                seen_rows.add(sig)
+        except TypeError:
+            sig = tuple((k, _to_hashable(v)) for k, v in sorted(row.items()))
+            if sig in seen_rows:
+                dup_count += 1
+            else:
+                seen_rows.add(sig)
+
+        # Validate format
+        if check_format and not required.issubset(row.keys()):
+            invalid_rows += 1
+
+        # Compute text length and count empty/None fields without intermediate
+        # list or joined-string allocations.
+        parts_len = 0
+        parts_count = 0
         for v in row.values():
             if v is None:
                 empty_count += 1
+            elif v:
+                v_str = v if isinstance(v, str) else str(v)
+                parts_len += len(v_str)
+                parts_count += 1
 
-    # Detect duplicates by stringifying rows
-    row_strs = [str(sorted(row.items())) for row in data]
-    dup_count = len(row_strs) - len(set(row_strs))
+        char_len = parts_len + (parts_count - 1 if parts_count > 0 else 0)
+        total_length += char_len
+        row_count += 1
+        if char_len < min_length:
+            min_length = char_len
+        if char_len > max_length:
+            max_length = char_len
+        if char_len < 10:
+            short_count += 1
 
-    # Validate format by running the real conversion path per row, so a row is
-    # counted invalid on exactly the conditions load_dataset would drop it. A
-    # key-presence check drifts from the converters (a row can have every
-    # required key and still be dropped, e.g. a null value or a non-dict
-    # message) and skips the formats absent from FORMAT_SIGNATURES entirely.
-    issues = []
-    valid_rows = len(data)
-    if expected_format and expected_format in VALID_FORMATS:
-        invalid = 0
-        sample_reasons: list[str] = []
-        for idx, row in enumerate(data):
-            _, reason = format_to_messages_with_reason(row, expected_format)
-            if reason is None:
-                continue
-            invalid += 1
-            if len(sample_reasons) < _MAX_REASON_SAMPLES:
-                sample_reasons.append(f"row {idx}: {reason}")
-        valid_rows = len(data) - invalid
-        if invalid > 0:
-            issues.append(
-                f"{invalid} rows fail to convert for '{expected_format}' format "
-                f"(load_dataset would drop them)"
-            )
-            issues.extend(sample_reasons)
-            if invalid > len(sample_reasons):
-                issues.append(f"... and {invalid - len(sample_reasons)} more")
+    valid_rows = len(data) - invalid_rows
 
+    issues: list[str] = []
+    if check_format and invalid_rows > 0:
+        issues.append(
+            f"{invalid_rows} rows missing required keys for '{expected_format}' format: {required}"
+        )
     if dup_count > 0:
         issues.append(f"{dup_count} duplicate rows found")
     if empty_count > 0:
         issues.append(f"{empty_count} empty fields found")
-
-    # Check for very short samples
-    short = sum(1 for length in lengths if length < 10)
-    if short > 0:
-        issues.append(f"{short} samples are very short (<10 chars)")
+    if short_count > 0:
+        issues.append(f"{short_count} samples are very short (<10 chars)")
 
     return {
         "total": len(data),
         "columns": columns,
-        "avg_length": round(sum(lengths) / len(lengths)),
-        "min_length": min(lengths),
-        "max_length": max(lengths),
+        "avg_length": round(total_length / row_count),
+        "min_length": int(min_length) if row_count > 0 else 0,
+        "max_length": int(max_length) if row_count > 0 else 0,
         "empty_fields": empty_count,
         "duplicates": dup_count,
         "issues": issues,
@@ -124,8 +156,14 @@ def extended_stats(data: list[dict]) -> dict:
     token_counts = []
 
     for row in data:
-        text = " ".join(str(v) for v in row.values() if v)
-        char_len = len(text)
+        parts_len = 0
+        parts_count = 0
+        for v in row.values():
+            if v:
+                v_str = v if isinstance(v, str) else str(v)
+                parts_len += len(v_str)
+                parts_count += 1
+        char_len = parts_len + (parts_count - 1 if parts_count > 0 else 0)
         lengths.append(char_len)
         # Approximate token count: ~4 chars per token for English
         token_counts.append(max(1, char_len // 4))
