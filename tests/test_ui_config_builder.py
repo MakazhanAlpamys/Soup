@@ -35,7 +35,7 @@ class TestConfigSchemaEndpoint:
         from soup_cli.ui.app import create_app
 
         client = TestClient(create_app())
-        response = client.get("/api/config/schema")
+        response = client.get("/api/config/schema", headers=_auth_headers())
         assert response.status_code == 200
         data = response.json()
         assert isinstance(data, dict)
@@ -50,7 +50,7 @@ class TestConfigSchemaEndpoint:
         from soup_cli.ui.app import create_app
 
         client = TestClient(create_app())
-        response = client.get("/api/config/schema")
+        response = client.get("/api/config/schema", headers=_auth_headers())
         data = response.json()
         assert "base" in data
         assert data["base"]["type"] == "string"
@@ -66,7 +66,7 @@ class TestConfigSchemaEndpoint:
         from soup_cli.ui.app import create_app
 
         client = TestClient(create_app())
-        response = client.get("/api/config/schema")
+        response = client.get("/api/config/schema", headers=_auth_headers())
         data = response.json()
         assert "task" in data
         assert "options" in data["task"]
@@ -83,7 +83,7 @@ class TestConfigSchemaEndpoint:
         from soup_cli.ui.app import create_app
 
         client = TestClient(create_app())
-        response = client.get("/api/config/schema")
+        response = client.get("/api/config/schema", headers=_auth_headers())
         data = response.json()
         assert "training" in data
         training = data["training"]
@@ -100,7 +100,7 @@ class TestConfigSchemaEndpoint:
         from soup_cli.ui.app import create_app
 
         client = TestClient(create_app())
-        response = client.get("/api/config/schema")
+        response = client.get("/api/config/schema", headers=_auth_headers())
         data = response.json()
         # Check that training.epochs has constraints or type info
         training = data.get("training", {})
@@ -134,7 +134,7 @@ class TestRecipesEndpoint:
         from soup_cli.ui.app import create_app
 
         client = TestClient(create_app())
-        response = client.get("/api/recipes")
+        response = client.get("/api/recipes", headers=_auth_headers())
         assert response.status_code == 200
         data = response.json()
         assert "recipes" in data
@@ -150,7 +150,7 @@ class TestRecipesEndpoint:
         from soup_cli.ui.app import create_app
 
         client = TestClient(create_app())
-        response = client.get("/api/recipes")
+        response = client.get("/api/recipes", headers=_auth_headers())
         recipes = response.json()["recipes"]
         for recipe in recipes:
             assert "name" in recipe

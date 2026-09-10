@@ -64,7 +64,7 @@ class LoraConfig(BaseModel):
         ge=0,
         description=(
             "LoRA rank. 0 = full fine-tuning: no adapter, every base "
-            "parameter trains (sft + transformers + text + "
+            "parameter trains (sft / embedding + transformers + text + "
             "quantization='none' only)."
         ),
     )
@@ -1500,8 +1500,9 @@ class TrainingConfig(BaseModel):
         gt=0.0,
         le=1.0,
         description=(
-            "Symmetric clipping radius for grpo_variant='two_sided'. "
-            "Required when grpo_variant='two_sided'; rejected otherwise."
+            "Symmetric clipping radius for grpo_variant='two_sided' (required) "
+            "or grpo_variant='gspo' (optional sequence clipping radius, "
+            "defaults to 0.2). Rejected for all other variants."
         ),
     )
     grpo_fp16: bool = Field(
@@ -2840,8 +2841,11 @@ class TrainingConfig(BaseModel):
     packing_cross_doc_attn_mask: bool = Field(
         default=False,
         description=(
-            "When packing is enabled, prevent attention bleed between packed "
-            "documents. Requires packing=true. (v0.28.0)."
+            "Never worked: Soup mapped this to packing_strategy="
+            "'attention_free', which is not in TRL's allowlist "
+            "(bfd / bfd-requeue / wrapped) on any released trl. "
+            "Use packing: true with FlashAttention instead. "
+            "(v0.28.0 / #691 / #709)."
         ),
     )
     # v0.28.0 — Activation offloading (CPU/disk) for small-VRAM large-batch
@@ -3467,32 +3471,33 @@ class TrainingConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_grpo_variant_delta(self) -> "TrainingConfig":
-        """v0.50.0 Part A — grpo_variant='two_sided' requires grpo_delta.
+        """v0.50.0 Part A / #744 — grpo_variant='two_sided' requires grpo_delta.
 
-        Conversely, grpo_delta is only meaningful for the two_sided variant;
-        setting it on any other variant (or with no variant) is rejected
-        as a probable footgun (matches v0.40.0 Part D ``preference_loss_weights``
-        + ``preference_loss`` mutually-exclusive policy).
+        grpo_variant='gspo' optionally accepts grpo_delta as sequence clipping radius.
+        Setting grpo_delta on any other variant (or with no variant) is rejected.
         """
         if self.grpo_variant == "two_sided" and self.grpo_delta is None:
             raise ValueError(
                 "grpo_variant='two_sided' requires grpo_delta "
                 "(symmetric clipping radius, (0, 1])"
             )
-        if self.grpo_delta is not None and self.grpo_variant != "two_sided":
+        if self.grpo_delta is not None and self.grpo_variant not in ("two_sided", "gspo"):
             raise ValueError(
-                "grpo_delta is only valid when grpo_variant='two_sided'; "
+                "grpo_delta is only valid when grpo_variant is 'two_sided' or 'gspo'; "
                 f"got grpo_variant={self.grpo_variant!r}"
             )
         return self
 
     @model_validator(mode="after")
     def _validate_cross_doc_attn_mask(self) -> "TrainingConfig":
-        """Cross-document attention masking requires packing=True."""
-        if self.packing_cross_doc_attn_mask and not self.packing:
+        """packing_cross_doc_attn_mask never mapped to a valid TRL strategy."""
+        if self.packing_cross_doc_attn_mask:
             raise ValueError(
-                "packing_cross_doc_attn_mask requires packing=true "
-                "(cross-doc attention masking only applies to packed sequences)"
+                "packing_cross_doc_attn_mask is not supported: it never mapped "
+                "to a valid TRL packing_strategy (allowlist is 'bfd', "
+                "'bfd-requeue', or 'wrapped'). Use packing: true with a "
+                "FlashAttention attn_implementation; TRL's default bfd "
+                "strategy already isolates packed documents when FA is present"
             )
         return self
 
@@ -5017,9 +5022,9 @@ class SoupConfig(BaseModel):
         mutually exclusive with the LoRA feature flags and with the other two
         (each independently decides what trains).
 
-        Scoped to ``task='sft'`` ON PURPOSE. ``classifier`` / ``reranker`` /
-        ``cross_encoder`` (``classifier_lora``, v0.71.12 #146) and ``asr``
-        (``asr_lora``, v0.71.32) have gated LoRA behind their own opt-in flag
+        Scoped to ``task in ('sft', 'embedding')`` (#340, #700). ``classifier`` /
+        ``reranker`` / ``cross_encoder`` (``classifier_lora``, v0.71.12 #146) and
+        ``asr`` (``asr_lora``, v0.71.32) have gated LoRA behind their own opt-in flag
         for releases, so ``lora.r: 0`` already parses and is already harmless
         there; a blanket gate would break configs that work today. Tasks that
         do pass the rank straight to peft keep their existing behaviour
@@ -5027,7 +5032,7 @@ class SoupConfig(BaseModel):
         a new refusal this issue never measured.
         """
         tcfg = self.training
-        if tcfg.lora.r != 0 or self.task != "sft":
+        if tcfg.lora.r != 0 or self.task not in ("sft", "embedding"):
             return self
         if tcfg.stream_layers:
             # Streaming has its own, more specific refusal (the decoder lives
@@ -5038,7 +5043,7 @@ class SoupConfig(BaseModel):
             raise ValueError(
                 f"training.lora.r=0 (full fine-tuning) requires "
                 f"backend='transformers'; got backend={self.backend!r}. The "
-                f"full-FT branch is wired in the transformers SFT trainer."
+                f"full-FT branch is wired in the transformers SFT and embedding trainers."
             )
         if self.modality != "text":
             raise ValueError(

@@ -557,7 +557,9 @@ soup ui
 - **Chat Upgrade** — SSE streaming via proxy, typing indicator, cancel button, markdown renderer (bold, italic, code blocks), chat export as JSON
 - **Config Builder** — recipe dropdown (165 recipes), config schema API for dynamic form generation
 
-**Security:** The Web UI generates a random auth token at startup (printed to console). All mutating endpoints (start/stop training, delete runs, inspect data, validate config) require `Authorization: Bearer <token>` header. CORS is restricted to the served origin. Data inspection is sandboxed to the working directory.
+**Security:** The Web UI generates a random auth token at startup (printed to console). Every private endpoint — mutating (start/stop training, delete runs, inspect data, validate config) and reading (runs, metrics, system, recipes, SSE streams) — requires an `Authorization: Bearer <token>` header. `/` and `/api/health` stay open so the dashboard can load. CORS is restricted to the served origin. Data inspection is sandboxed to the working directory.
+
+**Interactive API docs are loopback-only.** `/openapi.json`, `/docs`, `/docs/oauth2-redirect` and `/redoc` serve on a loopback bind and are **absent** (404) on any other, including `soup ui --public`. This is deliberate rather than incidental: the schema exposes no run data, configuration or logs, but it does describe every route, parameter and request/response shape, and on a LAN bind that is free reconnaissance. Gating them behind the token instead was rejected — `/docs` is a browser navigation and Swagger cannot attach a Bearer header to it, so gating would break the page for a developer while leaving `/openapi.json` readable by any HTTP client. If you need the schema while bound publicly, read it from a loopback instance of the same version.
 
 ```bash
 # Custom port, don't auto-open browser

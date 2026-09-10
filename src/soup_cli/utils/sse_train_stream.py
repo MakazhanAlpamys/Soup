@@ -20,6 +20,7 @@ _ALLOWED_KEYS = frozenset(
         "step",
         "epoch",
         "loss",
+        "val_loss",
         "lr",
         "grad_norm",
         "tokens_per_s",
@@ -45,6 +46,11 @@ class TrainEvent:
     step: Optional[int] = None
     epoch: Optional[float] = None
     loss: Optional[float] = None
+    #: Evaluation loss for this step, when an evaluation ran. Its own
+    #: field rather than riding in ``loss`` — routing it through the
+    #: training series would replace one curve with another at the same
+    #: step, which looks correct and is not.
+    val_loss: Optional[float] = None
     lr: Optional[float] = None
     grad_norm: Optional[float] = None
     tokens_per_s: Optional[float] = None
@@ -84,6 +90,7 @@ def to_payload(event: TrainEvent) -> Dict[str, Any]:
         "step",
         "epoch",
         "loss",
+        "val_loss",
         "lr",
         "grad_norm",
         "tokens_per_s",

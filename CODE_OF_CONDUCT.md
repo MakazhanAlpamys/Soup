@@ -38,7 +38,7 @@ This Code of Conduct applies within all community spaces, and also applies when 
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may be reported to the project maintainer at **team@trysoup.dev** (the project address) or **makazanalpamys@gmail.com** (the maintainer's personal address). All complaints will be reviewed and investigated promptly and fairly.
 
-This Code of Conduct applies in every project space, including the [Discord server](https://discord.gg/8RgVbFA6Zq).
+This Code of Conduct applies in every project space, including the [Discord server](https://discord.gg/dgd2pJcjwP).
 
 All community leaders are obligated to respect the privacy and security of the reporter of any incident.
 

@@ -182,6 +182,94 @@ def test_val_split_applied_once_after_mixing(tmp_path):
     assert len(result["val"]) == int(10 * 0.2)
 
 
+def test_interleave_over_val_split_has_no_duplicate_row_across_train_and_val(tmp_path):
+    # #680: "over" cycles B's 2 rows up to A's 8, so a naive split-after-mix
+    # can put one copy of a cycled row in train and another in val.
+    _write_jsonl(tmp_path / "a.jsonl", [f"A-{i}" for i in range(8)])
+    _write_jsonl(tmp_path / "b.jsonl", [f"B-{i}" for i in range(2)])
+    cfg = _cfg(
+        tmp_path,
+        train=[str(tmp_path / "a.jsonl"), str(tmp_path / "b.jsonl")],
+        interleave="over",
+        val_split=0.1,
+    )
+    result = load_dataset(cfg.data)
+    train_texts = {row["text"] for row in result["train"]}
+    val_texts = {row["text"] for row in result["val"]}
+    assert val_texts, "val must be non-empty, or the disjointness assertion is vacuous"
+    assert not (train_texts & val_texts)
+    assert len(result["train"]) + len(result["val"]) == 16
+
+
+def test_interleave_probs_val_split_has_no_duplicate_row_across_train_and_val(tmp_path):
+    _write_jsonl(tmp_path / "a.jsonl", [f"A-{i}" for i in range(8)])
+    _write_jsonl(tmp_path / "b.jsonl", [f"B-{i}" for i in range(2)])
+    cfg = _cfg(
+        tmp_path,
+        train=[str(tmp_path / "a.jsonl"), str(tmp_path / "b.jsonl")],
+        interleave={"strategy": "probs", "probs": [0.5, 0.5]},
+        val_split=0.1,
+    )
+    result = load_dataset(cfg.data)
+    train_texts = {row["text"] for row in result["train"]}
+    val_texts = {row["text"] for row in result["val"]}
+    assert val_texts, "val must be non-empty, or the disjointness assertion is vacuous"
+    assert not (train_texts & val_texts)
+
+
+def test_interleave_probs_val_split_no_overlap_regardless_of_source_order(tmp_path):
+    # Same two sources, B listed first and given the larger probs share:
+    # the no-overlap guarantee must not depend on which source happens to
+    # be the one that gets padded, or on where its copies land once combined.
+    _write_jsonl(tmp_path / "a.jsonl", [f"A-{i}" for i in range(8)])
+    _write_jsonl(tmp_path / "b.jsonl", [f"B-{i}" for i in range(2)])
+    cfg = _cfg(
+        tmp_path,
+        train=[str(tmp_path / "b.jsonl"), str(tmp_path / "a.jsonl")],
+        interleave={"strategy": "probs", "probs": [0.7, 0.3]},
+        val_split=0.5,
+    )
+    result = load_dataset(cfg.data)
+    train_texts = {row["text"] for row in result["train"]}
+    val_texts = {row["text"] for row in result["val"]}
+    assert val_texts, "val must be non-empty, or the disjointness assertion is vacuous"
+    assert not (train_texts & val_texts)
+
+
+def test_interleave_over_val_split_one_row_source_raises_with_real_reason(tmp_path):
+    # A source with exactly 1 row and val_split=0.1 sends that whole row to
+    # val, leaving _combine_interleaved a 0-row train side for it. Before
+    # #680's per-source carve-out this couldn't happen (val_split ran once,
+    # after cycling); the error must name val_split, not blame formatting.
+    _write_jsonl(tmp_path / "a.jsonl", [f"A-{i}" for i in range(10)])
+    _write_jsonl(tmp_path / "b.jsonl", ["B-0"])
+    cfg = _cfg(
+        tmp_path,
+        train=[str(tmp_path / "a.jsonl"), str(tmp_path / "b.jsonl")],
+        interleave="over",
+        val_split=0.1,
+    )
+    with pytest.raises(ValueError, match="data.val_split=0.1 leaves 0 training rows"):
+        load_dataset(cfg.data)
+
+
+def test_interleave_over_genuinely_empty_source_blames_formatting_not_val_split(tmp_path):
+    # A source with 0 rows never reaches _split_val_per_source's own
+    # val-consumed-everything case: val_split consumed nothing here, so
+    # the per-source guard must not claim it did. This must fall through
+    # to _combine_interleaved's generic "must have >= 1 row" error.
+    _write_jsonl(tmp_path / "a.jsonl", [f"A-{i}" for i in range(10)])
+    _write_jsonl(tmp_path / "b.jsonl", [])
+    cfg = _cfg(
+        tmp_path,
+        train=[str(tmp_path / "a.jsonl"), str(tmp_path / "b.jsonl")],
+        interleave="over",
+        val_split=0.1,
+    )
+    with pytest.raises(ValueError, match="must have >= 1 row after formatting"):
+        load_dataset(cfg.data)
+
+
 # ---------------------------------------------------------------------------
 # Schema-level: back-compat pin + the four parse-time refusals
 # ---------------------------------------------------------------------------

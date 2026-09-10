@@ -533,7 +533,7 @@ If you contributed and aren't credited somewhere, that's a bug — open a PR or 
 
 - **Issues:** Report bugs and request features on [GitHub Issues](https://github.com/MakazhanAlpamys/Soup/issues)
 - **Discussions:** Ask questions on [GitHub Discussions](https://github.com/MakazhanAlpamys/Soup/discussions)
-- **Discord:** Chat with maintainers and other users on [Discord](https://discord.gg/8RgVbFA6Zq) — good for
+- **Discord:** Chat with maintainers and other users on [Discord](https://discord.gg/dgd2pJcjwP) — good for
   quick questions and pairing on a PR; anything worth finding later still belongs in Issues or Discussions
 - **Code of Conduct:** Please read [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) — it applies on Discord too
 - **Security:** Report security issues via [SECURITY.md](SECURITY.md) — privately, never in Discord

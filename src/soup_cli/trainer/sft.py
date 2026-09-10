@@ -851,9 +851,10 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         if tcfg.neftune_alpha is not None:
             training_kwargs["neftune_noise_alpha"] = tcfg.neftune_alpha
 
-        # LoRA+ — different learning rates for A and B matrices
-        if tcfg.loraplus_lr_ratio is not None:
-            training_kwargs["loraplus_lr_ratio"] = tcfg.loraplus_lr_ratio
+        # LoRA+ — different learning rates for A and B matrices. Not a
+        # TrainingArguments field: the optimizer is built and attached after the
+        # trainer exists (attach_loraplus_optimizer), so it must NOT be forwarded
+        # here (#724).
 
         # GaLore — memory-efficient full-parameter training
         if tcfg.use_galore:
@@ -890,7 +891,9 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         # tokens per sample, with no warning. Building the SFTConfig here mirrors
         # TRL's own conversion (including the hub_token dance it does) and adds the
         # one field that was being dropped.
-        training_args = self._as_sft_config(training_args, cfg.data.max_length)
+        training_args = self._as_sft_config(
+            training_args, cfg.data.max_length, packing=tcfg.packing,
+        )
 
         # --- Trainer ---
         trainer_kwargs = {
@@ -903,23 +906,12 @@ class SFTTrainerWrapper(StreamingSetupMixin):
 
         # Sample packing — pack multiple short samples into one sequence
         if tcfg.packing:
-            trainer_kwargs["packing"] = True
             if cfg.data.max_length < 256:
                 console.print(
                     f"[yellow]Warning:[/] packing=true with max_length={cfg.data.max_length} "
                     "may be suboptimal. Consider increasing max_length for better packing."
                 )
             console.print("[green]Sample packing enabled[/]")
-            if tcfg.packing_cross_doc_attn_mask:
-                # TRL's SFTTrainer exposes an `eos_token`-based boundary detector
-                # on recent versions (>= 0.12). When available, we flag the
-                # trainer to emit block-diagonal attention masks; otherwise the
-                # flag is a best-effort hint (no regression in behavior).
-                trainer_kwargs["packing_strategy"] = "attention_free"
-                console.print(
-                    "[green]Cross-document attention masking enabled:[/] "
-                    "packed docs cannot attend across boundaries"
-                )
 
         # v0.40.4 #65 — multipack live wiring. ``make_multipack_trainer_class``
         # mixes a ``get_train_dataloader`` override into the SFTTrainer MRO
@@ -1263,8 +1255,8 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         )
 
     @staticmethod
-    def _as_sft_config(training_args, max_length):
-        """Convert `TrainingArguments` -> `SFTConfig`, carrying `max_length` over.
+    def _as_sft_config(training_args, max_length, packing=False):
+        """Convert `TrainingArguments` -> `SFTConfig`, carrying SFT-only fields.
 
         Mirrors what `SFTTrainer.__init__` does with a plain `TrainingArguments`,
         so nothing else about the run changes. Falls back to the original object if
@@ -1278,12 +1270,14 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             return training_args
         if isinstance(training_args, SFTConfig):
             training_args.max_length = max_length
+            training_args.packing = packing
             return training_args
         try:
             dict_args = training_args.to_dict()
             dict_args["hub_token"] = training_args.hub_token  # to_dict hides it
             dict_args.pop("push_to_hub_token", None)
             dict_args["max_length"] = max_length
+            dict_args["packing"] = packing
             return SFTConfig(**dict_args)
         except (TypeError, ValueError):
             return training_args
@@ -1900,9 +1894,12 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         from soup_cli.utils.peft_wiring import (
             attach_curriculum_callback,
             attach_lisa_callback,
+            attach_loraplus_optimizer,
             attach_plugin_callback,
             attach_relora_callback,
         )
+        # LoRA+ optimizer (#724) — build and attach now that the trainer exists.
+        attach_loraplus_optimizer(self.trainer, self.config.training)
         attach_relora_callback(self.trainer, self.config.training)
         # LISA layerwise importance sampling (v0.71.34 #267).
         attach_lisa_callback(self.trainer, self.config.training)

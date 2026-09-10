@@ -269,13 +269,18 @@ soup train --config soup.yaml \
 soup train --config grpo.yaml --reward-hack-mitigation kl_control   # raise KL, recover
 soup train --config grpo.yaml --reward-hack-mitigation log_only     # observe only, no action
 
-# Cross-tokenizer distillation — Llama -> Mistral, no shared vocab needed
+# Wasserstein-distance distillation between two models that SHARE a
+# tokenizer, e.g. two sizes in the same family (#681: wasserstein / topk_align
+# forward the student's token ids to the teacher unchanged, so the pair must
+# tokenize identically; for a genuinely different tokenizer see
+# wasserstein_aligned below).
 # (Universal Logit Distillation, Boizard et al. 2024 arXiv:2402.12030)
 soup train --config soup.yaml --uld-strategy wasserstein
 
-# Cross-tokenizer distillation for FULLY-DISJOINT tokenizers (v0.71.18) —
-# aligns student/teacher token sequences over decoded character spans, so you
-# can distill a GPT-2 BPE student from a Llama SentencePiece teacher.
+# Cross-tokenizer distillation for DIFFERENT tokenizers, e.g. Llama -> Mistral,
+# no shared vocab needed (v0.71.18). Aligns student/teacher token sequences
+# over decoded character spans, so you can distill a GPT-2 BPE student from a
+# Llama SentencePiece teacher.
 #   training:
 #     uld_strategy: wasserstein_aligned
 
@@ -519,15 +524,15 @@ task: grpo
 training:
   reward_fn: accuracy
   num_generations: 4
-  grpo_variant: gspo         # group-stabilised importance ratio
+  grpo_variant: gspo         # sequence-level length-normalized ratio
   # or: dapo / dr_grpo / bnpo / rft / two_sided
-  # grpo_delta: 0.2          # required when grpo_variant=two_sided
+  # grpo_delta: 0.2          # required when grpo_variant=two_sided; optional for gspo
 ```
 
 Variants:
 
 - **standard** — DeepSeek-R1-style baseline (delegates to TRL's `compute_loss`).
-- **gspo** — group-stabilised importance ratio with per-batch control variate.
+- **gspo** — Group Sequence Policy Optimization (sequence-level length-normalized ratio with clipping).
 - **dapo** — decoupled asymmetric clipping (`eps_lo=0.2, eps_hi=0.28`).
 - **dr_grpo** — token-sum without per-sample length normalisation.
 - **bnpo** — length-normalised PPO surrogate.
@@ -834,7 +839,7 @@ training:
   num_generations: 8
   # New: GRPO objective variants
   grpo_variant: dapo                  # one of: gspo / dapo / dr_grpo / bnpo / two_sided / rft / standard
-  # grpo_delta: 0.2                   # required when grpo_variant: two_sided
+  # grpo_delta: 0.2                   # required when grpo_variant: two_sided (optional for gspo)
   grpo_fp16: true                     # FP16 RL (unsloth parity)
   # Long-context + memory-efficient RL
   long_context_grpo: true             # wires Tiled MLP when available

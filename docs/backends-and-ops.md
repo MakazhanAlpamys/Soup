@@ -115,6 +115,34 @@ training:
 
 MLX backend supports SFT. `backend: mlx` with `task: dpo` or `task: grpo` is refused when the config is loaded, with an error naming the task — upstream `mlx-lm` ships no DPO/GRPO training helper, so those wrappers exist only as a backstop for callers that bypass config validation. Requires `mlx-lm >= 0.31.3`. Use `soup recipes search --tag mlx` for ready-made Apple Silicon configs.
 
+#### Optimizers and schedules
+
+`training.optimizer`, `training.scheduler`, `training.warmup_ratio` and
+`training.weight_decay` are honoured on the MLX backend
+([#686](https://github.com/MakazhanAlpamys/Soup/issues/686)). Before that they
+were validated, accepted and dropped — every run built a bare AdamW at a
+constant learning rate, whatever the recipe said.
+
+Because they are honoured rather than ignored, a setting MLX cannot express is
+now **refused when the optimizer is built**, rather than silently substituted:
+
+| setting | MLX accepts | otherwise |
+|---|---|---|
+| `optimizer` | `adamw_torch`, `adamw_hf`, `adamw_torch_fused`, `sgd`, `adafactor`, `adagrad`, `rmsprop`, `muon` | refused by name, listing what is available |
+| `scheduler` | `cosine`, `linear`, `constant`, `constant_with_warmup` | refused, naming the old constant-rate behaviour |
+| `weight_decay` | any value on every optimizer above except `adagrad` and `rmsprop` | a non-zero value on `adagrad` / `rmsprop` is refused — those MLX constructors take no `weight_decay`, and dropping it silently is the defect above |
+
+Soup's optimizer allowlist (`utils.optimizer_zoo`) is far wider than anything
+MLX ships, so most valid values have no MLX equivalent. Run those recipes on
+the transformers backend.
+
+The schedule counts **optimizer updates**, not iterations: mlx-lm calls
+`optimizer.update()` once every `gradient_accumulation_steps`, so a warmup of
+`warmup_ratio × (iters // gradient_accumulation_steps)` is what actually runs.
+The effective plan is written to `adapter_config.json` (`optimizer`,
+`scheduler`, `warmup_updates`, `total_updates`, `weight_decay`, `peak_lr`), so
+what ran is recoverable from the output directory.
+
 `--resume auto` finds mlx-lm's step-numbered `NNNNNNN_adapters.safetensors` checkpoints and warm-starts the LoRA weights from them ([#634](https://github.com/MakazhanAlpamys/Soup/issues/634)). This restores adapter weights only, not training state: mlx-lm's LoRA trainer exposes no optimizer state or step count, so training restarts from step 0 regardless of how far the checkpoint got. See [Resume Training](#resume-training) below for the MLX-specific checkpoint shape.
 
 ### Transformers on MPS

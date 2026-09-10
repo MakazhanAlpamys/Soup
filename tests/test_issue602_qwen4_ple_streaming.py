@@ -1138,13 +1138,14 @@ def test_qwen4_oq_torch_floor_matches_project_and_doctor():
     entries = re.findall(r'"([^"]+)"', block.group(1))
     torch_entries = [e for e in entries if e.split(">")[0].strip() == "torch"]
 
-    assert torch_entries == ["torch>=2.5.0"], (
+    assert torch_entries == ["torch>=2.6.0"], (
         "the `train` extra must declare exactly one torch floor, and it must be "
-        "2.5.0 -- transformers 5.16.1's own torch extra forces torch>=2.5, "
-        "which subsumes Qwen4/oQ's uint32 need at 2.3 (#636); found "
+        "2.6.0 -- transformers 5.16.1's own torch extra requires torch>=2.5, "
+        "while TRL 0.29 preference trainers require the public PyTorch 2.6 "
+        "FSDP2 API (#651); found "
         f"{torch_entries}"
     )
-    assert next(item for item in DEPS if item[0] == "torch")[2] == "2.5.0", (
+    assert next(item for item in DEPS if item[0] == "torch")[2] == "2.6.0", (
         "`soup doctor` keeps a literal copy of the torch floor; it must equal "
         "the one pyproject.toml declares, pinned by "
         "tests/test_issue636_torch_floor.py (#636)"

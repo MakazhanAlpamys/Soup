@@ -104,8 +104,7 @@ training:
 
 **How it composes:**
 - **Multipack** picks WHICH samples go together (FFD packing).
-- **`packing_cross_doc_attn_mask`** sets HOW the attention mask is built (block-diagonal causal — see section above).
-- The two layer cleanly: enable both for FA-incompatible backends; FA varlen path is auto-selected when FlashAttention is available.
+- Packed-document isolation is TRL's default `bfd` strategy when FlashAttention is the `attn_implementation`. `packing_cross_doc_attn_mask` is rejected at config load (it never mapped to a valid TRL `packing_strategy`).
 
 **Architecture allowlist** — 18 supported (Llama 3.x, Qwen 2/3, Mistral, Gemma 2/3, Phi 3/4, DeepSeek V2/V3, Mixtral, Falcon, StableLM, SmolLM2). Unknown architectures **fail loudly at config-load** instead of silently no-opping (critical fix vs Axolotl's silent-miss footgun).
 
@@ -113,7 +112,7 @@ training:
 
 **Multi-GPU sharding (v0.71.19).** Under FSDP / DeepSpeed ZeRO / DDP (`num_processes > 1`) the `get_train_dataloader` override routes the multipack DataLoader through `accelerator.prepare`, so accelerate's `BatchSamplerShard` round-robins whole FFD-packed bins to each rank (preserving the packing; the bin seed is identical across ranks so every rank agrees on the global order before sharding). The single-GPU path returns the raw DataLoader unchanged. Multi-GPU correctness is mocked-tested — a real 2+-GPU validation run is tracked QA.
 
-**DoS hardening** — the FFD packer caps at 1M items (algorithm is O(N²) worst-case); the 4D mask builder caps allocations at 2³¹ cells; the chat-template Jinja analyzer caps at 128KB. Every numeric input rejects `bool` explicitly (matches v0.30.0+ project policy).
+**DoS hardening** — the FFD packer caps at 1M items (a bound on retained memory; placement itself is O(N log N) since #726); the 4D mask builder caps allocations at 2³¹ cells; the chat-template Jinja analyzer caps at 128KB. Every numeric input rejects `bool` explicitly (matches v0.30.0+ project policy).
 
 The `JinjaTemplateAnalyzer` (also v0.37.0) walks chat-template ASTs to discover non-standard `message.<field>` references (`tool_calls`, `name`, `weight`, `train`) — used by the v0.36.0 `train_on_messages_with_train_field` path so per-message training masks are aware of fields beyond `role` / `content`. The analyzer parses templates without rendering them, so a crafted `soup.yaml` cannot trigger SSRF.
 

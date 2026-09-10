@@ -27,6 +27,9 @@ from soup_cli.config.schema import SoupConfig
 
 console = Console()
 
+# Chat key for the masked dataset, matching upstream's `chat_feature` default.
+_CHAT_KEY = "messages"
+
 
 def _count_safetensors_tensors(path: str) -> int:
     """Number of tensors declared in a ``.safetensors`` file's own header.
@@ -84,6 +87,54 @@ def resolve_mlx_target_keys(lora_cfg: object) -> list[str]:
     return list(raw) if isinstance(raw, list) else [raw]
 
 
+class _GradientClippingOptimizer:
+    """An MLX optimizer that clips the global gradient norm before applying it.
+
+    ``training.max_grad_norm`` is honoured by every transformers trainer and
+    reached nothing on this backend: no MLX file read it, ``mlx_lm``'s
+    ``TrainingArgs`` has no such field, and its trainer clips nowhere -- so the
+    same config trained clipped on one backend and unclipped on the other,
+    silently.
+
+    Upstream applies gradients through exactly one call,
+    ``optimizer.update(model, grad)`` (``mlx_lm/tuner/trainer.py:259``), so
+    clipping is reachable by handing ``train()`` an optimizer that clips first,
+    without forking the training loop. That call site is inside a function
+    compiled with ``mx.compile(inputs=state, outputs=state)``
+    (``trainer.py:246-248``); this proxy was measured through that same
+    compiled shape rather than assumed to survive tracing.
+
+    Everything other than ``update`` delegates, because upstream reads
+    ``optimizer.state`` (``trainer.py:246``) and ``optimizer.learning_rate``
+    (``trainer.py:337``) off the object it is given -- including the callable
+    schedule, whose ``.step`` counter lives on the wrapped optimizer.
+    """
+
+    def __init__(self, inner: object, max_norm: float) -> None:
+        # Assigned through __dict__ so __getattr__ cannot recurse on them.
+        self.__dict__["_inner"] = inner
+        self.__dict__["_max_norm"] = float(max_norm)
+
+    def update(self, model: object, gradients: object) -> object:
+        import mlx.optimizers as optim  # heavy: imported at call time
+
+        gradients, _total_norm = optim.clip_grad_norm(gradients, self._max_norm)
+        return self._inner.update(model, gradients)
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self.__dict__["_inner"], name)
+
+    def __setattr__(self, name: str, value: object) -> None:
+        setattr(self.__dict__["_inner"], name, value)
+
+
+def _clipping_optimizer(inner: object, max_norm: float) -> object:
+    """Wrap ``inner`` so gradients are clipped at ``max_norm`` before they are
+    applied. ``max_grad_norm`` is schema-validated ``gt=0``, so there is no
+    "clipping off" configuration to represent."""
+    return _GradientClippingOptimizer(inner, max_norm)
+
+
 def build_mlx_adapter_config(lora_cfg: object, *, adapter_path: str, **extra: object) -> dict:
     """The ``lora_parameters`` block, keyed off the RESOLVED module list.
 
@@ -132,7 +183,24 @@ class MLXSFTTrainerWrapper:
 
     def _check_unsupported(self) -> None:
         tcfg = self.config.training
+        dcfg = self.config.data
         unsupported = []
+        # #683 review: the per-message `train` field has no MLX equivalent --
+        # `MaskedChatDataset` supervises every assistant turn and reads no
+        # per-message flag. It looked rejected only because the mutual-
+        # exclusion validator fires while `train_on_responses_only` is at its
+        # `true` default; set that to false and the field was dropped in
+        # silence, which is the shape of the defect #683 reports.
+        if getattr(dcfg, "train_on_messages_with_train_field", False):
+            unsupported.append(
+                "data.train_on_messages_with_train_field (MLX supervises "
+                "every assistant turn; the per-message flag is not read)"
+            )
+        if getattr(dcfg, "train_on_prompt", False):
+            unsupported.append(
+                "data.train_on_prompt (MLX masks the prompt or supervises the "
+                "whole sequence; there is no per-field switch)"
+            )
         if tcfg.quantization == "8bit":
             unsupported.append("quantization=8bit (use mlx-community 4bit models)")
         if tcfg.use_galore:
@@ -149,6 +217,11 @@ class MLXSFTTrainerWrapper:
             unsupported.append("training.seed (MLX seeds through mx.random)")
         if tcfg.data_seed is not None:
             unsupported.append("training.data_seed (MLX seeds through mx.random)")
+        if isinstance(tcfg.gradient_checkpointing, str):
+            unsupported.append(
+                f"gradient_checkpointing tier {tcfg.gradient_checkpointing!r} "
+                "(MLX has a single on/off switch; enabling it)"
+            )
         if unsupported:
             console.print(
                 "[yellow]MLX backend ignores: " + ", ".join(unsupported) + "[/]"
@@ -261,7 +334,6 @@ class MLXSFTTrainerWrapper:
 
         self._require_mlx()
 
-        import mlx.optimizers as optim  # type: ignore
         from mlx_lm.tuner.callbacks import TrainingCallback
         from mlx_lm.tuner.datasets import CacheDataset, create_dataset
         from mlx_lm.tuner.trainer import TrainingArgs, train  # type: ignore
@@ -299,6 +371,22 @@ class MLXSFTTrainerWrapper:
         # Real eval cadence when a val split exists; otherwise the value is
         # irrelevant (val_dataset stays None and mlx-lm skips evaluation).
         steps_per_eval = max(1, iters // 4) if val_rows else max(1000, iters + 1)
+        # mlx-lm's TrainingArgs.grad_checkpoint is a single bool with no concept
+        # of a granularity tier; bool() is the same coercion commands/train.py's
+        # hardware-fit predictor and layer_stream.should_enable_hf_gradient_checkpointing
+        # already apply to this field on every other backend, so any non-empty
+        # tier string ("selective"/"medium"/"full"/"auto") resolves to True here too.
+        grad_checkpoint = bool(cfg.training.gradient_checkpointing)
+        grad_accumulation_steps = int(cfg.training.gradient_accumulation_steps)
+        # mlx-lm updates the optimizer only when it % accum == 0 (trainer.py) and
+        # never flushes a partial group, so round iters down to a whole number of
+        # groups, keeping at least one group so a small dataset does not train
+        # for zero optimizer steps.
+        if grad_accumulation_steps > 1:
+            iters = max(
+                grad_accumulation_steps,
+                iters - (iters % grad_accumulation_steps),
+            )
         args = TrainingArgs(
             batch_size=batch_size,
             iters=iters,
@@ -307,16 +395,112 @@ class MLXSFTTrainerWrapper:
             steps_per_eval=steps_per_eval,
             steps_per_save=steps_per_save,
             adapter_file=str(output_dir / "adapters.safetensors"),
+            grad_checkpoint=grad_checkpoint,
+            grad_accumulation_steps=grad_accumulation_steps,
         )
 
-        train_dataset = CacheDataset(create_dataset(train_rows, self.tokenizer, args))
-        val_dataset = (
-            CacheDataset(create_dataset(val_rows, self.tokenizer, args))
-            if val_rows
-            else None
-        )
+        # #683: `data.train_on_responses_only` defaults to True and was reaching
+        # nothing here -- no mask was passed, so every MLX SFT run trained on
+        # system and user turns against the documented default.
+        #
+        # The route in is an attribute set rather than a constructor kwarg:
+        # upstream reads `getattr(config, "mask_prompt", False)`
+        # (`datasets.py:180`) off the args object, and `TrainingArgs` has no
+        # such field, so `TrainingArgs(mask_prompt=...)` raises TypeError.
+        #
+        # But that only gives the right answer for prompt/completion rows.
+        # `ChatDataset` masks a single prefix before `messages[-1]`, so on
+        # multi-turn chat it supervises the last assistant turn and silently
+        # drops the earlier ones -- a different wrong distribution, not a fix.
+        # Chat rows therefore go through Soup's own per-token mask, injected
+        # via `train(loss=..., iterate_batches=...)`.
+        from soup_cli.trainer.mlx_masking import plan_response_masking
 
-        optimizer = optim.AdamW(learning_rate=float(cfg.training.lr))
+        responses_only = bool(getattr(cfg.data, "train_on_responses_only", False))
+        plan = plan_response_masking(
+            responses_only, train_rows[0] if train_rows else {}
+        )
+        use_token_mask = plan.token_mask
+        args.mask_prompt = plan.mask_prompt
+        if plan.warning:
+            console.print(f"[yellow]MLX backend ignores: {plan.warning}[/]")
+
+        if use_token_mask:
+            from soup_cli.trainer.mlx_masking import (
+                MaskedChatDataset,
+                ResponseMaskError,
+                masked_iterate_batches,
+                masked_loss,
+            )
+
+            masked_train = MaskedChatDataset(
+                train_rows, self.tokenizer, chat_key=_CHAT_KEY
+            )
+            # Probe row 0 now. `process` is otherwise called lazily by
+            # `CacheDataset` from inside `train()`, so a template this cannot
+            # mask -- Qwen3's, which injects its thinking block only for the
+            # last assistant turn and is therefore not prefix-stable at any
+            # earlier one -- surfaced after the model had loaded, LoRA was
+            # applied and "Starting training..." had printed. The refusal is
+            # correct; its timing was not.
+            if train_rows:
+                try:
+                    masked_train.process(train_rows[0])
+                except ResponseMaskError as exc:
+                    raise ResponseMaskError(
+                        f"{exc}. Set `data.train_on_responses_only: false` to "
+                        "train on the full sequence on this model, or run the "
+                        "recipe on the transformers backend."
+                    ) from exc
+
+            train_dataset = CacheDataset(masked_train)
+            val_dataset = (
+                CacheDataset(
+                    MaskedChatDataset(val_rows, self.tokenizer, chat_key=_CHAT_KEY)
+                )
+                if val_rows
+                else None
+            )
+            train_hooks = {"loss": masked_loss, "iterate_batches": masked_iterate_batches}
+        else:
+            train_dataset = CacheDataset(create_dataset(train_rows, self.tokenizer, args))
+            val_dataset = (
+                CacheDataset(create_dataset(val_rows, self.tokenizer, args))
+                if val_rows
+                else None
+            )
+            train_hooks = {}
+
+        # #686: the optimizer was `AdamW(learning_rate=<scalar>)` and nothing
+        # else, so `warmup_ratio`, `scheduler`, `weight_decay` and `optimizer`
+        # were validated, accepted and dropped -- an MLX run silently trained a
+        # different recipe from the configured one.
+        #
+        # The schedule counts OPTIMIZER UPDATES, not iterations: MLX calls a
+        # callable learning_rate with `optimizer.step`, which advances once per
+        # `optimizer.update()`, and mlx-lm calls that only every
+        # `grad_accumulation_steps` iterations. Building against `iters` would
+        # stretch the warmup by that factor and never reach the cosine floor.
+        from soup_cli.trainer.mlx_optim import build_optimizer, plan_optimizer
+
+        total_updates = max(1, iters // max(1, grad_accumulation_steps))
+        optimizer_plan = plan_optimizer(
+            lr=float(cfg.training.lr),
+            optimizer=str(getattr(cfg.training, "optimizer", "adamw_torch")),
+            scheduler=str(getattr(cfg.training, "scheduler", "cosine")),
+            warmup_ratio=float(getattr(cfg.training, "warmup_ratio", 0.0) or 0.0),
+            weight_decay=float(getattr(cfg.training, "weight_decay", 0.0) or 0.0),
+            total_updates=total_updates,
+        )
+        for _warning in optimizer_plan.warnings:
+            console.print(f"[yellow]MLX backend: {_warning}[/]")
+        # #749: mlx-lm never clips, so the optimizer #686 built is wrapped in
+        # one that clips the global gradient norm before delegating. Applied
+        # here rather than inside build_optimizer so the plan stays a pure
+        # description of the schedule and the two fixes stay separable.
+        optimizer = _clipping_optimizer(
+            build_optimizer(optimizer_plan), float(cfg.training.max_grad_norm)
+        )
 
         captured: dict = {}
         total_epochs = float(cfg.training.epochs)
@@ -336,9 +520,119 @@ class MLXSFTTrainerWrapper:
             carrying a real value on another is worse than an absent one.
             """
 
+            # #23: the last MEASURED validation loss, for the panel only.
+            # An evaluation happens every `steps_per_eval` iterations, so the
+            # panel must keep showing the last one between passes. It must NOT
+            # be written to the tracker or the SSE wire on training steps --
+            # that fabricates measurements that never happened, which is the
+            # defect #713 was blocked on (9 persisted rows for 2 evaluations).
+            _sticky_val_loss = None
+            #: Last measured training values, carried into the row an
+            #: evaluation creates so it reports no number that was not
+            #: measured somewhere. Initial 0.0 matches the transformers
+            #: callback's own initialisation (callback.py:61-63).
+            _last_loss = 0.0
+            _last_lr = 0.0
+            _last_speed = 0.0
+
+            @staticmethod
+            def _as_float(value):
+                """mlx-lm hands back a Python float (`evaluate()` calls
+                `.item()`), but a future build returning an mx scalar must not
+                put an unserialisable object on the SSE wire."""
+                if value is None:
+                    return None
+                try:
+                    return float(value)
+                except (TypeError, ValueError):
+                    return None
+
+            def on_val_loss_report(self, val_info: dict) -> None:
+                """mlx-lm's validation hook — the #23 checklist item.
+
+                Payload is built at ``mlx_lm/tuner/trainer.py:310-315`` as
+                ``{"iteration": it - 1, "val_loss": float, "val_time": float}``.
+                Note ``it - 1``: upstream reports validation one behind the
+                training counter. That is recorded as sent rather than
+                corrected, so a row can be matched to upstream's own log line.
+                """
+                val_loss = self._as_float(val_info.get("val_loss"))
+                if val_loss is None:
+                    # A payload without the key is not an evaluation; recording
+                    # a None row would be indistinguishable from a real one.
+                    return
+                type(self)._sticky_val_loss = val_loss
+
+                # NOTE the value this can take: upstream's `it - 1` at
+                # `it = 0` makes the initial evaluation report **step -1**, and
+                # that negative step is written to the tracker and the wire as
+                # sent. Recording upstream's own counter is deliberate -- a row
+                # can be matched to its log line -- but it does surface in a
+                # table users read, so it is said here rather than discovered.
+                step = int(val_info.get("iteration", 0) or 0)
+                epoch = (step / iters * total_epochs) if iters else 0.0
+
+                if display is not None:
+                    display.update(
+                        step=step,
+                        epoch=epoch,
+                        loss=captured.get("losses", [0.0])[-1] if captured.get("losses") else 0.0,
+                        lr=cfg.training.lr,
+                        val_loss=val_loss,
+                    )
+                if tracker is not None and run_id:
+                    try:
+                        # `log_metrics` defaults loss/lr/speed to 0.0, not None,
+                        # so a bare val row writes three training columns that
+                        # no step measured -- over half the `loss` series at a
+                        # realistic cadence. The merged transformers producer
+                        # carries `_last_loss` / `_last_lr` into the row an
+                        # evaluation creates (callback.py:205-207); this mirrors
+                        # it, so the two backends fabricate the same nothing.
+                        #
+                        # An evaluation before the first training step still
+                        # carries the 0.0 initial value -- there is no measured
+                        # loss to carry yet -- which is exactly what the
+                        # transformers path does at the same point.
+                        tracker.log_metrics(
+                            run_id=run_id,
+                            step=step,
+                            epoch=epoch,
+                            loss=type(self)._last_loss,
+                            lr=type(self)._last_lr,
+                            speed=type(self)._last_speed,
+                            val_loss=val_loss,
+                        )
+                    except Exception:  # noqa: BLE001 — telemetry must not kill a run
+                        pass
+                try:
+                    from soup_cli.utils.sse_train_stream import TrainEvent
+                    from soup_cli.utils.train_event_buffer import push_train_event
+
+                    push_train_event(
+                        TrainEvent(
+                            type="metric",
+                            step=step,
+                            epoch=float(epoch),
+                            val_loss=val_loss,
+                        )
+                    )
+                except Exception:  # noqa: BLE001 — telemetry must not kill a run
+                    pass
+
             def on_train_loss_report(self, train_info: dict) -> None:
                 loss = train_info.get("train_loss", 0.0)
                 captured.setdefault("losses", []).append(loss)
+                # Carried for the validation row, which has no training numbers
+                # of its own. Recorded BEFORE the display guard on purpose: a
+                # run with no display still reaches this hook, and reading them
+                # after the early return would leave every carried value at its
+                # initial state for exactly the configuration that has no panel
+                # to notice. (The same early-return trap that made the SSE test
+                # below vacuous.)
+                type(self)._last_loss = loss
+                type(self)._last_lr = train_info.get("learning_rate", cfg.training.lr)
+                type(self)._last_speed = train_info.get("iterations_per_second", 0.0)
                 if display is None:
                     return
 
@@ -359,6 +653,11 @@ class MLXSFTTrainerWrapper:
                     lr=lr_value,
                     speed=speed,
                     gpu_mem=gpu_mem,
+                    # Sticky, and deliberately only here: the panel keeps the
+                    # last measured validation loss between evaluations, while
+                    # the tracker and the wire below receive nothing, so no row
+                    # or event claims a measurement that did not happen.
+                    val_loss=type(self)._sticky_val_loss,
                 )
                 if tracker is not None and run_id:
                     tracker.log_metrics(
@@ -405,6 +704,7 @@ class MLXSFTTrainerWrapper:
                 val_dataset=val_dataset,
                 args=args,
                 training_callback=_Callback(),
+                **train_hooks,
             )
         finally:
             # A Live display left attached would corrupt the terminal if
@@ -435,9 +735,24 @@ class MLXSFTTrainerWrapper:
                     "lora_parameters": build_mlx_adapter_config(
                         lora_cfg, adapter_path=str(output_dir)
                     )["lora_parameters"],
-                    "mask_prompt": False,
-                    "grad_checkpoint": False,
-                    "grad_accumulation_steps": 1,
+                    # #683: the EFFECTIVE masking, not a hardcoded False.
+                    # `mask_prompt` stays upstream's meaning (a single masked
+                    # prefix); `response_token_mask` is Soup's per-token mask,
+                    # which is what a multi-turn chat run actually used.
+                    "mask_prompt": bool(args.mask_prompt),
+                    "response_token_mask": use_token_mask,
+                    "train_on_responses_only": responses_only,
+                    "grad_checkpoint": grad_checkpoint,
+                    "grad_accumulation_steps": grad_accumulation_steps,
+                    # #686: the EFFECTIVE optimizer and schedule, so an adapter
+                    # records the recipe that ran rather than the one requested.
+                    **optimizer_plan.as_metadata(),
+                    # #749: the norm gradients were actually clipped at.
+                    # Recorded because MLX honours it through a Soup-side
+                    # wrapper rather than through anything mlx-lm writes, so
+                    # the output dir is the only place a finished run says
+                    # whether it clipped.
+                    "max_grad_norm": float(cfg.training.max_grad_norm),
                 },
                 indent=2,
             )

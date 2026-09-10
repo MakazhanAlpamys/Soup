@@ -191,6 +191,19 @@ def _require_str_content(value: object, field: str) -> str:
     return value
 
 
+def _require_dict_messages(messages: object, kind: str) -> None:
+    """Require a messages list whose elements are all dicts.
+
+    Raising ValueError routes the row to ``format_to_messages``'s drop path
+    instead of passing the malformed element through into training.
+    """
+    if not isinstance(messages, list):
+        raise ValueError(f"{kind} row 'messages' must be a list")
+    for msg in messages:
+        if not isinstance(msg, dict):
+            raise ValueError(f"{kind} message must be a dict")
+
+
 def _convert_alpaca(row: dict) -> dict:
     instruction = _require_str_content(row["instruction"], "alpaca.instruction")
     input_text = row.get("input") or ""  # missing / null -> ""
@@ -224,8 +237,9 @@ def _convert_sharegpt(row: dict) -> dict:
 
 
 def _convert_chatml(row: dict) -> dict:
-    # Already in the right format
-    return {"messages": row["messages"]}
+    messages = row["messages"]
+    _require_dict_messages(messages, "chatml")
+    return {"messages": messages}
 
 
 def _convert_dpo(row: dict) -> dict:
@@ -317,6 +331,7 @@ def _convert_audio(row: dict) -> dict:
     messages = row["messages"]
     if not isinstance(messages, list) or len(messages) < 1:
         raise ValueError("Audio row must have a 'messages' list with at least one message")
+    _require_dict_messages(messages, "audio")
     return {"messages": messages, "audio": audio}
 
 
@@ -610,7 +625,10 @@ def _convert_video(row: dict) -> dict:
         raise ValueError("video row 'video' must not contain null bytes")
     if len(video) > 2048:
         raise ValueError("video row 'video' must be <= 2048 chars")
-    messages = row.get("messages") or []
+    messages = row.get("messages")
+    if messages is None:
+        messages = []
+    _require_dict_messages(messages, "video")
     return {"video": video, "messages": messages}
 
 

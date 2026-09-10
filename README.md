@@ -11,11 +11,13 @@
 <p align="center">
   <a href="https://trysoup.dev">Website</a> &middot;
   <a href="#quick-start">Quick Start</a> &middot;
+  <a href="#web-ui">Web UI</a> &middot;
   <a href="#configuration">Config</a> &middot;
   <a href="#documentation">Docs</a> &middot;
   <a href="docs/commands.md">Commands</a> &middot;
   <a href="docs/models.md">Models</a> &middot;
-  <a href="https://discord.gg/8RgVbFA6Zq">Discord</a> &middot;
+  <a href="https://discord.gg/dgd2pJcjwP">Discord</a> &middot;
+  <a href="https://t.me/souptasters">Telegram</a> &middot;
   <a href="https://www.producthunt.com/products/soup-cli">Product Hunt</a>
 </p>
 
@@ -27,7 +29,8 @@
   <a href="https://github.com/MakazhanAlpamys/Soup/actions"><img src="https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/MakazhanAlpamys/65fdc943f85f3b2c46ecddb415c2b779/raw/soup_tests.json" alt="Tests"></a>
   <a href="https://github.com/MakazhanAlpamys/Soup/actions"><img src="https://github.com/MakazhanAlpamys/Soup/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://trysoup.dev"><img src="https://img.shields.io/badge/website-trysoup.dev-blue" alt="Website"></a>
-  <a href="https://discord.gg/8RgVbFA6Zq"><img src="https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white" alt="Discord"></a>
+  <a href="https://discord.gg/dgd2pJcjwP"><img src="https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white" alt="Discord"></a>
+  <a href="https://t.me/souptasters"><img src="https://img.shields.io/badge/Telegram-join-26A5E4?logo=telegram&logoColor=white" alt="Telegram"></a>
   <a href="https://doi.org/10.5281/zenodo.21771064"><img src="https://img.shields.io/badge/DOI-10.5281%2Fzenodo.21771064-blue?logo=zenodo&logoColor=white" alt="DOI: 10.5281/zenodo.21771064"></a>
 </p>
 
@@ -244,6 +247,21 @@ soup export --model ./output --format gguf --quant q4_k_m   # GGUF for Ollama / 
 More export targets (ONNX, TensorRT, AWQ, GPTQ, BitNet) and deployment options live in
 [`docs/serving-and-export.md`](docs/serving-and-export.md).
 
+## Web UI
+
+Prefer a browser? `soup ui` serves a local dashboard for experiments,
+training setup, live metrics, dataset exploration and model chat.
+
+```bash
+pip install "soup-cli[ui]"
+soup ui
+# Opens http://127.0.0.1:7860
+```
+
+![Soup Web UI — New Training](docs/assets/web-ui-new-training.png)
+
+[Web UI documentation](docs/serving-and-export.md#web-ui)
+
 ## Configuration
 
 A complete `soup.yaml`:
@@ -315,6 +333,7 @@ soup train  --config soup.yaml        # train (SFT/DPO/GRPO/PPO/KTO/ORPO/SimPO/I
 soup infer  --model ./output --input prompts.jsonl   # batch inference
 soup chat   --model ./output          # interactive chat
 soup serve  --model ./output          # OpenAI-compatible API server
+soup ui                               # local browser dashboard
 soup merge  --adapter ./output        # merge LoRA into the base model
 soup export --model ./output --format gguf           # export for deployment
 soup eval   benchmark --model ./output               # evaluate
@@ -429,7 +448,8 @@ Bugs and feature requests belong in the
 and help the next person with the same problem.
 
 For live chat, setup help, and everything that reads better as a conversation, join the
-[Discord](https://discord.gg/8RgVbFA6Zq). Anything that should still be findable in six months
+[Discord](https://discord.gg/dgd2pJcjwP) or the [Telegram community](https://t.me/souptasters).
+Anything that should still be findable in six months
 belongs in Issues or Discussions — a Discord answer helps one person, an issue helps everyone
 who hits the same thing. The [Code of Conduct](CODE_OF_CONDUCT.md) applies there too.
 

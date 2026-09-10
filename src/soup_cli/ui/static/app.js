@@ -2,16 +2,68 @@
 
 const API = '';  // same origin
 
+// v0.53.9 #95 — Pick up Bearer token from `?token=…` (phone QR landing)
+// or from sessionStorage on subsequent navigations. Stripped from the URL
+// after read so the token doesn't sit in browser history.
+(function _bootstrapAuthToken() {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const fromUrl = params.get('token');
+    if (fromUrl) {
+      window._authToken = fromUrl;
+      try { sessionStorage.setItem('soup_auth_token', fromUrl); } catch (e) {}
+      // Drop ?token=… from the URL so refresh history doesn't leak it.
+      params.delete('token');
+      const qs = params.toString();
+      const clean = window.location.pathname + (qs ? '?' + qs : '') +
+        window.location.hash;
+      window.history.replaceState(null, '', clean);
+    } else {
+      try {
+        const saved = sessionStorage.getItem('soup_auth_token');
+        if (saved) window._authToken = saved;
+      } catch (e) {}
+    }
+  } catch (e) {
+    // Defensive: never block app load.
+  }
+})();
+
+// v0.74.x #687 — Request ephemeral single-use ticket for SSE endpoints
+async function getAuthTicket() {
+  if (!window._authToken) return '';
+  try {
+    const resp = await fetch(API + '/api/auth/ticket', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + window._authToken,
+      },
+    });
+    if (!resp.ok) return '';
+    const data = await resp.json();
+    return data.ticket || '';
+  } catch (e) {
+    return '';
+  }
+}
+window.getAuthTicket = getAuthTicket;
+
 // v0.53.9 #94 — Lightweight EventSource consumer for /api/train/stream.
 // Opens on demand (call `startTrainEventStream()`) and dispatches parsed
 // payloads to `onTrainEvent(payload)` which other modules can override.
 // Auto-closes on `status=done` or `status=timeout`.
 let _trainEventSource = null;
 window.onTrainEvent = window.onTrainEvent || function (_payload) {};
-function startTrainEventStream() {
+async function startTrainEventStream() {
   if (_trainEventSource) return _trainEventSource;
   try {
-    const es = new EventSource('/api/train/stream');
+    let url = '/api/train/stream';
+    const ticket = await getAuthTicket();
+    if (ticket) {
+      url += '?ticket=' + encodeURIComponent(ticket);
+    }
+    const es = new EventSource(url);
     _trainEventSource = es;
     es.onmessage = function (event) {
       if (!event.data) return;
@@ -46,33 +98,6 @@ function stopTrainEventStream() {
 }
 window.startTrainEventStream = startTrainEventStream;
 window.stopTrainEventStream = stopTrainEventStream;
-
-// v0.53.9 #95 — Pick up Bearer token from `?token=…` (phone QR landing)
-// or from sessionStorage on subsequent navigations. Stripped from the URL
-// after read so the token doesn't sit in browser history.
-(function _bootstrapAuthToken() {
-  try {
-    const params = new URLSearchParams(window.location.search);
-    const fromUrl = params.get('token');
-    if (fromUrl) {
-      window._authToken = fromUrl;
-      try { sessionStorage.setItem('soup_auth_token', fromUrl); } catch (e) {}
-      // Drop ?token=… from the URL so refresh history doesn't leak it.
-      params.delete('token');
-      const qs = params.toString();
-      const clean = window.location.pathname + (qs ? '?' + qs : '') +
-        window.location.hash;
-      window.history.replaceState(null, '', clean);
-    } else {
-      try {
-        const saved = sessionStorage.getItem('soup_auth_token');
-        if (saved) window._authToken = saved;
-      } catch (e) {}
-    }
-  } catch (e) {
-    // Defensive: never block app load.
-  }
-})();
 
 // --- State ---
 let currentPage = 'dashboard';
@@ -183,9 +208,13 @@ async function renderToolOutputs() {
 
 // --- API Helpers ---
 async function api(path, opts = {}) {
+  const headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) };
+  if (window._authToken && !headers['Authorization']) {
+    headers['Authorization'] = 'Bearer ' + window._authToken;
+  }
   const resp = await fetch(API + path, {
-    headers: { 'Content-Type': 'application/json' },
     ...opts,
+    headers,
   });
   if (!resp.ok) {
     const err = await resp.json().catch(() => ({ detail: resp.statusText }));
@@ -929,7 +958,7 @@ let logEventSource = null;
 let metricsEventSource = null;
 const LOG_MAX_LINES = 500;
 
-function connectTrainingSSE() {
+async function connectTrainingSSE() {
   disconnectTrainingSSE();
 
   const logPanel = document.getElementById('train-log-panel');
@@ -941,8 +970,14 @@ function connectTrainingSSE() {
   progressPanel.style.display = 'block';
   if (liveBadge) liveBadge.style.display = 'inline-flex';
 
+  let url = API + '/api/train/logs';
+  const ticket = await getAuthTicket();
+  if (ticket) {
+    url += '?ticket=' + encodeURIComponent(ticket);
+  }
+
   // Connect to log SSE
-  logEventSource = new EventSource(API + '/api/train/logs');
+  logEventSource = new EventSource(url);
   logEventSource.onmessage = function(ev) {
     const data = JSON.parse(ev.data);
     appendLogLine(data.line);

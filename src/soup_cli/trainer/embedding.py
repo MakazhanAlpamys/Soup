@@ -12,8 +12,8 @@ from soup_cli.utils.gpu import (
     bf16_fp16_flags,
     estimate_batch_size,
     model_size_from_name,
+    resolve_base_load_dtype,
     resolve_device_map,
-    resolve_frozen_base_load_dtype,
 )
 from soup_cli.utils.mixed_precision import align_trainable_dtype_for_fp16
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
@@ -87,10 +87,15 @@ class EmbeddingTrainerWrapper:
         else:
             self._setup_transformers(cfg, tcfg)
 
-        trainable, total = self.model.get_nb_trainable_parameters()
-        pct = 100 * trainable / total
+        if tcfg.lora.r == 0:
+            trainable = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+            total = sum(p.numel() for p in self.model.parameters())
+        else:
+            trainable, total = self.model.get_nb_trainable_parameters()
+        pct = 100 * trainable / total if total > 0 else 0.0
+        label = "Full fine-tuning" if tcfg.lora.r == 0 else "LoRA applied"
         console.print(
-            f"[green]LoRA applied:[/] {trainable:,} trainable"
+            f"[green]{label}:[/] {trainable:,} trainable"
             f" / {total:,} total ({pct:.2f}%)"
         )
 
@@ -175,8 +180,9 @@ class EmbeddingTrainerWrapper:
         if self.fsdp_config:
             training_kwargs.update(self.fsdp_config)
 
-        if tcfg.loraplus_lr_ratio is not None:
-            training_kwargs["loraplus_lr_ratio"] = tcfg.loraplus_lr_ratio
+        # LoRA+ is not a TrainingArguments field; its optimizer is built and
+        # attached after the trainer exists (attach_loraplus_optimizer). Do NOT
+        # forward loraplus_lr_ratio here (#724).
 
         training_args = TrainingArguments(**training_kwargs)
 
@@ -208,9 +214,12 @@ class EmbeddingTrainerWrapper:
         # v0.40.6 #67 — ReLoRA callback.
         from soup_cli.utils.peft_wiring import (
             attach_curriculum_callback,
+            attach_loraplus_optimizer,
             attach_plugin_callback,
             attach_relora_callback,
         )
+        # LoRA+ optimizer (#724) — build and attach now that the trainer exists.
+        attach_loraplus_optimizer(self.trainer, tcfg)
         attach_relora_callback(self.trainer, tcfg)
         # v0.53.5 #114/#115 — dynamic curriculum live callback.
         attach_curriculum_callback(self.trainer, tcfg, str(output_dir), console)
@@ -240,9 +249,13 @@ class EmbeddingTrainerWrapper:
 
         console.print(f"[dim]Loading model: {cfg.base}[/]")
         dev_map = resolve_device_map(self.device)
+        from soup_cli.trainer.sft import is_full_finetune
+
         model_kwargs = {
             "trust_remote_code": self._trust_remote_code, "device_map": dev_map,
-            "torch_dtype": resolve_frozen_base_load_dtype(self.device),
+            "torch_dtype": resolve_base_load_dtype(
+                self.device, full_finetune=is_full_finetune(tcfg)
+            ),
         }
         if quant_config_obj is not None:
             model_kwargs["quantization_config"] = quant_config_obj
@@ -253,28 +266,43 @@ class EmbeddingTrainerWrapper:
         if tcfg.quantization in ("4bit", "8bit", "mxfp4"):
             self.model = prepare_model_for_kbit_training(self.model)
 
-        from soup_cli.utils.peft_wiring import resolve_lora_target_modules
+        if tcfg.lora.r == 0:
+            # #700 — Full fine-tuning for embedding models (no PEFT adapter applied).
+            trainable = [
+                param for param in self.model.parameters() if param.requires_grad
+            ]
+            if not trainable:
+                raise ValueError(
+                    "training.lora.r=0 requests full fine-tuning but no "
+                    "parameter is trainable — check base model parameters, "
+                    "or set lora.r >= 1 to train an adapter instead. "
+                    "Refusing rather than running a no-op."
+                )
+            if hasattr(self.model, "enable_input_require_grads"):
+                self.model.enable_input_require_grads()
+        else:
+            from soup_cli.utils.peft_wiring import resolve_lora_target_modules
 
-        target_modules = resolve_lora_target_modules(self.model, tcfg.lora.target_modules)
+            target_modules = resolve_lora_target_modules(self.model, tcfg.lora.target_modules)
 
-        lora_config = LoraConfig(
-            r=tcfg.lora.r,
-            lora_alpha=tcfg.lora.alpha,
-            lora_dropout=tcfg.lora.dropout,
-            target_modules=target_modules,
-            task_type=TaskType.FEATURE_EXTRACTION,
-            bias="none",
-            use_dora=tcfg.lora.use_dora,
-            use_rslora=tcfg.lora.use_rslora,
-        )
-        # v0.40.6 #67 — surgical PEFT patches.
-        from soup_cli.utils.peft_wiring import (
-            apply_post_lora_patches,
-            apply_pre_lora_patches,
-        )
-        apply_pre_lora_patches(self.model, cfg.base)
-        self.model = get_peft_model(self.model, lora_config)
-        apply_post_lora_patches(self.model)
+            lora_config = LoraConfig(
+                r=tcfg.lora.r,
+                lora_alpha=tcfg.lora.alpha,
+                lora_dropout=tcfg.lora.dropout,
+                target_modules=target_modules,
+                task_type=TaskType.FEATURE_EXTRACTION,
+                bias="none",
+                use_dora=tcfg.lora.use_dora,
+                use_rslora=tcfg.lora.use_rslora,
+            )
+            # v0.40.6 #67 — surgical PEFT patches.
+            from soup_cli.utils.peft_wiring import (
+                apply_post_lora_patches,
+                apply_pre_lora_patches,
+            )
+            apply_pre_lora_patches(self.model, cfg.base)
+            self.model = get_peft_model(self.model, lora_config)
+            apply_post_lora_patches(self.model)
 
         # v0.35.0 #60 — multi-trainer wiring of v0.28.0 speed/memory features.
         # Embedding does not run cross-doc-mask paths; that flag no-ops.
@@ -536,3 +564,12 @@ class _EmbeddingTrainer:
     @property
     def state(self):
         return self._trainer.state
+
+    @property
+    def model(self):
+        return self._trainer.model
+
+    @property
+    def args(self):
+        return self._trainer.args
+

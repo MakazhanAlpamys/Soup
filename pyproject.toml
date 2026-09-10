@@ -51,15 +51,14 @@ dependencies = [
 # v0.71.0 — heavy training stack. `pip install 'soup-cli[train]'` to fine-tune.
 # These were core dependencies through v0.70.0.
 train = [
-    # The binding floor is transformers', not Soup's: the torch extra of
-    # 5.16.1 (the floor declared just below) requires torch>=2.5, so no
-    # installable [train] env can carry torch below 2.5 regardless of what
-    # is declared here (#636). oQ/Qwen4's uint32 need (2.3) is subsumed.
+    # Soup's training floor is 2.6.0 because TRL preference trainers
+    # require the public FSDP2 API introduced in PyTorch 2.6.0. This also
+    # subsumes Transformers 5.16.1's torch>=2.5 requirement (#651).
     # tests/test_issue636_torch_floor.py pins this floor against the declared
     # transformers floor's own requirement (real metadata, on the
     # transformers-floor CI job that installs exactly 5.16.1) and pins
     # doctor's literal copy against this file, so neither can drift silently.
-    "torch>=2.5.0",
+    "torch>=2.6.0",
     # 5.16.1 is the validated Qwen4-Exp floor: an outer `qwen4_exp` config
     # selects the text-only Qwen4ExpForCausalLM, and the patch release restores
     # tensor-parallel compatibility needed by large-model training. The v5
@@ -223,7 +222,7 @@ soup = "soup_cli.cli:run"
 Homepage = "https://github.com/MakazhanAlpamys/Soup"
 Repository = "https://github.com/MakazhanAlpamys/Soup"
 Issues = "https://github.com/MakazhanAlpamys/Soup/issues"
-Discord = "https://discord.gg/8RgVbFA6Zq"
+Discord = "https://discord.gg/dgd2pJcjwP"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/soup_cli"]

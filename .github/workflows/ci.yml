@@ -119,10 +119,10 @@ jobs:
       - name: Install training dependencies
         # torch>=2.6 is load-bearing, not belt-and-braces: sshleifer/tiny-gpt2
         # ships only pytorch_model.bin, and transformers refuses torch.load
-        # below 2.6 under CVE-2025-32434. Removing this pin because "[dev]
+        # below 2.6.0 under CVE-2025-32434. Removing this pin because "[dev]
         # already pulls torch" breaks the job with a message naming the CVE
         # rather than the cause.
-        run: pip install -e ".[dev]" "torch>=2.6"
+        run: pip install -e ".[dev]" "torch>=2.6.0"
 
       - name: Warm tiny GPT-2 cache
         shell: python
@@ -143,7 +143,7 @@ jobs:
           path: ${{ runner.temp }}/hf-cache
           key: hf-pytorch-smoke-${{ runner.os }}-${{ hashFiles('tests/test_smoke_train.py', 'pyproject.toml') }}
 
-  # #502/#503/#522/#571: install the exact Torch 2.5.1 / Transformers 5.16.1 /
+  # #502/#503/#522/#571/#651: install the exact Torch 2.6.0 / Transformers 5.16.1 /
   # trl 0.29 / PEFT 0.20 support stack and Plotext 6.0.0 so pip cannot silently
   # upgrade the cell, then assert every pinned compatibility boundary.
   transformers-floor:
@@ -187,6 +187,26 @@ jobs:
                   f"pip silently upgraded, ignored -c, or constraints drifted"
               )
               print(f"{name}={got} (matches constraints)")
+          PY
+      - name: Prove the pinned torch actually supports trl's FSDP2 path
+        run: |
+          python - <<'PY'
+          import torch
+          import torch.distributed.fsdp as fsdp
+
+          assert hasattr(fsdp, "FSDPModule"), (
+              "torch.distributed.fsdp.FSDPModule is absent — this is the #651 "
+              "root cause; the declared torch floor does not support trl 0.29"
+          )
+          import trl
+          from trl import DPOTrainer, KTOTrainer
+
+          print(
+              "trl",
+              trl.__version__,
+              "imports on torch",
+              torch.__version__,
+          )
           PY
       - name: Run Transformers floor compatibility guard
         run: >

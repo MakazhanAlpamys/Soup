@@ -255,6 +255,17 @@ rather than reconstructed.
 
 ## Reproducing
 
+The current harness also exercises the Rich display and experiment-tracker
+bridge added in #665. It saves `experiments.db` beside the temporary artifacts,
+leaving the user's usual experiment database untouched, and fails if no display
+updates or tracker metrics arrive. The bridge emits its normal process-local
+SSE events too. No separate UI server is started.
+
+The measurements above predate this wiring; they have not been re-run with the
+bridge enabled. New runs include display/tracker overhead in the training wall
+time. Throughput still uses mlx-lm's cumulative trained-token count captured
+inside the stdout tee, not the display's iterations-per-second value.
+
 ```bash
 pip install -e ".[mlx]"
 python benchmarks/harness/mlx_sft_smoke.py mlx-community/Qwen2.5-0.5B-Instruct-4bit 48 1
