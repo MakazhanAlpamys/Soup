@@ -32,6 +32,17 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from soup_cli.config.schema import SoupConfig
 
 #: A setting the backend reads and refuses, versus one it never reads at all.
+#:
+#: #755's AC3 named three statuses. Only ``ignored`` has live instances; the
+#: other two are **deliberately deferred**, not forgotten:
+#:
+#: * ``honoured`` would mean enumerating 275 declared fields against every
+#:   reviewed pair -- a table nobody can review honestly, and the opposite of
+#:   this module's premise that a gap list is short enough to be checked;
+#: * ``rejected`` has no instance because ``mlx_sft.py`` only ever warns; it
+#:   raises for no config field. The constant stays because a backend that hard
+#:   errors is a real category, and ``STATUSES`` is what stops a typo'd status
+#:   reaching the table.
 IGNORED = "ignored"
 REJECTED = "rejected"
 STATUSES = frozenset({IGNORED, REJECTED})
@@ -115,10 +126,20 @@ REGISTRY: dict[tuple[str, str], tuple[SupportEntry, ...]] = {
     ("sft", "mlx"): _MLX_SFT,
 }
 
-#: The trainer module each reviewed pair dispatches to. The guard reads it to
-#: check ``trainer_reads`` against the real source.
-TRAINER_MODULES: dict[tuple[str, str], str] = {
-    ("sft", "mlx"): "soup_cli/trainer/mlx_sft.py",
+#: Every module a reviewed pair can read config through -- the trainer plus the
+#: helpers it delegates to. The guard scans the **union**.
+#:
+#: Naming only the trainer was a real hole, found by mutation on #756: the
+#: schedule fields #734 wired appear 7-12 times in ``mlx_optim.py`` and twice in
+#: ``mlx_sft.py``. The guard caught that drift only because #734 happened to
+#: leave ``warmup_ratio=`` and ``weight_decay=`` visible at the call site. A
+#: field wired entirely inside a helper would have passed.
+TRAINER_MODULES: dict[tuple[str, str], tuple[str, ...]] = {
+    ("sft", "mlx"): (
+        "soup_cli/trainer/mlx_sft.py",
+        "soup_cli/trainer/mlx_optim.py",
+        "soup_cli/trainer/mlx_masking.py",
+    ),
 }
 
 

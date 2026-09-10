@@ -26,12 +26,18 @@ import re
 import textwrap
 
 import pytest
+import typer
 
+from soup_cli.config.backend_support import REGISTRY as _REGISTRY
 from soup_cli.config.schema import DataConfig, TrainingConfig
 
 MLX_SFT = pathlib.Path(__file__).resolve().parents[1] / (
     "src/soup_cli/trainer/mlx_sft.py"
 )
+
+#: Every entry the registry declares as read-only-to-warn. Tests parametrise
+#: over this so a new entry is covered without editing an assertion.
+_WARNED_ENTRIES = [e for e in _REGISTRY[("sft", "mlx")] if e.trainer_reads]
 
 
 @pytest.fixture
@@ -236,6 +242,25 @@ def test_doctor_config_names_the_ignored_field_and_its_reason(config_at, capsys)
     assert "mx.random" in out, "the row must carry the reason, not just the name"
 
 
+@pytest.mark.parametrize(
+    "path, why",
+    [("does_not_exist.yaml", "missing"), ("broken.yaml", "unparseable")],
+)
+def test_doctor_exits_non_zero_when_the_config_cannot_be_read(
+    path, why, tmp_path, monkeypatch
+):
+    """A leg CI can gate on must not report success on a config it never read."""
+    from soup_cli.commands.doctor import doctor
+
+    monkeypatch.chdir(tmp_path)
+    if why == "unparseable":
+        (tmp_path / path).write_text("base: [unclosed\n", encoding="utf-8")
+
+    with pytest.raises(typer.Exit) as excinfo:
+        doctor(nccl=False, disk=False, config=str(tmp_path / path))
+    assert excinfo.value.exit_code != 0
+
+
 def test_doctor_without_config_does_not_read_one(config_at, capsys):
     """The existing environment-only behaviour must be unchanged."""
     from soup_cli.commands.doctor import doctor
@@ -272,28 +297,65 @@ def _fields_read_by(path: pathlib.Path) -> set[str]:
     return names
 
 
+def _fields_read_outside(repo_root: pathlib.Path, modules) -> set[str]:
+    """Names read by any module in the tree except the ones declared for a pair."""
+    src = repo_root / "src" / "soup_cli"
+    declared = {(repo_root / "src" / m).resolve() for m in modules}
+    names: set[str] = set()
+    for path in src.rglob("*.py"):
+        if path.resolve() in declared or path.name == "schema.py":
+            continue
+        names |= _fields_read_by(path)
+    return names
+
+
 def _registry_drift(repo_root: pathlib.Path) -> list[str]:
-    """Entries whose ``trainer_reads`` no longer matches the trainer's source."""
+    """Entries whose ``trainer_reads`` no longer matches the real source.
+
+    Scans the **union** of every module declared for the pair. Grounding on the
+    trainer alone was a hole: #734 wired four schedule fields that live 7-12
+    times in ``mlx_optim.py`` and twice in ``mlx_sft.py``, and the guard caught
+    it only because the call site happened to name them.
+    """
     from soup_cli.config.backend_support import REGISTRY, TRAINER_MODULES
 
     problems: list[str] = []
     for pair, entries in REGISTRY.items():
-        module = TRAINER_MODULES.get(pair)
-        if module is None:
-            problems.append(f"{pair} has entries but no trainer module declared")
+        modules = TRAINER_MODULES.get(pair)
+        if not modules:
+            problems.append(f"{pair} has entries but no trainer modules declared")
             continue
-        read = _fields_read_by(repo_root / "src" / module)
+        read: dict[str, str] = {}
+        for module in modules:
+            path = repo_root / "src" / module
+            if not path.exists():
+                problems.append(f"{pair}: declared module {module} does not exist")
+                continue
+            for name in _fields_read_by(path):
+                read.setdefault(name, module)
+        # A claimed gap must be a gap *relative to something*. If no module in
+        # the tree reads the field at all, it is not "this backend ignores it"
+        # -- it is a field nothing consumes anywhere, which is #748's territory
+        # and #751's allowlist, not this table. Without this, an entry can
+        # assert an unfounded gap for any field and never be contradicted.
+        elsewhere = _fields_read_outside(repo_root, modules)
         for entry in entries:
             name = entry.field.split(".", 1)[1]
+            if not entry.trainer_reads and name not in elsewhere:
+                problems.append(
+                    f"{entry.field}: declared a gap on {pair}, but no module "
+                    f"outside {', '.join(modules)} reads it either — that is a "
+                    f"globally unconsumed field (#748), not a per-backend gap"
+                )
             if entry.trainer_reads and name not in read:
                 problems.append(
-                    f"{entry.field}: declared read-to-warn by {module}, "
-                    f"but that module no longer mentions it"
+                    f"{entry.field}: declared read-to-warn, but none of "
+                    f"{', '.join(modules)} mentions it"
                 )
             if not entry.trainer_reads and name in read:
                 problems.append(
-                    f"{entry.field}: declared unread, but {module} now reads it "
-                    f"— the field was wired; remove or reclassify the entry"
+                    f"{entry.field}: declared unread, but {read[name]} now reads "
+                    f"it — the field was wired; remove or reclassify the entry"
                 )
     return problems
 
@@ -302,6 +364,121 @@ def test_the_registry_matches_what_the_backend_trainer_actually_reads():
     repo_root = pathlib.Path(__file__).resolve().parents[1]
     problems = _registry_drift(repo_root)
     assert problems == [], "\n".join(problems)
+
+
+def test_the_declared_modules_cover_every_helper_the_trainer_imports():
+    """The map must not silently shrink back to trainer-only.
+
+    Derived from the trainer's own imports rather than hardcoded, so adding a
+    helper to ``mlx_sft.py`` without declaring it here fails, and dropping one
+    from the map fails too. Asserting a literal list would pass either way.
+    """
+    from soup_cli.config.backend_support import TRAINER_MODULES
+
+    repo_root = pathlib.Path(__file__).resolve().parents[1]
+    missing: list[str] = []
+    for pair, modules in TRAINER_MODULES.items():
+        primary = repo_root / "src" / modules[0]
+        tree = ast.parse(primary.read_text(encoding="utf-8"))
+        imported: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module:
+                if node.module.startswith("soup_cli.trainer"):
+                    imported.add(node.module)
+            elif isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name.startswith("soup_cli.trainer"):
+                        imported.add(alias.name)
+        declared = {m.removesuffix(".py").replace("/", ".") for m in modules}
+        for mod in sorted(imported):
+            if mod not in declared:
+                missing.append(f"{pair}: {modules[0]} imports {mod}, not declared")
+    assert missing == [], "\n".join(missing)
+
+
+def test_an_unfounded_gap_claim_is_caught():
+    """@MakazhanAlpamys's mutation on #756, which the first version survived.
+
+    He fabricated an entry declaring ``data.mask_history`` ignored on
+    ``(sft, mlx)`` and the suite stayed green: the drift check only compared
+    the entry against the declared modules, so an ``ignored`` claim about a
+    field those modules never mention could not be contradicted.
+
+    A gap is relative to something. If nothing anywhere reads the field, it is
+    not "this backend ignores it" -- it is a field no code consumes, which is
+    #748's subject and #751's allowlist.
+    """
+    import soup_cli.config.backend_support as bs
+
+    repo_root = pathlib.Path(__file__).resolve().parents[1]
+    fabricated = bs.SupportEntry(
+        "data.mask_history", bs.IGNORED, "fabricated, unfounded claim"
+    )
+    real = bs.REGISTRY[("sft", "mlx")]
+    try:
+        bs.REGISTRY[("sft", "mlx")] = (fabricated,) + real
+        problems = _registry_drift(repo_root)
+    finally:
+        bs.REGISTRY[("sft", "mlx")] = real
+
+    assert any(
+        "mask_history" in p and "globally unconsumed" in p for p in problems
+    ), problems
+
+
+def test_a_gap_for_a_field_another_backend_reads_is_accepted():
+    """Control for the above — the check must not fire on a real gap.
+
+    ``training.seed`` is read by the transformers path and ignored by MLX, so
+    it is exactly the shape the registry exists to record.
+    """
+    repo_root = pathlib.Path(__file__).resolve().parents[1]
+    assert _registry_drift(repo_root) == []
+
+
+def test_a_declared_module_that_does_not_exist_is_caught(tmp_path, monkeypatch):
+    """A renamed helper must not silently shrink the guard's scope."""
+    import soup_cli.config.backend_support as bs
+
+    monkeypatch.setitem(
+        bs.TRAINER_MODULES, ("sft", "mlx"), ("soup_cli/trainer/gone.py",)
+    )
+    problems = _registry_drift(tmp_path)
+    assert any("does not exist" in p for p in problems), problems
+
+
+def test_a_field_wired_only_inside_a_helper_is_caught(tmp_path, monkeypatch):
+    """The hole this fix closes.
+
+    #734 wired the schedule fields mostly inside ``mlx_optim.py``. Had it left
+    nothing visible in ``mlx_sft.py``, a trainer-only scan would have passed.
+    """
+    import soup_cli.config.backend_support as bs
+
+    trainer = tmp_path / "src" / "soup_cli" / "trainer"
+    trainer.mkdir(parents=True)
+    # the trainer never names the field ...
+    (trainer / "mlx_sft.py").write_text(
+        "def setup(cfg):\n    return build(cfg)\n", encoding="utf-8"
+    )
+    # ... the helper it delegates to does the reading
+    (trainer / "mlx_optim.py").write_text(
+        "def build(cfg):\n    return plan(warmup_ratio=cfg.training.warmup_ratio)\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setitem(
+        bs.REGISTRY,
+        ("sft", "mlx"),
+        (bs.SupportEntry("training.warmup_ratio", bs.IGNORED, "stale on purpose"),),
+    )
+    monkeypatch.setitem(
+        bs.TRAINER_MODULES,
+        ("sft", "mlx"),
+        ("soup_cli/trainer/mlx_sft.py", "soup_cli/trainer/mlx_optim.py"),
+    )
+
+    problems = _registry_drift(tmp_path)
+    assert any("warmup_ratio" in p and "mlx_optim.py" in p for p in problems), problems
 
 
 def test_wiring_a_field_makes_its_stale_entry_fail(tmp_path, monkeypatch):
@@ -340,23 +517,37 @@ def test_wiring_a_field_makes_its_stale_entry_fail(tmp_path, monkeypatch):
         ),
     )
     monkeypatch.setitem(
-        bs.TRAINER_MODULES, ("sft", "mlx"), "soup_cli/trainer/mlx_sft.py"
+        bs.TRAINER_MODULES, ("sft", "mlx"), ("soup_cli/trainer/mlx_sft.py",)
     )
 
     problems = _registry_drift(tmp_path)
     assert any("max_grad_norm" in p and "now reads it" in p for p in problems), problems
 
 
-def test_deleting_a_warning_makes_its_entry_fail(tmp_path, monkeypatch):
-    """The mirror case: an entry declared read-to-warn whose warning is gone."""
+@pytest.mark.parametrize(
+    "entry",
+    [e for e in _WARNED_ENTRIES],
+    ids=[e.field for e in _WARNED_ENTRIES],
+)
+def test_deleting_a_warning_makes_its_entry_fail(entry, tmp_path, monkeypatch):
+    """The mirror case: an entry declared read-to-warn whose warning is gone.
+
+    Parametrised over every ``trainer_reads=True`` entry rather than pinning
+    ``use_galore``, so this cannot pass by fixture coincidence and a new entry
+    is covered the moment it is added.
+    """
     import soup_cli.config.backend_support as bs
 
-    fake_src = tmp_path / "src" / "soup_cli" / "trainer"
-    fake_src.mkdir(parents=True)
-    (fake_src / "mlx_sft.py").write_text("def build(tcfg):\n    return None\n", "utf-8")
+    trainer = tmp_path / "src" / "soup_cli" / "trainer"
+    trainer.mkdir(parents=True)
+    (trainer / "mlx_sft.py").write_text(
+        "def build(tcfg):\n    return None\n", encoding="utf-8"
+    )
+    monkeypatch.setitem(bs.REGISTRY, ("sft", "mlx"), (entry,))
     monkeypatch.setitem(
-        bs.TRAINER_MODULES, ("sft", "mlx"), "soup_cli/trainer/mlx_sft.py"
+        bs.TRAINER_MODULES, ("sft", "mlx"), ("soup_cli/trainer/mlx_sft.py",)
     )
 
     problems = _registry_drift(tmp_path)
-    assert any("use_galore" in p and "no longer mentions it" in p for p in problems)
+    name = entry.field.split(".", 1)[1]
+    assert any(name in p and "declared read-to-warn" in p for p in problems), problems

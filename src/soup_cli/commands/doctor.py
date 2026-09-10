@@ -73,7 +73,7 @@ def doctor(
             "measure sequential read throughput."
         ),
     ),
-    config: str = typer.Option(
+    config: str | None = typer.Option(
         None,
         "--config",
         "-c",
@@ -214,12 +214,15 @@ def _check_config_support(config_path: str) -> None:
         from soup_cli.config.loader import load_config
 
         cfg = load_config(config_path)
-    except FileNotFoundError:
+    except FileNotFoundError as exc:
         console.print(f"\n[red]Config not found:[/] {config_path}")
-        return
+        # Non-zero deliberately: this leg is meant to be gate-able in CI, and a
+        # config that cannot be read is not a clean bill of health. `doctor`
+        # without --config keeps its old exit status.
+        raise typer.Exit(2) from exc
     except Exception as exc:  # invalid YAML, failed validation
         console.print(f"\n[red]Config could not be loaded:[/] {exc}")
-        return
+        raise typer.Exit(2) from exc
 
     backend = getattr(cfg, "backend", DEFAULT_BACKEND)
     gaps = check_config(cfg)
