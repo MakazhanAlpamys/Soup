@@ -20,10 +20,21 @@ and out of scope here.
 attribute or key anywhere under ``src/``, not whether it appears on a config
 object. The consumed set is roughly 3,400 names -- most of the codebase's
 attribute namespace. A field named after a common attribute therefore reads as
-consumed on the strength of an unrelated one: a `temperature` field is
-"consumed" by `request.temperature` in `commands/serve.py`, and `top_p`,
-`dtype`, `timeout` and `seed` behave the same way. The guard leaks hardest on
-exactly the generic names a new HuggingFace/TRL passthrough field would carry.
+consumed on the strength of an unrelated one. Measured on this tree, an
+unwired field would be caught or missed as follows:
+
+    training.verbose         caught
+    training.top_k           LEAKS   -- `top_k` is an attribute elsewhere
+    training.top_p           LEAKS
+    training.temperature     LEAKS   -- `request.temperature`, commands/serve.py
+    training.dtype           LEAKS
+    training.seed            LEAKS
+    training.logging_steps   LEAKS
+
+So this is a ratchet with a known hole, not a proof. It leaks hardest on
+exactly the generic names a new HuggingFace/TRL passthrough field would carry,
+which is the case most likely to arise. `test_the_known_leak_is_still_the_
+known_leak` pins the boundary so it cannot move without someone noticing.
 Scoping reads to config-typed objects is a much larger piece of work and is
 not attempted here.
 
@@ -663,3 +674,29 @@ class TestSchemaSideResolvers:
         )
         assert "double_quant_on" in raw, "the property itself is called"
         assert "bnb_4bit_use_double_quant" in fold_property_reads(raw, props)
+
+
+def test_the_known_leak_is_still_the_known_leak():
+    """Pin the boundary of the global-name-space hole, measured not assumed.
+
+    The maintainer measured this on #751 before merging: an unwired
+    `training.verbose` is caught, an unwired `training.top_k` is not, because
+    `top_k` appears as an attribute elsewhere in the tree. Recording it as a
+    test rather than as prose means the hole cannot quietly widen or close.
+
+    If a name moves from one list to the other, that is not a failure to fix
+    by editing this test — it is a change in what the guard can see, and the
+    docstring's leak table should move with it.
+    """
+    consumed = _consumed_in_src()
+
+    assert "verbose" not in consumed, (
+        "`training.verbose` used to be catchable; if some module now reads a "
+        "`.verbose` attribute, the guard has lost a name it could see"
+    )
+    for leaky in ("top_k", "top_p", "temperature", "dtype", "seed", "logging_steps"):
+        assert leaky in consumed, (
+            f"`{leaky}` no longer collides with an unrelated attribute, so the "
+            "guard can now catch an unwired field of that name. Good news — "
+            "update the leak table in the module docstring."
+        )
