@@ -230,9 +230,24 @@ def test_transformers_is_not_flagged_for_helper_owned_fields(config_at):
 # the doctor leg
 # --------------------------------------------------------------------------
 
-def test_doctor_config_names_the_ignored_field_and_its_reason(config_at, capsys):
+def test_doctor_config_names_the_ignored_field_and_its_reason(
+    config_at, capsys, monkeypatch
+):
+    """Rendered at a pinned width.
+
+    ``doctor`` builds its Console at import, so the row layout follows whatever
+    terminal the developer happens to have. Asserting on wrapped output tested
+    the reviewer's terminal as much as the code — it passed on CI and on mine,
+    and failed at ``COLUMNS=35``. The repo already pins width explicitly
+    elsewhere (``CliRunner(env={"COLUMNS": "200"})``); this is the same idea for
+    a directly-called command.
+    """
+    from rich.console import Console
+
+    import soup_cli.commands.doctor as doctor_module
     from soup_cli.commands.doctor import doctor
 
+    monkeypatch.setattr(doctor_module, "console", Console(width=200))
     path = config_at("sft", "mlx", "  seed: 42")
     # Every typer parameter passed explicitly — see #752.
     doctor(nccl=False, disk=False, config=path)
@@ -259,6 +274,45 @@ def test_doctor_exits_non_zero_when_the_config_cannot_be_read(
     with pytest.raises(typer.Exit) as excinfo:
         doctor(nccl=False, disk=False, config=str(tmp_path / path))
     assert excinfo.value.exit_code != 0
+
+
+@pytest.mark.parametrize("width", [35, 60, 200])
+def test_the_setting_name_survives_at_any_pinned_width(
+    width, config_at, capsys, monkeypatch
+):
+    """A row that says a setting is ignored must say *which* setting.
+
+    A dotted field name is one unbreakable word, so Rich ellipsised it to
+    ``training…`` on a narrow terminal — the report named no setting at all.
+    ``overflow="fold"`` keeps it. Widths are pinned, never inherited.
+    """
+    from rich.console import Console
+
+    import soup_cli.commands.doctor as doctor_module
+    from soup_cli.commands.doctor import doctor
+
+    monkeypatch.setattr(doctor_module, "console", Console(width=width))
+    doctor(nccl=False, disk=False, config=config_at("sft", "mlx", "  seed: 42"))
+
+    # Scope to the config section: the environment report above it has its own
+    # tables, and the dependency table legitimately ellipsises at 35 columns.
+    out = capsys.readouterr().out
+    section = out[out.index("Config check"):]
+
+    # A folded name is split down the FIRST column across consecutive lines, so
+    # it has to be rebuilt column-wise. Concatenating the whole section instead
+    # interleaves the status and reason cells between the halves of the name --
+    # which is what my first version of this assertion did, and why it failed
+    # at width 35 while the output was perfectly readable.
+    first_column = "".join(
+        line.split("\u2502")[1].strip()
+        for line in section.splitlines()
+        if line.startswith("\u2502")
+    )
+    assert "training.seed" in first_column, (
+        f"name lost at width={width}; first column read as {first_column!r}"
+    )
+    assert "\u2026" not in section, f"a config row was ellipsised at width={width}"
 
 
 def test_doctor_without_config_does_not_read_one(config_at, capsys):

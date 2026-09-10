@@ -238,9 +238,13 @@ def _check_config_support(config_path: str) -> None:
         return
 
     table = Table(title=None, show_header=True)
-    table.add_column("setting", style="bold")
+    # overflow="fold" on both text columns: a dotted field name is one
+    # unbreakable word, so Rich ellipsises it on a narrow terminal and the row
+    # says a setting is ignored without saying which one. Folding keeps the
+    # name and the reason legible at any width.
+    table.add_column("setting", style="bold", overflow="fold")
     table.add_column("status", justify="center")
-    table.add_column("why")
+    table.add_column("why", overflow="fold")
     for entry in gaps:
         table.add_row(entry.field, f"[yellow]{entry.status}[/]", entry.describe())
     console.print(table)
