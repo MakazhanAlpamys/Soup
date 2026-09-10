@@ -124,12 +124,13 @@ def load_benchmark_dataset() -> list[dict]:
 
 def benchmark_interleaved(
     data: list[dict],
+    expected_format: str | None = None,
     runs: int = 15,
 ) -> tuple[float, float, dict, dict]:
     """Benchmark in interleaved A/B order to eliminate sequential ordering artifacts."""
     for _ in range(3):
-        previous_validate_and_stats(data, "alpaca")
-        validate_and_stats(data, "alpaca")
+        previous_validate_and_stats(data, expected_format)
+        validate_and_stats(data, expected_format)
 
     prev_times: list[float] = []
     curr_times: list[float] = []
@@ -138,11 +139,11 @@ def benchmark_interleaved(
 
     for _ in range(runs):
         t0 = time.perf_counter()
-        prev_result = previous_validate_and_stats(data, "alpaca")
+        prev_result = previous_validate_and_stats(data, expected_format)
         prev_times.append(time.perf_counter() - t0)
 
         t0 = time.perf_counter()
-        curr_result = validate_and_stats(data, "alpaca")
+        curr_result = validate_and_stats(data, expected_format)
         curr_times.append(time.perf_counter() - t0)
 
     prev_times.sort()
@@ -154,23 +155,28 @@ def benchmark_interleaved(
 
 def run_benchmark() -> None:
     data = load_benchmark_dataset()
-    print(f"Loaded benchmark dataset: {len(data)} rows from repository fixtures")
+    print(f"Loaded benchmark dataset: {len(data)} rows from repository fixtures\n")
 
-    prev_time, curr_time, prev_result, curr_result = benchmark_interleaved(data)
-    print(f"Previous Implementation (median of 15 runs): {prev_time:.4f}s")
-    print(f"Current Implementation  (median of 15 runs): {curr_time:.4f}s")
+    for fmt in (None, "alpaca"):
+        fmt_label = f"format={fmt!r}" if fmt is not None else "format=None (inspect)"
+        print(f"--- Benchmarking {fmt_label} ---")
+        prev_time, curr_time, prev_result, curr_result = benchmark_interleaved(
+            data, expected_format=fmt
+        )
+        print(f"Previous Implementation (median of 15 runs): {prev_time:.4f}s")
+        print(f"Current Implementation  (median of 15 runs): {curr_time:.4f}s")
 
-    assert prev_result == curr_result, (
-        f"Results mismatch!\nPrev: {prev_result}\nCurr: {curr_result}"
-    )
-    print("Correctness check: PASS (identical outputs)")
+        assert prev_result == curr_result, (
+            f"Results mismatch for {fmt_label}!\nPrev: {prev_result}\nCurr: {curr_result}"
+        )
+        print("Correctness check: PASS (identical outputs)")
 
-    if prev_time > 0:
-        reduction = (prev_time - curr_time) / prev_time * 100.0
-        speedup = prev_time / curr_time if curr_time > 0 else float("inf")
-        print(f"\nExecution Time: {prev_time:.4f}s -> {curr_time:.4f}s")
-        print(f"Reduction: {reduction:.1f}%")
-        print(f"Speedup: {speedup:.2f}x")
+        if prev_time > 0 and curr_time > 0:
+            reduction = (prev_time - curr_time) / prev_time * 100.0
+            speedup = prev_time / curr_time
+            print(f"Execution Time: {prev_time:.4f}s -> {curr_time:.4f}s")
+            print(f"Reduction: {reduction:.1f}%")
+            print(f"Speedup: {speedup:.2f}x\n")
 
 
 if __name__ == "__main__":
