@@ -344,7 +344,7 @@ Upstream репозиторий (`MakazhanAlpamys/Soup`) построен соо
   doi       = {10.5281/zenodo.21918325},
   url       = {https://doi.org/10.5281/zenodo.21918325}
 }
-``````
+```
 =======
 ## Почему Soup?
 

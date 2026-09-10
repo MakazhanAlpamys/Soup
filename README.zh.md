@@ -344,7 +344,7 @@ pre-commit install                 # 可选：提交时ruff lint+格式化
   doi       = {10.5281/zenodo.21918325},
   url       = {https://doi.org/10.5281/zenodo.21918325}
 }
-``````
+```
 =======
 ## 为什么选择Soup？
 

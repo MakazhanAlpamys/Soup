@@ -49,7 +49,7 @@
   <a href="https://trendshift.io/repositories/98395?utm_source=repository-badge&amp_medium=badge&amp_campaign=badge-repository-98395" target="_blank" rel="noopener noreferrer">
     <img src="https://trendshift.io/api/badge/repositories/98395" alt="MakazhanAlpamys/Soup | Trendshift" width="250" height="55">
   </a>
-</p></p>
+</p>
 =======
   <a href="#documentation">Docs</a> &middot;
   <a href="docs/commands.md">Commands</a> &middot;

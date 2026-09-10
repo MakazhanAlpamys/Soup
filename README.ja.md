@@ -344,7 +344,7 @@ pre-commit install                 # 任意：コミット時のruff lint+フォ
   doi       = {10.5281/zenodo.21918325},
   url       = {https://doi.org/10.5281/zenodo.21918325}
 }
-``````
+```
 =======
 ## なぜSoup？
 

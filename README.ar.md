@@ -349,7 +349,7 @@ pre-commit install                 # اختياري: ruff lint+تنسيق على
   doi       = {10.5281/zenodo.21918325},
   url       = {https://doi.org/10.5281/zenodo.21918325}
 }
-``````
+```
 =======
 ## لماذا Soup؟
 

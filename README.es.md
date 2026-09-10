@@ -344,7 +344,7 @@ Este fork (`Ercaner1988/Soup`) se basa en el proyecto original: [MakazhanAlpamys
   doi       = {10.5281/zenodo.21918325},
   url       = {https://doi.org/10.5281/zenodo.21918325}
 }
-``````
+```
 =======
 ## ¿Por qué Soup?
 
