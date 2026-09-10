@@ -87,7 +87,14 @@ class TestSetupFailureReachesFailRun:
     ):
         """The gap covered every setup step, not only trainer_wrapper.setup —
         pin one earlier in the sequence (--tracker resolution) too, so the
-        fix is proven at more than the one call site it was written against."""
+        fix is proven at more than the one call site it was written against.
+
+        This site is reached via ``raise typer.Exit(...) from exc``, not a
+        bare raise — asserting the real message, not just non-None, is what
+        catches recording "Exit: " instead of the actual reason (review
+        finding on #767: typer.Exit carries no message of its own, and the
+        except here originally formatted the caught exception directly
+        rather than unwrapping to __cause__)."""
         from soup_cli.utils import trackers as trackers_mod
 
         def _raise_resolve(**kwargs):
@@ -102,6 +109,9 @@ class TestSetupFailureReachesFailRun:
         run = _the_run(db_path)
         assert run["status"] == "failed", run
         assert run["error_message"] is not None
+        message = run["error_message"]
+        assert "ValueError" in message, message
+        assert "simulated --tracker resolution failure" in message, message
 
 
 class TestRunRecordsItsOwnPid:

@@ -189,6 +189,20 @@ def _apply_replay_overrides(cfg, *, replay, replay_ratio, replay_seed=None):
     return type(cfg)(**payload)
 
 
+def _describe_exception_for_tracker(exc: BaseException) -> str:
+    """Format ``exc`` for ``ExperimentTracker.fail_run``'s ``error=`` column.
+
+    A handled setup failure (a bad ``--tracker`` value, a hub download
+    error) exits via ``raise typer.Exit(...) from exc``. ``typer.Exit``
+    carries no message of its own, so formatting the caught exception
+    directly writes ``"Exit: "`` to the row and loses the reason a human
+    needs — the one already printed to the console just before the raise.
+    Unwrapping to ``__cause__`` when present recovers it (#764 review).
+    """
+    cause = exc.__cause__ or exc
+    return f"{type(cause).__name__}: {cause}"
+
+
 def train(
     config: str = typer.Option(
         "soup.yaml",
@@ -1556,7 +1570,7 @@ def train(
                 energy_ctx = contextlib.nullcontext()
 
     except Exception as exc:
-        tracker.fail_run(run_id, error=f"{type(exc).__name__}: {exc}")
+        tracker.fail_run(run_id, error=_describe_exception_for_tracker(exc))
         raise
 
     try:
@@ -1576,7 +1590,7 @@ def train(
             output_dir=result["output_dir"],
         )
     except Exception as exc:
-        tracker.fail_run(run_id, error=f"{type(exc).__name__}: {exc}")
+        tracker.fail_run(run_id, error=_describe_exception_for_tracker(exc))
         # v0.34.0 Part D — write a .crash bundle next to the run for triage.
         try:
             from soup_cli.utils.crash import build_crash_bundle, write_crash_bundle
