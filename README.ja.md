@@ -1,4 +1,5 @@
-<p align="center">**🌍 [Türkçe](README.md) | [English](README.en.md) | [العربية](README.ar.md) | [日本語](README.ja.md) | [中文](README.zh.md) | [Русский](README.ru.md) | [Español](README.es.md)**
+<!-- synced-from: README.md sha256:1cdf85f67b56a053d993850d6d8ee27e161e3efd9d2bf6d3ec10e68691fcc3b6 -->
+<p align="center"><strong>🌍 <a href="README.tr.md">Türkçe</a> | <a href="README.md">English</a> | <a href="README.ar.md">العربية</a> | <a href="README.ja.md">日本語</a> | <a href="README.zh.md">中文</a> | <a href="README.ru.md">Русский</a> | <a href="README.es.md">Español</a></strong></p>
 
 <p align="center">
   <img src="soup.png" alt="Soup" width="280">
@@ -82,7 +83,6 @@ Soup/
 │   ├── cans/            # Soup Cans：モデルパッケージ化、公開、検証
 │   ├── cloud/           # Lambda Labs / Modalクラウドコントローラー
 │   └── utils/           # 共有ヘルパー（350以上のモジュール）
-├── graft/               # Graft MCP設定（ユーザーレベル配線）
 ├── docs/                # トピックガイド + 完全コマンドリファレンス
 ├── templates/           # chat.yaml、code.yaml、medical.yamlスタートテンプレート
 ├── benchmarks/          # 測定レコード（全数値の生データ）
@@ -287,7 +287,7 @@ pre-commit install                 # 任意：コミット時のruff lint+フォ
 
 ## 👥 コントリビューター
 
-上流リポジトリ（`MakazhanAlpamys/Soup`）はコミュニティによって構築されています。このフォーク（`Ercaner1988/Soup`）はGraft MCP統合用にカスタマイズされています。
+上流リポジトリ（`MakazhanAlpamys/Soup`）はコミュニティによって構築されています。このフォーク（`Ercaner1988/Soup`）は多言語ドキュメントを含みます。
 
 | コントリビューター | コミット数 | 役割 |
 |-------------------|-----------|------|
@@ -302,7 +302,7 @@ pre-commit install                 # 任意：コミット時のruff lint+フォ
 | Harshit Sharma | 7 | コントリビューション |
 | UmranPros | 6 | コントリビューション |
 | （その他のコントリビューター24名） | 5–1 | [CONTRIBUTORS.md](CONTRIBUTORS.md)参照 |
-| **Ercan Er** | **2** | **Graft MCP設定（ユーザーレベル配線）** |
+| **Ercan Er** | **2** | **多言語ドキュメントとブランチ設定** |
 
 > 指標は`git shortlog -sn HEAD`出力から取得（ercan1ブランチ、2026-09-09）。
 

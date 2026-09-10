@@ -1,4 +1,5 @@
-<p align="center">**🌍 [Türkçe](README.md) | [English](README.en.md) | [العربية](README.ar.md) | [日本語](README.ja.md) | [中文](README.zh.md) | [Русский](README.ru.md) | [Español](README.es.md)**
+<!-- synced-from: README.md sha256:1cdf85f67b56a053d993850d6d8ee27e161e3efd9d2bf6d3ec10e68691fcc3b6 -->
+<p align="center"><strong>🌍 <a href="README.tr.md">Türkçe</a> | <a href="README.md">English</a> | <a href="README.ar.md">العربية</a> | <a href="README.ja.md">日本語</a> | <a href="README.zh.md">中文</a> | <a href="README.ru.md">Русский</a> | <a href="README.es.md">Español</a></strong></p>
 
 <p align="center">
   <img src="soup.png" alt="Soup" width="280">
@@ -82,7 +83,6 @@ Soup/
 │   ├── cans/            # Soup Cans: empaquetado de modelos, publicación, verificación
 │   ├── cloud/           # Controladores de nube Lambda Labs / Modal
 │   └── utils/           # Ayudantes compartidos (350+ módulos)
-├── graft/               # Configuración de Graft MCP (cableado a nivel de usuario)
 ├── docs/                # Guías temáticas + referencia completa de comandos
 ├── templates/           # Plantillas iniciales chat.yaml, code.yaml, medical.yaml
 ├── benchmarks/          # Registros de medición (datos crudos para cada número)
@@ -287,7 +287,7 @@ pre-commit install                 # opcional: ruff lint+formateo al commit
 
 ## 👥 Contribuyentes
 
-El repositorio upstream (`MakazhanAlpamys/Soup`) está construido por la comunidad. Este fork (`Ercaner1988/Soup`) está personalizado para integración con Graft MCP.
+El repositorio upstream (`MakazhanAlpamys/Soup`) está construido por la comunidad. Este fork (`Ercaner1988/Soup`) incluye documentación multilingüe.
 
 | Contribuyente | Commits | Rol |
 |--------------|---------|-----|
@@ -302,7 +302,7 @@ El repositorio upstream (`MakazhanAlpamys/Soup`) está construido por la comunid
 | Harshit Sharma | 7 | Contribuciones |
 | UmranPros | 6 | Contribuciones |
 | (otros 24 contribuyentes) | 5–1 | Ver [CONTRIBUTORS.md](CONTRIBUTORS.md) |
-| **Ercan Er** | **2** | **Configuración de Graft MCP (cableado a nivel de usuario)** |
+| **Ercan Er** | **2** | **Documentación multilingüe y configuración de ramas** |
 
 > Métricas del resultado `git shortlog -sn HEAD` (rama ercan1, 2026-09-09).
 

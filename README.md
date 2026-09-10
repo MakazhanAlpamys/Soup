@@ -1,5 +1,3 @@
-<p align="center"><strong>🌍 <a href="README.md">Türkçe</a> | <a href="README.en.md">English</a> | <a href="README.ar.md">العربية</a> | <a href="README.ja.md">日本語</a> | <a href="README.zh.md">中文</a> | <a href="README.ru.md">Русский</a> | <a href="README.es.md">Español</a></strong></p>
-
 <p align="center">
   <img src="soup.png" alt="Soup" width="280">
 </p>
@@ -7,233 +5,269 @@
 <h1 align="center">Soup</h1>
 
 <p align="center">
-  <strong>LLM ince ayarını ve son eğitimini tek komutla yapın. SSH yok, yapılandırma karmaşası yok.</strong>
+  <strong>Fine-tune and post-train LLMs in one command. No SSH, no config hell.</strong>
 </p>
 
 <p align="center">
-  <a href="https://trysoup.dev">Web Sitesi</a> &middot;
-  <a href="#hızlı-başlangıç">Hızlı Başlangıç</a> &middot;
-  <a href="#web-arayüzü">Web Arayüzü</a> &middot;
-  <a href="#yapılandırma">Yapılandırma</a> &middot;
-  <a href="docs/commands.md">Komutlar</a> &middot;
-  <a href="docs/models.md">Modeller</a> &middot;
-  <a href="https://discord.gg/dgd2pJcjwP">Discord</a>
+  <a href="https://trysoup.dev">Website</a> &middot;
+  <a href="#quick-start">Quick Start</a> &middot;
+  <a href="#web-ui">Web UI</a> &middot;
+  <a href="#configuration">Config</a> &middot;
+  <a href="#documentation">Docs</a> &middot;
+  <a href="docs/commands.md">Commands</a> &middot;
+  <a href="docs/models.md">Models</a> &middot;
+  <a href="https://discord.gg/dgd2pJcjwP">Discord</a> &middot;
+  <a href="https://www.producthunt.com/products/soup-cli">Product Hunt</a>
 </p>
 
 <p align="center">
   <a href="https://pypi.org/project/soup-cli/"><img src="https://img.shields.io/pypi/v/soup-cli?color=blue" alt="PyPI"></a>
-  <a href="https://pepy.tech/project/soup-cli"><img src="https://img.shields.io/pepy/dt/soup-cli?color=blue" alt="İndirmeler"></a>
+  <a href="https://pepy.tech/project/soup-cli"><img src="https://img.shields.io/pepy/dt/soup-cli?color=blue" alt="Downloads"></a>
   <img src="https://img.shields.io/badge/python-3.10--3.12-blue" alt="Python 3.10-3.12">
-  <img src="https://img.shields.io/badge/lisans-Apache--2.0-blue" alt="Apache-2.0 Lisansı">
-  <a href="https://github.com/MakazhanAlpamys/Soup/actions"><img src="https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/MakazhanAlpamys/65fdc943f85f3b2c46ecddb415c2b779/raw/soup_tests.json" alt="Testler"></a>
+  <img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="Apache-2.0 License">
+  <a href="https://github.com/MakazhanAlpamys/Soup/actions"><img src="https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/MakazhanAlpamys/65fdc943f85f3b2c46ecddb415c2b779/raw/soup_tests.json" alt="Tests"></a>
   <a href="https://github.com/MakazhanAlpamys/Soup/actions"><img src="https://github.com/MakazhanAlpamys/Soup/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://trysoup.dev"><img src="https://img.shields.io/badge/website-trysoup.dev-blue" alt="Web sitesi"></a>
-  <a href="https://discord.gg/dgd2pJcjwP"><img src="https://img.shields.io/badge/Discord-katıl-5865F2?logo=discord&logoColor=white" alt="Discord"></a>
-  <a href="https://doi.org/10.5281/zenodo.21771064"><img src="https://img.shields.io/badge/DOI-10.5281%2Fzenodo.21771064-blue?logo=zenodo&logoColor=white" alt="DOI"></a>
+  <a href="https://trysoup.dev"><img src="https://img.shields.io/badge/website-trysoup.dev-blue" alt="Website"></a>
+  <a href="https://discord.gg/dgd2pJcjwP"><img src="https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white" alt="Discord"></a>
+  <a href="https://doi.org/10.5281/zenodo.21771064"><img src="https://img.shields.io/badge/DOI-10.5281%2Fzenodo.21771064-blue?logo=zenodo&logoColor=white" alt="DOI: 10.5281/zenodo.21771064"></a>
 </p>
 
 <p align="center">
-  <a href="https://www.producthunt.com/products/soup-cli?embed=true&utm_source=badge-featured&utm_medium=badge&utm_campaign=badge-soup-cli">
+  <a href="https://www.producthunt.com/products/soup-cli?embed=true&amp;utm_source=badge-featured&amp;utm_medium=badge&amp;utm_campaign=badge-soup-cli">
     <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1217869&theme=dark">
-      <img src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1217869&theme=light" alt="Soup CLI - 4 GB laptop GPU'sunda 8B LLM ince ayarı | Product Hunt" width="250" height="54">
+      <source media="(prefers-color-scheme: dark)" srcset="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1217869&amp;theme=dark">
+      <img src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1217869&amp;theme=light" alt="Soup CLI - Fine-tune an 8B LLM on a 4 GB laptop GPU | Product Hunt" width="250" height="54">
     </picture>
   </a>
-  <a href="https://trendshift.io/repositories/98395?utm_source=repository-badge&utm_medium=badge&utm_campaign=badge-repository-98395" target="_blank" rel="noopener noreferrer">
+  <a href="https://trendshift.io/repositories/98395?utm_source=repository-badge&amp;utm_medium=badge&amp;utm_campaign=badge-repository-98395" target="_blank" rel="noopener noreferrer">
     <img src="https://trendshift.io/api/badge/repositories/98395" alt="MakazhanAlpamys/Soup | Trendshift" width="250" height="55">
   </a>
 </p>
 
 ---
 
-Soup, LLM ince ayarının zahmetini basit bir iş akışına dönüştürür. Bir yapılandırma, bir komut, bitti.
+Soup turns the pain of LLM fine-tuning into a simple workflow. One config, one command, done.
 
 ```bash
-pip install "soup-cli[train]"   # [train] ince ayar için; yalnız soup-cli hafif CLI'dir
+pip install "soup-cli[train]"   # add [train] to fine-tune; bare `soup-cli` is the light CLI
 soup init --template chat
 soup train
 ```
 
-**4 GB laptop GPU'sunda 8B modeli ince ayar yapın.** Katman akışı (layer streaming), donmuş tabanı VRAM dışında tutar ve GPU'ya bir kod çözücü katmanı aynı anda besler. RTX 3050 Laptop 4 GB'de ölçülen: Llama-3.1-8B-Instruct + NF4, **119.6 tok/s, 3.32 GB tepe** — normal bir yerleşik çalışmaya karşı bit-özdeş, aynı 3.32 GB'de H100'de bağımsız olarak 113.00 tok/s ile doğrulandı. (tok/s sayısı, −4.8% maliyetine neden olan v0.73.0 doğruluk onarımından önce v0.72.2'de ölçülmüştür; 4 GB kart üzerinde yeniden çalıştırılmamıştır.) Katılım (`stream_layers: true`) isteğe bağlı ve hâlâ BETA —
-[nasıl çalışır](docs/performance-and-quantization.md#layer-streaming-beta-v0720-nf4-v0722-disk--wider-archs-v0723-preference-losses-v0724) ·
-[tüm ölçümler](benchmarks/) · [makale](https://doi.org/10.5281/zenodo.21771064) ·
-**[ücretsiz Colab T4'te kendiniz kontrol edin](notebooks/proof-4gb.ipynb)** (işlemi 4 GB ile sınırlar, ardından akışan modelin normal bir modelle bit-özdeş olduğunu doğrular)
+**Fine-tune an 8B model on a 4 GB laptop GPU.** Layer streaming keeps the frozen base out of
+VRAM and feeds it to the GPU one decoder layer at a time. Measured on an RTX 3050 Laptop 4 GB:
+Llama-3.1-8B-Instruct + NF4 at **119.6 tok/s, 3.32 GB peak** — bit-exact against a normal
+resident run, and reproduced independently on an H100 at 113.00 tok/s in the same 3.32 GB.
+(The tok/s figure was measured on v0.72.2, before the v0.73.0 correctness repair that cost
+−4.8% at 32B; it has not been re-run on a 4 GB card since.) Opt-in (`stream_layers: true`)
+and still BETA —
+[how it works](docs/performance-and-quantization.md#layer-streaming-beta-v0720-nf4-v0722-disk--wider-archs-v0723-preference-losses-v0724) ·
+[all measurements](benchmarks/) · [paper](https://doi.org/10.5281/zenodo.21771064) ·
+**[check it yourself on a free Colab T4](notebooks/proof-4gb.ipynb)** (caps the process to
+4 GB, then asserts a streamed model is bit-identical to a normal one)
 
 <p align="center">
   <a href="https://youtu.be/T1LCErE943E"><img src="docs/assets/layer-streaming.gif" alt="soup train pre-flight for Llama-3.1-8B on a 4 GB card: a 3.60 GB base store pinned in RAM across 32 layers and two 113 MB VRAM buffers, then a measured peak of 3.32 GB at 119.6 tok/s, stopping short of the 4 GB line"></a><br>
-  <sub>Llama-3.1-8B-Instruct + NF4, LoRA, batch 1, seq 512, RTX 3050 Laptop 4 GB — <b>3.32 GB tepe, 119.6 tok/s</b>. <a href="https://youtu.be/T1LCErE943E">Tam video (90s)</a></sub>
+  <sub>Llama-3.1-8B-Instruct + NF4, LoRA, batch 1, seq 512 on an RTX 3050 Laptop 4 GB — <b>3.32 GB peak, 119.6 tok/s</b>. <a href="https://youtu.be/T1LCErE943E">Full video (90s)</a></sub>
 </p>
 
----
+## Why Soup?
 
-## 🎯 Neden Soup?
+Training LLMs is still painful. Even experienced teams spend 30-50% of their time fighting
+infrastructure instead of improving models. Soup fixes that.
 
-LLM eğitimi hâlâ zahmetli. Deneyimli ekipler bile zamanlarının %30–50'sini modelleri iyileştirmek yerine altyapıyla boğuşarak geçirir. Soup bunu çözer.
+- **Zero SSH.** Never SSH into a broken GPU box again.
+- **One config.** A simple YAML file is all you need.
+- **Auto everything.** Batch size, GPU detection, quantization — handled.
+- **Works locally.** Train on your own GPU with QLoRA. No cloud required.
 
-- **Sıfır SSH.** Bozuk bir GPU kutusuna asla SSH açmayın.
-- **Tek yapılandırma.** Basit bir YAML dosyası yeterli.
-- **Her şey otomatik.** Toplu iş boyutu, GPU algılama, nicemleme — halloldu.
-- **Yerel çalışır.** QLoRA ile kendi GPU'nuzda eğitin. Bulut gerekmez.
+## What's New
 
-### Yeni Neler Var — v0.74.0
+**v0.74.0 — the frozen base was being loaded in fp32 the whole time.** Fixing that
+alone cuts peak VRAM 2.59x on an unchanged config. **116 of the 120 merged pull
+requests in this release came from outside the maintainer**, by 25 people.
 
-**v0.74.0 — donmuş taban baştan beri fp32'de yükleniyordu.** Bunu düzeltmek tek başına değiştirilmemiş bir yapılandırmada tepe VRAM'ı 2.59 kat azaltır. **Bu sürümdeki 120 birleştirilen çekme isteğinin 116'sı dışarıdan, 25 kişiden geldi.**
+- **Every SFT load silently upcast the frozen base to fp32.** A base that never
+  receives an optimizer step was materialised at twice its checkpoint precision, on
+  all three load paths. Measured on an H100 with Llama-3.1-8B + LoRA: **48,241 MiB →
+  18,658 MiB peak — 2.59x, 28.9 GB**, byte-identical across three repeats. A trainable
+  base still loads fp32, deliberately.
+- **Transformers 5.x, TRL 0.29, PEFT 0.20.** Qwen3.5-family text decoders train on the
+  Transformers path, and `pip install "soup-cli[train,mlx]"` resolves again — the two
+  extras previously declared ranges that could not be satisfied together.
+- **The free Colab/Kaggle tier could not stream at all.** T4 / P100 / V100 / GTX 16xx
+  crashed layer streaming, because peft creates LoRA adapters in the checkpoint's dtype
+  while the fp16 GradScaler needs fp32 gradients.
+- **Four SSRF bypasses of the same shape.** Abbreviated, decimal, hex and octal IPv4
+  spellings (`127.1`, `2130706433`, `0x7f000001`, `0177.0.0.1`) reached the telemetry
+  and webhook guard — and, through a path the first fix never touched, the OTLP
+  tracing validator.
+- **Breaking: `soup serve` now exits 2** when bound to a non-loopback host without
+  `--tool-auth-token`, instead of printing a warning. `/v1/tools/bash` is re-enabled
+  behind real OS-level isolation, so the endpoint it protects now actually executes.
+- **`soup train --cloud lambda`**, plan-only by default, with termination in a
+  `finally` that also polls to confirm it happened.
 
-- Her SFT yüklemesi donmuş tabanı sessizce fp32'ye yükseltti. H100'de Llama-3.1-8B + LoRA ile ölçülen: **48.241 MiB → 18.658 MiB tepe — 2.59x, 28.9 GB**.
-- **Transformers 5.x, TRL 0.29, PEFT 0.20.**
-- Dört aynı biçimde SSRF atlatma (kısaltılmış, ondalık, onaltılık, sekizli IPv4) kapatıldı.
-- **`soup serve` artık exit 2 döndürür** `--tool-auth-token` olmadan loopback dışı bir ana bilgisayara bağlandığında.
-- **`soup train --cloud lambda`** — varsayılan olarak yalnızca plan, `--cloud-submit` ile canlı gönderim.
+> Known limitation: the declared `torch>=2.5.0` floor does not work with `trl>=0.29` —
+> at torch 2.5.1 trl cannot import. A fresh install resolves a newer torch and is
+> unaffected; a pinned 2.5.x environment is not. See
+> [#651](https://github.com/MakazhanAlpamys/Soup/issues/651).
 
-> **Bilinen sınırlama:** Bildirilen `torch>=2.5.0` tabanı `trl>=0.29` ile çalışmıyor — torch 2.5.1'de trl içe aktarılamaz. Temiz kurulum daha yeni bir torch çözer ve etkilenmez; sabitlenmiş 2.5.x ortamı değildir. Bkz. [#651](https://github.com/MakazhanAlpamys/Soup/issues/651).
-
-> Python **3.10–3.12** yalnızca. 3.13+ üzerinde pip, Soup çalışmadan önce çöken test edilmemiş PyTorch tekerleklerini çözerdi.
+> Python **3.10–3.12** only. On 3.13+, pip used to resolve untested PyTorch wheels that
+> crash in the native extension before Soup runs at all.
 
 <details>
-<summary>Önceki sürüm — v0.73.3, her çekme isteği bakımcının dışından geldi</summary>
+<summary>Previous release — v0.73.3, every pull request came from outside the maintainer</summary>
 
-**v0.73.3 — bu sürümdeki her çekme isteği bakımcıdan başka birinden geldi.** Tamamı 8 kişiden, beşi ilk kez görünüyor. Buldukları ilginç: doğrulanan, belgelenen ve sonra hiçbir şey tarafından okunmayan dört ayrı bayrak.
-- **Sıfır belirteçte eğitilmiş yalnızca asistan masking, normal bir kayıp eğrisiyle.** `BatchEncoding` döndüren bir belirteçleyici — bu bir `dict` değil — korumayı aştı, böylece etiket maskesi eşlemenin **anahtar dizelerinden** inşa edildi. İstisna yok, uyarı yok, eğitim gibi görünen bir kayıp eğrisi. Hata ile değil, türü okuyarak bulundu.
-- **Apple Silicon'da `quantization: 4bit` sessizce `none` olarak yeniden yazıldı.**
+**v0.73.3 — every pull request in this release came from someone other than the
+maintainer.** All 24 of them, from eight people, five of whom appear here for the first
+time. What they found is the interesting part: four separate flags that were validated,
+documented, and then read by nothing.
+- **Assistant-only masking trained on zero tokens, with a normal loss curve.** A
+  tokenizer returning `BatchEncoding` — which is not a `dict` — slipped past the guard,
+  so the label mask was built from the mapping's **key strings**. No exception, no
+  warning, a loss curve that looks like training. Found by reading the type, not by
+  hitting the bug.
+- **On Apple Silicon, `quantization: 4bit` was silently rewritten to `none`.**
+
 </details>
 
----
+<details>
+<summary>Previous release — v0.72.4, align on a laptop (DPO / ORPO / SimPO / KTO over layer streaming)</summary>
 
-## 🏗️ Mimari ve Modüller
+Layer streaming used to support supervised fine-tuning only; v0.72.4 opened it to the
+preference losses. The risk was one thing: DPO needs a reference model, and a second copy
+would double memory and defeat the point. Soup uses *the same streamed base with its
+adapters switched off* — measured at **0.914×** the SFT peak, where forcing a real second
+instance cost **+730 MB, exactly one copy of the weights**. Bit-exact against a normal
+non-streamed run for all four. Honest cost: free in *memory*, not in *time* — DPO reads the
+layer stack **1.52×** as often per step. `grpo` / `ppo` stay excluded on purpose.
 
-```
-Soup/
-├── src/soup_cli/
-│   ├── commands/        # 70+ CLI komutu (train, eval, data, serve, agent, …)
-│   ├── config/
-│   │   └── schema.py    # Pydantic v2 — tüm yapılandırma alanları için tek kaynak
-│   ├── autodistill/     # Otomatik damıtma (veri yakalama, yayımlama, MLX çalışanı)
-│   ├── autopilot/       # Sıfır-yapılandırma görev/nicemleme/LR seçimi
-│   ├── cans/            # Soup Cans: model paketleme, yayımlama, doğrulama
-│   ├── cloud/           # Lambda Labs / Modal bulut denetleyicileri
-│   └── utils/           # Paylaşılan yardımcılar (350+ modül)
-├── graft/               # Graft MCP yapılandırması (kullanıcı düzeyi kablo bağlantısı)
-├── docs/                # Konu başına rehberler + tam komut referansı
-├── templates/           # chat.yaml, code.yaml, medical.yaml başlangıç şablonları
-├── benchmarks/          # Ölçüm kayıtları (her sayı için ham veri)
-├── tests/               # 460 test dosyası
-└── pyproject.toml       # Bağımlılıklar, extras, yapı sistemi
-```
+> **Trained with `stream_layers: true` on v0.72.0?** That adapter is inert — its tensors were
+> saved under keys with an extra `.inner.` segment, so every loader returned the untuned base.
+> Fixed in v0.72.1; re-run or re-save. Check with:
+> `python -c "from safetensors.torch import load_file; print([k for k in load_file('adapter_model.safetensors') if '.inner.' in k][:3])"`
 
-**Temel bağımlılıklar (çekirdek kurulum — PyTorch yok):**
-`typer`, `rich`, `pydantic>=2`, `pyyaml`, `huggingface-hub`, `plotext`, `packaging`
+</details>
 
-**`[train]` ekstrası:** `torch>=2.6.0`, `transformers>=5.16.1,<6`, `peft>=0.20,<1`, `trl>=0.29`, `datasets`, `bitsandbytes`, `accelerate`
+<details>
+<summary>Previous release — v0.71.40, soup reward synth (generate a reward verifier from your data)</summary>
 
-**Dikkat:** Depo, Python kaynak kodu yanı sıra kurulum betikleri, CI iş akışları ve paket araçları içerir; bu nedenle "%100 saf Python" iddiası yapılmaz.
-
----
-
-## 🚀 Kurulum
-
-### Gereksinimler
-
-- Python 3.10, 3.11 veya 3.12 (CI testi yapılan sürümler; 3.13+ henüz desteklenmiyor)
-- GPU ile CUDA (önerilen), Apple Silicon (MPS) veya CPU (deneysel — çok yavaş)
-- QLoRA ile 7B modeller için 8 GB+ VRAM
-
-### Kurulum Adımları
+Point `soup reward synth` at a JSONL of reference outputs and it infers a deterministic verifier,
+writes a readable / committable `.py` reward function, and — the part nobody else does — *refuses* to
+emit one that can't tell your references from bad answers (four families: `numeric` / `json_schema` /
+`regex` / `tool_call`; a mandatory calibration report is the moat). Reward ensembles
+(`reward_fn: "accuracy,format"`) also train now. (#311)
 
 ```bash
-# Hafif çekirdek: CLI + yapılandırma + veri araçları, PyTorch yok
-pipx install soup-cli
-uv tool install soup-cli          # zaten uv kullanıyorsanız
+soup reward synth references.jsonl -o reward.py --output-report calib.json
+```
 
-# Eğitim yığınını ekleyin (torch, transformers, peft, trl, datasets, …)
+</details>
+
+
+Full history: [CHANGELOG.md](CHANGELOG.md) &middot; [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
+
+## Quick Start
+
+### 1. Install
+
+Soup is a command-line application, so the cleanest install gives it its own
+environment and puts `soup` on your `PATH`:
+
+```bash
+# Light core: CLI + config + data tools, no PyTorch
+pipx install soup-cli
+uv tool install soup-cli          # same idea, if you already use uv
+
+# Add the training stack (torch, transformers, peft, trl, datasets, …)
 pipx install "soup-cli[train]"
 
-# Her şey bir arada (train + serve + ui + data)
+# Everything (train + serve + ui + data) in one shot
 pipx install "soup-cli[all]"
 
-# GitHub'dan (en güncel geliştirme)
+# Or from GitHub (latest dev)
 pipx install "git+https://github.com/MakazhanAlpamys/Soup.git"
 ```
 
-Zaten bir virtualenv, Colab not defteri veya Docker görüntüsünün içindeyseniz `pip` kullanın:
+Already inside a virtualenv, a Colab notebook, or a Docker image? Use `pip`
+directly, with the same names and extras:
 
 ```bash
 pip install soup-cli
 pip install "soup-cli[train]"
 pip install "soup-cli[all]"
+pip install git+https://github.com/MakazhanAlpamys/Soup.git
 ```
 
-> **`error: externally-managed-environment`?** Bu [PEP 668](https://peps.python.org/pep-0668/), Soup sorunu değil. `pipx` veya `uv tool` kullanın.
+Use `pip` rather than `pipx` if you also want to `import soup_cli` from your own
+code, since pipx deliberately isolates the application from everything else.
 
-> **Çift tırnak, tek tırnak değil.** `"soup-cli[train]"` her kabukta çalışan tek yazımdır.
+The full extras table (`fast`, `mlx`, `serve`, `eval`, `ui`, `vision`, `audio`, …) lives in
+[`docs/models.md`](docs/models.md#optional-extras).
 
-Tam extras tablosu (`fast`, `mlx`, `serve`, `eval`, `ui`, `vision`, `audio`, `liger`, `onnx`, `tensorrt`, …): [`docs/models.md`](docs/models.md#optional-extras)
+> **`error: externally-managed-environment`?** That is
+> [PEP 668](https://peps.python.org/pep-0668/), not a Soup problem. Debian 12,
+> Ubuntu 23.04 and later stop `pip` from writing into the system Python, because
+> `apt` manages those files too. `pipx` and `uv tool` sidestep it by giving Soup
+> its own environment, which is why they are listed first above. `python3 -m venv
+> .venv && source .venv/bin/activate` then plain `pip` works just as well.
 
-### Çataldan Kurulum
+> **Double quotes, not single.** `"soup-cli[train]"` is the only spelling that works in every
+> shell — `cmd.exe`, PowerShell, bash and zsh. If you copied `'soup-cli[train]'` from an older
+> tutorial and pip rejected it, that is the reason:
+> [why, and the exact error](docs/models.md#quoting-the-extra).
 
-Bu depo `Ercaner1988/Soup` çatalıdır. Upstream: `MakazhanAlpamys/Soup`.
+`soup init`, `soup data …`, and the other data/inspection commands work on the light install.
+Fine-tuning (`soup train`) needs the `[train]` extra.
+
+### 2. Create a config
 
 ```bash
-git clone https://github.com/Ercaner1988/Soup.git
-cd Soup
-pip install -e ".[dev]"
+soup init                       # interactive wizard
+soup init --template chat       # or start from a template
 ```
 
-### Sorun Giderme
+Templates: `chat`, `code`, `tool-calling`, `medical`, `reasoning`, `vision`, `kto`, `orpo`,
+`simpo`, `ipo`, `bco`, `rlhf`, `pretrain`, `moe`, `longcontext`, `embedding`, `audio`.
+
+### 3. Train, test, ship
 
 ```bash
-soup doctor    # GPU, sistem kaynakları, bağımlılıklar ve sürüm tek yerde kontrol eder
+soup train --config soup.yaml                 # LoRA, quantization, batching — all handled
+soup chat  --model ./output                    # talk to your model
+soup push  --model ./output --repo you/my-model
+
+soup merge  --adapter ./output                              # merge LoRA into the base
+soup export --model ./output --format gguf --quant q4_k_m   # GGUF for Ollama / llama.cpp
 ```
 
-CUDA tekerlekleri, sürüm uyuşmazlıkları: [`docs/backends-and-ops.md`](docs/backends-and-ops.md#sorun-giderme)
+More export targets (ONNX, TensorRT, AWQ, GPTQ, BitNet) and deployment options live in
+[`docs/serving-and-export.md`](docs/serving-and-export.md).
 
----
+## Web UI
 
-## 📖 Kullanım
-
-### Hızlı Başlangıç
+Prefer a browser? `soup ui` serves a local dashboard for experiments,
+training setup, live metrics, dataset exploration and model chat.
 
 ```bash
-# 1. Yapılandırma oluşturun
-soup init                       # etkileşimli sihirbaz
-soup init --template chat       # şablondan başlayın
-
-# 2. Eğitin, test edin, gönderin
-soup train --config soup.yaml
-soup chat  --model ./output
-soup push  --model ./output --repo kullanici/modelim
-
-# 3. Birleştirin ve dışa aktarın
-soup merge  --adapter ./output
-soup export --model ./output --format gguf --quant q4_k_m
+pip install "soup-cli[ui]"
+soup ui
+# Opens http://127.0.0.1:7860
 ```
 
-**Şablonlar:** `chat`, `code`, `tool-calling`, `medical`, `reasoning`, `vision`, `kto`, `orpo`, `simpo`, `ipo`, `bco`, `rlhf`, `pretrain`, `moe`, `longcontext`, `embedding`, `audio`
+![Soup Web UI — New Training](docs/assets/web-ui-new-training.png)
 
-### Temel Komutlar
+[Web UI documentation](docs/serving-and-export.md#web-ui)
 
-```bash
-soup train  --config soup.yaml                         # eğitim (SFT/DPO/GRPO/PPO/KTO/ORPO/…)
-soup infer  --model ./output --input istemler.jsonl    # toplu çıkarım
-soup chat   --model ./output                           # etkileşimli sohbet
-soup serve  --model ./output                           # OpenAI uyumlu API sunucusu
-soup ui                                                # yerel tarayıcı panosu
-soup merge  --adapter ./output                         # LoRA'yı taban modele birleştir
-soup export --model ./output --format gguf             # dağıtım için dışa aktar
-soup eval   benchmark --model ./output                 # değerlendir
-soup data   inspect ./data/train.jsonl                 # veri kümesi istatistikleri
-soup recipes list                                      # 100+ hazır model tarifi
-soup autopilot --model <id> --data d.jsonl --goal chat # sıfır-yapılandırma
-soup doctor                                            # GPU / bağımlılıklar / ortam kontrolü
-```
+## Configuration
 
-### Yapılandırma
-
-Tam bir `soup.yaml`:
+A complete `soup.yaml`:
 
 ```yaml
 base: meta-llama/Llama-3.1-8B-Instruct
 task: sft
-# backend: unsloth  # 2-5x daha hızlı, pip install "soup-cli[fast]"
+# backend: unsloth  # 2-5x faster, pip install "soup-cli[fast]"
 
 data:
   train: ./data/train.jsonl
@@ -252,76 +286,111 @@ training:
 output: ./output
 ```
 
-`config/schema.py` her alan için tek kaynaktır.
+`config/schema.py` is the single source of truth for every field. Advanced data, training,
+and PEFT options are documented under [Documentation](#documentation).
 
-> **Bilinmeyen yapılandırma anahtarları bugün uyarı verir, v0.75'te reddedilecek.**
+> **Unknown config keys warn today and will be rejected in v0.75.** A key no model
+> declares — a typo like `quantizaton`, or a field that only exists on a newer Soup —
+> used to validate clean and be discarded, so the run proceeded with the setting simply
+> not applied. It is now reported at load with the field you probably meant. From
+> **v0.75** the same config will fail to load instead of warning, so fix or remove the
+> key rather than relying on it being ignored. See
+> [Unknown config keys](docs/backends-and-ops.md#unknown-config-keys).
 
-### Veri Biçimleri
+## Documentation
 
-Alpaca, ShareGPT, ChatML, tercih çiftleri (DPO / ORPO / SimPO / IPO / KTO), görsel, ses, ASR, düz metin, gömme, RAFT ve daha fazlası — JSONL, JSON, CSV, Parquet veya TXT'den otomatik algılama. Bkz. [`docs/data.md`](docs/data.md).
+The full feature reference lives in [`docs/`](docs/). Start here:
 
-### Desteklenen Modeller
+| Guide | Covers |
+|---|---|
+| [Training tasks & methods](docs/training.md) | SFT, DPO/GRPO/PPO/KTO/ORPO/SimPO/IPO/BCO, tool-calling, PRM, pre-training, distillation, classification, vision/audio/TTS, unlearning, RAFT/RA-DIT, loop-hardening detectors |
+| [PEFT, long context & efficiency](docs/peft-and-efficiency.md) | DoRA, LoRA+, rsLoRA, VeRA, OLoRA, NEFTune, PiSSA, ReLoRA, optimizer & PEFT zoo, LLaMA Pro, GaLore, YaRN/LongLoRA, packing, curriculum, auto-tuning |
+| [Performance & quantization](docs/performance-and-quantization.md) | QAT, FP8, Quant Menu (I + II), KV-cache, NVFP4, save formats, Cut Cross-Entropy, gradient checkpointing, kernels, activation offloading, layer streaming, multi-GPU / DeepSpeed / FSDP |
+| [Data engineering](docs/data.md) | Formats, the Axolotl/LF-parity pipeline, data tools, synthetic generation & forge, quality scorecards, trace tooling, remote datasets, mixing, recipe DAGs |
+| [Evaluation & probes](docs/evaluation.md) | Eval design/gate, eval-gated training, benchmarks, NLG metrics, calibration, Elo arena, diagnose, post-train X-ray probes, A/B, drift, tunability, `soup advise` |
+| [Serving & export](docs/serving-and-export.md) | OpenAI-compatible server, batch inference, benchmarking, merge/export, Anthropic Messages endpoint, speculative decoding (train + measure your own draft), deploy autopilot, Web UI, Agent Forge |
+| [Adapters, registry & governance](docs/adapters-and-governance.md) | Adapter lifecycle/management, model registry, Soup Cans, the data flywheel (`soup loop`), knowledge editing, steering, supply-chain controls (scan/sign/BOM/attest/audit/airgap) |
+| [Compliance & governance quickstart](docs/compliance.md) | HIPAA/SOC2/EU-AI-Act/SR-11-7 `init` templates, provenance (BOM/attest/repro-receipt), audit log, air-gap, model-card autogen (`soup card`), CI gate (`soup ci init`) |
+| [Backends, platform & ops](docs/backends-and-ops.md) | MLX/Unsloth backends, alternative hubs, HF Hub integration, autopilot, experiment tracking, plan/apply, env lockfiles, hardware-fit, completions, plugins, utility commands |
+| [Command reference](docs/commands.md) | The full `soup` command list |
+| [Supported models & extras](docs/models.md) | Recommended model families, the VRAM size guide, the pip extras matrix |
 
-Soup, [HuggingFace Hub](https://huggingface.co/models?pipeline_tag=text-generation)'daki **herhangi** bir metin üretim modeliyle çalışır. Llama 3.x/4, Qwen 2.5/3, Gemma 3, Mistral, Mixtral, DeepSeek R1/V3, Phi-4 ve 100+ diğerleri hazır tarifler olarak gelir (`soup recipes list`).
+## Data Formats
 
-| VRAM | Maksimum model (QLoRA 4-bit) | Örnek |
-|------|-------------------------------|-------|
+Alpaca, ShareGPT, ChatML, preference pairs (DPO / ORPO / SimPO / IPO / KTO), vision, audio,
+ASR, plaintext, embedding, RAFT and more — all auto-detected from JSONL, JSON, CSV, Parquet or
+TXT, so in most cases you point `data.train` at a file and nothing else changes. Schemas with a
+worked example per format, plus the data pipeline (remote URIs, streaming, sharding,
+interleaving, vocab expansion, document ingestion), are in
+[`docs/data.md`](docs/data.md#data-formats).
+
+## Common Commands
+
+```bash
+soup train  --config soup.yaml        # train (SFT/DPO/GRPO/PPO/KTO/ORPO/SimPO/IPO/...)
+soup infer  --model ./output --input prompts.jsonl   # batch inference
+soup chat   --model ./output          # interactive chat
+soup serve  --model ./output          # OpenAI-compatible API server
+soup ui                               # local browser dashboard
+soup merge  --adapter ./output        # merge LoRA into the base model
+soup export --model ./output --format gguf           # export for deployment
+soup eval   benchmark --model ./output               # evaluate
+soup data   inspect ./data/train.jsonl               # dataset stats
+soup recipes list                     # 100+ ready-made model recipes
+soup autopilot --model <id> --data d.jsonl --goal chat  # zero-config
+soup doctor                           # check GPU / deps / environment
+```
+
+The complete command list is in [`docs/commands.md`](docs/commands.md).
+
+## Supported Models
+
+Soup works with **any** text-generation model on the
+[HuggingFace Hub](https://huggingface.co/models?pipeline_tag=text-generation) — if it loads with
+`AutoModelForCausalLM`, it works, zero config changes. Llama 3.x/4, Qwen 2.5/3, Gemma 3, Mistral,
+Mixtral, DeepSeek R1/V3, Phi-4, and 100+ others ship as ready-made recipes (`soup recipes list`).
+
+| VRAM | Max model (QLoRA 4-bit) | Example |
+|---|---|---|
 | 8 GB | ~7B | Llama-3.1-8B, Mistral-7B |
 | 16 GB | ~14B | Phi-4-14B, Qwen2.5-14B |
 | 24 GB | ~34B | CodeLlama-34B, Yi-1.5-34B |
 | 48 GB | ~70B | Llama-3.3-70B |
-| 80 GB+ | 70B+ (tam) veya MoE | Mixtral-8x22B, DeepSeek-V3 |
+| 80 GB+ | 70B+ (full) or MoE | Mixtral-8x22B, DeepSeek-V3 |
 
-### Web Arayüzü
+Full model + vision tables and the optional-extras matrix are in [`docs/models.md`](docs/models.md).
 
-```bash
-pip install "soup-cli[ui]"
-soup ui
-# http://127.0.0.1:7860 adresini açar
-```
+## Docker
 
-### Docker
+Run Soup without installing CUDA or PyTorch locally (image published to GHCR on every release):
 
 ```bash
 docker pull ghcr.io/makazhanalpamys/soup:latest
 docker run --gpus all -v $(pwd):/workspace ghcr.io/makazhanalpamys/soup train --config soup.yaml
+docker compose up   # or build locally
 ```
 
----
+## Requirements
 
-## 🛡️ Test ve Kalite Kapıları
+- Python 3.10, 3.11 or 3.12 (those are the versions CI tests; 3.13+ is not supported yet
+  because the PyTorch stack has not been validated there)
+- GPU with CUDA (recommended), Apple Silicon (MPS), or CPU (experimental — very slow)
+- 8 GB+ VRAM for 7B models with QLoRA
+
+All training tasks run on CPU for testing (quantization auto-disabled). Optional extras
+(`train`, `all`, `fast`, `vision`, `qat`, `serve`, `serve-fast`, `ui`, `eval`, `deepspeed`,
+`liger`, `mlx`, `onnx`, `tensorrt`, …) are listed in
+[`docs/models.md`](docs/models.md#optional-extras).
+
+## Troubleshooting
 
 ```bash
-pip install -e ".[dev]"
-ruff check src/soup_cli/ tests/    # lint — her commit öncesi temiz olmalı
-pytest tests/ -v --tb=short        # birim testleri (hızlı, GPU gerekmez; 460 test dosyası)
-pytest tests/ -m smoke -v          # duman testleri (küçük model indirir, eğitir)
-pre-commit install                 # isteğe bağlı: committe ruff lint+biçimlendirme
+soup doctor    # GPU, system resources, dependencies, and version in one place
 ```
 
-**CI matrisi:** Python 3.10 / 3.11 / 3.12 × Ubuntu / Windows / macOS
+CUDA wheels, version mismatches: [`docs/backends-and-ops.md`](docs/backends-and-ops.md#troubleshooting).
 
-**Güvenlik:** `soup doctor` GPU, sistem kaynakları, bağımlılıklar ve sürümü tek yerde kontrol eder. Telemetri kesinlikle katılım bazlıdır (`SOUP_TELEMETRY=1`, varsayılan kapalı).
-
----
-
-## 📚 Belgeler
-
-| Rehber | Kapsam |
-|--------|--------|
-| [Eğitim görevleri ve yöntemler](docs/training.md) | SFT, DPO/GRPO/PPO/KTO/ORPO/SimPO/IPO/BCO, araç çağırma, PRM, ön eğitim, damıtma |
-| [PEFT, uzun bağlam ve verimlilik](docs/peft-and-efficiency.md) | DoRA, LoRA+, rsLoRA, VeRA, OLoRA, NEFTune, PiSSA, ReLoRA |
-| [Performans ve nicemleme](docs/performance-and-quantization.md) | QAT, FP8, KV önbellek, katman akışı, çoklu GPU / DeepSpeed / FSDP |
-| [Veri mühendisliği](docs/data.md) | Biçimler, veri araçları, yapay üretim, tarif DAG'ları |
-| [Değerlendirme ve sondalar](docs/evaluation.md) | Eval tasarımı, kıyaslamalar, NLG metrikleri, A/B |
-| [Sunma ve dışa aktarma](docs/serving-and-export.md) | OpenAI uyumlu sunucu, birleştirme/dışa aktarma, Web Arayüzü |
-| [Adaptörler ve yönetim](docs/adapters-and-governance.md) | Adaptör yaşam döngüsü, model kayıt defteri, Soup Cans |
-| [Uyumluluk](docs/compliance.md) | HIPAA/SOC2/AB-YZ-Yasası/SR-11-7 şablonları, denetim günlüğü |
-| [Arka uçlar ve işlemler](docs/backends-and-ops.md) | MLX/Unsloth arka uçları, HF Hub, otopilot |
-| [Komut referansı](docs/commands.md) | Tam `soup` komut listesi |
-| [Desteklenen modeller ve extras](docs/models.md) | Model aileleri, VRAM rehberi, pip extras matrisi |
-
-### Geliştirme
+## Development
 
 ```bash
 git clone https://github.com/MakazhanAlpamys/Soup.git
@@ -329,84 +398,108 @@ cd Soup
 pip install -e ".[dev]"
 
 ruff check src/soup_cli/ tests/    # lint
-pytest tests/ -v                   # birim testleri (hızlı, GPU gerekmez)
-pytest tests/ -m smoke -v          # duman testleri (küçük model indirir, eğitir)
+pytest tests/ -v                   # unit tests (fast, no GPU)
+pytest tests/ -m smoke -v          # smoke tests (downloads a tiny model, trains)
 
-pre-commit install                 # isteğe bağlı: committe ruff lint+biçimlendirme
+pre-commit install                 # optional: ruff lint+format on commit
 ```
 
-Tam iş akışı için [CONTRIBUTING.md](CONTRIBUTING.md) ve güvenlik açığı bildirmek için [SECURITY.md](SECURITY.md) dosyalarına bakın. Telemetri kesinlikle katılım bazlıdır (`SOUP_TELEMETRY=1`, varsayılan kapalı; bkz. [Gizlilik İlkesi](docs/backends-and-ops.md#gizlilik-politikası)).
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow and [SECURITY.md](SECURITY.md) to
+report a vulnerability. Telemetry is strictly opt-in (`SOUP_TELEMETRY=1`, default off; see [Privacy Policy](docs/backends-and-ops.md#privacy-policy)).
 
-### Soup'u Destekleyin
+## Support Soup
 
-Soup Apache-2.0 ve ücretsiz — ve öyle kalacak. Tek bir 4 GB laptop üzerinde açık kaynak olarak inşa ediliyor ve bakımı yapılıyor, bu nedenle bu belgelerdeki her performans numarası iddia değil ölçümdür.
+Soup is Apache-2.0 and free — and stays that way. It is built and maintained in the open on a
+single 4 GB laptop, which is why every performance number in these docs is measured rather than
+claimed.
 
-Soup bir eğitim çalıştırması kurtardıysa, [depoyu yıldızlamak](https://github.com/MakazhanAlpamys/Soup) en çok yardımcı olur ve hiçbir maliyeti yoktur. Doğrudan çalışmayı finanse etmek isterseniz:
+If Soup saved you a training run, [starring the repo](https://github.com/MakazhanAlpamys/Soup)
+helps most, and it costs nothing. If you would like to fund the work directly:
 
-**[❤️ Bağış yapın](https://buy.stripe.com/4gMcN441k3pha3T19ye7m04)** — tek seferlik, herhangi bir tutar (ödeme sayfasında *Tutarı değiştir* kullanın). Ödemeler bakımcının kayıtlı işletmesi **MePlay, Inc.** tarafından Stripe aracılığıyla işlenir — bu ad, "Soup" değil, ödeme sayfasında ve kart ekstresinde görünen şeydir.
+**[❤️ Donate](https://buy.stripe.com/4gMcN441k3pha3T19ye7m04)** — one-off, any amount (use
+*Change amount* on the checkout page). Payments are processed by Stripe under the maintainer's
+registered business, **MePlay, Inc.** — that name, not "Soup", is what appears on the checkout
+page and on your card statement.
 
-Bağışlar, tek bir 4 GB laptop'un ulaşamayacağı donanım kapılı çalışmalar için GPU süresi satın alır — çoklu GPU, 8B+ doğrulama, Apple Silicon.
+Donations buy GPU time for the hardware-gated work — multi-GPU, 8B+ validation, Apple Silicon —
+that a single 4 GB laptop cannot reach.
 
-Diğer tam olarak bu öğeleri taşımanın yolu **donanımın kendisidir**. Daha büry box'unuz varsa — veya kullanılmayan GPU kredileri — [`help wanted`](https://github.com/MakazhanAlpamys/Soup/issues?q=is%3Aissue+is%3Aopen+label%3A%22help+wanted%22) sorunlarından birini çalıştırıp numaraları göndermek, GPU süresini finanse etmek kadar yardımcı olur. Bu sorunlar bugün donanım tarafından tam olarak neyin engellendiğini söyler.
+The other way to move exactly those items is **hardware itself**. They ship behind honest
+"requires \<hardware\>" gates rather than unverified claims, so if you have access to a bigger
+box — or GPU credits going unused — running one of the
+[`help wanted`](https://github.com/MakazhanAlpamys/Soup/issues?q=is%3Aissue+is%3Aopen+label%3A%22help+wanted%22)
+issues and posting the numbers helps as much as funding the GPU time would. Those issues say
+exactly what is blocked on hardware today.
 
-### İletişim
+## Contributors
 
-Hata raporları ve özellik istekleri için [sorun izleyicisi](https://github.com/MakazhanAlpamys/Soup/issues), sorular için [Tartışmalar](https://github.com/MakazhanAlpamys/Soup/discussions) — her ikisi de daha hızlı yanıt alır ve aynı sorunu yaşayan bir sonraki kişiye yardımcı olur.
+Built by the community ❤️ — thank you to everyone who has contributed. See
+[CONTRIBUTORS.md](CONTRIBUTORS.md).
 
-Canlı sohbet, kurulum yardımı ve konuşma olarak daha iyi okunan her şey için [Discord](https://discord.gg/dgd2pJcjwP) katılın. Altı ay sonra hâlâ bulunabilir olması gereken her şey Sorunlar veya Tartışmalarda yer almalı — Discord yanıtı bir kişiye yardımcı olur, bir sorun aynı şeyle karşılaşan herkese yardımcı olur. [Davranış Kuralları](CODE_OF_CONDUCT.md) orada da geçerlidir.
+[![Contributors](https://contrib.rocks/image?repo=MakazhanAlpamys/Soup)](https://github.com/MakazhanAlpamys/Soup/graphs/contributors)
 
-Herkese açık olmayan her şey için — güvenlik raporları (bkz. [SECURITY.md](SECURITY.md)), Davranış Kuralları konuları veya basın — **team@trysoup.dev** adresine e-posta gönderin. Bu proje adresidir ve Soup ile ilgili her şey için doğru olanıdır. **makazanalpamys@gmail.com** bakımcının kişisel adresidir; aynı kişiye ulaşır ve iyi bir yedek seçenektir.
+## Contact
 
----
+Bugs and feature requests belong in the
+[issue tracker](https://github.com/MakazhanAlpamys/Soup/issues), questions in
+[Discussions](https://github.com/MakazhanAlpamys/Soup/discussions) — both get answered faster
+and help the next person with the same problem.
 
-## 👥 Katkıda Bulunanlar
+For live chat, setup help, and everything that reads better as a conversation, join the
+[Discord](https://discord.gg/dgd2pJcjwP). Anything that should still be findable in six months
+belongs in Issues or Discussions — a Discord answer helps one person, an issue helps everyone
+who hits the same thing. The [Code of Conduct](CODE_OF_CONDUCT.md) applies there too.
 
-Upstream depo (`MakazhanAlpamys/Soup`) topluluğun katkısıyla inşa edilmiştir. Bu çatal (`Ercaner1988/Soup`) Graft MCP bütünleşmesi için özelleştirilmiştir.
+For anything that does not fit in public — security reports (see [SECURITY.md](SECURITY.md)),
+Code of Conduct matters, or press — email **team@trysoup.dev**. That is the project address
+and the right one for anything Soup-related. **makazanalpamys@gmail.com** is the maintainer's
+personal address; it reaches the same person and is a fine fallback.
 
-| Katkıda Bulunan | Commitler | Rol |
-|----------------|-----------|-----|
-| Alpamys (Alpamys Makazhan) | 912 | Proje sahibi ve baş geliştirici |
-| AmixDigital | 37 | Web Arayüzü ön kapı bölümü |
-| Srinivasan R | 24 | MLX yanıt maskesi, doğrulama kayıpları, tarif kimliği koruma |
-| Amir Fathi | 24 | Katkılar |
-| Ben Younes | 15 | Katkılar |
-| Salil Mhatre | 11 | Katkılar |
-| Darsh | 9 | Katkılar |
-| Nurkhan Esenbek | 9 | Katkılar |
-| Harshit Sharma | 7 | Katkılar |
-| UmranPros | 6 | Katkılar |
-| (diğer 24 katkıda bulunan) | 5–1 | Bkz. [CONTRIBUTORS.md](CONTRIBUTORS.md) |
-| **Ercan Er** | **2** | **Graft MCP yapılandırması (kullanıcı düzeyi kablo bağlantısı)** |
+## Citing Soup
 
-> Ölçümler `git shortlog -sn HEAD` çıktısından alınmıştır (ercan1 dalı, 2026-09-09).
+Layer streaming — training an 8B model on a 4 GB laptop GPU by streaming the frozen base from
+host RAM one decoder layer at a time — is described in a preprint, together with the correctness
+protocol that verifies a streamed run against a resident one (forward and backward stated
+separately, because they are two claims and not one).
 
----
+> Makazhan, A. (2026). *Exact Layer Streaming: LoRA Fine-Tuning of an 8B Model on a 4 GB Laptop
+> GPU* (v3). Zenodo. https://doi.org/10.5281/zenodo.21918325
 
-## 📄 Lisans
+**Version 3 (13 August 2026) is current.** The title and the claim are unchanged — 8B on 4 GB —
+and no measured number has changed since v1. What v3 does is **withdraw an explanation we had
+published**, which is also the shortest way to describe what the paper is for:
 
-[Apache-2.0](LICENSE). Telif hakkı © Soup katkıda bulunanları.
+- **Retracted in v3: "layer streaming is bound by host-to-device transfer, not by the GPU."**
+  That was an *inference* from the H100 replication below, and it had never been measured. We
+  measured it on 11 August and it is false at the published configuration: deleting every
+  host-to-device byte buys **1.4%**, the compute stream waits on a copy for **0.20%** of the
+  step, and the step runs at **71.3%** of that card's same-session GEMM ceiling. The largest
+  streaming-specific cost is the per-layer NF4 dequantisation, at 9.8%
+  ([the record](benchmarks/probe-v0.73.0-what-bounds-streaming.md)). Every measurement stands;
+  the replication survives in a weaker form — the constraint is common to both machines and is
+  not the GPU's compute.
+- **Replication on hardware nothing like the original** (added in v2): 119.6 tok/s on the RTX
+  3050 against a median 113.00 on an H100, at the same 3.32 GB peak.
+- **A silent wrong-gradient defect, found and repaired.** On NF4 above ~165 MiB per layer the
+  forward stayed bit-exact and the loss curve looked healthy while the gradients were wrong. The
+  cause is named in the upstream library and reported there; the repair is gated against controls
+  on real 32B and 72B.
+- **Bit-exactness at real model sizes** instead of three-layer toys: forward from 0.5B to 72B,
+  backward at 8B and 14B.
+- **Trained-model quality, measured for the first time**, and indistinguishable from a resident run.
+- **A comparison against DeepSpeed** — including the result that does not flatter us: eight cards
+  of ZeRO-3 are slower than one card training resident.
+- **The limitations section rewritten**: of v1's ten items, one closed and four more narrowed,
+  and seven new ones added.
 
-Bu çatal (`Ercaner1988/Soup`) özgün projeyi temel alır: [MakazhanAlpamys/Soup](https://github.com/MakazhanAlpamys/Soup)
+Cite the version you used. `10.5281/zenodo.21771064` is the concept DOI and always resolves to
+the latest version (v3 today); v1 and v2 remain citable at their own version DOIs and are not
+edited — the retraction above is a new version precisely so that the record of what we claimed,
+and when, stays intact.
 
-### Alıntı
-
-Katman akışı — donmuş tabanı ana bilgisayar RAM'inden bir kod çözücü katmanı aynı anda akıştırarak 4 GB laptop GPU'da 8B model eğitimi — bir ön baskıda, akışan bir çalıştırmanın yerleşik bir karşı doğru protokolü ile birlikte açıklanmıştır (ileri ve geri ayrı ayrı belirtilir, çünkü bunlar iki iddia değil birincidir).
-
-> Makazhan, A. (2026). *Exact Layer Streaming: LoRA Fine-Tuning of an 8B Model on a 4 GB Laptop GPU* (v3). Zenodo. https://doi.org/10.5281/zenodo.21918325
-
-**Sürüm 3 (13 Ağustos 2026) günceldir.** Başlık ve iddia değişmedi — 8B 4 GB üzerinde — ve v1'den bu yana ölçülen hiçbir sayı değişmedi. Sürüm 3'ün yaptığı, **yayınladığımız bir açıklamayı geri çekmektir**, bu da makalenin ne olduğunu tanımlamanın en kısa yoludur:
-
-- **Sürüm 3'te geri çekilen: "katman akışı, ana bilgisayardan cihaza aktarıma bağlıdır, GPU'ya değil."** Bu, aşağıdaki H100 replikasyonundan bir *çıkarımdı* ve hiç ölçülmemişti. 11 Ağustos'ta ölçtük ve yayınlanan yapılandırmada yanlıştır: her ana bilgisayardan cihaza baytı silmek **%1.4** satın alır, hesaplama akışı bir kopyayı **%0.20** adım bekler ve adım o kartın aynı oturum GEMM tavanının **%71.3**'ünde çalışır. En büyük akışa özgü maliyet katman başına NF4 ters nicemlemedir, **%9.8** ([kayıt](benchmarks/probe-v0.73.0-what-bounds-streaming.md)). Her ölçüm geçerli; replikasyon daha zayıf bir biçimde hayatta kalır — kısıtlama her iki makinede ortaktır ve GPU'nun hesabı değildir.
-- **Orijinalden çok farklı donanımda replikasyon** (v2'de eklendi): RTX 3050'de 119.6 tok/s, H100'de medyan 113.00'a karşı, aynı 3.32 GB tepe değerinde.
-- **Sessiz bir yanlış gradyan kusuru, bulundu ve onarıldı.** Katman başına ~165 MiB üzerinde NF4'te ileri bit-özdeş kaldı ve kayıp eğrisi sağlıklı görünürken gradyanlar yanlıştı. Neden akış kütüphanesinde adlandırılmış ve orada bildirilmiştir; onarım gerçek 32B ve 72B üzerindeki kontrollere karşı korumalıdır.
-- **Gerçek model boyutlarında bit-özdeşlik** üç katmanlı oyuncaklar yerine: 0.5B'den 72B'ye ileri, 8B ve 14B'de geri.
-- **İlk kez ölçülen eğitilmiş model kalitesi** ve yerleşik bir çalıştırmadan ayırt edilemez.
-- **DeepSpeed karşılaştırması** — bizi pohpohlamayan sonuç dahil: ZeRO-3'ün sekiz kartı, bir kart yerleşik eğitimden daha yavaş.
-- **Sınırlar bölümü yeniden yazıldı:** v1'in on maddesinden biri kapandı ve dördü daha daraltıldı, yedi yeni eklendi.
-
-Kullandığınız sürümü alıntılayın. `10.5281/zenodo.21771064` kavram DOI'sidir ve her zaman en son sürüme çözümlenir (bugün v3); v1 ve v2 kendi sürüm DOI'lerinde alıntılanabilir ve düzenlenmez — yukarıdaki geri çekme, tam olarak kaydın neyi, ne zaman iddia ettiğimizi bozulmadan tutmak için yeni bir sürümdür.
-
-Arkasındaki ölçüm kayıtları [`benchmarks/`](benchmarks/) içindedir, yazıldığı gibi yayınlanmış — başarısızlıklar, yanlış çıkan varsayımlar ve ölçülüp atılan numaralar dahil.
+The measurement records behind every number in it are in [`benchmarks/`](benchmarks/), published
+as written — including the failures, the assumptions that turned out wrong, and the numbers that
+were measured and then discarded.
 
 ```bibtex
 @misc{makazhan2026exact,
@@ -419,3 +512,7 @@ Arkasındaki ölçüm kayıtları [`benchmarks/`](benchmarks/) içindedir, yazı
   url          = {https://doi.org/10.5281/zenodo.21918325}
 }
 ```
+
+## License
+
+[Apache-2.0](LICENSE). Copyright © the Soup contributors.

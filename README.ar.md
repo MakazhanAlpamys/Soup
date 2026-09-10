@@ -1,4 +1,5 @@
-<p align="center">**🌍 [Türkçe](README.md) | [English](README.en.md) | [العربية](README.ar.md) | [日本語](README.ja.md) | [中文](README.zh.md) | [Русский](README.ru.md) | [Español](README.es.md)**
+<!-- synced-from: README.md sha256:1cdf85f67b56a053d993850d6d8ee27e161e3efd9d2bf6d3ec10e68691fcc3b6 -->
+<p align="center"><strong>🌍 <a href="README.tr.md">Türkçe</a> | <a href="README.md">English</a> | <a href="README.ar.md">العربية</a> | <a href="README.ja.md">日本語</a> | <a href="README.zh.md">中文</a> | <a href="README.ru.md">Русский</a> | <a href="README.es.md">Español</a></strong></p>
 
 <p align="center">
   <img src="soup.png" alt="Soup" width="280">
@@ -78,7 +79,6 @@ Soup/
 │   ├── cans/            # Soup Cans: تغليف النماذج، النشر، التحقق
 │   ├── cloud/           # متحكمات سحابة Lambda Labs / Modal
 │   └── utils/           # مساعدات مشتركة (350+ وحدة)
-├── graft/               # تكوين Graft MCP (الأسلاك على مستوى المستخدم)
 ├── docs/                # أدلة المواضيع + مرجع الأوامر الكامل
 ├── templates/           # قوالب البداية chat.yaml، code.yaml، medical.yaml
 ├── benchmarks/          # سجلات القياس (بيانات خام لكل رقم)
@@ -283,7 +283,7 @@ pre-commit install                 # اختياري: ruff lint+تنسيق على
 
 ## 👥 المساهمون
 
-المستودع المنبع (`MakazhanAlpamys/Soup`) مبني من قبل المجتمع. هذه الشوكة (`Ercaner1988/Soup`) مخصصة لتكامل Graft MCP.
+المستودع المنبع (`MakazhanAlpamys/Soup`) مبني من قبل المجتمع. هذه الشوكة (`Ercaner1988/Soup`) مخصصة لهذا المستودع.
 
 | المساهم | Commits | الدور |
 |---------|---------|-------|
@@ -298,7 +298,7 @@ pre-commit install                 # اختياري: ruff lint+تنسيق على
 | Harshit Sharma | 7 | مساهمات |
 | UmranPros | 6 | مساهمات |
 | (24 مساهم آخر) | 5–1 | انظر [CONTRIBUTORS.md](CONTRIBUTORS.md) |
-| **Ercan Er** | **2** | **تكوين Graft MCP (الأسلاك على مستوى المستخدم)** |
+| **Ercan Er** | **2** | **تكوين الفروع والتوثيق متعدد اللغات** |
 
 > المقاييس من مخرجات `git shortlog -sn HEAD` (فرع ercan1، 2026-09-09).
 

@@ -1,4 +1,5 @@
-<p align="center">**🌍 [Türkçe](README.md) | [English](README.en.md) | [العربية](README.ar.md) | [日本語](README.ja.md) | [中文](README.zh.md) | [Русский](README.ru.md) | [Español](README.es.md)**
+<!-- synced-from: README.md sha256:1cdf85f67b56a053d993850d6d8ee27e161e3efd9d2bf6d3ec10e68691fcc3b6 -->
+<p align="center"><strong>🌍 <a href="README.tr.md">Türkçe</a> | <a href="README.md">English</a> | <a href="README.ar.md">العربية</a> | <a href="README.ja.md">日本語</a> | <a href="README.zh.md">中文</a> | <a href="README.ru.md">Русский</a> | <a href="README.es.md">Español</a></strong></p>
 
 <p align="center">
   <img src="soup.png" alt="Soup" width="280">
@@ -82,7 +83,6 @@ Soup/
 │   ├── cans/            # Soup Cans：模型打包、发布、验证
 │   ├── cloud/           # Lambda Labs / Modal云控制器
 │   └── utils/           # 共享助手（350多个模块）
-├── graft/               # Graft MCP配置（用户级布线）
 ├── docs/                # 主题指南 + 完整命令参考
 ├── templates/           # chat.yaml、code.yaml、medical.yaml起始模板
 ├── benchmarks/          # 测量记录（每个数字的原始数据）
@@ -287,7 +287,7 @@ pre-commit install                 # 可选：提交时ruff lint+格式化
 
 ## 👥 贡献者
 
-上游存储库（`MakazhanAlpamys/Soup`）由社区构建。此分叉（`Ercaner1988/Soup`）针对Graft MCP集成进行了定制。
+上游存储库（`MakazhanAlpamys/Soup`）由社区构建。此分叉（`Ercaner1988/Soup`）包含多语言文档。
 
 | 贡献者 | 提交数 | 角色 |
 |--------|--------|------|
@@ -302,7 +302,7 @@ pre-commit install                 # 可选：提交时ruff lint+格式化
 | Harshit Sharma | 7 | 贡献 |
 | UmranPros | 6 | 贡献 |
 | （其他24位贡献者） | 5–1 | 见[CONTRIBUTORS.md](CONTRIBUTORS.md) |
-| **Ercan Er** | **2** | **Graft MCP配置（用户级布线）** |
+| **Ercan Er** | **2** | **多语言文档和分支配置** |
 
 > 指标来自`git shortlog -sn HEAD`输出（ercan1分支，2026-09-09）。
 
