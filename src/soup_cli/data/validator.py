@@ -5,8 +5,8 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from soup_cli.data.formats import (
-    VALID_FORMATS,
     _DROP_EXCEPTIONS,
+    VALID_FORMATS,
     _dispatch_conversion,
 )
 
@@ -143,18 +143,9 @@ def validate_and_stats(data: list[dict], expected_format: Optional[str] = None) 
                 if len(sample_reasons) < _MAX_REASON_SAMPLES:
                     sample_reasons.append(f"row {idx}: {reason}")
 
-        # 3. Inlined text length & empty field calculation (avoids per-row
-        # function call overhead for 20k+ rows).
-        parts_len = 0
-        parts_count = 0
-        for v in row.values():
-            if v is None:
-                empty_count += 1
-            elif v:
-                v_str = v if isinstance(v, str) else str(v)
-                parts_len += len(v_str)
-                parts_count += 1
-        char_len = parts_len + (parts_count - 1 if parts_count > 0 else 0)
+        # 3. Shared text length & empty field calculation
+        char_len, empty_fields_in_row = _compute_row_text_length(row)
+        empty_count += empty_fields_in_row
         total_length += char_len
         if char_len < min_length:
             min_length = char_len
