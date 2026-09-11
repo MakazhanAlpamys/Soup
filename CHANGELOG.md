@@ -12,12 +12,6 @@ reproducing 70+ versions of notes.
 
 ## [Unreleased]
 
-### Fixed
-
-- PPO now forwards `training.epochs` and `ppo_kl_penalty` to TRL 0.29's
-  `num_train_epochs` and `kl_coef` fields while retaining legacy field-name
-  compatibility (#721).
-
 ## [0.74.0] - 2026-09-04
 
 ### Added
