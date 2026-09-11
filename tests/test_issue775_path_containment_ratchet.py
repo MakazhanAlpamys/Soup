@@ -33,6 +33,8 @@ bug — it is also the normal way to shorten a path for display):
   "cosmetic fallback" apart needs a taint analysis, and the cheap version got
   ``adapters.py:38`` wrong in both directions while being written. A benign
   site is one allowlist line with a reason instead.
+  ``with contextlib.suppress(ValueError):`` is the same decision written as a
+  context manager and counts identically.
 * ``relative_to`` in a boolean position — ``if``/``while``/``assert`` test,
   ``not``, ``and``/``or``, a ternary condition, a comprehension filter. Nobody
   writes that for display.
@@ -91,22 +93,59 @@ def _parent_map(tree: ast.AST) -> dict[ast.AST, ast.AST]:
     return parents
 
 
-def _handler_catches_value_error(handler: ast.ExceptHandler) -> bool:
-    exc = handler.type
-    if exc is None:  # bare `except:`
-        return True
-    candidates = exc.elts if isinstance(exc, ast.Tuple) else [exc]
-    for candidate in candidates:
+def _names_catch_value_error(nodes: list[ast.expr]) -> bool:
+    """Does any exception expression in ``nodes`` catch ``ValueError``?
+
+    Shared by ``except (A, B):`` and ``suppress(A, B)`` — one rule, two
+    spellings. Tuples are recursed into: ``suppress`` forwards its arguments to
+    ``issubclass``, which accepts nested tuples, so ``suppress((OSError,
+    ValueError))`` is a real spelling.
+    """
+    for node in nodes:
+        if isinstance(node, ast.Tuple):
+            if _names_catch_value_error(node.elts):
+                return True
+            continue
         name = (
-            candidate.id
-            if isinstance(candidate, ast.Name)
-            else candidate.attr
-            if isinstance(candidate, ast.Attribute)
+            node.id
+            if isinstance(node, ast.Name)
+            else node.attr
+            if isinstance(node, ast.Attribute)
             else ""
         )
         if name in _CATCHES_VALUE_ERROR:
             return True
     return False
+
+
+def _handler_catches_value_error(handler: ast.ExceptHandler) -> bool:
+    exc = handler.type
+    if exc is None:  # bare `except:`
+        return True
+    return _names_catch_value_error(exc.elts if isinstance(exc, ast.Tuple) else [exc])
+
+
+def _suppress_names(tree: ast.AST) -> set[str]:
+    """Local names bound to ``contextlib.suppress`` in this module.
+
+    ``import contextlib as cl`` needs no entry: the attribute form below keys on
+    ``.suppress`` alone.
+    """
+    names = {"suppress"}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == "contextlib":
+            names.update(a.asname or a.name for a in node.names if a.name == "suppress")
+    return names
+
+
+def _is_suppress_call(node: ast.expr, suppress_names: set[str]) -> bool:
+    func = node.func if isinstance(node, ast.Call) else None
+    if isinstance(func, ast.Name):
+        return func.id in suppress_names
+    # ponytail: any `X.suppress(...)` counts — covers `contextlib.suppress` and
+    # any module alias without following imports. Narrow to the real module if a
+    # non-contextlib `suppress` attribute ever shows up.
+    return isinstance(func, ast.Attribute) and func.attr == "suppress"
 
 
 def _in_field(parent: ast.AST, child: ast.AST, field: str) -> bool:
@@ -124,7 +163,11 @@ def _in_field(parent: ast.AST, child: ast.AST, field: str) -> bool:
     return value is child
 
 
-def _containment_reason(call: ast.Call, parents: dict[ast.AST, ast.AST]) -> str | None:
+def _containment_reason(
+    call: ast.Call,
+    parents: dict[ast.AST, ast.AST],
+    suppress_names: set[str] = frozenset({"suppress"}),  # type: ignore[assignment]
+) -> str | None:
     """Why ``call`` decides containment, or ``None`` when it does not."""
     if call.func.attr == "is_relative_to":  # type: ignore[union-attr]
         return "is_relative_to is a containment predicate"
@@ -140,6 +183,18 @@ def _containment_reason(call: ast.Call, parents: dict[ast.AST, ast.AST]) -> str 
                 _handler_catches_value_error(h) for h in parent.handlers
             ):
                 return "relative_to guarded by an except that catches ValueError"
+        if isinstance(parent, (ast.With, ast.AsyncWith)) and _in_field(
+            parent, child, "body"
+        ):
+            # `body` only, never `items`: a `relative_to` used while building the
+            # `suppress(...)` call is not guarded by it — same distinction as
+            # `If.test` versus `If.body`.
+            if any(
+                _is_suppress_call(item.context_expr, suppress_names)
+                and _names_catch_value_error(item.context_expr.args)  # type: ignore[attr-defined]
+                for item in parent.items
+            ):
+                return "relative_to guarded by suppress() that catches ValueError"
         if isinstance(parent, (ast.If, ast.While, ast.Assert, ast.IfExp)):
             if _in_field(parent, child, "test"):
                 return "relative_to used as a condition"
@@ -164,6 +219,7 @@ def find_containment_relative_to(source: str) -> list[tuple[int, str, str]]:
     except SyntaxError:  # pragma: no cover — a broken file fails its own tests
         return []
     parents = _parent_map(tree)
+    suppress_names = _suppress_names(tree)
     lines = source.splitlines()
     offenders: list[tuple[int, str, str]] = []
     for node in ast.walk(tree):
@@ -171,7 +227,7 @@ def find_containment_relative_to(source: str) -> list[tuple[int, str, str]]:
             continue
         if node.func.attr not in _CONTAINMENT_METHODS:
             continue
-        reason = _containment_reason(node, parents)
+        reason = _containment_reason(node, parents, suppress_names)
         if reason is None:
             continue
         # The call's own source, wrapping collapsed: `lines[lineno - 1]` is
@@ -397,3 +453,121 @@ except ValueError:
 
     def test_unparseable_source_does_not_explode(self):
         assert find_containment_relative_to("def broken(:\n") == []
+
+
+class TestSuppressGuardedRelativeTo:
+    """`with suppress(ValueError):` is `try/except ValueError:` with a shorter
+    spelling — the ratchet has to see both or the idiom just moves."""
+
+    def test_it_catches_the_issue_example(self):
+        source = '''
+from contextlib import suppress
+
+def _validate(target, base):
+    with suppress(ValueError):
+        target.resolve().relative_to(base)
+        return True
+    return False
+'''
+        found = find_containment_relative_to(source)
+        assert len(found) == 1, found
+        assert "relative_to(base)" in found[0][1]
+        assert found[0][0] == 6, found
+
+    def test_it_catches_the_attribute_form(self):
+        source = '''
+import contextlib
+
+def _validate(target, base):
+    with contextlib.suppress(ValueError):
+        target.relative_to(base)
+'''
+        assert len(find_containment_relative_to(source)) == 1
+
+    def test_it_catches_a_flat_multi_argument_suppress(self):
+        source = '''
+from contextlib import suppress
+
+def _validate(target, base):
+    with suppress(OSError, ValueError):
+        target.relative_to(base)
+'''
+        assert len(find_containment_relative_to(source)) == 1
+
+    def test_it_catches_a_nested_tuple_argument(self):
+        source = '''
+from contextlib import suppress
+
+def _validate(target, base):
+    with suppress((OSError, ValueError)):
+        target.relative_to(base)
+'''
+        assert len(find_containment_relative_to(source)) == 1
+
+    def test_it_catches_an_aliased_import(self):
+        source = '''
+from contextlib import suppress as quiet
+
+def _validate(target, base):
+    with quiet(ValueError):
+        target.relative_to(base)
+'''
+        assert len(find_containment_relative_to(source)) == 1
+
+    def test_it_catches_an_aliased_module(self):
+        source = '''
+import contextlib as cl
+
+def _validate(target, base):
+    with cl.suppress(ValueError):
+        target.relative_to(base)
+'''
+        assert len(find_containment_relative_to(source)) == 1
+
+    # ── controls ──
+
+    def test_suppressing_only_os_error_is_not_flagged(self):
+        """CONTROL. OSError cannot catch the ValueError `relative_to` raises."""
+        source = '''
+from contextlib import suppress
+
+def _label(path, root):
+    with suppress(OSError):
+        return str(path.relative_to(root))
+'''
+        assert find_containment_relative_to(source) == []
+
+    def test_suppress_around_unrelated_code_is_not_flagged(self):
+        source = '''
+from contextlib import suppress
+
+def _clean(path):
+    with suppress(ValueError):
+        path.unlink()
+'''
+        assert find_containment_relative_to(source) == []
+
+    def test_relative_to_outside_the_with_body_is_not_flagged(self):
+        """CONTROL. Only the `body` is guarded — not the `context_expr` that
+        builds the `suppress(...)` call, and not code after the block."""
+        source = '''
+from contextlib import suppress
+
+def _label(path, root, pick):
+    with suppress(ValueError, pick(path.relative_to(root))):
+        pass
+    return str(path.relative_to(root))
+'''
+        assert find_containment_relative_to(source) == []
+
+    def test_a_nested_function_boundary_stops_the_walk(self):
+        """CONTROL. A `with` around a *definition* does not guard calls in the
+        body — those run later, at the caller's mercy."""
+        source = '''
+from contextlib import suppress
+
+with suppress(ValueError):
+    def _label(path, root):
+        return str(path.relative_to(root))
+'''
+        assert find_containment_relative_to(source) == []
