@@ -96,6 +96,16 @@ def validate(
         console.print(f"[red]File not found: {file_path}[/]")
         raise typer.Exit(1)
 
+    if fmt != "auto":
+        from soup_cli.data.formats import VALID_FORMATS
+
+        if fmt not in VALID_FORMATS:
+            console.print(
+                f"[red]Unknown --format: {fmt!r}[/]\n"
+                f"Accepted: auto, {', '.join(VALID_FORMATS)}"
+            )
+            raise typer.Exit(1)
+
     data = load_raw_data(file_path)
 
     # Auto-detect format if not specified
