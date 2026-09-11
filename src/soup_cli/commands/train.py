@@ -6,7 +6,7 @@ import contextlib
 import os
 import re
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Annotated
 
 import typer
 from rich.console import Console
@@ -249,14 +249,26 @@ def train(
     gpus: str = typer.Option(
         None,
         "--gpus",
-        help="Number of GPUs for distributed training ('auto' or integer)",
+        help="GPUs per node for distributed training ('auto' or integer)",
     ),
+    nodes: Annotated[int, typer.Option(
+        "--nodes", help="Number of machines; each must use the same --gpus count",
+    )] = 1,
+    node_rank: Annotated[int | None, typer.Option(
+        "--node-rank", help="This machine's rank, from 0 to nodes minus 1 (default 0)",
+    )] = None,
+    master_addr: Annotated[str | None, typer.Option(
+        "--master-addr",
+        help="Rank 0 hostname or IP reachable by all nodes; required with --nodes > 1",
+    )] = None,
+    master_port: Annotated[int | None, typer.Option(
+        "--master-port", help="Shared coordinator port for multiple nodes (default 29500)",
+    )] = None,
     no_reexec: bool = typer.Option(
         False,
         "--no-reexec",
         help=(
-            "When --gpus N>1, print the accelerate launch command instead "
-            "of auto-reexec under it (v0.33.0 #37 default behaviour: reexec)"
+            "Print the distributed launch command instead of launching it"
         ),
     ),
     gate: str = typer.Option(
@@ -503,6 +515,25 @@ def train(
     ),
 ):
     """Start training from a soup.yaml config."""
+    from soup_cli.utils.launcher import validate_multi_node_options
+
+    try:
+        validate_multi_node_options(nodes, node_rank, master_addr, master_port)
+        if nodes > 1:
+            if not gpus:
+                raise ValueError("--nodes > 1 requires --gpus (GPUs per node)")
+            if cloud or find_lr:
+                raise ValueError("--nodes > 1 cannot be combined with --cloud or --find-lr")
+    except ValueError as exc:
+        message = str(exc)
+        for field, flag in (
+            ("num_machines", "--nodes"), ("machine_rank", "--node-rank"),
+            ("main_process_ip", "--master-addr"), ("main_process_port", "--master-port"),
+        ):
+            message = message.replace(field, flag)
+        console.print(f"[red]Invalid distributed launch:[/] {markup_escape(message)}")
+        raise typer.Exit(1) from exc
+
     config_path = Path(config)
     if not config_path.exists():
         console.print(f"[red]Config not found: {config_path}[/]")
@@ -906,12 +937,15 @@ def train(
             raise typer.Exit(1) from exc
         topo = detect_topology()
         if num_gpus is not None and num_gpus < 1:
+            if nodes > 1:
+                console.print("[red]Multi-node training requires at least one GPU per node.[/]")
+                raise typer.Exit(1)
             # --gpus auto on CPU / no-CUDA box — explicit, not silent.
             console.print(
                 "[yellow]--gpus auto detected 0 GPUs; continuing as a "
                 "single-process CPU run.[/]"
             )
-        elif num_gpus is not None and num_gpus > 1:
+        elif num_gpus is not None and num_gpus * nodes > 1:
             from soup_cli.utils.launcher import (
                 build_accelerate_argv,
                 build_train_reexec_argv,
@@ -921,16 +955,8 @@ def train(
                 is_in_distributed,
             )
 
-            if dry_run and not is_in_distributed():
-                # --dry-run must NEVER os.execvp into a real multi-GPU run.
-                # Without this guard the re-exec fired before the dry_run check
-                # (~350 lines below), so `soup train --dry-run --gpus N` launched
-                # a full accelerate run instead of just validating.
-                console.print(
-                    f"[dim]--dry-run: skipping accelerate re-exec "
-                    f"({num_gpus} GPUs, {topo['interconnect']}).[/]"
-                )
-            elif not is_in_distributed():
+            num_processes = num_gpus * nodes
+            if not is_in_distributed():
                 # v0.33.0 #37 — auto-reexec under accelerate launch unless
                 # --no-reexec was passed. Reexec uses os.execvp so the new
                 # accelerate process replaces this process; no leftover PID
@@ -973,11 +999,23 @@ def train(
                         replay_seed=replay_seed,
                     ),
                 )
-                if no_reexec:
-                    hint_args = hint_argv_from_reexec(script_args)
+                if nodes > 1:
+                    console.print(
+                        "[dim]Multi-node NCCL default: NCCL_IB_DISABLE=0. "
+                        "Set NCCL_IB_DISABLE=1 for TCP-only networks. "
+                        "Existing environment settings are preserved.[/]"
+                    )
+                if (dry_run and nodes > 1) or (no_reexec and not dry_run):
+                    # Multi-node advice is the executable module-form argv,
+                    # exactly as passed to execvp, including the child guard.
+                    hint_args = script_args if nodes > 1 else hint_argv_from_reexec(script_args)
                     console.print(
                         Panel(
-                            markup_escape(format_advice(num_gpus, hint_args)),
+                            markup_escape(format_advice(
+                                num_processes, hint_args, num_machines=nodes,
+                                machine_rank=node_rank, main_process_ip=master_addr,
+                                main_process_port=master_port,
+                            )),
                             title="[yellow]Multi-GPU launch required[/]",
                         )
                     )
@@ -985,35 +1023,48 @@ def train(
                         f"[dim]Detected topology: {topo['gpu_count']} GPUs, "
                         f"{topo['interconnect']}[/]"
                     )
-                    raise typer.Exit(1)
+                    if not dry_run:
+                        raise typer.Exit(1)
 
-                argv = build_accelerate_argv(
-                    num_processes=num_gpus, script_args=script_args,
-                )
-                console.print(
-                    f"[green]Auto-reexec under accelerate "
-                    f"({num_gpus} GPUs, {topo['interconnect']})[/]"
-                )
-                console.print(f"[dim]argv: {' '.join(argv)}[/]")
-                # os.execvp replaces the current process — does not return.
-                # On Windows execvp creates a new process and returns the
-                # child's return code; we don't loop because the parent
-                # also exits via Typer.
-                try:
-                    os.execvp(argv[0], argv)
-                except OSError as exc:
+                if dry_run:
                     console.print(
-                        f"[red]accelerate launch failed:[/] {exc}\n"
-                        "Use [bold]--no-reexec[/] to fall back to printing "
-                        "the launch command for manual execution."
+                        f"[dim]--dry-run: skipping accelerate re-exec "
+                        f"({num_processes} GPUs, {topo['interconnect']}).[/]"
                     )
-                    raise typer.Exit(1) from exc
-            elif is_in_distributed():
+                else:
+                    argv = build_accelerate_argv(
+                        num_processes=num_processes, script_args=script_args,
+                        num_machines=nodes, machine_rank=node_rank,
+                        main_process_ip=master_addr, main_process_port=master_port,
+                    )
+                    if nodes > 1:
+                        from soup_cli.utils.topology import suggest_nccl_env
+
+                        for key, val in suggest_nccl_env(
+                            gpu_count=num_gpus, interconnect=topo["interconnect"],
+                            num_machines=nodes,
+                        ).items():
+                            os.environ.setdefault(key, val)
+                    console.print(
+                        f"[green]Auto-reexec under accelerate "
+                        f"({num_processes} GPUs, {topo['interconnect']})[/]"
+                    )
+                    console.print(f"[dim]argv: {markup_escape(' '.join(argv))}[/]")
+                    # execvp replaces this process; the child carries --no-reexec.
+                    try:
+                        os.execvp(argv[0], argv)
+                    except OSError as exc:
+                        console.print(
+                            f"[red]accelerate launch failed:[/] {markup_escape(str(exc))}\n"
+                            "Use [bold]--no-reexec[/] to print the launch command."
+                        )
+                        raise typer.Exit(1) from exc
+            elif not dry_run:
                 # Already a launched rank — announce + apply NCCL hints. (The
                 # dry_run branch above intentionally does neither.)
                 console.print(
                     f"[green]Distributed run detected[/] "
-                    f"({num_gpus} procs, {topo['interconnect']} interconnect)"
+                    f"({num_processes} procs, {topo['interconnect']} interconnect)"
                 )
                 # Apply NCCL env hints. All current keys (``NCCL_P2P_DISABLE`` /
                 # ``NCCL_IB_DISABLE`` / ``NCCL_NVLS_ENABLE``) are rank-idempotent
@@ -1024,7 +1075,7 @@ def train(
                 from soup_cli.utils.topology import suggest_nccl_env
 
                 for key, val in suggest_nccl_env(
-                    gpu_count=num_gpus, interconnect=topo["interconnect"]
+                    gpu_count=num_gpus, interconnect=topo["interconnect"], num_machines=nodes,
                 ).items():
                     os.environ.setdefault(key, val)
 

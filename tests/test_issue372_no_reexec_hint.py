@@ -140,6 +140,11 @@ EXPECTED_LOCAL_ONLY = frozenset({
     "no_reexec",
     # Becomes accelerate --num_processes; repeating --gpus would double-count.
     "gpus",
+    # Consumed by Accelerate, not passed to its training subprocesses (#40).
+    "nodes",
+    "node_rank",
+    "master_addr",
+    "master_port",
     # Plan-only: the multi-GPU path skips re-exec entirely.
     "dry_run",
     # Early-return before any launch.

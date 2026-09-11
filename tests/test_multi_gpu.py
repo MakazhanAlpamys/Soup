@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import sys
 from unittest.mock import MagicMock, patch
 
@@ -258,6 +259,249 @@ class TestLauncherArgv:
             build_accelerate_argv(
                 num_processes=2, script_args=["soup", "train"], num_machines=10_000
             )
+
+
+class TestMultiNodeLauncher:
+    """CPU-only launch contracts for #40; no distributed training is run."""
+
+    @staticmethod
+    def _prefix(rank=0, processes=16, port=29500):
+        return [
+            "accelerate", "launch", "--num_processes", str(processes),
+            "--multi_gpu", "--num_machines", "2", "--machine_rank", str(rank),
+            "--main_process_ip", "head.internal", "--main_process_port", str(port),
+            "--rdzv_backend", "static",
+        ]
+
+    @staticmethod
+    def _output(result):
+        from tests.conftest import strip_ansi
+
+        return " ".join(strip_ansi(result.output).replace("│", " ").split())
+
+    @pytest.mark.parametrize("rank", [0, 1])
+    def test_exact_argv_for_each_node(self, rank):
+        from soup_cli.utils.launcher import build_accelerate_argv
+
+        argv = build_accelerate_argv(
+            16, [sys.executable, "-m", "soup_cli.cli", "train"],
+            num_machines=2, machine_rank=rank,
+            main_process_ip="head.internal", main_process_port=29500,
+        )
+        assert argv == self._prefix(rank) + ["--module", "soup_cli.cli", "train"]
+
+    def test_defaults_and_mixed_precision(self):
+        from soup_cli.utils.launcher import build_accelerate_argv
+
+        assert build_accelerate_argv(
+            16, ["train.py"], num_machines=2,
+            main_process_ip="head.internal", mixed_precision="bf16",
+        ) == self._prefix() + ["--mixed_precision", "bf16", "train.py"]
+
+    @pytest.mark.parametrize("processes", [1, 3, 15])
+    def test_process_count_must_divide_evenly_between_nodes(self, processes):
+        from soup_cli.utils.launcher import build_accelerate_argv
+
+        with pytest.raises(ValueError, match="num_processes"):
+            build_accelerate_argv(
+                processes, ["train.py"], num_machines=2,
+                main_process_ip="head.internal",
+            )
+
+    @pytest.mark.parametrize("options, field", [
+        ({"num_machines": True}, "num_machines"),
+        ({"num_machines": 1.5}, "num_machines"),
+        ({"machine_rank": -1}, "machine_rank"),
+        ({"machine_rank": 2}, "machine_rank"),
+        ({"machine_rank": True}, "machine_rank"),
+        ({"machine_rank": "1"}, "machine_rank"),
+        ({"main_process_ip": None}, "main_process_ip"),
+        ({"main_process_ip": ""}, "main_process_ip"),
+        ({"main_process_ip": "bad host"}, "main_process_ip"),
+        ({"main_process_ip": "head\x00host"}, "main_process_ip"),
+        ({"main_process_ip": "--bad"}, "main_process_ip"),
+        ({"main_process_ip": "http://head"}, "main_process_ip"),
+        ({"main_process_port": 0}, "main_process_port"),
+        ({"main_process_port": 65536}, "main_process_port"),
+        ({"main_process_port": True}, "main_process_port"),
+        ({"main_process_port": "29500"}, "main_process_port"),
+    ])
+    def test_rejects_invalid_node_settings(self, options, field):
+        from soup_cli.utils.launcher import build_accelerate_argv
+
+        kwargs = {"num_machines": 2, "main_process_ip": "head.internal", **options}
+        with pytest.raises(ValueError, match=field):
+            build_accelerate_argv(16, ["train.py"], **kwargs)
+
+    @pytest.mark.parametrize("processes", [1, 4])
+    def test_single_node_control_is_unchanged(self, processes):
+        from soup_cli.utils.launcher import build_accelerate_argv
+
+        expected = ["train.py"] if processes == 1 else [
+            "accelerate", "launch", "--num_processes", "4", "train.py",
+        ]
+        assert build_accelerate_argv(processes, ["train.py"]) == expected
+
+    @pytest.fixture
+    def launch_cli(self, tmp_path, monkeypatch):
+        from rich.console import Console
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+        from soup_cli.commands import train as train_cmd
+        from soup_cli.utils import topology
+
+        for key in (
+            "RANK", "WORLD_SIZE", "LOCAL_RANK", "ACCELERATE_MIXED_PRECISION",
+            "ACCELERATE_USE_DEEPSPEED", "ACCELERATE_USE_FSDP",
+            "NCCL_IB_DISABLE", "NCCL_P2P_DISABLE", "NCCL_NVLS_ENABLE",
+        ):
+            monkeypatch.delenv(key, raising=False)
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("COLUMNS", "1000")
+        monkeypatch.setenv("FORCE_COLOR", "1")
+        (tmp_path / "soup.yaml").write_text(
+            "base: test/model\ntask: sft\n"
+            "data: {train: data.jsonl, format: alpaca}\n"
+            "training: {epochs: 1, lr: 1e-4, batch_size: 1}\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(topology, "_detected_gpu_count", lambda: 8)
+        monkeypatch.setattr(topology, "detect_topology", lambda: {
+            "gpu_count": 8, "interconnect": "pcie",
+        })
+        monkeypatch.setattr(train_cmd, "console", Console(width=1000, force_terminal=True))
+        monkeypatch.setattr(train_cmd, "detect_device", lambda **kw: ("cpu", "CPU"))
+        monkeypatch.setattr(train_cmd, "get_gpu_info", lambda **kw: {"memory_total": "0 GB"})
+        loader = MagicMock(return_value={"train": [{}]})
+        monkeypatch.setattr(train_cmd, "load_dataset", loader)
+        captured = []
+
+        def fake_execvp(file, argv):
+            captured.append((file, list(argv), {
+                key: value for key, value in os.environ.items() if key.startswith("NCCL_")
+            }))
+            raise SystemExit(99)
+
+        monkeypatch.setattr(os, "execvp", fake_execvp)
+
+        def invoke(args):
+            return CliRunner().invoke(
+                app, ["train", "--config", "soup.yaml", "--yes", *args], color=True,
+            )
+
+        return invoke, captured, loader
+
+    @pytest.mark.parametrize("rank", [0, 1])
+    @pytest.mark.parametrize("gpus", ["8", "1", "auto"])
+    def test_cli_launches_exact_command_and_env(self, launch_cli, rank, gpus):
+        invoke, captured, loader = launch_cli
+        result = invoke([
+            "--gpus", gpus, "--nodes", "2", "--node-rank", str(rank),
+            "--master-addr", "head.internal", "--master-port", "29601",
+        ])
+        assert result.exit_code == 99, (self._output(result), result.exception)
+        expected = self._prefix(rank, 2 if gpus == "1" else 16, 29601) + [
+            "--module", "soup_cli.cli", "train", "--config", "soup.yaml",
+            "--no-reexec", "--yes",
+        ]
+        assert captured == [("accelerate", expected, {
+            "NCCL_P2P_DISABLE": "0", "NCCL_IB_DISABLE": "0",
+        })]
+        loader.assert_not_called()
+
+    def test_no_reexec_prints_the_same_argv_and_does_not_mutate_env(self, launch_cli):
+        invoke, captured, loader = launch_cli
+        args = ["--gpus", "8", "--nodes", "2", "--node-rank", "1",
+                "--master-addr", "head.internal", "--name", "space in name"]
+        result = invoke([*args, "--no-reexec"])
+        out = self._output(result)
+        assert result.exit_code == 1, (out, result.exception)
+        assert not captured
+        assert "NCCL_IB_DISABLE=0" in out
+        assert "NCCL_IB_DISABLE" not in os.environ
+        loader.assert_not_called()
+        result = invoke(args)
+        assert result.exit_code == 99, (self._output(result), result.exception)
+        printed = out[out.index("accelerate launch "):].split("Run this command", 1)[0]
+        assert shlex.split(printed) == captured[0][1]
+
+    @pytest.mark.parametrize("no_reexec", [False, True])
+    def test_dry_run_validates_data_without_launching_or_changing_env(
+        self, launch_cli, no_reexec,
+    ):
+        invoke, captured, loader = launch_cli
+        args = ["--gpus", "8", "--nodes", "2", "--master-addr", "head.internal",
+                "--dry-run"]
+        result = invoke(args + (["--no-reexec"] if no_reexec else []))
+        out = self._output(result)
+        assert result.exit_code == 0, (out, result.exception)
+        assert "--num_processes 16" in out
+        assert "Config valid" in out
+        assert not captured
+        assert "NCCL_IB_DISABLE" not in os.environ
+        loader.assert_called_once()
+
+    @pytest.mark.parametrize("args, message", [
+        (["--gpus", "8", "--nodes", "2"], "--master-addr"),
+        (["--nodes", "2", "--master-addr", "head.internal"], "--gpus"),
+        (["--gpus", "8", "--nodes", "0"], "--nodes"),
+        (["--gpus", "8", "--nodes", "257"], "--nodes"),
+        (["--gpus", "8", "--nodes", "2", "--node-rank", "2",
+          "--master-addr", "head.internal"], "--node-rank"),
+        (["--gpus", "8", "--nodes", "2", "--master-addr", "head.internal",
+          "--master-port", "0"], "--master-port"),
+        (["--gpus", "8", "--master-addr", "head.internal"], "--nodes"),
+        (["--gpus", "8", "--nodes", "2", "--master-addr", "head.internal",
+          "--cloud", "modal"], "--cloud"),
+        (["--gpus", "8", "--nodes", "2", "--master-addr", "head.internal",
+          "--find-lr"], "--find-lr"),
+    ])
+    def test_invalid_cli_settings_fail_before_loading_data(self, launch_cli, args, message):
+        invoke, captured, loader = launch_cli
+        result = invoke(args)
+        assert result.exit_code != 0
+        assert message in self._output(result), result.exception
+        assert not captured
+        loader.assert_not_called()
+
+    def test_auto_without_a_local_gpu_refuses_multi_node(self, launch_cli, monkeypatch):
+        from soup_cli.utils import topology
+
+        invoke, captured, loader = launch_cli
+        monkeypatch.setattr(topology, "_detected_gpu_count", lambda: 0)
+        result = invoke(["--gpus", "auto", "--nodes", "2", "--master-addr", "head.internal"])
+        assert result.exit_code == 1, result.exception
+        assert "at least one GPU per node" in self._output(result)
+        assert not captured
+        loader.assert_not_called()
+
+    def test_user_nccl_overrides_survive_launch(self, launch_cli, monkeypatch):
+        invoke, captured, _ = launch_cli
+        monkeypatch.setenv("NCCL_IB_DISABLE", "1")
+        monkeypatch.setenv("NCCL_P2P_DISABLE", "1")
+        result = invoke(["--gpus", "8", "--nodes", "2", "--master-addr", "head.internal"])
+        assert result.exit_code == 99, result.exception
+        assert captured[0][2] == {"NCCL_IB_DISABLE": "1", "NCCL_P2P_DISABLE": "1"}
+
+    def test_existing_rank_does_not_launch_again(self, launch_cli, monkeypatch):
+        invoke, captured, _ = launch_cli
+        monkeypatch.setenv("RANK", "8")
+        monkeypatch.setenv("WORLD_SIZE", "16")
+        result = invoke([
+            "--gpus", "8", "--nodes", "2", "--node-rank", "1",
+            "--master-addr", "head.internal", "--dry-run",
+        ])
+        assert result.exit_code == 0, (self._output(result), result.exception)
+        assert not captured
+        assert "NCCL_IB_DISABLE" not in os.environ
+
+    def test_cli_help_survives_rich_ansi(self, launch_cli):
+        invoke, _, _ = launch_cli
+        result = invoke(["--help"])
+        assert result.exit_code == 0
+        for flag in ("--nodes", "--node-rank", "--master-addr", "--master-port"):
+            assert flag in self._output(result)
 
 
 class TestLauncherDetectActive:

@@ -759,19 +759,64 @@ trainable LoRA tensor is 2-D, so the no-decay group comes out empty, DeepSpeed
 drops it while the scheduler keeps two `base_lrs`, and torch's strict `zip`
 raises. Full fine-tuning populates both groups, so nothing is pruned there.
 
-### `--gpus` flag — topology-aware launch
+### `--gpus` flag: topology-aware launch
 
 ```bash
-# Auto-detect GPU count; print the exact accelerate command
+# Auto-detect local GPU count and launch under Accelerate
 soup train --config soup.yaml --gpus auto
 
-# Explicit GPU count
+# Explicit local GPU count
 soup train --config soup.yaml --gpus 4
+
+# Print the launch command without starting training
+soup train --config soup.yaml --gpus 4 --no-reexec
 ```
 
-`soup` detects NVLink / PCIe interconnect and prints the correct
-`accelerate launch` command. Copy-paste to start distributed training
-(auto-reexec ships in v0.27.1).
+With more than one GPU, Soup detects the local NVLink / PCIe topology and
+replaces itself with `accelerate launch`. Use `--no-reexec` to print a command
+for manual execution instead; this advisory mode exits with status 1.
+`--dry-run` validates the configuration and data without launching training.
+
+### Multi-node launch
+
+Run Soup on **each node**, with a different `--node-rank`. For two machines
+with eight GPUs each:
+
+```bash
+# On rank 0 (replace 10.0.0.10 with its reachable private hostname or IP)
+soup train --config soup.yaml --gpus 8 --nodes 2 \
+  --node-rank 0 --master-addr 10.0.0.10 --master-port 29500
+
+# On rank 1
+soup train --config soup.yaml --gpus 8 --nodes 2 \
+  --node-rank 1 --master-addr 10.0.0.10 --master-port 29500
+```
+
+`--gpus` is the number of GPUs **per node**. Both commands pass
+`--num_processes 16 --num_machines 2` to Accelerate, which starts eight workers
+on each machine. One GPU per node is also supported. `--gpus auto` detects the
+local count, so use it only when every node has the same number of visible GPUs.
+
+`--nodes` defaults to 1. With multiple nodes, `--master-addr` is required;
+`--node-rank` defaults to 0 and `--master-port` to 29500. Ranks must be distinct
+and between 0 and `nodes - 1`. Use the same node count, coordinator address,
+and port on every machine. Soup uses static rendezvous; it does not provision
+machines, copy files, or run the command on other nodes.
+
+Install the same Soup and training dependencies on all nodes, and make the
+model, configuration, and data available at the paths used by each command.
+All nodes need network access to rank 0's coordinator port and to the peer
+connections used by NCCL. Configure the cluster's private network and firewall
+accordingly; opening only the coordinator port may not be sufficient.
+
+Multi-node launches default to `NCCL_IB_DISABLE=0` to allow InfiniBand. On a
+TCP-only cluster, set `NCCL_IB_DISABLE=1` before launching on every node.
+Soup preserves existing NCCL environment settings. `--no-reexec` prints the
+launch command and this advice without setting environment variables.
+`--dry-run` also prints the multi-node command, then validates locally without
+starting workers or changing NCCL settings. Neither mode tests peer connectivity.
+
+Multi-node options cannot be combined with `--cloud` or `--find-lr`.
 
 ### FSDP2 + `torch.compile`
 
