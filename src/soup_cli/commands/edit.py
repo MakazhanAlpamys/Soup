@@ -325,10 +325,10 @@ def set_edit(
 @app.command(name="diff")
 def diff_edit(
     before: str = typer.Argument(
-        ..., help="Registry run id of the model BEFORE the edit.",
+        ..., help="Label or run id of the model BEFORE the edit (metadata).",
     ),
     after: str = typer.Argument(
-        ..., help="Registry run id of the model AFTER the edit.",
+        ..., help="Label or run id of the model AFTER the edit (metadata).",
     ),
     probe_file: Optional[str] = typer.Option(
         None, "--probes",
@@ -360,10 +360,8 @@ def diff_edit(
 ) -> None:
     """Knowledge-injection diff: facts changed between before / after.
 
-    Pass both ``--before-model`` and ``--after-model`` (plus ``--probes``) to
-    generate the diff LIVE (v0.71.9 #194): each probe is run through both
-    models and changed completions are surfaced. Without model paths the
-    report is a validated placeholder.
+    Pass both ``--before-model`` and ``--after-model`` alongside ``--probes``
+    to evaluate probe completions live and surface changed facts.
     """
     from soup_cli.utils.edit_diff import build_diff_report, render_diff_table
 

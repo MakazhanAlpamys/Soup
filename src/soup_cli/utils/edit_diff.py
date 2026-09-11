@@ -131,6 +131,12 @@ def load_probes(path: str) -> Tuple[str, ...]:
             f"probe file exceeds {_MAX_PROBE_BYTES} bytes"
         )
     out: list[str] = []
+    total_lines: int = 0
+    skipped_missing_prompt: int = 0
+    skipped_empty_prompt: int = 0
+    skipped_not_json: int = 0
+    skipped_not_dict: int = 0
+
     with open(real, "r", encoding="utf-8") as fh:
         for i, line in enumerate(fh):
             if i >= _MAX_PROBE_ROWS:
@@ -138,14 +144,21 @@ def load_probes(path: str) -> Tuple[str, ...]:
             line = line.strip()
             if not line:
                 continue
+            total_lines += 1
             try:
                 row = json.loads(line)
             except json.JSONDecodeError:
+                skipped_not_json += 1
                 continue
             if not isinstance(row, dict):
+                skipped_not_dict += 1
+                continue
+            if "prompt" not in row:
+                skipped_missing_prompt += 1
                 continue
             prompt = row.get("prompt")
             if not isinstance(prompt, str) or not prompt:
+                skipped_empty_prompt += 1
                 continue
             if "\x00" in prompt:
                 continue
@@ -156,6 +169,30 @@ def load_probes(path: str) -> Tuple[str, ...]:
                 )
                 prompt = prompt[:_MAX_PROMPT_LEN]
             out.append(prompt)
+
+    if not out:
+        if skipped_missing_prompt > 0:
+            raise ValueError(
+                f"no valid probes loaded from {path!r} "
+                f"({skipped_missing_prompt} row(s) skipped: missing 'prompt' key)"
+            )
+        if skipped_empty_prompt > 0:
+            raise ValueError(
+                f"no valid probes loaded from {path!r} "
+                f"({skipped_empty_prompt} row(s) skipped: empty 'prompt')"
+            )
+        if skipped_not_json > 0:
+            raise ValueError(
+                f"no valid probes loaded from {path!r} "
+                f"({skipped_not_json} row(s) skipped: invalid JSON)"
+            )
+        if skipped_not_dict > 0:
+            raise ValueError(
+                f"no valid probes loaded from {path!r} "
+                f"({skipped_not_dict} row(s) skipped: rows must be JSON objects)"
+            )
+        raise ValueError(f"probe file {path!r} is empty (0 probes loaded)")
+
     return tuple(out)
 
 
@@ -176,8 +213,7 @@ def build_diff_report(
     When ``before_model`` AND ``after_model`` (model paths or HF ids) are both
     supplied alongside probes, the report is generated LIVE (v0.71.9 #194):
     each probe prompt is run through both models and the report lists the
-    prompts whose greedy generation changed. Without model paths the report is
-    a placeholder (shape is stable; surfaces the probe count).
+    prompts whose greedy generation changed. Probes require both models.
     """
     before = _validate_run_id(before_run_id, "before_run_id")
     after = _validate_run_id(after_run_id, "after_run_id")
@@ -189,14 +225,27 @@ def build_diff_report(
             "applied between identical runs)."
         )
 
+    if (before_model is None) != (after_model is None):
+        if before_model is not None:
+            raise ValueError(
+                "--after-model is required when --before-model is specified"
+            )
+        raise ValueError(
+            "--before-model is required when --after-model is specified"
+        )
+
     probes: Tuple[str, ...] = ()
     if probe_file is not None:
         probes = load_probes(probe_file)
 
+    if probes and (before_model is None or after_model is None):
+        raise ValueError(
+            "both --before-model and --after-model are required when --probes is provided"
+        )
+
     from soup_cli import __version__
 
-    live = before_model is not None and after_model is not None and probes
-    if live:
+    if probes:
         changes = _generate_live_changes(
             probes=probes,
             before_model=before_model,  # type: ignore[arg-type]
@@ -214,21 +263,11 @@ def build_diff_report(
             soup_version=__version__,
         )
 
-    # Placeholder path: empty/marked changes (no live model invocation).
-    changes_placeholder = tuple(
-        FactChange(
-            prompt=p,
-            before="<supply --before-model + --after-model to generate>",
-            after="<supply --before-model + --after-model to generate>",
-            changed=False,
-        )
-        for p in probes[:k]
-    )
     return DiffReport(
         before_run_id=before,
         after_run_id=after,
-        changes=changes_placeholder,
-        total_probes=len(probes),
+        changes=(),
+        total_probes=0,
         soup_version=__version__,
     )
 

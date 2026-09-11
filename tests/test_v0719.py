@@ -629,17 +629,16 @@ class TestEditDiffLive:
         n_changed = sum(1 for c in report.changes if c.changed)
         assert n_changed == 1
 
-    def test_placeholder_without_models(self, monkeypatch, tmp_path):
+    def test_probes_without_models_rejected(self, monkeypatch, tmp_path):
         from soup_cli.utils.edit_diff import build_diff_report
 
         monkeypatch.chdir(tmp_path)
         probes = tmp_path / "p.jsonl"
         probes.write_text(json.dumps({"prompt": "x"}) + "\n", encoding="utf-8")
-        report = build_diff_report(
-            before_run_id="r1", after_run_id="r2", probe_file="p.jsonl",
-        )
-        assert report.changes[0].changed is False
-        assert "supply" in report.changes[0].before.lower()
+        with pytest.raises(ValueError, match="both --before-model and --after-model"):
+            build_diff_report(
+                before_run_id="r1", after_run_id="r2", probe_file="p.jsonl",
+            )
 
 
 # ===========================================================================
