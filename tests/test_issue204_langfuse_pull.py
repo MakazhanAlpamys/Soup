@@ -29,6 +29,7 @@ import http.server
 import io
 import json
 import logging
+import os
 import subprocess
 import sys
 import threading
@@ -869,7 +870,11 @@ def test_local_export_output_is_byte_identical(pull_env):
     result = _invoke(["--source", "langfuse", "--logs", "lf.jsonl", "--output", "out.jsonl"])
 
     assert result.exit_code == 0, result.output
-    assert (pull_env / "out.jsonl").read_bytes() == _GOLDEN_OUTPUT
+    # The local path writes in text mode, so each line ends in os.linesep (CRLF on
+    # Windows, as before this change). JSON escapes newlines inside values, so the
+    # golden's only b"\n" bytes are line ends.
+    expected = _GOLDEN_OUTPUT.replace(b"\n", os.linesep.encode())
+    assert (pull_env / "out.jsonl").read_bytes() == expected
 
 
 _IMPORT_PROBE = r"""
@@ -903,8 +908,6 @@ print(json.dumps({"exit": result.exit_code, "attempts": attempts, "loaded": load
 
 
 def _probe(tmp_path, mode):
-    import os
-
     (tmp_path / "lf.jsonl").write_text('{"id":"t1","input":"x","output":"y"}\n', encoding="utf-8")
     env = {key: value for key, value in os.environ.items() if key != "SOUP_TELEMETRY"}
     env["SOUP_NO_AUDIT_LOG"] = "1"
