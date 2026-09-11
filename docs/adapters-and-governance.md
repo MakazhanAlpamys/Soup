@@ -493,6 +493,41 @@ Bank model-risk teams and regulated-org auditors get a single JSON file that fin
 the exact environment the run executed in. Atomic write, cwd-contained.
 
 
+## Run-vs-Config Audit (`soup adapters audit`)
+
+Does the finished adapter match the config that asked for it? Four merged
+fixes taught the MLX path to record what it actually did into
+`adapter_config.json` — #683 (masking), #684 (accumulation), #685 (gradient
+checkpointing), #686 (optimizer and schedule), #749 (gradient clipping). Each
+existed because a setting was accepted and silently dropped. Nothing read that
+record back until this command.
+
+```bash
+soup adapters audit ./output --config soup.yaml
+soup adapters audit ./output --config soup.yaml --json   # machine-readable
+```
+
+```
+Audit: output
+│ optimizer                    │ adamw_torch │ AdamW  │ ok      │
+│ warmup_ratio                 │ 0.03        │ —      │ unknown │
+│ weight_decay                 │ 0.01        │ 0.01   │ ok      │
+│ lora.r                       │ 8           │ 8      │ ok      │
+```
+
+**`unknown` is never `ok`.** A setting the record cannot speak to is reported
+`unknown`, never agreement — a false clean bill turns "I do not know" into "I
+checked", which is exactly the substitution this command exists to undo. It is
+not a failure either: an older adapter predates the keys, which is not the
+user's fault.
+
+The config is read through the schema, so a setting you omitted is audited
+against the default Soup would actually have used, not against a second copy
+of the defaults kept by the audit.
+
+Exits non-zero on divergence, so it composes into CI and `soup ship` rather
+than only being read.
+
 ## Adapter Backdoor Scanner (`soup adapters scan`)
 
 Spectral analysis of LoRA adapter weights pre-load. Flags rank-1 dominance

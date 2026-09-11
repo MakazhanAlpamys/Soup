@@ -1732,6 +1732,19 @@ def audit(
         console.print(f"[red]No adapter_config.json in: {adapter}[/]")
         raise typer.Exit(1)
 
+    # Sibling subcommands enforce this (scan: 779, merge: 1484); read-only here,
+    # but a convention mismatch inside one file is its own hazard.
+    from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
+
+    for _path, _label in ((str(adapter_path), "adapter directory"), (config, "--config")):
+        try:
+            enforce_under_cwd_and_no_symlink(_path, _label)
+        except (ValueError, OSError) as exc:
+            # Same shape as `adapters scan` (:779) -- a refused path is a red
+            # line and Exit(1), never a raw traceback.
+            console.print(f"[red]Path refused: {escape(str(exc))}[/]")
+            raise typer.Exit(1) from exc
+
     config_path = Path(config).resolve()
     if not config_path.exists():
         console.print(f"[red]Config not found: {config}[/]")
@@ -1742,11 +1755,24 @@ def audit(
     except ValueError as exc:
         console.print(f"[red]adapter_config.json is not valid JSON: {exc}[/]")
         raise typer.Exit(1) from exc
+    # #763 review: load through the schema, not yaml.safe_load. Handing the raw
+    # mapping to audit_adapter left omitted keys to the audit's own fallbacks,
+    # and three of those disagreed with config/schema.py -- warmup_ratio 0.0 vs
+    # 0.03, weight_decay 0.0 vs 0.01, gradient_accumulation_steps 1 vs 4. A
+    # config that simply omits them was reported `ok` against a value it never
+    # asked for, which is the false clean bill this command exists to refuse.
+    # The schema is the single source of defaults; the audit module stays pure.
     try:
-        cfg = yaml.safe_load(config_path.read_text()) or {}
+        from soup_cli.config.loader import load_config_from_string
+
+        soup_config = load_config_from_string(config_path.read_text())
     except yaml.YAMLError as exc:
         console.print(f"[red]Could not parse {config}: {exc}[/]")
         raise typer.Exit(1) from exc
+    except (SystemExit, Exception) as exc:  # schema rejection prints its own
+        console.print(f"[red]Could not load {config}: {exc}[/]")
+        raise typer.Exit(1) from exc
+    cfg = soup_config.model_dump()
 
     result = audit_adapter(cfg, record)
 
@@ -1770,19 +1796,25 @@ def audit(
     for row in result.rows:
         table.add_row(
             row.setting,
-            escape(str(row.asked)),
-            escape("—" if row.ran is None else str(row.ran)),
+            # _for_terminal as well as escape: escape() neutralises Rich
+            # markup, not control bytes, and an adapter_config.json can be
+            # downloaded. A recorded "AdamW\x1b[2J" would clear the screen.
+            escape(_for_terminal(str(row.asked))),
+            escape(_for_terminal("—" if row.ran is None else str(row.ran))),
             marks.get(row.status, row.status),
         )
     console.print(table)
 
     for row in result.rows:
         if row.status == "diverged" and row.detail:
-            console.print(f"  [red]{escape(row.setting)}[/]: {escape(row.detail)}")
+            console.print(
+                f"  [red]{escape(_for_terminal(row.setting))}[/]: "
+                f"{escape(_for_terminal(row.detail))}"
+            )
 
     reason = unknown_reason(result.record_kind)
     if reason and result.unknown_count:
-        console.print(f"\n[yellow]{escape(reason)}[/]")
+        console.print(f"\n[yellow]{escape(_for_terminal(reason))}[/]")
 
     if result.diverged_count:
         console.print(
