@@ -2498,30 +2498,32 @@ def preprocess_dataset(
                 truncation=True,
                 padding=False,
                 return_attention_mask=True,
-                # #785: the chat path renders the template's special tokens
-                # already (including any {{ bos_token }}), so re-adding the
-                # tokenizer's defaults here doubled the BOS — one token off from
-                # post-#782 inference. Pretrain feeds raw document text with no
-                # template, so it still gets the tokenizer's leading BOS.
-                add_special_tokens=is_pretrain,
+                # Tokenise exactly as ``main`` (add_special_tokens defaults to
+                # True). This keeps ``main``'s truncation reservation — a
+                # truncated row still ends on the post-processor's EOS — and the
+                # post-processor BOS/EOS, so the cache's EOS stays pinned to
+                # ``main``. #785's only defect on this path is the doubled BOS,
+                # removed below for the chat path.
             )
         except Exception:  # noqa: BLE001 — tokenizer errors vary
             continue
         input_ids = tokens["input_ids"]
+        attention_mask = tokens.get("attention_mask", [1] * len(input_ids))
         if not is_pretrain:
-            # #788: add_special_tokens=False (the #785 BOS fix) also strips the
-            # tokenizer post-processor's EOS. Put it back exactly as the live
-            # training path (loss_mask.build_full_sequence_labels) does, then
-            # re-truncate — otherwise a template that renders BOS but not EOS
-            # trains on a missing stop token from this cache. Pretrain feeds raw
-            # document text and keeps the tokenizer's own specials untouched.
-            from soup_cli.data.loss_mask import reappend_eos_if_dropped
+            # #785/#788: the chat template already renders the BOS; ``main``'s
+            # add_special_tokens=True prepends a second one. Drop only that one
+            # duplicated leading BOS so the row is byte-identical to ``main``
+            # apart from the extra BOS (EOS and truncation untouched). Pretrain
+            # feeds raw document text with no template BOS, so nothing to drop.
+            from soup_cli.data.loss_mask import strip_doubled_leading_bos
 
-            input_ids = reappend_eos_if_dropped(tokenizer, input_ids)[:max_length]
+            input_ids, attention_mask = strip_doubled_leading_bos(
+                tokenizer, input_ids, attention_mask
+            )
         rendered_rows.append(
             {
                 "input_ids": input_ids,
-                "attention_mask": [1] * len(input_ids),
+                "attention_mask": attention_mask,
             }
         )
 

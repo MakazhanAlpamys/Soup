@@ -376,10 +376,12 @@ def append_training_eos(tokenizer: Any, input_ids: list[int]) -> list[int]:
     space so the pre-tokenised row trains on the same EOS ``main`` did.
 
     Used by the live-training path (:func:`build_full_sequence_labels`). The
-    ``soup data preprocess`` cache path deliberately does NOT use this -- its EOS
-    behaviour is pinned to ``main`` (post-processor only) via
-    :func:`reappend_eos_if_dropped`, and the resulting cache-vs-live mismatch is
-    tracked separately in #791.
+    ``soup data preprocess`` cache path deliberately does NOT use this -- it
+    tokenises exactly as ``main`` (``add_special_tokens=True``, so the
+    post-processor supplies the EOS) and only drops #785's duplicated leading
+    BOS via :func:`strip_doubled_leading_bos`. Its EOS is therefore whatever the
+    post-processor added, not TRL's ``add_eos`` rule, and the resulting
+    cache-vs-live mismatch is tracked separately in #791.
     """
     eos_id = _resolve_eos_token_id(tokenizer)
     if eos_id is not None and (not input_ids or input_ids[-1] != eos_id):
@@ -387,48 +389,48 @@ def append_training_eos(tokenizer: Any, input_ids: list[int]) -> list[int]:
     return input_ids
 
 
-def reappend_eos_if_dropped(tokenizer: Any, input_ids: list[int]) -> list[int]:
-    """Put back the EOS that ``add_special_tokens=False`` stripped, if any.
+def strip_doubled_leading_bos(
+    tokenizer: Any, input_ids: list[int], attention_mask: list[int]
+) -> tuple[list[int], list[int]]:
+    """Drop only the one duplicated leading BOS #785 introduced on the cache path.
 
-    The #785 BOS fix tokenises the rendered chat template with
-    ``add_special_tokens=False`` so the template is the single source of special
-    tokens. That also drops the trailing EOS a tokenizer's post-processor would
-    otherwise append. Re-append exactly that (and only that) so the
-    ``soup data preprocess`` cache keeps the EOS count it had on ``main``, where
-    the path tokenised with ``add_special_tokens=True``.
+    ``soup data preprocess`` tokenises the rendered chat template exactly as
+    ``main`` did (``add_special_tokens=True``), which keeps ``main``'s truncation
+    reservation and post-processor EOS. The only #785 defect on this path is the
+    doubled BOS: a template rendering ``{{ bos_token }}`` on a tokenizer whose
+    post-processor also prepends BOS yields ``[bos, bos, ...]``. Drop exactly that
+    duplicate (the post-processor's leading copy) and nothing else, so the row is
+    byte-identical to ``main`` apart from the extra BOS and matches post-#782
+    inference's one BOS.
 
-    NOTE: this is the post-processor rule, NOT TRL's ``add_eos`` string rule that
-    the live path uses (:func:`append_training_eos`). The two differ for
-    tokenizers whose post-processor appends no EOS (Qwen-shaped): the live path
-    trains on one, the preprocess cache on none. That mismatch is pre-existing on
-    ``main`` and is tracked in #791 -- it is deliberately not resolved here.
+    A single post-processor BOS (no template BOS, e.g. Zephyr/TinyLlama) or none
+    at all (Qwen) is not a duplicate and is left as ``main`` had it -- the cache
+    is deliberately pinned to ``main`` here, not to the live path's
+    template-only rule, and that difference is the #791 family.
     """
-    appended_eos = _tokenizer_appends_eos(tokenizer)
-    if appended_eos is not None and (not input_ids or input_ids[-1] != appended_eos):
-        return input_ids + [appended_eos]
-    return input_ids
+    bos_id = _resolve_bos_token_id(tokenizer)
+    if (
+        bos_id is not None
+        and len(input_ids) >= 2
+        and input_ids[0] == bos_id
+        and input_ids[1] == bos_id
+    ):
+        return input_ids[1:], attention_mask[1:]
+    return input_ids, attention_mask
 
 
-def _tokenizer_appends_eos(tokenizer: Any) -> Optional[int]:
-    """Return the EOS id the tokenizer appends under ``add_special_tokens=True``.
-
-    ``None`` when the tokenizer appends no trailing EOS (e.g. a BOS-only
-    post-processor, or none at all). Detected by probing a trivial string both
-    ways so the answer reflects the real ``tokenizers`` post-processor rather
-    than an assumption. Mirrors ``trainer/sft.py``'s ``_processor_adds_leading_bos``
-    for the trailing end.
-    """
-    eos_id = _resolve_eos_token_id(tokenizer)
-    if eos_id is None or not callable(tokenizer):
+def _resolve_bos_token_id(tokenizer: Any) -> Optional[int]:
+    """Return an int BOS token id, or None. Mirrors :func:`_resolve_eos_token_id`."""
+    candidate = getattr(tokenizer, "bos_token_id", None)
+    if isinstance(candidate, bool):
         return None
-    try:
-        with_special = coerce_token_ids(tokenizer("a", add_special_tokens=True))
-        without = coerce_token_ids(tokenizer("a", add_special_tokens=False))
-    except (TypeError, ValueError):
-        return None
-    appends = bool(with_special) and with_special[-1] == eos_id
-    already = bool(without) and without[-1] == eos_id
-    return eos_id if appends and not already else None
+    if isinstance(candidate, int):
+        return candidate
+    if isinstance(candidate, list):
+        for entry in candidate:
+            if isinstance(entry, int) and not isinstance(entry, bool):
+                return entry
+    return None
 
 
 def _resolve_eos_token_id(tokenizer: Any) -> Optional[int]:

@@ -272,7 +272,9 @@ class TestPreprocessCachePathEOS:
     pre-existing on ``main`` and tracked in #791 — not resolved here.
     """
 
-    def _run_preprocess(self, tmp_path, monkeypatch, tok, *, task="sft", rows=None):
+    def _run_preprocess(
+        self, tmp_path, monkeypatch, tok, *, task="sft", rows=None, max_length=2048
+    ):
         transformers = pytest.importorskip("transformers")
         datasets = pytest.importorskip("datasets")
         from typer.testing import CliRunner
@@ -283,7 +285,8 @@ class TestPreprocessCachePathEOS:
         monkeypatch.chdir(tmp_path)
         (tmp_path / "soup.yaml").write_text(
             f"base: x/y\ntask: {task}\n"
-            "data:\n  train: ./d.jsonl\n  format: chatml\n  max_length: 2048\n",
+            "data:\n  train: ./d.jsonl\n  format: chatml\n"
+            f"  max_length: {max_length}\n",
             encoding="utf-8",
         )
         (tmp_path / "d.jsonl").write_text("{}\n", encoding="utf-8")
@@ -302,13 +305,18 @@ class TestPreprocessCachePathEOS:
         ds = datasets.load_from_disk(str(cache_dirs[0]))
         return list(ds[0]["input_ids"])
 
-    def _main_preprocess_ids(self, tok):
+    def _main_preprocess_ids(self, tok, *, messages=None, max_length=2048):
         """What ``main``'s preprocess chat path produced: ``tokenizer(text)`` with
-        the default ``add_special_tokens=True`` (no TRL ``add_eos`` on this path)."""
+        the default ``add_special_tokens=True`` and the same truncation budget (no
+        TRL ``add_eos`` on this path). HF truncation reserves room for the
+        post-processor's specials, so a truncated ``main`` row still ends on EOS."""
+        messages = messages if messages is not None else _MESSAGES
         text = tok.apply_chat_template(
-            _MESSAGES, tokenize=False, add_generation_prompt=False
+            messages, tokenize=False, add_generation_prompt=False
         )
-        return tok(text, add_special_tokens=True)["input_ids"]
+        return tok(
+            text, max_length=max_length, truncation=True, add_special_tokens=True
+        )["input_ids"]
 
     def test_cache_eos_matches_main_when_post_processor_appends(self, tmp_path, monkeypatch):
         """bos_eos post-processor: ``main``'s preprocess kept one EOS (from the
@@ -347,6 +355,44 @@ class TestPreprocessCachePathEOS:
         )
         assert ids == tok(raw, add_special_tokens=True)["input_ids"]
 
+    def test_cache_keeps_eos_on_truncated_row(self, tmp_path, monkeypatch):
+        """The #788 round-2 blocker. A row long enough to truncate must still end
+        on the post-processor's EOS, exactly as ``main``. The first round-2 attempt
+        (``add_special_tokens=False``, re-append the EOS, slice ``[:max_length]``)
+        filled the whole budget with content and sliced the re-appended EOS back
+        off (1 -> 0). Tokenising as ``main`` reserves truncation room for the EOS,
+        so it survives; we only drop the one duplicated leading BOS."""
+        tok = _tokenizer(_BOS_TEMPLATE, post_processor="bos_eos")
+        long_msgs = [
+            {"role": "user", "content": "What is the capital of France ? " * 40},
+            {"role": "assistant", "content": "Paris . " * 40},
+        ]
+        ids = self._run_preprocess(
+            tmp_path, monkeypatch, tok, rows=[{"messages": long_msgs}], max_length=64
+        )
+        main_pp = self._main_preprocess_ids(tok, messages=long_msgs, max_length=64)
+        assert len(main_pp) == 64, "sanity: main filled the truncation budget"
+        assert main_pp[0] == main_pp[1] == _BOS_ID, "sanity: main doubled the BOS"
+        assert ids == main_pp[1:], "cache == main minus the one duplicated leading BOS"
+        assert ids[-1] == _EOS_ID and ids.count(_EOS_ID) == 1, (
+            f"truncated row must still end on the stop token; got {ids}"
+        )
+        assert ids.count(_BOS_ID) == 1, "doubled BOS removed even under truncation"
+
+    def test_cache_keeps_mains_eos_when_template_renders_it(self, tmp_path, monkeypatch):
+        """Template renders the EOS itself AND the post-processor appends one, so
+        ``main`` trained on several trailing EOS. The cache reproduces ``main``'s
+        EOS count (it does NOT collapse to one like the live path — that divergence
+        is #791), minus only the duplicated leading BOS."""
+        tok = _tokenizer(_BOS_EOS_TEMPLATE, post_processor="bos_eos")
+        ids = self._run_preprocess(tmp_path, monkeypatch, tok)
+        main_pp = self._main_preprocess_ids(tok)
+
+        assert main_pp[0] == main_pp[1] == _BOS_ID, "sanity: main doubled the BOS"
+        assert ids == main_pp[1:], "cache == main minus the duplicated BOS"
+        assert ids.count(_EOS_ID) == main_pp.count(_EOS_ID) > 1, "EOS count pinned to main"
+        assert ids[-1] == _EOS_ID and ids.count(_BOS_ID) == 1
+
 
 class TestPreprocessCacheKey:
     def test_cache_key_changed_from_pre_fix_blob(self):
@@ -368,3 +414,42 @@ class TestPreprocessCacheKey:
         )
         old_key = hashlib.sha256(old_blob.encode("utf-8")).hexdigest()[:16]
         assert make_preprocess_cache_key(**args) != old_key
+
+
+class TestDataDoctorLegacyMatchesTraining:
+    """``soup data doctor --show-mask`` must X-ray what training actually
+    consumes. Its legacy (``train_on_responses_only=false``) branch therefore
+    calls the SAME builder as the trainer, :func:`build_full_sequence_labels`.
+
+    #788 regression guard: ``main`` re-rendered here with
+    ``apply_chat_template(tokenize=True)`` and the tokenizer's default specials,
+    which doubled the BOS and skipped TRL's ``add_eos`` — so the X-ray diverged
+    from training. Reverting ``_build_row_labels`` to that now fails here rather
+    than silently. (Without this test the revert passes the whole suite.)
+    """
+
+    @pytest.mark.parametrize(
+        "post_processor",
+        ["bos_eos", "bos", None],
+        ids=["bos+eos", "bos-only", "no-post-processor (Qwen)"],
+    )
+    def test_legacy_branch_matches_the_training_builder(self, post_processor):
+        from soup_cli.data.loss_mask import build_full_sequence_labels
+        from soup_cli.utils.data_doctor import _build_row_labels
+
+        tok = _tokenizer(_BOS_TEMPLATE, post_processor=post_processor)
+        doctor = _build_row_labels(
+            tok,
+            _MESSAGES,
+            max_length=2048,
+            train_on_responses_only=False,
+            train_on_messages_with_train_field=False,
+            include_eot=True,
+        )
+        training = build_full_sequence_labels(_MESSAGES, tok, max_length=2048)
+        assert doctor["input_ids"] == training["input_ids"], (
+            "the mask X-ray must tokenize identically to training"
+        )
+        assert doctor["labels"] == training["labels"]
+        # and it is genuinely the post-#785 shape, not main's doubled BOS
+        assert doctor["input_ids"].count(_BOS_ID) == 1
