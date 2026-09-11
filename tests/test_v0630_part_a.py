@@ -334,7 +334,9 @@ def test_ingest_traces_skips_malformed_lines(tmp_path, monkeypatch):
 def test_resolve_auth_env_each_source(monkeypatch):
     from soup_cli.utils.ingest_sources import resolve_auth_env
 
-    monkeypatch.setenv("LANGFUSE_KEY", "lf-key")
+    # Langfuse authenticates with a key pair; #204 replaced the invented LANGFUSE_KEY.
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-lf-key")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "lf-key")
     monkeypatch.setenv("LANGSMITH_API_KEY", "ls-key")
     monkeypatch.setenv("HELICONE_API_KEY", "h-key")
     monkeypatch.setenv("OPENPIPE_API_KEY", "op-key")
@@ -353,7 +355,8 @@ def test_resolve_auth_env_missing(monkeypatch):
     from soup_cli.utils.ingest_sources import resolve_auth_env
 
     for env in [
-        "LANGFUSE_KEY",
+        "LANGFUSE_PUBLIC_KEY",
+        "LANGFUSE_SECRET_KEY",
         "LANGSMITH_API_KEY",
         "HELICONE_API_KEY",
         "OPENPIPE_API_KEY",

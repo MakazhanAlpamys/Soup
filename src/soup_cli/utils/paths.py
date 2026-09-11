@@ -16,7 +16,7 @@ import os
 import stat
 import tempfile
 from pathlib import Path
-from typing import Union
+from typing import Iterable, Union
 
 
 def is_under(path: Union[str, Path], base: Union[str, Path]) -> bool:
@@ -109,6 +109,41 @@ def atomic_write_text(
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(text)
+        os.replace(tmp_path, output_path)
+    finally:
+        if os.path.exists(tmp_path):
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+    return os.path.realpath(output_path)
+
+
+def atomic_write_lines(
+    lines: Iterable[str],
+    output_path: str,
+    *,
+    prefix: str = ".soup.",
+    suffix: str = ".tmp",
+    field: str = "output",
+) -> str:
+    """Stream ``lines`` into ``output_path`` atomically under cwd containment.
+
+    Streaming sibling of :func:`atomic_write_text` (#204 ``soup ingest --pull``):
+    each line is written to the staging file as the iterable yields it, so a
+    large result is never held in memory, and the target is replaced only once
+    the iterable is exhausted. An exception raised while iterating removes the
+    staging file and leaves any existing target untouched. Same TOCTOU-safe
+    pipeline.
+    """
+    enforce_under_cwd_and_no_symlink(output_path, field)
+    parent = os.path.dirname(os.path.abspath(output_path)) or "."
+    os.makedirs(parent, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(prefix=prefix, suffix=suffix, dir=parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            for line in lines:
+                fh.write(line)
         os.replace(tmp_path, output_path)
     finally:
         if os.path.exists(tmp_path):
