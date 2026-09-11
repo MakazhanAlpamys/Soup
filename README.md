@@ -1,3 +1,5 @@
+<p align="center">🌍 <strong>English</strong> | <a href="README.tr.md">Türkçe</a></p>
+
 <p align="center">
   <img src="soup.png" alt="Soup" width="280">
 </p>
