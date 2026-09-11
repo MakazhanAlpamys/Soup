@@ -581,9 +581,12 @@ _ALLOWLIST = {
         "passes add_special_tokens through **processor_kwargs, decided per processor "
         "by _processor_adds_leading_bos (#302)"
     ),
-    # preprocess_dataset was fixed in #785: its chat branch now tokenizes with
-    # add_special_tokens=is_pretrain (False for templated rows), so it no longer
-    # renders-then-adds and has left the allowlist.
+    "commands/data.py::preprocess_dataset": (
+        "renders a template, then tokenizes with the tokenizer's default "
+        "add_special_tokens=True on purpose so the cache stays byte-identical to "
+        "main (truncation reservation and post-processor EOS preserved), and strips "
+        "only the one doubled leading BOS afterwards (#785/#788)"
+    ),
     "utils/live_eval.py::extract_layer_activations": (
         "activation capture; changing the ids changes saved steering vectors and "
         "probe calibration (#781, out of scope)"

@@ -191,9 +191,10 @@ def validate_shards(value: Optional[int]) -> Optional[int]:
 # tokenizer + max_length + format + dataset path → SHA-256 → cache filename.
 # Bump whenever the on-disk tokenization of a preprocessed row changes, so a
 # dataset cached under an older encoding is never silently reused. v2 (#785):
-# the chat path now tokenizes with add_special_tokens=False (the chat template
-# already renders its special tokens), removing the doubled BOS that older
-# caches baked in.
+# the chat path still tokenizes with the tokenizer's default add_special_tokens=True
+# (so the cache stays byte-identical to older behaviour on EOS and truncation) but
+# now strips the one doubled leading BOS the chat template already rendered, so a
+# row that used to bake in [bos, bos, ...] no longer does.
 _PREPROCESS_TOKENIZE_SCHEMA = "v2"
 
 
