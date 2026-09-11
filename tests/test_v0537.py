@@ -372,8 +372,10 @@ class TestPromptStrategyRuntime:
         )
         tokenizer = MagicMock()
         tokenizer.chat_template = "{% for msg in messages %}{{msg['content']}}{% endfor %}"
-        # #785: the legacy path now pre-tokenizes (apply_chat_template tokenize=True
-        # returns ids). Not callable as tokenizer(...) here, so no EOS probe fires.
+        # #785/#788: the legacy path now pre-tokenizes (apply_chat_template
+        # tokenize=True returns ids). No EOS is appended here not because the mock
+        # is uncallable (a MagicMock IS callable) but because its eos_token_id does
+        # not resolve to an int, so append_training_eos is a no-op.
         tokenizer.apply_chat_template = MagicMock(return_value=[7, 8, 9])
         fn = build_format_row(tokenizer, data_cfg)
         # When invoked, the inner row should pass through the attach transform

@@ -36,6 +36,7 @@ _WORDS = [
     "?", "Paris", "system", "user", "assistant",
 ]
 _BOS_ID = _SPECIALS.index("<s>")
+_EOS_ID = _SPECIALS.index("</s>")
 
 _BOS_TEMPLATE = (
     "{{ bos_token }}"
@@ -90,10 +91,33 @@ def _legacy_format_row(tok):
     return build_format_row(tokenizer=tok, data_cfg=dcfg)
 
 
+def _trl_main_lm_ids(tok, messages):
+    """The ids the SFT language-modeling text path trained on for ``messages`` on
+    ``main`` (the baseline #788 must be measured against).
+
+    Reproduces TRL 0.29.1's two real operations on a legacy ``{"text"}`` row using
+    the real tokenizer: ``add_eos`` appends ``eos_token`` as a string when the
+    rendered text does not already end with it (``sft_trainer.py`` ``add_eos``,
+    lines 1026-1031), then TRL tokenizes with the tokenizer's default
+    ``add_special_tokens=True`` (line 1131). ``tok(text=text)`` alone omits
+    ``add_eos`` and under-counts the trained EOS — the mistake the first #788
+    attempt made and the reason these tests are baselined against this instead.
+    """
+    text = tok.apply_chat_template(
+        messages, tokenize=False, add_generation_prompt=False
+    )
+    if not text.endswith(tok.eos_token):
+        text = text + tok.eos_token
+    return tok(text)["input_ids"]
+
+
 class TestLegacyTextPathBOS:
-    def test_bos_template_trains_on_exactly_one_bos(self):
-        """A template that renders {{ bos_token }} must train on one BOS, and the
-        ids must equal HF's own one-step encode (what inference sends post-#782).
+    def test_bos_template_trains_on_one_bos_and_keeps_the_eos(self):
+        """A template that renders {{ bos_token }} must train on one BOS (not the
+        two ``main`` produced) while keeping the trailing EOS ``main`` trained on.
+
+        The body equals inference's one-step encode (add_special_tokens=False,
+        what #782 sends) plus the training stop token inference does not send.
 
         Fails on pre-fix main: that path returned a ``{"text"}`` row, so there is
         no ``input_ids`` to read, and TRL then tokenized the text to two BOS.
@@ -107,10 +131,17 @@ class TestLegacyTextPathBOS:
         ids = row["input_ids"]
         assert ids.count(_BOS_ID) == 1, f"expected one BOS, got ids={ids}"
 
-        reference = tok.apply_chat_template(
-            _MESSAGES, tokenize=True, add_generation_prompt=False, return_dict=True
+        main_ids = _trl_main_lm_ids(tok, _MESSAGES)
+        assert main_ids.count(_BOS_ID) == 2, "sanity: main doubled the BOS here"
+        # The stop token main trained on (TRL add_eos) is preserved, not dropped.
+        assert ids[-1] == _EOS_ID and main_ids[-1] == _EOS_ID
+        assert ids.count(_EOS_ID) == main_ids.count(_EOS_ID) == 1
+
+        inference = tok.apply_chat_template(
+            _MESSAGES, tokenize=True, add_generation_prompt=False,
+            add_special_tokens=False, return_dict=True,
         )["input_ids"]
-        assert ids == list(reference)
+        assert ids == list(inference) + [_EOS_ID]
         # Full-sequence training: every token is a target, none masked.
         assert row["labels"] == ids
         assert set(row["attention_mask"]) == {1}
@@ -143,89 +174,112 @@ class TestLegacyTextPathBOS:
 class TestTrainingEOSPreserved:
     """The BOS fix must not cost the stop token (maintainer req 1 on #785).
 
-    On the training side, dropping a tokenizer-appended trailing EOS is the
-    opposite of #782's inference goal: it teaches run-on generation. Behaviour
-    stated per case below.
+    ``main``'s live text path trained on the EOS TRL's ``add_eos`` appends as a
+    string, independent of the tokenizer's post-processor. Dropping it teaches
+    run-on generation. Every case is baselined against ``_trl_main_lm_ids`` (what
+    ``main`` trained on), not ``tok(text=...)`` which omits ``add_eos``. The fix
+    reproduces TRL's rule: end on exactly one EOS, removing ``main``'s duplicates
+    but never dropping the stop token.
     """
 
-    _EOS_ID = _SPECIALS.index("</s>")
+    @pytest.mark.parametrize(
+        "post_processor",
+        ["bos", None],
+        ids=["bos-only (Gemma/Llama-2)", "no-post-processor (Qwen)"],
+    )
+    def test_eos_kept_when_post_processor_appends_none(self, post_processor):
+        """The regression the #788 review caught. Template renders no EOS on a
+        tokenizer whose post-processor appends none. ``main`` still trained on one
+        EOS because TRL's ``add_eos`` appends it as a string; probing the
+        post-processor (the first #788 attempt) added none and dropped the stop
+        token 1 -> 0. The fix keeps it."""
+        tok = _tokenizer(_BOS_TEMPLATE, post_processor=post_processor)
+        main_ids = _trl_main_lm_ids(tok, _MESSAGES)
+        assert main_ids.count(_EOS_ID) == 1, "main trained on one EOS via add_eos"
 
-    def test_eos_preserved_when_template_renders_none_and_tokenizer_appends(self):
-        """Template renders no EOS, tokenizer's post-processor appends one.
+        ids = _legacy_format_row(tok)({"messages": _MESSAGES})["input_ids"]
+        assert ids[-1] == _EOS_ID and ids.count(_EOS_ID) == 1, (
+            f"fix must keep the EOS main trained on, not drop it; got {ids}"
+        )
 
-        Pre-fix (render then tokenize with defaults) kept that appended EOS.
-        add_special_tokens=False alone would drop it; the fix re-appends it, so
-        the trained EOS count is unchanged and the row still ends on the stop
-        token."""
+    def test_eos_not_duplicated_when_post_processor_also_appends(self):
+        """Template renders no EOS; the post-processor appends one AND TRL's
+        add_eos appended another, so ``main`` trained on a duplicated EOS. The fix
+        ends on exactly one stop token — main's duplicate removed, like the BOS."""
         tok = _tokenizer(_BOS_TEMPLATE, post_processor="bos_eos")
-        text = tok.apply_chat_template(_MESSAGES, tokenize=False, add_generation_prompt=False)
-        pre_fix_eos = tok(text=text)["input_ids"].count(self._EOS_ID)
+        main_ids = _trl_main_lm_ids(tok, _MESSAGES)
+        assert main_ids.count(_EOS_ID) == 2, "sanity: main duplicated the EOS here"
 
         ids = _legacy_format_row(tok)({"messages": _MESSAGES})["input_ids"]
-        assert ids.count(self._EOS_ID) == pre_fix_eos == 1
-        assert ids[-1] == self._EOS_ID, "row must end on the stop token"
-        assert ids.count(_BOS_ID) == 1, "and still carry exactly one BOS"
-
-    def test_eos_unchanged_when_template_renders_it(self):
-        """Template renders the EOS itself; the tokenizer appends none.
-
-        The template's EOS carries through untouched and none is re-added, so the
-        trained EOS count is unchanged from the pre-fix path and only the leading
-        duplicate BOS is removed."""
-        tok = _tokenizer(_BOS_EOS_TEMPLATE, post_processor="bos")
-        text = tok.apply_chat_template(_MESSAGES, tokenize=False, add_generation_prompt=False)
-        pre_fix = tok(text=text)["input_ids"]
-
-        ids = _legacy_format_row(tok)({"messages": _MESSAGES})["input_ids"]
-        assert ids.count(self._EOS_ID) == pre_fix.count(self._EOS_ID)
-        assert ids[-1] == self._EOS_ID, "row still ends on the stop token"
-        assert ids == pre_fix[1:], "only diff is the removed leading BOS"
+        assert ids[-1] == _EOS_ID, "row ends on the stop token"
+        assert ids.count(_EOS_ID) == 1, "exactly one, the duplicate removed"
         assert ids.count(_BOS_ID) == 1
 
-    def test_no_eos_invented_when_neither_side_provides_one(self):
-        """Template renders no EOS and the tokenizer appends none: pre-fix had no
-        stop token, and the fix invents none (unchanged)."""
-        tok = _tokenizer(_BOS_TEMPLATE, post_processor="bos")
+    def test_template_rendered_eos_is_kept_and_not_re_appended(self):
+        """Template renders the EOS itself; the fix adds none because the sequence
+        already ends on it (TRL's rule: append only if not already ending on EOS).
+        The body equals inference's encode; main's add_eos duplicate is gone."""
+        tok = _tokenizer(_BOS_EOS_TEMPLATE, post_processor="bos")
         ids = _legacy_format_row(tok)({"messages": _MESSAGES})["input_ids"]
-        assert ids.count(self._EOS_ID) == 0
+
+        assert ids[-1] == _EOS_ID, "row ends on the template's stop token"
+        inference = tok.apply_chat_template(
+            _MESSAGES, tokenize=True, add_generation_prompt=False,
+            add_special_tokens=False, return_dict=True,
+        )["input_ids"]
+        assert ids == list(inference), "nothing re-appended; already ends on EOS"
+        assert ids.count(_BOS_ID) == 1
+
+        main_ids = _trl_main_lm_ids(tok, _MESSAGES)
+        assert main_ids.count(_EOS_ID) == ids.count(_EOS_ID) + 1, (
+            "main's add_eos duplicated the trailing EOS; the fix does not"
+        )
 
 
 class TestTemplatedOnly:
     """The rule applies only to text a chat template rendered (maintainer req 2)."""
 
-    def test_no_template_is_rejected_not_silently_stripped(self):
-        """A tokenizer with no chat_template never reaches add_special_tokens=False:
-        the text path raises rather than silently dropping the tokenizer's own
-        (only) special tokens. Same behaviour as main (it raised before too)."""
-        from soup_cli.data.loss_mask import build_full_sequence_labels
+    def test_no_template_row_raises_rather_than_being_silently_pretokenized(self):
+        """A tokenizer with no chat_template must raise, not be silently stripped
+        into wrong training data. Routed through ``build_format_row`` — the real
+        dispatch, present on ``main`` too — so it discriminates the raise
+        behaviour rather than the mere absence of a #788 import."""
+        from soup_cli.config.schema import DataConfig
+        from soup_cli.data.sft_format import build_format_row
 
         tok = _tokenizer(None, post_processor="bos")  # no chat_template
         tok.chat_template = None
+        dcfg = DataConfig(
+            train="t.jsonl",
+            train_on_responses_only=False,
+            train_on_messages_with_train_field=False,
+            max_length=2048,
+        )
+        format_row = build_format_row(tokenizer=tok, data_cfg=dcfg)
         with pytest.raises(ValueError, match="chat_template"):
-            build_full_sequence_labels(_MESSAGES, tok, max_length=2048)
+            format_row({"messages": _MESSAGES})
 
 
 class TestPreprocessCachePathEOS:
-    """`soup data preprocess` must handle EOS exactly like live training.
+    """`soup data preprocess` EOS behaviour is pinned to ``main`` (post-processor
+    only), deliberately NOT to the live path.
 
-    The BOS fix (#785) lives on two paths: ``loss_mask.build_full_sequence_labels``
-    (live tokenize) and ``preprocess_dataset`` (the AOT cache read straight into
-    the trainer by ``sft._maybe_load_pretokenized``). Both now tokenize the
-    rendered template with ``add_special_tokens=False``, which also drops the
-    tokenizer post-processor's EOS. #788 review (AmirF194): the cache path did not
-    re-append it, so a BOS-but-not-EOS template silently trained on a missing stop
-    token from the cache. These pin the two paths to identical ids.
+    #788 de-duplicates the BOS on the preprocess cache path just as on the live
+    path, but it must NOT change what EOS the cache trains on: ``main``'s
+    preprocess never went through TRL's ``add_eos``, so its EOS is whatever the
+    post-processor added. The live path now reproduces ``add_eos`` and so trains
+    on an EOS the cache does not (Qwen shape). That cache-vs-live mismatch is
+    pre-existing on ``main`` and tracked in #791 — not resolved here.
     """
 
-    _EOS_ID = _SPECIALS.index("</s>")
-
-    def _run_preprocess(self, tmp_path, monkeypatch, tok, task="sft"):
+    def _run_preprocess(self, tmp_path, monkeypatch, tok, *, task="sft", rows=None):
         transformers = pytest.importorskip("transformers")
         datasets = pytest.importorskip("datasets")
         from typer.testing import CliRunner
 
         from soup_cli.cli import app
 
+        rows = rows if rows is not None else [{"messages": _MESSAGES}]
         monkeypatch.chdir(tmp_path)
         (tmp_path / "soup.yaml").write_text(
             f"base: x/y\ntask: {task}\n"
@@ -239,8 +293,7 @@ class TestPreprocessCachePathEOS:
         # Control the rows directly so the assertion is about tokenization, not
         # format conversion. preprocess_dataset local-imports this name.
         monkeypatch.setattr(
-            "soup_cli.data.loader.load_dataset",
-            lambda *a, **k: {"train": [{"messages": _MESSAGES}]},
+            "soup_cli.data.loader.load_dataset", lambda *a, **k: {"train": rows}
         )
         result = CliRunner().invoke(app, ["data", "preprocess", "soup.yaml", "--yes"])
         assert result.exit_code == 0, result.output
@@ -249,35 +302,50 @@ class TestPreprocessCachePathEOS:
         ds = datasets.load_from_disk(str(cache_dirs[0]))
         return list(ds[0]["input_ids"])
 
-    def test_cache_preserves_eos_the_tokenizer_appends(self, tmp_path, monkeypatch):
-        """Template renders BOS but not EOS; the tokenizer appends EOS. The cached
-        row must still end on the stop token and match the live path exactly.
+    def _main_preprocess_ids(self, tok):
+        """What ``main``'s preprocess chat path produced: ``tokenizer(text)`` with
+        the default ``add_special_tokens=True`` (no TRL ``add_eos`` on this path)."""
+        text = tok.apply_chat_template(
+            _MESSAGES, tokenize=False, add_generation_prompt=False
+        )
+        return tok(text, add_special_tokens=True)["input_ids"]
 
-        Fails without the #788 re-append: the cache row would end one token short
-        (EOS dropped), which reaches the trainer verbatim."""
-        from soup_cli.data.loss_mask import build_full_sequence_labels
-
+    def test_cache_eos_matches_main_when_post_processor_appends(self, tmp_path, monkeypatch):
+        """bos_eos post-processor: ``main``'s preprocess kept one EOS (from the
+        post-processor). The cache keeps exactly that and drops the doubled BOS."""
         tok = _tokenizer(_BOS_TEMPLATE, post_processor="bos_eos")
         ids = self._run_preprocess(tmp_path, monkeypatch, tok)
-        live = build_full_sequence_labels(_MESSAGES, tok, max_length=2048)["input_ids"]
+        main_pp = self._main_preprocess_ids(tok)
 
-        assert ids == live, "cache path must equal the live-training path"
-        assert ids[-1] == self._EOS_ID, "cached row must end on the stop token"
-        assert ids.count(self._EOS_ID) == 1
-        assert ids.count(_BOS_ID) == 1
+        assert ids.count(_EOS_ID) == main_pp.count(_EOS_ID) == 1, "EOS unchanged vs main"
+        assert main_pp.count(_BOS_ID) == 2 and ids.count(_BOS_ID) == 1, "BOS de-duplicated"
 
-    def test_cache_invents_no_eos_when_tokenizer_appends_none(self, tmp_path, monkeypatch):
-        """Tokenizer appends no EOS: the cache path must not invent one, matching
-        the live path (control against over-eager re-appending)."""
+    def test_cache_keeps_mains_zero_eos_for_no_eos_post_processor(self, tmp_path, monkeypatch):
+        """Qwen/BOS-only shape: ``main``'s preprocess added no EOS, so the cache
+        keeps zero rather than adopting the live path's one. Documents that the
+        cache and live path diverge here — the #791 mismatch."""
         from soup_cli.data.loss_mask import build_full_sequence_labels
 
         tok = _tokenizer(_BOS_TEMPLATE, post_processor="bos")
         ids = self._run_preprocess(tmp_path, monkeypatch, tok)
-        live = build_full_sequence_labels(_MESSAGES, tok, max_length=2048)["input_ids"]
+        main_pp = self._main_preprocess_ids(tok)
 
-        assert ids == live
-        assert ids.count(self._EOS_ID) == 0
-        assert ids.count(_BOS_ID) == 1
+        assert ids.count(_EOS_ID) == main_pp.count(_EOS_ID) == 0, "EOS unchanged vs main"
+        assert ids.count(_BOS_ID) == 1, "BOS de-duplicated"
+        live = build_full_sequence_labels(_MESSAGES, tok, max_length=2048)["input_ids"]
+        assert live.count(_EOS_ID) == 1, "live trains on an EOS the cache does not (#791)"
+
+    def test_pretrain_cache_is_byte_identical_to_main(self, tmp_path, monkeypatch):
+        """Pretrain rows never went through a template, so #788 must leave them
+        exactly as ``main``: ``add_special_tokens=True`` and no EOS re-append.
+        Kills the two surviving mutations (add_special_tokens=False on pretrain,
+        and the EOS re-append applied to pretrain)."""
+        tok = _tokenizer(_BOS_TEMPLATE, post_processor="bos_eos")
+        raw = "You are terse ."
+        ids = self._run_preprocess(
+            tmp_path, monkeypatch, tok, task="pretrain", rows=[{"text": raw}]
+        )
+        assert ids == tok(raw, add_special_tokens=True)["input_ids"]
 
 
 class TestPreprocessCacheKey:

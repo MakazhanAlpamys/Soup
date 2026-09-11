@@ -350,17 +350,41 @@ def build_full_sequence_labels(
             "text (train_on_responses_only=false) path"
         )
     full_ids = _tokenize_only(tokenizer, messages)
-    # #785: the BOS fix must not cost the training EOS. The pre-#785 path let TRL
-    # tokenize the rendered text with the tokenizer's defaults, so a tokenizer
-    # whose post-processor appends EOS gave every row a trailing stop token even
-    # when the template rendered none. add_special_tokens=False (above) removes
-    # the doubled BOS but also that EOS, which teaches run-on generation
-    # (the failure `soup data doctor`'s eos_in_labels check exists to catch). Put
-    # the stop token back when the tokenizer would have appended one and the
-    # template did not already end the sequence with it.
-    full_ids = reappend_eos_if_dropped(tokenizer, full_ids)
+    # #785/#788: the BOS fix must not cost the training EOS. On ``main`` the
+    # legacy text rows reached TRL as ``{"text": ...}``, and TRL 0.29.1's
+    # language-modeling path appends ``eos_token`` as a STRING to every row that
+    # does not already end with it (``sft_trainer.py`` ``add_eos``), before
+    # tokenizing -- independent of the tokenizer's post-processor. Pre-tokenising
+    # here skips that TRL step, so reproduce its rule in token space: append the
+    # EOS id when the sequence does not already end on it. Probing the
+    # post-processor instead (an earlier #788 attempt) under-appended for
+    # BOS-only and Qwen-shaped tokenizers, dropping the stop token ``main``
+    # trained on and teaching run-on generation (the failure `soup data doctor`'s
+    # eos_in_labels check exists to catch).
+    full_ids = append_training_eos(tokenizer, full_ids)
     labels = list(full_ids)
     return _truncate(full_ids, labels, max_length)
+
+
+def append_training_eos(tokenizer: Any, input_ids: list[int]) -> list[int]:
+    """Append the EOS the SFT language-modeling path trains on (TRL's rule).
+
+    Reproduces TRL 0.29.1's ``add_eos`` (``sft_trainer.py``): the trained text row
+    ends in ``eos_token`` unless it already does, regardless of whether the
+    tokenizer's post-processor would append one. #785 pre-tokenises the rendered
+    template so TRL never runs ``add_eos``; this puts the stop token back in token
+    space so the pre-tokenised row trains on the same EOS ``main`` did.
+
+    Used by the live-training path (:func:`build_full_sequence_labels`). The
+    ``soup data preprocess`` cache path deliberately does NOT use this -- its EOS
+    behaviour is pinned to ``main`` (post-processor only) via
+    :func:`reappend_eos_if_dropped`, and the resulting cache-vs-live mismatch is
+    tracked separately in #791.
+    """
+    eos_id = _resolve_eos_token_id(tokenizer)
+    if eos_id is not None and (not input_ids or input_ids[-1] != eos_id):
+        return input_ids + [eos_id]
+    return input_ids
 
 
 def reappend_eos_if_dropped(tokenizer: Any, input_ids: list[int]) -> list[int]:
@@ -369,12 +393,15 @@ def reappend_eos_if_dropped(tokenizer: Any, input_ids: list[int]) -> list[int]:
     The #785 BOS fix tokenises the rendered chat template with
     ``add_special_tokens=False`` so the template is the single source of special
     tokens. That also drops the trailing EOS a tokenizer's post-processor would
-    otherwise append, teaching run-on generation. Re-append it when the tokenizer
-    would have added one and the sequence does not already end on it.
+    otherwise append. Re-append exactly that (and only that) so the
+    ``soup data preprocess`` cache keeps the EOS count it had on ``main``, where
+    the path tokenised with ``add_special_tokens=True``.
 
-    Shared by the live-training path (:func:`build_full_sequence_labels`) and the
-    ``soup data preprocess`` cache path (``commands/data.py``) so the two cannot
-    silently diverge on EOS handling (#785/#788).
+    NOTE: this is the post-processor rule, NOT TRL's ``add_eos`` string rule that
+    the live path uses (:func:`append_training_eos`). The two differ for
+    tokenizers whose post-processor appends no EOS (Qwen-shaped): the live path
+    trains on one, the preprocess cache on none. That mismatch is pre-existing on
+    ``main`` and is tracked in #791 -- it is deliberately not resolved here.
     """
     appended_eos = _tokenizer_appends_eos(tokenizer)
     if appended_eos is not None and (not input_ids or input_ids[-1] != appended_eos):
