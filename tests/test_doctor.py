@@ -129,7 +129,7 @@ def test_doctor_missing_dep():
         ],
     ):
         result = runner.invoke(app, ["doctor"])
-        assert result.exit_code != 0
+        assert result.exit_code == 1
         assert "MISSING" in result.output
 
 
@@ -176,8 +176,9 @@ def test_doctor_missing_train_extra_suggests_extra(monkeypatch):
 
 def test_doctor_suggestion_is_colour_safe(monkeypatch):
     """The [train] suggestion survives Rich highlighting (#828 review)."""
-    monkeypatch.setenv("FORCE_COLOR", "1")
-    monkeypatch.setenv("TERM", "xterm-256color")
+    from rich.console import Console
+
+    monkeypatch.setattr("soup_cli.commands.doctor.console", Console(force_terminal=True))
     for name in (
         "torch",
         "transformers",
@@ -191,6 +192,61 @@ def test_doctor_suggestion_is_colour_safe(monkeypatch):
     result = runner.invoke(app, ["doctor"])
     assert result.exit_code == 0
     assert 'pip install "soup-cli[train]"' in _strip_ansi(result.output)
+
+
+def test_doctor_fix_all_line_keeps_extra_marker(monkeypatch):
+    """The Fix all line must not drop [train] to Rich markup (#828 review)."""
+    for name in (
+        "torch",
+        "transformers",
+        "peft",
+        "trl",
+        "datasets",
+        "bitsandbytes",
+        "accelerate",
+    ):
+        monkeypatch.setitem(sys.modules, name, None)
+    result = runner.invoke(app, ["doctor"])
+    assert result.exit_code == 0
+    out = _strip_ansi(result.output)
+    assert "Fix all:" in out
+    after = out.split("Fix all:", 1)[1]
+    assert 'pip install "soup-cli[train]"' in after
+
+
+def test_doctor_table_keeps_extra_marker(monkeypatch):
+    """The Required column must render [train] literally, not blank (#828 review)."""
+    for name in (
+        "torch",
+        "transformers",
+        "peft",
+        "trl",
+        "datasets",
+        "bitsandbytes",
+        "accelerate",
+    ):
+        monkeypatch.setitem(sys.modules, name, None)
+    result = runner.invoke(app, ["doctor"])
+    out = _strip_ansi(result.output)
+    torch_rows = [line for line in out.splitlines() if "torch" in line]
+    assert torch_rows, "expected a table row for torch"
+    assert any("[train]" in line for line in torch_rows)
+
+
+def test_doctor_incompatible_train_member_is_reported(monkeypatch):
+    """A [train] member past its breaking-major ceiling must add an issue (#828 review)."""
+    monkeypatch.setattr(
+        "soup_cli.commands.doctor.EXTRA_GROUPS",
+        [("train", [("transformers", "transformers", "5.16.1")])],
+    )
+    monkeypatch.setattr(
+        "soup_cli.commands.doctor._installed_version_str", lambda import_name, pkg_name: "6.1.0"
+    )
+    result = runner.invoke(app, ["doctor"])
+    out = _strip_ansi(result.output)
+    assert "INCOMPATIBLE" in out
+    assert 'Downgrade transformers: pip install "transformers>=5.16.1,<6.0.0"' in out
+    assert "All checks passed!" not in out
 
 
 def test_doctor_out_of_range_train_member_is_reported(monkeypatch):
@@ -241,7 +297,7 @@ def test_installed_extras_lists_train_and_mcp(monkeypatch):
     class _FakeMeta:
         def get_all(self, key):
             if key == "Provides-Extra":
-                return ["train", "mcp", "serve"]
+                return ["train", "mcp", "serve", "data"]
             return None
 
     requires = [
@@ -249,8 +305,9 @@ def test_installed_extras_lists_train_and_mcp(monkeypatch):
         "transformers>=5.16.1; extra == 'train'",
         "mcp>=1.10.0; extra == 'mcp'",
         "fastapi>=0.104.0; extra == 'serve'",
+        "scikit-learn>=1.3.0; extra == 'data'",
     ]
-    present = {"torch", "transformers", "mcp", "fastapi"}
+    present = {"torch", "transformers", "mcp", "fastapi", "scikit-learn"}
 
     def _distribution(name):
         if name not in present:
@@ -266,6 +323,7 @@ def test_installed_extras_lists_train_and_mcp(monkeypatch):
     extras = _installed_extras()
     assert "train" in extras
     assert "mcp" in extras
+    assert "data" in extras
 
 
 def test_doctor_nccl_no_gpu():

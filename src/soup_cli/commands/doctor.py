@@ -8,6 +8,7 @@ import sys
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
@@ -209,7 +210,11 @@ def doctor(
             version_str = _installed_version_str(import_name, pkg_name)
             if version_str is None:
                 table.add_row(
-                    pkg_name, f"[{extra_name}]", "-", f">={min_ver}", "[dim]not installed[/]"
+                    pkg_name,
+                    escape(f"[{extra_name}]"),
+                    "-",
+                    f">={min_ver}",
+                    "[dim]not installed[/]",
                 )
                 group_missing = True
                 continue
@@ -226,7 +231,7 @@ def doctor(
                 status = f"[yellow]outdated (need >={min_ver})[/]"
                 issues.append(f'Upgrade {pkg_name}: pip install "{pkg_name}>={min_ver}"')
                 fix_parts.append(f'"{pkg_name}>={min_ver}"')
-            table.add_row(pkg_name, f"[{extra_name}]", version_str, f">={min_ver}", status)
+            table.add_row(pkg_name, escape(f"[{extra_name}]"), version_str, f">={min_ver}", status)
         if group_missing:
             if extra_name == "train":
                 driver = _nvidia_smi_cuda_version()
@@ -237,9 +242,9 @@ def doctor(
                     # CUDA wheel index in its own step; the ``[train]`` extra is
                     # then resolved against PyPI with torch already satisfied.
                     issues.append(
-                        "Training stack not installed: "
-                        f'pip install torch --index-url {url}, then '
-                        'pip install "soup-cli[train]"'
+                        "Training stack not installed:\n"
+                        f"  pip install torch --index-url {url}\n"
+                        '  pip install "soup-cli[train]"'
                     )
                     fix_pre.append(f"pip install torch --index-url {url}")
                 else:
@@ -266,18 +271,16 @@ def doctor(
         # would otherwise swallow as markup tags — escape so the suggestion
         # renders literally (cmd.exe-safe double quotes included). highlight
         # is off so Rich does not colour-wrap the quoted specs mid-command.
-        from rich.markup import escape as _escape
-
         console.print(f"\n[yellow]Found {len(issues)} issue(s):[/]")
         for issue in issues:
-            console.print(f"  [red]>[/] {_escape(issue)}", highlight=False)
+            console.print(f"  [red]>[/] {escape(issue)}", highlight=False)
         if fix_pre or fix_parts:
             console.print("\n[dim]Fix all:[/]")
             for step in fix_pre:
-                console.print(f"[dim]  {_escape(step)}[/]", highlight=False)
+                console.print(f"[dim]  {escape(step)}[/]", highlight=False)
             if fix_parts:
                 console.print(
-                    f"[dim]  pip install {' '.join(fix_parts)}[/]", highlight=False
+                    f"[dim]  pip install {escape(' '.join(fix_parts))}[/]", highlight=False
                 )
     else:
         console.print("\n[bold green]All checks passed![/] Your environment is ready.")
