@@ -1251,11 +1251,14 @@ class TestStatsHistogramWindows:
         )
 
         try:
+            from rich.console import Console
+
             from soup_cli.utils.plotext_compat import render_histogram
 
             render_histogram(
                 plt,
                 [10, 20, 30, 40, 50],
+                console=Console(file=sys.stdout),
                 bins=3,
                 title="Test",
                 xlabel="Value",

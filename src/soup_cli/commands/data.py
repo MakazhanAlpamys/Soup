@@ -625,11 +625,11 @@ def stats(
                 render_histogram(
                     plt,
                     lengths,
+                    console=console,
                     bins=30,
                     title="Text Length Distribution (chars)",
                     xlabel="Length",
                     ylabel="Count",
-                    theme="dark",
                 )
             finally:
                 sys.stdout = original_stdout

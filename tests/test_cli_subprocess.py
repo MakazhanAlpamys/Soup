@@ -309,10 +309,55 @@ class TestDataCommands:
         data_file.write_text(
             "\n".join(json.dumps(r) for r in rows), encoding="utf-8"
         )
-        result = run_soup("data", "stats", str(data_file))
+        result = run_soup(
+            "data",
+            "stats",
+            str(data_file),
+            env={"NO_COLOR": "1"},
+        )
         assert result.returncode == 0, (
             f"data stats failed (rc={result.returncode}):\n{result.stderr}"
         )
+        assert "Text Length Distribution" in result.stdout
+        assert "\x1b" not in result.stdout
+
+
+class TestRunCommands:
+    def test_runs_replay_no_color_has_no_escape_bytes(self, tmp_path, monkeypatch):
+        db_path = tmp_path / "runs.db"
+        monkeypatch.setenv("SOUP_DB_PATH", str(db_path))
+
+        from soup_cli.experiment.tracker import ExperimentTracker
+
+        tracker = ExperimentTracker()
+        run_id = tracker.start_run(
+            config_dict={"base": "x", "task": "sft"},
+            device="cpu",
+            device_name="cpu",
+            gpu_info={},
+        )
+        for step in range(3):
+            tracker.log_metrics(run_id, step=step, loss=2.0 - step * 0.25)
+        tracker.finish_run(
+            run_id=run_id,
+            initial_loss=2.0,
+            final_loss=1.5,
+            total_steps=3,
+            duration_secs=1.0,
+            output_dir=str(tmp_path),
+        )
+        tracker.close()
+
+        result = run_soup(
+            "runs",
+            "replay",
+            run_id,
+            env={"NO_COLOR": "1", "SOUP_DB_PATH": str(db_path)},
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert "Training Loss" in result.stdout
+        assert "\x1b" not in result.stdout
 
 
 # ---------------------------------------------------------------------------

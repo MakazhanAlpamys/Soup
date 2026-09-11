@@ -168,8 +168,14 @@ class TestCli:
         )
         tracker.close()
         runner = CliRunner()
-        result = runner.invoke(app, ["runs", "replay", run_id, "--no-plot"])
+        result = runner.invoke(
+            app,
+            ["runs", "replay", run_id],
+            env={"NO_COLOR": "1"},
+        )
         assert result.exit_code == 0, (result.output, repr(result.exception))
         assert run_id in result.output
         # Summary should reference initial / final loss
         assert "2.0" in result.output or "2.00" in result.output
+        assert "Training Loss" in result.output
+        assert "\x1b" not in result.output

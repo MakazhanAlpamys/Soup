@@ -221,6 +221,7 @@ def test_stats_command(sample_alpaca_file):
     assert result.exit_code == 0
     assert "p50" in result.output
     assert "Tokens" in result.output
+    assert "Text Length Distribution" in result.output
 
 
 def test_stats_missing_file():

@@ -561,11 +561,11 @@ def _plot_loss_curve(metrics: list[dict]) -> None:
         plt,
         steps,
         losses,
+        console=console,
         label="loss",
         title="Training Loss",
         xlabel="Step",
         ylabel="Loss",
-        theme="dark",
     )
 
 

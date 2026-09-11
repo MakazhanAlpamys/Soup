@@ -1,8 +1,10 @@
 """Plotext 5.x / 6.x compatibility coverage."""
 
 from importlib.metadata import version as distribution_version
+from io import StringIO
 
 from packaging.version import Version
+from rich.console import Console
 
 from soup_cli.utils.plotext_compat import render_histogram, render_line
 
@@ -14,6 +16,14 @@ class _Recorder:
     def _record(self, name: str, *args, **kwargs):
         self.calls.append((name, args, kwargs))
         return self
+
+
+class _Console:
+    def __init__(self) -> None:
+        self.output: list[str] = []
+
+    def print(self, value) -> None:
+        self.output.append(str(value))
 
 
 class _Plotext5(_Recorder):
@@ -38,8 +48,9 @@ class _Plotext5(_Recorder):
     def theme(self, *args, **kwargs):
         return self._record("theme", *args, **kwargs)
 
-    def show(self):
-        return self._record("show")
+    def build(self):
+        self._record("build")
+        return "\x1b[31mplot\x1b[0m"
 
 
 class _Signal(_Recorder):
@@ -74,8 +85,9 @@ class _Figure6(_Recorder):
     def theme(self, *args, **kwargs):
         return self._record("theme", *args, **kwargs)
 
-    def show(self):
-        return self._record("show")
+    def build(self):
+        self._record("build")
+        return "\x1b[31mplot\x1b[0m"
 
 
 class _Plotext6:
@@ -85,9 +97,11 @@ class _Plotext6:
 
 def test_plotext5_module_api_remains_supported() -> None:
     plotext = _Plotext5()
+    console = _Console()
     render_histogram(
         plotext,
         [1, 2],
+        console=console,
         bins=2,
         title="Histogram",
         xlabel="X",
@@ -98,6 +112,7 @@ def test_plotext5_module_api_remains_supported() -> None:
         plotext,
         [1, 2],
         [0.5, 0.25],
+        console=console,
         label="loss",
         title="Loss",
         xlabel="Step",
@@ -113,22 +128,25 @@ def test_plotext5_module_api_remains_supported() -> None:
         "xlabel",
         "ylabel",
         "theme",
-        "show",
+        "build",
         "clf",
         "plot",
         "title",
         "xlabel",
         "ylabel",
         "theme",
-        "show",
+        "build",
     ]
+    assert console.output == ["plot", "plot"]
 
 
 def test_plotext6_figure_api_is_used() -> None:
     plotext = _Plotext6()
+    console = _Console()
     render_histogram(
         plotext,
         [1, 2],
+        console=console,
         bins=2,
         title="Histogram",
         xlabel="X",
@@ -139,6 +157,7 @@ def test_plotext6_figure_api_is_used() -> None:
         plotext,
         [1, 2],
         [0.5, 0.25],
+        console=console,
         label="loss",
         title="Loss",
         xlabel="Step",
@@ -155,7 +174,7 @@ def test_plotext6_figure_api_is_used() -> None:
         "label",
         "label",
         "theme",
-        "show",
+        "build",
         "clear",
         "signal",
         "draw",
@@ -163,22 +182,24 @@ def test_plotext6_figure_api_is_used() -> None:
         "label",
         "label",
         "theme",
-        "show",
+        "build",
     ]
+    assert console.output == ["plot", "plot"]
 
 
-def test_installed_plotext_runtime_renders_histogram_and_line(monkeypatch) -> None:
+def test_installed_plotext_runtime_renders_histogram_and_line() -> None:
     """Exercise the installed package, not only the two contract doubles."""
     import plotext
 
     major = Version(distribution_version("plotext")).major
     assert major in {5, 6}
     runtime = plotext.figure if major == 6 else plotext
-    assert callable(runtime.show)
-    monkeypatch.setattr(runtime, "show", lambda: None)
+    assert callable(runtime.build)
+    console = _Console()
     render_histogram(
         plotext,
         [1, 2, 3],
+        console=console,
         bins=2,
         title="Histogram",
         xlabel="X",
@@ -189,6 +210,7 @@ def test_installed_plotext_runtime_renders_histogram_and_line(monkeypatch) -> No
         plotext,
         [1, 2, 3],
         [0.5, 0.25, 0.125],
+        console=console,
         label="loss",
         title="Loss",
         xlabel="Step",
@@ -197,3 +219,24 @@ def test_installed_plotext_runtime_renders_histogram_and_line(monkeypatch) -> No
     )
     built = runtime.build()
     assert "Loss" in str(built)
+    assert "Histogram" in console.output[0]
+    assert "Loss" in console.output[1]
+
+
+def test_rich_console_controls_plot_color(monkeypatch) -> None:
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    plotext = _Plotext5()
+    terminal_output = StringIO()
+    terminal = Console(file=terminal_output, force_terminal=True, color_system="standard")
+
+    render_histogram(
+        plotext,
+        [1, 2],
+        console=terminal,
+        bins=2,
+        title="Histogram",
+        xlabel="X",
+        ylabel="Y",
+    )
+
+    assert "\x1b[" in terminal_output.getvalue()
