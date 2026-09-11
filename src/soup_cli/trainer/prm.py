@@ -24,7 +24,12 @@ from typing import Any, Optional
 from rich.console import Console
 
 from soup_cli.config.schema import SoupConfig
-from soup_cli.utils.gpu import bf16_fp16_flags
+from soup_cli.utils.gpu import (
+    bf16_fp16_flags,
+    estimate_batch_size,
+    get_gpu_info,
+    model_size_from_name,
+)
 from soup_cli.utils.mixed_precision import align_trainable_dtype_for_fp16
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 
@@ -313,19 +318,41 @@ class PRMTrainerWrapper:
                 self._dataset["val"], self.tokenizer, cfg.data.max_length
             )
 
-        # v0.53.11 review fix (python-review HIGH) — bool is subclass of int,
-        # so explicit bool reject before isinstance(int).
-        if isinstance(tcfg.batch_size, bool) or not isinstance(tcfg.batch_size, int):
-            bs = 1
-        else:
-            bs = tcfg.batch_size
+        batch_size = tcfg.batch_size
+        if batch_size == "auto":
+            gpu_info = get_gpu_info()
+            batch_size = estimate_batch_size(
+                model_params_b=model_size_from_name(cfg.base),
+                seq_length=cfg.data.max_length,
+                gpu_memory_bytes=gpu_info["memory_total_bytes"],
+                quantization=tcfg.quantization,
+                lora_r=tcfg.lora.r,
+            )
+            console.print(f"[green]Auto batch size (PRM):[/] {batch_size}")
+        bs = int(batch_size)
+        import math
+
+        total_steps = math.ceil(
+            len(train_rows) / bs / tcfg.gradient_accumulation_steps
+        ) * tcfg.epochs
+        warmup_steps = int(total_steps * tcfg.warmup_ratio)
         use_bf16, use_fp16 = bf16_fp16_flags(self.device, allow_mps_bf16=True)
+        from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
+
         args = TrainingArguments(
             output_dir=str(output_dir),
             num_train_epochs=tcfg.epochs,
             per_device_train_batch_size=bs,
             gradient_accumulation_steps=tcfg.gradient_accumulation_steps,
             learning_rate=tcfg.lr,
+            warmup_steps=warmup_steps,
+            gradient_checkpointing=should_enable_hf_gradient_checkpointing(
+                tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
+            ),
+            weight_decay=tcfg.weight_decay,
+            max_grad_norm=tcfg.max_grad_norm,
+            optim=tcfg.optimizer,
+            lr_scheduler_type=tcfg.scheduler,
             logging_steps=tcfg.logging_steps,
             save_steps=tcfg.save_steps,
             save_total_limit=3,
@@ -335,6 +362,7 @@ class PRMTrainerWrapper:
             remove_unused_columns=False,
             deepspeed=self.deepspeed_config,
             **training_seed_kwargs(tcfg),
+            **(self.fsdp_config or {}),
         )
 
         prm_trainer_cls = make_prm_trainer_class(Trainer)
