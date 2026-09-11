@@ -68,6 +68,13 @@ def _config(**overrides):
         "weight_decay": 0.01,
         "max_grad_norm": 1.0,
     }
+    # #763 review: the command now loads through the schema, and
+    # `training.lora` is `Field(default_factory=LoraConfig)` -- so it is always
+    # materialised, with r=64, even for a config that never mentions LoRA.
+    # This fixture used to rely on the key being ABSENT; stating it explicitly
+    # is both what a real config does and what makes "a clean run" mean
+    # anything. The record says rank 8 / scale 2.0 -> alpha 16.
+    training.setdefault("lora", {"r": 8, "alpha": 16})
     data = {"train": "./d.jsonl", "format": "chatml", "train_on_responses_only": True}
     training.update(overrides.pop("training", {}))
     data.update(overrides.pop("data", {}))
@@ -234,6 +241,14 @@ class TestLoraShapeIsCheckedOnBothRecordKinds:
 
 
 class TestTheCommand:
+    """#763 review: `audit` now enforces `enforce_under_cwd_and_no_symlink` on
+    both paths, matching `adapters scan` (:779) and `merge` (:1484), so these
+    invoke the CLI from inside tmp_path rather than pointing at it."""
+
+    @pytest.fixture(autouse=True)
+    def _run_from_tmp(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+
     def _write(self, tmp_path, record, config):
         import yaml
 
@@ -248,7 +263,7 @@ class TestTheCommand:
         from soup_cli.commands.adapters import app
 
         cfg = self._write(tmp_path, _mlx_record(), _config())
-        res = CliRunner().invoke(app, ["audit", str(tmp_path), "--config", str(cfg)])
+        res = CliRunner().invoke(app, ["audit", ".", "--config", cfg.name])
         assert res.exit_code == 0, res.output
 
     def test_a_divergent_run_exits_non_zero(self, tmp_path):
@@ -258,7 +273,7 @@ class TestTheCommand:
         from soup_cli.commands.adapters import app
 
         cfg = self._write(tmp_path, _mlx_record(optimizer="SGD"), _config())
-        res = CliRunner().invoke(app, ["audit", str(tmp_path), "--config", str(cfg)])
+        res = CliRunner().invoke(app, ["audit", ".", "--config", cfg.name])
         assert res.exit_code != 0
         assert "optimizer" in res.output
 
@@ -268,9 +283,7 @@ class TestTheCommand:
         from soup_cli.commands.adapters import app
 
         cfg = self._write(tmp_path, _mlx_record(optimizer="SGD"), _config())
-        res = CliRunner().invoke(
-            app, ["audit", str(tmp_path), "--config", str(cfg), "--json"]
-        )
+        res = CliRunner().invoke(app, ["audit", ".", "--config", cfg.name, "--json"])
         payload = json.loads(res.output)
         assert payload["diverged_count"] == 1
         assert any(r["setting"] == "optimizer" for r in payload["rows"])
@@ -283,7 +296,7 @@ class TestTheCommand:
 
         cfg = tmp_path / "soup.yaml"
         cfg.write_text(yaml.safe_dump(_config()))
-        res = CliRunner().invoke(app, ["audit", str(tmp_path), "--config", str(cfg)])
+        res = CliRunner().invoke(app, ["audit", ".", "--config", cfg.name])
         assert res.exit_code != 0
         assert "adapter_config.json" in res.output
 
@@ -343,3 +356,143 @@ class TestLoraAlphaComesFromWhicheverShapeTheWriterChose:
 
         row = next(r for r in audit_adapter(cfg, record).rows if r.setting == "lora.alpha")
         assert row.status == "unknown"
+
+
+# --------------------------------------------------------------------------
+# #763 review — the audit must not carry its own idea of a default
+# --------------------------------------------------------------------------
+
+class TestAuditDefaultsMatchTheSchema:
+    """Three audit fallbacks disagreed with ``config/schema.py``.
+
+    A config that simply omitted `warmup_ratio` was reported ``ok`` against
+    0.0 when the schema asks for 0.03 — a false clean bill on the motivating
+    example of #762 — and `weight_decay` / `gradient_accumulation_steps`
+    reported DIVERGED on a conformant run, which is worse than noise once this
+    is wired into CI.
+
+    ``adapter_audit`` is deliberately stdlib-only, so it cannot import the
+    schema to find out. This pins the correspondence from the outside instead,
+    mechanically, so the next default that moves fails here rather than in a
+    user's audit.
+    """
+
+    def _audit_fallbacks(self):
+        """Every ``mapping.get("name", default)`` literal in the audit module."""
+        import ast
+        import pathlib
+
+        source = pathlib.Path(
+            __file__
+        ).resolve().parents[1] / "src/soup_cli/utils/adapter_audit.py"
+        tree = ast.parse(source.read_text(encoding="utf-8"))
+        found = {}
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "get"
+                and len(node.args) == 2
+                and isinstance(node.args[0], ast.Constant)
+            ):
+                try:
+                    found[node.args[0].value] = ast.literal_eval(node.args[1])
+                except ValueError:
+                    continue
+        return found
+
+    def test_every_fallback_matches_the_schema_default(self):
+        from soup_cli.config.schema import DataConfig, TrainingConfig
+
+        mismatches = []
+        checked = 0
+        for name, fallback in self._audit_fallbacks().items():
+            field = TrainingConfig.model_fields.get(name) or DataConfig.model_fields.get(
+                name
+            )
+            if field is None:
+                continue  # a record key, not a config field
+            checked += 1
+            if fallback != field.default:
+                mismatches.append(
+                    f"adapter_audit falls back to {name}={fallback!r}, "
+                    f"schema default is {field.default!r}"
+                )
+        assert checked >= 5, f"only {checked} fallbacks resolved; the walk is broken"
+        assert mismatches == [], "\n".join(mismatches)
+
+    def test_the_check_can_actually_fail(self):
+        """It finds zero mismatches today, so prove it still fires."""
+        from soup_cli.config.schema import TrainingConfig
+
+        field = TrainingConfig.model_fields["warmup_ratio"]
+        assert field.default != 0.0, (
+            "this check is vacuous if the schema default is the old audit literal"
+        )
+
+    def test_an_omitted_setting_is_audited_against_the_schema_value(self, tmp_path):
+        """End to end: the shape that produced the false clean bill."""
+        from soup_cli.config.loader import load_config_from_string
+
+        train = tmp_path / "t.jsonl"
+        train.write_text('{"instruction": "a", "output": "b"}\n', encoding="utf-8")
+        config = load_config_from_string(
+            f"base: m\ntask: sft\ndata: {{train: {train}, format: alpaca}}\n"
+            f"training: {{epochs: 1}}\noutput: {tmp_path / 'o'}\n"
+        )
+        asked = config.model_dump()["training"]
+        assert asked["warmup_ratio"] == 0.03
+        assert asked["weight_decay"] == 0.01
+        assert asked["gradient_accumulation_steps"] == 4
+
+
+class TestSchedulerIsComparedCaseInsensitively:
+    """#763 review: `mlx_optim` stores `str(scheduler).strip().lower()`.
+
+    `scheduler: Cosine` in a config would report DIVERGED against a record
+    saying `cosine`. `_audit_optimizer` already normalised; `_cmp` did not.
+    """
+
+    @pytest.mark.parametrize("written", ["cosine", "Cosine", "COSINE", "  cosine  "])
+    def test_case_and_padding_do_not_diverge(self, written):
+        from soup_cli.utils.adapter_audit import audit_adapter
+
+        cfg = _config(training={"scheduler": written})
+        row = next(
+            r for r in audit_adapter(cfg, _mlx_record()).rows if r.setting == "scheduler"
+        )
+        assert row.status == "ok", f"{written!r} reported {row.status}"
+
+    def test_a_genuinely_different_scheduler_still_diverges(self):
+        """Control — normalising must not swallow a real mismatch."""
+        from soup_cli.utils.adapter_audit import audit_adapter
+
+        cfg = _config(training={"scheduler": "linear"})
+        row = next(
+            r for r in audit_adapter(cfg, _mlx_record()).rows if r.setting == "scheduler"
+        )
+        assert row.status == "diverged"
+
+    def test_the_displayed_value_is_what_the_user_wrote(self):
+        """Normalisation is for the comparison, not for the report."""
+        from soup_cli.utils.adapter_audit import audit_adapter
+
+        cfg = _config(training={"scheduler": "Cosine"})
+        row = next(
+            r for r in audit_adapter(cfg, _mlx_record()).rows if r.setting == "scheduler"
+        )
+        assert row.asked == "Cosine"
+
+
+class TestTheAliasTableMatchesTheRealOne:
+    """#763 review nit: `_MLX_OPTIMIZER_ALIASES` is a hand-copy of
+    `mlx_optim._OPTIMIZER_MAP`, identical today with nothing pinning it.
+    `mlx_optim` sets the precedent with its own weight-decay table test."""
+
+    def test_every_alias_matches_mlx_optim(self):
+        from soup_cli.trainer.mlx_optim import _OPTIMIZER_MAP
+        from soup_cli.utils.adapter_audit import _MLX_OPTIMIZER_ALIASES
+
+        assert _MLX_OPTIMIZER_ALIASES == _OPTIMIZER_MAP, (
+            "the audit's copy has drifted from mlx_optim's table"
+        )

@@ -110,10 +110,21 @@ def classify_record(record: Dict[str, Any]) -> str:
     return "unknown"
 
 
-def _cmp(setting: str, asked: Any, ran: Any, *, detail: str = "") -> AuditRow:
+def _cmp(
+    setting: str,
+    asked: Any,
+    ran: Any,
+    *,
+    detail: str = "",
+    normalise: "Optional[Any]" = None,
+) -> AuditRow:
+    """Compare one setting. ``normalise`` is applied to both sides before the
+    equality test, never to what is displayed -- the user should see the value
+    they wrote, not a lowered copy of it."""
     if ran is None:
         return AuditRow(setting, asked, None, UNKNOWN, detail or "not in the record")
-    status = OK if asked == ran else DIVERGED
+    left, right = (normalise(asked), normalise(ran)) if normalise else (asked, ran)
+    status = OK if left == right else DIVERGED
     return AuditRow(setting, asked, ran, status, detail if status == DIVERGED else "")
 
 
@@ -139,7 +150,7 @@ def _audit_warmup(training: Dict[str, Any], record: Dict[str, Any]) -> AuditRow:
     #686 warns at the time; if nobody was watching the terminal, the record is
     the only surviving evidence.
     """
-    asked = training.get("warmup_ratio", 0.0)
+    asked = training.get("warmup_ratio", 0.03)
     ran = record.get("warmup_updates")
     total = record.get("total_updates")
     if ran is None or total is None:
@@ -205,10 +216,22 @@ def audit_adapter(config: Dict[str, Any], record: Dict[str, Any]) -> AuditResult
     rows: List[AuditRow] = []
 
     rows.append(_audit_optimizer(training, record))
-    rows.append(_cmp("scheduler", training.get("scheduler", "cosine"), record.get("scheduler")))
+    # mlx_optim stores `str(scheduler).strip().lower()`, so `scheduler: Cosine`
+    # in a config would report DIVERGED against a record saying `cosine`.
+    # _audit_optimizer already normalises; this did not.
+    _asked_sched = training.get("scheduler", "cosine")
+    _ran_sched = record.get("scheduler")
+    rows.append(
+        _cmp(
+            "scheduler",
+            _asked_sched,
+            _ran_sched,
+            normalise=lambda v: str(v).strip().lower(),
+        )
+    )
     rows.append(_audit_warmup(training, record))
     rows.append(
-        _cmp("weight_decay", training.get("weight_decay", 0.0), record.get("weight_decay"))
+        _cmp("weight_decay", training.get("weight_decay", 0.01), record.get("weight_decay"))
     )
     rows.append(
         _cmp("max_grad_norm", training.get("max_grad_norm", 1.0), record.get("max_grad_norm"))
@@ -216,7 +239,7 @@ def audit_adapter(config: Dict[str, Any], record: Dict[str, Any]) -> AuditResult
     rows.append(
         _cmp(
             "gradient_accumulation_steps",
-            training.get("gradient_accumulation_steps", 1),
+            training.get("gradient_accumulation_steps", 4),
             record.get("grad_accumulation_steps"),
         )
     )
