@@ -142,12 +142,17 @@ class TestIssue636TorchFloor:
         # dist-info records the install's history, so an editable checkout
         # whose pyproject moved on reports a floor nobody declared, and an
         # uninstalled source tree reports "?" which _version_ok treats as OK.
-        from soup_cli.commands.doctor import DEPS
+        from soup_cli.commands.doctor import EXTRA_GROUPS
 
-        torch_rows = [row for row in DEPS if row[1] == "torch"]
-        assert len(torch_rows) == 1, "expected exactly one torch row in DEPS"
-        assert torch_rows[0][2] == _declared_torch_floor(), (
-            f"doctor.py checks torch>={torch_rows[0][2]} but pyproject.toml "
+        torch_rows = [
+            (pkg_name, floor)
+            for _, members in EXTRA_GROUPS
+            for _, pkg_name, floor in members
+            if pkg_name == "torch"
+        ]
+        assert len(torch_rows) == 1, "expected exactly one torch row in EXTRA_GROUPS"
+        assert torch_rows[0][1] == _declared_torch_floor(), (
+            f"doctor.py checks torch>={torch_rows[0][1]} but pyproject.toml "
             f"[train] declares torch>={_declared_torch_floor()} — doctor must "
             f"report the declared floor (#636)"
         )

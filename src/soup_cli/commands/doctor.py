@@ -41,11 +41,6 @@ DEPS = [
     ("torchao", "torchao", "0.4.0", False),
     ("sglang", "sglang", "0.2.0", False),
     ("librosa", "librosa", "0.10.0", False),
-    # Compatibility pin for tests/test_issue636_torch_floor.py, which imports
-    # DEPS and expects exactly one torch row carrying the declared floor. The
-    # canonical declaration lives in EXTRA_GROUPS below; doctor() skips this
-    # alias (see _EXTRA_PACKAGE_NAMES) and renders torch once with its group.
-    ("torch", "torch", "2.6.0", False),
 ]
 
 # Extra groups: (extra_name, [(import_name, package_name, min_version), ...])
@@ -67,13 +62,6 @@ EXTRA_GROUPS: list[tuple[str, list[tuple[str, str, str]]]] = [
         ],
     ),
 ]
-
-# Package names owned by an extra group. DEPS may keep a compatibility alias
-# for such a name (the torch pin above); the DEPS loop skips those so each
-# package is rendered exactly once, with its group.
-_EXTRA_PACKAGE_NAMES: frozenset[str] = frozenset(
-    pkg_name for _, members in EXTRA_GROUPS for _, pkg_name, _ in members
-)
 
 # Packages whose declared breaking-major ceiling must be reported as
 # incompatible instead of silently green-lighted by ``soup doctor``.
@@ -142,15 +130,13 @@ def doctor(
     # that are actually missing or out of range land here — never the full
     # required set, and never a bare per-package floor for an extra group.
     fix_parts: list[str] = []
+    fix_pre: list[str] = []
     # A missing or incompatible core dependency turns doctor into a gate:
     # exit non-zero at the end. Advisory issues (optional packages, the
     # [train] group, torchvision skew) never touch the exit code.
     core_broken = False
 
     for import_name, pkg_name, min_ver, required in DEPS:
-        if pkg_name in _EXTRA_PACKAGE_NAMES:
-            # Rendered once below, with its extra group (#828 pin alias).
-            continue
         try:
             mod = __import__(import_name)
             version = getattr(mod, "__version__", getattr(mod, "VERSION", None))
@@ -217,34 +203,45 @@ def doctor(
     # least one missing member contributes exactly one issue pointing at the
     # extra, so the suggestion keeps the declared ceilings and the platform
     # torch index instead of bare per-package floors.
-    train_index_url: str | None = None
     for extra_name, members in EXTRA_GROUPS:
         group_missing = False
         for import_name, pkg_name, min_ver in members:
             version_str = _installed_version_str(import_name, pkg_name)
             if version_str is None:
-                table.add_row(pkg_name, "optional", "-", f">={min_ver}", "[dim]not installed[/]")
+                table.add_row(
+                    pkg_name, f"[{extra_name}]", "-", f">={min_ver}", "[dim]not installed[/]"
+                )
                 group_missing = True
                 continue
             max_excl = _MAX_EXCLUSIVE.get(pkg_name)
             if max_excl and _version_ge(version_str, max_excl):
                 status = f"[red]INCOMPATIBLE (need <{max_excl})[/]"
+                issues.append(
+                    f'Downgrade {pkg_name}: pip install "{pkg_name}>={min_ver},<{max_excl}"'
+                )
+                fix_parts.append(f'"{pkg_name}>={min_ver},<{max_excl}"')
             elif _version_ok(version_str, min_ver):
                 status = "[green]OK[/]"
             else:
                 status = f"[yellow]outdated (need >={min_ver})[/]"
-            table.add_row(pkg_name, "optional", version_str, f">={min_ver}", status)
+                issues.append(f'Upgrade {pkg_name}: pip install "{pkg_name}>={min_ver}"')
+                fix_parts.append(f'"{pkg_name}>={min_ver}"')
+            table.add_row(pkg_name, f"[{extra_name}]", version_str, f">={min_ver}", status)
         if group_missing:
             if extra_name == "train":
                 driver = _nvidia_smi_cuda_version()
                 if driver is not None:
                     tag = _torch_cuda_wheel_tag(driver)
                     url = f"https://download.pytorch.org/whl/{tag}"
+                    # ``--index-url`` replaces PyPI, so torch must come from the
+                    # CUDA wheel index in its own step; the ``[train]`` extra is
+                    # then resolved against PyPI with torch already satisfied.
                     issues.append(
-                        'Training stack not installed: pip install "soup-cli[train]"'
-                        f" --index-url {url}"
+                        "Training stack not installed: "
+                        f'pip install torch --index-url {url}, then '
+                        'pip install "soup-cli[train]"'
                     )
-                    train_index_url = url
+                    fix_pre.append(f"pip install torch --index-url {url}")
                 else:
                     issues.append('Training stack not installed: pip install "soup-cli[train]"')
                 fix_parts.append('"soup-cli[train]"')
@@ -267,17 +264,21 @@ def doctor(
     if issues:
         # Issue/fix text may contain "[train]"-style brackets, which Rich
         # would otherwise swallow as markup tags — escape so the suggestion
-        # renders literally (cmd.exe-safe double quotes included).
+        # renders literally (cmd.exe-safe double quotes included). highlight
+        # is off so Rich does not colour-wrap the quoted specs mid-command.
         from rich.markup import escape as _escape
 
         console.print(f"\n[yellow]Found {len(issues)} issue(s):[/]")
         for issue in issues:
-            console.print(f"  [red]>[/] {_escape(issue)}")
-        if fix_parts:
-            fix_cmd = "pip install " + " ".join(fix_parts)
-            if train_index_url is not None:
-                fix_cmd += f" --index-url {train_index_url}"
-            console.print(f"\n[dim]Fix all: {_escape(fix_cmd)}[/]")
+            console.print(f"  [red]>[/] {_escape(issue)}", highlight=False)
+        if fix_pre or fix_parts:
+            console.print("\n[dim]Fix all:[/]")
+            for step in fix_pre:
+                console.print(f"[dim]  {_escape(step)}[/]", highlight=False)
+            if fix_parts:
+                console.print(
+                    f"[dim]  pip install {' '.join(fix_parts)}[/]", highlight=False
+                )
     else:
         console.print("\n[bold green]All checks passed![/] Your environment is ready.")
 

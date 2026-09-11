@@ -674,7 +674,7 @@ def version(
 
 def _installed_extras() -> list[str]:
     """Extras whose requirements are all importable, derived from dist metadata."""
-    import importlib.util
+    import importlib.metadata
 
     try:
         from importlib.metadata import PackageNotFoundError
@@ -714,13 +714,16 @@ def _installed_extras() -> list[str]:
         if not names:
             continue
         try:
-            if all(
-                importlib.util.find_spec(name.replace("-", "_")) is not None
-                for name in names
-            ):
-                installed.append(extra)
-        except Exception:  # noqa: BLE001 — unguessable import name, skip extra
+            for name in names:
+                # Distribution metadata, not the import name: ``scikit-learn``
+                # / ``sklearn`` and ``pillow`` / ``PIL`` never match find_spec,
+                # which dropped data/vision/dev from ``version --full`` (#828).
+                importlib.metadata.distribution(name)
+        except importlib.metadata.PackageNotFoundError:
             continue
+        except Exception:  # noqa: BLE001 — unreadable metadata, skip extra
+            continue
+        installed.append(extra)
     return sorted(installed)
 
 
