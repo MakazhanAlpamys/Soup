@@ -16,6 +16,7 @@ They are the evidence behind the preprint:
 
 | File | What it gates | Headline |
 |---|---|---|
+| [`gate-674-quest-w4a4-sft.md`](gate-674-quest-w4a4-sft.md) | Experimental QuEST W4A4 SFT feasibility ([#674](https://github.com/MakazhanAlpamys/Soup/issues/674)); not an integration | **Gate failed:** 0.114 nat [0.099, 0.130] above the strongest retained FP on the same panel. One training seed, one model, fake quantization; no parity or efficiency claim. Retains failed directions, costs, source/result hashes and spent-panel history; FINAL256 remains untouched. |
 | [`gate-655-pinned-store-accounting.md`](gate-655-pinned-store-accounting.md) | Pinned host-memory accounting and the `/dev/shm` preflight decision ([#655](https://github.com/MakazhanAlpamys/Soup/issues/655)) | Two pinned 4 GiB allocations on an L4/Linux/CUDA stack each add exactly 4 GiB to `RssShmem` without using `/dev/shm`; the pageable control adds 4 GiB to `RssAnon`. Preserves the original host-counter drift and probe. |
 | [`gate-v0.72.0-layer-streaming.md`](gate-v0.72.0-layer-streaming.md) | The streaming path itself | Bit-exactness vs a resident reference; 3B bf16 trained on a 4 GB card |
 | [`gate-v0.72.2-nf4.md`](gate-v0.72.2-nf4.md) | NF4 quantised streaming | Llama-3.1-8B at 119.6 tok/s in a 3.32 GB peak |
