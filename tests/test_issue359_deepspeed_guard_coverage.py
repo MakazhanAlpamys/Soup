@@ -223,6 +223,107 @@ class TestGuardToleratesTrainersWithoutCreateOptimizer:
         assert len(optimizer.param_groups) == 1  # the empty group is gone
 
 
+class TestGuardForwardsModelParameter:
+    """Issue #784 — the wrapper must accept and forward the ``model`` kwarg.
+
+    ``transformers.Trainer.create_optimizer(self, model=None)`` is called
+    positionally on the ``delay_optimizer_creation`` path:
+    ``self.create_optimizer(model)``.  The guard wrapper must accept that
+    call form and forward ``model`` to the original, not swallow it.
+    """
+
+    def test_positional_model_is_forwarded(self):
+        from soup_cli.utils.deepspeed import attach_empty_param_group_guard
+
+        sentinel = object()
+
+        class _Trainer:
+            def __init__(self):
+                self.received_model = None
+
+            def create_optimizer(self, model=None):
+                self.received_model = model
+                return types.SimpleNamespace(param_groups=[{"params": [1]}])
+
+        trainer = _Trainer()
+        attach_empty_param_group_guard(trainer)
+        trainer.create_optimizer(sentinel)
+        assert trainer.received_model is sentinel
+
+    def test_keyword_model_is_forwarded(self):
+        from soup_cli.utils.deepspeed import attach_empty_param_group_guard
+
+        sentinel = object()
+
+        class _Trainer:
+            def __init__(self):
+                self.received_model = None
+
+            def create_optimizer(self, model=None):
+                self.received_model = model
+                return types.SimpleNamespace(param_groups=[{"params": [1]}])
+
+        trainer = _Trainer()
+        attach_empty_param_group_guard(trainer)
+        trainer.create_optimizer(model=sentinel)
+        assert trainer.received_model is sentinel
+
+    def test_no_model_still_works(self):
+        from soup_cli.utils.deepspeed import attach_empty_param_group_guard
+
+        class _Trainer:
+            def __init__(self):
+                self.received_model = "UNSET"
+
+            def create_optimizer(self, model=None):
+                self.received_model = model
+                return types.SimpleNamespace(param_groups=[{"params": [1]}])
+
+        trainer = _Trainer()
+        attach_empty_param_group_guard(trainer)
+        trainer.create_optimizer()
+        assert trainer.received_model is None
+
+    def test_positional_model_with_pruning(self):
+        """The guard must still prune empty groups when model is supplied."""
+        from soup_cli.utils.deepspeed import attach_empty_param_group_guard
+
+        sentinel = object()
+
+        class _Trainer:
+            def __init__(self):
+                self.received_model = None
+
+            def create_optimizer(self, model=None):
+                self.received_model = model
+                return types.SimpleNamespace(
+                    param_groups=[{"params": [1, 2]}, {"params": []}]
+                )
+
+        trainer = _Trainer()
+        attach_empty_param_group_guard(trainer)
+        optimizer = trainer.create_optimizer(sentinel)
+        assert trainer.received_model is sentinel
+        assert len(optimizer.param_groups) == 1  # empty group pruned
+
+    def test_wrapper_signature_accepts_positional_arg(self):
+        """The wrapper must not regress to a zero-arg signature."""
+        import inspect
+
+        from soup_cli.utils.deepspeed import attach_empty_param_group_guard
+
+        class _Trainer:
+            def create_optimizer(self, model=None):
+                return types.SimpleNamespace(param_groups=[])
+
+        trainer = _Trainer()
+        attach_empty_param_group_guard(trainer)
+        sig = inspect.signature(trainer.create_optimizer)
+        params = list(sig.parameters.values())
+        assert len(params) >= 1, "wrapper must accept at least one parameter (model)"
+        assert params[0].default is None
+
+
 class TestUserSuppliedDeepspeedFileIsResolved:
     """#359 criterion 4 — decided: resolve, but only what is provably invalid.
 
