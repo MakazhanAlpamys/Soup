@@ -27,6 +27,16 @@ def test_version_full_short_flag():
     assert "Python" in result.output
 
 
+def test_version_full_lists_installed_extras_from_metadata():
+    """`version --full` derives extras from installed metadata, so a [dev] test
+    environment (which pulls in [train] and [mcp]) reports both (#828)."""
+    result = runner.invoke(app, ["version", "--full"])
+    assert result.exit_code == 0
+    assert "extras:" in result.output
+    assert "train" in result.output
+    assert "mcp" in result.output
+
+
 def test_help():
     result = runner.invoke(app, ["--help"])
     assert result.exit_code == 0

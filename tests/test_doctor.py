@@ -110,8 +110,12 @@ def test_doctor_checks_optional_deps():
     assert "optional" in result.output
 
 
-def test_doctor_missing_dep():
-    """soup doctor reports missing required dep."""
+def test_doctor_missing_core_dep_exits_nonzero():
+    """A missing *core* dependency is blocking, so doctor exits non-zero (#828).
+
+    ``nonexistent-pkg`` is absent from ``_PACKAGE_EXTRA``, so it is treated as a
+    core dependency (not an extra) and its absence fails the gate.
+    """
     with patch(
         "soup_cli.commands.doctor.DEPS",
         [
@@ -119,8 +123,36 @@ def test_doctor_missing_dep():
         ],
     ):
         result = runner.invoke(app, ["doctor"])
-        assert result.exit_code == 0
+        assert result.exit_code != 0
         assert "MISSING" in result.output
+
+
+def test_doctor_missing_train_suggests_extra_not_bare_floor():
+    """A missing [train] stack collapses to one `soup-cli[train]` hint (#828).
+
+    The suggestion must name the extra (so pyproject's ceilings apply) and be
+    double-quoted (so it survives cmd.exe) — never a bare `torch>=` floor. An
+    absent extra is advisory, so the exit stays 0.
+    """
+    with (
+        patch(
+            "soup_cli.commands.doctor.DEPS",
+            [
+                ("fake_torch_xyz", "torch", "2.6.0", True),
+                ("fake_transformers_xyz", "transformers", "5.16.1", True),
+            ],
+        ),
+        # Keep the assertion hardware-independent: no CUDA follow-on note.
+        patch("soup_cli.commands.doctor._nvidia_smi_executable", return_value=None),
+    ):
+        result = runner.invoke(app, ["doctor"])
+        output = result.output
+        assert result.exit_code == 0
+        assert 'pip install "soup-cli[train]"' in output
+        # No bare floor for a [train] package, single- or double-quoted.
+        assert "torch>=" not in output
+        assert "transformers>=" not in output
+        assert "'soup-cli[train]'" not in output
 
 
 def test_doctor_outdated_dep():

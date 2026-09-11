@@ -373,6 +373,71 @@ def current_declared_bounds_check(dist_name: str = _SELF_DIST) -> BoundsCheck:
     return check_declared_bounds(reqs, installed)
 
 
+def installed_extras(dist_name: str = _SELF_DIST) -> list[str]:
+    """Return the sorted names of ``dist_name`` extras fully installed here.
+
+    Reads the declared extras from installed metadata (``Provides-Extra``) and,
+    for each, the packages its requirements pull in (evaluating the
+    ``extra == "X"`` marker the way ``check_declared_bounds`` does). An extra
+    counts as installed when every one of those packages resolves to an
+    installed version. A self-referential ``soup-cli[...]`` requirement — how
+    ``[all]`` and ``[dev]`` re-declare other extras — is skipped rather than
+    recursed: the extras it names are judged on their own terms.
+
+    Metadata-derived, so a new extra is picked up without editing a hand-kept
+    list (the bug this replaces in ``soup version --full`` — #828). An absent
+    distribution (running from a source tree) or missing ``packaging`` yields
+    ``[]`` rather than raising: this feeds a version banner, not a gate.
+    """
+    from importlib.metadata import PackageNotFoundError, metadata, requires
+
+    try:
+        reqs = requires(dist_name) or []
+        declared = metadata(dist_name).get_all("Provides-Extra") or []
+    except PackageNotFoundError:
+        return []
+    if not reqs or not declared:
+        return []
+
+    try:
+        from packaging.markers import UndefinedEnvironmentName
+        from packaging.requirements import InvalidRequirement, Requirement
+        from packaging.utils import canonicalize_name
+    except ImportError:  # pragma: no cover — packaging is a declared dependency
+        return []
+
+    self_key = canonicalize_name(dist_name)
+    parsed = []
+    for raw in reqs:
+        try:
+            parsed.append(Requirement(raw))
+        except InvalidRequirement:
+            continue
+
+    def selects(marker, extra: str) -> bool:
+        try:
+            return bool(marker.evaluate({"extra": extra}))
+        except UndefinedEnvironmentName:
+            return False
+
+    result: list[str] = []
+    for extra in declared:
+        members = [
+            req
+            for req in parsed
+            if req.marker is not None
+            and selects(req.marker, extra)
+            and canonicalize_name(req.name) != self_key
+        ]
+        if not members:
+            # An extra that only re-declares other extras (e.g. `all`) has no
+            # packages of its own to confirm — do not claim it as installed.
+            continue
+        if all(_detect_package_version(req.name) is not None for req in members):
+            result.append(extra)
+    return sorted(result)
+
+
 def _detect_cuda_version() -> Optional[str]:
     """Best-effort CUDA version probe via env / nvidia-smi / torch.
 

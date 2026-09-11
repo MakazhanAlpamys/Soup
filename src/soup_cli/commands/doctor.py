@@ -57,6 +57,47 @@ _MAX_EXCLUSIVE: dict[str, str] = {
     "trl": "1.0.0",
 }
 
+# The extra whose whole-absence is worth surfacing on its own line: a core-only
+# install is a supported state since v0.71.0, and turning it into a training
+# install is the one thing a user on it is most likely to want (#828).
+_TRAIN_EXTRA = "train"
+
+# Which pyproject optional-dependency group each checked package ships in, keyed
+# by its package name (field 1 of DEPS). ``None`` marks a genuine core
+# dependency (declared in [project.dependencies]); its absence is a real failure
+# and exits non-zero. Everything else belongs to an extra: a wholly-absent extra
+# is not a failure, and its fix is ``pip install "soup-cli[<extra>]"`` — which
+# carries the ceilings declared in pyproject, unlike a bare version floor (#828).
+_PACKAGE_EXTRA: dict[str, str | None] = {
+    # Core ([project.dependencies])
+    "pydantic": None,
+    "typer": None,
+    "rich": None,
+    "pyyaml": None,
+    "plotext": None,
+    # Training stack ([train])
+    "torch": _TRAIN_EXTRA,
+    "transformers": _TRAIN_EXTRA,
+    "peft": _TRAIN_EXTRA,
+    "trl": _TRAIN_EXTRA,
+    "datasets": _TRAIN_EXTRA,
+    "bitsandbytes": _TRAIN_EXTRA,
+    "accelerate": _TRAIN_EXTRA,
+    # Optional extras
+    "fastapi": "serve",
+    "uvicorn": "serve",
+    "datasketch": "data",
+    "lm-eval": "eval",
+    "wandb": "wandb",
+    "deepspeed": "deepspeed",
+    "httpx": "generate",
+    "unsloth": "fast",
+    "Pillow": "vision",
+    "torchao": "qat",
+    "sglang": "sglang",
+    "librosa": "audio",
+}
+
 
 def doctor(
     nccl: bool = typer.Option(
@@ -111,9 +152,25 @@ def doctor(
     table.add_column("Min Version")
     table.add_column("Status")
 
-    issues = []
+    # Problems are split by severity so `doctor` can gate CI without failing on
+    # a supported partial install (#828): a missing *core* dependency, or any
+    # package installed beyond its compatibility ceiling, is blocking (non-zero
+    # exit); an outdated package, or an optional extra that is simply absent, is
+    # advisory. Core-vs-extra comes from _PACKAGE_EXTRA, not the historical
+    # `required` flag, since the training stack now lives in the [train] extra.
+    blocking: list[str] = []
+    advisories: list[str] = []
+    extras_to_fix: set[str] = set()
+    core_reinstall = False
+    # Per-extra tallies so a wholly-absent extra collapses to one line, not N.
+    extra_total: dict[str, int] = {}
+    extra_present: dict[str, int] = {}
 
     for import_name, pkg_name, min_ver, required in DEPS:
+        extra = _PACKAGE_EXTRA.get(pkg_name)
+        is_core = extra is None
+        if extra is not None:
+            extra_total[extra] = extra_total.get(extra, 0) + 1
         try:
             mod = __import__(import_name)
             version = getattr(mod, "__version__", getattr(mod, "VERSION", None))
@@ -133,37 +190,51 @@ def doctor(
                 except (PackageNotFoundError, ImportError):
                     version = "?"
             version_str = str(version)
+            if extra is not None:
+                extra_present[extra] = extra_present.get(extra, 0) + 1
 
             # Flag versions beyond Soup's validated compatibility band.
             max_excl = _MAX_EXCLUSIVE.get(pkg_name)
             if max_excl and _version_ge(version_str, max_excl):
                 status = f"[red]INCOMPATIBLE (need <{max_excl})[/]"
-                issues.append(
-                    f"Downgrade {pkg_name}: pip install '{pkg_name}>={min_ver},<{max_excl}'"
+                blocking.append(
+                    f"{pkg_name} {version_str} is beyond Soup's supported range "
+                    f"(need <{max_excl})"
                 )
+                if is_core:
+                    core_reinstall = True
+                else:
+                    extras_to_fix.add(extra)
             elif _version_ok(version_str, min_ver):
                 status = "[green]OK[/]"
             else:
                 status = f"[yellow]outdated (need >={min_ver})[/]"
-                issues.append(f"Upgrade {pkg_name}: pip install '{pkg_name}>={min_ver}'")
+                advisories.append(
+                    f"{pkg_name} {version_str} is older than the supported >={min_ver}"
+                )
+                if is_core:
+                    core_reinstall = True
+                else:
+                    extras_to_fix.add(extra)
 
             table.add_row(
                 pkg_name,
-                "yes" if required else "optional",
+                "yes" if is_core else "optional",
                 version_str,
                 f">={min_ver}",
                 status,
             )
         except ImportError:
-            if required:
+            if is_core:
                 status = "[red]MISSING[/]"
-                issues.append(f"Install {pkg_name}: pip install '{pkg_name}>={min_ver}'")
+                blocking.append(f"core dependency {pkg_name} is not installed")
+                core_reinstall = True
             else:
                 status = "[dim]not installed[/]"
 
             table.add_row(
                 pkg_name,
-                "yes" if required else "optional",
+                "yes" if is_core else "optional",
                 "-",
                 f">={min_ver}",
                 status,
@@ -171,26 +242,58 @@ def doctor(
 
     console.print(table)
 
-    # Check torchvision + torch compatibility
-    _check_torchvision_compat(issues)
+    # A partially-installed extra (some members present, some missing) needs the
+    # whole extra reinstalled so the missing pieces arrive with the right pins.
+    for extra_name, total in extra_total.items():
+        if 0 < extra_present.get(extra_name, 0) < total:
+            extras_to_fix.add(extra_name)
+
+    # Check torchvision + torch compatibility (advisory).
+    _check_torchvision_compat(advisories)
 
     if nccl:
         _run_nccl_check()
 
-    # Summary
-    if issues:
-        console.print(f"\n[yellow]Found {len(issues)} issue(s):[/]")
-        for issue in issues:
-            console.print(f"  [red]>[/] {issue}")
-        console.print(
-            "\n[dim]Fix all: pip install -U "
-            + " ".join(
-                f"'{pkg_name}>={min_ver}'" for _, pkg_name, min_ver, required in DEPS if required
-            )
-            + "[/]"
+    # Only the training stack is surfaced when wholly absent; other absent
+    # optional extras stay quiet, exactly as before (#828).
+    train_absent = _TRAIN_EXTRA in extra_total and extra_present.get(_TRAIN_EXTRA, 0) == 0
+    if train_absent:
+        advisories.append(
+            "training stack not installed — "
+            f'pip install "soup-cli[{_TRAIN_EXTRA}]"{_train_extra_index_hint()}'
         )
-    else:
-        console.print("\n[bold green]All checks passed![/] Your environment is ready.")
+
+    # Fix commands are built from extra names (and `soup-cli` for core), never
+    # from bare floors, so pyproject's declared ceilings apply and the quoting
+    # works in bash, PowerShell and cmd.exe (#828).
+    fix_commands: list[str] = []
+    if core_reinstall:
+        fix_commands.append('pip install -U "soup-cli"')
+    for extra_name in sorted(extras_to_fix):
+        cmd = f'pip install "soup-cli[{extra_name}]"'
+        if extra_name == _TRAIN_EXTRA:
+            cmd += _train_extra_index_hint()
+        fix_commands.append(cmd)
+
+    # Summary. Free text is escaped: a suggestion like `soup-cli[train]` contains
+    # `[...]`, which Rich would otherwise parse as markup and silently drop (#828).
+    from rich.markup import escape as _escape
+
+    console.print()
+    if blocking:
+        console.print(f"[red]Found {len(blocking)} blocking issue(s):[/]")
+        for item in blocking:
+            console.print(f"  [red]>[/] {_escape(item)}")
+    if advisories:
+        console.print(f"[yellow]{len(advisories)} advisory:[/]")
+        for item in advisories:
+            console.print(f"  [yellow]-[/] {_escape(item)}")
+    if not blocking and not advisories:
+        console.print("[bold green]All checks passed![/] Your environment is ready.")
+    if fix_commands:
+        console.print("\n[dim]To fix:[/]")
+        for cmd in fix_commands:
+            console.print(f"  [dim]{_escape(cmd)}[/]")
 
     # After the environment summary on purpose: "All checks passed" reports on
     # the environment, and printing config findings above it read as though the
@@ -199,6 +302,11 @@ def doctor(
         _check_config_support(config)
 
     console.print(f"\n[dim]GitHub: [link={GITHUB_URL}]{GITHUB_URL}[/link][/]")
+
+    # Non-zero exit only for blocking problems, so `soup doctor` can gate CI. A
+    # supported partial install (e.g. core-only, no [train]) stays exit 0 (#828).
+    if blocking:
+        raise typer.Exit(code=1)
 
 
 def _check_config_support(config_path: str) -> None:
@@ -396,6 +504,24 @@ def _nvidia_smi_cuda_version() -> tuple[int, int] | None:
     if completed.returncode != 0:
         return None
     return _parse_cuda_version((completed.stdout or "") + (completed.stderr or ""))
+
+
+def _train_extra_index_hint() -> str:
+    """Parenthetical CUDA hint for a ``soup-cli[train]`` suggestion, or "".
+
+    Only when nvidia-smi reports a GPU: PyPI's torch wheel is CPU-only (and on
+    Windows always so), so a training install on an NVIDIA box wants the CUDA
+    wheel index. The extra install itself stays a plain ``soup-cli[train]`` —
+    pointing every package at the torch index would be wrong — so this is a
+    follow-on note, not an ``--index-url`` on the extra command.
+    """
+    if _nvidia_smi_executable() is None:
+        return ""
+    wheel = _torch_cuda_wheel_tag(_nvidia_smi_cuda_version())
+    return (
+        " (NVIDIA GPU detected — for CUDA torch, first run: "
+        f"pip install torch --index-url https://download.pytorch.org/whl/{wheel})"
+    )
 
 
 def _detect_gpu_hw_without_torch_cuda() -> str:

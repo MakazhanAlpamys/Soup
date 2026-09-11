@@ -662,21 +662,15 @@ def version(
     except ImportError:
         parts.append("no torch")
 
-    # Installed extras
-    extras = []
-    for name, label in [
-        ("fastapi", "serve"),
-        ("vllm", "serve-fast"),
-        ("datasketch", "data"),
-        ("lm_eval", "eval"),
-        ("deepspeed", "deepspeed"),
-        ("wandb", "wandb"),
-    ]:
-        try:
-            __import__(name)
-            extras.append(label)
-        except ImportError:
-            pass
+    # Installed extras, derived from installed metadata so a newly added extra
+    # is reported without editing a hand-kept list (#828). A metadata quirk must
+    # never crash the version banner, so fall back to no extras.
+    try:
+        from soup_cli.utils.env_lock import installed_extras
+
+        extras = installed_extras()
+    except Exception:  # noqa: BLE001 — a version banner must not fail
+        extras = []
 
     if extras:
         parts.append(f"extras: {', '.join(extras)}")
