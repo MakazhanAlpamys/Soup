@@ -52,7 +52,7 @@ def test_legacy_trl_parameter_names_remain_supported(training_config) -> None:
 
 
 def test_installed_trl_exposes_and_receives_current_names(training_config) -> None:
-    pytest.importorskip("trl")
+    pytest.importorskip("trl.experimental.ppo")
     from trl.experimental.ppo import PPOConfig
 
     params = inspect.signature(PPOConfig).parameters
