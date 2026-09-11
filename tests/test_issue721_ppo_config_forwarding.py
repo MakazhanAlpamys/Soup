@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from soup_cli.trainer.ppo import _set_ppo_training_kwargs
+from soup_cli.trainer.ppo import _effective_ppo_setting, _set_ppo_training_kwargs
 
 
 @pytest.fixture
@@ -77,6 +77,20 @@ def test_current_names_win_when_a_signature_carries_both(training_config) -> Non
         "ppo_epochs": "num_ppo_epochs",
         "kl_coef": "kl_coef",
     }
+
+
+def test_an_unforwarded_setting_is_marked_rather_than_echoed() -> None:
+    # When the installed trl exposes no field for a setting, the summary must
+    # not print the requested value as if it had reached the trainer.
+    shown = _effective_ppo_setting(SimpleNamespace(), {}, None, 7)
+
+    assert shown == "7 (not forwarded)"
+
+
+def test_a_forwarded_setting_reports_the_constructed_value() -> None:
+    config = SimpleNamespace(num_train_epochs=3)
+
+    assert _effective_ppo_setting(config, {"num_train_epochs": 7}, "num_train_epochs", 7) == 3
 
 
 def test_installed_trl_exposes_and_receives_current_names(training_config) -> None:
