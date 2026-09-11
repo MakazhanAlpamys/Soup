@@ -2507,12 +2507,21 @@ def preprocess_dataset(
             )
         except Exception:  # noqa: BLE001 — tokenizer errors vary
             continue
+        input_ids = tokens["input_ids"]
+        if not is_pretrain:
+            # #788: add_special_tokens=False (the #785 BOS fix) also strips the
+            # tokenizer post-processor's EOS. Put it back exactly as the live
+            # training path (loss_mask.build_full_sequence_labels) does, then
+            # re-truncate — otherwise a template that renders BOS but not EOS
+            # trains on a missing stop token from this cache. Pretrain feeds raw
+            # document text and keeps the tokenizer's own specials untouched.
+            from soup_cli.data.loss_mask import reappend_eos_if_dropped
+
+            input_ids = reappend_eos_if_dropped(tokenizer, input_ids)[:max_length]
         rendered_rows.append(
             {
-                "input_ids": tokens["input_ids"],
-                "attention_mask": tokens.get(
-                    "attention_mask", [1] * len(tokens["input_ids"])
-                ),
+                "input_ids": input_ids,
+                "attention_mask": [1] * len(input_ids),
             }
         )
 

@@ -205,6 +205,81 @@ class TestTemplatedOnly:
             build_full_sequence_labels(_MESSAGES, tok, max_length=2048)
 
 
+class TestPreprocessCachePathEOS:
+    """`soup data preprocess` must handle EOS exactly like live training.
+
+    The BOS fix (#785) lives on two paths: ``loss_mask.build_full_sequence_labels``
+    (live tokenize) and ``preprocess_dataset`` (the AOT cache read straight into
+    the trainer by ``sft._maybe_load_pretokenized``). Both now tokenize the
+    rendered template with ``add_special_tokens=False``, which also drops the
+    tokenizer post-processor's EOS. #788 review (AmirF194): the cache path did not
+    re-append it, so a BOS-but-not-EOS template silently trained on a missing stop
+    token from the cache. These pin the two paths to identical ids.
+    """
+
+    _EOS_ID = _SPECIALS.index("</s>")
+
+    def _run_preprocess(self, tmp_path, monkeypatch, tok, task="sft"):
+        transformers = pytest.importorskip("transformers")
+        datasets = pytest.importorskip("datasets")
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "soup.yaml").write_text(
+            f"base: x/y\ntask: {task}\n"
+            "data:\n  train: ./d.jsonl\n  format: chatml\n  max_length: 2048\n",
+            encoding="utf-8",
+        )
+        (tmp_path / "d.jsonl").write_text("{}\n", encoding="utf-8")
+        monkeypatch.setattr(
+            transformers.AutoTokenizer, "from_pretrained", lambda *a, **k: tok
+        )
+        # Control the rows directly so the assertion is about tokenization, not
+        # format conversion. preprocess_dataset local-imports this name.
+        monkeypatch.setattr(
+            "soup_cli.data.loader.load_dataset",
+            lambda *a, **k: {"train": [{"messages": _MESSAGES}]},
+        )
+        result = CliRunner().invoke(app, ["data", "preprocess", "soup.yaml", "--yes"])
+        assert result.exit_code == 0, result.output
+        cache_dirs = [p for p in (tmp_path / ".soup-tokenized").iterdir() if p.is_dir()]
+        assert len(cache_dirs) == 1, cache_dirs
+        ds = datasets.load_from_disk(str(cache_dirs[0]))
+        return list(ds[0]["input_ids"])
+
+    def test_cache_preserves_eos_the_tokenizer_appends(self, tmp_path, monkeypatch):
+        """Template renders BOS but not EOS; the tokenizer appends EOS. The cached
+        row must still end on the stop token and match the live path exactly.
+
+        Fails without the #788 re-append: the cache row would end one token short
+        (EOS dropped), which reaches the trainer verbatim."""
+        from soup_cli.data.loss_mask import build_full_sequence_labels
+
+        tok = _tokenizer(_BOS_TEMPLATE, post_processor="bos_eos")
+        ids = self._run_preprocess(tmp_path, monkeypatch, tok)
+        live = build_full_sequence_labels(_MESSAGES, tok, max_length=2048)["input_ids"]
+
+        assert ids == live, "cache path must equal the live-training path"
+        assert ids[-1] == self._EOS_ID, "cached row must end on the stop token"
+        assert ids.count(self._EOS_ID) == 1
+        assert ids.count(_BOS_ID) == 1
+
+    def test_cache_invents_no_eos_when_tokenizer_appends_none(self, tmp_path, monkeypatch):
+        """Tokenizer appends no EOS: the cache path must not invent one, matching
+        the live path (control against over-eager re-appending)."""
+        from soup_cli.data.loss_mask import build_full_sequence_labels
+
+        tok = _tokenizer(_BOS_TEMPLATE, post_processor="bos")
+        ids = self._run_preprocess(tmp_path, monkeypatch, tok)
+        live = build_full_sequence_labels(_MESSAGES, tok, max_length=2048)["input_ids"]
+
+        assert ids == live
+        assert ids.count(self._EOS_ID) == 0
+        assert ids.count(_BOS_ID) == 1
+
+
 class TestPreprocessCacheKey:
     def test_cache_key_changed_from_pre_fix_blob(self):
         """The #785 tokenization change must invalidate old preprocess caches:

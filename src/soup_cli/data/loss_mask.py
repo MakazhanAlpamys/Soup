@@ -358,11 +358,28 @@ def build_full_sequence_labels(
     # (the failure `soup data doctor`'s eos_in_labels check exists to catch). Put
     # the stop token back when the tokenizer would have appended one and the
     # template did not already end the sequence with it.
-    appended_eos = _tokenizer_appends_eos(tokenizer)
-    if appended_eos is not None and (not full_ids or full_ids[-1] != appended_eos):
-        full_ids = full_ids + [appended_eos]
+    full_ids = reappend_eos_if_dropped(tokenizer, full_ids)
     labels = list(full_ids)
     return _truncate(full_ids, labels, max_length)
+
+
+def reappend_eos_if_dropped(tokenizer: Any, input_ids: list[int]) -> list[int]:
+    """Put back the EOS that ``add_special_tokens=False`` stripped, if any.
+
+    The #785 BOS fix tokenises the rendered chat template with
+    ``add_special_tokens=False`` so the template is the single source of special
+    tokens. That also drops the trailing EOS a tokenizer's post-processor would
+    otherwise append, teaching run-on generation. Re-append it when the tokenizer
+    would have added one and the sequence does not already end on it.
+
+    Shared by the live-training path (:func:`build_full_sequence_labels`) and the
+    ``soup data preprocess`` cache path (``commands/data.py``) so the two cannot
+    silently diverge on EOS handling (#785/#788).
+    """
+    appended_eos = _tokenizer_appends_eos(tokenizer)
+    if appended_eos is not None and (not input_ids or input_ids[-1] != appended_eos):
+        return input_ids + [appended_eos]
+    return input_ids
 
 
 def _tokenizer_appends_eos(tokenizer: Any) -> Optional[int]:
