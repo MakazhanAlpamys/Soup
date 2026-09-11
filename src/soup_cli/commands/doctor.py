@@ -220,7 +220,15 @@ def _check_config_support(config_path: str) -> None:
         # config that cannot be read is not a clean bill of health. `doctor`
         # without --config keeps its old exit status.
         raise typer.Exit(2) from exc
-    except Exception as exc:  # invalid YAML, failed validation
+    except SystemExit as exc:
+        # load_config prints its own diagnosis and raises SystemExit(1) for a
+        # schema-invalid config. SystemExit is a BaseException, so it walks
+        # past `except Exception` and the exit code contradicted the 2
+        # documented in docs/commands.md. Re-raised as 2 so all three unreadable
+        # shapes -- missing, unparseable, schema-invalid -- agree.
+        console.print("\n[red]Config could not be loaded (see above).[/]")
+        raise typer.Exit(2) from exc
+    except Exception as exc:  # invalid YAML, unreadable file
         console.print(f"\n[red]Config could not be loaded:[/] {exc}")
         raise typer.Exit(2) from exc
 

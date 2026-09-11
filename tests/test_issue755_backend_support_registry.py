@@ -30,6 +30,7 @@ import typer
 
 from soup_cli.config.backend_support import REGISTRY as _REGISTRY
 from soup_cli.config.schema import DataConfig, TrainingConfig
+from tests.conftest import strip_ansi
 
 MLX_SFT = pathlib.Path(__file__).resolve().parents[1] / (
     "src/soup_cli/trainer/mlx_sft.py"
@@ -252,14 +253,21 @@ def test_doctor_config_names_the_ignored_field_and_its_reason(
     # Every typer parameter passed explicitly — see #752.
     doctor(nccl=False, disk=False, config=path)
 
-    out = capsys.readouterr().out
+    out = strip_ansi(capsys.readouterr().out)
     assert "seed" in out
     assert "mx.random" in out, "the row must carry the reason, not just the name"
 
 
 @pytest.mark.parametrize(
     "path, why",
-    [("does_not_exist.yaml", "missing"), ("broken.yaml", "unparseable")],
+    [
+        ("does_not_exist.yaml", "missing"),
+        ("broken.yaml", "unparseable"),
+        # load_config raises SystemExit(1) here -- a BaseException, so it walks
+        # past `except Exception` and used to exit 1, contradicting the 2 in
+        # docs/commands.md.
+        ("invalid.yaml", "schema-invalid"),
+    ],
 )
 def test_doctor_exits_non_zero_when_the_config_cannot_be_read(
     path, why, tmp_path, monkeypatch
@@ -270,10 +278,18 @@ def test_doctor_exits_non_zero_when_the_config_cannot_be_read(
     monkeypatch.chdir(tmp_path)
     if why == "unparseable":
         (tmp_path / path).write_text("base: [unclosed\n", encoding="utf-8")
+    elif why == "schema-invalid":
+        (tmp_path / path).write_text(
+            "base: m\ntask: sft\ndata: {train: x.jsonl}\n"
+            "training: {epochs: -5}\noutput: o\n",
+            encoding="utf-8",
+        )
 
     with pytest.raises(typer.Exit) as excinfo:
         doctor(nccl=False, disk=False, config=str(tmp_path / path))
-    assert excinfo.value.exit_code != 0
+    # 2 specifically, not merely non-zero: docs/commands.md:218 documents it,
+    # and all three unreadable shapes must agree.
+    assert excinfo.value.exit_code == 2
 
 
 @pytest.mark.parametrize("width", [35, 60, 200])
@@ -296,7 +312,12 @@ def test_the_setting_name_survives_at_any_pinned_width(
 
     # Scope to the config section: the environment report above it has its own
     # tables, and the dependency table legitimately ellipsises at 35 columns.
-    out = capsys.readouterr().out
+    # Strip ANSI first. Rich reads FORCE_COLOR when the Console is built, so an
+    # explicitly-constructed console emits colour even though capsys is not a
+    # tty — and the escapes land *between* the folded halves of the name, so
+    # collapsing whitespace alone does not rescue the split. conftest's
+    # strip_ansi is the shared one; 38 files had grown their own copy.
+    out = strip_ansi(capsys.readouterr().out)
     section = out[out.index("Config check"):]
 
     # A folded name is split down the FIRST column across consecutive lines, so
