@@ -85,6 +85,7 @@ soup data validate <path>                     Check format (auto-detect)
 soup data doctor <path> --model <id>          Chat-template compat report: 8 checks, OK/MINOR/MAJOR
 soup data doctor <path> --model <id> --show-mask N  Per-token trained/masked colouring via the real collator
 soup data lint <path>                         Preference-data linter: length bias, near-dups, chosen==rejected
+soup data clean <path> [-o out]               Sanitize dataset: code fences, control chars, AI boilerplate, JSON
 soup data convert <path> --to chatml          Convert between formats
 soup data merge data1.jsonl data2.jsonl       Combine datasets
 soup data dedup <path> --threshold 0.8        Remove duplicates (MinHash)

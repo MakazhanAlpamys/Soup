@@ -532,6 +532,11 @@ from soup_cli.commands import data_canary as _data_canary_cmd  # noqa: E402
 
 data.app.add_typer(_data_canary_cmd.app, name="canary")
 
+# Feature 3 — Automated Dataset Cleaning & Sanity Repair Pipeline.
+from soup_cli.commands import data_clean as _data_clean_cmd  # noqa: E402
+
+data.app.command(name="clean")(_data_clean_cmd.clean)
+
 # v0.71.28 — MCP server: drive Soup from any MCP client (Claude Code / Cursor /
 # Cline / Continue) over stdio.
 from soup_cli.commands import mcp as _mcp_cmd  # noqa: E402

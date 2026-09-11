@@ -23,6 +23,7 @@
 - [Data Quality Scorecard](#data-quality-scorecard)
 - [Remote Datasets (S3 / GCS / Azure / OCI)](#remote-datasets-s3--gcs--azure--oci)
 - [Semantic dedup (`soup data dedup --semantic`)](#semantic-dedup-soup-data-dedup---semantic)
+- [Dataset Sanitization & Repair (`soup data clean`)](#dataset-sanitization--repair-soup-data-clean)
 - [Topic map (`soup data topics`)](#topic-map-soup-data-topics)
 - [Canaries (`soup data canary insertcheck`)](#canaries-soup-data-canary-insertcheck)
 - [Data Recipe DAG](#data-recipe-dag)
@@ -78,6 +79,39 @@ against your own data, and check what got dropped.
 
 `--threshold` means Jaccard for MinHash and cosine for `--semantic`. They are
 different scales; a value tuned for one is not meaningful for the other.
+
+## Dataset Sanitization & Repair (`soup data clean`)
+
+`soup data clean` applies deterministic hygiene rules to repair corrupted, malformed, or noisy fine-tuning datasets without ever modifying the input file in place:
+
+```bash
+# Clean dataset with safe non-destructive defaults -> writes to <input>_cleaned.jsonl
+soup data clean raw_data.jsonl
+
+# Specify custom output path
+soup data clean raw_data.jsonl -o clean_data.jsonl
+
+# Preview modifications and statistics without writing any files
+soup data clean raw_data.jsonl --dry-run
+
+# Output machine-readable JSON for CI/CD pipelines
+soup data clean raw_data.jsonl --json
+
+# Enable optional heuristic repairs (AI disclaimers, code fences, tool-call JSON, echo pruning)
+soup data clean raw_data.jsonl --strip-boilerplate --repair-code --repair-json --prune-echo
+```
+
+### Cleaning Rules & Defaults:
+- **Default (Safe & Non-Destructive):**
+  1. **Control Characters & Whitespace:** Strips C0 controls (`\x00-\x1f`), zero-width spaces (`\u200b-\u200d`, `\ufeff`), and normalizes CRLF/CR to Unix LF.
+  2. **Empty & Degenerate Turns:** Drops rows where the assistant turn is empty or shorter than `--min-tokens`.
+- **Opt-In Heuristic Repairs (Flags):**
+  1. `--strip-boilerplate`: Strips canned preambles (*"Certainly! As an AI language model..."*) and sign-offs (*"I hope this helps!"*) across multiple passes.
+  2. `--repair-code`: Auto-closes unclosed triple backtick (```` ``` ````) code fences in assistant completions.
+  3. `--repair-json`: Unwraps markdown code blocks from JSON arguments and repairs trailing commas in tool calls.
+  4. `--prune-echo`: Drops rows where the assistant merely repeats the user prompt verbatim.
+
+Supports all standard formats: `chatml`, `alpaca`, `sharegpt`, `dpo`, `kto`, and `tool-calling`.
 
 ## Topic map (`soup data topics`)
 
@@ -753,6 +787,10 @@ soup data stats ./data/train.jsonl
 soup data filter ./data/train.jsonl --coherence 0.3
 soup data filter ./data/train.jsonl --perplexity 500 --coherence 0.3
 soup data filter ./data/train.jsonl --score-only  # add scores without filtering
+
+# Clean and repair dataset (fences, control chars, AI boilerplate, JSON)
+soup data clean ./data/train.jsonl
+soup data clean ./data/train.jsonl -o ./data/clean.jsonl --dry-run
 ```
 
 
