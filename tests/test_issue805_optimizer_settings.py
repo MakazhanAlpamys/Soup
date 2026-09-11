@@ -65,16 +65,11 @@ def test_ppo_forwards_non_default_training_values_with_capability_probes() -> No
 
 def test_unlearn_honors_optimizer_loop_and_model_loading_settings() -> None:
     source = (TRAINER / "unlearn.py").read_text(encoding="utf-8")
-    tree = _tree("unlearn.py")
-    adamw = [
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute)
-        and node.func.attr == "AdamW"
-    ]
-    assert adamw
-    assert "weight_decay" in {keyword.arg for keyword in adamw[-1].keywords if keyword.arg}
+    assert "Trainer.get_optimizer_cls_and_kwargs" in source
+    assert "TrainingArguments(" in source
+    assert "optim=tcfg.optimizer" in source
+    assert "optimizer_cls(optimizer_params" in source
+    assert "torch.optim.AdamW" not in source
     assert "get_scheduler(" in source
     assert "clip_grad_norm_(" in source
     assert "self.config.data.max_length" in source

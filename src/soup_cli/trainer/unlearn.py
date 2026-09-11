@@ -162,7 +162,6 @@ class UnlearnTrainerWrapper:
 
     def setup(self, dataset: Any = None) -> None:
         """Load policy + (optional) frozen reference, LoRA, and datasets."""
-        import torch
         from peft import LoraConfig, get_peft_model
 
         from soup_cli.utils.live_eval import load_model_and_tokenizer
@@ -249,12 +248,33 @@ class UnlearnTrainerWrapper:
             _MAX_STEPS_CAP, math.ceil(batches_per_epoch / accumulation) * int(tcfg.epochs)
         )
         lr = float(tcfg.lr)
-        self._optimizer = torch.optim.AdamW(
-            (p for p in self.model.parameters() if p.requires_grad),
-            lr=lr,
+        # Reuse Transformers' optimizer resolution so the hand-rolled loop
+        # honors the same optimizer allowlist and optional backends as the
+        # Trainer-based wrappers.  A small TrainingArguments instance keeps
+        # this path aligned with the configured optimizer without creating a
+        # second Trainer or silently falling back to AdamW.
+        from transformers import Trainer, TrainingArguments, get_scheduler
+
+        optimizer_args = TrainingArguments(
+            output_dir=str(cfg.output),
+            optim=tcfg.optimizer,
+            learning_rate=lr,
             weight_decay=float(tcfg.weight_decay),
         )
-        from transformers import get_scheduler
+        optimizer_cls, optimizer_kwargs = Trainer.get_optimizer_cls_and_kwargs(
+            optimizer_args
+        )
+        optimizer_kwargs = dict(optimizer_kwargs)
+        optimizer_kwargs.setdefault("lr", lr)
+        optimizer_params = [
+            {
+                "params": [
+                    p for p in self.model.parameters() if p.requires_grad
+                ],
+                "weight_decay": float(tcfg.weight_decay),
+            }
+        ]
+        self._optimizer = optimizer_cls(optimizer_params, **optimizer_kwargs)
 
         self._scheduler = get_scheduler(
             name=tcfg.scheduler,
