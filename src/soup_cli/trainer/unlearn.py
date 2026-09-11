@@ -36,7 +36,6 @@ _MAX_STEPS_CAP = 2000
 _MAX_ROWS = 5000
 _MAX_ROW_BYTES = 1 * 1024 * 1024  # per-line cap (defends against multi-GB row)
 _MAX_FILE_BYTES = 1 * 1024 * 1024 * 1024  # 1 GiB dataset-file cap
-_MAX_LENGTH = 256
 _RMU_CONTROL_SCALE = 6.0
 _DEFAULT_BETA = 0.1
 
@@ -155,6 +154,8 @@ class UnlearnTrainerWrapper:
         self._forget: List[Tuple[str, str]] = []
         self._retain: List[Tuple[str, str]] = []
         self._optimizer: Any = None
+        self._scheduler: Any = None
+        self._max_updates = 0
         # Kept None — this wrapper has no HF Trainer object (the push-callback
         # path in commands/train.py gracefully skips when .trainer is None).
         self.trainer: Any = None
@@ -171,6 +172,12 @@ class UnlearnTrainerWrapper:
         cfg = self.config
         tcfg = cfg.training
 
+        if tcfg.batch_size == "auto":
+            raise ValueError(
+                "task='unlearn' requires an integer training.batch_size; "
+                "batch_size='auto' is unsupported"
+            )
+
         # #353: seed before the model and any adapter are built. This wrapper
         # never builds a Trainer, so nothing else would apply the seed at all.
         apply_training_seed(tcfg)
@@ -179,12 +186,24 @@ class UnlearnTrainerWrapper:
         self.method = method
 
         self.model, self.tokenizer, self._dev = load_model_and_tokenizer(
-            cfg.base, device=self.device, trust_remote_code=self.trust_remote_code,
+            cfg.base,
+            device=self.device,
+            trust_remote_code=self.trust_remote_code,
+            quantization=tcfg.quantization,
         )
         lora_cfg = LoraConfig(
             r=cfg.training.lora.r,
             lora_alpha=cfg.training.lora.alpha,
             lora_dropout=cfg.training.lora.dropout,
+            target_modules=(
+                cfg.training.lora.target_modules
+                if cfg.training.lora.target_modules != "auto"
+                else None
+            ),
+            use_dora=cfg.training.lora.use_dora,
+            use_rslora=cfg.training.lora.use_rslora,
+            rank_pattern=cfg.training.lora.rank_pattern,
+            alpha_pattern=cfg.training.lora.alpha_pattern,
             bias="none",
             task_type="CAUSAL_LM",
         )
@@ -194,7 +213,10 @@ class UnlearnTrainerWrapper:
         # NPO + RMU need a frozen reference copy of the base.
         if method in ("npo", "rmu"):
             ref, _, _ = load_model_and_tokenizer(
-                cfg.base, device=self.device, trust_remote_code=self.trust_remote_code,
+                cfg.base,
+                device=self.device,
+                trust_remote_code=self.trust_remote_code,
+                quantization=tcfg.quantization,
             )
             for p in ref.parameters():
                 p.requires_grad_(False)
@@ -218,9 +240,27 @@ class UnlearnTrainerWrapper:
                 "data.retain_set to preserve utility."
             )
 
+        import math
+
+        batch_size = int(tcfg.batch_size)
+        accumulation = int(tcfg.gradient_accumulation_steps)
+        batches_per_epoch = math.ceil(len(self._forget) / batch_size)
+        self._max_updates = min(
+            _MAX_STEPS_CAP, math.ceil(batches_per_epoch / accumulation) * int(tcfg.epochs)
+        )
         lr = float(tcfg.lr)
         self._optimizer = torch.optim.AdamW(
-            (p for p in self.model.parameters() if p.requires_grad), lr=lr,
+            (p for p in self.model.parameters() if p.requires_grad),
+            lr=lr,
+            weight_decay=float(tcfg.weight_decay),
+        )
+        from transformers import get_scheduler
+
+        self._scheduler = get_scheduler(
+            name=tcfg.scheduler,
+            optimizer=self._optimizer,
+            num_warmup_steps=int(self._max_updates * tcfg.warmup_ratio),
+            num_training_steps=max(1, self._max_updates),
         )
         self._setup_called = True
         console.print(
@@ -245,8 +285,8 @@ class UnlearnTrainerWrapper:
 
         cfg = self.config
         tcfg = cfg.training
-        epochs = max(1, int(tcfg.epochs))
-        n_steps = min(_MAX_STEPS_CAP, epochs * len(self._forget))
+        batch_size = int(tcfg.batch_size)
+        accumulation = int(tcfg.gradient_accumulation_steps)
         started = time.monotonic()
         dev = self._dev
         method = self.method
@@ -275,11 +315,12 @@ class UnlearnTrainerWrapper:
         final_loss = None
         step = 0
         retain_idx = 0
-        while step < n_steps:
+        accumulated = 0
+        self._optimizer.zero_grad(set_to_none=True)
+        while step < self._max_updates:
             for f_prompt, f_target in self._forget:
-                if step >= n_steps:
+                if step >= self._max_updates:
                     break
-                self._optimizer.zero_grad(set_to_none=True)
                 if method in ("npo", "simnpo"):
                     loss = self._step_preference(
                         _tokenize_pair, f_prompt, f_target, method, dev,
@@ -297,12 +338,31 @@ class UnlearnTrainerWrapper:
                     )
                 if loss is None:
                     continue
+                loss = loss / float(batch_size * accumulation)
                 loss.backward()
-                self._optimizer.step()
+                accumulated += 1
                 lval = float(loss.item())
                 if initial_loss is None:
                     initial_loss = lval
                 final_loss = lval
+                if accumulated < batch_size * accumulation:
+                    continue
+                torch.nn.utils.clip_grad_norm_(
+                    self.model.parameters(), float(tcfg.max_grad_norm)
+                )
+                self._optimizer.step()
+                self._scheduler.step()
+                self._optimizer.zero_grad(set_to_none=True)
+                accumulated = 0
+                step += 1
+            if accumulated:
+                torch.nn.utils.clip_grad_norm_(
+                    self.model.parameters(), float(tcfg.max_grad_norm)
+                )
+                self._optimizer.step()
+                self._scheduler.step()
+                self._optimizer.zero_grad(set_to_none=True)
+                accumulated = 0
                 step += 1
             if step == 0:
                 break
@@ -335,7 +395,7 @@ class UnlearnTrainerWrapper:
         )
 
         input_ids, labels = tokenize_pair(
-            self.tokenizer, prompt, target, max_length=_MAX_LENGTH
+            self.tokenizer, prompt, target, max_length=self.config.data.max_length
         )
         if (labels != -100).sum().item() == 0:
             return None
@@ -369,7 +429,7 @@ class UnlearnTrainerWrapper:
         self._retain_ce_idx = idx + 1
         prompt, target = self._retain[idx % len(self._retain)]
         input_ids, labels = tokenize_pair(
-            self.tokenizer, prompt, target, max_length=_MAX_LENGTH
+            self.tokenizer, prompt, target, max_length=self.config.data.max_length
         )
         if (labels != -100).sum().item() == 0:
             return None
@@ -400,7 +460,7 @@ class UnlearnTrainerWrapper:
             captured.append(hidden)
 
         f_ids, f_labels = tokenize_pair(
-            self.tokenizer, f_prompt, f_target, max_length=_MAX_LENGTH
+            self.tokenizer, f_prompt, f_target, max_length=self.config.data.max_length
         )
         f_ids = f_ids.to(dev)
 
@@ -416,7 +476,7 @@ class UnlearnTrainerWrapper:
             retain_frozen = None
             if r_pair is not None and self._retain:
                 r_ids, _ = tokenize_pair(
-                    self.tokenizer, r_pair[0], r_pair[1], max_length=_MAX_LENGTH
+                    self.tokenizer, r_pair[0], r_pair[1], max_length=self.config.data.max_length
                 )
                 r_ids = r_ids.to(dev)
                 captured.clear()

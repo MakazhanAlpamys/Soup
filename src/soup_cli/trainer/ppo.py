@@ -15,6 +15,7 @@ from rich.console import Console
 
 from soup_cli.config.schema import SoupConfig
 from soup_cli.utils.gpu import (
+    bf16_fp16_flags,
     estimate_batch_size,
     model_size_from_name,
     resolve_device_map,
@@ -167,6 +168,34 @@ class PPOTrainerWrapper:
             ppo_kwargs.update(self.fsdp_config)
 
         ppo_params = inspect.signature(ppo_config_cls).parameters
+
+        import math
+
+        total_steps = math.ceil(
+            len(train_ds) / batch_size / tcfg.gradient_accumulation_steps
+        ) * tcfg.epochs
+        optional_training_kwargs = {
+            "warmup_steps": int(total_steps * tcfg.warmup_ratio),
+            "weight_decay": tcfg.weight_decay,
+            "max_grad_norm": tcfg.max_grad_norm,
+            "optim": tcfg.optimizer,
+            "lr_scheduler_type": tcfg.scheduler,
+            "logging_steps": tcfg.logging_steps,
+            "save_steps": tcfg.save_steps,
+            "save_total_limit": 3,
+        }
+        use_bf16, use_fp16 = bf16_fp16_flags(self.device, allow_mps_bf16=True)
+        optional_training_kwargs.update(bf16=use_bf16, fp16=use_fp16)
+        from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
+
+        optional_training_kwargs["gradient_checkpointing"] = (
+            should_enable_hf_gradient_checkpointing(
+                tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
+            )
+        )
+        for name, value in optional_training_kwargs.items():
+            if name in ppo_params:
+                ppo_kwargs[name] = value
 
         # trl renamed ppo_epochs -> num_ppo_epochs in newer versions
         if "num_ppo_epochs" in ppo_params:
