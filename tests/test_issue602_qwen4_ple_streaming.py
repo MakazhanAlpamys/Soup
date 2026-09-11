@@ -1122,7 +1122,7 @@ def test_qwen4_oq_torch_floor_matches_project_and_doctor():
     import re
     from pathlib import Path
 
-    from soup_cli.commands.doctor import DEPS
+    from soup_cli.commands.doctor import EXTRA_GROUPS
 
     root = Path(__file__).parents[1]
     project = (root / "pyproject.toml").read_text(encoding="utf-8")
@@ -1145,7 +1145,13 @@ def test_qwen4_oq_torch_floor_matches_project_and_doctor():
         "FSDP2 API (#651); found "
         f"{torch_entries}"
     )
-    assert next(item for item in DEPS if item[0] == "torch")[2] == "2.6.0", (
+    doctor_torch_floors = [
+        floor
+        for _, members in EXTRA_GROUPS
+        for _, pkg_name, floor in members
+        if pkg_name == "torch"
+    ]
+    assert doctor_torch_floors == ["2.6.0"], (
         "`soup doctor` keeps a literal copy of the torch floor; it must equal "
         "the one pyproject.toml declares, pinned by "
         "tests/test_issue636_torch_floor.py (#636)"
