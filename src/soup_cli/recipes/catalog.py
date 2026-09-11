@@ -48,7 +48,7 @@ def search_recipes(
 
 
 # ---------------------------------------------------------------------------
-# Recipe catalog (165 recipes)
+# Recipe catalog (167 recipes)
 # ---------------------------------------------------------------------------
 
 RECIPES: Dict[str, RecipeMeta] = {
@@ -3798,6 +3798,39 @@ training:
 output: ./output
 """,
     ),
+    "qwen3.5-0.8b-grpo": RecipeMeta(
+        model="Qwen/Qwen3.5-0.8B",
+        task="grpo",
+        size="0.8B",
+        tags=("qwen", "qwen3.5", "grpo", "reasoning", "thinking", "tiny", "edge", "mobile"),
+        description="Qwen 3.5 0.8B GRPO reasoning training (Apache-2.0, tiny / mobile)",
+        yaml_str="""\
+base: Qwen/Qwen3.5-0.8B
+task: grpo
+modality: text
+
+data:
+  train: ./data/reasoning_train.jsonl
+  format: auto
+  max_length: 4096
+
+training:
+  epochs: 3
+  lr: 1e-5
+  batch_size: auto
+  gradient_accumulation_steps: 8
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  quantization: 4bit
+  grpo_beta: 0.1
+  num_generations: 4
+  reward_fn: accuracy
+
+output: ./output
+""",
+    ),
     "qwen3.5-2b-sft": RecipeMeta(
         model="Qwen/Qwen3.5-2B",
         task="sft",
@@ -3823,6 +3856,39 @@ training:
     alpha: 16
     target_modules: auto
   quantization: 4bit
+
+output: ./output
+""",
+    ),
+    "qwen3.5-2b-grpo": RecipeMeta(
+        model="Qwen/Qwen3.5-2B",
+        task="grpo",
+        size="2B",
+        tags=("qwen", "qwen3.5", "grpo", "reasoning", "thinking", "small", "edge"),
+        description="Qwen 3.5 2B GRPO reasoning training (Apache-2.0, small / edge)",
+        yaml_str="""\
+base: Qwen/Qwen3.5-2B
+task: grpo
+modality: text
+
+data:
+  train: ./data/reasoning_train.jsonl
+  format: auto
+  max_length: 4096
+
+training:
+  epochs: 3
+  lr: 1e-5
+  batch_size: auto
+  gradient_accumulation_steps: 8
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  quantization: 4bit
+  grpo_beta: 0.1
+  num_generations: 4
+  reward_fn: accuracy
 
 output: ./output
 """,

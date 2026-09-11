@@ -338,6 +338,87 @@ class TestIssue277Qwen35GrpoRecipe:
         )
 
 
+class TestQwen35SmallGrpoRecipes:
+    """Regression coverage for qwen3.5-0.8b-grpo / qwen3.5-2b-grpo (#848, #275).
+
+    The 0.8B and 2B siblings shipped SFT only; small enough that a contributor
+    might actually run them, unlike most #275 rows. Same two-surface
+    discipline as ``TestDeepSeekV4FlashDpoRecipe``: the model id is pinned on
+    ``RecipeMeta.model`` and on the YAML ``base:`` in two separate tests, so a
+    mutation to either alone names the surface it broke. LR follows the GRPO
+    precedent (1e-5, the majority across existing GRPO recipes) rather than
+    the SFT siblings' 2e-4/3e-4; LoRA r=16/alpha=32 and max_length: 4096
+    follow the GRPO template (``qwen3.5-9b-grpo``), not the SFT siblings'
+    r=8/alpha=16/2048 — reasoning completions run long.
+    """
+
+    RECIPES = {
+        "qwen3.5-0.8b-grpo": "Qwen/Qwen3.5-0.8B",
+        "qwen3.5-2b-grpo": "Qwen/Qwen3.5-2B",
+    }
+
+    @pytest.mark.parametrize("name,model", list(RECIPES.items()))
+    def test_recipe_meta_pins_the_model_id(self, name: str, model: str) -> None:
+        """Surface 1: the catalog metadata, read without touching the YAML."""
+        from soup_cli.recipes.catalog import get_recipe
+
+        recipe = get_recipe(name)
+        assert recipe is not None, f"{name} is missing from the catalog"
+        assert recipe.model == model
+        assert recipe.task == "grpo"
+
+    @pytest.mark.parametrize("name,model", list(RECIPES.items()))
+    def test_yaml_base_pins_the_model_id(self, name: str, model: str) -> None:
+        """Surface 2: the YAML body, parsed directly rather than via ``.model``."""
+        import yaml
+
+        from soup_cli.recipes.catalog import get_recipe
+
+        recipe = get_recipe(name)
+        assert recipe is not None
+        parsed = yaml.safe_load(recipe.yaml_str)
+        assert parsed["base"] == model
+        assert parsed["task"] == "grpo"
+
+    @pytest.mark.parametrize("name,model", list(RECIPES.items()))
+    def test_recipe_loads_with_expected_grpo_shape(self, name: str, model: str) -> None:
+        from soup_cli.config.loader import load_config_from_string
+        from soup_cli.recipes.catalog import get_recipe
+
+        recipe = get_recipe(name)
+        assert recipe is not None
+
+        config = load_config_from_string(recipe.yaml_str)
+        assert config.base == model
+        assert config.task == "grpo"
+        assert config.training.grpo_beta == 0.1
+        assert config.training.num_generations == 4
+        assert config.training.reward_fn == "accuracy"
+        assert config.training.quantization == "4bit"
+        assert config.training.lora.r == 16
+        assert config.training.lora.alpha == 32
+        assert config.training.gradient_accumulation_steps == 8
+        assert config.data.train == "./data/reasoning_train.jsonl"
+        assert config.data.max_length == 4096
+
+    @pytest.mark.parametrize("name,model", list(RECIPES.items()))
+    def test_show_and_use_recipe(
+        self,
+        name: str,
+        model: str,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        show_result = runner.invoke(app, ["recipes", "show", name])
+        assert show_result.exit_code == 0
+        assert model in show_result.output
+
+        monkeypatch.chdir(tmp_path)
+        use_result = runner.invoke(app, ["recipes", "use", name, "--yes"])
+        assert use_result.exit_code == 0
+        assert model in (tmp_path / "soup.yaml").read_text(encoding="utf-8")
+
+
 class TestIssue280Glm51DpoRecipe:
     """Regression coverage for the glm-5.1-dpo recipe."""
 
@@ -933,7 +1014,7 @@ class TestV025NewRecipes:
             assert cfg.base == recipe.model
             assert cfg.task == recipe.task
 
-    def test_catalog_size_is_165(self):
+    def test_catalog_size_is_167(self):
         """Total catalog size — grew with each release.
 
         v0.25.0 shipped 43 recipes (29 + 9 Part A + 2 Part B tools + 3 Part E MLX).
@@ -962,10 +1043,11 @@ class TestV025NewRecipes:
         Task-variant for #275 added 1 (glm-5.1-grpo) -> 163.
         Task-variant for #275 added 1 (deepseek-v4-flash-dpo) -> 164.
         Task-variant for #275 added 1 (kimi-k2.6-dpo) -> 165.
+        Task-variant for #275 added 2 (qwen3.5-0.8b-grpo, qwen3.5-2b-grpo) -> 167.
         """
         from soup_cli.recipes.catalog import RECIPES
 
-        assert len(RECIPES) == 165
+        assert len(RECIPES) == 167
 
     def test_new_recipes_searchable(self):
         """Search returns the new recipes via keyword/task filter."""
