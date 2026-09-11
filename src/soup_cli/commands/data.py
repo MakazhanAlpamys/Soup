@@ -82,11 +82,32 @@ def validate(
         "auto", "--format", "-f",
         help="Expected format: auto, alpaca, sharegpt, chatml, dpo, kto, plaintext",
     ),
+    min_valid_fraction: Optional[float] = typer.Option(
+        None, "--min-valid-fraction",
+        help="Minimum fraction of valid rows required (0.0 to 1.0); exits 2 if below",
+    ),
+    strict: bool = typer.Option(
+        False, "--strict",
+        help="Require 100% of rows to be valid; exits 2 if any rows are dropped",
+    ),
 ):
-    """Validate dataset format and report issues."""
+    """Validate dataset format and report issues.
+
+    Exit codes:
+      0: Dataset passed validation.
+      1: File not found, undetectable format, or invalid arguments.
+      2: Validation failed (0 valid rows, below --min-valid-fraction, or
+         dropped rows with --strict).
+    """
     file_path = Path(path)
     if not file_path.exists():
         console.print(f"[red]File not found: {file_path}[/]")
+        raise typer.Exit(1)
+
+    if min_valid_fraction is not None and (min_valid_fraction < 0.0 or min_valid_fraction > 1.0):
+        console.print(
+            f"[red]--min-valid-fraction must be between 0.0 and 1.0, got {min_valid_fraction}[/]"
+        )
         raise typer.Exit(1)
 
     data = load_raw_data(file_path)
@@ -113,7 +134,32 @@ def validate(
 
     valid = result["valid_rows"]
     total = result["total"]
-    console.print(f"\n[green]{valid}/{total} rows valid for {fmt} format[/]")
+    if valid == 0 and total > 0:
+        console.print(f"\n[red]{valid}/{total} rows valid for {fmt} format[/]")
+    else:
+        console.print(f"\n[green]{valid}/{total} rows valid for {fmt} format[/]")
+
+    if total > 0 and valid == 0:
+        console.print(
+            f"[red]Validation failed: 0/{total} rows valid for '{fmt}' format (all rows dropped)[/]"
+        )
+        raise typer.Exit(2)
+
+    if strict and (valid < total or total == 0):
+        dropped = total - valid
+        console.print(
+            f"[red]Strict validation failed: {valid}/{total} rows valid ({dropped} dropped)[/]"
+        )
+        raise typer.Exit(2)
+
+    if min_valid_fraction is not None:
+        fraction = (valid / total) if total > 0 else 0.0
+        if fraction < min_valid_fraction:
+            console.print(
+                f"[red]Validation threshold failed: {valid}/{total} rows valid "
+                f"({fraction:.1%} < {min_valid_fraction:.1%})[/]"
+            )
+            raise typer.Exit(2)
 
 
 @app.command()

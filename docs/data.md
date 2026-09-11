@@ -736,6 +736,9 @@ soup data inspect ./data/train.jsonl
 # Validate format (auto-detects if --format not specified)
 soup data validate ./data/train.jsonl
 soup data validate ./data/train.jsonl --format alpaca
+soup data validate ./data/train.jsonl --strict                 # exit 2 on any dropped row
+soup data validate ./data/train.jsonl --min-valid-fraction 0.95 # exit 2 below 95% valid
+# Exit codes: 0 = valid, 1 = missing file / bad arguments, 2 = validation failed (0 valid or below threshold)
 
 # Convert between formats
 soup data convert ./data/train.jsonl --to sharegpt --output converted.jsonl
