@@ -134,11 +134,11 @@ def _compute_distill_term(
             return student_logits.sum() * 0.0
         s_flat = s[mask]
         t_flat = t[mask]
-        denom = mask.sum().to(dtype=s.dtype)
+        denom = mask.sum().float()
     else:
         s_flat = s.reshape(-1, s.size(-1))
         t_flat = t.reshape(-1, t.size(-1))
-        denom = torch.tensor(s_flat.size(0), dtype=s.dtype, device=s.device)
+        denom = torch.tensor(s_flat.size(0), dtype=torch.float32, device=s.device)
 
     def _chunk_kernel(s_c: "_torch_typ.Tensor", t_c: "_torch_typ.Tensor") -> "_torch_typ.Tensor":
         if divergence == "forward_kl":

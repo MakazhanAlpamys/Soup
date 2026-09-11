@@ -434,16 +434,15 @@ can exhaust GPU memory due to massive intermediate logit and probability tensors
 Soup provides two controls to bound activation memory:
 
 - `distill_chunk_size`: Evaluates divergence in chunks of active response tokens
-  (`labels != -100`). Pre-filtering immediately sheds prompt and padding tokens
-  from retained memory, while chunking bounds peak activation tensors. Moderate
-  chunk sizes (e.g. 64) often improve throughput (e.g. 11.8 ms vs 20.1 ms dense)
-  due to cache locality, whereas very small chunks reduce peak memory at the
-  cost of additional loop overhead.
+  (`labels != -100`). Pre-filtering immediately sheds unmasked prompt and padding
+  tokens from retained autograd memory, while chunking bounds transient peak
+  activation tensors during divergence evaluation. Moderate chunk sizes (e.g. 64
+  to 256 tokens) balance peak memory reduction with kernel launch overhead.
 - `distill_checkpoint`: Wraps chunk evaluation in non-reentrant activation
   checkpointing (`torch.utils.checkpoint.checkpoint(..., use_reentrant=False)`).
   Discards intermediate `log_softmax` and probability tensors during the forward
-  pass and recomputes them during backward, yielding up to ~2.3x lower peak
-  activation memory at the cost of recomputation time (~1.9x slower on small chunks).
+  pass and recomputes them during backward, substantially reducing retained autograd
+  tensor bytes at the cost of recomputation time in the backward pass.
 
 Set `distill_mode: sequence` (default `token`) to train on the teacher's **generated
 continuations** instead of per-token logit matching — a hard-label, cross-tokenizer-friendly

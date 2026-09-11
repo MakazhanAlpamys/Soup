@@ -274,6 +274,40 @@ training:
         assert captured_kwargs.get("chunk_size") == 128
         assert captured_kwargs.get("use_checkpoint") is True
 
+    def test_chunk_size_controls_invocation_count(self, monkeypatch) -> None:
+        """Prove distill_chunk_size is not a no-op by verifying invocation count."""
+        import math
+
+        torch = _torch_or_skip()
+        from soup_cli.trainer.distill import _compute_distill_term
+
+        def _calls(chunk_size: int | None, s_len: int = 64, vocab: int = 32) -> int:
+            torch.manual_seed(0)
+            s = torch.randn(1, s_len, vocab, requires_grad=True)
+            t = torch.randn(1, s_len, vocab)
+            count = 0
+            real_log_softmax = torch.log_softmax
+
+            def spy(*args, **kwargs):
+                nonlocal count
+                count += 1
+                return real_log_softmax(*args, **kwargs)
+
+            monkeypatch.setattr(torch, "log_softmax", spy)
+            _compute_distill_term(
+                s,
+                t,
+                temperature=1.0,
+                divergence="forward_kl",
+                chunk_size=chunk_size,
+                use_checkpoint=False,
+            )
+            return count
+
+        for cs in (None, 8, 16, 64):
+            expected = 1 if cs is None else math.ceil(64 / cs)
+            assert _calls(cs) == expected
+
     def test_all_masked_labels_returns_zero_and_finite_grad(self) -> None:
         torch = _torch_or_skip()
         from soup_cli.trainer.distill import _compute_distill_term
