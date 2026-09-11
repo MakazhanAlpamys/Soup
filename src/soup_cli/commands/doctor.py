@@ -17,18 +17,12 @@ console = Console()
 
 
 # Dependencies to check: (import_name, package_name, min_version, required)
+#
+# A core-only install (`pip install soup-cli`) is intentionally light: the CLI,
+# config system, and data tools — no PyTorch. Only the core rows below are
+# required; the heavy training stack lives in EXTRA_GROUPS as one optional
+# extra, so a healthy core-only install reports no failures (#828).
 DEPS = [
-    # The torch floor is declared once, in pyproject.toml's [train] extra.
-    # This literal is a copy, pinned to the declaration by
-    # tests/test_issue636_torch_floor.py — reading installed metadata instead
-    # would report the install's history, not the declaration (#636).
-    ("torch", "torch", "2.6.0", True),
-    ("transformers", "transformers", "5.16.1", True),
-    ("peft", "peft", "0.20.0", True),
-    ("trl", "trl", "0.29.0", True),
-    ("datasets", "datasets", "2.14.0", True),
-    ("bitsandbytes", "bitsandbytes", "0.41.0", True),
-    ("accelerate", "accelerate", "0.27.0", True),
     ("pydantic", "pydantic", "2.0.0", True),
     ("typer", "typer", "0.9.0", True),
     ("rich", "rich", "13.0.0", True),
@@ -47,7 +41,39 @@ DEPS = [
     ("torchao", "torchao", "0.4.0", False),
     ("sglang", "sglang", "0.2.0", False),
     ("librosa", "librosa", "0.10.0", False),
+    # Compatibility pin for tests/test_issue636_torch_floor.py, which imports
+    # DEPS and expects exactly one torch row carrying the declared floor. The
+    # canonical declaration lives in EXTRA_GROUPS below; doctor() skips this
+    # alias (see _EXTRA_PACKAGE_NAMES) and renders torch once with its group.
+    ("torch", "torch", "2.6.0", False),
 ]
+
+# Extra groups: (extra_name, [(import_name, package_name, min_version), ...])
+EXTRA_GROUPS: list[tuple[str, list[tuple[str, str, str]]]] = [
+    (
+        "train",
+        [
+            # The torch floor is declared once, in pyproject.toml's [train] extra.
+            # This literal is a copy, pinned to the declaration by
+            # tests/test_issue636_torch_floor.py — reading installed metadata instead
+            # would report the install's history, not the declaration (#636).
+            ("torch", "torch", "2.6.0"),
+            ("transformers", "transformers", "5.16.1"),
+            ("peft", "peft", "0.20.0"),
+            ("trl", "trl", "0.29.0"),
+            ("datasets", "datasets", "2.14.0"),
+            ("bitsandbytes", "bitsandbytes", "0.41.0"),
+            ("accelerate", "accelerate", "0.27.0"),
+        ],
+    ),
+]
+
+# Package names owned by an extra group. DEPS may keep a compatibility alias
+# for such a name (the torch pin above); the DEPS loop skips those so each
+# package is rendered exactly once, with its group.
+_EXTRA_PACKAGE_NAMES: frozenset[str] = frozenset(
+    pkg_name for _, members in EXTRA_GROUPS for _, pkg_name, _ in members
+)
 
 # Packages whose declared breaking-major ceiling must be reported as
 # incompatible instead of silently green-lighted by ``soup doctor``.
@@ -111,9 +137,20 @@ def doctor(
     table.add_column("Min Version")
     table.add_column("Status")
 
-    issues = []
+    issues: list[str] = []
+    # Actionable install specs for the trailing "Fix all" line. Only entries
+    # that are actually missing or out of range land here — never the full
+    # required set, and never a bare per-package floor for an extra group.
+    fix_parts: list[str] = []
+    # A missing or incompatible core dependency turns doctor into a gate:
+    # exit non-zero at the end. Advisory issues (optional packages, the
+    # [train] group, torchvision skew) never touch the exit code.
+    core_broken = False
 
     for import_name, pkg_name, min_ver, required in DEPS:
+        if pkg_name in _EXTRA_PACKAGE_NAMES:
+            # Rendered once below, with its extra group (#828 pin alias).
+            continue
         try:
             mod = __import__(import_name)
             version = getattr(mod, "__version__", getattr(mod, "VERSION", None))
@@ -139,13 +176,17 @@ def doctor(
             if max_excl and _version_ge(version_str, max_excl):
                 status = f"[red]INCOMPATIBLE (need <{max_excl})[/]"
                 issues.append(
-                    f"Downgrade {pkg_name}: pip install '{pkg_name}>={min_ver},<{max_excl}'"
+                    f'Downgrade {pkg_name}: pip install "{pkg_name}>={min_ver},<{max_excl}"'
                 )
+                fix_parts.append(f'"{pkg_name}>={min_ver},<{max_excl}"')
+                if required:
+                    core_broken = True
             elif _version_ok(version_str, min_ver):
                 status = "[green]OK[/]"
             else:
                 status = f"[yellow]outdated (need >={min_ver})[/]"
-                issues.append(f"Upgrade {pkg_name}: pip install '{pkg_name}>={min_ver}'")
+                issues.append(f'Upgrade {pkg_name}: pip install "{pkg_name}>={min_ver}"')
+                fix_parts.append(f'"{pkg_name}>={min_ver}"')
 
             table.add_row(
                 pkg_name,
@@ -157,7 +198,9 @@ def doctor(
         except ImportError:
             if required:
                 status = "[red]MISSING[/]"
-                issues.append(f"Install {pkg_name}: pip install '{pkg_name}>={min_ver}'")
+                issues.append(f'Install {pkg_name}: pip install "{pkg_name}>={min_ver}"')
+                fix_parts.append(f'"{pkg_name}>={min_ver}"')
+                core_broken = True
             else:
                 status = "[dim]not installed[/]"
 
@@ -169,6 +212,49 @@ def doctor(
                 status,
             )
 
+    # Extra groups render in the same table as optional rows. A missing group
+    # member is advisory (status only, no per-package issue); a group with at
+    # least one missing member contributes exactly one issue pointing at the
+    # extra, so the suggestion keeps the declared ceilings and the platform
+    # torch index instead of bare per-package floors.
+    train_index_url: str | None = None
+    for extra_name, members in EXTRA_GROUPS:
+        group_missing = False
+        for import_name, pkg_name, min_ver in members:
+            version_str = _installed_version_str(import_name, pkg_name)
+            if version_str is None:
+                table.add_row(pkg_name, "optional", "-", f">={min_ver}", "[dim]not installed[/]")
+                group_missing = True
+                continue
+            max_excl = _MAX_EXCLUSIVE.get(pkg_name)
+            if max_excl and _version_ge(version_str, max_excl):
+                status = f"[red]INCOMPATIBLE (need <{max_excl})[/]"
+            elif _version_ok(version_str, min_ver):
+                status = "[green]OK[/]"
+            else:
+                status = f"[yellow]outdated (need >={min_ver})[/]"
+            table.add_row(pkg_name, "optional", version_str, f">={min_ver}", status)
+        if group_missing:
+            if extra_name == "train":
+                driver = _nvidia_smi_cuda_version()
+                if driver is not None:
+                    tag = _torch_cuda_wheel_tag(driver)
+                    url = f"https://download.pytorch.org/whl/{tag}"
+                    issues.append(
+                        'Training stack not installed: pip install "soup-cli[train]"'
+                        f" --index-url {url}"
+                    )
+                    train_index_url = url
+                else:
+                    issues.append('Training stack not installed: pip install "soup-cli[train]"')
+                fix_parts.append('"soup-cli[train]"')
+            else:
+                issues.append(
+                    f"{extra_name} stack not installed: "
+                    f'pip install "soup-cli[{extra_name}]"'
+                )
+                fix_parts.append(f'"soup-cli[{extra_name}]"')
+
     console.print(table)
 
     # Check torchvision + torch compatibility
@@ -179,16 +265,19 @@ def doctor(
 
     # Summary
     if issues:
+        # Issue/fix text may contain "[train]"-style brackets, which Rich
+        # would otherwise swallow as markup tags — escape so the suggestion
+        # renders literally (cmd.exe-safe double quotes included).
+        from rich.markup import escape as _escape
+
         console.print(f"\n[yellow]Found {len(issues)} issue(s):[/]")
         for issue in issues:
-            console.print(f"  [red]>[/] {issue}")
-        console.print(
-            "\n[dim]Fix all: pip install -U "
-            + " ".join(
-                f"'{pkg_name}>={min_ver}'" for _, pkg_name, min_ver, required in DEPS if required
-            )
-            + "[/]"
-        )
+            console.print(f"  [red]>[/] {_escape(issue)}")
+        if fix_parts:
+            fix_cmd = "pip install " + " ".join(fix_parts)
+            if train_index_url is not None:
+                fix_cmd += f" --index-url {train_index_url}"
+            console.print(f"\n[dim]Fix all: {_escape(fix_cmd)}[/]")
     else:
         console.print("\n[bold green]All checks passed![/] Your environment is ready.")
 
@@ -199,6 +288,27 @@ def doctor(
         _check_config_support(config)
 
     console.print(f"\n[dim]GitHub: [link={GITHUB_URL}]{GITHUB_URL}[/link][/]")
+
+    if core_broken:
+        raise typer.Exit(code=1)
+
+
+def _installed_version_str(import_name: str, pkg_name: str) -> str | None:
+    """Return the installed version string, or None when not importable."""
+    try:
+        mod = __import__(import_name)
+    except ImportError:
+        return None
+    version = getattr(mod, "__version__", getattr(mod, "VERSION", None))
+    if version is None:
+        try:
+            from importlib.metadata import PackageNotFoundError
+            from importlib.metadata import version as _pkgver
+
+            version = _pkgver(pkg_name)
+        except (PackageNotFoundError, ImportError):
+            version = "?"
+    return str(version)
 
 
 def _check_config_support(config_path: str) -> None:
