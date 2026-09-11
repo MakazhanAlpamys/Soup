@@ -51,6 +51,34 @@ def test_legacy_trl_parameter_names_remain_supported(training_config) -> None:
     }
 
 
+def test_current_names_win_when_a_signature_carries_both(training_config) -> None:
+    # Gap spotted by @dchaudhari7177 in #741: the two tests above each present
+    # one spelling, so preferring the legacy name would pass both of them.
+    kwargs: dict[str, object] = {}
+    fields = _set_ppo_training_kwargs(
+        kwargs,
+        {
+            "num_train_epochs": None,
+            "num_ppo_epochs": None,
+            "ppo_epochs": None,
+            "kl_coef": None,
+            "init_kl_coef": None,
+        },
+        training_config,
+    )
+
+    assert kwargs == {
+        "num_train_epochs": 7,
+        "num_ppo_epochs": 2,
+        "kl_coef": 0.7,
+    }
+    assert fields == {
+        "train_epochs": "num_train_epochs",
+        "ppo_epochs": "num_ppo_epochs",
+        "kl_coef": "kl_coef",
+    }
+
+
 def test_installed_trl_exposes_and_receives_current_names(training_config) -> None:
     pytest.importorskip("trl.experimental.ppo")
     from trl.experimental.ppo import PPOConfig
