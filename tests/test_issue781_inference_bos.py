@@ -581,10 +581,9 @@ _ALLOWLIST = {
         "passes add_special_tokens through **processor_kwargs, decided per processor "
         "by _processor_adds_leading_bos (#302)"
     ),
-    "commands/data.py::preprocess_dataset": (
-        "training-side: writes the pre_tokenized rows training consumes; changing it "
-        "changes training data and the pipeline cache key (#781, out of scope)"
-    ),
+    # preprocess_dataset was fixed in #785: its chat branch now tokenizes with
+    # add_special_tokens=is_pretrain (False for templated rows), so it no longer
+    # renders-then-adds and has left the allowlist.
     "utils/live_eval.py::extract_layer_activations": (
         "activation capture; changing the ids changes saved steering vectors and "
         "probe calibration (#781, out of scope)"

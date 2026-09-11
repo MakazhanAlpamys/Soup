@@ -372,13 +372,15 @@ class TestPromptStrategyRuntime:
         )
         tokenizer = MagicMock()
         tokenizer.chat_template = "{% for msg in messages %}{{msg['content']}}{% endfor %}"
-        tokenizer.apply_chat_template = MagicMock(return_value="rendered")
+        # #785: the legacy path now pre-tokenizes (apply_chat_template tokenize=True
+        # returns ids). Not callable as tokenizer(...) here, so no EOS probe fires.
+        tokenizer.apply_chat_template = MagicMock(return_value=[7, 8, 9])
         fn = build_format_row(tokenizer, data_cfg)
         # When invoked, the inner row should pass through the attach transform
         result = fn({"messages": [{"role": "user", "content": "hi"}]})
-        # Verify the legacy text formatter ran with attached row.
+        # Verify the legacy formatter ran (pre-tokenized) through the wrapper.
         assert tokenizer.apply_chat_template.called
-        assert "rendered" in result.get("text", "")
+        assert result.get("input_ids") == [7, 8, 9]
 
 
 # ----- #86 soup data preprocess live tokenize ----------------------------

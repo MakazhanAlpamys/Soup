@@ -26,6 +26,7 @@ from soup_cli.config.schema import DataConfig
 from soup_cli.data.chat_templates import apply_chat_template_override
 from soup_cli.data.loss_mask import (
     build_assistant_only_labels,
+    build_full_sequence_labels,
     build_per_message_train_labels,
 )
 
@@ -89,7 +90,7 @@ def build_format_row(
             tokenizer, max_length, include_eot=include_eot
         )
     else:
-        inner = _legacy_text_format_row(tokenizer)
+        inner = _build_full_sequence_format_row(tokenizer, max_length)
     return _wrap_with_prompt_strategy(
         _wrap_with_reasoning_effort(inner, reasoning_effort),
         prompt_strategy_spec,
@@ -168,6 +169,26 @@ def _build_per_message_format_row(
 ) -> Callable[[dict], dict]:
     def format_row(example: dict) -> dict:
         return build_per_message_train_labels(
+            example["messages"], tokenizer, max_length=max_length
+        )
+
+    return format_row
+
+
+def _build_full_sequence_format_row(
+    tokenizer: Any, max_length: int
+) -> Callable[[dict], dict]:
+    """Legacy (both flags False) path: train on every token, no masking.
+
+    #785: pre-tokenise with ``add_special_tokens=False`` so TRL skips its own
+    language-modeling ``tokenize_fn`` (which re-adds the tokenizer's default
+    special tokens and doubled the BOS on ``{{ bos_token }}`` templates). The
+    rendered chat template is the single source of special tokens, matching
+    inference after #782.
+    """
+
+    def format_row(example: dict) -> dict:
+        return build_full_sequence_labels(
             example["messages"], tokenizer, max_length=max_length
         )
 

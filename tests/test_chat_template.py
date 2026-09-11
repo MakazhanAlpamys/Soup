@@ -261,7 +261,9 @@ class TestHardError:
                 self, messages, tokenize=False, add_generation_prompt=False, **kwargs
             ):
                 self.applied.append(messages)
-                return "RENDERED"
+                # #785: the legacy path now pre-tokenizes (tokenize=True); it
+                # renders to text only for display/other callers.
+                return [1, 2, 3] if tokenize else "RENDERED"
 
         tok = _T()
         cfg = DataConfig(
@@ -272,5 +274,6 @@ class TestHardError:
         )
         fn = build_format_row(tok, cfg, console=None)
         out = fn({"messages": [{"role": "user", "content": "hi"}]})
-        assert out["text"] == "RENDERED"
+        assert out["input_ids"] == [1, 2, 3]  # override made the legacy path usable
+        assert tok.applied  # apply_chat_template was invoked
         assert tok.chat_template is not None  # override was applied

@@ -2498,6 +2498,12 @@ def preprocess_dataset(
                 truncation=True,
                 padding=False,
                 return_attention_mask=True,
+                # #785: the chat path renders the template's special tokens
+                # already (including any {{ bos_token }}), so re-adding the
+                # tokenizer's defaults here doubled the BOS — one token off from
+                # post-#782 inference. Pretrain feeds raw document text with no
+                # template, so it still gets the tokenizer's leading BOS.
+                add_special_tokens=is_pretrain,
             )
         except Exception:  # noqa: BLE001 — tokenizer errors vary
             continue

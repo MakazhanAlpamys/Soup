@@ -324,6 +324,69 @@ def build_assistant_only_labels(
     return _truncate(full_ids, labels, max_length)
 
 
+def build_full_sequence_labels(
+    messages: Sequence[dict],
+    tokenizer: Any,
+    max_length: int = 2048,
+) -> dict[str, list[int]]:
+    """Build labels where EVERY token contributes to loss (no masking).
+
+    The ``train_on_responses_only=False`` / ``train_on_messages_with_train_field
+    =False`` path. Pre-tokenises with ``add_special_tokens=False`` (via
+    ``_tokenize_only``) so the chat template is the single source of special
+    tokens, matching inference and ``apply_chat_template(tokenize=True)`` (#785).
+
+    Previously this path handed TRL a ``{"text"}`` column, and TRL's
+    language-modeling ``tokenize_fn`` re-tokenised it with the tokenizer's
+    default ``add_special_tokens=True``. A template that renders
+    ``{{ bos_token }}`` then trained on a doubled BOS, one token off from
+    post-#782 inference.
+    """
+    _check_messages(messages)
+    _validate_max_length(max_length)
+    if not getattr(tokenizer, "chat_template", None):
+        raise ValueError(
+            "tokenizer has no chat_template — cannot render messages for the "
+            "text (train_on_responses_only=false) path"
+        )
+    full_ids = _tokenize_only(tokenizer, messages)
+    # #785: the BOS fix must not cost the training EOS. The pre-#785 path let TRL
+    # tokenize the rendered text with the tokenizer's defaults, so a tokenizer
+    # whose post-processor appends EOS gave every row a trailing stop token even
+    # when the template rendered none. add_special_tokens=False (above) removes
+    # the doubled BOS but also that EOS, which teaches run-on generation
+    # (the failure `soup data doctor`'s eos_in_labels check exists to catch). Put
+    # the stop token back when the tokenizer would have appended one and the
+    # template did not already end the sequence with it.
+    appended_eos = _tokenizer_appends_eos(tokenizer)
+    if appended_eos is not None and (not full_ids or full_ids[-1] != appended_eos):
+        full_ids = full_ids + [appended_eos]
+    labels = list(full_ids)
+    return _truncate(full_ids, labels, max_length)
+
+
+def _tokenizer_appends_eos(tokenizer: Any) -> Optional[int]:
+    """Return the EOS id the tokenizer appends under ``add_special_tokens=True``.
+
+    ``None`` when the tokenizer appends no trailing EOS (e.g. a BOS-only
+    post-processor, or none at all). Detected by probing a trivial string both
+    ways so the answer reflects the real ``tokenizers`` post-processor rather
+    than an assumption. Mirrors ``trainer/sft.py``'s ``_processor_adds_leading_bos``
+    for the trailing end.
+    """
+    eos_id = _resolve_eos_token_id(tokenizer)
+    if eos_id is None or not callable(tokenizer):
+        return None
+    try:
+        with_special = coerce_token_ids(tokenizer("a", add_special_tokens=True))
+        without = coerce_token_ids(tokenizer("a", add_special_tokens=False))
+    except (TypeError, ValueError):
+        return None
+    appends = bool(with_special) and with_special[-1] == eos_id
+    already = bool(without) and without[-1] == eos_id
+    return eos_id if appends and not already else None
+
+
 def _resolve_eos_token_id(tokenizer: Any) -> Optional[int]:
     """Return an int EOS/EOT token id, or None if undetermined.
 
