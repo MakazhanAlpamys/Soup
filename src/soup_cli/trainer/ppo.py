@@ -63,7 +63,7 @@ def _effective_ppo_setting(
 ) -> object:
     """Read the constructed config value, with compatibility fallbacks."""
     if field is None:
-        return fallback
+        return f"{fallback} (not forwarded)"
     return getattr(config, field, kwargs[field])
 
 
