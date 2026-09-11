@@ -63,6 +63,35 @@ def _legacy_chat_prompt(messages) -> str:
     return "\n".join(parts)
 
 
+def _render_chat_prompt(
+    messages: Any, tokenizer: Any, *, fallback_on_error: bool
+) -> tuple[str, bool]:
+    """Render ``messages``; also report whether the model's template produced the text.
+
+    Only template-rendered text already carries the model's special tokens, which is
+    what :func:`encode_rendered_prompt` needs to know.
+    """
+    template = getattr(tokenizer, "chat_template", None)
+    if tokenizer is not None and template and hasattr(tokenizer, "apply_chat_template"):
+        try:
+            text = tokenizer.apply_chat_template(
+                _normalise_messages(messages),
+                tokenize=False,
+                add_generation_prompt=True,
+            )
+        except Exception:  # noqa: BLE001 — a broken template must not 500
+            if not fallback_on_error:
+                raise
+            logger.warning(
+                "chat template failed to render; falling back to the legacy "
+                "role-prefixed prompt",
+                exc_info=True,
+            )
+        else:
+            return text, True
+    return _legacy_chat_prompt(messages), False
+
+
 def build_chat_prompt(messages, tokenizer=None) -> str:
     """Render chat messages into a prompt string (#332).
 
@@ -71,6 +100,10 @@ def build_chat_prompt(messages, tokenizer=None) -> str:
     template when it has one, and falls back to the legacy role-prefixed
     format only when it does not (or when no tokenizer could be loaded).
 
+    In-process callers must not hand the result to a bare ``tokenizer(...)``
+    call; use :func:`encode_chat_prompt` (#781). The vLLM engine tokenizes this
+    string itself.
+
     Args:
         messages: chat messages — pydantic objects or dicts.
         tokenizer: a HF tokenizer, or None when one could not be loaded.
@@ -78,21 +111,39 @@ def build_chat_prompt(messages, tokenizer=None) -> str:
     Returns:
         The prompt string to hand to the engine.
     """
-    template = getattr(tokenizer, "chat_template", None)
-    if tokenizer is not None and template and hasattr(tokenizer, "apply_chat_template"):
-        try:
-            return tokenizer.apply_chat_template(
-                _normalise_messages(messages),
-                tokenize=False,
-                add_generation_prompt=True,
-            )
-        except Exception:  # noqa: BLE001 — a broken template must not 500
-            logger.warning(
-                "chat template failed to render; falling back to the legacy "
-                "role-prefixed prompt",
-                exc_info=True,
-            )
-    return _legacy_chat_prompt(messages)
+    return _render_chat_prompt(messages, tokenizer, fallback_on_error=True)[0]
+
+
+def encode_rendered_prompt(
+    tokenizer: Any, text: str, *, templated: bool, **tokenizer_kwargs: Any
+) -> Any:
+    """Tokenize a prompt without re-adding the special tokens its template rendered (#781).
+
+    A chat template already emits every special token the model expects —
+    Llama-3, Gemma and Mistral render ``{{ bos_token }}`` — so letting the
+    tokenizer add its own on top sent ``[bos, bos, ...]``. Soup's training ids
+    are built with ``add_special_tokens=False`` (``data/loss_mask.py``), as are
+    HF's own ``apply_chat_template(tokenize=True)`` ids, and inference has to
+    match them. Text no template rendered is tokenized exactly as before.
+    """
+    if templated:
+        return tokenizer(text, add_special_tokens=False, **tokenizer_kwargs)
+    return tokenizer(text, **tokenizer_kwargs)
+
+
+def encode_chat_prompt(
+    messages: Any, tokenizer: Any, *, fallback_on_error: bool, **tokenizer_kwargs: Any
+) -> Any:
+    """Render ``messages`` with the model's template and tokenize them as Soup trains.
+
+    ``fallback_on_error`` keeps each caller's existing contract: ``soup serve``
+    serves the legacy prompt when a template fails to render, while the CLI
+    commands surface the template's own error.
+    """
+    text, templated = _render_chat_prompt(
+        messages, tokenizer, fallback_on_error=fallback_on_error
+    )
+    return encode_rendered_prompt(tokenizer, text, templated=templated, **tokenizer_kwargs)
 
 
 def resolve_finish_reason(output: Any, max_tokens: Optional[int]) -> str:

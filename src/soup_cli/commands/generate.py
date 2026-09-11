@@ -773,6 +773,7 @@ def _generate_local(
         model_requires_trust_remote_code,
         resolve_trust_remote_code,
     )
+    from soup_cli.utils.vllm import encode_rendered_prompt
 
     requires = model_requires_trust_remote_code(model_name) or False
     trc = resolve_trust_remote_code(
@@ -797,7 +798,8 @@ def _generate_local(
     if generation_prompt is None:
         generation_prompt = _build_generation_prompt(prompt, count, fmt, seed_examples)
 
-    if hasattr(tokenizer, "apply_chat_template") and tokenizer.chat_template:
+    templated = bool(hasattr(tokenizer, "apply_chat_template") and tokenizer.chat_template)
+    if templated:
         messages = [
             {"role": "system", "content": generation_prompt},
             {"role": "user", "content": f"Generate {count} training examples now."},
@@ -806,7 +808,7 @@ def _generate_local(
     else:
         text = f"{generation_prompt}\n\nGenerate {count} training examples now.\n\n"
 
-    inputs = tokenizer(text, return_tensors="pt")
+    inputs = encode_rendered_prompt(tokenizer, text, templated=templated, return_tensors="pt")
     input_ids = inputs["input_ids"].to(model.device)
 
     with torch.no_grad():

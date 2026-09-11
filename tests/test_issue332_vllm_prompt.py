@@ -165,8 +165,10 @@ class TestBothBackendsShareOneBuilder:
     """Acceptance #1: vLLM and transformers must produce the SAME string."""
 
     def test_transformers_backend_calls_the_shared_builder(self):
+        # #781: serve renders through the builder's body and encodes in the same
+        # call; the ids it sends are pinned in tests/test_issue781_inference_bos.py.
         src = Path("src/soup_cli/commands/serve.py").read_text(encoding="utf-8")
-        assert "build_chat_prompt(" in src, (
+        assert "encode_chat_prompt(" in src, (
             "the transformers backend must use the shared builder"
         )
 

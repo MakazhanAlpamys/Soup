@@ -1573,13 +1573,14 @@ def _generate_response(
     """Generate a response from the model."""
     import torch
 
-    from soup_cli.utils.vllm import build_chat_prompt
+    from soup_cli.utils.vllm import encode_chat_prompt
 
     # Apply chat template. #332 — THE shared builder; the vLLM backend calls
-    # the same function so the two backends cannot drift apart again.
-    text = build_chat_prompt(messages, tokenizer)
-
-    inputs = tokenizer(text, return_tensors="pt")
+    # the same function so the two backends cannot drift apart again. #781 —
+    # encoded without re-adding the special tokens the template rendered.
+    inputs = encode_chat_prompt(
+        messages, tokenizer, fallback_on_error=True, return_tensors="pt"
+    )
     input_ids = inputs["input_ids"].to(model.device)
     attention_mask = inputs["attention_mask"].to(model.device)
 

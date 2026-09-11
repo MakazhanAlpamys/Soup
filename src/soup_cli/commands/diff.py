@@ -281,25 +281,11 @@ def _generate(model, tokenizer, messages, max_tokens=256, temperature=0.7) -> st
     """Generate a response from the model."""
     import torch
 
-    if hasattr(tokenizer, "apply_chat_template") and tokenizer.chat_template:
-        text = tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True
-        )
-    else:
-        parts = []
-        for msg in messages:
-            role = msg["role"]
-            content = msg["content"]
-            if role == "system":
-                parts.append(f"System: {content}")
-            elif role == "user":
-                parts.append(f"User: {content}")
-            elif role == "assistant":
-                parts.append(f"Assistant: {content}")
-        parts.append("Assistant:")
-        text = "\n".join(parts)
+    from soup_cli.utils.vllm import encode_chat_prompt
 
-    inputs = tokenizer(text, return_tensors="pt")
+    inputs = encode_chat_prompt(
+        messages, tokenizer, fallback_on_error=False, return_tensors="pt"
+    )
     input_ids = inputs["input_ids"].to(model.device)
     attention_mask = inputs["attention_mask"].to(model.device)
 
