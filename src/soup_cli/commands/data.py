@@ -82,8 +82,15 @@ def validate(
         "auto", "--format", "-f",
         help="Expected format: auto, alpaca, sharegpt, chatml, dpo, kto, plaintext",
     ),
+    min_valid_fraction: float = typer.Option(
+        0.0,
+        "--min-valid-fraction",
+        min=0.0,
+        max=1.0,
+        help="Exit 2 when the fraction of valid rows is below this value",
+    ),
 ):
-    """Validate dataset format and report issues."""
+    """Validate a dataset, returning exit 1 for input errors and 2 for unusable data."""
     file_path = Path(path)
     if not file_path.exists():
         console.print(f"[red]File not found: {file_path}[/]")
@@ -114,6 +121,17 @@ def validate(
     valid = result["valid_rows"]
     total = result["total"]
     console.print(f"\n[green]{valid}/{total} rows valid for {fmt} format[/]")
+
+    if total > 0 and valid == 0:
+        console.print("[red]Validation failed: no usable rows remain.[/]")
+        raise typer.Exit(2)
+
+    if total > 0 and valid / total < min_valid_fraction:
+        console.print(
+            f"[red]Validation failed: valid fraction {valid / total:.3f} is below "
+            f"--min-valid-fraction {min_valid_fraction:.3f}.[/]"
+        )
+        raise typer.Exit(2)
 
 
 @app.command()

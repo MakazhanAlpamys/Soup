@@ -737,6 +737,9 @@ soup data inspect ./data/train.jsonl
 soup data validate ./data/train.jsonl
 soup data validate ./data/train.jsonl --format alpaca
 
+# Require at least 90% of rows to be usable
+soup data validate ./data/train.jsonl --min-valid-fraction 0.9
+
 # Convert between formats
 soup data convert ./data/train.jsonl --to sharegpt --output converted.jsonl
 
@@ -754,6 +757,12 @@ soup data filter ./data/train.jsonl --coherence 0.3
 soup data filter ./data/train.jsonl --perplexity 500 --coherence 0.3
 soup data filter ./data/train.jsonl --score-only  # add scores without filtering
 ```
+
+`soup data validate` exits with code `0` when at least one row is usable and the
+optional minimum valid fraction is met. It exits with code `1` for input errors,
+such as a missing file or an undetectable format, and code `2` when a non-empty
+dataset has no usable rows or falls below `--min-valid-fraction`. A partially valid
+dataset still exits with code `0` when no minimum is specified.
 
 
 ## Demo Datasets (`soup data demo`)
