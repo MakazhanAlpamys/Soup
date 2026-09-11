@@ -38,6 +38,10 @@ class _Plotext5(_Recorder):
     def theme(self, *args, **kwargs):
         return self._record("theme", *args, **kwargs)
 
+    def build(self):
+        self._record("build")
+        return "mock_chart"
+
     def show(self):
         return self._record("show")
 
@@ -73,6 +77,10 @@ class _Figure6(_Recorder):
 
     def theme(self, *args, **kwargs):
         return self._record("theme", *args, **kwargs)
+
+    def build(self):
+        self._record("build")
+        return "mock_chart"
 
     def show(self):
         return self._record("show")
@@ -113,14 +121,14 @@ def test_plotext5_module_api_remains_supported() -> None:
         "xlabel",
         "ylabel",
         "theme",
-        "show",
+        "build",
         "clf",
         "plot",
         "title",
         "xlabel",
         "ylabel",
         "theme",
-        "show",
+        "build",
     ]
 
 
@@ -155,7 +163,7 @@ def test_plotext6_figure_api_is_used() -> None:
         "label",
         "label",
         "theme",
-        "show",
+        "build",
         "clear",
         "signal",
         "draw",
@@ -163,7 +171,7 @@ def test_plotext6_figure_api_is_used() -> None:
         "label",
         "label",
         "theme",
-        "show",
+        "build",
     ]
 
 

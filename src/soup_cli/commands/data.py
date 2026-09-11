@@ -629,7 +629,7 @@ def stats(
                     title="Text Length Distribution (chars)",
                     xlabel="Length",
                     ylabel="Count",
-                    theme="dark",
+                    console=console,
                 )
             finally:
                 sys.stdout = original_stdout
