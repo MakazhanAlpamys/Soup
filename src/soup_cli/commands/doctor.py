@@ -133,8 +133,10 @@ def doctor(
     fix_parts: list[str] = []
     fix_pre: list[str] = []
     # A missing or incompatible core dependency turns doctor into a gate:
-    # exit non-zero at the end. Advisory issues (optional packages, the
-    # [train] group, torchvision skew) never touch the exit code.
+    # exit non-zero at the end. An installed package beyond its declared
+    # ceiling is blocking wherever it is found, extra groups included (#874).
+    # Advisory issues (optional packages, a missing or outdated [train]
+    # member, torchvision skew) never touch the exit code.
     core_broken = False
 
     for import_name, pkg_name, min_ver, required in DEPS:
@@ -225,6 +227,7 @@ def doctor(
                     f'Downgrade {pkg_name}: pip install "{pkg_name}>={min_ver},<{max_excl}"'
                 )
                 fix_parts.append(f'"{pkg_name}>={min_ver},<{max_excl}"')
+                core_broken = True
             elif _version_ok(version_str, min_ver):
                 status = "[green]OK[/]"
             else:
