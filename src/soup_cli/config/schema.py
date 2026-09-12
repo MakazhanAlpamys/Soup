@@ -1764,7 +1764,7 @@ class TrainingConfig(BaseModel):
         description=(
             "Token chunk size for evaluating the distillation divergence kernel. "
             "Chunks the active supervised tokens to reduce peak memory retention. "
-            "Unset (None) processes all tokens in a single chunk. (v0.74.0 #722)"
+            "Unset (None) processes all tokens in a single chunk. (#722)"
         ),
     )
     distill_checkpoint: bool = Field(
@@ -1772,7 +1772,7 @@ class TrainingConfig(BaseModel):
         description=(
             "Enable non-reentrant activation checkpointing per token chunk during "
             "distillation divergence computation to minimize autograd retained "
-            "memory. (v0.74.0 #722)"
+            "memory. (#722)"
         ),
     )
     # v0.71.12 #146 — opt-in LoRA / PEFT path for classifier-family tasks.
@@ -4780,6 +4780,37 @@ class SoupConfig(BaseModel):
                 )
             except ValueError as exc:
                 raise ValueError(str(exc)) from exc
+
+            chunk_offenders = [
+                name
+                for name, val in (
+                    ("distill_chunk_size", tcfg.distill_chunk_size),
+                    (
+                        "distill_checkpoint",
+                        tcfg.distill_checkpoint if tcfg.distill_checkpoint else None,
+                    ),
+                )
+                if val is not None
+            ]
+            if chunk_offenders:
+                if tcfg.uld_strategy is not None:
+                    raise ValueError(
+                        f"Distillation fields {chunk_offenders} are incompatible with "
+                        f"training.uld_strategy={tcfg.uld_strategy!r}; "
+                        "chunked evaluation applies only to standard token-level distillation"
+                    )
+                if tcfg.minillm_enabled:
+                    raise ValueError(
+                        f"Distillation fields {chunk_offenders} are incompatible with "
+                        "training.minillm_enabled=True; "
+                        "chunked evaluation applies only to standard token-level distillation"
+                    )
+                if tcfg.distill_mode == "sequence":
+                    raise ValueError(
+                        f"Distillation fields {chunk_offenders} are incompatible with "
+                        "training.distill_mode='sequence'; "
+                        "chunked evaluation applies only to token-level distillation"
+                    )
             return self
         if distill_fields_set:
             offenders = [

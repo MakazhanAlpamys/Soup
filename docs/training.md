@@ -442,7 +442,10 @@ Soup provides two controls to bound activation memory:
   checkpointing (`torch.utils.checkpoint.checkpoint(..., use_reentrant=False)`).
   Discards intermediate `log_softmax` and probability tensors during the forward
   pass and recomputes them during backward, substantially reducing retained autograd
-  tensor bytes at the cost of recomputation time in the backward pass.
+  tensor bytes at the cost of recomputation time in the backward pass. Note that
+  enabling `distill_checkpoint: true` without setting `distill_chunk_size` processes
+  all active tokens in a single chunk, which reduces retained bytes via checkpointing
+  but leaves transient peak activations unbounded.
 
 Set `distill_mode: sequence` (default `token`) to train on the teacher's **generated
 continuations** instead of per-token logit matching — a hard-label, cross-tokenizer-friendly

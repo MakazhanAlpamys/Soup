@@ -116,9 +116,13 @@ def _compute_distill_term(
         if attention_mask is not None:
             attention_mask = attention_mask[:, 1:]
 
+    # Keep the divergence kernel in FP32. In lower precision, valid logits at
+    # low temperatures readily underflow probabilities to zero; target-side
+    # derivatives in torch.kl_div then become non-finite even when the reduced
+    # loss is finite (#719).
     temp = float(temperature)
-    s = student_logits / temp
-    t = teacher_logits / temp
+    s = student_logits.float() / temp
+    t = teacher_logits.float() / temp
 
     if labels is not None:
         mask = labels != -100
@@ -126,8 +130,6 @@ def _compute_distill_term(
         mask = attention_mask.bool()
     else:
         mask = None
-
-    kl_div = torch.nn.functional.kl_div
 
     if mask is not None:
         if not mask.any():
@@ -141,23 +143,20 @@ def _compute_distill_term(
         denom = torch.tensor(s_flat.size(0), dtype=torch.float32, device=s.device)
 
     def _chunk_kernel(s_c: "_torch_typ.Tensor", t_c: "_torch_typ.Tensor") -> "_torch_typ.Tensor":
+        log_s = torch.log_softmax(s_c, dim=-1)
+        log_t = torch.log_softmax(t_c, dim=-1)
         if divergence == "forward_kl":
-            log_s = torch.log_softmax(s_c, dim=-1)
-            p_t = torch.softmax(t_c, dim=-1)
-            return kl_div(log_s, p_t, reduction="sum")
+            p_t = log_t.exp()
+            return (p_t * (log_t - log_s)).sum()
         if divergence == "reverse_kl":
-            log_t = torch.log_softmax(t_c, dim=-1)
-            p_s = torch.softmax(s_c, dim=-1)
-            return kl_div(log_t, p_s, reduction="sum")
+            p_s = log_s.exp()
+            return (p_s * (log_s - log_t)).sum()
         if divergence == "js":
-            log_s = torch.log_softmax(s_c, dim=-1)
-            log_t = torch.log_softmax(t_c, dim=-1)
             p_s = log_s.exp()
             p_t = log_t.exp()
-            m = 0.5 * (p_s + p_t)
-            log_m = m.clamp(min=1e-12).log()
-            kl_pm = kl_div(log_m, p_s, reduction="sum")
-            kl_qm = kl_div(log_m, p_t, reduction="sum")
+            log_m = torch.logaddexp(log_s, log_t) - math.log(2.0)
+            kl_pm = (p_s * (log_s - log_m)).sum()
+            kl_qm = (p_t * (log_t - log_m)).sum()
             return 0.5 * (kl_pm + kl_qm)
         raise ValueError(f"Unknown divergence {divergence!r}")
 

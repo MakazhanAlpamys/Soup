@@ -108,60 +108,54 @@ class TestChunkedDistillKernel:
     def test_matches_pre_pr_reference_kernel(
         self, divergence: str, chunk_size: int | None, use_checkpoint: bool
     ) -> None:
-        """BLOCKING 3: pin against the pre-PR origin/main reference formula, not ourselves."""
+        """Pin against an independent double-precision probability-space reference (#719 / #722)."""
         torch = _torch_or_skip()
         from soup_cli.trainer.distill import _compute_distill_term
 
-        def _reference_pre_pr_distill(s_in, t_in, div, temperature, labels_in=None):
-            kl_div = torch.nn.functional.kl_div
+        def _reference_double_precision_distill(s_in, t_in, div, temperature, labels_in=None):
             if labels_in is not None:
                 s_in = s_in[:, :-1, :]
                 t_in = t_in[:, :-1, :]
                 labels_in = labels_in[:, 1:]
+                mask = labels_in != -100
+                s_flat = s_in[mask].double()
+                t_flat = t_in[mask].double()
+                denom = mask.sum().double()
+            else:
+                s_flat = s_in.reshape(-1, s_in.size(-1)).double()
+                t_flat = t_in.reshape(-1, t_in.size(-1)).double()
+                denom = torch.tensor(s_flat.size(0), dtype=torch.float64, device=s_in.device)
+
             temp_val = float(temperature)
-            s_scaled = s_in / temp_val
-            t_scaled = t_in / temp_val
-
-            def _masked_mean(per_token):
-                if labels_in is not None:
-                    mask = (labels_in != -100).to(per_token.dtype)
-                    return (per_token * mask).sum() / mask.sum().clamp(min=1.0)
-                return per_token.mean()
-
+            ps = torch.softmax(s_flat / temp_val, dim=-1)
+            pt = torch.softmax(t_flat / temp_val, dim=-1)
             if div == "forward_kl":
-                log_s = torch.log_softmax(s_scaled, dim=-1)
-                p_t = torch.softmax(t_scaled, dim=-1)
-                per_tok = kl_div(log_s, p_t, reduction="none").sum(dim=-1)
-                return _masked_mean(per_tok) * (temp_val * temp_val)
-            if div == "reverse_kl":
-                log_t = torch.log_softmax(t_scaled, dim=-1)
-                p_s = torch.softmax(s_scaled, dim=-1)
-                per_tok = kl_div(log_t, p_s, reduction="none").sum(dim=-1)
-                return _masked_mean(per_tok) * (temp_val * temp_val)
-            if div == "js":
-                log_s = torch.log_softmax(s_scaled, dim=-1)
-                log_t = torch.log_softmax(t_scaled, dim=-1)
-                p_s = log_s.exp()
-                p_t = log_t.exp()
-                m = 0.5 * (p_s + p_t)
-                log_m = m.clamp(min=1e-12).log()
-                kl_pm = kl_div(log_m, p_s, reduction="none").sum(dim=-1)
-                kl_qm = kl_div(log_m, p_t, reduction="none").sum(dim=-1)
-                return _masked_mean(0.5 * (kl_pm + kl_qm)) * (temp_val * temp_val)
-            raise ValueError(f"Unknown divergence {div}")
+                per_tok = (pt * torch.log(pt / ps)).sum(dim=-1)
+            elif div == "reverse_kl":
+                per_tok = (ps * torch.log(ps / pt)).sum(dim=-1)
+            elif div == "js":
+                mixture = 0.5 * (ps + pt)
+                per_tok = 0.5 * (
+                    (ps * torch.log(ps / mixture)).sum(dim=-1)
+                    + (pt * torch.log(pt / mixture)).sum(dim=-1)
+                )
+            else:
+                raise ValueError(f"Unknown divergence {div}")
+
+            return (per_tok.sum() / denom) * (temp_val * temp_val)
 
         torch.manual_seed(999)
         batch, seq, vocab = 2, 8, 16
         temp = 2.0
-        s = torch.randn(batch, seq, vocab, requires_grad=True)
-        t = torch.randn(batch, seq, vocab)
+        s = torch.randn(batch, seq, vocab, dtype=torch.float32, requires_grad=True)
+        t = torch.randn(batch, seq, vocab, dtype=torch.float32)
         labels = torch.tensor([
             [-100, 1, 2, -100, 4, -100, 6, -100],
             [-100, -100, 2, 3, -100, 5, 6, -100],
         ])
 
         s_ref = s.detach().clone().requires_grad_(True)
-        loss_ref = _reference_pre_pr_distill(s_ref, t, divergence, temp, labels_in=labels)
+        loss_ref = _reference_double_precision_distill(s_ref, t, divergence, temp, labels_in=labels)
         loss_ref.backward()
         grad_ref = s_ref.grad.clone()
 
@@ -173,8 +167,8 @@ class TestChunkedDistillKernel:
         loss_new.backward()
         grad_new = s_new.grad.clone()
 
-        assert abs(loss_ref.item() - loss_new.item()) < 1e-6
-        assert (grad_ref - grad_new).abs().max().item() < 1e-6
+        assert abs(loss_ref.item() - loss_new.item()) < 1e-5
+        assert (grad_ref.float() - grad_new).abs().max().item() < 1e-5
 
     def test_checkpoint_explicitly_uses_non_reentrant(self) -> None:
         """Verify that checkpointing explicitly passes use_reentrant=False."""
@@ -305,7 +299,7 @@ training:
             return count
 
         for cs in (None, 8, 16, 64):
-            expected = 1 if cs is None else math.ceil(64 / cs)
+            expected = 2 if cs is None else 2 * math.ceil(64 / cs)
             assert _calls(cs) == expected
 
     def test_all_masked_labels_returns_zero_and_finite_grad(self) -> None:
@@ -462,6 +456,70 @@ training:
         # Expect at least a 1.5x - 2x reduction on retained autograd bytes
         assert dense_bytes / ckpt_bytes >= 1.5
 
+    @pytest.mark.parametrize("divergence", ["forward_kl", "reverse_kl", "js"])
+    @pytest.mark.parametrize("chunk_size", [None, 1, 4])
+    @pytest.mark.parametrize("use_checkpoint", [False, True])
+    @pytest.mark.parametrize("dtype_name", ["float32", "bfloat16", "float16"])
+    def test_low_temperature_chunked_gradients_stay_finite(
+        self, divergence: str, chunk_size: int | None, use_checkpoint: bool, dtype_name: str
+    ) -> None:
+        """Low temperature (T=0.05) gradients stay finite across chunked paths (#719 / #722)."""
+        torch = _torch_or_skip()
+        from soup_cli.trainer.distill import _compute_distill_term
+
+        dtype = getattr(torch, dtype_name)
+        student = torch.tensor(
+            [[[0.0, 0.0], [0.0, -6.0], [0.0, 0.0]]],
+            dtype=dtype,
+            requires_grad=True,
+        )
+        teacher = torch.tensor([[[0.0, 0.0], [0.0, -0.5], [0.0, 0.0]]], dtype=dtype)
+        mask = torch.tensor([[0, 0, 1]])
+        labels = mask.masked_fill(mask == 0, -100)
+
+        loss = _compute_distill_term(
+            student,
+            teacher,
+            divergence,
+            temperature=0.05,
+            labels=labels,
+            chunk_size=chunk_size,
+            use_checkpoint=use_checkpoint,
+        )
+        loss.backward()
+
+        assert torch.isfinite(loss)
+        assert student.grad is not None
+        assert torch.isfinite(student.grad).all()
+
+    @pytest.mark.parametrize("divergence", ["forward_kl", "reverse_kl", "js"])
+    def test_bfloat16_large_active_tokens_dense_vs_chunked_parity(self, divergence: str) -> None:
+        """Pins FP32 accumulation and FP32 denominator at scale (>=512 active tokens)."""
+        torch = _torch_or_skip()
+        from soup_cli.trainer.distill import _compute_distill_term
+
+        torch.manual_seed(42)
+        batch, seq, vocab = 2, 300, 64
+        temp = 2.0
+        s_dense = torch.randn(batch, seq, vocab, dtype=torch.bfloat16, requires_grad=True)
+        t_dense = torch.randn(batch, seq, vocab, dtype=torch.bfloat16)
+        labels = torch.full((batch, seq), -100, dtype=torch.long)
+        labels[:, 25:] = 1  # 2 * 275 = 550 active tokens (>512)
+
+        loss_dense = _compute_distill_term(
+            s_dense, t_dense, divergence, temp, labels=labels, chunk_size=None, use_checkpoint=False
+        )
+        loss_dense.backward()
+
+        s_chunk = s_dense.detach().clone().requires_grad_(True)
+        loss_chunk = _compute_distill_term(
+            s_chunk, t_dense, divergence, temp, labels=labels, chunk_size=8, use_checkpoint=False
+        )
+        loss_chunk.backward()
+
+        assert abs(loss_dense.item() - loss_chunk.item()) < 5e-3
+        assert (s_dense.grad - s_chunk.grad).abs().max().item() < 5e-3
+
 
 class TestDistillConfigSchema:
     def test_distill_chunk_size_validates(self) -> None:
@@ -549,4 +607,56 @@ class TestDistillConfigSchema:
                 "task: sft\n"
                 "training:\n"
                 "  distill_checkpoint: true\n"
+            )
+
+    def test_distill_chunk_fields_incompatible_with_uld_minillm_sequence(self) -> None:
+        from soup_cli.config.loader import load_config_from_string
+
+        # uld_strategy
+        with pytest.raises(
+            ValueError, match="Distillation fields.*incompatible with training.uld_strategy"
+        ):
+            load_config_from_string(
+                "base: test/model\n"
+                "data:\n"
+                "  train: dummy.jsonl\n"
+                "  format: chatml\n"
+                "task: distill\n"
+                "training:\n"
+                "  teacher_model: teacher/model\n"
+                "  uld_strategy: wasserstein\n"
+                "  distill_chunk_size: 64\n"
+            )
+
+        # minillm_enabled
+        with pytest.raises(
+            ValueError, match="Distillation fields.*incompatible with training.minillm_enabled"
+        ):
+            load_config_from_string(
+                "base: test/model\n"
+                "data:\n"
+                "  train: dummy.jsonl\n"
+                "  format: chatml\n"
+                "task: distill\n"
+                "training:\n"
+                "  teacher_model: teacher/model\n"
+                "  minillm_enabled: true\n"
+                "  distill_checkpoint: true\n"
+            )
+
+        # distill_mode sequence
+        with pytest.raises(
+            ValueError,
+            match="Distillation fields.*incompatible with training.distill_mode='sequence'",
+        ):
+            load_config_from_string(
+                "base: test/model\n"
+                "data:\n"
+                "  train: dummy.jsonl\n"
+                "  format: chatml\n"
+                "task: distill\n"
+                "training:\n"
+                "  teacher_model: teacher/model\n"
+                "  distill_mode: sequence\n"
+                "  distill_chunk_size: 64\n"
             )
