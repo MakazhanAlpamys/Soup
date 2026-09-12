@@ -183,13 +183,12 @@ def install_dequant_forward(module: Any) -> int:
     tensor through the ordinary mechanism, which checkpointing DOES discard and
     recompute, and the transient lives only inside the recomputed block — O(window).
 
-    This is not a numerics change at training shapes. ``bitsandbytes::gemm_4bit``
-    dispatches on M with ``_gemm_4bit_custom_max_m = 1536``, and on real projection
-    shapes it takes ``_dequant_linear_fallback`` at every M measured from 8 to 2048 —
-    i.e. bitsandbytes already does exactly this. The dtype handling below therefore
-    mirrors ``Linear4bit.forward`` line for line, replacing only the final call: a
-    dequantisation into a different dtype than bnb's own would introduce a rounding
-    difference precisely where there is none today.
+    This changes the computation path used by the patched NF4 module. With
+    bitsandbytes 0.50.2, the native fused ``MatMul4Bit`` path and explicit
+    ``dequantize_4bit`` + ``F.linear`` can disagree at small M: measured at
+    K=N=4096, the paths diverge through M=64 and agree at M=2048. The
+    dequantise + linear path is retained for correctness under checkpointing
+    (#331), not because it is numerically free.
 
     Returns the number of modules patched, so a caller can assert it patched
     something. Zero would mean the model carries no 4-bit linears at all.
