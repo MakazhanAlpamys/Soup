@@ -547,8 +547,18 @@ of which exit 0 — plus `unknown_reason`, the same explanation the table
 prints. Config warnings (an unknown key, for instance) go to stderr, so stdout
 under `--json` is the payload and nothing else.
 
-Exits non-zero on divergence, so it composes into CI and `soup ship` rather
-than only being read.
+**Exit codes: 0 = agreement, 2 = DIVERGED, 1 = usage or read error.** The
+verdict is kept off `1` so a CI gate can tell "the run did not do what the
+config asked" from "the path was wrong" -- a missing `adapter_config.json`, a
+missing `--config` and a path outside the working directory all exit `1`.
+This follows `soup ship` / `soup shrink` (0 pass / 2 failed gate / 1 error)
+rather than the older `adapters scan`, which predates that convention.
+`unknown` rows exit `0`.
+
+Strings in `adapter_config.json` are untrusted -- an adapter can be downloaded
+-- so record-derived text is stripped of ANSI/OSC control bytes and escaped
+against Rich markup before it is printed. `--json` is not sanitised: a machine
+consumer gets the bytes the record actually holds.
 
 ## Adapter Backdoor Scanner (`soup adapters scan`)
 

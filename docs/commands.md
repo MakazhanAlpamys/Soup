@@ -141,7 +141,7 @@ soup cost --config soup.yaml --gpu H100      Estimate training cost for specific
 soup adapters list ./output/                 Scan for LoRA adapters
 soup adapters info ./output/checkpoint-500/  Show adapter metadata
 soup adapters compare adapter1/ adapter2/    Compare two adapters
-soup adapters audit <adapter> --config soup.yaml [--json]   Compare a finished run's adapter_config.json against the config that started it (#762); a setting the record cannot speak to is 'unknown', never 'ok'. Exits non-zero on divergence so it composes into CI.
+soup adapters audit <adapter> --config soup.yaml [--json]   Compare a finished run's adapter_config.json against the config that started it (#762); a setting the record cannot speak to is 'unknown', never 'ok'. Exit codes 0=agreement, 2=DIVERGED, 1=usage error, so CI can tell a verdict from a mistyped path.
 soup loop init <model> --eval <s> --baseline <b> [--pre-wired]  Create .soup/loop.yaml (data flywheel; --pre-wired = real stages)
 soup loop status                              Counters + status + pre_wired flag
 soup loop watch [--detach] [--max-iter N] [--pre-wired] [--pack-cans]  Harvest → train → gate → deploy daemon (pre-wired stages + Soup Can packing)

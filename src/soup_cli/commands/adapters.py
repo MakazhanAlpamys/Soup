@@ -1716,9 +1716,12 @@ def audit(
     once accepted and silently dropped (#683, #684, #685, #686, #749). This
     reads that record back and reports every place it disagrees with the config.
 
-    Exits non-zero on divergence so it composes into CI and ``soup ship``.
-    Settings the record cannot speak to are reported ``unknown``, never as
-    agreeing: a false clean bill is worse than no audit.
+    Exit codes: 0=agreement, 2=DIVERGED, 1=usage/read error. The verdict is
+    kept off ``1`` so a CI gate can tell "the run did not do what the config
+    asked" from "the path was wrong"; this follows ``soup ship`` / ``soup
+    shrink`` rather than the older ``adapters scan``. Settings the record
+    cannot speak to are reported ``unknown``, never as agreeing -- a false
+    clean bill is worse than no audit -- and ``unknown`` exits 0.
     """
     import contextlib
     import json as _json

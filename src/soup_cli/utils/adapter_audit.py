@@ -47,6 +47,16 @@ DIVERGED = "diverged"
 UNKNOWN = "unknown"
 
 
+def _is_number(value: Any) -> bool:
+    """A real number, excluding ``bool``.
+
+    ``bool`` is a subclass of ``int``, and treating it as one is the defect
+    ``_cmp`` and ``_audit_masking`` both guard against, so it is excluded here
+    too rather than in three separate places.
+    """
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
 @dataclass(frozen=True)
 class AuditRow:
     """One setting, as asked for and as recorded."""
@@ -85,9 +95,17 @@ class AuditResult:
 
     @property
     def exit_code(self) -> int:
-        """Non-zero only for divergence, so this composes into CI and `soup
-        ship`. `unknown` deliberately does not fail: see the module docstring."""
-        return 1 if self.diverged_count else 0
+        """0 agreement, 2 divergence. The caller maps its own errors to 1.
+
+        Divergence is ``2`` rather than ``1`` so a CI gate can tell "the run
+        did not do what the config asked" from "the path was wrong" -- both
+        exited ``1``, and #762 exists for CI composability, which that
+        collapse defeats. Repo convention (``ship``, ``shrink``, ``data canary
+        check``): 0 pass / 2 failed gate / 1 error.
+
+        ``unknown`` deliberately does not fail: see the module docstring.
+        """
+        return 2 if self.diverged_count else 0
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -128,14 +146,22 @@ def _cmp(
     asked: Any,
     ran: Any,
     *,
-    detail: str = "",
     normalise: "Optional[Any]" = None,
 ) -> AuditRow:
     """Compare one setting. ``normalise`` is applied to both sides before the
     equality test, never to what is displayed -- the user should see the value
-    they wrote, not a lowered copy of it."""
+    they wrote, not a lowered copy of it.
+
+    A ``detail=`` parameter used to sit here, passed by no call site, so the
+    DIVERGED branch below returned an unconditionally empty string (#763
+    review). Removed rather than wired up: a declared-and-never-read parameter
+    inside the command written to catch declared-and-never-read settings is
+    not a joke worth keeping. Rows needing an explanation build it themselves
+    (``_audit_optimizer``, ``_audit_warmup``, ``_audit_masking``), and the two
+    refusals below carry their own.
+    """
     if ran is None:
-        return AuditRow(setting, asked, None, UNKNOWN, detail or "not in the record")
+        return AuditRow(setting, asked, None, UNKNOWN, "not in the record")
     # `True == 1` and `False == 0` in Python, so a record carrying
     # `max_grad_norm: true` compared equal to a requested 1.0 and was handed a
     # clean bill. Only a malformed record does this, but "the record is
@@ -149,7 +175,7 @@ def _cmp(
         )
     left, right = (normalise(asked), normalise(ran)) if normalise else (asked, ran)
     status = OK if left == right else DIVERGED
-    return AuditRow(setting, asked, ran, status, detail if status == DIVERGED else "")
+    return AuditRow(setting, asked, ran, status)
 
 
 def _audit_optimizer(training: Dict[str, Any], record: Dict[str, Any]) -> AuditRow:
@@ -179,6 +205,19 @@ def _audit_warmup(training: Dict[str, Any], record: Dict[str, Any]) -> AuditRow:
     total = record.get("total_updates")
     if ran is None or total is None:
         return AuditRow("warmup_ratio", asked, ran, UNKNOWN, "not in the record")
+
+    # The record's types were trusted here, so `total_updates: "twelve"` in a
+    # hand-edited or downloaded adapter reached `int(total)` and raised
+    # `ValueError` out of the command. `audit` is meant to be a CI gate, and a
+    # traceback is not a verdict -- same threat model as the terminal-control
+    # hardening, worse outcome.
+    if not _is_number(ran) or not _is_number(total):
+        return AuditRow(
+            "warmup_ratio", asked, ran, DIVERGED,
+            f"the record holds warmup_updates={ran!r} and total_updates="
+            f"{total!r}; both must be numbers for the warmup schedule to be "
+            "checked at all",
+        )
 
     expected = int(float(asked) * int(total))
 
@@ -220,7 +259,10 @@ def _ran_alpha(record: Dict[str, Any]) -> Optional[float]:
     if "alpha" in params:
         return params["alpha"]
     scale, rank = params.get("scale"), params.get("rank")
-    if scale is None or rank is None:
+    if not _is_number(scale) or not _is_number(rank):
+        # Absent, or present but unusable -- `scale * rank` on two strings
+        # raised `TypeError` out of the command. Either way the record carries
+        # no readable alpha, which is `unknown`, never agreement.
         return None
     return scale * rank
 
@@ -248,6 +290,29 @@ def _audit_masking(data: Dict[str, Any], record: Dict[str, Any]) -> AuditRow:
     asked = bool(data.get("train_on_responses_only", True))
     prefix_mask = record.get("mask_prompt")
     token_mask = record.get("response_token_mask")
+
+    # Same guard `_cmp` carries. A JSON string "false" is truthy, so an effect
+    # key that is not a real boolean would read as "masking happened" -- a
+    # false clean bill on the headline row, arrived at through a type rather
+    # than through a missing key. `mlx_sft.py` always writes real bools, so
+    # this only fires on a foreign or hand-edited record, which is the same
+    # threat model the terminal-control hardening rests on.
+    malformed = [
+        (name, value)
+        for name, value in (
+            ("mask_prompt", prefix_mask),
+            ("response_token_mask", token_mask),
+        )
+        if value is not None and not isinstance(value, bool)
+    ]
+    if malformed:
+        shown = ", ".join(f"{n}={v!r} ({type(v).__name__})" for n, v in malformed)
+        return AuditRow(
+            "data.train_on_responses_only", asked, malformed[0][1], DIVERGED,
+            f"the record holds {shown} where a bool is required; a non-empty "
+            "string is truthy in Python, so this cannot be read as evidence "
+            "either way",
+        )
 
     # Presence is provable from one key, absence needs both. A truthy key
     # settles it whatever the other would have said; but reading a *missing*
