@@ -156,12 +156,19 @@ def show(
         console.print("[dim]Use [bold]soup runs[/] to see all runs.[/]")
         raise typer.Exit(1)
 
-    # Format status
+    # Format status. Enumerated rather than a catch-all "else: running" —
+    # that fallback used to print "running" for a "terminated" row too,
+    # since _reconcile_orphaned_run (#401) and a "launching" MCP row both
+    # fell through it silently (#764/#767 review).
     status = run["status"]
     if status == "completed":
         status_str = "[green]completed[/]"
     elif status == "failed":
         status_str = "[red]failed[/]"
+    elif status == "terminated":
+        status_str = "[red]terminated[/]"
+    elif status == "launching":
+        status_str = "[dim]launching[/]"
     else:
         status_str = "[yellow]running[/]"
 
@@ -180,6 +187,13 @@ def show(
         f"Name:       {_esc(str(run.get('experiment_name') or '-'))}",
         f"Status:     {status_str}",
         f"Date:       {run['created_at'][:19].replace('T', ' ')}",
+    ]
+    # error_message (#764/#767): written by fail_run since #764, but read by
+    # nothing until now — a failed run's "why" was sitting in the database
+    # with no surface to show it.
+    if run.get("error_message"):
+        info_lines.append(f"Error:      {_esc(str(run['error_message']))}")
+    info_lines.extend([
         "",
         f"Model:      [bold]{_esc(str(run.get('base_model') or '-'))}[/]",
         f"Task:       {_esc(str(run.get('task') or '-'))}",
@@ -192,7 +206,7 @@ def show(
         f"Duration:   {duration_str}",
         f"Cost:       {_fmt_cost(run)}",
         f"Output:     {_esc(str(run.get('output_dir') or '-'))}",
-    ]
+    ])
     console.print(Panel("\n".join(info_lines), title="Run Details"))
 
     # Config section

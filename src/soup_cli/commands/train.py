@@ -193,14 +193,28 @@ def _describe_exception_for_tracker(exc: BaseException) -> str:
     """Format ``exc`` for ``ExperimentTracker.fail_run``'s ``error=`` column.
 
     A handled setup failure (a bad ``--tracker`` value, a hub download
-    error) exits via ``raise typer.Exit(...) from exc``. ``typer.Exit``
-    carries no message of its own, so formatting the caught exception
-    directly writes ``"Exit: "`` to the row and loses the reason a human
-    needs — the one already printed to the console just before the raise.
-    Unwrapping to ``__cause__`` when present recovers it (#764 review).
+    error, a hub-cache path-containment refusal) exits via
+    ``raise typer.Exit(...)``, sometimes chained with ``from exc`` and
+    sometimes not. ``typer.Exit`` carries no message of its own, so
+    formatting it directly writes ``"Exit: "`` to the row and loses the
+    reason a human needs. Unwrapping to ``__cause__`` recovers it for the
+    chained sites; recording ``exit_code`` covers the one site that
+    raises bare, so all three read as something more useful than
+    ``"Exit: "`` (#764/#767 review).
+
+    The unwrap is gated to ``typer.Exit`` specifically — this helper also
+    runs on ordinary training failures (``raise X from Y`` deep inside a
+    library), where the outer exception X is the operator-facing reason
+    and the inner cause Y is just the mechanism. Unwrapping unconditionally
+    would discard X and keep only Y, which is less informative than before
+    this fix existed — the exact regression the same review caught.
     """
-    cause = exc.__cause__ or exc
-    return f"{type(cause).__name__}: {cause}"
+    if isinstance(exc, typer.Exit):
+        if exc.__cause__ is not None:
+            cause = exc.__cause__
+            return f"{type(cause).__name__}: {cause} (exit code {exc.exit_code})"
+        return f"Exit(code={exc.exit_code})"
+    return f"{type(exc).__name__}: {exc}"
 
 
 def train(

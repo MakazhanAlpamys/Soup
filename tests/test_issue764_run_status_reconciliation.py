@@ -131,3 +131,124 @@ class TestRunRecordsItsOwnPid:
 
         run = _the_run(db_path)
         assert run["pid"] == os.getpid(), run
+
+
+class TestDescribeExceptionForTracker:
+    """Second review round on #767: the first fix over-corrected.
+
+    Unwrapping to ``__cause__`` fixes the three ``typer.Exit`` sites, but
+    doing it unconditionally also rewrites ordinary training-phase
+    failures — a plain ``raise X from Y`` deep inside a library then
+    stores Y (the mechanism) and discards X (the operator-facing reason),
+    which is *less* informative than before this whole fix existed. The
+    unwrap must be gated to ``typer.Exit`` specifically.
+    """
+
+    def test_a_chained_typer_exit_unwraps_to_the_real_cause(self):
+        import typer
+
+        from soup_cli.commands.train import _describe_exception_for_tracker
+
+        try:
+            try:
+                raise ValueError("simulated --tracker resolution failure")
+            except ValueError as exc:
+                raise typer.Exit(code=2) from exc
+        except typer.Exit as e:
+            message = _describe_exception_for_tracker(e)
+
+        assert "ValueError" in message
+        assert "simulated --tracker resolution failure" in message
+        assert "Exit:" not in message
+
+    def test_a_bare_typer_exit_records_the_exit_code_not_a_blank_reason(self):
+        """The hub-cache containment refusal raises `typer.Exit(code=1)`
+        with no `from exc` at all — there is no cause to unwrap, so the
+        fix has to record *something* other than the old "Exit: "."""
+        import typer
+
+        from soup_cli.commands.train import _describe_exception_for_tracker
+
+        try:
+            raise typer.Exit(code=1)
+        except typer.Exit as e:
+            message = _describe_exception_for_tracker(e)
+
+        assert message != "Exit: "
+        assert "1" in message
+
+    def test_an_ordinary_chained_exception_keeps_the_outer_message(self):
+        """Regression pin: a plain `raise X from Y` (not a typer.Exit) must
+        keep reporting X, the operator-facing reason, not Y, the inner
+        mechanism — unwrapping unconditionally inverts #764's own point,
+        that a run dying at 'Loading tokenizer' should read differently
+        from one that diverged at step 900."""
+        from soup_cli.commands.train import _describe_exception_for_tracker
+
+        try:
+            try:
+                raise OSError("permission denied: /home/u/.ssh/id_rsa")
+            except OSError as exc:
+                raise RuntimeError(
+                    "failed to load tokenizer for meta-llama/Llama-3.1-8B"
+                ) from exc
+        except RuntimeError as e:
+            message = _describe_exception_for_tracker(e)
+
+        assert "RuntimeError" in message
+        assert "failed to load tokenizer" in message
+        assert "permission denied" not in message
+
+
+class TestFailRunRedactsAndCapsTheErrorMessage:
+    """error_message is stored verbatim otherwise: a token embedded in an
+    exception (a failed hub download's URL, an auth header) would sit in
+    plaintext in a locally-readable database, and an unbounded string from
+    a runaway stack trace could bloat the runs table."""
+
+    def test_a_token_shaped_string_is_redacted(self, tmp_path):
+        from soup_cli.experiment.tracker import ExperimentTracker
+
+        db_path = tmp_path / "experiments.db"
+        tracker = ExperimentTracker(db_path=db_path)
+        run_id = tracker.start_run(
+            config_dict={"base": "x"}, device="cpu", device_name="cpu", gpu_info={},
+        )
+        tracker.fail_run(
+            run_id,
+            error="RuntimeError: failed to download: "
+            "token=hf_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345",
+        )
+
+        stored = tracker.get_run(run_id)["error_message"]
+        assert "hf_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345" not in stored
+        assert "<redacted>" in stored
+
+    def test_an_oversized_message_is_capped(self, tmp_path):
+        from soup_cli.experiment.tracker import (
+            _MAX_ERROR_MESSAGE_CHARS,
+            ExperimentTracker,
+        )
+
+        db_path = tmp_path / "experiments.db"
+        tracker = ExperimentTracker(db_path=db_path)
+        run_id = tracker.start_run(
+            config_dict={"base": "x"}, device="cpu", device_name="cpu", gpu_info={},
+        )
+        tracker.fail_run(run_id, error="x" * (_MAX_ERROR_MESSAGE_CHARS * 3))
+
+        stored = tracker.get_run(run_id)["error_message"]
+        assert len(stored) <= _MAX_ERROR_MESSAGE_CHARS + len("...(truncated)")
+
+    def test_a_short_message_is_left_alone(self, tmp_path):
+        """Control: redaction/capping must not corrupt an ordinary message."""
+        from soup_cli.experiment.tracker import ExperimentTracker
+
+        db_path = tmp_path / "experiments.db"
+        tracker = ExperimentTracker(db_path=db_path)
+        run_id = tracker.start_run(
+            config_dict={"base": "x"}, device="cpu", device_name="cpu", gpu_info={},
+        )
+        tracker.fail_run(run_id, error="ValueError: bad config")
+
+        assert tracker.get_run(run_id)["error_message"] == "ValueError: bad config"

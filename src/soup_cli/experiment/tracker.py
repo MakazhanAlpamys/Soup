@@ -18,7 +18,13 @@ from pathlib import Path
 from typing import Optional
 
 from soup_cli.utils.constants import EXPERIMENTS_DB, SOUP_DIR
+from soup_cli.utils.crash import redact_secrets
 from soup_cli.utils.process_liveness import process_is_alive as _process_is_alive
+
+# error_message is operator-facing text read in `soup runs show`, not a
+# diagnostic dump — capped well short of a full traceback so one runaway
+# stack trace can't bloat the runs table (#764/#767 review).
+_MAX_ERROR_MESSAGE_CHARS = 2000
 
 # Run status values this module reconciles. A watcher that never unwound (its
 # daemon thread was killed when the MCP server exited) leaves the run at
@@ -416,9 +422,16 @@ class ExperimentTracker:
 
         ``error`` distinguishes a run that never got past setup from one that
         diverged mid-training — both used to read as an identical 'failed'
-        row with nothing else to go on.
+        row with nothing else to go on. Redacted and length-capped before
+        storage: an exception message can embed a token from a failed HF/hub
+        auth call, and this column must not become the place secrets leak
+        into a locally-readable database (#764/#767 review).
         """
         conn = self._get_conn()
+        if error is not None:
+            error = redact_secrets(error)
+            if len(error) > _MAX_ERROR_MESSAGE_CHARS:
+                error = error[:_MAX_ERROR_MESSAGE_CHARS] + "...(truncated)"
         conn.execute(
             "UPDATE runs SET status = 'failed', error_message = ? WHERE run_id = ?",
             (error, run_id),
