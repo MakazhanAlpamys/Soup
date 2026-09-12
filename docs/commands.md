@@ -11,6 +11,8 @@ soup init [--template chat|code|...|audio]       Create config
 soup init --template hipaa|soc2|eu-ai-act|sr-11-7  Compliance-shaped starting config + the commands for that regime (v0.71.35)
 soup autopilot --model <id> --data d.jsonl --goal <g>  Zero-config: pick task/quant/LR/epochs from data + model + goal
 soup advise <data> --goal "..."               Pre-flight decision: PROMPT_ENG / RAG / SFT / DPO / GRPO — run BEFORE spending GPU hours
+soup advise compare                           Show prior verdicts from advise history
+soup advise explain                           Rubric + evidence trail of the last verdict
 soup fetch <name>                             Fetch a ready-to-edit example config from the bundled catalog
 soup train --config soup.yaml                 Start training
 soup train --config soup.yaml --tensorboard   Train with TensorBoard logging
@@ -61,6 +63,16 @@ soup eval leaderboard                         Local model leaderboard
 soup eval human --input p.jsonl               Human A/B evaluation
 soup eval gate --suite gate.yaml              Run eval-gate suite standalone
 soup eval quant-check --before X --after Y --tasks t.jsonl  Before/after quantization eval (OK/MINOR/MAJOR verdict)
+soup eval design DATA                         Draft an eval suite from training data + goal
+soup eval discover DATA                       Discover a held-out canary set
+soup eval lock DESIGN                         Freeze a design as a checksummed suite
+soup eval coverage DESIGN                     Coverage / gap analysis for an eval suite
+soup eval against BASELINE_RUN_ID             Run-vs-run regression check (paired bootstrap)
+soup eval gate-install                        Install a pre-push regression gate
+soup eval behavior RUN_ID                     Behaviour battery pre/post diff
+soup eval capability RUN_ID                   Capability profile (MMLU-Pro / GPQA / AIME ...)
+soup eval checklist SPEC                      CheckList MFT / INV / DIR tests
+soup eval irt-subset RESPONSES                Minimum-cost eval subset via IRT
 soup diagnose <run-id>                        Post-training report card: forgetting / refusal / format / mode collapse / memorization / contamination
 soup serve --model ./output --port 8000       OpenAI-compatible API server
 soup serve --model ./output --backend vllm    vLLM backend (2-4x throughput)
@@ -124,6 +136,10 @@ soup data push --input d.jsonl --hf-dataset u/n --hub modelscope|modelers  Uploa
 soup data registry                           List all registered datasets
 soup data demo                                List bundled demo JSONL fixtures
 soup data demo alpaca_demo --output ./d.jsonl Copy a bundled demo JSONL fixture
+soup data ingest FILE                         PDF/DOCX/MD/TXT -> JSONL (one row per page/heading)
+soup data preprocess CONFIG                   AOT-tokenize and cache for reuse across runs
+soup data recipe PATH                         Validate / execute a Data Recipe DAG
+soup data mix                                 BETA mixture-weight optimiser (proxy runs)
 soup data forge --docs ./docs --task sft --target-rows 1000  Synthetic data pipeline + provenance
 soup data forge --docs ./docs --hub modelscope --teacher owner/name  Pre-fetch the teacher from an alternative hub
 soup data score --input rows.jsonl            Composite quality scorecard (PII + toxicity + lang + edu)
@@ -141,6 +157,9 @@ soup cost --config soup.yaml --gpu H100      Estimate training cost for specific
 soup adapters list ./output/                 Scan for LoRA adapters
 soup adapters info ./output/checkpoint-500/  Show adapter metadata
 soup adapters compare adapter1/ adapter2/    Compare two adapters
+soup adapters branches                        List snapshotted branches
+soup adapters checkout NAME                   Restore a snapshotted branch's config
+soup adapters diff A B                        Per-layer ΔW Frobenius diff + effective-rank drift
 soup loop init <model> --eval <s> --baseline <b> [--pre-wired]  Create .soup/loop.yaml (data flywheel; --pre-wired = real stages)
 soup loop status                              Counters + status + pre_wired flag
 soup loop watch [--detach] [--max-iter N] [--pre-wired] [--pack-cans]  Harvest → train → gate → deploy daemon (pre-wired stages + Soup Can packing)
@@ -170,6 +189,9 @@ soup runs                                     List training runs
 soup runs show <run_id>                       Run details + loss graph + cost
 soup runs compare <run_1> <run_2>             Compare two runs
 soup runs replay <run_id>                     Replay summary + loss curve from history (also plots a benchmark-score curve when the metric lives in eval_results)
+soup runs clean RUN_ID                        Clean redundant checkpoint files
+soup runs curriculum-curve RUN_ID             BETA curriculum bucket-weight plot
+soup runs delete RUN_ID                       Delete a run and its metrics
 soup why [run_id]                             Explain training anomalies (heuristic)
 soup ship --base <m> --adapter <lora> --task-eval t.jsonl  SHIP / DON'T-SHIP verdict: task win AND no regression on the bundled suite (exit 0=SHIP / 2=DON'T / 3=usage / 1=runtime) (v0.71.25; leg-2 real + usage-off-2 v0.71.38)
 soup ship --evidence ev.json [--output v.json]  Decide offline from pre-computed scores (no model load)
@@ -220,7 +242,7 @@ soup doctor [--nccl] [--disk] [--config F]    Check environment (optionally chec
 soup monitor                                  NVIDIA / Apple Silicon GPU monitor: util / temp / VRAM / power
 soup quickstart [--dry-run]                   Full demo
 soup plugins list|install|enable|disable      Manage Soup plugins
-soup llama cli|mtmd-cli|gguf-split|server ... Proxy to the llama.cpp binaries
+soup llama cli|mtmd-cli|gguf-split|server|quantize ... Proxy to the llama.cpp binaries
 soup quantize <model> --to <fmt>              Quantize a model — ergonomic alias for `soup export --format <fmt>`
 soup bom emit --name <n> --base-sha <hex> --config-sha <hex> --format cyclonedx|spdx|both  CycloneDX ML-BOM / SPDX AI bill of materials
 soup adapters scan <adapter>                  Spectral backdoor scan (rank-1 dominance + outlier detection)
