@@ -7,12 +7,9 @@ regardless of how the adapter was trained. An NF4-trained adapter was
 therefore judged on a bf16 base it never saw during training.
 
 Scoped to acceptance criteria 1 and 3 of the issue: threading the argument
-through and a test that the reported numerics match the requested ones (here,
-that ``from_pretrained`` actually receives the requested quantization_config).
-Acceptance criteria 2 and 4 (``soup ship`` reporting the numerics used, and a
-staleness gate on evidence recorded under mismatched numerics) are larger
-integration work into ``soup ship``'s evidence machinery and are left open,
-per the PR body.
+through and a test that ``from_pretrained`` actually receives the requested
+quantization_config. Criteria 2 and 4 (verdict / evidence stamp + staleness
+gate) live in ``test_issue367_ship_numerics.py``.
 
 Tests mock at the ``from_pretrained`` boundary, matching every other test in
 this module's consumer chain (module docstring: "Tests mock at this
@@ -220,8 +217,8 @@ class TestBuildQuantizationConfigHelper:
 
 
 # #367 checklist item 1, second half: the four internal callers must accept
-# and forward ``quantization`` too. Criteria 2 and 4 stay out of scope, same
-# as the original PR (see the module docstring above).
+# and forward ``quantization`` too. Criteria 2 and 4 are in
+# test_issue367_ship_numerics.py.
 
 
 class TestTheFourCallersForwardQuantization:

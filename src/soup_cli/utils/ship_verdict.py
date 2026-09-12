@@ -23,19 +23,23 @@ CPU-testable. Model loading + live evaluation live in ``commands/ship.py``.
 Public surface
 --------------
 - Frozen dataclasses: ``TaskWin``, ``BenchmarkDelta``, ``ShipVerdict``.
-- Constants: ``TASK_MODES``, ``SUPPORTED_TASK_MODES``, ``DECISION_SHIP`` /
-  ``DECISION_DONT_SHIP``, the ``FAILED_*`` rule codes, ``DEFAULT_FORGETTING_THRESHOLD``.
+- Constants: ``EVIDENCE_SCHEMA_FIELDS``, ``TASK_MODES``,
+  ``SUPPORTED_TASK_MODES``, ``DECISION_SHIP`` / ``DECISION_DONT_SHIP``, the
+  ``FAILED_*`` rule codes, ``DEFAULT_FORGETTING_THRESHOLD``.
 - Pure functions: ``build_task_win``, ``compute_benchmark_deltas``,
   ``decide_ship`` (the moat), ``render_ship_panel``, ``format_ship_rubric``,
+  ``verdict_from_evidence`` (the canonical evidence reader),
   ``verdict_to_dict``, ``verdict_to_evidence`` (the inverse of the ``--evidence``
-  reader — makes ``soup ship`` output replayable as input, #312).
+  reader — makes ``soup ship`` output replayable as input, #312),
+  ``numerics_family`` / ``numerics_from_evidence`` (the #367 judge-numerics stamp).
 """
 
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
-from typing import Dict, List, Mapping, Optional, Sequence, Tuple
+from dataclasses import dataclass, replace
+from types import MappingProxyType
+from typing import Dict, FrozenSet, List, Mapping, Optional, Sequence, Tuple
 
 from rich.console import Group
 from rich.markup import escape
@@ -47,6 +51,18 @@ from soup_cli import __version__
 # ---------------------------------------------------------------------------
 # Public constants
 # ---------------------------------------------------------------------------
+
+# One registry for the evidence fields understood by the canonical reader and
+# emitted by ``verdict_to_evidence``. Parity tests must exercise every field so
+# a future optional addition cannot be silently ignored by both public readers.
+# ``provenance`` is intentionally opaque metadata, so its nested keys are not
+# part of the verdict schema.
+EVIDENCE_SCHEMA_FIELDS: Mapping[str, FrozenSet[str]] = MappingProxyType({
+    "root": frozenset({"task", "benchmarks", "noise_floor", "provenance", "numerics"}),
+    "task": frozenset({"mode", "base", "tuned"}),
+    "benchmark": frozenset({"base", "tuned"}),
+    "noise_floor": frozenset({"runs", "floors", "judge_inclusive"}),
+})
 
 # Leg-1 task-win modes. ``pairwise`` (true judge win-rate) landed in v0.71.31:
 # a ``TaskWin(base=0.5 coin-flip, tuned=win-rate)`` where ``won = tuned > 0.5``.
@@ -64,6 +80,16 @@ FAILED_REGRESSION = "regression"  # leg 2: a general benchmark regressed
 # Default forgetting threshold — 0.05 ABSOLUTE points, mirroring
 # ``EvalGateConfig.regression_threshold`` and ``run_gate`` semantics.
 DEFAULT_FORGETTING_THRESHOLD = 0.05
+
+# Canonical live-eval load stamps (#367). Quantized loads use the BitsAndBytes
+# format name; full-precision loads use the torch dtype that actually went to
+# ``from_pretrained``. The staleness gate compares *family* (``4bit`` / ``8bit``
+# / ``full``), so a CUDA-bf16 run and a CPU-fp32 run of the same recipe are not
+# stale relative to each other — the bug is NF4 vs bf16, not bf16 vs fp32.
+KNOWN_NUMERICS: Tuple[str, ...] = ("4bit", "8bit", "bfloat16", "float32")
+_QUANTIZED_NUMERICS = frozenset({"4bit", "8bit"})
+_FULL_PRECISION_NUMERICS = frozenset({"bfloat16", "float32"})
+NUMERICS_FAMILY_FULL = "full"
 
 # Float-noise tolerance so an exactly-at-threshold drop reads as OK (a -5.00%
 # drop must not flip to "regressed" just because 0.80 - 0.75 == 0.05000000004).
@@ -204,11 +230,54 @@ class ShipVerdict:
     #: Set only when ``--noise-floor`` measured one; ``None`` keeps the v0.73.1
     #: path byte-identical.
     noise_floor: Optional[NoiseFloor] = None
+    #: Actual live-eval load precision (one of ``KNOWN_NUMERICS``). ``None`` on
+    #: pre-#367 evidence that never stamped it — the panel then says
+    #: ``unstamped`` rather than implying bf16.
+    numerics: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
 # Validation helpers
 # ---------------------------------------------------------------------------
+
+def parse_numerics(value: object) -> str:
+    """Validate a present numerics stamp. Does not echo unknown values."""
+    if isinstance(value, str) and value in KNOWN_NUMERICS:
+        return value
+    if not isinstance(value, str):
+        raise ValueError(f"numerics must be a string, got {type(value).__name__}")
+    raise ValueError(
+        "numerics must be one of " + ", ".join(KNOWN_NUMERICS)
+    )
+
+
+def numerics_family(numerics: str) -> str:
+    """Map a stamp to the family the staleness gate compares.
+
+    ``4bit`` and ``8bit`` stay themselves; ``bfloat16`` and ``float32`` collapse
+    to ``full``. Unknown values raise — callers must ``parse_numerics`` first.
+    """
+    if numerics in _QUANTIZED_NUMERICS:
+        return numerics
+    if numerics in _FULL_PRECISION_NUMERICS:
+        return NUMERICS_FAMILY_FULL
+    raise ValueError(
+        "numerics must be one of " + ", ".join(KNOWN_NUMERICS)
+    )
+
+
+def numerics_from_evidence(payload: object) -> Optional[str]:
+    """Parse an evidence ``numerics`` stamp.
+
+    Returns ``None`` when the key is absent (every pre-#367 evidence file).
+    Raises ``ValueError`` on a present-but-malformed value rather than dropping
+    it: a stamp silently discarded on read would let mismatched numerics replay
+    as if they were never recorded.
+    """
+    if payload is None:
+        return None
+    return parse_numerics(payload)
+
 
 def _validate_score(value: object, name: str) -> float:
     """Coerce ``value`` to a finite float, rejecting bool / non-numeric / NaN."""
@@ -228,6 +297,17 @@ def _validate_threshold(value: object) -> float:
     if not (0.0 <= out <= 1.0):
         raise ValueError("forgetting_threshold must be in [0.0, 1.0]")
     return out
+
+
+def _validate_evidence_fields(
+    payload: Mapping[object, object], section: str, path: str
+) -> None:
+    """Refuse unregistered verdict fields instead of silently ignoring them."""
+    allowed = EVIDENCE_SCHEMA_FIELDS[section]
+    unknown = sorted(str(key) for key in payload if key not in allowed)
+    if unknown:
+        joined = ", ".join(repr(key) for key in unknown)
+        raise ValueError(f"{path} has unsupported field(s): {joined}")
 
 
 def _is_regressed(base: float, tuned: float, threshold: float) -> bool:
@@ -531,6 +611,10 @@ def format_ship_rubric(verdict: ShipVerdict) -> str:
     won_str = "won" if win.won else "no win"
     parts: List[str] = []
     parts.append(f"Decision:    {verdict.decision}")
+    if verdict.numerics is not None:
+        parts.append(f"Judge numerics: {verdict.numerics}")
+    else:
+        parts.append("Judge numerics: unstamped")
     parts.append("")
     parts.append(
         f"Leg 1 task win ({win.mode}): "
@@ -574,7 +658,10 @@ def render_ship_panel(verdict: ShipVerdict) -> Panel:
         # so the panel silently ATE its own leg-1 marker on every run up to and
         # including v0.73.1. The plain-text rubric, which has no markup parser,
         # printed it correctly the whole time — which is why it went unnoticed.
-        f"{win.base:.4f} -> {win.tuned:.4f}  {escape('[' + won_str + ']')}"
+        f"{win.base:.4f} -> {win.tuned:.4f}  {escape('[' + won_str + ']')}\n"
+        "[dim]Judge numerics: "
+        f"{escape(verdict.numerics) if verdict.numerics is not None else 'unstamped'}"
+        "[/]"
     )
 
     table = Table(
@@ -705,7 +792,9 @@ def verdict_to_evidence(
     ``provenance`` (optional) is attached verbatim under a ``"provenance"`` key.
     It is informational to the verdict (the reader ignores it), but the CI
     staleness gate uses ``provenance.config_sha`` to bind evidence to the exact
-    config that produced it (v0.71.39).
+    config that produced it (v0.71.39). ``numerics`` (optional) is the actual
+    live-eval load precision; the gate compares its family against ``--config``
+    (#367).
     """
     if not isinstance(verdict, ShipVerdict):
         raise TypeError("verdict must be a ShipVerdict instance")
@@ -732,6 +821,8 @@ def verdict_to_evidence(
         if verdict.noise_floor.judge_inclusive:
             floor_block["judge_inclusive"] = True
         evidence["noise_floor"] = floor_block
+    if verdict.numerics is not None:
+        evidence["numerics"] = verdict.numerics
     if provenance is not None:
         if not isinstance(provenance, Mapping):
             raise TypeError("provenance must be a mapping")
@@ -760,6 +851,7 @@ def noise_floor_from_evidence(payload: object) -> Optional[NoiseFloor]:
         return None
     if not isinstance(payload, Mapping):
         raise ValueError("evidence.noise_floor must be an object")
+    _validate_evidence_fields(payload, "noise_floor", "evidence.noise_floor")
     runs = payload.get("runs")
     if isinstance(runs, bool) or not isinstance(runs, int):
         raise ValueError("evidence.noise_floor.runs must be an integer")
@@ -793,6 +885,89 @@ def noise_floor_from_evidence(payload: object) -> Optional[NoiseFloor]:
     return NoiseFloor(
         runs=runs, floors=tuple(floors), judge_inclusive=judge_inclusive
     )
+
+
+def verdict_from_evidence(
+    payload: Mapping[str, object],
+    *,
+    forgetting_threshold: float = DEFAULT_FORGETTING_THRESHOLD,
+) -> ShipVerdict:
+    """Decode the complete evidence schema into a verdict.
+
+    This is the single reader shared by the CLI and MCP surfaces. Schema
+    validation belongs here so adding an evidence key cannot update one public
+    surface while leaving the other to silently compute a different verdict.
+    """
+    if not isinstance(payload, Mapping):
+        raise TypeError("evidence must be an object")
+    _validate_evidence_fields(payload, "root", "evidence")
+    threshold = _validate_threshold(forgetting_threshold)
+
+    task = payload.get("task")
+    if not isinstance(task, Mapping):
+        raise ValueError("evidence.task must be an object with 'mode', 'base', 'tuned'")
+    _validate_evidence_fields(task, "task", "evidence.task")
+    mode = task.get("mode", "metric")
+    if mode not in SUPPORTED_TASK_MODES:
+        supported = ", ".join(SUPPORTED_TASK_MODES)
+        raise ValueError(
+            f"evidence.task.mode must be one of {supported}; got {mode!r}"
+        )
+    if "base" not in task or "tuned" not in task:
+        raise ValueError("evidence.task needs both 'base' and 'tuned' scores")
+
+    try:
+        stored_floor = noise_floor_from_evidence(payload.get("noise_floor"))
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(f"invalid evidence.noise_floor: {exc}") from exc
+    try:
+        task_win = build_task_win(
+            str(mode), task["base"], task["tuned"], noise_floor=stored_floor
+        )
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(f"invalid evidence.task: {exc}") from exc
+
+    raw_benchmarks = payload.get("benchmarks", {})
+    if not isinstance(raw_benchmarks, Mapping):
+        raise ValueError(
+            "evidence.benchmarks must be an object of {name: {base, tuned}}"
+        )
+    base_scores: Dict[str, object] = {}
+    tuned_scores: Dict[str, object] = {}
+    for name, entry in raw_benchmarks.items():
+        if not isinstance(entry, Mapping) or "base" not in entry or "tuned" not in entry:
+            raise ValueError(
+                f"evidence.benchmarks[{name!r}] needs 'base' and 'tuned'"
+            )
+        _validate_evidence_fields(
+            entry, "benchmark", f"evidence.benchmarks[{name!r}]"
+        )
+        key = str(name)
+        base_scores[key] = entry["base"]
+        tuned_scores[key] = entry["tuned"]
+
+    try:
+        deltas = compute_benchmark_deltas(
+            base_scores,
+            tuned_scores,
+            forgetting_threshold=threshold,
+            noise_floor=stored_floor,
+        )
+        verdict = decide_ship(
+            task_win,
+            deltas,
+            forgetting_threshold=threshold,
+            noise_floor=stored_floor,
+        )
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(f"invalid evidence.benchmarks: {exc}") from exc
+    try:
+        stored_numerics = numerics_from_evidence(payload.get("numerics"))
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(f"invalid evidence.numerics: {exc}") from exc
+    if stored_numerics is not None:
+        return replace(verdict, numerics=stored_numerics)
+    return verdict
 
 
 def floor_exceeds_threshold(
@@ -850,4 +1025,5 @@ def verdict_to_dict(verdict: ShipVerdict) -> Dict[str, object]:
                 "judge_inclusive": verdict.noise_floor.judge_inclusive,
             }
         ),
+        "numerics": verdict.numerics,
     }
