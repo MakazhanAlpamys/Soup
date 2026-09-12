@@ -1,4 +1,4 @@
-<!-- synced-from: README.md sha256:03f7663cba830787567ba1dd58a59e60021203026ccc790710a27a963bf55a24 -->
+<!-- synced-from: README.md sha256:860efca42c4659a0ce89dfb1e4dd8e68e4fc16f8b6ef9f30bd017c377784590a -->
 <p align="center">🌍 <a href="README.md">English</a> | <strong>Türkçe</strong></p>
 
 <p align="center">
@@ -90,7 +90,7 @@ yerine altyapıyla boğuşarak geçiriyor. Soup bunu çözer.
 
 **v0.75.0 — aynı `soup.yaml`, MLX'te transformers'takinden farklı bir tarif eğitiyordu,
 sessizce.** Altı eğitim seçeneği doğrulanıyor, belgeleniyor, kabul ediliyor — ve o arka uçta
-hiçbir şey tarafından okunmuyordu. **Bu sürümdeki 57 pull request'in tamamı bakımcı dışından
+hiçbir şey tarafından okunmuyordu. **Bu sürümdeki 58 pull request'in tamamı bakımcı dışından
 geldi**, 22 kişiden.
 
 - **Geriye dönük uyumsuz: bilinmeyen bir yapılandırma anahtarı artık yüklemeyi reddediyor.**
