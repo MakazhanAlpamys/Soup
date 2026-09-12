@@ -27,6 +27,7 @@ from soup_cli.mcp_server.execution import (
     digest_file,
 )
 from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink, is_under_cwd
+from soup_cli.utils.terminal import strip_control
 
 if TYPE_CHECKING:
     from soup_cli.config.schema import SoupConfig
@@ -37,14 +38,6 @@ _MAX_JSON_BYTES = 16 * 1024 * 1024
 # be able to point `data` at an arbitrarily large file and exhaust memory
 # (mirrors advise's own 1 GiB cap; security-review MEDIUM).
 _MAX_DATA_BYTES = 1024 * 1024 * 1024
-
-# C0 control bytes (keep tab / newline / CR) + DEL, stripped from every string
-# in a handler result before it reaches the MCP client. ``rich.markup.escape``
-# only neutralises ``[...]`` markup, not raw ESC/OSC sequences a malicious
-# dataset string could smuggle into a client's terminal. Mirrors
-# ``commands/data_doctor.py::_CONTROL_STRIP_TABLE``.
-_CONTROL_STRIP_TABLE = {i: None for i in range(0x20) if i not in (0x09, 0x0A, 0x0D)}
-_CONTROL_STRIP_TABLE[0x7F] = None
 
 
 class McpToolError(Exception):
@@ -81,7 +74,7 @@ def _sanitize(obj: Any) -> Any:
     dicts and lists. Applied to every handler result as defence-in-depth.
     """
     if isinstance(obj, str):
-        return obj.translate(_CONTROL_STRIP_TABLE)
+        return strip_control(obj)
     if isinstance(obj, Mapping):
         return {_sanitize(k): _sanitize(v) for k, v in obj.items()}
     if isinstance(obj, (list, tuple)):

@@ -12,6 +12,8 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 
+from soup_cli.utils.terminal import for_terminal
+
 console = Console()
 
 
@@ -310,20 +312,6 @@ _ASR_TRANSCRIBER_OVERRIDE = None
 # vector (mirrors the project's 10k custom-eval / 1e6 HF-download caps).
 _MAX_ASR_ROWS: int = 100_000
 
-# C0 control bytes (keep tab/newline/CR) + DEL, stripped from dataset-derived
-# strings before they reach the terminal. rich.markup.escape() neutralises Rich
-# '[...]' tags but NOT raw ESC bytes, and a row's audio path / an exception
-# carrying it is untrusted (title-bar / OSC-8 spoofing). Mirrors v0.71.27
-# data_doctor._for_terminal.
-_CONTROL_STRIP_TABLE = {i: None for i in range(0x20) if i not in (0x09, 0x0A, 0x0D)}
-_CONTROL_STRIP_TABLE[0x7F] = None
-
-
-def _for_terminal(text: str) -> str:
-    """Strip C0/ESC/DEL control bytes from a dataset-derived string."""
-    return str(text).translate(_CONTROL_STRIP_TABLE)
-
-
 def _read_asr_rows(path: Path) -> list[dict]:
     """Read ASR rows ``{"audio": path[, "text": reference]}`` from JSONL.
 
@@ -559,7 +547,6 @@ def _infer_asr(
             console.print(f"[red]{exc}[/]")
             raise typer.Exit(2) from exc
 
-    from rich.markup import escape as _escape
 
     refs: list[str] = []
     hyps: list[str] = []
@@ -574,9 +561,9 @@ def _infer_asr(
             skipped += 1
             # Escape + control-strip the dataset-derived filename AND the
             # exception (whose message embeds that filename) before printing.
-            name = _escape(_for_terminal(Path(str(audio)).name))
+            name = for_terminal(Path(str(audio)).name)
             console.print(
-                f"[yellow]Skipped {name!r}: {_escape(_for_terminal(str(exc)))}[/]"
+                f"[yellow]Skipped {name!r}: {for_terminal(str(exc))}[/]"
             )
             continue
         rec = {"audio": audio, "transcription": hyp}
@@ -590,10 +577,10 @@ def _infer_asr(
                 row_wer = wer(ref, hyp)
                 row_cer = cer(ref, hyp)
             except ValueError as exc:
-                name = _escape(_for_terminal(Path(str(audio)).name))
+                name = for_terminal(Path(str(audio)).name)
                 console.print(
                     f"[yellow]Metric skipped for {name!r}: "
-                    f"{_escape(_for_terminal(str(exc)))}[/]"
+                    f"{for_terminal(str(exc))}[/]"
                 )
             else:
                 rec["reference"] = ref
