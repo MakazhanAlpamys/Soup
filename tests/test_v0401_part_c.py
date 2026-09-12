@@ -159,9 +159,10 @@ def test_detect_gpu_hw_returns_advisory_when_smi_succeeds():
     ):
         advisory = _detect_gpu_hw_without_torch_cuda()
     assert "RTX 3050" in advisory
-    assert "download.pytorch.org/whl/" in advisory
-    # Unknown driver: conservative cu121 (parse failure is an old driver).
-    assert "whl/cu121" in advisory
+    # Unknown driver: do not guess a CUDA wheel index.
+    assert "download.pytorch.org/whl/" not in advisory
+    assert "whl/None" not in advisory
+    assert "could not be confirmed" in advisory
 
 
 def test_detect_gpu_hw_uses_driver_cuda_wheel():
@@ -229,16 +230,64 @@ def test_parse_cuda_version_from_nvidia_smi_header():
     )
     assert _parse_cuda_version(header) == (13, 2)
     assert _parse_cuda_version("CUDA Version:13.2") == (13, 2)
+    assert _parse_cuda_version("CUDA UMD Version: 13.4") == (13, 4)
     assert _parse_cuda_version("CUDA Version: 12.10") == (12, 10)
     assert _parse_cuda_version("CUDA Version: N/A") is None
     assert _parse_cuda_version("no cuda here") is None
     assert _parse_cuda_version("") is None
 
 
-def test_torch_cuda_wheel_tag_picks_newest_supported():
+def test_detect_gpu_hw_distinguishes_cuda_build_from_cpu_build(monkeypatch):
+    import sys
+    import types
+
+    from soup_cli.commands.doctor import _detect_gpu_hw_without_torch_cuda
+
+    fake_torch = types.SimpleNamespace(
+        version=types.SimpleNamespace(cuda="13.0"),
+    )
+
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    monkeypatch.setattr(
+        "soup_cli.commands.doctor._nvidia_smi_cuda_version",
+        lambda: (13, 0),
+    )
+    monkeypatch.setattr(
+        "soup_cli.commands.doctor._nvidia_smi_executable",
+        lambda: "/usr/bin/nvidia-smi",
+    )
+    monkeypatch.setattr(
+        "shutil.which",
+        lambda name: "/usr/bin/nvidia-smi",
+    )
+
+    completed = types.SimpleNamespace(
+        returncode=0,
+        stdout="NVIDIA GeForce RTX 5070 Laptop GPU\\n",
+        stderr="",
+    )
+    monkeypatch.setattr("subprocess.run", lambda *args, **kwargs: completed)
+    monkeypatch.setattr(
+        "importlib.metadata.version",
+        lambda name: "2.14.0+cu130",
+    )
+
+    advisory = _detect_gpu_hw_without_torch_cuda()
+
+    assert "CUDA build (13.0) could not initialise" in advisory
+    assert "the CPU build" not in advisory
+    assert "--force-reinstall" in advisory
+    assert "torch>=2.6.0" in advisory
+    assert "whl/cu130" in advisory
+
+
+def test_torch_cuda_wheel_tag_picks_supported_index():
     from soup_cli.commands.doctor import _TORCH_CUDA_WHEELS, _torch_cuda_wheel_tag
 
     assert (11, 8, "cu118") in _TORCH_CUDA_WHEELS
+
+    # Fixed published-index mapping; do not derive arbitrary CUDA tags.
+    assert _torch_cuda_wheel_tag((13, 4)) == "cu132"
     assert _torch_cuda_wheel_tag((13, 2)) == "cu132"
     assert _torch_cuda_wheel_tag((13, 1)) == "cu130"
     assert _torch_cuda_wheel_tag((13, 0)) == "cu130"
@@ -246,10 +295,12 @@ def test_torch_cuda_wheel_tag_picks_newest_supported():
     assert _torch_cuda_wheel_tag((12, 7)) == "cu126"
     assert _torch_cuda_wheel_tag((12, 6)) == "cu126"
     assert _torch_cuda_wheel_tag((12, 4)) == "cu124"
-    assert _torch_cuda_wheel_tag((12, 1)) == "cu121"
+    assert _torch_cuda_wheel_tag((12, 1)) == "cu118"
     assert _torch_cuda_wheel_tag((11, 8)) == "cu118"
-    assert _torch_cuda_wheel_tag((11, 0)) == "cu118"
-    assert _torch_cuda_wheel_tag(None) == "cu121"
+    assert _torch_cuda_wheel_tag((11, 0)) is None
+
+    # An unreadable driver must never guess an arbitrary CUDA index.
+    assert _torch_cuda_wheel_tag(None) is None
 
 
 def test_readme_does_not_hardcode_a_cuda_wheel_index():

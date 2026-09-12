@@ -454,30 +454,35 @@ _TORCH_CUDA_WHEELS: tuple[tuple[int, int, str], ...] = (
     (11, 8, "cu118"),
 )
 
+# PyTorch CUDA indexes that carry a torch release satisfying Soup's
+# ``[train]`` floor (torch>=2.6.0). Keep this table explicit: not every
+# CUDA version reported by a driver has a corresponding PyTorch index.
+_SUPPORTED_TORCH_CUDA_WHEELS = frozenset(
+    {"cu132", "cu130", "cu128", "cu126", "cu124", "cu118"}
+)
+
 
 def _parse_cuda_version(text: str) -> tuple[int, int] | None:
-    """Extract ``(major, minor)`` from nvidia-smi ``CUDA Version: X.Y`` text."""
-    match = re.search(r"CUDA Version:\s*(\d+)\.(\d+)", text or "")
+    """Extract ``(major, minor)`` from an nvidia-smi CUDA version header."""
+    match = re.search(r"CUDA(?: UMD)? Version:\s*(\d+)\.(\d+)", text or "")
     if match is None:
         return None
     return int(match.group(1)), int(match.group(2))
 
 
-def _torch_cuda_wheel_tag(driver: tuple[int, int] | None) -> str:
-    """Pick the newest PyTorch CUDA wheel the driver can run.
+def _torch_cuda_wheel_tag(driver: tuple[int, int] | None) -> str | None:
+    """Pick the newest supported PyTorch CUDA wheel for a driver version.
 
-    ``None`` (unreadable nvidia-smi header) falls back to ``cu121``, not
-    ``cu130``: a parse failure is treated as an old driver. A too-new wheel
-    is the failure mode that looks like success (pip ok, CUDA init dies).
-    A known 13.2 header still maps to ``cu132``. Drivers older than every
-    table row get ``cu118``, the oldest published tag.
+    A missing driver version is not safe to guess from, so it returns ``None``.
     """
     if driver is None:
-        return "cu121"
+        return None
+
     for major, minor, tag in _TORCH_CUDA_WHEELS:
-        if driver >= (major, minor):
+        if driver >= (major, minor) and tag in _SUPPORTED_TORCH_CUDA_WHEELS:
             return tag
-    return "cu118"
+
+    return None
 
 
 def _nvidia_smi_executable() -> str | None:
@@ -546,15 +551,42 @@ def _detect_gpu_hw_without_torch_cuda() -> str:
         torch_version = _pkgver("torch")
     except Exception:  # noqa: BLE001
         torch_version = "?"
+
+    try:
+        import torch
+
+        torch_cuda_version = getattr(torch.version, "cuda", None)
+    except Exception:  # noqa: BLE001
+        torch_cuda_version = None
+
     wheel = _torch_cuda_wheel_tag(_nvidia_smi_cuda_version())
-    index_url = f"https://download.pytorch.org/whl/{wheel}"
     windows_note = ""
     if platform.system() == "Windows":
         windows_note = " On Windows, PyPI's torch wheel is CPU-only."
+
+    if wheel is None:
+        return (
+            f"GPU hardware present ({gpu_label}) but torch CUDA could not "
+            f"be confirmed. The installed torch is {torch_version}. "
+            "Run `nvidia-smi` and install a PyTorch CUDA wheel compatible "
+            "with the reported driver."
+            f"{windows_note}"
+        )
+
+    index_url = f"https://download.pytorch.org/whl/{wheel}"
+
+    if torch_cuda_version:
+        build_status = (
+            f"torch CUDA build ({torch_cuda_version}) could not initialise"
+        )
+    else:
+        build_status = "torch is the CPU build"
+
     return (
-        f"GPU hardware present ({gpu_label}) but torch is the CPU build "
+        f"GPU hardware present ({gpu_label}) but {build_status} "
         f"(torch {torch_version}). To enable your GPU: "
-        f"`pip install torch --index-url {index_url}`"
+        f"`pip install --force-reinstall \"torch>=2.6.0\" "
+        f"--index-url {index_url}`"
         f"{windows_note}"
     )
 
