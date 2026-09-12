@@ -10,8 +10,6 @@ Detailed, per-release notes for every published version live on the
 file tracks unreleased changes and links out for historical detail rather than
 reproducing 70+ versions of notes.
 
-## [Unreleased]
-
 ## [0.74.0] - 2026-09-04
 
 ### Added
