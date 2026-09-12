@@ -167,20 +167,22 @@ def format_unknown_keys(
     from a newer Soup trips several keys at once, and a panel per key buries
     the list it exists to present.
 
-    ``include_deadline`` is off for callers that already refuse. ``sweep.py``
-    raises today whatever the loader's switch says, so appending a *future*
-    rejection there would describe a future that has already arrived for that
-    caller.
+    ``include_deadline`` is off for callers that refuse. ``sweep.py`` raised
+    from the start whatever the loader's switch said, and since v0.75 the
+    loader refuses too, so appending a *future* rejection would describe a
+    future that has already arrived. The same flag picks the per-key suffix:
+    a warning caller proceeds with the key ignored ("Not applied."), a refusing
+    caller does not proceed at all, and saying "not applied" there would read
+    as if the run went ahead without it.
     """
+    suffix = "Not applied." if include_deadline else "Refused."
     lines = []
     for item in unknown:
         if item.suggestions:
             hint = " or ".join(f"'{s}'" for s in item.suggestions)
-            lines.append(
-                f"unknown config key '{item.path}' - did you mean {hint}? Not applied."
-            )
+            lines.append(f"unknown config key '{item.path}' - did you mean {hint}? {suffix}")
         else:
-            lines.append(f"unknown config key '{item.path}' - not applied.")
+            lines.append(f"unknown config key '{item.path}' - {suffix.lower()}")
     if include_deadline and lines:
         lines.append(deadline_notice())
     return "\n".join(lines)

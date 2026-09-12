@@ -11,7 +11,7 @@ training:
   batch_size: auto
   quantization: 4bit
   dpo_beta: 0.1
-lora:
-  r: 16
-  alpha: 32
+  lora:
+    r: 16
+    alpha: 32
 output: ./out-dpo

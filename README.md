@@ -87,90 +87,42 @@ infrastructure instead of improving models. Soup fixes that.
 
 ## What's New
 
-**v0.74.0 — the frozen base was being loaded in fp32 the whole time.** Fixing that
-alone cuts peak VRAM 2.59x on an unchanged config. **116 of the 120 merged pull
-requests in this release came from outside the maintainer**, by 25 people.
+**v0.75.0 — the same `soup.yaml` trained a different recipe on MLX than on transformers,
+silently.** Six training options were validated, documented, accepted — and read by nothing
+on that backend. **All 57 pull requests in this release came from outside the maintainer**,
+by 22 people.
 
-- **Every SFT load silently upcast the frozen base to fp32.** A base that never
-  receives an optimizer step was materialised at twice its checkpoint precision, on
-  all three load paths. Measured on an H100 with Llama-3.1-8B + LoRA: **48,241 MiB →
-  18,658 MiB peak — 2.59x, 28.9 GB**, byte-identical across three repeats. A trainable
-  base still loads fp32, deliberately.
-- **Transformers 5.x, TRL 0.29, PEFT 0.20.** Qwen3.5-family text decoders train on the
-  Transformers path, and `pip install "soup-cli[train,mlx]"` resolves again — the two
-  extras previously declared ranges that could not be satisfied together.
-- **The free Colab/Kaggle tier could not stream at all.** T4 / P100 / V100 / GTX 16xx
-  crashed layer streaming, because peft creates LoRA adapters in the checkpoint's dtype
-  while the fp16 GradScaler needs fp32 gradients.
-- **Four SSRF bypasses of the same shape.** Abbreviated, decimal, hex and octal IPv4
-  spellings (`127.1`, `2130706433`, `0x7f000001`, `0177.0.0.1`) reached the telemetry
-  and webhook guard — and, through a path the first fix never touched, the OTLP
-  tracing validator.
-- **Breaking: `soup serve` now exits 2** when bound to a non-loopback host without
-  `--tool-auth-token`, instead of printing a warning. `/v1/tools/bash` is re-enabled
-  behind real OS-level isolation, so the endpoint it protects now actually executes.
-- **`soup train --cloud lambda`**, plan-only by default, with termination in a
-  `finally` that also polls to confirm it happened.
-
-> Known limitation: the declared `torch>=2.5.0` floor does not work with `trl>=0.29` —
-> at torch 2.5.1 trl cannot import. A fresh install resolves a newer torch and is
-> unaffected; a pinned 2.5.x environment is not. See
-> [#651](https://github.com/MakazhanAlpamys/Soup/issues/651).
+- **Breaking: an unknown config key now refuses the load.** v0.74 warned and named this
+  release as the deadline. A typo like `quantizaton`, or a key that only exists on a newer
+  Soup, used to be dropped while the run proceeded with the setting not applied; it now
+  fails on the CLI (exit 1) and in the API (`ValueError`), naming the field you probably
+  meant. All 165 shipped recipes and every template load clean; two `soup fetch examples`
+  files carried a top-level `lora:` block that had never applied, and were fixed.
+- **MLX honours the config it accepted.** `train_on_responses_only`, `warmup_ratio` /
+  `scheduler` / `weight_decay` / `optimizer`, `max_grad_norm`, `gradient_accumulation_steps`
+  and `gradient_checkpointing` were each validated and then dropped on `backend: mlx`. Only
+  8 of the 32 optimizer names have an MLX equivalent; the other 24 are refused by name
+  instead of silently becoming AdamW. MLX also drives the live dashboard, the tracker and
+  `soup ui`, and `soup doctor --config` lists the settings a backend does not read.
+- **Validation loss existed nowhere.** It was computed on every backend and thrown away:
+  no metrics column, no event field, nothing on the panel. It is now recorded, streamed
+  and displayed.
+- **Breaking: `grpo_variant: gspo` is the published sequence-level objective**
+  (arXiv:2507.18071), replacing a column-centering heuristic in which a padding token also
+  shifted the gradient of every row sharing its column. Existing gspo configs will not
+  reproduce prior runs.
+- **Web UI read endpoints and SSE require auth**, with short-lived single-use tickets
+  instead of a token in a query string; `--public` no longer serves `/docs` and
+  `/openapi.json` to the LAN; and a training subprocess no longer hangs when nothing
+  reads its output.
+- **`torch>=2.6.0`** closes v0.74.0's known limitation: at 2.5.1 `trl>=0.29` could not
+  import and every preference trainer was dead. Also fixed: `training.loraplus_lr_ratio`
+  crashed every run that set it, and `packing: true` raised on TRL 0.29.
 
 > Python **3.10–3.12** only. On 3.13+, pip used to resolve untested PyTorch wheels that
 > crash in the native extension before Soup runs at all.
 
-<details>
-<summary>Previous release — v0.73.3, every pull request came from outside the maintainer</summary>
-
-**v0.73.3 — every pull request in this release came from someone other than the
-maintainer.** All 24 of them, from eight people, five of whom appear here for the first
-time. What they found is the interesting part: four separate flags that were validated,
-documented, and then read by nothing.
-- **Assistant-only masking trained on zero tokens, with a normal loss curve.** A
-  tokenizer returning `BatchEncoding` — which is not a `dict` — slipped past the guard,
-  so the label mask was built from the mapping's **key strings**. No exception, no
-  warning, a loss curve that looks like training. Found by reading the type, not by
-  hitting the bug.
-- **On Apple Silicon, `quantization: 4bit` was silently rewritten to `none`.**
-
-</details>
-
-<details>
-<summary>Previous release — v0.72.4, align on a laptop (DPO / ORPO / SimPO / KTO over layer streaming)</summary>
-
-Layer streaming used to support supervised fine-tuning only; v0.72.4 opened it to the
-preference losses. The risk was one thing: DPO needs a reference model, and a second copy
-would double memory and defeat the point. Soup uses *the same streamed base with its
-adapters switched off* — measured at **0.914×** the SFT peak, where forcing a real second
-instance cost **+730 MB, exactly one copy of the weights**. Bit-exact against a normal
-non-streamed run for all four. Honest cost: free in *memory*, not in *time* — DPO reads the
-layer stack **1.52×** as often per step. `grpo` / `ppo` stay excluded on purpose.
-
-> **Trained with `stream_layers: true` on v0.72.0?** That adapter is inert — its tensors were
-> saved under keys with an extra `.inner.` segment, so every loader returned the untuned base.
-> Fixed in v0.72.1; re-run or re-save. Check with:
-> `python -c "from safetensors.torch import load_file; print([k for k in load_file('adapter_model.safetensors') if '.inner.' in k][:3])"`
-
-</details>
-
-<details>
-<summary>Previous release — v0.71.40, soup reward synth (generate a reward verifier from your data)</summary>
-
-Point `soup reward synth` at a JSONL of reference outputs and it infers a deterministic verifier,
-writes a readable / committable `.py` reward function, and — the part nobody else does — *refuses* to
-emit one that can't tell your references from bad answers (four families: `numeric` / `json_schema` /
-`regex` / `tool_call`; a mandatory calibration report is the moat). Reward ensembles
-(`reward_fn: "accuracy,format"`) also train now. (#311)
-
-```bash
-soup reward synth references.jsonl -o reward.py --output-report calib.json
-```
-
-</details>
-
-
-Full history: [CHANGELOG.md](CHANGELOG.md) &middot; [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
+Older highlights live on the [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases) page.
 
 ## Quick Start
 
@@ -293,13 +245,12 @@ output: ./output
 `config/schema.py` is the single source of truth for every field. Advanced data, training,
 and PEFT options are documented under [Documentation](#documentation).
 
-> **Unknown config keys warn today and will be rejected in v0.75.** A key no model
-> declares — a typo like `quantizaton`, or a field that only exists on a newer Soup —
-> used to validate clean and be discarded, so the run proceeded with the setting simply
-> not applied. It is now reported at load with the field you probably meant. From
-> **v0.75** the same config will fail to load instead of warning, so fix or remove the
-> key rather than relying on it being ignored. See
-> [Unknown config keys](docs/backends-and-ops.md#unknown-config-keys).
+> **Unknown config keys are rejected since v0.75.** A key no model declares — a typo
+> like `quantizaton`, or a field that only exists on a newer Soup — used to validate
+> clean and be discarded, so the run proceeded with the setting simply not applied.
+> v0.74 reported it at load with the field you probably meant; from **v0.75** the same
+> config fails to load, so fix or remove the key rather than relying on it being
+> ignored. See [Unknown config keys](docs/backends-and-ops.md#unknown-config-keys).
 
 ## Documentation
 

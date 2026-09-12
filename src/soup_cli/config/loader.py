@@ -21,14 +21,15 @@ console = Console()
 #: options argued on #627, kept as one switch so the decision is a one-line
 #: change rather than a rewrite.
 #:
-#: The decision was warn-then-forbid, and the release that flips this to
-#: ``"error"`` is named by
+#: The decision was warn-then-forbid. v0.74.0 shipped ``"warn"`` with a
+#: deadline named by
 #: :data:`~soup_cli.config.unknown_keys.UNKNOWN_KEY_REJECTION_VERSION` -- by
-#: reference, not by number, because the warning must state that version in
-#: exactly one place. ``TestTheDeadline`` fails the moment the declared
-#: ``__version__`` reaches it while this still reads ``"warn"``, so the flip
-#: cannot be forgotten and the message cannot outlive its own promise.
-UNKNOWN_KEY_SEVERITY = "warn"
+#: reference, not by number, because the warning stated that version in
+#: exactly one place -- and the release that reached it flipped this to
+#: ``"error"``. ``TestTheDeadline`` pins the switch to the declared
+#: ``__version__`` in both directions, so it can be neither forgotten nor
+#: flipped early.
+UNKNOWN_KEY_SEVERITY = "error"
 
 
 def _report_unknown_keys(raw: dict) -> "str | None":

@@ -518,27 +518,46 @@ class TestOneReportPerLoad:
         msg = format_unknown_keys(self._four_typos())
         assert msg.count(f"v{UNKNOWN_KEY_REJECTION_VERSION}") == 1
 
-    def test_the_loader_prints_a_single_warning_block(self) -> None:
-        """Four unknown keys must not produce four ``Warning:`` headers."""
+    _TWO_TYPOS = {
+        "base": "hf/model",
+        "task": "sft",
+        "data": {"train": "./t.jsonl", "format": "auto", "max_len": 512},
+        "training": {"epochs": 1, "quantizaton": "4bit"},
+        "output": "./o",
+    }
+
+    def test_the_loader_returns_a_single_refusal_naming_every_key(self, monkeypatch) -> None:
+        """Under the shipped ``"error"`` switch: one message, nothing printed.
+
+        Printing is the caller's job on this branch (``SystemExit`` for the
+        CLI, ``ValueError`` for the API), so a report that printed *and*
+        returned would show the operator the same list twice.
+        """
         from soup_cli.config import loader
 
         printed: list[str] = []
-        original = loader.console.print
-        loader.console.print = lambda *a, **k: printed.append(" ".join(str(x) for x in a))
-        try:
-            loader._report_unknown_keys(
-                {
-                    "base": "hf/model",
-                    "task": "sft",
-                    "data": {"train": "./t.jsonl", "format": "auto", "max_len": 512},
-                    "training": {"epochs": 1, "quantizaton": "4bit"},
-                    "output": "./o",
-                }
-            )
-        finally:
-            loader.console.print = original
+        monkeypatch.setattr(loader.console, "print", lambda *a, **k: printed.append(str(a)))
+        message = loader._report_unknown_keys(dict(self._TWO_TYPOS))
 
+        assert printed == []
+        assert message is not None
+        assert "data.max_len" in message and "training.quantizaton" in message
+        # The refusal must not say the run proceeded without the key.
+        assert "not applied" not in message.lower()
+        assert "Refused." in message
+
+    def test_the_loader_prints_a_single_warning_block_under_warn(self, monkeypatch) -> None:
+        """The other side of the switch stays pinned: four keys, one ``Warning:``."""
+        from soup_cli.config import loader
+
+        printed: list[str] = []
+        monkeypatch.setattr(loader, "UNKNOWN_KEY_SEVERITY", "warn")
+        monkeypatch.setattr(
+            loader.console, "print", lambda *a, **k: printed.append(" ".join(str(x) for x in a))
+        )
+        assert loader._report_unknown_keys(dict(self._TWO_TYPOS)) is None
         assert sum("Warning:" in line for line in printed) == 1
+        assert sum("Not applied." in line for line in printed) == 1
 
 
 class TestTheSweepGuardIsIndependentOfTheDeadline:
@@ -581,12 +600,18 @@ class TestTheSweepGuardIsIndependentOfTheDeadline:
             _reject_unknown_sweep_params(self._swept("lora_rank", 8))
         assert UNKNOWN_KEY_REJECTION_VERSION not in str(excinfo.value)
 
-    def test_it_raises_even_though_the_loader_only_warns(self) -> None:
-        """The switch governs the loader, not the sweep -- pinned, not assumed."""
+    @pytest.mark.parametrize("severity", ["warn", "error"])
+    def test_it_raises_whatever_the_loader_switch_says(self, monkeypatch, severity) -> None:
+        """The switch governs the loader, not the sweep -- pinned on both sides.
+
+        v0.74 shipped the loader at ``"warn"`` and v0.75 at ``"error"``; the
+        sweep guard raised under both, and this parametrisation is what keeps
+        that true rather than assumed.
+        """
         from soup_cli.commands.sweep import _reject_unknown_sweep_params
         from soup_cli.config import loader
 
-        assert loader.UNKNOWN_KEY_SEVERITY == "warn"
+        monkeypatch.setattr(loader, "UNKNOWN_KEY_SEVERITY", severity)
         with pytest.raises(ValueError):
             _reject_unknown_sweep_params(self._swept("lora_rank", 8))
 
@@ -815,11 +840,26 @@ class TestTheLoaderIsActuallyWiredUp:
         monkeypatch.setattr(loader.console, "print", record)
         return printed
 
-    def test_load_config_from_string_reports_an_unknown_key(self, monkeypatch) -> None:
+    def test_load_config_from_string_refuses_an_unknown_key(self, monkeypatch) -> None:
+        """The shipped switch: the API/UI call site raises, and names the key."""
         from soup_cli.config.loader import load_config_from_string
 
         printed = self._recording_console(monkeypatch)
-        load_config_from_string(self.TYPOD)
+        with pytest.raises(ValueError) as excinfo:
+            load_config_from_string(self.TYPOD)
+        assert "quantizaton" in str(excinfo.value), "the refusal never named the typo"
+        assert "unknown config key" in str(excinfo.value)
+        # A refusal that still promised a *future* rejection would be lying.
+        assert UNKNOWN_KEY_REJECTION_VERSION not in str(excinfo.value)
+        assert printed == [], "the API call site must raise, not print"
+
+    def test_load_config_from_string_warns_under_warn_severity(self, monkeypatch) -> None:
+        """The pre-v0.75 branch stays pinned: report, name the deadline, proceed."""
+        from soup_cli.config import loader
+
+        monkeypatch.setattr(loader, "UNKNOWN_KEY_SEVERITY", "warn")
+        printed = self._recording_console(monkeypatch)
+        loader.load_config_from_string(self.TYPOD)
         joined = "\n".join(printed)
         assert "quantizaton" in joined, "the API/UI call site never reported the typo"
         assert "unknown config key" in joined
@@ -833,14 +873,29 @@ class TestTheLoaderIsActuallyWiredUp:
         load_config_from_string(self.CLEAN)
         assert printed == [], f"a clean config produced output: {printed}"
 
-    def test_load_config_reports_an_unknown_key(self, monkeypatch, tmp_path) -> None:
+    def test_load_config_refuses_an_unknown_key(self, monkeypatch, tmp_path) -> None:
         """The file call site is a separate branch from the string one."""
         from soup_cli.config.loader import load_config
 
         path = tmp_path / "soup.yaml"
         path.write_text(self.TYPOD, encoding="utf-8")
         printed = self._recording_console(monkeypatch)
-        load_config(path)
+        with pytest.raises(SystemExit) as excinfo:
+            load_config(path)
+        assert excinfo.value.code == 1
+        joined = "\n".join(printed)
+        assert "quantizaton" in joined, "the CLI call site never reported the typo"
+        assert "unknown config key" in joined
+        assert "Refused." in joined and "Not applied." not in joined
+
+    def test_load_config_warns_under_warn_severity(self, monkeypatch, tmp_path) -> None:
+        from soup_cli.config import loader
+
+        path = tmp_path / "soup.yaml"
+        path.write_text(self.TYPOD, encoding="utf-8")
+        monkeypatch.setattr(loader, "UNKNOWN_KEY_SEVERITY", "warn")
+        printed = self._recording_console(monkeypatch)
+        loader.load_config(path)
         joined = "\n".join(printed)
         assert "quantizaton" in joined, "the CLI call site never reported the typo"
         assert "unknown config key" in joined
