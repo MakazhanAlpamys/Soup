@@ -12,7 +12,6 @@ import importlib.metadata
 
 import pytest
 
-
 torch = pytest.importorskip("torch")
 
 CUDA = pytest.mark.skipif(
