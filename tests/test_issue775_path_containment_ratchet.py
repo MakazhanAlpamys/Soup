@@ -69,14 +69,14 @@ _CATCHES_VALUE_ERROR = frozenset({"ValueError", "Exception", "BaseException"})
 #: verified live by ``test_the_allowlist_has_no_dead_entries`` — a moved or
 #: deleted site fails there rather than rotting into a silent hole.
 ALLOWLIST: dict[tuple[str, int], str] = {
-    ("commands/adapters.py", 38): (
+    ("commands/adapters.py", 29): (
         "depth counter, not a gate. The paths come from "
         "`directory.rglob('adapter_config.json')`, so they are already under "
         "`directory` by construction; the result is only measured for its "
         "`.parts` length against max_depth, and the `except ValueError: "
         "continue` is unreachable for rglob output rather than a denial."
     ),
-    ("commands/adapters.py", 107): (
+    ("commands/adapters.py", 98): (
         "display-only shortening. On ValueError it falls back to the full "
         "`adapter_path` and still renders the row — the value reaches "
         "`table.add_row` and nothing else, so a short-name mismatch costs a "
