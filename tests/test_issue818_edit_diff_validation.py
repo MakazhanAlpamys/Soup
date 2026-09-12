@@ -10,7 +10,13 @@ from typer.testing import CliRunner
 from soup_cli.cli import app
 from soup_cli.utils import live_eval
 
+from .conftest import strip_ansi
+
 runner = CliRunner()
+
+
+def _clean(text: str) -> str:
+    return " ".join(strip_ansi(text).split())
 
 
 def test_edit_diff_probes_without_models_exits_2(tmp_path: Path) -> None:
@@ -26,7 +32,7 @@ def test_edit_diff_probes_without_models_exits_2(tmp_path: Path) -> None:
             "--probes", str(probes_file),
         ])
         assert result.exit_code == 2, result.output
-        assert "both --before-model and --after-model are required" in result.output
+        assert "both --before-model and --after-model are required" in _clean(result.output)
 
 
 def test_edit_diff_only_before_model_exits_2_and_names_after_model(tmp_path: Path) -> None:
@@ -42,7 +48,7 @@ def test_edit_diff_only_before_model_exits_2_and_names_after_model(tmp_path: Pat
             "--before-model", "some-before-model",
         ])
         assert result.exit_code == 2, result.output
-        assert "--after-model is required" in result.output
+        assert "--after-model is required" in _clean(result.output)
 
 
 def test_edit_diff_only_after_model_exits_2_and_names_before_model(tmp_path: Path) -> None:
@@ -58,7 +64,7 @@ def test_edit_diff_only_after_model_exits_2_and_names_before_model(tmp_path: Pat
             "--after-model", "some-after-model",
         ])
         assert result.exit_code == 2, result.output
-        assert "--before-model is required" in result.output
+        assert "--before-model is required" in _clean(result.output)
 
 
 def test_edit_diff_asymmetric_models_without_probes_exits_2(tmp_path: Path) -> None:
@@ -68,7 +74,7 @@ def test_edit_diff_asymmetric_models_without_probes_exits_2(tmp_path: Path) -> N
             "--before-model", "some-before-model",
         ])
         assert result.exit_code == 2, result.output
-        assert "--after-model is required" in result.output
+        assert "--after-model is required" in _clean(result.output)
 
 
 def test_edit_diff_probes_lacking_prompt_key_exits_2(tmp_path: Path) -> None:
@@ -86,8 +92,8 @@ def test_edit_diff_probes_lacking_prompt_key_exits_2(tmp_path: Path) -> None:
             "--after-model", "modelB",
         ])
         assert result.exit_code == 2, result.output
-        assert "prompt" in result.output.lower()
-        assert "missing 'prompt' key" in result.output
+        assert "prompt" in _clean(result.output).lower()
+        assert "missing 'prompt' key" in _clean(result.output)
 
 
 def test_edit_diff_empty_probe_file_exits_2(tmp_path: Path) -> None:
@@ -101,7 +107,25 @@ def test_edit_diff_empty_probe_file_exits_2(tmp_path: Path) -> None:
             "--after-model", "modelB",
         ])
         assert result.exit_code == 2, result.output
-        assert "empty" in result.output.lower()
+        assert "empty" in _clean(result.output).lower()
+
+
+def test_edit_diff_probes_with_null_byte_exits_2(tmp_path: Path) -> None:
+    with runner.isolated_filesystem(temp_dir=tmp_path) as fs:
+        probes_file = Path(fs) / "null_probes.jsonl"
+        probes_file.write_text(
+            json.dumps({"prompt": "The Eiffel Tower is located in \x00 Paris"}) + "\n",
+            encoding="utf-8",
+        )
+        result = runner.invoke(app, [
+            "edit", "diff", "runA", "runB",
+            "--probes", str(probes_file),
+            "--before-model", "modelA",
+            "--after-model", "modelB",
+        ])
+        assert result.exit_code == 2, result.output
+        assert "prompt contains null byte" in _clean(result.output)
+
 
 
 def test_no_probe_receives_unmeasured_changed_false(monkeypatch, tmp_path: Path) -> None:

@@ -134,6 +134,7 @@ def load_probes(path: str) -> Tuple[str, ...]:
     total_lines: int = 0
     skipped_missing_prompt: int = 0
     skipped_empty_prompt: int = 0
+    skipped_null_byte: int = 0
     skipped_not_json: int = 0
     skipped_not_dict: int = 0
 
@@ -161,6 +162,7 @@ def load_probes(path: str) -> Tuple[str, ...]:
                 skipped_empty_prompt += 1
                 continue
             if "\x00" in prompt:
+                skipped_null_byte += 1
                 continue
             if len(prompt) > _MAX_PROMPT_LEN:
                 _LOG.warning(
@@ -180,6 +182,11 @@ def load_probes(path: str) -> Tuple[str, ...]:
             raise ValueError(
                 f"no valid probes loaded from {path!r} "
                 f"({skipped_empty_prompt} row(s) skipped: empty 'prompt')"
+            )
+        if skipped_null_byte > 0:
+            raise ValueError(
+                f"no valid probes loaded from {path!r} "
+                f"({skipped_null_byte} row(s) skipped: prompt contains null byte)"
             )
         if skipped_not_json > 0:
             raise ValueError(
