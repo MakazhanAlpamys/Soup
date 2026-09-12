@@ -439,7 +439,9 @@ class MoleRoutingTrainerWrapper:
         duration_str = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
         return {
             "status": "ok",
-            **loss_summary,
+            "initial_loss": loss_summary["initial_loss"],
+            "final_loss": loss_summary["final_loss"],
+            "loss_summary_kind": loss_summary["loss_summary_kind"],
             "duration": duration_str,
             "duration_secs": duration,
             "total_steps": self.trainer.state.global_step,
