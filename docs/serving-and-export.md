@@ -281,9 +281,11 @@ soup serve --model ./output --backend vllm --max-model-len 8192
 > **Tip:** Soup auto-detects vLLM. When installed, you'll see a hint during `soup serve` if you haven't enabled it yet.
 
 The vLLM backend applies the **model's own chat template**, exactly like the
-transformers backend — both call one shared prompt builder. A model that ships
-no chat template falls back to a generic `User:` / `Assistant:` prompt, and the
-server says so at startup. `finish_reason` reports `"length"` when a response
+transformers backend, and encodes the rendered prompt itself so the engine
+receives the same token ids Soup trains on rather than re-tokenizing the string.
+(The SGLang and MII backends still hand the engine the rendered string; see
+#785.) A model that ships no chat template falls back to a generic `User:` /
+`Assistant:` prompt, and the server says so at startup. `finish_reason` reports `"length"` when a response
 hits `max_tokens` and `"stop"` otherwise (`/v1/messages` maps those to
 `max_tokens` / `end_turn`).
 
