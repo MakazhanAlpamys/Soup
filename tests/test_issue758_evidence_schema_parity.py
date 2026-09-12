@@ -213,7 +213,16 @@ def test_all_readers_report_every_verdict_field_identically(
 
 @pytest.mark.parametrize("evidence", EVIDENCE_CORPUS)
 def test_schema_keys_are_derived_from_the_canonical_serializer(evidence):
-    """A producer-added schema key cannot be silently ignored by a reader."""
+    """A producer-added schema key cannot be silently ignored by a reader.
+
+    SEMANTIC BACKSTOP — do not prune this as redundant with the parity cases.
+    Once one decoder serves both surfaces, the parity assertions can only prove
+    the two readers AGREE, not that they are right: a key dropped in the shared
+    decoder is dropped identically on both sides and every parity case still
+    passes. This round-trip against `verdict_to_evidence` is the only test that
+    fails in that case (maintainer mutation run on #768: ignoring `noise_floor`
+    in the shared decoder left 24 of 25 tests green, and only this one caught it).
+    """
     from soup_cli.utils.ship_verdict import verdict_from_evidence
 
     canonical = verdict_from_evidence(
@@ -247,6 +256,87 @@ def test_all_readers_refuse_the_same_malformed_corpus(
 
     with pytest.raises(McpToolError):
         _mcp_verdict(tmp_path, monkeypatch, copy.deepcopy(evidence))
+
+
+_HOSTILE_EVIDENCE_VALUE = "\x1b[2J\x1b[31mPWNED-BY-EVIDENCE"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    (
+        {
+            "task": {"mode": _HOSTILE_EVIDENCE_VALUE, "base": 0.3, "tuned": 0.4},
+            "benchmarks": {"mini_mmlu": {"base": 0.26, "tuned": 0.25}},
+        },
+        {
+            "task": {"mode": "metric", "base": 0.3, "tuned": 0.4},
+            "benchmarks": {"mini_mmlu": {"base": 0.26, "tuned": 0.25}},
+            _HOSTILE_EVIDENCE_VALUE: "unsupported",
+        },
+    ),
+    ids=("hostile-task-mode", "hostile-unknown-field"),
+)
+def test_mcp_refusals_do_not_echo_evidence_content(tmp_path, monkeypatch, payload):
+    """`McpToolError` stays path-free/user-input-free after the reader was shared.
+
+    The shared decoder quotes the offending value so the CLI can name it on
+    stderr. That text is untrusted evidence-file content, and the MCP surface
+    documents its errors as fixed strings, so the registry re-wraps the decoder
+    message instead of forwarding it to the client.
+    """
+    monkeypatch.chdir(tmp_path)
+    _write_evidence(tmp_path, copy.deepcopy(payload))
+    with pytest.raises(McpToolError) as mcp_error:
+        tool_ship_evidence({"evidence": EVIDENCE_FILENAME})
+
+    message = str(mcp_error.value)
+    assert "PWNED-BY-EVIDENCE" not in message
+    assert "\x1b" not in message
+    # The schema path survives so the refusal still says what it refused.
+    assert "<redacted>" in message
+    assert message.endswith("(ValueError)")
+
+    # The CLI keeps the rich message: the convention is MCP-side, not a
+    # downgrade of the operator-facing diagnostic.
+    cli_result, cli_output = _cli_verdict(tmp_path, monkeypatch, copy.deepcopy(payload))
+    assert cli_result.exit_code == 1
+    assert cli_output is None
+    assert "PWNED-BY-EVIDENCE" in cli_result.output
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    (
+        ("'only quoted'", "<redacted> (ValueError)"),
+        ("", "invalid evidence (ValueError)"),
+        ('evidence.task.mode; got "x"', "evidence.task.mode; got <redacted> (ValueError)"),
+        # `repr()` always balances its quotes, so the decoder cannot emit this
+        # today — but the boundary must not fail open if one ever does.
+        ("unterminated 'PWNED", "unterminated <redacted> (ValueError)"),
+    ),
+    ids=("fully-quoted", "empty-message", "double-quoted", "unterminated-quote"),
+)
+def test_mcp_error_sanitizer_never_returns_an_empty_message(raw, expected):
+    """A decoder message that is entirely quoted must not redact down to nothing."""
+    from soup_cli.mcp_server.registry import _evidence_error_message
+
+    assert _evidence_error_message(ValueError(raw)) == expected
+
+
+def test_mcp_refusal_still_names_the_schema_block_it_refused(tmp_path, monkeypatch):
+    """Redaction must not flatten the message into an unactionable string.
+
+    The v0.73.2 contract (`test_v07302.py`) requires the MCP refusal to name
+    `noise_floor`, so only quoted evidence VALUES may be stripped — the schema
+    path is a constant and stays.
+    """
+    payload = copy.deepcopy(EVIDENCE_CORPUS[0])
+    payload["noise_floor"] = {"runs": 1, "floors": {"x": 0.12}}
+
+    monkeypatch.chdir(tmp_path)
+    _write_evidence(tmp_path, payload)
+    with pytest.raises(McpToolError, match="noise_floor"):
+        tool_ship_evidence({"evidence": EVIDENCE_FILENAME})
 
 
 @pytest.mark.parametrize("threshold", (True, -0.01, 1.01, float("nan")))

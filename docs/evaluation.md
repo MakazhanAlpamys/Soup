@@ -457,6 +457,26 @@ A malformed `noise_floor` block is **refused, not dropped** — a silently disca
 replay as a different verdict. Values are bounded to `[0, 1]` and the mapping is capped, because an
 evidence file is untrusted input and a floor widens the gate.
 
+**The same rule now covers unknown fields anywhere in the schema (#758).** An evidence file
+carrying a field this release does not recognise is **refused, not ignored**:
+
+```bash
+$ soup ship --evidence evidence.json
+Error: evidence has unsupported field(s): 'numerics'
+$ echo $?
+1
+```
+
+Previously such a field was dropped silently and the run exited `0`. The reason for the change is
+the defect it closes: `soup ship --evidence` and the MCP `ship_evidence` tool used to decode the
+same file through two independent readers, so a key that one reader understood and the other did
+not made the *same* evidence replay to a *different* verdict depending on which surface asked — a
+SHIP on one side and a DON'T-SHIP on the other. Both surfaces now decode through one shared reader,
+and refusing an unrecognised field is what keeps that guarantee honest: a field is either supported
+by both surfaces or accepted by neither. A refusal is recoverable and visible; a divergent verdict
+is neither. When a newer Soup writes an evidence file that an older one refuses, upgrade the reader
+rather than stripping the field.
+
 ### Closing the evidence loop (v0.71.39)
 
 The verdict is now emittable, committable, and provenance-bound so a fine-tuning gate runs on

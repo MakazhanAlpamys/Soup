@@ -14,6 +14,7 @@ from __future__ import annotations
 import csv
 import json
 import os
+import re
 import shlex
 import sys
 from dataclasses import asdict, dataclass
@@ -509,6 +510,34 @@ def tool_diagnose_evidence(args: dict) -> dict:
     return report.to_dict()
 
 
+# The shared evidence decoder (#758) quotes the offending value with ``!r``/
+# ``repr()`` every time it echoes evidence-file content, and never quotes the
+# structural part of its message. So redacting every quoted run drops exactly
+# the untrusted half and keeps the schema path that says what was refused.
+# The trailing alternative redacts from an UNTERMINATED quote to end-of-string:
+# ``repr()`` always balances its quotes, so that cannot happen today, but a
+# boundary that fails open on one malformed message is the wrong default.
+_EVIDENCE_ERROR_QUOTED = re.compile(r"'[^']*'|\"[^\"]*\"|['\"].*\Z", re.DOTALL)
+_EVIDENCE_ERROR_REDACTION = "<redacted>"
+
+
+def _evidence_error_message(exc: Exception) -> str:
+    """Strip evidence-file content out of a shared-decoder error message.
+
+    ``McpToolError`` is documented above as a path-free/user-input-free message,
+    and every other handler raises a fixed string. The evidence decoder is
+    shared with the CLI (#758), where naming the offending value on stderr is
+    the point, so the sanitising happens HERE at the MCP boundary rather than by
+    degrading the CLI diagnostic. Schema field names outside quotes are kept:
+    they are constants from ``EVIDENCE_SCHEMA_FIELDS`` rather than user input,
+    and the v0.73.2 contract test asserts the refusal names the block it refused.
+    """
+    redacted = _EVIDENCE_ERROR_QUOTED.sub(_EVIDENCE_ERROR_REDACTION, str(exc)).strip()
+    if not redacted:
+        return f"invalid evidence ({type(exc).__name__})"
+    return f"{redacted} ({type(exc).__name__})"
+
+
 def tool_ship_evidence(args: dict) -> dict:
     """`soup ship --evidence` — SHIP / DON'T-SHIP verdict from pre-computed scores."""
     from soup_cli.utils.ship_verdict import (
@@ -525,7 +554,7 @@ def tool_ship_evidence(args: dict) -> dict:
             payload, forgetting_threshold=threshold
         )
     except (TypeError, ValueError, OverflowError) as exc:
-        raise McpToolError(str(exc)) from exc
+        raise McpToolError(_evidence_error_message(exc)) from exc
     payload_out = verdict_to_dict(verdict)
     # An evidence-supplied floor WIDENS the gate, and the CLI announces that on
     # stderr. This transport cannot: stdout is the JSON-RPC channel and the
