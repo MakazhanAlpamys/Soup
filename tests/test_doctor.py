@@ -276,6 +276,91 @@ def test_doctor_nvidia_train_suggestion_is_two_step(monkeypatch):
     assert '["soup-cli[train]" --index-url' not in out and '[train]" --index-url' not in out
 
 
+def test_doctor_partial_train_names_missing_members(monkeypatch):
+    """Some [train] members present: name the gap, don't claim the stack is absent (#875).
+
+    Fails against current `main`, which prints "Training stack not installed"
+    whenever any member is missing. The present member (`os`) always imports, so
+    the group is partial regardless of the env; its version resolves through
+    `importlib.metadata.version("torch")` when torch is installed, but that only
+    affects the reported version, never its present/absent state.
+    """
+    monkeypatch.setattr("soup_cli.commands.doctor._nvidia_smi_cuda_version", lambda: None)
+    monkeypatch.setattr(
+        "soup_cli.commands.doctor.EXTRA_GROUPS",
+        [
+            (
+                "train",
+                [
+                    ("os", "torch", "0.0.0"),  # importable + in range -> present
+                    ("nonexistent_bnb_xyz", "bitsandbytes", "0.41.0"),  # absent
+                ],
+            )
+        ],
+    )
+    result = runner.invoke(app, ["doctor"])
+    out = _strip_ansi(result.output)
+    assert result.exit_code == 0
+    assert "Training stack incomplete, missing: bitsandbytes" in out
+    assert "Training stack not installed" not in out
+    assert 'pip install "soup-cli[train]"' in out
+    # Never a green all-clear beside a fix list.
+    assert "All checks passed!" not in out
+
+
+def test_doctor_partial_train_with_torch_present_skips_cuda_step(monkeypatch):
+    """The CUDA wheel-index step is suggested only when torch itself is missing (#875).
+
+    Kills the mutation that drops the ``"torch" in missing_members`` gate: with an
+    NVIDIA driver reported but torch already present (only ``bitsandbytes`` absent),
+    the two-step ``pip install torch --index-url`` advice must NOT appear — it is
+    torch-index advice and would mislead when torch is fine. Without the gate the
+    step reappears here, so this test fails.
+    """
+    monkeypatch.setattr("soup_cli.commands.doctor._nvidia_smi_cuda_version", lambda: (13, 0))
+    monkeypatch.setattr(
+        "soup_cli.commands.doctor.EXTRA_GROUPS",
+        [
+            (
+                "train",
+                [
+                    ("os", "torch", "0.0.0"),  # present -> torch is NOT missing
+                    ("nonexistent_bnb_xyz", "bitsandbytes", "0.41.0"),  # absent
+                ],
+            )
+        ],
+    )
+    result = runner.invoke(app, ["doctor"])
+    out = _strip_ansi(result.output)
+    assert result.exit_code == 0
+    assert "Training stack incomplete, missing: bitsandbytes" in out
+    assert 'pip install "soup-cli[train]"' in out
+    # torch is present, so the torch-index step must be absent.
+    assert "pip install torch --index-url" not in out
+
+
+def test_doctor_all_train_absent_keeps_not_installed_wording(monkeypatch):
+    """None present keeps the original "not installed" wording, exit 0 (#875 acceptance 2)."""
+    monkeypatch.setattr("soup_cli.commands.doctor._nvidia_smi_cuda_version", lambda: None)
+    monkeypatch.setattr(
+        "soup_cli.commands.doctor.EXTRA_GROUPS",
+        [
+            (
+                "train",
+                [
+                    ("nonexistent_torch_xyz", "torch", "2.6.0"),
+                    ("nonexistent_bnb_xyz", "bitsandbytes", "0.41.0"),
+                ],
+            )
+        ],
+    )
+    result = runner.invoke(app, ["doctor"])
+    out = _strip_ansi(result.output)
+    assert result.exit_code == 0
+    assert 'Training stack not installed: pip install "soup-cli[train]"' in out
+    assert "incomplete" not in out
+
+
 def test_doctor_missing_core_dependency_exits_nonzero(monkeypatch):
     """A missing core dependency makes `soup doctor` exit non-zero (#828)."""
     monkeypatch.setitem(sys.modules, "plotext", None)

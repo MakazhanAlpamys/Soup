@@ -205,7 +205,12 @@ def doctor(
     # extra, so the suggestion keeps the declared ceilings and the platform
     # torch index instead of bare per-package floors.
     for extra_name, members in EXTRA_GROUPS:
-        group_missing = False
+        # Track *which* members are absent, not just whether any is. A group with
+        # six of seven present is "incomplete, missing: X", not "not installed" —
+        # the latter is both wrong and unhelpful when most of the stack is there
+        # and `pip install "soup-cli[<extra>]"` is a no-op for the satisfied six
+        # (#875).
+        missing_members: list[str] = []
         for import_name, pkg_name, min_ver in members:
             version_str = _installed_version_str(import_name, pkg_name)
             if version_str is None:
@@ -216,7 +221,7 @@ def doctor(
                     f">={min_ver}",
                     "[dim]not installed[/]",
                 )
-                group_missing = True
+                missing_members.append(pkg_name)
                 continue
             max_excl = _MAX_EXCLUSIVE.get(pkg_name)
             if max_excl and _version_ge(version_str, max_excl):
@@ -232,29 +237,43 @@ def doctor(
                 issues.append(f'Upgrade {pkg_name}: pip install "{pkg_name}>={min_ver}"')
                 fix_parts.append(f'"{pkg_name}>={min_ver}"')
             table.add_row(pkg_name, escape(f"[{extra_name}]"), version_str, f">={min_ver}", status)
-        if group_missing:
+        if missing_members:
+            # None present keeps the original "not installed" wording; some
+            # present names the gap instead. Either way an issue is appended, so
+            # the summary never prints "All checks passed!" beside a fix list.
+            label = "Training stack" if extra_name == "train" else f"{extra_name} stack"
+            all_absent = len(missing_members) == len(members)
+            if all_absent:
+                headline = f"{label} not installed"
+            else:
+                headline = f"{label} incomplete, missing: {', '.join(missing_members)}"
+            # A one-line "headline: cmd" reads as a double colon once the headline
+            # already ends in a "missing: a, b" list, so the partial case puts the
+            # command(s) on their own line. all_absent keeps #828's exact wording.
+            tail = ": " if all_absent else "\n  "
+            block = ":\n  " if all_absent else "\n  "
             if extra_name == "train":
                 driver = _nvidia_smi_cuda_version()
-                if driver is not None:
+                # The CUDA wheel-index step is only relevant when torch itself is
+                # the missing piece; suggesting it while torch is fine (e.g. only
+                # bitsandbytes absent) would mislead.
+                if driver is not None and "torch" in missing_members:
                     tag = _torch_cuda_wheel_tag(driver)
                     url = f"https://download.pytorch.org/whl/{tag}"
                     # ``--index-url`` replaces PyPI, so torch must come from the
                     # CUDA wheel index in its own step; the ``[train]`` extra is
                     # then resolved against PyPI with torch already satisfied.
                     issues.append(
-                        "Training stack not installed:\n"
-                        f"  pip install torch --index-url {url}\n"
+                        f"{headline}{block}"
+                        f"pip install torch --index-url {url}\n"
                         '  pip install "soup-cli[train]"'
                     )
                     fix_pre.append(f"pip install torch --index-url {url}")
                 else:
-                    issues.append('Training stack not installed: pip install "soup-cli[train]"')
+                    issues.append(f'{headline}{tail}pip install "soup-cli[train]"')
                 fix_parts.append('"soup-cli[train]"')
             else:
-                issues.append(
-                    f"{extra_name} stack not installed: "
-                    f'pip install "soup-cli[{extra_name}]"'
-                )
+                issues.append(f'{headline}{tail}pip install "soup-cli[{extra_name}]"')
                 fix_parts.append(f'"soup-cli[{extra_name}]"')
 
     console.print(table)
