@@ -231,8 +231,14 @@ def _consumed_in_src() -> set:
     property itself is called from somewhere in `src/`. See
     `schema_property_reads`.
     """
-    consumed = set(_consumed_cached(tuple(sorted(str(p) for p in _consumer_modules()))))
-    return fold_property_reads(consumed, schema_property_reads(SCHEMA_PATH))
+    modules = _consumer_modules()
+    consumed = set(_consumed_cached(tuple(sorted(str(p) for p in modules))))
+    consumed = fold_property_reads(consumed, schema_property_reads(SCHEMA_PATH))
+    # #807: a read inside a function nothing calls is not consumption, for
+    # the same reason an uncalled @property launders nothing.
+    return drop_dead_function_reads(
+        consumed, function_scoped_reads(modules), referenced_names(modules)
+    )
 
 
 # --------------------------------------------------------------------------
@@ -266,6 +272,23 @@ KNOWN_UNCONSUMED = {
                             "field reaches nothing",
     "training.grace_codebook": "no issue yet -- the string appears as an artifact-kind name in "
                                "store.py:52 / edit.py:312, unrelated to this field",
+    # -- #807: read ONLY inside a function nothing in src/ references, so the
+    #    read is not consumption. Surfaced by the dead-function gate, which
+    #    the guard previously applied to @property resolvers only.
+    "training.warmup_auto": "#807 -- read only in autopilot.generate_config, "
+                            "which nothing in src/ calls; and that line reads "
+                            "the decisions dict and WRITES the value into a "
+                            "config, so it is not a read of the field either",
+    "training.lora.use_vera": "#794 via #807 -- read only in "
+                              "utils/peft_builder.build_peft_config, which has "
+                              "no caller in src/",
+    "training.lora.use_olora": "#794 via #807 -- same uncalled builder",
+    "training.lora.init_strategy": "#794 via #807 -- same uncalled builder; "
+                                   "PiSSA/LoftQ selection never reaches a trainer",
+    # -- #807: LoraConfig came into the guard's scope with the dead-function
+    #    gate, and these two have no read anywhere at all.
+    "training.lora.loftq_iter": "#794 -- no read anywhere; LoftQ is unreachable",
+    "training.lora.loftq_bits": "#794 -- no read anywhere; LoftQ is unreachable",
     # -- declared and deliberately REFUSED, so having no consumer is correct.
     #    A distinct category from the two below: the user is told, loudly, at
     #    config load. Found by this guard rather than by hand.
@@ -313,7 +336,7 @@ KNOWN_UNCONSUMED = {
 
 def _declared():
     import soup_cli
-    from soup_cli.config.schema import DataConfig, TrainingConfig
+    from soup_cli.config.schema import DataConfig, LoraConfig, TrainingConfig
 
     # The scan walks SRC (this checkout); the fields come from the IMPORTED
     # package. In a worktree with no PYTHONPATH those are different trees and
@@ -327,7 +350,13 @@ def _declared():
     )
 
     out = {}
-    for cls, label in ((TrainingConfig, "training"), (DataConfig, "data")):
+    # #807: LoraConfig was outside the guard's scope entirely, so every
+    # LoRA-variant field was unguarded.
+    for cls, label in (
+        (TrainingConfig, "training"),
+        (DataConfig, "data"),
+        (LoraConfig, "training.lora"),
+    ):
         for name in cls.model_fields:
             out[f"{label}.{name}"] = name
     return out
@@ -511,8 +540,8 @@ def test_the_allowlist_size_is_pinned_exactly():
     half: it names WHICH entry went stale, where this one only says the count
     moved.
     """
-    assert len(KNOWN_UNCONSUMED) == 39, (
-        f"KNOWN_UNCONSUMED is {len(KNOWN_UNCONSUMED)}, pinned at 39. Going UP "
+    assert len(KNOWN_UNCONSUMED) == 45, (
+        f"KNOWN_UNCONSUMED is {len(KNOWN_UNCONSUMED)}, pinned at 45. Going UP "
         "means a field was allowlisted rather than wired; going DOWN means an "
         "entry was retired, which is the good direction -- lower this number "
         "in the same commit."
@@ -700,3 +729,159 @@ def test_the_known_leak_is_still_the_known_leak():
             "guard can now catch an unwired field of that name. Good news — "
             "update the leak table in the module docstring."
         )
+
+
+# --------------------------------------------------------------------------
+# #807: the same laundering the property gate refuses, one level over.
+#
+# `fold_property_reads` gates a `schema.py` @property on being CALLED. Ordinary
+# functions got no such gate, so a read inside a function nothing calls counted
+# exactly like a read in a trainer. `training.warmup_auto` passed the guard on
+# the strength of one line in `autopilot/generate_config.generate_config`,
+# which nothing in src/ calls -- and which reads the autopilot decisions dict
+# and writes the value INTO a config, so it is not even a read of the field.
+# --------------------------------------------------------------------------
+
+
+def function_scoped_reads(paths) -> dict:
+    """Map each read name to the {(module, enclosing function)} it occurs in.
+
+    ``None`` as the function means module scope, which always counts: a read at
+    import time runs whenever the module is imported.
+
+    Every function is attributed, **methods included**. An earlier version of
+    this walked only `tree.body` top-level defs, so a read inside a class
+    method was invisible -- and a field whose only live read sits in a method
+    then looked dead. That produced two false positives on the real tree
+    (`auto_mixed_precision`, read at `trainer/sft.py:1185`, and
+    `training.multipack`). False positives are what get a guard deleted, so the
+    attribution has to cover methods or the gate is worse than no gate.
+    """
+    out: dict = {}
+    for path in paths:
+        try:
+            tree = ast.parse(path.read_text(errors="ignore"))
+        except (SyntaxError, UnicodeDecodeError, ValueError):
+            continue
+        stack = [(tree, None)]
+        while stack:
+            node, fname = stack.pop()
+            for child in ast.iter_child_nodes(node):
+                inner = (
+                    child.name
+                    if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    else fname
+                )
+                name = None
+                if isinstance(child, ast.Attribute) and isinstance(child.ctx, ast.Load):
+                    name = child.attr
+                elif isinstance(child, ast.Constant) and isinstance(child.value, str):
+                    name = child.value
+                if name:
+                    out.setdefault(name, set()).add((path.name, fname))
+                stack.append((child, inner))
+    return out
+
+
+def referenced_names(paths) -> set:
+    """Every name loaded anywhere under src/ -- the "is this function called?" set.
+
+    A global name match, deliberately. It errs toward "referenced", which is
+    the safe direction: a guard that cries wolf on live code gets deleted, and
+    a missed dead function is only a return to today's behaviour.
+    """
+    names: set = set()
+    for path in paths:
+        try:
+            tree = ast.parse(path.read_text(errors="ignore"))
+        except (SyntaxError, UnicodeDecodeError, ValueError):
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+                names.add(node.id)
+            elif isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Load):
+                names.add(node.attr)
+    return names
+
+
+def drop_dead_function_reads(consumed: set, scoped: dict, referenced: set) -> set:
+    """Remove names whose EVERY read sits in a function nothing references.
+
+    The function-level twin of `fold_property_reads`, and extracted for the
+    same reason: a gate can only be pinned by driving it directly. Testing it
+    through the real tree cannot distinguish the gate from its absence for any
+    field that is genuinely live.
+    """
+    out = set(consumed)
+    for name, sites in scoped.items():
+        if name not in out:
+            continue
+        if all(fn is not None and fn not in referenced for _, fn in sites):
+            out.discard(name)
+    return out
+
+
+class TestTheDeadFunctionGate:
+    """#807. Both directions, driven through the gate rather than the tree."""
+
+    def test_a_read_in_a_referenced_function_still_counts(self):
+        consumed = {"widget"}
+        scoped = {"widget": {("m.py", "live_helper")}}
+        assert "widget" in drop_dead_function_reads(consumed, scoped, {"live_helper"})
+
+    def test_a_read_in_a_function_nothing_references_is_dropped(self):
+        consumed = {"widget"}
+        scoped = {"widget": {("m.py", "dead_helper")}}
+        assert "widget" not in drop_dead_function_reads(consumed, scoped, {"other"})
+
+    def test_one_live_read_rescues_a_field_with_dead_ones(self):
+        """A field read in both a live and a dead function is consumed. Anything
+        else would flag `auto_mixed_precision`, which `sft.py` really reads."""
+        consumed = {"widget"}
+        scoped = {"widget": {("dead.py", "never_called"), ("live.py", "used")}}
+        assert "widget" in drop_dead_function_reads(consumed, scoped, {"used"})
+
+    def test_a_module_scope_read_always_counts(self):
+        """Module scope runs on import; there is no enclosing function to be
+        dead."""
+        consumed = {"widget"}
+        assert "widget" in drop_dead_function_reads(
+            consumed, {"widget": {("m.py", None)}}, set()
+        )
+
+    def test_methods_are_attributed_not_skipped(self, tmp_path):
+        """The false-positive generator. Walking only top-level defs made a
+        read inside a method invisible, so the field looked dead."""
+        mod = tmp_path / "m.py"
+        mod.write_text(
+            "class C:\n"
+            "    def a_method(self, cfg):\n"
+            "        return cfg.widget\n"
+        )
+        scoped = function_scoped_reads([mod])
+        assert scoped.get("widget") == {("m.py", "a_method")}, (
+            "a read inside a method must be attributed to that method, not lost"
+        )
+
+    def test_the_real_tree_has_exactly_the_four_known_escapes(self):
+        """Measured, and pinned so the number cannot drift unnoticed.
+
+        Reproduced on current main: `training.warmup_auto` plus three LoRA
+        variants, each read only inside a function nothing references.
+        """
+        modules = _consumer_modules()
+        scoped = function_scoped_reads(modules)
+        referenced = referenced_names(modules)
+        # The UNGATED set: _consumed_in_src() already applies the gate, so
+        # diffing it against itself would always be empty and this test would
+        # pass vacuously. Rebuild the pre-gate set the same way it does.
+        ungated = fold_property_reads(
+            set(_consumed_cached(tuple(sorted(str(m) for m in modules)))),
+            schema_property_reads(SCHEMA_PATH),
+        )
+        dropped = sorted(ungated - drop_dead_function_reads(ungated, scoped, referenced))
+        for expected in ("warmup_auto", "use_vera", "use_olora", "init_strategy"):
+            assert expected in dropped, (
+                f"{expected} is read only inside a function nothing references, "
+                "so the gate should drop it"
+            )
