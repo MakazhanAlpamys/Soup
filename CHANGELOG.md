@@ -115,7 +115,7 @@ reproducing 70+ versions of notes.
 
 ### Changed
 
-- **The README now leads with `pipx`, and names PEP 668 by its error text (#673, closes #671).**
+- **The README now leads with `pipx`, and names PEP 668 by its error text (#671 by @swalla02 in #673).**
   `pip install soup-cli`, the first command in the README, fails on Debian 12 and
   Ubuntu 23.04 or later:
 
