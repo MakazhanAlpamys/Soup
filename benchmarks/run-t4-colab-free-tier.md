@@ -128,12 +128,16 @@ the gap has been seen rather than reasoned about.
   produced a healthy loss curve, a bit-exact forward and silently wrong gradients
   on every layer but the last `stream_buffers`, and it was NF4-only and
   size-dependent. Nothing in this run would have caught it.
-- **The notebook's section 4 — streamed-vs-resident bit-exactness on the T4 —
-  produced no captured output.** It is recorded here as **unrun**, not as a pass.
-  A T4 with 15.6 GB can in principle hold a resident NF4 8B reference, so this is
-  the obvious next measurement and it has not been taken.
-- **Forward exactness on sm_75 is not shown either.** The fp16 exactness results
-  in the v0.73.0 notes were measured on an Ampere card using fp16.
+- **Section 4 — streamed-vs-resident forward bit-exactness on the T4 — has since
+  been run and recorded.** `notebooks/proof-4gb.ipynb` (#844) was executed end to
+  end on a free Colab T4 (Tesla T4, driver-reported 15.6 GB): `max |streamed -
+  resident| = 0.0`, `torch.equal = True`. That is `HuggingFaceTB/SmolLM2-135M-Instruct`
+  in fp16, unquantized (`shard_checkpoint` called without `quant`, defaulting to
+  `QUANT_NONE`), not the 8B NF4 configuration this document measures — a resident
+  NF4 8B reference on Turing is still the obvious next measurement and has not
+  been taken.
+- **Forward exactness on sm_75 in fp16 is now shown** (see above); the v0.73.0
+  notes' fp16 exactness results were measured on an Ampere card, not Turing.
 - **One run, one seed, one configuration, no repeats**, on a session that cannot
   be returned to. Nothing about variance is claimed.
 - Library versions (torch / bitsandbytes / transformers / peft) were **not
