@@ -34,7 +34,7 @@ def render_histogram(
         figure.label(ylabel, axis=1)
         if theme is not None:
             figure.theme(theme)
-        console.print(Text.from_ansi(str(figure.build())))
+        console.print(Text.from_ansi(str(figure.build())), soft_wrap=True)
         return
 
     plotext.clf()
@@ -44,7 +44,7 @@ def render_histogram(
     plotext.ylabel(ylabel)
     if theme is not None:
         plotext.theme(theme)
-    console.print(Text.from_ansi(str(plotext.build())))
+    console.print(Text.from_ansi(str(plotext.build())), soft_wrap=True)
 
 
 def render_line(
@@ -70,7 +70,7 @@ def render_line(
         figure.label(ylabel, axis=1)
         if theme is not None:
             figure.theme(theme)
-        console.print(Text.from_ansi(str(figure.build())))
+        console.print(Text.from_ansi(str(figure.build())), soft_wrap=True)
         return
 
     plotext.clf()
@@ -80,4 +80,4 @@ def render_line(
     plotext.ylabel(ylabel)
     if theme is not None:
         plotext.theme(theme)
-    console.print(Text.from_ansi(str(plotext.build())))
+    console.print(Text.from_ansi(str(plotext.build())), soft_wrap=True)

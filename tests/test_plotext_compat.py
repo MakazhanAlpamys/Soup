@@ -21,9 +21,11 @@ class _Recorder:
 class _Console:
     def __init__(self) -> None:
         self.output: list[str] = []
+        self.options: list[dict] = []
 
-    def print(self, value) -> None:
+    def print(self, value, **kwargs) -> None:
         self.output.append(str(value))
+        self.options.append(kwargs)
 
 
 class _Plotext5(_Recorder):
@@ -138,6 +140,7 @@ def test_plotext5_module_api_remains_supported() -> None:
         "build",
     ]
     assert console.output == ["plot", "plot"]
+    assert console.options == [{"soft_wrap": True}, {"soft_wrap": True}]
 
 
 def test_plotext6_figure_api_is_used() -> None:
@@ -185,6 +188,7 @@ def test_plotext6_figure_api_is_used() -> None:
         "build",
     ]
     assert console.output == ["plot", "plot"]
+    assert console.options == [{"soft_wrap": True}, {"soft_wrap": True}]
 
 
 def test_installed_plotext_runtime_renders_histogram_and_line() -> None:
@@ -240,3 +244,22 @@ def test_rich_console_controls_plot_color(monkeypatch) -> None:
     )
 
     assert "\x1b[" in terminal_output.getvalue()
+
+
+def test_rich_console_does_not_wrap_plot_rows() -> None:
+    plotext = _Plotext5()
+    plotext.build = lambda: "123456\nabcdef"
+    redirected_output = StringIO()
+    redirected = Console(file=redirected_output, width=4, color_system=None)
+
+    render_histogram(
+        plotext,
+        [1, 2],
+        console=redirected,
+        bins=2,
+        title="Histogram",
+        xlabel="X",
+        ylabel="Y",
+    )
+
+    assert redirected_output.getvalue().splitlines() == ["123456", "abcdef"]
