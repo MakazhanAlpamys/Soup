@@ -49,6 +49,7 @@ from soup_cli.utils.draft import (
     same_tokenizer,
 )
 from soup_cli.utils.paths import atomic_write_text, enforce_under_cwd_and_no_symlink
+from soup_cli.utils.terminal import for_terminal
 
 if TYPE_CHECKING:  # pragma: no cover — typing only, keeps the CLI import light
     from transformers import PreTrainedModel, PreTrainedTokenizerBase
@@ -396,7 +397,11 @@ def _run_distill(
         data_rows=data_rows,
         uld_strategy=uld_strategy,
     )
-    load_config_from_string(yaml_text)  # validate before spending a subprocess
+    try:
+        load_config_from_string(yaml_text)  # validate before spending a subprocess
+    except ValueError as exc:
+        console.print(f"[red]Invalid rendered distill config:[/] {for_terminal(exc)}")
+        raise typer.Exit(code=1) from exc
 
     # #364 — surface the resolved optimiser-step budget before the run. Epoch
     # granularity can only land NEAR ``--steps``; printing it makes any mismatch

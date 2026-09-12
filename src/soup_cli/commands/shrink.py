@@ -41,6 +41,7 @@ from soup_cli.utils.shrink import (
     shrink_arch_of,
     shrink_verdict_to_dict,
 )
+from soup_cli.utils.terminal import for_terminal
 
 console = Console()
 
@@ -563,7 +564,11 @@ def _run_heal(
         out_dir=out_dir,
         heal_rows=heal_rows,
     )
-    load_config_from_string(yaml_text)  # validate before spending a subprocess
+    try:
+        load_config_from_string(yaml_text)  # validate before spending a subprocess
+    except ValueError as exc:
+        console.print(f"[red]Invalid rendered heal config:[/] {for_terminal(exc)}")
+        raise typer.Exit(code=1) from exc
     config_path = Path(pruned_dir).parent / "heal_config.yaml"
     atomic_write_text(yaml_text, str(config_path), field="heal config")
 
