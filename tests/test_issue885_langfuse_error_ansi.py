@@ -89,3 +89,27 @@ def test_stripped_body_renders_on_a_colour_console() -> None:
     plain = re.sub(r"\x1b\[[0-9;]*m", "", rendered)
     assert "HTTP 500" in plain
     assert "FAKE ERROR" in plain
+
+
+def test_credentials_pull_error_body_renders_inert(monkeypatch, tmp_path) -> None:
+    """The credentials PullError site (:246) strips control bytes too."""
+    creds = LangfuseCredentials(
+        public_key="pk", secret_key="sk", host="https://langfuse.example.com"
+    )
+    message = f"Langfuse credentials: {_error_detail(HOSTILE, creds)}"
+
+    def _raise_pull_error(*args, **kwargs):
+        raise PullError(message)
+
+    monkeypatch.setattr(ingest_pull, "load_langfuse_credentials", _raise_pull_error)
+    monkeypatch.chdir(tmp_path)
+
+    runner = CliRunner(env={"FORCE_COLOR": "1", "TERM": "xterm-256color", "COLUMNS": "300"})
+    result = runner.invoke(app, ["ingest", "--source", "langfuse", "--pull", "-o", "out.jsonl"])
+
+    assert result.exit_code == 1
+    assert "\x1b[2J" not in result.output
+    assert "\x00" not in result.output
+    assert "\x07" not in result.output
+    assert "Langfuse credentials" in result.output
+    assert "FAKE ERROR" in result.output
