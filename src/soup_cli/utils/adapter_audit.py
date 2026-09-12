@@ -1,6 +1,6 @@
 """Compare a finished adapter's record against the config that asked for it (#762).
 
-Four merged fixes taught the MLX path to record what it actually did into
+Five merged fixes taught the MLX path to record what it actually did into
 ``adapter_config.json`` -- #683 (masking), #684 (accumulation), #685 (grad
 checkpoint), #686 (optimizer and schedule), #749 (gradient clipping). Each
 existed as a defect where a setting was accepted and dropped without a word,
@@ -72,6 +72,18 @@ class AuditResult:
         return sum(1 for r in self.rows if r.status == UNKNOWN)
 
     @property
+    def checked_count(self) -> int:
+        """Rows the record could actually speak to -- ``ok`` or ``diverged``.
+
+        Without it, a ``{}`` record (ten ``unknown``, nothing checked) and a
+        run that genuinely agreed on everything both present as "No
+        divergences" and exit 0, and a CI job cannot tell them apart (#763
+        review). The exit contract is deliberately unchanged: ``unknown``
+        still does not fail, it is now merely countable.
+        """
+        return sum(1 for r in self.rows if r.status in (OK, DIVERGED))
+
+    @property
     def exit_code(self) -> int:
         """Non-zero only for divergence, so this composes into CI and `soup
         ship`. `unknown` deliberately does not fail: see the module docstring."""
@@ -82,6 +94,7 @@ class AuditResult:
             "record_kind": self.record_kind,
             "diverged_count": self.diverged_count,
             "unknown_count": self.unknown_count,
+            "checked_count": self.checked_count,
             "rows": [
                 {
                     "setting": r.setting,
@@ -123,6 +136,17 @@ def _cmp(
     they wrote, not a lowered copy of it."""
     if ran is None:
         return AuditRow(setting, asked, None, UNKNOWN, detail or "not in the record")
+    # `True == 1` and `False == 0` in Python, so a record carrying
+    # `max_grad_norm: true` compared equal to a requested 1.0 and was handed a
+    # clean bill. Only a malformed record does this, but "the record is
+    # nonsense" must not read as "the run agreed".
+    if isinstance(asked, bool) != isinstance(ran, bool):
+        return AuditRow(
+            setting, asked, ran, DIVERGED,
+            f"the record holds {ran!r} ({type(ran).__name__}) where the config "
+            f"asks for {asked!r} ({type(asked).__name__}); Python compares "
+            "bools equal to 0/1, so this is not the agreement it looks like",
+        )
     left, right = (normalise(asked), normalise(ran)) if normalise else (asked, ran)
     status = OK if left == right else DIVERGED
     return AuditRow(setting, asked, ran, status, detail if status == DIVERGED else "")
@@ -201,6 +225,71 @@ def _ran_alpha(record: Dict[str, Any]) -> Optional[float]:
     return scale * rank
 
 
+def _audit_masking(data: Dict[str, Any], record: Dict[str, Any]) -> AuditRow:
+    """Did response-only masking actually happen -- not: was it requested.
+
+    ``mlx_sft.py:742-744`` writes three keys, and only two of them are
+    evidence. ``train_on_responses_only`` is ``responses_only`` echoed back --
+    the config's own request, copied into the record. The effect is
+    ``mask_prompt`` (upstream's single masked prefix, correct for
+    prompt/completion rows) and ``response_token_mask`` (Soup's per-token mask,
+    the only shape correct for multi-turn chat).
+
+    ``plan_response_masking`` returns *neither* for plain-text rows: they carry
+    no role boundaries, upstream raises if the flag is set, so the run warns
+    once and trains on the full sequence. The record it leaves says
+    ``train_on_responses_only: true`` beside ``mask_prompt: false`` and
+    ``response_token_mask: false``.
+
+    Comparing the config against the echo therefore agrees with itself on the
+    one run that most needs reporting -- #683 itself, handed a clean bill by
+    the command written to catch it.
+    """
+    asked = bool(data.get("train_on_responses_only", True))
+    prefix_mask = record.get("mask_prompt")
+    token_mask = record.get("response_token_mask")
+
+    # Presence is provable from one key, absence needs both. A truthy key
+    # settles it whatever the other would have said; but reading a *missing*
+    # key as False would turn "this record does not say" into "the run masked
+    # nothing", which is the same substitution as the false clean bill,
+    # arrived at from the other direction. `mlx_sft.py` writes the pair
+    # together, so a record holding one alone is foreign or truncated.
+    if bool(prefix_mask) or bool(token_mask):
+        ran = True
+    elif prefix_mask is None or token_mask is None:
+        missing = [
+            name
+            for name, value in (
+                ("mask_prompt", prefix_mask),
+                ("response_token_mask", token_mask),
+            )
+            if value is None
+        ]
+        return AuditRow(
+            "data.train_on_responses_only", asked, None, UNKNOWN,
+            f"the record does not carry {' or '.join(missing)}, so it cannot "
+            "say whether masking took effect"
+            + (" (adapter predates #683)" if len(missing) == 2 else ""),
+        )
+    else:
+        ran = False
+    if ran == asked:
+        return AuditRow("data.train_on_responses_only", asked, ran, OK)
+    if asked and not ran:
+        return AuditRow(
+            "data.train_on_responses_only", asked, ran, DIVERGED,
+            "requested, but the run masked nothing -- plain-text rows carry no "
+            "role boundaries, so the loss covered prompt tokens too; use chatml "
+            "or prompt/completion data",
+        )
+    return AuditRow(
+        "data.train_on_responses_only", asked, ran, DIVERGED,
+        "not requested, but the run masked anyway "
+        f"(mask_prompt={prefix_mask!r}, response_token_mask={token_mask!r})",
+    )
+
+
 def _lora_asked(training: Dict[str, Any]) -> Dict[str, Any]:
     lora = training.get("lora") or {}
     if not isinstance(lora, dict):
@@ -250,13 +339,7 @@ def audit_adapter(config: Dict[str, Any], record: Dict[str, Any]) -> AuditResult
             record.get("grad_checkpoint"),
         )
     )
-    rows.append(
-        _cmp(
-            "data.train_on_responses_only",
-            bool(data.get("train_on_responses_only", True)),
-            record.get("train_on_responses_only"),
-        )
-    )
+    rows.append(_audit_masking(data, record))
 
     lora = _lora_asked(training)
     if "r" in lora:
