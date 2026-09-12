@@ -1190,3 +1190,598 @@ class TestAHalfRecordCannotProveAbsenceOfMasking:
         row = next(r for r in result.rows if r.setting == "data.train_on_responses_only")
         assert row.status == "diverged"
         assert result.exit_code != 0
+
+
+class TestTheMaskingKeysMustBeRealBooleans:
+    """#763 review round 3: `_audit_masking` was the one comparison path that
+    skipped the type guard `_cmp` got last round.
+
+    `if bool(prefix_mask) or bool(token_mask)` reads the JSON **string**
+    `"false"` as truthy, so a record saying `"mask_prompt": "false"` reported
+    `ok` — a false clean bill on the headline row, arrived at through a type
+    rather than through a missing key. `mlx_sft.py` always writes real bools,
+    so this needs a foreign or hand-edited record: the same threat model the
+    `_for_terminal` hardening rests on.
+    """
+
+    ASKED = {"data": {"train_on_responses_only": True}}
+
+    @pytest.mark.parametrize(
+        "value", ["false", "true", 0, 1, "", None.__class__.__name__],
+        ids=["str-false", "str-true", "int-0", "int-1", "empty-str", "str-NoneType"],
+    )
+    def test_a_non_boolean_effect_key_is_never_a_clean_bill(self, value):
+        from soup_cli.utils.adapter_audit import audit_adapter
+
+        record = _mlx_record(mask_prompt=value, response_token_mask=value)
+        row = next(
+            r
+            for r in audit_adapter(_config(**self.ASKED), record).rows
+            if r.setting == "data.train_on_responses_only"
+        )
+        assert row.status != "ok", (
+            f"mask_prompt={value!r} was read as agreement"
+        )
+        assert row.detail, "a refusal has to say why"
+
+    def test_the_string_false_specifically_does_not_read_as_masking(self):
+        """The reviewer's exact record."""
+        from soup_cli.utils.adapter_audit import audit_adapter
+
+        record = _mlx_record(
+            mask_prompt="false", response_token_mask="false", train_on_responses_only=True
+        )
+        result = audit_adapter(_config(**self.ASKED), record)
+        row = next(r for r in result.rows if r.setting == "data.train_on_responses_only")
+        assert row.status == "diverged"
+        assert "bool" in row.detail or "str" in row.detail, row.detail
+
+    def test_real_booleans_still_behave(self):
+        """Control — the guard must not reject the records real runs write."""
+        from soup_cli.trainer.mlx_masking import plan_response_masking
+        from soup_cli.utils.adapter_audit import audit_adapter
+
+        for sample, expected in (
+            ({"messages": [{"role": "user", "content": "q"}]}, "ok"),
+            ({"prompt": "q", "completion": "a"}, "ok"),
+            ({"text": "plain"}, "diverged"),
+        ):
+            plan = plan_response_masking(True, sample)
+            record = _mlx_record(
+                mask_prompt=plan.mask_prompt,
+                response_token_mask=plan.token_mask,
+                train_on_responses_only=True,
+            )
+            row = next(
+                r
+                for r in audit_adapter(_config(**self.ASKED), record).rows
+                if r.setting == "data.train_on_responses_only"
+            )
+            assert row.status == expected, f"{sample} -> {row.status}"
+
+
+class TestTheExitCodeSeparatesVerdictFromError:
+    """#763 review round 3, the maintainer's call: exit 1 meant both "the run
+    diverged" and "you typed the path wrong".
+
+    #762 exists for CI composability, and a gate that cannot tell a verdict
+    from a usage error fails at exactly that. Repo convention is
+    0 = pass / 2 = failed gate / 1 = error (`ship`, `shrink`, `data canary
+    check`, `reward stress`). `adapters` itself had no convention to appeal to
+    — `scan` uses 3/1, `verify` 1, `bisect` 2 — so this was an unmade decision
+    rather than a violation.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _run_from_tmp(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        _pin_console(monkeypatch)
+
+    def _write(self, tmp_path, record=None, config=None):
+        import yaml
+
+        if record is not None:
+            (tmp_path / "adapter_config.json").write_text(json.dumps(record))
+        (tmp_path / "soup.yaml").write_text(yaml.safe_dump(config or _config()))
+
+    def test_a_divergence_exits_2(self, tmp_path):
+        from soup_cli.commands.adapters import app
+
+        self._write(tmp_path, _mlx_record(optimizer="SGD"))
+        res = _runner().invoke(app, ["audit", ".", "--config", "soup.yaml"])
+        assert res.exit_code == 2, res.output
+
+    def test_agreement_still_exits_0(self, tmp_path):
+        from soup_cli.commands.adapters import app
+
+        self._write(tmp_path, _mlx_record())
+        res = _runner().invoke(app, ["audit", ".", "--config", "soup.yaml"])
+        assert res.exit_code == 0, res.output
+
+    def test_unknown_rows_still_exit_0(self, tmp_path):
+        """`unknown` is visible, not fatal — unchanged by the new taxonomy."""
+        from soup_cli.commands.adapters import app
+
+        self._write(tmp_path, {})
+        res = _runner().invoke(app, ["audit", ".", "--config", "soup.yaml"])
+        assert res.exit_code == 0, res.output
+
+    @pytest.mark.parametrize(
+        "case", ["missing-record", "missing-config", "outside-cwd", "bad-json"]
+    )
+    def test_every_usage_error_exits_1_not_2(self, tmp_path, case):
+        """The whole point: a mistyped path must not look like a verdict."""
+        from soup_cli.commands.adapters import app
+
+        if case == "missing-record":
+            self._write(tmp_path)
+            args = ["audit", ".", "--config", "soup.yaml"]
+        elif case == "missing-config":
+            self._write(tmp_path, _mlx_record())
+            args = ["audit", ".", "--config", "nope.yaml"]
+        elif case == "outside-cwd":
+            self._write(tmp_path, _mlx_record())
+            args = ["audit", str(tmp_path.parent), "--config", "soup.yaml"]
+        else:
+            self._write(tmp_path, _mlx_record())
+            (tmp_path / "adapter_config.json").write_text("{not json")
+            args = ["audit", ".", "--config", "soup.yaml"]
+
+        res = _runner().invoke(app, args)
+        assert res.exit_code == 1, f"{case} exited {res.exit_code}: {res.output}"
+
+    def test_the_two_are_actually_distinguishable(self, tmp_path):
+        """Stated as the property CI depends on, so collapsing them fails."""
+        from soup_cli.commands.adapters import app
+
+        self._write(tmp_path, _mlx_record(optimizer="SGD"))
+        verdict = _runner().invoke(app, ["audit", ".", "--config", "soup.yaml"])
+        usage = _runner().invoke(app, ["audit", ".", "--config", "nope.yaml"])
+
+        assert verdict.exit_code != usage.exit_code
+        assert {verdict.exit_code, usage.exit_code} == {2, 1}
+
+    def test_the_docstring_documents_the_taxonomy(self):
+        """`scan` states its codes in the docstring, which is what `--help`
+        shows; a contract CI depends on must be discoverable there."""
+        from soup_cli.commands.adapters import audit
+
+        doc = audit.__doc__ or ""
+        for token in ("0", "1", "2"):
+            assert token in doc, f"exit code {token} is undocumented"
+        assert "diverg" in doc.lower()
+
+
+class TestTheExplanationsSayTheSubstance:
+    """#763 review round 3: every `.detail` was checked for truthiness only,
+    so six mutations lived through all 76 tests.
+
+    The dangerous one: **swapping the two DIVERGED masking explanations
+    survives.** A run that asked for masking and got none would be told "not
+    requested, but the run masked anyway" — the exactly inverted remediation —
+    with CI green. The two strings carry opposite user actions and differed by
+    nothing any test could see.
+
+    These assert what each message must *do for the reader*: name the
+    direction, the resolved value, or the arithmetic. Not the wording, so a
+    rewrite stays free; the substance, so a gutting does not.
+    """
+
+    MASK_ASKED_GOT_NONE = {"data": {"train_on_responses_only": True}}
+    MASK_NOT_ASKED_GOT_SOME = {"data": {"train_on_responses_only": False}}
+
+    def _mask_row(self, cfg_over, **record_over):
+        from soup_cli.utils.adapter_audit import audit_adapter
+
+        result = audit_adapter(_config(**cfg_over), _mlx_record(**record_over))
+        return next(
+            r for r in result.rows if r.setting == "data.train_on_responses_only"
+        )
+
+    def test_asked_for_masking_and_got_none_says_so(self):
+        row = self._mask_row(
+            self.MASK_ASKED_GOT_NONE, mask_prompt=False, response_token_mask=False
+        )
+        assert row.status == "diverged"
+        detail = row.detail.lower()
+        assert "requested" in detail
+        assert "masked nothing" in detail, row.detail
+        assert "anyway" not in detail, (
+            "this is the opposite message; the two explanations are swapped"
+        )
+
+    def test_did_not_ask_for_masking_but_got_it_says_so(self):
+        row = self._mask_row(
+            self.MASK_NOT_ASKED_GOT_SOME, mask_prompt=False, response_token_mask=True
+        )
+        assert row.status == "diverged"
+        detail = row.detail.lower()
+        assert "not requested" in detail
+        assert "anyway" in detail, row.detail
+        assert "masked nothing" not in detail, (
+            "this is the opposite message; the two explanations are swapped"
+        )
+
+    def test_the_two_masking_explanations_are_not_interchangeable(self):
+        """Stated directly, so a swap cannot pass by satisfying both loosely."""
+        got_none = self._mask_row(
+            self.MASK_ASKED_GOT_NONE, mask_prompt=False, response_token_mask=False
+        ).detail
+        got_some = self._mask_row(
+            self.MASK_NOT_ASKED_GOT_SOME, mask_prompt=False, response_token_mask=True
+        ).detail
+
+        assert got_none != got_some
+        # Each must carry the remediation for its own direction and not the
+        # other's: "use chatml data" is useless advice to someone who asked for
+        # no masking and got some.
+        assert "chatml" in got_none and "chatml" not in got_some, (
+            f"got_none={got_none!r}\ngot_some={got_some!r}"
+        )
+
+    def test_the_optimizer_detail_names_the_resolved_backend_value(self):
+        """Gutting it to "the optimizer differs" survived. The whole value of
+        this row is that `adamw_torch` resolves to `AdamW` on MLX — without
+        that, the reader cannot tell a real swap from a naming difference."""
+        from soup_cli.utils.adapter_audit import audit_adapter
+
+        row = next(
+            r
+            for r in audit_adapter(_config(), _mlx_record(optimizer="SGD")).rows
+            if r.setting == "optimizer"
+        )
+        assert row.status == "diverged"
+        assert "adamw_torch" in row.detail, row.detail
+        assert "AdamW" in row.detail, "the resolved name is the point of the row"
+        assert "SGD" in row.detail, "and what actually ran"
+
+    def test_the_warmup_detail_shows_the_arithmetic_that_rounded_away(self):
+        """This string *is* the motivating case of #762. "warmup differs" does
+        not tell anyone that 0.03 x 12 is zero steps, which is the finding."""
+        from soup_cli.utils.adapter_audit import audit_adapter
+
+        cfg = _config(training={"warmup_ratio": 0.03})
+        row = next(
+            r
+            for r in audit_adapter(cfg, _mlx_record(warmup_updates=0)).rows
+            if r.setting == "warmup_ratio"
+        )
+        assert row.status == "diverged"
+        assert "0.03" in row.detail, row.detail
+        assert "12" in row.detail, "the update count is half the arithmetic"
+        assert "0" in row.detail
+        assert "warmup_ratio" in row.detail or "gradient_accumulation" in row.detail, (
+            "a divergence the user cannot act on is only half reported"
+        )
+
+    def test_the_expected_warmup_count_is_shown_when_it_simply_disagrees(self):
+        """The non-rounding branch has its own arithmetic to show."""
+        from soup_cli.utils.adapter_audit import audit_adapter
+
+        cfg = _config(training={"warmup_ratio": 0.25})  # 0.25 x 12 = 3
+        row = next(
+            r
+            for r in audit_adapter(cfg, _mlx_record(warmup_updates=7)).rows
+            if r.setting == "warmup_ratio"
+        )
+        assert row.status == "diverged"
+        assert "3" in row.detail, row.detail
+        assert "0.25" in row.detail and "12" in row.detail
+
+    def test_the_bool_type_detail_names_both_types(self):
+        from soup_cli.utils.adapter_audit import audit_adapter
+
+        row = next(
+            r
+            for r in audit_adapter(
+                _config(training={"max_grad_norm": 1.0}), _mlx_record(max_grad_norm=True)
+            ).rows
+            if r.setting == "max_grad_norm"
+        )
+        assert row.status == "diverged"
+        assert "bool" in row.detail, row.detail
+        assert "float" in row.detail, "the reader needs to know what was expected"
+
+
+class TestTheSummaryCountsWhatItFound:
+    """#763 review round 3: hardcoding the summary's divergence count to 1
+    survived, because no test read the number back."""
+
+    @pytest.fixture(autouse=True)
+    def _run_from_tmp(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        _pin_console(monkeypatch)
+
+    def _run(self, tmp_path, record):
+        import yaml
+
+        from soup_cli.commands.adapters import app
+
+        (tmp_path / "adapter_config.json").write_text(json.dumps(record))
+        (tmp_path / "soup.yaml").write_text(yaml.safe_dump(_config()))
+        return _runner().invoke(app, ["audit", ".", "--config", "soup.yaml"])
+
+    @pytest.mark.parametrize(
+        "overrides,expected",
+        [
+            ({"optimizer": "SGD"}, 1),
+            ({"optimizer": "SGD", "scheduler": "linear"}, 2),
+            (
+                {"optimizer": "SGD", "scheduler": "linear", "weight_decay": 0.9},
+                3,
+            ),
+        ],
+        ids=["one", "two", "three"],
+    )
+    def test_the_printed_count_matches_the_number_found(
+        self, tmp_path, overrides, expected
+    ):
+        res = self._run(tmp_path, _mlx_record(**overrides))
+        assert f"{expected} divergence(s)" in res.output, res.output
+        assert res.exit_code == 2
+
+    def test_the_unchecked_count_is_printed_too(self, tmp_path):
+        record = _mlx_record(optimizer="SGD")
+        for key in ("max_grad_norm", "weight_decay"):
+            del record[key]
+        res = self._run(tmp_path, record)
+        assert "1 divergence(s)" in res.output, res.output
+        assert "2 unchecked" in res.output, res.output
+
+
+class TestAdapterSuppliedTextCannotDriveTheTerminal:
+    """#763 review round 3: the control-byte hardening had no test at all.
+
+    `adapter_config.json` is downloadable, so its strings are untrusted input
+    that this command prints. `rich.markup.escape` neutralises Rich's `[...]`
+    tags but not raw ANSI/OSC bytes, hence `_for_terminal` beside it — a
+    recorded `"AdamW\\x1b[2J"` would clear the screen, and `\\x1b]0;...\\x07`
+    would rewrite the title bar, which is how a refusal gets hidden.
+
+    Asserted as the *absence of specific dangerous sequences* rather than as
+    "no \\x1b anywhere", because Rich legitimately emits its own colour codes
+    under `FORCE_COLOR=1` and the suite is run that way.
+    """
+
+    # Erase-display, then an OSC title-set terminated by BEL.
+    PAYLOAD = "AdamW\x1b[2J\x1b]0;pwned\x07"
+
+    @pytest.fixture(autouse=True)
+    def _run_from_tmp(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        _pin_console(monkeypatch)
+
+    def _run(self, tmp_path, record, *extra):
+        import yaml
+
+        from soup_cli.commands.adapters import app
+
+        (tmp_path / "adapter_config.json").write_text(json.dumps(record))
+        (tmp_path / "soup.yaml").write_text(yaml.safe_dump(_config()))
+        return _runner().invoke(app, ["audit", ".", "--config", "soup.yaml", *extra])
+
+    def test_no_escape_sequence_from_the_record_reaches_the_terminal(self, tmp_path):
+        res = self._run(tmp_path, _mlx_record(optimizer=self.PAYLOAD))
+
+        assert "\x1b[2J" not in res.output, "erase-display survived to the terminal"
+        assert "\x1b]0;" not in res.output, "OSC title-set survived to the terminal"
+        assert "\x07" not in res.output, "BEL survived to the terminal"
+
+    def test_the_value_is_neutralised_rather_than_dropped(self, tmp_path):
+        """Stripping must not silently swallow the row — the audit still has to
+        report what it found, just inertly."""
+        res = self._run(tmp_path, _mlx_record(optimizer=self.PAYLOAD))
+
+        assert "AdamW" in res.output
+        assert "[2J" in res.output, "the payload should remain visible as inert text"
+        assert "DIVERGED" in res.output
+        assert res.exit_code == 2
+
+    def test_rich_markup_in_a_table_cell_is_printed_not_interpreted(self, tmp_path):
+        """`escape()` is the other half of the pair: `repr()` neutralises
+        control bytes but does nothing about `[red]`, which Rich would act on.
+
+        Uses `scheduler`, which diverges through `_cmp` and therefore carries
+        an **empty** detail -- so the payload reaches the table cell and
+        nowhere else. Asserting on `optimizer` instead would pass with the
+        cell's `escape()` deleted, because the same text reappears in that
+        row's detail line, which escapes separately.
+        """
+        res = self._run(tmp_path, _mlx_record(scheduler="cosine[red]X[/]"))
+
+        assert "[red]" in res.output, "the tag was interpreted instead of shown"
+
+    def test_rich_markup_in_a_detail_line_is_printed_not_interpreted(self, tmp_path):
+        """The detail line escapes separately from the cell, so it is asserted
+        separately -- on that line alone, for the same reason as above."""
+        res = self._run(tmp_path, _mlx_record(optimizer="AdamW[red]X[/]"))
+
+        detail_lines = [
+            line for line in res.output.splitlines() if line.strip().startswith("optimizer:")
+        ]
+        assert detail_lines, res.output
+        assert "[red]" in detail_lines[0], (
+            f"markup was interpreted in the detail line: {detail_lines[0]!r}"
+        )
+
+    def test_no_explanation_can_carry_a_control_byte_in_the_first_place(self):
+        """The invariant the detail line's `_for_terminal` insures against.
+
+        Every ``detail`` that interpolates a record value does so through
+        ``repr()``, which renders ``\x1b`` as four printable characters -- so
+        no raw control byte can reach ``row.detail`` by any current path, and
+        stripping it there is defence in depth rather than a live guard. That
+        makes removing it an *equivalent* mutation, which is only an honest
+        claim if the invariant is actually pinned. This pins it.
+        """
+        from soup_cli.utils.adapter_audit import audit_adapter
+
+        payload = "X\x1b[2J\x1b]0;p\x07".encode().decode("unicode_escape")
+        hostile = _mlx_record(
+            optimizer=payload,
+            scheduler=payload,
+            mask_prompt=payload,
+            response_token_mask=payload,
+            max_grad_norm=payload,
+            weight_decay=payload,
+            grad_checkpoint=payload,
+            grad_accumulation_steps=payload,
+            lora_parameters={"rank": payload, "scale": payload},
+        )
+        rows = audit_adapter(_config(), hostile).rows
+        assert any(r.status == "diverged" for r in rows), "the fixture must exercise it"
+        for row in rows:
+            assert "\x1b" not in row.detail, f"{row.setting}: {row.detail!r}"
+            assert "\x07" not in row.detail, f"{row.setting}: {row.detail!r}"
+
+    def test_the_unknown_reason_text_is_a_fixed_string_not_record_derived(self):
+        """The third `_for_terminal` call site, and the same honesty problem.
+
+        `unknown_reason` is a lookup over `classify_record`'s three literal
+        results, so nothing an adapter can write reaches it -- also an
+        equivalent mutation, and also worth pinning rather than asserting.
+        """
+        from soup_cli.utils.adapter_audit import classify_record, unknown_reason
+
+        kinds = {
+            classify_record(r)
+            for r in ({}, {"peft_type": "LORA"}, {"fine_tune_type": "lora"},
+                      {"total_updates": 1}, _mlx_record())
+        }
+        assert kinds == {"unknown", "peft", "mlx"}, kinds
+        for kind in kinds:
+            reason = unknown_reason(kind)
+            if reason is None:
+                continue
+            assert not any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in reason), reason
+
+    def test_the_json_path_is_unaffected_by_the_stripping(self, tmp_path):
+        """`--json` must carry the record's bytes faithfully; `_for_terminal`
+        is a terminal concern, and a machine consumer wants the real value."""
+        res = self._run(tmp_path, _mlx_record(optimizer=self.PAYLOAD), "--json")
+        payload = json.loads(res.stdout)
+
+        row = next(r for r in payload["rows"] if r["setting"] == "optimizer")
+        assert row["ran"] == self.PAYLOAD, "JSON should not be terminal-sanitised"
+
+    def test_a_control_byte_in_a_nested_lora_value_is_also_stripped(self, tmp_path):
+        """Not just the top-level keys — `lora_parameters` is record-supplied
+        too and reaches the same cells."""
+        res = self._run(
+            tmp_path,
+            _mlx_record(lora_parameters={"rank": self.PAYLOAD, "scale": 2.0}),
+        )
+
+        assert "\x1b[2J" not in res.output
+        assert "\x07" not in res.output
+
+
+class TestAMalformedRecordIsReportedNotCrashedOn:
+    """Found while pinning the control-byte invariant, not raised in review.
+
+    The two arithmetic paths trusted the record's types. A hand-edited or
+    foreign `adapter_config.json` with string numerics reached
+    `int(total_updates)` and `scale * rank` and raised out of the command:
+
+        Error: ValueError: invalid literal for int() with base 10: 'twelve'
+
+    Same threat model as the terminal-control hardening and the masking type
+    guard -- an untrusted downloaded file -- and a traceback is a worse
+    outcome than either, because `audit` is meant to be a CI gate and a crash
+    is not a verdict.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _run_from_tmp(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        _pin_console(monkeypatch)
+
+    def test_a_non_numeric_total_updates_does_not_raise(self):
+        from soup_cli.utils.adapter_audit import audit_adapter
+
+        result = audit_adapter(
+            _config(), _mlx_record(total_updates="twelve", warmup_updates=0)
+        )
+        row = next(r for r in result.rows if r.setting == "warmup_ratio")
+        assert row.status != "ok", "a record it cannot read is not agreement"
+        assert row.detail
+
+    def test_a_non_numeric_warmup_updates_does_not_raise(self):
+        from soup_cli.utils.adapter_audit import audit_adapter
+
+        result = audit_adapter(_config(), _mlx_record(warmup_updates="three"))
+        row = next(r for r in result.rows if r.setting == "warmup_ratio")
+        assert row.status != "ok"
+
+    def test_non_numeric_lora_parameters_do_not_raise(self):
+        from soup_cli.utils.adapter_audit import audit_adapter
+
+        result = audit_adapter(
+            _config(), _mlx_record(lora_parameters={"rank": "eight", "scale": "two"})
+        )
+        alpha = next(r for r in result.rows if r.setting == "lora.alpha")
+        rank = next(r for r in result.rows if r.setting == "lora.r")
+        assert alpha.status != "ok", "a derived value it cannot compute is not agreement"
+        assert rank.status != "ok"
+
+    def test_the_command_reports_rather_than_tracebacks(self, tmp_path):
+        """End to end: the shape that raised out of the CLI."""
+        import yaml
+
+        from soup_cli.commands.adapters import app
+
+        (tmp_path / "adapter_config.json").write_text(
+            json.dumps(
+                {
+                    "fine_tune_type": "lora",
+                    "total_updates": "twelve",
+                    "warmup_updates": 0,
+                    "lora_parameters": {"rank": "eight", "scale": "two"},
+                }
+            )
+        )
+        (tmp_path / "soup.yaml").write_text(yaml.safe_dump(_config()))
+
+        res = _runner().invoke(app, ["audit", ".", "--config", "soup.yaml"])
+
+        assert res.exception is None or isinstance(res.exception, SystemExit), (
+            f"raised out of the command: {res.exception!r}"
+        )
+        assert res.exit_code in (0, 2), res.output
+        assert "Traceback" not in res.output
+
+    def test_a_boolean_warmup_count_is_not_a_number(self):
+        """`_is_number` excludes `bool` on purpose, and this is why.
+
+        `warmup_ratio: 0` over 12 updates expects 0 warmup updates, and
+        `0 == False` is True in Python -- so a record saying
+        `warmup_updates: false` was handed a clean bill by the arithmetic.
+        Same defect `_cmp` and `_audit_masking` already guard.
+        """
+        from soup_cli.utils.adapter_audit import audit_adapter
+
+        result = audit_adapter(
+            _config(training={"warmup_ratio": 0.0}), _mlx_record(warmup_updates=False)
+        )
+        row = next(r for r in result.rows if r.setting == "warmup_ratio")
+        assert row.status != "ok", "a bool was read as the number 0"
+
+    def test_boolean_lora_scale_and_rank_are_not_numbers(self):
+        """`True * True` is `1`, so a config asking for alpha 1 agreed with a
+        record carrying two booleans."""
+        from soup_cli.utils.adapter_audit import audit_adapter
+
+        cfg = _config(training={"lora": {"r": 1, "alpha": 1}})
+        result = audit_adapter(
+            cfg, _mlx_record(lora_parameters={"rank": True, "scale": True})
+        )
+        row = next(r for r in result.rows if r.setting == "lora.alpha")
+        assert row.status != "ok", "two bools multiplied into a matching alpha"
+
+    def test_well_formed_records_are_unaffected(self):
+        """Control — the guards must not reject what real runs write."""
+        from soup_cli.utils.adapter_audit import audit_adapter
+
+        result = audit_adapter(_config(), _mlx_record())
+        assert result.diverged_count == 0
+        assert result.unknown_count == 0
