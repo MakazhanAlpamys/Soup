@@ -46,6 +46,15 @@ def _load_yaml_config(path: str) -> dict:
         data = yaml.safe_load(fh)
     if not isinstance(data, dict):
         raise ValueError("config must parse to a dict")
+    from soup_cli.config.unknown_keys import find_unknown_config_keys, format_unknown_keys
+    from soup_cli.utils.terminal import for_terminal
+
+    unknown = find_unknown_config_keys(data)
+    if unknown:
+        message = format_unknown_keys(unknown, include_deadline=False)
+        console.print("[red bold]Config validation error:[/]\n")
+        console.print(f"  [red]{for_terminal(message)}[/]")
+        raise SystemExit(1)
     return data
 
 
