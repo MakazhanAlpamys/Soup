@@ -18,7 +18,13 @@ from pathlib import Path
 from typing import Optional
 
 from soup_cli.utils.constants import EXPERIMENTS_DB, SOUP_DIR
+from soup_cli.utils.crash import redact_secrets
 from soup_cli.utils.process_liveness import process_is_alive as _process_is_alive
+
+# error_message is operator-facing text read in `soup runs show`, not a
+# diagnostic dump — capped well short of a full traceback so one runaway
+# stack trace can't bloat the runs table (#764/#767 review).
+_MAX_ERROR_MESSAGE_CHARS = 2000
 
 # Run status values this module reconciles. A watcher that never unwound (its
 # daemon thread was killed when the MCP server exited) leaves the run at
@@ -62,7 +68,8 @@ CREATE TABLE IF NOT EXISTS runs (
     pid             INTEGER,
     command_digest  TEXT,
     log_path        TEXT,
-    exit_code       INTEGER
+    exit_code       INTEGER,
+    error_message   TEXT
 );
 
 CREATE TABLE IF NOT EXISTS metrics (
@@ -178,6 +185,7 @@ class ExperimentTracker:
             ("runs", "command_digest", "ALTER TABLE runs ADD COLUMN command_digest TEXT"),
             ("runs", "log_path", "ALTER TABLE runs ADD COLUMN log_path TEXT"),
             ("runs", "exit_code", "ALTER TABLE runs ADD COLUMN exit_code INTEGER"),
+            ("runs", "error_message", "ALTER TABLE runs ADD COLUMN error_message TEXT"),
             # Deliberately nullable with no default: a row written before this
             # column existed has no evaluation loss, and NULL says so. A 0.0
             # would read as a measurement nobody took.
@@ -409,10 +417,25 @@ class ExperimentTracker:
         )
         conn.commit()
 
-    def fail_run(self, run_id: str) -> None:
-        """Mark run as failed."""
+    def fail_run(self, run_id: str, *, error: Optional[str] = None) -> None:
+        """Mark run as failed, optionally recording why (#764).
+
+        ``error`` distinguishes a run that never got past setup from one that
+        diverged mid-training — both used to read as an identical 'failed'
+        row with nothing else to go on. Redacted and length-capped before
+        storage: an exception message can embed a token from a failed HF/hub
+        auth call, and this column must not become the place secrets leak
+        into a locally-readable database (#764/#767 review).
+        """
         conn = self._get_conn()
-        conn.execute("UPDATE runs SET status = 'failed' WHERE run_id = ?", (run_id,))
+        if error is not None:
+            error = redact_secrets(error)
+            if len(error) > _MAX_ERROR_MESSAGE_CHARS:
+                error = error[:_MAX_ERROR_MESSAGE_CHARS] + "...(truncated)"
+        conn.execute(
+            "UPDATE runs SET status = 'failed', error_message = ? WHERE run_id = ?",
+            (error, run_id),
+        )
         conn.commit()
 
     def _reconcile_orphaned_run(self, run: dict) -> dict:
