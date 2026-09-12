@@ -1720,23 +1720,26 @@ def audit(
     Settings the record cannot speak to are reported ``unknown``, never as
     agreeing: a false clean bill is worse than no audit.
     """
+    import contextlib
     import json as _json
+    import sys
 
     import yaml
 
     from soup_cli.utils.adapter_audit import audit_adapter, unknown_reason
 
-    adapter_path = Path(adapter).resolve()
-    record_file = adapter_path / "adapter_config.json"
-    if not record_file.exists():
-        console.print(f"[red]No adapter_config.json in: {adapter}[/]")
-        raise typer.Exit(1)
-
     # Sibling subcommands enforce this (scan: 779, merge: 1484); read-only here,
     # but a convention mismatch inside one file is its own hazard.
+    #
+    # #763 review: on the RAW argument, and before the existence check.
+    # `Path(adapter).resolve()` follows the symlink, so the `os.lstat` inside
+    # the helper saw the target and the no-symlink half never fired; and with
+    # the existence check first, an out-of-cwd path was reported as
+    # "No adapter_config.json in: C:/Windows" -- a missing-file message for a
+    # path that is refused outright.
     from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
 
-    for _path, _label in ((str(adapter_path), "adapter directory"), (config, "--config")):
+    for _path, _label in ((adapter, "adapter directory"), (config, "--config")):
         try:
             enforce_under_cwd_and_no_symlink(_path, _label)
         except (ValueError, OSError) as exc:
@@ -1744,6 +1747,12 @@ def audit(
             # line and Exit(1), never a raw traceback.
             console.print(f"[red]Path refused: {escape(str(exc))}[/]")
             raise typer.Exit(1) from exc
+
+    adapter_path = Path(adapter).resolve()
+    record_file = adapter_path / "adapter_config.json"
+    if not record_file.exists():
+        console.print(f"[red]No adapter_config.json in: {adapter}[/]")
+        raise typer.Exit(1)
 
     config_path = Path(config).resolve()
     if not config_path.exists():
@@ -1765,7 +1774,13 @@ def audit(
     try:
         from soup_cli.config.loader import load_config_from_string
 
-        soup_config = load_config_from_string(config_path.read_text())
+        # The loader reports unknown keys through its own module-level Console,
+        # which writes to STDOUT -- so `--json` emitted four lines of warning
+        # ahead of the payload and `json.load` failed on it (#763 review).
+        # A diagnostic about the config is not this command's output; stderr
+        # is where it belongs, and it stays just as visible there.
+        with contextlib.redirect_stdout(sys.stderr):
+            soup_config = load_config_from_string(config_path.read_text())
     except yaml.YAMLError as exc:
         console.print(f"[red]Could not parse {config}: {exc}[/]")
         raise typer.Exit(1) from exc
@@ -1780,7 +1795,14 @@ def audit(
         # Plain stdout, not console.print_json: Rich pretty-prints and
         # highlights, which makes the output unparseable by the caller this
         # flag exists for.
-        typer.echo(_json.dumps(result.to_dict(), indent=2))
+        payload = result.to_dict()
+        # Criterion 4 for machine consumers: a list of `unknown` rows with no
+        # explanation reads as a tool failure rather than as a limit of the
+        # record. Gated on `unknown_count` so it matches the table exactly.
+        payload["unknown_reason"] = (
+            unknown_reason(result.record_kind) if result.unknown_count else None
+        )
+        typer.echo(_json.dumps(payload, indent=2))
         raise typer.Exit(result.exit_code)
 
     table = Table(title=f"Audit: {adapter_path.name}")

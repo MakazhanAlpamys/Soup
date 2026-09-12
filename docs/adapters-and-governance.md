@@ -495,7 +495,7 @@ the exact environment the run executed in. Atomic write, cwd-contained.
 
 ## Run-vs-Config Audit (`soup adapters audit`)
 
-Does the finished adapter match the config that asked for it? Four merged
+Does the finished adapter match the config that asked for it? Five merged
 fixes taught the MLX path to record what it actually did into
 `adapter_config.json` — #683 (masking), #684 (accumulation), #685 (gradient
 checkpointing), #686 (optimizer and schedule), #749 (gradient clipping). Each
@@ -524,6 +524,28 @@ user's fault.
 The config is read through the schema, so a setting you omitted is audited
 against the default Soup would actually have used, not against a second copy
 of the defaults kept by the audit.
+
+**Masking is audited by effect, not by request.** The record's
+`train_on_responses_only` is the config's own request echoed back; the effect
+is `mask_prompt` (upstream's single masked prefix) and `response_token_mask`
+(Soup's per-token mask). Plain-text rows carry no role boundaries, so a run
+that asked for response-only masking on them warns once and trains on the full
+sequence — leaving a record that says `train_on_responses_only: true` beside
+two false effect keys. The audit compares against the effect, so that run is
+reported `DIVERGED`.
+
+Evidence is weighed the same way everywhere else in this command: one truthy
+key proves masking *happened*, whatever the other says, but proving it did
+**not** happen needs both keys. A record carrying neither (written before
+#683) — or carrying one false key with the other absent — is `unknown`, not a
+divergence, because a missing key read as `False` would claim a check the
+record cannot support.
+
+`--json` emits `checked_count` alongside `diverged_count` and `unknown_count`,
+so a CI job can tell "everything agreed" from "nothing was checkable" — both
+of which exit 0 — plus `unknown_reason`, the same explanation the table
+prints. Config warnings (an unknown key, for instance) go to stderr, so stdout
+under `--json` is the payload and nothing else.
 
 Exits non-zero on divergence, so it composes into CI and `soup ship` rather
 than only being read.
