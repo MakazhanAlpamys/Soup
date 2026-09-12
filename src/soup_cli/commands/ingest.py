@@ -243,7 +243,7 @@ def _pull(
             os.environ, allow_private_host=allow_private_host
         )
     except ingest_pull.PullError as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(f"[red]{for_terminal(str(exc))}[/]")
         raise typer.Exit(1) from None
     except ValueError as exc:
         console.print(f"[red]{escape(str(exc))}[/]")
