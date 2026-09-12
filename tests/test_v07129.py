@@ -908,6 +908,31 @@ class TestRunHeal:
             sc._run_heal(pruned_dir="./model", teacher="t", heal_data="./h.jsonl",
                          steps=5, out_dir="./adapter", heal_rows=10)
 
+    def test_run_heal_reports_rendered_config_validation_error(self, tmp_path, monkeypatch):
+        import typer
+
+        import soup_cli.commands.shrink as sc
+
+        messages: list[str] = []
+        monkeypatch.setattr(
+            "soup_cli.config.loader.load_config_from_string",
+            lambda _yaml: (_ for _ in ()).throw(ValueError("invalid rendered config")),
+        )
+        monkeypatch.setattr(sc.console, "print", lambda message: messages.append(message))
+
+        with pytest.raises(typer.Exit) as exc_info:
+            sc._run_heal(
+                pruned_dir="./model",
+                teacher="t",
+                heal_data="./h.jsonl",
+                steps=5,
+                out_dir="./adapter",
+                heal_rows=10,
+            )
+
+        assert exc_info.value.exit_code == 1
+        assert messages == ["[red]Invalid rendered heal config:[/] invalid rendered config"]
+
     def test_nonzero_tail_control_bytes_stripped(self, tmp_path, monkeypatch):
         import soup_cli.commands.shrink as sc
 

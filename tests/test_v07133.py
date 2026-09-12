@@ -1505,6 +1505,33 @@ class TestDraftDistillCli:
                 out_dir="draftout", steps=100, data_rows=200,
             )
 
+    def test_run_distill_reports_rendered_config_validation_error(
+        self, in_tmp_cwd, monkeypatch
+    ):
+        import typer
+
+        from soup_cli.commands import draft as draft_cmd
+
+        messages: list[str] = []
+        monkeypatch.setattr(
+            "soup_cli.config.loader.load_config_from_string",
+            lambda _yaml: (_ for _ in ()).throw(ValueError("invalid rendered config")),
+        )
+        monkeypatch.setattr(draft_cmd.console, "print", lambda message: messages.append(message))
+
+        with pytest.raises(typer.Exit) as exc_info:
+            draft_cmd._run_distill(
+                draft_base="org/tiny",
+                target="org/target",
+                data="d.jsonl",
+                out_dir="draftout",
+                steps=100,
+                data_rows=200,
+            )
+
+        assert exc_info.value.exit_code == 1
+        assert messages == ["[red]Invalid rendered distill config:[/] invalid rendered config"]
+
     def test_run_distill_timeout_raises_friendly_error(self, in_tmp_cwd, monkeypatch):
         import subprocess as _sp
 
