@@ -34,6 +34,7 @@ from soup_cli.utils.ingest_sources import (
     validate_source_name,
 )
 from soup_cli.utils.paths import is_under_cwd
+from soup_cli.utils.terminal import for_terminal
 
 console = Console()
 
@@ -277,7 +278,7 @@ def _pull(
         # Streams to a staging file; the target only appears once the pull finished.
         atomic_write_lines(_lines(), str(output_path), field="--output")
     except ingest_pull.PullError as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(f"[red]{for_terminal(str(exc))}[/]")
         console.print(f"[red]Nothing was written to {escape(output_path.name)}.[/]")
         raise typer.Exit(1) from None
 
