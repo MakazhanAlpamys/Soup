@@ -53,6 +53,8 @@ def _compute_distill_term(
     temperature: float,
     labels: "_torch_typ.Tensor | None" = None,
     attention_mask: "_torch_typ.Tensor | None" = None,
+    chunk_size: int | None = None,
+    use_checkpoint: bool = False,
 ) -> "_torch_typ.Tensor":
     """Pure tensor kernel: divergence between student and teacher logits.
 
@@ -61,13 +63,16 @@ def _compute_distill_term(
     a scalar mean over the token-level divergences, restricted to the trained
     tokens: ``labels != -100`` when ``labels`` is given (excludes padding AND
     prompt), else ``attention_mask`` (excludes padding), else all positions.
-    Averaging over padding/prompt tokens (the pre-fix behaviour) diluted the
-    signal with the divergence on positions the student is not trained on.
+
+    Supports token chunking and non-reentrant activation checkpointing via
+    ``chunk_size`` and ``use_checkpoint`` to drastically reduce the peak
+    memory of autograd saved tensors across large vocabularies and sequences (#722).
 
     Raises:
-        TypeError: ``temperature`` not numeric or is bool.
-        ValueError: ``temperature`` non-finite or non-positive; ``divergence``
-            outside the supported set.
+        TypeError: ``temperature`` not numeric or is bool; ``chunk_size`` not int
+            or is bool; ``use_checkpoint`` not bool.
+        ValueError: ``temperature`` non-finite or non-positive; ``chunk_size < 1``;
+            ``divergence`` outside the supported set.
     """
     import torch
 
@@ -80,6 +85,21 @@ def _compute_distill_term(
     if not math.isfinite(float(temperature)) or float(temperature) <= 0:
         raise ValueError(
             f"temperature must be finite and positive, got {temperature!r}"
+        )
+    if divergence not in ("forward_kl", "reverse_kl", "js"):
+        raise ValueError(f"Unknown divergence {divergence!r}")
+    if chunk_size is not None:
+        if isinstance(chunk_size, bool):
+            raise TypeError(f"chunk_size must not be bool, got {chunk_size!r}")
+        if not isinstance(chunk_size, int):
+            raise TypeError(
+                f"chunk_size must be int, got {type(chunk_size).__name__}"
+            )
+        if chunk_size < 1:
+            raise ValueError(f"chunk_size must be >= 1, got {chunk_size}")
+    if not isinstance(use_checkpoint, bool):
+        raise TypeError(
+            f"use_checkpoint must be bool, got {type(use_checkpoint).__name__}"
         )
 
     # Causal-LM alignment: logits at position i predict token i+1, so the CE
@@ -96,47 +116,82 @@ def _compute_distill_term(
         if attention_mask is not None:
             attention_mask = attention_mask[:, 1:]
 
+    # Keep the divergence kernel in FP32. In lower precision, valid logits at
+    # low temperatures readily underflow probabilities to zero; target-side
+    # derivatives in torch.kl_div then become non-finite even when the reduced
+    # loss is finite (#719).
     temp = float(temperature)
-    s = student_logits / temp
-    t = teacher_logits / temp
+    s = student_logits.float() / temp
+    t = teacher_logits.float() / temp
 
-    def _masked_mean(per_token: "_torch_typ.Tensor") -> "_torch_typ.Tensor":
-        """Mean of a ``(batch, seq)`` per-token divergence over trained tokens."""
-        if labels is not None:
-            mask = labels != -100
-        elif attention_mask is not None:
-            mask = attention_mask.bool()
+    if labels is not None:
+        mask = labels != -100
+    elif attention_mask is not None:
+        mask = attention_mask.bool()
+    else:
+        mask = None
+
+    if mask is not None:
+        if not mask.any():
+            return student_logits.sum() * 0.0
+        s_flat = s[mask]
+        t_flat = t[mask]
+        denom = mask.sum().float()
+    else:
+        s_flat = s.reshape(-1, s.size(-1))
+        t_flat = t.reshape(-1, t.size(-1))
+        denom = torch.tensor(s_flat.size(0), dtype=torch.float32, device=s.device)
+
+    def _chunk_kernel(s_c: "_torch_typ.Tensor", t_c: "_torch_typ.Tensor") -> "_torch_typ.Tensor":
+        log_s = torch.log_softmax(s_c, dim=-1)
+        log_t = torch.log_softmax(t_c, dim=-1)
+        if divergence == "forward_kl":
+            p_t = log_t.exp()
+            return (p_t * (log_t - log_s)).sum()
+        if divergence == "reverse_kl":
+            p_s = log_s.exp()
+            return (p_s * (log_s - log_t)).sum()
+        if divergence == "js":
+            p_s = log_s.exp()
+            p_t = log_t.exp()
+            log_m = torch.logaddexp(log_s, log_t) - math.log(2.0)
+            kl_pm = (p_s * (log_s - log_m)).sum()
+            kl_qm = (p_t * (log_t - log_m)).sum()
+            return 0.5 * (kl_pm + kl_qm)
+        raise ValueError(f"Unknown divergence {divergence!r}")
+
+    n_tokens = s_flat.size(0)
+    c_size = chunk_size if (chunk_size is not None and chunk_size > 0) else n_tokens
+
+    if c_size >= n_tokens and not use_checkpoint:
+        total_sum = _chunk_kernel(s_flat, t_flat).float()
+    else:
+        total_sum = torch.tensor(0.0, device=s.device, dtype=torch.float32)
+        if use_checkpoint:
+            from torch.utils.checkpoint import checkpoint
+
+            for i in range(0, n_tokens, c_size):
+                s_chunk = s_flat[i : i + c_size]
+                t_chunk = t_flat[i : i + c_size]
+                if t_chunk.requires_grad:
+                    chunk_sum = checkpoint(
+                        _chunk_kernel, s_chunk, t_chunk, use_reentrant=False
+                    )
+                else:
+                    def _step(s_in: "_torch_typ.Tensor", _t=t_chunk) -> "_torch_typ.Tensor":
+                        return _chunk_kernel(s_in, _t)
+
+                    chunk_sum = checkpoint(_step, s_chunk, use_reentrant=False)
+                total_sum = total_sum + chunk_sum.float()
         else:
-            return per_token.mean()
-        mask = mask.to(per_token.dtype)
-        denom = mask.sum().clamp(min=1.0)
-        return (per_token * mask).sum() / denom
+            for i in range(0, n_tokens, c_size):
+                s_chunk = s_flat[i : i + c_size]
+                t_chunk = t_flat[i : i + c_size]
+                chunk_sum = _chunk_kernel(s_chunk, t_chunk)
+                total_sum = total_sum + chunk_sum.float()
 
-    kl_div = torch.nn.functional.kl_div
-    if divergence == "forward_kl":
-        # KL(teacher || student): student log-probs, teacher probs. reduction=
-        # "none" keeps per-token so we can mask before averaging.
-        log_s = torch.log_softmax(s, dim=-1)
-        p_t = torch.softmax(t, dim=-1)
-        per_token = kl_div(log_s, p_t, reduction="none").sum(dim=-1)
-        return _masked_mean(per_token) * (temp * temp)
-    if divergence == "reverse_kl":
-        log_t = torch.log_softmax(t, dim=-1)
-        p_s = torch.softmax(s, dim=-1)
-        per_token = kl_div(log_t, p_s, reduction="none").sum(dim=-1)
-        return _masked_mean(per_token) * (temp * temp)
-    if divergence == "js":
-        # Jensen-Shannon: 0.5 (KL(p||m) + KL(q||m)), m = 0.5 (p + q).
-        log_s = torch.log_softmax(s, dim=-1)
-        log_t = torch.log_softmax(t, dim=-1)
-        p_s = log_s.exp()
-        p_t = log_t.exp()
-        m = 0.5 * (p_s + p_t)
-        log_m = m.clamp(min=1e-12).log()
-        kl_pm = kl_div(log_m, p_s, reduction="none").sum(dim=-1)
-        kl_qm = kl_div(log_m, p_t, reduction="none").sum(dim=-1)
-        return 0.5 * (_masked_mean(kl_pm) + _masked_mean(kl_qm)) * (temp * temp)
-    raise ValueError(f"Unknown divergence {divergence!r}")
+    loss = (total_sum / denom.float()) * (temp * temp)
+    return loss.to(dtype=s.dtype)
 
 
 def _require_uld_id_compatible_tokenizers(
@@ -531,6 +586,8 @@ class DistillTrainerWrapper:
         _uld_aligned = tcfg.uld_strategy == "wasserstein_aligned"
         _uld_teacher_tokenizer = uld_teacher_tokenizer
         _student_tokenizer = self.tokenizer
+        _distill_chunk_size = tcfg.distill_chunk_size
+        _distill_checkpoint = bool(tcfg.distill_checkpoint)
 
         class _DistillTrainer(Trainer):
             def compute_loss(
@@ -687,6 +744,8 @@ class DistillTrainerWrapper:
                         student_logits, teacher_logits, divergence, temperature,
                         labels=labels,
                         attention_mask=inputs.get("attention_mask"),
+                        chunk_size=_distill_chunk_size,
+                        use_checkpoint=_distill_checkpoint,
                     )
                 total = _CE_WEIGHT * ce_loss + _DISTILL_WEIGHT * distill_loss
                 if anchor is not None:

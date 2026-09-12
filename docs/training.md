@@ -416,6 +416,8 @@ training:
   teacher_model: meta-llama/Llama-3.1-8B
   distill_divergence: forward_kl   # kl | forward_kl | reverse_kl | js
   distill_temperature: 2.0
+  distill_chunk_size: 256          # token chunk size for divergence evaluation
+  distill_checkpoint: true         # non-reentrant activation checkpointing
   epochs: 3
   lr: 5e-5
   quantization: 4bit               # quantizes student only
@@ -424,6 +426,26 @@ training:
 Loss = student CE + (T**2) × KL(teacher_logits / T  ||  student_logits / T).
 Teacher is loaded once, frozen via `requires_grad_(False)` + `.eval()`, and its
 inputs / logits are auto-bridged across CPU / CUDA devices.
+
+### Chunking and Activation Checkpointing
+
+Distillation with large vocabularies (e.g. 150k for Qwen 2.5) and long sequences
+can exhaust GPU memory due to massive intermediate logit and probability tensors.
+Soup provides two controls to bound activation memory:
+
+- `distill_chunk_size`: Evaluates divergence in chunks of active response tokens
+  (`labels != -100`). Pre-filtering immediately sheds unmasked prompt and padding
+  tokens from retained autograd memory, while chunking bounds transient peak
+  activation tensors during divergence evaluation. Moderate chunk sizes (e.g. 64
+  to 256 tokens) balance peak memory reduction with kernel launch overhead.
+- `distill_checkpoint`: Wraps chunk evaluation in non-reentrant activation
+  checkpointing (`torch.utils.checkpoint.checkpoint(..., use_reentrant=False)`).
+  Discards intermediate `log_softmax` and probability tensors during the forward
+  pass and recomputes them during backward, substantially reducing retained autograd
+  tensor bytes at the cost of recomputation time in the backward pass. Note that
+  enabling `distill_checkpoint: true` without setting `distill_chunk_size` processes
+  all active tokens in a single chunk, which reduces retained bytes via checkpointing
+  but leaves transient peak activations unbounded.
 
 Set `distill_mode: sequence` (default `token`) to train on the teacher's **generated
 continuations** instead of per-token logit matching — a hard-label, cross-tokenizer-friendly
