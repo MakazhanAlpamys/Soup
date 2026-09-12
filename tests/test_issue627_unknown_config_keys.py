@@ -1287,3 +1287,79 @@ class TestTheWebUiErrorBranchesAreDistinct:
         assert response.status_code == 400, response.text
         detail = response.json()["detail"]
         assert detail == "Invalid training configuration", detail
+
+
+class TestPlanAndApplyRefuseUnknownKeys:
+    """`soup plan` / `soup apply` must refuse what `soup train` refuses (#894).
+
+    `_load_yaml_config` handed the raw mapping to `build_plan` without ever
+    checking for unknown keys, so a typo'd key planned cleanly and was only
+    refused one command later by `soup train`. Both commands now run the same
+    unknown-key check the loader runs and exit 1 with the same message.
+    """
+
+    TYPOD = (
+        "base: hf/model\n"
+        "task: sft\n"
+        "data:\n"
+        "  train: ./t.jsonl\n"
+        "  format: auto\n"
+        "output: ./o\n"
+        "training:\n"
+        "  epochs: 1\n"
+        "  quantizaton: none\n"
+    )
+    CLEAN = (
+        "base: hf/model\n"
+        "task: sft\n"
+        "data:\n"
+        "  train: ./t.jsonl\n"
+        "  format: auto\n"
+        "output: ./o\n"
+        "training:\n"
+        "  epochs: 1\n"
+    )
+
+    def test_plan_refuses_a_typod_key(self, tmp_path, monkeypatch) -> None:
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        monkeypatch.chdir(tmp_path)
+        cfg = tmp_path / "soup.yaml"
+        cfg.write_text(self.TYPOD, encoding="utf-8")
+        result = CliRunner().invoke(app, ["plan", "--config", str(cfg)])
+        assert result.exit_code == 1, result.output
+        assert "unknown config key" in result.output
+        assert "training.quantizaton" in result.output
+        assert "quantization" in result.output
+
+    def test_apply_dry_run_refuses_a_typod_key(self, tmp_path, monkeypatch) -> None:
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        monkeypatch.chdir(tmp_path)
+        cfg = tmp_path / "soup.yaml"
+        cfg.write_text(self.TYPOD, encoding="utf-8")
+        result = CliRunner().invoke(
+            app, ["apply", "--config", str(cfg), "--dry-run"]
+        )
+        assert result.exit_code == 1, result.output
+        assert "unknown config key" in result.output
+        assert "training.quantizaton" in result.output
+        assert "quantization" in result.output
+
+    def test_clean_config_still_plans_and_applies(self, tmp_path, monkeypatch) -> None:
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        monkeypatch.chdir(tmp_path)
+        cfg = tmp_path / "soup.yaml"
+        cfg.write_text(self.CLEAN, encoding="utf-8")
+        runner = CliRunner()
+        planned = runner.invoke(app, ["plan", "--config", str(cfg)])
+        assert planned.exit_code == 0, planned.output
+        applied = runner.invoke(app, ["apply", "--config", str(cfg), "--dry-run"])
+        assert applied.exit_code == 0, applied.output
