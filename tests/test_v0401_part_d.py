@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 # --- H4: Template help is dynamically generated --------------------------
@@ -80,15 +81,18 @@ def test_migrate_jsonl_input_yields_friendly_error(tmp_path: Path, monkeypatch):
     assert "got JSONL" in result.output
 
 
+@pytest.mark.parametrize("record_size", [2, 40000])
+@pytest.mark.parametrize("trailing_newline", [True, False])
 def test_migrate_jsonl_with_json_suffix_yields_friendly_error(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path, monkeypatch, record_size: int, trailing_newline: bool
 ):
     """Multiple JSON objects are data even when the suffix does not say JSONL."""
     from soup_cli.cli import app
 
     monkeypatch.chdir(tmp_path)
     data = tmp_path / "data.json"
-    data.write_text('{"prompt": "hi"}\n{"prompt": "world"}\n', encoding="utf-8")
+    record = json.dumps({"prompt": "x" * record_size})
+    data.write_text(f"{record}\n{record}" + ("\n" if trailing_newline else ""), encoding="utf-8")
 
     result = CliRunner().invoke(
         app, ["migrate", "--from", "llamafactory", "data.json", "--dry-run"]

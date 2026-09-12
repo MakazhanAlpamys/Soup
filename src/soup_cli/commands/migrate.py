@@ -157,32 +157,34 @@ def _looks_like_jsonl(path: Path, *, require_multiple_objects: bool = False) -> 
     error. Windows tooling writes that BOM by default, PowerShell's
     ``Out-File`` included (#675 review).
 
-    The read is bounded because a file with no newline is one single line. An
+    Each of at most 64 line reads is bounded because a file with no newline is one single line. An
     unbounded line iteration pulled a measured 240.9 MB peak for a 120 MB
     one-liner. Unknown suffixes use the stricter mode: two non-blank lines must
     each be complete JSON objects, which separates JSONL from one JSON document.
     """
     try:
         with open(path, "r", encoding="utf-8-sig", errors="replace") as fh:
-            prefix = fh.read(65536)
+            object_count = 0
+            for _ in range(64):
+                line = fh.readline(65536)
+                if not line:
+                    break
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                if not require_multiple_objects:
+                    return stripped.startswith("{")
+                if not line.endswith("\n") and len(line) >= 65536:
+                    return False
+                try:
+                    value = json.loads(stripped)
+                except json.JSONDecodeError:
+                    return False
+                if not isinstance(value, dict):
+                    return False
+                object_count += 1
+                if object_count == 2:
+                    return True
     except OSError:
         return False
-
-    lines = [line.strip() for line in prefix.splitlines() if line.strip()]
-    if not lines:
-        return False
-    if not require_multiple_objects:
-        return lines[0].startswith("{")
-
-    object_count = 0
-    for line in lines:
-        try:
-            value = json.loads(line)
-        except json.JSONDecodeError:
-            return False
-        if not isinstance(value, dict):
-            return False
-        object_count += 1
-        if object_count == 2:
-            return True
     return False
