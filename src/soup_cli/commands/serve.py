@@ -19,6 +19,8 @@ if TYPE_CHECKING:  # pragma: no cover
 from rich.console import Console
 from rich.panel import Panel
 
+from soup_cli.utils.terminal import for_terminal
+
 logger = logging.getLogger(__name__)
 
 console = Console()
@@ -681,19 +683,13 @@ def serve(
 
     # Auto-pair draft model for speculative decoding
     if auto_spec and not speculative_model:
-        from rich.markup import escape as _esc
-
         from soup_cli.utils.spec_pairing import pick_draft_model
 
         # A paired value can come from the local draft registry (a file that
         # may be edited outside this invocation), so strip control bytes and
         # escape Rich markup before printing — escape() alone leaves raw
-        # ESC/OSC sequences live (mirrors commands/draft.py::_for_terminal).
-        _ctrl = {i: None for i in range(0x20) if i not in (0x09, 0x0A, 0x0D)}
-        _ctrl[0x7F] = None
-
-        def _safe(value: str) -> str:
-            return _esc(str(value).translate(_ctrl))
+        # ESC/OSC sequences live (mirrors soup_cli.utils.terminal.for_terminal).
+        _safe = for_terminal
 
         target_for_pairing = base_model or str(model_path)
         paired = pick_draft_model(target_for_pairing)

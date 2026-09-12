@@ -11,20 +11,11 @@ from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
+from soup_cli.utils.terminal import for_terminal
+
 console = Console()
 
 app = typer.Typer(no_args_is_help=True)
-
-# Strip C0/DEL control bytes from adapter-config-derived text before it reaches
-# the terminal. rich.markup.escape() only neutralises Rich's [...] tags, not raw
-# ANSI/OSC/ESC bytes that could spoof a title bar or hide a refusal (mirrors
-# commands/data_doctor.py::_for_terminal). Keep tab/LF/CR.
-_CONTROL_STRIP_TABLE = {i: None for i in range(0x20) if i not in (0x09, 0x0A, 0x0D)}
-_CONTROL_STRIP_TABLE[0x7F] = None
-
-
-def _for_terminal(text: str) -> str:
-    return text.translate(_CONTROL_STRIP_TABLE)
 
 
 def _find_adapters(directory: Path, max_depth: int = 6) -> list[Path]:
@@ -839,7 +830,7 @@ def arithmetic(
     if len(distinct) > 1:
         if not allow_cross_base:
             listed = ", ".join(
-                f"{escape(n)}={escape(_for_terminal(str(b)))}"
+                f"{escape(n)}={for_terminal(str(b))}"
                 for n, b in bases.items()
             )
             console.print(
@@ -942,7 +933,7 @@ def arithmetic(
     panel = Panel(
         f"Expression:     {escape(report.expression)}\n"
         f"Terms:          {terms_str}\n"
-        f"Base model:     {escape(_for_terminal(str(report.base_model)))}\n"
+        f"Base model:     {for_terminal(str(report.base_model))}\n"
         f"Merged tensors: [bold]{report.merged_layers}[/]\n"
         f"Skipped tensors:{len(report.skipped_layers)}\n"
         f"Output:         [bold]{escape(report.output_dir)}[/]",

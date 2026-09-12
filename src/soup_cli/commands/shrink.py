@@ -41,6 +41,7 @@ from soup_cli.utils.shrink import (
     shrink_arch_of,
     shrink_verdict_to_dict,
 )
+from soup_cli.utils.terminal import strip_control
 
 console = Console()
 
@@ -53,16 +54,6 @@ _MAX_HEAL_STEPS = 1_000_000
 _MAX_HEAL_EPOCHS = 100
 _PPL_MAX_LENGTH = 512
 
-
-# Strip C0 / ESC / DEL before subprocess- or model-derived text hits the
-# terminal (rich.markup.escape only neutralises [...] markup, not raw ESC bytes
-# — mirrors commands/data_doctor.py::_for_terminal, v0.71.27).
-_CONTROL_STRIP_TABLE = {i: None for i in range(0x20) if i not in (0x09, 0x0A, 0x0D)}
-_CONTROL_STRIP_TABLE[0x7F] = None
-
-
-def _for_terminal(text: str) -> str:
-    return text.translate(_CONTROL_STRIP_TABLE)
 
 
 # ---------------------------------------------------------------------------
@@ -598,7 +589,7 @@ def _run_heal(
         combined = (result.stderr or b"").decode("utf-8", "replace") + (
             result.stdout or b""
         ).decode("utf-8", "replace")
-        tail = _for_terminal(combined[-800:])
+        tail = strip_control(combined[-800:])
         raise RuntimeError(f"heal distill failed (rc={result.returncode}): {tail}")
 
     _fuse_adapter(base_dir=pruned_dir, adapter_dir=out_dir, trc=trc)

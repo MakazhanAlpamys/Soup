@@ -43,6 +43,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from soup_cli import __version__
+from soup_cli.utils.terminal import strip_control as for_terminal
 
 # ---------------------------------------------------------------------------
 # Public constants
@@ -75,25 +76,6 @@ _DELTA_ROUND = 6
 
 # CommonMark's minimum code-fence length (used by render_ship_pr_markdown).
 _MIN_MD_FENCE_LEN = 3
-
-# Strip C0 controls + DEL before any UNTRUSTED name reaches the terminal
-# (mirrors ``commands/data_doctor._for_terminal``, and the reasoning is the
-# same): ``rich.markup.escape`` neutralises Rich's own ``[...]`` tag syntax and
-# nothing else, so a raw ESC byte survives it. Benchmark and noise-floor axis
-# names come from an ``--evidence`` JSON file, which is untrusted input — a
-# crafted name can spoof the terminal title, emit OSC-8 links, or use cursor
-# tricks to obscure a DON'T-SHIP verdict. Tab / LF / CR are kept because Rich
-# lays them out safely. ``--output`` JSON is unaffected: ``json.dumps`` already
-# ``\\u00XX``-escapes control characters.
-_CONTROL_STRIP_TABLE: Dict[int, None] = {
-    i: None for i in range(0x20) if i not in (0x09, 0x0A, 0x0D)
-}
-_CONTROL_STRIP_TABLE[0x7F] = None
-
-
-def for_terminal(text: str) -> str:
-    """Strip control bytes ``rich.markup.escape`` does not handle."""
-    return str(text).translate(_CONTROL_STRIP_TABLE)
 
 # ---------------------------------------------------------------------------
 # Noise floor (v0.73.2) — what the instrument can actually resolve
