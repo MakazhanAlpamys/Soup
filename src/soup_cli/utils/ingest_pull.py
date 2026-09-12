@@ -490,8 +490,10 @@ def _urllib_transport(url: str, credentials: LangfuseCredentials, timeout: float
         try:
             # The status is what the caller acts on; an error body that cannot be
             # read in time must not turn a clean "HTTP 401" into a raw traceback.
+            # PullError belongs here too: since #865 the deadline and the size cap
+            # raise it from _read_capped, and it is not an OSError.
             body = _read_capped(exc, deadline=deadline, timeout=timeout)
-        except (OSError, http.client.HTTPException):
+        except (OSError, http.client.HTTPException, PullError):
             body = b""
         finally:
             exc.close()

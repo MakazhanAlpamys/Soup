@@ -95,7 +95,16 @@ def drip_server(monkeypatch):
         def do_GET(self):  # noqa: N802 — http.server API
             route = urlsplit(self.path).path
             try:
-                if route == "/drip":
+                if route == "/drip-401":
+                    # A 401 whose body arrives too slowly to read.
+                    self.send_response(401)
+                    self.send_header("Content-Length", str(_DRIP_CHUNKS))
+                    self.end_headers()
+                    for _ in range(_DRIP_CHUNKS):
+                        time.sleep(_DRIP_GAP)
+                        self.wfile.write(b"x")
+                        self.wfile.flush()
+                elif route == "/drip":
                     self.send_response(200)
                     self.send_header("Content-Length", str(_DRIP_CHUNKS))
                     self.end_headers()
@@ -146,6 +155,22 @@ class TestDeadline:
             f"({_DRIP_CHUNKS} chunks {_DRIP_GAP}s apart)"
         )
         assert raised is not None and "timed out" in str(raised).lower()
+
+    def test_a_drip_fed_error_body_still_reports_its_status(self, drip_server):
+        """The deadline raises PullError, which is not an OSError: without it in
+        the HTTPError branch, a slow 401 body loses the credentials message and
+        surfaces as a timeout instead."""
+        from soup_cli.utils.ingest_pull import PullError, _decode_page, _urllib_transport
+
+        started = time.monotonic()
+        response = _urllib_transport(f"{drip_server}/drip-401", _creds(), _TIMEOUT)
+        elapsed = time.monotonic() - started
+
+        assert (response.status, response.body) == (401, b"")
+        assert elapsed < _TIMEOUT + _EPSILON
+        with pytest.raises(PullError) as info:
+            _decode_page(response, _creds())
+        assert "LANGFUSE_PUBLIC_KEY" in str(info.value)
 
     def test_control_a_prompt_response_still_arrives(self, drip_server):
         """CONTROL — the deadline must not break a normal read."""
