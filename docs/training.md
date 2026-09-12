@@ -425,9 +425,22 @@ Loss = student CE + (T**2) × KL(teacher_logits / T  ||  student_logits / T).
 Teacher is loaded once, frozen via `requires_grad_(False)` + `.eval()`, and its
 inputs / logits are auto-bridged across CPU / CUDA devices.
 
-The token-divergence kernel evaluates probability math in FP32, including when
-the model logits use FP16 or BF16, so low temperatures do not create non-finite
-reverse-KL or Jensen-Shannon gradients.
+The token-divergence kernel evaluates all three divergences in FP32 and deliberately
+returns an FP32 scalar, including for FP16/BF16 logits. Forward-KL values can therefore
+also differ slightly from the previous low-precision calculation. The log-space
+reverse-KL and Jensen-Shannon formulas prevent finite losses with non-finite
+gradients; the upcast also preserves small losses that would underflow to zero.
+Non-finite logits propagate into the loss/gradients, allowing AMP's GradScaler to
+skip overflowed steps rather than aborting training with a validation exception.
+
+FP32 intermediates cost time and memory. The [maintainer's PR #736 measurement](https://github.com/MakazhanAlpamys/Soup/pull/736)
+on an RTX 5070 (BF16, B=1/S=512/V=32000, forward plus backward) found the originally
+submitted kernel took 1.71 times as long and 1.24 times the peak memory of main.
+That measurement included finite-value guards removed here: without them it took
+9.40 ms versus 6.39 ms, with the same 376.5 MiB versus 303.6 MiB peak. These are
+hardware-specific measurements, not a benchmark of this revised implementation,
+which also avoids unused probability tensors. Two FP32 logits copies alone occupy
+about 7.8 GiB at B=4/S=2048/V=128256; budget for additional intermediates as well.
 
 Set `distill_mode: sequence` (default `token`) to train on the teacher's **generated
 continuations** instead of per-token logit matching — a hard-label, cross-tokenizer-friendly

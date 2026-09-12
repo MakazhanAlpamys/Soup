@@ -58,14 +58,48 @@ def test_forward_kl_matches_probability_space_reference() -> None:
 
 
 @pytest.mark.parametrize("which", ["student", "teacher"])
-def test_non_finite_input_is_reported_separately(which: str) -> None:
+@pytest.mark.parametrize("divergence", ["forward_kl", "reverse_kl", "js"])
+@pytest.mark.parametrize("nonfinite", [float("nan"), float("inf")])
+def test_non_finite_logits_propagate_to_amp(which, divergence, nonfinite) -> None:
     torch = pytest.importorskip("torch")
     from soup_cli.trainer.distill import _compute_distill_term
 
-    student = torch.zeros(1, 1, 2)
+    student = torch.zeros(1, 1, 2, requires_grad=True)
     teacher = torch.zeros(1, 1, 2)
-    target = student if which == "student" else teacher
-    target[0, 0, 0] = float("nan")
+    with torch.no_grad():
+        (student if which == "student" else teacher)[0, 0, 0] = nonfinite
 
-    with pytest.raises(ValueError, match=rf"{which}_logits.*finite"):
-        _compute_distill_term(student, teacher, "reverse_kl", temperature=1.0)
+    loss = _compute_distill_term(student, teacher, divergence, temperature=1.0)
+    loss.backward()
+
+    assert not torch.isfinite(loss)
+    assert not torch.isfinite(student.grad).all()
+
+
+@pytest.mark.parametrize("dtype_name", ["float32", "bfloat16", "float16"])
+@pytest.mark.parametrize("divergence", ["forward_kl", "reverse_kl", "js"])
+def test_divergence_matches_double_precision_reference(dtype_name, divergence) -> None:
+    torch = pytest.importorskip("torch")
+    from soup_cli.trainer.distill import _compute_distill_term
+
+    dtype = getattr(torch, dtype_name)
+    student = torch.tensor([[[0.2, -0.4, 0.8]]], dtype=dtype, requires_grad=True)
+    teacher = torch.tensor([[[0.5, 0.1, -0.2]]], dtype=dtype)
+    temperature = 2.0
+    # Use independent probability-space arithmetic on the actual rounded inputs.
+    ps = torch.softmax(student.detach().double() / temperature, dim=-1)
+    pt = torch.softmax(teacher.double() / temperature, dim=-1)
+    if divergence == "forward_kl":
+        expected = (pt * torch.log(pt / ps)).sum()
+    elif divergence == "reverse_kl":
+        expected = (ps * torch.log(ps / pt)).sum()
+    else:
+        mixture = (ps + pt) / 2
+        expected = ((ps * torch.log(ps / mixture)).sum()
+                    + (pt * torch.log(pt / mixture)).sum()) / 2
+    expected *= temperature**2
+
+    actual = _compute_distill_term(student, teacher, divergence, temperature=temperature)
+
+    assert actual.dtype == torch.float32
+    torch.testing.assert_close(actual.double(), expected, rtol=1e-5, atol=2e-7)

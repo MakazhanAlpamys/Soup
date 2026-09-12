@@ -64,6 +64,10 @@ def _compute_distill_term(
     Averaging over padding/prompt tokens (the pre-fix behaviour) diluted the
     signal with the divergence on positions the student is not trained on.
 
+    The scalar stays in FP32 for every divergence, including half-precision
+    inputs. Non-finite logits propagate through the loss so AMP can skip an
+    overflowed step without a synchronous per-step validation guard.
+
     Raises:
         TypeError: ``temperature`` not numeric or is bool.
         ValueError: ``temperature`` non-finite or non-positive; ``divergence``
@@ -96,11 +100,6 @@ def _compute_distill_term(
         if attention_mask is not None:
             attention_mask = attention_mask[:, 1:]
 
-    if not torch.isfinite(student_logits).all():
-        raise ValueError("student_logits must contain only finite values")
-    if not torch.isfinite(teacher_logits).all():
-        raise ValueError("teacher_logits must contain only finite values")
-
     # Keep the divergence kernel in FP32. In lower precision, valid logits at
     # low temperatures readily underflow probabilities to zero; target-side
     # derivatives in torch.kl_div then become non-finite even when the reduced
@@ -108,8 +107,6 @@ def _compute_distill_term(
     temp = float(temperature)
     log_s = torch.log_softmax(student_logits.float() / temp, dim=-1)
     log_t = torch.log_softmax(teacher_logits.float() / temp, dim=-1)
-    p_s = log_s.exp()
-    p_t = log_t.exp()
 
     def _masked_mean(per_token: "_torch_typ.Tensor") -> "_torch_typ.Tensor":
         """Mean of a ``(batch, seq)`` per-token divergence over trained tokens."""
@@ -124,12 +121,16 @@ def _compute_distill_term(
         return (per_token * mask).sum() / denom
 
     if divergence == "forward_kl":
+        p_t = log_t.exp()
         per_token = (p_t * (log_t - log_s)).sum(dim=-1)
         return _masked_mean(per_token) * (temp * temp)
     if divergence == "reverse_kl":
+        p_s = log_s.exp()
         per_token = (p_s * (log_s - log_t)).sum(dim=-1)
         return _masked_mean(per_token) * (temp * temp)
     if divergence == "js":
+        p_s = log_s.exp()
+        p_t = log_t.exp()
         log_m = torch.logaddexp(log_s, log_t) - math.log(2.0)
         kl_pm = (p_s * (log_s - log_m)).sum(dim=-1)
         kl_qm = (p_t * (log_t - log_m)).sum(dim=-1)
