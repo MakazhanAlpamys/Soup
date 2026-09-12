@@ -1582,24 +1582,24 @@ def _patch_tokenizer(monkeypatch, tok=None):
 
 class TestForTerminal:
     def test_strips_esc_and_bell(self):
-        from soup_cli.commands.data_doctor import _for_terminal
+        from soup_cli.utils.terminal import strip_control
 
-        assert _for_terminal("\x1b]0;PWNED\x07human") == "]0;PWNEDhuman"
+        assert strip_control("\x1b]0;PWNED\x07human") == "]0;PWNEDhuman"
 
     def test_preserves_tab_newline_cr(self):
-        from soup_cli.commands.data_doctor import _for_terminal
+        from soup_cli.utils.terminal import strip_control
 
-        assert _for_terminal("a\tb\nc\rd") == "a\tb\nc\rd"
+        assert strip_control("a\tb\nc\rd") == "a\tb\nc\rd"
 
     def test_strips_del(self):
-        from soup_cli.commands.data_doctor import _for_terminal
+        from soup_cli.utils.terminal import strip_control
 
-        assert _for_terminal("a\x7fb") == "ab"
+        assert strip_control("a\x7fb") == "ab"
 
     def test_plain_text_unchanged(self):
-        from soup_cli.commands.data_doctor import _for_terminal
+        from soup_cli.utils.terminal import strip_control
 
-        assert _for_terminal("nothing weird here") == "nothing weird here"
+        assert strip_control("nothing weird here") == "nothing weird here"
 
 
 class TestLoadTokenizerUsesResolvedTrust:

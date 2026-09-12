@@ -33,6 +33,7 @@ from soup_cli.utils.canary import (
 )
 from soup_cli.utils.live_eval import compute_pair_losses
 from soup_cli.utils.paths import atomic_write_text, is_under_cwd
+from soup_cli.utils.terminal import for_terminal
 
 if TYPE_CHECKING:  # static types only — transformers stays a lazy import
     from transformers import PreTrainedModel, PreTrainedTokenizerBase
@@ -42,24 +43,6 @@ app = typer.Typer(
     no_args_is_help=True, help="Dataset canaries (memorization probe)."
 )
 
-# Strip C0/DEL before any manifest-derived string reaches the terminal.
-# rich.markup.escape() only neutralises Rich's own [...] tag syntax — a raw
-# ESC byte survives it. The manifest is explicitly a shareable artifact, so
-# a hostile one is a realistic input: an OSC 52 / cursor sequence in a
-# `secret` could spoof the title bar or obscure the MAJOR verdict printed
-# right below the table. Mirrors commands/data_doctor.py + commands/shrink.py.
-# --output JSON is unaffected: json.dumps already \\u00XX-escapes these.
-_CONTROL_STRIP_TABLE = {
-    i: None for i in range(0x20) if i not in (0x09, 0x0A, 0x0D)
-}
-_CONTROL_STRIP_TABLE[0x7F] = None
-
-
-def _for_terminal(text: str) -> str:
-    return text.translate(_CONTROL_STRIP_TABLE)
-
-# Fixed seed for the control draw: controls are a null distribution, not a
-# secret, so reproducibility is the useful property here.
 _CONTROL_SEED = 12345
 _VERDICT_COLOUR = {"OK": "green", "MINOR": "yellow", "MAJOR": "red"}
 
@@ -227,7 +210,7 @@ def check(
             "nan" if math.isnan(exposure.loss) else f"{exposure.loss:.4f}"
         )
         table.add_row(
-            escape(_for_terminal(exposure.secret.strip())),
+            for_terminal(exposure.secret.strip()),
             loss_text,
             f"{exposure.percentile * 100:.1f}%",
             "[red]YES[/]" if exposure.memorized else "no",

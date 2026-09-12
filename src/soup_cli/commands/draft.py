@@ -49,6 +49,7 @@ from soup_cli.utils.draft import (
     same_tokenizer,
 )
 from soup_cli.utils.paths import atomic_write_text, enforce_under_cwd_and_no_symlink
+from soup_cli.utils.terminal import for_terminal, strip_control
 
 if TYPE_CHECKING:  # pragma: no cover — typing only, keeps the CLI import light
     from transformers import PreTrainedModel, PreTrainedTokenizerBase
@@ -79,17 +80,6 @@ _SUBPROCESS_ERROR_TAIL_CHARS = 800
 # trains into this subdirectory of -o; the merge then replaces -o with the
 # dense model.
 _ADAPTER_SUBDIR = "_adapter"
-
-# Strip C0 / ESC / DEL before subprocess- or model-derived text hits the
-# terminal (rich.markup.escape only neutralises [...] markup, not raw ESC
-# bytes) — mirrors commands/shrink.py::_for_terminal.
-_CONTROL_STRIP_TABLE = {i: None for i in range(0x20) if i not in (0x09, 0x0A, 0x0D)}
-_CONTROL_STRIP_TABLE[0x7F] = None
-
-
-def _for_terminal(text: str) -> str:
-    return text.translate(_CONTROL_STRIP_TABLE)
-
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -456,7 +446,7 @@ def _run_distill(
         combined = (result.stderr or b"").decode("utf-8", "replace") + (
             result.stdout or b""
         ).decode("utf-8", "replace")
-        tail = _for_terminal(combined[-_SUBPROCESS_ERROR_TAIL_CHARS:])
+        tail = strip_control(combined[-_SUBPROCESS_ERROR_TAIL_CHARS:])
         raise RuntimeError(f"draft distill failed (rc={result.returncode}): {tail}")
 
     if not os.path.isdir(adapter_dir):
@@ -864,9 +854,9 @@ def list_registered() -> None:
     for entry in entries:
         rate = entry.get("acceptance_rate")
         table.add_row(
-            escape(_for_terminal(str(entry.get("target", "?")))),
-            escape(_for_terminal(str(entry.get("draft", "?")))),
+            for_terminal(str(entry.get("target", "?"))),
+            for_terminal(str(entry.get("draft", "?"))),
             "-" if rate is None else f"{float(rate) * 100:.1f}%",
-            escape(_for_terminal(str(entry.get("created", "?")))),
+            for_terminal(str(entry.get("created", "?"))),
         )
     console.print(table)
