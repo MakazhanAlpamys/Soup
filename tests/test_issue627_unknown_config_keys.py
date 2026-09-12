@@ -172,6 +172,12 @@ class TestTheControl:
             unknown = find_unknown_config_keys(yaml.safe_load(text))
             assert unknown == [], (entry.name, [u.path for u in unknown])
             assert load_config_from_string(text).training.lora.r == 16, entry.name
+            # The remap makes a root-level ``lora:`` LEGAL, so the two checks
+            # above cannot see the canonical-spelling fix; pin the text itself.
+            assert "lora" not in yaml.safe_load(text), (
+                f"{entry.name}: the bundled example spells lora: at the root; "
+                "the canonical spelling is training.lora"
+            )
     def test_non_mapping_values_do_not_crash_the_walk(self) -> None:
         raw = _raw()
         raw["training"] = "not-a-mapping"
@@ -1103,6 +1109,19 @@ class TestTheReportIsSafeForTheTerminal:
         assert for_terminal("\x1b[31m[bold]x[/]\x7f") == "[31m\\[bold]x\\[/]"
         assert for_terminal("tab\tnew\nline") == "tab\tnew\nline"
 
+    @pytest.mark.parametrize("byte", [*range(0x00, 0x20), 0x7F])
+    def test_every_control_byte_is_stripped_except_the_three_whitespace_ones(
+        self, byte: int
+    ) -> None:
+        """ESC and DEL were pinned; BEL, CR and the other 28 were not (TDD review)."""
+        from soup_cli.utils.terminal import for_terminal
+
+        out = for_terminal(f"a{chr(byte)}b")
+        if byte in (0x09, 0x0A, 0x0D):
+            assert out == f"a{chr(byte)}b", f"whitespace byte {byte:#04x} must survive"
+        else:
+            assert out == "ab", f"control byte {byte:#04x} reached the terminal"
+
 
 class TestTheWalkIsBounded:
     """A config string reaches the detector from the Web UI and MCP too.
@@ -1127,10 +1146,33 @@ class TestTheWalkIsBounded:
         started = time.perf_counter()
         unknown = find_unknown_config_keys(raw)
         elapsed = time.perf_counter() - started
-        assert len(unknown) == _MAX_REPORTED_UNKNOWN_KEYS
+        # cap + 1: the extra finding is the overflow marker the report reads.
+        assert len(unknown) == _MAX_REPORTED_UNKNOWN_KEYS + 1
         assert elapsed < 5.0, f"the capped walk took {elapsed:.1f}s"
         message = format_unknown_keys(unknown, include_deadline=False)
         assert f"capped at {_MAX_REPORTED_UNKNOWN_KEYS}" in message
+        assert message.count("unknown config key") == _MAX_REPORTED_UNKNOWN_KEYS
+
+    def test_exactly_the_cap_is_reported_in_full_without_the_cap_sentence(self) -> None:
+        """A boundary the first version got wrong: 100 findings printed 'capped'."""
+        from soup_cli.config.unknown_keys import _MAX_REPORTED_UNKNOWN_KEYS
+
+        def raw(count: int) -> dict:
+            return {
+                "base": "m",
+                "data": {"train": "t.jsonl"},
+                "training": {f"bogus_key_{i}": i for i in range(count)},
+            }
+
+        at_cap = find_unknown_config_keys(raw(_MAX_REPORTED_UNKNOWN_KEYS))
+        assert len(at_cap) == _MAX_REPORTED_UNKNOWN_KEYS
+        at_cap_msg = format_unknown_keys(at_cap, include_deadline=False)
+        assert "capped" not in at_cap_msg
+        assert at_cap_msg.count("unknown config key") == _MAX_REPORTED_UNKNOWN_KEYS
+
+        one_over = find_unknown_config_keys(raw(_MAX_REPORTED_UNKNOWN_KEYS + 1))
+        assert len(one_over) == _MAX_REPORTED_UNKNOWN_KEYS + 1
+        assert "capped" in format_unknown_keys(one_over, include_deadline=False)
 
     def test_a_report_below_the_cap_does_not_claim_to_be_capped(self) -> None:
         unknown = find_unknown_config_keys(
@@ -1180,3 +1222,68 @@ class TestTheWebUiKeepsTheHint:
         assert detail.startswith("Invalid training configuration")
         assert "quantizaton" in detail and "quantization" in detail
         assert "Refused." in detail
+
+
+class TestTheLoaderRefusesANonMappingFile:
+    """``load_config`` on a list-shaped YAML died with a TypeError traceback.
+
+    ``load_config_from_string`` has guarded this shape since v0.40.x (its
+    contract is ValueError-only); the file call site, touched in v0.75.0,
+    never did — found by the post-release TDD review.
+    """
+
+    @pytest.mark.parametrize("text, shape", [("- a\n- b\n", "list"), ("just a string\n", "str")])
+    def test_a_non_mapping_document_is_a_clean_exit_not_a_traceback(
+        self, monkeypatch, tmp_path, text, shape
+    ) -> None:
+        from soup_cli.config import loader
+
+        printed: list[str] = []
+        monkeypatch.setattr(loader.console, "print", lambda *a, **k: printed.append(str(a[0])))
+        path = tmp_path / "soup.yaml"
+        path.write_text(text, encoding="utf-8")
+        with pytest.raises(SystemExit) as excinfo:
+            loader.load_config(path)
+        assert excinfo.value.code == 1
+        assert any("YAML mapping" in line and shape in line for line in printed), printed
+
+
+class TestTheWebUiErrorBranchesAreDistinct:
+    """Both Web UI handlers split ValueError from everything else (TDD review).
+
+    The split is the point of the v0.75.0 change: the loader's ValueError
+    carries the key and the suggestion and is safe to show; anything else
+    (a YAML parser error, an unexpected TypeError) must stay generic.
+    """
+
+    @staticmethod
+    def _client():
+        pytest.importorskip("fastapi")
+        from fastapi.testclient import TestClient
+
+        from soup_cli.ui.app import create_app, get_auth_token
+
+        return TestClient(create_app()), {"Authorization": f"Bearer {get_auth_token()}"}
+
+    def test_from_form_names_the_field_on_a_validation_error(self) -> None:
+        client, headers = self._client()
+        response = client.post(
+            "/api/config/from-form",
+            json={"base": "m", "data": {"train": "./t.jsonl"}, "training": {"epochs": 0}},
+            headers=headers,
+        )
+        assert response.status_code == 200, response.text
+        error = response.json()["error"]
+        assert error.startswith("Invalid configuration:")
+        assert "epochs" in error, error
+
+    def test_train_start_keeps_a_parser_error_generic(self) -> None:
+        client, headers = self._client()
+        response = client.post(
+            "/api/train/start",
+            json={"config_yaml": "base: [unclosed\n  data: {"},
+            headers=headers,
+        )
+        assert response.status_code == 400, response.text
+        detail = response.json()["detail"]
+        assert detail == "Invalid training configuration", detail

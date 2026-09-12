@@ -67,6 +67,12 @@ def load_config(path: "Path | str") -> SoupConfig:
     if raw is None:
         console.print("[red]Config file is empty[/]")
         raise SystemExit(1)
+    if not isinstance(raw, dict):
+        # A bare list ("- a") or scalar would reach SoupConfig(**raw) and die
+        # with a TypeError traceback; load_config_from_string already refuses
+        # this shape, and the CLI contract here is SystemExit(1).
+        console.print(f"[red]Config must be a YAML mapping, got {type(raw).__name__}[/]")
+        raise SystemExit(1)
 
     unknown_error = _report_unknown_keys(raw)
     if unknown_error is not None:

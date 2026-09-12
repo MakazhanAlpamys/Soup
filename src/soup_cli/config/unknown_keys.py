@@ -133,7 +133,9 @@ def _walk(
 
     declared = model.model_fields
     for key, value in raw.items():
-        if len(found) >= _MAX_REPORTED_UNKNOWN_KEYS:
+        # One finding PAST the cap is kept as the overflow marker, so the
+        # report can tell "exactly the cap" from "more than the cap".
+        if len(found) > _MAX_REPORTED_UNKNOWN_KEYS:
             return
         if not isinstance(key, str):
             continue
@@ -165,8 +167,11 @@ def find_unknown_config_keys(raw: dict) -> list[UnknownKey]:
     refuses (v0.75.0, #879). A key present at both levels is left for the
     validator, which raises the precise error for it.
 
-    At most :data:`_MAX_REPORTED_UNKNOWN_KEYS` findings are returned; the
-    report says so when the cap was hit.
+    At most :data:`_MAX_REPORTED_UNKNOWN_KEYS` + 1 findings are returned: the
+    walk keeps one finding past the cap as the overflow marker, and
+    :func:`format_unknown_keys` lists the first cap and says the rest were
+    cut. A config with exactly the cap's worth of unknown keys is reported in
+    full, without the cap sentence.
     """
     try:
         normalised = remap_root_level_misplaced_keys(raw)
@@ -213,8 +218,9 @@ def format_unknown_keys(
     # a deadline are exactly the callers that proceed, so one flag decides both
     # the trailing sentence and the per-key verdict word.
     suffix = "Not applied." if include_deadline else "Refused."
+    overflow = len(unknown) > _MAX_REPORTED_UNKNOWN_KEYS
     lines = []
-    for item in unknown:
+    for item in unknown[:_MAX_REPORTED_UNKNOWN_KEYS]:
         if item.suggestions:
             # After the question mark the suffix starts a new sentence.
             hint = " or ".join(f"'{s}'" for s in item.suggestions)
@@ -222,7 +228,7 @@ def format_unknown_keys(
         else:
             # After " - " it continues the sentence, hence lowercase.
             lines.append(f"unknown config key '{item.path}' - {suffix.lower()}")
-    if len(unknown) >= _MAX_REPORTED_UNKNOWN_KEYS:
+    if overflow:
         lines.append(
             f"(report capped at {_MAX_REPORTED_UNKNOWN_KEYS} unknown keys; "
             "fix these and load again)"
