@@ -347,6 +347,10 @@ soup doctor                           # check GPU / deps / environment
 
 The complete command list is in [`docs/commands.md`](docs/commands.md).
 
+For training across machines, use `--gpus` for the per-node GPU count and
+`--nodes`, `--node-rank`, `--master-addr`, and `--master-port` for the cluster.
+See the [two-node launch example](docs/performance-and-quantization.md#multi-node-launch).
+
 ## Supported Models
 
 Soup works with **any** text-generation model on the
