@@ -933,6 +933,35 @@ class TestRunHeal:
         assert exc_info.value.exit_code == 1
         assert messages == ["[red]Invalid rendered heal config:[/] invalid rendered config"]
 
+    def test_run_heal_sanitizes_rendered_config_validation_error(self, tmp_path, monkeypatch):
+        import typer
+
+        import soup_cli.commands.shrink as sc
+
+        messages: list[str] = []
+        monkeypatch.setattr(
+            "soup_cli.config.loader.load_config_from_string",
+            lambda _yaml: (_ for _ in ()).throw(
+                ValueError("bad \x1b[2J[bold red]field[/]")
+            ),
+        )
+        monkeypatch.setattr(sc.console, "print", lambda message: messages.append(message))
+
+        with pytest.raises(typer.Exit) as exc_info:
+            sc._run_heal(
+                pruned_dir="./model",
+                teacher="t",
+                heal_data="./h.jsonl",
+                steps=5,
+                out_dir="./adapter",
+                heal_rows=10,
+            )
+
+        assert exc_info.value.exit_code == 1
+        assert len(messages) == 1
+        assert "\x1b" not in messages[0]
+        assert "bad [2J\\[bold red]field\\[/]" in messages[0]
+
     def test_nonzero_tail_control_bytes_stripped(self, tmp_path, monkeypatch):
         import soup_cli.commands.shrink as sc
 
