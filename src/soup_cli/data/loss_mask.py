@@ -406,7 +406,9 @@ def strip_doubled_leading_bos(
     A single post-processor BOS (no template BOS, e.g. Zephyr/TinyLlama) or none
     at all (Qwen) is not a duplicate and is left as ``main`` had it -- the cache
     is deliberately pinned to ``main`` here, not to the live path's
-    template-only rule, and that difference is the #791 family.
+    template-only rule, and that difference (the live path now yields zero
+    leading BOS for a ``data.chat_template`` preset while the cache keeps
+    ``main``'s one) is tracked in #876.
     """
     bos_id = _resolve_bos_token_id(tokenizer)
     if (
