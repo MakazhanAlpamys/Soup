@@ -261,6 +261,68 @@ def test_doctor_out_of_range_train_member_is_reported(monkeypatch):
     assert "All checks passed!" not in out
 
 
+def test_doctor_incompatible_train_member_exits_nonzero(monkeypatch):
+    """A [train] member past its ceiling makes `soup doctor` exit non-zero (#874)."""
+    monkeypatch.setattr(
+        "soup_cli.commands.doctor.EXTRA_GROUPS",
+        [("train", [("transformers", "transformers", "5.16.1")])],
+    )
+    monkeypatch.setattr(
+        "soup_cli.commands.doctor._installed_version_str", lambda import_name, pkg_name: "6.1.0"
+    )
+    result = runner.invoke(app, ["doctor"])
+    assert result.exit_code == 1
+    assert "INCOMPATIBLE" in _strip_ansi(result.output)
+
+
+def test_doctor_incompatible_core_dependency_exits_nonzero(monkeypatch):
+    """A core dependency past its ceiling makes `soup doctor` exit non-zero (#874)."""
+    monkeypatch.setattr("soup_cli.commands.doctor.DEPS", [("typer", "typer", "0.1.0", True)])
+    monkeypatch.setattr("soup_cli.commands.doctor._MAX_EXCLUSIVE", {"typer": "0.2.0"})
+    result = runner.invoke(app, ["doctor"])
+    assert result.exit_code == 1
+    assert "INCOMPATIBLE" in _strip_ansi(result.output)
+
+
+def test_doctor_outdated_train_member_exits_zero(monkeypatch):
+    """An outdated [train] member stays advisory: only beyond-ceiling blocks (#874)."""
+    monkeypatch.setattr(
+        "soup_cli.commands.doctor.EXTRA_GROUPS",
+        [("train", [("transformers", "transformers", "5.16.1")])],
+    )
+    monkeypatch.setattr(
+        "soup_cli.commands.doctor._installed_version_str", lambda import_name, pkg_name: "4.0.0"
+    )
+    result = runner.invoke(app, ["doctor"])
+    assert result.exit_code == 0
+    assert "outdated" in _strip_ansi(result.output)
+
+
+def test_doctor_partial_train_group_in_range_exits_zero(monkeypatch):
+    """A partially installed [train] group with in-range members stays exit 0 (#874)."""
+    monkeypatch.setattr(
+        "soup_cli.commands.doctor.EXTRA_GROUPS",
+        [
+            (
+                "train",
+                [
+                    ("transformers", "transformers", "5.16.1"),
+                    ("bitsandbytes", "bitsandbytes", "0.41.0"),
+                ],
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        "soup_cli.commands.doctor._installed_version_str",
+        lambda import_name, pkg_name: "5.16.1" if pkg_name == "transformers" else None,
+    )
+    result = runner.invoke(app, ["doctor"])
+    assert result.exit_code == 0
+    out = _strip_ansi(result.output)
+    assert "OK" in out
+    assert "not installed" in out
+
+
 def test_doctor_nvidia_train_suggestion_is_two_step(monkeypatch):
     """On an NVIDIA box the [train] suggestion installs torch from its own index (#828 review)."""
     monkeypatch.setattr(
