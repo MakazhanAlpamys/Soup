@@ -89,7 +89,7 @@ infrastructure instead of improving models. Soup fixes that.
 
 **v0.75.0 — the same `soup.yaml` trained a different recipe on MLX than on transformers,
 silently.** Six training options were validated, documented, accepted — and read by nothing
-on that backend. **All 58 pull requests in this release came from outside the maintainer**,
+on that backend. **All 60 pull requests in this release came from outside the maintainer**,
 by 22 people.
 
 - **Breaking: an unknown config key now refuses the load.** v0.74 warned and named this
