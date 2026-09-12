@@ -941,12 +941,24 @@ class TestTheCommandLoadsThroughTheSchema:
 class TestTheJsonFlagEmitsOnlyJson:
     """#763 review, finding 3: a regression from the schema-loading fix.
 
-    `load_config_from_string` reports unknown keys through a module-level
-    `rich` Console, which writes to **stdout** — so `--json` emitted four lines
-    of warning before the payload and `json.load` failed on it. That breaks
-    acceptance criterion 6.
+    `load_config_from_string` reported unknown keys through a module-level
+    `rich` Console writing to **stdout**, so `--json` emitted four lines of
+    warning before the payload and `json.load` failed on it. The load now runs
+    inside `contextlib.redirect_stdout(sys.stderr)`.
 
-    This runs a real process rather than `CliRunner`: whether stdout and stderr
+    **v0.75.0 changed the ground under this.** The release flipped
+    `UNKNOWN_KEY_SEVERITY` from `"warn"` to `"error"` — v0.75 was the deadline
+    `UNKNOWN_KEY_REJECTION_VERSION` declared — so an unknown key now *raises*
+    and the loader prints nothing at all. Verified on this tree: the load emits
+    zero bytes to stdout.
+
+    That makes the redirect insurance rather than a live guard, which is only
+    an honest thing to keep if the insurance is tested. So the last test here
+    puts the severity switch back to `"warn"` in a real subprocess and asserts
+    the payload still parses — pinning the fix against the actual print path,
+    whichever way the policy is set today.
+
+    These run real processes rather than `CliRunner`: whether stdout and stderr
     are separable in-process depends on the click version (`mix_stderr` was
     removed in 8.2), and the claim under test is precisely that they are
     separate. Marked `integration` for that reason, against the module's
@@ -974,13 +986,45 @@ class TestTheJsonFlagEmitsOnlyJson:
         (tmp_path / "adapter_config.json").write_text(json.dumps(_mlx_record()))
         (tmp_path / "soup.yaml").write_text(yaml.safe_dump(config))
 
+    @staticmethod
+    def _run_with_severity(cwd, severity, *args):
+        """Same command, in a real process, with the unknown-key policy forced.
+
+        `UNKNOWN_KEY_SEVERITY` is a module-level switch the loader reads at
+        call time, so setting it before invoking the app reproduces exactly
+        what the other setting does -- real code, opposite position, no stub.
+        """
+        import os
+        import subprocess
+        import sys
+
+        env = {**os.environ, "PYTHONIOENCODING": "utf-8", "COLUMNS": "200"}
+        src = str(pathlib.Path(__file__).resolve().parents[1] / "src")
+        env["PYTHONPATH"] = src + os.pathsep + env.get("PYTHONPATH", "")
+        code = (
+            "import soup_cli.config.loader as loader;"
+            f"loader.UNKNOWN_KEY_SEVERITY={severity!r};"
+            "from soup_cli.commands.adapters import app; app()"
+        )
+        return subprocess.run(
+            [sys.executable, "-c", code, "audit", *args],
+            cwd=str(cwd), capture_output=True, text=True, timeout=120,
+            env=env, encoding="utf-8", errors="replace",
+        )
+
     @pytest.mark.integration
-    def test_an_unknown_config_key_does_not_break_the_payload(self, tmp_path):
+    def test_a_loader_warning_never_reaches_the_payload(self, tmp_path):
+        """The original bug, pinned against the real print path.
+
+        With the severity switch at `"warn"` the loader prints four lines to
+        stdout during the load -- exactly what broke `json.load` before the
+        redirect. stdout must still be nothing but the payload.
+        """
         config = _config()
-        config["data"]["trian_on_responses_only"] = True  # a typo, warned about
+        config["data"]["trian_on_responses_only"] = True  # a typo it warns about
         self._write(tmp_path, config)
 
-        proc = self._run(tmp_path, ".", "--config", "soup.yaml", "--json")
+        proc = self._run_with_severity(tmp_path, "warn", ".", "--config", "soup.yaml", "--json")
 
         payload = json.loads(proc.stdout)  # the assertion: stdout is pure JSON
         assert payload["record_kind"] == "mlx"
@@ -989,15 +1033,48 @@ class TestTheJsonFlagEmitsOnlyJson:
         )
 
     @pytest.mark.integration
-    def test_the_warning_is_not_silently_dropped_in_table_mode(self, tmp_path):
+    def test_that_warning_is_not_silently_dropped_in_table_mode(self, tmp_path):
         """Routing it to stderr must not amount to hiding it."""
         config = _config()
         config["data"]["trian_on_responses_only"] = True
         self._write(tmp_path, config)
 
-        proc = self._run(tmp_path, ".", "--config", "soup.yaml")
+        proc = self._run_with_severity(tmp_path, "warn", ".", "--config", "soup.yaml")
 
         assert "unknown config key" in proc.stdout + proc.stderr
+
+    @pytest.mark.integration
+    def test_under_v075_the_unknown_key_is_refused_and_stdout_stays_clean(self, tmp_path):
+        """The policy this tree actually ships: `"error"`, so the load raises.
+
+        `--json` cannot emit a payload for a config that would not load, and
+        the important half is that it does not emit half of one either -- a
+        caller must get a non-zero code and nothing parseable, not a truncated
+        object.
+        """
+        config = _config()
+        config["data"]["trian_on_responses_only"] = True
+        self._write(tmp_path, config)
+
+        proc = self._run(tmp_path, ".", "--config", "soup.yaml", "--json")
+
+        assert proc.returncode == 1, proc.stdout + proc.stderr
+        assert "unknown config key" in proc.stdout + proc.stderr
+        with pytest.raises(ValueError):
+            json.loads(proc.stdout)
+
+    def test_the_shipped_severity_is_the_one_this_class_assumes(self):
+        """Names the coupling, so the next flip fails here with a reason
+        rather than somewhere confusing."""
+        from soup_cli import __version__
+        from soup_cli.config.loader import UNKNOWN_KEY_SEVERITY
+        from soup_cli.config.unknown_keys import UNKNOWN_KEY_REJECTION_VERSION
+
+        assert UNKNOWN_KEY_SEVERITY in ("warn", "error")
+        if UNKNOWN_KEY_SEVERITY == "error":
+            assert __version__ >= UNKNOWN_KEY_REJECTION_VERSION, (
+                "rejection turned on before the version it was promised for"
+            )
 
 
 class TestTheReportSaysWhatItCouldNotCheck:
