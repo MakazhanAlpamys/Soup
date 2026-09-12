@@ -96,8 +96,10 @@ by 22 people.
   release as the deadline. A typo like `quantizaton`, or a key that only exists on a newer
   Soup, used to be dropped while the run proceeded with the setting not applied; it now
   fails on the CLI (exit 1) and in the API (`ValueError`), naming the field you probably
-  meant. All 165 shipped recipes and every template load clean; two `soup fetch examples`
-  files carried a top-level `lora:` block that had never applied, and were fixed.
+  meant. The detector applies the root-level `lora:` remap the schema has honoured
+  since v0.40.1, so that spelling is accepted, not refused; the two `soup fetch examples`
+  files using it moved to the canonical `training.lora`. Every recipe and template loads
+  clean, key names are escaped before they reach the terminal, and the scan is bounded.
 - **MLX honours the config it accepted.** `train_on_responses_only`, `warmup_ratio` /
   `scheduler` / `weight_decay` / `optimizer`, `max_grad_norm`, `gradient_accumulation_steps`
   and `gradient_checkpointing` were each validated and then dropped on `backend: mlx`. Only

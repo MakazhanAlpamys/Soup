@@ -40,7 +40,11 @@ from dataclasses import dataclass
 
 import pydantic
 
-from soup_cli.config.schema import SoupConfig
+from soup_cli.config.schema import (
+    ROOT_LEVEL_MISPLACED_KEYS,
+    SoupConfig,
+    remap_root_level_misplaced_keys,
+)
 
 __all__ = [
     "UNKNOWN_KEY_REJECTION_VERSION",
@@ -70,6 +74,21 @@ UNKNOWN_KEY_REJECTION_VERSION = "0.75"
 #: difflib cutoff. 0.6 resolves every case reported in #627 on the first
 #: suggestion while leaving an unrelated key (``zzzzzzzz``) with none.
 _SUGGESTION_CUTOFF = 0.6
+
+#: Findings are capped, and so is the work: every unknown key costs a difflib
+#: pass over the ~240 declared field names, and a config string reaches this
+#: walk from the Web UI and the MCP server as well as from a local file. With
+#: no cap, 50,000 bogus keys under one section cost ~31 s of CPU per request
+#: (measured); the walk now stops once this many findings are collected, which
+#: bounds it regardless of input size. A config with more unknown keys than
+#: this is not a config with typos, and the report says it was capped.
+_MAX_REPORTED_UNKNOWN_KEYS = 100
+
+#: A key longer than this is shown truncated so a megabyte key name is not
+#: echoed into a terminal or a JSON error body. (difflib itself is not the
+#: cost here: its length pre-filter discards a long key against a short field
+#: name at once, so no separate gate is needed for the fuzzy match.)
+_MAX_KEY_LEN = 256
 _MAX_SUGGESTIONS = 2
 
 
@@ -114,21 +133,19 @@ def _walk(
 
     declared = model.model_fields
     for key, value in raw.items():
+        if len(found) >= _MAX_REPORTED_UNKNOWN_KEYS:
+            return
         if not isinstance(key, str):
             continue
-        path = f"{prefix}{key}"
+        shown = key if len(key) <= _MAX_KEY_LEN else key[:_MAX_KEY_LEN] + "..."
+        path = f"{prefix}{shown}"
         if key not in declared:
-            found.append(
-                UnknownKey(
-                    path=path,
-                    key=key,
-                    suggestions=tuple(
-                        difflib.get_close_matches(
-                            key, list(declared), n=_MAX_SUGGESTIONS, cutoff=_SUGGESTION_CUTOFF
-                        )
-                    ),
+            suggestions = tuple(
+                difflib.get_close_matches(
+                    key, list(declared), n=_MAX_SUGGESTIONS, cutoff=_SUGGESTION_CUTOFF
                 )
             )
+            found.append(UnknownKey(path=path, key=shown, suggestions=suggestions))
             continue
         for nested in _nested_models(model, key):
             _walk(value, nested, f"{path}.", found)
@@ -140,9 +157,26 @@ def find_unknown_config_keys(raw: dict) -> list[UnknownKey]:
     Walks the whole tree -- ``data``, ``training``, ``training.lora`` and the
     rest -- so a guard applied to one model and forgotten on another does not
     look like it works.
+
+    The walk sees the config the way :class:`SoupConfig` does: the root-level
+    ``lora:`` spelling that the schema has accepted and moved under
+    ``training`` since v0.40.1 is remapped here first, through the same
+    function, so a spelling the validator accepts is never one this detector
+    refuses (v0.75.0, #879). A key present at both levels is left for the
+    validator, which raises the precise error for it.
+
+    At most :data:`_MAX_REPORTED_UNKNOWN_KEYS` findings are returned; the
+    report says so when the cap was hit.
     """
+    try:
+        normalised = remap_root_level_misplaced_keys(raw)
+    except ValueError:
+        # The key sits at both levels. The validator raises the precise error
+        # for that; walking the raw dict here would report the root key as
+        # unknown and refuse first, with the worse message. Walk without it.
+        normalised = {k: v for k, v in raw.items() if k not in ROOT_LEVEL_MISPLACED_KEYS}
     found: list[UnknownKey] = []
-    _walk(raw, SoupConfig, "", found)
+    _walk(normalised, SoupConfig, "", found)
     return found
 
 
@@ -175,14 +209,24 @@ def format_unknown_keys(
     caller does not proceed at all, and saying "not applied" there would read
     as if the run went ahead without it.
     """
+    # ``include_deadline`` does double duty on purpose: the callers that append
+    # a deadline are exactly the callers that proceed, so one flag decides both
+    # the trailing sentence and the per-key verdict word.
     suffix = "Not applied." if include_deadline else "Refused."
     lines = []
     for item in unknown:
         if item.suggestions:
+            # After the question mark the suffix starts a new sentence.
             hint = " or ".join(f"'{s}'" for s in item.suggestions)
             lines.append(f"unknown config key '{item.path}' - did you mean {hint}? {suffix}")
         else:
+            # After " - " it continues the sentence, hence lowercase.
             lines.append(f"unknown config key '{item.path}' - {suffix.lower()}")
+    if len(unknown) >= _MAX_REPORTED_UNKNOWN_KEYS:
+        lines.append(
+            f"(report capped at {_MAX_REPORTED_UNKNOWN_KEYS} unknown keys; "
+            "fix these and load again)"
+        )
     if include_deadline and lines:
         lines.append(deadline_notice())
     return "\n".join(lines)

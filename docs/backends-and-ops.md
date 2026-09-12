@@ -584,10 +584,15 @@ unknown config key 'training.quantizaton' - did you mean 'quantization' or 'quan
 **Since v0.75 an unknown config key refuses the load.** v0.74 shipped the same report
 as a warning that named this deadline, so there was exactly one release of notice —
 deliberately, because a config written against a newer Soup has to keep running on an
-older wheel for at least one release. The refusal is the same everywhere a config is
-read: `soup train` exits 1 before the training stack is imported, and the Web UI / API
-loader raises `ValueError` with the same text. Nothing is defaulted and nothing is
-guessed: the suggestion is a hint for you, not a substitution the loader makes.
+older wheel for at least one release. The refusal is the same everywhere a `SoupConfig`
+is built from a file or a string: `soup train` exits 1 before the training stack is
+imported, `soup sweep` / `soup doctor --config` / `soup ship --config` refuse the same
+way, and the Web UI / API loader raises `ValueError` with the same text (the Web UI shows
+it). `soup plan` and `soup apply` read the YAML as a plain mapping and do not run this
+check. Nothing is defaulted and nothing is guessed: the suggestion is a hint for you, not
+a substitution the loader makes. A root-level `lora:` block is not an unknown key — the
+schema has accepted that spelling and moved it under `training` since v0.40.1, and the
+detector applies the same remap before it looks.
 
 A config that names a key your installed Soup does not have usually means one of two
 things: a typo (take the suggestion), or a field added after your version shipped

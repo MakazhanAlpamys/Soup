@@ -473,6 +473,14 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
 
             try:
                 load_config_from_string(req.config_yaml)
+            except ValueError as exc:
+                # The loader's own message names the field and the suggestion;
+                # an unknown key now refuses here (#879), so this is where a
+                # Web UI user learns which key. Rendered through escapeHtml().
+                logger.warning("Invalid training config: %s", exc)
+                raise HTTPException(
+                    status_code=400, detail=f"Invalid training configuration: {exc}"
+                )
             except Exception as exc:
                 logger.warning("Invalid training config: %s", exc)
                 raise HTTPException(
@@ -827,7 +835,10 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
             # Validate
             load_config_from_string(yaml_str)
             return {"yaml": yaml_str}
-        except (ValueError, TypeError) as exc:
+        except ValueError as exc:
+            logger.warning("Config form validation error: %s", exc)
+            return {"error": f"Invalid configuration: {exc}"}
+        except TypeError as exc:
             logger.warning("Config form validation error: %s", exc)
             return {"error": "Invalid configuration"}
 

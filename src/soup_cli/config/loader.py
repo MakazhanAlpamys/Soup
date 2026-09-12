@@ -8,6 +8,7 @@ from rich.console import Console
 
 from soup_cli.config.schema import SoupConfig
 from soup_cli.config.unknown_keys import find_unknown_config_keys, format_unknown_keys
+from soup_cli.utils.terminal import for_terminal
 
 console = Console()
 
@@ -49,7 +50,8 @@ def _report_unknown_keys(raw: dict) -> "str | None":
     message = format_unknown_keys(unknown, include_deadline=warning)
     if not warning:
         return message
-    console.print(f"[yellow]Warning:[/] {message}")
+    # The key names in ``message`` came from the config file: escape them.
+    console.print(f"[yellow]Warning:[/] {for_terminal(message)}")
     console.print(
         "[dim]An unapplied key is ignored, not defaulted -- the run proceeds as "
         "if you had not written it.[/]"
@@ -69,7 +71,7 @@ def load_config(path: "Path | str") -> SoupConfig:
     unknown_error = _report_unknown_keys(raw)
     if unknown_error is not None:
         console.print("[red bold]Config validation error:[/]\n")
-        console.print(f"  [red]{unknown_error}[/]")
+        console.print(f"  [red]{for_terminal(unknown_error)}[/]")
         raise SystemExit(1)
 
     try:

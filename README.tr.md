@@ -1,4 +1,4 @@
-<!-- synced-from: README.md sha256:860efca42c4659a0ce89dfb1e4dd8e68e4fc16f8b6ef9f30bd017c377784590a -->
+<!-- synced-from: README.md sha256:13400c0d86dc1856e5f9e360211e1d810bc9d51bd8686ee4a89d807f0136b6ae -->
 <p align="center">🌍 <a href="README.md">English</a> | <strong>Türkçe</strong></p>
 
 <p align="center">
@@ -97,9 +97,11 @@ geldi**, 22 kişiden.
   v0.74 uyarı vermiş ve son tarih olarak bu sürümü adlandırmıştı. `quantizaton` gibi bir yazım
   hatası ya da yalnızca daha yeni bir Soup'ta bulunan bir anahtar eskiden atılıyor ve
   çalıştırma o ayar uygulanmadan devam ediyordu; artık CLI'da (çıkış kodu 1) ve API'de
-  (`ValueError`) başarısız oluyor ve muhtemelen kastettiğiniz alanı adlandırıyor. Gönderilen
-  165 tarifin tamamı ve her şablon temiz yükleniyor; iki `soup fetch examples` dosyası hiç
-  uygulanmamış üst düzey bir `lora:` bloğu taşıyordu ve düzeltildi.
+  (`ValueError`) başarısız oluyor ve muhtemelen kastettiğiniz alanı adlandırıyor. Dedektör,
+  şemanın v0.40.1'den beri tanıdığı üst düzey `lora:` yeniden eşlemesini uyguluyor; yani bu
+  yazım reddedilmiyor, kabul ediliyor. Onu kullanan iki `soup fetch examples` dosyası kanonik
+  `training.lora` biçimine taşındı. Her tarif ve şablon temiz yükleniyor, anahtar adları
+  terminale ulaşmadan önce kaçışlanıyor ve tarama sınırlı.
 - **MLX, kabul ettiği yapılandırmaya uyuyor.** `train_on_responses_only`, `warmup_ratio` /
   `scheduler` / `weight_decay` / `optimizer`, `max_grad_norm`, `gradient_accumulation_steps`
   ve `gradient_checkpointing`, `backend: mlx` üzerinde tek tek doğrulanıp sonra düşürülüyordu.
