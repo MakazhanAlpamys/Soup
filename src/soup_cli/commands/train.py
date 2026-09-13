@@ -36,10 +36,12 @@ _HW_FIT_OPTIMIZERS = frozenset({
 
 def _format_training_complete_loss(result: dict) -> str:
     """Render only a loss comparison that the trainer actually measured."""
-    summary_kind = result.get("loss_summary_kind", "delta")
+    summary_kind = result.get("loss_summary_kind")
     if summary_kind == "unavailable":
         return "Loss: [bold]unavailable[/]"
-    if summary_kind in {"mean", "single"}:
+    if summary_kind in {"mean", "single"} or (
+        summary_kind is None and result["initial_loss"] == result["final_loss"]
+    ):
         return f"Loss: [bold]{result['final_loss']:.4f}[/]"
     return f"Loss: [bold]{result['initial_loss']:.4f} -> {result['final_loss']:.4f}[/]"
 

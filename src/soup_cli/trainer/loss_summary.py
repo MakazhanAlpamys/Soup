@@ -7,12 +7,18 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 
-def _finite_loss(value: object) -> float | None:
+def _numeric_loss(value: object) -> float | None:
     if isinstance(value, bool):
         return None
     try:
-        loss = float(value)
+        return float(value)
     except (TypeError, ValueError):
+        return None
+
+
+def _finite_loss(value: object) -> float | None:
+    loss = _numeric_loss(value)
+    if loss is None:
         return None
     return loss if math.isfinite(loss) else None
 
@@ -32,7 +38,7 @@ def summarize_training_loss(
     for entry in log_history:
         if not isinstance(entry, Mapping) or "loss" not in entry:
             continue
-        loss = _finite_loss(entry["loss"])
+        loss = _numeric_loss(entry["loss"])
         if loss is not None:
             per_step.append(loss)
 

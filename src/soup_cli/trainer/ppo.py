@@ -759,15 +759,14 @@ class PPOTrainerWrapper:
         self.tokenizer.save_pretrained(self._output_dir)
 
         # Extract metrics
-        losses = [entry["loss"] for entry in log_history if "loss" in entry]
+        loss_summary = summarize_training_loss(log_history)
 
         hours = int(duration // 3600)
         minutes = int((duration % 3600) // 60)
         duration_str = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
 
         return {
-            "initial_loss": losses[0] if losses else 0,
-            "final_loss": losses[-1] if losses else 0,
+            **loss_summary,
             "duration": duration_str,
             "duration_secs": duration,
             "output_dir": self._output_dir,
