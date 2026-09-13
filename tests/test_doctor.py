@@ -174,6 +174,45 @@ def test_doctor_missing_train_extra_suggests_extra(monkeypatch):
     assert "accelerate>=0.27.0" not in out
 
 
+def test_doctor_partial_train_extra_names_missing_members(monkeypatch):
+    """A partial [train] install names the absent members, not the whole stack (#875)."""
+    installed = {
+        "torch": "2.6.0",
+        "transformers": "5.16.1",
+        "peft": "0.20.0",
+        "trl": "0.29.0",
+        "datasets": "2.14.0",
+        "accelerate": "0.27.0",
+    }
+
+    def _fake_version(import_name, pkg_name):
+        return installed.get(pkg_name)
+
+    monkeypatch.setattr("soup_cli.commands.doctor._installed_version_str", _fake_version)
+    monkeypatch.setattr("soup_cli.commands.doctor._nvidia_smi_cuda_version", lambda: None)
+    result = runner.invoke(app, ["doctor"])
+    assert result.exit_code == 0
+    out = _strip_ansi(result.output)
+    assert "Training stack not installed" not in out
+    assert "Training stack incomplete, missing: bitsandbytes" in out
+    assert 'pip install "soup-cli[train]"' in out
+    assert "All checks passed!" not in out
+
+
+def test_doctor_missing_train_extra_message_unchanged_when_none_installed(monkeypatch):
+    """With no [train] members, the existing not-installed message is kept (#875)."""
+    monkeypatch.setattr(
+        "soup_cli.commands.doctor._installed_version_str", lambda import_name, pkg_name: None
+    )
+    monkeypatch.setattr("soup_cli.commands.doctor._nvidia_smi_cuda_version", lambda: None)
+    result = runner.invoke(app, ["doctor"])
+    assert result.exit_code == 0
+    out = _strip_ansi(result.output)
+    assert 'Training stack not installed: pip install "soup-cli[train]"' in out
+    assert "Training stack incomplete" not in out
+    assert "All checks passed!" not in out
+
+
 def test_doctor_suggestion_is_colour_safe(monkeypatch):
     """The [train] suggestion survives Rich highlighting (#828 review)."""
     from rich.console import Console
@@ -274,6 +313,34 @@ def test_doctor_nvidia_train_suggestion_is_two_step(monkeypatch):
     assert 'pip install "soup-cli[train]"' in out
     # The broken single-step form must be gone.
     assert '["soup-cli[train]" --index-url' not in out and '[train]" --index-url' not in out
+
+
+def test_doctor_nvidia_partial_stack_with_torch_missing(monkeypatch):
+    """NVIDIA + partial [train] + torch missing keeps the two-step index URL (#884)."""
+    installed = {
+        "transformers": "5.16.1",
+        "peft": "0.20.0",
+        "trl": "0.29.0",
+        "datasets": "2.14.0",
+        "bitsandbytes": "0.41.0",
+        "accelerate": "0.27.0",
+    }
+
+    def _fake_version(import_name, pkg_name):
+        return installed.get(pkg_name)
+
+    monkeypatch.setattr("soup_cli.commands.doctor._installed_version_str", _fake_version)
+    monkeypatch.setattr(
+        "soup_cli.commands.doctor._nvidia_smi_cuda_version", lambda: (13, 0)
+    )
+    result = runner.invoke(app, ["doctor"])
+    assert result.exit_code == 0
+    out = _strip_ansi(result.output)
+    assert "Training stack incomplete, missing: torch" in out
+    assert "pip install torch --index-url https://download.pytorch.org/whl/" in out
+    assert 'pip install "soup-cli[train]"' in out
+    assert "All checks passed!" not in out
+    assert "Training stack not installed" not in out
 
 
 def test_doctor_missing_core_dependency_exits_nonzero(monkeypatch):

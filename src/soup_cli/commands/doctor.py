@@ -205,7 +205,7 @@ def doctor(
     # extra, so the suggestion keeps the declared ceilings and the platform
     # torch index instead of bare per-package floors.
     for extra_name, members in EXTRA_GROUPS:
-        group_missing = False
+        missing_pkgs: list[str] = []
         for import_name, pkg_name, min_ver in members:
             version_str = _installed_version_str(import_name, pkg_name)
             if version_str is None:
@@ -216,7 +216,7 @@ def doctor(
                     f">={min_ver}",
                     "[dim]not installed[/]",
                 )
-                group_missing = True
+                missing_pkgs.append(pkg_name)
                 continue
             max_excl = _MAX_EXCLUSIVE.get(pkg_name)
             if max_excl and _version_ge(version_str, max_excl):
@@ -232,28 +232,57 @@ def doctor(
                 issues.append(f'Upgrade {pkg_name}: pip install "{pkg_name}>={min_ver}"')
                 fix_parts.append(f'"{pkg_name}>={min_ver}"')
             table.add_row(pkg_name, escape(f"[{extra_name}]"), version_str, f">={min_ver}", status)
-        if group_missing:
+        if missing_pkgs:
+            all_missing = len(missing_pkgs) == len(members)
+            missing_list = ", ".join(missing_pkgs)
             if extra_name == "train":
                 driver = _nvidia_smi_cuda_version()
-                if driver is not None:
-                    tag = _torch_cuda_wheel_tag(driver)
-                    url = f"https://download.pytorch.org/whl/{tag}"
-                    # ``--index-url`` replaces PyPI, so torch must come from the
-                    # CUDA wheel index in its own step; the ``[train]`` extra is
-                    # then resolved against PyPI with torch already satisfied.
+                torch_missing = "torch" in missing_pkgs
+                # Single call site, gated on torch itself being missing.
+                tag = (
+                    _torch_cuda_wheel_tag(driver)
+                    if driver is not None and torch_missing
+                    else None
+                )
+                url = f"https://download.pytorch.org/whl/{tag}" if tag else None
+                if all_missing:
+                    if url is not None:
+                        # ``--index-url`` replaces PyPI, so torch must come from the
+                        # CUDA wheel index in its own step; the ``[train]`` extra is
+                        # then resolved against PyPI with torch already satisfied.
+                        issues.append(
+                            "Training stack not installed:\n"
+                            f"  pip install torch --index-url {url}\n"
+                            '  pip install "soup-cli[train]"'
+                        )
+                        fix_pre.append(f"pip install torch --index-url {url}")
+                    else:
+                        issues.append(
+                            'Training stack not installed: pip install "soup-cli[train]"'
+                        )
+                elif url is not None:
                     issues.append(
-                        "Training stack not installed:\n"
+                        f"Training stack incomplete, missing: {missing_list}\n"
                         f"  pip install torch --index-url {url}\n"
                         '  pip install "soup-cli[train]"'
                     )
                     fix_pre.append(f"pip install torch --index-url {url}")
                 else:
-                    issues.append('Training stack not installed: pip install "soup-cli[train]"')
+                    issues.append(
+                        f"Training stack incomplete, missing: {missing_list}\n"
+                        '  pip install "soup-cli[train]"'
+                    )
                 fix_parts.append('"soup-cli[train]"')
-            else:
+            elif all_missing:
                 issues.append(
                     f"{extra_name} stack not installed: "
                     f'pip install "soup-cli[{extra_name}]"'
+                )
+                fix_parts.append(f'"soup-cli[{extra_name}]"')
+            else:
+                issues.append(
+                    f"{extra_name} stack incomplete, missing: {missing_list}\n"
+                    f'  pip install "soup-cli[{extra_name}]"'
                 )
                 fix_parts.append(f'"soup-cli[{extra_name}]"')
 
