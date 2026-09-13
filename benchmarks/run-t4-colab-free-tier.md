@@ -130,8 +130,12 @@ the gap has been seen rather than reasoned about.
   size-dependent. Nothing in this run would have caught it.
 - **Section 4 — streamed-vs-resident forward bit-exactness on the T4 — has since
   been run and recorded.** `notebooks/proof-4gb.ipynb` (#844) was executed end to
-  end on a free Colab T4 (Tesla T4, driver-reported 15.6 GB) on **2026-09-13**,
-  against **soup-cli 0.75.0**, `torch 2.11.0+cu128`, `transformers 5.16.1`,
+  end on a free Colab T4 (Tesla T4, driver-reported 15.6 GB). The date does not
+  appear anywhere in the notebook's own output, so it is provenance rather than
+  a printed result: the commit that carries the run (`e06864c`) was made at
+  **2026-09-12T19:50:14Z** (UTC; the author's local +05:30 clock reads
+  2026-09-13, which is why an earlier version of this line said that instead).
+  Run against **soup-cli 0.75.0**, `torch 2.11.0+cu128`, `transformers 5.16.1`,
   `peft 0.20.0`, `bitsandbytes 0.50.2` (printed by the notebook's own version
   cell — the library-version gap the rest of this document notes does not apply
   to this second run): `max |streamed - resident| = 0.0`, `torch.equal = True`.
