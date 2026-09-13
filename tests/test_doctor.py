@@ -343,6 +343,30 @@ def test_doctor_nvidia_partial_stack_with_torch_missing(monkeypatch):
     assert "Training stack not installed" not in out
 
 
+def test_doctor_nvidia_partial_stack_with_torch_present(monkeypatch):
+    """NVIDIA + partial [train] + torch installed drops the index URL (#884)."""
+    installed = {
+        "torch": "2.6.0",
+        "transformers": "5.16.1",
+        "peft": "0.20.0",
+        "trl": "0.29.0",
+        "datasets": "2.14.0",
+        "accelerate": "0.27.0",
+    }  # bitsandbytes missing, torch present
+    monkeypatch.setattr(
+        "soup_cli.commands.doctor._installed_version_str",
+        lambda import_name, pkg_name: installed.get(pkg_name),
+    )
+    monkeypatch.setattr(
+        "soup_cli.commands.doctor._nvidia_smi_cuda_version", lambda: (13, 0)
+    )
+    result = runner.invoke(app, ["doctor"])
+    assert result.exit_code == 0
+    out = _strip_ansi(result.output)
+    assert "Training stack incomplete, missing: bitsandbytes" in out
+    assert "index-url" not in out
+
+
 def test_doctor_missing_core_dependency_exits_nonzero(monkeypatch):
     """A missing core dependency makes `soup doctor` exit non-zero (#828)."""
     monkeypatch.setitem(sys.modules, "plotext", None)
