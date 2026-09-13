@@ -11,7 +11,7 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Mapping, Optional
 
 from pydantic import BaseModel as PydanticBaseModel
 from pydantic import Field
@@ -43,7 +43,7 @@ class _RequestBodySizeLimitMiddleware:
     YAML-entry routes.
     """
 
-    def __init__(self, app, limits: dict = _BODY_SIZE_LIMITS) -> None:
+    def __init__(self, app, limits: Mapping[str, int] = _BODY_SIZE_LIMITS) -> None:
         self._app = app
         self._limits = limits
 
@@ -627,6 +627,9 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
     def inspect_data(req: DataInspectRequest):
         from soup_cli.data.loader import load_raw_data
         from soup_cli.utils.paths import is_under_cwd
+
+        # The path lives inside the body, so it can't be checked before the
+        # body is parsed. _BODY_SIZE_LIMITS caps that read at 8 KiB instead.
 
         # Path traversal protection. Use realpath + commonpath containment
         # (is_under_cwd) — the old str.startswith check let a sibling like
