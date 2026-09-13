@@ -276,7 +276,9 @@ The harness pins `batch_size: 1` and `gradient_accumulation_steps: 1`, so those
 model id and the row count are: the throughput figures below are per-step work,
 and a reader reproducing this needs the step count to be reproducible too rather
 than inherited from whatever the config schema defaults to at the time. The
-harness asserts the resolved count and refuses to measure if it does not match.
+harness resolves both counts from the loaded config and, if either is not
+`rows * epochs`, exits non-zero before training starts, naming the iteration
+count, the optimizer-update count and any rows the rounding would drop.
 
 It prints the throughput line this table's tok/s column is taken from:
 
