@@ -570,8 +570,23 @@ def attach_relora_callback(trainer: Any, tcfg: Any) -> bool:
     return True
 
 
-def attach_loraplus_optimizer(trainer: Any, tcfg: Any) -> bool:
-    """Attach a PEFT LoRA+ optimizer when ``training.loraplus_lr_ratio`` is set.
+def build_loraplus_optimizer(model: Any, args: Any, tcfg: Any) -> Any:
+    """Build a PEFT LoRA+ optimizer from a model + ``TrainingArguments``, or ``None``.
+
+    Returns ``None`` when ``training.loraplus_lr_ratio`` is unset, so a caller can
+    treat "no LoRA+" and "a LoRA+ optimizer" uniformly. This is the shared core of
+    the two wiring shapes LoRA+ needs:
+
+    - :func:`attach_loraplus_optimizer` assigns the result onto an already-built
+      ``trainer.optimizer`` — the SFT-family and preference/RL trainers, whose
+      ``Trainer.create_optimizer`` runs lazily at ``train()`` and so respects a
+      pre-assigned optimizer, building the scheduler around it.
+    - The PPO wrapper hands it to the trainer *constructor* via
+      ``optimizers=(optimizer, None)``, because ``trl.experimental``'s
+      ``PPOTrainer`` builds its optimizer and scheduler eagerly inside
+      ``__init__``; a post-construction assignment there trains the B group at
+      ``lr * ratio`` but leaves ``self.lr_scheduler`` bound to the discarded
+      default optimizer (see ``trainer/ppo.py``).
 
     LoRA+ is not a ``TrainingArguments`` field — it belongs to PEFT's optimizer
     construction (``create_loraplus_optimizer``), which gives the LoRA B matrices
@@ -579,20 +594,15 @@ def attach_loraplus_optimizer(trainer: Any, tcfg: Any) -> bool:
     Forwarding it into ``TrainingArguments`` raised ``TypeError`` before the first
     step, so the advertised option always crashed (#724).
 
-    Assigning ``trainer.optimizer`` here is respected because
-    ``Trainer.create_optimizer`` builds one only when ``self.optimizer is None``,
-    and the scheduler is still built from it with the configured warmup/schedule.
     The optimizer class and its betas/eps come from the run's configured optimizer
     via ``Trainer.get_optimizer_cls_and_kwargs``, so LoRA+ uses the same optimizer
     the user asked for; weight decay is applied through PEFT's own
     ``loraplus_weight_decay`` (the plain ``weight_decay`` kwarg is ignored by
     ``create_loraplus_optimizer``).
-
-    Returns ``True`` when an optimizer was attached, ``False`` otherwise.
     """
     ratio = getattr(tcfg, "loraplus_lr_ratio", None)
     if ratio is None:
-        return False
+        return None
 
     # GaLore projects full-parameter gradients; LoRA+ tunes LoRA A/B matrices.
     # They cannot both own the optimizer — fail loudly rather than let this
@@ -614,7 +624,6 @@ def attach_loraplus_optimizer(trainer: Any, tcfg: Any) -> bool:
     from peft.optimizers import create_loraplus_optimizer
     from transformers import Trainer
 
-    model = trainer.model
     if not isinstance(model, PeftModel):
         raise ValueError(
             "training.loraplus_lr_ratio requires a LoRA (PEFT) model, but the "
@@ -622,18 +631,38 @@ def attach_loraplus_optimizer(trainer: Any, tcfg: Any) -> bool:
             "loraplus_lr_ratio."
         )
 
-    optimizer_cls, optimizer_kwargs = Trainer.get_optimizer_cls_and_kwargs(trainer.args)
+    optimizer_cls, optimizer_kwargs = Trainer.get_optimizer_cls_and_kwargs(args)
     # create_loraplus_optimizer takes lr explicitly and re-inserts it into the
     # per-group kwargs itself; drop the duplicate so it is not passed twice.
     optimizer_kwargs.pop("lr", None)
-    trainer.optimizer = create_loraplus_optimizer(
+    return create_loraplus_optimizer(
         model=model,
         optimizer_cls=optimizer_cls,
-        lr=trainer.args.learning_rate,
+        lr=args.learning_rate,
         loraplus_lr_ratio=float(ratio),
-        loraplus_weight_decay=trainer.args.weight_decay,
+        loraplus_weight_decay=args.weight_decay,
         **optimizer_kwargs,
     )
+
+
+def attach_loraplus_optimizer(trainer: Any, tcfg: Any) -> bool:
+    """Attach a PEFT LoRA+ optimizer when ``training.loraplus_lr_ratio`` is set.
+
+    Assigning ``trainer.optimizer`` here is respected because
+    ``Trainer.create_optimizer`` builds one only when ``self.optimizer is None``,
+    and the scheduler is still built from it with the configured warmup/schedule.
+    That ordering holds for every trainer whose optimizer is created lazily at
+    ``train()`` time; PPO is the one exception (its ``trl.experimental`` trainer
+    builds the optimizer and scheduler eagerly in ``__init__``), and it uses
+    :func:`build_loraplus_optimizer` with constructor injection instead — see
+    ``trainer/ppo.py``.
+
+    Returns ``True`` when an optimizer was attached, ``False`` otherwise.
+    """
+    optimizer = build_loraplus_optimizer(trainer.model, trainer.args, tcfg)
+    if optimizer is None:
+        return False
+    trainer.optimizer = optimizer
     return True
 
 

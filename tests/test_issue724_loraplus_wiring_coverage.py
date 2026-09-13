@@ -16,12 +16,25 @@ crash used to give for free.
 **#745 extends the coverage from the three SFT-family wrappers to every wrapper
 that builds a TRL/HF ``Trainer``.** LoRA+ is a shared ``TrainingConfig`` option
 with no task gating, so a preference/RL/specialised wrapper that builds a PEFT
-model and does not wire it silently ignores ``loraplus_lr_ratio``. The one
-genuine exception is ``unlearn.py``: it runs a self-contained
-``torch.optim.AdamW`` loop (not a ``Trainer`` subclass), so there is no
-``trainer.optimizer`` to attach to. Rather than lump it in with the wired
-wrappers or leave it silently ignoring the option, ``loraplus_lr_ratio`` is
-**refused at config parse** for ``task='unlearn'`` — see
+model and does not wire it silently ignores ``loraplus_lr_ratio``.
+
+A wrapper wires LoRA+ one of two ways, and this scan accepts both:
+
+- **Attach** — ``attach_loraplus_optimizer(trainer, tcfg)`` after construction.
+  Correct for every trainer whose optimizer is created lazily at ``train()``
+  (the SFT family and ten of the preference/RL wrappers).
+- **Inject** — ``build_loraplus_optimizer(...)`` before construction, handed to
+  the trainer via ``optimizers=(opt, None)``. This is PPO's shape: its
+  ``trl.experimental`` trainer builds the optimizer and scheduler eagerly in
+  ``__init__``, so a post-construction attach would leave the scheduler bound to
+  the discarded default optimizer — see
+  ``tests/test_issue745_ppo_loraplus_scheduler.py``.
+
+The one genuine exception is ``unlearn.py``: it runs a self-contained
+``torch.optim.AdamW`` loop (not a ``Trainer`` subclass), so there is neither a
+``trainer.optimizer`` to attach to nor a constructor to inject into. Rather than
+lump it in with the wired wrappers or leave it silently ignoring the option,
+``loraplus_lr_ratio`` is **refused at config parse** for ``task='unlearn'`` — see
 ``test_unlearn_loraplus_is_refused_at_config_parse``. So the exemption below is
 earned by a hard error, not by an unimplemented gap.
 
@@ -44,7 +57,11 @@ _TRAINER_SOURCES = sorted(_TRAINER_DIR.glob("*.py"))
 #: A wrapper applies a LoRA adapter when it calls ``get_peft_model(...)`` — the
 #: point at which LoRA A/B matrices exist for LoRA+ to give different rates to.
 _BUILDS_PEFT = re.compile(r"get_peft_model\s*\(")
+#: The two wiring shapes (see the module docstring): attach after construction,
+#: or build before it and inject via ``optimizers=``. A wrapper counts as wiring
+#: LoRA+ if it does either.
 _ATTACH_CALL = re.compile(r"attach_loraplus_optimizer\s*\(")
+_INJECT_CALL = re.compile(r"build_loraplus_optimizer\s*\(")
 
 #: PEFT-building wrappers that do NOT wire ``attach_loraplus_optimizer``, each
 #: with the reason it is allowed to. After #745 there is exactly one: ``unlearn``
@@ -73,7 +90,9 @@ def _builds_peft(path: pathlib.Path) -> bool:
 
 
 def _wires_loraplus(path: pathlib.Path) -> bool:
-    return bool(_ATTACH_CALL.search(_code_without_comments(path.read_text(encoding="utf-8"))))
+    """True if the module wires LoRA+ either way — attach or constructor inject."""
+    code = _code_without_comments(path.read_text(encoding="utf-8"))
+    return bool(_ATTACH_CALL.search(code) or _INJECT_CALL.search(code))
 
 
 class TestLoraPlusWiringCoverage:
@@ -99,17 +118,19 @@ class TestLoraPlusWiringCoverage:
             return
         if path.name in _LORAPLUS_EXEMPT:
             return
-        assert _ATTACH_CALL.search(code), (
-            f"{path.name} applies a LoRA adapter (get_peft_model) but never calls "
-            "attach_loraplus_optimizer(); training.loraplus_lr_ratio would be "
-            "silently ignored on this task (#724/#745). Wire it, or add the module "
-            "to _LORAPLUS_EXEMPT with a reason."
+        assert _ATTACH_CALL.search(code) or _INJECT_CALL.search(code), (
+            f"{path.name} applies a LoRA adapter (get_peft_model) but neither "
+            "calls attach_loraplus_optimizer() nor builds one for constructor "
+            "injection (build_loraplus_optimizer); training.loraplus_lr_ratio "
+            "would be silently ignored on this task (#724/#745). Wire it, or add "
+            "the module to _LORAPLUS_EXEMPT with a reason."
         )
 
     def test_every_builder_except_the_exempt_is_wired(self):
         """Pins the positive set so the parametrized check above is not vacuous:
-        every PEFT-building wrapper except the earned exemptions carries the call.
-        #724 wired three; #745 must wire all the rest (dpo, ppo, kto, ...)."""
+        every PEFT-building wrapper except the earned exemptions wires LoRA+ (by
+        attach or by constructor inject). #724 wired three; #745 wires all the
+        rest — ten by attach (dpo, kto, ...) and PPO by inject."""
         builders = {p.name for p in _TRAINER_SOURCES if _builds_peft(p)}
         wired = {p.name for p in _TRAINER_SOURCES if _wires_loraplus(p)}
         assert wired == builders - set(_LORAPLUS_EXEMPT), (
@@ -129,11 +150,11 @@ class TestLoraPlusWiringCoverage:
                 continue
             if path.name in _LORAPLUS_EXEMPT:
                 continue
-            if not _ATTACH_CALL.search(code):
+            if not (_ATTACH_CALL.search(code) or _INJECT_CALL.search(code)):
                 offenders.append(path.name)
         assert not offenders, (
-            f"{', '.join(offenders)} apply a LoRA adapter but never call "
-            "attach_loraplus_optimizer(). Wire LoRA+ or add to _LORAPLUS_EXEMPT "
+            f"{', '.join(offenders)} apply a LoRA adapter but neither attach nor "
+            "inject a LoRA+ optimizer. Wire LoRA+ or add to _LORAPLUS_EXEMPT "
             "with the reason."
         )
 
@@ -150,24 +171,73 @@ class TestLoraPlusWiringCoverage:
                 f"{name} is exempt but no longer builds a PEFT model; drop it from "
                 "_LORAPLUS_EXEMPT."
             )
-            assert not _ATTACH_CALL.search(code), (
-                f"{name} now calls attach_loraplus_optimizer; remove it from "
+            assert not (_ATTACH_CALL.search(code) or _INJECT_CALL.search(code)), (
+                f"{name} now wires LoRA+ (attach or inject); remove it from "
                 "_LORAPLUS_EXEMPT — it is wired, not exempt."
             )
 
     def test_the_patterns_would_catch_the_unwired_shape(self):
         """A scanner nobody has watched fail is indistinguishable from a broken
-        one. Both detectors are exercised here, comments included."""
+        one. All three detectors are exercised here, comments included."""
         assert _BUILDS_PEFT.search("        self.model = get_peft_model(model, cfg)")
         assert not _BUILDS_PEFT.search("        # get_peft_model is applied elsewhere")
         assert _ATTACH_CALL.search("attach_loraplus_optimizer(self.trainer, tcfg)")
         assert not _ATTACH_CALL.search("# attach_loraplus_optimizer is needed here")
+        assert _INJECT_CALL.search("opt = build_loraplus_optimizer(model, args, tcfg)")
+        assert not _INJECT_CALL.search("# build_loraplus_optimizer builds it")
 
     def test_a_comment_mentioning_the_call_does_not_satisfy_it(self):
         """The positive check reads code, not prose — otherwise the note that
         explains the wiring would pass without calling it."""
         source = "self.trainer = SFTTrainer()  # attach_loraplus_optimizer(x)\n"
         assert not _ATTACH_CALL.search(_code_without_comments(source))
+
+
+class TestPpoWiresLoraPlusByInjectionNotAttach:
+    """PPO is the one trainer that must wire LoRA+ by constructor injection.
+
+    Its ``trl.experimental`` trainer builds the optimizer and scheduler eagerly
+    in ``__init__``, so the post-construction ``attach_loraplus_optimizer`` the
+    other ten preference/RL wrappers use would leave the scheduler bound to the
+    discarded default optimizer — the B group would train at a flat ``lr*ratio``
+    with warmup and decay never reaching it. The behavioural proof lives in
+    ``tests/test_issue745_ppo_loraplus_scheduler.py``; this pins the source
+    shape so a refactor cannot quietly swap PPO back onto the attach path.
+    """
+
+    _PPO = _TRAINER_DIR / "ppo.py"
+
+    def _code(self) -> str:
+        return _code_without_comments(self._PPO.read_text(encoding="utf-8"))
+
+    def test_ppo_builds_the_optimizer_for_injection(self):
+        assert _INJECT_CALL.search(self._code()), (
+            "ppo.py must build the LoRA+ optimizer with build_loraplus_optimizer "
+            "before constructing the trainer."
+        )
+
+    def test_ppo_hands_the_optimizer_to_the_constructor(self):
+        """The injection is only correct if the built optimizer actually reaches
+        the constructor as optimizers=(opt, None); building it and dropping it
+        would be worse than the attach it replaced."""
+        code = self._code()
+        # The built optimizer goes into an `optimizers` tuple on trainer_kwargs;
+        # accept either `optimizers=(...)` or `trainer_kwargs["optimizers"] = (...)`.
+        assert re.search(r"\(\s*loraplus_optimizer\s*,\s*None\s*\)", code) and (
+            "optimizers" in code
+        ), (
+            "ppo.py builds a LoRA+ optimizer but does not pass it as "
+            "optimizers=(loraplus_optimizer, None) to the PPOTrainer constructor."
+        )
+
+    def test_ppo_does_not_use_the_post_construction_attach(self):
+        """The attach is the bug on PPO's eager-scheduler shape (#745). If it
+        reappears here, the scheduler goes back to the wrong optimizer."""
+        assert not _ATTACH_CALL.search(self._code()), (
+            "ppo.py calls attach_loraplus_optimizer(), which binds the scheduler "
+            "to the wrong optimizer on PPO's eager-construction trainer. Use "
+            "build_loraplus_optimizer + optimizers=(opt, None) instead."
+        )
 
 
 class TestUnlearnExemptionIsEarned:

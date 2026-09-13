@@ -6697,6 +6697,10 @@ class SoupConfig(BaseModel):
           footgun — mirrors v0.52.0 distill / classifier task-gate).
         - ``data.forget_set`` is present when ``task='unlearn'``.
         - Backend != mlx (live wiring deferred to v0.61.1).
+        - ``loraplus_lr_ratio`` is refused (#745): unlearn drives its own
+          ``torch.optim.AdamW`` loop, not a ``Trainer``, so there is nothing
+          for ``attach_loraplus_optimizer`` to attach to and LoRA+ would be
+          silently ignored. Every other PEFT-building task wires it.
         """
         tcfg = self.training
         method = tcfg.unlearn_method
@@ -6731,6 +6735,23 @@ class SoupConfig(BaseModel):
             raise ValueError(
                 "task='unlearn' requires data.forget_set (path or HF "
                 "dataset id pointing at rows to unlearn)."
+            )
+
+        # LoRA+ is refused here rather than wired (#745). unlearn.py drives a
+        # self-contained torch.optim.AdamW loop, not a transformers Trainer, so
+        # there is no trainer.optimizer for attach_loraplus_optimizer to
+        # replace — LoRA+ would train the B matrices at the base rate the user
+        # did not ask for, silently. Every Trainer-based task wires LoRA+; this
+        # one names the incompatibility at parse (before sharding costs time)
+        # instead of ignoring it.
+        if tcfg.loraplus_lr_ratio is not None:
+            raise ValueError(
+                "Refused: training.loraplus_lr_ratio is not supported on "
+                "task='unlearn'. Unlearning runs its own optimizer loop, not a "
+                "Trainer, so the LoRA+ split learning rate (B at lr*ratio) "
+                "cannot be applied and would be silently ignored. Remove "
+                "training.loraplus_lr_ratio, or use a Trainer-based task "
+                "(sft/dpo/kto/orpo/simpo/...) to train with LoRA+."
             )
 
         # Delegate backend gate to the pure helper so the runtime path
