@@ -312,6 +312,7 @@ _ASR_TRANSCRIBER_OVERRIDE = None
 # vector (mirrors the project's 10k custom-eval / 1e6 HF-download caps).
 _MAX_ASR_ROWS: int = 100_000
 
+
 def _read_asr_rows(path: Path) -> list[dict]:
     """Read ASR rows ``{"audio": path[, "text": reference]}`` from JSONL.
 
@@ -546,7 +547,6 @@ def _infer_asr(
         except ValueError as exc:  # arch guard / bad base
             console.print(f"[red]{exc}[/]")
             raise typer.Exit(2) from exc
-
 
     refs: list[str] = []
     hyps: list[str] = []

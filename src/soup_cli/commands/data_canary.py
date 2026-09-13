@@ -43,6 +43,8 @@ app = typer.Typer(
     no_args_is_help=True, help="Dataset canaries (memorization probe)."
 )
 
+# Fixed seed for the control draw: controls are a null distribution, not a
+# secret, so reproducibility is the useful property here.
 _CONTROL_SEED = 12345
 _VERDICT_COLOUR = {"OK": "green", "MINOR": "yellow", "MAJOR": "red"}
 

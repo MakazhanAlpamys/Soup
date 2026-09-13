@@ -1054,11 +1054,11 @@ class TestTheReportIsSafeForTheTerminal:
     """Key names come from the config file; the report must not restyle the terminal.
 
     ``rich.markup.escape`` neutralises ``[...]`` and nothing else, and Rich
-    passes a raw ESC byte straight through -- the class of bug six command
-    modules already guard against with a private ``_for_terminal``. The
-    loader printed the warning without either guard in v0.74.0, and v0.75.0's
-    refusal printed the same text through a second, newly-live call. Both now
-    go through ``soup_cli.utils.terminal.for_terminal``.
+    passes a raw ESC byte straight through -- the class of bug every other
+    command module now guards against via the shared
+    ``soup_cli.utils.terminal.for_terminal``. The loader printed the warning
+    without either guard in v0.74.0, and v0.75.0's refusal printed the same
+    text through a second, newly-live call. Both now go through it.
     """
 
     HOSTILE = (
