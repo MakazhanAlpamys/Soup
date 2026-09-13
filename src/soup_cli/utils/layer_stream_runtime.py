@@ -185,10 +185,10 @@ def install_dequant_forward(module: Any) -> int:
 
     This changes the computation path used by the patched NF4 module. With
     bitsandbytes 0.50.2, the native fused ``MatMul4Bit`` path and explicit
-    ``dequantize_4bit`` + ``F.linear`` can disagree at small M: measured at
-    K=N=4096, the paths diverge through M=64 and agree at M=2048. The
-    dequantise + linear path is retained for correctness under checkpointing
-    (#331), not because it is numerically free.
+    ``dequantize_4bit`` + ``F.linear`` can differ depending on the CUDA
+    architecture and projection shape. The dequantise + linear path is retained
+    for correctness under checkpointing (#331); this path choice is not assumed
+    to be numerically free.
 
     Returns the number of modules patched, so a caller can assert it patched
     something. Zero would mean the model carries no 4-bit linears at all.

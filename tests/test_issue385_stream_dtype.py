@@ -453,10 +453,10 @@ class TestFloat16StreamingIsBitExact:
 
     The reference matches the streamed model's computation path. For NF4 that
     means a genuinely NF4-quantised resident reference with
-    ``install_dequant_forward`` applied, because the native bitsandbytes
-    ``MatMul4Bit`` path can use a different fused kernel at small token counts.
-    Comparing those different kernels would measure kernel-path differences
-    rather than layer streaming.
+    ``install_dequant_forward`` applied. With ``bitsandbytes`` 0.50.2, NF4 may
+    dispatch through a different fused kernel depending on CUDA architecture
+    and projection shape, so comparing the native resident path would measure
+    kernel-path differences rather than layer streaming.
     """
 
     def _run(self, tmp_path, dtype: str, quant: str) -> float:
