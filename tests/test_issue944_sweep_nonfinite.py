@@ -10,6 +10,8 @@ from typer.testing import CliRunner
 from soup_cli.cli import app
 from soup_cli.commands import sweep as sweep_mod
 
+from .conftest import strip_ansi
+
 
 def _result(name: str, loss: float) -> dict:
     return {
@@ -62,6 +64,21 @@ def test_summary_labels_diverged_arms_and_never_selects_them_as_best(monkeypatch
     assert "Best run: finite-run (loss: 0.5000)" in output
 
 
+def test_all_diverged_summary_has_no_best_marker_or_best_run(monkeypatch):
+    console = Console(record=True, width=120)
+    monkeypatch.setattr(sweep_mod, "console", console)
+
+    sweep_mod._display_summary(
+        [_result("nan-run", float("nan")), _result("inf-run", float("inf"))],
+        {"lr": ["nan", "inf"]},
+    )
+    output = console.export_text()
+
+    assert output.count("diverged") == 2
+    assert "*" not in output
+    assert "Best run:" not in output
+
+
 def test_early_stop_treats_a_diverged_recent_arm_as_worse(tmp_path, monkeypatch):
     config_file = tmp_path / "soup.yaml"
     config_file.write_text(
@@ -96,5 +113,6 @@ def test_early_stop_treats_a_diverged_recent_arm_as_worse(tmp_path, monkeypatch)
 
     assert result.exit_code == 0, (result.output, repr(result.exception))
     assert run_single.call_count == 2
-    assert result.output.lower().count("diverged") == 3
-    assert "skipping 3 remaining run(s)" in result.output
+    output = strip_ansi(result.output)
+    assert output.lower().count("diverged") == 3
+    assert "skipping 3 remaining run(s)" in output
