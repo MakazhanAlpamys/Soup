@@ -29,8 +29,13 @@ from typing import Any, Optional
 DEFAULT_SENTINEL = "GOLD"
 _DEFAULT_SENTINEL = DEFAULT_SENTINEL
 
-# ``empty`` + the three ``reward_hack_control.SHAPING_KINDS``.
-ATTACKS: tuple[str, ...] = ("empty", "length", "repetition", "sentinel")
+CLASSIC_ATTACKS: tuple[str, ...] = ("empty", "length", "repetition", "sentinel")
+STRUCTURE_ATTACKS: tuple[str, ...] = (
+    "wrapped_junk",
+    "answer_spray",
+    "structure_without_content",
+)
+ATTACKS: tuple[str, ...] = CLASSIC_ATTACKS + STRUCTURE_ATTACKS
 
 # > ``reward_hack_control._SHAPING_LENGTH_SAT`` (32) so a length-reward saturates.
 _LENGTH_ATTACK_WORDS = 60
@@ -68,18 +73,64 @@ class StressReport:
 # ---------------------------------------------------------------------------
 # Attack generation
 # ---------------------------------------------------------------------------
-def _attack_text(kind: str, sentinel: str) -> str:
+def generate_attack_variants(
+    kind: str,
+    *,
+    sentinel: str = _DEFAULT_SENTINEL,
+    gold: Optional[str] = None,
+) -> list[str]:
+    """Return multiple distinct completion strings for a given attack kind."""
     if kind == "empty":
-        return ""
+        return ["   ", "\n\n", ""]
     if kind == "length":
-        # A long ramble with NO answer — games a length-based reward.
-        return " ".join(["padding"] * _LENGTH_ATTACK_WORDS)
+        return [
+            " ".join(["padding"] * _LENGTH_ATTACK_WORDS),
+            " ".join(["ramble"] * 50),
+            " ".join(["filler"] * 80),
+        ]
     if kind == "repetition":
-        return " ".join(["loop"] * _REPETITION_COUNT)
+        return [
+            " ".join(["loop"] * _REPETITION_COUNT),
+            " ".join(["repeat"] * 45),
+            " ".join(["again"] * 50),
+        ]
     if kind == "sentinel":
-        # Spam a magic token — games a "contains a sentinel" reward.
-        return " ".join([sentinel] * _SENTINEL_COUNT)
+        return [
+            " ".join([sentinel] * _SENTINEL_COUNT),
+            " ".join([sentinel] * 10),
+            f"start {sentinel} middle {sentinel} end",
+        ]
+    if kind == "wrapped_junk":
+        return [
+            "<think>padding</think>padding",
+            "<think></think>a",
+            "<think>loop loop</think>loop",
+            "<think>.</think>.",
+            "#### padding",
+            r"\boxed{padding}",
+            '{"response": "padding", "answer": "junk"}',
+        ]
+    if kind == "answer_spray":
+        target = "42" if gold is None else str(gold).strip()
+        return [
+            f"<think>options</think> 1 2 3 17 {target} 256 999",
+            f"The candidate options considered were {target}, 987, 654, and 321.",
+            f"Analysis indicates {target} is an option, while alternatives include 888 and 777.",
+            f"Could be {target} or perhaps 111, 222, and 333.",
+        ]
+    if kind == "structure_without_content":
+        return [
+            '{"name": "", "arguments": {}, "result": null}',
+            '{"type": "object", "properties": {}, "status": "pending"}',
+            '{"tool": "none", "parameters": {"key": "placeholder"}}',
+            '{"thought": "", "action": "none", "input": ""}',
+        ]
     raise ValueError(f"unknown attack kind: {kind!r} (options: {', '.join(ATTACKS)})")
+
+
+def _attack_text(kind: str, sentinel: str = _DEFAULT_SENTINEL) -> str:
+    variants = generate_attack_variants(kind, sentinel=sentinel)
+    return variants[-1] if variants else ""
 
 
 def generate_attacks(
@@ -90,7 +141,11 @@ def generate_attacks(
         # A bare string is a Sequence of characters — iterating it would probe
         # per-letter. Force an explicit collection (mirrors reward_synth guards).
         raise TypeError("kinds must be a sequence of attack-kind strings, not a str")
-    return [(kind, _attack_text(kind, sentinel)) for kind in kinds]
+    attacks: list[tuple[str, str]] = []
+    for kind in kinds:
+        for text in generate_attack_variants(kind, sentinel=sentinel):
+            attacks.append((kind, text))
+    return attacks
 
 
 # ---------------------------------------------------------------------------
@@ -143,18 +198,24 @@ def run_stress(
 ) -> StressReport:
     """Score adversarial junk completions and flag a gameable verifier.
 
-    For each attack kind, one junk completion is scored per sampled gold against
-    the REAL gold (so numeric/tool_call/json_schema verifiers get a valid
-    ``answer=`` and still must reject the junk). ``gameability`` is the overall
-    junk accept-rate; ``gameable`` iff it strictly exceeds ``max_gameable``.
+    Each attack family generates distinct variant attempts (classic strings,
+    wrapped scaffolds, answer-spray distractors, and empty structures).
+    When gold references are supplied, junk variants are scored against real
+    golds and ``answer_spray`` embeds the actual gold targets.
+
+    ``gameability`` is the overall junk accept-rate; ``gameable`` iff it
+    strictly exceeds ``max_gameable``.
 
     ``reference_accept`` (the golds scored as their own correct completions) is
     reported for context — a verifier that rejects everything is broken, a
     different problem — but does NOT set the verdict.
 
-    No-gold fallback: with an empty ``golds`` each attack is scored once with no
-    ``answer`` kwarg and ``reference_accept`` is ``None``.
+    No-gold fallback: with an empty ``golds`` each attack family's variants
+    are scored once with no ``answer`` kwarg and ``reference_accept`` is ``None``.
     """
+    if isinstance(attacks, (str, bytes)):
+        raise TypeError("attacks must be a sequence of attack-kind strings, not a str")
+
     sampled = list(golds)[:_MAX_STRESS_GOLDS]
     have_golds = bool(sampled)
 
@@ -167,21 +228,54 @@ def run_stress(
         ref_scores = _score_batch(reward_fn, sampled, sampled)
         reference_accept = _accepted(ref_scores) / len(sampled)
 
+    unique_kinds = list(dict.fromkeys(attacks))
     results: list[AttackResult] = []
     total_accepted = total_n = 0
-    for kind, junk in generate_attacks(sentinel=sentinel, kinds=attacks):
+
+    for kind in unique_kinds:
+        kind_accepted = 0
+        kind_n = 0
+
         if have_golds:
-            texts: list[str] = [junk] * len(sampled)
-            answers: Optional[list[str]] = list(sampled)
+            if kind == "answer_spray":
+                # Multiple templates; each template is tested across all sampled golds
+                # in batches of len(sampled) so batch size matches golds cap.
+                num_templates = len(
+                    generate_attack_variants("answer_spray", sentinel=sentinel, gold="42")
+                )
+                for idx in range(num_templates):
+                    texts = [
+                        generate_attack_variants(
+                            "answer_spray", sentinel=sentinel, gold=g
+                        )[idx]
+                        for g in sampled
+                    ]
+                    scores = _score_batch(reward_fn, texts, sampled)
+                    kind_accepted += _accepted(scores)
+                    kind_n += len(texts)
+            else:
+                variants = generate_attack_variants(kind, sentinel=sentinel, gold=None)
+                for v in variants:
+                    texts = [v] * len(sampled)
+                    scores = _score_batch(reward_fn, texts, sampled)
+                    kind_accepted += _accepted(scores)
+                    kind_n += len(texts)
         else:
-            texts = [junk]
-            answers = None
-        scores = _score_batch(reward_fn, texts, answers)
-        accepted = _accepted(scores)
-        n = len(texts)
-        results.append(AttackResult(kind, n, accepted, accepted / n if n else 0.0))
-        total_accepted += accepted
-        total_n += n
+            texts = generate_attack_variants(kind, sentinel=sentinel, gold=None)
+            scores = _score_batch(reward_fn, texts, None)
+            kind_accepted = _accepted(scores)
+            kind_n = len(texts)
+
+        results.append(
+            AttackResult(
+                kind=kind,
+                n=kind_n,
+                accepted=kind_accepted,
+                accept_rate=kind_accepted / kind_n if kind_n else 0.0,
+            )
+        )
+        total_accepted += kind_accepted
+        total_n += kind_n
 
     gameability = (total_accepted / total_n) if total_n else 0.0
     return StressReport(
