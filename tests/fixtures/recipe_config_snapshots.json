@@ -1209,6 +1209,21 @@
       "training.lora.r": 16,
       "training.lr": 0.0002
     },
+    "minimax-m3-dpo": {
+      "base": "MiniMaxAI/MiniMax-M3",
+      "data.format": "dpo",
+      "data.max_length": 4096,
+      "data.train": "./data/preference_train.jsonl",
+      "task": "dpo",
+      "training.batch_size": 1,
+      "training.epochs": 1,
+      "training.gradient_accumulation_steps": 16,
+      "training.gradient_checkpointing": true,
+      "training.lora.alpha": 64,
+      "training.lora.r": 32,
+      "training.lr": 5e-06,
+      "training.moe_lora": true
+    },
     "minimax-m3-sft": {
       "base": "MiniMaxAI/MiniMax-M3",
       "data.format": "auto",
@@ -1248,6 +1263,21 @@
       "training.lora.alpha": 32,
       "training.lora.r": 16,
       "training.lr": 0.0002
+    },
+    "mistral-large-3-dpo": {
+      "base": "mistralai/Mistral-Large-3-675B-Instruct-2512",
+      "data.format": "dpo",
+      "data.max_length": 4096,
+      "data.train": "./data/preference_train.jsonl",
+      "task": "dpo",
+      "training.batch_size": 1,
+      "training.epochs": 1,
+      "training.gradient_accumulation_steps": 32,
+      "training.gradient_checkpointing": true,
+      "training.lora.alpha": 64,
+      "training.lora.r": 32,
+      "training.lr": 5e-06,
+      "training.moe_lora": true
     },
     "mistral-large-3-sft": {
       "base": "mistralai/Mistral-Large-3-675B-Instruct-2512",
