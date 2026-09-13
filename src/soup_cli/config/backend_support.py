@@ -118,6 +118,18 @@ _MLX_SFT: tuple[SupportEntry, ...] = (
         "MLX masks the prompt or supervises the whole sequence; no per-field switch",
         trainer_reads=True,
     ),
+    SupportEntry(
+        "training.use_liger",
+        IGNORED,
+        "Liger fused kernels have no MLX implementation",
+        trainer_reads=True,
+    ),
+    SupportEntry(
+        "training.neftune_alpha",
+        IGNORED,
+        "NEFT noise is applied on the transformers training path, not MLX",
+        trainer_reads=True,
+    ),
 )
 
 
