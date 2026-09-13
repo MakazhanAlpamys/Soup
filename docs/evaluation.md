@@ -673,8 +673,8 @@ Before you ship a quantized model, verify it didn't lose skills. The checker run
 ```bash
 # Compare a pre-quant model with its post-quant version
 soup eval quant-check \
-  --before ./output \
-  --after  ./output/quantized.q4_k_m.gguf \
+  --before ./output/base \
+  --after  ./output/quantized \
   --tasks  ./evals/sanity.jsonl
 
 # Both sides may be registry refs
@@ -683,16 +683,19 @@ soup eval quant-check \
   --after  registry://llama31-chat-v1-q4 \
   --tasks  ./evals/sanity.jsonl
 
-# Render as JSON for CI integration
+# Render as JSON for CI integration (exits 2 on MAJOR, 0 on OK/MINOR)
 soup eval quant-check --before X --after Y --tasks t.jsonl --format json
+
+# Use deterministic stubs in CI when weights are unavailable
+soup eval quant-check --before X --after Y --tasks t.jsonl --allow-stub
 ```
 
 **Verdict thresholds (per task):**
-- `OK` — score delta ≤ 2%
-- `MINOR` — delta 2-10% (investigate)
-- `MAJOR` — delta > 10% (do NOT ship)
+- `OK` — score drop ≤ 2% (or score improved)
+- `MINOR` — score drop 2–5% (investigate)
+- `MAJOR` — score drop > 5% (do NOT ship, exits code 2)
 
-Paths are containment-checked, and `registry://` refs are resolved with an optional `kinds` filter so you never pick the wrong artifact.
+Paths are containment-checked, and `registry://` refs are resolved with an optional `kinds` filter so you never pick the wrong artifact. Standalone `.gguf` file paths are refused up front; pass directory paths containing safetensors/HuggingFace weights or `registry://` references.
 
 ### Custom Eval Format
 
