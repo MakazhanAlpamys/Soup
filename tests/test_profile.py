@@ -571,8 +571,9 @@ class TestResolveGpuMemory:
             "soup_cli.utils.gpu.get_gpu_info",
             lambda: (_ for _ in ()).throw(RuntimeError("no GPU")),
         )
-        mem = _resolve_gpu_memory(None)
+        mem, source = _resolve_gpu_memory(None)
         assert mem == 24.0
+        assert source == "assumed"
 
 
 class TestTrainableParamsEstimate:
