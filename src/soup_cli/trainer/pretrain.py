@@ -287,7 +287,7 @@ class PretrainTrainerWrapper:
 
     def _setup_transformers(self, cfg: SoupConfig, tcfg) -> None:
         """Load model via standard transformers + peft pipeline."""
-        from peft import LoraConfig, TaskType, get_peft_model, prepare_model_for_kbit_training
+        from peft import TaskType, get_peft_model, prepare_model_for_kbit_training
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
         from soup_cli.utils.moe import detect_moe_model, get_moe_target_modules
@@ -347,7 +347,7 @@ class PretrainTrainerWrapper:
         # combined). Shared with the SFT trainer so the two cannot drift.
         from soup_cli.utils.peft_wiring import (
             apply_lisa_setup,
-            build_lora_config_kwargs,
+            build_lora_config,
             resolve_lora_target_modules,
             resolve_lora_target_parameters,
         )
@@ -367,13 +367,11 @@ class PretrainTrainerWrapper:
                         f"[green]ScatterMoE LoRA:[/] targeting {len(moe_targets)} module patterns"
                     )
 
-            lora_config = LoraConfig(
-                **build_lora_config_kwargs(
-                    tcfg.lora,
-                    target_modules=target_modules,
-                    target_parameters=target_parameters,
-                    task_type=TaskType.CAUSAL_LM,
-                )
+            lora_config = build_lora_config(
+                tcfg.lora,
+                target_modules=target_modules,
+                target_parameters=target_parameters,
+                task_type=TaskType.CAUSAL_LM,
             )
             # v0.40.6 #67 — surgical PEFT patches.
             from soup_cli.utils.peft_wiring import (

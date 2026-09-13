@@ -230,7 +230,7 @@ class EmbeddingTrainerWrapper:
 
     def _setup_transformers(self, cfg: SoupConfig, tcfg: TrainingConfig) -> None:
         """Load model via standard transformers + peft pipeline."""
-        from peft import LoraConfig, TaskType, get_peft_model, prepare_model_for_kbit_training
+        from peft import TaskType, get_peft_model, prepare_model_for_kbit_training
         from transformers import AutoModel, AutoTokenizer
 
         console.print(f"[dim]Loading tokenizer: {cfg.base}[/]")
@@ -281,19 +281,17 @@ class EmbeddingTrainerWrapper:
             if hasattr(self.model, "enable_input_require_grads"):
                 self.model.enable_input_require_grads()
         else:
-            from soup_cli.utils.peft_wiring import resolve_lora_target_modules
+            from soup_cli.utils.peft_wiring import (
+                build_lora_config,
+                resolve_lora_target_modules,
+            )
 
             target_modules = resolve_lora_target_modules(self.model, tcfg.lora.target_modules)
 
-            lora_config = LoraConfig(
-                r=tcfg.lora.r,
-                lora_alpha=tcfg.lora.alpha,
-                lora_dropout=tcfg.lora.dropout,
+            lora_config = build_lora_config(
+                tcfg.lora,
                 target_modules=target_modules,
                 task_type=TaskType.FEATURE_EXTRACTION,
-                bias="none",
-                use_dora=tcfg.lora.use_dora,
-                use_rslora=tcfg.lora.use_rslora,
             )
             # v0.40.6 #67 — surgical PEFT patches.
             from soup_cli.utils.peft_wiring import (
@@ -572,4 +570,3 @@ class _EmbeddingTrainer:
     @property
     def args(self):
         return self._trainer.args
-

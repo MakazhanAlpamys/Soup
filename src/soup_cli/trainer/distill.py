@@ -221,7 +221,7 @@ class DistillTrainerWrapper:
     def setup(self, dataset: dict) -> None:
         """Load student + teacher, build distillation Trainer."""
         from datasets import Dataset
-        from peft import LoraConfig, TaskType, get_peft_model
+        from peft import TaskType, get_peft_model
         from transformers import (
             AutoModelForCausalLM,
             AutoTokenizer,
@@ -273,18 +273,16 @@ class DistillTrainerWrapper:
         )
 
         # LoRA on the student — bracket with v0.40.6 #67 surgical PEFT patches.
-        from soup_cli.utils.peft_wiring import resolve_lora_target_modules
+        from soup_cli.utils.peft_wiring import (
+            build_lora_config,
+            resolve_lora_target_modules,
+        )
 
         target_modules = resolve_lora_target_modules(self.model, tcfg.lora.target_modules)
-        lora_config = LoraConfig(
-            r=tcfg.lora.r,
-            lora_alpha=tcfg.lora.alpha,
-            lora_dropout=tcfg.lora.dropout,
+        lora_config = build_lora_config(
+            tcfg.lora,
             target_modules=target_modules,
             task_type=TaskType.CAUSAL_LM,
-            bias="none",
-            use_dora=tcfg.lora.use_dora,
-            use_rslora=tcfg.lora.use_rslora,
         )
         from soup_cli.utils.peft_wiring import (
             apply_post_lora_patches,

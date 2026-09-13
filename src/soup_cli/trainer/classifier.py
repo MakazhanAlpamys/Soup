@@ -262,26 +262,22 @@ class ClassifierTrainerWrapper:
             tcfg.lora.r > 0
         )
         if self._lora_active:
-            from peft import LoraConfig, TaskType, get_peft_model
+            from peft import TaskType, get_peft_model
 
             from soup_cli.utils.peft_wiring import (
                 apply_post_lora_patches,
                 apply_pre_lora_patches,
+                build_lora_config,
                 resolve_lora_target_modules,
             )
 
             target_modules = resolve_lora_target_modules(
                 self.model, tcfg.lora.target_modules
             )
-            lora_config = LoraConfig(
-                r=tcfg.lora.r,
-                lora_alpha=tcfg.lora.alpha,
-                lora_dropout=tcfg.lora.dropout,
+            lora_config = build_lora_config(
+                tcfg.lora,
                 target_modules=target_modules,
                 task_type=TaskType.SEQ_CLS,
-                bias="none",
-                use_dora=tcfg.lora.use_dora,
-                use_rslora=tcfg.lora.use_rslora,
             )
             apply_pre_lora_patches(self.model, cfg.base)
             self.model = get_peft_model(self.model, lora_config)
