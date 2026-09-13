@@ -322,7 +322,11 @@ def _check_config_support(config_path: str) -> None:
     pre-flight check, and the fields sitting at their schema default are not
     what anyone came here to ask about.
     """
-    from soup_cli.config.backend_support import DEFAULT_BACKEND, check_config
+    from soup_cli.config.backend_support import (
+        DEFAULT_BACKEND,
+        check_config,
+        unsupported_for,
+    )
 
     try:
         from soup_cli.config.loader import load_config
@@ -354,8 +358,10 @@ def _check_config_support(config_path: str) -> None:
         f"backend=[bold]{backend}[/]"
     )
     if not gaps:
+        known = unsupported_for(cfg.task, backend)
         console.print(
-            "  [green]Every setting this config writes is read on this backend.[/]"
+            f"  [green]None of the {len(known)} setting(s) known to be unread "
+            f"on task={cfg.task} backend={backend} is set in this config.[/]"
         )
         return
 
