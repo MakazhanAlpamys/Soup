@@ -48,6 +48,11 @@ _SUPPORTED_FORMATS: Tuple[str, ...] = ("dpo", "kto")
 _DEFAULT_SAMPLE_SIZE = 2000
 _MAX_SAMPLE_SIZE = 50_000
 _MIN_PROMPT_LEAK_LEN = 40
+# length_bias needs a real difference in size as well as a consistent one: Cohen's d
+# is scale-free, so lengths that barely vary turn a one-word gap into a "large
+# effect". Relative difference of the mean lengths, |chosen - rejected| / larger.
+_LENGTH_BIAS_MINOR_REL_DIFF = 0.05
+_LENGTH_BIAS_MAJOR_REL_DIFF = 0.10
 
 
 @dataclass(frozen=True)
@@ -158,6 +163,24 @@ def extract_pref_text(value: Any) -> str:
     return "" if value is None else str(value)
 
 
+def extract_completion_text(value: Any) -> str:
+    """The completion part of a chosen/rejected/completion field.
+
+    A conversational completion carries its prompt as the leading user turn, so
+    ``extract_pref_text`` of it always contains the prompt. Checks about the
+    completion itself (``prompt_leak``, ``length_bias``) read only the assistant
+    turns; a list with no assistant role, or a plain string, is used whole.
+    """
+    if isinstance(value, list):
+        assistant_turns = [
+            turn for turn in value
+            if isinstance(turn, Mapping) and turn.get("role") == "assistant"
+        ]
+        if assistant_turns:
+            return extract_pref_text(assistant_turns)
+    return extract_pref_text(value)
+
+
 def cohens_d(a: Sequence[float], b: Sequence[float]) -> float:
     """Standardized mean difference (pooled std) between two samples.
 
@@ -207,25 +230,30 @@ def _coerce_kto_label(value: Any) -> bool:
 def check_length_bias(rows: Sequence[Mapping], *, length_fn: Callable[[str], float]) -> LintCheck:
     """The #1 silent DPO degradation: chosen systematically longer than
     rejected teaches "longer is better" instead of the real preference.
-    MAJOR at |Cohen's d| >= 0.8 (large effect, Cohen's convention), MINOR
-    at >= 0.3, else OK."""
+    MAJOR at |Cohen's d| >= 0.8 (large effect, Cohen's convention) with the
+    mean lengths differing by at least 10%, MINOR at |d| >= 0.3 with at least
+    5%, else OK. Lengths are of the completion only (assistant turns)."""
     if not rows:
         return LintCheck(name="length_bias", verdict="OK", message="no rows")
     chosen_lens: List[float] = []
     rejected_lens: List[float] = []
     longer_chosen = 0
     for row in rows:
-        c_len = length_fn(extract_pref_text(row.get("chosen")))
-        r_len = length_fn(extract_pref_text(row.get("rejected")))
+        c_len = length_fn(extract_completion_text(row.get("chosen")))
+        r_len = length_fn(extract_completion_text(row.get("rejected")))
         chosen_lens.append(c_len)
         rejected_lens.append(r_len)
         if c_len > r_len:
             longer_chosen += 1
     d = cohens_d(chosen_lens, rejected_lens)
     abs_d = abs(d)
-    if abs_d >= 0.8:
+    mean_chosen = sum(chosen_lens) / len(chosen_lens)
+    mean_rejected = sum(rejected_lens) / len(rejected_lens)
+    larger_mean = max(mean_chosen, mean_rejected)
+    rel_diff = abs(mean_chosen - mean_rejected) / larger_mean if larger_mean > 0 else 0.0
+    if abs_d >= 0.8 and rel_diff >= _LENGTH_BIAS_MAJOR_REL_DIFF:
         verdict = "MAJOR"
-    elif abs_d >= 0.3:
+    elif abs_d >= 0.3 and rel_diff >= _LENGTH_BIAS_MINOR_REL_DIFF:
         verdict = "MINOR"
     else:
         verdict = "OK"
@@ -240,12 +268,12 @@ def check_length_bias(rows: Sequence[Mapping], *, length_fn: Callable[[str], flo
         name="length_bias",
         verdict=verdict,
         message=(
-            f"effect size (Cohen's d) = {d:.3f} ({direction}); "
-            f"chosen is longer in {frac_longer:.1%} of rows"
+            f"effect size (Cohen's d) = {d:.3f} ({direction}), mean lengths "
+            f"differ by {rel_diff:.1%}; chosen is longer in {frac_longer:.1%} of rows"
         ),
         evidence=(
-            f"mean chosen={sum(chosen_lens) / len(chosen_lens):.1f}, "
-            f"mean rejected={sum(rejected_lens) / len(rejected_lens):.1f}"
+            f"mean chosen={mean_chosen:.1f}, "
+            f"mean rejected={mean_rejected:.1f}"
         ),
     )
 
@@ -359,7 +387,9 @@ def check_prompt_leak(
     """Flags the prompt echoed verbatim inside the completion (a common
     synthetic-data pipeline bug). MAJOR at >=10% of rows, MINOR for any
     lower non-zero rate. Prompts shorter than ``min_prompt_len`` are
-    skipped to avoid false positives on trivially-short shared substrings."""
+    skipped to avoid false positives on trivially-short shared substrings.
+    Only the assistant turns of a conversational completion are searched:
+    its leading user turn IS the prompt, so it would always match."""
     if not rows:
         return LintCheck(name="prompt_leak", verdict="OK", message="no rows")
     flagged = 0
@@ -369,11 +399,11 @@ def check_prompt_leak(
             continue
         if fmt == "dpo":
             targets = [
-                extract_pref_text(row.get("chosen")),
-                extract_pref_text(row.get("rejected")),
+                extract_completion_text(row.get("chosen")),
+                extract_completion_text(row.get("rejected")),
             ]
         else:
-            targets = [extract_pref_text(row.get("completion"))]
+            targets = [extract_completion_text(row.get("completion"))]
         if any(prompt in target for target in targets if target):
             flagged += 1
     frac = flagged / len(rows)
@@ -479,6 +509,7 @@ __all__ = [
     "check_prompt_leak",
     "cohens_d",
     "compose_lint_report",
+    "extract_completion_text",
     "extract_pref_text",
     "run_lint",
 ]

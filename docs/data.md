@@ -991,11 +991,15 @@ soup data lint ./data/prefs.jsonl --model meta-llama/Llama-3.1-8B-Instruct  # ex
 ```
 
 Five checks: `length_bias` — the **#1 silent DPO degradation**: `chosen`
-systematically longer than `rejected`, reported as a Cohen's d effect size —
+systematically longer than `rejected`, reported as a Cohen's d effect size; MAJOR
+needs |d| >= 0.8 and mean lengths at least 10% apart, MINOR |d| >= 0.3 and 5%, so a
+consistent one-word gap between near-constant lengths is not flagged —
 `label_imbalance` (KTO desirable:undesirable ratio), `near_duplicates`
 (MinHash/LSH, reuses the `soup data dedup` kernel; requires
 `pip install "soup-cli[data]"`, degrades to an advisory skip otherwise),
 `identical_pairs` (`chosen == rejected` — zero preference signal), and
 `prompt_leak` (the prompt echoed verbatim inside the completion, a common
-synthetic-data pipeline bug). Same OK/MINOR/MAJOR taxonomy and exit codes as
+synthetic-data pipeline bug). For conversational `chosen` / `rejected` (message
+lists), `length_bias` and `prompt_leak` read only the assistant turns, since the
+leading user turn is the prompt itself. Same OK/MINOR/MAJOR taxonomy and exit codes as
 `soup data doctor`.
