@@ -19,6 +19,7 @@ leak passed positionally is caught and the report names only what is unfilled.
 from __future__ import annotations
 
 import ast
+import functools
 import pathlib
 from typing import NamedTuple
 
@@ -51,7 +52,12 @@ def _is_typer_default(node: ast.expr | None) -> bool:
 
 
 def _is_command(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
-    """Decorated with something ending in `.command(...)` or `.callback(...)`."""
+    """Decorated with something ending in `.command(...)` or `.callback(...)`.
+
+    Only the attribute form is matched. A bare `@command()` (after
+    `from typer import ...`) would be invisible here; nothing in the package
+    registers commands that way today.
+    """
     for dec in node.decorator_list:
         call = dec.func if isinstance(dec, ast.Call) else dec
         if isinstance(call, ast.Attribute) and call.attr in {"command", "callback"}:
@@ -83,7 +89,10 @@ def _module_name(path: pathlib.Path) -> str:
     return ".".join(parts)
 
 
-def _package_sources() -> list[_Source]:
+@functools.lru_cache(maxsize=1)
+def _package_sources() -> tuple[_Source, ...]:
+    # Cached: parsing ~500 files is the bulk of this file's run time, and
+    # several tests need the same walk.
     sources = []
     for path in sorted(SRC.rglob("*.py")):
         try:
@@ -91,10 +100,10 @@ def _package_sources() -> list[_Source]:
         except (SyntaxError, UnicodeDecodeError):  # pragma: no cover
             continue
         sources.append(_Source(str(path.relative_to(SRC.parent.parent)), _module_name(path), tree))
-    return sources
+    return tuple(sources)
 
 
-def _collect_commands(sources: list[_Source]) -> dict[tuple[str, str], _Command]:
+def _collect_commands(sources) -> dict[tuple[str, str], _Command]:
     """Every typer command, keyed by (module, function name)."""
     commands: dict[tuple[str, str], _Command] = {}
     for source in sources:
@@ -142,7 +151,12 @@ def _unfilled(call: ast.Call, command: _Command) -> set[str] | None:
     return set(command.typer_params - filled)
 
 
-def _leaking_calls(sources: list[_Source], commands) -> list[str]:
+@functools.lru_cache(maxsize=1)
+def _package_commands() -> dict[tuple[str, str], _Command]:
+    return _collect_commands(_package_sources())
+
+
+def _leaking_calls(sources, commands) -> list[str]:
     findings: list[str] = []
     for source in sources:
         resolved = _imported_commands(source, commands)
@@ -193,11 +207,21 @@ def _scan_synthetic(call: str) -> list[str]:
 def test_the_package_declares_typer_commands_at_all():
     # If the walk silently found nothing, the real test below would pass
     # vacuously forever.
-    commands = _collect_commands(_package_sources())
-    assert len(commands) > 50, f"only found {len(commands)} typer commands; the walk is broken"
+    commands = _package_commands()
+    assert len(commands) > 120, f"only found {len(commands)} typer commands; the walk is broken"
     key = ("soup_cli.commands.eval", "custom")
     assert key in commands
     assert {"output", "attach_to_registry"} <= commands[key].typer_params
+
+
+def test_the_walk_reaches_the_whole_package_not_just_commands():
+    # 143 of the package's commands live under commands/, so a walk narrowed
+    # to that directory would still pass the count above -- and would no
+    # longer see monitoring/callback.py, one of #752's two real call sites.
+    # This also catches modules silently dropped by a parse failure.
+    modules = {source.module for source in _package_sources()}
+    assert "soup_cli.monitoring.callback" in modules
+    assert len(modules) > 400, f"only parsed {len(modules)} modules; the walk is broken"
 
 
 def test_the_guard_reports_a_synthetic_leak():
@@ -226,6 +250,43 @@ def test_leading_plain_parameters_do_not_count_as_filled_typer_ones():
     assert _scan_synthetic("gadget(ctx, 't', True)") == []
 
 
+def test_a_command_imported_inside_a_function_is_still_resolved():
+    # monitoring/callback.py imports `custom` inside a function, which is the
+    # shape of one of #752's two real sites. A resolver that only looked at
+    # module-level imports would go blind to it.
+    sources = [
+        _Source("pkg/cli.py", "pkg.cli", ast.parse(_SYNTHETIC_COMMAND)),
+        _Source(
+            "pkg/nested.py",
+            "pkg.nested",
+            ast.parse("def run():\n    from pkg.cli import widget\n    widget('x')\n"),
+        ),
+    ]
+    assert _leaking_calls(sources, _collect_commands(sources)) == [
+        "pkg/nested.py:3 calls widget() without ['fmt', 'verbose']"
+    ]
+
+
+def test_a_method_sharing_a_command_name_is_not_reported():
+    # #752's third acceptance criterion: `model.train()` is not the `train`
+    # command. Pinned here rather than left to whatever call sites happen to
+    # exist in the tree today.
+    assert _scan_synthetic("obj.widget('x')") == []
+    assert _scan_synthetic("pkg.cli.widget('x')") == []
+
+
+def test_a_local_function_sharing_a_command_name_is_not_reported():
+    sources = [
+        _Source("pkg/cli.py", "pkg.cli", ast.parse(_SYNTHETIC_COMMAND)),
+        _Source(
+            "pkg/other.py",
+            "pkg.other",
+            ast.parse("def widget(name):\n    return name\n\nwidget('x')\n"),
+        ),
+    ]
+    assert _leaking_calls(sources, _collect_commands(sources)) == []
+
+
 def test_calls_it_cannot_resolve_are_not_reported():
     assert _scan_synthetic("widget(*args)") == []
     assert _scan_synthetic("widget(**kwargs)") == []
@@ -233,7 +294,7 @@ def test_calls_it_cannot_resolve_are_not_reported():
 
 def test_a_partial_positional_call_names_only_the_unfilled_parameters():
     """#752's call with its first two arguments passed positionally."""
-    commands = _collect_commands(_package_sources())
+    commands = _package_commands()
     caller = _Source(
         "caller.py",
         "caller",
@@ -249,8 +310,7 @@ def test_a_partial_positional_call_names_only_the_unfilled_parameters():
 
 
 def test_no_typer_command_is_called_with_parameters_left_unfilled():
-    sources = _package_sources()
-    findings = _leaking_calls(sources, _collect_commands(sources))
+    findings = _leaking_calls(_package_sources(), _package_commands())
     assert not findings, (
         "A typer command is called as a plain function without every "
         "typer-defaulted parameter. The unfilled ones arrive as truthy "
