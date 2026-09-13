@@ -14,6 +14,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from soup_cli.utils.run_cost import format_cost_usd
+from soup_cli.utils.terminal import for_terminal
 
 console = Console()
 
@@ -192,7 +193,10 @@ def show(
     # nothing until now — a failed run's "why" was sitting in the database
     # with no surface to show it.
     if run.get("error_message"):
-        info_lines.append(f"Error:      {_esc(str(run['error_message']))}")
+        # error_message is exception text, not a config-derived string --
+        # it can carry a remote error body verbatim, so it gets control-byte
+        # stripping (for_terminal) rather than markup escaping alone (#767).
+        info_lines.append(f"Error:      {for_terminal(run['error_message'])}")
     info_lines.extend([
         "",
         f"Model:      [bold]{_esc(str(run.get('base_model') or '-'))}[/]",

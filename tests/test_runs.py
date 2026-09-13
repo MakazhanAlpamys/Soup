@@ -123,6 +123,31 @@ def test_runs_show_surfaces_the_stored_error_message(tracker):
     assert "simulated tokenizer load failure" in result.output
 
 
+def test_runs_show_strips_control_bytes_from_the_error_message(tracker):
+    """#767 follow-up review: error_message is exception text, not a
+    config-derived string, so it can carry a remote error body verbatim.
+    markup_escape alone only neutralises '[...]' -- a raw ESC (window-title
+    or SGR color) reaches the terminal untouched. for_terminal strips C0
+    control bytes first, so neither escape sequence should survive."""
+    run_id = tracker.start_run(
+        config_dict={"base": "test-model", "task": "sft"},
+        device="cpu",
+        device_name="CPU",
+        gpu_info={"memory_total": "16 GB"},
+    )
+    tracker.fail_run(
+        run_id,
+        error="boom \x1b]0;HIJACKED\x07 and \x1b[31mRED\x1b[0m tail",
+    )
+
+    result = runner.invoke(app, ["runs", "show", run_id, "--no-plot"])
+    assert result.exit_code == 0
+    assert "\x1b" not in result.output
+    assert "boom" in result.output
+    assert "HIJACKED" in result.output
+    assert "tail" in result.output
+
+
 def test_runs_show_omits_the_error_line_when_there_is_none(tracker):
     """Control: a run with no error_message must not print a stray 'Error:'
     line — the field is genuinely absent for completed/running runs, not
