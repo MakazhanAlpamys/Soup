@@ -1297,8 +1297,8 @@ def quant_check_cmd(
 
     Runs the same JSONL eval tasks through both models sequentially (memory
     safe) and renders a per-task delta with OK / MINOR / MAJOR verdicts.
-    Exits with code 0 on OK / MINOR, code 2 on MAJOR, and code 1 on loading
-    or runtime errors.
+    Exits with code 0 on OK / MINOR, code 2 on MAJOR, code 1 on model loading
+    or runtime errors, and code 3 on usage or input validation errors.
     """
     from soup_cli.eval.quant_check import (
         ensure_format,
@@ -1339,17 +1339,14 @@ def quant_check_cmd(
 
     for label, path_str in (("--before", resolved_before), ("--after", resolved_after)):
         path_obj = Path(path_str)
-        is_gguf = path_obj.suffix.lower() == ".gguf" or (
-            path_obj.is_file() and path_obj.suffix.lower() == ".gguf"
-        )
-        if is_gguf:
+        if path_obj.is_file() and path_obj.suffix.lower() == ".gguf":
             console.print(
                 f"[red]{label} specifies a standalone GGUF file '{path_str}', "
                 "which is not supported for live eval quant-check.\n"
                 "Supported: directories containing safetensors / HuggingFace "
                 "model files or registry:// refs.[/]"
             )
-            raise typer.Exit(1)
+            raise typer.Exit(3)
 
     before_path = Path(resolved_before)
     after_path = Path(resolved_after)
@@ -1365,15 +1362,14 @@ def quant_check_cmd(
     from soup_cli.eval.quant_check import make_model_generator
 
     is_stub = False
-    before_gen = None
-    after_gen = None
 
     try:
         before_gen = make_model_generator(resolved_before)
     except (OSError, ValueError, ImportError) as exc:
         if not allow_stub:
             console.print(
-                f"[red]Failed to load --before model ({resolved_before}): {exc}[/]"
+                f"[red]Failed to load --before model ({resolved_before}): {exc} "
+                "(pass --allow-stub to score with deterministic stubs instead)[/]"
             )
             raise typer.Exit(1) from exc
         if fmt != "json":
@@ -1388,7 +1384,8 @@ def quant_check_cmd(
     except (OSError, ValueError, ImportError) as exc:
         if not allow_stub:
             console.print(
-                f"[red]Failed to load --after model ({resolved_after}): {exc}[/]"
+                f"[red]Failed to load --after model ({resolved_after}): {exc} "
+                "(pass --allow-stub to score with deterministic stubs instead)[/]"
             )
             raise typer.Exit(1) from exc
         if fmt != "json":
@@ -1409,8 +1406,9 @@ def quant_check_cmd(
         console.print(rendered)
     else:
         # Plain text (markdown / json) — skip Rich markup interpretation so
-        # pipe chars in markdown don't render as Rich tags.
-        console.print(rendered, markup=False)
+        # pipe chars in markdown don't render as Rich tags, and disable
+        # highlighting so JSON output is not polluted with ANSI escape codes.
+        console.print(rendered, markup=False, highlight=False)
 
     has_major = any(r.verdict == "MAJOR" for r in result.rows)
     raise typer.Exit(2 if has_major else 0)

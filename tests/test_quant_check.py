@@ -9,6 +9,8 @@ from typer.testing import CliRunner
 
 from soup_cli.cli import app
 
+from .conftest import strip_ansi
+
 runner = CliRunner()
 
 
@@ -295,7 +297,7 @@ class TestQuantCheckIssue809:
             "--after", str(after_dir),
             "--tasks", str(tasks),
         ])
-        assert result.exit_code != 0
+        assert result.exit_code == 1
         assert "Failed to load --before model" in result.output
 
     def test_load_failure_only_after_names_after_side(
@@ -320,9 +322,10 @@ class TestQuantCheckIssue809:
             "--after", str(after_dir),
             "--tasks", str(tasks),
         ])
-        assert result.exit_code != 0
+        assert result.exit_code == 1
         assert "Failed to load --after model" in result.output
         assert "Failed to load --before model" not in result.output
+        assert "using deterministic stub" not in result.output
 
     def test_major_verdict_asserts_exit_code_2(
         self, tmp_path, monkeypatch,
@@ -415,7 +418,8 @@ class TestQuantCheckIssue809:
             "--format", "table",
         ])
         assert result_tbl.exit_code == 0
-        assert "deterministic stub" in result_tbl.output
+        clean_tbl = strip_ansi(result_tbl.output)
+        assert "not a live measurement" in " ".join(clean_tbl.split())
 
     def test_allow_stub_retains_live_before_when_after_fails(
         self, tmp_path, monkeypatch,
@@ -462,5 +466,5 @@ class TestQuantCheckIssue809:
             "--after", str(gguf_file),
             "--tasks", str(tasks),
         ])
-        assert result.exit_code != 0
+        assert result.exit_code == 3
         assert "standalone GGUF file" in result.output

@@ -688,7 +688,7 @@ Soup deliberately does not offer a host-execution fallback.
 
 ### Quant-Lobotomy Checker
 
-Before you ship a quantized model, verify it didn't lose skills. The checker runs the same task list against the `--before` and `--after` models and renders a per-task OK / MINOR / MAJOR verdict.
+Before you ship a quantized model, verify it didn't lose skills. The checker runs the same task list against the `--before` and `--after` models and renders an aggregate suite OK / MINOR / MAJOR verdict.
 
 ```bash
 # Compare a pre-quant model with its post-quant version
@@ -710,10 +710,10 @@ soup eval quant-check --before X --after Y --tasks t.jsonl --format json
 soup eval quant-check --before X --after Y --tasks t.jsonl --allow-stub
 ```
 
-**Verdict thresholds (per task):**
-- `OK` — score drop ≤ 2% (or score improved)
+**Verdict thresholds (aggregate suite verdict):**
+- `OK` — score drop < 2% (or score improved)
 - `MINOR` — score drop 2–5% (investigate)
-- `MAJOR` — score drop > 5% (do NOT ship, exits code 2)
+- `MAJOR` — score drop ≥ 5% (do NOT ship, exits code 2)
 
 Paths are containment-checked, and `registry://` refs are resolved with an optional `kinds` filter so you never pick the wrong artifact. Standalone `.gguf` file paths are refused up front; pass directory paths containing safetensors/HuggingFace weights or `registry://` references.
 
