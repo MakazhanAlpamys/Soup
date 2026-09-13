@@ -58,8 +58,11 @@ def _private_loss_result_lines(source: str) -> list[int]:
         node.lineno
         for node in ast.walk(tree)
         if isinstance(node, ast.Dict)
-        and any(_is_string_key(key, "initial_loss") for key in node.keys)
-        and not _dict_uses_shared_loss_summary(node)
+        and any(
+            _is_string_key(key, "initial_loss")
+            and not _is_loss_summary_initial_subscript(value)
+            for key, value in zip(node.keys, node.values, strict=True)
+        )
     ]
 
 
@@ -191,8 +194,16 @@ def result(loss_summary):
     return {
         'initial_loss': loss_summary['initial_loss'],
         'final_loss': loss_summary['final_loss'],
+}
+"""
+    overrides_shared_spread = """\
+def result(logs, loss_summary):
+    return {
+        **loss_summary,
+        'initial_loss': ([entry['loss'] for entry in logs if 'loss' in entry] or [0])[0],
     }
 """
 
     assert _private_loss_result_lines(alternate_spelling) == [2]
     assert _private_loss_result_lines(shared_subscript) == []
+    assert _private_loss_result_lines(overrides_shared_spread) == [2]
