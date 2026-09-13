@@ -426,7 +426,7 @@ def tool_registry_show(args: dict) -> dict:
 def _resolve_gpu_memory_mcp(gpu: str | None) -> tuple[float, str]:
     """GPU memory in GB and its source, from a flag or auto-detection (non-Typer
     mirror of ``commands/profile.py::_resolve_gpu_memory``)."""
-    from soup_cli.utils.profiler import GPU_MEMORY, normalize_gpu_key
+    from soup_cli.utils.profiler import ASSUMED_GPU_MEMORY_GB, GPU_MEMORY, normalize_gpu_key
 
     if gpu is not None:
         gpu_key = normalize_gpu_key(gpu)
@@ -442,7 +442,7 @@ def _resolve_gpu_memory_mcp(gpu: str | None) -> tuple[float, str]:
             return mem_bytes / (1024**3), "detected"
     except (ImportError, RuntimeError, OSError):
         pass
-    return 24.0, "assumed"
+    return ASSUMED_GPU_MEMORY_GB, "assumed"
 
 
 def _load_config_under_cwd(config: str) -> SoupConfig:

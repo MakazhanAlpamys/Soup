@@ -4,8 +4,9 @@ import math
 import re
 
 # GPU memory lookup table (name → GB VRAM). Keys are normalized by
-# ``normalize_gpu_key``. Laptop parts get their own key wherever their memory
-# differs from the desktop card of the same number.
+# ``normalize_gpu_key``. Every laptop part has its own key, including those with
+# the same memory as the desktop card: that is what lets the device name torch
+# reports ("... Laptop GPU") resolve at all.
 GPU_MEMORY: dict[str, int] = {
     "rtx3050": 8,
     "rtx3050_6gb": 6,
@@ -53,6 +54,10 @@ GPU_MEMORY: dict[str, int] = {
     "t4": 16,
     "v100": 32,
 }
+
+# What ``soup profile`` and the MCP ``profile`` tool fall back to when there is
+# no --gpu and no device is detected. Always reported as assumed, not measured.
+ASSUMED_GPU_MEMORY_GB = 24.0
 
 _GPU_NAME_NOISE = re.compile(r"\b(nvidia|geforce|tesla|gpu)\b")
 

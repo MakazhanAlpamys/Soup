@@ -12,6 +12,7 @@ from rich.table import Table
 
 from soup_cli.utils.gpu import model_size_from_name
 from soup_cli.utils.profiler import (
+    ASSUMED_GPU_MEMORY_GB,
     GPU_MEMORY,
     estimate_speed,
     estimate_total,
@@ -103,9 +104,6 @@ def profile(
     _render_profile(result, cfg, gpu_memory_gb, gpu_memory_source)
 
 
-_ASSUMED_GPU_MEMORY_GB = 24.0
-
-
 def _resolve_gpu_memory(gpu: str | None) -> tuple[float, str]:
     """Resolve GPU memory in GB, and where the number came from.
 
@@ -135,12 +133,10 @@ def _resolve_gpu_memory(gpu: str | None) -> tuple[float, str]:
         pass
 
     # Nothing detected and no --gpu: a common consumer card, reported as assumed.
-    return _ASSUMED_GPU_MEMORY_GB, "assumed"
+    return ASSUMED_GPU_MEMORY_GB, "assumed"
 
 
-def _render_profile(
-    result: dict, cfg, gpu_memory_gb: float, gpu_memory_source: str = "detected"
-) -> None:
+def _render_profile(result: dict, cfg, gpu_memory_gb: float, gpu_memory_source: str) -> None:
     """Render Rich profile output."""
     # Model info
     model_info = (
