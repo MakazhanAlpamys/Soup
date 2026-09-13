@@ -46,6 +46,11 @@ EVIDENCE_CORPUS = (
         "task": {"mode": "pairwise", "base": 0.50, "tuned": 0.50},
         "benchmarks": {"mini_safety": {"base": 0.95, "tuned": 0.70}},
     },
+    {
+        "task": {"mode": "metric", "base": 0.50, "tuned": 0.80},
+        "benchmarks": {"mini_mmlu": {"base": 0.70, "tuned": 0.72}},
+        "numerics": "4bit",
+    },
 )
 
 
@@ -125,6 +130,11 @@ MALFORMED_CORPUS = (
         "task": {"mode": "metric", "base": 0.50, "tuned": 0.60},
         "benchmarks": {},
         "noise_floor": {"runs": 2, "floors": {}, "future_optional": True},
+    },
+    {
+        "task": {"mode": "metric", "base": 0.50, "tuned": 0.80},
+        "benchmarks": {"mini_mmlu": {"base": 0.70, "tuned": 0.72}},
+        "numerics": "nf4",
     },
 )
 

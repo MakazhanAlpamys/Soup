@@ -462,7 +462,7 @@ carrying a field this release does not recognise is **refused, not ignored**:
 
 ```bash
 $ soup ship --evidence evidence.json
-Error: evidence has unsupported field(s): 'numerics'
+Error: evidence has unsupported field(s): 'future_optional'
 $ echo $?
 1
 ```
@@ -475,7 +475,8 @@ SHIP on one side and a DON'T-SHIP on the other. Both surfaces now decode through
 and refusing an unrecognised field is what keeps that guarantee honest: a field is either supported
 by both surfaces or accepted by neither. A refusal is recoverable and visible; a divergent verdict
 is neither. When a newer Soup writes an evidence file that an older one refuses, upgrade the reader
-rather than stripping the field.
+rather than stripping the field. `numerics` is a supported stamp as of #746 — both surfaces
+read it — so a file that carries it is no longer refused for that key.
 
 ### Closing the evidence loop (v0.71.39)
 
@@ -494,8 +495,12 @@ every PR instead of relying on a hand-edited JSON file.
 - **Provenance + staleness.** With `--emit-evidence`, `--config` STAMPS a `provenance` block
   (`config_sha` — a semantic, order-insensitive recipe hash that EXCLUDES the `eval.ship` gate
   policy, so tuning the threshold never invalidates evidence — plus `base_model` and a
-  best-effort `data_sha`). With `--evidence` alone, `--config` GATES: it refuses (exit 3)
-  evidence whose `config_sha` drifted from the committed config.
+  best-effort `data_sha`). A live run also stamps top-level `numerics` (`4bit` / `8bit` /
+  `bfloat16` / `float32`) — the actual load, not the training field — so a GPTQ recipe that
+  the judge loaded as bf16 says so. With `--evidence` alone, `--config` GATES: it refuses
+  (exit 3) evidence whose `config_sha` drifted from the committed config, or whose numerics
+  *family* (`4bit` / `8bit` / `full`) does not match. Pre-#367 evidence without a stamp
+  warns rather than failing closed.
 - **`--push owner/repo#N`** posts the verdict as a GitHub PR comment (best-effort — a missing
   token or `gh` failure warns but never flips the SHIP / DON'T-SHIP exit code).
 
