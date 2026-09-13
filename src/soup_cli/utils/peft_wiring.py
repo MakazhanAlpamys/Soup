@@ -1,10 +1,9 @@
-"""Shared PEFT wiring helpers (v0.40.6 #67) — multi-trainer ReLoRA + surgical patches.
+"""Shared PEFT wiring helpers — LoRA config, multi-trainer ReLoRA, and patches.
 
-Centralises the v0.39.0 Part B (ReLoRA callback) and Part D (surgical PEFT
-patches) wiring previously inlined only in the SFT trainer. Every
-transformer-backend trainer (DPO / GRPO / KTO / ORPO / SimPO / IPO / PPO /
-RewardModel / Pretrain / Embedding / BCO) calls these helpers from its
-``_setup_transformers`` and ``train`` paths.
+Centralises PEFT LoRA construction plus the v0.39.0 Part B (ReLoRA callback)
+and Part D (surgical PEFT patches) wiring previously inlined only in the SFT
+trainer. Every Transformers-backend trainer calls these helpers from its setup
+and training paths.
 
 Helpers swallow per-patch exceptions at DEBUG level — best-effort by design;
 training never crashes because a Gemma4 swap or 3-D dropout strip failed.
@@ -110,7 +109,7 @@ def build_lora_config_kwargs(
     target_parameters: Any,
     task_type: Any,
 ) -> dict[str, Any]:
-    """Build the shared PEFT LoRA kwargs used by resident SFT/pretrain."""
+    """Build the shared PEFT LoRA kwargs used by every trainer path."""
     kwargs = {
         "r": lora_cfg.r,
         "lora_alpha": lora_cfg.alpha,
@@ -122,11 +121,38 @@ def build_lora_config_kwargs(
         "use_dora": lora_cfg.use_dora,
         "use_rslora": lora_cfg.use_rslora,
     }
-    if lora_cfg.rank_pattern:
-        kwargs["rank_pattern"] = dict(lora_cfg.rank_pattern)
-    if lora_cfg.alpha_pattern:
-        kwargs["alpha_pattern"] = dict(lora_cfg.alpha_pattern)
+    rank_pattern = getattr(lora_cfg, "rank_pattern", None)
+    alpha_pattern = getattr(lora_cfg, "alpha_pattern", None)
+    if rank_pattern:
+        kwargs["rank_pattern"] = dict(rank_pattern)
+    if alpha_pattern:
+        kwargs["alpha_pattern"] = dict(alpha_pattern)
     return kwargs
+
+
+def build_lora_config(
+    lora_cfg: Any,
+    *,
+    target_modules: Any,
+    task_type: Any,
+    target_parameters: Any = None,
+) -> Any:
+    """Build a PEFT ``LoraConfig`` through the single shared kwargs path.
+
+    Keeping the PEFT import inside this function preserves Soup's lazy-import
+    boundary while ensuring every trainer consumes new shared LoRA fields such
+    as ``rank_pattern`` and ``alpha_pattern`` automatically.
+    """
+    from peft import LoraConfig
+
+    return LoraConfig(
+        **build_lora_config_kwargs(
+            lora_cfg,
+            target_modules=target_modules,
+            target_parameters=target_parameters,
+            task_type=task_type,
+        )
+    )
 
 
 def apply_pre_lora_patches(model: Any, base: str) -> None:

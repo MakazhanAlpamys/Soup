@@ -1284,7 +1284,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
 
     def _setup_transformers(self, cfg, tcfg):
         """Load model via standard transformers + peft pipeline."""
-        from peft import LoraConfig, TaskType, get_peft_model, prepare_model_for_kbit_training
+        from peft import TaskType, get_peft_model, prepare_model_for_kbit_training
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
         from soup_cli.utils.moe import detect_moe_model, get_moe_target_modules
@@ -1493,7 +1493,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         else:
             # LoRA — with MoE-aware target modules if moe_lora is enabled
             from soup_cli.utils.peft_wiring import (
-                build_lora_config_kwargs,
+                build_lora_config,
                 resolve_lora_target_modules,
                 resolve_lora_target_parameters,
             )
@@ -1514,13 +1514,11 @@ class SFTTrainerWrapper(StreamingSetupMixin):
                         f"{len(moe_targets)} module patterns"
                     )
 
-            lora_config = LoraConfig(
-                **build_lora_config_kwargs(
-                    tcfg.lora,
-                    target_modules=target_modules,
-                    target_parameters=target_parameters,
-                    task_type=TaskType.CAUSAL_LM,
-                )
+            lora_config = build_lora_config(
+                tcfg.lora,
+                target_modules=target_modules,
+                target_parameters=target_parameters,
+                task_type=TaskType.CAUSAL_LM,
             )
             # v0.39.0 Part D / v0.40.6 #67 — surgical PEFT patches via shared helpers.
             from soup_cli.utils.peft_wiring import (
@@ -1592,7 +1590,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
 
     def _setup_vision_transformers(self, cfg, tcfg):
         """Load vision-language model via transformers (LLaMA-Vision, Qwen2-VL, etc.)."""
-        from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
+        from peft import get_peft_model, prepare_model_for_kbit_training
         from transformers import AutoModelForImageTextToText, AutoProcessor
 
         console.print(f"[dim]Loading vision processor: {cfg.base}[/]")
@@ -1648,18 +1646,17 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             self.model = prepare_model_for_kbit_training(self.model)
 
         # LoRA — target language model layers only
-        from soup_cli.utils.peft_wiring import resolve_lora_target_modules
+        from soup_cli.utils.peft_wiring import (
+            build_lora_config,
+            resolve_lora_target_modules,
+        )
 
         target_modules = resolve_lora_target_modules(self.model, tcfg.lora.target_modules)
 
-        lora_config = LoraConfig(
-            r=tcfg.lora.r,
-            lora_alpha=tcfg.lora.alpha,
-            lora_dropout=tcfg.lora.dropout,
+        lora_config = build_lora_config(
+            tcfg.lora,
             target_modules=target_modules,
-            bias="none",
-            use_dora=tcfg.lora.use_dora,
-            use_rslora=tcfg.lora.use_rslora,
+            task_type=None,
         )
         self.model = get_peft_model(self.model, lora_config)
 
@@ -1703,7 +1700,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
 
     def _setup_audio_transformers(self, cfg, tcfg):
         """Load audio-language model via transformers (Qwen2-Audio, Whisper, etc.)."""
-        from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
+        from peft import get_peft_model, prepare_model_for_kbit_training
         from rich.panel import Panel as RichPanel
         from transformers import AutoModel, AutoProcessor
 
@@ -1764,18 +1761,17 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             self.model = prepare_model_for_kbit_training(self.model)
 
         # LoRA — target language model layers only
-        from soup_cli.utils.peft_wiring import resolve_lora_target_modules
+        from soup_cli.utils.peft_wiring import (
+            build_lora_config,
+            resolve_lora_target_modules,
+        )
 
         target_modules = resolve_lora_target_modules(self.model, tcfg.lora.target_modules)
 
-        lora_config = LoraConfig(
-            r=tcfg.lora.r,
-            lora_alpha=tcfg.lora.alpha,
-            lora_dropout=tcfg.lora.dropout,
+        lora_config = build_lora_config(
+            tcfg.lora,
             target_modules=target_modules,
-            bias="none",
-            use_dora=tcfg.lora.use_dora,
-            use_rslora=tcfg.lora.use_rslora,
+            task_type=None,
         )
         self.model = get_peft_model(self.model, lora_config)
 

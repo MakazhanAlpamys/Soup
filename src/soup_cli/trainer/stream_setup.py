@@ -423,7 +423,7 @@ class StreamingSetupMixin:
         """
         from dataclasses import replace
 
-        from peft import LoraConfig, TaskType
+        from peft import TaskType
         from transformers import AutoConfig, AutoTokenizer
 
         # BEFORE the tokenizer load, the weight resolve and the shard write:
@@ -803,7 +803,10 @@ class StreamingSetupMixin:
                     f"[dim]expandable_segments allocator hint not enabled: {why_not}[/]"
                 )
 
-        from soup_cli.utils.peft_wiring import resolve_lora_target_modules
+        from soup_cli.utils.peft_wiring import (
+            build_lora_config,
+            resolve_lora_target_modules,
+        )
 
         target_modules = resolve_lora_target_modules(model_config, tcfg.lora.target_modules)
         if tcfg.moe_lora and is_moe and moe_targets:
@@ -811,15 +814,10 @@ class StreamingSetupMixin:
             console.print(
                 f"[green]ScatterMoE LoRA:[/] targeting {len(moe_targets)} module patterns"
             )
-        lora_config = LoraConfig(
-            r=tcfg.lora.r,
-            lora_alpha=tcfg.lora.alpha,
-            lora_dropout=tcfg.lora.dropout,
+        lora_config = build_lora_config(
+            tcfg.lora,
             target_modules=target_modules,
             task_type=TaskType.CAUSAL_LM,
-            bias="none",
-            use_dora=tcfg.lora.use_dora,
-            use_rslora=tcfg.lora.use_rslora,
         )
 
         # #366 / #434 — CUDA host pinning is inapplicable on every non-CUDA

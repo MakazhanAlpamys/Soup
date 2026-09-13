@@ -235,19 +235,17 @@ class AsrTrainerWrapper:
         # Optional LoRA on the attention q/v projections — opt-in via
         # ``training.asr_lora`` (default full-FT; tiny Whisper fits the dev box).
         if self._should_use_lora(tcfg):
-            from peft import LoraConfig, get_peft_model
+            from peft import get_peft_model
+
+            from soup_cli.utils.peft_wiring import build_lora_config
 
             target_modules = tcfg.lora.target_modules
             if target_modules == "auto":
                 target_modules = ["q_proj", "v_proj"]
-            lora_config = LoraConfig(
-                r=tcfg.lora.r,
-                lora_alpha=tcfg.lora.alpha,
-                lora_dropout=tcfg.lora.dropout,
+            lora_config = build_lora_config(
+                tcfg.lora,
                 target_modules=target_modules,
-                bias="none",
-                use_dora=tcfg.lora.use_dora,
-                use_rslora=tcfg.lora.use_rslora,
+                task_type=None,
             )
             self.model = get_peft_model(self.model, lora_config)
             self._lora_active = True
