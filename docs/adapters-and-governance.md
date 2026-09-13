@@ -493,6 +493,73 @@ Bank model-risk teams and regulated-org auditors get a single JSON file that fin
 the exact environment the run executed in. Atomic write, cwd-contained.
 
 
+## Run-vs-Config Audit (`soup adapters audit`)
+
+Does the finished adapter match the config that asked for it? Five merged
+fixes taught the MLX path to record what it actually did into
+`adapter_config.json` — #683 (masking), #684 (accumulation), #685 (gradient
+checkpointing), #686 (optimizer and schedule), #749 (gradient clipping). Each
+existed because a setting was accepted and silently dropped. Nothing read that
+record back until this command.
+
+```bash
+soup adapters audit ./output --config soup.yaml
+soup adapters audit ./output --config soup.yaml --json   # machine-readable
+```
+
+```
+Audit: output
+│ optimizer                    │ adamw_torch │ AdamW  │ ok      │
+│ warmup_ratio                 │ 0.03        │ —      │ unknown │
+│ weight_decay                 │ 0.01        │ 0.01   │ ok      │
+│ lora.r                       │ 8           │ 8      │ ok      │
+```
+
+**`unknown` is never `ok`.** A setting the record cannot speak to is reported
+`unknown`, never agreement — a false clean bill turns "I do not know" into "I
+checked", which is exactly the substitution this command exists to undo. It is
+not a failure either: an older adapter predates the keys, which is not the
+user's fault.
+
+The config is read through the schema, so a setting you omitted is audited
+against the default Soup would actually have used, not against a second copy
+of the defaults kept by the audit.
+
+**Masking is audited by effect, not by request.** The record's
+`train_on_responses_only` is the config's own request echoed back; the effect
+is `mask_prompt` (upstream's single masked prefix) and `response_token_mask`
+(Soup's per-token mask). Plain-text rows carry no role boundaries, so a run
+that asked for response-only masking on them warns once and trains on the full
+sequence — leaving a record that says `train_on_responses_only: true` beside
+two false effect keys. The audit compares against the effect, so that run is
+reported `DIVERGED`.
+
+Evidence is weighed the same way everywhere else in this command: one truthy
+key proves masking *happened*, whatever the other says, but proving it did
+**not** happen needs both keys. A record carrying neither (written before
+#683) — or carrying one false key with the other absent — is `unknown`, not a
+divergence, because a missing key read as `False` would claim a check the
+record cannot support.
+
+`--json` emits `checked_count` alongside `diverged_count` and `unknown_count`,
+so a CI job can tell "everything agreed" from "nothing was checkable" — both
+of which exit 0 — plus `unknown_reason`, the same explanation the table
+prints. Config warnings (an unknown key, for instance) go to stderr, so stdout
+under `--json` is the payload and nothing else.
+
+**Exit codes: 0 = agreement, 2 = DIVERGED, 1 = usage or read error.** The
+verdict is kept off `1` so a CI gate can tell "the run did not do what the
+config asked" from "the path was wrong" -- a missing `adapter_config.json`, a
+missing `--config` and a path outside the working directory all exit `1`.
+This follows `soup ship` / `soup shrink` (0 pass / 2 failed gate / 1 error)
+rather than the older `adapters scan`, which predates that convention.
+`unknown` rows exit `0`.
+
+Strings in `adapter_config.json` are untrusted -- an adapter can be downloaded
+-- so record-derived text is stripped of ANSI/OSC control bytes and escaped
+against Rich markup before it is printed. `--json` is not sanitised: a machine
+consumer gets the bytes the record actually holds.
+
 ## Adapter Backdoor Scanner (`soup adapters scan`)
 
 Spectral analysis of LoRA adapter weights pre-load. Flags rank-1 dominance

@@ -1701,3 +1701,154 @@ def _estimated_probes(n: int) -> int:
     if n <= 2:
         return n
     return max(2, math.ceil(math.log2(n))) + 2
+
+
+@app.command()
+def audit(
+    adapter: str = typer.Argument(..., help="Path to adapter directory"),
+    config: str = typer.Option(..., "--config", "-c", help="soup.yaml the run was started from"),
+    json_out: bool = typer.Option(False, "--json", help="Emit machine-readable JSON"),
+):
+    """Check whether a finished run did what its config asked for (#762).
+
+    The MLX path records its effective settings in ``adapter_config.json`` --
+    optimizer, schedule, warmup, masking, clipping -- because each of those was
+    once accepted and silently dropped (#683, #684, #685, #686, #749). This
+    reads that record back and reports every place it disagrees with the config.
+
+    Exit codes: 0=agreement, 2=DIVERGED, 1=usage/read error. The verdict is
+    kept off ``1`` so a CI gate can tell "the run did not do what the config
+    asked" from "the path was wrong"; this follows ``soup ship`` / ``soup
+    shrink`` rather than the older ``adapters scan``. Settings the record
+    cannot speak to are reported ``unknown``, never as agreeing -- a false
+    clean bill is worse than no audit -- and ``unknown`` exits 0.
+    """
+    import contextlib
+    import json as _json
+    import sys
+
+    import yaml
+
+    from soup_cli.utils.adapter_audit import audit_adapter, unknown_reason
+
+    # Sibling subcommands enforce this (scan: 779, merge: 1484); read-only here,
+    # but a convention mismatch inside one file is its own hazard.
+    #
+    # #763 review: on the RAW argument, and before the existence check.
+    # `Path(adapter).resolve()` follows the symlink, so the `os.lstat` inside
+    # the helper saw the target and the no-symlink half never fired; and with
+    # the existence check first, an out-of-cwd path was reported as
+    # "No adapter_config.json in: C:/Windows" -- a missing-file message for a
+    # path that is refused outright.
+    from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
+
+    for _path, _label in ((adapter, "adapter directory"), (config, "--config")):
+        try:
+            enforce_under_cwd_and_no_symlink(_path, _label)
+        except (ValueError, OSError) as exc:
+            # Same shape as `adapters scan` (:779) -- a refused path is a red
+            # line and Exit(1), never a raw traceback.
+            console.print(f"[red]Path refused: {escape(str(exc))}[/]")
+            raise typer.Exit(1) from exc
+
+    adapter_path = Path(adapter).resolve()
+    record_file = adapter_path / "adapter_config.json"
+    if not record_file.exists():
+        console.print(f"[red]No adapter_config.json in: {adapter}[/]")
+        raise typer.Exit(1)
+
+    config_path = Path(config).resolve()
+    if not config_path.exists():
+        console.print(f"[red]Config not found: {config}[/]")
+        raise typer.Exit(1)
+
+    try:
+        record = _json.loads(record_file.read_text())
+    except ValueError as exc:
+        console.print(f"[red]adapter_config.json is not valid JSON: {exc}[/]")
+        raise typer.Exit(1) from exc
+    # #763 review: load through the schema, not yaml.safe_load. Handing the raw
+    # mapping to audit_adapter left omitted keys to the audit's own fallbacks,
+    # and three of those disagreed with config/schema.py -- warmup_ratio 0.0 vs
+    # 0.03, weight_decay 0.0 vs 0.01, gradient_accumulation_steps 1 vs 4. A
+    # config that simply omits them was reported `ok` against a value it never
+    # asked for, which is the false clean bill this command exists to refuse.
+    # The schema is the single source of defaults; the audit module stays pure.
+    try:
+        from soup_cli.config.loader import load_config_from_string
+
+        # The loader reports unknown keys through its own module-level Console,
+        # which writes to STDOUT -- so `--json` emitted four lines of warning
+        # ahead of the payload and `json.load` failed on it (#763 review).
+        # A diagnostic about the config is not this command's output; stderr
+        # is where it belongs, and it stays just as visible there.
+        with contextlib.redirect_stdout(sys.stderr):
+            soup_config = load_config_from_string(config_path.read_text())
+    except yaml.YAMLError as exc:
+        console.print(f"[red]Could not parse {config}: {exc}[/]")
+        raise typer.Exit(1) from exc
+    except (SystemExit, Exception) as exc:  # schema rejection prints its own
+        console.print(f"[red]Could not load {config}: {exc}[/]")
+        raise typer.Exit(1) from exc
+    cfg = soup_config.model_dump()
+
+    result = audit_adapter(cfg, record)
+
+    if json_out:
+        # Plain stdout, not console.print_json: Rich pretty-prints and
+        # highlights, which makes the output unparseable by the caller this
+        # flag exists for.
+        payload = result.to_dict()
+        # Criterion 4 for machine consumers: a list of `unknown` rows with no
+        # explanation reads as a tool failure rather than as a limit of the
+        # record. Gated on `unknown_count` so it matches the table exactly.
+        payload["unknown_reason"] = (
+            unknown_reason(result.record_kind) if result.unknown_count else None
+        )
+        typer.echo(_json.dumps(payload, indent=2))
+        raise typer.Exit(result.exit_code)
+
+    table = Table(title=f"Audit: {adapter_path.name}")
+    table.add_column("setting")
+    table.add_column("asked")
+    table.add_column("ran")
+    table.add_column("")
+    marks = {
+        "ok": "[green]ok[/]",
+        "diverged": "[red]DIVERGED[/]",
+        "unknown": "[yellow]unknown[/]",
+    }
+    for row in result.rows:
+        table.add_row(
+            row.setting,
+            # _for_terminal as well as escape: escape() neutralises Rich
+            # markup, not control bytes, and an adapter_config.json can be
+            # downloaded. A recorded "AdamW\x1b[2J" would clear the screen.
+            escape(_for_terminal(str(row.asked))),
+            escape(_for_terminal("—" if row.ran is None else str(row.ran))),
+            marks.get(row.status, row.status),
+        )
+    console.print(table)
+
+    for row in result.rows:
+        if row.status == "diverged" and row.detail:
+            console.print(
+                f"  [red]{escape(_for_terminal(row.setting))}[/]: "
+                f"{escape(_for_terminal(row.detail))}"
+            )
+
+    reason = unknown_reason(result.record_kind)
+    if reason and result.unknown_count:
+        console.print(f"\n[yellow]{escape(_for_terminal(reason))}[/]")
+
+    if result.diverged_count:
+        console.print(
+            f"\n[red]{result.diverged_count} divergence(s)[/]"
+            f"{f', {result.unknown_count} unchecked' if result.unknown_count else ''}"
+        )
+    else:
+        console.print(
+            f"\n[green]No divergences[/]"
+            f"{f', {result.unknown_count} unchecked' if result.unknown_count else ''}"
+        )
+    raise typer.Exit(result.exit_code)
