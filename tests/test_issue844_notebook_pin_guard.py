@@ -50,6 +50,27 @@ def _install_cell_source():
     pytest.fail("no code cell installs soup-cli")
 
 
+class TestTheNotebookWasActuallyRun:
+    """A committed notebook can be edited without being re-run, and a stale
+    pin bump is exactly the case that would leave outputs behind from an
+    older run -- or none at all. Every code cell must carry recorded output,
+    so re-running (or skipping a re-run) is not silent.
+    """
+
+    def test_every_code_cell_has_recorded_output(self):
+        nb = _load_notebook()
+        empty = [
+            i
+            for i, cell in enumerate(nb["cells"])
+            if cell.get("cell_type") == "code" and not cell.get("outputs")
+        ]
+        assert not empty, (
+            f"code cell(s) at index {empty} carry no output -- the notebook "
+            "was edited (or the pin was bumped) without being re-run end to "
+            "end on real hardware"
+        )
+
+
 class TestTheInstallCellIsPinnedToARelease:
     def test_it_does_not_install_from_git(self):
         src = _install_cell_source()
