@@ -25,6 +25,10 @@ from soup_cli.data.formats import detect_format
 from soup_cli.data.loader import load_raw_data
 from soup_cli.utils import data_doctor as engine
 from soup_cli.utils import data_lint as lint_engine
+from soup_cli.utils.exit_codes import (
+    EXIT_GATE_FAILED,
+    EXIT_USAGE_ERROR,
+)
 from soup_cli.utils.paths import atomic_write_text
 from soup_cli.utils.trust_remote import model_requires_trust_remote_code, resolve_trust_remote_code
 
@@ -278,12 +282,12 @@ def lint(
     file_path = Path(path)
     if not file_path.exists():
         console.print(f"[red]File not found: {file_path}[/]")
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=EXIT_USAGE_ERROR)
 
     data = load_raw_data(file_path)
     if not data:
         console.print("[red]Dataset is empty.[/]")
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=EXIT_USAGE_ERROR)
 
     resolved_fmt = _resolve_format(data, fmt)
 
@@ -293,7 +297,7 @@ def lint(
             "soup data lint only supports dpo/orpo/simpo/ipo/bco (chosen/rejected) and kto. "
             "Use [bold]soup data doctor[/] instead for chat/SFT data."
         )
-        raise typer.Exit(code=2)
+        raise typer.Exit(code=EXIT_USAGE_ERROR)
 
     # Only dpo's length_bias check consults length_fn — skip the tokenizer
     # load entirely for kto so `--model` isn't a wasted download/load.
@@ -318,7 +322,7 @@ def lint(
         report = lint_engine.run_lint(data, resolved_fmt, sample_size=sample, length_fn=length_fn)
     except ValueError as exc:
         console.print(f"[red]Error:[/] {escape(str(exc))}")
-        raise typer.Exit(code=1) from exc
+        raise typer.Exit(code=EXIT_USAGE_ERROR) from exc
 
     _render_lint_report(report)
 
@@ -328,10 +332,10 @@ def lint(
             console.print(f"[green]Wrote[/] {escape(output)}")
         except (OSError, ValueError) as exc:
             console.print(f"[red]Error:[/] cannot write --output: {escape(str(exc))}")
-            raise typer.Exit(code=1) from exc
+            raise typer.Exit(code=EXIT_USAGE_ERROR) from exc
 
     if report.overall == "MAJOR":
-        raise typer.Exit(code=2)
+        raise typer.Exit(code=EXIT_GATE_FAILED)
 
 
 __all__ = ["doctor", "lint"]

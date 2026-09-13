@@ -17,6 +17,12 @@ from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
+from soup_cli.utils.exit_codes import (
+    EXIT_GATE_FAILED,
+    EXIT_RUNTIME_ERROR,
+    EXIT_USAGE_ERROR,
+)
+
 # v0.56.0 evidence-loader policy (review M6 fix).
 _MAX_EVIDENCE_BYTES = 16 * 1024 * 1024  # 16 MiB
 _MAX_RUN_ID_LEN = 256
@@ -80,7 +86,7 @@ def _read_evidence_json(path: str, *, console: Console) -> dict:
     data = json.loads(raw)
     if not isinstance(data, dict):
         console.print("[red]Evidence must be a JSON object.[/]")
-        raise typer.Exit(2)
+        raise typer.Exit(EXIT_USAGE_ERROR)
     return data
 
 
@@ -97,7 +103,7 @@ def _write_json_output(
         enforce_under_cwd_and_no_symlink(output, field)
     except (TypeError, ValueError) as exc:
         console.print(f"[red]Invalid {field}:[/] {escape(str(exc))}")
-        raise typer.Exit(2) from exc
+        raise typer.Exit(EXIT_USAGE_ERROR) from exc
     atomic_write_text(json.dumps(payload, indent=2), output, field=field)
     console.print(f"[green]Wrote {escape(output)}[/]")
 
@@ -152,13 +158,13 @@ def register(app: typer.Typer, console: Console) -> None:
             _validate_run_id(run_id)
         except typer.BadParameter as exc:
             console.print(f"[red]Invalid run_id:[/] {escape(str(exc))}")
-            raise typer.Exit(2) from exc
+            raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
         try:
             canonical = validate_battery_name(battery)
         except (TypeError, ValueError) as exc:
             console.print(f"[red]Invalid battery:[/] {escape(str(exc))}")
-            raise typer.Exit(2) from exc
+            raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
         spec = get_battery_spec(canonical)
         console.print(Panel(
@@ -181,7 +187,7 @@ def register(app: typer.Typer, console: Console) -> None:
                 )
             except (RuntimeError, ValueError, TypeError, OSError) as exc:
                 console.print(f"[red]Live behaviour diff failed:[/] {escape(str(exc))}")
-                raise typer.Exit(2) from exc
+                raise typer.Exit(EXIT_RUNTIME_ERROR) from exc
             table = Table(title=f"Behaviour Diff (live) — {canonical}")
             table.add_column("Stage", style="bold")
             table.add_column("Value", justify="right")
@@ -193,24 +199,15 @@ def register(app: typer.Typer, console: Console) -> None:
             if output:
                 _write_json_output(report.to_dict(), output, console=console)
             if report.overall == "MAJOR":
-                raise typer.Exit(2)
+                raise typer.Exit(EXIT_GATE_FAILED)
             return
 
         if evidence is None:
-            # No evidence: emit neutral OK report (matches v0.56.0 diagnose
-            # policy when no probes are supplied).
             console.print(
-                "[yellow]No --evidence supplied; emitting neutral OK report.[/]"
+                "[red]No evidence supplied; pass --evidence <path.json> "
+                "or --base-model <id> to run behavior evaluation.[/]"
             )
-            payload = {
-                "run_id": run_id, "battery": canonical,
-                "pre": {"value": 1.0, "verdict": "OK", "num_probes": 0},
-                "post": {"value": 1.0, "verdict": "OK", "num_probes": 0},
-                "delta": 0.0, "overall": "OK",
-            }
-            if output:
-                _write_json_output(payload, output, console=console)
-            return
+            raise typer.Exit(EXIT_USAGE_ERROR)
 
         try:
             data = _read_evidence_json(evidence, console=console)
@@ -218,7 +215,7 @@ def register(app: typer.Typer, console: Console) -> None:
             console.print(
                 f"[red]Failed to read evidence:[/] {escape(str(exc))}"
             )
-            raise typer.Exit(2) from exc
+            raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
         try:
             report = compute_behavior_diff(
@@ -230,7 +227,7 @@ def register(app: typer.Typer, console: Console) -> None:
             )
         except (TypeError, ValueError) as exc:
             console.print(f"[red]Diff failed:[/] {escape(str(exc))}")
-            raise typer.Exit(2) from exc
+            raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
         table = Table(title=f"Behaviour Diff — {canonical}")
         table.add_column("Stage", style="bold")
@@ -245,7 +242,7 @@ def register(app: typer.Typer, console: Console) -> None:
             _write_json_output(report.to_dict(), output, console=console)
 
         if report.overall == "MAJOR":
-            raise typer.Exit(2)
+            raise typer.Exit(EXIT_GATE_FAILED)
 
     @app.command(name="capability")
     def capability_cmd(
@@ -293,7 +290,7 @@ def register(app: typer.Typer, console: Console) -> None:
             _validate_run_id(run_id)
         except typer.BadParameter as exc:
             console.print(f"[red]Invalid run_id:[/] {escape(str(exc))}")
-            raise typer.Exit(2) from exc
+            raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
         try:
             canonical = validate_suite_name(suite)
@@ -302,12 +299,12 @@ def register(app: typer.Typer, console: Console) -> None:
                 f"[red]Invalid --suite:[/] {escape(str(exc))} "
                 f"(valid: {', '.join(list_suites())})"
             )
-            raise typer.Exit(2) from exc
+            raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
         if live:
             if not model:
                 console.print("[red]--live requires --model <hf-id>.[/]")
-                raise typer.Exit(2)
+                raise typer.Exit(EXIT_USAGE_ERROR)
             from soup_cli.utils.capability_suite import run_capability_suite
 
             task_list = (
@@ -324,7 +321,7 @@ def register(app: typer.Typer, console: Console) -> None:
                 )
             except (RuntimeError, ValueError, TypeError) as exc:
                 console.print(f"[red]Capability run failed:[/] {escape(str(exc))}")
-                raise typer.Exit(2) from exc
+                raise typer.Exit(EXIT_RUNTIME_ERROR) from exc
             table = Table(title=f"Capability Suite (live) — {canonical}")
             table.add_column("Benchmark")
             table.add_column("Metric")
@@ -391,7 +388,7 @@ def register(app: typer.Typer, console: Console) -> None:
             spec = load_checklist_spec(spec_path)
         except (TypeError, ValueError, OSError) as exc:
             console.print(f"[red]Failed to load spec:[/] {escape(str(exc))}")
-            raise typer.Exit(2) from exc
+            raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
         evidence_map = None
         if evidence is not None:
@@ -401,13 +398,13 @@ def register(app: typer.Typer, console: Console) -> None:
                 console.print(
                     f"[red]Failed to read evidence:[/] {escape(str(exc))}"
                 )
-                raise typer.Exit(2) from exc
+                raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
         try:
             report = run_checklist_spec(spec, evidence=evidence_map)
         except (TypeError, ValueError) as exc:
             console.print(f"[red]CheckList run failed:[/] {escape(str(exc))}")
-            raise typer.Exit(2) from exc
+            raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
         table = Table(title="CheckList Tests")
         table.add_column("Name", style="bold")
@@ -432,7 +429,7 @@ def register(app: typer.Typer, console: Console) -> None:
             _write_json_output(report.to_dict(), output, console=console)
 
         if report.overall == "MAJOR":
-            raise typer.Exit(2)
+            raise typer.Exit(EXIT_GATE_FAILED)
 
     @app.command(name="irt-subset")
     def irt_subset_cmd(

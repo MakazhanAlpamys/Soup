@@ -5,7 +5,7 @@ Subcommands:
 - ``soup lock write``: render a ``soup.lock`` from operator-supplied
   base-model / dataset / env hashes.
 - ``soup lock check``: compare a tracked ``soup.lock`` against a
-  freshly-computed closure; exit 3 on drift.
+  freshly-computed closure; exit 2 on drift, 3 on usage/missing lock.
 - ``soup lock show``: print a tracked lock.
 """
 
@@ -18,6 +18,8 @@ import typer
 from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
+
+from soup_cli.utils.exit_codes import EXIT_GATE_FAILED, EXIT_USAGE_ERROR
 
 console = Console()
 
@@ -115,7 +117,7 @@ def show_lock_cmd(
         lock = read_lock(path)
     except (FileNotFoundError, TypeError, ValueError) as exc:
         console.print(f"[red]{escape(str(exc))}[/]")
-        raise typer.Exit(2) from exc
+        raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
     console.print(
         Panel(
@@ -139,7 +141,7 @@ def check_lock_cmd(
     env_hash: str = typer.Option(..., "--env-hash", help="64-hex current env hash"),
     base_model: str = typer.Option(..., "--base-model", help="Current base model id"),
 ):
-    """Refuse with exit 3 if the lock has drifted from current state."""
+    """Refuse with exit 2 if the lock has drifted from current state."""
     from soup_cli import __version__
     from soup_cli.utils.soup_lock import (
         SoupLock,
@@ -152,7 +154,7 @@ def check_lock_cmd(
         expected = read_lock(path)
     except (FileNotFoundError, TypeError, ValueError) as exc:
         console.print(f"[red]{escape(str(exc))}[/]")
-        raise typer.Exit(2) from exc
+        raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
     try:
         closure = compute_lock_closure(
@@ -174,7 +176,7 @@ def check_lock_cmd(
         )
     except (TypeError, ValueError) as exc:
         console.print(f"[red]{escape(str(exc))}[/]")
-        raise typer.Exit(2) from exc
+        raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
     drift = check_lock_drift(expected, actual)
     if drift.ok:
@@ -201,4 +203,4 @@ def check_lock_cmd(
             f"[yellow]Note: soup version changed "
             f"({escape(expected.soup_version)} -> {escape(__version__)})[/]"
         )
-    raise typer.Exit(3)
+    raise typer.Exit(EXIT_GATE_FAILED)

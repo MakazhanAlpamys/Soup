@@ -16,6 +16,7 @@ from rich.table import Table
 from soup_cli.data.loader import load_raw_data
 from soup_cli.data.validator import validate_and_stats
 from soup_cli.utils.embed import DEFAULT_EMBED_MODEL, embed_texts
+from soup_cli.utils.exit_codes import EXIT_GATE_FAILED, EXIT_USAGE_ERROR
 from soup_cli.utils.paths import is_under_cwd
 from soup_cli.utils.semdedup import DedupReport, greedy_semdedup
 
@@ -90,11 +91,11 @@ def validate(
         help="Exit 2 when the fraction of valid rows is below this value",
     ),
 ):
-    """Validate a dataset, returning exit 1 for input errors and 2 for unusable data."""
+    """Validate a dataset, returning exit 3 for input errors and 2 for unusable data."""
     file_path = Path(path)
     if not file_path.exists():
         console.print(f"[red]File not found: {file_path}[/]")
-        raise typer.Exit(1)
+        raise typer.Exit(EXIT_USAGE_ERROR)
 
     if fmt != "auto":
         from soup_cli.data.formats import VALID_FORMATS
@@ -104,7 +105,7 @@ def validate(
                 f"[red]Unknown --format: {fmt!r}[/]\n"
                 f"Accepted: auto, {', '.join(VALID_FORMATS)}"
             )
-            raise typer.Exit(1)
+            raise typer.Exit(EXIT_USAGE_ERROR)
 
     data = load_raw_data(file_path)
 
@@ -117,7 +118,7 @@ def validate(
             console.print(f"[dim]Auto-detected format: {fmt}[/]")
         except ValueError as exc:
             console.print(f"[red]{exc}[/]")
-            raise typer.Exit(1)
+            raise typer.Exit(EXIT_USAGE_ERROR)
 
     result = validate_and_stats(data, expected_format=fmt)
 
@@ -134,14 +135,14 @@ def validate(
 
     if total > 0 and valid == 0:
         console.print("[red]Validation failed: no usable rows remain.[/]")
-        raise typer.Exit(2)
+        raise typer.Exit(EXIT_GATE_FAILED)
 
     if total > 0 and valid / total < min_valid_fraction:
         console.print(
             f"[red]Validation failed: valid fraction {valid / total:.3f} is below "
             f"--min-valid-fraction {min_valid_fraction:.3f}.[/]"
         )
-        raise typer.Exit(2)
+        raise typer.Exit(EXIT_GATE_FAILED)
 
 
 @app.command()

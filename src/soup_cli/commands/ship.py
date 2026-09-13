@@ -19,7 +19,7 @@ Exit codes so CI can gate on the result:
 Usage errors moved off ``2`` in v0.71.38 — a typo'd flag was previously
 indistinguishable from a caught regression (both exited ``2``); ``3`` mirrors
 ``soup plan`` / ``soup env check``. Offline ``--evidence`` read/parse errors
-stay ``1``.
+exit ``3``.
 
 Leg 1 (task win) modes: ``metric`` (reuses ``eval/custom.run_eval`` accuracy),
 ``judge_score`` (reuses ``eval/judge.JudgeEvaluator``), and ``pairwise`` (true
@@ -400,22 +400,22 @@ def _verdict_from_evidence(payload: dict, *, forgetting_threshold: float) -> Shi
     """Build a verdict from an already-loaded evidence payload (no model load)."""
     task = payload.get("task")
     if not isinstance(task, dict):
-        _fail("evidence.task must be an object with 'mode', 'base', 'tuned'", _EXIT_RUNTIME)
+        _fail("evidence.task must be an object with 'mode', 'base', 'tuned'", _EXIT_USAGE)
     mode = task.get("mode", "metric")
     if mode not in SUPPORTED_TASK_MODES:
         _fail(
             f"evidence.task.mode must be one of {', '.join(SUPPORTED_TASK_MODES)}; "
             f"got {mode!r}",
-            _EXIT_RUNTIME,
+            _EXIT_USAGE,
         )
     if "base" not in task or "tuned" not in task:
-        _fail("evidence.task needs both 'base' and 'tuned' scores", _EXIT_RUNTIME)
+        _fail("evidence.task needs both 'base' and 'tuned' scores", _EXIT_USAGE)
     # A floor recorded by --emit-evidence must be honoured on read, or the same
     # scores replay to a DIFFERENT decision than the run that produced them.
     try:
         stored_floor = noise_floor_from_evidence(payload.get("noise_floor"))
     except (TypeError, ValueError) as exc:
-        _fail(f"invalid evidence.noise_floor: {exc}", _EXIT_RUNTIME)
+        _fail(f"invalid evidence.noise_floor: {exc}", _EXIT_USAGE)
     _warn_if_floor_widens(stored_floor, forgetting_threshold, source="evidence-supplied")
 
     try:
@@ -423,16 +423,16 @@ def _verdict_from_evidence(payload: dict, *, forgetting_threshold: float) -> Shi
             mode, task["base"], task["tuned"], noise_floor=stored_floor
         )
     except (TypeError, ValueError) as exc:
-        _fail(f"invalid evidence.task: {exc}", _EXIT_RUNTIME)
+        _fail(f"invalid evidence.task: {exc}", _EXIT_USAGE)
 
     raw_benchmarks = payload.get("benchmarks", {})
     if not isinstance(raw_benchmarks, dict):
-        _fail("evidence.benchmarks must be an object of {name: {base, tuned}}", _EXIT_RUNTIME)
+        _fail("evidence.benchmarks must be an object of {name: {base, tuned}}", _EXIT_USAGE)
     base_scores: Dict[str, object] = {}
     tuned_scores: Dict[str, object] = {}
     for name, entry in raw_benchmarks.items():
         if not isinstance(entry, dict) or "base" not in entry or "tuned" not in entry:
-            _fail(f"evidence.benchmarks[{name!r}] needs 'base' and 'tuned'", _EXIT_RUNTIME)
+            _fail(f"evidence.benchmarks[{name!r}] needs 'base' and 'tuned'", _EXIT_USAGE)
         base_scores[str(name)] = entry["base"]
         tuned_scores[str(name)] = entry["tuned"]
 
@@ -450,7 +450,7 @@ def _verdict_from_evidence(payload: dict, *, forgetting_threshold: float) -> Shi
             noise_floor=stored_floor,
         )
     except (TypeError, ValueError) as exc:
-        _fail(f"invalid evidence.benchmarks: {exc}", _EXIT_RUNTIME)
+        _fail(f"invalid evidence.benchmarks: {exc}", _EXIT_USAGE)
 
 
 # ---------------------------------------------------------------------------
@@ -1288,7 +1288,7 @@ def ship(
         try:
             payload = _load_evidence(evidence)
         except (OSError, ValueError, json.JSONDecodeError) as exc:
-            _fail(f"cannot read --evidence: {exc}", _EXIT_RUNTIME)
+            _fail(f"cannot read --evidence: {exc}", _EXIT_USAGE)
         # --config has two intents here:
         #   * GATE (no --emit-evidence): verify this committed evidence is bound
         #     to the committed config — refuse if config_sha drifted or is absent.
