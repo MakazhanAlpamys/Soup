@@ -891,6 +891,7 @@ nodes:
     config: {path: prompts.jsonl}
   - name: llm1
     kind: llm_text
+    config: {prompt: "Answer the request: {text}"}
   - name: judge1
     kind: judge
   - name: samp1
@@ -901,7 +902,7 @@ edges:
   - [judge1, samp1]
 ```
 
-Closed node-kind allowlist (`seed` / `llm_text` / `code` / `judge` / `validator` / `sampler`); Kahn's topological sort via `collections.deque` (deterministic, O(N+E)); cycle / self-loop / duplicate-edge / dangling-edge / unknown-kind rejection. `_MAX_NODES=256`, `_MAX_EDGES=1024`, `_MAX_FILE_BYTES=1MiB`. The recipe file must stay under cwd and **must not be a symlink** (`os.lstat + S_ISLNK` TOCTOU defence). Live offline runner against a local model lands in v0.45.1.
+Closed node-kind allowlist (`seed` / `llm_text` / `code` / `judge` / `validator` / `sampler`); Kahn's topological sort via `collections.deque` (deterministic, O(N+E)); cycle / self-loop / duplicate-edge / dangling-edge / unknown-kind rejection. `_MAX_NODES=256`, `_MAX_EDGES=1024`, `_MAX_FILE_BYTES=1MiB`. The recipe file must stay under cwd and **must not be a symlink** (`os.lstat + S_ISLNK` TOCTOU defence).
 
 
 ## Data Mixing Optimizer (BETA)
@@ -945,11 +946,19 @@ up from the last completed shard.
 Execute a Data Recipe DAG end-to-end:
 
 ```bash
-soup data recipe path/to/recipe.yaml --execute --output ./out
+soup data recipe path/to/recipe.yaml --execute --output ./out \
+    --provider ollama --model llama3.1
 ```
 
+`llm_text` and `judge` nodes support `ollama`, `anthropic`, and `vllm`; use
+`--base-url` to override the loopback endpoint for Ollama or vLLM. Running either
+node kind without `--provider` is refused so placeholder data cannot be mistaken
+for live generations. For deterministic tests only, `--offline` explicitly enables
+`llm_text(offline): ...` placeholders and makes judge nodes accept every row; the
+command prints a warning whenever this mode is active.
+
 Six node kinds now run live: **seed** (JSONL load), **llm_text** (LLM generation via
-any provider), **code** (execution via RLVR sandbox), **judge** (binary scoring),
+Ollama, Anthropic, or vLLM), **code** (execution via RLVR sandbox), **judge** (binary scoring),
 **validator** (regex or JSON schema), **sampler** (deterministic selection). Checkpoint
 written per node; resume rehydrates from per-node sidecars. Failed rows logged with
 redacted reasons (paths stripped, capped at 256 chars).

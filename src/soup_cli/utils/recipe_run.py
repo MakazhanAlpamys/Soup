@@ -268,6 +268,7 @@ def _node_llm_text(
     *,
     judge_provider: Optional[str],
     judge_model: Optional[str],
+    judge_base_url: Optional[str],
 ) -> List[Mapping[str, Any]]:
     """Call an LLM provider with ``node.config.prompt.format(**row)``."""
     prompt_template = node.config.get("prompt")
@@ -291,7 +292,9 @@ def _node_llm_text(
     from soup_cli.utils.data_forge import make_judge_provider_fn
 
     judge_fn = make_judge_provider_fn(
-        judge_provider, model=judge_model or "llama3.1"
+        judge_provider,
+        model=judge_model or "llama3.1",
+        base_url=judge_base_url,
     )
     rows = _merge_inputs(inputs)
     out_rows: List[Mapping[str, Any]] = []
@@ -317,6 +320,7 @@ def _node_judge(
     *,
     judge_provider: Optional[str],
     judge_model: Optional[str],
+    judge_base_url: Optional[str],
 ) -> List[Mapping[str, Any]]:
     """Binary OK/REJECT classification via an LLM provider.
 
@@ -341,7 +345,9 @@ def _node_judge(
     from soup_cli.utils.data_forge import make_judge_provider_fn
 
     judge_fn = make_judge_provider_fn(
-        judge_provider, model=judge_model or "llama3.1"
+        judge_provider,
+        model=judge_model or "llama3.1",
+        base_url=judge_base_url,
     )
     rows = _merge_inputs(inputs)
     kept: List[Mapping[str, Any]] = []
@@ -528,6 +534,8 @@ def run_recipe(
     resume: bool = False,
     judge_provider: Optional[str] = None,
     judge_model: Optional[str] = None,
+    judge_base_url: Optional[str] = None,
+    offline: bool = False,
 ) -> Mapping[str, Any]:
     """Execute a validated :class:`RecipeDAG` end-to-end (v0.53.7 live).
 
@@ -543,9 +551,12 @@ def run_recipe(
         resume: when True, skip nodes whose checkpoint already reports
             ``status='completed'``.
         judge_provider: route ``llm_text`` / ``judge`` nodes through this
-            v0.20.0 provider (``ollama`` / ``anthropic`` / ``vllm``). When
-            ``None``, both kinds fall back to deterministic offline stubs.
+            v0.20.0 provider (``ollama`` / ``anthropic`` / ``vllm``).
         judge_model: model name forwarded to the judge provider.
+        judge_base_url: optional Ollama or vLLM endpoint forwarded to the
+            provider factory.
+        offline: explicitly allow deterministic placeholder behaviour for
+            ``llm_text`` and accept-all behaviour for ``judge`` nodes.
 
     Returns:
         Mapping with ``status`` (``"completed"`` or ``"failed"``),
@@ -572,6 +583,21 @@ def run_recipe(
         raise TypeError("judge_provider must be a string or None")
     if judge_model is not None and not isinstance(judge_model, str):
         raise TypeError("judge_model must be a string or None")
+    if judge_base_url is not None and not isinstance(judge_base_url, str):
+        raise TypeError("judge_base_url must be a string or None")
+    if not isinstance(offline, bool):
+        raise TypeError("offline must be a bool")
+
+    has_llm_nodes = any(node.kind in {"llm_text", "judge"} for node in dag.nodes)
+    if has_llm_nodes and judge_provider is None and not offline:
+        raise ValueError(
+            "recipe contains llm_text or judge nodes; pass --provider or explicitly opt in "
+            "to placeholder output with --offline"
+        )
+    if judge_provider is not None and offline:
+        raise ValueError("judge_provider and offline mode are mutually exclusive")
+    if judge_provider is None and (judge_model is not None or judge_base_url is not None):
+        raise ValueError("judge_model and judge_base_url require judge_provider")
 
     if "\x00" in output_dir:
         raise ValueError("output_dir must not contain null bytes")
@@ -615,6 +641,7 @@ def run_recipe(
                     node, pred_outputs,
                     judge_provider=judge_provider,
                     judge_model=judge_model,
+                    judge_base_url=judge_base_url,
                 )
             elif node.kind == "code":
                 result = _node_code(node, pred_outputs)
@@ -623,6 +650,7 @@ def run_recipe(
                     node, pred_outputs,
                     judge_provider=judge_provider,
                     judge_model=judge_model,
+                    judge_base_url=judge_base_url,
                 )
             elif node.kind == "validator":
                 result = _node_validator(node, pred_outputs)
