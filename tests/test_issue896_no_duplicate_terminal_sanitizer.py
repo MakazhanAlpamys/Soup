@@ -189,15 +189,18 @@ class TestTheScannerCanActuallyFail:
         """
         probe = SRC_ROOT / "zz_unparseable_guard_probe.py"
         relpath = probe.relative_to(REPO_ROOT).as_posix()
-        probe.write_text("def broken(:\n", encoding="utf-8")
-        subprocess.run(
-            ["git", "add", "-N", "--", relpath],
-            cwd=REPO_ROOT,
-            capture_output=True,
-            text=True,
-            check=True,
-        )
         try:
+            # Both the write and the registration live inside the try: if
+            # ``git add -N`` fails, the probe is already on disk and the
+            # cleanup below must still run.
+            probe.write_text("def broken(:\n", encoding="utf-8")
+            subprocess.run(
+                ["git", "add", "-N", "--", relpath],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
             assert relpath in {
                 p.relative_to(REPO_ROOT).as_posix() for p in _tracked_python_files()
             }, "the probe must really be part of the scanned tree"
