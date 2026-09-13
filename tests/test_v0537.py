@@ -663,7 +663,7 @@ class TestRunRecipeLive:
         assert result["node_row_counts"]["vchk"] == 1
         assert result["node_row_counts"]["sink"] == 1
 
-    def test_llm_text_offline_stub(self, tmp_path, monkeypatch):
+    def test_llm_text_explicit_offline_stub(self, tmp_path, monkeypatch):
         from soup_cli.utils.recipe_dag import parse_recipe
         from soup_cli.utils.recipe_run import run_recipe
 
@@ -685,14 +685,14 @@ class TestRunRecipeLive:
                 "edges": [["seed1", "llm"], ["llm", "sink"]],
             }
         )
-        result = run_recipe(dag, output_dir=str(out_dir))
+        result = run_recipe(dag, output_dir=str(out_dir), offline=True)
         assert result["status"] == "completed"
         # Offline stub injects llm column
         sink = (out_dir / "sink.jsonl").read_text(encoding="utf-8").strip().splitlines()
         first = json.loads(sink[0])
         assert "llm" in first
 
-    def test_judge_node_offline_default_keeps_all(self, tmp_path, monkeypatch):
+    def test_judge_node_explicit_offline_keeps_all(self, tmp_path, monkeypatch):
         from soup_cli.utils.recipe_dag import parse_recipe
         from soup_cli.utils.recipe_run import run_recipe
 
@@ -713,7 +713,7 @@ class TestRunRecipeLive:
                 "edges": [["seed1", "j"], ["j", "sink"]],
             }
         )
-        result = run_recipe(dag, output_dir=str(out_dir))
+        result = run_recipe(dag, output_dir=str(out_dir), offline=True)
         assert result["node_row_counts"]["j"] == 2
 
     def test_checkpoint_written_on_completion(self, tmp_path, monkeypatch):
