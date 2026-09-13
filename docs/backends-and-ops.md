@@ -586,13 +586,12 @@ as a warning that named this deadline, so there was exactly one release of notic
 deliberately, because a config written against a newer Soup has to keep running on an
 older wheel for at least one release. The refusal is the same everywhere a `SoupConfig`
 is built from a file or a string: `soup train` exits 1 before the training stack is
-imported, `soup sweep` / `soup doctor --config` / `soup ship --config` refuse the same
-way, and the Web UI / API loader raises `ValueError` with the same text (the Web UI shows
-it). `soup plan` and `soup apply` refuse an unknown key the same way, exiting 1
-with the same message. Nothing is defaulted and nothing is guessed: the suggestion is a hint for you, not
-a substitution the loader makes. A root-level `lora:` block is not an unknown key — the
-schema has accepted that spelling and moved it under `training` since v0.40.1, and the
-detector applies the same remap before it looks.
+imported, `soup sweep` / `soup doctor --config` / `soup ship --config` / `soup plan` /
+`soup apply` refuse the same way, and the Web UI / API loader raises `ValueError` with
+the same text (the Web UI shows it). Nothing is defaulted and nothing is guessed: the
+suggestion is a hint for you, not a substitution the loader makes. A root-level `lora:`
+block is not an unknown key — the schema has accepted that spelling and moved it under
+`training` since v0.40.1, and the detector applies the same remap before it looks.
 
 A config that names a key your installed Soup does not have usually means one of two
 things: a typo (take the suggestion), or a field added after your version shipped
