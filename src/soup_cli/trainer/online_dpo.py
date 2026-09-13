@@ -33,6 +33,7 @@ from typing import Optional
 from rich.console import Console
 
 from soup_cli.config.schema import SoupConfig
+from soup_cli.data.chat_templates import apply_chat_template_override
 from soup_cli.utils.gpu import (
     bf16_fp16_flags,
     estimate_batch_size,
@@ -347,6 +348,9 @@ class OnlineDPOTrainerWrapper:
         )
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
+        apply_chat_template_override(
+            self.tokenizer, cfg.data.chat_template, console=console
+        )
         # Online DPO renders conversational prompts -> a chat template is
         # required. Fall back to a template WITH a generation cue when the model
         # ships none (so add_generation_prompt actually opens the assistant turn).

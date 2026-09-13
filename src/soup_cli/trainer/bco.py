@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Optional
 from rich.console import Console
 
 from soup_cli.config.schema import SoupConfig
+from soup_cli.data.chat_templates import apply_chat_template_override
 from soup_cli.utils.gpu import (
     bf16_fp16_flags,
     estimate_batch_size,
@@ -133,6 +134,10 @@ class BCOTrainerWrapper:
             self._setup_unsloth(cfg, tcfg)
         else:
             self._setup_transformers(cfg, tcfg)
+
+        apply_chat_template_override(
+            self.tokenizer, cfg.data.chat_template, console=console
+        )
 
         trainable, total = self.model.get_nb_trainable_parameters()
         pct = 100 * trainable / total
