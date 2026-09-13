@@ -381,7 +381,13 @@ class TestMLXDoctor:
         result = CliRunner().invoke(app, ["doctor"])
 
         assert result.exit_code == 0, result.output
-        assert "Apple Silicon only" not in result.output
+        # "Apple Silicon only" was asserted here originally and is vacuous: the
+        # string exists nowhere in src/, so it could never fail. Assert on a
+        # string the MLX branch really does emit -- the sibling test above
+        # asserts this exact hint IS present when apple_silicon is True -- so
+        # this now fails if `doctor` starts advertising MLX off Apple Silicon.
+        assert 'pip install "soup-cli[mlx]"' not in result.output
+        assert "MLX" not in result.output
 
 
 if __name__ == "__main__":
