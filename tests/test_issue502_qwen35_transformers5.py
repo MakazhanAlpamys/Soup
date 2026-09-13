@@ -146,9 +146,13 @@ def test_peft_floor_is_the_validated_transformers5_adapter_stack():
 
 
 def test_doctor_training_bounds_match_declared_extra():
-    from soup_cli.commands.doctor import _MAX_EXCLUSIVE, DEPS
+    from soup_cli.commands.doctor import _MAX_EXCLUSIVE, EXTRA_GROUPS
 
-    doctor_floors = {package: floor for _, package, floor, _ in DEPS}
+    doctor_floors = {
+        package: floor
+        for _, members in EXTRA_GROUPS
+        for _, package, floor in members
+    }
     for package in _RUNTIME_FLOORS:
         requirement = _extra_requirement("train", package)
         assert doctor_floors[package] == _single_bound(requirement, ">=")

@@ -231,12 +231,49 @@ def tool_data_inspect(args: dict) -> dict:
 
 
 def tool_data_validate(args: dict) -> dict:
-    """`soup data validate` — format-compliance report."""
+    """`soup data validate` — format-compliance report.
+
+    Resolves ``format`` exactly as ``tool_data_doctor`` below already does,
+    and for the same reason (#878). ``validator.validate_and_stats`` computes
+    ``check_format = bool(expected_format and expected_format in
+    VALID_FORMATS)``, so an unrecognised format silently turns the format
+    check *off* and a missing one never turns it on -- both answer "every row
+    valid" for a reason that has nothing to do with the data. #869 guarded the
+    CLI against that; this surface kept reporting the old verdict, so one file
+    got two answers depending on which surface asked.
+
+    The allowlist is ``VALID_FORMATS`` itself rather than a copy: a
+    hand-written second tuple is how the two surfaces drifted apart in the
+    first place.
+    """
+    from soup_cli.data import formats as _formats
     from soup_cli.data.validator import validate_and_stats
 
     rows = _load_data_rows(_require_str(args, "data"))
+    # Absent means auto; an empty or blank string is a value the caller
+    # supplied and it is not a format, so it is refused -- `soup data
+    # validate --format ""` exits 1 rather than auto-detecting, and this
+    # surface has to answer the same way. (`tool_data_doctor` below still
+    # spells this `or "auto"`, so it reads a blank string as omitted; noted
+    # in #878 rather than changed here.)
     fmt = _opt_str(args, "format")
-    return validate_and_stats(rows, expected_format=fmt)
+    fmt = "auto" if fmt is None else fmt
+    if fmt != "auto" and fmt not in _formats.VALID_FORMATS:
+        raise McpToolError(
+            f"unknown format {fmt!r}; accepted: auto, "
+            + ", ".join(sorted(_formats.VALID_FORMATS))
+        )
+    if fmt == "auto":
+        try:
+            fmt = _formats.detect_format(rows)
+        except ValueError as exc:
+            raise McpToolError(
+                "could not auto-detect data format; pass 'format'"
+            ) from exc
+    # The resolved format travels back with the report: without it a caller
+    # cannot tell which format was checked, which makes the schema's
+    # "omit to auto-detect" unobservable even once it is true.
+    return {**validate_and_stats(rows, expected_format=fmt), "format": fmt}
 
 
 def tool_data_score(args: dict) -> dict:
@@ -808,7 +845,11 @@ def _readonly_specs() -> list[ToolSpec]:
                     "data": _DATA_ARG,
                     "format": {
                         "type": "string",
-                        "description": "Expected format; omit to auto-detect.",
+                        "description": (
+                            "Expected format (alpaca/sharegpt/chatml/dpo/...); "
+                            "'auto' or omitted auto-detects. The resolved "
+                            "format is returned as 'format'."
+                        ),
                     },
                 },
                 "required": ["data"],

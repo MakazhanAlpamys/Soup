@@ -622,8 +622,12 @@ class TestBuildFormatRow:
         )
         fn = build_format_row(tok, cfg)
         out = fn(self._row())
-        assert "text" in out
-        assert "input_ids" not in out
+        # #785: the legacy (both-False) path now PRE-tokenizes with
+        # add_special_tokens=False so TRL never re-adds the template's special
+        # tokens (which doubled the BOS). Full-sequence: every token is a target.
+        assert "text" not in out
+        assert "input_ids" in out
+        assert out["labels"] == out["input_ids"]
 
     def test_no_chat_template_calling_format_row_raises(self):
         """v0.36.0 Part C: previous silent fallback now raises ValueError."""

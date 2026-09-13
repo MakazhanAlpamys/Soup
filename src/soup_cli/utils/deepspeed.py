@@ -410,8 +410,11 @@ def attach_empty_param_group_guard(trainer) -> bool:
     if not callable(original):
         return False
 
-    def create_optimizer():
-        optimizer = original()
+    def create_optimizer(model=None):
+        if model is not None:
+            optimizer = original(model)
+        else:
+            optimizer = original()
         dropped = prune_empty_param_groups(optimizer)
         if dropped:
             from rich.console import Console

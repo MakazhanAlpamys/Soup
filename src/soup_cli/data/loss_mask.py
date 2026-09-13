@@ -324,6 +324,117 @@ def build_assistant_only_labels(
     return _truncate(full_ids, labels, max_length)
 
 
+def build_full_sequence_labels(
+    messages: Sequence[dict],
+    tokenizer: Any,
+    max_length: int = 2048,
+) -> dict[str, list[int]]:
+    """Build labels where EVERY token contributes to loss (no masking).
+
+    The ``train_on_responses_only=False`` / ``train_on_messages_with_train_field
+    =False`` path. Pre-tokenises with ``add_special_tokens=False`` (via
+    ``_tokenize_only``) so the chat template is the single source of special
+    tokens, matching inference and ``apply_chat_template(tokenize=True)`` (#785).
+
+    Previously this path handed TRL a ``{"text"}`` column, and TRL's
+    language-modeling ``tokenize_fn`` re-tokenised it with the tokenizer's
+    default ``add_special_tokens=True``. A template that renders
+    ``{{ bos_token }}`` then trained on a doubled BOS, one token off from
+    post-#782 inference.
+    """
+    _check_messages(messages)
+    _validate_max_length(max_length)
+    if not getattr(tokenizer, "chat_template", None):
+        raise ValueError(
+            "tokenizer has no chat_template — cannot render messages for the "
+            "text (train_on_responses_only=false) path"
+        )
+    full_ids = _tokenize_only(tokenizer, messages)
+    # #785/#788: the BOS fix must not cost the training EOS. On ``main`` the
+    # legacy text rows reached TRL as ``{"text": ...}``, and TRL 0.29.1's
+    # language-modeling path appends ``eos_token`` as a STRING to every row that
+    # does not already end with it (``sft_trainer.py`` ``add_eos``), before
+    # tokenizing -- independent of the tokenizer's post-processor. Pre-tokenising
+    # here skips that TRL step, so reproduce its rule in token space: append the
+    # EOS id when the sequence does not already end on it. Probing the
+    # post-processor instead (an earlier #788 attempt) under-appended for
+    # BOS-only and Qwen-shaped tokenizers, dropping the stop token ``main``
+    # trained on and teaching run-on generation (the failure `soup data doctor`'s
+    # eos_in_labels check exists to catch).
+    full_ids = append_training_eos(tokenizer, full_ids)
+    labels = list(full_ids)
+    return _truncate(full_ids, labels, max_length)
+
+
+def append_training_eos(tokenizer: Any, input_ids: list[int]) -> list[int]:
+    """Append the EOS the SFT language-modeling path trains on (TRL's rule).
+
+    Reproduces TRL 0.29.1's ``add_eos`` (``sft_trainer.py``): the trained text row
+    ends in ``eos_token`` unless it already does, regardless of whether the
+    tokenizer's post-processor would append one. #785 pre-tokenises the rendered
+    template so TRL never runs ``add_eos``; this puts the stop token back in token
+    space so the pre-tokenised row trains on the same EOS ``main`` did.
+
+    Used by the live-training path (:func:`build_full_sequence_labels`). The
+    ``soup data preprocess`` cache path deliberately does NOT use this -- it
+    tokenises exactly as ``main`` (``add_special_tokens=True``, so the
+    post-processor supplies the EOS) and only drops #785's duplicated leading
+    BOS via :func:`strip_doubled_leading_bos`. Its EOS is therefore whatever the
+    post-processor added, not TRL's ``add_eos`` rule, and the resulting
+    cache-vs-live mismatch is tracked separately in #791.
+    """
+    eos_id = _resolve_eos_token_id(tokenizer)
+    if eos_id is not None and (not input_ids or input_ids[-1] != eos_id):
+        return input_ids + [eos_id]
+    return input_ids
+
+
+def strip_doubled_leading_bos(
+    tokenizer: Any, input_ids: list[int], attention_mask: list[int]
+) -> tuple[list[int], list[int]]:
+    """Drop only the one duplicated leading BOS #785 introduced on the cache path.
+
+    ``soup data preprocess`` tokenises the rendered chat template exactly as
+    ``main`` did (``add_special_tokens=True``), which keeps ``main``'s truncation
+    reservation and post-processor EOS. The only #785 defect on this path is the
+    doubled BOS: a template rendering ``{{ bos_token }}`` on a tokenizer whose
+    post-processor also prepends BOS yields ``[bos, bos, ...]``. Drop exactly that
+    duplicate (the post-processor's leading copy) and nothing else, so the row is
+    byte-identical to ``main`` apart from the extra BOS and matches post-#782
+    inference's one BOS.
+
+    A single post-processor BOS (no template BOS, e.g. Zephyr/TinyLlama) or none
+    at all (Qwen) is not a duplicate and is left as ``main`` had it -- the cache
+    is deliberately pinned to ``main`` here, not to the live path's
+    template-only rule, and that difference (the live path now yields zero
+    leading BOS for a ``data.chat_template`` preset while the cache keeps
+    ``main``'s one) is tracked in #876.
+    """
+    bos_id = _resolve_bos_token_id(tokenizer)
+    if (
+        bos_id is not None
+        and len(input_ids) >= 2
+        and input_ids[0] == bos_id
+        and input_ids[1] == bos_id
+    ):
+        return input_ids[1:], attention_mask[1:]
+    return input_ids, attention_mask
+
+
+def _resolve_bos_token_id(tokenizer: Any) -> Optional[int]:
+    """Return an int BOS token id, or None. Mirrors :func:`_resolve_eos_token_id`."""
+    candidate = getattr(tokenizer, "bos_token_id", None)
+    if isinstance(candidate, bool):
+        return None
+    if isinstance(candidate, int):
+        return candidate
+    if isinstance(candidate, list):
+        for entry in candidate:
+            if isinstance(entry, int) and not isinstance(entry, bool):
+                return entry
+    return None
+
+
 def _resolve_eos_token_id(tokenizer: Any) -> Optional[int]:
     """Return an int EOS/EOT token id, or None if undetermined.
 

@@ -95,8 +95,7 @@ def test_divergence_matches_double_precision_reference(dtype_name, divergence) -
         expected = (ps * torch.log(ps / pt)).sum()
     else:
         mixture = (ps + pt) / 2
-        expected = ((ps * torch.log(ps / mixture)).sum()
-                    + (pt * torch.log(pt / mixture)).sum()) / 2
+        expected = ((ps * torch.log(ps / mixture)).sum() + (pt * torch.log(pt / mixture)).sum()) / 2
     expected *= temperature**2
 
     actual = _compute_distill_term(student, teacher, divergence, temperature=temperature)

@@ -42,9 +42,91 @@ class DataInspectRequest(PydanticBaseModel):
     limit: int = Field(default=50, ge=1, le=_MAX_INSPECT_LIMIT)
 
 
+class TrainLogBuffer:
+    """Thread-safe bounded ring buffer for subprocess output lines."""
+
+    def __init__(self, maxlen: int = 10000):
+        self._maxlen = maxlen
+        self._lines: list[tuple[int, str]] = []
+        self._lock = threading.Lock()
+        self._new_line_cond = threading.Condition(self._lock)
+        self._done = False
+        self._total_emitted = 0
+
+    def append(self, text: str) -> None:
+        with self._new_line_cond:
+            idx = self._total_emitted
+            self._total_emitted += 1
+            self._lines.append((idx, text))
+            if len(self._lines) > self._maxlen:
+                self._lines.pop(0)
+            self._new_line_cond.notify_all()
+
+    def mark_done(self) -> None:
+        with self._new_line_cond:
+            self._done = True
+            self._new_line_cond.notify_all()
+
+    def is_done(self) -> bool:
+        with self._lock:
+            return self._done
+
+    def get_lines_from(self, start_idx: int) -> list[tuple[int, str]]:
+        with self._lock:
+            return [item for item in self._lines if item[0] >= start_idx]
+
+    def wait_for_lines_or_done(
+        self, next_idx: int, timeout: float = 0.5
+    ) -> tuple[list[tuple[int, str]], bool]:
+        """Wait until lines >= next_idx are available or process is marked done."""
+        with self._new_line_cond:
+            available = [item for item in self._lines if item[0] >= next_idx]
+            if available or self._done:
+                return available, self._done
+            self._new_line_cond.wait(timeout=timeout)
+            available = [item for item in self._lines if item[0] >= next_idx]
+            return available, self._done
+
+
+def _drain_stdout_worker(proc: subprocess.Popen, log_buffer: TrainLogBuffer) -> None:
+    """Continuously read stdout of proc until EOF and write to log_buffer."""
+    stdout = getattr(proc, "stdout", None)
+    if stdout is None:
+        log_buffer.mark_done()
+        return
+
+    try:
+        while True:
+            raw_line = stdout.readline()
+            if not raw_line or raw_line == b"":
+                break
+            if isinstance(raw_line, bytes):
+                text = raw_line.decode("utf-8", errors="replace").rstrip("\n\r")
+            elif isinstance(raw_line, str):
+                text = raw_line.rstrip("\n\r")
+            else:
+                break
+            log_buffer.append(text)
+    except (ValueError, OSError) as exc:
+        logger.debug("Drain worker exception: %s", exc)
+    finally:
+        try:
+            stdout.close()
+        except Exception:
+            pass
+        log_buffer.mark_done()
+
+
+def _resolve_train_argv(config_path: str) -> list[str]:
+    """Construct command-line arguments for launching training subprocess."""
+    return [sys.executable, "-m", "soup_cli", "train", "--config", config_path, "--yes"]
+
+
 # Global state for training process
 _train_process: Optional[subprocess.Popen] = None
 _train_config_path: Optional[str] = None
+_train_log_buffer: Optional[TrainLogBuffer] = None
+_train_drain_thread: Optional[threading.Thread] = None
 _train_lock = threading.Lock()
 
 # Auth token generated at startup — printed to console for the user.
@@ -143,7 +225,28 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
     from fastapi.responses import HTMLResponse
     from fastapi.staticfiles import StaticFiles
 
-    app = FastAPI(title="Soup Web UI", version="1.0.0")
+    # #731: FastAPI's interactive docs describe every route, parameter and
+    # schema, and served none of it behind a token -- so a `soup ui --public`
+    # bind let anyone on the LAN enumerate the whole API surface. Gating them
+    # behind `_verify_token` does not work: `/docs` is a browser navigation and
+    # Swagger cannot attach a Bearer header to it (the #687 constraint), so
+    # gating would break the page for the developer while `/openapi.json` stayed
+    # readable by curl. Passing `None` removes the routes outright -- there is
+    # no handler left to reach -- and loopback keeps the convenience.
+    _docs_enabled = _is_loopback(host)
+    app = FastAPI(
+        title="Soup Web UI",
+        version="1.0.0",
+        openapi_url="/openapi.json" if _docs_enabled else None,
+        docs_url="/docs" if _docs_enabled else None,
+        redoc_url="/redoc" if _docs_enabled else None,
+        # Derived from `swagger_ui_oauth2_redirect_url`, not from `docs_url`:
+        # leaving it at its default keeps `/docs/oauth2-redirect` serving even
+        # once `/docs` is gone.
+        swagger_ui_oauth2_redirect_url=(
+            "/docs/oauth2-redirect" if _docs_enabled else None
+        ),
+    )
 
     # Restrict CORS to the origin we actually serve. When `host == "0.0.0.0"`
     # the literal `http://0.0.0.0:<port>` is never a browser origin, so we
@@ -370,6 +473,14 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
 
             try:
                 load_config_from_string(req.config_yaml)
+            except ValueError as exc:
+                # The loader's own message names the field and the suggestion;
+                # an unknown key now refuses here (#879), so this is where a
+                # Web UI user learns which key. Rendered through escapeHtml().
+                logger.warning("Invalid training config: %s", exc)
+                raise HTTPException(
+                    status_code=400, detail=f"Invalid training configuration: {exc}"
+                )
             except Exception as exc:
                 logger.warning("Invalid training config: %s", exc)
                 raise HTTPException(
@@ -388,10 +499,19 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
 
             _train_config_path = config_path
             _train_process = subprocess.Popen(
-                [sys.executable, "-m", "soup_cli", "train", "--config", config_path, "--yes"],
+                _resolve_train_argv(config_path),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
             )
+            global _train_log_buffer, _train_drain_thread
+            _train_log_buffer = TrainLogBuffer(maxlen=10000)
+            _train_drain_thread = threading.Thread(
+                target=_drain_stdout_worker,
+                args=(_train_process, _train_log_buffer),
+                daemon=True,
+                name="soup_train_drain",
+            )
+            _train_drain_thread.start()
             return {"started": True, "pid": _train_process.pid}
 
     @app.get("/api/train/status", dependencies=[Depends(_verify_token)])
@@ -481,26 +601,28 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
             skip_count = int(last_event_id) + 1
 
         def _generate_log_events():
-            line_index = 0
             with _train_lock:
-                proc = _train_process
-            if proc is None:
+                buf = _train_log_buffer
+            if buf is None:
                 yield "event: done\ndata: {}\n\n"
                 return
 
-            try:
-                for raw_line in proc.stdout:
-                    if isinstance(raw_line, bytes):
-                        raw_line = raw_line.decode("utf-8", errors="replace")
-                    text = raw_line.rstrip("\n\r")
-                    if line_index < skip_count:
-                        line_index += 1
-                        continue
-                    data = json_mod.dumps({"line": text, "id": line_index})
-                    yield f"id: {line_index}\ndata: {data}\n\n"
-                    line_index += 1
-            except (ValueError, OSError):
-                pass
+            current_idx = skip_count
+            while True:
+                lines, is_done = buf.wait_for_lines_or_done(current_idx, timeout=0.5)
+                for idx, text in lines:
+                    data = json_mod.dumps({"line": text, "id": idx})
+                    yield f"id: {idx}\ndata: {data}\n\n"
+                    current_idx = idx + 1
+
+                if is_done:
+                    # Drain any remaining lines buffered before completion
+                    remaining = buf.get_lines_from(current_idx)
+                    for idx, text in remaining:
+                        data = json_mod.dumps({"line": text, "id": idx})
+                        yield f"id: {idx}\ndata: {data}\n\n"
+                        current_idx = idx + 1
+                    break
 
             yield "event: done\ndata: {}\n\n"
 
@@ -713,7 +835,10 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
             # Validate
             load_config_from_string(yaml_str)
             return {"yaml": yaml_str}
-        except (ValueError, TypeError) as exc:
+        except ValueError as exc:
+            logger.warning("Config form validation error: %s", exc)
+            return {"error": f"Invalid configuration: {exc}"}
+        except TypeError as exc:
             logger.warning("Config form validation error: %s", exc)
             return {"error": "Invalid configuration"}
 

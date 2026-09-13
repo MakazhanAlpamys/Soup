@@ -686,29 +686,12 @@ class LoadedMole:
         Returns ``(response, prompt_tokens, completion_tokens)`` so the serve
         chat handler can use it interchangeably with ``_generate_response``.
         """
-        tokenizer = self.tokenizer
-        if (
-            hasattr(tokenizer, "apply_chat_template")
-            and getattr(tokenizer, "chat_template", None)
-        ):
-            text = tokenizer.apply_chat_template(
-                messages, tokenize=False, add_generation_prompt=True
-            )
-        else:
-            parts = []
-            for msg in messages:
-                role = msg.get("role")
-                content = msg.get("content", "")
-                if role == "system":
-                    parts.append(f"System: {content}")
-                elif role == "user":
-                    parts.append(f"User: {content}")
-                elif role == "assistant":
-                    parts.append(f"Assistant: {content}")
-            parts.append("Assistant:")
-            text = "\n".join(parts)
+        from soup_cli.utils.vllm import encode_chat_prompt
 
-        inputs = tokenizer(text, return_tensors="pt")
+        tokenizer = self.tokenizer
+        inputs = encode_chat_prompt(
+            messages, tokenizer, fallback_on_error=False, return_tensors="pt"
+        )
         device = getattr(self.model, "device", None)
         input_ids = inputs["input_ids"]
         attention_mask = inputs["attention_mask"]

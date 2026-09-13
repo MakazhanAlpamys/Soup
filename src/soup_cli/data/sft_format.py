@@ -26,6 +26,7 @@ from soup_cli.config.schema import DataConfig
 from soup_cli.data.chat_templates import apply_chat_template_override
 from soup_cli.data.loss_mask import (
     build_assistant_only_labels,
+    build_full_sequence_labels,
     build_per_message_train_labels,
 )
 
@@ -89,7 +90,7 @@ def build_format_row(
             tokenizer, max_length, include_eot=include_eot
         )
     else:
-        inner = _legacy_text_format_row(tokenizer)
+        inner = _build_full_sequence_format_row(tokenizer, max_length)
     return _wrap_with_prompt_strategy(
         _wrap_with_reasoning_effort(inner, reasoning_effort),
         prompt_strategy_spec,
@@ -174,22 +175,44 @@ def _build_per_message_format_row(
     return format_row
 
 
-def _legacy_text_format_row(tokenizer: Any) -> Callable[[dict], dict]:
+def _build_full_sequence_format_row(
+    tokenizer: Any, max_length: int
+) -> Callable[[dict], dict]:
+    """Legacy (both flags False) path: train on every token, no masking.
+
+    #785: pre-tokenise with ``add_special_tokens=False`` so TRL skips its own
+    language-modeling ``tokenize_fn`` (which re-adds the tokenizer's default
+    special tokens and doubled the BOS on ``{{ bos_token }}`` templates). The
+    rendered chat template is the single source of special tokens, matching
+    inference after #782.
+    """
+
     def format_row(example: dict) -> dict:
-        if not getattr(tokenizer, "chat_template", None):
-            # v0.36.0 Part C: hard error replaces the silent
-            # ``f"{role}: {content}"`` fallback that produced garbage
-            # training data on tokenizers without a chat template.
-            raise ValueError(
-                "Tokenizer has no chat_template. Pass "
-                "data.chat_template: chatml (or llama3/qwen2.5/mistral/"
-                "gemma3/phi4/deepseek-r1) in soup.yaml, or supply a raw "
-                "Jinja string. The previous silent f-string fallback "
-                "produced wrong loss labels and was removed in v0.36.0."
-            )
-        text = tokenizer.apply_chat_template(
-            example["messages"], tokenize=False, add_generation_prompt=False
+        return build_full_sequence_labels(
+            example["messages"], tokenizer, max_length=max_length
         )
-        return {"text": text}
+
+    return format_row
+
+
+def _legacy_text_format_row(tokenizer: Any) -> Callable[[dict], dict]:
+    """No-template fallback for a masking config: reached from
+    :func:`build_format_row` only when a masking flag is set but the tokenizer has
+    no ``chat_template``, so it always raises.
+
+    #788: the ``{"text": rendered}`` return this used to produce is dead now that
+    the full-sequence path pre-tokenises (returning ``input_ids``), so it is gone;
+    what remains is the hard error that (v0.36.0 Part C) replaced the silent
+    ``f"{role}: {content}"`` fallback which produced garbage training data.
+    """
+
+    def format_row(example: dict) -> dict:
+        raise ValueError(
+            "Tokenizer has no chat_template. Pass "
+            "data.chat_template: chatml (or llama3/qwen2.5/mistral/"
+            "gemma3/phi4/deepseek-r1) in soup.yaml, or supply a raw "
+            "Jinja string. The previous silent f-string fallback "
+            "produced wrong loss labels and was removed in v0.36.0."
+        )
 
     return format_row

@@ -1,5 +1,7 @@
 """Tests for soup doctor command."""
 
+import re
+import sys
 from unittest.mock import patch
 
 from typer.testing import CliRunner
@@ -8,6 +10,14 @@ from soup_cli.cli import app
 from soup_cli.commands.doctor import _version_ok
 
 runner = CliRunner()
+
+# Rich/Typer emits per-character ANSI escapes when colour is forced
+# (FORCE_COLOR=1), which would break substring assertions on commands.
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _strip_ansi(text: str) -> str:
+    return _ANSI_RE.sub("", text)
 
 
 # --- _version_ok tests ---
@@ -111,7 +121,7 @@ def test_doctor_checks_optional_deps():
 
 
 def test_doctor_missing_dep():
-    """soup doctor reports missing required dep."""
+    """soup doctor reports a missing required dep and exits non-zero (#828)."""
     with patch(
         "soup_cli.commands.doctor.DEPS",
         [
@@ -119,7 +129,7 @@ def test_doctor_missing_dep():
         ],
     ):
         result = runner.invoke(app, ["doctor"])
-        assert result.exit_code == 0
+        assert result.exit_code == 1
         assert "MISSING" in result.output
 
 
@@ -137,6 +147,183 @@ def test_doctor_outdated_dep():
 
 
 # --- NCCL Check tests ---
+
+
+def test_doctor_missing_train_extra_suggests_extra(monkeypatch):
+    """A core-only install suggests the [train] extra, not bare floors (#828)."""
+    for name in (
+        "torch",
+        "transformers",
+        "peft",
+        "trl",
+        "datasets",
+        "bitsandbytes",
+        "accelerate",
+    ):
+        monkeypatch.setitem(sys.modules, name, None)
+    result = runner.invoke(app, ["doctor"])
+    assert result.exit_code == 0
+    out = _strip_ansi(result.output)
+    assert 'pip install "soup-cli[train]"' in out
+    assert "torch>=2.6.0" not in out
+    assert "transformers>=5.16.1" not in out
+    assert "peft>=0.20.0" not in out
+    assert "trl>=0.29.0" not in out
+    assert "datasets>=2.14.0" not in out
+    assert "bitsandbytes>=0.41.0" not in out
+    assert "accelerate>=0.27.0" not in out
+
+
+def test_doctor_suggestion_is_colour_safe(monkeypatch):
+    """The [train] suggestion survives Rich highlighting (#828 review)."""
+    from rich.console import Console
+
+    monkeypatch.setattr("soup_cli.commands.doctor.console", Console(force_terminal=True))
+    for name in (
+        "torch",
+        "transformers",
+        "peft",
+        "trl",
+        "datasets",
+        "bitsandbytes",
+        "accelerate",
+    ):
+        monkeypatch.setitem(sys.modules, name, None)
+    result = runner.invoke(app, ["doctor"])
+    assert result.exit_code == 0
+    assert 'pip install "soup-cli[train]"' in _strip_ansi(result.output)
+
+
+def test_doctor_fix_all_line_keeps_extra_marker(monkeypatch):
+    """The Fix all line must not drop [train] to Rich markup (#828 review)."""
+    for name in (
+        "torch",
+        "transformers",
+        "peft",
+        "trl",
+        "datasets",
+        "bitsandbytes",
+        "accelerate",
+    ):
+        monkeypatch.setitem(sys.modules, name, None)
+    result = runner.invoke(app, ["doctor"])
+    assert result.exit_code == 0
+    out = _strip_ansi(result.output)
+    assert "Fix all:" in out
+    after = out.split("Fix all:", 1)[1]
+    assert 'pip install "soup-cli[train]"' in after
+
+
+def test_doctor_table_keeps_extra_marker(monkeypatch):
+    """The Required column must render [train] literally, not blank (#828 review)."""
+    for name in (
+        "torch",
+        "transformers",
+        "peft",
+        "trl",
+        "datasets",
+        "bitsandbytes",
+        "accelerate",
+    ):
+        monkeypatch.setitem(sys.modules, name, None)
+    result = runner.invoke(app, ["doctor"])
+    out = _strip_ansi(result.output)
+    torch_rows = [line for line in out.splitlines() if "torch" in line]
+    assert torch_rows, "expected a table row for torch"
+    assert any("[train]" in line for line in torch_rows)
+
+
+def test_doctor_incompatible_train_member_is_reported(monkeypatch):
+    """A [train] member past its breaking-major ceiling must add an issue (#828 review)."""
+    monkeypatch.setattr(
+        "soup_cli.commands.doctor.EXTRA_GROUPS",
+        [("train", [("transformers", "transformers", "5.16.1")])],
+    )
+    monkeypatch.setattr(
+        "soup_cli.commands.doctor._installed_version_str", lambda import_name, pkg_name: "6.1.0"
+    )
+    result = runner.invoke(app, ["doctor"])
+    out = _strip_ansi(result.output)
+    assert "INCOMPATIBLE" in out
+    assert 'Downgrade transformers: pip install "transformers>=5.16.1,<6.0.0"' in out
+    assert "All checks passed!" not in out
+
+
+def test_doctor_out_of_range_train_member_is_reported(monkeypatch):
+    """An installed-but-out-of-range [train] member must add an issue (#828 review)."""
+    monkeypatch.setattr(
+        "soup_cli.commands.doctor.EXTRA_GROUPS",
+        [("train", [("pydantic", "pydantic", "999.0.0")])],
+    )
+    result = runner.invoke(app, ["doctor"])
+    out = _strip_ansi(result.output)
+    assert "outdated" in out
+    assert "All checks passed!" not in out
+
+
+def test_doctor_nvidia_train_suggestion_is_two_step(monkeypatch):
+    """On an NVIDIA box the [train] suggestion installs torch from its own index (#828 review)."""
+    monkeypatch.setattr(
+        "soup_cli.commands.doctor._nvidia_smi_cuda_version", lambda: (13, 0)
+    )
+    for name in ("torch", "transformers", "peft", "trl", "datasets", "bitsandbytes", "accelerate"):
+        monkeypatch.setitem(sys.modules, name, None)
+    result = runner.invoke(app, ["doctor"])
+    out = _strip_ansi(result.output)
+    assert "pip install torch --index-url https://download.pytorch.org/whl/" in out
+    assert 'pip install "soup-cli[train]"' in out
+    # The broken single-step form must be gone.
+    assert '["soup-cli[train]" --index-url' not in out and '[train]" --index-url' not in out
+
+
+def test_doctor_missing_core_dependency_exits_nonzero(monkeypatch):
+    """A missing core dependency makes `soup doctor` exit non-zero (#828)."""
+    monkeypatch.setitem(sys.modules, "plotext", None)
+    result = runner.invoke(app, ["doctor"])
+    assert result.exit_code != 0
+    assert "MISSING" in result.output
+
+
+def test_doctor_full_install_exits_zero():
+    """Runs against the full dev install: missing [train] stays advisory (#828)."""
+    result = runner.invoke(app, ["doctor"])
+    assert result.exit_code == 0
+
+
+def test_installed_extras_lists_train_and_mcp(monkeypatch):
+    """_installed_extras() derives train and mcp from dist metadata (#828)."""
+    import importlib.metadata
+
+    class _FakeMeta:
+        def get_all(self, key):
+            if key == "Provides-Extra":
+                return ["train", "mcp", "serve", "data"]
+            return None
+
+    requires = [
+        "torch>=2.6.0; extra == 'train'",
+        "transformers>=5.16.1; extra == 'train'",
+        "mcp>=1.10.0; extra == 'mcp'",
+        "fastapi>=0.104.0; extra == 'serve'",
+        "scikit-learn>=1.3.0; extra == 'data'",
+    ]
+    present = {"torch", "transformers", "mcp", "fastapi", "scikit-learn"}
+
+    def _distribution(name):
+        if name not in present:
+            raise importlib.metadata.PackageNotFoundError(name)
+        return object()
+
+    monkeypatch.setattr(importlib.metadata, "metadata", lambda name: _FakeMeta())
+    monkeypatch.setattr(importlib.metadata, "requires", lambda name: list(requires))
+    monkeypatch.setattr(importlib.metadata, "distribution", _distribution)
+
+    from soup_cli.cli import _installed_extras
+
+    extras = _installed_extras()
+    assert "train" in extras
+    assert "mcp" in extras
+    assert "data" in extras
 
 
 def test_doctor_nccl_no_gpu():

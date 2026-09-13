@@ -8,6 +8,7 @@ from rich.console import Console
 
 from soup_cli.config.schema import SoupConfig
 from soup_cli.config.unknown_keys import find_unknown_config_keys, format_unknown_keys
+from soup_cli.utils.terminal import for_terminal
 
 console = Console()
 
@@ -21,14 +22,15 @@ console = Console()
 #: options argued on #627, kept as one switch so the decision is a one-line
 #: change rather than a rewrite.
 #:
-#: The decision was warn-then-forbid, and the release that flips this to
-#: ``"error"`` is named by
+#: The decision was warn-then-forbid. v0.74.0 shipped ``"warn"`` with a
+#: deadline named by
 #: :data:`~soup_cli.config.unknown_keys.UNKNOWN_KEY_REJECTION_VERSION` -- by
-#: reference, not by number, because the warning must state that version in
-#: exactly one place. ``TestTheDeadline`` fails the moment the declared
-#: ``__version__`` reaches it while this still reads ``"warn"``, so the flip
-#: cannot be forgotten and the message cannot outlive its own promise.
-UNKNOWN_KEY_SEVERITY = "warn"
+#: reference, not by number, because the warning stated that version in
+#: exactly one place -- and the release that reached it flipped this to
+#: ``"error"``. ``TestTheDeadline`` pins the switch to the declared
+#: ``__version__`` in both directions, so it can be neither forgotten nor
+#: flipped early.
+UNKNOWN_KEY_SEVERITY = "error"
 
 
 def _report_unknown_keys(raw: dict) -> "str | None":
@@ -48,7 +50,8 @@ def _report_unknown_keys(raw: dict) -> "str | None":
     message = format_unknown_keys(unknown, include_deadline=warning)
     if not warning:
         return message
-    console.print(f"[yellow]Warning:[/] {message}")
+    # The key names in ``message`` came from the config file: escape them.
+    console.print(f"[yellow]Warning:[/] {for_terminal(message)}")
     console.print(
         "[dim]An unapplied key is ignored, not defaulted -- the run proceeds as "
         "if you had not written it.[/]"
@@ -64,11 +67,17 @@ def load_config(path: "Path | str") -> SoupConfig:
     if raw is None:
         console.print("[red]Config file is empty[/]")
         raise SystemExit(1)
+    if not isinstance(raw, dict):
+        # A bare list ("- a") or scalar would reach SoupConfig(**raw) and die
+        # with a TypeError traceback; load_config_from_string already refuses
+        # this shape, and the CLI contract here is SystemExit(1).
+        console.print(f"[red]Config must be a YAML mapping, got {type(raw).__name__}[/]")
+        raise SystemExit(1)
 
     unknown_error = _report_unknown_keys(raw)
     if unknown_error is not None:
         console.print("[red bold]Config validation error:[/]\n")
-        console.print(f"  [red]{unknown_error}[/]")
+        console.print(f"  [red]{for_terminal(unknown_error)}[/]")
         raise SystemExit(1)
 
     try:

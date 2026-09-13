@@ -541,15 +541,15 @@ task: grpo
 training:
   reward_fn: accuracy
   num_generations: 4
-  grpo_variant: gspo         # group-stabilised importance ratio
+  grpo_variant: gspo         # sequence-level length-normalized ratio
   # or: dapo / dr_grpo / bnpo / rft / two_sided
-  # grpo_delta: 0.2          # required when grpo_variant=two_sided
+  # grpo_delta: 0.2          # required when grpo_variant=two_sided; optional for gspo
 ```
 
 Variants:
 
 - **standard** — DeepSeek-R1-style baseline (delegates to TRL's `compute_loss`).
-- **gspo** — group-stabilised importance ratio with per-batch control variate.
+- **gspo** — Group Sequence Policy Optimization (sequence-level length-normalized ratio with clipping).
 - **dapo** — decoupled asymmetric clipping (`eps_lo=0.2, eps_hi=0.28`).
 - **dr_grpo** — token-sum without per-sample length normalisation.
 - **bnpo** — length-normalised PPO surrogate.
@@ -856,7 +856,7 @@ training:
   num_generations: 8
   # New: GRPO objective variants
   grpo_variant: dapo                  # one of: gspo / dapo / dr_grpo / bnpo / two_sided / rft / standard
-  # grpo_delta: 0.2                   # required when grpo_variant: two_sided
+  # grpo_delta: 0.2                   # required when grpo_variant: two_sided (optional for gspo)
   grpo_fp16: true                     # FP16 RL (unsloth parity)
   # Long-context + memory-efficient RL
   long_context_grpo: true             # wires Tiled MLP when available
@@ -1215,6 +1215,7 @@ data:
   format: chatml
 training:
   reward_model: ./output_rm
+  epochs: 1
   ppo_epochs: 4
   ppo_clip_ratio: 0.2
   ppo_kl_penalty: 0.05
@@ -1224,6 +1225,11 @@ training:
   quantization: 4bit
 output: ./output_ppo
 ```
+
+`epochs` controls complete passes over the training dataset. `ppo_epochs`
+controls optimization passes within each PPO update. Soup forwards both values,
+plus `ppo_kl_penalty`, to the active TRL `PPOConfig` names and prints the
+effective schedule during setup.
 
 PPO supports two reward sources:
 - **Reward model** (`reward_model`): pre-trained reward model (from step 2)

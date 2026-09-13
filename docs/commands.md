@@ -39,7 +39,7 @@ soup export --model ./output --format gguf    Export to GGUF (Ollama)
 soup export --model ./output --deploy ollama  Export GGUF + auto-deploy to Ollama
 soup export --model ./output --format onnx    Export to ONNX
 soup export --model ./output --format tensorrt Export to TensorRT-LLM
-soup export --model ./output --format awq     Export to AWQ (4-bit)
+soup export --model ./output --format awq --calibration-data cal.jsonl  Export to AWQ (4-bit)
 soup export --model ./output --format gptq --calibration-data cal.jsonl  Export to GPTQ (4-bit)
 soup deploy ollama --model m.gguf --name x    Deploy GGUF to Ollama
 soup deploy ollama --list                     List Soup-deployed models
@@ -152,7 +152,7 @@ soup migrate --from llamafactory config.yaml  Import config from LLaMA-Factory
 soup migrate --from axolotl config.yml        Import config from Axolotl
 soup migrate --from unsloth notebook.ipynb    Import config from Unsloth notebook
 soup migrate --from llamafactory c.yaml --dry-run  Preview without writing
-soup recipes list                             List all 165 ready-made recipes
+soup recipes list                             List all 169 ready-made recipes
 soup recipes show llama3.1-8b-sft            Print recipe YAML
 soup recipes use llama3.1-8b-sft             Copy recipe to soup.yaml
 soup recipes search "reasoning"              Search by keyword/task/size
@@ -210,12 +210,13 @@ soup tui                                      Full-screen Textual dashboard (req
 soup train --config soup.yaml --profile       Record torch.profiler trace to <output>/profiles/
 soup --log-level quiet|normal|verbose|debug   Global logging tier (Rich-formatted)
 soup ui [--port 7860]                         Web UI (experiments, training, data)
-soup ui --public [--auth-token T]             Phone-scannable Web UI (v0.53.9)
+soup ui --public [--auth-token T]             Phone-scannable Web UI (v0.53.9); /docs + /openapi.json are loopback-only
 soup tokenizer train --input c.jsonl --vocab-size N  Train BPE tokenizer (v0.53.9)
 soup bench <model> --p50 --p95                Bench with tail-latency percentiles (v0.53.9)
 soup bench <model> --backend auto             Auto-detect transformers/mlx backend (v0.53.9)
 soup serve --reasoning-parser deepseek-r1     Strip <think> blocks from responses (v0.53.9)
-soup doctor [--nccl] [--disk]                 Check environment (optionally check NCCL bandwidth, media type; --disk ~9s cold / ~2.4s warm)
+soup doctor [--nccl] [--disk] [--config F]    Check environment (optionally check NCCL bandwidth, media type; --disk ~9s cold / ~2.4s warm).
+                                              --config also reports which settings that config writes are not read on its task/backend (#755); exits 2 if it cannot be read, and exits 1 when a required core dependency is missing or incompatible (#828).
 soup monitor                                  NVIDIA / Apple Silicon GPU monitor: util / temp / VRAM / power
 soup quickstart [--dry-run]                   Full demo
 soup plugins list|install|enable|disable      Manage Soup plugins
@@ -251,6 +252,7 @@ soup serve --steer <name> [--steer-strength <s>]  Apply a steering vector at dec
 soup serve --bank <bank.json> [--bank-strength <s>]  Multi-tenant VeRA/VB-LoRA serving; active user per request via X-User-Id header, ContextVar-isolated (v0.71.12 / v0.71.17)
 soup serve --mole <dir>                              Serve a trained MoLE: base + N frozen task LoRAs + mole_gate.pt, blended per-token at decode (transformers-only) (v0.71.17)
 soup ingest --source langfuse|langsmith|helicone|openpipe|otel|openai-stored --logs <jsonl>  Universal trace importer (6 SaaS adapters → normalised JSONL)
+soup ingest --source langfuse --pull [--since 7d --max-pages 100 --allow-private-host]  Live pull of Langfuse generations (Observations API v2; LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY / LANGFUSE_HOST) (#204)
 soup prune-prompt --input <jsonl> --output <jsonl> --min-frequency 0.95  Detect + strip shared system-prompt prefix
 soup prune-prompt ... --tokenizer <id-or-path>  Tokenizer-aware prefix detection (decodes remaining ids, boundary-safe)
 soup data active-sample --input <jsonl> --output <jsonl> --budget N  Top-N uncertain prod traces for human review

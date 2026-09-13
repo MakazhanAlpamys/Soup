@@ -43,7 +43,11 @@ class TestTrainLogsSSE:
         mock_proc.poll.return_value = None
         mock_proc.stdout = iter([b"Epoch 1/3\n", b"Loss: 2.5\n"])
         mock_proc.poll.side_effect = [None, None, 0]
-        ui_mod._train_process = mock_proc
+        buf = ui_mod.TrainLogBuffer(maxlen=100)
+        buf.append("Epoch 1/3")
+        buf.append("Loss: 2.5")
+        buf.mark_done()
+        ui_mod._train_log_buffer = buf
 
         client = TestClient(create_app())
         try:
@@ -56,10 +60,11 @@ class TestTrainLogsSSE:
                 lines = []
                 for line in resp.iter_lines():
                     lines.append(line)
-                    if len(lines) >= 2:
+                    if len(lines) >= 2 or "done" in line:
                         break
         finally:
             ui_mod._train_process = None
+            ui_mod._train_log_buffer = None
 
     def test_logs_no_training_returns_done(self):
         """When no training is running, SSE should emit done event."""
@@ -94,18 +99,19 @@ class TestTrainLogsSSE:
         import soup_cli.ui.app as ui_mod
         from soup_cli.ui.app import create_app
 
-        mock_proc = MagicMock()
-        lines = [b"Line 1\n", b"Line 2\n", b"Line 3\n"]
-        mock_proc.stdout = iter(lines)
-        mock_proc.poll.side_effect = [None, None, None, 0]
-        ui_mod._train_process = mock_proc
+        buf = ui_mod.TrainLogBuffer(maxlen=100)
+        buf.append("Line 1")
+        buf.append("Line 2")
+        buf.append("Line 3")
+        buf.mark_done()
+        ui_mod._train_log_buffer = buf
 
         client = TestClient(create_app())
         try:
             with client.stream(
                 "GET",
                 "/api/train/logs",
-                headers={"Last-Event-ID": "1", **_auth_headers()},
+                headers={"Last-Event-ID": "0", **_auth_headers()},
             ) as resp:
                 assert resp.status_code == 200
                 body = b""
@@ -115,8 +121,7 @@ class TestTrainLogsSSE:
                 # Line 1 (id=0) should be skipped, Line 2+ should appear
                 assert "Line 2" in text or "Line 3" in text
         finally:
-            ui_mod._train_process = None
-
+            ui_mod._train_log_buffer = None
     def test_logs_no_auth_required(self):
         """SSE log endpoint requires auth (401 without token, 200 with one)."""
         try:

@@ -123,22 +123,32 @@ def _build_quantization_config(quantization: Optional[str]):
     )
 
 
-def _apply_prompt_template(tokenizer: object, prompt: str) -> str:
-    """Render a single user turn through the tokenizer's chat template.
+def _render_prompt_template(tokenizer: object, prompt: str) -> Tuple[str, bool]:
+    """Render a single user turn; also report whether the chat template produced it.
 
-    Falls back to the raw prompt when the tokenizer has no chat template.
+    Falls back to the raw prompt when the tokenizer has no chat template or the
+    template fails to render.
     """
     chat_template = getattr(tokenizer, "chat_template", None)
     if chat_template:
         try:
-            return tokenizer.apply_chat_template(  # type: ignore[attr-defined]
+            text = tokenizer.apply_chat_template(  # type: ignore[attr-defined]
                 [{"role": "user", "content": prompt}],
                 tokenize=False,
                 add_generation_prompt=True,
             )
         except Exception:  # noqa: BLE001 — malformed template → raw prompt
-            return prompt
-    return prompt
+            return prompt, False
+        return text, True
+    return prompt, False
+
+
+def _apply_prompt_template(tokenizer: object, prompt: str) -> str:
+    """Render a single user turn through the tokenizer's chat template.
+
+    Falls back to the raw prompt when the tokenizer has no chat template.
+    """
+    return _render_prompt_template(tokenizer, prompt)[0]
 
 
 def load_model_and_tokenizer(
@@ -220,6 +230,8 @@ def make_generator(
         raise ValueError("loaded must be a (model, tokenizer, device) tuple")
     import torch
 
+    from soup_cli.utils.vllm import encode_rendered_prompt
+
     model, tokenizer, dev = loaded or load_model_and_tokenizer(
         model_id,
         adapter=adapter,
@@ -237,9 +249,14 @@ def make_generator(
     def _gen(prompt: str) -> str:
         if not isinstance(prompt, str):
             raise TypeError("prompt must be a string")
-        text = _apply_prompt_template(tokenizer, prompt)
-        inputs = tokenizer(
-            text, return_tensors="pt", truncation=True, max_length=_MAX_PROMPT_TOKENS
+        text, templated = _render_prompt_template(tokenizer, prompt)
+        inputs = encode_rendered_prompt(
+            tokenizer,
+            text,
+            templated=templated,
+            return_tensors="pt",
+            truncation=True,
+            max_length=_MAX_PROMPT_TOKENS,
         ).to(dev)
         prompt_len = inputs["input_ids"].shape[1]
         with torch.no_grad():
@@ -281,6 +298,8 @@ def make_multi_generator(
         raise ValueError("loaded must be a (model, tokenizer, device) tuple")
     import torch
 
+    from soup_cli.utils.vllm import encode_rendered_prompt
+
     model, tokenizer, dev = loaded or load_model_and_tokenizer(
         model_id,
         adapter=adapter,
@@ -299,9 +318,14 @@ def make_multi_generator(
             raise TypeError("prompt must be a string")
         if isinstance(k, bool) or not isinstance(k, int) or k < 1:
             raise ValueError("k must be a positive int")
-        text = _apply_prompt_template(tokenizer, prompt)
-        inputs = tokenizer(
-            text, return_tensors="pt", truncation=True, max_length=_MAX_PROMPT_TOKENS
+        text, templated = _render_prompt_template(tokenizer, prompt)
+        inputs = encode_rendered_prompt(
+            tokenizer,
+            text,
+            templated=templated,
+            return_tensors="pt",
+            truncation=True,
+            max_length=_MAX_PROMPT_TOKENS,
         ).to(dev)
         prompt_len = inputs["input_ids"].shape[1]
         with torch.no_grad():
