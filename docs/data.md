@@ -684,8 +684,25 @@ not byte-identically (a streaming source's size generally can't be known ahead o
 On the local (eager) and all-hub-name paths, `data.val_split` is applied per source before
 `over`/`probs` pad it with copies of its own rows, so a padded row can never land on both
 sides of the split; `concat`/`under` never duplicate rows and still split the combined
-result as before. This does not reach the streaming path below, which still splits after
-combining and can still duplicate a row across `train` and `val` under `over`/`probs`.
+result as before.
+
+The streaming path reaches the same guarantee by a different route (#702). A stream is not
+countable ahead of time, so there is nothing to take a fraction of before interleaving
+starts; instead, once `over` has been materialised, the split is sized over the *distinct*
+rows and val is taken from the end of the stream, preferring rows whose content occurs only
+once, so train keeps every row and all of its oversampling. Only if there are too few such
+rows is repeated content moved to val, and then its other copies are withheld from train
+and the number withheld is printed as a warning. A split that would leave train empty
+raises instead. Because val comes from distinct rows in stream order rather than from each
+source in turn, **it is not balanced across sources**: with 100 rows against 10 under
+`val_split: 0.1`, every val row comes from the larger source, since the smaller one's rows
+are all recycled. The eager path's per-source carve-out is mixture-representative; this one
+is not.
+
+`concat`/`under`/`probs` do not *add* duplicates on the streaming path (only `over` uses
+`stopping_strategy="all_exhausted"`), so they keep the ordinary positional split. That is a
+statement about interleaving, not about your data: rows that are already duplicated in a
+source can still land on both sides of the split under any strategy, on either path.
 
 Splitting before padding also means the requested `val_split` fraction is no longer exact
 under `over`/`probs`: it is taken from each source's own (smaller, unpadded) row count, so
