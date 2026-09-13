@@ -533,6 +533,18 @@ class DistillTrainerWrapper:
         _student_tokenizer = self.tokenizer
 
         class _DistillTrainer(Trainer):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                # compute_loss below returns a mean over its own microbatch and
+                # never divides by num_items_in_batch, which it accepts and
+                # ignores. Transformers skips its own gradient-accumulation
+                # compensation for a model it classifies as consuming loss
+                # kwargs, so leaving this True makes the accumulated gradient
+                # scale with gradient_accumulation_steps: the same effective
+                # batch split four ways gives four times the gradient. Opting
+                # out restores the division Transformers would otherwise do.
+                self.model_accepts_loss_kwargs = False
+
             def compute_loss(
                 self,
                 model,
