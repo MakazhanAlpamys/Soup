@@ -80,6 +80,8 @@
     "training.curriculum_metric": "length",
     "training.data_seed": null,
     "training.defer_rerolling": false,
+    "training.distill_checkpoint": false,
+    "training.distill_chunk_size": null,
     "training.distill_divergence": null,
     "training.distill_mode": "token",
     "training.distill_temperature": null,
