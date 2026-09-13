@@ -1288,14 +1288,17 @@ def quant_check_cmd(
         "table", "--format",
         help="Output format: table | json | markdown",
     ),
+    allow_stub: bool = typer.Option(
+        False, "--allow-stub",
+        help="Allow deterministic stub generators if live model loading fails.",
+    ),
 ) -> None:
     """Compare accuracy before vs after quantization on the same eval suite.
 
     Runs the same JSONL eval tasks through both models sequentially (memory
     safe) and renders a per-task delta with OK / MINOR / MAJOR verdicts.
-    Wiring live model loading is post-v0.26.0; until then, this runs with a
-    stub generator so the orchestration layer is still usable for tests and
-    CI smoke-checks.
+    Exits with code 0 on OK / MINOR, code 2 on MAJOR, and code 1 on loading
+    or runtime errors.
     """
     from soup_cli.eval.quant_check import (
         ensure_format,
@@ -1334,6 +1337,20 @@ def quant_check_cmd(
             console.print(f"[red]{label} not found: {path_str}[/]")
             raise typer.Exit(1)
 
+    for label, path_str in (("--before", resolved_before), ("--after", resolved_after)):
+        path_obj = Path(path_str)
+        is_gguf = path_obj.suffix.lower() == ".gguf" or (
+            path_obj.is_file() and path_obj.suffix.lower() == ".gguf"
+        )
+        if is_gguf:
+            console.print(
+                f"[red]{label} specifies a standalone GGUF file '{path_str}', "
+                "which is not supported for live eval quant-check.\n"
+                "Supported: directories containing safetensors / HuggingFace "
+                "model files or registry:// refs.[/]"
+            )
+            raise typer.Exit(1)
+
     before_path = Path(resolved_before)
     after_path = Path(resolved_after)
     if not before_path.exists():
@@ -1344,24 +1361,48 @@ def quant_check_cmd(
         raise typer.Exit(1)
 
     # Live model scoring: build transformers-backed generators per side.
-    # Falls back to deterministic stubs if loading fails (e.g. missing deps),
-    # so CI without GPUs can still smoke-test the orchestration layer.
+    # Deterministic stubs are used only if --allow-stub is explicitly passed.
     from soup_cli.eval.quant_check import make_model_generator
+
+    is_stub = False
+    before_gen = None
+    after_gen = None
 
     try:
         before_gen = make_model_generator(resolved_before)
+    except (OSError, ValueError, ImportError) as exc:
+        if not allow_stub:
+            console.print(
+                f"[red]Failed to load --before model ({resolved_before}): {exc}[/]"
+            )
+            raise typer.Exit(1) from exc
+        if fmt != "json":
+            console.print(
+                f"[yellow]Failed to load --before model ({exc}); using deterministic stub.[/]"
+            )
+        before_gen = stub_generator("before")
+        is_stub = True
+
+    try:
         after_gen = make_model_generator(resolved_after)
     except (OSError, ValueError, ImportError) as exc:
-        console.print(
-            f"[yellow]Live model load failed ({exc}); using deterministic stub.[/]"
-        )
-        before_gen = stub_generator("before")
+        if not allow_stub:
+            console.print(
+                f"[red]Failed to load --after model ({resolved_after}): {exc}[/]"
+            )
+            raise typer.Exit(1) from exc
+        if fmt != "json":
+            console.print(
+                f"[yellow]Failed to load --after model ({exc}); using deterministic stub.[/]"
+            )
         after_gen = stub_generator("after")
+        is_stub = True
 
     result = run_quant_check(
         before_gen=before_gen,
         after_gen=after_gen,
         tasks_file=tasks,
+        stub=is_stub,
     )
     rendered = render(result, fmt=fmt)
     if fmt == "table":
@@ -1370,6 +1411,9 @@ def quant_check_cmd(
         # Plain text (markdown / json) — skip Rich markup interpretation so
         # pipe chars in markdown don't render as Rich tags.
         console.print(rendered, markup=False)
+
+    has_major = any(r.verdict == "MAJOR" for r in result.rows)
+    raise typer.Exit(2 if has_major else 0)
 
 
 def _print_gate_result(result) -> None:

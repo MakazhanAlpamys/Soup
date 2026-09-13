@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, Literal, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, Literal, Optional, Union
 
 from soup_cli.utils.paths import is_under_cwd as _is_under_cwd
 
@@ -42,12 +42,15 @@ class QuantCheckRow:
 @dataclass(frozen=True)
 class QuantCheckResult:
     rows: list[QuantCheckRow]
+    stub: bool = False
 
     def to_json(self) -> str:
-        return json.dumps(
-            {"rows": [asdict(r) for r in self.rows]},
-            indent=2,
-        )
+        payload: dict[str, Any] = {
+            "rows": [asdict(r) for r in self.rows],
+        }
+        if self.stub:
+            payload["stub"] = True
+        return json.dumps(payload, indent=2)
 
 
 def _score_tasks(tasks_file: str, generate_fn: Callable[[str], str]) -> float:
@@ -70,16 +73,20 @@ def run_quant_check(
     after_gen: Callable[[str], str],
     tasks_file: str,
     task_name: str = "default",
+    stub: bool = False,
 ) -> QuantCheckResult:
     """Run ``tasks_file`` through both models and return the row."""
     before = _score_tasks(tasks_file, before_gen)
     after = _score_tasks(tasks_file, after_gen)
     delta = after - before
     verdict = classify_delta(delta)
-    return QuantCheckResult(rows=[QuantCheckRow(
-        task=task_name, before=before, after=after,
-        delta=delta, verdict=verdict,
-    )])
+    return QuantCheckResult(
+        rows=[QuantCheckRow(
+            task=task_name, before=before, after=after,
+            delta=delta, verdict=verdict,
+        )],
+        stub=stub,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -91,7 +98,10 @@ def render_table(result: QuantCheckResult) -> "Table":
     """Render a QuantCheckResult as a Rich Table (for the CLI)."""
     from rich.table import Table
 
-    table = Table(title="Quant check")
+    title = "Quant check"
+    if result.stub:
+        title = "Quant check [yellow](deterministic stub - not a live measurement)[/]"
+    table = Table(title=title)
     table.add_column("Task", style="cyan")
     table.add_column("Before", justify="right")
     table.add_column("After", justify="right")
@@ -115,10 +125,15 @@ def render_table(result: QuantCheckResult) -> "Table":
 
 
 def render_markdown(result: QuantCheckResult) -> str:
-    lines = [
+    lines = []
+    if result.stub:
+        lines.append(
+            "> **Warning**: Deterministic stub scoring — not a live model measurement.\n"
+        )
+    lines.extend([
         "| Task | Before | After | Delta | Verdict |",
         "|------|--------|-------|-------|---------|",
-    ]
+    ])
     for row in result.rows:
         lines.append(
             f"| {row.task} | {row.before:.3f} | {row.after:.3f} | "
@@ -195,10 +210,9 @@ def make_model_generator(
 
 
 def stub_generator(label: str) -> Callable[[str], str]:
-    """Return a deterministic stub generator so the CLI has something runnable.
+    """Return a deterministic stub generator for tests and CI smoke-checks.
 
-    Real model loading is wired post-v0.26.0 — once then, pass in real
-    ``before_gen`` / ``after_gen`` callables instead of this stub.
+    Used when ``--allow-stub`` is passed and live model loading fails.
     """
     def _stub(prompt: str) -> str:  # noqa: ARG001
         return f"[stub:{label}]"
