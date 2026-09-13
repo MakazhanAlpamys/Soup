@@ -315,6 +315,34 @@ def test_doctor_nvidia_train_suggestion_is_two_step(monkeypatch):
     assert '["soup-cli[train]" --index-url' not in out and '[train]" --index-url' not in out
 
 
+def test_doctor_nvidia_partial_stack_with_torch_missing(monkeypatch):
+    """NVIDIA + partial [train] + torch missing keeps the two-step index URL (#884)."""
+    installed = {
+        "transformers": "5.16.1",
+        "peft": "0.20.0",
+        "trl": "0.29.0",
+        "datasets": "2.14.0",
+        "bitsandbytes": "0.41.0",
+        "accelerate": "0.27.0",
+    }
+
+    def _fake_version(import_name, pkg_name):
+        return installed.get(pkg_name)
+
+    monkeypatch.setattr("soup_cli.commands.doctor._installed_version_str", _fake_version)
+    monkeypatch.setattr(
+        "soup_cli.commands.doctor._nvidia_smi_cuda_version", lambda: (13, 0)
+    )
+    result = runner.invoke(app, ["doctor"])
+    assert result.exit_code == 0
+    out = _strip_ansi(result.output)
+    assert "Training stack incomplete, missing: torch" in out
+    assert "pip install torch --index-url https://download.pytorch.org/whl/" in out
+    assert 'pip install "soup-cli[train]"' in out
+    assert "All checks passed!" not in out
+    assert "Training stack not installed" not in out
+
+
 def test_doctor_missing_core_dependency_exits_nonzero(monkeypatch):
     """A missing core dependency makes `soup doctor` exit non-zero (#828)."""
     monkeypatch.setitem(sys.modules, "plotext", None)

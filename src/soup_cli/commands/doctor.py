@@ -238,10 +238,15 @@ def doctor(
             if extra_name == "train":
                 driver = _nvidia_smi_cuda_version()
                 torch_missing = "torch" in missing_pkgs
+                # Single call site, gated on torch itself being missing.
+                tag = (
+                    _torch_cuda_wheel_tag(driver)
+                    if driver is not None and torch_missing
+                    else None
+                )
+                url = f"https://download.pytorch.org/whl/{tag}" if tag else None
                 if all_missing:
-                    if driver is not None:
-                        tag = _torch_cuda_wheel_tag(driver)
-                        url = f"https://download.pytorch.org/whl/{tag}"
+                    if url is not None:
                         # ``--index-url`` replaces PyPI, so torch must come from the
                         # CUDA wheel index in its own step; the ``[train]`` extra is
                         # then resolved against PyPI with torch already satisfied.
@@ -255,9 +260,7 @@ def doctor(
                         issues.append(
                             'Training stack not installed: pip install "soup-cli[train]"'
                         )
-                elif driver is not None and torch_missing:
-                    tag = _torch_cuda_wheel_tag(driver)
-                    url = f"https://download.pytorch.org/whl/{tag}"
+                elif url is not None:
                     issues.append(
                         f"Training stack incomplete, missing: {missing_list}\n"
                         f"  pip install torch --index-url {url}\n"
