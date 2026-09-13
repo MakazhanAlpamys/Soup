@@ -346,6 +346,47 @@ def test_controller_rejects_available_manifest_not_bound_to_worker_receipt(
         )
 
 
+def test_controller_rejects_a_receipt_whose_nonce_does_not_match_the_request(
+    monkeypatch,
+    tmp_path,
+):
+    """#898: a venv's Scripts/python.exe launcher spawns the real interpreter
+    as a grandchild, so Popen.pid never equals the child's own os.getpid()
+    there. Verification switched from PID equality to a nonce the parent
+    generates and the child echoes back into the receipt. A receipt with
+    the wrong nonce -- e.g. left over from an unrelated worker directory --
+    must still be rejected, not waved through because PID is no longer
+    checked."""
+    import soup_cli.autodistill.mlx_worker as worker_module
+
+    plan, teacher_root, tokenizer_root, dataset_root = _local_plan(tmp_path)
+    fake_root = _write_fake_mlx_runtime(tmp_path)
+    _runtime_environment(monkeypatch, tmp_path, fake_root)
+    publication_root = tmp_path / "publication"
+    original_read_control = worker_module._read_control
+
+    def tamper_nonce(path, model_type):
+        receipt = original_read_control(path, model_type)
+        if model_type is worker_module.MlxTeacherWorkerReceipt:
+            receipt = receipt.model_copy(update={"worker_nonce": "0" * 32})
+        return receipt
+
+    monkeypatch.setattr(worker_module, "_read_control", tamper_nonce)
+
+    with pytest.raises(ValueError, match="receipt nonce does not match the dispatched request"):
+        run_mlx_teacher_capture_process(
+            plan=plan,
+            teacher_root=teacher_root,
+            tokenizer_root=tokenizer_root,
+            dataset_root=dataset_root,
+            publication_root=publication_root,
+            shard_id="shard-0001",
+            transaction_id="transaction-0001",
+            python_executable=sys.executable,
+            timeout_seconds=30,
+        )
+
+
 def test_runtime_version_mismatch_fails_before_publication(monkeypatch, tmp_path):
     plan, teacher_root, tokenizer_root, dataset_root = _local_plan(tmp_path)
     fake_root = _write_fake_mlx_runtime(tmp_path, mlx_lm_version="different-version")
