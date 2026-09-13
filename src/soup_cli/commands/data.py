@@ -2501,9 +2501,9 @@ def preprocess_dataset(
                 # Tokenise exactly as ``main`` (add_special_tokens defaults to
                 # True). This keeps ``main``'s truncation reservation — a
                 # truncated row still ends on the post-processor's EOS — and the
-                # post-processor BOS/EOS, so the cache's EOS stays pinned to
-                # ``main``. #785's only defect on this path is the doubled BOS,
-                # removed below for the chat path.
+                # post-processor BOS/EOS. #785 removed the one doubled leading BOS
+                # here; #791 then applies TRL's training EOS rule below, both only
+                # for the chat path.
             )
         except Exception:  # noqa: BLE001 — tokenizer errors vary
             continue
@@ -2512,14 +2512,34 @@ def preprocess_dataset(
         if not is_pretrain:
             # #785/#788: the chat template already renders the BOS; ``main``'s
             # add_special_tokens=True prepends a second one. Drop only that one
-            # duplicated leading BOS so the row is byte-identical to ``main``
-            # apart from the extra BOS (EOS and truncation untouched). Pretrain
-            # feeds raw document text with no template BOS, so nothing to drop.
-            from soup_cli.data.loss_mask import strip_doubled_leading_bos
+            # duplicated leading BOS. Pretrain feeds raw document text with no
+            # template BOS, so nothing to drop.
+            from soup_cli.data.loss_mask import (
+                append_training_eos,
+                strip_doubled_leading_bos,
+            )
 
             input_ids, attention_mask = strip_doubled_leading_bos(
                 tokenizer, input_ids, attention_mask
             )
+            # #791: the live training path appends ``eos_token`` (TRL 0.29.1's
+            # ``add_eos``, ``sft_trainer.py:1026-1038``) to every chat row that
+            # does not already end on it, before tokenizing. This cache path
+            # tokenizes directly, so on a template that renders no EOS and a
+            # tokenizer whose post-processor appends none (Qwen-shaped) the cached
+            # row carried zero stop tokens while the live path trained on one —
+            # run-on generation, and silent (the loss curve looks normal and
+            # ``soup data doctor`` renders the live path, not the cache). Reproduce
+            # the rule in token space so the cache trains on the same EOS count.
+            # Only when the row is under the length budget: a row that filled
+            # ``max_length`` was truncated, and the live path (append-then-truncate)
+            # keeps no trailing EOS there either, so matching it means not pushing
+            # the row past the budget.
+            if len(input_ids) < max_length:
+                with_eos = append_training_eos(tokenizer, input_ids)
+                if len(with_eos) != len(input_ids):
+                    input_ids = with_eos
+                    attention_mask = attention_mask + [1]
         rendered_rows.append(
             {
                 "input_ids": input_ids,
