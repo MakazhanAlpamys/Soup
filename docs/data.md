@@ -778,7 +778,7 @@ soup data filter ./data/train.jsonl --score-only  # add scores without filtering
 ```
 
 `soup data validate` exits with code `0` when at least one row is usable and the
-optional minimum valid fraction is met. It exits with code `1` for input errors,
+optional minimum valid fraction is met. It exits with code `3` for input errors,
 such as a missing file or an undetectable format, and code `2` when a non-empty
 dataset has no usable rows or falls below `--min-valid-fraction`. A partially valid
 dataset still exits with code `0` when no minimum is specified.

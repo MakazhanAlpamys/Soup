@@ -296,12 +296,19 @@ if [ -z "$CANDIDATE_RUN_ID" ]; then
     exit 0
 fi
 
+set +e
 soup eval against "$BASELINE_RUN_ID" --candidate "$CANDIDATE_RUN_ID" \\
-    --suite "$GATE_SUITE" --json-only \\
-    || {{
-        echo "[soup] pre-push gate blocked: regression vs $BASELINE_RUN_ID" >&2
-        exit 1
-    }}
+    --suite "$GATE_SUITE" --json-only
+rc=$?
+set -e
+
+if [ "$rc" -eq 2 ]; then
+    echo "[soup] pre-push gate blocked: regression vs $BASELINE_RUN_ID" >&2
+    exit 2
+elif [ "$rc" -ne 0 ]; then
+    echo "[soup] pre-push gate error: configuration or usage error (exit $rc)" >&2
+    exit "$rc"
+fi
 
 exit 0
 """

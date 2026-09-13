@@ -289,7 +289,7 @@ soup adapters branch <name> --from-registry <id> | --attach-to-registry <id>  Br
 soup adapters bisect <ckpt>... --eval-command "..."  Binary search over training history (v0.67.0)
 soup lock write --base-sha <h> --dataset-sha <h> --env-hash <h>  Write soup.lock (v0.67.0)
 soup lock write --base-sha <h> --dataset-sha <h> --env-lock soup-env.lock  Auto-derive --env-hash from soup-env.lock (v0.71.1)
-soup lock show / soup lock check              Show + drift-check (exit 3 on drift)
+soup lock show / soup lock check              Show + drift-check (exit 2 on drift, 3 on usage/missing lock)
 soup compile <program.py> --eval <suite> [--optimizer mipro|gepa|textgrad|copro|bootstrap_fewshot] [--plan-only]  DSPy / GEPA / TextGrad prompt-program compiler — live (v0.71.13; pip install "soup-cli[compile]")
 soup distill-prompt --traces <jsonl> --teacher <m> --student <m> --strategy sft|preference|kl [--provider ollama|anthropic|vllm] [--base-url <url>] [--temperature F] [--max-rows N]  Distill prompt-heavy traces via a live teacher (v0.71.13)
 soup compile-tools <spec.json|yaml> --eval <jsonl> [--optimizer textgrad|gepa] [--plan-only]  TextGrad / GEPA tool-schema optimiser — live (v0.71.13; pip install "soup-cli[compile]")
@@ -437,3 +437,17 @@ mutating tools (`train_start`, `export`) are gated behind `--allow-mutating`
 - **Subprocess Isolation:** Execution runs the Soup CLI as an isolated subprocess (`shell=False`, `stdin=DEVNULL`, `cwd` pinned to server startup directory). Child stdout/stderr is redirected to `.soup/mcp-runs/<run_id>.log` to avoid corrupting the MCP JSON-RPC stdio stream.
 - **Concurrency & Disconnects:** Enforces 1 active execution at a time, gated on a persisted run whose process is still alive — so a **restarted** server does not launch a second training while a child from a previous server is still running, and a stale record whose process is gone never blocks execution. A `launching` record (committed before the child process exists, pid not yet written) blocks restart capacity too: it is indistinguishable from "about to spawn", so treating it as live is the safe direction after a crash in that window. If a server crash leaves that row behind, `soup mcp runs reconcile --expunge-launching` removes rows older than five minutes and prints every removed `run_id`; use `--older-than-seconds N` to choose another positive threshold. The command refuses the whole operation if any candidate records a PID that is still alive. Launches run in background (fire-and-forget). Disconnecting the MCP client does not terminate an already-running subprocess.
 - **Config Snapshotting & Input Revalidation:** At plan time (`train_start`), the validated config is snapshotted to `.soup/mcp-runs/<run_id>/config.yaml`, and execution uses this snapshot rather than the original mutable config path. External protected inputs (such as datasets and model/checkpoint directories or files) are not frozen in the snapshot; instead, their content digests (computed via SHA-256 for regular files, or deterministic recursive content hashing over sorted relative file paths for directory trees, bounded by file-count and total-byte safety limits) are recorded at plan time and revalidated immediately before spawn. Modifying an external protected input between plan and execute invalidates the token. Modifying the original config path after planning has no effect because execution strictly uses the snapshotted config. Snapshotting freezes only the configuration itself, not external filesystem assets.
+
+## Gate and Verdict Exit Codes
+
+Soup gate and verdict commands follow a unified, CI-friendly exit-code contract:
+
+| Exit Code | Constant | Meaning | Examples |
+|---|---|---|---|
+| `0` | `EXIT_OK` | PASS / OK / SHIP | Model passes gate; no regression; lock matches closure; valid dataset |
+| `2` | `EXIT_GATE_FAILED` | GATE FAILED / REGRESSION / DRIFT / DON'T SHIP | Metric regressed; behavior/checklist MAJOR; lock closure drifted; dataset unusable |
+| `3` | `EXIT_USAGE_ERROR` | USAGE / INPUT / CONFIG ERROR | Bad or invalid CLI flag; missing or unparseable input file; empty series |
+| `1` | `EXIT_RUNTIME_ERROR` | RUNTIME ERROR | Unexpected crash, environment incompatibility, or live inference error |
+
+The taxonomy applies consistently across `soup ship`, `soup eval gate`, `soup eval against`, `soup eval checklist`, `soup eval behavior`, `soup eval quant-check`, `soup lock check`, `soup data validate`, and `soup data lint`.
+

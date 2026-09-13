@@ -11,6 +11,13 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
+from soup_cli.utils.exit_codes import (
+    EXIT_GATE_FAILED,
+    EXIT_OK,
+    EXIT_RUNTIME_ERROR,
+    EXIT_USAGE_ERROR,
+)
+
 console = Console()
 
 app = typer.Typer(
@@ -1190,11 +1197,11 @@ def gate_cmd(
         console.print(
             "[red]--regression-threshold must be between 0.0 and 1.0[/]"
         )
-        raise typer.Exit(1)
+        raise typer.Exit(EXIT_USAGE_ERROR)
 
     if write_baseline and not model:
         console.print("[red]--write-baseline requires --model[/]")
-        raise typer.Exit(1)
+        raise typer.Exit(EXIT_USAGE_ERROR)
 
     from soup_cli.eval.gate import (
         load_suite,
@@ -1207,7 +1214,7 @@ def gate_cmd(
         eval_suite = load_suite(suite)
     except (FileNotFoundError, ValueError) as exc:
         console.print(f"[red]Cannot load suite:[/] {exc}")
-        raise typer.Exit(1) from exc
+        raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
     try:
         baseline_scores = resolve_baseline(
@@ -1216,7 +1223,7 @@ def gate_cmd(
         )
     except (FileNotFoundError, ValueError) as exc:
         console.print(f"[red]Cannot resolve baseline:[/] {exc}")
-        raise typer.Exit(1) from exc
+        raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
     # When --model is provided, build a transformers-backed generator.
     # Otherwise fall back to an empty-string stub for smoke runs.
@@ -1261,10 +1268,10 @@ def gate_cmd(
             console.print(
                 f"[red]Cannot write --write-baseline:[/] {exc}"
             )
-            raise typer.Exit(1) from exc
+            raise typer.Exit(EXIT_RUNTIME_ERROR) from exc
         console.print(f"[green]Wrote stamped baseline[/] {written}")
 
-    raise typer.Exit(0 if result.passed else 1)
+    raise typer.Exit(EXIT_OK if result.passed else EXIT_GATE_FAILED)
 
 
 # ─── soup eval quant-check (v0.26.0 Part D) ───
@@ -1310,16 +1317,16 @@ def quant_check_cmd(
         ensure_format(fmt)
     except ValueError as exc:
         console.print(f"[red]{exc}[/]")
-        raise typer.Exit(1) from exc
+        raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
     resolved_before = resolve_model_ref(before)
     resolved_after = resolve_model_ref(after)
     if resolved_before is None:
         console.print(f"[red]Cannot resolve --before: {before}[/]")
-        raise typer.Exit(1)
+        raise typer.Exit(EXIT_USAGE_ERROR)
     if resolved_after is None:
         console.print(f"[red]Cannot resolve --after: {after}[/]")
-        raise typer.Exit(1)
+        raise typer.Exit(EXIT_USAGE_ERROR)
 
     for label, path_str in (("--before", resolved_before),
                             ("--after", resolved_after),
@@ -1329,19 +1336,19 @@ def quant_check_cmd(
             console.print(
                 f"[red]{label} '{path_str}' is outside cwd - refusing[/]"
             )
-            raise typer.Exit(1)
+            raise typer.Exit(EXIT_USAGE_ERROR)
         if not path_obj.exists() and label == "--tasks":
             console.print(f"[red]{label} not found: {path_str}[/]")
-            raise typer.Exit(1)
+            raise typer.Exit(EXIT_USAGE_ERROR)
 
     before_path = Path(resolved_before)
     after_path = Path(resolved_after)
     if not before_path.exists():
         console.print(f"[red]--before not found: {resolved_before}[/]")
-        raise typer.Exit(1)
+        raise typer.Exit(EXIT_USAGE_ERROR)
     if not after_path.exists():
         console.print(f"[red]--after not found: {resolved_after}[/]")
-        raise typer.Exit(1)
+        raise typer.Exit(EXIT_USAGE_ERROR)
 
     # Live model scoring: build transformers-backed generators per side.
     # Falls back to deterministic stubs if loading fails (e.g. missing deps),
@@ -1370,6 +1377,9 @@ def quant_check_cmd(
         # Plain text (markdown / json) — skip Rich markup interpretation so
         # pipe chars in markdown don't render as Rich tags.
         console.print(rendered, markup=False)
+
+    has_major = any(r.verdict == "MAJOR" for r in result.rows)
+    raise typer.Exit(EXIT_GATE_FAILED if has_major else EXIT_OK)
 
 
 def _print_gate_result(result) -> None:

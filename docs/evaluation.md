@@ -317,7 +317,7 @@ SHIP  ⇔  task_tuned > task_base  AND  ∀ benchmark: base − tuned ≤ forget
 else DON'T SHIP — even if the task metric looks great.
 ```
 
-Exit codes are CI-gateable: **0 = SHIP, 2 = DON'T SHIP, 1 = runtime error**. A tie on leg 1, a
+Exit codes are CI-gateable: **0 = SHIP, 2 = DON'T SHIP, 3 = usage/flag error, 1 = runtime error** (matching line 379). A tie on leg 1, a
 single regressed benchmark, or a missing baseline all yield DON'T SHIP (a missing baseline
 *refuses* rather than silently shipping).
 
