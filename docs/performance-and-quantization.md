@@ -453,7 +453,7 @@ training:
   epochs: 3
   lr: 2e-5
   batch_size: 1           # explicit sizes allowed; "auto" rejected
-  gradient_accumulation_steps: 1   # values > 1 now allowed (v0.72.3)
+  16: 1   # values > 1 now allowed (v0.72.3)
   quantization: 4bit      # NF4 — ~4x smaller RAM store than bf16 (or `none`)
   gradient_checkpointing: true     # handled per-layer by the streamer
   stream_layers: true     # Enable layer streaming
