@@ -83,6 +83,144 @@ def test_doctor_shows_dependencies():
     assert "Package" in result.output
 
 
+def test_torch_gpu_arch_supported_accepts_exact_sm_target():
+    from types import SimpleNamespace
+
+    from soup_cli.commands.doctor import _torch_gpu_arch_supported
+
+    fake_torch = SimpleNamespace(
+        cuda=SimpleNamespace(
+            get_arch_list=lambda: ["sm_90", "sm_120"],
+        )
+    )
+
+    assert _torch_gpu_arch_supported(fake_torch, 12, 0) is True
+
+
+def test_torch_gpu_arch_supported_accepts_lower_ptx_target():
+    from types import SimpleNamespace
+
+    from soup_cli.commands.doctor import _torch_gpu_arch_supported
+
+    fake_torch = SimpleNamespace(
+        cuda=SimpleNamespace(
+            get_arch_list=lambda: ["sm_90", "compute_90"],
+        )
+    )
+
+    assert _torch_gpu_arch_supported(fake_torch, 12, 0) is True
+
+
+def test_torch_gpu_arch_supported_rejects_higher_only_ptx_target():
+    from types import SimpleNamespace
+
+    from soup_cli.commands.doctor import _torch_gpu_arch_supported
+
+    fake_torch = SimpleNamespace(
+        cuda=SimpleNamespace(
+            get_arch_list=lambda: ["sm_80", "compute_120"],
+        )
+    )
+
+    assert _torch_gpu_arch_supported(fake_torch, 9, 0) is False
+
+
+def test_doctor_gpu_panel_shows_compute_capability_and_precision(monkeypatch):
+    """GPU panel reports compute capability and precision feature gates."""
+    import types
+
+    fake_cuda = types.SimpleNamespace(
+        is_available=lambda: True,
+        device_count=lambda: 1,
+        get_device_name=lambda idx: "NVIDIA GeForce RTX 5070 Laptop GPU",
+        get_device_properties=lambda idx: types.SimpleNamespace(
+            total_memory=8 * 1024**3
+        ),
+        get_device_capability=lambda idx: (12, 0),
+        get_arch_list=lambda: ["sm_75", "sm_80", "sm_90", "sm_120"],
+        is_bf16_supported=lambda: True,
+    )
+
+    fake_torch = types.SimpleNamespace(
+        cuda=fake_cuda,
+        version=types.SimpleNamespace(cuda="13.0"),
+    )
+
+    monkeypatch.setitem(__import__("sys").modules, "torch", fake_torch)
+    monkeypatch.setattr(
+        "soup_cli.utils.fp8.is_fp8_gpu_supported",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        "soup_cli.utils.fp8.is_fp8_available",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        "soup_cli.utils.advanced_precision.is_blackwell_gpu",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        "soup_cli.utils.advanced_precision._torchao_available",
+        lambda: True,
+    )
+
+    result = runner.invoke(app, ["doctor"])
+    out = result.output
+
+    assert result.exit_code == 0
+    assert "sm_120 (Blackwell)" in out
+    assert "Precision features" in out
+    assert "BF16: hardware=yes" in out
+    assert "FP8: hardware=yes, software=yes" in out
+    assert "NVFP4: hardware=yes, software=yes" in out
+
+
+def test_doctor_gpu_panel_warns_when_torch_lacks_gpu_arch(monkeypatch):
+    """GPU panel warns when Torch does not include the detected GPU architecture."""
+    import types
+
+    fake_cuda = types.SimpleNamespace(
+        is_available=lambda: True,
+        device_count=lambda: 1,
+        get_device_name=lambda idx: "NVIDIA GeForce RTX 5070 Laptop GPU",
+        get_device_properties=lambda idx: types.SimpleNamespace(
+            total_memory=8 * 1024**3
+        ),
+        get_device_capability=lambda idx: (12, 0),
+        get_arch_list=lambda: ["sm_75", "sm_80", "sm_90"],
+        is_bf16_supported=lambda: True,
+    )
+
+    fake_torch = types.SimpleNamespace(
+        cuda=fake_cuda,
+        version=types.SimpleNamespace(cuda="13.0"),
+    )
+
+    monkeypatch.setitem(__import__("sys").modules, "torch", fake_torch)
+    monkeypatch.setattr(
+        "soup_cli.utils.fp8.is_fp8_gpu_supported",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        "soup_cli.utils.fp8.is_fp8_available",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        "soup_cli.utils.advanced_precision.is_blackwell_gpu",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        "soup_cli.utils.advanced_precision._torchao_available",
+        lambda: True,
+    )
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert result.exit_code == 0
+    assert "sm_120 (Blackwell)" in result.output
+    assert "Torch build does not include this GPU architecture" in result.output
+
+
 def test_doctor_shows_gpu_section():
     """soup doctor shows GPU section."""
     result = runner.invoke(app, ["doctor"])
@@ -118,6 +256,26 @@ def test_doctor_checks_optional_deps():
     result = runner.invoke(app, ["doctor"])
     assert result.exit_code == 0
     assert "optional" in result.output
+
+
+def test_doctor_requires_torchao_070_for_optional_feature_support(monkeypatch):
+    """Doctor must report the highest runtime torchao floor used by features."""
+    import types
+
+    monkeypatch.setattr(
+        "soup_cli.commands.doctor.DEPS",
+        [("torchao", "torchao", "0.7.0", False)],
+    )
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "torchao",
+        types.SimpleNamespace(__version__="0.6.0"),
+    )
+
+    result = runner.invoke(app, ["doctor"])
+    assert result.exit_code == 0
+    assert "outdated" in result.output
+    assert ">=0.7.0" in result.output
 
 
 def test_doctor_missing_dep():

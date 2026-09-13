@@ -467,6 +467,75 @@ def _check_mlx():
         )
 
 
+def _gpu_architecture_name(major: int, minor: int) -> str:
+    """Return the NVIDIA architecture family for a compute capability."""
+    if major >= 12 or major == 10:
+        return "Blackwell"
+    if major == 9:
+        return "Hopper"
+    if major == 8 and minor == 9:
+        return "Ada"
+    if major == 8:
+        return "Ampere"
+    if major == 7 and minor == 5:
+        return "Turing"
+    return "Unknown"
+
+
+def _torch_gpu_arch_supported(torch, major: int, minor: int) -> bool:
+    """Return whether Torch has native or PTX coverage for this GPU."""
+    try:
+        arch_list = torch.cuda.get_arch_list()
+    except (AttributeError, RuntimeError):
+        return False
+
+    target = major * 10 + minor
+    for arch in arch_list:
+        if arch == f"sm_{major}{minor}":
+            return True
+        if arch.startswith("compute_"):
+            try:
+                ptx_target = int(arch.removeprefix("compute_"))
+            except ValueError:
+                continue
+            if ptx_target <= target:
+                return True
+
+    return False
+
+
+def _format_gpu_capability(torch, idx: int) -> tuple[str, bool]:
+    """Return ``(capability_text, supported_by_torch)`` for one GPU."""
+    try:
+        major, minor = torch.cuda.get_device_capability(idx)
+    except (RuntimeError, AssertionError):
+        return "unknown", False
+
+    architecture = _gpu_architecture_name(major, minor)
+    supported = _torch_gpu_arch_supported(torch, major, minor)
+    return f"sm_{major}{minor} ({architecture})", supported
+
+
+def _get_precision_capabilities(torch) -> dict[str, tuple[bool, bool | None]]:
+    """Return hardware/software support for the reported precision features."""
+    from soup_cli.utils.advanced_precision import (
+        _torchao_available,
+        is_blackwell_gpu,
+    )
+    from soup_cli.utils.fp8 import is_fp8_available, is_fp8_gpu_supported
+
+    try:
+        bf16_supported = bool(torch.cuda.is_bf16_supported())
+    except (AttributeError, RuntimeError, AssertionError):
+        bf16_supported = False
+
+    return {
+        "BF16": (bf16_supported, None),
+        "FP8": (bool(is_fp8_gpu_supported()), bool(is_fp8_available())),
+        "NVFP4": (bool(is_blackwell_gpu()), bool(_torchao_available())),
+    }
+
+
 def _check_gpu():
     """Check GPU availability and display info."""
     try:
@@ -480,13 +549,42 @@ def _check_gpu():
                 mem = torch.cuda.get_device_properties(idx)
                 total_gb = getattr(mem, "total_memory", getattr(mem, "total_mem", 0))
                 total_gb = total_gb / (1024**3)
-                gpus.append(f"  GPU {idx}: [bold]{name}[/] ({total_gb:.1f} GB)")
+
+                capability, torch_arch_supported = _format_gpu_capability(torch, idx)
+                arch_warning = ""
+                if not torch_arch_supported:
+                    arch_warning = (
+                        " [bold red]Torch build does not include this GPU "
+                        "architecture[/]"
+                    )
+
+                gpus.append(
+                    f"  GPU {idx}: [bold]{name}[/] "
+                    f"({total_gb:.1f} GB) — {capability}{arch_warning}"
+                )
             gpu_info = "\n".join(gpus)
             cuda_ver = torch.version.cuda or "N/A"
+
+            precision = _get_precision_capabilities(torch)
+            precision_lines = []
+            for feature, (hardware, software) in precision.items():
+                hw_status = "[green]yes[/]" if hardware else "[red]no[/]"
+                if software is None:
+                    precision_lines.append(f"  {feature}: hardware={hw_status}")
+                else:
+                    sw_status = "[green]yes[/]" if software else "[yellow]no[/]"
+                    precision_lines.append(
+                        f"  {feature}: hardware={hw_status}, software={sw_status}"
+                    )
+
+            precision_info = "\n".join(precision_lines)
+
             console.print(
                 Panel(
                     f"CUDA:     [bold green]available[/] (v{cuda_ver})\n"
-                    f"GPUs:     [bold]{gpu_count}[/]\n{gpu_info}",
+                    f"GPUs:     [bold]{gpu_count}[/]\n{gpu_info}\n\n"
+                    "[bold]Precision features[/]\n"
+                    f"{precision_info}",
                     title="GPU",
                 )
             )
