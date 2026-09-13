@@ -15,6 +15,7 @@ from soup_cli.utils.profiler import (
     GPU_MEMORY,
     estimate_speed,
     estimate_total,
+    normalize_gpu_key,
     recommend_batch_size,
     recommend_gpu,
 )
@@ -58,7 +59,7 @@ def profile(
         batch_size = int(batch_size)
 
     # Resolve GPU memory
-    gpu_memory_gb = _resolve_gpu_memory(gpu)
+    gpu_memory_gb, gpu_memory_source = _resolve_gpu_memory(gpu)
 
     # Compute profile
     result = estimate_total(
@@ -91,18 +92,28 @@ def profile(
     result["recommended_batch_size"] = recommended_bs
     result["compatible_gpus"] = compatible_gpus
     result["gpu_memory_gb"] = gpu_memory_gb
+    # "flag" (--gpu), "detected" (a device was found) or "assumed" (neither:
+    # the number is a default, not a measurement).
+    result["gpu_memory_source"] = gpu_memory_source
 
     if json_output:
         console.print(json.dumps(result, indent=2))
         return
 
-    _render_profile(result, cfg, gpu_memory_gb)
+    _render_profile(result, cfg, gpu_memory_gb, gpu_memory_source)
 
 
-def _resolve_gpu_memory(gpu: str | None) -> float:
-    """Resolve GPU memory in GB from flag or auto-detection."""
+_ASSUMED_GPU_MEMORY_GB = 24.0
+
+
+def _resolve_gpu_memory(gpu: str | None) -> tuple[float, str]:
+    """Resolve GPU memory in GB, and where the number came from.
+
+    The source is ``"flag"``, ``"detected"`` or ``"assumed"``; an assumed
+    value must not be presented as a measured fit.
+    """
     if gpu is not None:
-        gpu_key = gpu.lower().replace(" ", "").replace("-", "")
+        gpu_key = normalize_gpu_key(gpu)
         if gpu_key not in GPU_MEMORY:
             valid = ", ".join(sorted(GPU_MEMORY.keys()))
             console.print(
@@ -110,7 +121,7 @@ def _resolve_gpu_memory(gpu: str | None) -> float:
                 f"[dim]Valid options: {valid}[/]"
             )
             raise typer.Exit(1)
-        return float(GPU_MEMORY[gpu_key])
+        return float(GPU_MEMORY[gpu_key]), "flag"
 
     # Auto-detect
     try:
@@ -119,15 +130,17 @@ def _resolve_gpu_memory(gpu: str | None) -> float:
         info = get_gpu_info()
         mem_bytes = info.get("memory_total_bytes", 0)
         if mem_bytes > 0:
-            return mem_bytes / (1024**3)
+            return mem_bytes / (1024**3), "detected"
     except (ImportError, RuntimeError, OSError):
         pass
 
-    # Default to 24 GB (common consumer GPU)
-    return 24.0
+    # Nothing detected and no --gpu: a common consumer card, reported as assumed.
+    return _ASSUMED_GPU_MEMORY_GB, "assumed"
 
 
-def _render_profile(result: dict, cfg, gpu_memory_gb: float) -> None:
+def _render_profile(
+    result: dict, cfg, gpu_memory_gb: float, gpu_memory_source: str = "detected"
+) -> None:
     """Render Rich profile output."""
     # Model info
     model_info = (
@@ -154,16 +167,24 @@ def _render_profile(result: dict, cfg, gpu_memory_gb: float) -> None:
     mem_table.add_row("-" * 20, "-" * 10)
     mem_table.add_row("[bold]Total[/]", f"[bold]~{result['total_memory_gb']:.1f} GB[/]")
 
-    # Speed info
+    # Speed info. estimate_speed is an A100 lookup that does not depend on the GPU.
     speed_info = (
         f"Tokens/sec: ~{result['tokens_per_sec']:,.0f}\n"
-        f"Samples/sec: ~{result['samples_per_sec']:.1f}"
+        f"Samples/sec: ~{result['samples_per_sec']:.1f}\n"
+        "[dim]Typical A100 throughput, not specific to your GPU.[/]"
     )
 
     # Recommendations
     recs = []
     fits = result["total_memory_gb"] <= gpu_memory_gb
-    if fits:
+    if gpu_memory_source == "assumed":
+        verdict = "would fit" if fits else "would NOT fit"
+        recs.append(
+            f"[yellow]?[/] No GPU detected: {verdict} in an assumed "
+            f"{gpu_memory_gb:.0f} GB (need ~{result['total_memory_gb']:.0f} GB). "
+            "Pass --gpu for a real verdict."
+        )
+    elif fits:
         recs.append(
             f"[green]OK[/] Fits in {gpu_memory_gb:.0f} GB VRAM"
         )
@@ -173,9 +194,15 @@ def _render_profile(result: dict, cfg, gpu_memory_gb: float) -> None:
             f"(need ~{result['total_memory_gb']:.0f} GB)"
         )
 
-    recs.append(
-        f"[green]OK[/] Recommended batch_size: {result['recommended_batch_size']}"
-    )
+    if gpu_memory_source == "assumed":
+        recs.append(
+            f"[yellow]?[/] batch_size {result['recommended_batch_size']} assumes "
+            f"{gpu_memory_gb:.0f} GB VRAM"
+        )
+    else:
+        recs.append(
+            f"[green]OK[/] Recommended batch_size: {result['recommended_batch_size']}"
+        )
 
     if result["total_memory_gb"] > 24 and not result["gradient_checkpointing"]:
         recs.append(

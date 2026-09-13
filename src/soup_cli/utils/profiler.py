@@ -1,9 +1,14 @@
 """Training profile estimator — memory, speed, and recommendations."""
 
 import math
+import re
 
-# GPU memory lookup table (name → GB VRAM)
+# GPU memory lookup table (name → GB VRAM). Keys are normalized by
+# ``normalize_gpu_key``. Laptop parts get their own key wherever their memory
+# differs from the desktop card of the same number.
 GPU_MEMORY: dict[str, int] = {
+    "rtx3050": 8,
+    "rtx3050_6gb": 6,
     "rtx3060": 12,
     "rtx3070": 8,
     "rtx3070ti": 8,
@@ -16,7 +21,23 @@ GPU_MEMORY: dict[str, int] = {
     "rtx4070ti": 12,
     "rtx4080": 16,
     "rtx4090": 24,
+    "rtx5060": 8,
+    "rtx5060ti": 16,
+    "rtx5060ti_8gb": 8,
+    "rtx5070": 12,
+    "rtx5070ti": 16,
+    "rtx5080": 16,
     "rtx5090": 32,
+    "rtx4050laptop": 6,
+    "rtx4060laptop": 8,
+    "rtx4070laptop": 8,
+    "rtx4080laptop": 12,
+    "rtx4090laptop": 16,
+    "rtx5060laptop": 8,
+    "rtx5070laptop": 8,
+    "rtx5070tilaptop": 12,
+    "rtx5080laptop": 16,
+    "rtx5090laptop": 24,
     "a10": 24,
     "a30": 24,
     "a40": 48,
@@ -24,12 +45,27 @@ GPU_MEMORY: dict[str, int] = {
     "a100_40gb": 40,
     "h100": 80,
     "h200": 141,
+    # DGX B200: 1,440 GB across eight GPUs.
+    "b200": 180,
     "l4": 24,
     "l40": 48,
     "l40s": 48,
     "t4": 16,
     "v100": 32,
 }
+
+_GPU_NAME_NOISE = re.compile(r"\b(nvidia|geforce|tesla|gpu)\b")
+
+
+def normalize_gpu_key(name: str) -> str:
+    """Map a ``--gpu`` value or a device name torch reports to a ``GPU_MEMORY`` key.
+
+    ``"NVIDIA GeForce RTX 5070 Laptop GPU"`` and ``"rtx 5070 laptop"`` both
+    become ``"rtx5070laptop"``; ``"RTX-4090"`` becomes ``"rtx4090"``.
+    """
+    key = _GPU_NAME_NOISE.sub("", name.lower())
+    return re.sub(r"[\s-]+", "", key)
+
 
 # Known model architectures: model_size_b → (hidden_size, num_layers, intermediate_size)
 _KNOWN_ARCHS: dict[float, tuple[int, int, int]] = {
