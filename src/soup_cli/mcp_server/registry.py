@@ -247,9 +247,7 @@ def tool_data_validate(args: dict) -> dict:
     # Absent means auto; an empty or blank string is a value the caller
     # supplied and it is not a format, so it is refused -- `soup data
     # validate --format ""` exits 1 rather than auto-detecting, and this
-    # surface has to answer the same way. (`tool_data_doctor` below still
-    # spells this `or "auto"`, so it reads a blank string as omitted; noted
-    # in #878 rather than changed here.)
+    # surface has to answer the same way.
     fmt = _opt_str(args, "format")
     fmt = "auto" if fmt is None else fmt
     if fmt != "auto" and fmt not in _formats.VALID_FORMATS:
@@ -293,7 +291,13 @@ def tool_data_doctor(args: dict) -> dict:
 
     rows = _load_data_rows(_require_str(args, "data"))
     model = _require_str(args, "model")
-    fmt = _opt_str(args, "format") or "auto"
+    fmt = _opt_str(args, "format")
+    fmt = "auto" if fmt is None else fmt
+    if fmt != "auto" and fmt not in _formats.VALID_FORMATS:
+        raise McpToolError(
+            f"unknown format {fmt!r}; accepted: auto, "
+            + ", ".join(sorted(_formats.VALID_FORMATS))
+        )
     max_length = _opt_int(args, "max_length", 2048, lo=64, hi=1_048_576)
     sample_size = _opt_int(args, "sample_size", 200, lo=1, hi=2000)
     if fmt == "auto":
