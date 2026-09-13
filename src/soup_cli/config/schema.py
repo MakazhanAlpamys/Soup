@@ -4288,7 +4288,11 @@ class SoupConfig(BaseModel):
     def _validate_chat_template_supported_tasks(self) -> "SoupConfig":
         """Reject chat-template overrides on trainers that never render chat."""
         unsupported = {"pretrain", "embedding", "classifier", "reranker", "cross_encoder"}
-        if self.data.chat_template is not None and self.task in unsupported:
+        if (
+            self.data.chat_template is not None
+            and self.task in unsupported
+            and not self.training.stream_layers
+        ):
             raise ValueError(
                 "data.chat_template is not used by "
                 f"task={self.task!r}; remove it or choose a conversational training task"

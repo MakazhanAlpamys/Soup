@@ -267,3 +267,19 @@ class TestNonChatTasksRejectTheField:
                 data={"train": "data.jsonl", "chat_template": "chatml"},
                 training=training,
             )
+
+    @pytest.mark.parametrize("task", ("pretrain", "embedding"))
+    def test_streaming_incompatibility_keeps_its_existing_error_precedence(self, task):
+        from soup_cli.config.schema import SoupConfig
+
+        with pytest.raises(ValidationError, match="stream_layers"):
+            SoupConfig(
+                base="model",
+                task=task,
+                data={"train": "data.jsonl", "chat_template": "chatml"},
+                training={
+                    "stream_layers": True,
+                    "batch_size": 1,
+                    "quantization": "none",
+                },
+            )
