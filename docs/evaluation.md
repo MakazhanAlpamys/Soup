@@ -157,14 +157,35 @@ so a single outlier row doesn't flip the gate.
 soup eval gate-install --baseline run-abc-123 --suite evals/locked.json
 ```
 
-The generated `.git/hooks/pre-push` script:
+The generated `.git/hooks/pre-push` script compares the candidate named by
+`SOUP_CANDIDATE_RUN_ID` against the baseline. Its default `task_accuracy` lookup also
+falls back to the `custom` result written by `soup eval custom --run-id`, so the hook
+works with Soup-produced evaluation data without hand-written database rows.
 
-- Compares against a baseline run id from the Soup registry.
-- Watches four metrics: `task_accuracy`, `refusal_rate`, `format_validity`,
-  `p95_latency_ms`.
-- Treats `task_accuracy` / `refusal_rate` / `format_validity` as higher-is-better
-  and `p95_latency_ms` as lower-is-better; regression is decided per metric on the
-  paired-bootstrap CI bound (upper bound for higher-better, lower for lower-better).
+You can also compare a specific result directly:
+
+```bash
+# Names written by Soup are accepted directly.
+soup eval against run-base --candidate run-candidate --metric custom
+soup eval against run-base --candidate run-candidate --metric aider_polyglot
+soup eval against run-base --candidate run-candidate --metric judge:openai/judge-model
+
+# Arbitrary lm-eval tasks use an explicit namespace so typos remain usage errors.
+soup eval against run-base --candidate run-candidate --metric benchmark:mmlu
+```
+
+- `task_accuracy`, `refusal_rate`, `format_validity`, `custom`, `aider_polyglot`,
+  `judge:<model>`, and `benchmark:<task>` are higher-is-better. `p95_latency_ms` is
+  lower-is-better. Eval benchmark scores use the `task_accuracy` tolerance.
+- Unknown names are rejected before the experiment database is opened.
+- Exit status `0` means no regression, `1` means regression, `2` means invalid input or
+  a failed comparison, and `3` means the required results are unavailable. The generated
+  hook blocks all three failure states while reporting unavailable data separately from
+  a measured regression.
+- Regression is decided on the paired-bootstrap CI bound (upper bound for higher-better,
+  lower for lower-better). A single aggregate result is still compared by its point
+  delta, but Soup labels the confidence interval unavailable instead of displaying the
+  repeated point as an interval.
 - Uses `shlex.quote` on every embedded value — no shell-injection surface from a
   crafted run id or suite path.
 - Refuses to overwrite an existing hook without `--force`; rejects pre-placed
