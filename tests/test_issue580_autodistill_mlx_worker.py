@@ -341,6 +341,14 @@ def test_worker_verification_survives_a_real_venv_launcher(monkeypatch, tmp_path
 
     assert result.worker_exit_confirmed is True
     assert result.row_count == result.token_count == 3
+    if sys.platform == "win32":
+        # Confirm the launcher mismatch was actually exercised here, not just
+        # assumed -- otherwise a future CPython dropping the redirector would
+        # make this test quietly stop discriminating, with no signal.
+        receipt = json.loads(
+            (publication_root / ".workers/transaction-0001/worker-receipt.json").read_bytes()
+        )
+        assert receipt["worker_pid"] != result.worker_pid
 
 
 def test_controller_rejects_available_manifest_not_bound_to_worker_receipt(
