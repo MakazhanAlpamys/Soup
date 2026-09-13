@@ -20,10 +20,14 @@ The control cases matter as much as the failing one: `probs`, `concat` and
 
 from __future__ import annotations
 
+import io
+from collections import Counter
 from pathlib import Path
 
 import pytest
+from rich.console import Console
 
+import soup_cli.data.loader as loader
 from soup_cli.config.schema import SoupConfig
 from soup_cli.data.loader import _row_key, _split_val, _split_val_deduplicated, load_dataset
 from tests.test_issue459_interleave_streaming_hub import (
@@ -104,26 +108,80 @@ def test_deduplicated_split_is_disjoint_and_val_is_not_empty() -> None:
     assert not (train_keys & val_keys)
 
 
+def _multiset(rows: list[dict]) -> Counter:
+    return Counter(_row_key(row) for row in rows)
+
+
 def test_no_row_is_lost_by_the_deduplicated_split() -> None:
-    """Every distinct row still lands on exactly one side."""
+    """Every input row comes out on exactly one side, with its multiplicity.
+
+    Stated about the rows, not re-derived from the implementation's filter:
+    the output multiset must equal the input multiset.
+    """
     rows = _recycled_interleave()
     train, val = _split_val_deduplicated(rows, 0.1)
 
-    distinct = {_row_key(row) for row in rows}
-    assert {_row_key(row) for row in train} | {_row_key(row) for row in val} == distinct
+    assert val
+    assert _multiset(train) + _multiset(val) == _multiset(rows)
 
 
 def test_duplicates_of_a_train_row_are_kept() -> None:
-    """Only val rows lose their copies; the oversampling is otherwise intact."""
+    """The oversampling of train rows survives the split."""
     rows = _recycled_interleave()
-    train, val = _split_val_deduplicated(rows, 0.1)
+    train, _ = _split_val_deduplicated(rows, 0.1)
 
-    val_keys = {_row_key(row) for row in val}
-    kept = [row for row in rows if _row_key(row) not in val_keys]
-    assert len(train) == len(kept)
     assert len(train) > len({_row_key(row) for row in train}), (
         "train should still contain recycled duplicates of non-val rows"
     )
+
+
+def test_genuinely_repeated_source_rows_are_not_lost() -> None:
+    """Two distinct source rows that render to the same text (#729 review).
+
+    Content keying cannot tell them from a recycled copy. The split used to
+    put one in val and filter the other out of train, so 20 rows went in and
+    19 came out. Val is now drawn from content that occurs once.
+    """
+    rows = [{"text": f"r{i}"} for i in range(18)]
+    rows += [{"text": "DUPLICATE_CONTENT"}, {"text": "DUPLICATE_CONTENT"}]
+
+    train, val = _split_val_deduplicated(rows, 0.3)
+
+    assert val
+    assert not (set(_multiset(train)) & set(_multiset(val)))
+    assert _multiset(train) + _multiset(val) == _multiset(rows)
+
+
+def test_too_little_unique_content_withholds_copies_loudly(monkeypatch) -> None:
+    """When val can only be filled from repeated content, say how much train lost."""
+    out = io.StringIO()
+    monkeypatch.setattr(loader, "console", Console(file=out, width=400))
+    rows = [{"text": f"r{i}"} for i in range(10) for _ in range(3)]
+
+    train, val = _split_val_deduplicated(rows, 0.2)
+
+    assert len(val) == 2
+    assert not (set(_multiset(train)) & set(_multiset(val)))
+    assert len(train) + len(val) + 4 == len(rows)
+    assert "withheld 4 duplicate row(s) from train" in out.getvalue()
+
+
+def test_the_recycled_case_withholds_nothing(monkeypatch) -> None:
+    out = io.StringIO()
+    monkeypatch.setattr(loader, "console", Console(file=out, width=400))
+
+    _split_val_deduplicated(_recycled_interleave(), 0.1)
+
+    assert "withheld" not in out.getvalue()
+
+
+@pytest.mark.parametrize("val_split", [0.1, 0.5])
+def test_a_single_distinct_row_refuses_rather_than_training_on_nothing(val_split) -> None:
+    """Mirror of `_split_val_per_source`'s refusal on the eager path."""
+    rows = [{"text": "same"}] * 20
+
+    with pytest.raises(ValueError, match="leaves 0 training rows under streaming 'over'"):
+        _split_val_deduplicated(rows, val_split)
 
 
 def test_a_split_with_no_duplicates_matches_the_ordinary_split() -> None:
@@ -136,9 +194,16 @@ def test_row_key_ignores_key_order() -> None:
     assert _row_key({"a": 1, "b": 2}) == _row_key({"b": 2, "a": 1})
 
 
-def test_row_key_survives_an_unserialisable_value() -> None:
-    """A leak check must not become a crash on an exotic column."""
+def test_row_key_serialises_an_unknown_type_through_repr() -> None:
     assert _row_key({"x": object()})
+
+
+def test_row_key_falls_back_when_json_refuses_the_row() -> None:
+    """A leak check must not become a crash: a circular value makes json raise."""
+    looped: list = []
+    looped.append(looped)
+
+    assert _row_key({"x": looped}) == _row_key({"x": looped})
 
 
 # ---------------------------------------------------------------------------
@@ -157,15 +222,30 @@ def test_streaming_over_with_val_split_has_no_overlap(tmp_path, monkeypatch) -> 
     assert result["train"], "train must not be empty"
 
 
+def test_streaming_over_on_a_single_distinct_row_refuses(tmp_path, monkeypatch) -> None:
+    _write_jsonl(tmp_path / "big.jsonl", ["same"] * 20)
+    _write_jsonl(tmp_path / "small.jsonl", ["same"] * 2)
+    _install_fake_streaming_datasets(monkeypatch, [])
+
+    with pytest.raises(ValueError, match="leaves 0 training rows under streaming 'over'"):
+        load_dataset(_cfg(tmp_path, strategy="over", val_split=0.5).data)
+
+
 @pytest.mark.parametrize("strategy", ["concat", "under", "probs"])
 def test_the_other_strategies_are_unchanged(tmp_path, monkeypatch, strategy) -> None:
     """Control: only `over` duplicates rows on this path.
 
     These three go through the ordinary `_finalize` split, and this asserts
-    the fix did not quietly reroute them.
+    the fix did not quietly reroute them: the deduplicating split must never
+    be called, and val must be non-empty so disjointness is not vacuous.
     """
     _sources(tmp_path)
     _install_fake_streaming_datasets(monkeypatch, [])
+
+    def rerouted(*args, **kwargs):
+        raise AssertionError(f"{strategy} was rerouted through the #702 split")
+
+    monkeypatch.setattr(loader, "_split_val_deduplicated", rerouted)
 
     config = SoupConfig.model_validate(
         {
@@ -190,6 +270,7 @@ def test_the_other_strategies_are_unchanged(tmp_path, monkeypatch, strategy) -> 
 
     assert _overlap(result) == 0
     assert result["train"]
+    assert result["val"]
 
 
 def test_streaming_over_without_val_split_is_untouched(tmp_path, monkeypatch) -> None:

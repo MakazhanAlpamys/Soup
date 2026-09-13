@@ -484,8 +484,8 @@ def _row_key(row: dict) -> str:
 
     try:
         return json.dumps(row, sort_keys=True, default=repr)
-    except (TypeError, ValueError):  # pragma: no cover - defensive
-        return repr(sorted(row.items(), key=lambda kv: kv[0]))
+    except (TypeError, ValueError):
+        return repr(sorted(row.items(), key=lambda kv: str(kv[0])))
 
 
 def _split_val_deduplicated(
@@ -500,26 +500,54 @@ def _split_val_deduplicated(
     on each side -- validation loss on the recycled source then measures
     memorisation and reports a suspiciously good number rather than an error.
 
-    #701 fixes the eager path by carving val out per source *before* padding.
-    That does not transfer here: a stream is not countable ahead of time, so
-    there is no length to take a fraction of. What this path does have, by the
-    time it splits, is the materialised rows -- so the split happens over
-    *distinct* rows, and every copy of a chosen val row is then withheld from
-    train.
+    A stream is not countable ahead of time, so #701's per-source carve-out
+    does not transfer. The split is instead sized over *distinct* rows, and
+    val is drawn from the tail of the distinct rows in stream order,
+    preferring content that occurs exactly once: such a row has no copy to
+    leave behind, so taking it costs train nothing. Content is keyed by
+    value, so a recycled copy and a genuinely repeated source row are
+    indistinguishable; only when too few unique rows exist is repeated
+    content used, and then every other copy is withheld from train and the
+    number withheld is reported rather than dropped silently.
 
-    Train therefore loses the upsampling for the specific rows that became
-    val. That is the intended trade: oversampling a row is a tuning choice,
-    while having it on both sides of the split makes the validation number
-    meaningless.
+    Raises ``ValueError`` when the split would leave no training rows, the
+    same refusal ``_split_val_per_source`` makes on the eager path.
     """
-    seen: dict[str, dict] = {}
-    for row in rows:
-        seen.setdefault(_row_key(row), row)
-    distinct = list(seen.values())
+    from collections import Counter
 
-    _, val_rows = _split_val(distinct, val_split)
-    val_keys = {_row_key(row) for row in val_rows}
-    train_rows = [row for row in rows if _row_key(row) not in val_keys]
+    keys = [_row_key(row) for row in rows]
+    counts = Counter(keys)
+    first_index: dict[str, int] = {}
+    for index, key in enumerate(keys):
+        first_index.setdefault(key, index)
+    distinct = list(first_index)
+
+    n_val = len(distinct) - int(len(distinct) * (1 - val_split))
+    newest_first = distinct[::-1]
+    unique = [key for key in newest_first if counts[key] == 1]
+    repeated = [key for key in newest_first if counts[key] > 1]
+    chosen = unique[:n_val]
+    fallback = repeated[: n_val - len(chosen)]
+    val_keys = set(chosen) | set(fallback)
+
+    val_rows = [rows[first_index[key]] for key in sorted(val_keys, key=first_index.get)]
+    train_rows = [row for row, key in zip(rows, keys) if key not in val_keys]
+
+    if rows and not train_rows:
+        raise ValueError(
+            f"data.interleave: data.val_split={val_split} leaves 0 training rows "
+            f"under streaming 'over', which splits over distinct rows: the "
+            f"{len(rows)} materialised row(s) hold {len(distinct)} distinct "
+            "row(s). Add distinct rows, set val_split: 0, or use 'concat'/'under'."
+        )
+    withheld = sum(counts[key] - 1 for key in fallback)
+    if withheld:
+        console.print(
+            f"[yellow]Warning: data.val_split under streaming 'over' withheld "
+            f"{withheld} duplicate row(s) from train: too few rows with unique "
+            f"content to fill val, so {len(fallback)} val row(s) have copies "
+            "that would otherwise have leaked into train.[/]"
+        )
     return train_rows, val_rows
 
 

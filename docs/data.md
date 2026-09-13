@@ -688,11 +688,21 @@ result as before.
 
 The streaming path reaches the same guarantee by a different route (#702). A stream is not
 countable ahead of time, so there is nothing to take a fraction of before interleaving
-starts; instead, once `over` has been materialised, the split is taken over the *distinct*
-rows and every copy of a chosen val row is withheld from train. Train therefore keeps the
-oversampling for every row except those that became val, and `train`/`val` are disjoint.
-`concat`/`under`/`probs` never duplicate a row on the streaming path (only `over` uses
-`stopping_strategy="all_exhausted"`) and keep the ordinary split.
+starts; instead, once `over` has been materialised, the split is sized over the *distinct*
+rows and val is taken from the end of the stream, preferring rows whose content occurs only
+once, so train keeps every row and all of its oversampling. Only if there are too few such
+rows is repeated content moved to val, and then its other copies are withheld from train
+and the number withheld is printed as a warning. A split that would leave train empty
+raises instead. Because val comes from distinct rows in stream order rather than from each
+source in turn, **it is not balanced across sources**: with 100 rows against 10 under
+`val_split: 0.1`, every val row comes from the larger source, since the smaller one's rows
+are all recycled. The eager path's per-source carve-out is mixture-representative; this one
+is not.
+
+`concat`/`under`/`probs` do not *add* duplicates on the streaming path (only `over` uses
+`stopping_strategy="all_exhausted"`), so they keep the ordinary positional split. That is a
+statement about interleaving, not about your data: rows that are already duplicated in a
+source can still land on both sides of the split under any strategy, on either path.
 
 Splitting before padding also means the requested `val_split` fraction is no longer exact
 under `over`/`probs`: it is taken from each source's own (smaller, unpadded) row count, so
