@@ -23,6 +23,87 @@ STATIC_DIR = Path(__file__).parent / "static"
 # Max file read size to prevent memory exhaustion
 _MAX_INSPECT_LIMIT = 500
 
+# YAML-bearing Web UI requests are tiny in normal use (the shipped recipes are
+# all well below this).  Cap the complete encoded HTTP body, rather than only a
+# Pydantic field, so dict-shaped endpoints and clients without Content-Length
+# receive the same protection before JSON or YAML validation can run.
+_MAX_YAML_REQUEST_BYTES = 1024 * 1024
+_YAML_REQUEST_PATHS = frozenset({
+    "/api/config/validate",
+    "/api/train/start",
+    "/api/config/from-form",
+})
+
+
+class _YamlRequestBodyLimitMiddleware:
+    """Reject oversized YAML-entry request bodies before route processing.
+
+    ``Content-Length`` provides the cheap path.  Pre-reading at most the limit
+    plus one byte prevents chunked requests, missing headers, and understated
+    headers from bypassing the cap, and keeps the request away from FastAPI's
+    JSON parser until its size is known.
+    """
+
+    def __init__(self, app, max_body_size: int = _MAX_YAML_REQUEST_BYTES) -> None:
+        self._app = app
+        self._max_body_size = max_body_size
+
+    async def _reject(self, scope, receive, send) -> None:
+        from starlette.responses import JSONResponse
+
+        response = JSONResponse(
+            status_code=413,
+            content={"detail": "Request body too large"},
+        )
+        await response(scope, receive, send)
+
+    async def __call__(self, scope, receive, send) -> None:
+        if (
+            scope.get("type") != "http"
+            or scope.get("method") != "POST"
+            or scope.get("path") not in _YAML_REQUEST_PATHS
+        ):
+            await self._app(scope, receive, send)
+            return
+
+        for key, value in scope.get("headers", ()):
+            if key.lower() != b"content-length":
+                continue
+            try:
+                if int(value) > self._max_body_size:
+                    await self._reject(scope, receive, send)
+                    return
+            except ValueError:
+                # Do not trust a malformed header; the receive wrapper below
+                # still enforces the actual byte count.
+                pass
+
+        received = 0
+        buffered_messages = []
+        while True:
+            message = await receive()
+            buffered_messages.append(message)
+            if message.get("type") == "http.request":
+                received += len(message.get("body", b""))
+                if received > self._max_body_size:
+                    await self._reject(scope, receive, send)
+                    return
+                if message.get("more_body", False):
+                    continue
+            break
+
+        message_index = 0
+
+        async def receive_buffered():
+            nonlocal message_index
+            if message_index < len(buffered_messages):
+                message = buffered_messages[message_index]
+                message_index += 1
+                return message
+            return await receive()
+
+        await self._app(scope, receive_buffered, send)
+
 
 class TrainRequest(PydanticBaseModel):
     """Request body for starting a training run."""
@@ -247,6 +328,10 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
             "/docs/oauth2-redirect" if _docs_enabled else None
         ),
     )
+
+    # Install before CORS so Starlette keeps CORS outside the limiter and 413
+    # responses retain the same browser-facing headers as endpoint responses.
+    app.add_middleware(_YamlRequestBodyLimitMiddleware)
 
     # Restrict CORS to the origin we actually serve. When `host == "0.0.0.0"`
     # the literal `http://0.0.0.0:<port>` is never a browser origin, so we
