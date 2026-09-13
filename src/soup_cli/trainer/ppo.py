@@ -297,6 +297,48 @@ class PPOTrainerWrapper:
         # Store for use in train() — experimental API has different .train() signature
         self._is_experimental = is_experimental
 
+        # LoRA+ optimizer (#724/#745), PPO's shape. The other eleven LoRA
+        # trainers are plain transformers.Trainer subclasses whose
+        # create_optimizer runs lazily at train(), so a post-construction
+        # attach_loraplus_optimizer lands cleanly and the scheduler is built
+        # around it. trl.experimental's PPOTrainer is not that shape: its
+        # __init__ builds the optimizer AND scheduler eagerly
+        # (create_optimizer_and_scheduler) and then calls
+        # accelerator.prepare(model, optimizer, dataloader) without the
+        # scheduler. Assigning trainer.optimizer afterwards is still stepped
+        # (B does train at lr*ratio), but self.lr_scheduler stays bound to the
+        # discarded default optimizer, so warmup and decay never reach the B
+        # group and get_last_lr() reports the wrong optimizer. Build the LoRA+
+        # optimizer up front and hand it to the constructor via
+        # optimizers=(opt, None) so create_optimizer_and_scheduler binds the
+        # scheduler to it. If trl ever makes the PPO optimizer lazy, delete this
+        # branch and let PPO join the post-construction attach.
+        #
+        # Detect the shape, not the trl version (see trainer/_trl_compat.py):
+        # the eager shape is exactly the one whose __init__ accepts an
+        # `optimizers` tuple. If a future trl.experimental drops that keyword,
+        # fail loudly here rather than silently fall back to the post-attach and
+        # reintroduce the flat-LR bug.
+        loraplus_optimizer = None
+        if getattr(tcfg, "loraplus_lr_ratio", None) is not None:
+            if "optimizers" not in ppo_trainer_params:
+                raise RuntimeError(
+                    "training.loraplus_lr_ratio is set, but this trl PPOTrainer "
+                    f"({ppo_trainer_cls.__module__}.{ppo_trainer_cls.__qualname__}) "
+                    "does not accept an `optimizers` argument, so the LoRA+ "
+                    "optimizer cannot be bound to the LR scheduler at "
+                    "construction. A post-construction attach would train the "
+                    "LoRA B group at a flat lr*ratio with warmup and decay never "
+                    "reaching it. Pin a trl whose PPO trainer takes "
+                    "optimizers=(optimizer, scheduler), or remove "
+                    "loraplus_lr_ratio for this run."
+                )
+            from soup_cli.utils.peft_wiring import build_loraplus_optimizer
+
+            loraplus_optimizer = build_loraplus_optimizer(
+                self.model, ppo_config, tcfg
+            )
+
         if is_experimental:
             # trl >=0.28 experimental API: PPOTrainer(args, processing_class,
             #   model, ref_model, reward_model, train_dataset, value_model, ...)
@@ -314,6 +356,9 @@ class PPOTrainerWrapper:
                 "train_dataset": train_ds,
                 "value_model": value_model_obj,
             }
+            # LoRA+ (#724/#745): inject so the eagerly-built scheduler binds to it.
+            if loraplus_optimizer is not None:
+                trainer_kwargs["optimizers"] = (loraplus_optimizer, None)
             self._dataset_in_constructor = True
             self.trainer = ppo_trainer_cls(**trainer_kwargs)
 
@@ -341,6 +386,9 @@ class PPOTrainerWrapper:
                 )
             if "value_model" in ppo_trainer_params:
                 trainer_kwargs["value_model"] = self._create_value_model(cfg, tcfg)
+            # LoRA+ (#724/#745): inject so the eagerly-built scheduler binds to it.
+            if loraplus_optimizer is not None:
+                trainer_kwargs["optimizers"] = (loraplus_optimizer, None)
             self._dataset_in_constructor = (
                 "train_dataset" in trainer_kwargs or "dataset" in trainer_kwargs
             )
@@ -382,6 +430,9 @@ class PPOTrainerWrapper:
         )
 
         # v0.40.6 #67 — ReLoRA callback (magnitude-prune LoRA every N steps).
+        # LoRA+ (#724/#745) is wired ABOVE via constructor injection, not here:
+        # PPO's trainer builds its scheduler eagerly, so the optimizer has to be
+        # passed to the constructor rather than attached after it.
         from soup_cli.utils.peft_wiring import (
             attach_curriculum_callback,
             attach_plugin_callback,
