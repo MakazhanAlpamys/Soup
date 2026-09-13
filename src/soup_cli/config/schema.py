@@ -4284,6 +4284,17 @@ class SoupConfig(BaseModel):
             )
         return value
 
+    @model_validator(mode="after")
+    def _validate_chat_template_supported_tasks(self) -> "SoupConfig":
+        """Reject chat-template overrides on trainers that never render chat."""
+        unsupported = {"pretrain", "embedding", "classifier", "reranker", "cross_encoder"}
+        if self.data.chat_template is not None and self.task in unsupported:
+            raise ValueError(
+                "data.chat_template is not used by "
+                f"task={self.task!r}; remove it or choose a conversational training task"
+            )
+        return self
+
     @model_validator(mode="before")
     @classmethod
     def _remap_root_level_misplaced_keys(cls, values):

@@ -11,6 +11,7 @@ from typing import Any, Optional
 from rich.console import Console
 
 from soup_cli.config.schema import SoupConfig, TrainingConfig
+from soup_cli.data.chat_templates import apply_chat_template_override
 from soup_cli.utils.gpu import (
     bf16_fp16_flags,
     estimate_batch_size,
@@ -353,6 +354,10 @@ class GRPOTrainerWrapper:
             self._setup_unsloth(cfg, tcfg)
         else:
             self._setup_transformers(cfg, tcfg)
+
+        apply_chat_template_override(
+            self.tokenizer, cfg.data.chat_template, console=console
+        )
 
         # Ensure tokenizer has a chat template — trl's GRPOTrainer calls
         # apply_chat_template() when it detects conversational prompts (message
