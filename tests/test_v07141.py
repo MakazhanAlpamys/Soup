@@ -141,10 +141,10 @@ class TestRunStress:
                 out.append(1.0 if "GOLD" in text else 0.0)
             return out
 
-        rep_at = rst.run_stress(reward_fn, ["x"], max_gameable=0.25)
+        rep_at = rst.run_stress(reward_fn, ["x"], attacks=rst.CLASSIC_ATTACKS, max_gameable=0.25)
         assert rep_at.gameability == 0.25
         assert rep_at.gameable is False  # 0.25 > 0.25 is False -> inclusive
-        rep_below = rst.run_stress(reward_fn, ["x"], max_gameable=0.2)
+        rep_below = rst.run_stress(reward_fn, ["x"], attacks=rst.CLASSIC_ATTACKS, max_gameable=0.2)
         assert rep_below.gameable is True
 
     def test_threshold_applied(self):
@@ -172,7 +172,7 @@ class TestRunStress:
         rep = rst.run_stress(self._numeric_verifier(), ["42", "7"])
         assert {a.kind for a in rep.attacks} == set(rst.ATTACKS)
         for a in rep.attacks:
-            assert a.n == 2 and a.accepted == 0
+            assert a.n == len(rst.generate_attack_variants(a.kind)) * 2 and a.accepted == 0
 
     def test_short_return_raises_not_false_robust(self):
         # A gold-requiring builtin scored with no answer returns [] (its
@@ -194,9 +194,11 @@ class TestRunStress:
     def test_real_accuracy_builtin_gold_path_robust(self):
         from soup_cli.trainer.rewards import load_reward_fn
 
-        rep = rst.run_stress(load_reward_fn("accuracy"), ["42", "7"])
-        # accuracy compares the completion tail against the gold; junk never matches,
-        # and a gold scored as its own completion is a perfect match.
+        rep = rst.run_stress(
+            load_reward_fn("accuracy"), ["42", "7"], attacks=rst.CLASSIC_ATTACKS
+        )
+        # Under classic attacks, accuracy compares the completion tail against the gold;
+        # classic junk never matches, and a gold scored as its own completion is a perfect match.
         assert rep.gameable is False
         assert rep.reference_accept == 1.0
 

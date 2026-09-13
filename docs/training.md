@@ -1080,10 +1080,12 @@ completions are prompted to mark their answer (standard RLVR practice).
 ### Stress-test a verifier for gameability (`soup reward stress`)
 
 A verifier that passes calibration still might pay out for junk. `soup reward stress` feeds the
-verifier deterministic degenerate completions — empty, length-padded, repeated, and
-sentinel-spam — scored against your real gold answers, and flags any it **accepts**. It's the
-adversarial counterpart to `synth`: calibration proves the verifier tells references from
-*friendly* bad answers; `stress` asks whether a reward-hacking model could game it.
+verifier deterministic degenerate completions — classic degenerate strings (empty, length-padded,
+repeated, sentinel-spam) and structure-preserving attacks (`wrapped_junk` reasoning scaffolds,
+`answer_spray` distractor injections, and `structure_without_content` empty JSON/tool payloads) —
+scored against real gold answers, and flags any it **accepts**. It's the adversarial counterpart
+to `synth`: calibration proves the verifier tells references from *friendly* bad answers;
+`stress` asks whether a reward-hacking model could game it.
 
 ```bash
 # probe a synthesized verifier (or any reward .py) — exit 0 robust, 2 gameable, 1 error
@@ -1094,8 +1096,8 @@ soup reward stress verifiable --verifiable-domain math --references golds.jsonl
 
 # tune the attack set / accept threshold / gameability tolerance
 soup reward stress reward.py --references golds.jsonl \
-    --attacks empty,length,repetition,sentinel --sentinel GOLD \
-    --threshold 0.5 --max-gameable 0.0
+    --attacks empty,length,repetition,sentinel,wrapped_junk,answer_spray,structure_without_content \
+    --sentinel GOLD --threshold 0.5 --max-gameable 0.0
 ```
 
 The report shows a per-attack accept-rate and an overall verdict. A gold-requiring verifier probed
