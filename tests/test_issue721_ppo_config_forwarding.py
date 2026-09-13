@@ -8,7 +8,21 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from soup_cli.trainer._trl_compat import kl_penalty_kwargs
 from soup_cli.trainer.ppo import _effective_ppo_setting, _set_ppo_training_kwargs
+
+
+def _config_accepting(*fields: str) -> type:
+    """A config class whose constructor signature accepts exactly ``fields``."""
+
+    class Config:
+        def __init__(self, **kwargs: object) -> None:
+            pass
+
+    Config.__signature__ = inspect.Signature(
+        [inspect.Parameter(name, inspect.Parameter.KEYWORD_ONLY, default=None) for name in fields]
+    )
+    return Config
 
 
 @pytest.fixture
@@ -20,7 +34,7 @@ def test_current_trl_parameter_names_receive_non_defaults(training_config) -> No
     kwargs: dict[str, object] = {}
     fields = _set_ppo_training_kwargs(
         kwargs,
-        {"num_train_epochs": None, "num_ppo_epochs": None, "kl_coef": None},
+        _config_accepting("num_train_epochs", "num_ppo_epochs", "kl_coef"),
         training_config,
     )
 
@@ -40,7 +54,7 @@ def test_legacy_trl_parameter_names_remain_supported(training_config) -> None:
     kwargs: dict[str, object] = {}
     fields = _set_ppo_training_kwargs(
         kwargs,
-        {"ppo_epochs": None, "init_kl_coef": None},
+        _config_accepting("ppo_epochs", "init_kl_coef"),
         training_config,
     )
 
@@ -57,13 +71,9 @@ def test_current_names_win_when_a_signature_carries_both(training_config) -> Non
     kwargs: dict[str, object] = {}
     fields = _set_ppo_training_kwargs(
         kwargs,
-        {
-            "num_train_epochs": None,
-            "num_ppo_epochs": None,
-            "ppo_epochs": None,
-            "kl_coef": None,
-            "init_kl_coef": None,
-        },
+        _config_accepting(
+            "num_train_epochs", "num_ppo_epochs", "ppo_epochs", "kl_coef", "init_kl_coef"
+        ),
         training_config,
     )
 
@@ -77,6 +87,29 @@ def test_current_names_win_when_a_signature_carries_both(training_config) -> Non
         "ppo_epochs": "num_ppo_epochs",
         "kl_coef": "kl_coef",
     }
+
+
+@pytest.mark.parametrize(
+    ("fields", "expected"),
+    [
+        (("kl_coef",), {"kl_coef": 0.7}),
+        (("init_kl_coef",), {"init_kl_coef": 0.7}),
+        (("init_kl_coef", "kl_coef"), {"kl_coef": 0.7}),
+        (("cliprange",), {}),
+    ],
+)
+def test_kl_penalty_kwargs_follows_the_rename(fields, expected) -> None:
+    assert kl_penalty_kwargs(_config_accepting(*fields), 0.7) == expected
+
+
+def test_a_config_without_a_kl_field_leaves_it_unforwarded(training_config) -> None:
+    kwargs: dict[str, object] = {}
+    fields = _set_ppo_training_kwargs(
+        kwargs, _config_accepting("num_train_epochs", "num_ppo_epochs"), training_config
+    )
+
+    assert "kl_coef" not in fields
+    assert kwargs == {"num_train_epochs": 7, "num_ppo_epochs": 2}
 
 
 def test_an_unforwarded_setting_is_marked_rather_than_echoed() -> None:
@@ -97,9 +130,8 @@ def test_installed_trl_exposes_and_receives_current_names(training_config) -> No
     pytest.importorskip("trl.experimental.ppo")
     from trl.experimental.ppo import PPOConfig
 
-    params = inspect.signature(PPOConfig).parameters
     kwargs: dict[str, object] = {}
-    _set_ppo_training_kwargs(kwargs, params, training_config)
+    _set_ppo_training_kwargs(kwargs, PPOConfig, training_config)
 
     assert kwargs["num_train_epochs"] == 7
     assert kwargs["num_ppo_epochs"] == 2

@@ -120,6 +120,20 @@ def prompt_length_kwargs(config_cls: type, max_prompt_length: int) -> dict[str, 
     return {}
 
 
+def kl_penalty_kwargs(config_cls: type, kl_penalty: float) -> dict[str, float]:
+    """``{'kl_coef': x}`` or ``{'init_kl_coef': x}``, whichever this trl's config takes.
+
+    trl 0.29 renamed ``init_kl_coef`` to ``kl_coef`` on ``PPOConfig``. The new
+    name wins when a config accepts both. Returns an empty dict when it accepts
+    neither, so a third rename leaves the coefficient visibly unforwarded
+    rather than passing a keyword the config would reject.
+    """
+    for name in ("kl_coef", "init_kl_coef"):
+        if config_accepts(config_cls, name):
+            return {name: kl_penalty}
+    return {}
+
+
 def _truncate_tokens(tokens: list[int], limit: int, mode: str) -> list[int]:
     """Truncate one token sequence using TRL's preference-side convention."""
     if limit <= 0:

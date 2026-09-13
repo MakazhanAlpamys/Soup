@@ -28,29 +28,29 @@ console = Console()
 
 def _set_ppo_training_kwargs(
     ppo_kwargs: dict[str, object],
-    ppo_params: Mapping[str, object],
+    ppo_config_cls: type,
     tcfg: Any,
 ) -> dict[str, str]:
     """Forward Soup's three PPO schedules across TRL parameter renames."""
+    from soup_cli.trainer._trl_compat import config_accepts, kl_penalty_kwargs
+
     applied: dict[str, str] = {}
 
-    if "num_train_epochs" in ppo_params:
+    if config_accepts(ppo_config_cls, "num_train_epochs"):
         ppo_kwargs["num_train_epochs"] = tcfg.epochs
         applied["train_epochs"] = "num_train_epochs"
 
-    if "num_ppo_epochs" in ppo_params:
+    if config_accepts(ppo_config_cls, "num_ppo_epochs"):
         ppo_kwargs["num_ppo_epochs"] = tcfg.ppo_epochs
         applied["ppo_epochs"] = "num_ppo_epochs"
-    elif "ppo_epochs" in ppo_params:
+    elif config_accepts(ppo_config_cls, "ppo_epochs"):
         ppo_kwargs["ppo_epochs"] = tcfg.ppo_epochs
         applied["ppo_epochs"] = "ppo_epochs"
 
-    if "kl_coef" in ppo_params:
-        ppo_kwargs["kl_coef"] = tcfg.ppo_kl_penalty
-        applied["kl_coef"] = "kl_coef"
-    elif "init_kl_coef" in ppo_params:
-        ppo_kwargs["init_kl_coef"] = tcfg.ppo_kl_penalty
-        applied["kl_coef"] = "init_kl_coef"
+    kl_kwargs = kl_penalty_kwargs(ppo_config_cls, tcfg.ppo_kl_penalty)
+    ppo_kwargs.update(kl_kwargs)
+    for name in kl_kwargs:
+        applied["kl_coef"] = name
 
     return applied
 
@@ -210,7 +210,7 @@ class PPOTrainerWrapper:
         ppo_params = inspect.signature(ppo_config_cls).parameters
 
         applied_ppo_fields = _set_ppo_training_kwargs(
-            ppo_kwargs, ppo_params, tcfg
+            ppo_kwargs, ppo_config_cls, tcfg
         )
 
         if "cliprange" in ppo_params:
