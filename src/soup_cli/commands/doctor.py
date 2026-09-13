@@ -533,7 +533,7 @@ _SUPPORTED_TORCH_CUDA_WHEELS = frozenset(
 
 def _parse_cuda_version(text: str) -> tuple[int, int] | None:
     """Extract ``(major, minor)`` from an nvidia-smi CUDA version header."""
-    match = re.search(r"CUDA(?: UMD)? Version:\s*(\d+)\.(\d+)", text or "")
+    match = re.search(r"CUDA(?:\s+UMD)?\s+Version:\s*(\d+)\.(\d+)", text or "")
     if match is None:
         return None
     return int(match.group(1)), int(match.group(2))

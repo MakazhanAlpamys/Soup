@@ -213,6 +213,32 @@ def test_doctor_missing_train_extra_message_unchanged_when_none_installed(monkey
     assert "All checks passed!" not in out
 
 
+def test_doctor_missing_train_extra_with_unsupported_driver_falls_back_to_extra(monkeypatch):
+    """Do not construct a whl/None URL when the driver has no supported wheel."""
+    for name in (
+        "torch",
+        "transformers",
+        "peft",
+        "trl",
+        "datasets",
+        "bitsandbytes",
+        "accelerate",
+    ):
+        monkeypatch.setitem(sys.modules, name, None)
+
+    monkeypatch.setattr(
+        "soup_cli.commands.doctor._nvidia_smi_cuda_version",
+        lambda: (11, 7),
+    )
+    result = runner.invoke(app, ["doctor"])
+
+    assert result.exit_code == 0
+    out = _strip_ansi(result.output)
+    assert 'pip install "soup-cli[train]"' in out
+    assert "download.pytorch.org/whl/" not in out
+    assert "whl/None" not in out
+
+
 def test_doctor_suggestion_is_colour_safe(monkeypatch):
     """The [train] suggestion survives Rich highlighting (#828 review)."""
     from rich.console import Console

@@ -231,6 +231,7 @@ def test_parse_cuda_version_from_nvidia_smi_header():
     assert _parse_cuda_version(header) == (13, 2)
     assert _parse_cuda_version("CUDA Version:13.2") == (13, 2)
     assert _parse_cuda_version("CUDA UMD Version: 13.4") == (13, 4)
+    assert _parse_cuda_version("CUDA  UMD  Version: 13.4") == (13, 4)
     assert _parse_cuda_version("CUDA Version: 12.10") == (12, 10)
     assert _parse_cuda_version("CUDA Version: N/A") is None
     assert _parse_cuda_version("no cuda here") is None
