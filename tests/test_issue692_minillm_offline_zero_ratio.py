@@ -158,3 +158,50 @@ class TestOfflineMiniLLMTeacherSignal:
         assert torch.isfinite(loss_a).item()
         assert torch.isfinite(loss_b).item()
         assert loss_a.item() != pytest.approx(loss_b.item())
+
+
+class TestMinillmOnPolicyCliFlag:
+    """#977: --minillm-on-policy must be visible to the mix-0 offline gate."""
+
+    def test_load_config_override_allows_default_mix(self, tmp_path) -> None:
+        from soup_cli.config.loader import load_config
+
+        path = tmp_path / "soup.yaml"
+        path.write_text(_distill_yaml(minillm_enabled=True), encoding="utf-8")
+        cfg = load_config(path, training_overrides={"minillm_on_policy": True})
+        assert cfg.training.minillm_on_policy is True
+        assert cfg.training.minillm_teacher_mix_ratio == 0.0
+
+    def test_cli_flag_allows_default_mix(self, tmp_path) -> None:
+        import re
+
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        path = tmp_path / "soup.yaml"
+        path.write_text(_distill_yaml(minillm_enabled=True), encoding="utf-8")
+        result = CliRunner().invoke(
+            app,
+            ["train", "--config", str(path), "--minillm-on-policy", "--dry-run"],
+        )
+        out = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
+        assert "minillm_on_policy=false" not in out
+        assert "MiniLLM on-policy rollout enabled" in out
+
+    def test_cli_without_flag_still_rejects_default_mix(self, tmp_path) -> None:
+        import re
+
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        path = tmp_path / "soup.yaml"
+        path.write_text(_distill_yaml(minillm_enabled=True), encoding="utf-8")
+        result = CliRunner().invoke(
+            app,
+            ["train", "--config", str(path), "--dry-run"],
+        )
+        out = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
+        assert result.exit_code != 0
+        assert "minillm_teacher_mix_ratio" in out

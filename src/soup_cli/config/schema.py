@@ -6457,7 +6457,7 @@ class SoupConfig(BaseModel):
         ``minillm_enabled=True`` is rejected (silent no-op footgun
         mirroring v0.52 distill / v0.62 grace_codebook policy).
 
-        v0.75.x #692 — ``minillm_enabled`` + offline blend + mix ratio 0
+        #692 — ``minillm_enabled`` + offline blend + mix ratio 0
         is the inverse footgun: the teacher is loaded and forwarded, then
         given zero weight. Rejected at parse. Ratio 0 stays legal on the
         on-policy path (student-only sampling, loss still KL(student ||
@@ -6523,7 +6523,7 @@ class SoupConfig(BaseModel):
                 "minillm_rollout_length requires minillm_on_policy=True "
                 "(unused by the offline distribution blend)"
             )
-        # v0.75.x #692 — offline blend at mix 0 is KL(student || stopgrad(student)).
+        # #692 — offline blend at mix 0 is KL(student || stopgrad(student)).
         if (
             not tcfg.minillm_on_policy
             and tcfg.minillm_teacher_mix_ratio == 0.0
