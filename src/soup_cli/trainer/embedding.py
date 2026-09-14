@@ -185,6 +185,10 @@ class EmbeddingTrainerWrapper:
         # attached after the trainer exists (attach_loraplus_optimizer). Do NOT
         # forward loraplus_lr_ratio here (#724).
 
+        # LoRA-FA is not a TrainingArguments field; its optimizer is built and
+        # attached after the trainer exists (attach_lorafa_optimizer). Do NOT
+        # forward use_lorafa here (#725).
+
         training_args = TrainingArguments(**training_kwargs)
 
         # --- Custom Trainer with embedding loss ---
@@ -215,12 +219,15 @@ class EmbeddingTrainerWrapper:
         # v0.40.6 #67 — ReLoRA callback.
         from soup_cli.utils.peft_wiring import (
             attach_curriculum_callback,
+            attach_lorafa_optimizer,
             attach_loraplus_optimizer,
             attach_plugin_callback,
             attach_relora_callback,
         )
         # LoRA+ optimizer (#724) — build and attach now that the trainer exists.
         attach_loraplus_optimizer(self.trainer, tcfg)
+        # LoRA-FA optimizer (#725) — build and attach now that the trainer exists.
+        attach_lorafa_optimizer(self.trainer, tcfg)
         attach_relora_callback(self.trainer, tcfg)
         # v0.53.5 #114/#115 — dynamic curriculum live callback.
         attach_curriculum_callback(self.trainer, tcfg, str(output_dir), console)

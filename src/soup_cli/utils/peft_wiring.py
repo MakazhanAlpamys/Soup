@@ -251,6 +251,12 @@ def attach_loraplus_optimizer(trainer: Any, tcfg: Any) -> bool:
             "training.use_galore: LoRA+ tunes LoRA A/B matrices while GaLore "
             "projects full-parameter gradients. Enable one, not both."
         )
+    if getattr(tcfg, "use_lorafa", False):
+        raise ValueError(
+            "training.loraplus_lr_ratio is mutually exclusive with "
+            "training.use_lorafa: LoRA+ tunes LoRA A/B matrices while LoRA-FA "
+            "freezes LoRA A matrices. Enable one, not both."
+        )
 
     from peft import PeftModel
     from peft.optimizers import create_loraplus_optimizer
@@ -276,6 +282,99 @@ def attach_loraplus_optimizer(trainer: Any, tcfg: Any) -> bool:
         loraplus_weight_decay=trainer.args.weight_decay,
         **optimizer_kwargs,
     )
+    return True
+
+
+def attach_lorafa_optimizer(trainer: Any, tcfg: Any) -> bool:
+    """Attach a PEFT LoRA-FA optimizer when ``training.use_lorafa`` is set.
+
+    LoRA-FA (Frozen-A LoRA, arXiv:2308.03303) freezes the LoRA A matrices and
+    only updates the B matrices (#725). Freezing A eliminates the need to retain
+    input activations for backpropagating through A, cutting adapter-rank
+    activation memory retention substantially.
+
+    Like LoRA+, LoRA-FA is not a ``TrainingArguments`` field — it belongs to
+    PEFT's optimizer construction (``create_lorafa_optimizer``). Assigning
+    ``trainer.optimizer`` post-construction is respected because
+    ``Trainer.create_optimizer`` builds one only when ``self.optimizer is None``,
+    and the scheduler is still derived from it with the configured warmup/schedule.
+
+    Weight decay is passed directly through PEFT's ``weight_decay`` argument.
+    The optimizer uses the learning rate from ``trainer.args.learning_rate``, and
+    betas/eps from ``Trainer.get_optimizer_cls_and_kwargs`` are preserved.
+    Conflicting configurations (GaLore, LoRA+, or a non-LoRA run) are rejected
+    with explicit error messages.
+
+    Returns ``True`` when an optimizer was attached, ``False`` otherwise.
+    """
+    if not getattr(tcfg, "use_lorafa", False):
+        return False
+
+    # GaLore projects full-parameter gradients; LoRA-FA tunes LoRA B matrices.
+    # They cannot both own the optimizer — fail loudly rather than let this
+    # silently override the GaLore optimizer set on TrainingArguments.
+    if getattr(tcfg, "use_galore", False):
+        raise ValueError(
+            "training.use_lorafa is mutually exclusive with "
+            "training.use_galore: LoRA-FA tunes LoRA B matrices while GaLore "
+            "projects full-parameter gradients. Enable one, not both."
+        )
+
+    # LoRA+ provides separate learning rates for A and B; LoRA-FA freezes A.
+    # They cannot be combined on the same run.
+    if getattr(tcfg, "loraplus_lr_ratio", None) is not None:
+        raise ValueError(
+            "training.use_lorafa is mutually exclusive with "
+            "training.loraplus_lr_ratio: LoRA-FA freezes LoRA A matrices while "
+            "LoRA+ tunes them with separate learning rates. Enable one, not both."
+        )
+
+    from peft import PeftModel
+    from peft.optimizers import create_lorafa_optimizer
+    from transformers import Trainer
+
+    model = trainer.model
+    if not isinstance(model, PeftModel):
+        raise ValueError(
+            "training.use_lorafa requires a LoRA (PEFT) model, but the "
+            "active run has no adapter. Add a lora config or disable "
+            "use_lorafa."
+        )
+
+    r = None
+    lora_alpha = None
+    if hasattr(model, "peft_config") and model.peft_config:
+        active = getattr(model, "active_adapter", None)
+        if isinstance(active, str) and active in model.peft_config:
+            adapter_cfg = model.peft_config[active]
+        else:
+            adapter_cfg = next(iter(model.peft_config.values()))
+        r = getattr(adapter_cfg, "r", None)
+        lora_alpha = getattr(adapter_cfg, "lora_alpha", None)
+    if r is None and hasattr(tcfg, "lora") and tcfg.lora is not None:
+        r = getattr(tcfg.lora, "r", None)
+        lora_alpha = getattr(tcfg.lora, "alpha", None)
+    if r is None:
+        r = 8
+    if lora_alpha is None:
+        lora_alpha = 16
+
+    _, optimizer_kwargs = Trainer.get_optimizer_cls_and_kwargs(trainer.args)
+    optimizer = create_lorafa_optimizer(
+        model=model,
+        r=int(r),
+        lora_alpha=int(lora_alpha),
+        lr=trainer.args.learning_rate,
+        weight_decay=trainer.args.weight_decay,
+    )
+    if "betas" in optimizer_kwargs:
+        for group in optimizer.param_groups:
+            group["betas"] = optimizer_kwargs["betas"]
+    if "eps" in optimizer_kwargs:
+        for group in optimizer.param_groups:
+            group["eps"] = optimizer_kwargs["eps"]
+
+    trainer.optimizer = optimizer
     return True
 
 
