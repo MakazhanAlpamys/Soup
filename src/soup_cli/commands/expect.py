@@ -17,6 +17,8 @@ from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
+from soup_cli.utils.exit_codes import EXIT_GATE_FAILED, EXIT_USAGE_ERROR
+
 console = Console()
 
 _MAX_DATA_BYTES = 1_073_741_824  # 1 GiB cap on input data
@@ -38,24 +40,28 @@ def _load_jsonl_rows(data_path: str) -> List[Mapping[str, object]]:
     enforce_under_cwd_and_no_symlink(data_path, "data path")
     real = os.path.realpath(data_path)
     if not os.path.isfile(real):
-        raise FileNotFoundError(real)
+        raise FileNotFoundError(data_path)
     if os.path.getsize(real) > _MAX_DATA_BYTES:
-        raise ValueError(f"data file exceeds {_MAX_DATA_BYTES} bytes")
+        raise ValueError(
+            f"data file exceeds {_MAX_DATA_BYTES // (1024 * 1024)} MB cap"
+        )
     rows: List[Mapping[str, object]] = []
     skipped = 0
-    with open(real, "r", encoding="utf-8") as handle:
-        for line_no, line in enumerate(handle, start=1):
-            if not line.strip():
+    with open(real, "r", encoding="utf-8") as f:
+        for line_no, line in enumerate(f, 1):
+            line = line.strip()
+            if not line:
                 continue
-            if line_no > _MAX_DATA_ROWS:
-                raise ValueError(f"data file exceeds {_MAX_DATA_ROWS} rows")
+            if len(rows) >= _MAX_DATA_ROWS:
+                raise ValueError(f"dataset exceeds {_MAX_DATA_ROWS:,} row cap")
             try:
-                row = json.loads(line)
+                rows.append(json.loads(line))
             except json.JSONDecodeError:
                 skipped += 1
-                continue
-            if isinstance(row, dict):
-                rows.append(row)
+                if skipped > 100:
+                    raise ValueError(
+                        f"too many malformed JSONL lines (> 100) — aborting at line {line_no}"
+                    )
     if skipped:
         console.print(
             f"[yellow]Note: skipped {skipped} malformed JSONL line(s)[/]"
@@ -69,7 +75,7 @@ def expect_cmd(
 ) -> None:
     """Run an expectations suite against a JSONL dataset.
 
-    Exit 0 = suite passed. Exit 2 = validation rejection. Exit 3 = suite failed.
+    Exit 0 = suite passed. Exit 2 = gate failed. Exit 3 = usage/input error.
     """
     from soup_cli.utils.expectations import load_suite_yaml, run_suite
 
@@ -77,19 +83,19 @@ def expect_cmd(
         spec = load_suite_yaml(suite)
     except (FileNotFoundError, TypeError, ValueError) as exc:
         console.print(f"[red]{escape(str(exc))}[/]")
-        raise typer.Exit(2) from exc
+        raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
     try:
         rows = _load_jsonl_rows(data)
     except (FileNotFoundError, TypeError, ValueError) as exc:
         console.print(f"[red]{escape(str(exc))}[/]")
-        raise typer.Exit(2) from exc
+        raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
     try:
         report = run_suite(rows, spec)
     except (TypeError, ValueError) as exc:
         console.print(f"[red]{escape(str(exc))}[/]")
-        raise typer.Exit(2) from exc
+        raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
     table = Table(title=f"soup expect — {escape(data)}")
     table.add_column("Expectation")
@@ -115,4 +121,4 @@ def expect_cmd(
                         title=f"[red]Violations: {escape(result.name)}[/]",
                     )
                 )
-        raise typer.Exit(3)
+        raise typer.Exit(EXIT_GATE_FAILED)
